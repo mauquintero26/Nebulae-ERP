@@ -7,3 +7,4 @@ email-validator
 pyjwt
 passlib[bcrypt]
 python-multipart
+python-dotenv
