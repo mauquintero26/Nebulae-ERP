@@ -278,3 +278,32 @@ export async function deleteLead(leadId: number) {
   const res = await fetch(`${API_URL}/crm/leads/${leadId}`, { method: 'DELETE', headers: getHeaders() });
   return handleResponse(res);
 }
+
+// ── CALENDAR EVENTS ──────────────────────────────────────────────────────────
+export async function getCalendarEvents(month?: number, year?: number) {
+  const params = new URLSearchParams();
+  if (month) params.set('month', String(month));
+  if (year)  params.set('year', String(year));
+  const res = await fetch(`${API_URL}/crm/events?${params}`, { headers: getHeaders() });
+  return handleResponse(res);
+}
+
+export async function getCustomerCalendarEvents(customerId: number) {
+  const res = await fetch(`${API_URL}/crm/events/customer/${customerId}`, { headers: getHeaders() });
+  return handleResponse(res);
+}
+
+export async function createCalendarEvent(data: any) {
+  const res = await fetch(`${API_URL}/crm/events`, { method: 'POST', headers: getHeaders(), body: JSON.stringify(data) });
+  return handleResponse(res);
+}
+
+export async function updateCalendarEvent(eventId: number, data: any) {
+  const res = await fetch(`${API_URL}/crm/events/${eventId}`, { method: 'PUT', headers: getHeaders(), body: JSON.stringify(data) });
+  return handleResponse(res);
+}
+
+export async function deleteCalendarEvent(eventId: number) {
+  const res = await fetch(`${API_URL}/crm/events/${eventId}`, { method: 'DELETE', headers: getHeaders() });
+  return handleResponse(res);
+}

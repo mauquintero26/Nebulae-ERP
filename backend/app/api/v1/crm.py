@@ -544,3 +544,172 @@ def get_lead_detail(lead_id: int, db: Session = Depends(get_db)):
     lead = _lead_to_dict(order, customer, stage)
     lead["all_stages"] = [_stage_to_dict(s) for s in all_stages]
     return {"status": "success", "data": lead}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CALENDAR EVENTS — Modelo + Endpoints CRUD
+# ══════════════════════════════════════════════════════════════════════════════
+
+from sqlalchemy import Column as _Col, Integer as _Int, String as _Str, Text as _Txt
+from sqlalchemy import DateTime as _DT, ForeignKey as _FK
+from app.db.database import Base as _Base
+
+class CalendarEvent(_Base):
+    __tablename__ = "calendar_events"
+    __table_args__ = {"extend_existing": True}
+    id                 = _Col(_Int, primary_key=True, index=True)
+    title              = _Col(_Str(200), nullable=False)
+    description        = _Col(_Txt, nullable=True)
+    start_datetime     = _Col(_DT, nullable=False)
+    end_datetime       = _Col(_DT, nullable=True)
+    event_type         = _Col(_Str(50), default="MEETING")
+    location           = _Col(_Str(200), nullable=True)
+    customer_id        = _Col(_Int, nullable=True)
+    customer_name      = _Col(_Str(200), nullable=True)
+    created_by         = _Col(_Str(100), default="CRM")
+    google_event_id    = _Col(_Str(200), nullable=True)
+    microsoft_event_id = _Col(_Str(200), nullable=True)
+    sync_source        = _Col(_Str(50), default="INTERNAL")
+    color              = _Col(_Str(50), default="indigo")
+    created_at         = _Col(_DT, default=datetime.datetime.utcnow)
+    updated_at         = _Col(_DT, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+def _event_to_dict(e: CalendarEvent) -> dict:
+    return {
+        "id":                  e.id,
+        "title":               e.title,
+        "description":         e.description or "",
+        "start_datetime":      e.start_datetime.isoformat() if e.start_datetime else None,
+        "end_datetime":        e.end_datetime.isoformat()   if e.end_datetime   else None,
+        "event_type":          e.event_type or "MEETING",
+        "location":            e.location or "",
+        "customer_id":         e.customer_id,
+        "customer_name":       e.customer_name or "",
+        "created_by":          e.created_by or "CRM",
+        "google_event_id":     e.google_event_id,
+        "microsoft_event_id":  e.microsoft_event_id,
+        "sync_source":         e.sync_source or "INTERNAL",
+        "color":               e.color or "indigo",
+        "created_at":          e.created_at.isoformat() if e.created_at else None,
+    }
+
+# ── GET all events (optional month/year filter) ───────────────────────────────
+@router.get("/events", response_model=dict)
+def get_events(month: int = None, year: int = None, db: Session = Depends(get_db)):
+    query = db.query(CalendarEvent)
+    if month and year:
+        start = datetime.datetime(year, month, 1)
+        if month == 12:
+            end = datetime.datetime(year + 1, 1, 1)
+        else:
+            end = datetime.datetime(year, month + 1, 1)
+        query = query.filter(CalendarEvent.start_datetime >= start, CalendarEvent.start_datetime < end)
+    elif year:
+        start = datetime.datetime(year, 1, 1)
+        end = datetime.datetime(year + 1, 1, 1)
+        query = query.filter(CalendarEvent.start_datetime >= start, CalendarEvent.start_datetime < end)
+    events = query.order_by(CalendarEvent.start_datetime.asc()).all()
+    return {"status": "success", "data": [_event_to_dict(e) for e in events]}
+
+# ── GET events by customer ───────────────────────────────────────────────────
+@router.get("/events/customer/{customer_id}", response_model=dict)
+def get_customer_events(customer_id: int, db: Session = Depends(get_db)):
+    events = db.query(CalendarEvent).filter(
+        CalendarEvent.customer_id == customer_id
+    ).order_by(CalendarEvent.start_datetime.desc()).all()
+    return {"status": "success", "data": [_event_to_dict(e) for e in events]}
+
+# ── GET single event ─────────────────────────────────────────────────────────
+@router.get("/events/{event_id}", response_model=dict)
+def get_event(event_id: int, db: Session = Depends(get_db)):
+    e = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).first()
+    if not e:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return {"status": "success", "data": _event_to_dict(e)}
+
+# ── POST create event ─────────────────────────────────────────────────────────
+@router.post("/events", response_model=dict)
+def create_event(body: dict, db: Session = Depends(get_db)):
+    try:
+        start = datetime.datetime.fromisoformat(body["start_datetime"].replace("Z", ""))
+    except (KeyError, ValueError):
+        raise HTTPException(status_code=400, detail="start_datetime requerido (ISO 8601)")
+
+    end = None
+    if body.get("end_datetime"):
+        try:
+            end = datetime.datetime.fromisoformat(body["end_datetime"].replace("Z", ""))
+        except ValueError:
+            pass
+
+    # Enrich customer_name if customer_id provided
+    customer_name = body.get("customer_name", "")
+    customer_id = body.get("customer_id")
+    if customer_id and not customer_name:
+        c = db.query(Customer).filter(Customer.id == customer_id).first()
+        if c:
+            customer_name = f"{c.first_name} {c.last_name}".strip()
+
+    event = CalendarEvent(
+        title=body.get("title", "Evento"),
+        description=body.get("description", ""),
+        start_datetime=start,
+        end_datetime=end,
+        event_type=body.get("event_type", "MEETING"),
+        location=body.get("location", ""),
+        customer_id=customer_id,
+        customer_name=customer_name,
+        created_by=body.get("created_by", "CRM"),
+        google_event_id=body.get("google_event_id"),
+        microsoft_event_id=body.get("microsoft_event_id"),
+        sync_source=body.get("sync_source", "INTERNAL"),
+        color=body.get("color", "indigo"),
+    )
+    db.add(event)
+    try:
+        db.commit()
+        db.refresh(event)
+    except Exception as ex:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(ex))
+    return {"status": "success", "data": _event_to_dict(event)}
+
+# ── PUT update event ──────────────────────────────────────────────────────────
+@router.put("/events/{event_id}", response_model=dict)
+def update_event(event_id: int, body: dict, db: Session = Depends(get_db)):
+    e = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).first()
+    if not e:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    updatable = ["title", "description", "event_type", "location", "customer_id",
+                 "customer_name", "created_by", "color", "google_event_id",
+                 "microsoft_event_id", "sync_source"]
+    for f in updatable:
+        if f in body:
+            setattr(e, f, body[f])
+
+    if "start_datetime" in body:
+        try:
+            e.start_datetime = datetime.datetime.fromisoformat(body["start_datetime"].replace("Z", ""))
+        except ValueError:
+            pass
+    if "end_datetime" in body and body["end_datetime"]:
+        try:
+            e.end_datetime = datetime.datetime.fromisoformat(body["end_datetime"].replace("Z", ""))
+        except ValueError:
+            pass
+
+    e.updated_at = datetime.datetime.utcnow()
+    db.commit()
+    db.refresh(e)
+    return {"status": "success", "data": _event_to_dict(e)}
+
+# ── DELETE event ──────────────────────────────────────────────────────────────
+@router.delete("/events/{event_id}", response_model=dict)
+def delete_event(event_id: int, db: Session = Depends(get_db)):
+    e = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).first()
+    if not e:
+        raise HTTPException(status_code=404, detail="Event not found")
+    db.delete(e)
+    db.commit()
+    return {"status": "success", "data": {"message": "Evento eliminado."}}

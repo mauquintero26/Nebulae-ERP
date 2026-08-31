@@ -63,6 +63,10 @@ export default function AgendaPage() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [agendaForm, setAgendaForm] = useState<any>({
+    title: '', event_type: 'MEETING', color: 'indigo',
+    start_datetime: '', end_datetime: '', location: '', notes: '',
+  });
 
   // Fetch customers list
   const fetchCustomers = async () => {
@@ -236,6 +240,37 @@ export default function AgendaPage() {
     }
   };
 
+  const handleCreateAgendaEvent = async () => {
+    if (!agendaForm.title.trim()) { toast.error('El título del evento es obligatorio.'); return; }
+    if (!agendaForm.start_datetime) { toast.error('Selecciona la fecha y hora de inicio.'); return; }
+    const tid = toast.loading('Creando evento en el calendario...');
+    try {
+      const payload: any = {
+        title: agendaForm.title.trim(),
+        event_type: agendaForm.event_type,
+        color: agendaForm.color,
+        start_datetime: agendaForm.start_datetime,
+        end_datetime: agendaForm.end_datetime || null,
+        location: agendaForm.location || '',
+        description: agendaForm.notes || '',
+        customer_id: selectedClient?.realId || null,
+        customer_name: selectedClient?.name || '',
+        created_by: 'Agenda CRM',
+        sync_source: 'INTERNAL',
+      };
+      await fetch(`${API_URL}/crm/events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getHeaders() },
+        body: JSON.stringify(payload),
+      });
+      toast.success('¡Evento creado en el Calendario! ✅', { id: tid });
+      setShowModal(null);
+      setAgendaForm({ title: '', event_type: 'MEETING', color: 'indigo', start_datetime: '', end_datetime: '', location: '', notes: '' });
+    } catch (err: any) {
+      toast.error(err.message || 'Error al crear evento', { id: tid });
+    }
+  };
+
   // ─── Filtered Customers ─────────────────────────────────────────────────────
   const filteredCustomers = customers.filter(c =>
     c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -370,7 +405,14 @@ export default function AgendaPage() {
 
         {!isNew && (
           <div className="flex items-center gap-3">
-            <button onClick={() => setShowModal('Agendar')} className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-colors flex items-center gap-2">
+            <button onClick={() => {
+                const now = new Date(); now.setMinutes(0,0,0);
+                const startStr = now.toISOString().slice(0,16);
+                const endD = new Date(now); endD.setHours(endD.getHours()+1);
+                const endStr = endD.toISOString().slice(0,16);
+                setAgendaForm((prev: any) => ({ ...prev, title: `Reunión con ${selectedClient?.name || ''}`, start_datetime: startStr, end_datetime: endStr }));
+                setShowModal('Agendar');
+              }} className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-colors flex items-center gap-2">
               <Calendar size={16} /> Agendar
             </button>
             <button onClick={() => setShowModal('Contactar')} className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-colors flex items-center gap-2">
@@ -662,25 +704,101 @@ export default function AgendaPage() {
             <div className="p-6">
 
               {/* ── AGENDAR ── */}
-              {showModal === 'Agendar' && (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-2">Fecha de la Reunión</label>
-                    <input type="date" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
+              {showModal === 'Agendar' && (() => {
+                // Inline agenda form state managed via agendaForm on the parent
+                return (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-2">Título del Evento *</label>
+                      <input
+                        type="text"
+                        value={agendaForm.title}
+                        onChange={e => setAgendaForm({ ...agendaForm, title: e.target.value })}
+                        placeholder="Ej. Reunión de seguimiento cotización"
+                        className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-2">Tipo</label>
+                        <select
+                          value={agendaForm.event_type}
+                          onChange={e => setAgendaForm({ ...agendaForm, event_type: e.target.value })}
+                          className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-700 focus:outline-none focus:border-purple-600 bg-white"
+                        >
+                          <option value="MEETING">Reunión</option>
+                          <option value="CALL">Llamada</option>
+                          <option value="VIDEO">Videollamada</option>
+                          <option value="FOLLOWUP">Seguimiento</option>
+                          <option value="DEMO">Demo</option>
+                          <option value="TASK">Tarea</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-2">Color</label>
+                        <select
+                          value={agendaForm.color}
+                          onChange={e => setAgendaForm({ ...agendaForm, color: e.target.value })}
+                          className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-700 focus:outline-none focus:border-purple-600 bg-white"
+                        >
+                          <option value="indigo">Índigo</option>
+                          <option value="purple">Morado</option>
+                          <option value="green">Verde</option>
+                          <option value="blue">Azul</option>
+                          <option value="amber">Ámbar</option>
+                          <option value="rose">Rosa</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-2">Inicio *</label>
+                        <input
+                          type="datetime-local"
+                          value={agendaForm.start_datetime}
+                          onChange={e => setAgendaForm({ ...agendaForm, start_datetime: e.target.value })}
+                          className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-600"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-2">Fin</label>
+                        <input
+                          type="datetime-local"
+                          value={agendaForm.end_datetime}
+                          onChange={e => setAgendaForm({ ...agendaForm, end_datetime: e.target.value })}
+                          className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-600"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-2">Lugar / Enlace</label>
+                      <input
+                        type="text"
+                        value={agendaForm.location}
+                        onChange={e => setAgendaForm({ ...agendaForm, location: e.target.value })}
+                        placeholder="Ej. Oficina principal, https://meet.google.com/..."
+                        className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-purple-600"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-2">Notas</label>
+                      <textarea
+                        rows={2}
+                        value={agendaForm.notes}
+                        onChange={e => setAgendaForm({ ...agendaForm, notes: e.target.value })}
+                        placeholder="Temas a tratar, documentos a preparar..."
+                        className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-purple-600 resize-none"
+                      />
+                    </div>
+                    <button
+                      onClick={handleCreateAgendaEvent}
+                      className="w-full bg-purple-600 text-white font-bold py-3 rounded-xl shadow-md hover:bg-purple-700 transition-colors mt-2 flex items-center justify-center gap-2"
+                    >
+                      <Calendar size={16} /> Confirmar en Calendario
+                    </button>
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-2">Hora de Disponibilidad</label>
-                    <input type="time" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-2">Asunto / Motivo</label>
-                    <input type="text" placeholder="Ej. Presentación de producto" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                  </div>
-                  <button onClick={() => { toast.success('Reunión agendada en el calendario.'); setShowModal(null); }} className="w-full bg-purple-600 text-white font-bold py-3 rounded-xl shadow-md hover:bg-purple-700 transition-colors mt-2">
-                    Confirmar Agenda
-                  </button>
-                </div>
-              )}
+                );
+              })()}
 
               {/* ── CONTACTAR ── */}
               {showModal === 'Contactar' && (
