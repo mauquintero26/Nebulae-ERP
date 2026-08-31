@@ -137,20 +137,72 @@ export default function CRMPage() {
   const [newStageColor, setNewStageColor] = useState('bg-purple-500');
 
   // ═══ Load data ═══════════════════════════════════════════════════════════
-  const loadAll = useCallback(async () => {
-    setLoading(true);
+  // Stages: cached in localStorage for 5 min (rarely change)
+  const STAGES_CACHE_KEY = 'crm_stages_v1';
+  const STAGES_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+  function getCachedStages() {
     try {
-      const [stagesData, leadsData] = await Promise.all([
-        apiFetch('/crm/pipeline-stages/config'),
-        apiFetch('/crm/leads'),
-      ]);
-      setStages(Array.isArray(stagesData) ? stagesData : []);
-      setLeads(Array.isArray(leadsData) ? leadsData : []);
-    } catch (e) { toast.error('Error cargando CRM: ' + e.message); }
-    finally { setLoading(false); }
+      const raw = localStorage.getItem(STAGES_CACHE_KEY);
+      if (!raw) return null;
+      const { data, ts } = JSON.parse(raw);
+      if (Date.now() - ts > STAGES_CACHE_TTL) return null;
+      return data;
+    } catch { return null; }
+  }
+
+  function setCachedStages(data) {
+    try { localStorage.setItem(STAGES_CACHE_KEY, JSON.stringify({ data, ts: Date.now() })); }
+    catch { /* quota exceeded — ignore */ }
+  }
+
+  // Load only leads (called after mutations)
+  const loadLeads = useCallback(async () => {
+    try {
+      const leadsData = await apiFetch('/crm/leads');
+      setLeads(Array.isArray(leadsData) ? leadsData : (leadsData?.data ?? []));
+    } catch (e) { toast.error('Error cargando leads: ' + e.message); }
   }, []);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  // Full load: stages (cache) + leads (fresh) in parallel
+  const loadAll = useCallback(async (showSpinner = true) => {
+    if (showSpinner) setLoading(true);
+    try {
+      const cached = getCachedStages();
+      if (cached) {
+        // Serve stages from cache immediately, fetch leads in parallel
+        setStages(cached);
+        setConfigStages(cached);
+        const leadsData = await apiFetch('/crm/leads');
+        setLeads(Array.isArray(leadsData) ? leadsData : (leadsData?.data ?? []));
+        // Refresh stages in background (don't block)
+        apiFetch('/crm/pipeline-stages/config').then(d => {
+          const arr = Array.isArray(d) ? d : (d?.data ?? []);
+          if (arr.length) { setStages(arr); setConfigStages(arr); setCachedStages(arr); }
+        }).catch(() => {});
+      } else {
+        // No cache — fetch both in parallel
+        const [stagesRes, leadsRes] = await Promise.all([
+          apiFetch('/crm/pipeline-stages/config'),
+          apiFetch('/crm/leads'),
+        ]);
+        const stagesArr = Array.isArray(stagesRes) ? stagesRes : (stagesRes?.data ?? []);
+        const leadsArr  = Array.isArray(leadsRes)  ? leadsRes  : (leadsRes?.data  ?? []);
+        setStages(stagesArr);
+        setConfigStages(stagesArr);
+        setLeads(leadsArr);
+        setCachedStages(stagesArr);
+      }
+    } catch (e) { toast.error('Error cargando CRM: ' + e.message); }
+    finally { if (showSpinner) setLoading(false); }
+  }, []);
+
+  // On mount: warmup pool, then load
+  useEffect(() => {
+    // Fire warmup in background (don't await — just wakes the pool)
+    apiFetch('/crm/warmup').catch(() => {});
+    loadAll();
+  }, [loadAll]);
 
   // Customer autocomplete search
   useEffect(() => {
@@ -789,9 +841,33 @@ export default function CRMPage() {
         <div className="flex-1 overflow-x-auto overflow-y-hidden">
           <div className="flex gap-4 p-5 h-full min-w-max">
             {loading ? (
-              <div className="flex-1 flex items-center justify-center text-slate-400">
-                <RefreshCw size={20} className="animate-spin mr-2"/> Cargando pipeline...
-              </div>
+              /* ── Kanban skeleton ─────────────────────────────────── */
+              Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="flex flex-col w-72 flex-shrink-0">
+                  {/* Column header skeleton */}
+                  <div className="flex items-center gap-2 mb-3 px-1">
+                    <div className="w-2.5 h-2.5 rounded-full bg-slate-200 animate-pulse"/>
+                    <div className="h-3.5 w-24 bg-slate-200 rounded animate-pulse"/>
+                    <div className="h-4 w-5 rounded-full bg-slate-200 animate-pulse ml-1"/>
+                  </div>
+                  {/* Card skeletons */}
+                  <div className="flex-1 rounded-2xl p-2 min-h-[200px] bg-slate-100/80 border border-slate-200/60">
+                    {Array.from({ length: i === 0 ? 3 : i === 1 ? 2 : 1 }).map((_, j) => (
+                      <div key={j} className="bg-white rounded-xl border border-slate-100 p-3 mb-2 shadow-sm">
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="h-4 w-16 bg-slate-200 rounded-md animate-pulse"/>
+                        </div>
+                        <div className="h-3.5 w-full bg-slate-200 rounded animate-pulse mb-1.5"/>
+                        <div className="h-3 w-2/3 bg-slate-100 rounded animate-pulse mb-3"/>
+                        <div className="flex justify-between pt-2 border-t border-slate-50">
+                          <div className="h-2.5 w-12 bg-slate-100 rounded animate-pulse"/>
+                          <div className="h-2.5 w-16 bg-slate-100 rounded animate-pulse"/>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))
             ) : (
               stages.map(stage => {
                 const stageLeads = filteredLeads.filter(l => l.pipeline_stage_id === stage.id);

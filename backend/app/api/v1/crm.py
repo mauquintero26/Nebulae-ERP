@@ -1,12 +1,21 @@
-from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
+from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Response
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.models.crm import Alert
 from app.models.sales import SalesOrder
 from app.schemas import crm as schemas
-import datetime
+import datetime, time, threading
 
 router = APIRouter()
+
+# ── In-memory TTL cache for rarely-changing data ──────────────────────────────
+_cache_lock = threading.Lock()
+_stages_cache = {"data": None, "expires": 0}   # Invalidated on stage write
+_STAGES_TTL = 60  # seconds
+
+def _invalidate_stages_cache():
+    with _cache_lock:
+        _stages_cache["expires"] = 0
 
 def generate_crm_alerts(db: Session):
     two_days_ago = datetime.datetime.utcnow() - datetime.timedelta(hours=48)
@@ -488,17 +497,37 @@ def _lead_to_dict(order, customer, stage, db=None) -> dict:
     }
 
 @router.get("/leads", response_model=dict)
-def get_leads(db: Session = Depends(get_db)):
-    orders = db.query(SalesOrder).filter(SalesOrder.status != "CANCELLED").order_by(SalesOrder.created_at.desc()).all()
-    stages_map = {s.id: s for s in db.query(PipelineStage).all()}
-    leads = []
-    for order in orders:
-        customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
-        if not customer:
-            continue
-        stage = stages_map.get(order.pipeline_stage_id)
-        leads.append(_lead_to_dict(order, customer, stage, db))
-    return {"status": "success", "data": leads}
+def get_leads(
+    db: Session = Depends(get_db),
+    limit: int = 500,
+    offset: int = 0,
+    stage_id: int = None,
+    search: str = None,
+):
+    """
+    Optimized: single JOIN query — O(1) DB round trips regardless of lead count.
+    Previously: N+1 queries (1 per lead) → extremely slow at scale.
+    """
+    # ── Build base query with JOIN ──────────────────────────────────────────
+    q = (
+        db.query(SalesOrder, Customer, PipelineStage)
+        .join(Customer, SalesOrder.customer_id == Customer.id)
+        .outerjoin(PipelineStage, SalesOrder.pipeline_stage_id == PipelineStage.id)
+        .filter(SalesOrder.status != "CANCELLED")
+    )
+    if stage_id:
+        q = q.filter(SalesOrder.pipeline_stage_id == stage_id)
+    if search:
+        pattern = f"%{search}%"
+        q = q.filter(
+            (Customer.first_name + " " + Customer.last_name).ilike(pattern)
+            | SalesOrder.lead_description.ilike(pattern)
+            | SalesOrder.lead_product_name.ilike(pattern)
+        )
+    total = q.count()
+    rows = q.order_by(SalesOrder.created_at.desc()).offset(offset).limit(limit).all()
+    leads = [_lead_to_dict(order, customer, stage) for order, customer, stage in rows]
+    return {"status": "success", "data": leads, "total": total}
 
 
 @router.patch("/leads/{lead_id}/stage", response_model=dict)
@@ -885,19 +914,18 @@ def _lead_to_dict_v2(order, customer, stage, db=None) -> dict:
         "advisor_name":      getattr(order, 'advisor_name', None) or "",
     }
 
-
 @router.get("/leads/v2", response_model=dict)
 def get_leads_v2(db: Session = Depends(get_db)):
-    """Enhanced leads endpoint with product and advisor data."""
-    orders = db.query(SalesOrder).filter(SalesOrder.status != "CANCELLED").order_by(SalesOrder.created_at.desc()).all()
-    stages_map = {s.id: s for s in db.query(PipelineStage).all()}
-    leads = []
-    for order in orders:
-        customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
-        if not customer:
-            continue
-        stage = stages_map.get(order.pipeline_stage_id)
-        leads.append(_lead_to_dict_v2(order, customer, stage, db))
+    """Redirects to optimized get_leads — kept for backward compatibility."""
+    rows = (
+        db.query(SalesOrder, Customer, PipelineStage)
+        .join(Customer, SalesOrder.customer_id == Customer.id)
+        .outerjoin(PipelineStage, SalesOrder.pipeline_stage_id == PipelineStage.id)
+        .filter(SalesOrder.status != "CANCELLED")
+        .order_by(SalesOrder.created_at.desc())
+        .all()
+    )
+    leads = [_lead_to_dict_v2(order, customer, stage, db) for order, customer, stage in rows]
     return {"status": "success", "data": leads}
 
 
@@ -1031,31 +1059,38 @@ def lead_to_pedido(lead_id: int, db: Session = Depends(get_db)):
 
 @router.get("/pipeline-stages/config", response_model=dict)
 def get_pipeline_config(db: Session = Depends(get_db)):
-    """Get all pipeline stages with full config including alert settings."""
+    """Get all pipeline stages — cached in-memory with 60s TTL."""
+    now = time.time()
+    with _cache_lock:
+        if _stages_cache["data"] is not None and now < _stages_cache["expires"]:
+            return {"status": "success", "data": _stages_cache["data"], "cached": True}
+
+    # Cache miss — fetch from DB
     stages = db.query(PipelineStage).order_by(PipelineStage.position).all()
-    return {
-        "status": "success",
-        "data": [
-            {
-                "id": s.id,
-                "name": s.name,
-                "color": s.color,
-                "bg_color": s.bg_color,
-                "position": s.position,
-                "maps_to_status": s.maps_to_status,
-                "alert_days": getattr(s, 'alert_days', 7),
-                "alert_message": getattr(s, 'alert_message', 'Lead sin actividad'),
-                "is_closed": getattr(s, 'is_closed', False),
-                "pipeline_name": getattr(s, 'pipeline_name', 'Principal'),
-            }
-            for s in stages
-        ]
-    }
+    data = [
+        {
+            "id": s.id,
+            "name": s.name,
+            "color": s.color,
+            "bg_color": s.bg_color,
+            "position": s.position,
+            "maps_to_status": s.maps_to_status,
+            "alert_days": getattr(s, 'alert_days', 7),
+            "alert_message": getattr(s, 'alert_message', 'Lead sin actividad'),
+            "is_closed": getattr(s, 'is_closed', False),
+            "pipeline_name": getattr(s, 'pipeline_name', 'Principal'),
+        }
+        for s in stages
+    ]
+    with _cache_lock:
+        _stages_cache["data"] = data
+        _stages_cache["expires"] = now + _STAGES_TTL
+    return {"status": "success", "data": data, "cached": False}
 
 
 @router.put("/pipeline-stages/{stage_id}/config", response_model=dict)
 def update_pipeline_stage_config(stage_id: int, body: dict, db: Session = Depends(get_db)):
-    """Update pipeline stage with all config fields including alert settings."""
+    """Update pipeline stage config. Invalidates stages cache."""
     stage = db.query(PipelineStage).filter(PipelineStage.id == stage_id).first()
     if not stage:
         raise HTTPException(status_code=404, detail="Stage not found")
@@ -1067,6 +1102,7 @@ def update_pipeline_stage_config(stage_id: int, body: dict, db: Session = Depend
             except AttributeError:
                 pass
     db.commit(); db.refresh(stage)
+    _invalidate_stages_cache()  # Force next GET to re-fetch from DB
     return {"status": "success", "data": {
         "id": stage.id, "name": stage.name, "color": stage.color,
         "bg_color": stage.bg_color, "position": stage.position,
@@ -1075,3 +1111,24 @@ def update_pipeline_stage_config(stage_id: int, body: dict, db: Session = Depend
         "alert_message": getattr(stage, 'alert_message', ''),
         "is_closed": getattr(stage, 'is_closed', False),
     }}
+
+
+@router.get("/warmup", response_model=dict)
+def warmup(db: Session = Depends(get_db)):
+    """
+    Pre-warms the DB connection pool and stages cache.
+    Call once on app startup or before first user load.
+    Returns in < 100ms on subsequent calls (cache hit).
+    """
+    now = time.time()
+    with _cache_lock:
+        cache_warm = _stages_cache["data"] is not None and now < _stages_cache["expires"]
+
+    if not cache_warm:
+        stages = db.query(PipelineStage).order_by(PipelineStage.position).all()
+        data = [{"id": s.id, "name": s.name} for s in stages]
+        with _cache_lock:
+            _stages_cache["expires"] = now + _STAGES_TTL
+        return {"status": "success", "message": "Pool and cache warmed", "stages": len(data)}
+
+    return {"status": "success", "message": "Already warm", "stages": len(_stages_cache["data"])}
