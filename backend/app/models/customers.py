@@ -10,6 +10,8 @@ class Customer(Base):
     phone = Column(String)
     email = Column(String, unique=True, index=True)
     city = Column(String)
+    document = Column(String)
+    address = Column(String)
 
     quotations = relationship("Quotation", back_populates="customer")
     sales_orders = relationship("SalesOrder", back_populates="customer")

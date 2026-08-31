@@ -33,6 +33,8 @@ class CustomerBase(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     city: Optional[str] = None
+    document: Optional[str] = None
+    address: Optional[str] = None
 
 class CustomerCreate(CustomerBase):
     pass

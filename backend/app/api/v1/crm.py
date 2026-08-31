@@ -147,7 +147,9 @@ def create_customer(customer: CustomerCreate, db: Session = Depends(get_db)):
         last_name=customer.last_name,
         email=customer.email,
         phone=customer.phone,
-        city=customer.city
+        city=customer.city,
+        document=customer.document,
+        address=customer.address
     )
     db.add(db_customer)
     db.commit()

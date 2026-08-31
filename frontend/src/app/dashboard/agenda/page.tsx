@@ -63,8 +63,8 @@ export default function AgendaPage() {
           sector: 'N/A',
           source: 'Registro CRM',
           initial: c.first_name ? c.first_name.charAt(0).toUpperCase() : 'C',
-          document: '',
-          address: '',
+          document: c.document || '',
+          address: c.address || '',
           city: c.city || '',
           country: 'Colombia',
           category: 'Regular',
@@ -82,16 +82,14 @@ export default function AgendaPage() {
       try {
         toast.loading('Guardando cliente...', { id: 'save-client' });
         // Mapear nombre completo
-        const names = (formData.name || 'Sin Nombre').split(' ');
-        const first = names[0];
-        const last = names.slice(1).join(' ') || '';
-        
         await createCustomer({
-          first_name: first,
-          last_name: last || 'N/A',
+            first_name: formData.first_name || 'Sin Nombre',
+            last_name: formData.last_name || 'N/A',
           email: formData.email || null,
           phone: formData.phone || null,
-          city: formData.city || null
+          city: formData.city || null,
+            document: formData.document || null,
+            address: formData.address || null
         });
         
         toast.success('Cliente creado', { id: 'save-client' });
@@ -192,7 +190,7 @@ export default function AgendaPage() {
   const isNew = selectedClient === 'NEW';
   const clientData = isNew ? {
     id: 'Nuevo', name: 'Nuevo Cliente', initial: 'N', source: 'Tú',
-    email: '', phone: '', document: '', address: '', city: '', country: '', category: '', tags: []
+    email: '', phone: '', document: c.document || '', address: c.address || '', city: '', country: '', category: '', tags: []
   } : selectedClient;
 
   // Render logic flags
@@ -440,35 +438,26 @@ export default function AgendaPage() {
 
             {/* Resumen de Estados Activos CRM */}
             <div className="p-5 border-b border-slate-100 bg-white space-y-3">
-              <div className="flex justify-between items-center mb-1">
-                <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Trámites Activos (CRM)</h4>
-                {activeTimeline !== 'general' && (
-                  <button onClick={() => setActiveTimeline('general')} className="text-[10px] text-purple-600 font-bold hover:underline">
-                    Ver Todo
-                  </button>
+                <div className="flex justify-between items-center mb-1">
+                  <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Trámites Activos (CRM)</h4>
+                </div>
+                
+                {customer360?.active_orders?.length > 0 ? (
+                  customer360.active_orders.map((order: any, idx: number) => (
+                    <div key={order.id} className="flex justify-between items-center border p-3 rounded-xl transition-all bg-indigo-50/30 border-indigo-100">
+                      <div>
+                        <p className="text-xs font-bold text-indigo-900">Trámite #0{order.id}</p>
+                        <p className="text-[10px] text-indigo-600 mt-0.5">{order.status}</p>
+                      </div>
+                      <button className="text-xs font-bold bg-white text-indigo-600 px-3 py-1.5 rounded border border-indigo-200 hover:bg-indigo-50">
+                        Ver Tracking
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-xs text-slate-500 italic">No hay trámites activos en este momento.</p>
                 )}
               </div>
-              
-              <div className={`flex justify-between items-center border p-3 rounded-xl transition-all ${activeTimeline === 'cotizacion' ? 'bg-indigo-50 border-indigo-400 ring-2 ring-indigo-100' : 'bg-indigo-50/30 border-indigo-100'}`}>
-                <div>
-                  <p className="text-xs font-bold text-indigo-900">Cotización #095</p>
-                  <p className="text-[10px] text-indigo-600 mt-0.5">Cotizado - pdte confirmación</p>
-                </div>
-                <button onClick={() => setActiveTimeline('cotizacion')} className="text-xs font-bold bg-white text-indigo-600 px-3 py-1.5 rounded border border-indigo-200 hover:bg-indigo-50">
-                  Ver Tracking
-                </button>
-              </div>
-
-              <div className={`flex justify-between items-center border p-3 rounded-xl transition-all ${activeTimeline === 'pedido' ? 'bg-emerald-50 border-emerald-400 ring-2 ring-emerald-100' : 'bg-emerald-50/30 border-emerald-100'}`}>
-                <div>
-                  <p className="text-xs font-bold text-emerald-900">Pedido #089</p>
-                  <p className="text-[10px] text-emerald-600 mt-0.5">Procesando orden</p>
-                </div>
-                <button onClick={() => setActiveTimeline('pedido')} className="text-xs font-bold bg-white text-emerald-600 px-3 py-1.5 rounded border border-emerald-200 hover:bg-emerald-50">
-                  Ver Tracking
-                </button>
-              </div>
-            </div>
 
             {/* Trazabilidad Timeline */}
             <div className="flex-1 p-5 relative overflow-y-auto custom-scrollbar bg-slate-50/30">
@@ -637,7 +626,7 @@ export default function AgendaPage() {
                     <label className="block text-xs font-bold text-slate-500 mb-2">Detalles Adicionales</label>
                     <textarea rows={3} placeholder="Describe brevemente lo que necesita el cliente..." className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600 resize-none"></textarea>
                   </div>
-                  <button onClick={() => { toast.success('¡Solicitud Creada! El cliente ha sido ingresado al pipeline del CRM en la etapa correspondiente.'); setShowModal(null); }} className="w-full bg-purple-600 text-white font-bold py-3 rounded-xl shadow-md hover:bg-purple-700 transition-colors mt-2 flex items-center justify-center gap-2">
+                  <button onClick={() => { toast.success('¡¡Solicitud Creada! Se ha ingresado al pipeline de Ventas.'); setShowModal(null); }} className="w-full bg-purple-600 text-white font-bold py-3 rounded-xl shadow-md hover:bg-purple-700 transition-colors mt-2 flex items-center justify-center gap-2">
                     Ingresar al CRM <ArrowRight size={16} />
                   </button>
                 </div>
