@@ -232,11 +232,52 @@ def get_customer_360_profile(customer_id: int, db: Session = Depends(get_db)):
         "status": "CREATED",
         "status_label": "Cliente Creado",
         "color": "purple",
-        "created_at": None,  # We don't have a created_at on Customer yet
+        "created_at": None,
         "total": 0,
         "lines_count": 0,
         "description": "Ficha del cliente registrada en el sistema.",
     })
+
+    # ── Include calendar events in the timeline (audit log) ──────────────────
+    cal_events = db.query(CalendarEvent).filter(
+        CalendarEvent.customer_id == customer.id
+    ).order_by(CalendarEvent.start_datetime.desc()).all()
+
+    EVENT_TYPE_LABELS = {
+        "MEETING":  "Reunión agendada",
+        "CALL":     "Llamada agendada",
+        "VIDEO":    "Videollamada agendada",
+        "FOLLOWUP": "Seguimiento agendado",
+        "TASK":     "Tarea agendada",
+        "DEMO":     "Demo / Presentación",
+    }
+    EVENT_TYPE_COLORS = {
+        "MEETING": "indigo", "CALL": "green", "VIDEO": "blue",
+        "FOLLOWUP": "amber", "TASK": "purple", "DEMO": "rose",
+    }
+
+    for ce in cal_events:
+        type_label = EVENT_TYPE_LABELS.get(ce.event_type or "MEETING", "Evento")
+        color = EVENT_TYPE_COLORS.get(ce.event_type or "MEETING", "indigo")
+        start_str = ce.start_datetime.strftime("%d %b %Y %H:%M") if ce.start_datetime else "—"
+        desc_parts = [f"📅 {start_str}"]
+        if ce.location: desc_parts.append(f"📍 {ce.location}")
+        if ce.description: desc_parts.append(ce.description[:100])
+        all_orders_timeline.append({
+            "type": "calendar_event",
+            "id": ce.id,
+            "status": "CALENDAR_EVENT",
+            "status_label": type_label,
+            "estado_label": ce.title,
+            "solicitud_tipo": type_label,
+            "color": color,
+            "created_at": ce.created_at.isoformat() if ce.created_at else None,
+            "event_start": ce.start_datetime.isoformat() if ce.start_datetime else None,
+            "total": 0,
+            "lines_count": 0,
+            "description": " · ".join(desc_parts),
+            "created_by": ce.created_by or "CRM",
+        })
 
     # Sort by created_at descending (newest first), put None at end
     all_orders_timeline.sort(
@@ -257,6 +298,7 @@ def get_customer_360_profile(customer_id: int, db: Session = Depends(get_db)):
         "timeline": all_orders_timeline,
         "ltv": str(round(ltv, 2)),
         "total_orders": len(customer.sales_orders),
+        "total_events": len(cal_events),
     }
 
     return {"status": "success", "data": profile}

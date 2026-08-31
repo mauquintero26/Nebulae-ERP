@@ -258,18 +258,22 @@ export default function AgendaPage() {
         created_by: 'Agenda CRM',
         sync_source: 'INTERNAL',
       };
-      await fetch(`${API_URL}/crm/events`, {
+      const res = await fetch(`${API_URL}/crm/events`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getHeaders() },
         body: JSON.stringify(payload),
       });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || 'Error'); }
       toast.success('¡Evento creado en el Calendario! ✅', { id: tid });
       setShowModal(null);
       setAgendaForm({ title: '', event_type: 'MEETING', color: 'indigo', start_datetime: '', end_datetime: '', location: '', notes: '' });
+      // Refresh the 360 profile so the calendar event appears in the bitácora
+      if (selectedClient?.realId) fetchProfile(selectedClient.realId);
     } catch (err: any) {
       toast.error(err.message || 'Error al crear evento', { id: tid });
     }
   };
+
 
   // ─── Filtered Customers ─────────────────────────────────────────────────────
   const filteredCustomers = customers.filter(c =>
@@ -406,10 +410,14 @@ export default function AgendaPage() {
         {!isNew && (
           <div className="flex items-center gap-3">
             <button onClick={() => {
-                const now = new Date(); now.setMinutes(0,0,0);
-                const startStr = now.toISOString().slice(0,16);
-                const endD = new Date(now); endD.setHours(endD.getHours()+1);
-                const endStr = endD.toISOString().slice(0,16);
+                const now = new Date(); now.setSeconds(0,0);
+                now.setMinutes(now.getMinutes() >= 30 ? 60 : 0);
+                // Build local datetime string (not UTC)
+                const pad = (n: number) => String(n).padStart(2,'0');
+                const localStr = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+                const startStr = localStr(now);
+                const endD = new Date(now.getTime() + 3600000); // +1 hour default
+                const endStr = localStr(endD);
                 setAgendaForm((prev: any) => ({ ...prev, title: `Reunión con ${selectedClient?.name || ''}`, start_datetime: startStr, end_datetime: endStr }));
                 setShowModal('Agendar');
               }} className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-colors flex items-center gap-2">
@@ -647,27 +655,56 @@ export default function AgendaPage() {
             {/* Timeline */}
             <div className="flex-1 p-5 relative overflow-y-auto custom-scrollbar bg-slate-50/30">
               <div className="absolute left-[27px] top-5 bottom-5 w-0.5 bg-slate-200"></div>
-              <div className="space-y-5 relative">
-                {customer360?.timeline?.length > 0 ? customer360.timeline.map((event: any, idx: number) => (
-                  <div key={`${event.type}-${event.id}-${idx}`} className="relative pl-8">
-                    <div className={`absolute left-[-5px] top-1 w-3 h-3 rounded-full border-2 border-white shadow-sm ${TIMELINE_DOT_COLOR[event.status] || 'bg-slate-400'}`}></div>
-                    <div className="bg-white border border-slate-100 rounded-xl p-3 shadow-sm hover:border-purple-200 transition-colors cursor-default">
-                      <div className="flex justify-between items-start mb-1">
-                        <h4 className="font-bold text-slate-800 text-sm">{event.solicitud_tipo || event.status_label || event.status}</h4>
-                        <span className="text-[10px] text-slate-400 font-medium shrink-0 ml-2">
-                          {event.created_at ? timeAgo(event.created_at) : 'Hoy'}
-                        </span>
-                      </div>
-                      {event.estado_label && (
-                        <p className="text-xs font-bold text-indigo-600 mb-1">ESTADO: {event.estado_label}</p>
-                      )}
-                      <p className="text-xs text-slate-500">{event.description}</p>
-                      {event.total > 0 && (
-                        <p className="text-xs font-bold text-slate-700 mt-1">${parseFloat(event.total).toLocaleString('es-CO')}</p>
+              <div className="space-y-4 relative">
+                {customer360?.timeline?.length > 0 ? customer360.timeline.map((event: any, idx: number) => {
+                  const isCalEvent = event.type === 'calendar_event';
+                  const isCreated  = event.type === 'created';
+                  // Color dot classes
+                  const calColorDot: Record<string, string> = {
+                    indigo: 'bg-indigo-500', green: 'bg-green-500', blue: 'bg-blue-500',
+                    amber: 'bg-amber-500', purple: 'bg-purple-500', rose: 'bg-rose-500',
+                  };
+                  const dotClass = isCalEvent
+                    ? (calColorDot[event.color] || 'bg-indigo-500')
+                    : (TIMELINE_DOT_COLOR[event.status] || 'bg-slate-400');
+                  return (
+                    <div key={`${event.type}-${event.id}-${idx}`} className="relative pl-8">
+                      <div className={`absolute left-[-5px] top-1.5 w-3 h-3 rounded-full border-2 border-white shadow-sm ${dotClass}`}></div>
+                      {isCalEvent ? (
+                        // Calendar event card — special style
+                        <div className="bg-white border border-indigo-100 rounded-xl p-3 shadow-sm hover:border-indigo-300 transition-colors">
+                          <div className="flex justify-between items-start mb-1">
+                            <div className="flex items-center gap-1.5">
+                              <Calendar size={11} className="text-indigo-500 flex-shrink-0" />
+                              <h4 className="font-bold text-indigo-800 text-sm leading-tight">{event.status_label}</h4>
+                            </div>
+                            <span className="text-[10px] text-slate-400 font-medium shrink-0 ml-2">{event.created_at ? timeAgo(event.created_at) : 'Hoy'}</span>
+                          </div>
+                          <p className="text-xs font-bold text-indigo-600 mb-1">📅 {event.estado_label}</p>
+                          <p className="text-xs text-slate-500">{event.description}</p>
+                          {event.created_by && (
+                            <p className="text-[10px] text-slate-400 mt-1.5 font-medium">Por: {event.created_by}</p>
+                          )}
+                        </div>
+                      ) : (
+                        // Sales order / created card — original style
+                        <div className={`bg-white border rounded-xl p-3 shadow-sm hover:border-purple-200 transition-colors ${isCreated ? 'border-purple-100' : 'border-slate-100'}`}>
+                          <div className="flex justify-between items-start mb-1">
+                            <h4 className="font-bold text-slate-800 text-sm">{event.solicitud_tipo || event.status_label || event.status}</h4>
+                            <span className="text-[10px] text-slate-400 font-medium shrink-0 ml-2">{event.created_at ? timeAgo(event.created_at) : 'Hoy'}</span>
+                          </div>
+                          {event.estado_label && !isCreated && (
+                            <p className="text-xs font-bold text-indigo-600 mb-1">ESTADO: {event.estado_label}</p>
+                          )}
+                          <p className="text-xs text-slate-500">{event.description}</p>
+                          {event.total > 0 && (
+                            <p className="text-xs font-bold text-slate-700 mt-1">${parseFloat(event.total).toLocaleString('es-CO')}</p>
+                          )}
+                        </div>
                       )}
                     </div>
-                  </div>
-                )) : (
+                  );
+                }) : (
                   <div className="relative pl-8">
                     <div className="absolute left-[-5px] top-1 w-3 h-3 rounded-full bg-purple-500 border-2 border-white shadow-sm"></div>
                     <div className="bg-white border border-slate-100 rounded-xl p-3 shadow-sm">
