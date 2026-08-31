@@ -238,3 +238,43 @@ export async function getSolicitudTipos(): Promise<string[]> {
     ];
   }
 }
+
+// ── CRM PIPELINE — STAGES ────────────────────────────────────────────────────
+export async function getPipelineStages() {
+  const res = await fetch(`${API_URL}/crm/pipeline-stages`, { headers: getHeaders() });
+  return handleResponse(res);
+}
+export async function createPipelineStage(data: any) {
+  const res = await fetch(`${API_URL}/crm/pipeline-stages`, { method: 'POST', headers: getHeaders(), body: JSON.stringify(data) });
+  return handleResponse(res);
+}
+export async function updatePipelineStage(id: number, data: any) {
+  const res = await fetch(`${API_URL}/crm/pipeline-stages/${id}`, { method: 'PUT', headers: getHeaders(), body: JSON.stringify(data) });
+  return handleResponse(res);
+}
+export async function deletePipelineStage(id: number) {
+  const res = await fetch(`${API_URL}/crm/pipeline-stages/${id}`, { method: 'DELETE', headers: getHeaders() });
+  return handleResponse(res);
+}
+
+// ── CRM PIPELINE — LEADS ────────────────────────────────────────────────────
+export async function getLeads() {
+  const res = await fetch(`${API_URL}/crm/leads`, { headers: getHeaders() });
+  return handleResponse(res);
+}
+export async function createLead(data: any) {
+  const res = await fetch(`${API_URL}/crm/leads`, { method: 'POST', headers: getHeaders(), body: JSON.stringify(data) });
+  return handleResponse(res);
+}
+export async function updateLeadStage(leadId: number, pipelineStageId: number) {
+  const res = await fetch(`${API_URL}/crm/leads/${leadId}/stage`, { method: 'PATCH', headers: getHeaders(), body: JSON.stringify({ pipeline_stage_id: pipelineStageId }) });
+  return handleResponse(res);
+}
+export async function updateLead(leadId: number, data: any) {
+  const res = await fetch(`${API_URL}/crm/leads/${leadId}`, { method: 'PATCH', headers: getHeaders(), body: JSON.stringify(data) });
+  return handleResponse(res);
+}
+export async function deleteLead(leadId: number) {
+  const res = await fetch(`${API_URL}/crm/leads/${leadId}`, { method: 'DELETE', headers: getHeaders() });
+  return handleResponse(res);
+}

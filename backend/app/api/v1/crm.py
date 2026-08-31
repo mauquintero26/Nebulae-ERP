@@ -311,11 +311,22 @@ def create_customer_solicitud(customer_id: int, body: dict, db: Session = Depend
     pipeline_status = TIPO_TO_STATUS.get(tipo, "QUOTATION")
     sale_type = body.get("sale_type", "ON_DEMAND")
 
+    # Find the matching pipeline stage (so the lead appears in the correct Kanban column)
+    matching_stage = db.execute(
+        text("SELECT id FROM pipeline_stages WHERE maps_to_status = :status ORDER BY position LIMIT 1"),
+        {"status": pipeline_status}
+    ).fetchone()
+    stage_id = matching_stage[0] if matching_stage else None
+
     new_order = SalesOrder(
         customer_id=customer_id,
         status=pipeline_status,
         sale_type=sale_type,
         solicitud_tipo=tipo,
+        lead_source="Agenda CRM",
+        lead_description=body.get("detalles", ""),
+        lead_value=body.get("valor", 0),
+        pipeline_stage_id=stage_id,
     )
     db.add(new_order)
     try:
@@ -338,3 +349,198 @@ def create_customer_solicitud(customer_id: int, body: dict, db: Session = Depend
         }
     }
 
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CRM PIPELINE — STAGES (columnas Kanban personalizables por usuario)
+# ══════════════════════════════════════════════════════════════════════════════
+
+from sqlalchemy import Column as SAColumn, Integer as SAInt, String as SAStr, text
+from app.db.database import Base
+
+class PipelineStage(Base):
+    __tablename__ = "pipeline_stages"
+    __table_args__ = {"extend_existing": True}
+    id             = SAColumn(SAInt, primary_key=True, index=True)
+    name           = SAColumn(SAStr(100), nullable=False)
+    color          = SAColumn(SAStr(50),  default="bg-blue-500")
+    bg_color       = SAColumn(SAStr(50),  default="bg-blue-50")
+    position       = SAColumn(SAInt,      default=0)
+    maps_to_status = SAColumn(SAStr(50),  nullable=True)
+
+def _stage_to_dict(s):
+    return {"id": s.id, "name": s.name, "color": s.color, "bg_color": s.bg_color,
+            "position": s.position, "maps_to_status": s.maps_to_status}
+
+@router.get("/pipeline-stages", response_model=dict)
+def get_pipeline_stages(db: Session = Depends(get_db)):
+    stages = db.query(PipelineStage).order_by(PipelineStage.position).all()
+    return {"status": "success", "data": [_stage_to_dict(s) for s in stages]}
+
+@router.post("/pipeline-stages", response_model=dict)
+def create_pipeline_stage(body: dict, db: Session = Depends(get_db)):
+    max_pos = db.execute(text("SELECT COALESCE(MAX(position),0) FROM pipeline_stages")).scalar()
+    stage = PipelineStage(
+        name=body.get("name", "Nueva Etapa"),
+        color=body.get("color", "bg-purple-500"),
+        bg_color=body.get("bg_color", "bg-purple-50"),
+        position=max_pos + 1,
+        maps_to_status=body.get("maps_to_status", "DRAFT"),
+    )
+    db.add(stage); db.commit(); db.refresh(stage)
+    return {"status": "success", "data": _stage_to_dict(stage)}
+
+@router.put("/pipeline-stages/{stage_id}", response_model=dict)
+def update_pipeline_stage(stage_id: int, body: dict, db: Session = Depends(get_db)):
+    stage = db.query(PipelineStage).filter(PipelineStage.id == stage_id).first()
+    if not stage:
+        raise HTTPException(status_code=404, detail="Stage not found")
+    for field in ("name", "color", "bg_color", "position", "maps_to_status"):
+        if field in body:
+            setattr(stage, field, body[field])
+    db.commit(); db.refresh(stage)
+    return {"status": "success", "data": _stage_to_dict(stage)}
+
+@router.delete("/pipeline-stages/{stage_id}", response_model=dict)
+def delete_pipeline_stage(stage_id: int, db: Session = Depends(get_db)):
+    stage = db.query(PipelineStage).filter(PipelineStage.id == stage_id).first()
+    if not stage:
+        raise HTTPException(status_code=404, detail="Stage not found")
+    db.delete(stage); db.commit()
+    return {"status": "success", "data": {"message": "Etapa eliminada."}}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CRM PIPELINE — LEADS (tarjetas = SalesOrders enriquecidos)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _lead_to_dict(order, customer, stage) -> dict:
+    days = (datetime.datetime.utcnow() - order.updated_at).days if order.updated_at else 0
+    return {
+        "id":                order.id,
+        "client":            f"{customer.first_name} {customer.last_name}".strip(),
+        "customer_id":       order.customer_id,
+        "contact":           customer.phone or customer.email or "-",
+        "email":             customer.email,
+        "phone":             customer.phone,
+        "city":              customer.city,
+        "value":             float(order.lead_value or 0),
+        "source":            order.lead_source or "CRM",
+        "tag":               order.solicitud_tipo or "Solicitud",
+        "description":       order.lead_description or "",
+        "status":            order.status,
+        "status_label":      STATUS_LABELS.get(order.status, order.status),
+        "solicitud_tipo":    order.solicitud_tipo,
+        "pipeline_stage_id": order.pipeline_stage_id,
+        "stage_name":        stage.name if stage else STATUS_LABELS.get(order.status, order.status),
+        "days":              days,
+        "created_at":        order.created_at.isoformat() if order.created_at else None,
+        "updated_at":        order.updated_at.isoformat() if order.updated_at else None,
+    }
+
+@router.get("/leads", response_model=dict)
+def get_leads(db: Session = Depends(get_db)):
+    orders = db.query(SalesOrder).filter(SalesOrder.status != "CANCELLED").order_by(SalesOrder.created_at.desc()).all()
+    stages_map = {s.id: s for s in db.query(PipelineStage).all()}
+    leads = []
+    for order in orders:
+        customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
+        if not customer:
+            continue
+        stage = stages_map.get(order.pipeline_stage_id)
+        leads.append(_lead_to_dict(order, customer, stage))
+    return {"status": "success", "data": leads}
+
+@router.post("/leads", response_model=dict)
+def create_lead(body: dict, db: Session = Depends(get_db)):
+    customer_id = body.get("customer_id")
+    if not customer_id:
+        raise HTTPException(status_code=400, detail="customer_id is required")
+    customer = db.query(Customer).filter(Customer.id == customer_id).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    stage_id = body.get("pipeline_stage_id")
+    stage = None
+    pipeline_status = "DRAFT"
+    if stage_id:
+        stage = db.query(PipelineStage).filter(PipelineStage.id == stage_id).first()
+        if stage and stage.maps_to_status:
+            pipeline_status = stage.maps_to_status
+    else:
+        stage = db.query(PipelineStage).order_by(PipelineStage.position).first()
+        if stage:
+            stage_id = stage.id
+            pipeline_status = stage.maps_to_status or "DRAFT"
+    tipo = body.get("solicitud_tipo", "Solicitud de Cotizacion")
+    new_order = SalesOrder(
+        customer_id=customer_id,
+        status=pipeline_status,
+        sale_type=body.get("sale_type", "ON_DEMAND"),
+        solicitud_tipo=tipo,
+        lead_value=body.get("lead_value", 0),
+        lead_source=body.get("lead_source", "CRM"),
+        lead_description=body.get("description", ""),
+        pipeline_stage_id=stage_id,
+    )
+    db.add(new_order)
+    try:
+        db.commit(); db.refresh(new_order)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "success", "data": _lead_to_dict(new_order, customer, stage)}
+
+@router.patch("/leads/{lead_id}/stage", response_model=dict)
+def move_lead_stage(lead_id: int, body: dict, db: Session = Depends(get_db)):
+    order = db.query(SalesOrder).filter(SalesOrder.id == lead_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    stage = db.query(PipelineStage).filter(PipelineStage.id == body.get("pipeline_stage_id")).first()
+    if not stage:
+        raise HTTPException(status_code=404, detail="Stage not found")
+    order.pipeline_stage_id = stage.id
+    order.status = stage.maps_to_status or order.status
+    order.updated_at = datetime.datetime.utcnow()
+    db.commit(); db.refresh(order)
+    customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
+    return {"status": "success", "data": _lead_to_dict(order, customer, stage)}
+
+@router.patch("/leads/{lead_id}", response_model=dict)
+def update_lead(lead_id: int, body: dict, db: Session = Depends(get_db)):
+    order = db.query(SalesOrder).filter(SalesOrder.id == lead_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    for field in ("lead_value", "lead_source", "lead_description", "solicitud_tipo", "status", "pipeline_stage_id"):
+        if field in body:
+            setattr(order, field, body[field])
+    order.updated_at = datetime.datetime.utcnow()
+    db.commit(); db.refresh(order)
+    customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
+    stage = db.query(PipelineStage).filter(PipelineStage.id == order.pipeline_stage_id).first() if order.pipeline_stage_id else None
+    return {"status": "success", "data": _lead_to_dict(order, customer, stage)}
+
+@router.delete("/leads/{lead_id}", response_model=dict)
+def delete_lead(lead_id: int, db: Session = Depends(get_db)):
+    order = db.query(SalesOrder).filter(SalesOrder.id == lead_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    try:
+        for line in order.lines:
+            db.delete(line)
+        db.delete(order); db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "success", "data": {"message": "Lead eliminado."}}
+
+@router.get("/leads/{lead_id}", response_model=dict)
+def get_lead_detail(lead_id: int, db: Session = Depends(get_db)):
+    order = db.query(SalesOrder).filter(SalesOrder.id == lead_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
+    stage = db.query(PipelineStage).filter(PipelineStage.id == order.pipeline_stage_id).first() if order.pipeline_stage_id else None
+    all_stages = db.query(PipelineStage).order_by(PipelineStage.position).all()
+    lead = _lead_to_dict(order, customer, stage)
+    lead["all_stages"] = [_stage_to_dict(s) for s in all_stages]
+    return {"status": "success", "data": lead}

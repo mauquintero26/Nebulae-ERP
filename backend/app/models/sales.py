@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, DateTime, Text
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 import datetime
@@ -38,7 +38,11 @@ class SalesOrder(Base):
     anticipo = Column(Numeric(12, 2), default=0.0)
     estimated_delivery_date = Column(DateTime, nullable=True)
     solicitud_tipo = Column(String, nullable=True)  # e.g. "Solicitud de Cotización"
-    
+    lead_value = Column(Numeric(14, 2), default=0.0)
+    lead_source = Column(String, nullable=True)      # WhatsApp, Instagram, Correo, etc.
+    lead_description = Column(Text, nullable=True)
+    pipeline_stage_id = Column(Integer, nullable=True)  # FK-like to pipeline_stages.id
+
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
