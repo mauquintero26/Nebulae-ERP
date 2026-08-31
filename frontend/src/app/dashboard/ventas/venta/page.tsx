@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import toast from 'react-hot-toast';
 import { ResizableHeader } from '@/components/ResizableHeader';
 
 import { 
@@ -11,36 +12,48 @@ import {
   Trash2, FileText, CheckSquare, Send, ShoppingBag, Truck
 } from 'lucide-react';
 
-const MOCK_VENTAS = Array.from({ length: 24 }, (_, i) => {
-  const num = i + 1;
-  const isPending = num % 4 === 0;
-  const isEcom = num % 3 === 0;
-  
-  let estado = "Pagado";
-  if (isPending) estado = "Pendiente de Pago";
-  if (num % 7 === 0) estado = "Borrador";
 
-  let logistica = "Entregado";
-  if (estado === "Pendiente de Pago") logistica = "Retenido";
-  else if (num % 5 === 0) logistica = "Por Despachar";
 
-  return { 
-    id: `VEN-${num.toString().padStart(4, '0')}`, 
-    cliente: `Cliente Corporativo ${num}`, 
-    origen: isEcom ? 'E-Commerce' : `COT-${(num * 12).toString().padStart(4, '0')}`,
-    monto: `$${(num * 1450).toLocaleString('en-US')}.00`, 
-    fecha: '25 Ago 2026', estado: estado, 
-    logistica: logistica,
-    ultimaAct: 'Hace ' + (num % 24 + 1) + ' horas', 
-    responsable: `Asesor ${num % 4 + 1}`, 
-    alerta: estado === 'Pendiente de Pago' && num % 2 === 0
-  };
-});
+import { getSalesOrders, invoiceSalesOrder } from '@/lib/api';
 
 export default function VentasHubPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeView, setActiveView] = useState('list');
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
+  const [ventasData, setVentasData] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetchVentas();
+  }, []);
+
+  const fetchVentas = async () => {
+    try {
+      const data = await getSalesOrders();
+      const realSales = data.sales || data;
+      if (Array.isArray(realSales)) {
+        // Pedidos de Venta ya facturados/aprobados
+        const ventas = realSales.filter(s => s.status === 'INVOICED' || s.status === 'TO_INVOICE').map(s => ({
+          id: `VEN-0${s.id}`,
+          realId: s.id,
+          cliente: `Cliente #${s.customer_id}`,
+          origen: `COT-0${s.id}`,
+          monto: `$${(s.total_amount || 0).toLocaleString()}`,
+          fecha: new Date(s.created_at || Date.now()).toLocaleDateString(),
+          estado: s.status === 'TO_INVOICE' ? 'Pendiente de Pago' : 'Pagado',
+          logistica: 'Por Despachar',
+          ultimaAct: '2 min',
+          responsable: 'Tú',
+          alerta: false
+        }));
+        setVentasData(ventas);
+      }
+    } catch(e) {
+      console.error(e);
+    }
+  };
+
+  const MOCK_VENTAS = ventasData;
+
 
   const toggleRow = (id: string) => {
     if (selectedRows.includes(id)) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { 
@@ -19,20 +19,52 @@ const SUB_MODULES = [
   { name: 'Proyecciones', path: '/dashboard/ventas/proyecciones' }
 ];
 
-const MOCK_SALES = [
-  { id: 'PVEN-0145', client: 'Acme Corp', date: '2026-08-30', amount: 15400, type: 'B2B', status: 'Pendiente', risk: 'high', quoteId: 'COT-089' },
-  { id: 'PVEN-0144', client: 'Industrias Stark', date: '2026-08-29', amount: 8200, type: 'B2B', status: 'Facturado', risk: 'low', quoteId: 'COT-088' },
-  { id: 'PVEN-0143', client: 'Wayne Enterprises', date: '2026-08-28', amount: 45000, type: 'Licitación', status: 'Pendiente', risk: 'medium', quoteId: 'COT-085' },
-  { id: 'PVEN-0142', client: 'Venta Mostrador', date: '2026-08-28', amount: 450, type: 'Retail', status: 'Facturado', risk: 'low', quoteId: 'Directo' },
-  { id: 'PVEN-0141', client: 'Global Dynamics', date: '2026-08-25', amount: 12000, type: 'B2B', status: 'Mora', risk: 'high', quoteId: 'COT-080' },
-];
+
+
+import { getHeaders } from '@/lib/api';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1';
 
 export default function VentasHub() {
   const pathname = usePathname();
   const [activeTab, setActiveTab] = useState('Pendientes');
+  const [salesData, setSalesData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchSales = async () => {
+      try {
+        const res = await fetch(`${API_URL}/sales`, { headers: getHeaders() });
+        const data = await res.json().catch(() => ({}));
+        const realSales = data.data || data;
+        
+        if (Array.isArray(realSales)) {
+          const mapped = realSales.map((s:any) => ({
+            id: `PVEN-${s.id}`,
+            realId: s.id,
+            client: `Cliente #${s.customer_id}`,
+            date: new Date(s.created_at || Date.now()).toISOString().split('T')[0],
+            amount: s.total_amount || 0,
+            type: s.sale_type || 'B2B',
+            status: s.status === 'TO_INVOICE' ? 'Pendiente' : (s.status === 'INVOICED' ? 'Facturado' : s.status),
+            risk: 'low',
+            quoteId: `COT-${s.id}`
+          }));
+          setSalesData(mapped);
+        }
+      } catch(e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchSales();
+  }, []);
+
+  const MOCK_SALES = salesData;
+
 
   return (
-    <div className="w-full bg-slate-50 min-h-max pb-12 animate-in fade-in custom-scrollbar">
+    <div className="w-full bg-slate-50 min-h-max pb-{salesData.filter(s => s.status === 'Pendiente').length} animate-in fade-in custom-scrollbar">
       
       {/* 1. TABS: Sub-Módulos */}
       <div className="bg-white border-b border-slate-200 px-6 py-2 overflow-x-auto custom-scrollbar flex items-center gap-2 shadow-sm sticky top-0 z-30">
@@ -81,36 +113,36 @@ export default function VentasHub() {
         {/* 3. KPIs Estratégicos */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
           <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm relative overflow-hidden group cursor-pointer hover:border-amber-300 transition-all">
-            <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 mb-4 group-hover:scale-110 transition-transform">
+            <div className="w-{salesData.filter(s => s.status === 'Pendiente').length} h-{salesData.filter(s => s.status === 'Pendiente').length} rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 mb-4 group-hover:scale-110 transition-transform">
               <FileText size={24} />
             </div>
             <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Cotizaciones Atascadas</p>
-            <h2 className="text-3xl font-black text-slate-800">12</h2>
+            <h2 className="text-3xl font-black text-slate-800">{salesData.filter(s => s.status === 'Pendiente').length}</h2>
             <p className="text-xs font-bold text-amber-600 mt-2 flex items-center gap-1"><Clock size={14}/> Requieren seguimiento (SLA)</p>
           </div>
 
           <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm relative overflow-hidden group cursor-pointer hover:border-emerald-300 transition-all">
-            <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 mb-4 group-hover:scale-110 transition-transform">
+            <div className="w-{salesData.filter(s => s.status === 'Pendiente').length} h-{salesData.filter(s => s.status === 'Pendiente').length} rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 mb-4 group-hover:scale-110 transition-transform">
               <DollarSign size={24} />
             </div>
             <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Pendiente de Facturar</p>
-            <h2 className="text-3xl font-black text-slate-800">$60,400</h2>
-            <p className="text-xs font-bold text-slate-500 mt-2 flex items-center gap-1">En 8 Pedidos de Venta aprobados</p>
+            <h2 className="text-3xl font-black text-slate-800">${salesData.filter(s => s.status === 'Pendiente').reduce((acc, curr) => acc + curr.amount, 0).toLocaleString()}</h2>
+            <p className="text-xs font-bold text-slate-500 mt-2 flex items-center gap-1">{salesData.filter(s => s.status === 'Pendiente').length} Pedidos de Venta aprobados</p>
           </div>
 
           <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm relative overflow-hidden group cursor-pointer hover:border-blue-300 transition-all">
-            <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 mb-4 group-hover:scale-110 transition-transform">
+            <div className="w-{salesData.filter(s => s.status === 'Pendiente').length} h-{salesData.filter(s => s.status === 'Pendiente').length} rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 mb-4 group-hover:scale-110 transition-transform">
               <Target size={24} />
             </div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Tasa de Conversión</p>
-            <h2 className="text-3xl font-black text-slate-800">32.4%</h2>
+            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Margen Promedio</p>
+            <h2 className="text-3xl font-black text-slate-800">0%</h2>
             <p className="text-xs font-bold text-emerald-500 mt-2 flex items-center gap-1"><TrendingUp size={14}/> +4% vs mes anterior</p>
           </div>
 
           <div className="bg-gradient-to-br from-purple-600 to-indigo-700 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden group cursor-pointer">
             <div className="absolute right-0 top-0 opacity-20"><Activity size={100} /></div>
             <p className="text-xs font-black text-purple-200 uppercase tracking-wider mb-1 relative z-10">Ventas Facturadas (Mes)</p>
-            <h2 className="text-3xl font-black text-white relative z-10">$142,000</h2>
+            <h2 className="text-3xl font-black text-white relative z-10">${salesData.filter(s => s.status === 'Facturado').reduce((acc, curr) => acc + curr.amount, 0).toLocaleString()}</h2>
             <p className="text-xs font-bold text-emerald-300 mt-2 flex items-center gap-1 relative z-10">Meta al 85% - ¡Falta poco!</p>
           </div>
         </div>
@@ -201,7 +233,7 @@ export default function VentasHub() {
                 ))}
                 {MOCK_SALES.filter(s => activeTab === 'Pendientes' ? s.status !== 'Facturado' : s.status === 'Facturado').length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-6 py-12 text-center text-slate-500 font-medium">
+                    <td colSpan={6} className="px-6 py-{salesData.filter(s => s.status === 'Pendiente').length} text-center text-slate-500 font-medium">
                       No hay registros en esta categoría.
                     </td>
                   </tr>

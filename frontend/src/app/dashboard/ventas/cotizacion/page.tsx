@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   BadgeDollarSign, Search, Filter, Plus, AlertCircle, 
   TrendingUp, Wallet, CheckCircle2, ArrowUpRight, ArrowDownRight, 
@@ -8,39 +8,50 @@ import {
   Trash2, FileText, CheckSquare, Send, MessageSquareWarning
 } from 'lucide-react';
 import Link from 'next/link';
+import toast from 'react-hot-toast';
 import { ResizableHeader } from '@/components/ResizableHeader';
 
-const MOCK_COTIZACIONES = [
-  { id: 'COT-0001', origen_sc: 'SC-0003', cliente: 'Empresa Cliente 1', monto: '$1,200.00', fecha: '23 Ago 2026', estado: 'Cotizado - Pendiente Conf.', ultimaAct: 'Hace 2 horas', responsable: 'Agente 2', desatendida: false },
-  { id: 'COT-0002', origen_sc: 'SC-0006', cliente: 'Empresa Cliente 2', monto: '$2,400.00', fecha: '23 Ago 2026', estado: 'Cotizado - Pendiente Conf.', ultimaAct: 'Hace 3 días', responsable: 'Agente 3', desatendida: true },
-  { id: 'COT-0003', origen_sc: 'SC-0009', cliente: 'Empresa Cliente 3', monto: '$3,600.00', fecha: '23 Ago 2026', estado: 'Pendiente por Cotizar', ultimaAct: 'Hace 3 días', responsable: 'Agente 1', desatendida: true },
-  { id: 'COT-0004', origen_sc: 'SC-0012', cliente: 'Empresa Cliente 4', monto: '$4,800.00', fecha: '23 Ago 2026', estado: 'Cotizado - Pendiente Conf.', ultimaAct: 'Hace 2 horas', responsable: 'Agente 2', desatendida: false },
-  { id: 'COT-0005', origen_sc: 'SC-0015', cliente: 'Empresa Cliente 5', monto: '$6,000.00', fecha: '23 Ago 2026', estado: 'Cotización Confirmada', ultimaAct: 'Hace 2 horas', responsable: 'Agente 3', desatendida: false },
-  { id: 'COT-0006', origen_sc: 'SC-0018', cliente: 'Empresa Cliente 6', monto: '$7,200.00', fecha: '23 Ago 2026', estado: 'Pendiente por Cotizar', ultimaAct: 'Hace 2 horas', responsable: 'Agente 1', desatendida: false },
-  { id: 'COT-0007', origen_sc: 'SC-0021', cliente: 'Empresa Cliente 7', monto: '$8,400.00', fecha: '23 Ago 2026', estado: 'Cotizado - Pendiente Conf.', ultimaAct: 'Hace 2 horas', responsable: 'Agente 2', desatendida: false },
-  { id: 'COT-0008', origen_sc: 'SC-0024', cliente: 'Empresa Cliente 8', monto: '$9,600.00', fecha: '23 Ago 2026', estado: 'Cotizado - Pendiente Conf.', ultimaAct: 'Hace 2 horas', responsable: 'Agente 3', desatendida: false },
-  { id: 'COT-0009', origen_sc: 'SC-0027', cliente: 'Empresa Cliente 9', monto: '$10,800.00', fecha: '23 Ago 2026', estado: 'Pendiente por Cotizar', ultimaAct: 'Hace 2 horas', responsable: 'Agente 1', desatendida: false },
-  { id: 'COT-0010', origen_sc: 'SC-0030', cliente: 'Empresa Cliente 10', monto: '$12,000.00', fecha: '23 Ago 2026', estado: 'Cotizado - Pendiente Conf.', ultimaAct: 'Hace 2 horas', responsable: 'Agente 2', desatendida: false },
-  { id: 'COT-0011', origen_sc: 'SC-0033', cliente: 'Empresa Cliente 11', monto: '$13,200.00', fecha: '23 Ago 2026', estado: 'Cotización Confirmada', ultimaAct: 'Hace 2 horas', responsable: 'Agente 3', desatendida: false },
-  { id: 'COT-0012', origen_sc: 'SC-0036', cliente: 'Empresa Cliente 12', monto: '$14,400.00', fecha: '23 Ago 2026', estado: 'Pendiente por Cotizar', ultimaAct: 'Hace 2 horas', responsable: 'Agente 1', desatendida: false },
-  { id: 'COT-0013', origen_sc: 'SC-0039', cliente: 'Empresa Cliente 13', monto: '$15,600.00', fecha: '23 Ago 2026', estado: 'Cotizado - Pendiente Conf.', ultimaAct: 'Hace 2 horas', responsable: 'Agente 2', desatendida: false },
-  { id: 'COT-0014', origen_sc: 'SC-0042', cliente: 'Empresa Cliente 14', monto: '$16,800.00', fecha: '23 Ago 2026', estado: 'Cotizado - Pendiente Conf.', ultimaAct: 'Hace 3 días', responsable: 'Agente 3', desatendida: true },
-  { id: 'COT-0015', origen_sc: 'SC-0045', cliente: 'Empresa Cliente 15', monto: '$18,000.00', fecha: '23 Ago 2026', estado: 'Pendiente por Cotizar', ultimaAct: 'Hace 2 horas', responsable: 'Agente 1', desatendida: false },
-  { id: 'COT-0016', origen_sc: 'SC-0048', cliente: 'Empresa Cliente 16', monto: '$19,200.00', fecha: '23 Ago 2026', estado: 'Cotizado - Pendiente Conf.', ultimaAct: 'Hace 2 horas', responsable: 'Agente 2', desatendida: false },
-  { id: 'COT-0017', origen_sc: 'SC-0051', cliente: 'Empresa Cliente 17', monto: '$20,400.00', fecha: '23 Ago 2026', estado: 'Cotización Confirmada', ultimaAct: 'Hace 2 horas', responsable: 'Agente 3', desatendida: false },
-  { id: 'COT-0018', origen_sc: 'SC-0054', cliente: 'Empresa Cliente 18', monto: '$21,600.00', fecha: '23 Ago 2026', estado: 'Pendiente por Cotizar', ultimaAct: 'Hace 2 horas', responsable: 'Agente 1', desatendida: false },
-  { id: 'COT-0019', origen_sc: 'SC-0057', cliente: 'Empresa Cliente 19', monto: '$22,800.00', fecha: '23 Ago 2026', estado: 'Cotizado - Pendiente Conf.', ultimaAct: 'Hace 2 horas', responsable: 'Agente 2', desatendida: false },
-  { id: 'COT-0020', origen_sc: 'SC-0060', cliente: 'Empresa Cliente 20', monto: '$24,000.00', fecha: '23 Ago 2026', estado: 'Cotizado - Pendiente Conf.', ultimaAct: 'Hace 2 horas', responsable: 'Agente 3', desatendida: false },
-  { id: 'COT-0021', origen_sc: 'SC-0063', cliente: 'Empresa Cliente 21', monto: '$25,200.00', fecha: '23 Ago 2026', estado: 'Pendiente por Cotizar', ultimaAct: 'Hace 3 días', responsable: 'Agente 1', desatendida: true },
-  { id: 'COT-0022', origen_sc: 'SC-0066', cliente: 'Empresa Cliente 22', monto: '$26,400.00', fecha: '23 Ago 2026', estado: 'Cotizado - Pendiente Conf.', ultimaAct: 'Hace 2 horas', responsable: 'Agente 2', desatendida: false },
-  { id: 'COT-0023', origen_sc: 'SC-0069', cliente: 'Empresa Cliente 23', monto: '$27,600.00', fecha: '23 Ago 2026', estado: 'Cotización Confirmada', ultimaAct: 'Hace 2 horas', responsable: 'Agente 3', desatendida: false },
-  { id: 'COT-0024', origen_sc: 'SC-0072', cliente: 'Empresa Cliente 24', monto: '$28,800.00', fecha: '23 Ago 2026', estado: 'Pendiente por Cotizar', ultimaAct: 'Hace 2 horas', responsable: 'Agente 1', desatendida: false },
-];
+
+
+import { getSalesOrders, updateSalesOrderStatus } from '@/lib/api';
 
 export default function CotizacionesPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeView, setActiveView] = useState('list');
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
+  const [cotizacionesData, setCotizacionesData] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetchCotizaciones();
+  }, []);
+
+  const fetchCotizaciones = async () => {
+    try {
+      const data = await getSalesOrders();
+      const realSales = data.sales || data;
+      if (Array.isArray(realSales)) {
+        // Asumiendo que QUOTATION u otros estados intermedios
+        const cotizaciones = realSales.filter(s => s.status === 'QUOTATION' || s.status === 'TO_INVOICE').map(s => ({
+          id: `COT-0${s.id}`,
+          realId: s.id,
+          origen_sc: `SC-0${s.id}`,
+          cliente: `Cliente #${s.customer_id}`,
+          monto: `$${(s.total_amount || 0).toLocaleString()}`,
+          fecha: new Date(s.created_at || Date.now()).toLocaleDateString(),
+          estado: s.status === 'TO_INVOICE' ? 'Cotización Confirmada' : 'Pendiente por Cotizar',
+          ultimaAct: '2 min',
+          responsable: 'Tú',
+          desatendida: false
+        }));
+        setCotizacionesData(cotizaciones);
+      }
+    } catch(e) {
+      console.error(e);
+    }
+  };
+
+  const MOCK_COTIZACIONES = cotizacionesData;
+
 
   const toggleRow = (id: string) => {
     if (selectedRows.includes(id)) {

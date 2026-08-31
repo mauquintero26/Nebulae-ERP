@@ -1,16 +1,48 @@
 "use client";
+import { useState, useEffect } from 'react';
 
 import { Layers, Search, Filter, Download, AlertCircle, CheckCircle2 } from 'lucide-react';
 
-const STOCK_MOCK = [
-  { sku: 'IP15P-SG', producto: 'iPhone 15 Pro - Space Gray', categoria: 'Electrónica', central: 145, sucursal1: 20, total: 165, minimo: 50, estado: 'ok' },
-  { sku: 'MAC-M3-512', producto: 'MacBook Pro M3 - 512GB', categoria: 'Computación', central: 2, sucursal1: 0, total: 2, minimo: 10, estado: 'alert' },
-  { sku: 'CAM-BLA-M', producto: 'Camiseta Básica - Blanco M', categoria: 'Ropa', central: 0, sucursal1: 5, total: 5, minimo: 50, estado: 'critical' },
-  { sku: 'AUD-AIR-P2', producto: 'AirPods Pro 2', categoria: 'Accesorios', central: 430, sucursal1: 85, total: 515, minimo: 100, estado: 'ok' },
-  { sku: 'MON-LG-32', producto: 'Monitor LG UltraGear 32"', categoria: 'Computación', central: 15, sucursal1: 3, total: 18, minimo: 20, estado: 'alert' },
-];
+
+
+import { getHeaders } from '@/lib/api';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1';
 
 export default function StockPage() {
+  const [stockData, setStockData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchStock = async () => {
+      try {
+        const res = await fetch(`${API_URL}/products`, { headers: getHeaders() });
+        const data = await res.json().catch(() => ({}));
+        const realProducts = data.data || data;
+        
+        if (Array.isArray(realProducts)) {
+          const mapped = realProducts.map((p:any) => ({
+            sku: p.internal_ref || `PRD-${p.id}`,
+            producto: p.name,
+            categoria: `Categoría #${p.category_id || 'N/A'}`,
+            central: p.total_stock || 0,
+            sucursal1: 0,
+            total: p.total_stock || 0,
+            minimo: 10,
+            estado: (p.total_stock || 0) > 10 ? 'ok' : 'alert'
+          }));
+          setStockData(mapped);
+        }
+      } catch(e) {
+        console.error(e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchStock();
+  }, []);
+
+  const STOCK_MOCK = stockData;
+
   return (
     <div className="p-8 h-full overflow-y-auto space-y-6 animate-in fade-in duration-500 custom-scrollbar bg-slate-50">
       

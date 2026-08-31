@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { ResizableHeader } from '@/components/ResizableHeader';
 
@@ -12,38 +12,47 @@ import {
   Trash2, Edit, CheckSquare
 } from 'lucide-react';
 
-const MOCK_SOLICITUDES = [
-  { id: 'SC-0001', cliente: 'Cliente Genérico 1', tipo: 'Soporte', estado: 'Esperando Cliente', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 2', desatendida: false },
-  { id: 'SC-0002', cliente: 'Cliente Genérico 2', tipo: 'Información', estado: 'En Proceso', fecha: '24 Ago 2026', ultimaAct: 'Hace 4 días', responsable: 'Agente 3', desatendida: true },
-  { id: 'SC-0003', cliente: 'Cliente Genérico 3', tipo: 'Devolución', estado: 'Esperando Cliente', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 4', desatendida: false },
-  { id: 'SC-0004', cliente: 'Cliente Genérico 4', tipo: 'Queja', estado: 'Nuevo', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 1', desatendida: false },
-  { id: 'SC-0005', cliente: 'Cliente Genérico 5', tipo: 'Cotización', estado: 'Esperando Cliente', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 2', desatendida: false },
-  { id: 'SC-0006', cliente: 'Cliente Genérico 6', tipo: 'Soporte', estado: 'En Proceso', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 3', desatendida: false },
-  { id: 'SC-0007', cliente: 'Cliente Genérico 7', tipo: 'Información', estado: 'Esperando Cliente', fecha: '24 Ago 2026', ultimaAct: 'Hace 4 días', responsable: 'Agente 4', desatendida: true },
-  { id: 'SC-0008', cliente: 'Cliente Genérico 8', tipo: 'Devolución', estado: 'Nuevo', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 1', desatendida: false },
-  { id: 'SC-0009', cliente: 'Cliente Genérico 9', tipo: 'Queja', estado: 'Esperando Cliente', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 2', desatendida: false },
-  { id: 'SC-0010', cliente: 'Cliente Genérico 10', tipo: 'Cotización', estado: 'En Proceso', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 3', desatendida: false },
-  { id: 'SC-0011', cliente: 'Cliente Genérico 11', tipo: 'Soporte', estado: 'Esperando Cliente', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 4', desatendida: false },
-  { id: 'SC-0012', cliente: 'Cliente Genérico 12', tipo: 'Información', estado: 'Nuevo', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 1', desatendida: false },
-  { id: 'SC-0013', cliente: 'Cliente Genérico 13', tipo: 'Devolución', estado: 'Esperando Cliente', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 2', desatendida: false },
-  { id: 'SC-0014', cliente: 'Cliente Genérico 14', tipo: 'Queja', estado: 'En Proceso', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 3', desatendida: false },
-  { id: 'SC-0015', cliente: 'Cliente Genérico 15', tipo: 'Cotización', estado: 'Esperando Cliente', fecha: '24 Ago 2026', ultimaAct: 'Hace 4 días', responsable: 'Agente 4', desatendida: true },
-  { id: 'SC-0016', cliente: 'Cliente Genérico 16', tipo: 'Soporte', estado: 'Nuevo', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 1', desatendida: false },
-  { id: 'SC-0017', cliente: 'Cliente Genérico 17', tipo: 'Información', estado: 'Esperando Cliente', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 2', desatendida: false },
-  { id: 'SC-0018', cliente: 'Cliente Genérico 18', tipo: 'Devolución', estado: 'En Proceso', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 3', desatendida: false },
-  { id: 'SC-0019', cliente: 'Cliente Genérico 19', tipo: 'Queja', estado: 'Esperando Cliente', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 4', desatendida: false },
-  { id: 'SC-0020', cliente: 'Cliente Genérico 20', tipo: 'Cotización', estado: 'Nuevo', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 1', desatendida: false },
-  { id: 'SC-0021', cliente: 'Cliente Genérico 21', tipo: 'Soporte', estado: 'Esperando Cliente', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 2', desatendida: false },
-  { id: 'SC-0022', cliente: 'Cliente Genérico 22', tipo: 'Información', estado: 'En Proceso', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 3', desatendida: false },
-  { id: 'SC-0023', cliente: 'Cliente Genérico 23', tipo: 'Devolución', estado: 'Esperando Cliente', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 4', desatendida: false },
-  { id: 'SC-0024', cliente: 'Cliente Genérico 24', tipo: 'Queja', estado: 'Nuevo', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 1', desatendida: false },
-  { id: 'SC-0025', cliente: 'Cliente Genérico 25', tipo: 'Cotización', estado: 'Esperando Cliente', fecha: '24 Ago 2026', ultimaAct: 'Hace 1 hora', responsable: 'Agente 2', desatendida: false },
-];
+
+
+import { getSalesOrders, updateSalesOrderStatus } from '@/lib/api';
+import toast from 'react-hot-toast';
 
 export default function SolicitudesClientePage() {
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeView, setActiveView] = useState('list'); // list, kanban, calendar, analysis
+  const [activeView, setActiveView] = useState('list');
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
+  const [salesData, setSalesData] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetchSolicitudes();
+  }, []);
+
+  const fetchSolicitudes = async () => {
+    try {
+      const data = await getSalesOrders();
+      const realSales = data.sales || data;
+      if (Array.isArray(realSales)) {
+        // Filtrar solo las que sean solicitudes (estado inicial)
+        const solicitudes = realSales.filter(s => s.status === 'DRAFT' || s.status === 'SOLICITUD' || s.status === 'TO_INVOICE').map(s => ({
+          id: `SC-0${s.id}`,
+          realId: s.id,
+          date: new Date(s.created_at || Date.now()).toLocaleDateString(),
+          client: `Cliente #${s.customer_id}`,
+          type: s.sale_type || 'B2B',
+          status: s.status === 'TO_INVOICE' ? 'Evaluación' : 'Pendiente',
+          lastUpdate: '2 min',
+          assigned: 'Tú',
+          desatendida: false
+        }));
+        setSalesData(solicitudes);
+      }
+    } catch(e) {
+      console.error(e);
+    }
+  };
+
+  const MOCK_SOLICITUDES = salesData;
+
 
   const toggleRow = (id: string) => {
     if (selectedRows.includes(id)) {

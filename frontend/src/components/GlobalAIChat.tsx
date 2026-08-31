@@ -3,18 +3,19 @@
 import { useState, useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import { Sparkles, X, Send, Bot, Minimize2, Maximize2, Paperclip } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 export function GlobalAIChat() {
   const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [messages, setMessages] = useState<{role: 'ai'|'user', text: string}[]>([
-    { role: 'ai', text: '¡Hola! Soy Nebulae AI, tu agente MCP. Veo que estás en el sistema. ¿En qué te puedo asistir hoy?' }
+    { role: 'ai', text: '¡Hola! Soy Nebulae AI, tu agente MCP. Conectado al servidor de producción. ¿En qué te puedo asistir hoy?' }
   ]);
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [ws, setWs] = useState<WebSocket | null>(null);
 
-  // Helper to get module name from path
   const getModuleName = () => {
     if (!pathname) return 'General';
     if (pathname.includes('/ventas')) return 'Ventas & CRM';
@@ -29,29 +30,59 @@ export function GlobalAIChat() {
   const moduleName = getModuleName();
 
   useEffect(() => {
-    // Scroll to bottom when messages change
+    // Scroll to bottom
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isOpen]);
 
-  // Welcome message based on context change
+  // WebSocket Connection
   useEffect(() => {
-    if (isOpen && messages.length > 0) {
-       // Optional: Add context aware greeting if they navigate while open
-    }
-  }, [pathname]);
+    const socket = new WebSocket('wss://api.nebulaekids.com/ws/chat/global');
+    
+    socket.onopen = () => {
+      console.log('Conectado a Nebulae AI Production');
+    };
+    
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        setMessages(prev => [...prev, { role: 'ai', text: data.message || event.data }]);
+      } catch(e) {
+        setMessages(prev => [...prev, { role: 'ai', text: event.data }]);
+      }
+    };
+    
+    socket.onerror = (error) => {
+      console.error('WebSocket Error:', error);
+    };
+
+    setWs(socket);
+
+    return () => {
+      socket.close();
+    };
+  }, []);
 
   const handleSend = () => {
     if (!input.trim()) return;
-    setMessages(prev => [...prev, { role: 'user', text: input }]);
-    setInput('');
     
-    // Simulate AI response based on context
-    setTimeout(() => {
-      setMessages(prev => [...prev, { 
-        role: 'ai', 
-        text: `Consultando la base de datos de ${moduleName} a través del Agente MCP... ¡Encontrado! ¿Hay algún dato específico que quieras cruzar con otro módulo?`
-      }]);
-    }, 1000);
+    // Add user message to UI
+    setMessages(prev => [...prev, { role: 'user', text: input }]);
+    
+    // Send to WS
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ 
+        context: moduleName, 
+        message: input 
+      }));
+    } else {
+      toast.error('Conexión con IA perdida. Intentando reconectar...');
+      // Simulamos que al menos muestra algo de error local
+      setTimeout(() => {
+        setMessages(prev => [...prev, { role: 'ai', text: 'Error: No se pudo contactar al MCP Agent de producción.' }]);
+      }, 500);
+    }
+    
+    setInput('');
   };
 
   if (!isOpen) {
@@ -61,8 +92,7 @@ export function GlobalAIChat() {
         className="fixed bottom-6 right-6 w-14 h-14 bg-gradient-to-br from-purple-600 to-blue-600 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(168,85,247,0.4)] hover:scale-110 transition-transform z-50 group"
       >
         <Sparkles className="text-white group-hover:animate-spin-slow" size={24} />
-        {/* Unread indicator dot */}
-        <span className="absolute top-0 right-0 w-3.5 h-3.5 bg-red-500 border-2 border-white rounded-full"></span>
+        <span className="absolute top-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full"></span>
       </button>
     );
   }
@@ -73,13 +103,14 @@ export function GlobalAIChat() {
       {/* Header */}
       <div className="bg-gradient-to-r from-slate-900 to-slate-800 p-4 shrink-0 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center shadow-inner">
+          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-blue-500 flex items-center justify-center shadow-inner relative">
             <Bot className="text-white" size={20} />
+            <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 border-2 border-slate-800 rounded-full ${ws?.readyState === WebSocket.OPEN ? 'bg-emerald-400' : 'bg-red-400'}`}></span>
           </div>
           <div>
             <h3 className="font-black text-white text-sm">Nebulae Copilot</h3>
             <p className="text-[10px] font-bold text-emerald-400 flex items-center gap-1 uppercase tracking-wider">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> MCP Online: {moduleName}
+              <span className={`w-1.5 h-1.5 rounded-full ${ws?.readyState === WebSocket.OPEN ? 'bg-emerald-400 animate-pulse' : 'bg-red-500'}`}></span> MCP Online: {moduleName}
             </p>
           </div>
         </div>
@@ -96,7 +127,7 @@ export function GlobalAIChat() {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 bg-slate-50 flex flex-col gap-4 custom-scrollbar">
         <div className="text-center mb-2">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-slate-200 px-2 py-1 rounded-full">Hoy</span>
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider bg-slate-200 px-2 py-1 rounded-full">Prod. Server Conectado</span>
         </div>
         
         {messages.map((msg, i) => (
@@ -129,7 +160,7 @@ export function GlobalAIChat() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            placeholder={`Preguntar sobre ${moduleName}...`}
+            placeholder={`Hablar con IA en ${moduleName}...`}
             className="flex-1 bg-transparent border-none focus:ring-0 text-sm font-medium text-slate-700 outline-none px-2"
           />
           <button 
@@ -139,9 +170,6 @@ export function GlobalAIChat() {
           >
             <Send size={14} className={input.trim() ? "ml-0.5" : ""} />
           </button>
-        </div>
-        <div className="text-center mt-2">
-          <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">Powered by MCP Agent Network</p>
         </div>
       </div>
 

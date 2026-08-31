@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { 
   ShoppingBag, AlertTriangle, Package, CheckCircle2, 
@@ -17,13 +17,7 @@ const SUB_MODULES = [
   { name: 'Proyecciones', path: '/dashboard/compras/proyecciones' }
 ];
 
-const MOCK_COMPRAS = [
-  { id: 'PEC-0092', supplier: 'Tech Corp Asia', date: '2026-08-30', amount: 45000, status: 'Emitido', linkedSale: 'PVEN-0145', risk: 'low' },
-  { id: 'PEC-0091', supplier: 'Logística Sur', date: '2026-08-28', amount: 12500, status: 'En Tránsito', linkedSale: 'Stock Base', risk: 'low' },
-  { id: 'PEC-0090', supplier: 'Importaciones Global', date: '2026-08-25', amount: 8900, status: 'Retrasado', linkedSale: 'PVEN-0141', risk: 'high' },
-  { id: 'PEC-0089', supplier: 'Embalajes Express', date: '2026-08-24', amount: 1200, status: 'Recibido', linkedSale: 'Consumo Interno', risk: 'none' },
-  { id: 'PEC-0088', supplier: 'Tech Corp Asia', date: '2026-08-20', amount: 32000, status: 'Recibido', linkedSale: 'PVEN-0130', risk: 'none' },
-];
+
 
 export default function ComprasHub() {
   const [activeTab, setActiveTab] = useState('En Proceso');

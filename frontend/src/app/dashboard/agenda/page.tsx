@@ -1,6 +1,8 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { getCustomers, createCustomer, getHeaders, API_URL, handleResponse } from '@/lib/api';
+import toast from 'react-hot-toast';
 import { 
   Search, Filter, LayoutGrid, List, Plus, 
   ChevronLeft, Calendar, MessageSquare, Settings, 
@@ -9,20 +11,7 @@ import {
   Phone, Mail, X, ArrowRight
 , Trash2, Edit, Download} from 'lucide-react';
 
-const MOCK_CLIENTS = [
-  {
-    id: 'CLI-001', name: 'Carlos Mendoza', email: 'carlos.m@empresa.com', phone: '+57 300 123 4567',
-    type: 'Empleado', sector: 'Salud', source: 'Repositorio', initial: 'C',
-    document: 'CC 1020304050', address: 'Calle 123 #45-67', city: 'Bogotá', country: 'Cundinamarca, Colombia',
-    category: 'VIP', tags: ['Frecuente', 'Envío Rápido']
-  },
-  {
-    id: 'CLI-002', name: 'Laura Jiménez', email: 'laura.j@gmail.com', phone: '+57 310 987 6543',
-    type: 'Pyme', sector: 'Prestación de servicios', source: 'Ana Gómez', initial: 'L',
-    document: 'NIT 900.123.456-7', address: 'Carrera 15 #80-11', city: 'Medellín', country: 'Antioquia, Colombia',
-    category: 'Regular', tags: ['Corporativo']
-  }
-];
+
 
 export default function AgendaPage() {
   const [selectedClient, setSelectedClient] = useState<any | null>(null);
@@ -30,6 +19,96 @@ export default function AgendaPage() {
   const [entityType, setEntityType] = useState('Individuo');
   const [activeTimeline, setActiveTimeline] = useState('general');
   const [showModal, setShowModal] = useState<string | null>(null);
+
+  const [customers, setCustomers] = useState<any[]>([]);
+  const [formData, setFormData] = useState<any>({});
+
+  const [customer360, setCustomer360] = useState<any>(null);
+
+  useEffect(() => {
+    if (selectedClient && selectedClient !== 'NEW') {
+      const fetchProfile = async () => {
+        try {
+          const res = await fetch(`${API_URL}/crm/customers/${selectedClient.realId}/profile-360`, { headers: getHeaders() });
+          const data = await handleResponse(res);
+          setCustomer360(data.data);
+        } catch(e) {
+          console.error(e);
+        }
+      };
+      fetchProfile();
+    } else {
+      setCustomer360(null);
+    }
+  }, [selectedClient]);
+
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  
+  useEffect(() => {
+    fetchCustomers();
+  }, []);
+
+  const fetchCustomers = async () => {
+    try {
+      const data = await getCustomers();
+      const realCustomers = data.data || data;
+      if (Array.isArray(realCustomers)) {
+        const mapped = realCustomers.map(c => ({
+          id: `CLI-00${c.id}`,
+          realId: c.id,
+          name: `${c.first_name} ${c.last_name}`,
+          email: c.email || '',
+          phone: c.phone || '',
+          type: 'Regular',
+          sector: 'N/A',
+          source: 'Registro CRM',
+          initial: c.first_name ? c.first_name.charAt(0).toUpperCase() : 'C',
+          document: '',
+          address: '',
+          city: c.city || '',
+          country: 'Colombia',
+          category: 'Regular',
+          tags: []
+        }));
+        setCustomers(mapped);
+      }
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  const handleSave = async () => {
+    if (selectedClient === 'NEW') {
+      try {
+        toast.loading('Guardando cliente...', { id: 'save-client' });
+        // Mapear nombre completo
+        const names = (formData.name || 'Sin Nombre').split(' ');
+        const first = names[0];
+        const last = names.slice(1).join(' ') || '';
+        
+        await createCustomer({
+          first_name: first,
+          last_name: last || 'N/A',
+          email: formData.email || null,
+          phone: formData.phone || null,
+          city: formData.city || null
+        });
+        
+        toast.success('Cliente creado', { id: 'save-client' });
+        setSelectedClient(null);
+        setFormData({});
+        setImagePreview(null);
+        fetchCustomers();
+      } catch (error: any) {
+        toast.error(error.message, { id: 'save-client' });
+      }
+    } else {
+      toast.success('Cambios guardados localmente');
+    }
+  };
+  
+  const MOCK_CLIENTS = customers;
+
 
   // VIEW 1: LIST
   if (!selectedClient) {
@@ -46,6 +125,7 @@ export default function AgendaPage() {
           <button 
             onClick={() => {
               setSelectedClient('NEW');
+              setFormData({});
               setActiveTab('Información y Bitácora');
             }}
             className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-lg font-bold text-sm shadow-sm transition-colors flex items-center gap-2"
@@ -82,7 +162,7 @@ export default function AgendaPage() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {MOCK_CLIENTS.map((client) => (
-                <tr key={client.id} onClick={() => setSelectedClient(client)} className="hover:bg-slate-50 cursor-pointer transition-colors">
+                <tr key={client.id} onClick={() => { setSelectedClient(client); setFormData({}); }} className="hover:bg-slate-50 cursor-pointer transition-colors">
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center text-purple-700 font-bold">{client.initial}</div>
@@ -125,7 +205,8 @@ export default function AgendaPage() {
       {/* Header */}
       <div className="flex justify-between items-start mb-4">
         <div className="flex items-center gap-4">
-          <button onClick={() => setSelectedClient(null)} className="w-10 h-10 bg-white border border-slate-200 rounded-xl flex items-center justify-center text-slate-500 hover:bg-slate-50 shadow-sm">
+          <button onClick={() => { setSelectedClient(null);
+        setFormData({}); setImagePreview(null); }} className="w-10 h-10 bg-white border border-slate-200 rounded-xl flex items-center justify-center text-slate-500 hover:bg-slate-50 shadow-sm">
             <ChevronLeft size={20} />
           </button>
           <div className="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center text-purple-700 font-bold text-xl">
@@ -177,14 +258,19 @@ export default function AgendaPage() {
           {activeTab === 'Información y Bitácora' && (
             <>
               <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-6">
-                <div className="w-24 h-24 bg-slate-100 rounded-full flex flex-col items-center justify-center text-slate-400 border-2 border-dashed border-slate-300">
-                  <User size={32} className="mb-1 opacity-50" />
-                </div>
+                {imagePreview ? (
+                  <img src={imagePreview} alt="Preview" className="w-24 h-24 rounded-full object-cover shadow-inner shrink-0 border-2 border-slate-300" />
+                ) : (
+                  <div className="w-24 h-24 bg-slate-100 rounded-full flex flex-col items-center justify-center text-slate-400 border-2 border-dashed border-slate-300">
+                    <User size={32} className="mb-1 opacity-50" />
+                  </div>
+                )}
                 <div>
-                  <h3 className="font-bold text-slate-800">Fotografía / Logo</h3>
-                  <p className="text-xs text-slate-500 mb-3">Sube una imagen para identificar rápidamente al cliente.</p>
-                  <button className="text-sm font-bold border border-slate-300 px-4 py-1.5 rounded-lg text-slate-700 hover:bg-slate-50">Subir imagen</button>
-                </div>
+                    <h3 className="font-bold text-slate-800">Fotografía / Logo</h3>
+                    <p className="text-xs text-slate-500 mb-3">Sube una imagen para identificar rápidamente al cliente.</p>
+                    <input type="file" id="upload-image" className="hidden" accept="image/*" onChange={(e) => { if(e.target.files && e.target.files[0]) { setImagePreview(URL.createObjectURL(e.target.files[0])); toast.success('Imagen cargada localmente'); } }} />
+                    <label htmlFor="upload-image" className="cursor-pointer text-sm font-bold border border-slate-300 px-4 py-1.5 rounded-lg text-slate-700 hover:bg-slate-50">Subir imagen</label>
+                  </div>
               </div>
 
               <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
@@ -198,14 +284,20 @@ export default function AgendaPage() {
                       <button onClick={() => setEntityType('Compañía')} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-colors ${entityType === 'Compañía' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>Compañía</button>
                     </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1">Nombre Completo / Razón Social</label>
-                    <input type="text" defaultValue={clientData.name} className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1">Nombre (s)</label>
+                        <input type="text" value={formData.first_name !== undefined ? formData.first_name : (clientData.name ? clientData.name.split(' ')[0] : "")} onChange={(e) => setFormData({...formData, first_name: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-500 mb-1">Apellido (s) / Razón Social</label>
+                        <input type="text" value={formData.last_name !== undefined ? formData.last_name : (clientData.name ? clientData.name.split(' ').slice(1).join(' ') : "")} onChange={(e) => setFormData({...formData, last_name: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
+                      </div>
+                    </div>
                   
                   <div>
                     <label className="block text-xs font-bold text-slate-500 mb-1">Identificación (CC/NIT/Pasaporte)</label>
-                    <input type="text" defaultValue={clientData.document} className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
+                    <input type="text" value={formData.document !== undefined ? formData.document : clientData.document || ""} onChange={(e) => setFormData({...formData, document: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 mb-1">Categorización</label>
@@ -221,22 +313,22 @@ export default function AgendaPage() {
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   <div>
                     <label className="block text-xs font-bold text-slate-500 mb-1">Correo Electrónico</label>
-                    <input type="email" defaultValue={clientData.email} className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
+                    <input type="email" value={formData.email !== undefined ? formData.email : clientData.email || ""} onChange={(e) => setFormData({...formData, email: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-500 mb-1">Teléfono / WhatsApp</label>
-                    <input type="text" defaultValue={clientData.phone} className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
+                    <input type="text" value={formData.phone !== undefined ? formData.phone : clientData.phone || ""} onChange={(e) => setFormData({...formData, phone: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-3 gap-4 mb-4">
                   <div className="col-span-1">
                     <label className="block text-xs font-bold text-slate-500 mb-1">Ciudad</label>
-                    <input type="text" defaultValue={clientData.city} className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
+                    <input type="text" value={formData.city !== undefined ? formData.city : clientData.city || ""} onChange={(e) => setFormData({...formData, city: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
                   </div>
                   <div className="col-span-2">
                     <label className="block text-xs font-bold text-slate-500 mb-1">Dirección de Facturación / Entrega</label>
-                    <input type="text" defaultValue={clientData.address} className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
+                    <input type="text" value={formData.address !== undefined ? formData.address : clientData.address || ""} onChange={(e) => setFormData({...formData, address: e.target.value})} className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
                   </div>
                 </div>
 
@@ -246,14 +338,7 @@ export default function AgendaPage() {
                 </div>
 
                 <button 
-                  onClick={() => {
-                    if (isNew) {
-                      alert('Cliente creado exitosamente');
-                      setSelectedClient(null);
-                    } else {
-                      alert('Cambios guardados');
-                    }
-                  }}
+                  onClick={handleSave}
                   className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-colors"
                 >
                   {isNew ? 'Crear Cliente' : 'Guardar Cambios'}
@@ -286,8 +371,8 @@ export default function AgendaPage() {
               <div className="grid grid-cols-3 gap-4">
                 <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-5 rounded-2xl text-white shadow-md">
                   <p className="text-xs font-bold uppercase tracking-wider opacity-80 mb-1">Total Comprado</p>
-                  <h2 className="text-3xl font-black">$4.250.000</h2>
-                  <p className="text-sm opacity-90 mt-2">En 4 transacciones</p>
+                  <h2 className="text-3xl font-black">${(customer360?.ltv || 0).toLocaleString()}</h2>
+                  <p className="text-sm opacity-90 mt-2">En {customer360?.active_orders?.length || 0} transacciones</p>
                 </div>
                 <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
                   <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1"><DollarSign size={14}/> Ganancia / LTV</p>
@@ -487,7 +572,7 @@ export default function AgendaPage() {
                     <label className="block text-xs font-bold text-slate-500 mb-2">Asunto / Motivo</label>
                     <input type="text" placeholder="Ej. Presentación de producto" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
                   </div>
-                  <button onClick={() => { alert('Reunión agendada exitosamente en el calendario.'); setShowModal(null); }} className="w-full bg-purple-600 text-white font-bold py-3 rounded-xl shadow-md hover:bg-purple-700 transition-colors mt-2">
+                  <button onClick={() => { toast.success('Reunión agendada exitosamente en el calendario.'); setShowModal(null); }} className="w-full bg-purple-600 text-white font-bold py-3 rounded-xl shadow-md hover:bg-purple-700 transition-colors mt-2">
                     Confirmar Agenda
                   </button>
                 </div>
@@ -500,27 +585,27 @@ export default function AgendaPage() {
                 <div className="space-y-3">
                   <p className="text-sm font-bold text-slate-600 mb-2">Selecciona el canal de comunicación:</p>
                   
-                  <button onClick={() => { alert('Abriendo chat de WhatsApp'); setShowModal(null); }} className="w-full flex items-center gap-3 p-3 border border-slate-200 rounded-xl hover:bg-green-50 hover:border-green-300 transition-colors group">
+                  <button onClick={() => { toast.success('Abriendo chat de WhatsApp'); setShowModal(null); }} className="w-full flex items-center gap-3 p-3 border border-slate-200 rounded-xl hover:bg-green-50 hover:border-green-300 transition-colors group">
                     <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center text-green-600"><MessageSquare size={16} /></div>
                     <span className="font-bold text-slate-700 group-hover:text-green-700">WhatsApp</span>
                   </button>
                   
-                  <button onClick={() => { alert('Abriendo chat de Instagram'); setShowModal(null); }} className="w-full flex items-center gap-3 p-3 border border-slate-200 rounded-xl hover:bg-pink-50 hover:border-pink-300 transition-colors group">
+                  <button onClick={() => { toast.success('Abriendo chat de Instagram'); setShowModal(null); }} className="w-full flex items-center gap-3 p-3 border border-slate-200 rounded-xl hover:bg-pink-50 hover:border-pink-300 transition-colors group">
                     <div className="w-8 h-8 rounded-full bg-pink-100 flex items-center justify-center text-pink-600"><MessageSquare size={16} /></div>
                     <span className="font-bold text-slate-700 group-hover:text-pink-700">Instagram</span>
                   </button>
 
-                  <button onClick={() => { alert('Abriendo chat de Facebook'); setShowModal(null); }} className="w-full flex items-center gap-3 p-3 border border-slate-200 rounded-xl hover:bg-blue-50 hover:border-blue-300 transition-colors group">
+                  <button onClick={() => { toast.success('Abriendo chat de Facebook'); setShowModal(null); }} className="w-full flex items-center gap-3 p-3 border border-slate-200 rounded-xl hover:bg-blue-50 hover:border-blue-300 transition-colors group">
                     <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600"><MessageSquare size={16} /></div>
                     <span className="font-bold text-slate-700 group-hover:text-blue-700">Facebook Messenger</span>
                   </button>
                   
-                  <button onClick={() => { alert('Abriendo redactor de correo'); setShowModal(null); }} className="w-full flex items-center gap-3 p-3 border border-slate-200 rounded-xl hover:bg-red-50 hover:border-red-300 transition-colors group">
+                  <button onClick={() => { toast.success('Abriendo redactor de correo'); setShowModal(null); }} className="w-full flex items-center gap-3 p-3 border border-slate-200 rounded-xl hover:bg-red-50 hover:border-red-300 transition-colors group">
                     <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center text-red-600"><Mail size={16} /></div>
                     <span className="font-bold text-slate-700 group-hover:text-red-700">Correo Electrónico</span>
                   </button>
                   
-                  <button onClick={() => { alert('Iniciando llamada...'); setShowModal(null); }} className="w-full flex items-center gap-3 p-3 border border-slate-200 rounded-xl hover:bg-purple-50 hover:border-purple-300 transition-colors group">
+                  <button onClick={() => { toast.success('Iniciando llamada...'); setShowModal(null); }} className="w-full flex items-center gap-3 p-3 border border-slate-200 rounded-xl hover:bg-purple-50 hover:border-purple-300 transition-colors group">
                     <div className="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center text-purple-600"><Phone size={16} /></div>
                     <span className="font-bold text-slate-700 group-hover:text-purple-700">Llamada Telefónica</span>
                   </button>
@@ -552,7 +637,7 @@ export default function AgendaPage() {
                     <label className="block text-xs font-bold text-slate-500 mb-2">Detalles Adicionales</label>
                     <textarea rows={3} placeholder="Describe brevemente lo que necesita el cliente..." className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600 resize-none"></textarea>
                   </div>
-                  <button onClick={() => { alert('¡Solicitud Creada! El cliente ha sido ingresado al pipeline del CRM en la etapa correspondiente.'); setShowModal(null); }} className="w-full bg-purple-600 text-white font-bold py-3 rounded-xl shadow-md hover:bg-purple-700 transition-colors mt-2 flex items-center justify-center gap-2">
+                  <button onClick={() => { toast.success('¡Solicitud Creada! El cliente ha sido ingresado al pipeline del CRM en la etapa correspondiente.'); setShowModal(null); }} className="w-full bg-purple-600 text-white font-bold py-3 rounded-xl shadow-md hover:bg-purple-700 transition-colors mt-2 flex items-center justify-center gap-2">
                     Ingresar al CRM <ArrowRight size={16} />
                   </button>
                 </div>
@@ -570,7 +655,7 @@ export default function AgendaPage() {
                     </div>
                   </button>
                   
-                  <button onClick={() => { alert('Iniciando descarga de reporte en PDF/Excel...'); setShowModal(null); }} className="w-full flex items-center gap-3 p-4 border border-slate-200 rounded-xl hover:bg-emerald-50 hover:border-emerald-300 transition-colors group shadow-sm">
+                  <button onClick={() => { toast.success('Iniciando descarga de reporte en PDF/Excel...'); setShowModal(null); }} className="w-full flex items-center gap-3 p-4 border border-slate-200 rounded-xl hover:bg-emerald-50 hover:border-emerald-300 transition-colors group shadow-sm">
                     <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600"><Download size={18} /></div>
                     <div className="text-left">
                       <h4 className="font-bold text-slate-800 group-hover:text-emerald-700">Exportar Información</h4>
@@ -579,7 +664,9 @@ export default function AgendaPage() {
                   </button>
 
                   <div className="pt-4 mt-4 border-t border-slate-100">
-                    <button onClick={() => { if(confirm('¿Estás seguro de que deseas eliminar este cliente? Esta acción no se puede deshacer.')) { alert('Cliente eliminado.'); setShowModal(null); setSelectedClient(null); } }} className="w-full flex items-center gap-3 p-4 border border-red-100 rounded-xl hover:bg-red-50 hover:border-red-300 transition-colors group shadow-sm bg-red-50/50">
+                    <button onClick={() => { if(confirm('¿Estás seguro de que deseas eliminar este cliente? Esta acción no se puede deshacer.')) { toast.success('Cliente eliminado.'); setShowModal(null); setSelectedClient(null);
+        setFormData({});
+        setImagePreview(null); } }} className="w-full flex items-center gap-3 p-4 border border-red-100 rounded-xl hover:bg-red-50 hover:border-red-300 transition-colors group shadow-sm bg-red-50/50">
                       <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600"><Trash2 size={18} /></div>
                       <div className="text-left">
                         <h4 className="font-bold text-red-700">Eliminar Cliente</h4>

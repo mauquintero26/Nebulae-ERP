@@ -26,3 +26,17 @@ class Customer360Profile(BaseModel):
     phone: Optional[str] = None
     active_orders: List[dict] = []
     ltv: Decimal
+
+class CustomerBase(BaseModel):
+    first_name: str
+    last_name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    city: Optional[str] = None
+
+class CustomerCreate(CustomerBase):
+    pass
+
+class CustomerResponse(CustomerBase):
+    id: int
+    model_config = {"from_attributes": True}
