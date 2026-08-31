@@ -104,6 +104,10 @@ export default function CRMPage() {
   const [showConfig, setShowConfig]     = useState(false);
   const [isSaving, setIsSaving]         = useState(false);
 
+  // ─── Drag & Drop state ────────────────────────────────────────────────────
+  const [dragLeadId, setDragLeadId]           = useState(null);
+  const [dragOverStageId, setDragOverStageId] = useState(null);
+
   // ─── New Lead form ─────────────────────────────────────────────────────
   const [nlForm, setNlForm] = useState({
     customer_id: '', customer_name: '', solicitud_tipo: 'Nuevo Lead',
@@ -314,6 +318,66 @@ export default function CRMPage() {
     } catch (e) { toast.error(e.message); }
   }
 
+  // ═══ Drag & Drop handlers ════════════════════════════════════════════════
+  function handleDragStart(e, lead) {
+    setDragLeadId(lead.id);
+    e.dataTransfer.effectAllowed = 'move';
+    // Store lead id in dataTransfer for cross-window safety
+    e.dataTransfer.setData('text/plain', String(lead.id));
+  }
+
+  function handleDragEnd() {
+    setDragLeadId(null);
+    setDragOverStageId(null);
+  }
+
+  function handleDragOverStage(e, stageId) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverStageId(stageId);
+  }
+
+  function handleDragLeaveStage(e) {
+    // Only clear if leaving the column (not a child element)
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+      setDragOverStageId(null);
+    }
+  }
+
+  async function handleDropOnStage(e, targetStageId) {
+    e.preventDefault();
+    setDragOverStageId(null);
+    if (!dragLeadId) return;
+    const lead = leads.find(l => l.id === dragLeadId);
+    if (!lead) return;
+    if (lead.pipeline_stage_id === targetStageId) {
+      setDragLeadId(null);
+      return; // same column — no-op
+    }
+    // Optimistic update for instant visual feedback
+    setLeads(prev => prev.map(l =>
+      l.id === dragLeadId ? { ...l, pipeline_stage_id: targetStageId } : l
+    ));
+    setDragLeadId(null);
+    try {
+      const updated = await apiFetch(`/crm/leads/${dragLeadId}/stage`, {
+        method: 'PATCH',
+        body: JSON.stringify({ pipeline_stage_id: targetStageId }),
+      });
+      setLeads(prev => prev.map(l => l.id === updated.id ? updated : l));
+      if (selectedLead?.id === updated.id) setSelectedLead(updated);
+      const stageName = stages.find(s => s.id === targetStageId)?.name || '';
+      toast.success(`Lead movido a "${stageName}"`);
+    } catch (e) {
+      // Revert optimistic update on error
+      setLeads(prev => prev.map(l =>
+        l.id === dragLeadId ? { ...l, pipeline_stage_id: lead.pipeline_stage_id } : l
+      ));
+      toast.error('Error al mover: ' + e.message);
+    }
+  }
+
+
   // ═══ Lead → Ventas actions ════════════════════════════════════════════════
   async function handleLeadAction(lead, action) {
     const tid = toast.loading('Procesando...');
@@ -386,7 +450,7 @@ export default function CRMPage() {
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // LEAD CARD component (rich display)
+  // LEAD CARD component (rich display + draggable)
   // ══════════════════════════════════════════════════════════════════════════
   function LeadCard({ lead }) {
     const stage = stages.find(s => s.id === lead.pipeline_stage_id);
@@ -394,13 +458,21 @@ export default function CRMPage() {
     const isStale = lead.days >= alertDays;
     const stageColor = stage ? (COLOR_HEX[stage.color] || '#6366f1') : '#94a3b8';
     const stageBg = stage ? (BG_HEX[stage.bg_color] || '#f8fafc') : '#f8fafc';
+    const isDragging = dragLeadId === lead.id;
     return (
       <div
-        onClick={() => openDetail(lead)}
-        className={`bg-white rounded-xl border cursor-pointer hover:shadow-md transition-all group p-3 mb-2
-          ${isStale ? 'border-amber-300 shadow-amber-100/50 shadow-sm' : 'border-slate-200 hover:border-indigo-200'}`}>
+        draggable
+        onDragStart={e => handleDragStart(e, lead)}
+        onDragEnd={handleDragEnd}
+        onClick={() => !dragLeadId && openDetail(lead)}
+        className={`bg-white rounded-xl border cursor-grab active:cursor-grabbing hover:shadow-md transition-all group p-3 mb-2 select-none
+          ${isDragging ? 'opacity-40 scale-95 shadow-lg ring-2 ring-indigo-400 ring-offset-1' : ''}
+          ${isStale && !isDragging ? 'border-amber-300 shadow-amber-100/50 shadow-sm' : ''}
+          ${!isStale && !isDragging ? 'border-slate-200 hover:border-indigo-200' : ''}`}>
         {/* Header row */}
         <div className="flex items-start justify-between gap-2 mb-2">
+          {/* Drag handle */}
+          <GripVertical size={13} className="text-slate-300 group-hover:text-slate-400 mt-0.5 flex-shrink-0 transition-colors"/>
           <div className="flex-1 min-w-0">
             {/* Tipo badge */}
             <div className="flex items-center gap-1.5 mb-1 flex-wrap">
@@ -633,6 +705,8 @@ export default function CRMPage() {
                 const stageColor = COLOR_HEX[stage.color] || '#6366f1';
                 const stageBg = BG_HEX[stage.bg_color] || '#f8fafc';
                 const stageTotal = stageLeads.reduce((s,l) => s+(l.value||0), 0);
+                const isDragTarget = dragOverStageId === stage.id;
+                const isDraggingAny = dragLeadId !== null;
                 return (
                   <div key={stage.id} className="flex flex-col w-72 flex-shrink-0">
                     {/* Stage header */}
@@ -648,14 +722,41 @@ export default function CRMPage() {
                         <span className="text-[10px] font-bold text-slate-500">{formatCOP(stageTotal)}</span>
                       )}
                     </div>
-                    {/* Cards */}
-                    <div className="flex-1 overflow-y-auto rounded-2xl p-2 min-h-[200px]"
-                      style={{ backgroundColor: stageBg + 'cc', border: `1px solid ${stageColor}22` }}>
+                    {/* Cards — Drop zone */}
+                    <div
+                      onDragOver={e => handleDragOverStage(e, stage.id)}
+                      onDragLeave={handleDragLeaveStage}
+                      onDrop={e => handleDropOnStage(e, stage.id)}
+                      className={`flex-1 overflow-y-auto rounded-2xl p-2 min-h-[200px] transition-all duration-150
+                        ${isDragTarget
+                          ? 'ring-2 ring-offset-2 scale-[1.01]'
+                          : isDraggingAny
+                          ? 'opacity-90'
+                          : ''}`}
+                      style={{
+                        backgroundColor: isDragTarget ? stageColor + '18' : stageBg + 'cc',
+                        border: isDragTarget
+                          ? `2px dashed ${stageColor}`
+                          : `1px solid ${stageColor}22`,
+                        ringColor: isDragTarget ? stageColor : 'transparent',
+                      }}>
                       {stageLeads.map(lead => <LeadCard key={lead.id} lead={lead}/>)}
-                      {stageLeads.length === 0 && (
-                        <div className="flex flex-col items-center justify-center h-24 text-slate-300">
-                          <GripVertical size={20} className="mb-1"/>
-                          <p className="text-xs">Sin leads</p>
+                      {/* Drop indicator (empty or dragging) */}
+                      {(stageLeads.length === 0 || (isDragTarget && isDraggingAny)) && (
+                        <div className={`flex flex-col items-center justify-center h-20 rounded-xl transition-all
+                          ${isDragTarget ? 'border-2 border-dashed' : 'text-slate-300'}`}
+                          style={isDragTarget ? { borderColor: stageColor, color: stageColor } : {}}>
+                          {isDragTarget ? (
+                            <>
+                              <ArrowRight size={20} className="mb-1 animate-bounce"/>
+                              <p className="text-xs font-bold">Soltar aquí</p>
+                            </>
+                          ) : (
+                            <>
+                              <GripVertical size={20} className="mb-1"/>
+                              <p className="text-xs">Sin leads</p>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>
