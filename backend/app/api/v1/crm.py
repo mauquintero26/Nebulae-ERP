@@ -131,9 +131,15 @@ def delete_customer(customer_id: int, db: Session = Depends(get_db)):
     db_customer = db.query(Customer).filter(Customer.id == customer_id).first()
     if not db_customer:
         raise HTTPException(status_code=404, detail="Customer not found")
-    # Unlink sales orders so we don't cascade-delete them, just set customer_id to null if possible
-    # For now just delete the customer (sales orders with FK will error if not handled)
     try:
+        # Remove linked sales orders first to avoid FK constraint violations
+        for order in db_customer.sales_orders:
+            for line in order.lines:
+                db.delete(line)
+            db.delete(order)
+        # Remove linked quotations
+        for q in db_customer.quotations:
+            db.delete(q)
         db.delete(db_customer)
         db.commit()
     except Exception as e:
