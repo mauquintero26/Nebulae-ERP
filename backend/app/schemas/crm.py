@@ -22,7 +22,7 @@ class Customer360Profile(BaseModel):
     id: int
     first_name: str
     last_name: str
-    email: str
+    email: Optional[str] = None
     phone: Optional[str] = None
     active_orders: List[dict] = []
     ltv: Decimal
@@ -38,6 +38,15 @@ class CustomerBase(BaseModel):
 
 class CustomerCreate(CustomerBase):
     pass
+
+class CustomerUpdate(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    city: Optional[str] = None
+    document: Optional[str] = None
+    address: Optional[str] = None
 
 class CustomerResponse(CustomerBase):
     id: int
