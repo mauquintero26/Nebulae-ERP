@@ -42,6 +42,11 @@ class SalesOrder(Base):
     lead_source = Column(String, nullable=True)      # WhatsApp, Instagram, Correo, etc.
     lead_description = Column(Text, nullable=True)
     pipeline_stage_id = Column(Integer, nullable=True)  # FK-like to pipeline_stages.id
+    # CRM enriched fields (added via migration)
+    lead_product_name = Column(String(200), nullable=True)
+    lead_product_sku_id = Column(Integer, ForeignKey("product_skus.id"), nullable=True)
+    lead_qty = Column(Numeric(10, 2), default=1)
+    advisor_name = Column(String(100), nullable=True)
 
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
