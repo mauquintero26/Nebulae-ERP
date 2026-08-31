@@ -24,6 +24,10 @@ eggs/
 .eggs/
 lib/
 lib64/
+# Explicitly track frontend src/lib (has api.ts)
+!frontend/src/lib/
+!frontend/src/lib/**
+
 parts/
 sdist/
 var/
