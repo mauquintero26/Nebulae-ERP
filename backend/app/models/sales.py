@@ -37,6 +37,7 @@ class SalesOrder(Base):
     sale_type = Column(String, default="IMMEDIATE")
     anticipo = Column(Numeric(12, 2), default=0.0)
     estimated_delivery_date = Column(DateTime, nullable=True)
+    solicitud_tipo = Column(String, nullable=True)  # e.g. "Solicitud de Cotización"
     
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)

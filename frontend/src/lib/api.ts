@@ -222,3 +222,19 @@ export async function createClienteSolicitud(customerId: number, solicitudData: 
   });
   return handleResponse(res);
 }
+
+export async function getSolicitudTipos(): Promise<string[]> {
+  try {
+    const res = await fetch(`${API_URL}/crm/solicitud-tipos`, { headers: getHeaders() });
+    const data = await handleResponse(res);
+    return Array.isArray(data) ? data : data.data || [];
+  } catch {
+    // Fallback defaults if backend unavailable
+    return [
+      'Solicitud de Cotización',
+      'Solicitud de Seguimiento',
+      'Solicitud de Devolución / Garantía',
+      'Solicitud de Soporte Técnico',
+    ];
+  }
+}

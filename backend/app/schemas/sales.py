@@ -24,6 +24,7 @@ class SalesOrderBase(BaseModel):
     sale_type: str = "IMMEDIATE"
     anticipo: Decimal = Decimal("0.0")
     estimated_delivery_date: Optional[datetime] = None
+    solicitud_tipo: Optional[str] = None
 
 class SalesOrderCreate(SalesOrderBase):
     lines: List[SalesOrderLineCreate] = []
@@ -34,3 +35,4 @@ class SalesOrderResponse(SalesOrderBase):
     updated_at: datetime
     lines: List[SalesOrderLineResponse] = []
     model_config = {"from_attributes": True}
+

@@ -30,20 +30,42 @@ export default function SolicitudesClientePage() {
   const fetchSolicitudes = async () => {
     try {
       const data = await getSalesOrders();
-      const realSales = data.sales || data;
+      const realSales = data.sales || (Array.isArray(data) ? data : []);
       if (Array.isArray(realSales)) {
-        // Filtrar solo las que sean solicitudes (estado inicial)
-        const solicitudes = realSales.filter(s => s.status === 'DRAFT' || s.status === 'SOLICITUD' || s.status === 'TO_INVOICE').map(s => ({
-          id: `SC-0${s.id}`,
-          realId: s.id,
-          date: new Date(s.created_at || Date.now()).toLocaleDateString(),
-          client: `Cliente #${s.customer_id}`,
-          type: s.sale_type || 'B2B',
-          status: s.status === 'TO_INVOICE' ? 'Evaluación' : 'Pendiente',
-          lastUpdate: '2 min',
-          assigned: 'Tú',
-          desatendida: false
-        }));
+        const STATUS_LABELS: Record<string, string> = {
+          DRAFT: 'Borrador',
+          QUOTATION: 'Pendiente por cotizar',
+          PENDING: 'Pendiente de atención',
+          TO_INVOICE: 'En evaluación',
+          INVOICED: 'Facturado',
+          DONE: 'Completado',
+          CANCELLED: 'Cancelado',
+        };
+        const solicitudes = realSales
+          .filter((s: any) => s.status !== 'CANCELLED')
+          .map((s: any) => ({
+            id: `SC-${String(s.id).padStart(4, '0')}`,
+            realId: s.id,
+            fecha: new Date(s.created_at || Date.now()).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }),
+            cliente: s.customer_id ? `Cliente #${String(s.customer_id).padStart(4, '0')}` : 'Sin cliente',
+            tipo: s.solicitud_tipo || s.sale_type || 'Solicitud',
+            estado: STATUS_LABELS[s.status] || s.status,
+            rawStatus: s.status,
+            ultimaAct: (() => {
+              const updated = new Date(s.updated_at || s.created_at || Date.now());
+              const diff = Math.floor((Date.now() - updated.getTime()) / 60000);
+              if (diff < 1) return 'Hace un momento';
+              if (diff < 60) return `Hace ${diff} min`;
+              if (diff < 1440) return `Hace ${Math.floor(diff / 60)}h`;
+              return `Hace ${Math.floor(diff / 1440)} días`;
+            })(),
+            responsable: 'Registro CRM',
+            desatendida: (() => {
+              const created = new Date(s.created_at || Date.now());
+              const days = (Date.now() - created.getTime()) / 86400000;
+              return days > 2 && ['QUOTATION', 'PENDING', 'DRAFT'].includes(s.status);
+            })(),
+          }));
         setSalesData(solicitudes);
       }
     } catch(e) {
@@ -268,8 +290,11 @@ export default function SolicitudesClientePage() {
                       </td>
                       <td className="px-6 py-4">
                         <span className={`px-2.5 py-1 rounded-md text-xs font-bold border ${
-                          sol.estado === 'Nuevo' ? 'bg-blue-50 text-blue-700 border-blue-200' :
-                          sol.estado === 'En Proceso' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                          sol.rawStatus === 'QUOTATION' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' :
+                          sol.rawStatus === 'PENDING' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                          sol.rawStatus === 'TO_INVOICE' ? 'bg-purple-50 text-purple-700 border-purple-200' :
+                          sol.rawStatus === 'INVOICED' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                          sol.rawStatus === 'DONE' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
                           'bg-slate-50 text-slate-700 border-slate-200'
                         }`}>
                           {sol.estado}

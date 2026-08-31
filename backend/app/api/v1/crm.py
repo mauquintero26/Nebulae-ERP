@@ -153,12 +153,12 @@ def delete_customer(customer_id: int, db: Session = Depends(get_db)):
 # ──────────────────────────────────────────────────────────────────────────────
 
 STATUS_LABELS = {
-    "DRAFT": "Solicitud en borrador",
-    "QUOTATION": "Cotización enviada",
+    "DRAFT": "Borrador",
+    "QUOTATION": "Pendiente por cotizar",
     "TO_INVOICE": "Pendiente de facturación",
     "INVOICED": "Facturado",
     "CANCELLED": "Cancelado",
-    "PENDING": "Pendiente",
+    "PENDING": "Pendiente de atención",
     "PENDING_PAYMENT": "Pendiente de pago",
     "QUOTING": "En cotización",
     "DONE": "Completado",
@@ -191,28 +191,35 @@ def get_customer_360_profile(customer_id: int, db: Session = Depends(get_db)):
     for order in customer.sales_orders:
         order_total = sum((line.unit_price * line.quantity) for line in order.lines)
 
+        # Use solicitud_tipo for display if available, else generic label
+        tipo_display = getattr(order, "solicitud_tipo", None) or "Solicitud"
+        estado_display = STATUS_LABELS.get(order.status, order.status)
+
         if order.status != "CANCELLED":
             active_orders.append({
                 "id": order.id,
                 "status": order.status,
-                "status_label": STATUS_LABELS.get(order.status, order.status),
+                "status_label": estado_display,
+                "solicitud_tipo": tipo_display,
                 "color": STATUS_COLORS.get(order.status, "slate"),
                 "created_at": order.created_at.isoformat(),
                 "total": round(float(order_total), 2),
                 "lines_count": len(order.lines),
             })
 
-        # Timeline activity entry for every order
+        # Timeline entry — richer description using solicitud_tipo
         all_orders_timeline.append({
             "type": "sale_order",
             "id": order.id,
             "status": order.status,
-            "status_label": STATUS_LABELS.get(order.status, order.status),
+            "status_label": tipo_display,
+            "estado_label": estado_display,
+            "solicitud_tipo": tipo_display,
             "color": STATUS_COLORS.get(order.status, "slate"),
             "created_at": order.created_at.isoformat(),
             "total": round(float(order_total), 2),
             "lines_count": len(order.lines),
-            "description": f"Orden #{order.id} - {STATUS_LABELS.get(order.status, order.status)}",
+            "description": f"ESTADO: {estado_display}",
         })
 
         if order.status in ["INVOICED", "COMPLETED", "DONE", "PAID"]:
@@ -256,20 +263,59 @@ def get_customer_360_profile(customer_id: int, db: Session = Depends(get_db)):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# CUSTOMER SALES ORDERS (Nueva Solicitud from Agenda)
+# PIPELINE DE SOLICITUDES: tipos disponibles (sincronizados con Frontend)
 # ──────────────────────────────────────────────────────────────────────────────
+SOLICITUD_TIPOS = [
+    "Solicitud de Cotización",
+    "Solicitud de Seguimiento",
+    "Solicitud de Devolución / Garantía",
+    "Solicitud de Soporte Técnico",
+]
+
+# Mapa: tipo de solicitud → estado inicial en el pipeline
+TIPO_TO_STATUS = {
+    "Solicitud de Cotización": "QUOTATION",
+    "Solicitud de Seguimiento": "PENDING",
+    "Solicitud de Devolución / Garantía": "PENDING",
+    "Solicitud de Soporte Técnico": "PENDING",
+}
+
+# Etiquetas de display para cada estado
+STATUS_LABELS_SOLICITUD = {
+    "QUOTATION": "Pendiente por cotizar",
+    "PENDING": "Pendiente de atención",
+    "DRAFT": "Borrador",
+    "TO_INVOICE": "En evaluación",
+    "INVOICED": "Facturado",
+    "DONE": "Completado",
+    "CANCELLED": "Cancelado",
+}
+
+@router.get("/solicitud-tipos", response_model=dict)
+def get_solicitud_tipos():
+    """Returns the list of available solicitud pipeline types for frontend dropdowns."""
+    return {"status": "success", "data": SOLICITUD_TIPOS}
+
 
 @router.post("/customers/{customer_id}/solicitudes", response_model=dict)
 def create_customer_solicitud(customer_id: int, body: dict, db: Session = Depends(get_db)):
-    """Creates a DRAFT sales order (Solicitud) linked to a customer from the CRM Agenda."""
+    """
+    Creates a sales order (Solicitud) in the CRM pipeline linked to a customer.
+    Maps the user-facing 'tipo' to the correct pipeline status.
+    """
     customer = db.query(Customer).filter(Customer.id == customer_id).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
 
+    tipo = body.get("tipo", "Solicitud de Cotización")
+    pipeline_status = TIPO_TO_STATUS.get(tipo, "QUOTATION")
+    sale_type = body.get("sale_type", "ON_DEMAND")
+
     new_order = SalesOrder(
         customer_id=customer_id,
-        status="DRAFT",
-        sale_type=body.get("sale_type", "ON_DEMAND"),
+        status=pipeline_status,
+        sale_type=sale_type,
+        solicitud_tipo=tipo,
     )
     db.add(new_order)
     try:
@@ -285,7 +331,10 @@ def create_customer_solicitud(customer_id: int, body: dict, db: Session = Depend
             "id": new_order.id,
             "customer_id": new_order.customer_id,
             "status": new_order.status,
+            "status_label": STATUS_LABELS_SOLICITUD.get(new_order.status, new_order.status),
+            "solicitud_tipo": new_order.solicitud_tipo,
             "sale_type": new_order.sale_type,
             "created_at": new_order.created_at.isoformat(),
         }
     }
+

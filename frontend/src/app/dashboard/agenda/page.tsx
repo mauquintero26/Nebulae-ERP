@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from 'react';
-import { getCustomers, createCustomer, updateCustomer, deleteCustomer, createClienteSolicitud, getHeaders, API_URL } from '@/lib/api';
+import { getCustomers, createCustomer, updateCustomer, deleteCustomer, createClienteSolicitud, getSolicitudTipos, getHeaders, API_URL } from '@/lib/api';
 import toast from 'react-hot-toast';
 import {
   Search, Filter, Plus,
@@ -53,6 +53,12 @@ export default function AgendaPage() {
   const [customers, setCustomers] = useState<any[]>([]);
   const [formData, setFormData] = useState<any>({});
   const [solicitudForm, setSolicitudForm] = useState<any>({ sale_type: 'ON_DEMAND', tipo: 'Solicitud de Cotización', producto: '', detalles: '' });
+  const [solicitudTipos, setSolicitudTipos] = useState<string[]>([
+    'Solicitud de Cotización',
+    'Solicitud de Seguimiento',
+    'Solicitud de Devolución / Garantía',
+    'Solicitud de Soporte Técnico',
+  ]);
   const [customer360, setCustomer360] = useState<any>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -100,7 +106,11 @@ export default function AgendaPage() {
     }
   };
 
-  useEffect(() => { fetchCustomers(); }, []);
+  useEffect(() => {
+    fetchCustomers();
+    // Load pipeline tipos from backend (dynamic — if a new type is added to the backend, it appears here)
+    getSolicitudTipos().then(tipos => { if (tipos.length > 0) setSolicitudTipos(tipos); });
+  }, []);
 
   useEffect(() => {
     if (selectedClient && selectedClient !== 'NEW') {
@@ -601,11 +611,14 @@ export default function AgendaPage() {
                     <div className={`absolute left-[-5px] top-1 w-3 h-3 rounded-full border-2 border-white shadow-sm ${TIMELINE_DOT_COLOR[event.status] || 'bg-slate-400'}`}></div>
                     <div className="bg-white border border-slate-100 rounded-xl p-3 shadow-sm hover:border-purple-200 transition-colors cursor-default">
                       <div className="flex justify-between items-start mb-1">
-                        <h4 className="font-bold text-slate-800 text-sm">{event.status_label || event.status}</h4>
+                        <h4 className="font-bold text-slate-800 text-sm">{event.solicitud_tipo || event.status_label || event.status}</h4>
                         <span className="text-[10px] text-slate-400 font-medium shrink-0 ml-2">
                           {event.created_at ? timeAgo(event.created_at) : 'Hoy'}
                         </span>
                       </div>
+                      {event.estado_label && (
+                        <p className="text-xs font-bold text-indigo-600 mb-1">ESTADO: {event.estado_label}</p>
+                      )}
                       <p className="text-xs text-slate-500">{event.description}</p>
                       {event.total > 0 && (
                         <p className="text-xs font-bold text-slate-700 mt-1">${parseFloat(event.total).toLocaleString('es-CO')}</p>
@@ -699,10 +712,9 @@ export default function AgendaPage() {
                         onChange={e => setSolicitudForm({ ...solicitudForm, tipo: e.target.value })}
                         className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-700 appearance-none focus:outline-none focus:border-purple-600"
                       >
-                        <option>Solicitud de Cotización</option>
-                        <option>Solicitud de Seguimiento</option>
-                        <option>Solicitud de Devolución / Garantía</option>
-                        <option>Solicitud de Soporte Técnico</option>
+                        {solicitudTipos.map(tipo => (
+                          <option key={tipo} value={tipo}>{tipo}</option>
+                        ))}
                       </select>
                       <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                     </div>
