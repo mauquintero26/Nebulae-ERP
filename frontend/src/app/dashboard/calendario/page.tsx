@@ -186,11 +186,13 @@ export default function CalendarioPage() {
 
   const grid = getDaysGrid(year, month);
 
-  // Load events for current month/year
+  // Load ALL events for the current year (month filter done client-side)
+  // This prevents events from "disappearing" when navigating months or refreshing
   const loadEvents = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await apiFetch(`/crm/events?month=${month + 1}&year=${year}`);
+      // Fetch full year so navigating months never loses events
+      const data = await apiFetch(`/crm/events?year=${year}`);
       const list = Array.isArray(data) ? data : [];
       setEvents(list);
       // Schedule browser notifications for upcoming events
@@ -203,7 +205,7 @@ export default function CalendarioPage() {
       });
     } catch (e) { toast.error('Error cargando eventos: ' + e.message); }
     finally { setLoading(false); }
-  }, [month, year]);
+  }, [year]);  // Only re-fetch when year changes, not on every month change
 
   useEffect(() => { loadEvents(); }, [loadEvents]);
 
@@ -283,8 +285,11 @@ export default function CalendarioPage() {
           scheduleNotification(saved, 60);
           scheduledNotifs.current.add(saved.id);
         }
+        // Add to local state immediately (optimistic)
         setEvents(prev => [...prev, saved]);
         toast.success('Evento creado ✅', { id: tid });
+        // Then reload from DB to ensure consistency
+        setTimeout(() => loadEvents(), 500);
       }
       setShowForm(false); setEditingEvent(null);
     } catch (e) { toast.error(e.message, { id: tid }); }
@@ -434,7 +439,7 @@ export default function CalendarioPage() {
           </div>
           <div>
             <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">Calendario</h1>
-            <p className="text-slate-500 text-xs mt-0.5">{events.length} eventos en {MONTHS[month]} {year}</p>
+            <p className="text-slate-500 text-xs mt-0.5">{events.filter(e => { const d = new Date(e.start_datetime); return d.getMonth() === month && d.getFullYear() === year; }).length} eventos en {MONTHS[month]} {year}</p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
