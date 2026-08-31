@@ -108,6 +108,7 @@ export default function CRMPage() {
   const [dragging, setDragging]               = useState(null); // { lead, x, y } | null
   const [dragOverStageId, setDragOverStageId] = useState(null);
   const dragRef = useRef({ started: false, startX: 0, startY: 0, lead: null });
+  const stageColumnRefs = useRef({}); // { [stageId]: HTMLDivElement } — for bounding rect detection
 
   // ─── New Lead form ─────────────────────────────────────────────────────
   const [nlForm, setNlForm] = useState({
@@ -319,13 +320,31 @@ export default function CRMPage() {
     } catch (e) { toast.error(e.message); }
   }
 
+  // ═══ Pointer Drag & Drop — Bounding Rect detection ════════════════════════
+  /** Find which stage column (by stored DOM refs) contains point (x, y) */
+  function getStageAtPoint(x, y) {
+    for (const [stageId, el] of Object.entries(stageColumnRefs.current)) {
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+        return Number(stageId);
+      }
+    }
+    return null;
+  }
 
-  // ═══ Pointer Drag & Drop handlers ════════════════════════════════════════
   function onCardPointerDown(e, lead) {
-    // Only primary button (left click / first touch)
-    if (e.button !== undefined && e.button !== 0) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    dragRef.current = { started: false, startX: e.clientX, startY: e.clientY, lead };
+    if (e.button !== 0) return; // left button / first touch only
+    // Do NOT setPointerCapture — we need free movement across columns
+    e.stopPropagation();
+    dragRef.current = {
+      started: false,
+      startX: e.clientX,
+      startY: e.clientY,
+      lead,
+      pointerId: e.pointerId,
+      cardEl: e.currentTarget,
+    };
   }
 
   function onCardPointerMove(e) {
@@ -333,20 +352,21 @@ export default function CRMPage() {
     if (!ref.lead) return;
     const dx = e.clientX - ref.startX;
     const dy = e.clientY - ref.startY;
+
     if (!ref.started) {
-      // Activate drag after moving 8px in any direction
-      if (Math.hypot(dx, dy) < 8) return;
+      if (Math.hypot(dx, dy) < 6) return; // 6px threshold
       ref.started = true;
+      // Capture pointer on the DOCUMENT so we receive events even when outside card
+      try { ref.cardEl?.setPointerCapture(e.pointerId); } catch (_) {}
       setDragging({ lead: ref.lead, x: e.clientX, y: e.clientY });
     } else {
-      // Update clone position
+      // Throttle: update clone position every frame
       setDragging(prev => prev ? { ...prev, x: e.clientX, y: e.clientY } : null);
     }
-    // Detect which stage the cursor is over
-    const els = document.elementsFromPoint(e.clientX, e.clientY);
-    const stageEl = els.find(el => el.dataset && el.dataset.stageId);
-    setDragOverStageId(stageEl ? Number(stageEl.dataset.stageId) : null);
-    // Prevent scroll/text selection during drag
+
+    // Bounding rect detection — which column is under cursor?
+    const stageId = getStageAtPoint(e.clientX, e.clientY);
+    setDragOverStageId(stageId);
     e.preventDefault();
   }
 
@@ -354,51 +374,64 @@ export default function CRMPage() {
     const ref = dragRef.current;
     const wasDragging = ref.started;
     const lead = ref.lead;
-    dragRef.current = { started: false, startX: 0, startY: 0, lead: null };
+
+    // Reset all state
+    dragRef.current = { started: false, startX: 0, startY: 0, lead: null, pointerId: null, cardEl: null };
     setDragging(null);
+    setDragOverStageId(null);
 
     if (!wasDragging) {
-      // It was just a click — open detail
-      setDragOverStageId(null);
+      // Click (no meaningful movement) → open detail
       if (lead) openDetail(lead);
       return;
     }
 
-    // Find target stage under cursor at drop
-    const els = document.elementsFromPoint(e.clientX, e.clientY);
-    const stageEl = els.find(el => el.dataset && el.dataset.stageId);
-    const targetStageId = stageEl ? Number(stageEl.dataset.stageId) : null;
-    setDragOverStageId(null);
+    if (!lead) return;
 
-    if (!targetStageId || !lead) return;
-    if (lead.pipeline_stage_id === targetStageId) return; // same column
+    // Bounding rect: find target stage at the drop point
+    const targetStageId = getStageAtPoint(e.clientX, e.clientY);
 
-    // Optimistic update — instant visual
+    if (!targetStageId || lead.pipeline_stage_id === targetStageId) return;
+
+    // Get target stage info for status update
+    const targetStage = stages.find(s => s.id === targetStageId);
+    const stageName = targetStage?.name || '';
+    const newStatus = targetStage?.maps_to_status || lead.status;
+
+    // Optimistic update — move card visually & update status immediately
     const originalStageId = lead.pipeline_stage_id;
+    const originalStatus = lead.status;
     setLeads(prev => prev.map(l =>
-      l.id === lead.id ? { ...l, pipeline_stage_id: targetStageId } : l
+      l.id === lead.id
+        ? { ...l, pipeline_stage_id: targetStageId, status: newStatus, stage_name: stageName }
+        : l
     ));
+    if (selectedLead?.id === lead.id) {
+      setSelectedLead(prev => prev ? { ...prev, pipeline_stage_id: targetStageId, status: newStatus, stage_name: stageName } : null);
+    }
 
-    const stageName = stages.find(s => s.id === targetStageId)?.name || '';
     try {
       const updated = await apiFetch(`/crm/leads/${lead.id}/stage`, {
         method: 'PATCH',
         body: JSON.stringify({ pipeline_stage_id: targetStageId }),
       });
+      // Sync with server response (authoritative)
       setLeads(prev => prev.map(l => l.id === updated.id ? updated : l));
       if (selectedLead?.id === updated.id) setSelectedLead(updated);
-      toast.success(`Lead movido a "${stageName}"`);
+      toast.success(`"${lead.client}" → ${stageName}`);
     } catch (err) {
-      // Revert on error
+      // Revert on failure
       setLeads(prev => prev.map(l =>
-        l.id === lead.id ? { ...l, pipeline_stage_id: originalStageId } : l
+        l.id === lead.id
+          ? { ...l, pipeline_stage_id: originalStageId, status: originalStatus, stage_name: stages.find(s => s.id === originalStageId)?.name || '' }
+          : l
       ));
-      toast.error('Error al mover: ' + err.message);
+      toast.error('Error al mover lead: ' + err.message);
     }
   }
 
   function onCardPointerCancel() {
-    dragRef.current = { started: false, startX: 0, startY: 0, lead: null };
+    dragRef.current = { started: false, startX: 0, startY: 0, lead: null, pointerId: null, cardEl: null };
     setDragging(null);
     setDragOverStageId(null);
   }
@@ -650,9 +683,13 @@ export default function CRMPage() {
   // RENDER
   // ══════════════════════════════════════════════════════════════════════════
   return (
-    <div className="h-full w-full bg-slate-50 flex flex-col overflow-hidden" onClick={() => {
-      setShowCustDrop(false); setShowProdDrop(false);
-    }}>
+    <div
+      className="h-full w-full bg-slate-50 flex flex-col overflow-hidden"
+      onClick={() => { setShowCustDrop(false); setShowProdDrop(false); }}
+      onPointerMove={dragging ? onCardPointerMove : undefined}
+      onPointerUp={dragging ? onCardPointerUp : undefined}
+      onPointerLeave={dragging ? onCardPointerCancel : undefined}
+      style={dragging ? { userSelect: 'none', cursor: 'grabbing' } : undefined}>
 
       {/* ── Header ── */}
       <div className="flex items-center justify-between px-6 py-4 bg-white border-b border-slate-200 flex-shrink-0">
@@ -778,9 +815,9 @@ export default function CRMPage() {
                         <span className="text-[10px] font-bold text-slate-500">{formatCOP(stageTotal)}</span>
                       )}
                     </div>
-                    {/* Cards — Drop zone (data-stage-id used by elementsFromPoint) */}
+                    {/* Cards — Drop zone (ref registered for bounding rect detection) */}
                     <div
-                      data-stage-id={stage.id}
+                      ref={el => { stageColumnRefs.current[stage.id] = el; }}
                       className={`flex-1 overflow-y-auto rounded-2xl p-2 min-h-[200px] transition-all duration-150
                         ${isDragTarget
                           ? 'ring-2 ring-offset-2 scale-[1.01]'
@@ -789,10 +826,7 @@ export default function CRMPage() {
                           : ''}`}
                       style={{
                         backgroundColor: isDragTarget ? stageColor + '18' : stageBg + 'cc',
-                        border: isDragTarget
-                          ? `2px dashed ${stageColor}`
-                          : `1px solid ${stageColor}22`,
-                        ringColor: isDragTarget ? stageColor : 'transparent',
+                        border: isDragTarget ? `2px dashed ${stageColor}` : `1px solid ${stageColor}22`,
                       }}>
                       {stageLeads.map(lead => <LeadCard key={lead.id} lead={lead}/>)}
                       {/* Drop indicator (empty or dragging) */}
