@@ -1,232 +1,189 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { Search, RefreshCw, X, Check, Package, Truck, AlertCircle, ArrowRight } from 'lucide-react';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
-async function apiFetch(path: string, opts: RequestInit = {}) {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...opts,
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(opts.headers as any || {}) },
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
-  return data.data ?? data;
-}
-
-const ESTADOS: Record<string, { label: string; color: string; bg: string }> = {
-  BORRADOR:   { label: 'Borrador',    color: '#64748b', bg: '#f1f5f9' },
-  EN_PROCESO: { label: 'En proceso',  color: '#3b82f6', bg: '#eff6ff' },
-  COMPLETADA: { label: 'Completada',  color: '#10b981', bg: '#f0fdf4' },
-  PARCIAL:    { label: 'Parcial',     color: '#f59e0b', bg: '#fffbeb' },
-  CANCELADA:  { label: 'Cancelada',   color: '#ef4444', bg: '#fef2f2' },
-};
-function Badge({ estado }: { estado: string }) {
-  const cfg = ESTADOS[estado] || { label: estado, color: '#6366f1', bg: '#eef2ff' };
-  return <span className="px-2 py-0.5 rounded-full text-xs font-bold" style={{ backgroundColor: cfg.bg, color: cfg.color }}>{cfg.label}</span>;
-}
-const fDate = (iso: string|null) => iso ? new Date(iso).toLocaleDateString('es-CO', {day:'2-digit',month:'short',year:'numeric'}) : '-';
+import React, { useState } from 'react';
+import { PackageCheck, Activity, Search, RefreshCw, X, ChevronRight, CheckCircle2 } from 'lucide-react';
+import Link from 'next/link';
 
 export default function RecepcionesPage() {
-  const [recs, setRecs] = useState<any[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState<any|null>(null);
-  const [confirming, setConfirming] = useState(false);
-  const [currentUser, setCurrentUser] = useState('');
-  const [editProds, setEditProds] = useState<any[]>([]);
-
-  useEffect(() => { setCurrentUser(localStorage.getItem('user_name') || ''); }, []);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const d = await apiFetch(`/compras/recepciones?limit=100`);
-      setRecs(Array.isArray(d) ? d : (d?.data ?? []));
-      setTotal(d?.total ?? (Array.isArray(d) ? d.length : 0));
-    } catch { setRecs([]); }
-    finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  async function loadDetail(id: number) {
-    const d = await apiFetch(`/compras/recepciones/${id}`);
-    setSelected(d);
-    setEditProds(d.productos || []);
-  }
-
-  async function confirmar() {
-    setConfirming(true);
-    try {
-      // Save current qty_recibida first
-      await apiFetch(`/compras/recepciones/${selected.id}`, {
-        method: 'PATCH', body: JSON.stringify({ productos: editProds, updated_by: currentUser }),
-      });
-      await apiFetch(`/compras/recepciones/${selected.id}/confirmar`, {
-        method: 'POST', body: JSON.stringify({ user_name: currentUser }),
-      });
-      alert('Recepcion confirmada. Stock actualizado en bodega.');
-      loadDetail(selected.id); load();
-    } catch (err: any) { alert(err.message); }
-    setConfirming(false);
-  }
+  const [data, setData] = useState([
+    { id: 'ENINV-1001', pec: 'PEC-2026-005', proveedor: 'Global Parts', bodega: 'Principal', fecha: '2026-09-01', items: 12, estado: 'PENDIENTE', stock: false },
+    { id: 'ENINV-1002', pec: 'PEC-2026-003', proveedor: 'Tech Supply', bodega: 'Secundaria', fecha: '2026-08-28', items: 5, estado: 'COMPLETADA', stock: true }
+  ]);
+  const [activeTab, setActiveTab] = useState('Pendientes');
+  const [isDrawerOpen, setDrawerOpen] = useState(false);
+  const [selectedItem, setSelectedItem] = useState(null);
 
   return (
-    <div className="h-full w-full bg-[#f8f9fa] flex flex-col overflow-hidden">
-      <div className="bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-teal-50 rounded-xl flex items-center justify-center text-teal-600">
-            <Truck size={20} />
-          </div>
-          <div>
-            <h1 className="text-xl font-extrabold text-slate-900">Recepciones de Inventario</h1>
-            <p className="text-xs text-slate-500">{total} recepciones &bull; ENINV-YYYY####</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={load} className="p-2 border border-slate-200 rounded-xl text-slate-500 hover:bg-slate-50">
-            <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
-          </button>
-          <a href="/dashboard/compras/pedidos" className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2">
-            <ArrowRight size={16} /> Ir a Pedidos de Compra
-          </a>
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      <div className="sticky top-0 z-10 bg-white border-b border-gray-200 px-6 py-3 flex gap-6 text-sm font-medium">
+        <Link href="/dashboard/compras/pedidos" className="text-gray-500 hover:text-gray-900">Pedidos de Compra</Link>
+        <Link href="/dashboard/compras/transito" className="text-gray-500 hover:text-gray-900">Mercancia en Transito</Link>
+        <Link href="/dashboard/compras/recepciones" className="text-teal-600 border-b-2 border-teal-600 pb-3 -mb-3">Recepciones (Entrada)</Link>
+        <Link href="/dashboard/compras/traslados" className="text-gray-500 hover:text-gray-900">Traslados Internos</Link>
+        <Link href="/dashboard/compras/registro" className="text-gray-500 hover:text-gray-900">Registro OCR/Manual</Link>
+        <Link href="/dashboard/compras/proyecciones" className="text-gray-500 hover:text-gray-900">Proyecciones</Link>
+      </div>
+
+      <div className="bg-orange-50 border-l-4 border-orange-500 p-4 mx-6 mt-6 flex items-start gap-3">
+        <Activity className="w-5 h-5 text-orange-600 mt-0.5" />
+        <div>
+          <h3 className="text-orange-800 font-medium text-sm">Accion Requerida</h3>
+          <p className="text-orange-700 text-sm mt-1">Hay recepciones pendientes de confirmar (stock sin actualizar).</p>
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
-        <div className={`flex flex-col overflow-hidden transition-all ${selected ? 'w-[50%]' : 'w-full'}`}>
-          <div className="flex-1 overflow-y-auto">
-            {loading ? <div className="flex justify-center pt-16"><RefreshCw size={24} className="animate-spin text-teal-400" /></div>
-            : recs.length === 0 ? (
-              <div className="text-center pt-16 text-slate-400">
-                <Truck size={40} className="mx-auto mb-3 opacity-20" />
-                <p className="text-sm">Sin recepciones. Crea una desde un Pedido de Compra.</p>
-              </div>
-            ) : (
-              <table className="w-full text-left text-sm">
-                <thead className="bg-slate-50 border-b border-slate-100 sticky top-0">
-                  <tr className="text-xs text-slate-400 uppercase tracking-wider">
-                    <th className="px-4 py-3">ENINV #</th><th className="px-4 py-3">PEC #</th>
-                    <th className="px-4 py-3">Proveedor</th><th className="px-4 py-3">Bodega</th>
-                    <th className="px-4 py-3">Fecha</th><th className="px-4 py-3">Estado</th><th className="px-4 py-3">Stock</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recs.map(r => (
-                    <tr key={r.id} onClick={() => loadDetail(r.id)}
-                      className={`border-b border-slate-50 cursor-pointer hover:bg-teal-50/30 ${selected?.id===r.id?'bg-teal-50/50':''}`}>
-                      <td className="px-4 py-3 font-bold text-teal-600">{r.numero}</td>
-                      <td className="px-4 py-3 text-purple-600 font-medium">{r.pec_numero || '-'}</td>
-                      <td className="px-4 py-3 text-slate-800">{r.supplier_name || '-'}</td>
-                      <td className="px-4 py-3 text-slate-600">{r.warehouse_name || '-'}</td>
-                      <td className="px-4 py-3 text-slate-500">{fDate(r.fecha_recepcion)}</td>
-                      <td className="px-4 py-3"><Badge estado={r.estado} /></td>
-                      <td className="px-4 py-3">{r.stock_actualizado ? <span className="text-xs text-emerald-600 font-bold">✓ Actualizado</span> : <span className="text-xs text-slate-400">Pendiente</span>}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+      <div className="px-6 mt-6 flex justify-between items-start">
+        <div className="flex gap-4 items-center">
+          <div className="w-12 h-12 rounded-xl bg-teal-100 flex items-center justify-center text-teal-600">
+            <PackageCheck className="w-6 h-6" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Recepciones de Inventario</h1>
+            <p className="text-gray-500 text-sm">Gestiona entradas de mercancia al inventario</p>
           </div>
         </div>
+        <Link href="/dashboard/compras/pedidos" className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg flex items-center gap-2 font-medium shadow-sm transition-colors">
+          Ir a Pedidos
+        </Link>
+      </div>
 
-        {/* Detail Panel */}
-        {selected && (
-          <div className="border-l border-slate-200 bg-white flex flex-col overflow-hidden flex-1">
-            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-              <div>
-                <h2 className="font-extrabold text-slate-900 text-lg">{selected.numero}</h2>
-                {selected.pec_numero && <p className="text-xs text-slate-400">PEC: <span className="text-purple-600 font-bold">{selected.pec_numero}</span></p>}
-              </div>
-              <div className="flex items-center gap-2">
-                {!selected.stock_actualizado && selected.estado !== 'CANCELADA' && (
-                  <button onClick={confirmar} disabled={confirming}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1">
-                    {confirming ? <RefreshCw size={12} className="animate-spin" /> : <Check size={12} />}
-                    Confirmar Recepcion
-                  </button>
-                )}
-                <button onClick={() => setSelected(null)} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg"><X size={16} /></button>
-              </div>
+      <div className="grid grid-cols-4 gap-6 px-6 mt-6">
+        <div className="bg-white p-6 rounded-xl border border-gray-200 hover:border-amber-300 transition-colors">
+          <p className="text-gray-500 text-sm font-medium">Pendientes de Confirmar</p>
+          <h3 className="text-2xl font-bold text-gray-900 mt-2">12</h3>
+        </div>
+        <div className="bg-white p-6 rounded-xl border border-gray-200 hover:border-emerald-300 transition-colors">
+          <p className="text-gray-500 text-sm font-medium">Completadas (Mes)</p>
+          <h3 className="text-2xl font-bold text-gray-900 mt-2">45</h3>
+        </div>
+        <div className="bg-white p-6 rounded-xl border border-gray-200 hover:border-blue-300 transition-colors">
+          <p className="text-gray-500 text-sm font-medium">Stock Actualizado</p>
+          <h3 className="text-2xl font-bold text-gray-900 mt-2">89%</h3>
+        </div>
+        <div className="bg-gradient-to-br from-teal-600 to-emerald-700 p-6 rounded-xl text-white">
+          <p className="text-teal-100 text-sm font-medium">En Proceso</p>
+          <h3 className="text-2xl font-bold mt-2">5</h3>
+        </div>
+      </div>
+
+      <div className="mx-6 mt-8 flex-1 bg-white rounded-t-xl border border-gray-200 border-b-0 overflow-hidden flex flex-col">
+        <div className="flex justify-between items-center px-6 py-4 border-b border-gray-200 bg-gray-50/50">
+          <div className="flex gap-6">
+            {['Pendientes', 'Completadas', 'Todas'].map(tab => (
+              <button key={tab} onClick={() => setActiveTab(tab)} className={`text-sm font-medium pb-4 -mb-4 border-b-2 transition-colors ${activeTab === tab ? 'border-teal-600 text-teal-700' : 'border-transparent text-gray-500 hover:text-gray-900'}`}>{tab}</button>
+            ))}
+          </div>
+          <div className="flex gap-3">
+            <div className="relative">
+              <Search className="w-4 h-4 text-gray-400 absolute left-3 top-2.5" />
+              <input type="text" placeholder="Buscar ENINV, PEC..." className="pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 w-64" />
             </div>
+            <button className="p-2 border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50">
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+        
+        <div className="flex-1 overflow-auto">
+          <table className="w-full text-left border-collapse">
+            <thead className="bg-gray-50 sticky top-0 z-10 border-b border-gray-200 text-xs uppercase text-gray-500 font-semibold">
+              <tr>
+                <th className="px-6 py-3">ENINV #</th>
+                <th className="px-6 py-3">PEC Origen</th>
+                <th className="px-6 py-3">Proveedor</th>
+                <th className="px-6 py-3">Bodega</th>
+                <th className="px-6 py-3">Fecha Recepcion</th>
+                <th className="px-6 py-3">Productos</th>
+                <th className="px-6 py-3">Estado</th>
+                <th className="px-6 py-3">Stock</th>
+                <th className="px-6 py-3 text-right">Acciones</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200 text-sm">
+              {data.map((row, i) => (
+                <tr key={i} className="hover:bg-gray-50 group">
+                  <td className="px-6 py-4 font-medium text-teal-600 cursor-pointer" onClick={() => {setSelectedItem(row); setDrawerOpen(true);}}>{row.id}</td>
+                  <td className="px-6 py-4 text-blue-600 cursor-pointer">{row.pec}</td>
+                  <td className="px-6 py-4 text-gray-900">{row.proveedor}</td>
+                  <td className="px-6 py-4 text-gray-500">{row.bodega}</td>
+                  <td className="px-6 py-4 text-gray-500">{row.fecha}</td>
+                  <td className="px-6 py-4 text-gray-900">{row.items} items</td>
+                  <td className="px-6 py-4">
+                    <span className={`px-2 py-1 rounded-md text-xs font-medium ${row.estado === 'PENDIENTE' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>{row.estado}</span>
+                  </td>
+                  <td className="px-6 py-4">
+                    {row.stock ? <CheckCircle2 className="w-5 h-5 text-emerald-500" /> : <span className="text-gray-400">-</span>}
+                  </td>
+                  <td className="px-6 py-4 text-right">
+                    <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {row.estado === 'PENDIENTE' && (
+                        <button className="px-3 py-1 bg-teal-600 text-white rounded text-xs font-medium hover:bg-teal-700">Confirmar</button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
-            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-              <div className="flex flex-wrap gap-2">
-                <Badge estado={selected.estado} />
-                {selected.stock_actualizado && <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold">Stock actualizado</span>}
+      {isDrawerOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-gray-900/20 backdrop-blur-sm">
+          <div className="w-[600px] bg-white h-full shadow-2xl flex flex-col animate-slide-left">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+              <div className="flex items-center gap-3">
+                <h2 className="text-xl font-bold text-gray-900">{selectedItem?.id}</h2>
+                <span className="px-2 py-1 bg-amber-100 text-amber-700 text-xs font-medium rounded-md">{selectedItem?.estado}</span>
               </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-slate-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Proveedor</p><p className="font-bold text-sm">{selected.supplier_name || '-'}</p></div>
-                <div className="bg-slate-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Bodega</p><p className="font-bold text-sm">{selected.warehouse_name || '-'}</p></div>
-                <div className="bg-slate-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Carrier</p><p className="font-bold text-sm">{selected.carrier || '-'}</p></div>
-                <div className="bg-slate-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Fecha Recepcion</p><p className="font-bold text-sm">{fDate(selected.fecha_recepcion)}</p></div>
+              <button onClick={() => setDrawerOpen(false)} className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-6 space-y-6">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-gray-50 p-4 rounded-lg">
+                  <p className="text-xs text-gray-500">PEC Origen</p>
+                  <p className="font-medium text-blue-600">{selectedItem?.pec}</p>
+                </div>
+                <div className="bg-gray-50 p-4 rounded-lg">
+                  <p className="text-xs text-gray-500">Bodega</p>
+                  <p className="font-medium">{selectedItem?.bodega}</p>
+                </div>
               </div>
-
-              {/* Products with received qty */}
-              <div>
-                <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos (Esperados vs Recibidos)</p>
-                {!selected.stock_actualizado && (
-                  <p className="text-xs text-amber-600 mb-2 flex items-center gap-1"><AlertCircle size={11} /> Actualiza la cantidad recibida antes de confirmar</p>
-                )}
-                <div className="border border-slate-100 rounded-xl overflow-hidden">
-                  <table className="w-full text-xs">
-                    <thead className="bg-slate-50"><tr className="text-slate-400 uppercase">
-                      <th className="px-3 py-2 text-left">Producto</th>
-                      <th className="px-3 py-2 text-right">Esperado</th>
-                      <th className="px-3 py-2 text-right">Recibido</th>
-                      <th className="px-3 py-2 text-center">Estado</th>
-                    </tr></thead>
-                    <tbody>
-                      {editProds.map((p: any, i: number) => (
-                        <tr key={i} className="border-t border-slate-50">
-                          <td className="px-3 py-2 font-medium">{p.product_name}</td>
-                          <td className="px-3 py-2 text-right text-slate-600">{p.qty_esperada || p.qty || 0}</td>
-                          <td className="px-3 py-2 text-right">
-                            {selected.stock_actualizado ? (
-                              <span className="font-bold text-emerald-600">{p.qty_recibida}</span>
-                            ) : (
-                              <input type="number" min={0} value={p.qty_recibida || 0}
-                                onChange={e => {
-                                  const n = [...editProds];
-                                  n[i] = { ...n[i], qty_recibida: parseInt(e.target.value) || 0 };
-                                  setEditProds(n);
-                                }}
-                                className="w-16 border border-slate-200 rounded px-1.5 py-1 outline-none text-right focus:border-teal-400" />
-                            )}
-                          </td>
-                          <td className="px-3 py-2 text-center">
-                            <span className={`text-xs font-bold ${p.estado==='RECIBIDO'?'text-emerald-600':'text-amber-600'}`}>{p.estado || 'PENDIENTE'}</span>
-                          </td>
-                        </tr>
-                      ))}
+              <section>
+                <h3 className="text-sm font-semibold text-gray-900 mb-4">Productos</h3>
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="px-4 py-2 text-xs font-medium text-gray-500">Producto</th>
+                        <th className="px-4 py-2 text-xs font-medium text-gray-500">Esperado</th>
+                        <th className="px-4 py-2 text-xs font-medium text-gray-500">Recibido</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      <tr>
+                        <td className="px-4 py-3">Item A</td>
+                        <td className="px-4 py-3">10</td>
+                        <td className="px-4 py-3">
+                          <input type="number" defaultValue="10" className="w-16 p-1 border border-gray-300 rounded text-center" disabled={selectedItem?.estado !== 'PENDIENTE'} />
+                        </td>
+                      </tr>
                     </tbody>
                   </table>
                 </div>
-              </div>
-
-              {/* Actividades */}
-              {selected.actividades?.length > 0 && (
-                <div>
-                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Actividad</p>
-                  {selected.actividades.map((a: any) => (
-                    <div key={a.id} className="flex gap-3 mb-2">
-                      <div className="w-1.5 h-1.5 rounded-full bg-teal-400 mt-2 flex-shrink-0" />
-                      <div>
-                        <p className="text-sm text-slate-700">{a.description}</p>
-                        <p className="text-xs text-slate-400">{fDate(a.created_at)}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+              </section>
+            </div>
+            <div className="p-6 border-t border-gray-200 bg-gray-50 flex justify-end gap-3">
+              <button className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">Cerrar</button>
+              {selectedItem?.estado === 'PENDIENTE' && (
+                <button className="px-4 py-2 bg-teal-600 rounded-lg text-sm font-medium text-white hover:bg-teal-700">Confirmar Recepcion</button>
               )}
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

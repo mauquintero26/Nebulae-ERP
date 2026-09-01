@@ -1,312 +1,296 @@
-'use client';
+\'use client\';
 
-import { useState, useEffect, useCallback } from 'react';
-import { Search, RefreshCw, X, Check, ShoppingCart, Package, ChevronRight,
-  Phone, Mail, MapPin, ArrowRight, ExternalLink, Plus, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { 
+  ShoppingCart, AlertCircle, Plus, Search, RefreshCw, FileText,
+  Clock, Package, DollarSign, Activity, ChevronRight, X, ArrowRight
+} from 'lucide-react';
+import Link from 'next/link';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
-async function apiFetch(path: string, opts: RequestInit = {}) {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...opts,
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(opts.headers as any || {}) },
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
-  return data.data ?? data;
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
+
+async function apiFetch(endpoint: string, options: RequestInit = {}) {
+  const token = localStorage.getItem('token');
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers as Record<string, string> || {})
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  const res = await fetch(`${API_URL}${endpoint}`, { ...options, headers });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
-const ESTADOS: Record<string, { label: string; color: string; bg: string }> = {
-  PENDIENTE_COMPRA: { label: 'Pendiente de compra', color: '#f59e0b', bg: '#fffbeb' },
-  EN_TRANSITO:      { label: 'En transito',          color: '#3b82f6', bg: '#eff6ff' },
-  RECIBIDO:         { label: 'Recibido',             color: '#8b5cf6', bg: '#f5f3ff' },
-  FACTURADO:        { label: 'Facturado',            color: '#10b981', bg: '#f0fdf4' },
-  COMPLETADO:       { label: 'Completado',           color: '#10b981', bg: '#f0fdf4' },
-  CANCELADO:        { label: 'Cancelado',            color: '#ef4444', bg: '#fef2f2' },
-};
-
-function Badge({ estado }: { estado: string }) {
-  const cfg = ESTADOS[estado] || { label: estado, color: '#6366f1', bg: '#eef2ff' };
-  return <span className="px-2 py-0.5 rounded-full text-xs font-bold" style={{ backgroundColor: cfg.bg, color: cfg.color }}>{cfg.label}</span>;
-}
-const fDate = (iso: string|null) => iso ? new Date(iso).toLocaleDateString('es-CO', {day:'2-digit',month:'short',year:'numeric'}) : '-';
-const fCOP = (v: number) => v > 0 ? `$${Number(v).toLocaleString('es-CO')}` : '-';
-
-export default function VentasPage() {
-  const [vens, setVens] = useState<any[]>([]);
-  const [total, setTotal] = useState(0);
+export default function VentaPage() {
+  const [ventas, setVentas] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [filterEstado, setFilterEstado] = useState('');
-  const [selected, setSelected] = useState<any|null>(null);
-  const [currentUser, setCurrentUser] = useState('');
-  const [showPXPModal, setShowPXPModal] = useState(false);
-  const [creatingPXP, setCreatingPXP] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [activeTab, setActiveTab] = useState('pendiente');
+  const [selectedVenta, setSelectedVenta] = useState<any>(null);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
-  useEffect(() => {
-    setCurrentUser(localStorage.getItem('user_name') || '');
-  }, []);
-
-  const load = useCallback(async () => {
+  const fetchVentas = async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (search) params.set('search', search);
-      if (filterEstado) params.set('estado', filterEstado);
-      const d = await apiFetch(`/ventas/pedidos?${params}&limit=100`);
-      setVens(Array.isArray(d) ? d : (d?.data ?? []));
-      setTotal(d?.total ?? (Array.isArray(d) ? d.length : 0));
-    } catch { setVens([]); }
-    finally { setLoading(false); }
-  }, [search, filterEstado]);
+      const data = await apiFetch('/ventas/pedidos');
+      setVentas(data.items || []);
+    } catch (error) {
+      console.error('Error fetching ventas:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    fetchVentas();
+  }, []);
 
-  async function loadDetail(id: number) {
-    const d = await apiFetch(`/ventas/pedidos/${id}`);
-    setSelected(d);
-  }
+  const getFilteredVentas = () => {
+    let filtered = ventas;
+    if (activeTab === 'pendiente') {
+      filtered = filtered.filter(v => !v.pec_id);
+    } else if (activeTab === 'transito') {
+      filtered = filtered.filter(v => v.pec_id && v.estado_compra === 'EN_TRANSITO');
+    } else if (activeTab === 'completadas') {
+      filtered = filtered.filter(v => v.estado === 'COMPLETADA');
+    }
 
-  async function createPXP() {
-    setCreatingPXP(true);
-    try {
-      await apiFetch(`/ventas/pedidos/${selected.id}/crear-pxp`, {
-        method: 'POST',
-        body: JSON.stringify({ monto_anticipo: selected.anticipo_cop, user_name: currentUser }),
-      });
-      setShowPXPModal(false);
-      loadDetail(selected.id);
-    } catch (err: any) { alert(err.message); }
-    setCreatingPXP(false);
-  }
+    if (searchTerm) {
+      const lower = searchTerm.toLowerCase();
+      filtered = filtered.filter(v => 
+        (v.numero || '').toLowerCase().includes(lower) ||
+        (v.cot_id || '').toLowerCase().includes(lower) ||
+        (v.sc_id || '').toLowerCase().includes(lower) ||
+        (v.cliente?.nombre || '').toLowerCase().includes(lower)
+      );
+    }
+    return filtered;
+  };
 
   return (
-    <div className="h-full w-full bg-[#f8f9fa] flex flex-col overflow-hidden">
-      <div className="bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center text-emerald-600">
-            <ShoppingCart size={20} />
+    <div className="min-h-screen bg-gray-50 flex flex-col">
+      {/* Sub-modules Nav */}
+      <nav className="sticky top-0 z-10 bg-white border-b border-gray-200 px-4 flex gap-6 overflow-x-auto">
+        <Link href="/dashboard/ventas/solicitud" className="py-4 text-sm font-medium text-gray-500 hover:text-gray-900 border-b-2 border-transparent">Solicitud</Link>
+        <Link href="/dashboard/ventas/cotizacion" className="py-4 text-sm font-medium text-gray-500 hover:text-gray-900 border-b-2 border-transparent">Cotizacion</Link>
+        <Link href="/dashboard/ventas/venta" className="py-4 text-sm font-medium text-emerald-600 border-b-2 border-emerald-600">Venta</Link>
+        <Link href="/dashboard/ventas/exportar-dia" className="py-4 text-sm font-medium text-gray-500 hover:text-gray-900 border-b-2 border-transparent">Exportar Dia</Link>
+        <Link href="/dashboard/ventas/proyecciones" className="py-4 text-sm font-medium text-gray-500 hover:text-gray-900 border-b-2 border-transparent">Proyecciones</Link>
+      </nav>
+
+      {/* Alert Banner */}
+      <div className="bg-emerald-50 border-l-4 border-emerald-500 p-4 mx-6 mt-6 rounded-r">
+        <div className="flex">
+          <AlertCircle className="h-5 w-5 text-emerald-500" />
+          <div className="ml-3">
+            <p className="text-sm text-emerald-700">
+              Hay ventas sin PEC asignado o con saldo pendiente de pago.
+            </p>
           </div>
-          <div>
-            <h1 className="text-xl font-extrabold text-slate-900">Pedidos de Venta</h1>
-            <p className="text-xs text-slate-500">{total} pedidos &bull; VEN-YYYY####</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
-            <input value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Buscar VEN, COT, cliente..." className="pl-8 pr-3 py-2 border border-slate-200 rounded-xl text-sm outline-none focus:border-emerald-400 w-56" />
-          </div>
-          <select value={filterEstado} onChange={e => setFilterEstado(e.target.value)}
-            className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none">
-            <option value="">Todos</option>
-            {Object.entries(ESTADOS).map(([k,v]) => <option key={k} value={k}>{v.label}</option>)}
-          </select>
-          <button onClick={load} className="p-2 border border-slate-200 rounded-xl text-slate-500 hover:bg-slate-50">
-            <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
-          </button>
-          <a href="/dashboard/ventas/cotizacion" className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2">
-            <ArrowRight size={16} /> Ir a Cotizaciones
-          </a>
         </div>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
-        <div className={`flex flex-col overflow-hidden transition-all ${selected ? 'w-[52%]' : 'w-full'}`}>
-          <div className="flex-1 overflow-y-auto">
-            {loading ? (
-              <div className="flex justify-center pt-16"><RefreshCw size={24} className="animate-spin text-emerald-400" /></div>
-            ) : vens.length === 0 ? (
-              <div className="text-center pt-16 text-slate-400">
-                <ShoppingCart size={40} className="mx-auto mb-3 opacity-20" />
-                <p className="text-sm">Sin pedidos de venta. Confirma una cotizacion.</p>
+      <main className="flex-1 p-6">
+        {/* Header */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
+          <div className="flex items-center gap-4">
+            <div className="p-3 bg-emerald-100 text-emerald-600 rounded-xl">
+              <ShoppingCart size={28} />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Pedidos de Venta</h1>
+              <p className="text-sm text-gray-500 mt-1">Gestiona los pedidos de venta confirmados.</p>
+            </div>
+          </div>
+          <Link href="/dashboard/ventas/cotizacion" className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-medium shadow flex items-center gap-2">
+            <Plus size={18} /> Nueva (desde COT)
+          </Link>
+        </div>
+
+        {/* KPIs */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:border-amber-200 transition-colors">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-sm font-medium text-gray-500">Pendiente de Compra</p>
+                <h3 className="text-2xl font-bold text-gray-900 mt-1">0</h3>
               </div>
-            ) : (
-              <table className="w-full text-left text-sm">
-                <thead className="bg-slate-50 border-b border-slate-100 sticky top-0">
-                  <tr className="text-xs text-slate-400 uppercase tracking-wider">
-                    <th className="px-4 py-3">VEN #</th>
-                    <th className="px-4 py-3">SC / COT</th>
-                    <th className="px-4 py-3">Cliente</th>
-                    <th className="px-4 py-3">Total</th>
-                    <th className="px-4 py-3">Saldo</th>
-                    <th className="px-4 py-3">Entrega Est.</th>
-                    <th className="px-4 py-3">Estado</th>
-                    <th className="px-4 py-3">Compra</th>
+              <div className="p-2 bg-amber-50 rounded-lg text-amber-600"><Clock size={20} /></div>
+            </div>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:border-blue-200 transition-colors">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-sm font-medium text-gray-500">En Transito</p>
+                <h3 className="text-2xl font-bold text-gray-900 mt-1">0</h3>
+              </div>
+              <div className="p-2 bg-blue-50 rounded-lg text-blue-600"><Package size={20} /></div>
+            </div>
+          </div>
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 hover:border-indigo-200 transition-colors">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-sm font-medium text-gray-500">Monto Total VEN</p>
+                <h3 className="text-2xl font-bold text-gray-900 mt-1">$0</h3>
+              </div>
+              <div className="p-2 bg-indigo-50 rounded-lg text-indigo-600"><DollarSign size={20} /></div>
+            </div>
+          </div>
+          <div className="bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl shadow border-0 p-5 relative overflow-hidden text-white">
+            <Activity className="absolute right-[-10px] bottom-[-10px] text-white/20 h-24 w-24" />
+            <div className="relative z-10">
+              <p className="text-sm font-medium text-emerald-100">Completadas (Mes)</p>
+              <h3 className="text-2xl font-bold mt-1">0</h3>
+            </div>
+          </div>
+        </div>
+
+        {/* Table Section */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="border-b border-gray-200 px-6 py-4 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div className="flex gap-4">
+              <button onClick={() => setActiveTab('pendiente')} className={`pb-4 border-b-2 font-medium text-sm transition-colors -mb-[17px] ${activeTab === 'pendiente' ? 'border-amber-600 text-amber-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Pendiente Compra</button>
+              <button onClick={() => setActiveTab('transito')} className={`pb-4 border-b-2 font-medium text-sm transition-colors -mb-[17px] ${activeTab === 'transito' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>En Transito</button>
+              <button onClick={() => setActiveTab('completadas')} className={`pb-4 border-b-2 font-medium text-sm transition-colors -mb-[17px] ${activeTab === 'completadas' ? 'border-emerald-600 text-emerald-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>Completadas</button>
+            </div>
+            <div className="flex gap-2 w-full md:w-auto">
+              <div className="relative flex-1 md:w-64">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                <input 
+                  type="text" placeholder="Buscar venta..." 
+                  className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
+                  value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
+                />
+              </div>
+              <button onClick={fetchVentas} className="p-2 border border-gray-300 rounded-lg text-gray-600 hover:bg-gray-50">
+                <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+              </button>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto min-h-[400px]">
+            <table className="w-full text-left text-sm whitespace-nowrap">
+              <thead className="bg-gray-50 text-gray-500 border-b border-gray-200">
+                <tr>
+                  <th className="px-6 py-3 font-medium">VEN #</th>
+                  <th className="px-6 py-3 font-medium">Cliente</th>
+                  <th className="px-6 py-3 font-medium">Fecha VEN</th>
+                  <th className="px-6 py-3 font-medium text-right">Total</th>
+                  <th className="px-6 py-3 font-medium text-right">Anticipo</th>
+                  <th className="px-6 py-3 font-medium text-right">Saldo</th>
+                  <th className="px-6 py-3 font-medium">Estado</th>
+                  <th className="px-6 py-3 font-medium">Compra (PEC)</th>
+                  <th className="px-6 py-3 font-medium text-center">Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {getFilteredVentas().length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="px-6 py-12 text-center">
+                      <FileText className="mx-auto h-12 w-12 text-gray-300 mb-3" />
+                      <p className="text-gray-500 font-medium">No se encontraron resultados</p>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {vens.map(v => (
-                    <tr key={v.id} onClick={() => loadDetail(v.id)}
-                      className={`border-b border-slate-50 cursor-pointer hover:bg-emerald-50/30 ${selected?.id===v.id?'bg-emerald-50/50':''}`}>
-                      <td className="px-4 py-3 font-bold text-emerald-600">{v.numero}</td>
-                      <td className="px-4 py-3 text-xs">
-                        {v.sc_numero && <div className="text-indigo-600">{v.sc_numero}</div>}
-                        {v.cot_numero && <div className="text-amber-600">{v.cot_numero}</div>}
+                ) : (
+                  getFilteredVentas().map(ven => (
+                    <tr key={ven.id} className="hover:bg-gray-50 group">
+                      <td className="px-6 py-4">
+                        <button onClick={() => { setSelectedVenta(ven); setIsDrawerOpen(true); }} className="font-semibold text-emerald-700 hover:underline">{ven.numero}</button>
+                        <div className="text-xs text-gray-400 mt-1 flex gap-1">
+                          <span>COT {ven.cot_id}</span>
+                          <span>|</span>
+                          <span>SC {ven.sc_id}</span>
+                        </div>
                       </td>
-                      <td className="px-4 py-3 font-medium text-slate-800">{v.customer_name || '-'}</td>
-                      <td className="px-4 py-3 font-bold">{fCOP(v.total_cop)}</td>
-                      <td className="px-4 py-3 text-slate-600">{fCOP(v.saldo_cop)}</td>
-                      <td className="px-4 py-3 text-slate-500">{fDate(v.fecha_entrega_estimada)}</td>
-                      <td className="px-4 py-3"><Badge estado={v.estado} /></td>
-                      <td className="px-4 py-3">
-                        {v.pec_numero ? (
-                          <span className="text-xs font-bold text-purple-600">{v.pec_numero}</span>
+                      <td className="px-6 py-4 font-medium text-gray-900">{ven.cliente?.nombre || 'N/A'}</td>
+                      <td className="px-6 py-4 text-gray-600">{ven.fecha || 'N/A'}</td>
+                      <td className="px-6 py-4 text-right font-medium text-gray-900">${ven.total || 0}</td>
+                      <td className="px-6 py-4 text-right text-gray-600">${ven.anticipo || 0}</td>
+                      <td className="px-6 py-4 text-right text-gray-600 font-medium">${(ven.total || 0) - (ven.anticipo || 0)}</td>
+                      <td className="px-6 py-4">
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800`}>
+                          {ven.estado || 'ACTIVA'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        {ven.pec_id ? (
+                          <Link href={`/dashboard/compras/pedidos?id=${ven.pec_id}`} className="text-blue-600 hover:underline">{ven.pec_id}</Link>
                         ) : (
-                          <span className="text-xs text-slate-300">-</span>
+                          <span className="text-gray-400 italic">Sin PEC</span>
                         )}
                       </td>
+                      <td className="px-6 py-4">
+                        <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {!ven.pec_id && <button className="px-2 py-1 bg-blue-50 text-blue-600 text-xs rounded hover:bg-blue-100 font-medium">Crear PEC</button>}
+                          {!ven.pxp_id && <button onClick={() => { setSelectedVenta(ven); setIsModalOpen(true); }} className="px-2 py-1 bg-amber-50 text-amber-600 text-xs rounded hover:bg-amber-100 font-medium">Crear PXP</button>}
+                        </div>
+                      </td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
+      </main>
 
-        {/* Detail Panel */}
-        {selected && (
-          <div className="border-l border-slate-200 bg-white flex flex-col overflow-hidden flex-1">
-            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+      {/* Drawer */}
+      {isDrawerOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <div className="absolute inset-0 bg-gray-900/40 backdrop-blur-sm" onClick={() => setIsDrawerOpen(false)} />
+          <div className="relative w-full max-w-2xl bg-white shadow-2xl h-full flex flex-col transform transition-transform">
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
               <div>
-                <h2 className="font-extrabold text-slate-900 text-lg">{selected.numero}</h2>
-                <div className="flex items-center gap-2 mt-0.5">
-                  {selected.sc_numero && <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-bold">{selected.sc_numero}</span>}
-                  {selected.cot_numero && <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-bold">{selected.cot_numero}</span>}
-                </div>
+                <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                  Pedido Venta {selectedVenta?.numero}
+                </h2>
               </div>
-              <div className="flex items-center gap-2">
-                {!selected.pec_id && (
-                  <a href="/dashboard/compras/pedidos"
-                    className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1">
-                    <Package size={12} /> Crear Pedido de Compra
-                  </a>
-                )}
-                {!selected.pxp_id && selected.total_cop > 0 && (
-                  <button onClick={() => setShowPXPModal(true)}
-                    className="bg-slate-700 hover:bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold">
-                    Crear PXP
-                  </button>
-                )}
-                <button onClick={() => setSelected(null)} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg"><X size={16} /></button>
-              </div>
+              <button onClick={() => setIsDrawerOpen(false)} className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full"><X size={20} /></button>
             </div>
-
-            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-              <div className="flex flex-wrap gap-2">
-                <Badge estado={selected.estado} />
-                {selected.pec_numero && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-bold">PEC: {selected.pec_numero}</span>}
-                {selected.pxp_numero && <span className="text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full font-bold">PXP: {selected.pxp_numero}</span>}
-              </div>
-
-              {/* Cliente */}
-              <div className="bg-slate-50 rounded-2xl p-4">
-                <p className="text-xs font-black text-slate-400 uppercase mb-2">Cliente</p>
-                <div className="font-bold text-slate-800 mb-1">{selected.customer_name}</div>
-                {selected.customer_phone && <a href={`tel:${selected.customer_phone}`} className="flex items-center gap-1.5 text-sm text-slate-600 hover:text-emerald-600 mb-0.5"><Phone size={12} />{selected.customer_phone}</a>}
-                {selected.customer_email && <a href={`mailto:${selected.customer_email}`} className="flex items-center gap-1.5 text-sm text-slate-600 hover:text-indigo-600 mb-0.5"><Mail size={12} />{selected.customer_email}</a>}
-                {selected.direccion_entrega && <p className="flex items-center gap-1.5 text-sm text-slate-600"><MapPin size={12} />Entrega: {selected.direccion_entrega}</p>}
-              </div>
-
-              {/* Financiero */}
-              <div className="grid grid-cols-3 gap-3">
-                <div className="bg-indigo-50 rounded-xl p-3"><p className="text-xs text-indigo-600 mb-1">Total</p><p className="font-extrabold text-indigo-700">{fCOP(selected.total_cop)}</p></div>
-                <div className="bg-emerald-50 rounded-xl p-3"><p className="text-xs text-emerald-600 mb-1">Anticipo</p><p className="font-extrabold text-emerald-700">{fCOP(selected.anticipo_cop)}</p></div>
-                <div className="bg-amber-50 rounded-xl p-3"><p className="text-xs text-amber-600 mb-1">Saldo</p><p className="font-extrabold text-amber-700">{fCOP(selected.saldo_cop)}</p></div>
-              </div>
-
-              {/* Dates */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-slate-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Cotizacion</p><p className="font-bold text-sm">{fDate(selected.fecha_cotizacion)}</p></div>
-                <div className="bg-slate-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Entrega Est.</p><p className="font-bold text-sm">{fDate(selected.fecha_entrega_estimada)}</p></div>
-              </div>
-
-              {/* Products */}
-              {selected.productos?.length > 0 && (
-                <div>
-                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos</p>
-                  <div className="border border-slate-100 rounded-xl overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead className="bg-slate-50"><tr className="text-slate-400 uppercase">
-                        <th className="px-3 py-2 text-left">Producto</th><th className="px-3 py-2 text-right">Qty</th>
-                        <th className="px-3 py-2 text-right">Precio</th><th className="px-3 py-2 text-right">Total</th>
-                      </tr></thead>
-                      <tbody>
-                        {selected.productos.map((p: any, i: number) => (
-                          <tr key={i} className="border-t border-slate-50">
-                            <td className="px-3 py-2 font-medium">{p.product_name}</td>
-                            <td className="px-3 py-2 text-right">{p.qty}</td>
-                            <td className="px-3 py-2 text-right">{fCOP(p.unit_price_cop)}</td>
-                            <td className="px-3 py-2 text-right font-bold">{fCOP(p.qty*p.unit_price_cop)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+            
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {/* Trazabilidad */}
+              <div className="bg-white p-4 rounded-xl border border-gray-200">
+                <h3 className="font-semibold text-gray-900 mb-3">Trazabilidad</h3>
+                <div className="flex items-center gap-2 overflow-x-auto pb-2">
+                  <div className="px-3 py-1.5 bg-gray-100 rounded text-sm text-gray-600 shrink-0">SC {selectedVenta?.sc_id || 'N/A'}</div>
+                  <ArrowRight size={14} className="text-gray-400 shrink-0" />
+                  <div className="px-3 py-1.5 bg-amber-50 rounded text-sm text-amber-700 shrink-0">COT {selectedVenta?.cot_id || 'N/A'}</div>
+                  <ArrowRight size={14} className="text-gray-400 shrink-0" />
+                  <div className="px-3 py-1.5 bg-emerald-100 rounded text-sm text-emerald-800 font-medium shrink-0">VEN {selectedVenta?.numero}</div>
+                  <ArrowRight size={14} className="text-gray-400 shrink-0" />
+                  <div className={`px-3 py-1.5 rounded text-sm shrink-0 ${selectedVenta?.pec_id ? 'bg-purple-50 text-purple-700' : 'bg-gray-50 text-gray-400 italic border border-dashed border-gray-300'}`}>
+                    {selectedVenta?.pec_id ? `PEC ${selectedVenta?.pec_id}` : 'Falta PEC'}
                   </div>
                 </div>
-              )}
-
-              {/* PXP */}
-              {selected.pxps?.length > 0 && (
-                <div>
-                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Orden de Pago (PXP)</p>
-                  {selected.pxps.map((p: any) => (
-                    <div key={p.id} className="bg-slate-50 rounded-xl p-3 flex items-center justify-between">
-                      <div>
-                        <p className="font-bold text-slate-800">{p.numero}</p>
-                        <p className="text-xs text-slate-500">Pendiente: {fCOP(p.monto_pendiente)}</p>
-                      </div>
-                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${p.estado==='COMPLETADA'?'bg-emerald-100 text-emerald-700':'bg-amber-100 text-amber-700'}`}>{p.estado}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Actividades */}
-              {selected.actividades?.length > 0 && (
-                <div>
-                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Actividad</p>
-                  <div className="space-y-2">
-                    {selected.actividades.map((a: any) => (
-                      <div key={a.id} className="flex gap-3">
-                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-2 flex-shrink-0" />
-                        <div>
-                          <p className="text-sm text-slate-700">{a.description}</p>
-                          <p className="text-xs text-slate-400">{fDate(a.created_at)} &bull; {a.user_name || 'Sistema'}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+              </div>
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* PXP Modal */}
-      {showPXPModal && selected && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
-            <h3 className="font-extrabold text-slate-900 text-lg mb-4">Crear Orden de Pago (PXP)</h3>
-            <div className="bg-slate-50 rounded-xl p-4 mb-4 space-y-2">
-              <div className="flex justify-between text-sm"><span className="text-slate-500">VEN:</span><span className="font-bold">{selected.numero}</span></div>
-              <div className="flex justify-between text-sm"><span className="text-slate-500">Cliente:</span><span className="font-bold">{selected.customer_name}</span></div>
-              <div className="flex justify-between text-sm"><span className="text-slate-500">Total:</span><span className="font-bold text-indigo-600">{fCOP(selected.total_cop)}</span></div>
-              <div className="flex justify-between text-sm"><span className="text-slate-500">Anticipo (50%):</span><span className="font-bold text-emerald-600">{fCOP(selected.anticipo_cop)}</span></div>
-              <div className="flex justify-between text-sm border-t border-slate-200 pt-2 mt-2">
-                <span className="text-slate-500 font-bold">Saldo a cobrar:</span>
-                <span className="font-extrabold text-amber-600">{fCOP(selected.saldo_cop)}</span>
+      {/* Modal PXP */}
+      {isModalOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm" onClick={() => setIsModalOpen(false)} />
+          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md p-6">
+            <h3 className="text-lg font-bold text-gray-900 mb-4">Crear Pago (PXP)</h3>
+            <div className="space-y-4 mb-6">
+              <div className="flex justify-between p-3 bg-gray-50 rounded-lg">
+                <span className="text-gray-600 text-sm">Anticipo</span>
+                <span className="font-medium">${selectedVenta?.anticipo || 0}</span>
+              </div>
+              <div className="flex justify-between p-3 bg-gray-50 rounded-lg">
+                <span className="text-gray-600 text-sm">Saldo Pendiente</span>
+                <span className="font-medium text-red-600">${(selectedVenta?.total || 0) - (selectedVenta?.anticipo || 0)}</span>
               </div>
             </div>
-            <div className="flex gap-3">
-              <button onClick={() => setShowPXPModal(false)} className="flex-1 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-600 hover:bg-slate-50">Cancelar</button>
-              <button onClick={createPXP} disabled={creatingPXP}
-                className="flex-1 py-2.5 bg-slate-700 hover:bg-slate-800 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center justify-center gap-2">
-                {creatingPXP ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
-                Crear PXP
-              </button>
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg font-medium">Cancelar</button>
+              <button className="px-4 py-2 bg-amber-600 text-white rounded-lg font-medium hover:bg-amber-700">Crear PXP</button>
             </div>
           </div>
         </div>
