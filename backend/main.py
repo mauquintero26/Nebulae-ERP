@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from app.api.v1 import auth, catalog, quotations, inventory, finance, store, crm, sales, purchases, webhooks, marketing, chat
+from app.api.v1 import erp_ventas, erp_compras
 from app.api import ws
 from app.db.database import Base, engine
 
@@ -54,6 +55,8 @@ app.include_router(webhooks.router, prefix="/api/v1/webhooks", tags=["Webhooks"]
 app.include_router(marketing.router, prefix="/api/v1/marketing", tags=["Marketing"])
 app.include_router(chat.router, prefix="/api/v1/chat", tags=["Chat Omnicanal"])
 app.include_router(ws.router, prefix="/ws", tags=["WebSockets"])
+app.include_router(erp_ventas.router, prefix="/api/v1/ventas", tags=["ERP Ventas"])
+app.include_router(erp_compras.router, prefix="/api/v1/compras", tags=["ERP Compras"])
 
 @app.get("/")
 def read_root():

@@ -1,52 +1,127 @@
-"use client";
+'use client';
 
-import { useState } from 'react';
-import { 
-  Package, Search, Filter, Plus, ChevronLeft, Save, 
-  Image as ImageIcon, Globe, Tag, Layers, ShoppingCart, 
-  DollarSign, Truck, FileText, CheckCircle2, Sparkles, AlertCircle
+import { useState, useEffect, useCallback } from 'react';
+import {
+  Package, Search, Filter, Plus, ChevronLeft, Save,
+  Globe, Tag, Layers, DollarSign, RefreshCw, AlertCircle
 } from 'lucide-react';
 
-const MOCK_PRODUCTS = [
-  { id: 'PRD-001', name: 'Auriculares Inalámbricos Pro', sku: 'AUDIO-01', stock: 145, price: '$450.000', cost: '$200.000', category: 'Electrónica', published: true },
-  { id: 'PRD-002', name: 'Teclado Mecánico RGB', sku: 'PER-02', stock: 32, price: '$280.000', cost: '$120.000', category: 'Periféricos', published: true },
-  { id: 'PRD-003', name: 'Mouse Ergonómico Vertical', sku: 'PER-03', stock: 0, price: '$150.000', cost: '$60.000', category: 'Periféricos', published: false },
-  { id: 'PRD-004', name: 'Monitor 27" 4K', sku: 'MON-01', stock: 12, price: '$1.200.000', cost: '$800.000', category: 'Monitores', published: true },
-];
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
+async function apiFetch(path: string, opts: RequestInit = {}) {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(opts.headers as any || {}) },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
+  return data.data ?? data;
+}
+
+const TABS = ['Informacion General', 'SKUs y Variantes', 'Stock', 'E-Commerce'];
 
 export default function ProductosPage() {
+  const [products, setProducts] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
   const [selectedProduct, setSelectedProduct] = useState<any | null>(null);
-  const [activeTab, setActiveTab] = useState('Información General');
-  
-  // Form Checkboxes Header
+  const [activeTab, setActiveTab] = useState(TABS[0]);
+  const [categories, setCategories] = useState<any[]>([]);
+  const [brands, setBrands] = useState<any[]>([]);
+  const [warehouses, setWarehouses] = useState<any[]>([]);
+  const [saving, setSaving] = useState(false);
+
   const [canSell, setCanSell] = useState(true);
   const [canBuy, setCanBuy] = useState(true);
-  const [canExpense, setCanExpense] = useState(false);
-
-  // E-commerce states inside form
   const [isPublished, setIsPublished] = useState(false);
 
   const isNew = selectedProduct === 'NEW';
 
-  // --- VISTA 1: LISTADO DE PRODUCTOS (Unificado con E-Commerce) ---
+  const [form, setForm] = useState({
+    name: '', description: '', type: 'Fisico', base_currency: 'COP',
+    uom: 'Unidad', brand_id: '', category_id: '',
+    sale_price: '', cost_price: '', tax_rate: 0, reference: '',
+    track_inventory: true, auto_replenish: false, is_active: true,
+    is_published: false, ecommerce_category: '', low_stock_alert: 0,
+  });
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (search) params.set('search', search);
+      const d = await apiFetch(`/products?${params}&limit=100`);
+      setProducts(Array.isArray(d) ? d : (d?.data ?? d?.products ?? []));
+      setTotal(d?.total ?? (Array.isArray(d) ? d.length : 0));
+    } catch { setProducts([]); }
+    finally { setLoading(false); }
+  }, [search]);
+
+  useEffect(() => {
+    load();
+    apiFetch('/categories').then(d => setCategories(Array.isArray(d) ? d : (d?.data ?? []))).catch(()=>{});
+    apiFetch('/brands').then(d => setBrands(Array.isArray(d) ? d : (d?.data ?? []))).catch(()=>{});
+    apiFetch('/inventory/warehouses').then(d => setWarehouses(Array.isArray(d) ? d : (d?.data ?? []))).catch(()=>{});
+  }, [load]);
+
+  async function saveProduct(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const body = { ...form, is_published: isPublished };
+      if (isNew) {
+        await apiFetch('/products', { method: 'POST', body: JSON.stringify(body) });
+      } else {
+        await apiFetch(`/products/${selectedProduct.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+      }
+      setSelectedProduct(null);
+      load();
+    } catch (err: any) { alert(err.message); }
+    setSaving(false);
+  }
+
+  function openNew() {
+    setForm({ name: '', description: '', type: 'Fisico', base_currency: 'COP', uom: 'Unidad',
+      brand_id: '', category_id: '', sale_price: '', cost_price: '', tax_rate: 0, reference: '',
+      track_inventory: true, auto_replenish: false, is_active: true, is_published: false, ecommerce_category: '', low_stock_alert: 0 });
+    setIsPublished(false);
+    setActiveTab(TABS[0]);
+    setSelectedProduct('NEW');
+  }
+
+  function openEdit(p: any) {
+    setForm({
+      name: p.name || '', description: p.description || '', type: p.type || 'Fisico',
+      base_currency: p.base_currency || 'COP', uom: p.uom || 'Unidad',
+      brand_id: p.brand_id || '', category_id: p.category_id || '',
+      sale_price: p.sale_price || '', cost_price: p.cost_price || '', tax_rate: p.tax_rate || 0,
+      reference: p.reference || '', track_inventory: p.track_inventory ?? true,
+      auto_replenish: p.auto_replenish ?? false, is_active: p.is_active ?? true,
+      is_published: p.is_published ?? false, ecommerce_category: p.ecommerce_category || '',
+      low_stock_alert: p.low_stock_alert || 0,
+    });
+    setIsPublished(p.is_published ?? false);
+    setActiveTab(TABS[0]);
+    setSelectedProduct(p);
+  }
+
+  // ─── PRODUCT LIST ───
   if (!selectedProduct) {
     return (
-      <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-5 overflow-y-auto animate-in fade-in custom-scrollbar">
+      <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-5 overflow-y-auto">
         <div className="flex justify-between items-start mb-6">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 bg-white rounded-xl shadow-sm border border-slate-200 flex items-center justify-center text-purple-600">
               <Package size={24} />
             </div>
             <div>
-              <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Catálogo de Productos</h1>
-              <p className="text-slate-500 text-sm mt-1">Sincronizado en tiempo real con el E-commerce y Módulo de Ventas.</p>
+              <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Catalogo de Productos</h1>
+              <p className="text-slate-500 text-sm mt-1">{total} productos • Sincronizado con E-commerce</p>
             </div>
           </div>
-          
-          <button 
-            onClick={() => { setSelectedProduct('NEW'); setIsPublished(false); setActiveTab('Información General'); }}
-            className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-colors flex items-center gap-2"
-          >
+          <button onClick={openNew}
+            className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm flex items-center gap-2">
             <Plus size={18} /> Nuevo Producto
           </button>
         </div>
@@ -56,536 +131,327 @@ export default function ProductosPage() {
             <div className="flex items-center gap-3">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                <input type="text" placeholder="Buscar producto por nombre, SKU, código..." className="pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-lg text-sm w-96 outline-none focus:border-purple-600" />
+                <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+                  placeholder="Buscar por nombre, SKU, referencia..."
+                  className="pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-lg text-sm w-80 outline-none focus:border-purple-400" />
               </div>
-              <button className="p-2 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50"><Filter size={18} /></button>
+              <button onClick={load} className="p-2 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50">
+                <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+              </button>
             </div>
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-slate-500">Total:</span>
-              <span className="font-bold text-slate-800">1,204 productos</span>
-            </div>
+            <span className="text-sm text-slate-500">Total: <span className="font-bold text-slate-800">{total} productos</span></span>
           </div>
-          
-          <div className="flex-1 overflow-y-auto custom-scrollbar">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-100 text-xs text-slate-400 uppercase tracking-wider sticky top-0 z-10 shadow-sm">
-                  <th className="px-6 py-4 font-bold">Producto</th>
-                  <th className="px-6 py-4 font-bold">Categoría</th>
-                  <th className="px-6 py-4 font-bold">Precio</th>
-                  <th className="px-6 py-4 font-bold">Coste</th>
-                  <th className="px-6 py-4 font-bold text-center">Stock Físico</th>
-                  <th className="px-6 py-4 font-bold text-center">Web E-Commerce</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-sm">
-                {MOCK_PRODUCTS.map(prod => (
-                  <tr key={prod.id} onClick={() => setSelectedProduct(prod)} className="hover:bg-purple-50/50 transition-colors cursor-pointer group">
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-slate-100 rounded-lg border border-slate-200 flex items-center justify-center text-slate-300">
-                          <ImageIcon size={16} />
-                        </div>
-                        <div>
-                          <p className="font-bold text-slate-800 group-hover:text-purple-700 transition-colors">{prod.name}</p>
-                          <p className="text-xs text-slate-400">{prod.sku}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-slate-600 font-medium">{prod.category}</td>
-                    <td className="px-6 py-4 font-black text-slate-800">{prod.price}</td>
-                    <td className="px-6 py-4 text-slate-500">{prod.cost}</td>
-                    <td className="px-6 py-4 text-center">
-                      <span className={`font-bold ${prod.stock > 10 ? 'text-emerald-600' : prod.stock > 0 ? 'text-amber-600' : 'text-rose-600'}`}>
-                        {prod.stock}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex justify-center">
-                        <label className="relative inline-flex items-center cursor-pointer">
-                          <input type="checkbox" className="sr-only peer" defaultChecked={prod.published} />
-                          <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
-                        </label>
-                      </div>
-                    </td>
+
+          <div className="flex-1 overflow-y-auto">
+            {loading ? (
+              <div className="flex justify-center pt-16"><RefreshCw size={24} className="animate-spin text-purple-400" /></div>
+            ) : products.length === 0 ? (
+              <div className="text-center pt-16 text-slate-400">
+                <Package size={48} className="mx-auto mb-4 opacity-20" />
+                <p>Sin productos. Crea el primero.</p>
+              </div>
+            ) : (
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-100 text-xs text-slate-400 uppercase tracking-wider sticky top-0">
+                    <th className="px-6 py-4 font-bold">Producto</th>
+                    <th className="px-6 py-4 font-bold">Tipo</th>
+                    <th className="px-6 py-4 font-bold">Precio Venta</th>
+                    <th className="px-6 py-4 font-bold">Costo</th>
+                    <th className="px-6 py-4 font-bold text-center">E-Commerce</th>
+                    <th className="px-6 py-4 font-bold text-center">Activo</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {products.map((p: any) => (
+                    <tr key={p.id} onClick={() => openEdit(p)}
+                      className="border-b border-slate-50 cursor-pointer hover:bg-purple-50/30 transition-colors">
+                      <td className="px-6 py-4">
+                        <div className="font-semibold text-slate-800">{p.name}</div>
+                        {p.reference && <div className="text-xs text-slate-400">Ref: {p.reference}</div>}
+                      </td>
+                      <td className="px-6 py-4">
+                        <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">{p.type}</span>
+                      </td>
+                      <td className="px-6 py-4 font-medium text-slate-800">
+                        {p.sale_price ? `$${Number(p.sale_price).toLocaleString('es-CO')}` : '-'}
+                      </td>
+                      <td className="px-6 py-4 text-slate-600">
+                        {p.cost_price ? `$${Number(p.cost_price).toLocaleString('es-CO')}` : '-'}
+                      </td>
+                      <td className="px-6 py-4 text-center">
+                        <span className={`inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full ${p.is_published ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>
+                          <Globe size={10} />{p.is_published ? 'Publicado' : 'No publicado'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-center">
+                        <span className={`w-2 h-2 rounded-full inline-block ${p.is_active ? 'bg-emerald-400' : 'bg-slate-300'}`} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       </div>
     );
   }
 
-  // --- VISTA 2: FORMULARIO DETALLADO DE PRODUCTO ---
+  // ─── PRODUCT FORM ───
   return (
-    <div className="h-full w-full bg-[#f8f9fa] flex flex-col overflow-y-auto animate-in fade-in custom-scrollbar">
-      
-      {/* Fixed Header */}
-      <div className="bg-white border-b border-slate-200 px-6 py-4 sticky top-0 z-20 shadow-sm flex flex-col gap-4">
-        <div className="flex justify-between items-start">
-          <div className="flex items-start gap-4 flex-1">
-            <button onClick={() => setSelectedProduct(null)} className="w-10 h-10 bg-white border border-slate-200 rounded-xl flex items-center justify-center text-slate-500 hover:bg-slate-50 shadow-sm flex-shrink-0 mt-1">
-              <ChevronLeft size={20} />
-            </button>
-            <div className="flex-1 max-w-2xl">
-              <input 
-                type="text" 
-                placeholder="Nombre del Producto..." 
-                defaultValue={!isNew ? selectedProduct.name : ''}
-                className="w-full text-3xl font-black text-slate-900 outline-none placeholder-slate-300 bg-transparent border-b border-transparent focus:border-slate-200 transition-colors pb-1"
-              />
-              <div className="flex gap-6 mt-3">
-                <label className="flex items-center gap-2 cursor-pointer group">
-                  <input type="checkbox" checked={canSell} onChange={(e) => setCanSell(e.target.checked)} className="rounded text-purple-600 focus:ring-purple-500" />
-                  <span className="text-sm font-bold text-slate-600 group-hover:text-slate-900 transition-colors">Puede ser vendido</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer group">
-                  <input type="checkbox" checked={canBuy} onChange={(e) => setCanBuy(e.target.checked)} className="rounded text-purple-600 focus:ring-purple-500" />
-                  <span className="text-sm font-bold text-slate-600 group-hover:text-slate-900 transition-colors">Puede ser comprado</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer group">
-                  <input type="checkbox" checked={canExpense} onChange={(e) => setCanExpense(e.target.checked)} className="rounded text-purple-600 focus:ring-purple-500" />
-                  <span className="text-sm font-bold text-slate-600 group-hover:text-slate-900 transition-colors">Puede ser un gasto</span>
-                </label>
-              </div>
-            </div>
-          </div>
-          
-          <div className="flex gap-3">
-            <button className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-colors">
-              Descartar
-            </button>
-            <button className="bg-purple-600 hover:bg-purple-700 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-colors flex items-center gap-2">
-              <Save size={18} /> Guardar Producto
-            </button>
-          </div>
+    <div className="h-full w-full bg-[#f8f9fa] flex flex-col overflow-hidden">
+      <div className="bg-white border-b border-slate-100 px-6 py-4 flex items-center gap-4 flex-shrink-0">
+        <button onClick={() => setSelectedProduct(null)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-xl">
+          <ChevronLeft size={20} />
+        </button>
+        <div className="flex-1">
+          <h1 className="font-extrabold text-xl text-slate-900">{isNew ? 'Nuevo Producto' : form.name}</h1>
+          {!isNew && selectedProduct?.reference && <p className="text-xs text-slate-400">Ref: {selectedProduct.reference}</p>}
+        </div>
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={canSell} onChange={e=>setCanSell(e.target.checked)} className="w-4 h-4" />
+            <span className="font-medium text-slate-600">Se puede vender</span>
+          </label>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={canBuy} onChange={e=>setCanBuy(e.target.checked)} className="w-4 h-4" />
+            <span className="font-medium text-slate-600">Se puede comprar</span>
+          </label>
+          <button onClick={saveProduct} disabled={saving}
+            className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2 rounded-xl font-bold text-sm flex items-center gap-2 disabled:opacity-50">
+            {saving ? <RefreshCw size={14} className="animate-spin" /> : <Save size={16} />}
+            {saving ? 'Guardando...' : 'Guardar'}
+          </button>
         </div>
       </div>
 
-      {/* Content Canvas */}
-      <div className="p-6 max-w-6xl w-full mx-auto flex-1">
-        
-        {/* Navigation Tabs */}
-        <div className="flex overflow-x-auto custom-scrollbar border-b border-slate-200 mb-6 pb-2">
-          {[
-            { name: 'Información General', icon: FileText },
-            { name: 'Atributos y Variantes', icon: Layers },
-            { name: 'Ventas y E-Commerce', icon: Globe },
-            { name: 'Precios', icon: Tag },
-            { name: 'Compra', icon: ShoppingCart },
-            { name: 'Inventario', icon: Truck },
-          ].map(tab => {
-            const Icon = tab.icon;
-            return (
-              <button 
-                key={tab.name}
-                onClick={() => setActiveTab(tab.name)}
-                className={`px-4 py-2 font-bold text-sm rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap mr-2 ${activeTab === tab.name ? 'bg-white shadow-sm border border-slate-200 text-purple-700' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'}`}
-              >
-                <Icon size={16} className={activeTab === tab.name ? 'text-purple-600' : 'text-slate-400'} /> {tab.name}
-              </button>
-            );
-          })}
+      {/* Tabs */}
+      <div className="bg-white border-b border-slate-100 px-6 flex-shrink-0">
+        <div className="flex gap-0">
+          {TABS.map(tab => (
+            <button key={tab} onClick={() => setActiveTab(tab)}
+              className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${activeTab === tab ? 'border-purple-600 text-purple-700' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+              {tab}
+            </button>
+          ))}
         </div>
+      </div>
 
-        <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-8 min-h-[500px]">
-          
-          {/* TAB: INFORMACIÓN GENERAL */}
-          {activeTab === 'Información General' && (
-            <div className="flex gap-10 items-start">
-              
-              <div className="flex-1 space-y-6">
-                <div className="grid grid-cols-2 gap-6">
-                  <div>
-                    <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-2">Tipo de Producto</label>
-                    <select className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 outline-none focus:border-purple-600 focus:bg-white transition-colors">
-                      <option>Bienes (Almacenable)</option>
-                      <option>Servicio</option>
-                      <option>E-Learning / Digital</option>
-                      <option>Combinado (Kit)</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-2">Categoría</label>
-                    <select className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 outline-none focus:border-purple-600 focus:bg-white transition-colors">
-                      <option>Selecciona una categoría...</option>
-                      <option selected={!isNew}>Electrónica</option>
-                      <option>Periféricos</option>
-                      <option>Monitores</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-6 pt-4 border-t border-slate-100">
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-2">Precio de Venta</label>
-                      <input type="text" defaultValue={!isNew ? selectedProduct.price : ''} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-purple-600" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-2">Impuestos de Venta</label>
-                      <input type="text" defaultValue="IVA 19%" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-purple-600" />
-                    </div>
-                  </div>
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-2">Coste (Unitario)</label>
-                      <input type="text" defaultValue={!isNew ? selectedProduct.cost : ''} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-purple-600" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-2">Impuestos de Compra</label>
-                      <input type="text" defaultValue="No Aplica" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-purple-600" />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-6 pt-4 border-t border-slate-100">
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-2">Referencia Interna (SKU)</label>
-                      <input type="text" defaultValue={!isNew ? selectedProduct.sku : ''} className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-purple-600" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-2">Código de Barras</label>
-                      <input type="text" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-purple-600" />
-                    </div>
-                  </div>
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-2">Marca</label>
-                      <input type="text" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-purple-600" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-2">Unidad de Medida (UOM)</label>
-                      <select className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 outline-none focus:border-purple-600 bg-white">
-                        <option>Unidades (U)</option>
-                        <option>Docenas</option>
-                        <option>Kilogramos (Kg)</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
+      <form onSubmit={saveProduct} className="flex-1 overflow-y-auto p-6">
+        {activeTab === 'Informacion General' && (
+          <div className="grid grid-cols-3 gap-6 max-w-5xl">
+            <div className="col-span-2 space-y-4">
+              <div>
+                <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Nombre del Producto *</label>
+                <input required value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400" />
               </div>
-              
-              {/* Image Upload Area */}
-              <div className="w-72 flex flex-col items-center">
-                <div className="w-full aspect-square border-2 border-dashed border-slate-200 rounded-3xl flex flex-col items-center justify-center bg-slate-50 text-slate-400 hover:bg-slate-100 hover:border-purple-300 transition-all cursor-pointer overflow-hidden group">
-                  <ImageIcon size={48} className="mb-2 group-hover:text-purple-400 transition-colors" />
-                  <span className="font-bold text-sm">Subir Imagen</span>
-                  <span className="text-xs font-medium mt-1">1024x1024 recomendado</span>
+              <div>
+                <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Descripcion</label>
+                <textarea rows={3} value={form.description} onChange={e=>setForm(f=>({...f,description:e.target.value}))}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400 resize-none" />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Tipo</label>
+                  <select value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400">
+                    <option>Fisico</option><option>Servicio</option><option>Experiencia</option><option>Digital</option>
+                  </select>
                 </div>
-                
-                <div className="mt-6 w-full p-4 border border-purple-100 bg-purple-50/50 rounded-2xl flex items-start gap-3">
-                  <input type="checkbox" defaultChecked className="mt-1 rounded text-purple-600" />
-                  <div>
-                    <h4 className="font-bold text-purple-900 text-sm">Rastreo de Inventario</h4>
-                    <p className="text-xs text-purple-700/80 mt-1">Activa esta opción para contabilizar stock, recepciones y entregas de este bien material.</p>
-                  </div>
+                <div>
+                  <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Unidad de Medida</label>
+                  <select value={form.uom} onChange={e=>setForm(f=>({...f,uom:e.target.value}))}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400">
+                    <option>Unidad</option><option>Kg</option><option>Lb</option><option>Metro</option><option>Litro</option>
+                  </select>
                 </div>
-              </div>
-
-            </div>
-          )}
-
-          {/* TAB: ATRIBUTOS Y VARIANTES */}
-          {activeTab === 'Atributos y Variantes' && (
-            <div className="space-y-6">
-              <div className="flex justify-between items-center mb-4">
-                <p className="text-sm text-slate-500">Agrega atributos como Talla o Color para crear múltiples variantes (Ej. Camiseta - Roja - Talla M).</p>
-                <button className="text-sm font-bold text-purple-600 bg-purple-50 px-4 py-2 rounded-lg border border-purple-100 hover:bg-purple-100 transition-colors">
-                  + Añadir Atributo
-                </button>
-              </div>
-
-              <div className="border border-slate-200 rounded-2xl overflow-hidden">
-                <table className="w-full text-left">
-                  <thead className="bg-slate-50 border-b border-slate-200">
-                    <tr>
-                      <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase">Atributo</th>
-                      <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase">Valores</th>
-                      <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase w-16"></th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    <tr>
-                      <td className="px-4 py-3">
-                        <select className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm font-bold w-full bg-white outline-none">
-                          <option>Color</option>
-                          <option>Talla</option>
-                          <option>Material</option>
-                        </select>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-2 flex-wrap">
-                          <span className="bg-slate-100 text-slate-700 px-2 py-1 rounded text-xs font-bold flex items-center gap-1 border border-slate-200">Rojo <button className="hover:text-red-500">x</button></span>
-                          <span className="bg-slate-100 text-slate-700 px-2 py-1 rounded text-xs font-bold flex items-center gap-1 border border-slate-200">Negro <button className="hover:text-red-500">x</button></span>
-                          <input type="text" placeholder="Añadir valor..." className="text-xs px-2 py-1 outline-none border-b border-dashed border-slate-300 w-24 focus:border-purple-500 bg-transparent" />
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <button className="text-slate-400 hover:text-red-500">x</button>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td className="px-4 py-3">
-                        <select className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm font-bold w-full bg-white outline-none">
-                          <option>Talla</option>
-                        </select>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-2 flex-wrap">
-                          <span className="bg-slate-100 text-slate-700 px-2 py-1 rounded text-xs font-bold flex items-center gap-1 border border-slate-200">S <button className="hover:text-red-500">x</button></span>
-                          <span className="bg-slate-100 text-slate-700 px-2 py-1 rounded text-xs font-bold flex items-center gap-1 border border-slate-200">M <button className="hover:text-red-500">x</button></span>
-                          <span className="bg-slate-100 text-slate-700 px-2 py-1 rounded text-xs font-bold flex items-center gap-1 border border-slate-200">L <button className="hover:text-red-500">x</button></span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <button className="text-slate-400 hover:text-red-500">x</button>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex gap-3 items-start mt-4">
-                <AlertCircle className="text-amber-500 shrink-0" size={18} />
-                <p className="text-sm font-medium text-amber-800">Has definido 2 atributos. Esto generará <strong>6 variantes</strong> (2 Colores × 3 Tallas). Deberás configurar códigos de barras y precios individuales si difieren de la base.</p>
+                <div>
+                  <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Categoria</label>
+                  <select value={form.category_id} onChange={e=>setForm(f=>({...f,category_id:e.target.value}))}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400">
+                    <option value="">Seleccionar...</option>
+                    {categories.map((c:any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Marca</label>
+                  <select value={form.brand_id} onChange={e=>setForm(f=>({...f,brand_id:e.target.value}))}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400">
+                    <option value="">Seleccionar...</option>
+                    {brands.map((b:any) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Referencia Interna</label>
+                  <input value={form.reference} onChange={e=>setForm(f=>({...f,reference:e.target.value}))}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400" />
+                </div>
+                <div>
+                  <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Moneda Base</label>
+                  <select value={form.base_currency} onChange={e=>setForm(f=>({...f,base_currency:e.target.value}))}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400">
+                    <option>COP</option><option>USD</option>
+                  </select>
+                </div>
               </div>
             </div>
-          )}
 
-          {/* TAB: VENTAS Y E-COMMERCE */}
-          {activeTab === 'Ventas y E-Commerce' && (
-            <div className="grid grid-cols-2 gap-10">
-              
-              {/* Sección Web */}
-              <div className="space-y-6">
-                <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider mb-2 flex items-center gap-2">
-                  <Globe size={18} className="text-purple-600"/> Publicación en Tienda Web
-                </h3>
-                
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 flex justify-between items-center">
-                  <div>
-                    <h4 className="font-bold text-slate-800">Publicado en Sitio Web</h4>
-                    <p className="text-xs text-slate-500 mt-1">Sincroniza y muestra este producto en tu E-Commerce.</p>
-                  </div>
-                  <label className="relative inline-flex items-center cursor-pointer scale-110">
-                    <input type="checkbox" className="sr-only peer" checked={isPublished} onChange={(e) => setIsPublished(e.target.checked)} />
-                    <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
-                  </label>
-                </div>
-
-                <div className="space-y-4 pt-2">
-                  <label className="flex items-start gap-3 cursor-pointer group">
-                    <input type="checkbox" defaultChecked className="mt-1 rounded text-purple-600" />
-                    <div>
-                      <span className="text-sm font-bold text-slate-800 block">Vender cuando esté agotado (Bajo Pedido)</span>
-                      <span className="text-xs text-slate-500 block">Permite comprar aunque el stock físico sea cero.</span>
-                    </div>
-                  </label>
-                  <label className="flex items-start gap-3 cursor-pointer group">
-                    <input type="checkbox" defaultChecked className="mt-1 rounded text-purple-600" />
-                    <div>
-                      <span className="text-sm font-bold text-slate-800 block">Mostrar cantidad disponible en la web</span>
-                      <span className="text-xs text-slate-500 block">Ej. "¡Solo quedan 3 unidades!" para generar urgencia.</span>
-                    </div>
-                  </label>
-                </div>
-                
-                <div>
-                  <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-2">Mensaje por falta de stock</label>
-                  <input type="text" placeholder="Ej: Agotado temporalmente. Déjanos tu correo." className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                </div>
-              </div>
-
-              {/* Cross-sell / Upsell */}
-              <div className="space-y-6">
-                <div className="flex justify-between items-center mb-2">
-                  <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
-                    <ShoppingCart size={18} className="text-indigo-600"/> Cross-Selling & Accesorios
-                  </h3>
-                  <button className="text-[10px] font-bold bg-indigo-50 border border-indigo-200 text-indigo-700 px-2 py-1 rounded flex items-center gap-1 hover:bg-indigo-100 transition-colors">
-                    <Sparkles size={10} /> Auto-Completar IA
-                  </button>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-2">Productos Opcionales (Upsell - Checkout)</label>
-                  <input type="text" placeholder="Buscar productos para sugerir en el carrito..." className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-2">Productos de Accesorio (Página de Producto)</label>
-                  <input type="text" placeholder="Buscar estuches, cables, garantías..." className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                </div>
-                
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-2">Productos Alternativos</label>
-                  <input type="text" placeholder="Buscar productos similares si este no convence..." className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                </div>
-              </div>
-
-            </div>
-          )}
-
-          {/* TAB: PRECIOS */}
-          {activeTab === 'Precios' && (
             <div className="space-y-4">
-              <div className="flex justify-between items-center mb-4">
-                <p className="text-sm text-slate-500">Reglas de lista de precios, descuentos por volumen y promociones.</p>
-                <button className="text-sm font-bold text-purple-600 bg-purple-50 px-4 py-2 rounded-lg border border-purple-100 hover:bg-purple-100 transition-colors">
-                  + Añadir Regla de Precio
-                </button>
+              <div className="bg-white border border-slate-200 rounded-2xl p-4">
+                <h3 className="font-black text-sm text-slate-700 mb-3 flex items-center gap-2"><DollarSign size={14} className="text-indigo-500" /> Precios</h3>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Precio de Venta</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2.5 text-slate-400 text-sm">$</span>
+                      <input type="number" value={form.sale_price} onChange={e=>setForm(f=>({...f,sale_price:e.target.value}))}
+                        className="w-full border border-slate-200 rounded-xl pl-7 pr-3 py-2.5 text-sm outline-none focus:border-purple-400" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Costo</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2.5 text-slate-400 text-sm">$</span>
+                      <input type="number" value={form.cost_price} onChange={e=>setForm(f=>({...f,cost_price:e.target.value}))}
+                        className="w-full border border-slate-200 rounded-xl pl-7 pr-3 py-2.5 text-sm outline-none focus:border-purple-400" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Impuesto %</label>
+                    <input type="number" value={form.tax_rate} min={0} max={100}
+                      onChange={e=>setForm(f=>({...f,tax_rate:parseFloat(e.target.value)||0}))}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400" />
+                  </div>
+                </div>
               </div>
 
-              <div className="border border-slate-200 rounded-2xl overflow-hidden">
-                <table className="w-full text-left">
-                  <thead className="bg-slate-50 border-b border-slate-200">
-                    <tr>
-                      <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase">Tarifa / Audiencia</th>
-                      <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase">Cantidad Mín.</th>
-                      <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase">Precio Unitario</th>
-                      <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase">Descuento (%)</th>
-                      <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase">Vigencia</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    <tr>
-                      <td className="px-4 py-3 font-bold text-slate-700 text-sm">Mayoristas VIP</td>
-                      <td className="px-4 py-3 text-sm text-slate-600">10</td>
-                      <td className="px-4 py-3 font-bold text-slate-800 text-sm">$380.000</td>
-                      <td className="px-4 py-3 text-sm text-emerald-600 font-bold">15%</td>
-                      <td className="px-4 py-3 text-xs text-slate-400">Siempre</td>
-                    </tr>
-                    <tr>
-                      <td className="px-4 py-3 font-bold text-slate-700 text-sm">Black Friday Web</td>
-                      <td className="px-4 py-3 text-sm text-slate-600">1</td>
-                      <td className="px-4 py-3 font-bold text-slate-800 text-sm">$400.000</td>
-                      <td className="px-4 py-3 text-sm text-emerald-600 font-bold">11%</td>
-                      <td className="px-4 py-3 text-xs text-slate-400">20/11/26 - 30/11/26</td>
-                    </tr>
+              <div className="bg-white border border-slate-200 rounded-2xl p-4">
+                <h3 className="font-black text-sm text-slate-700 mb-3 flex items-center gap-2"><Layers size={14} className="text-purple-500" /> Inventario</h3>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={form.track_inventory}
+                      onChange={e=>setForm(f=>({...f,track_inventory:e.target.checked}))} className="w-4 h-4" />
+                    <span className="text-sm text-slate-600">Rastrear inventario</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={form.auto_replenish}
+                      onChange={e=>setForm(f=>({...f,auto_replenish:e.target.checked}))} className="w-4 h-4" />
+                    <span className="text-sm text-slate-600">Reabastecimiento automatico</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" checked={form.is_active}
+                      onChange={e=>setForm(f=>({...f,is_active:e.target.checked}))} className="w-4 h-4" />
+                    <span className="text-sm text-slate-600">Activo</span>
+                  </label>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">Alerta stock minimo</label>
+                    <input type="number" value={form.low_stock_alert} min={0}
+                      onChange={e=>setForm(f=>({...f,low_stock_alert:parseInt(e.target.value)||0}))}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400" />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'SKUs y Variantes' && (
+          <div className="max-w-3xl">
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3 mb-6">
+              <AlertCircle size={16} className="text-amber-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-bold text-amber-700">Gestion de SKUs</p>
+                <p className="text-xs text-amber-600 mt-0.5">Los SKUs y variantes se gestionan despues de guardar el producto.</p>
+              </div>
+            </div>
+            {!isNew && selectedProduct?.skus?.length > 0 ? (
+              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50"><tr className="text-xs text-slate-400 uppercase">
+                    <th className="px-4 py-3 text-left">SKU</th><th className="px-4 py-3 text-left">Variantes</th>
+                    <th className="px-4 py-3 text-right">Costo</th><th className="px-4 py-3 text-right">Precio</th>
+                  </tr></thead>
+                  <tbody>
+                    {selectedProduct.skus.map((s: any) => (
+                      <tr key={s.id} className="border-t border-slate-50">
+                        <td className="px-4 py-3 font-mono text-sm">{s.sku}</td>
+                        <td className="px-4 py-3 text-slate-600">{s.attributes?.join(', ') || '-'}</td>
+                        <td className="px-4 py-3 text-right">${Number(s.cost_price||0).toLocaleString('es-CO')}</td>
+                        <td className="px-4 py-3 text-right">${Number(s.sale_price||0).toLocaleString('es-CO')}</td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
-            </div>
-          )}
+            ) : (
+              <p className="text-slate-400 text-sm">Sin SKUs configurados.</p>
+            )}
+          </div>
+        )}
 
-          {/* TAB: COMPRA */}
-          {activeTab === 'Compra' && (
-            <div className="space-y-6">
-              <div className="flex justify-between items-center mb-4">
-                <p className="text-sm text-slate-500">Gestiona los proveedores que suministran este producto, precios pactados y divisas.</p>
-                <button className="text-sm font-bold text-purple-600 bg-purple-50 px-4 py-2 rounded-lg border border-purple-100 hover:bg-purple-100 transition-colors">
-                  + Añadir Proveedor
-                </button>
-              </div>
-
-              <div className="border border-slate-200 rounded-2xl overflow-hidden mb-6">
-                <table className="w-full text-left">
-                  <thead className="bg-slate-50 border-b border-slate-200">
-                    <tr>
-                      <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase">Proveedor</th>
-                      <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase">Plazo Entrega</th>
-                      <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase">Moneda</th>
-                      <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase">Precio Unitario</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    <tr>
-                      <td className="px-4 py-3 font-bold text-slate-700 text-sm flex items-center gap-2"><Truck size={14}/> Shenzhen Tech Ltd.</td>
-                      <td className="px-4 py-3 text-sm text-slate-600">15 días</td>
-                      <td className="px-4 py-3 text-sm text-slate-600">USD</td>
-                      <td className="px-4 py-3 font-bold text-slate-800 text-sm">$45.00</td>
-                    </tr>
+        {activeTab === 'Stock' && (
+          <div className="max-w-3xl">
+            {!isNew && selectedProduct?.inventory_levels?.length > 0 ? (
+              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50"><tr className="text-xs text-slate-400 uppercase">
+                    <th className="px-4 py-3 text-left">Bodega</th><th className="px-4 py-3 text-right">Stock</th>
+                  </tr></thead>
+                  <tbody>
+                    {selectedProduct.inventory_levels.map((l: any) => (
+                      <tr key={l.id} className="border-t border-slate-50">
+                        <td className="px-4 py-3">{l.warehouse_name || `Bodega #${l.warehouse_id}`}</td>
+                        <td className="px-4 py-3 text-right font-bold">{l.quantity}</td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
+            ) : (
+              <div className="bg-slate-50 rounded-2xl p-8 text-center text-slate-400">
+                <Package size={32} className="mx-auto mb-3 opacity-30" />
+                <p>Sin stock registrado. El stock se actualiza automaticamente cuando se confirma una Recepcion (ENINV).</p>
+              </div>
+            )}
+          </div>
+        )}
 
-              <div className="grid grid-cols-2 gap-6">
-                <div>
-                  <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-2">Descripción para Pedidos de Compra</label>
-                  <textarea rows={4} placeholder="Texto que aparecerá impreso en la Órden de Compra al proveedor..." className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600 resize-none"></textarea>
-                </div>
-                <div>
-                  <label className="block text-xs font-black text-slate-500 uppercase tracking-wider mb-2">Facturas de Proveedores (Notas)</label>
-                  <textarea rows={4} placeholder="Notas contables para la recepción de facturas..." className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600 resize-none"></textarea>
-                </div>
+        {activeTab === 'E-Commerce' && (
+          <div className="max-w-2xl space-y-5">
+            <div className="bg-white border border-slate-200 rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-black text-slate-700 flex items-center gap-2"><Globe size={14} className="text-emerald-500" /> Estado de Publicacion</h3>
+                <button type="button" onClick={() => setIsPublished(!isPublished)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${isPublished ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${isPublished ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
+              <p className={`text-sm font-bold ${isPublished ? 'text-emerald-600' : 'text-slate-400'}`}>
+                {isPublished ? 'Publicado en la tienda web' : 'No publicado'}
+              </p>
+            </div>
+
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-4">
+              <h3 className="font-black text-slate-700 flex items-center gap-2"><Tag size={14} className="text-indigo-500" /> Configuracion E-Commerce</h3>
+              <div>
+                <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Categoria en Tienda</label>
+                <input value={form.ecommerce_category} onChange={e=>setForm(f=>({...f,ecommerce_category:e.target.value}))}
+                  placeholder="Ej: Accesorios, Electronica, Ropa..."
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-indigo-400" />
+              </div>
+              <div>
+                <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Alerta de stock bajo</label>
+                <input type="number" min={0} value={form.low_stock_alert}
+                  onChange={e=>setForm(f=>({...f,low_stock_alert:parseInt(e.target.value)||0}))}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-indigo-400" />
+                <p className="text-xs text-slate-400 mt-1">Alerta cuando el stock caiga por debajo de este numero</p>
               </div>
             </div>
-          )}
-
-          {/* TAB: INVENTARIO */}
-          {activeTab === 'Inventario' && (
-            <div className="grid grid-cols-2 gap-10">
-              
-              {/* Logística */}
-              <div className="space-y-6">
-                <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider mb-2 flex items-center gap-2">
-                  <Truck size={18} className="text-purple-600"/> Operaciones y Rutas
-                </h3>
-                
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-2">Rutas (Selecciona las aplicables)</label>
-                  <div className="space-y-2">
-                    <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" defaultChecked className="rounded" /> <span className="text-sm text-slate-700">Comprar</span></label>
-                    <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" className="rounded" /> <span className="text-sm text-slate-700">Bajo Pedido (MTO)</span></label>
-                    <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" className="rounded" /> <span className="text-sm text-slate-700">Fabricar</span></label>
-                    <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" className="rounded" /> <span className="text-sm text-slate-700">Drop-Shipping</span></label>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-2">Responsable Logístico</label>
-                    <input type="text" defaultValue="Juan Pérez" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-2">Plazo Entrega a Cliente</label>
-                    <input type="text" defaultValue="3 días" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800" />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-2">Peso (Kg)</label>
-                    <input type="text" defaultValue="0.45" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-2">Volumen (m³)</label>
-                    <input type="text" defaultValue="0.001" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800" />
-                  </div>
-                </div>
-              </div>
-
-              {/* Descripciones Logísticas */}
-              <div className="space-y-4 bg-slate-50 p-6 rounded-2xl border border-slate-100">
-                <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider mb-4 flex items-center gap-2">
-                  <FileText size={18} className="text-slate-500"/> Notas para Remisiones
-                </h3>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">Descripción para Recepciones</label>
-                  <textarea rows={2} placeholder="Nota al recibir del proveedor..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 resize-none"></textarea>
-                </div>
-                
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">Descripción para Órdenes de Entrega</label>
-                  <textarea rows={2} placeholder="Nota para el empacador o repartidor..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 resize-none"></textarea>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1">Descripción para Traslados Internos</label>
-                  <textarea rows={2} placeholder="Nota al mover entre bodegas..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 resize-none"></textarea>
-                </div>
-              </div>
-
-            </div>
-          )}
-
-        </div>
-      </div>
+          </div>
+        )}
+      </form>
     </div>
   );
 }

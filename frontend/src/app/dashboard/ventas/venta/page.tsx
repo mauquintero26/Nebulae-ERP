@@ -1,341 +1,316 @@
-"use client";
+'use client';
 
-import { useState, useEffect } from 'react';
-import Link from 'next/link';
-import toast from 'react-hot-toast';
-import { ResizableHeader } from '@/components/ResizableHeader';
+import { useState, useEffect, useCallback } from 'react';
+import { Search, RefreshCw, X, Check, ShoppingCart, Package, ChevronRight,
+  Phone, Mail, MapPin, ArrowRight, ExternalLink, Plus, AlertCircle } from 'lucide-react';
 
-import { 
-  BadgeDollarSign, Search, Filter, Plus, AlertCircle, 
-  TrendingUp, Wallet, CheckCircle2, ArrowUpRight, ArrowDownRight, 
-  MoreVertical, List, LayoutGrid, Calendar, PieChart, ChevronDown, X,
-  Trash2, FileText, CheckSquare, Send, ShoppingBag, Truck
-} from 'lucide-react';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
+async function apiFetch(path: string, opts: RequestInit = {}) {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(opts.headers as any || {}) },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
+  return data.data ?? data;
+}
 
+const ESTADOS: Record<string, { label: string; color: string; bg: string }> = {
+  PENDIENTE_COMPRA: { label: 'Pendiente de compra', color: '#f59e0b', bg: '#fffbeb' },
+  EN_TRANSITO:      { label: 'En transito',          color: '#3b82f6', bg: '#eff6ff' },
+  RECIBIDO:         { label: 'Recibido',             color: '#8b5cf6', bg: '#f5f3ff' },
+  FACTURADO:        { label: 'Facturado',            color: '#10b981', bg: '#f0fdf4' },
+  COMPLETADO:       { label: 'Completado',           color: '#10b981', bg: '#f0fdf4' },
+  CANCELADO:        { label: 'Cancelado',            color: '#ef4444', bg: '#fef2f2' },
+};
 
+function Badge({ estado }: { estado: string }) {
+  const cfg = ESTADOS[estado] || { label: estado, color: '#6366f1', bg: '#eef2ff' };
+  return <span className="px-2 py-0.5 rounded-full text-xs font-bold" style={{ backgroundColor: cfg.bg, color: cfg.color }}>{cfg.label}</span>;
+}
+const fDate = (iso: string|null) => iso ? new Date(iso).toLocaleDateString('es-CO', {day:'2-digit',month:'short',year:'numeric'}) : '-';
+const fCOP = (v: number) => v > 0 ? `$${Number(v).toLocaleString('es-CO')}` : '-';
 
-import { getSalesOrders, invoiceSalesOrder } from '@/lib/api';
-
-export default function VentasHubPage() {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [activeView, setActiveView] = useState('list');
-  const [selectedRows, setSelectedRows] = useState<string[]>([]);
-  const [ventasData, setVentasData] = useState<any[]>([]);
+export default function VentasPage() {
+  const [vens, setVens] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [filterEstado, setFilterEstado] = useState('');
+  const [selected, setSelected] = useState<any|null>(null);
+  const [currentUser, setCurrentUser] = useState('');
+  const [showPXPModal, setShowPXPModal] = useState(false);
+  const [creatingPXP, setCreatingPXP] = useState(false);
 
   useEffect(() => {
-    fetchVentas();
+    setCurrentUser(localStorage.getItem('user_name') || '');
   }, []);
 
-  const fetchVentas = async () => {
+  const load = useCallback(async () => {
+    setLoading(true);
     try {
-      const data = await getSalesOrders();
-      const realSales = data.sales || data;
-      if (Array.isArray(realSales)) {
-        // Pedidos de Venta ya facturados/aprobados
-        const ventas = realSales.filter(s => s.status === 'INVOICED' || s.status === 'TO_INVOICE').map(s => ({
-          id: `VEN-0${s.id}`,
-          realId: s.id,
-          cliente: `Cliente #${s.customer_id}`,
-          origen: `COT-0${s.id}`,
-          monto: `$${(s.total_amount || 0).toLocaleString()}`,
-          fecha: new Date(s.created_at || Date.now()).toLocaleDateString(),
-          estado: s.status === 'TO_INVOICE' ? 'Pendiente de Pago' : 'Pagado',
-          logistica: 'Por Despachar',
-          ultimaAct: '2 min',
-          responsable: 'Tú',
-          alerta: false
-        }));
-        setVentasData(ventas);
-      }
-    } catch(e) {
-      console.error(e);
-    }
-  };
+      const params = new URLSearchParams();
+      if (search) params.set('search', search);
+      if (filterEstado) params.set('estado', filterEstado);
+      const d = await apiFetch(`/ventas/pedidos?${params}&limit=100`);
+      setVens(Array.isArray(d) ? d : (d?.data ?? []));
+      setTotal(d?.total ?? (Array.isArray(d) ? d.length : 0));
+    } catch { setVens([]); }
+    finally { setLoading(false); }
+  }, [search, filterEstado]);
 
-  const MOCK_VENTAS = ventasData;
+  useEffect(() => { load(); }, [load]);
 
+  async function loadDetail(id: number) {
+    const d = await apiFetch(`/ventas/pedidos/${id}`);
+    setSelected(d);
+  }
 
-  const toggleRow = (id: string) => {
-    if (selectedRows.includes(id)) {
-      setSelectedRows(selectedRows.filter(rowId => rowId !== id));
-    } else {
-      setSelectedRows([...selectedRows, id]);
-    }
-  };
-
-  const toggleAll = () => {
-    if (selectedRows.length === MOCK_VENTAS.length) {
-      setSelectedRows([]);
-    } else {
-      setSelectedRows(MOCK_VENTAS.map(s => s.id));
-    }
-  };
-
-  const ventasConAlerta = MOCK_VENTAS.filter(v => v.alerta);
+  async function createPXP() {
+    setCreatingPXP(true);
+    try {
+      await apiFetch(`/ventas/pedidos/${selected.id}/crear-pxp`, {
+        method: 'POST',
+        body: JSON.stringify({ monto_anticipo: selected.anticipo_cop, user_name: currentUser }),
+      });
+      setShowPXPModal(false);
+      loadDetail(selected.id);
+    } catch (err: any) { alert(err.message); }
+    setCreatingPXP(false);
+  }
 
   return (
-    <div className="w-full bg-white flex flex-col px-8 py-6 min-h-max">
-      
-      {/* Header */}
-      <div className="flex justify-between items-start mb-4">
+    <div className="h-full w-full bg-[#f8f9fa] flex flex-col overflow-hidden">
+      <div className="bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between flex-shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-12 h-12 bg-white rounded-xl shadow-sm border border-slate-200 flex items-center justify-center text-emerald-600">
-            <BadgeDollarSign size={24} />
+          <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center text-emerald-600">
+            <ShoppingCart size={20} />
           </div>
           <div>
-            <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Hub de Ventas Central</h1>
-            <p className="text-slate-500 text-sm mt-1">Acopio de todas las ventas ganadas desde E-Commerce, Cotizaciones y CRM.</p>
+            <h1 className="text-xl font-extrabold text-slate-900">Pedidos de Venta</h1>
+            <p className="text-xs text-slate-500">{total} pedidos &bull; VEN-YYYY####</p>
           </div>
         </div>
-        
-        <button className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-colors flex items-center gap-2">
-          <Plus size={18} /> Nueva Venta Manual
-        </button>
-      </div>
-
-      {/* Alertas Críticas Financieras */}
-      {ventasConAlerta.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-6 flex items-start gap-4 shadow-sm">
-          <div className="bg-amber-100 text-amber-600 p-2 rounded-full shrink-0 mt-0.5">
-            <Wallet size={20} />
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Buscar VEN, COT, cliente..." className="pl-8 pr-3 py-2 border border-slate-200 rounded-xl text-sm outline-none focus:border-emerald-400 w-56" />
           </div>
-          <div className="flex-1">
-            <h3 className="font-black text-amber-800 text-sm">Cuentas por Cobrar Atrasadas</h3>
-            <p className="text-amber-700 text-sm mt-1">
-              Tienes <strong>{ventasConAlerta.length} ventas confirmadas</strong> que superan los términos de crédito sin registrar pago. Bloquea despachos hasta conciliar.
-            </p>
-          </div>
-          <button className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg text-xs font-bold transition-colors shadow-sm">
-            Gestionar Cobros
+          <select value={filterEstado} onChange={e => setFilterEstado(e.target.value)}
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none">
+            <option value="">Todos</option>
+            {Object.entries(ESTADOS).map(([k,v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          <button onClick={load} className="p-2 border border-slate-200 rounded-xl text-slate-500 hover:bg-slate-50">
+            <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
           </button>
-        </div>
-      )}
-
-      {/* KPIs HUB */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 p-5 rounded-2xl shadow-sm text-white relative overflow-hidden">
-          <div className="absolute top-0 right-0 p-4 opacity-10 text-black"><TrendingUp size={48} /></div>
-          <p className="text-xs font-bold uppercase tracking-wider mb-2 opacity-90">Ingresos (Mes Actual)</p>
-          <h3 className="text-3xl font-black">$124.5M</h3>
-          <p className="text-xs font-bold mt-2 opacity-90 flex items-center gap-1"><ArrowUpRight size={14}/> +18% vs mes anterior</p>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
-          <div className="absolute top-0 right-0 p-4 opacity-10"><ShoppingBag size={48} /></div>
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Ticket Promedio</p>
-          <h3 className="text-3xl font-black text-slate-800">$4,250.00</h3>
-          <p className="text-xs font-bold text-emerald-500 mt-2 flex items-center gap-1"><ArrowUpRight size={14}/> +$120 vs ayer</p>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
-          <div className="absolute top-0 right-0 p-4 opacity-10"><Wallet size={48} /></div>
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Facturación Pendiente</p>
-          <h3 className="text-3xl font-black text-amber-600">$18.2M</h3>
-          <p className="text-xs font-bold text-amber-500 mt-2 flex items-center gap-1">En {MOCK_VENTAS.filter(v => v.estado === 'Pendiente de Pago').length} ventas sin conciliar</p>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
-          <div className="absolute top-0 right-0 p-4 opacity-10"><CheckCircle2 size={48} /></div>
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Tasa de Conversión (General)</p>
-          <h3 className="text-3xl font-black text-slate-800">42%</h3>
-          <p className="text-xs font-bold text-emerald-500 mt-2 flex items-center gap-1"><ArrowUpRight size={14}/> Cotización a Venta</p>
+          <a href="/dashboard/ventas/cotizacion" className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2">
+            <ArrowRight size={16} /> Ir a Cotizaciones
+          </a>
         </div>
       </div>
 
-      {/* Controles de Búsqueda Avanzada y Vistas */}
-      <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white py-3 border-b border-slate-100">
-        
-        {/* Buscador Avanzado (Izquierda) */}
-        <div className="flex-1 flex items-center gap-3 w-full">
-          <div className="relative flex-1 max-w-2xl flex items-center bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 focus-within:border-emerald-500 focus-within:ring-1 focus-within:ring-emerald-500 transition-all">
-            <Search className="text-slate-400 mr-2 shrink-0" size={18} />
-            
-            {/* Filter Pills */}
-            <div className="flex items-center gap-1 mr-2 shrink-0">
-              <span className="flex items-center gap-1 bg-white border border-slate-200 text-slate-700 text-xs font-bold px-2 py-1 rounded-md shadow-sm">
-                Origen: E-Commerce <button className="hover:text-red-500"><X size={12}/></button>
-              </span>
-            </div>
-            
-            <input 
-              type="text" 
-              placeholder="Buscar por ID (VEN-0001), Cliente, Cotización Origen..." 
-              className="bg-transparent border-none outline-none text-sm w-full font-medium text-slate-700 placeholder-slate-400"
-            />
-          </div>
-          
-          <button className="flex items-center gap-2 px-3 py-2 text-sm font-bold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors shadow-sm shrink-0">
-            <Filter size={16} /> Filtros <ChevronDown size={14} />
-          </button>
-          <button className="flex items-center gap-2 px-3 py-2 text-sm font-bold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors shadow-sm shrink-0">
-            Agrupar Por <ChevronDown size={14} />
-          </button>
-        </div>
-
-        {/* Vistas (Derecha) */}
-        <div className="flex bg-slate-100 p-1 rounded-xl shrink-0">
-          <button 
-            onClick={() => setActiveView('list')}
-            className={`p-2 rounded-lg flex items-center justify-center transition-colors ${activeView === 'list' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-            title="Libro Mayor (Lista)"
-          >
-            <List size={18} />
-          </button>
-          <button 
-            onClick={() => setActiveView('kanban')}
-            className={`p-2 rounded-lg flex items-center justify-center transition-colors ${activeView === 'kanban' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-            title="Kanban de Facturación"
-          >
-            <LayoutGrid size={18} />
-          </button>
-          <button 
-            onClick={() => setActiveView('calendar')}
-            className={`p-2 rounded-lg flex items-center justify-center transition-colors ${activeView === 'calendar' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-            title="Calendario de Cobros y Despachos"
-          >
-            <Calendar size={18} />
-          </button>
-          <button 
-            onClick={() => setActiveView('analysis')}
-            className={`p-2 rounded-lg flex items-center justify-center transition-colors ${activeView === 'analysis' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-            title="Análisis Financiero"
-          >
-            <PieChart size={18} />
-          </button>
-        </div>
-      </div>
-
-      {/* Área Principal de Contenido (Depende de activeView) */}
-      <div className="bg-white flex flex-col">
-        
-        {/* Barra de Acciones Múltiples (Aparece si hay checkboxes seleccionados) */}
-        {selectedRows.length > 0 && activeView === 'list' && (
-          <div className="bg-emerald-50 px-6 py-3 flex items-center justify-between border-b border-emerald-100 animate-in fade-in slide-in-from-top-2 sticky top-0 z-20">
-            <div className="flex items-center gap-3">
-              <span className="bg-emerald-600 text-white text-xs font-bold px-2 py-1 rounded-md">{selectedRows.length}</span>
-              <span className="text-sm font-bold text-emerald-900">Pedidos seleccionados</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button className="flex items-center gap-2 bg-white border border-emerald-200 text-emerald-700 hover:bg-emerald-100 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors">
-                <FileText size={14} /> Facturar en Bloque
-              </button>
-              <button className="flex items-center gap-2 bg-white border border-emerald-200 text-emerald-700 hover:bg-emerald-100 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors">
-                <Truck size={14} /> Crear Rutas Logísticas
-              </button>
-              <button className="flex items-center gap-2 bg-white border border-amber-200 text-amber-600 hover:bg-amber-50 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ml-2">
-                <Send size={14} /> Reclamar Pago
-              </button>
-            </div>
-          </div>
-        )}
-
-        {activeView === 'list' && (
-          <div className="w-full">
-            <table className="w-full text-left table-fixed border-b border-slate-100">
-              <thead>
-                <tr className="bg-white border-b border-slate-200 text-xs text-slate-400 uppercase tracking-wider sticky top-0 z-10 shadow-sm">
-                  <th className="px-6 py-4 font-bold w-12">
-                    <input 
-                      type="checkbox" 
-                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer w-4 h-4"
-                      checked={selectedRows.length === MOCK_VENTAS.length && MOCK_VENTAS.length > 0}
-                      onChange={toggleAll}
-                    />
-                  </th>
-                  <ResizableHeader>Venta</ResizableHeader>
-                  <ResizableHeader>Fecha</ResizableHeader>
-                  <ResizableHeader>Cliente</ResizableHeader>
-                  <ResizableHeader>Origen (Hub)</ResizableHeader>
-                  <ResizableHeader>Monto</ResizableHeader>
-                  <ResizableHeader>Financiero</ResizableHeader>
-                  <ResizableHeader>Logístico</ResizableHeader>
-                  <ResizableHeader>Acciones</ResizableHeader>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-sm">
-                {MOCK_VENTAS.map(venta => {
-                  const isSelected = selectedRows.includes(venta.id);
-                  return (
-                    <tr key={venta.id} className={`transition-colors ${isSelected ? 'bg-emerald-50/50' : venta.alerta ? 'bg-amber-50/30 hover:bg-amber-50/50' : 'hover:bg-slate-50'}`}>
-                      <td className="px-6 py-4">
-                        <input 
-                          type="checkbox" 
-                          className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer w-4 h-4"
-                          checked={isSelected}
-                          onChange={() => toggleRow(venta.id)}
-                        />
+      <div className="flex flex-1 overflow-hidden">
+        <div className={`flex flex-col overflow-hidden transition-all ${selected ? 'w-[52%]' : 'w-full'}`}>
+          <div className="flex-1 overflow-y-auto">
+            {loading ? (
+              <div className="flex justify-center pt-16"><RefreshCw size={24} className="animate-spin text-emerald-400" /></div>
+            ) : vens.length === 0 ? (
+              <div className="text-center pt-16 text-slate-400">
+                <ShoppingCart size={40} className="mx-auto mb-3 opacity-20" />
+                <p className="text-sm">Sin pedidos de venta. Confirma una cotizacion.</p>
+              </div>
+            ) : (
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 border-b border-slate-100 sticky top-0">
+                  <tr className="text-xs text-slate-400 uppercase tracking-wider">
+                    <th className="px-4 py-3">VEN #</th>
+                    <th className="px-4 py-3">SC / COT</th>
+                    <th className="px-4 py-3">Cliente</th>
+                    <th className="px-4 py-3">Total</th>
+                    <th className="px-4 py-3">Saldo</th>
+                    <th className="px-4 py-3">Entrega Est.</th>
+                    <th className="px-4 py-3">Estado</th>
+                    <th className="px-4 py-3">Compra</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {vens.map(v => (
+                    <tr key={v.id} onClick={() => loadDetail(v.id)}
+                      className={`border-b border-slate-50 cursor-pointer hover:bg-emerald-50/30 ${selected?.id===v.id?'bg-emerald-50/50':''}`}>
+                      <td className="px-4 py-3 font-bold text-emerald-600">{v.numero}</td>
+                      <td className="px-4 py-3 text-xs">
+                        {v.sc_numero && <div className="text-indigo-600">{v.sc_numero}</div>}
+                        {v.cot_numero && <div className="text-amber-600">{v.cot_numero}</div>}
                       </td>
-                      <td className="px-6 py-4 font-black text-emerald-600 hover:text-emerald-800 hover:underline"><Link href={`/dashboard/ventas/venta/${venta.id.toLowerCase()}`}>{venta.id}</Link></td>
-                      <td className="px-6 py-4 text-slate-500 text-xs font-medium">{venta.fecha}</td>
-                      <td className="px-6 py-4 font-bold text-slate-700">{venta.cliente}</td>
-                      <td className="px-6 py-4">
-                        <span className={`px-2 py-1 rounded text-xs font-bold border ${
-                          venta.origen === 'E-Commerce' ? 'bg-indigo-50 text-indigo-700 border-indigo-200' : 'bg-slate-100 text-slate-700 border-slate-200'
-                        }`}>
-                          {venta.origen}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 font-black text-slate-800">{venta.monto}</td>
-                      <td className="px-6 py-4">
-                        <span className={`px-2.5 py-1 rounded-md text-xs font-bold border ${
-                          venta.estado === 'Borrador' ? 'bg-slate-50 text-slate-600 border-slate-200' :
-                          venta.estado === 'Pendiente de Pago' ? 'bg-amber-50 text-amber-700 border-amber-200' :
-                          'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        }`}>
-                          {venta.estado}
-                        </span>
-                        {venta.alerta && <AlertCircle size={14} className="text-amber-500 inline ml-2" title="Cobro atrasado" />}
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={`px-2.5 py-1 rounded-md text-xs font-bold border ${
-                          venta.logistica === 'Retenido' ? 'bg-rose-50 text-rose-700 border-rose-200' :
-                          venta.logistica === 'Por Despachar' ? 'bg-blue-50 text-blue-700 border-blue-200' :
-                          'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        }`}>
-                          {venta.logistica}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <button className="text-slate-400 hover:text-emerald-600 transition-colors">
-                          <MoreVertical size={18} />
-                        </button>
+                      <td className="px-4 py-3 font-medium text-slate-800">{v.customer_name || '-'}</td>
+                      <td className="px-4 py-3 font-bold">{fCOP(v.total_cop)}</td>
+                      <td className="px-4 py-3 text-slate-600">{fCOP(v.saldo_cop)}</td>
+                      <td className="px-4 py-3 text-slate-500">{fDate(v.fecha_entrega_estimada)}</td>
+                      <td className="px-4 py-3"><Badge estado={v.estado} /></td>
+                      <td className="px-4 py-3">
+                        {v.pec_numero ? (
+                          <span className="text-xs font-bold text-purple-600">{v.pec_numero}</span>
+                        ) : (
+                          <span className="text-xs text-slate-300">-</span>
+                        )}
                       </td>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
-        )}
+        </div>
 
-        {/* Paginación */}
-        {activeView === 'list' && (
-          <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-white">
-            <span className="text-sm text-slate-500">Mostrando 1 a 24 de 430 ventas registradas</span>
-            <div className="flex items-center gap-1">
-              <button className="px-3 py-1 text-sm font-medium text-slate-400 hover:text-slate-700 transition-colors">Anterior</button>
-              <button className="w-8 h-8 rounded-lg bg-emerald-600 text-white text-sm font-bold shadow-sm">1</button>
-              <button className="w-8 h-8 rounded-lg text-slate-600 hover:bg-slate-100 text-sm font-medium transition-colors">2</button>
-              <button className="w-8 h-8 rounded-lg text-slate-600 hover:bg-slate-100 text-sm font-medium transition-colors">3</button>
-              <span className="text-slate-400 px-2">...</span>
-              <button className="w-8 h-8 rounded-lg text-slate-600 hover:bg-slate-100 text-sm font-medium transition-colors">18</button>
-              <button className="px-3 py-1 text-sm font-medium text-emerald-600 hover:text-emerald-800 transition-colors">Siguiente</button>
+        {/* Detail Panel */}
+        {selected && (
+          <div className="border-l border-slate-200 bg-white flex flex-col overflow-hidden flex-1">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h2 className="font-extrabold text-slate-900 text-lg">{selected.numero}</h2>
+                <div className="flex items-center gap-2 mt-0.5">
+                  {selected.sc_numero && <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-bold">{selected.sc_numero}</span>}
+                  {selected.cot_numero && <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-bold">{selected.cot_numero}</span>}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {!selected.pec_id && (
+                  <a href="/dashboard/compras/pedidos"
+                    className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1">
+                    <Package size={12} /> Crear Pedido de Compra
+                  </a>
+                )}
+                {!selected.pxp_id && selected.total_cop > 0 && (
+                  <button onClick={() => setShowPXPModal(true)}
+                    className="bg-slate-700 hover:bg-slate-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold">
+                    Crear PXP
+                  </button>
+                )}
+                <button onClick={() => setSelected(null)} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg"><X size={16} /></button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+              <div className="flex flex-wrap gap-2">
+                <Badge estado={selected.estado} />
+                {selected.pec_numero && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-bold">PEC: {selected.pec_numero}</span>}
+                {selected.pxp_numero && <span className="text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full font-bold">PXP: {selected.pxp_numero}</span>}
+              </div>
+
+              {/* Cliente */}
+              <div className="bg-slate-50 rounded-2xl p-4">
+                <p className="text-xs font-black text-slate-400 uppercase mb-2">Cliente</p>
+                <div className="font-bold text-slate-800 mb-1">{selected.customer_name}</div>
+                {selected.customer_phone && <a href={`tel:${selected.customer_phone}`} className="flex items-center gap-1.5 text-sm text-slate-600 hover:text-emerald-600 mb-0.5"><Phone size={12} />{selected.customer_phone}</a>}
+                {selected.customer_email && <a href={`mailto:${selected.customer_email}`} className="flex items-center gap-1.5 text-sm text-slate-600 hover:text-indigo-600 mb-0.5"><Mail size={12} />{selected.customer_email}</a>}
+                {selected.direccion_entrega && <p className="flex items-center gap-1.5 text-sm text-slate-600"><MapPin size={12} />Entrega: {selected.direccion_entrega}</p>}
+              </div>
+
+              {/* Financiero */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-indigo-50 rounded-xl p-3"><p className="text-xs text-indigo-600 mb-1">Total</p><p className="font-extrabold text-indigo-700">{fCOP(selected.total_cop)}</p></div>
+                <div className="bg-emerald-50 rounded-xl p-3"><p className="text-xs text-emerald-600 mb-1">Anticipo</p><p className="font-extrabold text-emerald-700">{fCOP(selected.anticipo_cop)}</p></div>
+                <div className="bg-amber-50 rounded-xl p-3"><p className="text-xs text-amber-600 mb-1">Saldo</p><p className="font-extrabold text-amber-700">{fCOP(selected.saldo_cop)}</p></div>
+              </div>
+
+              {/* Dates */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-slate-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Cotizacion</p><p className="font-bold text-sm">{fDate(selected.fecha_cotizacion)}</p></div>
+                <div className="bg-slate-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Entrega Est.</p><p className="font-bold text-sm">{fDate(selected.fecha_entrega_estimada)}</p></div>
+              </div>
+
+              {/* Products */}
+              {selected.productos?.length > 0 && (
+                <div>
+                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos</p>
+                  <div className="border border-slate-100 rounded-xl overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead className="bg-slate-50"><tr className="text-slate-400 uppercase">
+                        <th className="px-3 py-2 text-left">Producto</th><th className="px-3 py-2 text-right">Qty</th>
+                        <th className="px-3 py-2 text-right">Precio</th><th className="px-3 py-2 text-right">Total</th>
+                      </tr></thead>
+                      <tbody>
+                        {selected.productos.map((p: any, i: number) => (
+                          <tr key={i} className="border-t border-slate-50">
+                            <td className="px-3 py-2 font-medium">{p.product_name}</td>
+                            <td className="px-3 py-2 text-right">{p.qty}</td>
+                            <td className="px-3 py-2 text-right">{fCOP(p.unit_price_cop)}</td>
+                            <td className="px-3 py-2 text-right font-bold">{fCOP(p.qty*p.unit_price_cop)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* PXP */}
+              {selected.pxps?.length > 0 && (
+                <div>
+                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Orden de Pago (PXP)</p>
+                  {selected.pxps.map((p: any) => (
+                    <div key={p.id} className="bg-slate-50 rounded-xl p-3 flex items-center justify-between">
+                      <div>
+                        <p className="font-bold text-slate-800">{p.numero}</p>
+                        <p className="text-xs text-slate-500">Pendiente: {fCOP(p.monto_pendiente)}</p>
+                      </div>
+                      <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${p.estado==='COMPLETADA'?'bg-emerald-100 text-emerald-700':'bg-amber-100 text-amber-700'}`}>{p.estado}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Actividades */}
+              {selected.actividades?.length > 0 && (
+                <div>
+                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Actividad</p>
+                  <div className="space-y-2">
+                    {selected.actividades.map((a: any) => (
+                      <div key={a.id} className="flex gap-3">
+                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-2 flex-shrink-0" />
+                        <div>
+                          <p className="text-sm text-slate-700">{a.description}</p>
+                          <p className="text-xs text-slate-400">{fDate(a.created_at)} &bull; {a.user_name || 'Sistema'}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
-
-        {/* Placeholder para otras vistas */}
-        {activeView !== 'list' && (
-          <div className="w-full py-32 flex flex-col items-center justify-center text-slate-400">
-            {activeView === 'kanban' && <LayoutGrid size={48} className="mb-4 opacity-20" />}
-            {activeView === 'calendar' && <Calendar size={48} className="mb-4 opacity-20" />}
-            {activeView === 'analysis' && <PieChart size={48} className="mb-4 opacity-20" />}
-            <p className="font-bold text-lg text-slate-500">Vista en construcción</p>
-            <p className="text-sm">Esta vista estará conectada al motor de renderizado correspondiente.</p>
-          </div>
-        )}
-
       </div>
+
+      {/* PXP Modal */}
+      {showPXPModal && selected && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+            <h3 className="font-extrabold text-slate-900 text-lg mb-4">Crear Orden de Pago (PXP)</h3>
+            <div className="bg-slate-50 rounded-xl p-4 mb-4 space-y-2">
+              <div className="flex justify-between text-sm"><span className="text-slate-500">VEN:</span><span className="font-bold">{selected.numero}</span></div>
+              <div className="flex justify-between text-sm"><span className="text-slate-500">Cliente:</span><span className="font-bold">{selected.customer_name}</span></div>
+              <div className="flex justify-between text-sm"><span className="text-slate-500">Total:</span><span className="font-bold text-indigo-600">{fCOP(selected.total_cop)}</span></div>
+              <div className="flex justify-between text-sm"><span className="text-slate-500">Anticipo (50%):</span><span className="font-bold text-emerald-600">{fCOP(selected.anticipo_cop)}</span></div>
+              <div className="flex justify-between text-sm border-t border-slate-200 pt-2 mt-2">
+                <span className="text-slate-500 font-bold">Saldo a cobrar:</span>
+                <span className="font-extrabold text-amber-600">{fCOP(selected.saldo_cop)}</span>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setShowPXPModal(false)} className="flex-1 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-600 hover:bg-slate-50">Cancelar</button>
+              <button onClick={createPXP} disabled={creatingPXP}
+                className="flex-1 py-2.5 bg-slate-700 hover:bg-slate-800 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center justify-center gap-2">
+                {creatingPXP ? <RefreshCw size={14} className="animate-spin" /> : <Check size={14} />}
+                Crear PXP
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

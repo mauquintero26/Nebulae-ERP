@@ -1,239 +1,229 @@
-"use client";
+'use client';
 
-import { useState } from 'react';
-import { 
-  Search, Filter, LayoutGrid, List,
-  MessageSquareWarning, ChevronDown, CheckSquare,
-  PackageSearch, Archive, ShieldCheck, Link as LinkIcon
-} from 'lucide-react';
-import Link from 'next/link';
-import { ResizableHeader } from '@/components/ResizableHeader';
+import { useState, useEffect, useCallback } from 'react';
+import { Search, RefreshCw, X, Check, Package, Truck, AlertCircle, ArrowRight } from 'lucide-react';
 
-const MOCK_RECEPCIONES = Array.from({ length: 18 }, (_, i) => {
-  const num = i + 1;
-  const isRetrasado = [3, 8].includes(num); // Faltantes o discrepancias
-  
-  let estado = 'Pendiente de Conteo';
-  if (num % 4 === 0) estado = 'Validado (Facturable)';
-  else if (num % 7 === 0) estado = 'Discrepancia';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
+async function apiFetch(path: string, opts: RequestInit = {}) {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(opts.headers as any || {}) },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
+  return data.data ?? data;
+}
 
-  return { 
-    id: `ENINV-${num.toString().padStart(4, '0')}`,
-    pec: `PEC-${(num + 10).toString().padStart(4, '0')}`,
-    pven: num % 2 === 0 ? `PVEN-${(num + 50).toString().padStart(4, '0')}` : 'Stock Interno',
-    proveedor: `Global Supplier ${num % 5 + 1}`, 
-    fechaLlegada: '26 Ago 2026',
-    articulos: num * 5,
-    estado,
-    discrepancia: isRetrasado,
-    responsable: `Bodeguero ${num % 2 + 1}`
-  };
-});
+const ESTADOS: Record<string, { label: string; color: string; bg: string }> = {
+  BORRADOR:   { label: 'Borrador',    color: '#64748b', bg: '#f1f5f9' },
+  EN_PROCESO: { label: 'En proceso',  color: '#3b82f6', bg: '#eff6ff' },
+  COMPLETADA: { label: 'Completada',  color: '#10b981', bg: '#f0fdf4' },
+  PARCIAL:    { label: 'Parcial',     color: '#f59e0b', bg: '#fffbeb' },
+  CANCELADA:  { label: 'Cancelada',   color: '#ef4444', bg: '#fef2f2' },
+};
+function Badge({ estado }: { estado: string }) {
+  const cfg = ESTADOS[estado] || { label: estado, color: '#6366f1', bg: '#eef2ff' };
+  return <span className="px-2 py-0.5 rounded-full text-xs font-bold" style={{ backgroundColor: cfg.bg, color: cfg.color }}>{cfg.label}</span>;
+}
+const fDate = (iso: string|null) => iso ? new Date(iso).toLocaleDateString('es-CO', {day:'2-digit',month:'short',year:'numeric'}) : '-';
 
-export default function RecepcionesHub() {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [activeView, setActiveView] = useState('list');
-  const [selectedRows, setSelectedRows] = useState<string[]>([]);
+export default function RecepcionesPage() {
+  const [recs, setRecs] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState<any|null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [currentUser, setCurrentUser] = useState('');
+  const [editProds, setEditProds] = useState<any[]>([]);
 
-  const toggleRow = (id: string) => {
-    setSelectedRows(prev => prev.includes(id) ? prev.filter(rowId => rowId !== id) : [...prev, id]);
-  };
+  useEffect(() => { setCurrentUser(localStorage.getItem('user_name') || ''); }, []);
 
-  const toggleAll = () => {
-    if (selectedRows.length === MOCK_RECEPCIONES.length) setSelectedRows([]);
-    else setSelectedRows(MOCK_RECEPCIONES.map(p => p.id));
-  };
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const d = await apiFetch(`/compras/recepciones?limit=100`);
+      setRecs(Array.isArray(d) ? d : (d?.data ?? []));
+      setTotal(d?.total ?? (Array.isArray(d) ? d.length : 0));
+    } catch { setRecs([]); }
+    finally { setLoading(false); }
+  }, []);
 
-  const alertas = MOCK_RECEPCIONES.filter(p => p.discrepancia);
+  useEffect(() => { load(); }, [load]);
+
+  async function loadDetail(id: number) {
+    const d = await apiFetch(`/compras/recepciones/${id}`);
+    setSelected(d);
+    setEditProds(d.productos || []);
+  }
+
+  async function confirmar() {
+    setConfirming(true);
+    try {
+      // Save current qty_recibida first
+      await apiFetch(`/compras/recepciones/${selected.id}`, {
+        method: 'PATCH', body: JSON.stringify({ productos: editProds, updated_by: currentUser }),
+      });
+      await apiFetch(`/compras/recepciones/${selected.id}/confirmar`, {
+        method: 'POST', body: JSON.stringify({ user_name: currentUser }),
+      });
+      alert('Recepcion confirmada. Stock actualizado en bodega.');
+      loadDetail(selected.id); load();
+    } catch (err: any) { alert(err.message); }
+    setConfirming(false);
+  }
 
   return (
-    <div className="w-full bg-white flex flex-col px-8 py-6 min-h-max animate-in fade-in">
-      
-      {/* Cabecera */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
-        <div>
-          <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-2">
-            Recepciones de Mercancía
-          </h1>
-          <p className="text-slate-500 mt-1 font-medium">Inspección, conteo ciego y validación para autorización de facturas.</p>
-        </div>
-      </div>
-
-      {/* Alertas Críticas (Discrepancias) */}
-      {alertas.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-6 flex items-start gap-4 shadow-sm">
-          <div className="bg-amber-100 text-amber-600 p-2 rounded-full shrink-0 mt-0.5">
-            <MessageSquareWarning size={20} />
+    <div className="h-full w-full bg-[#f8f9fa] flex flex-col overflow-hidden">
+      <div className="bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between flex-shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-teal-50 rounded-xl flex items-center justify-center text-teal-600">
+            <Truck size={20} />
           </div>
           <div>
-            <h3 className="text-amber-800 font-black mb-1">¡Atención! Tienes {alertas.length} recepciones con discrepancias de inventario</h3>
-            <p className="text-amber-700 text-sm mb-3">Las cantidades recibidas no coinciden con la orden de compra. Requiere revisión para facturar.</p>
-            <div className="flex flex-wrap gap-2">
-              {alertas.map(a => (
-                <Link key={a.id} href={`/dashboard/compras/recepciones/${a.id.toLowerCase()}`} className="bg-white border border-amber-200 text-amber-700 text-xs font-bold px-3 py-1 rounded-full shadow-sm hover:bg-amber-100 transition-colors cursor-pointer">
-                  {a.id} ({a.pec})
-                </Link>
-              ))}
-            </div>
+            <h1 className="text-xl font-extrabold text-slate-900">Recepciones de Inventario</h1>
+            <p className="text-xs text-slate-500">{total} recepciones &bull; ENINV-YYYY####</p>
           </div>
         </div>
-      )}
-
-      {/* KPIs Grid */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">En Muelle (Pendientes)</p>
-          <div className="flex items-end gap-2">
-            <h3 className="text-3xl font-black text-slate-800">{MOCK_RECEPCIONES.filter(r => r.estado === 'Pendiente de Conteo').length}</h3>
-          </div>
-        </div>
-        
-        <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 p-5 rounded-2xl shadow-sm text-white relative overflow-hidden">
-          <p className="text-xs font-bold uppercase tracking-wider mb-2 opacity-90">Validadas hoy</p>
-          <h3 className="text-3xl font-black">{MOCK_RECEPCIONES.filter(r => r.estado === 'Validado (Facturable)').length}</h3>
-          <p className="text-xs font-bold mt-2 opacity-90 text-emerald-100">Listas para cruce de facturas</p>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Discrepancias</p>
-          <h3 className="text-3xl font-black text-amber-600">{alertas.length}</h3>
-          <p className="text-xs font-bold text-slate-400 mt-2 flex items-center gap-1">Diferencia vs PEC</p>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Volumen Físico</p>
-          <h3 className="text-3xl font-black text-slate-800">4,200</h3>
-          <p className="text-xs font-bold text-slate-400 mt-2 flex items-center gap-1">Unidades procesadas</p>
+        <div className="flex items-center gap-2">
+          <button onClick={load} className="p-2 border border-slate-200 rounded-xl text-slate-500 hover:bg-slate-50">
+            <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+          </button>
+          <a href="/dashboard/compras/pedidos" className="bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2">
+            <ArrowRight size={16} /> Ir a Pedidos de Compra
+          </a>
         </div>
       </div>
 
-      {/* Barra de Filtros y Búsqueda */}
-      <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white py-3 border-b border-slate-100">
-        <div className="flex-1 flex items-center gap-3 w-full">
-          <div className="relative flex-1 max-w-2xl flex items-center bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 focus-within:border-emerald-500 focus-within:ring-1 focus-within:ring-emerald-500 transition-all">
-            <Search className="text-slate-400 shrink-0 mr-2" size={18} />
-            <input 
-              type="text" 
-              placeholder="Buscar por Entrada, PEC o PVEN..." 
-              className="w-full bg-transparent border-none focus:ring-0 text-sm font-medium text-slate-700 placeholder:text-slate-400 outline-none"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
+      <div className="flex flex-1 overflow-hidden">
+        <div className={`flex flex-col overflow-hidden transition-all ${selected ? 'w-[50%]' : 'w-full'}`}>
+          <div className="flex-1 overflow-y-auto">
+            {loading ? <div className="flex justify-center pt-16"><RefreshCw size={24} className="animate-spin text-teal-400" /></div>
+            : recs.length === 0 ? (
+              <div className="text-center pt-16 text-slate-400">
+                <Truck size={40} className="mx-auto mb-3 opacity-20" />
+                <p className="text-sm">Sin recepciones. Crea una desde un Pedido de Compra.</p>
+              </div>
+            ) : (
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 border-b border-slate-100 sticky top-0">
+                  <tr className="text-xs text-slate-400 uppercase tracking-wider">
+                    <th className="px-4 py-3">ENINV #</th><th className="px-4 py-3">PEC #</th>
+                    <th className="px-4 py-3">Proveedor</th><th className="px-4 py-3">Bodega</th>
+                    <th className="px-4 py-3">Fecha</th><th className="px-4 py-3">Estado</th><th className="px-4 py-3">Stock</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recs.map(r => (
+                    <tr key={r.id} onClick={() => loadDetail(r.id)}
+                      className={`border-b border-slate-50 cursor-pointer hover:bg-teal-50/30 ${selected?.id===r.id?'bg-teal-50/50':''}`}>
+                      <td className="px-4 py-3 font-bold text-teal-600">{r.numero}</td>
+                      <td className="px-4 py-3 text-purple-600 font-medium">{r.pec_numero || '-'}</td>
+                      <td className="px-4 py-3 text-slate-800">{r.supplier_name || '-'}</td>
+                      <td className="px-4 py-3 text-slate-600">{r.warehouse_name || '-'}</td>
+                      <td className="px-4 py-3 text-slate-500">{fDate(r.fecha_recepcion)}</td>
+                      <td className="px-4 py-3"><Badge estado={r.estado} /></td>
+                      <td className="px-4 py-3">{r.stock_actualizado ? <span className="text-xs text-emerald-600 font-bold">✓ Actualizado</span> : <span className="text-xs text-slate-400">Pendiente</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
-          <button className="flex items-center gap-2 px-3 py-2 text-sm font-bold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors shadow-sm shrink-0">
-            <Filter size={16} /> Estado de Conteo <ChevronDown size={14}/>
-          </button>
         </div>
 
-        <div className="flex bg-slate-100 p-1 rounded-xl shrink-0">
-          <button onClick={() => setActiveView('list')} className={`p-1.5 rounded-lg transition-colors ${activeView === 'list' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
-            <List size={18} />
-          </button>
-          <button onClick={() => setActiveView('grid')} className={`p-1.5 rounded-lg transition-colors ${activeView === 'grid' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
-            <LayoutGrid size={18} />
-          </button>
-        </div>
-      </div>
-
-      {/* Tabla Dinámica */}
-      <div className="bg-white flex flex-col">
-        {activeView === 'list' ? (
-          <>
-          {selectedRows.length > 0 && (
-            <div className="bg-emerald-50 px-6 py-3 flex items-center justify-between border-b border-emerald-100 animate-in fade-in slide-in-from-top-2">
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-bold text-emerald-900">{selectedRows.length} Entradas seleccionadas</span>
+        {/* Detail Panel */}
+        {selected && (
+          <div className="border-l border-slate-200 bg-white flex flex-col overflow-hidden flex-1">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h2 className="font-extrabold text-slate-900 text-lg">{selected.numero}</h2>
+                {selected.pec_numero && <p className="text-xs text-slate-400">PEC: <span className="text-purple-600 font-bold">{selected.pec_numero}</span></p>}
               </div>
               <div className="flex items-center gap-2">
-                <button className="flex items-center gap-2 bg-white border border-emerald-200 text-emerald-700 hover:bg-emerald-100 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors">
-                  <CheckSquare size={14} /> Aprobar Masivo
-                </button>
+                {!selected.stock_actualizado && selected.estado !== 'CANCELADA' && (
+                  <button onClick={confirmar} disabled={confirming}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1">
+                    {confirming ? <RefreshCw size={12} className="animate-spin" /> : <Check size={12} />}
+                    Confirmar Recepcion
+                  </button>
+                )}
+                <button onClick={() => setSelected(null)} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg"><X size={16} /></button>
               </div>
             </div>
-          )}
 
-          <div className="w-full">
-            <table className="w-full text-left table-fixed">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-100 text-xs text-slate-400 uppercase tracking-wider sticky top-0 z-10 bg-white shadow-sm">
-                  <th className="px-6 py-4 font-bold w-12">
-                    <input type="checkbox" checked={selectedRows.length === MOCK_RECEPCIONES.length} onChange={toggleAll} className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer" />
-                  </th>
-                  <ResizableHeader>ID Recepción</ResizableHeader>
-                  <ResizableHeader>P. Compra (PEC)</ResizableHeader>
-                  <ResizableHeader>P. Venta (PVEN)</ResizableHeader>
-                  <ResizableHeader>Proveedor</ResizableHeader>
-                  <ResizableHeader>Fecha Llegada</ResizableHeader>
-                  <ResizableHeader>Artículos Requeridos</ResizableHeader>
-                  <ResizableHeader>Estado / Inspección</ResizableHeader>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-sm">
-                {MOCK_RECEPCIONES.map((rec) => (
-                  <tr key={rec.id} className={`hover:bg-slate-50 transition-colors ${selectedRows.includes(rec.id) ? 'bg-emerald-50/50' : ''} ${rec.discrepancia ? 'bg-amber-50/30' : ''}`}>
-                    <td className="px-6 py-4">
-                      <input type="checkbox" checked={selectedRows.includes(rec.id)} onChange={() => toggleRow(rec.id)} className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer" />
-                    </td>
-                    
-                    <td className="px-6 py-4 font-black text-emerald-600 hover:text-emerald-800 hover:underline">
-                      <Link href={`/dashboard/compras/recepciones/${rec.id.toLowerCase()}`}>{rec.id}</Link>
-                    </td>
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+              <div className="flex flex-wrap gap-2">
+                <Badge estado={selected.estado} />
+                {selected.stock_actualizado && <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold">Stock actualizado</span>}
+              </div>
 
-                    <td className="px-6 py-4">
-                      <Link href={`/dashboard/compras/pedidos/${rec.pec.toLowerCase()}`} className="flex items-center gap-1.5 font-bold text-slate-600 hover:text-emerald-700 hover:underline">
-                        <LinkIcon size={14} /> {rec.pec}
-                      </Link>
-                    </td>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-slate-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Proveedor</p><p className="font-bold text-sm">{selected.supplier_name || '-'}</p></div>
+                <div className="bg-slate-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Bodega</p><p className="font-bold text-sm">{selected.warehouse_name || '-'}</p></div>
+                <div className="bg-slate-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Carrier</p><p className="font-bold text-sm">{selected.carrier || '-'}</p></div>
+                <div className="bg-slate-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Fecha Recepcion</p><p className="font-bold text-sm">{fDate(selected.fecha_recepcion)}</p></div>
+              </div>
 
-                    <td className="px-6 py-4">
-                      {rec.pven === 'Stock Interno' ? (
-                        <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-xs font-bold border border-slate-200">Stock Interno</span>
-                      ) : (
-                        <Link href={`/dashboard/ventas/venta/${rec.pven.toLowerCase()}`} className="flex items-center gap-1.5 font-bold text-purple-600 hover:text-purple-800 hover:underline">
-                          <LinkIcon size={14} /> {rec.pven}
-                        </Link>
-                      )}
-                    </td>
+              {/* Products with received qty */}
+              <div>
+                <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos (Esperados vs Recibidos)</p>
+                {!selected.stock_actualizado && (
+                  <p className="text-xs text-amber-600 mb-2 flex items-center gap-1"><AlertCircle size={11} /> Actualiza la cantidad recibida antes de confirmar</p>
+                )}
+                <div className="border border-slate-100 rounded-xl overflow-hidden">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-50"><tr className="text-slate-400 uppercase">
+                      <th className="px-3 py-2 text-left">Producto</th>
+                      <th className="px-3 py-2 text-right">Esperado</th>
+                      <th className="px-3 py-2 text-right">Recibido</th>
+                      <th className="px-3 py-2 text-center">Estado</th>
+                    </tr></thead>
+                    <tbody>
+                      {editProds.map((p: any, i: number) => (
+                        <tr key={i} className="border-t border-slate-50">
+                          <td className="px-3 py-2 font-medium">{p.product_name}</td>
+                          <td className="px-3 py-2 text-right text-slate-600">{p.qty_esperada || p.qty || 0}</td>
+                          <td className="px-3 py-2 text-right">
+                            {selected.stock_actualizado ? (
+                              <span className="font-bold text-emerald-600">{p.qty_recibida}</span>
+                            ) : (
+                              <input type="number" min={0} value={p.qty_recibida || 0}
+                                onChange={e => {
+                                  const n = [...editProds];
+                                  n[i] = { ...n[i], qty_recibida: parseInt(e.target.value) || 0 };
+                                  setEditProds(n);
+                                }}
+                                className="w-16 border border-slate-200 rounded px-1.5 py-1 outline-none text-right focus:border-teal-400" />
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            <span className={`text-xs font-bold ${p.estado==='RECIBIDO'?'text-emerald-600':'text-amber-600'}`}>{p.estado || 'PENDIENTE'}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
 
-                    <td className="px-6 py-4 font-bold text-slate-700">{rec.proveedor}</td>
-                    
-                    <td className="px-6 py-4 text-slate-500 font-medium">{rec.fechaLlegada}</td>
-                    
-                    <td className="px-6 py-4 font-black text-slate-800 flex items-center gap-2">
-                      <Archive size={16} className="text-slate-400"/> {rec.articulos}
-                    </td>
-
-                    <td className="px-6 py-4">
-                      <span className={`px-2.5 py-1.5 rounded-md text-xs font-bold border flex items-center gap-1.5 w-max ${
-                        rec.estado === 'Pendiente de Conteo' ? 'bg-slate-50 text-slate-700 border-slate-200' :
-                        rec.estado === 'Validado (Facturable)' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
-                        'bg-amber-50 text-amber-700 border-amber-200'
-                      }`}>
-                        {rec.estado === 'Pendiente de Conteo' && <PackageSearch size={14} />}
-                        {rec.estado === 'Validado (Facturable)' && <ShieldCheck size={14} />}
-                        {rec.estado === 'Discrepancia' && <MessageSquareWarning size={14} />}
-                        {rec.estado}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="flex items-center justify-between px-6 py-4 border-t border-slate-100 bg-white">
-            <span className="text-sm text-slate-500">Mostrando 1 a 18 recepciones</span>
-            <div className="flex items-center gap-1">
-              <button className="px-3 py-1 text-sm font-medium text-slate-400 hover:text-slate-700 transition-colors">Anterior</button>
-              <button className="w-8 h-8 rounded-lg bg-emerald-600 text-white text-sm font-bold shadow-sm">1</button>
-              <button className="px-3 py-1 text-sm font-medium text-slate-400 hover:text-slate-700 transition-colors">Siguiente</button>
+              {/* Actividades */}
+              {selected.actividades?.length > 0 && (
+                <div>
+                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Actividad</p>
+                  {selected.actividades.map((a: any) => (
+                    <div key={a.id} className="flex gap-3 mb-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-teal-400 mt-2 flex-shrink-0" />
+                      <div>
+                        <p className="text-sm text-slate-700">{a.description}</p>
+                        <p className="text-xs text-slate-400">{fDate(a.created_at)}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-          </>
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-slate-400 py-12">
-            <LayoutGrid size={48} className="mb-4 opacity-20" />
-            <p className="font-bold text-lg text-slate-500">Vista Kanban de Bodega en construcción</p>
           </div>
         )}
       </div>

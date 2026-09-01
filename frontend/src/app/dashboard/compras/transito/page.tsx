@@ -1,235 +1,166 @@
-"use client";
+'use client';
 
-import { useState } from 'react';
-import { 
-  Search, Filter, LayoutGrid, List,
-  MessageSquareWarning, ChevronDown, 
-  Truck, Clock, MapPin, Navigation, AlertTriangle, Link as LinkIcon
-} from 'lucide-react';
-import Link from 'next/link';
-import { ResizableHeader } from '@/components/ResizableHeader';
+import { useState, useEffect } from 'react';
+import { Truck, Clock, AlertCircle, RefreshCw, Check, Package } from 'lucide-react';
 
-const FASES = [
-  'Despachado por el Proveedor',
-  'Proveedor -> Casillero',
-  'Casillero -> Aduana',
-  'Aduana -> Bodega'
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
+async function apiFetch(path: string, opts: RequestInit = {}) {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(opts.headers as any || {}) },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
+  return data.data ?? data;
+}
+
+const TRACKING_STAGES = [
+  { stage: 'PROVEEDOR_CASILLERO', label: 'Proveedor → Casillero' },
+  { stage: 'CASILLERO_ADUANA',    label: 'Casillero → Aduana' },
+  { stage: 'ADUANA_BODEGA',       label: 'Aduana → Bodega' },
+  { stage: 'ENTREGADO',           label: 'Entregado' },
 ];
 
-const MOCK_TRANSITO = Array.from({ length: 24 }, (_, i) => {
-  const num = i + 1;
-  const diasEnFase = (num % 5) + 1; // 1 to 5 days
-  const isRetrasado = diasEnFase >= 3;
-  
-  const faseIndex = num % 4;
-  const fase = FASES[faseIndex];
+const fDate = (iso: string|null) => iso ? new Date(iso).toLocaleDateString('es-CO', {day:'2-digit',month:'short',year:'numeric'}) : '-';
+const fCOP = (v: number) => v > 0 ? `$${Number(v).toLocaleString('es-CO')}` : '-';
 
-  return { 
-    id: `TRK-${num.toString().padStart(4, '0')}`,
-    guia: `FX-2026${(num * 881).toString().padStart(5, '0')}`,
-    pec: `PEC-${(num + 10).toString().padStart(4, '0')}`,
-    pven: num % 3 !== 0 ? `PVEN-${(num + 50).toString().padStart(4, '0')}` : 'Stock Interno', // Some for internal stock, some linked to sales
-    proveedor: `Global Supplier ${num % 5 + 1}`, 
-    fase,
-    diasEnFase,
-    isRetrasado,
-    carrier: num % 2 === 0 ? 'DHL' : 'FedEx',
-    eta: '30 Ago 2026',
-  };
-});
+export default function TransitoPage() {
+  const [pedidos, setPedidos] = useState<any[]>([]);
+  const [overdueCount, setOverdueCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState('');
 
-export default function MercanciaTransitoHub() {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [activeView, setActiveView] = useState('list');
-  const [selectedRows, setSelectedRows] = useState<string[]>([]);
+  useEffect(() => {
+    setCurrentUser(localStorage.getItem('user_name') || '');
+    load();
+  }, []);
 
-  const toggleRow = (id: string) => {
-    setSelectedRows(prev => prev.includes(id) ? prev.filter(rowId => rowId !== id) : [...prev, id]);
-  };
+  async function load() {
+    setLoading(true);
+    try {
+      const d = await apiFetch('/compras/transito');
+      setPedidos(Array.isArray(d) ? d : (d?.data ?? []));
+      setOverdueCount(d?.overdue_count ?? 0);
+    } catch { setPedidos([]); }
+    finally { setLoading(false); }
+  }
 
-  const toggleAll = () => {
-    if (selectedRows.length === MOCK_TRANSITO.length) setSelectedRows([]);
-    else setSelectedRows(MOCK_TRANSITO.map(p => p.id));
-  };
-
-  const alertas = MOCK_TRANSITO.filter(p => p.isRetrasado);
+  async function updateTracking(pec_id: number, stage: string, status: string) {
+    await apiFetch(`/compras/pedidos/${pec_id}/tracking`, {
+      method: 'PATCH',
+      body: JSON.stringify({ stage, status, user_name: currentUser }),
+    });
+    load();
+  }
 
   return (
-    <div className="w-full bg-slate-50 flex flex-col px-8 py-6 min-h-max animate-in fade-in">
-      
-      {/* Cabecera */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
-        <div>
-          <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-2">
-            Mercancía en Tránsito
-          </h1>
-          <p className="text-slate-500 mt-1 font-medium">Torre de control logístico. Rastrea las importaciones y detecta cuellos de botella.</p>
-        </div>
-      </div>
-
-      {/* Alertas Críticas de Tiempos Muertos */}
-      {alertas.length > 0 && (
-        <div className="bg-rose-600 border border-rose-700 rounded-2xl p-4 mb-6 flex items-start gap-4 shadow-md shadow-rose-200">
-          <div className="bg-white/20 text-white p-2 rounded-full shrink-0 mt-0.5">
-            <AlertTriangle size={20} />
+    <div className="h-full w-full bg-[#f8f9fa] flex flex-col overflow-hidden">
+      <div className="bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between flex-shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center text-blue-600">
+            <Truck size={20} />
           </div>
           <div>
-            <h3 className="text-white font-black mb-1">¡Alerta Logística (SLA)! {alertas.length} paquetes exceden los 3 días de tolerancia</h3>
-            <p className="text-rose-100 text-sm mb-3">La mercancía listada a continuación ha superado el tiempo máximo permitido en su fase actual sin avanzar.</p>
-            <div className="flex flex-wrap gap-2">
-              {alertas.slice(0, 8).map(a => (
-                <span key={a.id} className="bg-white text-rose-700 text-xs font-bold px-3 py-1 rounded-full shadow-sm cursor-pointer hover:bg-rose-50 transition-colors">
-                  {a.pec} ({a.diasEnFase} días en {a.fase})
-                </span>
-              ))}
-              {alertas.length > 8 && <span className="text-white text-xs font-bold px-2 py-1">+{alertas.length - 8} más</span>}
-            </div>
+            <h1 className="text-xl font-extrabold text-slate-900">Mercancia en Transito</h1>
+            <p className="text-xs text-slate-500">{pedidos.length} pedidos activos
+              {overdueCount > 0 && <span className="text-red-500 font-bold ml-2">• {overdueCount} vencidos</span>}
+            </p>
           </div>
         </div>
-      )}
-
-      {/* KPIs Grid */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 relative overflow-hidden">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Total en Tránsito</p>
-          <div className="flex items-end gap-2">
-            <h3 className="text-3xl font-black text-slate-800">{MOCK_TRANSITO.length}</h3>
-            <span className="text-sm font-bold text-slate-500 mb-1">bultos/envíos</span>
-          </div>
-        </div>
-        
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 relative overflow-hidden">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">En Aduana</p>
-          <div className="flex items-end gap-2">
-            <h3 className="text-3xl font-black text-blue-600">{MOCK_TRANSITO.filter(t => t.fase.includes('Aduana')).length}</h3>
-            <span className="text-sm font-bold text-slate-500 mb-1">envíos</span>
-          </div>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 relative overflow-hidden">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Pedidos de Venta (PVEN) Afectados</p>
-          <div className="flex items-end gap-2">
-            <h3 className="text-3xl font-black text-purple-600">{MOCK_TRANSITO.filter(t => t.pven !== 'Stock Interno').length}</h3>
-            <span className="text-sm font-bold text-slate-500 mb-1">órdenes de clientes</span>
-          </div>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 relative overflow-hidden">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Tasa de Retraso (SLA)</p>
-          <h3 className="text-3xl font-black text-rose-600">{Math.round((alertas.length / MOCK_TRANSITO.length) * 100)}%</h3>
-        </div>
+        <button onClick={load} className="p-2 border border-slate-200 rounded-xl text-slate-500 hover:bg-slate-50">
+          <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+        </button>
       </div>
 
-      {/* Barra de Filtros y Búsqueda */}
-      <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white py-3 px-4 border border-slate-200 rounded-t-2xl">
-        <div className="flex-1 flex items-center gap-3 w-full">
-          <div className="relative flex-1 max-w-2xl flex items-center bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-all">
-            <Search className="text-slate-400 shrink-0 mr-2" size={18} />
-            <input 
-              type="text" 
-              placeholder="Buscar por PEC, PVEN, Guía o Carrier..." 
-              className="w-full bg-transparent border-none focus:ring-0 text-sm font-medium text-slate-700 placeholder:text-slate-400 outline-none"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-          <button className="flex items-center gap-2 px-3 py-2 text-sm font-bold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors shadow-sm shrink-0">
-            <Filter size={16} /> Fase Logística <ChevronDown size={14}/>
-          </button>
-        </div>
-
-        <div className="flex bg-slate-100 p-1 rounded-xl shrink-0 border border-slate-200">
-          <button onClick={() => setActiveView('list')} className={`p-1.5 rounded-lg transition-colors ${activeView === 'list' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
-            <List size={18} />
-          </button>
-          <button onClick={() => setActiveView('grid')} className={`p-1.5 rounded-lg transition-colors ${activeView === 'grid' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
-            <LayoutGrid size={18} />
-          </button>
-        </div>
-      </div>
-
-      {/* Tabla Dinámica (Sin Caja Exterior para scroll infinito) */}
-      <div className="bg-white flex flex-col border border-t-0 border-slate-200 rounded-b-2xl overflow-hidden shadow-sm">
-        {activeView === 'list' ? (
-          <div className="w-full">
-            <table className="w-full text-left table-fixed">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase tracking-wider sticky top-0 z-10">
-                  <th className="px-6 py-4 font-bold w-12">
-                    <input type="checkbox" checked={selectedRows.length === MOCK_TRANSITO.length} onChange={toggleAll} className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
-                  </th>
-                  <ResizableHeader>Tracking / Guía</ResizableHeader>
-                  <ResizableHeader>P. Compra (PEC)</ResizableHeader>
-                  <ResizableHeader>P. Venta Asociado (PVEN)</ResizableHeader>
-                  <ResizableHeader>Fase Actual</ResizableHeader>
-                  <ResizableHeader>Timer / Tolerancia (3 días)</ResizableHeader>
-                  <ResizableHeader>ETA Bodega</ResizableHeader>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-sm">
-                {MOCK_TRANSITO.map((trk) => (
-                  <tr key={trk.id} className={`hover:bg-slate-50 transition-colors ${trk.isRetrasado ? 'bg-rose-50/40' : ''}`}>
-                    <td className="px-6 py-4">
-                      <input type="checkbox" checked={selectedRows.includes(trk.id)} onChange={() => toggleRow(trk.id)} className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
-                    </td>
-                    
-                    <td className="px-6 py-4">
-                      <div className="flex flex-col">
-                        <span className="font-black text-slate-800">{trk.guia}</span>
-                        <span className="text-xs font-bold text-slate-400 flex items-center gap-1"><Navigation size={10}/> {trk.carrier}</span>
-                      </div>
-                    </td>
-
-                    <td className="px-6 py-4">
-                      <Link href={`/dashboard/compras/pedidos/${trk.pec.toLowerCase()}`} className="flex items-center gap-1.5 font-black text-emerald-600 hover:text-emerald-800 hover:underline">
-                        <LinkIcon size={14} /> {trk.pec}
-                      </Link>
-                    </td>
-                    
-                    <td className="px-6 py-4">
-                      {trk.pven === 'Stock Interno' ? (
-                        <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-xs font-bold border border-slate-200">Stock Interno</span>
-                      ) : (
-                        <Link href={`/dashboard/ventas/venta/${trk.pven.toLowerCase()}`} className="flex items-center gap-1.5 font-black text-purple-600 hover:text-purple-800 hover:underline">
-                          <LinkIcon size={14} /> {trk.pven}
-                        </Link>
-                      )}
-                    </td>
-                    
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        <Truck size={16} className={trk.fase.includes('Bodega') ? 'text-purple-500' : 'text-blue-500'} />
-                        <span className="font-bold text-slate-700">{trk.fase}</span>
-                      </div>
-                    </td>
-
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
-                          <div 
-                            className={`h-full ${trk.isRetrasado ? 'bg-rose-500' : 'bg-blue-500'}`} 
-                            style={{ width: `${Math.min((trk.diasEnFase / 3) * 100, 100)}%` }}
-                          />
-                        </div>
-                        <span className={`text-xs font-black w-14 text-right ${trk.isRetrasado ? 'text-rose-600' : 'text-slate-600'}`}>
-                          {trk.diasEnFase} / 3d
-                        </span>
-                        {trk.isRetrasado && <AlertTriangle size={14} className="text-rose-500" />}
-                      </div>
-                    </td>
-
-                    <td className="px-6 py-4 font-bold text-slate-600">
-                      {trk.eta}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      <div className="flex-1 overflow-y-auto p-6">
+        {loading ? (
+          <div className="flex justify-center pt-16"><RefreshCw size={24} className="animate-spin text-blue-400" /></div>
+        ) : pedidos.length === 0 ? (
+          <div className="text-center pt-16 text-slate-400">
+            <Truck size={48} className="mx-auto mb-4 opacity-20" />
+            <p className="font-medium">Sin mercancia en transito</p>
+            <p className="text-sm mt-1">Los pedidos de compra activos apareceran aqui</p>
           </div>
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-slate-400 py-12">
-            <LayoutGrid size={48} className="mb-4 opacity-20" />
-            <p className="font-bold text-lg text-slate-500">Mapa Global Logístico en construcción</p>
+          <div className="grid gap-4">
+            {pedidos.map(p => {
+              const completedStages = (p.tracking_stages || []).filter((s: any) => s.status === 'COMPLETADO').length;
+              const progressPct = Math.round((completedStages / 4) * 100);
+              return (
+                <div key={p.id} className={`bg-white rounded-3xl shadow-sm border p-5 ${p.is_overdue ? 'border-red-200' : 'border-slate-100'}`}>
+                  <div className="flex items-start justify-between mb-4">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-extrabold text-lg text-purple-700">{p.numero}</span>
+                        {p.ven_numero && <span className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold">{p.ven_numero}</span>}
+                        {p.is_overdue && <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-bold flex items-center gap-1"><AlertCircle size={10} /> Vencido</span>}
+                      </div>
+                      <p className="text-slate-600 font-medium mt-0.5">{p.supplier_name}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-extrabold text-slate-900">{fCOP(p.total_cop)}</p>
+                      <p className="text-xs text-slate-400">Entrega: {fDate(p.fecha_entrega_estimada)}</p>
+                      {p.days_until_delivery !== null && !p.is_overdue && (
+                        <p className={`text-xs font-bold flex items-center gap-1 justify-end mt-1 ${p.days_until_delivery <= 3 ? 'text-amber-500' : 'text-slate-400'}`}>
+                          <Clock size={10} /> {p.days_until_delivery} dias
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Progress bar */}
+                  <div className="mb-4">
+                    <div className="flex justify-between text-xs text-slate-400 mb-1">
+                      <span>Progreso de entrega</span>
+                      <span>{completedStages}/4 etapas</span>
+                    </div>
+                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-gradient-to-r from-purple-500 to-emerald-500 rounded-full transition-all"
+                        style={{ width: `${progressPct}%` }} />
+                    </div>
+                  </div>
+
+                  {/* Tracking stages */}
+                  <div className="grid grid-cols-4 gap-2">
+                    {(p.tracking_stages || []).map((s: any, i: number) => {
+                      const meta = TRACKING_STAGES[i] || { label: s.stage };
+                      const isDone = s.status === 'COMPLETADO';
+                      const isActive = s.status === 'EN_PROCESO';
+                      return (
+                        <div key={s.stage} className={`p-2.5 rounded-xl text-center border transition-all ${isDone ? 'bg-emerald-50 border-emerald-200' : isActive ? 'bg-blue-50 border-blue-200' : 'bg-slate-50 border-slate-100'}`}>
+                          <div className={`w-7 h-7 rounded-full flex items-center justify-center mx-auto mb-1.5 text-xs font-black ${isDone ? 'bg-emerald-500 text-white' : isActive ? 'bg-blue-500 text-white' : 'bg-slate-300 text-slate-600'}`}>
+                            {isDone ? <Check size={12} /> : i+1}
+                          </div>
+                          <p className={`text-xs font-bold mb-2 leading-tight ${isDone ? 'text-emerald-700' : isActive ? 'text-blue-700' : 'text-slate-500'}`}>{meta.label}</p>
+                          {!isDone && (
+                            <button onClick={() => updateTracking(p.id, s.stage, isActive ? 'COMPLETADO' : 'EN_PROCESO')}
+                              className={`text-xs px-2 py-1 rounded-lg font-bold w-full ${isActive ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'}`}>
+                              {isActive ? 'Completar' : 'Iniciar'}
+                            </button>
+                          )}
+                          {isDone && s.timestamp && <p className="text-xs text-emerald-600">{fDate(s.timestamp)}</p>}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Products summary */}
+                  {p.productos?.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-slate-100">
+                      <div className="flex gap-2 flex-wrap">
+                        {p.productos.slice(0, 3).map((pr: any, i: number) => (
+                          <span key={i} className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
+                            {pr.product_name} x{pr.qty}
+                          </span>
+                        ))}
+                        {p.productos.length > 3 && <span className="text-xs text-slate-400">+{p.productos.length-3} mas</span>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

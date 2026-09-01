@@ -1,276 +1,374 @@
-"use client";
+'use client';
 
-import { useState, useEffect } from 'react';
-import { 
-  BadgeDollarSign, Search, Filter, Plus, AlertCircle, 
-  TrendingUp, Wallet, CheckCircle2, ArrowUpRight, ArrowDownRight, 
-  MoreVertical, List, LayoutGrid, Calendar, PieChart, ChevronDown, X,
-  Trash2, FileText, CheckSquare, Send, MessageSquareWarning
-} from 'lucide-react';
-import Link from 'next/link';
-import toast from 'react-hot-toast';
-import { ResizableHeader } from '@/components/ResizableHeader';
+import { useState, useEffect, useCallback } from 'react';
+import { Plus, Search, RefreshCw, X, Check, FileText, ChevronRight,
+  Phone, Mail, MapPin, User, DollarSign, Package, ExternalLink,
+  Calculator, ArrowRight } from 'lucide-react';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
+async function apiFetch(path: string, opts: RequestInit = {}) {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(opts.headers as any || {}) },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
+  return data.data ?? data;
+}
 
+const ESTADOS: Record<string, { label: string; color: string; bg: string }> = {
+  BORRADOR:               { label: 'Borrador',              color: '#64748b', bg: '#f1f5f9' },
+  ENVIADA:                { label: 'Enviada',               color: '#3b82f6', bg: '#eff6ff' },
+  PENDIENTE_CONFIRMACION: { label: 'Pendiente',             color: '#f59e0b', bg: '#fffbeb' },
+  CONFIRMADA:             { label: 'Confirmada',             color: '#10b981', bg: '#f0fdf4' },
+  RECHAZADA:              { label: 'Rechazada',              color: '#ef4444', bg: '#fef2f2' },
+  CANCELADA:              { label: 'Cancelada',              color: '#ef4444', bg: '#fef2f2' },
+};
 
-import { getSalesOrders, updateSalesOrderStatus } from '@/lib/api';
+function Badge({ estado }: { estado: string }) {
+  const cfg = ESTADOS[estado] || { label: estado, color: '#6366f1', bg: '#eef2ff' };
+  return <span className="px-2 py-0.5 rounded-full text-xs font-bold" style={{ backgroundColor: cfg.bg, color: cfg.color }}>{cfg.label}</span>;
+}
+const fDate = (iso: string | null) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
+const fCOP  = (v: number) => v > 0 ? `$${Number(v).toLocaleString('es-CO')}` : '-';
 
 export default function CotizacionesPage() {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [activeView, setActiveView] = useState('list');
-  const [selectedRows, setSelectedRows] = useState<string[]>([]);
-  const [cotizacionesData, setCotizacionesData] = useState<any[]>([]);
+  const [cots, setCots] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [filterEstado, setFilterEstado] = useState('');
+  const [selected, setSelected] = useState<any | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [editingProd, setEditingProd] = useState(false);
+  const [currentUser, setCurrentUser] = useState('');
+
+  // Edit producto inline
+  const [editProds, setEditProds] = useState<any[]>([]);
+  const [newProd, setNewProd] = useState({ product_name: '', qty: 1, unit_price_cop: 0, casillero: '', delivery_date: '' });
+  const [trm, setTrm] = useState(4200);
 
   useEffect(() => {
-    fetchCotizaciones();
+    const u = localStorage.getItem('user_name') || '';
+    setCurrentUser(u);
   }, []);
 
-  const fetchCotizaciones = async () => {
+  const load = useCallback(async () => {
+    setLoading(true);
     try {
-      const data = await getSalesOrders();
-      const realSales = data.sales || data;
-      if (Array.isArray(realSales)) {
-        // Asumiendo que QUOTATION u otros estados intermedios
-        const cotizaciones = realSales.filter(s => s.status === 'QUOTATION' || s.status === 'TO_INVOICE').map(s => ({
-          id: `COT-0${s.id}`,
-          realId: s.id,
-          origen_sc: `SC-0${s.id}`,
-          cliente: `Cliente #${s.customer_id}`,
-          monto: `$${(s.total_amount || 0).toLocaleString()}`,
-          fecha: new Date(s.created_at || Date.now()).toLocaleDateString(),
-          estado: s.status === 'TO_INVOICE' ? 'Cotización Confirmada' : 'Pendiente por Cotizar',
-          ultimaAct: '2 min',
-          responsable: 'Tú',
-          desatendida: false
-        }));
-        setCotizacionesData(cotizaciones);
-      }
-    } catch(e) {
-      console.error(e);
-    }
-  };
+      const params = new URLSearchParams();
+      if (search) params.set('search', search);
+      if (filterEstado) params.set('estado', filterEstado);
+      const d = await apiFetch(`/ventas/cotizaciones?${params}&limit=100`);
+      setCots(Array.isArray(d) ? d : (d?.data ?? []));
+      setTotal(d?.total ?? (Array.isArray(d) ? d.length : 0));
+    } catch { setCots([]); }
+    finally { setLoading(false); }
+  }, [search, filterEstado]);
 
-  const MOCK_COTIZACIONES = cotizacionesData;
+  useEffect(() => { load(); }, [load]);
 
+  async function loadDetail(id: number) {
+    const d = await apiFetch(`/ventas/cotizaciones/${id}`);
+    setSelected(d);
+    setEditProds(d.productos || []);
+  }
 
-  const toggleRow = (id: string) => {
-    if (selectedRows.includes(id)) {
-      setSelectedRows(selectedRows.filter(rowId => rowId !== id));
-    } else {
-      setSelectedRows([...selectedRows, id]);
-    }
-  };
+  async function saveProds() {
+    const total_cop = editProds.reduce((s, p) => s + (p.qty * p.unit_price_cop), 0);
+    const anticipo = total_cop * 0.5;
+    await apiFetch(`/ventas/cotizaciones/${selected.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        productos: editProds,
+        subtotal_cop: total_cop,
+        total_cop,
+        anticipo_cop: anticipo,
+        trm_rate: trm,
+        updated_by: currentUser,
+      }),
+    });
+    setEditingProd(false);
+    loadDetail(selected.id);
+    load();
+  }
 
-  const toggleAll = () => {
-    if (selectedRows.length === MOCK_COTIZACIONES.length) {
-      setSelectedRows([]);
-    } else {
-      setSelectedRows(MOCK_COTIZACIONES.map(c => c.id));
-    }
-  };
+  function addProd() {
+    if (!newProd.product_name) return;
+    setEditProds(prev => [...prev, { ...newProd, total_cop: newProd.qty * newProd.unit_price_cop }]);
+    setNewProd({ product_name: '', qty: 1, unit_price_cop: 0, casillero: '', delivery_date: '' });
+  }
 
-  const alertas = MOCK_COTIZACIONES.filter(c => c.desatendida);
+  async function changeEstado(estado: string) {
+    await apiFetch(`/ventas/cotizaciones/${selected.id}`, {
+      method: 'PATCH', body: JSON.stringify({ estado, updated_by: currentUser }),
+    });
+    loadDetail(selected.id); load();
+  }
+
+  async function confirmarCOT() {
+    setConfirming(true);
+    try {
+      const d = await apiFetch(`/ventas/cotizaciones/${selected.id}/confirmar`, {
+        method: 'POST', body: JSON.stringify({ user_name: currentUser }),
+      });
+      alert(`Cotizacion confirmada. Pedido de Venta ${d.pedido_venta?.numero} creado.`);
+      loadDetail(selected.id); load();
+    } catch (err: any) { alert('Error: ' + err.message); }
+    setConfirming(false);
+  }
+
+  const totalCOP = editProds.reduce((s, p) => s + (p.qty * (p.unit_price_cop || 0)), 0);
 
   return (
-    <div className="w-full bg-white flex flex-col px-8 py-6 min-h-max animate-in fade-in">
-      
-      {/* Cabecera */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
-        <div>
-          <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-2">
-            Cotizaciones
-          </h1>
-          <p className="text-slate-500 mt-1 font-medium">Gestiona y haz seguimiento a las propuestas comerciales.</p>
-        </div>
-        <Link href="/dashboard/ventas/cotizacion/nueva" className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-colors flex items-center gap-2">
-          <Plus size={18} /> Nueva Cotización
-        </Link>
-      </div>
-
-      {/* Alertas Críticas */}
-      {alertas.length > 0 && (
-        <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 mb-6 flex items-start gap-4 shadow-sm">
-          <div className="bg-rose-100 text-rose-600 p-2 rounded-full shrink-0 mt-0.5">
-            <MessageSquareWarning size={20} />
+    <div className="h-full w-full bg-[#f8f9fa] flex flex-col overflow-hidden">
+      {/* Header */}
+      <div className="bg-white border-b border-slate-100 px-6 py-4 flex items-center justify-between flex-shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center text-amber-600">
+            <Calculator size={20} />
           </div>
           <div>
-            <h3 className="text-rose-800 font-black mb-1">¡Alerta de SLA! Tienes {alertas.length} cotizaciones desatendidas</h3>
-            <p className="text-rose-600 text-sm mb-3">Las siguientes cotizaciones llevan más de 2 días sin cambio de estado.</p>
-            <div className="flex flex-wrap gap-2">
-              {alertas.map(a => (
-                <span key={a.id} className="bg-white border border-rose-200 text-rose-700 text-xs font-bold px-3 py-1 rounded-full shadow-sm">
-                  {a.id} ({a.responsable})
-                </span>
-              ))}
-            </div>
+            <h1 className="text-xl font-extrabold text-slate-900">Cotizaciones</h1>
+            <p className="text-xs text-slate-500">{total} cotizaciones &bull; COT-YYYY####</p>
           </div>
         </div>
-      )}
-
-      {/* KPIs Grid */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Total Activas</p>
-          <h3 className="text-3xl font-black text-slate-800">124</h3>
-        </div>
-        
-        <div className="bg-gradient-to-br from-amber-500 to-amber-600 p-5 rounded-2xl shadow-sm text-white relative overflow-hidden">
-          <p className="text-xs font-bold uppercase tracking-wider mb-2 opacity-90">Pendientes por Cotizar</p>
-          <h3 className="text-3xl font-black">15</h3>
-          <p className="text-xs font-bold mt-2 opacity-90 text-amber-100">Requieren elaboración</p>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Esperando Confirmación</p>
-          <h3 className="text-3xl font-black text-slate-800">42</h3>
-          <p className="text-xs font-bold text-slate-400 mt-2 flex items-center gap-1">Cotizaciones enviadas</p>
-        </div>
-
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 relative overflow-hidden">
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Tasa de Cierre</p>
-          <h3 className="text-3xl font-black text-slate-800">38%</h3>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Buscar COT, SC, cliente..." className="pl-8 pr-3 py-2 border border-slate-200 rounded-xl text-sm outline-none focus:border-amber-400 w-56" />
+          </div>
+          <select value={filterEstado} onChange={e => setFilterEstado(e.target.value)}
+            className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none">
+            <option value="">Todos</option>
+            {Object.entries(ESTADOS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          <button onClick={load} className="p-2 border border-slate-200 rounded-xl text-slate-500 hover:bg-slate-50">
+            <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+          </button>
+          <a href="/dashboard/ventas/solicitud"
+            className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-xl font-bold text-sm flex items-center gap-2">
+            <Plus size={16} /> Nueva (desde SC)
+          </a>
         </div>
       </div>
 
-      {/* Barra de Filtros y Búsqueda */}
-      <div className="flex flex-col sm:flex-row justify-between items-center gap-4 bg-white py-3 border-b border-slate-100">
-        <div className="flex-1 flex items-center gap-3 w-full">
-          <div className="relative flex-1 max-w-2xl flex items-center bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-all">
-            <div className="flex items-center gap-1 mr-2 shrink-0">
-              <span className="flex items-center gap-1 bg-white border border-slate-200 text-slate-700 text-xs font-bold px-2 py-1 rounded-md shadow-sm">
-                Cliente <ChevronDown size={12} />
-              </span>
-            </div>
-            <Search className="text-slate-400 shrink-0 mr-2" size={18} />
-            <input 
-              type="text" 
-              placeholder="Buscar por ID, nombre o monto..." 
-              className="w-full bg-transparent border-none focus:ring-0 text-sm font-medium text-slate-700 placeholder:text-slate-400 outline-none"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
+      <div className="flex flex-1 overflow-hidden">
+        {/* Table */}
+        <div className={`flex flex-col overflow-hidden transition-all ${selected ? 'w-[52%]' : 'w-full'}`}>
+          <div className="flex-1 overflow-y-auto">
+            {loading ? (
+              <div className="flex justify-center pt-16"><RefreshCw size={24} className="animate-spin text-amber-400" /></div>
+            ) : cots.length === 0 ? (
+              <div className="text-center pt-16 text-slate-400">
+                <Calculator size={40} className="mx-auto mb-3 opacity-20" />
+                <p className="text-sm">Sin cotizaciones. Confirma una Solicitud para crear una.</p>
+                <a href="/dashboard/ventas/solicitud" className="mt-3 inline-flex items-center gap-1 text-indigo-600 font-bold text-sm hover:underline">
+                  <ArrowRight size={14} /> Ir a Solicitudes
+                </a>
+              </div>
+            ) : (
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 border-b border-slate-100 sticky top-0">
+                  <tr className="text-xs text-slate-400 uppercase tracking-wider">
+                    <th className="px-4 py-3">COT #</th>
+                    <th className="px-4 py-3">SC Origen</th>
+                    <th className="px-4 py-3">Cliente</th>
+                    <th className="px-4 py-3">Cotizador</th>
+                    <th className="px-4 py-3">Total</th>
+                    <th className="px-4 py-3">Entrega Est.</th>
+                    <th className="px-4 py-3">Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cots.map(cot => (
+                    <tr key={cot.id} onClick={() => loadDetail(cot.id)}
+                      className={`border-b border-slate-50 cursor-pointer hover:bg-amber-50/30 ${selected?.id === cot.id ? 'bg-amber-50/50' : ''}`}>
+                      <td className="px-4 py-3 font-bold text-amber-600">{cot.numero}</td>
+                      <td className="px-4 py-3">
+                        {cot.sc_numero ? <span className="text-indigo-600 font-medium">{cot.sc_numero}</span> : <span className="text-slate-400">-</span>}
+                      </td>
+                      <td className="px-4 py-3 font-medium text-slate-800">{cot.customer_name || '-'}</td>
+                      <td className="px-4 py-3 text-slate-600">{cot.cotizador || '-'}</td>
+                      <td className="px-4 py-3 font-bold text-slate-800">{fCOP(cot.total_cop)}</td>
+                      <td className="px-4 py-3 text-slate-500">{fDate(cot.fecha_entrega_estimada)}</td>
+                      <td className="px-4 py-3"><Badge estado={cot.estado} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
-          <button className="flex items-center gap-2 px-3 py-2 text-sm font-bold text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors shadow-sm shrink-0">
-            <Filter size={16} /> Filtros
-          </button>
         </div>
 
-        <div className="flex bg-slate-100 p-1 rounded-xl shrink-0">
-          <button onClick={() => setActiveView('list')} className={`p-1.5 rounded-lg transition-colors ${activeView === 'list' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
-            <List size={18} />
-          </button>
-          <button onClick={() => setActiveView('grid')} className={`p-1.5 rounded-lg transition-colors ${activeView === 'grid' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}>
-            <LayoutGrid size={18} />
-          </button>
-        </div>
-      </div>
-
-      {/* Tabla Dinámica (Sin Caja Exterior) */}
-      <div className="bg-white flex flex-col">
-        {activeView === 'list' ? (
-          <>
-          {selectedRows.length > 0 && (
-            <div className="bg-blue-50 px-6 py-3 flex items-center justify-between border-b border-blue-100 animate-in fade-in slide-in-from-top-2">
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-bold text-blue-900">{selectedRows.length} Cotizaciones seleccionadas</span>
+        {/* Detail Panel */}
+        {selected && (
+          <div className="border-l border-slate-200 bg-white flex flex-col overflow-hidden flex-1">
+            <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h2 className="font-extrabold text-slate-900 text-lg">{selected.numero}</h2>
+                {selected.sc_numero && <p className="text-xs text-slate-400">SC Origen: <span className="text-indigo-600 font-bold">{selected.sc_numero}</span></p>}
               </div>
               <div className="flex items-center gap-2">
-                <button className="flex items-center gap-2 bg-white border border-blue-200 text-blue-700 hover:bg-blue-100 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors">
-                  <CheckSquare size={14} /> Aprobar
-                </button>
-                <button className="flex items-center gap-2 bg-white border border-blue-200 text-blue-700 hover:bg-blue-100 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors">
-                  <Send size={14} /> Re-enviar
-                </button>
-                <button className="flex items-center gap-2 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ml-2">
-                  <Trash2 size={14} /> Eliminar
-                </button>
+                {(selected.estado === 'BORRADOR' || selected.estado === 'ENVIADA') && (
+                  <button onClick={() => changeEstado('PENDIENTE_CONFIRMACION')}
+                    className="bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold">
+                    Enviar a cliente
+                  </button>
+                )}
+                {(selected.estado === 'BORRADOR' || selected.estado === 'ENVIADA' || selected.estado === 'PENDIENTE_CONFIRMACION') && (
+                  <button onClick={confirmarCOT} disabled={confirming}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1">
+                    {confirming ? <RefreshCw size={12} className="animate-spin" /> : <Check size={12} />}
+                    Confirmar + VEN
+                  </button>
+                )}
+                <button onClick={() => setSelected(null)} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg"><X size={16} /></button>
               </div>
             </div>
-          )}
 
-          <div className="w-full">
-            <table className="w-full text-left table-fixed">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-100 text-xs text-slate-400 uppercase tracking-wider sticky top-0 z-10 bg-white shadow-sm">
-                  <th className="px-6 py-4 font-bold w-12">
-                    <input type="checkbox" checked={selectedRows.length === MOCK_COTIZACIONES.length} onChange={toggleAll} className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
-                  </th>
-                  <ResizableHeader>ID Cotización</ResizableHeader>
-                  <ResizableHeader>Fecha</ResizableHeader>
-                  <ResizableHeader>Cliente</ResizableHeader>
-                  <ResizableHeader>Origen</ResizableHeader>
-                  <ResizableHeader>Monto</ResizableHeader>
-                  <ResizableHeader>Estado</ResizableHeader>
-                  <ResizableHeader>Última Act.</ResizableHeader>
-                  <ResizableHeader>Responsable</ResizableHeader>
-                  <ResizableHeader>Acciones</ResizableHeader>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 text-sm">
-                {MOCK_COTIZACIONES.map((cot) => (
-                  <tr key={cot.id} className={`hover:bg-slate-50 transition-colors ${selectedRows.includes(cot.id) ? 'bg-blue-50/50' : ''} ${cot.desatendida ? 'bg-rose-50/30' : ''}`}>
-                    <td className="px-6 py-4">
-                      <input type="checkbox" checked={selectedRows.includes(cot.id)} onChange={() => toggleRow(cot.id)} className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
-                    </td>
-                    <td className="px-6 py-4 font-black text-blue-600 hover:text-blue-800 hover:underline"><Link href={`/dashboard/ventas/cotizacion/${cot.id.toLowerCase()}`}>{cot.id}</Link></td>
-                    <td className="px-6 py-4 text-slate-500 text-xs font-medium">{cot.fecha}</td>
-                    <td className="px-6 py-4 font-bold text-slate-700">{cot.cliente}</td>
-                    <td className="px-6 py-4">
-                      <span className="bg-slate-100 text-slate-700 px-2 py-1 rounded text-xs font-bold border border-slate-200">
-                        {cot.origen_sc}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 font-black text-slate-800">{cot.monto}</td>
-                    <td className="px-6 py-4">
-                      <span className={`px-2.5 py-1 rounded-md text-xs font-bold border ${
-                        cot.estado === 'Pendiente por Cotizar' ? 'bg-amber-50 text-amber-700 border-amber-200' :
-                        cot.estado === 'Cotizado - Pendiente Conf.' ? 'bg-blue-50 text-blue-700 border-blue-200' :
-                        'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      }`}>
-                        {cot.estado}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-xs font-bold ${cot.desatendida ? 'text-rose-600' : 'text-slate-500'}`}>{cot.ultimaAct}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        <div className="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center text-[10px] font-bold text-slate-600 border border-slate-300">
-                          {cot.responsable.split(' ').map(n => n[0]).join('')}
-                        </div>
-                        <span className="font-medium text-slate-700">{cot.responsable}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <button className="text-slate-400 hover:text-blue-600 transition-colors">
-                        <MoreVertical size={18} />
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge estado={selected.estado} />
+                {selected.pec_numero && <span className="text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-bold">{selected.pec_numero}</span>}
+              </div>
+
+              {/* Cliente */}
+              <div className="bg-slate-50 rounded-2xl p-4">
+                <p className="text-xs font-black text-slate-400 uppercase mb-2">Cliente</p>
+                <div className="font-bold text-slate-800 mb-1">{selected.customer_name}</div>
+                {selected.customer_phone && <a href={`tel:${selected.customer_phone}`} className="flex items-center gap-1.5 text-sm text-slate-600 hover:text-emerald-600 mb-0.5"><Phone size={12} />{selected.customer_phone}</a>}
+                {selected.customer_email && <a href={`mailto:${selected.customer_email}`} className="flex items-center gap-1.5 text-sm text-slate-600 hover:text-indigo-600 mb-0.5"><Mail size={12} />{selected.customer_email}</a>}
+                {selected.customer_address && <p className="flex items-center gap-1.5 text-sm text-slate-600"><MapPin size={12} />{selected.customer_address}</p>}
+              </div>
+
+              {/* Fechas y financiero */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-slate-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Cotizacion</p><p className="font-bold text-sm">{fDate(selected.fecha_cotizacion)}</p></div>
+                <div className="bg-slate-50 rounded-xl p-3"><p className="text-xs text-slate-400 mb-1">Entrega Est.</p><p className="font-bold text-sm">{fDate(selected.fecha_entrega_estimada)}</p></div>
+                <div className="bg-indigo-50 rounded-xl p-3"><p className="text-xs text-indigo-600 mb-1">Total COP</p><p className="font-extrabold text-base text-indigo-700">{fCOP(selected.total_cop)}</p></div>
+                <div className="bg-emerald-50 rounded-xl p-3"><p className="text-xs text-emerald-600 mb-1">Anticipo (50%)</p><p className="font-extrabold text-base text-emerald-700">{fCOP(selected.anticipo_cop)}</p></div>
+              </div>
+
+              {/* Products */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-black text-slate-400 uppercase">Productos</p>
+                  <button onClick={() => { setEditingProd(!editingProd); setEditProds(selected.productos || []); }}
+                    className="text-xs font-bold text-indigo-600 hover:underline flex items-center gap-1">
+                    {editingProd ? 'Cancelar' : 'Editar productos'}
+                  </button>
+                </div>
+
+                {editingProd ? (
+                  <div>
+                    <div className="border border-slate-100 rounded-xl overflow-hidden mb-3">
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50"><tr className="text-slate-400">
+                          <th className="px-3 py-2 text-left">Producto</th><th className="px-3 py-2 text-right">Qty</th>
+                          <th className="px-3 py-2 text-right">Precio COP</th><th className="px-3 py-2 text-right">Total</th><th></th>
+                        </tr></thead>
+                        <tbody>
+                          {editProds.map((p, i) => (
+                            <tr key={i} className="border-t border-slate-50">
+                              <td className="px-3 py-2">
+                                <input value={p.product_name} onChange={e => { const n=[...editProds]; n[i].product_name=e.target.value; setEditProds(n); }}
+                                  className="w-full border border-slate-200 rounded px-1.5 py-1 outline-none text-xs" />
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                <input type="number" value={p.qty} onChange={e => { const n=[...editProds]; n[i].qty=parseInt(e.target.value)||1; setEditProds(n); }}
+                                  className="w-14 border border-slate-200 rounded px-1.5 py-1 outline-none text-xs text-right" />
+                              </td>
+                              <td className="px-3 py-2 text-right">
+                                <input type="number" value={p.unit_price_cop} onChange={e => { const n=[...editProds]; n[i].unit_price_cop=parseFloat(e.target.value)||0; setEditProds(n); }}
+                                  className="w-24 border border-slate-200 rounded px-1.5 py-1 outline-none text-xs text-right" />
+                              </td>
+                              <td className="px-3 py-2 text-right font-bold">{fCOP(p.qty*(p.unit_price_cop||0))}</td>
+                              <td className="px-3 py-2">
+                                <button type="button" onClick={() => setEditProds(prev=>prev.filter((_,j)=>j!==i))} className="text-red-400 hover:text-red-600"><X size={11} /></button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="grid grid-cols-5 gap-2 mb-3">
+                      <input placeholder="Producto" value={newProd.product_name} onChange={e=>setNewProd(p=>({...p,product_name:e.target.value}))}
+                        className="col-span-2 border border-slate-200 rounded-lg px-2 py-1.5 text-xs outline-none" />
+                      <input type="number" placeholder="Qty" value={newProd.qty} onChange={e=>setNewProd(p=>({...p,qty:parseInt(e.target.value)||1}))}
+                        className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs outline-none" />
+                      <input type="number" placeholder="Precio COP" value={newProd.unit_price_cop||''} onChange={e=>setNewProd(p=>({...p,unit_price_cop:parseFloat(e.target.value)||0}))}
+                        className="border border-slate-200 rounded-lg px-2 py-1.5 text-xs outline-none" />
+                      <button type="button" onClick={addProd} className="bg-indigo-100 hover:bg-indigo-200 text-indigo-700 rounded-lg px-2 py-1.5 text-xs font-bold flex items-center justify-center"><Plus size={12} /></button>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-bold text-slate-700">Total: {fCOP(totalCOP)} &bull; Anticipo: {fCOP(totalCOP*0.5)}</p>
+                      <button onClick={saveProds} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1">
+                        <Check size={12} /> Guardar
                       </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    </div>
+                  </div>
+                ) : (
+                  selected.productos?.length > 0 ? (
+                    <div className="border border-slate-100 rounded-xl overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50"><tr className="text-slate-400 uppercase">
+                          <th className="px-3 py-2 text-left">Producto</th><th className="px-3 py-2 text-right">Qty</th>
+                          <th className="px-3 py-2 text-right">Precio</th><th className="px-3 py-2 text-right">Total</th>
+                        </tr></thead>
+                        <tbody>
+                          {selected.productos.map((p: any, i: number) => (
+                            <tr key={i} className="border-t border-slate-50">
+                              <td className="px-3 py-2 font-medium">{p.product_name}</td>
+                              <td className="px-3 py-2 text-right">{p.qty}</td>
+                              <td className="px-3 py-2 text-right">{fCOP(p.unit_price_cop)}</td>
+                              <td className="px-3 py-2 text-right font-bold">{fCOP(p.qty*p.unit_price_cop)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : <p className="text-sm text-slate-400 italic">Sin productos. Haz clic en "Editar productos".</p>
+                )}
+              </div>
 
-          <div className="flex items-center justify-between px-6 py-4 border-t border-slate-100 bg-white">
-            <span className="text-sm text-slate-500">Mostrando 1 a 24 de 124 cotizaciones</span>
-            <div className="flex items-center gap-1">
-              <button className="px-3 py-1 text-sm font-medium text-slate-400 hover:text-slate-700 transition-colors">Anterior</button>
-              <button className="w-8 h-8 rounded-lg bg-blue-600 text-white text-sm font-bold shadow-sm">1</button>
-              <button className="w-8 h-8 rounded-lg text-slate-600 hover:bg-slate-100 text-sm font-medium transition-colors">2</button>
-              <button className="w-8 h-8 rounded-lg text-slate-600 hover:bg-slate-100 text-sm font-medium transition-colors">3</button>
-              <span className="text-slate-400 px-2">...</span>
-              <button className="w-8 h-8 rounded-lg text-slate-600 hover:bg-slate-100 text-sm font-medium transition-colors">5</button>
-              <button className="px-3 py-1 text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors">Siguiente</button>
+              {/* Linked VEN */}
+              {selected.pedidos_venta?.length > 0 && (
+                <div>
+                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Pedidos de Venta</p>
+                  {selected.pedidos_venta.map((v: any) => (
+                    <a key={v.id} href="/dashboard/ventas/venta"
+                      className="flex items-center justify-between p-3 bg-emerald-50 rounded-xl mb-2 hover:bg-emerald-100">
+                      <span className="font-bold text-emerald-700">{v.numero}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-emerald-600">{v.estado}</span>
+                        <ChevronRight size={14} className="text-emerald-400" />
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              )}
+
+              {/* Actividades */}
+              {selected.actividades?.length > 0 && (
+                <div>
+                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Actividad</p>
+                  <div className="space-y-2">
+                    {selected.actividades.map((a: any) => (
+                      <div key={a.id} className="flex gap-3">
+                        <div className="w-1.5 h-1.5 rounded-full bg-amber-400 mt-2 flex-shrink-0" />
+                        <div>
+                          <p className="text-sm text-slate-700">{a.description}</p>
+                          <p className="text-xs text-slate-400">{fDate(a.created_at)} &bull; {a.user_name || 'Sistema'}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-          </>
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-slate-400 py-12">
-            <LayoutGrid size={48} className="mb-4 opacity-20" />
-            <p className="font-bold text-lg text-slate-500">Vista Kanban en construcción</p>
           </div>
         )}
       </div>
