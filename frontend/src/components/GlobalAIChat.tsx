@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import { Sparkles, X, Send, Bot, Minimize2, Maximize2, Paperclip } from 'lucide-react';
-import toast from 'react-hot-toast';
+
 
 export function GlobalAIChat() {
   const pathname = usePathname();
@@ -34,55 +34,78 @@ export function GlobalAIChat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isOpen]);
 
-  // WebSocket Connection
+  // WebSocket Connection — silently degraded if endpoint not available
   useEffect(() => {
-    const socket = new WebSocket('wss://api.nebulaekids.com/ws/chat/global');
-    
-    socket.onopen = () => {
-      console.log('Conectado a Nebulae AI Production');
-    };
-    
-    socket.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        setMessages(prev => [...prev, { role: 'ai', text: data.message || event.data }]);
-      } catch(e) {
-        setMessages(prev => [...prev, { role: 'ai', text: event.data }]);
-      }
-    };
-    
-    socket.onerror = (error) => {
-      console.error('WebSocket Error:', error);
-    };
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket('wss://api.nebulaekids.com/ws/chat/global');
 
-    setWs(socket);
+      socket.onopen = () => {
+        // Connected successfully
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          setMessages(prev => [...prev, { role: 'ai', text: data.message || event.data }]);
+        } catch {
+          setMessages(prev => [...prev, { role: 'ai', text: event.data }]);
+        }
+      };
+
+      // Suppress error — endpoint may not exist yet; chat still works via REST fallback
+      socket.onerror = () => { /* silenced — WS endpoint pending deployment */ };
+      socket.onclose = () => { /* silenced */ };
+
+      setWs(socket);
+    } catch {
+      // WebSocket not available in this environment — REST fallback will be used
+    }
 
     return () => {
-      socket.close();
+      try { socket?.close(); } catch { /* silenced */ }
     };
   }, []);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!input.trim()) return;
-    
-    // Add user message to UI
-    setMessages(prev => [...prev, { role: 'user', text: input }]);
-    
-    // Send to WS
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ 
-        context: moduleName, 
-        message: input 
-      }));
-    } else {
-      toast.error('Conexión con IA perdida. Intentando reconectar...');
-      // Simulamos que al menos muestra algo de error local
-      setTimeout(() => {
-        setMessages(prev => [...prev, { role: 'ai', text: 'Error: No se pudo contactar al MCP Agent de producción.' }]);
-      }, 500);
-    }
-    
+    const userMsg = input;
     setInput('');
+
+    setMessages(prev => [...prev, { role: 'user', text: userMsg }]);
+
+    // Try WebSocket first
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ context: moduleName, message: userMsg }));
+      return;
+    }
+
+    // REST fallback — try backend chat endpoint
+    try {
+      const token = localStorage.getItem('access_token');
+      const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
+      const res = await fetch(`${API_BASE}/chat/message`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ context: moduleName, message: userMsg }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setMessages(prev => [...prev, { role: 'ai', text: data.message || data.data?.message || 'Respuesta recibida.' }]);
+        return;
+      }
+    } catch { /* fallthrough to offline message */ }
+
+    // Offline message
+    setTimeout(() => {
+      setMessages(prev => [...prev, {
+        role: 'ai',
+        text: `[Nebulae AI] El servicio de IA no esta disponible en este momento. Tu mensaje fue: "${userMsg}". Por favor intenta mas tarde.`,
+      }]);
+    }, 300);
   };
 
   if (!isOpen) {
