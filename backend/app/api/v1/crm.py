@@ -503,10 +503,12 @@ def get_leads(
     offset: int = 0,
     stage_id: int = None,
     search: str = None,
+    customer_id: int = None,
+    advisor_name: str = None,
 ):
     """
     Optimized: single JOIN query — O(1) DB round trips regardless of lead count.
-    Previously: N+1 queries (1 per lead) → extremely slow at scale.
+    Supports filtering by customer_id and advisor_name for the omnichannel view.
     """
     # ── Build base query with JOIN ──────────────────────────────────────────
     q = (
@@ -517,6 +519,10 @@ def get_leads(
     )
     if stage_id:
         q = q.filter(SalesOrder.pipeline_stage_id == stage_id)
+    if customer_id:
+        q = q.filter(SalesOrder.customer_id == customer_id)
+    if advisor_name:
+        q = q.filter(SalesOrder.advisor_name.ilike(f"%{advisor_name}%"))
     if search:
         pattern = f"%{search}%"
         q = q.filter(
