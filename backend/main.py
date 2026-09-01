@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-from app.api.v1 import auth, catalog, quotations, inventory, finance, store, crm, sales, purchases, webhooks, marketing
+from app.api.v1 import auth, catalog, quotations, inventory, finance, store, crm, sales, purchases, webhooks, marketing, chat
 from app.api import ws
 from app.db.database import Base, engine
 
@@ -14,7 +14,13 @@ app = FastAPI(title="Nebulae ERP & CRM API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5100", "http://127.0.0.1:5100"],
+    allow_origins=[
+        "http://localhost:5100",
+        "http://127.0.0.1:5100",
+        "https://nebulaekids.com",
+        "https://www.nebulaekids.com",
+        "*",   # Allow web chat widget from any domain
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -46,6 +52,7 @@ app.include_router(sales.router, prefix="/api/v1/sales", tags=["Sales"])
 app.include_router(purchases.router, prefix="/api/v1/purchases", tags=["Purchases"])
 app.include_router(webhooks.router, prefix="/api/v1/webhooks", tags=["Webhooks"])
 app.include_router(marketing.router, prefix="/api/v1/marketing", tags=["Marketing"])
+app.include_router(chat.router, prefix="/api/v1/chat", tags=["Chat Omnicanal"])
 app.include_router(ws.router, prefix="/ws", tags=["WebSockets"])
 
 @app.get("/")
