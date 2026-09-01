@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
@@ -6,10 +6,22 @@ import {
   Paperclip, CheckCheck, Bot, Sparkles, FileText, ChevronRight,
   X, Calculator, ArrowRight, Phone, Mail, RefreshCw, Plus,
   Edit3, Trash2, MoveRight, ShoppingCart, Package, User,
-  Clock, AlertCircle, ChevronDown, ExternalLink, Zap, Instagram,
-  Facebook, Wifi, Circle, Check, XCircle
+  Clock, AlertCircle, ChevronDown, ExternalLink, Zap,
+  Circle, Check, Camera, Users
 } from 'lucide-react';
 import { calculateQuotation } from '@/lib/api';
+
+// Inline SVG icons for social channels (lucide-react doesn't have brand icons)
+const IGIcon = ({ size = 22, ...p }: { size?: number; [k: string]: any }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round" {...p}>
+    <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/>
+  </svg>
+);
+const FBIcon = ({ size = 22, ...p }: { size?: number; [k: string]: any }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round" {...p}>
+    <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/>
+  </svg>
+);
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
 
@@ -26,20 +38,20 @@ async function apiFetch(path: string, opts: RequestInit = {}) {
   return data.data ?? data;
 }
 
-// ── Channel config ─────────────────────────────────────────────────────────
+// â”€â”€ Channel config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const CHANNEL_CONFIG = {
   all:       { label: 'Todos',     color: '#6366f1', bg: '#eef2ff', Icon: LayoutGrid },
   web:       { label: 'Web Chat',  color: '#0ea5e9', bg: '#f0f9ff', Icon: Globe },
   whatsapp:  { label: 'WhatsApp',  color: '#25d366', bg: '#f0fdf4', Icon: MessageCircle },
-  instagram: { label: 'Instagram', color: '#e1306c', bg: '#fdf2f8', Icon: Instagram },
-  facebook:  { label: 'Facebook',  color: '#1877f2', bg: '#eff6ff', Icon: Facebook },
+  instagram: { label: 'Instagram', color: '#e1306c', bg: '#fdf2f8', Icon: IGIcon },
+  facebook:  { label: 'Facebook',  color: '#1877f2', bg: '#eff6ff', Icon: FBIcon },
 };
 
-// ── Status badge ──────────────────────────────────────────────────────────
+// â”€â”€ Status badge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const STATUS_COLORS: Record<string, string> = {
   'Nuevo Lead':         'bg-blue-100 text-blue-700',
   'Solicitud':          'bg-purple-100 text-purple-700',
-  'Cotización':         'bg-amber-100 text-amber-700',
+  'CotizaciÃ³n':         'bg-amber-100 text-amber-700',
   'Pendiente de Pago':  'bg-rose-100 text-rose-700',
   'Pedido de Venta':    'bg-emerald-100 text-emerald-700',
   'DRAFT':   'bg-blue-100 text-blue-700',
@@ -65,7 +77,7 @@ function initials(name: string) {
   return name.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase();
 }
 
-// ══ MAIN COMPONENT ══════════════════════════════════════════════════════════
+// â•â• MAIN COMPONENT â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 export default function AsistenteOmnicanal() {
   // Layout
   const [inboxWidth, setInboxWidth]   = useState(300);
@@ -112,14 +124,14 @@ export default function AsistenteOmnicanal() {
   const pollMsgsRef  = useRef<NodeJS.Timeout | null>(null);
   const lastMsgTimeRef = useRef<string | null>(null);
 
-  // ── Load pipeline stages (for CRM col 4) ───────────────────────────────
+  // â”€â”€ Load pipeline stages (for CRM col 4) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
     apiFetch('/crm/pipeline-stages/config')
       .then(d => setCrmStages(Array.isArray(d) ? d : (d?.data ?? [])))
       .catch(() => {});
   }, []);
 
-  // ── Load conversations (inbox) ─────────────────────────────────────────
+  // â”€â”€ Load conversations (inbox) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const loadConversations = useCallback(async () => {
     try {
       const channel = activeChannel === 'all' ? '' : activeChannel;
@@ -142,7 +154,7 @@ export default function AsistenteOmnicanal() {
     return () => { if (pollInboxRef.current) clearInterval(pollInboxRef.current); };
   }, [activeChannel]);
 
-  // ── Load messages for selected conversation ────────────────────────────
+  // â”€â”€ Load messages for selected conversation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const loadMessages = useCallback(async (convId: number, since: string | null = null) => {
     try {
       const q = since ? `?since=${encodeURIComponent(since)}` : '';
@@ -180,7 +192,7 @@ export default function AsistenteOmnicanal() {
     return () => { if (pollMsgsRef.current) clearInterval(pollMsgsRef.current); };
   }, [activeConvId]);
 
-  // ── Load CRM leads for customer in active conversation ─────────────────
+  // â”€â”€ Load CRM leads for customer in active conversation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
     if (!activeConv?.customer_id) { setCrmLeads([]); return; }
     apiFetch(`/crm/leads?search=`)
@@ -192,12 +204,12 @@ export default function AsistenteOmnicanal() {
       .catch(() => setCrmLeads([]));
   }, [activeConv?.customer_id]);
 
-  // ── Scroll to bottom on new messages ──────────────────────────────────
+  // â”€â”€ Scroll to bottom on new messages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // ── AI suggestion on conversation change ──────────────────────────────
+  // â”€â”€ AI suggestion on conversation change â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
     if (!activeConvId || aiMode === 'off') { setAiSuggestion(''); return; }
     setLoadingAI(true);
@@ -207,7 +219,7 @@ export default function AsistenteOmnicanal() {
       .finally(() => setLoadingAI(false));
   }, [activeConvId, messages.length]);
 
-  // ── Send message ───────────────────────────────────────────────────────
+  // â”€â”€ Send message â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function sendMessage() {
     if (!inputText.trim() || !activeConvId || sending) return;
     const content = inputText.trim();
@@ -231,13 +243,13 @@ export default function AsistenteOmnicanal() {
     setSending(false);
   }
 
-  // ── Insert AI suggestion ───────────────────────────────────────────────
+  // â”€â”€ Insert AI suggestion â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   function insertSuggestion() {
     setInputText(aiSuggestion);
     textareaRef.current?.focus();
   }
 
-  // ── Toggle AI mode ─────────────────────────────────────────────────────
+  // â”€â”€ Toggle AI mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function toggleAiMode(mode: 'auto' | 'suggestion' | 'off') {
     if (!activeConvId) return;
     setAiMode(mode);
@@ -247,7 +259,7 @@ export default function AsistenteOmnicanal() {
     }).catch(() => {});
   }
 
-  // ── Open lead detail modal ─────────────────────────────────────────────
+  // â”€â”€ Open lead detail modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   function openLeadDetail(lead: any) {
     setSelectedLead(lead);
     setEditLeadForm({
@@ -261,7 +273,7 @@ export default function AsistenteOmnicanal() {
     setShowLeadModal(true);
   }
 
-  // ── Save lead edits ────────────────────────────────────────────────────
+  // â”€â”€ Save lead edits â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function saveLead() {
     if (!selectedLead) return;
     setSavingLead(true);
@@ -278,7 +290,7 @@ export default function AsistenteOmnicanal() {
     setSavingLead(false);
   }
 
-  // ── Move lead to stage ─────────────────────────────────────────────────
+  // â”€â”€ Move lead to stage â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function moveLeadToStage(lead: any, stageId: number) {
     const stage = crmStages.find(s => s.id === stageId);
     if (!stage) return;
@@ -296,11 +308,11 @@ export default function AsistenteOmnicanal() {
     }
   }
 
-  // ── Lead action (to-solicitud, to-cotizacion) ──────────────────────────
+  // â”€â”€ Lead action (to-solicitud, to-cotizacion) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function leadAction(lead: any, action: string) {
     try {
       const r = await apiFetch(`/crm/leads/${lead.id}/${action}`, { method: 'POST' });
-      alert(r.message || 'Acción completada');
+      alert(r.message || 'AcciÃ³n completada');
       // Refresh leads
       if (activeConv?.customer_id) {
         const all = await apiFetch(`/crm/leads`);
@@ -312,7 +324,7 @@ export default function AsistenteOmnicanal() {
     }
   }
 
-  // ── Quotation calculation ──────────────────────────────────────────────
+  // â”€â”€ Quotation calculation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function handleCalculate(e: React.FormEvent) {
     e.preventDefault();
     setIsCalculating(true);
@@ -325,11 +337,11 @@ export default function AsistenteOmnicanal() {
         parseFloat(quoteForm.trm)
       );
       setQuoteResult(result);
-    } catch { alert('Error calculando cotización'); }
+    } catch { alert('Error calculando cotizaciÃ³n'); }
     finally { setIsCalculating(false); }
   }
 
-  // ── Resize handlers ────────────────────────────────────────────────────
+  // â”€â”€ Resize handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   function startDragInbox(e: React.MouseEvent) {
     e.preventDefault();
     const startX = e.pageX, startW = inboxWidth;
@@ -352,16 +364,16 @@ export default function AsistenteOmnicanal() {
     document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
   }
 
-  // ── Active conversation for display ──────────────────────────────────
+  // â”€â”€ Active conversation for display â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const activeConvData = conversations.find(c => c.id === activeConvId) || activeConv;
   const ChannelIcon = activeConvData ? (CHANNEL_CONFIG[activeConvData.channel as keyof typeof CHANNEL_CONFIG]?.Icon || Globe) : Globe;
   const channelColor = activeConvData ? (CHANNEL_CONFIG[activeConvData.channel as keyof typeof CHANNEL_CONFIG]?.color || '#6366f1') : '#6366f1';
 
-  // ══ RENDER ══════════════════════════════════════════════════════════════
+  // â•â• RENDER â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   return (
     <div className="h-full w-full bg-white flex overflow-hidden">
 
-      {/* ── COL 1: CHANNEL SIDEBAR ─────────────────────────────────────── */}
+      {/* â”€â”€ COL 1: CHANNEL SIDEBAR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <div className="w-20 bg-slate-50 border-r border-slate-200 flex flex-col items-center py-5 gap-3 flex-shrink-0 z-10">
         {Object.entries(CHANNEL_CONFIG).map(([id, cfg]) => {
           const unread = id === 'all'
@@ -395,14 +407,14 @@ export default function AsistenteOmnicanal() {
         <a
           href="/chat"
           target="_blank"
-          title="Widget de chat público"
+          title="Widget de chat pÃºblico"
           className="p-2.5 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-xl transition-colors"
         >
           <ExternalLink size={16}/>
         </a>
       </div>
 
-      {/* ── COL 2: INBOX ──────────────────────────────────────────────── */}
+      {/* â”€â”€ COL 2: INBOX â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <div
         className="bg-white border-r border-slate-200 flex flex-col flex-shrink-0 relative"
         style={{ width: inboxWidth }}
@@ -486,7 +498,7 @@ export default function AsistenteOmnicanal() {
           {!loadingConvs && conversations.length === 0 && (
             <div className="flex flex-col items-center justify-center p-8 text-slate-400">
               <MessageCircle size={32} className="mb-2 opacity-40"/>
-              <p className="text-xs text-center">Sin conversaciones. El chat web ya está activo en <a href="/chat" target="_blank" className="text-indigo-500 underline">/chat</a></p>
+              <p className="text-xs text-center">Sin conversaciones. El chat web ya estÃ¡ activo en <a href="/chat" target="_blank" className="text-indigo-500 underline">/chat</a></p>
             </div>
           )}
         </div>
@@ -494,7 +506,7 @@ export default function AsistenteOmnicanal() {
         <div onMouseDown={startDragInbox} className="absolute right-0 top-0 bottom-0 w-1.5 hover:bg-indigo-400/40 cursor-col-resize bg-transparent z-20"/>
       </div>
 
-      {/* ── COL 3: CHAT THREAD ─────────────────────────────────────────── */}
+      {/* â”€â”€ COL 3: CHAT THREAD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <div className="flex-1 flex flex-col min-w-[280px] bg-slate-50/30">
         {/* Header */}
         <div className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-5 flex-shrink-0">
@@ -511,7 +523,7 @@ export default function AsistenteOmnicanal() {
                     <span className="text-[10px] text-slate-400">{CHANNEL_CONFIG[activeConvData.channel as keyof typeof CHANNEL_CONFIG]?.label}</span>
                     {activeConvData.channel === 'web' && (
                       <span className="flex items-center gap-0.5 text-[9px] text-emerald-500 font-bold">
-                        <Circle size={6} className="fill-emerald-500"/> en línea
+                        <Circle size={6} className="fill-emerald-500"/> en lÃ­nea
                       </span>
                     )}
                   </div>
@@ -527,7 +539,7 @@ export default function AsistenteOmnicanal() {
               </div>
             </>
           ) : (
-            <p className="text-slate-400 text-sm">Selecciona una conversación</p>
+            <p className="text-slate-400 text-sm">Selecciona una conversaciÃ³n</p>
           )}
         </div>
 
@@ -540,7 +552,7 @@ export default function AsistenteOmnicanal() {
           ) : messages.length === 0 && activeConvId ? (
             <div className="flex flex-col items-center justify-center h-full text-slate-400">
               <MessageCircle size={40} className="mb-3 opacity-30"/>
-              <p className="text-sm">Aún no hay mensajes</p>
+              <p className="text-sm">AÃºn no hay mensajes</p>
             </div>
           ) : (
             messages.map(msg => (
@@ -614,7 +626,7 @@ export default function AsistenteOmnicanal() {
         )}
       </div>
 
-      {/* ── COL 4: CRM + AI ───────────────────────────────────────────── */}
+      {/* â”€â”€ COL 4: CRM + AI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <div
         className="bg-slate-50 border-l border-slate-200 flex flex-col relative flex-shrink-0"
         style={{ width: col4Width }}
@@ -622,7 +634,7 @@ export default function AsistenteOmnicanal() {
         {/* Resize handle left */}
         <div onMouseDown={startDragCol4} className="absolute left-0 top-0 bottom-0 w-1.5 hover:bg-indigo-400/40 cursor-col-resize bg-transparent z-20 -ml-px"/>
 
-        {/* ── CRM TOP PANEL ─────────────────────────────────────────── */}
+        {/* â”€â”€ CRM TOP PANEL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <div className="flex flex-col bg-white border-b border-slate-200 relative" style={{ height: crmHeight }}>
           {/* Customer header */}
           <div className="px-4 py-3 border-b border-slate-100 flex-shrink-0">
@@ -651,7 +663,7 @@ export default function AsistenteOmnicanal() {
               </a>
             ) : (
               <p className="text-[10px] text-amber-600 font-medium flex items-center gap-1">
-                <AlertCircle size={10}/> Conversación no vinculada a un cliente
+                <AlertCircle size={10}/> ConversaciÃ³n no vinculada a un cliente
               </p>
             )}
           </div>
@@ -686,7 +698,7 @@ export default function AsistenteOmnicanal() {
                       {lead.lead_product_name && <p className="text-[10px] text-slate-500 truncate flex items-center gap-1"><Package size={9}/> {lead.lead_product_name}</p>}
                       <div className="flex justify-between items-center mt-1">
                         <p className="text-xs font-black text-slate-800">
-                          {lead.value > 0 ? `$${Number(lead.value).toLocaleString('es-CO')}` : '—'}
+                          {lead.value > 0 ? `$${Number(lead.value).toLocaleString('es-CO')}` : 'â€”'}
                         </p>
                         <span className="text-[9px] text-indigo-600 font-bold group-hover:underline flex items-center gap-0.5">
                           Gestionar <ChevronRight size={9}/>
@@ -702,7 +714,7 @@ export default function AsistenteOmnicanal() {
           <div onMouseDown={startDragCrmH} className="absolute bottom-0 left-0 right-0 h-1.5 cursor-row-resize hover:bg-indigo-400/40 bg-transparent z-20"/>
         </div>
 
-        {/* ── AI AGENT PANEL ────────────────────────────────────────── */}
+        {/* â”€â”€ AI AGENT PANEL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
         <div className="flex-1 flex flex-col overflow-hidden bg-gradient-to-b from-white to-indigo-50/30">
           {/* AI header */}
           <div className="px-4 py-2.5 bg-white border-b border-indigo-100 flex items-center justify-between flex-shrink-0">
@@ -741,7 +753,7 @@ export default function AsistenteOmnicanal() {
                 <p className="text-[9px] font-black text-slate-400 uppercase mb-0.5">Estado</p>
                 <p className="text-xs font-bold text-slate-700 leading-snug">
                   {aiMode === 'off'    ? 'IA desactivada. Solo el asesor responde.' :
-                   aiMode === 'auto'   ? 'Modo AUTO: respondiendo automáticamente por el asesor.' :
+                   aiMode === 'auto'   ? 'Modo AUTO: respondiendo automÃ¡ticamente por el asesor.' :
                    'Modo SUGERENCIA: sugiriendo respuestas al asesor.'}
                 </p>
               </div>
@@ -756,7 +768,7 @@ export default function AsistenteOmnicanal() {
                   <p className="text-[10px] text-indigo-800"><span className="font-bold">Leads activos:</span> {crmLeads.length}</p>
                   <p className="text-[10px] text-indigo-800"><span className="font-bold">Mensajes:</span> {messages.length}</p>
                   {crmLeads.length > 0 && (
-                    <p className="text-[10px] text-indigo-800"><span className="font-bold">Último estado:</span> {crmLeads[0].stage_name || crmLeads[0].status}</p>
+                    <p className="text-[10px] text-indigo-800"><span className="font-bold">Ãšltimo estado:</span> {crmLeads[0].stage_name || crmLeads[0].status}</p>
                   )}
                 </div>
               </div>
@@ -797,7 +809,7 @@ export default function AsistenteOmnicanal() {
         </div>
       </div>
 
-      {/* ══ LEAD DETAIL MODAL ══════════════════════════════════════════════ */}
+      {/* â•â• LEAD DETAIL MODAL â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       {showLeadModal && selectedLead && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-100">
@@ -871,7 +883,7 @@ export default function AsistenteOmnicanal() {
 
               {/* Description */}
               <div>
-                <label className="text-[10px] font-black text-slate-500 uppercase block mb-1">Descripción</label>
+                <label className="text-[10px] font-black text-slate-500 uppercase block mb-1">DescripciÃ³n</label>
                 <textarea
                   value={editLeadForm.lead_description}
                   onChange={e => setEditLeadForm((f: any) => ({ ...f, lead_description: e.target.value }))}
@@ -892,7 +904,7 @@ export default function AsistenteOmnicanal() {
 
               {/* Actions */}
               <div className="pt-2 border-t border-slate-100">
-                <p className="text-[10px] font-black text-slate-500 uppercase mb-2">Acciones rápidas</p>
+                <p className="text-[10px] font-black text-slate-500 uppercase mb-2">Acciones rÃ¡pidas</p>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     onClick={() => leadAction(selectedLead, 'to-solicitud')}
@@ -904,10 +916,10 @@ export default function AsistenteOmnicanal() {
                     onClick={() => leadAction(selectedLead, 'to-cotizacion')}
                     className="flex items-center justify-center gap-1.5 py-2 px-3 bg-amber-50 border border-amber-200 text-amber-700 rounded-xl text-xs font-bold hover:bg-amber-100 transition-colors"
                   >
-                    <Calculator size={13}/> Crear Cotización
+                    <Calculator size={13}/> Crear CotizaciÃ³n
                   </button>
                   <button
-                    onClick={() => { if (confirm('¿Mover a Pedido de Venta?')) { const s = crmStages.find(s => s.name.toLowerCase().includes('pedido')); if (s) moveLeadToStage(selectedLead, s.id); } }}
+                    onClick={() => { if (confirm('Â¿Mover a Pedido de Venta?')) { const s = crmStages.find(s => s.name.toLowerCase().includes('pedido')); if (s) moveLeadToStage(selectedLead, s.id); } }}
                     className="flex items-center justify-center gap-1.5 py-2 px-3 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl text-xs font-bold hover:bg-emerald-100 transition-colors"
                   >
                     <ShoppingCart size={13}/> Crear Pedido
@@ -940,7 +952,7 @@ export default function AsistenteOmnicanal() {
         </div>
       )}
 
-      {/* ══ QUOTATION MODAL ════════════════════════════════════════════════ */}
+      {/* â•â• QUOTATION MODAL â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       {showQuoteModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-xl overflow-hidden border border-slate-100">
@@ -948,7 +960,7 @@ export default function AsistenteOmnicanal() {
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-indigo-600 text-white rounded-xl shadow-sm"><Calculator size={20}/></div>
                 <div>
-                  <h3 className="font-extrabold text-slate-800 text-lg">Cotizador Rápido</h3>
+                  <h3 className="font-extrabold text-slate-800 text-lg">Cotizador RÃ¡pido</h3>
                   <p className="text-xs text-slate-500">Motor Financiero TRM</p>
                 </div>
               </div>
@@ -961,7 +973,7 @@ export default function AsistenteOmnicanal() {
                     { label: 'Costo (USD)', key: 'costUsd', type: 'number', placeholder: '120.00' },
                     { label: 'Descuento (%)', key: 'discount', type: 'number', placeholder: '0' },
                     { label: 'Peso (Libras)', key: 'weightLb', type: 'number', placeholder: '1' },
-                    { label: 'TRM del día', key: 'trm', type: 'number', placeholder: '4200' },
+                    { label: 'TRM del dÃ­a', key: 'trm', type: 'number', placeholder: '4200' },
                   ].map(({ label, key, type, placeholder }) => (
                     <div key={key}>
                       <label className="block text-xs font-bold text-slate-500 mb-1">{label}</label>
@@ -992,13 +1004,13 @@ export default function AsistenteOmnicanal() {
                   <button
                     onClick={async () => {
                       if (!activeConvId) return;
-                      const msg = `💰 Cotización:\n• Costo total: $${quoteResult.total_cost_cop?.toLocaleString('es-CO')} COP\n• Precio sugerido: $${quoteResult.suggested_price_cop?.toLocaleString('es-CO')} COP\n• Anticipo (50%): $${quoteResult.advance_payment_cop?.toLocaleString('es-CO')} COP`;
+                      const msg = `ðŸ’° CotizaciÃ³n:\nâ€¢ Costo total: $${quoteResult.total_cost_cop?.toLocaleString('es-CO')} COP\nâ€¢ Precio sugerido: $${quoteResult.suggested_price_cop?.toLocaleString('es-CO')} COP\nâ€¢ Anticipo (50%): $${quoteResult.advance_payment_cop?.toLocaleString('es-CO')} COP`;
                       setInputText(msg);
                       setShowQuoteModal(false);
                     }}
                     className="w-full mt-3 bg-slate-800 text-white font-bold py-2.5 rounded-xl hover:bg-slate-900 transition-colors text-sm flex items-center justify-center gap-2"
                   >
-                    <Send size={14}/> Enviar cotización al chat
+                    <Send size={14}/> Enviar cotizaciÃ³n al chat
                   </button>
                 </div>
               )}
@@ -1009,3 +1021,4 @@ export default function AsistenteOmnicanal() {
     </div>
   );
 }
+
