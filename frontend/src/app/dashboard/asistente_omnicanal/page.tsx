@@ -55,10 +55,12 @@ const SOLICITUD_TIPOS = [
 
 // â”€â”€ Font size presets â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 type FontSize = 'sm' | 'md' | 'lg';
-const FS: Record<FontSize, { name: string; name2: string; conv: string; convSub: string; lead: string; leadSub: string; badge: string }> = {
-  sm: { name: 'xs font-bold',     name2: '[9px] text-slate-400',   conv: '[9px]',   convSub: '[8px]',   lead: '[9px]',   leadSub: '[8px]',   badge: '[7px]' },
-  md: { name: 'xs font-bold',     name2: '[10px] text-slate-400',  conv: '[10px]',  convSub: '[9px]',   lead: '[10px]',  leadSub: '[9px]',   badge: '[8px]' },
-  lg: { name: 'sm font-bold',     name2: 'xs text-slate-400',      conv: 'xs',      convSub: '[10px]',  lead: 'xs',      leadSub: '[10px]',  badge: '[9px]' },
+// Font size = px numbers used with style={{ fontSize: N }}
+// Do NOT use text-${var} Tailwind classes â€” purger can't detect dynamic class names
+const FS: Record<FontSize, { name: number; sub: number; preview: number; badge: number }> = {
+  sm: { name: 11, sub: 10,  preview: 10, badge: 9  },
+  md: { name: 12, sub: 11,  preview: 11, badge: 10 },
+  lg: { name: 14, sub: 12,  preview: 13, badge: 11 },
 };
 
 const STAGE_COLORS: Record<string, string> = {
@@ -602,12 +604,12 @@ export default function AsistenteOmnicanal() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-center mb-0.5">
-                      <span className={`font-bold text-slate-800 truncate pr-1 text-${iFS.name}`}>{conv.customer_name}</span>
-                      <span className={`text-${iFS.name2} flex-shrink-0`}>{formatTime(conv.last_message_at)}</span>
+                      <span className="font-bold text-slate-800 truncate pr-1" style={{ fontSize: iFS.name }}>{conv.customer_name}</span>
+                      <span className="text-slate-400 flex-shrink-0" style={{ fontSize: iFS.sub }}>{formatTime(conv.last_message_at)}</span>
                     </div>
-                    <p className={`text-${iFS.conv} text-slate-500 truncate`}>{conv.last_message || '...'}</p>
+                    <p className="text-slate-500 truncate" style={{ fontSize: iFS.preview }}>{conv.last_message || '...'}</p>
                     <div className="flex items-center justify-between mt-1">
-                      <span className={`text-${iFS.badge} font-bold uppercase px-1.5 py-0.5 rounded`} style={{ backgroundColor: cfg.bg, color: cfg.color }}>{cfg.label}</span>
+                      <span className="font-bold uppercase px-1.5 py-0.5 rounded" style={{ fontSize: iFS.badge, backgroundColor: cfg.bg, color: cfg.color }}>{cfg.label}</span>
                       {conv.unread_count > 0 && <span className="bg-indigo-600 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full">{conv.unread_count}</span>}
                     </div>
                   </div>
@@ -634,7 +636,7 @@ export default function AsistenteOmnicanal() {
                   <div className="flex items-center gap-1">
                     <ChIcon size={9} style={{ color: chanCfg.color }} />
                     <span className="text-[9px] text-slate-400">{chanCfg.label}</span>
-                    {activeConvData.channel === 'web' && <><Circle size={5} className="fill-emerald-400 text-emerald-400 ml-1" /><span className="text-[9px] text-emerald-500 font-bold">en lÃ­nea</span></>}
+                    {activeConvData.channel === 'web' && <><Circle size={5} className="fill-emerald-400 text-emerald-400 ml-1" /><span className="font-bold text-emerald-500" style={{ fontSize: 11 }}>en lÃ­nea</span></>}
                   </div>
                 </div>
               </div>
@@ -749,7 +751,7 @@ export default function AsistenteOmnicanal() {
             ) : crmLeads.length === 0 ? (
               <div className="text-center py-8 text-slate-400">
                 <FileText size={22} className="mx-auto mb-2 opacity-25" />
-                <p className={`text-${cFS.lead}`}>{activeConv?.customer_id ? 'Sin registros CRM para este cliente' : 'Sin historial â€” crea una nueva solicitud'}</p>
+                <p style={{ fontSize: cFS.name }}>{activeConv?.customer_id ? 'Sin registros CRM para este cliente' : 'Sin historial â€” crea una nueva solicitud'}</p>
                 <button onClick={() => setShowNewLead(true)} className="mt-2 text-[10px] font-bold text-indigo-600 hover:underline flex items-center gap-1 mx-auto">
                   <Plus size={9} /> Crear primera solicitud
                 </button>
@@ -761,10 +763,10 @@ export default function AsistenteOmnicanal() {
                 <div key={`lead-${lead.id ?? idx}-${idx}`} className="border border-slate-200 rounded-xl overflow-hidden bg-white hover:border-indigo-300 hover:shadow-sm transition-all group">
                   <div className="px-3 py-2 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between group-hover:bg-indigo-50/20">
                     <div className="flex items-center gap-1.5 min-w-0">
-                      <span className={`text-${cFS.leadSub} font-black text-slate-400`}>#{lead.id}</span>
-                      <span className={`text-${cFS.lead} font-bold text-slate-800 truncate`}>{lead.solicitud_tipo || 'Lead'}</span>
+                      <span className="font-black text-slate-400" style={{ fontSize: cFS.sub }}>#{lead.id}</span>
+                      <span className="font-bold text-slate-800 truncate" style={{ fontSize: cFS.name }}>{lead.solicitud_tipo || 'Lead'}</span>
                     </div>
-                    <span className={`text-${cFS.badge} font-black uppercase px-1.5 py-0.5 rounded-md`}
+                    <span className="font-black uppercase px-1.5 py-0.5 rounded-md" style={{ fontSize: cFS.badge }}
                       style={{ backgroundColor: `${sc}18`, color: sc, border: `1px solid ${sc}40` }}>
                       {(stage.name || '').length > 12 ? (stage.name || '').slice(0, 12) + 'â€¦' : (stage.name || '')}
                     </span>
@@ -772,16 +774,16 @@ export default function AsistenteOmnicanal() {
 
                   <div className="px-3 py-2">
                     {lead.lead_product_name && (
-                      <p className={`text-${cFS.leadSub} text-slate-500 flex items-center gap-1 mb-1 truncate`}>
+                      <p className="text-slate-500 flex items-center gap-1 mb-1 truncate" style={{ fontSize: cFS.sub }}>
                         <Package size={8} />{lead.lead_product_name}
                       </p>
                     )}
                     <div className="flex items-center justify-between mb-2">
-                      <span className={`text-${cFS.lead} font-black text-slate-800`}>
+                      <span className="font-black text-slate-800" style={{ fontSize: cFS.name }}>
                         {(lead.value || lead.lead_value) > 0 ? `$${Number(lead.value ?? lead.lead_value).toLocaleString('es-CO')}` : 'â€”'}
                       </span>
                       {lead.advisor_name && (
-                        <span className={`text-${cFS.badge} text-slate-400 flex items-center gap-0.5 truncate`}>
+                        <span className="text-slate-400 flex items-center gap-0.5 truncate" style={{ fontSize: cFS.badge }}>
                           <User size={7} />{lead.advisor_name}
                         </span>
                       )}
@@ -807,7 +809,7 @@ export default function AsistenteOmnicanal() {
                     </div>
 
                     <button onClick={() => openLead(lead)}
-                      className={`mt-1.5 w-full text-right text-${cFS.badge} font-bold text-indigo-600 hover:text-indigo-800 flex items-center justify-end gap-0.5`}>
+                      className="mt-1.5 w-full text-right font-bold text-indigo-600 hover:text-indigo-800 flex items-center justify-end gap-0.5" style={{ fontSize: cFS.badge }}>
                       Gestionar <ChevronRight size={9} />
                     </button>
                   </div>
