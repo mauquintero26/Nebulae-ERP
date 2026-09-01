@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
@@ -6,14 +6,16 @@ import {
   Paperclip, CheckCheck, Bot, Sparkles, FileText, ChevronRight,
   X, Calculator, ArrowRight, Phone, Mail, RefreshCw, Plus,
   MoveRight, ShoppingCart, Package, User, AlertCircle,
-  ExternalLink, Circle, Check
+  ExternalLink, Circle, Check, Type, ChevronDown, UserPlus
 } from 'lucide-react';
 import { calculateQuotation } from '@/lib/api';
 
-// ── SVG brand icons (lucide-react has no brand icons) ─────────────────────
+// â”€â”€ SVG brand icons â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const IGIcon = ({ size = 22, className = '', style = {} }: any) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.3} strokeLinecap="round" strokeLinejoin="round" className={className} style={style}>
-    <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/>
+    <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/>
+    <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/>
+    <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/>
   </svg>
 );
 const FBIcon = ({ size = 22, className = '', style = {} }: any) => (
@@ -33,11 +35,11 @@ async function apiFetch(path: string, opts: RequestInit = {}) {
   };
   const res = await fetch(`${API}${path}`, { ...opts, headers });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.message || data.detail || 'Error');
+  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
   return data.data ?? data;
 }
 
-// ── Channel config ─────────────────────────────────────────────────────────
+// â”€â”€ Channel config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const CHANNEL_CONFIG: Record<string, { label: string; color: string; bg: string; Icon: any }> = {
   all:       { label: 'Todos',     color: '#6366f1', bg: '#eef2ff', Icon: LayoutGrid },
   web:       { label: 'Web Chat',  color: '#0ea5e9', bg: '#f0f9ff', Icon: Globe },
@@ -51,144 +53,188 @@ const SOLICITUD_TIPOS = [
   'Pendiente de Pago', 'Pedido de Venta',
 ];
 
-const STAGE_COLORS: Record<string, string> = {
-  'bg-blue-500':   '#3b82f6', 'bg-purple-500': '#a855f7',
-  'bg-amber-500':  '#f59e0b', 'bg-rose-500':   '#f43f5e',
-  'bg-emerald-500':'#10b981', 'bg-indigo-500': '#6366f1',
-  'bg-slate-500':  '#64748b', 'bg-orange-500': '#f97316',
+// â”€â”€ Font size presets â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+type FontSize = 'sm' | 'md' | 'lg';
+const FS: Record<FontSize, { name: string; name2: string; conv: string; convSub: string; lead: string; leadSub: string; badge: string }> = {
+  sm: { name: 'xs font-bold',     name2: '[9px] text-slate-400',   conv: '[9px]',   convSub: '[8px]',   lead: '[9px]',   leadSub: '[8px]',   badge: '[7px]' },
+  md: { name: 'xs font-bold',     name2: '[10px] text-slate-400',  conv: '[10px]',  convSub: '[9px]',   lead: '[10px]',  leadSub: '[9px]',   badge: '[8px]' },
+  lg: { name: 'sm font-bold',     name2: 'xs text-slate-400',      conv: 'xs',      convSub: '[10px]',  lead: 'xs',      leadSub: '[10px]',  badge: '[9px]' },
 };
 
-function stageColor(s: any) {
-  return STAGE_COLORS[s?.color] || '#6366f1';
-}
+const STAGE_COLORS: Record<string, string> = {
+  'bg-blue-500':'#3b82f6','bg-purple-500':'#a855f7','bg-amber-500':'#f59e0b',
+  'bg-rose-500':'#f43f5e','bg-emerald-500':'#10b981','bg-indigo-500':'#6366f1',
+  'bg-slate-500':'#64748b','bg-orange-500':'#f97316',
+};
+function stageColor(s: any) { return STAGE_COLORS[s?.color] || '#6366f1'; }
 
 function formatTime(iso: string | null) {
   if (!iso) return '';
-  const d = new Date(iso), now = new Date();
-  const diff = now.getTime() - d.getTime();
+  const d = new Date(iso), now = new Date(), diff = now.getTime() - d.getTime();
   if (diff < 60000) return 'ahora';
   if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
   if (diff < 86400000) return d.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
   return d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' });
 }
-
 function initials(name: string) {
   return (name || 'V').split(' ').slice(0, 2).map((w: string) => w[0]).join('').toUpperCase();
 }
 
-// ── Lead card status badge ──────────────────────────────────────────────────
-function StageBadge({ stage, onClick }: { stage: any; onClick?: () => void }) {
-  const color = stageColor(stage);
+// â”€â”€ Font size picker â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+function FontSizePicker({ value, onChange }: { value: FontSize; onChange: (v: FontSize) => void }) {
   return (
-    <span
-      onClick={onClick}
-      className={`text-[8px] font-black uppercase tracking-wide px-1.5 py-0.5 rounded-md ${onClick ? 'cursor-pointer hover:opacity-80' : ''}`}
-      style={{ backgroundColor: `${color}18`, color, border: `1px solid ${color}40` }}
-    >
-      {stage?.name || 'Sin etapa'}
-    </span>
+    <div className="flex items-center gap-0.5 bg-slate-100 rounded-lg p-0.5" title="TamaÃ±o de texto">
+      {(['sm', 'md', 'lg'] as FontSize[]).map(sz => (
+        <button key={sz} onClick={() => onChange(sz)}
+          className={`px-2 py-1 rounded-md transition-all font-black ${value === sz ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+          style={{ fontSize: sz === 'sm' ? 9 : sz === 'md' ? 11 : 13 }}>
+          A
+        </button>
+      ))}
+    </div>
   );
 }
 
-// ══ MAIN COMPONENT ══════════════════════════════════════════════════════════
+// â•â• COMPONENT â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 export default function AsistenteOmnicanal() {
-  // ── Layout state ─────────────────────────────────────────────────────────
+  // â”€â”€ Layout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [inboxWidth, setInboxWidth] = useState(300);
   const [col4Width, setCol4Width]   = useState(380);
-  const [crmHeight, setCrmHeight]   = useState(420);
+  const [crmHeight, setCrmHeight]   = useState(430);
 
-  // ── Session / user ───────────────────────────────────────────────────────
+  // â”€â”€ Font sizes (persisted) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const [inboxFontSize, setInboxFontSize]   = useState<FontSize>('md');
+  const [crmFontSize, setCrmFontSize]       = useState<FontSize>('md');
+  useEffect(() => {
+    const i = localStorage.getItem('omni_inbox_font') as FontSize;
+    const c = localStorage.getItem('omni_crm_font') as FontSize;
+    if (i) setInboxFontSize(i);
+    if (c) setCrmFontSize(c);
+  }, []);
+  const changeInboxFont = (v: FontSize) => { setInboxFontSize(v); localStorage.setItem('omni_inbox_font', v); };
+  const changeCrmFont   = (v: FontSize) => { setCrmFontSize(v);   localStorage.setItem('omni_crm_font', v); };
+
+  // â”€â”€ User â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [currentUser, setCurrentUser] = useState('');
   const [showMyLeads, setShowMyLeads] = useState(false);
 
-  // ── Inbox & conversations ─────────────────────────────────────────────────
-  const [activeChannel, setActiveChannel]   = useState('all');
-  const [conversations, setConversations]   = useState<any[]>([]);
-  const [activeConvId, setActiveConvId]     = useState<number | null>(null);
-  const [activeConv, setActiveConv]         = useState<any>(null);
-  const [loadingConvs, setLoadingConvs]     = useState(true);
-  const [searchInbox, setSearchInbox]       = useState('');
+  // â”€â”€ Inbox â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const [activeChannel, setActiveChannel] = useState('all');
+  const [conversations, setConversations] = useState<any[]>([]);
+  const [activeConvId, setActiveConvId]   = useState<number | null>(null);
+  const [activeConv, setActiveConv]       = useState<any>(null);
+  const [loadingConvs, setLoadingConvs]   = useState(true);
+  const [searchInbox, setSearchInbox]     = useState('');
 
-  // ── Messages ─────────────────────────────────────────────────────────────
-  const [messages, setMessages]     = useState<any[]>([]);
+  // â”€â”€ Messages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const [messages, setMessages]       = useState<any[]>([]);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
-  const [inputText, setInputText]   = useState('');
-  const [sending, setSending]       = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [inputText, setInputText]     = useState('');
+  const [sending, setSending]         = useState(false);
+  const textareaRef    = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // ── AI ────────────────────────────────────────────────────────────────────
+  // â”€â”€ AI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [aiMode, setAiMode]             = useState<'auto'|'suggestion'|'off'>('suggestion');
   const [aiSuggestion, setAiSuggestion] = useState('');
   const [loadingAI, setLoadingAI]       = useState(false);
 
-  // ── CRM data ─────────────────────────────────────────────────────────────
-  const [crmStages, setCrmStages]         = useState<any[]>([]);
-  const [crmLeads, setCrmLeads]           = useState<any[]>([]);
-  const [loadingLeads, setLoadingLeads]   = useState(false);
+  // â”€â”€ CRM â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const [crmStages, setCrmStages]       = useState<any[]>([]);
+  const [crmLeads, setCrmLeads]         = useState<any[]>([]);
+  const [loadingLeads, setLoadingLeads] = useState(false);
 
-  // ── Lead detail modal ─────────────────────────────────────────────────────
+  // â”€â”€ Lead modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [selectedLead, setSelectedLead]   = useState<any>(null);
   const [showLeadModal, setShowLeadModal] = useState(false);
   const [editForm, setEditForm]           = useState<any>({});
   const [savingLead, setSavingLead]       = useState(false);
   const [movingStage, setMovingStage]     = useState(false);
 
-  // ── Nueva Solicitud form ───────────────────────────────────────────────────
+  // â”€â”€ Nueva Solicitud â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [showNewLead, setShowNewLead]   = useState(false);
   const [newLeadForm, setNewLeadForm]   = useState<any>({
     solicitud_tipo: 'Nuevo Lead',
     lead_product_name: '',
-    lead_value: 0,
+    lead_value: '',
     lead_description: '',
     advisor_name: '',
     pipeline_stage_id: '',
+    // Customer fields (when not linked)
+    customer_id: null as number | null,
+    customer_search: '',
+    customer_display: '',
   });
-  const [savingNew, setSavingNew]       = useState(false);
+  const [customerResults, setCustomerResults] = useState<any[]>([]);
+  const [searchingCustomer, setSearchingCustomer] = useState(false);
+  const [showCustomerList, setShowCustomerList]   = useState(false);
+  const [savingNew, setSavingNew]   = useState(false);
   const [newLeadError, setNewLeadError] = useState('');
 
-  // ── Quote modal ────────────────────────────────────────────────────────────
+  // â”€â”€ Quotation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [showQuoteModal, setShowQuoteModal] = useState(false);
-  const [quoteForm, setQuoteForm]           = useState({ costUsd: '', discount: '0', weightLb: '1', trm: '4200' });
+  const [quoteForm, setQuoteForm]           = useState({ costUsd:'', discount:'0', weightLb:'1', trm:'4200' });
   const [quoteResult, setQuoteResult]       = useState<any>(null);
   const [isCalculating, setIsCalculating]   = useState(false);
 
-  // ── Polling refs ──────────────────────────────────────────────────────────
+  // â”€â”€ Polling refs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const pollInboxRef  = useRef<NodeJS.Timeout | null>(null);
   const pollMsgsRef   = useRef<NodeJS.Timeout | null>(null);
   const lastMsgTsRef  = useRef<string | null>(null);
-  const sentMsgIdsRef = useRef<Set<number>>(new Set()); // track optimistic ids
+  const sentMsgIdsRef = useRef<Set<number>>(new Set());
 
-  // ── Load current user from localStorage ──────────────────────────────────
+  // â”€â”€ Init â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   useEffect(() => {
-    const stored = localStorage.getItem('user_name') || localStorage.getItem('username') || '';
-    setCurrentUser(stored);
-    // Pre-fill advisor field
-    setNewLeadForm((f: any) => ({ ...f, advisor_name: stored }));
+    const u = localStorage.getItem('user_name') || localStorage.getItem('username') || '';
+    setCurrentUser(u);
   }, []);
 
-  // ── Load pipeline stages (cached TTL handled by backend) ────────────────
   useEffect(() => {
     apiFetch('/crm/pipeline-stages/config')
       .then(d => {
         const arr = Array.isArray(d) ? d : (d?.data ?? []);
         setCrmStages(arr);
         if (arr.length > 0) setNewLeadForm((f: any) => ({ ...f, pipeline_stage_id: arr[0].id }));
-      })
-      .catch(() => {});
+      }).catch(() => {});
   }, []);
 
-  // ── Load conversations ────────────────────────────────────────────────────
+  // â”€â”€ Customer search (inside new lead form) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const customerSearchTimer = useRef<NodeJS.Timeout | null>(null);
+  function onCustomerSearch(q: string) {
+    setNewLeadForm((f: any) => ({ ...f, customer_search: q, customer_id: null, customer_display: '' }));
+    setShowCustomerList(true);
+    if (customerSearchTimer.current) clearTimeout(customerSearchTimer.current);
+    if (!q.trim()) { setCustomerResults([]); return; }
+    setSearchingCustomer(true);
+    customerSearchTimer.current = setTimeout(async () => {
+      try {
+        const d = await apiFetch(`/crm/customers/search?q=${encodeURIComponent(q)}`);
+        setCustomerResults(Array.isArray(d) ? d : (d?.data ?? []));
+      } catch { setCustomerResults([]); }
+      finally { setSearchingCustomer(false); }
+    }, 300);
+  }
+  function selectCustomer(c: any) {
+    setNewLeadForm((f: any) => ({
+      ...f,
+      customer_id: c.id,
+      customer_search: c.full_name || `${c.first_name} ${c.last_name}`,
+      customer_display: `${c.full_name || c.first_name} â€” ${c.phone || c.email || ''}`,
+    }));
+    setShowCustomerList(false);
+    setCustomerResults([]);
+  }
+
+  // â”€â”€ Load conversations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const loadConversations = useCallback(async () => {
     try {
       const ch = activeChannel === 'all' ? '' : activeChannel;
-      const q  = ch ? `?channel=${ch}` : '';
-      const d  = await apiFetch(`/chat/conversations${q}`);
+      const q = ch ? `?channel=${ch}` : '';
+      const d = await apiFetch(`/chat/conversations${q}`);
       const arr = Array.isArray(d) ? d : (d?.data ?? []);
       setConversations(arr);
       if (arr.length > 0 && !activeConvId) setActiveConvId(arr[0].id);
-    } catch { }
-    finally { setLoadingConvs(false); }
+    } catch { } finally { setLoadingConvs(false); }
   }, [activeChannel, activeConvId]);
 
   useEffect(() => {
@@ -199,7 +245,7 @@ export default function AsistenteOmnicanal() {
     return () => { if (pollInboxRef.current) clearInterval(pollInboxRef.current); };
   }, [activeChannel]);
 
-  // ── Load messages ─────────────────────────────────────────────────────────
+  // â”€â”€ Load messages â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const loadMessages = useCallback(async (convId: number, since: string | null = null) => {
     try {
       const q = since ? `?since=${encodeURIComponent(since)}` : '';
@@ -208,16 +254,11 @@ export default function AsistenteOmnicanal() {
       const conv = d?.conversation ?? null;
       if (since) {
         if (msgs.length > 0) {
-          // Filter out any optimistic messages we already displayed
           const fresh = msgs.filter(m => !sentMsgIdsRef.current.has(m.id));
           if (fresh.length > 0) {
             setMessages(prev => {
-              // Remove optimistic placeholders with matching content
-              const filtered = prev.filter(p => typeof p.id === 'number' && p.id > 1e12
-                ? false  // remove old optimistic
-                : true
-              );
-              return [...filtered, ...fresh];
+              const withoutOptimistic = prev.filter(p => typeof p.id !== 'number' || p.id <= 1e12 + 1e9);
+              return [...withoutOptimistic, ...fresh];
             });
             lastMsgTsRef.current = msgs[msgs.length - 1].created_at;
           }
@@ -237,54 +278,48 @@ export default function AsistenteOmnicanal() {
     setLoadingMsgs(true);
     lastMsgTsRef.current = null;
     loadMessages(activeConvId).finally(() => setLoadingMsgs(false));
-
     if (pollMsgsRef.current) clearInterval(pollMsgsRef.current);
     pollMsgsRef.current = setInterval(() => loadMessages(activeConvId, lastMsgTsRef.current), 3000);
     return () => { if (pollMsgsRef.current) clearInterval(pollMsgsRef.current); };
   }, [activeConvId]);
 
-  // ── Load CRM leads for current conversation's customer ────────────────────
+  // â”€â”€ CRM leads â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const loadCrmLeads = useCallback(async (customerId?: number) => {
     if (!customerId) { setCrmLeads([]); return; }
     setLoadingLeads(true);
     try {
-      const advisor = showMyLeads && currentUser ? `&advisor_name=${encodeURIComponent(currentUser)}` : '';
-      const d = await apiFetch(`/crm/leads?customer_id=${customerId}${advisor}&limit=100`);
-      const arr = Array.isArray(d) ? d : (d?.data ?? []);
-      setCrmLeads(arr);
+      const adv = showMyLeads && currentUser ? `&advisor_name=${encodeURIComponent(currentUser)}` : '';
+      const d = await apiFetch(`/crm/leads?customer_id=${customerId}${adv}&limit=100`);
+      setCrmLeads(Array.isArray(d) ? d : (d?.data ?? []));
     } catch { setCrmLeads([]); }
     finally { setLoadingLeads(false); }
   }, [showMyLeads, currentUser]);
 
-  useEffect(() => {
-    loadCrmLeads(activeConv?.customer_id);
-  }, [activeConv?.customer_id, showMyLeads]);
+  useEffect(() => { loadCrmLeads(activeConv?.customer_id); }, [activeConv?.customer_id, showMyLeads]);
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
-  // ── Scroll to bottom ─────────────────────────────────────────────────────
+  // â”€â”€ AI suggestion â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  const inMsgCount = messages.filter(m => m.direction === 'in').length;
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (!activeConvId || aiMode === 'off' || inMsgCount === 0) { setAiSuggestion(''); return; }
+    const t = setTimeout(() => {
+      setLoadingAI(true);
+      apiFetch(`/chat/conversations/${activeConvId}/ai-suggest`, { method: 'POST', body: JSON.stringify({}) })
+        .then(d => setAiSuggestion(d?.suggestion || ''))
+        .catch(() => setAiSuggestion(''))
+        .finally(() => setLoadingAI(false));
+    }, 800);
+    return () => clearTimeout(t);
+  }, [activeConvId, inMsgCount, aiMode]);
 
-  // ── AI suggestion ─────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!activeConvId || aiMode === 'off') { setAiSuggestion(''); return; }
-    const last = messages.filter(m => m.direction === 'in').slice(-1)[0];
-    if (!last) return;
-    setLoadingAI(true);
-    apiFetch(`/chat/conversations/${activeConvId}/ai-suggest`, { method: 'POST', body: JSON.stringify({}) })
-      .then(d => setAiSuggestion(d?.suggestion || ''))
-      .catch(() => setAiSuggestion(''))
-      .finally(() => setLoadingAI(false));
-  }, [activeConvId, messages.filter(m => m.direction === 'in').length]);
-
-  // ── Send message ──────────────────────────────────────────────────────────
+  // â”€â”€ Send message â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function sendMessage() {
     if (!inputText.trim() || !activeConvId || sending) return;
     const content = inputText.trim();
     setInputText('');
     setSending(true);
-    const tempId = Date.now();
-    const opt = { id: tempId, direction: 'out', content, sender_name: 'Asesor', created_at: new Date().toISOString(), is_ai_generated: false };
+    const tempId = Date.now() + Math.random();
+    const opt = { id: tempId, direction: 'out', content, sender_name: 'Asesor', created_at: new Date().toISOString() };
     setMessages(prev => [...prev, opt]);
     try {
       const d = await apiFetch(`/chat/conversations/${activeConvId}/reply`, {
@@ -298,7 +333,7 @@ export default function AsistenteOmnicanal() {
     setSending(false);
   }
 
-  // ── AI mode toggle ────────────────────────────────────────────────────────
+  // â”€â”€ AI mode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function toggleAiMode(mode: 'auto' | 'suggestion' | 'off') {
     setAiMode(mode);
     if (!activeConvId) return;
@@ -307,45 +342,107 @@ export default function AsistenteOmnicanal() {
     }).catch(() => {});
   }
 
-  // ── Create new lead (Nueva Solicitud) ─────────────────────────────────────
+  // â”€â”€ Create new lead â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   async function createNewLead(e: React.FormEvent) {
     e.preventDefault();
-    if (!activeConv?.customer_id) { setNewLeadError('Esta conversación no tiene un cliente vinculado.'); return; }
-    setSavingNew(true); setNewLeadError('');
+    setNewLeadError('');
+
+    // Determine customer_id
+    let customerId = activeConv?.customer_id || newLeadForm.customer_id;
+    if (!customerId) {
+      setNewLeadError('Selecciona un cliente de la lista o vincula uno a esta conversaciÃ³n.');
+      return;
+    }
+
+    setSavingNew(true);
     try {
-      const body = {
-        customer_id: activeConv.customer_id,
-        solicitud_tipo: newLeadForm.solicitud_tipo,
-        lead_product_name: newLeadForm.lead_product_name,
-        lead_value: Number(newLeadForm.lead_value) || 0,
-        description: newLeadForm.lead_description,
-        advisor_name: newLeadForm.advisor_name || currentUser,
-        pipeline_stage_id: Number(newLeadForm.pipeline_stage_id) || undefined,
-        lead_source: 'Omnicanal',
+      // Step 1: If customer not linked to conv, link it now
+      if (!activeConv?.customer_id && activeConvId) {
+        await apiFetch(`/chat/conversations/${activeConvId}/link-customer`, {
+          method: 'PATCH',
+          body: JSON.stringify({ customer_id: customerId }),
+        });
+        // Refresh conversation so customer_id is set
+        setActiveConv((prev: any) => ({ ...prev, customer_id: customerId }));
+        setConversations(prev => prev.map(c => c.id === activeConvId
+          ? { ...c, customer_id: customerId, customer_name: newLeadForm.customer_search }
+          : c
+        ));
+      }
+
+      // Step 2: Create the lead in CRM
+      const stageId = newLeadForm.pipeline_stage_id ? Number(newLeadForm.pipeline_stage_id) : undefined;
+      const body: any = {
+        customer_id:        customerId,
+        solicitud_tipo:     newLeadForm.solicitud_tipo,
+        lead_product_name:  newLeadForm.lead_product_name.trim(),
+        lead_value:         Number(newLeadForm.lead_value) || 0,
+        description:        newLeadForm.lead_description.trim(),
+        advisor_name:       (newLeadForm.advisor_name || currentUser || '').trim(),
+        lead_source:        'Omnicanal',
+        sale_type:          'ON_DEMAND',
       };
-      await apiFetch('/crm/leads', { method: 'POST', body: JSON.stringify(body) });
+      if (stageId) body.pipeline_stage_id = stageId;
+
+      const newLead = await apiFetch('/crm/leads', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+
+      // Step 3: Add lead to historial immediately (optimistic)
+      const stage = crmStages.find(s => s.id === stageId);
+      const leadData = newLead?.data ?? newLead;
+      setCrmLeads(prev => [leadData || {
+        id: Date.now(),
+        solicitud_tipo: body.solicitud_tipo,
+        lead_product_name: body.lead_product_name,
+        lead_value: body.lead_value,
+        value: body.lead_value,
+        advisor_name: body.advisor_name,
+        pipeline_stage_id: stageId,
+        stage_name: stage?.name || 'Nuevo Lead',
+        stage,
+        status: stage?.maps_to_status || 'DRAFT',
+      }, ...prev]);
+
+      // Step 4: Reset form and close
       setShowNewLead(false);
-      setNewLeadForm({ solicitud_tipo: 'Nuevo Lead', lead_product_name: '', lead_value: 0, lead_description: '', advisor_name: currentUser, pipeline_stage_id: crmStages[0]?.id || '' });
-      await loadCrmLeads(activeConv.customer_id);
-    } catch (err: any) { setNewLeadError(err.message || 'Error al crear solicitud'); }
+      setNewLeadForm({
+        solicitud_tipo: 'Nuevo Lead',
+        lead_product_name: '',
+        lead_value: '',
+        lead_description: '',
+        advisor_name: currentUser,
+        pipeline_stage_id: crmStages[0]?.id || '',
+        customer_id: null,
+        customer_search: '',
+        customer_display: '',
+      });
+      setCustomerResults([]);
+
+      // Step 5: Refresh from server to get real data
+      await loadCrmLeads(customerId);
+
+    } catch (err: any) {
+      setNewLeadError(err.message || 'Error al crear la solicitud. Verifica los datos.');
+    }
     setSavingNew(false);
   }
 
-  // ── Open lead detail modal ────────────────────────────────────────────────
+  // â”€â”€ Open lead modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   function openLead(lead: any) {
     setSelectedLead(lead);
     setEditForm({
-      solicitud_tipo:     lead.solicitud_tipo || 'Nuevo Lead',
-      lead_product_name:  lead.lead_product_name || '',
-      lead_value:         lead.value ?? lead.lead_value ?? 0,
-      lead_description:   lead.description || lead.lead_description || '',
-      advisor_name:       lead.advisor_name || '',
-      pipeline_stage_id:  lead.pipeline_stage_id || '',
+      solicitud_tipo:    lead.solicitud_tipo || 'Nuevo Lead',
+      lead_product_name: lead.lead_product_name || '',
+      lead_value:        lead.value ?? lead.lead_value ?? 0,
+      lead_description:  lead.description || lead.lead_description || '',
+      advisor_name:      lead.advisor_name || '',
+      pipeline_stage_id: lead.pipeline_stage_id || '',
     });
     setShowLeadModal(true);
   }
 
-  // ── Save lead edits ───────────────────────────────────────────────────────
   async function saveLead() {
     if (!selectedLead) return;
     setSavingLead(true);
@@ -359,7 +456,6 @@ export default function AsistenteOmnicanal() {
     setSavingLead(false);
   }
 
-  // ── Move lead to stage (inline from historial) ────────────────────────────
   async function moveLead(lead: any, stageId: number) {
     setMovingStage(true);
     try {
@@ -375,17 +471,15 @@ export default function AsistenteOmnicanal() {
     setMovingStage(false);
   }
 
-  // ── Lead quick action (to-solicitud, to-cotizacion, to-pedido) ─────────────
   async function leadAction(lead: any, action: string) {
     try {
       const r = await apiFetch(`/crm/leads/${lead.id}/${action}`, { method: 'POST' });
-      alert(r?.message || 'Acción completada');
+      alert(r?.message || 'Â¡AcciÃ³n completada!');
       await loadCrmLeads(activeConv?.customer_id);
       setShowLeadModal(false);
     } catch (err: any) { alert('Error: ' + err.message); }
   }
 
-  // ── Quotation ─────────────────────────────────────────────────────────────
   async function handleCalculate(e: React.FormEvent) {
     e.preventDefault();
     setIsCalculating(true); setQuoteResult(null);
@@ -399,11 +493,11 @@ export default function AsistenteOmnicanal() {
     finally { setIsCalculating(false); }
   }
 
-  // ── Resize handlers ───────────────────────────────────────────────────────
+  // â”€â”€ Resize â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   function startDrag(setter: (v: number) => void, axis: 'x'|'xr'|'y', min: number, max: number) {
     return (e: React.MouseEvent) => {
       e.preventDefault();
-      const start = axis === 'y' ? e.pageY : e.pageX;
+      const start  = axis === 'y' ? e.pageY : e.pageX;
       const startV = axis === 'y' ? crmHeight : axis === 'x' ? inboxWidth : col4Width;
       const move = (ev: MouseEvent) => {
         const delta = (axis === 'y' ? ev.pageY : ev.pageX) - start;
@@ -414,22 +508,25 @@ export default function AsistenteOmnicanal() {
     };
   }
 
-  // ── Derived ───────────────────────────────────────────────────────────────
+  // â”€â”€ Derived â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const activeConvData = conversations.find(c => c.id === activeConvId) || activeConv;
-  const chanCfg = activeConvData ? (CHANNEL_CONFIG[activeConvData.channel] || CHANNEL_CONFIG.web) : CHANNEL_CONFIG.web;
-  const ChannelIcon = chanCfg.Icon;
+  const chanCfg  = activeConvData ? (CHANNEL_CONFIG[activeConvData.channel] || CHANNEL_CONFIG.web) : CHANNEL_CONFIG.web;
+  const ChIcon   = chanCfg.Icon;
+  const iFS      = FS[inboxFontSize];
+  const cFS      = FS[crmFontSize];
   const inboxFiltered = conversations.filter(c =>
     !searchInbox ||
     c.customer_name?.toLowerCase().includes(searchInbox.toLowerCase()) ||
     c.last_message?.toLowerCase().includes(searchInbox.toLowerCase())
   );
+  const effectiveCustomerId = activeConv?.customer_id || newLeadForm.customer_id;
 
-  // ═══════════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   return (
     <div className="h-full w-full bg-white flex overflow-hidden">
 
-      {/* ── COL 1: CHANNEL SIDEBAR ──────────────────────────────────────── */}
-      <div className="w-[72px] bg-slate-50 border-r border-slate-200 flex flex-col items-center py-5 gap-3 flex-shrink-0 z-10">
+      {/* â”€â”€ COL 1: CHANNELS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
+      <div className="w-[70px] bg-slate-50 border-r border-slate-200 flex flex-col items-center py-5 gap-3 flex-shrink-0">
         {Object.entries(CHANNEL_CONFIG).map(([id, cfg]) => {
           const unread = id === 'all'
             ? conversations.reduce((s, c) => s + (c.unread_count || 0), 0)
@@ -437,61 +534,66 @@ export default function AsistenteOmnicanal() {
           const active = activeChannel === id;
           return (
             <button key={id} onClick={() => setActiveChannel(id)} title={cfg.label}
-              className="relative flex flex-col items-center gap-1 group outline-none">
+              className="relative flex flex-col items-center gap-1 outline-none">
               <div className="p-2.5 rounded-2xl transition-all duration-200"
-                style={active ? { backgroundColor: cfg.bg, color: cfg.color, boxShadow: `0 2px 8px ${cfg.color}30` }
-                  : { color: '#94a3b8' }}>
-                <cfg.Icon size={21} />
+                style={active ? { backgroundColor: cfg.bg, color: cfg.color, boxShadow: `0 2px 8px ${cfg.color}30` } : { color: '#94a3b8' }}>
+                <cfg.Icon size={20} />
               </div>
-              {unread > 0 && <span className="absolute -top-1 -right-0.5 bg-red-500 text-white text-[9px] font-black min-w-[16px] px-1 py-0.5 rounded-full border-2 border-slate-50 text-center">{unread > 99 ? '99+' : unread}</span>}
+              {unread > 0 && (
+                <span className="absolute -top-1 right-0 bg-red-500 text-white text-[8px] font-black min-w-[15px] px-1 py-0.5 rounded-full border border-slate-50 text-center leading-none">{unread > 9 ? '9+' : unread}</span>
+              )}
               <span className="text-[8px] font-bold" style={{ color: active ? cfg.color : '#94a3b8' }}>{cfg.label.split(' ')[0]}</span>
             </button>
           );
         })}
         <div className="flex-1" />
-        <a href="/chat" target="_blank" title="Widget web público"
-          className="p-2 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-xl transition-colors">
-          <ExternalLink size={15} />
+        <a href="/chat" target="_blank" title="Abrir widget web" className="p-2 text-slate-400 hover:text-sky-600 hover:bg-sky-50 rounded-xl transition-colors">
+          <ExternalLink size={14} />
         </a>
       </div>
 
-      {/* ── COL 2: INBOX ────────────────────────────────────────────────── */}
+      {/* â”€â”€ COL 2: INBOX â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <div className="bg-white border-r border-slate-200 flex flex-col flex-shrink-0 relative" style={{ width: inboxWidth }}>
-        <div className="p-3.5 border-b border-slate-100">
-          <div className="flex items-center justify-between mb-2.5">
+        {/* Header */}
+        <div className="p-3 border-b border-slate-100">
+          <div className="flex items-center justify-between mb-2">
             <h2 className="text-sm font-extrabold text-slate-800">Bandeja</h2>
-            <button onClick={loadConversations} className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
-              <RefreshCw size={13} className={loadingConvs ? 'animate-spin' : ''} />
-            </button>
+            <div className="flex items-center gap-1.5">
+              <FontSizePicker value={inboxFontSize} onChange={changeInboxFont} />
+              <button onClick={loadConversations} className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg">
+                <RefreshCw size={12} className={loadingConvs ? 'animate-spin' : ''} />
+              </button>
+            </div>
           </div>
           <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={13} />
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" size={12} />
             <input value={searchInbox} onChange={e => setSearchInbox(e.target.value)}
               placeholder="Buscar..."
-              className="w-full pl-7 pr-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none" />
+              className="w-full pl-7 pr-2 py-1.5 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none"
+              style={{ fontSize: inboxFontSize === 'lg' ? 13 : inboxFontSize === 'sm' ? 10 : 11 }} />
           </div>
         </div>
 
+        {/* Conversation list */}
         <div className="flex-1 overflow-y-auto">
           {loadingConvs && conversations.length === 0 ? (
-            <div className="p-3 space-y-2">
-              {[1, 2, 3].map(i => <div key={i} className="h-16 bg-slate-50 rounded-xl animate-pulse" />)}
-            </div>
+            <div className="p-3 space-y-2">{[1,2,3].map(i => <div key={i} className="h-14 bg-slate-50 rounded-xl animate-pulse" />)}</div>
           ) : inboxFiltered.length === 0 ? (
             <div className="flex flex-col items-center justify-center p-8 text-slate-400">
-              <MessageCircle size={28} className="mb-2 opacity-30" />
-              <p className="text-xs text-center">Sin conversaciones</p>
+              <MessageCircle size={26} className="mb-2 opacity-30" />
+              <p className="text-xs">Sin conversaciones</p>
             </div>
           ) : inboxFiltered.map(conv => {
             const cfg = CHANNEL_CONFIG[conv.channel] || CHANNEL_CONFIG.web;
             const isActive = conv.id === activeConvId;
             return (
               <button key={conv.id} onClick={() => setActiveConvId(conv.id)}
-                className={`w-full text-left p-3 border-b border-slate-50 transition-all relative ${isActive ? 'bg-indigo-50/50' : 'hover:bg-slate-50'}`}>
-                {isActive && <div className="absolute left-0 top-2.5 bottom-2.5 w-0.5 bg-indigo-600 rounded-r-full" />}
-                <div className="flex items-start gap-2.5 pl-1">
+                className={`w-full text-left p-3 border-b border-slate-50 transition-all relative ${isActive ? 'bg-indigo-50/40' : 'hover:bg-slate-50'}`}>
+                {isActive && <div className="absolute left-0 top-3 bottom-3 w-0.5 bg-indigo-600 rounded-r-full" />}
+                <div className="flex items-start gap-2 pl-0.5">
                   <div className="relative flex-shrink-0">
-                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-[10px] font-black" style={{ backgroundColor: cfg.color }}>
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-white font-black"
+                      style={{ backgroundColor: cfg.color, fontSize: inboxFontSize === 'lg' ? 11 : 10 }}>
                       {initials(conv.customer_name)}
                     </div>
                     <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full flex items-center justify-center border border-white" style={{ backgroundColor: cfg.color }}>
@@ -500,13 +602,13 @@ export default function AsistenteOmnicanal() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-center mb-0.5">
-                      <span className="font-bold text-slate-800 text-xs truncate pr-1">{conv.customer_name}</span>
-                      <span className="text-[9px] text-slate-400">{formatTime(conv.last_message_at)}</span>
+                      <span className={`font-bold text-slate-800 truncate pr-1 text-${iFS.name}`}>{conv.customer_name}</span>
+                      <span className={`text-${iFS.name2} flex-shrink-0`}>{formatTime(conv.last_message_at)}</span>
                     </div>
-                    <p className="text-[10px] text-slate-500 truncate">{conv.last_message || '...'}</p>
+                    <p className={`text-${iFS.conv} text-slate-500 truncate`}>{conv.last_message || '...'}</p>
                     <div className="flex items-center justify-between mt-1">
-                      <span className="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded" style={{ backgroundColor: cfg.bg, color: cfg.color }}>{cfg.label}</span>
-                      {conv.unread_count > 0 && <span className="bg-indigo-600 text-white text-[9px] font-black px-1.5 py-0.5 rounded-full">{conv.unread_count}</span>}
+                      <span className={`text-${iFS.badge} font-bold uppercase px-1.5 py-0.5 rounded`} style={{ backgroundColor: cfg.bg, color: cfg.color }}>{cfg.label}</span>
+                      {conv.unread_count > 0 && <span className="bg-indigo-600 text-white text-[8px] font-black px-1.5 py-0.5 rounded-full">{conv.unread_count}</span>}
                     </div>
                   </div>
                 </div>
@@ -514,58 +616,51 @@ export default function AsistenteOmnicanal() {
             );
           })}
         </div>
-        <div onMouseDown={startDrag(setInboxWidth, 'x', 220, 480)} className="absolute right-0 top-0 bottom-0 w-1.5 hover:bg-indigo-400/40 cursor-col-resize bg-transparent z-20" />
+        <div onMouseDown={startDrag(setInboxWidth, 'x', 220, 500)} className="absolute right-0 top-0 bottom-0 w-1.5 hover:bg-indigo-400/40 cursor-col-resize bg-transparent z-20" />
       </div>
 
-      {/* ── COL 3: CHAT THREAD ──────────────────────────────────────────── */}
+      {/* â”€â”€ COL 3: CHAT THREAD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <div className="flex-1 flex flex-col min-w-[260px] bg-slate-50/30">
-        <div className="h-13 bg-white border-b border-slate-200 flex items-center justify-between px-4 py-2.5 flex-shrink-0">
+        {/* Header */}
+        <div className="bg-white border-b border-slate-200 flex items-center justify-between px-4 py-2.5 flex-shrink-0">
           {activeConvData ? (
             <>
               <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-full flex items-center justify-center text-white font-black text-[11px]" style={{ backgroundColor: chanCfg.color }}>
+                <div className="w-8 h-8 rounded-full flex items-center justify-center text-white font-black text-[10px]" style={{ backgroundColor: chanCfg.color }}>
                   {initials(activeConvData.customer_name)}
                 </div>
                 <div>
-                  <p className="font-bold text-slate-800 text-sm">{activeConvData.customer_name}</p>
-                  <div className="flex items-center gap-1.5">
-                    <ChannelIcon size={10} style={{ color: chanCfg.color }} />
+                  <p className="font-bold text-slate-800 text-sm leading-tight">{activeConvData.customer_name}</p>
+                  <div className="flex items-center gap-1">
+                    <ChIcon size={9} style={{ color: chanCfg.color }} />
                     <span className="text-[9px] text-slate-400">{chanCfg.label}</span>
-                    {activeConvData.channel === 'web' && <><Circle size={5} className="fill-emerald-400 text-emerald-400" /><span className="text-[9px] text-emerald-500 font-bold">en línea</span></>}
+                    {activeConvData.channel === 'web' && <><Circle size={5} className="fill-emerald-400 text-emerald-400 ml-1" /><span className="text-[9px] text-emerald-500 font-bold">en lÃ­nea</span></>}
                   </div>
                 </div>
               </div>
-              <div className="flex items-center gap-1.5">
-                <button onClick={() => setShowQuoteModal(true)} title="Cotizador" className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors">
-                  <Calculator size={16} />
-                </button>
-                <button className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-xl transition-colors">
-                  <MoreVertical size={16} />
-                </button>
+              <div className="flex items-center gap-1">
+                <button onClick={() => setShowQuoteModal(true)} title="Cotizador" className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors"><Calculator size={16} /></button>
+                <button className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-xl transition-colors"><MoreVertical size={16} /></button>
               </div>
             </>
-          ) : <p className="text-slate-400 text-sm">Selecciona una conversación</p>}
+          ) : <p className="text-slate-400 text-sm">Selecciona una conversaciÃ³n</p>}
         </div>
 
+        {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {loadingMsgs ? (
-            <div className="flex justify-center pt-10 text-slate-400"><RefreshCw size={20} className="animate-spin" /></div>
+            <div className="flex justify-center pt-10"><RefreshCw size={20} className="animate-spin text-slate-400" /></div>
           ) : messages.length === 0 && activeConvId ? (
-            <div className="flex flex-col items-center justify-center h-full text-slate-400">
-              <MessageCircle size={36} className="mb-2 opacity-25" />
-              <p className="text-xs">Sin mensajes aún</p>
-            </div>
+            <div className="flex flex-col items-center justify-center h-full text-slate-400"><MessageCircle size={32} className="mb-2 opacity-20" /><p className="text-xs">Sin mensajes</p></div>
           ) : messages.map((msg, idx) => (
-            <div key={`msg-${msg.id}-${idx}`} className={`flex ${msg.direction === 'in' ? 'justify-start' : 'justify-end'}`}>
-              <div className={`max-w-[73%] rounded-2xl px-4 py-2.5 shadow-sm ${msg.direction === 'in'
-                ? 'bg-white border border-slate-200 text-slate-700 rounded-tl-none'
-                : 'bg-indigo-600 text-white rounded-tr-none'
+            <div key={`m-${msg.id}-${idx}`} className={`flex ${msg.direction === 'in' ? 'justify-start' : 'justify-end'}`}>
+              <div className={`max-w-[74%] rounded-2xl px-4 py-2.5 shadow-sm ${
+                msg.direction === 'in' ? 'bg-white border border-slate-200 text-slate-700 rounded-tl-none' : 'bg-indigo-600 text-white rounded-tr-none'
               }`}>
                 {msg.is_ai_generated && <div className="flex items-center gap-1 mb-1"><Bot size={9} className="text-indigo-200" /><span className="text-[8px] text-indigo-200 font-bold">IA</span></div>}
                 <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.content}</p>
                 <div className={`text-[9px] mt-1 flex items-center justify-end gap-1 ${msg.direction === 'in' ? 'text-slate-400' : 'text-indigo-200'}`}>
-                  {formatTime(msg.created_at)}
-                  {msg.direction === 'out' && <CheckCheck size={10} />}
+                  {formatTime(msg.created_at)}{msg.direction === 'out' && <CheckCheck size={10} />}
                 </div>
               </div>
             </div>
@@ -577,19 +672,19 @@ export default function AsistenteOmnicanal() {
         {aiSuggestion && aiMode === 'suggestion' && activeConvId && (
           <div className="px-3 pb-1.5">
             <div className="bg-indigo-50 border border-indigo-200 rounded-xl px-3 py-2 flex items-center gap-2">
-              <Bot size={13} className="text-indigo-500 flex-shrink-0" />
+              <Bot size={12} className="text-indigo-500 flex-shrink-0" />
               <p className="text-xs text-indigo-800 flex-1 truncate">{aiSuggestion}</p>
-              <button onClick={() => setInputText(aiSuggestion)} className="text-[10px] font-black bg-indigo-600 text-white px-2.5 py-1 rounded-lg hover:bg-indigo-700 flex-shrink-0">
-                Insertar
-              </button>
+              <button onClick={() => { setInputText(aiSuggestion); textareaRef.current?.focus(); }}
+                className="text-[9px] font-black bg-indigo-600 text-white px-2.5 py-1 rounded-lg hover:bg-indigo-700 flex-shrink-0">Insertar</button>
             </div>
           </div>
         )}
 
+        {/* Input */}
         {activeConvId && (
           <div className="p-3 bg-white border-t border-slate-200 flex-shrink-0">
             <div className="flex items-end gap-2 bg-slate-50 border border-slate-200 p-2 rounded-2xl focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100 transition-all">
-              <button className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-xl transition-colors"><Paperclip size={17} /></button>
+              <button className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-xl transition-colors"><Paperclip size={16} /></button>
               <textarea ref={textareaRef} rows={1} value={inputText}
                 onChange={e => setInputText(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
@@ -597,60 +692,52 @@ export default function AsistenteOmnicanal() {
                 placeholder="Escribe un mensaje... (Enter para enviar)" />
               <button onClick={sendMessage} disabled={!inputText.trim() || sending}
                 className="p-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl transition-colors">
-                {sending ? <RefreshCw size={16} className="animate-spin" /> : <Send size={16} />}
+                {sending ? <RefreshCw size={15} className="animate-spin" /> : <Send size={15} />}
               </button>
             </div>
           </div>
         )}
       </div>
 
-      {/* ── COL 4: CRM MINI ─────────────────────────────────────────────── */}
+      {/* â”€â”€ COL 4: CRM PANEL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       <div className="bg-slate-50 border-l border-slate-200 flex flex-col flex-shrink-0 relative" style={{ width: col4Width }}>
-        <div onMouseDown={startDrag(setCol4Width, 'xr', 300, 600)} className="absolute left-0 top-0 bottom-0 w-1.5 hover:bg-indigo-400/40 cursor-col-resize bg-transparent z-20 -ml-px" />
+        <div onMouseDown={startDrag(setCol4Width, 'xr', 300, 620)} className="absolute left-0 top-0 bottom-0 w-1.5 hover:bg-indigo-400/40 cursor-col-resize bg-transparent z-20" />
 
-        {/* ─ CRM TOP: customer header + historial ───────────────────────── */}
-        <div className="flex flex-col bg-white border-b border-slate-200 relative" style={{ height: crmHeight, minHeight: 180 }}>
+        {/* CRM History Panel */}
+        <div className="flex flex-col bg-white border-b border-slate-200 relative overflow-hidden" style={{ height: crmHeight }}>
 
-          {/* Customer info bar */}
-          <div className="px-4 py-3 border-b border-slate-100 flex-shrink-0">
-            <div className="flex items-center justify-between mb-1.5">
+          {/* Customer info */}
+          <div className="px-4 py-2.5 border-b border-slate-100 flex-shrink-0">
+            <div className="flex items-center justify-between">
               <div className="min-w-0">
-                <p className="font-extrabold text-slate-800 text-sm truncate">{activeConvData?.customer_name || 'Sin cliente vinculado'}</p>
-                <p className="text-[10px] text-slate-400 truncate">{activeConvData?.customer_email || activeConvData?.customer_phone || 'Sin datos de contacto'}</p>
+                <p className="font-extrabold text-slate-800 text-sm truncate">{activeConvData?.customer_name || 'Sin cliente'}</p>
+                <p className="text-[10px] text-slate-400 truncate">{activeConvData?.customer_email || activeConvData?.customer_phone || 'â€”'}</p>
               </div>
               <div className="flex items-center gap-1 flex-shrink-0 ml-2">
-                {activeConvData?.customer_phone && <a href={`tel:${activeConvData.customer_phone}`} className="p-1 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg"><Phone size={13} /></a>}
-                {activeConvData?.customer_id && <a href={`/dashboard/agenda_clientes/${activeConvData.customer_id}`} target="_blank" className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"><ExternalLink size={13} /></a>}
+                {activeConvData?.customer_phone && <a href={`tel:${activeConvData.customer_phone}`} className="p-1 text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg"><Phone size={12} /></a>}
+                {activeConvData?.customer_id && <a href={`/dashboard/agenda_clientes/${activeConvData.customer_id}`} target="_blank" className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"><ExternalLink size={12} /></a>}
               </div>
             </div>
-            {!activeConvData?.customer_id && (
-              <p className="text-[9px] text-amber-600 font-medium flex items-center gap-1"><AlertCircle size={9} />Conversación sin cliente vinculado</p>
-            )}
           </div>
 
-          {/* Historial CRM header */}
-          <div className="px-4 py-2 border-b border-slate-100 flex items-center justify-between flex-shrink-0 bg-slate-50/50">
+          {/* Historial header */}
+          <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between flex-shrink-0 bg-slate-50/50">
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-black text-slate-600 uppercase tracking-wider">Historial CRM</span>
+              <span className="text-[10px] font-black text-slate-600 uppercase tracking-wide">Historial CRM</span>
               <span className="text-[9px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded-full font-bold">{crmLeads.length}</span>
             </div>
             <div className="flex items-center gap-1.5">
+              {/* Font size control for CRM */}
+              <FontSizePicker value={crmFontSize} onChange={changeCrmFont} />
               {/* My leads toggle */}
-              <button
-                onClick={() => setShowMyLeads(v => !v)}
-                title={showMyLeads ? 'Mostrando mis leads' : 'Mostrando todos los leads'}
-                className={`text-[8px] font-black uppercase px-1.5 py-1 rounded-lg flex items-center gap-1 transition-all ${showMyLeads ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'}`}
-              >
-                <User size={9} /> {showMyLeads ? 'Míos' : 'Todos'}
+              <button onClick={() => setShowMyLeads(v => !v)} title={showMyLeads ? 'Mis leads' : 'Todos los leads'}
+                className={`text-[8px] font-black uppercase px-2 py-1 rounded-lg flex items-center gap-1 transition-all ${showMyLeads ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'}`}>
+                <User size={8} />{showMyLeads ? 'MÃ­os' : 'Todos'}
               </button>
-              {/* Nueva Solicitud */}
-              <button
-                onClick={() => { setShowNewLead(true); setNewLeadError(''); }}
-                disabled={!activeConvData?.customer_id}
-                title={activeConvData?.customer_id ? 'Nueva Solicitud' : 'Vincula un cliente primero'}
-                className="flex items-center gap-1 text-[9px] font-black bg-indigo-600 text-white px-2 py-1 rounded-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
-              >
-                <Plus size={11} /> Nueva
+              {/* Nueva solicitud */}
+              <button onClick={() => { setShowNewLead(true); setNewLeadError(''); }}
+                className="flex items-center gap-1 text-[9px] font-black bg-indigo-600 text-white px-2 py-1 rounded-lg hover:bg-indigo-700 transition-all shadow-sm">
+                <Plus size={10} /> Nueva
               </button>
             </div>
           </div>
@@ -658,87 +745,89 @@ export default function AsistenteOmnicanal() {
           {/* Leads list */}
           <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2">
             {loadingLeads ? (
-              <div className="flex justify-center py-4 text-slate-400"><RefreshCw size={16} className="animate-spin" /></div>
+              <div className="flex justify-center py-4"><RefreshCw size={15} className="animate-spin text-slate-400" /></div>
             ) : crmLeads.length === 0 ? (
-              <div className="text-center py-6 text-slate-400">
+              <div className="text-center py-8 text-slate-400">
                 <FileText size={22} className="mx-auto mb-2 opacity-25" />
-                <p className="text-[10px]">{activeConvData?.customer_id ? 'Sin registros CRM' : 'Vincula un cliente'}</p>
-                {activeConvData?.customer_id && (
-                  <button onClick={() => setShowNewLead(true)}
-                    className="mt-2 text-[10px] font-bold text-indigo-600 hover:underline flex items-center gap-1 mx-auto">
-                    <Plus size={10} /> Crear primera solicitud
-                  </button>
-                )}
+                <p className={`text-${cFS.lead}`}>{activeConv?.customer_id ? 'Sin registros CRM para este cliente' : 'Sin historial â€” crea una nueva solicitud'}</p>
+                <button onClick={() => setShowNewLead(true)} className="mt-2 text-[10px] font-bold text-indigo-600 hover:underline flex items-center gap-1 mx-auto">
+                  <Plus size={9} /> Crear primera solicitud
+                </button>
               </div>
             ) : crmLeads.map((lead, idx) => {
-              const stage = crmStages.find(s => s.id === lead.pipeline_stage_id) || { name: lead.stage_name, color: 'bg-slate-500' };
+              const stage = crmStages.find(s => s.id === lead.pipeline_stage_id) || { name: lead.stage_name || 'Sin etapa', color: 'bg-slate-500' };
               const sc = stageColor(stage);
               return (
-                <div key={`lead-${lead.id}-${idx}`} className="border border-slate-200 rounded-xl overflow-hidden bg-white hover:border-indigo-300 hover:shadow-sm transition-all group">
-                  {/* Lead header */}
-                  <div className="px-3 py-2 border-b border-slate-100 bg-slate-50/50 group-hover:bg-indigo-50/30 flex items-center justify-between">
+                <div key={`lead-${lead.id ?? idx}-${idx}`} className="border border-slate-200 rounded-xl overflow-hidden bg-white hover:border-indigo-300 hover:shadow-sm transition-all group">
+                  <div className="px-3 py-2 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between group-hover:bg-indigo-50/20">
                     <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="text-[9px] font-black text-slate-500">#{lead.id}</span>
-                      <span className="text-[10px] font-bold text-slate-800 truncate">{lead.solicitud_tipo || 'Lead'}</span>
+                      <span className={`text-${cFS.leadSub} font-black text-slate-400`}>#{lead.id}</span>
+                      <span className={`text-${cFS.lead} font-bold text-slate-800 truncate`}>{lead.solicitud_tipo || 'Lead'}</span>
                     </div>
-                    <StageBadge stage={stage} />
+                    <span className={`text-${cFS.badge} font-black uppercase px-1.5 py-0.5 rounded-md`}
+                      style={{ backgroundColor: `${sc}18`, color: sc, border: `1px solid ${sc}40` }}>
+                      {(stage.name || '').length > 12 ? (stage.name || '').slice(0, 12) + 'â€¦' : (stage.name || '')}
+                    </span>
                   </div>
 
-                  {/* Lead body */}
                   <div className="px-3 py-2">
                     {lead.lead_product_name && (
-                      <p className="text-[9px] text-slate-500 flex items-center gap-1 mb-1 truncate"><Package size={8} />{lead.lead_product_name}</p>
-                    )}
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs font-black text-slate-800">
-                        {(lead.value || lead.lead_value) > 0 ? `$${Number(lead.value ?? lead.lead_value).toLocaleString('es-CO')}` : '—'}
+                      <p className={`text-${cFS.leadSub} text-slate-500 flex items-center gap-1 mb-1 truncate`}>
+                        <Package size={8} />{lead.lead_product_name}
                       </p>
-                      {lead.advisor_name && <p className="text-[9px] text-slate-400 truncate ml-1"><User size={8} className="inline" /> {lead.advisor_name}</p>}
+                    )}
+                    <div className="flex items-center justify-between mb-2">
+                      <span className={`text-${cFS.lead} font-black text-slate-800`}>
+                        {(lead.value || lead.lead_value) > 0 ? `$${Number(lead.value ?? lead.lead_value).toLocaleString('es-CO')}` : 'â€”'}
+                      </span>
+                      {lead.advisor_name && (
+                        <span className={`text-${cFS.badge} text-slate-400 flex items-center gap-0.5 truncate`}>
+                          <User size={7} />{lead.advisor_name}
+                        </span>
+                      )}
                     </div>
 
                     {/* Inline pipeline mover */}
-                    <div className="mt-2 flex items-center gap-1 flex-wrap">
+                    <div className="flex flex-wrap gap-1">
                       {crmStages.map(s => {
                         const isActive = s.id === lead.pipeline_stage_id;
                         const c = stageColor(s);
                         return (
                           <button key={s.id} onClick={() => !isActive && moveLead(lead, s.id)}
-                            title={s.name}
-                            className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded transition-all ${isActive ? 'text-white' : 'text-slate-500 hover:opacity-80'}`}
-                            style={isActive ? { backgroundColor: c } : { backgroundColor: '#f1f5f9', border: `1px solid #e2e8f0` }}
                             disabled={movingStage || isActive}
-                          >
-                            {s.name.length > 10 ? s.name.slice(0, 10) + '…' : s.name}
+                            title={s.name}
+                            className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded transition-all leading-tight ${
+                              isActive ? 'text-white' : 'text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200'
+                            }`}
+                            style={isActive ? { backgroundColor: c } : {}}>
+                            {s.name.length > 9 ? s.name.slice(0, 9) + 'â€¦' : s.name}
                           </button>
                         );
                       })}
                     </div>
 
-                    {/* Actions */}
-                    <div className="mt-2 flex items-center justify-end gap-1">
-                      <button onClick={() => openLead(lead)}
-                        className="text-[9px] font-bold text-indigo-600 hover:bg-indigo-50 px-2 py-1 rounded-lg flex items-center gap-0.5 transition-colors">
-                        Gestionar <ChevronRight size={9} />
-                      </button>
-                    </div>
+                    <button onClick={() => openLead(lead)}
+                      className={`mt-1.5 w-full text-right text-${cFS.badge} font-bold text-indigo-600 hover:text-indigo-800 flex items-center justify-end gap-0.5`}>
+                      Gestionar <ChevronRight size={9} />
+                    </button>
                   </div>
                 </div>
               );
             })}
           </div>
-          <div onMouseDown={startDrag(setCrmHeight, 'y', 180, 700)} className="absolute bottom-0 left-0 right-0 h-1.5 cursor-row-resize hover:bg-indigo-400/40 bg-transparent z-20" />
+          <div onMouseDown={startDrag(setCrmHeight, 'y', 180, 720)} className="absolute bottom-0 left-0 right-0 h-1.5 cursor-row-resize hover:bg-indigo-400/40 bg-transparent z-20" />
         </div>
 
-        {/* ─ AI AGENT PANEL ──────────────────────────────────────────────── */}
-        <div className="flex-1 flex flex-col overflow-hidden bg-gradient-to-b from-white to-indigo-50/20">
+        {/* AI Agent panel */}
+        <div className="flex-1 flex flex-col overflow-hidden">
           <div className="px-4 py-2.5 bg-white border-b border-indigo-100 flex items-center justify-between flex-shrink-0">
             <div className="flex items-center gap-2">
-              <div className="bg-indigo-600 p-1 rounded-lg"><Sparkles className="text-white" size={12} /></div>
+              <div className="bg-indigo-600 p-1 rounded-lg"><Sparkles size={11} className="text-white" /></div>
               <span className="font-extrabold text-indigo-900 text-sm">Agente IA</span>
               <div className={`w-1.5 h-1.5 rounded-full ${aiMode === 'off' ? 'bg-slate-400' : aiMode === 'auto' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'}`} />
             </div>
             <div className="flex items-center gap-0.5 bg-slate-100 rounded-lg p-0.5">
-              {(['off', 'suggestion', 'auto'] as const).map(m => (
+              {(['off','suggestion','auto'] as const).map(m => (
                 <button key={m} onClick={() => toggleAiMode(m)}
                   className={`px-2 py-1 rounded-md text-[8px] font-black uppercase transition-all ${aiMode === m ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500'}`}>
                   {m === 'off' ? 'Off' : m === 'suggestion' ? 'Suger.' : 'Auto'}
@@ -747,13 +836,13 @@ export default function AsistenteOmnicanal() {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-3 space-y-3">
+          <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-gradient-to-b from-white to-indigo-50/20">
             <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-3 flex gap-2">
               <div className={`w-2 h-2 rounded-full mt-1 flex-shrink-0 ${aiMode === 'off' ? 'bg-slate-400' : aiMode === 'auto' ? 'bg-emerald-500 animate-pulse' : 'bg-amber-400'}`} />
               <div>
-                <p className="text-[9px] font-black text-slate-400 uppercase mb-0.5">Estado</p>
+                <p className="text-[9px] font-black text-slate-400 uppercase mb-0.5">Estado IA</p>
                 <p className="text-xs font-bold text-slate-700 leading-snug">
-                  {aiMode === 'off' ? 'IA desactivada.' : aiMode === 'auto' ? 'AUTO: responde automáticamente.' : 'SUGERENCIA: propone al asesor.'}
+                  {aiMode === 'off' ? 'Desactivada.' : aiMode === 'auto' ? 'AUTO: responde automÃ¡ticamente.' : 'SUGERENCIA: propone al asesor.'}
                 </p>
               </div>
             </div>
@@ -761,12 +850,12 @@ export default function AsistenteOmnicanal() {
             {activeConvData && (
               <div className="bg-indigo-50 rounded-xl border border-indigo-100 p-3">
                 <p className="text-[9px] font-black text-indigo-700 uppercase mb-1.5">Contexto</p>
-                <div className="space-y-0.5">
-                  <p className="text-[10px] text-indigo-800"><span className="font-bold">Canal:</span> {CHANNEL_CONFIG[activeConvData.channel]?.label || activeConvData.channel}</p>
-                  <p className="text-[10px] text-indigo-800"><span className="font-bold">Leads:</span> {crmLeads.length} registros</p>
-                  <p className="text-[10px] text-indigo-800"><span className="font-bold">Mensajes:</span> {messages.length}</p>
-                  {crmLeads.length > 0 && <p className="text-[10px] text-indigo-800"><span className="font-bold">Último estado:</span> {crmLeads[0].stage_name || crmLeads[0].status}</p>}
-                  {currentUser && <p className="text-[10px] text-indigo-800"><span className="font-bold">Asesor:</span> {currentUser}</p>}
+                <div className="space-y-0.5 text-[10px] text-indigo-800">
+                  <p><span className="font-bold">Canal:</span> {CHANNEL_CONFIG[activeConvData.channel]?.label || activeConvData.channel}</p>
+                  <p><span className="font-bold">Leads activos:</span> {crmLeads.length}</p>
+                  <p><span className="font-bold">Mensajes:</span> {messages.length}</p>
+                  {crmLeads.length > 0 && <p><span className="font-bold">Ãšltimo estado:</span> {crmLeads[0].stage_name || crmLeads[0].status}</p>}
+                  {currentUser && <p><span className="font-bold">Asesor:</span> {currentUser}</p>}
                 </div>
               </div>
             )}
@@ -774,8 +863,8 @@ export default function AsistenteOmnicanal() {
             {aiSuggestion && aiMode !== 'off' && (
               <div className="bg-indigo-600 rounded-2xl p-4 text-white shadow-md">
                 <div className="flex items-center gap-1 mb-2">
-                  <Bot size={11} className="text-indigo-200" />
-                  <span className="text-[9px] font-black text-indigo-200 uppercase">Sugerencia</span>
+                  <Bot size={10} className="text-indigo-200" />
+                  <span className="text-[9px] font-black text-indigo-200 uppercase">Sugerencia IA</span>
                   {loadingAI && <RefreshCw size={9} className="animate-spin text-indigo-300 ml-auto" />}
                 </div>
                 <p className="text-xs font-medium leading-relaxed mb-3">"{aiSuggestion}"</p>
@@ -785,13 +874,11 @@ export default function AsistenteOmnicanal() {
                       className="flex-1 bg-white text-indigo-700 text-[9px] font-black py-1.5 rounded-lg hover:bg-indigo-50">Insertar</button>
                     <button onClick={async () => {
                       if (!activeConvId) return;
-                      await apiFetch(`/chat/conversations/${activeConvId}/reply`, {
-                        method: 'POST', body: JSON.stringify({ content: aiSuggestion, is_ai_generated: true, is_auto_sent: true }),
-                      });
-                      setMessages(prev => [...prev, { id: Date.now(), direction: 'out', content: aiSuggestion, sender_name: 'Agente IA', is_ai_generated: true, created_at: new Date().toISOString() }]);
-                    }} className="flex-1 bg-indigo-500 text-white text-[9px] font-black py-1.5 rounded-lg hover:bg-indigo-400 border border-indigo-400">
-                      Enviar directo
-                    </button>
+                      const d = await apiFetch(`/chat/conversations/${activeConvId}/reply`, {
+                        method: 'POST', body: JSON.stringify({ content: aiSuggestion, is_ai_generated: true }),
+                      }).catch(() => null);
+                      if (d) setMessages(prev => [...prev, { id: d.id || Date.now(), direction: 'out', content: aiSuggestion, is_ai_generated: true, created_at: new Date().toISOString() }]);
+                    }} className="flex-1 bg-indigo-500 text-white text-[9px] font-black py-1.5 rounded-lg hover:bg-indigo-400 border border-indigo-400">Enviar directo</button>
                   </div>
                 )}
               </div>
@@ -800,84 +887,157 @@ export default function AsistenteOmnicanal() {
         </div>
       </div>
 
-      {/* ══ MODAL: NUEVA SOLICITUD ═══════════════════════════════════════════ */}
+      {/* â•â• MODAL: NUEVA SOLICITUD â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       {showNewLead && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-slate-100">
             <div className="px-5 py-4 bg-gradient-to-r from-indigo-50 to-white border-b border-slate-100 flex justify-between items-center">
               <div>
-                <h3 className="font-extrabold text-slate-800">Nueva Solicitud</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Para: <strong>{activeConvData?.customer_name}</strong></p>
+                <h3 className="font-extrabold text-slate-800 text-lg flex items-center gap-2">
+                  <Plus size={18} className="text-indigo-600" /> Nueva Solicitud CRM
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">Se registrarÃ¡ en el CRM e historial del cliente</p>
               </div>
               <button onClick={() => setShowNewLead(false)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full"><X size={17} /></button>
             </div>
 
-            <form onSubmit={createNewLead} className="p-5 space-y-3.5 max-h-[75vh] overflow-y-auto">
+            <form onSubmit={createNewLead} className="p-5 space-y-4 max-h-[78vh] overflow-y-auto">
               {newLeadError && (
-                <div className="bg-red-50 border border-red-200 rounded-xl px-3 py-2 flex items-center gap-2 text-xs text-red-700">
-                  <AlertCircle size={14} />{newLeadError}
+                <div className="bg-red-50 border border-red-200 rounded-xl px-3 py-2.5 flex items-start gap-2 text-xs text-red-700">
+                  <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />{newLeadError}
+                </div>
+              )}
+
+              {/* Customer field â€” show when conv has no customer */}
+              {!activeConv?.customer_id ? (
+                <div>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase mb-1.5 flex items-center gap-1">
+                    <User size={10} /> Cliente *
+                  </label>
+                  <div className="relative">
+                    <input
+                      value={newLeadForm.customer_search}
+                      onChange={e => onCustomerSearch(e.target.value)}
+                      onFocus={() => { setShowCustomerList(true); if (!newLeadForm.customer_search) onCustomerSearch(''); }}
+                      placeholder="Buscar cliente por nombre, email o telÃ©fono..."
+                      autoComplete="off"
+                      className={`w-full border rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 pr-8 ${
+                        newLeadForm.customer_id ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200 bg-slate-50'
+                      }`}
+                    />
+                    {newLeadForm.customer_id ? (
+                      <Check size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-emerald-500" />
+                    ) : searchingCustomer ? (
+                      <RefreshCw size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 animate-spin" />
+                    ) : (
+                      <Search size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    )}
+                    {/* Dropdown */}
+                    {showCustomerList && (customerResults.length > 0 || newLeadForm.customer_search.length > 0) && (
+                      <div className="absolute z-10 left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden max-h-48 overflow-y-auto">
+                        {customerResults.length === 0 && !searchingCustomer ? (
+                          <div className="p-3 text-center text-xs text-slate-500">
+                            <p>No encontrado en la base de datos</p>
+                            <a href="/dashboard/agenda_clientes" target="_blank"
+                              className="text-indigo-600 font-bold hover:underline flex items-center gap-1 justify-center mt-1">
+                              <UserPlus size={11} /> Crear nuevo cliente
+                            </a>
+                          </div>
+                        ) : customerResults.map(c => (
+                          <button key={c.id} type="button" onClick={() => selectCustomer(c)}
+                            className="w-full text-left px-3 py-2 hover:bg-indigo-50 transition-colors border-b border-slate-50 last:border-0">
+                            <p className="text-xs font-bold text-slate-800">{c.full_name || `${c.first_name} ${c.last_name}`}</p>
+                            <p className="text-[9px] text-slate-400">{c.email || c.phone || c.city || 'â€”'}</p>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {newLeadForm.customer_id && (
+                    <p className="text-[9px] text-emerald-600 font-bold mt-1 flex items-center gap-1">
+                      <Check size={9} /> Cliente seleccionado â€” la conversaciÃ³n se vincularÃ¡ automÃ¡ticamente
+                    </p>
+                  )}
+                  {!newLeadForm.customer_id && (
+                    <p className="text-[9px] text-amber-600 mt-1 flex items-center gap-1">
+                      <AlertCircle size={9} /> Selecciona un cliente de la lista para continuar
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 flex items-center gap-2">
+                  <Check size={14} className="text-emerald-500" />
+                  <div>
+                    <p className="text-xs font-bold text-emerald-800">{activeConvData?.customer_name}</p>
+                    <p className="text-[9px] text-emerald-600">Cliente vinculado a esta conversaciÃ³n</p>
+                  </div>
                 </div>
               )}
 
               {/* Tipo */}
               <div>
                 <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">Tipo de Solicitud</label>
-                <select value={newLeadForm.solicitud_tipo} onChange={e => setNewLeadForm((f: any) => ({ ...f, solicitud_tipo: e.target.value }))}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400">
+                <select value={newLeadForm.solicitud_tipo}
+                  onChange={e => setNewLeadForm((f: any) => ({ ...f, solicitud_tipo: e.target.value }))}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400">
                   {SOLICITUD_TIPOS.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
 
-              {/* Etapa inicial */}
+              {/* Etapa pipeline */}
               <div>
-                <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">Etapa del Pipeline</label>
-                <select value={newLeadForm.pipeline_stage_id} onChange={e => setNewLeadForm((f: any) => ({ ...f, pipeline_stage_id: e.target.value }))}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400">
+                <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">Etapa Inicial</label>
+                <select value={newLeadForm.pipeline_stage_id}
+                  onChange={e => setNewLeadForm((f: any) => ({ ...f, pipeline_stage_id: e.target.value }))}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400">
                   {crmStages.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
               </div>
 
               {/* Producto */}
               <div>
-                <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">Producto / Interés</label>
-                <input value={newLeadForm.lead_product_name} onChange={e => setNewLeadForm((f: any) => ({ ...f, lead_product_name: e.target.value }))}
-                  placeholder="Ej. Extractor eléctrico doble"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400" />
+                <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">Producto / InterÃ©s</label>
+                <input value={newLeadForm.lead_product_name}
+                  onChange={e => setNewLeadForm((f: any) => ({ ...f, lead_product_name: e.target.value }))}
+                  placeholder="Ej. Extractor elÃ©ctrico doble"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400" />
               </div>
 
               {/* Valor */}
               <div>
                 <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">Valor estimado (COP)</label>
-                <input type="number" value={newLeadForm.lead_value} onChange={e => setNewLeadForm((f: any) => ({ ...f, lead_value: e.target.value }))}
+                <input type="number" value={newLeadForm.lead_value}
+                  onChange={e => setNewLeadForm((f: any) => ({ ...f, lead_value: e.target.value }))}
                   placeholder="0"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400" />
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400" />
               </div>
 
-              {/* Descripción */}
+              {/* DescripciÃ³n */}
               <div>
-                <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">Descripción / Notas</label>
-                <textarea rows={2} value={newLeadForm.lead_description} onChange={e => setNewLeadForm((f: any) => ({ ...f, lead_description: e.target.value }))}
-                  placeholder="Contexto del chat, interés del cliente..."
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 resize-none" />
+                <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">DescripciÃ³n / Notas</label>
+                <textarea rows={2} value={newLeadForm.lead_description}
+                  onChange={e => setNewLeadForm((f: any) => ({ ...f, lead_description: e.target.value }))}
+                  placeholder="Contexto del chat, interÃ©s, requerimientos especiales..."
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 resize-none" />
               </div>
 
               {/* Asesor */}
               <div>
                 <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">Asesor responsable</label>
-                <input value={newLeadForm.advisor_name} onChange={e => setNewLeadForm((f: any) => ({ ...f, advisor_name: e.target.value }))}
+                <input value={newLeadForm.advisor_name || currentUser}
+                  onChange={e => setNewLeadForm((f: any) => ({ ...f, advisor_name: e.target.value }))}
                   placeholder={currentUser || 'Nombre del asesor'}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400" />
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400" />
               </div>
 
               <div className="flex gap-3 pt-1">
                 <button type="button" onClick={() => setShowNewLead(false)}
-                  className="flex-1 py-2.5 text-sm text-slate-600 hover:bg-slate-100 rounded-xl transition-colors">
-                  Cancelar
-                </button>
-                <button type="submit" disabled={savingNew}
-                  className="flex-1 py-2.5 bg-indigo-600 text-white text-sm font-bold rounded-xl hover:bg-indigo-700 disabled:opacity-60 transition-colors flex items-center justify-center gap-2">
+                  className="flex-1 py-2.5 text-sm text-slate-600 hover:bg-slate-100 rounded-xl transition-colors">Cancelar</button>
+                <button type="submit"
+                  disabled={savingNew || (!activeConv?.customer_id && !newLeadForm.customer_id)}
+                  className="flex-1 py-2.5 bg-indigo-600 text-white text-sm font-bold rounded-xl hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2">
                   {savingNew ? <RefreshCw size={14} className="animate-spin" /> : <Plus size={14} />}
-                  Crear en CRM
+                  {savingNew ? 'Creando...' : 'Crear en CRM'}
                 </button>
               </div>
             </form>
@@ -885,20 +1045,19 @@ export default function AsistenteOmnicanal() {
         </div>
       )}
 
-      {/* ══ MODAL: LEAD DETAIL & GESTIÓN ════════════════════════════════════ */}
+      {/* â•â• MODAL: LEAD GESTIÃ“N â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       {showLeadModal && selectedLead && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-100">
             <div className="px-5 py-4 bg-gradient-to-r from-indigo-50 to-white border-b border-slate-100 flex justify-between items-center">
               <div>
                 <h3 className="font-extrabold text-slate-800">Lead #{selectedLead.id}</h3>
-                <p className="text-xs text-slate-500">{activeConvData?.customer_name}</p>
+                <p className="text-xs text-slate-400">{activeConvData?.customer_name}</p>
               </div>
               <button onClick={() => setShowLeadModal(false)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full"><X size={17} /></button>
             </div>
 
             <div className="p-5 space-y-4 max-h-[72vh] overflow-y-auto">
-              {/* Tipo */}
               <div>
                 <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">Tipo</label>
                 <select value={editForm.solicitud_tipo} onChange={e => setEditForm((f: any) => ({ ...f, solicitud_tipo: e.target.value }))}
@@ -907,75 +1066,56 @@ export default function AsistenteOmnicanal() {
                 </select>
               </div>
 
-              {/* Pipeline: grid de botones */}
               <div>
-                <label className="block text-[10px] font-black text-slate-500 uppercase mb-1.5">Mover en Pipeline</label>
+                <label className="block text-[10px] font-black text-slate-500 uppercase mb-1.5">Pipeline â€” haz click para mover</label>
                 <div className="grid grid-cols-2 gap-1.5">
                   {crmStages.map(s => {
                     const isActive = editForm.pipeline_stage_id === s.id;
                     const c = stageColor(s);
                     return (
-                      <button key={s.id}
-                        onClick={() => setEditForm((f: any) => ({ ...f, pipeline_stage_id: s.id }))}
+                      <button key={s.id} onClick={() => setEditForm((f: any) => ({ ...f, pipeline_stage_id: s.id }))}
                         className={`py-2 px-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${isActive ? 'text-white shadow-sm' : 'border border-slate-200 text-slate-600 hover:border-indigo-300'}`}
                         style={isActive ? { backgroundColor: c, borderColor: c } : {}}>
-                        {isActive && <Check size={10} />}
-                        {s.name}
+                        {isActive && <Check size={10} />}{s.name}
                       </button>
                     );
                   })}
                 </div>
               </div>
 
-              {/* Producto */}
-              <div>
-                <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">Producto</label>
-                <input value={editForm.lead_product_name} onChange={e => setEditForm((f: any) => ({ ...f, lead_product_name: e.target.value }))}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400" placeholder="Producto o interés" />
-              </div>
+              {[['Producto', 'lead_product_name', 'text', 'Producto o interÃ©s'],
+                ['Valor (COP)', 'lead_value', 'number', '0'],
+                ['Asesor', 'advisor_name', 'text', 'Nombre del asesor']].map(([label, key, type, ph]) => (
+                <div key={key}>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">{label}</label>
+                  <input type={type} value={editForm[key]} placeholder={ph}
+                    onChange={e => setEditForm((f: any) => ({ ...f, [key]: type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value }))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400" />
+                </div>
+              ))}
 
-              {/* Valor */}
               <div>
-                <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">Valor (COP)</label>
-                <input type="number" value={editForm.lead_value} onChange={e => setEditForm((f: any) => ({ ...f, lead_value: parseFloat(e.target.value) || 0 }))}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400" />
-              </div>
-
-              {/* Descripción */}
-              <div>
-                <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">Descripción</label>
-                <textarea rows={2} value={editForm.lead_description} onChange={e => setEditForm((f: any) => ({ ...f, lead_description: e.target.value }))}
+                <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">DescripciÃ³n</label>
+                <textarea rows={2} value={editForm.lead_description}
+                  onChange={e => setEditForm((f: any) => ({ ...f, lead_description: e.target.value }))}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 resize-none" />
               </div>
 
-              {/* Asesor */}
-              <div>
-                <label className="block text-[10px] font-black text-slate-500 uppercase mb-1">Asesor</label>
-                <input value={editForm.advisor_name} onChange={e => setEditForm((f: any) => ({ ...f, advisor_name: e.target.value }))}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400" />
-              </div>
-
-              {/* Acciones rápidas */}
               <div className="pt-1 border-t border-slate-100">
-                <p className="text-[10px] font-black text-slate-500 uppercase mb-2">Acciones rápidas</p>
+                <p className="text-[10px] font-black text-slate-500 uppercase mb-2">Acciones</p>
                 <div className="grid grid-cols-2 gap-2">
-                  {[
-                    { label: 'Crear Solicitud', icon: MoveRight, action: 'to-solicitud', bg: 'bg-purple-50 border-purple-200 text-purple-700' },
-                    { label: 'Crear Cotización', icon: Calculator, action: 'to-cotizacion', bg: 'bg-amber-50 border-amber-200 text-amber-700' },
-                    { label: 'Crear Pedido', icon: ShoppingCart, action: 'to-pedido', bg: 'bg-emerald-50 border-emerald-200 text-emerald-700' },
-                    { label: 'Ver en CRM', icon: ExternalLink, action: null, href: '/dashboard/crm', bg: 'bg-slate-50 border-slate-200 text-slate-600' },
-                  ].map(({ label, icon: Icon, action, href, bg }) =>
-                    href ? (
-                      <a key={label} href={href} target="_blank" className={`flex items-center justify-center gap-1.5 py-2 px-2 border rounded-xl text-xs font-bold transition-colors hover:opacity-80 ${bg}`}>
-                        <Icon size={12} />{label}
-                      </a>
-                    ) : (
-                      <button key={label} onClick={() => leadAction(selectedLead, action!)}
-                        className={`flex items-center justify-center gap-1.5 py-2 px-2 border rounded-xl text-xs font-bold transition-colors hover:opacity-80 ${bg}`}>
-                        <Icon size={12} />{label}
-                      </button>
-                    )
-                  )}
+                  {[['Crear Solicitud', MoveRight, 'to-solicitud', 'bg-purple-50 border-purple-200 text-purple-700'],
+                    ['Crear CotizaciÃ³n', Calculator, 'to-cotizacion', 'bg-amber-50 border-amber-200 text-amber-700'],
+                    ['Crear Pedido', ShoppingCart, 'to-pedido', 'bg-emerald-50 border-emerald-200 text-emerald-700']].map(([label, Icon, action, bg]: any) => (
+                    <button key={label} onClick={() => leadAction(selectedLead, action)}
+                      className={`flex items-center justify-center gap-1.5 py-2 px-2 border rounded-xl text-xs font-bold transition-colors hover:opacity-80 ${bg}`}>
+                      <Icon size={12} />{label}
+                    </button>
+                  ))}
+                  <a href="/dashboard/crm" target="_blank"
+                    className="flex items-center justify-center gap-1.5 py-2 px-2 border border-slate-200 bg-slate-50 text-slate-600 rounded-xl text-xs font-bold hover:opacity-80">
+                    <ExternalLink size={12} /> Ver en CRM
+                  </a>
                 </div>
               </div>
             </div>
@@ -984,29 +1124,28 @@ export default function AsistenteOmnicanal() {
               <button onClick={() => setShowLeadModal(false)} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-200 rounded-xl">Cancelar</button>
               <button onClick={saveLead} disabled={savingLead}
                 className="px-5 py-2 bg-indigo-600 text-white text-sm font-bold rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex items-center gap-2">
-                {savingLead ? <RefreshCw size={13} className="animate-spin" /> : <Check size={13} />}
-                Guardar
+                {savingLead ? <RefreshCw size={13} className="animate-spin" /> : <Check size={13} />} Guardar
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ══ MODAL: COTIZADOR ════════════════════════════════════════════════ */}
+      {/* â•â• MODAL: COTIZADOR â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       {showQuoteModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-xl overflow-hidden border border-slate-100">
             <div className="px-5 py-4 border-b border-slate-100 flex justify-between items-center bg-gradient-to-r from-indigo-50 to-white">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-indigo-600 text-white rounded-xl"><Calculator size={18} /></div>
-                <div><h3 className="font-extrabold text-slate-800">Cotizador Rápido</h3><p className="text-[10px] text-slate-400">Motor TRM</p></div>
+                <div><h3 className="font-extrabold text-slate-800">Cotizador RÃ¡pido</h3><p className="text-[10px] text-slate-400">Motor TRM</p></div>
               </div>
               <button onClick={() => setShowQuoteModal(false)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full"><X size={18} /></button>
             </div>
             <div className="p-5">
               <form onSubmit={handleCalculate} className="space-y-4">
                 <div className="grid grid-cols-2 gap-3">
-                  {[['Costo (USD)', 'costUsd', '120.00'], ['Descuento (%)', 'discount', '0'], ['Peso (lb)', 'weightLb', '1'], ['TRM', 'trm', '4200']].map(([label, key, ph]) => (
+                  {[['Costo (USD)','costUsd','120.00'],['Descuento (%)','discount','0'],['Peso (lb)','weightLb','1'],['TRM','trm','4200']].map(([label,key,ph]) => (
                     <div key={key}>
                       <label className="block text-[10px] font-bold text-slate-500 mb-1">{label}</label>
                       <input type="number" step="any" value={(quoteForm as any)[key]}
@@ -1017,21 +1156,21 @@ export default function AsistenteOmnicanal() {
                 </div>
                 <button type="submit" disabled={isCalculating}
                   className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 disabled:opacity-60 flex justify-center items-center gap-2">
-                  {isCalculating ? 'Calculando...' : <><ArrowRight size={15} /> Calcular</>}
+                  {isCalculating ? 'Calculando...' : <><ArrowRight size={15} /> Calcular precio sugerido</>}
                 </button>
               </form>
               {quoteResult && (
                 <div className="mt-4 border-t border-slate-100 pt-4">
                   <div className="grid grid-cols-3 gap-2">
-                    {[['Costo', quoteResult.total_cost_cop, 'slate'], ['Precio', quoteResult.suggested_price_cop, 'indigo'], ['Anticipo', quoteResult.advance_payment_cop, 'emerald']].map(([l, v, c]) => (
+                    {[['Costo total',quoteResult.total_cost_cop,'slate'],['Precio sugerido',quoteResult.suggested_price_cop,'indigo'],['Anticipo 50%',quoteResult.advance_payment_cop,'emerald']].map(([l,v,c]) => (
                       <div key={l as string} className={`p-3 rounded-2xl border text-center bg-${c}-50 border-${c}-200`}>
                         <p className={`text-[9px] font-bold uppercase text-${c}-500 mb-1`}>{l as string}</p>
-                        <p className={`text-sm font-extrabold text-${c}-700`}>${Number(v).toLocaleString('es-CO')}</p>
+                        <p className={`text-base font-extrabold text-${c}-700`}>${Number(v).toLocaleString('es-CO')}</p>
                       </div>
                     ))}
                   </div>
                   <button onClick={() => {
-                    setInputText(`💰 Cotización:\n• Costo: $${Number(quoteResult.total_cost_cop).toLocaleString('es-CO')} COP\n• Precio sugerido: $${Number(quoteResult.suggested_price_cop).toLocaleString('es-CO')} COP\n• Anticipo (50%): $${Number(quoteResult.advance_payment_cop).toLocaleString('es-CO')} COP`);
+                    setInputText(`ðŸ’° CotizaciÃ³n:\nâ€¢ Costo: $${Number(quoteResult.total_cost_cop).toLocaleString('es-CO')} COP\nâ€¢ Precio sugerido: $${Number(quoteResult.suggested_price_cop).toLocaleString('es-CO')} COP\nâ€¢ Anticipo (50%): $${Number(quoteResult.advance_payment_cop).toLocaleString('es-CO')} COP`);
                     setShowQuoteModal(false);
                   }} className="w-full mt-3 bg-slate-800 text-white font-bold py-2.5 rounded-xl text-sm flex items-center justify-center gap-2">
                     <Send size={13} /> Enviar al chat
@@ -1045,3 +1184,4 @@ export default function AsistenteOmnicanal() {
     </div>
   );
 }
+
