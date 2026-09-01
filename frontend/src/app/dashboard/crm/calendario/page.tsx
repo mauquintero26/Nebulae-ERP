@@ -1,261 +1,311 @@
-"use client";
+'use client';
 
-import { useState } from 'react';
-import { 
-  Phone, Mail, MessageCircle, FileText, CheckCircle2, 
-  Clock, AlertCircle, Search, Filter, Bot, Calendar,
-  MoreVertical, Send, Paperclip, Activity
+import { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
+import {
+  Phone, Mail, MessageCircle, FileText, CheckCircle2,
+  Clock, AlertCircle, Search, Calendar,
+  MoreVertical, Activity, RefreshCw, User,
+  ChevronRight, DollarSign, Package
 } from 'lucide-react';
 
-const PIPELINES = ['Nuevo', 'Solicitud Cliente', 'Cotización', 'Pago', 'Pedido de Venta'];
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
+async function apiFetch(path: string, opts: RequestInit = {}) {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(opts.headers as any || {}) },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || 'Error');
+  return data.data ?? data;
+}
 
-const MOCK_DATA = {
-  'Nuevo': [
-    { id: 'SEG-1001', name: 'Laura Gómez', product: 'Consulta General', status: 'Recién ingresado', daysInStatus: 1, lastAction: 'Llenó formulario web' },
-    { id: 'SEG-1002', name: 'Andrés Felipe', product: 'Duda sobre envíos', status: 'Asignado a Asesor', daysInStatus: 3, lastAction: 'Asignación automática' }
-  ],
-  'Solicitud Cliente': [
-    { id: 'SEG-1010', name: 'Marta Ríos', product: 'Set Biberones', status: 'Esperando requerimientos', daysInStatus: 4, lastAction: 'Mensaje de saludo enviado' },
-    { id: 'SEG-1011', name: 'Camilo Pérez', product: 'Coche Paseador', status: 'Requerimientos completos', daysInStatus: 1, lastAction: 'Cliente envió referencias' }
-  ],
-  'Cotización': [
-    { id: 'SEG-1024', name: 'Andrés Silva', product: 'Set de Biberones 8oz', status: 'Pendiente por cotizar', daysInStatus: 4, lastAction: 'Llamada no contestada' },
-    { id: 'SEG-1027', name: 'Martha López', product: 'Coche Paseador', status: 'Pendiente por cotizar', daysInStatus: 1, lastAction: 'Consulta de precio' },
-    { id: 'SEG-1025', name: 'Carlos Mendoza', product: 'Extractor Eléctrico', status: 'Cotizado - pdte confirmación', daysInStatus: 2, lastAction: 'Cotización enviada' },
-    { id: 'SEG-1028', name: 'Diana Ríos', product: 'Monitor de Bebé', status: 'Cotización confirmada', daysInStatus: 0, lastAction: 'Aceptó precio' }
-  ],
-  'Pago': [
-    { id: 'SEG-1029', name: 'Luis Fernando', product: 'Silla de Auto', status: 'Factura enviada / Link de pago', daysInStatus: 5, lastAction: 'Envío de link de pago' },
-    { id: 'SEG-1030', name: 'Carmen Velez', product: 'Corral Cuna', status: 'Promesa de pago', daysInStatus: 2, lastAction: 'Cliente confirmó pago mañana' },
-    { id: 'SEG-1031', name: 'Jorge Tovar', product: 'Monitor Pro', status: 'Pago recibido - Validando', daysInStatus: 1, lastAction: 'Comprobante adjuntado' }
-  ],
-  'Pedido de Venta': [
-    { id: 'SEG-1040', name: 'Ana Silva', product: 'Cuna Colecho', status: 'Procesando orden', daysInStatus: 1, lastAction: 'Enviado a bodega' },
-    { id: 'SEG-1041', name: 'David Ríos', product: 'Silla de Auto', status: 'Completado', daysInStatus: 0, lastAction: 'Facturación emitida' }
-  ]
+const PIPELINE_LABELS: Record<string, string> = {
+  DRAFT: 'Nuevo',
+  PENDING: 'Solicitud Cliente',
+  QUOTATION: 'Cotizacion',
+  WON: 'Pedido de Venta',
+  LOST: 'Perdido',
 };
 
-const STATUSES_BY_PIPELINE: Record<string, string[]> = {
-  'Nuevo': ['Recién ingresado', 'Asignado a Asesor'],
-  'Solicitud Cliente': ['Esperando requerimientos', 'Requerimientos completos'],
-  'Cotización': ['Pendiente por cotizar', 'Cotizado - pdte confirmación', 'Cotización confirmada'],
-  'Pago': ['Factura enviada / Link de pago', 'Promesa de pago', 'Pago recibido - Validando'],
-  'Pedido de Venta': ['Procesando orden', 'Completado']
+const PIPELINE_COLORS: Record<string, { bg: string; text: string; border: string; dot: string }> = {
+  DRAFT:     { bg: 'bg-slate-50',   text: 'text-slate-700',  border: 'border-slate-200', dot: 'bg-slate-400' },
+  PENDING:   { bg: 'bg-blue-50',    text: 'text-blue-700',   border: 'border-blue-200',  dot: 'bg-blue-500' },
+  QUOTATION: { bg: 'bg-amber-50',   text: 'text-amber-700',  border: 'border-amber-200', dot: 'bg-amber-500' },
+  WON:       { bg: 'bg-emerald-50', text: 'text-emerald-700',border: 'border-emerald-200',dot: 'bg-emerald-500' },
+  LOST:      { bg: 'bg-red-50',     text: 'text-red-700',    border: 'border-red-200',   dot: 'bg-red-500' },
 };
+
+function timeAgo(iso: string | null) {
+  if (!iso) return 'Sin actividad';
+  const diff = Date.now() - new Date(iso).getTime();
+  const d = Math.floor(diff / 86400000);
+  const h = Math.floor(diff / 3600000);
+  if (d > 30) return `hace ${Math.floor(d/30)} mes(es)`;
+  if (d > 0) return `hace ${d} dia(s)`;
+  if (h > 0) return `hace ${h}h`;
+  return 'Hace un momento';
+}
+
+function daysInStage(iso: string | null) {
+  if (!iso) return 0;
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+}
+
+const fCOP = (v: number) => v > 0 ? `$${Number(v).toLocaleString('es-CO')}` : '-';
+
+const SUB_MODULES = [
+  { name: 'Tablero Kanban',  path: '/dashboard/crm' },
+  { name: 'Seguimientos',    path: '/dashboard/crm/calendario' },
+];
 
 export default function SeguimientosPage() {
-  const [activePipeline, setActivePipeline] = useState('Cotización');
-  const [selectedLead, setSelectedLead] = useState<any>(MOCK_DATA['Cotización'][0]);
-  const [chatterTab, setChatterTab] = useState('WhatsApp');
+  const [leads, setLeads] = useState<any[]>([]);
+  const [stages, setStages] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [activeStage, setActiveStage] = useState('all');
+  const [selected, setSelected] = useState<any | null>(null);
 
-  const leads = MOCK_DATA[activePipeline as keyof typeof MOCK_DATA] || [];
-  const pipelineStatuses = STATUSES_BY_PIPELINE[activePipeline] || [];
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [l, s] = await Promise.all([
+        apiFetch('/crm/leads?limit=200').catch(() => []),
+        apiFetch('/crm/pipeline-stages').catch(() => []),
+      ]);
+      setLeads(Array.isArray(l) ? l : (l?.leads ?? []));
+      setStages(Array.isArray(s) ? s : (s?.stages ?? []));
+    } catch { setLeads([]); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filtered = leads.filter(l => {
+    const ms = !search || JSON.stringify(l).toLowerCase().includes(search.toLowerCase());
+    if (!ms) return false;
+    if (activeStage === 'all') return true;
+    return (l.pipeline_stage_id?.toString() === activeStage) || (l.status === activeStage);
+  });
+
+  const byStage = stages.reduce((acc: any, s: any) => {
+    acc[s.id] = filtered.filter(l => l.pipeline_stage_id === s.id);
+    return acc;
+  }, {} as Record<string, any[]>);
+
+  const urgentes = leads.filter(l => daysInStage(l.updated_at) > 7 && l.status !== 'WON' && l.status !== 'LOST');
 
   return (
-    <div className="h-full flex flex-col bg-slate-50 overflow-hidden animate-in fade-in">
-      
-      {/* Header General */}
-      <div className="px-6 py-4 border-b border-slate-200 bg-white flex justify-between items-center flex-shrink-0">
-        <div>
-          <h1 className="text-2xl font-black text-slate-900 flex items-center gap-2">
-            <Phone className="text-purple-600" /> Mis Seguimientos
-          </h1>
-          <p className="text-sm text-slate-500 font-medium">Gestiona los seguimientos por etapa del Pipeline CRM</p>
-        </div>
-        
-        {/* Pipeline Selectors (The 5 Macro Stages) */}
-        <div className="flex bg-slate-100 p-1 rounded-xl">
-          {PIPELINES.map(pipe => (
-            <button
-              key={pipe}
-              onClick={() => { setActivePipeline(pipe); setSelectedLead(MOCK_DATA[pipe as keyof typeof MOCK_DATA]?.[0]); }}
-              className={`px-4 py-2 text-sm font-bold rounded-lg transition-all ${activePipeline === pipe ? 'bg-white text-purple-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-            >
-              {pipe}
-            </button>
-          ))}
-        </div>
+    <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
+
+      {/* Sub-module nav */}
+      <div className="bg-white border-b border-slate-200 px-6 py-2 overflow-x-auto flex items-center gap-2 shadow-sm sticky top-0 z-30">
+        <span className="text-xs font-black text-slate-400 uppercase tracking-wider mr-4 shrink-0">CRM:</span>
+        {SUB_MODULES.map(mod => (
+          <Link key={mod.name} href={mod.path}
+            className={`shrink-0 px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${
+              mod.path === '/dashboard/crm/calendario'
+                ? 'bg-purple-600 text-white border-purple-600'
+                : 'text-slate-600 hover:bg-purple-50 hover:text-purple-700 border-transparent hover:border-purple-200'
+            }`}>{mod.name}
+          </Link>
+        ))}
       </div>
 
-      {/* Split Pane */}
-      <div className="flex-1 flex overflow-hidden">
-        
-        {/* Left Pane: Vertical Kanban grouped by Status */}
-        <div className="w-[420px] bg-slate-50 border-r border-slate-200 flex flex-col flex-shrink-0">
-          
-          {/* Search */}
-          <div className="p-4 bg-white border-b border-slate-200 flex gap-2 flex-shrink-0">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-              <input type="text" placeholder={`Buscar en ${activePipeline}...`} className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 outline-none" />
-            </div>
-            <button className="p-2 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50 bg-white"><Filter size={16}/></button>
-          </div>
+      {/* Alert urgentes */}
+      {urgentes.length > 0 && (
+        <div className="bg-amber-50 border-b border-amber-200 px-6 py-3 flex items-center gap-4">
+          <AlertCircle className="text-amber-600 shrink-0" size={18} />
+          <p className="text-xs font-bold text-amber-700 flex-1">
+            {urgentes.length} lead(s) sin actividad por mas de 7 dias — riesgo de perder oportunidades
+          </p>
+        </div>
+      )}
 
-          {/* List of Leads Grouped by Status */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
-            {pipelineStatuses.map(status => {
-              const statusLeads = leads.filter(l => l.status === status);
+      <div className="p-8 max-w-[1600px] mx-auto space-y-6">
+
+        {/* Header */}
+        <div className="flex justify-between items-center">
+          <div>
+            <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">
+              <div className="bg-purple-100 text-purple-600 p-2 rounded-xl shadow-inner"><Phone size={24} /></div>
+              Seguimientos CRM
+            </h1>
+            <p className="text-slate-500 mt-1 font-medium">Gestiona el pipeline de ventas por etapa — {leads.length} leads activos</p>
+          </div>
+          <div className="flex gap-3">
+            <button onClick={load} className="bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm">
+              <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> Actualizar
+            </button>
+            <Link href="/dashboard/crm"
+              className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-xl font-bold shadow-md flex items-center gap-2 text-sm">
+              Ir al Kanban
+            </Link>
+          </div>
+        </div>
+
+        {/* KPI Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {stages.slice(0, 3).map((s: any) => {
+            const count = leads.filter(l => l.pipeline_stage_id === s.id).length;
+            return (
+              <div key={s.id} className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm cursor-pointer hover:border-purple-200 transition-all"
+                onClick={() => setActiveStage(s.id.toString())}>
+                <div className="w-3 h-3 rounded-full mb-3" style={{ backgroundColor: s.color || '#a855f7' }} />
+                <p className="text-xs font-black text-slate-400 uppercase mb-1 truncate">{s.name}</p>
+                <h2 className="text-3xl font-black text-slate-800">{count}</h2>
+              </div>
+            );
+          })}
+          <div className="bg-gradient-to-br from-purple-600 to-indigo-700 rounded-2xl p-5 text-white shadow-lg relative overflow-hidden cursor-pointer"
+            onClick={() => setActiveStage('all')}>
+            <div className="absolute right-0 top-0 opacity-10"><Activity size={80} /></div>
+            <p className="text-xs font-black text-purple-100 uppercase mb-1 relative z-10">Total Leads</p>
+            <h2 className="text-3xl font-black relative z-10">{leads.length}</h2>
+            <p className="text-xs font-bold text-purple-100 mt-1 relative z-10">{urgentes.length} urgentes</p>
+          </div>
+        </div>
+
+        {/* Stage filter + Search */}
+        <div className="flex gap-3 flex-wrap items-center">
+          <button onClick={() => setActiveStage('all')}
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeStage === 'all' ? 'bg-purple-600 text-white' : 'bg-white border border-slate-200 text-slate-600'}`}>
+            Todos ({leads.length})
+          </button>
+          {stages.map((s: any) => {
+            const count = leads.filter(l => l.pipeline_stage_id === s.id).length;
+            return (
+              <button key={s.id} onClick={() => setActiveStage(s.id.toString())}
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeStage === s.id.toString() ? 'bg-purple-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:border-purple-200'}`}>
+                {s.name} ({count})
+              </button>
+            );
+          })}
+          <div className="ml-auto flex items-center bg-white border border-slate-300 rounded-xl px-3 py-2 shadow-sm focus-within:border-purple-400">
+            <Search className="text-slate-400 mr-2" size={15} />
+            <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Buscar cliente, producto..."
+              className="bg-transparent text-sm outline-none w-48 text-slate-700" />
+          </div>
+        </div>
+
+        {/* Content */}
+        {loading ? (
+          <div className="flex justify-center py-20">
+            <RefreshCw size={28} className="animate-spin text-purple-400" />
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="bg-white rounded-3xl border border-slate-200 p-20 text-center shadow-sm">
+            <Activity size={48} className="mx-auto mb-4 text-slate-200" />
+            <p className="text-slate-500 font-semibold">Sin leads en esta etapa</p>
+            <Link href="/dashboard/crm"
+              className="inline-flex items-center gap-2 mt-4 bg-purple-600 text-white px-5 py-2 rounded-xl font-bold text-sm hover:bg-purple-700">
+              Ir al Kanban <ChevronRight size={14} />
+            </Link>
+          </div>
+        ) : stages.length > 0 ? (
+          /* Group by stage */
+          <div className="space-y-6">
+            {stages.map((stage: any) => {
+              const stageLeads = filtered.filter(l => l.pipeline_stage_id === stage.id);
+              if (stageLeads.length === 0 && activeStage !== 'all') return null;
               return (
-                <div key={status} className="space-y-3">
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-black text-slate-700 uppercase tracking-wider">{status}</h3>
-                    <span className="bg-slate-200 text-slate-600 text-xs font-bold px-2 py-0.5 rounded-full">{statusLeads.length}</span>
+                <div key={stage.id}>
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: stage.color || '#a855f7' }} />
+                    <h3 className="font-extrabold text-slate-700 text-lg">{stage.name}</h3>
+                    <span className="text-xs font-bold bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">{stageLeads.length} leads</span>
                   </div>
-                  
-                  {statusLeads.length === 0 && (
-                    <div className="text-xs font-medium text-slate-400 italic border-2 border-dashed border-slate-200 p-4 rounded-xl text-center">
-                      No hay seguimientos aquí
+                  {stageLeads.length === 0 ? (
+                    <p className="text-sm text-slate-400 italic pl-6">Sin leads en esta etapa</p>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {stageLeads.map((lead: any) => {
+                        const days = daysInStage(lead.updated_at);
+                        const isUrgent = days > 7;
+                        return (
+                          <div key={lead.id} onClick={() => setSelected(selected?.id === lead.id ? null : lead)}
+                            className={`bg-white rounded-2xl border shadow-sm p-5 cursor-pointer transition-all hover:shadow-md ${
+                              selected?.id === lead.id ? 'border-purple-400 ring-2 ring-purple-100' : isUrgent ? 'border-amber-200' : 'border-slate-100'
+                            }`}>
+                            <div className="flex items-start justify-between mb-3">
+                              <div>
+                                <p className="font-extrabold text-slate-900">{lead.customer_name || lead.name || 'Sin nombre'}</p>
+                                {lead.lead_product_name && (
+                                  <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1"><Package size={10}/> {lead.lead_product_name}</p>
+                                )}
+                              </div>
+                              <div className="flex flex-col items-end gap-1">
+                                {lead.lead_value > 0 && (
+                                  <span className="text-xs font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">
+                                    {fCOP(lead.lead_value)}
+                                  </span>
+                                )}
+                                {isUrgent && (
+                                  <span className="text-xs font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                    <AlertCircle size={10}/> {days}d sin actividad
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="space-y-1.5 text-xs text-slate-500">
+                              {lead.description && (
+                                <p className="line-clamp-2">{lead.description}</p>
+                              )}
+                              <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-50">
+                                <span className="flex items-center gap-1 text-slate-400">
+                                  <Clock size={11}/> {timeAgo(lead.updated_at)}
+                                </span>
+                                {lead.advisor_name && (
+                                  <span className="flex items-center gap-1 text-slate-500 font-medium">
+                                    <User size={11}/> {lead.advisor_name}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Quick actions */}
+                            <div className="flex gap-2 mt-3 pt-3 border-t border-slate-50">
+                              {lead.customer_phone && (
+                                <a href={`tel:${lead.customer_phone}`}
+                                  className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-green-50 text-green-700 rounded-lg text-xs font-bold hover:bg-green-100" onClick={e => e.stopPropagation()}>
+                                  <Phone size={11}/> Llamar
+                                </a>
+                              )}
+                              {lead.customer_email && (
+                                <a href={`mailto:${lead.customer_email}`}
+                                  className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-bold hover:bg-blue-100" onClick={e => e.stopPropagation()}>
+                                  <Mail size={11}/> Email
+                                </a>
+                              )}
+                              <Link href="/dashboard/crm"
+                                className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-purple-50 text-purple-700 rounded-lg text-xs font-bold hover:bg-purple-100" onClick={e => e.stopPropagation()}>
+                                <MoreVertical size={11}/> CRM
+                              </Link>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
-
-                  {statusLeads.map(lead => {
-                    // Logic: >= 3 days = Red, else Gray/Blue
-                    const isOverdue = lead.daysInStatus >= 3;
-                    return (
-                      <div 
-                        key={lead.id} 
-                        onClick={() => setSelectedLead(lead)}
-                        className={`bg-white p-4 rounded-xl border-2 transition-all cursor-pointer shadow-sm relative overflow-hidden ${selectedLead?.id === lead.id ? 'border-purple-600 shadow-md ring-2 ring-purple-100' : 'border-slate-200 hover:border-purple-300'}`}
-                      >
-                        {/* Status Left Border Indicator */}
-                        <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${isOverdue ? 'bg-rose-500' : 'bg-slate-300'}`}></div>
-                        
-                        <div className="flex justify-between items-start mb-2 pl-2">
-                          <span className="text-xs font-black text-slate-400">{lead.id}</span>
-                          <span className={`text-[10px] font-bold px-2 py-1 rounded-md flex items-center gap-1 ${isOverdue ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600'}`}>
-                            <Clock size={10} /> {lead.daysInStatus} {lead.daysInStatus === 1 ? 'día' : 'días'} {isOverdue && '(Vencido)'}
-                          </span>
-                        </div>
-                        <h4 className="font-bold text-slate-900 text-base pl-2">{lead.name}</h4>
-                        <p className="text-xs text-slate-500 mb-3 pl-2">{lead.product}</p>
-                        <div className="flex items-center gap-1.5 text-[11px] text-slate-400 font-medium bg-slate-50 p-2 rounded-lg ml-2 border border-slate-100">
-                          <Activity size={12} className="text-slate-400" /> Última: {lead.lastAction}
-                        </div>
-                      </div>
-                    );
-                  })}
                 </div>
               );
             })}
           </div>
-        </div>
-
-        {/* Right Pane: Detail View */}
-        <div className="flex-1 flex flex-col bg-white overflow-hidden relative border-l border-slate-200">
-          {selectedLead ? (
-            <>
-              {/* Detail Header */}
-              <div className="p-6 border-b border-slate-200 flex justify-between items-start bg-slate-50/50">
-                <div>
-                  <div className="flex items-center gap-3 mb-1">
-                    <h2 className="text-3xl font-black text-slate-900">{selectedLead.name}</h2>
-                    <span className="bg-slate-100 text-slate-600 font-bold px-3 py-1 rounded-full text-xs border border-slate-200">{selectedLead.id}</span>
-                    <span className="bg-purple-100 text-purple-700 font-bold px-3 py-1 rounded-full text-xs flex items-center gap-1 border border-purple-200">
-                      <Activity size={12}/> {activePipeline}: {selectedLead.status}
-                    </span>
-                  </div>
-                  <p className="text-slate-500 font-medium mt-2 flex items-center gap-2">
-                    <span className="bg-white px-3 py-1 rounded-md border border-slate-200 shadow-sm text-xs">Interesado en: <strong className="text-slate-700">{selectedLead.product}</strong></span>
-                  </p>
-                </div>
-                <div className="flex flex-col items-end gap-2">
-                  <select className="bg-white border border-slate-300 text-slate-700 font-bold text-sm px-4 py-2 rounded-xl shadow-sm outline-none focus:ring-2 focus:ring-purple-500">
-                    {pipelineStatuses.map(s => <option key={s} selected={s === selectedLead.status}>{s}</option>)}
-                  </select>
-                  <button className="bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs px-4 py-2 rounded-xl shadow-md flex items-center gap-2 transition-colors">
-                    <Calendar size={14}/> Agendar Cita
-                  </button>
-                </div>
+        ) : (
+          /* Fallback: simple list if no stages */
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filtered.map((lead: any) => (
+              <div key={lead.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
+                <p className="font-extrabold text-slate-900">{lead.customer_name || lead.name || 'Sin nombre'}</p>
+                <p className="text-xs text-slate-400 mt-1">{timeAgo(lead.updated_at)}</p>
               </div>
-
-              <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
-                
-                {/* AI Context */}
-                <div className="bg-indigo-50/80 border border-indigo-100 rounded-2xl p-6 relative overflow-hidden">
-                  <div className="absolute top-0 right-0 p-4 opacity-10">
-                    <Bot size={100} />
-                  </div>
-                  <h3 className="flex items-center gap-2 font-black text-indigo-900 mb-3 relative z-10">
-                    <Bot size={18} className="text-indigo-600"/> Resumen de Evolución e IA
-                  </h3>
-                  <p className="text-sm text-indigo-900/80 leading-relaxed font-medium mb-3 relative z-10">
-                    El cliente se encuentra en <strong className="text-indigo-700">"{selectedLead.status}"</strong>. 
-                    {selectedLead.daysInStatus >= 3 
-                      ? ' Ha excedido el tiempo promedio de respuesta de 2 a 3 días. Se sugiere contacto prioritario o escalar el ticket.' 
-                      : ' Está dentro del marco de tiempo normal. Sugiero hacer una llamada corta para resolver dudas.'}
-                  </p>
-                  {selectedLead.daysInStatus >= 3 && (
-                    <div className="mt-4 flex items-center gap-2 text-rose-700 bg-rose-100/80 p-3 rounded-lg text-sm font-bold relative z-10 border border-rose-200">
-                      <AlertCircle size={16}/> ¡Alerta de SLA! El lead lleva {selectedLead.daysInStatus} días en este estado. Timer vencido.
-                    </div>
-                  )}
-                </div>
-
-                {/* Chatter */}
-                <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
-                  <div className="flex bg-slate-50 border-b border-slate-200">
-                    <button onClick={() => setChatterTab('WhatsApp')} className={`flex-1 py-3 text-sm font-bold flex justify-center items-center gap-2 transition-colors ${chatterTab === 'WhatsApp' ? 'bg-white text-[#25D366] border-t-2 border-t-[#25D366] shadow-[0_4px_0_0_#ffffff_inset]' : 'text-slate-500 hover:bg-slate-100'}`}><MessageCircle size={16}/> WhatsApp</button>
-                    <button onClick={() => setChatterTab('Llamada')} className={`flex-1 py-3 text-sm font-bold flex justify-center items-center gap-2 transition-colors ${chatterTab === 'Llamada' ? 'bg-white text-blue-600 border-t-2 border-t-blue-600 shadow-[0_4px_0_0_#ffffff_inset]' : 'text-slate-500 hover:bg-slate-100'}`}><Phone size={16}/> Llamada</button>
-                    <button onClick={() => setChatterTab('Correo')} className={`flex-1 py-3 text-sm font-bold flex justify-center items-center gap-2 transition-colors ${chatterTab === 'Correo' ? 'bg-white text-rose-600 border-t-2 border-t-rose-600 shadow-[0_4px_0_0_#ffffff_inset]' : 'text-slate-500 hover:bg-slate-100'}`}><Mail size={16}/> Correo</button>
-                    <button onClick={() => setChatterTab('Nota Interna')} className={`flex-1 py-3 text-sm font-bold flex justify-center items-center gap-2 transition-colors ${chatterTab === 'Nota Interna' ? 'bg-white text-amber-600 border-t-2 border-t-amber-600 shadow-[0_4px_0_0_#ffffff_inset]' : 'text-slate-500 hover:bg-slate-100'}`}><FileText size={16}/> Nota Interna</button>
-                  </div>
-                  <div className="p-4 bg-white">
-                    {chatterTab === 'WhatsApp' && (
-                      <div className="space-y-4 animate-in fade-in">
-                        <div className="bg-green-50 text-green-800 text-xs font-bold p-3 rounded-lg flex items-center gap-2 border border-green-100">
-                          <MessageCircle size={14}/> El mensaje quedará registrado en el tracking y el backend avanzará el estado si el cliente responde.
-                        </div>
-                        <textarea 
-                          rows={4}
-                          placeholder={`Hola ${selectedLead.name.split(' ')[0]}, ¿cómo estás? Te comparto la información...`}
-                          className="w-full border border-slate-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-[#25D366] outline-none resize-none bg-slate-50"
-                        ></textarea>
-                        <div className="flex justify-between items-center">
-                          <button className="text-slate-400 hover:text-slate-600 p-2"><Paperclip size={18}/></button>
-                          <button className="bg-[#25D366] hover:bg-[#1ebd5a] text-white px-6 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 shadow-sm transition-colors">
-                            Enviar Mensaje <Send size={14}/>
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                    {chatterTab !== 'WhatsApp' && (
-                      <div className="py-8 text-center text-slate-400 text-sm font-medium animate-in fade-in">
-                        Interfaz funcional para registrar {chatterTab.toLowerCase()} lista para integrar.
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Activity Tracking */}
-                <div className="pt-6 border-t border-slate-100">
-                  <h3 className="font-black text-slate-800 mb-6 uppercase tracking-wider text-xs">Tracking de Actividad (Auditoría)</h3>
-                  <div className="relative border-l-2 border-slate-100 ml-3 space-y-6">
-                    <div className="relative pl-6">
-                      <div className="absolute left-[-9px] top-1 w-4 h-4 rounded-full bg-slate-800 border-4 border-white shadow-sm"></div>
-                      <p className="text-xs font-bold text-slate-400 mb-0.5">Hoy</p>
-                      <p className="text-sm font-bold text-slate-800">Acción: {selectedLead.lastAction}</p>
-                      <p className="text-xs text-slate-500 mt-1">Registrado por: Usuario / Canal Omnicanal</p>
-                    </div>
-                    <div className="relative pl-6 opacity-80">
-                      <div className="absolute left-[-9px] top-1 w-4 h-4 rounded-full bg-purple-500 border-4 border-white shadow-sm"></div>
-                      <p className="text-xs font-bold text-slate-400 mb-0.5">Hace {selectedLead.daysInStatus} días</p>
-                      <p className="text-sm font-bold text-slate-800">Ingresó al estado "{selectedLead.status}"</p>
-                      <p className="text-xs text-slate-500 mt-1">Registrado por: Automatización del Pipeline</p>
-                    </div>
-                  </div>
-                </div>
-
-              </div>
-            </>
-          ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-slate-400 font-medium">
-              <Phone size={48} className="mb-4 opacity-20" />
-              <p>Selecciona un seguimiento del panel izquierdo</p>
-            </div>
-          )}
-        </div>
-
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
