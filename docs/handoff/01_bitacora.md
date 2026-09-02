@@ -65,3 +65,60 @@
 - **Calendario Global (/dashboard/calendario):**
   - Vista de cuadricula mensual perfectamente alineada con el panel de Proximos Eventos y Sincronizacion.
   - Soporte visual para integracion (Google Workspace / Microsoft Outlook / Calendario Interno).
+
+## Fase 9: Unificación de Sub-items de Ventas, Trazabilidad Bidireccional y Acciones de Compra
+- **Estructura Visual Unificada de Barras de Herramientas (2 filas):**
+  - Fila 1: Pestañas en pastillas (pills) rellenas con estado activo índigo/morado y conmutador de vistas (Lista/Kanban) a la derecha.
+  - Fila 2: Buscador dinámico, botón dropdown de filtrado por estado y contador en tiempo real de registros.
+- **Pestaña de Análisis Individual:**
+  - Implementada en **Solicitud de Cliente** (`/ventas/solicitud`), **Cotización** (`/ventas/cotizacion`) y **Pedido de Venta** (`/ventas/venta`) con métricas específicas de conversión y volumen.
+- **Navegación Bidireccional Hub ↔ Sub-módulos:**
+  - Clic en filas del Hub de Ventas redirige a la sub-página correspondiente (`?id=...`) y auto-despliega el panel de detalle lateral.
+  - Inclusión del botón de retorno "← Hub de Ventas" en todos los sub-módulos.
+- **Acciones de Compra desde Pedido de Venta (PVEN):**
+  - Dentro de pedidos en estado `PENDIENTE_COMPRA`, habilitación de bloque de acciones:
+    - *Opción 1:* Crear Pedido de Compra (PEC) directo con autocompletado de proveedor, asignación automática de días y vinculación al PVEN.
+    - *Opción 2:* Enviar a Lista de Productos por Comprar.
+- **Sub-módulo Lista de Productos por Comprar (`/compras/lista-compras`):**
+  - Sub-item posicionado encima de Pedidos de Compra.
+  - Gestión integral con filtros de proveedor, rangos de fechas, buscador, KPIs y consolidación de ítems para órdenes de compra.
+  - Endpoints backend dedicados (`/compras/lista-compras`) con auto-inicialización de tabla PostgreSQL.
+
+## Fase 10: Compras Hub (Paridad Visual y Funcional con Ventas Hub)
+- **Transformación de `/dashboard/compras` en Compras Hub:**
+  - Adopción de la arquitectura visual de Ventas Hub adaptada a compras (paleta morado/purple).
+  - Pestañas de pastilla activa: `Pedidos de Compra` y `Análisis`, con switch de visualización Lista / Kanban.
+  - Alerta dinámica tipo banner para PECs con entregas vencidas o en riesgo crítico de cadena de suministro.
+  - **4 Tarjetas de KPIs en Tiempo Real:** PEC Activos, Capital en Compras, Retrasos Críticos y Recibidos.
+  - **Tabla de Pedidos de Compra:** Columnas completas (#PEC/PVEN, Proveedor, Comprador, Monto, F. Compra, F. Entrega Est., F. Límite Alerta, Estado, Total y Acciones con menú `...`).
+  - **Agrupación por Mes:** Acordeón interactivo expandible que totaliza pedidos y montos por período mensual.
+  - **Tablero Kanban:** Arrastrar y soltar (drag & drop) entre columnas: *Emitido*, *En Tránsito*, *Recibido* y *Cancelado*.
+  - **Panel de Detalle Lateral (Full-width, Split 45/55):**
+    - Pestaña de consolidación de Pedidos de Venta (`PENDIENTE_COMPRA`) para agrupar múltiples PVEN en una orden de compra.
+  - **Pestaña de Análisis de Compras:**
+    - Filtros por período (7d, 30d, 90d, 180d, 1y, personalizado) y tipo de gráfico (barras, líneas, torta).
+    - Métricas de compras por estado y tabla de Top Proveedores por volumen transaccional.
+    - **Asistente IA de Compras:** Interfaz conversacional contextualizada para responder preguntas gerenciales de abastecimiento.
+
+## Fase 11: Reingeniería Total de Pedidos de Compra (`/compras/pedidos`)
+- **Migración a Datos 100% Reales (Eliminación de Mocks):**
+  - Conexión completa con el backend de FastAPI (`/compras/pedidos?limit=200`).
+- **Adaptación al Formato Visual de Solicitud de Cliente:**
+  - Header estilizado, 4 KPI cards conectadas a la base de datos (Activos, En Tránsito, Vencidos, Total).
+  - Barra de herramientas con filtros por estado, búsqueda en vivo, pestañas (`Todos`, `Activos`, `En Tránsito`, `Recibidos`, `Análisis`), agrupación mensual y Kanban drag & drop.
+- **Panel Lateral de Detalle con Barra Interactiva de Tracking:**
+  - **Pipeline Logístico Dinámico:**
+    - Modalidad Casillero: *Proveedor → Casillero* → *Casillero → Nebulae* → *Pendiente Recepción*.
+    - Modalidad Directa: *Proveedor → Colombia* → *Pendiente Recepción*.
+  - Botones de acción directa por etapa (*En Proceso*, *Completar*, *Revertir*).
+  - Registro y guardado de número de guía / tracking por cada fase con **historial cronológico de múltiples guías**.
+  - Pestañas internas adicionales: *Productos del PEC*, *PVEN asociados*, *Información general* y *Historial de actividad*.
+- **Modal de Nuevo PEC (Inspirado en Odoo con Flujo Extendido):**
+  - Autocompletado de proveedores desde BD con detección inteligente: si el proveedor no existe, despliega modal emergente para agregarlo de inmediato a la agenda de proveedores.
+  - Selección de tipo de envío (*Casillero* o *Directo a Colombia*), días de entrega y carrier.
+  - Tabla dinámica de productos con nombre, cantidad, precio COP, IVA, guía individual, fecha estimada y cálculo automático de totales.
+  - Pestaña de asociación de Pedidos de Venta pendientes de compra.
+- **Optimizaciones en Backend (`erp_compras.py`):**
+  - Endpoint `PATCH /pedidos/{id}` ampliado para registrar `tracking_history`, `tipo_envio`, `casillero` y `fecha_compra`.
+  - Endpoint `PATCH /pedidos/{id}/tracking` actualizado para almacenar historial de guías por fase.
+  - Transición automática de estados del PEC según el avance de los tracking stages (ej. avance a `EN_TRANSITO` y cierre a `RECIBIDO`).
