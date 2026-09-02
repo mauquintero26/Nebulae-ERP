@@ -626,3 +626,175 @@ def compras_stats(db: Session = Depends(get_db)):
             "pec_monto_total": float(pec_monto),
         }
     }
+
+
+# ─── LISTA DE PRODUCTOS POR COMPRAR ─────────────────────────────────────────
+
+def _ensure_lista_table(db: Session):
+    """Auto-create lista_compras_items table if not exists"""
+    db.execute(text("""
+        CREATE TABLE IF NOT EXISTS lista_compras_items (
+            id             SERIAL PRIMARY KEY,
+            pven_id        INTEGER,
+            pven_numero    VARCHAR(30),
+            producto       VARCHAR(500) NOT NULL,
+            cantidad       INTEGER DEFAULT 1,
+            unidad         VARCHAR(50),
+            notas          TEXT,
+            proveedor_id   INTEGER,
+            proveedor      VARCHAR(255),
+            estado         VARCHAR(30) DEFAULT 'PENDIENTE',
+            pec_id         INTEGER,
+            pec_numero     VARCHAR(30),
+            fecha_creacion TIMESTAMPTZ DEFAULT NOW(),
+            updated_at     TIMESTAMPTZ DEFAULT NOW(),
+            created_by     VARCHAR(100)
+        )
+    """))
+    db.commit()
+
+
+def _lista_item_dict(row) -> dict:
+    return {
+        "id": row.id,
+        "pven_id": row.pven_id,
+        "pven_numero": row.pven_numero,
+        "producto": row.producto,
+        "cantidad": row.cantidad,
+        "unidad": row.unidad,
+        "notas": row.notas,
+        "proveedor_id": row.proveedor_id,
+        "proveedor": row.proveedor,
+        "estado": row.estado,
+        "pec_id": row.pec_id,
+        "pec_numero": row.pec_numero,
+        "fecha_creacion": row.fecha_creacion.isoformat() if row.fecha_creacion else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "created_by": row.created_by,
+    }
+
+
+@router.get("/lista-compras")
+def list_lista_compras(
+    estado: Optional[str] = None,
+    proveedor: Optional[str] = None,
+    search: Optional[str] = None,
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+    pven_id: Optional[int] = None,
+    limit: int = Query(200, le=500),
+    offset: int = 0,
+    db: Session = Depends(get_db)
+):
+    _ensure_lista_table(db)
+    filters = []
+    if estado:
+        filters.append(f"estado = '{estado}'")
+    if proveedor:
+        filters.append(f"proveedor ILIKE '%{proveedor}%'")
+    if search:
+        filters.append(f"(producto ILIKE '%{search}%' OR pven_numero ILIKE '%{search}%' OR notas ILIKE '%{search}%')")
+    if fecha_desde:
+        filters.append(f"fecha_creacion >= '{fecha_desde}'")
+    if fecha_hasta:
+        filters.append(f"fecha_creacion <= '{fecha_hasta} 23:59:59'")
+    if pven_id:
+        filters.append(f"pven_id = {pven_id}")
+    where = ("WHERE " + " AND ".join(filters)) if filters else ""
+    rows = db.execute(text(f"""
+        SELECT * FROM lista_compras_items {where}
+        ORDER BY fecha_creacion DESC
+        LIMIT {limit} OFFSET {offset}
+    """)).fetchall()
+    total_row = db.execute(text(f"SELECT COUNT(*) FROM lista_compras_items {where}")).scalar()
+    items = [_lista_item_dict(r) for r in rows]
+    return {"status": "success", "total": total_row, "data": items}
+
+
+@router.post("/lista-compras", status_code=201)
+def add_to_lista_compras(body: dict, db: Session = Depends(get_db)):
+    _ensure_lista_table(db)
+    productos = body.get("productos", [])
+    pven_id = body.get("pven_id")
+    pven_numero = body.get("pven_numero")
+    created_by = body.get("created_by")
+
+    if not productos:
+        # Single item mode
+        productos = [{"producto": body.get("producto", ""), "cantidad": body.get("cantidad", 1), "unidad": body.get("unidad"), "notas": body.get("notas")}]
+
+    created_ids = []
+    for prod in productos:
+        nombre = prod.get("producto_nombre") or prod.get("descripcion") or prod.get("producto") or "Sin nombre"
+        row = db.execute(text("""
+            INSERT INTO lista_compras_items
+              (pven_id, pven_numero, producto, cantidad, unidad, notas, proveedor, estado, created_by)
+            VALUES
+              (:pven_id, :pven_numero, :producto, :cantidad, :unidad, :notas, :proveedor, 'PENDIENTE', :created_by)
+            RETURNING id
+        """), {
+            "pven_id": pven_id,
+            "pven_numero": pven_numero,
+            "producto": nombre,
+            "cantidad": int(prod.get("cantidad", prod.get("qty", 1))),
+            "unidad": prod.get("unidad"),
+            "notas": body.get("notas") or prod.get("notas"),
+            "proveedor": body.get("proveedor"),
+            "created_by": created_by,
+        })
+        db.commit()
+        created_ids.append(row.scalar())
+
+    return {"status": "success", "message": f"{len(created_ids)} producto(s) agregado(s) a la lista", "ids": created_ids}
+
+
+@router.patch("/lista-compras/{item_id}")
+def update_lista_item(item_id: int, body: dict, db: Session = Depends(get_db)):
+    _ensure_lista_table(db)
+    sets = []
+    params: dict = {"item_id": item_id}
+    for field in ["estado", "proveedor", "proveedor_id", "pec_id", "pec_numero", "notas", "cantidad", "unidad"]:
+        if field in body:
+            sets.append(f"{field} = :{field}")
+            params[field] = body[field]
+    if not sets:
+        raise HTTPException(400, "No fields to update")
+    sets.append("updated_at = NOW()")
+    db.execute(text(f"UPDATE lista_compras_items SET {', '.join(sets)} WHERE id = :item_id"), params)
+    db.commit()
+    row = db.execute(text("SELECT * FROM lista_compras_items WHERE id = :id"), {"id": item_id}).fetchone()
+    if not row:
+        raise HTTPException(404, "Item no encontrado")
+    return {"status": "success", "data": _lista_item_dict(row)}
+
+
+@router.delete("/lista-compras/{item_id}")
+def delete_lista_item(item_id: int, db: Session = Depends(get_db)):
+    _ensure_lista_table(db)
+    db.execute(text("DELETE FROM lista_compras_items WHERE id = :id"), {"id": item_id})
+    db.commit()
+    return {"status": "success", "message": "Item eliminado"}
+
+
+@router.get("/lista-compras/stats")
+def lista_compras_stats(db: Session = Depends(get_db)):
+    _ensure_lista_table(db)
+    total = db.execute(text("SELECT COUNT(*) FROM lista_compras_items")).scalar() or 0
+    pendientes = db.execute(text("SELECT COUNT(*) FROM lista_compras_items WHERE estado = 'PENDIENTE'")).scalar() or 0
+    en_pedido = db.execute(text("SELECT COUNT(*) FROM lista_compras_items WHERE estado = 'EN_PEDIDO'")).scalar() or 0
+    recibidos = db.execute(text("SELECT COUNT(*) FROM lista_compras_items WHERE estado = 'RECIBIDO'")).scalar() or 0
+    proveedores_rows = db.execute(text("""
+        SELECT proveedor, COUNT(*) as cnt FROM lista_compras_items
+        WHERE estado = 'PENDIENTE' AND proveedor IS NOT NULL AND proveedor != ''
+        GROUP BY proveedor ORDER BY cnt DESC LIMIT 10
+    """)).fetchall()
+    return {
+        "status": "success",
+        "data": {
+            "total": total,
+            "pendientes": pendientes,
+            "en_pedido": en_pedido,
+            "recibidos": recibidos,
+            "por_proveedor": [{"proveedor": r.proveedor, "count": r.cnt} for r in proveedores_rows],
+        }
+    }

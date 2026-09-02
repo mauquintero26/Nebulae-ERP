@@ -28,13 +28,14 @@ export default function PedidosPage() {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* Nav */}
-      <div className="sticky top-0 z-10 bg-white border-b border-gray-200 px-6 py-3 flex gap-6 text-sm font-medium">
-        <Link href="/dashboard/compras/pedidos" className="text-purple-600 border-b-2 border-purple-600 pb-3 -mb-3">Pedidos de Compra</Link>
-        <Link href="/dashboard/compras/transito" className="text-gray-500 hover:text-gray-900">Mercancia en Transito</Link>
-        <Link href="/dashboard/compras/recepciones" className="text-gray-500 hover:text-gray-900">Recepciones (Entrada)</Link>
-        <Link href="/dashboard/compras/traslados" className="text-gray-500 hover:text-gray-900">Traslados Internos</Link>
-        <Link href="/dashboard/compras/registro" className="text-gray-500 hover:text-gray-900">Registro OCR/Manual</Link>
-        <Link href="/dashboard/compras/proyecciones" className="text-gray-500 hover:text-gray-900">Proyecciones</Link>
+      <div className="sticky top-0 z-10 bg-white border-b border-gray-200 px-6 py-3 flex gap-6 text-sm font-medium overflow-x-auto">
+        <Link href="/dashboard/compras/lista-compras" className="text-gray-500 hover:text-gray-900 whitespace-nowrap">Lista de Compras</Link>
+        <Link href="/dashboard/compras/pedidos" className="text-purple-600 border-b-2 border-purple-600 pb-3 -mb-3 whitespace-nowrap">Pedidos de Compra</Link>
+        <Link href="/dashboard/compras/transito" className="text-gray-500 hover:text-gray-900 whitespace-nowrap">Mercancia en Transito</Link>
+        <Link href="/dashboard/compras/recepciones" className="text-gray-500 hover:text-gray-900 whitespace-nowrap">Recepciones (Entrada)</Link>
+        <Link href="/dashboard/compras/traslados" className="text-gray-500 hover:text-gray-900 whitespace-nowrap">Traslados Internos</Link>
+        <Link href="/dashboard/compras/registro" className="text-gray-500 hover:text-gray-900 whitespace-nowrap">Registro OCR/Manual</Link>
+        <Link href="/dashboard/compras/proyecciones" className="text-gray-500 hover:text-gray-900 whitespace-nowrap">Proyecciones</Link>
       </div>
 
       {/* Alert */}

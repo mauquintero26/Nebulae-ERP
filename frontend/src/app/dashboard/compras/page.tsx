@@ -21,6 +21,7 @@ async function apiFetch(path: string, opts: RequestInit = {}) {
 }
 
 const SUB_MODULES = [
+  { name: 'Lista de Compras',      path: '/dashboard/compras/lista-compras' },
   { name: 'Pedidos de Compra',     path: '/dashboard/compras/pedidos' },
   { name: 'Mercancia en Transito', path: '/dashboard/compras/transito' },
   { name: 'Recepciones (Entrada)', path: '/dashboard/compras/recepciones' },

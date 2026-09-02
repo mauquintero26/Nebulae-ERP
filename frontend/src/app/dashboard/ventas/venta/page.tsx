@@ -4,7 +4,8 @@ import {
   Search, RefreshCw, Plus, MoreHorizontal, X, Edit2, Save,
   Clock, Truck, FileText, FileCheck, Phone, Mail, MessageCircle,
   AlertCircle, ShoppingCart, TrendingUp, Activity, CheckCircle2, 
-  Package, DollarSign, ChevronDown, ArrowLeft
+  Package, DollarSign, ChevronDown, ArrowLeft, ListChecks, ShoppingBag,
+  ExternalLink
 } from 'lucide-react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -57,6 +58,15 @@ export default function PedidoDeVentaPage() {
   const [chatterMsg, setChatterMsg]     = useState('');
   const [chatterSending, setChatterSending] = useState(false);
   const [openMenu, setOpenMenu]         = useState<number|null>(null);
+  // ── PEC Modal state ─────────────────────────────────────────────────────────
+  const [showPecModal, setShowPecModal]   = useState(false);
+  const [pecSaving, setPecSaving]         = useState(false);
+  const [pecForm, setPecForm]             = useState({ dias_entrega:15, modalidad_pago:'Contado', notas:'' });
+  const [supplierSearch, setSupplierSearch] = useState('');
+  const [suppliers, setSuppliers]         = useState<any[]>([]);
+  const [selectedSupplier, setSelectedSupplier] = useState<any>(null);
+  const [listaSaving, setListaSaving]     = useState(false);
+  const supplierTimer = useRef<any>(null);
 
   const showToast = (msg:string, type:'success'|'error'='success') => {
     setToast({msg,type}); setTimeout(()=>setToast(null),3500);
@@ -99,6 +109,67 @@ export default function PedidoDeVentaPage() {
   const handleCrearPXP = async (id:number) => {
     try { await apiFetch(`/ventas/pedidos/${id}/crear-pxp`,{method:'POST',body:JSON.stringify({monto_anticipo:selectedPedido?.saldo_cop||0})}); showToast('PXP Creado'); fetchDetail(id); fetchPedidos(); }
     catch(err:any){ showToast(err.message,'error'); }
+  };
+
+  // Supplier autocomplete
+  const onSupplierSearch = (q:string) => {
+    setSupplierSearch(q); setSelectedSupplier(null);
+    if(supplierTimer.current) clearTimeout(supplierTimer.current);
+    if(!q.trim()){ setSuppliers([]); return; }
+    supplierTimer.current = setTimeout(async()=>{
+      const d = await apiFetch(`/compras/proveedores/search?q=${encodeURIComponent(q)}`).catch(()=>({data:[]}));
+      setSuppliers(Array.isArray(d)?d:(d?.data??[]));
+    },300);
+  };
+
+  // Opcion 1: Crear PEC directamente vinculado al PVEN
+  const handleCrearPEC = async () => {
+    if(!selectedPedido) return;
+    setPecSaving(true);
+    try {
+      const user = localStorage.getItem('user_name')||'';
+      const pec = await apiFetch('/compras/pedidos',{method:'POST',body:JSON.stringify({
+        supplier_id: selectedSupplier?.id,
+        supplier_name: selectedSupplier?.name||supplierSearch,
+        ven_id: selectedPedido.id,
+        ven_numero: selectedPedido.numero,
+        dias_entrega: pecForm.dias_entrega,
+        modalidad_pago: pecForm.modalidad_pago,
+        notas: pecForm.notas,
+        productos: (selectedPedido.productos||[]).map((p:any)=>({
+          producto_nombre: p.descripcion||p.producto_nombre||'',
+          qty: p.cantidad||1,
+          unit_price_cop: p.precio_unitario||0,
+        })),
+        created_by: user,
+      })});
+      showToast(`PEC ${pec.numero} creado y vinculado al pedido`);
+      setShowPecModal(false);
+      fetchDetail(selectedPedido.id);
+      fetchPedidos();
+    } catch(err:any){ showToast(err.message,'error'); }
+    finally{ setPecSaving(false); }
+  };
+
+  // Opcion 2: Enviar a Lista de Productos por Comprar
+  const handleAgregarLista = async () => {
+    if(!selectedPedido) return;
+    setListaSaving(true);
+    try {
+      const user = localStorage.getItem('user_name')||'';
+      await apiFetch('/compras/lista-compras',{method:'POST',body:JSON.stringify({
+        pven_id: selectedPedido.id,
+        pven_numero: selectedPedido.numero,
+        productos: (selectedPedido.productos||[]).map((p:any)=>({
+          producto_nombre: p.descripcion||p.producto_nombre||'Sin nombre',
+          qty: p.cantidad||1,
+        })),
+        notas: `PVEN: ${selectedPedido.numero} — Cliente: ${selectedPedido.customer_name||''}`,
+        created_by: user,
+      })});
+      showToast('Productos agregados a la Lista de Compras');
+    } catch(err:any){ showToast(err.message,'error'); }
+    finally{ setListaSaving(false); }
   };
 
   const handleSendChatter = async () => {
@@ -541,6 +612,67 @@ export default function PedidoDeVentaPage() {
             {/* RIGHT 55% — Acciones + Actividad/Chatter */}
             <div className="w-[55%] bg-white p-7 overflow-y-auto flex flex-col gap-4">
 
+              {/* ─── BLOQUE ACCIONES DE COMPRA (solo cuando PENDIENTE_COMPRA) ─── */}
+              {selectedPedido.estado === 'PENDIENTE_COMPRA' && !selectedPedido.pec_numero && (
+                <div className="rounded-2xl border-2 border-orange-200 bg-orange-50 p-5">
+                  <div className="flex items-center gap-2 mb-1">
+                    <ShoppingCart size={18} className="text-orange-600"/>
+                    <h3 className="text-sm font-black text-orange-800 uppercase tracking-wide">Pendiente de Compra</h3>
+                  </div>
+                  <p className="text-xs text-orange-600 mb-4">Este pedido requiere la compra de {(selectedPedido.productos||[]).length} producto(s). Selecciona como proceder:</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Opcion 1 */}
+                    <button
+                      onClick={()=>{
+                        setSupplierSearch(''); setSelectedSupplier(null); setSuppliers([]);
+                        setPecForm({dias_entrega:15, modalidad_pago:'Contado', notas:`Pedido de compra para PVEN ${selectedPedido.numero} — ${selectedPedido.customer_name||''}`});
+                        setShowPecModal(true);
+                      }}
+                      className="flex flex-col items-start gap-2 p-4 bg-white border-2 border-orange-300 rounded-xl hover:border-purple-400 hover:bg-purple-50 transition-all group text-left shadow-sm">
+                      <div className="bg-purple-100 text-purple-600 p-2 rounded-xl group-hover:bg-purple-200 transition-colors">
+                        <ShoppingCart size={18}/>
+                      </div>
+                      <div>
+                        <p className="text-sm font-black text-gray-900">Crear Pedido de Compra</p>
+                        <p className="text-xs text-gray-500 mt-0.5 leading-tight">Genera un PEC vinculado directamente a este PVEN</p>
+                      </div>
+                    </button>
+                    {/* Opcion 2 */}
+                    <button
+                      onClick={handleAgregarLista}
+                      disabled={listaSaving}
+                      className="flex flex-col items-start gap-2 p-4 bg-white border-2 border-orange-300 rounded-xl hover:border-indigo-400 hover:bg-indigo-50 transition-all group text-left shadow-sm disabled:opacity-50">
+                      <div className="bg-indigo-100 text-indigo-600 p-2 rounded-xl group-hover:bg-indigo-200 transition-colors">
+                        {listaSaving ? <RefreshCw size={18} className="animate-spin"/> : <ListChecks size={18}/>}
+                      </div>
+                      <div>
+                        <p className="text-sm font-black text-gray-900">Agregar a Lista de Compras</p>
+                        <p className="text-xs text-gray-500 mt-0.5 leading-tight">Envia los productos a la lista pendiente de comprar</p>
+                      </div>
+                    </button>
+                  </div>
+                  <div className="mt-3 flex justify-end">
+                    <Link href="/dashboard/compras/lista-compras" className="text-xs text-indigo-600 font-bold hover:underline flex items-center gap-1">
+                      Ver Lista de Compras <ExternalLink size={11}/>
+                    </Link>
+                  </div>
+                </div>
+              )}
+
+              {/* Si ya tiene PEC vinculado, mostrar badge */}
+              {selectedPedido.pec_numero && (
+                <div className="flex items-center gap-2 px-4 py-3 bg-purple-50 border border-purple-200 rounded-xl">
+                  <CheckCircle2 size={16} className="text-purple-600 shrink-0"/>
+                  <div className="flex-1">
+                    <p className="text-sm font-black text-purple-800">PEC Vinculado: {selectedPedido.pec_numero}</p>
+                    <p className="text-xs text-purple-600">Pedido de compra creado para este PVEN</p>
+                  </div>
+                  <Link href="/dashboard/compras/pedidos" className="text-xs text-purple-600 font-bold hover:underline flex items-center gap-1">
+                    Ver PEC <ExternalLink size={11}/>
+                  </Link>
+                </div>
+              )}
+
               {/* Action buttons row */}
               <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 flex flex-wrap gap-2">
                 {!selectedPedido.pxp_id&&(
@@ -626,6 +758,92 @@ export default function PedidoDeVentaPage() {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── MODAL CREAR PEC ───────────────────────────────────────────────── */}
+      {showPecModal && selectedPedido && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg">
+            <div className="px-6 py-5 border-b border-gray-100 flex justify-between items-center bg-gradient-to-r from-purple-50 to-white rounded-t-3xl">
+              <div>
+                <h3 className="text-xl font-black text-gray-900 flex items-center gap-2">
+                  <ShoppingCart size={20} className="text-purple-600"/> Crear Pedido de Compra
+                </h3>
+                <p className="text-sm text-gray-500 mt-0.5">Vinculado a <strong>{selectedPedido.numero}</strong> — {selectedPedido.customer_name}</p>
+              </div>
+              <button onClick={()=>setShowPecModal(false)} className="p-2 text-gray-400 hover:bg-gray-100 rounded-xl"><X size={18}/></button>
+            </div>
+            <div className="p-6 space-y-4">
+              {/* Productos summary */}
+              {(selectedPedido.productos||[]).length > 0 && (
+                <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+                  <p className="text-xs font-black text-gray-400 uppercase mb-2">Productos a comprar</p>
+                  <div className="space-y-1">
+                    {(selectedPedido.productos||[]).slice(0,5).map((p:any,i:number)=>(
+                      <div key={i} className="flex justify-between text-xs text-gray-700">
+                        <span className="truncate max-w-[260px]">{p.descripcion||p.producto_nombre}</span>
+                        <span className="font-bold ml-2 shrink-0">× {p.cantidad}</span>
+                      </div>
+                    ))}
+                    {(selectedPedido.productos||[]).length > 5 && (
+                      <p className="text-xs text-gray-400">+{(selectedPedido.productos||[]).length - 5} más...</p>
+                    )}
+                  </div>
+                </div>
+              )}
+              {/* Proveedor */}
+              <div>
+                <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Proveedor</label>
+                <input value={supplierSearch} onChange={e=>onSupplierSearch(e.target.value)}
+                  placeholder="Buscar proveedor..." className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
+                {suppliers.length > 0 && (
+                  <div className="border border-gray-200 rounded-xl shadow-lg mt-1 max-h-36 overflow-y-auto z-10">
+                    {suppliers.map((s:any)=>(
+                      <button key={s.id} onClick={()=>{setSelectedSupplier(s);setSupplierSearch(s.name);setSuppliers([]);}}
+                        className="w-full text-left px-4 py-2.5 hover:bg-purple-50 text-sm font-medium border-b last:border-0">
+                        {s.name} {s.city&&<span className="text-gray-400">· {s.city}</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {selectedSupplier && (
+                  <p className="text-xs text-purple-700 font-bold mt-1 flex items-center gap-1">
+                    <CheckCircle2 size={12}/> {selectedSupplier.name} seleccionado
+                  </p>
+                )}
+              </div>
+              {/* Dias + Modalidad */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Dias Entrega Estimada</label>
+                  <input type="number" min="1" value={pecForm.dias_entrega} onChange={e=>setPecForm(f=>({...f,dias_entrega:Number(e.target.value)}))}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
+                </div>
+                <div>
+                  <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Modalidad de Pago</label>
+                  <select value={pecForm.modalidad_pago} onChange={e=>setPecForm(f=>({...f,modalidad_pago:e.target.value}))}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200">
+                    {['Contado','Credito 30d','Credito 60d','Adelanto 50%','Contra entrega'].map(p=><option key={p}>{p}</option>)}
+                  </select>
+                </div>
+              </div>
+              {/* Notas */}
+              <div>
+                <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Notas</label>
+                <textarea value={pecForm.notas} onChange={e=>setPecForm(f=>({...f,notas:e.target.value}))}
+                  rows={2} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none outline-none focus:ring-2 focus:ring-purple-200"/>
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3 bg-gray-50 rounded-b-3xl">
+              <button onClick={()=>setShowPecModal(false)} className="px-5 py-2.5 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-white">Cancelar</button>
+              <button onClick={handleCrearPEC} disabled={pecSaving}
+                className="px-6 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50">
+                {pecSaving ? <RefreshCw size={14} className="animate-spin"/> : <ShoppingCart size={14}/>}
+                Crear PEC
+              </button>
             </div>
           </div>
         </div>
