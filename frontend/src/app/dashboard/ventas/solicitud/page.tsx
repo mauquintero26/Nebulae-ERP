@@ -113,18 +113,51 @@ function ActionDot({ action }: { action: string }) {
     style={{ backgroundColor: colors[action] || '#94a3b8', borderColor: 'white' }} />;
 }
 
+// ── Product Not Found Modal ──────────────────────────────────────────────────
+function ProductNotFoundModal({
+  productName, onConfirm, onCancel
+}: { productName: string; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl p-7 max-w-sm w-full mx-4 text-center">
+        <div className="w-14 h-14 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <Package className="text-amber-600" size={24}/>
+        </div>
+        <h3 className="font-extrabold text-lg text-slate-900 mb-2">Producto no encontrado</h3>
+        <p className="text-slate-600 text-sm mb-1">
+          El producto <strong className="text-slate-900">"{productName}"</strong> no existe en la base de datos.
+        </p>
+        <p className="text-slate-500 text-xs mb-6">
+          ¿Deseas continuar con este nombre de todas formas? Se anotara en las notas para cotizarlo despues.
+        </p>
+        <div className="flex gap-3">
+          <button onClick={onCancel}
+            className="flex-1 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-bold text-sm hover:bg-slate-50">
+            No, Cancelar
+          </button>
+          <button onClick={onConfirm}
+            className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-sm hover:bg-indigo-700 shadow-md">
+            Si, Continuar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Product Autocomplete ─────────────────────────────────────────────────────
 function ProductSearch({
-  value, onChange, onSelect
-}: { value: string; onChange: (v: string) => void; onSelect: (p: any) => void }) {
+  value, onChange, onSelect, onConfirmNew
+}: { value: string; onChange: (v: string) => void; onSelect: (p: any) => void; onConfirmNew: (name: string) => void }) {
   const [results, setResults] = useState<any[]>([]);
-  const [notFound, setNotFound] = useState(false);
+  const [showNotFoundModal, setShowNotFoundModal] = useState(false);
   const [open, setOpen] = useState(false);
+  const [pendingName, setPendingName] = useState('');
   const timer = useRef<any>(null);
 
   function handleInput(v: string) {
     onChange(v);
-    setNotFound(false);
+    setShowNotFoundModal(false);
     setOpen(false);
     if (timer.current) clearTimeout(timer.current);
     if (!v.trim()) { setResults([]); return; }
@@ -134,7 +167,10 @@ function ProductSearch({
         const list = Array.isArray(d) ? d : (d?.data ?? []);
         setResults(list);
         setOpen(true);
-        if (list.length === 0 && v.length > 2) setNotFound(true);
+        if (list.length === 0 && v.length > 2) {
+          setPendingName(v);
+          setShowNotFoundModal(true);
+        }
       } catch { setResults([]); }
     }, 300);
   }
@@ -155,15 +191,12 @@ function ProductSearch({
           ))}
         </div>
       )}
-      {notFound && (
-        <div className="mt-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
-          <p className="text-xs font-bold text-amber-700 mb-1">
-            Este producto no existe en la base de datos.
-          </p>
-          <p className="text-xs text-amber-600">
-            Puedes dejarlo en blanco y anotarlo en las Notas para que Cotizacion lo gestione.
-          </p>
-        </div>
+      {showNotFoundModal && (
+        <ProductNotFoundModal
+          productName={pendingName}
+          onConfirm={() => { onConfirmNew(pendingName); setShowNotFoundModal(false); }}
+          onCancel={() => { onChange(''); setShowNotFoundModal(false); setPendingName(''); }}
+        />
       )}
     </div>
   );
@@ -941,6 +974,7 @@ export default function SolicitudesPage() {
                       value={prodName}
                       onChange={v => setProdName(v)}
                       onSelect={p => { setProdName(p.name || p.product_name); }}
+                      onConfirmNew={name => { setProdName(name); }}
                     />
                     {prodName && (
                       <div className="mt-2 flex items-center gap-2">
