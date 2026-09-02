@@ -326,6 +326,7 @@ export default function CotizacionPage() {
   const [cotHistory, setCotHistory] = useState<any[]>([]);
   const [chatterInput, setChatterInput] = useState('');
   const [chatterSending, setChatterSending] = useState(false);
+  const [alertDias, setAlertDias] = useState(2);
 
   useEffect(() => {
     const u = localStorage.getItem('user_name') || localStorage.getItem('username') || '';
@@ -337,8 +338,12 @@ export default function CotizacionPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const d = await apiFetch('/ventas/cotizaciones?limit=200');
+      const [d, cfg] = await Promise.all([
+        apiFetch('/ventas/cotizaciones?limit=200'),
+        apiFetch('/ventas/config').catch(() => ({})),
+      ]);
       setCotizaciones(Array.isArray(d) ? d : (d?.data ?? []));
+      if (cfg?.alerta_cot_dias?.value) setAlertDias(Number(cfg.alerta_cot_dias.value));
     } catch { setCotizaciones([]); }
     finally { setLoading(false); }
   }, []);
@@ -469,6 +474,10 @@ export default function CotizacionPage() {
   const sinCalc     = activas.filter(c => !(c.total_cop > 0)).length;
   const vencenPronto= activas.filter(c => isExpiringSoon(c.fecha_entrega_estimada)).length;
   const montoTotal  = confirmadas.reduce((s, c) => s + (c.total_cop || 0), 0);
+  const sinAtender  = activas.filter(c => {
+    const ms = (Date.now() - new Date(c.updated_at || c.created_at).getTime());
+    return ms / 3600000 > alertDias * 24;
+  }).length;
 
   const filtered = cotizaciones.filter(c => {
     const ms = !search || JSON.stringify(c).toLowerCase().includes(search.toLowerCase());
@@ -504,14 +513,15 @@ export default function CotizacionPage() {
       </div>
 
       {/* Alert Banner */}
-      {(sinCalc > 0 || vencenPronto > 0) && (
+      {(sinCalc > 0 || vencenPronto > 0 || sinAtender > 0) && (
         <div className="bg-amber-50 border-b border-amber-200 px-6 py-3 flex items-start gap-4">
           <ShieldAlert className="text-amber-600 shrink-0 mt-0.5" size={20} />
           <div className="flex-1">
-            <h4 className="text-sm font-black text-amber-800">ATENCION — Cotizaciones requieren accion</h4>
+            <h4 className="text-sm font-black text-amber-800">ATENCION — Cotizaciones requieren accion (Alerta {alertDias} dias)</h4>
             <p className="text-xs font-bold text-amber-700 mt-1">
-              {sinCalc > 0 && `• ${sinCalc} cotizacion(es) sin calcular / sin precio `}
-              {vencenPronto > 0 && `• ${vencenPronto} vence(n) en los proximos 7 dias `}
+              {sinAtender > 0 && `* ${sinAtender} cotizacion(es) sin atender mas de ${alertDias} dias `}
+              {sinCalc > 0 && `* ${sinCalc} sin calcular / sin precio `}
+              {vencenPronto > 0 && `* ${vencenPronto} vence(n) en los proximos 7 dias `}
             </p>
           </div>
           <button onClick={load} className="bg-amber-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-amber-700 shrink-0">Actualizar</button>

@@ -453,6 +453,25 @@ export default function SolicitudesPage() {
       const d=await apiFetch(`/ventas/solicitudes/${selected.id}/confirmar`,{method:'POST',body:JSON.stringify({user_name:currentUser})});
       const cotNum=d?.cotizacion?.numero||'';
       showToast(`Cotizacion ${cotNum} creada`);
+      // CRM Pipeline: advance lead to COT stage if customer_id exists
+      if(selected.customer_id){
+        try{
+          // Get leads for this customer and advance the most recent one
+          const leads=await apiFetch(`/crm/leads/v2?limit=50`).catch(()=>({data:[]}));
+          const leadList=Array.isArray(leads)?leads:(leads?.data??[]);
+          const myLead=leadList.find((l:any)=>l.customer_id===selected.customer_id&&l.lead_source==='SC');
+          if(myLead){
+            // Get pipeline stages and advance to next
+            const stages=await apiFetch('/crm/pipeline-stages').catch(()=>({data:[]}));
+            const stageList=Array.isArray(stages)?stages:(stages?.data??[]);
+            const curIdx=stageList.findIndex((s:any)=>s.id===myLead.pipeline_stage_id);
+            const nextStage=stageList[curIdx+1];
+            if(nextStage){
+              await apiFetch(`/crm/leads/${myLead.id}/stage`,{method:'PATCH',body:JSON.stringify({stage_id:nextStage.id,cotizacion_numero:cotNum})}).catch(()=>{});
+            }
+          }
+        }catch{}
+      }
       await loadDetail(selected.id);load();
     }catch(err:any){showToast('Error: '+err.message,'err');}
     setConfirming(false);
@@ -475,13 +494,25 @@ export default function SolicitudesPage() {
       } else if(form.tipo_solicitud==='Devolucion de Producto'){
         extraNotas=`DEVOLUCION VEN:${devVen} PEC:${devPec} MOTIVO:${devMotivo}\n${form.notas}`;
       }
-      await apiFetch('/ventas/solicitudes',{method:'POST',body:JSON.stringify({
+      const scData = await apiFetch('/ventas/solicitudes',{method:'POST',body:JSON.stringify({
         ...form,notas:extraNotas,
         customer_id:selectedCust?.id||null,
         customer_name:selectedCust?`${selectedCust.first_name} ${selectedCust.last_name}`.trim():custSearch,
         customer_phone:selectedCust?.phone||'',customer_email:selectedCust?.email||'',customer_address:selectedCust?.address||'',
         productos:prodsToSend,created_by:currentUser,
       })});
+      // Auto-create CRM Lead silently (only if customer_id exists)
+      if(selectedCust?.id){
+        apiFetch('/crm/leads',{method:'POST',body:JSON.stringify({
+          customer_id:selectedCust.id,
+          advisor_name:form.advisor_name||currentUser,
+          solicitud_tipo:form.tipo_solicitud||'Cotizacion de Producto',
+          description:`SC creada: ${scData?.numero||''} - ${form.notas||''}`.substring(0,500),
+          lead_source:'SC',
+          lead_product_name:prodsToSend[0]?.product_name||'',
+          lead_qty:prodsToSend[0]?.qty||1,
+        })}).catch(()=>{}); // Silent — CRM lead is best-effort
+      }
       showToast('Solicitud creada');
       setShowCreate(false);resetCreateForm();load();
     }catch(err:any){showToast('Error: '+err.message,'err');}
