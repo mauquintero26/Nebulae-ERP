@@ -2,9 +2,10 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import {
   FileText, AlertTriangle, CheckCircle2, Clock, Search, Plus, X,
-  User, Phone, Mail, MapPin, ExternalLink, RefreshCw, ArrowRight,
+  User, Phone, Mail, MapPin, ExternalLink, RefreshCw, ArrowRight, ArrowLeft,
   Activity, ChevronRight, MoreVertical, DollarSign, MessageCircle,
   Edit2, Save, Package, Send, AlertCircle, ChevronDown, Truck,
   Trash2, RotateCcw, UserPlus, LayoutGrid, List, ShieldAlert,
@@ -369,6 +370,13 @@ export default function SolicitudesPage() {
   },[]);
   useEffect(()=>{load();},[load]);
 
+  const searchParams = useSearchParams();
+  // Auto-open detail if navigated here with ?id= from Hub
+  useEffect(()=>{
+    const idParam = searchParams?.get('id');
+    if(idParam){ const numId=Number(idParam); if(!isNaN(numId)) loadDetail(numId); }
+  },[searchParams]);
+
   async function loadDetail(id:number) {
     try{const d=await apiFetch(`/ventas/solicitudes/${id}`);setSelected(d);setEditForm({advisor_name:d.advisor_name||'',tipo_solicitud:d.tipo_solicitud||'Cotizacion de Producto',modalidad_pago:d.modalidad_pago||'Contado',notas:d.notas||'',fecha_vencimiento:d.fecha_vencimiento?d.fecha_vencimiento.split('T')[0]:''});}
     catch(err:any){showToast('Error: '+err.message,'err');}
@@ -573,6 +581,10 @@ export default function SolicitudesPage() {
 
       {/* Sub-module nav */}
       <div className="bg-white border-b border-slate-200 px-6 py-2 overflow-x-auto flex items-center gap-2 shadow-sm sticky top-0 z-30">
+        <Link href="/dashboard/ventas" className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold text-gray-500 hover:bg-gray-100 border border-gray-200 mr-2 transition-colors">
+          <ArrowLeft size={12}/> Hub
+        </Link>
+        <div className="w-px h-4 bg-gray-200 mr-1 shrink-0"/>
         <span className="text-xs font-black text-slate-400 uppercase tracking-wider mr-4 shrink-0">Ventas:</span>
         {SUB_MODULES.map(mod=>(
           <Link key={mod.name} href={mod.path} className={`shrink-0 px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${mod.path==='/dashboard/ventas/solicitud'?'bg-indigo-600 text-white border-indigo-600':'text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 border-transparent hover:border-indigo-200'}`}>{mod.name}</Link>

@@ -8,7 +8,7 @@ import {
   ToggleLeft, ToggleRight, Save, TrendingUp, ShieldAlert,
   ShoppingBag, FileText, Package, BarChart3
 } from 'lucide-react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 
 const SUB_MODULES = [
   { name: 'Solicitud de Cliente', path: '/dashboard/ventas/solicitud' },
@@ -226,6 +226,7 @@ function ConfigPanel({alertDias,onSave,onClose}:{alertDias:any,onSave:(cfg:any)=
    ════════════════════════════════════════════════════════════ */
 export default function VentasHub() {
   const pathname = usePathname();
+  const router = useRouter();
   const [activeTab, setActiveTab]   = useState('Todos');
   const [viewMode, setViewMode]     = useState<'lista'|'kanban'>('lista');
   const [loading, setLoading]       = useState(true);
@@ -636,7 +637,12 @@ export default function VentasHub() {
                   return (
                     <tr key={idx}
                       className={`hover:bg-indigo-50/30 cursor-pointer group transition-colors ${isAtrasada?'border-l-4 border-l-red-400 bg-red-50/20':''}`}
-                      onClick={e=>{if((e.target as any).closest('input')||(e.target as any).closest('button')) return; if(row.tipo==='VEN')openVenDetail(row.id);}}>
+                      onClick={e=>{
+                        if((e.target as any).closest('input')||(e.target as any).closest('button')) return;
+                        if(row.tipo==='SC')  router.push(`/dashboard/ventas/solicitud?id=${row.id}`);
+                        if(row.tipo==='COT') router.push(`/dashboard/ventas/cotizacion?id=${row.id}`);
+                        if(row.tipo==='VEN') router.push(`/dashboard/ventas/venta?id=${row.id}`);
+                      }}>
                       <td className="px-5 py-3.5">
                         <input type="checkbox" className="rounded border-gray-300" checked={selectedIds.has(idStr)}
                           onChange={e=>{const n=new Set(selectedIds);if(e.target.checked)n.add(idStr);else n.delete(idStr);setSelectedIds(n);}}/>

@@ -4,9 +4,10 @@ import {
   Search, RefreshCw, Plus, MoreHorizontal, X, Edit2, Save,
   Clock, Truck, FileText, FileCheck, Phone, Mail, MessageCircle,
   AlertCircle, ShoppingCart, TrendingUp, Activity, CheckCircle2, 
-  Package, DollarSign, ChevronDown
+  Package, DollarSign, ChevronDown, ArrowLeft
 } from 'lucide-react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
 async function apiFetch(path: string, opts: RequestInit = {}) {
@@ -76,7 +77,18 @@ export default function PedidoDeVentaPage() {
     } catch(err:any) { showToast(err.message,'error'); }
   };
 
+  const searchParams = useSearchParams();
+
   useEffect(()=>{ fetchPedidos(); },[]);
+
+  // Auto-open detail if navigated here with ?id= from Hub
+  useEffect(()=>{
+    const idParam = searchParams?.get('id');
+    if(idParam){
+      const numId = Number(idParam);
+      if(!isNaN(numId)) fetchDetail(numId);
+    }
+  },[searchParams]);
 
   const handleSaveEdit = async () => {
     if(!selectedPedido) return;
@@ -134,6 +146,10 @@ export default function PedidoDeVentaPage() {
 
       {/* Sub-module nav */}
       <div className="bg-white border-b border-gray-200 px-6 py-2 flex items-center gap-1 sticky top-0 z-30 shadow-sm overflow-x-auto">
+        <Link href="/dashboard/ventas" className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold text-gray-500 hover:bg-gray-100 border border-gray-200 mr-2 transition-colors">
+          <ArrowLeft size={12}/> Hub
+        </Link>
+        <div className="w-px h-4 bg-gray-200 mr-2 shrink-0"/>
         <span className="text-xs font-black text-gray-400 uppercase tracking-wider mr-3 shrink-0">VENTAS:</span>
         {SUB_MODULES.map(m=>(
           <Link key={m.path} href={m.path}
