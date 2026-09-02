@@ -194,7 +194,7 @@ export default function VentasHub() {
 
         {/* ── FLUJO PIPELINE SC → COT → VEN ────────────────────────────────── */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* SC Card */}
+          {/* SC */}
           <Link href="/dashboard/ventas/solicitud"
             className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm hover:border-indigo-300 hover:shadow-md transition-all group">
             <div className="flex items-center justify-between mb-4">
@@ -221,17 +221,61 @@ export default function VentasHub() {
             </div>
           </Link>
 
-          {/* Flecha */}
-          <div className="hidden md:flex items-center justify-center">
-            <div className="flex flex-col items-center gap-2">
-              <ArrowRight size={28} className="text-slate-300" />
-              <span className="text-xs font-bold text-slate-400">confirmar</span>
+          {/* COT */}
+          <Link href="/dashboard/ventas/cotizacion"
+            className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm hover:border-amber-300 hover:shadow-md transition-all group">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 group-hover:scale-110 transition-transform">
+                <FileText size={24} />
+              </div>
+              <span className="text-xs font-black bg-amber-100 text-amber-700 px-3 py-1 rounded-full">COT</span>
             </div>
-          </div>
+            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-2">Cotizaciones</p>
+            <h2 className="text-4xl font-black text-slate-800">{cotizaciones.length}</h2>
+            <div className="mt-3 space-y-1">
+              <div className="flex justify-between text-xs font-bold">
+                <span className="text-slate-500">En borrador</span>
+                <span className="text-amber-600">{cotPendientes.length}</span>
+              </div>
+              <div className="w-full bg-slate-100 rounded-full h-1.5">
+                <div className="bg-amber-500 h-1.5 rounded-full transition-all"
+                  style={{ width: cotizaciones.length > 0 ? `${((cotizaciones.length - cotPendientes.length) / cotizaciones.length) * 100}%` : '0%' }} />
+              </div>
+              <p className="text-xs text-slate-400">{fCOP(montoTotalCOT)} en cartera</p>
+            </div>
+            <div className="mt-4 flex items-center gap-1 text-xs font-bold text-amber-600 group-hover:gap-2 transition-all">
+              Ver cotizaciones <ChevronRight size={13}/>
+            </div>
+          </Link>
 
-          {/* COT Card — reemplazamos flecha con grid 3 cols en md */}
-          <div className="md:col-span-1 -ml-0 md:-ml-12 hidden md:block">{/* spacer hack removed below */}</div>
+          {/* VEN */}
+          <Link href="/dashboard/ventas/venta"
+            className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm hover:border-emerald-300 hover:shadow-md transition-all group">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 group-hover:scale-110 transition-transform">
+                <Receipt size={24} />
+              </div>
+              <span className="text-xs font-black bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full">VEN</span>
+            </div>
+            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-2">Pedidos de Venta</p>
+            <h2 className="text-4xl font-black text-slate-800">{pedidos.length}</h2>
+            <div className="mt-3 space-y-1">
+              <div className="flex justify-between text-xs font-bold">
+                <span className="text-slate-500">Activos</span>
+                <span className="text-emerald-600">{venActivos.length}</span>
+              </div>
+              <div className="w-full bg-slate-100 rounded-full h-1.5">
+                <div className="bg-emerald-500 h-1.5 rounded-full transition-all"
+                  style={{ width: pedidos.length > 0 ? `${(venFacturados.length / pedidos.length) * 100}%` : '0%' }} />
+              </div>
+              <p className="text-xs text-slate-400">{venFacturados.length} facturados — {fCOP(montoFacturado)}</p>
+            </div>
+            <div className="mt-4 flex items-center gap-1 text-xs font-bold text-emerald-600 group-hover:gap-2 transition-all">
+              Ver pedidos <ChevronRight size={13}/>
+            </div>
+          </Link>
         </div>
+
 
         {/* KPI Cards reales */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
@@ -541,26 +585,50 @@ export default function VentasHub() {
 
         {/* ── Links rápidos a sub-módulos ───────────────────────────────────── */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {[
-            { label: 'Solicitudes',     href: '/dashboard/ventas/solicitud',    icon: ClipboardList, color: 'indigo', count: solicitudes.length },
-            { label: 'Cotizaciones',    href: '/dashboard/ventas/cotizacion',   icon: FileText,      color: 'amber',  count: cotizaciones.length },
-            { label: 'Pedidos Venta',   href: '/dashboard/ventas/venta',        icon: Receipt,       color: 'emerald',count: pedidos.length },
-            { label: 'Exportar / Sync', href: '/dashboard/ventas/exportar-dia', icon: FileOutput,    color: 'purple', count: null },
-          ].map(item => (
-            <Link key={item.label} href={item.href}
-              className="bg-white border border-slate-200 rounded-2xl p-5 flex items-center gap-4 hover:border-purple-200 hover:shadow-md transition-all group">
-              <div className={`w-10 h-10 rounded-xl bg-${item.color}-50 flex items-center justify-center text-${item.color}-600 group-hover:scale-110 transition-transform shrink-0`}>
-                <item.icon size={20}/>
-              </div>
-              <div>
-                <p className="font-black text-slate-700 text-sm">{item.label}</p>
-                {item.count !== null && (
-                  <p className="text-xs font-bold text-slate-400">{item.count} registros</p>
-                )}
-              </div>
-              <ChevronRight size={16} className="ml-auto text-slate-300 group-hover:text-purple-500 transition-colors" />
-            </Link>
-          ))}
+          <Link href="/dashboard/ventas/solicitud"
+            className="bg-white border border-slate-200 rounded-2xl p-5 flex items-center gap-4 hover:border-indigo-200 hover:shadow-md transition-all group">
+            <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600 group-hover:scale-110 transition-transform shrink-0">
+              <ClipboardList size={20}/>
+            </div>
+            <div>
+              <p className="font-black text-slate-700 text-sm">Solicitudes</p>
+              <p className="text-xs font-bold text-slate-400">{solicitudes.length} registros</p>
+            </div>
+            <ChevronRight size={16} className="ml-auto text-slate-300 group-hover:text-indigo-500 transition-colors"/>
+          </Link>
+          <Link href="/dashboard/ventas/cotizacion"
+            className="bg-white border border-slate-200 rounded-2xl p-5 flex items-center gap-4 hover:border-amber-200 hover:shadow-md transition-all group">
+            <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 group-hover:scale-110 transition-transform shrink-0">
+              <FileText size={20}/>
+            </div>
+            <div>
+              <p className="font-black text-slate-700 text-sm">Cotizaciones</p>
+              <p className="text-xs font-bold text-slate-400">{cotizaciones.length} registros</p>
+            </div>
+            <ChevronRight size={16} className="ml-auto text-slate-300 group-hover:text-amber-500 transition-colors"/>
+          </Link>
+          <Link href="/dashboard/ventas/venta"
+            className="bg-white border border-slate-200 rounded-2xl p-5 flex items-center gap-4 hover:border-emerald-200 hover:shadow-md transition-all group">
+            <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 group-hover:scale-110 transition-transform shrink-0">
+              <Receipt size={20}/>
+            </div>
+            <div>
+              <p className="font-black text-slate-700 text-sm">Pedidos Venta</p>
+              <p className="text-xs font-bold text-slate-400">{pedidos.length} registros</p>
+            </div>
+            <ChevronRight size={16} className="ml-auto text-slate-300 group-hover:text-emerald-500 transition-colors"/>
+          </Link>
+          <Link href="/dashboard/ventas/exportar-dia"
+            className="bg-white border border-slate-200 rounded-2xl p-5 flex items-center gap-4 hover:border-purple-200 hover:shadow-md transition-all group">
+            <div className="w-10 h-10 rounded-xl bg-purple-50 flex items-center justify-center text-purple-600 group-hover:scale-110 transition-transform shrink-0">
+              <FileOutput size={20}/>
+            </div>
+            <div>
+              <p className="font-black text-slate-700 text-sm">Exportar / Sync</p>
+              <p className="text-xs font-bold text-slate-400">Herramientas</p>
+            </div>
+            <ChevronRight size={16} className="ml-auto text-slate-300 group-hover:text-purple-500 transition-colors"/>
+          </Link>
         </div>
 
       </div>
