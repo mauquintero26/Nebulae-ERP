@@ -99,8 +99,11 @@ export default function PedidoDeVentaPage() {
     finally{ setChatterSending(false); }
   };
 
-  const TABS = ['Todos','Pend. Compra','En Proceso','Listo Entrega','Entregado','Facturado','Cancelado'];
+  const TABS = ['Todos','Pend. Compra','En Proceso','Listo Entrega','Entregado','Facturado','Cancelado','Analisis'];
   const tabEstado:Record<string,string> = {'Pend. Compra':'PENDIENTE_COMPRA','En Proceso':'EN_PROCESO','Listo Entrega':'LISTO_ENTREGA','Entregado':'ENTREGADO','Facturado':'FACTURADO','Cancelado':'CANCELADO'};
+  const [viewMode, setViewMode] = useState<'lista'|'kanban'>('lista');
+  const [showFilterDropdown, setShowFilterDropdown] = useState(false);
+  const [filterEstado, setFilterEstado] = useState('');
 
   const filtered = useMemo(()=>{
     let base=pedidos;
@@ -201,34 +204,123 @@ export default function PedidoDeVentaPage() {
         </div>
       </div>
 
-      {/* TABS + SEARCH */}
-      <div className="px-8 py-4 flex items-center justify-between gap-4 bg-white border-b border-gray-100">
-        <div className="flex items-center gap-1 overflow-x-auto shrink-0">
+      {/* ROW 1: TABS + VIEW TOGGLE */}
+      <div className="px-8 pt-4 pb-0 bg-white flex items-center justify-between">
+        <div className="flex items-center gap-1 overflow-x-auto">
           {TABS.map(tab=>{
             const est=tabEstado[tab];
-            const count=tab==='Todos'?pedidos.length:pedidos.filter(p=>p.estado===est).length;
+            const count=tab==='Todos'?pedidos.length:tab==='Analisis'?undefined:pedidos.filter(p=>p.estado===est).length;
+            const isActive=activeTab===tab;
             return (
               <button key={tab} onClick={()=>setActiveTab(tab)}
-                className={`px-4 py-2 rounded-xl text-sm font-bold whitespace-nowrap transition-all ${activeTab===tab?'bg-amber-100 text-amber-800 border border-amber-300':'text-gray-500 hover:bg-gray-100'}`}>
-                {tab}
-                <span className={`ml-1.5 text-xs ${activeTab===tab?'text-amber-600':'text-gray-400'}`}>{count}</span>
+                className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${isActive?'bg-indigo-600 text-white shadow-sm':'text-gray-600 hover:text-indigo-700 hover:bg-indigo-50'}`}>
+                {tab}{count!==undefined&&<span className={`ml-1.5 text-xs font-black ${isActive?'text-indigo-200':'text-gray-400'}`}>{count}</span>}
               </button>
             );
           })}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="flex items-center bg-gray-100 rounded-xl px-3 py-2 gap-2 w-64">
+        {activeTab!=='Analisis'&&(
+          <div className="flex items-center gap-1 shrink-0 ml-4">
+            <button onClick={()=>setViewMode('lista')}
+              className={`p-2 rounded-lg border transition-colors ${viewMode==='lista'?'bg-indigo-50 border-indigo-200 text-indigo-700':'border-gray-200 text-gray-400 hover:bg-gray-50'}`}>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="3" width="14" height="2" rx="1" fill="currentColor"/><rect x="1" y="7" width="14" height="2" rx="1" fill="currentColor"/><rect x="1" y="11" width="14" height="2" rx="1" fill="currentColor"/></svg>
+            </button>
+            <button onClick={()=>setViewMode('kanban')}
+              className={`p-2 rounded-lg border transition-colors ${viewMode==='kanban'?'bg-indigo-50 border-indigo-200 text-indigo-700':'border-gray-200 text-gray-400 hover:bg-gray-50'}`}>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="14" rx="1.5" fill="currentColor"/><rect x="9" y="1" width="6" height="14" rx="1.5" fill="currentColor"/></svg>
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ROW 2: SEARCH + FILTER + COUNT */}
+      {activeTab!=='Analisis'&&(
+        <div className="px-8 py-3 bg-white border-b border-gray-100 flex items-center gap-3">
+          <div className="flex items-center bg-white border border-gray-200 rounded-xl px-3 py-2 gap-2 flex-1 max-w-[420px] shadow-sm">
             <Search size={14} className="text-gray-400 shrink-0"/>
             <input value={search} onChange={e=>setSearch(e.target.value)}
-              placeholder="Buscar PVEN, cliente..."
+              placeholder="Buscar por numero, cliente, asesor..."
               className="text-sm bg-transparent outline-none flex-1 placeholder-gray-400"/>
-            {search&&<button onClick={()=>setSearch('')}><X size={13} className="text-gray-400"/></button>}
+            {search&&<button onClick={()=>setSearch('')}><X size={13} className="text-gray-400 hover:text-gray-600"/></button>}
           </div>
-          <button onClick={fetchPedidos} className="p-2 rounded-xl border border-gray-200 bg-white text-gray-500 hover:bg-gray-50 shadow-sm">
-            <RefreshCw size={14} className={loading?'animate-spin':''}/>
-          </button>
+          <div className="relative">
+            <button onClick={()=>setShowFilterDropdown(f=>!f)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-semibold transition-colors shadow-sm ${filterEstado?'bg-indigo-50 border-indigo-300 text-indigo-700':'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M3 7h8M5 11h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+              Filtrar Estado
+              {filterEstado&&<span className="bg-indigo-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-black leading-none">{filterEstado.replace('_',' ')}</span>}
+            </button>
+            {showFilterDropdown&&(
+              <>
+                <div className="fixed inset-0 z-10" onClick={()=>setShowFilterDropdown(false)}/>
+                <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-2xl shadow-2xl p-4 z-20 w-60">
+                  <p className="text-xs font-black text-gray-400 uppercase mb-2">Filtrar por Estado</p>
+                  {['','PENDIENTE_COMPRA','EN_PROCESO','LISTO_ENTREGA','ENTREGADO','FACTURADO','CANCELADO'].map(e=>(
+                    <button key={e} onClick={()=>{setFilterEstado(e);setShowFilterDropdown(false);}}
+                      className={`w-full text-left px-3 py-2 text-sm rounded-xl mb-0.5 font-medium transition-colors ${filterEstado===e?'bg-indigo-50 text-indigo-700 font-bold':'hover:bg-gray-50 text-gray-600'}`}>
+                      {e||'Todos los estados'}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+          <span className="text-sm text-gray-400 font-medium">{filtered.length} registros</span>
         </div>
-      </div>
+      )}
+
+      {/* ANALISIS TAB */}
+      {activeTab==='Analisis'&&(
+        <div className="flex-1 px-8 py-6 bg-gray-50 border-b border-gray-100">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            {[
+              {label:'Total Pedidos',value:pedidos.length,color:'text-indigo-700'},
+              {label:'Monto Total',value:fCOP(pedidos.reduce((a,p)=>a+(Number(p.total_cop)||0),0)),color:'text-gray-900'},
+              {label:'Anticipo Cobrado',value:fCOP(pedidos.reduce((a,p)=>a+(Number(p.anticipo_cop)||0),0)),color:'text-emerald-600'},
+              {label:'Saldo Pendiente',value:fCOP(pedidos.reduce((a,p)=>a+(Number(p.saldo_cop)||0),0)),color:'text-red-600'},
+            ].map((k,i)=>(
+              <div key={i} className="bg-white rounded-2xl p-5 border border-gray-200 shadow-sm">
+                <p className="text-xs font-black text-gray-400 uppercase mb-2">{k.label}</p>
+                <p className={`text-2xl font-black ${k.color}`}>{k.value}</p>
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-white rounded-2xl p-5 border border-gray-200 shadow-sm">
+              <h3 className="text-sm font-black text-gray-700 mb-4">Distribucion por Estado</h3>
+              {Object.entries(VEN_ESTADOS).map(([key,st])=>{
+                const cnt=pedidos.filter(p=>p.estado===key).length;
+                const pct=pedidos.length?Math.round((cnt/pedidos.length)*100):0;
+                return cnt>0?(
+                  <div key={key} className="flex items-center gap-3 mb-2">
+                    <span className={`text-xs font-bold ${st.text} shrink-0 w-28`}>{st.label}</span>
+                    <div className="flex-1 bg-gray-100 rounded-full h-2 overflow-hidden">
+                      <div className={`h-2 rounded-full ${st.bg.replace('bg-','bg-').replace('-100','-400')}`} style={{width:`${pct}%`}}/>
+                    </div>
+                    <span className="text-xs text-gray-500 w-12 text-right font-bold">{cnt} ({pct}%)</span>
+                  </div>
+                ):null;
+              })}
+            </div>
+            <div className="bg-white rounded-2xl p-5 border border-gray-200 shadow-sm">
+              <h3 className="text-sm font-black text-gray-700 mb-4">Top 5 Clientes por Monto</h3>
+              {Object.entries(
+                pedidos.reduce((acc:any,p:any)=>{
+                  const k=p.customer_name||'Sin cliente';
+                  acc[k]=(acc[k]||0)+(Number(p.total_cop)||0);
+                  return acc;
+                },{})
+              ).sort(([,a]:any,[,b]:any)=>b-a).slice(0,5).map(([name,total]:any,i)=>(
+                <div key={i} className="flex items-center justify-between py-2 border-b last:border-0">
+                  <span className="text-sm font-medium text-gray-700 truncate mr-2">{name}</span>
+                  <span className="text-sm font-black text-indigo-700 shrink-0">{fCOP(total)}</span>
+                </div>
+              ))}
+              {pedidos.length===0&&<p className="text-sm text-gray-400 text-center py-4">Sin datos</p>}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* TABLE */}
       <div className="flex-1 overflow-auto px-8 py-4">

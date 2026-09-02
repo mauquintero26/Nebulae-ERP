@@ -644,20 +644,48 @@ export default function SolicitudesPage() {
         {/* Table */}
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
           <div className="border-b border-slate-200 bg-slate-50/50 p-4 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
-            <div className="flex gap-2">
-              {(['Activas','Confirmadas','Canceladas'] as const).map(tab=>(
-                <button key={tab} onClick={()=>setActiveTab(tab)} className={`px-5 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab===tab?tab==='Activas'?'bg-amber-100 text-amber-800 border border-amber-200':tab==='Confirmadas'?'bg-emerald-100 text-emerald-800 border border-emerald-200':'bg-red-100 text-red-800 border border-red-200':'text-slate-600 hover:bg-slate-100'}`}>{tab}</button>
+            {/* ROW 1: TABS + VIEW TOGGLE */}
+          <div className="flex items-center justify-between pt-1 pb-0">
+            <div className="flex items-center gap-1 overflow-x-auto">
+              {(['Activas','Confirmadas','Canceladas','Analisis'] as const).map(tab=>(
+                <button key={tab} onClick={()=>setActiveTab(tab as any)}
+                  className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${activeTab===tab?'bg-indigo-600 text-white shadow-sm':'text-gray-600 hover:text-indigo-700 hover:bg-indigo-50'}`}>
+                  {tab}
+                  {tab!=='Analisis'&&<span className={`ml-1.5 text-xs font-black ${activeTab===tab?'text-indigo-200':'text-gray-400'}`}>
+                    {tab==='Activas'?solicitudes.filter(s=>s.estado==='BORRADOR'||s.estado==='PENDIENTE_CONFIRMACION').length:tab==='Confirmadas'?solicitudes.filter(s=>s.estado==='CONFIRMADA').length:solicitudes.filter(s=>s.estado==='CANCELADA').length}
+                  </span>}
+                </button>
               ))}
             </div>
-            <div className="flex items-center gap-3 w-full lg:w-auto">
-              <div className="relative flex-1 lg:w-72 flex items-center bg-white border border-slate-300 rounded-xl px-3 py-2 shadow-sm focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100">
-                <Search className="text-slate-400 shrink-0 mr-2" size={16}/>
-                <input type="text" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar SC, cliente, asesor..." className="w-full bg-transparent border-none text-sm font-medium text-slate-700 outline-none"/>
-                {search&&<button onClick={()=>setSearch('')}><X size={14} className="text-slate-400"/></button>}
+            {activeTab!=='Analisis'&&(
+              <div className="flex items-center gap-1 shrink-0 ml-4">
+                <button className="p-2 rounded-lg border bg-indigo-50 border-indigo-200 text-indigo-700">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="3" width="14" height="2" rx="1" fill="currentColor"/><rect x="1" y="7" width="14" height="2" rx="1" fill="currentColor"/><rect x="1" y="11" width="14" height="2" rx="1" fill="currentColor"/></svg>
+                </button>
+                <button className="p-2 rounded-lg border border-gray-200 text-gray-400 hover:bg-gray-50">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="14" rx="1.5" fill="currentColor"/><rect x="9" y="1" width="6" height="14" rx="1.5" fill="currentColor"/></svg>
+                </button>
               </div>
-              <button onClick={load} className="bg-white border border-slate-300 p-2.5 rounded-xl text-slate-600 hover:bg-slate-50 shadow-sm"><RefreshCw size={16} className={loading?'animate-spin':''}/></button>
-            </div>
+            )}
           </div>
+
+          {/* ROW 2: SEARCH + FILTER + COUNT */}
+          {activeTab!=='Analisis'&&(
+            <div className="flex items-center gap-3 pt-3 pb-1 border-t border-slate-100 mt-3">
+              <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-2 gap-2 flex-1 max-w-[420px] shadow-sm">
+                <Search className="text-slate-400 shrink-0" size={14}/>
+                <input type="text" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar SC, cliente, asesor..." className="w-full bg-transparent text-sm font-medium text-slate-700 outline-none placeholder-slate-400"/>
+                {search&&<button onClick={()=>setSearch('')}><X size={13} className="text-slate-400 hover:text-slate-600"/></button>}
+              </div>
+              <button onClick={load} className="flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-600 text-sm font-semibold hover:bg-slate-50 shadow-sm">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M3 7h8M5 11h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                Filtrar Estado
+              </button>
+              <span className="text-sm text-slate-400 font-medium">{filtered.length} registros</span>
+            </div>
+          )}
+
+
 
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
