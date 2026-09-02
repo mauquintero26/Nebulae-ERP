@@ -42,6 +42,7 @@ class CustomerRequest(Base):
     customer_email   = Column(String(150), nullable=True)
     customer_address = Column(String(300), nullable=True)
     advisor_name     = Column(String(150), nullable=True)
+    tipo_solicitud   = Column(String(100), nullable=True, default="Cotizacion de Producto")
     modalidad_pago   = Column(String(100), nullable=True, default="Contado")
     estado           = Column(String(50), nullable=False, default="BORRADOR")
     fecha_solicitud  = Column(DateTime, default=_now)

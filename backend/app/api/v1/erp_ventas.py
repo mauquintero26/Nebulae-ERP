@@ -57,6 +57,7 @@ def _sc_dict(sc: CustomerRequest) -> dict:
         "customer_email": sc.customer_email,
         "customer_address": sc.customer_address,
         "advisor_name": sc.advisor_name,
+        "tipo_solicitud": sc.tipo_solicitud or "Cotizacion de Producto",
         "modalidad_pago": sc.modalidad_pago,
         "estado": sc.estado,
         "fecha_solicitud": sc.fecha_solicitud.isoformat() if sc.fecha_solicitud else None,
@@ -220,6 +221,7 @@ def create_solicitud(body: dict, db: Session = Depends(get_db)):
         customer_email=cust_email,
         customer_address=cust_addr,
         advisor_name=body.get("advisor_name"),
+        tipo_solicitud=body.get("tipo_solicitud", "Cotizacion de Producto"),
         modalidad_pago=body.get("modalidad_pago", "Contado"),
         estado="BORRADOR",
         fecha_vencimiento=venc,
@@ -260,7 +262,7 @@ def update_solicitud(sc_id: int, body: dict, db: Session = Depends(get_db)):
         raise HTTPException(404, "Solicitud no encontrada")
     old_estado = sc.estado
     allowed = ["customer_id","customer_name","customer_phone","customer_email",
-               "customer_address","advisor_name","modalidad_pago","estado",
+               "customer_address","advisor_name","tipo_solicitud","modalidad_pago","estado",
                "fecha_vencimiento","notas","productos"]
     for k in allowed:
         if k in body:
