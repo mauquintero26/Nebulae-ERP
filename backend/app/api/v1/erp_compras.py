@@ -337,7 +337,8 @@ def update_pec(pec_id: int, body: dict, db: Session = Depends(get_db)):
     allowed = ["estado","supplier_id","supplier_name","supplier_ref","modalidad_pago",
                "metodo_pago","warehouse_id","carrier","tracking_number","tracking_stages",
                "fecha_entrega_estimada","fecha_alerta","subtotal_cop","total_cop",
-               "notas","productos","ven_id","ven_numero"]
+               "notas","productos","ven_id","ven_numero","tracking_history",
+               "tipo_envio","casillero","fecha_compra"]
     for k in allowed:
         if k in body:
             setattr(p, k, body[k])
@@ -354,33 +355,57 @@ def update_pec(pec_id: int, body: dict, db: Session = Depends(get_db)):
 
 @router.patch("/pedidos/{pec_id}/tracking")
 def update_tracking(pec_id: int, body: dict, db: Session = Depends(get_db)):
-    """Update a tracking stage status"""
+    """Update a tracking stage status, tracking number, and append to tracking history"""
     p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).first()
     if not p:
         raise HTTPException(404, "Pedido de compra no encontrado")
 
     stage_name = body.get("stage")
     new_status = body.get("status")  # PENDIENTE, EN_PROCESO, COMPLETADO
-    stages = p.tracking_stages or []
+    tracking_num = body.get("tracking_number")
+    stages = list(p.tracking_stages or [])
+    now = datetime.datetime.utcnow().isoformat()
 
     for i, s in enumerate(stages):
         if s["stage"] == stage_name:
             stages[i]["status"] = new_status
-            stages[i]["timestamp"] = datetime.datetime.utcnow().isoformat()
-            stages[i]["notes"] = body.get("notes")
+            stages[i]["timestamp"] = now
+            stages[i]["notes"] = body.get("notes") or s.get("notes")
+            if tracking_num:
+                stages[i]["tracking_number"] = tracking_num
+                # Append to tracking history for this stage
+                history = stages[i].get("tracking_history", [])
+                history.append({
+                    "numero": tracking_num,
+                    "fecha": now,
+                    "notas": body.get("notes"),
+                    "user": body.get("user_name"),
+                })
+                stages[i]["tracking_history"] = history
             break
 
     p.tracking_stages = stages
     p.updated_at = datetime.datetime.utcnow()
 
-    # If last stage ENTREGADO, update PEC estado
-    if stage_name == "ENTREGADO" and new_status == "COMPLETADO":
+    # Auto-update PEC estado based on tracking completions
+    completed = [s for s in stages if s.get("status") == "COMPLETADO"]
+    last_stage = stages[-1] if stages else {}
+    if last_stage.get("status") == "COMPLETADO":
+        old_e = p.estado
         p.estado = "RECIBIDO"
+        if old_e != "RECIBIDO":
+            _log(db, "PEC", p.id, p.numero, "ESTADO_CHANGED",
+                 "Recibido en bodega — todos los stages completados",
+                 old_estado=old_e, new_estado="RECIBIDO",
+                 user_name=body.get("user_name"))
+    elif any(s.get("status") == "EN_PROCESO" for s in stages):
+        if p.estado in ("BORRADOR", "EMITIDO"):
+            p.estado = "EN_TRANSITO"
 
     db.commit()
     db.refresh(p)
     _log(db, "PEC", p.id, p.numero, "TRACKING_UPDATED",
-         f"Etapa {stage_name} -> {new_status}",
+         f"Etapa {stage_name} → {new_status}" + (f" | Guía: {tracking_num}" if tracking_num else ""),
          user_name=body.get("user_name"))
     return {"status": "success", "data": _pec_dict(p)}
 
