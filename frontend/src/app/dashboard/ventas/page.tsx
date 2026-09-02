@@ -324,13 +324,24 @@ export default function VentasHub() {
               </div>
               
               <div className="bg-white p-6 rounded-2xl shadow-sm">
-                <h3 className="font-bold text-lg mb-4">Top Clientes</h3>
+                <h3 className="font-bold text-lg mb-4">Top Clientes (por monto COP)</h3>
+                <div className="flex gap-2 mb-3">
+                  <span className="text-xs bg-amber-50 border border-amber-200 text-amber-700 px-2 py-1 rounded-full font-bold">
+                    &gt;$500k: {(analytics?.top_clientes||[]).filter((c:any)=>c.total>=500000).length} clientes
+                  </span>
+                  <span className="text-xs bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-1 rounded-full font-bold">
+                    &gt;$1M: {(analytics?.top_clientes||[]).filter((c:any)=>c.total>=1000000).length} clientes
+                  </span>
+                </div>
                 <table className="w-full text-sm">
-                  <thead><tr className="border-b text-left text-slate-500"><th>Rank</th><th>Nombre</th><th className="text-right">Total COP</th></tr></thead>
+                  <thead><tr className="border-b text-left text-slate-500"><th>Rank</th><th>Nombre</th><th className="text-right">Total COP</th><th className="text-right">Segmento</th></tr></thead>
                   <tbody>
                     {(analytics?.top_clientes || []).map((c:any, i:number) => (
                       <tr key={i} className="border-b last:border-0">
-                        <td className="py-2">{i+1}</td><td className="py-2">{c.nombre}</td><td className="py-2 text-right">{fCOP(c.total)}</td>
+                        <td className="py-2">{i+1}</td><td className="py-2">{c.nombre}</td><td className="py-2 text-right font-medium">{fCOP(c.total)}</td>
+                        <td className="py-2 text-right">
+                          {c.total>=1000000?<span className="text-xs bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold">&gt;1M</span>:c.total>=500000?<span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-bold">&gt;500k</span>:null}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
