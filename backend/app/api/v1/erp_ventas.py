@@ -465,7 +465,7 @@ def confirmar_cotizacion(cot_id: int, body: dict, db: Session = Depends(get_db))
          user_name=body.get("user_name"))
 
     # Create VEN
-    ven_numero = _gen_numero(db, "VEN-", "seq_ven")
+    ven_numero = _gen_numero(db, "PVEN-", "seq_ven")
     saldo = float(cot.total_cop or 0) - float(cot.anticipo_cop or 0)
     ven = SaleOrder(
         numero=ven_numero,
@@ -501,7 +501,30 @@ def confirmar_cotizacion(cot_id: int, body: dict, db: Session = Depends(get_db))
     return {"status": "success", "data": {"cotizacion": _cot_dict(cot), "pedido_venta": _ven_dict(ven)}}
 
 
-# ─── PEDIDOS DE VENTA (VEN) ─────────────────────────────────────────────────
+@router.post("/cotizaciones/{cot_id}/actividad")
+def add_cot_activity(cot_id: int, body: dict, db: Session = Depends(get_db)):
+    cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
+    if not cot:
+        raise HTTPException(404, "Cotizacion no encontrada")
+    _log(db, "COT", cot.id, cot.numero,
+         body.get("action", "NOTE_ADDED"),
+         body.get("description"),
+         user_name=body.get("user_name"))
+    return {"status": "success"}
+
+
+@router.post("/pedidos/{ven_id}/actividad")
+def add_ven_activity(ven_id: int, body: dict, db: Session = Depends(get_db)):
+    v = db.query(SaleOrder).filter(SaleOrder.id == ven_id).first()
+    if not v:
+        raise HTTPException(404, "Pedido no encontrado")
+    _log(db, "VEN", v.id, v.numero,
+         body.get("action", "NOTE_ADDED"),
+         body.get("description"),
+         user_name=body.get("user_name"))
+    return {"status": "success"}
+
+
 
 @router.get("/pedidos")
 def list_pedidos(
@@ -532,7 +555,7 @@ def list_pedidos(
 
 @router.post("/pedidos", status_code=201)
 def create_pedido(body: dict, db: Session = Depends(get_db)):
-    numero = _gen_numero(db, "VEN-", "seq_ven")
+    numero = _gen_numero(db, "PVEN-", "seq_ven")
     saldo = float(body.get("total_cop", 0)) - float(body.get("anticipo_cop", 0))
     ven = SaleOrder(
         numero=numero,
@@ -715,3 +738,158 @@ def ventas_stats(db: Session = Depends(get_db)):
             "cot_por_estado": {r[0]: r[1] for r in cot_por_estado},
         }
     }
+
+
+# ─── ANALYTICS ───────────────────────────────────────────────────────────────
+
+@router.get("/analytics")
+def ventas_analytics(
+    range: Optional[str] = "30d",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    product: Optional[str] = None,
+    top_n: int = Query(10, le=50),
+    db: Session = Depends(get_db)
+):
+    now = datetime.datetime.utcnow()
+    # Determine date range
+    if date_from and date_to:
+        d_from = datetime.datetime.fromisoformat(date_from)
+        d_to   = datetime.datetime.fromisoformat(date_to) + datetime.timedelta(days=1)
+    else:
+        days_map = {"7d": 7, "30d": 30, "90d": 90, "180d": 180, "1y": 365}
+        days = days_map.get(range, 30)
+        d_from = now - datetime.timedelta(days=days)
+        d_to   = now + datetime.timedelta(days=1)
+
+    # Base VEN query in range (not cancelled)
+    ven_q = db.query(SaleOrder).filter(
+        SaleOrder.created_at >= d_from,
+        SaleOrder.created_at <= d_to,
+        SaleOrder.estado != "CANCELADO"
+    )
+    if product:
+        ven_q = ven_q.filter(SaleOrder.productos.cast(text("text")).ilike(f"%{product}%"))
+
+    vens = ven_q.all()
+
+    # Revenue by day
+    revenue_by_day: dict = {}
+    for v in vens:
+        day = v.created_at.strftime("%Y-%m-%d") if v.created_at else "unknown"
+        revenue_by_day[day] = revenue_by_day.get(day, 0) + float(v.total_cop or 0)
+
+    # Top clients by revenue
+    client_rev: dict = {}
+    for v in vens:
+        name = v.customer_name or "Sin nombre"
+        client_rev[name] = client_rev.get(name, 0) + float(v.total_cop or 0)
+    top_clients = sorted(client_rev.items(), key=lambda x: x[1], reverse=True)[:top_n]
+
+    # Clients above thresholds
+    clients_500k  = [(k, v) for k, v in client_rev.items() if v >= 500000]
+    clients_1m    = [(k, v) for k, v in client_rev.items() if v >= 1000000]
+
+    # Total revenue and count
+    total_revenue = sum(float(v.total_cop or 0) for v in vens)
+    total_count   = len(vens)
+    avg_ticket    = total_revenue / total_count if total_count > 0 else 0
+
+    # SC and COT in range
+    sc_range = db.query(func.count(CustomerRequest.id)).filter(
+        CustomerRequest.created_at >= d_from, CustomerRequest.created_at <= d_to
+    ).scalar()
+    cot_range = db.query(func.count(SalesQuotation.id)).filter(
+        SalesQuotation.created_at >= d_from, SalesQuotation.created_at <= d_to
+    ).scalar()
+
+    # Conversion rates
+    conv_sc_cot = round(cot_range / sc_range * 100, 1) if sc_range > 0 else 0
+    conv_cot_ven = round(total_count / cot_range * 100, 1) if cot_range > 0 else 0
+
+    # Status breakdown for VEN
+    ven_por_estado: dict = {}
+    for v in vens:
+        ven_por_estado[v.estado] = ven_por_estado.get(v.estado, 0) + 1
+
+    return {
+        "status": "success",
+        "data": {
+            "range": range,
+            "date_from": d_from.isoformat(),
+            "date_to": d_to.isoformat(),
+            "total_revenue": total_revenue,
+            "total_count": total_count,
+            "avg_ticket": avg_ticket,
+            "sc_count": sc_range,
+            "cot_count": cot_range,
+            "conv_sc_cot_pct": conv_sc_cot,
+            "conv_cot_ven_pct": conv_cot_ven,
+            "revenue_by_day": [{"date": k, "total": v} for k, v in sorted(revenue_by_day.items())],
+            "top_clients": [{"name": k, "total": v} for k, v in top_clients],
+            "clients_above_500k": len(clients_500k),
+            "clients_above_1m": len(clients_1m),
+            "ven_por_estado": ven_por_estado,
+        }
+    }
+
+
+# ─── ALERTAS (SC/COT sin cambio en N dias) ───────────────────────────────────
+
+def _get_alert_days(db: Session, key: str = "alerta_sc_dias") -> int:
+    try:
+        r = db.execute(text(f"SELECT value FROM admin_config WHERE key = '{key}'")).fetchone()
+        return int(r[0]) if r else 2
+    except Exception:
+        return 2
+
+
+@router.get("/alertas")
+def get_alertas(db: Session = Depends(get_db)):
+    dias = _get_alert_days(db)
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=dias)
+
+    # SC activos sin cambio de estado en N dias
+    sc_alertas = db.query(CustomerRequest).filter(
+        CustomerRequest.updated_at <= cutoff,
+        CustomerRequest.estado.notin_(["CONFIRMADA", "CANCELADA"])
+    ).all()
+
+    # COT activas sin cambio de estado en N dias
+    cot_alertas = db.query(SalesQuotation).filter(
+        SalesQuotation.updated_at <= cutoff,
+        SalesQuotation.estado.notin_(["CONFIRMADA", "RECHAZADA"])
+    ).all()
+
+    return {
+        "status": "success",
+        "data": {
+            "alerta_dias": dias,
+            "sc_sin_atender": [_sc_dict(sc) for sc in sc_alertas],
+            "cot_sin_atender": [_cot_dict(c) for c in cot_alertas],
+            "sc_count": len(sc_alertas),
+            "cot_count": len(cot_alertas),
+        }
+    }
+
+
+# ─── ADMIN CONFIG ─────────────────────────────────────────────────────────────
+
+@router.get("/config")
+def get_config(db: Session = Depends(get_db)):
+    try:
+        rows = db.execute(text("SELECT key, value, description FROM admin_config")).fetchall()
+        return {"status": "success", "data": {r[0]: {"value": r[1], "description": r[2]} for r in rows}}
+    except Exception:
+        return {"status": "success", "data": {}}
+
+
+@router.patch("/config")
+def update_config(body: dict, db: Session = Depends(get_db)):
+    for k, v in body.items():
+        db.execute(text(
+            f"INSERT INTO admin_config (key, value, updated_at) VALUES ('{k}', '{v}', NOW()) "
+            f"ON CONFLICT (key) DO UPDATE SET value = '{v}', updated_at = NOW()"
+        ))
+    db.commit()
+    return {"status": "success"}

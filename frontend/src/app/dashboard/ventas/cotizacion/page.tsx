@@ -7,7 +7,7 @@ import {
   Search, X, RefreshCw, AlertCircle, MoreVertical, Plus,
   Phone, Mail, MapPin, ChevronRight, ShieldAlert, Package,
   Calculator, Send, Trash2, Edit2, Save, ArrowRight,
-  MessageCircle, ExternalLink, User, TrendingUp, ChevronDown
+  MessageCircle, ExternalLink, User, TrendingUp, ChevronDown, RotateCcw
 } from 'lucide-react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
@@ -322,6 +322,10 @@ export default function CotizacionPage() {
   const [editForm, setEditForm] = useState<any>({});
   const [savingEdit, setSavingEdit] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [panelTab, setPanelTab] = useState<'acciones'|'actividad'|'chatter'>('acciones');
+  const [cotHistory, setCotHistory] = useState<any[]>([]);
+  const [chatterInput, setChatterInput] = useState('');
+  const [chatterSending, setChatterSending] = useState(false);
 
   useEffect(() => {
     const u = localStorage.getItem('user_name') || localStorage.getItem('username') || '';
@@ -959,113 +963,181 @@ export default function CotizacionPage() {
                 </div>
               </div>
 
-              {/* RIGHT: Activity + Actions 55% */}
-              <div className="flex-1 overflow-y-auto p-6 space-y-5 bg-slate-50/50">
-
-                {/* Primary Actions */}
-                <div>
-                  <p className="text-xs font-black text-slate-400 uppercase mb-3">Acciones Principales</p>
-                  <div className="space-y-2">
-
-                    {/* Calculadora */}
-                    <button onClick={() => setShowCalc(true)}
-                      className="w-full bg-amber-600 hover:bg-amber-700 text-white px-4 py-3 rounded-xl font-bold flex items-center gap-2 shadow-md transition-colors">
-                      <Calculator size={16}/> Cotiza — Calcular Precios
-                    </button>
-
-                    {/* Enviar */}
-                    {(selected.estado === 'BORRADOR' || selected.estado === 'ENVIADA') && (
-                      <button onClick={enviarCotizacion} disabled={saving}
-                        className="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 rounded-xl font-bold flex items-center gap-2 shadow-md disabled:opacity-50 transition-colors">
-                        {saving ? <RefreshCw size={14} className="animate-spin"/> : <Send size={14}/>}
-                        {selected.estado === 'ENVIADA' ? 'Re-enviar al Cliente' : 'Enviar al Cliente (Esperar Confirmacion)'}
-                      </button>
-                    )}
-
-                    {/* Confirmar */}
-                    {(selected.estado === 'ENVIADA' || selected.estado === 'PENDIENTE_CONFIRMACION' || selected.estado === 'BORRADOR') && selected.estado !== 'CONFIRMADA' && (
-                      <button onClick={confirmar} disabled={confirming}
-                        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-3 rounded-xl font-bold flex items-center gap-2 shadow-md disabled:opacity-50 transition-colors">
-                        {confirming ? <RefreshCw size={14} className="animate-spin"/> : <CheckCircle2 size={14}/>}
-                        Confirmar + Crear Pedido de Venta
-                      </button>
-                    )}
-
-                    {/* Ver VEN */}
-                    {(selected.pedidos_venta || []).length > 0 && (
-                      <Link href="/dashboard/ventas/venta"
-                        className="w-full bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-emerald-100 transition-colors">
-                        <ArrowRight size={14}/> Ver Pedido de Venta
-                      </Link>
-                    )}
-                  </div>
+              {/* RIGHT: Tabbed panel 55% */}
+              <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50">
+                {/* Tab bar */}
+                <div className="border-b border-slate-200 px-4 pt-3 flex gap-1 bg-white flex-shrink-0">
+                  {([['acciones','Acciones'],['actividad','Actividad'],['chatter','Chatter']] as const).map(([k,l])=>(
+                    <button key={k} onClick={()=>setPanelTab(k)} className={`px-4 py-2 rounded-t-lg text-sm font-bold border-b-2 transition-colors ${panelTab===k?'text-amber-700 border-amber-600 bg-amber-50/50':'text-slate-500 border-transparent hover:text-slate-700'}`}>{l}</button>
+                  ))}
                 </div>
 
-                {/* Contactar */}
-                <div>
-                  <p className="text-xs font-black text-slate-400 uppercase mb-3">Contactar al Cliente</p>
-                  <div className="grid grid-cols-3 gap-2">
-                    {selected.customer_phone && (
-                      <a href={`https://wa.me/57${selected.customer_phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer"
-                        className="flex flex-col items-center gap-1 py-3 bg-green-50 border border-green-200 text-green-700 rounded-xl font-bold text-xs hover:bg-green-100 transition-colors">
-                        <MessageCircle size={16}/>
-                        WhatsApp
-                      </a>
-                    )}
-                    {selected.customer_phone && (
-                      <a href={`tel:${selected.customer_phone}`}
-                        className="flex flex-col items-center gap-1 py-3 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl font-bold text-xs hover:bg-blue-100 transition-colors">
-                        <Phone size={16}/>
-                        Llamar
-                      </a>
-                    )}
-                    {selected.customer_email && (
-                      <a href={`mailto:${selected.customer_email}?subject=Cotizacion ${selected.numero}`}
-                        className="flex flex-col items-center gap-1 py-3 bg-slate-50 border border-slate-200 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-100 transition-colors">
-                        <Mail size={16}/>
-                        Email
-                      </a>
-                    )}
-                  </div>
-                </div>
+                <div className="flex-1 overflow-y-auto p-6 space-y-5">
+                  {panelTab==='acciones'&&(
+                    <>
+                      {/* Primary Actions - HALF WIDTH grid */}
+                      <div>
+                        <p className="text-xs font-black text-slate-400 uppercase mb-3">Acciones Principales</p>
+                        <div className="grid grid-cols-2 gap-2">
 
-                {/* Eliminar */}
-                {selected.estado !== 'CONFIRMADA' && (
-                  <div>
-                    <p className="text-xs font-black text-slate-400 uppercase mb-2">Zona de Peligro</p>
-                    <button onClick={() => setShowDelete(true)}
-                      className="flex items-center gap-2 text-red-600 hover:text-red-800 text-xs font-bold border border-red-200 px-3 py-2 rounded-xl hover:bg-red-50 transition-colors">
-                      <Trash2 size={13}/> Eliminar / Rechazar Cotizacion
-                    </button>
-                  </div>
-                )}
+                          {/* Calculadora / Re-Cotizar */}
+                          <button onClick={()=>{
+                            if(Number(selected.total_cop)>0){
+                              setCotHistory(h=>[...h,{fecha:new Date().toISOString(),total:selected.total_cop,anticipo:selected.anticipo_cop,productos:selected.productos}]);
+                            }
+                            setShowCalc(true);
+                          }}
+                            className={`col-span-2 ${Number(selected.total_cop)>0?'bg-orange-500 hover:bg-orange-600':'bg-amber-600 hover:bg-amber-700'} text-white px-4 py-3 rounded-xl font-bold flex items-center gap-2 shadow-md transition-colors`}>
+                            {Number(selected.total_cop)>0?<RotateCcw size={15}/>:<Calculator size={15}/>}
+                            {Number(selected.total_cop)>0?'Re-Cotizar — Actualizar Precios':'Cotiza — Calcular Precios'}
+                          </button>
 
-                {/* Activity Timeline */}
-                <div>
-                  <p className="text-xs font-black text-slate-400 uppercase mb-3">Historial de Actividad</p>
-                  {(selected.actividades || []).length === 0 ? (
-                    <p className="text-xs text-slate-400 italic">Sin actividad registrada</p>
-                  ) : (
-                    <div className="space-y-4 relative before:absolute before:left-2 before:top-0 before:bottom-0 before:w-0.5 before:bg-slate-100">
-                      {[...(selected.actividades || [])].reverse().map((a: any) => (
-                        <div key={a.id} className="flex gap-4 pl-7 relative">
-                          <ActionDot action={a.action}/>
-                          <div className="flex-1 bg-white border border-slate-100 rounded-xl p-3 shadow-sm">
-                            <p className="text-sm font-bold text-slate-700">{a.description}</p>
-                            {a.old_estado && a.new_estado && (
-                              <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
-                                <Badge estado={a.old_estado}/>
-                                <ArrowRight size={10} className="text-slate-300"/>
-                                <Badge estado={a.new_estado}/>
-                              </p>
-                            )}
-                            <p className="text-xs text-slate-400 mt-1">
-                              {fDate(a.created_at)} a las {fTime(a.created_at)}
-                              {a.user_name && <span className="ml-2 font-medium">• {a.user_name}</span>}
-                            </p>
-                          </div>
+                          {/* Enviar */}
+                          {(selected.estado === 'BORRADOR' || selected.estado === 'ENVIADA') && (
+                            <button onClick={enviarCotizacion} disabled={saving}
+                              className="col-span-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 rounded-xl font-bold flex items-center gap-2 shadow-md disabled:opacity-50 transition-colors">
+                              {saving ? <RefreshCw size={14} className="animate-spin"/> : <Send size={14}/>}
+                              {selected.estado === 'ENVIADA' ? 'Re-enviar al Cliente' : 'Enviar al Cliente'}
+                            </button>
+                          )}
+
+                          {/* Confirmar */}
+                          {(selected.estado === 'ENVIADA' || selected.estado === 'PENDIENTE_CONFIRMACION' || selected.estado === 'BORRADOR') && selected.estado !== 'CONFIRMADA' && (
+                            <button onClick={confirmar} disabled={confirming}
+                              className="col-span-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-3 rounded-xl font-bold flex items-center gap-2 shadow-md disabled:opacity-50 transition-colors">
+                              {confirming ? <RefreshCw size={14} className="animate-spin"/> : <CheckCircle2 size={14}/>}
+                              Confirmar + Crear Pedido de Venta
+                            </button>
+                          )}
+
+                          {/* Ver VEN */}
+                          {(selected.pedidos_venta || []).length > 0 && (
+                            <Link href="/dashboard/ventas/venta"
+                              className="col-span-2 bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-emerald-100 transition-colors">
+                              <ArrowRight size={14}/> Ver Pedido de Venta
+                            </Link>
+                          )}
+
+                          {/* Eliminar */}
+                          {selected.estado !== 'CONFIRMADA' && (
+                            <button onClick={() => setShowDelete(true)}
+                              className="flex items-center justify-center gap-2 text-red-600 hover:text-red-800 text-xs font-bold border border-red-200 px-3 py-2.5 rounded-xl hover:bg-red-50 transition-colors">
+                              <Trash2 size={13}/> Eliminar
+                            </button>
+                          )}
                         </div>
-                      ))}
+
+                        {/* History of re-cotizaciones */}
+                        {cotHistory.length>0&&(
+                          <div className="mt-3 border border-orange-200 rounded-xl bg-orange-50 p-3">
+                            <p className="text-xs font-black text-orange-700 uppercase mb-2">Historial de Re-Cotizaciones</p>
+                            {cotHistory.map((h:any,i:number)=>(
+                              <div key={i} className="bg-white rounded-lg p-2 mb-1 flex justify-between text-xs">
+                                <span className="text-slate-600">Re-Cotizacion #{i+1}</span>
+                                <span className="font-bold text-orange-700">{new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(h.total)}</span>
+                                <span className="text-slate-400">{new Date(h.fecha).toLocaleDateString('es-CO')}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Contactar */}
+                      <div>
+                        <p className="text-xs font-black text-slate-400 uppercase mb-3">Contactar al Cliente</p>
+                        <div className="grid grid-cols-3 gap-2">
+                          {selected.customer_phone && (
+                            <a href={`https://wa.me/57${selected.customer_phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer"
+                              className="flex flex-col items-center gap-1 py-3 bg-green-50 border border-green-200 text-green-700 rounded-xl font-bold text-xs hover:bg-green-100 transition-colors">
+                              <MessageCircle size={16}/>WhatsApp
+                            </a>
+                          )}
+                          {selected.customer_phone && (
+                            <a href={`tel:${selected.customer_phone}`}
+                              className="flex flex-col items-center gap-1 py-3 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl font-bold text-xs hover:bg-blue-100 transition-colors">
+                              <Phone size={16}/>Llamar
+                            </a>
+                          )}
+                          {selected.customer_email && (
+                            <a href={`mailto:${selected.customer_email}?subject=Cotizacion ${selected.numero}`}
+                              className="flex flex-col items-center gap-1 py-3 bg-slate-50 border border-slate-200 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-100 transition-colors">
+                              <Mail size={16}/>Email
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {panelTab==='actividad'&&(
+                    <div>
+                      <p className="text-xs font-black text-slate-400 uppercase mb-3">Historial de Actividad</p>
+                      {(selected.actividades || []).length === 0 ? (
+                        <p className="text-xs text-slate-400 italic">Sin actividad registrada</p>
+                      ) : (
+                        <div className="space-y-4 relative before:absolute before:left-2 before:top-0 before:bottom-0 before:w-0.5 before:bg-slate-100">
+                          {[...(selected.actividades || [])].reverse().filter((a:any)=>a.action!=='CHATTER').map((a: any) => (
+                            <div key={a.id} className="flex gap-4 pl-7 relative">
+                              <ActionDot action={a.action}/>
+                              <div className="flex-1 bg-white border border-slate-100 rounded-xl p-3 shadow-sm">
+                                <p className="text-sm font-bold text-slate-700">{a.description}</p>
+                                {a.old_estado && a.new_estado && (
+                                  <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
+                                    <Badge estado={a.old_estado}/>
+                                    <ArrowRight size={10} className="text-slate-300"/>
+                                    <Badge estado={a.new_estado}/>
+                                  </p>
+                                )}
+                                <p className="text-xs text-slate-400 mt-1">
+                                  {fDate(a.created_at)} a las {fTime(a.created_at)}
+                                  {a.user_name && <span className="ml-2 font-medium">• {a.user_name}</span>}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {panelTab==='chatter'&&(
+                    <div className="flex flex-col h-full">
+                      <div className="flex-1 space-y-3 min-h-[200px]">
+                        {(selected.actividades||[]).filter((a:any)=>a.action==='CHATTER').map((a:any)=>(
+                          <div key={a.id} className="bg-slate-100 rounded-xl p-3 max-w-[85%]">
+                            <p className="text-sm text-slate-800">{a.description}</p>
+                            <p className="text-xs text-slate-400 mt-1">{a.user_name} - {fDate(a.created_at)}</p>
+                          </div>
+                        ))}
+                        {!(selected.actividades||[]).some((a:any)=>a.action==='CHATTER')&&(
+                          <p className="text-xs text-slate-400 italic text-center py-8">Sin mensajes. Escribe abajo para chatear con el cliente.</p>
+                        )}
+                      </div>
+                      <div className="border-t border-slate-100 pt-3 mt-3">
+                        <textarea value={chatterInput} onChange={e=>setChatterInput(e.target.value)} rows={2} placeholder="Escribe un mensaje..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-amber-200 outline-none mb-2"/>
+                        <div className="flex gap-2">
+                          <button onClick={async()=>{
+                            if(!selected.customer_phone) return;
+                            const text=encodeURIComponent(chatterInput||`Hola, te contactamos sobre tu cotizacion ${selected.numero}`);
+                            window.open(`https://wa.me/57${selected.customer_phone.replace(/\D/g,'')}?text=${text}`,'_blank');
+                            if(chatterInput){
+                              try{await apiFetch(`/ventas/cotizaciones/${selected.id}/actividad`,{method:'POST',body:JSON.stringify({action:'CHATTER',description:chatterInput,user_name:currentUser})});}catch{}
+                              setChatterInput('');
+                              await loadDetail(selected.id);
+                            }
+                          }} disabled={!selected.customer_phone} className="flex-1 bg-green-500 hover:bg-green-600 text-white py-2 rounded-xl font-bold text-xs flex items-center justify-center gap-1 disabled:opacity-50">
+                            <MessageCircle size={12}/>WhatsApp
+                          </button>
+                          <button onClick={async()=>{
+                            if(!chatterInput.trim()||chatterSending) return;
+                            setChatterSending(true);
+                            try{await apiFetch(`/ventas/cotizaciones/${selected.id}/actividad`,{method:'POST',body:JSON.stringify({action:'CHATTER',description:chatterInput,user_name:currentUser})});setChatterInput('');await loadDetail(selected.id);}catch{}
+                            setChatterSending(false);
+                          }} disabled={!chatterInput.trim()||chatterSending} className="flex-1 bg-amber-600 hover:bg-amber-700 text-white py-2 rounded-xl font-bold text-xs flex items-center justify-center gap-1 disabled:opacity-50">
+                            {chatterSending?<RefreshCw size={12} className="animate-spin"/>:<Send size={12}/>}Registrar
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
