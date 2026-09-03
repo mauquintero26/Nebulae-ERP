@@ -208,6 +208,17 @@ class GoodsReceipt(Base):
     updated_at        = Column(DateTime, default=_now, onupdate=_now)
     created_by        = Column(String(150), nullable=True)
 
+    # ── Fase 1A: idempotencia y trazabilidad de confirmación ─────────────────
+    # Añadidos por migración fa1a_002. Obligatorios post-migración.
+    idempotency_key        = Column(String(150), nullable=True, index=True)
+    idempotency_request_id = Column(Integer, nullable=True)
+    # FK lógica a idempotency_requests.id — no se declara FK formal para
+    # evitar dependencia circular en downgrade de migraciones
+    receipt_type    = Column(String(20), nullable=True, default="FISICA")
+    # FISICA | LOGISTICA
+    confirmed_by    = Column(String(150), nullable=True)
+    confirmed_at    = Column(DateTime, nullable=True)
+
     purchase_order = relationship("PurchaseOrderFull", back_populates="goods_receipts")
     supplier       = relationship("Supplier", foreign_keys=[supplier_id])
 
