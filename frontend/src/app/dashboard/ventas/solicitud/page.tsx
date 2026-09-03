@@ -628,7 +628,7 @@ export default function SolicitudesPage() {
               <div className="bg-indigo-100 text-indigo-600 p-2 rounded-xl"><FileText size={24}/></div>
               Solicitudes de Cliente
             </h1>
-            <p className="text-slate-500 mt-2 font-medium">SC-YYYY#### Pipeline: SC -> COT -> VEN</p>
+            <p className="text-slate-500 mt-2 font-medium">SC-YYYY#### Pipeline: SC → COT → VEN</p>
           </div>
           <div className="flex gap-3">
             <button onClick={load} className="bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm shadow-sm"><RefreshCw size={15} className={loading?'animate-spin':''}/> Actualizar</button>
