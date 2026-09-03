@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
@@ -311,6 +311,8 @@ export default function CotizacionClient() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState('Activas');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   const [selected, setSelected] = useState<any | null>(null);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null);
@@ -676,7 +678,7 @@ export default function CotizacionClient() {
                       </div>
                     )}
                   </td></tr>
-                ) : filtered.map(cot => {
+                ) : filtered.slice((currentPage-1)*pageSize, currentPage*pageSize).map(cot => {
                   const overdue = isOverdue(cot.fecha_entrega_estimada);
                   const expiring = isExpiringSoon(cot.fecha_entrega_estimada);
                   return (
@@ -729,12 +731,31 @@ export default function CotizacionClient() {
             </table>
           </div>
 
-          {filtered.length > 0 && (
-            <div className="border-t border-slate-100 px-6 py-3 flex justify-between items-center bg-slate-50/50">
-              <p className="text-xs font-bold text-slate-400">{filtered.length} de {cotizaciones.length} cotizaciones</p>
-              <p className="text-xs font-black text-amber-700">
-                Valor total activas: {fCOP(activas.reduce((s, c) => s + (c.total_cop || 0), 0))}
-              </p>
+          {filtered.length > 0 && activeTab !== 'Analisis' && (
+            <div className="border-t border-slate-100 px-5 py-3 flex items-center justify-between bg-slate-50/50">
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-bold text-slate-400">{filtered.length} registros</span>
+                <select value={pageSize} onChange={e=>{setPageSize(Number(e.target.value));setCurrentPage(1);}} className="text-xs border border-slate-200 rounded-lg px-2 py-1 font-bold text-slate-600 outline-none focus:ring-1 focus:ring-amber-200">
+                  <option value={25}>25 por página</option>
+                  <option value={50}>50 por página</option>
+                </select>
+                <p className="text-xs font-black text-amber-700">
+                  Total activas: {fCOP(activas.reduce((s, c) => s + (c.total_cop || 0), 0))}
+                </p>
+              </div>
+              {Math.ceil(filtered.length/pageSize)>1&&(
+                <div className="flex items-center gap-1">
+                  <button disabled={currentPage===1} onClick={()=>setCurrentPage(1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">«</button>
+                  <button disabled={currentPage===1} onClick={()=>setCurrentPage(p=>p-1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">‹</button>
+                  {Array.from({length:Math.min(5,Math.ceil(filtered.length/pageSize))},(_,i)=>{
+                    const tp=Math.ceil(filtered.length/pageSize);let page=i+1;
+                    if(tp>5){const half=2;const start=Math.max(1,Math.min(currentPage-half,tp-4));page=start+i;}
+                    return <button key={page} onClick={()=>setCurrentPage(page)} className={`px-2.5 py-1 text-xs font-bold border rounded-lg ${currentPage===page?'bg-amber-600 text-white border-amber-600':'border-slate-200 hover:bg-slate-100'}`}>{page}</button>;
+                  })}
+                  <button disabled={currentPage===Math.ceil(filtered.length/pageSize)} onClick={()=>setCurrentPage(p=>p+1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">›</button>
+                  <button disabled={currentPage===Math.ceil(filtered.length/pageSize)} onClick={()=>setCurrentPage(Math.ceil(filtered.length/pageSize))} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">»</button>
+                </div>
+              )}
             </div>
           )}
         </div>

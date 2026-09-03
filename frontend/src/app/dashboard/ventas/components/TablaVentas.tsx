@@ -16,7 +16,7 @@ export function TablaVentas({ rawData }: TablaVentasProps) {
   const [dateTo, setDateTo] = useState('');
   const [selectedTipoVenta, setSelectedTipoVenta] = useState('ALL');
 
-  const itemsPerPage = 50;
+  const [itemsPerPage, setItemsPerPage] = useState(25);
 
   const categories = [
     "Ropa", "Calzado", "Maternidad", "Esenciales (Salud y Cremas)", 
@@ -223,27 +223,27 @@ export function TablaVentas({ rawData }: TablaVentasProps) {
         </div>
         
         {/* Pagination */}
-        <div className="p-3 border-t border-slate-100 bg-slate-50 flex justify-between items-center">
-          <span className="text-xs text-slate-500 font-medium">
-            Mostrando {(currentPage - 1) * itemsPerPage + 1} - {Math.min(currentPage * itemsPerPage, filteredData.length)} de {filteredData.length}
-          </span>
-          <div className="flex space-x-1">
-            <button 
-              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
-              className="p-1 border border-slate-200 rounded-md text-slate-500 hover:bg-white disabled:opacity-50 transition-colors"
-            >
-              <ChevronLeft className="w-5 h-5" />
-            </button>
-            <span className="px-3 py-1 text-sm font-medium text-slate-700">Pág {currentPage} / {totalPages}</span>
-            <button 
-              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages}
-              className="p-1 border border-slate-200 rounded-md text-slate-500 hover:bg-white disabled:opacity-50 transition-colors"
-            >
-              <ChevronRight className="w-5 h-5" />
-            </button>
+        <div className="px-5 py-3 border-t border-slate-100 bg-slate-50 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-bold text-slate-400">{filteredData.length} registros</span>
+            <select value={itemsPerPage} onChange={e=>{setItemsPerPage(Number(e.target.value));setCurrentPage(1);}} className="text-xs border border-slate-200 rounded-lg px-2 py-1 font-bold text-slate-600 outline-none focus:ring-1 focus:ring-indigo-200">
+              <option value={25}>25 por página</option>
+              <option value={50}>50 por página</option>
+            </select>
           </div>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1">
+              <button disabled={currentPage===1} onClick={()=>setCurrentPage(1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">«</button>
+              <button disabled={currentPage===1} onClick={()=>setCurrentPage(p=>p-1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">‹</button>
+              {Array.from({length:Math.min(5,totalPages)},(_,i)=>{
+                let page=i+1;
+                if(totalPages>5){const half=2;const start=Math.max(1,Math.min(currentPage-half,totalPages-4));page=start+i;}
+                return <button key={page} onClick={()=>setCurrentPage(page)} className={`px-2.5 py-1 text-xs font-bold border rounded-lg ${currentPage===page?'bg-indigo-600 text-white border-indigo-600':'border-slate-200 hover:bg-slate-100'}`}>{page}</button>;
+              })}
+              <button disabled={currentPage===totalPages} onClick={()=>setCurrentPage(p=>p+1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">›</button>
+              <button disabled={currentPage===totalPages} onClick={()=>setCurrentPage(totalPages)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">»</button>
+            </div>
+          )}
         </div>
 
       </div>
