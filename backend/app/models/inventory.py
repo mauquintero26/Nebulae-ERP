@@ -16,7 +16,14 @@ class InventoryLevel(Base):
     id = Column(Integer, primary_key=True, index=True)
     sku_id = Column(Integer, ForeignKey("product_skus.id"), nullable=False)
     warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=False)
-    quantity = Column(Integer, default=0)
+    quantity = Column(Integer, default=0)          # Total físico (backward compat)
+    # Dimensiones de estado — disponible = quantity - reserved - in_quarantine
+    reserved            = Column(Integer, default=0)   # Reservado temporalmente (e-commerce / entrega inmediata)
+    assigned_customers  = Column(Integer, default=0)   # Asignado a clientes con PVEN por pedido
+    in_transit          = Column(Integer, default=0)   # En camino (no disponible para entrega inmediata)
+    in_quarantine       = Column(Integer, default=0)   # Defectuoso / cuarentena
+    qty_nebulae         = Column(Integer, default=0)   # Propietario Nebulae
+    qty_mau             = Column(Integer, default=0)   # Propietario Mau
 
     sku = relationship("ProductSKU", back_populates="inventory_levels")
     warehouse = relationship("Warehouse", back_populates="inventory_levels")

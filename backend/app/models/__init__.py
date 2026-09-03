@@ -8,3 +8,9 @@ from app.models.expenses import OperationalExpense
 from app.models.crm import Alert
 
 from app.models.erp_documents import Supplier, CustomerRequest, SalesQuotation, SaleOrder, PaymentPending, PurchaseOrderFull, GoodsReceipt, ActivityLog
+from app.models.erp_lines import (
+    CustomerRequestLine, SalesQuotationLine, SaleOrderLineErp,
+    PurchaseOrderLine, ProcurementAllocation, GoodsReceiptLine,
+    InventoryReservation
+)
+from app.models.payments import PaymentTransaction

@@ -11,8 +11,9 @@ from app.db.database import get_db
 from app.models.erp_documents import (
     Supplier, PurchaseOrderFull, GoodsReceipt, ActivityLog, SaleOrder
 )
-from app.models.inventory import InventoryLevel, Warehouse
+from app.models.inventory import InventoryLevel, Warehouse, InventoryOperation, InventoryMovement
 import datetime
+import uuid
 
 router = APIRouter()
 
@@ -555,61 +556,133 @@ def update_recepcion(eninv_id: int, body: dict, db: Session = Depends(get_db)):
 
 @router.post("/recepciones/{eninv_id}/confirmar")
 def confirmar_recepcion(eninv_id: int, body: dict, db: Session = Depends(get_db)):
-    """Confirm receipt -> update stock in warehouse"""
+    """
+    Confirma una recepción de mercancía.
+
+    Reglas de seguridad:
+    - Idempotente: si se envía el mismo idempotency_key dos veces, devuelve el resultado previo sin duplicar stock.
+    - Atómica: una sola transacción; si cualquier paso falla, nada se guarda.
+    - Diferencia LOGISTICA (llegada Miami/Bogotá, no incrementa stock vendible) vs FISICA (bodega Barranquilla).
+    - No marca PEC como RECIBIDO si quedan cantidades pendientes por línea.
+    - Crea InventoryOperation + InventoryMovement por cada SKU recibido.
+    """
     g = db.query(GoodsReceipt).filter(GoodsReceipt.id == eninv_id).first()
     if not g:
         raise HTTPException(404, "Recepcion no encontrada")
-    if g.stock_actualizado:
-        raise HTTPException(400, "Stock ya fue actualizado para esta recepcion")
 
+    # --- IDEMPOTENCIA ---
+    client_key = body.get("idempotency_key")
+    if client_key:
+        if g.idempotency_key and g.idempotency_key == client_key and g.stock_actualizado:
+            # Reintento duplicado — devolver resultado anterior sin modificar nada
+            return {"status": "success", "data": _gr_dict(g), "idempotent_replay": True}
+    elif g.stock_actualizado:
+        # Sin clave provista pero ya confirmada — bloquear doble ejecución
+        raise HTTPException(400, "Esta recepcion ya fue confirmada. Incluye idempotency_key para reintentar de forma segura.")
+
+    receipt_type = body.get("receipt_type", "FISICA")  # LOGISTICA | FISICA
     warehouse_id = g.warehouse_id
     if not warehouse_id:
         raise HTTPException(400, "Debe seleccionar una bodega antes de confirmar")
 
+    user_name = body.get("user_name") or body.get("created_by")
+    now = datetime.datetime.utcnow()
+
+    # --- PROCESAR LÍNEAS (dentro de la misma transacción) ---
     updated_products = []
+    total_received = 0
+    total_pending  = 0
+    sku_increments: dict[int, int] = {}  # sku_id -> qty_recibida para esta confirmación
+
     for prod in (g.productos or []):
-        sku_id = prod.get("sku_id")
+        sku_id       = prod.get("sku_id")
+        qty_esperada = int(prod.get("qty_esperada", prod.get("qty", 0)))
         qty_recibida = int(prod.get("qty_recibida", prod.get("qty", 0)))
-        if sku_id and qty_recibida > 0:
-            # Update or create inventory level
+
+        if sku_id and qty_recibida > 0 and receipt_type == "FISICA":
+            # Acumular para crear movimientos (no actualizar aún)
+            sku_increments[sku_id] = sku_increments.get(sku_id, 0) + qty_recibida
+            prod["estado"] = "RECIBIDO"
+            total_received += qty_recibida
+        elif qty_esperada > qty_recibida:
+            total_pending += (qty_esperada - qty_recibida)
+
+        updated_products.append(prod)
+
+    # --- ACTUALIZAR INVENTARIO (solo FISICA) ---
+    inv_operation = None
+    if receipt_type == "FISICA" and sku_increments:
+        # Crear una InventoryOperation tipo RECEIPT
+        inv_operation = InventoryOperation(
+            dest_warehouse_id=warehouse_id,
+            operation_type="RECEIPT",
+            status="DONE",
+        )
+        db.add(inv_operation)
+        db.flush()  # Obtener inv_operation.id sin hacer commit todavía
+
+        for sku_id, qty in sku_increments.items():
+            # Actualizar InventoryLevel
             level = db.query(InventoryLevel).filter(
                 InventoryLevel.sku_id == sku_id,
                 InventoryLevel.warehouse_id == warehouse_id
             ).first()
             if level:
-                level.quantity += qty_recibida
+                level.quantity += qty
             else:
                 level = InventoryLevel(
                     sku_id=sku_id,
                     warehouse_id=warehouse_id,
-                    quantity=qty_recibida
+                    quantity=qty
                 )
                 db.add(level)
-            prod["estado"] = "RECIBIDO"
-        updated_products.append(prod)
 
-    g.productos = updated_products
-    g.stock_actualizado = True
-    g.estado = "COMPLETADA"
-    g.updated_at = datetime.datetime.utcnow()
-    db.commit()
+            # Crear InventoryMovement trazable
+            movement = InventoryMovement(
+                operation_id=inv_operation.id,
+                sku_id=sku_id,
+                quantity=qty,
+            )
+            db.add(movement)
 
-    # Update PEC estado if all received
+    # --- ACTUALIZAR RECEPCIÓN ---
+    g.productos        = updated_products
+    g.stock_actualizado = (receipt_type == "FISICA")
+    g.estado           = "COMPLETADA"
+    g.receipt_type     = receipt_type
+    g.confirmed_by     = user_name
+    g.confirmed_at     = now
+    g.idempotency_key  = client_key or str(uuid.uuid4())
+    g.updated_at       = now
+
+    # --- ACTUALIZAR PEC — solo si NO quedan pendientes ---
+    pec_estado_nuevo = None
     if g.pec_id:
         p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == g.pec_id).first()
         if p:
-            p.estado = "RECIBIDO"
-            p.updated_at = datetime.datetime.utcnow()
-            db.commit()
-            _log(db, "PEC", p.id, p.numero, "RECIBIDO",
-                 f"Mercancia recibida via {g.numero}",
-                 old_estado="PENDIENTE_ENTREGA", new_estado="RECIBIDO",
-                 user_name=body.get("user_name"))
+            if total_pending > 0:
+                pec_estado_nuevo = "PARCIALMENTE_RECIBIDA"
+            else:
+                pec_estado_nuevo = "RECIBIDO"
+            p.estado     = pec_estado_nuevo
+            p.updated_at = now
 
+    # --- ÚNICO COMMIT ---
+    db.commit()
+
+    # --- LOGS DE AUDITORÍA (después del commit, no dentro de la transacción crítica) ---
     _log(db, "ENINV", g.id, g.numero, "STOCK_ACTUALIZADO",
-         f"Stock actualizado en bodega {g.warehouse_name}. {len(updated_products)} productos procesados.",
+         f"Recepcion {receipt_type} confirmada en bodega {g.warehouse_name}. "
+         f"{total_received} uds recibidas, {total_pending} pendientes.",
          old_estado="BORRADOR", new_estado="COMPLETADA",
-         user_name=body.get("user_name"))
+         user_name=user_name,
+         extra_data={"receipt_type": receipt_type, "sku_increments": sku_increments})
+
+    if g.pec_id and pec_estado_nuevo:
+        _log(db, "PEC", g.pec_id, g.pec_numero or "", "RECEPCION_CONFIRMADA",
+             f"Recepcion {g.numero} confirmada. Estado derivado: {pec_estado_nuevo}",
+             new_estado=pec_estado_nuevo,
+             user_name=user_name)
 
     return {"status": "success", "data": _gr_dict(g)}
 
