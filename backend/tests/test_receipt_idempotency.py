@@ -1,4 +1,4 @@
-
+﻿
 """
 tests/test_receipt_idempotency.py
 Scenarios:
@@ -19,7 +19,7 @@ def _key():
 def test_missing_idempotency_key_rejected(app_client, admin_token):
     """Pydantic generates a key automatically, but receipt_type is required to be valid."""
     resp = app_client.post(
-        "/api/v1/erp-compras/recepciones/1/confirmar",
+        "/api/v1/compras/recepciones/1/confirmar",
         json={"receipt_type": "INVALIDA"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
@@ -32,9 +32,9 @@ def test_same_key_same_payload_is_replay(app_client, admin_token):
     """Same idempotency_key + same payload returns idempotent_replay=True."""
     key = _key()
     payload = {"idempotency_key": key, "receipt_type": "FISICA"}
-    # First call — may succeed (200) or fail (404/400) if ENINV doesn't exist
+    # First call â€” may succeed (200) or fail (404/400) if ENINV doesn't exist
     r1 = app_client.post(
-        "/api/v1/erp-compras/recepciones/999999/confirmar",
+        "/api/v1/compras/recepciones/999999/confirmar",
         json=payload,
         headers={"Authorization": f"Bearer {admin_token}"},
     )
@@ -43,9 +43,9 @@ def test_same_key_same_payload_is_replay(app_client, admin_token):
 
     assert r1.status_code == 200
 
-    # Second call — same key, same payload -> replay
+    # Second call â€” same key, same payload -> replay
     r2 = app_client.post(
-        "/api/v1/erp-compras/recepciones/999999/confirmar",
+        "/api/v1/compras/recepciones/999999/confirmar",
         json=payload,
         headers={"Authorization": f"Bearer {admin_token}"},
     )
@@ -60,16 +60,16 @@ def test_same_key_different_payload_returns_409(app_client, admin_token):
     key = _key()
     # First call
     r1 = app_client.post(
-        "/api/v1/erp-compras/recepciones/999999/confirmar",
+        "/api/v1/compras/recepciones/999999/confirmar",
         json={"idempotency_key": key, "receipt_type": "FISICA"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     if r1.status_code in (404, 400):
         pytest.skip("No test ENINV available")
 
-    # Second call — same key, different receipt_type
+    # Second call â€” same key, different receipt_type
     r2 = app_client.post(
-        "/api/v1/erp-compras/recepciones/999999/confirmar",
+        "/api/v1/compras/recepciones/999999/confirmar",
         json={"idempotency_key": key, "receipt_type": "LOGISTICA"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
@@ -83,17 +83,18 @@ def test_replay_data_is_json_not_string(app_client, admin_token):
     key = _key()
     payload = {"idempotency_key": key, "receipt_type": "FISICA"}
     r1 = app_client.post(
-        "/api/v1/erp-compras/recepciones/999999/confirmar",
+        "/api/v1/compras/recepciones/999999/confirmar",
         json=payload,
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     if r1.status_code in (404, 400):
         pytest.skip("No test ENINV available")
     r2 = app_client.post(
-        "/api/v1/erp-compras/recepciones/999999/confirmar",
+        "/api/v1/compras/recepciones/999999/confirmar",
         json=payload,
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     if r2.status_code == 200 and r2.json().get("idempotent_replay"):
         data = r2.json().get("data")
         assert isinstance(data, dict), f"replay data is {type(data)}, expected dict"
+

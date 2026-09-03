@@ -1,4 +1,4 @@
-
+﻿
 """
 tests/test_receipt_concurrency.py
 Scenarios:
@@ -11,7 +11,7 @@ import pytest, uuid, threading, time
 
 def _confirmar(app_client, eninv_id, key, receipt_type, token, results, idx):
     resp = app_client.post(
-        f"/api/v1/erp-compras/recepciones/{eninv_id}/confirmar",
+        f"/api/v1/compras/recepciones/{eninv_id}/confirmar",
         json={"idempotency_key": key, "receipt_type": receipt_type},
         headers={"Authorization": f"Bearer {token}"},
     )
@@ -33,7 +33,7 @@ def test_two_same_key_concurrent_requests(app_client, admin_token):
     t1.join(); t2.join()
 
     statuses = set(results)
-    # With a non-existent ENINV, both may return 404/409 — but never both 200
+    # With a non-existent ENINV, both may return 404/409 â€” but never both 200
     assert results.count(200) <= 1, (
         f"At most one request should succeed. Got statuses: {results}"
     )
@@ -60,3 +60,4 @@ def test_two_different_keys_same_eninv_concurrent(app_client, admin_token):
     # With non-existent ENINV both return 404. That's fine.
     # If ENINV existed, stock_actualizado guard prevents double increment.
     assert 500 not in results, f"No 500 should occur. Got: {results}"
+

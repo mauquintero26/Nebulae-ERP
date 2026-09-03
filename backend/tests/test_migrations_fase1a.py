@@ -75,12 +75,18 @@ def test_inventory_movements_has_fase1a_columns(pg_session):
 
 
 def test_alembic_downgrade_and_upgrade_roundtrip():
-    """downgrade to base then upgrade to head must both succeed."""
-    r_down = _run(["downgrade", "base"])
+    """downgrade to Fase-1A base (ba65b0f69880) then upgrade to head must both succeed.
+    NOTE: we do NOT downgrade to 'base' because pre-Fase-1A migrations contain
+    DDL changes (e.g. sales_orders.user_id NOT NULL) that cannot be reversed
+    when real data already exists in the staging database.
+    We only test the Fase 1A migrations roundtrip."""
+    # Downgrade to the revision immediately before Fase 1A
+    r_down = _run(["downgrade", "ba65b0f69880"])
     assert r_down.returncode == 0, (
-        f"downgrade failed:\n{r_down.stdout}\n{r_down.stderr}"
+        f"downgrade to ba65b0f69880 failed:\n{r_down.stdout}\n{r_down.stderr}"
     )
+    # Re-apply Fase 1A migrations
     r_up = _run(["upgrade", "head"])
     assert r_up.returncode == 0, (
-        f"re-upgrade failed:\n{r_up.stdout}\n{r_up.stderr}"
+        f"re-upgrade to head failed:\n{r_up.stdout}\n{r_up.stderr}"
     )
