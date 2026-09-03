@@ -23,7 +23,7 @@ function ProductCard({ product }: { product: Product }) {
   const hasDiscount = product.descuento_pct && product.descuento_pct > 0;
   return (
     <div className="group flex flex-col">
-      <Link href={/store/producto/+product.id} className="block">
+      <Link href={"/store/producto/"+product.id} className="block">
         <div className="relative w-full aspect-[4/5] bg-slate-100 rounded-2xl overflow-hidden mb-3">
           {img ? (
             <img src={img} alt={product.nombre} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
@@ -46,7 +46,7 @@ function ProductCard({ product }: { product: Product }) {
           </div>
         </div>
       </Link>
-      <Link href={/store/producto/+product.id}>
+      <Link href={"/store/producto/"+product.id}>
         <h3 className="font-bold text-slate-800 text-sm leading-tight mb-1 group-hover:text-emerald-600 transition-colors line-clamp-2">{product.nombre}</h3>
         <div className="flex items-center gap-2">
           <p className="font-black text-slate-900 text-sm">{formatCOP(product.precio_venta)}</p>
@@ -172,3 +172,4 @@ export default function CategoriaPage({ params }: { params: Promise<{ slug: stri
     </div>
   );
 }
+
