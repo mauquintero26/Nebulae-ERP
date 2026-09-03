@@ -2,6 +2,58 @@
 
 > **Nota para el AI:** Cada vez que el usuario pida "actualiza la bitácora", debes agregar una nueva entrada al final de este documento detallando los últimos cambios.
 
+---
+
+## Fase 16: Prompt Maestro — Auditoría y Plan de Migración ERP (2026-09-03)
+
+**Motivación:** El usuario entregó `Prompt_Maestro_Antigravity_Nebulae_ERP.md` con instrucciones para convertir los módulos de ventas, compras, tránsito, recepción e inventario en un flujo operativo único, confiable y trazable.
+
+**Fase 0 — Solo auditoría (sin modificaciones de código):**
+- Diagnóstico completo con 7 hallazgos críticos documentados.
+- Plan de 6 fases aprobado y guardado en `implementation_plan.md`.
+- Primera versión del plan rechazada por el usuario por no contemplar autenticación real, idempotencia multicapa, dimensiones de inventario, separación Fase 1A/1B, requisitos de backfill y pruebas de concurrencia.
+- **Plan corregido** con 12 puntos incorporados: seguridad real, idempotencia multicapa vía `idempotency_requests`, `inventory_owner_balances`, separación 1A/1B, estados con matriz de transiciones, diagrama ER, backfill formal, roles, concurrencia.
+
+---
+
+## Fase 17: Fase 1A — Autenticación JWT y confirmar_recepcion Atómica (2026-09-03, commit `c280bde`)
+
+### Brecha crítica corregida
+`erp_ventas.py` y `erp_compras.py` tenían **0 endpoints protegidos**. Verificado: `grep get_current_user erp_ventas.py erp_compras.py` → sin resultados. Cualquier actor en red podía crear pedidos, confirmar recepciones e incrementar stock.
+
+### Archivos modificados
+
+| Archivo | Cambio |
+|---|---|
+| `backend/app/api/dependencies.py` | `require_roles(*roles)` factory + constantes `ROLE_ADMIN`, `ROLE_ASESOR`, `ROLE_COMPRAS`, `ROLE_BODEGA`, `ROLE_FINANZAS`, `ROLE_CONSULTA` |
+| `backend/app/api/v1/erp_ventas.py` | **30 endpoints** protegidos con `Depends(require_roles(...))` granular por rol |
+| `backend/app/api/v1/erp_compras.py` | **23 endpoints** protegidos; `confirmar_recepcion` reescrita |
+| `backend/alembic/versions/fa1a_001_idempotency_requests.py` | Tabla `idempotency_requests` con `UNIQUE(operation_key)` |
+| `backend/alembic/versions/fa1a_002_goodsreceipt_fields.py` | Columnas en `goods_receipts`, `inventory_operations`, `inventory_movements` |
+
+### Roles asignados por operación
+- `GET *` → `ALL_ERP_ROLES` (todos pueden leer)
+- Crear/editar SC, COT, PVEN → `ADMIN + ASESOR`
+- Crear/editar PEC, tracking → `ADMIN + COMPRAS`
+- Confirmar recepción → **`ADMIN + BODEGA`** (única operación que incrementa stock)
+- Papelera permanente → `ADMIN` exclusivo
+- Pagos PXP → `ADMIN + FINANZAS`
+
+### confirmar_recepcion — Invariantes garantizados
+1. **Atómica:** un único `db.commit()` al final
+2. **Idempotente:** si `idempotency_requests` existe, replay devuelve respuesta guardada sin modificar stock
+3. **FISICA vs LOGISTICA:** LOGISTICA registra llegada intermedia (Miami/Bogotá) sin incrementar stock vendible de Barranquilla
+4. **Estado PEC derivado correctamente:** `PARCIALMENTE_RECIBIDA` si `total_pendiente > 0`, `RECIBIDO` solo cuando todo cubierto
+5. **Auditoría no crítica:** `_log(...)` en bloque `try/except` separado — fallo de log no revierte el stock
+
+### Sin cambios en Frontend
+Ningún archivo `.tsx` modificado. 0 errores TypeScript nuevos.
+
+### Pendiente (Fase 1B)
+Tablas de líneas normalizadas (`customer_request_lines`, `sale_order_lines_erp`, etc.), `goods_receipt_lines`, `inventory_owner_balances`, `PaymentTransaction`, backfill, recepción definitiva sobre líneas normalizadas.
+
+---
+
 ## Fase 1: Estructura Base y Migración
 - Configuración del entorno Next.js 14/15 con Tailwind CSS y Lucide React.
 - Creación de Layout base, Sidebar reorganizado con secciones desplegables.
