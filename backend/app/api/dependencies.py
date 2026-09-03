@@ -52,3 +52,36 @@ class RoleChecker:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Read access required")
 
         return user
+
+
+# --- ERP Role constants ---
+# User.role acepta valores legacy ("Admin","Vendedor","ERP","Finanzas") y nuevos ("ADMIN","ASESOR","COMPRAS","BODEGA","FINANZAS","CONSULTA")
+ROLE_ADMIN    = ("Admin", "ADMIN")
+ROLE_ASESOR   = ("Vendedor", "ASESOR")
+ROLE_COMPRAS  = ("ERP", "COMPRAS")
+ROLE_BODEGA   = ("BODEGA",)
+ROLE_FINANZAS = ("Finanzas", "FINANZAS")
+ROLE_CONSULTA = ("CONSULTA",)
+ALL_ERP_ROLES = ROLE_ADMIN + ROLE_ASESOR + ROLE_COMPRAS + ROLE_BODEGA + ROLE_FINANZAS + ROLE_CONSULTA
+
+
+def require_roles(*allowed_roles: str):
+    """
+    FastAPI dependency factory: verifica que el usuario autenticado tenga uno de los roles permitidos.
+
+    Uso:
+        @router.post("/endpoint")
+        def endpoint(user = Depends(require_roles("Admin", "BODEGA"))):
+            ...
+    """
+    def _check_role(current_user: User = Depends(get_current_user)):
+        if current_user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"Rol '{current_user.role}' no autorizado. "
+                    f"Requerido: {', '.join(allowed_roles)}"
+                ),
+            )
+        return current_user
+    return _check_role

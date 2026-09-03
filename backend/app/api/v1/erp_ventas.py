@@ -13,6 +13,11 @@ from app.models.erp_documents import (
     PaymentPending, ActivityLog
 )
 from app.models.customers import Customer
+from app.api.dependencies import (
+    require_roles, get_current_user,
+    ROLE_ADMIN, ROLE_ASESOR, ROLE_COMPRAS, ROLE_FINANZAS, ALL_ERP_ROLES
+)
+from app.models.users import User
 import datetime
 
 router = APIRouter()
@@ -178,6 +183,8 @@ def list_solicitudes(
     search: Optional[str] = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
+    
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
     q = db.query(CustomerRequest)
@@ -198,7 +205,8 @@ def list_solicitudes(
 
 
 @router.post("/solicitudes", status_code=201)
-def create_solicitud(body: dict, db: Session = Depends(get_db)):
+def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+        db: Session = Depends(get_db)):
     numero = _gen_numero(db, "SC-", "seq_sc")
     # Auto vencimiento: 30 days
     venc = datetime.datetime.utcnow() + datetime.timedelta(days=body.get("dias_vencimiento", 30))
@@ -242,7 +250,8 @@ def create_solicitud(body: dict, db: Session = Depends(get_db)):
 
 
 @router.get("/solicitudes/{sc_id}")
-def get_solicitud(sc_id: int, db: Session = Depends(get_db)):
+def get_solicitud(sc_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+        db: Session = Depends(get_db)):
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
@@ -259,7 +268,8 @@ def get_solicitud(sc_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/solicitudes/{sc_id}")
-def update_solicitud(sc_id: int, body: dict, db: Session = Depends(get_db)):
+def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+        db: Session = Depends(get_db)):
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
@@ -282,7 +292,8 @@ def update_solicitud(sc_id: int, body: dict, db: Session = Depends(get_db)):
 
 
 @router.post("/solicitudes/{sc_id}/confirmar")
-def confirmar_solicitud(sc_id: int, body: dict, db: Session = Depends(get_db)):
+def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+        db: Session = Depends(get_db)):
     """Confirm SC -> creates COT automatically"""
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     if not sc:
@@ -330,7 +341,8 @@ def confirmar_solicitud(sc_id: int, body: dict, db: Session = Depends(get_db)):
 
 
 @router.post("/solicitudes/{sc_id}/actividad")
-def add_sc_activity(sc_id: int, body: dict, db: Session = Depends(get_db)):
+def add_sc_activity(sc_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
@@ -350,6 +362,8 @@ def list_cotizaciones(
     search: Optional[str] = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
+    
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
     q = db.query(SalesQuotation)
@@ -371,7 +385,8 @@ def list_cotizaciones(
 
 
 @router.post("/cotizaciones", status_code=201)
-def create_cotizacion(body: dict, db: Session = Depends(get_db)):
+def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+        db: Session = Depends(get_db)):
     numero = _gen_numero(db, "COT-", "seq_cot")
     entrega_est = None
     if body.get("dias_entrega"):
@@ -409,7 +424,8 @@ def create_cotizacion(body: dict, db: Session = Depends(get_db)):
 
 
 @router.get("/cotizaciones/{cot_id}")
-def get_cotizacion(cot_id: int, db: Session = Depends(get_db)):
+def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+        db: Session = Depends(get_db)):
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
     if not cot:
         raise HTTPException(404, "Cotizacion no encontrada")
@@ -426,7 +442,8 @@ def get_cotizacion(cot_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/cotizaciones/{cot_id}")
-def update_cotizacion(cot_id: int, body: dict, db: Session = Depends(get_db)):
+def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+        db: Session = Depends(get_db)):
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
     if not cot:
         raise HTTPException(404, "Cotizacion no encontrada")
@@ -450,7 +467,8 @@ def update_cotizacion(cot_id: int, body: dict, db: Session = Depends(get_db)):
 
 
 @router.post("/cotizaciones/{cot_id}/confirmar")
-def confirmar_cotizacion(cot_id: int, body: dict, db: Session = Depends(get_db)):
+def confirmar_cotizacion(cot_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+        db: Session = Depends(get_db)):
     """Confirm COT -> creates VEN automatically"""
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
     if not cot:
@@ -505,7 +523,8 @@ def confirmar_cotizacion(cot_id: int, body: dict, db: Session = Depends(get_db))
 
 
 @router.post("/cotizaciones/{cot_id}/actividad")
-def add_cot_activity(cot_id: int, body: dict, db: Session = Depends(get_db)):
+def add_cot_activity(cot_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
     if not cot:
         raise HTTPException(404, "Cotizacion no encontrada")
@@ -517,7 +536,8 @@ def add_cot_activity(cot_id: int, body: dict, db: Session = Depends(get_db)):
 
 
 @router.post("/pedidos/{ven_id}/actividad")
-def add_ven_activity(ven_id: int, body: dict, db: Session = Depends(get_db)):
+def add_ven_activity(ven_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
     v = db.query(SaleOrder).filter(SaleOrder.id == ven_id).first()
     if not v:
         raise HTTPException(404, "Pedido no encontrado")
@@ -537,6 +557,8 @@ def list_pedidos(
     search: Optional[str] = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
+    
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
     q = db.query(SaleOrder)
@@ -561,7 +583,8 @@ def list_pedidos(
 
 
 @router.post("/pedidos", status_code=201)
-def create_pedido(body: dict, db: Session = Depends(get_db)):
+def create_pedido(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+        db: Session = Depends(get_db)):
     numero = _gen_numero(db, "PVEN-", "seq_ven")
     saldo = float(body.get("total_cop", 0)) - float(body.get("anticipo_cop", 0))
     ven = SaleOrder(
@@ -597,7 +620,8 @@ def create_pedido(body: dict, db: Session = Depends(get_db)):
 
 
 @router.get("/pedidos/{ven_id}")
-def get_pedido(ven_id: int, db: Session = Depends(get_db)):
+def get_pedido(ven_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+        db: Session = Depends(get_db)):
     v = db.query(SaleOrder).filter(SaleOrder.id == ven_id).first()
     if not v:
         raise HTTPException(404, "Pedido de venta no encontrado")
@@ -613,7 +637,8 @@ def get_pedido(ven_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/pedidos/{ven_id}")
-def update_pedido(ven_id: int, body: dict, db: Session = Depends(get_db)):
+def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+        db: Session = Depends(get_db)):
     v = db.query(SaleOrder).filter(SaleOrder.id == ven_id).first()
     if not v:
         raise HTTPException(404, "Pedido de venta no encontrado")
@@ -637,7 +662,8 @@ def update_pedido(ven_id: int, body: dict, db: Session = Depends(get_db)):
 
 
 @router.post("/pedidos/{ven_id}/crear-pxp")
-def crear_pxp(ven_id: int, body: dict, db: Session = Depends(get_db)):
+def crear_pxp(ven_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS)),
+        db: Session = Depends(get_db)):
     v = db.query(SaleOrder).filter(SaleOrder.id == ven_id).first()
     if not v:
         raise HTTPException(404, "Pedido de venta no encontrado")
@@ -684,6 +710,8 @@ def list_pxp(
     estado: Optional[str] = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
+    
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
     q = db.query(PaymentPending)
@@ -695,7 +723,8 @@ def list_pxp(
 
 
 @router.patch("/pxp/{pxp_id}")
-def update_pxp(pxp_id: int, body: dict, db: Session = Depends(get_db)):
+def update_pxp(pxp_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS)),
+        db: Session = Depends(get_db)):
     p = db.query(PaymentPending).filter(PaymentPending.id == pxp_id).first()
     if not p:
         raise HTTPException(404, "PXP no encontrada")
@@ -717,7 +746,8 @@ def update_pxp(pxp_id: int, body: dict, db: Session = Depends(get_db)):
 # ─── DASHBOARD STATS ─────────────────────────────────────────────────────────
 
 @router.get("/stats")
-def ventas_stats(db: Session = Depends(get_db)):
+def ventas_stats(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *ROLE_COMPRAS, *ROLE_FINANZAS)),
+        db: Session = Depends(get_db)):
     sc_total = db.query(func.count(CustomerRequest.id)).scalar()
     cot_total = db.query(func.count(SalesQuotation.id)).scalar()
     ven_total = db.query(func.count(SaleOrder.id)).scalar()
@@ -756,6 +786,8 @@ def ventas_analytics(
     date_to: Optional[str] = None,
     product: Optional[str] = None,
     top_n: int = Query(10, le=50),
+    
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
     now = datetime.datetime.utcnow()
@@ -852,7 +884,8 @@ def _get_alert_days(db: Session, key: str = "alerta_sc_dias") -> int:
 
 
 @router.get("/alertas")
-def get_alertas(db: Session = Depends(get_db)):
+def get_alertas(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
     dias = _get_alert_days(db)
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=dias)
 
@@ -883,7 +916,8 @@ def get_alertas(db: Session = Depends(get_db)):
 # ─── ADMIN CONFIG ─────────────────────────────────────────────────────────────
 
 @router.get("/config")
-def get_config(db: Session = Depends(get_db)):
+def get_config(user: User = Depends(require_roles(*ROLE_ADMIN)),
+        db: Session = Depends(get_db)):
     try:
         rows = db.execute(text("SELECT key, value, description FROM admin_config")).fetchall()
         return {"status": "success", "data": {r[0]: {"value": r[1], "description": r[2]} for r in rows}}
@@ -892,7 +926,8 @@ def get_config(db: Session = Depends(get_db)):
 
 
 @router.patch("/config")
-def update_config(body: dict, db: Session = Depends(get_db)):
+def update_config(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)),
+        db: Session = Depends(get_db)):
     for k, v in body.items():
         db.execute(text(
             f"INSERT INTO admin_config (key, value, updated_at) VALUES ('{k}', '{v}', NOW()) "
@@ -905,7 +940,8 @@ def update_config(body: dict, db: Session = Depends(get_db)):
 # ─── IA ANÁLISIS DE SOLICITUD ────────────────────────────────────────────────
 
 @router.post("/solicitudes/{sc_id}/ia-analisis")
-def ia_analisis_solicitud(sc_id: int, body: dict = {}, db: Session = Depends(get_db)):
+def ia_analisis_solicitud(sc_id: int, body: dict = {}, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+        db: Session = Depends(get_db)):
     """Genera análisis IA contextual de una SC: trazabilidad o condiciones de devolución."""
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     if not sc:
@@ -1000,7 +1036,8 @@ Notas: {sc.notas or 'Sin notas adicionales'}"""
 # ─── CANCELAR SC CON RAZÓN ────────────────────────────────────────────────────
 
 @router.post("/solicitudes/{sc_id}/cancelar")
-def cancelar_solicitud(sc_id: int, body: dict, db: Session = Depends(get_db)):
+def cancelar_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+        db: Session = Depends(get_db)):
     """Cancela una SC con razón obligatoria y marca eliminada_at para papelera 30 días."""
     razon = body.get("razon", "").strip()
     if not razon:
@@ -1036,7 +1073,8 @@ def cancelar_solicitud(sc_id: int, body: dict, db: Session = Depends(get_db)):
 # ─── PAPELERA (SCs canceladas, purga 30 días) ────────────────────────────────
 
 @router.get("/solicitudes/papelera")
-def get_papelera(db: Session = Depends(get_db)):
+def get_papelera(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+        db: Session = Depends(get_db)):
     """Lista SCs canceladas con días restantes antes de eliminación permanente."""
     try:
         # Ensure columns exist
@@ -1076,7 +1114,8 @@ def get_papelera(db: Session = Depends(get_db)):
 
 
 @router.delete("/solicitudes/{sc_id}/permanente")
-def eliminar_permanente(sc_id: int, db: Session = Depends(get_db)):
+def eliminar_permanente(sc_id: int, user: User = Depends(require_roles(*ROLE_ADMIN)),
+        db: Session = Depends(get_db)):
     """Elimina permanentemente una SC de la papelera."""
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     if not sc or sc.estado != "CANCELADA":
@@ -1089,7 +1128,8 @@ def eliminar_permanente(sc_id: int, db: Session = Depends(get_db)):
 # ─── FORMATO CONFIRMACIÓN ────────────────────────────────────────────────────
 
 @router.get("/solicitudes/{sc_id}/formato-confirmacion")
-def get_formato_confirmacion(sc_id: int, db: Session = Depends(get_db)):
+def get_formato_confirmacion(sc_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+        db: Session = Depends(get_db)):
     """Retorna datos estructurados para el formato de confirmación al cliente."""
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     if not sc:

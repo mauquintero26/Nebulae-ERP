@@ -11,8 +11,14 @@ from app.db.database import get_db
 from app.models.erp_documents import (
     Supplier, PurchaseOrderFull, GoodsReceipt, ActivityLog, SaleOrder
 )
-from app.models.inventory import InventoryLevel, Warehouse
+from app.models.inventory import InventoryLevel, Warehouse, InventoryOperation, InventoryMovement
+from app.api.dependencies import (
+    require_roles, get_current_user,
+    ROLE_ADMIN, ROLE_ASESOR, ROLE_COMPRAS, ROLE_BODEGA, ROLE_FINANZAS, ALL_ERP_ROLES
+)
+from app.models.users import User
 import datetime
+import uuid
 
 router = APIRouter()
 
@@ -141,6 +147,8 @@ def list_suppliers(
     is_active: Optional[bool] = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
+    
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
     q = db.query(Supplier)
@@ -160,7 +168,8 @@ def list_suppliers(
 
 
 @router.get("/proveedores/search")
-def search_suppliers(q: str = "", db: Session = Depends(get_db)):
+def search_suppliers(q: str = "", user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+        db: Session = Depends(get_db)):
     like = f"%{q}%"
     items = db.query(Supplier).filter(
         Supplier.is_active == True,
@@ -170,7 +179,8 @@ def search_suppliers(q: str = "", db: Session = Depends(get_db)):
 
 
 @router.post("/proveedores", status_code=201)
-def create_supplier(body: dict, db: Session = Depends(get_db)):
+def create_supplier(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
     s = Supplier(
         name=body["name"],
         reference=body.get("reference"),
@@ -190,7 +200,8 @@ def create_supplier(body: dict, db: Session = Depends(get_db)):
 
 
 @router.get("/proveedores/{supplier_id}")
-def get_supplier(supplier_id: int, db: Session = Depends(get_db)):
+def get_supplier(supplier_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+        db: Session = Depends(get_db)):
     s = db.query(Supplier).filter(Supplier.id == supplier_id).first()
     if not s:
         raise HTTPException(404, "Proveedor no encontrado")
@@ -203,7 +214,8 @@ def get_supplier(supplier_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/proveedores/{supplier_id}")
-def update_supplier(supplier_id: int, body: dict, db: Session = Depends(get_db)):
+def update_supplier(supplier_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
     s = db.query(Supplier).filter(Supplier.id == supplier_id).first()
     if not s:
         raise HTTPException(404, "Proveedor no encontrado")
@@ -225,6 +237,8 @@ def list_pec(
     search: Optional[str] = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
+    
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
     q = db.query(PurchaseOrderFull)
@@ -245,7 +259,8 @@ def list_pec(
 
 
 @router.post("/pedidos", status_code=201)
-def create_pec(body: dict, db: Session = Depends(get_db)):
+def create_pec(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
     numero = _gen_numero(db, "PEC-", "seq_pec")
     # Default delivery: 15 days
     days = body.get("dias_entrega", 15)
@@ -313,7 +328,8 @@ def create_pec(body: dict, db: Session = Depends(get_db)):
 
 
 @router.get("/pedidos/{pec_id}")
-def get_pec(pec_id: int, db: Session = Depends(get_db)):
+def get_pec(pec_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+        db: Session = Depends(get_db)):
     p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).first()
     if not p:
         raise HTTPException(404, "Pedido de compra no encontrado")
@@ -329,7 +345,8 @@ def get_pec(pec_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/pedidos/{pec_id}")
-def update_pec(pec_id: int, body: dict, db: Session = Depends(get_db)):
+def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
     p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).first()
     if not p:
         raise HTTPException(404, "Pedido de compra no encontrado")
@@ -354,7 +371,8 @@ def update_pec(pec_id: int, body: dict, db: Session = Depends(get_db)):
 
 
 @router.patch("/pedidos/{pec_id}/tracking")
-def update_tracking(pec_id: int, body: dict, db: Session = Depends(get_db)):
+def update_tracking(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
     """Update a tracking stage status, tracking number, and append to tracking history"""
     p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).first()
     if not p:
@@ -411,7 +429,8 @@ def update_tracking(pec_id: int, body: dict, db: Session = Depends(get_db)):
 
 
 @router.post("/pedidos/{pec_id}/recepcionar")
-def crear_recepcion_desde_pec(pec_id: int, body: dict, db: Session = Depends(get_db)):
+def crear_recepcion_desde_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
     """Create a GoodsReceipt (ENINV) from a PEC"""
     p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).first()
     if not p:
@@ -477,6 +496,8 @@ def list_recepciones(
     pec_id: Optional[int] = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
+    
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
     q = db.query(GoodsReceipt)
@@ -490,7 +511,8 @@ def list_recepciones(
 
 
 @router.post("/recepciones", status_code=201)
-def create_recepcion(body: dict, db: Session = Depends(get_db)):
+def create_recepcion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
     numero = _gen_numero(db, "ENINV-", "seq_eninv")
     gr = GoodsReceipt(
         numero=numero,
@@ -518,7 +540,8 @@ def create_recepcion(body: dict, db: Session = Depends(get_db)):
 
 
 @router.get("/recepciones/{eninv_id}")
-def get_recepcion(eninv_id: int, db: Session = Depends(get_db)):
+def get_recepcion(eninv_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+        db: Session = Depends(get_db)):
     g = db.query(GoodsReceipt).filter(GoodsReceipt.id == eninv_id).first()
     if not g:
         raise HTTPException(404, "Recepcion no encontrada")
@@ -532,7 +555,8 @@ def get_recepcion(eninv_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch("/recepciones/{eninv_id}")
-def update_recepcion(eninv_id: int, body: dict, db: Session = Depends(get_db)):
+def update_recepcion(eninv_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
     g = db.query(GoodsReceipt).filter(GoodsReceipt.id == eninv_id).first()
     if not g:
         raise HTTPException(404, "Recepcion no encontrada")
@@ -554,70 +578,214 @@ def update_recepcion(eninv_id: int, body: dict, db: Session = Depends(get_db)):
 
 
 @router.post("/recepciones/{eninv_id}/confirmar")
-def confirmar_recepcion(eninv_id: int, body: dict, db: Session = Depends(get_db)):
-    """Confirm receipt -> update stock in warehouse"""
+def confirmar_recepcion(
+    eninv_id: int,
+    body: dict,
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_BODEGA)),
+    db: Session = Depends(get_db),
+):
+    """
+    Confirma una recepcion de mercancia (Fase 1A — sobre JSON existente).
+
+    Seguridad:
+    - Solo roles ADMIN y BODEGA.
+    - Atómica: un único db.commit() al final.
+    - Idempotente: usa tabla idempotency_requests con UNIQUE(operation_key).
+      Si el cliente envía idempotency_key repetido con status=DONE, devuelve
+      la respuesta guardada sin modificar nada.
+    - Distingue receipt_type FISICA (incrementa stock vendible) vs LOGISTICA
+      (registra llegada a punto intermedio, no incrementa stock vendible Barranquilla).
+    - Deriva estado PEC correctamente: PARCIALMENTE_RECIBIDA si quedan cantidades,
+      RECIBIDO solo cuando todo está cubierto.
+    - Crea InventoryOperation + InventoryMovement por cada SKU recibido (FISICA).
+    """
     g = db.query(GoodsReceipt).filter(GoodsReceipt.id == eninv_id).first()
     if not g:
         raise HTTPException(404, "Recepcion no encontrada")
-    if g.stock_actualizado:
-        raise HTTPException(400, "Stock ya fue actualizado para esta recepcion")
+
+    # ─── IDEMPOTENCIA ────────────────────────────────────────────────────────
+    # Importar aquí para evitar importación circular en el nivel de módulo
+    try:
+        from sqlalchemy import text as _text
+        IdempReq = None
+        # Verificar si la tabla idempotency_requests existe (puede no existir antes de migración)
+        result = db.execute(_text(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='idempotency_requests'"
+        )).scalar()
+        has_idem_table = result > 0
+    except Exception:
+        has_idem_table = False
+
+    client_key = body.get("idempotency_key")
+    idem_record = None
+    now = datetime.datetime.utcnow()
+
+    if has_idem_table and client_key:
+        # Buscar registro existente
+        idem_record = db.execute(_text(
+            "SELECT id, status, response_body FROM idempotency_requests WHERE operation_key = :k"
+        ), {"k": client_key}).fetchone()
+
+        if idem_record:
+            if idem_record.status == "DONE":
+                # Replay idempotente — devolver respuesta guardada
+                return {"status": "success", "data": idem_record.response_body, "idempotent_replay": True}
+            elif idem_record.status == "PROCESSING":
+                raise HTTPException(409, "Operacion en proceso. Reintenta en unos segundos.")
+        else:
+            # Registrar inicio de operación
+            db.execute(_text(
+                "INSERT INTO idempotency_requests "
+                "(operation_key, operation_type, entity_type, entity_id, user_id, status, request_body, created_at) "
+                "VALUES (:k, 'CONFIRMAR_RECEPCION', 'ENINV', :eid, :uid, 'PROCESSING', :body, :now)"
+            ), {"k": client_key, "eid": eninv_id, "uid": user.id,
+                "body": str(body), "now": now})
+            db.flush()
+    elif g.stock_actualizado and not client_key:
+        # Sin clave de idempotencia y ya confirmada — bloquear re-ejecución accidental
+        raise HTTPException(
+            400,
+            "Esta recepcion ya fue confirmada. "
+            "Incluye 'idempotency_key' en el body para reintentar de forma segura."
+        )
 
     warehouse_id = g.warehouse_id
     if not warehouse_id:
         raise HTTPException(400, "Debe seleccionar una bodega antes de confirmar")
 
+    receipt_type = body.get("receipt_type", "FISICA")  # FISICA | LOGISTICA
+    if receipt_type not in ("FISICA", "LOGISTICA"):
+        raise HTTPException(422, "receipt_type debe ser FISICA o LOGISTICA")
+
+    # ─── PROCESAR LÍNEAS DEL JSON ────────────────────────────────────────────
     updated_products = []
+    total_esperado   = 0
+    total_recibido   = 0
+    total_pendiente  = 0
+    sku_increments: dict = {}  # {sku_id: qty}
+
     for prod in (g.productos or []):
-        sku_id = prod.get("sku_id")
+        sku_id       = prod.get("sku_id")
+        qty_esperada = int(prod.get("qty_esperada", prod.get("qty", 0)))
         qty_recibida = int(prod.get("qty_recibida", prod.get("qty", 0)))
-        if sku_id and qty_recibida > 0:
-            # Update or create inventory level
-            level = db.query(InventoryLevel).filter(
-                InventoryLevel.sku_id == sku_id,
-                InventoryLevel.warehouse_id == warehouse_id
-            ).first()
-            if level:
-                level.quantity += qty_recibida
-            else:
-                level = InventoryLevel(
-                    sku_id=sku_id,
-                    warehouse_id=warehouse_id,
-                    quantity=qty_recibida
-                )
-                db.add(level)
+        total_esperado += qty_esperada
+        total_recibido += qty_recibida
+
+        if qty_esperada > qty_recibida:
+            total_pendiente += (qty_esperada - qty_recibida)
+
+        if sku_id and qty_recibida > 0 and receipt_type == "FISICA":
+            sku_increments[sku_id] = sku_increments.get(sku_id, 0) + qty_recibida
             prod["estado"] = "RECIBIDO"
+        elif receipt_type == "LOGISTICA":
+            prod["estado"] = "EN_TRANSITO_INTERMEDIO"
+
         updated_products.append(prod)
 
-    g.productos = updated_products
-    g.stock_actualizado = True
-    g.estado = "COMPLETADA"
-    g.updated_at = datetime.datetime.utcnow()
-    db.commit()
+    # ─── ACTUALIZAR INVENTARIO (solo FISICA) ─────────────────────────────────
+    inv_op = None
+    if receipt_type == "FISICA" and sku_increments:
+        inv_op = InventoryOperation(
+            dest_warehouse_id=warehouse_id,
+            operation_type="RECEIPT",
+            status="DONE",
+            source_document_type="ENINV" if hasattr(InventoryOperation, "source_document_type") else None,
+            source_document_id=g.id if hasattr(InventoryOperation, "source_document_type") else None,
+        )
+        # Usar solo los campos que existen en el modelo actual
+        if not hasattr(InventoryOperation, "source_document_type"):
+            inv_op = InventoryOperation(
+                dest_warehouse_id=warehouse_id,
+                operation_type="RECEIPT",
+                status="DONE",
+            )
+        db.add(inv_op)
+        db.flush()  # Obtener ID sin commit
 
-    # Update PEC estado if all received
+        for sku_id, qty in sku_increments.items():
+            # InventoryLevel: incrementar cantidad física
+            level = db.query(InventoryLevel).filter(
+                InventoryLevel.sku_id == sku_id,
+                InventoryLevel.warehouse_id == warehouse_id,
+            ).first()
+            if level:
+                level.quantity += qty
+            else:
+                level = InventoryLevel(sku_id=sku_id, warehouse_id=warehouse_id, quantity=qty)
+                db.add(level)
+
+            # InventoryMovement: registro trazable
+            mv = InventoryMovement(
+                operation_id=inv_op.id,
+                sku_id=sku_id,
+                quantity=qty,
+            )
+            db.add(mv)
+
+    # ─── ACTUALIZAR RECEPCIÓN ────────────────────────────────────────────────
+    g.productos         = updated_products
+    g.stock_actualizado = (receipt_type == "FISICA")
+    g.estado            = "COMPLETADA" if receipt_type == "FISICA" else "COMPLETADA_LOGISTICA"
+    g.updated_at        = now
+
+    # Guardar campos de idempotencia si las columnas existen
+    try:
+        g.receipt_type  = receipt_type
+        g.confirmed_by  = user.username if hasattr(user, "username") else str(user.id)
+        g.confirmed_at  = now
+        g.idempotency_key = client_key or str(uuid.uuid4())
+    except AttributeError:
+        pass  # Columnas aún no migradas — continuar sin ellas
+
+    # ─── ESTADO DEL PEC ─────────────────────────────────────────────────────
+    pec_estado_nuevo = None
     if g.pec_id:
         p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == g.pec_id).first()
         if p:
-            p.estado = "RECIBIDO"
-            p.updated_at = datetime.datetime.utcnow()
-            db.commit()
-            _log(db, "PEC", p.id, p.numero, "RECIBIDO",
-                 f"Mercancia recibida via {g.numero}",
-                 old_estado="PENDIENTE_ENTREGA", new_estado="RECIBIDO",
-                 user_name=body.get("user_name"))
+            if total_pendiente > 0:
+                pec_estado_nuevo = "PARCIALMENTE_RECIBIDA"
+            else:
+                pec_estado_nuevo = "RECIBIDO"
+            p.estado     = pec_estado_nuevo
+            p.updated_at = now
 
-    _log(db, "ENINV", g.id, g.numero, "STOCK_ACTUALIZADO",
-         f"Stock actualizado en bodega {g.warehouse_name}. {len(updated_products)} productos procesados.",
-         old_estado="BORRADOR", new_estado="COMPLETADA",
-         user_name=body.get("user_name"))
+    # ─── COMMIT ÚNICO ───────────────────────────────────────────────────────
+    response_data = _gr_dict(g)
 
-    return {"status": "success", "data": _gr_dict(g)}
+    # Actualizar idempotency_requests a DONE antes del commit
+    if has_idem_table and client_key and idem_record is None:
+        db.execute(_text(
+            "UPDATE idempotency_requests SET status='DONE', response_body=:resp, completed_at=:now "
+            "WHERE operation_key=:k"
+        ), {"resp": str(response_data), "now": now, "k": client_key})
+
+    db.commit()
+
+    # ─── AUDITORÍA (no dentro de la transacción crítica) ─────────────────────
+    try:
+        _log(db, "ENINV", g.id, g.numero, "STOCK_ACTUALIZADO",
+             f"Recepcion {receipt_type} confirmada en bodega {g.warehouse_name}. "
+             f"{total_recibido} uds recibidas, {total_pendiente} pendientes.",
+             old_estado="BORRADOR", new_estado=g.estado,
+             user_name=body.get("user_name") or str(user.id),
+             extra_data={"receipt_type": receipt_type, "sku_increments": sku_increments,
+                         "total_recibido": total_recibido, "total_pendiente": total_pendiente})
+        if g.pec_id and pec_estado_nuevo:
+            _log(db, "PEC", g.pec_id, g.pec_numero or "", "RECEPCION_CONFIRMADA",
+                 f"Recepcion {g.numero} confirmada. Estado derivado: {pec_estado_nuevo}",
+                 new_estado=pec_estado_nuevo,
+                 user_name=body.get("user_name") or str(user.id))
+    except Exception:
+        pass  # Los logs de auditoría no deben revertir la operación principal
+
+    return {"status": "success", "data": response_data}
 
 
 # ─── TRANSITO ────────────────────────────────────────────────────────────────
 
 @router.get("/transito")
-def list_transito(db: Session = Depends(get_db)):
+def list_transito(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS, *ROLE_ASESOR)),
+        db: Session = Depends(get_db)):
     """List all PEC orders currently in transit with timer info"""
     items = db.query(PurchaseOrderFull).filter(
         PurchaseOrderFull.estado.in_(["ENVIADO", "PENDIENTE_ENTREGA", "EN_TRANSITO"])
@@ -632,7 +800,8 @@ def list_transito(db: Session = Depends(get_db)):
 # ─── STATS ───────────────────────────────────────────────────────────────────
 
 @router.get("/stats")
-def compras_stats(db: Session = Depends(get_db)):
+def compras_stats(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS, *ROLE_FINANZAS)),
+        db: Session = Depends(get_db)):
     pec_total = db.query(func.count(PurchaseOrderFull.id)).scalar()
     eninv_total = db.query(func.count(GoodsReceipt.id)).scalar()
     en_transito = db.query(func.count(PurchaseOrderFull.id)).filter(
@@ -709,6 +878,8 @@ def list_lista_compras(
     pven_id: Optional[int] = None,
     limit: int = Query(200, le=500),
     offset: int = 0,
+    
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
     _ensure_lista_table(db)
@@ -737,7 +908,8 @@ def list_lista_compras(
 
 
 @router.post("/lista-compras", status_code=201)
-def add_to_lista_compras(body: dict, db: Session = Depends(get_db)):
+def add_to_lista_compras(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
     _ensure_lista_table(db)
     productos = body.get("productos", [])
     pven_id = body.get("pven_id")
@@ -774,7 +946,8 @@ def add_to_lista_compras(body: dict, db: Session = Depends(get_db)):
 
 
 @router.patch("/lista-compras/{item_id}")
-def update_lista_item(item_id: int, body: dict, db: Session = Depends(get_db)):
+def update_lista_item(item_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
     _ensure_lista_table(db)
     sets = []
     params: dict = {"item_id": item_id}
@@ -794,7 +967,8 @@ def update_lista_item(item_id: int, body: dict, db: Session = Depends(get_db)):
 
 
 @router.delete("/lista-compras/{item_id}")
-def delete_lista_item(item_id: int, db: Session = Depends(get_db)):
+def delete_lista_item(item_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
     _ensure_lista_table(db)
     db.execute(text("DELETE FROM lista_compras_items WHERE id = :id"), {"id": item_id})
     db.commit()
@@ -802,7 +976,8 @@ def delete_lista_item(item_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/lista-compras/stats")
-def lista_compras_stats(db: Session = Depends(get_db)):
+def lista_compras_stats(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS, *ROLE_FINANZAS)),
+        db: Session = Depends(get_db)):
     _ensure_lista_table(db)
     total = db.execute(text("SELECT COUNT(*) FROM lista_compras_items")).scalar() or 0
     pendientes = db.execute(text("SELECT COUNT(*) FROM lista_compras_items WHERE estado = 'PENDIENTE'")).scalar() or 0
