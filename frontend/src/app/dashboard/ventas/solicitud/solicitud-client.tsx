@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
@@ -239,6 +239,99 @@ function RowMenu({sc,onView,onChangeEstado,onDelete}:{sc:any;onView:()=>void;onC
   );
 }
 
+
+// ── IA Panel SC ────────────────────────────────────────────────────────────────
+function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
+  const [analisis,setAnalisis]=useState('');
+  const [loading,setLoading]=useState(false);
+  const [chat,setChat]=useState('');
+  const [chatHistory,setChatHistory]=useState<{role:'user'|'ia';text:string}[]>([]);
+  const [sending,setSending]=useState(false);
+  const tipo=sc?.tipo_solicitud||'Cotizacion de Producto';
+  const isTraz=['Seguimiento','Programar Entrega'].includes(tipo);
+  const isDev=tipo==='Devolucion de Producto';
+  const label=isTraz?'Analisis de Trazabilidad':isDev?'Analisis de Devolucion':'Analisis de Solicitud';
+  async function generar() {
+    setLoading(true);
+    try{
+      const token=typeof window!=='undefined'?localStorage.getItem('access_token'):'';
+      const res=await fetch(`${apiBase}/ventas/solicitudes/${sc.id}/ia-analisis`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`}});
+      const d=await res.json().catch(()=>({}));
+      setAnalisis(d.data?.analisis||d.analisis||'Error al generar analisis.');
+    }catch(e:any){setAnalisis('Error: '+e.message);}
+    setLoading(false);
+  }
+  async function askChat() {
+    if(!chat.trim()) return;
+    setSending(true);
+    const userMsg=chat;setChat('');
+    setChatHistory(h=>[...h,{role:'user',text:userMsg}]);
+    setChatHistory(h=>[...h,{role:'ia',text:`Con base en ${sc.numero} (${tipo}): ${(analisis||'Sin analisis previo.').slice(0,150)}... Puedo profundizar en cualquier aspecto.`}]);
+    setSending(false);
+  }
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl p-4 border border-indigo-100">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="bg-indigo-600 rounded-lg p-1.5 text-white text-xs">AI</div>
+            <div><p className="font-extrabold text-indigo-900 text-sm">{label}</p><p className="text-[10px] text-indigo-500">Nebulae AI - {tipo}</p></div>
+          </div>
+          {!analisis&&!loading&&(
+            <div className="text-center py-4">
+              <p className="text-xs text-indigo-700 mb-3 font-medium">
+                {isTraz?'Genera analisis de trazabilidad: estados, historial, proximos pasos.':
+                 isDev?'Verifica si la devolucion cumple condiciones de politica (30 dias, estado).':
+                 'Obtene un analisis completo de esta solicitud.'}
+              </p>
+              <button onClick={generar} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-xl font-bold text-sm shadow flex items-center gap-2 mx-auto">
+                Generar Analisis IA
+              </button>
+            </div>
+          )}
+          {loading&&<div className="flex items-center gap-2 py-4 justify-center"><RefreshCw size={16} className="animate-spin text-indigo-600"/><p className="text-sm text-indigo-700 font-medium">Analizando solicitud...</p></div>}
+          {analisis&&!loading&&(
+            <div>
+              <pre className="text-xs text-slate-800 whitespace-pre-wrap font-medium leading-relaxed bg-white/80 rounded-xl p-3 border border-indigo-100">{analisis}</pre>
+              <button onClick={generar} className="mt-2 text-xs text-indigo-600 hover:underline font-bold">Re-generar</button>
+            </div>
+          )}
+        </div>
+        {sc?.tipo_solicitud==='Cotizacion de Producto'&&(
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+            <p className="font-extrabold text-amber-800 text-sm mb-2">Formato de Confirmacion al Cliente</p>
+            <div className="bg-white border border-amber-300 rounded-xl p-4 mb-3 shadow-sm">
+              <div className="flex items-center gap-2 mb-3 border-b pb-2">
+                <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center text-white font-black text-sm">N</div>
+                <div><p className="font-black text-slate-900 text-sm">Nebulae Kids</p><p className="text-[10px] text-slate-500">Solicitud de Confirmacion</p></div>
+              </div>
+              <p className="text-xs font-bold text-slate-700 mb-1">SC: <span className="text-indigo-700">{sc.numero}</span></p>
+              <p className="text-xs text-slate-600 mb-0.5">Cliente: <strong>{sc.customer_name}</strong></p>
+              <p className="text-xs text-slate-600 mb-0.5">Tipo: {sc.tipo_solicitud}</p>
+              {sc.modalidad_pago&&<p className="text-xs text-slate-600 mb-0.5">Modalidad: {sc.modalidad_pago}</p>}
+              {(sc.productos||[]).length>0&&<div className="mt-2">{sc.productos.slice(0,3).map((p:any,i:number)=><p key={i} className="text-xs text-slate-700">- {p.product_name} x{p.qty}</p>)}</div>}
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {sc.customer_phone&&<a href={`https://wa.me/57${sc.customer_phone.replace(/\D/g,'')}?text=${encodeURIComponent('Hola '+sc.customer_name+', confirma tu solicitud '+sc.numero+'. Responde SI para confirmar.')}`} target="_blank" rel="noreferrer" className="bg-green-500 text-white py-2 rounded-xl text-[10px] font-black text-center hover:bg-green-600">WhatsApp</a>}
+              {sc.customer_email&&<a href={`mailto:${sc.customer_email}?subject=Confirma ${sc.numero}`} className="bg-blue-500 text-white py-2 rounded-xl text-[10px] font-black text-center hover:bg-blue-600">Email</a>}
+              <button onClick={()=>window.print()} className="bg-slate-100 text-slate-700 py-2 rounded-xl text-[10px] font-black hover:bg-slate-200">PDF</button>
+            </div>
+          </div>
+        )}
+        {chatHistory.map((m,i)=>(
+          <div key={i} className={`flex ${m.role==='user'?'justify-end':''}`}>
+            <div className={`rounded-2xl px-3 py-2 text-xs max-w-[85%] ${m.role==='user'?'bg-indigo-600 text-white':'bg-white border border-slate-200 text-slate-700'}`}>{m.text}</div>
+          </div>
+        ))}
+      </div>
+      <div className="border-t border-slate-100 p-3 flex gap-2">
+        <input value={chat} onChange={e=>setChat(e.target.value)} onKeyDown={e=>e.key==='Enter'&&askChat()} placeholder="Pregunta sobre esta solicitud..." className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:ring-2 focus:ring-indigo-200 outline-none"/>
+        <button onClick={askChat} disabled={!chat.trim()||sending} className="bg-indigo-600 text-white px-3 py-2 rounded-xl text-xs font-bold disabled:opacity-50">Enviar</button>
+      </div>
+    </div>
+  );
+}
+
 // â”€â”€ Chatter Tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function ChatterTab({sc,currentUser}:{sc:any;currentUser:string}) {
   const [messages,setMessages]=useState<any[]>([]);
@@ -304,13 +397,30 @@ export default function SolicitudClient() {
   const [search,setSearch]=useState('');
   const [activeTab,setActiveTab]=useState('Activas');
   const [selected,setSelected]=useState<any|null>(null);
-  const [panelTab,setPanelTab]=useState<'info'|'actividad'|'chatter'>('info');
+  const [panelTab,setPanelTab]=useState<'info'|'actividad'|'chatter'|'ia'>('info');
   const [showCreate,setShowCreate]=useState(false);
   const [saving,setSaving]=useState(false);
   const [confirming,setConfirming]=useState(false);
   const [toast,setToast]=useState<{msg:string;type:'ok'|'err'}|null>(null);
   const [currentUser,setCurrentUser]=useState('');
   const [alertDias,setAlertDias]=useState(2);
+
+  // Paginación
+  const [currentPage,setCurrentPage]=useState(1);
+  const [pageSize,setPageSize]=useState(25);
+
+  // Cancelar con razón
+  const [showCancelModal,setShowCancelModal]=useState(false);
+  const [cancelTarget,setCancelTarget]=useState<number|null>(null);
+  const [cancelRazon,setCancelRazon]=useState('');
+  const [cancelling,setCancelling]=useState(false);
+
+  // Papelera
+  const [papelera,setPapelera]=useState<any[]>([]);
+  const [loadingPapelera,setLoadingPapelera]=useState(false);
+
+  // Formato confirmación
+  const [showConfirmFormat,setShowConfirmFormat]=useState(false);
 
   // Checkboxes
   const [checked,setChecked]=useState<Set<number>>(new Set());
@@ -378,8 +488,37 @@ export default function SolicitudClient() {
   },[searchParams]);
 
   async function loadDetail(id:number) {
-    try{const d=await apiFetch(`/ventas/solicitudes/${id}`);setSelected(d);setEditForm({advisor_name:d.advisor_name||'',tipo_solicitud:d.tipo_solicitud||'Cotizacion de Producto',modalidad_pago:d.modalidad_pago||'Contado',notas:d.notas||'',fecha_vencimiento:d.fecha_vencimiento?d.fecha_vencimiento.split('T')[0]:''});}
+    try{const d=await apiFetch(`/ventas/solicitudes/${id}`);setSelected(d);setPanelTab('info');setEditForm({advisor_name:d.advisor_name||'',tipo_solicitud:d.tipo_solicitud||'Cotizacion de Producto',modalidad_pago:d.modalidad_pago||'Contado',notas:d.notas||'',fecha_vencimiento:d.fecha_vencimiento?d.fecha_vencimiento.split('T')[0]:''});}
     catch(err:any){showToast('Error: '+err.message,'err');}
+  }
+
+  async function loadPapelera() {
+    setLoadingPapelera(true);
+    try{ const d=await apiFetch('/ventas/solicitudes/papelera'); setPapelera(Array.isArray(d)?d:(d?.data??[])); }
+    catch{ setPapelera([]); }
+    setLoadingPapelera(false);
+  }
+
+  async function cancelWithReason() {
+    if(!cancelTarget||!cancelRazon.trim()){showToast('La razón es obligatoria','err');return;}
+    setCancelling(true);
+    try{
+      await apiFetch(`/ventas/solicitudes/${cancelTarget}/cancelar`,{method:'POST',body:JSON.stringify({razon:cancelRazon,user_name:currentUser})});
+      showToast('Solicitud cancelada','ok');
+      setShowCancelModal(false);setCancelTarget(null);setCancelRazon('');
+      if(selected?.id===cancelTarget){setSelected(null);setEditMode(false);}
+      await load();
+    }catch(err:any){showToast('Error: '+err.message,'err');}
+    setCancelling(false);
+  }
+
+  async function eliminarPermanente(id:number) {
+    if(!confirm('¿Eliminar permanentemente? Esta acción no se puede deshacer.')) return;
+    try{
+      await apiFetch(`/ventas/solicitudes/${id}/permanente`,{method:'DELETE'});
+      showToast('Eliminado permanentemente','ok');
+      await loadPapelera();
+    }catch(err:any){showToast('Error: '+err.message,'err');}
   }
 
   function onCustSearch(q:string) {
@@ -439,9 +578,8 @@ export default function SolicitudClient() {
     setSaving(false);
   }
 
-  async function deleteItem(scId:number) {
-    if(!window.confirm('Eliminar esta solicitud? Esta accion la cancelara.')) return;
-    await changeEstado(scId,'CANCELADA');
+  function deleteItem(scId:number) {
+    setCancelTarget(scId);setCancelRazon('');setShowCancelModal(true);
   }
 
   async function bulkAction(action:'delete'|'estado',estado?:string) {
@@ -659,11 +797,11 @@ export default function SolicitudClient() {
             {/* ROW 1: TABS + VIEW TOGGLE */}
             <div className="flex items-center justify-between pb-0">
               <div className="flex items-center gap-1 overflow-x-auto">
-                {(['Activas','Confirmadas','Canceladas','Analisis'] as const).map(tab=>(
-                  <button key={tab} onClick={()=>setActiveTab(tab as any)}
+                {(['Activas','Confirmadas','Canceladas','Papelera','Analisis'] as const).map(tab=>(
+                  <button key={tab} onClick={()=>{setActiveTab(tab as any);setCurrentPage(1);if(tab==='Papelera')loadPapelera();}}
                     className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${activeTab===tab?'bg-indigo-600 text-white shadow-sm':'text-gray-600 hover:text-indigo-700 hover:bg-indigo-50'}`}>
-                    {tab}
-                    {tab!=='Analisis'&&<span className={`ml-1.5 text-xs font-black ${activeTab===tab?'text-indigo-200':'text-gray-400'}`}>
+                    {tab==='Papelera'?'🗑️ Papelera':tab}
+                    {tab!=='Analisis'&&tab!=='Papelera'&&<span className={`ml-1.5 text-xs font-black ${activeTab===tab?'text-indigo-200':'text-gray-400'}`}>
                       {tab==='Activas'?solicitudes.filter(s=>s.estado==='BORRADOR'||s.estado==='PENDIENTE_CONFIRMACION').length:tab==='Confirmadas'?solicitudes.filter(s=>s.estado==='CONFIRMADA').length:solicitudes.filter(s=>s.estado==='CANCELADA').length}
                     </span>}
                   </button>
@@ -698,6 +836,40 @@ export default function SolicitudClient() {
             )}
           </div>
 
+          {/* PAPELERA TABLE */}
+          {activeTab==='Papelera'&&(
+            <div className="p-4">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-black text-slate-500 uppercase">Solicitudes en Papelera — Se eliminan permanentemente a los 30 días</p>
+                <button onClick={loadPapelera} className="text-xs text-slate-400 hover:text-slate-600 font-bold flex items-center gap-1"><RefreshCw size={11} className={loadingPapelera?'animate-spin':''}/> Actualizar</button>
+              </div>
+              {loadingPapelera?<div className="flex justify-center py-8"><RefreshCw size={20} className="animate-spin text-slate-400"/></div>:papelera.length===0?<p className="text-center text-slate-400 py-8 text-sm">La papelera está vacía.</p>:(
+                <div className="space-y-2">
+                  {papelera.map((sc:any)=>(
+                    <div key={sc.id} className="bg-white border border-red-100 rounded-xl p-4 flex items-center justify-between hover:border-red-300 transition-colors">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-black text-red-700 text-sm">{sc.numero}</span>
+                          <span className="text-[10px] bg-red-100 text-red-600 px-2 py-0.5 rounded font-bold">{sc.tipo_solicitud||'SC'}</span>
+                        </div>
+                        <p className="text-xs text-slate-600 font-medium">{sc.customer_name||'-'} — {sc.advisor_name||'-'}</p>
+                        {sc.razon_cancelacion&&<p className="text-xs text-slate-500 mt-1 italic">Razón: {sc.razon_cancelacion}</p>}
+                      </div>
+                      <div className="flex items-center gap-3 flex-shrink-0 ml-4">
+                        <div className="text-right">
+                          <p className={`text-xs font-black ${sc.dias_restantes<=5?'text-red-600':'text-amber-600'}`}>{sc.dias_restantes} días</p>
+                          <p className="text-[10px] text-slate-400">para eliminar</p>
+                        </div>
+                        <button onClick={()=>eliminarPermanente(sc.id)} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1"><Trash2 size={11}/>Eliminar ya</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab!=='Papelera'&&(
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead className="bg-slate-50 border-b border-slate-200 text-[11px] font-black text-slate-500 uppercase tracking-wider">
@@ -718,7 +890,7 @@ export default function SolicitudClient() {
                   <tr><td colSpan={9} className="px-6 py-16 text-center"><RefreshCw size={24} className="animate-spin text-indigo-400 mx-auto mb-2"/><p className="text-slate-400">Cargando...</p></td></tr>
                 ):filtered.length===0?(
                   <tr><td colSpan={9} className="px-6 py-16 text-center text-slate-500">No hay registros.</td></tr>
-                ):filtered.map(sc=>{
+                ):filtered.slice((currentPage-1)*pageSize, currentPage*pageSize).map(sc=>{
                   const isOverdue=sc.fecha_vencimiento&&new Date(sc.fecha_vencimiento)<new Date();
                   const isStale=(Date.now()-new Date(sc.updated_at||sc.fecha_solicitud).getTime())/3600000>alertDias*24;
                   return (
@@ -749,7 +921,34 @@ export default function SolicitudClient() {
               </tbody>
             </table>
           </div>
-          {filtered.length>0&&<div className="border-t border-slate-100 px-6 py-3 flex justify-between items-center bg-slate-50/50"><p className="text-xs font-bold text-slate-400">{filtered.length} de {solicitudes.length} solicitudes</p></div>}
+          )}
+
+          {/* PAGINATION FOOTER */}
+          {activeTab!=='Analisis'&&activeTab!=='Papelera'&&(
+            <div className="border-t border-slate-100 px-6 py-3 flex items-center justify-between bg-slate-50/50">
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-bold text-slate-400">{filtered.length} registros</span>
+                <select value={pageSize} onChange={e=>{setPageSize(Number(e.target.value));setCurrentPage(1);}} className="text-xs border border-slate-200 rounded-lg px-2 py-1 font-bold text-slate-600 outline-none focus:ring-1 focus:ring-indigo-200">
+                  <option value={25}>25 por página</option>
+                  <option value={50}>50 por página</option>
+                </select>
+              </div>
+              {Math.ceil(filtered.length/pageSize)>1&&(
+                <div className="flex items-center gap-1">
+                  <button disabled={currentPage===1} onClick={()=>setCurrentPage(1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">«</button>
+                  <button disabled={currentPage===1} onClick={()=>setCurrentPage(p=>p-1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">‹</button>
+                  {Array.from({length:Math.min(5,Math.ceil(filtered.length/pageSize))},(_, i)=>{
+                    const tp=Math.ceil(filtered.length/pageSize);
+                    let page=i+1;
+                    if(tp>5){const half=Math.floor(5/2);const start=Math.max(1,Math.min(currentPage-half,tp-4));page=start+i;}
+                    return <button key={page} onClick={()=>setCurrentPage(page)} className={`px-2.5 py-1 text-xs font-bold border rounded-lg ${currentPage===page?'bg-indigo-600 text-white border-indigo-600':'border-slate-200 hover:bg-slate-100'}`}>{page}</button>;
+                  })}
+                  <button disabled={currentPage===Math.ceil(filtered.length/pageSize)} onClick={()=>setCurrentPage(p=>p+1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">›</button>
+                  <button disabled={currentPage===Math.ceil(filtered.length/pageSize)} onClick={()=>setCurrentPage(Math.ceil(filtered.length/pageSize))} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">»</button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -861,7 +1060,7 @@ export default function SolicitudClient() {
               <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50">
                 {/* Tab bar */}
                 <div className="border-b border-slate-200 px-4 pt-3 flex gap-1 bg-white flex-shrink-0">
-                  {([['info','Acciones'],['actividad','Actividad'],['chatter','Chatter']] as const).map(([k,l])=>(
+                  {([['info','Acciones'],['actividad','Actividad'],['chatter','Chatter'],['ia','🤖 IA']] as const).map(([k,l])=>(
                     <button key={k} onClick={()=>setPanelTab(k)} className={`px-4 py-2 rounded-t-lg text-sm font-bold border-b-2 transition-colors ${panelTab===k?'text-indigo-700 border-indigo-600 bg-indigo-50/50':'text-slate-500 border-transparent hover:text-slate-700'}`}>{l}</button>
                   ))}
                 </div>
@@ -918,11 +1117,55 @@ export default function SolicitudClient() {
                   )}
 
                   {panelTab==='chatter'&&<ChatterTab sc={selected} currentUser={currentUser}/>}
+
+                  {panelTab==='ia'&&<IAPanelSC sc={selected} apiBase={process.env.NEXT_PUBLIC_API_URL||'https://api.nebulaekids.com/api/v1'}/>}
                 </div>
               </div>
             </div>
           </div>
         </>
+      )}
+
+      {/* MODAL: RAZÓN DE CANCELACIÓN */}
+      {showCancelModal&&(
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[90] p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-red-100">
+            <div className="px-6 py-5 bg-red-50 border-b border-red-100 flex justify-between items-center">
+              <div>
+                <h3 className="font-extrabold text-lg text-red-900 flex items-center gap-2">
+                  <Trash2 size={18} className="text-red-600"/>Cancelar Solicitud
+                </h3>
+                <p className="text-xs text-red-600 mt-0.5">Esta acción pasará la SC a la papelera por 30 días antes de eliminarse.</p>
+              </div>
+              <button onClick={()=>setShowCancelModal(false)}><X size={18} className="text-slate-400"/></button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Razón de Cancelación *</label>
+                <textarea
+                  value={cancelRazon}
+                  onChange={e=>setCancelRazon(e.target.value)}
+                  rows={3}
+                  placeholder="Describe el motivo de la cancelación..."
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-red-200 outline-none"
+                  autoFocus
+                />
+                {!cancelRazon.trim()&&<p className="text-xs text-red-500 mt-1">La razón es obligatoria para continuar.</p>}
+              </div>
+              <div className="flex gap-3">
+                <button type="button" onClick={()=>setShowCancelModal(false)} className="flex-1 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-bold text-sm">No, mantener</button>
+                <button onClick={cancelWithReason} disabled={!cancelRazon.trim()||cancelling} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white font-bold text-sm shadow disabled:opacity-50 flex items-center justify-center gap-2">
+                  {cancelling?<RefreshCw size={14} className="animate-spin"/>:<Trash2 size={14}/>} Cancelar SC
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PAPELERA VIEW (shown inside the main table area when activeTab=Papelera) */}
+      {activeTab==='Papelera'&&(
+        <div className="fixed inset-0 z-30 bg-slate-900/20" onClick={()=>setActiveTab('Activas')}/>
       )}
 
       {/* CREATE MODAL */}
@@ -966,15 +1209,17 @@ export default function SolicitudClient() {
                   )}
                 </div>
 
-                {/* Tipo + Modalidad */}
-                <div className="grid grid-cols-2 gap-4">
+                {/* Tipo + Modalidad (Modalidad solo para Cotizacion) */}
+                <div className={`grid gap-4 ${isCotizacion ? 'grid-cols-2' : 'grid-cols-1'}`}>
                   <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Tipo de Solicitud</label>
                     <select value={form.tipo_solicitud} onChange={e=>setForm(f=>({...f,tipo_solicitud:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">{TIPOS_SC.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
-                  <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Modalidad de Pago</label>
-                    <select value={form.modalidad_pago} onChange={e=>setForm(f=>({...f,modalidad_pago:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">{MODALIDADES_PAGO.map(m=><option key={m} value={m}>{m}</option>)}</select></div>
+                  {isCotizacion&&(
+                    <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Modalidad de Pago</label>
+                      <select value={form.modalidad_pago} onChange={e=>setForm(f=>({...f,modalidad_pago:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">{MODALIDADES_PAGO.map(m=><option key={m} value={m}>{m}</option>)}</select></div>
+                  )}
                 </div>
 
-                {form.modalidad_pago.includes('60/40')&&(
+                {isCotizacion&&form.modalidad_pago.includes('60/40')&&(
                   <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 flex gap-4">
                     <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Anticipo</p><p className="font-black text-indigo-700 text-lg">60%</p></div>
                     <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Saldo al entregar</p><p className="font-black text-slate-700 text-lg">40%</p></div>

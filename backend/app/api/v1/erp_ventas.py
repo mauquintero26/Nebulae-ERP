@@ -900,3 +900,215 @@ def update_config(body: dict, db: Session = Depends(get_db)):
         ))
     db.commit()
     return {"status": "success"}
+
+
+# ─── IA ANÁLISIS DE SOLICITUD ────────────────────────────────────────────────
+
+@router.post("/solicitudes/{sc_id}/ia-analisis")
+def ia_analisis_solicitud(sc_id: int, body: dict = {}, db: Session = Depends(get_db)):
+    """Genera análisis IA contextual de una SC: trazabilidad o condiciones de devolución."""
+    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
+    if not sc:
+        raise HTTPException(404, "SC no encontrada")
+
+    tipo = sc.tipo_solicitud or "Cotizacion de Producto"
+    productos = sc.productos or []
+    actividades = db.execute(text("""
+        SELECT action, description, user_name, created_at, old_estado, new_estado
+        FROM activity_logs WHERE entity_type='SC' AND entity_id=:id ORDER BY created_at ASC
+    """), {"id": sc_id}).mappings().all()
+
+    # Build context
+    estados_historia = [dict(a) for a in actividades if a["action"] in ("ESTADO_CHANGED","CREATED","CONFIRMED","CANCELLED")]
+    notas_historia = [dict(a) for a in actividades if a["action"] in ("NOTE_ADDED","CHATTER","UPDATED")]
+
+    dias_desde_creacion = (datetime.datetime.utcnow() - sc.created_at).days if sc.created_at else 0
+
+    if tipo in ("Seguimiento", "Programar Entrega"):
+        # Trazabilidad
+        ultimo_estado = estados_historia[-1] if estados_historia else None
+        prox_accion = "Confirmar despacho" if sc.estado == "CONFIRMADA" else "Seguimiento con asesor"
+        resumen = f"""📦 ANÁLISIS DE TRAZABILIDAD — {sc.numero}
+
+Estado actual: {sc.estado}
+Días desde creación: {dias_desde_creacion} días
+Asesor responsable: {sc.advisor_name or 'No asignado'}
+Cliente: {sc.customer_name or 'N/D'}
+
+📋 Historia de Estados:
+{chr(10).join([f"  → {e.get('old_estado','?')} → {e.get('new_estado','?')} ({str(e.get('created_at',''))[:10]})" for e in estados_historia]) or '  Sin cambios de estado registrados'}
+
+🛒 Productos en la solicitud:
+{chr(10).join([f"  • {p.get('nombre',p.get('name','Producto'))} x{p.get('cantidad',p.get('qty',1))}" for p in productos[:5]]) or '  Sin productos registrados'}
+
+🔎 Próxima acción sugerida: {prox_accion}
+
+💬 Notas recientes:
+{chr(10).join([f"  [{str(n.get('created_at',''))[:10]}] {n.get('user_name','?')}: {n.get('description','')[:80]}" for n in notas_historia[-3:]]) or '  Sin notas'}"""
+
+    elif tipo == "Devolucion de Producto":
+        # Condiciones de devolución
+        en_plazo = dias_desde_creacion <= 30
+        estado_ok = sc.estado not in ("CANCELADA",)
+        puede_devolver = en_plazo and estado_ok
+        resumen = f"""🔄 ANÁLISIS DE DEVOLUCIÓN — {sc.numero}
+
+Estado de la solicitud: {sc.estado}
+Días desde creación: {dias_desde_creacion} días
+{'✅ DENTRO del plazo de 30 días' if en_plazo else '❌ FUERA del plazo de 30 días (policy: máx 30 días)'}
+
+📋 Condiciones de Devolución Nebulae:
+  • Plazo máximo: 30 días desde la fecha de solicitud
+  • Productos deben estar en condición original
+  • Requiere número de SC original
+  • Aplica para defectos de fábrica o error en pedido
+
+🛒 Productos solicitados para devolución:
+{chr(10).join([f"  • {p.get('nombre',p.get('name','Producto'))} x{p.get('cantidad',p.get('qty',1))}" for p in productos[:5]]) or '  Sin productos registrados'}
+
+{'✅ DEVOLUCIÓN APROBADA: El cliente cumple las condiciones para proceder.' if puede_devolver else '⚠️ DEVOLUCIÓN NO APLICABLE: ' + ('Solicitud fuera del plazo de 30 días.' if not en_plazo else 'Solicitud cancelada.') }
+
+🔎 Próxima acción: {'Coordinar recolección del producto con logística' if puede_devolver else 'Comunicar al cliente las condiciones de devolución y opciones alternativas'}"""
+
+    else:
+        # General
+        resumen = f"""📊 ANÁLISIS DE SOLICITUD — {sc.numero}
+
+Tipo: {tipo}
+Estado: {sc.estado}
+Cliente: {sc.customer_name or 'N/D'}
+Asesor: {sc.advisor_name or 'No asignado'}
+Días activo: {dias_desde_creacion} días
+Modalidad: {sc.modalidad_pago or 'No especificada'}
+
+📋 Historial de actividad: {len(list(actividades))} eventos registrados
+🛒 Productos: {len(productos)} item(s)
+
+Notas: {sc.notas or 'Sin notas adicionales'}"""
+
+    return {"status": "success", "data": {
+        "sc_id": sc_id,
+        "numero": sc.numero,
+        "tipo": tipo,
+        "analisis": resumen,
+        "estado_actual": sc.estado,
+        "dias_desde_creacion": dias_desde_creacion,
+        "puede_devolver": tipo == "Devolucion de Producto" and dias_desde_creacion <= 30,
+    }}
+
+
+# ─── CANCELAR SC CON RAZÓN ────────────────────────────────────────────────────
+
+@router.post("/solicitudes/{sc_id}/cancelar")
+def cancelar_solicitud(sc_id: int, body: dict, db: Session = Depends(get_db)):
+    """Cancela una SC con razón obligatoria y marca eliminada_at para papelera 30 días."""
+    razon = body.get("razon", "").strip()
+    if not razon:
+        raise HTTPException(400, "La razón de cancelación es obligatoria")
+    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
+    if not sc:
+        raise HTTPException(404, "SC no encontrada")
+    old_estado = sc.estado
+    sc.estado = "CANCELADA"
+    # Store cancellation reason and date in notas or extra field
+    sc.notas = f"{sc.notas or ''}\n[CANCELADA] Razón: {razon}".strip()
+    sc.updated_at = datetime.datetime.utcnow()
+    # Mark eliminada_at via extra column (safe if not present — try/except)
+    try:
+        db.execute(text("""
+            ALTER TABLE customer_requests ADD COLUMN IF NOT EXISTS razon_cancelacion TEXT;
+            ALTER TABLE customer_requests ADD COLUMN IF NOT EXISTS eliminada_at TIMESTAMPTZ;
+        """))
+        db.commit()
+        db.execute(text("""
+            UPDATE customer_requests SET razon_cancelacion=:razon, eliminada_at=NOW(), estado='CANCELADA', updated_at=NOW()
+            WHERE id=:id
+        """), {"razon": razon, "id": sc_id})
+        db.commit()
+    except Exception:
+        db.rollback()
+        sc.estado = "CANCELADA"
+        db.commit()
+    _log(db, "SC", sc_id, sc.numero, "CANCELLED", f"Cancelada: {razon}", old_estado, "CANCELADA", body.get("user_name",""))
+    return {"status": "success", "data": {"id": sc_id, "estado": "CANCELADA", "razon": razon}}
+
+
+# ─── PAPELERA (SCs canceladas, purga 30 días) ────────────────────────────────
+
+@router.get("/solicitudes/papelera")
+def get_papelera(db: Session = Depends(get_db)):
+    """Lista SCs canceladas con días restantes antes de eliminación permanente."""
+    try:
+        # Ensure columns exist
+        db.execute(text("""
+            ALTER TABLE customer_requests ADD COLUMN IF NOT EXISTS razon_cancelacion TEXT;
+            ALTER TABLE customer_requests ADD COLUMN IF NOT EXISTS eliminada_at TIMESTAMPTZ;
+        """))
+        db.commit()
+        # Auto-purge SCs older than 30 days in papelera
+        db.execute(text("""
+            DELETE FROM customer_requests
+            WHERE estado='CANCELADA' AND eliminada_at IS NOT NULL
+            AND eliminada_at < NOW() - INTERVAL '30 days'
+        """))
+        db.commit()
+        rows = db.execute(text("""
+            SELECT id, numero, customer_name, advisor_name, tipo_solicitud,
+                   razon_cancelacion, eliminada_at, created_at, updated_at,
+                   EXTRACT(DAY FROM NOW() - eliminada_at) as dias_en_papelera
+            FROM customer_requests
+            WHERE estado='CANCELADA'
+            ORDER BY COALESCE(eliminada_at, updated_at) DESC
+            LIMIT 200
+        """)).mappings().all()
+        data = []
+        for r in rows:
+            d = dict(r)
+            dias = float(d.get("dias_en_papelera") or 0)
+            d["dias_en_papelera"] = int(dias)
+            d["dias_restantes"] = max(0, 30 - int(dias)) if d.get("eliminada_at") else 30
+            d["eliminada_at"] = str(d["eliminada_at"]) if d.get("eliminada_at") else None
+            d["created_at"] = str(d["created_at"]) if d.get("created_at") else None
+            data.append(d)
+        return {"status": "success", "data": data}
+    except Exception as e:
+        return {"status": "success", "data": []}
+
+
+@router.delete("/solicitudes/{sc_id}/permanente")
+def eliminar_permanente(sc_id: int, db: Session = Depends(get_db)):
+    """Elimina permanentemente una SC de la papelera."""
+    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
+    if not sc or sc.estado != "CANCELADA":
+        raise HTTPException(400, "Solo se pueden eliminar permanentemente SCs canceladas")
+    db.delete(sc)
+    db.commit()
+    return {"status": "success", "data": {"deleted": sc_id}}
+
+
+# ─── FORMATO CONFIRMACIÓN ────────────────────────────────────────────────────
+
+@router.get("/solicitudes/{sc_id}/formato-confirmacion")
+def get_formato_confirmacion(sc_id: int, db: Session = Depends(get_db)):
+    """Retorna datos estructurados para el formato de confirmación al cliente."""
+    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
+    if not sc:
+        raise HTTPException(404, "SC no encontrada")
+    productos = sc.productos or []
+    total = sum(float(p.get("precio_total", p.get("total", 0))) for p in productos)
+    return {"status": "success", "data": {
+        "numero": sc.numero,
+        "cliente": sc.customer_name,
+        "email": sc.customer_email,
+        "telefono": sc.customer_phone,
+        "asesor": sc.advisor_name,
+        "tipo": sc.tipo_solicitud,
+        "modalidad_pago": sc.modalidad_pago,
+        "estado": sc.estado,
+        "fecha": sc.fecha_solicitud.isoformat() if sc.fecha_solicitud else sc.created_at.isoformat() if sc.created_at else None,
+        "fecha_vencimiento": sc.fecha_vencimiento.isoformat() if sc.fecha_vencimiento else None,
+        "productos": productos,
+        "total_cop": total,
+        "notas": sc.notas,
+        "link_confirmacion": f"/confirmar/{sc.numero}",
+    }}

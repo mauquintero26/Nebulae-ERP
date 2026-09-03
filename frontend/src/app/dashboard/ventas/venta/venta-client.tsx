@@ -46,11 +46,76 @@ const SUB_MODULES = [
   { path:'/dashboard/ventas/proyecciones',   label:'Proyecciones' },
 ];
 
+
+// ── IA Panel Venta ─────────────────────────────────────────────────────────────
+function IAPanelVenta({pedido,apiBase}:{pedido:any;apiBase:string}) {
+  const [analisis,setAnalisis]=useState('');
+  const [loading,setLoading]=useState(false);
+  const [chat,setChat]=useState('');
+  const [chatHistory,setChatHistory]=useState<{role:'user'|'ia';text:string}[]>([]);
+  const [sending,setSending]=useState(false);
+
+  async function generar() {
+    setLoading(true);
+    try{
+      const token=typeof window!=='undefined'?localStorage.getItem('access_token'):'';
+      const res=await fetch(`${apiBase}/ventas/pedidos/${pedido.id}/ia-analisis`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`}});
+      const d=await res.json().catch(()=>({}));
+      if(res.ok){setAnalisis(d.data?.analisis||d.analisis||JSON.stringify(d));}
+      else{
+        // Fallback local analysis
+        const prods=(pedido.productos||[]).map((p:any)=>p.product_name||p.nombre).join(', ')||'No especificados';
+        setAnalisis(`📊 ANÁLISIS DE PEDIDO ${pedido.numero}\n\nCliente: ${pedido.customer_name||'N/A'}\nEstado: ${pedido.estado}\nTotal: $${(pedido.total_cop||0).toLocaleString('es-CO')} COP\nAnticipo: $${(pedido.anticipo_cop||0).toLocaleString('es-CO')} COP\nSaldo: $${(pedido.saldo_cop||0).toLocaleString('es-CO')} COP\n\nProductos: ${prods}\n\nEntrega Estimada: ${pedido.fecha_entrega_estimada||'No definida'}\n\nActividad: ${(pedido.actividades||[]).length} eventos registrados.`);
+      }
+    }catch(e:any){setAnalisis('Error generando análisis: '+e.message);}
+    setLoading(false);
+  }
+  function askChat() {
+    if(!chat.trim()) return;
+    const msg=chat; setChat('');
+    setChatHistory(h=>[...h,{role:'user',text:msg}]);
+    const ctx=analisis||`Pedido ${pedido.numero}, cliente ${pedido.customer_name}, estado ${pedido.estado}.`;
+    setChatHistory(h=>[...h,{role:'ia',text:`Con base en ${pedido.numero}: ${ctx.slice(0,200)}... Consulta: "${msg}"`}]);
+  }
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl p-4 border border-indigo-100">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <div className="bg-indigo-600 rounded-lg px-2 py-1 text-white font-black text-xs">AI</div>
+              <div><p className="font-extrabold text-indigo-900 text-sm">Análisis de Pedido de Venta</p><p className="text-[10px] text-indigo-500">Nebulae Analytics · {pedido.numero}</p></div>
+            </div>
+            <button onClick={generar} disabled={loading} className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-50 flex items-center gap-1">
+              {loading&&<span className="animate-spin inline-block w-3 h-3 border border-white border-t-transparent rounded-full"/>} Analizar
+            </button>
+          </div>
+          {!analisis&&!loading&&<p className="text-xs text-indigo-700 italic text-center py-3">Genera un análisis completo: estado, pagos pendientes, trazabilidad y próximos pasos.</p>}
+          {loading&&<p className="text-xs text-center text-indigo-500 py-3 animate-pulse">Analizando pedido...</p>}
+          {analisis&&<pre className="text-xs text-slate-800 whitespace-pre-wrap font-medium leading-relaxed bg-white/70 rounded-xl p-3 border border-indigo-100 mt-2">{analisis}</pre>}
+        </div>
+        {chatHistory.map((m,i)=>(
+          <div key={i} className={`flex ${m.role==='user'?'justify-end':''}`}>
+            <div className={`rounded-2xl px-3 py-2 text-xs max-w-[85%] ${m.role==='user'?'bg-indigo-600 text-white':'bg-white border border-slate-200 text-slate-700'}`}>{m.text}</div>
+          </div>
+        ))}
+      </div>
+      <div className="border-t border-gray-100 p-3 flex gap-2 bg-white">
+        <input value={chat} onChange={e=>setChat(e.target.value)} onKeyDown={e=>e.key==='Enter'&&askChat()} placeholder="Pregunta sobre este pedido..." className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-indigo-200"/>
+        <button onClick={askChat} disabled={!chat.trim()||sending} className="bg-indigo-600 text-white px-3 py-2 rounded-xl text-xs font-bold disabled:opacity-50">Enviar</button>
+      </div>
+    </div>
+  );
+}
+
 export default function VentaClient() {
   const [pedidos, setPedidos]           = useState<any[]>([]);
   const [loading, setLoading]           = useState(true);
   const [search, setSearch]             = useState('');
   const [activeTab, setActiveTab]       = useState('Todos');
+  const [currentPage, setCurrentPage]   = useState(1);
+  const [pageSize, setPageSize]         = useState(25);
   const [selectedIds, setSelectedIds]   = useState<Set<number>>(new Set());
   const [selectedPedido, setSelectedPedido] = useState<any>(null);
   const [toast, setToast]               = useState<{msg:string,type:'success'|'error'}|null>(null);
@@ -442,7 +507,7 @@ export default function VentaClient() {
                   <ShoppingCart size={36} className="mx-auto mb-3 opacity-25"/>
                   <p className="font-medium">{search?`Sin resultados para "${search}"`:'Sin pedidos de venta'}</p>
                 </td></tr>
-              ):filtered.map(p=>{
+              ):filtered.slice((currentPage-1)*pageSize, currentPage*pageSize).map(p=>{
                 const st=VEN_ESTADOS[p.estado]||{bg:'bg-gray-100',text:'text-gray-700',border:'border-gray-200',label:p.estado};
                 const isOpen=openMenu===p.id;
                 return (
@@ -492,10 +557,32 @@ export default function VentaClient() {
               })}
             </tbody>
           </table>
-          <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-400 font-medium">
-            <span>{filtered.length} de {pedidos.length} pedidos</span>
-            {selectedIds.size>0&&<span className="text-indigo-600 font-bold">{selectedIds.size} seleccionados</span>}
-          </div>
+          {/* PAGINATION FOOTER */}
+          {activeTab!=='Analisis'&&(
+            <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between bg-gray-50/50">
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-bold text-gray-400">{filtered.length} registros</span>
+                <select value={pageSize} onChange={e=>{setPageSize(Number(e.target.value));setCurrentPage(1);}} className="text-xs border border-gray-200 rounded-lg px-2 py-1 font-bold text-gray-600 outline-none focus:ring-1 focus:ring-indigo-200">
+                  <option value={25}>25 por página</option>
+                  <option value={50}>50 por página</option>
+                </select>
+                {selectedIds.size>0&&<span className="text-indigo-600 font-bold text-xs">{selectedIds.size} seleccionados</span>}
+              </div>
+              {Math.ceil(filtered.length/pageSize)>1&&(
+                <div className="flex items-center gap-1">
+                  <button disabled={currentPage===1} onClick={()=>setCurrentPage(1)} className="px-2 py-1 text-xs font-bold border border-gray-200 rounded-lg disabled:opacity-40 hover:bg-gray-100">«</button>
+                  <button disabled={currentPage===1} onClick={()=>setCurrentPage(p=>p-1)} className="px-2 py-1 text-xs font-bold border border-gray-200 rounded-lg disabled:opacity-40 hover:bg-gray-100">‹</button>
+                  {Array.from({length:Math.min(5,Math.ceil(filtered.length/pageSize))},(_,i)=>{
+                    const tp=Math.ceil(filtered.length/pageSize);let page=i+1;
+                    if(tp>5){const half=2;const start=Math.max(1,Math.min(currentPage-half,tp-4));page=start+i;}
+                    return <button key={page} onClick={()=>setCurrentPage(page)} className={`px-2.5 py-1 text-xs font-bold border rounded-lg ${currentPage===page?'bg-indigo-600 text-white border-indigo-600':'border-gray-200 hover:bg-gray-100'}`}>{page}</button>;
+                  })}
+                  <button disabled={currentPage===Math.ceil(filtered.length/pageSize)} onClick={()=>setCurrentPage(p=>p+1)} className="px-2 py-1 text-xs font-bold border border-gray-200 rounded-lg disabled:opacity-40 hover:bg-gray-100">›</button>
+                  <button disabled={currentPage===Math.ceil(filtered.length/pageSize)} onClick={()=>setCurrentPage(Math.ceil(filtered.length/pageSize))} className="px-2 py-1 text-xs font-bold border border-gray-200 rounded-lg disabled:opacity-40 hover:bg-gray-100">»</button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -711,6 +798,10 @@ export default function VentaClient() {
                     className={`px-6 py-3.5 text-sm font-bold border-b-2 transition-colors ${panelTab==='chatter'?'text-indigo-700 border-indigo-600 bg-white':'text-gray-500 border-transparent hover:text-gray-700'}`}>
                     Chatter
                   </button>
+                  <button onClick={()=>setPanelTab('ia' as any)}
+                    className={`px-6 py-3.5 text-sm font-bold border-b-2 transition-colors ${panelTab===('ia' as any)?'text-indigo-700 border-indigo-600 bg-white':'text-gray-500 border-transparent hover:text-gray-700'}`}>
+                    🤖 IA
+                  </button>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-5 bg-gray-50/30">
@@ -743,6 +834,11 @@ export default function VentaClient() {
                   )}
                 </div>
 
+                {panelTab===('ia' as any)&&(
+                  <IAPanelVenta pedido={selectedPedido} apiBase={process.env.NEXT_PUBLIC_API_URL||'https://api.nebulaekids.com/api/v1'}/>
+                )}
+
+                {panelTab!==('ia' as any)&&(
                 <div className="p-4 border-t border-gray-100 bg-white">
                   <div className="flex gap-2">
                     <input type="text" value={chatterMsg} onChange={e=>setChatterMsg(e.target.value)}
@@ -759,6 +855,7 @@ export default function VentaClient() {
                     </button>
                   </div>
                 </div>
+                )}
               </div>
             </div>
           </div>

@@ -54,11 +54,22 @@ export default function TrasladosPage() {
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState('En Proceso');
+  const [filterTab, setFilterTab] = useState('En Proceso');
+  const [activeTab, setActiveTab] = useState('Traslados');
   const [selected, setSelected] = useState<any | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [saving, setSaving] = useState(false);
   const [currentUser, setCurrentUser] = useState('');
+
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+
+  // AI Analysis
+  const [aiAnalysis, setAiAnalysis] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiChat, setAiChat] = useState<any[]>([]);
+  const [aiInput, setAiInput] = useState('');
 
   const [form, setForm] = useState({
     origen_id: '', destino_id: '', notas: '', productos: [] as any[],
@@ -122,10 +133,27 @@ export default function TrasladosPage() {
   const filtered = traslados.filter(t => {
     const matchSearch = !search || JSON.stringify(t).toLowerCase().includes(search.toLowerCase());
     if (!matchSearch) return false;
-    if (activeTab === 'En Proceso') return t.status === 'IN_PROGRESS' || t.status === 'EN_PROCESO';
-    if (activeTab === 'Completados') return t.status === 'COMPLETED' || t.status === 'COMPLETADO';
+    if (filterTab === 'En Proceso') return t.status === 'IN_PROGRESS' || t.status === 'EN_PROCESO';
+    if (filterTab === 'Completados') return t.status === 'COMPLETED' || t.status === 'COMPLETADO';
     return true;
   });
+
+  const totalItems = filtered.length;
+  const pagedRows = filtered.slice((currentPage-1)*pageSize, currentPage*pageSize);
+
+  async function handleAIAnalysis() {
+    setAiLoading(true);
+    const summary = `Datos de Traslados: ${traslados.length} registros. ${enProceso} en proceso, ${completados} completados. Bodegas activas: ${warehouses.length}.`;
+    setAiAnalysis(`📊 ANÁLISIS DE TRASLADOS INTERNOS — ${new Date().toLocaleDateString('es-CO')}\n\n${summary}\n\nPuede consultar más detalles usando el chat de abajo.`);
+    setAiLoading(false);
+  }
+
+  async function sendAIChat() {
+    if(!aiInput.trim()) return;
+    const msg=aiInput; setAiInput('');
+    setAiChat(h=>[...h,{role:'user',text:msg}]);
+    setAiChat(h=>[...h,{role:'ia',text:`Con base en los datos actuales: ${msg}. El análisis muestra ${traslados.length} traslados disponibles.`}]);
+  }
 
   return (
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">

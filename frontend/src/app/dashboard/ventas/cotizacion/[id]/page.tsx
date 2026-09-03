@@ -16,6 +16,8 @@ export default function CotizacionDetallePage() {
   
   // Status and Timeline State
   const [currentStatus, setCurrentStatus] = useState('Pendiente por Cotizar');
+  const [cotPanelTab, setCotPanelTab] = useState<'actividad'|'ia'>('actividad');
+  const [cotAnalisis, setCotAnalisis] = useState('');
   const [timeline, setTimeline] = useState([
     { id: 1, type: 'status', title: 'Cotización Borrador Creada', date: '26 Ago 2026, 09:35 AM', user: 'Sistema', icon: FileText, color: 'text-purple-500 bg-purple-50' },
     { id: 2, type: 'origin', title: 'Derivada de Solicitud SC-0021', desc: 'Productos y cantidades importados automáticamente desde la solicitud del cliente.', date: '26 Ago 2026, 09:35 AM', user: 'Sistema', icon: Box, color: 'text-blue-500 bg-blue-50' },
@@ -338,7 +340,34 @@ export default function CotizacionDetallePage() {
             </h3>
           </div>
 
-          {/* Activity Input Area */}
+          {/* Tab Bar */}
+          <div className="flex border-b border-slate-200 bg-slate-50/50 shrink-0">
+            <button onClick={()=>setCotPanelTab('actividad')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${cotPanelTab==='actividad'?'text-blue-700 border-blue-600 bg-white':'text-slate-500 border-transparent hover:text-slate-700'}`}>Actividad</button>
+            <button onClick={()=>setCotPanelTab('ia')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${cotPanelTab==='ia'?'text-indigo-700 border-indigo-600 bg-white':'text-slate-500 border-transparent hover:text-slate-700'}`}>🤖 IA</button>
+          </div>
+
+          {/* IA Tab Content */}
+          {cotPanelTab==='ia'&&(
+            <div className="flex-1 overflow-y-auto p-5 bg-slate-50/30 space-y-4">
+              <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl p-4 border border-indigo-100">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="bg-indigo-600 rounded-lg px-2 py-1 text-white font-black text-xs">AI</div>
+                    <div><p className="font-extrabold text-indigo-900 text-sm">Análisis de Cotización</p><p className="text-[10px] text-indigo-500">Nebulae Analytics</p></div>
+                  </div>
+                  <button onClick={()=>{
+                    const txt=`📊 ANÁLISIS DE COTIZACIÓN\n\nEstado: ${currentStatus}\nTotal: $${total.toLocaleString('es-CO')} COP\nSubtotal: $${subtotal.toLocaleString('es-CO')} COP\nIVA: $${taxes.toLocaleString('es-CO')} COP\n\nArtículos: ${items.length} líneas\n${items.map(it=>`• ${it.name} x${it.qty} — $${(it.price*it.qty*(1-it.discount/100)).toLocaleString('es-CO')}`).join('\n')}\n\nActividad: ${timeline.length} eventos.`;
+                    setCotAnalisis(txt);
+                  }} className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold">Analizar</button>
+                </div>
+                {!cotAnalisis&&<p className="text-xs text-indigo-700 italic text-center py-3">Genera un análisis con los precios, productos y estado de la cotización.</p>}
+                {cotAnalisis&&<pre className="text-xs text-slate-800 whitespace-pre-wrap font-medium leading-relaxed bg-white/70 rounded-xl p-3 border border-indigo-100 mt-2">{cotAnalisis}</pre>}
+              </div>
+            </div>
+          )}
+
+          {cotPanelTab==='actividad'&&(
+          <>{/* Activity Input Area */}
           <div className="p-5 border-b border-slate-200 bg-slate-50 z-10 shrink-0">
             <div className="flex gap-2 mb-4">
               <button className="flex-1 flex items-center justify-center gap-2 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 py-2.5 rounded-xl text-xs font-bold transition-colors shadow-sm">
@@ -398,6 +427,8 @@ export default function CotizacionDetallePage() {
               </span>
             </div>
           </div>
+          </> /* end actividad */
+          )}
 
         </div>
       </div>
