@@ -52,9 +52,6 @@ class CustomerRequest(Base):
     created_at       = Column(DateTime, default=_now)
     updated_at       = Column(DateTime, default=_now, onupdate=_now)
     created_by       = Column(String(150), nullable=True)
-    conversation_id  = Column(String(100), nullable=True, index=True)   # ID de conversación del chat omnicanal
-    campaign_id      = Column(Integer, nullable=True)                    # FK-like a campaigns.id (tabla sin ORM aún)
-    canal_origen     = Column(String(50), nullable=True)                 # WhatsApp | Instagram | Web | Presencial | CRM
 
     customer   = relationship("Customer", foreign_keys=[customer_id])
     quotations = relationship("SalesQuotation", back_populates="customer_request")
@@ -207,12 +204,6 @@ class GoodsReceipt(Base):
     notas             = Column(Text, nullable=True)
     productos         = Column(JSON, nullable=True, default=list)
     stock_actualizado = Column(Boolean, default=False)
-    idempotency_key   = Column(String(100), nullable=True, unique=True)  # Previene doble confirmación
-    receipt_type      = Column(String(20), nullable=True, default="FISICA")  # LOGISTICA | FISICA
-    # LOGISTICA = llegada a Miami/Bogotá (no incrementa stock vendible en Barranquilla)
-    # FISICA    = recepción en bodega Barranquilla (sí incrementa stock)
-    confirmed_by      = Column(String(150), nullable=True)
-    confirmed_at      = Column(DateTime, nullable=True)
     created_at        = Column(DateTime, default=_now)
     updated_at        = Column(DateTime, default=_now, onupdate=_now)
     created_by        = Column(String(150), nullable=True)
@@ -234,6 +225,3 @@ class ActivityLog(Base):
     user_name     = Column(String(150), nullable=True)
     created_at    = Column(DateTime, default=_now, index=True)
     extra_data    = Column(JSON, nullable=True)
-    idempotency_key      = Column(String(100), nullable=True, unique=True)  # Previene log duplicado en reintentos
-    related_entity_type  = Column(String(20), nullable=True)   # Entidad relacionada (ej: PEC relacionado con ENINV)
-    related_entity_id    = Column(Integer, nullable=True)
