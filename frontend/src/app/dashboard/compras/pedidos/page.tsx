@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -771,6 +771,8 @@ export default function PedidosCompraPage() {
   const [pedidosVenta, setPedidosVenta] = useState<any[]>([]);
   const [stats, setStats]             = useState<any>({});
   const [activeTab, setActiveTab]     = useState('Todos');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize]       = useState(25);
   const [viewMode, setViewMode]       = useState<'lista'|'kanban'>('lista');
   const [search, setSearch]           = useState('');
   const [filterEstado, setFilterEstado] = useState('');
@@ -1188,14 +1190,35 @@ export default function PedidosCompraPage() {
                       <button onClick={()=>setShowNuevoPec(true)} className="mt-3 px-4 py-2 bg-purple-600 text-white rounded-xl text-sm font-bold">+ Nuevo PEC</button>
                     </td></tr>
                   )}
-                  {filteredData.map((p:any)=><PecRow key={p.id} p={p}/>)}
+                  {filteredData.slice((currentPage-1)*pageSize, currentPage*pageSize).map((p:any)=><PecRow key={p.id} p={p}/>)}
                 </tbody>
               </table>
             )}
-            <div className="px-5 py-2.5 border-t border-gray-100 text-xs text-gray-400 font-medium flex justify-between">
-              <span>{filteredData.length} de {pedidos.length} registros</span>
-              {selectedIds.size>0&&<span className="text-purple-600 font-bold">{selectedIds.size} seleccionados</span>}
-            </div>
+            {activeTab!=='Analisis'&&(
+              <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between bg-slate-50/50">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-bold text-slate-400">{filteredData.length} registros</span>
+                  <select value={pageSize} onChange={e=>{setPageSize(Number(e.target.value));setCurrentPage(1);}} className="text-xs border border-slate-200 rounded-lg px-2 py-1 font-bold text-slate-600 outline-none">
+                    <option value={25}>25 por página</option>
+                    <option value={50}>50 por página</option>
+                  </select>
+                  {selectedIds.size>0&&<span className="text-purple-600 font-bold text-xs">{selectedIds.size} seleccionados</span>}
+                </div>
+                {Math.ceil(filteredData.length/pageSize)>1&&(
+                  <div className="flex items-center gap-1">
+                    <button disabled={currentPage===1} onClick={()=>setCurrentPage(1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">«</button>
+                    <button disabled={currentPage===1} onClick={()=>setCurrentPage(p=>p-1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">‹</button>
+                    {Array.from({length:Math.min(5,Math.ceil(filteredData.length/pageSize))},(_,i)=>{
+                      const tp=Math.ceil(filteredData.length/pageSize);let page=i+1;
+                      if(tp>5){const half=2;const start=Math.max(1,Math.min(currentPage-half,tp-4));page=start+i;}
+                      return <button key={page} onClick={()=>setCurrentPage(page)} className={`px-2.5 py-1 text-xs font-bold border rounded-lg ${currentPage===page?'bg-indigo-600 text-white border-indigo-600':'border-slate-200 hover:bg-slate-100'}`}>{page}</button>;
+                    })}
+                    <button disabled={currentPage===Math.ceil(filteredData.length/pageSize)} onClick={()=>setCurrentPage(p=>p+1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">›</button>
+                    <button disabled={currentPage===Math.ceil(filteredData.length/pageSize)} onClick={()=>setCurrentPage(Math.ceil(filteredData.length/pageSize))} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">»</button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
         ) : (
