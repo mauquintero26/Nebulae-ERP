@@ -1,37 +1,77 @@
 "use client";
 
 import { useCart } from '../layout';
-import { ShieldCheck, Truck, Lock, ChevronRight } from 'lucide-react';
+import { ShieldCheck, Truck, Lock, ChevronRight, AlertCircle } from 'lucide-react';
 import { useState } from 'react';
+import Link from 'next/link';
+
+const API = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1';
 
 export default function CheckoutPage() {
-  const { items, cartTotal } = useCart();
-  const [formData, setFormData] = useState({ name: '', phone: '', address: '' });
+  const { items, cartTotal, removeFromCart } = useCart();
+  const [formData, setFormData] = useState({ name: '', email: '', phone: '', address: '', ciudad: '', notas: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [pwebNumero, setPwebNumero] = useState('');
+  const [error, setError] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const set = (k: string, v: string) => setFormData(f => ({ ...f, [k]: v }));
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsSubmitting(true);
-    // Simulate CRM order creation delay
-    setTimeout(() => {
-      setIsSubmitting(false);
+    if (items.length === 0) { setError('Tu carrito está vacío.'); return; }
+    setIsSubmitting(true); setError('');
+    try {
+      const body = {
+        customer_name: formData.name,
+        customer_email: formData.email,
+        customer_phone: formData.phone,
+        customer_address: `${formData.address}, ${formData.ciudad}`,
+        direccion_entrega: `${formData.address}, ${formData.ciudad}`,
+        notas: formData.notas,
+        productos: items.map(i => ({
+          nombre: i.name,
+          cantidad: i.qty,
+          precio_cop: i.price,
+          variante: i.variant,
+          imagen: i.img,
+        })),
+        subtotal_cop: cartTotal,
+        total_cop: cartTotal,
+        canal_venta: 'WEB',
+        canal_metadata: { user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : '', origin: 'store_checkout' },
+      };
+      const r = await fetch(`${API}/ecommerce/pedidos`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || 'Error creando el pedido');
+      setPwebNumero(d.data?.pweb_numero || d.data?.numero || '');
+      // Clear cart items one by one
+      items.forEach(i => removeFromCart(i.id));
       setSuccess(true);
-    }, 2000);
-  };
-
+    } catch (e: any) { setError(e.message || 'Error al procesar tu pedido. Intenta de nuevo.'); }
+    setIsSubmitting(false);
+  }
   if (success) {
     return (
       <div className="max-w-3xl mx-auto px-4 py-20 text-center">
         <div className="w-24 h-24 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-6">
           <ShieldCheck size={48} />
         </div>
-        <h1 className="text-4xl font-black text-slate-900 mb-4">¡Orden Confirmada!</h1>
-        <p className="text-lg text-slate-600 mb-8">Gracias por tu compra, {formData.name}. Tu orden ha sido enviada directo a nuestra bodega para despacho inmediato.</p>
+        <h1 className="text-4xl font-black text-slate-900 mb-4">¡Pedido Confirmado!</h1>
+        {pwebNumero && <p className="text-sm font-black text-purple-600 mb-2 bg-purple-50 inline-block px-4 py-1.5 rounded-full">Pedido # {pwebNumero}</p>}
+        <p className="text-lg text-slate-600 mb-8 mt-4">Gracias por tu compra, {formData.name}. Tu pedido ha sido registrado y será procesado a la brevedad.</p>
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm inline-block text-left mb-8">
-          <p className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2">Resumen de Entrega</p>
-          <p className="font-bold text-slate-900">{formData.address}</p>
+          <p className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2">Datos de Entrega</p>
+          <p className="font-bold text-slate-900">{formData.address}, {formData.ciudad}</p>
           <p className="text-slate-600">{formData.phone}</p>
+          {formData.email && <p className="text-slate-500 text-sm">{formData.email}</p>}
+        </div>
+        <div className="flex gap-4 justify-center">
+          <Link href="/store" className="px-6 py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800">Seguir Comprando</Link>
         </div>
       </div>
     );
@@ -48,39 +88,41 @@ export default function CheckoutPage() {
         {/* Formulario */}
         <div>
           <h2 className="text-2xl font-black text-slate-900 mb-6">Datos de Envío</h2>
+          {error && (
+            <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-3 mb-4 text-red-700 text-sm">
+              <AlertCircle size={16}/> {error}
+            </div>
+          )}
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label className="block text-sm font-bold text-slate-700 mb-1">Nombre Completo</label>
-              <input 
-                required 
-                type="text" 
-                value={formData.name} 
-                onChange={(e) => setFormData({...formData, name: e.target.value})}
-                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-shadow" 
-                placeholder="Ej. María Pérez" 
-              />
+              <label className="block text-sm font-bold text-slate-700 mb-1">Nombre Completo *</label>
+              <input required type="text" value={formData.name} onChange={e => set('name', e.target.value)}
+                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-shadow" placeholder="Ej. María Pérez" />
             </div>
             <div>
-              <label className="block text-sm font-bold text-slate-700 mb-1">Celular / WhatsApp</label>
-              <input 
-                required 
-                type="tel" 
-                value={formData.phone} 
-                onChange={(e) => setFormData({...formData, phone: e.target.value})}
-                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-shadow" 
-                placeholder="Ej. 300 123 4567" 
-              />
+              <label className="block text-sm font-bold text-slate-700 mb-1">Correo Electrónico *</label>
+              <input required type="email" value={formData.email} onChange={e => set('email', e.target.value)}
+                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-shadow" placeholder="tu@correo.com" />
             </div>
             <div>
-              <label className="block text-sm font-bold text-slate-700 mb-1">Dirección Exacta</label>
-              <input 
-                required 
-                type="text" 
-                value={formData.address} 
-                onChange={(e) => setFormData({...formData, address: e.target.value})}
-                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-shadow" 
-                placeholder="Ej. Calle 123 #45-67, Apto 101, Bogotá" 
-              />
+              <label className="block text-sm font-bold text-slate-700 mb-1">Celular / WhatsApp *</label>
+              <input required type="tel" value={formData.phone} onChange={e => set('phone', e.target.value)}
+                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-shadow" placeholder="Ej. 300 123 4567" />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-1">Dirección Exacta *</label>
+              <input required type="text" value={formData.address} onChange={e => set('address', e.target.value)}
+                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-shadow" placeholder="Calle 123 #45-67, Apto 101" />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-1">Ciudad / Municipio *</label>
+              <input required type="text" value={formData.ciudad} onChange={e => set('ciudad', e.target.value)}
+                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-shadow" placeholder="Ej. Medellín, Bogotá, Cali" />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-700 mb-1">Notas del Pedido (opcional)</label>
+              <textarea value={formData.notas} onChange={e => set('notas', e.target.value)} rows={2}
+                className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-shadow resize-none" placeholder="Instrucciones especiales de entrega..."/>
             </div>
 
             <div className="pt-6 border-t border-slate-100">

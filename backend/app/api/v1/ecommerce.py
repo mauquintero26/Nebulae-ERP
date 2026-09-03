@@ -445,3 +445,80 @@ def update_shipping_config(body: dict, db: Session = Depends(get_db)):
     db.execute(text("INSERT INTO web_builder_config (config_key, config_value, updated_at) VALUES ('shipping', :v::jsonb, NOW()) ON CONFLICT (config_key) DO UPDATE SET config_value=:v::jsonb, updated_at=NOW()"), {"v": json_mod.dumps(body)})
     db.commit()
     return {"status": "success"}
+
+
+# --- CLIENTES WEB → AGENDA CRM ---
+@router.get("/clientes")
+def list_clientes_web(db: Session = Depends(get_db)):
+    """Lista clientes únicos que han realizado pedidos web (canal_venta=WEB)"""
+    web_orders = db.query(SaleOrder).filter(
+        SaleOrder.canal_venta == 'WEB',
+        SaleOrder.customer_email.isnot(None)
+    ).all()
+    # Deduplicate by email
+    seen = set()
+    clientes = []
+    for o in web_orders:
+        email = (o.customer_email or "").lower()
+        if email and email not in seen:
+            seen.add(email)
+            # Check if already in CRM agenda
+            from app.models.customers import Customer
+            crm_customer = db.query(Customer).filter(Customer.email == email).first()
+            clientes.append({
+                "email": o.customer_email,
+                "nombre": o.customer_name,
+                "telefono": o.customer_phone,
+                "address": o.customer_address,
+                "primer_pedido": o.created_at.isoformat() if o.created_at else None,
+                "total_pedidos": sum(1 for x in web_orders if (x.customer_email or "").lower() == email),
+                "total_cop": sum(float(x.total_cop or 0) for x in web_orders if (x.customer_email or "").lower() == email),
+                "en_agenda": crm_customer is not None,
+                "crm_id": crm_customer.id if crm_customer else None,
+            })
+    return {"status": "success", "total": len(clientes), "data": clientes}
+
+
+@router.post("/clientes/sync-agenda")
+def sync_clientes_web_to_agenda(body: dict, db: Session = Depends(get_db)):
+    """Importa clientes web a la agenda CRM marcados como canal=WEB"""
+    from app.models.customers import Customer
+    emails = body.get("emails", [])  # list of emails to sync, or empty = all
+    web_orders = db.query(SaleOrder).filter(
+        SaleOrder.canal_venta == 'WEB',
+        SaleOrder.customer_email.isnot(None)
+    ).all()
+    seen: dict = {}
+    for o in web_orders:
+        email = (o.customer_email or "").lower()
+        if email and email not in seen:
+            seen[email] = o
+    if emails:
+        to_sync = {e.lower(): seen[e.lower()] for e in emails if e.lower() in seen}
+    else:
+        to_sync = seen
+    imported = 0
+    already_exists = 0
+    for email, order in to_sync.items():
+        existing = db.query(Customer).filter(Customer.email == email).first()
+        if existing:
+            already_exists += 1
+            continue
+        # Parse name parts
+        full_name = (order.customer_name or "").strip()
+        parts = full_name.split(" ", 1)
+        first_name = parts[0] if parts else "Cliente"
+        last_name = parts[1] if len(parts) > 1 else "Web"
+        new_customer = Customer(
+            first_name=first_name,
+            last_name=last_name + " [WEB]",
+            email=order.customer_email,
+            phone=order.customer_phone,
+            address=order.customer_address,
+            city=None,
+            document=None,
+        )
+        db.add(new_customer)
+        imported += 1
+    db.commit()
+    return {"status": "success", "data": {"importados": imported, "ya_existian": already_exists, "total_procesados": len(to_sync)}}
