@@ -371,3 +371,37 @@ ext.config.ts — 	ypescript.ignoreBuildErrors: true, eslint.ignoreDuringBuilds:
   - **Traslados Internos:** Diagnóstico de movimientos entre bodegas y stock en tránsito.
   - **Pedidos de Compra:** Análisis de entregas a tiempo, proveedores críticos y montos comprometidos.
   - Cada sub-módulo cuenta con métricas rápidas y asistente conversacional de analítica.
+
+
+---
+
+## Fase 17 — Corrección v2 Fase 1A (2026-09-03, commit `599b6b0`)
+
+Correcciones sobre `c280bde` aplicadas tras revisión del plan v3:
+
+### 1. Compatibilidad de roles legacy — `dependencies.py`
+- `_ROLE_LEGACY_MAP`: Admin→ADMIN, Vendedor→ASESOR, ERP→COMPRAS, Finanzas→FINANZAS, Mercadeo→CONSULTA
+- `normalize_role(raw_role)`: normaliza case-insensitive + trim antes de comparar
+- `require_roles()` ahora usa `normalize_role()` — usuarios existentes no son bloqueados
+- Los valores pasados a `require_roles()` son ahora exclusivamente canónicos (ADMIN, ASESOR, etc.)
+- Validación en tiempo de definición: `ValueError` si se pasa un valor no canónico
+
+### 2. Auditoría transaccional — `confirmar_recepcion`
+- `ActivityLog` creado con `db.add()` **dentro** de la transacción principal
+- Si el log de auditoría falla, la confirmación NO se completa — el stock no queda sin trazabilidad
+- Eliminado el bloque `try/except` post-commit separado para los logs críticos
+
+### 3. Idempotencia con `request_hash`
+- `req_hash = SHA-256(body sin la clave)` calculado al inicio
+- Mismo key + mismo hash → replay idempotente (200)
+- Mismo key + hash diferente → 409 Conflict
+- Reintento de FAILED: permitido si mismo hash, bloqueado si hash diferente
+- FAILED registrado en `SessionLocal()` independiente para persistir tras rollback
+
+### 4. Migración `fa1a_001` actualizada
+- Columna `request_hash VARCHAR(64)` añadida
+- Columna `error_detail TEXT` añadida
+- Constraint `UNIQUE(operation_type, operation_key)` en lugar de `UNIQUE(operation_key)` solo
+
+### 5. Código muerto eliminado
+- 182 líneas de cuerpo antiguo de `confirmar_recepcion` removidas (eran inalcanzables)
