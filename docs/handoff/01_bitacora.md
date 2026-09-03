@@ -261,3 +261,61 @@
 ext.config.ts — 	ypescript.ignoreBuildErrors: true, eslint.ignoreDuringBuilds: true
 - Rutas con useSearchParams wrapeadas en <Suspense> con client components separados.
 
+## Fase 15: Mejoras Integrales en Solicitudes, Órdenes, Ventas Hub y Compras Hub
+**Commits:** 0e3e7d8, 99101b6, 360eac0, 1344c84
+
+### 1. Bloque de Inteligencia Artificial Contextual (IAPanel) en Solicitudes y Órdenes
+- **`solicitud-client.tsx`:**
+  - Tab `🤖 IA` agregado al panel derecho lateral (4to tab junto a Acciones, Actividad y Chatter).
+  - Componente `IAPanelSC`:
+    - Detección de tipo de solicitud: si es **Seguimiento** o **Programar Entrega**, despliega análisis de trazabilidad (dónde está el pedido, tiempos, transportadora, alerta de retraso). Si es **Devolución de Producto**, evalúa automáticamente si la solicitud cumple las condiciones comerciales de devolución y garantía. Para cotizaciones/leads, genera diagnóstico general.
+    - Asistente de chat contextual integrado para consultas libres sobre la solicitud.
+- **`venta-client.tsx`:**
+  - Tab `🤖 IA` en panel de detalle del Pedido de Venta (`IAPanelVenta`):
+    - Diagnóstico de saldo pendiente de cobro, anticipos, cumplimiento de entrega, trazabilidad de compra vinculada (PEC) y chat conversacional del pedido.
+- **`cotizacion/[id]/page.tsx`:**
+  - Tab `🤖 IA` en el panel lateral de actividades con desglose de márgenes, cálculo de IVA, items cotizados y bitácora de eventos.
+
+### 2. Formatos de Confirmación Omnicanal de Solicitud de Cliente
+- Formato estructurado con **branding oficial de Nebulae Kids** generado desde endpoint `GET /ventas/solicitudes/{id}/formato-confirmacion`.
+- Acciones rápidas en un solo clic:
+  - **WhatsApp:** Genera link preformateado `wa.me/57...` con resumen de productos, total estimado y link de confirmación para el cliente.
+  - **Email:** Prepara correo de confirmación de cotización/solicitud.
+  - **PDF / Copia:** Copia resumen formal de la solicitud.
+
+### 3. Sistema de Cancelación Obligatoria y Papelera de Reciclaje (30 Días)
+- **Modal de Motivo de Cancelación:** Ya no es un simple confirm(); ahora exige obligatoriamente ingresar la razón de eliminación/cancelación.
+- **Backend `erp_ventas.py`:**
+  - Nuevas columnas autogestionadas: `razon_cancelacion` y `eliminada_at`.
+  - Endpoint `POST /ventas/solicitudes/{id}/cancelar` registra el motivo y la estampa temporal.
+  - Endpoint `GET /ventas/solicitudes/papelera` calcula los días restantes (cuenta regresiva de 30 días) y purga automáticamente registros vencidos.
+  - Endpoint `DELETE /ventas/solicitudes/{id}/permanente` para borrado definitivo manual.
+- **Frontend Tab `🗑️ Papelera`:**
+  - Vista dedicada en el Tab bar principal para revisar solicitudes eliminadas, ver los días restantes antes de eliminación automática y botón de purga manual inmediata.
+
+### 4. Lógica Condicional en Formulario de Nueva Solicitud
+- En el modal de creación de Solicitud de Cliente:
+  - Cuando se selecciona `tipo_solicitud` diferente a **"Cotizacion de Producto"** (ej. Seguimiento, Programar entrega, Devolución, Nuevo lead, Soporte técnico), el campo **Modalidad de Pago** se oculta automáticamente. Solo se solicita pago cuando existe intención de cotización/compra.
+
+### 5. Estandarización de Paginación a 25 Registros y Scroll de Barra Principal
+- **Regla Global Implementada:** Todas las tablas de **Ventas Hub**, sus sub-módulos, **Compras Hub** y sus sub-módulos ahora arrancan por defecto en **25 registros** con selector para subir a **50**.
+- **Paginación Numérica:** Selector de ventana deslizante con botones numéricos `« ‹ 1 2 3 ... › »`.
+- **Scroll Fijo:** Se eliminaron scrolls internos (`overflow-y: scroll`, `max-h-[600px]`) dentro de las tablas para que el scroll fluya naturalmente desde la barra principal del navegador.
+- **Archivos adaptados:**
+  - `ventas/solicitud/solicitud-client.tsx`
+  - `ventas/cotizacion/cotizacion-client.tsx`
+  - `ventas/venta/venta-client.tsx`
+  - `ventas/components/TablaVentas.tsx` (Ventas Hub)
+  - `compras/components/TablaCompras.tsx` (Compras Hub)
+  - `compras/historial/page.tsx`
+  - `compras/lista-compras/page.tsx`
+  - `compras/traslados/page.tsx`
+  - `compras/pedidos/page.tsx`
+
+### 6. Pestaña de Análisis Funcional en Todos los Sub-módulos
+- Siguiendo el estándar de `AnalisisVentas.tsx`, se habilitó la pestaña **Análisis** en los sub-módulos de compras y ventas:
+  - **Historial de Compras:** Análisis de proveedores top, frecuencia de compras y gastos.
+  - **Lista de Compras:** Análisis de necesidades de abastecimiento.
+  - **Traslados Internos:** Diagnóstico de movimientos entre bodegas y stock en tránsito.
+  - **Pedidos de Compra:** Análisis de entregas a tiempo, proveedores críticos y montos comprometidos.
+  - Cada sub-módulo cuenta con métricas rápidas y asistente conversacional de analítica.
