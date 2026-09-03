@@ -92,8 +92,15 @@ export function Sidebar() {
           { name: '💸 Control de Gastos', path: '/dashboard/finanzas/gastos' }
         ]
       },
-      { name: 'E-Commerce', path: '/dashboard/ecommerce', icon: ShoppingCart },
-      { name: 'Sitio Web', path: '/dashboard/website', icon: Globe },
+      { 
+        name: 'E-Commerce', 
+        path: '/dashboard/ecommerce', 
+        icon: ShoppingCart,
+        subItems: [
+          { name: '🛒 E-Commerce Center', path: '/dashboard/ecommerce' },
+          { name: '🌐 Sitio Web / Landing', path: '/dashboard/sitio-web' },
+        ]
+      },
       { 
         name: 'Marketing', 
         path: '/dashboard/marketing', 
