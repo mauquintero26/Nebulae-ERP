@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
@@ -6,7 +6,7 @@ import {
   Paperclip, CheckCheck, Bot, Sparkles, FileText, ChevronRight,
   X, Calculator, ArrowRight, Phone, RefreshCw, Plus,
   MoveRight, ShoppingCart, User, AlertCircle,
-  ExternalLink, Circle, Check, UserPlus
+  ExternalLink, Circle, Check, UserPlus, Camera
 } from 'lucide-react';
 import { calculateQuotation } from '@/lib/api';
 
@@ -98,6 +98,11 @@ export default function AsistenteOmnicanal() {
   const [col4Width, setCol4Width]   = useState(380);
   const [crmHeight, setCrmHeight]   = useState(430);
 
+  // Stories catalog state
+  const [storyCatalog, setStoryCatalog] = useState<any[]>([]);
+  const [storyCatalogLoading, setStoryCatalogLoading] = useState(false);
+  const [storyTab, setStoryTab] = useState<'crm'|'historias'>('crm');
+
   const [inboxFontSize, setInboxFontSize] = useState<FontSize>('md');
   const [crmFontSize, setCrmFontSize]     = useState<FontSize>('md');
   useEffect(() => {
@@ -172,6 +177,18 @@ export default function AsistenteOmnicanal() {
     const u = localStorage.getItem('user_name') || localStorage.getItem('username') || '';
     setCurrentUser(u);
   }, []);
+
+  // Load story catalog for omnicanal col4
+  const loadStoryCatalog = useCallback(async () => {
+    setStoryCatalogLoading(true);
+    try {
+      const d = await apiFetch('/marketing/story-catalog?activo=true');
+      setStoryCatalog(Array.isArray(d) ? d : (d.data || []));
+    } catch { setStoryCatalog([]); }
+    setStoryCatalogLoading(false);
+  }, []);
+
+  useEffect(() => { if (storyTab === 'historias') loadStoryCatalog(); }, [storyTab, loadStoryCatalog]);
 
   useEffect(() => {
     apiFetch('/crm/pipeline-stages/config')
@@ -665,12 +682,82 @@ export default function AsistenteOmnicanal() {
         )}
       </div>
 
-      {/* COL 4: CRM */}
+      {/* COL 4: CRM + Historias */}
       <div className="bg-slate-50 border-l border-slate-200 flex flex-col flex-shrink-0 relative" style={{ width: col4Width }}>
         <div onMouseDown={startDrag(setCol4Width, 'xr', 300, 620)}
           className="absolute left-0 top-0 bottom-0 w-1.5 hover:bg-indigo-400/40 cursor-col-resize z-20" />
 
-        {/* CRM Panel */}
+        {/* Col4 Tab Switcher */}
+        <div className="flex items-center gap-0.5 px-3 pt-2 pb-1 bg-white border-b border-slate-200 shrink-0">
+          {([['crm','CRM'],['historias','📸 Historias']] as [string,string][]).map(([v,l])=>(
+            <button key={v} onClick={()=>setStoryTab(v as any)} className={`px-3 py-1.5 rounded-lg text-[10px] font-black transition-all ${storyTab===v?'bg-indigo-600 text-white':'text-slate-500 hover:bg-slate-100'}`}>{l}</button>
+          ))}
+        </div>
+
+        {/* HISTORIAS PANEL */}
+        {storyTab === 'historias' && (
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="px-3 py-2 border-b border-slate-100 flex items-center justify-between shrink-0 bg-white">
+              <span className="font-black text-slate-700 text-[10px] uppercase">Catálogo de Historias Activas</span>
+              <button onClick={loadStoryCatalog} className="p-1 hover:bg-slate-100 rounded-lg"><RefreshCw size={11} className={storyCatalogLoading?'animate-spin text-purple-600':'text-slate-400'}/></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-2 space-y-2">
+              {storyCatalogLoading && <div className="text-center py-8 text-slate-400"><RefreshCw size={18} className="animate-spin mx-auto mb-2"/><p style={{fontSize:10}}>Cargando historias...</p></div>}
+              {!storyCatalogLoading && storyCatalog.length===0 && (
+                <div className="text-center py-8 text-slate-400">
+                  <Camera size={24} className="mx-auto mb-2 opacity-25"/>
+                  <p style={{fontSize:10}} className="font-bold">Sin historias publicadas</p>
+                  <a href="/dashboard/marketing/historias" target="_blank" className="text-purple-600 font-bold text-[9px] hover:underline mt-1 block">Crear historia →</a>
+                </div>
+              )}
+              {storyCatalog.map((s:any)=>(
+                <div key={s.id} className="bg-white border border-slate-200 rounded-xl overflow-hidden hover:border-purple-300 hover:shadow-sm transition-all">
+                  {/* Product image */}
+                  <div className="w-full h-24 bg-gradient-to-br from-purple-50 to-pink-50 relative overflow-hidden">
+                    {s.imagen_url ? (
+                      <img src={s.imagen_url} alt={s.producto_nombre} className="w-full h-full object-cover"/>
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <Camera size={20} className="text-slate-300"/>
+                      </div>
+                    )}
+                    <span className="absolute top-1 right-1 text-[9px] bg-purple-600 text-white px-1.5 py-0.5 rounded font-bold">{s.canal||'IG'}</span>
+                  </div>
+                  <div className="p-2">
+                    <p className="font-black text-slate-800 leading-tight truncate" style={{fontSize:11}}>{s.producto_nombre||'Producto'}</p>
+                    <p className="font-black text-purple-700 mt-0.5" style={{fontSize:12}}>{s.precio_cop ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(s.precio_cop) : '-'}</p>
+                    {/* Action buttons */}
+                    <div className="flex gap-1 mt-2">
+                      <button
+                        onClick={()=>{
+                          setShowNewLead(true);
+                          setNewLeadForm((f:any)=>({...f, lead_product_name: s.producto_nombre, lead_description: `Interés por historia: ${s.producto_nombre} - ${s.canal}`, solicitud_tipo:'Lead Historia'}));
+                        }}
+                        className="flex-1 text-[9px] py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg font-black transition-colors"
+                      >
+                        + Lead
+                      </button>
+                      <button
+                        onClick={()=>{
+                          if (activeConv) {
+                            const precio = s.precio_cop ? new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(s.precio_cop) : 'consultar precio';
+                            setInputText(`¡Hola! 👋 El producto **${s.producto_nombre}** tiene un precio de **${precio}**. ¿Te gustaría cotizarlo o tienes alguna pregunta?`);
+                          }
+                        }}
+                        className="flex-1 text-[9px] py-1 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-lg font-black transition-colors"
+                      >
+                        Responder
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* CRM Panel (existing) — only show when storyTab=crm */}
+        {storyTab === 'crm' && (
         <div className="flex flex-col bg-white border-b border-slate-200 relative overflow-hidden" style={{ height: crmHeight }}>
 
           {/* Customer header */}
@@ -886,6 +973,7 @@ export default function AsistenteOmnicanal() {
             )}
           </div>
         </div>
+        )}
       </div>
 
       {/* MODAL: NUEVA SOLICITUD */}
