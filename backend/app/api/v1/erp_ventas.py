@@ -128,6 +128,9 @@ def _ven_dict(v: SaleOrder) -> dict:
         "pec_numero": v.pec_numero,
         "pxp_id": v.pxp_id,
         "pxp_numero": v.pxp_numero,
+        "canal_venta": v.canal_venta or "CRM",
+        "pweb_numero": v.pweb_numero,
+        "canal_metadata": v.canal_metadata,
         "created_at": v.created_at.isoformat() if v.created_at else None,
         "updated_at": v.updated_at.isoformat() if v.updated_at else None,
         "created_by": v.created_by,
@@ -530,6 +533,7 @@ def add_ven_activity(ven_id: int, body: dict, db: Session = Depends(get_db)):
 def list_pedidos(
     estado: Optional[str] = None,
     cot_id: Optional[int] = None,
+    canal_venta: Optional[str] = None,
     search: Optional[str] = None,
     limit: int = Query(50, le=200),
     offset: int = 0,
@@ -540,13 +544,16 @@ def list_pedidos(
         q = q.filter(SaleOrder.estado == estado)
     if cot_id:
         q = q.filter(SaleOrder.cot_id == cot_id)
+    if canal_venta:
+        q = q.filter(SaleOrder.canal_venta == canal_venta)
     if search:
         like = f"%{search}%"
         q = q.filter(
             SaleOrder.numero.ilike(like) |
             SaleOrder.customer_name.ilike(like) |
             SaleOrder.sc_numero.ilike(like) |
-            SaleOrder.cot_numero.ilike(like)
+            SaleOrder.cot_numero.ilike(like) |
+            SaleOrder.pweb_numero.ilike(like)
         )
     total = q.count()
     items = q.order_by(SaleOrder.created_at.desc()).offset(offset).limit(limit).all()

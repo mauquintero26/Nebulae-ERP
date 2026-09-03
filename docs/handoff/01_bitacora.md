@@ -122,3 +122,71 @@
   - Endpoint `PATCH /pedidos/{id}` ampliado para registrar `tracking_history`, `tipo_envio`, `casillero` y `fecha_compra`.
   - Endpoint `PATCH /pedidos/{id}/tracking` actualizado para almacenar historial de guías por fase.
   - Transición automática de estados del PEC según el avance de los tracking stages (ej. avance a `EN_TRANSITO` y cierre a `RECIBIDO`).
+
+## Fase 12: E-Commerce CENTER — Funcionalización Completa con Datos Reales
+
+### Backend (`backend/app/api/v1/ecommerce.py`) — NUEVO
+- **`GET /ecommerce/stats`:** KPIs reales: ventas web hoy/mes, carritos abandonados (count + valor), productos publicados, tasa de conversión, últimos 10 pedidos web.
+- **`GET/POST /ecommerce/pedidos`:** Pedidos web filtrados por `canal_venta=WEB`. Creación genera `PWEB-YYYY####` automáticamente (secuencia PostgreSQL `seq_pweb`).
+- **`GET/POST /ecommerce/carritos`:** Gestión de carritos (activos / abandonados). Tabla `web_carts` auto-creada.
+- **`PATCH /ecommerce/carritos/{id}/recuperar`:** Marca recuperación enviada + descuento configurado (10%, 15%, etc.).
+- **`GET/POST/PATCH/DELETE /ecommerce/catalogo`:** Catálogo digital con tabla `ecommerce_products`. Campos: nombre, descripción, descripción larga, SKU, precio, precio comparación, descuento, impuesto, categoría, sub-categoría, marca, imágenes (JSONB), atributos, variantes, stock, alerta stock mínimo, publicado_web toggle, SEO (título, descripción, keywords), código aduana, peso.
+- **`GET /ecommerce/categorias`:** Categorías y sub-categorías de productos publicados para el mega-menu.
+- **`GET/POST/DELETE /ecommerce/media`:** Repositorio de imágenes (tabla `media_repository`).
+- **`GET/PATCH /ecommerce/web-builder/config`:** Configuración JSON-driven de la landing page (hero, theme, contact, featured_section, blog). Tabla `web_builder_config` auto-creada.
+- **`POST /ecommerce/web-builder/chat`:** Procesamiento de instrucciones en lenguaje natural → genera cambios de configuración + los aplica automáticamente en BD.
+- **`GET/PATCH /ecommerce/pagos/config`:** Configuración de Stripe (publishable_key, secret_key, webhook_secret) y MercadoPago (public_key, access_token). Secret keys enmascaradas en GET.
+- **`GET/PATCH /ecommerce/envios/config`:** Configuración de tarifas: envío local, envío nacional, envío gratis desde X monto.
+
+### Modelo `SaleOrder` (erp_documents.py)
+- Nuevos campos: `canal_venta` (CRM|WEB|PRESENCIAL), `pweb_numero` (PWEB-YYYY####), `canal_metadata` (JSONB).
+- Serializer `_ven_dict` actualizado con los nuevos campos.
+- `GET /ventas/pedidos` ahora acepta `?canal_venta=WEB` para filtrar pedidos web desde el módulo Ventas.
+- Búsqueda en ventas ampliada a `pweb_numero`.
+
+### Frontend (`frontend/src/app/dashboard/ecommerce/page.tsx`) — Reescritura completa
+- **Tab "Panel de Rendimiento":**
+  - 4 KPI Cards reales: Ventas Hoy (COP), Ventas del Mes (COP), Carritos Abandonados (count + valor), Productos Publicados (con badge si hay stock bajo).
+  - Bloque **Recuperación de Carritos**: lista de carritos abandonados con botones de envío de recuperación (10% / 15% descuento), marca como enviado una vez usado.
+  - Tabla **Pedidos Web (PWEB)**: columnas #PWEB/PVEN, Cliente, Total, Items, Estado, Fecha, Ver. Buscador + filtro por estado. Slide-over de detalle al hacer click.
+- **Tab "Catálogo Digital":**
+  - Vista **Tabla** y vista **Kanban** (toggle lista/grid en la fila de tabs).
+  - Buscador por nombre/SKU + filtro por categoría.
+  - Toggle "Visible en Tienda" funcional (PATCH API real por producto).
+  - Badge de descuento, alerta de stock bajo (ícono amber), badge de stock agotado (rojo).
+  - Menú `...` por fila: Editar, Publicar/Ocultar, Eliminar.
+  - Botón "Nuevo Producto" en el header.
+  - **Modal de Producto (Odoo-style):** 6 pestañas: Información General, Ventas/Precios, Inventario, Imágenes (URLs), Atributos y Variantes, SEO. Resumen de precio calculado en tiempo real. Vista previa del snippet de Google (SEO).
+- **Tab "Pagos y Envíos":**
+  - Configuración Stripe: enable toggle, publishable_key, secret_key (password), webhook_secret.
+  - Configuración MercadoPago: enable toggle, public_key, access_token.
+  - Configuración envíos: tarifa local, tarifa nacional, umbral de envío gratis.
+  - Guardado persistente en BD (`web_builder_config` vía API).
+
+### Sidebar (`Sidebar.tsx`)
+- `E-Commerce` ahora tiene sub-items: 🛒 E-Commerce Center → `/dashboard/ecommerce` | 🌐 Sitio Web / Landing → `/dashboard/sitio-web`.
+
+## Fase 13: Sitio Web — AI Builder + Landing Page Pública
+
+### Dashboard Item (`frontend/src/app/dashboard/sitio-web/page.tsx`) — NUEVO
+- **Interfaz de tres paneles:**
+  - **Panel Izquierdo (Secciones):** Lista de secciones configurables (Hero, Contacto, Tema, Productos Destacados) con paneles de configuración expandibles. Acciones rápidas: ver tienda, ir al catálogo, ver blog.
+  - **Panel Central (Vista Previa):** iframe de `/store` con simulación de dispositivos (Desktop, Tablet, Mobile) mediante CSS width. Barra de URL estilo browser.
+  - **Panel Derecho (Agente IA Chat):** Chat conversacional para instrucciones en lenguaje natural. El agente procesa instrucciones, aplica cambios de configuración en tiempo real, y confirma con badges de "Cambios aplicados". Ejemplos embebidos en placeholder.
+- **Paneles de Configuración Visual:**
+  - `HeroPanel`: título, subtítulo, texto CTA, URL imagen de fondo.
+  - `ContactPanel`: teléfono, WhatsApp, email, dirección (con íconos por campo).
+  - `ThemePanel`: color picker para color principal y acento (input type=color).
+  - `FeaturedSectionPanel`: toggle, título sección, filtro por categoría, número de productos.
+- **Auto-guardado:** cambios del agente IA se guardan automáticamente en BD. Botón "Guardar Cambios" manual para ediciones de paneles.
+- **Conexión API:** `GET/PATCH /ecommerce/web-builder/config` · `POST /ecommerce/web-builder/chat`.
+
+### Storefront Público (`/store`) — Ampliación (En progreso por subagente)
+- Landing page con datos reales desde API (hero configurable, productos publicados).
+- Mega-menu dinámico con categorías del inventario.
+- Página de catálogo completo con sidebar de filtros.
+- Páginas de categoría por slug.
+- Detalle de producto con galería, variantes, carrito.
+- Blog con posts, filtros por categoría y modal de lectura.
+- Página de contacto con info dinámica desde web-builder config.
+- Página de cuenta (Login / Registro UI).
