@@ -16,63 +16,83 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table("goods_receipts") as batch_op:
-        batch_op.add_column(sa.Column("idempotency_key", sa.String(150), nullable=True, unique=True))
-        batch_op.add_column(sa.Column("receipt_type", sa.String(20), nullable=True, server_default="FISICA"))
-        # FISICA = incrementa stock vendible en Barranquilla
-        # LOGISTICA = llegada en Miami/Bogota, no incrementa stock vendible
-        batch_op.add_column(sa.Column("confirmed_by", sa.String(150), nullable=True))
-        batch_op.add_column(sa.Column("confirmed_at", sa.DateTime(), nullable=True))
-        batch_op.add_column(sa.Column("idempotency_request_id", sa.Integer(), nullable=True))
+    conn = op.get_bind()
+    # Use ADD COLUMN IF NOT EXISTS (PostgreSQL 9.6+) to make migration idempotent.
+    # This allows running upgrade on both a clean DB and one populated via create_all().
 
-    # Add FK separately to avoid circular issues in batch mode
-    op.create_index("ix_gr_idempotency_key", "goods_receipts", ["idempotency_key"])
+    # goods_receipts additions
+    for stmt in [
+        "ALTER TABLE goods_receipts ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(150)",
+        "ALTER TABLE goods_receipts ADD COLUMN IF NOT EXISTS receipt_type VARCHAR(20) DEFAULT 'FISICA'",
+        "ALTER TABLE goods_receipts ADD COLUMN IF NOT EXISTS confirmed_by VARCHAR(150)",
+        "ALTER TABLE goods_receipts ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMP",
+        "ALTER TABLE goods_receipts ADD COLUMN IF NOT EXISTS idempotency_request_id INTEGER",
+    ]:
+        conn.execute(sa.text(stmt))
 
-    # InventoryOperation: add source document columns for deduplication
-    with op.batch_alter_table("inventory_operations") as batch_op:
-        batch_op.add_column(sa.Column("source_document_type", sa.String(20), nullable=True))
-        # ENINV | AJUSTE | TRANSFERENCIA
-        batch_op.add_column(sa.Column("source_document_id", sa.Integer(), nullable=True))
-        batch_op.add_column(sa.Column("source_document_numero", sa.String(30), nullable=True))
+    conn.execute(sa.text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_gr_idempotency_key "
+        "ON goods_receipts (idempotency_key)"
+    ))
 
-    # Unique constraint: one operation per source document (prevents double-stock on retry)
-    op.create_index(
-        "uq_inv_op_source_doc",
-        "inventory_operations",
-        ["source_document_type", "source_document_id"],
-        unique=True,
-    )
+    # InventoryOperation additions
+    for stmt in [
+        "ALTER TABLE inventory_operations ADD COLUMN IF NOT EXISTS source_document_type VARCHAR(20)",
+        "ALTER TABLE inventory_operations ADD COLUMN IF NOT EXISTS source_document_id INTEGER",
+        "ALTER TABLE inventory_operations ADD COLUMN IF NOT EXISTS source_document_numero VARCHAR(30)",
+    ]:
+        conn.execute(sa.text(stmt))
 
-    # InventoryMovement: add idempotency_key per movement
-    with op.batch_alter_table("inventory_movements") as batch_op:
-        batch_op.add_column(sa.Column("idempotency_key", sa.String(150), nullable=True))
-        batch_op.add_column(sa.Column("direction", sa.String(10), nullable=True))
-        # IN | OUT | ADJUST
-        batch_op.add_column(sa.Column("owner", sa.String(20), nullable=True, server_default="NEBULAE"))
-        # NEBULAE | MAU
-        batch_op.add_column(sa.Column("unit_cost_cop", sa.Numeric(14, 2), nullable=True))
+    conn.execute(sa.text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_inv_op_source_doc "
+        "ON inventory_operations (source_document_type, source_document_id)"
+    ))
 
-    op.create_index("ix_inv_mov_idempotency_key", "inventory_movements", ["idempotency_key"], unique=True)
+    # InventoryMovement additions
+    for stmt in [
+        "ALTER TABLE inventory_movements ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(150)",
+        "ALTER TABLE inventory_movements ADD COLUMN IF NOT EXISTS direction VARCHAR(10)",
+        "ALTER TABLE inventory_movements ADD COLUMN IF NOT EXISTS owner VARCHAR(20) DEFAULT 'NEBULAE'",
+        "ALTER TABLE inventory_movements ADD COLUMN IF NOT EXISTS unit_cost_cop NUMERIC(14, 2)",
+    ]:
+        conn.execute(sa.text(stmt))
+
+    conn.execute(sa.text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_inv_mov_idempotency_key "
+        "ON inventory_movements (idempotency_key)"
+    ))
 
 
 def downgrade() -> None:
-    op.drop_index("ix_inv_mov_idempotency_key", table_name="inventory_movements")
-    with op.batch_alter_table("inventory_movements") as batch_op:
-        batch_op.drop_column("unit_cost_cop")
-        batch_op.drop_column("owner")
-        batch_op.drop_column("direction")
-        batch_op.drop_column("idempotency_key")
+    conn = op.get_bind()
+    # Use IF EXISTS for idempotent downgrade
+    conn.execute(sa.text("DROP INDEX IF EXISTS ix_inv_mov_idempotency_key"))
+    for stmt in [
+        "ALTER TABLE inventory_movements DROP COLUMN IF EXISTS unit_cost_cop",
+        "ALTER TABLE inventory_movements DROP COLUMN IF EXISTS owner",
+        "ALTER TABLE inventory_movements DROP COLUMN IF EXISTS direction",
+        "ALTER TABLE inventory_movements DROP COLUMN IF EXISTS idempotency_key",
+    ]:
+        conn.execute(sa.text(stmt))
 
-    op.drop_index("uq_inv_op_source_doc", table_name="inventory_operations")
-    with op.batch_alter_table("inventory_operations") as batch_op:
-        batch_op.drop_column("source_document_numero")
-        batch_op.drop_column("source_document_id")
-        batch_op.drop_column("source_document_type")
+    conn.execute(sa.text(
+        "ALTER TABLE inventory_operations DROP CONSTRAINT IF EXISTS uq_inv_op_source_doc"
+    ))
+    # Also drop the bare index in case it exists as a plain index (from create_all)
+    conn.execute(sa.text("DROP INDEX IF EXISTS uq_inv_op_source_doc"))
+    for stmt in [
+        "ALTER TABLE inventory_operations DROP COLUMN IF EXISTS source_document_numero",
+        "ALTER TABLE inventory_operations DROP COLUMN IF EXISTS source_document_id",
+        "ALTER TABLE inventory_operations DROP COLUMN IF EXISTS source_document_type",
+    ]:
+        conn.execute(sa.text(stmt))
 
-    op.drop_index("ix_gr_idempotency_key", table_name="goods_receipts")
-    with op.batch_alter_table("goods_receipts") as batch_op:
-        batch_op.drop_column("idempotency_request_id")
-        batch_op.drop_column("confirmed_at")
-        batch_op.drop_column("confirmed_by")
-        batch_op.drop_column("receipt_type")
-        batch_op.drop_column("idempotency_key")
+    conn.execute(sa.text("DROP INDEX IF EXISTS ix_gr_idempotency_key"))
+    for stmt in [
+        "ALTER TABLE goods_receipts DROP COLUMN IF EXISTS idempotency_request_id",
+        "ALTER TABLE goods_receipts DROP COLUMN IF EXISTS confirmed_at",
+        "ALTER TABLE goods_receipts DROP COLUMN IF EXISTS confirmed_by",
+        "ALTER TABLE goods_receipts DROP COLUMN IF EXISTS receipt_type",
+        "ALTER TABLE goods_receipts DROP COLUMN IF EXISTS idempotency_key",
+    ]:
+        conn.execute(sa.text(stmt))

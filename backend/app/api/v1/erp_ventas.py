@@ -18,6 +18,7 @@ from app.api.dependencies import (
     ROLE_ADMIN, ROLE_ASESOR, ROLE_COMPRAS, ROLE_FINANZAS, ALL_ERP_ROLES
 )
 from app.models.users import User
+from app.api.v1.schemas_compras import CancelarSolicitudBody
 import datetime
 
 router = APIRouter()
@@ -1036,12 +1037,14 @@ Notas: {sc.notas or 'Sin notas adicionales'}"""
 # ─── CANCELAR SC CON RAZÓN ────────────────────────────────────────────────────
 
 @router.post("/solicitudes/{sc_id}/cancelar")
-def cancelar_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+def cancelar_solicitud(sc_id: int, body: CancelarSolicitudBody,
+        user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
-    """Cancela una SC con razón obligatoria y marca eliminada_at para papelera 30 días."""
-    razon = body.get("razon", "").strip()
-    if not razon:
-        raise HTTPException(400, "La razón de cancelación es obligatoria")
+    """Cancela una SC con razon obligatoria (min 5 chars) y marca eliminada_at para papelera 30 dias.
+    
+    Frontend sends 'razon' field; CancelarSolicitudBody maps it to 'motivo' via alias.
+    """
+    razon = body.motivo  # validated by Pydantic (min 5 chars, max 500)
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     if not sc:
         raise HTTPException(404, "SC no encontrada")
