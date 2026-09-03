@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
@@ -757,7 +757,7 @@ export default function AsistenteOmnicanal() {
         )}
 
         {/* CRM Panel (existing) — only show when storyTab=crm */}
-        {storyTab === 'crm' && (
+        {storyTab === 'crm' && (<>
         <div className="flex flex-col bg-white border-b border-slate-200 relative overflow-hidden" style={{ height: crmHeight }}>
 
           {/* Customer header */}
@@ -973,7 +973,7 @@ export default function AsistenteOmnicanal() {
             )}
           </div>
         </div>
-        )}
+        </>)}
       </div>
 
       {/* MODAL: NUEVA SOLICITUD */}
