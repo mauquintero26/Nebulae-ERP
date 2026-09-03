@@ -193,7 +193,7 @@ export default function TrasladosPage() {
         {/* KPI cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
           <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-blue-300 transition-all"
-            onClick={() => setActiveTab('En Proceso')}>
+            onClick={() => setFilterTab('En Proceso')}>
             <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 mb-4 group-hover:scale-110 transition-transform">
               <ArrowLeftRight size={24} />
             </div>
@@ -203,7 +203,7 @@ export default function TrasladosPage() {
           </div>
 
           <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-emerald-300 transition-all"
-            onClick={() => setActiveTab('Completados')}>
+            onClick={() => setFilterTab('Completados')}>
             <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 mb-4 group-hover:scale-110 transition-transform">
               <CheckCircle2 size={24} />
             </div>
@@ -229,14 +229,30 @@ export default function TrasladosPage() {
           </div>
         </div>
 
+        {/* Main Tabs: Traslados / Análisis */}
+        <div className="flex items-center gap-2">
+          {['Traslados', 'Análisis'].map(tab => (
+            <button key={tab} onClick={() => setActiveTab(tab === 'Análisis' ? 'Analisis' : tab)}
+              className={`px-5 py-2.5 rounded-xl text-sm font-bold transition-all shadow-sm ${
+                activeTab === (tab === 'Análisis' ? 'Analisis' : tab)
+                  ? 'bg-orange-600 text-white'
+                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-orange-50'
+              }`}>
+              {tab}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === 'Traslados' && (
+        <>
         {/* Table */}
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
           <div className="border-b border-slate-200 bg-slate-50/50 p-4 flex justify-between items-center gap-4">
             <div className="flex gap-2">
               {['En Proceso', 'Completados', 'Todos'].map(tab => (
-                <button key={tab} onClick={() => setActiveTab(tab)}
+                <button key={tab} onClick={() => { setFilterTab(tab); setCurrentPage(1); }}
                   className={`px-5 py-2.5 rounded-lg text-sm font-bold transition-all ${
-                    activeTab === tab
+                    filterTab === tab
                       ? tab === 'En Proceso'   ? 'bg-blue-100 text-blue-800 shadow-sm border border-blue-200'
                       : tab === 'Completados' ? 'bg-emerald-100 text-emerald-800 shadow-sm border border-emerald-200'
                       :                          'bg-slate-200 text-slate-800 shadow-sm'
@@ -282,7 +298,7 @@ export default function TrasladosPage() {
                     <p className="text-slate-500 font-medium">Sin traslados internos registrados</p>
                     <p className="text-slate-400 text-sm mt-1">Crea un traslado para mover mercancia entre bodegas</p>
                   </td></tr>
-                ) : filtered.map((t: any) => (
+                ) : pagedRows.map((t: any) => (
                   <tr key={t.id} onClick={() => setSelected(t)}
                     className={`hover:bg-slate-50/80 transition-colors group cursor-pointer ${selected?.id === t.id ? 'bg-orange-50/30' : ''}`}>
                     <td className="px-6 py-4 font-black text-orange-700">TRL-{String(t.id).padStart(4, '0')}</td>
@@ -304,7 +320,74 @@ export default function TrasladosPage() {
               </tbody>
             </table>
           </div>
+
+          {/* PAGINATION */}
+          {totalItems > 0 && (
+            <div className="border-t border-slate-100 px-6 py-3 flex items-center justify-between bg-slate-50/50">
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-bold text-slate-400">{totalItems} registros</span>
+                <select value={pageSize} onChange={e=>{setPageSize(Number(e.target.value));setCurrentPage(1);}} className="text-xs border border-slate-200 rounded-lg px-2 py-1 font-bold text-slate-600 outline-none">
+                  <option value={25}>25 por página</option>
+                  <option value={50}>50 por página</option>
+                </select>
+              </div>
+              {Math.ceil(totalItems/pageSize) > 1 && (
+                <div className="flex items-center gap-1">
+                  <button disabled={currentPage===1} onClick={()=>setCurrentPage(1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">«</button>
+                  <button disabled={currentPage===1} onClick={()=>setCurrentPage(p=>p-1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">‹</button>
+                  {Array.from({length:Math.min(5,Math.ceil(totalItems/pageSize))},(_,i)=>{
+                    const tp=Math.ceil(totalItems/pageSize); let page=i+1;
+                    if(tp>5){const half=2;const start=Math.max(1,Math.min(currentPage-half,tp-4));page=start+i;}
+                    return <button key={page} onClick={()=>setCurrentPage(page)} className={`px-2.5 py-1 text-xs font-bold border rounded-lg ${currentPage===page?'bg-orange-600 text-white border-orange-600':'border-slate-200 hover:bg-slate-100'}`}>{page}</button>;
+                  })}
+                  <button disabled={currentPage===Math.ceil(totalItems/pageSize)} onClick={()=>setCurrentPage(p=>p+1)} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">›</button>
+                  <button disabled={currentPage===Math.ceil(totalItems/pageSize)} onClick={()=>setCurrentPage(Math.ceil(totalItems/pageSize))} className="px-2 py-1 text-xs font-bold border border-slate-200 rounded-lg disabled:opacity-40 hover:bg-slate-100">»</button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
+        </>
+        )}
+
+        {activeTab === 'Analisis' && (
+          <div className="space-y-4">
+            <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-5 border border-blue-100">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="bg-blue-600 rounded-xl p-2 text-white font-black text-sm">AI</div>
+                <div>
+                  <p className="font-extrabold text-blue-900">Análisis de Traslados Internos</p>
+                  <p className="text-xs text-blue-500">Nebulae Analytics</p>
+                </div>
+                <button onClick={handleAIAnalysis} disabled={aiLoading} className="ml-auto bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-bold text-sm disabled:opacity-50 flex items-center gap-2">
+                  {aiLoading ? <RefreshCw size={14} className="animate-spin"/> : null} Generar Análisis
+                </button>
+              </div>
+              {aiAnalysis && (
+                <pre className="text-sm text-slate-700 whitespace-pre-wrap bg-white/70 rounded-xl p-4 border border-blue-100 leading-relaxed">{aiAnalysis}</pre>
+              )}
+              {!aiAnalysis && !aiLoading && (
+                <p className="text-sm text-blue-700 italic text-center py-4">Haz clic en "Generar Análisis" para obtener insights sobre los datos actuales.</p>
+              )}
+            </div>
+            {/* Chat */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-4">
+              <p className="font-bold text-slate-700 text-sm mb-3">Consultar al Asistente</p>
+              <div className="space-y-2 max-h-40 overflow-y-auto mb-3">
+                {aiChat.map((m:any,i:number)=>(
+                  <div key={i} className={`flex ${m.role==='user'?'justify-end':''}`}>
+                    <div className={`rounded-xl px-3 py-2 text-xs max-w-[80%] ${m.role==='user'?'bg-blue-600 text-white':'bg-slate-100 text-slate-700'}`}>{m.text}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <input value={aiInput} onChange={e=>setAiInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&sendAIChat()} placeholder="Pregunta sobre los datos..." className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-blue-200"/>
+                <button onClick={sendAIChat} disabled={!aiInput.trim()} className="bg-blue-600 text-white px-3 py-2 rounded-xl text-xs font-bold disabled:opacity-50">Enviar</button>
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
 
       {/* Drawer */}
