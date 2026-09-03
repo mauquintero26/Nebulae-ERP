@@ -120,6 +120,9 @@ class SaleOrder(Base):
     pec_numero            = Column(String(20), nullable=True)
     pxp_id                = Column(Integer, nullable=True)
     pxp_numero            = Column(String(20), nullable=True)
+    canal_venta           = Column(String(30), nullable=True, default="CRM")  # CRM | WEB | PRESENCIAL
+    pweb_numero           = Column(String(25), nullable=True, index=True)      # PWEB-YYYY####
+    canal_metadata        = Column(JSON, nullable=True)                        # IP, user_agent, etc.
     created_at            = Column(DateTime, default=_now)
     updated_at            = Column(DateTime, default=_now, onupdate=_now)
     created_by            = Column(String(150), nullable=True)
@@ -127,6 +130,7 @@ class SaleOrder(Base):
     customer         = relationship("Customer", foreign_keys=[customer_id])
     quotation        = relationship("SalesQuotation", back_populates="sale_orders")
     payment_pendings = relationship("PaymentPending", back_populates="sale_order")
+
 
 
 class PaymentPending(Base):
