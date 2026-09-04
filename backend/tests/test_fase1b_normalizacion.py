@@ -113,13 +113,14 @@ class TestNormalizacionCaminos:
         )
         assert r.status_code == 201
         eninv_id = r.json()["data"]["id"]
+        grl_id = r.json()["data"]["productos"][0]["grl_id"]
 
-        # PATCH con nuevas cantidades en BORRADOR
+        # PATCH con nuevas cantidades en BORRADOR (incluye grl_id obligatorio para NATIVE)
         r2 = app_client.patch(
             f"/api/v1/compras/recepciones/{eninv_id}",
             headers=_auth(admin_token),
             json={"productos": [
-                {"sku_id": sku_id, "qty_esperada": 5, "qty_recibida": 3,
+                {"grl_id": grl_id, "sku_id": sku_id, "qty_esperada": 5, "qty_recibida": 3,
                  "qty_rechazada": 2, "nombre": "Prod"},
             ]},
         )
