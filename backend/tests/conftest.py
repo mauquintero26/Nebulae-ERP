@@ -2,8 +2,8 @@
 tests/conftest.py  --  Fase 1A v4
 
 TEST ISOLATION: Separate erp_test database (NOT schema redirection).
-Production DB: erpdb (postgresql://nebulae:...@[REDACTED_HOST]:[REDACTED_PORT]/erpdb?sslmode=disable)
-Test DB:       erp_test (same server, different database, no production data)
+Production DB: erpdb (set via DATABASE_URL environment variable)
+Test DB:       erp_test (set via TEST_DATABASE_URL environment variable)
 
 Safety checks abort if TEST_DATABASE_URL is not set, matches DATABASE_URL,
 or database name does not contain test/staging/dev/qa.
@@ -47,7 +47,7 @@ if not any(kw in _db_name for kw in ("test", "staging", "dev", "qa")):
         returncode=1,
     )
 
-PROD_VPS = "[REDACTED_HOST]"
+PROD_VPS = os.environ.get("PROD_VPS_HOST", "")  # Set PROD_VPS_HOST env var; never hardcode IP
 PROD_DBNAME = PROD_URL.split("?")[0].rstrip("/").split("/")[-1].lower()
 if PROD_VPS in TEST_URL and _db_name == PROD_DBNAME:
     pytest.exit(

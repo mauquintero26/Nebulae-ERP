@@ -2,9 +2,10 @@
 Run to create all new ERP tables in the remote PostgreSQL DB.
 Usage: python migrate_erp_v2.py
 """
+import os
 import psycopg2
 
-DB_URL = "postgresql://nebulae:[REDACTED_PASSWORD]@[REDACTED_HOST]:[REDACTED_PORT]/erpdb"
+DB_URL = os.environ["DATABASE_URL"]  # Set via environment variable, never hardcode
 
 SQL = """
 -- Suppliers

@@ -206,7 +206,7 @@ TEST 11: test_solo_grl_genera_movimientos_no_json_legacy
 SUITE COMPLETA (tests/ en erp_test):
 --------------------------------------
 Ejecutado: python -m pytest tests/ -v --no-header -W ignore::DeprecationWarning
-DB: postgresql://nebulae:***@[REDACTED_HOST]:[REDACTED_PORT]/erp_test?sslmode=disable
+DB: postgresql://[REDACTED]:[REDACTED]@[HOST]:[PORT]/[DB]
 Duración: 427.80s (7m 07s)
 
 test_auth_roles.py                    8/8   PASSED

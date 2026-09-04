@@ -1,6 +1,6 @@
 # Plan de Despliegue VPS (Producción)
 **Dominio:** api.nebulaekids.com
-**VPS IP:** [REDACTED_HOST]
+**VPS IP:** $VPS_HOST
 
 ## Paso 1: Configuración de DNS (Acción del Usuario)
 Antes de tocar el servidor, necesitamos que el mundo sepa a dónde apuntar.
@@ -8,11 +8,11 @@ Antes de tocar el servidor, necesitamos que el mundo sepa a dónde apuntar.
 2. Ve a la zona de gestión de **DNS**.
 3. Crea un nuevo **Registro A (A Record)**:
    - **Nombre/Host:** `api`
-   - **Apunta a (IP):** `[REDACTED_HOST]`
+   - **Apunta a (IP):** `$VPS_HOST`
    - **TTL:** Automático o el más bajo posible.
 
 ## Paso 2: Preparación del VPS (Instalación de Dependencias)
-Una vez dentro del servidor por SSH (`ssh root@[REDACTED_HOST]`), ejecutaremos:
+Una vez dentro del servidor por SSH (`ssh root@$VPS_HOST`), ejecutaremos:
 
 ```bash
 # Actualizar el sistema

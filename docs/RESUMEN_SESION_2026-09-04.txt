@@ -324,8 +324,8 @@ GoodsReceiptLine.__tablename__ = "goods_receipt_lines"
 purchase_orders_full = tablename real de PEC
 
 Configuración tests:
-  $env:TEST_DATABASE_URL = "postgresql://nebulae:[REDACTED_PASSWORD]@[REDACTED_HOST]:[REDACTED_PORT]/erp_test?sslmode=disable"
-  $env:DATABASE_URL = "postgresql://nebulae:[REDACTED_PASSWORD]@[REDACTED_HOST]:[REDACTED_PORT]/erpdb?sslmode=disable"
+  $env:TEST_DATABASE_URL = "postgresql://[REDACTED]:[REDACTED]@[HOST]:[PORT]/[DB]"
+  $env:DATABASE_URL = "postgresql://[REDACTED]:[REDACTED]@[HOST]:[PORT]/[DB]"
   $env:PYTHONIOENCODING = "utf-8"
   cd backend
   python -m pytest tests/ -v --no-header -W ignore::DeprecationWarning --tb=short

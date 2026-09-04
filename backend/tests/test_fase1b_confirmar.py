@@ -507,9 +507,15 @@ class TestConfirmarUsaGoodsReceiptLines:
 
     # ─── Bloqueo 1: distincion semantica quantity_received ───────────────────
 
-    def test_qty_received_cero_explicito_sin_sku_valido_422(
+    def test_qty_received_cero_explicito_no_genera_stock(
             self, app_client, admin_token):
-        """quantity_received=0 explicito para FISICA -> 422 (no hay SKU con qty>0)."""
+        """quantity_received=0 explicito para FISICA -> 200, stock=0, qty_faltante=5.
+
+        Bloqueo 2: cero explícito es una recepción física válida (ninguna unidad
+        llegó al inventario disponible). NO debe ser 422 — la recepción puede
+        completarse con todo faltante. El stock_actualizado=False porque no
+        hubo ingresos reales.
+        """
         db = TestSessionLocal()
         try:
             sup_id = _create_supplier_db(db)
@@ -523,18 +529,35 @@ class TestConfirmarUsaGoodsReceiptLines:
         eninv = _create_eninv_api(app_client, admin_token, pec["id"], wh_id)
         eninv_id = eninv["id"]
 
-        # Registrar cero explicito
+        # Registrar cero explícito (ninguna unidad llegó, ninguna rechazada)
         _registrar_grl(app_client, admin_token, eninv_id, 0, quantity_received=0)
 
         status, body, _ = _confirmar(app_client, admin_token, eninv_id)
-        # qty=0 para FISICA -> sku_increments vacio -> 422 "sin lineas validas"
-        assert status == 422, (
-            f"FISICA con qty_received=0 no tiene SKU valido para stock -> 422. Got {status}: {body}"
+        # Bloqueo 2: qty=0 explícito es válido -> 200
+        assert status == 200, (
+            f"FISICA con qty_received=0 explicito debe confirmar con 200. Got {status}: {body}"
         )
+
+        with TestSessionLocal() as db2:
+            inv = db2.execute(text(
+                "SELECT COALESCE(quantity, 0) FROM inventory_levels "
+                "WHERE sku_id=:s AND warehouse_id=:w"
+            ), {"s": sku_id, "w": wh_id}).scalar() or 0
+            gr = db2.execute(text(
+                "SELECT estado, stock_actualizado FROM goods_receipts WHERE id=:gid"
+            ), {"gid": eninv_id}).fetchone()
+
+        assert float(inv) == 0, f"Stock debe ser 0 (nada llegó). Got {inv}"
+        assert gr[0] == "COMPLETADA", f"Estado debe ser COMPLETADA. Got {gr[0]}"
+        assert gr[1] == False, f"stock_actualizado=False (sin ingresos). Got {gr[1]}"
 
     def test_todas_unidades_rechazadas_grl_correcto(
             self, app_client, admin_token):
-        """qty_received=0, qty_rejected=5 -> GRL correcto, 422 en confirmar FISICA."""
+        """qty_received=0, qty_rejected=5 -> GRL correcto, 200 en confirmar FISICA.
+
+        Bloqueo 2: todo rechazado es una recepción física válida. Debe confirmar
+        con 200, sin ingresos de stock, con trazabilidad de las unidades rechazadas.
+        """
         db = TestSessionLocal()
         try:
             sup_id = _create_supplier_db(db)
@@ -561,8 +584,21 @@ class TestConfirmarUsaGoodsReceiptLines:
         assert int(row[0]) == 0
         assert int(row[1]) == 5
 
-        status, _, _ = _confirmar(app_client, admin_token, eninv_id)
-        assert status == 422, f"Todos rechazados FISICA -> 422. Got {status}"
+        status, body, _ = _confirmar(app_client, admin_token, eninv_id)
+        # Bloqueo 2: todo rechazado es válido -> 200, stock=0
+        assert status == 200, f"Todos rechazados FISICA -> 200 (Bloqueo 2). Got {status}: {body}"
+
+        with TestSessionLocal() as db2:
+            inv = db2.execute(text(
+                "SELECT COALESCE(quantity, 0) FROM inventory_levels "
+                "WHERE sku_id=:s AND warehouse_id=:w"
+            ), {"s": sku_id, "w": wh_id}).scalar() or 0
+            gr = db2.execute(text(
+                "SELECT stock_actualizado FROM goods_receipts WHERE id=:gid"
+            ), {"gid": eninv_id}).scalar()
+
+        assert float(inv) == 0, f"Stock debe ser 0 (todo rechazado). Got {inv}"
+        assert gr == False, f"stock_actualizado=False (no hubo ingresos). Got {gr}"
 
     def test_todas_en_cuarentena_grl_correcto(
             self, app_client, admin_token):

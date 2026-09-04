@@ -59,3 +59,9 @@ nebulae_local.db
 # SO
 .DS_Store
 Thumbs.db
+
+# Added by security cleanup
+*.env
+backend/test_results*.txt
+check_ambiguos.py
+*.pyc

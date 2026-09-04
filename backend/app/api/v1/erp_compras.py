@@ -770,13 +770,32 @@ def create_recepcion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
     db.flush()  # obtener gr.id sin commit
 
     # Crear GoodsReceiptLine en la misma TX (Bloqueo 2: normalizar POST /recepciones)
+    # Bloqueo 3: validar _po_line_id si el cliente lo proporciona
+    pec_id_gr = body.get("pec_id")
     productos_gr = body.get("productos", [])
     for prod in productos_gr:
-        sku_id_raw = prod.get("sku_id")
-        qty_esp    = int(prod.get("qty_esperada", prod.get("qty", 0)))
+        sku_id_raw   = prod.get("sku_id")
+        qty_esp      = int(prod.get("qty_esperada", prod.get("qty", 0)))
+        po_line_id_v = prod.get("_po_line_id")
+
+        # Bloqueo 3: validar que _po_line_id pertenece a la PEC de esta recepción
+        if po_line_id_v is not None:
+            from sqlalchemy import text as _text3
+            pol_pec = db.execute(_text3(
+                "SELECT pec_id FROM purchase_order_lines WHERE id = :pid"
+            ), {"pid": po_line_id_v}).scalar()
+            if pol_pec is None:
+                raise HTTPException(422, f"po_line_id={po_line_id_v} no existe.")
+            if pec_id_gr and pol_pec != pec_id_gr:
+                raise HTTPException(
+                    422,
+                    f"po_line_id={po_line_id_v} pertenece a la PEC {pol_pec}, "
+                    f"no a la PEC {pec_id_gr} de esta recepción."
+                )
+
         db.add(GoodsReceiptLine(
             gr_id               = gr.id,
-            po_line_id          = prod.get("_po_line_id"),  # None si no viene de PEC
+            po_line_id          = po_line_id_v,
             sku_id              = sku_id_raw,
             description         = prod.get("nombre", prod.get("name", prod.get("product_name", ""))),
             quantity_expected   = qty_esp,
@@ -846,36 +865,123 @@ def update_recepcion(eninv_id: int, body: dict, user: User = Depends(require_rol
         ).scalars().all()
 
         if gr_lines:
-            # Actualizar GRL existentes por indice (preservar IDs)
-            for idx, grl in enumerate(gr_lines):
-                if idx < len(nuevos_prods):
-                    np = nuevos_prods[idx]
+            # Bloqueo 3: Actualizar GRL por grl_id (no por indice posicional).
+            # Cada item del body debe traer grl_id explicito.
+            # Tambien se acepta el formato antiguo (sin grl_id) por compatibilidad,
+            # en cuyo caso se actualizan por orden si hay correspondencia 1:1.
+            gr_lines_map = {grl.id: grl for grl in gr_lines}
+
+            has_grl_ids = any(np.get("grl_id") for np in nuevos_prods)
+            if has_grl_ids:
+                # ─── Ruta segura: actualizacion por grl_id ──────────────────
+                for np in nuevos_prods:
+                    grl_id_req = np.get("grl_id")
+                    if grl_id_req is None:
+                        raise HTTPException(
+                            422,
+                            "Todos los items deben incluir 'grl_id' cuando se usan IDs. "
+                            f"Item sin grl_id: {np}"
+                        )
+                    grl = gr_lines_map.get(int(grl_id_req))
+                    if grl is None:
+                        raise HTTPException(
+                            422,
+                            f"grl_id={grl_id_req} no pertenece a la recepcion {eninv_id}. "
+                            "No se pueden actualizar lineas de otras recepciones."
+                        )
+                    # Validar po_line_id si viene
+                    if "po_line_id" in np and np["po_line_id"] is not None:
+                        if int(np["po_line_id"]) != (grl.po_line_id or -1):
+                            raise HTTPException(
+                                422,
+                                f"po_line_id={np['po_line_id']} no coincide con "
+                                f"el de la GRL {grl_id_req} (po_line_id={grl.po_line_id}). "
+                                "No se puede reasignar una linea a otra PurchaseOrderLine."
+                            )
+                    # Validar sku_id si viene
+                    if "sku_id" in np and np["sku_id"] is not None:
+                        if int(np["sku_id"]) != (grl.sku_id or -1):
+                            raise HTTPException(
+                                422,
+                                f"sku_id={np['sku_id']} no coincide con el de "
+                                f"la GRL {grl_id_req} (sku_id={grl.sku_id}). "
+                                "No se puede cambiar el SKU de una linea existente."
+                            )
                     qty_recv = np.get("qty_recibida", np.get("quantity_received"))
                     qty_rej  = np.get("qty_rechazada", np.get("quantity_rejected", 0))
                     qty_quar = np.get("qty_cuarentena", np.get("quantity_quarantine", 0))
-                    # None se acepta (aun no registrado); 0 es cero explicito
                     if qty_recv is not None:
                         grl.quantity_received   = int(qty_recv)
                     grl.quantity_rejected   = int(qty_rej or 0)
                     grl.quantity_quarantine = int(qty_quar or 0)
-            # Regenerar snapshot JSON desde GRL (fuente de verdad -> snapshot)
+            else:
+                # ─── Ruta legacy: actualizacion por indice (1:1 posicional) ─
+                for idx, grl in enumerate(gr_lines):
+                    if idx < len(nuevos_prods):
+                        np = nuevos_prods[idx]
+                        qty_recv = np.get("qty_recibida", np.get("quantity_received"))
+                        qty_rej  = np.get("qty_rechazada", np.get("quantity_rejected", 0))
+                        qty_quar = np.get("qty_cuarentena", np.get("quantity_quarantine", 0))
+                        if qty_recv is not None:
+                            grl.quantity_received   = int(qty_recv)
+                        grl.quantity_rejected   = int(qty_rej or 0)
+                        grl.quantity_quarantine = int(qty_quar or 0)
+
+            # Regenerar snapshot JSON desde GRL (GRL es fuente de verdad)
             g.productos = [
                 {
-                    "sku_id"       : grl.sku_id,
-                    "nombre"       : grl.description or "",
-                    "qty_esperada" : int(grl.quantity_expected or 0),
-                    "qty_recibida" : int(grl.quantity_received) if grl.quantity_received is not None else None,
-                    "qty_rechazada": int(grl.quantity_rejected or 0),
+                    "sku_id"        : grl.sku_id,
+                    "nombre"        : grl.description or "",
+                    "qty_esperada"  : int(grl.quantity_expected or 0),
+                    "qty_recibida"  : int(grl.quantity_received) if grl.quantity_received is not None else None,
+                    "qty_rechazada" : int(grl.quantity_rejected or 0),
                     "qty_cuarentena": int(grl.quantity_quarantine or 0),
-                    "estado"       : "PENDIENTE" if grl.quantity_received is None else "PARCIAL",
-                    "po_line_id"   : grl.po_line_id,
-                    "grl_id"       : grl.id,
+                    "estado"        : "PENDIENTE" if grl.quantity_received is None else "PARCIAL",
+                    "po_line_id"    : grl.po_line_id,
+                    "grl_id"        : grl.id,
                 }
                 for grl in gr_lines
             ]
         else:
-            # No hay GRL: recepcion legacy. Actualizar JSON directamente por ahora.
-            g.productos = nuevos_prods
+            # No hay GRL: recepcion legacy.
+            # Bloqueo 3: Primero normalizar (crear GRL), luego actualizar por ID.
+            for prod in nuevos_prods:
+                sku_id_raw = prod.get("sku_id")
+                qty_esp    = int(prod.get("qty_esperada", prod.get("qty", 0)))
+                qty_recv_v = prod.get("qty_recibida", prod.get("quantity_received"))
+                db.add(GoodsReceiptLine(
+                    gr_id               = eninv_id,
+                    po_line_id          = None,
+                    sku_id              = sku_id_raw,
+                    description         = prod.get("nombre", prod.get("name", "")),
+                    quantity_expected   = qty_esp,
+                    quantity_received   = int(qty_recv_v) if qty_recv_v is not None else None,
+                    quantity_rejected   = int(prod.get("qty_rechazada", prod.get("quantity_rejected", 0)) or 0),
+                    quantity_quarantine = int(prod.get("qty_cuarentena", prod.get("quantity_quarantine", 0)) or 0),
+                    receipt_type        = "FISICA",
+                    source              = "LEGACY",
+                ))
+            db.flush()
+            # Regenerar JSON desde las nuevas GRL
+            new_grls = db.execute(
+                select(GoodsReceiptLine)
+                .where(GoodsReceiptLine.gr_id == eninv_id)
+                .order_by(GoodsReceiptLine.id)
+            ).scalars().all()
+            g.productos = [
+                {
+                    "sku_id"        : grl.sku_id,
+                    "nombre"        : grl.description or "",
+                    "qty_esperada"  : int(grl.quantity_expected or 0),
+                    "qty_recibida"  : int(grl.quantity_received) if grl.quantity_received is not None else None,
+                    "qty_rechazada" : int(grl.quantity_rejected or 0),
+                    "qty_cuarentena": int(grl.quantity_quarantine or 0),
+                    "estado"        : "PENDIENTE" if grl.quantity_received is None else "PARCIAL",
+                    "po_line_id"    : grl.po_line_id,
+                    "grl_id"        : grl.id,
+                }
+                for grl in new_grls
+            ]
 
     # Campos generales permitidos (excepto productos, ya consumido)
     allowed_non_prod = ["estado","warehouse_id","warehouse_name","carrier",
@@ -1224,15 +1330,18 @@ def confirmar_recepcion(
                 .order_by(GoodsReceiptLine.id)
             ).scalars().all()
 
-        # ─── VALIDAR Y CALCULAR DESDE LINEAS NORMALIZADAS (Bloqueo 1) ────────────
-        # quantity_received=NULL significa cantidad aun no registrada -> 422 en FISICA
-        # quantity_received=0 es recepcion explicita en cero (valida)
-        # quantity_received>0 es la cantidad registrada por el operador
-        sku_increments: dict = {}  # {sku_id: qty_total} — calculado desde GRL
+        # ─── VALIDAR Y CALCULAR DESDE LINEAS NORMALIZADAS (Bloqueos 1 y 2) ──────
+        # Bloqueo 1: NULL = pendiente de registro -> 422 en FISICA
+        # Bloqueo 2: qty=0 es valido (todo rechazado/cuarentena/faltante)
+        #   La condicion para confirmar es: todas las lineas tienen resultado EXPLICITO
+        #   (no necesariamente qty_received > 0)
+        sku_increments: dict = {}  # {sku_id: qty_total} — solo unidades disponibles
 
         for grl in gr_lines:
             sku_id       = grl.sku_id
             qty_expected = int(grl.quantity_expected or 0)
+            qty_rejected  = int(grl.quantity_rejected or 0)
+            qty_quarantine = int(grl.quantity_quarantine or 0)
 
             # Bloqueo 1: NULL = pendiente de registro -> rechazar en confirmacion FISICA
             if grl.quantity_received is None:
@@ -1248,73 +1357,94 @@ def confirmar_recepcion(
                         "para registrar la cantidad antes de confirmar. "
                         "Registra 0 si no llego ninguna unidad."
                     )
-                # Para LOGISTICA: cantidad NULL se trata como cero (no hay stock)
+                # Para LOGISTICA: cantidad NULL se trata como cero (sin impacto en stock)
                 qty_received = 0
             else:
                 qty_received = int(grl.quantity_received)
 
             # Validar cantidades negativas
-            if qty_received < 0:
+            if qty_received < 0 or qty_rejected < 0 or qty_quarantine < 0:
                 _mark_failed_external(
                     client_key, execution_token,
-                    f"quantity_received negativa en GRL {grl.id} SKU {sku_id}", now
+                    f"Cantidades negativas en GRL {grl.id} SKU {sku_id}", now
                 )
                 raise HTTPException(
                     422,
-                    f"quantity_received no puede ser negativa (GRL {grl.id}, SKU {sku_id}: {qty_received})"
+                    f"Las cantidades no pueden ser negativas "
+                    f"(GRL {grl.id}, SKU {sku_id}: recv={qty_received}, "
+                    f"rejected={qty_rejected}, quarantine={qty_quarantine})"
                 )
 
-            # Validar excedente
-            if qty_received > qty_expected and not allow_excess:
+            # Bloqueo 2: validar suma total <= quantity_expected
+            qty_suma = qty_received + qty_rejected + qty_quarantine
+            if qty_suma > qty_expected and not allow_excess:
                 _mark_failed_external(
                     client_key, execution_token,
-                    f"Excedente no autorizado en GRL {grl.id} SKU {sku_id}", now
+                    f"Suma total excede expected en GRL {grl.id} SKU {sku_id}", now
                 )
                 raise HTTPException(
                     422,
-                    f"quantity_received ({qty_received}) > quantity_expected ({qty_expected}) "
-                    f"para SKU {sku_id}. Usa allow_excess=true para registrar excedentes."
+                    f"La suma (recibida={qty_received} + rechazada={qty_rejected} + "
+                    f"cuarentena={qty_quarantine} = {qty_suma}) excede "
+                    f"quantity_expected={qty_expected} para SKU {sku_id}. "
+                    f"Usa allow_excess=true para registrar excedentes."
                 )
 
-            # Actualizar la linea normalizada con tipo de recepcion y qty definitiva
-            grl.quantity_received = qty_received
-            grl.receipt_type      = receipt_type
+            # Registrar faltante (qty_expected - suma_total)
+            qty_faltante = max(0, qty_expected - qty_suma)
 
+            # Actualizar la linea normalizada
+            grl.quantity_received  = qty_received
+            grl.quantity_rejected  = qty_rejected
+            grl.quantity_quarantine = qty_quarantine
+            grl.receipt_type       = receipt_type
+
+            # Solo sumar al inventario disponible si es FISICA y qty_received > 0
             if receipt_type == "FISICA" and sku_id and qty_received > 0:
                 sku_increments[sku_id] = sku_increments.get(sku_id, 0) + qty_received
 
-        # Para FISICA: debe haber al menos un SKU con qty > 0
-        if receipt_type == "FISICA" and not sku_increments:
-            _mark_failed_external(
-                client_key, execution_token,
-                "Sin lineas normalizadas con sku_id y quantity_received > 0", now
-            )
-            raise HTTPException(
-                422,
-                "Sin lineas normalizadas validas para confirmar recepcion FISICA. "
-                "Cada GoodsReceiptLine necesita sku_id y quantity_received > 0."
-            )
+        # Bloqueo 2: NO se exige sku_increments no vacio para FISICA.
+        # Una recepcion donde todo fue rechazado/cuarentena/faltante es valida.
+        # Solo se valida que haya al menos una linea con resultado explicito (ya
+        # garantizado por el check NULL anterior).
 
-        # ─── REGENERAR SNAPSHOT JSON DESDE LINEAS NORMALIZADAS ────────────────
-        # El campo g.productos se actualiza como snapshot de compatibilidad
-        # con el frontend. La fuente de verdad son las GoodsReceiptLine.
+        # ─── REGENERAR SNAPSHOT JSON DESDE LINEAS NORMALIZADAS (Bloqueo 2) ────
+        # Incluye qty_faltante para trazabilidad completa.
         updated_products = []
         for grl in gr_lines:
-            estado_prod = (
-                "RECIBIDO" if receipt_type == "FISICA" and grl.quantity_received > 0
-                else "EN_TRANSITO_INTERMEDIO" if receipt_type == "LOGISTICA"
-                else "PENDIENTE"
-            )
+            _qty_recv = int(grl.quantity_received or 0)
+            _qty_rej  = int(grl.quantity_rejected or 0)
+            _qty_quar = int(grl.quantity_quarantine or 0)
+            _qty_esp  = int(grl.quantity_expected or 0)
+            _qty_falt = max(0, _qty_esp - (_qty_recv + _qty_rej + _qty_quar))
+
+            if receipt_type == "FISICA":
+                if _qty_recv > 0:
+                    estado_prod = "RECIBIDO"
+                elif _qty_rej > 0 and _qty_recv == 0:
+                    estado_prod = "RECHAZADO"
+                elif _qty_quar > 0 and _qty_recv == 0:
+                    estado_prod = "EN_CUARENTENA"
+                elif _qty_falt > 0:
+                    estado_prod = "FALTANTE"
+                else:
+                    estado_prod = "SIN_STOCK"
+            elif receipt_type == "LOGISTICA":
+                estado_prod = "EN_TRANSITO_INTERMEDIO"
+            else:
+                estado_prod = "PENDIENTE"
+
             updated_products.append({
-                "sku_id"       : grl.sku_id,
-                "nombre"       : grl.description or "",
-                "qty_esperada" : int(grl.quantity_expected or 0),
-                "qty_recibida" : int(grl.quantity_received or 0),
-                "qty_rechazada": int(grl.quantity_rejected or 0),
-                "qty_cuarentena": int(grl.quantity_quarantine or 0),
-                "estado"       : estado_prod,
-                "po_line_id"   : grl.po_line_id,
-                "grl_id"       : grl.id,
+                "sku_id"        : grl.sku_id,
+                "nombre"        : grl.description or "",
+                "qty_esperada"  : _qty_esp,
+                "qty_recibida"  : _qty_recv,
+                "qty_rechazada" : _qty_rej,
+                "qty_cuarentena": _qty_quar,
+                "qty_faltante"  : _qty_falt,
+                "estado"        : estado_prod,
+                "po_line_id"    : grl.po_line_id,
+                "grl_id"        : grl.id,
             })
 
         # ─── ACTUALIZAR INVENTARIO (solo FISICA) ──────────────────────────────
@@ -1372,7 +1502,9 @@ def confirmar_recepcion(
         g.idempotency_key = client_key
 
         if receipt_type == "FISICA":
-            g.stock_actualizado = True
+            # Bloqueo 2: stock_actualizado=True solo si se ingresó stock disponible.
+            # Recepciones donde todo fue rechazado/cuarentena/faltante -> stock_actualizado=False.
+            g.stock_actualizado = bool(sku_increments)
             g.estado            = "COMPLETADA"
         else:
             g.stock_actualizado = False
