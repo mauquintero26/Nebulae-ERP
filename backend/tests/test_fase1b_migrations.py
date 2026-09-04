@@ -56,6 +56,13 @@ def _table_exists(conn, table_name):
 
 class TestFase1bMigrations:
 
+    @pytest.fixture(autouse=True)
+    def restore_head(self, setup_test_db):
+        """Garantiza que la DB vuelve a HEAD después de cada test que baje versión."""
+        yield
+        # Siempre restaurar a head al final, por si el test dejó la DB en versión anterior
+        _run(["upgrade", "head"])
+
     def test_all_fa1b_tables_exist_after_upgrade(self, setup_test_db):
         """Después del upgrade head, las 10 tablas Fase 1B existen."""
         with test_engine.connect() as conn:
@@ -72,6 +79,7 @@ class TestFase1bMigrations:
             for table in FA1B_TABLES:
                 exists = _table_exists(conn, table)
                 assert not exists, f"Tabla '{table}' debe desaparecer después del downgrade"
+        # restore_head fixture hará upgrade al head al teardown
 
     def test_upgrade_roundtrip(self, setup_test_db):
         """Upgrade después de downgrade: las tablas vuelven a existir."""
