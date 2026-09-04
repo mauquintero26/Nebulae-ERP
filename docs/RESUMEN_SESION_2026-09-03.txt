@@ -1,93 +1,285 @@
-RESUMEN DE SESION — NEBULAE ERP-CRM
+RESUMEN DE SESIÓN — NEBULAE ERP-CRM
 Fecha: 2026-09-03 / 2026-09-04
-Commit final: f617d78 (origin/main)
-Suite: 67/67 tests PASSED
+Hora cierre: 20:45 CDT
+Rama: main (origin/main)
+Commits de sesión: f617d78 → 000b9e9
+Suite final: 67/67 PASSED · 0 failed · 0 skipped
 ================================================================================
 
-FASE 1A — COMPLETADA (commit 66608c6)
---------------------------------------
+CONTEXTO
+--------
+El usuario detectó que el commit 5e5e4f2 seguía siendo una implementación
+aditiva: confirmar_recepcion insertaba GoodsReceiptLine pero continuaba
+leyendo, validando y calculando inventario desde goods_receipts.productos.
+GoodsReceiptLine no era la fuente de verdad.
+
+Se exigió corrección arquitectural completa antes de autorizar la Fase 1B.
+
+================================================================================
+FASE 1A — COMPLETADA SESIÓN ANTERIOR (commit 66608c6)
+================================================================================
 - 27/27 tests verdes
-- Recepciones FISICA / LOGISTICA, idempotencia, concurrencia, migraciones
+- Recepciones FISICA/LOGISTICA, idempotencia con clave, concurrencia,
+  migraciones Alembic
 
-FASE 1B ORIGINAL — COMPLETADA (commit 5e5e4f2)
------------------------------------------------
-- 10 tablas normalizadas: purchase_order_lines, goods_receipt_lines,
-  goods_receipt_line_allocations, sale_order_lines_erp,
-  sales_quotation_lines, customer_request_lines,
-  inventory_reservations, inventory_owner_balances,
-  procurement_allocations, payment_transactions
-- 4 migraciones Alembic: fa1b_001 -> fa1b_004
-- schemas_fase1b.py, backfill_fase1b.py
-- Suite combinada: 56/56 passed
+================================================================================
+FASE 1B TABLAS — COMPLETADA SESIÓN ANTERIOR (commits hasta 5e5e4f2)
+================================================================================
+- 10 tablas normalizadas creadas:
+    purchase_order_lines         (líneas de PEC)
+    goods_receipt_lines          (líneas de ENINV — fuente de verdad)
+    goods_receipt_line_allocations
+    sale_order_lines_erp
+    sales_quotation_lines
+    customer_request_lines
+    inventory_reservations
+    inventory_owner_balances
+    procurement_allocations
+    payment_transactions
+- 4 migraciones Alembic: fa1b_001 → fa1b_002 → fa1b_003 → fa1b_004
+- schemas_fase1b.py: modelos Pydantic de respuesta
+- backfill_fase1b.py: script de migración de datos legacy (NO ejecutado en prod)
+- Suite pre-corrección: 56/56 passed
 
-FASE 1B CORRECCION ARQUITECTURAL — COMPLETADA (commit f617d78)
----------------------------------------------------------------
-Problema identificado: confirmar_recepcion seguia leyendo g.productos
-para calcular inventario. GoodsReceiptLine era aditiva, no la fuente de verdad.
+================================================================================
+FASE 1B CORRECCIÓN ARQUITECTURAL — ESTA SESIÓN (commits f617d78, 000b9e9)
+================================================================================
 
-CORRECCIONES IMPLEMENTADAS:
+PROBLEMA IDENTIFICADO
+---------------------
+- confirmar_recepcion iteraba `for prod in g.productos` para calcular
+  sku_increments, validar cantidades y actualizar inventario.
+- Insertaba GoodsReceiptLine AL FINAL como copia del resultado JSON.
+- Flujo: JSON → cálculo → inventario → (copia a GRL)  [INCORRECTO]
+- Flujo requerido: GRL → cálculo → inventario → (snapshot a JSON) [CORRECTO]
 
-1. create_pec (POST /api/v1/compras/pedidos)
-   - Ahora crea PurchaseOrderLine por cada producto del payload.
-   - Una fila por linea, independientemente del sku_id (permite SKUs duplicados).
+CORRECCIONES IMPLEMENTADAS
+--------------------------
 
-2. crear_recepcion_desde_pec (POST /pedidos/{pec_id}/recepcionar)
-   - Construye mapa FIFO {sku_id: deque[po_line_id]} desde purchase_order_lines.
-   - Por cada producto pendiente: asigna po_line_id via popleft() (no LIMIT 1).
-   - Crea GoodsReceiptLine en la MISMA transaccion (db.flush() + db.add GRL).
-   - GRL creada con quantity_received=0, source='NATIVE'.
+1. create_pec  (POST /api/v1/compras/pedidos)
+   Archivo: backend/app/api/v1/erp_compras.py
+   - Cambiado: db.add(pec) + db.commit() → db.add(pec) + db.flush()
+   - Añadido: bucle que crea PurchaseOrderLine por cada producto del payload.
+     Una fila por línea del payload, independientemente del sku_id.
+     Campos: pec_id, sku_id, description, quantity_ordered, unit_cost_usd,
+             unit_cost_cop, quantity_received=0, source='NATIVE'
+   - Razón: prerequisito para enlazar GRL con po_line_id unívoco sin LIMIT 1.
 
-3. confirmar_recepcion (POST /recepciones/{id}/confirmar)
-   - SELECT FOR UPDATE GoodsReceiptLine WHERE gr_id=eninv_id ORDER BY id.
-   - Fallback para recepciones legacy (sin GRL preexistentes): crea GRL
-     desde JSON snapshot, usando quantity_expected (no qty_recibida del JSON).
-   - Validaciones y calculo de sku_increments exclusivamente desde GRL:
-       - quantity_expected, quantity_received, quantity_rejected,
-         quantity_quarantine, sku_id, receipt_type
-   - Actualiza GRL in-place (NO DELETE+INSERT — conserva IDs para trazabilidad).
-   - Regenera g.productos como SNAPSHOT desde GRL (GRL -> JSON, no al reves).
-   - Estado PEC calculado desde purchase_order_lines + goods_receipt_lines (SQL).
-   - Fallback estado PEC: acumula GRL de recepciones previas confirmadas
-     + GRL de otras ENINV via JSON (si no hay GRL previas).
+2. crear_recepcion_desde_pec  (POST /pedidos/{pec_id}/recepcionar)
+   Archivo: backend/app/api/v1/erp_compras.py
+   - Construye mapa FIFO: {sku_id: deque([po_line_id, ...])} desde
+     purchase_order_lines ORDER BY id.
+   - Por cada producto pendiente: asigna _po_line_id via deque.popleft()
+     (correcto cuando hay dos líneas con el mismo SKU).
+   - Guarda _po_line_id en el dict del producto (campo interno).
+   - Crea GoodsReceipt + db.flush() (obtiene gr.id sin commit).
+   - Crea GoodsReceiptLine por cada producto en la MISMA transacción:
+       gr_id, po_line_id, sku_id, description,
+       quantity_expected=qty_pendiente, quantity_received=0,
+       quantity_rejected=0, quantity_quarantine=0,
+       receipt_type='FISICA', source='NATIVE'
+   - db.commit() al final (GR + todas las GRL en una sola TX).
 
-TESTS NUEVOS — test_fase1b_confirmar.py (11 tests via TestClient HTTP):
- 1. test_confirmar_crea_grl_y_usa_fuente_normalizada — GRL es fuente de verdad
- 2. test_grl_gana_cuando_json_contradice — GRL(qty=5) gana vs JSON(qty=99)
- 3. test_no_duplica_lineas_en_replay — replay idempotente no crea GRL extra
- 4. test_replay_conserva_ids_de_lineas — IDs de GRL iguales en replay
- 5. test_error_produce_rollback_completo — 404 no genera GRL ni movimientos
- 6. test_recepcion_parcial_fisica — qty=3/5 -> inv=3, PEC=PARCIALMENTE_RECIBIDA
- 7. test_recepcion_logistica_no_actualiza_stock — LOGISTICA: stock=0
- 8. test_excedente_permitido — allow_excess=True acepta qty=7>5
- 9. test_excedente_no_permitido — allow_excess=False rechaza qty=8>5 con 422
-10. test_dos_lineas_mismo_sku_po_line_id_correcto — po_line_id distinto por linea
-11. test_solo_grl_genera_movimientos_no_json_legacy — SKU fantasma ignorado
+3. confirmar_recepcion  (POST /recepciones/{id}/confirmar)
+   Archivo: backend/app/api/v1/erp_compras.py
 
-RESULTADO FINAL:
-  67/67 tests PASSED
-  Commit: f617d78
-  Push: origin/main ✓
+   a) BLOQUE REEMPLAZADO: "PROCESAR LINEAS DEL JSON"
+      Antes: for prod in (g.productos or []) → acumulaba sku_increments
+      Ahora:
+        gr_lines = SELECT FOR UPDATE GoodsReceiptLine
+                   WHERE gr_id=eninv_id ORDER BY id
+        Si gr_lines vacío (recepción legacy sin GRL):
+          → Fallback: crea GRL desde g.productos con quantity_received=0
+            (NO usa qty_recibida del JSON para crear GRL de fallback)
+        Para cada grl en gr_lines:
+          → qty_received = grl.quantity_received (si 0, usa quantity_expected)
+          → valida negativo
+          → valida excedente vs allow_excess
+          → grl.quantity_received = qty_received  (in-place, NO DELETE)
+          → grl.receipt_type = receipt_type        (in-place)
+          → si FISICA y sku_id y qty>0:
+              sku_increments[sku_id] += qty_received
 
-LINEAS AMBIGUAS DEL BACKFILL (NO migradas sin autorizacion):
--------------------------------------------------------------
+   b) ELIMINADO: DELETE FROM goods_receipt_lines ... source='NATIVE'
+      Razón: conservar IDs de GRL para trazabilidad, asignaciones y auditoría.
+
+   c) BLOQUE AÑADIDO: "REGENERAR SNAPSHOT JSON DESDE LINEAS NORMALIZADAS"
+      updated_products = [dict desde GRL con estado calculado]
+      g.productos = updated_products   ← JSON es ahora un SNAPSHOT, no la fuente
+
+   d) BLOQUE REEMPLAZADO: "ESTADO DEL PEC — CÁLCULO ACUMULADO"
+      Antes: leía p.productos (JSON) y sumaba sku_increments del JSON
+      Ahora:
+        Ruta primaria: pol_totals = SELECT SUM(quantity_ordered) FROM
+                                    purchase_order_lines WHERE pec_id GROUP BY sku_id
+          Si hay pol_totals:
+            grl_totals = SELECT SUM(quantity_received) FROM goods_receipt_lines
+                         JOIN goods_receipts WHERE pec_id AND stock_actualizado=true
+                         GROUP BY sku_id
+            qty_acumulada_norm = {sku: recv} + sku_increments actuales
+            total_pendiente = SUM(ord - recv) para cada sku en pol_totals
+          Si no hay pol_totals (PEC legacy sin PurchaseOrderLine):
+            Fallback: lee p.productos (JSON) para totales ordenados
+            Acumula GRL previas confirmadas (SQL) o JSON de otras ENINV
+            Suma sku_increments actuales
+            Calcula total_pendiente
+
+4. Importación añadida
+   from app.models.fase1b import GoodsReceiptLine, PurchaseOrderLine
+
+================================================================================
+TESTS EJECUTADOS
+================================================================================
+
+ARCHIVO: backend/tests/test_fase1b_confirmar.py  (NUEVO — 11 tests)
+Todos los tests invocan POST /api/v1/compras/recepciones/{id}/confirmar
+via FastAPI TestClient con get_db sobrescrito a erp_test.
+
+Metodología:
+  - Cada test crea supplier, warehouse, sku en DB directa (TestSessionLocal)
+  - Crea PEC y ENINV VIA API (atraviesa crear_recepcion_desde_pec)
+  - La ENINV tiene GRL preexistentes (creadas por el endpoint, no SQL directo)
+  - Confirma VIA API (atraviesa confirmar_recepcion completo)
+  - Verifica resultado persistido en DB
+
+TEST 1: test_confirmar_crea_grl_y_usa_fuente_normalizada
+  Escenario: PEC con 5u → ENINV → confirmar FISICA
+  Verifica: GRL existe con sku_id correcto, quantity_expected=5,
+            quantity_received=5, source='NATIVE'
+  Resultado: PASSED ✅
+
+TEST 2: test_grl_gana_cuando_json_contradice
+  Escenario: PEC 5u → ENINV → manipular JSON (qty_recibida=99) → confirmar
+  Verifica: inventario_levels.quantity = 5 (GRL gana, no JSON)
+  Resultado: PASSED ✅
+
+TEST 3: test_no_duplica_lineas_en_replay
+  Escenario: confirmar con key=K → replay con key=K
+  Verifica: COUNT(GRL) igual antes y después del replay
+  Resultado: PASSED ✅
+
+TEST 4: test_replay_conserva_ids_de_lineas
+  Escenario: confirmar → replay → comparar IDs de GRL
+  Verifica: [id1, id2, ...] idénticos en ambas llamadas
+  Resultado: PASSED ✅
+
+TEST 5: test_error_produce_rollback_completo
+  Escenario: confirmar ENINV id=999999 (inexistente)
+  Verifica: HTTP 404, 0 inventory_movements para ese id, 0 GRL para ese id
+  Resultado: PASSED ✅
+
+TEST 6: test_recepcion_parcial_fisica
+  Escenario: PEC 5u → ENINV → UPDATE GRL quantity_received=3 → confirmar
+  Verifica: inventory_levels.quantity=3, PEC.estado='PARCIALMENTE_RECIBIDA'
+  Resultado: PASSED ✅
+
+TEST 7: test_recepcion_logistica_no_actualiza_stock
+  Escenario: PEC 5u → ENINV → confirmar receipt_type=LOGISTICA
+  Verifica: goods_receipts.estado='COMPLETADA_LOGISTICA',
+            stock_actualizado=False, inventory_levels.quantity=0
+  Resultado: PASSED ✅
+
+TEST 8: test_excedente_permitido
+  Escenario: PEC 5u → ENINV → UPDATE GRL quantity_received=7 →
+             confirmar allow_excess=True
+  Verifica: HTTP 200, inventory_levels.quantity=7
+  Resultado: PASSED ✅
+
+TEST 9: test_excedente_no_permitido
+  Escenario: PEC 5u → ENINV → UPDATE GRL quantity_received=8 →
+             confirmar allow_excess=False
+  Verifica: HTTP 422
+  Resultado: PASSED ✅
+
+TEST 10: test_dos_lineas_mismo_sku_po_line_id_correcto
+  Escenario: PEC con productos=[{sku_id=X, qty=3}, {sku_id=X, qty=2}] →
+             crear_recepcion_desde_pec
+  Verifica: 2 GRL creadas, po_line_id[0] != po_line_id[1]
+  Resultado: PASSED ✅
+
+TEST 11: test_solo_grl_genera_movimientos_no_json_legacy
+  Escenario: PEC 5u → ENINV → inyectar sku_fantasma solo en JSON →
+             confirmar
+  Verifica: inventory_movements WHERE sku_id=sku_fantasma → COUNT=0
+  Resultado: PASSED ✅
+
+SUITE COMPLETA (tests/ en erp_test):
+--------------------------------------
+Ejecutado: python -m pytest tests/ -v --no-header -W ignore::DeprecationWarning
+DB: postgresql://nebulae:***@[REDACTED_HOST]:[REDACTED_PORT]/erp_test?sslmode=disable
+Duración: 427.80s (7m 07s)
+
+test_auth_roles.py                    8/8   PASSED
+test_fase1b_backfill.py               5/5   PASSED
+test_fase1b_confirmar.py (NUEVO)     11/11  PASSED
+test_fase1b_schemas.py                7/7   PASSED
+test_migrations_fase1a.py             5/5   PASSED
+test_receipt_concurrency.py           2/2   PASSED
+test_receipt_idempotency.py           6/6   PASSED
+test_receipt_partial.py               5/5   PASSED
+test_z_migrations_fase1b.py           5/5   PASSED (incluyendo downgrade/upgrade)
+                                    ------
+TOTAL                                67/67  PASSED — 0 failed — 0 skipped
+
+================================================================================
+LÍNEAS AMBIGUAS DEL BACKFILL
+================================================================================
+(NO migradas. No se ejecutará backfill en producción sin autorización explícita.)
+
 1. sales_quotations id=1, numero=COT-20260001, linea_idx=0
-   Razon: sku_id=NULL. Datos: qty=1, cost_usd=50, product_name=""
-   El producto no esta catalogado en la BD.
+   Razón de ambigüedad: sku_id=NULL, product_name="" (vacío)
+   El producto fue vendido antes de que existiera el catálogo de SKUs.
+   Datos: qty=1, cost_usd=50, flete_usd=2, total_cop=312000,
+          margen_pct=30, unit_price_cop=283920
+   Propuesta: CUARENTENA — no migrar a sales_quotation_lines sin sku_id.
+   Acción requerida: revisión manual para asignar sku_id o descartar.
 
 2. sale_orders id=1, numero=VEN-20260001, linea_idx=0
-   Razon: sku_id=NULL. Esta VEN referencia COT-20260001 (mismo registro).
-   Datos: qty=1, cost_usd=50.
+   Razón de ambigüedad: sku_id=NULL. Esta VEN referencia COT-20260001
+   (es la misma línea de producto no catalogado).
+   Datos: qty=1, cost_usd=50, flete_usd=2, total_cop=312000,
+          margen_pct=30, unit_price_cop=283920
+   Propuesta: CUARENTENA — no migrar a sale_order_lines_erp sin sku_id.
+   Acción requerida: igual que la COT de origen.
 
-Propuesta: CUARENTENA.
-- No migrar a sale_order_lines_erp / sales_quotation_lines sin sku_id valido.
-- Documentar en log de ambiguos del backfill.
-- Requieren revision manual para asignar sku_id o descartar.
-- No se migraran silenciosamente en ningun caso.
+Confirmación: Ninguna de estas líneas será migrada silenciosamente
+a una fila incorrecta. El backfill las registrará en su log de ambiguos
+y las omitirá hasta recibir instrucción explícita.
 
-RESTRICCIONES VIGENTES:
-- NO ejecutar backfill en produccion sin autorizacion explicita.
-- NO iniciar Fase 2 sin autorizacion explicita.
-- NO modificar archivos frontend (.tsx / .ts / .css).
+================================================================================
+ESTADO FINAL DEL REPOSITORIO
+================================================================================
+Branch:  main
+Remoto:  origin/main ✓ sincronizado
+Commits de esta corrección arquitectural:
+  f617d78  Fase 1B: GoodsReceiptLine como fuente de verdad definitiva (67/67 tests)
+  000b9e9  docs: actualizar RESUMEN_SESSION con estado final Fase 1B
 
-ESTADO: Fase 1B CERRADA. Esperando autorizacion para proxima fase.
+git status: limpio (nothing to commit)
+Frontend modificado: NINGÚN archivo .tsx / .ts / .css fue tocado.
+
+Evidencias arquitecturales verificadas (13/13):
+  [PASS] SELECT FOR UPDATE en GoodsReceiptLine
+  [PASS] Comentario FUENTE DE VERDAD en confirmar_recepcion
+  [PASS] Comentario REGENERAR SNAPSHOT (GRL → JSON, no al revés)
+  [PASS] PurchaseOrderLine importado y usado en create_pec
+  [PASS] db.flush() para GRL en misma TX que GoodsReceipt
+  [PASS] FIFO popleft() para po_line_id unívoco
+  [PASS] quantity_received calculado desde grl.quantity_received
+  [PASS] sku_increments acumulados exclusivamente desde GRL
+  [PASS] GoodsReceiptLine.gr_id referenciado en SELECT
+  [PASS] NO DELETE+NATIVE dentro de confirmar_recepcion
+  [PASS] g.productos = updated_products (snapshot, no fuente)
+  [PASS] source='NATIVE' en creación de GRL
+  [PASS] Fallback para recepciones legacy (sin GRL preexistentes)
+
+================================================================================
+RESTRICCIONES VIGENTES
+================================================================================
+⛔ NO ejecutar backfill en producción sin autorización explícita.
+⛔ NO iniciar Fase 2 sin autorización explícita.
+⛔ NO modificar archivos frontend (.tsx / .ts / .css).
+
+ESTADO: Fase 1B CERRADA y verificada.
+Esperando autorización explícita del usuario para la siguiente fase.
 ================================================================================
