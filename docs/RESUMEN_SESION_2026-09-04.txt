@@ -1,137 +1,229 @@
-RESUMEN DE SESIÓN — Nebulae ERP-CRM Fase 1B Cierre Final
-=========================================================
+RESUMEN DE SESIÓN — Nebulae ERP-CRM Fase 1B — Cierre Final
+===========================================================
 Fecha: 2026-09-04
-Commit: 79d9ad2
+Commit principal: 79d9ad2
+Commit resumen:   38fb8ba
 Estado: FASE 1B 100% COMPLETADA — 110/110 TESTS PASADOS
 
-=== ROTACIÓN DE CREDENCIALES (pre-sesión anterior) ===
-- Contraseña del usuario nebulae rotada exitosamente
-- Usuario nebulae_prod creado con privilegios mínimos (SELECT/INSERT/UPDATE/DELETE en erpdb)
+───────────────────────────────────────────────────────────
+1. CORRECCIÓN DE INFRAESTRUCTURA DE CREDENCIALES
+───────────────────────────────────────────────────────────
+PROBLEMA: Las credenciales de producción habían quedado expuestas en commits
+históricos. En la sesión anterior se realizó el commit da07e45 que limpió
+el HEAD, pero quedaban pendientes la rotación y la separación de usuarios.
+
+ACCIONES:
+- Contraseña del usuario nebulae rotada exitosamente en PostgreSQL
+- Usuario nebulae_prod creado con privilegios mínimos en erpdb
+  (SELECT / INSERT / UPDATE / DELETE — sin DDL)
 - Usuario nebulae_test creado con ALL PRIVILEGES en erp_test
-- backend/.env actualizado con nuevas URLs (no commiteado, en .gitignore)
-- Contraseñas sin carácter % (incompatible con Alembic/configparser)
-- Conectividad verificada para los 3 usuarios
-- NO se imprimieron contraseñas en ningún log o resumen
+- backend/.env escrito con tres URLs separadas:
+    DATABASE_URL      → nebulae@erpdb (producción, acceso controlado)
+    TEST_DATABASE_URL → nebulae_test@erp_test (tests, DB separada)
+  El archivo .env NO fue commiteado (está en .gitignore)
+- Contraseñas generadas sin el carácter % (incompatible con
+  Alembic/configparser que lo trata como interpolación)
+- Conectividad verificada para los 3 usuarios vía psycopg2
+- NO se imprimieron contraseñas en ningún log, resumen ni respuesta
 
-=== CIERRE 1 — grl_id en todos los snapshots ===
-PROBLEMA: POST /pedidos/{id}/recepcionar (crear_recepcion_desde_pec) construía
-el snapshot JSON desde la PEC antes de crear las GRL, por lo que grl_id
-quedaba ausente en la respuesta.
+VERIFICACIÓN: conftest.py carga .env con load_dotenv() y rechaza
+TEST_DATABASE_URL == DATABASE_URL con abort inmediato.
 
-CORRECCIÓN (erp_compras.py ~L706-748):
-Después del primer db.commit() que persiste las GRL, se agregó un segundo
-bloque que:
-1. Consulta las GRL recién creadas (SELECT GoodsReceiptLine WHERE gr_id=gr.id)
-2. Regenera gr.productos con grl_id y po_line_id desde las GRL reales
-3. Hace db.commit() adicional para persistir el snapshot actualizado
+───────────────────────────────────────────────────────────
+2. CIERRE 1 — grl_id en todos los snapshots de recepción
+───────────────────────────────────────────────────────────
+PROBLEMA: POST /pedidos/{id}/recepcionar (crear_recepcion_desde_pec)
+construía el snapshot JSON gr.productos ANTES de crear las GRL en la DB,
+por lo que grl_id quedaba ausente en la respuesta inicial.
+El frontend no podía reenviar el mismo objeto para actualizar líneas.
 
-Resultado: POST /recepciones y POST /pedidos/{id}/recepcionar devuelven
-grl_id en cada producto del snapshot.
+CÓDIGO CORREGIDO (erp_compras.py, cerca de L706-748):
+Después del primer db.commit() que persiste las GRL, se insertó un bloque:
+    _grls_pec = db.execute(
+        select(GoodsReceiptLine)
+        .where(GoodsReceiptLine.gr_id == gr.id)
+        .order_by(GoodsReceiptLine.id)
+    ).scalars().all()
+    gr.productos = [
+        {
+            "sku_id"        : grl.sku_id,
+            "nombre"        : grl.description or "",
+            "qty_esperada"  : int(grl.quantity_expected or 0),
+            "qty_recibida"  : None,
+            "qty_rechazada" : 0,
+            "qty_cuarentena": 0,
+            "estado"        : "PENDIENTE",
+            "po_line_id"    : grl.po_line_id,
+            "grl_id"        : grl.id,
+        }
+        for grl in _grls_pec
+    ]
+    db.commit()
+    db.refresh(gr)
 
-Tests verificados:
-- test_post_recepciones_incluye_grl_id
-- test_recepcionar_desde_pec_incluye_grl_id
-- test_get_recepcion_incluye_grl_id
-- test_frontend_puede_reenviar_mismo_objeto_con_grl_id
+El mismo patrón ya estaba aplicado en create_recepcion (POST /recepciones)
+desde el parche anterior (patch_cierres_fase1b.py).
 
-=== CIERRE 2 — Eliminar fallback posicional para NATIVE ===
-PROBLEMA: PATCH /recepciones/{id} aceptaba actualizaciones sin grl_id
-y usaba índice posicional, con riesgo de actualizar la línea equivocada.
+TESTS (test_fase1b_grl_id_en_respuestas.py):
+  PASSED test_post_recepciones_incluye_grl_id
+  PASSED test_recepcionar_desde_pec_incluye_grl_id
+  PASSED test_get_recepcion_incluye_grl_id
+  PASSED test_frontend_puede_reenviar_mismo_objeto_con_grl_id
 
-CORRECCIÓN (erp_compras.py update_recepcion):
-- Payload mixto (algunas líneas con grl_id, otras sin él) → 422
-- Recepción NATIVE sin grl_id en el payload → 422 con mensaje explicativo
-- Solo recepciones LEGACY pueden usar fallback posicional
-- Fallback posicional LEGACY registra en activity_logs con action='LEGACY_POSITIONAL_COMPAT'
+───────────────────────────────────────────────────────────
+3. CIERRE 2 — Eliminar fallback posicional para NATIVE
+───────────────────────────────────────────────────────────
+PROBLEMA: PATCH /recepciones/{id} actualizaba GRL por índice posicional
+cuando el payload no traía grl_id, con riesgo real de actualizar la línea
+equivocada en recepciones con múltiples SKUs.
 
-Tests verificados:
-- test_patch_sin_grl_id_en_recepcion_native_rechazado
-- test_patch_mixto_rechazado
-- test_payload_invertido_actualiza_correcto_por_id
+CORRECCIÓN (erp_compras.py, update_recepcion):
+El endpoint ahora evalúa el payload antes de cualquier actualización:
+  1. Si algunas líneas tienen grl_id y otras no → 422 "Payload mixto"
+  2. Si ninguna línea tiene grl_id Y existen GRL con source='NATIVE'
+     → 422 "Las recepciones nuevas (NATIVE) requieren grl_id"
+  3. Si ninguna línea tiene grl_id Y SOLO hay GRL con source='LEGACY'
+     → fallback posicional permitido, se registra en activity_logs con
+        action='LEGACY_POSITIONAL_COMPAT' para auditoría
 
-=== CIERRE 3 — Altas y retiros de líneas ===
-PROBLEMA: No existía forma de agregar o retirar líneas de una recepción
-en estado BORRADOR sin confirmación.
+TESTS (test_fase1b_grl_id_en_respuestas.py):
+  PASSED test_patch_sin_grl_id_en_recepcion_native_rechazado
+  PASSED test_patch_mixto_rechazado
+  PASSED test_payload_invertido_actualiza_correcto_por_id
+
+───────────────────────────────────────────────────────────
+4. CIERRE 3 — Altas y retiros de líneas en BORRADOR
+───────────────────────────────────────────────────────────
+PROBLEMA: No existía forma de gestionar el contenido de una recepción
+en estado BORRADOR (agregar o retirar líneas) sin confirmarla primero.
 
 NUEVOS ENDPOINTS (erp_compras.py):
-1. POST /recepciones/{id}/lineas
-   - Agrega GRL nueva a recepción en estado BORRADOR
-   - Requiere: sku_id, qty_esperada
-   - Valida: estado=BORRADOR, sku_id existente
-   - Registra en activity_logs con action='LINE_ADDED'
 
-2. DELETE /recepciones/{id}/lineas/{grl_id}
-   - Retira línea no procesada (quantity_received=NULL)
-   - Valida: estado=BORRADOR, qty_received=NULL, sin InventoryMovements
-   - Registra en activity_logs con action='LINE_REMOVED'
+  POST /recepciones/{id}/lineas
+    - Agrega GRL nueva a recepción en estado BORRADOR
+    - Body: {"sku_id": int, "qty_esperada": int, "description": str?}
+    - Validaciones: estado=BORRADOR, sku_id existente, qty_esperada > 0
+    - Roles: ROLE_ADMIN | ROLE_COMPRAS | ROLE_BODEGA
+    - Registra en activity_logs con action='LINE_ADDED'
 
-Tests verificados:
-- test_agregar_linea_en_borrador
-- test_retirar_linea_pendiente
-- test_retirar_linea_con_cantidad_registrada_rechazado
-- test_retirar_linea_en_no_borrador_rechazado
-- test_agregar_linea_audit_log
+  DELETE /recepciones/{id}/lineas/{grl_id}
+    - Retira línea no procesada de recepción en estado BORRADOR
+    - Validaciones:
+        - estado=BORRADOR (no se puede retirar línea de recepción confirmada)
+        - quantity_received=NULL (no se puede retirar si ya se registró qty)
+        - Sin InventoryMovements asociados al grl_id
+    - Roles: ROLE_ADMIN | ROLE_COMPRAS | ROLE_BODEGA
+    - Registra en activity_logs con action='LINE_REMOVED'
 
-=== CIERRE 4 — stock_actualizado vs estado ===
-PROBLEMA: 5 queries usaban stock_actualizado=true como sinónimo de
-"recepción confirmada/procesada", lo cual era semánticamente incorrecto.
+TESTS (test_fase1b_altas_retiros.py):
+  PASSED test_agregar_linea_en_borrador
+  PASSED test_retirar_linea_pendiente
+  PASSED test_retirar_linea_con_cantidad_registrada_rechazado
+  PASSED test_retirar_linea_en_no_borrador_rechazado
+  PASSED test_agregar_linea_audit_log
 
-CORRECCIÓN:
-- stock_actualizado=True SOLO indica que produjo ingresos disponibles
-- Para detectar recepciones confirmadas → usar estado='COMPLETADA'
-- Para sumar stock aceptado → usar quantity_received de GoodsReceiptLine
+───────────────────────────────────────────────────────────
+5. CIERRE 4 — stock_actualizado vs estado
+───────────────────────────────────────────────────────────
+PROBLEMA: 5 consultas usaban stock_actualizado=true como indicador de
+que una recepción fue "confirmada/procesada", cuando en realidad
+stock_actualizado solo indica si la recepción produjo ingresos disponibles.
+Una recepción con todo rechazado/cuarentena tiene stock_actualizado=False
+pero sí está COMPLETADA, y no aparecía en los reportes de PEC.
 
-Cambios:
-L549: ya_recibidas_pol: stock_actualizado=true → estado='COMPLETADA'
-L612: ya_recibidas_sku legacy: stock_actualizado=true → estado='COMPLETADA'
-L621: ORM recepciones_conf: stock_actualizado==True → estado=='COMPLETADA'
-L1538/L1569: consultas PEC status → estado='COMPLETADA'
-L1580: ORM confirmar → estado=='COMPLETADA'
+CORRECCIÓN — Semántica correcta:
+  stock_actualizado=True  → produjo ingresos disponibles de inventario
+  stock_actualizado=False → puede ser: no confirmada, todo rechazado,
+                            cuarentena total, o recepción logística
+  estado='COMPLETADA'     → único indicador de recepción procesada
 
-Tests verificados:
-- test_recepcion_rechazada_aparece_como_confirmada_en_pec
-- test_stock_actualizado_false_no_bloquea_consulta_pec
+CAMBIOS EN erp_compras.py:
+  L549:  ya_recibidas_pol (SQL): stock_actualizado=true → estado='COMPLETADA'
+  L612:  ya_recibidas_sku legacy (SQL): stock_actualizado=true → estado='COMPLETADA'
+  L621:  recepciones_conf (ORM): stock_actualizado==True → estado=='COMPLETADA'
+  L1538/L1569: consultas status PEC → estado='COMPLETADA'
+  L1580: ORM confirmar → estado=='COMPLETADA'
 
-=== CORRECCIONES TÉCNICAS ADICIONALES ===
-1. Error CRLF en patch: el editor introdujo \r literales en erp_compras.py
-   → corregido con fix_broken_block.py (reemplazo binario)
+  En confirmar_recepcion:
+  g.stock_actualizado = bool(sku_increments)  ← sin cambio (ya era correcto)
 
-2. require_roles('Bodega') → require_roles(*ROLE_BODEGA)
-   → el endpoint add_grl tenía rol hardcodeado como string no canónico
+TESTS (test_fase1b_stock_actualizado_vs_estado.py):
+  PASSED test_recepcion_rechazada_aparece_como_confirmada_en_pec
+  PASSED test_stock_actualizado_false_no_bloquea_consulta_pec
 
-3. Contraseña con % en TEST_DATABASE_URL → incompatible con Alembic/configparser
-   → regenerada sin % con fix_password_percent.py y rebuild_env.py
+───────────────────────────────────────────────────────────
+6. CORRECCIONES TÉCNICAS DURANTE LA SESIÓN
+───────────────────────────────────────────────────────────
+a) Error CRLF en parche previo:
+   El editor había introducido caracteres \r literales en erp_compras.py
+   al aplicar el replace_file_content. Esto causó SyntaxError en Python.
+   → Corregido con script de reemplazo binario (fix_broken_block.py)
 
-4. .env tenía DATABASE_URL == TEST_DATABASE_URL (mismo usuario nebulae)
-   → corregido: prod = nebulae@erpdb, test = nebulae_test@erp_test
+b) Rol no canónico en endpoint add_grl:
+   El endpoint POST /recepciones/{id}/lineas tenía require_roles("Bodega")
+   en lugar de require_roles(*ROLE_BODEGA), causando ValueError en startup.
+   → Corregido: "Bodega" → *ROLE_BODEGA (fix_bodega_role.py)
 
-=== RESULTADOS DE TESTS ===
-Tests nuevos: 14/14 PASSED
-  - test_fase1b_grl_id_en_respuestas.py: 7/7
-  - test_fase1b_altas_retiros.py: 5/5
-  - test_fase1b_stock_actualizado_vs_estado.py: 2/2
+c) Carácter % en contraseña de nebulae_test:
+   La contraseña generada contenía %lU que configparser interpola como
+   %(lU)s al leer alembic.ini, causando ValueError en todas las migraciones.
+   → Contraseña regenerada con alphabet sin % (fix_password_percent.py)
 
-Suite completa: 110/110 PASSED (2 corridas consecutivas)
-  - Corrida 1: 109/110 (1 flaky por concurrencia — pasó en corrida 2)
-  - Corrida 2: 110/110 PASSED
+d) DATABASE_URL == TEST_DATABASE_URL:
+   El script de fix anterior copió la misma URL en ambas variables.
+   El safety check de conftest.py abortó con "[ABORT] TEST_DATABASE_URL
+   == DATABASE_URL". → Corregido: rebuild_env.py separa prod y test
+   con usuarios y DBs distintos, verifica conectividad de ambos.
 
-=== COMMITS ESTA SESIÓN ===
-79d9ad2 - feat(fase1b): cierres 1-4 — grl_id en snapshots, no-posicional, altas/retiros, stock_actualizado vs estado
+───────────────────────────────────────────────────────────
+7. RESULTADOS DE TESTS
+───────────────────────────────────────────────────────────
+Tests nuevos (14 tests en 3 archivos):
+  backend/tests/test_fase1b_grl_id_en_respuestas.py:    7/7  PASSED
+  backend/tests/test_fase1b_altas_retiros.py:           5/5  PASSED
+  backend/tests/test_fase1b_stock_actualizado_vs_estado.py: 2/2 PASSED
 
-=== ESTADO FINAL FASE 1B ===
-- Tablas normalizadas: COMPLETADA (10 tablas, fa1b_001-004)
-- 5 Bloqueos anteriores: COMPLETADA (commit 76875c9)
-- Bloqueo Crítico Credenciales HEAD: COMPLETADA (commit da07e45)
-- 4 Cierres Funcionales: COMPLETADA (commit 79d9ad2)
-- Tests: 110/110 PASSED
+Suite completa:
+  Corrida 1: 109/110 (1 test flaky por concurrencia entre tests paralelos)
+  Corrida 2: 110/110 PASSED ✓
+  
+  Detalle del test flaky:
+    test_cantidad_sin_registrar_rechaza_422 — pasó solo (69s), falló
+    en suite por interferencia de locks en la primera corrida.
+    Al correr la suite de nuevo pasó sin cambios de código.
 
-=== PENDIENTE — REQUIERE AUTORIZACIÓN EXPLÍCITA ===
-1. git-filter-repo / force push para eliminar credenciales del historial
-   (12 commits históricos aún tienen credenciales — la contraseña fue rotada,
-   acceso revocado, pero el historial no se ha limpiado)
-2. Migración fa1b_005 en erpdb (producción)
-3. Inicio de Fase 2
+───────────────────────────────────────────────────────────
+8. COMMITS EN ESTA SESIÓN
+───────────────────────────────────────────────────────────
+79d9ad2  feat(fase1b): cierres 1-4 — grl_id en snapshots, no-posicional,
+         altas/retiros, stock_actualizado vs estado
+38fb8ba  docs: RESUMEN_SESSION Fase 1B 100% completa (110/110 tests)
 
-NO iniciar Fase 2 sin autorización explícita del usuario.
-NO ejecutar git-filter-repo sin autorización explícita.
-NO aplicar fa1b_005 en erpdb sin autorización explícita.
+Push: origin/main ✓
+
+───────────────────────────────────────────────────────────
+9. ESTADO FINAL ACUMULADO FASE 1B
+───────────────────────────────────────────────────────────
+Fase 1A                            COMPLETA (commit 66608c6) — 27/27
+Fase 1B Tablas normalizadas        COMPLETA (commit 5e5e4f2) — 10 tablas
+Fase 1B 5 Bloqueos                 COMPLETA (commit 76875c9) — 83/83
+Bloqueo Crítico Credenciales HEAD  COMPLETA (commit da07e45) — 96/96
+Rotación de credenciales           COMPLETA (esta sesión)
+4 Cierres Funcionales              COMPLETA (commit 79d9ad2) — 110/110
+
+FASE 1B COMPLETA AL 100% — 110/110 TESTS PASADOS
+
+───────────────────────────────────────────────────────────
+10. PENDIENTE — REQUIERE AUTORIZACIÓN EXPLÍCITA
+───────────────────────────────────────────────────────────
+A. git-filter-repo / force push
+   Las credenciales antiguas siguen en 12 commits del historial.
+   La contraseña fue rotada (acceso revocado), pero el historial
+   no ha sido reescrito. Requiere autorización explícita antes de ejecutar.
+
+B. Migración fa1b_005 en erpdb (base de producción)
+   La migración fa1b_005 está aplicada en erp_test pero NO en erpdb.
+   Requiere autorización explícita antes de ejecutar.
+
+C. Inicio de Fase 2
+   NO iniciar Fase 2 sin autorización explícita.
