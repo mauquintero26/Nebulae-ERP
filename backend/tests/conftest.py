@@ -98,6 +98,18 @@ def setup_test_db():
     print("[alembic]:", result.stdout[-500:] if result.stdout else "(empty)")
     assert result.returncode == 0, f"Alembic upgrade failed: {result.stderr[-500:]}"
     yield
+    # Safety: ensure DB is at head before cleanup (migration tests may have left it downgraded)
+    try:
+        env_cleanup = os.environ.copy()
+        env_cleanup["DATABASE_URL"] = TEST_URL
+        subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            cwd=str(_BACKEND), env=env_cleanup,
+            capture_output=True, text=True, timeout=60,
+        )
+    except Exception:
+        pass  # best-effort
+
     # Cleanup: truncate all test data (best-effort, ignore missing tables)
     with test_engine.connect() as conn:
         for tbl in [
