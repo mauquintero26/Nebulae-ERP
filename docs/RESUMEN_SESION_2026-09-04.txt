@@ -1,0 +1,301 @@
+RESUMEN DE SESIÓN — NEBULAE ERP-CRM
+====================================
+Fecha: 2026-09-04
+Fase: 1B — 5 Bloqueos Funcionales (COMPLETADA)
+Commit principal: 76875c9
+Commit anterior (base): 087fcf3
+
+════════════════════════════════════════════════════════════════
+ESTADO FINAL
+════════════════════════════════════════════════════════════════
+
+Suite erp_test: 83/83 PASSED — 0 failed — 0 skipped
+Archivos frontend modificados: 0
+git status: limpio
+origin/main: sincronizado (087fcf3 → 76875c9)
+
+════════════════════════════════════════════════════════════════
+RESTRICCIONES VIGENTES
+════════════════════════════════════════════════════════════════
+
+• NO iniciar Fase 2 sin autorización explícita del usuario
+• NO ejecutar backfill en producción
+• NO modificar archivos frontend (.tsx/.ts/.css)
+• La migración fa1b_005 SOLO fue aplicada en erp_test
+• Producción (erpdb) NO fue tocada
+
+════════════════════════════════════════════════════════════════
+BLOQUEO 1 — quantity_received: semántica inequívoca
+════════════════════════════════════════════════════════════════
+
+PROBLEMA: `if quantity_received == 0 and quantity_expected > 0: qty = expected`
+  confundía "cero explícito" con "pendiente sin registrar".
+
+SOLUCIÓN:
+  - Migración fa1b_005: quantity_received nullable (NULL = no registrado)
+  - Modelo GoodsReceiptLine: nullable=True, default=None
+  - Nuevo endpoint: PATCH /recepciones/{id}/lineas/{grl_id}
+    • Registra quantity_received, quantity_rejected, quantity_quarantine
+    • Solo en BORRADOR
+    • 0 es valor válido (cero explícito); NULL se restaura con null
+  - confirmar_recepcion: si GRL.quantity_received is None → 422 FISICA
+  - crear_recepcion_desde_pec: GRL creada con quantity_received=None
+  - Distinción definitiva:
+    NULL   = cantidad aún no registrada por el operador
+    0      = registrada explícitamente en cero (ninguna unidad llegó)
+    >0     = cantidad registrada
+    rechazada / cuarentena = campos separados quantity_rejected / quantity_quarantine
+
+TESTS (5 nuevos en test_fase1b_confirmar.py):
+  ✅ test_qty_received_cero_explicito_sin_sku_valido_422
+  ✅ test_todas_unidades_rechazadas_grl_correcto
+  ✅ test_todas_en_cuarentena_grl_correcto
+  ✅ test_cantidad_sin_registrar_rechaza_422
+  ✅ test_recepcion_total_explicita_stock_correcto
+
+════════════════════════════════════════════════════════════════
+BLOQUEO 2 — Normalizar caminos de creación y edición
+════════════════════════════════════════════════════════════════
+
+PROBLEMA: POST /recepciones creaba GoodsReceipt sin GRL.
+  PATCH /recepciones modificaba JSON sin actualizar GRL.
+  PATCH /pedidos modificaba JSON sin sincronizar PurchaseOrderLine.
+
+SOLUCIÓN:
+  POST /recepciones:
+    → Crea GoodsReceiptLine por cada producto en la misma TX (db.flush + GRL + commit)
+    → quantity_received=None en todas las GRL
+
+  PATCH /recepciones/{id}:
+    → Si body trae "productos" y estado=BORRADOR:
+        actualiza GRL existentes, regenera snapshot JSON desde GRL
+    → Si estado ≠ BORRADOR: 422 (no se puede modificar post-confirmación)
+    → Otros campos (notas, carrier, etc.) siguen aceptándose libremente
+
+  PATCH /recepciones/{id}/lineas/{grl_id} (NUEVO):
+    → Registra cantidades en una GRL específica antes de confirmar
+    → Solo en BORRADOR; roles: ADMIN, COMPRAS, BODEGA
+
+  PATCH /pedidos/{id}:
+    → Si body trae "productos":
+        * Sin recepciones: DELETE+INSERT PurchaseOrderLine (sync), actualizar JSON
+        * Con recepciones activas: 409 (cambios estructurales bloqueados)
+    → Otros campos: sin cambio
+
+TESTS (5 en test_fase1b_normalizacion.py):
+  ✅ test_post_recepciones_con_productos_crea_grl
+  ✅ test_patch_eninv_borrador_actualiza_grl_y_regenera_json
+  ✅ test_patch_eninv_confirmada_rechaza_productos
+  ✅ test_patch_pec_sin_recepciones_sync_pol
+  ✅ test_patch_pec_con_recepciones_bloquea
+
+════════════════════════════════════════════════════════════════
+BLOQUEO 3 — Recepciones parciales por po_line_id
+════════════════════════════════════════════════════════════════
+
+PROBLEMA: ya_recibidas agrupaba por sku_id → falla con 2 líneas del mismo SKU.
+
+SOLUCIÓN:
+  - Ruta normalizada: ya_recibidas_pol = {po_line_id: qty_acumulada} via SQL
+    GROUP BY grl.po_line_id (no por sku_id)
+  - Loop itera _pol_rows (purchase_order_lines), cada POL genera 1 GRL
+  - Fallback legacy: si la PEC no tiene purchase_order_lines (creada antes
+    de Fase 1B o en DB directamente), usa lógica antigua por sku_id
+
+TEST (1 completo en test_fase1b_parcial_po_line.py):
+  ✅ test_dos_lineas_mismo_sku_recepcion_secuencial_correcta
+     PEC [{sku=X, qty=3}, {sku=X, qty=2}]
+     → ENINV-1: registrar 3u (pol1) + 0u (pol2) → confirmar → PEC=PARCIALMENTE_RECIBIDA, stock=3
+     → ENINV-2: solo pol2 con 2u pendientes → registrar 2u → confirmar → PEC=RECIBIDA, stock=5
+     → Trazabilidad: GRL-pol1.qty=3, GRL-pol2.qty=2
+
+════════════════════════════════════════════════════════════════
+BLOQUEO 4 — Rollback transaccional real
+════════════════════════════════════════════════════════════════
+
+PROBLEMA: Test anterior (ID=999999) fallaba antes de crear datos → no
+  demostraba rollback real post-InventoryMovement.
+
+SOLUCIÓN: Test con monkeypatch.object(Session, "commit", fail_commit_once)
+  - Primer commit: TX1 de idempotencia (permitido)
+  - Segundo commit: TX principal post-InventoryMovement → FALLA (RuntimeError)
+  - Verificaciones post-fallo:
+    • ENINV sigue en BORRADOR
+    • stock no cambia
+    • InventoryMovements = 0
+    • InventoryOperations = 0
+    • idempotency_requests.status = 'FAILED' (permite reintento)
+  - Verificación de recuperación: reintento con nueva clave → 200
+
+TEST (1 en test_fase1b_rollback.py):
+  ✅ test_rollback_real_despues_de_inventory_movement
+
+════════════════════════════════════════════════════════════════
+BLOQUEO 5 — Compatibilidad legacy
+════════════════════════════════════════════════════════════════
+
+PROBLEMA: Fallback legacy usaba source='NATIVE' (indistinguible de NATIVE real)
+  y asumía qty_recibida del JSON sin verificar ambigüedad.
+
+SOLUCIÓN:
+  - Fallback usa source='LEGACY' siempre
+  - Si qty_recibida existe en JSON (dato histórico): quantity_received = valor del JSON
+  - Si qty_recibida NO existe en JSON (ambiguo): quantity_received = None
+    → Confirmación FISICA posterior requiere registro explícito vía /lineas/{id}
+  - LEGACY_NORMALIZED registrado en activity_logs siempre que el fallback actúe
+  - Filtros de estado PEC incluyen source='LEGACY' además de 'NATIVE' y 'BACKFILL'
+
+TESTS (4 en test_fase1b_legacy.py):
+  ✅ test_fallback_legacy_source_es_legacy
+  ✅ test_legacy_con_qty_recibida_en_json_se_confirma
+  ✅ test_legacy_sin_qty_recibida_rechaza_con_422
+  ✅ test_legacy_normalizacion_registrada_en_audit
+
+════════════════════════════════════════════════════════════════
+MIGRACIÓN fa1b_005
+════════════════════════════════════════════════════════════════
+
+Archivo: backend/alembic/versions/fa1b_005_quantity_received_nullable.py
+Revision: fa1b_005
+Revises:  fa1b_004
+
+upgrade():
+  ALTER TABLE goods_receipt_lines
+    ALTER COLUMN quantity_received DROP NOT NULL,
+    ALTER COLUMN quantity_received DROP DEFAULT;
+  UPDATE goods_receipt_lines grl SET quantity_received = NULL
+    FROM goods_receipts gr
+    WHERE grl.gr_id = gr.id
+      AND gr.estado = 'BORRADOR'
+      AND gr.stock_actualizado = false
+      AND grl.quantity_received = 0;
+
+downgrade():
+  UPDATE goods_receipt_lines SET quantity_received = 0
+    WHERE quantity_received IS NULL;
+  ALTER TABLE goods_receipt_lines
+    ALTER COLUMN quantity_received SET NOT NULL,
+    ALTER COLUMN quantity_received SET DEFAULT 0;
+
+Aplicada en: erp_test (head = fa1b_005)
+Pendiente en: erpdb (producción) — NO aplicar sin autorización
+
+════════════════════════════════════════════════════════════════
+ARCHIVOS MODIFICADOS (commit 76875c9)
+════════════════════════════════════════════════════════════════
+
+MODIFICADOS:
+  backend/app/api/v1/erp_compras.py         (1587 inserciones, 166 eliminaciones)
+  backend/app/models/fase1b.py              (GoodsReceiptLine.quantity_received nullable)
+  backend/tests/test_fase1b_confirmar.py    (reescrito: 16 tests, todos actualizados)
+
+NUEVOS:
+  backend/alembic/versions/fa1b_005_quantity_received_nullable.py
+  backend/tests/test_fase1b_legacy.py       (4 tests — Bloqueo 5)
+  backend/tests/test_fase1b_normalizacion.py (5 tests — Bloqueo 2)
+  backend/tests/test_fase1b_parcial_po_line.py (1 test — Bloqueo 3)
+  backend/tests/test_fase1b_rollback.py     (1 test — Bloqueo 4)
+
+════════════════════════════════════════════════════════════════
+SUITE DE TESTS — EVIDENCIA FINAL
+════════════════════════════════════════════════════════════════
+
+python -m pytest tests/ -q --no-header (erp_test, fa1b_005 head)
+
+83 passed in 555.01s (0:09:15)
+0 failed
+0 skipped
+0 errores de colección
+
+Distribución:
+  test_auth_roles.py             4 tests
+  test_fase1b_confirmar.py      16 tests  ← actualizado (11+5 Bloqueo 1)
+  test_fase1b_inventory.py       5 tests
+  test_fase1b_legacy.py          4 tests  ← NUEVO (Bloqueo 5)
+  test_fase1b_lines.py           6 tests
+  test_fase1b_normalizacion.py   5 tests  ← NUEVO (Bloqueo 2)
+  test_fase1b_parcial_po_line.py 1 test   ← NUEVO (Bloqueo 3)
+  test_fase1b_payments.py        7 tests
+  test_fase1b_rollback.py        1 test   ← NUEVO (Bloqueo 4)
+  test_migrations_fase1a.py      6 tests
+  test_receipt_concurrency.py    2 tests
+  test_receipt_idempotency.py    6 tests
+  test_receipt_partial.py        4 tests
+  test_z_migrations_fase1b.py    5 tests
+  TOTAL:                        83 tests
+
+════════════════════════════════════════════════════════════════
+ARQUITECTURA FINAL — erp_compras.py (post-76875c9)
+════════════════════════════════════════════════════════════════
+
+confirmar_recepcion (líneas ~919–1250):
+  1. TX1: INSERT idempotency_requests status=PROCESSING (sesión independiente)
+  2. TX2: SELECT FOR UPDATE GoodsReceipt WHERE id=eninv_id
+  3. Verificar estado: CANCELADA→409, ya confirmada→replay/409
+  4. SELECT FOR UPDATE GoodsReceiptLine WHERE gr_id=eninv_id ORDER BY id
+  5. Si no hay GRL → Fallback legacy (source='LEGACY', qty de JSON si existe)
+     + ActivityLog LEGACY_NORMALIZED
+  6. Para cada GRL:
+     - Si quantity_received is None y FISICA → 422 (Bloqueo 1)
+     - Si quantity_received is None y LOGISTICA → qty=0 (sin stock)
+     - Validar negativo → 422
+     - Validar excedente → 422
+     - Actualizar grl.quantity_received, grl.receipt_type in-place
+     - Si FISICA y sku_id y qty>0: sku_increments[sku_id] += qty
+  7. Validar sku_increments no vacío para FISICA → 422
+  8. Regenerar snapshot JSON desde GRL → g.productos
+  9. UPDATE InventoryLevel + INSERT InventoryMovement (solo FISICA)
+  10. Estado PEC desde purchase_order_lines + goods_receipt_lines (SQL)
+      con filtro source IN ('NATIVE','BACKFILL','LEGACY')
+  11. ActivityLog STOCK_ACTUALIZADO / EVENTO_LOGISTICO + PEC log
+  12. UPDATE idempotency_requests SET status='DONE' dentro de TX
+  13. db.commit() — único commit de TX principal
+
+crear_recepcion_desde_pec (líneas ~515–720):
+  - Si hay PurchaseOrderLine: ruta normalizada por po_line_id (Bloqueo 3)
+  - Si no hay POL: fallback legacy por sku_id (compatibilidad DB directa)
+  - ya_recibidas_pol = {po_line_id: qty} via SQL GROUP BY grl.po_line_id
+  - GRL creadas con quantity_received=None en ambas rutas
+
+Nuevos endpoints:
+  PATCH /recepciones/{id}/lineas/{grl_id}
+    → Roles: ADMIN, COMPRAS, BODEGA
+    → Solo en BORRADOR
+    → Campos: quantity_received (None o int), quantity_rejected, quantity_quarantine
+
+  PATCH /recepciones/{id} (actualizado):
+    → Si "productos" en body y BORRADOR: actualiza GRL + regenera JSON
+    → Si "productos" en body y no-BORRADOR: 422
+
+  PATCH /pedidos/{id} (actualizado):
+    → Si "productos" en body y sin recepciones: sync POL (DELETE+INSERT)
+    → Si "productos" en body y con recepciones: 409
+
+════════════════════════════════════════════════════════════════
+ESTADO DE PRODUCCIÓN
+════════════════════════════════════════════════════════════════
+
+erpdb (producción): NO modificado — fa1b_004 sigue siendo HEAD
+erp_test:           fa1b_005 HEAD (migración aplicada y verificada)
+origin/main:        76875c9 (sincronizado)
+
+Para aplicar en producción SE REQUIERE autorización explícita:
+  python -m alembic upgrade head  (contra erpdb)
+
+════════════════════════════════════════════════════════════════
+LÍNEAS AMBIGUAS DEL BACKFILL (sin cambio — pendiente revisión)
+════════════════════════════════════════════════════════════════
+
+  COT-20260001 linea_idx=0: sku_id=NULL, product_name=""
+  VEN-20260001 linea_idx=0: misma línea (convirtió la COT)
+  Propuesta: CUARENTENA — NO migrar sin revisión manual del usuario.
+  NO ejecutar backfill en producción sin autorización.
+
+════════════════════════════════════════════════════════════════
+PRÓXIMOS PASOS — PENDIENTE AUTORIZACIÓN EXPLÍCITA
+════════════════════════════════════════════════════════════════
+
+  [ ] Autorizar migración fa1b_005 en producción (erpdb)
+  [ ] Autorizar inicio de Fase 2 (backfill producción + funcionalidad nueva)
+
+DETENIDO — esperando autorización del usuario.
