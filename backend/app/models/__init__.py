@@ -8,3 +8,17 @@ from app.models.expenses import OperationalExpense
 from app.models.crm import Alert
 
 from app.models.erp_documents import Supplier, CustomerRequest, SalesQuotation, SaleOrder, PaymentPending, PurchaseOrderFull, GoodsReceipt, ActivityLog
+
+# Fase 1B — modelos normalizados
+from app.models.fase1b import (
+    CustomerRequestLine,
+    SalesQuotationLine,
+    SaleOrderLineErp,
+    PurchaseOrderLine,
+    ProcurementAllocation,
+    GoodsReceiptLine,
+    GoodsReceiptLineAllocation,
+    InventoryOwnerBalance,
+    InventoryReservation,
+    PaymentTransaction,
+)

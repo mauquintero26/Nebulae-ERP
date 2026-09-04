@@ -101,9 +101,19 @@ def setup_test_db():
     # Cleanup: truncate all test data (best-effort, ignore missing tables)
     with test_engine.connect() as conn:
         for tbl in [
+            # Fase 1B — tablas normalizadas (deben truncarse antes que los documentos padre)
+            "goods_receipt_line_allocations", "goods_receipt_lines",
+            "procurement_allocations",
+            "sale_order_lines_erp", "sales_quotation_lines", "customer_request_lines",
+            "purchase_order_lines",
+            "inventory_reservations", "inventory_owner_balances",
+            "payment_transactions",
+            # Fase 1A y base
             "inventory_movements", "inventory_operations", "inventory_levels",
             "activity_logs", "idempotency_requests",
             "goods_receipts", "purchase_orders_full",
+            "sale_orders", "sales_quotations", "customer_requests",
+            "payment_pendings",
             "product_skus", "products", "brands", "categories",
             "warehouses", "suppliers", "users",
         ]:
