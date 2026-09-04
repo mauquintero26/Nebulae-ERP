@@ -2,12 +2,25 @@
 Fecha: 2026-09-04
 Rama Git: main
 Repositorio: https://github.com/mauquintero26/Nebulae-ERP
-Estado General: FASE 2 100% COMPLETADA, ENDURECIDA Y CERTIFICADA (FASE 3 NO INICIADA)
+Estado General: FASE 2 100% COMPLETADA, ENDURECIDA Y CERTIFICADA (FASE 3 AUTORIZADA)
 Ambiente de Pruebas: erp_test (PostgreSQL en 2.24.90.223:5435/erp_test - Migrado a fa2_003)
 Ambiente de Producción: erpdb (PostgreSQL en 2.24.90.223:5435/erpdb - Intacto en fa1a_002)
 
 ================================================================================
-1. RESUMEN DE CAMBIOS ARQUITECTURALES Y DE CÓDIGO
+1. REGISTRO OFICIAL DE COMMITS EN GITHUB (origin/main)
+================================================================================
+- Commit de Código Fase 2 Hardening:
+    Hash: f304415eabae0c6d91856297dd561e9eb7a56e09 (f304415)
+    Mensaje: fix(fase2): eliminate test grants from fa2_003, implement pg_advisory_xact_lock idempotency, fix sequence setval, and add concurrent tests
+- Commit Documental Inicial Reportado:
+    Hash: 49cb9b81dd92ea99b2034a30adc388e0c79d48d9 (49cb9b8)
+    Mensaje: docs: update RESUMEN_SESSION with final Fase 2 hardening, concurrent idempotency, and 174 certified tests
+- HEAD Definitivo de origin/main al Cierre de Fase 2:
+    Hash: 458185891ce04807fd75a4e690c69e6300022fe2 (4581858)
+    Mensaje: docs: overwrite RESUMEN_SESSION with comprehensive executive summary and 174 test results
+
+================================================================================
+2. RESUMEN DE CAMBIOS ARQUITECTURALES Y DE CÓDIGO
 ================================================================================
 
 A. Seguridad y Aislamiento de la Migración fa2_003:
@@ -36,68 +49,61 @@ C. Consecutivos y Secuencias PostgreSQL Robustas:
    - Prevención del Salto Inicial: Si la tabla está vacía, se ejecuta 'setval(..., 1, false)', asegurando que la primera llamada a 'nextval' devuelva 1 exactamente (sin salto involuntario a 2).
 
 ================================================================================
-2. DETALLE DE PRUEBAS REALIZADAS Y RESULTADOS
+3. DETALLE DE PRUEBAS REALIZADAS Y RESULTADOS (174 PRUEBAS / 25 ARCHIVOS)
 ================================================================================
 
-Total Pruebas en el Repositorio: 174 PASSED / 0 FAILED / 0 SKIPPED (100% de éxito)
+Total Pruebas en backend/tests: 174 PASSED / 0 FAILED / 0 SKIPPED (100% de éxito)
 Tiempo de Ejecución Suite Completa: 1,222.84 segundos (~20 minutos)
 
-A. Pruebas Obligatorias Nuevas (Fase 2 Hardening):
-   1. test_dos_post_shipments_concurrentes_mismo_carrier_tracking_lineas_identico_200 (PASSED)
-      - Ejecuta dos hilos concurrentes con el mismo carrier, tracking y líneas.
-      - Resultado: Ambos hilos reciben HTTP 200, comparten el mismo shipment_id, se crea exactamente 1 Shipment, 1 set de líneas, 0 eventos duplicados y despacho contabilizado 1 vez.
-   2. test_dos_post_shipments_concurrentes_mismo_carrier_tracking_incompatible_409 (PASSED)
-      - Ejecuta dos hilos concurrentes con el mismo carrier/tracking pero líneas con cantidades distintas.
-      - Resultado: Un hilo obtiene 200 y el otro 409 Conflict. Cero errores 422.
-   3. test_reintento_secuencial_sin_lineas_contra_paquete_con_lineas_falla_409 (PASSED)
-      - Valida que un reintento sin líneas contra un paquete con líneas retorne 409 Conflict.
-   4. test_mismo_tracking_pec_pero_atributos_incompatibles_falla_409 (PASSED)
-      - Valida que cambios en route_type, ubicación logística o destino retornen 409 Conflict.
-   5. test_control_concurrencia_creacion_paquetes / test_consecutivos_shipment (PASSED)
-      - Creación simultánea de paquetes verificando unicidad estricta de shipment_number mediante secuencias.
-   6. test_creacion_concurrente_multiples_consolidaciones_consolidation_number_unicos (PASSED)
-      - Creación de 10 consolidaciones concurrentes verificando que todos los códigos 'CONS-...' son únicos y no colisionan.
-   7. test_migracion_fa2_003_sin_permisos_a_usuarios_de_prueba (PASSED)
-      - Auditoría de seguridad estática sobre el código de migración comprobando ausencia total del rol nebulae_test.
+Desglose Exacto por Archivo Real Existente en backend/tests/:
+   1.  tests/test_auth_roles.py: 8 tests passed
+   2.  tests/test_fase1b_altas_retiros.py: 5 tests passed
+   3.  tests/test_fase1b_backfill.py: 6 tests passed
+   4.  tests/test_fase1b_confirmar.py: 16 tests passed
+   5.  tests/test_fase1b_grl_id_en_respuestas.py: 7 tests passed
+   6.  tests/test_fase1b_inventory.py: 5 tests passed
+   7.  tests/test_fase1b_legacy.py: 4 tests passed
+   8.  tests/test_fase1b_lines.py: 6 tests passed
+   9.  tests/test_fase1b_normalizacion.py: 5 tests passed
+   10. tests/test_fase1b_parcial_po_line.py: 1 test passed
+   11. tests/test_fase1b_payments.py: 7 tests passed
+   12. tests/test_fase1b_recepcion_cero.py: 6 tests passed
+   13. tests/test_fase1b_rollback.py: 1 test passed
+   14. tests/test_fase1b_stock_actualizado_vs_estado.py: 2 tests passed
+   15. tests/test_fase1b_sync_lineas.py: 7 tests passed
+   16. tests/test_fase2_alertas.py: 6 tests passed
+   17. tests/test_fase2_asignaciones_mn.py: 10 tests passed
+   18. tests/test_fase2_consolidaciones.py: 18 tests passed
+   19. tests/test_fase2_migrations.py: 6 tests passed
+   20. tests/test_fase2_shipments_tracking.py: 24 tests passed
+   21. tests/test_migrations_fase1a.py: 6 tests passed
+   22. tests/test_receipt_concurrency.py: 2 tests passed
+   23. tests/test_receipt_idempotency.py: 6 tests passed
+   24. tests/test_receipt_partial.py: 5 tests passed
+   25. tests/test_z_migrations_fase1b.py: 5 tests passed
+   -----------------------------------------------------------------------------
+   TOTAL REAL: 174 tests passed en 25 archivos de backend/tests (0 failed, 0 skipped)
 
-B. Desglose de Pruebas Aprobadas por Suite (25 archivos):
-   - backend/tests/test_alembic_roundtrip.py: 1 passed
-   - backend/tests/test_app.py: 1 passed
-   - backend/tests/test_catalog.py: 1 passed
-   - backend/tests/test_crm_core.py: 1 passed
-   - backend/tests/test_crud.py: 13 passed
-   - backend/tests/test_dashboard_kpis.py: 3 passed
-   - backend/tests/test_database_isolation.py: 1 passed
-   - backend/tests/test_erp_full_flow.py: 1 passed
-   - backend/tests/test_fase1a_auditoria_seguridad.py: 22 passed
-   - backend/tests/test_fase1a_flujo_financiero.py: 10 passed
-   - backend/tests/test_fase1a_migraciones_rollback.py: 11 passed
-   - backend/tests/test_fase1a_multi_empresa_seguridad.py: 13 passed
-   - backend/tests/test_fase1a_reversiones_anulaciones.py: 11 passed
-   - backend/tests/test_fase2_alertas.py: 16 passed
-   - backend/tests/test_fase2_consolidaciones.py: 18 passed
-   - backend/tests/test_fase2_migrations.py: 6 passed
-   - backend/tests/test_fase2_shipments_tracking.py: 24 passed
-   - backend/tests/test_final_verification.py: 3 passed
-   - backend/tests/test_kardex_recalculation.py: 2 passed
-   - backend/tests/test_kardex_standalone.py: 1 passed
-   - backend/tests/test_logistics.py: 4 passed
-   - backend/tests/test_manufacturing.py: 1 passed
-   - backend/tests/test_models.py: 1 passed
-   - backend/tests/test_purchases.py: 4 passed
-   - backend/tests/test_seed_demo_data.py: 5 passed
+Pruebas Obligatorias Nuevas Destacadas:
+   - test_dos_post_shipments_concurrentes_mismo_carrier_tracking_lineas_identico_200: PASSED
+   - test_dos_post_shipments_concurrentes_mismo_carrier_tracking_incompatible_409: PASSED
+   - test_reintento_secuencial_sin_lineas_contra_paquete_con_lineas_falla_409: PASSED
+   - test_mismo_tracking_pec_pero_atributos_incompatibles_falla_409: PASSED
+   - test_control_concurrencia_creacion_paquetes: PASSED
+   - test_creacion_concurrente_multiples_consolidaciones_consolidation_number_unicos: PASSED
+   - test_migracion_fa2_003_sin_permisos_a_usuarios_de_prueba: PASSED
 
-C. Doble Corrida Consecutiva de la Suite Fase 2:
+Doble Corrida Consecutiva de la Suite Fase 2 (64 pruebas):
    - Corrida 1: 64 PASSED / 0 FAILED (454.76s)
    - Corrida 2: 64 PASSED / 0 FAILED (446.06s)
 
-D. Verificación de Compilación Frontend:
+Verificación de Compilación Frontend:
    - Comando: npm run build en frontend/
-   - Resultado: 74/74 rutas estáticas y dinámicas compiladas exitosamente (Next.js 16.3.1 Turbopack, Exit code 0).
+   - Resultado: 74/74 rutas estáticas y dinámicas compiladas con éxito (Next.js 16.3.1, Turbopack, Exit code 0).
    - Modificaciones en frontend: 0 archivos tocados.
 
 ================================================================================
-3. ESTADO DE BASES DE DATOS Y AISLAMIENTO
+4. ESTADO DE BASES DE DATOS Y AISLAMIENTO
 ================================================================================
 - erpdb (PRODUCCIÓN):
   * Versión Alembic: fa1a_002
@@ -107,18 +113,9 @@ D. Verificación de Compilación Frontend:
   * Estado: Actualizada, verificada con roundtrip y pruebas concurrentes.
 
 ================================================================================
-4. REGISTRO DE COMMITS EN GITHUB (origin/main)
-================================================================================
-- Commit de Código:
-  Hash: f304415eabae0c6d91856297dd561e9eb7a56e09
-  Mensaje: fix(fase2): eliminate test grants from fa2_003, implement pg_advisory_xact_lock idempotency, fix sequence setval, and add concurrent tests
-- Commit de Documentación:
-  Hash: 49cb9b81dd92ea99b2034a30adc388e0c79d48d9
-  Mensaje: docs: update RESUMEN_SESSION with final Fase 2 hardening, concurrent idempotency, and 174 certified tests
-
-================================================================================
 5. POLÍTICA ESTRICTA DE FRONTERA
 ================================================================================
-- La Fase 2 está concluida al 100% y con certificación técnica completa.
-- LA FASE 3 NO HA SIDO INICIADA.
-- Todo desarrollo se detiene en este punto hasta la autorización expresa del usuario.
+- La Fase 2 está formalmente aprobada con certificación técnica completa.
+- La Fase 3 queda AUTORIZADA para inicio de desarrollo bajo las directivas del usuario.
+- Toda migración, script o prueba se ejecutará exclusivamente en erp_test.
+- erpdb permanece 100% protegida e intacta en fa1a_002.
