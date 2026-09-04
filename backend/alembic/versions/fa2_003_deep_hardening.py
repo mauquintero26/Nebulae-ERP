@@ -40,8 +40,55 @@ def upgrade() -> None:
     op.execute("CREATE SEQUENCE IF NOT EXISTS shipment_number_seq START WITH 1 INCREMENT BY 1;")
     op.execute("CREATE SEQUENCE IF NOT EXISTS consolidation_number_seq START WITH 1 INCREMENT BY 1;")
     op.execute("""
-        SELECT setval('shipment_number_seq', COALESCE((SELECT COUNT(*) FROM shipments), 0) + 1);
-        SELECT setval('consolidation_number_seq', COALESCE((SELECT COUNT(*) FROM consolidations), 0) + 1);
+        DO $$
+        DECLARE
+            max_shp BIGINT := 0;
+            max_con BIGINT := 0;
+        BEGIN
+            -- Determinar el mayor consecutivo de shipments considerando id y número formateado
+            SELECT COALESCE(
+                GREATEST(
+                    (SELECT COALESCE(MAX(id), 0) FROM shipments),
+                    (SELECT COALESCE(MAX(
+                        CASE 
+                            WHEN shipment_number ~ '^[A-Za-z0-9]+-[0-9]{4}([0-9]+)$' THEN 
+                                (regexp_replace(shipment_number, '^[A-Za-z0-9]+-[0-9]{4}', ''))::bigint
+                            WHEN shipment_number ~ '^[A-Za-z0-9]+-([0-9]+)$' THEN 
+                                (regexp_replace(shipment_number, '^[A-Za-z0-9]+-', ''))::bigint
+                            ELSE 0
+                        END
+                    ), 0) FROM shipments)
+                ), 0
+            ) INTO max_shp;
+
+            IF max_shp > 0 THEN
+                PERFORM setval('shipment_number_seq', max_shp, true);
+            ELSE
+                PERFORM setval('shipment_number_seq', 1, false);
+            END IF;
+
+            -- Determinar el mayor consecutivo de consolidations
+            SELECT COALESCE(
+                GREATEST(
+                    (SELECT COALESCE(MAX(id), 0) FROM consolidations),
+                    (SELECT COALESCE(MAX(
+                        CASE 
+                            WHEN consolidation_number ~ '^[A-Za-z0-9]+-[0-9]{4}([0-9]+)$' THEN 
+                                (regexp_replace(consolidation_number, '^[A-Za-z0-9]+-[0-9]{4}', ''))::bigint
+                            WHEN consolidation_number ~ '^[A-Za-z0-9]+-([0-9]+)$' THEN 
+                                (regexp_replace(consolidation_number, '^[A-Za-z0-9]+-', ''))::bigint
+                            ELSE 0
+                        END
+                    ), 0) FROM consolidations)
+                ), 0
+            ) INTO max_con;
+
+            IF max_con > 0 THEN
+                PERFORM setval('consolidation_number_seq', max_con, true);
+            ELSE
+                PERFORM setval('consolidation_number_seq', 1, false);
+            END IF;
+        END $$;
     """)
 
     # 2. Columnas en shipments
@@ -125,10 +172,6 @@ def upgrade() -> None:
         FROM logistics_locations loc
         WHERE c.logistics_location_id IS NULL AND loc.code = 'MIA_AGENCY_1';
     """)
-
-    # 9. Conceder permisos a nebulae_test
-    op.execute("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO nebulae_test;")
-    op.execute("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO nebulae_test;")
 
 
 def downgrade() -> None:

@@ -10,6 +10,8 @@ Endpoints:
 4. Motor de alertas de tránsito en tiempo real (días hábiles America/Bogota).
 """
 import datetime
+import hashlib
+import struct
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from typing import Optional, List, Dict, Any
 from zoneinfo import ZoneInfo
@@ -72,21 +74,17 @@ def _to_utc(dt: Optional[datetime.datetime]) -> datetime.datetime:
 
 def _gen_shipment_number(db: Session) -> str:
     year = datetime.datetime.now().year
-    try:
-        seq_val = db.execute(text("SELECT nextval('shipment_number_seq')")).scalar()
-    except Exception:
-        count = db.query(func.count(Shipment.id)).scalar() or 0
-        seq_val = count + 1
+    seq_val = db.execute(text("SELECT nextval('shipment_number_seq')")).scalar()
+    if seq_val is None:
+        raise RuntimeError("Fallo crítico: no se pudo obtener el consecutivo de 'shipment_number_seq'")
     return f"SHP-{year}{str(seq_val).zfill(4)}"
 
 
 def _gen_consolidation_number(db: Session) -> str:
     year = datetime.datetime.now().year
-    try:
-        seq_val = db.execute(text("SELECT nextval('consolidation_number_seq')")).scalar()
-    except Exception:
-        count = db.query(func.count(Consolidation.id)).scalar() or 0
-        seq_val = count + 1
+    seq_val = db.execute(text("SELECT nextval('consolidation_number_seq')")).scalar()
+    if seq_val is None:
+        raise RuntimeError("Fallo crítico: no se pudo obtener el consecutivo de 'consolidation_number_seq'")
     return f"CON-{year}{str(seq_val).zfill(4)}"
 
 
@@ -161,15 +159,49 @@ CONSOLIDATION_ALLOWED_TRANSITIONS: Dict[str, set] = {
 }
 
 
-def _is_shipment_compatible(existing: Shipment, p_pec_id: Optional[int], p_lines: Optional[List[Any]]) -> bool:
-    """Verifica si un paquete existente es semánticamente compatible con una nueva solicitud de creación."""
-    if existing.pec_id != p_pec_id:
+def _is_shipment_compatible(
+    existing: Shipment,
+    payload: ShipmentCreate,
+    resolved_loc_id: Optional[int],
+    resolved_route_type: str,
+    resolved_destination: str,
+) -> bool:
+    """
+    Verifica si un paquete existente es semánticamente compatible con una nueva solicitud de creación.
+    Campos de identidad inmutable que deben coincidir exactamente:
+    - pec_id: orden de compra asociada.
+    - route_type: tipo de ruta ('VIA_MIAMI' vs 'DIRECT_TO_BARRANQUILLA').
+    - logistics_location_id: agencia/ubicación asignada.
+    - destination: destino final o escala.
+    - lines: comparación exacta de la colección de líneas {po_line_id: quantity}.
+             Un payload sin líneas SOLO es compatible si el paquete existente tampoco tiene líneas.
+    """
+    # 1. Comparar orden de compra (pec_id)
+    if existing.pec_id != payload.pec_id:
         return False
-    if p_lines:
-        existing_lines_map = {l.po_line_id: Decimal(str(l.quantity)) for l in existing.lines}
-        payload_lines_map = {l.po_line_id: Decimal(str(l.quantity)) for l in p_lines}
-        if existing_lines_map != payload_lines_map:
+
+    # 2. Comparar tipo de ruta
+    if (existing.route_type or "VIA_MIAMI").upper() != resolved_route_type.upper():
+        return False
+
+    # 3. Comparar ubicación logística si se proveyó
+    if resolved_loc_id is not None:
+        if existing.logistics_location_id != resolved_loc_id:
             return False
+
+    # 4. Comparar destino
+    if existing.destination and resolved_destination:
+        if existing.destination.strip().upper() != resolved_destination.strip().upper():
+            return False
+
+    # 5. Comparar líneas estrictamente
+    existing_lines_map = {l.po_line_id: Decimal(str(l.quantity)) for l in (existing.lines or [])}
+    payload_lines = payload.lines or []
+    payload_lines_map = {l.po_line_id: Decimal(str(l.quantity)) for l in payload_lines}
+
+    if existing_lines_map != payload_lines_map:
+        return False
+
     return True
 
 
@@ -190,8 +222,9 @@ def create_shipment(
     """
     Crea un paquete independiente con tracking.
     Valida:
+    - Bloqueo asesor transaccional PostgreSQL sobre la identidad normalizada (carrier + tracking).
     - Normalización de carrier y tracking (lower/trim y upper/trim).
-    - Idempotencia con compatibilidad semántica (pec_id, líneas) o HTTP 409 Conflict si difiere.
+    - Idempotencia con compatibilidad semántica estricta (pec_id, ruta, ubicación, destino, líneas).
     - Validación de ruta (VIA_MIAMI o DIRECT_TO_BARRANQUILLA).
     - Validación de agencia/ubicación logística (existente, activa y coherente con la ruta).
     - Bloqueo de PurchaseOrderLine con SELECT FOR UPDATE.
@@ -199,7 +232,13 @@ def create_shipment(
     - Manejo seguro de carreras de concurrencia e IntegrityError en base de datos.
     """
     clean_carrier = payload.carrier.strip()
-    clean_tracking = payload.tracking_number.strip()
+    clean_tracking = payload.tracking_number.strip() if payload.tracking_number else ""
+
+    # Bloqueo asesor transaccional PostgreSQL para serializar peticiones simultáneas sobre la misma identidad
+    if clean_tracking:
+        ident_str = f"{clean_carrier.lower()}:{clean_tracking.upper()}"
+        lock_key = struct.unpack(">q", hashlib.md5(ident_str.encode("utf-8")).digest()[:8])[0]
+        db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": lock_key})
 
     # Validar route_type
     route_type = (payload.route_type or "VIA_MIAMI").upper().strip()
@@ -243,6 +282,8 @@ def create_shipment(
                 detail=f"La ubicación '{loc.name}' no es compatible con la ruta VIA_MIAMI",
             )
 
+    dest = payload.destination or ("MIAMI" if route_type == "VIA_MIAMI" else "BARRANQUILLA")
+
     # Idempotencia: Verificar si ya existe un paquete con este transportador y tracking
     existing_shp = (
         db.query(Shipment)
@@ -253,7 +294,24 @@ def create_shipment(
         .first()
     )
     if existing_shp:
-        if _is_shipment_compatible(existing_shp, payload.pec_id, payload.lines):
+        if _is_shipment_compatible(
+            existing=existing_shp,
+            payload=payload,
+            resolved_loc_id=loc.id if loc else None,
+            resolved_route_type=route_type,
+            resolved_destination=dest,
+        ):
+            # Actualizar metadatos complementarios si no estaban presentes
+            updated = False
+            if payload.notes and not existing_shp.notes:
+                existing_shp.notes = payload.notes
+                updated = True
+            if payload.carrier_service and not existing_shp.carrier_service:
+                existing_shp.carrier_service = payload.carrier_service
+                updated = True
+            if updated:
+                db.commit()
+                db.refresh(existing_shp)
             return {
                 "status": "success",
                 "message": f"Paquete existente recuperado de forma idempotente ({existing_shp.shipment_number})",
@@ -272,7 +330,7 @@ def create_shipment(
                 detail=(
                     f"Conflicto de identidad: ya existe un paquete con carrier='{existing_shp.carrier}' "
                     f"y tracking='{existing_shp.tracking_number}' ({existing_shp.shipment_number}), "
-                    f"pero los datos del envío son incompatibles con la solicitud (diferente PEC o líneas)."
+                    f"pero los datos del envío son incompatibles con la solicitud (diferente PEC, ruta, ubicación, destino o líneas)."
                 ),
             )
 
@@ -429,7 +487,13 @@ def create_shipment(
             .first()
         )
         if winner:
-            if _is_shipment_compatible(winner, payload.pec_id, payload.lines):
+            if _is_shipment_compatible(
+                existing=winner,
+                payload=payload,
+                resolved_loc_id=loc.id if loc else None,
+                resolved_route_type=route_type,
+                resolved_destination=dest,
+            ):
                 return {
                     "status": "success",
                     "message": f"Paquete existente recuperado de forma idempotente tras carrera ({winner.shipment_number})",

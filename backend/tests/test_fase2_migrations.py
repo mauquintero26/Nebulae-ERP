@@ -188,3 +188,22 @@ class TestFase2Migrations:
             assert _column_exists(conn, "shipments", "route_type")
             assert _index_exists(conn, "uq_shipment_carrier_tracking")
             assert _sequence_exists(conn, "shipment_number_seq")
+
+    def test_migracion_fa2_003_sin_permisos_a_usuarios_de_prueba(self):
+        """G. Migración ejecutada sin que exista el rol nebulae_test:
+        - Ninguna sentencia de la migración otorga permisos a usuarios de prueba.
+        - El archivo no contiene menciones a 'nebulae_test' ni sentencias GRANT funcionales.
+        - La migración es portable a cualquier base (incluyendo producción) sin roles de prueba."""
+        migration_file = _BACKEND / "alembic" / "versions" / "fa2_003_deep_hardening.py"
+        assert migration_file.exists(), "El archivo de migración fa2_003 debe existir"
+        content = migration_file.read_text(encoding="utf-8")
+
+        # 1. No debe existir mención a nebulae_test
+        assert "nebulae_test" not in content, (
+            "Violación de seguridad: fa2_003 contiene referencias al rol de pruebas 'nebulae_test'"
+        )
+
+        # 2. No debe contener sentencias GRANT
+        assert "GRANT " not in content.upper(), (
+            "Violación de seguridad: fa2_003 contiene sentencias GRANT en la migración funcional"
+        )

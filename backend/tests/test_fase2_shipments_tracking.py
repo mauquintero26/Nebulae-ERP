@@ -736,3 +736,226 @@ class TestFase2ShipmentsTracking:
             shp = session.query(Shipment).filter(Shipment.id == shp_id).first()
             assert shp.logistics_location_id is not None
             assert shp.agency_id == "MIA_AGENCY_1"
+
+    def test_dos_post_shipments_concurrentes_mismo_carrier_tracking_lineas_identico_200(self, app_client, admin_token):
+        """21. Dos POST /shipments simultáneos con mismo carrier, tracking, PEC y líneas.
+        Ambos deben responder 200, retornar mismo shipment_id, exactamente 1 Shipment,
+        exactamente 1 colección de ShipmentLine, sin eventos iniciales duplicados,
+        y el despacho acumulado solo se cuenta una vez."""
+        with TestSessionLocal() as session:
+            sup_id = _create_supplier_db(session)
+            sku_id = _create_sku_db(session)
+            pec, pol1, _ = _create_pec_with_lines(session, sup_id, sku_id)
+            pec_id = pec.id
+            pol1_id = pol1.id
+
+        trk = f"CONC-IDEM-{uuid.uuid4().hex[:6].upper()}"
+        payload = {
+            "pec_id": pec_id,
+            "carrier": "FedEx",
+            "tracking_number": trk,
+            "route_type": "VIA_MIAMI",
+            "lines": [{"po_line_id": pol1_id, "quantity": 5.0}],
+        }
+
+        def _post(_):
+            return app_client.post(
+                "/api/v1/logistica/shipments",
+                headers=_auth(admin_token),
+                json=payload,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            res1, res2 = list(executor.map(_post, [1, 2]))
+
+        assert res1.status_code == 200, f"Req 1 failed: {res1.text}"
+        assert res2.status_code == 200, f"Req 2 failed: {res2.text}"
+
+        id1 = res1.json()["data"]["id"]
+        id2 = res2.json()["data"]["id"]
+        assert id1 == id2, f"Deben retornar el mismo shipment_id: {id1} vs {id2}"
+
+        # Verificar en base de datos
+        with TestSessionLocal() as session:
+            # Exactamente 1 Shipment
+            shps = session.query(Shipment).filter(Shipment.tracking_number == trk).all()
+            assert len(shps) == 1, f"Debe quedar exactamente 1 shipment en BD, hay {len(shps)}"
+            shp = shps[0]
+
+            # Exactamente 1 colección de ShipmentLine
+            lines = session.query(ShipmentLine).filter(ShipmentLine.shipment_id == shp.id).all()
+            assert len(lines) == 1, f"Debe haber exactamente 1 línea, hay {len(lines)}"
+            assert Decimal(str(lines[0].quantity)) == Decimal("5.0")
+
+            # Ningún evento inicial duplicado
+            events = session.query(ShipmentEvent).filter(ShipmentEvent.shipment_id == shp.id).all()
+            prep_events = [e for e in events if e.event_type == "PREPARANDO_PROVEEDOR"]
+            mia_events = [e for e in events if e.event_type == "ENVIADO_A_MIAMI"]
+            assert len(prep_events) == 1, f"Evento PREPARANDO_PROVEEDOR no debe duplicarse: {len(prep_events)}"
+            assert len(mia_events) == 1, f"Evento ENVIADO_A_MIAMI no debe duplicarse: {len(mia_events)}"
+
+            # El despacho acumulado solo se cuenta una vez (si se intentara despachar más en otro paquete, respeta el saldo)
+            res_exceso = app_client.post(
+                "/api/v1/logistica/shipments",
+                headers=_auth(admin_token),
+                json={
+                    "pec_id": pec_id,
+                    "carrier": "DHL",
+                    "tracking_number": f"TRK-EXC-{uuid.uuid4().hex[:6]}",
+                    "lines": [{"po_line_id": pol1_id, "quantity": 6.0}],
+                },
+            )
+            assert res_exceso.status_code == 422
+
+    def test_dos_post_shipments_concurrentes_mismo_carrier_tracking_incompatible_409(self, app_client, admin_token):
+        """22. Dos POST /shipments simultáneos con mismo carrier y tracking pero payload incompatible.
+        Una solicitud crea (200), la otra devuelve 409 Conflict; solo queda un paquete."""
+        with TestSessionLocal() as session:
+            sup_id = _create_supplier_db(session)
+            sku_id = _create_sku_db(session)
+            pec, pol1, _ = _create_pec_with_lines(session, sup_id, sku_id)
+            pec_id = pec.id
+            pol1_id = pol1.id
+
+        trk = f"CONC-INCOMP-{uuid.uuid4().hex[:6].upper()}"
+        payload_a = {
+            "pec_id": pec_id,
+            "carrier": "FedEx",
+            "tracking_number": trk,
+            "lines": [{"po_line_id": pol1_id, "quantity": 2.0}],
+        }
+        payload_b = {
+            "pec_id": pec_id,
+            "carrier": "FedEx",
+            "tracking_number": trk,
+            "lines": [{"po_line_id": pol1_id, "quantity": 3.0}],  # Diferente cantidad -> incompatible
+        }
+
+        def _send(p):
+            return app_client.post(
+                "/api/v1/logistica/shipments",
+                headers=_auth(admin_token),
+                json=p,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            res_a, res_b = list(executor.map(_send, [payload_a, payload_b]))
+
+        codes = {res_a.status_code, res_b.status_code}
+        assert codes == {200, 409}, f"Esperaba {{200, 409}}, obtuvo {codes} ({res_a.text} / {res_b.text})"
+
+        with TestSessionLocal() as session:
+            shps = session.query(Shipment).filter(Shipment.tracking_number == trk).all()
+            assert len(shps) == 1, f"Solo debe existir 1 paquete en base de datos, hay {len(shps)}"
+
+    def test_reintento_secuencial_sin_lineas_contra_paquete_con_lineas_falla_409(self, app_client, admin_token):
+        """23. Reintento secuencial sin líneas contra un paquete existente con líneas debe devolver 409, no 200."""
+        with TestSessionLocal() as session:
+            sup_id = _create_supplier_db(session)
+            sku_id = _create_sku_db(session)
+            pec, pol1, _ = _create_pec_with_lines(session, sup_id, sku_id)
+            pec_id = pec.id
+            pol1_id = pol1.id
+
+        trk = f"SEC-NOLINE-{uuid.uuid4().hex[:6].upper()}"
+        # 1. Crear con líneas
+        res1 = app_client.post(
+            "/api/v1/logistica/shipments",
+            headers=_auth(admin_token),
+            json={
+                "pec_id": pec_id,
+                "carrier": "FedEx",
+                "tracking_number": trk,
+                "lines": [{"po_line_id": pol1_id, "quantity": 4.0}],
+            },
+        )
+        assert res1.status_code == 200
+
+        # 2. Reintento con mismo carrier/tracking pero sin líneas
+        res2 = app_client.post(
+            "/api/v1/logistica/shipments",
+            headers=_auth(admin_token),
+            json={
+                "pec_id": pec_id,
+                "carrier": "FedEx",
+                "tracking_number": trk,
+            },
+        )
+        assert res2.status_code == 409, f"Esperaba 409, obtuvo {res2.status_code}: {res2.text}"
+
+    def test_mismo_tracking_pec_pero_atributos_incompatibles_falla_409(self, app_client, admin_token):
+        """24. Mismo tracking y PEC, pero route_type, ubicación o destino diferente debe devolver 409."""
+        with TestSessionLocal() as session:
+            sup_id = _create_supplier_db(session)
+            sku_id = _create_sku_db(session)
+            pec, pol1, _ = _create_pec_with_lines(session, sup_id, sku_id)
+            pec_id = pec.id
+            pol1_id = pol1.id
+
+            loc1 = session.query(LogisticsLocation).filter(LogisticsLocation.code == "MIA_AGENCY_1").first()
+            loc2 = session.query(LogisticsLocation).filter(LogisticsLocation.code == "MIA_AGENCY_2").first()
+            loc1_id = loc1.id if loc1 else None
+            loc2_id = loc2.id if loc2 else None
+
+        # 1. Crear con VIA_MIAMI
+        trk = f"ATTR-INCOMP-{uuid.uuid4().hex[:6].upper()}"
+        res1 = app_client.post(
+            "/api/v1/logistica/shipments",
+            headers=_auth(admin_token),
+            json={
+                "pec_id": pec_id,
+                "carrier": "DHL",
+                "tracking_number": trk,
+                "route_type": "VIA_MIAMI",
+                "destination": "MIAMI",
+                "logistics_location_id": loc1_id,
+                "lines": [{"po_line_id": pol1_id, "quantity": 2.0}],
+            },
+        )
+        assert res1.status_code == 200
+
+        # Discrepancia en route_type -> 409
+        res_route = app_client.post(
+            "/api/v1/logistica/shipments",
+            headers=_auth(admin_token),
+            json={
+                "pec_id": pec_id,
+                "carrier": "DHL",
+                "tracking_number": trk,
+                "route_type": "DIRECT_TO_BARRANQUILLA",
+                "lines": [{"po_line_id": pol1_id, "quantity": 2.0}],
+            },
+        )
+        assert res_route.status_code == 409
+
+        # Discrepancia en destination -> 409
+        res_dest = app_client.post(
+            "/api/v1/logistica/shipments",
+            headers=_auth(admin_token),
+            json={
+                "pec_id": pec_id,
+                "carrier": "DHL",
+                "tracking_number": trk,
+                "route_type": "VIA_MIAMI",
+                "destination": "CALI",
+                "lines": [{"po_line_id": pol1_id, "quantity": 2.0}],
+            },
+        )
+        assert res_dest.status_code == 409
+
+        # Discrepancia en logistics_location_id -> 409
+        if loc2_id:
+            res_loc = app_client.post(
+                "/api/v1/logistica/shipments",
+                headers=_auth(admin_token),
+                json={
+                    "pec_id": pec_id,
+                    "carrier": "DHL",
+                    "tracking_number": trk,
+                    "route_type": "VIA_MIAMI",
+                    "destination": "MIAMI",
+                    "logistics_location_id": loc2_id,
+                    "lines": [{"po_line_id": pol1_id, "quantity": 2.0}],
+                },
+            )
+            assert res_loc.status_code == 409

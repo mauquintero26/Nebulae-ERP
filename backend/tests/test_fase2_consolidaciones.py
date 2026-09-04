@@ -27,6 +27,7 @@ Escenarios cubiertos:
 """
 import uuid
 from decimal import Decimal
+from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from tests.conftest import TestSessionLocal
@@ -609,3 +610,27 @@ class TestFase2Consolidaciones:
             assert assocs[s1_id].allocation_method == "VALUE"
             assert assocs[s1_id].allocation_base == Decimal("50.0000")
             assert assocs[s2_id].allocation_base == Decimal("250.0000")
+
+    def test_creacion_concurrente_multiples_consolidaciones_consolidation_number_unicos(self, app_client, admin_token):
+        """18. Creación concurrente de múltiples consolidaciones:
+        todos los consolidation_number deben ser únicos sin colisiones."""
+        def _create_con(idx):
+            return app_client.post(
+                "/api/v1/logistica/consolidaciones",
+                headers=_auth(admin_token),
+                json={
+                    "carrier": f"Air Cargo {idx}",
+                    "tracking_international": f"AWB-CONC-{uuid.uuid4().hex[:8].upper()}",
+                    "shipment_ids": [],
+                },
+            )
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            results = list(executor.map(_create_con, range(5)))
+
+        for r in results:
+            assert r.status_code == 200, f"Error creando consolidación concurrente: {r.text}"
+
+        numbers = [r.json()["data"]["consolidation_number"] for r in results]
+        assert len(numbers) == 5
+        assert len(numbers) == len(set(numbers)), f"Todos los consolidation_number deben ser únicos: {numbers}"

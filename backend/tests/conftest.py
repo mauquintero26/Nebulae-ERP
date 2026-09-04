@@ -97,6 +97,13 @@ def setup_test_db():
     )
     print("[alembic]:", result.stdout[-500:] if result.stdout else "(empty)")
     assert result.returncode == 0, f"Alembic upgrade failed: {result.stderr[-500:]}"
+    # Otorgar permisos al rol de pruebas exclusivamente en la base de pruebas erp_test
+    with test_engine.connect() as conn:
+        role_exists = conn.execute(text("SELECT 1 FROM pg_roles WHERE rolname='nebulae_test'")).scalar()
+        if role_exists:
+            conn.execute(text("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO nebulae_test;"))
+            conn.execute(text("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO nebulae_test;"))
+            conn.commit()
     yield
     # Safety: ensure DB is at head before cleanup (migration tests may have left it downgraded)
     try:
