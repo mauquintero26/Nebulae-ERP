@@ -12,6 +12,7 @@ from app.models.erp_documents import (
     Supplier, PurchaseOrderFull, GoodsReceipt, ActivityLog, SaleOrder
 )
 from app.models.inventory import InventoryLevel, Warehouse, InventoryOperation, InventoryMovement
+from app.models.fase1b import GoodsReceiptLine
 from app.api.v1.schemas_compras import (
     ConfirmarRecepcionBody, CrearRecepcionDesdePecBody,
     ActualizarTrackingBody, CrearPecBody, CancelarSolicitudBody, RegistrarPagoBody,
@@ -957,6 +958,45 @@ def confirmar_recepcion(
         g.confirmed_at    = now
         g.updated_at      = now
         g.idempotency_key = client_key
+
+        # ─── INSERCIÓN DEFINITIVA EN GOODS_RECEIPT_LINES (Fase 1B) ─────────────
+        # Por cada línea del JSON procesada, registrar la línea normalizada.
+        # El JSON original (g.productos snapshot) NO se modifica aquí —
+        # esta inserción es aditiva. Si ya existen líneas NATIVE para este ENINV
+        # (idempotencia) se reemplazan usando la clave client_key.
+        db.execute(text(
+            "DELETE FROM goods_receipt_lines WHERE gr_id = :gid AND source = 'NATIVE'"
+        ), {"gid": g.id})
+
+        for prod in updated_products:
+            sku_id_line  = prod.get("sku_id")
+            qty_esp      = int(prod.get("qty_esperada", prod.get("qty", 0)))
+            qty_recv     = int(prod.get("qty_recibida", prod.get("qty", 0)))
+
+            # Intentar enlazar con purchase_order_lines si existe PEC
+            po_line_id_link = None
+            if g.pec_id and sku_id_line:
+                row = db.execute(text(
+                    "SELECT id FROM purchase_order_lines "
+                    "WHERE pec_id = :pec AND sku_id = :sku LIMIT 1"
+                ), {"pec": g.pec_id, "sku": sku_id_line}).fetchone()
+                if row:
+                    po_line_id_link = row[0]
+
+            db.add(GoodsReceiptLine(
+                gr_id               = g.id,
+                po_line_id          = po_line_id_link,
+                sku_id              = sku_id_line,
+                description         = prod.get("nombre", prod.get("name", "")),
+                quantity_expected   = qty_esp,
+                quantity_received   = qty_recv,
+                quantity_rejected   = 0,
+                quantity_quarantine = 0,
+                receipt_type        = receipt_type,
+                source              = "NATIVE",
+                migration_batch_id  = None,
+                created_at          = now,
+            ))
 
         if receipt_type == "FISICA":
             g.stock_actualizado = True

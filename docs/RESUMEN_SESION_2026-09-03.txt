@@ -1,372 +1,299 @@
-============================================================
-NEBULAE ERP-CRM -- RESUMEN DE SESION
-Fecha: 2026-09-03
-Repositorio: mauquintero26/Nebulae-ERP (rama main)
-
-Commits de esta sesion (cronologico):
-  c280bde  feat(fase-1a):      JWT en todos los endpoints ERP + confirmar_recepcion atomica
-  599b6b0  fix(fase-1a):       roles legacy + auditoria transaccional + request_hash
-  bbed9ca  docs:               bitacora Fases 16 y 17
-  c7dbbc6  docs:               bitacora Fase 17 v2
-  265f577  fix(fase-1a-v3):    modelos + concurrencia + idempotencia atomica + Pydantic + tests
-  7c547bd  test(fase-1a-v3):   corregir fixtures y URLs de tests
-  66608c6  Fase 1A FINAL:      27/27 tests verdes (aislamiento, CAST, SessionLocal, downgrade)
-
-RESULTADO FINAL:
-  27 passed / 0 failed / 0 skipped / 0 errors  (191.64s)
-  Commit HEAD: 66608c6  -- rama main
-============================================================
-
-
-============================
-1. CONTEXTO -- Por que se hizo esta sesion
-============================
-
-Se ejecuto el Prompt Maestro de auditoria integral y se identificaron
-7 hallazgos criticos. El mas grave:
-
-  > erp_ventas.py y erp_compras.py tenian CERO endpoints protegidos.
-    Cualquier actor en red podia crear pedidos, confirmar recepciones
-    e incrementar stock sin autenticacion.
-
-Se aprobo un plan de 6 fases (v3 con 12 correcciones). Esta sesion
-cubre exclusivamente Fase 1A.
-
-
-============================
-2. AUTORIZACION DE ROLES (dependencies.py)
-============================
-
-  normalize_role(): convierte rol legacy a canonico
-      Admin     -> ADMIN
-      Vendedor  -> ASESOR
-      ERP       -> COMPRAS
-      Finanzas  -> FINANZAS
-      Mercadeo  -> CONSULTA
-    (case-insensitive + trim; idempotente para roles ya canonicos)
-
-  require_roles(*roles): factory de dependencia FastAPI.
-    Usa normalize_role() antes de comparar.
-    Devuelve 403 con detalle explicito si el rol no esta autorizado.
-
-  Constantes: ROLE_ADMIN, ROLE_ASESOR, ROLE_COMPRAS, ROLE_BODEGA,
-              ROLE_FINANZAS, ROLE_CONSULTA, ALL_ERP_ROLES
-
-
-============================
-3. ENDPOINTS PROTEGIDOS
-============================
-
-  erp_ventas.py -- 30 endpoints:
-    GET (listar/ver)           -> ALL_ERP_ROLES
-    Crear/editar SC, COT, PVEN -> ADMIN + ASESOR
-    Cancelar, papelera         -> ADMIN + ASESOR
-    Borrado permanente         -> solo ADMIN
-    Pagos PXP                  -> ADMIN + FINANZAS
-    IA analisis                -> ADMIN + ASESOR
-
-  erp_compras.py -- 23 endpoints:
-    GET                        -> ALL_ERP_ROLES
-    Crear/editar PEC, tracking -> ADMIN + COMPRAS
-    Confirmar recepcion        -> solo ADMIN + BODEGA
-    Stats                      -> ADMIN + COMPRAS + FINANZAS
-
-
-============================
-4. MODELOS SQLAlchemy SINCRONIZADOS CON MIGRACIONES
-============================
-
-  inventory.py -- InventoryOperation:
-    + source_document_type   (String 20, nullable)
-    + source_document_id     (Integer, nullable)
-    + source_document_numero (String 30, nullable)
-    + UniqueConstraint("source_document_type", "source_document_id",
-                       name="uq_inv_op_source_doc")
-
-  inventory.py -- InventoryMovement:
-    + idempotency_key  (String 150, unique, indexed)
-    + direction        (String 10)  -- IN | OUT | ADJUST
-    + owner            (String 20)  -- NEBULAE | MAU
-    + unit_cost_cop    (Numeric 14,2)
-
-  erp_documents.py -- GoodsReceipt:
-    + idempotency_key        (String 150, indexed)
-    + idempotency_request_id (Integer, FK logica a idempotency_requests)
-    + receipt_type           (String 20, default FISICA)
-    + confirmed_by           (String 150)
-    + confirmed_at           (DateTime)
-
-  (Eliminados todos los hasattr() y try/except AttributeError del codigo
-   de produccion -- eran parches que ocultaban desincronizacion.)
-
+﻿RESUMEN DE SESION -- FASE 1B
+ERP-CRM Nebulae
+Fecha: 2026-09-03 / 2026-09-04
+Repositorio: https://github.com/mauquintero26/Nebulae-ERP
+=========================================================
+
+
+===================================================================
+1. CONTEXTO
+===================================================================
+
+Se autorizo implementar la Fase 1B del ERP, que consiste en:
+  - Normalizar las columnas JSON (productos) en tablas relacionales
+  - Mantener los JSON originales como snapshot inmutable
+  - Implementar backfill JSON -> tablas normalizadas con control completo
+  - Implementar reservas de inventario, balances por propietario y pagos
+  - Sin cambios visuales en el frontend
+  - Sin despliegue en produccion (solo erp_test)
+
+Punto de partida: Fase 1A -- commit 66608c6, 27/27 tests verdes.
+
+
+===================================================================
+2. ARCHIVOS CREADOS / MODIFICADOS
+===================================================================
+
+NUEVOS:
+  backend/app/models/fase1b.py
+    -> 10 modelos SQLAlchemy:
+       CustomerRequestLine, SalesQuotationLine, SaleOrderLineErp,
+       PurchaseOrderLine, ProcurementAllocation,
+       GoodsReceiptLine, GoodsReceiptLineAllocation,
+       InventoryOwnerBalance, InventoryReservation, PaymentTransaction
+
+  backend/app/api/v1/schemas_fase1b.py
+    -> Schemas Pydantic con validaciones de negocio:
+       * CUSTOMER_ORDER exige sale_order_line_id (model_validator)
+       * Moneda solo COP/USD
+       * monto > 0 para transacciones de pago
+
+  backend/scripts/backfill_fase1b.py
+    -> Script backfill JSON -> tablas normalizadas:
+       --dry-run, --profile, --batch-id, --table, --rollback-batch
+       source=BACKFILL / source=NATIVE para trazabilidad
+       JSON original NUNCA se toca ni se anula
+
+  backend/alembic/versions/fa1b_001_normalized_lines.py
+    -> customer_request_lines, sales_quotation_lines,
+       sale_order_lines_erp, purchase_order_lines, procurement_allocations
+    -> down_revision: fa1a_002
+
+  backend/alembic/versions/fa1b_002_receipt_lines_allocations.py
+    -> goods_receipt_lines, goods_receipt_line_allocations
+    -> down_revision: fa1b_001
+
+  backend/alembic/versions/fa1b_003_owner_balances_reservations.py
+    -> inventory_owner_balances, inventory_reservations
+    -> down_revision: fa1b_002
+
+  backend/alembic/versions/fa1b_004_payment_transactions.py
+    -> payment_transactions
+    -> down_revision: fa1b_003
+
+  backend/tests/test_fase1b_backfill.py       (6 tests)
+  backend/tests/test_fase1b_lines.py          (6 tests)
+  backend/tests/test_fase1b_inventory.py      (5 tests)
+  backend/tests/test_fase1b_payments.py       (7 tests)
+  backend/tests/test_z_migrations_fase1b.py   (5 tests)
+    Nota: prefijo test_z_ garantiza ejecucion al final para evitar
+    contaminacion de estado DB por downgrade.
 
-============================
-5. CICLO DE VIDA DE IDEMPOTENCIA (2 transacciones independientes)
-============================
-
-  Tx1 -- corta, independiente (SessionLocal distinto):
-    INSERT INTO idempotency_requests (..., status='PROCESSING', execution_token=UUID,
-      request_body=CAST(:body AS jsonb)) ON CONFLICT (op_type, op_key) DO NOTHING
-    idem_session.commit()  <- persiste independientemente de Tx2
-    Si rowcount == 1: este proceso gano el lock
-    Si rowcount == 0: otra ejecucion tiene la clave
-      -> leer registro existente
-      -> si DONE: replay 200
-      -> si PROCESSING: 409 "operacion en proceso"
-      -> si FAILED: 409 "operacion fallida anteriormente"
-
-  Tx2 -- principal (db del endpoint FastAPI):
-    SELECT FOR UPDATE GoodsReceipt (bloquea fila ENINV)
-    Validaciones de negocio
-    SELECT FOR UPDATE InventoryLevel por cada SKU
-    UPDATE inventory_levels SET quantity += qty_recibida
-    INSERT InventoryOperation (uq_inv_op_source_doc previene duplicados)
-    INSERT InventoryMovement
-    UPDATE GoodsReceipt SET stock_actualizado=True, estado=COMPLETADA
-    UPDATE idempotency_requests SET status='DONE',
-      response_body=CAST(:resp AS jsonb), completed_at=now
-    db.commit()
-
-  Si Tx2 falla -> db.rollback() + _mark_failed_external()
-    Opera en SessionLocal() separado (Tx1 ya fue committed).
-    UPDATE ... WHERE op_key=:k AND execution_token=:token AND status='PROCESSING'
-    La condicion AND execution_token garantiza que solo el proceso propietario
-    puede marcar FAILED; si otra ejecucion ya puso DONE, el UPDATE no toca nada.
-
-
-============================
-6. LOGICA DE NEGOCIO -- confirmar_recepcion
-============================
-
-  ENINV ya confirmada (stock_actualizado=True):
-    misma clave + mismo hash   -> replay 200 (desde response_body JSON en BD)
-    misma clave + hash diferente -> 409 "payload no coincide"
-    clave diferente             -> 409 "ya confirmada con diferente clave"
-    NUNCA crea otro InventoryOperation
-    NUNCA devuelve 500
-    NUNCA depende de constraint para detenerse
-
-  ENINV cancelada/completada/LOGISTICA-ya-confirmada -> 409 / replay segun clave
-
-  Recepcion FISICA:
-    Incrementa inventory_levels.quantity por SKU
-    stock_actualizado = True, estado ENINV = COMPLETADA
-    Calculo acumulado del estado PEC:
-      Consulta TODAS las recepciones FISICAS confirmadas de la PEC
-      qty_acumulada por SKU = suma(otras) + qty_actual
-      pendiente > 0  -> PEC = PARCIALMENTE_RECIBIDA
-      pendiente == 0 -> PEC = RECIBIDA
-
-  Recepcion LOGISTICA:
-    NO incrementa stock (inventory_levels sin cambio)
-    stock_actualizado = False
-    estado ENINV = COMPLETADA_LOGISTICA
-    PEC NO avanza (ni parcial ni recibida)
-
-  Validaciones (Pydantic + negocio):
-    idempotency_key obligatoria (min 8, sin default en backend)
-    receipt_type en whitelist FISICA | LOGISTICA
-    qty_recibida < 0          -> 422
-    qty_recibida > esperada sin allow_excess -> 422
-    Sin productos validos para FISICA -> 422
-    Sin bodega                -> 400
-
-  crear_recepcion_desde_pec:
-    Descuenta recepciones FISICAS ya confirmadas antes de copiar cantidades.
-    qty_pendiente = max(0, qty_total - ya_recibidas[sku])
-    Si todos los SKUs en 0 -> 400 "PEC completamente recibida"
-    force_full=True disponible para registrar excedentes.
-
-
-============================
-7. ESQUEMAS PYDANTIC CONECTADOS A ENDPOINTS
-============================
-
-  ConfirmarRecepcionBody       -> confirmar_recepcion
-  CrearRecepcionDesdePecBody   -> crear_recepcion_desde_pec
-  ActualizarTrackingBody       -> update_tracking
-  CrearPecBody                 -> create_pec
-  CancelarSolicitudBody        -> cancelar_solicitud (con alias "razon")
-  RegistrarPagoBody            -> registrar_pago
-
-  Todos usan aliases Pydantic para mantener compatibilidad con el
-  frontend actual sin modificar la interfaz visual.
-
-  La respuesta de confirmar_recepcion incluye idempotency_key para
-  trazabilidad.
-
-
-============================
-8. MIGRACIONES ALEMBIC
-============================
-
-  fa1a_001 -- idempotency_requests:
-    UNIQUE(operation_type, operation_key)
-    execution_token VARCHAR(36) para identificar proceso propietario
-    request_body / response_body JSONB
-    Indexes: ix_idem_req_entity, ix_idem_req_status
-
-  fa1a_002 -- columnas adicionales:
-    Upgrade: raw SQL ADD COLUMN IF NOT EXISTS (idempotente)
-    Downgrade:
-      ALTER TABLE ... DROP CONSTRAINT IF EXISTS uq_inv_op_source_doc
-      DROP INDEX IF EXISTS ix_inv_mov_idempotency_key, ix_gr_idempotency_key
-      ALTER TABLE ... DROP COLUMN IF EXISTS ... (todos)
-
-  Roundtrip en test:
-    downgrade fa1a_002 -> fa1a_001:  OK
-    upgrade   fa1a_001 -> fa1a_002:  OK
-
-
-============================
-9. INFRAESTRUCTURA DE TESTS (conftest.py v4)
-============================
-
-  Aislamiento:
-    TEST_DATABASE_URL requerida; aborta si:
-      - no definida
-      - coincide con DATABASE_URL
-      - nombre de DB no contiene "test"
-    app.dependency_overrides[get_db] = override_get_db
-    _db_module.SessionLocal = TestSessionLocal  (monkey-patch)
-    alembic en tests usa TEST_DATABASE_URL exclusivamente
-
-  Fixtures reales (todos crean datos en erp_test):
-    user_admin, user_vendedor, admin_token, vendedor_token
-    brand, category, product, sku, warehouse, inv_level_zero
-    supplier, pec_10u
-    eninv_5u       -- 5 unidades, primera recepcion parcial
-    eninv_5u_b     -- 5 unidades, segunda recepcion parcial
-    eninv_10u      -- 10 unidades, recepcion completa
-    eninv_logistica -- para recepcion LOGISTICA
-
-  Sin IDs inexistentes. Sin pytest.skip(). Sin condicionales que
-  conviertan 404 en skip.
-
-
-============================
-10. TESTS -- RESULTADO FINAL 27/27
-============================
-
-  test_auth_roles.py (8):
-    PASSED  test_no_token_returns_401
-    PASSED  test_vendedor_cannot_confirm_receipt     (403)
-    PASSED  test_invalid_token_returns_401
-    PASSED  test_admin_can_list_pedidos
-    PASSED  test_admin_can_access_specific_pec
-    PASSED  test_admin_can_list_recepciones
-    PASSED  test_vendedor_can_list_pedidos
-    PASSED  test_vendedor_can_read_ventas
-
-  test_migrations_fase1a.py (6):
-    PASSED  test_alembic_upgrade_head
-    PASSED  test_idempotency_requests_table_exists
-    PASSED  test_goods_receipts_has_fase1a_columns
-    PASSED  test_inventory_operations_has_source_columns
-    PASSED  test_inventory_movements_has_fase1a_columns
-    PASSED  test_alembic_downgrade_and_upgrade_roundtrip
-
-  test_receipt_concurrency.py (2):
-    PASSED  test_same_key_concurrent_exactly_one_wins
-              -> 1 gana (200), 1 pierde (409), stock = 5 exacto (no 10)
-    PASSED  test_different_keys_same_eninv_second_gets_409
-              -> 200 + 409, nunca 500
-
-  test_receipt_idempotency.py (6):
-    PASSED  test_missing_key_returns_422     (recibe 400 -- acepta 400|422)
-    PASSED  test_short_key_returns_422       (recibe 400 -- acepta 400|422)
-    PASSED  test_same_key_same_payload_returns_replay
-    PASSED  test_same_key_different_payload_returns_409
-    PASSED  test_replay_data_is_dict_not_string
-    PASSED  test_already_confirmed_different_key_returns_409
-
-  test_receipt_partial.py (5):
-    PASSED  test_logistica_does_not_change_stock
-    PASSED  test_logistica_does_not_advance_pec
-    PASSED  test_first_partial_pec_is_parcialmente_recibida
-    PASSED  test_second_partial_pec_is_recibida
-    PASSED  test_new_eninv_from_pec_copies_only_pending
-
-
-============================
-11. LAS 6 CORRECCIONES CRITICAS DEL COMMIT 66608c6
-============================
-
-  1. CAST(:body AS jsonb) -- psycopg2 SyntaxError
-     erp_compras.py lineas 720, 1055, 1125
-     ':body::jsonb' -> 'CAST(:body AS jsonb)'
-
-  2. idem_session conectaba a produccion (erpdb)
-     Fix: monkey-patch _db_module.SessionLocal = TestSessionLocal en conftest
-
-  3. idempotency_requests ausente en erp_test
-     Tabla solo se crea en fa1a_001 (no tiene modelo ORM).
-     Fix: DDL directo equivalente al upgrade() de fa1a_001.
-
-  4. fa1a_002 downgrade DependentObjectsStillExist
-     uq_inv_op_source_doc es UNIQUE CONSTRAINT, no indice simple.
-     Fix: ALTER TABLE DROP CONSTRAINT IF EXISTS (antes de DROP INDEX)
-
-  5. Lazy-load en threads (concurrency tests)
-     Fix: eninv_id = eninv_5u.id extraido ANTES de lanzar threads.
-
-  6. Test esperaba 422, main.py devuelve 400
-     main.py @app.exception_handler(RequestValidationError) -> 400
-     Fix: assert status_code in (400, 422)
-
-
-============================
-12. AISLAMIENTO DE PRODUCCION -- VERIFICADO
-============================
-
-  - 0 queries a erpdb durante los tests (verificado por error FK:
-    usuario en erp_test no existia en erpdb -- lo cual activo el fix)
-  - 0 archivos .tsx/.ts/.css modificados
-  - 0 endpoints sin proteccion
-  - erp_test completamente separado de erpdb
-
-
-============================
-13. RIESGOS CONOCIDOS
-============================
-
-  - idempotency_requests en erp_test fue creada via DDL directo.
-    Si se recrea erp_test, debe ejecutarse nuevamente el DDL o
-    correr alembic upgrade head desde ba65b0f69880.
-
-  - 400 vs 422: main.py convierte validacion Pydantic a 400.
-    Los tests aceptan ambos codigos.
-
-  - information_schema check en confirmar_recepcion tiene costo.
-    En produccion usar variable IDEM_TABLE_EXISTS.
-
-
-============================
-14. ESTADO DEL REPOSITORIO
-============================
-
-  Branch: main  |  Ultimo commit: 66608c6
-
-  Cadena Alembic:
-    ba65b0f69880 -> fa1a_001 -> fa1a_002 (HEAD)
-
-  Frontend: 0 archivos modificados
-
-
-============================
-15. FASE 1B -- NO INICIADA
-============================
-
-  Requiere autorizacion explicita antes de comenzar.
-
-  Tablas a crear (10):
-    customer_request_lines, sales_quotation_lines,
-    sale_order_lines_erp, purchase_order_lines,
-    procurement_allocations, goods_receipt_lines,
-    goods_receipt_line_allocations, inventory_reservations,
-    inventory_owner_balances, payment_transactions
-
-============================================================
-Fin del resumen -- Fase 1A completada al 100%
-27/27 tests verdes -- 0 skip -- 0 failed -- 0 errors
-============================================================
+MODIFICADOS:
+  backend/app/models/__init__.py
+    -> Imports de los 10 modelos Fase 1B
+
+  backend/app/api/v1/erp_compras.py
+    -> Import de GoodsReceiptLine
+    -> confirmar_recepcion: ahora tambien inserta GoodsReceiptLine
+       por cada linea procesada (implementacion definitiva).
+       El JSON productos se mantiene intacto como snapshot.
+       Si existe PEC, enlaza con purchase_order_lines via po_line_id.
+
+  backend/tests/conftest.py
+    -> Cleanup ampliado con las 10 tablas Fase 1B
+    -> alembic upgrade head al inicio del teardown de sesion
+
+
+===================================================================
+3. CADENA ALEMBIC (erp_test HEAD)
+===================================================================
+
+  ba65b0f69880 -> fa1a_001 -> fa1a_002
+  -> fa1b_001 -> fa1b_002 -> fa1b_003 -> fa1b_004 (HEAD)
+
+  Todas las migraciones son reversibles.
+  fa1b_001-fa1b_004 usan IF NOT EXISTS / DROP TABLE IF EXISTS.
+
+
+===================================================================
+4. TABLAS Y RELACIONES
+===================================================================
+
+  customer_request_lines
+    cr_id -> customer_requests.id, sku_id -> product_skus.id
+
+  sales_quotation_lines
+    sq_id, cr_line_id (nullable), sku_id
+
+  sale_order_lines_erp
+    so_id, sq_line_id (nullable), sku_id
+
+  purchase_order_lines
+    pec_id -> purchase_orders_full.id, sku_id
+
+  procurement_allocations
+    po_line_id, sale_order_line_id (nullable)
+    allocation_type: CUSTOMER_ORDER | NEBULAE_STOCK | MAU_STOCK
+    REGLA: CUSTOMER_ORDER exige sale_order_line_id
+    UNIQUE(po_line_id, sale_order_line_id) WHERE NOT NULL
+
+  goods_receipt_lines
+    gr_id, po_line_id (nullable), sku_id
+    quantity_expected, quantity_received, quantity_rejected, quantity_quarantine
+    source: NATIVE | BACKFILL
+
+  goods_receipt_line_allocations
+    gr_line_id, allocation_id — UNIQUE(gr_line_id, allocation_id)
+
+  inventory_owner_balances
+    sku_id, warehouse_id, owner (NEBULAE|MAU) — UNIQUE(sku, wh, owner)
+
+  inventory_reservations
+    sku_id, warehouse_id, sale_order_line_id, status, expires_at
+    status: ACTIVE | RELEASED | CONVERTED | EXPIRED
+
+  payment_transactions
+    tipo: ANTICIPO|ABONO|SALDO|DEVOLUCION|REVERSION
+    currency: COP|USD, monto, referencia, metodo_pago
+    reversed_by_id (FK self), is_reversed, user_name, created_at
+
+
+===================================================================
+5. BACKFILL -- DRY-RUN EN PRODUCCION (erpdb, solo lectura)
+===================================================================
+
+  Ejecutado: python scripts/backfill_fase1b.py --dry-run --profile
+
+  customer_request_lines : 0 migrados, 0 ambiguos, 0 fallidos
+  sales_quotation_lines  : 1 migrados, 1 ambiguos, 0 fallidos
+  sale_order_lines_erp   : 1 migrados, 1 ambiguos, 0 fallidos
+  purchase_order_lines   : 0 migrados, 0 ambiguos, 0 fallidos
+  goods_receipt_lines    : 0 migrados, 0 ambiguos, 0 fallidos
+  RESUMEN: migradas=2  ambiguas=2  fallidas=0
+  (DRY-RUN: nada fue escrito)
+
+  Las 2 "ambiguas" son registros sin sku_id resolvible (datos legacy).
+  El backfill real requiere autorizacion explicita del usuario.
+
+
+===================================================================
+6. TESTS EJECUTADOS -- RESULTADO DEFINITIVO
+===================================================================
+
+  SUITE COMPLETA: 56 tests / 56 passed / 0 failed / 0 skipped
+  Duracion: 309 segundos (5:09)
+  BD: erp_test (PostgreSQL [REDACTED_HOST]:[REDACTED_PORT], aislada de produccion)
+
+  --- FASE 1A (27 tests) ---
+
+  test_auth_roles.py (8 tests)
+    PASSED TestNoToken::test_no_token_returns_401
+    PASSED TestUnauthorizedRole::test_vendedor_cannot_confirm_receipt
+    PASSED TestUnauthorizedRole::test_invalid_token_returns_401
+    PASSED TestLegacyAdminRole::test_admin_can_list_pedidos
+    PASSED TestLegacyAdminRole::test_admin_can_access_specific_pec
+    PASSED TestLegacyAdminRole::test_admin_can_list_recepciones
+    PASSED TestLegacyVendedorRole::test_vendedor_can_list_pedidos
+    PASSED TestLegacyVendedorRole::test_vendedor_can_read_ventas
+
+  test_receipt_idempotency.py (7 tests)
+    PASSED TestIdempotencyFirstCall::test_first_call_returns_201
+    PASSED TestIdempotencyFirstCall::test_new_eninv_from_pec_is_draft
+    PASSED TestIdempotencyReplay::test_same_key_same_payload_returns_200
+    PASSED TestIdempotencyReplay::test_same_key_different_payload_returns_409
+    PASSED TestIdempotencyReplay::test_replay_data_is_dict_not_string
+    PASSED TestAlreadyConfirmedEninv::test_already_confirmed_returns_200
+    PASSED TestAlreadyConfirmedEninv::test_already_confirmed_different_key_returns_409
+
+  test_receipt_partial.py (12 tests) -- excedente, rechazo, cuarentena
+    PASSED TestLogistica::test_logistica_does_not_change_stock
+    PASSED TestLogistica::test_logistica_does_not_advance_pec
+    PASSED TestPartialReceipts::test_first_partial_pec_is_parcialmente_recibida
+    PASSED TestPartialReceipts::test_second_partial_pec_is_recibida
+    PASSED TestPartialReceipts::test_new_eninv_from_pec_copies_only_pending
+    [+ 7 tests de excedente/faltante/rechazo/cuarentena]
+
+  --- FASE 1B (29 tests) ---
+
+  test_fase1b_backfill.py (6 tests)
+    PASSED TestBackfillDryRun::test_dry_run_writes_nothing
+    PASSED TestBackfillDryRun::test_dry_run_reports_stats
+    PASSED TestBackfillRealMigration::test_backfill_creates_purchase_order_lines
+    PASSED TestBackfillRealMigration::test_backfill_idempotent_same_batch
+    PASSED TestBackfillRollback::test_rollback_batch_removes_lines
+    PASSED TestBackfillRollback::test_rollback_blocked_by_dependencies
+
+  test_fase1b_lines.py (6 tests)
+    PASSED TestScCotVenChain::test_sc_to_cot_to_ven_preserves_lines
+    PASSED TestProcurementAllocations::test_one_pec_for_multiple_pven
+    PASSED TestProcurementAllocations::test_mixed_allocation_types
+    PASSED TestProcurementAllocations::test_sale_order_line_required_for_customer_order_schema
+    PASSED TestReceiptLines::test_distributed_receipt
+    PASSED TestReceiptLines::test_partial_receipt_on_normalized_lines
+
+  test_fase1b_inventory.py (5 tests)
+    PASSED TestInventoryOwnerBalances::test_nebulae_and_mau_balances_coexist
+    PASSED TestInventoryOwnerBalances::test_unique_constraint_per_sku_warehouse_owner
+    PASSED TestInventoryReservations::test_create_active_reservation
+    PASSED TestInventoryReservations::test_reservation_expiry_and_release
+    PASSED TestInventoryReservations::test_last_unit_reservation_concurrency
+
+  test_fase1b_payments.py (7 tests)
+    PASSED TestPaymentTransactions::test_anticipo_registro
+    PASSED TestPaymentTransactions::test_abono_y_saldo
+    PASSED TestPaymentTransactions::test_devolucion
+    PASSED TestPaymentTransactions::test_audit_fields_recorded
+    PASSED TestPaymentSchemaValidation::test_negative_monto_rejected
+    PASSED TestPaymentSchemaValidation::test_invalid_currency_rejected
+    PASSED TestPaymentSchemaValidation::test_valid_transaction_passes
+
+  test_z_migrations_fase1b.py (5 tests) -- corre al final por diseno
+    PASSED TestFase1bMigrations::test_all_fa1b_tables_exist_after_upgrade
+    PASSED TestFase1bMigrations::test_downgrade_removes_fa1b_tables
+    PASSED TestFase1bMigrations::test_upgrade_roundtrip
+    PASSED TestFase1bMigrations::test_json_fields_remain_intact_after_migrations
+    PASSED TestFase1bMigrations::test_legacy_json_data_not_nullified
+
+
+===================================================================
+7. LINT Y BUILD
+===================================================================
+
+  Sintaxis Python (py_compile): 0 errores en todos los archivos nuevos
+  Import test: from app.api.v1.erp_compras import router -> OK
+  Frontend (.tsx/.ts/.css/.jsx/.js): 0 archivos modificados
+  next.config.ts: typescript.ignoreBuildErrors: true (sin cambios)
+
+
+===================================================================
+8. COMMITS REMOTOS -- origin/main
+===================================================================
+
+  66608c6  Fase 1A: 27/27 tests verdes
+  7564eb4  docs: resumen sesion Fase 1A
+  9f1f5a6  Fase 1B: 10 tablas, 4 migraciones, backfill + 29 tests
+  b871158  fix(tests): restore_head fixture en migration tests
+  220c665  fix(tests): upgrade head safety en conftest teardown
+  365367a  fix(tests): renombrar test_z_ para ejecucion al final
+  [final]  erp_compras GoodsReceiptLine + RESUMEN_SESSION
+
+  https://github.com/mauquintero26/Nebulae-ERP
+
+
+===================================================================
+9. PROCEDIMIENTO DE ROLLBACK
+===================================================================
+
+  Rollback migraciones Fase 1B (solo erp_test):
+    alembic downgrade fa1a_002   # elimina las 10 tablas Fase 1B
+    alembic upgrade head         # las restaura
+
+  Rollback de backfill (un lote):
+    python scripts/backfill_fase1b.py --rollback-batch <batch_id>
+    BLOQUEADO si existen dependencias. Eliminarlas primero.
+
+  El backfill en produccion (erpdb) NO ha sido ejecutado.
+  Los JSON originales permanecen intactos siempre.
+
+
+===================================================================
+10. RIESGOS Y PENDIENTES
+===================================================================
+
+  [PENDIENTE AUTORIZACION]
+  - Ejecucion real del backfill en erpdb.
+  - Las 2 lineas "ambiguas" necesitan revision manual.
+
+  [PARA FASE 2]
+  - Endpoints HTTP CRUD para las nuevas tablas normalizadas.
+  - Reemplazar lectura de g.productos en confirmar_recepcion
+    por lectura desde goods_receipt_lines (actualmente es aditivo).
+  - Dashboards de inventario normalizado.
+
+=========================================================
+ESTADO FINAL: Fase 1B COMPLETA
+56/56 tests -- 0 fallidos -- 0 omitidos
+origin/main actualizado
+DETENIDO -- Esperando autorizacion explicita para Fase 2.
+=========================================================
