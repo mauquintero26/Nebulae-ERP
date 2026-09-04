@@ -373,3 +373,43 @@ erDiagram
 ### 5. Pestañas de Análisis Especializadas en Todos los Sub-módulos
 - Cada sub-módulo (Historial de Compras, Lista de Compras, Traslados, Pedidos, Ventas) cuenta con su pestaña **Análisis**.
 - Integra tarjetas de indicadores clave (KPIs), comparativas de rendimiento y un **asistente de chat IA** para realizar consultas analíticas en lenguaje natural sobre los datos de esa vista específica.
+
+---
+
+## 7. Fase 2: Arquitectura de Compras, Paquetes, Consolidaciones y Motor de Tránsito
+
+Con la implementación de la **Fase 2** según el Prompt Maestro, se desacopla la relación 1:1 legacy de compras y se incorporan entidades relacionales autónomas para la gestión de carga y logística internacional.
+
+### 1. Modelo Relacional de Paquetes y Consolidaciones
+
+```mermaid
+erDiagram
+    PURCHASE_ORDERS_FULL ||--o{ PURCHASE_ORDER_LINES : "tiene lineas"
+    PURCHASE_ORDER_LINES ||--o{ PROCUREMENT_ALLOCATIONS : "se asigna a"
+    SALE_ORDER_LINES_ERP ||--o{ PROCUREMENT_ALLOCATIONS : "recibe abastecimiento"
+    
+    PURCHASE_ORDERS_FULL ||--o{ SHIPMENTS : "despachada en paquetes"
+    SHIPMENTS ||--o{ SHIPMENT_LINES : "contiene lineas de compra"
+    PURCHASE_ORDER_LINES ||--o{ SHIPMENT_LINES : "despachada en"
+    SHIPMENTS ||--o{ SHIPMENT_EVENTS : "linea de tiempo"
+    
+    CONSOLIDATIONS ||--o{ CONSOLIDATION_SHIPMENTS : "agrupa paquetes"
+    SHIPMENTS ||--o{ CONSOLIDATION_SHIPMENTS : "consolidado en"
+```
+
+### 2. Entidades Principales
+- **`logistics_locations` (`LogisticsLocation`):** Catálogo de agencias y hubs intermedios (ej. `MIA_AGENCY_1`, `BOG_HUB`, `BAQ_MAIN`).
+- **`procurement_allocations` (`ProcurementAllocation`):** Relación many-to-many entre líneas de compra y destinos (`CUSTOMER_ORDER`, `NEBULAE_STOCK`, `MAU_STOCK`).
+- **`shipments` (`Shipment`):** Paquetes físicos independientes con transportador (FedEx, UPS, DHL), número de guía individual, pesos y estado físico (`status_fise`).
+- **`shipment_lines` (`ShipmentLine`):** Cantidades específicas de cada línea de orden de compra asignadas al paquete.
+- **`shipment_events` (`ShipmentEvent`):** Trazabilidad inmutable de hitos logísticos:
+  `PREPARANDO_PROVEEDOR` → `ENVIADO_A_MIAMI` → `RECIBIDO_MIAMI` → `PENDIENTE_CONSOLIDACION` → `CONSOLIDADO` → `EN_VUELO` → `EN_DIAN` → `LIBERADO_DIAN` → `RECIBIDO_BOGOTA` → `ENVIADO_BARRANQUILLA` → `RECIBIDO_BARRANQUILLA`.
+- **`consolidations` (`Consolidation`):** Carga internacional en Miami (`CON-YYYY####`) con TRM, peso total y flete en USD/COP.
+- **`consolidation_shipments` (`ConsolidationShipment`):** Vínculo N:M entre cajas de consolidación y paquetes con prorrateo de flete por peso (`WEIGHT`) o igual (`EQUAL`).
+
+### 3. Motor de Alertas de Tránsito en Tiempo Real (`/api/v1/logistica/alertas-transito`)
+- **`TRACKING_PENDIENTE`:** Órdenes de compra confirmadas > 3 días sin número de guía o paquete registrado.
+- **`ENTREGA_VENCIDA`:** Paquetes con fecha estimada de entrega vencida y estado no recibido.
+- **`PENDIENTE_CONSOLIDACION`:** Paquetes recibidos en Miami hace más de 5 días sin asignar a una consolidación.
+- **`DIAN_DEMORADO`:** Consolidaciones retenidas en aduana > 3 días hábiles.
+

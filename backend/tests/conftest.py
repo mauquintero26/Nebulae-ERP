@@ -113,6 +113,9 @@ def setup_test_db():
     # Cleanup: truncate all test data (best-effort, ignore missing tables)
     with test_engine.connect() as conn:
         for tbl in [
+            # Fase 2 — Logística, Paquetes y Consolidaciones
+            "consolidation_shipments", "shipment_events", "shipment_lines",
+            "shipments", "consolidations", "logistics_locations",
             # Fase 1B — tablas normalizadas (deben truncarse antes que los documentos padre)
             "goods_receipt_line_allocations", "goods_receipt_lines",
             "procurement_allocations",

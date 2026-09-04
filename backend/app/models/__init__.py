@@ -22,3 +22,13 @@ from app.models.fase1b import (
     InventoryReservation,
     PaymentTransaction,
 )
+
+# Fase 2 — modelos de logística, compras, paquetes y tránsito
+from app.models.fase2 import (
+    LogisticsLocation,
+    Consolidation,
+    Shipment,
+    ShipmentLine,
+    ShipmentEvent,
+    ConsolidationShipment,
+)

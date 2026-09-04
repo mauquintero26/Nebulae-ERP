@@ -405,3 +405,53 @@ Correcciones sobre `c280bde` aplicadas tras revisión del plan v3:
 
 ### 5. Código muerto eliminado
 - 182 líneas de cuerpo antiguo de `confirmar_recepcion` removidas (eran inalcanzables)
+
+---
+
+## Fase 2 — Compras, Paquetes, Consolidaciones y Tránsito (2026-09-04)
+
+Completada e integrada conforme al Prompt Maestro y arquitectura de referencia.
+
+### 1. Asignaciones M:N de Compras (ProcurementAllocation)
+- Desacoplamiento 1:1 legacy (PEC <-> PVEN) hacia modelo relacional many-to-many.
+- Cada línea de compra (`PurchaseOrderLine`) puede dividirse en asignaciones hacia pedidos de cliente (`CUSTOMER_ORDER` con `sale_order_line_id`), stock Nebulae (`NEBULAE_STOCK`) o stock Mau (`MAU_STOCK`).
+- Invariante estricta: `sum(quantity_allocated) <= quantity_ordered` (validada con HTTP 422).
+- Endpoints:
+  - `POST /api/v1/compras/pedidos/{pec_id}/asignaciones`: Registro y actualización idempotente de asignaciones.
+  - `GET /api/v1/compras/pedidos/{pec_id}/asignaciones`: Desglose completo de asignaciones del PEC.
+  - `GET /api/v1/compras/ventas/{so_id}/abastecimiento`: Consulta inversa para determinar compras abasteciendo una orden de venta.
+
+### 2. Paquetes y Envíos Independientes (Shipment) y Tracking
+- Múltiples paquetes por orden de compra (un PEC puede tener múltiples guías y transportadores, ej. FedEx, UPS, DHL).
+- Modelos relacionales:
+  - `Shipment`: Tracking number, transportador, pesos (lb/kg), costo de flete, fechas estimadas y estado físico (`status_fise`).
+  - `ShipmentLine`: Asociación explícita de cantidades despachadas por línea de orden de compra.
+  - `ShipmentEvent`: Hitos inmutables y secuenciales de trazabilidad (`PREPARANDO_PROVEEDOR` -> `ENVIADO_A_MIAMI` -> `RECIBIDO_MIAMI` -> `PENDIENTE_CONSOLIDACION` -> `CONSOLIDADO` -> `EN_VUELO` -> `EN_DIAN` -> `LIBERADO_DIAN` -> `RECIBIDO_BOGOTA` -> `ENVIADO_BARRANQUILLA` -> `RECIBIDO_BARRANQUILLA`).
+- Automatización: Al registrar `RECIBIDO_BARRANQUILLA`, se actualiza automáticamente la fecha real de entrega y el estado comercial a `EN_BARRANQUILLA`.
+- Catálogo de ubicaciones intermedias: `LogisticsLocation` (`GET/POST /api/v1/logistica/locations`).
+
+### 3. Consolidaciones Internacionales y Prorrateo de Flete
+- `Consolidation`: Carga o caja consolidada internacional en Miami (`CON-YYYY####`).
+- Prorrateo de costos de flete internacional (`total_freight_usd` y `total_freight_cop` con TRM) hacia cada paquete (`ConsolidationShipment`):
+  - Por PESO (`WEIGHT`): proporcional al peso individual en kilogramos.
+  - Por partes IGUALES (`EQUAL`): repartición equitativa entre paquetes contenidos.
+- Propagación en cascada de estados: El avance de la consolidación (`EN_VUELO`, `EN_DIAN`, `LIBERADA`, `RECIBIDA_DESTINO`) genera automáticamente los hitos y actualiza el estado de todos los paquetes contenidos.
+
+### 4. Motor de Alertas Operativas de Tránsito en Tiempo Real
+- Endpoint: `GET /api/v1/logistica/alertas-transito`.
+- Reglas de SLA activas:
+  - `TRACKING_PENDIENTE`: PECs confirmadas > 3 días sin guía ni paquete registrado.
+  - `ENTREGA_VENCIDA`: Paquetes con fecha estimada vencida y no recibidos.
+  - `PENDIENTE_CONSOLIDACION`: Paquetes en Miami > 5 días sin incluir en consolidación.
+  - `DIAN_DEMORADO`: Consolidaciones retenidas en aduana > 3 días hábiles.
+- Cálculo robusto de días de retraso con normalización de zona horaria UTC (`_to_utc`).
+
+### 5. Suite de Pruebas Automatizadas (26 tests pasando al 100%)
+- `tests/test_fase2_migrations.py`: 3 tests (upgrade, downgrade, roundtrip).
+- `tests/test_fase2_asignaciones_mn.py`: 7 tests funcionales.
+- `tests/test_fase2_shipments_tracking.py`: 6 tests de paquetes y trazabilidad.
+- `tests/test_fase2_consolidaciones.py`: 6 tests de consolidación y prorrateo.
+- `tests/test_fase2_alertas.py`: 4 tests del motor de alertas operativas.
+- 0 regresiones en Fase 1B (`test_fase1b_normalizacion.py` 5/5 PASSED).
+- Base de producción `erpdb` intacta y no modificada.
+- Frontend mantenido 100% sin alteraciones según la directriz.
