@@ -1,137 +1,124 @@
-# RESUMEN DE SESION - FASE 2: ENDURECIMIENTO FINAL, IDEMPOTENCIA CONCURRENTE Y CERTIFICACION DE PRODUCCION
+# RESUMEN EJECUTIVO DE SESIÓN - FASE 2: ENDURECIMIENTO, IDEMPOTENCIA CONCURRENTE Y CERTIFICACIÓN
 Fecha: 2026-09-04
-Estado Fase 2: 100% COMPLETADA Y CERTIFICADA (NO SE INICIA FASE 3 HASTA AUTORIZACION EXPLICITA)
-Entorno de Pruebas: erp_test (PostgreSQL remoto 2.24.90.223:5435/erp_test)
-Entorno de Produccion: erpdb (PostgreSQL remoto 2.24.90.223:5435/erpdb - INTACTO en fa1a_002)
+Rama Git: main
+Repositorio: https://github.com/mauquintero26/Nebulae-ERP
+Estado General: FASE 2 100% COMPLETADA, ENDURECIDA Y CERTIFICADA (FASE 3 NO INICIADA)
+Ambiente de Pruebas: erp_test (PostgreSQL en 2.24.90.223:5435/erp_test - Migrado a fa2_003)
+Ambiente de Producción: erpdb (PostgreSQL en 2.24.90.223:5435/erpdb - Intacto en fa1a_002)
 
 ================================================================================
-1. SEGURIDAD DE LA MIGRACION fa2_003
+1. RESUMEN DE CAMBIOS ARQUITECTURALES Y DE CÓDIGO
 ================================================================================
-- Problema resuelto: fa2_003_deep_hardening.py contenia GRANT ALL PRIVILEGES dirigido
-  al rol nebulae_test, lo que hubiera expuesto privilegios en erpdb al desplegar.
-- Accion ejecutada:
-  * Se removieron todos los GRANTs directos a nebulae_test de la migracion Alembic
-    fa2_003_deep_hardening.py.
-  * La migracion ahora es 100% agnostica y portable a cualquier base de datos donde
-    el rol nebulae_test no exista.
-  * Los permisos de prueba para nebulae_test residen unica y exclusivamente en
-    backend/tests/conftest.py dentro del hook condicional setup_test_db.
-  * Se agrego y aprobo el Test G (test_migracion_fa2_003_sin_permisos_a_usuarios_de_prueba)
-    en test_fase2_migrations.py para auditar estaticamente que el archivo no contenga
-    referencias a nebulae_test.
+
+A. Seguridad y Aislamiento de la Migración fa2_003:
+   - Archivo: backend/alembic/versions/fa2_003_deep_hardening.py
+   - Corrección: Se eliminaron completamente todas las sentencias 'GRANT ALL PRIVILEGES ... TO nebulae_test'.
+   - Beneficio: La migración es 100% portable y segura para producción. No asume ni requiere la existencia del rol de pruebas nebulae_test en el clúster PostgreSQL.
+   - Aislamiento de Pruebas: Los privilegios de testing para nebulae_test se confinaron exclusivamente al hook 'setup_test_db' en 'backend/tests/conftest.py', el cual cuenta con salvaguardas que abortan de inmediato si la base de datos no contiene 'test/staging/dev/qa' o si coincide con la URL de producción.
+
+B. Idempotencia Concurrente Real en Creación de Shipments:
+   - Archivo: backend/app/api/v1/erp_logistica.py
+   - Mecanismo: Bloqueo consultivo transaccional de PostgreSQL ('pg_advisory_xact_lock') sobre la clave de identidad normalizada:
+       ident_str = f"{clean_carrier.lower()}:{clean_tracking.upper()}"
+       lock_key = struct.unpack(">q", hashlib.md5(ident_str.encode("utf-8")).digest()[:8])[0]
+   - Precedencia Crítica: El lock se adquiere al inicio absoluto de 'create_shipment', ANTES de consultar las líneas del pedido de compra (PEC) o validar límites de despacho acumulado.
+   - Peticiones Concurrentes Idénticas: Ambas obtienen HTTP 200 con el mismo shipment_id, exactamente 1 registro Shipment, 1 conjunto de ShipmentLine, sin eventos duplicados y el despacho acumulado contabilizado una única vez.
+   - Peticiones Concurrentes Incompatibles: La primera solicitud crea el paquete (HTTP 200); la segunda detecta incompatibilidad y retorna HTTP 409 Conflict (nunca HTTP 422).
+   - Función '_is_shipment_compatible' Estricta:
+       * Compara pec_id, route_type, logistics_location_id y destination.
+       * Compara colecciones completas de líneas (product_id y quantity) ordenadas.
+       * Un payload sin líneas solo es compatible con un paquete existente sin líneas.
+
+C. Consecutivos y Secuencias PostgreSQL Robustas:
+   - Archivo: backend/app/api/v1/erp_logistica.py & fa2_003_deep_hardening.py
+   - Eliminación de Fallback Silencioso: Se eliminó el bloque 'try...except COUNT(*) + 1' en '_gen_shipment_number' y '_gen_consolidation_number'. Si la secuencia falla, se propaga un 'RuntimeError' explícito.
+   - Inicialización Histórica Real: En la migración, las secuencias 'seq_shipment_number' y 'seq_consolidation_number' se inicializan consultando el valor numérico máximo histórico de los formatos 'SHP-YYYY-#####' y 'CONS-YYYY-#####'.
+   - Prevención del Salto Inicial: Si la tabla está vacía, se ejecuta 'setval(..., 1, false)', asegurando que la primera llamada a 'nextval' devuelva 1 exactamente (sin salto involuntario a 2).
 
 ================================================================================
-2. IDEMPOTENCIA CONCURRENTE REAL EN SHIPMENT
+2. DETALLE DE PRUEBAS REALIZADAS Y RESULTADOS
 ================================================================================
-- Problema resuelto: En concurrencia real con el mismo (carrier, tracking), dos peticiones
-  simultaneas podian evaluar el limite de despacho acumulado en paralelo y fallar con
-  HTTP 422 por exceso de cantidad antes de detectar el shipment existente.
-- Accion ejecutada:
-  * Se implemento un bloqueo consultivo transaccional (pg_advisory_xact_lock) en
-    backend/app/api/v1/erp_logistica.py calculado sobre la clave normalizada:
-    ident_str = f"{clean_carrier.lower()}:{clean_tracking.upper()}"
-    lock_key = struct.unpack(">q", hashlib.md5(ident_str.encode("utf-8")).digest()[:8])[0]
-  * El lock se adquiere ANTES de evaluar lineas, ordenes de compra (PEC) y limites acumulados.
-  * Si ya existe un shipment para dicho carrier/tracking, se invoca _is_shipment_compatible.
-  * Peticiones concurrentes identicas: Ambas responden HTTP 200 con el mismo shipment_id,
-    exactamente 1 registro Shipment, 1 conjunto de ShipmentLine, sin eventos duplicados
-    y el despacho de inventario/PEC contabilizado una sola vez.
-  * Peticiones concurrentes incompatibles: La primera responde HTTP 200; la segunda detecta
-    incompatibilidad estricta y responde HTTP 409 Conflict (nunca 422).
-  * Evaluacion estricta en _is_shipment_compatible:
-    - Compara pec_id, route_type, logistics_location_id y destination.
-    - Compara coleccion exacta de lineas (product_id y quantity) ordenadas.
-    - Un payload sin lineas solo es compatible con un paquete sin lineas.
 
-================================================================================
-3. CONSECUTIVOS Y SECUENCIAS POSTGRESQL
-================================================================================
-- Problema resuelto: El fallback de emergencia COUNT(*) + 1 podia generar colisiones
-  cuando habia registros eliminados, y el setval(seq, 1) sin is_called=false causaba
-  que el primer valor generado fuera 2 en lugar de 1.
-- Accion ejecutada:
-  * Se eliminaron todos los fallbacks COUNT(*) + 1 silenciosos en _gen_shipment_number y
-    _gen_consolidation_number en backend/app/api/v1/erp_logistica.py.
-  * Si la secuencia falla, se propaga un RuntimeError explicito.
-  * En fa2_003_deep_hardening.py, las secuencias seq_shipment_number y seq_consolidation_number
-    se inicializan calculando el maximo consecutivo numerico historico existente.
-  * Si la tabla esta vacia, se invoca setval(..., 1, false) para que la primera llamada
-    a nextval devuelva 1 exactamente, evitando saltos indebidos.
+Total Pruebas en el Repositorio: 174 PASSED / 0 FAILED / 0 SKIPPED (100% de éxito)
+Tiempo de Ejecución Suite Completa: 1,222.84 segundos (~20 minutos)
 
-================================================================================
-4. NUEVOS TESTS OBLIGATORIOS IMPLEMENTADOS Y APROBADOS
-================================================================================
-A. test_fase2_shipments_tracking.py (Tests 21-24):
-   - Test 21: test_dos_post_shipments_concurrentes_mismo_carrier_tracking_payload_identico_200
-     Dos hilos concurrentes envian el mismo payload. Ambos reciben 200, mismo shipment_id,
-     exactamente 1 Shipment creado, sin lineas ni eventos duplicados.
-   - Test 22: test_dos_post_shipments_concurrentes_mismo_carrier_tracking_incompatible_409
-     Dos hilos concurrentes envian payloads distintos. Uno obtiene 200 y el otro 409 Conflict.
-     Nunca retorna 422.
-   - Test 23: test_reintento_post_shipment_despacho_acumulado_no_falla_422
-     Un PEC con cantidad 5.0 despachado completamente. Un reintento con payload identico
-     devuelve 200 idempotente y no falla por exceso de cantidad.
-   - Test 24: test_consecutivos_shipment_sin_fallback_count_respetan_secuencia
-     Generacion concurrente de numeros SHP via secuencia sin duplicados ni gaps.
-   -> Total archivo: 24 passed / 0 failed.
+A. Pruebas Obligatorias Nuevas (Fase 2 Hardening):
+   1. test_dos_post_shipments_concurrentes_mismo_carrier_tracking_lineas_identico_200 (PASSED)
+      - Ejecuta dos hilos concurrentes con el mismo carrier, tracking y líneas.
+      - Resultado: Ambos hilos reciben HTTP 200, comparten el mismo shipment_id, se crea exactamente 1 Shipment, 1 set de líneas, 0 eventos duplicados y despacho contabilizado 1 vez.
+   2. test_dos_post_shipments_concurrentes_mismo_carrier_tracking_incompatible_409 (PASSED)
+      - Ejecuta dos hilos concurrentes con el mismo carrier/tracking pero líneas con cantidades distintas.
+      - Resultado: Un hilo obtiene 200 y el otro 409 Conflict. Cero errores 422.
+   3. test_reintento_secuencial_sin_lineas_contra_paquete_con_lineas_falla_409 (PASSED)
+      - Valida que un reintento sin líneas contra un paquete con líneas retorne 409 Conflict.
+   4. test_mismo_tracking_pec_pero_atributos_incompatibles_falla_409 (PASSED)
+      - Valida que cambios en route_type, ubicación logística o destino retornen 409 Conflict.
+   5. test_control_concurrencia_creacion_paquetes / test_consecutivos_shipment (PASSED)
+      - Creación simultánea de paquetes verificando unicidad estricta de shipment_number mediante secuencias.
+   6. test_creacion_concurrente_multiples_consolidaciones_consolidation_number_unicos (PASSED)
+      - Creación de 10 consolidaciones concurrentes verificando que todos los códigos 'CONS-...' son únicos y no colisionan.
+   7. test_migracion_fa2_003_sin_permisos_a_usuarios_de_prueba (PASSED)
+      - Auditoría de seguridad estática sobre el código de migración comprobando ausencia total del rol nebulae_test.
 
-B. test_fase2_consolidaciones.py (Test 18):
-   - Test 18: test_consecutivos_consolidacion_sin_fallback_count_respetan_secuencia
-     Generacion concurrente de 10 consolidaciones. Los codigos generados son unicos
-     y la secuencia avanza monotonicamente.
-   -> Total archivo: 18 passed / 0 failed.
+B. Desglose de Pruebas Aprobadas por Suite (25 archivos):
+   - backend/tests/test_alembic_roundtrip.py: 1 passed
+   - backend/tests/test_app.py: 1 passed
+   - backend/tests/test_catalog.py: 1 passed
+   - backend/tests/test_crm_core.py: 1 passed
+   - backend/tests/test_crud.py: 13 passed
+   - backend/tests/test_dashboard_kpis.py: 3 passed
+   - backend/tests/test_database_isolation.py: 1 passed
+   - backend/tests/test_erp_full_flow.py: 1 passed
+   - backend/tests/test_fase1a_auditoria_seguridad.py: 22 passed
+   - backend/tests/test_fase1a_flujo_financiero.py: 10 passed
+   - backend/tests/test_fase1a_migraciones_rollback.py: 11 passed
+   - backend/tests/test_fase1a_multi_empresa_seguridad.py: 13 passed
+   - backend/tests/test_fase1a_reversiones_anulaciones.py: 11 passed
+   - backend/tests/test_fase2_alertas.py: 16 passed
+   - backend/tests/test_fase2_consolidaciones.py: 18 passed
+   - backend/tests/test_fase2_migrations.py: 6 passed
+   - backend/tests/test_fase2_shipments_tracking.py: 24 passed
+   - backend/tests/test_final_verification.py: 3 passed
+   - backend/tests/test_kardex_recalculation.py: 2 passed
+   - backend/tests/test_kardex_standalone.py: 1 passed
+   - backend/tests/test_logistics.py: 4 passed
+   - backend/tests/test_manufacturing.py: 1 passed
+   - backend/tests/test_models.py: 1 passed
+   - backend/tests/test_purchases.py: 4 passed
+   - backend/tests/test_seed_demo_data.py: 5 passed
 
-C. test_fase2_migrations.py (Test G):
-   - Test G: test_migracion_fa2_003_sin_permisos_a_usuarios_de_prueba
-     Auditoria de seguridad estatica sobre fa2_003_deep_hardening.py verificando que no
-     contenga referencias a nebulae_test.
-   -> Total archivo: 6 passed / 0 failed.
-
-================================================================================
-5. RESULTADOS DE LA CERTIFICACION COMPLETA
-================================================================================
-1. Suite Fase 2 - Doble Corrida Consecutiva:
+C. Doble Corrida Consecutiva de la Suite Fase 2:
    - Corrida 1: 64 PASSED / 0 FAILED (454.76s)
    - Corrida 2: 64 PASSED / 0 FAILED (446.06s)
-2. Suite Completa del Repositorio (25 archivos de prueba):
-   - Resultado: 174 PASSED / 0 FAILED / 0 SKIPPED (1222.84s / 20m 22s)
-   - Tasa de exito: 100.0%
-   - Detalle por archivo:
-     * test_alembic_roundtrip.py: 1 passed
-     * test_app.py: 1 passed
-     * test_catalog.py: 1 passed
-     * test_crm_core.py: 1 passed
-     * test_crud.py: 13 passed
-     * test_dashboard_kpis.py: 3 passed
-     * test_database_isolation.py: 1 passed
-     * test_erp_full_flow.py: 1 passed
-     * test_fase1a_auditoria_seguridad.py: 22 passed
-     * test_fase1a_flujo_financiero.py: 10 passed
-     * test_fase1a_migraciones_rollback.py: 11 passed
-     * test_fase1a_multi_empresa_seguridad.py: 13 passed
-     * test_fase1a_reversiones_anulaciones.py: 11 passed
-     * test_fase2_alertas.py: 16 passed
-     * test_fase2_consolidaciones.py: 18 passed
-     * test_fase2_migrations.py: 6 passed
-     * test_fase2_shipments_tracking.py: 24 passed
-     * test_final_verification.py: 3 passed
-     * test_kardex_recalculation.py: 2 passed
-     * test_kardex_standalone.py: 1 passed
-     * test_logistics.py: 4 passed
-     * test_manufacturing.py: 1 passed
-     * test_models.py: 1 passed
-     * test_purchases.py: 4 passed
-     * test_seed_demo_data.py: 5 passed
-3. Compilacion Frontend (npm run build):
-   - Exito total (Exit code 0)
-   - 74/74 rutas estaticas y dinamicas generadas sin errores.
-   - Cero archivos modificados en frontend/.
-4. Verificacion de Bases de Datos:
-   - erpdb (PRODUCCION): version fa1a_002 (Intacta, 0 migraciones aplicadas).
-   - erp_test (TESTING): version fa2_003 (Migrada y endurecida).
+
+D. Verificación de Compilación Frontend:
+   - Comando: npm run build en frontend/
+   - Resultado: 74/74 rutas estáticas y dinámicas compiladas exitosamente (Next.js 16.3.1 Turbopack, Exit code 0).
+   - Modificaciones en frontend: 0 archivos tocados.
 
 ================================================================================
-6. POLITICA DE TRANSICION
+3. ESTADO DE BASES DE DATOS Y AISLAMIENTO
 ================================================================================
-- La Fase 2 queda completamente endurecida y lista para despliegue cuando sea requerida.
-- LA FASE 3 NO HA SIDO INICIADA, cumpliendo la directiva estricta de suspension.
+- erpdb (PRODUCCIÓN):
+  * Versión Alembic: fa1a_002
+  * Estado: Completamente intacta. Cero migraciones ejecutadas, cero scripts aplicados.
+- erp_test (TESTING):
+  * Versión Alembic: fa2_003
+  * Estado: Actualizada, verificada con roundtrip y pruebas concurrentes.
+
+================================================================================
+4. REGISTRO DE COMMITS EN GITHUB (origin/main)
+================================================================================
+- Commit de Código:
+  Hash: f304415eabae0c6d91856297dd561e9eb7a56e09
+  Mensaje: fix(fase2): eliminate test grants from fa2_003, implement pg_advisory_xact_lock idempotency, fix sequence setval, and add concurrent tests
+- Commit de Documentación:
+  Hash: 49cb9b81dd92ea99b2034a30adc388e0c79d48d9
+  Mensaje: docs: update RESUMEN_SESSION with final Fase 2 hardening, concurrent idempotency, and 174 certified tests
+
+================================================================================
+5. POLÍTICA ESTRICTA DE FRONTERA
+================================================================================
+- La Fase 2 está concluida al 100% y con certificación técnica completa.
+- LA FASE 3 NO HA SIDO INICIADA.
+- Todo desarrollo se detiene en este punto hasta la autorización expresa del usuario.
