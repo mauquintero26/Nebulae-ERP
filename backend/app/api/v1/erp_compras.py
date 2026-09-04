@@ -12,7 +12,7 @@ from app.models.erp_documents import (
     Supplier, PurchaseOrderFull, GoodsReceipt, ActivityLog, SaleOrder
 )
 from app.models.inventory import InventoryLevel, Warehouse, InventoryOperation, InventoryMovement
-from app.models.fase1b import GoodsReceiptLine
+from app.models.fase1b import GoodsReceiptLine, PurchaseOrderLine
 from app.api.v1.schemas_compras import (
     ConfirmarRecepcionBody, CrearRecepcionDesdePecBody,
     ActualizarTrackingBody, CrearPecBody, CancelarSolicitudBody, RegistrarPagoBody,
@@ -315,6 +315,27 @@ def create_pec(body: CrearPecBody, user: User = Depends(require_roles(*ROLE_ADMI
         created_by=body.created_by,
     )
     db.add(pec)
+    db.flush()  # obtener pec.id sin commit
+
+    # ─── CREAR PURCHASE_ORDER_LINES (Fase 1B) ─────────────────────────────────
+    # Una fila por cada producto del payload. Permite distinguir dos lineas
+    # del mismo SKU mediante su po_line_id independiente.
+    for prod in productos_raw:
+        sku_id_pol = prod.get("sku_id")
+        qty_pol    = int(prod.get("qty", prod.get("quantity", 0)))
+        if qty_pol > 0:
+            db.add(PurchaseOrderLine(
+                pec_id           = pec.id,
+                sku_id           = sku_id_pol,
+                description      = prod.get("nombre", prod.get("name", prod.get("product_name", ""))),
+                quantity_ordered  = qty_pol,
+                unit_cost_usd    = prod.get("precio_usd") or prod.get("cost_usd"),
+                unit_cost_cop    = prod.get("precio_cop"),
+                quantity_received = 0,
+                source           = "NATIVE",
+                migration_batch_id = None,
+            ))
+
     db.commit()
     db.refresh(pec)
 
@@ -332,6 +353,7 @@ def create_pec(body: CrearPecBody, user: User = Depends(require_roles(*ROLE_ADMI
          new_estado="BORRADOR", user_name=body.created_by)
 
     return {"status": "success", "data": _pec_dict(pec)}
+
 
 
 @router.get("/pedidos/{pec_id}")
@@ -480,6 +502,16 @@ def crear_recepcion_desde_pec(
                         + int(prod.get("qty_recibida", prod.get("qty", 0)))
                     )
 
+    # Obtener purchase_order_lines de la PEC para enlace univoco (Fase 1B)
+    # Construimos un mapa: sku_id -> [po_line_id, ...] para manejar duplicados
+    po_lines_by_sku: dict = {}  # {sku_id: deque de po_line_id}
+    from collections import deque as _deque
+    _pol_rows = db.execute(text(
+        "SELECT id, sku_id FROM purchase_order_lines WHERE pec_id = :pec ORDER BY id"
+    ), {"pec": p.id}).fetchall()
+    for _pol_id, _pol_sku in _pol_rows:
+        po_lines_by_sku.setdefault(_pol_sku, _deque()).append(_pol_id)
+
     # Construir lista de productos con cantidades PENDIENTES
     productos_recepcion = []
     for prod in (p.productos or []):
@@ -495,12 +527,18 @@ def crear_recepcion_desde_pec(
         if qty_pendiente == 0:
             continue  # Omitir productos ya completamente recibidos
 
+        # Enlace univoco con purchase_order_lines (FIFO por sku_id)
+        _po_line_id = None
+        if sku_id and sku_id in po_lines_by_sku and po_lines_by_sku[sku_id]:
+            _po_line_id = po_lines_by_sku[sku_id].popleft()
+
         productos_recepcion.append({
             **prod,
             "qty_esperada": qty_pendiente,
             "qty_recibida": 0,
             "paquetes": 0,
             "estado": "PENDIENTE",
+            "_po_line_id": _po_line_id,  # campo interno para GoodsReceiptLine
         })
 
     if not productos_recepcion:
@@ -527,6 +565,31 @@ def crear_recepcion_desde_pec(
         created_by     = body.created_by,
     )
     db.add(gr)
+    db.flush()  # obtener gr.id sin commit
+
+    # ─── CREAR GOODS_RECEIPT_LINES EN LA MISMA TRANSACCION (Fase 1B) ──────────
+    # Cada linea del snapshot JSON tiene su GoodsReceiptLine correspondiente.
+    # Si la PEC tiene purchase_order_lines, enlazamos por po_line_id (univoco).
+    # Para SKUs duplicados usamos el campo "_po_line_id" embebido en el snapshot.
+    for prod in productos_recepcion:
+        po_line_id_link = prod.get("_po_line_id")  # puesto por el loop de abajo
+        sku_id_line  = prod.get("sku_id")
+        qty_esp_line = int(prod.get("qty_esperada", prod.get("qty", 0)))
+        db.add(GoodsReceiptLine(
+            gr_id               = gr.id,
+            po_line_id          = po_line_id_link,
+            sku_id              = sku_id_line,
+            description         = prod.get("nombre", prod.get("name", prod.get("product_name", ""))),
+            quantity_expected   = qty_esp_line,
+            quantity_received   = 0,         # a actualizar antes de confirmar
+            quantity_rejected   = 0,
+            quantity_quarantine = 0,
+            receipt_type        = "FISICA",  # default; cambia al confirmar
+            source              = "NATIVE",
+            migration_batch_id  = None,
+            created_at          = db.execute(text("SELECT NOW()")).scalar(),
+        ))
+
     db.commit()
     db.refresh(gr)
 
@@ -535,7 +598,7 @@ def crear_recepcion_desde_pec(
         entity_id     = gr.id,
         entity_numero = gr.numero,
         action        = "CREATED",
-        description   = f"Recepcion {gr.numero} creada desde {p.numero}",
+        description   = f"Recepcion {gr.numero} creada desde {p.numero} con {len(productos_recepcion)} lineas normalizadas",
         new_estado    = "BORRADOR",
         user_name     = body.created_by,
     ))
@@ -853,57 +916,123 @@ def confirmar_recepcion(
             _mark_failed_external(client_key, execution_token, "Bodega no encontrada", now)
             raise HTTPException(400, f"Bodega {warehouse_id} no encontrada en la base de datos.")
 
-        # ─── PROCESAR LINEAS DEL JSON ──────────────────────────────────────────
-        updated_products = []
-        sku_increments: dict = {}  # {sku_id: qty}
+        # ─── FUENTE DE VERDAD: GOODS_RECEIPT_LINES (Fase 1B) ─────────────────
+        # SELECT FOR UPDATE en GoodsReceiptLine para serializacion concurrente.
+        # Si no existen lineas normalizadas (recepcion legacy sin PEC), se crea
+        # una linea por cada entrada del JSON snapshot como fallback de compatibilidad.
+        gr_lines = db.execute(
+            select(GoodsReceiptLine)
+            .where(GoodsReceiptLine.gr_id == eninv_id)
+            .with_for_update()
+            .order_by(GoodsReceiptLine.id)
+        ).scalars().all()
 
-        for prod in (g.productos or []):
-            sku_id       = prod.get("sku_id")
-            qty_esperada = int(prod.get("qty_esperada", prod.get("qty", 0)))
-            qty_recibida = int(prod.get("qty_recibida", prod.get("qty", 0)))
+        if not gr_lines:
+            # Fallback: recepcion creada antes de Fase 1B (sin lineas normalizadas).
+            # Crear lineas desde JSON snapshot SOLO para esta confirmacion.
+            for prod in (g.productos or []):
+                sku_id_fb = prod.get("sku_id")
+                qty_esp_fb = int(prod.get("qty_esperada", prod.get("qty", 0)))
+                qty_recv_fb = int(prod.get("qty_recibida", qty_esp_fb))
+                db.add(GoodsReceiptLine(
+                    gr_id               = eninv_id,
+                    po_line_id          = None,
+                    sku_id              = sku_id_fb,
+                    description         = prod.get("nombre", prod.get("name", "")),
+                    quantity_expected   = qty_esp_fb,
+                    quantity_received   = qty_recv_fb,
+                    quantity_rejected   = 0,
+                    quantity_quarantine = 0,
+                    receipt_type        = receipt_type,
+                    source              = "NATIVE",
+                    migration_batch_id  = None,
+                    created_at          = now,
+                ))
+            db.flush()
+            # Re-leer con lock
+            gr_lines = db.execute(
+                select(GoodsReceiptLine)
+                .where(GoodsReceiptLine.gr_id == eninv_id)
+                .with_for_update()
+                .order_by(GoodsReceiptLine.id)
+            ).scalars().all()
+
+        # ─── VALIDAR Y CALCULAR DESDE LINEAS NORMALIZADAS ─────────────────────
+        sku_increments: dict = {}  # {sku_id: qty_total} — calculado desde GRL
+
+        for grl in gr_lines:
+            sku_id       = grl.sku_id
+            qty_expected = int(grl.quantity_expected or 0)
+            qty_received = int(grl.quantity_received or 0)
+
+            # Si quantity_received==0 en BORRADOR, usar quantity_expected como default
+            # (el operador no hizo PATCH antes de confirmar)
+            if qty_received == 0 and qty_expected > 0:
+                qty_received = qty_expected
 
             # Validar cantidades negativas
-            if qty_recibida < 0:
+            if qty_received < 0:
                 _mark_failed_external(
                     client_key, execution_token,
-                    f"qty_recibida negativa en SKU {sku_id}", now
+                    f"quantity_received negativa en GRL {grl.id} SKU {sku_id}", now
                 )
                 raise HTTPException(
                     422,
-                    f"qty_recibida no puede ser negativa (SKU {sku_id}: {qty_recibida})"
+                    f"quantity_received no puede ser negativa (GRL {grl.id}, SKU {sku_id}: {qty_received})"
                 )
 
             # Validar excedente
-            if qty_recibida > qty_esperada and not allow_excess:
+            if qty_received > qty_expected and not allow_excess:
                 _mark_failed_external(
                     client_key, execution_token,
-                    f"Excedente no autorizado en SKU {sku_id}", now
+                    f"Excedente no autorizado en GRL {grl.id} SKU {sku_id}", now
                 )
                 raise HTTPException(
                     422,
-                    f"qty_recibida ({qty_recibida}) > qty_esperada ({qty_esperada}) "
+                    f"quantity_received ({qty_received}) > quantity_expected ({qty_expected}) "
                     f"para SKU {sku_id}. Usa allow_excess=true para registrar excedentes."
                 )
 
-            if receipt_type == "FISICA" and sku_id and qty_recibida > 0:
-                sku_increments[sku_id] = sku_increments.get(sku_id, 0) + qty_recibida
-                prod["estado"] = "RECIBIDO"
-            elif receipt_type == "LOGISTICA":
-                prod["estado"] = "EN_TRANSITO_INTERMEDIO"
+            # Actualizar la linea normalizada con tipo de recepcion y qty definitiva
+            grl.quantity_received = qty_received
+            grl.receipt_type      = receipt_type
 
-            updated_products.append(prod)
+            if receipt_type == "FISICA" and sku_id and qty_received > 0:
+                sku_increments[sku_id] = sku_increments.get(sku_id, 0) + qty_received
 
         # Para FISICA: debe haber al menos un SKU con qty > 0
         if receipt_type == "FISICA" and not sku_increments:
             _mark_failed_external(
                 client_key, execution_token,
-                "Sin productos FISICA validos (sku_id y qty_recibida > 0)", now
+                "Sin lineas normalizadas con sku_id y quantity_received > 0", now
             )
             raise HTTPException(
                 422,
-                "Sin productos validos para confirmar recepcion FISICA. "
-                "Cada producto necesita sku_id y qty_recibida > 0."
+                "Sin lineas normalizadas validas para confirmar recepcion FISICA. "
+                "Cada GoodsReceiptLine necesita sku_id y quantity_received > 0."
             )
+
+        # ─── REGENERAR SNAPSHOT JSON DESDE LINEAS NORMALIZADAS ────────────────
+        # El campo g.productos se actualiza como snapshot de compatibilidad
+        # con el frontend. La fuente de verdad son las GoodsReceiptLine.
+        updated_products = []
+        for grl in gr_lines:
+            estado_prod = (
+                "RECIBIDO" if receipt_type == "FISICA" and grl.quantity_received > 0
+                else "EN_TRANSITO_INTERMEDIO" if receipt_type == "LOGISTICA"
+                else "PENDIENTE"
+            )
+            updated_products.append({
+                "sku_id"       : grl.sku_id,
+                "nombre"       : grl.description or "",
+                "qty_esperada" : int(grl.quantity_expected or 0),
+                "qty_recibida" : int(grl.quantity_received or 0),
+                "qty_rechazada": int(grl.quantity_rejected or 0),
+                "qty_cuarentena": int(grl.quantity_quarantine or 0),
+                "estado"       : estado_prod,
+                "po_line_id"   : grl.po_line_id,
+                "grl_id"       : grl.id,
+            })
 
         # ─── ACTUALIZAR INVENTARIO (solo FISICA) ──────────────────────────────
         inv_op = None
@@ -951,52 +1080,13 @@ def confirmar_recepcion(
                     idempotency_key = mv_key,
                 ))
 
-        # ─── ACTUALIZAR RECEPCION ──────────────────────────────────────────────
-        g.productos       = updated_products
+        # ─── ACTUALIZAR RECEPCION (snapshot JSON generado desde GRL) ───────────
+        g.productos       = updated_products   # snapshot de compatibilidad
         g.receipt_type    = receipt_type
         g.confirmed_by    = user_label
         g.confirmed_at    = now
         g.updated_at      = now
         g.idempotency_key = client_key
-
-        # ─── INSERCIÓN DEFINITIVA EN GOODS_RECEIPT_LINES (Fase 1B) ─────────────
-        # Por cada línea del JSON procesada, registrar la línea normalizada.
-        # El JSON original (g.productos snapshot) NO se modifica aquí —
-        # esta inserción es aditiva. Si ya existen líneas NATIVE para este ENINV
-        # (idempotencia) se reemplazan usando la clave client_key.
-        db.execute(text(
-            "DELETE FROM goods_receipt_lines WHERE gr_id = :gid AND source = 'NATIVE'"
-        ), {"gid": g.id})
-
-        for prod in updated_products:
-            sku_id_line  = prod.get("sku_id")
-            qty_esp      = int(prod.get("qty_esperada", prod.get("qty", 0)))
-            qty_recv     = int(prod.get("qty_recibida", prod.get("qty", 0)))
-
-            # Intentar enlazar con purchase_order_lines si existe PEC
-            po_line_id_link = None
-            if g.pec_id and sku_id_line:
-                row = db.execute(text(
-                    "SELECT id FROM purchase_order_lines "
-                    "WHERE pec_id = :pec AND sku_id = :sku LIMIT 1"
-                ), {"pec": g.pec_id, "sku": sku_id_line}).fetchone()
-                if row:
-                    po_line_id_link = row[0]
-
-            db.add(GoodsReceiptLine(
-                gr_id               = g.id,
-                po_line_id          = po_line_id_link,
-                sku_id              = sku_id_line,
-                description         = prod.get("nombre", prod.get("name", "")),
-                quantity_expected   = qty_esp,
-                quantity_received   = qty_recv,
-                quantity_rejected   = 0,
-                quantity_quarantine = 0,
-                receipt_type        = receipt_type,
-                source              = "NATIVE",
-                migration_batch_id  = None,
-                created_at          = now,
-            ))
 
         if receipt_type == "FISICA":
             g.stock_actualizado = True
@@ -1015,39 +1105,84 @@ def confirmar_recepcion(
             ).with_for_update().first()
 
             if p:
-                qty_total_ordenada: dict = {}
-                for prod in (p.productos or []):
-                    sid = prod.get("sku_id")
-                    if sid:
-                        qty_total_ordenada[sid] = (
-                            qty_total_ordenada.get(sid, 0)
-                            + int(prod.get("qty", prod.get("quantity", 0)))
-                        )
+                # Calcular estado PEC desde purchase_order_lines + goods_receipt_lines
+                # (fuente normalizada, no desde JSON)
+                pol_totals = db.execute(text(
+                    "SELECT pol.sku_id, SUM(pol.quantity_ordered) as ord "
+                    "FROM purchase_order_lines pol "
+                    "WHERE pol.pec_id = :pec "
+                    "GROUP BY pol.sku_id"
+                ), {"pec": g.pec_id}).fetchall()
 
-                otras_recepciones = db.query(GoodsReceipt).filter(
-                    GoodsReceipt.pec_id == g.pec_id,
-                    GoodsReceipt.stock_actualizado == True,
-                    GoodsReceipt.id != g.id,
-                ).all()
+                if pol_totals:
+                    # Calcular desde lineas normalizadas de todas las recepciones confirmadas
+                    grl_totals = db.execute(text(
+                        "SELECT grl.sku_id, SUM(grl.quantity_received) as recv "
+                        "FROM goods_receipt_lines grl "
+                        "JOIN goods_receipts gr ON gr.id = grl.gr_id "
+                        "WHERE gr.pec_id = :pec AND gr.stock_actualizado = true "
+                        "  AND grl.source IN ('NATIVE', 'BACKFILL') "
+                        "GROUP BY grl.sku_id"
+                    ), {"pec": g.pec_id}).fetchall()
+                    qty_acumulada_norm = {r[0]: int(r[1] or 0) for r in grl_totals}
 
-                qty_acumulada: dict = {}
-                for otra in otras_recepciones:
-                    for prod in (otra.productos or []):
+                    # Agregar la recepcion actual (aun no committed, pero gr_lines ya actualizadas)
+                    for sku_id, qty in sku_increments.items():
+                        qty_acumulada_norm[sku_id] = qty_acumulada_norm.get(sku_id, 0) + qty
+
+                    total_pendiente = 0
+                    for pol_sku, qty_ord in [(r[0], int(r[1] or 0)) for r in pol_totals]:
+                        recv = qty_acumulada_norm.get(pol_sku, 0)
+                        if recv < qty_ord:
+                            total_pendiente += (qty_ord - recv)
+                else:
+                    # Fallback: sin purchase_order_lines, calcular desde JSON de PEC
+                    qty_total_ordenada: dict = {}
+                    for prod in (p.productos or []):
                         sid = prod.get("sku_id")
                         if sid:
-                            qty_acumulada[sid] = (
-                                qty_acumulada.get(sid, 0)
-                                + int(prod.get("qty_recibida", prod.get("qty", 0)))
+                            qty_total_ordenada[sid] = (
+                                qty_total_ordenada.get(sid, 0)
+                                + int(prod.get("qty", prod.get("quantity", 0)))
                             )
+                    # Acumular recepciones FISICA anteriores (desde GRL si existen,
+                    # o desde JSON de recepciones confirmadas como fallback-de-fallback)
+                    grl_prev = db.execute(text(
+                        "SELECT grl.sku_id, SUM(grl.quantity_received) as recv "
+                        "FROM goods_receipt_lines grl "
+                        "JOIN goods_receipts gr ON gr.id = grl.gr_id "
+                        "WHERE gr.pec_id = :pec AND gr.stock_actualizado = true "
+                        "  AND grl.source IN ('NATIVE', 'BACKFILL') "
+                        "GROUP BY grl.sku_id"
+                    ), {"pec": g.pec_id}).fetchall()
 
-                for sku_id, qty in sku_increments.items():
-                    qty_acumulada[sku_id] = qty_acumulada.get(sku_id, 0) + qty
+                    if grl_prev:
+                        qty_acumulada = {r[0]: int(r[1] or 0) for r in grl_prev}
+                    else:
+                        # Fallback de fallback: JSON de otras recepciones confirmadas
+                        otras = db.query(GoodsReceipt).filter(
+                            GoodsReceipt.pec_id == g.pec_id,
+                            GoodsReceipt.stock_actualizado == True,
+                            GoodsReceipt.id != g.id,
+                        ).all()
+                        qty_acumulada = {}
+                        for otra in otras:
+                            for prod in (otra.productos or []):
+                                sid = prod.get("sku_id")
+                                if sid:
+                                    qty_acumulada[sid] = (
+                                        qty_acumulada.get(sid, 0)
+                                        + int(prod.get("qty_recibida", prod.get("qty", 0)))
+                                    )
 
-                total_pendiente = 0
-                for sku_id, qty_ord in qty_total_ordenada.items():
-                    recibido = qty_acumulada.get(sku_id, 0)
-                    if recibido < qty_ord:
-                        total_pendiente += (qty_ord - recibido)
+                    for sku_id, qty in sku_increments.items():
+                        qty_acumulada[sku_id] = qty_acumulada.get(sku_id, 0) + qty
+
+                    total_pendiente = 0
+                    for sid, qty_ord in qty_total_ordenada.items():
+                        recv = qty_acumulada.get(sid, 0)
+                        if recv < qty_ord:
+                            total_pendiente += (qty_ord - recv)
 
                 pec_estado_nuevo = "PARCIALMENTE_RECIBIDA" if total_pendiente > 0 else "RECIBIDA"
                 p.estado     = pec_estado_nuevo
