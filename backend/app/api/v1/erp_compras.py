@@ -376,16 +376,68 @@ def get_pec(pec_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
 @router.patch("/pedidos/{pec_id}")
 def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
         db: Session = Depends(get_db)):
+    """
+    Actualiza un pedido de compra.
+
+    Bloqueo 2 — Normalizar caminos de edicion:
+    - Si body trae 'productos':
+        * Si la PEC NO tiene recepciones (BORRADOR/EMITIDO sin ENINV): sync PurchaseOrderLine.
+        * Si la PEC YA tiene recepciones: 409 — cambios estructurales no permitidos.
+    - El JSON p.productos se regenera desde PurchaseOrderLine despues del sync.
+    - Otros campos (estado, carrier, notas, etc.) se actualizan libremente.
+    """
     p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).first()
     if not p:
         raise HTTPException(404, "Pedido de compra no encontrado")
     old_estado = p.estado
-    allowed = ["estado","supplier_id","supplier_name","supplier_ref","modalidad_pago",
-               "metodo_pago","warehouse_id","carrier","tracking_number","tracking_stages",
-               "fecha_entrega_estimada","fecha_alerta","subtotal_cop","total_cop",
-               "notas","productos","ven_id","ven_numero","tracking_history",
-               "tipo_envio","casillero","fecha_compra"]
-    for k in allowed:
+
+    # Si el payload trae productos, aplicar logica normalizada
+    if "productos" in body:
+        # Verificar si ya tiene recepciones
+        n_recepciones = db.execute(text(
+            "SELECT COUNT(*) FROM goods_receipts WHERE pec_id = :pid"
+        ), {"pid": pec_id}).scalar()
+
+        if n_recepciones and int(n_recepciones) > 0:
+            raise HTTPException(
+                409,
+                f"La PEC {p.numero} ya tiene {n_recepciones} recepcion(es) asociada(s). "
+                "Los cambios estructurales en productos no estan permitidos cuando hay recepciones activas. "
+                "Cancela las recepciones pendientes antes de modificar los productos."
+            )
+
+        nuevos_prods = body["productos"]  # lista de {sku_id, qty, nombre, ...}
+
+        # Sincronizar PurchaseOrderLine: eliminar las anteriores y crear nuevas
+        db.execute(text(
+            "DELETE FROM purchase_order_lines WHERE pec_id = :pid"
+        ), {"pid": pec_id})
+        db.flush()
+
+        for prod in nuevos_prods:
+            sku_id_raw = prod.get("sku_id")
+            qty        = int(prod.get("qty", prod.get("quantity", 0)))
+            db.add(PurchaseOrderLine(
+                pec_id           = pec_id,
+                sku_id           = sku_id_raw,
+                description      = prod.get("nombre", prod.get("name", "")),
+                quantity_ordered  = qty,
+                unit_cost_usd    = prod.get("cost_usd"),
+                unit_cost_cop    = prod.get("cost_cop"),
+                quantity_received = 0,
+                source           = "NATIVE",
+            ))
+        # El JSON p.productos se actualiza con el payload como snapshot
+        p.productos = nuevos_prods
+
+    # Campos generales permitidos
+    allowed_non_prod = ["estado","supplier_id","supplier_name","supplier_ref",
+                        "modalidad_pago","metodo_pago","warehouse_id","carrier",
+                        "tracking_number","tracking_stages","fecha_entrega_estimada",
+                        "fecha_alerta","subtotal_cop","total_cop","notas",
+                        "ven_id","ven_numero","tracking_history","tipo_envio",
+                        "casillero","fecha_compra"]
+    for k in allowed_non_prod:
         if k in body:
             setattr(p, k, body[k])
     p.updated_at = datetime.datetime.utcnow()
@@ -486,21 +538,19 @@ def crear_recepcion_desde_pec(
         if wh:
             wh_name = wh.name
 
-    # Calcular cantidades ya recibidas en recepciones FISICAS confirmadas
-    ya_recibidas: dict = {}  # {sku_id: qty_acumulada}
+    # Calcular cantidades ya recibidas por PurchaseOrderLine (Bloqueo 3: por po_line_id, no por sku_id)
+    # Esto es correcto cuando una PEC tiene dos lineas distintas con el mismo SKU.
+    ya_recibidas_pol: dict = {}  # {po_line_id: qty_acumulada}
     if not body.force_full:
-        recepciones_conf = db.query(GoodsReceipt).filter(
-            GoodsReceipt.pec_id == pec_id,
-            GoodsReceipt.stock_actualizado == True,
-        ).all()
-        for r in recepciones_conf:
-            for prod in (r.productos or []):
-                sid = prod.get("sku_id")
-                if sid:
-                    ya_recibidas[sid] = (
-                        ya_recibidas.get(sid, 0)
-                        + int(prod.get("qty_recibida", prod.get("qty", 0)))
-                    )
+        _grl_recv = db.execute(text(
+            "SELECT grl.po_line_id, COALESCE(SUM(grl.quantity_received), 0) as recv "
+            "FROM goods_receipt_lines grl "
+            "JOIN goods_receipts gr ON gr.id = grl.gr_id "
+            "WHERE gr.pec_id = :pec AND gr.stock_actualizado = true "
+            "  AND grl.po_line_id IS NOT NULL "
+            "GROUP BY grl.po_line_id"
+        ), {"pec": pec_id}).fetchall()
+        ya_recibidas_pol = {r[0]: int(r[1] or 0) for r in _grl_recv}
 
     # Obtener purchase_order_lines de la PEC para enlace univoco (Fase 1B)
     # Construimos un mapa: sku_id -> [po_line_id, ...] para manejar duplicados
@@ -512,34 +562,94 @@ def crear_recepcion_desde_pec(
     for _pol_id, _pol_sku in _pol_rows:
         po_lines_by_sku.setdefault(_pol_sku, _deque()).append(_pol_id)
 
-    # Construir lista de productos con cantidades PENDIENTES
+    # Construir lista de productos PENDIENTES POR PurchaseOrderLine (Bloqueo 3)
+    # Cada POL con saldo pendiente genera una GoodsReceiptLine en la recepcion.
+    # Cuando una PEC tiene dos lineas del mismo SKU, cada POL se trata separadamente.
     productos_recepcion = []
-    for prod in (p.productos or []):
-        qty_total = int(prod.get("qty", prod.get("quantity", 0)))
-        sku_id    = prod.get("sku_id")
 
-        if body.force_full:
-            qty_pendiente = qty_total
-        else:
-            qty_ya = ya_recibidas.get(sku_id, 0) if sku_id else 0
-            qty_pendiente = max(0, qty_total - qty_ya)
+    if _pol_rows:
+        # ─── RUTA NORMALIZADA: PEC con PurchaseOrderLine ─────────────────────
+        for _pol_id, _pol_sku in _pol_rows:
+            # Encontrar datos del producto en el JSON de la PEC para metadata
+            prod_data = next(
+                (p2 for p2 in (p.productos or []) if p2.get("sku_id") == _pol_sku),
+                {"sku_id": _pol_sku, "nombre": "", "qty": 0}
+            )
+            # Cantidad ordenada en esta linea especifica (desde purchase_order_lines)
+            _pol_qty_ordered = db.execute(text(
+                "SELECT quantity_ordered FROM purchase_order_lines WHERE id = :pid"
+            ), {"pid": _pol_id}).scalar() or 0
+            qty_total = int(_pol_qty_ordered)
 
-        if qty_pendiente == 0:
-            continue  # Omitir productos ya completamente recibidos
+            if body.force_full:
+                qty_pendiente = qty_total
+            else:
+                qty_ya = ya_recibidas_pol.get(_pol_id, 0)
+                qty_pendiente = max(0, qty_total - qty_ya)
 
-        # Enlace univoco con purchase_order_lines (FIFO por sku_id)
-        _po_line_id = None
-        if sku_id and sku_id in po_lines_by_sku and po_lines_by_sku[sku_id]:
-            _po_line_id = po_lines_by_sku[sku_id].popleft()
+            if qty_pendiente == 0:
+                continue  # Esta linea ya fue completamente recibida
 
-        productos_recepcion.append({
-            **prod,
-            "qty_esperada": qty_pendiente,
-            "qty_recibida": 0,
-            "paquetes": 0,
-            "estado": "PENDIENTE",
-            "_po_line_id": _po_line_id,  # campo interno para GoodsReceiptLine
-        })
+            productos_recepcion.append({
+                **prod_data,
+                "sku_id": _pol_sku,
+                "qty_esperada": qty_pendiente,
+                "qty_recibida": None,  # NULL = pendiente de registro por operador
+                "paquetes": 0,
+                "estado": "PENDIENTE",
+                "_po_line_id": _pol_id,  # campo interno para GoodsReceiptLine
+            })
+    else:
+        # ─── FALLBACK LEGACY: PEC sin PurchaseOrderLine ───────────────────────
+        # Compatibilidad con PECs creadas antes de Fase 1B o creadas directamente en DB.
+        # Calcular ya_recibidas por sku_id desde el JSON snapshot de recepciones confirmadas.
+        ya_recibidas_sku: dict = {}  # {sku_id: qty_acumulada}
+        if not body.force_full:
+            _legacy_recv = db.execute(text(
+                "SELECT grl.sku_id, COALESCE(SUM(grl.quantity_received), 0) as recv "
+                "FROM goods_receipt_lines grl "
+                "JOIN goods_receipts gr ON gr.id = grl.gr_id "
+                "WHERE gr.pec_id = :pec AND gr.stock_actualizado = true "
+                "GROUP BY grl.sku_id"
+            ), {"pec": pec_id}).fetchall()
+            ya_recibidas_sku = {r[0]: int(r[1] or 0) for r in _legacy_recv}
+
+            if not ya_recibidas_sku:
+                # Fallback-de-fallback: JSON snapshot de recepciones anteriores
+                recepciones_conf = db.query(GoodsReceipt).filter(
+                    GoodsReceipt.pec_id == pec_id,
+                    GoodsReceipt.stock_actualizado == True,
+                ).all()
+                for r_conf in recepciones_conf:
+                    for prod in (r_conf.productos or []):
+                        sid = prod.get("sku_id")
+                        if sid:
+                            ya_recibidas_sku[sid] = (
+                                ya_recibidas_sku.get(sid, 0)
+                                + int(prod.get("qty_recibida", prod.get("qty", 0)))
+                            )
+
+        for prod in (p.productos or []):
+            qty_total = int(prod.get("qty", prod.get("quantity", 0)))
+            sku_id_leg = prod.get("sku_id")
+
+            if body.force_full:
+                qty_pendiente = qty_total
+            else:
+                qty_ya = ya_recibidas_sku.get(sku_id_leg, 0) if sku_id_leg else 0
+                qty_pendiente = max(0, qty_total - qty_ya)
+
+            if qty_pendiente == 0:
+                continue
+
+            productos_recepcion.append({
+                **prod,
+                "qty_esperada": qty_pendiente,
+                "qty_recibida": None,  # NULL = pendiente de registro
+                "paquetes": 0,
+                "estado": "PENDIENTE",
+                "_po_line_id": None,  # no hay POL disponible (PEC legacy)
+            })
 
     if not productos_recepcion:
         raise HTTPException(
@@ -581,7 +691,7 @@ def crear_recepcion_desde_pec(
             sku_id              = sku_id_line,
             description         = prod.get("nombre", prod.get("name", prod.get("product_name", ""))),
             quantity_expected   = qty_esp_line,
-            quantity_received   = 0,         # a actualizar antes de confirmar
+            quantity_received   = None,      # NULL = pendiente de registro por operador
             quantity_rejected   = 0,
             quantity_quarantine = 0,
             receipt_type        = "FISICA",  # default; cambia al confirmar
@@ -657,10 +767,30 @@ def create_recepcion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
         created_by=body.get("created_by"),
     )
     db.add(gr)
+    db.flush()  # obtener gr.id sin commit
+
+    # Crear GoodsReceiptLine en la misma TX (Bloqueo 2: normalizar POST /recepciones)
+    productos_gr = body.get("productos", [])
+    for prod in productos_gr:
+        sku_id_raw = prod.get("sku_id")
+        qty_esp    = int(prod.get("qty_esperada", prod.get("qty", 0)))
+        db.add(GoodsReceiptLine(
+            gr_id               = gr.id,
+            po_line_id          = prod.get("_po_line_id"),  # None si no viene de PEC
+            sku_id              = sku_id_raw,
+            description         = prod.get("nombre", prod.get("name", prod.get("product_name", ""))),
+            quantity_expected   = qty_esp,
+            quantity_received   = None,   # NULL = pendiente de registro
+            quantity_rejected   = 0,
+            quantity_quarantine = 0,
+            receipt_type        = "FISICA",
+            source              = "NATIVE",
+        ))
+
     db.commit()
     db.refresh(gr)
     _log(db, "ENINV", gr.id, gr.numero, "CREATED",
-         f"Recepcion {gr.numero} creada",
+         f"Recepcion {gr.numero} creada con {len(productos_gr)} lineas normalizadas",
          new_estado="BORRADOR", user_name=body.get("created_by"))
     return {"status": "success", "data": _gr_dict(gr)}
 
@@ -683,13 +813,74 @@ def get_recepcion(eninv_id: int, user: User = Depends(require_roles(*ALL_ERP_ROL
 @router.patch("/recepciones/{eninv_id}")
 def update_recepcion(eninv_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
         db: Session = Depends(get_db)):
+    """
+    Actualiza una recepcion.
+
+    Bloqueo 2 — Normalizar caminos de edicion:
+    - Si body trae 'productos' y la recepcion esta en BORRADOR:
+        Actualiza GoodsReceiptLine existentes y regenera el snapshot JSON.
+    - Si body trae 'productos' y la recepcion NO esta en BORRADOR:
+        Retorna 422. No se puede modificar productos de una recepcion confirmada.
+    - Otros campos (estado, warehouse_id, notas, etc.) se actualizan libremente.
+    - El JSON g.productos NUNCA se actualiza directamente; solo desde GRL.
+    """
     g = db.query(GoodsReceipt).filter(GoodsReceipt.id == eninv_id).first()
     if not g:
         raise HTTPException(404, "Recepcion no encontrada")
     old_estado = g.estado
-    allowed = ["estado","warehouse_id","warehouse_name","carrier","tracking_number",
-               "operacion_tipo","notas","productos"]
-    for k in allowed:
+
+    # Si el payload trae productos, aplicar logica normalizada
+    if "productos" in body:
+        if g.estado != "BORRADOR":
+            raise HTTPException(
+                422,
+                f"No se puede modificar productos de una recepcion en estado {g.estado!r}. "
+                "Solo se pueden editar recepciones en BORRADOR."
+            )
+        # Actualizar GRL existentes y regenerar snapshot JSON
+        nuevos_prods = body.pop("productos")  # consumir del body
+        gr_lines = db.execute(
+            select(GoodsReceiptLine)
+            .where(GoodsReceiptLine.gr_id == eninv_id)
+            .order_by(GoodsReceiptLine.id)
+        ).scalars().all()
+
+        if gr_lines:
+            # Actualizar GRL existentes por indice (preservar IDs)
+            for idx, grl in enumerate(gr_lines):
+                if idx < len(nuevos_prods):
+                    np = nuevos_prods[idx]
+                    qty_recv = np.get("qty_recibida", np.get("quantity_received"))
+                    qty_rej  = np.get("qty_rechazada", np.get("quantity_rejected", 0))
+                    qty_quar = np.get("qty_cuarentena", np.get("quantity_quarantine", 0))
+                    # None se acepta (aun no registrado); 0 es cero explicito
+                    if qty_recv is not None:
+                        grl.quantity_received   = int(qty_recv)
+                    grl.quantity_rejected   = int(qty_rej or 0)
+                    grl.quantity_quarantine = int(qty_quar or 0)
+            # Regenerar snapshot JSON desde GRL (fuente de verdad -> snapshot)
+            g.productos = [
+                {
+                    "sku_id"       : grl.sku_id,
+                    "nombre"       : grl.description or "",
+                    "qty_esperada" : int(grl.quantity_expected or 0),
+                    "qty_recibida" : int(grl.quantity_received) if grl.quantity_received is not None else None,
+                    "qty_rechazada": int(grl.quantity_rejected or 0),
+                    "qty_cuarentena": int(grl.quantity_quarantine or 0),
+                    "estado"       : "PENDIENTE" if grl.quantity_received is None else "PARCIAL",
+                    "po_line_id"   : grl.po_line_id,
+                    "grl_id"       : grl.id,
+                }
+                for grl in gr_lines
+            ]
+        else:
+            # No hay GRL: recepcion legacy. Actualizar JSON directamente por ahora.
+            g.productos = nuevos_prods
+
+    # Campos generales permitidos (excepto productos, ya consumido)
+    allowed_non_prod = ["estado","warehouse_id","warehouse_name","carrier",
+                        "tracking_number","operacion_tipo","notas"]
+    for k in allowed_non_prod:
         if k in body:
             setattr(g, k, body[k])
     g.updated_at = datetime.datetime.utcnow()
@@ -701,6 +892,63 @@ def update_recepcion(eninv_id: int, body: dict, user: User = Depends(require_rol
              old_estado=old_estado, new_estado=g.estado,
              user_name=body.get("updated_by"))
     return {"status": "success", "data": _gr_dict(g)}
+
+
+@router.patch("/recepciones/{eninv_id}/lineas/{grl_id}")
+def update_grl(
+    eninv_id: int, grl_id: int, body: dict,
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS, *ROLE_BODEGA)),
+    db: Session = Depends(get_db),
+):
+    """
+    Registra cantidades en una GoodsReceiptLine especifica antes de confirmar.
+
+    Campos aceptados:
+      quantity_received   (int o null)
+      quantity_rejected   (int)
+      quantity_quarantine (int)
+
+    Bloqueo 1: permite registrar 0 como recepcion explicita en cero.
+    Solo funciona si la recepcion esta en BORRADOR.
+    """
+    gr = db.query(GoodsReceipt).filter(GoodsReceipt.id == eninv_id).first()
+    if not gr:
+        raise HTTPException(404, "Recepcion no encontrada")
+    if gr.estado != "BORRADOR":
+        raise HTTPException(422, f"Solo se puede editar lineas de recepciones en BORRADOR. Estado actual: {gr.estado!r}")
+
+    grl = db.execute(
+        select(GoodsReceiptLine)
+        .where(GoodsReceiptLine.id == grl_id, GoodsReceiptLine.gr_id == eninv_id)
+    ).scalar_one_or_none()
+    if not grl:
+        raise HTTPException(404, f"GoodsReceiptLine {grl_id} no encontrada en recepcion {eninv_id}")
+
+    if "quantity_received" in body:
+        v = body["quantity_received"]
+        grl.quantity_received = None if v is None else int(v)
+    if "quantity_rejected" in body:
+        grl.quantity_rejected = int(body["quantity_rejected"] or 0)
+    if "quantity_quarantine" in body:
+        grl.quantity_quarantine = int(body["quantity_quarantine"] or 0)
+
+    db.commit()
+    db.refresh(grl)
+    return {
+        "status": "success",
+        "data": {
+            "id": grl.id,
+            "gr_id": grl.gr_id,
+            "po_line_id": grl.po_line_id,
+            "sku_id": grl.sku_id,
+            "quantity_expected": int(grl.quantity_expected or 0),
+            "quantity_received": int(grl.quantity_received) if grl.quantity_received is not None else None,
+            "quantity_rejected": int(grl.quantity_rejected or 0),
+            "quantity_quarantine": int(grl.quantity_quarantine or 0),
+            "receipt_type": grl.receipt_type,
+            "source": grl.source,
+        }
+    }
 
 
 @router.post("/recepciones/{eninv_id}/confirmar")
@@ -929,25 +1177,44 @@ def confirmar_recepcion(
 
         if not gr_lines:
             # Fallback: recepcion creada antes de Fase 1B (sin lineas normalizadas).
-            # Crear lineas desde JSON snapshot SOLO para esta confirmacion.
+            # Bloqueo 5: crear GRL con source='LEGACY'
+            # - Si qty_recibida existe en JSON (dato historico): usarla como quantity_received.
+            # - Si qty_recibida NO existe o es ambigua: usar NULL (requiere registro explicito).
+            # Esta regla preserva compatibilidad con recepciones legacy que ya tenian datos.
             for prod in (g.productos or []):
-                sku_id_fb = prod.get("sku_id")
+                sku_id_fb  = prod.get("sku_id")
                 qty_esp_fb = int(prod.get("qty_esperada", prod.get("qty", 0)))
-                qty_recv_fb = int(prod.get("qty_recibida", qty_esp_fb))
+                # Usar qty del JSON si existe; NULL si no esta presente (ambiguo)
+                qty_recv_raw = prod.get("qty_recibida")
+                qty_recv_fb  = int(qty_recv_raw) if qty_recv_raw is not None else None
                 db.add(GoodsReceiptLine(
                     gr_id               = eninv_id,
                     po_line_id          = None,
                     sku_id              = sku_id_fb,
                     description         = prod.get("nombre", prod.get("name", "")),
                     quantity_expected   = qty_esp_fb,
-                    quantity_received   = qty_recv_fb,
+                    quantity_received   = qty_recv_fb,  # None si ambigua; valor si historico
                     quantity_rejected   = 0,
                     quantity_quarantine = 0,
                     receipt_type        = receipt_type,
-                    source              = "NATIVE",
+                    source              = "LEGACY",     # identificable como normalizado desde JSON
                     migration_batch_id  = None,
                     created_at          = now,
                 ))
+            db.flush()
+            # Audit: registrar normalizacion legacy
+            n_legacy = len(g.productos or [])
+            db.add(ActivityLog(
+                entity_type   = "ENINV",
+                entity_id     = eninv_id,
+                entity_numero = g.numero,
+                action        = "LEGACY_NORMALIZED",
+                description   = (
+                    f"Normalizacion legacy: {n_legacy} lineas creadas desde JSON snapshot. "
+                    "source=LEGACY. quantity_received preservado del JSON si existia."
+                ),
+                user_name     = user_label,
+            ))
             db.flush()
             # Re-leer con lock
             gr_lines = db.execute(
@@ -957,18 +1224,34 @@ def confirmar_recepcion(
                 .order_by(GoodsReceiptLine.id)
             ).scalars().all()
 
-        # ─── VALIDAR Y CALCULAR DESDE LINEAS NORMALIZADAS ─────────────────────
+        # ─── VALIDAR Y CALCULAR DESDE LINEAS NORMALIZADAS (Bloqueo 1) ────────────
+        # quantity_received=NULL significa cantidad aun no registrada -> 422 en FISICA
+        # quantity_received=0 es recepcion explicita en cero (valida)
+        # quantity_received>0 es la cantidad registrada por el operador
         sku_increments: dict = {}  # {sku_id: qty_total} — calculado desde GRL
 
         for grl in gr_lines:
             sku_id       = grl.sku_id
             qty_expected = int(grl.quantity_expected or 0)
-            qty_received = int(grl.quantity_received or 0)
 
-            # Si quantity_received==0 en BORRADOR, usar quantity_expected como default
-            # (el operador no hizo PATCH antes de confirmar)
-            if qty_received == 0 and qty_expected > 0:
-                qty_received = qty_expected
+            # Bloqueo 1: NULL = pendiente de registro -> rechazar en confirmacion FISICA
+            if grl.quantity_received is None:
+                if receipt_type == "FISICA":
+                    _mark_failed_external(
+                        client_key, execution_token,
+                        f"GRL {grl.id} sin cantidad registrada (quantity_received=NULL)", now
+                    )
+                    raise HTTPException(
+                        422,
+                        f"La linea GRL {grl.id} (SKU {sku_id}, esperada: {qty_expected}) "
+                        "no tiene cantidad registrada. Usa PATCH /recepciones/{id}/lineas/{grl_id} "
+                        "para registrar la cantidad antes de confirmar. "
+                        "Registra 0 si no llego ninguna unidad."
+                    )
+                # Para LOGISTICA: cantidad NULL se trata como cero (no hay stock)
+                qty_received = 0
+            else:
+                qty_received = int(grl.quantity_received)
 
             # Validar cantidades negativas
             if qty_received < 0:
@@ -1121,7 +1404,7 @@ def confirmar_recepcion(
                         "FROM goods_receipt_lines grl "
                         "JOIN goods_receipts gr ON gr.id = grl.gr_id "
                         "WHERE gr.pec_id = :pec AND gr.stock_actualizado = true "
-                        "  AND grl.source IN ('NATIVE', 'BACKFILL') "
+                        "  AND grl.source IN ('NATIVE', 'BACKFILL', 'LEGACY') "
                         "GROUP BY grl.sku_id"
                     ), {"pec": g.pec_id}).fetchall()
                     qty_acumulada_norm = {r[0]: int(r[1] or 0) for r in grl_totals}
@@ -1152,7 +1435,7 @@ def confirmar_recepcion(
                         "FROM goods_receipt_lines grl "
                         "JOIN goods_receipts gr ON gr.id = grl.gr_id "
                         "WHERE gr.pec_id = :pec AND gr.stock_actualizado = true "
-                        "  AND grl.source IN ('NATIVE', 'BACKFILL') "
+                        "  AND grl.source IN ('NATIVE', 'BACKFILL', 'LEGACY') "
                         "GROUP BY grl.sku_id"
                     ), {"pec": g.pec_id}).fetchall()
 

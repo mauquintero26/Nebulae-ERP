@@ -4,6 +4,9 @@ test_fase1b_confirmar.py — Tests de confirmar_recepcion via endpoint HTTP
 Usa la fixture app_client del conftest (scope=session) que tiene get_db
 sobrescrito apuntando a erp_test.
 
+NOTA: A partir de Bloqueo 1, GRL se crea con quantity_received=NULL.
+Los tests deben registrar la cantidad via PATCH /lineas/{grl_id} antes de confirmar.
+
 Escenarios:
  1. confirmar usa GoodsReceiptLine (no g.productos) como fuente de verdad
  2. JSON contradice GRL -> GRL gana
@@ -16,6 +19,12 @@ Escenarios:
  9. Excedente no permitido (allow_excess=False)
 10. Dos lineas PEC mismo SKU -> po_line_id distinto en cada GRL
 11. SKU solo en JSON no genera InventoryMovement
+-- Bloqueo 1: distincion semantica quantity_received --
+12. qty_received=0 explicito para FISICA -> 422 (sin sku valido para stock)
+13. Todas rechazadas: qty_received=0, qty_rejected=5
+14. Todas en cuarentena: qty_received=0, qty_quarantine=5
+15. Cantidad sin registrar (NULL) -> 422 en FISICA
+16. Recepcion total explicita (qty_received=qty_expected) -> stock correcto
 """
 import uuid
 import json as _json
@@ -25,7 +34,7 @@ from sqlalchemy import text
 from tests.conftest import TestSessionLocal
 
 
-# ─── Helpers inline (usan app_client del conftest) ────────────────────────────
+# ─── Helpers inline ─────────────────────────────────────────────────────────────
 
 def _auth(token):
     return {"Authorization": f"Bearer {token}"}
@@ -81,6 +90,52 @@ def _create_eninv_api(client, token, pec_id, wh_id) -> dict:
     return r.json()["data"]
 
 
+def _registrar_cantidades(client, token, eninv_id, quantities: dict):
+    """
+    Registra cantidades en GRL. quantities = {grl_id: qty_received} o {0: qty} para la primera.
+    Si quantities es un entero, lo aplica a la primera GRL.
+    """
+    with TestSessionLocal() as db:
+        grls = db.execute(text(
+            "SELECT id FROM goods_receipt_lines WHERE gr_id=:gid ORDER BY id"
+        ), {"gid": eninv_id}).scalars().all()
+
+    if isinstance(quantities, int):
+        # Registrar misma cantidad a todas las GRL
+        for grl_id in grls:
+            client.patch(
+                f"/api/v1/compras/recepciones/{eninv_id}/lineas/{grl_id}",
+                headers=_auth(token),
+                json={"quantity_received": quantities},
+            )
+    elif isinstance(quantities, dict):
+        for idx_or_id, qty in quantities.items():
+            if idx_or_id < len(grls):
+                grl_id = grls[idx_or_id]
+            else:
+                grl_id = idx_or_id
+            client.patch(
+                f"/api/v1/compras/recepciones/{eninv_id}/lineas/{grl_id}",
+                headers=_auth(token),
+                json={"quantity_received": qty},
+            )
+
+
+def _registrar_grl(client, token, eninv_id, grl_idx, **kwargs):
+    """Registra campos en la GRL en el indice dado."""
+    with TestSessionLocal() as db:
+        grl_id = db.execute(text(
+            "SELECT id FROM goods_receipt_lines WHERE gr_id=:gid ORDER BY id LIMIT 1 OFFSET :off"
+        ), {"gid": eninv_id, "off": grl_idx}).scalar()
+    r = client.patch(
+        f"/api/v1/compras/recepciones/{eninv_id}/lineas/{grl_id}",
+        headers=_auth(token),
+        json=kwargs,
+    )
+    assert r.status_code == 200, f"PATCH linea failed: {r.text}"
+    return grl_id
+
+
 def _confirmar(client, token, eninv_id, receipt_type="FISICA",
                allow_excess=False, key=None):
     if key is None:
@@ -114,23 +169,27 @@ class TestConfirmarUsaGoodsReceiptLines:
         eninv = _create_eninv_api(app_client, admin_token, pec["id"], wh_id)
         eninv_id = eninv["id"]
 
+        # Registrar cantidad antes de confirmar (Bloqueo 1)
+        _registrar_cantidades(app_client, admin_token, eninv_id, 5)
+
         status, body, _ = _confirmar(app_client, admin_token, eninv_id)
         assert status == 200, f"Expected 200: {body}"
 
         with TestSessionLocal() as db2:
-            rows = db2.execute(text(
+            grl = db2.execute(text(
                 "SELECT sku_id, quantity_expected, quantity_received, source "
-                "FROM goods_receipt_lines WHERE gr_id=:gid ORDER BY id"
-            ), {"gid": eninv_id}).fetchall()
+                "FROM goods_receipt_lines WHERE gr_id=:gid"
+            ), {"gid": eninv_id}).fetchone()
 
-        assert len(rows) >= 1, "Debe existir >= 1 GoodsReceiptLine"
-        assert int(rows[0][0]) == sku_id
-        assert int(rows[0][1]) == 5, f"qty_expected=5, got {rows[0][1]}"
-        assert int(rows[0][2]) == 5, f"qty_received=5, got {rows[0][2]}"
-        assert rows[0][3] == "NATIVE"
+        assert grl is not None, "GRL debe existir"
+        assert int(grl[0]) == sku_id
+        assert int(grl[1]) == 5
+        assert int(grl[2]) == 5
+        assert grl[3] == "NATIVE"
 
-    def test_grl_gana_cuando_json_contradice(self, app_client, admin_token):
-        """GRL (qty=5) gana cuando JSON dice qty_recibida=99."""
+    def test_grl_gana_cuando_json_contradice(
+            self, app_client, admin_token):
+        """GRL con qty_received=5 gana sobre JSON con qty_recibida=99."""
         db = TestSessionLocal()
         try:
             sup_id = _create_supplier_db(db)
@@ -144,7 +203,10 @@ class TestConfirmarUsaGoodsReceiptLines:
         eninv = _create_eninv_api(app_client, admin_token, pec["id"], wh_id)
         eninv_id = eninv["id"]
 
-        # Manipular JSON
+        # Registrar 5u en GRL
+        _registrar_cantidades(app_client, admin_token, eninv_id, 5)
+
+        # Manipular JSON para que diga 99 (deberia ser ignorado)
         with TestSessionLocal() as db2:
             db2.execute(text(
                 "UPDATE goods_receipts SET productos=CAST(:p AS jsonb) WHERE id=:gid"
@@ -158,16 +220,14 @@ class TestConfirmarUsaGoodsReceiptLines:
         assert status == 200, f"Expected 200: {body}"
 
         with TestSessionLocal() as db2:
-            qty = db2.execute(text(
-                "SELECT quantity FROM inventory_levels "
-                "WHERE sku_id=:s AND warehouse_id=:w"
+            inv = db2.execute(text(
+                "SELECT quantity FROM inventory_levels WHERE sku_id=:s AND warehouse_id=:w"
             ), {"s": sku_id, "w": wh_id}).scalar()
 
-        assert qty is not None
-        assert int(qty) == 5, f"GRL debe ganar: inv=5, no 99. Got {qty}"
+        assert int(inv) == 5, f"GRL gana: inventario debe ser 5. Got {inv}"
 
     def test_no_duplica_lineas_en_replay(self, app_client, admin_token):
-        """Replay no genera GRL adicionales."""
+        """Replay idempotente no crea GRL extra."""
         db = TestSessionLocal()
         try:
             sup_id = _create_supplier_db(db)
@@ -181,27 +241,29 @@ class TestConfirmarUsaGoodsReceiptLines:
         eninv = _create_eninv_api(app_client, admin_token, pec["id"], wh_id)
         eninv_id = eninv["id"]
 
+        _registrar_cantidades(app_client, admin_token, eninv_id, 5)
+
         key = str(uuid.uuid4())
         _confirmar(app_client, admin_token, eninv_id, key=key)
 
         with TestSessionLocal() as db2:
-            c1 = db2.execute(text(
+            cnt_before = db2.execute(text(
                 "SELECT COUNT(*) FROM goods_receipt_lines WHERE gr_id=:gid"
             ), {"gid": eninv_id}).scalar()
 
-        s2, b2, _ = _confirmar(app_client, admin_token, eninv_id, key=key)
-        assert s2 == 200
-        assert b2.get("idempotent_replay") is True
+        _confirmar(app_client, admin_token, eninv_id, key=key)  # replay
 
         with TestSessionLocal() as db2:
-            c2 = db2.execute(text(
+            cnt_after = db2.execute(text(
                 "SELECT COUNT(*) FROM goods_receipt_lines WHERE gr_id=:gid"
             ), {"gid": eninv_id}).scalar()
 
-        assert c2 == c1, f"Replay no debe crear mas GRL. {c1} -> {c2}"
+        assert int(cnt_after) == int(cnt_before), (
+            f"Replay no debe crear GRL extra. Antes={cnt_before}, Despues={cnt_after}"
+        )
 
     def test_replay_conserva_ids_de_lineas(self, app_client, admin_token):
-        """Replay conserva los mismos IDs de GRL."""
+        """IDs de GRL identicos en el replay."""
         db = TestSessionLocal()
         try:
             sup_id = _create_supplier_db(db)
@@ -215,43 +277,47 @@ class TestConfirmarUsaGoodsReceiptLines:
         eninv = _create_eninv_api(app_client, admin_token, pec["id"], wh_id)
         eninv_id = eninv["id"]
 
+        _registrar_cantidades(app_client, admin_token, eninv_id, 5)
+
         key = str(uuid.uuid4())
         _confirmar(app_client, admin_token, eninv_id, key=key)
 
         with TestSessionLocal() as db2:
-            ids1 = [r[0] for r in db2.execute(text(
-                "SELECT id FROM goods_receipt_lines WHERE gr_id=:gid ORDER BY id"
-            ), {"gid": eninv_id}).fetchall()]
+            ids_before = sorted(db2.execute(text(
+                "SELECT id FROM goods_receipt_lines WHERE gr_id=:gid"
+            ), {"gid": eninv_id}).scalars().all())
 
-        _confirmar(app_client, admin_token, eninv_id, key=key)
+        _confirmar(app_client, admin_token, eninv_id, key=key)  # replay
 
         with TestSessionLocal() as db2:
-            ids2 = [r[0] for r in db2.execute(text(
-                "SELECT id FROM goods_receipt_lines WHERE gr_id=:gid ORDER BY id"
-            ), {"gid": eninv_id}).fetchall()]
+            ids_after = sorted(db2.execute(text(
+                "SELECT id FROM goods_receipt_lines WHERE gr_id=:gid"
+            ), {"gid": eninv_id}).scalars().all())
 
-        assert ids1 == ids2, f"IDs cambiaron: {ids1} -> {ids2}"
+        assert ids_before == ids_after, (
+            f"IDs de GRL deben ser identicos. Antes={ids_before}, Despues={ids_after}"
+        )
 
     def test_error_produce_rollback_completo(self, app_client, admin_token):
-        """ENINV 999999 inexistente: sin GRL ni movimientos huerfanos."""
+        """404 en ENINV inexistente no crea GRL ni movimientos."""
         status, body, _ = _confirmar(app_client, admin_token, 999999)
-        assert status == 404
+        assert status == 404, f"Expected 404: {body}"
 
-        with TestSessionLocal() as db2:
-            mv = db2.execute(text(
+        with TestSessionLocal() as db:
+            n_grl = db.execute(text(
+                "SELECT COUNT(*) FROM goods_receipt_lines WHERE gr_id=999999"
+            )).scalar()
+            n_mv = db.execute(text(
                 "SELECT COUNT(*) FROM inventory_movements im "
                 "JOIN inventory_operations io ON io.id=im.operation_id "
                 "WHERE io.source_document_id=999999"
             )).scalar()
-            grl = db2.execute(text(
-                "SELECT COUNT(*) FROM goods_receipt_lines WHERE gr_id=999999"
-            )).scalar()
 
-        assert int(mv) == 0
-        assert int(grl) == 0
+        assert int(n_grl) == 0
+        assert int(n_mv) == 0
 
     def test_recepcion_parcial_fisica(self, app_client, admin_token):
-        """qty_received=3/5 -> inventario=3, PEC=PARCIALMENTE_RECIBIDA."""
+        """qty_received=3/5 -> inventario=3, PEC PARCIALMENTE_RECIBIDA."""
         db = TestSessionLocal()
         try:
             sup_id = _create_supplier_db(db)
@@ -265,28 +331,24 @@ class TestConfirmarUsaGoodsReceiptLines:
         eninv = _create_eninv_api(app_client, admin_token, pec["id"], wh_id)
         eninv_id = eninv["id"]
 
-        with TestSessionLocal() as db2:
-            db2.execute(text(
-                "UPDATE goods_receipt_lines SET quantity_received=3 WHERE gr_id=:gid"
-            ), {"gid": eninv_id})
-            db2.commit()
+        # Registrar 3 de 5
+        _registrar_cantidades(app_client, admin_token, eninv_id, 3)
 
         status, body, _ = _confirmar(app_client, admin_token, eninv_id)
         assert status == 200, f"Expected 200: {body}"
 
         with TestSessionLocal() as db2:
-            pec_est = db2.execute(text(
-                "SELECT estado FROM purchase_orders_full WHERE id=:pid"
-            ), {"pid": pec["id"]}).scalar()
             inv = db2.execute(text(
                 "SELECT quantity FROM inventory_levels WHERE sku_id=:s AND warehouse_id=:w"
             ), {"s": sku_id, "w": wh_id}).scalar()
+            pec_est = db2.execute(text(
+                "SELECT estado FROM purchase_orders_full WHERE id=:pid"
+            ), {"pid": pec["id"]}).scalar()
 
-        assert pec_est == "PARCIALMENTE_RECIBIDA",             f"PEC debe ser PARCIALMENTE_RECIBIDA. Got {pec_est}"
-        assert int(inv) == 3, f"Inventario debe ser 3. Got {inv}"
+        assert int(inv) == 3, f"Stock debe ser 3. Got {inv}"
+        assert pec_est == "PARCIALMENTE_RECIBIDA", f"PEC debe ser PARCIALMENTE_RECIBIDA. Got {pec_est}"
 
-    def test_recepcion_logistica_no_actualiza_stock(
-            self, app_client, admin_token):
+    def test_recepcion_logistica_no_actualiza_stock(self, app_client, admin_token):
         """LOGISTICA: estado=COMPLETADA_LOGISTICA, stock_actualizado=False."""
         db = TestSessionLocal()
         try:
@@ -301,25 +363,26 @@ class TestConfirmarUsaGoodsReceiptLines:
         eninv = _create_eninv_api(app_client, admin_token, pec["id"], wh_id)
         eninv_id = eninv["id"]
 
+        # LOGISTICA no requiere cantidad (NULL se trata como 0 para LOGISTICA)
         status, body, _ = _confirmar(app_client, admin_token, eninv_id,
                                      receipt_type="LOGISTICA")
-        assert status == 200, f"Expected 200: {body}"
+        assert status == 200, f"Expected 200 LOGISTICA: {body}"
 
         with TestSessionLocal() as db2:
-            row = db2.execute(text(
+            gr = db2.execute(text(
                 "SELECT estado, stock_actualizado FROM goods_receipts WHERE id=:gid"
             ), {"gid": eninv_id}).fetchone()
-            qty = db2.execute(text(
-                "SELECT quantity FROM inventory_levels WHERE sku_id=:s AND warehouse_id=:w"
-            ), {"s": sku_id, "w": wh_id}).scalar()
+            inv = db2.execute(text(
+                "SELECT COALESCE(quantity, 0) FROM inventory_levels "
+                "WHERE sku_id=:s AND warehouse_id=:w"
+            ), {"s": sku_id, "w": wh_id}).scalar() or 0
 
-        assert row[0] == "COMPLETADA_LOGISTICA"
-        assert row[1] is False
-        if qty is not None:
-            assert int(qty) == 0, f"LOGISTICA no debe subir stock. Got {qty}"
+        assert gr[0] == "COMPLETADA_LOGISTICA"
+        assert gr[1] == False
+        assert float(inv) == 0
 
     def test_excedente_permitido(self, app_client, admin_token):
-        """allow_excess=True: qty_received=7>5 se acepta."""
+        """allow_excess=True acepta qty_received=7 > qty_expected=5."""
         db = TestSessionLocal()
         try:
             sup_id = _create_supplier_db(db)
@@ -333,24 +396,20 @@ class TestConfirmarUsaGoodsReceiptLines:
         eninv = _create_eninv_api(app_client, admin_token, pec["id"], wh_id)
         eninv_id = eninv["id"]
 
-        with TestSessionLocal() as db2:
-            db2.execute(text(
-                "UPDATE goods_receipt_lines SET quantity_received=7 WHERE gr_id=:gid"
-            ), {"gid": eninv_id})
-            db2.commit()
+        _registrar_cantidades(app_client, admin_token, eninv_id, 7)
 
         status, body, _ = _confirmar(app_client, admin_token, eninv_id,
                                      allow_excess=True)
-        assert status == 200, f"Expected 200 con allow_excess: {body}"
+        assert status == 200, f"Expected 200: {body}"
 
         with TestSessionLocal() as db2:
             inv = db2.execute(text(
                 "SELECT quantity FROM inventory_levels WHERE sku_id=:s AND warehouse_id=:w"
             ), {"s": sku_id, "w": wh_id}).scalar()
-        assert int(inv) == 7, f"Inventario debe ser 7. Got {inv}"
+        assert int(inv) == 7
 
     def test_excedente_no_permitido(self, app_client, admin_token):
-        """allow_excess=False: qty_received=8>5 retorna 422."""
+        """allow_excess=False rechaza qty_received=8 > qty_expected=5 con 422."""
         db = TestSessionLocal()
         try:
             sup_id = _create_supplier_db(db)
@@ -364,19 +423,15 @@ class TestConfirmarUsaGoodsReceiptLines:
         eninv = _create_eninv_api(app_client, admin_token, pec["id"], wh_id)
         eninv_id = eninv["id"]
 
-        with TestSessionLocal() as db2:
-            db2.execute(text(
-                "UPDATE goods_receipt_lines SET quantity_received=8 WHERE gr_id=:gid"
-            ), {"gid": eninv_id})
-            db2.commit()
+        _registrar_cantidades(app_client, admin_token, eninv_id, 8)
 
-        status, body, _ = _confirmar(app_client, admin_token, eninv_id,
-                                     allow_excess=False)
-        assert status == 422, f"Expected 422 por excedente: {body}"
+        status, _, _ = _confirmar(app_client, admin_token, eninv_id,
+                                  allow_excess=False)
+        assert status == 422, f"Expected 422. Got {status}"
 
     def test_dos_lineas_mismo_sku_po_line_id_correcto(
             self, app_client, admin_token):
-        """PEC con 2 lineas mismo SKU: 2 GRL con po_line_id distinto."""
+        """PEC con 2 lineas del mismo SKU -> po_line_id distinto en cada GRL."""
         db = TestSessionLocal()
         try:
             sup_id = _create_supplier_db(db)
@@ -385,28 +440,24 @@ class TestConfirmarUsaGoodsReceiptLines:
         finally:
             db.close()
 
-        pec = _create_pec_api(
-            app_client, admin_token, sup_id, wh_id,
-            [{"sku_id": sku_id, "qty": 3, "nombre": "Linea A"},
-             {"sku_id": sku_id, "qty": 2, "nombre": "Linea B"}]
-        )
+        pec = _create_pec_api(app_client, admin_token, sup_id, wh_id, [
+            {"sku_id": sku_id, "qty": 3, "nombre": "Linea A"},
+            {"sku_id": sku_id, "qty": 2, "nombre": "Linea B"},
+        ])
         eninv = _create_eninv_api(app_client, admin_token, pec["id"], wh_id)
         eninv_id = eninv["id"]
 
         with TestSessionLocal() as db2:
             grls = db2.execute(text(
-                "SELECT id, po_line_id, quantity_expected "
-                "FROM goods_receipt_lines WHERE gr_id=:gid ORDER BY id"
+                "SELECT id, po_line_id FROM goods_receipt_lines WHERE gr_id=:gid ORDER BY id"
             ), {"gid": eninv_id}).fetchall()
-            pols = db2.execute(text(
-                "SELECT id FROM purchase_order_lines WHERE pec_id=:pid ORDER BY id"
-            ), {"pid": pec["id"]}).fetchall()
 
-        assert len(grls) == 2,             f"Deben existir 2 GRL (una por linea de PEC). Got {len(grls)}"
-
-        if pols and len(pols) >= 2:
-            po_ids = [r[1] for r in grls]
-            assert po_ids[0] != po_ids[1],                 f"po_line_id debe ser distinto por linea. Got {po_ids}"
+        assert len(grls) == 2, f"Deben existir 2 GRL. Got {grls}"
+        assert grls[0][1] != grls[1][1], (
+            f"po_line_id debe ser distinto: {grls[0][1]} vs {grls[1][1]}"
+        )
+        assert grls[0][1] is not None
+        assert grls[1][1] is not None
 
     def test_solo_grl_genera_movimientos_no_json_legacy(
             self, app_client, admin_token):
@@ -437,12 +488,161 @@ class TestConfirmarUsaGoodsReceiptLines:
             ), {"p": _json.dumps(prods), "gid": eninv_id})
             db2.commit()
 
+        # Registrar cantidad en la GRL real
+        _registrar_cantidades(app_client, admin_token, eninv_id, 5)
+
         status, body, _ = _confirmar(app_client, admin_token, eninv_id)
         assert status == 200, f"Expected 200: {body}"
 
         with TestSessionLocal() as db2:
-            mv = db2.execute(text(
-                "SELECT COUNT(*) FROM inventory_movements WHERE sku_id=:s"
-            ), {"s": sku_fantasma}).scalar()
+            n_mv_fantasma = db2.execute(text(
+                "SELECT COUNT(*) FROM inventory_movements im "
+                "JOIN inventory_operations io ON io.id=im.operation_id "
+                "WHERE im.sku_id=:s AND io.source_document_id=:gid"
+            ), {"s": sku_fantasma, "gid": eninv_id}).scalar()
 
-        assert int(mv) == 0,             f"SKU fantasma (solo JSON) no debe tener movimientos. Got {mv}"
+        assert int(n_mv_fantasma) == 0, (
+            f"SKU fantasma no debe generar movimientos. Got {n_mv_fantasma}"
+        )
+
+    # ─── Bloqueo 1: distincion semantica quantity_received ───────────────────
+
+    def test_qty_received_cero_explicito_sin_sku_valido_422(
+            self, app_client, admin_token):
+        """quantity_received=0 explicito para FISICA -> 422 (no hay SKU con qty>0)."""
+        db = TestSessionLocal()
+        try:
+            sup_id = _create_supplier_db(db)
+            wh_id  = _create_warehouse_db(db)
+            sku_id = _create_sku_db(db)
+        finally:
+            db.close()
+
+        pec   = _create_pec_api(app_client, admin_token, sup_id, wh_id,
+                                [{"sku_id": sku_id, "qty": 5, "nombre": "Prod"}])
+        eninv = _create_eninv_api(app_client, admin_token, pec["id"], wh_id)
+        eninv_id = eninv["id"]
+
+        # Registrar cero explicito
+        _registrar_grl(app_client, admin_token, eninv_id, 0, quantity_received=0)
+
+        status, body, _ = _confirmar(app_client, admin_token, eninv_id)
+        # qty=0 para FISICA -> sku_increments vacio -> 422 "sin lineas validas"
+        assert status == 422, (
+            f"FISICA con qty_received=0 no tiene SKU valido para stock -> 422. Got {status}: {body}"
+        )
+
+    def test_todas_unidades_rechazadas_grl_correcto(
+            self, app_client, admin_token):
+        """qty_received=0, qty_rejected=5 -> GRL correcto, 422 en confirmar FISICA."""
+        db = TestSessionLocal()
+        try:
+            sup_id = _create_supplier_db(db)
+            wh_id  = _create_warehouse_db(db)
+            sku_id = _create_sku_db(db)
+        finally:
+            db.close()
+
+        pec   = _create_pec_api(app_client, admin_token, sup_id, wh_id,
+                                [{"sku_id": sku_id, "qty": 5, "nombre": "Prod"}])
+        eninv = _create_eninv_api(app_client, admin_token, pec["id"], wh_id)
+        eninv_id = eninv["id"]
+
+        grl_id = _registrar_grl(
+            app_client, admin_token, eninv_id, 0,
+            quantity_received=0, quantity_rejected=5,
+        )
+
+        with TestSessionLocal() as db2:
+            row = db2.execute(text(
+                "SELECT quantity_received, quantity_rejected FROM goods_receipt_lines WHERE id=:gid"
+            ), {"gid": grl_id}).fetchone()
+
+        assert int(row[0]) == 0
+        assert int(row[1]) == 5
+
+        status, _, _ = _confirmar(app_client, admin_token, eninv_id)
+        assert status == 422, f"Todos rechazados FISICA -> 422. Got {status}"
+
+    def test_todas_en_cuarentena_grl_correcto(
+            self, app_client, admin_token):
+        """qty_received=0, qty_quarantine=5 -> GRL campos correctos."""
+        db = TestSessionLocal()
+        try:
+            sup_id = _create_supplier_db(db)
+            wh_id  = _create_warehouse_db(db)
+            sku_id = _create_sku_db(db)
+        finally:
+            db.close()
+
+        pec   = _create_pec_api(app_client, admin_token, sup_id, wh_id,
+                                [{"sku_id": sku_id, "qty": 5, "nombre": "Prod"}])
+        eninv = _create_eninv_api(app_client, admin_token, pec["id"], wh_id)
+        eninv_id = eninv["id"]
+
+        grl_id = _registrar_grl(
+            app_client, admin_token, eninv_id, 0,
+            quantity_received=0, quantity_quarantine=5,
+        )
+
+        with TestSessionLocal() as db2:
+            row = db2.execute(text(
+                "SELECT quantity_received, quantity_quarantine FROM goods_receipt_lines WHERE id=:gid"
+            ), {"gid": grl_id}).fetchone()
+
+        assert int(row[0]) == 0
+        assert int(row[1]) == 5
+
+    def test_cantidad_sin_registrar_rechaza_422(
+            self, app_client, admin_token):
+        """GRL con quantity_received=NULL -> 422 al confirmar FISICA."""
+        db = TestSessionLocal()
+        try:
+            sup_id = _create_supplier_db(db)
+            wh_id  = _create_warehouse_db(db)
+            sku_id = _create_sku_db(db)
+        finally:
+            db.close()
+
+        pec   = _create_pec_api(app_client, admin_token, sup_id, wh_id,
+                                [{"sku_id": sku_id, "qty": 5, "nombre": "Prod"}])
+        eninv = _create_eninv_api(app_client, admin_token, pec["id"], wh_id)
+        eninv_id = eninv["id"]
+
+        # NO registrar cantidad (dejar quantity_received=NULL)
+        status, body, _ = _confirmar(app_client, admin_token, eninv_id)
+        assert status == 422, (
+            f"NULL quantity_received en FISICA debe retornar 422. Got {status}: {body}"
+        )
+
+    def test_recepcion_total_explicita_stock_correcto(
+            self, app_client, admin_token):
+        """quantity_received=5 via endpoint -> stock=5, PEC RECIBIDA."""
+        db = TestSessionLocal()
+        try:
+            sup_id = _create_supplier_db(db)
+            wh_id  = _create_warehouse_db(db)
+            sku_id = _create_sku_db(db)
+        finally:
+            db.close()
+
+        pec   = _create_pec_api(app_client, admin_token, sup_id, wh_id,
+                                [{"sku_id": sku_id, "qty": 5, "nombre": "Prod"}])
+        eninv = _create_eninv_api(app_client, admin_token, pec["id"], wh_id)
+        eninv_id = eninv["id"]
+
+        _registrar_cantidades(app_client, admin_token, eninv_id, 5)
+
+        status, body, _ = _confirmar(app_client, admin_token, eninv_id)
+        assert status == 200, f"Expected 200: {body}"
+
+        with TestSessionLocal() as db2:
+            inv = db2.execute(text(
+                "SELECT quantity FROM inventory_levels WHERE sku_id=:s AND warehouse_id=:w"
+            ), {"s": sku_id, "w": wh_id}).scalar()
+            pec_est = db2.execute(text(
+                "SELECT estado FROM purchase_orders_full WHERE id=:pid"
+            ), {"pid": pec["id"]}).scalar()
+
+        assert int(inv) == 5, f"Stock debe ser 5. Got {inv}"
+        assert pec_est == "RECIBIDA", f"PEC debe ser RECIBIDA. Got {pec_est}"

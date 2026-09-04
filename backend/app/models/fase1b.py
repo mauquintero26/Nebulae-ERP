@@ -164,7 +164,7 @@ class GoodsReceiptLine(Base):
     sku_id               = Column(Integer, ForeignKey("product_skus.id", ondelete="SET NULL"), nullable=True)
     description          = Column(String(300), nullable=True)
     quantity_expected    = Column(Numeric(10, 2), nullable=False, default=0)
-    quantity_received    = Column(Numeric(10, 2), nullable=False, default=0)
+    quantity_received    = Column(Numeric(10, 2), nullable=True, default=None)  # NULL = pendiente de registro
     quantity_rejected    = Column(Numeric(10, 2), nullable=False, default=0)
     quantity_quarantine  = Column(Numeric(10, 2), nullable=False, default=0)
     unit_cost_cop        = Column(Numeric(14, 2), nullable=True)
