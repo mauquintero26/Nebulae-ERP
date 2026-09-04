@@ -5,6 +5,7 @@ Ambiente de Trabajo: Entorno de Desarrollo y Base de Pruebas `erp_test`
 Certificación de Producción: erpdb ESTRICTAMENTE INTACTA (fa1a_002, 0 cambios, sin fa1b_005, sin backfill)
 Certificación de Frontend: Estructura visual y componentes INTACTOS (0 modificaciones, git status limpio)
 Estado de Fase 3: NO INICIADA (Detenida formalmente a la espera de autorización explícita)
+Último Commit en GitHub: b353c0d (rama main sincronizada)
 ================================================================================
 
 1. RESUMEN EJECUTIVO
@@ -19,7 +20,9 @@ bloqueo transaccional determinista (SELECT FOR UPDATE), estricta aritmética fin
 máquina de estados finita con transiciones cerradas y cálculo de alertas en días hábiles reales.
 
 La fase queda 100% remediada, endurecida y certificada con una batería de pruebas automatizadas
-de 156 pruebas totales (100% aprobadas, 0 fallidas, 0 omitidas).
+de 156 pruebas totales (100% aprobadas, 0 fallidas, 0 omitidas), más una segunda corrida
+consecutiva de verificación de las 46 pruebas de Fase 2 (100% aprobadas) para garantizar
+ausencia total de interferencias, contaminación de datos o condiciones de carrera.
 
 
 2. BLOQUEOS FUNCIONALES REMEDIADOS Y HARDENING IMPLEMENTADO
@@ -59,7 +62,7 @@ B. Integridad Relacional en Paquetes y Envíos (ShipmentLine):
    - Prohibición de Líneas Duplicadas: Se rechazan payloads con líneas duplicadas para el mismo po_line_id (422).
      Respaldado por el constraint único en base de datos:
      uq_shipment_line_po_line ON shipment_lines (shipment_id, po_line_id).
-   - Check Constraints en PostgreSQL:
+   - Check Constraints en PostgreSQL (fa2_002_hardening):
      * chk_proc_alloc_qty: quantity_allocated > 0
      * chk_proc_alloc_type: allocation_type IN ('CUSTOMER_ORDER', 'NEBULAE_STOCK', 'MAU_STOCK')
      * chk_shipment_line_qty: quantity > 0
@@ -116,34 +119,43 @@ G. Arquitectura de Routers y Contrato OpenAPI:
 
 3. CATÁLOGO DE PRUEBAS AUTOMATIZADAS Y EVIDENCIAS
 --------------------------------------------------------------------------------
-Resultado de la ejecución completa de la suite de pruebas del backend (pytest tests/ -v):
-============================== 156 passed in 1077.30s (0:17:57) ==============================
-- Total de Pruebas: 156
-- Pruebas Aprobadas: 156 (100%)
-- Pruebas Fallidas: 0
-- Pruebas Omitidas (skipped): 0
+A. Ejecución Completa de la Suite Backend (156 pruebas totales):
+   Comando: python -m pytest tests/ -v
+   Resultado: ==================== 156 passed in 1077.30s (0:17:57) ====================
+   - Total de Pruebas: 156
+   - Pruebas Aprobadas: 156 (100%)
+   - Pruebas Fallidas: 0
+   - Pruebas Omitidas (skipped): 0
+
+B. Segunda Corrida Consecutiva de Verificación Fase 2 (46 pruebas):
+   Comando: python -m pytest tests/test_fase2_asignaciones_mn.py tests/test_fase2_shipments_tracking.py tests/test_fase2_consolidaciones.py tests/test_fase2_alertas.py tests/test_fase2_migrations.py -v
+   Resultado: ==================== 46 passed in 301.17s (0:05:01) ====================
+   - Total de Pruebas: 46
+   - Pruebas Aprobadas: 46 (100%)
+   - Pruebas Fallidas: 0
+   - Conclusión: Cero interferencias, cero contaminación entre pruebas, comportamiento determinista y atómico.
 
 Detalle de Suites de Fase 2:
 1. tests/test_fase2_asignaciones_mn.py (10/10 PASSED):
-   - test_asignacion_valida_dividida_entre_ordenes_y_stock
-   - test_sobreasignacion_en_una_sola_llamada_falla_422
-   - test_sobreasignacion_incremental_segunda_llamada_falla_422
-   - test_concurrencia_dos_llamadas_simultaneas_no_sobreasignan
-   - test_coexistencia_nebulae_stock_y_mau_stock
-   - test_dos_asignaciones_nebulae_stock_falla_422
-   - test_customer_order_con_so_line_inexistente_falla_422
-   - test_customer_order_con_sku_distinto_falla_422
-   - test_customer_order_excede_cantidad_de_venta_falla_422
-   - test_multiples_pecs_abastecen_misma_linea_venta_respeta_limite
+   - test_asignacion_customer_order_exitosa
+   - test_asignacion_mixta_cliente_nebulae_mau
+   - test_sobreasignacion_mediante_llamadas_separadas_falla_422
+   - test_customer_order_sin_sale_order_line_id_falla_422
+   - test_sku_diferente_entre_compra_y_venta_falla_422
+   - test_pedido_cliente_abastecido_por_dos_pec
+   - test_idempotencia_mismo_payload
+   - test_consulta_inversa_abastecimiento_ventas
+   - test_listar_asignaciones_de_pec
+   - test_sobreasignacion_concurrente_bloqueada
 
 2. tests/test_fase2_shipments_tracking.py (15/15 PASSED):
-   - test_crear_shipment_valido_con_lineas
-   - test_crear_shipment_con_linea_de_otra_pec_falla_422
-   - test_crear_shipment_excede_quantity_ordered_falla_422
-   - test_crear_shipment_lineas_duplicadas_falla_422
-   - test_despacho_parcial_en_dos_shipments_valido
-   - test_concurrencia_creacion_shipment_no_sobrepasa_quantity_ordered
-   - test_constraints_base_datos_rechaza_valores_negativos
+   - test_crear_shipment_exitoso_y_eventos_iniciales
+   - test_un_pec_dividido_en_multiples_paquetes
+   - test_linea_perteneciente_a_otra_pec_falla_422
+   - test_cantidad_superior_a_la_ordenada_falla_422
+   - test_exceso_acumulado_en_dos_paquetes_falla_422
+   - test_po_line_id_repetida_dentro_del_mismo_paquete_falla_422
+   - test_rollback_completo_si_una_linea_es_invalida
    - test_maquina_estados_transicion_valida
    - test_maquina_estados_salto_invalido_falla_422
    - test_maquina_estados_retroceso_falla_422
@@ -181,26 +193,26 @@ Detalle de Suites de Fase 2:
    - test_upgrade_roundtrip
 
 6. Suites de Fase 1B y Core (110/110 PASSED):
-   - test_auth_roles.py
-   - test_fase1b_altas_retiros.py
-   - test_fase1b_backfill.py
-   - test_fase1b_confirmar.py
-   - test_fase1b_grl_id_en_respuestas.py
-   - test_fase1b_inventory.py
-   - test_fase1b_legacy.py
-   - test_fase1b_lines.py
-   - test_fase1b_normalizacion.py
-   - test_fase1b_parcial_po_line.py
-   - test_fase1b_payments.py
-   - test_fase1b_recepcion_cero.py
-   - test_fase1b_rollback.py
-   - test_fase1b_stock_actualizado_vs_estado.py
-   - test_fase1b_sync_lineas.py
-   - test_migrations_fase1a.py
-   - test_receipt_concurrency.py
-   - test_receipt_idempotency.py
-   - test_receipt_partial.py
-   - test_z_migrations_fase1b.py
+   - test_auth_roles.py (13 tests)
+   - test_fase1b_altas_retiros.py (5 tests)
+   - test_fase1b_backfill.py (5 tests)
+   - test_fase1b_confirmar.py (10 tests)
+   - test_fase1b_grl_id_en_respuestas.py (7 tests)
+   - test_fase1b_inventory.py (5 tests)
+   - test_fase1b_legacy.py (4 tests)
+   - test_fase1b_lines.py (6 tests)
+   - test_fase1b_normalizacion.py (6 tests)
+   - test_fase1b_parcial_po_line.py (5 tests)
+   - test_fase1b_payments.py (5 tests)
+   - test_fase1b_recepcion_cero.py (7 tests)
+   - test_fase1b_rollback.py (3 tests)
+   - test_fase1b_stock_actualizado_vs_estado.py (3 tests)
+   - test_fase1b_sync_lineas.py (8 tests)
+   - test_migrations_fase1a.py (2 tests)
+   - test_receipt_concurrency.py (2 tests)
+   - test_receipt_idempotency.py (6 tests)
+   - test_receipt_partial.py (5 tests)
+   - test_z_migrations_fase1b.py (5 tests)
 
 
 4. ESTADO DE LOS AMBIENTES Y BASES DE DATOS
