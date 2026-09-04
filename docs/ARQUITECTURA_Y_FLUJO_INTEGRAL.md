@@ -469,31 +469,49 @@ El sistema implementa un grafo de transiciones estrictamente cerrado que modela 
 
 ---
 
-### 6. Políticas de Consolidaciones Internacionales
-1. **Membresía Activa Única:**  
-   Un paquete físico solo puede pertenecer a lo sumo a una consolidación activa a la vez. Implementado en base de datos mediante el índice parcial único:  
-   `uq_active_consolidation_shipment ON consolidation_shipments (shipment_id) WHERE is_active = true`.
-2. **Inclusión Atómica de Múltiples Paquetes:**  
-   Al asociar una lista de paquetes a una consolidación, la operación es 100% atómica. Si un solo `shipment_id` no existe o no es elegible, la solicitud completa falla (`404`/`422`) con rollback total, impidiendo asociaciones parciales huérfanas.
-3. **Consolidaciones Cerradas Inmutables:**  
-   Se rechaza con `422` cualquier intento de agregar paquetes o modificar costos en consolidaciones con estado `CERRADA`.
-4. **Idempotencia en Retransmisiones:**  
-   Reintentar la adición de paquetes previamente asociados retorna `200 OK` de forma idempotente sin duplicar eventos ni registros en `consolidation_shipments`.
+### 6. Políticas y Máquina de Estados de Consolidaciones Internacionales
+1. **Máquina de Estados Finita No Evadible:**
+   El ciclo de vida de una consolidación sigue el flujo unidireccional estricto:
+   `ABIERTA` ──► `CONSOLIDADA` ──► `EN_VUELO` ──► `EN_DIAN` ──► `LIBERADA` ──► `RECIBIDA_DESTINO` ──► `CERRADA` (TERMINAL).
+   - Cualquier salto o regresión es rechazado con `HTTP 422 Unprocessable Entity`.
+   - Repetir exactamente el estado actual es idempotente (`HTTP 200`), sin duplicar eventos ni re-ejecutar efectos secundarios.
+   - `CERRADA` es inmutable y terminal: rechaza nuevos paquetes, cambios de estado o repartos de costos (`HTTP 422`).
+   - Propagación controlada a paquetes: cada transición de la consolidación propaga el estado correspondiente a sus paquetes miembros respetando el grafo de transiciones permitidas del paquete.
+
+2. **Tipos de Ruta y Elegibilidad:**
+   - Se distinguen formalmente las rutas `VIA_MIAMI` y `DIRECT_TO_BARRANQUILLA`.
+   - Un paquete solo puede ser agregado a una consolidación si se encuentra en estado elegible (`RECIBIDO_MIAMI` o `PENDIENTE_CONSOLIDACION`).
+   - Los paquetes con ruta `DIRECT_TO_BARRANQUILLA` no admiten eventos de tránsito en Miami ni pueden consolidarse en consolidaciones vía Miami (`HTTP 422`).
+
+3. **Membresía Activa Única y Concurrencia:**
+   - Un paquete físico solo puede pertenecer a lo sumo a una consolidación activa a la vez. Respaldado por:
+     `uq_active_consolidation_shipment ON consolidation_shipments (shipment_id) WHERE is_active = true`.
+   - La inclusión de paquetes bloquea los registros con `SELECT ... FOR UPDATE` y es 100% atómica.
+   - Si un paquete ya pertenece a otra consolidación activa, la operación se rechaza con `HTTP 422`.
+
+4. **Secuencias Atómicas en Base de Datos e Idempotencia:**
+   - Códigos `shipment_number` y `consolidation_number` se generan mediante secuencias nativas de PostgreSQL (`shipment_number_seq` y `consolidation_number_seq`).
+   - Identidad funcional normalizada: índice único `uq_shipment_carrier_tracking ON shipments (lower(trim(carrier)), upper(trim(tracking_number)))`. Peticiones repetidas semánticamente idénticas responden idempotentemente (`HTTP 200`), mientras que incompatibilidades responden con `HTTP 409 Conflict`.
+   - Eventos de tracking deduplicados mediante índice único parcial `uq_shipment_event_idempotency ON shipment_events (shipment_id, idempotency_key) WHERE idempotency_key IS NOT NULL`.
 
 ---
 
 ### 7. Prorrateo Determinista y Exacto de Fletes (`/api/v1/logistica/consolidaciones/{id}/repartir-costos`)
-1. **Validación Estricta del Método:**  
-   Solo se aceptan los métodos `WEIGHT` (por peso físico) y `EQUAL` (cuotas iguales). Cualquier otro método devuelve `422 Unprocessable Entity`.
-2. **Exigencia de Peso para Prorrateo por Peso:**  
-   Si se selecciona `WEIGHT`, todos los paquetes involucrados deben tener `weight_kg > 0`. Se erradicó el fallback silencioso a 1 kg. Si falta peso o es 0, se rechaza con `422`.
-3. **Aritmética Exacta con Decimal y Reparto de Centavos Residuales:**  
-   - Los cálculos se ejecutan íntegramente con tipos `Decimal` de alta precisión cuantizados a centavos (`Decimal('0.01')`).
-   - La división no periódica o periódica (ej. \$100 entre 3 paquetes = \$33.3333...) genera un residuo $R$.
-   - El residuo $k = R / 0.01$ se distribuye determinísticamente sumando 1 centavo a los primeros $k$ paquetes.
-   - **Garantía Contable Certificada:** La suma de las cuotas prorrateadas en USD y COP es idéntica en el centavo exacto al total registrado en la consolidación:  
-     $$\sum \text{cost\_allocation\_usd} = \text{total\_freight\_usd}$$  
+1. **Cinco Métodos Soportados:**
+   - `WEIGHT`: Prorrateo ponderado por peso físico (`weight_kg`). Requiere peso > 0 en cada paquete.
+   - `VOLUME`: Prorrateo ponderado por volumen (`volume_cbm`). Requiere volumen > 0 en cada paquete.
+   - `QUANTITY`: Prorrateo ponderado por cantidad de piezas despachadas en el paquete. Requiere piezas > 0.
+   - `VALUE`: Prorrateo ponderado por valor declarado comercial en USD (`declared_value_usd`). Requiere valor > 0.
+   - `EQUAL`: Distribución en cuotas equitativas entre todos los paquetes asociados.
+   Cualquier otro método o base faltante/cero/negativa devuelve `HTTP 422 Unprocessable Entity`. No se permite prorratear sobre consolidaciones `CERRADA`.
+
+2. **Aritmética Financiera 100% Decimal con Asignación Determinista de Residuos:**
+   - Cálculos realizados íntegramente con `Decimal` y redondeo al centavo exacto (`Decimal('0.01')`).
+   - El residuo por centavos indivisibles se asigna determinísticamente al paquete con mayor base (o al primer paquete en caso de empate).
+   - **Garantía Contable Certificada:** La suma de las cuotas asignadas en USD y COP es idéntica en el centavo exacto al total registrado en la consolidación:
+     $$\sum \text{cost\_allocation\_usd} = \text{total\_freight\_usd}$$
      $$\sum \text{cost\_allocation\_cop} = \text{total\_freight\_cop}$$
+   - **Persistencia de Trazabilidad:** Se persisten `allocation_method` y `allocation_base` en `consolidation_shipments`, así como `last_allocation_method` en `consolidations`.
 
 ---
 
@@ -509,7 +527,14 @@ El sistema implementa un grafo de transiciones estrictamente cerrado que modela 
 
 ---
 
-### 9. Arquitectura de Rutas y Separación de Módulos
+### 9. Integridad de Ubicaciones Logísticas
+- FK `logistics_location_id` en `shipments` y `consolidations` referenciando `logistics_locations`.
+- Validación de existencia y activación (`is_active = True`).
+- Validación de congruencia geográfica (ej. asignaciones de agencia Miami requieren ubicación con tipo `AGENCY_MIAMI` o ciudad Miami).
+
+---
+
+### 10. Arquitectura de Rutas y Separación de Módulos
 Para garantizar una arquitectura limpia sin colisiones en OpenAPI:
 - **Asignaciones de Compras:** `/api/v1/compras/pedidos/{pec_id}/asignaciones` (manejado en `app/api/v1/erp_compras_asignaciones.py`).
 - **Operaciones Logísticas:** `/api/v1/logistica/*` (paquetes, consolidaciones, ubicaciones, alertas) (manejado en `app/api/v1/erp_logistica.py`).

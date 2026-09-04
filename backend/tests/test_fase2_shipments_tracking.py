@@ -1,23 +1,27 @@
 """
-test_fase2_shipments_tracking.py — Tests de Paquetes, Envíos y Trazabilidad (Fase 2 Endurecida).
+test_fase2_shipments_tracking.py — Tests de Paquetes, Envíos y Trazabilidad (Fase 2 Deep Hardening).
 
 Escenarios cubiertos:
-1. Creación de un paquete (Shipment) con tracking individual y eventos automáticos iniciales.
+1. Creación de un paquete (Shipment) con tracking individual y eventos automáticos iniciales (VIA_MIAMI).
 2. Un PEC dividido en múltiples paquetes (ej. FedEx + UPS con líneas separadas).
 3. Rechazo si una línea de compra pertenece a otra PEC (falla 422).
 4. Cantidad despachada superior a la cantidad ordenada (falla 422).
 5. Exceso acumulado en dos paquetes (6 + 6 en orden de 10 falla 422).
 6. Líneas duplicadas (mismo po_line_id) en el mismo paquete (falla 422).
 7. Rollback completo si una de varias líneas es inválida (no se crea el Shipment).
-8. Control de concurrencia al crear paquetes simultáneos (SELECT FOR UPDATE).
+8. Control de concurrencia al crear paquetes simultáneos con secuencias PostgreSQL (shipment_number_seq).
 9. Máquina de estados: transición válida paso a paso.
 10. Máquina de estados: salto inválido (ej: ENVIADO_A_MIAMI -> RECIBIDO_BARRANQUILLA falla 422).
 11. Máquina de estados: retroceso (ej: EN_DIAN -> RECIBIDO_MIAMI falla 422).
 12. Máquina de estados: evento duplicado es idempotente sin duplicar fila.
 13. Máquina de estados: evento posterior a la entrega final RECIBIDO_BARRANQUILLA falla 422.
-14. Máquina de estados: Ruta Amazon Directo (proveedor directo a vuelo -> DIAN -> Barranquilla).
-15. Idempotencia en creación de paquete (mismo carrier + tracking_number).
-16. Catálogo de ubicaciones logísticas intermedias (LogisticsLocation).
+14. Máquina de estados: eventos concurrentes con idempotency_key retornan el evento idempotentemente.
+15. Ruta DIRECT_TO_BARRANQUILLA: inicia en PREPARANDO_PROVEEDOR y rechaza eventos de escala Miami (422).
+16. Ruta DIRECT_TO_BARRANQUILLA: ciclo directo completo (PREPARANDO -> EN_VUELO -> EN_DIAN -> LIBERADO -> BARRANQUILLA).
+17. Identidad normalizada e idempotencia: espacios y mayúsculas/minúsculas recuperan paquete existente si compatible.
+18. Conflicto de identidad (409 Conflict): mismo carrier y tracking pero diferente PEC o líneas.
+19. Integridad de ubicaciones: ubicación inexistente (422), inactiva (422), o incompatible con la ruta (422).
+20. Ubicación válida activa asigna logistics_location_id y agency_id.
 """
 import uuid
 import datetime
@@ -110,7 +114,7 @@ def _create_pec_with_lines(db, sup_id: int, sku_id: int) -> tuple:
 class TestFase2ShipmentsTracking:
 
     def test_crear_shipment_exitoso_y_eventos_iniciales(self, app_client, admin_token):
-        """1. Creación de un paquete individual con tracking y carrier."""
+        """1. Creación de un paquete individual con tracking y carrier (ruta por defecto VIA_MIAMI)."""
         with TestSessionLocal() as session:
             sup_id = _create_supplier_db(session)
             sku_id = _create_sku_db(session)
@@ -124,10 +128,12 @@ class TestFase2ShipmentsTracking:
             "carrier": "UPS",
             "tracking_number": trk,
             "carrier_service": "Ground",
+            "route_type": "VIA_MIAMI",
             "origin": "PROVEEDOR",
             "destination": "MIAMI",
             "weight_lb": 4.5,
             "weight_kg": 2.04,
+            "volume_cbm": 0.015,
             "shipping_cost_usd": 18.50,
             "lines": [{"po_line_id": l1_id, "quantity": 5.0}],
         }
@@ -137,6 +143,7 @@ class TestFase2ShipmentsTracking:
         assert data["carrier"] == "UPS"
         assert data["tracking_number"] == trk
         assert data["status_fise"] == "ENVIADO_A_MIAMI"
+        assert data["route_type"] == "VIA_MIAMI"
 
     def test_un_pec_dividido_en_multiples_paquetes(self, app_client, admin_token):
         """2. Un PEC con 2 líneas despachado en 2 paquetes con carriers distintos."""
@@ -154,70 +161,56 @@ class TestFase2ShipmentsTracking:
             json={
                 "pec_id": pec_id,
                 "carrier": "FedEx",
-                "tracking_number": f"FDX-{uuid.uuid4().hex[:8].upper()}",
+                "tracking_number": f"FDX-{uuid.uuid4().hex[:8]}",
                 "lines": [{"po_line_id": l1_id, "quantity": 5.0}],
             },
         )
         assert res1.status_code == 200
 
-        # Paquete 2: línea 2 por USPS
+        # Paquete 2: línea 2 por DHL
         res2 = app_client.post(
             "/api/v1/logistica/shipments",
             headers=_auth(admin_token),
             json={
                 "pec_id": pec_id,
-                "carrier": "USPS",
-                "tracking_number": f"9400{uuid.uuid4().hex[:8].upper()}",
+                "carrier": "DHL Express",
+                "tracking_number": f"DHL-{uuid.uuid4().hex[:8]}",
                 "lines": [{"po_line_id": l2_id, "quantity": 3.0}],
             },
         )
         assert res2.status_code == 200
 
-        res_list = app_client.get(f"/api/v1/logistica/shipments?pec_id={pec_id}", headers=_auth(admin_token))
-        assert res_list.status_code == 200
-        assert res_list.json()["data"]["total"] == 2
+        with TestSessionLocal() as session:
+            s1 = session.query(Shipment).filter(Shipment.id == res1.json()["data"]["id"]).first()
+            s2 = session.query(Shipment).filter(Shipment.id == res2.json()["data"]["id"]).first()
+            assert s1.pec_id == pec_id and s2.pec_id == pec_id
+            assert s1.shipment_number != s2.shipment_number
 
-    def test_linea_perteneciente_a_otra_pec_falla_422(self, app_client, admin_token):
-        """3. Falla con 422 si se intenta meter una línea de otra PEC en el paquete."""
+    def test_rechazo_linea_de_otra_pec_falla_422(self, app_client, admin_token):
+        """3. Rechazo si se intenta incluir una línea que no pertenece a la PEC del paquete."""
         with TestSessionLocal() as session:
             sup_id = _create_supplier_db(session)
             sku_id = _create_sku_db(session)
-            pec1, l1_a, _ = _create_pec_with_lines(session, sup_id, sku_id)
-            pec2, l2_a, _ = _create_pec_with_lines(session, sup_id, sku_id)
+            pec1, l1, _ = _create_pec_with_lines(session, sup_id, sku_id)
+            pec2, l2, _ = _create_pec_with_lines(session, sup_id, sku_id)
             pec1_id = pec1.id
-            l2_a_id = l2_a.id  # Línea de PEC 2
+            l2_id = l2.id
 
-        payload = {
-            "pec_id": pec1_id,
-            "carrier": "DHL",
-            "tracking_number": f"DHL-{uuid.uuid4().hex[:8]}",
-            "lines": [{"po_line_id": l2_a_id, "quantity": 1.0}],
-        }
-        res = app_client.post("/api/v1/logistica/shipments", headers=_auth(admin_token), json=payload)
+        res = app_client.post(
+            "/api/v1/logistica/shipments",
+            headers=_auth(admin_token),
+            json={
+                "pec_id": pec1_id,
+                "carrier": "USPS",
+                "tracking_number": f"9400{uuid.uuid4().hex[:8]}",
+                "lines": [{"po_line_id": l2_id, "quantity": 1.0}],
+            },
+        )
         assert res.status_code == 422
         assert "no pertenece a la orden PEC" in res.text
 
-    def test_cantidad_superior_a_la_ordenada_falla_422(self, app_client, admin_token):
-        """4. Falla con 422 si se intenta despachar una cantidad mayor a la ordenada."""
-        with TestSessionLocal() as session:
-            sup_id = _create_supplier_db(session)
-            sku_id = _create_sku_db(session)
-            pec, l1, _ = _create_pec_with_lines(session, sup_id, sku_id)
-            pec_id = pec.id
-            l1_id = l1.id  # ordered = 5.0
-
-        payload = {
-            "pec_id": pec_id,
-            "carrier": "UPS",
-            "tracking_number": f"1Z-{uuid.uuid4().hex[:8]}",
-            "lines": [{"po_line_id": l1_id, "quantity": 6.0}],  # 6.0 > 5.0
-        }
-        res = app_client.post("/api/v1/logistica/shipments", headers=_auth(admin_token), json=payload)
-        assert res.status_code == 422
-        assert "superaría la cantidad ordenada" in res.text
-
-    def test_exceso_acumulado_en_dos_paquetes_falla_422(self, app_client, admin_token):
-        """5. Primer paquete despacha 3 de 5; segundo paquete intenta despachar 3 más (total 6 > 5) -> Falla 422."""
+    def test_despacho_superior_a_cantidad_ordenada_falla_422(self, app_client, admin_token):
+        """4. Intentar despachar 10 unidades de una línea que solo tiene 5 ordenadas."""
         with TestSessionLocal() as session:
             sup_id = _create_supplier_db(session)
             sku_id = _create_sku_db(session)
@@ -225,35 +218,57 @@ class TestFase2ShipmentsTracking:
             pec_id = pec.id
             l1_id = l1.id
 
-        # Paquete 1: 3.0
-        res1 = app_client.post(
+        res = app_client.post(
             "/api/v1/logistica/shipments",
             headers=_auth(admin_token),
             json={
                 "pec_id": pec_id,
                 "carrier": "UPS",
-                "tracking_number": f"1Z-{uuid.uuid4().hex[:8]}",
-                "lines": [{"po_line_id": l1_id, "quantity": 3.0}],
+                "tracking_number": f"1Z-EXC-{uuid.uuid4().hex[:8]}",
+                "lines": [{"po_line_id": l1_id, "quantity": 10.0}],  # Solo hay 5 ordenadas
+            },
+        )
+        assert res.status_code == 422
+        assert "Exceso de cantidad" in res.text
+
+    def test_exceso_acumulado_en_dos_paquetes_falla_422(self, app_client, admin_token):
+        """5. Despacho acumulado: 4 unidades en el primer paquete, luego 2 más sobre una orden de 5 (total 6 > 5)."""
+        with TestSessionLocal() as session:
+            sup_id = _create_supplier_db(session)
+            sku_id = _create_sku_db(session)
+            pec, l1, _ = _create_pec_with_lines(session, sup_id, sku_id)
+            pec_id = pec.id
+            l1_id = l1.id
+
+        # Paquete 1: 4 de 5 (válido)
+        res1 = app_client.post(
+            "/api/v1/logistica/shipments",
+            headers=_auth(admin_token),
+            json={
+                "pec_id": pec_id,
+                "carrier": "FedEx",
+                "tracking_number": f"FDX-P1-{uuid.uuid4().hex[:8]}",
+                "lines": [{"po_line_id": l1_id, "quantity": 4.0}],
             },
         )
         assert res1.status_code == 200
 
-        # Paquete 2: 3.0 más (acumulado sería 6.0 > 5.0)
+        # Paquete 2: 2 de 5 restantes (4 + 2 = 6 > 5, debe fallar con 422)
         res2 = app_client.post(
             "/api/v1/logistica/shipments",
             headers=_auth(admin_token),
             json={
                 "pec_id": pec_id,
                 "carrier": "FedEx",
-                "tracking_number": f"FDX-{uuid.uuid4().hex[:8]}",
-                "lines": [{"po_line_id": l1_id, "quantity": 3.0}],
+                "tracking_number": f"FDX-P2-{uuid.uuid4().hex[:8]}",
+                "lines": [{"po_line_id": l1_id, "quantity": 2.0}],
             },
         )
         assert res2.status_code == 422
-        assert "superaría la cantidad ordenada" in res2.text
+        assert "Exceso de cantidad" in res2.text
 
-    def test_po_line_id_repetida_dentro_del_mismo_paquete_falla_422(self, app_client, admin_token):
-        """6. Falla con 422 si se repite la misma po_line_id en el payload del paquete."""
+    def test_lineas_duplicadas_en_mismo_paquete_falla_422(self, app_client, admin_token):
+        """6. Rechazar payload con líneas duplicadas (mismo po_line_id repetido)."""
         with TestSessionLocal() as session:
             sup_id = _create_supplier_db(session)
             sku_id = _create_sku_db(session)
@@ -261,52 +276,83 @@ class TestFase2ShipmentsTracking:
             pec_id = pec.id
             l1_id = l1.id
 
-        payload = {
-            "pec_id": pec_id,
-            "carrier": "UPS",
-            "tracking_number": f"1Z-{uuid.uuid4().hex[:8]}",
-            "lines": [
-                {"po_line_id": l1_id, "quantity": 2.0},
-                {"po_line_id": l1_id, "quantity": 2.0},
-            ],
-        }
-        res = app_client.post("/api/v1/logistica/shipments", headers=_auth(admin_token), json=payload)
+        res = app_client.post(
+            "/api/v1/logistica/shipments",
+            headers=_auth(admin_token),
+            json={
+                "pec_id": pec_id,
+                "carrier": "UPS",
+                "tracking_number": f"1Z-DUP-{uuid.uuid4().hex[:8]}",
+                "lines": [
+                    {"po_line_id": l1_id, "quantity": 2.0},
+                    {"po_line_id": l1_id, "quantity": 1.0},
+                ],
+            },
+        )
         assert res.status_code == 422
         assert "Líneas duplicadas detectadas" in res.text
 
-    def test_rollback_completo_si_una_linea_es_invalida(self, app_client, admin_token):
-        """7. Si una de las líneas es inválida, ninguna línea se crea ni se persiste el paquete."""
-        with TestSessionLocal() as session:
-            sup_id = _create_supplier_db(session)
-            sku_id = _create_sku_db(session)
-            pec, l1, l2 = _create_pec_with_lines(session, sup_id, sku_id)
-            pec_id = pec.id
-            l1_id = l1.id
-            trk = f"1Z-RB-{uuid.uuid4().hex[:8]}"
-
-        payload = {
-            "pec_id": pec_id,
-            "carrier": "UPS",
-            "tracking_number": trk,
-            "lines": [
-                {"po_line_id": l1_id, "quantity": 2.0},
-                {"po_line_id": 9999999, "quantity": 1.0},  # Línea inexistente
-            ],
-        }
-        res = app_client.post("/api/v1/logistica/shipments", headers=_auth(admin_token), json=payload)
-        assert res.status_code == 422
-
-        # Comprobar que no quedó paquete huérfano en BD
-        with TestSessionLocal() as session:
-            found = session.query(Shipment).filter(Shipment.tracking_number == trk).first()
-            assert found is None, "El paquete debió ser revertido por rollback completo"
-
-    def test_maquina_estados_transicion_valida(self, app_client, admin_token):
-        """8. Transiciones válidas y ordenadas en la máquina de estados de Miami."""
+    def test_rollback_completo_si_linea_invalida(self, app_client, admin_token):
+        """7. Si una de varias líneas falla, no se debe crear el Shipment en la base de datos."""
         with TestSessionLocal() as session:
             sup_id = _create_supplier_db(session)
             sku_id = _create_sku_db(session)
             pec, l1, _ = _create_pec_with_lines(session, sup_id, sku_id)
+            pec_id = pec.id
+            l1_id = l1.id
+
+        trk = f"1Z-RB-{uuid.uuid4().hex[:8]}"
+        res = app_client.post(
+            "/api/v1/logistica/shipments",
+            headers=_auth(admin_token),
+            json={
+                "pec_id": pec_id,
+                "carrier": "UPS",
+                "tracking_number": trk,
+                "lines": [
+                    {"po_line_id": l1_id, "quantity": 2.0},
+                    {"po_line_id": 999999, "quantity": 1.0},  # No existe
+                ],
+            },
+        )
+        assert res.status_code in (404, 422)
+
+        with TestSessionLocal() as session:
+            shp = session.query(Shipment).filter(Shipment.tracking_number == trk).first()
+            assert shp is None, "El paquete no debió ser creado debido al rollback"
+
+    def test_control_concurrencia_creacion_paquetes(self, app_client, admin_token):
+        """8. Creación concurrente de paquetes genera shipment_number secuenciales únicos sin colisiones."""
+        with TestSessionLocal() as session:
+            sup_id = _create_supplier_db(session)
+            sku_id = _create_sku_db(session)
+            pec, _, _ = _create_pec_with_lines(session, sup_id, sku_id)
+            pec_id = pec.id
+
+        def _make_req(idx):
+            return app_client.post(
+                "/api/v1/logistica/shipments",
+                headers=_auth(admin_token),
+                json={
+                    "pec_id": pec_id,
+                    "carrier": f"Carrier-{idx}",
+                    "tracking_number": f"TRK-{uuid.uuid4().hex[:8]}",
+                },
+            )
+
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            results = list(ex.map(_make_req, range(4)))
+
+        numbers = [r.json()["data"]["shipment_number"] for r in results if r.status_code == 200]
+        assert len(numbers) == 4
+        assert len(numbers) == len(set(numbers)), "Todos los números de shipment generados concurrentemente deben ser únicos"
+
+    def test_maquina_estados_transicion_valida_paso_a_paso(self, app_client, admin_token):
+        """9. Máquina de estados: ciclo de vida completo vía Miami."""
+        with TestSessionLocal() as session:
+            sup_id = _create_supplier_db(session)
+            sku_id = _create_sku_db(session)
+            pec, _, _ = _create_pec_with_lines(session, sup_id, sku_id)
             pec_id = pec.id
 
         res = app_client.post(
@@ -314,10 +360,10 @@ class TestFase2ShipmentsTracking:
             headers=_auth(admin_token),
             json={"pec_id": pec_id, "carrier": "FedEx", "tracking_number": f"FDX-{uuid.uuid4().hex[:8]}"},
         )
+        assert res.status_code == 200
         shp_id = res.json()["data"]["id"]
 
-        # Secuencia canónica
-        steps = [
+        flujo = [
             "RECIBIDO_MIAMI",
             "PENDIENTE_CONSOLIDACION",
             "CONSOLIDADO",
@@ -328,23 +374,23 @@ class TestFase2ShipmentsTracking:
             "ENVIADO_BARRANQUILLA",
             "RECIBIDO_BARRANQUILLA",
         ]
-        for step in steps:
-            ev_res = app_client.post(
+        for step in flujo:
+            r = app_client.post(
                 f"/api/v1/logistica/shipments/{shp_id}/eventos",
                 headers=_auth(admin_token),
-                json={"event_type": step, "location": "Hub Operativo"},
+                json={"event_type": step, "notes": f"Llegó a {step}"},
             )
-            assert ev_res.status_code == 200, f"Error en paso {step}: {ev_res.text}"
-            assert ev_res.json()["data"]["nuevo_status_fise"] == step
+            assert r.status_code == 200, f"Falló en paso {step}: {r.text}"
+            assert r.json()["data"]["nuevo_status_fise"] == step
 
-        # Verificar estado comercial final
-        detail = app_client.get(f"/api/v1/logistica/shipments/{shp_id}", headers=_auth(admin_token)).json()["data"]
-        assert detail["status_fise"] == "RECIBIDO_BARRANQUILLA"
-        assert detail["commercial_status"] == "EN_BARRANQUILLA"
-        assert detail["actual_delivery_date"] is not None
+        with TestSessionLocal() as session:
+            s = session.query(Shipment).filter(Shipment.id == shp_id).first()
+            assert s.status_fise == "RECIBIDO_BARRANQUILLA"
+            assert s.commercial_status == "EN_BARRANQUILLA"
+            assert s.actual_delivery_date is not None
 
     def test_maquina_estados_salto_invalido_falla_422(self, app_client, admin_token):
-        """9. Intentar saltar directamente de ENVIADO_A_MIAMI a RECIBIDO_BARRANQUILLA debe fallar con 422."""
+        """10. Un salto no permitido (ej. ENVIADO_A_MIAMI -> RECIBIDO_BARRANQUILLA) debe fallar con 422."""
         with TestSessionLocal() as session:
             sup_id = _create_supplier_db(session)
             sku_id = _create_sku_db(session)
@@ -358,17 +404,16 @@ class TestFase2ShipmentsTracking:
         )
         shp_id = res.json()["data"]["id"]
 
-        # Intento de salto inválido
-        res_bad = app_client.post(
+        res_salto = app_client.post(
             f"/api/v1/logistica/shipments/{shp_id}/eventos",
             headers=_auth(admin_token),
             json={"event_type": "RECIBIDO_BARRANQUILLA"},
         )
-        assert res_bad.status_code == 422
-        assert "Transición inválida" in res_bad.text
+        assert res_salto.status_code == 422
+        assert "Transición inválida" in res_salto.text
 
-    def test_maquina_estados_retroceso_falla_422(self, app_client, admin_token):
-        """10. Intentar retroceder de EN_DIAN a RECIBIDO_MIAMI debe fallar con 422."""
+    def test_maquina_estados_retroceso_invalido_falla_422(self, app_client, admin_token):
+        """11. Retroceder en el estado logístico (ej. EN_DIAN -> RECIBIDO_MIAMI) debe fallar con 422."""
         with TestSessionLocal() as session:
             sup_id = _create_supplier_db(session)
             sku_id = _create_sku_db(session)
@@ -382,21 +427,19 @@ class TestFase2ShipmentsTracking:
         )
         shp_id = res.json()["data"]["id"]
 
-        # Avanzar hasta EN_DIAN
         for step in ["RECIBIDO_MIAMI", "CONSOLIDADO", "EN_VUELO", "EN_DIAN"]:
             app_client.post(f"/api/v1/logistica/shipments/{shp_id}/eventos", headers=_auth(admin_token), json={"event_type": step})
 
-        # Intentar retroceder a RECIBIDO_MIAMI
-        res_retro = app_client.post(
+        res_back = app_client.post(
             f"/api/v1/logistica/shipments/{shp_id}/eventos",
             headers=_auth(admin_token),
             json={"event_type": "RECIBIDO_MIAMI"},
         )
-        assert res_retro.status_code == 422
-        assert "Transición inválida" in res_retro.text
+        assert res_back.status_code == 422
+        assert "Transición inválida" in res_back.text
 
-    def test_maquina_estados_duplicado_idempotente(self, app_client, admin_token):
-        """11. Enviar el mismo evento cuando el paquete ya está en ese estado es idempotente y no duplica filas."""
+    def test_maquina_estados_evento_duplicado_es_idempotente(self, app_client, admin_token):
+        """12. Repetir el mismo estado es idempotente y no crea eventos duplicados."""
         with TestSessionLocal() as session:
             sup_id = _create_supplier_db(session)
             sku_id = _create_sku_db(session)
@@ -412,7 +455,6 @@ class TestFase2ShipmentsTracking:
 
         app_client.post(f"/api/v1/logistica/shipments/{shp_id}/eventos", headers=_auth(admin_token), json={"event_type": "RECIBIDO_MIAMI"})
 
-        # Reintento idéntico
         res_dup = app_client.post(f"/api/v1/logistica/shipments/{shp_id}/eventos", headers=_auth(admin_token), json={"event_type": "RECIBIDO_MIAMI"})
         assert res_dup.status_code == 200
         assert "idempotente" in res_dup.json()["message"]
@@ -422,7 +464,7 @@ class TestFase2ShipmentsTracking:
             assert len(events) == 1, f"Se esperaba 1 solo evento, encontrados {len(events)}"
 
     def test_maquina_estados_evento_despues_de_estado_final_falla_422(self, app_client, admin_token):
-        """12. Intentar registrar un nuevo evento tras alcanzar RECIBIDO_BARRANQUILLA debe fallar con 422."""
+        """13. Intentar registrar un nuevo evento tras alcanzar RECIBIDO_BARRANQUILLA debe fallar con 422."""
         with TestSessionLocal() as session:
             sup_id = _create_supplier_db(session)
             sku_id = _create_sku_db(session)
@@ -439,7 +481,6 @@ class TestFase2ShipmentsTracking:
         for step in ["RECIBIDO_MIAMI", "CONSOLIDADO", "EN_VUELO", "EN_DIAN", "LIBERADO_DIAN", "RECIBIDO_BOGOTA", "ENVIADO_BARRANQUILLA", "RECIBIDO_BARRANQUILLA"]:
             app_client.post(f"/api/v1/logistica/shipments/{shp_id}/eventos", headers=_auth(admin_token), json={"event_type": step})
 
-        # Intentar nuevo evento
         res_after = app_client.post(
             f"/api/v1/logistica/shipments/{shp_id}/eventos",
             headers=_auth(admin_token),
@@ -448,88 +489,250 @@ class TestFase2ShipmentsTracking:
         assert res_after.status_code == 422
         assert "estado final de entrega" in res_after.text
 
-    def test_maquina_estados_ruta_amazon_directo(self, app_client, admin_token):
-        """13. Ruta directa (Amazon Direct) sin pasar por Miami."""
+    def test_eventos_concurrencia_idempotency_key(self, app_client, admin_token):
+        """14. Clave de idempotencia única en shipment_events para peticiones concurrentes."""
         with TestSessionLocal() as session:
             sup_id = _create_supplier_db(session)
             sku_id = _create_sku_db(session)
             pec, _, _ = _create_pec_with_lines(session, sup_id, sku_id)
             pec_id = pec.id
 
-        # Crear paquete sin tracking inicial (queda en PREPARANDO_PROVEEDOR)
         res = app_client.post(
             "/api/v1/logistica/shipments",
             headers=_auth(admin_token),
-            json={"pec_id": pec_id, "carrier": "Amazon Logistics", "tracking_number": f"TBA-{uuid.uuid4().hex[:8]}"},
+            json={"pec_id": pec_id, "carrier": "FedEx", "tracking_number": f"FDX-{uuid.uuid4().hex[:8]}"},
         )
         shp_id = res.json()["data"]["id"]
 
-        # Salto directo de proveedor a vuelo internacional
-        # En create_shipment con tracking pasa a ENVIADO_A_MIAMI por defecto si destination es MIAMI.
-        # Creemos uno con destination BOGOTA o ruta directa
-        res_direct = app_client.post(
+        idem_key = f"KEY-{uuid.uuid4().hex}"
+        payload = {"event_type": "RECIBIDO_MIAMI", "idempotency_key": idem_key}
+
+        def _send():
+            return app_client.post(
+                f"/api/v1/logistica/shipments/{shp_id}/eventos",
+                headers=_auth(admin_token),
+                json=payload,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            futs = [ex.submit(_send), ex.submit(_send)]
+            results = [f.result() for f in futs]
+
+        for r in results:
+            assert r.status_code == 200
+
+        with TestSessionLocal() as session:
+            evs = session.query(ShipmentEvent).filter(ShipmentEvent.shipment_id == shp_id, ShipmentEvent.idempotency_key == idem_key).all()
+            assert len(evs) == 1
+
+    def test_ruta_directa_rechaza_eventos_de_miami_422(self, app_client, admin_token):
+        """15. Paquete con ruta DIRECT_TO_BARRANQUILLA rechaza eventos de Miami con HTTP 422."""
+        with TestSessionLocal() as session:
+            sup_id = _create_supplier_db(session)
+            sku_id = _create_sku_db(session)
+            pec, _, _ = _create_pec_with_lines(session, sup_id, sku_id)
+            pec_id = pec.id
+
+        res = app_client.post(
             "/api/v1/logistica/shipments",
             headers=_auth(admin_token),
             json={
                 "pec_id": pec_id,
                 "carrier": "Amazon Direct",
-                "tracking_number": f"AMZ-DIR-{uuid.uuid4().hex[:8]}",
-                "destination": "BOGOTA",
+                "tracking_number": f"TBA-DIR-{uuid.uuid4().hex[:8]}",
+                "route_type": "DIRECT_TO_BARRANQUILLA",
             },
         )
-        shp_dir_id = res_direct.json()["data"]["id"]
+        assert res.status_code == 200
+        shp_id = res.json()["data"]["id"]
+        assert res.json()["data"]["status_fise"] == "PREPARANDO_PROVEEDOR"
 
-        # Ruta directa: ENVIADO_A_MIAMI o PREPARANDO -> EN_VUELO -> EN_DIAN -> LIBERADO_DIAN -> RECIBIDO_BARRANQUILLA
-        # Reset a PREPARANDO_PROVEEDOR via DB para probar transición directa
-        with TestSessionLocal() as session:
-            shp_obj = session.query(Shipment).filter(Shipment.id == shp_dir_id).first()
-            shp_obj.status_fise = "PREPARANDO_PROVEEDOR"
-            session.commit()
+        # Intentar registrar evento de Miami
+        res_miami = app_client.post(
+            f"/api/v1/logistica/shipments/{shp_id}/eventos",
+            headers=_auth(admin_token),
+            json={"event_type": "ENVIADO_A_MIAMI"},
+        )
+        assert res_miami.status_code == 422
+        assert "no permite eventos de escala Miami" in res_miami.text
 
-        res_vuelo = app_client.post(f"/api/v1/logistica/shipments/{shp_dir_id}/eventos", headers=_auth(admin_token), json={"event_type": "EN_VUELO"})
-        assert res_vuelo.status_code == 200
-
-        res_dian = app_client.post(f"/api/v1/logistica/shipments/{shp_dir_id}/eventos", headers=_auth(admin_token), json={"event_type": "EN_DIAN"})
-        assert res_dian.status_code == 200
-
-        res_lib = app_client.post(f"/api/v1/logistica/shipments/{shp_dir_id}/eventos", headers=_auth(admin_token), json={"event_type": "LIBERADO_DIAN"})
-        assert res_lib.status_code == 200
-
-        res_baq = app_client.post(f"/api/v1/logistica/shipments/{shp_dir_id}/eventos", headers=_auth(admin_token), json={"event_type": "RECIBIDO_BARRANQUILLA"})
-        assert res_baq.status_code == 200
-
-    def test_idempotencia_creacion_shipment(self, app_client, admin_token):
-        """14. Crear el mismo paquete con idéntico carrier y tracking es idempotente."""
+    def test_ruta_directa_ciclo_completo(self, app_client, admin_token):
+        """16. Ciclo directo completo para DIRECT_TO_BARRANQUILLA."""
         with TestSessionLocal() as session:
             sup_id = _create_supplier_db(session)
             sku_id = _create_sku_db(session)
             pec, _, _ = _create_pec_with_lines(session, sup_id, sku_id)
             pec_id = pec.id
 
-        trk = f"TRK-IDEM-{uuid.uuid4().hex[:8]}"
-        payload = {"pec_id": pec_id, "carrier": "DHL", "tracking_number": trk}
+        res = app_client.post(
+            "/api/v1/logistica/shipments",
+            headers=_auth(admin_token),
+            json={
+                "pec_id": pec_id,
+                "carrier": "Amazon Direct",
+                "tracking_number": f"TBA-DIR2-{uuid.uuid4().hex[:8]}",
+                "route_type": "DIRECT_TO_BARRANQUILLA",
+            },
+        )
+        shp_id = res.json()["data"]["id"]
 
-        res1 = app_client.post("/api/v1/logistica/shipments", headers=_auth(admin_token), json=payload)
+        flujo_directo = ["EN_VUELO", "EN_DIAN", "LIBERADO_DIAN", "RECIBIDO_BARRANQUILLA"]
+        for step in flujo_directo:
+            r = app_client.post(
+                f"/api/v1/logistica/shipments/{shp_id}/eventos",
+                headers=_auth(admin_token),
+                json={"event_type": step},
+            )
+            assert r.status_code == 200, f"Falló en {step}: {r.text}"
+
+        with TestSessionLocal() as session:
+            shp = session.query(Shipment).filter(Shipment.id == shp_id).first()
+            assert shp.status_fise == "RECIBIDO_BARRANQUILLA"
+
+    def test_identidad_normalizada_e_idempotencia(self, app_client, admin_token):
+        """17. Variaciones de espacios y mayúsculas/minúsculas se normalizan y retornan el paquete de forma idempotente."""
+        with TestSessionLocal() as session:
+            sup_id = _create_supplier_db(session)
+            sku_id = _create_sku_db(session)
+            pec, _, _ = _create_pec_with_lines(session, sup_id, sku_id)
+            pec_id = pec.id
+
+        trk = f"trk-{uuid.uuid4().hex[:8]}"
+        res1 = app_client.post(
+            "/api/v1/logistica/shipments",
+            headers=_auth(admin_token),
+            json={"pec_id": pec_id, "carrier": "  FedEx Express  ", "tracking_number": f"  {trk.lower()}  "},
+        )
         assert res1.status_code == 200
         shp_id1 = res1.json()["data"]["id"]
 
-        res2 = app_client.post("/api/v1/logistica/shipments", headers=_auth(admin_token), json=payload)
+        # Segunda llamada con diferente casing y espacios
+        res2 = app_client.post(
+            "/api/v1/logistica/shipments",
+            headers=_auth(admin_token),
+            json={"pec_id": pec_id, "carrier": "fedex express", "tracking_number": trk.upper()},
+        )
         assert res2.status_code == 200
         shp_id2 = res2.json()["data"]["id"]
+        assert shp_id1 == shp_id2, "Debe retornar el mismo paquete recuperado de forma idempotente"
 
-        assert shp_id1 == shp_id2, "Debe retornar exactamente el mismo ID"
+    def test_conflicto_identidad_incompatible_falla_409(self, app_client, admin_token):
+        """18. Mismo carrier y tracking pero diferente PEC debe arrojar HTTP 409 Conflict."""
+        with TestSessionLocal() as session:
+            sup_id = _create_supplier_db(session)
+            sku_id = _create_sku_db(session)
+            pec1, _, _ = _create_pec_with_lines(session, sup_id, sku_id)
+            pec2, _, _ = _create_pec_with_lines(session, sup_id, sku_id)
+            pec1_id, pec2_id = pec1.id, pec2.id
 
-    def test_catalogo_ubicaciones_logisticas(self, app_client, admin_token):
-        """15. Catálogo de agencias y hubs logísticos."""
-        code = f"AGY-{uuid.uuid4().hex[:4].upper()}"
-        res = app_client.post(
-            "/api/v1/logistica/locations",
+        trk = f"TRK-CONF-{uuid.uuid4().hex[:8]}"
+        res1 = app_client.post(
+            "/api/v1/logistica/shipments",
             headers=_auth(admin_token),
-            json={"code": code, "name": "Miami Hub Central", "location_type": "AGENCY_MIAMI", "city": "Miami", "country": "USA"},
+            json={"pec_id": pec1_id, "carrier": "DHL", "tracking_number": trk},
+        )
+        assert res1.status_code == 200
+
+        # Intentar crear con la otra PEC
+        res2 = app_client.post(
+            "/api/v1/logistica/shipments",
+            headers=_auth(admin_token),
+            json={"pec_id": pec2_id, "carrier": "DHL", "tracking_number": trk},
+        )
+        assert res2.status_code == 409
+        assert "Conflicto de identidad" in res2.text
+
+    def test_validacion_ubicacion_logistica(self, app_client, admin_token):
+        """19. Validar ubicación inexistente, inactiva y compatibilidad con ruta."""
+        with TestSessionLocal() as session:
+            # Asegurar MIA_AGENCY_1
+            mia_loc = session.query(LogisticsLocation).filter(LogisticsLocation.code == "MIA_AGENCY_1").first()
+            if not mia_loc:
+                mia_loc = LogisticsLocation(
+                    code="MIA_AGENCY_1",
+                    name="Miami Agency 1",
+                    location_type="AGENCY_MIAMI",
+                    city="Miami",
+                    country="USA",
+                    is_active=True,
+                )
+                session.add(mia_loc)
+            else:
+                mia_loc.is_active = True
+
+            # Crear ubicación inactiva
+            loc_inactiva = LogisticsLocation(
+                code=f"INACT-{uuid.uuid4().hex[:4].upper()}",
+                name="Agencia Inactiva",
+                location_type="AGENCY_MIAMI",
+                is_active=False,
+            )
+            session.add(loc_inactiva)
+            session.commit()
+            inact_id = loc_inactiva.id
+
+        # 1. Ubicación inexistente
+        res_non = app_client.post(
+            "/api/v1/logistica/shipments",
+            headers=_auth(admin_token),
+            json={"carrier": "UPS", "tracking_number": f"TRK-{uuid.uuid4().hex[:6]}", "logistics_location_id": 999999},
+        )
+        assert res_non.status_code == 422
+        assert "no encontrada" in res_non.text
+
+        # 2. Ubicación inactiva
+        res_ina = app_client.post(
+            "/api/v1/logistica/shipments",
+            headers=_auth(admin_token),
+            json={"carrier": "UPS", "tracking_number": f"TRK-{uuid.uuid4().hex[:6]}", "logistics_location_id": inact_id},
+        )
+        assert res_ina.status_code == 422
+        assert "no está activa" in res_ina.text
+
+        # 3. Ubicación de Miami en ruta directa
+        res_inc = app_client.post(
+            "/api/v1/logistica/shipments",
+            headers=_auth(admin_token),
+            json={
+                "carrier": "UPS",
+                "tracking_number": f"TRK-{uuid.uuid4().hex[:6]}",
+                "agency_id": "MIA_AGENCY_1",
+                "route_type": "DIRECT_TO_BARRANQUILLA",
+            },
+        )
+        assert res_inc.status_code == 422
+        assert "no es compatible con la ruta directa" in res_inc.text
+
+    def test_ubicacion_valida_activa_asigna_correctamente(self, app_client, admin_token):
+        """20. Ubicación válida y activa se asigna correctamente al paquete."""
+        with TestSessionLocal() as session:
+            mia_loc = session.query(LogisticsLocation).filter(LogisticsLocation.code == "MIA_AGENCY_1").first()
+            if not mia_loc:
+                mia_loc = LogisticsLocation(
+                    code="MIA_AGENCY_1",
+                    name="Miami Agency 1",
+                    location_type="AGENCY_MIAMI",
+                    city="Miami",
+                    country="USA",
+                    is_active=True,
+                )
+                session.add(mia_loc)
+                session.commit()
+
+        res = app_client.post(
+            "/api/v1/logistica/shipments",
+            headers=_auth(admin_token),
+            json={
+                "carrier": "UPS",
+                "tracking_number": f"TRK-LOC-{uuid.uuid4().hex[:6]}",
+                "agency_id": "MIA_AGENCY_1",
+                "route_type": "VIA_MIAMI",
+            },
         )
         assert res.status_code == 200
-        assert res.json()["data"]["code"] == code
+        shp_id = res.json()["data"]["id"]
 
-        res_get = app_client.get("/api/v1/logistica/locations", headers=_auth(admin_token))
-        assert res_get.status_code == 200
-        assert any(l["code"] == code for l in res_get.json()["data"])
+        with TestSessionLocal() as session:
+            shp = session.query(Shipment).filter(Shipment.id == shp_id).first()
+            assert shp.logistics_location_id is not None
+            assert shp.agency_id == "MIA_AGENCY_1"

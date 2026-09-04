@@ -1,11 +1,12 @@
 """
-test_fase2_migrations.py — Tests de migraciones Alembic Fase 2 (fa2_001 y fa2_002)
+test_fase2_migrations.py — Tests de migraciones Alembic Fase 2 (fa2_001, fa2_002 y fa2_003)
 
 Escenarios:
-1. Upgrade head: todas las tablas e índices/constraints de Fase 2 existen
-2. Downgrade fa2_001: revierte fa2_002 (desaparecen columnas y constraints de hardening)
-3. Downgrade fa1b_005: todas las tablas de Fase 2 se eliminan limpiamente
-4. Upgrade head de nuevo (roundtrip completo verificado)
+1. Upgrade head: todas las tablas, columnas, índices, constraints y secuencias de fa2_001, fa2_002 y fa2_003 existen.
+2. Downgrade fa2_002: revierte fa2_003 (desaparecen columnas, índices y secuencias de deep hardening).
+3. Downgrade fa2_001: revierte fa2_002.
+4. Downgrade fa1b_005: todas las tablas de Fase 2 se eliminan limpiamente.
+5. Upgrade head de nuevo (roundtrip completo verificado).
 """
 import subprocess
 import sys
@@ -64,6 +65,13 @@ def _index_exists(conn, index_name):
     return bool(row)
 
 
+def _sequence_exists(conn, seq_name):
+    row = conn.execute(text(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.sequences WHERE sequence_name=:s)"
+    ), {"s": seq_name}).scalar()
+    return bool(row)
+
+
 class TestFase2Migrations:
 
     @pytest.fixture(autouse=True)
@@ -95,6 +103,46 @@ class TestFase2Migrations:
             assert _index_exists(conn, "uq_procurement_alloc_identity")
             assert _index_exists(conn, "uq_shipment_line_po_line")
             assert _index_exists(conn, "uq_active_consolidation_shipment")
+
+            # Columnas de fa2_003 (Deep Hardening)
+            assert _column_exists(conn, "shipments", "route_type")
+            assert _column_exists(conn, "shipments", "volume_cbm")
+            assert _column_exists(conn, "shipments", "logistics_location_id")
+            assert _column_exists(conn, "consolidations", "logistics_location_id")
+            assert _column_exists(conn, "consolidations", "last_allocation_method")
+            assert _column_exists(conn, "consolidation_shipments", "allocation_method")
+            assert _column_exists(conn, "consolidation_shipments", "allocation_base")
+
+            # Índices y secuencias de fa2_003
+            assert _index_exists(conn, "uq_shipment_carrier_tracking")
+            assert _index_exists(conn, "uq_shipment_event_idempotency")
+            assert _sequence_exists(conn, "shipment_number_seq")
+            assert _sequence_exists(conn, "consolidation_number_seq")
+
+    def test_downgrade_fa2_003_reverts_deep_hardening(self, setup_test_db):
+        _run(["upgrade", "head"])
+
+        # Downgrade a fa2_002
+        code, out = _run(["downgrade", "fa2_002"])
+        assert code == 0, f"alembic downgrade fa2_002 falló: {out}"
+
+        with test_engine.connect() as conn:
+            # Las tablas todavía existen en fa2_002
+            for t in FA2_TABLES:
+                assert _table_exists(conn, t), f"La tabla '{t}' aún debería existir en fa2_002"
+
+            # Columnas de fa2_003 deben haber desaparecido
+            assert not _column_exists(conn, "shipments", "route_type")
+            assert not _column_exists(conn, "shipments", "volume_cbm")
+            assert not _column_exists(conn, "shipments", "logistics_location_id")
+            assert not _column_exists(conn, "consolidations", "last_allocation_method")
+            assert not _column_exists(conn, "consolidation_shipments", "allocation_method")
+            assert not _index_exists(conn, "uq_shipment_carrier_tracking")
+            assert not _sequence_exists(conn, "shipment_number_seq")
+
+            # Pero las de fa2_002 todavía están
+            assert _column_exists(conn, "consolidations", "dian_entered_at")
+            assert _column_exists(conn, "consolidation_shipments", "is_active")
 
     def test_downgrade_fa2_002_reverts_hardening(self, setup_test_db):
         _run(["upgrade", "head"])
@@ -129,7 +177,7 @@ class TestFase2Migrations:
         code_down, out_down = _run(["downgrade", "fa1b_005"])
         assert code_down == 0, f"Downgrade falló: {out_down}"
 
-        # Re-upgrade a head (fa2_002)
+        # Re-upgrade a head (fa2_003)
         code_up, out_up = _run(["upgrade", "head"])
         assert code_up == 0, f"Re-upgrade falló: {out_up}"
 
@@ -137,4 +185,6 @@ class TestFase2Migrations:
             for t in FA2_TABLES:
                 assert _table_exists(conn, t), f"La tabla '{t}' debería existir tras re-upgrade"
             assert _column_exists(conn, "consolidations", "dian_entered_at")
-            assert _index_exists(conn, "uq_procurement_alloc_identity")
+            assert _column_exists(conn, "shipments", "route_type")
+            assert _index_exists(conn, "uq_shipment_carrier_tracking")
+            assert _sequence_exists(conn, "shipment_number_seq")

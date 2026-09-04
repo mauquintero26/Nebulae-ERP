@@ -56,12 +56,15 @@ class ShipmentCreate(BaseModel):
     carrier: str
     tracking_number: str
     carrier_service: Optional[str] = None
+    route_type: Optional[str] = "VIA_MIAMI"  # VIA_MIAMI | DIRECT_TO_BARRANQUILLA
     origin: Optional[str] = "PROVEEDOR"
     destination: Optional[str] = "MIAMI"
     agency_id: Optional[str] = None
+    logistics_location_id: Optional[int] = None
     estimated_delivery_date: Optional[date] = None
     weight_lb: Optional[Decimal] = Field(None, ge=Decimal("0"))
     weight_kg: Optional[Decimal] = Field(None, ge=Decimal("0"))
+    volume_cbm: Optional[Decimal] = Field(None, ge=Decimal("0"))
     shipping_cost_usd: Optional[Decimal] = Field(None, ge=Decimal("0"))
     notes: Optional[str] = None
     lines: Optional[List[ShipmentLineIn]] = []
@@ -102,15 +105,18 @@ class ShipmentOut(BaseModel):
     carrier: str
     tracking_number: str
     carrier_service: Optional[str] = None
+    route_type: str = "VIA_MIAMI"
     origin: str
     destination: str
     status_fise: str
     commercial_status: str
     agency_id: Optional[str] = None
+    logistics_location_id: Optional[int] = None
     estimated_delivery_date: Optional[date] = None
     actual_delivery_date: Optional[date] = None
     weight_lb: Optional[float] = None
     weight_kg: Optional[float] = None
+    volume_cbm: Optional[float] = None
     shipping_cost_usd: Optional[float] = None
     notes: Optional[str] = None
     created_at: Optional[datetime] = None
@@ -127,6 +133,7 @@ class ConsolidationCreate(BaseModel):
     carrier: Optional[str] = None
     tracking_international: Optional[str] = None
     agency_name: Optional[str] = "Miami Agency 1"
+    logistics_location_id: Optional[int] = None
     origin: Optional[str] = "MIAMI"
     destination: Optional[str] = "BARRANQUILLA"
     trm: Optional[Decimal] = Field(Decimal("0"), ge=Decimal("0"))
@@ -141,16 +148,16 @@ class ConsolidationAddShipments(BaseModel):
 
 
 class ConsolidationCostAllocation(BaseModel):
-    allocation_method: str = Field("WEIGHT", description="WEIGHT o EQUAL")
+    allocation_method: str = Field("WEIGHT", description="WEIGHT, VOLUME, QUANTITY, VALUE, EQUAL")
     total_freight_usd: Optional[Decimal] = Field(None, ge=Decimal("0"))
     trm: Optional[Decimal] = Field(None, ge=Decimal("0"))
-
 
 
 class ConsolidationUpdate(BaseModel):
     carrier: Optional[str] = None
     tracking_international: Optional[str] = None
     agency_name: Optional[str] = None
+    logistics_location_id: Optional[int] = None
     customs_declaration_number: Optional[str] = None
     notes: Optional[str] = None
     estimated_arrival_date: Optional[date] = None
@@ -161,13 +168,13 @@ class ConsolidationStatusUpdate(BaseModel):
     notes: Optional[str] = None
 
 
-
 class ConsolidationOut(BaseModel):
     id: int
     consolidation_number: str
     carrier: Optional[str] = None
     tracking_international: Optional[str] = None
     agency_name: Optional[str] = None
+    logistics_location_id: Optional[int] = None
     origin: str
     destination: str
     total_weight_kg: float
@@ -181,6 +188,7 @@ class ConsolidationOut(BaseModel):
     estimated_arrival_date: Optional[datetime] = None
     actual_arrival_date: Optional[datetime] = None
     dian_entered_at: Optional[datetime] = None
+    last_allocation_method: Optional[str] = None
     notes: Optional[str] = None
     created_at: Optional[datetime] = None
     shipments_count: int = 0
@@ -200,4 +208,3 @@ class TransitAlert(BaseModel):
     document_reference: str
     message: str
     days_delay: int = 0
-    suggested_action: str
