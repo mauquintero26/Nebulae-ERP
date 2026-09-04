@@ -120,6 +120,8 @@ def setup_test_db():
     # Cleanup: truncate all test data (best-effort, ignore missing tables)
     with test_engine.connect() as conn:
         for tbl in [
+            # Fase 3 — Cuarentena
+            "inventory_quarantine",
             # Fase 2 — Logística, Paquetes y Consolidaciones
             "consolidation_shipments", "shipment_events", "shipment_lines",
             "shipments", "consolidations", "logistics_locations",
@@ -195,8 +197,8 @@ def db(setup_test_db):
 
     # Monkey-patch add() to track created objects for cleanup
     _orig_add = session.add
-    def _tracking_add(obj):
-        _orig_add(obj)
+    def _tracking_add(obj, *args, **kwargs):
+        _orig_add(obj, *args, **kwargs)
         _created_ids.append(obj)
     session.add = _tracking_add
 

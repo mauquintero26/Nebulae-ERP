@@ -217,10 +217,13 @@ class GoodsReceipt(Base):
     receipt_type    = Column(String(20), nullable=True, default="FISICA")
     # FISICA | LOGISTICA
     confirmed_by    = Column(String(150), nullable=True)
-    confirmed_at    = Column(DateTime, nullable=True)
+    # ── Fase 3: Vinculo a shipment y etapa de recepcion ─────────────────────
+    shipment_id     = Column(Integer, ForeignKey("shipments.id", ondelete="SET NULL"), nullable=True, index=True)
+    reception_stage = Column(String(30), nullable=True, default="BARRANQUILLA")
 
     purchase_order = relationship("PurchaseOrderFull", back_populates="goods_receipts")
     supplier       = relationship("Supplier", foreign_keys=[supplier_id])
+    shipment       = relationship("Shipment", foreign_keys=[shipment_id])
 
 
 class ActivityLog(Base):

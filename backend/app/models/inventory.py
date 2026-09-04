@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, UniqueConstraint
+import datetime
+from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, UniqueConstraint, DateTime
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 
@@ -84,11 +85,15 @@ class InventoryMovement(Base):
     # Añadidos por migración fa1a_002.
     idempotency_key = Column(String(150), nullable=True, unique=True, index=True)
     # SHA-256(operation_id:sku_id:direction:owner:dest_warehouse)
-    direction       = Column(String(10), nullable=True)
+    direction       = Column(String(30), nullable=True)
     # IN | OUT | ADJUST | TRANSFER_IN | TRANSFER_OUT
     owner           = Column(String(20), nullable=True, default="NEBULAE")
     # NEBULAE | MAU
-    unit_cost_cop   = Column(Numeric(14, 2), nullable=True)
+    # ── Fase 3: Trazabilidad de bodega, fecha inmutable y usuario ───────────
+    warehouse_id    = Column(Integer, ForeignKey("warehouses.id"), nullable=True, index=True)
+    created_at      = Column(DateTime(timezone=True), default=datetime.datetime.utcnow, nullable=False)
+    created_by      = Column(String(150), nullable=True)
 
     operation = relationship("InventoryOperation", back_populates="movements")
     sku       = relationship("ProductSKU", back_populates="inventory_movements")
+    warehouse = relationship("Warehouse", foreign_keys=[warehouse_id])

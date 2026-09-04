@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from app.api.v1 import auth, catalog, quotations, inventory, finance, store, crm, sales, purchases, webhooks, marketing, chat
-from app.api.v1 import erp_ventas, erp_compras, erp_compras_asignaciones, ecommerce, erp_logistica
+from app.api.v1 import erp_ventas, erp_compras, erp_compras_asignaciones, ecommerce, erp_logistica, erp_inventario
 from app.api import ws
 from app.db.database import Base, engine
 
@@ -60,6 +60,7 @@ app.include_router(erp_compras.router, prefix="/api/v1/compras", tags=["ERP Comp
 app.include_router(erp_compras_asignaciones.router, prefix="/api/v1/compras", tags=["ERP Compras - Asignaciones"])
 app.include_router(erp_logistica.router, prefix="/api/v1/logistica", tags=["ERP Logística y Tránsito"])
 app.include_router(ecommerce.router, prefix="/api/v1/ecommerce", tags=["E-commerce"])
+app.include_router(erp_inventario.router, prefix="/api/v1/inventory", tags=["ERP Inventario"])
 
 @app.get("/")
 def read_root():

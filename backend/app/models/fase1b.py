@@ -177,6 +177,12 @@ class GoodsReceiptLine(Base):
     unit_cost_cop        = Column(Numeric(14, 2), nullable=True)
     receipt_type         = Column(String(20), nullable=False, default="FISICA")
     # FISICA | LOGISTICA
+    # ── Fase 3: Trazabilidad de diferencias y estado ────────────────────────
+    quantity_missing     = Column(Numeric(10, 2), nullable=False, default=0)
+    quantity_excess      = Column(Numeric(10, 2), nullable=False, default=0)
+    status               = Column(String(30), nullable=False, default="PENDIENTE")
+    notes                = Column(Text, nullable=True)
+    damaged_reason       = Column(String(100), nullable=True)
     source               = Column(String(20), nullable=False, default="NATIVE")
     migration_batch_id   = Column(String(50), nullable=True, index=True)
     created_at           = Column(DateTime, default=_now)
@@ -185,6 +191,7 @@ class GoodsReceiptLine(Base):
     po_line              = relationship("PurchaseOrderLine", back_populates="receipt_lines")
     sku                  = relationship("ProductSKU", foreign_keys=[sku_id])
     allocations          = relationship("GoodsReceiptLineAllocation", back_populates="gr_line")
+    quarantine_records   = relationship("InventoryQuarantine", back_populates="gr_line")
 
 
 class GoodsReceiptLineAllocation(Base):

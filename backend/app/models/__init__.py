@@ -32,3 +32,8 @@ from app.models.fase2 import (
     ShipmentEvent,
     ConsolidationShipment,
 )
+
+# Fase 3 — modelos de recepciones, cuarentena e inventario
+from app.models.fase3 import (
+    InventoryQuarantine,
+)

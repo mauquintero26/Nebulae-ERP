@@ -16,7 +16,13 @@ from app.models.erp_documents import (
     Supplier, PurchaseOrderFull, GoodsReceipt, ActivityLog, SaleOrder
 )
 from app.models.inventory import InventoryLevel, Warehouse, InventoryOperation, InventoryMovement
-from app.models.fase1b import GoodsReceiptLine, PurchaseOrderLine
+from app.models.fase1b import (
+    GoodsReceiptLine, PurchaseOrderLine, InventoryOwnerBalance,
+    GoodsReceiptLineAllocation, ProcurementAllocation
+)
+from app.models.fase2 import Shipment, ShipmentEvent
+from app.models.fase3 import InventoryQuarantine
+from decimal import Decimal
 from app.api.v1.schemas_compras import (
     ConfirmarRecepcionBody, CrearRecepcionDesdePecBody,
     ActualizarTrackingBody, CrearPecBody, CancelarSolicitudBody, RegistrarPagoBody,
@@ -1678,22 +1684,43 @@ def confirmar_recepcion(
                 )
             # Registrar faltante (qty_expected - suma_total)
             qty_faltante = max(0, qty_expected - qty_suma)
-            # Actualizar la linea normalizada
-            grl.quantity_received  = qty_received
-            grl.quantity_rejected  = qty_rejected
+            qty_exceso = max(0, qty_received - qty_expected)
+
+            # Actualizar la linea normalizada con trazabilidad Fase 3
+            grl.quantity_received   = qty_received
+            grl.quantity_rejected   = qty_rejected
             grl.quantity_quarantine = qty_quarantine
-            grl.receipt_type       = receipt_type
+            grl.quantity_missing    = Decimal(str(qty_faltante))
+            grl.quantity_excess     = Decimal(str(qty_exceso))
+            grl.receipt_type        = receipt_type
+
+            if qty_quarantine > 0 and qty_received == 0:
+                grl.status = "CUARENTENA"
+            elif qty_rejected > 0 and qty_received == 0:
+                grl.status = "RECHAZADA"
+            elif qty_faltante > 0 and qty_received > 0:
+                grl.status = "PARCIAL"
+            elif qty_faltante > 0 and qty_received == 0:
+                grl.status = "FALTANTE"
+            elif qty_exceso > 0:
+                grl.status = "EXCEDENTE"
+            else:
+                grl.status = "CORRECTA"
+
+            # Actualizar quantity_received en PurchaseOrderLine
+            if receipt_type == "FISICA" and grl.po_line_id:
+                pol = db.execute(
+                    select(PurchaseOrderLine).where(PurchaseOrderLine.id == grl.po_line_id).with_for_update()
+                ).scalar_one_or_none()
+                if pol:
+                    pol.quantity_received = (pol.quantity_received or Decimal("0")) + Decimal(str(qty_received))
+
             # Solo sumar al inventario disponible si es FISICA y qty_received > 0
             if receipt_type == "FISICA" and sku_id and qty_received > 0:
                 sku_increments[sku_id] = sku_increments.get(sku_id, 0) + qty_received
-        # Bloqueo 2: NO se exige sku_increments no vacio para FISICA.
-        # Una recepcion donde todo fue rechazado/cuarentena/faltante es valida.
-        # Solo se valida que haya al menos una linea con resultado explicito (ya
-        # garantizado por el check NULL anterior).
 
         # ─── REGENERAR SNAPSHOT JSON DESDE LINEAS NORMALIZADAS (Bloqueo 2) ────
 
-        # Incluye qty_faltante para trazabilidad completa.
         updated_products = []
         for grl in gr_lines:
             _qty_recv = int(grl.quantity_received or 0)
@@ -1743,8 +1770,9 @@ def confirmar_recepcion(
             )
             db.add(inv_op)
             db.flush()  # Obtener ID sin commit
+
+            # 1. Unidades vendibles hacia InventoryLevel
             for sku_id, qty in sku_increments.items():
-                # SELECT FOR UPDATE en InventoryLevel para prevenir race
                 level = db.execute(
                     select(InventoryLevel)
                     .where(
@@ -1769,7 +1797,128 @@ def confirmar_recepcion(
                     quantity        = qty,
                     direction       = "IN",
                     owner           = "NEBULAE",
+                    warehouse_id    = warehouse_id,
                     idempotency_key = mv_key,
+                    created_at      = now,
+                    created_by      = user_label,
+                ))
+
+        if receipt_type == "FISICA":
+            # 2. Unidades defectuosas / discrepantes hacia Cuarentena
+            for grl in gr_lines:
+                _q_quar = int(grl.quantity_quarantine or 0)
+                if _q_quar > 0 and grl.sku_id:
+                    db.add(InventoryQuarantine(
+                        sku_id       = grl.sku_id,
+                        warehouse_id = warehouse_id,
+                        gr_line_id   = grl.id,
+                        quantity     = Decimal(str(_q_quar)),
+                        reason       = grl.damaged_reason or "DEFECTUOSO_RECEPCION",
+                        status       = "ACTIVO",
+                        notes        = grl.notes,
+                        created_at   = now,
+                    ))
+                    if inv_op:
+                        quar_key = hashlib.sha256(
+                            f"{inv_op.id}:{grl.sku_id}:QUARANTINE:NEBULAE:{warehouse_id}".encode()
+                        ).hexdigest()
+                        db.add(InventoryMovement(
+                            operation_id    = inv_op.id,
+                            sku_id          = grl.sku_id,
+                            quantity        = _q_quar,
+                            direction       = "QUARANTINE",
+                            owner           = "NEBULAE",
+                            warehouse_id    = warehouse_id,
+                            idempotency_key = quar_key,
+                            created_at      = now,
+                            created_by      = user_label,
+                        ))
+
+            # 3. Asignaciones y Balances por Propietario (NEBULAE vs MAU)
+            owner_increments = {}
+            for grl in gr_lines:
+                _q_recv = int(grl.quantity_received or 0)
+                if grl.sku_id and _q_recv > 0:
+                    rem_alloc = _q_recv
+                    if grl.po_line_id:
+                        allocs = db.execute(
+                            select(ProcurementAllocation)
+                            .where(ProcurementAllocation.po_line_id == grl.po_line_id)
+                            .order_by(ProcurementAllocation.id)
+                            .with_for_update()
+                        ).scalars().all()
+                        for alloc in allocs:
+                            if rem_alloc <= 0:
+                                break
+                            applied_prev = db.execute(
+                                select(func.coalesce(func.sum(GoodsReceiptLineAllocation.quantity_applied), 0))
+                                .where(GoodsReceiptLineAllocation.allocation_id == alloc.id)
+                            ).scalar() or 0
+                            alloc_pending = max(0, int(alloc.quantity_allocated) - int(applied_prev))
+                            if alloc_pending > 0:
+                                take = min(rem_alloc, alloc_pending)
+                                db.add(GoodsReceiptLineAllocation(
+                                    gr_line_id=grl.id,
+                                    allocation_id=alloc.id,
+                                    quantity_applied=take,
+                                    created_at=now
+                                ))
+                                rem_alloc -= take
+                                alloc_owner = "MAU" if alloc.allocation_type == "MAU_STOCK" else "NEBULAE"
+                                owner_increments[(grl.sku_id, alloc_owner)] = owner_increments.get((grl.sku_id, alloc_owner), 0) + take
+                                if alloc.allocation_type == "CUSTOMER_ORDER" and alloc.sale_order_line_id:
+                                    db.add(ActivityLog(
+                                        entity_type="PVEN",
+                                        entity_id=alloc.sale_order_line_id,
+                                        entity_numero="",
+                                        action="MERCANCIA_EN_BARRANQUILLA",
+                                        description=f"{take} unidad(es) de SKU {grl.sku_id} recibidas en Barranquilla según {g.numero}. Pendiente de saldo y entrega.",
+                                        user_name=user_label,
+                                    ))
+                    if rem_alloc > 0:
+                        owner_increments[(grl.sku_id, "NEBULAE")] = owner_increments.get((grl.sku_id, "NEBULAE"), 0) + rem_alloc
+
+            for (sid, own), o_qty in owner_increments.items():
+                iob = db.execute(
+                    select(InventoryOwnerBalance)
+                    .where(
+                        InventoryOwnerBalance.sku_id == sid,
+                        InventoryOwnerBalance.warehouse_id == warehouse_id,
+                        InventoryOwnerBalance.owner == own,
+                    )
+                    .with_for_update()
+                ).scalar_one_or_none()
+                if iob:
+                    iob.quantity += Decimal(str(o_qty))
+                    iob.updated_at = now
+                else:
+                    db.add(InventoryOwnerBalance(
+                        sku_id=sid,
+                        warehouse_id=warehouse_id,
+                        owner=own,
+                        quantity=Decimal(str(o_qty)),
+                        updated_at=now,
+                    ))
+
+        # ─── VINCULO A SHIPMENT — CIERRE DE ENTREGA FÍSICA EN BARRANQUILLA ───
+
+        if g.shipment_id and receipt_type == "FISICA":
+            shp = db.execute(
+                select(Shipment).where(Shipment.id == g.shipment_id).with_for_update()
+            ).scalar_one_or_none()
+            if shp and shp.status_fise != "RECIBIDO_BARRANQUILLA":
+                shp.status_fise = "RECIBIDO_BARRANQUILLA"
+                shp.actual_delivery_date = now.date()
+                shp.updated_at = now
+                ev_key = hashlib.sha256(f"{shp.id}:RECIBIDO_BARRANQUILLA:{g.numero}".encode()).hexdigest()
+                db.add(ShipmentEvent(
+                    shipment_id=shp.id,
+                    event_type="RECIBIDO_BARRANQUILLA",
+                    location="BARRANQUILLA",
+                    user_name=user_label,
+                    idempotency_key=ev_key,
+                    notes=f"Recibido físicamente en bodega {warehouse.name} según {g.numero}",
+                    timestamp=now,
                 ))
 
         # ─── ACTUALIZAR RECEPCION (snapshot JSON generado desde GRL) ───────────
