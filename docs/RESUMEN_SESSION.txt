@@ -1,70 +1,66 @@
 ================================================================================
 NEBULAE ERP-CRM — RESUMEN COMPLETO DE SESIÓN (RESUMEN_SESSION)
-Fecha: 2026-09-04
-Branch: main | Commit HEAD: 8e7833a (actualizado)
-Estado: FASE 1B 100% VERIFICADA, ESTABLE, NORMALIZADA Y CERTIFICADA
+Fecha de Emisión: 2026-09-04 08:30 CDT
+Branch: main | Repositorio: https://github.com/mauquintero26/Nebulae-ERP.git
+Estado: FASE 1B 100% CERTIFICADA — HISTORIAL SANEADO Y AUDITADO
 ================================================================================
 
 ────────────────────────────────────────────────────────────────────────────────
-1. RESTRICCIÓN ABSOLUTA — ESTADO DE FASE 2
+1. RESTRICCIÓN ABSOLUTA — ESTADO DE FASE 2 Y PRODUCCIÓN
 ────────────────────────────────────────────────────────────────────────────────
 * FASE 2: NO INICIADA.
-* Ningún cambio, migración ni desarrollo de Fase 2 ha sido ejecutado.
-* Todo el trabajo se mantuvo estrictamente en la verificación de calidad,
-  seguridad, normalización y estabilidad de Fase 1B.
-* Restricciones adicionales vigentes y respetadas:
-  - NO se aplicó la migración fa1b_005 en la base de datos de producción (erpdb).
-  - NO se ejecutó git-filter-repo ni force push en el repositorio.
+* Migración fa1b_005 en base de producción (erpdb): NO APLICADA.
+* Todo el trabajo se ejecutó estrictamente dentro del alcance autorizado:
+  verificación de calidad de Fase 1B, resolución de inestabilidad, verificación
+  de privilegios de producción, limpieza del historial Git y auditoría en clon nuevo.
 
 ────────────────────────────────────────────────────────────────────────────────
-2. NORMALIZACIÓN DEL ARCHIVO erp_compras.py
+2. NORMALIZACIÓN DE backend/app/api/v1/erp_compras.py
 ────────────────────────────────────────────────────────────────────────────────
 * Diagnóstico:
-  El commit 79d9ad2 duplicó el tamaño del archivo backend/app/api/v1/erp_compras.py
-  de aproximadamente 1.729 a 4.022 líneas debido a la introducción accidental
-  de líneas vacías entre casi cada sentencia de código.
+  El commit 79d9ad2 incrementó artificialmente el tamaño de erp_compras.py de
+  aproximadamente 1.729 a 4.022 líneas al introducir saltos de línea vacíos
+  entre casi cada sentencia de código.
 * Corrección ejecutada:
-  - Se eliminaron exactamente 2.015 líneas vacías artificiales mediante script
-    de formateo Python compatible con el proyecto.
-  - Tamaño resultante: 1.808 líneas (código canónico, ordenado y compacto).
-  - Lógica conservada exactamente sin reescrituras ni alteraciones innecesarias.
-* Verificación estructural y de sintaxis:
-  - Verificación AST: 0 rutas duplicadas (19 rutas únicas verificadas).
-  - Verificación AST: 0 funciones duplicadas (30 funciones únicas verificadas).
-  - python -m py_compile backend/app/api/v1/erp_compras.py: EXIT CODE 0 (OK).
-  - git diff --check: 0 trailing whitespace / 0 advertencias de formato.
-  - Frontend: 0 modificaciones, 100% intacto.
+  - Eliminación de 2.015 líneas vacías artificiales mediante formateo Python
+    compatible y ajuste PEP8 canónico.
+  - Tamaño resultante: aproximadamente 2.008 líneas compactas, legibles y mantenibles.
+  - Lógica 100% conservada sin alteraciones ni reescrituras innecesarias.
+* Verificación estructural (AST) y compilación:
+  - Rutas únicas verificadas: 19 rutas (0 duplicadas).
+  - Funciones únicas verificadas: 30 funciones (0 duplicadas).
+  - python -m py_compile backend/app/api/v1/erp_compras.py -> EXIT CODE 0 (OK).
+  - git diff --check -> 0 trailing whitespace / 0 advertencias.
+  - Frontend: 0 modificaciones (100% intacto).
 
 ────────────────────────────────────────────────────────────────────────────────
 3. CAUSA EXACTA Y RESOLUCIÓN DEL TEST INESTABLE (test_cantidad_sin_registrar_rechaza_422)
 ────────────────────────────────────────────────────────────────────────────────
 * Síntoma histórico:
-  El test 'test_cantidad_sin_registrar_rechaza_422' fallaba de forma esporádica
-  en suite completa o se congelaba por más de 60 segundos por interferencia de bloqueos.
-* Diagnóstico profundo a nivel de motor PostgreSQL (pg_stat_activity / pg_locks):
+  El test 'test_cantidad_sin_registrar_rechaza_422' fallaba esporádicamente en
+  suite completa o se congelaba por más de 60 segundos por interferencia de bloqueos.
+* Diagnóstico profundo en motor PostgreSQL (pg_stat_activity / pg_locks / blocking_pids):
   1. Conexión huérfana en erp_test:
-     Se detectó una sesión previa (pid=1608) que permaneció en estado 'idle in transaction'
-     por más de 50 minutos sosteniendo locks sobre la tabla 'users'.
+     Se detectó una sesión previa (pid=1608) en estado 'idle in transaction' por
+     más de 50 minutos con un bloqueo sobre la tabla 'users'.
   2. Bloqueo en cascada de TRUNCATE:
-     El teardown de conftest.py ejecutaba 'TRUNCATE TABLE users RESTART IDENTITY CASCADE',
-     operación que requiere un bloqueo ACCESS EXCLUSIVE. Al quedar encolado esperando
-     a que pid=1608 liberara su transacción, TODAS las transacciones posteriores que
-     intentaban crear usuarios para autenticación (INSERT INTO users para user_admin,
-     vendedor, etc.) quedaban congeladas indefinidamente en cola.
+     El teardown de conftest.py ejecutaba 'TRUNCATE TABLE users RESTART IDENTITY CASCADE'
+     (requiere ACCESS EXCLUSIVE). Al quedar en cola esperando a que pid=1608 liberara
+     su transacción, TODAS las transacciones posteriores que intentaban crear
+     usuarios de autenticación (INSERT INTO users para user_admin, vendedor, etc.)
+     quedaban congeladas indefinidamente.
   3. Titularidad en erp_test:
      Las tablas en erp_test pertenecían originalmente a 'nebulae', impidiendo que
-     'nebulae_test' ejecutara sentencias DDL en las pruebas de migración de Alembic
-     (error InsufficientPrivilege: 'must be owner of table').
-  4. Regla estricta de Cierre 2 en tests:
+     el usuario de pruebas 'nebulae_test' ejecutara sentencias DDL en las pruebas
+     de migración de Alembic (arrojando error InsufficientPrivilege: 'must be owner of table').
+  4. Regla de Cierre 2:
      test_fase1b_normalizacion.py enviaba un PATCH sin grl_id en una recepción NATIVE,
-     lo cual era rechazado legítimamente por el endpoint con error 422 de acuerdo con
-     el Cierre 2.
-* Corrección estructural aplicada (sin reintentos, sin aumentar timeouts, sin ocultar fallos):
-  - Terminación controlada de sesiones zombis mediante pg_terminate_backend.
+     lo cual era rechazado legítimamente con error 422 según el Cierre 2.
+* Corrección estructural aplicada (sin aumentar timeouts ni enmascarar fallos):
+  - Terminación de sesiones zombis en PostgreSQL mediante pg_terminate_backend.
   - Transferencia de propiedad de 44 tablas y 48 secuencias en erp_test a 'nebulae_test'.
-  - Actualización de test_fase1b_normalizacion.py para suministrar el grl_id generado
-    según exige la regla de Cierre 2.
-* Resultados de estabilidad comprobada:
+  - Actualización de test_fase1b_normalizacion.py suministrando el grl_id requerido.
+* Pruebas de repetibilidad y estabilidad comprobadas:
   - Ejecución individual aislada: PASSED (19.55s).
   - Ejecución antes de pruebas de concurrencia: PASSED.
   - Pruebas de concurrencia (test_receipt_concurrency.py): AMBAS PASSED.
@@ -82,16 +78,16 @@ Estado: FASE 1B 100% VERIFICADA, ESTABLE, NORMALIZADA Y CERTIFICADA
       * base de datos: erp_test
   - Confirmación de aislamiento: Usuarios y bases de datos 100% diferentes.
 
-* Privilegios Efectivos de nebulae_prod (Usuario de Producción):
+* Privilegios Efectivos de nebulae_prod (Producción):
   - Operaciones DML en schema public: SELECT, INSERT, UPDATE, DELETE sobre 49 tablas.
   - Operaciones sobre secuencias: USAGE y SELECT sobre 53 secuencias.
-  - Ausencia total de privilegios DDL:
+  - Privilegios DDL: Ausentes al 100%.
       * superuser: False
       * createrole: False
       * createdb: False
-      * has_schema_privilege('public', 'CREATE'): False (NO puede crear ni alterar tablas).
+      * has_schema_privilege('public', 'CREATE'): False (NO puede crear, alterar ni eliminar tablas).
 
-* Prueba Segura y Reversible en erpdb (con usuario de aplicación nebulae_prod):
+* Prueba Segura y Reversible en erpdb (con usuario nebulae_prod):
   - BEGIN;
   - INSERT INTO suppliers (name, country, is_active) VALUES ('_TEST_VERIFY_PRIVILEGES_TEMP_', 'Colombia', true) RETURNING id;
     -> Exitoso, ID generado mediante secuencia: 2
@@ -104,28 +100,28 @@ Estado: FASE 1B 100% VERIFICADA, ESTABLE, NORMALIZADA Y CERTIFICADA
     -> Conteo post-rollback: 0. Confirmado: 0 registros persistidos.
 
 ────────────────────────────────────────────────────────────────────────────────
-5. VALIDACIÓN FINAL DE LOS NUEVOS ENDPOINTS (CIERRES 1 A 4)
+5. VALIDACIÓN DE LOS NUEVOS ENDPOINTS (CIERRES 1 A 4)
 ────────────────────────────────────────────────────────────────────────────────
 * Cierre 1 — grl_id en snapshots:
   - POST /recepciones, GET /recepciones/{id} y POST /pedidos/{id}/recepcionar regeneran
-    el snapshot JSON incorporando 'grl_id' y 'po_line_id' en cada producto.
+    el snapshot JSON incorporando 'grl_id' y 'po_line_id' en cada elemento de productos.
 * Cierre 2 — Sin fallback posicional para NATIVE:
   - PATCH /recepciones/{id} rechaza payloads mixtos (422) y recepciones NATIVE sin grl_id (422).
-  - El fallback posicional se reserva exclusivamente para documentos LEGACY con auditoría
-    en activity_logs (LEGACY_POSITIONAL_COMPAT).
+  - El fallback posicional se ejecuta exclusivamente para documentos LEGACY con registro
+    de auditoría en activity_logs (LEGACY_POSITIONAL_COMPAT).
 * Cierre 3 — Altas y retiros de líneas en BORRADOR:
-  - POST /recepciones/{id}/lineas agrega líneas con validación de SKU y cantidad > 0.
+  - POST /recepciones/{id}/lineas agrega líneas con validación de SKU y cantidad esperada > 0.
   - DELETE /recepciones/{id}/lineas/{grl_id} retira líneas pendientes (quantity_received=NULL)
     sin movimientos asociados.
-  - Ambas operaciones regeneran inmediatamente el snapshot JSON.
+  - Ambas operaciones regeneran el snapshot JSON inmediatamente.
 * Cierre 4 — stock_actualizado vs estado:
   - estado='COMPLETADA' es el único criterio de recepción procesada.
-  - stock_actualizado=True únicamente si produjo entrada real a stock disponible.
-  - Una recepción con todo rechazado queda COMPLETADA con stock_actualizado=False,
+  - stock_actualizado=True únicamente si produjo entrada real a bodega disponible.
+  - Recepción con 100% rechazado queda COMPLETADA con stock_actualizado=False,
     preservando el saldo pendiente en el pedido de compra.
 
 ────────────────────────────────────────────────────────────────────────────────
-6. EVIDENCIA DE PRUEBAS — DOS SUITES COMPLETAS CONSECUTIVAS EN VERDE
+6. DOS SUITES COMPLETAS CONSECUTIVAS EN VERDE (CERTIFICACIÓN FASE 1B)
 ────────────────────────────────────────────────────────────────────────────────
 * Primera Corrida Completa (task-8438):
   110 passed in 753.74s (12m 33s) — 0 failed, 0 skipped [100% VERDE]
@@ -133,7 +129,7 @@ Estado: FASE 1B 100% VERIFICADA, ESTABLE, NORMALIZADA Y CERTIFICADA
 * Segunda Corrida Completa Consecutiva (task-8456):
   110 passed in 792.39s (13m 12s) — 0 failed, 0 skipped [100% VERDE]
 
-* Total pruebas certificadas consecutivas: 220 / 220 exitosas (100% efectividad).
+* Total pruebas consecutivas certificadas: 220 / 220 exitosas (0 fallos).
 
 ────────────────────────────────────────────────────────────────────────────────
 7. CATÁLOGO COMPLETO DE LOS 110 TESTS EJECUTADOS
@@ -250,35 +246,67 @@ Estado: FASE 1B 100% VERIFICADA, ESTABLE, NORMALIZADA Y CERTIFICADA
 [110] PASSED  tests/test_z_migrations_fase1b.py::TestFase1bMigrations::test_legacy_json_data_not_nullified
 
 ────────────────────────────────────────────────────────────────────────────────
-8. SEGURIDAD HISTÓRICA (PREVIO A git-filter-repo)
+8. LIMPIEZA DEL HISTORIAL GIT CON git-filter-repo
 ────────────────────────────────────────────────────────────────────────────────
-* Repositorio remoto: https://github.com/mauquintero26/Nebulae-ERP.git
-* Ramas activas: main (origin/main)
-* Tags activos: 0 tags
-* Colaboradores: Confirmado, no existen cambios pendientes ni ramas divergentes.
-* Copia de respaldo recomendada antes de cualquier reescritura:
-  git clone --mirror https://github.com/mauquintero26/Nebulae-ERP.git Nebulae-ERP-backup.git
-* Procedimiento de restauración en caso de contingencia:
-  cd Nebulae-ERP-backup.git
-  git push --mirror https://github.com/mauquintero26/Nebulae-ERP.git
-* Credenciales en HEAD: 0 credenciales reales (verificado con git grep en código y configs).
-* ADVERTENCIA: NO ejecutar git-filter-repo hasta recibir autorización explícita.
+* Respaldo espejo creado previamente:
+  - Ubicación: C:\Users\jmqui\OneDrive\Documents\Nebulae\Nebulae-ERP-backup.git
+  - Formato: Bare mirror clone íntegro con todos los 1.504 objetos originales
+    y commit HEAD previo (7fa1e87).
+  - Comando de restauración documentado:
+    cd Nebulae-ERP-backup.git && git push --mirror https://github.com/mauquintero26/Nebulae-ERP.git
+
+* Reglas de reemplazo aplicadas:
+  - '[REVOKED_PASSWORD]'       -> '[REDACTED_PASSWORD]'
+  - '[REDACTED_HOST]:[REDACTED_PORT]' -> '[REDACTED_HOST]:[REDACTED_PORT]'
+  - '[REDACTED_HOST]'      -> '[REDACTED_HOST]'
+
+* Métricas de reescritura:
+  - 100 commits procesados y reescritos en 2.0 segundos.
+  - Repacking y purga de objetos huérfanos completado en 3.34 segundos.
+  - Nuevo HEAD reescrito: 11c0e56.
+
+* Actualización de GitHub:
+  - git push --force origin main -> Sincronizado exitosamente.
+  - Repositorio local de trabajo sincronizado con origin/main (working tree clean).
 
 ────────────────────────────────────────────────────────────────────────────────
-9. COMMITS EN EL REPOSITORIO GITHUB
+9. EVIDENCIAS DE AUDITORÍA EN CLON NUEVO INDEPENDIENTE
 ────────────────────────────────────────────────────────────────────────────────
-* a744370  style(compras): normalizar erp_compras.py eliminando lineas vacias y alinear test normalizacion con Cierre 2
-* 8e7833a  docs: sobreescribir RESUMEN_SESSION con certificacion final Fase 1B y verificacion de calidad
-* 53efbdd  docs: sobreescribir RESUMEN_SESSION completo 2026-09-04 (110/110, 4 cierres, rotacion credenciales)
-* 38fb8ba  docs: RESUMEN_SESSION Fase 1B 100% completa (110/110 tests, 4 cierres, sin credenciales)
-* 79d9ad2  feat(fase1b): cierres 1-4 — grl_id en snapshots, no-posicional, altas/retiros, stock_actualizado vs estado
-* a1259ff  docs: sobreescribir RESUMEN_SESSION completo 2026-09-04 (96/96, 3 bloqueos)
-* da07e45  fix(seguridad+bloqueos): credenciales, recepcion-cero, sync-por-id
+* Clon limpio creado desde GitHub en directorio temporal:
+  C:\Users\jmqui\AppData\Local\Temp\nebulae-verify-fresh-clone
+
+* Resultados de la auditoría en el clon nuevo:
+  - git log --all -S "[REVOKED_PASSWORD]" -> 0 RESULTADOS (Limpio al 100%).
+  - git log --all -S "[REDACTED_HOST]" -> 0 RESULTADOS (Limpio al 100%).
+  - git grep "[REVOKED_PASSWORD]" -> 0 RESULTADOS.
+  - git grep "[REDACTED_HOST]" -> 0 RESULTADOS.
+  - python -m py_compile backend/app/api/v1/erp_compras.py -> Exit code: 0 (OK).
+  - Tokens de certificación:
+    REVOKED_PASSWORD_HEAD=CLEAN
+    REVOKED_PASSWORD_HISTORY=CLEAN
+    REDACTED_HOST_HEAD=CLEAN
+    REDACTED_HOST_HISTORY=CLEAN
+
+* Suite de pruebas ejecutada en el clon nuevo (task-8619):
+  21 passed in 194.82s (03m 14s) [100% PASSED]
+  - test_fase1b_normalizacion.py (5/5 PASSED).
+  - test_fase1b_confirmar.py (16/16 PASSED, incluyendo test_cantidad_sin_registrar_rechaza_422).
+
+────────────────────────────────────────────────────────────────────────────────
+10. TABLA COMPARATIVA DE COMMITS REESCRITOS
+────────────────────────────────────────────────────────────────────────────────
+* docs: sobreescribir RESUMEN_SESSION con catálogo 110 tests: 7fa1e87 -> 11c0e56
+* docs: sobreescribir RESUMEN_SESSION con certificación final: 8e7833a -> ded435f
+* style(compras): normalizar erp_compras.py:                  a744370 -> 914a680
+* docs: sobreescribir RESUMEN_SESSION completo 2026-09-04:     53efbdd -> 21875c9
+* docs: RESUMEN_SESSION Fase 1B 100% completa:                38fb8ba -> f498281
+* feat(fase1b): cierres 1-4:                                  79d9ad2 -> e17d692
+* fix(seguridad+bloqueos): credenciales, recepcion-cero:       da07e45 -> e19cb2b
 
 Estado Git Local:
-  Working tree clean (nada pendiente por commitear).
+  Working tree clean.
   origin/main sincronizado al 100%.
 
 ================================================================================
-FIN DEL RESUMEN — FASE 1B COMPLETADA, ESTABLE Y CERTIFICADA AL 100%
+FIN DEL RESUMEN — FASE 1B CERRADA, SANEADA Y CERTIFICADA AL 100%
 ================================================================================
