@@ -1,299 +1,93 @@
-﻿RESUMEN DE SESION -- FASE 1B
-ERP-CRM Nebulae
+RESUMEN DE SESION — NEBULAE ERP-CRM
 Fecha: 2026-09-03 / 2026-09-04
-Repositorio: https://github.com/mauquintero26/Nebulae-ERP
-=========================================================
-
-
-===================================================================
-1. CONTEXTO
-===================================================================
-
-Se autorizo implementar la Fase 1B del ERP, que consiste en:
-  - Normalizar las columnas JSON (productos) en tablas relacionales
-  - Mantener los JSON originales como snapshot inmutable
-  - Implementar backfill JSON -> tablas normalizadas con control completo
-  - Implementar reservas de inventario, balances por propietario y pagos
-  - Sin cambios visuales en el frontend
-  - Sin despliegue en produccion (solo erp_test)
-
-Punto de partida: Fase 1A -- commit 66608c6, 27/27 tests verdes.
-
-
-===================================================================
-2. ARCHIVOS CREADOS / MODIFICADOS
-===================================================================
-
-NUEVOS:
-  backend/app/models/fase1b.py
-    -> 10 modelos SQLAlchemy:
-       CustomerRequestLine, SalesQuotationLine, SaleOrderLineErp,
-       PurchaseOrderLine, ProcurementAllocation,
-       GoodsReceiptLine, GoodsReceiptLineAllocation,
-       InventoryOwnerBalance, InventoryReservation, PaymentTransaction
-
-  backend/app/api/v1/schemas_fase1b.py
-    -> Schemas Pydantic con validaciones de negocio:
-       * CUSTOMER_ORDER exige sale_order_line_id (model_validator)
-       * Moneda solo COP/USD
-       * monto > 0 para transacciones de pago
-
-  backend/scripts/backfill_fase1b.py
-    -> Script backfill JSON -> tablas normalizadas:
-       --dry-run, --profile, --batch-id, --table, --rollback-batch
-       source=BACKFILL / source=NATIVE para trazabilidad
-       JSON original NUNCA se toca ni se anula
-
-  backend/alembic/versions/fa1b_001_normalized_lines.py
-    -> customer_request_lines, sales_quotation_lines,
-       sale_order_lines_erp, purchase_order_lines, procurement_allocations
-    -> down_revision: fa1a_002
-
-  backend/alembic/versions/fa1b_002_receipt_lines_allocations.py
-    -> goods_receipt_lines, goods_receipt_line_allocations
-    -> down_revision: fa1b_001
-
-  backend/alembic/versions/fa1b_003_owner_balances_reservations.py
-    -> inventory_owner_balances, inventory_reservations
-    -> down_revision: fa1b_002
-
-  backend/alembic/versions/fa1b_004_payment_transactions.py
-    -> payment_transactions
-    -> down_revision: fa1b_003
-
-  backend/tests/test_fase1b_backfill.py       (6 tests)
-  backend/tests/test_fase1b_lines.py          (6 tests)
-  backend/tests/test_fase1b_inventory.py      (5 tests)
-  backend/tests/test_fase1b_payments.py       (7 tests)
-  backend/tests/test_z_migrations_fase1b.py   (5 tests)
-    Nota: prefijo test_z_ garantiza ejecucion al final para evitar
-    contaminacion de estado DB por downgrade.
-
-MODIFICADOS:
-  backend/app/models/__init__.py
-    -> Imports de los 10 modelos Fase 1B
-
-  backend/app/api/v1/erp_compras.py
-    -> Import de GoodsReceiptLine
-    -> confirmar_recepcion: ahora tambien inserta GoodsReceiptLine
-       por cada linea procesada (implementacion definitiva).
-       El JSON productos se mantiene intacto como snapshot.
-       Si existe PEC, enlaza con purchase_order_lines via po_line_id.
-
-  backend/tests/conftest.py
-    -> Cleanup ampliado con las 10 tablas Fase 1B
-    -> alembic upgrade head al inicio del teardown de sesion
-
-
-===================================================================
-3. CADENA ALEMBIC (erp_test HEAD)
-===================================================================
-
-  ba65b0f69880 -> fa1a_001 -> fa1a_002
-  -> fa1b_001 -> fa1b_002 -> fa1b_003 -> fa1b_004 (HEAD)
-
-  Todas las migraciones son reversibles.
-  fa1b_001-fa1b_004 usan IF NOT EXISTS / DROP TABLE IF EXISTS.
-
-
-===================================================================
-4. TABLAS Y RELACIONES
-===================================================================
-
-  customer_request_lines
-    cr_id -> customer_requests.id, sku_id -> product_skus.id
-
-  sales_quotation_lines
-    sq_id, cr_line_id (nullable), sku_id
-
-  sale_order_lines_erp
-    so_id, sq_line_id (nullable), sku_id
-
-  purchase_order_lines
-    pec_id -> purchase_orders_full.id, sku_id
-
-  procurement_allocations
-    po_line_id, sale_order_line_id (nullable)
-    allocation_type: CUSTOMER_ORDER | NEBULAE_STOCK | MAU_STOCK
-    REGLA: CUSTOMER_ORDER exige sale_order_line_id
-    UNIQUE(po_line_id, sale_order_line_id) WHERE NOT NULL
-
-  goods_receipt_lines
-    gr_id, po_line_id (nullable), sku_id
-    quantity_expected, quantity_received, quantity_rejected, quantity_quarantine
-    source: NATIVE | BACKFILL
-
-  goods_receipt_line_allocations
-    gr_line_id, allocation_id — UNIQUE(gr_line_id, allocation_id)
-
-  inventory_owner_balances
-    sku_id, warehouse_id, owner (NEBULAE|MAU) — UNIQUE(sku, wh, owner)
-
-  inventory_reservations
-    sku_id, warehouse_id, sale_order_line_id, status, expires_at
-    status: ACTIVE | RELEASED | CONVERTED | EXPIRED
-
-  payment_transactions
-    tipo: ANTICIPO|ABONO|SALDO|DEVOLUCION|REVERSION
-    currency: COP|USD, monto, referencia, metodo_pago
-    reversed_by_id (FK self), is_reversed, user_name, created_at
-
-
-===================================================================
-5. BACKFILL -- DRY-RUN EN PRODUCCION (erpdb, solo lectura)
-===================================================================
-
-  Ejecutado: python scripts/backfill_fase1b.py --dry-run --profile
-
-  customer_request_lines : 0 migrados, 0 ambiguos, 0 fallidos
-  sales_quotation_lines  : 1 migrados, 1 ambiguos, 0 fallidos
-  sale_order_lines_erp   : 1 migrados, 1 ambiguos, 0 fallidos
-  purchase_order_lines   : 0 migrados, 0 ambiguos, 0 fallidos
-  goods_receipt_lines    : 0 migrados, 0 ambiguos, 0 fallidos
-  RESUMEN: migradas=2  ambiguas=2  fallidas=0
-  (DRY-RUN: nada fue escrito)
-
-  Las 2 "ambiguas" son registros sin sku_id resolvible (datos legacy).
-  El backfill real requiere autorizacion explicita del usuario.
-
-
-===================================================================
-6. TESTS EJECUTADOS -- RESULTADO DEFINITIVO
-===================================================================
-
-  SUITE COMPLETA: 56 tests / 56 passed / 0 failed / 0 skipped
-  Duracion: 309 segundos (5:09)
-  BD: erp_test (PostgreSQL [REDACTED_HOST]:[REDACTED_PORT], aislada de produccion)
-
-  --- FASE 1A (27 tests) ---
-
-  test_auth_roles.py (8 tests)
-    PASSED TestNoToken::test_no_token_returns_401
-    PASSED TestUnauthorizedRole::test_vendedor_cannot_confirm_receipt
-    PASSED TestUnauthorizedRole::test_invalid_token_returns_401
-    PASSED TestLegacyAdminRole::test_admin_can_list_pedidos
-    PASSED TestLegacyAdminRole::test_admin_can_access_specific_pec
-    PASSED TestLegacyAdminRole::test_admin_can_list_recepciones
-    PASSED TestLegacyVendedorRole::test_vendedor_can_list_pedidos
-    PASSED TestLegacyVendedorRole::test_vendedor_can_read_ventas
-
-  test_receipt_idempotency.py (7 tests)
-    PASSED TestIdempotencyFirstCall::test_first_call_returns_201
-    PASSED TestIdempotencyFirstCall::test_new_eninv_from_pec_is_draft
-    PASSED TestIdempotencyReplay::test_same_key_same_payload_returns_200
-    PASSED TestIdempotencyReplay::test_same_key_different_payload_returns_409
-    PASSED TestIdempotencyReplay::test_replay_data_is_dict_not_string
-    PASSED TestAlreadyConfirmedEninv::test_already_confirmed_returns_200
-    PASSED TestAlreadyConfirmedEninv::test_already_confirmed_different_key_returns_409
-
-  test_receipt_partial.py (12 tests) -- excedente, rechazo, cuarentena
-    PASSED TestLogistica::test_logistica_does_not_change_stock
-    PASSED TestLogistica::test_logistica_does_not_advance_pec
-    PASSED TestPartialReceipts::test_first_partial_pec_is_parcialmente_recibida
-    PASSED TestPartialReceipts::test_second_partial_pec_is_recibida
-    PASSED TestPartialReceipts::test_new_eninv_from_pec_copies_only_pending
-    [+ 7 tests de excedente/faltante/rechazo/cuarentena]
-
-  --- FASE 1B (29 tests) ---
-
-  test_fase1b_backfill.py (6 tests)
-    PASSED TestBackfillDryRun::test_dry_run_writes_nothing
-    PASSED TestBackfillDryRun::test_dry_run_reports_stats
-    PASSED TestBackfillRealMigration::test_backfill_creates_purchase_order_lines
-    PASSED TestBackfillRealMigration::test_backfill_idempotent_same_batch
-    PASSED TestBackfillRollback::test_rollback_batch_removes_lines
-    PASSED TestBackfillRollback::test_rollback_blocked_by_dependencies
-
-  test_fase1b_lines.py (6 tests)
-    PASSED TestScCotVenChain::test_sc_to_cot_to_ven_preserves_lines
-    PASSED TestProcurementAllocations::test_one_pec_for_multiple_pven
-    PASSED TestProcurementAllocations::test_mixed_allocation_types
-    PASSED TestProcurementAllocations::test_sale_order_line_required_for_customer_order_schema
-    PASSED TestReceiptLines::test_distributed_receipt
-    PASSED TestReceiptLines::test_partial_receipt_on_normalized_lines
-
-  test_fase1b_inventory.py (5 tests)
-    PASSED TestInventoryOwnerBalances::test_nebulae_and_mau_balances_coexist
-    PASSED TestInventoryOwnerBalances::test_unique_constraint_per_sku_warehouse_owner
-    PASSED TestInventoryReservations::test_create_active_reservation
-    PASSED TestInventoryReservations::test_reservation_expiry_and_release
-    PASSED TestInventoryReservations::test_last_unit_reservation_concurrency
-
-  test_fase1b_payments.py (7 tests)
-    PASSED TestPaymentTransactions::test_anticipo_registro
-    PASSED TestPaymentTransactions::test_abono_y_saldo
-    PASSED TestPaymentTransactions::test_devolucion
-    PASSED TestPaymentTransactions::test_audit_fields_recorded
-    PASSED TestPaymentSchemaValidation::test_negative_monto_rejected
-    PASSED TestPaymentSchemaValidation::test_invalid_currency_rejected
-    PASSED TestPaymentSchemaValidation::test_valid_transaction_passes
-
-  test_z_migrations_fase1b.py (5 tests) -- corre al final por diseno
-    PASSED TestFase1bMigrations::test_all_fa1b_tables_exist_after_upgrade
-    PASSED TestFase1bMigrations::test_downgrade_removes_fa1b_tables
-    PASSED TestFase1bMigrations::test_upgrade_roundtrip
-    PASSED TestFase1bMigrations::test_json_fields_remain_intact_after_migrations
-    PASSED TestFase1bMigrations::test_legacy_json_data_not_nullified
-
-
-===================================================================
-7. LINT Y BUILD
-===================================================================
-
-  Sintaxis Python (py_compile): 0 errores en todos los archivos nuevos
-  Import test: from app.api.v1.erp_compras import router -> OK
-  Frontend (.tsx/.ts/.css/.jsx/.js): 0 archivos modificados
-  next.config.ts: typescript.ignoreBuildErrors: true (sin cambios)
-
-
-===================================================================
-8. COMMITS REMOTOS -- origin/main
-===================================================================
-
-  66608c6  Fase 1A: 27/27 tests verdes
-  7564eb4  docs: resumen sesion Fase 1A
-  9f1f5a6  Fase 1B: 10 tablas, 4 migraciones, backfill + 29 tests
-  b871158  fix(tests): restore_head fixture en migration tests
-  220c665  fix(tests): upgrade head safety en conftest teardown
-  365367a  fix(tests): renombrar test_z_ para ejecucion al final
-  [final]  erp_compras GoodsReceiptLine + RESUMEN_SESSION
-
-  https://github.com/mauquintero26/Nebulae-ERP
-
-
-===================================================================
-9. PROCEDIMIENTO DE ROLLBACK
-===================================================================
-
-  Rollback migraciones Fase 1B (solo erp_test):
-    alembic downgrade fa1a_002   # elimina las 10 tablas Fase 1B
-    alembic upgrade head         # las restaura
-
-  Rollback de backfill (un lote):
-    python scripts/backfill_fase1b.py --rollback-batch <batch_id>
-    BLOQUEADO si existen dependencias. Eliminarlas primero.
-
-  El backfill en produccion (erpdb) NO ha sido ejecutado.
-  Los JSON originales permanecen intactos siempre.
-
-
-===================================================================
-10. RIESGOS Y PENDIENTES
-===================================================================
-
-  [PENDIENTE AUTORIZACION]
-  - Ejecucion real del backfill en erpdb.
-  - Las 2 lineas "ambiguas" necesitan revision manual.
-
-  [PARA FASE 2]
-  - Endpoints HTTP CRUD para las nuevas tablas normalizadas.
-  - Reemplazar lectura de g.productos en confirmar_recepcion
-    por lectura desde goods_receipt_lines (actualmente es aditivo).
-  - Dashboards de inventario normalizado.
-
-=========================================================
-ESTADO FINAL: Fase 1B COMPLETA
-56/56 tests -- 0 fallidos -- 0 omitidos
-origin/main actualizado
-DETENIDO -- Esperando autorizacion explicita para Fase 2.
-=========================================================
+Commit final: f617d78 (origin/main)
+Suite: 67/67 tests PASSED
+================================================================================
+
+FASE 1A — COMPLETADA (commit 66608c6)
+--------------------------------------
+- 27/27 tests verdes
+- Recepciones FISICA / LOGISTICA, idempotencia, concurrencia, migraciones
+
+FASE 1B ORIGINAL — COMPLETADA (commit 5e5e4f2)
+-----------------------------------------------
+- 10 tablas normalizadas: purchase_order_lines, goods_receipt_lines,
+  goods_receipt_line_allocations, sale_order_lines_erp,
+  sales_quotation_lines, customer_request_lines,
+  inventory_reservations, inventory_owner_balances,
+  procurement_allocations, payment_transactions
+- 4 migraciones Alembic: fa1b_001 -> fa1b_004
+- schemas_fase1b.py, backfill_fase1b.py
+- Suite combinada: 56/56 passed
+
+FASE 1B CORRECCION ARQUITECTURAL — COMPLETADA (commit f617d78)
+---------------------------------------------------------------
+Problema identificado: confirmar_recepcion seguia leyendo g.productos
+para calcular inventario. GoodsReceiptLine era aditiva, no la fuente de verdad.
+
+CORRECCIONES IMPLEMENTADAS:
+
+1. create_pec (POST /api/v1/compras/pedidos)
+   - Ahora crea PurchaseOrderLine por cada producto del payload.
+   - Una fila por linea, independientemente del sku_id (permite SKUs duplicados).
+
+2. crear_recepcion_desde_pec (POST /pedidos/{pec_id}/recepcionar)
+   - Construye mapa FIFO {sku_id: deque[po_line_id]} desde purchase_order_lines.
+   - Por cada producto pendiente: asigna po_line_id via popleft() (no LIMIT 1).
+   - Crea GoodsReceiptLine en la MISMA transaccion (db.flush() + db.add GRL).
+   - GRL creada con quantity_received=0, source='NATIVE'.
+
+3. confirmar_recepcion (POST /recepciones/{id}/confirmar)
+   - SELECT FOR UPDATE GoodsReceiptLine WHERE gr_id=eninv_id ORDER BY id.
+   - Fallback para recepciones legacy (sin GRL preexistentes): crea GRL
+     desde JSON snapshot, usando quantity_expected (no qty_recibida del JSON).
+   - Validaciones y calculo de sku_increments exclusivamente desde GRL:
+       - quantity_expected, quantity_received, quantity_rejected,
+         quantity_quarantine, sku_id, receipt_type
+   - Actualiza GRL in-place (NO DELETE+INSERT — conserva IDs para trazabilidad).
+   - Regenera g.productos como SNAPSHOT desde GRL (GRL -> JSON, no al reves).
+   - Estado PEC calculado desde purchase_order_lines + goods_receipt_lines (SQL).
+   - Fallback estado PEC: acumula GRL de recepciones previas confirmadas
+     + GRL de otras ENINV via JSON (si no hay GRL previas).
+
+TESTS NUEVOS — test_fase1b_confirmar.py (11 tests via TestClient HTTP):
+ 1. test_confirmar_crea_grl_y_usa_fuente_normalizada — GRL es fuente de verdad
+ 2. test_grl_gana_cuando_json_contradice — GRL(qty=5) gana vs JSON(qty=99)
+ 3. test_no_duplica_lineas_en_replay — replay idempotente no crea GRL extra
+ 4. test_replay_conserva_ids_de_lineas — IDs de GRL iguales en replay
+ 5. test_error_produce_rollback_completo — 404 no genera GRL ni movimientos
+ 6. test_recepcion_parcial_fisica — qty=3/5 -> inv=3, PEC=PARCIALMENTE_RECIBIDA
+ 7. test_recepcion_logistica_no_actualiza_stock — LOGISTICA: stock=0
+ 8. test_excedente_permitido — allow_excess=True acepta qty=7>5
+ 9. test_excedente_no_permitido — allow_excess=False rechaza qty=8>5 con 422
+10. test_dos_lineas_mismo_sku_po_line_id_correcto — po_line_id distinto por linea
+11. test_solo_grl_genera_movimientos_no_json_legacy — SKU fantasma ignorado
+
+RESULTADO FINAL:
+  67/67 tests PASSED
+  Commit: f617d78
+  Push: origin/main ✓
+
+LINEAS AMBIGUAS DEL BACKFILL (NO migradas sin autorizacion):
+-------------------------------------------------------------
+1. sales_quotations id=1, numero=COT-20260001, linea_idx=0
+   Razon: sku_id=NULL. Datos: qty=1, cost_usd=50, product_name=""
+   El producto no esta catalogado en la BD.
+
+2. sale_orders id=1, numero=VEN-20260001, linea_idx=0
+   Razon: sku_id=NULL. Esta VEN referencia COT-20260001 (mismo registro).
+   Datos: qty=1, cost_usd=50.
+
+Propuesta: CUARENTENA.
+- No migrar a sale_order_lines_erp / sales_quotation_lines sin sku_id valido.
+- Documentar en log de ambiguos del backfill.
+- Requieren revision manual para asignar sku_id o descartar.
+- No se migraran silenciosamente en ningun caso.
+
+RESTRICCIONES VIGENTES:
+- NO ejecutar backfill en produccion sin autorizacion explicita.
+- NO iniciar Fase 2 sin autorizacion explicita.
+- NO modificar archivos frontend (.tsx / .ts / .css).
+
+ESTADO: Fase 1B CERRADA. Esperando autorizacion para proxima fase.
+================================================================================
