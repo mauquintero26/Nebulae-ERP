@@ -62,6 +62,11 @@ class TestFase1bMigrations:
         yield
         # Siempre restaurar a head al final, por si el test dejó la DB en versión anterior
         _run(["upgrade", "head"])
+        with test_engine.connect() as conn:
+            conn.execute(text("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO nebulae_test;"))
+            conn.execute(text("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO nebulae_test;"))
+            conn.commit()
+
 
     def test_all_fa1b_tables_exist_after_upgrade(self, setup_test_db):
         """Después del upgrade head, las 10 tablas Fase 1B existen."""

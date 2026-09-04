@@ -378,7 +378,7 @@ erDiagram
 
 ## 7. Fase 2: Arquitectura de Compras, Paquetes, Consolidaciones y Motor de Tránsito
 
-Con la implementación de la **Fase 2** según el Prompt Maestro, se desacopla la relación 1:1 legacy de compras y se incorporan entidades relacionales autónomas para la gestión de carga y logística internacional.
+Con la implementación y endurecimiento integral de la **Fase 2** conforme al Prompt Maestro y los requerimientos de integridad transaccional, se desacopla la relación 1:1 legacy de compras y se incorporan entidades relacionales autónomas para la gestión de carga y logística internacional, respaldadas por restricciones en base de datos (`PostgreSQL Check Constraints`), índices únicos e índices parciales.
 
 ### 1. Modelo Relacional de Paquetes y Consolidaciones
 
@@ -391,25 +391,128 @@ erDiagram
     PURCHASE_ORDERS_FULL ||--o{ SHIPMENTS : "despachada en paquetes"
     SHIPMENTS ||--o{ SHIPMENT_LINES : "contiene lineas de compra"
     PURCHASE_ORDER_LINES ||--o{ SHIPMENT_LINES : "despachada en"
-    SHIPMENTS ||--o{ SHIPMENT_EVENTS : "linea de tiempo"
+    SHIPMENTS ||--o{ SHIPMENT_EVENTS : "linea de tiempo de estados"
     
     CONSOLIDATIONS ||--o{ CONSOLIDATION_SHIPMENTS : "agrupa paquetes"
     SHIPMENTS ||--o{ CONSOLIDATION_SHIPMENTS : "consolidado en"
 ```
 
-### 2. Entidades Principales
+### 2. Entidades Principales y Tablas del Sistema
 - **`logistics_locations` (`LogisticsLocation`):** Catálogo de agencias y hubs intermedios (ej. `MIA_AGENCY_1`, `BOG_HUB`, `BAQ_MAIN`).
-- **`procurement_allocations` (`ProcurementAllocation`):** Relación many-to-many entre líneas de compra y destinos (`CUSTOMER_ORDER`, `NEBULAE_STOCK`, `MAU_STOCK`).
+- **`procurement_allocations` (`ProcurementAllocation`):** Relación many-to-many entre líneas de orden de compra y destinos (`CUSTOMER_ORDER`, `NEBULAE_STOCK`, `MAU_STOCK`).
 - **`shipments` (`Shipment`):** Paquetes físicos independientes con transportador (FedEx, UPS, DHL), número de guía individual, pesos y estado físico (`status_fise`).
 - **`shipment_lines` (`ShipmentLine`):** Cantidades específicas de cada línea de orden de compra asignadas al paquete.
-- **`shipment_events` (`ShipmentEvent`):** Trazabilidad inmutable de hitos logísticos:
-  `PREPARANDO_PROVEEDOR` → `ENVIADO_A_MIAMI` → `RECIBIDO_MIAMI` → `PENDIENTE_CONSOLIDACION` → `CONSOLIDADO` → `EN_VUELO` → `EN_DIAN` → `LIBERADO_DIAN` → `RECIBIDO_BOGOTA` → `ENVIADO_BARRANQUILLA` → `RECIBIDO_BARRANQUILLA`.
-- **`consolidations` (`Consolidation`):** Carga internacional en Miami (`CON-YYYY####`) con TRM, peso total y flete en USD/COP.
-- **`consolidation_shipments` (`ConsolidationShipment`):** Vínculo N:M entre cajas de consolidación y paquetes con prorrateo de flete por peso (`WEIGHT`) o igual (`EQUAL`).
+- **`shipment_events` (`ShipmentEvent`):** Trazabilidad inmutable de hitos logísticos con `idempotency_key` y deduplicación por evento.
+- **`consolidations` (`Consolidation`):** Carga internacional agrupada (`CON-YYYY####`) con TRM, peso total, fecha de ingreso a aduana (`dian_entered_at`) y fletes en USD/COP.
+- **`consolidation_shipments` (`ConsolidationShipment`):** Vínculo relacional con flag de vigencia `is_active` e índice parcial único.
 
-### 3. Motor de Alertas de Tránsito en Tiempo Real (`/api/v1/logistica/alertas-transito`)
-- **`TRACKING_PENDIENTE`:** Órdenes de compra confirmadas > 3 días sin número de guía o paquete registrado.
-- **`ENTREGA_VENCIDA`:** Paquetes con fecha estimada de entrega vencida y estado no recibido.
-- **`PENDIENTE_CONSOLIDACION`:** Paquetes recibidos en Miami hace más de 5 días sin asignar a una consolidación.
-- **`DIAN_DEMORADO`:** Consolidaciones retenidas en aduana > 3 días hábiles.
+---
+
+### 3. Integridad Transaccional de Asignaciones M:N (`/api/v1/compras/pedidos/{pec_id}/asignaciones`)
+1. **Semántica Upsert Atómica por Identidad Relacional:**
+   - La identidad única de una asignación está definida por la tupla `(po_line_id, allocation_type, sale_order_line_id)`.
+   - En base de datos se implementa el índice funcional único:  
+     `uq_procurement_alloc_identity ON procurement_allocations (po_line_id, allocation_type, COALESCE(sale_order_line_id, -1))`.
+2. **Cálculo del Estado Final Proyectado:**
+   - Para evitar sobre-asignaciones accidentales entre llamadas consecutivas o concurrentes, se bloquean las líneas con `SELECT ... FOR UPDATE`.
+   - Se bloquean las asignaciones existentes de la orden.
+   - El sistema construye el mapa proyectado: reemplaza asignaciones preexistentes si vienen en el payload, suma las nuevas y conserva las no mencionadas.
+   - Se valida de forma atómica que para cada línea:  
+     $$\sum \text{quantity\_allocated}_{\text{proyectada}} \le \text{PurchaseOrderLine.quantity\_ordered}$$
+3. **Reglas de Coexistencia de Tipos de Asignación:**
+   - Para una misma línea de compra se permite a lo sumo **1** asignación `NEBULAE_STOCK` y **1** asignación `MAU_STOCK`.
+   - Se permiten **múltiples** asignaciones de tipo `CUSTOMER_ORDER`, siempre que cada una apunte a un `sale_order_line_id` distinto.
+4. **Validaciones Estrictas para `CUSTOMER_ORDER`:**
+   - Se verifica que la línea de pedido de venta exista y pertenezca a un pedido real.
+   - Coincidencia estricta de producto: el `sku_id` de la línea de venta debe ser idéntico al `sku_id` de la línea de compra.
+   - Límite proyectado acumulado de abastecimiento: la suma de todas las asignaciones existentes más la solicitada no puede superar la demanda original requerida por la línea de cliente:  
+     $$\sum \text{quantity\_allocated}_{\text{todas las PECs}} \le \text{SaleOrderLineErp.quantity}$$
+
+---
+
+### 4. Integridad Relacional en Paquetes y Envíos (`ShipmentLine`)
+1. **Pertenencia a la Orden de Compra:**  
+   Cada `po_line_id` enviado dentro de un paquete debe pertenecer estrictamente a la orden `pec_id` especificada. Intentar registrar líneas de otra PEC es rechazado con error `422`.
+2. **Tope de Despacho Acumulado:**  
+   La cantidad despachada acumulada a lo largo de todos los paquetes activos creados no puede superar la cantidad ordenada:  
+   $$\sum \text{ShipmentLine.quantity} \le \text{PurchaseOrderLine.quantity\_ordered}$$
+   Protegido mediante `with_for_update()` en transacciones concurrentes.
+3. **Unicidad de Línea por Paquete:**  
+   Se rechazan líneas duplicadas con el mismo `po_line_id` en un mismo payload (`422`). Respaldado en base de datos por el constraint único `uq_shipment_line_po_line ON shipment_lines (shipment_id, po_line_id)`.
+4. **Restricciones Check en Base de Datos (`fa2_002_hardening`):**
+   - `quantity > 0` en asignaciones y líneas de paquete.
+   - `weight_lb >= 0`, `weight_kg >= 0`, `shipping_cost_usd >= 0`.
+   - `total_freight_usd >= 0`, `total_freight_cop >= 0`, `trm >= 0`, `total_weight_kg >= 0`, `total_volume_cbm >= 0`.
+
+---
+
+### 5. Máquina de Estados Finita Logística
+El sistema implementa un grafo de transiciones estrictamente cerrado que modela el flujo físico real de la mercancía importada:
+
+```
+[PREPARANDO_PROVEEDOR] ─── (Ruta Miami) ───► [ENVIADO_A_MIAMI] ──► [RECIBIDO_MIAMI]
+          │                                                              │
+          │                                                              ▼
+          │                                                 [PENDIENTE_CONSOLIDACION]
+          │                                                              │
+          ▼ (Ruta Directa)                                               ▼
+      [EN_VUELO] ◄─────────────────────────────────────────────── [CONSOLIDADO]
+          │
+          ▼
+      [EN_DIAN] ──► [LIBERADO_DIAN] ──► [RECIBIDO_BOGOTA] ──► [ENVIADO_BARRANQUILLA] ──► [RECIBIDO_BARRANQUILLA] (TERMINAL)
+```
+
+- **Saltos Inválidos Prohibidos:** Se rechaza con `422` cualquier salto que viole el flujo físico (ej. pasar de `PREPARANDO_PROVEEDOR` a `EN_DIAN`).
+- **Prohibición de Regresión:** Ningún paquete puede retroceder en la máquina de estados (ej. de `EN_DIAN` a `ENVIADO_A_MIAMI`).
+- **Estado Terminal Inviolable:** `RECIBIDO_BARRANQUILLA` marca la recepción física definitiva en la bodega central. Cualquier intento de registrar eventos posteriores es rechazado con `422`.
+- **Deduplicación e Idempotencia:** Se previene la duplicidad de eventos idénticos mediante clave natural `(shipment_id, event_type, location)` y soporte de encabezado o payload `idempotency_key`.
+
+---
+
+### 6. Políticas de Consolidaciones Internacionales
+1. **Membresía Activa Única:**  
+   Un paquete físico solo puede pertenecer a lo sumo a una consolidación activa a la vez. Implementado en base de datos mediante el índice parcial único:  
+   `uq_active_consolidation_shipment ON consolidation_shipments (shipment_id) WHERE is_active = true`.
+2. **Inclusión Atómica de Múltiples Paquetes:**  
+   Al asociar una lista de paquetes a una consolidación, la operación es 100% atómica. Si un solo `shipment_id` no existe o no es elegible, la solicitud completa falla (`404`/`422`) con rollback total, impidiendo asociaciones parciales huérfanas.
+3. **Consolidaciones Cerradas Inmutables:**  
+   Se rechaza con `422` cualquier intento de agregar paquetes o modificar costos en consolidaciones con estado `CERRADA`.
+4. **Idempotencia en Retransmisiones:**  
+   Reintentar la adición de paquetes previamente asociados retorna `200 OK` de forma idempotente sin duplicar eventos ni registros en `consolidation_shipments`.
+
+---
+
+### 7. Prorrateo Determinista y Exacto de Fletes (`/api/v1/logistica/consolidaciones/{id}/repartir-costos`)
+1. **Validación Estricta del Método:**  
+   Solo se aceptan los métodos `WEIGHT` (por peso físico) y `EQUAL` (cuotas iguales). Cualquier otro método devuelve `422 Unprocessable Entity`.
+2. **Exigencia de Peso para Prorrateo por Peso:**  
+   Si se selecciona `WEIGHT`, todos los paquetes involucrados deben tener `weight_kg > 0`. Se erradicó el fallback silencioso a 1 kg. Si falta peso o es 0, se rechaza con `422`.
+3. **Aritmética Exacta con Decimal y Reparto de Centavos Residuales:**  
+   - Los cálculos se ejecutan íntegramente con tipos `Decimal` de alta precisión cuantizados a centavos (`Decimal('0.01')`).
+   - La división no periódica o periódica (ej. \$100 entre 3 paquetes = \$33.3333...) genera un residuo $R$.
+   - El residuo $k = R / 0.01$ se distribuye determinísticamente sumando 1 centavo a los primeros $k$ paquetes.
+   - **Garantía Contable Certificada:** La suma de las cuotas prorrateadas en USD y COP es idéntica en el centavo exacto al total registrado en la consolidación:  
+     $$\sum \text{cost\_allocation\_usd} = \text{total\_freight\_usd}$$  
+     $$\sum \text{cost\_allocation\_cop} = \text{total\_freight\_cop}$$
+
+---
+
+### 8. Motor de Alertas Operativas de Tránsito (`/api/v1/logistica/alertas-transito`)
+1. **`TRACKING_PENDIENTE`:** Órdenes de compra confirmadas > 3 días sin número de guía o paquete registrado.
+2. **`ENTREGA_VENCIDA`:** Paquetes con fecha estimada de entrega vencida y estado físico no recibido.
+3. **`PENDIENTE_CONSOLIDACION`:** Paquetes recibidos en Miami hace más de 5 días sin asignar a una consolidación.
+4. **`DIAN_DEMORADO` (Días Hábiles Reales):**  
+   - Se calcula exclusivamente en días hábiles (lunes a viernes) utilizando la zona horaria empresarial `America/Bogota`. Los fines de semana no incrementan el contador.
+   - Se rastrea a partir de la columna inmutable `dian_entered_at` registrada cuando la consolidación entra a `EN_DIAN`.
+   - **Inmunidad ante Edición:** La edición de notas u otros metadatos actualiza `updated_at`, pero **preserva intacto** `dian_entered_at`, impidiendo el reseteo involuntario o fraudulento de la alerta aduanera.
+   - **Resolución Automática:** Cuando la consolidación cambia de estado (ej. `LIBERADA`), la alerta se extingue automáticamente.
+
+---
+
+### 9. Arquitectura de Rutas y Separación de Módulos
+Para garantizar una arquitectura limpia sin colisiones en OpenAPI:
+- **Asignaciones de Compras:** `/api/v1/compras/pedidos/{pec_id}/asignaciones` (manejado en `app/api/v1/erp_compras_asignaciones.py`).
+- **Operaciones Logísticas:** `/api/v1/logistica/*` (paquetes, consolidaciones, ubicaciones, alertas) (manejado en `app/api/v1/erp_logistica.py`).
+- **Verificación de Contrato API:** 199 endpoints registrados, **0 colisiones de `operationId`**.
+
 

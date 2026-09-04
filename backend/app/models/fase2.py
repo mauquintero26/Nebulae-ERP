@@ -12,7 +12,8 @@ Entidades:
 import datetime
 from sqlalchemy import (
     Column, Integer, String, Numeric, ForeignKey,
-    DateTime, Text, Boolean, Date, UniqueConstraint, Index
+    DateTime, Text, Boolean, Date, UniqueConstraint, Index,
+    CheckConstraint, text
 )
 from sqlalchemy.orm import relationship
 from app.db.database import Base
@@ -64,11 +65,20 @@ class Consolidation(Base):
     departure_date             = Column(DateTime(timezone=True), nullable=True)
     estimated_arrival_date     = Column(DateTime(timezone=True), nullable=True)
     actual_arrival_date        = Column(DateTime(timezone=True), nullable=True)
+    dian_entered_at            = Column(DateTime(timezone=True), nullable=True)
     notes                      = Column(Text, nullable=True)
     created_at                 = Column(DateTime(timezone=True), default=_now)
     updated_at                 = Column(DateTime(timezone=True), default=_now, onupdate=_now)
 
     shipment_associations      = relationship("ConsolidationShipment", back_populates="consolidation", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        CheckConstraint("total_freight_usd >= 0", name="chk_consolidation_freight_usd"),
+        CheckConstraint("total_freight_cop >= 0", name="chk_consolidation_freight_cop"),
+        CheckConstraint("trm >= 0", name="chk_consolidation_trm"),
+        CheckConstraint("total_weight_kg >= 0", name="chk_consolidation_weight_kg"),
+        CheckConstraint("total_volume_cbm >= 0", name="chk_consolidation_volume_cbm"),
+    )
 
 
 class Shipment(Base):
@@ -105,6 +115,12 @@ class Shipment(Base):
     events                  = relationship("ShipmentEvent", back_populates="shipment", cascade="all, delete-orphan", order_by="ShipmentEvent.timestamp")
     consolidation_associations = relationship("ConsolidationShipment", back_populates="shipment", cascade="all, delete-orphan")
 
+    __table_args__ = (
+        CheckConstraint("weight_lb IS NULL OR weight_lb >= 0", name="chk_shipment_weight_lb"),
+        CheckConstraint("weight_kg IS NULL OR weight_kg >= 0", name="chk_shipment_weight_kg"),
+        CheckConstraint("shipping_cost_usd IS NULL OR shipping_cost_usd >= 0", name="chk_shipment_cost_usd"),
+    )
+
 
 class ShipmentLine(Base):
     """Línea de contenido de un paquete (asociada a una línea de compra)."""
@@ -119,23 +135,29 @@ class ShipmentLine(Base):
     shipment    = relationship("Shipment", back_populates="lines")
     po_line     = relationship("PurchaseOrderLine", foreign_keys=[po_line_id])
 
+    __table_args__ = (
+        UniqueConstraint("shipment_id", "po_line_id", name="uq_shipment_line_po_line"),
+        CheckConstraint("quantity > 0", name="chk_shipment_line_qty"),
+    )
+
 
 class ShipmentEvent(Base):
     """Hito inmutable de la cadena de suministro para un paquete."""
     __tablename__ = "shipment_events"
 
-    id           = Column(Integer, primary_key=True, index=True)
-    shipment_id  = Column(Integer, ForeignKey("shipments.id", ondelete="CASCADE"), nullable=False, index=True)
-    event_type   = Column(String(50), nullable=False)
+    id              = Column(Integer, primary_key=True, index=True)
+    shipment_id     = Column(Integer, ForeignKey("shipments.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_type      = Column(String(50), nullable=False)
     # PREPARANDO_PROVEEDOR, ENVIADO_A_MIAMI, RECIBIDO_MIAMI, PENDIENTE_CONSOLIDACION,
     # CONSOLIDADO, EN_VUELO, EN_DIAN, LIBERADO_DIAN, RECIBIDO_BOGOTA, ENVIADO_BARRANQUILLA, RECIBIDO_BARRANQUILLA
-    location     = Column(String(150), nullable=True)
-    user_name    = Column(String(150), nullable=True)
-    notes        = Column(Text, nullable=True)
-    evidence_url = Column(String(500), nullable=True)
-    timestamp    = Column(DateTime(timezone=True), default=_now, nullable=False, index=True)
+    location        = Column(String(150), nullable=True)
+    user_name       = Column(String(150), nullable=True)
+    notes           = Column(Text, nullable=True)
+    evidence_url    = Column(String(500), nullable=True)
+    idempotency_key = Column(String(100), nullable=True, index=True)
+    timestamp       = Column(DateTime(timezone=True), default=_now, nullable=False, index=True)
 
-    shipment     = relationship("Shipment", back_populates="events")
+    shipment        = relationship("Shipment", back_populates="events")
 
 
 class ConsolidationShipment(Base):
@@ -147,6 +169,7 @@ class ConsolidationShipment(Base):
     shipment_id         = Column(Integer, ForeignKey("shipments.id", ondelete="CASCADE"), nullable=False, index=True)
     cost_allocation_usd = Column(Numeric(10, 2), nullable=False, default=0)
     cost_allocation_cop = Column(Numeric(14, 2), nullable=False, default=0)
+    is_active           = Column(Boolean, nullable=False, default=True)
     created_at          = Column(DateTime(timezone=True), default=_now)
 
     consolidation       = relationship("Consolidation", back_populates="shipment_associations")
@@ -154,4 +177,5 @@ class ConsolidationShipment(Base):
 
     __table_args__ = (
         UniqueConstraint("consolidation_id", "shipment_id", name="uq_consolidation_shipment"),
+        Index("uq_active_consolidation_shipment", "shipment_id", unique=True, postgresql_where=text("is_active = true")),
     )

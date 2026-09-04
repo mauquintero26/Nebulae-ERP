@@ -1,181 +1,229 @@
 ================================================================================
-NEBULAE ERP-CRM — REPORTE OFICIAL DE CIERRE DE FASE 2
+NEBULAE ERP-CRM — REPORTE DE REMEDIACIÓN INTEGRAL Y CERTIFICACIÓN DE FASE 2
 Fecha: 2026-09-04
 Ambiente de Trabajo: Entorno de Desarrollo y Base de Pruebas `erp_test`
-Certificación de Producción: erpdb INTACTA (0 modificaciones, sin aplicar fa1b_005, sin backfill)
-Certificación de Frontend: Estructura visual y componentes INTACTOS (0 modificaciones)
-Sincronización GitHub: ACTUALIZADA Y PUBLICADA EN origin/main
+Certificación de Producción: erpdb ESTRICTAMENTE INTACTA (fa1a_002, 0 cambios, sin fa1b_005, sin backfill)
+Certificación de Frontend: Estructura visual y componentes INTACTOS (0 modificaciones, git status limpio)
+Estado de Fase 3: NO INICIADA (Detenida formalmente a la espera de autorización explícita)
 ================================================================================
 
-1. RESUMEN EJECUTIVO Y ESTADO DE APROBACIÓN
+1. RESUMEN EJECUTIVO
 --------------------------------------------------------------------------------
-- Fase 1B: Oficialmente aprobada, cerrada y certificada. Historial Git 100% limpio y saneado.
-- Fase 2 (Compras, Paquetes, Trazabilidad, Consolidaciones y Tránsito):
-  COMPLETADA AL 100% conforme a las especificaciones del Prompt Maestro (`Prompt_Maestro_Antigravity_Nebulae_ERP.md`).
-- Todas las tablas, relaciones, endpoints de API y esquemas de validación fueron implementados,
-  migrados en la base de datos de pruebas `erp_test` y verificados mediante 26 pruebas automatizadas específicas.
-- 0 regresiones detectadas contra la suite de pruebas de Fase 1B.
-- Todos los cambios fueron consolidados y publicados en el repositorio remoto GitHub en la rama `main`.
+Tras la revisión de auditoría del commit b8da5a6, se suspendió la aprobación de la Fase 2
+debido a bloqueos funcionales y brechas de integridad relacional en asignaciones M:N,
+concurrencia, despachos parciales, máquina de estados, consolidaciones, prorrateo y alertas.
 
-2. ARQUITECTURA TÉCNICA Y MODELADO IMPLEMENTADO (FASE 2)
+Se procedió con una remediación profunda y exhaustiva, aplicando endurecimiento a nivel de
+esquema en base de datos (PostgreSQL Check Constraints, índices únicos e índices parciales),
+bloqueo transaccional determinista (SELECT FOR UPDATE), estricta aritmética financiera en Decimal,
+máquina de estados finita con transiciones cerradas y cálculo de alertas en días hábiles reales.
+
+La fase queda 100% remediada, endurecida y certificada con una batería de pruebas automatizadas
+de 156 pruebas totales (100% aprobadas, 0 fallidas, 0 omitidas).
+
+
+2. BLOQUEOS FUNCIONALES REMEDIADOS Y HARDENING IMPLEMENTADO
 --------------------------------------------------------------------------------
-A. Asignaciones M:N de Compras (ProcurementAllocation):
-   - Desacoplamiento de la relación 1:1 legacy (PEC <-> PVEN) hacia un modelo relacional Many-to-Many.
-   - Cada línea de orden de compra (`PurchaseOrderLine`) ahora puede asignarse a:
-     * `CUSTOMER_ORDER`: Asignada directamente a una línea de pedido de venta (`sale_order_line_id`).
-     * `NEBULAE_STOCK`: Abastecimiento de inventario general propio.
-     * `MAU_STOCK`: Abastecimiento para inventario de socio/Mau.
-   - Invariante relacional validada: `sum(quantity_allocated) <= quantity_ordered` (error HTTP 422 si se supera).
-   - Endpoints:
-     * POST /api/v1/compras/pedidos/{pec_id}/asignaciones (creación y actualización idempotente)
-     * GET /api/v1/compras/pedidos/{pec_id}/asignaciones (desglose por PEC)
-     * GET /api/v1/compras/ventas/{so_id}/abastecimiento (consulta inversa desde orden de venta)
 
-B. Paquetes y Envíos Independientes (Shipments) y Trazabilidad:
-   - Desacoplamiento del tracking del encabezado de la orden de compra. Una orden de compra (`PurchaseOrderFull`)
-     puede despacharse en múltiples paquetes físicos (`Shipment`), cada uno con transportador (FedEx, UPS, DHL, etc.)
-     y número de guía independiente.
-   - Modelos:
-     * `Shipment`: Paquete físico con transportador, guía, pesos (lb/kg), costo de envío USD y estado físico (`status_fise`).
-     * `ShipmentLine`: Cantidad específica despachada por línea de compra (`po_line_id`).
-     * `ShipmentEvent`: Hitos inmutables y secuenciales de la cadena de suministro:
-       `PREPARANDO_PROVEEDOR` -> `ENVIADO_A_MIAMI` -> `RECIBIDO_MIAMI` -> `PENDIENTE_CONSOLIDACION` ->
-       `CONSOLIDADO` -> `EN_VUELO` -> `EN_DIAN` -> `LIBERADO_DIAN` -> `RECIBIDO_BOGOTA` ->
-       `ENVIADO_BARRANQUILLA` -> `RECIBIDO_BARRANQUILLA`.
-     * `LogisticsLocation`: Catálogo de agencias y ubicaciones intermedias en Miami, hubs domésticos y bodegas.
-   - Automatización de estados:
-     * Al registrar tracking en la creación del paquete, se emite automáticamente `ENVIADO_A_MIAMI` y el PEC avanza a `ENVIADA`.
-     * Al registrar el hito `RECIBIDO_BARRANQUILLA`, se fija automáticamente `actual_delivery_date` al día actual y `commercial_status='EN_BARRANQUILLA'`.
-   - Endpoints:
-     * POST /api/v1/logistica/shipments (creación de paquete y líneas)
-     * GET /api/v1/logistica/shipments (listado con filtros de PEC, transportador, estado físico y búsqueda)
-     * GET /api/v1/logistica/shipments/{id} (detalle completo de paquete, líneas, eventos y consolidaciones)
-     * POST /api/v1/logistica/shipments/{id}/eventos (registro de hitos con validación de estados)
-     * GET/POST /api/v1/logistica/locations (catálogo de agencias y sedes)
+A. Integridad Transaccional de Asignaciones M:N (erp_compras_asignaciones.py):
+   - Definición de Identidad Semántica: La identidad de una asignación queda determinada
+     por la tupla (po_line_id, allocation_type, sale_order_line_id). Respaldada por el índice
+     funcional único en PostgreSQL:
+     uq_procurement_alloc_identity ON procurement_allocations (po_line_id, allocation_type, COALESCE(sale_order_line_id, -1)).
+   - Semántica Atómica Upsert: Se eliminó la ambigüedad. El endpoint ejecuta un upsert transaccional:
+     actualiza asignaciones preexistentes si coinciden en la identidad, inserta nuevas asignaciones,
+     y preserva las asignaciones existentes no mencionadas en el payload.
+   - Bloqueo de Concurrencia (SELECT FOR UPDATE): Se bloquea la línea PurchaseOrderLine y todas sus
+     ProcurementAllocation existentes con with_for_update() para evitar condiciones de carrera.
+   - Cálculo del Estado Proyectado Completo: El sistema suma las asignaciones existentes no modificadas,
+     más las altas y actualizaciones proyectadas. Se valida estrictamente:
+       SUM(quantity_allocated_proyectada) <= PurchaseOrderLine.quantity_ordered
+     Cualquier intento de sobrepasar la cantidad ordenada (en una o múltiples llamadas concurrentes)
+     es rechazado con HTTP 422 Unprocessable Entity.
+   - Reglas de Coexistencia: Para una misma línea de compra se permite a lo sumo 1 asignación NEBULAE_STOCK,
+     a lo sumo 1 asignación MAU_STOCK, y múltiples asignaciones CUSTOMER_ORDER.
+   - Validación Estricta de CUSTOMER_ORDER:
+     * La línea de venta sale_order_line_id debe existir y pertenecer a un pedido de venta real.
+     * Coincidencia de Producto: El sku_id de la línea de venta debe coincidir exactamente con el sku_id de la línea de compra.
+     * Límite de Demanda Acumulada: La suma proyectada de todas las asignaciones de todas las órdenes de compra
+       hacia esa línea de venta no puede exceder la demanda requerida:
+       SUM(quantity_allocated_global) <= SaleOrderLineErp.quantity
 
-C. Consolidaciones Internacionales y Prorrateo de Flete:
-   - Entidad `Consolidation`: Carga o caja consolidada internacional en Miami (`CON-YYYY####`).
-   - Asociación Many-to-Many `ConsolidationShipment`: Asocia múltiples paquetes (incluso de diferentes PECs)
-     a una caja de consolidación para su vuelo internacional.
-   - Prorrateo de costos de flete internacional (`total_freight_usd` y `total_freight_cop` calculado con TRM):
-     * Método `WEIGHT`: Prorrateo proporcional según el peso individual de cada paquete en kilogramos.
-     * Método `EQUAL`: Repartición equitativa por partes iguales entre los paquetes agrupados.
-   - Propagación en cascada de hitos:
-     * Al avanzar el estado de la consolidación (`EN_VUELO`, `EN_DIAN`, `LIBERADA`, `RECIBIDA_DESTINO`),
-       se propagan automáticamente los hitos de trazabilidad y se actualiza el estado de todos los paquetes contenidos.
-   - Endpoints:
-     * POST /api/v1/logistica/consolidaciones (crear consolidación)
-     * GET /api/v1/logistica/consolidaciones (listar con filtros)
-     * GET /api/v1/logistica/consolidaciones/{id} (detalle con desglose de paquetes y costos prorrateados)
-     * POST /api/v1/logistica/consolidaciones/{id}/shipments (agregar paquetes a consolidación abierta)
-     * POST /api/v1/logistica/consolidaciones/{id}/repartir-costos (ejecutar prorrateo de flete)
-     * PATCH /api/v1/logistica/consolidaciones/{id}/estado (actualizar estado y propagar a paquetes)
+B. Integridad Relacional en Paquetes y Envíos (ShipmentLine):
+   - Pertenencia a la Orden de Compra: Cada po_line_id debe pertenecer estrictamente a la orden pec_id
+     especificada en el payload. Mezclar líneas de otra orden devuelve HTTP 422.
+   - Límite de Despacho Acumulado: La cantidad despachada acumulada en todos los paquetes activos creados
+     para esa línea de compra no puede superar quantity_ordered:
+       SUM(ShipmentLine.quantity) <= PurchaseOrderLine.quantity_ordered
+     Protegido contra llamadas concurrentes mediante SELECT FOR UPDATE.
+   - Prohibición de Líneas Duplicadas: Se rechazan payloads con líneas duplicadas para el mismo po_line_id (422).
+     Respaldado por el constraint único en base de datos:
+     uq_shipment_line_po_line ON shipment_lines (shipment_id, po_line_id).
+   - Check Constraints en PostgreSQL:
+     * chk_proc_alloc_qty: quantity_allocated > 0
+     * chk_proc_alloc_type: allocation_type IN ('CUSTOMER_ORDER', 'NEBULAE_STOCK', 'MAU_STOCK')
+     * chk_shipment_line_qty: quantity > 0
+     * chk_shipment_weight_lb / chk_shipment_weight_kg / chk_shipment_cost_usd: valores >= 0
 
-D. Motor de Alertas de Tránsito en Tiempo Real (Transit Alerts SLA):
-   - Endpoint: `GET /api/v1/logistica/alertas-transito`.
-   - Reglas operativas evaluadas dinámicamente:
-     1. `TRACKING_PENDIENTE`: PECs confirmadas/pagadas hace más de 3 días sin guía ni paquete registrado.
-     2. `ENTREGA_VENCIDA`: Paquetes cuya fecha estimada de entrega venció y aún no han sido entregados.
-     3. `PENDIENTE_CONSOLIDACION`: Paquetes en Miami (`RECIBIDO_MIAMI`) hace más de 5 días sin incluir en consolidación.
-     4. `DIAN_DEMORADO`: Consolidaciones retenidas en aduana (`EN_DIAN`) por más de 3 días hábiles.
-   - Normalización de tiempo UTC robusta (`_to_utc`) para cálculo exacto de días de retraso sin conflictos de timezone.
+C. Máquina de Estados Finita Logística:
+   - Grafo Canónico de Transiciones (ALLOWED_TRANSITIONS):
+     * Ruta Miami (con consolidación):
+       PREPARANDO_PROVEEDOR -> ENVIADO_A_MIAMI -> RECIBIDO_MIAMI -> PENDIENTE_CONSOLIDACION -> CONSOLIDADO
+       -> EN_VUELO -> EN_DIAN -> LIBERADO_DIAN -> RECIBIDO_BOGOTA -> ENVIADO_BARRANQUILLA -> RECIBIDO_BARRANQUILLA
+     * Ruta Directa (Amazon Direct):
+       PREPARANDO_PROVEEDOR -> EN_VUELO -> EN_DIAN -> LIBERADO_DIAN -> RECIBIDO_BOGOTA -> ENVIADO_BARRANQUILLA -> RECIBIDO_BARRANQUILLA
+   - Rechazo de Saltos Inválidos: Pasar de PREPARANDO_PROVEEDOR a EN_DIAN o cualquier salto no permitido falla con HTTP 422.
+   - Prohibición de Regresión: Intentar devolver un paquete a un estado anterior falla con HTTP 422.
+   - Estado Terminal Inviolable: RECIBIDO_BARRANQUILLA es terminal. No se permiten transiciones posteriores (422).
+   - Deduplicación e Idempotencia: Los reintentos del mismo evento retornan 200 de forma idempotente sin duplicar
+     registros en ShipmentEvent, soportando natural keys (shipment_id, event_type, location) y la nueva columna idempotency_key.
 
-3. MIGRACIONES DE BASE DE DATOS (ALEMBIC)
+D. Políticas de Consolidaciones Internacionales:
+   - Membresía Activa Única: Un paquete físico solo puede pertenecer a 1 consolidación activa a la vez.
+     Respaldado por el índice parcial único en PostgreSQL:
+     uq_active_consolidation_shipment ON consolidation_shipments (shipment_id) WHERE is_active = true.
+   - Adición Atómica Multipaquetes: Agregar una lista de paquetes a una consolidación es 100% atómico.
+     Si un solo ID no existe o genera conflicto, la transacción completa falla con rollback total.
+   - Bloqueo de Consolidaciones Cerradas: No se permite agregar paquetes ni alterar costos en consolidaciones CERRADA (422).
+   - Idempotencia: Retransmitir la adición de paquetes ya consolidados retorna 200 sin duplicar registros.
+
+E. Prorrateo Determinista y Exacto de Costos:
+   - Validación Estricta de Método: Solo se aceptan WEIGHT y EQUAL. Métodos desconocidos devuelven HTTP 422.
+   - Erradicación de Fallbacks Silenciosos: Para WEIGHT, todos los paquetes deben tener weight_kg > 0.
+     Si falta peso o es 0, se rechaza con HTTP 422 en vez de asumir un valor ficticio.
+   - Aritmética 100% en Decimal y Reparto de Residuos:
+     * Cuotas cuantizadas a centavos (Decimal('0.01')).
+     * El residuo de centavos resultante de divisiones periódicas (ej. $100 / 3 = $33.3333...) se reparte
+       de forma determinista asignando 1 centavo a los primeros k paquetes.
+     * Garantía Contable: La suma exacta de las cuotas asignadas en USD y COP es matemáticamente idéntica
+       al total registrado en la consolidación al centavo exacto:
+       SUM(cost_allocation_usd) == total_freight_usd
+       SUM(cost_allocation_cop) == total_freight_cop
+
+F. Motor de Alertas Operativas en Días Hábiles Reales:
+   - Cálculo en Días Hábiles: Se evalúa lunes a viernes en zona horaria America/Bogota. Fines de semana no suman.
+   - Inmunidad del Temporizador DIAN: La alerta DIAN_DEMORADO se calcula a partir de dian_entered_at,
+     columna inmutable registrada al momento en que la consolidación entra a EN_DIAN.
+     Editar notas u otros metadatos actualiza updated_at pero NO modifica dian_entered_at.
+   - Resolución Automática: Al avanzar de EN_DIAN a LIBERADA o estados posteriores, la alerta se extingue.
+
+G. Arquitectura de Routers y Contrato OpenAPI:
+   - Separación Modular Limpia:
+     * Compras y Asignaciones M:N: /api/v1/compras (app/api/v1/erp_compras_asignaciones.py)
+     * Logística, Paquetes, Consolidaciones, Alertas: /api/v1/logistica (app/api/v1/erp_logistica.py)
+   - Contrato OpenAPI: 199 endpoints registrados, 0 colisiones de operationId.
+
+
+3. CATÁLOGO DE PRUEBAS AUTOMATIZADAS Y EVIDENCIAS
 --------------------------------------------------------------------------------
-- Migración creada: `backend/alembic/versions/fa2_001_shipments_and_consolidations.py`
-- Revisión Alembic: `fa2_001` (down_revision: `fa1b_005`)
-- Tablas creadas en `erp_test`:
-  1. `logistics_locations`
-  2. `consolidations`
-  3. `shipments`
-  4. `shipment_lines`
-  5. `shipment_events`
-  6. `consolidation_shipments`
-- Índices de rendimiento creados para búsquedas rápidas por `tracking_number`, `shipment_number`, `consolidation_number`, `pec_id` y `timestamp`.
-- Constraint única: `uq_consolidation_shipment(consolidation_id, shipment_id)`.
-- Ownership y permisos verificados para el usuario `nebulae_test`.
+Resultado de la ejecución completa de la suite de pruebas del backend (pytest tests/ -v):
+============================== 156 passed in 1077.30s (0:17:57) ==============================
+- Total de Pruebas: 156
+- Pruebas Aprobadas: 156 (100%)
+- Pruebas Fallidas: 0
+- Pruebas Omitidas (skipped): 0
 
-4. MATRIZ DE RESULTADOS DE PRUEBAS AUTOMATIZADAS (26/26 PASSED - 100%)
+Detalle de Suites de Fase 2:
+1. tests/test_fase2_asignaciones_mn.py (10/10 PASSED):
+   - test_asignacion_valida_dividida_entre_ordenes_y_stock
+   - test_sobreasignacion_en_una_sola_llamada_falla_422
+   - test_sobreasignacion_incremental_segunda_llamada_falla_422
+   - test_concurrencia_dos_llamadas_simultaneas_no_sobreasignan
+   - test_coexistencia_nebulae_stock_y_mau_stock
+   - test_dos_asignaciones_nebulae_stock_falla_422
+   - test_customer_order_con_so_line_inexistente_falla_422
+   - test_customer_order_con_sku_distinto_falla_422
+   - test_customer_order_excede_cantidad_de_venta_falla_422
+   - test_multiples_pecs_abastecen_misma_linea_venta_respeta_limite
+
+2. tests/test_fase2_shipments_tracking.py (15/15 PASSED):
+   - test_crear_shipment_valido_con_lineas
+   - test_crear_shipment_con_linea_de_otra_pec_falla_422
+   - test_crear_shipment_excede_quantity_ordered_falla_422
+   - test_crear_shipment_lineas_duplicadas_falla_422
+   - test_despacho_parcial_en_dos_shipments_valido
+   - test_concurrencia_creacion_shipment_no_sobrepasa_quantity_ordered
+   - test_constraints_base_datos_rechaza_valores_negativos
+   - test_maquina_estados_transicion_valida
+   - test_maquina_estados_salto_invalido_falla_422
+   - test_maquina_estados_retroceso_falla_422
+   - test_maquina_estados_duplicado_idempotente
+   - test_maquina_estados_evento_despues_de_estado_final_falla_422
+   - test_maquina_estados_ruta_amazon_directo
+   - test_idempotencia_creacion_shipment
+   - test_catalogo_ubicaciones_logisticas
+
+3. tests/test_fase2_consolidaciones.py (11/11 PASSED):
+   - test_crear_consolidacion_exitosa
+   - test_paquete_en_dos_consolidaciones_activas_falla_422
+   - test_shipment_ids_repetidos_en_payload_falla_422
+   - test_id_inexistente_rechaza_con_rollback_atomico
+   - test_agregar_paquetes_a_consolidacion_cerrada_falla_422
+   - test_idempotencia_agregar_paquetes
+   - test_propagacion_estados_y_deduplicacion_eventos
+   - test_prorrateo_metodo_desconocido_falla_422
+   - test_prorrateo_peso_faltante_o_cero_falla_422
+   - test_prorrateo_tres_paquetes_division_periodica_suma_exacta
+   - test_prorrateo_por_peso_suma_exacta_usd_cop
+
+4. tests/test_fase2_alertas.py (6/6 PASSED):
+   - test_alerta_tracking_pendiente
+   - test_alerta_entrega_vencida
+   - test_alerta_pendiente_consolidacion
+   - test_alerta_dian_dias_habiles_y_fin_de_semana
+   - test_alerta_dian_no_se_resetea_al_editar_notas
+   - test_resolucion_alerta_al_liberar_consolidacion
+
+5. tests/test_fase2_migrations.py (4/4 PASSED):
+   - test_all_fa2_tables_and_constraints_exist_after_upgrade
+   - test_downgrade_fa2_002_reverts_hardening
+   - test_downgrade_fa1b_005_removes_fa2_tables
+   - test_upgrade_roundtrip
+
+6. Suites de Fase 1B y Core (110/110 PASSED):
+   - test_auth_roles.py
+   - test_fase1b_altas_retiros.py
+   - test_fase1b_backfill.py
+   - test_fase1b_confirmar.py
+   - test_fase1b_grl_id_en_respuestas.py
+   - test_fase1b_inventory.py
+   - test_fase1b_legacy.py
+   - test_fase1b_lines.py
+   - test_fase1b_normalizacion.py
+   - test_fase1b_parcial_po_line.py
+   - test_fase1b_payments.py
+   - test_fase1b_recepcion_cero.py
+   - test_fase1b_rollback.py
+   - test_fase1b_stock_actualizado_vs_estado.py
+   - test_fase1b_sync_lineas.py
+   - test_migrations_fase1a.py
+   - test_receipt_concurrency.py
+   - test_receipt_idempotency.py
+   - test_receipt_partial.py
+   - test_z_migrations_fase1b.py
+
+
+4. ESTADO DE LOS AMBIENTES Y BASES DE DATOS
 --------------------------------------------------------------------------------
-A. Pruebas de Migración Alembic (3 tests):
-   - tests/test_fase2_migrations.py::test_all_fa2_tables_exist_after_upgrade ... PASSED
-   - tests/test_fase2_migrations.py::test_downgrade_removes_fa2_tables ......... PASSED
-   - tests/test_fase2_migrations.py::test_upgrade_roundtrip .................... PASSED
+- Base de Producción (`erpdb`):
+  * Versión Alembic: fa1a_002
+  * Estado: ESTRICTAMENTE INTACTA.
+  * Certificación: 0 migraciones de Fase 1B (fa1b_005) ni Fase 2 aplicadas. 0 scripts de backfill ejecutados.
+- Base de Pruebas (`erp_test`):
+  * Versión Alembic: fa2_002 (head)
+  * Estado: 100% migrada y endurecida con check constraints, índices únicos e índices parciales.
+  * Permisos: Concedidos a nebulae_test en todas las tablas y secuencias.
+- Frontend (Next.js 16.3.1):
+  * Modificaciones visuales o estructurales: 0 (git status limpio).
+  * Build de producción (npm run build): Exitoso (exit code 0, 74 rutas compiladas sin errores).
+- Auditoría de Seguridad:
+  * 0 direcciones IP públicas en el git diff.
+  * 0 credenciales, contraseñas o tokens expuestos.
 
-B. Pruebas de Asignaciones M:N de Compras (7 tests):
-   - tests/test_fase2_asignaciones_mn.py::test_asignacion_customer_order_exitosa .............. PASSED
-   - tests/test_fase2_asignaciones_mn.py::test_asignacion_mixta_cliente_nebulae_mau ........... PASSED
-   - tests/test_fase2_asignaciones_mn.py::test_sobreasignacion_falla_422 ...................... PASSED
-   - tests/test_fase2_asignaciones_mn.py::test_customer_order_sin_sale_order_line_id_falla_422  PASSED
-   - tests/test_fase2_asignaciones_mn.py::test_actualizacion_idempotente_asignaciones ........ PASSED
-   - tests/test_fase2_asignaciones_mn.py::test_consulta_inversa_abastecimiento_ventas ......... PASSED
-   - tests/test_fase2_asignaciones_mn.py::test_listar_asignaciones_de_pec ..................... PASSED
 
-C. Pruebas de Paquetes y Trazabilidad de Envíos (6 tests):
-   - tests/test_fase2_shipments_tracking.py::test_crear_shipment_exitoso_y_eventos_iniciales .. PASSED
-   - tests/test_fase2_shipments_tracking.py::test_un_pec_dividido_en_multiples_paquetes ....... PASSED
-   - tests/test_fase2_shipments_tracking.py::test_registro_eventos_secuenciales_trazabilidad . PASSED
-   - tests/test_fase2_shipments_tracking.py::test_recibido_barranquilla_actualiza_entrega ..... PASSED
-   - tests/test_fase2_shipments_tracking.py::test_evento_invalido_falla_422 ................... PASSED
-   - tests/test_fase2_shipments_tracking.py::test_catalogo_ubicaciones_logisticas ............. PASSED
-
-D. Pruebas de Consolidaciones Internacionales y Prorrateo (6 tests):
-   - tests/test_fase2_consolidaciones.py::test_crear_consolidacion_exitosa .................... PASSED
-   - tests/test_fase2_consolidaciones.py::test_prorrateo_flete_por_peso ....................... PASSED
-   - tests/test_fase2_consolidaciones.py::test_prorrateo_flete_por_partes_iguales ............. PASSED
-   - tests/test_fase2_consolidaciones.py::test_agregar_paquetes_a_consolidacion_abierta ....... PASSED
-   - tests/test_fase2_consolidaciones.py::test_propagacion_en_cascada_de_estados_a_paquetes ... PASSED
-   - tests/test_fase2_consolidaciones.py::test_agregar_paquetes_a_consolidacion_cerrada_falla . PASSED
-
-E. Pruebas del Motor de Alertas Operativas de Tránsito (4 tests):
-   - tests/test_fase2_alertas.py::test_alerta_tracking_pendiente .............................. PASSED
-   - tests/test_fase2_alertas.py::test_alerta_entrega_vencida ................................. PASSED
-   - tests/test_fase2_alertas.py::test_alerta_pendiente_consolidacion ......................... PASSED
-   - tests/test_fase2_alertas.py::test_alerta_dian_demorado ................................... PASSED
-
-F. Pruebas de Regresión Fase 1B (5 tests):
-   - tests/test_fase1b_normalizacion.py (5 tests) ............................................. 5/5 PASSED (0 regresiones)
-
-TOTAL DE PRUEBAS EJECUTADAS Y APROBADAS EN LA SESIÓN: 31 tests (100% exitosos)
-
-5. REGISTRO DE COMMITS Y SINCRONIZACIÓN GITHUB
+5. DECLARACIÓN FORMAL DE CIERRE
 --------------------------------------------------------------------------------
-- Commit Principal Fase 2: b8da5a68e7cb0451f93db82c84aa185e5dfff67b
-- Mensaje: "feat(fase2): compras M:N, paquetes independientes, tracking, consolidaciones internacionales y alertas de transito"
-- Repositorio Remoto: https://github.com/mauquintero26/Nebulae-ERP.git
-- Rama: main (up to date con origin/main)
-- Archivos incorporados y modificados (17 archivos):
-  * backend/alembic/versions/fa2_001_shipments_and_consolidations.py
-  * backend/app/api/v1/erp_logistica.py
-  * backend/app/api/v1/schemas_fase2.py
-  * backend/app/models/fase2.py
-  * backend/app/models/__init__.py
-  * backend/main.py
-  * backend/tests/conftest.py
-  * backend/tests/test_fase2_alertas.py
-  * backend/tests/test_fase2_asignaciones_mn.py
-  * backend/tests/test_fase2_consolidaciones.py
-  * backend/tests/test_fase2_migrations.py
-  * backend/tests/test_fase2_shipments_tracking.py
-  * docs/ARQUITECTURA_Y_FLUJO_INTEGRAL.md
-  * docs/handoff/01_bitacora.md
-  * docs/RESUMEN_SESSION.txt
-  * docs/RESUMEN_SESION_2026-09-04.txt
-  * RESUMEN_SESSION.txt
-
-6. CUMPLIMIENTO ESTRICTO DE DIRECTRICES Y COMPROMISOS
---------------------------------------------------------------------------------
-1. Base de Producción erpdb: NO MODIFICADA. fa1b_005, backfill y fa2_001 permanecen
-   pendientes para despliegue controlado en producción cuando el usuario lo autorice explícitamente.
-2. Frontend: Componentes, páginas y archivos visuales sin modificación alguna, preservando
-   la integridad funcional actual de la interfaz de usuario.
-3. Seguridad e Higiene Git: No se expusieron ni reintrodujeron contraseñas revocadas, hosts anteriores
-   ni tokens. Todos los archivos y comandos respetan los estándares de sanitización.
-
-7. PRÓXIMOS PASOS (ESPERANDO AUTORIZACIÓN)
---------------------------------------------------------------------------------
-- Fase 2 se encuentra COMPLETADA, VERIFICADA Y SINCRONIZADA en GitHub.
-- Se detiene la ejecución para presentar el reporte y esperar autorización explícita antes de:
-  1. Desplegar migraciones en el servidor VPS de producción cuando corresponda.
-  2. Iniciar la Fase 3 según la secuencia del Prompt Maestro.
+La Fase 2 queda completamente remediada, probada, documentada y certificada.
+NO SE HA INICIADO LA FASE 3. El agente se detiene aquí y queda a la espera de la
+autorización formal y explícita del usuario para continuar con la siguiente fase.
 ================================================================================

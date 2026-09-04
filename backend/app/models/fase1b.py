@@ -7,7 +7,8 @@ que se conservan como snapshot para compatibilidad con el frontend actual.
 """
 from sqlalchemy import (
     Column, Integer, String, Numeric, ForeignKey,
-    DateTime, Text, Boolean, Date, UniqueConstraint, Index
+    DateTime, Text, Boolean, Date, UniqueConstraint, Index,
+    CheckConstraint, func, text
 )
 from sqlalchemy.orm import relationship
 from app.db.database import Base
@@ -139,9 +140,15 @@ class ProcurementAllocation(Base):
     receipt_line_allocations = relationship("GoodsReceiptLineAllocation", back_populates="allocation")
 
     __table_args__ = (
-        UniqueConstraint(
-            "po_line_id", "sale_order_line_id",
-            name="uq_proc_alloc_po_sol"
+        Index(
+            "uq_procurement_alloc_identity",
+            "po_line_id", "allocation_type", func.coalesce("sale_order_line_id", -1),
+            unique=True
+        ),
+        CheckConstraint("quantity_allocated > 0", name="chk_proc_alloc_qty"),
+        CheckConstraint(
+            "allocation_type IN ('CUSTOMER_ORDER', 'NEBULAE_STOCK', 'MAU_STOCK')",
+            name="chk_proc_alloc_type"
         ),
     )
 
