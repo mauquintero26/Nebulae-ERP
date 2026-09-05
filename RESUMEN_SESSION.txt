@@ -27,7 +27,12 @@ En esta sesión se abordaron y corrigieron de manera definitiva y estricta los t
   - En `backend/app/api/v1/erp_compras.py` (`confirmar_recepcion`), se valida que el envío asociado pueda transicionar hacia `RECIBIDO_BARRANQUILLA` con `FOR UPDATE` (lanzando 422 si no es admisible) y se delega la transición a la función compartida canónica.
 - **Endpoints de Eventos de Logística:**
   - En `erp_logistica.py`, el endpoint canónico `/shipments/{id}/eventos` cuenta además con el alias `/shipments/{id}/events` para compatibilidad total con clientes y suites de prueba.
-  - En `test_fase3_hardening.py` y `test_fase3_recepciones_parciales.py`, los envíos se avanzan llamando a los endpoints certificados de eventos de Fase 2 (`PREPARANDO_PROVEEDOR -> EN_VUELO -> EN_DIAN -> LIBERADO_DIAN`).
+  - En `test_fase3_hardening.py` y `test_fase3_recepciones_parciales.py`, los envíos se avanzan llamando a los endpoints certificados de eventos de Fase 2.
+- **Pruebas de Máquina de Estados Certificadas:**
+  - `test_caso6`: Estado no admisible para `VIA_MIAMI` devuelve 422 y ejecuta rollback total.
+  - `test_caso7`: `DIRECT_TO_BARRANQUILLA` avanza con eventos reales (`EN_VUELO` -> `EN_DIAN` -> `LIBERADO_DIAN`) y confirma recepción física a `RECIBIDO_BARRANQUILLA` sin duplicar eventos en replay.
+  - `test_caso7b`: `VIA_MIAMI` completa su flujo real de Fase 2 (`ENVIADO_A_MIAMI` -> `RECIBIDO_MIAMI` -> `CONSOLIDADO` -> `EN_VUELO` -> `EN_DIAN` -> `LIBERADO_DIAN`) y confirma recepción física a `RECIBIDO_BARRANQUILLA`.
+  - `test_caso7c`: Envío en estado inventado o desconocido es rechazado estrictamente con `HTTP 422`.
 
 ### Bloqueo 2: Retry después de FAILED e Idempotencia Robusta
 - **Persistencia Atómica Completa en `_mark_failed_external`:**
@@ -63,9 +68,9 @@ En esta sesión se abordaron y corrigieron de manera definitiva y estricta los t
 
 ---
 
-## 2. MATRIZ DE PRUEBAS DEL REPOSITORIO (225 PRUEBAS / 32 ARCHIVOS)
+## 2. MATRIZ DE PRUEBAS DEL REPOSITORIO (227 PRUEBAS / 32 ARCHIVOS)
 
-**Resultado Global:** **225 PASSED / 0 FAILED / 0 SKIPPED (100% de éxito verificado en dos pasadas completas)**  
+**Resultado Global:** **227 PASSED / 0 FAILED / 0 SKIPPED (100% de éxito)**  
 
 ### Desglose Exhaustivo por Archivo de Prueba:
 
@@ -92,7 +97,7 @@ En esta sesión se abordaron y corrigieron de manera definitiva y estricta los t
 | 19 | `tests/test_fase2_migrations.py` | 6 | **PASSED** | Integridad y roundtrip de migraciones `fa2_001`, `fa2_002` y `fa2_003`. |
 | 20 | `tests/test_fase2_shipments_tracking.py` | 24 | **PASSED** | Máquina de estados de paquetería, locks consultivos y tracking. |
 | 21 | `tests/test_fase3_cuarentena_diferencias.py` | 7 | **PASSED** | Aislamiento de averías, consulta y resolución (`LIBERAR`, `DEVOLVER`, `DESTRUIR`). |
-| 22 | `tests/test_fase3_hardening.py` | 19 | **PASSED** | **Suite Maestra de Hardening:** Casos 1 al 19 (incluye retry FAILED, replay y reversibilidad). |
+| 22 | `tests/test_fase3_hardening.py` | 21 | **PASSED** | **Suite Maestra de Hardening:** Casos 1 al 19 (incluye 7B VIA_MIAMI real y 7C estado desconocido). |
 | 23 | `tests/test_fase3_kardex_idempotente.py` | 3 | **PASSED** | Kárdex paginado, deduplicación por `idempotency_key` y trazabilidad. |
 | 24 | `tests/test_fase3_migrations.py` | 5 | **PASSED** | Tablas `fa3_001`/`fa3_002`, precisión numérica, checks, 0 grants y roundtrip completo. |
 | 25 | `tests/test_fase3_propiedad_nebulae_mau.py` | 4 | **PASSED** | Segregación patrimonial NEBULAE/MAU, blindaje de reservas y stock-summary. |
@@ -103,7 +108,7 @@ En esta sesión se abordaron y corrigieron de manera definitiva y estricta los t
 | 30 | `tests/test_receipt_idempotency.py` | 6 | **PASSED** | Idempotencia estricta en recepciones con replay de respuestas guardadas. |
 | 31 | `tests/test_receipt_partial.py` | 5 | **PASSED** | Recepciones lógicas vs físicas y control de cantidades parciales. |
 | 32 | `tests/test_z_migrations_fase1b.py` | 5 | **PASSED** | Migraciones de Fase 1B, integridad de datos y retrocompatibilidad. |
-| **TOTAL** | **32 suites** | **225** | **225 PASSED / 0 FAILED / 0 SKIPPED (100% de éxito)** |
+| **TOTAL** | **32 suites** | **227** | **227 PASSED / 0 FAILED / 0 SKIPPED (100% de éxito)** |
 
 ---
 
@@ -152,6 +157,7 @@ En esta sesión se abordaron y corrigieron de manera definitiva y estricta los t
   - En la fixture `app_client`, monkey-patching dinámico de `SessionLocal` en `_inventario_module` para garantizar aislamiento estricto hacia `erp_test`.
 - `backend/tests/test_fase3_hardening.py`:
   - Actualizados casos 6 y 7 utilizando la máquina de estados real de Fase 2 (sin estados inventados).
+  - Agregado caso 7B (flujo real VIA_MIAMI con eventos de Fase 2) y caso 7C (rechazo 422 ante estado inventado o desconocido).
   - Agregados casos 16, 17, 18 y 19 probando exhaustivamente retry tras FAILED, replay 200 y rechazo 409 por payload divergente.
 - `backend/tests/test_fase3_recepciones_parciales.py`:
   - Actualizada la prueba de shipment para avanzar el envío con eventos canónicos de Fase 2.
@@ -169,6 +175,6 @@ En esta sesión se abordaron y corrigieron de manera definitiva y estricta los t
 ## 5. POLÍTICA ESTRICTA DE NO INICIACIÓN DE FASE 4
 
 En estricto cumplimiento de las directrices:
-1. La Fase 3 se encuentra formalmente corregida, blindada, documentada y certificada con 225 pruebas pasando consecutivamente al 100%.
+1. La Fase 3 se encuentra formalmente corregida, blindada, documentada y certificada con 227 pruebas pasando al 100%.
 2. **NO se ha iniciado ningún desarrollo, script ni planificación operativa de la Fase 4.**
 3. La ejecución se detiene aquí a la espera de la revisión y autorización formal del usuario.
