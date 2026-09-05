@@ -17,7 +17,7 @@ class InventoryLevel(Base):
     id = Column(Integer, primary_key=True, index=True)
     sku_id = Column(Integer, ForeignKey("product_skus.id"), nullable=False)
     warehouse_id = Column(Integer, ForeignKey("warehouses.id"), nullable=False)
-    quantity = Column(Integer, default=0)
+    quantity = Column(Numeric(10, 2), default=0)
 
     sku = relationship("ProductSKU", back_populates="inventory_levels")
     warehouse = relationship("Warehouse", back_populates="inventory_levels")
@@ -79,7 +79,7 @@ class InventoryMovement(Base):
     id           = Column(Integer, primary_key=True, index=True)
     operation_id = Column(Integer, ForeignKey("inventory_operations.id"), nullable=False)
     sku_id       = Column(Integer, ForeignKey("product_skus.id"), nullable=False)
-    quantity     = Column(Integer, nullable=False)
+    quantity     = Column(Numeric(10, 2), nullable=False)
 
     # ── Fase 1A: trazabilidad y deduplicación de movimientos ────────────────
     # Añadidos por migración fa1a_002.

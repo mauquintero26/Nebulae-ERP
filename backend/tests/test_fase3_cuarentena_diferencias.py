@@ -219,7 +219,7 @@ class TestFase3CuarentenaDiferencias:
         assert len(items) >= 1
         matched = [it for it in items if it["sku_id"] == sc["sku"].id]
         assert len(matched) == 1
-        assert matched[0]["quantity"] == 5.0
+        assert Decimal(str(matched[0]["quantity"])) == Decimal("5.00")
         assert matched[0]["status"] == "ACTIVO"
 
     def test_resolucion_cuarentena_liberar_ingresa_a_stock(self, app_client, admin_token, db):
@@ -244,7 +244,7 @@ class TestFase3CuarentenaDiferencias:
         # Resolver con LIBERAR
         resolve_resp = app_client.post(
             f"/api/v1/inventory/cuarentena/{q_item.id}/resolver",
-            json={"action": "LIBERAR", "notes": "Reinspección técnica superada, producto en óptimas condiciones"},
+            json={"idempotency_key": f"q-res-{uuid.uuid4().hex}", "action": "LIBERAR", "notes": "Reinspección técnica superada, producto en óptimas condiciones"},
             headers=_auth(admin_token)
         )
         assert resolve_resp.status_code == 200
@@ -290,7 +290,7 @@ class TestFase3CuarentenaDiferencias:
 
         resolve_resp = app_client.post(
             f"/api/v1/inventory/cuarentena/{q_item.id}/resolver",
-            json={"action": "DEVUELTO_PROVEEDOR", "notes": "RMA #9872 despachado a proveedor"},
+            json={"idempotency_key": f"q-dev-{uuid.uuid4().hex}", "action": "DEVUELTO_PROVEEDOR", "notes": "RMA #9872 despachado a proveedor"},
             headers=_auth(admin_token)
         )
         assert resolve_resp.status_code == 200
@@ -324,7 +324,7 @@ class TestFase3CuarentenaDiferencias:
 
         resolve_resp = app_client.post(
             f"/api/v1/inventory/cuarentena/{q_item.id}/resolver",
-            json={"action": "DESTRUIDO", "notes": "Acta de baja y destrucción por merma total"},
+            json={"idempotency_key": f"q-des-{uuid.uuid4().hex}", "action": "DESTRUIDO", "notes": "Acta de baja y destrucción por merma total"},
             headers=_auth(admin_token)
         )
         assert resolve_resp.status_code == 200
@@ -358,14 +358,14 @@ class TestFase3CuarentenaDiferencias:
         # Primera resolución
         app_client.post(
             f"/api/v1/inventory/cuarentena/{q_item.id}/resolver",
-            json={"action": "LIBERAR"},
+            json={"idempotency_key": f"q-res1-{uuid.uuid4().hex}", "action": "LIBERAR"},
             headers=_auth(admin_token)
         )
 
-        # Segunda resolución redundante
+        # Segunda resolución redundante con clave distinta (409)
         resp2 = app_client.post(
             f"/api/v1/inventory/cuarentena/{q_item.id}/resolver",
-            json={"action": "LIBERAR"},
+            json={"idempotency_key": f"q-res2-{uuid.uuid4().hex}", "action": "LIBERAR"},
             headers=_auth(admin_token)
         )
         assert resp2.status_code == 409
@@ -391,7 +391,7 @@ class TestFase3CuarentenaDiferencias:
 
         resp = app_client.post(
             f"/api/v1/inventory/cuarentena/{q_item.id}/resolver",
-            json={"action": "REGALAR_A_CLIENTE"},
+            json={"idempotency_key": f"q-inv-{uuid.uuid4().hex}", "action": "REGALAR_A_CLIENTE"},
             headers=_auth(admin_token)
         )
         assert resp.status_code == 422

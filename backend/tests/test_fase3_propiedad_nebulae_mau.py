@@ -208,6 +208,7 @@ class TestFase3PropiedadNebulaeMau:
         resp_neb = app_client.post(
             "/api/v1/inventory/reservas",
             json={
+                "idempotency_key": f"rsv-neb-{uuid.uuid4().hex}",
                 "sku_id": data["sku"].id,
                 "warehouse_id": data["warehouse"].id,
                 "quantity": 8,  # Falla porque Nebulae solo tiene 6
@@ -235,6 +236,7 @@ class TestFase3PropiedadNebulaeMau:
         resp_mau = app_client.post(
             "/api/v1/inventory/reservas",
             json={
+                "idempotency_key": f"rsv-mau-{uuid.uuid4().hex}",
                 "sku_id": data["sku"].id,
                 "warehouse_id": data["warehouse"].id,
                 "quantity": 4,
@@ -249,6 +251,7 @@ class TestFase3PropiedadNebulaeMau:
         resp_mau_over = app_client.post(
             "/api/v1/inventory/reservas",
             json={
+                "idempotency_key": f"rsv-mau-over-{uuid.uuid4().hex}",
                 "sku_id": data["sku"].id,
                 "warehouse_id": data["warehouse"].id,
                 "quantity": 1,
@@ -281,6 +284,6 @@ class TestFase3PropiedadNebulaeMau:
         matched = [it for it in items if it["sku_id"] == data["sku"].id]
         assert len(matched) == 1
         it = matched[0]
-        assert it["stock_fisico"] == 10.0
-        assert it["balance_nebulae"] == 6.0
-        assert it["balance_mau"] == 4.0
+        assert float(it["stock_fisico"]) == 10.0
+        assert float(it["balance_nebulae"]) == 6.0
+        assert float(it["balance_mau"]) == 4.0

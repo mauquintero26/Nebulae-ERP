@@ -20,12 +20,12 @@ class KardexMovementItem(BaseModel):
     sku_id: int
     sku: Optional[str] = None
     product_name: Optional[str] = None
-    quantity: int
+    quantity: Decimal
     direction: Optional[str] = None
     owner: str = "NEBULAE"
     warehouse_id: Optional[int] = None
     warehouse_name: Optional[str] = None
-    unit_cost_cop: Optional[float] = None
+    unit_cost_cop: Optional[Decimal] = None
     created_at: Optional[datetime.datetime] = None
     created_by: Optional[str] = None
     idempotency_key: Optional[str] = None
@@ -34,12 +34,18 @@ class KardexMovementItem(BaseModel):
 # ─── RESERVAS ────────────────────────────────────────────────────────────────
 
 class CreateReservationRequest(BaseModel):
+    idempotency_key: str = Field(..., min_length=8, description="Clave de idempotencia obligatoria")
     sku_id: int
     warehouse_id: int
     quantity: Decimal = Field(gt=0, description="Cantidad positiva a reservar")
     owner: str = Field(default="NEBULAE", description="Propietario del inventario: NEBULAE o MAU")
     sale_order_line_id: Optional[int] = None
     expires_hours: Optional[int] = Field(default=48, ge=1, le=720)
+    notes: Optional[str] = None
+
+
+class OperateReservationRequest(BaseModel):
+    idempotency_key: str = Field(..., min_length=8, description="Clave de idempotencia obligatoria")
     notes: Optional[str] = None
 
 
@@ -50,7 +56,7 @@ class ReservationResponse(BaseModel):
     sku_id: int
     warehouse_id: int
     owner: str
-    quantity_reserved: float
+    quantity_reserved: Decimal
     sale_order_line_id: Optional[int] = None
     status: str
     expires_at: Optional[datetime.datetime] = None
@@ -68,13 +74,15 @@ class SkuAvailabilityResponse(BaseModel):
     product_name: Optional[str] = None
     warehouse_id: int
     warehouse_name: Optional[str] = None
-    stock_fisico: float
-    stock_reservado: float
-    stock_cuarentena: float
-    stock_disponible: float
-    stock_en_transito: float
-    balance_nebulae: float
-    balance_mau: float
+    stock_vendible_fisico: Decimal
+    stock_reservado: Decimal
+    stock_disponible: Decimal
+    stock_cuarentena: Decimal
+    stock_total_bajo_custodia: Decimal
+    stock_fisico: Decimal
+    stock_en_transito: Decimal
+    balance_nebulae: Decimal
+    balance_mau: Decimal
 
 
 # ─── CUARENTENA ──────────────────────────────────────────────────────────────
@@ -89,8 +97,9 @@ class QuarantineItemResponse(BaseModel):
     warehouse_id: int
     warehouse_name: Optional[str] = None
     gr_line_id: Optional[int] = None
-    quantity: float
+    quantity: Decimal
     reason: str
+    owner: str = "NEBULAE"
     status: str
     notes: Optional[str] = None
     created_at: Optional[datetime.datetime] = None
@@ -99,5 +108,6 @@ class QuarantineItemResponse(BaseModel):
 
 
 class ResolveQuarantineRequest(BaseModel):
+    idempotency_key: str = Field(..., min_length=8, description="Clave de idempotencia obligatoria")
     action: str = Field(..., description="LIBERAR | DEVUELTO_PROVEEDOR | DESTRUIDO")
     notes: Optional[str] = None

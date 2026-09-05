@@ -1,16 +1,15 @@
 """
-test_fase3_migrations.py — Integridad de Migración fa3_001 y Seguridad (Fase 3).
+test_fase3_migrations.py — Integridad de Migraciones fa3_001, fa3_002 y Seguridad (Fase 3 Hardening).
 
 Escenarios cubiertos:
-1. Verificación de existencia de tabla inventory_quarantine y sus columnas y tipos en erp_test.
-2. Verificación de columnas añadidas a goods_receipts, goods_receipt_lines e inventory_movements.
+1. Verificación de existencia de tabla inventory_quarantine y sus columnas en erp_test.
+2. Verificación de columnas añadidas en fa3_001 y fa3_002 (owner, NUMERIC(10,2), constraints).
 3. Auditoría estática de seguridad:
-   - fa3_001_recepciones_inventario.py NO debe contener GRANTs dirigidos a nebulae_test
-     ni modificar permisos de producción.
+   - fa3_001 y fa3_002 NO deben contener GRANTs dirigidos a nebulae_test ni modificar permisos de producción.
 4. Ciclo de vida de migración (Roundtrip downgrade -> upgrade):
-   - Downgrade seguro a fa2_003.
-   - Upgrade seguro a head (fa3_001).
-   - Verificación de que erpdb (producción) permanece inalterado en fa1a_002.
+   - Downgrade seguro a fa2_003 / fa3_001.
+   - Upgrade seguro a head (fa3_002).
+5. Verificación de que erpdb (producción) permanece inalterado en fa1a_002.
 """
 import os
 import sys
@@ -26,7 +25,6 @@ class TestFase3Migrations:
 
     def test_fa3_001_tablas_y_columnas_creadas(self, db):
         """Verifica la existencia física de la tabla inventory_quarantine y nuevas columnas."""
-        # 1. Tabla inventory_quarantine
         cols_quar = db.execute(text("""
             SELECT column_name, data_type, is_nullable
             FROM information_schema.columns
@@ -35,7 +33,7 @@ class TestFase3Migrations:
         """)).fetchall()
         assert len(cols_quar) > 0, "Tabla inventory_quarantine no existe en erp_test"
         col_names = [c[0] for c in cols_quar]
-        for expected in ["id", "sku_id", "warehouse_id", "gr_line_id", "quantity", "reason", "status", "notes", "created_at"]:
+        for expected in ["id", "sku_id", "warehouse_id", "gr_line_id", "quantity", "reason", "status", "notes", "created_at", "owner"]:
             assert expected in col_names, f"Columna {expected} no encontrada en inventory_quarantine"
 
         # 2. Nuevas columnas en goods_receipts
@@ -69,29 +67,45 @@ class TestFase3Migrations:
         assert "created_at" in im_col_names
         assert "created_by" in im_col_names
 
-    def test_fa3_001_check_constraints_and_indexes(self, db):
-        """Verifica que las restricciones CHECK para cantidad y estado existan en inventory_quarantine."""
+    def test_fa3_002_owner_constraints_and_numeric_precision(self, db):
+        """Verifica la columna owner, check constraints y precisión decimal de fa3_002."""
+        # 1. Check constraints en inventory_quarantine
         constraints = db.execute(text("""
             SELECT conname, pg_get_constraintdef(oid)
             FROM pg_constraint
             WHERE conrelid = 'inventory_quarantine'::regclass
         """)).fetchall()
         c_defs = [str(c[1]) for c in constraints]
-        has_qty_check = any("quantity >" in d and "0" in d for d in c_defs)
-        has_status_check = any("status" in d for d in c_defs)
-        assert has_qty_check, f"Falta check constraint de quantity > 0: {c_defs}"
-        assert has_status_check, f"Falta check constraint de status: {c_defs}"
+        has_owner_check = any("owner" in d and "NEBULAE" in d and "MAU" in d for d in c_defs)
+        assert has_owner_check, f"Falta check constraint chk_quarantine_owner: {c_defs}"
 
-    def test_fa3_001_static_audit_no_test_role_grants(self):
-        """Auditoría estática: fa3_001 no debe contener GRANTs hacia nebulae_test."""
-        mig_file = _BACKEND / "alembic" / "versions" / "fa3_001_recepciones_inventario.py"
-        assert mig_file.exists(), f"Archivo de migración no encontrado en {mig_file}"
-        code = mig_file.read_text(encoding="utf-8")
-        assert "nebulae_test" not in code, "VIOLACIÓN DE SEGURIDAD: fa3_001 contiene 'nebulae_test'"
-        assert "grant all" not in code.lower(), "VIOLACIÓN DE SEGURIDAD: fa3_001 contiene 'GRANT ALL'"
+        # 2. Precisión NUMERIC(10, 2) en inventory_levels
+        lvl_type = db.execute(text("""
+            SELECT data_type, numeric_precision, numeric_scale
+            FROM information_schema.columns
+            WHERE table_name = 'inventory_levels' AND column_name = 'quantity'
+        """)).fetchone()
+        assert lvl_type[0] == "numeric" and lvl_type[1] == 10 and lvl_type[2] == 2
 
-    def test_fa3_001_roundtrip_downgrade_upgrade(self):
-        """Verifica que fa3_001 pueda hacer downgrade a fa2_003 y volver a head limpiamente en erp_test."""
+        # 3. Precisión NUMERIC(10, 2) en inventory_movements
+        mv_type = db.execute(text("""
+            SELECT data_type, numeric_precision, numeric_scale
+            FROM information_schema.columns
+            WHERE table_name = 'inventory_movements' AND column_name = 'quantity'
+        """)).fetchone()
+        assert mv_type[0] == "numeric" and mv_type[1] == 10 and mv_type[2] == 2
+
+    def test_fa3_static_audit_no_test_role_grants(self):
+        """Auditoría estática: fa3_001 y fa3_002 no deben contener GRANTs hacia nebulae_test."""
+        for mig_name in ["fa3_001_recepciones_inventario.py", "fa3_002_cuarentena_owner_hardening.py"]:
+            mig_file = _BACKEND / "alembic" / "versions" / mig_name
+            assert mig_file.exists(), f"Archivo de migración no encontrado en {mig_file}"
+            code = mig_file.read_text(encoding="utf-8")
+            assert "nebulae_test" not in code, f"VIOLACIÓN DE SEGURIDAD: {mig_name} contiene 'nebulae_test'"
+            assert "grant all" not in code.lower(), f"VIOLACIÓN DE SEGURIDAD: {mig_name} contiene 'GRANT ALL'"
+
+    def test_fa3_roundtrip_downgrade_upgrade(self):
+        """Verifica que fa3 pueda hacer downgrade a fa2_003 y volver a head (fa3_002) limpiamente en erp_test."""
         env = os.environ.copy()
         env["DATABASE_URL"] = TEST_URL
 
@@ -105,13 +119,13 @@ class TestFase3Migrations:
         )
         assert down_res.returncode == 0, f"Error en downgrade fa2_003: {down_res.stderr}"
 
-        # Verificar version
+        # Verificar version fa2_003
         eng = create_engine(TEST_URL)
         with eng.connect() as conn:
             v_down = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
             assert v_down == "fa2_003"
 
-        # 2. Upgrade a head (fa3_001)
+        # 2. Upgrade a head (fa3_002)
         up_res = subprocess.run(
             [sys.executable, "-m", "alembic", "upgrade", "head"],
             cwd=str(_BACKEND),
@@ -123,7 +137,7 @@ class TestFase3Migrations:
 
         with eng.connect() as conn:
             v_up = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-            assert v_up == "fa3_001"
+            assert v_up == "fa3_002"
 
     def test_erpdb_produccion_permanece_inalterada(self):
         """Verifica que la base de datos de producción erpdb no ha sido modificada y sigue en fa1a_002."""

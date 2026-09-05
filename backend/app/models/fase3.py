@@ -34,6 +34,8 @@ class InventoryQuarantine(Base):
     # DEFECTUOSO | EQUIVOCADO | DAÑADO_TRANSPORTE | CUARENTENA_CALIDAD
     status       = Column(String(30), nullable=False, default="ACTIVO")
     # ACTIVO | LIBERADO | DEVUELTO_PROVEEDOR | DESTRUIDO
+    owner        = Column(String(20), nullable=False, default="NEBULAE")
+    # NEBULAE | MAU
     notes        = Column(Text, nullable=True)
     created_at   = Column(DateTime(timezone=True), default=_now, nullable=False)
     resolved_at  = Column(DateTime(timezone=True), nullable=True)
@@ -46,4 +48,6 @@ class InventoryQuarantine(Base):
     __table_args__ = (
         CheckConstraint("quantity > 0", name="chk_quarantine_qty"),
         CheckConstraint("status IN ('ACTIVO', 'LIBERADO', 'DEVUELTO_PROVEEDOR', 'DESTRUIDO')", name="chk_quarantine_status"),
+        CheckConstraint("owner IN ('NEBULAE', 'MAU')", name="chk_quarantine_owner"),
+        Index("ix_quarantine_lookup", "sku_id", "warehouse_id", "owner", "status"),
     )

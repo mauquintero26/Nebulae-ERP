@@ -1566,6 +1566,43 @@ def confirmar_recepcion(
             _mark_failed_external(client_key, execution_token, "Bodega no encontrada", now)
             raise HTTPException(400, f"Bodega {warehouse_id} no encontrada en la base de datos.")
 
+        # ─── VALIDACION RIGUROSA DE MAQUINA DE ESTADOS DE SHIPMENT (Punto 5) ──
+        shp = None
+        if g.shipment_id and receipt_type == "FISICA":
+            shp = db.execute(
+                select(Shipment).where(Shipment.id == g.shipment_id).with_for_update()
+            ).scalar_one_or_none()
+            if shp:
+                if shp.status_fise == "RECIBIDO_BARRANQUILLA":
+                    pass
+                elif shp.route_type == "DIRECT_TO_BARRANQUILLA":
+                    if shp.status_fise != "EN_TRANSITO_BARRANQUILLA":
+                        _mark_failed_external(
+                            client_key, execution_token,
+                            f"Shipment {shp.shipment_number} en estado '{shp.status_fise}' no elegible para recepcion con DIRECT_TO_BARRANQUILLA",
+                            now
+                        )
+                        raise HTTPException(
+                            422,
+                            f"Transición de envío inválida: Un envío con ruta DIRECT_TO_BARRANQUILLA en estado "
+                            f"'{shp.status_fise}' no puede ser recibido físicamente. Debe estar en 'EN_TRANSITO_BARRANQUILLA'."
+                        )
+                elif shp.route_type == "VIA_MIAMI":
+                    if shp.status_fise != "DESPACHADO_A_BARRANQUILLA":
+                        _mark_failed_external(
+                            client_key, execution_token,
+                            f"Shipment {shp.shipment_number} en estado '{shp.status_fise}' no elegible para recepcion con VIA_MIAMI",
+                            now
+                        )
+                        raise HTTPException(
+                            422,
+                            f"Transición de envío inválida: Un envío con ruta VIA_MIAMI en estado "
+                            f"'{shp.status_fise}' no puede ser recibido físicamente. Debe estar en 'DESPACHADO_A_BARRANQUILLA'."
+                        )
+                else:
+                    _mark_failed_external(client_key, execution_token, f"Ruta desconocida: {shp.route_type}", now)
+                    raise HTTPException(422, f"Ruta de envío no reconocida: '{shp.route_type}'.")
+
         # ─── FUENTE DE VERDAD: GOODS_RECEIPT_LINES (Fase 1B) ─────────────────
 
         # SELECT FOR UPDATE en GoodsReceiptLine para serializacion concurrente.
@@ -1759,154 +1796,226 @@ def confirmar_recepcion(
         # ─── ACTUALIZAR INVENTARIO (solo FISICA) ──────────────────────────────
 
         inv_op = None
-        if receipt_type == "FISICA" and sku_increments:
-            inv_op = InventoryOperation(
-                dest_warehouse_id     = warehouse_id,
-                operation_type        = "RECEIPT",
-                status                = "DONE",
-                source_document_type  = "ENINV",
-                source_document_id    = g.id,
-                source_document_numero= g.numero,
-            )
-            db.add(inv_op)
-            db.flush()  # Obtener ID sin commit
-
-            # 1. Unidades vendibles hacia InventoryLevel
-            for sku_id, qty in sku_increments.items():
-                level = db.execute(
-                    select(InventoryLevel)
-                    .where(
-                        InventoryLevel.sku_id      == sku_id,
-                        InventoryLevel.warehouse_id == warehouse_id,
-                    )
-                    .with_for_update()
-                ).scalar_one_or_none()
-                if level:
-                    level.quantity += qty
-                else:
-                    level = InventoryLevel(
-                        sku_id=sku_id, warehouse_id=warehouse_id, quantity=qty
-                    )
-                    db.add(level)
-                mv_key = hashlib.sha256(
-                    f"{inv_op.id}:{sku_id}:IN:NEBULAE:{warehouse_id}".encode()
-                ).hexdigest()
-                db.add(InventoryMovement(
-                    operation_id    = inv_op.id,
-                    sku_id          = sku_id,
-                    quantity        = qty,
-                    direction       = "IN",
-                    owner           = "NEBULAE",
-                    warehouse_id    = warehouse_id,
-                    idempotency_key = mv_key,
-                    created_at      = now,
-                    created_by      = user_label,
-                ))
+        owner_increments = {}   # (sku_id, owner) -> Decimal
+        quarantine_items = []   # lista de dicts
 
         if receipt_type == "FISICA":
-            # 2. Unidades defectuosas / discrepantes hacia Cuarentena
+            # Paso A: Resolver asignaciones por propietario para unidades recibidas y en cuarentena
             for grl in gr_lines:
-                _q_quar = int(grl.quantity_quarantine or 0)
-                if _q_quar > 0 and grl.sku_id:
+                _q_recv = Decimal(str(grl.quantity_received or 0))
+                _q_quar = Decimal(str(grl.quantity_quarantine or 0))
+
+                if not grl.sku_id:
+                    continue
+
+                if grl.po_line_id:
+                    allocs = db.execute(
+                        select(ProcurementAllocation)
+                        .where(ProcurementAllocation.po_line_id == grl.po_line_id)
+                        .order_by(ProcurementAllocation.id)
+                        .with_for_update()
+                    ).scalars().all()
+
+                    alloc_remaining = {}
+                    for alloc in allocs:
+                        applied_prev = db.execute(
+                            select(func.coalesce(func.sum(GoodsReceiptLineAllocation.quantity_applied), 0))
+                            .where(GoodsReceiptLineAllocation.allocation_id == alloc.id)
+                        ).scalar() or 0
+                        alloc_remaining[alloc.id] = max(Decimal("0.00"), Decimal(str(alloc.quantity_allocated)) - Decimal(str(applied_prev)))
+
+                    # 1. Asignar unidades recibidas (vendibles)
+                    rem_recv = _q_recv
+                    for alloc in allocs:
+                        if rem_recv <= 0:
+                            break
+                        avail = alloc_remaining[alloc.id]
+                        if avail > 0:
+                            take = min(rem_recv, avail)
+                            db.add(GoodsReceiptLineAllocation(
+                                gr_line_id=grl.id,
+                                allocation_id=alloc.id,
+                                quantity_applied=take,
+                                created_at=now
+                            ))
+                            rem_recv -= take
+                            alloc_remaining[alloc.id] -= take
+                            alloc_owner = "MAU" if alloc.allocation_type == "MAU_STOCK" else "NEBULAE"
+                            owner_increments[(grl.sku_id, alloc_owner)] = owner_increments.get((grl.sku_id, alloc_owner), Decimal("0.00")) + take
+                            if alloc.allocation_type == "CUSTOMER_ORDER" and alloc.sale_order_line_id:
+                                db.add(ActivityLog(
+                                    entity_type="PVEN",
+                                    entity_id=alloc.sale_order_line_id,
+                                    entity_numero="",
+                                    action="MERCANCIA_EN_BARRANQUILLA",
+                                    description=f"{take} unidad(es) de SKU {grl.sku_id} recibidas en Barranquilla según {g.numero}. Pendiente de saldo y entrega.",
+                                    user_name=user_label,
+                                ))
+                    if rem_recv > 0:
+                        owner_increments[(grl.sku_id, "NEBULAE")] = owner_increments.get((grl.sku_id, "NEBULAE"), Decimal("0.00")) + rem_recv
+
+                    # 2. Asignar unidades en cuarentena (segregación patrimonial de cuarentena)
+                    rem_quar = _q_quar
+                    for alloc in allocs:
+                        if rem_quar <= 0:
+                            break
+                        avail = alloc_remaining[alloc.id]
+                        if avail > 0:
+                            take_q = min(rem_quar, avail)
+                            rem_quar -= take_q
+                            alloc_remaining[alloc.id] -= take_q
+                            alloc_owner = "MAU" if alloc.allocation_type == "MAU_STOCK" else "NEBULAE"
+                            quarantine_items.append({
+                                "sku_id": grl.sku_id,
+                                "warehouse_id": warehouse_id,
+                                "gr_line_id": grl.id,
+                                "quantity": take_q,
+                                "reason": grl.damaged_reason or "DEFECTUOSO_RECEPCION",
+                                "owner": alloc_owner,
+                                "notes": grl.notes,
+                            })
+                    if rem_quar > 0:
+                        quarantine_items.append({
+                            "sku_id": grl.sku_id,
+                            "warehouse_id": warehouse_id,
+                            "gr_line_id": grl.id,
+                            "quantity": rem_quar,
+                            "reason": grl.damaged_reason or "DEFECTUOSO_RECEPCION",
+                            "owner": "NEBULAE",
+                            "notes": grl.notes,
+                        })
+                else:
+                    if _q_recv > 0:
+                        owner_increments[(grl.sku_id, "NEBULAE")] = owner_increments.get((grl.sku_id, "NEBULAE"), Decimal("0.00")) + _q_recv
+                    if _q_quar > 0:
+                        quarantine_items.append({
+                            "sku_id": grl.sku_id,
+                            "warehouse_id": warehouse_id,
+                            "gr_line_id": grl.id,
+                            "quantity": _q_quar,
+                            "reason": grl.damaged_reason or "DEFECTUOSO_RECEPCION",
+                            "owner": "NEBULAE",
+                            "notes": grl.notes,
+                        })
+
+            total_recv = sum(owner_increments.values()) if owner_increments else Decimal("0.00")
+            total_quar = sum(q["quantity"] for q in quarantine_items) if quarantine_items else Decimal("0.00")
+
+            # Crear InventoryOperation si hay entrada física vendible O entrada en cuarentena
+            if total_recv > 0 or total_quar > 0:
+                inv_op = InventoryOperation(
+                    dest_warehouse_id=warehouse_id,
+                    operation_type="RECEIPT",
+                    status="DONE",
+                    source_document_type="ENINV",
+                    source_document_id=g.id,
+                    source_document_numero=g.numero,
+                )
+                db.add(inv_op)
+                db.flush()
+
+            # 1. Unidades vendibles hacia InventoryLevel y Kárdex IN por propietario
+            if total_recv > 0:
+                # Sumar por SKU a InventoryLevel
+                sku_totals = {}
+                for (sku_id, owner), qty in owner_increments.items():
+                    sku_totals[sku_id] = sku_totals.get(sku_id, Decimal("0.00")) + qty
+
+                for sku_id, total_sku_qty in sku_totals.items():
+                    level = db.execute(
+                        select(InventoryLevel)
+                        .where(
+                            InventoryLevel.sku_id == sku_id,
+                            InventoryLevel.warehouse_id == warehouse_id,
+                        )
+                        .with_for_update()
+                    ).scalar_one_or_none()
+                    if level:
+                        level.quantity = Decimal(str(level.quantity)) + total_sku_qty
+                    else:
+                        db.add(InventoryLevel(
+                            sku_id=sku_id,
+                            warehouse_id=warehouse_id,
+                            quantity=total_sku_qty
+                        ))
+
+                # Asignar Balances por Propietario y Kárdex IN por Propietario
+                for (sku_id, owner), o_qty in owner_increments.items():
+                    if o_qty <= Decimal("0.00"):
+                        continue
+                    iob = db.execute(
+                        select(InventoryOwnerBalance)
+                        .where(
+                            InventoryOwnerBalance.sku_id == sku_id,
+                            InventoryOwnerBalance.warehouse_id == warehouse_id,
+                            InventoryOwnerBalance.owner == owner,
+                        )
+                        .with_for_update()
+                    ).scalar_one_or_none()
+                    if iob:
+                        iob.quantity = Decimal(str(iob.quantity)) + o_qty
+                        iob.updated_at = now
+                    else:
+                        db.add(InventoryOwnerBalance(
+                            sku_id=sku_id,
+                            warehouse_id=warehouse_id,
+                            owner=owner,
+                            quantity=o_qty,
+                            updated_at=now,
+                        ))
+
+                    mv_key = hashlib.sha256(
+                        f"{inv_op.id}:{sku_id}:IN:{owner}:{warehouse_id}".encode()
+                    ).hexdigest()
+                    db.add(InventoryMovement(
+                        operation_id=inv_op.id,
+                        sku_id=sku_id,
+                        quantity=o_qty,
+                        direction="IN",
+                        owner=owner,
+                        warehouse_id=warehouse_id,
+                        idempotency_key=mv_key,
+                        created_at=now,
+                        created_by=user_label,
+                    ))
+
+            # 2. Unidades defectuosas / discrepantes hacia Cuarentena con trazabilidad
+            if total_quar > 0:
+                for idx, q_data in enumerate(quarantine_items):
+                    q_qty = q_data["quantity"]
+                    if q_qty <= Decimal("0.00"):
+                        continue
                     db.add(InventoryQuarantine(
-                        sku_id       = grl.sku_id,
-                        warehouse_id = warehouse_id,
-                        gr_line_id   = grl.id,
-                        quantity     = Decimal(str(_q_quar)),
-                        reason       = grl.damaged_reason or "DEFECTUOSO_RECEPCION",
-                        status       = "ACTIVO",
-                        notes        = grl.notes,
-                        created_at   = now,
+                        sku_id=q_data["sku_id"],
+                        warehouse_id=q_data["warehouse_id"],
+                        gr_line_id=q_data["gr_line_id"],
+                        quantity=q_qty,
+                        reason=q_data["reason"],
+                        owner=q_data["owner"],
+                        status="ACTIVO",
+                        notes=q_data["notes"],
+                        created_at=now,
                     ))
                     if inv_op:
                         quar_key = hashlib.sha256(
-                            f"{inv_op.id}:{grl.sku_id}:QUARANTINE:NEBULAE:{warehouse_id}".encode()
+                            f"{inv_op.id}:{q_data['sku_id']}:QUARANTINE:{q_data['owner']}:{warehouse_id}:{q_data['gr_line_id']}:{idx}".encode()
                         ).hexdigest()
                         db.add(InventoryMovement(
-                            operation_id    = inv_op.id,
-                            sku_id          = grl.sku_id,
-                            quantity        = _q_quar,
-                            direction       = "QUARANTINE",
-                            owner           = "NEBULAE",
-                            warehouse_id    = warehouse_id,
-                            idempotency_key = quar_key,
-                            created_at      = now,
-                            created_by      = user_label,
+                            operation_id=inv_op.id,
+                            sku_id=q_data["sku_id"],
+                            quantity=q_qty,
+                            direction="QUARANTINE",
+                            owner=q_data["owner"],
+                            warehouse_id=warehouse_id,
+                            idempotency_key=quar_key,
+                            created_at=now,
+                            created_by=user_label,
                         ))
-
-            # 3. Asignaciones y Balances por Propietario (NEBULAE vs MAU)
-            owner_increments = {}
-            for grl in gr_lines:
-                _q_recv = int(grl.quantity_received or 0)
-                if grl.sku_id and _q_recv > 0:
-                    rem_alloc = _q_recv
-                    if grl.po_line_id:
-                        allocs = db.execute(
-                            select(ProcurementAllocation)
-                            .where(ProcurementAllocation.po_line_id == grl.po_line_id)
-                            .order_by(ProcurementAllocation.id)
-                            .with_for_update()
-                        ).scalars().all()
-                        for alloc in allocs:
-                            if rem_alloc <= 0:
-                                break
-                            applied_prev = db.execute(
-                                select(func.coalesce(func.sum(GoodsReceiptLineAllocation.quantity_applied), 0))
-                                .where(GoodsReceiptLineAllocation.allocation_id == alloc.id)
-                            ).scalar() or 0
-                            alloc_pending = max(0, int(alloc.quantity_allocated) - int(applied_prev))
-                            if alloc_pending > 0:
-                                take = min(rem_alloc, alloc_pending)
-                                db.add(GoodsReceiptLineAllocation(
-                                    gr_line_id=grl.id,
-                                    allocation_id=alloc.id,
-                                    quantity_applied=take,
-                                    created_at=now
-                                ))
-                                rem_alloc -= take
-                                alloc_owner = "MAU" if alloc.allocation_type == "MAU_STOCK" else "NEBULAE"
-                                owner_increments[(grl.sku_id, alloc_owner)] = owner_increments.get((grl.sku_id, alloc_owner), 0) + take
-                                if alloc.allocation_type == "CUSTOMER_ORDER" and alloc.sale_order_line_id:
-                                    db.add(ActivityLog(
-                                        entity_type="PVEN",
-                                        entity_id=alloc.sale_order_line_id,
-                                        entity_numero="",
-                                        action="MERCANCIA_EN_BARRANQUILLA",
-                                        description=f"{take} unidad(es) de SKU {grl.sku_id} recibidas en Barranquilla según {g.numero}. Pendiente de saldo y entrega.",
-                                        user_name=user_label,
-                                    ))
-                    if rem_alloc > 0:
-                        owner_increments[(grl.sku_id, "NEBULAE")] = owner_increments.get((grl.sku_id, "NEBULAE"), 0) + rem_alloc
-
-            for (sid, own), o_qty in owner_increments.items():
-                iob = db.execute(
-                    select(InventoryOwnerBalance)
-                    .where(
-                        InventoryOwnerBalance.sku_id == sid,
-                        InventoryOwnerBalance.warehouse_id == warehouse_id,
-                        InventoryOwnerBalance.owner == own,
-                    )
-                    .with_for_update()
-                ).scalar_one_or_none()
-                if iob:
-                    iob.quantity += Decimal(str(o_qty))
-                    iob.updated_at = now
-                else:
-                    db.add(InventoryOwnerBalance(
-                        sku_id=sid,
-                        warehouse_id=warehouse_id,
-                        owner=own,
-                        quantity=Decimal(str(o_qty)),
-                        updated_at=now,
-                    ))
 
         # ─── VINCULO A SHIPMENT — CIERRE DE ENTREGA FÍSICA EN BARRANQUILLA ───
 
-        if g.shipment_id and receipt_type == "FISICA":
-            shp = db.execute(
-                select(Shipment).where(Shipment.id == g.shipment_id).with_for_update()
-            ).scalar_one_or_none()
-            if shp and shp.status_fise != "RECIBIDO_BARRANQUILLA":
+        if g.shipment_id and receipt_type == "FISICA" and shp:
+            if shp.status_fise != "RECIBIDO_BARRANQUILLA":
                 shp.status_fise = "RECIBIDO_BARRANQUILLA"
                 shp.actual_delivery_date = now.date()
                 shp.updated_at = now
@@ -1932,7 +2041,7 @@ def confirmar_recepcion(
         if receipt_type == "FISICA":
             # Bloqueo 2: stock_actualizado=True solo si se ingresó stock disponible.
             # Recepciones donde todo fue rechazado/cuarentena/faltante -> stock_actualizado=False.
-            g.stock_actualizado = bool(sku_increments)
+            g.stock_actualizado = bool(total_recv > 0)
             g.estado            = "COMPLETADA"
         else:
             g.stock_actualizado = False

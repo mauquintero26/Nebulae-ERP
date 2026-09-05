@@ -360,7 +360,7 @@ class TestFase3RecepcionesParciales:
             carrier="DHL",
             tracking_number=f"TRK-{uuid.uuid4().hex[:8].upper()}",
             route_type="DIRECT_TO_BARRANQUILLA",
-            status_fise="EN_VUELO",
+            status_fise="EN_TRANSITO_BARRANQUILLA",
             origin="PROVEEDOR",
             destination="BARRANQUILLA",
             created_at=now

@@ -178,10 +178,16 @@ class TestRecepcionCeroUnidades:
                 "WHERE sku_id=:s AND warehouse_id=:w"
             ), {"s": sku_id, "w": wh_id}).scalar() or 0
 
-            n_mv = db2.execute(text(
+            n_mv_in = db2.execute(text(
                 "SELECT COUNT(*) FROM inventory_movements im "
                 "JOIN inventory_operations io ON io.id=im.operation_id "
-                "WHERE io.source_document_id=:gid"
+                "WHERE io.source_document_id=:gid AND im.direction='IN'"
+            ), {"gid": eninv_id}).scalar()
+
+            n_mv_quar = db2.execute(text(
+                "SELECT COUNT(*) FROM inventory_movements im "
+                "JOIN inventory_operations io ON io.id=im.operation_id "
+                "WHERE io.source_document_id=:gid AND im.direction='QUARANTINE'"
             ), {"gid": eninv_id}).scalar()
 
             grl = db2.execute(text(
@@ -189,7 +195,8 @@ class TestRecepcionCeroUnidades:
             ), {"gid": eninv_id}).fetchone()
 
         assert float(inv) == 0, f"Stock debe ser 0. Got {inv}"
-        assert int(n_mv) == 0, f"No debe crear InventoryMovement de stock. Got {n_mv}"
+        assert int(n_mv_in) == 0, f"No debe crear InventoryMovement de stock disponible. Got {n_mv_in}"
+        assert int(n_mv_quar) == 1, f"Debe crear InventoryMovement de cuarentena para trazabilidad. Got {n_mv_quar}"
         assert int(grl[0]) == 0, f"qty_received debe ser 0. Got {grl[0]}"
         assert int(grl[1]) == 5, f"qty_quarantine debe ser 5. Got {grl[1]}"
 
