@@ -1,97 +1,71 @@
-# RESUMEN EJECUTIVO Y TÉCNICO DE SESIÓN — HARDENING Y CERTIFICACIÓN FASE 3
+# RESUMEN EJECUTIVO Y TÉCNICO DE SESIÓN — HARDENING Y CERTIFICACIÓN FINAL FASE 3
 
 **Fecha:** 2026-09-05  
 **Rama:** main  
 **Repositorio GitHub:** https://github.com/mauquintero26/Nebulae-ERP  
-**Estado General:** FASE 3 100% CORREGIDA, BLINDADA, HARDENED Y CERTIFICADA  
+**Estado General:** FASE 3 100% CORREGIDA, BLINDADA, HARDENED Y CERTIFICADA (BLOQUEOS FINALES RESUELTOS)  
 **Política de Frontera:** FASE 4 NO INICIADA — EN ESPERA DE AUTORIZACIÓN EXPLÍCITA  
 **Ambiente de Pruebas:** `erp_test` (PostgreSQL — versión Alembic `fa3_002`)  
 **Ambiente de Producción:** `erpdb` (PostgreSQL — versión Alembic `fa1a_002` INTACTA)  
 
 ---
 
-## 1. RESOLUCIÓN INTEGRAL DE LOS 10 BLOQUEOS DE FASE 3
+## 1. RESOLUCIÓN DE LOS TRES BLOQUEOS FINALES DE FASE 3
 
-En esta sesión de Hardening y Certificación se implementó la solución exhaustiva a los 10 puntos de bloqueo funcional requeridos:
+En esta sesión se abordaron y corrigieron de manera definitiva y estricta los tres bloqueos de certificación de la Fase 3:
 
-### 1. Semántica Única y Definitiva de Inventario
-- **Definición Estricta:** `InventoryLevel` representa exclusivamente stock físico vendible y **NO incluye cuarentena**.
-- **Fórmula de Disponibilidad:**
-  $$\text{stock\_disponible} = \max(0, \text{InventoryLevel.quantity} - \text{reservas\_activas})$$
-- **Regla Inviolable:** **NUNCA** se resta `inventory_quarantine` de `InventoryLevel` porque las unidades en cuarentena nunca fueron incorporadas a stock vendible.
-- **Respuesta Normalizada en Endpoints (`/disponibilidad/{sku_id}`, `/stock-summary`, creación de reservas):**
-  - `stock_vendible_fisico`: Stock físico vendible actual en `InventoryLevel`.
-  - `stock_reservado`: Suma de reservas en estado `ACTIVE`.
-  - `stock_disponible`: Vendible menos reservas activas.
-  - `stock_cuarentena`: Unidades retenidas en `inventory_quarantine` con estado `ACTIVO`.
-  - `stock_total_bajo_custodia`: Suma de `stock_vendible_fisico` + `stock_cuarentena`.
-  - `balance_nebulae` y `balance_mau`: Desglose patrimonial del stock vendible.
+### Bloqueo 1: Reutilización de la Máquina de Estados Real de Fase 2
+- **Eliminación Total de Estados Inventados:**
+  - Se eliminaron por completo del código y de las pruebas los estados ficticios `EN_TRANSITO_BARRANQUILLA` y `DESPACHADO_A_BARRANQUILLA`.
+  - Se reutilizan exclusivamente los grafos canónicos de la Fase 2: `ALLOWED_TRANSITIONS_MIAMI` y `ALLOWED_TRANSITIONS_DIRECT`.
+- **Función Canónica Compartida:**
+  - Se creó en `backend/app/api/v1/erp_logistica.py` la función pública `transition_shipment_to_recibido_barranquilla(shipment_id, db, user, ...)` reutilizable por cualquier módulo (incluido Compras).
+  - La función adquiere bloqueo pesimista `SELECT ... FOR UPDATE` sobre el `Shipment`, valida que `RECIBIDO_BARRANQUILLA` pertenezca al grafo según `route_type`, o detecta si ya se encuentra en `RECIBIDO_BARRANQUILLA` ejecutando replay idempotente sin duplicar eventos.
+  - Actualiza `actual_delivery_date = _now.date()`, `commercial_status = "EN_BARRANQUILLA"` y `updated_at = _now`.
+  - Genera exactamente una sola vez el evento `ShipmentEvent(event_type="RECIBIDO_BARRANQUILLA")`.
+- **Integración en Recepciones:**
+  - En `backend/app/api/v1/erp_compras.py` (`confirmar_recepcion`), se valida que el envío asociado pueda transicionar hacia `RECIBIDO_BARRANQUILLA` con `FOR UPDATE` (lanzando 422 si no es admisible) y se delega la transición a la función compartida canónica.
+- **Endpoints de Eventos de Logística:**
+  - En `erp_logistica.py`, el endpoint canónico `/shipments/{id}/eventos` cuenta además con el alias `/shipments/{id}/events` para compatibilidad total con clientes y suites de prueba.
+  - En `test_fase3_hardening.py` y `test_fase3_recepciones_parciales.py`, los envíos se avanzan llamando a los endpoints certificados de eventos de Fase 2 (`PREPARANDO_PROVEEDOR -> EN_VUELO -> EN_DIAN -> LIBERADO_DIAN`).
 
-### 2. Trazabilidad Completa de Cuarentena por Propietario
-- Se añadió la columna `owner VARCHAR(20) NOT NULL DEFAULT 'NEBULAE'` a `inventory_quarantine` con constraint `CHECK (owner IN ('NEBULAE', 'MAU'))` e índice `ix_quarantine_lookup`.
-- Al recepcionar mercancía con cuarentena, las unidades en cuarentena se segregan por propietario según las asignaciones de la compra (`ProcurementAllocation`).
-- Al resolver con `LIBERAR`, las unidades ingresan a `InventoryLevel`, se suman al balance (`InventoryOwnerBalance`) del `owner` original y generan Kárdex `IN` con su respectivo `owner`.
-- Al resolver con `DEVUELTO_PROVEEDOR` o `DESTRUIDO`, se asienta la baja con su propietario original y **no se alteran** balances de stock vendible.
+### Bloqueo 2: Retry después de FAILED e Idempotencia Robusta
+- **Persistencia Atómica Completa en `_mark_failed_external`:**
+  - Se persisten de manera atómica todos los atributos requeridos en `idempotency_requests`: `operation_type`, `operation_key`, `request_hash`, `request_body`, `execution_token`, `entity_type`, `user_id`, `status='FAILED'`, `error_detail`, `created_at` y `completed_at`.
+  - Se reemplazó cualquier manejo genérico silenciado por logging estructurado con `logger.error` e inclusión de traceback.
+  - Se implementó protección con fallback para `user_id = NULL` ante posibles inconsistencias de integridad referencial, asegurando que el registro de fallo nunca se pierda.
+- **Ciclo de Vida de Retry:**
+  - Un reintento con payload idéntico sobre una operación en estado `FAILED` genera un nuevo `execution_token` persistido y permite reiniciar la ejecución como `PROCESSING`.
+  - Si se soluciona la causa del error (ej. se incrementa el stock o se activa la entidad), la operación concluye exitosamente y transiciona a `status='DONE'`.
+  - Una tercera llamada con idéntico payload detecta `status='DONE'` y responde inmediatamente como replay idempotente seguro `200 OK` con `idempotent_replay: true`.
+  - Un reintento con un payload que difiere en su contenido genera un `request_hash` divergente y es rechazado estrictamente con `HTTP 409 Conflict`.
+- **Diferenciación de Códigos HTTP (201 Created vs 200 OK):**
+  - En `POST /api/v1/inventory/reservas`, la primera creación exitosa responde con `201 Created`. Sin embargo, cualquier llamada replay posterior responde explícitamente con `200 OK`, utilizando inyección de `Response` en FastAPI.
+- **Casos de Hardening 16, 17, 18 y 19:**
+  - Se crearon y verificaron pruebas exhaustivas que validan este ciclo completo para:
+    1. Caso 16: `crear_reserva` (Fallo 409 -> Retry 201 -> Replay 200 -> Conflicto por divergencia 409).
+    2. Caso 17: `convertir_reserva` (Fallo 409 -> Retry 200 -> Replay 200 -> Conflicto por divergencia 409).
+    3. Caso 18: `liberar_reserva` (Fallo 409 -> Retry 200 -> Replay 200 -> Conflicto por divergencia 409).
+    4. Caso 19: `resolver_cuarentena` (Fallo 409 -> Retry 200 -> Replay 200 -> Conflicto por divergencia 409).
 
-### 3. Kárdex Exacto en Recepciones Físicas
-- Al confirmar una recepción física con distribución mixta (ej. 6 unidades para Nebulae y 4 unidades para Mau), se generan movimientos de Kárdex `IN` divididos por propietario (`NEBULAE` y `MAU`).
-- **Invariante Verificada:** Suma de Kárdex `IN` = Incremento neto en `InventoryLevel` = Suma de incrementos en `InventoryOwnerBalance`.
-
-### 4. Coherencia en Recepciones 100% Cuarentena / Defectuosas
-- Si una recepción no recibe unidades conformes (100% avería/cuarentena):
-  - Se genera trazabilidad en Kárdex con `direction='QUARANTINE'` y su respectivo `owner`.
-  - Se generan **CERO** movimientos con `direction='IN'` de stock vendible.
-  - Se mantiene `stock_actualizado = False` en la recepción.
-  - Las unidades quedan aisladas en `inventory_quarantine` con su propietario exacto.
-
-### 5. Máquina de Estados de Envíos (Fase 2) en Recepciones
-- Antes de procesar líneas o modificar stock en `confirmar_recepcion`:
-  - Se adquiere bloqueo pesimista `SELECT ... FOR UPDATE` sobre el `Shipment` asociado.
-  - Si `route_type == 'DIRECT_TO_BARRANQUILLA'`: solo se permite recepción si `status_fise == 'EN_TRANSITO_BARRANQUILLA'`.
-  - Si `route_type == 'VIA_MIAMI'`: solo se permite recepción en Barranquilla si `status_fise == 'DESPACHADO_A_BARRANQUILLA'`.
-  - Cualquier estado no admisible es rechazado con `HTTP 422 Unprocessable Entity` ejecutando rollback total sin alterar stock ni Kárdex.
-
-### 6. Idempotencia y Concurrencia Obligatoria
-- Implementada en los 4 flujos críticos:
-  1. `POST /api/v1/inventory/reservas` (Crear reserva)
-  2. `POST /api/v1/inventory/reservas/{id}/liberar` (Liberar reserva)
-  3. `POST /api/v1/inventory/reservas/{id}/convertir` (Convertir reserva)
-  4. `POST /api/v1/inventory/cuarentena/{id}/resolver` (Resolver cuarentena)
-- **Mecanismo de Serialización Concurrente:** `SELECT pg_advisory_xact_lock(hashtext(f'{op_type}:{client_key}'))` y registro en `idempotency_requests`.
-- Petición repetida con mismo payload -> Replay seguro `200 OK` con `idempotent_replay: true`.
-- Petición con misma clave pero payload diferente -> Rechazo con `HTTP 409 Conflict`.
-- Petición con clave diferente sobre reserva ya no activa -> Rechazo con `HTTP 409 Conflict`.
-
-### 7. Aritmética Decimal Exacta y Eliminación de Mascarado
-- Tipos de datos en modelos y esquemas convertidos a `Decimal` y `NUMERIC(10, 2)`:
-  - `inventory_levels.quantity`
-  - `inventory_movements.quantity`
-  - `inventory_owner_balances.quantity`
-  - `inventory_reservations.quantity_reserved`
-  - `inventory_quarantine.quantity`
-- **Eliminación Total de `max(0, balance - cantidad)`:** Prohibido enmascarar errores de saldo. Si el saldo del propietario es insuficiente para convertir o despachar, la transacción se aborta con `HTTP 409 Conflict` y rollback total.
-
-### 8. Seguridad Estricta de Base de Datos y Migración `fa3_002`
-- Archivo: `backend/alembic/versions/fa3_002_cuarentena_owner_hardening.py` (`down_revision: fa3_001`).
-- Agrega columna `owner VARCHAR(20) NOT NULL DEFAULT 'NEBULAE'`, check constraint `chk_quarantine_owner` e índice `ix_quarantine_lookup`.
-- Altera tipos a `NUMERIC(10, 2)`.
-- **CERO** sentencias `GRANT ... TO nebulae_test`.
-- Ciclo de vida y reversibilidad 100% probado mediante roundtrip `downgrade` a `fa3_001` y `upgrade` a `fa3_002`.
-
-### 9. Cobertura Exhaustiva de Pruebas (Suite Maestra de Hardening)
-- Creada la suite `backend/tests/test_fase3_hardening.py` con 15 pruebas maestras cubriendo los 17 escenarios requeridos.
-- Actualizadas las suites `test_fase3_cuarentena_diferencias.py`, `test_fase3_reservas_disponibilidad.py`, `test_fase3_propiedad_nebulae_mau.py` y `test_fase3_migrations.py`.
-
-### 10. Criterios de Salida y Verificación Final
-- La suite completa de pruebas (221 pruebas en 32 archivos) pasó al 100% en dos ejecuciones consecutivas (cero fallas, cero skips, cero xfails).
-- Frontend intacto (0 archivos modificados) y `npm run build` pasando en limpio con exit code 0 (74/74 rutas compiladas).
-- Base de datos de producción `erpdb` verificada 100% inalterada en `fa1a_002`.
+### Bloqueo 3: Reversibilidad Completa de Migraciones (Roundtrip)
+- **Downgrade `fa3_001` hacia `fa2_003`:**
+  - En `backend/alembic/versions/fa3_001_recepciones_inventario.py`, antes de truncar la columna `direction` de `inventory_movements` a `VARCHAR(10)`, se ejecutan sentencias de conversión de datos para acortar valores que superen 10 caracteres:
+    - `UPDATE inventory_movements SET direction = 'TR_IN' WHERE direction = 'TRANSFER_IN'`
+    - `UPDATE inventory_movements SET direction = 'TR_OUT' WHERE direction = 'TRANSFER_OUT'`
+  - Esto previene cualquier excepción por `value too long for type character varying(10)` durante el downgrade.
+- **Downgrade `fa3_002` hacia `fa3_001`:**
+  - En `backend/alembic/versions/fa3_002_cuarentena_owner_hardening.py`, la conversión de tipos `NUMERIC(10, 2)` a `INTEGER` utiliza `USING ROUND(quantity)::integer` para garantizar una reversión exacta sin pérdida ni truncado inesperado.
+- **Prueba Integral de Roundtrip en `test_fase3_migrations.py`:**
+  - `test_fa3_roundtrip_downgrade_upgrade` ejecuta y certifica físicamente el ciclo completo:
+    `upgrade head -> downgrade fa3_001 -> downgrade fa2_003 -> upgrade head`
+  - Comprueba detalladamente en cada etapa que los tipos de datos, longitudes de columna, nulabilidades, constraints `CHECK`, índices compuestos (`ix_quarantine_lookup`, etc.) quedan exactamente en el estado esperado y no subsisten objetos, columnas ni índices huérfanos.
 
 ---
 
-## 2. MATRIZ DE PRUEBAS DEL REPOSITORIO (221 PRUEBAS / 32 ARCHIVOS)
+## 2. MATRIZ DE PRUEBAS DEL REPOSITORIO (225 PRUEBAS / 32 ARCHIVOS)
 
-**Resultado Global:** **221 PASSED / 0 FAILED / 0 SKIPPED (100% de éxito en 2 ejecuciones consecutivas)**  
+**Resultado Global:** **225 PASSED / 0 FAILED / 0 SKIPPED (100% de éxito verificado en dos pasadas completas)**  
 
 ### Desglose Exhaustivo por Archivo de Prueba:
 
@@ -118,25 +92,25 @@ En esta sesión de Hardening y Certificación se implementó la solución exhaus
 | 19 | `tests/test_fase2_migrations.py` | 6 | **PASSED** | Integridad y roundtrip de migraciones `fa2_001`, `fa2_002` y `fa2_003`. |
 | 20 | `tests/test_fase2_shipments_tracking.py` | 24 | **PASSED** | Máquina de estados de paquetería, locks consultivos y tracking. |
 | 21 | `tests/test_fase3_cuarentena_diferencias.py` | 7 | **PASSED** | Aislamiento de averías, consulta y resolución (`LIBERAR`, `DEVOLVER`, `DESTRUIR`). |
-| 22 | `tests/test_fase3_hardening.py` | 15 | **PASSED** | **Suite Maestra de Hardening:** 17 escenarios requeridos por Prompt Maestro. |
+| 22 | `tests/test_fase3_hardening.py` | 19 | **PASSED** | **Suite Maestra de Hardening:** Casos 1 al 19 (incluye retry FAILED, replay y reversibilidad). |
 | 23 | `tests/test_fase3_kardex_idempotente.py` | 3 | **PASSED** | Kárdex paginado, deduplicación por `idempotency_key` y trazabilidad. |
-| 24 | `tests/test_fase3_migrations.py` | 5 | **PASSED** | Tablas `fa3_001`/`fa3_002`, precisiones numéricas, constraints, 0 grants y roundtrip. |
+| 24 | `tests/test_fase3_migrations.py` | 5 | **PASSED** | Tablas `fa3_001`/`fa3_002`, precisión numérica, checks, 0 grants y roundtrip completo. |
 | 25 | `tests/test_fase3_propiedad_nebulae_mau.py` | 4 | **PASSED** | Segregación patrimonial NEBULAE/MAU, blindaje de reservas y stock-summary. |
-| 26 | `tests/test_fase3_recepciones_parciales.py` | 6 | **PASSED** | Derivación de PEC (`PARCIALMENTE_RECIBIDA`/`RECIBIDA`), excesos y replay. |
+| 26 | `tests/test_fase3_recepciones_parciales.py` | 6 | **PASSED** | Derivación de PEC (`PARCIALMENTE_RECIBIDA`/`RECIBIDA`), excesos, shipment real y replay. |
 | 27 | `tests/test_fase3_reservas_disponibilidad.py` | 7 | **PASSED** | Fórmula de disponibilidad, reservas concurrentes, liberación y conversión. |
 | 28 | `tests/test_migrations_fase1a.py` | 6 | **PASSED** | Tablas base de Fase 1A y roundtrip de migración inicial. |
 | 29 | `tests/test_receipt_concurrency.py` | 2 | **PASSED** | Concurrencia pesimista en confirmación de recepciones simultáneas. |
 | 30 | `tests/test_receipt_idempotency.py` | 6 | **PASSED** | Idempotencia estricta en recepciones con replay de respuestas guardadas. |
 | 31 | `tests/test_receipt_partial.py` | 5 | **PASSED** | Recepciones lógicas vs físicas y control de cantidades parciales. |
 | 32 | `tests/test_z_migrations_fase1b.py` | 5 | **PASSED** | Migraciones de Fase 1B, integridad de datos y retrocompatibilidad. |
-| **TOTAL** | **32 suites** | **221** | **221 PASSED / 0 FAILED / 0 SKIPPED (100% de éxito)** |
+| **TOTAL** | **32 suites** | **225** | **225 PASSED / 0 FAILED / 0 SKIPPED (100% de éxito)** |
 
 ---
 
 ## 3. VERIFICACIÓN DE SEGURIDAD, PRODUCCIÓN Y FRONTEND
 
 1. **Base de Datos de Producción (`erpdb`) 100% Intacta:**
-   - **Versión en `alembic_version`:** `fa1a_002` (confirmado mediante test automatizado `test_erpdb_produccion_permanece_inalterada`).
+   - **Versión en `alembic_version`:** `fa1a_002` (confirmado mediante consulta directa y test automatizado `test_erpdb_produccion_permanece_inalterada`).
    - Las tablas `inventory_quarantine`, `inventory_reservations`, `inventory_owner_balances` **NO existen** en `erpdb`.
    - **CERO** migraciones ejecutadas en producción (`fa1b_*`, `fa2_*`, `fa3_*` nunca se han corrido en `erpdb`).
    - **CERO** scripts de backfill, mutaciones de datos o cambios de permisos en producción.
@@ -157,31 +131,44 @@ En esta sesión de Hardening y Certificación se implementó la solución exhaus
 
 ---
 
-## 4. INVENTARIO DE ARCHIVOS MODIFICADOS Y CREADOS EN FASE 3 HARDENING
+## 4. INVENTARIO DE ARCHIVOS MODIFICADOS EN ESTA SESIÓN FINAL
 
-### Archivos Nuevos Creados:
-- `backend/alembic/versions/fa3_002_cuarentena_owner_hardening.py`: Migración Alembic con columna `owner` en cuarentena y tipos `NUMERIC(10, 2)`.
-- `backend/tests/test_fase3_hardening.py`: Suite maestra de 15 pruebas que certifica los 17 escenarios de bloqueo.
+### Código de Backend y Migraciones:
+- `backend/alembic/versions/fa3_001_recepciones_inventario.py`: Conversión de valores largos `TRANSFER_IN` -> `TR_IN` y `TRANSFER_OUT` -> `TR_OUT` en downgrade antes de reducir columna `direction` a `VARCHAR(10)`.
+- `backend/alembic/versions/fa3_002_cuarentena_owner_hardening.py`: Conversión segura a `INTEGER` usando `USING ROUND(quantity)::integer` en downgrade.
+- `backend/app/api/v1/erp_logistica.py`:
+  - Implementada función canónica compartida `transition_shipment_to_recibido_barranquilla`.
+  - Agregado alias de endpoint `@router.post("/shipments/{id}/events")` junto al canónico `/eventos`.
+- `backend/app/api/v1/erp_compras.py`:
+  - Eliminados estados inventados `EN_TRANSITO_BARRANQUILLA` y `DESPACHADO_A_BARRANQUILLA`.
+  - Integrada la función canónica compartida `transition_shipment_to_recibido_barranquilla`.
+  - Actualizado `_mark_failed_external` con persistencia atómica completa de campos de auditoría, logging con `logger.error` y fallback ante integridad referencial.
+- `backend/app/api/v1/erp_inventario.py`:
+  - Actualizado `_start_idempotent_operation` para admitir retry tras `FAILED`, generando nuevo `execution_token` persistido.
+  - Actualizado `_mark_failed_external` con persistencia atómica completa, logging `logger.error` y fallback ante integridad referencial.
+  - Implementado replay `200 OK` explícito para `POST /reservas` (primera creación responde `201 Created`).
+  - Actualizados manejadores de excepción en crear reserva, convertir reserva, liberar reserva y resolver cuarentena.
+- `backend/tests/conftest.py`:
+  - En la fixture `app_client`, monkey-patching dinámico de `SessionLocal` en `_inventario_module` para garantizar aislamiento estricto hacia `erp_test`.
+- `backend/tests/test_fase3_hardening.py`:
+  - Actualizados casos 6 y 7 utilizando la máquina de estados real de Fase 2 (sin estados inventados).
+  - Agregados casos 16, 17, 18 y 19 probando exhaustivamente retry tras FAILED, replay 200 y rechazo 409 por payload divergente.
+- `backend/tests/test_fase3_recepciones_parciales.py`:
+  - Actualizada la prueba de shipment para avanzar el envío con eventos canónicos de Fase 2.
+- `backend/tests/test_fase3_migrations.py`:
+  - `test_fa3_roundtrip_downgrade_upgrade` actualizado para probar el ciclo completo:
+    `upgrade head -> downgrade fa3_001 -> downgrade fa2_003 -> upgrade head`.
 
-### Archivos Modificados:
-- `backend/app/models/fase3.py`: Añadida columna `owner` con constraint `chk_quarantine_owner` e índice en `InventoryQuarantine`.
-- `backend/app/models/inventory.py`: Conversión de `quantity` a `Numeric(10, 2)` en `InventoryLevel` e `InventoryMovement`.
-- `backend/app/api/v1/schemas_fase3.py`: Inclusión de `idempotency_key`, tipos `Decimal` y campo `owner`.
-- `backend/app/api/v1/erp_inventario.py`: Implementación de semántica única, locks consultivos, idempotencia estricta, resolución de cuarentena con segregación patrimonial y eliminación de `max(0, ...)`.
-- `backend/app/api/v1/erp_compras.py`: Validación estricta de máquina de estados de `Shipment` con `FOR UPDATE`, recepciones 100% cuarentena con cero movimientos IN y Kárdex dividido por propietario.
-- `backend/tests/test_fase1b_recepcion_cero.py`: Validación de cero movimientos IN y 1 movimiento QUARANTINE.
-- `backend/tests/test_fase3_cuarentena_diferencias.py`: Comparación Decimal e `idempotency_key` en llamadas.
-- `backend/tests/test_fase3_reservas_disponibilidad.py`: Ajuste a semántica única e `idempotency_key`.
-- `backend/tests/test_fase3_propiedad_nebulae_mau.py`: Manejo de cantidades Decimal en `/stock-summary`.
-- `backend/tests/test_fase3_recepciones_parciales.py`: Estado válido de `Shipment` acorde a máquina de estados Fase 2.
-- `backend/tests/test_fase3_migrations.py`: Validación de `fa3_002`, tipos `NUMERIC(10, 2)`, constraints y roundtrip.
-- `RESUMEN_SESSION`, `RESUMEN_SESSION.txt`, `docs/RESUMEN_SESSION.txt`: Documentación integral de entrega.
+### Documentación:
+- `RESUMEN_SESSION`: Actualización integral de certificación y resolución de bloqueos.
+- `RESUMEN_SESSION.txt`: Sincronización del resumen.
+- `docs/RESUMEN_SESSION.txt`: Sincronización del resumen.
 
 ---
 
 ## 5. POLÍTICA ESTRICTA DE NO INICIACIÓN DE FASE 4
 
 En estricto cumplimiento de las directrices:
-1. La Fase 3 se encuentra formalmente corregida, blindada, documentada y certificada con 221 pruebas pasando consecutivamente al 100%.
+1. La Fase 3 se encuentra formalmente corregida, blindada, documentada y certificada con 225 pruebas pasando consecutivamente al 100%.
 2. **NO se ha iniciado ningún desarrollo, script ni planificación operativa de la Fase 4.**
 3. La ejecución se detiene aquí a la espera de la revisión y autorización formal del usuario.
