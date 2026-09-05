@@ -166,10 +166,9 @@ En esta sesión se abordaron y corrigieron de manera definitiva y estricta los t
     `upgrade head -> downgrade fa3_001 -> downgrade fa2_003 -> upgrade head`.
 
 ### Documentación:
-- `RESUMEN_SESSION`: Actualización integral de certificación y resolución de bloqueos.
-- `RESUMEN_SESSION.txt`: Sincronización del resumen.
-- `docs/RESUMEN_SESSION.txt`: Sincronización del resumen.
-
+- RESUMEN_SESION / RESUMEN_SESSION: Actualización integral de certificación y resolución de bloqueos.
+- RESUMEN_SESION.txt / RESUMEN_SESSION.txt: Sincronización del resumen técnico.
+- docs/RESUMEN_SESION.txt / docs/RESUMEN_SESSION.txt: Registro permanente en documentación del repositorio.
 ---
 
 ## 5. POLÍTICA ESTRICTA DE NO INICIACIÓN DE FASE 4
