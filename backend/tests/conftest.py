@@ -164,16 +164,19 @@ def app_client(setup_test_db):
     from app.db.database import get_db
     import app.db.database as _db_module
     import app.api.v1.erp_compras as _compras_module
+    import app.api.v1.erp_inventario as _inventario_module
 
     # Override FastAPI dependency
     app.dependency_overrides[get_db] = override_get_db
 
-    # Patch SessionLocal in both database module and erp_compras (used by idem_session)
+    # Patch SessionLocal in database module, erp_compras, and erp_inventario (used by idem_session)
     # so all sessions created during tests connect to erp_test, not production
     _original_sl = _db_module.SessionLocal
     _db_module.SessionLocal = TestSessionLocal
     if hasattr(_compras_module, "SessionLocal"):
         _compras_module.SessionLocal = TestSessionLocal  # in case it's imported directly
+    if hasattr(_inventario_module, "SessionLocal"):
+        _inventario_module.SessionLocal = TestSessionLocal
 
     from fastapi.testclient import TestClient
     with TestClient(app, raise_server_exceptions=False) as client:
@@ -181,6 +184,10 @@ def app_client(setup_test_db):
 
     # Cleanup
     _db_module.SessionLocal = _original_sl
+    if hasattr(_compras_module, "SessionLocal"):
+        _compras_module.SessionLocal = _original_sl
+    if hasattr(_inventario_module, "SessionLocal"):
+        _inventario_module.SessionLocal = _original_sl
     app.dependency_overrides.clear()
 
 

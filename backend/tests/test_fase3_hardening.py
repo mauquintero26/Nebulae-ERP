@@ -367,7 +367,7 @@ class TestFase3Hardening:
             headers=_auth(admin_token)
         )
         assert conf_resp.status_code == 422
-        assert "DESPACHADO_A_BARRANQUILLA" in conf_resp.text
+        assert "Transición inválida" in conf_resp.text or "RECIBIDO_BARRANQUILLA" in conf_resp.text
 
         db.expire_all()
         # Rollback total verificado:
@@ -384,7 +384,7 @@ class TestFase3Hardening:
         assert lvl is None or float(lvl.quantity) == 0.0
 
     def test_caso7_shipment_directo_barranquilla_valido_exitoso(self, app_client, admin_token, db):
-        """Caso 7: Confirmar recepción de Shipment DIRECT_TO_BARRANQUILLA desde EN_TRANSITO_BARRANQUILLA es exitoso."""
+        """Caso 7: Confirmar recepción de Shipment DIRECT_TO_BARRANQUILLA avanzado con eventos reales de Fase 2 es exitoso."""
         base = _create_test_base(db)
         sku_id = base["sku"].id
         wh_id = base["warehouse"].id
@@ -394,10 +394,21 @@ class TestFase3Hardening:
             shipment_number=f"SHP-DIR-{uuid.uuid4().hex[:6]}",
             carrier="SERVIENTREGA", tracking_number=f"TRK-DIR-{uuid.uuid4().hex[:8]}",
             route_type="DIRECT_TO_BARRANQUILLA",
-            status_fise="EN_TRANSITO_BARRANQUILLA",  # Estado válido
+            status_fise="PREPARANDO_PROVEEDOR",
         )
         db.add(shp)
-        db.flush()
+        db.commit()
+        db.refresh(shp)
+
+        # Avanzar mediante la máquina de estados real de Fase 2:
+        # PREPARANDO_PROVEEDOR -> EN_VUELO -> EN_DIAN -> LIBERADO_DIAN
+        for ev_type in ["EN_VUELO", "EN_DIAN", "LIBERADO_DIAN"]:
+            ev_res = app_client.post(
+                f"/api/v1/logistica/shipments/{shp.id}/events",
+                json={"event_type": ev_type, "location": "TRANSITO"},
+                headers=_auth(admin_token),
+            )
+            assert ev_res.status_code == 200, f"Fallo al avanzar evento {ev_type}: {ev_res.text}"
 
         gr = GoodsReceipt(
             numero=f"ENINV-DIR-{uuid.uuid4().hex[:6]}", warehouse_id=wh_id,
@@ -423,9 +434,23 @@ class TestFase3Hardening:
         db.expire_all()
         shp_db = db.execute(select(Shipment).where(Shipment.id == shp.id)).scalar_one()
         assert shp_db.status_fise == "RECIBIDO_BARRANQUILLA"
+        assert shp_db.commercial_status == "EN_BARRANQUILLA"
+        assert shp_db.actual_delivery_date is not None
 
-        ev = db.execute(select(ShipmentEvent).where(ShipmentEvent.shipment_id == shp.id)).scalar_one()
-        assert ev.event_type == "RECIBIDO_BARRANQUILLA"
+        evs = db.execute(select(ShipmentEvent).where(ShipmentEvent.shipment_id == shp.id, ShipmentEvent.event_type == "RECIBIDO_BARRANQUILLA")).scalars().all()
+        assert len(evs) == 1
+
+        # Replay idempotente no debe duplicar evento ni fallar
+        replay_resp = app_client.post(
+            f"/api/v1/compras/recepciones/{gr.id}/confirmar",
+            json={"idempotency_key": key, "receipt_type": "FISICA"},
+            headers=_auth(admin_token)
+        )
+        assert replay_resp.status_code == 200
+
+        db.expire_all()
+        evs_after = db.execute(select(ShipmentEvent).where(ShipmentEvent.shipment_id == shp.id, ShipmentEvent.event_type == "RECIBIDO_BARRANQUILLA")).scalars().all()
+        assert len(evs_after) == 1
 
     def test_caso8_doble_post_concurrente_crear_reserva_genera_una_sola(self, app_client, admin_token, db):
         """Caso 8: Doble POST concurrente a crear_reserva con misma idempotency_key genera una sola reserva."""
@@ -763,3 +788,215 @@ class TestFase3Hardening:
             cwd=str(_BACKEND), env=env, capture_output=True, text=True
         )
         assert res_up.returncode == 0, f"Falla en upgrade fa3_002: {res_up.stderr}"
+
+    def test_caso16_retry_after_failed_crear_reserva(self, app_client, admin_token, db):
+        """Caso 16: Fallo forzado en crear_reserva -> reintento con payload idéntico exitoso (201) -> 3ra llamada replay (200) -> payload divergente (409)."""
+        base = _create_test_base(db)
+        sku_id = base["sku"].id
+        wh_id = base["warehouse"].id
+        now = datetime.datetime.utcnow()
+
+        db.add(InventoryLevel(sku_id=sku_id, warehouse_id=wh_id, quantity=Decimal("5.00")))
+        db.add(InventoryOwnerBalance(sku_id=sku_id, warehouse_id=wh_id, owner="NEBULAE", quantity=Decimal("5.00"), updated_at=now))
+        db.commit()
+
+        key = f"rsv-fail-{uuid.uuid4().hex}"
+        payload = {
+            "idempotency_key": key,
+            "sku_id": sku_id,
+            "warehouse_id": wh_id,
+            "quantity": 20,  # Insuficiente -> Falla 409
+            "owner": "NEBULAE",
+        }
+
+        # 1. Fallo forzado
+        r_fail = app_client.post("/api/v1/inventory/reservas", json=payload, headers=_auth(admin_token))
+        assert r_fail.status_code == 409
+
+        # Verificar persistencia completa atómica en FAILED
+        row_failed = db.execute(
+            text("SELECT status, request_hash, request_body, execution_token, entity_type, user_id, error_detail, created_at, completed_at "
+                 "FROM idempotency_requests WHERE operation_type = 'CREAR_RESERVA' AND operation_key = :k"),
+            {"k": key}
+        ).fetchone()
+        assert row_failed is not None
+        assert row_failed.status == "FAILED"
+        assert row_failed.request_hash is not None
+        assert row_failed.request_body is not None
+        assert row_failed.execution_token is not None
+        assert row_failed.entity_type == "RESERVA"
+        assert row_failed.error_detail is not None
+        assert row_failed.created_at is not None
+        assert row_failed.completed_at is not None
+
+        # Reintento con payload diferente sobre clave FAILED -> 409
+        diff_payload = dict(payload, quantity=30)
+        r_diff = app_client.post("/api/v1/inventory/reservas", json=diff_payload, headers=_auth(admin_token))
+        assert r_diff.status_code == 409
+        assert "payload diferente" in r_diff.text.lower()
+
+        # Incrementar stock para que el reintento del payload idéntico sea exitoso
+        lvl = db.execute(select(InventoryLevel).where(InventoryLevel.sku_id == sku_id, InventoryLevel.warehouse_id == wh_id)).scalar_one()
+        lvl.quantity = Decimal("50.00")
+        bal = db.execute(select(InventoryOwnerBalance).where(InventoryOwnerBalance.sku_id == sku_id, InventoryOwnerBalance.owner == "NEBULAE")).scalar_one()
+        bal.quantity = Decimal("50.00")
+        db.commit()
+
+        # 2. Reintento con payload idéntico -> Exitoso 201 Created
+        r_retry = app_client.post("/api/v1/inventory/reservas", json=payload, headers=_auth(admin_token))
+        assert r_retry.status_code == 201
+        assert r_retry.json().get("idempotent_replay") is not True
+
+        row_done = db.execute(
+            text("SELECT status, response_body FROM idempotency_requests WHERE operation_type = 'CREAR_RESERVA' AND operation_key = :k"),
+            {"k": key}
+        ).fetchone()
+        assert row_done.status == "DONE"
+        assert row_done.response_body is not None
+
+        # 3. Tercera llamada -> Replay explícito 200 OK
+        r_replay = app_client.post("/api/v1/inventory/reservas", json=payload, headers=_auth(admin_token))
+        assert r_replay.status_code == 200
+        assert r_replay.json().get("idempotent_replay") is True
+
+        # 4. Intento con payload diferente tras DONE -> 409 Conflict
+        r_diff_post_done = app_client.post("/api/v1/inventory/reservas", json=diff_payload, headers=_auth(admin_token))
+        assert r_diff_post_done.status_code == 409
+        assert "payload diferente" in r_diff_post_done.text.lower()
+
+    def test_caso17_retry_after_failed_convertir_reserva(self, app_client, admin_token, db):
+        """Caso 17: Fallo forzado en convertir_reserva -> reintento idéntico exitoso (200) -> 3ra llamada replay (200) -> payload divergente (409)."""
+        base = _create_test_base(db)
+        sku_id = base["sku"].id
+        wh_id = base["warehouse"].id
+        now = datetime.datetime.utcnow()
+
+        db.add(InventoryLevel(sku_id=sku_id, warehouse_id=wh_id, quantity=Decimal("10.00")))
+        db.add(InventoryOwnerBalance(sku_id=sku_id, warehouse_id=wh_id, owner="NEBULAE", quantity=Decimal("10.00"), updated_at=now))
+        res = InventoryReservation(
+            sku_id=sku_id, warehouse_id=wh_id, owner="NEBULAE", quantity_reserved=Decimal("5.00"),
+            status="ACTIVE", created_at=now
+        )
+        db.add(res)
+        db.commit()
+        db.refresh(res)
+
+        # Forzar falla bajando nivel a 0
+        lvl = db.execute(select(InventoryLevel).where(InventoryLevel.sku_id == sku_id, InventoryLevel.warehouse_id == wh_id)).scalar_one()
+        lvl.quantity = Decimal("0.00")
+        db.commit()
+
+        key = f"conv-fail-{uuid.uuid4().hex}"
+        payload = {"idempotency_key": key, "notes": "Entrega parcial"}
+
+        # 1. Fallo forzado
+        r_fail = app_client.post(f"/api/v1/inventory/reservas/{res.id}/convertir", json=payload, headers=_auth(admin_token))
+        assert r_fail.status_code == 409
+
+        # Verificar status FAILED y campos completos
+        row_failed = db.execute(
+            text("SELECT status, request_hash, entity_type FROM idempotency_requests WHERE operation_type = 'CONVERTIR_RESERVA' AND operation_key = :k"),
+            {"k": key}
+        ).fetchone()
+        assert row_failed.status == "FAILED"
+        assert row_failed.entity_type == "RESERVA"
+
+        # Restaurar nivel físico
+        lvl.quantity = Decimal("10.00")
+        db.commit()
+
+        # 2. Reintento con payload idéntico -> Exitoso 200 OK
+        r_retry = app_client.post(f"/api/v1/inventory/reservas/{res.id}/convertir", json=payload, headers=_auth(admin_token))
+        assert r_retry.status_code == 200
+
+        # 3. Tercera llamada -> Replay 200 OK
+        r_replay = app_client.post(f"/api/v1/inventory/reservas/{res.id}/convertir", json=payload, headers=_auth(admin_token))
+        assert r_replay.status_code == 200
+        assert r_replay.json().get("idempotent_replay") is True
+
+        # 4. Intento con payload divergente -> 409
+        diff_payload = {"idempotency_key": key, "notes": "Notas divergentes"}
+        r_diff = app_client.post(f"/api/v1/inventory/reservas/{res.id}/convertir", json=diff_payload, headers=_auth(admin_token))
+        assert r_diff.status_code == 409
+
+    def test_caso18_retry_after_failed_liberar_reserva(self, app_client, admin_token, db):
+        """Caso 18: Fallo forzado en liberar_reserva -> reintento idéntico exitoso (200) -> 3ra llamada replay (200) -> payload divergente (409)."""
+        base = _create_test_base(db)
+        sku_id = base["sku"].id
+        wh_id = base["warehouse"].id
+        now = datetime.datetime.utcnow()
+
+        db.add(InventoryLevel(sku_id=sku_id, warehouse_id=wh_id, quantity=Decimal("10.00")))
+        db.add(InventoryOwnerBalance(sku_id=sku_id, warehouse_id=wh_id, owner="NEBULAE", quantity=Decimal("10.00"), updated_at=now))
+        res = InventoryReservation(
+            sku_id=sku_id, warehouse_id=wh_id, owner="NEBULAE", quantity_reserved=Decimal("5.00"),
+            status="CANCELLED", created_at=now  # Estado no activo para forzar fallo
+        )
+        db.add(res)
+        db.commit()
+        db.refresh(res)
+
+        key = f"lib-fail-{uuid.uuid4().hex}"
+        payload = {"idempotency_key": key, "notes": "Liberación voluntaria"}
+
+        # 1. Fallo forzado
+        r_fail = app_client.post(f"/api/v1/inventory/reservas/{res.id}/liberar", json=payload, headers=_auth(admin_token))
+        assert r_fail.status_code == 409
+
+        # Activar reserva para permitir éxito
+        res.status = "ACTIVE"
+        db.commit()
+
+        # 2. Reintento con payload idéntico -> Exitoso 200 OK
+        r_retry = app_client.post(f"/api/v1/inventory/reservas/{res.id}/liberar", json=payload, headers=_auth(admin_token))
+        assert r_retry.status_code == 200
+
+        # 3. Tercera llamada -> Replay 200 OK
+        r_replay = app_client.post(f"/api/v1/inventory/reservas/{res.id}/liberar", json=payload, headers=_auth(admin_token))
+        assert r_replay.status_code == 200
+        assert r_replay.json().get("idempotent_replay") is True
+
+        # 4. Intento con payload divergente -> 409
+        diff_payload = {"idempotency_key": key, "notes": "Notas divergentes"}
+        r_diff = app_client.post(f"/api/v1/inventory/reservas/{res.id}/liberar", json=diff_payload, headers=_auth(admin_token))
+        assert r_diff.status_code == 409
+
+    def test_caso19_retry_after_failed_resolver_cuarentena(self, app_client, admin_token, db):
+        """Caso 19: Fallo forzado en resolver_cuarentena -> reintento idéntico exitoso (200) -> 3ra llamada replay (200) -> payload divergente (409)."""
+        base = _create_test_base(db)
+        sku_id = base["sku"].id
+        wh_id = base["warehouse"].id
+        now = datetime.datetime.utcnow()
+
+        q = InventoryQuarantine(
+            sku_id=sku_id, warehouse_id=wh_id, quantity=Decimal("4.00"),
+            owner="MAU", reason="Defectuoso", status="LIBERADO", created_at=now  # Ya liberado para forzar fallo
+        )
+        db.add(q)
+        db.commit()
+        db.refresh(q)
+
+        key = f"quar-fail-{uuid.uuid4().hex}"
+        payload = {"idempotency_key": key, "action": "LIBERAR", "notes": "Liberado tras inspección"}
+
+        # 1. Fallo forzado
+        r_fail = app_client.post(f"/api/v1/inventory/cuarentena/{q.id}/resolver", json=payload, headers=_auth(admin_token))
+        assert r_fail.status_code == 409
+
+        # Activar cuarentena para permitir éxito
+        q.status = "ACTIVO"
+        db.commit()
+
+        # 2. Reintento con payload idéntico -> Exitoso 200 OK
+        r_retry = app_client.post(f"/api/v1/inventory/cuarentena/{q.id}/resolver", json=payload, headers=_auth(admin_token))
+        assert r_retry.status_code == 200
+
+        # 3. Tercera llamada -> Replay 200 OK
+        r_replay = app_client.post(f"/api/v1/inventory/cuarentena/{q.id}/resolver", json=payload, headers=_auth(admin_token))
+        assert r_replay.status_code == 200
+        assert r_replay.json().get("idempotent_replay") is True
+
+        # 4. Intento con payload divergente -> 409
+        diff_payload = {"idempotency_key": key, "action": "DEVUELTO_PROVEEDOR", "notes": "Divergente"}
+        r_diff = app_client.post(f"/api/v1/inventory/cuarentena/{q.id}/resolver", json=diff_payload, headers=_auth(admin_token))
+        assert r_diff.status_code == 409

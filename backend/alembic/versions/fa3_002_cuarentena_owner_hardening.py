@@ -57,12 +57,12 @@ def upgrade() -> None:
 def downgrade() -> None:
     conn = op.get_bind()
 
-    # 4. Revertir precision decimal a INTEGER
+    # 4. Revertir precision decimal a INTEGER de forma segura
     conn.execute(sa.text(
-        "ALTER TABLE inventory_movements ALTER COLUMN quantity TYPE INTEGER"
+        "ALTER TABLE inventory_movements ALTER COLUMN quantity TYPE INTEGER USING ROUND(quantity)::integer"
     ))
     conn.execute(sa.text(
-        "ALTER TABLE inventory_levels ALTER COLUMN quantity TYPE INTEGER"
+        "ALTER TABLE inventory_levels ALTER COLUMN quantity TYPE INTEGER USING ROUND(quantity)::integer"
     ))
 
     # 3, 2, 1. Revertir owner en inventory_quarantine

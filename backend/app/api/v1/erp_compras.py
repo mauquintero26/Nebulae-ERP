@@ -35,7 +35,14 @@ from app.api.dependencies import (
 from app.models.users import User
 import datetime
 import uuid
+import logging
+from app.api.v1.erp_logistica import (
+    ALLOWED_TRANSITIONS_DIRECT,
+    ALLOWED_TRANSITIONS_MIAMI,
+    transition_shipment_to_recibido_barranquilla,
+)
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -1563,10 +1570,13 @@ def confirmar_recepcion(
             select(Warehouse).where(Warehouse.id == warehouse_id).with_for_update()
         ).scalar_one_or_none()
         if not warehouse:
-            _mark_failed_external(client_key, execution_token, "Bodega no encontrada", now)
+            _mark_failed_external(
+                client_key, execution_token, "Bodega no encontrada", now,
+                request_hash=req_hash, request_body=body_for_hash, entity_type="GOODS_RECEIPT", user_id=getattr(user, "id", None)
+            )
             raise HTTPException(400, f"Bodega {warehouse_id} no encontrada en la base de datos.")
 
-        # ─── VALIDACION RIGUROSA DE MAQUINA DE ESTADOS DE SHIPMENT (Punto 5) ──
+        # ─── VALIDACION RIGUROSA DE MAQUINA DE ESTADOS DE SHIPMENT (Fase 2) ──
         shp = None
         if g.shipment_id and receipt_type == "FISICA":
             shp = db.execute(
@@ -1574,34 +1584,29 @@ def confirmar_recepcion(
             ).scalar_one_or_none()
             if shp:
                 if shp.status_fise == "RECIBIDO_BARRANQUILLA":
-                    pass
-                elif shp.route_type == "DIRECT_TO_BARRANQUILLA":
-                    if shp.status_fise != "EN_TRANSITO_BARRANQUILLA":
-                        _mark_failed_external(
-                            client_key, execution_token,
-                            f"Shipment {shp.shipment_number} en estado '{shp.status_fise}' no elegible para recepcion con DIRECT_TO_BARRANQUILLA",
-                            now
-                        )
-                        raise HTTPException(
-                            422,
-                            f"Transición de envío inválida: Un envío con ruta DIRECT_TO_BARRANQUILLA en estado "
-                            f"'{shp.status_fise}' no puede ser recibido físicamente. Debe estar en 'EN_TRANSITO_BARRANQUILLA'."
-                        )
-                elif shp.route_type == "VIA_MIAMI":
-                    if shp.status_fise != "DESPACHADO_A_BARRANQUILLA":
-                        _mark_failed_external(
-                            client_key, execution_token,
-                            f"Shipment {shp.shipment_number} en estado '{shp.status_fise}' no elegible para recepcion con VIA_MIAMI",
-                            now
-                        )
-                        raise HTTPException(
-                            422,
-                            f"Transición de envío inválida: Un envío con ruta VIA_MIAMI en estado "
-                            f"'{shp.status_fise}' no puede ser recibido físicamente. Debe estar en 'DESPACHADO_A_BARRANQUILLA'."
-                        )
+                    pass  # Idempotente
                 else:
-                    _mark_failed_external(client_key, execution_token, f"Ruta desconocida: {shp.route_type}", now)
-                    raise HTTPException(422, f"Ruta de envío no reconocida: '{shp.route_type}'.")
+                    trans_graph = (
+                        ALLOWED_TRANSITIONS_DIRECT
+                        if shp.route_type == "DIRECT_TO_BARRANQUILLA"
+                        else ALLOWED_TRANSITIONS_MIAMI
+                    )
+                    allowed_next = trans_graph.get(shp.status_fise, set())
+                    if "RECIBIDO_BARRANQUILLA" not in allowed_next:
+                        _mark_failed_external(
+                            client_key, execution_token,
+                            f"Shipment {shp.shipment_number} en estado '{shp.status_fise}' no elegible para recepcion con {shp.route_type}",
+                            now,
+                            request_hash=req_hash,
+                            request_body=body_for_hash,
+                            entity_type="GOODS_RECEIPT",
+                            user_id=getattr(user, "id", None)
+                        )
+                        raise HTTPException(
+                            422,
+                            f"Transición inválida: no es posible avanzar de '{shp.status_fise}' a 'RECIBIDO_BARRANQUILLA' "
+                            f"para ruta '{shp.route_type}'. Transiciones permitidas desde el estado actual: {sorted(list(allowed_next))}"
+                        )
 
         # ─── FUENTE DE VERDAD: GOODS_RECEIPT_LINES (Fase 1B) ─────────────────
 
@@ -2015,20 +2020,15 @@ def confirmar_recepcion(
         # ─── VINCULO A SHIPMENT — CIERRE DE ENTREGA FÍSICA EN BARRANQUILLA ───
 
         if g.shipment_id and receipt_type == "FISICA" and shp:
-            if shp.status_fise != "RECIBIDO_BARRANQUILLA":
-                shp.status_fise = "RECIBIDO_BARRANQUILLA"
-                shp.actual_delivery_date = now.date()
-                shp.updated_at = now
-                ev_key = hashlib.sha256(f"{shp.id}:RECIBIDO_BARRANQUILLA:{g.numero}".encode()).hexdigest()
-                db.add(ShipmentEvent(
-                    shipment_id=shp.id,
-                    event_type="RECIBIDO_BARRANQUILLA",
-                    location="BARRANQUILLA",
-                    user_name=user_label,
-                    idempotency_key=ev_key,
-                    notes=f"Recibido físicamente en bodega {warehouse.name} según {g.numero}",
-                    timestamp=now,
-                ))
+            ev_key = hashlib.sha256(f"{shp.id}:RECIBIDO_BARRANQUILLA:{g.numero}".encode()).hexdigest()
+            transition_shipment_to_recibido_barranquilla(
+                db=db,
+                shipment=shp,
+                user_name=user_label,
+                notes=f"Recibido físicamente en bodega {warehouse.name} según {g.numero}",
+                idempotency_key=ev_key,
+                now=now,
+            )
 
         # ─── ACTUALIZAR RECEPCION (snapshot JSON generado desde GRL) ───────────
 
@@ -2184,13 +2184,19 @@ def confirmar_recepcion(
         # ─── UNICO COMMIT DE LA TRANSACCION PRINCIPAL ─────────────────────────
 
         db.commit()
-    except HTTPException:
+    except HTTPException as he:
         db.rollback()
-        _mark_failed_external(client_key, execution_token, "HTTPException durante procesamiento", now)
+        _mark_failed_external(
+            client_key, execution_token, str(getattr(he, 'detail', he))[:2000], now,
+            request_hash=req_hash, request_body=body_for_hash, entity_type="GOODS_RECEIPT", user_id=getattr(user, "id", None)
+        )
         raise
     except Exception as exc:
         db.rollback()
-        _mark_failed_external(client_key, execution_token, str(exc)[:2000], now)
+        _mark_failed_external(
+            client_key, execution_token, str(exc)[:2000], now,
+            request_hash=req_hash, request_body=body_for_hash, entity_type="GOODS_RECEIPT", user_id=getattr(user, "id", None)
+        )
         raise HTTPException(500, f"Error al confirmar recepcion: {exc}")
     return {
         "status": "success",
@@ -2199,40 +2205,86 @@ def confirmar_recepcion(
     }
 
 
-def _mark_failed_external(op_key: str, exec_token: str, error: str, now: datetime.datetime):
+def _mark_failed_external(
+    op_key: str,
+    exec_token: str,
+    error: str,
+    now: datetime.datetime,
+    request_hash: Optional[str] = None,
+    request_body: Optional[dict] = None,
+    entity_type: Optional[str] = None,
+    user_id: Optional[int] = None,
+):
     """
-
-    Actualiza idempotency_requests a FAILED en una sesion independiente.
-
-    Se llama DESPUES de que la transaccion principal hizo rollback.
-
-    Dado que la Transaccion 1 (adquirir clave) fue committed de forma independiente,
-
-    el registro PROCESSING existe en la BD y este UPDATE siempre tiene algo que actualizar.
-
-    Guard: solo actualiza si execution_token coincide Y status=PROCESSING.
-
-    Nunca sobreescribe el DONE de una ejecucion exitosa concurrente.
-
+    Actualiza idempotency_requests a FAILED en una sesion independiente persistiendo
+    todos los campos de auditoría. Se llama DESPUÉS de que la transacción principal hizo rollback.
     """
     try:
         from app.db.database import SessionLocal as _SL
         import json as _json
+        body_json = _json.dumps(request_body, default=str) if request_body is not None else None
         with _SL() as _s:
-            _s.execute(
-                __import__("sqlalchemy").text(
-                    "UPDATE idempotency_requests "
-                    "SET status='FAILED', error_detail=:err, completed_at=:now "
-                    "WHERE operation_type='CONFIRMAR_RECEPCION' "
-                    "  AND operation_key=:k "
-                    "  AND execution_token=:token "
-                    "  AND status='PROCESSING'"
-                ),
-                {"k": op_key, "token": exec_token, "err": error[:2000], "now": now}
-            )
-            _s.commit()
-    except Exception:
-        pass  # Best-effort; la operacion principal ya revirtio.
+            try:
+                _s.execute(
+                    __import__("sqlalchemy").text(
+                        "INSERT INTO idempotency_requests "
+                        "(operation_type, operation_key, request_hash, request_body, execution_token, entity_type, user_id, status, error_detail, created_at, completed_at) "
+                        "VALUES ('CONFIRMAR_RECEPCION', :k, :h, CAST(:body AS jsonb), :token, :et, :uid, 'FAILED', :err, :now, :now) "
+                        "ON CONFLICT (operation_type, operation_key) DO UPDATE "
+                        "SET status='FAILED', "
+                        "    error_detail=:err, "
+                        "    completed_at=:now, "
+                        "    request_hash=COALESCE(EXCLUDED.request_hash, idempotency_requests.request_hash), "
+                        "    request_body=COALESCE(EXCLUDED.request_body, idempotency_requests.request_body), "
+                        "    execution_token=EXCLUDED.execution_token, "
+                        "    entity_type=COALESCE(EXCLUDED.entity_type, idempotency_requests.entity_type), "
+                        "    user_id=COALESCE(EXCLUDED.user_id, idempotency_requests.user_id) "
+                        "WHERE idempotency_requests.operation_type='CONFIRMAR_RECEPCION' "
+                        "  AND idempotency_requests.operation_key=:k"
+                    ),
+                    {
+                        "k": op_key,
+                        "h": request_hash,
+                        "body": body_json,
+                        "token": exec_token,
+                        "et": entity_type,
+                        "uid": user_id,
+                        "err": error[:2000],
+                        "now": now,
+                    }
+                )
+                _s.commit()
+            except Exception:
+                _s.rollback()
+                _s.execute(
+                    __import__("sqlalchemy").text(
+                        "INSERT INTO idempotency_requests "
+                        "(operation_type, operation_key, request_hash, request_body, execution_token, entity_type, user_id, status, error_detail, created_at, completed_at) "
+                        "VALUES ('CONFIRMAR_RECEPCION', :k, :h, CAST(:body AS jsonb), :token, :et, NULL, 'FAILED', :err, :now, :now) "
+                        "ON CONFLICT (operation_type, operation_key) DO UPDATE "
+                        "SET status='FAILED', "
+                        "    error_detail=:err, "
+                        "    completed_at=:now, "
+                        "    request_hash=COALESCE(EXCLUDED.request_hash, idempotency_requests.request_hash), "
+                        "    request_body=COALESCE(EXCLUDED.request_body, idempotency_requests.request_body), "
+                        "    execution_token=EXCLUDED.execution_token, "
+                        "    entity_type=COALESCE(EXCLUDED.entity_type, idempotency_requests.entity_type) "
+                        "WHERE idempotency_requests.operation_type='CONFIRMAR_RECEPCION' "
+                        "  AND idempotency_requests.operation_key=:k"
+                    ),
+                    {
+                        "k": op_key,
+                        "h": request_hash,
+                        "body": body_json,
+                        "token": exec_token,
+                        "et": entity_type,
+                        "err": error[:2000],
+                        "now": now,
+                    }
+                )
+                _s.commit()
+    except Exception as exc:
+        logger.error(f"Error al marcar FAILED en idempotency_requests para CONFIRMAR_RECEPCION/{op_key}: {exc}", exc_info=True)
 
 
 def _mark_done_external(op_key: str, exec_token: str, response_data: dict, now: datetime.datetime):

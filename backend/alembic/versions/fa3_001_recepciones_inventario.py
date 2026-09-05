@@ -115,6 +115,16 @@ def downgrade() -> None:
         "ALTER TABLE inventory_movements DROP COLUMN IF EXISTS created_by",
         "ALTER TABLE inventory_movements DROP COLUMN IF EXISTS created_at",
         "ALTER TABLE inventory_movements DROP COLUMN IF EXISTS warehouse_id",
+        """
+        UPDATE inventory_movements
+        SET direction = CASE
+            WHEN direction = 'TRANSFER_IN' THEN 'TR_IN'
+            WHEN direction = 'TRANSFER_OUT' THEN 'TR_OUT'
+            ELSE LEFT(direction, 10)
+        END
+        WHERE LENGTH(direction) > 10
+        """,
+        "ALTER TABLE inventory_movements ALTER COLUMN direction TYPE VARCHAR(10)",
     ]:
         conn.execute(sa.text(stmt))
 

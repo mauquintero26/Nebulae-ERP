@@ -14,10 +14,13 @@ import json
 import uuid
 from typing import Optional, List, Tuple
 from decimal import Decimal
+import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func, and_, or_, text
+
+logger = logging.getLogger(__name__)
 
 from app.db.database import get_db, SessionLocal
 from app.models.users import User
@@ -62,14 +65,14 @@ def _start_idempotent_operation(
     entity_type: str,
     user_id: Optional[int],
     now: datetime.datetime,
-) -> Tuple[Optional[dict], str]:
+) -> Tuple[Optional[dict], str, str]:
     """
     Control de concurrencia e idempotencia estricta.
     1. Toma lock consultivo de transacción: pg_advisory_xact_lock(hashtext(f'{op_type}:{client_key}'))
        lo que serializa cualquier ejecución concurrente con la misma clave.
     2. Valida hash del payload contra ejecuciones previas (409 Conflict si difiere).
     3. Si ya completó (DONE), retorna el response guardado con idempotent_replay=True.
-    4. Si es nueva o reintento de FAILED, registra status='PROCESSING' y retorna execution_token.
+    4. Si es nueva o reintento de FAILED con mismo payload, registra status='PROCESSING' y retorna nuevo execution_token.
     """
     req_hash = hashlib.sha256(
         json.dumps(payload_dict, sort_keys=True, default=str).encode()
@@ -102,7 +105,7 @@ def _start_idempotent_operation(
             stored = row.response_body
             if isinstance(stored, str):
                 stored = json.loads(stored)
-            return (stored, row.execution_token)
+            return (stored, row.execution_token, req_hash)
         elif row.status == "PROCESSING":
             if row.request_hash != req_hash:
                 raise HTTPException(
@@ -121,12 +124,19 @@ def _start_idempotent_operation(
                 text(
                     "UPDATE idempotency_requests "
                     "SET status = 'PROCESSING', execution_token = :token, "
-                    "    request_hash = :h, created_at = :now, response_body = NULL, error_detail = NULL "
+                    "    request_hash = :h, request_body = CAST(:body AS jsonb), "
+                    "    created_at = :now, response_body = NULL, error_detail = NULL "
                     "WHERE id = :id"
                 ),
-                {"token": exec_token, "h": req_hash, "now": now, "id": row.id}
+                {
+                    "token": exec_token,
+                    "h": req_hash,
+                    "body": json.dumps(payload_dict, default=str),
+                    "now": now,
+                    "id": row.id
+                }
             )
-            return (None, exec_token)
+            return (None, exec_token, req_hash)
 
     # 3. No existía: registrar PROCESSING en la sesión de la transacción
     exec_token = str(uuid.uuid4())
@@ -143,7 +153,7 @@ def _start_idempotent_operation(
             "body": json.dumps(payload_dict, default=str), "now": now
         }
     )
-    return (None, exec_token)
+    return (None, exec_token, req_hash)
 
 
 def _finish_idempotent_operation(
@@ -175,23 +185,77 @@ def _mark_failed_external(
     exec_token: str,
     error: str,
     now: datetime.datetime,
+    request_hash: Optional[str] = None,
+    request_body: Optional[dict] = None,
+    entity_type: Optional[str] = None,
+    user_id: Optional[int] = None,
 ):
     try:
-        with SessionLocal() as s:
-            s.execute(
-                text(
-                    "INSERT INTO idempotency_requests "
-                    "(operation_type, operation_key, execution_token, status, error_detail, created_at, completed_at) "
-                    "VALUES (:ot, :k, :token, 'FAILED', :err, :now, :now) "
-                    "ON CONFLICT (operation_type, operation_key) DO UPDATE "
-                    "SET status = 'FAILED', error_detail = :err, completed_at = :now "
-                    "WHERE idempotency_requests.operation_type = :ot AND idempotency_requests.operation_key = :k"
-                ),
-                {"ot": op_type, "k": client_key, "token": exec_token, "err": error[:2000], "now": now}
-            )
-            s.commit()
-    except Exception:
-        pass
+        from app.db.database import SessionLocal as _SL
+        with _SL() as s:
+            body_json = json.dumps(request_body, default=str) if request_body is not None else None
+            try:
+                s.execute(
+                    text(
+                        "INSERT INTO idempotency_requests "
+                        "(operation_type, operation_key, request_hash, request_body, execution_token, entity_type, user_id, status, error_detail, created_at, completed_at) "
+                        "VALUES (:ot, :k, :h, CAST(:body AS jsonb), :token, :et, :uid, 'FAILED', :err, :now, :now) "
+                        "ON CONFLICT (operation_type, operation_key) DO UPDATE "
+                        "SET status = 'FAILED', "
+                        "    error_detail = :err, "
+                        "    completed_at = :now, "
+                        "    request_hash = COALESCE(EXCLUDED.request_hash, idempotency_requests.request_hash), "
+                        "    request_body = COALESCE(EXCLUDED.request_body, idempotency_requests.request_body), "
+                        "    execution_token = EXCLUDED.execution_token, "
+                        "    entity_type = COALESCE(EXCLUDED.entity_type, idempotency_requests.entity_type), "
+                        "    user_id = COALESCE(EXCLUDED.user_id, idempotency_requests.user_id) "
+                        "WHERE idempotency_requests.operation_type = :ot AND idempotency_requests.operation_key = :k"
+                    ),
+                    {
+                        "ot": op_type,
+                        "k": client_key,
+                        "h": request_hash,
+                        "body": body_json,
+                        "token": exec_token,
+                        "et": entity_type,
+                        "uid": user_id,
+                        "err": error[:2000],
+                        "now": now,
+                    }
+                )
+                s.commit()
+            except IntegrityError:
+                s.rollback()
+                # Fallback con user_id=None en caso de foreign key error en tabla users
+                s.execute(
+                    text(
+                        "INSERT INTO idempotency_requests "
+                        "(operation_type, operation_key, request_hash, request_body, execution_token, entity_type, user_id, status, error_detail, created_at, completed_at) "
+                        "VALUES (:ot, :k, :h, CAST(:body AS jsonb), :token, :et, NULL, 'FAILED', :err, :now, :now) "
+                        "ON CONFLICT (operation_type, operation_key) DO UPDATE "
+                        "SET status = 'FAILED', "
+                        "    error_detail = :err, "
+                        "    completed_at = :now, "
+                        "    request_hash = COALESCE(EXCLUDED.request_hash, idempotency_requests.request_hash), "
+                        "    request_body = COALESCE(EXCLUDED.request_body, idempotency_requests.request_body), "
+                        "    execution_token = EXCLUDED.execution_token, "
+                        "    entity_type = COALESCE(EXCLUDED.entity_type, idempotency_requests.entity_type) "
+                        "WHERE idempotency_requests.operation_type = :ot AND idempotency_requests.operation_key = :k"
+                    ),
+                    {
+                        "ot": op_type,
+                        "k": client_key,
+                        "h": request_hash,
+                        "body": body_json,
+                        "token": exec_token,
+                        "et": entity_type,
+                        "err": error[:2000],
+                        "now": now,
+                    }
+                )
+                s.commit()
+    except Exception as exc:
+        logger.error(f"Error al marcar FAILED en idempotency_requests para {op_type}/{client_key}: {exc}", exc_info=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -487,6 +551,7 @@ def get_inventory_stock_summary(
 @router.post("/reservas", response_model=dict, status_code=status.HTTP_201_CREATED)
 def create_inventory_reservation(
     body: CreateReservationRequest,
+    response: Response,
     user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *ROLE_BODEGA)),
     db: Session = Depends(get_db),
 ):
@@ -509,7 +574,7 @@ def create_inventory_reservation(
         "sale_order_line_id": body.sale_order_line_id,
     }
 
-    replay_data, exec_token = _start_idempotent_operation(
+    replay_data, exec_token, req_hash = _start_idempotent_operation(
         db=db,
         op_type="CREAR_RESERVA",
         client_key=client_key,
@@ -520,6 +585,7 @@ def create_inventory_reservation(
     )
 
     if replay_data is not None:
+        response.status_code = status.HTTP_200_OK
         return {
             "status": "success",
             "data": replay_data,
@@ -557,26 +623,25 @@ def create_inventory_reservation(
                 InventoryReservation.sku_id == sku_id,
                 InventoryReservation.warehouse_id == warehouse_id,
                 InventoryReservation.owner == owner,
-                InventoryReservation.status == "ACTIVE",
-                or_(InventoryReservation.expires_at == None, InventoryReservation.expires_at > now),
+                InventoryReservation.status == "ACTIVE"
             )
-        ).scalar() or 0
+        ).scalar()
         active_res_owner = Decimal(str(active_res_sum))
 
-        # Disponibilidad específica para este propietario (NUNCA restar cuarentena)
-        disponible_owner = max(Decimal("0.00"), stock_owner - active_res_owner)
-
-        # Calcular reservas activas totales sobre la bodega
-        active_res_total_sum = db.execute(
+        # Calcular reservas activas globales
+        global_res_sum = db.execute(
             select(func.coalesce(func.sum(InventoryReservation.quantity_reserved), 0))
             .where(
                 InventoryReservation.sku_id == sku_id,
                 InventoryReservation.warehouse_id == warehouse_id,
-                InventoryReservation.status == "ACTIVE",
-                or_(InventoryReservation.expires_at == None, InventoryReservation.expires_at > now),
+                InventoryReservation.status == "ACTIVE"
             )
-        ).scalar() or 0
-        disponible_fisico = max(Decimal("0.00"), stock_fisico - Decimal(str(active_res_total_sum)))
+        ).scalar()
+        global_res = Decimal(str(global_res_sum))
+
+        # Semántica única: disponible_fisico = vendible - reservas
+        disponible_fisico = max(Decimal("0.00"), stock_fisico - global_res)
+        disponible_owner = max(Decimal("0.00"), stock_owner - active_res_owner)
 
         if disponible_owner < qty:
             raise HTTPException(
@@ -634,13 +699,33 @@ def create_inventory_reservation(
             "data": resp_data,
             "idempotency_key": client_key,
         }
-    except HTTPException:
+    except HTTPException as he:
         db.rollback()
-        _mark_failed_external("CREAR_RESERVA", client_key, exec_token, "HTTPException", now)
+        _mark_failed_external(
+            op_type="CREAR_RESERVA",
+            client_key=client_key,
+            exec_token=exec_token,
+            error=str(getattr(he, "detail", he))[:2000],
+            now=now,
+            request_hash=req_hash,
+            request_body=payload_for_hash,
+            entity_type="RESERVA",
+            user_id=getattr(user, "id", None),
+        )
         raise
     except Exception as exc:
         db.rollback()
-        _mark_failed_external("CREAR_RESERVA", client_key, exec_token, str(exc), now)
+        _mark_failed_external(
+            op_type="CREAR_RESERVA",
+            client_key=client_key,
+            exec_token=exec_token,
+            error=str(exc)[:2000],
+            now=now,
+            request_hash=req_hash,
+            request_body=payload_for_hash,
+            entity_type="RESERVA",
+            user_id=getattr(user, "id", None),
+        )
         raise HTTPException(500, f"Error al crear reserva: {exc}")
 
 
@@ -656,7 +741,7 @@ def release_inventory_reservation(
     client_key = body.idempotency_key.strip()
     payload_for_hash = {"reserva_id": reserva_id, "notes": body.notes}
 
-    replay_data, exec_token = _start_idempotent_operation(
+    replay_data, exec_token, req_hash = _start_idempotent_operation(
         db=db,
         op_type="LIBERAR_RESERVA",
         client_key=client_key,
@@ -708,13 +793,33 @@ def release_inventory_reservation(
             "data": resp_data,
             "idempotency_key": client_key,
         }
-    except HTTPException:
+    except HTTPException as he:
         db.rollback()
-        _mark_failed_external("LIBERAR_RESERVA", client_key, exec_token, "HTTPException", now)
+        _mark_failed_external(
+            op_type="LIBERAR_RESERVA",
+            client_key=client_key,
+            exec_token=exec_token,
+            error=str(getattr(he, "detail", he))[:2000],
+            now=now,
+            request_hash=req_hash,
+            request_body=payload_for_hash,
+            entity_type="RESERVA",
+            user_id=getattr(user, "id", None),
+        )
         raise
     except Exception as exc:
         db.rollback()
-        _mark_failed_external("LIBERAR_RESERVA", client_key, exec_token, str(exc), now)
+        _mark_failed_external(
+            op_type="LIBERAR_RESERVA",
+            client_key=client_key,
+            exec_token=exec_token,
+            error=str(exc)[:2000],
+            now=now,
+            request_hash=req_hash,
+            request_body=payload_for_hash,
+            entity_type="RESERVA",
+            user_id=getattr(user, "id", None),
+        )
         raise HTTPException(500, f"Error al liberar reserva: {exc}")
 
 
@@ -730,7 +835,7 @@ def convert_inventory_reservation(
     client_key = body.idempotency_key.strip()
     payload_for_hash = {"reserva_id": reserva_id, "notes": body.notes}
 
-    replay_data, exec_token = _start_idempotent_operation(
+    replay_data, exec_token, req_hash = _start_idempotent_operation(
         db=db,
         op_type="CONVERTIR_RESERVA",
         client_key=client_key,
@@ -844,13 +949,33 @@ def convert_inventory_reservation(
             "data": resp_data,
             "idempotency_key": client_key,
         }
-    except HTTPException:
+    except HTTPException as he:
         db.rollback()
-        _mark_failed_external("CONVERTIR_RESERVA", client_key, exec_token, "HTTPException", now)
+        _mark_failed_external(
+            op_type="CONVERTIR_RESERVA",
+            client_key=client_key,
+            exec_token=exec_token,
+            error=str(getattr(he, "detail", he))[:2000],
+            now=now,
+            request_hash=req_hash,
+            request_body=payload_for_hash,
+            entity_type="RESERVA",
+            user_id=getattr(user, "id", None),
+        )
         raise
     except Exception as exc:
         db.rollback()
-        _mark_failed_external("CONVERTIR_RESERVA", client_key, exec_token, str(exc), now)
+        _mark_failed_external(
+            op_type="CONVERTIR_RESERVA",
+            client_key=client_key,
+            exec_token=exec_token,
+            error=str(exc)[:2000],
+            now=now,
+            request_hash=req_hash,
+            request_body=payload_for_hash,
+            entity_type="RESERVA",
+            user_id=getattr(user, "id", None),
+        )
         raise HTTPException(500, f"Error al convertir reserva: {exc}")
 
 
@@ -949,7 +1074,7 @@ def resolve_quarantine_item(
         "notes": body.notes,
     }
 
-    replay_data, exec_token = _start_idempotent_operation(
+    replay_data, exec_token, req_hash = _start_idempotent_operation(
         db=db,
         op_type="RESOLVER_CUARENTENA",
         client_key=client_key,
@@ -1088,11 +1213,31 @@ def resolve_quarantine_item(
             "data": resp_data,
             "idempotency_key": client_key,
         }
-    except HTTPException:
+    except HTTPException as he:
         db.rollback()
-        _mark_failed_external("RESOLVER_CUARENTENA", client_key, exec_token, "HTTPException", now)
+        _mark_failed_external(
+            op_type="RESOLVER_CUARENTENA",
+            client_key=client_key,
+            exec_token=exec_token,
+            error=str(getattr(he, "detail", he))[:2000],
+            now=now,
+            request_hash=req_hash,
+            request_body=payload_for_hash,
+            entity_type="CUARENTENA",
+            user_id=getattr(user, "id", None),
+        )
         raise
     except Exception as exc:
         db.rollback()
-        _mark_failed_external("RESOLVER_CUARENTENA", client_key, exec_token, str(exc), now)
+        _mark_failed_external(
+            op_type="RESOLVER_CUARENTENA",
+            client_key=client_key,
+            exec_token=exec_token,
+            error=str(exc)[:2000],
+            now=now,
+            request_hash=req_hash,
+            request_body=payload_for_hash,
+            entity_type="CUARENTENA",
+            user_id=getattr(user, "id", None),
+        )
         raise HTTPException(500, f"Error al resolver cuarentena: {exc}")

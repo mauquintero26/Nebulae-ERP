@@ -360,7 +360,7 @@ class TestFase3RecepcionesParciales:
             carrier="DHL",
             tracking_number=f"TRK-{uuid.uuid4().hex[:8].upper()}",
             route_type="DIRECT_TO_BARRANQUILLA",
-            status_fise="EN_TRANSITO_BARRANQUILLA",
+            status_fise="PREPARANDO_PROVEEDOR",
             origin="PROVEEDOR",
             destination="BARRANQUILLA",
             created_at=now
@@ -368,6 +368,15 @@ class TestFase3RecepcionesParciales:
         db.add(shp)
         db.commit()
         db.refresh(shp)
+
+        # Avanzar el envío a través de la máquina de estados real de Fase 2 hasta LIBERADO_DIAN
+        for ev_name in ["EN_VUELO", "EN_DIAN", "LIBERADO_DIAN"]:
+            ev_resp = app_client.post(
+                f"/api/v1/logistica/shipments/{shp.id}/events",
+                json={"event_type": ev_name, "location": "TRANSITO"},
+                headers=_auth(admin_token)
+            )
+            assert ev_resp.status_code == 200, f"Fallo al avanzar evento {ev_name}: {ev_resp.text}"
 
         gr.shipment_id = shp.id
         gr.reception_stage = "RECEPCION_FINAL"
@@ -389,9 +398,11 @@ class TestFase3RecepcionesParciales:
         db.expire_all()
         db.refresh(shp)
         assert shp.status_fise == "RECIBIDO_BARRANQUILLA"
+        assert shp.commercial_status == "EN_BARRANQUILLA"
+        assert shp.actual_delivery_date is not None
 
-        event = db.execute(
+        events = db.execute(
             select(ShipmentEvent)
             .where(ShipmentEvent.shipment_id == shp.id, ShipmentEvent.event_type == "RECIBIDO_BARRANQUILLA")
-        ).scalar_one_or_none()
-        assert event is not None
+        ).scalars().all()
+        assert len(events) == 1

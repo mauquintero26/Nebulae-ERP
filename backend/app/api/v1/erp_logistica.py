@@ -13,7 +13,7 @@ import datetime
 import hashlib
 import struct
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -157,6 +157,80 @@ CONSOLIDATION_ALLOWED_TRANSITIONS: Dict[str, set] = {
     "RECIBIDA_DESTINO": {"CERRADA"},
     "CERRADA": set(),  # Terminal
 }
+
+
+def transition_shipment_to_recibido_barranquilla(
+    db: Session,
+    shipment: Shipment,
+    user_name: str,
+    notes: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    now: Optional[datetime.datetime] = None,
+) -> Tuple[Shipment, Optional[ShipmentEvent]]:
+    """
+    Función canónica compartida para transicionar un Shipment a RECIBIDO_BARRANQUILLA:
+    - Selecciona el grafo real según route_type (ALLOWED_TRANSITIONS_DIRECT vs ALLOWED_TRANSITIONS_MIAMI).
+    - Idempotencia: si ya se encuentra en RECIBIDO_BARRANQUILLA, no duplica ShipmentEvent ni falla.
+    - Valida que RECIBIDO_BARRANQUILLA pertenezca a las transiciones permitidas desde status_fise.
+    - Aplica la transición atómicamente: actualiza actual_delivery_date, commercial_status='EN_BARRANQUILLA'.
+    - Genera ShipmentEvent una sola vez dentro de la sesión (sin commit aislado).
+    """
+    _now = now or datetime.datetime.now(datetime.timezone.utc)
+    if shipment.status_fise == "RECIBIDO_BARRANQUILLA":
+        existing_ev = None
+        if idempotency_key:
+            existing_ev = (
+                db.query(ShipmentEvent)
+                .filter(
+                    ShipmentEvent.shipment_id == shipment.id,
+                    ShipmentEvent.idempotency_key == idempotency_key,
+                )
+                .first()
+            )
+        if not existing_ev:
+            existing_ev = (
+                db.query(ShipmentEvent)
+                .filter(
+                    ShipmentEvent.shipment_id == shipment.id,
+                    ShipmentEvent.event_type == "RECIBIDO_BARRANQUILLA",
+                )
+                .order_by(desc(ShipmentEvent.id))
+                .first()
+            )
+        return shipment, existing_ev
+
+    trans_graph = (
+        ALLOWED_TRANSITIONS_DIRECT
+        if shipment.route_type == "DIRECT_TO_BARRANQUILLA"
+        else ALLOWED_TRANSITIONS_MIAMI
+    )
+
+    allowed_next = trans_graph.get(shipment.status_fise, set())
+    if "RECIBIDO_BARRANQUILLA" not in allowed_next:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Transición inválida: no es posible avanzar de '{shipment.status_fise}' a 'RECIBIDO_BARRANQUILLA' "
+                f"para ruta '{shipment.route_type}'. Transiciones permitidas desde el estado actual: {sorted(list(allowed_next))}"
+            ),
+        )
+
+    shipment.status_fise = "RECIBIDO_BARRANQUILLA"
+    shipment.actual_delivery_date = _now.date()
+    shipment.commercial_status = "EN_BARRANQUILLA"
+    shipment.updated_at = _now
+
+    ev = ShipmentEvent(
+        shipment_id=shipment.id,
+        event_type="RECIBIDO_BARRANQUILLA",
+        location="BARRANQUILLA",
+        user_name=user_name,
+        notes=notes,
+        idempotency_key=idempotency_key,
+        timestamp=_now,
+    )
+    db.add(ev)
+    return shipment, ev
 
 
 def _is_shipment_compatible(
@@ -694,6 +768,12 @@ def get_shipment_detail(
     "/shipments/{id}/eventos",
     response_model=Dict[str, Any],
     summary="Registrar un nuevo evento o hito logístico en la línea de tiempo del paquete con máquina de estados",
+)
+@router.post(
+    "/shipments/{id}/events",
+    response_model=Dict[str, Any],
+    summary="Registrar un nuevo evento o hito logístico en la línea de tiempo del paquete con máquina de estados (alias)",
+    include_in_schema=False,
 )
 def add_shipment_event(
     id: int,
