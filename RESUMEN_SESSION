@@ -1,152 +1,215 @@
-# RESUMEN EJECUTIVO DE SESIÓN - FASE 3: RECEPCIONES, CUARENTENA, KÁRDEX, RESERVAS Y SEPARACIÓN PATRIMONIAL
-Fecha: 2026-09-04
-Rama Git: main
-Repositorio: https://github.com/mauquintero26/Nebulae-ERP
-Estado General: FASE 3 100% DESARROLLADA, VERIFICADA Y CERTIFICADA (FASE 4 NO INICIADA - EN ESPERA DE AUTORIZACIÓN)
-Ambiente de Pruebas: erp_test (PostgreSQL en 2.24.90.223:5435/erp_test - Migrado a fa3_001)
-Ambiente de Producción: erpdb (PostgreSQL en 2.24.90.223:5435/erpdb - Intacto e inalterado en fa1a_002)
+# RESUMEN EJECUTIVO Y TÉCNICO DE SESIÓN — FASE 3 Y ESTADO INTEGRAL DEL SISTEMA
 
-================================================================================
-1. REGISTRO OFICIAL DE COMMITS EN GITHUB (origin/main)
-================================================================================
+**Fecha:** 2026-09-05  
+**Rama:** main  
+**Repositorio GitHub:** https://github.com/mauquintero26/Nebulae-ERP  
+**Estado General:** FASE 3 100% DESARROLLADA, INTEGRADA, VERIFICADA Y CERTIFICADA  
+**Política de Frontera:** FASE 4 NO INICIADA — EN ESPERA DE AUTORIZACIÓN EXPLÍCITA  
+**Ambiente de Pruebas:** `erp_test` (PostgreSQL en 2.24.90.223:5435/erp_test — versión `fa3_001`)  
+**Ambiente de Producción:** `erpdb` (PostgreSQL en 2.24.90.223:5435/erpdb — versión `fa1a_002` INTACTA)  
 
-A. Registro Histórico de Commits Fase 2:
-   - Commit de Código Fase 2 Hardening:
-       Hash: f304415eabae0c6d91856297dd561e9eb7a56e09 (f304415)
-       Mensaje: fix(fase2): eliminate test grants from fa2_003, implement pg_advisory_xact_lock idempotency, fix sequence setval, and add concurrent tests
-   - Commit Documental Inicial Reportado:
-       Hash: 49cb9b81dd92ea99b2034a30adc388e0c79d48d9 (49cb9b8)
-       Mensaje: docs: update RESUMEN_SESSION with final Fase 2 hardening, concurrent idempotency, and 174 certified tests
-   - HEAD Definitivo de origin/main al Cierre de Fase 2:
-       Hash: 458185891ce04807fd75a4e690c69e6300022fe2 (4581858)
-       Mensaje: docs: overwrite RESUMEN_SESSION with comprehensive executive summary and 174 test results
+---
 
-B. Registro de Commits Fase 3 (Recepciones e Inventario):
-   - Commit de Código Fase 3:
-       Hash: f782c2b10eab5dbc7ef85e1125e1921c4c9156c6 (f782c2b)
-       Mensaje: feat(fase3): implementacion de recepciones parciales, cuarentena, kardex inmutable, reservas y separacion patrimonial nebulae mau
-   - Commit Documental Fase 3:
-       Mensaje: docs: certificacion fase 3 con desglose de 206 pruebas, verificacion de produccion y frontend
+## 1. REGISTRO OFICIAL DE COMMITS EN GITHUB (origin/main)
 
-================================================================================
-2. VERIFICACIÓN DE SEGURIDAD, PRODUCCIÓN Y FRONTEND
-================================================================================
+### A. Registro Histórico de Fase 2:
+- **Commit de Código Fase 2 (Deep Hardening):**  
+  `f304415eabae0c6d91856297dd561e9eb7a56e09` (`f304415`)  
+  *Mensaje:* `fix(fase2): eliminate test grants from fa2_003, implement pg_advisory_xact_lock idempotency, fix sequence setval, and add concurrent tests`
+- **Commit Documental Inicial Reportado Fase 2:**  
+  `49cb9b81dd92ea99b2034a30adc388e0c79d48d9` (`49cb9b8`)  
+  *Mensaje:* `docs: update RESUMEN_SESSION with final Fase 2 hardening, concurrent idempotency, and 174 certified tests`
+- **HEAD Definitivo de origin/main al Cierre de Fase 2:**  
+  `458185891ce04807fd75a4e690c69e6300022fe2` (`4581858`)  
+  *Mensaje:* `docs: overwrite RESUMEN_SESSION with comprehensive executive summary and 174 test results`
 
-1. Base de Datos de Producción erpdb 100% Intacta:
-   - Versión en alembic_version de erpdb: fa1a_002 (Verificado mediante consulta directa a pg_catalog/alembic_version).
-   - Cero ejecuciones de migraciones fa1b_*, fa2_* o fa3_*.
-   - Cero scripts de backfill, transformación o cambios de privilegios ejecutados en erpdb.
-   - Todas las pruebas y migraciones se limitaron estrictamente a erp_test.
+### B. Registro de Commits Fase 3 (Recepciones e Inventario):
+- **Commit de Corrección Documental Previa (Desglose 174 pruebas en 25 archivos):**  
+  `fff19085587b75f9749157c1533f47266a3c0e34` (`fff1908`)  
+  *Mensaje:* `docs: correct RESUMEN_SESSION test breakdown to exact 25 backend/tests files and record commit history`
+- **Commit de Código Fase 3 (Implementación Funcional Completa):**  
+  `f782c2b10eab5dbc7ef85e1125e1921c4c9156c6` (`f782c2b`)  
+  *Mensaje:* `feat(fase3): implementacion de recepciones parciales, cuarentena, kardex inmutable, reservas y separacion patrimonial nebulae mau`
+- **Commit Documental Fase 3 (Certificación con 206 Pruebas):**  
+  `63ed23d2937f829d6f8e92515d74ded3e3f45ccc` (`63ed23d`)  
+  *Mensaje:* `docs: certificacion fase 3 con desglose de 206 pruebas, verificacion de produccion y frontend`
 
-2. Seguridad de la Nueva Migración fa3_001:
-   - Archivo: backend/alembic/versions/fa3_001_recepciones_inventario.py (down_revision: fa2_003).
-   - Auditoría estática: CERO sentencias GRANT dirigidas a nebulae_test o roles de testing.
-   - Seguridad y portabilidad garantizada al desplegar en bases donde nebulae_test no existe.
-   - Ciclo de vida verificado mediante test_fa3_001_roundtrip_downgrade_upgrade (downgrade a fa2_003 y upgrade a head limpio).
+---
 
-3. Frontend 100% Intacto:
-   - Cero archivos modificados en el directorio frontend/ (Verificado mediante git status).
-   - Compilación exitosa verificada: npm run build en frontend/
-     * Tiempo de compilación: 4.1 segundos.
-     * 74 de 74 rutas estáticas y dinámicas generadas exitosamente.
-     * Código de salida: 0 (cero errores de TypeScript, ESLint o Tailwind).
+## 2. VERIFICACIÓN DE SEGURIDAD, PRODUCCIÓN Y FRONTEND
 
-================================================================================
-3. ARQUITECTURA E IMPLEMENTACIÓN FUNCIONAL DE LA FASE 3
-================================================================================
+1. **Base de Datos de Producción (`erpdb`) 100% Intacta:**
+   - **Versión en `alembic_version`:** `fa1a_002` (confirmado mediante consulta SQL directa a `erpdb`).
+   - La tabla `inventory_quarantine` **NO existe** en `erpdb`.
+   - **CERO** migraciones ejecutadas en producción (`fa1b_*`, `fa2_*`, `fa3_*` nunca se han corrido en `erpdb`).
+   - **CERO** scripts de backfill, transformación de datos o cambios de permisos ejecutados en producción.
+   - Aislamiento absoluto: todo el desarrollo y pruebas se ejecutaron estrictamente en `erp_test`.
 
-A. Recepciones Parciales y Derivación de Estado PEC:
-   - Endpoint: POST /api/v1/compras/recepciones/{id}/confirmar y PATCH /lineas/{line_id}
-   - Derivación automática del estado del pedido de compra (PurchaseOrderFull):
-     * Si la sumatoria de recepciones acumuladas cubre la cantidad ordenada de todas las líneas -> RECIBIDA.
-     * Si se reciben unidades pero existen pendientes -> PARCIALMENTE_RECIBIDA.
-     * Si todo fue rechazado, dañado o en cuarentena -> stock_actualizado permanece False.
-   - Trazabilidad por línea (goods_receipt_lines):
-     * quantity_missing: faltante explícito vs esperado.
-     * quantity_excess: excedente explícito recibido.
-     * status: PENDIENTE, CORRECTA, PARCIAL, FALTANTE, EXCEDENTE, DEFECTUOSA, CUARENTENA.
-     * notes y damaged_reason.
-   - Bloqueo de excesos: Intentar recibir unidades en exceso sin autorización previa retorna HTTP 422 Unprocessable Entity.
-   - Idempotencia transaccional: Peticiones repetidas con la misma idempotency_key retornan la respuesta almacenada sin duplicar stock ni movimientos en el Kárdex.
-   - Enlace logístico: Si la recepción está vinculada a un paquete (Shipment), actualiza su estado a RECIBIDO_BARRANQUILLA y asienta el evento ShipmentEvent correspondiente.
+2. **Seguridad de la Migración `fa3_001`:**
+   - Archivo: `backend/alembic/versions/fa3_001_recepciones_inventario.py` (`down_revision: fa2_003`).
+   - **Auditoría Estática:** CERO sentencias `GRANT ... TO nebulae_test` o asignaciones a roles de pruebas en el código de migración.
+   - Seguridad y portabilidad total garantizada al desplegar en cualquier entorno donde `nebulae_test` no exista.
+   - Ciclo de vida y reversibilidad validados mediante `test_fa3_001_roundtrip_downgrade_upgrade` (`downgrade` a `fa2_003` y `upgrade` a `fa3_001`).
 
-B. Aislamiento Estricto de Cuarentena y Resolución de Averías:
-   - Tabla: inventory_quarantine con constraints CHECK (quantity > 0) y CHECK (status IN ('ACTIVO', 'LIBERADO', 'DEVUELTO_PROVEEDOR', 'DESTRUIDO')).
-   - Invariante de Negocio: Las unidades defectuosas o dañadas en recepción se enrutan exclusivamente a inventory_quarantine y al Kárdex bajo direction='QUARANTINE'. NUNCA ingresan a InventoryLevel (stock físico vendible).
-   - Consulta: GET /api/v1/inventory/cuarentena con filtros por warehouse_id, status y sku_id.
-   - Resolución: POST /api/v1/inventory/cuarentena/{id}/resolver
-     * Acción LIBERAR: Convierte las unidades en vendibles incrementando InventoryLevel y el balance de propietario, asentando Kárdex IN.
-     * Acción DEVUELTO_PROVEEDOR: Marca el registro como DEVUELTO_PROVEEDOR, sin alterar stock vendible.
-     * Acción DESTRUIDO: Asienta la baja/merma, sin alterar stock vendible.
-     * Protección contra redundancia: Resolver un ítem ya resuelto genera HTTP 409 Conflict.
+3. **Frontend 100% Intacto:**
+   - **CERO** archivos modificados en el directorio `frontend/`.
+   - Compilación de producción limpia verificada con `npm run build`:
+     - Tiempo de compilación: 3.3 segundos.
+     - 74 de 74 rutas estáticas y dinámicas compiladas exitosamente.
+     - Código de salida: 0 (sin errores de TypeScript, ESLint ni Tailwind).
 
-C. Kárdex Inmutable e Idempotente:
-   - Endpoint: GET /api/v1/inventory/kardex con filtros por SKU, bodega, propietario (NEBULAE/MAU), dirección y rango de fechas.
-   - Campos de trazabilidad auditables: id, operation_id, sku_id, sku, product_name, quantity, direction, owner, warehouse_id, warehouse_name, created_at, created_by, idempotency_key, source_document_type, source_document_numero.
-   - Inmutabilidad y deduplicación: Restricción UNIQUE en idempotency_key para inventory_movements.
+---
 
-D. Reservas Atómicas y Disponibilidad Derivada:
-   - Fórmula matemática exacta de disponibilidad:
-       disponible = stock_fisico - reservas_activas - cuarentena_activa
-   - Endpoints implementados:
-     * GET /api/v1/inventory/disponibilidad/{sku_id}: Desglose en tiempo real de stock físico, reservado, cuarentena y vendible.
-     * POST /api/v1/inventory/reservas: Reserva con SELECT ... FOR UPDATE sobre InventoryLevel e InventoryOwnerBalance. Si la cantidad solicitada supera el disponible del propietario, retorna HTTP 409 Conflict.
-     * POST /api/v1/inventory/reservas/{id}/liberar: Cambia estado a RELEASED y devuelve la disponibilidad al inventario.
-     * POST /api/v1/inventory/reservas/{id}/convertir: Cambia estado a CONVERTED, descuenta stock físico en InventoryLevel y balance en InventoryOwnerBalance, generando movimiento de salida OUT en Kárdex.
-   - Concurrencia pesimista validada: Múltiples hilos compitiendo por la última unidad disponible garantizan que exactamente una reserva tiene éxito (HTTP 201) y la otra es rechazada (HTTP 409), previniendo sobreventa.
+## 3. ARQUITECTURA E IMPLEMENTACIÓN FUNCIONAL DE LA FASE 3
 
-E. Separación Patrimonial Estricta Nebulae vs Mau:
-   - Modelo: InventoryOwnerBalance segregado por sku_id, warehouse_id y owner ('NEBULAE' vs 'MAU').
-   - Asignaciones de compra (ProcurementAllocation): Distribución porcentual o absoluta entre inventario propio de Nebulae y mercancía patrimonial de Mau.
-   - Blindaje de reservas: Nebulae NUNCA puede reservar ni vender unidades pertenecientes a Mau, incluso habiendo disponibilidad física total en bodega.
-   - Endpoint: GET /api/v1/inventory/stock-summary expone explícitamente balance_nebulae y balance_mau por bodega.
+### A. Recepciones Parciales y Derivación Automática de Estado PEC:
+- **Endpoints:** `POST /api/v1/compras/recepciones/{id}/confirmar`, `PATCH /api/v1/compras/recepciones/{id}/lineas/{line_id}`
+- **Derivación de Estado en `PurchaseOrderFull`:**
+  - `RECIBIDA`: Si la suma de recepciones acumuladas cubre el 100% de las cantidades ordenadas en todas las líneas.
+  - `PARCIALMENTE_RECIBIDA`: Si se reciben unidades pero aún restan unidades pendientes por entregar.
+  - Si una recepción es 100% rechazada o en cuarentena, `stock_actualizado` se mantiene en `False`.
+- **Trazabilidad por Línea (`goods_receipt_lines`):**
+  - `quantity_missing`: Faltante explícito respecto a lo esperado.
+  - `quantity_excess`: Excedente explícito recibido.
+  - `status`: `PENDIENTE`, `CORRECTA`, `PARCIAL`, `FALTANTE`, `EXCEDENTE`, `DEFECTUOSA`, `CUARENTENA`.
+  - `notes` y `damaged_reason`.
+- **Control Estricto de Excesos:** Intentar recibir unidades por encima de lo ordenado sin autorización explícita retorna `HTTP 422 Unprocessable Entity`.
+- **Idempotencia Transaccional:** Repeticiones de la misma petición con `idempotency_key` retornan la respuesta almacenada sin duplicar stock ni movimientos.
+- **Cierre Logístico:** Recepciones físicas vinculadas a un paquete (`Shipment`) actualizan su estado a `RECIBIDO_BARRANQUILLA` y generan el respectivo `ShipmentEvent`.
 
-================================================================================
-4. MATRIZ DE PRUEBAS DEL REPOSITORIO (206 PRUEBAS / 31 ARCHIVOS)
-================================================================================
+### B. Aislamiento Estricto de Cuarentena y Resolución de Averías:
+- **Tabla:** `inventory_quarantine` con restricciones:
+  - `CHECK (quantity > 0)`
+  - `CHECK (status IN ('ACTIVO', 'LIBERADO', 'DEVUELTO_PROVEEDOR', 'DESTRUIDO'))`
+- **Invariante Crítica:** Las unidades defectuosas o en cuarentena se aíslan en `inventory_quarantine` y se registran en el Kárdex con `direction='QUARANTINE'`. **NUNCA entran a `InventoryLevel` (stock vendible).**
+- **Consulta:** `GET /api/v1/inventory/cuarentena` con filtros por `warehouse_id`, `status` y `sku_id`.
+- **Resolución de Averías:** `POST /api/v1/inventory/cuarentena/{id}/resolver`:
+  - `LIBERAR`: Convierte las unidades en vendibles (`InventoryLevel += qty`), incrementa el balance del propietario y genera movimiento Kárdex `IN`.
+  - `DEVUELTO_PROVEEDOR`: Marca el ítem como devuelto sin alterar stock vendible.
+  - `DESTRUIDO`: Asienta la baja/merma sin alterar stock vendible.
+  - Intentar resolver un ítem ya resuelto genera `HTTP 409 Conflict`. Acciones no reconocidas retornan `HTTP 422`.
 
-Total Pruebas en backend/tests: 206 PASSED / 0 FAILED / 0 SKIPPED (100% de éxito)
-Cobertura de Suites: 31 archivos de prueba en backend/tests/
+### C. Kárdex Inmutable e Idempotente:
+- **Endpoint:** `GET /api/v1/inventory/kardex` con filtros por SKU, bodega, propietario (`NEBULAE`/`MAU`), dirección y fechas.
+- **Campos Auditables:** `id`, `operation_id`, `sku_id`, `sku`, `product_name`, `quantity`, `direction`, `owner`, `warehouse_id`, `warehouse_name`, `created_at`, `created_by`, `idempotency_key`, `source_document_type`, `source_document_numero`.
+- **Inmutabilidad y Deduplicación:** Restricción `UNIQUE` sobre `idempotency_key` en `inventory_movements`.
 
-Desglose Exhaustivo por Archivo:
-   1.  tests/test_auth_roles.py: 8 tests passed
-   2.  tests/test_fase1b_altas_retiros.py: 5 tests passed
-   3.  tests/test_fase1b_backfill.py: 6 tests passed
-   4.  tests/test_fase1b_confirmar.py: 16 tests passed
-   5.  tests/test_fase1b_grl_id_en_respuestas.py: 7 tests passed
-   6.  tests/test_fase1b_inventory.py: 5 tests passed
-   7.  tests/test_fase1b_legacy.py: 4 tests passed
-   8.  tests/test_fase1b_lines.py: 6 tests passed
-   9.  tests/test_fase1b_normalizacion.py: 5 tests passed
-   10. tests/test_fase1b_parcial_po_line.py: 1 test passed
-   11. tests/test_fase1b_payments.py: 7 tests passed
-   12. tests/test_fase1b_recepcion_cero.py: 6 tests passed
-   13. tests/test_fase1b_rollback.py: 1 test passed
-   14. tests/test_fase1b_stock_actualizado_vs_estado.py: 2 tests passed
-   15. tests/test_fase1b_sync_lineas.py: 7 tests passed
-   16. tests/test_fase2_alertas.py: 6 tests passed
-   17. tests/test_fase2_asignaciones_mn.py: 10 tests passed
-   18. tests/test_fase2_consolidaciones.py: 18 tests passed
-   19. tests/test_fase2_migrations.py: 6 tests passed
-   20. tests/test_fase2_shipments_tracking.py: 24 tests passed
-   21. tests/test_fase3_cuarentena_diferencias.py: 7 tests passed
-   22. tests/test_fase3_kardex_idempotente.py: 3 tests passed
-   23. tests/test_fase3_migrations.py: 5 tests passed
-   24. tests/test_fase3_propiedad_nebulae_mau.py: 4 tests passed
-   25. tests/test_fase3_recepciones_parciales.py: 6 tests passed
-   26. tests/test_fase3_reservas_disponibilidad.py: 7 tests passed
-   27. tests/test_migrations_fase1a.py: 6 tests passed
-   28. tests/test_receipt_concurrency.py: 2 tests passed
-   29. tests/test_receipt_idempotency.py: 6 tests passed
-   30. tests/test_receipt_partial.py: 5 tests passed
-   31. tests/test_z_migrations_fase1b.py: 5 tests passed
-   -----------------------------------------------------------------------------
-   TOTAL: 206 tests passed en 31 archivos de backend/tests (0 failed, 0 skipped)
+### D. Reservas Atómicas y Disponibilidad Derivada:
+- **Fórmula Matemática de Disponibilidad:**
+  $$\text{Disponible} = \text{Físico} - \text{Reservas Activas} - \text{Cuarentena Activa}$$
+- **Endpoints:**
+  - `GET /api/v1/inventory/disponibilidad/{sku_id}`: Desglose en tiempo real de disponibilidad por bodega.
+  - `POST /api/v1/inventory/reservas`: Bloqueo pesimista `SELECT ... FOR UPDATE` sobre `InventoryLevel` e `InventoryOwnerBalance`. Si excede el disponible del propietario, falla con `HTTP 409 Conflict`.
+  - `POST /api/v1/inventory/reservas/{id}/liberar`: Cambia estado a `RELEASED` y restituye la disponibilidad.
+  - `POST /api/v1/inventory/reservas/{id}/convertir`: Cambia estado a `CONVERTED`, descuenta stock físico vendible y balance patrimonial, generando Kárdex `OUT`.
+- **Concurrencia Pesimista:** Hilos concurrentes compitiendo por la última unidad garantizan exactamente una reserva exitosa (`HTTP 201`) y el rechazo de las demás (`HTTP 409`), previniendo sobreventa.
 
-================================================================================
-5. POLÍTICA DE NO INICIACIÓN DE FASE 4
-================================================================================
-Conforme a las directrices explícitas del usuario:
-- La Fase 3 se encuentra formalmente completada y certificada.
-- NO se ha iniciado ningún desarrollo ni planificación operativa de la Fase 4.
-- Se detiene la ejecución a la espera de la revisión y autorización formal del usuario.\n
+### E. Separación Patrimonial Estricta Nebulae vs Mau:
+- **Modelo:** `InventoryOwnerBalance` segregado por `sku_id`, `warehouse_id` y `owner` (`NEBULAE` vs `MAU`).
+- **Asignaciones de Compra:** Integración con `ProcurementAllocation` (`CUSTOMER_ORDER` vs `MAU_STOCK`).
+- **Blindaje Patrimonial:** Nebulae no puede reservar ni disponer de unidades de Mau, aun habiendo suficiente stock físico total en bodega.
+- **Endpoint:** `GET /api/v1/inventory/stock-summary` con desglose explícito de `balance_nebulae` y `balance_mau`.
+
+---
+
+## 4. RESOLUCIÓN DE HALLAZGOS Y HARDENING TÉCNICO
+
+Durante el ciclo de desarrollo y pruebas de la Fase 3 se detectaron y resolvieron 9 puntos técnicos clave:
+
+1. **Monkeypatching de SQLAlchemy en `tests/conftest.py`:**  
+   `session.add_all()` de SQLAlchemy 2.0 invoca `self.add(instance, _warn=False)`. La función interceptora requería soporte para `*args, **kwargs`. Se ajustó a `def _tracking_add(obj, *args, **kwargs)` para evitar errores `TypeError`.
+2. **Longitud de Columna en `inventory_movements`:**  
+   `direction` era `VARCHAR(10)`. Los valores `'TRANSFER_OUT'` (12 caracteres) y `'TRANSFER_IN'` (11 caracteres) causaban `StringDataRightTruncation`. Se amplió a `VARCHAR(30)` en la migración `fa3_001`, en el modelo `InventoryMovement` y en `erp_test`.
+3. **Propiedades del Modelo de Usuario en `erp_inventario.py`:**  
+   El modelo `User` posee `email` e `id` (no `name`). Se reemplazó el acceso directo por `getattr(user, 'email', str(getattr(user, 'id', 'system')))`.
+4. **Coerción de Relaciones Pydantic V2 en Cuarentena:**  
+   `InventoryQuarantine.sku` es una relación ORM con `ProductSKU`. En `resolve_quarantine_item`, `from_attributes=True` intentaba coercionar el modelo a `str`. Se normalizó la respuesta extrayendo `q.sku.sku` en un diccionario explícito.
+5. **Aislamiento de Hilos en Pruebas Concurrentes:**  
+   El acceso a atributos lazy-loaded (`data['sku'].id`) dentro de hilos paralelos causaba condiciones de carrera sobre la sesión. Se extrajeron los identificadores escalares (`sku_id = int(data['sku'].id)`) antes de instanciar los hilos.
+6. **Parámetros de Instanciación de `ProcurementAllocation`:**  
+   El modelo no recibe `sku_id` ni `notes`. Se removieron estos argumentos en los fixtures de prueba.
+7. **Sintaxis de Restricciones CHECK en PostgreSQL:**  
+   PostgreSQL almacena internamente las restricciones numéricas como `CHECK ((quantity > (0)::numeric))`. Se actualizó la verificación en `test_fase3_migrations.py` para validar la presencia semántica de `quantity >` y `0`.
+8. **Compatibilidad Regresiva de Recepción Cero (Fase 1B):**  
+   Al confirmar recepciones con cero unidades físicas recibidas (100% avería/rechazo), la prueba regresiva `test_fase1b_recepcion_cero.py` verifica que no se creen movimientos de stock vinculados a `InventoryOperation`. Se condicionó la creación de `InventoryOperation` a `if receipt_type == 'FISICA' and sku_increments:`, aislando a la vez las unidades en `InventoryQuarantine`.
+9. **Filtro Determinista en `/stock-summary`:**  
+   Al ejecutarse la suite completa con más de 100 SKUs acumulados, el `limit=100` por defecto excluía SKUs recién creados. Se agregó el parámetro de consulta `sku_id` a `get_inventory_stock_summary` y a la prueba correspondiente, garantizando ejecución determinista.
+
+---
+
+## 5. MATRIZ DE PRUEBAS DEL REPOSITORIO (206 PRUEBAS / 31 ARCHIVOS)
+
+**Resultado Global:** **206 PASSED / 0 FAILED / 0 SKIPPED (100% de éxito)**  
+**Tiempo Total de Ejecución:** Suite completa ejecutada y certificada en `erp_test`.
+
+### Desglose Exhaustivo por Archivo de Prueba:
+
+| # | Archivo de Prueba | Tests | Resultado | Cobertura / Funcionalidad Validada |
+|---|---|:---:|:---:|---|
+| 1 | `tests/test_auth_roles.py` | 8 | **PASSED** | Roles de usuario, permisos RBAC y acceso a endpoints protegidos. |
+| 2 | `tests/test_fase1b_altas_retiros.py` | 5 | **PASSED** | Altas y retiros de inventario con tracking de motivo y usuario. |
+| 3 | `tests/test_fase1b_backfill.py` | 6 | **PASSED** | Backfill seguro de datos históricos sin corrupción de snapshots JSON. |
+| 4 | `tests/test_fase1b_confirmar.py` | 16 | **PASSED** | Confirmación de recepciones base, consistencia de líneas y stock. |
+| 5 | `tests/test_fase1b_grl_id_en_respuestas.py` | 7 | **PASSED** | Exposición de `grl_id` en respuestas de la API de compras. |
+| 6 | `tests/test_fase1b_inventory.py` | 5 | **PASSED** | Operaciones de inventario normalizadas y niveles de stock. |
+| 7 | `tests/test_fase1b_legacy.py` | 4 | **PASSED** | Coexistencia de campos JSON legados con tablas normalizadas. |
+| 8 | `tests/test_fase1b_lines.py` | 6 | **PASSED** | Gestión de líneas individuales en órdenes de compra y recepciones. |
+| 9 | `tests/test_fase1b_normalizacion.py` | 5 | **PASSED** | Estructura normalizada de documentos de compra y recepción. |
+| 10 | `tests/test_fase1b_parcial_po_line.py` | 1 | **PASSED** | Asociación granular de recepciones parciales a `po_line_id`. |
+| 11 | `tests/test_fase1b_payments.py` | 7 | **PASSED** | Registro de transacciones de pago e idempotencia financiera. |
+| 12 | `tests/test_fase1b_recepcion_cero.py` | 6 | **PASSED** | Recepciones con cero unidades conformes (rechazo y cuarentena total). |
+| 13 | `tests/test_fase1b_rollback.py` | 1 | **PASSED** | Reversión atómica de transacciones ante fallos en confirmación. |
+| 14 | `tests/test_fase1b_stock_actualizado_vs_estado.py` | 2 | **PASSED** | Sincronización entre flag `stock_actualizado` y estado del documento. |
+| 15 | `tests/test_fase1b_sync_lineas.py` | 7 | **PASSED** | Sincronización bidireccional de líneas entre órdenes y recepciones. |
+| 16 | `tests/test_fase2_alertas.py` | 6 | **PASSED** | Motor de alertas logísticas, tiempos de tránsito y vencimientos. |
+| 17 | `tests/test_fase2_asignaciones_mn.py` | 10 | **PASSED** | Asignaciones M:N entre paquetes y órdenes de compra con tracking. |
+| 18 | `tests/test_fase2_consolidaciones.py` | 18 | **PASSED** | Consolidaciones aduaneras, prorrateo de costos y DIAN. |
+| 19 | `tests/test_fase2_migrations.py` | 6 | **PASSED** | Integridad y roundtrip de migraciones `fa2_001`, `fa2_002` y `fa2_003`. |
+| 20 | `tests/test_fase2_shipments_tracking.py` | 24 | **PASSED** | Máquina de estados de paquetería, locks consultivos y tracking. |
+| 21 | `tests/test_fase3_cuarentena_diferencias.py` | 7 | **PASSED** | Aislamiento de averías, consulta y resolución (`LIBERAR`, `DEVOLVER`, `DESTRUIR`). |
+| 22 | `tests/test_fase3_kardex_idempotente.py` | 3 | **PASSED** | Kárdex paginado, deduplicación por `idempotency_key` y trazabilidad. |
+| 23 | `tests/test_fase3_migrations.py` | 5 | **PASSED** | Tablas de `fa3_001`, check constraints, auditoría sin grants y roundtrip. |
+| 24 | `tests/test_fase3_propiedad_nebulae_mau.py` | 4 | **PASSED** | Segregación patrimonial NEBULAE/MAU, blindaje de reservas y stock-summary. |
+| 25 | `tests/test_fase3_recepciones_parciales.py` | 6 | **PASSED** | Derivación de PEC (`PARCIALMENTE_RECIBIDA`/`RECIBIDA`), excesos y replay. |
+| 26 | `tests/test_fase3_reservas_disponibilidad.py` | 7 | **PASSED** | Fórmula de disponibilidad, reservas concurrentes, liberación y conversión. |
+| 27 | `tests/test_migrations_fase1a.py` | 6 | **PASSED** | Tablas base de Fase 1A y roundtrip de migración inicial. |
+| 28 | `tests/test_receipt_concurrency.py` | 2 | **PASSED** | Concurrencia pesimista en confirmación de recepciones simultáneas. |
+| 29 | `tests/test_receipt_idempotency.py` | 6 | **PASSED** | Idempotencia estricta en recepciones con replay de respuestas guardadas. |
+| 30 | `tests/test_receipt_partial.py` | 5 | **PASSED** | Recepciones lógicas vs físicas y control de cantidades parciales. |
+| 31 | `tests/test_z_migrations_fase1b.py` | 5 | **PASSED** | Migraciones de Fase 1B, integridad de datos y retrocompatibilidad. |
+| **TOTAL** | **31 suites** | **206** | **206 PASSED / 0 FAILED / 0 SKIPPED** |
+
+---
+
+## 6. INVENTARIO DE ARCHIVOS MODIFICADOS Y CREADOS EN FASE 3
+
+### Archivos Nuevos Creados:
+- `backend/alembic/versions/fa3_001_recepciones_inventario.py`: Migración Alembic de Fase 3.
+- `backend/app/models/fase3.py`: Modelo `InventoryQuarantine`.
+- `backend/app/api/v1/schemas_fase3.py`: Esquemas Pydantic V2 para Kárdex, Reservas, Cuarentena y Disponibilidad.
+- `backend/app/api/v1/erp_inventario.py`: Router `/api/v1/inventory` con 8 endpoints funcionales.
+- `backend/tests/test_fase3_recepciones_parciales.py`: 6 pruebas de recepciones y estados PEC.
+- `backend/tests/test_fase3_cuarentena_diferencias.py`: 7 pruebas de aislamiento y resolución de cuarentena.
+- `backend/tests/test_fase3_kardex_idempotente.py`: 3 pruebas de Kárdex auditado e idempotente.
+- `backend/tests/test_fase3_reservas_disponibilidad.py`: 7 pruebas de reservas concurrentes y disponibilidad.
+- `backend/tests/test_fase3_propiedad_nebulae_mau.py`: 4 pruebas de separación patrimonial Nebulae vs Mau.
+- `backend/tests/test_fase3_migrations.py`: 5 pruebas de integridad, constraints, seguridad y roundtrip.
+
+### Archivos Modificados:
+- `backend/app/models/inventory.py`: Ampliación de `direction VARCHAR(30)`, columnas `warehouse_id`, `created_at`, `created_by` en `InventoryMovement`.
+- `backend/app/models/erp_documents.py`: Relación ORM y campos `shipment_id`, `reception_stage` en `GoodsReceipt`.
+- `backend/app/models/fase1b.py`: Columnas `quantity_missing`, `quantity_excess`, `status`, `notes`, `damaged_reason` en `GoodsReceiptLine`.
+- `backend/app/models/__init__.py`: Registro y exportación de modelos de Fase 3.
+- `backend/app/api/v1/erp_compras.py`: Soporte de recepciones parciales, estados PEC, aislamiento de cuarentena y enlace con shipments.
+- `backend/main.py`: Registro del router `erp_inventario.router` bajo el prefijo `/api/v1/inventory`.
+- `backend/tests/conftest.py`: Adaptador de tracking `_tracking_add(obj, *args, **kwargs)` para SQLAlchemy 2.0 y limpieza de `inventory_quarantine`.
+- `RESUMEN_SESSION`, `RESUMEN_SESSION.txt`, `docs/RESUMEN_SESSION.txt`: Documentación integral actualizada.
+
+---
+
+## 7. POLÍTICA ESTRICTA DE NO INICIACIÓN DE FASE 4
+
+En estricto cumplimiento de las directrices establecidas:
+1. La Fase 3 se encuentra formalmente completada, documentada y certificada.
+2. **NO se ha iniciado ningún desarrollo, script ni planificación operativa de la Fase 4.**
+3. La ejecución se detiene aquí a la espera de la revisión y autorización formal del usuario.
