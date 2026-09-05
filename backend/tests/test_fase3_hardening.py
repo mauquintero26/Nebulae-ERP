@@ -452,6 +452,98 @@ class TestFase3Hardening:
         evs_after = db.execute(select(ShipmentEvent).where(ShipmentEvent.shipment_id == shp.id, ShipmentEvent.event_type == "RECIBIDO_BARRANQUILLA")).scalars().all()
         assert len(evs_after) == 1
 
+    def test_caso7b_shipment_via_miami_flujo_real_exitoso(self, app_client, admin_token, db):
+        """Caso 7B: Confirmar recepción de Shipment VIA_MIAMI avanzado con flujo real hasta LIBERADO_DIAN es exitoso."""
+        base = _create_test_base(db)
+        sku_id = base["sku"].id
+        wh_id = base["warehouse"].id
+
+        shp = Shipment(
+            shipment_number=f"SHP-MIA-REAL-{uuid.uuid4().hex[:6]}",
+            carrier="DHL", tracking_number=f"TRK-MIA-{uuid.uuid4().hex[:8]}",
+            route_type="VIA_MIAMI",
+            status_fise="PREPARANDO_PROVEEDOR",
+        )
+        db.add(shp)
+        db.commit()
+        db.refresh(shp)
+
+        # Flujo real VIA_MIAMI certificado en Fase 2:
+        # PREPARANDO_PROVEEDOR -> ENVIADO_A_MIAMI -> RECIBIDO_MIAMI -> CONSOLIDADO -> EN_VUELO -> EN_DIAN -> LIBERADO_DIAN
+        for ev_type in ["ENVIADO_A_MIAMI", "RECIBIDO_MIAMI", "CONSOLIDADO", "EN_VUELO", "EN_DIAN", "LIBERADO_DIAN"]:
+            ev_res = app_client.post(
+                f"/api/v1/logistica/shipments/{shp.id}/events",
+                json={"event_type": ev_type, "location": "TRANSITO"},
+                headers=_auth(admin_token),
+            )
+            assert ev_res.status_code == 200, f"Fallo al avanzar evento {ev_type}: {ev_res.text}"
+
+        gr = GoodsReceipt(
+            numero=f"ENINV-MIA-OK-{uuid.uuid4().hex[:6]}", warehouse_id=wh_id,
+            shipment_id=shp.id, estado="BORRADOR", receipt_type="FISICA", stock_actualizado=False
+        )
+        db.add(gr)
+        db.flush()
+
+        grl = GoodsReceiptLine(
+            gr_id=gr.id, sku_id=sku_id, quantity_expected=4, quantity_received=4, receipt_type="FISICA"
+        )
+        db.add(grl)
+        db.commit()
+
+        key = f"cnf-mia-ok-{uuid.uuid4().hex}"
+        conf_resp = app_client.post(
+            f"/api/v1/compras/recepciones/{gr.id}/confirmar",
+            json={"idempotency_key": key, "receipt_type": "FISICA"},
+            headers=_auth(admin_token)
+        )
+        assert conf_resp.status_code == 200
+
+        db.expire_all()
+        shp_db = db.execute(select(Shipment).where(Shipment.id == shp.id)).scalar_one()
+        assert shp_db.status_fise == "RECIBIDO_BARRANQUILLA"
+        assert shp_db.commercial_status == "EN_BARRANQUILLA"
+        assert shp_db.actual_delivery_date is not None
+
+        evs = db.execute(select(ShipmentEvent).where(ShipmentEvent.shipment_id == shp.id, ShipmentEvent.event_type == "RECIBIDO_BARRANQUILLA")).scalars().all()
+        assert len(evs) == 1
+
+    def test_caso7c_shipment_estado_inventado_o_desconocido_falla_422(self, app_client, admin_token, db):
+        """Caso 7C: Confirmar recepción con Shipment en estado inventado o desconocido devuelve HTTP 422."""
+        base = _create_test_base(db)
+        sku_id = base["sku"].id
+        wh_id = base["warehouse"].id
+
+        shp = Shipment(
+            shipment_number=f"SHP-UNK-{uuid.uuid4().hex[:6]}",
+            carrier="FEDEX", tracking_number=f"TRK-UNK-{uuid.uuid4().hex[:8]}",
+            route_type="DIRECT_TO_BARRANQUILLA",
+            status_fise="EN_TRANSITO_BARRANQUILLA",  # Estado inventado / no permitido
+        )
+        db.add(shp)
+        db.flush()
+
+        gr = GoodsReceipt(
+            numero=f"ENINV-UNK-{uuid.uuid4().hex[:6]}", warehouse_id=wh_id,
+            shipment_id=shp.id, estado="BORRADOR", receipt_type="FISICA", stock_actualizado=False
+        )
+        db.add(gr)
+        db.flush()
+
+        grl = GoodsReceiptLine(
+            gr_id=gr.id, sku_id=sku_id, quantity_expected=2, quantity_received=2, receipt_type="FISICA"
+        )
+        db.add(grl)
+        db.commit()
+
+        key = f"cnf-unk-{uuid.uuid4().hex}"
+        conf_resp = app_client.post(
+            f"/api/v1/compras/recepciones/{gr.id}/confirmar",
+            json={"idempotency_key": key, "receipt_type": "FISICA"},
+            headers=_auth(admin_token)
+        )
+        assert conf_resp.status_code == 422
+
     def test_caso8_doble_post_concurrente_crear_reserva_genera_una_sola(self, app_client, admin_token, db):
         """Caso 8: Doble POST concurrente a crear_reserva con misma idempotency_key genera una sola reserva."""
         base = _create_test_base(db)
