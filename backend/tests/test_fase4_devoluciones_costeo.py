@@ -98,9 +98,11 @@ class TestFase4DevolucionesCosteo:
             "lines": [{"sale_order_id": so_id, "sale_order_line_id": line_id, "sku_id": sku_mau.id, "quantity": 2.0, "owner": "MAU"}]
         }, headers=_auth(admin_token))
         deliv_id = r_del.json()["data"]["id"]
-        app_client.post(f"/api/v1/ventas/entregas/{deliv_id}/despachar", json={"idempotency_key": f"disp-{uuid.uuid4().hex}"}, headers=_auth(admin_token))
+        r_disp = app_client.post(f"/api/v1/ventas/entregas/{deliv_id}/despachar", json={"idempotency_key": f"disp-{uuid.uuid4().hex}"}, headers=_auth(admin_token))
+        assert r_disp.status_code == 200, r_disp.text
 
         # Stock antes de la devolución debe ser 10 - 2 = 8
+        db.expire_all()
         lvl_before = db.execute(select(InventoryLevel).where(InventoryLevel.sku_id == sku_mau.id, InventoryLevel.warehouse_id == wh.id)).scalar_one()
         assert Decimal(str(lvl_before.quantity)) == Decimal("8.00")
 
@@ -167,8 +169,9 @@ class TestFase4DevolucionesCosteo:
             "lines": [{"sale_order_id": so_id, "sale_order_line_id": line_id, "sku_id": sku_neb.id, "quantity": 2.0, "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         deliv_id = r_del.json()["data"]["id"]
-        app_client.post(f"/api/v1/ventas/entregas/{deliv_id}/despachar", json={"idempotency_key": f"dq-{uuid.uuid4().hex}"}, headers=_auth(admin_token))
-
+        r_disp = app_client.post(f"/api/v1/ventas/entregas/{deliv_id}/despachar", json={"idempotency_key": f"dq-{uuid.uuid4().hex}"}, headers=_auth(admin_token))
+        assert r_disp.status_code == 200, r_disp.text
+        db.expire_all()
         lvl_before = db.execute(select(InventoryLevel).where(InventoryLevel.sku_id == sku_neb.id, InventoryLevel.warehouse_id == wh.id)).scalar_one()
         assert Decimal(str(lvl_before.quantity)) == Decimal("8.00")
 

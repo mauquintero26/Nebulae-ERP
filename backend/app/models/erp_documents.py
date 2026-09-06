@@ -109,6 +109,7 @@ class SaleOrder(Base):
     fecha_entrega_estimada= Column(DateTime, nullable=True)
     trm_rate              = Column(Numeric(10, 2), nullable=True)
     subtotal_cop          = Column(Numeric(14, 2), default=0)
+    tax_cop               = Column(Numeric(14, 2), default=0)
     descuento_pct         = Column(Numeric(5, 2), default=0)
     total_cop             = Column(Numeric(14, 2), default=0)
     anticipo_cop          = Column(Numeric(14, 2), default=0)

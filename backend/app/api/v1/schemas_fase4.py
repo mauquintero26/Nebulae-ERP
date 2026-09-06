@@ -71,7 +71,7 @@ class SaleOrderCreate(BaseModel):
     notas: Optional[str] = None
     canal_venta: Optional[str] = "CRM"
     anticipo_pct: Optional[Decimal] = Field(Decimal("60.00"), ge=Decimal("0.00"), le=Decimal("100.00"))
-    saldo_pct: Optional[Decimal] = Field(Decimal("40.00"), ge=Decimal("0.00"), le=Decimal("100.00"))
+    saldo_pct: Optional[Decimal] = Field(None, ge=Decimal("0.00"), le=Decimal("100.00"))
     policy_exception_authorized_by: Optional[str] = None
     policy_exception_reason: Optional[str] = None
     lines: List[SaleOrderLineCreate] = Field(..., min_length=1)
@@ -127,6 +127,8 @@ class CancelSaleOrderRequest(BaseModel):
     authorized_by: Optional[str] = None
     purchased_goods_decision: Optional[str] = None
     # PASAR_A_STOCK_NEBULAE | MANTENER_PENDIENTE | REASIGNAR_CLIENTE | DEVOLVER_PROVEEDOR | REGISTRAR_PERDIDA
+    target_customer_id: Optional[int] = None
+    target_sale_order_line_id: Optional[int] = None
 
     @field_validator("purchased_goods_decision")
     @classmethod
@@ -145,6 +147,19 @@ class CancelLineRequest(BaseModel):
     motivo: str = Field(..., min_length=5)
     authorized_by: Optional[str] = None
     purchased_goods_decision: Optional[str] = None
+    target_customer_id: Optional[int] = None
+    target_sale_order_line_id: Optional[int] = None
+
+    @field_validator("purchased_goods_decision")
+    @classmethod
+    def validate_decision(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        val = v.strip().upper()
+        allowed = ("PASAR_A_STOCK_NEBULAE", "MANTENER_PENDIENTE", "REASIGNAR_CLIENTE", "DEVOLVER_PROVEEDOR", "REGISTRAR_PERDIDA")
+        if val not in allowed:
+            raise ValueError(f"Decisión inválida. Opciones: {allowed}")
+        return val
 
 
 class PackingItemIn(BaseModel):
@@ -213,14 +228,22 @@ class DispatchDeliveryRequest(BaseModel):
     observations: Optional[str] = None
 
 
+class DeliveryStatusUpdateRequest(BaseModel):
+    carrier: Optional[str] = None
+    tracking_number: Optional[str] = None
+    evidence_url: Optional[str] = None
+    delivery_date: Optional[datetime.datetime] = None
+    notes: Optional[str] = None
+
+
 class ReturnLineIn(BaseModel):
     sale_order_line_id: int
-    sku_id: int
+    sku_id: Optional[int] = None
     warehouse_id: int
     quantity: Decimal = Field(..., gt=Decimal("0.00"))
     inventory_resolution: str = Field(..., description="REINTEGRAR_STOCK | CUARENTENA | DESTRUIDO | DEVOLVER_PROVEEDOR")
     product_condition: str = Field("ABIERTO_BUENO", description="NUEVO_SELLADO | ABIERTO_BUENO | DEFECTUOSO | DAÑADO")
-    owner: Optional[str] = "NEBULAE"
+    owner: Optional[str] = None
 
 
 class SaleOrderReturnCreate(BaseModel):

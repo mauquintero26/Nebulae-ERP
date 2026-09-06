@@ -280,6 +280,7 @@ class InventoryReservation(Base):
     converted_at        = Column(DateTime, nullable=True)
     created_by          = Column(String(150), nullable=True)
     notes               = Column(Text, nullable=True)
+    idempotency_key     = Column(String(150), unique=True, nullable=True)
 
     sku                 = relationship("ProductSKU", foreign_keys=[sku_id])
     warehouse           = relationship("Warehouse", foreign_keys=[warehouse_id])

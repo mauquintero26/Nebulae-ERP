@@ -101,6 +101,7 @@ class SalePackingItem(Base):
     __table_args__ = (
         CheckConstraint("quantity > 0", name="chk_pack_item_qty"),
         CheckConstraint("verified_quantity >= 0", name="chk_pack_item_vqty"),
+        CheckConstraint("verified_quantity <= quantity", name="chk_pack_item_vqty_le_qty"),
         CheckConstraint("status IN ('PENDIENTE', 'EMPACADO', 'INCIDENCIA')", name="chk_pack_item_status"),
         Index("ix_pack_items_line", "sale_order_line_id"),
     )
@@ -209,6 +210,7 @@ class SaleOrderReturn(Base):
     __table_args__ = (
         CheckConstraint("financial_resolution IN ('DEVOLUCION_DINERO', 'SALDO_A_FAVOR', 'SIN_DEVOLUCION_DINERO')", name="chk_ret_fin_res"),
         CheckConstraint("status IN ('REGISTRADA', 'PROCESADA', 'CANCELADA')", name="chk_ret_status"),
+        CheckConstraint("refund_amount >= 0", name="chk_return_refund_amt"),
         Index("ix_ret_order", "sale_order_id"),
         Index("ix_ret_customer", "customer_id"),
     )
