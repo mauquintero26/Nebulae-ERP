@@ -81,6 +81,54 @@ En estricto cumplimiento de la autorización expresa del usuario (`AUTORIZACIÓN
 - Tests fallidos: **0**.
 - Tests con error: **0**.
 
+#### Desglose Exhaustivo de Tests por Archivo (43 Archivos, 301 Tests):
+| Archivo de Prueba | Conteo de Tests | Estado |
+| :--- | :---: | :---: |
+| `tests/test_auth_roles.py` | 8 | PASSED |
+| `tests/test_fase1b_altas_retiros.py` | 5 | PASSED |
+| `tests/test_fase1b_backfill.py` | 6 | PASSED |
+| `tests/test_fase1b_confirmar.py` | 16 | PASSED |
+| `tests/test_fase1b_grl_id_en_respuestas.py` | 7 | PASSED |
+| `tests/test_fase1b_inventory.py` | 5 | PASSED |
+| `tests/test_fase1b_legacy.py` | 4 | PASSED |
+| `tests/test_fase1b_lines.py` | 6 | PASSED |
+| `tests/test_fase1b_normalizacion.py` | 5 | PASSED |
+| `tests/test_fase1b_parcial_po_line.py` | 1 | PASSED |
+| `tests/test_fase1b_payments.py` | 7 | PASSED |
+| `tests/test_fase1b_recepcion_cero.py` | 6 | PASSED |
+| `tests/test_fase1b_rollback.py` | 1 | PASSED |
+| `tests/test_fase1b_stock_actualizado_vs_estado.py` | 2 | PASSED |
+| `tests/test_fase1b_sync_lineas.py` | 7 | PASSED |
+| `tests/test_fase2_alertas.py` | 6 | PASSED |
+| `tests/test_fase2_asignaciones_mn.py` | 10 | PASSED |
+| `tests/test_fase2_consolidaciones.py` | 18 | PASSED |
+| `tests/test_fase2_migrations.py` | 6 | PASSED |
+| `tests/test_fase2_shipments_tracking.py` | 24 | PASSED |
+| `tests/test_fase3_cuarentena_diferencias.py` | 7 | PASSED |
+| `tests/test_fase3_hardening.py` | 21 | PASSED |
+| `tests/test_fase3_kardex_idempotente.py` | 3 | PASSED |
+| `tests/test_fase3_migrations.py` | 5 | PASSED |
+| `tests/test_fase3_propiedad_nebulae_mau.py` | 4 | PASSED |
+| `tests/test_fase3_recepciones_parciales.py` | 6 | PASSED |
+| `tests/test_fase3_reservas_disponibilidad.py` | 7 | PASSED |
+| `tests/test_fase4_asignacion_compras_recepcion.py` | 5 | PASSED |
+| `tests/test_fase4_cancelaciones.py` | 4 | PASSED |
+| `tests/test_fase4_cierre_tecnico_final.py` | 9 | PASSED |
+| `tests/test_fase4_devoluciones_costeo.py` | 3 | PASSED |
+| `tests/test_fase4_empaque_despacho_entrega.py` | 4 | PASSED |
+| `tests/test_fase4_final_hardening.py` | 8 | PASSED |
+| `tests/test_fase4_hardening.py` | 12 | PASSED |
+| `tests/test_fase4_migrations.py` | 4 | PASSED |
+| `tests/test_fase4_pagos_politicas.py` | 4 | PASSED |
+| `tests/test_fase4_ventas_lineas_estados.py` | 3 | PASSED |
+| `tests/test_fase5_integracion_erp.py` | 18 | PASSED |
+| `tests/test_migrations_fase1a.py` | 6 | PASSED |
+| `tests/test_receipt_concurrency.py` | 2 | PASSED |
+| `tests/test_receipt_idempotency.py` | 6 | PASSED |
+| `tests/test_receipt_partial.py` | 5 | PASSED |
+| `tests/test_z_migrations_fase1b.py` | 5 | PASSED |
+| **TOTAL GENERAL** | **301** | **100% PASSED** |
+
 ---
 
 ## 4. VERIFICACIÓN DE INVARIANTES Y POLÍTICAS INVIOLABLES
