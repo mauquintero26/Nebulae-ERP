@@ -9,6 +9,7 @@ from typing import Optional, List, Dict, Any
 from decimal import Decimal
 import datetime
 import hashlib
+import json
 import zoneinfo
 import uuid
 
@@ -51,11 +52,44 @@ from app.api.v1.schemas_fase4 import (
     DispatchDeliveryRequest,
     DeliveryStatusUpdateRequest,
     SaleOrderReturnCreate,
+    FinancialExceptionRequest,
 )
 
 router = APIRouter()
 
 BOGOTA_TZ = zoneinfo.ZoneInfo("America/Bogota")
+
+def _compute_return_fingerprint(
+    so_id: int,
+    customer_id: int,
+    delivery_id: Optional[int],
+    financial_resolution: str,
+    refund_amount: Decimal,
+    lines: List[Any]
+) -> str:
+    sorted_lines = sorted(
+        [
+            {
+                "sale_order_line_id": getattr(l, "sale_order_line_id", getattr(l, "id", None)),
+                "quantity": f"{Decimal(str(l.quantity)):.2f}",
+                "warehouse_id": l.warehouse_id,
+                "product_condition": getattr(l, "product_condition", None),
+                "inventory_resolution": getattr(l, "inventory_resolution", None),
+            }
+            for l in lines
+        ],
+        key=lambda x: (x["sale_order_line_id"] or 0, x["warehouse_id"] or 0)
+    )
+    payload_dict = {
+        "sale_order_id": so_id,
+        "customer_id": customer_id,
+        "delivery_id": delivery_id,
+        "financial_resolution": financial_resolution,
+        "refund_amount": f"{Decimal(str(refund_amount or 0)):.2f}",
+        "lines": sorted_lines
+    }
+    return hashlib.sha256(json.dumps(payload_dict, sort_keys=True).encode("utf-8")).hexdigest()
+
 
 
 def _now():
@@ -90,9 +124,9 @@ def _log_event(
     db: Session,
     entity_type: str,
     entity_id: int,
-    entity_numero: str,
-    action: str,
-    description: str,
+    entity_numero: Optional[str] = "",
+    action: str = "",
+    description: str = "",
     old_estado: Optional[str] = None,
     new_estado: Optional[str] = None,
     user_name: Optional[str] = None,
@@ -119,12 +153,12 @@ def _log_event(
 
 ALLOWED_TRANSITIONS_SALE_ORDER = {
     "BORRADOR": {"PENDIENTE_ANTICIPO", "CONFIRMADO", "CANCELADO"},
-    "PENDIENTE_ANTICIPO": {"CONFIRMADO", "CANCELADO"},
-    "CONFIRMADO": {"PARCIALMENTE_DISPONIBLE", "DISPONIBLE", "CANCELADO"},
+    "PENDIENTE_ANTICIPO": {"CONFIRMADO", "PENDIENTE_SALDO", "LISTO_PARA_ENTREGA", "CANCELADO"},
+    "CONFIRMADO": {"PARCIALMENTE_DISPONIBLE", "DISPONIBLE", "PENDIENTE_SALDO", "LISTO_PARA_ENTREGA", "CANCELADO"},
     "PARCIALMENTE_DISPONIBLE": {"DISPONIBLE", "PENDIENTE_SALDO", "LISTO_PARA_ENTREGA", "PARCIALMENTE_ENTREGADO", "CANCELADO"},
     "DISPONIBLE": {"PENDIENTE_SALDO", "LISTO_PARA_ENTREGA", "PARCIALMENTE_ENTREGADO", "CANCELADO"},
-    "PENDIENTE_SALDO": {"LISTO_PARA_ENTREGA", "CANCELADO"},
-    "LISTO_PARA_ENTREGA": {"PARCIALMENTE_ENTREGADO", "ENTREGADO", "CANCELADO"},
+    "PENDIENTE_SALDO": {"LISTO_PARA_ENTREGA", "PARCIALMENTE_ENTREGADO", "PENDIENTE_ANTICIPO", "CANCELADO"},
+    "LISTO_PARA_ENTREGA": {"PENDIENTE_SALDO", "PARCIALMENTE_ENTREGADO", "ENTREGADO", "CANCELADO"},
     "PARCIALMENTE_ENTREGADO": {"ENTREGADO", "DEVUELTO_TOTAL", "CANCELADO"},
     "ENTREGADO": {"DEVUELTO_TOTAL"},
     "CANCELADO": set(),
@@ -217,7 +251,12 @@ def recalculate_sale_order_state(so: SaleOrder, db: Session) -> str:
     any_ready = any(l.quantity_reserved > 0 for l in active_lines)
 
     if all_ready:
-        if saldo_cop > Decimal("0.00") and anticipo_req_pct == Decimal("100.00"):
+        has_valid_financial_exception = bool(
+            so.policy_exception_authorized_by and
+            so.policy_exception_reason and
+            len(str(so.policy_exception_reason).strip()) >= 5
+        )
+        if saldo_cop > Decimal("0.00") and not has_valid_financial_exception:
             return "PENDIENTE_SALDO"
         return "LISTO_PARA_ENTREGA"
 
@@ -225,6 +264,43 @@ def recalculate_sale_order_state(so: SaleOrder, db: Session) -> str:
         return "PARCIALMENTE_DISPONIBLE"
 
     return "CONFIRMADO"
+
+
+
+@router.post("/pedidos/{so_id}/excepcion-financiera")
+def authorize_order_financial_exception(
+    so_id: int,
+    body: FinancialExceptionRequest,
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS)),
+    db: Session = Depends(get_db)
+):
+    so = db.execute(select(SaleOrder).where(SaleOrder.id == so_id).with_for_update()).scalar_one_or_none()
+    if not so:
+        raise HTTPException(404, f"Pedido {so_id} no encontrado")
+    so.policy_exception_authorized_by = body.policy_exception_authorized_by
+    so.policy_exception_reason = body.policy_exception_reason
+    so.estado = recalculate_sale_order_state(so, db)
+    so.updated_at = _now()
+    _log_event(
+        db=db,
+        entity_type="PVEN",
+        entity_id=so.id,
+        entity_numero=so.numero,
+        action="EXCEPCION_FINANCIERA_AUTORIZADA",
+        description=f"Excepción financiera autorizada por {body.policy_exception_authorized_by}: {body.policy_exception_reason}",
+        new_estado=so.estado,
+        user_name=getattr(user, "email", str(getattr(user, "id", "system")))
+    )
+    db.commit()
+    return {
+        "status": "success",
+        "data": {
+            "sale_order_id": so.id,
+            "estado": so.estado,
+            "authorized_by": so.policy_exception_authorized_by,
+            "reason": so.policy_exception_reason
+        }
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -749,131 +825,310 @@ def _apply_purchased_goods_decision(
     user_name: str,
     db: Session
 ):
-    if not decision:
+    if not decision or qty_affected <= Decimal("0.00"):
         return
 
     now = _now()
-    if decision == "PASAR_A_STOCK_NEBULAE":
-        res_list = db.query(InventoryReservation).filter(
-            InventoryReservation.sale_order_line_id == line.id,
-            InventoryReservation.status == "ACTIVE"
-        ).all()
-        for r in res_list:
-            r.owner = "NEBULAE"
-            r.sale_order_line_id = None
-            r.notes = (r.notes or "") + " [Transferido a stock Nebulae por cancelación]"
-        db.query(ProcurementAllocation).filter(
-            ProcurementAllocation.sale_order_line_id == line.id
-        ).update({"allocation_type": "NEBULAE_STOCK", "sale_order_line_id": None}, synchronize_session=False)
+    qty_affected = Decimal(str(qty_affected))
 
-    elif decision == "MANTENER_PENDIENTE":
-        db.query(InventoryReservation).filter(
-            InventoryReservation.sale_order_line_id == line.id,
-            InventoryReservation.status == "ACTIVE"
-        ).update({"sale_order_line_id": None}, synchronize_session=False)
-        db.query(ProcurementAllocation).filter(
-            ProcurementAllocation.sale_order_line_id == line.id
-        ).update({"sale_order_line_id": None}, synchronize_session=False)
+    # 1. Validar REASIGNAR_CLIENTE antes de cualquier mutación si esta es la decisión
+    target_line = None
+    target_so = None
+    if decision == "REASIGNAR_CLIENTE":
+        if not target_customer_id or not target_sale_order_line_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="REASIGNAR_CLIENTE requiere 'target_customer_id' y 'target_sale_order_line_id'"
+            )
+        target_cust = db.query(Customer).filter(Customer.id == target_customer_id).first()
+        if not target_cust:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Cliente destino {target_customer_id} no encontrado")
+        target_line = db.query(SaleOrderLineErp).filter(SaleOrderLineErp.id == target_sale_order_line_id).with_for_update().first()
+        if not target_line:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Línea destino {target_sale_order_line_id} no encontrada")
+        target_so = db.query(SaleOrder).filter(SaleOrder.id == target_line.so_id).with_for_update().first()
+        if not target_so or (target_line.customer_id != target_customer_id and target_so.customer_id != target_customer_id):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"La línea destino {target_line.id} no pertenece al cliente destino {target_customer_id}")
+        if target_line.id == line.id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La línea destino no puede ser la misma línea de origen")
+        if target_line.sku_id != line.sku_id:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"SKU incompatible: origen={line.sku_id}, destino={target_line.sku_id}")
+        if target_line.owner != line.owner:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Propietario incompatible: origen={line.owner}, destino={target_line.owner}")
+        if target_line.estado in ("CANCELADA", "ENTREGADA", "DEVUELTA_TOTAL"):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Línea destino en estado '{target_line.estado}' no es válida para reasignación")
+        target_pending_need = (target_line.quantity - target_line.quantity_delivered - target_line.quantity_cancelled) - target_line.quantity_reserved
+        if qty_affected > target_pending_need:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Cantidad reasignada ({qty_affected}) supera la necesidad pendiente ({target_pending_need}) de la línea destino {target_line.id}")
 
-    elif decision == "REASIGNAR_CLIENTE":
-        if target_sale_order_line_id:
-            db.query(InventoryReservation).filter(
-                InventoryReservation.sale_order_line_id == line.id,
-                InventoryReservation.status == "ACTIVE"
-            ).update({"sale_order_line_id": target_sale_order_line_id}, synchronize_session=False)
-            db.query(ProcurementAllocation).filter(
-                ProcurementAllocation.sale_order_line_id == line.id
-            ).update({"sale_order_line_id": target_sale_order_line_id}, synchronize_session=False)
+    # 2. Manejar reservas de inventario activas para exactamente qty_affected
+    res_active = db.query(InventoryReservation).filter(
+        InventoryReservation.sale_order_line_id == line.id,
+        InventoryReservation.status == "ACTIVE"
+    ).order_by(InventoryReservation.id.asc()).with_for_update().all()
 
-    elif decision == "DEVOLVER_PROVEEDOR":
-        res_list = db.query(InventoryReservation).filter(
-            InventoryReservation.sale_order_line_id == line.id,
-            InventoryReservation.status == "ACTIVE"
-        ).all()
-        for r in res_list:
-            r.status = "RELEASED"
-            r.released_at = now
-            lvl = db.query(InventoryLevel).filter(
-                InventoryLevel.sku_id == r.sku_id,
-                InventoryLevel.warehouse_id == r.warehouse_id
-            ).with_for_update().first()
-            if lvl and lvl.quantity >= r.quantity_reserved:
-                lvl.quantity -= r.quantity_reserved
-                ob = db.query(InventoryOwnerBalance).filter(
-                    InventoryOwnerBalance.sku_id == r.sku_id,
-                    InventoryOwnerBalance.warehouse_id == r.warehouse_id,
-                    InventoryOwnerBalance.owner == r.owner
+    rem_res = qty_affected
+    for r in res_active:
+        if rem_res <= Decimal("0.00"):
+            break
+        if r.quantity_reserved <= rem_res:
+            take_qty = r.quantity_reserved
+            rem_res -= take_qty
+            target_res_obj = r
+        else:
+            take_qty = rem_res
+            rem_res = Decimal("0.00")
+            r.quantity_reserved -= take_qty
+            split_res = InventoryReservation(
+                sku_id=r.sku_id,
+                warehouse_id=r.warehouse_id,
+                owner=r.owner,
+                quantity_reserved=take_qty,
+                sale_order_line_id=r.sale_order_line_id,
+                status="ACTIVE",
+                created_at=r.created_at,
+                created_by=user_name,
+                notes=f"Split de reserva {r.id} por cancelación parcial"
+            )
+            db.add(split_res)
+            db.flush()
+            target_res_obj = split_res
+
+        # Aplicar decisión a target_res_obj
+        if decision == "PASAR_A_STOCK_NEBULAE":
+            orig_owner = target_res_obj.owner
+            target_res_obj.owner = "NEBULAE"
+            target_res_obj.sale_order_line_id = None
+            target_res_obj.status = "RELEASED"
+            target_res_obj.released_at = now
+            target_res_obj.notes = (target_res_obj.notes or "") + " [Transferido a stock Nebulae por cancelación]"
+            if orig_owner != "NEBULAE":
+                ob_orig = db.query(InventoryOwnerBalance).filter(
+                    InventoryOwnerBalance.sku_id == target_res_obj.sku_id,
+                    InventoryOwnerBalance.warehouse_id == target_res_obj.warehouse_id,
+                    InventoryOwnerBalance.owner == orig_owner
                 ).with_for_update().first()
-                if ob and ob.quantity >= r.quantity_reserved:
-                    ob.quantity -= r.quantity_reserved
-                inv_op = InventoryOperation(
-                    operation_type="PHYSICAL_INVENTORY",
-                    source_warehouse_id=r.warehouse_id,
-                    dest_warehouse_id=None,
-                    status="DONE",
-                    source_document_type="CANCELACION",
-                    source_document_id=line.id,
-                    source_document_numero=f"SOL-{line.id}",
-                )
-                db.add(inv_op)
-                db.flush()
-                mov = InventoryMovement(
-                    operation_id=inv_op.id,
-                    sku_id=r.sku_id,
-                    warehouse_id=r.warehouse_id,
-                    direction="OUT",
-                    quantity=r.quantity_reserved,
-                    owner=r.owner,
-                    idempotency_key=f"mov-canc-dev-{line.id}-{r.id}-{uuid.uuid4().hex[:8]}",
-                    created_at=now,
-                    created_by=user_name,
-                )
-                db.add(mov)
-
-    elif decision == "REGISTRAR_PERDIDA":
-        res_list = db.query(InventoryReservation).filter(
-            InventoryReservation.sale_order_line_id == line.id,
-            InventoryReservation.status == "ACTIVE"
-        ).all()
-        for r in res_list:
-            r.status = "RELEASED"
-            r.released_at = now
-            lvl = db.query(InventoryLevel).filter(
-                InventoryLevel.sku_id == r.sku_id,
-                InventoryLevel.warehouse_id == r.warehouse_id
-            ).with_for_update().first()
-            if lvl and lvl.quantity >= r.quantity_reserved:
-                lvl.quantity -= r.quantity_reserved
-                ob = db.query(InventoryOwnerBalance).filter(
-                    InventoryOwnerBalance.sku_id == r.sku_id,
-                    InventoryOwnerBalance.warehouse_id == r.warehouse_id,
-                    InventoryOwnerBalance.owner == r.owner
+                if ob_orig and ob_orig.quantity >= take_qty:
+                    ob_orig.quantity -= take_qty
+                ob_neb = db.query(InventoryOwnerBalance).filter(
+                    InventoryOwnerBalance.sku_id == target_res_obj.sku_id,
+                    InventoryOwnerBalance.warehouse_id == target_res_obj.warehouse_id,
+                    InventoryOwnerBalance.owner == "NEBULAE"
                 ).with_for_update().first()
-                if ob and ob.quantity >= r.quantity_reserved:
-                    ob.quantity -= r.quantity_reserved
-                inv_op = InventoryOperation(
-                    operation_type="PHYSICAL_INVENTORY",
-                    source_warehouse_id=r.warehouse_id,
-                    dest_warehouse_id=None,
-                    status="DONE",
-                    source_document_type="CANCELACION",
-                    source_document_id=line.id,
-                    source_document_numero=f"SOL-{line.id}",
+                if not ob_neb:
+                    ob_neb = InventoryOwnerBalance(
+                        sku_id=target_res_obj.sku_id,
+                        warehouse_id=target_res_obj.warehouse_id,
+                        owner="NEBULAE",
+                        quantity=Decimal("0.00"),
+                        updated_at=now
+                    )
+                    db.add(ob_neb)
+                ob_neb.quantity += take_qty
+
+        elif decision == "MANTENER_PENDIENTE":
+            target_res_obj.sale_order_line_id = None
+            target_res_obj.status = "RELEASED"
+            target_res_obj.released_at = now
+            target_res_obj.notes = (target_res_obj.notes or "") + " [Liberado a stock pendiente por cancelación]"
+
+        elif decision == "REASIGNAR_CLIENTE":
+            target_res_obj.sale_order_line_id = target_sale_order_line_id
+            target_res_obj.notes = (target_res_obj.notes or "") + f" [Reasignado desde línea {line.id}]"
+
+        elif decision == "DEVOLVER_PROVEEDOR":
+            target_res_obj.status = "RELEASED"
+            target_res_obj.released_at = now
+            lvl = db.query(InventoryLevel).filter(
+                InventoryLevel.sku_id == target_res_obj.sku_id,
+                InventoryLevel.warehouse_id == target_res_obj.warehouse_id
+            ).with_for_update().first()
+            if lvl and lvl.quantity >= take_qty:
+                lvl.quantity -= take_qty
+            ob = db.query(InventoryOwnerBalance).filter(
+                InventoryOwnerBalance.sku_id == target_res_obj.sku_id,
+                InventoryOwnerBalance.warehouse_id == target_res_obj.warehouse_id,
+                InventoryOwnerBalance.owner == target_res_obj.owner
+            ).with_for_update().first()
+            if ob and ob.quantity >= take_qty:
+                ob.quantity -= take_qty
+            inv_op = InventoryOperation(
+                operation_type="PHYSICAL_INVENTORY",
+                source_warehouse_id=target_res_obj.warehouse_id,
+                dest_warehouse_id=None,
+                status="DONE",
+                source_document_type="CANCELACION",
+                source_document_id=line.id,
+                source_document_numero=f"SOL-{line.id}",
+            )
+            db.add(inv_op)
+            db.flush()
+            mov = InventoryMovement(
+                operation_id=inv_op.id,
+                sku_id=target_res_obj.sku_id,
+                warehouse_id=target_res_obj.warehouse_id,
+                direction="OUT",
+                quantity=take_qty,
+                owner=target_res_obj.owner,
+                idempotency_key=f"mov-canc-dev-{line.id}-{target_res_obj.id}-{uuid.uuid4().hex[:8]}",
+                created_at=now,
+                created_by=user_name,
+            )
+            db.add(mov)
+
+        elif decision == "REGISTRAR_PERDIDA":
+            target_res_obj.status = "RELEASED"
+            target_res_obj.released_at = now
+            lvl = db.query(InventoryLevel).filter(
+                InventoryLevel.sku_id == target_res_obj.sku_id,
+                InventoryLevel.warehouse_id == target_res_obj.warehouse_id
+            ).with_for_update().first()
+            if lvl and lvl.quantity >= take_qty:
+                lvl.quantity -= take_qty
+            ob = db.query(InventoryOwnerBalance).filter(
+                InventoryOwnerBalance.sku_id == target_res_obj.sku_id,
+                InventoryOwnerBalance.warehouse_id == target_res_obj.warehouse_id,
+                InventoryOwnerBalance.owner == target_res_obj.owner
+            ).with_for_update().first()
+            if ob and ob.quantity >= take_qty:
+                ob.quantity -= take_qty
+            inv_op = InventoryOperation(
+                operation_type="SCRAP",
+                source_warehouse_id=target_res_obj.warehouse_id,
+                dest_warehouse_id=None,
+                status="DONE",
+                source_document_type="CANCELACION",
+                source_document_id=line.id,
+                source_document_numero=f"SOL-{line.id}",
+            )
+            db.add(inv_op)
+            db.flush()
+            mov = InventoryMovement(
+                operation_id=inv_op.id,
+                sku_id=target_res_obj.sku_id,
+                warehouse_id=target_res_obj.warehouse_id,
+                direction="SCRAP",
+                quantity=take_qty,
+                owner=target_res_obj.owner,
+                idempotency_key=f"mov-canc-scrap-{line.id}-{target_res_obj.id}-{uuid.uuid4().hex[:8]}",
+                created_at=now,
+                created_by=user_name,
+            )
+            db.add(mov)
+
+    # 3. Manejar ProcurementAllocations si existen para exactamente qty_affected
+    allocs = db.query(ProcurementAllocation).filter(
+        ProcurementAllocation.sale_order_line_id == line.id
+    ).order_by(ProcurementAllocation.id.asc()).with_for_update().all()
+
+    rem_alloc = qty_affected
+    for a in allocs:
+        if rem_alloc <= Decimal("0.00"):
+            break
+        if a.quantity_allocated <= rem_alloc:
+            take_alloc = a.quantity_allocated
+            rem_alloc -= take_alloc
+            target_alloc_obj = a
+        else:
+            take_alloc = rem_alloc
+            rem_alloc = Decimal("0.00")
+            a.quantity_allocated -= take_alloc
+            target_alloc_obj = None
+
+        if decision == "PASAR_A_STOCK_NEBULAE":
+            existing_stock_alloc = db.query(ProcurementAllocation).filter(
+                ProcurementAllocation.po_line_id == a.po_line_id,
+                ProcurementAllocation.allocation_type == "NEBULAE_STOCK",
+                ProcurementAllocation.sale_order_line_id.is_(None)
+            ).first()
+            if existing_stock_alloc:
+                existing_stock_alloc.quantity_allocated += take_alloc
+            else:
+                new_alloc = ProcurementAllocation(
+                    po_line_id=a.po_line_id,
+                    allocation_type="NEBULAE_STOCK",
+                    sale_order_line_id=None,
+                    quantity_allocated=take_alloc,
+                    created_at=now
                 )
-                db.add(inv_op)
-                db.flush()
-                mov = InventoryMovement(
-                    operation_id=inv_op.id,
-                    sku_id=r.sku_id,
-                    warehouse_id=r.warehouse_id,
-                    direction="OUT",
-                    quantity=r.quantity_reserved,
-                    owner=r.owner,
-                    idempotency_key=f"mov-canc-perd-{line.id}-{r.id}-{uuid.uuid4().hex[:8]}",
-                    created_at=now,
-                    created_by=user_name,
+                db.add(new_alloc)
+            if target_alloc_obj:
+                db.delete(target_alloc_obj)
+
+        elif decision == "MANTENER_PENDIENTE":
+            if target_alloc_obj:
+                target_alloc_obj.sale_order_line_id = None
+            else:
+                new_alloc = ProcurementAllocation(
+                    po_line_id=a.po_line_id,
+                    allocation_type=a.allocation_type,
+                    sale_order_line_id=None,
+                    quantity_allocated=take_alloc,
+                    created_at=now
                 )
-                db.add(mov)
+                db.add(new_alloc)
+
+        elif decision == "REASIGNAR_CLIENTE":
+            existing_target_alloc = db.query(ProcurementAllocation).filter(
+                ProcurementAllocation.po_line_id == a.po_line_id,
+                ProcurementAllocation.allocation_type == "CUSTOMER_ORDER",
+                ProcurementAllocation.sale_order_line_id == target_sale_order_line_id
+            ).first()
+            if existing_target_alloc:
+                existing_target_alloc.quantity_allocated += take_alloc
+            else:
+                new_alloc = ProcurementAllocation(
+                    po_line_id=a.po_line_id,
+                    allocation_type="CUSTOMER_ORDER",
+                    sale_order_line_id=target_sale_order_line_id,
+                    quantity_allocated=take_alloc,
+                    created_at=now
+                )
+                db.add(new_alloc)
+            if target_alloc_obj:
+                db.delete(target_alloc_obj)
+
+        elif decision in ("DEVOLVER_PROVEEDOR", "REGISTRAR_PERDIDA"):
+            if target_alloc_obj:
+                db.delete(target_alloc_obj)
+
+    db.flush()
+    # Si fue REASIGNAR_CLIENTE, actualizar target_line y target_so
+    if decision == "REASIGNAR_CLIENTE" and target_line:
+        target_line.quantity_reserved = db.query(
+            func.coalesce(func.sum(InventoryReservation.quantity_reserved), Decimal("0.00"))
+        ).filter(
+            InventoryReservation.sale_order_line_id == target_line.id,
+            InventoryReservation.status == "ACTIVE"
+        ).scalar() or Decimal("0.00")
+        if target_line.quantity_reserved >= (target_line.quantity - target_line.quantity_delivered - target_line.quantity_cancelled):
+            target_line.estado = "RESERVADA"
+        target_line.updated_at = now
+        so = db.query(SaleOrder).filter(SaleOrder.id == line.so_id).first()
+        so_num = so.numero if so else f"SO-{line.so_id}"
+        _log_event(
+            db=db,
+            entity_type="PVEN",
+            entity_id=line.so_id,
+            entity_numero=so_num,
+            action="MERCANCIA_REASIGNADA",
+            description=f"Reasignadas {qty_affected} unidades de línea {line.id} a cliente {target_customer_id}, línea {target_line.id}",
+            user_name=user_name,
+            extra_data={"source_line_id": line.id, "target_line_id": target_line.id, "target_customer_id": target_customer_id, "quantity": str(qty_affected)}
+        )
+        if target_so:
+            target_so.estado = recalculate_sale_order_state(target_so, db)
+            target_so.updated_at = now
+
+    db.flush()
+    # Reconciliar estrictamente line.quantity_reserved con las reservas ACTIVE restantes
+    line.quantity_reserved = db.query(
+        func.coalesce(func.sum(InventoryReservation.quantity_reserved), Decimal("0.00"))
+    ).filter(
+        InventoryReservation.sale_order_line_id == line.id,
+        InventoryReservation.status == "ACTIVE"
+    ).scalar() or Decimal("0.00")
+
 
 
 @router.post("/pedidos/{so_id}/cancelar")
@@ -1018,15 +1273,16 @@ def cancel_sale_order_line(
     if qty_to_cancel > max_cancelable:
         raise HTTPException(422, f"Cantidad a cancelar ({qty_to_cancel}) supera la cantidad cancelable ({max_cancelable})")
 
+    decision = body.purchased_goods_decision or getattr(body, "decision", None)
     # Verificar compras asociadas
     alloc = db.query(ProcurementAllocation).filter(
         ProcurementAllocation.sale_order_line_id == line.id
     ).first()
-    if alloc and not body.purchased_goods_decision:
+    if alloc and not decision:
         raise HTTPException(422, "La línea tiene compras asociadas. Debe indicar 'purchased_goods_decision'.")
 
     _apply_purchased_goods_decision(
-        body.purchased_goods_decision,
+        decision,
         line,
         qty_to_cancel,
         body.target_customer_id,
@@ -1035,24 +1291,32 @@ def cancel_sale_order_line(
         db
     )
 
-    # Liberar reserva proporcional
-    res_active = db.query(InventoryReservation).filter(
+    if not decision:
+        # Liberar reserva proporcional únicamente si no se aplicó una decisión específica
+        res_active = db.query(InventoryReservation).filter(
+            InventoryReservation.sale_order_line_id == line.id,
+            InventoryReservation.status == "ACTIVE"
+        ).order_by(InventoryReservation.id.asc()).all()
+        rem_lib = qty_to_cancel
+        for r in res_active:
+            if rem_lib <= Decimal("0.00"):
+                break
+            if r.quantity_reserved <= rem_lib:
+                r.status = "RELEASED"
+                r.released_at = now
+                rem_lib -= r.quantity_reserved
+            else:
+                r.quantity_reserved -= rem_lib
+                rem_lib = Decimal("0.00")
+
+    db.flush()
+    # Reconciliar cantidad reservada de la línea con reservas activas
+    line.quantity_reserved = db.query(
+        func.coalesce(func.sum(InventoryReservation.quantity_reserved), Decimal("0.00"))
+    ).filter(
         InventoryReservation.sale_order_line_id == line.id,
         InventoryReservation.status == "ACTIVE"
-    ).all()
-    rem_lib = qty_to_cancel
-    for r in res_active:
-        if rem_lib <= Decimal("0.00"):
-            break
-        if r.quantity_reserved <= rem_lib:
-            r.status = "RELEASED"
-            r.released_at = now
-            rem_lib -= r.quantity_reserved
-            line.quantity_reserved = max(Decimal("0.00"), line.quantity_reserved - r.quantity_reserved)
-        else:
-            r.quantity_reserved -= rem_lib
-            line.quantity_reserved = max(Decimal("0.00"), line.quantity_reserved - rem_lib)
-            rem_lib = Decimal("0.00")
+    ).scalar() or Decimal("0.00")
 
     line.quantity_cancelled += qty_to_cancel
     if line.quantity_cancelled + line.quantity_delivered >= line.quantity:
@@ -1189,38 +1453,68 @@ def create_packing_session(
         if line.estado in ("CANCELADA", "DEVUELTA_TOTAL"):
             raise HTTPException(422, f"La línea {line.id} se encuentra en estado terminal '{line.estado}'")
 
-        # Cantidad reservada o disponible pendiente de empacar
+        # Validar rigurosamente que cada cantidad a empacar esté respaldada por reserva ACTIVE en la misma bodega
+        active_res_qty = db.query(
+            func.coalesce(func.sum(InventoryReservation.quantity_reserved), Decimal("0.00"))
+        ).filter(
+            InventoryReservation.sale_order_line_id == line.id,
+            InventoryReservation.warehouse_id == body.warehouse_id,
+            InventoryReservation.status == "ACTIVE"
+        ).scalar() or Decimal("0.00")
+
+        if active_res_qty <= Decimal("0.00"):
+            if line.modalidad == "ENTREGA_INMEDIATA":
+                lvl = db.query(InventoryLevel).filter(
+                    InventoryLevel.sku_id == line.sku_id,
+                    InventoryLevel.warehouse_id == body.warehouse_id
+                ).with_for_update().first()
+                ob = db.query(InventoryOwnerBalance).filter(
+                    InventoryOwnerBalance.sku_id == line.sku_id,
+                    InventoryOwnerBalance.warehouse_id == body.warehouse_id,
+                    InventoryOwnerBalance.owner == line.owner
+                ).with_for_update().first()
+                if lvl and ob and lvl.quantity >= it.quantity and ob.quantity >= it.quantity:
+                    rsv_key = f"rsv-pack-auto-{sess.id}-{line.id}-{uuid.uuid4().hex[:8]}"
+                    auto_rsv = InventoryReservation(
+                        sku_id=line.sku_id,
+                        warehouse_id=body.warehouse_id,
+                        owner=line.owner,
+                        quantity_reserved=it.quantity,
+                        sale_order_line_id=line.id,
+                        status="ACTIVE",
+                        idempotency_key=rsv_key,
+                        created_by=user_name,
+                        created_at=now,
+                        notes=f"Reserva automática para sesión de empaque {sess.numero}"
+                    )
+                    db.add(auto_rsv)
+                    db.flush()
+                    active_res_qty = it.quantity
+                    line.quantity_reserved = (line.quantity_reserved or Decimal("0.00")) + it.quantity
+                    if line.quantity_reserved >= (line.quantity - line.quantity_delivered - line.quantity_cancelled):
+                        line.estado = "RESERVADA"
+                    line.updated_at = now
+
+        if active_res_qty <= Decimal("0.00"):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"La línea {line.id} no tiene reserva física activa en la bodega {body.warehouse_id}. No se puede empacar mercancía sin reserva previa."
+            )
+
         already_packed = db.query(
             func.coalesce(func.sum(SalePackingItem.quantity), Decimal("0.00"))
         ).join(SalePackingSession).filter(
             SalePackingItem.sale_order_line_id == line.id,
-            SalePackingSession.status.in_(["EN_PROCESO", "LISTO_DESPACHO", "DESPACHADO"])
+            SalePackingSession.warehouse_id == body.warehouse_id,
+            SalePackingSession.status.in_(["EN_PROCESO", "LISTO_DESPACHO"])
         ).scalar() or Decimal("0.00")
 
-        avail_reserved = Decimal(str(line.quantity_reserved or 0))
-        if avail_reserved > Decimal("0.00"):
-            pending_to_pack = avail_reserved - Decimal(str(already_packed))
-            if it.quantity > pending_to_pack:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Cantidad a empacar ({it.quantity}) supera la cantidad reservada pendiente de empacar ({pending_to_pack}) para la línea {line.id}"
-                )
-        else:
-            pending_to_pack = (Decimal(str(line.quantity)) - Decimal(str(line.quantity_delivered or 0)) - Decimal(str(line.quantity_cancelled or 0))) - Decimal(str(already_packed))
-            if it.quantity > pending_to_pack:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Cantidad a empacar ({it.quantity}) supera la cantidad disponible pendiente de empacar ({pending_to_pack}) para la línea {line.id}"
-                )
-
-        # Validar bodega de las reservas utilizadas
-        active_res = db.query(InventoryReservation).filter(
-            InventoryReservation.sale_order_line_id == line.id,
-            InventoryReservation.warehouse_id == body.warehouse_id,
-            InventoryReservation.status == "ACTIVE"
-        ).first()
-        if not active_res and line.quantity_reserved > 0:
-            raise HTTPException(422, f"Las reservas de la línea {line.id} no corresponden a la bodega {body.warehouse_id}")
+        pending_to_pack = active_res_qty - already_packed
+        if it.quantity > pending_to_pack:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Cantidad a empacar ({it.quantity}) supera la reserva activa disponible ({pending_to_pack}) en bodega {body.warehouse_id} para la línea {line.id}"
+            )
 
         p_item = SalePackingItem(
             packing_id=sess.id,
@@ -1446,10 +1740,13 @@ def create_delivery(
         raise HTTPException(404, f"Bodega {body.warehouse_id} no encontrada")
 
     # Validar packing si se proporciona
+    ps = None
     if body.packing_id:
-        ps = db.query(SalePackingSession).filter(SalePackingSession.id == body.packing_id).first()
+        ps = db.query(SalePackingSession).filter(SalePackingSession.id == body.packing_id).with_for_update().first()
         if not ps:
             raise HTTPException(404, f"Sesión de empaque {body.packing_id} no encontrada")
+        if ps.status != "LISTO_DESPACHO":
+            raise HTTPException(422, f"La sesión de empaque {ps.numero} está en estado '{ps.status}', no en 'LISTO_DESPACHO'")
         if ps.customer_id != body.customer_id:
             raise HTTPException(422, f"La sesión de empaque pertenece al cliente {ps.customer_id}, no a {body.customer_id}")
         if ps.warehouse_id != body.warehouse_id:
@@ -1497,30 +1794,54 @@ def create_delivery(
         if so.customer_id != body.customer_id:
             raise HTTPException(422, f"El pedido {so.id} pertenece al cliente {so.customer_id}, no al cliente {body.customer_id} de la entrega")
 
+        # Bloqueo pesimista para evitar sobrecompromiso concurrente
         line = db.query(SaleOrderLineErp).filter(
             SaleOrderLineErp.id == dl.sale_order_line_id,
             SaleOrderLineErp.so_id == dl.sale_order_id
-        ).first()
+        ).with_for_update().first()
         if not line:
             raise HTTPException(404, f"Línea {dl.sale_order_line_id} no encontrada en pedido {dl.sale_order_id}")
 
         if line.sku_id != dl.sku_id:
             raise HTTPException(422, f"SKU {dl.sku_id} no coincide con el SKU de la línea {line.sku_id}")
 
-        # Control de acumulación
-        already_in_deliv = db.query(
+        # Control canónico de acumulación sin doble descuento:
+        # cantidad acumulada no cancelada de entregas abiertas o ejecutadas <= line.quantity - line.quantity_cancelled
+        line_net_qty = Decimal(str(line.quantity)) - Decimal(str(line.quantity_cancelled or 0))
+        already_committed = db.query(
             func.coalesce(func.sum(SaleOrderDeliveryLine.quantity), Decimal("0.00"))
         ).join(SaleOrderDelivery).filter(
             SaleOrderDeliveryLine.sale_order_line_id == line.id,
             SaleOrderDelivery.status.in_(["BORRADOR", "PREPARANDO", "DESPACHADO", "EN_TRANSITO", "ENTREGADO"])
         ).scalar() or Decimal("0.00")
 
-        max_deliverable = line.quantity - line.quantity_cancelled - line.quantity_delivered
-        if already_in_deliv + dl.quantity > max_deliverable:
+        available_to_deliver = max(Decimal("0.00"), line_net_qty - Decimal(str(already_committed)))
+        if Decimal(str(dl.quantity)) > available_to_deliver:
             raise HTTPException(
                 status_code=422,
-                detail=f"Cantidad acumulada en entregas ({already_in_deliv + dl.quantity}) supera lo vendible pendiente ({max_deliverable}) para la línea {line.id}"
+                detail=f"Cantidad a entregar ({dl.quantity}) supera lo vendible pendiente disponible ({available_to_deliver}) para la línea {line.id}"
             )
+
+        # Si proviene de una sesión de empaque, validar que esté empacado y no reutilizado
+        if body.packing_id and ps:
+            pack_item = next((pi for pi in ps.items if pi.sale_order_line_id == dl.sale_order_line_id), None)
+            if not pack_item:
+                raise HTTPException(422, f"Línea {dl.sale_order_line_id} no existe en la sesión de empaque {ps.numero}")
+            
+            already_from_pack = db.query(
+                func.coalesce(func.sum(SaleOrderDeliveryLine.quantity), Decimal("0.00"))
+            ).join(SaleOrderDelivery).filter(
+                SaleOrderDelivery.packing_id == ps.id,
+                SaleOrderDelivery.status.in_(["BORRADOR", "PREPARANDO", "DESPACHADO", "EN_TRANSITO", "ENTREGADO"]),
+                SaleOrderDeliveryLine.sale_order_line_id == dl.sale_order_line_id
+            ).scalar() or Decimal("0.00")
+
+            avail_pack_qty = max(Decimal("0.00"), Decimal(str(pack_item.verified_quantity)) - Decimal(str(already_from_pack)))
+            if Decimal(str(dl.quantity)) > avail_pack_qty:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Cantidad a entregar ({dl.quantity}) supera las unidades empacadas disponibles ({avail_pack_qty}) en sesión {ps.numero} para línea {line.id}"
+                )
 
         d_line = SaleOrderDeliveryLine(
             delivery_id=delivery.id,
@@ -1599,8 +1920,11 @@ def dispatch_delivery(
     for so_id in order_ids:
         so = db.query(SaleOrder).filter(SaleOrder.id == so_id).with_for_update().first()
         if so and so.saldo_cop > Decimal("0.00"):
-            anticipo_req = Decimal(str(so.anticipo_pct_snapshot or 60.00))
-            if anticipo_req == Decimal("100.00") or not delivery.policy_authorized_by:
+            has_exception = bool(
+                delivery.policy_authorized_by or
+                (so.policy_exception_authorized_by and len(str(so.policy_exception_reason or "").strip()) >= 5)
+            )
+            if not has_exception:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail=f"Despacho rechazado: Pedido {so.numero} tiene saldo pendiente de ${so.saldo_cop:,.0f} COP sin excepción autorizada"
@@ -1697,6 +2021,15 @@ def dispatch_delivery(
         db.add(mov)
 
         line.quantity_delivered += dl.quantity
+        db.flush()
+        # Reconciliar estrictamente line.quantity_reserved con las reservas ACTIVE restantes
+        line.quantity_reserved = db.query(
+            func.coalesce(func.sum(InventoryReservation.quantity_reserved), Decimal("0.00"))
+        ).filter(
+            InventoryReservation.sale_order_line_id == line.id,
+            InventoryReservation.status == "ACTIVE"
+        ).scalar() or Decimal("0.00")
+
         if line.quantity_delivered >= (line.quantity - line.quantity_cancelled):
             line.estado = "ENTREGADA"
         line.updated_at = now
@@ -1708,11 +2041,27 @@ def dispatch_delivery(
     delivery.evidence_url = body.evidence_url or delivery.evidence_url
     delivery.idempotency_key = client_key
     delivery.updated_at = now
+    db.flush()
 
     if delivery.packing_id:
-        ps = db.query(SalePackingSession).filter(SalePackingSession.id == delivery.packing_id).first()
+        ps = db.query(SalePackingSession).filter(SalePackingSession.id == delivery.packing_id).with_for_update().first()
         if ps:
-            ps.status = "DESPACHADO"
+            all_consumed = True
+            for it in ps.items:
+                consumed = db.query(
+                    func.coalesce(func.sum(SaleOrderDeliveryLine.quantity), Decimal("0.00"))
+                ).join(SaleOrderDelivery).filter(
+                    SaleOrderDelivery.packing_id == ps.id,
+                    SaleOrderDelivery.status.in_(["DESPACHADO", "EN_TRANSITO", "ENTREGADO"]),
+                    SaleOrderDeliveryLine.sale_order_line_id == it.sale_order_line_id
+                ).scalar() or Decimal("0.00")
+                if Decimal(str(consumed)) < Decimal(str(it.verified_quantity)):
+                    all_consumed = False
+                    break
+            if all_consumed:
+                ps.status = "DESPACHADO"
+            else:
+                ps.status = "LISTO_DESPACHO"
 
     for so_id in order_ids:
         so = db.query(SaleOrder).filter(SaleOrder.id == so_id).first()
@@ -1821,19 +2170,43 @@ def create_sale_order_return(
     if body.sale_order_id != so_id:
         raise HTTPException(422, f"sale_order_id en el payload ({body.sale_order_id}) no coincide con la URL ({so_id})")
 
-    # Idempotencia
+    # Idempotencia determinista con fingerprint canónico del payload completo
     existing_ret = db.execute(
         select(SaleOrderReturn).where(SaleOrderReturn.idempotency_key == client_key)
     ).scalar_one_or_none()
     if existing_ret:
-        if existing_ret.sale_order_id != so_id or existing_ret.refund_amount != (body.refund_amount or Decimal("0.00")):
-            raise HTTPException(409, "idempotency_key ya utilizada para otra devolución con parámetros divergentes")
+        incoming_fp = _compute_return_fingerprint(
+            so_id=so_id,
+            customer_id=body.customer_id,
+            delivery_id=body.delivery_id,
+            financial_resolution=body.financial_resolution,
+            refund_amount=body.refund_amount or Decimal("0.00"),
+            lines=body.lines
+        )
+        existing_lines = db.query(SaleOrderReturnLine).filter(SaleOrderReturnLine.return_id == existing_ret.id).all()
+        existing_fp = _compute_return_fingerprint(
+            so_id=existing_ret.sale_order_id,
+            customer_id=existing_ret.customer_id,
+            delivery_id=existing_ret.delivery_id,
+            financial_resolution=existing_ret.financial_resolution,
+            refund_amount=existing_ret.refund_amount,
+            lines=existing_lines
+        )
+        if incoming_fp != existing_fp:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="idempotency_key ya utilizada para otra devolución con parámetros divergentes"
+            )
         response.status_code = status.HTTP_200_OK
         return {
             "status": "success",
             "message": "Replay idempotente de devolución",
             "idempotent_replay": True,
-            "data": {"id": existing_ret.id, "numero": existing_ret.numero, "status": existing_ret.status}
+            "data": {
+                "id": existing_ret.id,
+                "numero": existing_ret.numero,
+                "status": existing_ret.status,
+            }
         }
 
     so = db.execute(select(SaleOrder).where(SaleOrder.id == so_id).with_for_update()).scalar_one_or_none()
@@ -1995,8 +2368,35 @@ def create_sale_order_return(
             )
             db.add(mov)
 
-        elif rl.inventory_resolution == "DEVOLVER_PROVEEDOR":
+        elif rl.inventory_resolution == "DESTRUIDO":
             mov = InventoryMovement(
+                operation_id=inv_op.id,
+                sku_id=derived_sku_id,
+                warehouse_id=rl.warehouse_id,
+                direction="SCRAP",
+                quantity=rl.quantity,
+                owner=derived_owner,
+                idempotency_key=f"mov-ret-scrap-{ret.id}-{rl.sale_order_line_id}-{uuid.uuid4().hex[:8]}",
+                created_at=now,
+                created_by=user_name,
+            )
+            db.add(mov)
+
+        elif rl.inventory_resolution == "DEVOLVER_PROVEEDOR":
+            # 1. Reflejar recepción física de la devolución desde el cliente
+            mov_in = InventoryMovement(
+                operation_id=inv_op.id,
+                sku_id=derived_sku_id,
+                warehouse_id=rl.warehouse_id,
+                direction="RETURN_IN",
+                quantity=rl.quantity,
+                owner=derived_owner,
+                idempotency_key=f"mov-ret-prov-in-{ret.id}-{rl.sale_order_line_id}-{uuid.uuid4().hex[:8]}",
+                created_at=now,
+                created_by=user_name,
+            )
+            # 2. Reflejar salida física hacia el proveedor
+            mov_out = InventoryMovement(
                 operation_id=inv_op.id,
                 sku_id=derived_sku_id,
                 warehouse_id=rl.warehouse_id,
@@ -2007,7 +2407,7 @@ def create_sale_order_return(
                 created_at=now,
                 created_by=user_name,
             )
-            db.add(mov)
+            db.add_all([mov_in, mov_out])
 
         # Actualizar estado de la línea según acumulado histórico
         total_ret = past_returned + rl.quantity

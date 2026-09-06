@@ -126,11 +126,12 @@ class CancelSaleOrderRequest(BaseModel):
     motivo: str = Field(..., min_length=5)
     authorized_by: Optional[str] = None
     purchased_goods_decision: Optional[str] = None
+    decision: Optional[str] = None
     # PASAR_A_STOCK_NEBULAE | MANTENER_PENDIENTE | REASIGNAR_CLIENTE | DEVOLVER_PROVEEDOR | REGISTRAR_PERDIDA
     target_customer_id: Optional[int] = None
     target_sale_order_line_id: Optional[int] = None
 
-    @field_validator("purchased_goods_decision")
+    @field_validator("purchased_goods_decision", mode="before")
     @classmethod
     def validate_decision(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
@@ -147,10 +148,11 @@ class CancelLineRequest(BaseModel):
     motivo: str = Field(..., min_length=5)
     authorized_by: Optional[str] = None
     purchased_goods_decision: Optional[str] = None
+    decision: Optional[str] = None
     target_customer_id: Optional[int] = None
     target_sale_order_line_id: Optional[int] = None
 
-    @field_validator("purchased_goods_decision")
+    @field_validator("purchased_goods_decision", mode="before")
     @classmethod
     def validate_decision(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
@@ -245,6 +247,22 @@ class ReturnLineIn(BaseModel):
     product_condition: str = Field("ABIERTO_BUENO", description="NUEVO_SELLADO | ABIERTO_BUENO | DEFECTUOSO | DAÑADO")
     owner: Optional[str] = None
 
+    @field_validator("product_condition", mode="before")
+    @classmethod
+    def normalize_condition(cls, v: Optional[str]) -> str:
+        if not v:
+            return "ABIERTO_BUENO"
+        val = str(v).strip().upper()
+        if val in ("BUENO", "ABIERTO"):
+            return "ABIERTO_BUENO"
+        if val in ("NUEVO", "SELLADO"):
+            return "NUEVO_SELLADO"
+        if val in ("DANADO", "DAÑADO"):
+            return "DAÑADO"
+        if val in ("DEFECTUOSO", "MALO"):
+            return "DEFECTUOSO"
+        return val
+
 
 class SaleOrderReturnCreate(BaseModel):
     sale_order_id: int
@@ -273,3 +291,9 @@ class ProfitabilityResponse(BaseModel):
     nebulae_result_cop: Decimal
     mau_result_cop: Decimal
     lines_breakdown: List[Dict[str, Any]]
+
+
+class FinancialExceptionRequest(BaseModel):
+    policy_exception_authorized_by: str = Field(..., min_length=3)
+    policy_exception_reason: str = Field(..., min_length=5)
+
