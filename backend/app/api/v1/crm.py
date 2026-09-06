@@ -9,7 +9,7 @@ from app.models.fase1b import CustomerRequestLine, SalesQuotationLine, SaleOrder
 from app.models.fase4 import SaleOrderPayment, SalePackingSession, SalePackingItem, SaleOrderDelivery, SaleOrderDeliveryLine, SaleOrderReturn, SaleOrderReturnLine
 from app.models.fase5 import CustomerAgendaActivity, CustomerContactPreference
 from app.models.users import User
-from app.api.dependencies import get_current_user, get_optional_current_user, normalize_role, require_roles, ROLE_ADMIN, ROLE_FINANZAS, ALL_ERP_ROLES
+from app.api.dependencies import get_current_user, get_optional_current_user, normalize_role, require_roles, ROLE_ADMIN, ROLE_FINANZAS, ROLE_ASESOR, ROLE_BODEGA, ROLE_COMPRAS, ALL_ERP_ROLES
 from app.api.v1.schemas_fase5 import AgendaActivityCreate, AgendaActivityResponse
 
 from app.schemas import crm as schemas
@@ -99,14 +99,14 @@ def generate_delivery_alerts(db: Session, days_before: int = 5):
     db.commit()
 
 @router.post("/trigger-alerts")
-def trigger_alerts(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def trigger_alerts(background_tasks: BackgroundTasks, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Simulates a cronjob to generate alerts"""
     background_tasks.add_task(generate_crm_alerts, db)
     background_tasks.add_task(generate_delivery_alerts, db, 5)
     return {"status": "success", "message": "Alert generation triggered in background."}
 
 @router.get("/calendar")
-def get_crm_calendar(db: Session = Depends(get_db)):
+def get_crm_calendar(user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Session = Depends(get_db)):
     alerts = db.query(Alert).filter(Alert.alert_type == "CRM_FOLLOWUP").all()
     calendar_dict = {}
     for alert in alerts:
@@ -128,13 +128,13 @@ from decimal import Decimal
 # ──────────────────────────────────────────────────────────────────────────────
 
 @router.get("/customers", response_model=dict)
-def get_customers(db: Session = Depends(get_db)):
+def get_customers(user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Session = Depends(get_db)):
     customers = db.query(Customer).all()
     return {"status": "success", "data": [CustomerResponse.model_validate(c).model_dump() for c in customers]}
 
 
 @router.post("/customers", response_model=dict)
-def create_customer(customer: CustomerCreate, db: Session = Depends(get_db)):
+def create_customer(customer: CustomerCreate, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     # Check unique email if provided
     if customer.email:
         existing = db.query(Customer).filter(Customer.email == customer.email).first()
@@ -156,7 +156,7 @@ def create_customer(customer: CustomerCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/customers/{customer_id}", response_model=dict)
-def update_customer(customer_id: int, customer: CustomerUpdate, db: Session = Depends(get_db)):
+def update_customer(customer_id: int, customer: CustomerUpdate, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     db_customer = db.query(Customer).filter(Customer.id == customer_id).first()
     if not db_customer:
         raise HTTPException(status_code=404, detail="Customer not found")
@@ -169,7 +169,7 @@ def update_customer(customer_id: int, customer: CustomerUpdate, db: Session = De
 
 
 @router.delete("/customers/{customer_id}", response_model=dict)
-def delete_customer(customer_id: int, db: Session = Depends(get_db)):
+def delete_customer(customer_id: int, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     db_customer = db.query(Customer).filter(Customer.id == customer_id).first()
     if not db_customer:
         raise HTTPException(status_code=404, detail="Customer not found")
@@ -838,7 +838,7 @@ def get_customer_agenda(
     customer_id: Optional[int] = None,
     status: Optional[str] = None,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)
 ):
     """Consulta la agenda operativa del cliente o global."""
     q = db.query(CustomerAgendaActivity)
@@ -856,7 +856,7 @@ def get_customer_agenda(
 @router.post("/agenda/sync", response_model=dict)
 def sync_customer_agenda(
     customer_id: Optional[int] = None,
-    db: Session = Depends(get_db)
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)
 ):
     """Sincroniza actividades de agenda de forma determinista evitando duplicados."""
     count = _sync_operational_agenda_deterministic(db, customer_id)
@@ -866,7 +866,7 @@ def sync_customer_agenda(
 @router.post("/agenda", response_model=dict)
 def create_agenda_activity(
     activity: AgendaActivityCreate,
-    db: Session = Depends(get_db)
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)
 ):
     """Crea una actividad de agenda manual."""
     det_key = f"MANUAL_{activity.customer_id}_{activity.entity_type}_{activity.entity_id or 0}_{activity.activity_type}_{int(time.time())}"
@@ -892,7 +892,7 @@ def create_agenda_activity(
 def update_agenda_activity(
     activity_id: int,
     body: dict,
-    db: Session = Depends(get_db)
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)
 ):
     """Actualiza el estado o detalle de una actividad de agenda."""
     item = db.query(CustomerAgendaActivity).filter(CustomerAgendaActivity.id == activity_id).first()
@@ -946,7 +946,7 @@ def get_solicitud_tipos():
 
 
 @router.post("/customers/{customer_id}/solicitudes", response_model=dict)
-def create_customer_solicitud(customer_id: int, body: dict, db: Session = Depends(get_db)):
+def create_customer_solicitud(customer_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """
     Creates a sales order (Solicitud) in the CRM pipeline linked to a customer.
     Maps the user-facing 'tipo' to the correct pipeline status.
@@ -1021,12 +1021,12 @@ def _stage_to_dict(s):
             "position": s.position, "maps_to_status": s.maps_to_status}
 
 @router.get("/pipeline-stages", response_model=dict)
-def get_pipeline_stages(db: Session = Depends(get_db)):
+def get_pipeline_stages(user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Session = Depends(get_db)):
     stages = db.query(PipelineStage).order_by(PipelineStage.position).all()
     return {"status": "success", "data": [_stage_to_dict(s) for s in stages]}
 
 @router.post("/pipeline-stages", response_model=dict)
-def create_pipeline_stage(body: dict, db: Session = Depends(get_db)):
+def create_pipeline_stage(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     max_pos = db.execute(text("SELECT COALESCE(MAX(position),0) FROM pipeline_stages")).scalar()
     stage = PipelineStage(
         name=body.get("name", "Nueva Etapa"),
@@ -1039,7 +1039,7 @@ def create_pipeline_stage(body: dict, db: Session = Depends(get_db)):
     return {"status": "success", "data": _stage_to_dict(stage)}
 
 @router.put("/pipeline-stages/{stage_id}", response_model=dict)
-def update_pipeline_stage(stage_id: int, body: dict, db: Session = Depends(get_db)):
+def update_pipeline_stage(stage_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     stage = db.query(PipelineStage).filter(PipelineStage.id == stage_id).first()
     if not stage:
         raise HTTPException(status_code=404, detail="Stage not found")
@@ -1050,7 +1050,7 @@ def update_pipeline_stage(stage_id: int, body: dict, db: Session = Depends(get_d
     return {"status": "success", "data": _stage_to_dict(stage)}
 
 @router.delete("/pipeline-stages/{stage_id}", response_model=dict)
-def delete_pipeline_stage(stage_id: int, db: Session = Depends(get_db)):
+def delete_pipeline_stage(stage_id: int, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     stage = db.query(PipelineStage).filter(PipelineStage.id == stage_id).first()
     if not stage:
         raise HTTPException(status_code=404, detail="Stage not found")
@@ -1095,7 +1095,7 @@ def _lead_to_dict(order, customer, stage, db=None) -> dict:
 
 @router.get("/leads", response_model=dict)
 def get_leads(
-    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db),
     limit: int = 500,
     offset: int = 0,
     stage_id: int = None,
@@ -1134,7 +1134,7 @@ def get_leads(
 
 
 @router.patch("/leads/{lead_id}/stage", response_model=dict)
-def move_lead_stage(lead_id: int, body: dict, db: Session = Depends(get_db)):
+def move_lead_stage(lead_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     order = db.query(SalesOrder).filter(SalesOrder.id == lead_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -1149,7 +1149,7 @@ def move_lead_stage(lead_id: int, body: dict, db: Session = Depends(get_db)):
     return {"status": "success", "data": _lead_to_dict(order, customer, stage)}
 
 @router.patch("/leads/{lead_id}", response_model=dict)
-def update_lead(lead_id: int, body: dict, db: Session = Depends(get_db)):
+def update_lead(lead_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     order = db.query(SalesOrder).filter(SalesOrder.id == lead_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -1179,7 +1179,7 @@ def update_lead(lead_id: int, body: dict, db: Session = Depends(get_db)):
     return {"status": "success", "data": _lead_to_dict(order, customer, stage, db)}
 
 @router.delete("/leads/{lead_id}", response_model=dict)
-def delete_lead(lead_id: int, db: Session = Depends(get_db)):
+def delete_lead(lead_id: int, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     order = db.query(SalesOrder).filter(SalesOrder.id == lead_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -1193,7 +1193,7 @@ def delete_lead(lead_id: int, db: Session = Depends(get_db)):
     return {"status": "success", "data": {"message": "Lead eliminado."}}
 
 @router.get("/leads/{lead_id}", response_model=dict)
-def get_lead_detail(lead_id: int, db: Session = Depends(get_db)):
+def get_lead_detail(lead_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     order = db.query(SalesOrder).filter(SalesOrder.id == lead_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -1231,7 +1231,7 @@ def _event_to_dict(e: CalendarEvent) -> dict:
 
 # ── GET all events (optional month/year filter) ───────────────────────────────
 @router.get("/events", response_model=dict)
-def get_events(month: int = None, year: int = None, db: Session = Depends(get_db)):
+def get_events(month: int = None, year: int = None, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     query = db.query(CalendarEvent)
     if month and year:
         start = datetime.datetime(year, month, 1)
@@ -1249,7 +1249,7 @@ def get_events(month: int = None, year: int = None, db: Session = Depends(get_db
 
 # ── GET events by customer ───────────────────────────────────────────────────
 @router.get("/events/customer/{customer_id}", response_model=dict)
-def get_customer_events(customer_id: int, db: Session = Depends(get_db)):
+def get_customer_events(customer_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     events = db.query(CalendarEvent).filter(
         CalendarEvent.customer_id == customer_id
     ).order_by(CalendarEvent.start_datetime.desc()).all()
@@ -1257,7 +1257,7 @@ def get_customer_events(customer_id: int, db: Session = Depends(get_db)):
 
 # ── GET single event ─────────────────────────────────────────────────────────
 @router.get("/events/{event_id}", response_model=dict)
-def get_event(event_id: int, db: Session = Depends(get_db)):
+def get_event(event_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     e = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).first()
     if not e:
         raise HTTPException(status_code=404, detail="Event not found")
@@ -1265,7 +1265,7 @@ def get_event(event_id: int, db: Session = Depends(get_db)):
 
 # ── POST create event ─────────────────────────────────────────────────────────
 @router.post("/events", response_model=dict)
-def create_event(body: dict, db: Session = Depends(get_db)):
+def create_event(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     try:
         start = datetime.datetime.fromisoformat(body["start_datetime"].replace("Z", ""))
     except (KeyError, ValueError):
@@ -1312,7 +1312,7 @@ def create_event(body: dict, db: Session = Depends(get_db)):
 
 # ── PUT update event ──────────────────────────────────────────────────────────
 @router.put("/events/{event_id}", response_model=dict)
-def update_event(event_id: int, body: dict, db: Session = Depends(get_db)):
+def update_event(event_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     e = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).first()
     if not e:
         raise HTTPException(status_code=404, detail="Event not found")
@@ -1342,7 +1342,7 @@ def update_event(event_id: int, body: dict, db: Session = Depends(get_db)):
 
 # ── DELETE event ──────────────────────────────────────────────────────────────
 @router.delete("/events/{event_id}", response_model=dict)
-def delete_event(event_id: int, db: Session = Depends(get_db)):
+def delete_event(event_id: int, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     e = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).first()
     if not e:
         raise HTTPException(status_code=404, detail="Event not found")
@@ -1356,7 +1356,7 @@ def delete_event(event_id: int, db: Session = Depends(get_db)):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @router.get("/customers/search", response_model=dict)
-def search_customers(q: str = "", db: Session = Depends(get_db)):
+def search_customers(q: str = "", user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Session = Depends(get_db)):
     """Search customers by name, email, or phone for autocomplete in lead modal."""
     if not q or len(q) < 1:
         customers = db.query(Customer).limit(10).all()
@@ -1394,7 +1394,7 @@ def search_customers(q: str = "", db: Session = Depends(get_db)):
 from app.models.catalog import Product, ProductSKU
 
 @router.get("/products/search", response_model=dict)
-def search_products(q: str = "", db: Session = Depends(get_db)):
+def search_products(q: str = "", user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Session = Depends(get_db)):
     """Search products by name for autocomplete in lead quotation field."""
     try:
         if not q or len(q) < 1:
@@ -1425,7 +1425,7 @@ def search_products(q: str = "", db: Session = Depends(get_db)):
 
 
 @router.post("/products/quick-create", response_model=dict)
-def quick_create_product(body: dict, db: Session = Depends(get_db)):
+def quick_create_product(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Quick-create a product from within the lead modal."""
     name = body.get("name", "").strip()
     if not name:
@@ -1495,7 +1495,7 @@ def _lead_to_dict_v2(order, customer, stage, db=None) -> dict:
     }
 
 @router.get("/leads/v2", response_model=dict)
-def get_leads_v2(db: Session = Depends(get_db)):
+def get_leads_v2(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Redirects to optimized get_leads — kept for backward compatibility."""
     rows = (
         db.query(SalesOrder, Customer, PipelineStage)
@@ -1510,7 +1510,7 @@ def get_leads_v2(db: Session = Depends(get_db)):
 
 
 @router.patch("/leads/{lead_id}/v2", response_model=dict)
-def update_lead_v2(lead_id: int, body: dict, db: Session = Depends(get_db)):
+def update_lead_v2(lead_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Extended lead update with product, qty, advisor fields."""
     order = db.query(SalesOrder).filter(SalesOrder.id == lead_id).first()
     if not order:
@@ -1529,7 +1529,7 @@ def update_lead_v2(lead_id: int, body: dict, db: Session = Depends(get_db)):
 
 
 @router.post("/leads", response_model=dict)  # Override original to add new fields
-def create_lead_v2(body: dict, db: Session = Depends(get_db)):
+def create_lead_v2(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Create a lead with all fields including product and advisor."""
     customer_id = body.get("customer_id")
     if not customer_id:
@@ -1578,7 +1578,7 @@ def create_lead_v2(body: dict, db: Session = Depends(get_db)):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @router.post("/leads/{lead_id}/to-solicitud", response_model=dict)
-def lead_to_solicitud(lead_id: int, db: Session = Depends(get_db)):
+def lead_to_solicitud(lead_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Promote lead to formal Solicitud de Cliente in Ventas."""
     order = db.query(SalesOrder).filter(SalesOrder.id == lead_id).first()
     if not order:
@@ -1597,7 +1597,7 @@ def lead_to_solicitud(lead_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/leads/{lead_id}/to-cotizacion", response_model=dict)
-def lead_to_cotizacion(lead_id: int, db: Session = Depends(get_db)):
+def lead_to_cotizacion(lead_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Promote lead to Cotización stage in Ventas."""
     order = db.query(SalesOrder).filter(SalesOrder.id == lead_id).first()
     if not order:
@@ -1616,7 +1616,7 @@ def lead_to_cotizacion(lead_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/leads/{lead_id}/to-pedido", response_model=dict)
-def lead_to_pedido(lead_id: int, db: Session = Depends(get_db)):
+def lead_to_pedido(lead_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Promote lead to Pedido de Venta."""
     order = db.query(SalesOrder).filter(SalesOrder.id == lead_id).first()
     if not order:
@@ -1638,7 +1638,7 @@ def lead_to_pedido(lead_id: int, db: Session = Depends(get_db)):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @router.get("/pipeline-stages/config", response_model=dict)
-def get_pipeline_config(db: Session = Depends(get_db)):
+def get_pipeline_config(user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     """Get all pipeline stages — cached in-memory with 60s TTL."""
     now = time.time()
     with _cache_lock:
@@ -1669,7 +1669,7 @@ def get_pipeline_config(db: Session = Depends(get_db)):
 
 
 @router.put("/pipeline-stages/{stage_id}/config", response_model=dict)
-def update_pipeline_stage_config(stage_id: int, body: dict, db: Session = Depends(get_db)):
+def update_pipeline_stage_config(stage_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     """Update pipeline stage config. Invalidates stages cache."""
     stage = db.query(PipelineStage).filter(PipelineStage.id == stage_id).first()
     if not stage:
@@ -1694,7 +1694,7 @@ def update_pipeline_stage_config(stage_id: int, body: dict, db: Session = Depend
 
 
 @router.get("/warmup", response_model=dict)
-def warmup(db: Session = Depends(get_db)):
+def warmup(user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     """
     Pre-warms the DB connection pool and stages cache.
     Call once on app startup or before first user load.

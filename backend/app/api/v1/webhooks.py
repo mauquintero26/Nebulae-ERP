@@ -36,14 +36,16 @@ SENSITIVE_HEADERS = {
 
 
 def _verify_webhook_signature(provider: str, raw_body: bytes, signature_header: Optional[str]) -> bool:
-    """Verifica la firma HMAC del webhook en tiempo constante."""
-    if not signature_header:
+    """
+    Verifica la firma HMAC del webhook en tiempo constante con secreto especifico del proveedor.
+    Estrictamente exige {PROVIDER}_WEBHOOK_SECRET sin ningun fallback a SECRET_KEY.
+    """
+    if not signature_header or not raw_body:
         return False
-    secret = (
-        os.getenv(f"{provider.upper()}_WEBHOOK_SECRET") or
-        os.getenv("WEBHOOK_SIGNING_SECRET") or
-        os.getenv("SECRET_KEY")
-    )
+    prov_clean = provider.upper().replace("-", "_")
+    secret = os.getenv(f"{prov_clean}_WEBHOOK_SECRET")
+    if not secret and prov_clean in ("MERCADOPAGO", "MERCADO_PAGO"):
+        secret = os.getenv("MERCADOPAGO_WEBHOOK_SECRET") or os.getenv("MERCADO_PAGO_WEBHOOK_SECRET")
     if not secret:
         return False
 
@@ -86,7 +88,8 @@ def _sanitize_headers(headers: Dict[str, Any]) -> Dict[str, Any]:
 
 def _process_payment_webhook(provider: str, payload: dict, idem_key: str, db: Session) -> dict:
     """
-    Confirma pago de orden de venta ecommerce si el estado es aprobado y el monto es exacto.
+    Confirma pago de orden de venta ecommerce si el estado es aprobado, la moneda es estrictamente COP y el monto es exacto.
+    Utiliza bloqueo pesimista with_for_update para garantizar idempotencia concurrente y exactamente un solo pago.
     """
     data = payload.get("data") or payload
     ref = (
@@ -99,11 +102,11 @@ def _process_payment_webhook(provider: str, payload: dict, idem_key: str, db: Se
     order = None
     if ref:
         if str(ref).isdigit():
-            order = db.query(SaleOrder).filter(SaleOrder.id == int(ref)).first()
+            order = db.query(SaleOrder).filter(SaleOrder.id == int(ref)).with_for_update().first()
         if not order:
             order = db.query(SaleOrder).filter(
                 (SaleOrder.pweb_numero == str(ref)) | (SaleOrder.numero == str(ref))
-            ).first()
+            ).with_for_update().first()
     else:
         return {"action": "NO_ORDER_REFERENCE", "message": "Evento informativo o sin referencia de orden vinculada."}
 
@@ -114,6 +117,17 @@ def _process_payment_webhook(provider: str, payload: dict, idem_key: str, db: Se
     if status_val not in ("APPROVED", "APROBADO", "PAID", "PAGADO", "COMPLETED", "SUCCESS"):
         return {"action": "PAYMENT_NOT_APPROVED", "order_id": order.id, "payment_status": status_val}
 
+    # Validacion de moneda: estrictamente COP
+    currency = str(
+        data.get("currency_id") or
+        data.get("currency") or
+        payload.get("currency") or
+        payload.get("currency_id") or
+        "COP"
+    ).upper()
+    if currency != "COP":
+        raise ValueError(f"Moneda '{currency}' no admitida para confirmacion de pago. Se requiere estrictamente 'COP'.")
+
     # Extraer y verificar monto
     raw_amount = data.get("transaction_amount") or data.get("amount") or payload.get("amount") or 0
     if "amount_in_cents" in data:
@@ -123,10 +137,14 @@ def _process_payment_webhook(provider: str, payload: dict, idem_key: str, db: Se
     if abs(amount_paid - (order.total_cop or Decimal("0.00"))) > Decimal("0.01"):
         raise ValueError(f"Discrepancia en monto de pago: Recibido ${amount_paid}, Esperado ${order.total_cop}.")
 
-    # Registrar SaleOrderPayment confirmado
+    # Registrar SaleOrderPayment confirmado con bloqueo estricto de idempotencia
     pay_key = f"PAY_WEBHOOK_{provider}_{idem_key}"
     existing_payment = db.query(SaleOrderPayment).filter(SaleOrderPayment.idempotency_key == pay_key).first()
     if not existing_payment:
+        # Tambien verificar si la orden ya esta pagada en su totalidad por webhook para evitar duplicados concurrentes
+        if order.saldo_cop == Decimal("0.00") and order.anticipo_cop == order.total_cop:
+            return {"action": "PAYMENT_ALREADY_CONFIRMED", "order_id": order.id, "amount": float(amount_paid)}
+
         payment = SaleOrderPayment(
             sale_order_id=order.id,
             customer_id=order.customer_id,
@@ -192,7 +210,8 @@ async def receive_whatsapp(request: Request, db: Session = Depends(get_db)):
     except Exception:
         payload = {}
 
-    idem_key = sig_header or f"WA_{hash(raw_body)}"
+    body_sha = hashlib.sha256(raw_body).hexdigest()[:32]
+    idem_key = sig_header or f"WA_{body_sha}"
     existing = db.query(IntegrationWebhookEvent).filter(
         IntegrationWebhookEvent.provider == "WHATSAPP",
         IntegrationWebhookEvent.idempotency_key == idem_key
@@ -333,14 +352,12 @@ async def receive_generic_webhook(
         request.headers.get("x-webhook-signature")
     )
 
-    # Para pasarelas de pago (Mercado Pago, Wompi, PayU), la firma HMAC es obligatoria
-    is_payment_gateway = provider_canon in ("MERCADOPAGO", "MERCADO_PAGO", "WOMPI", "PAYU")
-    if is_payment_gateway or sig_header:
-        if not _verify_webhook_signature(provider_canon, raw_body, sig_header):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Firma de webhook ausente o invalida."
-            )
+    # Firma HMAC obligatoria para TODOS los proveedores sin excepcion
+    if not _verify_webhook_signature(provider_canon, raw_body, sig_header):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Firma de webhook ausente o invalida para el proveedor '{provider_canon}'."
+        )
 
     try:
         payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
@@ -354,7 +371,8 @@ async def receive_generic_webhook(
         str(payload.get("id") or payload.get("event_id") or payload.get("idempotency_key") or "")
     )
     if not idem_key:
-        idem_key = f"{provider_canon}_{hash(raw_body)}"
+        body_sha = hashlib.sha256(raw_body).hexdigest()[:32]
+        idem_key = f"{provider_canon}_{body_sha}"
 
     # Deduplicacion estricta por proveedor y clave
     existing = db.query(IntegrationWebhookEvent).filter(
@@ -371,7 +389,7 @@ async def receive_generic_webhook(
             "message": "Evento ya procesado previamente (Idempotent Replay)."
         }
 
-    # Registro transaccional en PROCESSING
+    # Registro transaccional en PROCESSING con manejo de concurrencia
     sanitized_headers = _sanitize_headers(dict(request.headers))
     event_type = str(payload.get("type") or payload.get("event") or payload.get("action") or "NOTIFICATION")
 
@@ -386,17 +404,26 @@ async def receive_generic_webhook(
         attempts=1,
         dead_letter=False
     )
-    db.add(event)
-    db.flush()
+    try:
+        db.add(event)
+        db.flush()
+    except Exception:
+        db.rollback()
+        existing = db.query(IntegrationWebhookEvent).filter(
+            IntegrationWebhookEvent.provider == provider_canon,
+            IntegrationWebhookEvent.idempotency_key == idem_key
+        ).first()
+        if existing:
+            return {
+                "status": "success",
+                "idempotent_replay": True,
+                "event_id": existing.id,
+                "provider": provider_canon,
+                "message": "Evento ya procesado previamente (Idempotent Replay)."
+            }
+        raise
 
-    # Ejecucion real del procesamiento
-    simulated_failure = payload.get("simulate_failure", False)
-    if simulated_failure:
-        event.status = "FAILED"
-        event.last_error = "Simulated integration processing error"
-        db.commit()
-        return {"status": "failed", "idempotent_replay": False, "event_id": event.id, "event_status": "FAILED"}
-
+    is_payment_gateway = provider_canon in ("MERCADOPAGO", "MERCADO_PAGO", "WOMPI", "PAYU")
     try:
         if is_payment_gateway:
             _process_payment_webhook(provider_canon, payload, idem_key, db)

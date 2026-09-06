@@ -1,3 +1,5 @@
+from app.models.users import User
+from app.api.dependencies import require_roles, ROLE_ADMIN, ROLE_FINANZAS, ROLE_ASESOR, ROLE_BODEGA, ALL_ERP_ROLES
 import hashlib
 
 from decimal import Decimal
@@ -12,7 +14,7 @@ E-commerce API
 Endpoints for: E-commerce stats, PWEB orders, digital catalog,
 abandoned carts, web builder config, image management
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Body
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
@@ -121,7 +123,7 @@ def _ensure_ecommerce_tables(db: Session):
 
 # --- ECOMMERCE STATS ---
 @router.get("/stats")
-def get_ecommerce_stats(db: Session = Depends(get_db)):
+def get_ecommerce_stats(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
     today = datetime.date.today()
     start_today = datetime.datetime.combine(today, datetime.time.min)
@@ -154,7 +156,7 @@ def get_ecommerce_stats(db: Session = Depends(get_db)):
 
 # --- WEB ORDERS ---
 @router.get("/pedidos")
-def list_web_orders(estado: Optional[str] = None, search: Optional[str] = None, limit: int = Query(50, le=200), offset: int = 0, db: Session = Depends(get_db)):
+def list_web_orders(estado: Optional[str] = None, search: Optional[str] = None, limit: int = Query(50, le=200), offset: int = 0, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *ROLE_FINANZAS, *ROLE_BODEGA)), db: Session = Depends(get_db)):
     q = db.query(SaleOrder).filter(SaleOrder.canal_venta == 'WEB')
     if estado: q = q.filter(SaleOrder.estado == estado)
     if search:
@@ -192,17 +194,11 @@ def _get_real_sellable_stock(db: Session, sku_id: int, warehouse_id: Optional[in
         res_q = res_q.filter(InventoryReservation.warehouse_id == warehouse_id)
     reservas_activas = Decimal(str(res_q.scalar() or 0))
 
-    # 3. Cuarentena
-    quar_q = db.query(func.coalesce(func.sum(InventoryQuarantine.quantity), 0)).filter(
-        InventoryQuarantine.sku_id == sku_id,
-        InventoryQuarantine.owner == owner,
-        InventoryQuarantine.status.in_(["ACTIVO", "ACTIVA"])
-    )
-    if warehouse_id:
-        quar_q = quar_q.filter(InventoryQuarantine.warehouse_id == warehouse_id)
-    cuarentena = Decimal(str(quar_q.scalar() or 0))
-
-    disponible = balance_owner - reservas_activas - cuarentena
+    # 3. Semantica de inventario canonica de Fase 3:
+    # InventoryOwnerBalance ya representa exclusivamente las unidades fisicas conformes
+    # del propietario y excluye las unidades en cuarentena (que se registran en InventoryQuarantine).
+    # Por tanto, no se resta nuevamente cuarentena para evitar doble descuento.
+    disponible = balance_owner - reservas_activas
     return max(disponible, Decimal("0.0"))
 
 @router.post("/pedidos", status_code=201)
@@ -356,13 +352,39 @@ def create_web_order(body: dict, db: Session = Depends(get_db)):
             }
         )
 
-    # 6. Validacion de disponibilidad vendible real (bloqueo pesimista)
-    default_wh = db.query(Warehouse).first()
-    default_wh_id = default_wh.id if default_wh else 1
+    # 6. Resolucion estricta de bodega en el servidor (reglas de fulfillment canonico)
+    central_wh = db.query(Warehouse).filter(Warehouse.location_type == "Central").first()
+    if not central_wh:
+        central_wh = db.query(Warehouse).first()
+    resolved_wh_id = central_wh.id if central_wh else 1
+    default_wh_id = resolved_wh_id
+
+    # Validacion anti-manipulacion de bodega: no confiar en warehouse_id enviado por cliente
+    client_wh_id = body.get("warehouse_id")
+    if client_wh_id is not None:
+        target_wh = db.query(Warehouse).filter(Warehouse.id == int(client_wh_id)).first()
+        if not target_wh or target_wh.location_type != "Central":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Bodega '{client_wh_id}' no autorizada para fulfillment ecommerce."
+            )
+        resolved_wh_id = target_wh.id
+        default_wh_id = resolved_wh_id
+
+    for it in raw_items:
+        it_wh_id = it.get("warehouse_id")
+        if it_wh_id is not None:
+            it_target = db.query(Warehouse).filter(Warehouse.id == int(it_wh_id)).first()
+            if not it_target or it_target.location_type != "Central":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Bodega '{it_wh_id}' en item no autorizada para fulfillment ecommerce."
+                )
 
     for vl in validated_lines:
+        vl["warehouse_id"] = resolved_wh_id
         if vl["modalidad"] == "ENTREGA_INMEDIATA":
-            wh_id = vl["warehouse_id"] or default_wh_id
+            wh_id = resolved_wh_id
             disp_real = _get_real_sellable_stock(db, vl["sku"].id, wh_id, "NEBULAE")
             if disp_real < Decimal(str(vl["qty"])):
                 raise HTTPException(
@@ -529,7 +551,7 @@ def create_web_order(body: dict, db: Session = Depends(get_db)):
 
 # --- CARRITOS ---
 @router.get("/carritos")
-def list_carritos(estado: str = "ABANDONADO", db: Session = Depends(get_db)):
+def list_carritos(estado: str = "ABANDONADO", user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
     try:
         rows = db.execute(text("SELECT id, session_id, customer_email, customer_name, productos, total_cop, estado, recuperacion_enviada, recuperacion_descuento, created_at FROM web_carts WHERE estado=:e ORDER BY created_at DESC LIMIT 50"), {"e": estado}).fetchall()
@@ -544,14 +566,14 @@ def save_cart(body: dict, db: Session = Depends(get_db)):
     existing = db.execute(text("SELECT id FROM web_carts WHERE session_id=:s"), {"s": session_id}).fetchone()
     pj = json_mod.dumps(body.get("productos", []))
     if existing:
-        db.execute(text("UPDATE web_carts SET customer_email=:e, customer_name=:n, productos=:p::jsonb, total_cop=:t, estado=:s, updated_at=NOW() WHERE session_id=:sid"), {"e": body.get("customer_email"), "n": body.get("customer_name"), "p": pj, "t": body.get("total_cop", 0), "s": body.get("estado", "ACTIVO"), "sid": session_id})
+        db.execute(text("UPDATE web_carts SET customer_email=:e, customer_name=:n, productos=CAST(:p AS jsonb), total_cop=:t, estado=:s, updated_at=NOW() WHERE session_id=:sid"), {"e": body.get("customer_email"), "n": body.get("customer_name"), "p": pj, "t": body.get("total_cop", 0), "s": body.get("estado", "ACTIVO"), "sid": session_id})
     else:
-        db.execute(text("INSERT INTO web_carts (session_id, customer_email, customer_name, productos, total_cop, estado, ip_address) VALUES (:sid, :e, :n, :p::jsonb, :t, :s, :ip)"), {"sid": session_id, "e": body.get("customer_email"), "n": body.get("customer_name"), "p": pj, "t": body.get("total_cop", 0), "s": body.get("estado", "ACTIVO"), "ip": body.get("ip_address")})
+        db.execute(text("INSERT INTO web_carts (session_id, customer_email, customer_name, productos, total_cop, estado, ip_address) VALUES (:sid, :e, :n, CAST(:p AS jsonb), :t, :s, :ip)"), {"sid": session_id, "e": body.get("customer_email"), "n": body.get("customer_name"), "p": pj, "t": body.get("total_cop", 0), "s": body.get("estado", "ACTIVO"), "ip": body.get("ip_address")})
     db.commit()
     return {"status": "success", "session_id": session_id}
 
 @router.patch("/carritos/{cart_id}/recuperar")
-def recuperar_carrito(cart_id: int, body: dict, db: Session = Depends(get_db)):
+def recuperar_carrito(cart_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
     descuento = body.get("descuento_pct", 10)
     db.execute(text("UPDATE web_carts SET recuperacion_enviada=TRUE, recuperacion_descuento=:d, updated_at=NOW() WHERE id=:id"), {"d": descuento, "id": cart_id})
@@ -683,12 +705,12 @@ def get_catalogo_product(product_id: int, db: Session = Depends(get_db)):
     return {"status": "success", "data": data}
 
 @router.post("/catalogo", status_code=201)
-def create_catalogo_product(body: dict, db: Session = Depends(get_db)):
+def create_catalogo_product(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
     now = datetime.datetime.utcnow()
     result = db.execute(text("""
         INSERT INTO ecommerce_products (nombre,descripcion,descripcion_larga,sku,precio_venta,precio_comparacion,descuento_pct,impuesto_pct,categoria,sub_categoria,marca,tipo_producto,imagenes,atributos,variantes,stock_disponible,alerta_stock_minimo,publicado_web,rastrear_inventario,codigo_aduana,peso_kg,notas_internas,seo_titulo,seo_descripcion,seo_keywords,created_at,updated_at,created_by)
-        VALUES (:nombre,:descripcion,:descripcion_larga,:sku,:precio_venta,:precio_comparacion,:descuento_pct,:impuesto_pct,:categoria,:sub_categoria,:marca,:tipo_producto,:imagenes::jsonb,:atributos::jsonb,:variantes::jsonb,:stock_disponible,:alerta_stock_minimo,:publicado_web,:rastrear_inventario,:codigo_aduana,:peso_kg,:notas_internas,:seo_titulo,:seo_descripcion,:seo_keywords,:now,:now,:created_by)
+        VALUES (:nombre,:descripcion,:descripcion_larga,:sku,:precio_venta,:precio_comparacion,:descuento_pct,:impuesto_pct,:categoria,:sub_categoria,:marca,:tipo_producto,CAST(:imagenes AS jsonb),CAST(:atributos AS jsonb),CAST(:variantes AS jsonb),:stock_disponible,:alerta_stock_minimo,:publicado_web,:rastrear_inventario,:codigo_aduana,:peso_kg,:notas_internas,:seo_titulo,:seo_descripcion,:seo_keywords,:now,:now,:created_by)
         RETURNING id
     """), {"nombre": body.get("nombre",""), "descripcion": body.get("descripcion"), "descripcion_larga": body.get("descripcion_larga"), "sku": body.get("sku"), "precio_venta": body.get("precio_venta",0), "precio_comparacion": body.get("precio_comparacion",0), "descuento_pct": body.get("descuento_pct",0), "impuesto_pct": body.get("impuesto_pct",0), "categoria": body.get("categoria"), "sub_categoria": body.get("sub_categoria"), "marca": body.get("marca"), "tipo_producto": body.get("tipo_producto","Bienes"), "imagenes": json_mod.dumps(body.get("imagenes",[])), "atributos": json_mod.dumps(body.get("atributos",[])), "variantes": json_mod.dumps(body.get("variantes",[])), "stock_disponible": body.get("stock_disponible",0), "alerta_stock_minimo": body.get("alerta_stock_minimo",5), "publicado_web": body.get("publicado_web",False), "rastrear_inventario": body.get("rastrear_inventario",True), "codigo_aduana": body.get("codigo_aduana"), "peso_kg": body.get("peso_kg"), "notas_internas": body.get("notas_internas"), "seo_titulo": body.get("seo_titulo"), "seo_descripcion": body.get("seo_descripcion"), "seo_keywords": body.get("seo_keywords"), "now": now, "created_by": body.get("created_by","")})
     db.commit()
@@ -696,7 +718,7 @@ def create_catalogo_product(body: dict, db: Session = Depends(get_db)):
     return {"status": "success", "data": {"id": new_id}}
 
 @router.patch("/catalogo/{product_id}")
-def update_catalogo_product(product_id: int, body: dict, db: Session = Depends(get_db)):
+def update_catalogo_product(product_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
     allowed = ["nombre","descripcion","descripcion_larga","sku","precio_venta","precio_comparacion","descuento_pct","impuesto_pct","categoria","sub_categoria","marca","tipo_producto","stock_disponible","alerta_stock_minimo","publicado_web","rastrear_inventario","codigo_aduana","peso_kg","notas_internas","seo_titulo","seo_descripcion","seo_keywords"]
     json_fields = ["imagenes","atributos","variantes"]
@@ -708,7 +730,7 @@ def update_catalogo_product(product_id: int, body: dict, db: Session = Depends(g
             params[k] = body[k]
     for k in json_fields:
         if k in body:
-            sets.append(f"{k}=:{k}::jsonb")
+            sets.append(f"{k}=CAST(:{k} AS jsonb)")
             params[k] = json_mod.dumps(body[k])
     if not sets:
         raise HTTPException(400, "Nada que actualizar")
@@ -718,7 +740,7 @@ def update_catalogo_product(product_id: int, body: dict, db: Session = Depends(g
     return {"status": "success"}
 
 @router.delete("/catalogo/{product_id}")
-def delete_catalogo_product(product_id: int, db: Session = Depends(get_db)):
+def delete_catalogo_product(product_id: int, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
     db.execute(text("DELETE FROM ecommerce_products WHERE id=:id"), {"id": product_id})
     db.commit()
@@ -744,7 +766,7 @@ def get_categorias_web(db: Session = Depends(get_db)):
 
 # --- MEDIA REPOSITORY ---
 @router.get("/media")
-def list_media(db: Session = Depends(get_db)):
+def list_media(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
     try:
         rows = db.execute(text("SELECT id, filename, url, tipo, tags, size_bytes, uploaded_by, created_at FROM media_repository ORDER BY created_at DESC LIMIT 200")).fetchall()
@@ -753,14 +775,14 @@ def list_media(db: Session = Depends(get_db)):
         return {"status": "success", "data": []}
 
 @router.post("/media", status_code=201)
-def upload_media(body: dict, db: Session = Depends(get_db)):
+def upload_media(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
-    result = db.execute(text("INSERT INTO media_repository (filename, url, tipo, tags, size_bytes, uploaded_by) VALUES (:fn, :url, :tipo, :tags::jsonb, :size, :user) RETURNING id"), {"fn": body.get("filename","imagen"), "url": body.get("url",""), "tipo": body.get("tipo","imagen"), "tags": json_mod.dumps(body.get("tags",[])), "size": body.get("size_bytes",0), "user": body.get("uploaded_by","")})
+    result = db.execute(text("INSERT INTO media_repository (filename, url, tipo, tags, size_bytes, uploaded_by) VALUES (:fn, :url, :tipo, CAST(:tags AS jsonb), :size, :user) RETURNING id"), {"fn": body.get("filename","imagen"), "url": body.get("url",""), "tipo": body.get("tipo","imagen"), "tags": json_mod.dumps(body.get("tags",[])), "size": body.get("size_bytes",0), "user": body.get("uploaded_by","")})
     db.commit()
     return {"status": "success", "data": {"id": result.fetchone()[0]}}
 
 @router.delete("/media/{media_id}")
-def delete_media(media_id: int, db: Session = Depends(get_db)):
+def delete_media(media_id: int, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
     db.execute(text("DELETE FROM media_repository WHERE id=:id"), {"id": media_id})
     db.commit()
@@ -769,7 +791,7 @@ def delete_media(media_id: int, db: Session = Depends(get_db)):
 
 # --- WEB BUILDER ---
 @router.get("/web-builder/config")
-def get_web_config(db: Session = Depends(get_db)):
+def get_web_config(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
     try:
         rows = db.execute(text("SELECT config_key, config_value FROM web_builder_config")).fetchall()
@@ -778,16 +800,16 @@ def get_web_config(db: Session = Depends(get_db)):
         return {"status": "success", "data": {}}
 
 @router.patch("/web-builder/config")
-def update_web_config(body: dict, db: Session = Depends(get_db)):
+def update_web_config(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
     for key, value in body.items():
         val_json = json_mod.dumps(value) if not isinstance(value, str) else json_mod.dumps(value)
-        db.execute(text("INSERT INTO web_builder_config (config_key, config_value, updated_at) VALUES (:k, :v::jsonb, NOW()) ON CONFLICT (config_key) DO UPDATE SET config_value=:v::jsonb, updated_at=NOW()"), {"k": key, "v": val_json})
+        db.execute(text("INSERT INTO web_builder_config (config_key, config_value, updated_at) VALUES (:k, CAST(:v AS jsonb), NOW()) ON CONFLICT (config_key) DO UPDATE SET config_value=CAST(:v AS jsonb), updated_at=NOW()"), {"k": key, "v": val_json})
     db.commit()
     return {"status": "success"}
 
 @router.post("/web-builder/chat")
-def web_builder_chat(body: dict, db: Session = Depends(get_db)):
+def web_builder_chat(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     instruction = (body.get("instruction", "") or "").lower()
     changes: dict = {}
     suggestions: list = []
@@ -813,14 +835,14 @@ def web_builder_chat(body: dict, db: Session = Depends(get_db)):
     # Apply changes if any
     if changes:
         for key, value in changes.items():
-            db.execute(text("INSERT INTO web_builder_config (config_key, config_value, updated_at) VALUES (:k, :v::jsonb, NOW()) ON CONFLICT (config_key) DO UPDATE SET config_value=:v::jsonb, updated_at=NOW()"), {"k": key, "v": json_mod.dumps(value)})
+            db.execute(text("INSERT INTO web_builder_config (config_key, config_value, updated_at) VALUES (:k, CAST(:v AS jsonb), NOW()) ON CONFLICT (config_key) DO UPDATE SET config_value=CAST(:v AS jsonb), updated_at=NOW()"), {"k": key, "v": json_mod.dumps(value)})
         db.commit()
     return {"status": "success", "data": {"response": response_text, "changes": changes, "applied": len(changes) > 0}}
 
 
 # --- PAGOS CONFIG ---
 @router.get("/pagos/config")
-def get_payment_config(db: Session = Depends(get_db)):
+def get_payment_config(user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
     try:
         row = db.execute(text("SELECT config_value FROM web_builder_config WHERE config_key='payment_gateways'")).fetchone()
@@ -837,7 +859,7 @@ def get_payment_config(db: Session = Depends(get_db)):
     return {"status": "success", "data": {"stripe": {"enabled": False, "publishable_key": "", "webhook_secret": ""}, "mercadopago": {"enabled": False, "public_key": ""}}}
 
 @router.patch("/pagos/config")
-def update_payment_config(body: dict, db: Session = Depends(get_db)):
+def update_payment_config(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
     existing = db.execute(text("SELECT config_value FROM web_builder_config WHERE config_key='payment_gateways'")).fetchone()
     existing_data: dict = dict(existing[0]) if existing and existing[0] else {}
@@ -846,12 +868,12 @@ def update_payment_config(body: dict, db: Session = Depends(get_db)):
             if gateway not in existing_data:
                 existing_data[gateway] = {}
             existing_data[gateway].update(config)
-    db.execute(text("INSERT INTO web_builder_config (config_key, config_value, updated_at) VALUES ('payment_gateways', :v::jsonb, NOW()) ON CONFLICT (config_key) DO UPDATE SET config_value=:v::jsonb, updated_at=NOW()"), {"v": json_mod.dumps(existing_data)})
+    db.execute(text("INSERT INTO web_builder_config (config_key, config_value, updated_at) VALUES ('payment_gateways', CAST(:v AS jsonb), NOW()) ON CONFLICT (config_key) DO UPDATE SET config_value=CAST(:v AS jsonb), updated_at=NOW()"), {"v": json_mod.dumps(existing_data)})
     db.commit()
     return {"status": "success"}
 
 @router.get("/envios/config")
-def get_shipping_config(db: Session = Depends(get_db)):
+def get_shipping_config(user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
     try:
         row = db.execute(text("SELECT config_value FROM web_builder_config WHERE config_key='shipping'")).fetchone()
@@ -862,16 +884,16 @@ def get_shipping_config(db: Session = Depends(get_db)):
     return {"status": "success", "data": {"envio_local": {"enabled": True, "tarifa": 12000}, "envio_nacional": {"enabled": True, "tarifa": 25000}, "envio_gratis_desde": 200000, "zonas": []}}
 
 @router.patch("/envios/config")
-def update_shipping_config(body: dict, db: Session = Depends(get_db)):
+def update_shipping_config(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
-    db.execute(text("INSERT INTO web_builder_config (config_key, config_value, updated_at) VALUES ('shipping', :v::jsonb, NOW()) ON CONFLICT (config_key) DO UPDATE SET config_value=:v::jsonb, updated_at=NOW()"), {"v": json_mod.dumps(body)})
+    db.execute(text("INSERT INTO web_builder_config (config_key, config_value, updated_at) VALUES ('shipping', CAST(:v AS jsonb), NOW()) ON CONFLICT (config_key) DO UPDATE SET config_value=CAST(:v AS jsonb), updated_at=NOW()"), {"v": json_mod.dumps(body)})
     db.commit()
     return {"status": "success"}
 
 
 # --- CLIENTES WEB → AGENDA CRM ---
 @router.get("/clientes")
-def list_clientes_web(db: Session = Depends(get_db)):
+def list_clientes_web(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Lista clientes únicos que han realizado pedidos web (canal_venta=WEB)"""
     web_orders = db.query(SaleOrder).filter(
         SaleOrder.canal_venta == 'WEB',
@@ -902,9 +924,11 @@ def list_clientes_web(db: Session = Depends(get_db)):
 
 
 @router.post("/clientes/sync-agenda")
-def sync_clientes_web_to_agenda(body: dict, db: Session = Depends(get_db)):
+def sync_clientes_web_to_agenda(body: Optional[dict] = Body(default={}), user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Importa clientes web a la agenda CRM marcados como canal=WEB"""
     from app.models.customers import Customer
+    if not body:
+        body = {}
     emails = body.get("emails", [])  # list of emails to sync, or empty = all
     web_orders = db.query(SaleOrder).filter(
         SaleOrder.canal_venta == 'WEB',

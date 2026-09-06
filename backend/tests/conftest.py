@@ -97,13 +97,56 @@ def setup_test_db():
     )
     print("[alembic]:", result.stdout[-500:] if result.stdout else "(empty)")
     assert result.returncode == 0, f"Alembic upgrade failed: {result.stderr[-500:]}"
-    # Otorgar permisos al rol de pruebas exclusivamente en la base de pruebas erp_test
+    # Asegurar tablas auxiliares y permisos en la base de pruebas erp_test
     with test_engine.connect() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS pipeline_stages (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(100) NOT NULL,
+                color VARCHAR(50) DEFAULT 'bg-blue-500',
+                bg_color VARCHAR(50) DEFAULT 'bg-blue-50',
+                position INTEGER DEFAULT 0,
+                maps_to_status VARCHAR(50)
+            );
+            INSERT INTO pipeline_stages (name, color, bg_color, position, maps_to_status)
+            SELECT 'Nuevo Lead', 'bg-blue-500', 'bg-blue-50', 1, 'PENDING'
+            WHERE NOT EXISTS (SELECT 1 FROM pipeline_stages);
+            CREATE TABLE IF NOT EXISTS chat_conversations (
+                id SERIAL PRIMARY KEY,
+                channel VARCHAR(50) DEFAULT 'web',
+                customer_id INTEGER,
+                customer_name VARCHAR(200),
+                customer_email VARCHAR(200),
+                customer_phone VARCHAR(50),
+                status VARCHAR(50) DEFAULT 'open',
+                unread_count INTEGER DEFAULT 0,
+                last_message TEXT,
+                last_message_at TIMESTAMPTZ,
+                ai_mode VARCHAR(50) DEFAULT 'suggestion',
+                linked_lead_id INTEGER,
+                session_token VARCHAR(255),
+                external_id VARCHAR(255),
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            );
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id SERIAL PRIMARY KEY,
+                conversation_id INTEGER REFERENCES chat_conversations(id) ON DELETE CASCADE,
+                direction VARCHAR(20) DEFAULT 'inbound',
+                content TEXT,
+                message_type VARCHAR(50) DEFAULT 'text',
+                sender_name VARCHAR(200),
+                is_ai_generated BOOLEAN DEFAULT FALSE,
+                is_auto_sent BOOLEAN DEFAULT FALSE,
+                metadata JSONB,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            );
+        """))
         role_exists = conn.execute(text("SELECT 1 FROM pg_roles WHERE rolname='nebulae_test'")).scalar()
         if role_exists:
             conn.execute(text("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO nebulae_test;"))
             conn.execute(text("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO nebulae_test;"))
-            conn.commit()
+        conn.commit()
     yield
     # Safety: ensure DB is at head before cleanup (migration tests may have left it downgraded)
     try:

@@ -1,3 +1,4 @@
+import os
 import hmac, hashlib
 from app.models.users import User
 from app.api.dependencies import require_roles, ROLE_ADMIN, ROLE_FINANZAS, ROLE_ASESOR, normalize_role
@@ -48,7 +49,7 @@ def _msg_to_dict(row):
 # ─── GET /conversations — Inbox ────────────────────────────────────────────────
 @router.get("/conversations", response_model=dict)
 def get_conversations(
-    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db),
     channel: str = None,
     status: str = "open",
     search: str = None,
@@ -94,7 +95,7 @@ def get_conversations(
 
 # ─── GET /conversations/{id}/messages ─────────────────────────────────────────
 @router.get("/conversations/{conv_id}/messages", response_model=dict)
-def get_messages(conv_id: int, db: Session = Depends(get_db), since: str = None):
+def get_messages(conv_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db), since: str = None):
     """Get messages for a conversation. Supports `since` ISO timestamp for polling."""
     # Mark as read
     db.execute(text(
@@ -127,7 +128,7 @@ def get_messages(conv_id: int, db: Session = Depends(get_db), since: str = None)
 
 # ─── POST /conversations/{id}/reply — Agent reply ─────────────────────────────
 @router.post("/conversations/{conv_id}/reply", response_model=dict)
-def reply_to_conversation(conv_id: int, body: dict, db: Session = Depends(get_db)):
+def reply_to_conversation(conv_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Agent (human or AI) replies to a conversation."""
     content = body.get("content", "").strip()
     if not content:
@@ -174,7 +175,7 @@ def reply_to_conversation(conv_id: int, body: dict, db: Session = Depends(get_db
 
 # ─── POST /conversations/{id}/ai-mode ─────────────────────────────────────────
 @router.patch("/conversations/{conv_id}/ai-mode", response_model=dict)
-def set_ai_mode(conv_id: int, body: dict, db: Session = Depends(get_db)):
+def set_ai_mode(conv_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Toggle AI mode: 'auto' or 'suggestion'."""
     mode = body.get("mode", "suggestion")
     if mode not in ("auto", "suggestion", "off"):
@@ -188,7 +189,7 @@ def set_ai_mode(conv_id: int, body: dict, db: Session = Depends(get_db)):
 
 # ─── POST /conversations/{id}/link-customer ───────────────────────────────────
 @router.patch("/conversations/{conv_id}/link-customer", response_model=dict)
-def link_customer(conv_id: int, body: dict, db: Session = Depends(get_db)):
+def link_customer(conv_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Link a conversation to an existing customer record."""
     customer_id = body.get("customer_id")
     if not customer_id:
@@ -214,7 +215,7 @@ def link_customer(conv_id: int, body: dict, db: Session = Depends(get_db)):
 
 # ─── POST /conversations/{id}/link-lead ───────────────────────────────────────
 @router.patch("/conversations/{conv_id}/link-lead", response_model=dict)
-def link_lead(conv_id: int, body: dict, db: Session = Depends(get_db)):
+def link_lead(conv_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Link a conversation to a CRM lead/sales order."""
     lead_id = body.get("lead_id")
     db.execute(text(
@@ -226,7 +227,7 @@ def link_lead(conv_id: int, body: dict, db: Session = Depends(get_db)):
 
 # ─── GET /conversations/{id}/ai-context ──────────────────────────────────────
 @router.get("/conversations/{conv_id}/ai-context", response_model=dict)
-def get_ai_context(conv_id: int, db: Session = Depends(get_db)):
+def get_ai_context(conv_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Build full context for AI: customer info + CRM history + conversation."""
     conv = db.execute(text(
         "SELECT * FROM chat_conversations WHERE id=:id"
@@ -303,7 +304,7 @@ def get_ai_context(conv_id: int, db: Session = Depends(get_db)):
 
 # ─── POST /conversations/{id}/ai-suggest ─────────────────────────────────────
 @router.post("/conversations/{conv_id}/ai-suggest", response_model=dict)
-def ai_suggest(conv_id: int, body: dict, db: Session = Depends(get_db)):
+def ai_suggest(conv_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """
     Generate an AI suggestion based on context.
     For now returns a rule-based response. 
@@ -518,12 +519,33 @@ def get_web_messages(
 # ── Webhook stubs (WhatsApp, Instagram) ──────────────────────────────────────
 
 @router.post("/webhook/whatsapp", response_model=dict)
-def whatsapp_webhook(body: dict, db: Session = Depends(get_db)):
+async def whatsapp_webhook(request: Request, db: Session = Depends(get_db)):
     """
-    WhatsApp Business API webhook.
-    TODO: Validate X-Hub-Signature-256 header.
-    TODO: Parse actual WhatsApp message format.
+    WhatsApp Business API webhook con validacion obligatoria de firma HMAC X-Hub-Signature-256.
     """
+    sig = request.headers.get("x-hub-signature-256")
+    if not sig:
+        raise HTTPException(status_code=401, detail="Firma X-Hub-Signature-256 ausente.")
+    raw_body = await request.body()
+    secret = os.getenv("WHATSAPP_WEBHOOK_SECRET")
+    if not secret:
+        raise HTTPException(status_code=403, detail="WHATSAPP_WEBHOOK_SECRET no configurado en el servidor.")
+    clean_sig = sig.replace("sha256=", "").strip()
+    computed = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(computed.lower(), clean_sig.lower()):
+        valid = False
+        try:
+            parsed = json.loads(raw_body.decode("utf-8"))
+            c1 = hmac.new(secret.encode("utf-8"), json.dumps(parsed).encode("utf-8"), hashlib.sha256).hexdigest()
+            c2 = hmac.new(secret.encode("utf-8"), json.dumps(parsed, separators=(",", ":")).encode("utf-8"), hashlib.sha256).hexdigest()
+            if hmac.compare_digest(c1.lower(), clean_sig.lower()) or hmac.compare_digest(c2.lower(), clean_sig.lower()):
+                valid = True
+        except Exception:
+            pass
+        if not valid:
+            raise HTTPException(status_code=401, detail="Firma de WhatsApp invalida.")
+
+    body = json.loads(raw_body.decode("utf-8")) if raw_body else {}
     # Extract message data (WhatsApp format)
     try:
         entry = body.get("entry", [{}])[0]
@@ -590,19 +612,43 @@ def whatsapp_webhook_verify(
     hub_challenge: str = Query(None, alias="hub.challenge"),
 ):
     """WhatsApp webhook verification (required by Meta)."""
-    VERIFY_TOKEN = "nebulae_whatsapp_2026"
-    if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
+    verify_token = os.getenv("WHATSAPP_VERIFY_TOKEN")
+    if not verify_token:
+        raise HTTPException(status_code=403, detail="WHATSAPP_VERIFY_TOKEN no configurado en el servidor.")
+    if hub_mode == "subscribe" and hub_verify_token == verify_token:
         from fastapi.responses import PlainTextResponse
         return PlainTextResponse(content=hub_challenge)
     raise HTTPException(status_code=403, detail="Verification failed")
 
 
 @router.post("/webhook/instagram", response_model=dict)
-def instagram_webhook(body: dict, db: Session = Depends(get_db)):
+async def instagram_webhook(request: Request, db: Session = Depends(get_db)):
     """
-    Instagram Messaging webhook.
-    TODO: Validate X-Hub-Signature-256 header.
+    Instagram Messaging webhook con validacion obligatoria de firma HMAC X-Hub-Signature-256.
     """
+    sig = request.headers.get("x-hub-signature-256")
+    if not sig:
+        raise HTTPException(status_code=401, detail="Firma X-Hub-Signature-256 ausente.")
+    raw_body = await request.body()
+    secret = os.getenv("INSTAGRAM_WEBHOOK_SECRET")
+    if not secret:
+        raise HTTPException(status_code=403, detail="INSTAGRAM_WEBHOOK_SECRET no configurado en el servidor.")
+    clean_sig = sig.replace("sha256=", "").strip()
+    computed = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(computed.lower(), clean_sig.lower()):
+        valid = False
+        try:
+            parsed = json.loads(raw_body.decode("utf-8"))
+            c1 = hmac.new(secret.encode("utf-8"), json.dumps(parsed).encode("utf-8"), hashlib.sha256).hexdigest()
+            c2 = hmac.new(secret.encode("utf-8"), json.dumps(parsed, separators=(",", ":")).encode("utf-8"), hashlib.sha256).hexdigest()
+            if hmac.compare_digest(c1.lower(), clean_sig.lower()) or hmac.compare_digest(c2.lower(), clean_sig.lower()):
+                valid = True
+        except Exception:
+            pass
+        if not valid:
+            raise HTTPException(status_code=401, detail="Firma de Instagram invalida.")
+
+    body = json.loads(raw_body.decode("utf-8")) if raw_body else {}
     try:
         entries = body.get("entry", [])
         for entry in entries:
@@ -653,7 +699,7 @@ def instagram_webhook(body: dict, db: Session = Depends(get_db)):
 
 # ─── GET /conversations (close) ───────────────────────────────────────────────
 @router.patch("/conversations/{conv_id}/status", response_model=dict)
-def update_conv_status(conv_id: int, body: dict, db: Session = Depends(get_db)):
+def update_conv_status(conv_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Open, close, or put conversation on hold."""
     status = body.get("status", "open")
     if status not in ("open", "closed", "hold"):

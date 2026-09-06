@@ -226,7 +226,7 @@ class TestFase3Migrations:
 
         with eng.connect() as conn:
             v_final = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-            assert v_final in ("fa3_002", "fa4_001", "fa4_002", "fa5_001"), f"Versión final esperada fa3_002 o posterior, obtenida {v_final}"
+            assert v_final in ("fa3_002", "fa4_001", "fa4_002", "fa5_001", "fa5_002"), f"Versión final esperada fa3_002 o posterior, obtenida {v_final}"
 
             # Comparar tipo de dato, longitud, nulabilidad de columnas principales
             col_info = conn.execute(text("""

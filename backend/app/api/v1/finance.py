@@ -8,10 +8,17 @@ from app.schemas import finance as schemas
 from decimal import Decimal
 import datetime
 
+from app.models.users import User
+from app.api.dependencies import require_roles, ROLE_ADMIN, ROLE_FINANZAS, ALL_ERP_ROLES
+
 router = APIRouter()
 
 @router.post("/expenses", status_code=status.HTTP_201_CREATED)
-def create_expense(expense: schemas.ExpenseCreate, db: Session = Depends(get_db)):
+def create_expense(
+    expense: schemas.ExpenseCreate,
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS)),
+    db: Session = Depends(get_db)
+):
     expense_data = expense.model_dump()
     if not expense_data.get("incurred_date"):
         expense_data["incurred_date"] = datetime.datetime.utcnow()
@@ -23,12 +30,18 @@ def create_expense(expense: schemas.ExpenseCreate, db: Session = Depends(get_db)
     return {"status": "success", "data": schemas.ExpenseResponse.model_validate(db_exp).model_dump()}
 
 @router.get("/expenses")
-def list_expenses(db: Session = Depends(get_db)):
+def list_expenses(
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS)),
+    db: Session = Depends(get_db)
+):
     expenses = db.query(OperationalExpense).all()
     return {"status": "success", "data": [schemas.ExpenseResponse.model_validate(e).model_dump() for e in expenses]}
 
 @router.get("/dashboard", response_model=dict)
-def get_dashboard(db: Session = Depends(get_db)):
+def get_dashboard(
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS)),
+    db: Session = Depends(get_db)
+):
     lines = db.query(SalesOrderLine).all()
     
     gross_revenue = Decimal("0.0")
@@ -266,10 +279,10 @@ def get_ledger_reconciliation(
     # Reconciliar anticipos documentales no reflejados individualmente en pagos
     paid_so_ids = {p.sale_order_id for p in payments if p.tipo in ("ANTICIPO", "PAGO_TOTAL", "PAGO_SALDO", "ABONO") and p.estado == "CONFIRMADO"}
     for s in sos:
-        if s.id not in paid_so_ids and s.anticipo_cop:
-            amt = Decimal(str(s.anticipo_cop))
-            if amt > Decimal("0.0"):
-                anticipos_cop += amt
+        if s.id not in paid_so_ids:
+            recaudo_doc = max(Decimal("0.0"), Decimal(str(s.total_cop or 0)) - Decimal(str(s.saldo_cop or 0)))
+            if recaudo_doc > Decimal("0.0"):
+                anticipos_cop += recaudo_doc
 
     flujo_neto_recaudo = (anticipos_cop + abonos_cop) - devoluciones_dinero_cop
 

@@ -492,7 +492,8 @@ class TestFase5SecurityHardening:
 
     def test_18_webhooks_firma_hmac_ausente_o_invalida_401(self, app_client: TestClient):
         """18. Webhooks con firma HMAC ausente o inválida retornan 401; con firma válida retornan 200."""
-        secret = os.getenv("SECRET_KEY", "b9fd2d98895dfc97d75afef593d1f8b57a045d725ae770f85fa3d28412e9fd0b")
+        secret = os.getenv("MERCADOPAGO_WEBHOOK_SECRET", "test_mp_secret_2026")
+        os.environ["MERCADOPAGO_WEBHOOK_SECRET"] = secret
         ts = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
         payload = {"event": "payment.test", "id": f"WH_SEC_{ts}"}
         body_bytes = json.dumps(payload).encode("utf-8")
@@ -516,7 +517,8 @@ class TestFase5SecurityHardening:
 
     def test_19_webhooks_sanitizacion_cabeceras_sensibles(self, app_client: TestClient, db: Session):
         """19. Cabeceras sensibles (Authorization, Token, Cookie, Secrets) se sanitizan a [REDACTED] en BD."""
-        secret = os.getenv("SECRET_KEY", "b9fd2d98895dfc97d75afef593d1f8b57a045d725ae770f85fa3d28412e9fd0b")
+        secret = os.getenv("WOMPI_WEBHOOK_SECRET", "test_wompi_secret_2026")
+        os.environ["WOMPI_WEBHOOK_SECRET"] = secret
         ts = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
         payload = {"event": "headers.test", "id": f"WH_HDR_{ts}"}
         body_bytes = json.dumps(payload).encode("utf-8")
@@ -560,7 +562,8 @@ class TestFase5SecurityHardening:
         db.add(so)
         db.commit()
 
-        secret = os.getenv("SECRET_KEY", "b9fd2d98895dfc97d75afef593d1f8b57a045d725ae770f85fa3d28412e9fd0b")
+        secret = os.getenv("MERCADOPAGO_WEBHOOK_SECRET", "test_mp_secret_2026")
+        os.environ["MERCADOPAGO_WEBHOOK_SECRET"] = secret
 
         # Webhook con pago exacto
         payload_ok = {

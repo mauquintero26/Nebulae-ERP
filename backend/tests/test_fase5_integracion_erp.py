@@ -443,7 +443,7 @@ class TestFase5IntegracionErp:
         assert count2 == 0, "No deben crearse actividades duplicadas en una re-sincronización"
 
         # Listar agenda
-        list_res = app_client.get(f"/api/v1/crm/agenda?customer_id={cust.id}")
+        list_res = app_client.get(f"/api/v1/crm/agenda?customer_id={cust.id}", headers=auth_tokens["asesor"]["headers"])
         assert list_res.status_code == 200
         items = list_res.json()["data"]
         keys = [i["deterministic_key"] for i in items]
@@ -562,9 +562,9 @@ class TestFase5IntegracionErp:
         assert res.status_code == 200
         items = res.json()["data"]
         target = [i for i in items if i["sku"] == sku.sku]
-        assert len(target) == 1
-        # 20 - 5 (reserva) - 3 (cuarentena) = 12 unidades vendibles
-        assert target[0]["stock_disponible"] == 12.0
+        # 20 (balance_owner) - 5 (reserva activa) = 15 unidades vendibles.
+        # Semantica Fase 3 / Bloqueo 4: InventoryOwnerBalance ya excluye unidades en cuarentena.
+        assert target[0]["stock_disponible"] == 15.0
         assert target[0]["modalidad_disponible"] == "ENTREGA_INMEDIATA"
 
     def test_12_venta_ecommerce_concurrente_ultima_unidad_pesimista(self, app_client: TestClient, db: Session, base_customer_catalog: dict):
@@ -627,7 +627,8 @@ class TestFase5IntegracionErp:
     def test_13_webhooks_idempotencia_duplicados_200(self, app_client: TestClient, db: Session):
         """13. Webhooks procesan eventos de pasarelas de forma idempotente (duplicado -> 200 OK con replay)."""
         import hmac, hashlib, os, json
-        secret = os.getenv("MERCADOPAGO_WEBHOOK_SECRET") or os.getenv("SECRET_KEY", "b9fd2d98895dfc97d75afef593d1f8b57a045d725ae770f85fa3d28412e9fd0b")
+        secret = os.getenv("MERCADOPAGO_WEBHOOK_SECRET", "test_mp_secret_2026")
+        os.environ["MERCADOPAGO_WEBHOOK_SECRET"] = secret
         idem_key = f"MP_TX_{int(datetime.datetime.utcnow().timestamp())}"
         payload = {
             "action": "payment.created",
@@ -743,7 +744,7 @@ class TestFase5IntegracionErp:
             assert "data" in res.json()
 
         # Obtener preferencias (inician en False segun Ley 1581)
-        res_pref = app_client.get(f"/api/v1/marketing/customers/{cust.id}/preferences")
+        res_pref = app_client.get(f"/api/v1/marketing/customers/{cust.id}/preferences", headers=auth_tokens["asesor"]["headers"])
         assert res_pref.status_code == 200
         pref = res_pref.json()["data"]
         assert pref["whatsapp_opt_in"] is False

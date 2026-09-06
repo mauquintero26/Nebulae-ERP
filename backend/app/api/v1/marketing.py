@@ -97,7 +97,7 @@ def _next_mkt_num(db: Session) -> str:
 
 # ─── STATS ───────────────────────────────────────────────────────────────────
 @router.get("/stats")
-def marketing_stats(db: Session = Depends(get_db)):
+def marketing_stats(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_marketing_tables(db)
     campanas_activas = db.execute(text("SELECT COUNT(*) FROM campaigns WHERE estado='ACTIVA'")).scalar() or 0
     campanas_total   = db.execute(text("SELECT COUNT(*) FROM campaigns")).scalar() or 0
@@ -126,7 +126,7 @@ def marketing_stats(db: Session = Depends(get_db)):
 
 # ─── CAMPAÑAS ─────────────────────────────────────────────────────────────────
 @router.get("/campanas")
-def list_campanas(db: Session = Depends(get_db), estado: Optional[str] = None, search: Optional[str] = None, limit: int = 100):
+def list_campanas(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db), estado: Optional[str] = None, search: Optional[str] = None, limit: int = 100):
     _ensure_marketing_tables(db)
     q = "SELECT c.*, (SELECT COUNT(*) FROM campaign_leads cl WHERE cl.campaign_id=c.id) AS leads_count, (SELECT COALESCE(SUM(cl2.venta_atribuida_cop),0) FROM campaign_leads cl2 WHERE cl2.campaign_id=c.id AND cl2.estado='CONVERTIDO') AS ventas_cop FROM campaigns c WHERE 1=1"
     params: dict = {}
@@ -144,7 +144,7 @@ def list_campanas(db: Session = Depends(get_db), estado: Optional[str] = None, s
     return {"status": "success", "total": len(data), "data": data}
 
 @router.get("/campanas/{campana_id}")
-def get_campana(campana_id: int, db: Session = Depends(get_db)):
+def get_campana(campana_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_marketing_tables(db)
     row = db.execute(text("SELECT * FROM campaigns WHERE id=:id"), {"id": campana_id}).mappings().first()
     if not row: raise HTTPException(404, "Campaña no encontrada")
@@ -154,7 +154,7 @@ def get_campana(campana_id: int, db: Session = Depends(get_db)):
     return {"status": "success", "data": d}
 
 @router.post("/campanas")
-def create_campana(body: dict, db: Session = Depends(get_db)):
+def create_campana(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_marketing_tables(db)
     num = _next_mkt_num(db)
     canales = body.get("canales", [])
@@ -173,7 +173,7 @@ def create_campana(body: dict, db: Session = Depends(get_db)):
     return {"status": "success", "data": dict(row)}
 
 @router.patch("/campanas/{campana_id}")
-def update_campana(campana_id: int, body: dict, db: Session = Depends(get_db)):
+def update_campana(campana_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_marketing_tables(db)
     allowed = ["nombre","tipo","estado","fecha_inicio","fecha_fin","presupuesto_cop","objetivo","canales","descripcion","codigo_descuento","descuento_pct"]
     sets = []
@@ -194,34 +194,34 @@ def update_campana(campana_id: int, body: dict, db: Session = Depends(get_db)):
     return {"status": "success", "data": d}
 
 @router.delete("/campanas/{campana_id}")
-def delete_campana(campana_id: int, db: Session = Depends(get_db)):
+def delete_campana(campana_id: int, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     _ensure_marketing_tables(db)
     db.execute(text("DELETE FROM campaigns WHERE id=:id"), {"id": campana_id})
     db.commit()
     return {"status": "success", "data": {"deleted": campana_id}}
 
 @router.post("/campanas/{campana_id}/launch")
-def launch_campana(campana_id: int, db: Session = Depends(get_db)):
+def launch_campana(campana_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_marketing_tables(db)
     db.execute(text("UPDATE campaigns SET estado='ACTIVA', updated_at=now() WHERE id=:id"), {"id": campana_id})
     db.commit()
     return {"status": "success", "data": {"estado": "ACTIVA", "message": "Campaña lanzada exitosamente"}}
 
 @router.post("/campanas/{campana_id}/pause")
-def pause_campana(campana_id: int, db: Session = Depends(get_db)):
+def pause_campana(campana_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_marketing_tables(db)
     db.execute(text("UPDATE campaigns SET estado='PAUSADA', updated_at=now() WHERE id=:id"), {"id": campana_id})
     db.commit()
     return {"status": "success", "data": {"estado": "PAUSADA"}}
 # ─── LEADS DE CAMPAÑA ────────────────────────────────────────────────────────
 @router.get("/campanas/{campana_id}/leads")
-def list_campaign_leads(campana_id: int, db: Session = Depends(get_db)):
+def list_campaign_leads(campana_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_marketing_tables(db)
     rows = db.execute(text("SELECT * FROM campaign_leads WHERE campaign_id=:id ORDER BY created_at DESC"), {"id": campana_id}).mappings().all()
     return {"status": "success", "data": [dict(r) for r in rows]}
 
 @router.post("/campanas/{campana_id}/leads")
-def add_campaign_lead(campana_id: int, body: dict, db: Session = Depends(get_db)):
+def add_campaign_lead(campana_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_marketing_tables(db)
     row = db.execute(text("""
         INSERT INTO campaign_leads (campaign_id, lead_name, lead_email, lead_phone, source_channel, estado, notas)
@@ -236,7 +236,7 @@ def add_campaign_lead(campana_id: int, body: dict, db: Session = Depends(get_db)
     return {"status": "success", "data": dict(row)}
 
 @router.patch("/campanas/{campana_id}/leads/{lead_id}")
-def update_campaign_lead(campana_id: int, lead_id: int, body: dict, db: Session = Depends(get_db)):
+def update_campaign_lead(campana_id: int, lead_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_marketing_tables(db)
     allowed = ["estado","venta_atribuida_cop","notas","crm_lead_id"]
     sets = []; params: dict = {"id": lead_id, "cid": campana_id}
@@ -250,7 +250,7 @@ def update_campaign_lead(campana_id: int, lead_id: int, body: dict, db: Session 
     return {"status": "success", "data": dict(row) if row else {}}
 
 @router.post("/leads/crm-sync")
-def sync_lead_to_crm(body: dict, db: Session = Depends(get_db)):
+def sync_lead_to_crm(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Crea un lead en el pipeline CRM desde un campaign_lead"""
     _ensure_marketing_tables(db)
     from app.models.erp_documents import SaleOrder
@@ -295,7 +295,7 @@ def sync_lead_to_crm(body: dict, db: Session = Depends(get_db)):
 
 # ─── FLUJOS DE AUTOMATIZACIÓN ────────────────────────────────────────────────
 @router.get("/flujos")
-def list_flujos(db: Session = Depends(get_db), canal: Optional[str] = None):
+def list_flujos(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db), canal: Optional[str] = None):
     _ensure_marketing_tables(db)
     q = "SELECT * FROM automation_flows WHERE 1=1"
     params: dict = {}
@@ -310,7 +310,7 @@ def list_flujos(db: Session = Depends(get_db), canal: Optional[str] = None):
     return {"status": "success", "data": data}
 
 @router.post("/flujos")
-def create_flujo(body: dict, db: Session = Depends(get_db)):
+def create_flujo(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_marketing_tables(db)
     acciones = body.get("acciones", [])
     row = db.execute(text("""
@@ -326,7 +326,7 @@ def create_flujo(body: dict, db: Session = Depends(get_db)):
     return {"status": "success", "data": dict(row)}
 
 @router.patch("/flujos/{flujo_id}")
-def update_flujo(flujo_id: int, body: dict, db: Session = Depends(get_db)):
+def update_flujo(flujo_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_marketing_tables(db)
     allowed = ["nombre","canal","trigger_keyword","estado","acciones","descripcion"]
     sets = []; params: dict = {"id": flujo_id}
@@ -345,7 +345,7 @@ def update_flujo(flujo_id: int, body: dict, db: Session = Depends(get_db)):
     return {"status": "success", "data": d}
 
 @router.delete("/flujos/{flujo_id}")
-def delete_flujo(flujo_id: int, db: Session = Depends(get_db)):
+def delete_flujo(flujo_id: int, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     _ensure_marketing_tables(db)
     db.execute(text("DELETE FROM automation_flows WHERE id=:id"), {"id": flujo_id})
     db.commit()
@@ -353,7 +353,7 @@ def delete_flujo(flujo_id: int, db: Session = Depends(get_db)):
 
 # ─── POSTS / HISTORIAS ────────────────────────────────────────────────────────
 @router.get("/posts")
-def list_posts(db: Session = Depends(get_db), tipo: Optional[str] = None, estado: Optional[str] = None, limit: int = 100):
+def list_posts(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db), tipo: Optional[str] = None, estado: Optional[str] = None, limit: int = 100):
     _ensure_marketing_tables(db)
     q = "SELECT * FROM social_posts WHERE 1=1"
     params: dict = {"limit": limit}
@@ -368,7 +368,7 @@ def list_posts(db: Session = Depends(get_db), tipo: Optional[str] = None, estado
     return {"status": "success", "data": data}
 
 @router.post("/posts")
-def create_post(body: dict, db: Session = Depends(get_db)):
+def create_post(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_marketing_tables(db)
     canales = body.get("canales", [])
     row = db.execute(text("""
@@ -395,7 +395,7 @@ def create_post(body: dict, db: Session = Depends(get_db)):
     return {"status": "success", "data": d}
 
 @router.patch("/posts/{post_id}")
-def update_post(post_id: int, body: dict, db: Session = Depends(get_db)):
+def update_post(post_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     _ensure_marketing_tables(db)
     allowed = ["tipo","producto_nombre","precio_cop","descuento_pct","canales","caption","imagen_url","formato","programado_para","estado","interacciones","leads_generados"]
     sets = []; params: dict = {"id": post_id}
@@ -413,7 +413,7 @@ def update_post(post_id: int, body: dict, db: Session = Depends(get_db)):
     return {"status": "success", "data": d}
 
 @router.delete("/posts/{post_id}")
-def delete_post(post_id: int, db: Session = Depends(get_db)):
+def delete_post(post_id: int, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     _ensure_marketing_tables(db)
     db.execute(text("DELETE FROM social_posts WHERE id=:id"), {"id": post_id})
     db.commit()
@@ -613,7 +613,7 @@ def get_customer_segment(
 @router.get("/customers/{customer_id}/preferences", response_model=dict)
 def get_customer_contact_preferences(
     customer_id: int,
-    db: Session = Depends(get_db)
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)
 ):
     """Obtiene las preferencias de contacto y consentimiento Habeas Data del cliente."""
     customer = db.query(Customer).filter(Customer.id == customer_id).first()
