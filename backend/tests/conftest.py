@@ -120,6 +120,9 @@ def setup_test_db():
     # Cleanup: truncate all test data (best-effort, ignore missing tables)
     with test_engine.connect() as conn:
         for tbl in [
+            # Fase 5 — Integración ERP
+            "integration_webhook_events", "customer_contact_preferences",
+            "omnichannel_interactions", "customer_agenda_activities",
             # Fase 4 — Ventas, Pagos, Empaque, Entregas y Devoluciones
             "sale_order_return_lines", "sale_order_returns",
             "sale_order_delivery_lines", "sale_order_deliveries",

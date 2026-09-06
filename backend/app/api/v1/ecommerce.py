@@ -1,9 +1,17 @@
-﻿"""
+
+from decimal import Decimal
+from app.models.catalog import ProductSKU, Product
+from app.models.inventory import InventoryLevel, Warehouse
+from app.models.fase1b import InventoryOwnerBalance, InventoryReservation, SaleOrderLineErp
+from app.models.fase3 import InventoryQuarantine
+from app.models.fase4 import SaleOrderPayment
+
+"""
 E-commerce API
 Endpoints for: E-commerce stats, PWEB orders, digital catalog,
 abandoned carts, web builder config, image management
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from typing import Optional
@@ -22,12 +30,17 @@ def _now():
 def _next_seq_pweb(db: Session) -> int:
     try:
         r = db.execute(text("SELECT nextval('seq_pweb')")).scalar()
-        return r
+        return int(r)
     except Exception:
-        db.execute(text("CREATE SEQUENCE IF NOT EXISTS seq_pweb START 1"))
-        db.commit()
-        r = db.execute(text("SELECT nextval('seq_pweb')")).scalar()
-        return r
+        db.rollback()
+        try:
+            db.execute(text("CREATE SEQUENCE IF NOT EXISTS seq_pweb START 1"))
+            db.commit()
+            return int(db.execute(text("SELECT nextval('seq_pweb')")).scalar())
+        except Exception:
+            db.rollback()
+            count = db.query(func.count(SaleOrder.id)).filter(SaleOrder.canal_venta == 'WEB').scalar() or 0
+            return int(count) + 1
 
 def _gen_pweb_numero(db: Session) -> str:
     year = datetime.datetime.utcnow().year
@@ -35,76 +48,79 @@ def _gen_pweb_numero(db: Session) -> str:
     return f"PWEB-{year}{n:04d}"
 
 def _ensure_ecommerce_tables(db: Session):
-    db.execute(text("""
-        CREATE TABLE IF NOT EXISTS web_carts (
-            id SERIAL PRIMARY KEY,
-            session_id VARCHAR(100),
-            customer_email VARCHAR(200),
-            customer_name VARCHAR(200),
-            productos JSONB DEFAULT '[]',
-            total_cop NUMERIC(14,2) DEFAULT 0,
-            estado VARCHAR(30) DEFAULT 'ACTIVO',
-            ip_address VARCHAR(50),
-            recuperacion_enviada BOOLEAN DEFAULT FALSE,
-            recuperacion_descuento NUMERIC(5,2) DEFAULT 0,
-            created_at TIMESTAMP DEFAULT NOW(),
-            updated_at TIMESTAMP DEFAULT NOW()
-        )
-    """))
-    db.execute(text("""
-        CREATE TABLE IF NOT EXISTS web_builder_config (
-            id SERIAL PRIMARY KEY,
-            config_key VARCHAR(100) UNIQUE NOT NULL,
-            config_value JSONB,
-            updated_at TIMESTAMP DEFAULT NOW()
-        )
-    """))
-    db.execute(text("""
-        CREATE TABLE IF NOT EXISTS media_repository (
-            id SERIAL PRIMARY KEY,
-            filename VARCHAR(300) NOT NULL,
-            url VARCHAR(500) NOT NULL,
-            tipo VARCHAR(50) DEFAULT 'imagen',
-            tags JSONB DEFAULT '[]',
-            size_bytes INTEGER DEFAULT 0,
-            uploaded_by VARCHAR(150),
-            created_at TIMESTAMP DEFAULT NOW()
-        )
-    """))
-    db.execute(text("""
-        CREATE TABLE IF NOT EXISTS ecommerce_products (
-            id SERIAL PRIMARY KEY,
-            nombre VARCHAR(500) NOT NULL,
-            descripcion TEXT,
-            descripcion_larga TEXT,
-            sku VARCHAR(100),
-            precio_venta NUMERIC(14,2) DEFAULT 0,
-            precio_comparacion NUMERIC(14,2) DEFAULT 0,
-            descuento_pct NUMERIC(5,2) DEFAULT 0,
-            impuesto_pct NUMERIC(5,2) DEFAULT 0,
-            categoria VARCHAR(200),
-            sub_categoria VARCHAR(200),
-            marca VARCHAR(200),
-            tipo_producto VARCHAR(50) DEFAULT 'Bienes',
-            imagenes JSONB DEFAULT '[]',
-            atributos JSONB DEFAULT '[]',
-            variantes JSONB DEFAULT '[]',
-            stock_disponible INTEGER DEFAULT 0,
-            alerta_stock_minimo INTEGER DEFAULT 5,
-            publicado_web BOOLEAN DEFAULT FALSE,
-            rastrear_inventario BOOLEAN DEFAULT TRUE,
-            codigo_aduana VARCHAR(100),
-            peso_kg NUMERIC(8,2),
-            notas_internas TEXT,
-            seo_titulo VARCHAR(300),
-            seo_descripcion TEXT,
-            seo_keywords TEXT,
-            created_at TIMESTAMP DEFAULT NOW(),
-            updated_at TIMESTAMP DEFAULT NOW(),
-            created_by VARCHAR(150)
-        )
-    """))
-    db.commit()
+    try:
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS web_carts (
+                id SERIAL PRIMARY KEY,
+                session_id VARCHAR(100),
+                customer_email VARCHAR(200),
+                customer_name VARCHAR(200),
+                productos JSONB DEFAULT '[]',
+                total_cop NUMERIC(14,2) DEFAULT 0,
+                estado VARCHAR(30) DEFAULT 'ACTIVO',
+                ip_address VARCHAR(50),
+                recuperacion_enviada BOOLEAN DEFAULT FALSE,
+                recuperacion_descuento NUMERIC(5,2) DEFAULT 0,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        """))
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS web_builder_config (
+                id SERIAL PRIMARY KEY,
+                config_key VARCHAR(100) UNIQUE NOT NULL,
+                config_value JSONB,
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+        """))
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS media_repository (
+                id SERIAL PRIMARY KEY,
+                filename VARCHAR(300) NOT NULL,
+                url VARCHAR(500) NOT NULL,
+                tipo VARCHAR(50) DEFAULT 'imagen',
+                tags JSONB DEFAULT '[]',
+                size_bytes INTEGER DEFAULT 0,
+                uploaded_by VARCHAR(150),
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """))
+        db.execute(text("""
+            CREATE TABLE IF NOT EXISTS ecommerce_products (
+                id SERIAL PRIMARY KEY,
+                nombre VARCHAR(500) NOT NULL,
+                descripcion TEXT,
+                descripcion_larga TEXT,
+                sku VARCHAR(100),
+                precio_venta NUMERIC(14,2) DEFAULT 0,
+                precio_comparacion NUMERIC(14,2) DEFAULT 0,
+                descuento_pct NUMERIC(5,2) DEFAULT 0,
+                impuesto_pct NUMERIC(5,2) DEFAULT 0,
+                categoria VARCHAR(200),
+                sub_categoria VARCHAR(200),
+                marca VARCHAR(200),
+                tipo_producto VARCHAR(50) DEFAULT 'Bienes',
+                imagenes JSONB DEFAULT '[]',
+                atributos JSONB DEFAULT '[]',
+                variantes JSONB DEFAULT '[]',
+                stock_disponible INTEGER DEFAULT 0,
+                alerta_stock_minimo INTEGER DEFAULT 5,
+                publicado_web BOOLEAN DEFAULT FALSE,
+                rastrear_inventario BOOLEAN DEFAULT TRUE,
+                codigo_aduana VARCHAR(100),
+                peso_kg NUMERIC(8,2),
+                notas_internas TEXT,
+                seo_titulo VARCHAR(300),
+                seo_descripcion TEXT,
+                seo_keywords TEXT,
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW(),
+                created_by VARCHAR(150)
+            )
+        """))
+        db.commit()
+    except Exception:
+        db.rollback()
 
 # --- ECOMMERCE STATS ---
 @router.get("/stats")
@@ -153,16 +169,86 @@ def list_web_orders(estado: Optional[str] = None, search: Optional[str] = None, 
     return {"status": "success", "total": total, "data": data}
 
 
+
+def _get_real_sellable_stock(db: Session, sku_id: int, warehouse_id: Optional[int] = None, owner: str = "NEBULAE") -> Decimal:
+    """
+    Calcula la disponibilidad vendible real:
+    disponible = stock_fisico_owner - reservas_activas_owner - cuarentena_owner.
+    Nunca publica inventario reservado, en cuarentena, perdido o de otro propietario.
+    """
+    # 1. Balance por propietario
+    bal_q = db.query(func.coalesce(func.sum(InventoryOwnerBalance.quantity), 0)).filter(
+        InventoryOwnerBalance.sku_id == sku_id,
+        InventoryOwnerBalance.owner == owner
+    )
+    if warehouse_id:
+        bal_q = bal_q.filter(InventoryOwnerBalance.warehouse_id == warehouse_id)
+    balance_owner = Decimal(str(bal_q.scalar() or 0))
+
+    # 2. Reservas activas
+    res_q = db.query(func.coalesce(func.sum(InventoryReservation.quantity_reserved), 0)).filter(
+        InventoryReservation.sku_id == sku_id,
+        InventoryReservation.owner == owner,
+        InventoryReservation.status == "ACTIVE"
+    )
+    if warehouse_id:
+        res_q = res_q.filter(InventoryReservation.warehouse_id == warehouse_id)
+    reservas_activas = Decimal(str(res_q.scalar() or 0))
+
+    # 3. Cuarentena
+    quar_q = db.query(func.coalesce(func.sum(InventoryQuarantine.quantity), 0)).filter(
+        InventoryQuarantine.sku_id == sku_id,
+        InventoryQuarantine.owner == owner,
+        InventoryQuarantine.status.in_(["ACTIVO", "ACTIVA"])
+    )
+    if warehouse_id:
+        quar_q = quar_q.filter(InventoryQuarantine.warehouse_id == warehouse_id)
+    cuarentena = Decimal(str(quar_q.scalar() or 0))
+
+    disponible = balance_owner - reservas_activas - cuarentena
+    return max(disponible, Decimal("0.0"))
+
 @router.post("/pedidos", status_code=201)
 def create_web_order(body: dict, db: Session = Depends(get_db)):
+    """
+    Creacion idempotente y pesimista de pedidos desde ecommerce.
+    - Idempotencia: si ya existe un pedido con el mismo idempotency_key, retorna 200 OK (Replay).
+    - Bloqueo pesimista con SELECT FOR UPDATE en reservas para articulos de entrega inmediata.
+    - Crea SaleOrder y SaleOrderLineErp canonicas vinculadas.
+    """
     _ensure_ecommerce_tables(db)
+
+    idem_key = body.get("idempotency_key")
+    if idem_key:
+        existing_order = db.query(SaleOrder).filter(
+            text("canal_metadata->>'idempotency_key' = :k")
+        ).params(k=idem_key).first()
+        if existing_order:
+            return {
+                "status": "success",
+                "idempotent_replay": True,
+                "data": {
+                    "id": existing_order.id,
+                    "numero": existing_order.numero,
+                    "pweb_numero": existing_order.pweb_numero,
+                    "estado": existing_order.estado,
+                    "total_cop": float(existing_order.total_cop or 0)
+                }
+            }
+
     pweb_numero = _gen_pweb_numero(db)
     try:
         n = db.execute(text("SELECT nextval('seq_ven')")).scalar()
     except Exception:
-        db.execute(text("CREATE SEQUENCE IF NOT EXISTS seq_ven START 1000"))
-        db.commit()
-        n = db.execute(text("SELECT nextval('seq_ven')")).scalar()
+        db.rollback()
+        try:
+            db.execute(text("CREATE SEQUENCE IF NOT EXISTS seq_ven START 1000"))
+            db.commit()
+            n = db.execute(text("SELECT nextval('seq_ven')")).scalar()
+        except Exception:
+            db.rollback()
+            count = db.query(func.count(SaleOrder.id)).scalar() or 0
+            n = int(count) + 1000
     year = datetime.datetime.utcnow().year
     pven_numero = f"PVEN-{year}{n:04d}"
 
@@ -171,20 +257,171 @@ def create_web_order(body: dict, db: Session = Depends(get_db)):
         customer = db.query(Customer).filter(Customer.email == body["customer_email"]).first()
     if not customer and body.get("customer_email"):
         names = (body.get("customer_name", "Web") or "Web").split(" ", 1)
-        customer = Customer(first_name=names[0], last_name=names[1] if len(names) > 1 else "", email=body.get("customer_email"), phone=body.get("customer_phone", ""))
+        customer = Customer(
+            first_name=names[0],
+            last_name=names[1] if len(names) > 1 else "",
+            email=body.get("customer_email"),
+            phone=body.get("customer_phone", ""),
+            address=body.get("customer_address", "")
+        )
         db.add(customer)
-        db.commit()
-        db.refresh(customer)
+        db.flush()
 
-    order = SaleOrder(numero=pven_numero, pweb_numero=pweb_numero, canal_venta="WEB", canal_metadata=body.get("canal_metadata"), customer_id=customer.id if customer else None, customer_name=body.get("customer_name", "Cliente Web"), customer_email=body.get("customer_email"), customer_phone=body.get("customer_phone"), customer_address=body.get("customer_address"), direccion_entrega=body.get("direccion_entrega") or body.get("customer_address"), total_cop=body.get("total_cop", 0), subtotal_cop=body.get("subtotal_cop", 0), descuento_pct=body.get("descuento_pct", 0), productos=body.get("productos", []), notas=body.get("notas"), estado="PENDIENTE_DESPACHO", created_by="WEB")
+    total_cop = Decimal(str(body.get("total_cop", 0)))
+    subtotal_cop = Decimal(str(body.get("subtotal_cop", total_cop)))
+    descuento_pct = Decimal(str(body.get("descuento_pct", 0)))
+
+    meta = body.get("canal_metadata") or {}
+    if idem_key:
+        meta["idempotency_key"] = idem_key
+
+    order = SaleOrder(
+        numero=pven_numero,
+        pweb_numero=pweb_numero,
+        canal_venta="WEB",
+        canal_metadata=meta,
+        customer_id=customer.id if customer else None,
+        customer_name=body.get("customer_name", "Cliente Web"),
+        customer_email=body.get("customer_email"),
+        customer_phone=body.get("customer_phone"),
+        customer_address=body.get("customer_address"),
+        direccion_entrega=body.get("direccion_entrega") or body.get("customer_address"),
+        total_cop=total_cop,
+        subtotal_cop=subtotal_cop,
+        descuento_pct=descuento_pct,
+        anticipo_cop=total_cop,  # Pagado 100% en pasarela web
+        saldo_cop=Decimal("0.0"),
+        productos=body.get("productos", []),
+        notas=body.get("notas"),
+        estado="PENDIENTE_DESPACHO"
+    )
     db.add(order)
+    db.flush()
+
+    # Registrar pago 100% en pasarela
+    if total_cop > Decimal("0"):
+        pay_idem = f"PAY_ECOMMERCE_{order.id}"
+        existing_pay = db.query(SaleOrderPayment).filter(SaleOrderPayment.idempotency_key == pay_idem).first()
+        if not existing_pay:
+            sop = SaleOrderPayment(
+                sale_order_id=order.id,
+                customer_id=customer.id if customer else None,
+                tipo="PAGO_TOTAL",
+                monto=total_cop,
+                moneda="COP",
+                metodo_pago=body.get("metodo_pago", "PASARELA_WEB"),
+                fecha=datetime.datetime.utcnow().date(),
+                referencia_bancaria=body.get("transaccion_id") or pweb_numero,
+                usuario="ECOMMERCE",
+                idempotency_key=pay_idem,
+                estado="CONFIRMADO",
+                notes=f"Pago e-commerce pedido web {pweb_numero}"
+            )
+            db.add(sop)
+
+    # Procesar lineas canonicas y reservas con bloqueo pesimista
+    productos_in = body.get("productos", [])
+    default_wh = db.query(Warehouse).first()
+    wh_id = default_wh.id if default_wh else 1
+
+    for p in productos_in:
+        qty = Decimal(str(p.get("qty") or p.get("quantity") or 1))
+        unit_price = Decimal(str(p.get("unit_price_cop") or p.get("precio_venta") or p.get("price") or 0))
+        sku_code = p.get("sku")
+        sku_id = p.get("sku_id")
+
+        sku = None
+        if sku_id:
+            sku = db.query(ProductSKU).filter(ProductSKU.id == sku_id).first()
+        elif sku_code:
+            sku = db.query(ProductSKU).filter(ProductSKU.sku == sku_code).first()
+
+        modalidad = p.get("modalidad", "ENTREGA_INMEDIATA")
+        owner = p.get("owner", "NEBULAE")
+        cost_unit = Decimal(str(sku.cost_price or 0)) if sku and sku.cost_price else Decimal("0.00")
+
+        so_line = SaleOrderLineErp(
+            so_id=order.id,
+            sku_id=sku.id if sku else None,
+            description=p.get("nombre") or p.get("description") or (sku.sku if sku else "Producto Web"),
+            quantity=qty,
+            unit_price_cop=unit_price,
+            descuento_pct=Decimal(str(p.get("descuento_pct", 0))),
+            customer_id=customer.id if customer else None,
+            tax_pct=Decimal(str(p.get("tax_pct", 0))),
+            modalidad=modalidad,
+            owner=owner,
+            quantity_reserved=Decimal("0"),
+            quantity_delivered=Decimal("0"),
+            quantity_cancelled=Decimal("0"),
+            estado="PENDIENTE",
+            cost_unit_cop_snapshot=cost_unit,
+            price_unit_cop_snapshot=unit_price,
+            source="NATIVE"
+        )
+        db.add(so_line)
+        db.flush()
+
+        # Si es entrega inmediata y tiene SKU, aplicar bloqueo pesimista y verificar stock
+        if modalidad == "ENTREGA_INMEDIATA" and sku:
+            line_wh_id = p.get("warehouse_id") or wh_id
+            # Bloqueo pesimista sobre el balance del propietario
+            owner_bal = db.query(InventoryOwnerBalance).filter(
+                InventoryOwnerBalance.sku_id == sku.id,
+                InventoryOwnerBalance.warehouse_id == line_wh_id,
+                InventoryOwnerBalance.owner == owner
+            ).with_for_update().first()
+
+            disp_real = _get_real_sellable_stock(db, sku.id, line_wh_id, owner)
+            if disp_real < qty:
+                db.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Stock insuficiente para entrega inmediata de '{sku.sku}'. Disponibles: {disp_real}, solicitadas: {qty}."
+                )
+
+            res_key = f"RES_PWEB_{order.id}_LINE_{so_line.id}"
+            res = InventoryReservation(
+                sku_id=sku.id,
+                warehouse_id=line_wh_id,
+                owner=owner,
+                quantity_reserved=qty,
+                sale_order_line_id=so_line.id,
+                status="ACTIVE",
+                idempotency_key=res_key,
+                created_by="ECOMMERCE",
+                notes=f"Reserva e-commerce pedido {pweb_numero}"
+            )
+            db.add(res)
+            so_line.quantity_reserved = qty
+            so_line.estado = "RESERVADA"
+        else:
+            so_line.estado = "PENDIENTE_COMPRA"
+
+    log = ActivityLog(
+        entity_type="VEN",
+        entity_id=order.id,
+        entity_numero=pweb_numero,
+        action="CREATED",
+        description=f"Pedido web {pweb_numero} ({pven_numero}) creado desde e-commerce con lineas canonicas.",
+        new_estado=order.estado,
+        user_name="ECOMMERCE"
+    )
+    db.add(log)
     db.commit()
     db.refresh(order)
 
-    log = ActivityLog(entity_type="VEN", entity_id=order.id, entity_numero=pweb_numero, action="CREATED", description=f"Pedido web {pweb_numero} creado desde e-commerce", new_estado="PENDIENTE_DESPACHO", user_name="WEB")
-    db.add(log)
-    db.commit()
-    return {"status": "success", "data": {"id": order.id, "numero": pven_numero, "pweb_numero": pweb_numero, "estado": order.estado}}
+    return {
+        "status": "success",
+        "idempotent_replay": False,
+        "data": {
+            "id": order.id,
+            "numero": pven_numero,
+            "pweb_numero": pweb_numero,
+            "estado": order.estado,
+            "total_cop": float(order.total_cop)
+        }
+    }
 
 
 # --- CARRITOS ---
@@ -238,7 +475,89 @@ def list_catalogo(search: Optional[str] = None, categoria: Optional[str] = None,
     try:
         rows = db.execute(text(f"SELECT id, nombre, descripcion, sku, precio_venta, precio_comparacion, descuento_pct, impuesto_pct, categoria, sub_categoria, marca, tipo_producto, imagenes, atributos, variantes, stock_disponible, alerta_stock_minimo, publicado_web, rastrear_inventario, seo_titulo, created_at, updated_at FROM ecommerce_products {where_sql} ORDER BY nombre LIMIT :limit"), params).fetchall()
         total = int(db.execute(text(f"SELECT COUNT(*) FROM ecommerce_products {where_sql}"), {k:v for k,v in params.items() if k!="limit"}).scalar() or 0)
-        data = [{"id": r[0], "nombre": r[1], "descripcion": r[2], "sku": r[3], "precio_venta": float(r[4] or 0), "precio_comparacion": float(r[5] or 0), "descuento_pct": float(r[6] or 0), "impuesto_pct": float(r[7] or 0), "categoria": r[8], "sub_categoria": r[9], "marca": r[10], "tipo_producto": r[11], "imagenes": r[12] or [], "atributos": r[13] or [], "variantes": r[14] or [], "stock_disponible": r[15] or 0, "alerta_stock_minimo": r[16] or 5, "publicado_web": r[17], "rastrear_inventario": r[18], "seo_titulo": r[19], "created_at": r[20].isoformat() if r[20] else None, "updated_at": r[21].isoformat() if r[21] else None, "is_low_stock": (r[15] or 0) <= (r[16] or 5)} for r in rows]
+        data = []
+        seen_skus = set()
+        for r in rows:
+            sku_code = r[3]
+            stock_disp = float(r[15] or 0)
+            if sku_code:
+                seen_skus.add(sku_code)
+                sku_record = db.query(ProductSKU).filter(ProductSKU.sku == sku_code).first()
+                if sku_record:
+                    real_stock = _get_real_sellable_stock(db, sku_record.id, owner="NEBULAE")
+                    stock_disp = float(real_stock)
+
+            modalidad = "ENTREGA_INMEDIATA" if stock_disp > 0 else "POR_PEDIDO"
+            is_low = stock_disp <= (r[16] or 5)
+
+            data.append({
+                "id": r[0],
+                "nombre": r[1],
+                "descripcion": r[2],
+                "sku": r[3],
+                "precio_venta": float(r[4] or 0),
+                "precio_comparacion": float(r[5] or 0),
+                "descuento_pct": float(r[6] or 0),
+                "impuesto_pct": float(r[7] or 0),
+                "categoria": r[8],
+                "sub_categoria": r[9],
+                "marca": r[10],
+                "tipo_producto": r[11],
+                "imagenes": r[12] or [],
+                "atributos": r[13] or [],
+                "variantes": r[14] or [],
+                "stock_disponible": stock_disp,
+                "modalidad_disponible": modalidad,
+                "alerta_stock_minimo": r[16] or 5,
+                "publicado_web": r[17],
+                "rastrear_inventario": r[18],
+                "seo_titulo": r[19],
+                "created_at": r[20].isoformat() if r[20] else None,
+                "updated_at": r[21].isoformat() if r[21] else None,
+                "is_low_stock": is_low,
+            })
+
+        # Incluir SKUs canonicos del ERP no presentes en ecommerce_products
+        sku_q = db.query(ProductSKU).join(Product, ProductSKU.product_id == Product.id)
+        if search:
+            like = f"%{search}%"
+            sku_q = sku_q.filter(
+                ProductSKU.sku.ilike(like) | Product.name.ilike(like)
+            )
+        for canon_sku in sku_q.limit(limit).all():
+            if canon_sku.sku not in seen_skus:
+                prod = canon_sku.product
+                real_stock = float(_get_real_sellable_stock(db, canon_sku.id, owner="NEBULAE"))
+                modalidad = "ENTREGA_INMEDIATA" if real_stock > 0 else "POR_PEDIDO"
+                data.append({
+                    "id": canon_sku.id,
+                    "nombre": prod.name if prod else canon_sku.sku,
+                    "descripcion": getattr(prod, "description", "") or "",
+                    "sku": canon_sku.sku,
+                    "precio_venta": float(canon_sku.sale_price or 0),
+                    "precio_comparacion": float(canon_sku.sale_price or 0),
+                    "descuento_pct": 0.0,
+                    "impuesto_pct": 0.0,
+                    "categoria": getattr(getattr(prod, "category", None), "name", "") if prod else "",
+                    "sub_categoria": "",
+                    "marca": getattr(getattr(prod, "brand", None), "name", "") if prod else "",
+                    "tipo_producto": "Fisico",
+                    "imagenes": [],
+                    "atributos": [],
+                    "variantes": [],
+                    "stock_disponible": real_stock,
+                    "modalidad_disponible": modalidad,
+                    "alerta_stock_minimo": 5,
+                    "publicado_web": True,
+                    "rastrear_inventario": True,
+                    "seo_titulo": prod.name if prod else canon_sku.sku,
+                    "created_at": canon_sku.created_at.isoformat() if hasattr(canon_sku, "created_at") and canon_sku.created_at else None,
+                    "updated_at": canon_sku.updated_at.isoformat() if hasattr(canon_sku, "updated_at") and canon_sku.updated_at else None,
+                    "is_low_stock": real_stock <= 5,
+                })
+                seen_skus.add(canon_sku.sku)
+                total += 1
+
         return {"status": "success", "total": total, "data": data}
     except Exception as e:
         return {"status": "success", "total": 0, "data": [], "error": str(e)}

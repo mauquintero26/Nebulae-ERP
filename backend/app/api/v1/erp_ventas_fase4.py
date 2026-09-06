@@ -1,8 +1,9 @@
+from app.api.v1.schemas_fase5 import ConvertirCotizacionVentaRequest
 # -*- coding: utf-8 -*-
 """
 ERP Ventas Fase 4 — Módulo Canónico de Ventas, Pagos, Empaque, Entregas y Devoluciones (Hardened).
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func, text, and_, or_
 from typing import Optional, List, Dict, Any
@@ -19,6 +20,7 @@ from app.models.catalog import ProductSKU, Product
 from app.models.inventory import Warehouse, InventoryLevel, InventoryMovement, InventoryOperation
 from app.models.erp_documents import SaleOrder, SalesQuotation, CustomerRequest, ActivityLog
 from app.models.fase1b import (
+    SalesQuotationLine,
     SaleOrderLineErp,
     ProcurementAllocation,
     GoodsReceiptLineAllocation,
@@ -2671,4 +2673,297 @@ def get_sale_order_profitability(
             "mau_result_cop": float(mau_net - mau_cost),
             "lines_breakdown": lines_breakdown,
         }
+    }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FASE 5: COTIZA → VENTA CANONICA E IDEMPOTENTE
+# ──────────────────────────────────────────────────────────────────────────────
+
+@router.post("/cotizaciones/{cot_id}/convertir-a-venta", status_code=status.HTTP_200_OK)
+def convertir_cotizacion_a_venta(
+    cot_id: int,
+    request: ConvertirCotizacionVentaRequest = Body(default_factory=ConvertirCotizacionVentaRequest),
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+    db: Session = Depends(get_db)
+):
+    """
+    Convierte una cotizacion aprobada en Pedido de Venta canonico (PVEN) con sus lineas normalizadas.
+    - Idempotente: mismo replay o idempotency_key devuelve 200 OK con el pedido existente.
+    - Rechaza conversiones incompatibles/divergentes con 409 Conflict.
+    - Conserva cot_id, cliente, lineas, SKU, modalidad (ENTREGA_INMEDIATA / POR_PEDIDO), precios, descuentos, etc.
+    """
+    cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).with_for_update().first()
+    if not cot:
+        raise HTTPException(status_code=404, detail=f"Cotizacion {cot_id} no encontrada.")
+
+    # Estados no convertibles
+    if cot.estado in ("RECHAZADA", "CANCELADA"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cotizacion en estado '{cot.estado}' no puede ser convertida a pedido de venta."
+        )
+
+    # 1. Verificar si ya existe un Pedido de Venta vinculado a esta cotizacion
+    existing_so = db.query(SaleOrder).filter(SaleOrder.cot_id == cot.id).first()
+    if existing_so:
+        existing_meta = existing_so.canal_metadata or {}
+        existing_key = existing_meta.get("idempotency_key") if isinstance(existing_meta, dict) else None
+        if request.idempotency_key and existing_key and request.idempotency_key != existing_key:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cotizacion {cot.numero} ya fue convertida al pedido {existing_so.numero} con otra clave de idempotencia."
+            )
+        return {
+            "status": "success",
+            "idempotent_replay": True,
+            "sale_order_id": existing_so.id,
+            "numero": existing_so.numero,
+            "estado": existing_so.estado,
+            "total_cop": float(existing_so.total_cop or 0),
+            "saldo_cop": float(existing_so.saldo_cop or 0),
+            "anticipo_cop": float(existing_so.anticipo_cop or 0),
+            "message": f"Cotizacion ya convertida previamente al pedido {existing_so.numero} (Replay)."
+        }
+
+    # 2. Generar numero unico de pedido PVEN
+    ven_numero = _gen_numero(db, "PVEN-", "seq_ven")
+
+    # 3. Datos del cliente y financieros
+    total_cop = Decimal(str(cot.total_cop or 0))
+    anticipo_cop = Decimal(str(cot.anticipo_cop or 0))
+    saldo_cop = total_cop - anticipo_cop
+    subtotal_cop = Decimal(str(cot.subtotal_cop or total_cop))
+    descuento_pct = Decimal(str(cot.descuento_pct or 0))
+
+    new_so = SaleOrder(
+        numero=ven_numero,
+        sc_id=cot.sc_id,
+        sc_numero=cot.sc_numero,
+        cot_id=cot.id,
+        cot_numero=cot.numero,
+        customer_id=cot.customer_id,
+        customer_name=cot.customer_name,
+        customer_phone=cot.customer_phone,
+        customer_email=cot.customer_email,
+        customer_address=cot.customer_address,
+        direccion_entrega=request.direccion_entrega or cot.direccion_entrega or cot.customer_address,
+        fecha_cotizacion=cot.fecha_cotizacion or datetime.datetime.utcnow().date(),
+        fecha_entrega_estimada=request.fecha_entrega_estimada or cot.fecha_entrega_estimada,
+        trm_rate=cot.trm_rate,
+        subtotal_cop=subtotal_cop,
+        descuento_pct=descuento_pct,
+        total_cop=total_cop,
+        anticipo_cop=anticipo_cop,
+        saldo_cop=saldo_cop,
+        estado="PENDIENTE_COMPRA",
+        notas=request.notas or cot.notas,
+        productos=cot.productos or [],
+        canal_venta="CRM",
+        canal_metadata={
+            "idempotency_key": request.idempotency_key,
+            "created_by": request.user_name or getattr(user, "email", "system")
+        }
+    )
+    db.add(new_so)
+    db.flush()
+
+    if anticipo_cop > Decimal("0"):
+        pay_idem = f"PAY_CONV_COT_{cot.id}_{new_so.id}"
+        existing_pay = db.query(SaleOrderPayment).filter(SaleOrderPayment.idempotency_key == pay_idem).first()
+        if not existing_pay:
+            sop = SaleOrderPayment(
+                sale_order_id=new_so.id,
+                customer_id=cot.customer_id,
+                tipo="ANTICIPO",
+                monto=anticipo_cop,
+                moneda="COP",
+                metodo_pago="CONVERSION_COTIZACION",
+                fecha=datetime.datetime.utcnow().date(),
+                referencia_bancaria=f"COT-{cot.numero}",
+                usuario=request.user_name or getattr(user, "email", "system"),
+                idempotency_key=pay_idem,
+                estado="CONFIRMADO",
+                notes=f"Anticipo registrado por conversion de cotizacion {cot.numero}"
+            )
+            db.add(sop)
+
+    # 4. Convertir lineas normalizadas
+    quotation_lines = db.query(SalesQuotationLine).filter(SalesQuotationLine.sq_id == cot.id).all()
+    created_lines = []
+    has_por_pedido = False
+    has_inmediata = False
+
+    default_wh = db.query(Warehouse).first()
+    wh_id = default_wh.id if default_wh else 1
+
+    if quotation_lines:
+        for ql in quotation_lines:
+            sku = db.query(ProductSKU).filter(ProductSKU.id == ql.sku_id).first() if ql.sku_id else None
+            modalidad = getattr(ql, "modalidad", None)
+            if not modalidad and cot.productos and isinstance(cot.productos, list):
+                for cp in cot.productos:
+                    if cp.get("sku_id") == ql.sku_id or cp.get("sku") == getattr(sku, "sku", None) or cp.get("description") == ql.description:
+                        modalidad = cp.get("modalidad")
+                        break
+            if not modalidad:
+                desc_lower = (ql.description or "").lower()
+                if "inmediat" in desc_lower:
+                    modalidad = "ENTREGA_INMEDIATA"
+                else:
+                    modalidad = "POR_PEDIDO"
+            owner = getattr(ql, "owner", "NEBULAE")
+            qty = Decimal(str(ql.quantity or 1))
+            unit_price = Decimal(str(ql.unit_price_cop or 0))
+            cost_unit = Decimal(str(sku.cost_price or 0)) if sku and sku.cost_price else Decimal("0.00")
+
+            if modalidad == "ENTREGA_INMEDIATA":
+                has_inmediata = True
+                line_estado = "PENDIENTE_RESERVA"
+            else:
+                has_por_pedido = True
+                line_estado = "PENDIENTE_COMPRA"
+
+            so_line = SaleOrderLineErp(
+                so_id=new_so.id,
+                sku_id=ql.sku_id,
+                sq_line_id=ql.id,
+                description=ql.description or (sku.sku if sku else "Producto"),
+                quantity=qty,
+                unit_price_cop=unit_price,
+                descuento_pct=Decimal(str(ql.descuento_pct or 0)),
+                customer_id=cot.customer_id,
+                tax_pct=Decimal("0"),
+                modalidad=modalidad,
+                owner=owner,
+                quantity_reserved=Decimal("0"),
+                quantity_delivered=Decimal("0"),
+                quantity_cancelled=Decimal("0"),
+                estado=line_estado,
+                cost_unit_cop_snapshot=cost_unit,
+                price_unit_cop_snapshot=unit_price,
+                source="NATIVE",
+            )
+            db.add(so_line)
+            db.flush()
+
+            if modalidad == "ENTREGA_INMEDIATA" and ql.sku_id:
+                try:
+                    res_key = f"RES_CONV_COT_{cot.id}_LINE_{so_line.id}"
+                    check_and_reserve_stock(
+                        db=db,
+                        sku_id=ql.sku_id,
+                        warehouse_id=wh_id,
+                        owner=owner,
+                        qty_to_reserve=qty,
+                        sale_order_line_id=so_line.id,
+                        idempotency_key=res_key,
+                        user_name=request.user_name or getattr(user, "email", "system"),
+                        now=_now(),
+                        notes=f"Auto-reserva conversion cotizacion {cot.numero}"
+                    )
+                    so_line.quantity_reserved = qty
+                    so_line.estado = "RESERVADA"
+                except HTTPException:
+                    so_line.estado = "PENDIENTE_COMPRA"
+                    has_por_pedido = True
+
+            created_lines.append(so_line)
+    elif cot.productos and isinstance(cot.productos, list):
+        for p in cot.productos:
+            qty = Decimal(str(p.get("qty") or p.get("quantity") or 1))
+            unit_price = Decimal(str(p.get("unit_price_cop") or p.get("price") or 0))
+            sku_id = p.get("sku_id")
+            sku = db.query(ProductSKU).filter(ProductSKU.id == sku_id).first() if sku_id else None
+            modalidad = p.get("modalidad", "POR_PEDIDO")
+            owner = p.get("owner", "NEBULAE")
+            cost_unit = Decimal(str(sku.cost_price or 0)) if sku and sku.cost_price else Decimal("0.00")
+
+            if modalidad == "ENTREGA_INMEDIATA":
+                has_inmediata = True
+                line_estado = "PENDIENTE_RESERVA"
+            else:
+                has_por_pedido = True
+                line_estado = "PENDIENTE_COMPRA"
+
+            so_line = SaleOrderLineErp(
+                so_id=new_so.id,
+                sku_id=sku_id,
+                description=p.get("description") or p.get("product_name") or "Producto",
+                quantity=qty,
+                unit_price_cop=unit_price,
+                descuento_pct=Decimal(str(p.get("descuento_pct") or 0)),
+                customer_id=cot.customer_id,
+                tax_pct=Decimal("0"),
+                modalidad=modalidad,
+                owner=owner,
+                quantity_reserved=Decimal("0"),
+                quantity_delivered=Decimal("0"),
+                quantity_cancelled=Decimal("0"),
+                estado=line_estado,
+                cost_unit_cop_snapshot=cost_unit,
+                price_unit_cop_snapshot=unit_price,
+                source="NATIVE",
+            )
+            db.add(so_line)
+            db.flush()
+
+            if modalidad == "ENTREGA_INMEDIATA" and sku_id:
+                try:
+                    res_key = f"RES_CONV_COT_{cot.id}_LINE_{so_line.id}"
+                    check_and_reserve_stock(
+                        db=db,
+                        sku_id=sku_id,
+                        warehouse_id=wh_id,
+                        owner=owner,
+                        qty_to_reserve=qty,
+                        sale_order_line_id=so_line.id,
+                        idempotency_key=res_key,
+                        user_name=request.user_name or getattr(user, "email", "system"),
+                        now=_now(),
+                        notes=f"Auto-reserva conversion cotizacion {cot.numero}"
+                    )
+                    so_line.quantity_reserved = qty
+                    so_line.estado = "RESERVADA"
+                except HTTPException:
+                    so_line.estado = "PENDIENTE_COMPRA"
+                    has_por_pedido = True
+
+            created_lines.append(so_line)
+
+    # 5. Derivar estado global del pedido
+    if has_por_pedido:
+        new_so.estado = "PENDIENTE_COMPRA"
+    elif all(l.estado == "RESERVADA" for l in created_lines):
+        new_so.estado = "LISTO_ENTREGA" if (new_so.saldo_cop <= 0) else "PENDIENTE_PAGO"
+    else:
+        new_so.estado = "EN_PROCESO"
+
+    cot.estado = "CONFIRMADA"
+    cot.updated_at = datetime.datetime.utcnow()
+
+    # 6. Auditoria
+    log = ActivityLog(
+        entity_type="COT",
+        entity_id=cot.id,
+        entity_numero=cot.numero,
+        action="CONVERTIDA_A_VENTA",
+        description=f"Cotizacion {cot.numero} convertida al pedido {new_so.numero}. Lineas: {len(created_lines)}.",
+        user_name=request.user_name or getattr(user, "email", "system")
+    )
+    db.add(log)
+
+    db.commit()
+    db.refresh(new_so)
+
+    return {
+        "status": "success",
+        "idempotent_replay": False,
+        "sale_order_id": new_so.id,
+        "numero": new_so.numero,
+        "estado": new_so.estado,
+        "total_cop": float(new_so.total_cop or 0),
+        "saldo_cop": float(new_so.saldo_cop or 0),
+        "anticipo_cop": float(new_so.anticipo_cop or 0),
+        "lines_count": len(created_lines),
+        "message": f"Cotizacion {cot.numero} convertida exitosamente a Pedido {new_so.numero}."
     }

@@ -8,6 +8,7 @@ from app.models.users import User, RolePermission
 from fastapi import Request
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
@@ -26,6 +27,22 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     if user is None:
         raise credentials_exception
     return user
+
+def get_optional_current_user(
+    token: str = Depends(oauth2_scheme_optional),
+    db: Session = Depends(get_db)
+):
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        if user_id is None:
+            return None
+        user = db.query(User).filter(User.id == int(user_id)).first()
+        return user
+    except Exception:
+        return None
 
 class RoleChecker:
     def __init__(self, module_name: str, require_write: bool = False):

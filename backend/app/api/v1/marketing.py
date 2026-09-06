@@ -1,6 +1,6 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, func
 from app.api.dependencies import get_db
 from typing import Optional
 import datetime, json as json_mod
@@ -451,3 +451,218 @@ def ask_story_product(body: dict, db: Session = Depends(get_db)):
         "acciones_disponibles": ["crear_lead", "crear_cotizacion", "ver_producto"]
     }
     return {"status": "success", "data": response}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FASE 5: SEGMENTACION DE MARKETING Y PREFERENCIAS DE CONTACTO (HABEAS DATA)
+# ──────────────────────────────────────────────────────────────────────────────
+from typing import Optional
+from decimal import Decimal
+from app.models.customers import Customer
+from app.models.erp_documents import SaleOrder, SalesQuotation
+from app.models.fase1b import SaleOrderLineErp
+from app.models.catalog import ProductSKU, Product, Category
+from app.models.fase5 import CustomerContactPreference
+from app.api.v1.schemas_fase5 import CustomerContactPreferenceUpdate, CustomerContactPreferenceResponse
+
+
+@router.get("/segments/{segment_type}", response_model=dict)
+def get_customer_segment(
+    segment_type: str,
+    categoria: Optional[str] = None,
+    dias_inactividad: int = 60,
+    min_pedidos_frecuente: int = 2,
+    db: Session = Depends(get_db)
+):
+    """
+    Segmentacion logica de clientes para campanas de marketing:
+    - por-categoria: Clientes que han comprado en una categoria especifica.
+    - saldo-pendiente: Clientes con saldo pendiente de pago.
+    - mercancia-disponible: Clientes con mercancia lista para entrega en bodega.
+    - clientes-frecuentes: Clientes con compras recurrentes.
+    - clientes-inactivos: Clientes sin compras en mas de N dias.
+    - cotizaciones-no-convertidas: Cotizaciones abiertas sin pedido vinculado.
+    """
+    now = datetime.datetime.utcnow()
+    customers_found = []
+
+    if segment_type == "por-categoria":
+        q = db.query(Customer).join(SaleOrder, Customer.id == SaleOrder.customer_id).join(SaleOrderLineErp, SaleOrder.id == SaleOrderLineErp.so_id)
+        if categoria:
+            q = q.join(ProductSKU, SaleOrderLineErp.sku_id == ProductSKU.id).join(Product, ProductSKU.product_id == Product.id).join(Category, Product.category_id == Category.id)
+            q = q.filter(Category.name.ilike(f"%{categoria}%"))
+        customers = q.distinct().all()
+        customers_found = [{
+            "customer_id": c.id,
+            "name": f"{c.first_name} {c.last_name or ''}".strip(),
+            "email": c.email,
+            "phone": c.phone,
+            "city": c.city
+        } for c in customers]
+
+    elif segment_type == "saldo-pendiente":
+        orders = db.query(SaleOrder).filter(
+            SaleOrder.saldo_cop > 0,
+            SaleOrder.estado != "CANCELADO"
+        ).all()
+        by_cust = {}
+        for so in orders:
+            c_id = so.customer_id or 0
+            if c_id not in by_cust:
+                by_cust[c_id] = {
+                    "customer_id": so.customer_id,
+                    "name": so.customer_name or "Cliente General",
+                    "email": so.customer_email,
+                    "phone": so.customer_phone,
+                    "total_saldo_cop": 0.0,
+                    "pedidos_pendientes": []
+                }
+            by_cust[c_id]["total_saldo_cop"] += float(so.saldo_cop or 0)
+            by_cust[c_id]["pedidos_pendientes"].append(so.numero)
+        customers_found = list(by_cust.values())
+
+    elif segment_type == "mercancia-disponible":
+        orders = db.query(SaleOrder).filter(
+            SaleOrder.estado == "LISTO_ENTREGA"
+        ).all()
+        by_cust = {}
+        for so in orders:
+            c_id = so.customer_id or 0
+            if c_id not in by_cust:
+                by_cust[c_id] = {
+                    "customer_id": so.customer_id,
+                    "name": so.customer_name,
+                    "email": so.customer_email,
+                    "phone": so.customer_phone,
+                    "pedidos_listos": []
+                }
+            by_cust[c_id]["pedidos_listos"].append(so.numero)
+        customers_found = list(by_cust.values())
+
+    elif segment_type == "clientes-frecuentes":
+        subq = db.query(
+            SaleOrder.customer_id,
+            func.count(SaleOrder.id).label("total_orders"),
+            func.sum(SaleOrder.total_cop).label("total_spent")
+        ).filter(SaleOrder.estado != "CANCELADO", SaleOrder.customer_id != None).group_by(SaleOrder.customer_id).having(func.count(SaleOrder.id) >= min_pedidos_frecuente).subquery()
+
+        results = db.query(Customer, subq.c.total_orders, subq.c.total_spent).join(subq, Customer.id == subq.c.customer_id).all()
+        customers_found = [{
+            "customer_id": c.id,
+            "name": f"{c.first_name} {c.last_name or ''}".strip(),
+            "email": c.email,
+            "phone": c.phone,
+            "total_orders": int(tot_o),
+            "total_spent_cop": float(tot_s or 0)
+        } for c, tot_o, tot_s in results]
+
+    elif segment_type == "clientes-inactivos":
+        cutoff = now - datetime.timedelta(days=dias_inactividad)
+        # Clientes con ordenes pero ninguna despues del cutoff
+        sub_recent = db.query(SaleOrder.customer_id).filter(SaleOrder.created_at >= cutoff, SaleOrder.customer_id != None).distinct()
+        sub_any = db.query(SaleOrder.customer_id).filter(SaleOrder.customer_id != None).distinct()
+
+        inactives = db.query(Customer).filter(Customer.id.in_(sub_any), Customer.id.notin_(sub_recent)).all()
+        customers_found = [{
+            "customer_id": c.id,
+            "name": f"{c.first_name} {c.last_name or ''}".strip(),
+            "email": c.email,
+            "phone": c.phone,
+            "city": c.city
+        } for c in inactives]
+
+    elif segment_type == "cotizaciones-no-convertidas":
+        cutoff = now - datetime.timedelta(days=3)
+        cots = db.query(SalesQuotation).filter(
+            SalesQuotation.estado.in_(["BORRADOR", "ENVIADA", "PENDIENTE_CONFIRMACION"]),
+            SalesQuotation.created_at <= cutoff
+        ).all()
+        customers_found = [{
+            "quotation_id": cot.id,
+            "numero": cot.numero,
+            "customer_id": cot.customer_id,
+            "customer_name": cot.customer_name,
+            "customer_phone": cot.customer_phone,
+            "customer_email": cot.customer_email,
+            "total_cop": float(cot.total_cop or 0),
+            "estado": cot.estado,
+            "created_at": cot.created_at.isoformat() if cot.created_at else None,
+        } for cot in cots]
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Tipo de segmento '{segment_type}' no valido. Opciones: por-categoria, saldo-pendiente, mercancia-disponible, clientes-frecuentes, clientes-inactivos, cotizaciones-no-convertidas."
+        )
+
+    return {
+        "status": "success",
+        "segment_type": segment_type,
+        "count": len(customers_found),
+        "data": customers_found
+    }
+
+
+@router.get("/customers/{customer_id}/preferences", response_model=dict)
+def get_customer_contact_preferences(
+    customer_id: int,
+    db: Session = Depends(get_db)
+):
+    """Obtiene las preferencias de contacto y consentimiento Habeas Data del cliente."""
+    customer = db.query(Customer).filter(Customer.id == customer_id).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+
+    pref = db.query(CustomerContactPreference).filter(CustomerContactPreference.customer_id == customer_id).first()
+    if not pref:
+        # Defaults
+        pref = CustomerContactPreference(
+            customer_id=customer_id,
+            whatsapp_opt_in=True,
+            email_opt_in=True,
+            sms_opt_in=False,
+            phone_opt_in=True,
+            habeas_data_accepted=True,
+            consent_channel="WEB"
+        )
+        db.add(pref)
+        db.commit()
+        db.refresh(pref)
+
+    return {
+        "status": "success",
+        "data": CustomerContactPreferenceResponse.model_validate(pref).model_dump()
+    }
+
+
+@router.put("/customers/{customer_id}/preferences", response_model=dict)
+def update_customer_contact_preferences(
+    customer_id: int,
+    body: CustomerContactPreferenceUpdate,
+    db: Session = Depends(get_db)
+):
+    """Actualiza preferencias de contacto y consentimiento de marketing."""
+    customer = db.query(Customer).filter(Customer.id == customer_id).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado")
+
+    pref = db.query(CustomerContactPreference).filter(CustomerContactPreference.customer_id == customer_id).first()
+    if not pref:
+        pref = CustomerContactPreference(customer_id=customer_id)
+        db.add(pref)
+
+    if body.whatsapp_opt_in is not None: pref.whatsapp_opt_in = body.whatsapp_opt_in
+    if body.email_opt_in is not None: pref.email_opt_in = body.email_opt_in
+    if body.sms_opt_in is not None: pref.sms_opt_in = body.sms_opt_in
+    if body.phone_opt_in is not None: pref.phone_opt_in = body.phone_opt_in
+    if body.habeas_data_accepted is not None: pref.habeas_data_accepted = body.habeas_data_accepted
+    if body.consent_channel is not None: pref.consent_channel = body.consent_channel
+    if body.notes is not None: pref.notes = body.notes
+
+    pref.updated_at = datetime.datetime.utcnow()
+    db.commit()
+    db.refresh(pref)
+
+    return {
+        "status": "success",
+        "data": CustomerContactPreferenceResponse.model_validate(pref).model_dump()
+    }

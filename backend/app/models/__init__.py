@@ -48,3 +48,10 @@ from app.models.fase4 import (
     SaleOrderReturn,
     SaleOrderReturnLine,
 )
+
+from app.models.fase5 import (
+    CustomerAgendaActivity,
+    OmnichannelInteraction,
+    CustomerContactPreference,
+    IntegrationWebhookEvent,
+)

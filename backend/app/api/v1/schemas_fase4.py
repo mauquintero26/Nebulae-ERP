@@ -1,7 +1,7 @@
 """
 Fase 4 - Schemas Pydantic para Ventas, Pagos, Empaque, Entregas y Devoluciones.
 """
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import Optional, List, Dict, Any
 from decimal import Decimal
 import datetime
@@ -57,8 +57,7 @@ class SaleOrderLineResponse(BaseModel):
     created_at: datetime.datetime
     updated_at: Optional[datetime.datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SaleOrderCreate(BaseModel):
@@ -118,8 +117,7 @@ class SaleOrderPaymentResponse(BaseModel):
     notes: Optional[str] = None
     created_at: datetime.datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class CancelSaleOrderRequest(BaseModel):

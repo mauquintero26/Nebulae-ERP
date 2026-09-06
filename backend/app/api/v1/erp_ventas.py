@@ -3,7 +3,7 @@ ERP Ventas API
 Endpoints for: Solicitudes de Cliente (SC), Cotizaciones (COT),
 Pedidos de Venta (VEN), Ordenes Pendientes por Pagar (PXP)
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from typing import Optional, List
@@ -468,59 +468,31 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
 
 
 @router.post("/cotizaciones/{cot_id}/confirmar")
-def confirmar_cotizacion(cot_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+def confirmar_cotizacion(cot_id: int, body: dict = Body(default_factory=dict), user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
-    """Confirm COT -> creates VEN automatically"""
-    cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
-    if not cot:
-        raise HTTPException(404, "Cotizacion no encontrada")
-    if cot.estado not in ("BORRADOR", "ENVIADA", "PENDIENTE_CONFIRMACION"):
-        raise HTTPException(400, f"No se puede confirmar en estado {cot.estado}")
+    """Confirm COT -> creates canonical VEN automatically with idempotent replay"""
+    from app.api.v1.erp_ventas_fase4 import convertir_cotizacion_a_venta
+    from app.api.v1.schemas_fase5 import ConvertirCotizacionVentaRequest
 
-    old_estado = cot.estado
-    cot.estado = "CONFIRMADA"
-    cot.updated_at = datetime.datetime.utcnow()
-    db.commit()
-    _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
-         "Cotizacion confirmada - Pedido de Venta creado",
-         old_estado=old_estado, new_estado="CONFIRMADA",
-         user_name=body.get("user_name"))
-
-    # Create VEN
-    ven_numero = _gen_numero(db, "PVEN-", "seq_ven")
-    saldo = float(cot.total_cop or 0) - float(cot.anticipo_cop or 0)
-    ven = SaleOrder(
-        numero=ven_numero,
-        sc_id=cot.sc_id,
-        sc_numero=cot.sc_numero,
-        cot_id=cot.id,
-        cot_numero=cot.numero,
-        customer_id=cot.customer_id,
-        customer_name=cot.customer_name,
-        customer_phone=cot.customer_phone,
-        customer_email=cot.customer_email,
-        customer_address=cot.customer_address,
-        direccion_entrega=cot.direccion_entrega,
-        fecha_cotizacion=cot.fecha_cotizacion,
-        fecha_entrega_estimada=cot.fecha_entrega_estimada,
-        trm_rate=cot.trm_rate,
-        subtotal_cop=cot.subtotal_cop,
-        descuento_pct=cot.descuento_pct,
-        total_cop=cot.total_cop,
-        anticipo_cop=cot.anticipo_cop,
-        saldo_cop=saldo,
-        estado="PENDIENTE_COMPRA",
-        productos=cot.productos or [],
-        created_by=body.get("user_name"),
+    req = ConvertirCotizacionVentaRequest(
+        idempotency_key=body.get("idempotency_key"),
+        user_name=body.get("user_name"),
+        direccion_entrega=body.get("direccion_entrega"),
+        notas=body.get("notas"),
     )
-    db.add(ven)
-    db.commit()
-    db.refresh(ven)
-    _log(db, "VEN", ven.id, ven.numero, "CREATED",
-         f"Pedido de Venta {ven.numero} creado desde {cot.numero}",
-         new_estado="PENDIENTE_COMPRA", user_name=body.get("user_name"))
-
-    return {"status": "success", "data": {"cotizacion": _cot_dict(cot), "pedido_venta": _ven_dict(ven)}}
+    res = convertir_cotizacion_a_venta(cot_id, req, user, db)
+    # Return format compatible with legacy expectations
+    cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
+    ven = db.query(SaleOrder).filter(SaleOrder.id == res["sale_order_id"]).first()
+    return {
+        "status": "success",
+        "data": {
+            "cotizacion": _cot_dict(cot) if cot else {},
+            "pedido_venta": _ven_dict(ven) if ven else {},
+            "idempotent_replay": res.get("idempotent_replay", False),
+            "sale_order_id": res.get("sale_order_id")
+        }
+    }
 
 
 @router.post("/cotizaciones/{cot_id}/actividad")

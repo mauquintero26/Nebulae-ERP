@@ -3,8 +3,41 @@ from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.models.crm import Alert
 from app.models.sales import SalesOrder
+from typing import Optional, List
+from app.models.erp_documents import CustomerRequest, SalesQuotation, SaleOrder, ActivityLog, PurchaseOrderFull
+from app.models.fase1b import CustomerRequestLine, SalesQuotationLine, SaleOrderLineErp, InventoryReservation, ProcurementAllocation
+from app.models.fase4 import SaleOrderPayment, SalePackingSession, SalePackingItem, SaleOrderDelivery, SaleOrderDeliveryLine, SaleOrderReturn, SaleOrderReturnLine
+from app.models.fase5 import CustomerAgendaActivity, CustomerContactPreference
+from app.models.users import User
+from app.api.dependencies import get_optional_current_user, normalize_role, require_roles, ROLE_ADMIN, ROLE_FINANZAS, ALL_ERP_ROLES
+from app.api.v1.schemas_fase5 import AgendaActivityCreate, AgendaActivityResponse
+
 from app.schemas import crm as schemas
 import datetime, time, threading
+
+from sqlalchemy import Column as _Col, Integer as _Int, String as _Str, Text as _Txt
+from sqlalchemy import DateTime as _DT, ForeignKey as _FK
+from app.db.database import Base as _Base
+
+class CalendarEvent(_Base):
+    __tablename__ = "calendar_events"
+    __table_args__ = {"extend_existing": True}
+    id                 = _Col(_Int, primary_key=True, index=True)
+    title              = _Col(_Str(200), nullable=False)
+    description        = _Col(_Txt, nullable=True)
+    start_datetime     = _Col(_DT, nullable=False)
+    end_datetime       = _Col(_DT, nullable=True)
+    event_type         = _Col(_Str(50), default="MEETING")
+    location           = _Col(_Str(200), nullable=True)
+    customer_id        = _Col(_Int, nullable=True)
+    customer_name      = _Col(_Str(200), nullable=True)
+    created_by         = _Col(_Str(100), default="CRM")
+    google_event_id    = _Col(_Str(200), nullable=True)
+    microsoft_event_id = _Col(_Str(200), nullable=True)
+    sync_source        = _Col(_Str(50), default="INTERNAL")
+    color              = _Col(_Str(50), default="indigo")
+    created_at         = _Col(_DT, default=datetime.datetime.utcnow)
+    updated_at         = _Col(_DT, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
 router = APIRouter()
 
@@ -187,23 +220,202 @@ STATUS_COLORS = {
     "PAID": "emerald",
 }
 
+
+def _sync_operational_agenda_deterministic(db: Session, target_customer_id: Optional[int] = None) -> int:
+    """Genera y actualiza de manera determinista las actividades de agenda y calendario del cliente."""
+    synced_count = 0
+    now = datetime.datetime.utcnow()
+
+    # Filtro de cliente si aplica
+    so_query = db.query(SaleOrder)
+    if target_customer_id:
+        so_query = so_query.filter(SaleOrder.customer_id == target_customer_id)
+    sales_orders = so_query.all()
+
+    for so in sales_orders:
+        if not so.customer_id:
+            continue
+        c_id = so.customer_id
+
+        # 1. Anticipo pendiente
+        if (so.saldo_cop or 0) > 0 and so.estado in ("PENDIENTE_COMPRA", "BORRADOR"):
+            key = f"{c_id}_SALE_ORDER_{so.id}_ANTICIPO_PENDIENTE"
+            existing = db.query(CustomerAgendaActivity).filter(CustomerAgendaActivity.deterministic_key == key).first()
+            if not existing:
+                db.add(CustomerAgendaActivity(
+                    customer_id=c_id,
+                    entity_type="SALE_ORDER",
+                    entity_id=so.id,
+                    activity_type="ANTICIPO_PENDIENTE",
+                    title=f"Anticipo pendiente para pedido {so.numero}",
+                    description=f"Pedido {so.numero} tiene saldo pendiente de anticipo (${float(so.total_cop or 0):,.0f} COP).",
+                    scheduled_date=so.created_at,
+                    due_date=so.fecha_entrega_estimada or (so.created_at + datetime.timedelta(days=3) if so.created_at else now),
+                    status="PENDIENTE",
+                    deterministic_key=key,
+                ))
+                synced_count += 1
+
+        # 2. Saldo pendiente al estar listo para entrega
+        if so.estado == "LISTO_ENTREGA" and (so.saldo_cop or 0) > 0:
+            key = f"{c_id}_SALE_ORDER_{so.id}_SALDO_PENDIENTE"
+            existing = db.query(CustomerAgendaActivity).filter(CustomerAgendaActivity.deterministic_key == key).first()
+            if not existing:
+                db.add(CustomerAgendaActivity(
+                    customer_id=c_id,
+                    entity_type="SALE_ORDER",
+                    entity_id=so.id,
+                    activity_type="SALDO_PENDIENTE",
+                    title=f"Cobro de saldo para entrega del pedido {so.numero}",
+                    description=f"Pedido {so.numero} esta listo para entregar pero tiene saldo de ${float(so.saldo_cop or 0):,.0f} COP.",
+                    scheduled_date=now,
+                    due_date=now + datetime.timedelta(days=2),
+                    status="PENDIENTE",
+                    deterministic_key=key,
+                ))
+                synced_count += 1
+
+        # 3. Mercancia lista para entregar
+        if so.estado == "LISTO_ENTREGA":
+            key = f"{c_id}_SALE_ORDER_{so.id}_MERCANCIA_LISTA"
+            existing = db.query(CustomerAgendaActivity).filter(CustomerAgendaActivity.deterministic_key == key).first()
+            if not existing:
+                db.add(CustomerAgendaActivity(
+                    customer_id=c_id,
+                    entity_type="SALE_ORDER",
+                    entity_id=so.id,
+                    activity_type="MERCANCIA_LISTA",
+                    title=f"Mercancia lista para entrega: {so.numero}",
+                    description=f"Todos los articulos del pedido {so.numero} se encuentran disponibles en bodega.",
+                    scheduled_date=now,
+                    due_date=now + datetime.timedelta(days=3),
+                    status="PENDIENTE",
+                    deterministic_key=key,
+                ))
+                synced_count += 1
+
+    # Empaques en proceso
+    pack_query = db.query(SalePackingSession).filter(SalePackingSession.status == "EN_PROCESO")
+    if target_customer_id:
+        pack_query = pack_query.filter(SalePackingSession.customer_id == target_customer_id)
+    for p in pack_query.all():
+        key = f"{p.customer_id}_PACKING_{p.id}_EMPAQUE_PENDIENTE"
+        existing = db.query(CustomerAgendaActivity).filter(CustomerAgendaActivity.deterministic_key == key).first()
+        if not existing:
+            db.add(CustomerAgendaActivity(
+                customer_id=p.customer_id,
+                entity_type="PACKING",
+                entity_id=p.id,
+                activity_type="EMPAQUE_PENDIENTE",
+                title=f"Empaque en curso {p.numero}",
+                description=f"Sesion de empaque {p.numero} pendiente de verificacion y cierre.",
+                scheduled_date=p.created_at,
+                due_date=now + datetime.timedelta(days=1),
+                status="PENDIENTE",
+                deterministic_key=key,
+            ))
+            synced_count += 1
+
+    # Entregas pendientes o despachadas
+    deliv_query = db.query(SaleOrderDelivery).filter(SaleOrderDelivery.status.in_(["BORRADOR", "PREPARANDO", "DESPACHADO", "EN_TRANSITO"]))
+    if target_customer_id:
+        deliv_query = deliv_query.filter(SaleOrderDelivery.customer_id == target_customer_id)
+    for d in deliv_query.all():
+        act_type = "DESPACHO_PROGRAMADO" if d.status in ("BORRADOR", "PREPARANDO") else "ENTREGA_PENDIENTE"
+        key = f"{d.customer_id}_DELIVERY_{d.id}_{act_type}"
+        existing = db.query(CustomerAgendaActivity).filter(CustomerAgendaActivity.deterministic_key == key).first()
+        if not existing:
+            db.add(CustomerAgendaActivity(
+                customer_id=d.customer_id,
+                entity_type="DELIVERY",
+                entity_id=d.id,
+                activity_type=act_type,
+                title=f"{act_type.replace('_', ' ').capitalize()}: {d.numero}",
+                description=f"Entrega {d.numero} ({d.status}) - Transportadora: {d.carrier or 'Local'}, Guia: {d.tracking_number or 'Pendiente'}",
+                scheduled_date=d.scheduled_date or d.dispatch_date or d.created_at,
+                due_date=d.scheduled_date or now + datetime.timedelta(days=3),
+                status="PENDIENTE",
+                deterministic_key=key,
+            ))
+            synced_count += 1
+
+    # Devoluciones
+    ret_query = db.query(SaleOrderReturn).filter(SaleOrderReturn.status == "REGISTRADA")
+    if target_customer_id:
+        ret_query = ret_query.filter(SaleOrderReturn.customer_id == target_customer_id)
+    for r in ret_query.all():
+        key = f"{r.customer_id}_RETURN_{r.id}_GARANTIA_DEVOLUCION"
+        existing = db.query(CustomerAgendaActivity).filter(CustomerAgendaActivity.deterministic_key == key).first()
+        if not existing:
+            db.add(CustomerAgendaActivity(
+                customer_id=r.customer_id,
+                entity_type="RETURN",
+                entity_id=r.id,
+                activity_type="GARANTIA_DEVOLUCION",
+                title=f"Gestion de devolucion {r.numero}",
+                description=f"Devolucion {r.numero} en evaluacion. Resolucion financiera: {r.financial_resolution}.",
+                scheduled_date=r.created_at,
+                due_date=now + datetime.timedelta(days=2),
+                status="PENDIENTE",
+                deterministic_key=key,
+            ))
+            synced_count += 1
+
+    db.commit()
+    return synced_count
+
 @router.get("/customers/{customer_id}/profile-360")
-def get_customer_360_profile(customer_id: int, db: Session = Depends(get_db)):
+def get_customer_360_profile(
+    customer_id: int,
+    user: Optional[User] = Depends(get_optional_current_user),
+    db: Session = Depends(get_db)
+):
     customer = db.query(Customer).filter(Customer.id == customer_id).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
 
+    # 1. Fetch canonical entities
+    canonical_sos = db.query(SaleOrder).filter(SaleOrder.customer_id == customer_id).all()
+    canonical_scs = db.query(CustomerRequest).filter(CustomerRequest.customer_id == customer_id).all()
+    canonical_cots = db.query(SalesQuotation).filter(SalesQuotation.customer_id == customer_id).all()
+    payments = db.query(SaleOrderPayment).filter(SaleOrderPayment.customer_id == customer_id).all()
+    packings = db.query(SalePackingSession).filter(SalePackingSession.customer_id == customer_id).all()
+    deliveries = db.query(SaleOrderDelivery).filter(SaleOrderDelivery.customer_id == customer_id).all()
+    returns = db.query(SaleOrderReturn).filter(SaleOrderReturn.customer_id == customer_id).all()
+    agenda_items = db.query(CustomerAgendaActivity).filter(CustomerAgendaActivity.customer_id == customer_id).all()
+    contact_pref = db.query(CustomerContactPreference).filter(CustomerContactPreference.customer_id == customer_id).first()
+
+    # Determine RBAC visibility for profitability/costs
+    user_role = normalize_role(user.role) if (user and hasattr(user, "role") and user.role) else ""
+    can_view_finance = user_role in ("ADMIN", "FINANZAS")
+
+    # 2. Financial totals
+    total_comprado_cop = Decimal("0.0")
+    total_pagado_cop = Decimal("0.0")
+    saldo_pendiente_cop = Decimal("0.0")
+    saldo_a_favor_cop = Decimal("0.0")
+    total_costo_cop = Decimal("0.0")
+
+    so_ids = [so.id for so in canonical_sos]
+    so_lines = db.query(SaleOrderLineErp).filter(SaleOrderLineErp.so_id.in_(so_ids)).all() if so_ids else []
+
+    reservations = db.query(InventoryReservation).filter(
+        InventoryReservation.sale_order_line_id.in_([l.id for l in so_lines]),
+        InventoryReservation.status == "ACTIVE"
+    ).all() if so_lines else []
+
+    allocations = db.query(ProcurementAllocation).filter(
+        ProcurementAllocation.sale_order_line_id.in_([l.id for l in so_lines])
+    ).all() if so_lines else []
+
     active_orders = []
     all_orders_timeline = []
-    ltv = Decimal("0.0")
 
+    # Include legacy orders if present
     for order in customer.sales_orders:
         order_total = sum((line.unit_price * line.quantity) for line in order.lines)
-
-        # Use solicitud_tipo for display if available, else generic label
         tipo_display = getattr(order, "solicitud_tipo", None) or "Solicitud"
         estado_display = STATUS_LABELS.get(order.status, order.status)
-
         if order.status != "CANCELLED":
             active_orders.append({
                 "id": order.id,
@@ -211,30 +423,270 @@ def get_customer_360_profile(customer_id: int, db: Session = Depends(get_db)):
                 "status_label": estado_display,
                 "solicitud_tipo": tipo_display,
                 "color": STATUS_COLORS.get(order.status, "slate"),
-                "created_at": order.created_at.isoformat(),
+                "created_at": order.created_at.isoformat() if order.created_at else "",
                 "total": round(float(order_total), 2),
                 "lines_count": len(order.lines),
             })
-
-        # Timeline entry — richer description using solicitud_tipo
         all_orders_timeline.append({
-            "type": "sale_order",
+            "type": "sale_order_legacy",
             "id": order.id,
             "status": order.status,
             "status_label": tipo_display,
             "estado_label": estado_display,
-            "solicitud_tipo": tipo_display,
             "color": STATUS_COLORS.get(order.status, "slate"),
-            "created_at": order.created_at.isoformat(),
+            "created_at": order.created_at.isoformat() if order.created_at else None,
             "total": round(float(order_total), 2),
             "lines_count": len(order.lines),
             "description": f"ESTADO: {estado_display}",
         })
 
-        if order.status in ["INVOICED", "COMPLETED", "DONE", "PAID"]:
-            ltv += order_total
+    # Process canonical SaleOrders
+    pedidos_data = []
+    for so in canonical_sos:
+        t_cop = Decimal(str(so.total_cop or 0))
+        s_cop = Decimal(str(so.saldo_cop or 0))
+        if so.estado != "CANCELADO":
+            total_comprado_cop += t_cop
+            saldo_pendiente_cop += s_cop
+            active_orders.append({
+                "id": so.id,
+                "numero": so.numero,
+                "status": so.estado,
+                "status_label": so.estado,
+                "solicitud_tipo": "Pedido de Venta",
+                "color": "emerald" if so.estado in ("ENTREGADO", "FACTURADO") else "blue",
+                "created_at": so.created_at.isoformat() if so.created_at else "",
+                "total": round(float(t_cop), 2),
+                "saldo": round(float(s_cop), 2),
+                "lines_count": len([l for l in so_lines if l.so_id == so.id]),
+            })
 
-    # Always add "Cliente Creado" as the first timeline event
+        pedidos_data.append({
+            "id": so.id,
+            "numero": so.numero,
+            "estado": so.estado,
+            "total_cop": float(t_cop),
+            "anticipo_cop": float(so.anticipo_cop or 0),
+            "saldo_cop": float(s_cop),
+            "fecha_entrega_estimada": so.fecha_entrega_estimada.isoformat() if so.fecha_entrega_estimada else None,
+            "created_at": so.created_at.isoformat() if so.created_at else None,
+        })
+
+        all_orders_timeline.append({
+            "type": "sale_order",
+            "id": so.id,
+            "numero": so.numero,
+            "status": so.estado,
+            "status_label": f"Pedido {so.numero}",
+            "estado_label": so.estado,
+            "color": "emerald" if so.estado in ("ENTREGADO", "FACTURADO") else "blue",
+            "created_at": so.created_at.isoformat() if so.created_at else None,
+            "total": round(float(t_cop), 2),
+            "description": f"Pedido {so.numero} en estado {so.estado} - Total: ${float(t_cop):,.0f} COP",
+        })
+
+    # Line costs for rentabilidad
+    for l in so_lines:
+        cost = Decimal(str(l.cost_unit_cop_snapshot or 0)) * Decimal(str(l.quantity or 0))
+        total_costo_cop += cost
+
+    # Payments
+    pagos_data = []
+    for p in payments:
+        p_monto = Decimal(str(p.monto or 0))
+        if p.estado == "CONFIRMADO":
+            if p.tipo in ("ANTICIPO", "ABONO", "PAGO_TOTAL", "PAGO_SALDO"):
+                total_pagado_cop += p_monto
+            elif p.tipo == "DEVOLUCION":
+                total_pagado_cop -= p_monto
+        pagos_data.append({
+            "id": p.id,
+            "tipo": p.tipo,
+            "monto": float(p_monto),
+            "estado": p.estado,
+            "fecha": p.fecha.isoformat() if p.fecha else None,
+            "metodo_pago": p.metodo_pago,
+            "referencia": p.referencia_bancaria,
+        })
+        all_orders_timeline.append({
+            "type": "payment",
+            "id": p.id,
+            "status": p.estado,
+            "status_label": f"Pago {p.tipo}",
+            "estado_label": p.estado,
+            "color": "emerald" if p.estado == "CONFIRMADO" else "amber",
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+            "total": float(p_monto),
+            "description": f"{p.tipo} de ${float(p_monto):,.0f} COP ({p.estado})",
+        })
+
+    # Solicitudes (SC)
+    solicitudes_data = []
+    for sc in canonical_scs:
+        solicitudes_data.append({
+            "id": sc.id,
+            "numero": sc.numero,
+            "estado": sc.estado,
+            "created_at": sc.created_at.isoformat() if sc.created_at else None,
+        })
+        all_orders_timeline.append({
+            "type": "customer_request",
+            "id": sc.id,
+            "numero": sc.numero,
+            "status": sc.estado,
+            "status_label": f"Solicitud {sc.numero}",
+            "estado_label": sc.estado,
+            "color": "indigo",
+            "created_at": sc.created_at.isoformat() if sc.created_at else None,
+            "description": f"Solicitud de cliente {sc.numero} ({sc.estado})",
+        })
+
+    # Cotizaciones (COT)
+    cotizaciones_data = []
+    for cot in canonical_cots:
+        cotizaciones_data.append({
+            "id": cot.id,
+            "numero": cot.numero,
+            "estado": cot.estado,
+            "total_cop": float(cot.total_cop or 0),
+            "created_at": cot.created_at.isoformat() if cot.created_at else None,
+        })
+        all_orders_timeline.append({
+            "type": "quotation",
+            "id": cot.id,
+            "numero": cot.numero,
+            "status": cot.estado,
+            "status_label": f"Cotización {cot.numero}",
+            "estado_label": cot.estado,
+            "color": "amber",
+            "created_at": cot.created_at.isoformat() if cot.created_at else None,
+            "total": float(cot.total_cop or 0),
+            "description": f"Cotización {cot.numero} ({cot.estado}) - Total: ${float(cot.total_cop or 0):,.0f} COP",
+        })
+
+    # Empaques
+    empaques_data = []
+    for pack in packings:
+        empaques_data.append({
+            "id": pack.id,
+            "numero": pack.numero,
+            "status": pack.status,
+            "created_at": pack.created_at.isoformat() if pack.created_at else None,
+        })
+
+    # Entregas
+    entregas_data = []
+    for deliv in deliveries:
+        entregas_data.append({
+            "id": deliv.id,
+            "numero": deliv.numero,
+            "delivery_method": deliv.delivery_method,
+            "carrier": deliv.carrier,
+            "tracking_number": deliv.tracking_number,
+            "status": deliv.status,
+            "dispatch_date": deliv.dispatch_date.isoformat() if deliv.dispatch_date else None,
+            "delivery_date": deliv.delivery_date.isoformat() if deliv.delivery_date else None,
+        })
+        all_orders_timeline.append({
+            "type": "delivery",
+            "id": deliv.id,
+            "numero": deliv.numero,
+            "status": deliv.status,
+            "status_label": f"Entrega {deliv.numero}",
+            "estado_label": deliv.status,
+            "color": "cyan",
+            "created_at": deliv.created_at.isoformat() if deliv.created_at else None,
+            "description": f"Entrega {deliv.numero} ({deliv.status}) - Guía: {deliv.tracking_number or 'Sin guía'}",
+        })
+
+    # Devoluciones
+    devoluciones_data = []
+    for ret in returns:
+        if ret.status != "CANCELADA" and ret.financial_resolution == "SALDO_A_FAVOR":
+            saldo_a_favor_cop += Decimal(str(ret.refund_amount or 0))
+        devoluciones_data.append({
+            "id": ret.id,
+            "numero": ret.numero,
+            "status": ret.status,
+            "financial_resolution": ret.financial_resolution,
+            "refund_amount": float(ret.refund_amount or 0),
+            "created_at": ret.created_at.isoformat() if ret.created_at else None,
+        })
+        all_orders_timeline.append({
+            "type": "return",
+            "id": ret.id,
+            "numero": ret.numero,
+            "status": ret.status,
+            "status_label": f"Devolución {ret.numero}",
+            "estado_label": ret.status,
+            "color": "red",
+            "created_at": ret.created_at.isoformat() if ret.created_at else None,
+            "description": f"Devolución {ret.numero} ({ret.status}) - Resolución: {ret.financial_resolution}",
+        })
+
+    # Reservas activas
+    reservas_data = [{
+        "id": r.id,
+        "sku_id": r.sku_id,
+        "warehouse_id": r.warehouse_id,
+        "owner": r.owner,
+        "quantity_reserved": float(r.quantity_reserved),
+        "status": r.status,
+    } for r in reservations]
+
+    # Compras asignadas
+    compras_asignadas_data = [{
+        "id": a.id,
+        "po_line_id": a.po_line_id,
+        "quantity_allocated": float(a.quantity_allocated),
+        "allocation_type": a.allocation_type,
+    } for a in allocations]
+
+    # Agenda / Calendario actividades
+    agenda_data = [{
+        "id": ag.id,
+        "activity_type": ag.activity_type,
+        "title": ag.title,
+        "description": ag.description,
+        "scheduled_date": ag.scheduled_date.isoformat() if ag.scheduled_date else None,
+        "due_date": ag.due_date.isoformat() if ag.due_date else None,
+        "status": ag.status,
+    } for ag in agenda_items]
+
+    for ag in agenda_items:
+        all_orders_timeline.append({
+            "type": "agenda_activity",
+            "id": ag.id,
+            "status": ag.status,
+            "status_label": ag.title,
+            "estado_label": ag.status,
+            "color": "blue",
+            "created_at": ag.created_at.isoformat() if ag.created_at else None,
+            "description": f"{ag.activity_type}: {ag.description or ag.title}",
+        })
+
+    # Calendar events legacy (opcional si existe la tabla)
+    cal_events = []
+    try:
+        cal_events = db.query(CalendarEvent).filter(
+            CalendarEvent.customer_id == customer.id
+        ).order_by(CalendarEvent.start_datetime.desc()).all()
+
+        for ce in cal_events:
+            all_orders_timeline.append({
+                "type": "calendar_event",
+                "id": ce.id,
+                "status": "CALENDAR_EVENT",
+                "status_label": ce.title,
+                "estado_label": ce.title,
+                "color": "indigo",
+                "created_at": ce.created_at.isoformat() if ce.created_at else None,
+                "description": ce.description or ce.title,
+            })
+    except Exception:
+        db.rollback()
+
+    # Cliente creado event
     all_orders_timeline.append({
         "type": "created",
         "id": customer.id,
@@ -247,54 +699,49 @@ def get_customer_360_profile(customer_id: int, db: Session = Depends(get_db)):
         "description": "Ficha del cliente registrada en el sistema.",
     })
 
-    # ── Include calendar events in the timeline (audit log) ──────────────────
-    cal_events = db.query(CalendarEvent).filter(
-        CalendarEvent.customer_id == customer.id
-    ).order_by(CalendarEvent.start_datetime.desc()).all()
-
-    EVENT_TYPE_LABELS = {
-        "MEETING":  "Reunión agendada",
-        "CALL":     "Llamada agendada",
-        "VIDEO":    "Videollamada agendada",
-        "FOLLOWUP": "Seguimiento agendado",
-        "TASK":     "Tarea agendada",
-        "DEMO":     "Demo / Presentación",
-    }
-    EVENT_TYPE_COLORS = {
-        "MEETING": "indigo", "CALL": "green", "VIDEO": "blue",
-        "FOLLOWUP": "amber", "TASK": "purple", "DEMO": "rose",
-    }
-
-    for ce in cal_events:
-        type_label = EVENT_TYPE_LABELS.get(ce.event_type or "MEETING", "Evento")
-        color = EVENT_TYPE_COLORS.get(ce.event_type or "MEETING", "indigo")
-        start_str = ce.start_datetime.strftime("%d %b %Y %H:%M") if ce.start_datetime else "—"
-        desc_parts = [f"📅 {start_str}"]
-        if ce.location: desc_parts.append(f"📍 {ce.location}")
-        if ce.description: desc_parts.append(ce.description[:100])
-        all_orders_timeline.append({
-            "type": "calendar_event",
-            "id": ce.id,
-            "status": "CALENDAR_EVENT",
-            "status_label": type_label,
-            "estado_label": ce.title,
-            "solicitud_tipo": type_label,
-            "color": color,
-            "created_at": ce.created_at.isoformat() if ce.created_at else None,
-            "event_start": ce.start_datetime.isoformat() if ce.start_datetime else None,
-            "total": 0,
-            "lines_count": 0,
-            "description": " · ".join(desc_parts),
-            "created_by": ce.created_by or "CRM",
-        })
-
-    # Sort by created_at descending (newest first), put None at end
     all_orders_timeline.sort(
-        key=lambda x: x["created_at"] if x["created_at"] else "",
+        key=lambda x: x["created_at"] if x.get("created_at") else "",
         reverse=True
     )
 
+    ltv = total_comprado_cop
+
+    # Rentabilidad logic (only visible to ADMIN and FINANZAS)
+    rentabilidad_payload = None
+    if can_view_finance:
+        margen_bruto_cop = total_comprado_cop - total_costo_cop
+        margen_bruto_pct = (margen_bruto_cop / total_comprado_cop * 100) if total_comprado_cop > 0 else Decimal("0.0")
+        rentabilidad_payload = {
+            "costo_total_cop": round(float(total_costo_cop), 2),
+            "margen_bruto_cop": round(float(margen_bruto_cop), 2),
+            "margen_bruto_pct": round(float(margen_bruto_pct), 2),
+            "visible": True,
+        }
+    else:
+        rentabilidad_payload = {
+            "visible": False,
+            "message": "Información financiera restringida a roles autorizados (ADMIN, FINANZAS)."
+        }
+
+    resumen_financiero = {
+        "total_comprado_cop": round(float(total_comprado_cop), 2),
+        "total_pagado_cop": round(float(total_pagado_cop), 2),
+        "saldo_pendiente_cop": round(float(saldo_pendiente_cop), 2),
+        "saldo_a_favor_cop": round(float(saldo_a_favor_cop), 2),
+    }
+
+    preferencias_payload = {
+        "whatsapp_opt_in": contact_pref.whatsapp_opt_in if contact_pref else True,
+        "email_opt_in": contact_pref.email_opt_in if contact_pref else True,
+        "sms_opt_in": contact_pref.sms_opt_in if contact_pref else False,
+        "phone_opt_in": contact_pref.phone_opt_in if contact_pref else True,
+        "habeas_data_accepted": contact_pref.habeas_data_accepted if contact_pref else True,
+        "consent_channel": contact_pref.consent_channel if contact_pref else "WEB",
+        "consent_date": contact_pref.consent_date.isoformat() if (contact_pref and contact_pref.consent_date) else None,
+    }
+
     profile = {
+        # Legacy compatibility keys
         "id": customer.id,
         "first_name": customer.first_name,
         "last_name": customer.last_name,
@@ -306,12 +753,106 @@ def get_customer_360_profile(customer_id: int, db: Session = Depends(get_db)):
         "active_orders": active_orders,
         "timeline": all_orders_timeline,
         "ltv": str(round(ltv, 2)),
-        "total_orders": len(customer.sales_orders),
-        "total_events": len(cal_events),
+        "total_orders": len(canonical_sos) + len(customer.sales_orders),
+        "total_events": len(agenda_items) + len(cal_events),
+        # Enriched canonical keys
+        "solicitudes": solicitudes_data,
+        "cotizaciones": cotizaciones_data,
+        "pedidos": pedidos_data,
+        "pagos": pagos_data,
+        "empaques": empaques_data,
+        "entregas": entregas_data,
+        "devoluciones": devoluciones_data,
+        "reservas_activas": reservas_data,
+        "compras_asignadas": compras_asignadas_data,
+        "agenda": agenda_data,
+        "preferencias_contacto": preferencias_payload,
+        "resumen_financiero": resumen_financiero,
+        "rentabilidad": rentabilidad_payload,
     }
-
     return {"status": "success", "data": profile}
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# AGENDA DEL CLIENTE Y CALENDARIO OPERATIVO (FASE 5)
+# ──────────────────────────────────────────────────────────────────────────────
+
+@router.get("/agenda", response_model=dict)
+def get_customer_agenda(
+    customer_id: Optional[int] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+    db: Session = Depends(get_db)
+):
+    """Consulta la agenda operativa del cliente o global."""
+    q = db.query(CustomerAgendaActivity)
+    if customer_id:
+        q = q.filter(CustomerAgendaActivity.customer_id == customer_id)
+    if status:
+        q = q.filter(CustomerAgendaActivity.status == status)
+    items = q.order_by(CustomerAgendaActivity.scheduled_date.asc().nullslast()).limit(limit).all()
+    return {
+        "status": "success",
+        "data": [AgendaActivityResponse.model_validate(i).model_dump() for i in items]
+    }
+
+
+@router.post("/agenda/sync", response_model=dict)
+def sync_customer_agenda(
+    customer_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Sincroniza actividades de agenda de forma determinista evitando duplicados."""
+    count = _sync_operational_agenda_deterministic(db, customer_id)
+    return {"status": "success", "data": {"synced_count": count}}
+
+
+@router.post("/agenda", response_model=dict)
+def create_agenda_activity(
+    activity: AgendaActivityCreate,
+    db: Session = Depends(get_db)
+):
+    """Crea una actividad de agenda manual."""
+    det_key = f"MANUAL_{activity.customer_id}_{activity.entity_type}_{activity.entity_id or 0}_{activity.activity_type}_{int(time.time())}"
+    db_item = CustomerAgendaActivity(
+        customer_id=activity.customer_id,
+        entity_type=activity.entity_type,
+        entity_id=activity.entity_id,
+        activity_type=activity.activity_type,
+        title=activity.title,
+        description=activity.description,
+        scheduled_date=activity.scheduled_date,
+        due_date=activity.due_date,
+        status=activity.status,
+        deterministic_key=det_key,
+    )
+    db.add(db_item)
+    db.commit()
+    db.refresh(db_item)
+    return {"status": "success", "data": AgendaActivityResponse.model_validate(db_item).model_dump()}
+
+
+@router.patch("/agenda/{activity_id}", response_model=dict)
+def update_agenda_activity(
+    activity_id: int,
+    body: dict,
+    db: Session = Depends(get_db)
+):
+    """Actualiza el estado o detalle de una actividad de agenda."""
+    item = db.query(CustomerAgendaActivity).filter(CustomerAgendaActivity.id == activity_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    if "status" in body:
+        item.status = body["status"]
+        if body["status"] == "COMPLETADA":
+            item.completed_at = datetime.datetime.utcnow()
+    if "description" in body:
+        item.description = body["description"]
+    if "due_date" in body and body["due_date"]:
+        item.due_date = datetime.datetime.fromisoformat(body["due_date"].replace("Z", "+00:00"))
+    db.commit()
+    db.refresh(item)
+    return {"status": "success", "data": AgendaActivityResponse.model_validate(item).model_dump()}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # PIPELINE DE SOLICITUDES: tipos disponibles (sincronizados con Frontend)
@@ -612,29 +1153,6 @@ def get_lead_detail(lead_id: int, db: Session = Depends(get_db)):
 # CALENDAR EVENTS — Modelo + Endpoints CRUD
 # ══════════════════════════════════════════════════════════════════════════════
 
-from sqlalchemy import Column as _Col, Integer as _Int, String as _Str, Text as _Txt
-from sqlalchemy import DateTime as _DT, ForeignKey as _FK
-from app.db.database import Base as _Base
-
-class CalendarEvent(_Base):
-    __tablename__ = "calendar_events"
-    __table_args__ = {"extend_existing": True}
-    id                 = _Col(_Int, primary_key=True, index=True)
-    title              = _Col(_Str(200), nullable=False)
-    description        = _Col(_Txt, nullable=True)
-    start_datetime     = _Col(_DT, nullable=False)
-    end_datetime       = _Col(_DT, nullable=True)
-    event_type         = _Col(_Str(50), default="MEETING")
-    location           = _Col(_Str(200), nullable=True)
-    customer_id        = _Col(_Int, nullable=True)
-    customer_name      = _Col(_Str(200), nullable=True)
-    created_by         = _Col(_Str(100), default="CRM")
-    google_event_id    = _Col(_Str(200), nullable=True)
-    microsoft_event_id = _Col(_Str(200), nullable=True)
-    sync_source        = _Col(_Str(50), default="INTERNAL")
-    color              = _Col(_Str(50), default="indigo")
-    created_at         = _Col(_DT, default=datetime.datetime.utcnow)
-    updated_at         = _Col(_DT, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
 def _event_to_dict(e: CalendarEvent) -> dict:
     return {

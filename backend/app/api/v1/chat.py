@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.db.database import get_db
 import datetime, secrets, json
+from decimal import Decimal
 
 router = APIRouter()
 
@@ -657,3 +658,287 @@ def update_conv_status(conv_id: int, body: dict, db: Session = Depends(get_db)):
     ), {"s": status, "id": conv_id})
     db.commit()
     return {"status": "success", "data": {"conv_id": conv_id, "status": status}}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FASE 5: ASISTENTE OMNICANAL SEGURO (CONSULTAS CANONICAS Y AUDITORIA)
+# ──────────────────────────────────────────────────────────────────────────────
+from app.models.customers import Customer
+from app.models.erp_documents import CustomerRequest, SalesQuotation, SaleOrder
+from app.models.fase1b import SaleOrderLineErp
+from app.models.fase4 import SalePackingSession, SaleOrderDelivery, SaleOrderReturn, SaleOrderPayment
+from app.models.fase5 import OmnichannelInteraction
+from app.api.v1.schemas_fase5 import OmnichannelQueryRequest, OmnichannelQueryResponse
+
+
+@router.post("/omnichannel/query", response_model=dict)
+def query_omnichannel_assistant(
+    request: OmnichannelQueryRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Capa de consulta segura para el Asistente Omnicanal (WhatsApp, Web, Kommo).
+    - Consulta el estado real de cotizaciones, pedidos, productos comprados,
+      tracking y ubicacion logistica, saldo pendiente, mercancia disponible,
+      empaque, entregas, guias y devoluciones.
+    - Operacion estrictamente de lectura (no muta inventario ni pagos).
+    - Registra la interaccion en 'omnichannel_interactions' con canal, cliente,
+      accion, resultado y actor.
+    """
+    customer = db.query(Customer).filter(Customer.id == request.customer_id).first()
+    if not customer:
+        raise HTTPException(status_code=404, detail=f"Cliente con ID {request.customer_id} no encontrado.")
+
+    customer_full_name = f"{customer.first_name} {customer.last_name or ''}".strip()
+    action = request.query_type
+    summary = ""
+    assistant_msg = ""
+    data_payload = {}
+    related_type = None
+    related_id = None
+
+    if action == "ESTADO_COTIZACION":
+        cots = db.query(SalesQuotation).filter(SalesQuotation.customer_id == customer.id).order_by(SalesQuotation.created_at.desc()).all()
+        if request.entity_id:
+            cots = [c for c in cots if c.id == request.entity_id]
+
+        cots_list = [{
+            "id": c.id,
+            "numero": c.numero,
+            "estado": c.estado,
+            "total_cop": float(c.total_cop or 0),
+            "fecha": c.fecha_cotizacion.isoformat() if c.fecha_cotizacion else None,
+        } for c in cots]
+
+        data_payload = {"cotizaciones": cots_list}
+        if cots:
+            latest = cots[0]
+            related_type = "SALES_QUOTATION"
+            related_id = latest.id
+            summary = f"{len(cots)} cotizacion(es) encontrada(s). Ultima: {latest.numero} ({latest.estado})."
+            assistant_msg = f"Hola {customer.first_name}, tu cotización más reciente es la {latest.numero} por un total de ${float(latest.total_cop or 0):,.0f} COP, actualmente en estado {latest.estado}."
+        else:
+            summary = "No se encontraron cotizaciones para el cliente."
+            assistant_msg = f"Hola {customer.first_name}, actualmente no tienes cotizaciones activas registradas."
+
+    elif action == "ESTADO_PEDIDO":
+        sos = db.query(SaleOrder).filter(SaleOrder.customer_id == customer.id).order_by(SaleOrder.created_at.desc()).all()
+        if request.entity_id:
+            sos = [s for s in sos if s.id == request.entity_id]
+
+        sos_list = [{
+            "id": s.id,
+            "numero": s.numero,
+            "estado": s.estado,
+            "total_cop": float(s.total_cop or 0),
+            "saldo_cop": float(s.saldo_cop or 0),
+            "fecha_entrega_estimada": s.fecha_entrega_estimada.isoformat() if s.fecha_entrega_estimada else None,
+        } for s in sos]
+
+        data_payload = {"pedidos": sos_list}
+        if sos:
+            latest = sos[0]
+            related_type = "SALE_ORDER"
+            related_id = latest.id
+            summary = f"{len(sos)} pedido(s) encontrado(s). Ultimo: {latest.numero} ({latest.estado})."
+            assistant_msg = f"Tu pedido {latest.numero} se encuentra en estado '{latest.estado}'. Total: ${float(latest.total_cop or 0):,.0f} COP, con un saldo pendiente de ${float(latest.saldo_cop or 0):,.0f} COP."
+            if latest.fecha_entrega_estimada:
+                assistant_msg += f" Fecha estimada de entrega: {latest.fecha_entrega_estimada.strftime('%d/%m/%Y')}."
+        else:
+            summary = "No se encontraron pedidos de venta para el cliente."
+            assistant_msg = f"Hola {customer.first_name}, no tienes pedidos de venta registrados en este momento."
+
+    elif action == "PRODUCTOS_COMPRADOS":
+        lines = db.query(SaleOrderLineErp).filter(SaleOrderLineErp.customer_id == customer.id).all()
+        lines_list = [{
+            "id": l.id,
+            "so_id": l.so_id,
+            "description": l.description,
+            "quantity": float(l.quantity),
+            "unit_price_cop": float(l.unit_price_cop),
+            "modalidad": l.modalidad,
+            "estado": l.estado,
+        } for l in lines]
+        data_payload = {"productos": lines_list}
+        summary = f"{len(lines)} linea(s) de producto compradas por el cliente."
+        prods_names = ", ".join([l.description for l in lines[:3]]) if lines else ""
+        assistant_msg = f"Has comprado {len(lines)} artículo(s) con nosotros" + (f", incluyendo: {prods_names}." if prods_names else ".")
+
+    elif action == "TRACKING_LOGISTICO":
+        delivs = db.query(SaleOrderDelivery).filter(SaleOrderDelivery.customer_id == customer.id).order_by(SaleOrderDelivery.created_at.desc()).all()
+        if request.entity_id:
+            delivs = [d for d in delivs if d.id == request.entity_id]
+
+        delivs_list = [{
+            "id": d.id,
+            "numero": d.numero,
+            "carrier": d.carrier,
+            "tracking_number": d.tracking_number,
+            "status": d.status,
+            "dispatch_date": d.dispatch_date.isoformat() if d.dispatch_date else None,
+            "delivery_date": d.delivery_date.isoformat() if d.delivery_date else None,
+        } for d in delivs]
+
+        data_payload = {"entregas": delivs_list}
+        if delivs:
+            latest = delivs[0]
+            related_type = "DELIVERY"
+            related_id = latest.id
+            summary = f"Entrega {latest.numero} ({latest.status}), transportadora: {latest.carrier}, guia: {latest.tracking_number}."
+            assistant_msg = f"Tu entrega {latest.numero} se encuentra en estado '{latest.status}'. "
+            if latest.tracking_number:
+                assistant_msg += f"Transportadora: {latest.carrier or 'Coordinadora'}, Guía de rastreo: {latest.tracking_number}."
+            else:
+                assistant_msg += "La guía de transporte está pendiente de asignación."
+        else:
+            summary = "Sin envíos ni entregas registradas para el cliente."
+            assistant_msg = "Aún no tienes despachos en curso registrados para tus pedidos."
+
+    elif action == "SALDO_PENDIENTE":
+        sos = db.query(SaleOrder).filter(SaleOrder.customer_id == customer.id, SaleOrder.estado != "CANCELADO").all()
+        total_saldo = sum((Decimal(str(s.saldo_cop or 0)) for s in sos), Decimal("0.0"))
+        # Saldo a favor por devoluciones
+        rets = db.query(SaleOrderReturn).filter(SaleOrderReturn.customer_id == customer.id, SaleOrderReturn.status != "CANCELADA", SaleOrderReturn.financial_resolution == "SALDO_A_FAVOR").all()
+        saldo_favor = sum((Decimal(str(r.refund_amount or 0)) for r in rets), Decimal("0.0"))
+
+        data_payload = {
+            "total_saldo_pendiente_cop": float(total_saldo),
+            "saldo_a_favor_disponible_cop": float(saldo_favor),
+            "pedidos_con_saldo": [{"id": s.id, "numero": s.numero, "saldo_cop": float(s.saldo_cop or 0)} for s in sos if (s.saldo_cop or 0) > 0]
+        }
+        summary = f"Saldo pendiente total: ${float(total_saldo):,.0f} COP, Saldo a favor: ${float(saldo_favor):,.0f} COP."
+        assistant_msg = f"Tu saldo pendiente total es de ${float(total_saldo):,.0f} COP."
+        if saldo_favor > 0:
+            assistant_msg += f" Adicionalmente, cuentas con un saldo a favor de ${float(saldo_favor):,.0f} COP por devoluciones."
+
+    elif action == "MERCANCIA_DISPONIBLE":
+        ready_lines = db.query(SaleOrderLineErp).filter(
+            SaleOrderLineErp.customer_id == customer.id,
+            SaleOrderLineErp.estado.in_(["RESERVADA", "LISTA_PARA_ENTREGA"])
+        ).all()
+        data_payload = {
+            "articulos_disponibles": [{
+                "id": l.id,
+                "so_id": l.so_id,
+                "description": l.description,
+                "quantity": float(l.quantity_reserved or l.quantity),
+                "estado": l.estado,
+            } for l in ready_lines]
+        }
+        summary = f"{len(ready_lines)} articulo(s) listos y reservados en bodega."
+        assistant_msg = f"Tienes {len(ready_lines)} artículo(s) listos y reservados en bodega disponibles para despacho o recogida."
+
+    elif action == "EMPAQUE_ENTREGA":
+        packs = db.query(SalePackingSession).filter(SalePackingSession.customer_id == customer.id).order_by(SalePackingSession.created_at.desc()).all()
+        delivs = db.query(SaleOrderDelivery).filter(SaleOrderDelivery.customer_id == customer.id).order_by(SaleOrderDelivery.created_at.desc()).all()
+        data_payload = {
+            "sesiones_empaque": [{"id": p.id, "numero": p.numero, "status": p.status} for p in packs],
+            "entregas": [{"id": d.id, "numero": d.numero, "status": d.status} for d in delivs],
+        }
+        summary = f"{len(packs)} empaque(s) y {len(delivs)} entrega(s) encontradas."
+        if packs:
+            assistant_msg = f"Tu sesión de empaque más reciente es {packs[0].numero} en estado '{packs[0].status}'."
+        else:
+            assistant_msg = "No tienes sesiones de empaque activas en este momento."
+
+    elif action == "GUIAS_TRANSPORTE":
+        delivs = db.query(SaleOrderDelivery).filter(
+            SaleOrderDelivery.customer_id == customer.id,
+            SaleOrderDelivery.tracking_number != None
+        ).all()
+        guias = [{"entrega": d.numero, "carrier": d.carrier, "guia": d.tracking_number, "estado": d.status} for d in delivs]
+        data_payload = {"guias": guias}
+        summary = f"{len(guias)} guia(s) de transporte encontradas."
+        if guias:
+            txt_guias = ", ".join([f"{g['carrier']}: {g['guia']}" for g in guias])
+            assistant_msg = f"Tus guías activas son: {txt_guias}."
+        else:
+            assistant_msg = "No se encontraron guías de transporte activas para tus entregas."
+
+    elif action == "DEVOLUCIONES":
+        rets = db.query(SaleOrderReturn).filter(SaleOrderReturn.customer_id == customer.id).order_by(SaleOrderReturn.created_at.desc()).all()
+        data_payload = {
+            "devoluciones": [{
+                "id": r.id,
+                "numero": r.numero,
+                "status": r.status,
+                "resolucion": r.financial_resolution,
+                "refund_amount": float(r.refund_amount or 0),
+            } for r in rets]
+        }
+        summary = f"{len(rets)} devolucion(es) registrada(s)."
+        if rets:
+            latest = rets[0]
+            related_type = "RETURN"
+            related_id = latest.id
+            assistant_msg = f"Tienes {len(rets)} solicitud(es) de devolución. La más reciente es {latest.numero} en estado '{latest.status}', con resolución '{latest.financial_resolution}'."
+        else:
+            assistant_msg = "No tienes devoluciones registradas."
+
+    # Registrar la interacción en omnichannel_interactions
+    interaction = OmnichannelInteraction(
+        channel=request.channel,
+        customer_id=customer.id,
+        conversation_id=request.conversation_id,
+        action_requested=request.query_type,
+        result_summary=summary,
+        result_data=json.dumps(data_payload),
+        related_entity_type=related_type,
+        related_entity_id=related_id,
+        actor_type=request.actor_type,
+        actor_name=request.actor_name,
+        status="SUCCESS",
+    )
+    db.add(interaction)
+    db.commit()
+    db.refresh(interaction)
+
+    return {
+        "status": "success",
+        "action": action,
+        "customer_id": customer.id,
+        "customer_name": customer_full_name,
+        "summary": summary,
+        "data": data_payload,
+        "assistant_message": assistant_msg,
+        "interaction_id": interaction.id,
+    }
+
+
+@router.post("/omnichannel/reject-unauthorized-mutation")
+def reject_assistant_mutation():
+    """Endpoint de seguridad: bloquea cualquier intento de mutacion directa desde el asistente."""
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="El asistente omnicanal tiene permisos estrictamente de lectura. Las mutaciones operativas (inventario, pagos, cancelaciones) requieren permisos y validaciones canónicas."
+    )
+
+
+@router.get("/omnichannel/interactions", response_model=dict)
+def list_omnichannel_interactions(
+    customer_id: Optional[int] = None,
+    channel: Optional[str] = None,
+    limit: int = 50,
+    db: Session = Depends(get_db)
+):
+    """Consulta el historial de auditoria de interacciones omnicanal."""
+    q = db.query(OmnichannelInteraction)
+    if customer_id:
+        q = q.filter(OmnichannelInteraction.customer_id == customer_id)
+    if channel:
+        q = q.filter(OmnichannelInteraction.channel == channel)
+    items = q.order_by(OmnichannelInteraction.created_at.desc()).limit(limit).all()
+    return {
+        "status": "success",
+        "data": [{
+            "id": i.id,
+            "channel": i.channel,
+            "customer_id": i.customer_id,
+            "conversation_id": i.conversation_id,
+            "action_requested": i.action_requested,
+            "result_summary": i.result_summary,
+            "actor_type": i.actor_type,
+            "actor_name": i.actor_name,
+            "status": i.status,
+            "created_at": i.created_at.isoformat() if i.created_at else None,
+        } for i in items]
+    }
