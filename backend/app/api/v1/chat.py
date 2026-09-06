@@ -1,4 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+import hmac, hashlib
+from app.models.users import User
+from app.api.dependencies import require_roles, ROLE_ADMIN, ROLE_FINANZAS, ROLE_ASESOR, normalize_role
+from app.core.security import SECRET_KEY, ALGORITHM
+import jwt
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.db.database import get_db
@@ -670,11 +675,88 @@ from app.models.fase5 import OmnichannelInteraction
 from app.api.v1.schemas_fase5 import OmnichannelQueryRequest, OmnichannelQueryResponse
 
 
+
+def _resolve_omnichannel_auth(request, raw_req: Request, db: Session):
+    """
+    Verifica la autorizacion del llamante en modo dual:
+    1. Token Bearer de usuario ERP (ADMIN, FINANZAS, ASESOR).
+    2. Token de autoservicio de cliente (x-customer-token o request.customer_token).
+    Sin token -> 401. Token no coincide con customer_id -> 403 (IDOR).
+    """
+    # A. Check Bearer token in Authorization header
+    auth_header = raw_req.headers.get("Authorization") or raw_req.headers.get("authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ", 1)[1].strip()
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            user_id = payload.get("sub")
+            if user_id:
+                user = db.query(User).filter(User.id == int(user_id)).first()
+                if user:
+                    role = normalize_role(user.role)
+                    if role in ("ADMIN", "FINANZAS", "ASESOR"):
+                        return {"auth_type": "ERP_USER", "user": user, "role": role}
+        except Exception:
+            pass
+
+    # B. Check Customer token
+    cust_token = (
+        getattr(request, "customer_token", None) or
+        raw_req.headers.get("x-customer-token") or
+        raw_req.headers.get("x-session-token")
+    )
+    if cust_token:
+        # 1. Try decoding JWT customer token
+        try:
+            payload = jwt.decode(cust_token, SECRET_KEY, algorithms=[ALGORITHM])
+            token_cid = payload.get("customer_id") or payload.get("sub_customer_id")
+            if token_cid is not None:
+                if int(token_cid) != int(request.customer_id):
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Acceso denegado: El token de cliente no coincide con el cliente solicitado (bloqueo IDOR)."
+                    )
+                return {"auth_type": "CUSTOMER", "customer_id": int(token_cid)}
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+        # 2. Try HMAC signed token: hmac_sha256(SECRET_KEY, f"customer:{customer_id}")
+        expected_hmac = hmac.new(SECRET_KEY.encode(), f"customer:{request.customer_id}".encode(), hashlib.sha256).hexdigest()
+        if hmac.compare_digest(cust_token.lower(), expected_hmac.lower()):
+            return {"auth_type": "CUSTOMER", "customer_id": request.customer_id}
+
+        # 3. Try checking session_token on chat_conversations
+        row = db.execute(text("SELECT customer_id FROM chat_conversations WHERE session_token = :t"), {"t": cust_token}).first()
+        if row:
+            conv_cid = row[0]
+            if conv_cid != request.customer_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Acceso denegado: La sesion activa no corresponde al cliente solicitado (bloqueo IDOR)."
+                )
+            return {"auth_type": "CUSTOMER", "customer_id": conv_cid}
+
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token de cliente invalido o expirado."
+        )
+
+    # Neither provided
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Autenticacion requerida para consultar el asistente omnicanal. Envie Bearer token de ERP o x-customer-token."
+    )
+
 @router.post("/omnichannel/query", response_model=dict)
 def query_omnichannel_assistant(
     request: OmnichannelQueryRequest,
+    raw_req: Request,
     db: Session = Depends(get_db)
 ):
+    # Validar autorizacion dual y anti-IDOR
+    auth_ctx = _resolve_omnichannel_auth(request, raw_req, db)
     """
     Capa de consulta segura para el Asistente Omnicanal (WhatsApp, Web, Kommo).
     - Consulta el estado real de cotizaciones, pedidos, productos comprados,
@@ -918,6 +1000,7 @@ def list_omnichannel_interactions(
     customer_id: Optional[int] = None,
     channel: Optional[str] = None,
     limit: int = 50,
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS, *ROLE_ASESOR)),
     db: Session = Depends(get_db)
 ):
     """Consulta el historial de auditoria de interacciones omnicanal."""

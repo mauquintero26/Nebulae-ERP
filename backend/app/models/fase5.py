@@ -106,14 +106,19 @@ class CustomerContactPreference(Base):
 
     id                   = Column(Integer, primary_key=True, index=True)
     customer_id          = Column(Integer, ForeignKey("customers.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
-    whatsapp_opt_in      = Column(Boolean, nullable=False, default=True)
-    email_opt_in         = Column(Boolean, nullable=False, default=True)
+    whatsapp_opt_in      = Column(Boolean, nullable=False, default=False)
+    email_opt_in         = Column(Boolean, nullable=False, default=False)
     sms_opt_in           = Column(Boolean, nullable=False, default=False)
-    phone_opt_in         = Column(Boolean, nullable=False, default=True)
-    habeas_data_accepted = Column(Boolean, nullable=False, default=True)
+    phone_opt_in         = Column(Boolean, nullable=False, default=False)
+    habeas_data_accepted = Column(Boolean, nullable=False, default=False)
     consent_channel      = Column(String(50), nullable=False, default="WEB")
     # WEB | STORE | CRM | WHATSAPP
     consent_date         = Column(DateTime, default=_now)
+    legal_version        = Column(String(50), nullable=True, default="v1.0")
+    is_revoked           = Column(Boolean, nullable=False, default=False)
+    revocation_date      = Column(DateTime, nullable=True)
+    revocation_reason    = Column(Text, nullable=True)
+    evidence             = Column(Text, nullable=True)
     notes                = Column(Text, nullable=True)
     created_at           = Column(DateTime, default=_now)
     updated_at           = Column(DateTime, default=_now, onupdate=_now)
@@ -135,7 +140,7 @@ class IntegrationWebhookEvent(Base):
     payload         = Column(Text, nullable=False)  # JSON payload
     headers         = Column(Text, nullable=True)   # JSON headers
     status          = Column(String(30), nullable=False, default="PENDING")
-    # PENDING | PROCESSED | FAILED | RETRYING
+    # PENDING | PROCESSING | PROCESSED | FAILED | RETRYING | DEAD_LETTER
     attempts        = Column(Integer, nullable=False, default=0)
     max_attempts    = Column(Integer, nullable=False, default=3)
     last_error      = Column(Text, nullable=True)
@@ -147,7 +152,7 @@ class IntegrationWebhookEvent(Base):
     __table_args__ = (
         UniqueConstraint("provider", "idempotency_key", name="uq_iwe_provider_key"),
         CheckConstraint("direction IN ('INBOUND', 'OUTBOUND')", name="chk_iwe_direction"),
-        CheckConstraint("status IN ('PENDING', 'PROCESSED', 'FAILED', 'RETRYING')", name="chk_iwe_status"),
+        CheckConstraint("status IN ('PENDING', 'PROCESSING', 'PROCESSED', 'FAILED', 'RETRYING', 'DEAD_LETTER')", name="chk_iwe_status"),
         Index("ix_iwe_provider_status", "provider", "status"),
         Index("ix_iwe_dead_letter", "dead_letter"),
     )

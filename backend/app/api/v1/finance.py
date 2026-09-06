@@ -73,6 +73,7 @@ from app.api.dependencies import require_roles, ROLE_ADMIN, ROLE_FINANZAS, ALL_E
 
 @router.get("/accounts-receivable", response_model=dict)
 def get_accounts_receivable(
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS)),
     db: Session = Depends(get_db)
 ):
     """
@@ -159,6 +160,7 @@ def get_accounts_receivable(
 
 @router.get("/accounts-payable", response_model=dict)
 def get_accounts_payable(
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS)),
     db: Session = Depends(get_db)
 ):
     """
@@ -220,6 +222,7 @@ def get_accounts_payable(
 
 @router.get("/ledger/reconciliation", response_model=dict)
 def get_ledger_reconciliation(
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS)),
     db: Session = Depends(get_db)
 ):
     """
@@ -293,6 +296,7 @@ def get_ledger_reconciliation(
 
 @router.get("/inventory-valuation", response_model=dict)
 def get_inventory_valuation(
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS)),
     db: Session = Depends(get_db)
 ):
     """
@@ -358,16 +362,19 @@ def get_inventory_valuation(
 
 @router.get("/losses-and-scrap", response_model=dict)
 def get_losses_and_scrap(
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS)),
     db: Session = Depends(get_db)
 ):
     """
     Reporte de perdidas por mermas (SCRAP) y devoluciones de clientes destruidas.
+    Deduplicacion estricta: cada articulo destruido o mermado se cuenta exactamente una vez.
     """
-    scrap_movements = db.query(InventoryMovement).filter(InventoryMovement.movement_type == "SCRAP").all()
+    scrap_movements = db.query(InventoryMovement).filter(InventoryMovement.direction == "SCRAP").all()
     destroyed_returns = db.query(SaleOrderReturnLine).filter(SaleOrderReturnLine.inventory_resolution == "DESTRUIDO").all()
 
     total_loss_cop = Decimal("0.0")
     scrap_items = []
+    seen_return_line_ids = set()
 
     for sm in scrap_movements:
         sku = db.query(ProductSKU).filter(ProductSKU.id == sm.sku_id).first()
@@ -375,17 +382,31 @@ def get_losses_and_scrap(
         qty = abs(Decimal(str(sm.quantity or 0)))
         loss = qty * cost
         total_loss_cop += loss
+
+        is_return_scrap = False
+        ret_line_id = None
+        if sm.idempotency_key and sm.idempotency_key.startswith("mov-ret-scrap-"):
+            try:
+                ret_line_id = int(sm.idempotency_key.replace("mov-ret-scrap-", ""))
+                seen_return_line_ids.add(ret_line_id)
+                is_return_scrap = True
+            except Exception:
+                pass
+
         scrap_items.append({
-            "source": "INVENTORY_SCRAP",
+            "source": "RETURN_DESTRUCTION" if is_return_scrap else "INVENTORY_SCRAP",
+            "return_line_id": ret_line_id,
             "sku_id": sm.sku_id,
             "quantity": float(qty),
             "unit_cost_cop": float(cost),
             "loss_cop": float(loss),
-            "notes": sm.notes,
+            "owner": sm.owner,
             "date": sm.created_at.isoformat() if sm.created_at else None,
         })
 
     for dr in destroyed_returns:
+        if dr.id in seen_return_line_ids:
+            continue
         sku = db.query(ProductSKU).filter(ProductSKU.id == dr.sku_id).first()
         cost = Decimal(str(sku.cost_price or 0)) if sku and sku.cost_price else Decimal("0.00")
         qty = Decimal(str(dr.quantity or 0))
@@ -406,6 +427,7 @@ def get_losses_and_scrap(
         "status": "success",
         "data": {
             "total_losses_cop": round(float(total_loss_cop), 2),
+            "perdida_total_cop": round(float(total_loss_cop), 2),
             "records_count": len(scrap_items),
             "items": scrap_items,
         }

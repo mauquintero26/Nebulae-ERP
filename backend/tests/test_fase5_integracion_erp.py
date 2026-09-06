@@ -1,3 +1,4 @@
+import hmac, hashlib
 """
 test_fase5_integracion_erp.py
 
@@ -242,10 +243,9 @@ class TestFase5IntegracionErp:
         assert rent_asesor["visible"] is False
         assert "costo_total_cop" not in rent_asesor
 
-        # Consulta anónima (sin token)
+        # Consulta anónima (sin token) -> 401 Unauthorized
         res_anon = app_client.get(f"/api/v1/crm/customers/{cust.id}/profile-360")
-        assert res_anon.status_code == 200
-        assert res_anon.json()["data"]["rentabilidad"]["visible"] is False
+        assert res_anon.status_code == 401
 
         # Finanzas consulta
         res_fin = app_client.get(f"/api/v1/crm/customers/{cust.id}/profile-360", headers=auth_tokens["finanzas"]["headers"])
@@ -449,7 +449,7 @@ class TestFase5IntegracionErp:
         keys = [i["deterministic_key"] for i in items]
         assert len(keys) == len(set(keys)), "Las claves deterministas de agenda deben ser únicas"
 
-    def test_07_asistente_omnicanal_consulta_segura_y_registro_interaccion(self, app_client: TestClient, db: Session, base_customer_catalog: dict):
+    def test_07_asistente_omnicanal_consulta_segura_y_registro_interaccion(self, app_client: TestClient, db: Session, base_customer_catalog: dict, auth_tokens: dict):
         """7. Asistente Omnicanal realiza consultas de lectura y registra la interacción en auditoría."""
         cust = base_customer_catalog["customer"]
 
@@ -474,7 +474,7 @@ class TestFase5IntegracionErp:
                 "actor_type": "BOT",
                 "actor_name": "NebulaeBot"
             }
-            res = app_client.post("/api/v1/chat/omnichannel/query", json=payload)
+            res = app_client.post("/api/v1/chat/omnichannel/query", json=payload, headers=auth_tokens["asesor"]["headers"])
             assert res.status_code == 200
             body = res.json()
             assert body["status"] == "success"
@@ -498,8 +498,8 @@ class TestFase5IntegracionErp:
 
     def test_09_cuentas_por_cobrar_reconciliadas_con_ledger(self, app_client: TestClient, db: Session, base_customer_catalog: dict, auth_tokens: dict):
         """9. Cuentas por cobrar agrupadas por aging y reconciliadas con el libro mayor."""
-        # Consultar cuentas por cobrar
-        res_ar = app_client.get("/api/v1/finance/accounts-receivable")
+        # Consultar cuentas por cobrar protegidas con ADMIN/FINANZAS
+        res_ar = app_client.get("/api/v1/finance/accounts-receivable", headers=auth_tokens["finanzas"]["headers"])
         assert res_ar.status_code == 200
         data_ar = res_ar.json()["data"]
         total_ar = data_ar["total_accounts_receivable_cop"]
@@ -507,8 +507,8 @@ class TestFase5IntegracionErp:
         sum_aging = aging["0_30_dias"] + aging["31_60_dias"] + aging["61_90_dias"] + aging["mas_90_dias"]
         assert abs(total_ar - sum_aging) < 0.1, "La suma de las ventanas de aging debe igualar el total de cuentas por cobrar"
 
-        # Consultar reconciliación de libro mayor
-        res_rec = app_client.get("/api/v1/finance/ledger/reconciliation")
+        # Consultar reconciliación de libro mayor protegida
+        res_rec = app_client.get("/api/v1/finance/ledger/reconciliation", headers=auth_tokens["admin"]["headers"])
         assert res_rec.status_code == 200
         data_rec = res_rec.json()["data"]
         assert data_rec["reconciliacion_cuadrada"] is True
@@ -516,7 +516,7 @@ class TestFase5IntegracionErp:
 
     def test_10_cuentas_por_pagar_proveedores(self, app_client: TestClient, db: Session, auth_tokens: dict):
         """10. Cuentas por pagar a proveedores desde órdenes de compra."""
-        res_ap = app_client.get("/api/v1/finance/accounts-payable")
+        res_ap = app_client.get("/api/v1/finance/accounts-payable", headers=auth_tokens["finanzas"]["headers"])
         assert res_ap.status_code == 200
         data_ap = res_ap.json()["data"]
         assert "total_accounts_payable_cop" in data_ap
@@ -626,20 +626,25 @@ class TestFase5IntegracionErp:
 
     def test_13_webhooks_idempotencia_duplicados_200(self, app_client: TestClient, db: Session):
         """13. Webhooks procesan eventos de pasarelas de forma idempotente (duplicado -> 200 OK con replay)."""
+        import hmac, hashlib, os, json
+        secret = os.getenv("MERCADOPAGO_WEBHOOK_SECRET") or os.getenv("SECRET_KEY", "b9fd2d98895dfc97d75afef593d1f8b57a045d725ae770f85fa3d28412e9fd0b")
         idem_key = f"MP_TX_{int(datetime.datetime.utcnow().timestamp())}"
         payload = {
             "action": "payment.created",
             "id": idem_key,
-            "data": {"id": 99887766, "status": "approved"}
+            "data": {"id": 99887766, "status": "pending"}
         }
+        body_bytes = json.dumps(payload).encode("utf-8")
+        sig = hmac.new(secret.encode("utf-8"), body_bytes, hashlib.sha256).hexdigest()
+        hdrs = {"x-idempotency-key": idem_key, "x-signature": sig}
 
         # Primer llamado
-        res1 = app_client.post("/api/v1/webhooks/mercadopago", json=payload, headers={"x-idempotency-key": idem_key})
+        res1 = app_client.post("/api/v1/webhooks/mercadopago", json=payload, headers=hdrs)
         assert res1.status_code == 200
         assert res1.json()["idempotent_replay"] is False
 
         # Segundo llamado duplicado
-        res2 = app_client.post("/api/v1/webhooks/mercadopago", json=payload, headers={"x-idempotency-key": idem_key})
+        res2 = app_client.post("/api/v1/webhooks/mercadopago", json=payload, headers=hdrs)
         assert res2.status_code == 200
         assert res2.json()["idempotent_replay"] is True
 
@@ -650,7 +655,7 @@ class TestFase5IntegracionErp:
         ).all()
         assert len(events) == 1
 
-    def test_14_webhooks_reintentos_y_dead_letter(self, app_client: TestClient, db: Session):
+    def test_14_webhooks_reintentos_y_dead_letter(self, app_client: TestClient, db: Session, auth_tokens: dict):
         """14. Mecanismo de reintentos seguros y traslado a dead-letter tras superar max_attempts."""
         key_retry = f"FAIL_EVENT_{int(datetime.datetime.utcnow().timestamp())}"
         ev = IntegrationWebhookEvent(
@@ -668,7 +673,7 @@ class TestFase5IntegracionErp:
         db.commit()
 
         # Reintento exitoso
-        res = app_client.post("/api/v1/webhooks/system/retry-failed?max_retries=3&provider=WOMPI")
+        res = app_client.post("/api/v1/webhooks/system/retry-failed?max_retries=3&provider=WOMPI", headers=auth_tokens["admin"]["headers"])
         assert res.status_code == 200
         assert res.json()["reprocessed_count"] >= 1
 
@@ -693,11 +698,11 @@ class TestFase5IntegracionErp:
         db.add(ev_dead)
         db.commit()
 
-        res_dead = app_client.post("/api/v1/webhooks/system/retry-failed?max_retries=3&provider=WOMPI")
+        res_dead = app_client.post("/api/v1/webhooks/system/retry-failed?max_retries=3&provider=WOMPI", headers=auth_tokens["admin"]["headers"])
         assert res_dead.status_code == 200
         db.refresh(ev_dead)
         assert ev_dead.dead_letter is True
-        assert ev_dead.status == "FAILED"
+        assert ev_dead.status == "DEAD_LETTER"
         assert "dead-letter" in ev_dead.last_error
 
     def test_15_separacion_patrimonial_nebulae_y_mau_en_finanzas(self, app_client: TestClient, db: Session, base_customer_catalog: dict, auth_tokens: dict):
@@ -712,7 +717,7 @@ class TestFase5IntegracionErp:
         db.commit()
 
         # Consultar valorización
-        res = app_client.get("/api/v1/finance/inventory-valuation")
+        res = app_client.get("/api/v1/finance/inventory-valuation", headers=auth_tokens["admin"]["headers"])
         assert res.status_code == 200
         data = res.json()["data"]
         assert data["nebulae"]["quantity"] >= 15.0
@@ -727,33 +732,38 @@ class TestFase5IntegracionErp:
         assert "nebulae" in prof_data
         assert "mau" in prof_data
 
-    def test_16_marketing_segmentacion_y_habeas_data_consentimiento(self, app_client: TestClient, db: Session, base_customer_catalog: dict):
+    def test_16_marketing_segmentacion_y_habeas_data_consentimiento(self, app_client: TestClient, db: Session, base_customer_catalog: dict, auth_tokens: dict):
         """16. Segmentación lógica de marketing y gestión de consentimiento Habeas Data."""
         cust = base_customer_catalog["customer"]
 
-        # Segmentos válidos
+        # Segmentos válidos protegidos con ASESOR
         for seg in ["saldo-pendiente", "mercancia-disponible", "clientes-frecuentes", "clientes-inactivos"]:
-            res = app_client.get(f"/api/v1/marketing/segments/{seg}")
+            res = app_client.get(f"/api/v1/marketing/segments/{seg}", headers=auth_tokens["asesor"]["headers"])
             assert res.status_code == 200
             assert "data" in res.json()
 
-        # Obtener preferencias
+        # Obtener preferencias (inician en False segun Ley 1581)
         res_pref = app_client.get(f"/api/v1/marketing/customers/{cust.id}/preferences")
         assert res_pref.status_code == 200
         pref = res_pref.json()["data"]
-        assert pref["whatsapp_opt_in"] is True
-        assert pref["habeas_data_accepted"] is True
+        assert pref["whatsapp_opt_in"] is False
+        assert pref["habeas_data_accepted"] is False
 
-        # Actualizar consentimiento
+        # Actualizar consentimiento por parte del asesor
         up_payload = {
-            "whatsapp_opt_in": False,
+            "whatsapp_opt_in": True,
+            "habeas_data_accepted": True,
             "sms_opt_in": True,
-            "notes": "Cliente prefiere no recibir ofertas por WhatsApp"
+            "notes": "Cliente autorizo tratamiento Habeas Data"
         }
-        res_up = app_client.put(f"/api/v1/marketing/customers/{cust.id}/preferences", json=up_payload)
+        res_up = app_client.put(
+            f"/api/v1/marketing/customers/{cust.id}/preferences",
+            json=up_payload,
+            headers=auth_tokens["asesor"]["headers"]
+        )
         assert res_up.status_code == 200
         pref_up = res_up.json()["data"]
-        assert pref_up["whatsapp_opt_in"] is False
+        assert pref_up["whatsapp_opt_in"] is True
         assert pref_up["sms_opt_in"] is True
 
     def test_17_compatibilidad_rutas_existentes(self, app_client: TestClient, db: Session, base_customer_catalog: dict, auth_tokens: dict):

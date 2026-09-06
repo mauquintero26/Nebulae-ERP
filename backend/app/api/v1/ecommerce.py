@@ -1,3 +1,4 @@
+import hashlib
 
 from decimal import Decimal
 from app.models.catalog import ProductSKU, Product
@@ -12,6 +13,7 @@ Endpoints for: E-commerce stats, PWEB orders, digital catalog,
 abandoned carts, web builder config, image management
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from typing import Optional
@@ -33,14 +35,9 @@ def _next_seq_pweb(db: Session) -> int:
         return int(r)
     except Exception:
         db.rollback()
-        try:
-            db.execute(text("CREATE SEQUENCE IF NOT EXISTS seq_pweb START 1"))
-            db.commit()
-            return int(db.execute(text("SELECT nextval('seq_pweb')")).scalar())
-        except Exception:
-            db.rollback()
-            count = db.query(func.count(SaleOrder.id)).filter(SaleOrder.canal_venta == 'WEB').scalar() or 0
-            return int(count) + 1
+        db.execute(text("CREATE SEQUENCE IF NOT EXISTS seq_pweb START 1"))
+        db.commit()
+        return int(db.execute(text("SELECT nextval('seq_pweb')")).scalar())
 
 def _gen_pweb_numero(db: Session) -> str:
     year = datetime.datetime.utcnow().year
@@ -211,20 +208,142 @@ def _get_real_sellable_stock(db: Session, sku_id: int, warehouse_id: Optional[in
 @router.post("/pedidos", status_code=201)
 def create_web_order(body: dict, db: Session = Depends(get_db)):
     """
-    Creacion idempotente y pesimista de pedidos desde ecommerce.
-    - Idempotencia: si ya existe un pedido con el mismo idempotency_key, retorna 200 OK (Replay).
-    - Bloqueo pesimista con SELECT FOR UPDATE en reservas para articulos de entrega inmediata.
-    - Crea SaleOrder y SaleOrderLineErp canonicas vinculadas.
+    Creacion segura, consistente y pesimista de pedidos desde ecommerce:
+    - Calculo de precios, descuentos y totales 100% en el backend.
+    - Rechazo de intentos de manipulacion de precios, totales forzados o empresa no autorizada (MAU).
+    - Validacion de disponibilidad vendible real para ENTREGA_INMEDIATA (409 si stock insuficiente).
+    - Lineas POR_PEDIDO admitidas con estado PENDIENTE_COMPRA.
+    - Estado inicial PENDIENTE_PAGO (CERO creacion de SaleOrderPayment en el checkout).
+    - Secuencias seguras PostgreSQL (seq_pweb y seq_ven).
+    - Idempotencia con huella canonica: replay 200 vs conflicto divergente 409.
     """
     _ensure_ecommerce_tables(db)
 
+    # 1. Validar clave de idempotencia
     idem_key = body.get("idempotency_key")
-    if idem_key:
-        existing_order = db.query(SaleOrder).filter(
-            text("canal_metadata->>'idempotency_key' = :k")
-        ).params(k=idem_key).first()
-        if existing_order:
-            return {
+    if not idem_key:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="El campo 'idempotency_key' es obligatorio para el checkout web."
+        )
+
+    # 2. Validacion de items y anti-manipulacion de propiedad patrimonial (MAU)
+    if body.get("owner") and body.get("owner") != "NEBULAE":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operacion rechazada: No se permite forzar propietario patrimonial no autorizado (MAU) en ecommerce."
+        )
+
+    raw_items = body.get("items") or body.get("productos") or []
+    if not raw_items:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="El pedido debe contener al menos un articulo."
+        )
+
+    for it in raw_items:
+        if it.get("owner") and it.get("owner") != "NEBULAE":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Operacion rechazada: Articulo con propietario forzado no autorizado (MAU)."
+            )
+
+    # 3. Calculo estricto del lado del servidor (precios, cantidades, totales)
+    server_subtotal = Decimal("0.00")
+    validated_lines = []
+
+    for it in raw_items:
+        qty = int(it.get("quantity") or it.get("qty") or 0)
+        if qty <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Cantidad invalida para el articulo: {qty}. Debe ser un entero mayor a 0."
+            )
+
+        sku_code = it.get("sku")
+        sku_id = it.get("sku_id")
+        sku = None
+        if sku_id:
+            sku = db.query(ProductSKU).filter(ProductSKU.id == sku_id).first()
+        elif sku_code:
+            sku = db.query(ProductSKU).filter(ProductSKU.sku == sku_code).first()
+
+        if not sku:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Producto SKU '{sku_code or sku_id}' no encontrado en el catalogo."
+            )
+
+        db_price = Decimal(str(sku.sale_price or sku.price or 0))
+
+        # Deteccion de manipulacion de precio unitario
+        client_price = it.get("unit_price_cop") or it.get("precio_venta") or it.get("price")
+        if client_price is not None and abs(Decimal(str(client_price)) - db_price) > Decimal("0.01"):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Manipulacion de precios detectada: Precio enviado para SKU {sku.sku} (${client_price}) no coincide con el catalogo oficial (${db_price})."
+            )
+
+        # Deteccion de manipulacion de descuento
+        client_disc = it.get("descuento_pct")
+        if client_disc is not None and Decimal(str(client_disc)) > Decimal("0.0"):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Descuento arbitrario no permitido desde el cliente web."
+            )
+
+        raw_mod = str(it.get("modalidad") or "ENTREGA_INMEDIATA").upper()
+        modalidad = "ENTREGA_INMEDIATA" if "INMEDIATA" in raw_mod else "POR_PEDIDO"
+        cost_unit = Decimal(str(sku.cost_price or 0)) if sku.cost_price else Decimal("0.00")
+        line_subtotal = Decimal(str(qty)) * db_price
+        server_subtotal += line_subtotal
+
+        validated_lines.append({
+            "sku": sku,
+            "qty": qty,
+            "unit_price": db_price,
+            "cost_unit": cost_unit,
+            "modalidad": modalidad,
+            "nombre": it.get("nombre") or (sku.sku if sku else "Producto Web"),
+            "warehouse_id": it.get("warehouse_id")
+        })
+
+    server_total = server_subtotal
+    # Deteccion de manipulacion de total
+    client_total = body.get("total_cop")
+    if client_total is not None and abs(Decimal(str(client_total)) - server_total) > Decimal("0.01"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Manipulacion de totales detectada: Total enviado (${client_total}) no coincide con el calculo del servidor (${server_total})."
+        )
+
+    # 4. Construccion de huella canonica de idempotencia (Fingerprint)
+    sorted_items = sorted([
+        {"sku": vl["sku"].sku, "quantity": vl["qty"], "modalidad": vl["modalidad"]}
+        for vl in validated_lines
+    ], key=lambda x: (x["sku"], x["quantity"]))
+
+    email_norm = str(body.get("customer_email") or "").strip().lower()
+    addr_norm = str(body.get("direccion_entrega") or body.get("customer_address") or "").strip().lower()
+    fp_raw = f"{email_norm}|{json_mod.dumps(sorted_items, sort_keys=True)}|{addr_norm}|{float(server_total)}"
+    current_fingerprint = hashlib.sha256(fp_raw.encode("utf-8")).hexdigest()
+
+    # 5. Verificacion de idempotencia en base de datos
+    existing_order = db.query(SaleOrder).filter(
+        (SaleOrder.checkout_idempotency_key == idem_key) |
+        (text("canal_metadata->>'idempotency_key' = :k").params(k=idem_key))
+    ).first()
+
+    if existing_order:
+        stored_fp = existing_order.checkout_fingerprint or (existing_order.canal_metadata or {}).get("fingerprint")
+        if stored_fp and stored_fp != current_fingerprint:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Conflicto de idempotencia: La clave ya fue utilizada para un pedido con datos divergentes."
+            )
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
                 "status": "success",
                 "idempotent_replay": True,
                 "data": {
@@ -235,26 +354,41 @@ def create_web_order(body: dict, db: Session = Depends(get_db)):
                     "total_cop": float(existing_order.total_cop or 0)
                 }
             }
+        )
 
+    # 6. Validacion de disponibilidad vendible real (bloqueo pesimista)
+    default_wh = db.query(Warehouse).first()
+    default_wh_id = default_wh.id if default_wh else 1
+
+    for vl in validated_lines:
+        if vl["modalidad"] == "ENTREGA_INMEDIATA":
+            wh_id = vl["warehouse_id"] or default_wh_id
+            disp_real = _get_real_sellable_stock(db, vl["sku"].id, wh_id, "NEBULAE")
+            if disp_real < Decimal(str(vl["qty"])):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Stock insuficiente para entrega inmediata de '{vl['sku'].sku}'. Disponibles: {disp_real}, solicitadas: {vl['qty']}."
+                )
+
+    # 7. Generacion segura de secuencias
     pweb_numero = _gen_pweb_numero(db)
     try:
-        n = db.execute(text("SELECT nextval('seq_ven')")).scalar()
+        n_ven = db.execute(text("SELECT nextval('seq_ven')")).scalar()
     except Exception:
         db.rollback()
-        try:
-            db.execute(text("CREATE SEQUENCE IF NOT EXISTS seq_ven START 1000"))
-            db.commit()
-            n = db.execute(text("SELECT nextval('seq_ven')")).scalar()
-        except Exception:
-            db.rollback()
-            count = db.query(func.count(SaleOrder.id)).scalar() or 0
-            n = int(count) + 1000
-    year = datetime.datetime.utcnow().year
-    pven_numero = f"PVEN-{year}{n:04d}"
+        db.execute(text("CREATE SEQUENCE IF NOT EXISTS seq_ven START 1000"))
+        db.commit()
+        n_ven = db.execute(text("SELECT nextval('seq_ven')")).scalar()
 
+    year = datetime.datetime.utcnow().year
+    pven_numero = f"PVEN-{year}{int(n_ven):04d}"
+
+    # 8. Resolucion o creacion de cliente
     customer = None
     if body.get("customer_email"):
         customer = db.query(Customer).filter(Customer.email == body["customer_email"]).first()
+    if not customer and body.get("customer_id"):
+        customer = db.query(Customer).filter(Customer.id == int(body["customer_id"])).first()
     if not customer and body.get("customer_email"):
         names = (body.get("customer_name", "Web") or "Web").split(" ", 1)
         customer = Customer(
@@ -267,125 +401,91 @@ def create_web_order(body: dict, db: Session = Depends(get_db)):
         db.add(customer)
         db.flush()
 
-    total_cop = Decimal(str(body.get("total_cop", 0)))
-    subtotal_cop = Decimal(str(body.get("subtotal_cop", total_cop)))
-    descuento_pct = Decimal(str(body.get("descuento_pct", 0)))
-
-    meta = body.get("canal_metadata") or {}
-    if idem_key:
-        meta["idempotency_key"] = idem_key
+    # 9. Creacion de la orden en estado PENDIENTE_PAGO (CERO confirmacion automatica de pago)
+    meta = {
+        "idempotency_key": idem_key,
+        "fingerprint": current_fingerprint,
+        "shipping_method": body.get("shipping_method") or body.get("metodo_entrega") or "STANDARD"
+    }
 
     order = SaleOrder(
         numero=pven_numero,
         pweb_numero=pweb_numero,
         canal_venta="WEB",
+        checkout_idempotency_key=idem_key,
+        checkout_fingerprint=current_fingerprint,
         canal_metadata=meta,
         customer_id=customer.id if customer else None,
-        customer_name=body.get("customer_name", "Cliente Web"),
-        customer_email=body.get("customer_email"),
-        customer_phone=body.get("customer_phone"),
-        customer_address=body.get("customer_address"),
-        direccion_entrega=body.get("direccion_entrega") or body.get("customer_address"),
-        total_cop=total_cop,
-        subtotal_cop=subtotal_cop,
-        descuento_pct=descuento_pct,
-        anticipo_cop=total_cop,  # Pagado 100% en pasarela web
-        saldo_cop=Decimal("0.0"),
-        productos=body.get("productos", []),
+        customer_name=body.get("customer_name") or (f"{customer.first_name} {customer.last_name or ''}".strip() if customer else "Cliente Web"),
+        customer_email=body.get("customer_email") or (customer.email if customer else None),
+        customer_phone=body.get("customer_phone") or (customer.phone if customer else None),
+        customer_address=body.get("customer_address") or (customer.address if customer else None),
+        direccion_entrega=body.get("direccion_entrega") or body.get("customer_address") or (customer.address if customer else ""),
+        total_cop=server_total,
+        subtotal_cop=server_subtotal,
+        descuento_pct=Decimal("0.00"),
+        anticipo_cop=Decimal("0.00"),
+        saldo_cop=server_total,
+        productos=[{
+            "sku": vl["sku"].sku,
+            "sku_id": vl["sku"].id,
+            "qty": vl["qty"],
+            "unit_price_cop": float(vl["unit_price"]),
+            "modalidad": vl["modalidad"]
+        } for vl in validated_lines],
         notas=body.get("notas"),
-        estado="PENDIENTE_DESPACHO"
+        estado="PENDIENTE_PAGO"
     )
     db.add(order)
     db.flush()
 
-    # Registrar pago 100% en pasarela
-    if total_cop > Decimal("0"):
-        pay_idem = f"PAY_ECOMMERCE_{order.id}"
-        existing_pay = db.query(SaleOrderPayment).filter(SaleOrderPayment.idempotency_key == pay_idem).first()
-        if not existing_pay:
-            sop = SaleOrderPayment(
-                sale_order_id=order.id,
-                customer_id=customer.id if customer else None,
-                tipo="PAGO_TOTAL",
-                monto=total_cop,
-                moneda="COP",
-                metodo_pago=body.get("metodo_pago", "PASARELA_WEB"),
-                fecha=datetime.datetime.utcnow().date(),
-                referencia_bancaria=body.get("transaccion_id") or pweb_numero,
-                usuario="ECOMMERCE",
-                idempotency_key=pay_idem,
-                estado="CONFIRMADO",
-                notes=f"Pago e-commerce pedido web {pweb_numero}"
-            )
-            db.add(sop)
-
-    # Procesar lineas canonicas y reservas con bloqueo pesimista
-    productos_in = body.get("productos", [])
-    default_wh = db.query(Warehouse).first()
-    wh_id = default_wh.id if default_wh else 1
-
-    for p in productos_in:
-        qty = Decimal(str(p.get("qty") or p.get("quantity") or 1))
-        unit_price = Decimal(str(p.get("unit_price_cop") or p.get("precio_venta") or p.get("price") or 0))
-        sku_code = p.get("sku")
-        sku_id = p.get("sku_id")
-
-        sku = None
-        if sku_id:
-            sku = db.query(ProductSKU).filter(ProductSKU.id == sku_id).first()
-        elif sku_code:
-            sku = db.query(ProductSKU).filter(ProductSKU.sku == sku_code).first()
-
-        modalidad = p.get("modalidad", "ENTREGA_INMEDIATA")
-        owner = p.get("owner", "NEBULAE")
-        cost_unit = Decimal(str(sku.cost_price or 0)) if sku and sku.cost_price else Decimal("0.00")
-
+    # 10. Creacion de lineas canonicas y reservas fisicas para articulos inmediatos
+    for vl in validated_lines:
+        wh_id = vl["warehouse_id"] or default_wh_id
         so_line = SaleOrderLineErp(
             so_id=order.id,
-            sku_id=sku.id if sku else None,
-            description=p.get("nombre") or p.get("description") or (sku.sku if sku else "Producto Web"),
-            quantity=qty,
-            unit_price_cop=unit_price,
-            descuento_pct=Decimal(str(p.get("descuento_pct", 0))),
+            sku_id=vl["sku"].id,
+            description=vl["nombre"],
+            quantity=Decimal(str(vl["qty"])),
+            unit_price_cop=vl["unit_price"],
+            descuento_pct=Decimal("0.00"),
             customer_id=customer.id if customer else None,
-            tax_pct=Decimal(str(p.get("tax_pct", 0))),
-            modalidad=modalidad,
-            owner=owner,
+            tax_pct=Decimal("0.00"),
+            modalidad=vl["modalidad"],
+            owner="NEBULAE",
             quantity_reserved=Decimal("0"),
             quantity_delivered=Decimal("0"),
             quantity_cancelled=Decimal("0"),
             estado="PENDIENTE",
-            cost_unit_cop_snapshot=cost_unit,
-            price_unit_cop_snapshot=unit_price,
+            cost_unit_cop_snapshot=vl["cost_unit"],
+            price_unit_cop_snapshot=vl["unit_price"],
             source="NATIVE"
         )
         db.add(so_line)
         db.flush()
 
-        # Si es entrega inmediata y tiene SKU, aplicar bloqueo pesimista y verificar stock
-        if modalidad == "ENTREGA_INMEDIATA" and sku:
-            line_wh_id = p.get("warehouse_id") or wh_id
-            # Bloqueo pesimista sobre el balance del propietario
+        if vl["modalidad"] == "ENTREGA_INMEDIATA":
+            # Bloqueo pesimista de balance
             owner_bal = db.query(InventoryOwnerBalance).filter(
-                InventoryOwnerBalance.sku_id == sku.id,
-                InventoryOwnerBalance.warehouse_id == line_wh_id,
-                InventoryOwnerBalance.owner == owner
+                InventoryOwnerBalance.sku_id == vl["sku"].id,
+                InventoryOwnerBalance.warehouse_id == wh_id,
+                InventoryOwnerBalance.owner == "NEBULAE"
             ).with_for_update().first()
 
-            disp_real = _get_real_sellable_stock(db, sku.id, line_wh_id, owner)
-            if disp_real < qty:
+            disp_real = _get_real_sellable_stock(db, vl["sku"].id, wh_id, "NEBULAE")
+            if disp_real < Decimal(str(vl["qty"])):
                 db.rollback()
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Stock insuficiente para entrega inmediata de '{sku.sku}'. Disponibles: {disp_real}, solicitadas: {qty}."
+                    detail=f"Stock insuficiente para entrega inmediata de '{vl['sku'].sku}'. Disponibles: {disp_real}, solicitadas: {vl['qty']}."
                 )
 
             res_key = f"RES_PWEB_{order.id}_LINE_{so_line.id}"
             res = InventoryReservation(
-                sku_id=sku.id,
-                warehouse_id=line_wh_id,
-                owner=owner,
-                quantity_reserved=qty,
+                sku_id=vl["sku"].id,
+                warehouse_id=wh_id,
+                owner="NEBULAE",
+                quantity_reserved=Decimal(str(vl["qty"])),
                 sale_order_line_id=so_line.id,
                 status="ACTIVE",
                 idempotency_key=res_key,
@@ -393,7 +493,7 @@ def create_web_order(body: dict, db: Session = Depends(get_db)):
                 notes=f"Reserva e-commerce pedido {pweb_numero}"
             )
             db.add(res)
-            so_line.quantity_reserved = qty
+            so_line.quantity_reserved = Decimal(str(vl["qty"]))
             so_line.estado = "RESERVADA"
         else:
             so_line.estado = "PENDIENTE_COMPRA"
@@ -403,7 +503,7 @@ def create_web_order(body: dict, db: Session = Depends(get_db)):
         entity_id=order.id,
         entity_numero=pweb_numero,
         action="CREATED",
-        description=f"Pedido web {pweb_numero} ({pven_numero}) creado desde e-commerce con lineas canonicas.",
+        description=f"Pedido web {pweb_numero} ({pven_numero}) creado desde e-commerce en estado PENDIENTE_PAGO.",
         new_estado=order.estado,
         user_name="ECOMMERCE"
     )
@@ -416,10 +516,13 @@ def create_web_order(body: dict, db: Session = Depends(get_db)):
         "idempotent_replay": False,
         "data": {
             "id": order.id,
-            "numero": pven_numero,
-            "pweb_numero": pweb_numero,
+            "numero": order.numero,
+            "pweb_numero": order.pweb_numero,
             "estado": order.estado,
-            "total_cop": float(order.total_cop)
+            "total_cop": float(order.total_cop or 0),
+            "anticipo_cop": float(order.anticipo_cop or 0),
+            "saldo_cop": float(order.saldo_cop or 0),
+            "fingerprint": current_fingerprint
         }
     }
 

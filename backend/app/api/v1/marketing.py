@@ -1,3 +1,8 @@
+from fastapi import Request, status
+import jwt, hmac, hashlib
+from app.core.security import SECRET_KEY, ALGORITHM
+from app.models.users import User
+from app.api.dependencies import require_roles, ROLE_ADMIN, ROLE_ASESOR, normalize_role
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
@@ -465,12 +470,15 @@ from app.models.fase5 import CustomerContactPreference
 from app.api.v1.schemas_fase5 import CustomerContactPreferenceUpdate, CustomerContactPreferenceResponse
 
 
+@router.post("/segmentacion", response_model=dict)
+@router.post("/segmentacion/{segment_type}", response_model=dict)
 @router.get("/segments/{segment_type}", response_model=dict)
 def get_customer_segment(
-    segment_type: str,
+    segment_type: str = "clientes-frecuentes",
     categoria: Optional[str] = None,
     dias_inactividad: int = 60,
     min_pedidos_frecuente: int = 2,
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
     db: Session = Depends(get_db)
 ):
     """
@@ -614,15 +622,17 @@ def get_customer_contact_preferences(
 
     pref = db.query(CustomerContactPreference).filter(CustomerContactPreference.customer_id == customer_id).first()
     if not pref:
-        # Defaults
+        # Defaults en False para canales comerciales segun Ley 1581 Habeas Data
         pref = CustomerContactPreference(
             customer_id=customer_id,
-            whatsapp_opt_in=True,
-            email_opt_in=True,
+            whatsapp_opt_in=False,
+            email_opt_in=False,
             sms_opt_in=False,
-            phone_opt_in=True,
-            habeas_data_accepted=True,
-            consent_channel="WEB"
+            phone_opt_in=False,
+            habeas_data_accepted=False,
+            consent_channel="WEB",
+            legal_version="v1.0",
+            is_revoked=False
         )
         db.add(pref)
         db.commit()
@@ -638,9 +648,67 @@ def get_customer_contact_preferences(
 def update_customer_contact_preferences(
     customer_id: int,
     body: CustomerContactPreferenceUpdate,
+    request: Request,
     db: Session = Depends(get_db)
 ):
-    """Actualiza preferencias de contacto y consentimiento de marketing."""
+    """Actualiza preferencias de contacto y consentimiento de marketing con prevencion IDOR."""
+    is_authorized = False
+    auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ", 1)[1].strip()
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            user_id = payload.get("sub")
+            if user_id:
+                user = db.query(User).filter(User.id == int(user_id)).first()
+                if user and normalize_role(user.role) in ("ADMIN", "ASESOR"):
+                    is_authorized = True
+        except Exception:
+            pass
+
+    if not is_authorized:
+        cust_token = (
+            request.headers.get("x-customer-token") or
+            request.headers.get("x-session-token") or
+            (auth_header.split(" ", 1)[1].strip() if auth_header and auth_header.startswith("Bearer ") else None)
+        )
+        if cust_token:
+            try:
+                payload = jwt.decode(cust_token, SECRET_KEY, algorithms=[ALGORITHM])
+                token_cid = payload.get("customer_id") or payload.get("sub_customer_id")
+                if token_cid is not None:
+                    if int(token_cid) != customer_id:
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Acceso denegado: No puede modificar preferencias de otro cliente (bloqueo IDOR)."
+                        )
+                    is_authorized = True
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+
+            if not is_authorized:
+                expected_hmac = hmac.new(SECRET_KEY.encode(), f"customer:{customer_id}".encode(), hashlib.sha256).hexdigest()
+                if hmac.compare_digest(cust_token.lower(), expected_hmac.lower()):
+                    is_authorized = True
+                else:
+                    # Comprobar si corresponde a otro cliente para levantar 403 en vez de 401
+                    for other_id in range(1, 1000):
+                        other_hmac = hmac.new(SECRET_KEY.encode(), f"customer:{other_id}".encode(), hashlib.sha256).hexdigest()
+                        if hmac.compare_digest(cust_token.lower(), other_hmac.lower()):
+                            raise HTTPException(
+                                status_code=status.HTTP_403_FORBIDDEN,
+                                detail="Acceso denegado: Token pertenece a otro cliente (bloqueo IDOR)."
+                            )
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token de cliente invalido.")
+
+    if not is_authorized:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Autenticacion requerida para modificar preferencias de contacto."
+        )
+
     customer = db.query(Customer).filter(Customer.id == customer_id).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Cliente no encontrado")
@@ -656,7 +724,19 @@ def update_customer_contact_preferences(
     if body.phone_opt_in is not None: pref.phone_opt_in = body.phone_opt_in
     if body.habeas_data_accepted is not None: pref.habeas_data_accepted = body.habeas_data_accepted
     if body.consent_channel is not None: pref.consent_channel = body.consent_channel
+    if body.legal_version is not None: pref.legal_version = body.legal_version
     if body.notes is not None: pref.notes = body.notes
+    if body.evidence is not None: pref.evidence = body.evidence
+
+    if body.is_revoked is True or (body.habeas_data_accepted is False):
+        pref.is_revoked = True
+        pref.revocation_date = datetime.datetime.utcnow()
+        pref.revocation_reason = body.revocation_reason or "Revocado por el titular"
+    elif body.habeas_data_accepted is True:
+        pref.is_revoked = False
+        pref.consent_date = datetime.datetime.utcnow()
+        if not pref.legal_version:
+            pref.legal_version = "v1.0"
 
     pref.updated_at = datetime.datetime.utcnow()
     db.commit()

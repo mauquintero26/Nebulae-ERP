@@ -9,7 +9,7 @@ from app.models.fase1b import CustomerRequestLine, SalesQuotationLine, SaleOrder
 from app.models.fase4 import SaleOrderPayment, SalePackingSession, SalePackingItem, SaleOrderDelivery, SaleOrderDeliveryLine, SaleOrderReturn, SaleOrderReturnLine
 from app.models.fase5 import CustomerAgendaActivity, CustomerContactPreference
 from app.models.users import User
-from app.api.dependencies import get_optional_current_user, normalize_role, require_roles, ROLE_ADMIN, ROLE_FINANZAS, ALL_ERP_ROLES
+from app.api.dependencies import get_current_user, get_optional_current_user, normalize_role, require_roles, ROLE_ADMIN, ROLE_FINANZAS, ALL_ERP_ROLES
 from app.api.v1.schemas_fase5 import AgendaActivityCreate, AgendaActivityResponse
 
 from app.schemas import crm as schemas
@@ -364,10 +364,12 @@ def _sync_operational_agenda_deterministic(db: Session, target_customer_id: Opti
     db.commit()
     return synced_count
 
+@router.get("/customer/{customer_id}/360")
+@router.get("/customers/{customer_id}/360")
 @router.get("/customers/{customer_id}/profile-360")
 def get_customer_360_profile(
     customer_id: int,
-    user: Optional[User] = Depends(get_optional_current_user),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     customer = db.query(Customer).filter(Customer.id == customer_id).first()
@@ -731,11 +733,11 @@ def get_customer_360_profile(
     }
 
     preferencias_payload = {
-        "whatsapp_opt_in": contact_pref.whatsapp_opt_in if contact_pref else True,
-        "email_opt_in": contact_pref.email_opt_in if contact_pref else True,
+        "whatsapp_opt_in": contact_pref.whatsapp_opt_in if contact_pref else False,
+        "email_opt_in": contact_pref.email_opt_in if contact_pref else False,
         "sms_opt_in": contact_pref.sms_opt_in if contact_pref else False,
-        "phone_opt_in": contact_pref.phone_opt_in if contact_pref else True,
-        "habeas_data_accepted": contact_pref.habeas_data_accepted if contact_pref else True,
+        "phone_opt_in": contact_pref.phone_opt_in if contact_pref else False,
+        "habeas_data_accepted": contact_pref.habeas_data_accepted if contact_pref else False,
         "consent_channel": contact_pref.consent_channel if contact_pref else "WEB",
         "consent_date": contact_pref.consent_date.isoformat() if (contact_pref and contact_pref.consent_date) else None,
     }
@@ -770,6 +772,60 @@ def get_customer_360_profile(
         "resumen_financiero": resumen_financiero,
         "rentabilidad": rentabilidad_payload,
     }
+
+    # Proyección estricta según rol (RBAC / Privacidad)
+    if user_role not in ("ADMIN", "FINANZAS"):
+        # Asesor y otros: no ve costos ni márgenes
+        profile["rentabilidad"] = {
+            "visible": False,
+            "message": "Información financiera restringida a roles autorizados (ADMIN, FINANZAS)."
+        }
+        for p in profile["pedidos"]:
+            p.pop("costo_total_cop", None)
+            p.pop("margen_estimado_cop", None)
+            p.pop("margen_estimado_pct", None)
+
+    if user_role == "BODEGA":
+        # Bodega: exclusivamente logistica y empaque/despacho
+        # Ocultar telefonos, emails, documento, compras a proveedor y saldos financieros
+        profile["phone"] = None
+        profile["email"] = None
+        profile["document"] = None
+        profile["ltv"] = None
+        profile["resumen_financiero"] = None
+        profile["rentabilidad"] = {
+            "visible": False,
+            "message": "Información financiera restringida a roles autorizados (ADMIN, FINANZAS)."
+        }
+        profile["pagos"] = []
+        profile["compras_asignadas"] = []
+        for p in profile["pedidos"]:
+            p["total_cop"] = None
+            p["anticipo_cop"] = None
+            p["saldo_cop"] = None
+        for ao in profile["active_orders"]:
+            ao["total"] = None
+            ao["saldo"] = None
+
+    elif user_role == "COMPRAS":
+        # Compras: unicamente pedidos y recepciones de proveedor vinculadas
+        # Ocultar datos privados de contacto del cliente y saldos financieros
+        profile["phone"] = None
+        profile["email"] = None
+        profile["address"] = None
+        profile["document"] = None
+        profile["ltv"] = None
+        profile["resumen_financiero"] = None
+        profile["rentabilidad"] = {
+            "visible": False,
+            "message": "Información financiera restringida a roles autorizados (ADMIN, FINANZAS)."
+        }
+        profile["pagos"] = []
+        for p in profile["pedidos"]:
+            p["saldo_cop"] = None
+        for ao in profile["active_orders"]:
+            ao["saldo"] = None
+
     return {"status": "success", "data": profile}
 
 

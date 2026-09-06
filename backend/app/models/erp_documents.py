@@ -124,6 +124,8 @@ class SaleOrder(Base):
     canal_venta           = Column(String(30), nullable=True, default="CRM")  # CRM | WEB | PRESENCIAL
     pweb_numero           = Column(String(25), nullable=True, index=True)      # PWEB-YYYY####
     canal_metadata        = Column(JSON, nullable=True)                        # IP, user_agent, etc.
+    checkout_idempotency_key = Column(String(150), nullable=True, index=True)
+    checkout_fingerprint     = Column(String(64), nullable=True)
     # ── Fase 4: Políticas de pago, rentabilidad y cancelación ─────────────────
     anticipo_pct_snapshot          = Column(Numeric(5, 2), nullable=False, default=60.00)
     saldo_pct_snapshot             = Column(Numeric(5, 2), nullable=False, default=40.00)

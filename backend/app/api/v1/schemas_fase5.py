@@ -56,6 +56,7 @@ class OmnichannelQueryRequest(BaseModel):
     conversation_id: Optional[str] = Field(None, max_length=150)
     actor_type: str = Field("BOT", pattern="^(BOT|AGENT|USER)$")
     actor_name: Optional[str] = Field(None, max_length=150)
+    customer_token: Optional[str] = None
 
 
 class OmnichannelQueryResponse(BaseModel):
@@ -75,6 +76,10 @@ class CustomerContactPreferenceUpdate(BaseModel):
     phone_opt_in: Optional[bool] = None
     habeas_data_accepted: Optional[bool] = None
     consent_channel: Optional[str] = Field(None, max_length=50)
+    legal_version: Optional[str] = Field(None, max_length=50)
+    is_revoked: Optional[bool] = None
+    revocation_reason: Optional[str] = None
+    evidence: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -87,7 +92,12 @@ class CustomerContactPreferenceResponse(BaseModel):
     habeas_data_accepted: bool
     consent_channel: str
     consent_date: datetime.datetime
-    notes: Optional[str]
+    legal_version: Optional[str] = None
+    is_revoked: Optional[bool] = False
+    revocation_date: Optional[datetime.datetime] = None
+    revocation_reason: Optional[str] = None
+    evidence: Optional[str] = None
+    notes: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
