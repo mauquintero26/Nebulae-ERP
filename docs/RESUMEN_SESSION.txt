@@ -1,131 +1,119 @@
-# RESUMEN EJECUTIVO Y TÉCNICO DE SESIÓN — IMPLEMENTACIÓN Y CERTIFICACIÓN FORMAL FASE 4 (VENTAS, PAGOS Y ENTREGA)
+# RESUMEN EJECUTIVO Y TÉCNICO DE SESIÓN — HARDENING Y CERTIFICACIÓN INTEGRAL FORMAL FASE 4 (VENTAS, PAGOS Y ENTREGA)
 
 **Fecha:** 2026-09-05  
 **Rama:** main  
 **Repositorio GitHub:** https://github.com/mauquintero26/Nebulae-ERP  
-**Estado General:** FASE 4 100% IMPLEMENTADA, AUDITADA, PROBADA Y CERTIFICADA (27/27 TESTS FASE 4 APROBADOS — 254/254 TESTS REPOSITORIO APROBADOS)  
+**Estado General:** FASE 4 100% IMPLEMENTADA, ENDURECIDA, AUDITADA, PROBADA Y CERTIFICADA (39/39 TESTS FASE 4 APROBADOS — 266/266 TESTS REPOSITORIO APROBADOS AL 100%)  
 **Política de Frontera:** FASE 5 NO INICIADA — EN ESPERA DE AUTORIZACIÓN EXPLÍCITA  
-**Ambiente de Pruebas:** `erp_test` (PostgreSQL — versión Alembic `fa4_001`)  
+**Ambiente de Pruebas:** `erp_test` (PostgreSQL — versión Alembic `fa4_002` head)  
 **Ambiente de Producción:** `erpdb` (PostgreSQL — versión Alembic `fa1a_002` 100% INTACTA)  
 **Frontend Next.js:** 0 archivos modificados en `frontend/` (74 rutas compiladas exitosamente con `npm run build`, exit code 0)
 
 ---
 
-## 1. OBJETIVO DE LA SESIÓN Y ALCANCE DE LA FASE 4
+## 1. OBJETIVO DE LA SESIÓN Y HARDENING DE FASE 4
 
-En cumplimiento de las directrices formales aprobadas para la **Fase 4 — Ventas, Pagos y Entrega**, se implementó el ciclo de vida completo de la venta canónica en Nebulae ERP, garantizando:
+En cumplimiento estricto de las directrices formales aprobadas para el **Hardening Integral de la Fase 4 — Ventas, Pagos y Entrega**, se completó la auditoría, refuerzo de esquemas de base de datos, idempotencia transaccional y certificación de suites de prueba, garantizando:
 1. **Trabajo exclusivo en `erp_test`:** Producción (`erpdb`) permaneció 100% inalterada en `fa1a_002`.
-2. **Frontend intacto:** No se alteró ninguna vista, ruta o componente de `frontend/` (74 rutas de Next.js operativas).
-3. **Migración incremental posterior a `fa3_002`:** Se aplicó `fa4_001_sales_payments_delivery.py` sin reescribir migraciones previas y con cero `GRANT` a roles de prueba.
-4. **Compatibilidad sistémica:** Integración atómica con CRM, Omnicanal, Cotizaciones, Compras, Inventario (Fase 3: cuarentena, reservas, balances Mau/Nebulae) y Finanzas.
-5. **Operaciones críticas:** Idempotentes, concurrent-safe con bloqueos pesimistas (`SELECT FOR UPDATE`), auditables y reversibles.
-6. **Frontera estricta:** Detención obligatoria al culminar la Fase 4, sin iniciar la Fase 5.
+2. **Frontend intacto:** No se alteró ninguna vista, ruta o componente de `frontend/` (74 rutas de Next.js operativas compiladas con exit code 0).
+3. **Migración incremental `fa4_002_hardening_fase4.py`:** Se aplicó sobre `fa4_001` sin reescribir migraciones previas y con cero `GRANT` a roles de prueba, verificando roundtrip completo (downgrade a `fa4_001` y upgrade a `head`).
+4. **Idempotencia y concurrencia pesimista:** Bloqueo determinista de duplicados en pagos, reservas y despachos; transiciones estrictas en máquinas de estados (`SaleOrder`, `SaleOrderLine`, `SaleOrderDelivery`, `SaleOrderReturn`, `SalePackingSession`).
+5. **Políticas de frontera operativa:** Despacho nacional limitado a Lunes, Miércoles y Viernes, y cutoff de fin de semana con control horario estricto en huso horario Bogotá (`America/Bogota`).
+6. **Segregación patrimonial inalterable:** Control de costos snapshot, margen y rentabilidad segregada `NEBULAE` vs `MAU`.
+7. **Frontera estricta:** Detención obligatoria al culminar el hardening de la Fase 4, sin iniciar la Fase 5.
 
 ---
 
-## 2. COMPONENTES Y ARQUITECTURA TÉCNICA IMPLEMENTADA
+## 2. COMPONENTES Y ARQUITECTURA TÉCNICA REFORZADA
 
-### 2.1 Migración de Base de Datos (`fa4_001_sales_payments_delivery.py`)
-- **7 Tablas Nuevas Creadas:**
-  - `sale_order_payments`: Registro inmutable de transacciones de pago, anticipos y saldos con `idempotency_key` única, estados (`CONFIRMADO`, `PENDIENTE`, `REVERTIDO`, `FALLIDO`) y tipos (`ANTICIPO`, `PAGO_FINAL`, `ABONO`, `REVERSION`).
-  - `sale_packing_sessions`: Sesiones de empaque (`EMP-YYYY-####`) agrupadoras de pedidos del mismo cliente.
-  - `sale_packing_items`: Ítems empacados vinculados a líneas de pedido de venta.
-  - `sale_order_deliveries`: Despachos y entregas físicas (`ENT-YYYY-####`) con transportadora, número de guía, costo de flete y confirmación de entrega.
-  - `sale_order_delivery_lines`: Detalle de unidades despachadas y su estado.
-  - `sale_order_returns`: Devoluciones y garantías de clientes (`DEV-YYYY-####`).
-  - `sale_order_return_lines`: Líneas devueltas con condición física (`NUEVO_SELLADO`, `ABIERTO_BUENO`, `DEFECTUOSO`, `DAÑADO`), destino (`STOCK_DISPONIBLE`, `CUARENTENA`, `DESECHO`) y resolución financiera (`DEVOLUCION_DINERO`, `SALDO_A_FAVOR`, `SIN_DEVOLUCION_DINERO`).
-- **Columnas y Constraints Agregados:**
-  - En `sale_orders`: `anticipo_pct_snapshot`, `saldo_pct_snapshot`, `policy_exception_authorized_by`, `policy_exception_reason`, `total_cost_cop`, `estimated_profit_cop`, `real_profit_cop`, `profit_is_estimated`, `cancellation_reason`, `cancellation_authorized_by`, `cancelled_at`.
-  - En `sale_order_lines_erp`: `customer_id`, `tax_pct`, `modalidad` (`ENTREGA_INMEDIATA`, `POR_PEDIDO`), `owner` (`NEBULAE`, `MAU`), `quantity_reserved`, `quantity_delivered`, `quantity_cancelled`, `estado` (`PENDIENTE`, `RESERVADO`, `EN_TRANSITO`, `RECIBIDO`, `EMPACADO`, `ENTREGADO`, `CANCELADO`), snapshots de costos y precios, y check constraints.
-- **4 Secuencias PostgreSQL:**
-  - `seq_emp`, `seq_ent`, `seq_dev`, `seq_pago`.
+### 2.1 Migración Incremental de Base de Datos (`fa4_002_hardening_fase4.py`)
+- **Columna e índice único en `inventory_reservations`:** `idempotency_key VARCHAR(150)` con índice único condicional para evitar dobles reservas automáticas.
+- **Columna en `sale_orders`:** `tax_cop NUMERIC(14, 2) NOT NULL DEFAULT 0.00` para desglose impositivo auditado.
+- **Constraint en `sale_packing_items`:** `chk_pack_item_vqty_le_qty` (`CHECK (verified_quantity <= quantity)`) para integridad en verificación de empaque.
+- **Constraint en `sale_order_returns`:** `chk_return_refund_amt` (`CHECK (refund_amount_cop >= 0)`) para prevenir reembolsos negativos.
 
 ### 2.2 Modelos SQLAlchemy y Schemas Pydantic
-- `backend/app/models/fase4.py`: Clases `SaleOrderPayment`, `SalePackingSession`, `SalePackingItem`, `SaleOrderDelivery`, `SaleOrderDeliveryLine`, `SaleOrderReturn`, `SaleOrderReturnLine`. Registrados en `backend/app/models/__init__.py`.
-- `backend/app/api/v1/schemas_fase4.py`: Esquemas completos de validación Pydantic para creación, actualización, respuestas, filtros de búsqueda y acciones de Fase 4.
+- Actualización de `InventoryReservation` en `backend/app/models/fase1b.py`.
+- Actualización de `SaleOrder` en `backend/app/models/erp_documents.py`.
+- Constraints agregados a `SalePackingItem` y `SaleOrderReturn` en `backend/app/models/fase4.py`.
+- Soporte en `schemas_fase4.py` para cálculo automático bidireccional de `saldo_pct` cuando solo se proporciona `anticipo_pct`.
 
 ### 2.3 Router Canónico de Ventas (`backend/app/api/v1/erp_ventas_fase4.py`)
-- Montado bajo el prefijo canónico `/api/v1/ventas` en `backend/main.py`.
-- **Líneas y Modalidades Mixtas:**
-  - Líneas `ENTREGA_INMEDIATA`: Valida disponibilidad física real (`quantity - reserved`) con bloqueo pesimista `SELECT ... FOR UPDATE` sobre `inventory_levels` y genera reserva atómica en `inventory_reservations`.
-  - Líneas `POR_PEDIDO`: Quedan en estado `PENDIENTE` sin bloquear stock físico, a la espera de compra y recepción.
-  - Concurrencia segura: Ante solicitudes concurrentes de dos clientes por la última unidad disponible, exactamente un cliente obtiene la reserva inmediata y el segundo transiciona con error o modalidad por pedido.
-- **Pagos y Políticas de Despacho:**
-  - Validación de política de anticipo congelada (`snapshot`).
-  - Bloqueo determinista de duplicados vía `idempotency_key`.
-  - Verificación de pago del 100% para proceder al despacho cuando la política comercial lo exige, o requerimiento obligatorio de excepción autorizada (`policy_exception_authorized_by`, `policy_exception_reason`).
-  - Reversión atómica de pagos: marca el pago original como `REVERTIDO`, inserta un pago negativo de tipo `REVERSION`, recalcula `saldo_cop` y actualiza el estado del pedido.
-- **Cancelaciones Seguras y Residuos:**
-  - Liberación inmediata de todas las reservas de inventario activas enlazadas al pedido cancelado.
-  - Exigencia de decisión explícita sobre mercancía ya pedida o en tránsito (`STOCK_DISPONIBLE`, `DEVOLUCION_PROVEEDOR` o `CANCELACION_PEC`).
-  - Cálculo contable de saldo a favor del cliente (`anticipo_pagado - penalidades`).
-- **Empaque, Despacho y Entrega:**
-  - Agrupación eficiente de múltiples pedidos de venta en una misma sesión de empaque (`EMP-YYYY-####`) siempre que pertenezcan al mismo cliente.
-  - Rechazo estricto (`HTTP 422`) ante cualquier intento de mezclar ventas de clientes distintos en una misma sesión.
-  - Despacho físico atómico (`ENT-YYYY-####`) con deducción de stock en Kardex (`KardexDirection.OUT`), paso a `ENTREGADO` e idempotencia.
-- **Devoluciones, Cuarentena y Costeo:**
-  - Evaluación física de mercancía devuelta (`NUEVO_SELLADO`, `ABIERTO_BUENO`, `DEFECTUOSO`, `DAÑADO`).
-  - Reintegro directo a stock disponible o aislamiento estricto en cuarentena (`inventory_quarantine`) sin inflar stock vendible.
-  - Costeo unitario y cálculo exacto de rentabilidad real vs estimada (`real_profit_cop`).
-  - Mantenimiento riguroso de la segregación patrimonial (`NEBULAE` vs `MAU`).
-
-### 2.4 Integración Transversal en Compras e Inventario
-- `backend/app/api/v1/erp_compras.py` (`confirmar_recepcion`):
-  - Detección automática de líneas de pedido de compra originadas por pedidos de clientes (`origin_type = 'CUSTOMER_ORDER'`).
-  - Al recepcionar físicamente, se genera de forma inmediata la reserva en `inventory_reservations` asociada al `sale_order_line_id` y al cliente, actualizando el estado de la línea a `RECIBIDO` y avanzando el pedido de venta.
-  - Las recepciones parciales asignan únicamente las unidades aceptadas.
-  - La mercancía desviada a cuarentena no genera reserva activa vendible.
-- `backend/app/api/v1/erp_inventario.py` (`resolver_cuarentena`):
-  - Al liberar mercancía de cuarentena vinculada a una línea de pedido de cliente, se genera automáticamente la reserva asignada al cliente respectivo.
+- **Gestión Atómica de Inventario:**
+  - Registro sistemático de `InventoryOperation` antes de cada lote de movimientos Kardex (`InventoryMovement`).
+  - Direcciones Kardex normalizadas (`OUT` para despachos y proveedores, `RETURN_IN` para devoluciones a stock).
+  - Manejo de devoluciones a cuarentena con aislamiento físico (`InventoryQuarantine` con status `ACTIVO` y motivo `DEVOLUCION_CLIENTE`).
+- **Cancelaciones Seguras:**
+  - Exigencia estricta de `purchased_goods_decision` si existen compras o reservas activas.
+  - Reseteo atómico de `quantity_reserved` y liberación de reservas en inventario.
+  - Cálculo de saldo a favor del cliente retornado con aliases canónicos.
+- **Empaque y Despacho:**
+  - Homogeneidad estricta de clientes en sesiones de empaque.
+  - Soporte de cantidades empacables tanto para líneas con reserva previa como para compras asignadas.
+  - Validación de políticas de despacho nacional y horario de corte de fin de semana.
+  - Estado inicial `PREPARANDO` en entregas y transiciones validadas hacia `DESPACHADO` y `ENTREGADO`.
 
 ---
 
 ## 3. CERTIFICACIÓN Y RESULTADOS DE LAS SUITES DE PRUEBA
 
-### 3.1 Suites Específicas de Fase 4 (27/27 Tests Aprobados — 100%)
-1. **`tests/test_fase4_ventas_lineas_estados.py` (3 tests — PASSED):**
+### 3.1 Suites Específicas de Fase 4 (39/39 Tests Aprobados — 100%)
+1. **`tests/test_fase4_hardening.py` (12 tests — PASSED 100%):**
+   - Reversión financiera sin doble descuento 60/40.
+   - Doble reversión concurrente (exactamente una prospera).
+   - Rechazo de reversión sobre pagos no válidos o ya revertidos.
+   - Idempotencia determinista (replay 200 vs conflicto 409 con payload divergente).
+   - Reserva inmediata con columna explícita `idempotency_key`.
+   - Empaque: validaciones de cliente, SKU, cantidades y transición a `LISTO_DESPACHO`.
+   - Despacho parcial con split trazable de reserva y transiciones.
+   - Devoluciones: derivación forzosa de owner, SKU y límite acumulado.
+   - Cancelación parcial de línea con recálculo financiero.
+   - Máquinas de estados: rechazo de regresiones y saltos ilegales.
+   - Cálculo comercial: porcentajes complementarios al 100% y desglose de IVA/impuesto.
+   - Política de despacho: fronteras horarias Bogotá y excepciones autorizadas.
+2. **`tests/test_fase4_ventas_lineas_estados.py` (3 tests — PASSED 100%):**
    - Venta mixta (inmediata + por pedido).
    - Concurrencia pesimista entre dos clientes por la última unidad.
    - Derivación estricta de estados y transiciones de líneas.
-2. **`tests/test_fase4_asignacion_compras_recepcion.py` (5 tests — PASSED):**
+3. **`tests/test_fase4_asignacion_compras_recepcion.py` (5 tests — PASSED 100%):**
    - Asignación compras -> recepción -> reserva automática de cliente.
    - Recepción parcial asigna solo lo aceptado.
    - Cuarentena no crea reserva vendible; liberación crea la reserva correspondiente.
    - Replay de recepción no duplica reservas.
    - Compra con múltiples clientes y recepción parcial ordenada.
-3. **`tests/test_fase4_pagos_politicas.py` (4 tests — PASSED):**
+4. **`tests/test_fase4_pagos_politicas.py` (4 tests — PASSED 100%):**
    - Anticipo parcial, recálculo de saldo y pago completo.
    - Política 100% exige pago completo antes de entrega.
    - Bloqueo de pagos duplicados por `idempotency_key`.
    - Reversión atómica de pagos y restauración de saldo.
-4. **`tests/test_fase4_cancelaciones.py` (4 tests — PASSED):**
+5. **`tests/test_fase4_cancelaciones.py` (4 tests — PASSED 100%):**
    - Cancelación libera reservas activas de inventario.
    - Cancelación exige decisión explícita sobre mercancía.
    - Cálculo correcto de saldo a favor del cliente.
    - Rechazo de cancelación sobre pedidos ya cancelados.
-5. **`tests/test_fase4_empaque_despacho_entrega.py` (4 tests — PASSED):**
+6. **`tests/test_fase4_empaque_despacho_entrega.py` (4 tests — PASSED 100%):**
    - Agrupación multi-ventas del mismo cliente en empaque.
    - Rechazo estricto (422) al agrupar clientes diferentes.
    - Reglas operativas de despacho según política comercial y excepciones.
    - Despacho físico atómico e idempotente con movimientos Kardex OUT.
-6. **`tests/test_fase4_devoluciones_costeo.py` (3 tests — PASSED):**
+7. **`tests/test_fase4_devoluciones_costeo.py` (3 tests — PASSED 100%):**
    - Devolución a stock reintegra físico y balance Mau/Nebulae.
    - Devolución a cuarentena aísla físicamente sin sumar stock vendible.
    - Rentabilidad y segregación patrimonial Mau vs Nebulae.
-7. **`tests/test_fase4_migrations.py` (4 tests — PASSED):**
-   - Tablas, columnas, checks y precisión decimal de `fa4_001`.
+8. **`tests/test_fase4_migrations.py` (4 tests — PASSED 100%):**
+   - Tablas, columnas, checks y precisión decimal de `fa4_001` y `fa4_002`.
    - Auditoría estática: 0 `GRANT` hacia `nebulae_test` ni `GRANT ALL`.
-   - Roundtrip completo: downgrade a `fa3_002` -> upgrade a `head` (`fa4_001`) sin huérfanos.
+   - Roundtrip completo de migración sin huérfanos.
    - Verificación de producción: `erpdb` inalterada en `fa1a_002`.
 
 ### 3.2 Suites Globales del Repositorio
-- **Total de Pruebas Colectadas y Ejecutadas:** 254 tests.
-- **Resultado:** 254 PASSED (100% de éxito en Fases 1A, 1B, 2, 3 y 4).
-- **Cero Regresiones:** Compatibilidad íntegra confirmada en todos los módulos existentes.
+- **Total de Pruebas Colectadas y Ejecutadas:** 266 tests.
+- **Resultado:** 266 PASSED (100% de éxito en Fases 1A, 1B, 2, 3 y 4).
+- **Cero Regresiones:** Compatibilidad íntegra confirmada en todos los módulos del ERP.
 
 ### 3.3 Verificaciones de Seguridad y Frontend
 - **Producción (`erpdb`):**
-  - Comando: `SELECT version_num FROM alembic_version;`
+  - Consulta: `SELECT version_num FROM alembic_version;`
   - Resultado: `fa1a_002` (inalterada).
 - **Frontend (`frontend/`):**
   - Archivos modificados: 0.
@@ -133,34 +121,25 @@ En cumplimiento de las directrices formales aprobadas para la **Fase 4 — Venta
 
 ---
 
-## 4. ARCHIVOS CREADOS Y MODIFICADOS
+## 4. ARCHIVOS CREADOS Y MODIFICADOS EN EL HARDENING
 
 ### Archivos Creados
-- `backend/alembic/versions/fa4_001_sales_payments_delivery.py`
-- `backend/app/models/fase4.py`
-- `backend/app/api/v1/schemas_fase4.py`
-- `backend/app/api/v1/erp_ventas_fase4.py`
-- `backend/tests/test_fase4_ventas_lineas_estados.py`
-- `backend/tests/test_fase4_asignacion_compras_recepcion.py`
-- `backend/tests/test_fase4_pagos_politicas.py`
-- `backend/tests/test_fase4_cancelaciones.py`
-- `backend/tests/test_fase4_empaque_despacho_entrega.py`
-- `backend/tests/test_fase4_devoluciones_costeo.py`
-- `backend/tests/test_fase4_migrations.py`
+- `backend/alembic/versions/fa4_002_hardening_fase4.py`
+- `backend/tests/test_fase4_hardening.py`
 
 ### Archivos Modificados
-- `backend/app/models/__init__.py` (exportación de modelos Fase 4)
-- `backend/app/models/erp_documents.py` (soporte de columnas y relaciones)
-- `backend/app/models/fase1b.py` (relaciones con `SaleOrderLineErp`)
-- `backend/main.py` (montaje del router `/api/v1/ventas`)
-- `backend/app/api/v1/erp_compras.py` (integración `confirmar_recepcion` con reservas de cliente)
-- `backend/app/api/v1/erp_inventario.py` (integración `resolver_cuarentena` con líneas de venta)
-- `backend/tests/conftest.py` (teardown de tablas Fase 4 y parche de sesión)
-- `backend/tests/test_fase3_migrations.py` (compatibilidad de migración con versiones posteriores a `fa3_002`)
+- `backend/app/models/fase1b.py` (columna e índice único `idempotency_key`)
+- `backend/app/models/erp_documents.py` (columna `tax_cop`)
+- `backend/app/models/fase4.py` (constraints de empaque y devoluciones)
+- `backend/app/api/v1/schemas_fase4.py` (cálculo automático de porcentajes de saldo)
+- `backend/app/api/v1/erp_ventas_fase4.py` (refuerzo de operaciones, inventario, despacho y cancelaciones)
+- `backend/tests/test_fase3_migrations.py` (soporte de heads posteriores a `fa3_002`)
+- `backend/tests/test_fase4_migrations.py` (certificación de `fa4_002`)
+- `backend/tests/test_fase4_devoluciones_costeo.py` (expiración de sesión para aislamiento de pruebas)
 
 ---
 
 ## 5. ESTADO ACTUAL Y POLÍTICA DE FRONTERA
 
-- **Fase 4:** 100% COMPLETADA, VERIFICADA Y CERTIFICADA.
-- **Fase 5:** **NO INICIADA.** En estricto apego a las instrucciones, el agente se detiene aquí y solicita autorización explícita para cualquier fase posterior.
+- **Fase 4:** 100% ENDURECIDA, COMPLETADA, VERIFICADA Y CERTIFICADA.
+- **Fase 5:** **NO INICIADA.** En estricto apego a las directrices inviolables, el agente se detiene aquí y solicita autorización expresa para cualquier fase posterior.
