@@ -18,7 +18,8 @@ from app.models.erp_documents import (
 from app.models.inventory import InventoryLevel, Warehouse, InventoryOperation, InventoryMovement
 from app.models.fase1b import (
     GoodsReceiptLine, PurchaseOrderLine, InventoryOwnerBalance,
-    GoodsReceiptLineAllocation, ProcurementAllocation
+    GoodsReceiptLineAllocation, ProcurementAllocation,
+    InventoryReservation, SaleOrderLineErp,
 )
 from app.models.fase2 import Shipment, ShipmentEvent
 from app.models.fase3 import InventoryQuarantine
@@ -1848,12 +1849,51 @@ def confirmar_recepcion(
                             alloc_owner = "MAU" if alloc.allocation_type == "MAU_STOCK" else "NEBULAE"
                             owner_increments[(grl.sku_id, alloc_owner)] = owner_increments.get((grl.sku_id, alloc_owner), Decimal("0.00")) + take
                             if alloc.allocation_type == "CUSTOMER_ORDER" and alloc.sale_order_line_id:
+                                res_key = f"RECV_RES:{g.id}:{grl.id}:{alloc.id}"
+                                existing_res = db.execute(
+                                    select(InventoryReservation).where(
+                                        InventoryReservation.notes.ilike(f"%idempotency_key={res_key}%")
+                                    )
+                                ).scalar_one_or_none()
+
+                                if not existing_res:
+                                    res = InventoryReservation(
+                                        sku_id=grl.sku_id,
+                                        warehouse_id=warehouse_id,
+                                        owner=alloc_owner,
+                                        quantity_reserved=take,
+                                        sale_order_line_id=alloc.sale_order_line_id,
+                                        status="ACTIVE",
+                                        expires_at=now + datetime.timedelta(hours=120),
+                                        created_at=now,
+                                        created_by=user_label,
+                                        notes=f"Reserva automática recepción {g.numero} asignación {alloc.id} (idempotency_key={res_key})"
+                                    )
+                                    db.add(res)
+
+                                    sol = db.execute(
+                                        select(SaleOrderLineErp).where(SaleOrderLineErp.id == alloc.sale_order_line_id).with_for_update()
+                                    ).scalar_one_or_none()
+                                    if sol:
+                                        sol.quantity_reserved = Decimal(str(sol.quantity_reserved or 0)) + take
+                                        if sol.quantity_reserved >= sol.quantity:
+                                            sol.estado = "RESERVADA"
+                                        else:
+                                            sol.estado = "PARCIALMENTE_DISPONIBLE"
+                                        sol.updated_at = now
+
+                                        so = db.execute(select(SaleOrder).where(SaleOrder.id == sol.so_id).with_for_update()).scalar_one_or_none()
+                                        if so:
+                                            from app.api.v1.erp_ventas_fase4 import recalculate_sale_order_state
+                                            so.estado = recalculate_sale_order_state(so, db)
+                                            so.updated_at = now
+
                                 db.add(ActivityLog(
                                     entity_type="PVEN",
                                     entity_id=alloc.sale_order_line_id,
                                     entity_numero="",
-                                    action="MERCANCIA_EN_BARRANQUILLA",
-                                    description=f"{take} unidad(es) de SKU {grl.sku_id} recibidas en Barranquilla según {g.numero}. Pendiente de saldo y entrega.",
+                                    action="MERCANCIA_DISPONIBLE",
+                                    description=f"{take} unidad(es) de SKU {grl.sku_id} recibidas y reservadas en Barranquilla según {g.numero}.",
                                     user_name=user_label,
                                 ))
                     if rem_recv > 0:

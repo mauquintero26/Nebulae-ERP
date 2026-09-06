@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from app.api.v1 import auth, catalog, quotations, inventory, finance, store, crm, sales, purchases, webhooks, marketing, chat
-from app.api.v1 import erp_ventas, erp_compras, erp_compras_asignaciones, ecommerce, erp_logistica, erp_inventario
+from app.api.v1 import erp_ventas, erp_ventas_fase4, erp_compras, erp_compras_asignaciones, ecommerce, erp_logistica, erp_inventario
 from app.api import ws
 from app.db.database import Base, engine
 
@@ -56,6 +56,7 @@ app.include_router(marketing.router, prefix="/api/v1/marketing", tags=["Marketin
 app.include_router(chat.router, prefix="/api/v1/chat", tags=["Chat Omnicanal"])
 app.include_router(ws.router, prefix="/ws", tags=["WebSockets"])
 app.include_router(erp_ventas.router, prefix="/api/v1/ventas", tags=["ERP Ventas"])
+app.include_router(erp_ventas_fase4.router, prefix="/api/v1/ventas", tags=["ERP Ventas Fase 4"])
 app.include_router(erp_compras.router, prefix="/api/v1/compras", tags=["ERP Compras"])
 app.include_router(erp_compras_asignaciones.router, prefix="/api/v1/compras", tags=["ERP Compras - Asignaciones"])
 app.include_router(erp_logistica.router, prefix="/api/v1/logistica", tags=["ERP Logística y Tránsito"])

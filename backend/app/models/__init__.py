@@ -37,3 +37,14 @@ from app.models.fase2 import (
 from app.models.fase3 import (
     InventoryQuarantine,
 )
+
+# Fase 4 — modelos de ventas, pagos, empaque, entregas y devoluciones
+from app.models.fase4 import (
+    SaleOrderPayment,
+    SalePackingSession,
+    SalePackingItem,
+    SaleOrderDelivery,
+    SaleOrderDeliveryLine,
+    SaleOrderReturn,
+    SaleOrderReturnLine,
+)

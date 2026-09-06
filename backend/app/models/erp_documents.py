@@ -123,6 +123,18 @@ class SaleOrder(Base):
     canal_venta           = Column(String(30), nullable=True, default="CRM")  # CRM | WEB | PRESENCIAL
     pweb_numero           = Column(String(25), nullable=True, index=True)      # PWEB-YYYY####
     canal_metadata        = Column(JSON, nullable=True)                        # IP, user_agent, etc.
+    # ── Fase 4: Políticas de pago, rentabilidad y cancelación ─────────────────
+    anticipo_pct_snapshot          = Column(Numeric(5, 2), nullable=False, default=60.00)
+    saldo_pct_snapshot             = Column(Numeric(5, 2), nullable=False, default=40.00)
+    policy_exception_authorized_by = Column(String(150), nullable=True)
+    policy_exception_reason        = Column(Text, nullable=True)
+    total_cost_cop                 = Column(Numeric(14, 2), nullable=False, default=0.00)
+    estimated_profit_cop           = Column(Numeric(14, 2), nullable=False, default=0.00)
+    real_profit_cop                = Column(Numeric(14, 2), nullable=True)
+    profit_is_estimated            = Column(Boolean, nullable=False, default=True)
+    cancellation_reason            = Column(Text, nullable=True)
+    cancellation_authorized_by     = Column(String(150), nullable=True)
+    cancelled_at                   = Column(DateTime, nullable=True)
     created_at            = Column(DateTime, default=_now)
     updated_at            = Column(DateTime, default=_now, onupdate=_now)
     created_by            = Column(String(150), nullable=True)
@@ -130,6 +142,9 @@ class SaleOrder(Base):
     customer         = relationship("Customer", foreign_keys=[customer_id])
     quotation        = relationship("SalesQuotation", back_populates="sale_orders")
     payment_pendings = relationship("PaymentPending", back_populates="sale_order")
+    order_lines      = relationship("SaleOrderLineErp", back_populates="sale_order")
+    payments         = relationship("SaleOrderPayment", back_populates="sale_order", cascade="all, delete-orphan")
+    returns          = relationship("SaleOrderReturn", back_populates="sale_order")
 
 
 

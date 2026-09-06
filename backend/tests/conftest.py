@@ -120,6 +120,11 @@ def setup_test_db():
     # Cleanup: truncate all test data (best-effort, ignore missing tables)
     with test_engine.connect() as conn:
         for tbl in [
+            # Fase 4 — Ventas, Pagos, Empaque, Entregas y Devoluciones
+            "sale_order_return_lines", "sale_order_returns",
+            "sale_order_delivery_lines", "sale_order_deliveries",
+            "sale_packing_items", "sale_packing_sessions",
+            "sale_order_payments",
             # Fase 3 — Cuarentena
             "inventory_quarantine",
             # Fase 2 — Logística, Paquetes y Consolidaciones
@@ -165,6 +170,7 @@ def app_client(setup_test_db):
     import app.db.database as _db_module
     import app.api.v1.erp_compras as _compras_module
     import app.api.v1.erp_inventario as _inventario_module
+    import app.api.v1.erp_ventas_fase4 as _ventas_fase4_module
 
     # Override FastAPI dependency
     app.dependency_overrides[get_db] = override_get_db
@@ -177,6 +183,8 @@ def app_client(setup_test_db):
         _compras_module.SessionLocal = TestSessionLocal  # in case it's imported directly
     if hasattr(_inventario_module, "SessionLocal"):
         _inventario_module.SessionLocal = TestSessionLocal
+    if hasattr(_ventas_fase4_module, "SessionLocal"):
+        _ventas_fase4_module.SessionLocal = TestSessionLocal
 
     from fastapi.testclient import TestClient
     with TestClient(app, raise_server_exceptions=False) as client:

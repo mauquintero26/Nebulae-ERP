@@ -1163,6 +1163,62 @@ def resolve_quarantine_item(
                 created_at=now,
                 created_by=getattr(user, "email", str(getattr(user, "id", "system")))
             ))
+
+            # 4. Asignación prioritaria a CUSTOMER_ORDER si proviene de una recepción de compra
+            if q.gr_line_id:
+                from app.models.fase1b import GoodsReceiptLine, ProcurementAllocation, SaleOrderLineErp
+                from app.models.erp_documents import SaleOrder
+                from app.api.v1.erp_ventas_fase4 import recalculate_sale_order_state
+
+                grl = db.execute(select(GoodsReceiptLine).where(GoodsReceiptLine.id == q.gr_line_id)).scalar_one_or_none()
+                if grl and grl.po_line_id:
+                    allocs = db.execute(
+                        select(ProcurementAllocation).where(
+                            ProcurementAllocation.po_line_id == grl.po_line_id,
+                            ProcurementAllocation.allocation_type == "CUSTOMER_ORDER",
+                            ProcurementAllocation.sale_order_line_id.isnot(None)
+                        ).order_by(ProcurementAllocation.id)
+                    ).scalars().all()
+
+                    rem_lib = qty
+                    for alloc in allocs:
+                        if rem_lib <= 0:
+                            break
+                        sol = db.execute(
+                            select(SaleOrderLineErp).where(SaleOrderLineErp.id == alloc.sale_order_line_id).with_for_update()
+                        ).scalar_one_or_none()
+                        if sol:
+                            needed = max(Decimal("0.00"), Decimal(str(sol.quantity)) - Decimal(str(sol.quantity_reserved or 0)))
+                            if needed > 0:
+                                take_res = min(rem_lib, needed)
+                                res_key = f"QUAR_LIB_RES:{q.id}:{alloc.id}:{client_key}"
+                                res = InventoryReservation(
+                                    sku_id=q.sku_id,
+                                    warehouse_id=q.warehouse_id,
+                                    owner=item_owner,
+                                    quantity_reserved=take_res,
+                                    sale_order_line_id=sol.id,
+                                    status="ACTIVE",
+                                    expires_at=now + datetime.timedelta(hours=72),
+                                    created_at=now,
+                                    created_by=getattr(user, "email", "system"),
+                                    notes=f"Reserva por liberación de cuarentena CUAR-{q.id} (idempotency_key={res_key})"
+                                )
+                                db.add(res)
+                                sol.quantity_reserved = Decimal(str(sol.quantity_reserved or 0)) + take_res
+                                if sol.quantity_reserved >= sol.quantity:
+                                    sol.estado = "RESERVADA"
+                                else:
+                                    sol.estado = "PARCIALMENTE_DISPONIBLE"
+                                sol.updated_at = now
+
+                                so = db.execute(select(SaleOrder).where(SaleOrder.id == sol.so_id).with_for_update()).scalar_one_or_none()
+                                if so:
+                                    so.estado = recalculate_sale_order_state(so, db)
+                                    so.updated_at = now
+
+                                rem_lib -= take_res
+
             q.status = "LIBERADO"
         else:
             q.status = action
