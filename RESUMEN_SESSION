@@ -2,86 +2,216 @@
 
 **Fecha:** 2026-09-06  
 **Rama:** `main`  
-**Repositorio GitHub:** https://github.com/mauquintero26/Nebulae-ERP  
-**Estado General:** FASE 5 100% IMPLEMENTADA, INTEGRADA, AUDITADA Y CERTIFICADA (301/301 TESTS BACKEND APROBADOS — 0 FAILED, 0 ERRORS)  
-**Política de Frontera:** FASE 6 NO INICIADA — TRABAJO DETENIDO A LA ESPERA DE AUTORIZACIÓN EXPRESA  
-**Base de Datos Pruebas:** `erp_test` (PostgreSQL — versión Alembic `fa5_001` head, roundtrip y migración limpia)  
-**Base de Datos Producción:** `erpdb` (PostgreSQL — versión Alembic `fa1a_002` 100% INTACTA E INALTERADA)  
+**Repositorio Remoto GitHub:** https://github.com/mauquintero26/Nebulae-ERP  
+**Commits Fase 5:**
+- `395ebb5`: `feat(fase5): integracion del nucleo operativo con modulos erp (crm, cotizaciones, agenda, omnicanal, finanzas, ecommerce, webhooks, marketing)`
+- `77396c9`: `docs(fase5): resumen ejecutivo y tecnico de sesion, certificacion global 301/301 tests e invariantes de fase 5`
+- `cd273f6`: `docs(fase5): incluir tabla detallada de 43 archivos y 301 tests en resumenes de sesion`
+**Estado General:** FASE 5 100% IMPLEMENTADA, INTEGRADA, AUDITADA Y CERTIFICADA (301/301 TESTS APROBADOS — 0 FAILED, 0 ERRORS)  
+**Política de Frontera:** FASE 6 NO INICIADA — PROCESO DETENIDO A LA ESPERA DE AUTORIZACIÓN EXPRESA  
+**Base de Datos Pruebas:** `erp_test` (PostgreSQL en VPS — versión Alembic `fa5_001` head, roundtrip validado)  
+**Base de Datos Producción:** `erpdb` (PostgreSQL en VPS — versión Alembic `fa1a_002` 100% INTACTA E INALTERADA)  
 **Frontend Next.js:** 0 archivos modificados en `frontend/` (74 rutas compiladas con éxito vía `npm run build`, exit code 0)
 
 ---
 
 ## 1. ALCANCE Y OBJETIVOS DE LA FASE 5 CUMPLIDOS AL 100%
 
-En estricto cumplimiento de la autorización expresa del usuario (`AUTORIZACIÓN EXPRESA: INICIAR FASE 5 DE NEBULAE ERP`), se ejecutó la integración integral y armónica del núcleo operativo canónico (Fases 1 a 4) con la totalidad de los módulos del ecosistema ERP:
-1. **CRM 360 y Agenda Operativa:** Visión integral 360 del cliente sin duplicidad, consolidación de pedidos, cotizaciones, tickets, cartera e historial omnicanal; agenda con clave determinista por actividad y enmascaramiento seguro de costos/márgenes ante asesores comerciales (RBAC).
-2. **Cotización a Venta (Flujo Comercial Canónico):** Conversión atómica `convertir-a-venta` con soporte para líneas mixtas (entrega inmediata con auto-reserva vs por pedido), idempotencia estricta por clave o cotización, validación de incompatibilidad (HTTP 409), y registro sincronizado en el libro de pagos (`SaleOrderPayment`).
-3. **Asistente Omnicanal con IA:** Consultas de contexto operativo en tiempo real (estado de pedidos, despachos, tracking, catálogo), registro estructurado en bitácora de auditoría e interacciones, y bloqueo tajante de mutaciones operativas no autorizadas (HTTP 403).
-4. **Capa Financiera y Libro Mayor Reconciliado:** Cartera por cobrar (AR) con clasificación por ventanas de antigüedad (aging 0-30, 31-60, 61-90, >90), cuentas por pagar (AP) a proveedores, libro mayor reconciliado al centavo (`reconciliacion_cuadrada = True`), valoración de inventario segregada por propietario (`NEBULAE` vs `MAU`), y reporte auditado de mermas/scrap.
-5. **E-Commerce y Disponibilidad Vendible:** Catálogo digital conectado con el inventario canónico descontando reservas activas, cuarentena y scrap; ordenamiento y checkout concurrente con bloqueo pesimista `SELECT ... FOR UPDATE` y generación de reservas seguras.
-6. **Webhooks e Integraciones Asíncronas:** Bandeja de entrada `webhook_inbox_events` con procesamiento asíncrono, deduplicación idempotente, reintentos con retroceso exponencial y cola de mensajes muertos (`webhook_dead_letters`).
-7. **Marketing y Habeas Data:** Segmentación inteligente de clientes y gestión estricta del consentimiento (Ley 1581 de 2012 / Habeas Data) para WhatsApp, Email, SMS y llamadas, con revocación inmediata y filtrado en campañas.
+Siguiendo la orden explícita `AUTORIZACIÓN EXPRESA: INICIAR FASE 5 DE NEBULAE ERP`, se integró armónicamente el núcleo operativo canónico (Fases 1 a 4) con los módulos existentes del ERP, consolidando una arquitectura transaccional de única fuente de verdad:
+
+1. **CRM 360 Lógico Consolidado:**
+   - Vista agregada y estructurada por cliente en un solo llamado sin duplicar entidades.
+   - Consolida: datos del cliente, solicitudes/oportunidades, cotizaciones, ventas, líneas, pagos, anticipos, saldos, saldo a favor, productos pendientes de compra, compras asignadas, estado logístico, reservas, sesiones de empaque, entregas/guías, devoluciones, actividades y eventos.
+   - Seguridad y confidencialidad comercial: Enmascaramiento condicional de `cost_price`, `cost_total` y `margen_estimado_pct` (retornando `None` y `rentabilidad_autorizada = False`) si el usuario tiene rol de asesor comercial, mostrándolos únicamente si tiene rol `ADMIN` o `FINANZAS`.
+
+2. **Cotización a Venta Canónica (Cotiza → Venta):**
+   - Conversión atómica desde cotización aprobada hacia pedido de venta (`SaleOrder`).
+   - Mantiene: `cot_id`, `sc_id`, `customer_id`, líneas, SKU, modalidad, cantidades, precios, descuentos, impuestos, TRM y notas.
+   - Soporte para líneas mixtas: auto-reserva con `check_and_reserve_stock` para `ENTREGA_INMEDIATA` y transición a `PENDIENTE_COMPRA` para `POR_PEDIDO`.
+   - Derivación automática del estado global del pedido (`PENDIENTE_COMPRA`, `LISTO_ENTREGA`, `EN_PROCESO`).
+   - Idempotencia estricta: reintento idéntico por `idempotency_key` o cotización ya convertida retorna `200 OK` con `idempotent_replay = True`.
+   - Rechazo de divergencias: cotización rechazada, cancelada o ya convertida con diferente clave retorna `409 Conflict`.
+   - Cuadre contable sincronizado: creación automática de registro en `SaleOrderPayment` para el `anticipo_cop`, garantizando libro mayor 100% cuadrado.
+
+3. **Agenda Operativa y Calendario Determinista:**
+   - Generación y consulta dinámica de actividades operativas del cliente y logística.
+   - Hitos cubiertos: anticipo pendiente, confirmación de proveedor, tracking pendiente, recepción estimada, llegada a Barranquilla, saldo pendiente, mercancía lista para entregar, empaque pendiente, despacho programado, entrega pendiente de confirmar y garantías/devoluciones.
+   - Deduplicación absoluta mediante clave hash MD5 determinista (`fingerprint = md5(tipo + origen_id + fecha)`).
+
+4. **Asistente Omnicanal con IA:**
+   - Capa de lectura contextual y segura para consultar estado de cotizaciones, pedidos, productos comprados, tracking, saldo, mercancía disponible, empaques, entregas, guías y devoluciones.
+   - Bitácora estructurada de auditoría en la tabla `omnichannel_interaction_logs` (canal, cliente, conversación, acción, resultado, entidad, usuario).
+   - Bloqueo de mutaciones no autorizadas: endpoint `/reject-unauthorized-mutation` que rechaza cualquier intento de mutación directa con `403 Forbidden`.
+
+5. **Capa Financiera y Libro Mayor Reconciliado:**
+   - Cuentas por Cobrar (AR) agrupadas por cliente y clasificadas deterministamente por ventanas de aging (0-30, 31-60, 61-90, >90 días) con conversión segura de fechas.
+   - Cuentas por Pagar (AP) a proveedores calculadas en vivo desde órdenes de compra activas.
+   - Libro Mayor reconciliado al centavo (`reconciliacion_cuadrada = True`), balanceando ventas facturadas, recaudo neto y cartera.
+   - Valoración de inventario segregada patrimonialmente por propietario (`NEBULAE` vs `MAU`).
+   - Reporte auditado de mermas (SCRAP) y devoluciones de clientes destruidas.
+
+6. **E-Commerce y Disponibilidad Vendible Real:**
+   - Catálogo digital enriquecido con SKUs canónicos y disponibilidad vendible real:
+     $$\text{stock\_vendible} = \max(0, \text{físico} - \text{reservas\_activas} - \text{cuarentena} - \text{scrap})$$
+   - Checkout web concurrente protegido con bloqueo pesimista `SELECT ... FOR UPDATE` y generación automática de pago en pasarela en `SaleOrderPayment`.
+   - Prohibición estricta de publicar mercancía reservada, en cuarentena o de propietario no autorizado.
+
+7. **Webhooks e Integraciones Asíncronas:**
+   - Bandeja de entrada desacoplada `webhook_inbox_events` con estados `PENDING`, `PROCESSED`, `FAILED`, `RETRYING`.
+   - Deduplicación idempotente ante reintentos de pasarelas (HTTP 200 con evento previo).
+   - Reintentos seguros con backoff exponencial y cola de mensajes muertos (`webhook_dead_letters`) tras agotar reintentos máximos.
+   - Cero llamadas externas reales durante tests y cero credenciales hardcodeadas.
+
+8. **Marketing y Habeas Data:**
+   - Segmentación inteligente de clientes por categorías, cartera pendiente, frecuencia e inactividad.
+   - Gestión explícita de consentimiento de contacto (Ley 1581 de 2012 / Habeas Data) para WhatsApp, Email, SMS y llamadas, con revocación en tiempo real y filtrado de listas.
 
 ---
 
-## 2. ARQUITECTURA DE INTEGRACIÓN Y CAMBIOS TÉCNICOS
+## 2. ARQUITECTURA DE INTEGRACIONES Y BASE DE DATOS
 
-### 2.1. Modelos de Base de Datos y Migración Alembic (`fa5_001_integracion_erp`)
-- **Migración Canónica:** `backend/alembic/versions/fa5_001_integracion_erp.py` (down_revision = `fa4_004`).
-- **Nuevas Tablas Creadas:**
-  - `marketing_campaigns`: Gestión de campañas de mercadeo con presupuesto, canales, fechas y estado.
+### 2.1. Migración Alembic `fa5_001_integracion_erp`
+- **Archivo:** `backend/alembic/versions/fa5_001_integracion_erp.py`
+- **Cadena de Migraciones:** `fa4_004` → `fa5_001`
+- **Tablas Creadas:**
+  - `marketing_campaigns`: Campañas comerciales con presupuesto, canal y fechas.
   - `marketing_consent_preferences`: Registro explícito de consentimiento de contacto por cliente, canal y base legal.
   - `omnichannel_interaction_logs`: Bitácora estructurada de interacciones con el asistente omnicanal e IA.
   - `webhook_inbox_events`: Eventos recibidos de pasarelas y plataformas con clave de idempotencia y conteo de intentos.
   - `webhook_inbox_logs`: Auditoría de procesamiento y trazas de error de webhooks.
   - `webhook_dead_letters`: Almacén de eventos fallidos tras agotar reintentos máximos para análisis post-mortem.
-- **Campos Agregados:**
+- **Columnas Agregadas:**
   - `sales_quotations.convertida_en_so_id`: Trazabilidad directa de cotización a orden de venta.
-  - `sale_orders.canal_venta`, `sale_orders.pweb_numero`, `sale_orders.canal_metadata`: Canal de origen y metadatos de idempotencia.
+  - `sale_orders.canal_venta`, `sale_orders.pweb_numero`, `sale_orders.canal_metadata`.
 
-### 2.2. Módulos y Rutas Endurecidas
-- **`backend/app/api/v1/crm.py`:** Endpoint `/api/v1/crm/customer/{id}/360` con agregación de cotizaciones, pedidos, facturación y cartera. Enmascaramiento condicional de `cost_price` y `margen_estimado_pct` si el usuario no tiene rol `ADMIN` o `FINANZAS`. Endpoint `/api/v1/crm/agenda/actividades-operativas` con deduplicación por clave hash MD5 determinista.
-- **`backend/app/api/v1/erp_ventas_fase4.py`:** Endpoint `/api/v1/ventas/cotizaciones/{id}/convertir-a-venta` con validación de líneas, auto-reserva con `check_and_reserve_stock`, derivación de estado global (`PENDIENTE_COMPRA`, `LISTO_ENTREGA`, `EN_PROCESO`) y registro automático del anticipo en `SaleOrderPayment`.
-- **`backend/app/api/v1/finance.py`:** Endpoints `/accounts-receivable`, `/accounts-payable`, `/ledger/reconciliation`, `/inventory-valuation`, `/losses-and-scrap` y `/profitability`. Corrección de cálculo de fechas convirtiendo de forma segura objetos `datetime`/`date` para evitar TypeErrors, y conciliación documental para cuadre de libro mayor perfecto.
-- **`backend/app/api/v1/ecommerce.py`:** Enriquecimiento de `/catalogo` para exponer SKUs canónicos y disponibilidad vendible real (`stock_vendible = fisico - reservas - cuarentena - scrap`). Concurrencia pesimista en creación de pedidos web con inserción de pago en pasarela.
-- **`backend/app/api/v1/webhooks.py`:** Endpoint `/api/v1/webhooks/inbox` con verificación de idempotencia, reintentos y dead-letter.
-- **`backend/app/api/v1/marketing.py`:** Endpoint de segmentación y gestión de preferencias de consentimiento Habeas Data `/api/v1/marketing/consentimiento`.
-- **`backend/app/api/v1/chat.py`:** Integración omnicanal `/api/v1/chat/omnichannel/query` y rechazo estricto de mutaciones operativas.
+### 2.2. Diagrama de Flujo e Integración
+
+```mermaid
+flowchart TD
+    subgraph Canales_Entrantes ["Puntos de Contacto y Canales"]
+        Web[E-commerce Storefront]
+        CRM[CRM Comercial & Asesores]
+        Omni[Asistente Omnicanal / IA]
+        HookIn[Pasarelas: MP / Wompi / Carrier Webhooks]
+    end
+
+    subgraph Capa_Integracion_Fase5 ["Capa de Integración y Adaptadores (Fase 5)"]
+        Inbox[Webhook Inbox Eventos & Logs]
+        ChatRouter[Omnichannel Read-Only Context Engine]
+        ConvVenta[Convertir-a-Venta Service & Split Líneas]
+        CatalogoDisp[Motor Disponibilidad Vendible Real]
+        MktEngine[Habeas Data Consent & Segmentador]
+    end
+
+    subgraph Nucleo_Operativo ["Núcleo Operativo Canónico (Fases 1-4)"]
+        Order[SaleOrder & Líneas ERP]
+        StockRes[InventoryReservations & Stock Físico]
+        Ledger[SaleOrderPayments & Tesorería]
+        Quar[InventoryQuarantine & Balances Propietario]
+        Audit[ActivityLogs]
+    end
+
+    subgraph Resiliencia ["Resiliencia y Dead-Letter"]
+        DeadLetter[Webhook Dead-Letter Queue]
+    end
+
+    Web -->|Checkout Concurrente Pesimista| CatalogoDisp
+    CatalogoDisp -->|Reserva Atómica| StockRes
+    CatalogoDisp -->|Venta Web| Order
+    Web -->|Pago Pasarela| Ledger
+
+    CRM -->|Cotización Aprobada| ConvVenta
+    ConvVenta -->|Split Inmediata / Por Pedido| Order
+    ConvVenta -->|Auto-Reserva Stock| StockRes
+    ConvVenta -->|Registro Anticipo| Ledger
+    ConvVenta -->|Auditoría| Audit
+
+    HookIn -->|Idempotencia SHA-256| Inbox
+    Inbox -->|Fallo > Max Reintentos| DeadLetter
+    Inbox -->|Éxito| Order
+
+    Omni -->|Consulta Lectura Segura| ChatRouter
+    ChatRouter -.->|Lectura Sin Mutación| Order
+    ChatRouter -.->|Lectura| StockRes
+
+    MktEngine -->|Filtro Legal Habeas Data| CRM
+```
 
 ---
 
-## 3. CERTIFICACIÓN GLOBAL DE PRUEBAS (301 / 301 TESTS PASADOS)
+## 3. MATRIZ DE ROLES Y PERMISOS (RBAC)
 
-### 3.1. Suite Fase 5 (`tests/test_fase5_integracion_erp.py` — 18 Tests Aprobados)
-1. `test_01_crm_360_sin_duplicados_y_entidades_canonicas`: **PASSED**
-2. `test_02_crm_360_seguridad_rentabilidad_enmascarada_para_asesor`: **PASSED**
-3. `test_03_cotiza_a_venta_conversion_lineas_mixtas_inmediata_y_pedido`: **PASSED**
-4. `test_04_cotiza_a_venta_idempotencia_replay_200`: **PASSED**
-5. `test_05_cotiza_a_venta_incompatible_409`: **PASSED**
-6. `test_06_agenda_operativa_sin_duplicados_clave_determinista`: **PASSED**
-7. `test_07_asistente_omnicanal_consulta_segura_y_registro_interaccion`: **PASSED**
-8. `test_08_asistente_omnicanal_bloqueo_mutaciones_no_autorizadas`: **PASSED**
-9. `test_09_cuentas_por_cobrar_reconciliadas_con_ledger`: **PASSED**
-10. `test_10_cuentas_por_pagar_proveedores`: **PASSED**
-11. `test_11_inventario_ecommerce_excluye_reservas_cuarentena_scrap`: **PASSED**
-12. `test_12_venta_ecommerce_concurrente_ultima_unidad_pesimista`: **PASSED**
-13. `test_13_webhooks_idempotencia_duplicados_200`: **PASSED**
-14. `test_14_webhooks_reintentos_y_dead_letter`: **PASSED**
-15. `test_15_separacion_patrimonial_nebulae_y_mau_en_finanzas`: **PASSED**
-16. `test_16_marketing_segmentacion_y_habeas_data_consentimiento`: **PASSED**
-17. `test_17_compatibilidad_rutas_existentes`: **PASSED**
-18. `test_18_seguridad_rbac_y_cero_llamadas_externas`: **PASSED**
+| Módulo / Recurso | ADMIN | FINANZAS | ASESOR | BODEGA | COMPRAS |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **CRM 360: Datos Básicos e Historial** | Total | Total | Total | Solo Lectura | Solo Lectura |
+| **CRM 360: Costos y Márgenes** | **Visible** | **Visible** | **Enmascarado (`None`)** | **Enmascarado (`None`)** | **Enmascarado (`None`)** |
+| **Agenda Operativa** | Total | Total | Total | Total | Total |
+| **Cotización → Venta** | Ejecución | Solo Lectura | Ejecución | Denegado (403) | Denegado (403) |
+| **Cartera (AR) y Proveedores (AP)** | Total | Total | Denegado (403) | Denegado (403) | Denegado (403) |
+| **Libro Mayor & Reconciliación** | Total | Total | Denegado (403) | Denegado (403) | Denegado (403) |
+| **Valoración Inventario (NEBULAE/MAU)**| Total | Total | Denegado (403) | Denegado (403) | Denegado (403) |
+| **Rentabilidad Real** | Total | Total | Denegado (403) | Denegado (403) | Denegado (403) |
+| **Empaque & Despachos** | Total | Solo Lectura | Solo Lectura | Ejecución | Denegado (403) |
+| **Órdenes de Compra (PEC)** | Total | Solo Lectura | Solo Lectura | Solo Lectura | Ejecución |
+| **Marketing & Habeas Data** | Total | Solo Lectura | Total | Denegado (403) | Denegado (403) |
 
-### 3.2. Idempotencia y Teardown Limpio
-- La suite de Fase 5 fue ejecutada dos veces consecutivas en su totalidad (`18 passed` en corrida 1, `18 passed` en corrida 2) certificando ausencia de contaminación de base de datos o dependencias de orden.
+---
 
-### 3.3. Suite Completa Preexistente (Fases 1 a 4 — 283 Tests Aprobados)
-- Total tests ejecutados en el proyecto: **301 tests**.
-- Total aprobados: **301 tests (100%)**.
-- Tests fallidos: **0**.
-- Tests con error: **0**.
+## 4. ENDPOINTS AGREGADOS Y ENRIQUECIDOS
 
-#### Desglose Exhaustivo de Tests por Archivo (43 Archivos, 301 Tests):
+| Método | Endpoint | Roles Permitidos | Propósito y Contrato |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/v1/crm/customer/{id}/360` | `ADMIN`, `FINANZAS`, `ASESOR`, `BODEGA` | Vista 360 del cliente. Enmascara costos/márgenes a asesores (`None`). |
+| `GET` | `/api/v1/crm/agenda/actividades-operativas` | `ALL_ERP_ROLES` | Agenda operativa con deduplicación determinista por MD5. |
+| `POST` | `/api/v1/ventas/cotizaciones/{id}/convertir-a-venta` | `ADMIN`, `ASESOR` | Conversión atómica a venta con soporte de líneas mixtas e idempotencia. |
+| `POST` | `/api/v1/chat/omnichannel/query` | `ALL_ERP_ROLES` | Consulta de contexto logístico y comercial para el asistente con bitácora. |
+| `POST` | `/api/v1/chat/omnichannel/reject-unauthorized-mutation` | Todos (Bloqueado) | Retorna siempre `403 Forbidden` para blindar el núcleo de mutaciones del bot. |
+| `GET` | `/api/v1/finance/accounts-receivable` | `ADMIN`, `FINANZAS` | Cuentas por cobrar agrupadas por cliente y clasificadas por aging determinista. |
+| `GET` | `/api/v1/finance/accounts-payable` | `ADMIN`, `FINANZAS` | Cuentas por pagar a proveedores vinculadas a órdenes de compra. |
+| `GET` | `/api/v1/finance/ledger/reconciliation` | `ADMIN`, `FINANZAS` | Libro mayor reconciliado con cuadre de ventas, recaudo y cartera. |
+| `GET` | `/api/v1/finance/inventory-valuation` | `ADMIN`, `FINANZAS` | Valorización de inventario segregado patrimonialmente entre `NEBULAE` y `MAU`. |
+| `GET` | `/api/v1/finance/losses-and-scrap` | `ADMIN`, `FINANZAS` | Reporte de mermas operativas y devoluciones destruidas. |
+| `GET` | `/api/v1/finance/profitability` | `ADMIN`, `FINANZAS` | Rentabilidad global y por propietario. Rechaza asesores comerciales (403). |
+| `GET` | `/api/v1/ecommerce/catalogo` | Público / Web | Catálogo digital con stock vendible real neto de reservas y cuarentena. |
+| `POST` | `/api/v1/ecommerce/pedidos` | Público / Web | Checkout e-commerce concurrente con bloqueo pesimista y reserva. |
+| `POST` | `/api/v1/webhooks/inbox` | Servicios Externos / Secret | Recepción idempotente de eventos webhook con reintentos y dead-letter. |
+| `GET` | `/api/v1/marketing/segmentacion` | `ADMIN`, `ASESOR` | Segmentación de clientes por categorías, cartera, frecuencia e inactividad. |
+| `POST` | `/api/v1/marketing/consentimiento` | `ADMIN`, `ASESOR` | Registro y revocación de consentimiento de contacto Ley 1581 (Habeas Data). |
+
+---
+
+## 5. CERTIFICACIÓN GLOBAL DE PRUEBAS (301 / 301 TESTS PASADOS)
+
+### 5.1. Suite de Integración Fase 5 (`tests/test_fase5_integracion_erp.py` — 18 Tests Aprobados)
+
+| # | Nombre de Prueba | Estado | Descripción |
+| :---: | :--- | :---: | :--- |
+| 1 | `test_01_crm_360_sin_duplicados_y_entidades_canonicas` | **PASSED** | Vista 360 consolidada con entidades canónicas sin duplicidad. |
+| 2 | `test_02_crm_360_seguridad_rentabilidad_enmascarada_para_asesor` | **PASSED** | Costos y margen enmascarados como `None` para asesores. |
+| 3 | `test_03_cotiza_a_venta_conversion_lineas_mixtas_inmediata_y_pedido` | **PASSED** | Conversión con líneas mixtas y auto-reserva inmediata. |
+| 4 | `test_04_cotiza_a_venta_idempotencia_replay_200` | **PASSED** | Replay idéntico retorna 200 OK con el pedido original. |
+| 5 | `test_05_cotiza_a_venta_incompatible_409` | **PASSED** | Rechazo 409 ante cotización cancelada o conflicto de clave. |
+| 6 | `test_06_agenda_operativa_sin_duplicados_clave_determinista` | **PASSED** | Actividades automáticas deduplicadas mediante MD5 determinista. |
+| 7 | `test_07_asistente_omnicanal_consulta_segura_y_registro_interaccion` | **PASSED** | Consulta de contexto logístico y registro en bitácora. |
+| 8 | `test_08_asistente_omnicanal_bloqueo_mutaciones_no_autorizadas` | **PASSED** | Bloqueo estricto 403 de mutaciones directas desde el asistente. |
+| 9 | `test_09_cuentas_por_cobrar_reconciliadas_con_ledger` | **PASSED** | Cartera con aging determinista y libro mayor 100% cuadrado. |
+| 10 | `test_10_cuentas_por_pagar_proveedores` | **PASSED** | Cuentas por pagar a proveedores desde órdenes de compra. |
+| 11 | `test_11_inventario_ecommerce_excluye_reservas_cuarentena_scrap` | **PASSED** | Disponibilidad vendible excluye reservas, cuarentena y scrap. |
+| 12 | `test_12_venta_ecommerce_concurrente_ultima_unidad_pesimista` | **PASSED** | Bloqueo pesimista concurrente en checkout web por última unidad. |
+| 13 | `test_13_webhooks_idempotencia_duplicados_200` | **PASSED** | Webhook deduplica eventos recibidos repetidos con 200 OK. |
+| 14 | `test_14_webhooks_reintentos_y_dead_letter` | **PASSED** | Reintentos con backoff y derivación a dead-letter tras fallos. |
+| 15 | `test_15_separacion_patrimonial_nebulae_y_mau_en_finanzas` | **PASSED** | Balances, costos y valoración segregados por NEBULAE vs MAU. |
+| 16 | `test_16_marketing_segmentacion_y_habeas_data_consentimiento` | **PASSED** | Segmentación por comportamiento y consentimiento Habeas Data. |
+| 17 | `test_17_compatibilidad_rutas_existentes` | **PASSED** | Cero rupturas de contratos preexistentes en endpoints. |
+| 18 | `test_18_seguridad_rbac_y_cero_llamadas_externas` | **PASSED** | RBAC financiero validado y cero llamadas externas en tests. |
+
+### 5.2. Evidencia de Doble Ejecución Consecutiva (Idempotencia Total)
+- **Corrida 1:** `18 passed, 204 warnings in 141.59s (0:02:21)`
+- **Corrida 2:** `18 passed, 204 warnings in 131.29s (0:02:11)`
+- Certifica que ninguna prueba deja basura en base de datos ni contamina estados posteriores.
+
+### 5.3. Desglose Exhaustivo de Tests por Archivo (43 Archivos, 301 Tests Aprobados)
+
 | Archivo de Prueba | Conteo de Tests | Estado |
 | :--- | :---: | :---: |
 | `tests/test_auth_roles.py` | 8 | PASSED |
@@ -127,11 +257,11 @@ En estricto cumplimiento de la autorización expresa del usuario (`AUTORIZACIÓN
 | `tests/test_receipt_idempotency.py` | 6 | PASSED |
 | `tests/test_receipt_partial.py` | 5 | PASSED |
 | `tests/test_z_migrations_fase1b.py` | 5 | PASSED |
-| **TOTAL GENERAL** | **301** | **100% PASSED** |
+| **TOTAL GENERAL** | **301** | **100% PASSED (0 FAILED, 0 ERRORS)** |
 
 ---
 
-## 4. VERIFICACIÓN DE INVARIANTES Y POLÍTICAS INVIOLABLES
+## 6. VERIFICACIÓN DE INVARIANTES Y POLÍTICAS INVIOLABLES
 
 | Invariante | Estado | Evidencia Técnica |
 | :--- | :---: | :--- |
@@ -144,9 +274,22 @@ En estricto cumplimiento de la autorización expresa del usuario (`AUTORIZACIÓN
 
 ---
 
-## 5. CONCLUSIÓN Y PRÓXIMOS PASOS
+## 7. HISTORIAL DE COMMITS Y SINCRONIZACIÓN GITHUB
 
-La **Fase 5 — Integración del Núcleo Operativo con Módulos ERP** ha quedado formalmente concluida, validada, auditada y certificada.
+El repositorio en GitHub (`mauquintero26/Nebulae-ERP`) se encuentra sincronizado con la rama `main` en estado limpio (`working tree clean`):
+
+```
+cd273f6 docs(fase5): incluir tabla detallada de 43 archivos y 301 tests en resumenes de sesion
+77396c9 docs(fase5): resumen ejecutivo y tecnico de sesion, certificacion global 301/301 tests e invariantes de fase 5
+395ebb5 feat(fase5): integracion del nucleo operativo con modulos erp (crm, cotizaciones, agenda, omnicanal, finanzas, ecommerce, webhooks, marketing)
+e1fe838 docs: actualizar RESUMEN_SESSION con desglose detallado de pruebas y certificacion de fase 4
+```
+
+---
+
+## 8. CONCLUSIÓN Y PRÓXIMOS PASOS
+
+La **Fase 5 — Integración del Núcleo Operativo con Módulos ERP** ha quedado formalmente finalizada, auditada y certificada con 301/301 tests exitosos.
 
 **ESTADO ACTUAL:** El sistema se encuentra en reposo absoluto a la espera de instrucciones del usuario.  
 **ALERTA DE SEGURIDAD:** **NO** se iniciará la Fase 6 hasta recibir autorización expresa.
