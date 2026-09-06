@@ -493,6 +493,101 @@ def create_sale_order_canonical(
 # 2. ENTREGA INMEDIATA (RESERVA AUTOMÁTICA Y PESIMISTA)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def check_and_reserve_stock(
+    db: Session,
+    sku_id: int,
+    warehouse_id: int,
+    owner: str,
+    qty_to_reserve: Decimal,
+    sale_order_line_id: int,
+    idempotency_key: str,
+    user_name: str,
+    now: datetime.datetime,
+    notes: str = ""
+) -> InventoryReservation:
+    """
+    Calcula simultáneamente la disponibilidad física y por propietario:
+      disponible_fisico = InventoryLevel.quantity - SUM(ACTIVE res para SKU y bodega)
+      disponible_owner  = InventoryOwnerBalance.quantity - SUM(ACTIVE res para SKU, bodega y owner)
+    Bloquea de forma transaccional pesimista InventoryLevel e InventoryOwnerBalance.
+    Exige: qty_to_reserve <= disponible_fisico Y qty_to_reserve <= disponible_owner.
+    Si alguna condición falla, levanta HTTP 409 Conflict.
+    Crea, persiste y retorna InventoryReservation con status ACTIVE.
+    """
+    # 1. Bloqueo transaccional pesimista de InventoryLevel
+    lvl = db.execute(
+        select(InventoryLevel).where(
+            InventoryLevel.sku_id == sku_id,
+            InventoryLevel.warehouse_id == warehouse_id
+        ).with_for_update()
+    ).scalar_one_or_none()
+    if not lvl:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"No existe nivel de inventario para SKU {sku_id} en bodega {warehouse_id}"
+        )
+
+    # 2. Bloqueo transaccional pesimista de InventoryOwnerBalance para el owner exacto
+    owner_bal = db.execute(
+        select(InventoryOwnerBalance).where(
+            InventoryOwnerBalance.sku_id == sku_id,
+            InventoryOwnerBalance.warehouse_id == warehouse_id,
+            InventoryOwnerBalance.owner == owner
+        ).with_for_update()
+    ).scalar_one_or_none()
+
+    # 3. Sumar reservas activas físicas (globales SKU + warehouse)
+    active_res_fisico = db.execute(
+        select(func.coalesce(func.sum(InventoryReservation.quantity_reserved), Decimal("0.00"))).where(
+            InventoryReservation.sku_id == sku_id,
+            InventoryReservation.warehouse_id == warehouse_id,
+            InventoryReservation.status == "ACTIVE"
+        )
+    ).scalar() or Decimal("0.00")
+    disponible_fisico = max(Decimal("0.00"), Decimal(str(lvl.quantity)) - Decimal(str(active_res_fisico)))
+
+    # 4. Sumar reservas activas del propietario (SKU + warehouse + owner)
+    active_res_owner = db.execute(
+        select(func.coalesce(func.sum(InventoryReservation.quantity_reserved), Decimal("0.00"))).where(
+            InventoryReservation.sku_id == sku_id,
+            InventoryReservation.warehouse_id == warehouse_id,
+            InventoryReservation.owner == owner,
+            InventoryReservation.status == "ACTIVE"
+        )
+    ).scalar() or Decimal("0.00")
+    owner_qty = Decimal(str(owner_bal.quantity)) if owner_bal else Decimal("0.00")
+    disponible_owner = max(Decimal("0.00"), owner_qty - Decimal(str(active_res_owner)))
+
+    # 5. Validaciones de suficiencia simultánea
+    if disponible_fisico < qty_to_reserve:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Stock físico insuficiente en bodega {warehouse_id}: disponible {disponible_fisico}, requerido {qty_to_reserve}"
+        )
+    if disponible_owner < qty_to_reserve:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Balance disponible insuficiente del propietario '{owner}' en bodega {warehouse_id}: disponible {disponible_owner}, requerido {qty_to_reserve}"
+        )
+
+    # 6. Crear la reserva
+    rsv = InventoryReservation(
+        sku_id=sku_id,
+        warehouse_id=warehouse_id,
+        owner=owner,
+        quantity_reserved=qty_to_reserve,
+        sale_order_line_id=sale_order_line_id,
+        status="ACTIVE",
+        idempotency_key=idempotency_key,
+        created_by=user_name,
+        created_at=now,
+        notes=notes or f"Reserva línea {sale_order_line_id}"
+    )
+    db.add(rsv)
+    db.flush()
+    return rsv
+
+
 @router.post("/pedidos/{so_id}/lineas/{line_id}/confirmar-inmediata")
 def confirm_immediate_sale_line(
     so_id: int,
@@ -549,60 +644,19 @@ def confirm_immediate_sale_line(
             "data": {"quantity_reserved": float(line.quantity_reserved)}
         }
 
-    # Bloquear InventoryLevel e InventoryOwnerBalance
-    lvl = db.execute(
-        select(InventoryLevel).where(
-            InventoryLevel.sku_id == line.sku_id,
-            InventoryLevel.warehouse_id == warehouse_id
-        ).with_for_update()
-    ).scalar_one_or_none()
-    if not lvl:
-        raise HTTPException(409, f"No existe nivel de inventario para SKU {line.sku_id} en bodega {warehouse_id}")
-
-    active_res = db.execute(
-        select(func.coalesce(func.sum(InventoryReservation.quantity_reserved), Decimal("0.00"))).where(
-            InventoryReservation.sku_id == line.sku_id,
-            InventoryReservation.warehouse_id == warehouse_id,
-            InventoryReservation.status == "ACTIVE"
-        )
-    ).scalar() or Decimal("0.00")
-
-    disponible = Decimal(str(lvl.quantity)) - Decimal(str(active_res))
-    if disponible < qty_to_reserve:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Stock insuficiente para entrega inmediata: solicitado {qty_to_reserve}, disponible {disponible}"
-        )
-
-    # Validar balance del propietario
-    owner_bal = db.execute(
-        select(InventoryOwnerBalance).where(
-            InventoryOwnerBalance.sku_id == line.sku_id,
-            InventoryOwnerBalance.warehouse_id == warehouse_id,
-            InventoryOwnerBalance.owner == line.owner
-        ).with_for_update()
-    ).scalar_one_or_none()
-    if not owner_bal or Decimal(str(owner_bal.quantity)) < qty_to_reserve:
-        bal_qty = Decimal(str(owner_bal.quantity)) if owner_bal else Decimal("0.00")
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Balance insuficiente del propietario {line.owner}: requerido {qty_to_reserve}, balance actual {bal_qty}"
-        )
-
-    # Crear reserva con columna idempotency_key
-    rsv = InventoryReservation(
+    # Reservar mediante helper canónico con validación simultánea física y de propietario
+    rsv = check_and_reserve_stock(
+        db=db,
         sku_id=line.sku_id,
         warehouse_id=warehouse_id,
         owner=line.owner,
-        quantity_reserved=qty_to_reserve,
+        qty_to_reserve=qty_to_reserve,
         sale_order_line_id=line.id,
-        status="ACTIVE",
         idempotency_key=idempotency_key,
-        created_by=user_name,
-        created_at=now,
+        user_name=user_name,
+        now=now,
         notes=f"Reserva inmediata pedido {so.numero} línea {line.id}"
     )
-    db.add(rsv)
 
     line.quantity_reserved = Decimal(str(line.quantity_reserved or 0)) + qty_to_reserve
     _validate_transition(line.estado, "RESERVADA", ALLOWED_TRANSITIONS_SALE_LINE, f"Línea {line.id}")
@@ -1464,36 +1518,24 @@ def create_packing_session(
 
         if active_res_qty <= Decimal("0.00"):
             if line.modalidad == "ENTREGA_INMEDIATA":
-                lvl = db.query(InventoryLevel).filter(
-                    InventoryLevel.sku_id == line.sku_id,
-                    InventoryLevel.warehouse_id == body.warehouse_id
-                ).with_for_update().first()
-                ob = db.query(InventoryOwnerBalance).filter(
-                    InventoryOwnerBalance.sku_id == line.sku_id,
-                    InventoryOwnerBalance.warehouse_id == body.warehouse_id,
-                    InventoryOwnerBalance.owner == line.owner
-                ).with_for_update().first()
-                if lvl and ob and lvl.quantity >= it.quantity and ob.quantity >= it.quantity:
-                    rsv_key = f"rsv-pack-auto-{sess.id}-{line.id}-{uuid.uuid4().hex[:8]}"
-                    auto_rsv = InventoryReservation(
-                        sku_id=line.sku_id,
-                        warehouse_id=body.warehouse_id,
-                        owner=line.owner,
-                        quantity_reserved=it.quantity,
-                        sale_order_line_id=line.id,
-                        status="ACTIVE",
-                        idempotency_key=rsv_key,
-                        created_by=user_name,
-                        created_at=now,
-                        notes=f"Reserva automática para sesión de empaque {sess.numero}"
-                    )
-                    db.add(auto_rsv)
-                    db.flush()
-                    active_res_qty = it.quantity
-                    line.quantity_reserved = (line.quantity_reserved or Decimal("0.00")) + it.quantity
-                    if line.quantity_reserved >= (line.quantity - line.quantity_delivered - line.quantity_cancelled):
-                        line.estado = "RESERVADA"
-                    line.updated_at = now
+                rsv_key = f"rsv-pack-auto-{sess.id}-{line.id}-{uuid.uuid4().hex[:8]}"
+                auto_rsv = check_and_reserve_stock(
+                    db=db,
+                    sku_id=line.sku_id,
+                    warehouse_id=body.warehouse_id,
+                    owner=line.owner,
+                    qty_to_reserve=it.quantity,
+                    sale_order_line_id=line.id,
+                    idempotency_key=rsv_key,
+                    user_name=user_name,
+                    now=now,
+                    notes=f"Reserva automática para sesión de empaque {sess.numero}"
+                )
+                active_res_qty = it.quantity
+                line.quantity_reserved = (line.quantity_reserved or Decimal("0.00")) + it.quantity
+                if line.quantity_reserved >= (line.quantity - line.quantity_delivered - line.quantity_cancelled):
+                    line.estado = "RESERVADA"
+                line.updated_at = now
 
         if active_res_qty <= Decimal("0.00"):
             raise HTTPException(
@@ -2216,13 +2258,35 @@ def create_sale_order_return(
     if so.customer_id != body.customer_id:
         raise HTTPException(422, f"El pedido pertenece al cliente {so.customer_id}, no a {body.customer_id}")
 
+    deliv = None
     if body.delivery_id:
-        deliv = db.query(SaleOrderDelivery).filter(
-            SaleOrderDelivery.id == body.delivery_id,
-            SaleOrderDelivery.customer_id == so.customer_id
-        ).first()
+        deliv = db.execute(
+            select(SaleOrderDelivery).where(SaleOrderDelivery.id == body.delivery_id).with_for_update()
+        ).scalar_one_or_none()
         if not deliv:
-            raise HTTPException(404, f"Entrega {body.delivery_id} no encontrada para este pedido")
+            raise HTTPException(404, f"Entrega {body.delivery_id} no encontrada")
+
+        if deliv.customer_id != so.customer_id:
+            raise HTTPException(
+                status_code=422,
+                detail=f"La entrega {deliv.id} pertenece al cliente {deliv.customer_id}, no al cliente {so.customer_id}"
+            )
+
+        if deliv.status in ("BORRADOR", "PREPARANDO", "CANCELADO"):
+            raise HTTPException(
+                status_code=422,
+                detail=f"La entrega {deliv.id} se encuentra en estado '{deliv.status}' y no puede ser utilizada como origen de devolución. Solo entregas despachadas o entregadas son válidas."
+            )
+
+        deliv_has_so = db.query(SaleOrderDeliveryLine).filter(
+            SaleOrderDeliveryLine.delivery_id == deliv.id,
+            SaleOrderDeliveryLine.sale_order_id == so.id
+        ).first()
+        if not deliv_has_so:
+            raise HTTPException(
+                status_code=422,
+                detail=f"La entrega {deliv.id} no contiene ítems asociados al pedido de venta {so.id}"
+            )
 
     # Validar que refund_amount no supere lo pagado elegible
     total_cop = Decimal(str(so.total_cop or 0))
@@ -2277,22 +2341,55 @@ def create_sale_order_return(
         if not line:
             raise HTTPException(404, f"Línea {rl.sale_order_line_id} no encontrada en pedido {so.id}")
 
-        # SKU y Owner derivados obligatoriamente de la línea
+        # SKU y Owner derivados obligatoriamente de la línea original
         derived_sku_id = line.sku_id
         derived_owner = line.owner
 
-        # Validar acumulación histórica de devoluciones
-        past_returned = db.query(
+        # Si se informó delivery_id, validar pertenencia a la entrega y límites despachados
+        if deliv:
+            deliv_line = db.query(SaleOrderDeliveryLine).filter(
+                SaleOrderDeliveryLine.delivery_id == deliv.id,
+                SaleOrderDeliveryLine.sale_order_line_id == line.id
+            ).first()
+            if not deliv_line:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"La línea {line.id} no fue despachada en la entrega {deliv.id}"
+                )
+
+            deliv_line_qty = db.query(
+                func.coalesce(func.sum(SaleOrderDeliveryLine.quantity), Decimal("0.00"))
+            ).filter(
+                SaleOrderDeliveryLine.delivery_id == deliv.id,
+                SaleOrderDeliveryLine.sale_order_line_id == line.id
+            ).scalar() or Decimal("0.00")
+
+            deliv_returned_qty = db.query(
+                func.coalesce(func.sum(SaleOrderReturnLine.quantity), Decimal("0.00"))
+            ).join(SaleOrderReturn, SaleOrderReturnLine.return_id == SaleOrderReturn.id).filter(
+                SaleOrderReturn.delivery_id == deliv.id,
+                SaleOrderReturnLine.sale_order_line_id == line.id,
+                SaleOrderReturn.status != "CANCELADA"
+            ).scalar() or Decimal("0.00")
+
+            if deliv_returned_qty + rl.quantity > deliv_line_qty:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Cantidad devuelta acumulada para la entrega {deliv.id} ({deliv_returned_qty + rl.quantity}) supera la cantidad despachada en esa entrega ({deliv_line_qty}) para la línea {line.id}"
+                )
+
+        # Validar acumulación histórica global de devoluciones para la línea
+        past_returned_global = db.query(
             func.coalesce(func.sum(SaleOrderReturnLine.quantity), Decimal("0.00"))
-        ).join(SaleOrderReturn).filter(
+        ).join(SaleOrderReturn, SaleOrderReturnLine.return_id == SaleOrderReturn.id).filter(
             SaleOrderReturnLine.sale_order_line_id == line.id,
             SaleOrderReturn.status != "CANCELADA"
         ).scalar() or Decimal("0.00")
 
-        if past_returned + rl.quantity > line.quantity_delivered:
+        if past_returned_global + rl.quantity > line.quantity_delivered:
             raise HTTPException(
                 status_code=422,
-                detail=f"Cantidad devuelta acumulada ({past_returned + rl.quantity}) no puede superar la entregada ({line.quantity_delivered}) para la línea {line.id}"
+                detail=f"Cantidad devuelta acumulada global ({past_returned_global + rl.quantity}) no puede superar la cantidad entregada ({line.quantity_delivered}) para la línea {line.id}"
             )
 
         ret_line = SaleOrderReturnLine(
@@ -2410,7 +2507,7 @@ def create_sale_order_return(
             db.add_all([mov_in, mov_out])
 
         # Actualizar estado de la línea según acumulado histórico
-        total_ret = past_returned + rl.quantity
+        total_ret = past_returned_global + rl.quantity
         if total_ret >= line.quantity_delivered and line.quantity_delivered > Decimal("0.00"):
             line.estado = "DEVUELTA_TOTAL"
         else:
