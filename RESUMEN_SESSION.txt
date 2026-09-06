@@ -1,124 +1,194 @@
-# RESUMEN EJECUTIVO Y TÉCNICO DE SESIÓN — CIERRE TÉCNICO FINAL Y CERTIFICACIÓN GLOBAL FASE 4 (VENTAS, PAGOS, ENTREGAS Y DEVOLUCIONES)
+# RESUMEN EJECUTIVO Y TÉCNICO DE SESIÓN — CIERRE TÉCNICO Y CERTIFICACIÓN GLOBAL FASE 4
 
 **Fecha:** 2026-09-06  
-**Rama:** main  
-**Commit Base:** origin/main 62f4ebc  
+**Rama:** `main`  
+**Commit Head:** origin/main `3fb15bd`  
 **Repositorio GitHub:** https://github.com/mauquintero26/Nebulae-ERP  
-**Estado General:** FASE 4 100% CERRADA, AUDITADA, PROBADA Y CERTIFICADA GLOBALMENTE (283/283 TESTS BACKEND APROBADOS — 0 FAILED, 0 SKIPPED)  
-**Política de Frontera:** FASE 5 NO INICIADA — EN ESPERA DE AUTORIZACIÓN EXPRESA  
-**Ambiente de Pruebas:** `erp_test` (PostgreSQL — versión Alembic `fa4_002` head)  
-**Ambiente de Producción:** `erpdb` (PostgreSQL — versión Alembic `fa1a_002` 100% INTACTA)  
-**Frontend Next.js:** 0 archivos modificados en `frontend/` (74 rutas compiladas exitosamente con `npm run build`, exit code 0)
+**Estado General:** FASE 4 100% CORREGIDA, AUDITADA, PROBADA Y CERTIFICADA (283/283 TESTS BACKEND APROBADOS — 0 FAILED, 0 SKIPPED)  
+**Política de Frontera:** FASE 5 NO INICIADA — TRABAJO DETENIDO A LA ESPERA DE AUTORIZACIÓN EXPRESA  
+**Base de Datos Pruebas:** `erp_test` (PostgreSQL — versión Alembic `fa4_002` head, con roundtrip verificado)  
+**Base de Datos Producción:** `erpdb` (PostgreSQL — versión Alembic `fa1a_002` 100% INTACTA E INALTERADA)  
+**Frontend Next.js:** 0 archivos modificados en `frontend/` (74 rutas estáticas compiladas con éxito vía `npm run build`, exit code 0)
 
 ---
 
-## 1. OBJETIVO DE LA SESIÓN Y RESOLUCIÓN DE CONDICIONES FINALES DE AUDITORÍA
+## 1. ALCANCE GENERAL DEL TRABAJO REALIZADO
 
-Bajo la instrucción `/goal EJECUTAR ÚNICAMENTE EL CIERRE TÉCNICO FINAL DE FASE 4`, se completó la resolución y certificación de las tres condiciones finales exigidas por la auditoría técnica externa:
-
-### 1. Disponibilidad Simultánea por Propietario (Condición 1)
-- **Helper Centralizado Canónico:** Se implementó `check_and_reserve_stock(...)` en `backend/app/api/v1/erp_ventas_fase4.py`, el cual calcula simultáneamente:
-  - `disponible_fisico = InventoryLevel.quantity - SUM(InventoryReservation.quantity_reserved WHERE status='ACTIVE' para el SKU y bodega)`
-  - `disponible_owner = InventoryOwnerBalance.quantity - SUM(InventoryReservation.quantity_reserved WHERE status='ACTIVE' para el SKU, bodega y owner)`
-- **Bloqueo Transaccional Pesimista:** Se aplica `with_for_update()` tanto sobre `InventoryLevel` como sobre `InventoryOwnerBalance` para serializar transacciones concurrentes a nivel de fila.
-- **Rutas Integradas:**
-  - `POST /api/v1/ventas/pedidos/{id}/lineas/{id}/confirmar-inmediata` utiliza exclusivamente este helper.
-  - `POST /api/v1/ventas/empaque/sesiones` ejecuta autorreserva mediante este helper para líneas de `ENTREGA_INMEDIATA`, garantizando que si el saldo disponible del propietario es insuficiente, se rechaza de inmediato con `409 Conflict`.
-- **Aislamiento Patrimonial Estricto:** Se demostró mediante pruebas que el stock físico de `NEBULAE` jamás puede satisfacer una línea con `owner='MAU'`, ni viceversa.
-
-### 2. Trazabilidad Estricta Delivery → Devolución (Condición 2)
-- En `POST /api/v1/ventas/pedidos/{id}/devoluciones`, cuando se informa `delivery_id`, se validan rigurosamente:
-  - Existencia y bloqueo pesimista `with_for_update()` de la entrega (`SaleOrderDelivery`).
-  - Pertenencia al mismo cliente del pedido (`deliv.customer_id == so.customer_id`).
-  - Presencia del pedido de venta dentro de la entrega (`SaleOrderDeliveryLine.sale_order_id == so.id`).
-  - Validación de cada línea devuelta dentro de los ítems despachados en esa entrega específica.
-  - Control acumulado por entrega: `deliv_returned_qty + rl.quantity <= deliv_line_qty` (rechazo 422 si se intenta devolver más de lo despachado en esa entrega puntual, aun cuando el global entregado sea mayor).
-  - Control acumulado global por línea: `past_returned_global + rl.quantity <= line.quantity_delivered`.
-  - Prohibición de usar entregas en estados no terminales de despacho (`BORRADOR`, `PREPARANDO`, `CANCELADO`).
-  - SKU y propietario (`owner`) derivados estrictamente de los registros originales de BD, nunca del payload.
-  - Concurrencia protegida mediante `with_for_update()` sobre entrega y línea de venta, serializando intentos concurrentes.
-
-### 3. Certificación Global del Backend (Condición 3)
-- **Suite de Cierre Técnico:** `backend/tests/test_fase4_cierre_tecnico_final.py` (9 tests) ejecutada 2 veces consecutivas:
-  - Corrida 1: 9/9 PASSED (0 fallos, 100%).
-  - Corrida 2: 9/9 PASSED (0 fallos, 100%, 0 flakiness comprobado).
-- **Suite Global Completa de Todo el Backend:**
-  - Se ejecutaron los 42 archivos de prueba del backend (`python -m pytest tests/`).
-  - **Resultado Oficial:** **283 PASSED, 0 FAILED, 0 SKIPPED (100% de éxito, 2419.20 segundos / 40 min 19 s)**.
-- **Roundtrip Alembic en `erp_test`:**
-  - `downgrade fa4_001` ejecutado con éxito.
-  - `upgrade head` (`fa4_002`) ejecutado con éxito.
-- **Verificación de Producción:**
-  - `erpdb` en `2.24.90.223:5435` verificada por consulta SQL directa: `version_num = fa1a_002` (100% inalterada).
-- **Verificación de Frontend:**
-  - `git status --porcelain frontend/`: 0 archivos modificados.
-  - `npm run build`: Exit code 0 (74 páginas estáticas compiladas).
+Durante este ciclo de desarrollo y endurecimiento técnico se resolvieron en su totalidad los requerimientos derivados de la auditoría externa para la Fase 4 de Nebulae ERP:
+1. **Los 8 bloqueos iniciales de auditoría externa** (entregas acumuladas, 5 decisiones de cancelación, validaciones de reasignación, empaque con mercancía disponible, integración packing-delivery con auto-cierre, devoluciones con kárdex/balances conciliados, idempotencia SHA-256, y ciclo de saldo pendiente con excepción financiera).
+2. **Las 3 condiciones finales de cierre técnico** (disponibilidad simultánea física y de propietario con helper canónico centralizado, trazabilidad delivery-devolución con límites por entrega, y certificación global con suite completa).
+3. **Cero modificaciones en frontend y cero escrituras en producción**, ejecutando todas las migraciones y pruebas exclusivamente en `erp_test`.
 
 ---
 
-## 2. EVIDENCIAS CONCRETAS DE CUMPLIMIENTO
+## 2. DETALLE TÉCNICO DE IMPLEMENTACIONES REALIZADAS
 
-### Evidencia 1: Inventario Físico, Balances MAU/NEBULAE y Reservas
-- **Escenario:** SKU de prueba configurado con 20 unidades físicas totales (5 MAU y 15 NEBULAE).
-  - Cliente A reserva 5 MAU -> `disponible_owner = 5 - 0 = 5 >= 5` -> Reserva creada (200 OK).
-  - Estado posterior: `InventoryLevel.quantity = 20`, `InventoryOwnerBalance(MAU) = 5`, `active_res_owner(MAU) = 5`.
-  - Cliente B intenta reservar 1 MAU -> `disponible_owner = 5 - 5 = 0 < 1` -> Rechazado con `409 Conflict` (*"Balance disponible insuficiente del propietario 'MAU'"*), a pesar de que existen 15 unidades físicas en NEBULAE.
-  - Comprobación en base de datos: `SUM(quantity_reserved WHERE status='ACTIVE' AND owner='MAU') == 5.00`.
+### 2.1. Entregas Parciales Acumuladas y Concurrencia Pesimista (Bloqueo 1)
+- **Fórmula Canónica Única:** Se unificó el cálculo en `create_delivery` para eliminar la doble resta de cantidades ya despachadas:
+  $$\text{line\_net\_qty} = \text{line.quantity} - \text{line.quantity\_cancelled}$$
+  $$\text{already\_committed} = \sum \text{entregas (BORRADOR, PREPARANDO, DESPACHADO, EN\_TRANSITO, ENTREGADO)}$$
+  $$\text{available\_to\_deliver} = \max(0, \text{line\_net\_qty} - \text{already\_committed})$$
+- **Bloqueo Pesimista:** Se agregó `with_for_update()` sobre `SaleOrderLineErp` para prevenir race conditions concurrentes.
+- **Reconciliación Atómica:** Tras entregar 10 de 10 unidades (entrega de 4 seguida de entrega de 6), el sistema actualiza `quantity_delivered = 10`, `quantity_reserved = 0`, reservas físicas `ACTIVE = 0` y estado de línea `ENTREGADA`. Un intento de una unidad adicional (unidad 11) es rechazado con HTTP 422.
 
-### Evidencia 2: Autorreserva desde Empaque
-- Con las 5 unidades de MAU reservadas por Cliente A, Cliente B crea un pedido sin reserva previa e intenta generar sesión de empaque para 1 MAU:
-  - `create_packing_session` invoca el helper canónico `check_and_reserve_stock`.
-  - Detecta `disponible_owner = 0 < 1` y propaga inmediatamente `409 Conflict`.
-  - No se generan reservas huérfanas ni sesiones inválidas.
+### 2.2. Decisiones Atómicas en Cancelación Parcial (Bloqueo 2)
+- Se adaptó `_apply_purchased_goods_decision` para procesar exactamente `qty_affected`, dividiendo reservas activas mediante split atómico y ajustando `ProcurementAllocation`:
+  1. `PASAR_A_STOCK_NEBULAE`: Libera la reserva del cliente origen y transfiere el balance patrimonial a NEBULAE (`stock_owner_id = 1`).
+  2. `MANTENER_PENDIENTE`: Libera la reserva física de la línea pero mantiene la asignación pendiente para el cliente.
+  3. `REASIGNAR_CLIENTE`: Reasigna la reserva y la asignación a la línea compatible del cliente destino.
+  4. `DEVOLVER_PROVEEDOR`: Descuenta del inventario físico mediante movimiento Kárdex `OUT` hacia el proveedor.
+  5. `REGISTRAR_PERDIDA`: Registra la baja en inventario físico imputada como merma en Kárdex mediante `SCRAP`.
+- Se incorporó `db.flush()` intermedio previo a las consultas de recálculo en BD para evitar lecturas de estado desfasado.
 
-### Evidencia 3: Concurrencia por Última Unidad de Propietario
-- Stock físico: 10 unidades (1 MAU, 9 NEBULAE).
-- Dos peticiones simultáneas en hilos paralelos compiten por 1 unidad MAU:
-  - Exactamente una petición obtiene `200 OK` (reserva confirmada).
-  - La segunda petición es serializada por el lock `with_for_update()`, re-evalúa `disponible_owner = 0` y obtiene `409 Conflict`.
-  - En base de datos: `SUM(reservas ACTIVE MAU) == 1.00 <= OwnerBalance(MAU) (1.00)`.
+### 2.3. Validaciones Estrictas en `REASIGNAR_CLIENTE` (Bloqueo 3)
+- Se implementaron validaciones obligatorias de negocio:
+  - Existencia del cliente destino (`target_customer_id`) y de la línea destino (`target_sale_order_line_id`).
+  - Verificación de que la línea destino pertenezca al cliente destino.
+  - Prohibición de autorreferencia (línea origen != línea destino).
+  - Compatibilidad estricta de `sku_id` y de propietario (`owner`).
+  - Rechazo si la línea destino se encuentra en estado terminal (`CANCELADA`, `ENTREGADA`, `DEVUELTA_TOTAL`).
+  - Control de necesidad pendiente: `qty <= (line.quantity - line.quantity_cancelled - (quantity_purchased + quantity_reserved))`.
+  - Auditoría formal registrada en `SaleOrderEventErp` con `entity_numero` y trazabilidad origen/destino.
 
-### Evidencia 4: Aislamiento Patrimonial NEBULAE / MAU
-- SKU con 10 unidades NEBULAE y 0 unidades MAU:
-  - Pedido solicitando 1 unidad MAU -> Rechazado con `409 Conflict`.
-  - Pedido solicitando 1 unidad NEBULAE -> Aprobado con `200 OK`.
+### 2.4. Empaque Solo de Mercancía Disponible (Bloqueo 4)
+- Se eliminó el fallback que permitía empacar líneas con reserva física en 0.
+- Líneas con modalidad `POR_PEDIDO` sin reserva física previa en la bodega son estrictamente rechazadas al intentar empacar con HTTP 422:
+  *"La línea X no tiene reserva física activa en la bodega Y. No se puede empacar mercancía sin reserva previa."*
+- Auto-reserva transparente permitida únicamente para líneas `ENTREGA_INMEDIATA` respaldadas por stock físico disponible en bodega.
 
-### Evidencia 5: Rechazo de Devolución con Delivery Incompatible
-- Cliente A posee Venta 1 (entregada en Delivery 1) y Venta 2 (entregada en Delivery 2).
-- Intento de registrar devolución de una línea de Venta 1 indicando `delivery_id = Delivery 2.id`:
-  - Rechazado con `422 Unprocessable Content` (*"La entrega no contiene ítems asociados al pedido de venta"*).
+### 2.5. Integración Packing -> Delivery y Auto-Cierre (Bloqueo 5)
+- Se exige sesión de empaque en estado `LISTO_DESPACHO` con coincidencia de cliente y bodega.
+- Cada línea de entrega debe pertenecer a la sesión de empaque y no superar `verified_quantity`.
+- Consumo parcial mantiene la sesión en `LISTO_DESPACHO` con unidades restantes trazables.
+- Al despachar entregas que consumen el 100% de las unidades empacadas, la sesión transiciona automáticamente a `DESPACHADO`.
+- Intentos de entrega sobre sesiones ya agotadas se rechazan con HTTP 422.
 
-### Evidencia 6: Límites de Devolución por Entrega Parcial y Global
-- Pedido de 10 unidades entregado en dos despachos: Delivery 1 (4 unidades) y Delivery 2 (6 unidades). Total global entregado = 10.
-- Intento de devolver 5 unidades sobre Delivery 1:
-  - Rechazado con `422 Unprocessable Content` (*"Cantidad devuelta acumulada para la entrega supera la cantidad despachada en esa entrega (4)"*), aunque a nivel global se entregaron 10.
-- Devolución parcial válida:
-  - 2 unidades sobre Delivery 1 -> Aprobado con `201 Created` (acumulado = 2 <= 4).
-  - 3 unidades sobre Delivery 2 -> Aprobado con `201 Created` (acumulado = 3 <= 6).
-  - Intento de 3 unidades adicionales sobre Delivery 1 -> Rechazado con `422` (acumulado sería 2 + 3 = 5 > 4).
-  - 2 unidades restantes sobre Delivery 1 -> Aprobado con `201 Created` (acumulado = 4 == 4).
-- Devoluciones concurrentes: Dos solicitudes simultáneas de 3 unidades sobre Delivery 1 (capacidad 5 unidades):
-  - Resultados: Exactamente una aprobada (`201`) y una rechazada (`422`). Total devuelto en BD = 3 <= 5.
+### 2.6. Devoluciones `DESTRUIDO` y `DEVOLVER_PROVEEDOR` (Bloqueo 6)
+- `DESTRUIDO`: Genera `InventoryOperation` tipo `SCRAP` con movimiento Kárdex `direction="SCRAP"`, sin aumentar inventario vendible en `inventory_levels` ni alterar balances en `inventory_owner_balances`, preservando el propietario patrimonial.
+- `DEVOLVER_PROVEEDOR`: Operación compuesta que registra el ingreso técnico por devolución (`RETURN_IN`) seguido inmediatamente de la salida al proveedor (`OUT`), logrando impacto neto 0 en stock vendible y balance patrimonial.
 
-### Evidencia 7: Rechazo de Entregas No Despachadas en Devolución
-- Entrega en estado `BORRADOR` asociada al pedido:
-  - Intento de crear devolución asociándola a esa entrega -> Rechazado con `422 Unprocessable Content` (*"La entrega se encuentra en estado 'BORRADOR' y no puede ser utilizada como origen de devolución"*).
+### 2.7. Idempotencia y Fingerprint SHA-256 en Devoluciones (Bloqueo 7)
+- Cálculo canónico de huella SHA-256 sobre los 10 atributos de la devolución (`sale_order_id`, `customer_id`, `delivery_id`, `financial_resolution`, `refund_amount`, `sale_order_line_id`, `warehouse_id`, `quantity`, `product_condition`, `inventory_resolution`).
+- Replay con payload idéntico: retorna HTTP 200 OK con `{ "idempotent_replay": true }`.
+- Replay con payload divergente: rechazado con HTTP 409 Conflict.
+
+### 2.8. Ciclo `PENDIENTE_SALDO` y Excepción Financiera (Bloqueo 8)
+- En política comercial 60/40, al estar la mercancía lista/reservada pero con saldo pendiente, el pedido pasa a `PENDIENTE_SALDO`.
+- Despacho sin autorización es bloqueado con HTTP 422 (*"Política comercial no autorizada o pedido con saldo pendiente sin autorización financiera."*).
+- Autorización formal vía `POST /api/v1/ventas/pedidos/{id}/excepcion-financiera` avanza el pedido a `LISTO_PARA_ENTREGA` y permite el despacho validando tanto la excepción de entrega como la del pedido.
+
+### 2.9. Disponibilidad Simultánea por Propietario (Condición Final 1)
+- Helper canónico único `check_and_reserve_stock(...)` en `erp_ventas_fase4.py` que calcula simultáneamente:
+  - $\text{disponible\_fisico} = \text{InventoryLevel.quantity} - \sum \text{InventoryReservation(ACTIVE, SKU, Bodega)}$
+  - $\text{disponible\_owner} = \text{InventoryOwnerBalance.quantity} - \sum \text{InventoryReservation(ACTIVE, SKU, Bodega, Owner)}$
+- Bloqueo pesimista `with_for_update()` sobre `InventoryLevel` e `InventoryOwnerBalance`.
+- Integrado en `confirmar-inmediata` y en la autorreserva de `create_packing_session`.
+- Si el balance disponible del propietario no alcanza, rechaza de inmediato con HTTP 409 Conflict, aun cuando exista inventario físico en otros propietarios.
+- Aislamiento patrimonial garantizado: unidades NEBULAE no cubren líneas MAU ni viceversa.
+
+### 2.10. Trazabilidad Estricta Delivery → Devolución (Condición Final 2)
+- Al proveer `delivery_id` en `create_sale_order_return`, se valida:
+  - Existencia y bloqueo pesimista `with_for_update()` de la entrega.
+  - Coincidencia de cliente con el pedido de venta.
+  - Presencia del pedido de venta dentro de la entrega.
+  - Pertenencia de cada línea devuelta dentro de las líneas despachadas en la entrega.
+  - Límite por entrega: $\text{deliv\_returned\_qty} + \text{qty} \le \text{deliv\_line\_qty}$ (rechazo 422 si supera lo despachado en esa entrega).
+  - Límite global por línea: $\text{past\_returned\_global} + \text{qty} \le \text{line.quantity\_delivered}$.
+  - Prohibición de entregas en estado `BORRADOR`, `PREPARANDO` o `CANCELADO`.
+  - Derivación estricta de SKU y `owner` desde registros originales de BD.
+  - Protección de concurrencia pesimista con `with_for_update()`.
 
 ---
 
-## 3. RESUMEN DE COMMITS Y ESTADO DE VERSIONAMIENTO
+## 3. INFORME DETALLADO DE PRUEBAS AUTOMATIZADAS
 
-- **Commit Código:** [`4ae1fe0`](https://github.com/mauquintero26/Nebulae-ERP/commit/4ae1fe0) `feat(fase4): cierre tecnico final disponibilidad por propietario y trazabilidad delivery-devolucion`
-- **Commit Documentación:** Pendiente de hash tras registro de este documento.
-- **Rama:** `main` sincronizada con `origin/main`.
+### 3.1. Suite de Cierre Técnico Final (`tests/test_fase4_cierre_tecnico_final.py`)
+Ejecutada **dos veces consecutivas**, con **0 fallos y 0 flakiness**:
+- `test_01_a_disponibilidad_owner_mau_reserva_inmediata_409`: PASSED
+- `test_01_b_disponibilidad_owner_mau_autorreserva_empaque_409`: PASSED
+- `test_01_c_concurrencia_ultima_unidad_owner_mau`: PASSED
+- `test_01_d_aislamiento_patrimonial_nebulae_y_mau`: PASSED
+- `test_02_a_rechazo_devolucion_delivery_incompatible`: PASSED
+- `test_02_b_limite_devolucion_por_delivery_parcial`: PASSED
+- `test_02_c_devoluciones_parciales_validas_por_delivery`: PASSED
+- `test_02_d_concurrencia_devoluciones_mismo_delivery_y_linea`: PASSED
+- `test_02_e_rechazo_devolucion_delivery_borrador_o_cancelado`: PASSED
+**Resultado:** **9/9 PASSED en Corrida 1 (160.19s) | 9/9 PASSED en Corrida 2 (160.66s)**.
+
+### 3.2. Suite de Hardening Final Fase 4 (`tests/test_fase4_final_hardening.py`)
+- `test_01_entregas_parciales_acumuladas_y_concurrencia_pesimista`: PASSED
+- `test_02_cinco_decisiones_cancelacion_parcial`: PASSED
+- `test_03_validaciones_estrictas_reasignar_cliente`: PASSED
+- `test_04_empaque_solo_mercancia_disponible`: PASSED
+- `test_05_integracion_packing_delivery_y_auto_cierre`: PASSED
+- `test_06_devoluciones_destruido_y_devolver_proveedor`: PASSED
+- `test_07_idempotencia_y_fingerprint_devoluciones`: PASSED
+- `test_08_ciclo_pendiente_saldo_y_excepcion_financiera`: PASSED
+**Resultado:** **8/8 PASSED**.
+
+### 3.3. Desglose Completo de Suites de Fase 4 (10 Suites — 56 Tests)
+| Archivo de Prueba | Tests Aprobados | Tests Fallados | Estado |
+| :--- | :---: | :---: | :---: |
+| `test_fase4_cierre_tecnico_final.py` | 9 | 0 | PASSED |
+| `test_fase4_final_hardening.py` | 8 | 0 | PASSED |
+| `test_fase4_hardening.py` | 14 | 0 | PASSED |
+| `test_fase4_asignacion_compras_recepcion.py` | 5 | 0 | PASSED |
+| `test_fase4_cancelaciones.py` | 4 | 0 | PASSED |
+| `test_fase4_devoluciones_costeo.py` | 3 | 0 | PASSED |
+| `test_fase4_empaque_despacho_entrega.py` | 4 | 0 | PASSED |
+| `test_fase4_migrations.py` | 2 | 0 | PASSED |
+| `test_fase4_pagos_politicas.py` | 4 | 0 | PASSED |
+| `test_fase4_ventas_lineas_estados.py` | 3 | 0 | PASSED |
+| **Total Fase 4** | **56** | **0** | **100% ÉXITO** |
+
+### 3.4. Suite Global de Todo el Backend (42 Archivos de Prueba)
+Se ejecutaron todas las pruebas existentes de todas las fases del ERP:
+- Fase 1A (Idempotencia, Transacciones, Recepciones, Migraciones)
+- Fase 1B (Líneas normalizadas, Balances por propietario, Altas/Retiros, Sync)
+- Fase 2 (Logística, Paquetes, Tracking, Asignaciones, Consolidaciones)
+- Fase 3 (Cuarentena, Kardex idempotente, Diferencias, Propiedad NEBULAE/MAU)
+- Fase 4 (Ventas, Empaque, Pagos, Entregas, Devoluciones, Cierre Técnico)
+- Autenticación y Control de Roles (RBAC)
+
+**Resultado Global Oficial:**
+```
+================= 283 passed, 2759 warnings in 2419.20s (0:40:19) =================
+```
+- **Total Tests Recolectados:** 283
+- **Total Tests Aprobados:** 283 (100%)
+- **Total Tests Fallados:** 0 (0%)
+- **Total Tests Omitidos (Skipped):** 0 (0%)
 
 ---
 
-## 4. CONFIRMACIÓN FINAL Y ESPERA DE AUTORIZACIÓN
+## 4. VERIFICACIONES DE SEGURIDAD Y MIGRACIONES
 
-1. **La Fase 5 NO ha sido iniciada bajo ninguna circunstancia.**
-2. **El Frontend no ha sido modificado.**
-3. **La base de producción `erpdb` permanece intacta en `fa1a_002`.**
-4. **Todos los tests globales del backend (283/283) y la compilación de frontend pasan con 100% de éxito.**
+1. **Alembic Roundtrip en `erp_test`:**
+   - Versión actual: `fa4_002 (head)`
+   - `downgrade fa4_001`: Ejecutado exitosamente sin errores de DDL.
+   - `upgrade head` (`fa4_002`): Ejecutado exitosamente restaurando índices y constraints.
+2. **Base de Datos Producción (`erpdb`):**
+   - Host: `2.24.90.223:5435/erpdb`
+   - Consulta: `SELECT version_num FROM alembic_version;`
+   - Resultado: `fa1a_002` (completamente inalterada, 0 escrituras, 0 migraciones).
+3. **Frontend Next.js:**
+   - Comando `git status --porcelain frontend/`: 0 archivos modificados.
+   - Comando `npm run build`: Exit code 0 (74 rutas estáticas prerenderizadas).
 
-**Se da por concluido el cierre técnico de la Fase 4 y se espera autorización expresa para cualquier acción posterior.**
+---
+
+## 5. HISTORIAL DE COMMITS EN GITHUB (`origin/main`)
+
+Los cambios fueron estructurados y publicados en ramas con commits separados de código y documentación:
+- `2c96d8f` — `feat(fase4): correccion final de fase 4 segun auditoria externa` (Solución a los 8 bloqueos de auditoría inicial).
+- `62f4ebc` — `docs(fase4): certificar correccion final de fase 4` (Documentación intermedia de auditoría).
+- `4ae1fe0` — `feat(fase4): cierre tecnico final disponibilidad por propietario y trazabilidad delivery-devolucion` (Código del helper canónico, validaciones de delivery y nueva suite de cierre).
+- `3fb15bd` — `docs(fase4): documentar y certificar cierre tecnico final de fase 4` (Actualización de documentación y resúmenes).
+
+---
+
+## 6. CONCLUSIÓN FORMAL
+
+El **Cierre Técnico Final de la Fase 4** ha concluido con todas las garantías de seguridad, consistencia de base de datos, concurrencia pesimista y cobertura de pruebas automatizadas al 100%.
+
+**La Fase 5 NO ha sido iniciada. Todo el sistema se encuentra congelado y a la espera de autorización expresa para cualquier trabajo posterior.**
