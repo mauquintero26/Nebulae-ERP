@@ -46,7 +46,16 @@ def create_sales_order(
             user_id=current_user.id,
             idempotency_key=idempotency_key
         )
-        return {"status": "success", "data": schemas.SalesOrderResponse.model_validate(db_order).model_dump()}
+        if db_order:
+            resp_data = schemas.SalesOrderResponse.model_validate(db_order).model_dump()
+        else:
+            resp_data = {
+                "id": canonical_so.id,
+                "customer_id": canonical_so.customer_id,
+                "status": canonical_so.estado,
+                "lines": []
+            }
+        return {"status": "success", "data": resp_data}
     except HTTPException:
         raise
     except Exception as e:

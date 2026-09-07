@@ -42,7 +42,14 @@ def create_purchase_order(
             user_id=current_user.id,
             idempotency_key=idempotency_key
         )
-        return {"status": "success", "data": schemas.PurchaseOrderResponse.model_validate(db_po).model_dump()}
+        if db_po:
+            resp_data = schemas.PurchaseOrderResponse.model_validate(db_po).model_dump()
+        else:
+            resp_data = {
+                "id": canonical_po.id,
+                "status": canonical_po.estado
+            }
+        return {"status": "success", "data": resp_data}
     except HTTPException:
         raise
     except Exception as e:

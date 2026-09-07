@@ -97,11 +97,22 @@ def validate_sunset_date(date_str: str) -> datetime.datetime:
 
 
 def get_or_create_governance_policy(db: Session) -> LegacyGovernancePolicy:
-    """Obtiene la directiva activa de gobernanza legacy o inicializa la politica por defecto."""
+    """Obtiene la directiva activa de gobernanza legacy o inicializa la politica por defecto de forma concurrente-segura."""
     policy = db.query(LegacyGovernancePolicy).filter(
         LegacyGovernancePolicy.policy_name == "DEFAULT"
     ).first()
-    if not policy:
+    if policy:
+        return policy
+
+    # Serializar la creacion concurrente de la politica DEFAULT para evitar UniqueViolation
+    try:
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext('legacy_gov_policy_default'))"))
+        policy = db.query(LegacyGovernancePolicy).filter(
+            LegacyGovernancePolicy.policy_name == "DEFAULT"
+        ).first()
+        if policy:
+            return policy
+
         policy = LegacyGovernancePolicy(
             policy_name="DEFAULT",
             mode="DUAL_WRITE",
@@ -115,7 +126,15 @@ def get_or_create_governance_policy(db: Session) -> LegacyGovernancePolicy:
         db.add(policy)
         db.commit()
         db.refresh(policy)
-    return policy
+        return policy
+    except Exception:
+        db.rollback()
+        policy = db.query(LegacyGovernancePolicy).filter(
+            LegacyGovernancePolicy.policy_name == "DEFAULT"
+        ).first()
+        if policy:
+            return policy
+        raise
 
 
 def apply_deprecation_headers(response: Response, policy: LegacyGovernancePolicy, successor_path: str = "/api/v1/ventas/pedidos"):
@@ -330,18 +349,48 @@ def compare_sales_parity(db: Session) -> Dict[str, Any]:
 
 def compare_purchases_parity(db: Session) -> Dict[str, Any]:
     """
-    Compara exhaustivamente ordenes de compra legacy contra canonicas.
-    ESTRICTAMENTE READ-ONLY. Inspecciona campo a campo:
-    - Proveedor (supplier_name)
-    - Moneda y TRM (productos JSON field)
-    - Subtotal y total COP
-    - Estado alineado
-    - Cantidad de lineas
-    - Por linea: SKU, quantity_ordered, unit_cost_cop
-    - Recepciones parciales y totales
-    Cada tipo de discrepancia baja el parity_score.
+    Compara ordenes de compra legacy contra canonicas con PARIDAD HONESTA.
+    ESTRICTAMENTE READ-ONLY.
+    
+    Limitacion estructural documentada:
+    El modelo legacy PurchaseOrder (backend/app/models/purchases.py) contiene
+    unicamente (id, status, canonical_purchase_order_id). No almacena proveedor,
+    moneda, TRM, lineas de compra, cantidades ni costos unitarios.
+    Dichos campos se marcan como NOT_COMPARABLE y se excluyen del porcentaje
+    de campos comparables entre modelos. No se otorga paridad por ausencia de
+    informacion ni se comparan relaciones internas canonicas haciendolas pasar
+    por paridad legacy-canonica.
     """
     from app.models.fase1b import PurchaseOrderLine as CanPurchaseLine
+
+    comparable_fields = ["status", "canonical_linkage"]
+    not_comparable_fields = [
+        "supplier_id", "supplier_name", "currency", "trm",
+        "subtotal_cop", "total_cop", "lines_count", "line_sku",
+        "line_quantity", "line_unit_cost", "receptions_goods_receipts"
+    ]
+    limitations_doc = (
+        "El modelo legacy PurchaseOrder contiene exclusivamente (id, status, canonical_purchase_order_id). "
+        "Campos como proveedor, moneda, TRM, lineas y costos son NOT_COMPARABLE entre legacy y canonico. "
+        "Se evaluan solo campos presentes en ambos modelos (status, canonical_linkage). "
+        "Las anomalias en lineas o subtotales canonicos se reportan como diagnosticos internos "
+        "sin atribuirlas falsamente a una paridad legacy."
+    )
+    field_comparability = {
+        "status": "COMPARABLE",
+        "canonical_linkage": "COMPARABLE",
+        "supplier_id": "NOT_COMPARABLE",
+        "supplier_name": "NOT_COMPARABLE",
+        "currency": "NOT_COMPARABLE",
+        "trm": "NOT_COMPARABLE",
+        "subtotal_cop": "NOT_COMPARABLE",
+        "total_cop": "NOT_COMPARABLE",
+        "lines_count": "NOT_COMPARABLE",
+        "line_sku": "NOT_COMPARABLE",
+        "line_quantity": "NOT_COMPARABLE",
+        "line_unit_cost": "NOT_COMPARABLE",
+        "receptions_goods_receipts": "NOT_COMPARABLE",
+    }
 
     legacy_pos = db.query(PurchaseOrder).all()
     canonical_pos = db.query(PurchaseOrderFull).all()
@@ -354,7 +403,9 @@ def compare_purchases_parity(db: Session) -> Dict[str, Any]:
             unmatched_pos.append({
                 "legacy_purchase_order_id": po.id,
                 "status": po.status,
-                "reason": "Sin orden canonica de compra vinculada"
+                "reason": "Sin orden canonica de compra vinculada",
+                "field": "canonical_linkage",
+                "comparability": "COMPARABLE"
             })
             continue
 
@@ -364,15 +415,19 @@ def compare_purchases_parity(db: Session) -> Dict[str, Any]:
                 "legacy_id": po.id,
                 "canonical_id": po.canonical_purchase_order_id,
                 "type": "CANONICAL_NOT_FOUND",
-                "detail": "El canonical_purchase_order_id vinculado no existe en purchase_orders_full."
+                "detail": "El canonical_purchase_order_id vinculado no existe en purchase_orders_full.",
+                "field": "canonical_linkage",
+                "comparability": "COMPARABLE"
             })
             continue
 
-        # ── 1. Estado ───────────────────────────────────────────────────────
+        # ── 1. Estado (COMPARABLE entre ambos modelos) ───────────────────────
         status_aligned = True
         if po.status == "RECEIVED" and can_po.estado not in ("RECIBIDA", "PARCIALMENTE_RECIBIDA"):
             status_aligned = False
-        elif po.status == "DRAFT" and can_po.estado not in ("BORRADOR", "CONFIRMADA", "ENVIADA"):
+        elif po.status == "DRAFT" and can_po.estado not in ("BORRADOR", "CONFIRMADA", "ENVIADA", "EMITIDO"):
+            status_aligned = False
+        elif po.status == "CANCELLED" and can_po.estado != "CANCELADA":
             status_aligned = False
         if not status_aligned:
             discrepancies.append({
@@ -380,47 +435,13 @@ def compare_purchases_parity(db: Session) -> Dict[str, Any]:
                 "canonical_id": can_po.id,
                 "type": "STATUS_MISMATCH",
                 "legacy_status": po.status,
-                "canonical_estado": can_po.estado
+                "canonical_estado": can_po.estado,
+                "field": "status",
+                "comparability": "COMPARABLE"
             })
 
-        # ── 2. Proveedor ─────────────────────────────────────────────────────
-        # legacy PurchaseOrder no tiene supplier_name; se detecta si can_po lo tiene pero
-        # no coincide con el nombre del supplier vinculado (cuando exista)
-        if can_po.supplier_id and can_po.supplier and can_po.supplier_name:
-            expected_name = can_po.supplier.name if hasattr(can_po.supplier, "name") else can_po.supplier_name
-            if can_po.supplier_name != expected_name:
-                discrepancies.append({
-                    "legacy_id": po.id,
-                    "canonical_id": can_po.id,
-                    "type": "SUPPLIER_NAME_MISMATCH",
-                    "canonical_supplier_name": can_po.supplier_name,
-                    "supplier_entity_name": expected_name
-                })
-
-        # ── 3. Moneda y TRM desde campo JSON de productos ───────────────────
-        productos = can_po.productos or []
-        currencies_found = {p.get("currency") for p in productos if p.get("currency")}
-        trm_values = [p.get("trm") for p in productos if p.get("trm") is not None]
-        if len(currencies_found) > 1:
-            discrepancies.append({
-                "legacy_id": po.id,
-                "canonical_id": can_po.id,
-                "type": "MIXED_CURRENCIES_IN_LINES",
-                "currencies": list(currencies_found)
-            })
-        if trm_values:
-            trm_min = min(trm_values)
-            trm_max = max(trm_values)
-            if abs(trm_max - trm_min) > 10:
-                discrepancies.append({
-                    "legacy_id": po.id,
-                    "canonical_id": can_po.id,
-                    "type": "TRM_INCONSISTENCY",
-                    "trm_min": trm_min,
-                    "trm_max": trm_max
-                })
-
-        # ── 4. Subtotal y Total COP ─────────────────────────────────────────
+        # ── 2. Campos NOT_COMPARABLE (Diagnosticos de integridad canonica) ───
+        # Subtotal y Total COP en el registro canonico
         can_lines = db.query(CanPurchaseLine).filter(CanPurchaseLine.pec_id == can_po.id).all()
         computed_subtotal = sum(
             (Decimal(str(ln.unit_cost_cop or 0)) * Decimal(str(ln.quantity_ordered or 1)))
@@ -433,21 +454,16 @@ def compare_purchases_parity(db: Session) -> Dict[str, Any]:
                 "legacy_id": po.id,
                 "canonical_id": can_po.id,
                 "type": "SUBTOTAL_MISMATCH",
+                "field": "subtotal_cop",
+                "comparability": "NOT_COMPARABLE",
+                "detail": "Discrepancia interna en entidad canonica: subtotal no cuadra con suma de lineas.",
                 "stored_subtotal_cop": float(stored_subtotal),
                 "computed_subtotal_cop": float(computed_subtotal),
                 "diff_cop": float(abs(computed_subtotal - stored_subtotal))
             })
-        if stored_total > Decimal("0") and stored_subtotal > Decimal("0") and stored_total < stored_subtotal:
-            discrepancies.append({
-                "legacy_id": po.id,
-                "canonical_id": can_po.id,
-                "type": "TOTAL_LESS_THAN_SUBTOTAL",
-                "total_cop": float(stored_total),
-                "subtotal_cop": float(stored_subtotal)
-            })
 
-        # ── 5. Cantidad de lineas ────────────────────────────────────────────
-        # legacy PurchaseOrder no tiene lineas normalizadas propias; comparamos con productos JSON
+        # Cantidad de lineas (JSON vs tabla normalizada)
+        productos = can_po.productos or []
         n_json_lines = len(productos) if productos else 0
         n_canon_lines = len(can_lines)
         if n_json_lines > 0 and n_canon_lines != n_json_lines:
@@ -455,86 +471,67 @@ def compare_purchases_parity(db: Session) -> Dict[str, Any]:
                 "legacy_id": po.id,
                 "canonical_id": can_po.id,
                 "type": "LINE_COUNT_MISMATCH",
+                "field": "lines_count",
+                "comparability": "NOT_COMPARABLE",
+                "detail": "Discrepancia interna canonica: conteo de lineas JSON no coincide con tabla normalizada.",
                 "json_lines_count": n_json_lines,
                 "canonical_lines_count": n_canon_lines
             })
 
-        # ── 6. Comparacion linea a linea: SKU, cantidad, costo ───────────────
+        # Lineas canonicas: SKU y costo
         for ln in can_lines:
-            # Verificar que el SKU sea valido
             if ln.sku_id is None:
                 discrepancies.append({
                     "legacy_id": po.id,
                     "canonical_id": can_po.id,
                     "type": "LINE_MISSING_SKU",
+                    "field": "line_sku",
+                    "comparability": "NOT_COMPARABLE",
+                    "detail": "Linea canonica sin sku_id asignado.",
                     "line_id": ln.id
                 })
-                continue
-            # Verificar cantidad ordenada
-            if Decimal(str(ln.quantity_ordered or 0)) <= Decimal("0"):
-                discrepancies.append({
-                    "legacy_id": po.id,
-                    "canonical_id": can_po.id,
-                    "type": "LINE_ZERO_QUANTITY",
-                    "line_id": ln.id,
-                    "sku_id": ln.sku_id
-                })
-            # Verificar costo unitario
             if ln.unit_cost_cop is None or Decimal(str(ln.unit_cost_cop)) <= Decimal("0"):
                 discrepancies.append({
                     "legacy_id": po.id,
                     "canonical_id": can_po.id,
                     "type": "LINE_MISSING_COST",
+                    "field": "line_unit_cost",
+                    "comparability": "NOT_COMPARABLE",
+                    "detail": "Linea canonica con costo unitario nulo o cero.",
                     "line_id": ln.id,
                     "sku_id": ln.sku_id
                 })
-            # Verificar sobrerecepcion
-            if Decimal(str(ln.quantity_received or 0)) > Decimal(str(ln.quantity_ordered or 0)):
-                discrepancies.append({
-                    "legacy_id": po.id,
-                    "canonical_id": can_po.id,
-                    "type": "OVER_RECEIVED_LINE",
-                    "line_id": ln.id,
-                    "sku_id": ln.sku_id,
-                    "ordered": float(ln.quantity_ordered),
-                    "received": float(ln.quantity_received)
-                })
 
-        # ── 7. Recepciones (GoodsReceipt) ────────────────────────────────────
-        can_receptions = db.query(GoodsReceipt).filter(GoodsReceipt.pec_id == can_po.id).all()
-        if po.status == "RECEIVED" and len(can_receptions) == 0 and can_po.estado != "RECIBIDA":
-            discrepancies.append({
-                "legacy_id": po.id,
-                "canonical_id": can_po.id,
-                "type": "RECEPTIONS_MISMATCH",
-                "detail": "Legacy reporta orden recibida pero no se registran recepciones en goods_receipts."
-            })
-        # Recepcion parcial: estado PARCIALMENTE_RECIBIDA debe tener al menos un GR
-        if can_po.estado == "PARCIALMENTE_RECIBIDA" and len(can_receptions) == 0:
-            discrepancies.append({
-                "legacy_id": po.id,
-                "canonical_id": can_po.id,
-                "type": "PARTIAL_RECEPTION_WITHOUT_GR",
-                "detail": "Estado PARCIALMENTE_RECIBIDA pero sin goods_receipts asociados."
-            })
+    # Calculo de paridad honesta:
+    # 1. Puntos comparables reales basados en los campos presentes en ambos modelos
+    total_legacy = len(legacy_pos)
+    comparable_discrepancies = [d for d in discrepancies if d.get("comparability") == "COMPARABLE"]
+    not_comparable_discrepancies = [d for d in discrepancies if d.get("comparability") == "NOT_COMPARABLE"]
 
-    # Calcular parity_score de compras
-    total_checked = len(legacy_pos) - len(unmatched_pos)
-    penalty = (len(unmatched_pos) * 5.0) + (len(discrepancies) * 2.5)
-    parity_score = max(0.0, 100.0 - penalty) if (len(legacy_pos) > 0) else 100.0
+    if total_legacy == 0:
+        parity_score = 100.0
+    else:
+        # Penalizacion estricta ante fallos comparables reales (linkage o status)
+        # y penalizacion menor ante discrepancias de consistencia interna canonica
+        penalty = (len(unmatched_pos) * 10.0) + (len(comparable_discrepancies) * 5.0) + (len(not_comparable_discrepancies) * 2.0)
+        parity_score = max(0.0, round(100.0 - penalty, 2))
 
     return {
-        "total_legacy_purchases": len(legacy_pos),
+        "total_legacy_purchases": total_legacy,
         "total_canonical_purchases": len(canonical_pos),
+        "comparable_fields": comparable_fields,
+        "not_comparable_fields": not_comparable_fields,
+        "field_comparability": field_comparability,
+        "limitations": limitations_doc,
         "unmatched_purchases_count": len(unmatched_pos),
         "unmatched_purchases": unmatched_pos[:50],
         "discrepancies_count": len(discrepancies),
         "discrepancies": discrepancies[:50],
+        "comparable_discrepancies_count": len(comparable_discrepancies),
+        "not_comparable_discrepancies_count": len(not_comparable_discrepancies),
         "purchases_parity_score": round(parity_score, 2),
-        "checked_pairs": total_checked
+        "checked_pairs": max(0, total_legacy - len(unmatched_pos))
     }
-
-
 
 
 def compare_financial_parity(db: Session) -> Dict[str, Any]:
@@ -839,8 +836,18 @@ def intercept_purchase_order_write(
     po_data: Dict[str, Any],
     user_id: Optional[int] = None,
     idempotency_key: Optional[str] = None
-) -> Tuple[PurchaseOrder, PurchaseOrderFull]:
-    """Intercepta creacion de PurchaseOrder legacy y crea PurchaseOrderFull canonica con idempotencia."""
+) -> Tuple[Optional[PurchaseOrder], PurchaseOrderFull]:
+    """
+    Intercepta creacion de PurchaseOrder legacy y aplica gobernanza:
+    - READ_ONLY: lanza HTTP 410 Gone sin escrituras.
+    - CANONICAL_PRIMARY: crea exclusivamente PurchaseOrderFull (cero filas en purchase_orders).
+      Retorna (None, canonical_po).
+    - DUAL_WRITE: crea PurchaseOrder legacy y PurchaseOrderFull canonica.
+      Retorna (db_po, canonical_po).
+    - Idempotencia determinista:
+      Misma clave + mismo fingerprint -> replay (retorna las instancias existentes).
+      Misma clave + fingerprint divergente -> HTTP 409 Conflict.
+    """
     policy = get_or_create_governance_policy(db)
     if policy.mode == "READ_ONLY" or not policy.allow_legacy_writes:
         raise HTTPException(
@@ -859,9 +866,9 @@ def intercept_purchase_order_write(
         ).first()
         if existing_log:
             if existing_log.fingerprint == fingerprint:
-                ex_po = db.query(PurchaseOrder).filter(PurchaseOrder.id == existing_log.legacy_id).first()
+                ex_po = db.query(PurchaseOrder).filter(PurchaseOrder.id == existing_log.legacy_id).first() if existing_log.legacy_id else None
                 ex_can = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == existing_log.canonical_id).first()
-                if ex_po and ex_can:
+                if ex_can and (ex_po is not None or existing_log.legacy_id is None):
                     return ex_po, ex_can
             else:
                 raise HTTPException(
@@ -869,24 +876,52 @@ def intercept_purchase_order_write(
                     detail="Idempotency-Key reutilizada con un payload diferente en orden de compra."
                 )
 
-    db_po = PurchaseOrder(**po_data)
-    db.add(db_po)
-    db.flush()
-
     numero_canonico = _get_next_purchase_order_numero(db, prefix="PEC")
+    initial_status = po_data.get("status", "DRAFT")
+    canonical_estado = "BORRADOR"
+    if initial_status == "RECEIVED":
+        canonical_estado = "RECIBIDA"
+    elif initial_status in ("SENT", "CONFIRMED"):
+        canonical_estado = "CONFIRMADA"
 
     canonical_po = PurchaseOrderFull(
         numero=numero_canonico,
         supplier_name="Proveedor General Legacy",
-        estado="BORRADOR",
+        estado=canonical_estado,
         subtotal_cop=Decimal("0.00"),
         total_cop=Decimal("0.00"),
-        notas=f"Orden de compra sincronizada desde PurchaseOrder legacy #{db_po.id}"
+        notas=f"Orden de compra creada via modo {policy.mode}"
     )
     db.add(canonical_po)
     db.flush()
 
+    if policy.mode == "CANONICAL_PRIMARY":
+        # CANONICAL_PRIMARY: NO insertar en purchase_orders.
+        # Solo existe la entidad canonica PurchaseOrderFull. Retorna (None, canonical_po).
+        record_legacy_audit_log(
+            db=db,
+            event_type="LEGACY_WRITE_INTERCEPTED",
+            legacy_endpoint="/api/v1/purchases",
+            http_method="POST",
+            entity_type="PURCHASE_ORDER",
+            legacy_id=None,
+            canonical_id=canonical_po.id,
+            actor_user_id=user_id,
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+            discrepancy_details={"status": canonical_po.estado, "mode": "CANONICAL_PRIMARY"},
+            status="ALIGNED"
+        )
+        db.commit()
+        db.refresh(canonical_po)
+        return None, canonical_po
+
+    # DUAL_WRITE: Crear tambien la entidad legacy PurchaseOrder y vincular
+    db_po = PurchaseOrder(**po_data)
     db_po.canonical_purchase_order_id = canonical_po.id
+    canonical_po.notas = f"Orden de compra sincronizada desde PurchaseOrder legacy #{db_po.id}"
+    db.add(db_po)
+    db.flush()
 
     record_legacy_audit_log(
         db=db,

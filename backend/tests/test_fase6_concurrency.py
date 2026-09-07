@@ -210,6 +210,7 @@ def concurrent_setup():
             document=f"CC{ts}"
         )
         session.add(cust)
+        get_or_create_governance_policy(session)
         session.commit()
 
         yield {
@@ -262,6 +263,10 @@ def test_conc_01_dual_write_same_key_one_operation(concurrent_setup):
     t2 = threading.Thread(target=_worker)
     t1.start(); t2.start()
     t1.join(timeout=15); t2.join(timeout=15)
+
+    assert not t1.is_alive() and not t2.is_alive(), "Ningun hilo debe continuar vivo tras el join"
+    assert len(errors) == 0, f"Cero excepciones permitidas en workers. Errores: {errors}"
+    assert len(results) == 2, f"Se esperaban exactamente 2 respuestas, se obtuvieron {len(results)}"
 
     # Al menos uno debe haber tenido exito
     success_ids = [r for r in results if r is not None]
@@ -346,6 +351,10 @@ def test_conc_03_concurrent_purchase_no_duplicates(concurrent_setup):
     t1.start(); t2.start()
     t1.join(timeout=15); t2.join(timeout=15)
 
+    assert not t1.is_alive() and not t2.is_alive(), "Ningun hilo debe continuar vivo tras el join"
+    assert len(errors) == 0, f"Cero excepciones permitidas en workers de compra. Errores: {errors}"
+    assert len(results) == 2, f"Se esperaban exactamente 2 respuestas, se obtuvieron {len(results)}"
+
     success_ids = [r for r in results if r is not None]
     assert len(success_ids) >= 1, f"Ningun hilo de compra tuvo exito. Errores: {errors}"
 
@@ -388,6 +397,9 @@ def test_conc_04_checkout_identical_concurrent_one_order(concurrent_client, conc
     t2 = threading.Thread(target=_checkout)
     t1.start(); t2.start()
     t1.join(timeout=15); t2.join(timeout=15)
+
+    assert not t1.is_alive() and not t2.is_alive(), "Ningun hilo debe continuar vivo tras el join"
+    assert len(results) == 2, f"Se esperaban exactamente 2 respuestas, se obtuvieron {len(results)}"
 
     ok_codes = [r for r, _ in results if r in (200, 201)]
     assert len(ok_codes) >= 1, f"Ningun checkout exitoso. Results: {results}"
@@ -460,15 +472,63 @@ def test_conc_05_competing_checkouts_no_oversell(concurrent_client, concurrent_s
     for t in threads:
         t.join(timeout=30)
 
+    # 1. Control estricto de concurrencia y respuesta de hilos
+    assert len(results) == 10, f"Se esperaban exactamente 10 respuestas, se obtuvieron {len(results)}"
+    assert not any(t.is_alive() for t in threads), "Ningún hilo debe continuar vivo tras el join"
+
     successes = [s for s in results if s in (200, 201)]
     failures = [s for s in results if s == 409]
 
-    assert len(successes) <= 5, (
-        f"OVERSELLING detectado: {len(successes)} exitos con solo 5 unidades. "
+    # 2. Exactamente 5 éxitos y 5 rechazos 409 (cero 500 y cero excepciones)
+    assert len(successes) == 5, (
+        f"Se esperaban exactamente 5 exitos (stock=5). Exitos={len(successes)}, Fallos={len(failures)}. "
         f"Resultados: {results}"
     )
-    assert len(successes) >= 1, f"Todos los checkouts fallaron. Resultados: {results}"
-    assert len(successes) + len(failures) == len(results)
+    assert len(failures) == 5, (
+        f"Se esperaban exactamente 5 respuestas 409. Fallos={len(failures)}. "
+        f"Resultados: {results}"
+    )
+    assert not any(s == 500 for s in results), f"Cero errores 500 permitidos. Resultados: {results}"
+    assert len(successes) + len(failures) == 10, f"La suma de exitos y fallos debe ser 10. Resultados: {results}"
+
+    # 3. Verificaciones rigurosas de estado en Base de Datos
+    from app.api.v1.ecommerce import _get_real_sellable_stock
+    session = _make_session()
+    try:
+        # Suma de reservas ACTIVE exactamente 5
+        active_res = session.query(InventoryReservation).filter(
+            InventoryReservation.sku_id == setup["sku_id"],
+            InventoryReservation.status == "ACTIVE"
+        ).all()
+        total_reserved = sum(r.quantity_reserved for r in active_res)
+        assert total_reserved == Decimal("5"), (
+            f"Suma de reservas ACTIVE debe ser exactamente 5, encontrado {total_reserved}"
+        )
+
+        # Exactamente 5 pedidos SaleOrder creados en esta ejecucion
+        created_orders = session.query(SaleOrder).filter(
+            SaleOrder.checkout_idempotency_key.like(f"CONC_STOCK_{ts}_%")
+        ).count()
+        assert created_orders == 5, (
+            f"Exactamente 5 pedidos SaleOrder deben ser creados, encontrados {created_orders}"
+        )
+
+        # Stock físico permanece en 5 hasta despacho
+        inv_post = session.query(InventoryLevel).filter(
+            InventoryLevel.sku_id == setup["sku_id"],
+            InventoryLevel.warehouse_id == setup["warehouse_id"]
+        ).first()
+        assert inv_post.quantity == 5, (
+            f"Stock fisico debe permanecer en 5 hasta despacho, encontrado {inv_post.quantity}"
+        )
+
+        # Disponibilidad vendible final = 0.0
+        avail = _get_real_sellable_stock(session, setup["sku_id"], setup["warehouse_id"], "NEBULAE")
+        assert avail == 0.0, (
+            f"Disponibilidad vendible final debe ser 0.0, encontrada {avail}"
+        )
+    finally:
+        session.close()
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -506,6 +566,9 @@ def test_conc_06_concurrent_reconcile_sync_no_duplicates(concurrent_client, conc
     t2 = threading.Thread(target=_reconcile)
     t1.start(); t2.start()
     t1.join(timeout=30); t2.join(timeout=30)
+
+    assert not t1.is_alive() and not t2.is_alive(), "Ningun hilo debe continuar vivo tras el join"
+    assert len(results) == 2, f"Se esperaban exactamente 2 respuestas, se obtuvieron {len(results)}"
 
     assert all(s == 200 for s in results), (
         f"Reconcile-sync fallo. Resultados: {results}"
@@ -565,8 +628,11 @@ def test_conc_07_consecutive_numbers_unique_under_concurrency():
     for t in threads:
         t.join(timeout=30)
 
+    assert not any(t.is_alive() for t in threads), "Ningun hilo debe continuar vivo tras el join"
     assert not errors, f"Errores obteniendo consecutivos: {errors}"
     assert len(ven_numeros) == 20, f"Se esperaban 20 numeros VEN, se obtuvieron {len(ven_numeros)}"
+    assert len(pec_numeros) == 20, f"Se esperaban 20 numeros PEC, se obtuvieron {len(pec_numeros)}"
+    assert len(cot_numeros) == 20, f"Se esperaban 20 numeros COT, se obtuvieron {len(cot_numeros)}"
 
     # Verificar unicidad
     assert len(set(ven_numeros)) == 20, (

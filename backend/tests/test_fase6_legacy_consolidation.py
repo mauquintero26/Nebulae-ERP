@@ -493,6 +493,16 @@ def test_06_compare_purchases_parity_comprehensive(db: Session):
     # El score calculado debe ser un numero valido
     assert 0.0 <= parity["purchases_parity_score"] <= 100.0
 
+    # Verificar Paridad Honesta (Bloqueo 5)
+    assert "status" in parity["comparable_fields"], "status debe ser campo COMPARABLE"
+    assert "canonical_linkage" in parity["comparable_fields"], "canonical_linkage debe ser campo COMPARABLE"
+    assert "supplier_name" in parity["not_comparable_fields"], "supplier_name debe ser NOT_COMPARABLE"
+    assert "currency" in parity["not_comparable_fields"], "currency debe ser NOT_COMPARABLE"
+    assert "lines_count" in parity["not_comparable_fields"], "lines_count debe ser NOT_COMPARABLE"
+    assert "limitations" in parity and len(parity["limitations"]) > 30, "Debe incluir documentacion explicita de limitaciones"
+    assert parity["field_comparability"]["supplier_name"] == "NOT_COMPARABLE"
+    assert parity["field_comparability"]["status"] == "COMPARABLE"
+
     # La funcion es estrictamente READ-ONLY: no debe haber modificado ningun registro
     db.expire_all()
     assert parity["discrepancies_count"] >= 5
@@ -893,17 +903,23 @@ def test_18_invoice_sales_order_sync(client: TestClient, auth_tokens, base_catal
 # ──────────────────────────────────────────────────────────────────────────────
 # TEST 19: Checkout Reserva Inventario sin Reduccion Fisica (Bloqueo 5)
 # ──────────────────────────────────────────────────────────────────────────────
-def test_19_checkout_reservation_does_not_reduce_physical_stock(client: TestClient, base_catalog_and_customer, db: Session):
+def test_19_checkout_reservation_does_not_reduce_physical_stock(client: TestClient, auth_tokens, base_catalog_and_customer, db: Session):
     """
     Al hacer checkout:
     - InventoryLevel.quantity NO cambia (stock fisico intacto)
     - InventoryOwnerBalance.quantity NO cambia
     - InventoryReservation ACTIVE se crea con la cantidad reservada
     - stock disponible = balance - suma de reservas activas (baja)
-    Al despachar, el stock fisico bajaria (fuera del scope de este test).
+    Al despachar con el servicio productivo real:
+    - InventoryLevel.quantity disminuye (-3)
+    - InventoryOwnerBalance.quantity disminuye (-3)
+    - InventoryReservation se consume / cierra (CONVERTED)
+    - Movimiento Kardex OUT se registra exactamente por 3 unidades
+    - Stock disponible final = 7
     """
     from app.api.v1.ecommerce import _get_real_sellable_stock
-    from app.models.inventory import InventoryLevel
+    from app.models.inventory import InventoryLevel, InventoryMovement
+    from app.models.fase1b import SaleOrderLineErp
 
     ts = int(time.time())
     sku = base_catalog_and_customer["sku"]
@@ -966,7 +982,7 @@ def test_19_checkout_reservation_does_not_reduce_physical_stock(client: TestClie
 
     db.expire_all()
 
-    # ── Verificacion: InventoryLevel NO cambia ───────────────────────────────
+    # ── Verificacion: InventoryLevel NO cambia al reservar ───────────────────
     stock_fisico_despues = db.query(InventoryLevel).filter(
         InventoryLevel.sku_id == sku.id,
         InventoryLevel.warehouse_id == wh.id
@@ -976,7 +992,7 @@ def test_19_checkout_reservation_does_not_reduce_physical_stock(client: TestClie
         f"Antes={stock_fisico_antes}, Despues={stock_fisico_despues}"
     )
 
-    # ── Verificacion: InventoryOwnerBalance NO cambia ────────────────────────
+    # ── Verificacion: InventoryOwnerBalance NO cambia al reservar ────────────
     balance_despues = db.query(InventoryOwnerBalance).filter(
         InventoryOwnerBalance.sku_id == sku.id,
         InventoryOwnerBalance.warehouse_id == wh.id,
@@ -993,79 +1009,115 @@ def test_19_checkout_reservation_does_not_reduce_physical_stock(client: TestClie
         InventoryReservation.sku_id == sku.id,
         InventoryReservation.status == "ACTIVE"
     ).all()
-    # Debe haber al menos 1 reserva ACTIVE para este SKU
     assert len(reservas) >= 1, "Debe existir al menos una InventoryReservation ACTIVE para el SKU"
     total_reservado = sum(r.quantity_reserved for r in reservas)
     assert total_reservado >= 3, f"La cantidad reservada debe ser al menos 3. Encontrada: {total_reservado}"
 
-    # ── Verificacion: stock vendible (disponible) bajo ───────────────────────
-    # _get_real_sellable_stock = balance - suma de reservas ACTIVE
+    # ── Verificacion: stock vendible (disponible) bajo a 7 ───────────────────
     stock_vendible = _get_real_sellable_stock(db, sku.id, wh.id, "NEBULAE")
     assert stock_vendible <= float(balance_antes) - 3, (
         f"Stock vendible debe haber bajado al menos 3 unidades. "
         f"Balance={balance_antes}, Vendible={stock_vendible}"
     )
 
-    # ── FASE 2: Simulacion de Despacho ───────────────────────────────────────
-    # No existe endpoint de despacho en Fase 6; el despacho es una salida fisica
-    # canonica que reduce InventoryLevel + InventoryOwnerBalance y cierra la reserva.
-    # Simulamos el despacho directamente en los modelos para verificar que la
-    # arquitectura de datos es consistente:
-    # stock inicial 10 → reservar 3 → fisico 10, balance 10, reserva 3, disponible 7
-    # → despachar 3 → fisico 7, balance 7, reserva cerrada, disponible final 7.
+    # ── FASE 2: Despacho Productivo Real ─────────────────────────────────────
+    # Se ejecuta el endpoint productivo real:
+    # 1. Crear Entrega en /api/v1/ventas/entregas
+    # 2. Ejecutar Despacho en /api/v1/ventas/entregas/{id}/despachar
+    # El despacho real descuenta stock físico (InventoryLevel), balance (InventoryOwnerBalance),
+    # convierte reservas a CONVERTED y genera movimiento Kardex OUT.
+    admin_headers = auth_tokens["admin"]["headers"]
+    can_order = db.query(SaleOrder).filter(SaleOrder.id == can_order_id).first()
+    assert can_order is not None, "Debe existir la orden canonica creada por el checkout"
 
-    # Reducir stock fisico (-3) — lo que haria el endpoint de salida fisica
-    inv_lvl_despacho = db.query(InventoryLevel).filter(
-        InventoryLevel.sku_id == sku.id,
-        InventoryLevel.warehouse_id == wh.id
+    so_line = db.query(SaleOrderLineErp).filter(
+        SaleOrderLineErp.so_id == can_order.id,
+        SaleOrderLineErp.sku_id == sku.id
     ).first()
-    inv_lvl_despacho.quantity = inv_lvl_despacho.quantity - 3
+    assert so_line is not None, "Debe existir la linea canonica SaleOrderLineErp para el SKU"
 
-    # Reducir balance patrimonial (-3)
-    bal_despacho = db.query(InventoryOwnerBalance).filter(
-        InventoryOwnerBalance.sku_id == sku.id,
-        InventoryOwnerBalance.warehouse_id == wh.id,
-        InventoryOwnerBalance.owner == "NEBULAE"
-    ).first()
-    bal_despacho.quantity = bal_despacho.quantity - Decimal("3")
+    # 1. Crear Entrega productiva con autorizacion formal de politica
+    delivery_body = {
+        "customer_id": can_order.customer_id,
+        "warehouse_id": wh.id,
+        "delivery_method": "ENTREGA_LOCAL",
+        "carrier": "Flota Propia Nebulae",
+        "policy_authorized_by": "Gerente Logistica",
+        "policy_exception_reason": "Despacho autorizado para verificacion de integracion real",
+        "lines": [
+            {
+                "sale_order_id": can_order.id,
+                "sale_order_line_id": so_line.id,
+                "sku_id": sku.id,
+                "quantity": 3
+            }
+        ]
+    }
+    res_deliv = client.post("/api/v1/ventas/entregas", json=delivery_body, headers=admin_headers)
+    assert res_deliv.status_code == 201, f"Fallo crear entrega: {res_deliv.text}"
+    delivery_id = res_deliv.json()["data"]["id"]
 
-    # Cerrar reserva ACTIVE → RELEASED
-    for res in reservas:
-        res.status = "RELEASED"
+    # 2. Ejecutar Despacho real en endpoint productivo
+    disp_key = f"DISP_REAL_{ts}"
+    res_disp = client.post(
+        f"/api/v1/ventas/entregas/{delivery_id}/despachar",
+        json={"idempotency_key": disp_key, "carrier": "Flota Propia", "observations": "Despacho real"},
+        headers=admin_headers
+    )
+    assert res_disp.status_code == 200, f"Fallo despacho real: {res_disp.text}"
 
-    db.commit()
     db.expire_all()
 
-    # ── Verificacion post-despacho ────────────────────────────────────────────
+    # ── Verificaciones post-despacho real ─────────────────────────────────────
+    # 1. Stock físico disminuyó a 7
     stock_fisico_post = db.query(InventoryLevel).filter(
         InventoryLevel.sku_id == sku.id,
         InventoryLevel.warehouse_id == wh.id
     ).first().quantity
     assert stock_fisico_post == 7, (
-        f"Despues del despacho: InventoryLevel.quantity debe ser 7, encontrado {stock_fisico_post}"
+        f"Despues del despacho real: InventoryLevel.quantity debe ser 7, encontrado {stock_fisico_post}"
     )
 
+    # 2. Balance patrimonial disminuyó a 7
     balance_post = db.query(InventoryOwnerBalance).filter(
         InventoryOwnerBalance.sku_id == sku.id,
         InventoryOwnerBalance.warehouse_id == wh.id,
         InventoryOwnerBalance.owner == "NEBULAE"
     ).first().quantity
     assert balance_post == Decimal("7"), (
-        f"Despues del despacho: InventoryOwnerBalance.quantity debe ser 7, encontrado {balance_post}"
+        f"Despues del despacho real: InventoryOwnerBalance.quantity debe ser 7, encontrado {balance_post}"
     )
 
-    reservas_post = db.query(InventoryReservation).filter(
-        InventoryReservation.sku_id == sku.id,
+    # 3. Reserva consumida / cerrada (cero reservas ACTIVE restantes para esta linea)
+    reservas_active_post = db.query(InventoryReservation).filter(
+        InventoryReservation.sale_order_line_id == so_line.id,
         InventoryReservation.status == "ACTIVE"
     ).all()
-    assert len(reservas_post) == 0, (
-        f"Despues del despacho: no debe haber reservas ACTIVE. Encontradas: {len(reservas_post)}"
+    assert len(reservas_active_post) == 0, (
+        f"Despues del despacho real: no debe haber reservas ACTIVE para la linea. Encontradas: {len(reservas_active_post)}"
     )
 
+    reservas_converted = db.query(InventoryReservation).filter(
+        InventoryReservation.sale_order_line_id == so_line.id,
+        InventoryReservation.status == "CONVERTED"
+    ).all()
+    assert len(reservas_converted) >= 1, "La reserva debe haber pasado a status CONVERTED tras el despacho"
+    assert sum(r.quantity_reserved for r in reservas_converted) == Decimal("3")
+
+    # 4. Movimiento Kárdex OUT generado exactamente por 3 unidades
+    kardex_movs = db.query(InventoryMovement).filter(
+        InventoryMovement.sku_id == sku.id,
+        InventoryMovement.warehouse_id == wh.id,
+        InventoryMovement.direction == "OUT"
+    ).all()
+    assert len(kardex_movs) >= 1, "Debe existir al menos un movimiento Kardex OUT tras el despacho real"
+    total_kardex_out = sum(m.quantity for m in kardex_movs)
+    assert total_kardex_out == Decimal("3"), f"Kardex OUT debe ser exactamente 3, encontrado {total_kardex_out}"
+
+    # 5. Disponibilidad vendible final = 7.0
     stock_vendible_post = _get_real_sellable_stock(db, sku.id, wh.id, "NEBULAE")
     assert stock_vendible_post == 7.0, (
-        f"Despues del despacho: stock vendible debe ser 7 (balance 7 - reservas 0). "
-        f"Encontrado: {stock_vendible_post}"
+        f"Despues del despacho real: stock vendible debe ser 7.0 (balance 7 - reservas 0). Encontrado: {stock_vendible_post}"
     )
 
 
@@ -1126,4 +1178,96 @@ def test_20_sequences_raise_error_without_fallback(db: Session):
         assert "seq_nonexistent_xyz" in err_str or "does not exist" in err_str or "no existe" in err_str, (
             f"Error inesperado: {exc}"
         )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TEST 21: CANONICAL_PRIMARY Real en Compras (Requisito 2)
+# ──────────────────────────────────────────────────────────────────────────────
+def test_21_canonical_primary_compras_real(client: TestClient, auth_tokens, db: Session):
+    """
+    Verifica intercept_purchase_order_write y gobernanza en compras:
+    - READ_ONLY: retorna 410 Gone sin escrituras.
+    - CANONICAL_PRIMARY: crea exclusivamente PurchaseOrderFull.
+      purchase_orders no aumenta (delta = 0).
+      La respuesta legacy se genera mediante adaptador compatible.
+      Replay idéntico devuelve el mismo ID.
+      Replay divergente retorna 409.
+    - DUAL_WRITE: crea ambas entidades (PurchaseOrder y PurchaseOrderFull).
+    - Conteos antes y después verificados rigurosamente.
+    """
+    headers = auth_tokens["admin"]["headers"]
+    ts = int(time.time())
+
+    # 1. READ_ONLY retorna 410 sin escrituras
+    client.patch("/api/v1/legacy/governance", json={"mode": "READ_ONLY", "allow_legacy_writes": False}, headers=headers)
+    res_ro = client.post("/api/v1/purchases/", json={"status": "DRAFT"}, headers={**headers, "Idempotency-Key": f"RO_PO_{ts}"})
+    assert res_ro.status_code == 410, f"READ_ONLY debe retornar 410 en compras. Got {res_ro.status_code}"
+
+    # 2. Configurar CANONICAL_PRIMARY
+    client.patch("/api/v1/legacy/governance", json={"mode": "CANONICAL_PRIMARY", "allow_legacy_writes": True}, headers=headers)
+
+    db.expire_all()
+    po_legacy_before = db.query(PurchaseOrder).count()
+    po_can_before = db.query(PurchaseOrderFull).count()
+
+    idem_cp = f"CP_PO_{ts}"
+    payload = {"status": "DRAFT"}
+
+    # Peticion HTTP a traves del endpoint legacy
+    res_cp = client.post("/api/v1/purchases/", json=payload, headers={**headers, "Idempotency-Key": idem_cp})
+    assert res_cp.status_code == 201, f"CANONICAL_PRIMARY debe retornar 201. Got {res_cp.status_code}: {res_cp.text}"
+    cp_data = res_cp.json()["data"]
+
+    # Validar respuesta compatible generada por el adaptador
+    assert "id" in cp_data, "El adaptador legacy debe retornar 'id'"
+    assert "status" in cp_data, "El adaptador legacy debe retornar 'status'"
+    assert cp_data["status"] == "BORRADOR" or cp_data["status"] == "DRAFT"
+    canon_id = cp_data["id"]
+
+    db.expire_all()
+    po_legacy_after = db.query(PurchaseOrder).count()
+    po_can_after = db.query(PurchaseOrderFull).count()
+
+    # purchase_orders NO aumenta; purchase_orders_full aumenta exactamente 1
+    assert po_legacy_after == po_legacy_before, (
+        f"CANONICAL_PRIMARY NO debe insertar en purchase_orders. Antes={po_legacy_before}, Despues={po_legacy_after}"
+    )
+    assert po_can_after == po_can_before + 1, (
+        f"CANONICAL_PRIMARY debe crear exactamente 1 PurchaseOrderFull. Antes={po_can_before}, Despues={po_can_after}"
+    )
+
+    # Replay idéntico -> retorna el mismo ID sin crear filas
+    res_replay = client.post("/api/v1/purchases/", json=payload, headers={**headers, "Idempotency-Key": idem_cp})
+    assert res_replay.status_code == 201
+    assert res_replay.json()["data"]["id"] == canon_id, "Replay identico debe retornar el mismo ID"
+
+    db.expire_all()
+    assert db.query(PurchaseOrder).count() == po_legacy_after, "Replay identico no debe crear purchase_orders"
+    assert db.query(PurchaseOrderFull).count() == po_can_after, "Replay identico no debe crear purchase_orders_full"
+
+    # Replay divergente -> 409 Conflict
+    res_div = client.post("/api/v1/purchases/", json={"status": "SENT"}, headers={**headers, "Idempotency-Key": idem_cp})
+    assert res_div.status_code == 409, f"Replay divergente en compras debe retornar 409. Got: {res_div.status_code}"
+
+    # 3. DUAL_WRITE crea ambas entidades
+    client.patch("/api/v1/legacy/governance", json={"mode": "DUAL_WRITE", "allow_legacy_writes": True}, headers=headers)
+
+    db.expire_all()
+    po_leg_dw_before = db.query(PurchaseOrder).count()
+    po_can_dw_before = db.query(PurchaseOrderFull).count()
+
+    idem_dw = f"DW_PO_{ts}"
+    res_dw = client.post("/api/v1/purchases/", json=payload, headers={**headers, "Idempotency-Key": idem_dw})
+    assert res_dw.status_code == 201
+
+    db.expire_all()
+    po_leg_dw_after = db.query(PurchaseOrder).count()
+    po_can_dw_after = db.query(PurchaseOrderFull).count()
+
+    assert po_leg_dw_after == po_leg_dw_before + 1, "DUAL_WRITE debe crear fila en purchase_orders"
+    assert po_can_dw_after == po_can_dw_before + 1, "DUAL_WRITE debe crear fila en purchase_orders_full"
+
+    # Restaurar gobernanza a DUAL_WRITE para evitar contaminacion en otros tests
+    client.patch("/api/v1/legacy/governance", json={"mode": "DUAL_WRITE", "allow_legacy_writes": True}, headers=headers)
+
 
