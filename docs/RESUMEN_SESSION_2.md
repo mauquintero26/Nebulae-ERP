@@ -81,6 +81,21 @@
 | Run 1 (verbose) | ✅ **7 passed, 0 failed** | 1:26 |
 | Run 2 (quiet) | ✅ **7 passed, 0 failed** | ~1:30 |
 
+### Suite Completa Backend — `tests/`
+
+```
+1 failed, 372 passed, 3436 warnings, 1 error in 3779.78s (1:02:59)
+```
+
+**Fallos pre-existentes (Fase 5, no relacionados con cambios de Fase 6):**
+
+| Test | Estado | Causa |
+|------|--------|-------|
+| `test_receipt_partial.py::TestLogistica::test_logistica_does_not_change_stock` | FAILED (pre-existente) | Test de logística Fase 5 — ya fallaba antes de eae7dec |
+| `test_receipt_concurrency.py::TestConcurrency::test_different_keys_same_eninv_second_gets_409` | ERROR (pre-existente) | Test de concurrencia recepciones Fase 5 — ya fallaba antes de eae7dec |
+
+**Los 27 tests nuevos/expandidos de Fase 6 (20 + 7) todos PASSED ✅**
+
 ### Frontend
 
 ```
