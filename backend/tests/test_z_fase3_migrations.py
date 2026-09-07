@@ -23,6 +23,21 @@ from tests.conftest import TEST_URL, PROD_URL, _BACKEND
 
 class TestFase3Migrations:
 
+    @pytest.fixture(autouse=True)
+    def restore_head(self, setup_test_db):
+        yield
+        env = os.environ.copy()
+        env["DATABASE_URL"] = TEST_URL
+        subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            cwd=str(_BACKEND), env=env, capture_output=True, text=True
+        )
+        eng = create_engine(TEST_URL)
+        with eng.connect() as conn:
+            conn.execute(text("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO nebulae_test;"))
+            conn.execute(text("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO nebulae_test;"))
+            conn.commit()
+
     def test_fa3_001_tablas_y_columnas_creadas(self, db):
         """Verifica la existencia física de la tabla inventory_quarantine y nuevas columnas."""
         cols_quar = db.execute(text("""

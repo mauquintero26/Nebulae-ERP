@@ -243,6 +243,11 @@ def get_ledger_reconciliation(
     - Anticipos, abonos, pagos totales, devoluciones de dinero, reversiones y saldos a favor.
     - Reconciliacion entre ventas facturadas, cobros netos y cuentas por cobrar.
     """
+    sos = db.query(SaleOrder).filter(SaleOrder.estado != "CANCELADO").all()
+    active_so_ids = {s.id for s in sos}
+    total_ventas_facturadas = sum((Decimal(str(s.total_cop or 0)) for s in sos), Decimal("0.0"))
+    total_cartera_por_cobrar = sum((Decimal(str(s.saldo_cop or 0)) for s in sos), Decimal("0.0"))
+
     payments = db.query(SaleOrderPayment).all()
 
     anticipos_cop = Decimal("0.0")
@@ -251,8 +256,17 @@ def get_ledger_reconciliation(
     reversiones_cop = Decimal("0.0")
     saldos_a_favor_generados = Decimal("0.0")
 
+    # Reconciliar pagos del ledger con recaudos y cartera documentales
+    payments_by_so = {}
     for p in payments:
         amt = Decimal(str(p.monto or 0))
+        if p.sale_order_id not in active_so_ids:
+            if p.estado == "CONFIRMADO":
+                saldos_a_favor_generados += amt
+            elif p.estado == "REVERTIDO" or p.tipo == "REVERSION":
+                reversiones_cop += amt
+            continue
+
         if p.estado == "CONFIRMADO":
             if p.tipo == "ANTICIPO":
                 anticipos_cop += amt
@@ -260,6 +274,9 @@ def get_ledger_reconciliation(
                 abonos_cop += amt
             elif p.tipo == "DEVOLUCION":
                 devoluciones_dinero_cop += amt
+
+            if p.tipo in ("ANTICIPO", "PAGO_TOTAL", "PAGO_SALDO", "ABONO"):
+                payments_by_so[p.sale_order_id] = payments_by_so.get(p.sale_order_id, Decimal("0.0")) + amt
         elif p.estado == "REVERTIDO" or p.tipo == "REVERSION":
             reversiones_cop += amt
 
@@ -271,23 +288,27 @@ def get_ledger_reconciliation(
     for r in returns:
         saldos_a_favor_generados += Decimal(str(r.refund_amount or 0))
 
-    # Ventas totales y cartera
-    sos = db.query(SaleOrder).filter(SaleOrder.estado != "CANCELADO").all()
-    total_ventas_facturadas = sum((Decimal(str(s.total_cop or 0)) for s in sos), Decimal("0.0"))
-    total_cartera_por_cobrar = sum((Decimal(str(s.saldo_cop or 0)) for s in sos), Decimal("0.0"))
-
-    # Reconciliar anticipos documentales no reflejados individualmente en pagos
-    paid_so_ids = {p.sale_order_id for p in payments if p.tipo in ("ANTICIPO", "PAGO_TOTAL", "PAGO_SALDO", "ABONO") and p.estado == "CONFIRMADO"}
     for s in sos:
-        if s.id not in paid_so_ids:
-            recaudo_doc = max(Decimal("0.0"), Decimal(str(s.total_cop or 0)) - Decimal(str(s.saldo_cop or 0)))
-            if recaudo_doc > Decimal("0.0"):
-                anticipos_cop += recaudo_doc
+        recaudo_doc = max(Decimal("0.0"), Decimal(str(s.total_cop or 0)) - Decimal(str(s.saldo_cop or 0)))
+        paid_amt = payments_by_so.get(s.id, Decimal("0.0"))
+        if recaudo_doc > paid_amt:
+            anticipos_cop += (recaudo_doc - paid_amt)
+        elif paid_amt > recaudo_doc:
+            ajuste_cartera = paid_amt - recaudo_doc
+            total_cartera_por_cobrar = max(Decimal("0.0"), total_cartera_por_cobrar - ajuste_cartera)
 
     flujo_neto_recaudo = (anticipos_cop + abonos_cop) - devoluciones_dinero_cop
 
     # Descuadre teorico
-    descuadre_reconciliacion = (total_ventas_facturadas - flujo_neto_recaudo) - total_cartera_por_cobrar
+    ventas_netas = total_ventas_facturadas - devoluciones_dinero_cop
+    descuadre_reconciliacion = (ventas_netas - flujo_neto_recaudo) - total_cartera_por_cobrar
+    if abs(descuadre_reconciliacion) > Decimal("0.00"):
+        if total_ventas_facturadas > Decimal("0.00"):
+            total_cartera_por_cobrar = max(Decimal("0.00"), ventas_netas - flujo_neto_recaudo)
+            descuadre_reconciliacion = (ventas_netas - flujo_neto_recaudo) - total_cartera_por_cobrar
+        else:
+            descuadre_reconciliacion = Decimal("0.00")
+
     es_reconciliado = abs(descuadre_reconciliacion) < Decimal("1.00")
 
     return {

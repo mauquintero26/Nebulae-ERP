@@ -226,6 +226,8 @@ def _sync_operational_agenda_deterministic(db: Session, target_customer_id: Opti
     synced_count = 0
     now = datetime.datetime.utcnow()
 
+    valid_customer_ids = {c[0] for c in db.query(Customer.id).all()}
+
     # Filtro de cliente si aplica
     so_query = db.query(SaleOrder)
     if target_customer_id:
@@ -233,7 +235,7 @@ def _sync_operational_agenda_deterministic(db: Session, target_customer_id: Opti
     sales_orders = so_query.all()
 
     for so in sales_orders:
-        if not so.customer_id:
+        if not so.customer_id or so.customer_id not in valid_customer_ids:
             continue
         c_id = so.customer_id
 
@@ -299,6 +301,8 @@ def _sync_operational_agenda_deterministic(db: Session, target_customer_id: Opti
     if target_customer_id:
         pack_query = pack_query.filter(SalePackingSession.customer_id == target_customer_id)
     for p in pack_query.all():
+        if not p.customer_id or p.customer_id not in valid_customer_ids:
+            continue
         key = f"{p.customer_id}_PACKING_{p.id}_EMPAQUE_PENDIENTE"
         existing = db.query(CustomerAgendaActivity).filter(CustomerAgendaActivity.deterministic_key == key).first()
         if not existing:
@@ -321,6 +325,8 @@ def _sync_operational_agenda_deterministic(db: Session, target_customer_id: Opti
     if target_customer_id:
         deliv_query = deliv_query.filter(SaleOrderDelivery.customer_id == target_customer_id)
     for d in deliv_query.all():
+        if not d.customer_id or d.customer_id not in valid_customer_ids:
+            continue
         act_type = "DESPACHO_PROGRAMADO" if d.status in ("BORRADOR", "PREPARANDO") else "ENTREGA_PENDIENTE"
         key = f"{d.customer_id}_DELIVERY_{d.id}_{act_type}"
         existing = db.query(CustomerAgendaActivity).filter(CustomerAgendaActivity.deterministic_key == key).first()
@@ -344,6 +350,8 @@ def _sync_operational_agenda_deterministic(db: Session, target_customer_id: Opti
     if target_customer_id:
         ret_query = ret_query.filter(SaleOrderReturn.customer_id == target_customer_id)
     for r in ret_query.all():
+        if not r.customer_id or r.customer_id not in valid_customer_ids:
+            continue
         key = f"{r.customer_id}_RETURN_{r.id}_GARANTIA_DEVOLUCION"
         existing = db.query(CustomerAgendaActivity).filter(CustomerAgendaActivity.deterministic_key == key).first()
         if not existing:

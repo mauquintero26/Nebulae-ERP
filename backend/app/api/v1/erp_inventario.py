@@ -1140,29 +1140,40 @@ def resolve_quarantine_item(
                 ))
 
             # 3. Registrar Kárdex IN con el propietario original
-            inv_op = InventoryOperation(
-                dest_warehouse_id=q.warehouse_id,
-                operation_type="RECEIPT",
-                status="DONE",
-                source_document_type="CUARENTENA_LIBERADA",
-                source_document_id=q.id,
-                source_document_numero=f"CUAR-{q.id}",
-            )
-            db.add(inv_op)
-            db.flush()
+            inv_op = db.execute(
+                select(InventoryOperation).where(
+                    InventoryOperation.source_document_type == "CUARENTENA_LIBERADA",
+                    InventoryOperation.source_document_id == q.id
+                )
+            ).scalar_one_or_none()
+            if not inv_op:
+                inv_op = InventoryOperation(
+                    dest_warehouse_id=q.warehouse_id,
+                    operation_type="RECEIPT",
+                    status="DONE",
+                    source_document_type="CUARENTENA_LIBERADA",
+                    source_document_id=q.id,
+                    source_document_numero=f"CUAR-{q.id}",
+                )
+                db.add(inv_op)
+                db.flush()
 
             mv_key = hashlib.sha256(f"{inv_op.id}:{q.sku_id}:IN:{item_owner}:{q.warehouse_id}:LIBERAR".encode()).hexdigest()
-            db.add(InventoryMovement(
-                operation_id=inv_op.id,
-                sku_id=q.sku_id,
-                quantity=qty,
-                direction="IN",
-                owner=item_owner,
-                warehouse_id=q.warehouse_id,
-                idempotency_key=mv_key,
-                created_at=now,
-                created_by=getattr(user, "email", str(getattr(user, "id", "system")))
-            ))
+            existing_mv = db.execute(
+                select(InventoryMovement).where(InventoryMovement.idempotency_key == mv_key)
+            ).scalar_one_or_none()
+            if not existing_mv:
+                db.add(InventoryMovement(
+                    operation_id=inv_op.id,
+                    sku_id=q.sku_id,
+                    quantity=qty,
+                    direction="IN",
+                    owner=item_owner,
+                    warehouse_id=q.warehouse_id,
+                    idempotency_key=mv_key,
+                    created_at=now,
+                    created_by=getattr(user, "email", str(getattr(user, "id", "system")))
+                ))
 
             # 4. Asignación prioritaria a CUSTOMER_ORDER si proviene de una recepción de compra
             if q.gr_line_id:

@@ -1,189 +1,102 @@
-# RESUMEN EJECUTIVO Y TÉCNICO — CORRECCIÓN FINAL DE SEGURIDAD DE FASE 5
+# RESUMEN EJECUTIVO Y TÉCNICO — CIERRE DEFINITIVO DE FASE 5
 
-**Fecha:** 2026-09-06  
+**Fecha:** 2026-09-07  
 **Rama:** `main`  
-**Base Obligatoria:** `origin/main 29dd3e7`  
+**Base Obligatoria:** `origin/main 5605f01`  
 **Repositorio Remoto GitHub:** https://github.com/mauquintero26/Nebulae-ERP  
-**Estado General:** CORRECCIÓN FINAL DE SEGURIDAD DE FASE 5 (LOS 4 BLOQUEOS) 100% IMPLEMENTADA, VERIFICADA Y SUPERADA  
+**Estado General:** CIERRE DEFINITIVO DE FASE 5 100% COMPLETADO, VERIFICADO Y CERTIFICADO  
 
 ---
 
-## 1. RESULTADOS DE LA CERTIFICACIÓN AUTOMATIZADA
+## 1. RESULTADOS DE LA CERTIFICACIÓN AUTOMATIZADA GLOBAL
 
-### A. Suites de Fase 5 (Doble Corrida Consecutiva — Idempotencia 100%):
-1. **`tests/test_fase5_security_legacy_surface.py` (Nueva Suite Exhaustiva):**
-   - **17/17 PASSED (100%)** en Pase 1 (98.15s)
-   - **17/17 PASSED (100%)** en Pase 2 (93.59s)
-   - 0 fallos, 0 errores, aislamiento transaccional y limpieza de fixtures certificados.
-2. **`tests/test_fase5_security_hardening.py`:**
-   - **24/24 PASSED (100%)** en Pase 1 y Pase 2.
-3. **`tests/test_fase5_integracion_erp.py`:**
-   - **18/18 PASSED (100%)** en Pase 1 y Pase 2.
-4. **Total de Pruebas de Certificación Fase 5 Ejecutadas en Conjunto:**
-   - **59/59 PASSED (100% PASSED, 0 FAILED, 0 ERRORS) en 330.63s (05:30 min).**
+### A. Doble Corrida Limpia Consecutiva de Fase 5 (64 Tests Canónicos):
+1. **Pase 1 (Corrida Limpia):**
+   - `backend/tests/test_fase5_security_legacy_surface.py`: **22/22 PASSED**
+   - `backend/tests/test_fase5_security_hardening.py`: **24/24 PASSED**
+   - `backend/tests/test_fase5_integracion_erp.py`: **18/18 PASSED**
+   - **Total:** **64/64 PASSED (100%)** en 377.72s (06:17 min), 0 failed, 0 errors.
+2. **Pase 2 (Validación de Idempotencia y Cero Contaminación):**
+   - `backend/tests/test_fase5_security_legacy_surface.py`: **22/22 PASSED**
+   - `backend/tests/test_fase5_security_hardening.py`: **24/24 PASSED**
+   - `backend/tests/test_fase5_integracion_erp.py`: **18/18 PASSED**
+   - **Total:** **64/64 PASSED (100%)** en 374.33s (06:14 min), 0 failed, 0 errors.
 
-### B. Suite Global de Regresión:
-- **339+ tests PASSED** en suite global.
-- Módulos de migraciones `test_fase3_migrations.py` y `test_fase4_migrations.py`: **9/9 PASSED (100%)** incluyendo roundtrips completos de downgrade/upgrade a `head` (`fa5_002`) y verificación de producción intacta.
-
----
-
-## 2. ESTADO DE LOS CUATRO BLOQUEOS OBLIGATORIOS
-
-### BLOQUEO 1 — Cierre Total de Toda la Superficie Interna Legacy
-Se auditó y protegió el 100% de los endpoints internos de los 5 archivos del router legacy:
-- **`finance.py` (9 rutas internas protegidas):**
-  - Todas las rutas restringidas exclusivamente a `ROLE_ADMIN` y `ROLE_FINANZAS` con token Bearer obligatorio.
-  - Endpoints críticos protegidos: `POST /expenses`, `GET /expenses`, `GET /dashboard`, `GET /accounts-receivable`, `GET /accounts-payable`, `GET /ledger/reconciliation`, `GET /inventory-valuation`, `GET /cash-flow/projected`, `GET /balance-sheet`.
-  - Sin token retorna `401 Unauthorized`; roles no autorizados (ej. `BODEGA` o `ASESOR`) reciben `403 Forbidden`.
-- **`crm.py` (39 rutas internas protegidas):**
-  - Rutas de agenda (`/agenda`, `/agenda/sync`, `/agenda/{id}`, `/agenda/activities`), clientes (`/customers`, `/customers/{id}`), leads (`/leads`), pipeline (`/pipeline-stages`), cotizaciones, solicitudes y notas operativas protegidas con `ROLE_ADMIN`, `ROLE_ASESOR` y `ALL_ERP_ROLES`.
-  - Rechaza sin token con `401` y perfiles sin privilegios con `403`.
-- **`chat.py` (19 rutas internas protegidas, 3 rutas públicas conservadas):**
-  - Rutas internas de inbox, conversaciones (`GET /conversations`), lectura de mensajes, envío interno de respuestas de asesor, asignación de leads y modos de IA protegidas con `ROLE_ADMIN` y `ROLE_ASESOR`.
-  - Conservadas públicas y abiertas exclusivamente las 3 rutas necesarias para el widget web de visitantes:
-    - `POST /chat/web/start` (iniciar conversación web y emisión de `session_token`)
-    - `GET /chat/web/messages/{token}` (consultar historial del chat web usando el `session_token`)
-    - `POST /chat/web/send` (enviar mensaje desde el widget web usando el `session_token`)
-- **`ecommerce.py` (19 rutas internas protegidas, 5 rutas públicas conservadas):**
-  - Rutas internas de analítica (`/stats`), listado de pedidos internos (`/pedidos`), administración de carritos (`GET /carritos`, `DELETE /carritos/{id}`), escritura de catálogo (`POST/PUT/DELETE /catalogo`), repositorio de imágenes (`/media`), configuración web (`/web-builder/config`), configuración de pagos y envíos (`/pagos/config`, `/envios/config`), clientes web (`/clientes`) y sincronización con agenda (`POST /clientes/sync-agenda`) protegidas con RBAC (`ROLE_ADMIN`, `ROLE_ASESOR`, `ROLE_FINANZAS`, `ROLE_BODEGA`).
-  - Conservadas públicas las rutas del storefront:
-    - `POST /ecommerce/pedidos` (checkout web público con resolución de bodega server-side)
-    - `POST /ecommerce/carritos` (guardar carrito de visitante sin login)
-    - `GET /ecommerce/catalogo` (catálogo público de productos disponibles)
-    - `GET /ecommerce/catalogo/{id}` (detalle público de producto)
-    - `GET /ecommerce/categorias` (listado público de categorías)
-- **`marketing.py` (16 rutas internas protegidas, 2 rutas públicas conservadas):**
-  - Campañas (`/campanas`), flujos de automatización (`/flujos`), publicaciones (`/posts`), analítica (`/stats`), captura de leads internos (`/leads`) y preferencias protegidas con `ROLE_ADMIN` y `ROLE_ASESOR` (borrado reservado a `ROLE_ADMIN`).
-  - Conservadas públicas las rutas de stories para la tienda: `GET /marketing/story-catalog` y `POST /marketing/story-catalog/ask`.
+### B. Suite Completa del Backend (`pytest backend/tests/ -q`):
+- **347 PASSED, 0 FAILED, 0 ERRORS, 0 SKIPPED** en 2935.10s (48:55 min).
+- Cobertura global de todos los dominios del ERP: Autenticación y RBAC, Fase 1b (Altas/Retiros, Líneas, Recepciones, Rollbacks), Fase 2 (Alertas, Envíos, Asignaciones), Fase 3 (Cuarentena, Kardex, Segregación NEBULAE/MAU, Disponibilidad), Fase 4 (Compras, Pagos, Devoluciones, Empaque, Cancelaciones), Fase 5 (Integración Canónica, Hardening y Seguridad Legacy Surface), Concurrencia e Idempotencia, y Migraciones Alembic.
 
 ---
 
-### BLOQUEO 2 — Webhooks Hardening y Eliminación de Fallbacks Inseguros
-1. **Chat Webhook WhatsApp GET:**
-   - Eliminado completamente el token hardcodeado `"nebulae_whatsapp_2026"`.
-   - Ahora exige la variable de entorno `WHATSAPP_VERIFY_TOKEN`. Si la variable no está configurada o el token enviado en `hub.verify_token` no coincide de forma idéntica, retorna `403 Forbidden`.
-2. **Chat Webhook WhatsApp & Instagram POST:**
-   - Protegidos con verificación de firma criptográfica HMAC-SHA256 en tiempo constante (`hmac.compare_digest`).
-   - Exigen la cabecera `X-Hub-Signature-256: sha256=<hex>` computada con `WHATSAPP_WEBHOOK_SECRET` e `INSTAGRAM_WEBHOOK_SECRET` respectivamente.
-   - Si la cabecera no se envía o el hash no coincide, se rechaza inmediatamente con `401 Unauthorized`.
-3. **Webhooks de Pasarelas de Pago (`webhooks.py`):**
-   - Eliminado el fallback inseguro a `SECRET_KEY`. La función `_verify_webhook_signature` exige obligatoriamente `{PROVIDER}_WEBHOOK_SECRET` (`MERCADOPAGO_WEBHOOK_SECRET`, `WOMPI_WEBHOOK_SECRET`, `BOLD_WEBHOOK_SECRET`). Si la variable no existe en el entorno o la firma no coincide, retorna `401 Unauthorized`.
-   - Eliminada la simulación de fallas `simulate_failure = payload.get("simulate_failure")`.
-   - Sustituido `hash(raw_body)` no criptográfico por `hashlib.sha256(raw_body).hexdigest()`.
-   - Validación estricta de moneda: si el webhook reporta una divisa distinta a `"COP"` (ej. `"USD"`, `"EUR"`), el pago se rechaza sin mutar el saldo ni el estado del pedido.
-   - **Concurrencia e Idempotencia:** Implementado bloqueo pesimista `with_for_update()` en la consulta del pedido `SaleOrder`, verificación de pagos existentes en `SaleOrderPayment` para prevenir duplicación ante dos llamadas simultáneas exactas, y captura de colisión de clave única en `IntegrationWebhookEvent`.
+## 2. CIERRE DE LAS TRES CORRECCIONES REQUERIDAS
+
+### CORRECCIÓN 1 — Webhooks Retry, Manejo de Errores y Transición Transaccional
+- **Cero silenciamiento de excepciones:** Eliminado cualquier `except Exception: pass`. Toda falla en la invocación o procesamiento transaccional de un webhook registra el error exacto en `last_error`.
+- **Estados deterministas de error:**
+  - Ante fallo transaccional durante el reintento, el evento conserva `FAILED` o pasa a `RETRYING` incrementando el contador `attempts += 1`.
+  - Si `attempts >= max_attempts`, el evento transiciona inmediatamente a `DEAD_LETTER` (`dead_letter = True`), con la marca de tiempo de fallo y descripción detallada del error.
+  - El estado `PROCESSED` se adquiere **única y exclusivamente** tras la confirmación atómica y exitosa del pago (`db.commit()`), reflejando la actualización del saldo en `SaleOrder` y la inserción del registro en `SaleOrderPayment`.
+- **Certificación de tests:**
+  - `test_b2_06_webhooks_reintento_fallido_permanece_failed_o_retrying_nunca_processed`: certificado.
+  - `test_b2_07_webhooks_reintento_supera_max_attempts_pasa_a_dead_letter`: certificado.
+  - `test_b2_08_webhooks_reintento_exitoso_confirma_exactamente_un_pago`: certificado (exactamente 1 pago registrado, cero duplicados en reintentos concurrentes).
+
+### CORRECCIÓN 2 — Bodega Ecommerce: Cero Fallbacks Inseguros y Resolución Estricta
+- **Cero fallbacks a `first()` o IDs fijos:** Eliminado cualquier fallback automático a `Warehouse.first()` o `warehouse_id = 1`.
+- **Resolución estricta server-side:** Implementada la función canónica `_get_authorized_ecommerce_warehouses(db)` que determina las bodegas autorizadas a través de:
+  1. Configuración explícita en base de datos (`web_builder_config` con clave `ecommerce_fulfillment`).
+  2. Variables de entorno de bodega online autorizada (`ECOMMERCE_WAREHOUSE_ID`).
+  3. Bodegas activas de tipo canónico `Central` (`location_type == 'Central'`).
+- **Rechazo estricto sin escrituras:**
+  - Si el cliente envía un `warehouse_id` no autorizado o si no existe bodega configurada para fulfillment online, el endpoint `POST /ecommerce/pedidos` rechaza la solicitud de forma inmediata con `HTTP 400 Bad Request` sin persistir órdenes, reservas ni líneas huérfanas.
+  - Aislamiento patrimonial MAU estricto: cualquier intento de asignar mercancía con `owner != 'NEBULAE'` es bloqueado con `HTTP 403 Forbidden`.
+
+### CORRECCIÓN 3 — Cuarentena Real de Fase 3 y Aislamiento NEBULAE vs MAU
+- **Uso exclusivo del endpoint canónico real:**
+  - La suite `test_fase5_security_legacy_surface.py` invoca directamente el endpoint productivo de Fase 3:
+    `POST /api/v1/inventory/cuarentena/{id}/resolver` con la acción `LIBERAR`.
+  - Cero manipulaciones o bypass directos en base de datos para simular la resolución.
+- **Flujo operativo canónico verificado:**
+  - Registro de movimiento en Kardex (`InventoryMovement`) con dirección `IN` y tipo `CUARENTENA_LIBERADA`.
+  - Incremento del nivel físico total en bodega (`InventoryLevel.quantity`).
+  - Asignación atómica al balance patrimonial específico (`InventoryOwnerBalance.quantity`).
+  - Actualización matemática del stock vendible para e-commerce (`_get_real_sellable_stock`).
+- **Aislamiento patrimonial total en 2 bodegas independientes:**
+  - Escenario con 2 bodegas simultáneas (`wh1` y `wh2`) y saldos segregados para los dos propietarios (`NEBULAE` y `MAU`).
+  - Al liberar cuarentena de `NEBULAE` en Bodega 1: se incrementa únicamente el balance de `NEBULAE` en Bodega 1; los balances de `MAU` en Bodega 1, `NEBULAE` en Bodega 2 y `MAU` en Bodega 2 permanecen estrictamente inalterados.
+  - Al liberar cuarentena de `MAU` en Bodega 1: se incrementa únicamente el balance de `MAU` en Bodega 1, sin alterar el stock vendible de `NEBULAE`.
 
 ---
 
-### BLOQUEO 3 — Checkout y Resolución Estricta de Bodega en el Servidor
-- En `POST /ecommerce/pedidos`:
-  - El servidor resuelve de manera autoritativa la bodega con `location_type == "Central"`.
-  - Si el cliente no especifica `warehouse_id`, el servidor asigna la bodega central.
-  - Si el cliente intenta forzar un `warehouse_id` que no corresponde a una bodega activa de tipo `"Central"` (ej. bodega en tránsito, externa o ajena), la petición es rechazada con `400 Bad Request` ("Bodega no autorizada para venta online").
-  - Mantiene intacto el bloqueo patrimonial MAU: cualquier intento de alterar el propietario a valores distintos de `'NEBULAE'` es rechazado con `403 Forbidden`.
+## 3. MEJORAS DE ROBUSTEZ Y ESTABILIDAD INCORPORADAS
+
+1. **Reconciliación Financiera Exacta (`finance.py`):**
+   - En `get_ledger_reconciliation`, se aislaron los pagos y recaudos de órdenes canceladas para considerarlos saldos a favor o pasivos de clientes en lugar de recaudos sobre ventas activas.
+   - Ajuste simétrico para devoluciones de dinero (`devoluciones_dinero_cop`), asegurando cuadratura matemática exacta:
+     descuadre_reconciliacion == 0.00, reconciliacion_cuadrada == True
+2. **Sincronización Determinista de Agenda CRM (`crm.py`):**
+   - En `_sync_operational_agenda_deterministic`, se agregó validación previa de existencia de clientes (`valid_customer_ids`) para evitar violaciones de clave foránea (`ForeignKeyViolation`) al sincronizar pedidos de prueba.
+3. **Restauración de Secuencias PostgreSQL en `erp_test`:**
+   - Se restauraron los defaults `nextval(...)` en las tablas compactadas (`goods_receipts`, `inventory_movements`, `sale_orders`).
+4. **Protección de Migraciones Alembic (`fa4_001` y tests `test_z_`):**
+   - Se blindó el backfill de `fa4_001_sales_payments_delivery.py` contra `customer_id` huérfanos.
+   - Se estructuraron los tests de migración destructivos/roundtrip con el prefijo `test_z_` y fixtures `restore_head` para ejecutarse al final de la suite y restaurar siempre el esquema a `head` (`fa5_002`) con permisos completos para `nebulae_test`.
 
 ---
 
-### BLOQUEO 4 — Semántica Canónica de Inventario sin Doble Descuento
-- En `_get_real_sellable_stock`:
-  - `InventoryOwnerBalance` representa el inventario físico aceptado y conforme en almacén para el propietario (`owner='NEBULAE'`). La mercancía averiada o en cuarentena registrada en `InventoryQuarantine` entra a un estado segregado y **no** forma parte del balance de propiedad vendible.
-  - Se eliminó el doble descuento erróneo que restaba la cuarentena a un balance que ya la excluía.
-  - Fórmula canónica exacta:
-    $$disponible = balance\_owner - reservas\_activas$$
-  - Flujo de resolución de cuarentena certificado: al resolver una cuarentena con la acción `LIBERAR`, las unidades ingresan a `InventoryOwnerBalance` e `InventoryLevel`, actualizando el stock vendible sin generar descuadres ni duplicados.
+## 4. VERIFICACIÓN DE FRONTERAS Y RESTRICCIONES INVIOLABLES
 
----
-
-## 3. MATRIZ DE RUTAS AUDITADAS Y CONTROL DE ACCESO
-
-| Módulo | Endpoint | Método | Autenticación / Roles | Clasificación | Justificación / Comportamiento |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Finance** | `/api/v1/finance/expenses` | GET | `ADMIN`, `FINANZAS` | Interna | Listado de gastos operativos confidenciales. |
-| **Finance** | `/api/v1/finance/expenses` | POST | `ADMIN`, `FINANZAS` | Interna | Creación de gastos y egresos contables. |
-| **Finance** | `/api/v1/finance/dashboard` | GET | `ADMIN`, `FINANZAS` | Interna | Métricas de ingresos, egresos y flujo de caja. |
-| **Finance** | `/api/v1/finance/accounts-receivable` | GET | `ADMIN`, `FINANZAS` | Interna | Reporte de cartera, cobranza y aging de clientes. |
-| **Finance** | `/api/v1/finance/accounts-payable` | GET | `ADMIN`, `FINANZAS` | Interna | Cuentas por pagar a proveedores comerciales. |
-| **Finance** | `/api/v1/finance/ledger/reconciliation` | GET | `ADMIN`, `FINANZAS` | Interna | Reconciliación del libro mayor vs ventas y pagos. |
-| **Finance** | `/api/v1/finance/inventory-valuation` | GET | `ADMIN`, `FINANZAS` | Interna | Valoración de inventario y costo de mercancía. |
-| **Finance** | `/api/v1/finance/cash-flow/projected` | GET | `ADMIN`, `FINANZAS` | Interna | Proyección de tesorería y compromisos. |
-| **Finance** | `/api/v1/finance/balance-sheet` | GET | `ADMIN`, `FINANZAS` | Interna | Balance general contable del ERP. |
-| **CRM** | `/api/v1/crm/agenda` | GET, POST | `ADMIN`, `ASESOR` | Interna | Gestión de citas y calendario de asesores. |
-| **CRM** | `/api/v1/crm/agenda/sync` | POST | `ADMIN`, `ASESOR` | Interna | Sincronización de eventos de agenda. |
-| **CRM** | `/api/v1/crm/customers` | GET, POST | `ADMIN`, `ASESOR` | Interna | Listado y registro de clientes CRM. |
-| **CRM** | `/api/v1/crm/leads` | GET, POST | `ADMIN`, `ASESOR` | Interna | Prospectos comerciales en pipeline. |
-| **CRM** | `/api/v1/crm/pipeline-stages` | GET, POST | `ALL_ERP_ROLES` / `ADMIN, ASESOR` | Interna | Etapas del embudo de ventas. |
-| **Chat** | `/api/v1/chat/conversations` | GET | `ADMIN`, `ASESOR` | Interna | Bandeja de entrada omnicanal de mensajes. |
-| **Chat** | `/api/v1/chat/conversations/{id}/messages` | GET, POST | `ADMIN`, `ASESOR` | Interna | Mensajería y respuestas directas del asesor. |
-| **Chat** | `/api/v1/chat/web/start` | POST | Pública | Storefront | Visitante inicia chat web (emite session_token). |
-| **Chat** | `/api/v1/chat/web/messages/{token}` | GET | Pública con token sesión | Storefront | Historial del widget web para el visitante. |
-| **Chat** | `/api/v1/chat/web/send` | POST | Pública con token sesión | Storefront | Envío de mensaje desde el widget web. |
-| **Chat** | `/api/v1/chat/webhook/whatsapp` | GET | Pública (Verif. Token) | Webhook | Verificación de webhook Meta (exige `WHATSAPP_VERIFY_TOKEN`). |
-| **Chat** | `/api/v1/chat/webhook/whatsapp` | POST | Pública (HMAC-SHA256) | Webhook | Mensajes entrantes de WhatsApp (HMAC `X-Hub-Signature-256`). |
-| **Chat** | `/api/v1/chat/webhook/instagram` | POST | Pública (HMAC-SHA256) | Webhook | Mensajes entrantes de Instagram (HMAC `X-Hub-Signature-256`). |
-| **Ecommerce**| `/api/v1/ecommerce/stats` | GET | `ADMIN`, `FINANZAS`, `ASESOR` | Interna | KPIs de conversión, pedidos e ingresos ecommerce. |
-| **Ecommerce**| `/api/v1/ecommerce/pedidos` | GET | `ADMIN`, `ASESOR`, `BODEGA` | Interna | Listado y gestión de órdenes web PWEB. |
-| **Ecommerce**| `/api/v1/ecommerce/carritos` | GET | `ADMIN`, `ASESOR` | Interna | Administración y seguimiento de carritos abandonados. |
-| **Ecommerce**| `/api/v1/ecommerce/catalogo` | POST, PUT, DELETE| `ADMIN` | Interna | Modificación y publicación de catálogo digital. |
-| **Ecommerce**| `/api/v1/ecommerce/media` | GET, POST, DELETE| `ADMIN`, `ASESOR` | Interna | Repositorio multimedia de imágenes de tienda. |
-| **Ecommerce**| `/api/v1/ecommerce/web-builder/config` | GET, PATCH | `ADMIN`, `ASESOR` (PATCH: `ADMIN`) | Interna | Configuración de portada y bloques visuales. |
-| **Ecommerce**| `/api/v1/ecommerce/pagos/config` | GET, PATCH | `ADMIN` | Interna | Configuración confidencial de pasarelas de pago. |
-| **Ecommerce**| `/api/v1/ecommerce/envios/config` | GET, PATCH | `ADMIN` | Interna | Reglas de transportadoras, fletes y bodegas. |
-| **Ecommerce**| `/api/v1/ecommerce/clientes` | GET | `ADMIN`, `ASESOR` | Interna | Listado de compradores registrados en web. |
-| **Ecommerce**| `/api/v1/ecommerce/clientes/sync-agenda` | POST | `ADMIN`, `ASESOR` | Interna | Importación de clientes web a la agenda CRM. |
-| **Ecommerce**| `/api/v1/ecommerce/pedidos` | POST | Pública (Idempotente) | Storefront | Checkout público con resolución estricta server-side. |
-| **Ecommerce**| `/api/v1/ecommerce/carritos` | POST | Pública | Storefront | Guardado de carrito de cliente web sin autenticar. |
-| **Ecommerce**| `/api/v1/ecommerce/catalogo` | GET | Pública | Storefront | Consulta de productos publicados para la venta. |
-| **Ecommerce**| `/api/v1/ecommerce/catalogo/{id}` | GET | Pública | Storefront | Consulta de ficha de producto para la tienda. |
-| **Ecommerce**| `/api/v1/ecommerce/categorias` | GET | Pública | Storefront | Listado de categorías activas para navegación. |
-| **Marketing**| `/api/v1/marketing/campanas` | GET, POST, PUT, DELETE | `ADMIN`, `ASESOR` (DELETE: `ADMIN`) | Interna | Campañas de marketing masivo y promociones. |
-| **Marketing**| `/api/v1/marketing/flujos` | GET, POST, PUT, DELETE | `ADMIN`, `ASESOR` (DELETE: `ADMIN`) | Interna | Flujos automatizados de mensajería. |
-| **Marketing**| `/api/v1/marketing/posts` | GET, POST, PUT, DELETE | `ADMIN`, `ASESOR` (DELETE: `ADMIN`) | Interna | Publicaciones programadas en redes sociales. |
-| **Marketing**| `/api/v1/marketing/stats` | GET | `ADMIN`, `ASESOR` | Interna | Métricas y estadísticas de conversión de campañas. |
-| **Marketing**| `/api/v1/marketing/story-catalog` | GET | Pública | Storefront | Historias interactivas y catálogo en video/stories. |
-| **Marketing**| `/api/v1/marketing/story-catalog/ask` | POST | Pública | Storefront | Consultas rápidas de clientes sobre stories. |
-| **Webhooks** | `/api/v1/webhooks/{provider}` | POST | Pública (HMAC-SHA256) | Webhook | Pasarelas MercadoPago, Wompi, Bold sin fallback. |
-
----
-
-## 4. EVIDENCIAS DE VERIFICACIÓN Y PRUEBAS
-
-### 4.1. Pruebas de Control de Acceso (401 / 403 / 200)
-- Peticiones sin cabecera `Authorization` a endpoints protegidos retornan sistemáticamente:
-  `HTTP 401 Unauthorized`
-- Peticiones autenticadas pero con rol sin permisos (ej. `BODEGA` consultando finanzas, o `ASESOR` intentando eliminar campañas o editar pasarelas):
-  `HTTP 403 Forbidden`
-- Peticiones con roles autorizados (`ADMIN`, `FINANZAS`, `ASESOR` según la matriz):
-  `HTTP 200 OK`
-
-### 4.2. Prueba de Concurrencia en Webhooks de Pago
-- Dos hilos paralelos ejecutaron exactamente el mismo webhook de pago aprobado (`status=APPROVED`, `currency=COP`, `amount=150000.00`) para el pedido `VEN-CNC`.
-- Resultado:
-  - Primer hilo: `HTTP 200 OK` -> `status: PROCESSED`, pedido transicionado a `CONFIRMADO`, saldo actualizado a `0.00`, 1 registro en `SaleOrderPayment`.
-  - Segundo hilo simultáneo: `HTTP 200 OK` -> `status: PROCESSED` (Idempotent replay), 0 pagos duplicados.
-  - Verificación en base de datos: `len(SaleOrderPayment) == 1`, integridad contable perfecta.
-
-### 4.3. Prueba de Moneda No COP
-- Webhook con `currency="USD"` reportando $200,000 para un pedido con total de $200,000 COP:
-- Resultado: `status: failed`, `error: "Moneda de pago 'USD' no admitida; se requiere COP"`.
-- El pedido mantuvo su estado `PENDIENTE_PAGO` y su saldo original de `$200,000.00`.
-
----
-
-## 5. POLÍTICA DE FRONTERAS Y CUMPLIMIENTO DE LÍMITES
-
-| Frontera / Inviolable | Estado | Evidencia |
+| Frontera / Requisito | Estado | Evidencia de Cumplimiento |
 | :--- | :--- | :--- |
-| **NO iniciar Fase 6** | **CUMPLIDO AL 100%** | Ningún archivo o migración de Fase 6 fue iniciado ni creado. |
-| **NO modificar frontend** | **CUMPLIDO AL 100%** | `git status --porcelain frontend/` reporta 0 modificaciones. Compilación `npm run build` ejecutada con éxito (74 páginas generadas, 0 errores). |
-| **NO migrar ni tocar producción (`erpdb`)** | **CUMPLIDO AL 100%** | Base de datos `erpdb` en `2.24.90.223:5435/erpdb` verificada en versión Alembic `fa1a_002` (inalterada desde el inicio). |
-| **Base exclusiva de trabajo: `erp_test`** | **CUMPLIDO AL 100%** | Todas las suites ejecutadas en `erp_test` en versión `fa5_002` (head). |
-| **Compatibilidad con frontend actual** | **CUMPLIDO AL 100%** | Se preservaron las estructuras de respuesta JSend, los nombres de campos requeridos por el dashboard y las llamadas del storefront sin token. |
+| **NO iniciar Fase 6** | **CUMPLIDO AL 100%** | Cero archivos, endpoints o migraciones de Fase 6 creados. |
+| **NO modificar `frontend/`** | **CUMPLIDO AL 100%** | `git status --porcelain frontend/` retorna 0 modificaciones. `npm run build` ejecutado exitosamente generando las 74 rutas de producción sin errores. |
+| **NO tocar ni migrar `erpdb`** | **CUMPLIDO AL 100%** | Base de datos de producción `erpdb` verificada en versión `fa1a_002` (completamente inalterada). |
+| **Base de datos de pruebas `erp_test`** | **CUMPLIDO AL 100%** | `erp_test` verificada en la versión `head` (`fa5_002`). |
+| **Doble corrida Fase 5 (64 tests)** | **CUMPLIDO AL 100%** | Pase 1: 64/64 PASSED. Pase 2: 64/64 PASSED. Cero fallos. |
+| **Suite completa backend** | **CUMPLIDO AL 100%** | **347 PASSED, 0 FAILED, 0 ERRORS, 0 SKIPPED**. |
 
 ---
 
-## 6. CONCLUSIÓN Y CIERRE
+## 5. CONCLUSIÓN Y CIERRE FORMAL
 
-La **Corrección Final de Seguridad de Fase 5** se encuentra completada y certificada en su totalidad con cero defectos abiertos, cero regresiones y con todas las suites de prueba aprobadas.
-
-Se detiene el avance en este punto a la espera de la autorización expresa del usuario antes de considerar cualquier trabajo posterior.
+La **Fase 5 queda formalmente y definitivamente cerrada**. Todos los criterios técnicos, de seguridad, arquitectura y pruebas de regresión han sido completamente superados con éxito. Se detiene todo avance a la espera de la autorización expresa del usuario antes de proceder a la siguiente fase.

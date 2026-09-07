@@ -8,16 +8,15 @@ Scenarios:
 """
 import subprocess, sys, os, pytest
 from pathlib import Path
+from sqlalchemy import text
+from tests.conftest import test_engine, TEST_URL
 
 BACKEND = Path(__file__).parent.parent
 
 
 def _run(args, cwd=BACKEND):
     env = os.environ.copy()
-    # Ensure alembic runs against the test DB, not production
-    test_url = os.environ.get("TEST_DATABASE_URL", "")
-    if test_url:
-        env["DATABASE_URL"] = test_url
+    env["DATABASE_URL"] = TEST_URL
     result = subprocess.run(
         [sys.executable, "-m", "alembic"] + args,
         cwd=cwd,
@@ -26,6 +25,17 @@ def _run(args, cwd=BACKEND):
         env=env,
     )
     return result
+
+
+@pytest.fixture(autouse=True)
+def restore_head(setup_test_db):
+    """Garantiza que la DB vuelve a HEAD despues de cada test que baje version."""
+    yield
+    _run(["upgrade", "head"])
+    with test_engine.connect() as conn:
+        conn.execute(text("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO nebulae_test;"))
+        conn.execute(text("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO nebulae_test;"))
+        conn.commit()
 
 
 def test_alembic_upgrade_head():
@@ -92,3 +102,7 @@ def test_alembic_downgrade_and_upgrade_roundtrip():
     assert r_up.returncode == 0, (
         f"re-upgrade to head failed:\n{r_up.stdout}\n{r_up.stderr}"
     )
+    with test_engine.connect() as conn:
+        conn.execute(text("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO nebulae_test;"))
+        conn.execute(text("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO nebulae_test;"))
+        conn.commit()

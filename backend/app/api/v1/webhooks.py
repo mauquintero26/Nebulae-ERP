@@ -260,22 +260,29 @@ def retry_failed_webhooks(
 
     for ev in failed_events:
         ev.attempts += 1
-        if ev.attempts >= max_retries:
+        limit = max_retries if max_retries is not None else (ev.max_attempts or 3)
+        if ev.attempts >= limit:
             ev.dead_letter = True
             ev.status = "DEAD_LETTER"
-            ev.last_error = f"Supero el limite maximo de {max_retries} intentos. Movido a cola de errores permanentes (dead-letter)."
+            ev.last_error = f"Supero el limite maximo de {limit} intentos. Movido a cola de errores permanentes (dead-letter)."
             moved_to_dead_letter += 1
         else:
             try:
                 payload = json.loads(ev.payload) if ev.payload else {}
                 if ev.provider in ("MERCADOPAGO", "MERCADO_PAGO", "WOMPI", "PAYU"):
                     _process_payment_webhook(ev.provider, payload, ev.idempotency_key, db)
-            except Exception:
-                pass
-            ev.status = "PROCESSED"
-            ev.processed_at = datetime.datetime.utcnow()
-            ev.last_error = None
-            reprocessed += 1
+                ev.status = "PROCESSED"
+                ev.processed_at = datetime.datetime.utcnow()
+                ev.last_error = None
+                reprocessed += 1
+            except Exception as ex:
+                ev.last_error = str(ex)
+                if ev.attempts >= limit:
+                    ev.dead_letter = True
+                    ev.status = "DEAD_LETTER"
+                    moved_to_dead_letter += 1
+                else:
+                    ev.status = "RETRYING"
         ev.updated_at = datetime.datetime.utcnow()
 
     db.commit()

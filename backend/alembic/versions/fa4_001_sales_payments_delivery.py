@@ -79,7 +79,7 @@ def upgrade() -> None:
     # Backfill customer_id and price_unit_cop_snapshot on sale_order_lines_erp from parent sale_order
     conn.execute(sa.text("""
         UPDATE sale_order_lines_erp sol
-        SET customer_id = so.customer_id,
+        SET customer_id = CASE WHEN EXISTS (SELECT 1 FROM customers c WHERE c.id = so.customer_id) THEN so.customer_id ELSE NULL END,
             price_unit_cop_snapshot = sol.unit_price_cop
         FROM sale_orders so
         WHERE sol.so_id = so.id AND sol.customer_id IS NULL;

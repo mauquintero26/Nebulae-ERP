@@ -24,6 +24,7 @@ from app.models.erp_documents import SaleOrder, ActivityLog
 from app.models.customers import Customer
 import datetime
 import uuid
+import os
 import json as json_mod
 
 router = APIRouter()
@@ -201,6 +202,73 @@ def _get_real_sellable_stock(db: Session, sku_id: int, warehouse_id: Optional[in
     disponible = balance_owner - reservas_activas
     return max(disponible, Decimal("0.0"))
 
+def _get_authorized_ecommerce_warehouses(db: Session):
+    """
+    Obtiene la lista de bodegas autorizadas y la bodega principal por defecto para fulfillment ecommerce.
+    Reglas estrictas de fulfillment y seguridad:
+    1. Si existe configuracion explicita en web_builder_config (key 'ecommerce_fulfillment'):
+       - Se lee 'authorized_warehouse_ids' (lista de enteros) y 'default_warehouse_id'.
+       - Si 'authorized_warehouse_ids' es una lista vacia ([]), retorna ([], None).
+    2. Si existe variable de entorno ECOMMERCE_AUTHORIZED_WAREHOUSE_IDS:
+       - Se parsean los IDs separados por coma.
+       - Si la variable esta definida pero vacia, retorna ([], None).
+    3. Si no hay configuracion explicita previa:
+       - Se consultan todas las bodegas de tipo 'Central' existentes en la base de datos.
+    4. Cada bodega autorizada DEBE existir en la base de datos y tener estrictamente location_type == 'Central'.
+    5. Prohibido cualquier fallback a Warehouse.first() de tipo no-Central o a un ID hardcodeado fijo.
+    Retorna (bodegas_autorizadas, bodega_por_defecto).
+    """
+    _ensure_ecommerce_tables(db)
+    explicit_ids = None
+    default_id = None
+
+    try:
+        row = db.execute(text("SELECT config_value FROM web_builder_config WHERE config_key='ecommerce_fulfillment'")).fetchone()
+        if row and row[0]:
+            cfg = row[0]
+            if isinstance(cfg, str):
+                cfg = json_mod.loads(cfg)
+            if "authorized_warehouse_ids" in cfg:
+                explicit_ids = [int(x) for x in cfg["authorized_warehouse_ids"]]
+                raw_def = cfg.get("default_warehouse_id")
+                if raw_def is not None:
+                    default_id = int(raw_def)
+    except Exception:
+        pass
+
+    if explicit_ids is None and "ECOMMERCE_AUTHORIZED_WAREHOUSE_IDS" in os.environ:
+        raw_env = os.environ.get("ECOMMERCE_AUTHORIZED_WAREHOUSE_IDS", "").strip()
+        if raw_env:
+            explicit_ids = [int(x.strip()) for x in raw_env.split(",") if x.strip().isdigit()]
+        else:
+            explicit_ids = []
+        raw_def = os.environ.get("ECOMMERCE_DEFAULT_WAREHOUSE_ID", "").strip()
+        if raw_def and raw_def.isdigit():
+            default_id = int(raw_def)
+
+    if explicit_ids is not None:
+        if not explicit_ids:
+            return [], None
+        whs = db.query(Warehouse).filter(
+            Warehouse.id.in_(explicit_ids),
+            Warehouse.location_type == "Central"
+        ).all()
+    else:
+        whs = db.query(Warehouse).filter(
+            Warehouse.location_type == "Central"
+        ).all()
+
+    if not whs:
+        return [], None
+
+    def_wh = None
+    if default_id is not None:
+        def_wh = next((w for w in whs if w.id == default_id), None)
+    if not def_wh:
+        def_wh = whs[0]
+
+    return whs, def_wh
+
 @router.post("/pedidos", status_code=201)
 def create_web_order(body: dict, db: Session = Depends(get_db)):
     """
@@ -353,29 +421,56 @@ def create_web_order(body: dict, db: Session = Depends(get_db)):
         )
 
     # 6. Resolucion estricta de bodega en el servidor (reglas de fulfillment canonico)
-    central_wh = db.query(Warehouse).filter(Warehouse.location_type == "Central").first()
-    if not central_wh:
-        central_wh = db.query(Warehouse).first()
-    resolved_wh_id = central_wh.id if central_wh else 1
-    default_wh_id = resolved_wh_id
+    auth_warehouses, default_wh = _get_authorized_ecommerce_warehouses(db)
+    if not auth_warehouses or not default_wh:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Error de configuracion: No existe una bodega central autorizada para fulfillment ecommerce."
+        )
+    auth_wh_ids = {w.id for w in auth_warehouses}
 
     # Validacion anti-manipulacion de bodega: no confiar en warehouse_id enviado por cliente
     client_wh_id = body.get("warehouse_id")
     if client_wh_id is not None:
-        target_wh = db.query(Warehouse).filter(Warehouse.id == int(client_wh_id)).first()
-        if not target_wh or target_wh.location_type != "Central":
+        try:
+            target_id = int(client_wh_id)
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Identificador de bodega invalido: '{client_wh_id}'."
+            )
+        target_wh = db.query(Warehouse).filter(Warehouse.id == target_id).first()
+        if not target_wh:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Bodega '{client_wh_id}' no encontrada en el sistema."
+            )
+        if target_wh.id not in auth_wh_ids:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Bodega '{client_wh_id}' no autorizada para fulfillment ecommerce."
             )
         resolved_wh_id = target_wh.id
-        default_wh_id = resolved_wh_id
+    else:
+        resolved_wh_id = default_wh.id
 
     for it in raw_items:
         it_wh_id = it.get("warehouse_id")
         if it_wh_id is not None:
-            it_target = db.query(Warehouse).filter(Warehouse.id == int(it_wh_id)).first()
-            if not it_target or it_target.location_type != "Central":
+            try:
+                it_target_id = int(it_wh_id)
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Identificador de bodega en item invalido: '{it_wh_id}'."
+                )
+            it_target = db.query(Warehouse).filter(Warehouse.id == it_target_id).first()
+            if not it_target:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Bodega '{it_wh_id}' en item no encontrada."
+                )
+            if it_target.id not in auth_wh_ids:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Bodega '{it_wh_id}' en item no autorizada para fulfillment ecommerce."
@@ -692,6 +787,26 @@ def get_catalogo_product(product_id: int, db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
     row = db.execute(text("SELECT * FROM ecommerce_products WHERE id=:id"), {"id": product_id}).fetchone()
     if not row:
+        prod = db.query(Product).filter(Product.id == product_id).first()
+        if prod:
+            sku_first = prod.skus[0] if prod.skus else None
+            stock_disp = float(_get_real_sellable_stock(db, sku_first.id, owner="NEBULAE")) if sku_first else 0.0
+            return {
+                "status": "success",
+                "data": {
+                    "id": prod.id,
+                    "nombre": prod.name,
+                    "descripcion": getattr(prod, "description", "") or "",
+                    "sku": sku_first.sku if sku_first else "",
+                    "precio_venta": float(sku_first.sale_price or 0) if sku_first else 0.0,
+                    "precio_comparacion": float(sku_first.sale_price or 0) if sku_first else 0.0,
+                    "descuento_pct": 0.0,
+                    "categoria": prod.category.name if prod.category else "",
+                    "marca": prod.brand.name if prod.brand else "",
+                    "stock_disponible": stock_disp,
+                    "publicado_web": True
+                }
+            }
         raise HTTPException(404, "Producto no encontrado")
     keys = ["id","nombre","descripcion","descripcion_larga","sku","precio_venta","precio_comparacion","descuento_pct","impuesto_pct","categoria","sub_categoria","marca","tipo_producto","imagenes","atributos","variantes","stock_disponible","alerta_stock_minimo","publicado_web","rastrear_inventario","codigo_aduana","peso_kg","notas_internas","seo_titulo","seo_descripcion","seo_keywords","created_at","updated_at","created_by"]
     data = dict(zip(keys, row))
@@ -889,6 +1004,31 @@ def update_shipping_config(body: dict, user: User = Depends(require_roles(*ROLE_
     db.execute(text("INSERT INTO web_builder_config (config_key, config_value, updated_at) VALUES ('shipping', CAST(:v AS jsonb), NOW()) ON CONFLICT (config_key) DO UPDATE SET config_value=CAST(:v AS jsonb), updated_at=NOW()"), {"v": json_mod.dumps(body)})
     db.commit()
     return {"status": "success"}
+
+@router.get("/fulfillment/config")
+def get_fulfillment_config(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
+    auth_warehouses, default_wh = _get_authorized_ecommerce_warehouses(db)
+    return {
+        "status": "success",
+        "data": {
+            "authorized_warehouse_ids": [w.id for w in auth_warehouses],
+            "default_warehouse_id": default_wh.id if default_wh else None,
+            "warehouses": [{"id": w.id, "name": w.name, "location_type": w.location_type} for w in auth_warehouses]
+        }
+    }
+
+@router.patch("/fulfillment/config")
+def update_fulfillment_config(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
+    _ensure_ecommerce_tables(db)
+    auth_ids = [int(x) for x in body.get("authorized_warehouse_ids", [])]
+    def_id = body.get("default_warehouse_id")
+    val = {"authorized_warehouse_ids": auth_ids, "default_warehouse_id": int(def_id) if def_id is not None else (auth_ids[0] if auth_ids else None)}
+    db.execute(
+        text("INSERT INTO web_builder_config (config_key, config_value, updated_at) VALUES ('ecommerce_fulfillment', CAST(:v AS jsonb), NOW()) ON CONFLICT (config_key) DO UPDATE SET config_value=CAST(:v AS jsonb), updated_at=NOW()"),
+        {"v": json_mod.dumps(val)}
+    )
+    db.commit()
+    return {"status": "success", "data": val}
 
 
 # --- CLIENTES WEB → AGENDA CRM ---

@@ -28,6 +28,21 @@ from tests.conftest import TEST_URL, PROD_URL, _BACKEND
 
 class TestFase4Migrations:
 
+    @pytest.fixture(autouse=True)
+    def restore_head(self, setup_test_db):
+        yield
+        env = os.environ.copy()
+        env["DATABASE_URL"] = TEST_URL
+        subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            cwd=str(_BACKEND), env=env, capture_output=True, text=True
+        )
+        eng = create_engine(TEST_URL)
+        with eng.connect() as conn:
+            conn.execute(text("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO nebulae_test;"))
+            conn.execute(text("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO nebulae_test;"))
+            conn.commit()
+
     def test_fa4_001_y_fa4_002_tablas_columnas_checks_indices(self, db):
         """Verifica la existencia física de las 7 tablas de Fase 4, columnas agregadas, checks e índices de fa4_002."""
         # 1. Verificar existencia de las 7 tablas nuevas
@@ -147,6 +162,11 @@ class TestFase4Migrations:
             cwd=str(_BACKEND), env=env, capture_output=True, text=True
         )
         assert up.returncode == 0, f"Error en upgrade a head: {up.stderr}"
+
+        with eng.connect() as conn:
+            conn.execute(text("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO nebulae_test;"))
+            conn.execute(text("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO nebulae_test;"))
+            conn.commit()
 
         with eng.connect() as conn:
             v_up = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
