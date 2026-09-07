@@ -51,7 +51,7 @@ class RoleChecker:
 
     def __call__(self, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
         # Si es Admin supremo, siempre pasa
-        if user.role == "Admin":
+        if user.role == "Admin" or normalize_role(user.role) == "ADMIN":
             return user
             
         permission = db.query(RolePermission).filter(

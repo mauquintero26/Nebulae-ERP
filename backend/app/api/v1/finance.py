@@ -42,17 +42,51 @@ def get_dashboard(
     user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS)),
     db: Session = Depends(get_db)
 ):
-    lines = db.query(SalesOrderLine).all()
-    
+    """
+    Dashboard consolidado de Finanzas (Fase 6 - Hallazgo 8).
+    Calcula ingresos y costo de ventas unificando:
+    1. Lineas canonicas activas de SaleOrderLineErp.
+    2. Lineas legacy no vinculadas (para no duplicar ni omitir).
+    """
     gross_revenue = Decimal("0.0")
     cogs = Decimal("0.0")
-    
-    for line in lines:
-        gross_revenue += (line.unit_price * line.quantity)
-        sku = db.query(ProductSKU).filter(ProductSKU.id == line.sku_id).first()
+
+    # 1. Ventas canonicas activas
+    from app.models.erp_documents import SaleOrder
+    from app.models.fase1b import SaleOrderLineErp
+    canonical_lines = (
+        db.query(SaleOrderLineErp)
+        .join(SaleOrder, SaleOrderLineErp.so_id == SaleOrder.id)
+        .filter(SaleOrder.estado != "CANCELADO")
+        .all()
+    )
+    for cline in canonical_lines:
+        qty = Decimal(str(cline.quantity or 1))
+        prc = Decimal(str(cline.unit_price_cop or 0.0))
+        gross_revenue += (prc * qty)
+        cost = Decimal(str(cline.cost_unit_cop_snapshot or 0.0))
+        if cost == 0 and cline.sku_id:
+            sku = db.query(ProductSKU).filter(ProductSKU.id == cline.sku_id).first()
+            if sku and sku.cost_price:
+                cost = Decimal(str(sku.cost_price))
+        cogs += (cost * qty)
+
+    # 2. Lineas legacy huerfanas (sin canonical_sale_order_id) para evitar doble conteo
+    legacy_lines = (
+        db.query(SalesOrderLine)
+        .join(SalesOrder, SalesOrderLine.sales_order_id == SalesOrder.id)
+        .filter(SalesOrder.canonical_sale_order_id.is_(None))
+        .filter(SalesOrder.status != "CANCELLED")
+        .all()
+    )
+    for lline in legacy_lines:
+        qty = Decimal(str(lline.quantity or 1))
+        prc = Decimal(str(lline.unit_price or 0.0))
+        gross_revenue += (prc * qty)
+        sku = db.query(ProductSKU).filter(ProductSKU.id == lline.sku_id).first()
         if sku and sku.cost_price:
-            cogs += (sku.cost_price * line.quantity)
-            
+            cogs += (Decimal(str(sku.cost_price)) * qty)
+
     gross_profit = gross_revenue - cogs
     
     expenses = db.query(OperationalExpense).all()

@@ -11,6 +11,8 @@ class Quotation(Base):
     trm_rate = Column(Numeric(10, 2))
     total_amount = Column(Numeric(12, 2))
 
+    canonical_quotation_id = Column(Integer, ForeignKey("sales_quotations.id"), nullable=True)
+
     customer = relationship("Customer", back_populates="quotations")
     user = relationship("User", back_populates="quotations")
     lines = relationship("QuotationLine", back_populates="quotation")
@@ -31,6 +33,7 @@ class SalesOrder(Base):
     id = Column(Integer, primary_key=True, index=True)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    canonical_sale_order_id = Column(Integer, ForeignKey("sale_orders.id"), nullable=True)
     status = Column(String, nullable=False)
     
     import_date = Column(DateTime, nullable=True)

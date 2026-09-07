@@ -52,6 +52,8 @@ def _invalidate_stages_cache():
 
 def generate_crm_alerts(db: Session):
     two_days_ago = datetime.datetime.utcnow() - datetime.timedelta(hours=48)
+    
+    # 1. Stalled legacy SalesOrders
     stalled_orders = db.query(SalesOrder).filter(
         SalesOrder.status.in_(["QUOTING", "PENDING_PAYMENT"]),
         SalesOrder.updated_at <= two_days_ago
@@ -70,11 +72,34 @@ def generate_crm_alerts(db: Session):
                 due_date=datetime.datetime.utcnow()
             )
             db.add(new_alert)
+
+    # 2. Stalled canonical SaleOrders (Fase 6 - Hallazgo 9)
+    stalled_canonical = db.query(SaleOrder).filter(
+        SaleOrder.estado.in_(["BORRADOR", "PENDIENTE_COMPRA"]),
+        SaleOrder.updated_at <= two_days_ago
+    ).all()
+    for c_order in stalled_canonical:
+        existing = db.query(Alert).filter(
+            Alert.reference_id == c_order.id,
+            Alert.alert_type == "CRM_FOLLOWUP",
+            Alert.is_resolved == False
+        ).first()
+        if not existing:
+            new_alert = Alert(
+                alert_type="CRM_FOLLOWUP",
+                reference_id=c_order.id,
+                message=f"El cliente de la orden {c_order.numero} lleva 48 horas en estado {c_order.estado}. ¡Hazle seguimiento!",
+                due_date=datetime.datetime.utcnow()
+            )
+            db.add(new_alert)
+
     db.commit()
 
 def generate_delivery_alerts(db: Session, days_before: int = 5):
     target_date = datetime.datetime.utcnow() + datetime.timedelta(days=days_before)
     today = datetime.datetime.utcnow()
+    
+    # 1. Legacy SalesOrders
     pending_deliveries = db.query(SalesOrder).filter(
         SalesOrder.sale_type == "ON_DEMAND",
         SalesOrder.status.in_(["PENDING", "QUOTING", "PENDING_PAYMENT"]),
@@ -96,6 +121,29 @@ def generate_delivery_alerts(db: Session, days_before: int = 5):
                 due_date=order.estimated_delivery_date
             )
             db.add(new_alert)
+
+    # 2. Canonical SaleOrders (Fase 6 - Hallazgo 9)
+    canonical_deliveries = db.query(SaleOrder).filter(
+        SaleOrder.estado.notin_(["ENTREGADO", "CANCELADO", "FACTURADO"]),
+        SaleOrder.fecha_entrega_estimada != None,
+        SaleOrder.fecha_entrega_estimada >= today,
+        SaleOrder.fecha_entrega_estimada <= target_date
+    ).all()
+    for c_order in canonical_deliveries:
+        existing = db.query(Alert).filter(
+            Alert.reference_id == c_order.id,
+            Alert.alert_type == "DELIVERY_ALERT",
+            Alert.is_resolved == False
+        ).first()
+        if not existing:
+            new_alert = Alert(
+                alert_type="DELIVERY_ALERT",
+                reference_id=c_order.id,
+                message=f"La orden {c_order.numero} debe entregarse pronto (Estimado: {c_order.fecha_entrega_estimada.strftime('%Y-%m-%d')}).",
+                due_date=c_order.fecha_entrega_estimada
+            )
+            db.add(new_alert)
+
     db.commit()
 
 @router.post("/trigger-alerts")
