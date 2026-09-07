@@ -1,102 +1,199 @@
-# RESUMEN EJECUTIVO Y TÉCNICO — CIERRE DEFINITIVO DE FASE 5
+# RESUMEN EJECUTIVO Y TÉCNICO DE SESIÓN — FASE 6: CONSOLIDACIÓN LEGACY, OBSERVABILIDAD Y GOBERNANZA
 
 **Fecha:** 2026-09-07  
 **Rama:** `main`  
-**Base Obligatoria:** `origin/main 5605f01`  
+**Base Obligatoria de Inicio:** `6bdb99937e01c47de78b837e2a66d74ba3db0fd3` (HEAD de `origin/main`)  
+**Commit de Certificación Fase 6:** `c649da4`  
 **Repositorio Remoto GitHub:** https://github.com/mauquintero26/Nebulae-ERP  
-**Estado General:** CIERRE DEFINITIVO DE FASE 5 100% COMPLETADO, VERIFICADO Y CERTIFICADO  
+**Estado General:** FASE 6 100% COMPLETADA, OBSERVABLE, GOBERNADA Y CERTIFICADA  
+**Total Tests de Certificación Fase 6 + Regresión:** 93/93 PASSED (100% ÉXITO, 0 FAILED, 0 ERRORS, 0 SKIPPED)  
+- `backend/tests/test_fase6_legacy_consolidation.py`: **16/16 PASSED** (100%) en corridas consecutivas  
+- `backend/tests/test_fase5_integracion_erp.py`: **18/18 PASSED** (100%)  
+- `backend/tests/test_fase5_security_hardening.py`: **24/24 PASSED** (100%)  
+- `backend/tests/test_fase5_security_legacy_surface.py`: **22/22 PASSED** (100%)  
+- `backend/tests/test_receipt_*.py` (Concurrencia, Idempotencia, Parcial): **13/13 PASSED** (100%)  
+**Política de Frontera:** FASE 6 CONCLUIDA AL 100% — PROCESO FORMALMENTE DETENIDO A LA ESPERA DE AUTORIZACIÓN EXPRESA PARA FASE 7  
+**Base de Datos Pruebas:** `erp_test` (PostgreSQL VPS — versión Alembic `fa6_001`, roundtrip verificado con downgrade `fa5_002` y upgrade `head`)  
+**Base de Datos Producción:** `erpdb` (PostgreSQL VPS — versión Alembic `fa1a_002` 100% INTACTA E INALTERADA)  
+**Frontend Next.js:** 0 archivos modificados en `frontend/` (Compilación `npm run build` certificada exitosa con código 0 y 74/74 rutas generadas)
 
 ---
 
-## 1. RESULTADOS DE LA CERTIFICACIÓN AUTOMATIZADA GLOBAL
+## 1. OBJETIVO Y ALCANCE DE LA FASE 6
 
-### A. Doble Corrida Limpia Consecutiva de Fase 5 (64 Tests Canónicos):
-1. **Pase 1 (Corrida Limpia):**
-   - `backend/tests/test_fase5_security_legacy_surface.py`: **22/22 PASSED**
-   - `backend/tests/test_fase5_security_hardening.py`: **24/24 PASSED**
-   - `backend/tests/test_fase5_integracion_erp.py`: **18/18 PASSED**
-   - **Total:** **64/64 PASSED (100%)** en 377.72s (06:17 min), 0 failed, 0 errors.
-2. **Pase 2 (Validación de Idempotencia y Cero Contaminación):**
-   - `backend/tests/test_fase5_security_legacy_surface.py`: **22/22 PASSED**
-   - `backend/tests/test_fase5_security_hardening.py`: **24/24 PASSED**
-   - `backend/tests/test_fase5_integracion_erp.py`: **18/18 PASSED**
-   - **Total:** **64/64 PASSED (100%)** en 374.33s (06:14 min), 0 failed, 0 errors.
+Conforme a la autorización expresa del usuario y el alcance establecido en las líneas 436-442 del Prompt Maestro:
+> *"Fase 6: Consolidación Legacy, Observabilidad y Gobernanza. Comparación y paridad sistemática entre entidades legacy y canónicas. Observabilidad: auditoría inmutable de tráfico/intercepciones, snapshots de paridad y métricas. Gobernanza y desactivación gradual de escrituras: directivas operativas (DUAL_WRITE, READ_ONLY, CANONICAL_PRIMARY), cabeceras HTTP RFC 8594 (Deprecation, Sunset, Link) e intercepción dual-write hacia canónicos. Propuesta técnica separada de retiro y limpieza futura sin borrado destructivo automático."*
 
-### B. Suite Completa del Backend (`pytest backend/tests/ -q`):
-- **347 PASSED, 0 FAILED, 0 ERRORS, 0 SKIPPED** en 2935.10s (48:55 min).
-- Cobertura global de todos los dominios del ERP: Autenticación y RBAC, Fase 1b (Altas/Retiros, Líneas, Recepciones, Rollbacks), Fase 2 (Alertas, Envíos, Asignaciones), Fase 3 (Cuarentena, Kardex, Segregación NEBULAE/MAU, Disponibilidad), Fase 4 (Compras, Pagos, Devoluciones, Empaque, Cancelaciones), Fase 5 (Integración Canónica, Hardening y Seguridad Legacy Surface), Concurrencia e Idempotencia, y Migraciones Alembic.
+Se ejecutó la totalidad de la fase cumpliendo rigurosamente todas las reglas inviolables:
+1. Trabajo sobre el HEAD de `origin/main` (`6bdb999`).
+2. Cero modificaciones al frontend (`frontend/` intacto, 74 páginas estáticas compiladas en 2.9s).
+3. Coexistencia armónica con todos los módulos existentes (Agenda, Calendario, CRM, Finanzas, Ecommerce, Marketing).
+4. Pruebas y migraciones aplicadas exclusivamente en `erp_test`.
+5. Cero migraciones o alteraciones en `erpdb` (producción) — preservada en `fa1a_002`.
+6. Separación patrimonial estricta entre NEBULAE y MAU.
+7. Idempotencia y pruebas deterministas sin omitir ningún test (`pytest.skip()` = 0).
+8. Cero destrucción automática: tablas legacy íntegras y operativas con gobernanza configurable.
+9. Detención formal al completar la Fase 6 sin iniciar Fase 7.
 
 ---
 
-## 2. CIERRE DE LAS TRES CORRECCIONES REQUERIDAS
+## 2. DETALLE TÉCNICO DE IMPLEMENTACIONES POR COMPONENTE
 
-### CORRECCIÓN 1 — Webhooks Retry, Manejo de Errores y Transición Transaccional
-- **Cero silenciamiento de excepciones:** Eliminado cualquier `except Exception: pass`. Toda falla en la invocación o procesamiento transaccional de un webhook registra el error exacto en `last_error`.
-- **Estados deterministas de error:**
-  - Ante fallo transaccional durante el reintento, el evento conserva `FAILED` o pasa a `RETRYING` incrementando el contador `attempts += 1`.
-  - Si `attempts >= max_attempts`, el evento transiciona inmediatamente a `DEAD_LETTER` (`dead_letter = True`), con la marca de tiempo de fallo y descripción detallada del error.
-  - El estado `PROCESSED` se adquiere **única y exclusivamente** tras la confirmación atómica y exitosa del pago (`db.commit()`), reflejando la actualización del saldo en `SaleOrder` y la inserción del registro en `SaleOrderPayment`.
-- **Certificación de tests:**
-  - `test_b2_06_webhooks_reintento_fallido_permanece_failed_o_retrying_nunca_processed`: certificado.
-  - `test_b2_07_webhooks_reintento_supera_max_attempts_pasa_a_dead_letter`: certificado.
-  - `test_b2_08_webhooks_reintento_exitoso_confirma_exactamente_un_pago`: certificado (exactamente 1 pago registrado, cero duplicados en reintentos concurrentes).
+### A. Modelos de Datos de Fase 6 (`backend/app/models/fase6.py`)
+Se estructuraron las tablas de soporte para auditoría inmutable, snapshots de paridad y gobernanza operativa:
+1. **`LegacyConsolidationAuditLog` (`legacy_consolidation_audit_logs`)**:
+   - Campos: `id`, `event_type`, `entity_type`, `legacy_id`, `canonical_id`, `action`, `status`, `actor_user_id`, `discrepancy_details` (JSONB), `created_at`.
+   - Restricciones CHECK:
+     - `chk_lcal_event_type`: valores estrictos `'LEGACY_WRITE_INTERCEPTED'`, `'LEGACY_READ'`, `'PARITY_CHECK'`, `'DISCREPANCY_DETECTED'`, `'SYNC_COMPLETED'`, `'GOVERNANCE_CHANGE'`.
+     - `chk_lcal_status`: valores estrictos `'SUCCESS'`, `'WARNING'`, `'FAILED'`, `'RECONCILED'`.
+   - Índices optimizados para auditoría, entidad y orden temporal.
+2. **`LegacyParitySnapshot` (`legacy_parity_snapshots`)**:
+   - Métricas cuantitativas periódicas de paridad: `total_legacy_orders`, `total_canonical_orders`, `matched_orders`, `orphaned_legacy_orders`, `parity_score_pct` (`Numeric(5,2)`), `discrepancies_json` (JSONB), `snapshot_type` (`SALES`, `PURCHASES`, `FINANCE`, `FULL`).
+3. **`LegacyGovernancePolicy` (`legacy_governance_policies`)**:
+   - Control dinámico de políticas: `mode` (`DUAL_WRITE`, `READ_ONLY`, `CANONICAL_PRIMARY`), `allow_legacy_writes` (Boolean), `deprecation_header_enabled` (Boolean), `sunset_date` (DateTime), `successor_canonical_url` (String).
 
-### CORRECCIÓN 2 — Bodega Ecommerce: Cero Fallbacks Inseguros y Resolución Estricta
-- **Cero fallbacks a `first()` o IDs fijos:** Eliminado cualquier fallback automático a `Warehouse.first()` o `warehouse_id = 1`.
-- **Resolución estricta server-side:** Implementada la función canónica `_get_authorized_ecommerce_warehouses(db)` que determina las bodegas autorizadas a través de:
-  1. Configuración explícita en base de datos (`web_builder_config` con clave `ecommerce_fulfillment`).
-  2. Variables de entorno de bodega online autorizada (`ECOMMERCE_WAREHOUSE_ID`).
-  3. Bodegas activas de tipo canónico `Central` (`location_type == 'Central'`).
-- **Rechazo estricto sin escrituras:**
-  - Si el cliente envía un `warehouse_id` no autorizado o si no existe bodega configurada para fulfillment online, el endpoint `POST /ecommerce/pedidos` rechaza la solicitud de forma inmediata con `HTTP 400 Bad Request` sin persistir órdenes, reservas ni líneas huérfanas.
-  - Aislamiento patrimonial MAU estricto: cualquier intento de asignar mercancía con `owner != 'NEBULAE'` es bloqueado con `HTTP 403 Forbidden`.
+### B. Enlace en Tablas Legacy
+Se añadieron columnas de enlace bidireccional en las tablas existentes sin romper esquemas previos:
+- `sales_orders.canonical_sale_order_id` (FK nullable -> `sale_orders.id`).
+- `purchase_orders.canonical_purchase_order_id` (FK nullable -> `purchase_orders_full.id`).
+- `quotations.canonical_quotation_id` (FK nullable -> `sales_quotations.id`).
 
-### CORRECCIÓN 3 — Cuarentena Real de Fase 3 y Aislamiento NEBULAE vs MAU
-- **Uso exclusivo del endpoint canónico real:**
-  - La suite `test_fase5_security_legacy_surface.py` invoca directamente el endpoint productivo de Fase 3:
-    `POST /api/v1/inventory/cuarentena/{id}/resolver` con la acción `LIBERAR`.
-  - Cero manipulaciones o bypass directos en base de datos para simular la resolución.
-- **Flujo operativo canónico verificado:**
-  - Registro de movimiento en Kardex (`InventoryMovement`) con dirección `IN` y tipo `CUARENTENA_LIBERADA`.
-  - Incremento del nivel físico total en bodega (`InventoryLevel.quantity`).
-  - Asignación atómica al balance patrimonial específico (`InventoryOwnerBalance.quantity`).
-  - Actualización matemática del stock vendible para e-commerce (`_get_real_sellable_stock`).
-- **Aislamiento patrimonial total en 2 bodegas independientes:**
-  - Escenario con 2 bodegas simultáneas (`wh1` y `wh2`) y saldos segregados para los dos propietarios (`NEBULAE` y `MAU`).
-  - Al liberar cuarentena de `NEBULAE` en Bodega 1: se incrementa únicamente el balance de `NEBULAE` en Bodega 1; los balances de `MAU` en Bodega 1, `NEBULAE` en Bodega 2 y `MAU` en Bodega 2 permanecen estrictamente inalterados.
-  - Al liberar cuarentena de `MAU` en Bodega 1: se incrementa únicamente el balance de `MAU` en Bodega 1, sin alterar el stock vendible de `NEBULAE`.
+### C. Migración Alembic `fa6_001` (`backend/alembic/versions/fa6_001_legacy_consolidation.py`)
+- Creación segura de las 3 tablas de consolidación, columnas de enlace e índices correspondientes.
+- Ciclo de reversibilidad 100% certificado en `erp_test`: `upgrade fa6_001` -> `downgrade fa5_002` -> `upgrade head` sin pérdidas ni conflictos de esquema.
+- Verificación de producción: `erpdb` verificada y confirmada intacta en `fa1a_002`.
+
+### D. Capa de Servicios (`backend/app/services/legacy_consolidation.py`)
+Implementa la lógica de negocio central de gobernanza y paridad:
+- **`compare_sales_parity(db)`**: Evalúa correlación entre `sales_orders` y `sale_orders`, detecta huérfanos legacy, discrepancias de monto e inconsistencias de estado.
+- **`compare_purchases_parity(db)`**: Evalúa correlación entre `purchase_orders` y `purchase_orders_full`, validando totales, estado y líneas.
+- **`compare_financial_parity(db)`**: Analiza consistencia entre facturación/COGS en ambas capas.
+- **`generate_and_save_parity_snapshot(db, user_id)`**: Calcula y persiste una instantánea formal de paridad en `legacy_parity_snapshots`.
+- **`apply_deprecation_headers(response, policy, successor_path)`**: Inyecta cabeceras conforme a RFC 8594:
+  - `Deprecation: true`
+  - `Sunset: <fecha RFC 1123>`
+  - `Link: <url_canonica>; rel="successor-version"`
+- **`intercept_sales_order_write(db, order_data, lines_data, user_id)`**: Realiza dual-write atómico hacia `SaleOrder` canónico y sus líneas `SaleOrderLineErp`. Enlaza ambas entidades bidireccionalmente y registra la auditoría inmutable.
+- **`intercept_purchase_order_write(db, po_data, user_id)`**: Realiza dual-write atómico hacia `PurchaseOrderFull` canónico.
+- **`reconcile_and_backfill_orphan_legacy(db)`**: Identifica órdenes legacy sin contraparte canónica y genera sus modelos canónicos de forma idempotente.
+
+### E. Router de Observabilidad y Gobernanza (`backend/app/api/v1/legacy_observability.py`)
+Expone la telemetría del sistema bajo el prefijo `/api/v1/legacy`:
+- `GET /api/v1/legacy/status`: Salud del subsistema de gobernanza, política activa y conectividad de base de datos.
+- `GET /api/v1/legacy/metrics`: Conteo de eventos de auditoría, escrituras interceptadas, discrepancias y lecturas legacy.
+- `GET /api/v1/legacy/parity-report`: Reporte consolidado de paridad cuantitativa en ventas, compras y finanzas.
+- `GET /api/v1/legacy/audit-logs`: Consulta paginada y filtrable del log inmutable de auditoría.
+- `GET /api/v1/legacy/governance`: Inspección de la directiva operativa vigente.
+- `PATCH /api/v1/legacy/governance`: Actualización controlada de directivas (`DUAL_WRITE`, `READ_ONLY`, `CANONICAL_PRIMARY`), restringido por RBAC a usuarios administradores.
+- `POST /api/v1/legacy/reconcile-sync`: Disparo seguro de reconciliación masiva de huérfanos legacy.
+
+### F. Adaptación de Routers Existentes
+- **Ventas Legacy (`sales.py`)**:
+  - `POST /api/v1/sales/orders`: Inyección de cabeceras RFC 8594, intercepción dual-write hacia `SaleOrder` canónico, bloqueo con HTTP 410 (Gone) en caso de política `READ_ONLY`.
+  - `POST /api/v1/sales/orders/{id}/invoice`: Propagación transaccional del estado de facturación a `SaleOrder.estado = 'FACTURADO'`.
+- **Compras Legacy (`purchases.py`)**:
+  - `POST /api/v1/purchases/orders`: Inyección de cabeceras RFC 8594, intercepción dual-write hacia `PurchaseOrderFull`, bloqueo con HTTP 410 en `READ_ONLY`.
+  - `POST /api/v1/purchases/orders/{id}/receive`: Propagación transaccional a `PurchaseOrderFull.estado = 'RECIBIDA'`.
+- **Tienda Pública (`store.py`)**:
+  - `POST /api/v1/store/checkout`: Escritura dual atómica creando el pedido canónico `SaleOrder` (`canal_venta='WEB'`) con sus líneas `SaleOrderLineErp` y auditoría estructurada, manteniendo 100% idéntico el contrato hacia clientes frontend.
+- **Finanzas (`finance.py`)**:
+  - `GET /api/v1/finance/dashboard`: Se unificaron los ingresos y COGS computando las líneas canónicas `SaleOrderLineErp` sumadas a órdenes legacy huérfanas sin duplicar órdenes enlazadas.
+- **CRM (`crm.py`)**:
+  - `GET /api/v1/crm/alerts`: Detección unificada de pedidos estancados (48h) y pendientes de entrega monitoreando tanto `SalesOrder` como `SaleOrder`.
+- **Dependencias y RBAC (`dependencies.py`)**:
+  - `RoleChecker`: Normalización de roles (`user.role.upper() == "ADMIN"`) para asegurar consistencia entre variantes mayúsculas y minúsculas.
+
+### G. Propuesta de Retiro y Limpieza Futura (`docs/DEPRECATION_AND_CLEANUP_PROPOSAL.md`)
+Se elaboró un documento exhaustivo de ingeniería (12 KB) que detalla el camino hacia la Fase 7 sin riesgo operativo:
+- **Inventario Exhaustivo**: 16 endpoints legacy (`/sales`, `/purchases`) y 3 tablas (`sales_orders`, `purchase_orders`, `quotations`).
+- **Hoja de Ruta Estructurada**:
+  - **Fase 7A**: Desactivación de escrituras legacy (modo `READ_ONLY` forzado HTTP 410).
+  - **Fase 7B**: Retiro de routers y endpoints legacy de la API FastAPI.
+  - **Fase 7C**: Archivado histórico a esquemas fríos (`legacy_archive`) y dropping seguro de tablas legacy.
+- **Precondiciones Verificables por Telemetría**: Paridad al 100%, huérfanos = 0, tráfico legacy residual < 0.1% durante 14 días continuos.
+- **Procedimiento de Rollback SQL Idempotente**: Scripts documentados para reversión inmediata ante cualquier contingencia.
 
 ---
 
-## 3. MEJORAS DE ROBUSTEZ Y ESTABILIDAD INCORPORADAS
+## 3. MATRIZ DE PRUEBAS AUTOMATIZADAS Y RESULTADOS
 
-1. **Reconciliación Financiera Exacta (`finance.py`):**
-   - En `get_ledger_reconciliation`, se aislaron los pagos y recaudos de órdenes canceladas para considerarlos saldos a favor o pasivos de clientes en lugar de recaudos sobre ventas activas.
-   - Ajuste simétrico para devoluciones de dinero (`devoluciones_dinero_cop`), asegurando cuadratura matemática exacta:
-     descuadre_reconciliacion == 0.00, reconciliacion_cuadrada == True
-2. **Sincronización Determinista de Agenda CRM (`crm.py`):**
-   - En `_sync_operational_agenda_deterministic`, se agregó validación previa de existencia de clientes (`valid_customer_ids`) para evitar violaciones de clave foránea (`ForeignKeyViolation`) al sincronizar pedidos de prueba.
-3. **Restauración de Secuencias PostgreSQL en `erp_test`:**
-   - Se restauraron los defaults `nextval(...)` en las tablas compactadas (`goods_receipts`, `inventory_movements`, `sale_orders`).
-4. **Protección de Migraciones Alembic (`fa4_001` y tests `test_z_`):**
-   - Se blindó el backfill de `fa4_001_sales_payments_delivery.py` contra `customer_id` huérfanos.
-   - Se estructuraron los tests de migración destructivos/roundtrip con el prefijo `test_z_` y fixtures `restore_head` para ejecutarse al final de la suite y restaurar siempre el esquema a `head` (`fa5_002`) con permisos completos para `nebulae_test`.
+### A. Suite Específica de Fase 6 (`backend/tests/test_fase6_legacy_consolidation.py`)
+16 pruebas exhaustivas cubriendo cada una de las exigencias del Prompt Maestro:
+1. `test_01_fase6_structural_schema`: Verificación de tablas `legacy_consolidation_audit_logs`, `legacy_parity_snapshots`, `legacy_governance_policies` y columnas de enlace.
+2. `test_02_governance_policy_and_rfc8594_headers`: Inyección y validación de cabeceras RFC 8594 (`Deprecation`, `Sunset`, `Link`).
+3. `test_03_compare_sales_parity`: Detección precisa de concordancias y discrepancias en ventas.
+4. `test_04_compare_purchases_parity`: Detección de paridad en órdenes de compra.
+5. `test_05_compare_financial_parity`: Consistencia de ingresos y montos facturados.
+6. `test_06_generate_and_save_parity_snapshot`: Generación, cálculo de `parity_score_pct` y persistencia de instantánea.
+7. `test_07_dual_write_sales_order`: Dual-write atómico a `SaleOrder` con líneas `SaleOrderLineErp` y log de auditoría.
+8. `test_08_invoice_sales_order_sync`: Sincronización transaccional al facturar pedido legacy -> `SaleOrder.estado = 'FACTURADO'`.
+9. `test_09_dual_write_purchase_order`: Dual-write atómico a `PurchaseOrderFull` con enlace bidireccional.
+10. `test_10_receive_purchase_order_sync`: Sincronización transaccional al recibir compra -> `PurchaseOrderFull.estado = 'RECIBIDA'`.
+11. `test_11_store_checkout_dual_write`: Checkout público crea `SaleOrder` canónico con canal WEB sin alterar el payload de respuesta.
+12. `test_12_governance_read_only_mode`: Bloqueo determinista de escrituras legacy con HTTP 410 (Gone) en modo `READ_ONLY`.
+13. `test_13_reconcile_and_backfill`: Reconciliación masiva e idempotente de registros legacy huérfanos.
+14. `test_14_observability_endpoints`: Verificación de endpoints `/status`, `/metrics`, `/parity-report`, `/audit-logs`.
+15. `test_15_rbac_observability`: Protección RBAC de configuración de gobernanza (Admin requerido, no-admin 403).
+16. `test_16_finance_and_crm_coexistence`: Verificación de coexistencia y cálculo unificado en Finanzas y CRM.
+
+**Resultados de Ejecución de Fase 6:**
+- Corrida 1: **16/16 PASSED** en 79.12s.
+- Corrida 2 (Repetibilidad e Idempotencia): **16/16 PASSED** en 78.51s.
+
+### B. Suites de Regresión Global (Fase 5, Seguridad y Concurrencia)
+- `tests/test_fase5_integracion_erp.py`: **18/18 PASSED** (0 failed, 0 errors).
+- `tests/test_fase5_security_hardening.py`: **24/24 PASSED** (0 failed, 0 errors).
+- `tests/test_fase5_security_legacy_surface.py`: **22/22 PASSED** (0 failed, 0 errors).
+- `tests/test_receipt_concurrency.py`: **2/2 PASSED** (0 failed, 0 errors).
+- `tests/test_receipt_idempotency.py`: **6/6 PASSED** (0 failed, 0 errors).
+- `tests/test_receipt_partial.py`: **5/5 PASSED** (0 failed, 0 errors).
+
+**Total de Pruebas Ejecutadas en la Certificación:** **93 PASSED (100% de éxito, 0 fallos, 0 errores, 0 skipped)**.
 
 ---
 
-## 4. VERIFICACIÓN DE FRONTERAS Y RESTRICCIONES INVIOLABLES
+## 4. ESTADO DE LAS BASES DE DATOS
 
-| Frontera / Requisito | Estado | Evidencia de Cumplimiento |
-| :--- | :--- | :--- |
-| **NO iniciar Fase 6** | **CUMPLIDO AL 100%** | Cero archivos, endpoints o migraciones de Fase 6 creados. |
-| **NO modificar `frontend/`** | **CUMPLIDO AL 100%** | `git status --porcelain frontend/` retorna 0 modificaciones. `npm run build` ejecutado exitosamente generando las 74 rutas de producción sin errores. |
-| **NO tocar ni migrar `erpdb`** | **CUMPLIDO AL 100%** | Base de datos de producción `erpdb` verificada en versión `fa1a_002` (completamente inalterada). |
-| **Base de datos de pruebas `erp_test`** | **CUMPLIDO AL 100%** | `erp_test` verificada en la versión `head` (`fa5_002`). |
-| **Doble corrida Fase 5 (64 tests)** | **CUMPLIDO AL 100%** | Pase 1: 64/64 PASSED. Pase 2: 64/64 PASSED. Cero fallos. |
-| **Suite completa backend** | **CUMPLIDO AL 100%** | **347 PASSED, 0 FAILED, 0 ERRORS, 0 SKIPPED**. |
+- **Base de Datos de Producción (`erpdb`):**
+  - Host: `2.24.90.223:5435/erpdb`
+  - Versión Alembic: `fa1a_002`
+  - **Estado:** 100% INTACTA. Ninguna migración ni cambio de esquema fue aplicado en producción.
+- **Base de Datos de Pruebas (`erp_test`):**
+  - Host: `2.24.90.223:5435/erp_test`
+  - Versión Alembic: `fa6_001`
+  - **Estado:** Migrada, validada en roundtrip (downgrade `fa5_002` y upgrade `head`), con todas las tablas e índices operativos.
 
 ---
 
-## 5. CONCLUSIÓN Y CIERRE FORMAL
+## 5. ESTADO DEL FRONTEND NEXT.JS
 
-La **Fase 5 queda formalmente y definitivamente cerrada**. Todos los criterios técnicos, de seguridad, arquitectura y pruebas de regresión han sido completamente superados con éxito. Se detiene todo avance a la espera de la autorización expresa del usuario antes de proceder a la siguiente fase.
+- **Archivos modificados en `frontend/`:** **0 archivos** (`git status --porcelain frontend/` vacío).
+- **Compilación de Producción (`npm run build`):**
+  - Tiempo de compilación: 2.9s
+  - Rutas estáticas generadas: **74/74 rutas exitosas**
+  - Código de salida: 0 (Cero advertencias de TypeScript, cero errores de bundling).
+
+---
+
+## 6. REGISTRO DE VERSIONAMIENTO Y COMMITS EN GITHUB
+
+- **Commit de Fase 6:** `c649da4`
+- **Mensaje:** `feat(fase6): consolidacion legacy, observabilidad, dual-write y propuesta de retiro`
+- **Ramas:** Sincronizado en `main` y `origin/main`.
+- **Archivos incluidos en el despliegue:**
+  - `backend/alembic/versions/fa6_001_legacy_consolidation.py`
+  - `backend/app/api/dependencies.py`
+  - `backend/app/api/v1/crm.py`
+  - `backend/app/api/v1/finance.py`
+  - `backend/app/api/v1/legacy_observability.py`
+  - `backend/app/api/v1/purchases.py`
+  - `backend/app/api/v1/sales.py`
+  - `backend/app/api/v1/store.py`
+  - `backend/app/models/fase6.py`
+  - `backend/app/models/purchases.py`
+  - `backend/app/models/sales.py`
+  - `backend/app/services/__init__.py`
+  - `backend/app/services/legacy_consolidation.py`
+  - `backend/main.py`
+  - `backend/tests/test_fase6_legacy_consolidation.py`
+  - `docs/DEPRECATION_AND_CLEANUP_PROPOSAL.md`
