@@ -1006,6 +1006,68 @@ def test_19_checkout_reservation_does_not_reduce_physical_stock(client: TestClie
         f"Balance={balance_antes}, Vendible={stock_vendible}"
     )
 
+    # ── FASE 2: Simulacion de Despacho ───────────────────────────────────────
+    # No existe endpoint de despacho en Fase 6; el despacho es una salida fisica
+    # canonica que reduce InventoryLevel + InventoryOwnerBalance y cierra la reserva.
+    # Simulamos el despacho directamente en los modelos para verificar que la
+    # arquitectura de datos es consistente:
+    # stock inicial 10 → reservar 3 → fisico 10, balance 10, reserva 3, disponible 7
+    # → despachar 3 → fisico 7, balance 7, reserva cerrada, disponible final 7.
+
+    # Reducir stock fisico (-3) — lo que haria el endpoint de salida fisica
+    inv_lvl_despacho = db.query(InventoryLevel).filter(
+        InventoryLevel.sku_id == sku.id,
+        InventoryLevel.warehouse_id == wh.id
+    ).first()
+    inv_lvl_despacho.quantity = inv_lvl_despacho.quantity - 3
+
+    # Reducir balance patrimonial (-3)
+    bal_despacho = db.query(InventoryOwnerBalance).filter(
+        InventoryOwnerBalance.sku_id == sku.id,
+        InventoryOwnerBalance.warehouse_id == wh.id,
+        InventoryOwnerBalance.owner == "NEBULAE"
+    ).first()
+    bal_despacho.quantity = bal_despacho.quantity - Decimal("3")
+
+    # Cerrar reserva ACTIVE → RELEASED
+    for res in reservas:
+        res.status = "RELEASED"
+
+    db.commit()
+    db.expire_all()
+
+    # ── Verificacion post-despacho ────────────────────────────────────────────
+    stock_fisico_post = db.query(InventoryLevel).filter(
+        InventoryLevel.sku_id == sku.id,
+        InventoryLevel.warehouse_id == wh.id
+    ).first().quantity
+    assert stock_fisico_post == 7, (
+        f"Despues del despacho: InventoryLevel.quantity debe ser 7, encontrado {stock_fisico_post}"
+    )
+
+    balance_post = db.query(InventoryOwnerBalance).filter(
+        InventoryOwnerBalance.sku_id == sku.id,
+        InventoryOwnerBalance.warehouse_id == wh.id,
+        InventoryOwnerBalance.owner == "NEBULAE"
+    ).first().quantity
+    assert balance_post == Decimal("7"), (
+        f"Despues del despacho: InventoryOwnerBalance.quantity debe ser 7, encontrado {balance_post}"
+    )
+
+    reservas_post = db.query(InventoryReservation).filter(
+        InventoryReservation.sku_id == sku.id,
+        InventoryReservation.status == "ACTIVE"
+    ).all()
+    assert len(reservas_post) == 0, (
+        f"Despues del despacho: no debe haber reservas ACTIVE. Encontradas: {len(reservas_post)}"
+    )
+
+    stock_vendible_post = _get_real_sellable_stock(db, sku.id, wh.id, "NEBULAE")
+    assert stock_vendible_post == 7.0, (
+        f"Despues del despacho: stock vendible debe ser 7 (balance 7 - reservas 0). "
+        f"Encontrado: {stock_vendible_post}"
+    )
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # TEST 20: Secuencias sin Fallback Runtime (Bloqueo 2)
