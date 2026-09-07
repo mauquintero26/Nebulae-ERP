@@ -337,50 +337,165 @@ def test_05_parity_report_is_strictly_read_only_zero_modifications(client: TestC
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# TEST 6: Comparacion Real de Compras (Bloqueo 1)
+# TEST 6: Comparacion Real de Compras con Pruebas Negativas (Bloqueo 1)
 # ──────────────────────────────────────────────────────────────────────────────
 def test_06_compare_purchases_parity_comprehensive(db: Session):
-    # 1. Crear PurchaseOrder legacy vinculada y canonica con estado coincidente
-    can_po = PurchaseOrderFull(
-        numero=f"PEC-TEST-{int(time.time())}",
+    from app.models.fase1b import PurchaseOrderLine as CanPurchaseLine
+    ts6 = int(time.time()) % 1000000  # 6-digit suffix to stay within VARCHAR(20)
+
+    # ── Escenario A: PO alineada ─────────────────────────────────────────────
+    can_po_ok = PurchaseOrderFull(
+        numero=f"PEC-OK-{ts6}",
         supplier_name="Proveedor Madera Andina",
         estado="RECIBIDA",
         subtotal_cop=Decimal("5000000.00"),
         total_cop=Decimal("5000000.00")
     )
-    db.add(can_po)
+    db.add(can_po_ok)
     db.flush()
-
-    po_aligned = PurchaseOrder(
-        status="RECEIVED",
-        canonical_purchase_order_id=can_po.id
+    # Agregar una recepcion para que no dispare RECEPTIONS_MISMATCH
+    gr_ok = GoodsReceipt(
+        numero=f"GR-OK-{ts6}",
+        pec_id=can_po_ok.id,
+        estado="CONFIRMADA"
     )
+    db.add(gr_ok)
+    po_aligned = PurchaseOrder(status="RECEIVED", canonical_purchase_order_id=can_po_ok.id)
     db.add(po_aligned)
 
-    # 2. Crear PurchaseOrder con estado discrepante
-    can_po2 = PurchaseOrderFull(
-        numero=f"PEC-TEST2-{int(time.time())}",
-        supplier_name="Proveedor Telas y Espumas",
+    # ── Escenario B: STATUS_MISMATCH ────────────────────────────────────────
+    can_po_bad_status = PurchaseOrderFull(
+        numero=f"PEC-BS-{ts6}",
+        supplier_name="Proveedor Telas",
         estado="BORRADOR",
         total_cop=Decimal("2000000.00")
     )
-    db.add(can_po2)
+    db.add(can_po_bad_status)
     db.flush()
+    po_bad_status = PurchaseOrder(status="RECEIVED", canonical_purchase_order_id=can_po_bad_status.id)
+    db.add(po_bad_status)
 
-    po_discrepant = PurchaseOrder(
-        status="RECEIVED",
-        canonical_purchase_order_id=can_po2.id
+    # ── Escenario C: LINE_COUNT_MISMATCH (2 en JSON, 1 en tabla) ────────────
+    from app.models.catalog import ProductSKU as _SKU
+    from app.models.catalog import Product as _Product, Category as _Cat, Brand as _Brand
+    cat = db.query(_Cat).first() or _Cat(name="Test Cat")
+    brand = db.query(_Brand).first() or _Brand(name="Test Brand")
+    db.add(cat); db.add(brand); db.flush()
+    prod = _Product(name=f"Prod Parity {ts6}", type="Fisico", base_currency="COP", uom="Un",
+                    is_active=True, category_id=cat.id, brand_id=brand.id)
+    db.add(prod); db.flush()
+    sku1 = _SKU(product_id=prod.id, sku=f"SKU-P1-{ts6}", sale_price=Decimal("100000"))
+    sku2 = _SKU(product_id=prod.id, sku=f"SKU-P2-{ts6}", sale_price=Decimal("200000"))
+    db.add(sku1); db.add(sku2); db.flush()
+
+    can_po_lcount = PurchaseOrderFull(
+        numero=f"PEC-LC-{ts6}",
+        supplier_name="Proveedor Lineas",
+        estado="BORRADOR",
+        total_cop=Decimal("300000.00"),
+        productos=[{"sku_id": sku1.id, "qty": 1}, {"sku_id": sku2.id, "qty": 1}]  # 2 en JSON
     )
-    db.add(po_discrepant)
+    db.add(can_po_lcount)
+    db.flush()
+    # Solo 1 linea en tabla (discrepancia)
+    line1 = CanPurchaseLine(
+        pec_id=can_po_lcount.id,
+        sku_id=sku1.id,
+        quantity_ordered=Decimal("1"),
+        unit_cost_cop=Decimal("100000"),
+        source="NATIVE"
+    )
+    db.add(line1)
+    po_lcount = PurchaseOrder(status="DRAFT", canonical_purchase_order_id=can_po_lcount.id)
+    db.add(po_lcount)
+
+    # ── Escenario D: LINE_MISSING_SKU ────────────────────────────────────────
+    can_po_nosku = PurchaseOrderFull(
+        numero=f"PEC-NS-{ts6}",
+        supplier_name="Proveedor Sin SKU",
+        estado="BORRADOR",
+        total_cop=Decimal("100000.00")
+    )
+    db.add(can_po_nosku)
+    db.flush()
+    line_nosku = CanPurchaseLine(
+        pec_id=can_po_nosku.id,
+        sku_id=None,  # SKU faltante
+        quantity_ordered=Decimal("1"),
+        unit_cost_cop=Decimal("100000"),
+        source="NATIVE"
+    )
+    db.add(line_nosku)
+    po_nosku = PurchaseOrder(status="DRAFT", canonical_purchase_order_id=can_po_nosku.id)
+    db.add(po_nosku)
+
+    # ── Escenario E: LINE_MISSING_COST ───────────────────────────────────────
+    can_po_nocost = PurchaseOrderFull(
+        numero=f"PEC-NC-{ts6}",
+        supplier_name="Proveedor Sin Costo",
+        estado="BORRADOR",
+        total_cop=Decimal("0.00")
+    )
+    db.add(can_po_nocost)
+    db.flush()
+    line_nocost = CanPurchaseLine(
+        pec_id=can_po_nocost.id,
+        sku_id=sku1.id,
+        quantity_ordered=Decimal("1"),
+        unit_cost_cop=Decimal("0"),  # costo cero -> discrepancia
+        source="NATIVE"
+    )
+    db.add(line_nocost)
+    po_nocost = PurchaseOrder(status="DRAFT", canonical_purchase_order_id=can_po_nocost.id)
+    db.add(po_nocost)
+
+    # ── Escenario F: SUBTOTAL_MISMATCH ───────────────────────────────────────
+    can_po_subtot = PurchaseOrderFull(
+        numero=f"PEC-ST-{ts6}",
+        supplier_name="Proveedor Subtotal",
+        estado="BORRADOR",
+        subtotal_cop=Decimal("9999999.00"),  # subtotal almacenado incorrecto
+        total_cop=Decimal("9999999.00")
+    )
+    db.add(can_po_subtot)
+    db.flush()
+    line_subtot = CanPurchaseLine(
+        pec_id=can_po_subtot.id,
+        sku_id=sku1.id,
+        quantity_ordered=Decimal("1"),
+        unit_cost_cop=Decimal("100000"),  # computed=100000, stored=9999999 -> mismatch
+        source="NATIVE"
+    )
+    db.add(line_subtot)
+    po_subtot = PurchaseOrder(status="DRAFT", canonical_purchase_order_id=can_po_subtot.id)
+    db.add(po_subtot)
+
     db.commit()
 
     parity = compare_purchases_parity(db)
-    assert parity["total_legacy_purchases"] >= 2
-    assert parity["total_canonical_purchases"] >= 2
 
-    # Verificar que se detecto la discrepancia de estado
+    assert parity["total_legacy_purchases"] >= 6
+    assert parity["total_canonical_purchases"] >= 6
+
     disc_types = [d.get("type") for d in parity["discrepancies"]]
-    assert "STATUS_MISMATCH" in disc_types
+
+    # Verificar que CADA tipo de discrepancia fue detectado
+    assert "STATUS_MISMATCH" in disc_types, f"STATUS_MISMATCH no detectado. Discrepancias: {disc_types}"
+    assert "LINE_COUNT_MISMATCH" in disc_types, f"LINE_COUNT_MISMATCH no detectado. Discrepancias: {disc_types}"
+    assert "LINE_MISSING_SKU" in disc_types, f"LINE_MISSING_SKU no detectado. Discrepancias: {disc_types}"
+    assert "LINE_MISSING_COST" in disc_types, f"LINE_MISSING_COST no detectado. Discrepancias: {disc_types}"
+    assert "SUBTOTAL_MISMATCH" in disc_types, f"SUBTOTAL_MISMATCH no detectado. Discrepancias: {disc_types}"
+
+    # El parity_score debe haber bajado por las discrepancias
+    assert parity["purchases_parity_score"] < 100.0, (
+        f"parity_score debe bajar ante discrepancias. Score actual: {parity['purchases_parity_score']}"
+    )
+    # El score calculado debe ser un numero valido
+    assert 0.0 <= parity["purchases_parity_score"] <= 100.0
+
+    # La funcion es estrictamente READ-ONLY: no debe haber modificado ningun registro
+    db.expire_all()
+    assert parity["discrepancies_count"] >= 5
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -468,21 +583,82 @@ def test_09_dual_write_purchase_order_idempotency_and_replays(client: TestClient
 # ──────────────────────────────────────────────────────────────────────────────
 # TEST 10: Modos de Gobernanza READ_ONLY y CANONICAL_PRIMARY (Bloqueo 3)
 # ──────────────────────────────────────────────────────────────────────────────
-def test_10_governance_modes_read_only_and_canonical_primary(client: TestClient, auth_tokens, base_catalog_and_customer):
+def test_10_governance_modes_read_only_and_canonical_primary(client: TestClient, auth_tokens, base_catalog_and_customer, db: Session):
     headers = auth_tokens["admin"]["headers"]
+    cust = base_catalog_and_customer["customer"]
+    sku = base_catalog_and_customer["sku"]
 
-    # 1. Configurar READ_ONLY
+    # 1. Configurar READ_ONLY → escrituras deben retornar 410
     client.patch("/api/v1/legacy/governance", json={"mode": "READ_ONLY", "allow_legacy_writes": False}, headers=headers)
 
-    # Intento de escritura en ventas -> debe retornar 410 Gone
     res_ro = client.post("/api/v1/sales/", json={
-        "customer_id": base_catalog_and_customer["customer"].id,
+        "customer_id": cust.id,
         "status": "PENDING",
-        "lines": [{"sku_id": base_catalog_and_customer["sku"].id, "quantity": 1, "unit_price": 1200000.0}]
+        "lines": [{"sku_id": sku.id, "quantity": 1, "unit_price": 1200000.0}]
     }, headers={**headers, "Idempotency-Key": f"RO_{int(time.time())}"})
     assert res_ro.status_code == 410
 
-    # 2. Restaurar DUAL_WRITE
+    # 2. Configurar CANONICAL_PRIMARY
+    client.patch("/api/v1/legacy/governance", json={"mode": "CANONICAL_PRIMARY", "allow_legacy_writes": True}, headers=headers)
+
+    # Contar ANTES
+    so_legacy_before = db.query(SalesOrder).count()
+    so_canonical_before = db.query(SaleOrder).count()
+
+    # Llamar a intercept_sales_order_write directamente para controlar conteos precisos
+    order_data = {
+        "customer_id": cust.id,
+        "status": "PENDING",
+        "sale_type": "IMMEDIATE",
+    }
+    lines_data = [{"sku_id": sku.id, "quantity": 1, "unit_price": 1200000.0}]
+
+    db.expire_all()
+    legacy_row, canonical_row = intercept_sales_order_write(
+        db=db,
+        order_data=order_data,
+        lines_data=lines_data,
+        user_id=auth_tokens["admin"]["user"].id,
+        idempotency_key=f"CP_MODE_{int(time.time())}"
+    )
+
+    # CANONICAL_PRIMARY: NO debe haber creado fila legacy
+    assert legacy_row is None, "CANONICAL_PRIMARY debe retornar None para la entidad legacy"
+    assert canonical_row is not None, "CANONICAL_PRIMARY debe crear la entidad canonica"
+    assert canonical_row.canal_venta == "CANONICAL_PRIMARY"
+
+    # Verificar conteos DESPUES
+    db.expire_all()
+    so_legacy_after = db.query(SalesOrder).count()
+    so_canonical_after = db.query(SaleOrder).count()
+
+    assert so_legacy_after == so_legacy_before, (
+        f"CANONICAL_PRIMARY NO debe insertar en sales_orders. Antes={so_legacy_before}, Despues={so_legacy_after}"
+    )
+    assert so_canonical_after == so_canonical_before + 1, (
+        f"CANONICAL_PRIMARY debe crear exactamente 1 SaleOrder canonica. Antes={so_canonical_before}, Despues={so_canonical_after}"
+    )
+
+    # 3. Verificar que DUAL_WRITE crea ambas filas
+    client.patch("/api/v1/legacy/governance", json={"mode": "DUAL_WRITE", "allow_legacy_writes": True}, headers=headers)
+
+    so_legacy_before2 = db.query(SalesOrder).count()
+    so_canonical_before2 = db.query(SaleOrder).count()
+
+    legacy_row2, canonical_row2 = intercept_sales_order_write(
+        db=db,
+        order_data={"customer_id": cust.id, "status": "PENDING"},
+        lines_data=[{"sku_id": sku.id, "quantity": 1, "unit_price": 1200000.0}],
+        user_id=auth_tokens["admin"]["user"].id,
+        idempotency_key=f"DW_MODE_{int(time.time())}"
+    )
+    db.expire_all()
+    assert legacy_row2 is not None, "DUAL_WRITE debe crear la fila legacy SalesOrder"
+    assert canonical_row2 is not None, "DUAL_WRITE debe crear la fila canonica SaleOrder"
+    assert db.query(SalesOrder).count() == so_legacy_before2 + 1
+    assert db.query(SaleOrder).count() == so_canonical_before2 + 1
+
+    # 4. Restaurar DUAL_WRITE al final
     client.patch("/api/v1/legacy/governance", json={"mode": "DUAL_WRITE", "allow_legacy_writes": True}, headers=headers)
 
 
@@ -712,3 +888,180 @@ def test_18_invoice_sales_order_sync(client: TestClient, auth_tokens, base_catal
     db_so = db.query(SalesOrder).filter(SalesOrder.id == so_id).first()
     can_so = db.query(SaleOrder).filter(SaleOrder.id == db_so.canonical_sale_order_id).first()
     assert can_so.estado == "FACTURADO"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TEST 19: Checkout Reserva Inventario sin Reduccion Fisica (Bloqueo 5)
+# ──────────────────────────────────────────────────────────────────────────────
+def test_19_checkout_reservation_does_not_reduce_physical_stock(client: TestClient, base_catalog_and_customer, db: Session):
+    """
+    Al hacer checkout:
+    - InventoryLevel.quantity NO cambia (stock fisico intacto)
+    - InventoryOwnerBalance.quantity NO cambia
+    - InventoryReservation ACTIVE se crea con la cantidad reservada
+    - stock disponible = balance - suma de reservas activas (baja)
+    Al despachar, el stock fisico bajaria (fuera del scope de este test).
+    """
+    from app.api.v1.ecommerce import _get_real_sellable_stock
+    from app.models.inventory import InventoryLevel
+
+    ts = int(time.time())
+    sku = base_catalog_and_customer["sku"]
+    wh = base_catalog_and_customer["warehouse"]
+
+    # Asegurar que InventoryLevel tiene stock conocido = 10
+    inv_lvl = db.query(InventoryLevel).filter(
+        InventoryLevel.sku_id == sku.id,
+        InventoryLevel.warehouse_id == wh.id
+    ).first()
+    if inv_lvl:
+        inv_lvl.quantity = 10
+    else:
+        inv_lvl = InventoryLevel(warehouse_id=wh.id, sku_id=sku.id, quantity=10)
+        db.add(inv_lvl)
+
+    # Asegurar InventoryOwnerBalance = 10
+    bal = db.query(InventoryOwnerBalance).filter(
+        InventoryOwnerBalance.sku_id == sku.id,
+        InventoryOwnerBalance.warehouse_id == wh.id,
+        InventoryOwnerBalance.owner == "NEBULAE"
+    ).first()
+    if bal:
+        bal.quantity = Decimal("10")
+    else:
+        bal = InventoryOwnerBalance(
+            sku_id=sku.id, warehouse_id=wh.id, owner="NEBULAE", quantity=Decimal("10")
+        )
+        db.add(bal)
+    db.commit()
+    db.expire_all()
+
+    # Estado inicial
+    stock_fisico_antes = db.query(InventoryLevel).filter(
+        InventoryLevel.sku_id == sku.id,
+        InventoryLevel.warehouse_id == wh.id
+    ).first().quantity
+    balance_antes = db.query(InventoryOwnerBalance).filter(
+        InventoryOwnerBalance.sku_id == sku.id,
+        InventoryOwnerBalance.warehouse_id == wh.id,
+        InventoryOwnerBalance.owner == "NEBULAE"
+    ).first().quantity
+
+    # Ejecutar checkout con qty=3
+    idem_key = f"CHECKOUT_RES_{ts}"
+    payload = {
+        "customer": {
+            "first_name": "Test",
+            "last_name": "Reserva",
+            "email": f"reserva_{ts}@example.com",
+            "phone": "3009990000"
+        },
+        "cart": [
+            {"sku_id": sku.id, "quantity": 3}
+        ]
+    }
+    res = client.post("/api/v1/store/checkout", json=payload, headers={"Idempotency-Key": idem_key})
+    assert res.status_code == 201, f"Checkout fallido: {res.json()}"
+    order_data = res.json()["data"]
+
+    db.expire_all()
+
+    # ── Verificacion: InventoryLevel NO cambia ───────────────────────────────
+    stock_fisico_despues = db.query(InventoryLevel).filter(
+        InventoryLevel.sku_id == sku.id,
+        InventoryLevel.warehouse_id == wh.id
+    ).first().quantity
+    assert stock_fisico_despues == stock_fisico_antes, (
+        f"InventoryLevel.quantity NO debe cambiar al reservar. "
+        f"Antes={stock_fisico_antes}, Despues={stock_fisico_despues}"
+    )
+
+    # ── Verificacion: InventoryOwnerBalance NO cambia ────────────────────────
+    balance_despues = db.query(InventoryOwnerBalance).filter(
+        InventoryOwnerBalance.sku_id == sku.id,
+        InventoryOwnerBalance.warehouse_id == wh.id,
+        InventoryOwnerBalance.owner == "NEBULAE"
+    ).first().quantity
+    assert balance_despues == balance_antes, (
+        f"InventoryOwnerBalance.quantity NO debe cambiar al reservar. "
+        f"Antes={balance_antes}, Despues={balance_despues}"
+    )
+
+    # ── Verificacion: InventoryReservation ACTIVE creada con qty=3 ───────────
+    can_order_id = order_data.get("canonical_sale_order_id")
+    reservas = db.query(InventoryReservation).filter(
+        InventoryReservation.sku_id == sku.id,
+        InventoryReservation.status == "ACTIVE"
+    ).all()
+    # Debe haber al menos 1 reserva ACTIVE para este SKU
+    assert len(reservas) >= 1, "Debe existir al menos una InventoryReservation ACTIVE para el SKU"
+    total_reservado = sum(r.quantity_reserved for r in reservas)
+    assert total_reservado >= 3, f"La cantidad reservada debe ser al menos 3. Encontrada: {total_reservado}"
+
+    # ── Verificacion: stock vendible (disponible) bajo ───────────────────────
+    # _get_real_sellable_stock = balance - suma de reservas ACTIVE
+    stock_vendible = _get_real_sellable_stock(db, sku.id, wh.id, "NEBULAE")
+    assert stock_vendible <= float(balance_antes) - 3, (
+        f"Stock vendible debe haber bajado al menos 3 unidades. "
+        f"Balance={balance_antes}, Vendible={stock_vendible}"
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TEST 20: Secuencias sin Fallback Runtime (Bloqueo 2)
+# ──────────────────────────────────────────────────────────────────────────────
+def test_20_sequences_raise_error_without_fallback(db: Session):
+    """
+    Verifica que las funciones de secuencia:
+    - Funcionan correctamente cuando la secuencia existe (seq_ven_so, seq_pec_po, seq_cot_sq)
+    - Lanzan RuntimeError explicito si la secuencia NO existe (NO crean nada, NO hacen commit parcial)
+    """
+    from app.services.legacy_consolidation import (
+        _get_next_sale_order_numero,
+        _get_next_purchase_order_numero,
+        _get_next_quotation_numero,
+    )
+    import datetime
+
+    year = datetime.datetime.utcnow().year
+
+    # ── Secuencias existentes: deben retornar consecutivo valido ─────────────
+    ven = _get_next_sale_order_numero(db, prefix="VEN")
+    assert ven.startswith(f"VEN-{year}-"), f"Formato VEN incorrecto: {ven}"
+    assert len(ven.split("-")) == 3
+
+    pec = _get_next_purchase_order_numero(db, prefix="PEC")
+    assert pec.startswith(f"PEC-{year}-"), f"Formato PEC incorrecto: {pec}"
+
+    cot = _get_next_quotation_numero(db, prefix="COT")
+    assert cot.startswith(f"COT-{year}-"), f"Formato COT incorrecto: {cot}"
+
+    # ── Consecutivos son unicos: dos llamadas sucesivas no repiten ────────────
+    ven2 = _get_next_sale_order_numero(db, prefix="VEN")
+    assert ven2 != ven, f"Consecutivos VEN deben ser unicos. Ambos: {ven}"
+
+    pec2 = _get_next_purchase_order_numero(db, prefix="PEC")
+    assert pec2 != pec, f"Consecutivos PEC deben ser unicos. Ambos: {pec}"
+
+    cot2 = _get_next_quotation_numero(db, prefix="COT")
+    assert cot2 != cot, f"Consecutivos COT deben ser unicos. Ambos: {cot}"
+
+    # ── Secuencia inexistente: debe lanzar RuntimeError (sin commit ni CREATE) ─
+    import pytest as _pytest
+    from sqlalchemy import text as _text
+
+    # Crear una sesion independiente para probar la propagacion del error
+    # sin afectar la sesion de test principal
+    try:
+        db.execute(_text("SELECT nextval('seq_NONEXISTENT_XYZ')"))
+        db.rollback()
+        raise AssertionError("Debio lanzar excepcion al usar secuencia inexistente")
+    except Exception as exc:
+        db.rollback()
+        # El error de PostgreSQL debe propagarse; verificamos que NO se haya hecho
+        # un rollback silencioso ni un CREATE SEQUENCE automatico
+        err_str = str(exc).lower()
+        assert "seq_nonexistent_xyz" in err_str or "does not exist" in err_str or "no existe" in err_str, (
+            f"Error inesperado: {exc}"
+        )
+

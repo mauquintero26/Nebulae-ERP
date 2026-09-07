@@ -186,44 +186,47 @@ def record_legacy_audit_log(
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _get_next_sale_order_numero(db: Session, prefix: str = "VEN") -> str:
-    """Genera consecutivo canonico atomico usando seq_ven_so sin condiciones de carrera MAX(id)+1."""
+    """Genera consecutivo canonico atomico usando seq_ven_so sin condiciones de carrera MAX(id)+1.
+    Las secuencias deben existir via Alembic fa6_002. Si falta, lanza error explicito sin crear parcialmente."""
     year = _now().year
     try:
         val = db.execute(text("SELECT nextval('seq_ven_so')")).scalar()
-    except Exception:
-        db.rollback()
-        db.execute(text("CREATE SEQUENCE IF NOT EXISTS seq_ven_so START 1000"))
-        db.execute(text("SELECT setval('seq_ven_so', GREATEST(COALESCE((SELECT MAX(id) FROM sale_orders), 0) + 1, 1000), false)"))
-        db.commit()
-        val = db.execute(text("SELECT nextval('seq_ven_so')")).scalar()
+    except Exception as exc:
+        raise RuntimeError(
+            "La secuencia PostgreSQL 'seq_ven_so' no existe. "
+            "Asegurese de haber aplicado la migracion fa6_002 via Alembic. "
+            f"Detalle tecnico: {exc}"
+        ) from exc
     return f"{prefix}-{year}-{int(val):04d}"
 
 
 def _get_next_purchase_order_numero(db: Session, prefix: str = "PEC") -> str:
-    """Genera consecutivo canonico atomico de compra usando seq_pec_po."""
+    """Genera consecutivo canonico atomico de compra usando seq_pec_po.
+    Las secuencias deben existir via Alembic fa6_002. Si falta, lanza error explicito sin crear parcialmente."""
     year = _now().year
     try:
         val = db.execute(text("SELECT nextval('seq_pec_po')")).scalar()
-    except Exception:
-        db.rollback()
-        db.execute(text("CREATE SEQUENCE IF NOT EXISTS seq_pec_po START 1000"))
-        db.execute(text("SELECT setval('seq_pec_po', GREATEST(COALESCE((SELECT MAX(id) FROM purchase_orders_full), 0) + 1, 1000), false)"))
-        db.commit()
-        val = db.execute(text("SELECT nextval('seq_pec_po')")).scalar()
+    except Exception as exc:
+        raise RuntimeError(
+            "La secuencia PostgreSQL 'seq_pec_po' no existe. "
+            "Asegurese de haber aplicado la migracion fa6_002 via Alembic. "
+            f"Detalle tecnico: {exc}"
+        ) from exc
     return f"{prefix}-{year}-{int(val):04d}"
 
 
 def _get_next_quotation_numero(db: Session, prefix: str = "COT") -> str:
-    """Genera consecutivo canonico atomico de cotizacion usando seq_cot_sq."""
+    """Genera consecutivo canonico atomico de cotizacion usando seq_cot_sq.
+    Las secuencias deben existir via Alembic fa6_002. Si falta, lanza error explicito sin crear parcialmente."""
     year = _now().year
     try:
         val = db.execute(text("SELECT nextval('seq_cot_sq')")).scalar()
-    except Exception:
-        db.rollback()
-        db.execute(text("CREATE SEQUENCE IF NOT EXISTS seq_cot_sq START 1000"))
-        db.execute(text("SELECT setval('seq_cot_sq', GREATEST(COALESCE((SELECT MAX(id) FROM sales_quotations), 0) + 1, 1000), false)"))
-        db.commit()
-        val = db.execute(text("SELECT nextval('seq_cot_sq')")).scalar()
+    except Exception as exc:
+        raise RuntimeError(
+            "La secuencia PostgreSQL 'seq_cot_sq' no existe. "
+            "Asegurese de haber aplicado la migracion fa6_002 via Alembic. "
+            f"Detalle tecnico: {exc}"
+        ) from exc
     return f"{prefix}-{year}-{int(val):04d}"
 
 
@@ -328,14 +331,18 @@ def compare_sales_parity(db: Session) -> Dict[str, Any]:
 def compare_purchases_parity(db: Session) -> Dict[str, Any]:
     """
     Compara exhaustivamente ordenes de compra legacy contra canonicas.
-    ESTRICTAMENTE READ-ONLY. Inspecciona:
-    - Proveedor
-    - Moneda y TRM
-    - Total y subtotales
-    - Estado
-    - SKUs, cantidades y lineas
-    - Recepciones de inventario asociadas
+    ESTRICTAMENTE READ-ONLY. Inspecciona campo a campo:
+    - Proveedor (supplier_name)
+    - Moneda y TRM (productos JSON field)
+    - Subtotal y total COP
+    - Estado alineado
+    - Cantidad de lineas
+    - Por linea: SKU, quantity_ordered, unit_cost_cop
+    - Recepciones parciales y totales
+    Cada tipo de discrepancia baja el parity_score.
     """
+    from app.models.fase1b import PurchaseOrderLine as CanPurchaseLine
+
     legacy_pos = db.query(PurchaseOrder).all()
     canonical_pos = db.query(PurchaseOrderFull).all()
 
@@ -361,13 +368,12 @@ def compare_purchases_parity(db: Session) -> Dict[str, Any]:
             })
             continue
 
-        # 1. Comparar Estado
+        # ── 1. Estado ───────────────────────────────────────────────────────
         status_aligned = True
         if po.status == "RECEIVED" and can_po.estado not in ("RECIBIDA", "PARCIALMENTE_RECIBIDA"):
             status_aligned = False
         elif po.status == "DRAFT" and can_po.estado not in ("BORRADOR", "CONFIRMADA", "ENVIADA"):
             status_aligned = False
-
         if not status_aligned:
             discrepancies.append({
                 "legacy_id": po.id,
@@ -377,12 +383,125 @@ def compare_purchases_parity(db: Session) -> Dict[str, Any]:
                 "canonical_estado": can_po.estado
             })
 
-        # 2. Comparar Lineas y SKUs
-        can_lines = db.query(PurchaseOrderLine).filter(PurchaseOrderLine.pec_id == can_po.id).all()
-        # Verificar recepciones canonicas
-        can_receptions = db.query(GoodsReceipt).filter(GoodsReceipt.pec_id == can_po.id).all()
+        # ── 2. Proveedor ─────────────────────────────────────────────────────
+        # legacy PurchaseOrder no tiene supplier_name; se detecta si can_po lo tiene pero
+        # no coincide con el nombre del supplier vinculado (cuando exista)
+        if can_po.supplier_id and can_po.supplier and can_po.supplier_name:
+            expected_name = can_po.supplier.name if hasattr(can_po.supplier, "name") else can_po.supplier_name
+            if can_po.supplier_name != expected_name:
+                discrepancies.append({
+                    "legacy_id": po.id,
+                    "canonical_id": can_po.id,
+                    "type": "SUPPLIER_NAME_MISMATCH",
+                    "canonical_supplier_name": can_po.supplier_name,
+                    "supplier_entity_name": expected_name
+                })
 
-        # Si en legacy esta RECEIVED pero no tiene recepciones canonicas confirmadas
+        # ── 3. Moneda y TRM desde campo JSON de productos ───────────────────
+        productos = can_po.productos or []
+        currencies_found = {p.get("currency") for p in productos if p.get("currency")}
+        trm_values = [p.get("trm") for p in productos if p.get("trm") is not None]
+        if len(currencies_found) > 1:
+            discrepancies.append({
+                "legacy_id": po.id,
+                "canonical_id": can_po.id,
+                "type": "MIXED_CURRENCIES_IN_LINES",
+                "currencies": list(currencies_found)
+            })
+        if trm_values:
+            trm_min = min(trm_values)
+            trm_max = max(trm_values)
+            if abs(trm_max - trm_min) > 10:
+                discrepancies.append({
+                    "legacy_id": po.id,
+                    "canonical_id": can_po.id,
+                    "type": "TRM_INCONSISTENCY",
+                    "trm_min": trm_min,
+                    "trm_max": trm_max
+                })
+
+        # ── 4. Subtotal y Total COP ─────────────────────────────────────────
+        can_lines = db.query(CanPurchaseLine).filter(CanPurchaseLine.pec_id == can_po.id).all()
+        computed_subtotal = sum(
+            (Decimal(str(ln.unit_cost_cop or 0)) * Decimal(str(ln.quantity_ordered or 1)))
+            for ln in can_lines
+        )
+        stored_total = Decimal(str(can_po.total_cop or 0))
+        stored_subtotal = Decimal(str(can_po.subtotal_cop or 0))
+        if can_lines and stored_subtotal > Decimal("0") and abs(computed_subtotal - stored_subtotal) > Decimal("1.00"):
+            discrepancies.append({
+                "legacy_id": po.id,
+                "canonical_id": can_po.id,
+                "type": "SUBTOTAL_MISMATCH",
+                "stored_subtotal_cop": float(stored_subtotal),
+                "computed_subtotal_cop": float(computed_subtotal),
+                "diff_cop": float(abs(computed_subtotal - stored_subtotal))
+            })
+        if stored_total > Decimal("0") and stored_subtotal > Decimal("0") and stored_total < stored_subtotal:
+            discrepancies.append({
+                "legacy_id": po.id,
+                "canonical_id": can_po.id,
+                "type": "TOTAL_LESS_THAN_SUBTOTAL",
+                "total_cop": float(stored_total),
+                "subtotal_cop": float(stored_subtotal)
+            })
+
+        # ── 5. Cantidad de lineas ────────────────────────────────────────────
+        # legacy PurchaseOrder no tiene lineas normalizadas propias; comparamos con productos JSON
+        n_json_lines = len(productos) if productos else 0
+        n_canon_lines = len(can_lines)
+        if n_json_lines > 0 and n_canon_lines != n_json_lines:
+            discrepancies.append({
+                "legacy_id": po.id,
+                "canonical_id": can_po.id,
+                "type": "LINE_COUNT_MISMATCH",
+                "json_lines_count": n_json_lines,
+                "canonical_lines_count": n_canon_lines
+            })
+
+        # ── 6. Comparacion linea a linea: SKU, cantidad, costo ───────────────
+        for ln in can_lines:
+            # Verificar que el SKU sea valido
+            if ln.sku_id is None:
+                discrepancies.append({
+                    "legacy_id": po.id,
+                    "canonical_id": can_po.id,
+                    "type": "LINE_MISSING_SKU",
+                    "line_id": ln.id
+                })
+                continue
+            # Verificar cantidad ordenada
+            if Decimal(str(ln.quantity_ordered or 0)) <= Decimal("0"):
+                discrepancies.append({
+                    "legacy_id": po.id,
+                    "canonical_id": can_po.id,
+                    "type": "LINE_ZERO_QUANTITY",
+                    "line_id": ln.id,
+                    "sku_id": ln.sku_id
+                })
+            # Verificar costo unitario
+            if ln.unit_cost_cop is None or Decimal(str(ln.unit_cost_cop)) <= Decimal("0"):
+                discrepancies.append({
+                    "legacy_id": po.id,
+                    "canonical_id": can_po.id,
+                    "type": "LINE_MISSING_COST",
+                    "line_id": ln.id,
+                    "sku_id": ln.sku_id
+                })
+            # Verificar sobrerecepcion
+            if Decimal(str(ln.quantity_received or 0)) > Decimal(str(ln.quantity_ordered or 0)):
+                discrepancies.append({
+                    "legacy_id": po.id,
+                    "canonical_id": can_po.id,
+                    "type": "OVER_RECEIVED_LINE",
+                    "line_id": ln.id,
+                    "sku_id": ln.sku_id,
+                    "ordered": float(ln.quantity_ordered),
+                    "received": float(ln.quantity_received)
+                })
+
+        # ── 7. Recepciones (GoodsReceipt) ────────────────────────────────────
+        can_receptions = db.query(GoodsReceipt).filter(GoodsReceipt.pec_id == can_po.id).all()
         if po.status == "RECEIVED" and len(can_receptions) == 0 and can_po.estado != "RECIBIDA":
             discrepancies.append({
                 "legacy_id": po.id,
@@ -390,6 +509,19 @@ def compare_purchases_parity(db: Session) -> Dict[str, Any]:
                 "type": "RECEPTIONS_MISMATCH",
                 "detail": "Legacy reporta orden recibida pero no se registran recepciones en goods_receipts."
             })
+        # Recepcion parcial: estado PARCIALMENTE_RECIBIDA debe tener al menos un GR
+        if can_po.estado == "PARCIALMENTE_RECIBIDA" and len(can_receptions) == 0:
+            discrepancies.append({
+                "legacy_id": po.id,
+                "canonical_id": can_po.id,
+                "type": "PARTIAL_RECEPTION_WITHOUT_GR",
+                "detail": "Estado PARCIALMENTE_RECIBIDA pero sin goods_receipts asociados."
+            })
+
+    # Calcular parity_score de compras
+    total_checked = len(legacy_pos) - len(unmatched_pos)
+    penalty = (len(unmatched_pos) * 5.0) + (len(discrepancies) * 2.5)
+    parity_score = max(0.0, 100.0 - penalty) if (len(legacy_pos) > 0) else 100.0
 
     return {
         "total_legacy_purchases": len(legacy_pos),
@@ -397,8 +529,12 @@ def compare_purchases_parity(db: Session) -> Dict[str, Any]:
         "unmatched_purchases_count": len(unmatched_pos),
         "unmatched_purchases": unmatched_pos[:50],
         "discrepancies_count": len(discrepancies),
-        "discrepancies": discrepancies[:50]
+        "discrepancies": discrepancies[:50],
+        "purchases_parity_score": round(parity_score, 2),
+        "checked_pairs": total_checked
     }
+
+
 
 
 def compare_financial_parity(db: Session) -> Dict[str, Any]:
@@ -565,38 +701,28 @@ def intercept_sales_order_write(
                     detail="Idempotency-Key reutilizada con un payload diferente (fingerprint divergente)."
                 )
 
-    # 3. Creacion de SalesOrder legacy
-    db_order = SalesOrder(**order_data)
-    if user_id and not db_order.user_id:
-        db_order.user_id = user_id
-    db.add(db_order)
-    db.flush()
-
+    # 3. Calcular totales del payload (comun a ambos modos)
     total_calc_cop = Decimal("0.0")
+    customer_id = order_data.get("customer_id")
+    anticipo = Decimal(str(order_data.get("anticipo") or 0))
     for l_dict in lines_data:
-        db_line = SalesOrderLine(**l_dict)
-        db_line.sales_order_id = db_order.id
-        db.add(db_line)
         u_p = Decimal(str(l_dict.get("unit_price") or 0))
         qty = Decimal(str(l_dict.get("quantity") or 1))
         total_calc_cop += (u_p * qty)
-
-    # 4. Creacion de SaleOrder canonica usando secuencia PostgreSQL (Cero MAX(id)+1)
-    numero_canonico = _get_next_sale_order_numero(db, prefix="VEN")
-
-    cust = db.query(Customer).filter(Customer.id == db_order.customer_id).first()
-    cust_name = f"{cust.first_name} {cust.last_name or ''}".strip() if cust else "Cliente Legacy"
-    cust_email = cust.email if cust else None
-    cust_phone = cust.phone if cust else None
-
-    anticipo = Decimal(str(db_order.anticipo or 0))
     if anticipo > total_calc_cop:
         total_calc_cop = anticipo
     saldo = max(Decimal("0.0"), total_calc_cop - anticipo)
 
+    cust = db.query(Customer).filter(Customer.id == customer_id).first()
+    cust_name = f"{cust.first_name} {cust.last_name or ''}".strip() if cust else "Cliente Legacy"
+    cust_email = cust.email if cust else None
+    cust_phone = cust.phone if cust else None
+
+    # 4. Creacion de SaleOrder canonica via secuencia PostgreSQL (cero MAX(id)+1)
+    numero_canonico = _get_next_sale_order_numero(db, prefix="VEN")
     canonical_so = SaleOrder(
         numero=numero_canonico,
-        customer_id=db_order.customer_id,
+        customer_id=customer_id,
         customer_name=cust_name,
         customer_email=cust_email,
         customer_phone=cust_phone,
@@ -606,39 +732,36 @@ def intercept_sales_order_write(
         saldo_cop=saldo,
         estado="CONFIRMADO" if anticipo >= total_calc_cop and total_calc_cop > 0 else "PENDIENTE_COMPRA",
         canal_venta="CANONICAL_PRIMARY" if policy.mode == "CANONICAL_PRIMARY" else "LEGACY_API",
-        notas=f"Orden sincronizada desde API Legacy SalesOrder #{db_order.id}"
+        notas=f"Orden creada via modo {policy.mode}"
     )
     db.add(canonical_so)
     db.flush()
 
-    # Vincular bidireccionalmente
-    db_order.canonical_sale_order_id = canonical_so.id
-
-    # Lineas canonicas SaleOrderLineErp
-    for idx, l_dict in enumerate(lines_data, 1):
+    # Lineas canonicas SaleOrderLineErp (comunes a ambos modos)
+    sale_type = order_data.get("sale_type", "")
+    for l_dict in lines_data:
         u_p = Decimal(str(l_dict.get("unit_price") or 0))
         qty = Decimal(str(l_dict.get("quantity") or 1))
         sku_id = l_dict.get("sku_id")
         sku_obj = db.query(ProductSKU).filter(ProductSKU.id == sku_id).first() if sku_id else None
         sku_code = sku_obj.sku if sku_obj else f"SKU-{sku_id}"
         prod_name = sku_obj.product.name if (sku_obj and sku_obj.product) else f"Producto {sku_code}"
-
         can_line = SaleOrderLineErp(
             so_id=canonical_so.id,
             sku_id=sku_id,
             description=prod_name,
             quantity=qty,
             unit_price_cop=u_p,
-            modalidad="ENTREGA_INMEDIATA" if db_order.sale_type == "IMMEDIATE" else "POR_PEDIDO",
+            modalidad="ENTREGA_INMEDIATA" if sale_type == "IMMEDIATE" else "POR_PEDIDO",
             owner="NEBULAE",
             price_unit_cop_snapshot=u_p,
             estado="PENDIENTE"
         )
         db.add(can_line)
 
-    # Registro de anticipo
+    # Registro de anticipo (comun a ambos modos)
     if anticipo > Decimal("0.0"):
-        pay_idem = f"LEGACY_PAY_SO_{db_order.id}_{int(_now().timestamp())}"
+        pay_idem = f"LEGACY_PAY_CAN_{canonical_so.id}_{int(_now().timestamp())}"
         db.add(SaleOrderPayment(
             sale_order_id=canonical_so.id,
             customer_id=canonical_so.customer_id,
@@ -651,7 +774,44 @@ def intercept_sales_order_write(
             idempotency_key=pay_idem
         ))
 
-    # Auditoria inmutable
+    # 5. Bifurcacion segun modo de gobernanza
+    if policy.mode == "CANONICAL_PRIMARY":
+        # CANONICAL_PRIMARY: NO insertar en sales_orders ni sales_order_lines.
+        # Solo existe la entidad canonica. Se retorna (None, canonical_so).
+        record_legacy_audit_log(
+            db=db,
+            event_type="LEGACY_WRITE_INTERCEPTED",
+            legacy_endpoint="/api/v1/sales",
+            http_method="POST",
+            entity_type="SALES_ORDER",
+            legacy_id=None,
+            canonical_id=canonical_so.id,
+            actor_user_id=user_id,
+            idempotency_key=idempotency_key,
+            fingerprint=fingerprint,
+            discrepancy_details={"total_cop": float(total_calc_cop), "lines_count": len(lines_data), "mode": "CANONICAL_PRIMARY"},
+            status="ALIGNED"
+        )
+        db.commit()
+        db.refresh(canonical_so)
+        return None, canonical_so
+
+    # DUAL_WRITE: Crear tambien la entidad legacy SalesOrder y vincular bidireccionalmente
+    db_order = SalesOrder(**order_data)
+    if user_id and not db_order.user_id:
+        db_order.user_id = user_id
+    db.add(db_order)
+    db.flush()
+
+    for l_dict in lines_data:
+        db_line = SalesOrderLine(**l_dict)
+        db_line.sales_order_id = db_order.id
+        db.add(db_line)
+
+    # Vincular bidireccionalmente
+    db_order.canonical_sale_order_id = canonical_so.id
+    canonical_so.notas = f"Orden sincronizada desde API Legacy SalesOrder #{db_order.id}"
+
     record_legacy_audit_log(
         db=db,
         event_type="LEGACY_WRITE_INTERCEPTED",
@@ -671,6 +831,7 @@ def intercept_sales_order_write(
     db.refresh(db_order)
     db.refresh(canonical_so)
     return db_order, canonical_so
+
 
 
 def intercept_purchase_order_write(

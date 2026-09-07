@@ -8,7 +8,7 @@ from sqlalchemy import text, func
 
 from app.db.database import get_db
 from app.models.catalog import Product, ProductSKU
-from app.models.inventory import InventoryLevel, Warehouse
+from app.models.inventory import Warehouse
 from app.models.customers import Customer
 from app.models.sales import SalesOrder, SalesOrderLine
 from app.models.erp_documents import SaleOrder
@@ -285,14 +285,10 @@ def checkout(
             quantity=vl["qty"],
             unit_price=float(vl["unit_price"])
         ))
-
-        # Actualizar nivel de inventario fisico para compatibilidad de vistas legacy
-        inv_lvl = db.query(InventoryLevel).filter(
-            InventoryLevel.warehouse_id == default_wh.id,
-            InventoryLevel.sku_id == vl["sku"].id
-        ).first()
-        if inv_lvl:
-            inv_lvl.quantity = max(0, inv_lvl.quantity - vl["qty"])
+        # NOTA: InventoryLevel.quantity NO se modifica al reservar.
+        # El stock fisico solo disminuye al ejecutar el despacho o salida fisica canonica.
+        # La disponibilidad vendible baja porque InventoryReservation ACTIVE existe
+        # y _get_real_sellable_stock() lo descuenta automaticamente.
 
     # 12. Auditoria inmutable
     record_legacy_audit_log(
