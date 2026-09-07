@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import Optional, Dict, Any, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.db.database import get_db
 from app.models.users import User
@@ -24,6 +24,8 @@ from app.services.legacy_consolidation import (
     generate_and_save_parity_snapshot,
     reconcile_and_backfill_orphan_legacy,
     record_legacy_audit_log,
+    validate_sunset_date,
+    format_sunset_header,
     _now
 )
 
@@ -35,6 +37,7 @@ class GovernanceUpdateRequest(BaseModel):
     deprecation_header_enabled: Optional[bool] = None
     sunset_date: Optional[str] = None
     allow_legacy_writes: Optional[bool] = None
+    change_reason: Optional[str] = Field(None, description="Motivo documentado del cambio de gobernanza")
 
 
 @router.get("/status", response_model=dict)
@@ -67,6 +70,7 @@ def get_legacy_status(
             "governance_mode": policy.mode,
             "deprecation_headers_active": policy.deprecation_header_enabled,
             "sunset_date": policy.sunset_date,
+            "sunset_rfc1123": format_sunset_header(str(policy.sunset_date)),
             "allow_legacy_writes": policy.allow_legacy_writes,
             "latest_parity_score_pct": parity_score,
             "last_evaluation_at": latest_snapshot.evaluated_at.isoformat() if latest_snapshot else None,
@@ -83,10 +87,8 @@ def get_parity_report(
 ):
     """
     Ejecuta o consulta el reporte exhaustivo de paridad:
-    - Comparacion de ordenes y recaudos de ventas.
-    - Comparacion de pedidos de compra y recepciones.
-    - Comparacion de P&L financiero.
-    - Metricas exactas de alineacion y discrepancias.
+    - Cuando persist=False (defecto), es ESTRICTAMENTE READ-ONLY (cero escrituras).
+    - Cuando persist=True, calcula y persiste formalmente una instantanea LegacyParitySnapshot.
     """
     if persist:
         snapshot = generate_and_save_parity_snapshot(db, user_id=user.id)
@@ -109,7 +111,7 @@ def get_parity_report(
         financial = compare_financial_parity(db)
 
         unmatched = sales["unmatched_legacy_orders_count"] + purchases["unmatched_purchases_count"]
-        discrepancies = sales["discrepancies_count"]
+        discrepancies = sales["discrepancies_count"] + purchases["discrepancies_count"]
         score = max(0.0, 100.0 - ((unmatched * 5.0) + (discrepancies * 2.5)))
 
         return {
@@ -129,13 +131,12 @@ def trigger_reconcile_sync(
     user: User = Depends(require_roles(*ROLE_ADMIN)),
     db: Session = Depends(get_db)
 ):
-    """Ejecuta la reconciliacion idempotente de entidades legacy huerfanas hacia el nucleo canonico."""
-    result = reconcile_and_backfill_orphan_legacy(db)
-    # Generar snapshot tras la sincronizacion
+    """Ejecuta la reconciliacion idempotente y transaccional de entidades legacy huerfanas."""
+    result = reconcile_and_backfill_orphan_legacy(db, actor_user_id=user.id)
     snapshot = generate_and_save_parity_snapshot(db, user_id=user.id)
     result["new_parity_score_pct"] = float(snapshot.parity_score_pct)
     return {
-        "status": "success",
+        "status": result.get("status", "success"),
         "data": result
     }
 
@@ -150,7 +151,7 @@ def list_legacy_audit_logs(
     user: User = Depends(require_roles(*ROLE_ADMIN)),
     db: Session = Depends(get_db)
 ):
-    """Consulta paginada de la bitacora de auditoria de intercepcion y observabilidad legacy."""
+    """Consulta paginada de la bitacora de auditoria inmutable de intercepcion y observabilidad legacy."""
     q = db.query(LegacyConsolidationAuditLog)
     if event_type:
         q = q.filter(LegacyConsolidationAuditLog.event_type == event_type)
@@ -177,6 +178,10 @@ def list_legacy_audit_logs(
                     "entity_type": item.entity_type,
                     "legacy_id": item.legacy_id,
                     "canonical_id": item.canonical_id,
+                    "actor_user_id": item.actor_user_id,
+                    "latency_ms": float(item.latency_ms) if item.latency_ms is not None else None,
+                    "result_summary": item.result_summary,
+                    "idempotency_key": item.idempotency_key,
                     "status": item.status,
                     "discrepancy_details": item.discrepancy_details,
                     "created_at": item.created_at.isoformat()
@@ -201,7 +206,10 @@ def get_governance_policy(
             "mode": policy.mode,
             "deprecation_header_enabled": policy.deprecation_header_enabled,
             "sunset_date": policy.sunset_date,
+            "sunset_rfc1123": format_sunset_header(str(policy.sunset_date)),
             "allow_legacy_writes": policy.allow_legacy_writes,
+            "change_reason": policy.change_reason,
+            "actor_user_id": policy.actor_user_id,
             "updated_at": policy.updated_at.isoformat(),
             "updated_by": policy.updated_by
         }
@@ -214,13 +222,43 @@ def update_governance_policy(
     user: User = Depends(require_roles(*ROLE_ADMIN)),
     db: Session = Depends(get_db)
 ):
-    """Actualiza la directiva de gobernanza legacy (restringido exclusivamente a ROLE_ADMIN)."""
+    """
+    Actualiza la directiva de gobernanza legacy (restringido exclusivamente a ROLE_ADMIN).
+    Rechaza configuraciones contradictorias y valida fechas de sunset.
+    Registra auditoria inmutable con old_value y new_value.
+    """
     policy = get_or_create_governance_policy(db)
+
+    old_state = {
+        "mode": policy.mode,
+        "allow_legacy_writes": policy.allow_legacy_writes,
+        "deprecation_header_enabled": policy.deprecation_header_enabled,
+        "sunset_date": policy.sunset_date
+    }
+
+    new_mode = body.mode if body.mode is not None else policy.mode
+    new_allow_writes = body.allow_legacy_writes if body.allow_legacy_writes is not None else policy.allow_legacy_writes
+
+    # Validacion anti-contradicciones (Bloqueo 3)
+    if new_mode == "READ_ONLY":
+        if body.allow_legacy_writes is True:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Configuracion contradictoria: el modo READ_ONLY no permite allow_legacy_writes=True."
+            )
+        new_allow_writes = False
+    elif new_mode in ("DUAL_WRITE", "CANONICAL_PRIMARY"):
+        if body.allow_legacy_writes is False:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Configuracion contradictoria: el modo {new_mode} requiere allow_legacy_writes=True para operar."
+            )
+        new_allow_writes = True
 
     if body.mode is not None:
         if body.mode not in ("DUAL_WRITE", "READ_ONLY", "CANONICAL_PRIMARY"):
             raise HTTPException(
-                status_code=422,
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Modo invalido '{body.mode}'. Opciones validas: DUAL_WRITE, READ_ONLY, CANONICAL_PRIMARY"
             )
         policy.mode = body.mode
@@ -229,13 +267,22 @@ def update_governance_policy(
         policy.deprecation_header_enabled = body.deprecation_header_enabled
 
     if body.sunset_date is not None:
+        validate_sunset_date(body.sunset_date)
         policy.sunset_date = body.sunset_date
 
-    if body.allow_legacy_writes is not None:
-        policy.allow_legacy_writes = body.allow_legacy_writes
-
+    policy.allow_legacy_writes = new_allow_writes
+    policy.change_reason = body.change_reason or "Actualizacion de politicas de gobernanza"
+    policy.actor_user_id = user.id
     policy.updated_at = _now()
     policy.updated_by = user.email or str(user.id)
+
+    new_state = {
+        "mode": policy.mode,
+        "allow_legacy_writes": policy.allow_legacy_writes,
+        "deprecation_header_enabled": policy.deprecation_header_enabled,
+        "sunset_date": policy.sunset_date,
+        "change_reason": policy.change_reason
+    }
 
     record_legacy_audit_log(
         db=db,
@@ -243,7 +290,8 @@ def update_governance_policy(
         legacy_endpoint="/api/v1/legacy/governance",
         http_method="PATCH",
         entity_type="SYSTEM",
-        discrepancy_details={"new_mode": policy.mode, "allow_writes": policy.allow_legacy_writes},
+        actor_user_id=user.id,
+        discrepancy_details={"old_value": old_state, "new_value": new_state, "change_reason": policy.change_reason},
         status="RECORDED"
     )
 
@@ -257,7 +305,10 @@ def update_governance_policy(
             "mode": policy.mode,
             "deprecation_header_enabled": policy.deprecation_header_enabled,
             "sunset_date": policy.sunset_date,
+            "sunset_rfc1123": format_sunset_header(str(policy.sunset_date)),
             "allow_legacy_writes": policy.allow_legacy_writes,
+            "change_reason": policy.change_reason,
+            "actor_user_id": policy.actor_user_id,
             "updated_at": policy.updated_at.isoformat(),
             "updated_by": policy.updated_by
         }
@@ -269,15 +320,20 @@ def get_legacy_metrics(
     user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS)),
     db: Session = Depends(get_db)
 ):
-    """Metricas de telemetria en tiempo real para observabilidad del subsistema legacy."""
+    """Metricas cuantitativas de telemetria en tiempo real para observabilidad del subsistema legacy."""
     policy = get_or_create_governance_policy(db)
     total_logs = db.query(func.count(LegacyConsolidationAuditLog.id)).scalar() or 0
     total_intercepted = db.query(func.count(LegacyConsolidationAuditLog.id)).filter(
         LegacyConsolidationAuditLog.event_type == "LEGACY_WRITE_INTERCEPTED"
     ).scalar() or 0
+    total_reads = db.query(func.count(LegacyConsolidationAuditLog.id)).filter(
+        LegacyConsolidationAuditLog.event_type == "LEGACY_READ"
+    ).scalar() or 0
     total_discrepancies = db.query(func.count(LegacyConsolidationAuditLog.id)).filter(
         LegacyConsolidationAuditLog.event_type == "DISCREPANCY_DETECTED"
     ).scalar() or 0
+
+    avg_latency = db.query(func.avg(LegacyConsolidationAuditLog.latency_ms)).scalar()
 
     latest_snapshot = db.query(LegacyParitySnapshot).order_by(
         LegacyParitySnapshot.evaluated_at.desc()
@@ -289,9 +345,12 @@ def get_legacy_metrics(
             "telemetry": {
                 "total_audit_events": total_logs,
                 "total_writes_intercepted": total_intercepted,
+                "total_legacy_reads": total_reads,
                 "discrepancies_detected_count": total_discrepancies,
+                "average_latency_ms": round(float(avg_latency), 2) if avg_latency is not None else 0.0,
                 "active_governance_mode": policy.mode,
-                "sunset_target": policy.sunset_date
+                "sunset_target": policy.sunset_date,
+                "sunset_rfc1123": format_sunset_header(str(policy.sunset_date))
             },
             "parity": {
                 "score_pct": float(latest_snapshot.parity_score_pct) if latest_snapshot else 100.0,

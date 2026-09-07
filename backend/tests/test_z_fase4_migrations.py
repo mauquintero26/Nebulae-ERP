@@ -170,7 +170,7 @@ class TestFase4Migrations:
 
         with eng.connect() as conn:
             v_up = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-            assert v_up in ("fa4_002", "fa5_001", "fa5_002"), f"Versión esperada fa4_002 o posterior, obtenida {v_up}"
+            assert v_up in ("fa4_002", "fa5_001", "fa5_002", "fa6_001", "fa6_002"), f"Versión esperada fa4_002 o posterior, obtenida {v_up}"
 
             # Tablas recreadas exitosamente
             for t in ["sale_order_payments", "sale_packing_sessions", "sale_order_deliveries", "sale_order_returns"]:

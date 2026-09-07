@@ -12,7 +12,7 @@ load_dotenv()
 
 # TEST_DATABASE_URL takes priority when set (via conftest.py create_test_schema fixture)
 # Ordinary runs use DATABASE_URL from .env
-_db_url = os.getenv("DATABASE_URL", "sqlite:///./nebulae_local.db")
+_db_url = os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL", "sqlite:///./nebulae_local.db")
 config.set_main_option("sqlalchemy.url", _db_url)
 
 from app.db.database import Base

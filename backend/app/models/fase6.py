@@ -1,6 +1,6 @@
 """
 Fase 6 - Modelos de Consolidacion Legacy, Observabilidad y Gobernanza:
-- LegacyConsolidationAuditLog: Auditoria de eventos y trafico sobre entidades y endpoints legacy.
+- LegacyConsolidationAuditLog: Auditoria inmutable de eventos y trafico sobre entidades y endpoints legacy.
 - LegacyParitySnapshot: Evaluaciones periodicas y comparativas de paridad numerica y financiera entre legacy y canonico.
 - LegacyGovernancePolicy: Politicas operativas de desactivacion gradual, deprecacion y modos de conmutacion.
 """
@@ -18,7 +18,7 @@ def _now():
 
 
 class LegacyConsolidationAuditLog(Base):
-    """Auditoria de eventos de trafico e intercepcion sobre endpoints y entidades legacy."""
+    """Auditoria inmutable de eventos de trafico e intercepcion sobre endpoints y entidades legacy."""
     __tablename__ = "legacy_consolidation_audit_logs"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -27,13 +27,20 @@ class LegacyConsolidationAuditLog(Base):
     legacy_endpoint = Column(String(255), nullable=False)
     http_method = Column(String(10), nullable=False)
     entity_type = Column(String(50), nullable=False)
-    # SALES_ORDER | PURCHASE_ORDER | QUOTATION | FINANCE | STORE
+    # SALES_ORDER | PURCHASE_ORDER | QUOTATION | FINANCE | STORE | SYSTEM
     legacy_id = Column(Integer, nullable=True)
     canonical_id = Column(Integer, nullable=True)
+    actor_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    latency_ms = Column(Numeric(10, 2), nullable=True)
+    result_summary = Column(String(255), nullable=True)
+    idempotency_key = Column(String(150), nullable=True, index=True)
+    fingerprint = Column(String(64), nullable=True)
     discrepancy_details = Column(Text, nullable=True)
     status = Column(String(30), nullable=False, default="RECORDED")
     # RECORDED | ALIGNED | DIVERGENT | RESOLVED
     created_at = Column(DateTime, default=_now, nullable=False)
+
+    actor_user = relationship("User", foreign_keys=[actor_user_id])
 
     __table_args__ = (
         CheckConstraint(
@@ -47,6 +54,8 @@ class LegacyConsolidationAuditLog(Base):
         Index("ix_lcal_event_created", "event_type", "created_at"),
         Index("ix_lcal_entity_legacy_id", "entity_type", "legacy_id"),
         Index("ix_lcal_entity_canonical_id", "entity_type", "canonical_id"),
+        Index("ix_lcal_actor_user", "actor_user_id"),
+        Index("ix_lcal_idempotency_key", "idempotency_key"),
     )
 
 
@@ -86,8 +95,12 @@ class LegacyGovernancePolicy(Base):
     deprecation_header_enabled = Column(Boolean, nullable=False, default=True)
     sunset_date = Column(String(50), nullable=False, default="2026-12-31")
     allow_legacy_writes = Column(Boolean, nullable=False, default=True)
+    change_reason = Column(Text, nullable=True)
+    actor_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     updated_at = Column(DateTime, default=_now, onupdate=_now, nullable=False)
     updated_by = Column(String(100), nullable=True)
+
+    actor_user = relationship("User", foreign_keys=[actor_user_id])
 
     __table_args__ = (
         CheckConstraint(

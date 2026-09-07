@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+import time
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, Header, status
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from typing import Optional
@@ -21,13 +22,14 @@ router = APIRouter()
 def create_sales_order(
     order: schemas.SalesOrderCreate,
     response: Response,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
     current_user: User = Depends(RoleChecker("sales", require_write=True))
 ):
     policy = get_or_create_governance_policy(db)
     apply_deprecation_headers(response, policy, "/api/v1/ventas/pedidos")
 
-    if not policy.allow_legacy_writes:
+    if not policy.allow_legacy_writes or policy.mode == "READ_ONLY":
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="Legacy sales order writes are permanently disabled. Use canonical endpoint /api/v1/ventas/pedidos."
@@ -41,7 +43,8 @@ def create_sales_order(
             db=db,
             order_data=order_data,
             lines_data=lines_data,
-            user_id=current_user.id
+            user_id=current_user.id,
+            idempotency_key=idempotency_key
         )
         return {"status": "success", "data": schemas.SalesOrderResponse.model_validate(db_order).model_dump()}
     except HTTPException:
@@ -59,6 +62,7 @@ def list_sales_orders(
     db: Session = Depends(get_db),
     current_user: User = Depends(RoleChecker("sales", require_write=False))
 ):
+    t0 = time.time()
     policy = get_or_create_governance_policy(db)
     apply_deprecation_headers(response, policy, "/api/v1/ventas/pedidos")
 
@@ -73,7 +77,22 @@ def list_sales_orders(
             
     total = query.count()
     orders = query.offset(offset).limit(limit).all()
-    
+    latency_ms = (time.time() - t0) * 1000.0
+
+    # Registrar LEGACY_READ (Bloqueo 4)
+    record_legacy_audit_log(
+        db=db,
+        event_type="LEGACY_READ",
+        legacy_endpoint="/api/v1/sales",
+        http_method="GET",
+        entity_type="SALES_ORDER",
+        actor_user_id=current_user.id,
+        latency_ms=latency_ms,
+        result_summary=f"LIST_SALES_ORDERS_TOTAL_{total}",
+        status="RECORDED"
+    )
+    db.commit()
+
     return {
         "status": "success", 
         "data": {
@@ -81,6 +100,40 @@ def list_sales_orders(
             "sales": [schemas.SalesOrderResponse.model_validate(o).model_dump() for o in orders]
         }
     }
+
+@router.get("/{order_id}")
+def get_sales_order(
+    order_id: int,
+    response: Response,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RoleChecker("sales", require_write=False))
+):
+    t0 = time.time()
+    policy = get_or_create_governance_policy(db)
+    apply_deprecation_headers(response, policy, "/api/v1/ventas/pedidos")
+
+    order = db.query(SalesOrder).filter(SalesOrder.id == order_id).first()
+    latency_ms = (time.time() - t0) * 1000.0
+
+    record_legacy_audit_log(
+        db=db,
+        event_type="LEGACY_READ",
+        legacy_endpoint=f"/api/v1/sales/{order_id}",
+        http_method="GET",
+        entity_type="SALES_ORDER",
+        legacy_id=order_id,
+        canonical_id=order.canonical_sale_order_id if order else None,
+        actor_user_id=current_user.id,
+        latency_ms=latency_ms,
+        result_summary="FOUND" if order else "NOT_FOUND",
+        status="RECORDED"
+    )
+    db.commit()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    return {"status": "success", "data": schemas.SalesOrderResponse.model_validate(order).model_dump()}
 
 @router.post("/{order_id}/invoice")
 def invoice_sales_order(
@@ -92,7 +145,7 @@ def invoice_sales_order(
     policy = get_or_create_governance_policy(db)
     apply_deprecation_headers(response, policy, "/api/v1/ventas/pedidos")
 
-    if not policy.allow_legacy_writes:
+    if not policy.allow_legacy_writes or policy.mode == "READ_ONLY":
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="Legacy sales order writes are permanently disabled. Use canonical endpoint /api/v1/ventas/pedidos."
@@ -121,9 +174,9 @@ def invoice_sales_order(
         entity_type="SALES_ORDER",
         legacy_id=order.id,
         canonical_id=order.canonical_sale_order_id,
+        actor_user_id=current_user.id,
         discrepancy_details={"new_status": "INVOICED"},
-        status="ALIGNED",
-        user_id=current_user.id
+        status="ALIGNED"
     )
 
     db.commit()

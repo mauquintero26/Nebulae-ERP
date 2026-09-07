@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+import time
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, Header, status
 from sqlalchemy.orm import Session
 from typing import Optional
 from app.db.database import get_db
@@ -21,13 +22,14 @@ router = APIRouter()
 def create_purchase_order(
     order: schemas.PurchaseOrderCreate,
     response: Response,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
     current_user: User = Depends(RoleChecker("purchases", require_write=True))
 ):
     policy = get_or_create_governance_policy(db)
     apply_deprecation_headers(response, policy, "/api/v1/compras/pedidos")
 
-    if not policy.allow_legacy_writes:
+    if not policy.allow_legacy_writes or policy.mode == "READ_ONLY":
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="Legacy purchase order writes are permanently disabled. Use canonical endpoint /api/v1/compras/pedidos."
@@ -37,7 +39,8 @@ def create_purchase_order(
         db_po, canonical_po = intercept_purchase_order_write(
             db=db,
             po_data=order.model_dump(),
-            user_id=current_user.id
+            user_id=current_user.id,
+            idempotency_key=idempotency_key
         )
         return {"status": "success", "data": schemas.PurchaseOrderResponse.model_validate(db_po).model_dump()}
     except HTTPException:
@@ -54,20 +57,70 @@ def list_purchase_orders(
     db: Session = Depends(get_db),
     current_user: User = Depends(RoleChecker("purchases", require_write=False))
 ):
+    t0 = time.time()
     policy = get_or_create_governance_policy(db)
     apply_deprecation_headers(response, policy, "/api/v1/compras/pedidos")
 
     total = db.query(PurchaseOrder).count()
     orders = db.query(PurchaseOrder).offset(offset).limit(limit).all()
+    latency_ms = (time.time() - t0) * 1000.0
+
+    record_legacy_audit_log(
+        db=db,
+        event_type="LEGACY_READ",
+        legacy_endpoint="/api/v1/purchases",
+        http_method="GET",
+        entity_type="PURCHASE_ORDER",
+        actor_user_id=current_user.id,
+        latency_ms=latency_ms,
+        result_summary=f"LIST_PURCHASE_ORDERS_TOTAL_{total}",
+        status="RECORDED"
+    )
+    db.commit()
+
     return {
         "status": "success", 
         "data": {
             "total": total,
-            "purchases": [schemas.PurchaseOrderResponse.model_validate(o).model_dump() for o in orders]
+            "orders": [schemas.PurchaseOrderResponse.model_validate(o).model_dump() for o in orders]
         }
     }
 
-@router.put("/{order_id}/receive")
+@router.get("/{order_id}")
+def get_purchase_order(
+    order_id: int,
+    response: Response,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(RoleChecker("purchases", require_write=False))
+):
+    t0 = time.time()
+    policy = get_or_create_governance_policy(db)
+    apply_deprecation_headers(response, policy, "/api/v1/compras/pedidos")
+
+    order = db.query(PurchaseOrder).filter(PurchaseOrder.id == order_id).first()
+    latency_ms = (time.time() - t0) * 1000.0
+
+    record_legacy_audit_log(
+        db=db,
+        event_type="LEGACY_READ",
+        legacy_endpoint=f"/api/v1/purchases/{order_id}",
+        http_method="GET",
+        entity_type="PURCHASE_ORDER",
+        legacy_id=order_id,
+        canonical_id=order.canonical_purchase_order_id if order else None,
+        actor_user_id=current_user.id,
+        latency_ms=latency_ms,
+        result_summary="FOUND" if order else "NOT_FOUND",
+        status="RECORDED"
+    )
+    db.commit()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Purchase order not found")
+
+    return {"status": "success", "data": schemas.PurchaseOrderResponse.model_validate(order).model_dump()}
+
+@router.post("/{order_id}/receive")
 def receive_purchase_order(
     order_id: int,
     request: schemas.PurchaseReceiveRequest,
@@ -78,7 +131,7 @@ def receive_purchase_order(
     policy = get_or_create_governance_policy(db)
     apply_deprecation_headers(response, policy, "/api/v1/compras/pedidos")
 
-    if not policy.allow_legacy_writes:
+    if not policy.allow_legacy_writes or policy.mode == "READ_ONLY":
         raise HTTPException(
             status_code=status.HTTP_410_GONE,
             detail="Legacy purchase order writes are permanently disabled. Use canonical endpoint /api/v1/compras/pedidos."
@@ -91,7 +144,6 @@ def receive_purchase_order(
     if order.status == "RECEIVED":
         raise HTTPException(status_code=400, detail="Order is already received")
         
-    # 1. Update status
     order.status = "RECEIVED"
     
     # Sincronizar PurchaseOrderFull canonica si existe
@@ -137,13 +189,13 @@ def receive_purchase_order(
         db=db,
         event_type="LEGACY_WRITE_INTERCEPTED",
         legacy_endpoint=f"/api/v1/purchases/{order_id}/receive",
-        http_method="PUT",
+        http_method="POST",
         entity_type="PURCHASE_ORDER",
         legacy_id=order.id,
         canonical_id=order.canonical_purchase_order_id,
+        actor_user_id=current_user.id,
         discrepancy_details={"dest_warehouse_id": request.dest_warehouse_id, "movements_count": len(request.movements)},
-        status="ALIGNED",
-        user_id=current_user.id
+        status="ALIGNED"
     )
             
     db.commit()
