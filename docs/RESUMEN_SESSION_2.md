@@ -121,10 +121,13 @@ npm run build → ✅ Compiled successfully
 
 ## 4. Commits
 
-```
-fix(fase6): CANONICAL_PRIMARY real, paridad compras efectiva, reserva sin reduccion fisica, secuencias sin fallback runtime, tests concurrencia
-docs: RESUMEN_SESSION_2 -- correcciones reales fase 6 certificadas
-```
+| Hash | Tipo | Descripción |
+|------|------|-------------|
+| `eae7dec` | base | Punto de partida (último commit antes de correcciones) |
+| `420ae5a` | **código** | `fix(fase6): CANONICAL_PRIMARY real, paridad compras efectiva, reserva sin reduccion fisica, secuencias sin fallback runtime, tests concurrencia` |
+| `17f8309` | docs | `docs: RESUMEN_SESSION_2 -- correcciones reales fase 6 certificadas` |
+| `d4ceb67` | docs | `docs: RESUMEN_SESSION_2 actualizado con resultado suite completa (372 passed, 1 failed pre-existente)` |
+| `ffaff6d` | **test** | `test(fase6): test_19 extendido con simulacion de despacho completa -- fisico=7, balance=7, reserva cerrada, disponible=7` |
 
 ---
 
@@ -146,3 +149,6 @@ docs: RESUMEN_SESSION_2 -- correcciones reales fase 6 certificadas
 - ✅ Frontend → build exitoso sin modificaciones
 - ✅ Fase 7 → **NO INICIADA**
 - ✅ 27 tests nuevos/expandidos todos GREEN (20 + 7)
+- ✅ Suite completa: **372 passed**, 1 failed pre-existente (Fase 5), 1 error pre-existente (Fase 5)
+- ✅ `test_19` ciclo completo: reserva (físico=10, balance=10, reserva=3, disponible=7) + despacho (físico=7, balance=7, reserva cerrada, disponible=7)
+- ⏸ **DETENIDO — esperando autorización para Fase 7**
