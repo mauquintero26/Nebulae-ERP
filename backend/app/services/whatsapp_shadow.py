@@ -1,4 +1,4 @@
-﻿"""
+"""
 BLOQUE 5 - Servicio de Modo Sombra para WhatsApp Business API.
 
 REGLAS ABSOLUTAS DE MODO SOMBRA:
@@ -148,7 +148,7 @@ def process_event_shadow(
         direction       = "INBOUND",
         payload         = payload_json,
         headers         = headers_safe,
-        status          = WhatsAppEventStatus.RECEIVED.value,
+        status          = WhatsAppEventStatus.PENDING.value,
         attempts        = 1,
         max_attempts    = 3,
     )

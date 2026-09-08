@@ -1,4 +1,4 @@
-﻿"""
+"""
 Schemas Pydantic para la integracion WhatsApp Business API (Meta).
 BLOQUE 5 - Modo Sombra: solo recepcion y registro, cero acciones operativas.
 """
@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 
 class WhatsAppEventStatus(str, enum.Enum):
+    PENDING     = "PENDING"
     RECEIVED    = "RECEIVED"
     PROCESSING  = "PROCESSING"
     PROCESSED   = "PROCESSED"

@@ -65,3 +65,8 @@ Thumbs.db
 backend/test_results*.txt
 check_ambiguos.py
 *.pyc
+
+.env.staging
+.env.production
+.env.*.local
+

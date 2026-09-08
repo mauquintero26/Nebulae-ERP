@@ -1,10 +1,11 @@
 import jwt
+import os
 from datetime import datetime, timedelta, timezone
 from passlib.context import CryptContext
 
-SECRET_KEY = "super-secret-key-for-development-change-me"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
+SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key-for-development-change-me")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
