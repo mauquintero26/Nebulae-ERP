@@ -62,6 +62,7 @@ export default function CategoriaPage({ params }: { params: Promise<{ slug: stri
       });
   }, [categoryName, filters.search, filters.marca, filters.precioMin, filters.precioMax, filters.modalidad]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadProducts(); }, [loadProducts]);
 
   const handleFilterChange = (key: keyof FilterState, value: string) => {

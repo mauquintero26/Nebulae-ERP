@@ -85,11 +85,13 @@ export default function StoreLayout({ children }: { children: React.ReactNode })
   const [mobileExpanded, setMobileExpanded] = useState<Record<string, boolean>>({});
   const megaTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Hydrate cart from localStorage ──
+  // ── Hydrate cart from localStorage (runs once, reading external storage) ──
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     setItems(loadCart());
     setHydrated(true);
   }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // ── Persist cart on change ──
   useEffect(() => {

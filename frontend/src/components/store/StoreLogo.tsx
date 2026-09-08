@@ -1,7 +1,6 @@
 "use client";
 
 import Link from 'next/link';
-import Image from 'next/image';
 
 type Props = {
   /** URL of the logo — falls back to public/logo.png */

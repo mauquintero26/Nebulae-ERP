@@ -108,15 +108,18 @@ export function FilterDrawer({
                     >
                       {cat.nombre}
                     </button>
-                    {cat.sub_categorias?.map((sub) => (
-                      <button
-                        key={sub}
-                        onClick={() => onChange('categoria', typeof sub === 'string' ? sub : (sub as any).nombre)}
-                        className={`w-full text-left text-xs px-5 py-1.5 rounded-xl transition-colors ${filters.categoria === sub ? 'text-[#ED87B6] font-bold' : 'text-[#8A8A8E] hover:text-[#ED87B6]'}`}
-                      >
-                        → {typeof sub === 'string' ? sub : (sub as any).nombre}
-                      </button>
-                    ))}
+                    {cat.sub_categorias?.map((sub) => {
+                      const subName = typeof sub === 'string' ? sub : (sub as { nombre: string }).nombre;
+                      return (
+                        <button
+                          key={subName}
+                          onClick={() => onChange('categoria', subName)}
+                          className={`w-full text-left text-xs px-5 py-1.5 rounded-xl transition-colors ${filters.categoria === subName ? 'text-[#ED87B6] font-bold' : 'text-[#8A8A8E] hover:text-[#ED87B6]'}`}
+                        >
+                          → {subName}
+                        </button>
+                      );
+                    })}
                   </div>
                 ))}
               </div>

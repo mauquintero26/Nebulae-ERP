@@ -56,7 +56,7 @@ export default function CatalogoPage() {
     setLoading(true);
     setError(false);
     const params = new URLSearchParams({ publicado: 'true', limit: '50' });
-    if (filters.search)   params.append('search', filters.search);
+    if (filters.search)    params.append('search', filters.search);
     if (filters.categoria) params.append('categoria', filters.categoria);
 
     fetch(`${API}/ecommerce/catalogo?${params}`)
@@ -64,7 +64,7 @@ export default function CatalogoPage() {
       .then((d) => {
         let list: Product[] = Array.isArray(d) ? d : (d?.data ?? d?.items ?? []);
         // Client-side supplementary filters (WEB-2 will move these server-side)
-        if (filters.marca)    list = list.filter((p) => p.marca?.toLowerCase().includes(filters.marca.toLowerCase()));
+        if (filters.marca)     list = list.filter((p) => p.marca?.toLowerCase().includes(filters.marca.toLowerCase()));
         if (filters.precioMin) list = list.filter((p) => p.precio_venta >= Number(filters.precioMin));
         if (filters.precioMax) list = list.filter((p) => p.precio_venta <= Number(filters.precioMax));
         if (filters.modalidad) list = list.filter((p) => p.modalidad === filters.modalidad);
@@ -75,8 +75,10 @@ export default function CatalogoPage() {
         setError(true);
         setLoading(false);
       });
-  }, [filters]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.search, filters.categoria, filters.marca, filters.precioMin, filters.precioMax, filters.modalidad]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadProducts(); }, [loadProducts]);
 
   const handleFilterChange = (key: keyof FilterState, value: string) => {
@@ -193,7 +195,7 @@ export default function CatalogoPage() {
                 onClick={() => { handleFilterChange('search', ''); setSearchInput(''); }}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#FFF5FA] border border-[#ED87B6] text-[#ED87B6] text-xs font-bold rounded-full hover:bg-[#ED87B6] hover:text-white transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none"
               >
-                "{filters.search}" <X size={10} />
+                {`"${filters.search}"`} <X size={10} />
               </button>
             )}
             {filters.marca && (
