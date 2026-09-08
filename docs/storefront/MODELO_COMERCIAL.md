@@ -20,10 +20,12 @@ Producto en stock, listo para despachar hoy.
 [Tienda] En checkout: revalidación de stock antes de confirmar
    ↓ Si ya no hay stock → error al checkout
 [Backend] POST /ecommerce/pedidos → estado: PENDIENTE_PAGO
-   ↓ NO se reserva hasta confirmar pago
+   ↓ Se crea InventoryReservation ACTIVE en este momento
+   ↓ (La reserva reduce disponibilidad vendible pero NO el stock físico)
 [Pasarela] Pago completado → webhook firmado
    ↓
-[Backend] Webhook → estado: PENDIENTE_DESPACHO + crear InventoryReservation
+[Backend] Webhook → estado: PENDIENTE_DESPACHO
+   ↓ (La InventoryReservation ya existía — solo cambia el estado del pedido)
    ↓ Reserva NO reduce stock físico
 [Bodega] Embalar + despachar
    ↓
@@ -204,7 +206,7 @@ Las siguientes definiciones comerciales son necesarias para WEB-1 en adelante:
 | 2 | ¿Cuántos días tiene el cliente para pagar el saldo al llegar la mercancía? |
 | 3 | ¿Qué pasa si el cliente no paga el saldo? ¿Se cancela automáticamente? |
 | 4 | ¿Hay envío gratis desde cierto monto? ¿Cuál es la política de envío? |
-| 5 | ¿Qué pasarela de pago se usará? ¿Wompi? ¿PayU? ¿Epayco? |
+| 5 | ~~¿Qué pasarela de pago se usará?~~ **RESPONDIDO en WEB-1:** Wompi, PayU, Mercado Pago — implementar adaptador desacoplado en WEB-4 |
 | 6 | ¿El checkout permite pagos en efectivo (PSE, OXXO)? |
 | 7 | ¿Los productos por pedido tienen un tiempo estimado específico por categoría? |
 | 8 | ¿Cuál es la política de devoluciones? ¿X días? |

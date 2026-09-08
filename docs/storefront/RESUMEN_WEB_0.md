@@ -4,8 +4,12 @@
 **Rama:** `feature/storefront-ecommerce`  
 **Worktree:** `c:/Users/jmqui/OneDrive/Documents/Nebulae/storefront-wt`  
 **Commit base (origin/main):** `81d70b54bffb6d81415dd445061d25ee2e67cffd`  
+**Commit cierre WEB-0:** `566a13661d493be2e5390c66fb5786f8bf937e15`  
 **Fecha:** 2026-09-08  
 **Auditor:** Antigravity WEB-0
+
+> **CORRECCIÓN:** El HEAD al cierre de WEB-0 fue `566a136` (no `81d70b5`). La referencia interna ha sido corregida.
+> Las capturas de pantalla (criterio #5) NO se completaron en WEB-0 — se realizarán como parte de WEB-1 baseline.
 
 ---
 

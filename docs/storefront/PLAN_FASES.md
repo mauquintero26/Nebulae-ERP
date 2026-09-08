@@ -1,6 +1,7 @@
 # Plan de Fases — WEB-0 a WEB-7
 
 **Fecha:** 2026-09-08  
+**Actualizado:** 2026-09-08 (WEB-1) — Epayco eliminado, pasarelas definitivas: Wompi, PayU, Mercado Pago.  
 **Nota:** Cada fase requiere autorización expresa del usuario antes de iniciar.
 
 ---
@@ -150,7 +151,7 @@
 ### Tareas incluidas:
 
 #### Diseño de Integración
-- [ ] Seleccionar pasarela: Wompi / PayU / Epayco (decisión del usuario)
+- [ ] Seleccionar pasarela: Wompi / PayU / Mercado Pago (definidas en WEB-1)
 - [ ] Implementar interfaz desacoplada de pasarelas
 - [ ] Checkout alojado (hosted payment page)
 
