@@ -194,4 +194,68 @@ Según las instrucciones de WEB-1, los siguientes errores de WEB-0 fueron correg
 - ✅ No se creó auth B2C
 - ✅ No se modificaron reglas de reserva o inventario
 
-**🛑 WEB-2 no iniciará hasta recibir autorización expresa del usuario.**
+---
+
+## Reporte Técnico Final (Sección 13)
+
+### Estado Git
+
+| Campo | Valor |
+|-------|-------|
+| **Commit base (WEB-0)** | `566a13661d493be2e5390c66fb5786f8bf937e15` |
+| **Commit código WEB-1** | `600a1b3` |
+| **Commit evidencias** | `a334526` |
+| **Commit lint/screenshots** | `43317ee74af47e521b1c96e87ae55d3f8be29021` |
+| **HEAD local** | `43317ee74af47e521b1c96e87ae55d3f8be29021` |
+| **HEAD remoto** | `43317ee74af47e521b1c96e87ae55d3f8be29021` ✅ |
+| **main** | `9bd27d9` — no modificada ✅ |
+| **git status** | Working tree limpio — 0 archivos pendientes ✅ |
+
+### Resultado del Build (final, post lint fixes)
+
+```
+✓ Running next.config.ts      took 311ms
+✓ Compiled successfully       in 26.6s
+✓ Generating static pages     74/74 in 11.6s
+  Exit code: 0
+  Errores nuevos: 0
+```
+
+### Resultado del Linter (WEB-1 files solamente)
+
+```
+npx eslint src/app/store/layout.tsx src/app/store/page.tsx
+           src/app/store/catalogo/page.tsx src/app/store/categoria/[slug]/page.tsx
+           src/components/store/ src/lib/design-tokens.ts
+           src/lib/categoryTree.ts src/types/store.ts
+           --quiet
+
+Exit code: 0
+Errores: 0
+```
+
+> **Nota:** `lib/api.ts`, `lib/design-system.ts`, `checkout/page.tsx` tienen errores pre-existentes del ERP — no son archivos WEB-1.
+
+### TypeScript (tsc --noEmit)
+
+- Errores en archivos WEB-1: **0**
+- Errores pre-existentes del ERP dashboard: ≥35 (cubiertos por `ignoreBuildErrors: true`)
+- Ningún error nuevo introducido en WEB-1
+
+### Evidencias Visuales
+
+| Tipo | Cantidad | Rutas cubiertas |
+|------|----------|----------------|
+| Baseline (pre-WEB-1) | 8 PNG | home, catálogo, checkout, cuenta × desktop + mobile |
+| Final (post-WEB-1) | 18 PNG | home, catálogo, categoría, checkout, contacto, cuenta, producto, megamenú, menú móvil, filtros, carrito × desktop + mobile |
+
+### Confirmación Cero Modificaciones en Backend
+
+```
+git diff --stat origin/main HEAD -- backend/
+→ 0 adiciones desde nuestra rama
+→ Las eliminaciones son líneas de main ausentes en nuestra rama (trabajo del otro agente)
+```
+
+**main intacta:** nunca se hizo merge, rebase, cherry-pick ni force-push sobre main.
+
