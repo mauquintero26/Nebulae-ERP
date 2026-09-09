@@ -7,7 +7,7 @@ Endpoints for: Proveedores (Suppliers), Pedidos de Compra (PEC),
 Recepciones de Inventario (ENINV)
 
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from typing import Optional
@@ -221,12 +221,18 @@ def search_suppliers(q: str = "", user: User = Depends(require_roles(*ALL_ERP_RO
 @router.post("/proveedores", status_code=201)
 def create_supplier(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
         db: Session = Depends(get_db)):
+    name = body.get("name") or body.get("nombre")
+    if not name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="El campo 'name' es requerido para crear un proveedor.",
+        )
     s = Supplier(
-        name=body["name"],
+        name=name,
         reference=body.get("reference"),
         contact_name=body.get("contact_name"),
         phone=body.get("phone"),
-        email=body.get("email"),
+        email=body.get("email") or body.get("contact_email"),
         address=body.get("address"),
         city=body.get("city"),
         country=body.get("country", "Colombia"),

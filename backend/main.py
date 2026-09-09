@@ -7,6 +7,7 @@ from app.api.v1 import whatsapp_webhook  # BLOQUE 5 — Modo Sombra WhatsApp
 from app.api.v1 import debug_db  # Hardening — endpoint de verificacion de DB (solo ADMIN)
 from app.api import ws
 from app.db.database import Base, engine
+from app.core.preflight import run_preflight_or_abort  # BLOQUE 5 — Preflight DB check
 
 # Create tables in DB (for development/testing only, Alembic is preferred)
 # Base.metadata.create_all(bind=engine)
@@ -30,6 +31,16 @@ app.add_middleware(
 )
 
 # Exception handler to standardize generic errors in JSend format
+@app.on_event("startup")
+async def startup_preflight():
+    """
+    Ejecuta la verificacion de base de datos ANTES de aceptar trafico.
+    Si falla, Uvicorn termina con codigo != 0.
+    No imprime DATABASE_URL ni credenciales.
+    """
+    run_preflight_or_abort()
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(

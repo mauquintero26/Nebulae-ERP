@@ -87,7 +87,10 @@ def setup_test_db():
         )
 
     env = os.environ.copy()
-    env["DATABASE_URL"] = TEST_URL
+    env["DATABASE_URL"] = TEST_URL       # Backward compat for any old code
+    env["TEST_DATABASE_URL"] = TEST_URL  # env.py en modo testing usa esta
+    env["ALEMBIC_ENV"] = "testing"       # Declara explicitamente el modo
+    env.pop("ALLOW_PRODUCTION_MIGRATION", None)  # Jamas debe haber autorización de prod aqui
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
         cwd=str(_BACKEND),

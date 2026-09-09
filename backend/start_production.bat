@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 REM =============================================================================
 REM start_production.bat -- Nebulae ERP Backend (Produccion / Staging) - Windows
 REM =============================================================================
@@ -122,6 +122,17 @@ REM ---------------------------------------------------------------------------
 REM 6. Exportar NEBULAE_ENV
 REM ---------------------------------------------------------------------------
 set NEBULAE_ENV=%NEBULAE_ENV%
+
+REM ---------------------------------------------------------------------------
+REM 6b. Preflight: verificar base de datos antes de iniciar
+REM ---------------------------------------------------------------------------
+echo [INFO] Ejecutando preflight de base de datos...
+venv\Scripts\python.exe -m app.core.preflight
+if errorlevel 1 (
+    echo [ERROR] Preflight fallo. El backend no puede iniciar. 1>&2
+    exit /b 2
+)
+echo [INFO] Preflight OK.
 
 REM ---------------------------------------------------------------------------
 REM 7. Iniciar uvicorn SIN --reload usando python -m uvicorn

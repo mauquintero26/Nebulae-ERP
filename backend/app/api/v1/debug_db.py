@@ -1,9 +1,11 @@
-﻿"""
+"""
 app/api/v1/debug_db.py -- Nebulae ERP
 Endpoint protegido para verificar la base de datos activa.
 
 Solo accesible por usuarios con rol ADMIN.
-Nunca expone credenciales: solo nombre de base, version alembic, y host/puerto.
+Solo disponible en ambientes development y staging.
+En produccion devuelve 404 (no registrado, invisible).
+Nunca expone credenciales: solo nombre de base, version alembic y ambiente.
 
 Uso en ensayo de despliegue (BLOQUE 2 del hardening):
   GET /api/v1/debug/db-info
@@ -13,8 +15,6 @@ Respuesta esperada en staging:
   {
     "current_database": "erp_staging_20260908_132152",
     "alembic_version": "fa6_002",
-    "host": "2.24.90.223",
-    "port": 5435,
     "environment": "staging"
   }
 """
@@ -24,29 +24,21 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from app.db.database import get_db, SQLALCHEMY_DATABASE_URL
+from app.db.database import get_db
 from app.api.dependencies import get_current_user, normalize_role
 from app.models.users import User
 
-try:
-    from urllib.parse import urlparse as _urlparse
-except ImportError:
-    _urlparse = None
-
 router = APIRouter()
 
+# Ambientes en los que este endpoint esta disponible
+_ALLOWED_ENVS = {"development", "staging", "dev"}
 
-def _get_db_connection_info() -> dict:
-    """Extrae host, puerto y nombre de DB desde DATABASE_URL sin exponer credenciales."""
-    try:
-        parsed = _urlparse(SQLALCHEMY_DATABASE_URL)
-        return {
-            "host": parsed.hostname or "local",
-            "port": parsed.port or 5432,
-            "dbname": (parsed.path or "").lstrip("/").split("?")[0],
-        }
-    except Exception:
-        return {"host": "?", "port": 0, "dbname": "?"}
+
+def _get_current_env() -> str:
+    """Retorna el ambiente normalizado en minusculas."""
+    return os.environ.get(
+        "NEBULAE_ENV", os.environ.get("ALEMBIC_ENV", "")
+    ).strip().lower()
 
 
 @router.get("/db-info")
@@ -56,8 +48,19 @@ def get_db_info(
 ):
     """
     Devuelve informacion de la base de datos activa.
-    Requiere rol ADMIN. No expone credenciales.
+    Requiere rol ADMIN.
+    Solo disponible en development y staging.
+    En produccion responde 404.
     """
+    env = _get_current_env()
+
+    # En produccion: no registrar ni exponer informacion
+    if env not in _ALLOWED_ENVS:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Not Found",
+        )
+
     canonical_role = normalize_role(current_user.role)
     if canonical_role != "ADMIN":
         raise HTTPException(
@@ -76,17 +79,11 @@ def get_db_info(
     except Exception:
         alembic_version = "tabla_no_encontrada"
 
-    conn_info = _get_db_connection_info()
-
-    nebulae_env = os.environ.get("NEBULAE_ENV", os.environ.get("ALEMBIC_ENV", ""))
-
     return {
         "status": "success",
         "data": {
             "current_database": current_db_row,
             "alembic_version": alembic_version,
-            "host": conn_info["host"],
-            "port": conn_info["port"],
-            "environment": nebulae_env or "no_declarado",
+            "environment": env or "no_declarado",
         },
     }

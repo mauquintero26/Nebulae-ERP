@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # =============================================================================
 # start_production.sh -- Nebulae ERP Backend (Produccion / Staging)
 # =============================================================================
@@ -148,6 +148,16 @@ _cleanup() {
     exit 0
 }
 trap _cleanup SIGINT SIGTERM
+
+# ---------------------------------------------------------------------------
+# 7b. Preflight: verificar base de datos antes de iniciar
+# ---------------------------------------------------------------------------
+echo "[INFO] Ejecutando preflight de base de datos..."
+if ! "${PYTHON_BIN}" -m app.core.preflight 2>&1; then
+    echo "[ERROR] Preflight fallo. El backend no puede iniciar." >&2
+    exit 2
+fi
+echo "[INFO] Preflight OK."
 
 # ---------------------------------------------------------------------------
 # 8. Iniciar uvicorn (SIN --reload)

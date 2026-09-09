@@ -1,4 +1,4 @@
-﻿"""
+"""
 alembic/env.py -- Nebulae ERP
 Seleccion explicita y segura del destino de migracion.
 
@@ -7,13 +7,19 @@ Reglas:
   2. Prioridad de URL:
        a. Si ALEMBIC_ENV=testing  -> usa TEST_DATABASE_URL (obligatoria)
        b. Si ALEMBIC_ENV=staging  -> usa DATABASE_URL      (obligatoria, guarda erpdb)
-       c. Si ALEMBIC_ENV=production -> usa DATABASE_URL    (obligatoria, guarda erpdb)
-       d. Si ALEMBIC_ENV ausente  -> usa DATABASE_URL; falla si TEST_DATABASE_URL tambien definida
+       c. Si ALEMBIC_ENV=production -> usa DATABASE_URL    (triple autorizacion requerida para erpdb)
+       d. Si ALEMBIC_ENV=development -> permite sqlite
+       e. Si ALEMBIC_ENV ausente  -> usa DATABASE_URL; falla si TEST_DATABASE_URL tambien definida
   3. DATABASE_URL y TEST_DATABASE_URL ambas definidas sin ALEMBIC_ENV -> ABORT.
   4. EXPECTED_DATABASE_NAME: verifica current_database() == valor; aborta si no coincide.
   5. Nunca inferir produccion por fallback; sqlite solo si ALEMBIC_ENV=development.
   6. Credenciales no aparecen en logs.
-  7. erpdb nunca puede ser destino de migracion automatica.
+  7. TRIPLE AUTORIZACION para erpdb en modo production:
+       ALEMBIC_ENV=production
+       EXPECTED_DATABASE_NAME=erpdb
+       ALLOW_PRODUCTION_MIGRATION=YES_I_HAVE_A_VERIFIED_BACKUP
+     Todas deben coincidir simultaneamente. Sin cualquiera: ABORT.
+  8. staging y testing NO pueden usar la autorizacion de produccion.
 """
 
 from logging.config import fileConfig
@@ -47,9 +53,13 @@ ALEMBIC_ENV = os.environ.get("ALEMBIC_ENV", "").strip().lower()
 _db_url_env = os.environ.get("DATABASE_URL", "").strip()
 _test_url_env = os.environ.get("TEST_DATABASE_URL", "").strip()
 _expected_db = os.environ.get("EXPECTED_DATABASE_NAME", "").strip()
+_allow_prod = os.environ.get("ALLOW_PRODUCTION_MIGRATION", "").strip()
 
-# Bases de produccion protegidas que NUNCA deben migrarse automaticamente
-_PROTECTED_DB_NAMES = {"erpdb"}
+# Valor exacto requerido para la triple autorizacion productiva (sin valor predeterminado)
+_PROD_AUTH_REQUIRED = "YES_I_HAVE_A_VERIFIED_BACKUP"
+
+# Nombre exacto de la base productiva que requiere triple autorizacion
+_PRODUCTION_DATABASE_NAME = "erpdb"
 
 DEV_SQLITE_URL = "sqlite:///./nebulae_local.db"
 
@@ -84,6 +94,57 @@ def _abort(message: str) -> None:
     sys.exit(1)
 
 
+def _check_production_triple_auth(db_name: str) -> None:
+    """
+    Verifica la triple autorizacion requerida para migrar la base productiva.
+    Llama a _abort() si falta cualquier condicion.
+
+    Condiciones requeridas SIMULTANEAMENTE:
+      1. ALEMBIC_ENV=production
+      2. EXPECTED_DATABASE_NAME=erpdb  (debe coincidir con el nombre real)
+      3. ALLOW_PRODUCTION_MIGRATION=YES_I_HAVE_A_VERIFIED_BACKUP
+
+    Ninguna condicion tiene valor predeterminado.
+    staging y testing nunca pueden satisfacer esta verificacion.
+    No se infiere produccion por el nombre de la URL.
+    """
+    if db_name != _PRODUCTION_DATABASE_NAME:
+        # Otra base en modo production: se permite sin triple-auth
+        return
+
+    # La URL apunta a erpdb — exigir triple autorizacion completa
+    missing = []
+
+    if ALEMBIC_ENV != "production":
+        missing.append(
+            f"ALEMBIC_ENV debe ser 'production' (actual: '{ALEMBIC_ENV}')"
+        )
+
+    if _expected_db != _PRODUCTION_DATABASE_NAME:
+        missing.append(
+            f"EXPECTED_DATABASE_NAME debe ser '{_PRODUCTION_DATABASE_NAME}' "
+            f"(actual: '{_expected_db or '(vacio)'}')"
+        )
+
+    if _allow_prod != _PROD_AUTH_REQUIRED:
+        missing.append(
+            "ALLOW_PRODUCTION_MIGRATION debe ser exactamente "
+            f"'{_PROD_AUTH_REQUIRED}' (sin valor predeterminado; actual: "
+            f"'{'(vacio)' if not _allow_prod else '(valor incorrecto)'}')"
+        )
+
+    if missing:
+        _abort(
+            f"La base '{_PRODUCTION_DATABASE_NAME}' requiere triple autorizacion. "
+            "Condiciones no satisfechas:\n  - " + "\n  - ".join(missing)
+        )
+
+    logger.warning(
+        "TRIPLE AUTORIZACION CONCEDIDA para '%s'. Proceder con extrema precaucion.",
+        _PRODUCTION_DATABASE_NAME,
+    )
+
+
 def _resolve_database_url() -> str:
     """
     Resuelve la URL de base de datos para la migracion aplicando
@@ -95,6 +156,13 @@ def _resolve_database_url() -> str:
     if ALEMBIC_ENV == "testing":
         if not _test_url_env:
             _abort("ALEMBIC_ENV=testing pero TEST_DATABASE_URL no esta definida.")
+        # testing nunca puede apuntar a erpdb
+        test_db_name = _db_name_from_url(_test_url_env)
+        if test_db_name == _PRODUCTION_DATABASE_NAME:
+            _abort(
+                f"ALEMBIC_ENV=testing pero TEST_DATABASE_URL apunta a '{_PRODUCTION_DATABASE_NAME}'. "
+                "Las pruebas nunca pueden ejecutarse contra la base productiva."
+            )
         url = _test_url_env
         logger.info("Alembic modo TESTING -> %s", _mask_url(url))
         return url
@@ -108,20 +176,34 @@ def _resolve_database_url() -> str:
         return url
 
     # ------------------------------------------------------------------
-    # Modo staging o production explicito
+    # Modo staging explicito
     # ------------------------------------------------------------------
-    if ALEMBIC_ENV in ("staging", "production"):
+    if ALEMBIC_ENV == "staging":
         if not _db_url_env:
             _abort(
-                f"ALEMBIC_ENV={ALEMBIC_ENV} pero DATABASE_URL no esta definida."
+                "ALEMBIC_ENV=staging pero DATABASE_URL no esta definida."
             )
         db_name = _db_name_from_url(_db_url_env)
-        if db_name in _PROTECTED_DB_NAMES:
+        if db_name == _PRODUCTION_DATABASE_NAME:
             _abort(
-                f"DATABASE_URL apunta a la base protegida '{db_name}'. "
-                "Esta base nunca puede migrarse en modo automatizado."
+                f"ALEMBIC_ENV=staging pero DATABASE_URL apunta a '{_PRODUCTION_DATABASE_NAME}'. "
+                "staging nunca puede migrar la base productiva."
             )
-        logger.info("Alembic modo %s -> %s", ALEMBIC_ENV.upper(), _mask_url(_db_url_env))
+        logger.info("Alembic modo STAGING -> %s", _mask_url(_db_url_env))
+        return _db_url_env
+
+    # ------------------------------------------------------------------
+    # Modo production explicito — triple autorizacion para erpdb
+    # ------------------------------------------------------------------
+    if ALEMBIC_ENV == "production":
+        if not _db_url_env:
+            _abort(
+                "ALEMBIC_ENV=production pero DATABASE_URL no esta definida."
+            )
+        db_name = _db_name_from_url(_db_url_env)
+        # Para erpdb: verificar triple autorizacion
+        _check_production_triple_auth(db_name)
+        logger.info("Alembic modo PRODUCTION -> %s", _mask_url(_db_url_env))
         return _db_url_env
 
     # ------------------------------------------------------------------
@@ -137,10 +219,10 @@ def _resolve_database_url() -> str:
             )
         if _db_url_env:
             db_name = _db_name_from_url(_db_url_env)
-            if db_name in _PROTECTED_DB_NAMES:
+            if db_name == _PRODUCTION_DATABASE_NAME:
                 _abort(
-                    f"DATABASE_URL apunta a la base protegida '{db_name}'. "
-                    "Declare ALEMBIC_ENV explicito antes de continuar."
+                    f"DATABASE_URL apunta a la base productiva '{_PRODUCTION_DATABASE_NAME}'. "
+                    "Declare ALEMBIC_ENV=production con triple autorizacion antes de continuar."
                 )
             logger.info("Alembic (sin ALEMBIC_ENV) -> %s", _mask_url(_db_url_env))
             return _db_url_env
