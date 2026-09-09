@@ -55,3 +55,6 @@ from app.models.fase5 import (
     CustomerContactPreference,
     IntegrationWebhookEvent,
 )
+
+# GO/NO-GO V2.1 — tablas funcionales faltantes en Alembic (corrección 80/77)
+from app.models.admin_calendar_crm import AdminConfig, CalendarEvent, CrmConfig
