@@ -1,16 +1,18 @@
-# RESUMEN EJECUTIVO — WEB-1
+# RESUMEN EJECUTIVO — WEB-1 (Revisión Final)
 
 **Fase:** WEB-1 — Organización Visual, Identidad de Marca y Navegación Dinámica  
 **Rama:** `feature/storefront-ecommerce`  
 **Worktree:** `c:/Users/jmqui/OneDrive/Documents/Nebulae/storefront-wt`  
 **Commit base WEB-0:** `566a13661d493be2e5390c66fb5786f8bf937e15`  
-**Fecha:** 2026-09-08
+**Fecha:** 2026-09-08 (Rev 2: 2026-09-09)
 
 ---
 
 ## Resumen Ejecutivo
 
-WEB-1 completa la organización visual del storefront de Nebulae Kids, establece la identidad de marca definitiva con la paleta pastel oficial, integra el logo real del usuario, y prepara la arquitectura de componentes para las fases funcionales. El build pasa sin errores.
+WEB-1 completa la organización visual del storefront de Nebulae, establece la identidad de marca definitiva con la paleta pastel oficial, integra el logo real del usuario, implementa la navegación dinámica desde la API de categorías con jerarquía arbitraria, y prepara la arquitectura de componentes para las fases funcionales.
+
+La revisión final corrigió: la profundidad de la jerarquía de categorías (ahora verdaderamente recursiva), los textos comerciales (ahora neutrales y configurables), las categorías destacadas de la home (ahora desde API/config, no hardcodeadas), y el manejo de errores (ahora observable, no silenciado).
 
 ---
 
@@ -22,19 +24,24 @@ WEB-1 completa la organización visual del storefront de Nebulae Kids, establece
 | 2 | Logo real integrado (dinámico, reemplazable) | ✅ |
 | 3 | Paleta exacta documentada y aplicada | ✅ |
 | 4 | Mega-menú alimentado desde API de categorías | ✅ |
-| 5 | Jerarquía inicial representable en menú | ✅ |
+| 5 | Jerarquía arbitraria (3+ niveles) representable | ✅ (rev 2) |
 | 6 | Menú desktop y móvil consistentes (misma fuente de datos) | ✅ |
 | 7 | Drawer móvil de filtros funcional | ✅ |
 | 8 | Componentes duplicados consolidados | ✅ |
 | 9 | Ruta antigua /store/product/[id] redirige a canónica | ✅ |
-| 10 | Build exitoso | ✅ |
-| 11 | TypeScript sin errores nuevos | ✅ (ignoreBuildErrors preexistente del ERP) |
-| 12 | Cero errores de consola nuevos | ✅ |
-| 13 | Capturas baseline disponibles | ✅ (ver evidencias/web1/baseline/) |
-| 14 | Cero modificaciones en backend | ✅ |
-| 15 | Cero modificaciones de bases de datos | ✅ |
-| 16 | `main` intacta | ✅ |
-| 17 | Rama publicada y working tree limpio | ✅ |
+| 10 | Build exitoso (exit 0) | ✅ |
+| 11 | ESLint archivos WEB-1: exit 0, 0 errores | ✅ |
+| 12 | TypeScript archivos WEB-1: sin errores nuevos | ✅ |
+| 13 | TypeScript global: deuda preexistente preservada, ignoreBuildErrors: true | ✅ (documentado) |
+| 14 | Pruebas unitarias 11/11 (Vitest) | ✅ (rev 2) |
+| 15 | Textos comerciales neutrales y configurables | ✅ (rev 2) |
+| 16 | Categorías destacadas home desde API/config | ✅ (rev 2) |
+| 17 | Errores manejados y observables (no silenciados) | ✅ (rev 2) |
+| 18 | Capturas baseline disponibles | ✅ (ver evidencias/web1/baseline/) |
+| 19 | Cero modificaciones en backend (vs WEB-0) | ✅ |
+| 20 | Cero modificaciones de bases de datos | ✅ |
+| 21 | `main` intacta | ✅ |
+| 22 | Rama publicada y working tree limpio | ✅ |
 
 ---
 
@@ -44,155 +51,116 @@ WEB-1 completa la organización visual del storefront de Nebulae Kids, establece
 
 | Archivo | Descripción |
 |---------|-------------|
-| `src/types/store.ts` | Tipos TypeScript centrales: Product, CartItem, NavNode, FilterState, WebConfig |
+| `src/types/store.ts` | Tipos TypeScript: Product, CartItem, NavNode, FilterState, WebConfig, FeaturedCategory |
 | `src/lib/design-tokens.ts` | Tokens de diseño: paleta Nebulae HEX, clases semánticas, availability/modality |
-| `src/lib/categoryTree.ts` | Normalizador recursivo de categorías (compatible con jerarquía futura) |
+| `src/lib/categoryTree.ts` | Normalizador recursivo de profundidad arbitraria (jerarquía anidada + parent_id plano) |
+| `src/lib/__tests__/categoryTree.test.ts` | 11 pruebas unitarias Vitest (8 escenarios requeridos + 3 slugify) |
+| `src/components/store/NavTreeItem.tsx` | Componente recursivo compartido: desktop hover + mobile accordion, profundidad arbitraria |
 | `src/components/store/ProductCard.tsx` | Tarjeta unificada: badges, touch-visible, keyboard nav |
-| `src/components/store/AvailabilityBadge.tsx` | Badge de disponibilidad (available, low_stock, out_of_stock, by_order) |
-| `src/components/store/ModalityBadge.tsx` | Badge de modalidad (ENTREGA_INMEDIATA, POR_PEDIDO) |
-| `src/components/store/States.tsx` | Skeleton, EmptyState, ErrorState |
-| `src/components/store/StoreLogo.tsx` | Logo dinámico con fallback tipográfico |
-| `src/components/store/StoreFooter.tsx` | Footer compartido extraído del layout |
-| `src/components/store/FilterDrawer.tsx` | Drawer móvil de filtros |
-| `src/components/Toast.tsx` | Toast unificado con tipos |
-| `public/logo.png` | Logo oficial de Nebulae Kids |
+| `src/components/store/AvailabilityBadge.tsx` | Badge de disponibilidad semántica |
+| `src/components/store/ModalityBadge.tsx` | Badge de modalidad (ENTREGA_INMEDIATA / POR_PEDIDO) |
+| `src/components/store/States.tsx` | Skeleton, EmptyState, ErrorState compartidos |
+| `src/components/store/StoreLogo.tsx` | Logo dinámico (reemplazable vía API, fallback /logo.png) |
+| `src/components/store/StoreFooter.tsx` | Footer compartido de la tienda |
+| `src/components/store/FilterDrawer.tsx` | Drawer de filtros móvil |
+| `src/components/Toast.tsx` | Toast unificado |
+| `frontend/public/logo.png` | Logo real de Nebulae (85 KB) |
+| `frontend/vitest.config.ts` | Configuración Vitest con alias @ |
+| `docs/storefront/SISTEMA_DISENO.md` | Documentación del sistema de diseño |
+| `docs/storefront/CONTRATO_CATEGORIAS.md` | Contrato de la API de categorías |
 
 ### Archivos modificados
 
-| Archivo | Cambios |
-|---------|---------|
-| `src/app/store/layout.tsx` | Logo dinámico, carrito con localStorage + updateQty, nav dinámica, mega-menú, menú móvil con subcategorías, paleta Nebulae, StoreFooter |
-| `src/app/store/page.tsx` | ProductCard unificado, URL normalizada (/catalogo), paleta Nebulae, footer eliminado (en layout), hero desde config |
-| `src/app/store/catalogo/page.tsx` | ProductCard unificado, FilterDrawer, chips de filtros activos, error state, paleta Nebulae |
-| `src/app/store/categoria/[slug]/page.tsx` | ProductCard unificado, FilterDrawer, error state, paleta Nebulae |
-| `src/app/store/product/[id]/page.tsx` | Convertido de mock puro a redirect → `/store/producto/[id]` |
-| `next.config.ts` | Redirects para rutas legacy + imagen remote patterns |
-| `docs/storefront/RESUMEN_WEB_0.md` | Corregida referencia HEAD (566a136) y nota de capturas pendientes |
-| `docs/storefront/MODELO_COMERCIAL.md` | Corregido flujo de reserva y Epayco eliminado |
-| `docs/storefront/PLAN_FASES.md` | Epayco reemplazado por Mercado Pago |
-
-### Nuevos documentos
-
 | Archivo | Descripción |
 |---------|-------------|
-| `docs/storefront/SISTEMA_DISENO.md` | Sistema de diseño completo: paleta, tokens, tipografía, componentes, accesibilidad |
-| `docs/storefront/CONTRATO_CATEGORIAS.md` | Contrato API para categorías: estado actual, limitaciones, schema requerido en WEB-2 |
-| `docs/storefront/RESUMEN_WEB_1.md` | Este archivo |
-| `docs/storefront/evidencias/paleta.png` | Imagen de referencia de la paleta oficial |
-| `docs/storefront/evidencias/web1/baseline/` | Capturas antes de los cambios |
-| `docs/storefront/evidencias/web1/final/` | Capturas después de los cambios |
+| `frontend/next.config.ts` | Redirects + image remote patterns |
+| `src/app/store/layout.tsx` | Reescritura completa: carrito, NavTreeItem recursivo, errores observables |
+| `src/app/store/page.tsx` | Categorías dinámicas, textos neutrales, retry, info_bar |
+| `src/app/store/catalogo/page.tsx` | ProductCard unificado, FilterDrawer, lint fixes |
+| `src/app/store/categoria/[slug]/page.tsx` | ProductCard unificado, FilterDrawer, lint fixes |
+| `src/app/store/product/[id]/page.tsx` | Redirige a /store/producto/[id] |
+| `frontend/package.json` | Script "test": "vitest run" |
+| `docs/storefront/MODELO_COMERCIAL.md` | Flujo de reserva corregido, Epayco eliminado |
+| `docs/storefront/PLAN_FASES.md` | Epayco → Mercado Pago |
 
 ---
 
-## Correcciones de WEB-0
+## Jerarquía de Categorías — Arquitectura
 
-Según las instrucciones de WEB-1, los siguientes errores de WEB-0 fueron corregidos:
-
-| Error | Corrección |
-|-------|-----------|
-| HEAD en RESUMEN_WEB_0 decía `81d70b5` (commit base) | Corregido a `566a136` (commit real de cierre WEB-0) |
-| Criterio 26/26 afirmaba capturas completadas | Corregido — capturas se realizan en WEB-1 baseline |
-| Flujo de reserva: "NO se reserva hasta confirmar pago" | Corregido — `InventoryReservation` se crea al crear el pedido exitosamente |
-| Epayco listado como pasarela | Eliminado — pasarelas definitivas: Wompi, PayU, Mercado Pago |
-
----
-
-## Identidad Visual Aplicada
-
-### Logo
-- **Archivo:** `public/logo.png`
-- **Fuente:** Logo oficial suministrado por el usuario
-- **Mecanismo:** Dinámico — lee `config.logo_url` primero, luego `/logo.png`, luego texto
-- **Reemplazable:** Sí — desde el admin o reemplazando el archivo en `public/`
-
-### Paleta de Marca
-
-| Color | HEX | Token | Uso |
-|-------|-----|-------|-----|
-| Rosa saturado | `#ED87B6` | `brand-primary` | CTAs, botones, links activos |
-| Rosa claro | `#F6BAD6` | `brand-pink` | Hover, fondos |
-| Azul pastel | `#B5E1F6` | `brand-secondary` / `brand-blue` | Elementos secundarios |
-| Púrpura | `#D1BADB` | `brand-purple` | Decorativos |
-| Amarillo | `#FFEE83` | `brand-yellow` | Highlights |
-| Naranja | `#F9BF92` | `brand-orange` | Warning |
-| Verde | `#C2D987` | `brand-accent` | Success, disponibilidad |
-
-**Colores eliminados:** emerald-500, slate-500 de Tailwind como colores de acción
-
----
-
-## Resultado del Build
+### Formatos soportados por `normalizeCategories()`
 
 ```
-▲ Next.js 16.3.1 (Turbopack)
-✓ Compiled successfully in 10.1s
-✓ 74 páginas generadas
-✓ 0 errores
+1. Anidado legacy: { nombre, sub_categorias: string[] }
+2. Anidado objetos: { nombre, sub_categorias: [{ nombre, children: [...] }] }
+3. Anidado children: { nombre, children: [{ nombre, children: [...] }] }
+4. Plano parent_id:  [{ id, nombre, parent_id }] → árbol ensamblado
 ```
 
-**Rutas del storefront:**
+### Garantías
+
+- ✅ Profundidad arbitraria (no limitada a 2 niveles)
+- ✅ Slugs del backend preferidos; fallback generado solo para compatibilidad legacy
+- ✅ Ciclos detectados y cortados (DFS visited set)
+- ✅ Categorías `activa: false` filtradas con todo su subárbol
+- ✅ Nodos huérfanos (parent_id inexistente) adjuntados al nivel raíz
+- ✅ Nombres duplicados con distintos padres → IDs únicos
+
+### Componente `NavTreeItem` recursivo
+
 ```
-○ /store               (Static)
-○ /store/blog          (Static)
-○ /store/catalogo      (Static)
-ƒ /store/categoria/[slug] (Dynamic)
-○ /store/checkout      (Static)
-○ /store/contacto      (Static)
-○ /store/cuenta        (Static)
-ƒ /store/product/[id]  (Dynamic — redirect)
-ƒ /store/producto/[id] (Dynamic)
+NavTreeItem (mode="desktop")  → hover dropdown con sub-dropdowns por nivel
+NavTreeItem (mode="mobile")   → accordion expandible por nivel
 ```
 
 ---
 
-## Trabajo Pendiente para WEB-2
+## Textos Fallback Configurables
 
-| Tarea | Razón |
-|-------|-------|
-| Crear `lib/store-api.ts` | Centralizar todos los fetch directos |
-| Filtros server-side en catálogo | Actualmente se filtran en el cliente |
-| Backend: agregar `id`, `slug`, `orden` a `/ecommerce/categorias` | Ver CONTRATO_CATEGORIAS.md |
-| URL de categoría por `slug` en lugar de `nombre` | Evitar problemas con tildes |
-| ISR para catálogo y producto | Actualmente solo CSR |
-| SEO: `generateMetadata` por ruta | No implementado |
-| Formulario de contacto conectado | Actualmente es mock |
-| Migrar `store/catalogo` a usar slug canónico | Requiere backend actualizado |
-| `store/producto/[id]` — paleta Nebulae | Página no modificada en WEB-1 |
-| `store/checkout` — fix de contrato API | Requiere WEB-3 |
-| `store/cuenta` — conectar a auth B2C | Requiere WEB-3 |
+| Campo | Fallback (cuando la API no devuelve configuración) |
+|-------|----------------------------------------------------|
+| hero.title | `Productos para ti y toda tu familia` |
+| hero.subtitle | `Compra en línea productos por pedido y de entrega inmediata.` |
+| hero.cta_text | `Explorar Catálogo` |
+| hero.info_bar | `Productos seleccionados para toda la familia — Envíos a toda Colombia` |
+| featured_categories | Primeros 6 nodos raíz de la API de categorías |
+
+Todos los textos son reemplazables mediante `WebConfig` desde el constructor web.  
+**No se hardcodearon categorías comerciales** (Bebés, Ropa, Calzado, Juguetes, etc.) en el frontend.
 
 ---
 
-## Decisiones Documentadas
+## Manejo de Errores — Política
 
-| ADR | Decisión |
-|-----|---------|
-| ADR-008 | Pasarelas: Wompi + PayU + Mercado Pago. Adaptador desacoplado en WEB-4. Epayco descartado. |
-| ADR-009 | Logo dinámico: `config.logo_url` → `/logo.png` → fallback tipográfico. Permite cambio sin redeploy. |
-| ADR-010 | Paleta Nebulae pastel oficial aplicada. Verde esmeralda (`emerald`) eliminado del storefront. |
-| ADR-011 | `InventoryReservation ACTIVE` se crea al crear el pedido exitosamente (no después del pago). |
+| Error | Comportamiento |
+|-------|----------------|
+| Config no disponible | `console.warn` + fallbacks locales. Tienda funcional. |
+| Categorías no disponibles | `console.warn` + menú vacío. Carrito y header intactos. |
+| Productos no disponibles | Estado de error visible + botón "Reintentar" (retryCount). |
+| Error HTTP non-ok | `throw new Error('HTTP N')` → capturado en `.catch` → observable. |
+
+**Ningún error se silencia con `.catch(() => {})` sin logging.**
 
 ---
 
-## Confirmaciones de Cierre WEB-1
+## Pruebas Unitarias
 
-- ✅ Frontend existente reutilizado (no reconstruido desde cero)
-- ✅ Logo real integrado
-- ✅ Paleta oficial aplicada (sin colores inventados)
-- ✅ Mega-menú desde API (normalizeCategories)
-- ✅ Menú móvil con misma fuente de datos que desktop
-- ✅ FilterDrawer funcional en móvil
-- ✅ ProductCard unificado (3 duplicados → 1)
-- ✅ Redirect /store/product/[id] → /store/producto/[id]
-- ✅ Build: 0 errores
-- ✅ TypeScript: ignoreBuildErrors preexistente (dashboard ERP)
-- ✅ Backend: 0 archivos modificados
-- ✅ Base de datos: no tocada
-- ✅ main: no modificada
-- ✅ No se inició WEB-2
-- ✅ No se conectaron pagos reales
-- ✅ No se creó auth B2C
-- ✅ No se modificaron reglas de reserva o inventario
+**Suite:** `src/lib/__tests__/categoryTree.test.ts`  
+**Framework:** Vitest 5.0.0  
+**Resultado:** 11/11 passed
+
+| # | Test | Estado |
+|---|------|--------|
+| 1 | Jerarquía de 2 niveles (objetos) | ✅ |
+| 2 | Jerarquía de 3+ niveles (children anidados) | ✅ |
+| 3 | Sub_categorias string[] (legacy) | ✅ |
+| 4 | Lista plana con parent_id | ✅ |
+| 5 | Categorías inactivas filtradas | ✅ |
+| 6 | Nodo huérfano al nivel raíz | ✅ |
+| 7 | Ciclo detectado y cortado | ✅ |
+| 8 | Tildes, espacios, nombres duplicados → IDs únicos | ✅ |
+| 9 | slugify: elimina diacríticos | ✅ |
+| 10 | slugify: colapsa guiones múltiples | ✅ |
+| 11 | slugify: elimina caracteres especiales | ✅ |
 
 ---
 
@@ -203,59 +171,71 @@ Según las instrucciones de WEB-1, los siguientes errores de WEB-0 fueron correg
 | Campo | Valor |
 |-------|-------|
 | **Commit base (WEB-0)** | `566a13661d493be2e5390c66fb5786f8bf937e15` |
-| **Commit código WEB-1** | `600a1b3` |
+| **Commit código WEB-1 inicial** | `600a1b3` |
 | **Commit evidencias** | `a334526` |
-| **Commit lint/screenshots** | `43317ee74af47e521b1c96e87ae55d3f8be29021` |
-| **HEAD local** | `43317ee74af47e521b1c96e87ae55d3f8be29021` |
-| **HEAD remoto** | `43317ee74af47e521b1c96e87ae55d3f8be29021` ✅ |
+| **Commit lint/screenshots** | `43317ee` |
+| **Commit reporte técnico** | `fa8d037` |
+| **Commit correcciones WEB-1 rev2** | `3379ce5` |
+| **Commit documental final** | *este commit* |
 | **main** | `9bd27d9` — no modificada ✅ |
-| **git status** | Working tree limpio — 0 archivos pendientes ✅ |
+| **git status** | Working tree limpio ✅ |
 
-### Resultado del Build (final, post lint fixes)
+### Diferencia de backend vs commit base WEB-0
 
 ```
-✓ Running next.config.ts      took 311ms
-✓ Compiled successfully       in 26.6s
-✓ Generating static pages     74/74 in 11.6s
+git diff --name-only 566a13661d493be2e5390c66fb5786f8bf937e15 HEAD -- backend/
+→ (vacío) = 0 archivos de backend modificados
+```
+
+> **Nota sobre la rama vs `main`:** `feature/storefront-ecommerce` está separada de `main` intencionalmente — no se realiza merge hasta que el agente GO/NO-GO finalice su trabajo. El diff `--stat origin/main HEAD` muestra eliminaciones porque `main` tiene commits del otro agente que nuestra rama no tiene; esto NO representa eliminaciones realizadas por WEB-1.
+
+### Resultado del Build
+
+```
+✓ Compiled successfully in 23.9s
   Exit code: 0
   Errores nuevos: 0
 ```
 
-### Resultado del Linter (WEB-1 files solamente)
+### Resultado del Linter (archivos WEB-1 únicamente)
 
 ```
 npx eslint src/app/store/layout.tsx src/app/store/page.tsx
            src/app/store/catalogo/page.tsx src/app/store/categoria/[slug]/page.tsx
-           src/components/store/ src/lib/design-tokens.ts
-           src/lib/categoryTree.ts src/types/store.ts
+           src/components/store/ src/lib/categoryTree.ts
+           src/lib/__tests__/categoryTree.test.ts src/types/store.ts
            --quiet
 
 Exit code: 0
 Errores: 0
 ```
 
-> **Nota:** `lib/api.ts`, `lib/design-system.ts`, `checkout/page.tsx` tienen errores pre-existentes del ERP — no son archivos WEB-1.
+### TypeScript — Distinción importante
 
-### TypeScript (tsc --noEmit)
+| Alcance | Resultado |
+|---------|-----------|
+| **Archivos WEB-1** | ✅ 0 errores nuevos introducidos |
+| **TypeScript global (tsc --noEmit)** | ⚠️ Tiene deuda preexistente del ERP dashboard (≥35 errores pre-WEB-1) |
+| **Build TypeScript** | ✅ Exitoso — cubierto por `ignoreBuildErrors: true` preexistente en `next.config.ts` |
 
-- Errores en archivos WEB-1: **0**
-- Errores pre-existentes del ERP dashboard: ≥35 (cubiertos por `ignoreBuildErrors: true`)
-- Ningún error nuevo introducido en WEB-1
+> **Aclaración:** WEB-1 NO afirma "TypeScript global sin errores". Los errores del dashboard ERP son preexistentes y no fueron introducidos ni aumentados por WEB-1.
 
-### Evidencias Visuales
-
-| Tipo | Cantidad | Rutas cubiertas |
-|------|----------|----------------|
-| Baseline (pre-WEB-1) | 8 PNG | home, catálogo, checkout, cuenta × desktop + mobile |
-| Final (post-WEB-1) | 18 PNG | home, catálogo, categoría, checkout, contacto, cuenta, producto, megamenú, menú móvil, filtros, carrito × desktop + mobile |
-
-### Confirmación Cero Modificaciones en Backend
+### Pruebas Unitarias
 
 ```
-git diff --stat origin/main HEAD -- backend/
-→ 0 adiciones desde nuestra rama
-→ Las eliminaciones son líneas de main ausentes en nuestra rama (trabajo del otro agente)
+vitest run --reporter=verbose
+Test Files: 1 passed (1)
+Tests:      11 passed (11)
+Duration:   959ms
 ```
 
-**main intacta:** nunca se hizo merge, rebase, cherry-pick ni force-push sobre main.
+### Confirmación Backend y Bases de Datos
 
+- `git diff --name-only 566a136 HEAD -- backend/` → **vacío** (0 archivos)
+- Bases de datos: **no tocadas**
+- Migraciones Alembic: **no tocadas**
+- `main`: última commit `9bd27d9` — **nunca modificada**
+
+---
+
+**🛑 WEB-2 no iniciará hasta recibir autorización expresa del usuario.**
