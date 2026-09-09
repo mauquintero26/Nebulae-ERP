@@ -36,12 +36,16 @@ def _call_preflight(db_url: str = "postgresql://u:x@h:5432/erp_staging_test",
                     expected_db: str = "",
                     nebulae_env: str = "staging",
                     mock_engine=None,
-                    raise_operational_error: bool = False):
+                    raise_operational_error: bool = False,
+                    extra_env: dict = None):
     """
     Llama a run_preflight_or_abort con mocks de sys.exit y create_engine.
     Retorna (exited, exit_code, stderr_output, return_value).
+
+    extra_env: variables adicionales para inyectar en os.environ durante el test.
     """
     import importlib
+    import os
     # Forzar recarga del modulo para que tome los nuevos mocks
     if "app.core.preflight" in sys.modules:
         pf = sys.modules["app.core.preflight"]
@@ -71,9 +75,12 @@ def _call_preflight(db_url: str = "postgresql://u:x@h:5432/erp_staging_test",
     else:
         engine_to_use = mock_engine or _make_mock_engine("erp_staging_test")
 
+    env_overrides = extra_env or {}
+
     with mock.patch("sys.exit", side_effect=fake_exit), \
          mock.patch("sys.stderr", mock.Mock(write=fake_stderr_write)), \
-         mock.patch("app.core.preflight.create_engine", return_value=engine_to_use):
+         mock.patch("app.core.preflight.create_engine", return_value=engine_to_use), \
+         mock.patch.dict(os.environ, env_overrides, clear=False):
         try:
             result = pf.run_preflight_or_abort(
                 db_url=db_url,
@@ -123,6 +130,11 @@ class TestPreflight(unittest.TestCase):
             expected_db="erpdb",
             nebulae_env="production",
             mock_engine=engine,
+            extra_env={
+                "NEBULAE_ENV": "production",
+                "SECRET_KEY": "a" * 64,
+                "CORS_ALLOWED_ORIGINS": "https://nebulaekids.com",
+            },
         )
         self.assertTrue(exited, "Version incorrecta en produccion debe abortar")
         self.assertEqual(code, 4, f"Exit code debe ser 4, obtuvo {code}")
@@ -149,6 +161,11 @@ class TestPreflight(unittest.TestCase):
             expected_db="erpdb",
             nebulae_env="production",
             mock_engine=engine,
+            extra_env={
+                "NEBULAE_ENV": "production",
+                "SECRET_KEY": "a" * 64,
+                "CORS_ALLOWED_ORIGINS": "https://nebulaekids.com",
+            },
         )
         self.assertFalse(exited, f"Version correcta en produccion debe pasar. stderr={stderr}")
         self.assertIsNotNone(result)
@@ -184,6 +201,101 @@ class TestPreflight(unittest.TestCase):
         self.assertTrue(exited, "Error de conexion debe abortar")
         self.assertEqual(code, 2, f"Exit code debe ser 2 por OperationalError, obtuvo {code}")
 
+    # --- Nuevos tests: verificaciones de variables obligatorias en produccion ---
+
+    def test_produccion_sin_secret_key_aborta(self):
+        """En produccion, si SECRET_KEY no esta definida, debe abortar con exit 2."""
+        import os
+        engine = _make_mock_engine("erpdb", "fa6_002")
+        exited, code, stderr, _ = _call_preflight(
+            db_url="postgresql://u:x@h:5432/erpdb",
+            expected_db="erpdb",
+            nebulae_env="production",
+            mock_engine=engine,
+            extra_env={
+                "NEBULAE_ENV": "production",
+                "SECRET_KEY": "",
+                "CORS_ALLOWED_ORIGINS": "https://nebulaekids.com",
+            },
+        )
+        self.assertTrue(exited, "Sin SECRET_KEY en produccion debe abortar")
+        self.assertEqual(code, 2, f"Exit code debe ser 2, obtuvo {code}")
+        self.assertIn("SECRET_KEY", stderr)
+
+    def test_produccion_secret_key_dev_aborta(self):
+        """En produccion, si SECRET_KEY es el valor de desarrollo, debe abortar."""
+        engine = _make_mock_engine("erpdb", "fa6_002")
+        exited, code, stderr, _ = _call_preflight(
+            db_url="postgresql://u:x@h:5432/erpdb",
+            expected_db="erpdb",
+            nebulae_env="production",
+            mock_engine=engine,
+            extra_env={
+                "NEBULAE_ENV": "production",
+                "SECRET_KEY": "super-secret-key-for-development-change-me",
+                "CORS_ALLOWED_ORIGINS": "https://nebulaekids.com",
+            },
+        )
+        self.assertTrue(exited, "SECRET_KEY dev en produccion debe abortar")
+        self.assertEqual(code, 2)
+
+    def test_produccion_sin_cors_aborta(self):
+        """En produccion, si CORS_ALLOWED_ORIGINS no esta definida, debe abortar."""
+        engine = _make_mock_engine("erpdb", "fa6_002")
+        exited, code, stderr, _ = _call_preflight(
+            db_url="postgresql://u:x@h:5432/erpdb",
+            expected_db="erpdb",
+            nebulae_env="production",
+            mock_engine=engine,
+            extra_env={
+                "NEBULAE_ENV": "production",
+                "SECRET_KEY": "a" * 64,
+                "CORS_ALLOWED_ORIGINS": "",
+            },
+        )
+        self.assertTrue(exited, "Sin CORS_ALLOWED_ORIGINS en produccion debe abortar")
+        self.assertEqual(code, 2)
+        self.assertIn("CORS_ALLOWED_ORIGINS", stderr)
+
+    def test_produccion_sin_expected_db_aborta(self):
+        """En produccion, EXPECTED_DATABASE_NAME es obligatorio."""
+        engine = _make_mock_engine("erpdb", "fa6_002")
+        exited, code, stderr, _ = _call_preflight(
+            db_url="postgresql://u:x@h:5432/erpdb",
+            expected_db="",  # Sin expected_db
+            nebulae_env="production",
+            mock_engine=engine,
+            extra_env={
+                "NEBULAE_ENV": "production",
+                "EXPECTED_DATABASE_NAME": "",
+                "SECRET_KEY": "a" * 64,
+                "CORS_ALLOWED_ORIGINS": "https://nebulaekids.com",
+            },
+        )
+        self.assertTrue(exited, "Sin EXPECTED_DATABASE_NAME en produccion debe abortar")
+        self.assertEqual(code, 2)
+        self.assertIn("EXPECTED_DATABASE_NAME", stderr)
+
+    def test_produccion_nebulae_env_no_definido_aborta(self):
+        """En produccion, NEBULAE_ENV debe ser exactamente 'production'."""
+        import os
+        engine = _make_mock_engine("erpdb", "fa6_002")
+        # nebulae_env='production' via parametro pero NEBULAE_ENV env var no coincide
+        exited, code, stderr, _ = _call_preflight(
+            db_url="postgresql://u:x@h:5432/erpdb",
+            expected_db="erpdb",
+            nebulae_env="production",
+            mock_engine=engine,
+            extra_env={
+                "NEBULAE_ENV": "staging",  # Inconsistente con nebulae_env param
+                "SECRET_KEY": "a" * 64,
+                "CORS_ALLOWED_ORIGINS": "https://nebulaekids.com",
+            },
+        )
+        self.assertTrue(exited, "NEBULAE_ENV != production debe abortar")
+        self.assertEqual(code, 2)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

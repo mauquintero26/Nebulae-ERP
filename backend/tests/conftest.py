@@ -147,8 +147,13 @@ def setup_test_db():
         """))
         role_exists = conn.execute(text("SELECT 1 FROM pg_roles WHERE rolname='nebulae_test'")).scalar()
         if role_exists:
-            conn.execute(text("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO nebulae_test;"))
-            conn.execute(text("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO nebulae_test;"))
+            try:
+                conn.execute(text("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO nebulae_test;"))
+                conn.execute(text("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO nebulae_test;"))
+            except Exception:
+                # InternalError: tuple concurrently updated — otro proceso de pytest ya está otorgando
+                # permisos simultáneamente. Best-effort: si ya están otorgados, no hay problema.
+                conn.rollback()
         conn.commit()
     yield
     # Safety: ensure DB is at head before cleanup (migration tests may have left it downgraded)

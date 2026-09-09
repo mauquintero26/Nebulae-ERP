@@ -1,4 +1,4 @@
-﻿"""
+"""
 app/core/preflight.py -- Nebulae ERP
 Verificacion de base de datos ANTES de iniciar Uvicorn.
 
@@ -87,6 +87,56 @@ def run_preflight_or_abort(
     exp_db = expected_db or os.environ.get("EXPECTED_DATABASE_NAME", "").strip()
     env = nebulae_env or _get_env()
     req_version = required_version
+
+    # ---------------------------------------------------------------------------
+    # Verificaciones de variables de entorno obligatorias en produccion
+    # ---------------------------------------------------------------------------
+    _DEV_SECRET = "super-secret-key-for-development-change-me"
+
+    if env == "production":
+        # 1. NEBULAE_ENV debe estar explicitamente definida (no puede ser vacia)
+        _nebulae_env_raw = os.environ.get("NEBULAE_ENV", "").strip()
+        if not _nebulae_env_raw or _nebulae_env_raw != "production":
+            _abort(
+                "NEBULAE_ENV debe ser 'production' en modo productivo. "
+                f"Valor actual: '{_nebulae_env_raw}'. El backend no iniciara.",
+                exit_code=2,
+            )
+
+        # 2. EXPECTED_DATABASE_NAME obligatorio en produccion
+        if not exp_db:
+            _abort(
+                "EXPECTED_DATABASE_NAME es obligatorio en produccion. "
+                "Define la base de datos esperada (ej: erpdb) para evitar conexiones incorrectas.",
+                exit_code=2,
+            )
+        logger.info("PREFLIGHT: EXPECTED_DATABASE_NAME='%s' declarado.", exp_db)
+
+        # 3. SECRET_KEY obligatorio y no puede ser el valor de desarrollo
+        _secret_key = os.environ.get("SECRET_KEY", "").strip()
+        if not _secret_key:
+            _abort(
+                "SECRET_KEY no esta definida en produccion. El backend no puede iniciar.",
+                exit_code=2,
+            )
+        if _secret_key == _DEV_SECRET:
+            _abort(
+                "SECRET_KEY tiene el valor de desarrollo. "
+                "Genera una clave segura (ej: openssl rand -hex 32) antes de iniciar en produccion.",
+                exit_code=2,
+            )
+        logger.info("PREFLIGHT: SECRET_KEY presente y no es el valor de desarrollo. OK")
+
+        # 4. CORS_ALLOWED_ORIGINS obligatorio en produccion
+        _cors = os.environ.get("CORS_ALLOWED_ORIGINS", "").strip()
+        if not _cors:
+            _abort(
+                "CORS_ALLOWED_ORIGINS es obligatorio en produccion. "
+                "Define los origenes permitidos separados por coma (ej: https://nebulaekids.com). "
+                "El wildcard '*' no puede usarse con allow_credentials=True.",
+                exit_code=2,
+            )
+        logger.info("PREFLIGHT: CORS_ALLOWED_ORIGINS presente. OK")
 
     if not url:
         _abort(
