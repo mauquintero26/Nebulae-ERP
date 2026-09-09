@@ -1,153 +1,276 @@
 "use client";
 
 /**
- * Catálogo — WEB-1
+ * Catálogo — WEB-2A
  *
- * Cambios:
- * - Usa ProductCard unificado (elimina duplicado local)
- * - FilterDrawer móvil (antes el sidebar no renderizaba en móvil)
- * - URL de API normalizada: /ecommerce/catalogo (sin tilde)
- * - Paleta Nebulae
- * - Estado de error y vacío mejorados
- * - Focus visible en todos los controles
- * - Sidebar desktop mejorado con los mismos tokens
+ * Cambios respecto a WEB-1:
+ * - Usa useCatalog hook (no fetch directo): datos, filtros, paginación y URL sync centralizados
+ * - Búsqueda con debounce en el hook, spinner de "buscando..." y botón X para limpiar
+ * - Persistencia de todos los filtros en URL (?q=, ?categoria=, ?page=, etc.)
+ * - Paginación client-side: prev/next, indicador "Página X de Y"
+ * - Sort dropdown: Relevancia, Más recientes, Precio asc, Precio desc
+ * - Chips de filtros activos con X individual
+ * - Badge con conteo de filtros activos en botón móvil
+ * - Sidebar desktop: categorías desde API (listCategorias), precio min/max, marcas, modalidad
+ * - FilterDrawer para móvil (adaptando CatalogFilterState → FilterState)
+ * - EmptyState con "Limpiar filtros" y ErrorState con retry()
+ * - SEO: document.title dinámico y h1 visible
+ * - Paleta Nebulae, focus-visible en todos los controles, prefers-reduced-motion
+ *
+ * Paginación client-side temporal — ver WEB2A_GAPS_BACKEND.md GAP-001
  */
+
+import type { Metadata } from 'next';
+// Note: Metadata from server component would go here.
+// Page title is set via document.title in useEffect for client component.
 
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { Search, SlidersHorizontal, X, RefreshCw, ChevronRight } from 'lucide-react';
+import {
+  Search, SlidersHorizontal, X, RefreshCw, ChevronRight,
+  ChevronLeft, ChevronDown, Loader2,
+} from 'lucide-react';
 import { useCart } from '../layout';
 import { ProductCard } from '@/components/store/ProductCard';
 import { ProductGridSkeleton, EmptyState, ErrorState } from '@/components/store/States';
 import { FilterDrawer } from '@/components/store/FilterDrawer';
-import type { Product, FilterState, RawCategoria } from '@/types/store';
+import { useCatalog } from '@/hooks/useCatalog';
+import { listCategorias } from '@/lib/store-api';
+import type { NavNode } from '@/types/store';
+import type { FilterState } from '@/types/store';
+import type { CatalogFilterState } from '@/lib/store-api';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1';
+// ─── Sort options ─────────────────────────────────────────────────────────────
 
-const INITIAL_FILTERS: FilterState = {
-  search: '', categoria: '', subcategoria: '',
-  marca: '', precioMin: '', precioMax: '',
-  modalidad: '', disponibilidad: '', talla: '', color: '',
-};
+const SORT_OPTIONS: { value: string; label: string }[] = [
+  { value: '',            label: 'Relevancia' },
+  { value: 'recientes',   label: 'Más recientes' },
+  { value: 'precio_asc',  label: 'Precio: menor a mayor' },
+  { value: 'precio_desc', label: 'Precio: mayor a menor' },
+];
+
+// ─── Adapter: CatalogFilterState → FilterState (for FilterDrawer) ─────────────
+
+function toFilterState(f: CatalogFilterState): FilterState {
+  return {
+    search:         f.search,
+    categoria:      f.categoria,
+    subcategoria:   f.subcategoria,
+    marca:          f.marca,
+    precioMin:      f.precioMin,
+    precioMax:      f.precioMax,
+    modalidad:      f.modalidad,
+    disponibilidad: f.disponibilidad,
+    talla:          f.talla,
+    color:          f.color,
+  };
+}
+
+// ─── Filter chip helper ───────────────────────────────────────────────────────
+
+type ActiveChip = { key: keyof CatalogFilterState; label: string };
+
+function buildChips(filters: CatalogFilterState): ActiveChip[] {
+  const chips: ActiveChip[] = [];
+  if (filters.search)       chips.push({ key: 'search',      label: `"${filters.search}"` });
+  if (filters.categoria)    chips.push({ key: 'categoria',   label: filters.categoria });
+  if (filters.subcategoria) chips.push({ key: 'subcategoria', label: filters.subcategoria });
+  if (filters.marca)        chips.push({ key: 'marca',       label: filters.marca });
+  if (filters.precioMin)    chips.push({ key: 'precioMin',   label: `Desde $${filters.precioMin}` });
+  if (filters.precioMax)    chips.push({ key: 'precioMax',   label: `Hasta $${filters.precioMax}` });
+  if (filters.modalidad) {
+    const label = filters.modalidad === 'ENTREGA_INMEDIATA' ? 'Entrega inmediata' : 'Por pedido';
+    chips.push({ key: 'modalidad', label });
+  }
+  if (filters.ordenar) {
+    const opt = SORT_OPTIONS.find((o) => o.value === filters.ordenar);
+    if (opt) chips.push({ key: 'ordenar', label: opt.label });
+  }
+  return chips;
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function CatalogoPage() {
-  const { addToCart }      = useCart();
-  const [products, setProducts]   = useState<Product[]>([]);
-  const [categorias, setCategorias] = useState<RawCategoria[]>([]);
-  const [loading, setLoading]     = useState(true);
-  const [error, setError]         = useState(false);
-  const [filters, setFilters]     = useState<FilterState>(INITIAL_FILTERS);
-  const [searchInput, setSearchInput] = useState('');
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const { addToCart } = useCart();
 
-  // Fetch categories
+  const {
+    products,
+    filteredCount,
+    pagination,
+    filters,
+    activeFilterCount,
+    loading,
+    error,
+    isRetryable,
+    setFilter,
+    clearFilters,
+    clearFilter,
+    retry,
+    setPage,
+  } = useCatalog();
+
+  // ── Categories from API ────────────────────────────────────────────────────
+  const [navNodes, setNavNodes] = useState<NavNode[]>([]);
+
   useEffect(() => {
-    fetch(`${API}/ecommerce/categorias`)
-      .then((r) => r.json())
-      .then((d) => {
-        const list = Array.isArray(d) ? d : (d?.data ?? []);
-        setCategorias(list);
-      })
-      .catch(() => {});
+    listCategorias().then(setNavNodes).catch(() => {});
   }, []);
 
-  // Fetch products on filter change
-  const loadProducts = useCallback(() => {
-    setLoading(true);
-    setError(false);
-    const params = new URLSearchParams({ publicado: 'true', limit: '50' });
-    if (filters.search)    params.append('search', filters.search);
-    if (filters.categoria) params.append('categoria', filters.categoria);
+  // ── Dynamic page title ─────────────────────────────────────────────────────
+  useEffect(() => {
+    const title = filters.categoria
+      ? `${filters.categoria} — Catálogo | Nebulae Kids`
+      : 'Catálogo | Nebulae Kids';
+    document.title = title;
+  }, [filters.categoria]);
 
-    fetch(`${API}/ecommerce/catalogo?${params}`)
-      .then((r) => r.json())
-      .then((d) => {
-        let list: Product[] = Array.isArray(d) ? d : (d?.data ?? d?.items ?? []);
-        // Client-side supplementary filters (WEB-2 will move these server-side)
-        if (filters.marca)     list = list.filter((p) => p.marca?.toLowerCase().includes(filters.marca.toLowerCase()));
-        if (filters.precioMin) list = list.filter((p) => p.precio_venta >= Number(filters.precioMin));
-        if (filters.precioMax) list = list.filter((p) => p.precio_venta <= Number(filters.precioMax));
-        if (filters.modalidad) list = list.filter((p) => p.modalidad === filters.modalidad);
-        setProducts(list);
-        setLoading(false);
-      })
-      .catch(() => {
-        setError(true);
-        setLoading(false);
-      });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.search, filters.categoria, filters.marca, filters.precioMin, filters.precioMax, filters.modalidad]);
+  // ── Drawer (mobile) ───────────────────────────────────────────────────────
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { loadProducts(); }, [loadProducts]);
+  // ── Derive marcas from products for sidebar ───────────────────────────────
+  // Accumulate known marcas across pages so the list does not collapse on filter change.
+  const [knownMarcas, setKnownMarcas] = useState<string[]>([]);
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (products.length === 0) return;
+    setKnownMarcas((prev) => {
+      const next = [...new Set([...prev, ...products.map((p) => p.marca).filter(Boolean)])].sort();
+      return next;
+    });
+  }, [products]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
-  const handleFilterChange = (key: keyof FilterState, value: string) => {
-    setFilters((prev) => ({ ...prev, [key]: value }));
-  };
+  // ── FilterDrawer adapter: maps DrawerState back to setFilter calls ─────────
+  const handleDrawerChange = useCallback(
+    (key: keyof FilterState, value: string) => {
+      setFilter(key as keyof CatalogFilterState, value);
+    },
+    [setFilter],
+  );
 
-  const clearFilters = () => {
-    setFilters(INITIAL_FILTERS);
-    setSearchInput('');
-  };
+  // ── Active chips ───────────────────────────────────────────────────────────
+  const chips = buildChips(filters);
+  const hasActiveFilters = activeFilterCount > 0;
 
-  const applySearch = () => handleFilterChange('search', searchInput);
+  // ── Flatten NavNode[] for FilterDrawer ────────────────────────────────────
+  const drawerCategorias = navNodes.map((n) => ({
+    nombre: n.label,
+    sub_categorias: n.children.map((c) => c.label),
+  }));
 
-  const hasActiveFilters = Object.entries(filters).some(([, v]) => v !== '');
-  const marcas = [...new Set(products.map((p) => p.marca).filter(Boolean))];
+  // ── Search is active (debounce lag indicator) ─────────────────────────────
+  const isSearchActive = filters.search.length > 0;
+
+  // ─────────────────────────────────────────────────────────────────────────
 
   return (
     <>
-      {/* Mobile filter drawer */}
+      {/* ── Mobile filter drawer ── */}
       <FilterDrawer
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        filters={filters}
-        onChange={handleFilterChange}
+        filters={toFilterState(filters)}
+        onChange={handleDrawerChange}
         onClear={clearFilters}
-        categorias={categorias}
-        marcas={marcas}
+        categorias={drawerCategorias}
+        marcas={knownMarcas}
         hasActiveFilters={hasActiveFilters}
       />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
 
-        {/* Breadcrumb */}
+        {/* ── Breadcrumb ── */}
         <nav aria-label="Ruta de navegación" className="flex items-center gap-1.5 text-xs text-[#8A8A8E] mb-6">
-          <Link href="/store" className="hover:text-[#ED87B6] transition-colors">Inicio</Link>
+          <Link
+            href="/store"
+            className="hover:text-[#ED87B6] transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none rounded"
+          >
+            Inicio
+          </Link>
           <ChevronRight size={12} aria-hidden="true" />
-          <span className="text-[#1C1C1E] font-bold">Catálogo</span>
+          {filters.categoria ? (
+            <>
+              <Link
+                href="/store/catalogo"
+                className="hover:text-[#ED87B6] transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none rounded"
+              >
+                Catálogo
+              </Link>
+              <ChevronRight size={12} aria-hidden="true" />
+              <span className="text-[#1C1C1E] font-bold">{filters.categoria}</span>
+            </>
+          ) : (
+            <span className="text-[#1C1C1E] font-bold">Catálogo</span>
+          )}
         </nav>
 
-        {/* Page header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-black text-[#1C1C1E] mb-2">
-            {filters.categoria ? filters.categoria : 'Todo el Catálogo'}
-          </h1>
-          {!loading && (
-            <p className="text-sm text-[#8A8A8E]">
-              {products.length} {products.length === 1 ? 'producto' : 'productos'}
-              {hasActiveFilters && ' encontrados'}
-            </p>
-          )}
+        {/* ── Page header ── */}
+        <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-3xl font-black text-[#1C1C1E] mb-1">
+              {filters.categoria ? filters.categoria : 'Todo el Catálogo'}
+            </h1>
+            {!loading && (
+              <p className="text-sm text-[#8A8A8E]">
+                <span className="font-bold text-[#1C1C1E]">{filteredCount}</span>{' '}
+                {filteredCount === 1 ? 'producto encontrado' : 'productos encontrados'}
+              </p>
+            )}
+          </div>
+
+          {/* ── Sort dropdown ── */}
+          <div className="relative">
+            <label htmlFor="catalog-sort" className="sr-only">Ordenar por</label>
+            <div className="relative">
+              <select
+                id="catalog-sort"
+                value={filters.ordenar}
+                onChange={(e) => setFilter('ordenar', e.target.value)}
+                className="appearance-none pl-4 pr-9 py-2.5 border border-[#F0E0EC] rounded-2xl text-sm font-bold text-[#4A4A4A] bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-[#ED87B6] focus:border-transparent transition-all cursor-pointer"
+              >
+                {SORT_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+              <ChevronDown
+                size={14}
+                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[#8A8A8E]"
+                aria-hidden="true"
+              />
+            </div>
+          </div>
         </div>
 
-        {/* Search bar */}
-        <div className="flex gap-2 mb-6">
+        {/* ── Search bar ── */}
+        <div className="flex gap-2 mb-5">
           <div className="relative flex-1">
-            <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#8A8A8E]" aria-hidden="true" />
+            {loading && isSearchActive ? (
+              <Loader2
+                size={16}
+                className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#ED87B6] animate-spin"
+                aria-hidden="true"
+              />
+            ) : (
+              <Search
+                size={16}
+                className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#8A8A8E]"
+                aria-hidden="true"
+              />
+            )}
             <label htmlFor="catalog-search" className="sr-only">Buscar productos</label>
             <input
               id="catalog-search"
               type="search"
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && applySearch()}
-              placeholder="Buscar productos..."
-              className="w-full pl-10 pr-4 py-3 border border-[#F0E0EC] rounded-2xl text-sm text-[#1C1C1E] placeholder:text-[#8A8A8E] focus:outline-none focus:ring-2 focus:ring-[#ED87B6] focus:border-transparent bg-white shadow-sm transition-all"
+              value={filters.search}
+              onChange={(e) => setFilter('search', e.target.value)}
+              placeholder={loading && isSearchActive ? 'Buscando...' : 'Buscar productos...'}
+              className="w-full pl-10 pr-10 py-3 border border-[#F0E0EC] rounded-2xl text-sm text-[#1C1C1E] placeholder:text-[#8A8A8E] focus:outline-none focus:ring-2 focus:ring-[#ED87B6] focus:border-transparent bg-white shadow-sm transition-all"
+              aria-busy={loading && isSearchActive}
             />
-            {searchInput && (
+            {filters.search && (
               <button
-                onClick={() => { setSearchInput(''); handleFilterChange('search', ''); }}
+                onClick={() => clearFilter('search')}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8A8A8E] hover:text-[#ED87B6] transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none rounded-full p-0.5"
                 aria-label="Limpiar búsqueda"
               >
@@ -155,107 +278,110 @@ export default function CatalogoPage() {
               </button>
             )}
           </div>
-          <button
-            onClick={applySearch}
-            className="px-5 py-3 bg-[#ED87B6] hover:bg-[#E06FA3] text-white font-bold rounded-2xl text-sm transition-all shadow-md shadow-[#ED87B6]/20 focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:ring-offset-2 focus-visible:outline-none"
-          >
-            Buscar
-          </button>
+
           {/* Mobile filter button */}
           <button
             onClick={() => setDrawerOpen(true)}
             className="lg:hidden flex items-center gap-2 px-4 py-3 border-2 border-[#F0E0EC] hover:border-[#ED87B6] text-[#4A4A4A] hover:text-[#ED87B6] font-bold rounded-2xl text-sm transition-all focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none relative"
-            aria-label="Abrir filtros"
+            aria-label={`Abrir filtros${activeFilterCount > 0 ? ` (${activeFilterCount} activos)` : ''}`}
           >
             <SlidersHorizontal size={16} aria-hidden="true" />
             Filtros
-            {hasActiveFilters && (
-              <span className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-[#ED87B6] text-white text-[10px] font-black rounded-full flex items-center justify-center">
-                !
+            {activeFilterCount > 0 && (
+              <span
+                className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] bg-[#ED87B6] text-white text-[10px] font-black rounded-full flex items-center justify-center px-1"
+                aria-hidden="true"
+              >
+                {activeFilterCount}
               </span>
             )}
           </button>
         </div>
 
-        {/* Active filter chips */}
-        {hasActiveFilters && (
-          <div className="flex flex-wrap gap-2 mb-6" role="list" aria-label="Filtros activos">
-            {filters.categoria && (
+        {/* ── Active filter chips ── */}
+        {chips.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-5" role="list" aria-label="Filtros activos">
+            {chips.map((chip) => (
               <button
+                key={chip.key}
                 role="listitem"
-                onClick={() => handleFilterChange('categoria', '')}
+                onClick={() => clearFilter(chip.key)}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#FFF5FA] border border-[#ED87B6] text-[#ED87B6] text-xs font-bold rounded-full hover:bg-[#ED87B6] hover:text-white transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none"
+                aria-label={`Quitar filtro: ${chip.label}`}
               >
-                {filters.categoria} <X size={10} />
+                {chip.label}
+                <X size={10} aria-hidden="true" />
               </button>
-            )}
-            {filters.search && (
-              <button
-                role="listitem"
-                onClick={() => { handleFilterChange('search', ''); setSearchInput(''); }}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#FFF5FA] border border-[#ED87B6] text-[#ED87B6] text-xs font-bold rounded-full hover:bg-[#ED87B6] hover:text-white transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none"
-              >
-                {`"${filters.search}"`} <X size={10} />
-              </button>
-            )}
-            {filters.marca && (
-              <button
-                role="listitem"
-                onClick={() => handleFilterChange('marca', '')}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#FFF5FA] border border-[#ED87B6] text-[#ED87B6] text-xs font-bold rounded-full hover:bg-[#ED87B6] hover:text-white transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none"
-              >
-                {filters.marca} <X size={10} />
-              </button>
-            )}
+            ))}
             <button
               onClick={clearFilters}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[#8A8A8E] text-xs font-bold rounded-full hover:text-[#ED87B6] transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none"
+              aria-label="Limpiar todos los filtros"
             >
-              <RefreshCw size={10} /> Limpiar todo
+              <RefreshCw size={10} aria-hidden="true" />
+              Limpiar todo
             </button>
           </div>
         )}
 
+        {/* ── Main content: sidebar + grid ── */}
         <div className="flex gap-8">
 
           {/* ── Desktop sidebar ── */}
           <aside className="hidden lg:block w-60 flex-shrink-0" aria-label="Filtros de búsqueda">
             <div className="bg-white rounded-2xl border border-[#F0E0EC] p-5 space-y-6 sticky top-24 shadow-sm">
+
               <div className="flex items-center justify-between">
                 <h2 className="font-black text-[#1C1C1E] text-sm uppercase tracking-widest">Filtros</h2>
                 {hasActiveFilters && (
-                  <button onClick={clearFilters} className="text-xs font-bold text-[#ED87B6] hover:text-[#E06FA3] flex items-center gap-1 transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none rounded">
-                    <RefreshCw size={11} /> Limpiar
+                  <button
+                    onClick={clearFilters}
+                    className="flex items-center gap-1 text-xs font-bold text-[#ED87B6] hover:text-[#E06FA3] transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none rounded"
+                  >
+                    <RefreshCw size={11} aria-hidden="true" />
+                    Limpiar
                   </button>
                 )}
               </div>
 
               {/* Categorías */}
-              {categorias.length > 0 && (
+              {navNodes.length > 0 && (
                 <div>
                   <h3 className="text-xs font-black text-[#4A4A4A] uppercase tracking-widest mb-3">Categoría</h3>
                   <div className="space-y-0.5">
                     <button
-                      onClick={() => handleFilterChange('categoria', '')}
-                      className={`w-full text-left text-sm px-3 py-2 rounded-xl transition-colors ${filters.categoria === '' ? 'bg-[#FFF5FA] text-[#ED87B6] font-bold' : 'text-[#4A4A4A] hover:bg-[#FFF5FA] hover:text-[#ED87B6]'}`}
+                      onClick={() => clearFilter('categoria')}
+                      className={`w-full text-left text-sm px-3 py-2 rounded-xl transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none ${
+                        filters.categoria === ''
+                          ? 'bg-[#FFF5FA] text-[#ED87B6] font-bold'
+                          : 'text-[#4A4A4A] hover:bg-[#FFF5FA] hover:text-[#ED87B6]'
+                      }`}
                     >
                       Todas
                     </button>
-                    {categorias.map((cat) => (
-                      <div key={cat.nombre}>
+                    {navNodes.map((node) => (
+                      <div key={node.id}>
                         <button
-                          onClick={() => handleFilterChange('categoria', cat.nombre)}
-                          className={`w-full text-left text-sm px-3 py-2 rounded-xl font-medium transition-colors ${filters.categoria === cat.nombre ? 'bg-[#FFF5FA] text-[#ED87B6] font-bold' : 'text-[#4A4A4A] hover:bg-[#FFF5FA]'}`}
+                          onClick={() => setFilter('categoria', node.label)}
+                          className={`w-full text-left text-sm px-3 py-2 rounded-xl font-medium transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none ${
+                            filters.categoria === node.label
+                              ? 'bg-[#FFF5FA] text-[#ED87B6] font-bold'
+                              : 'text-[#4A4A4A] hover:bg-[#FFF5FA]'
+                          }`}
                         >
-                          {cat.nombre}
+                          {node.label}
                         </button>
-                        {cat.sub_categorias?.map((sub: string) => (
+                        {node.children.map((child) => (
                           <button
-                            key={sub}
-                            onClick={() => handleFilterChange('categoria', sub)}
-                            className={`w-full text-left text-xs px-5 py-1.5 rounded-xl transition-colors ${filters.categoria === sub ? 'text-[#ED87B6] font-bold' : 'text-[#8A8A8E] hover:text-[#ED87B6]'}`}
+                            key={child.id}
+                            onClick={() => setFilter('categoria', child.label)}
+                            className={`w-full text-left text-xs px-5 py-1.5 rounded-xl transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none ${
+                              filters.categoria === child.label
+                                ? 'text-[#ED87B6] font-bold'
+                                : 'text-[#8A8A8E] hover:text-[#ED87B6]'
+                            }`}
                           >
-                            → {sub}
+                            → {child.label}
                           </button>
                         ))}
                       </div>
@@ -271,7 +397,7 @@ export default function CatalogoPage() {
                   <input
                     type="number"
                     value={filters.precioMin}
-                    onChange={(e) => handleFilterChange('precioMin', e.target.value)}
+                    onChange={(e) => setFilter('precioMin', e.target.value)}
                     placeholder="Min"
                     aria-label="Precio mínimo"
                     className="w-1/2 py-2 px-3 text-sm border border-[#F0E0EC] rounded-xl focus:outline-none focus:ring-2 focus:ring-[#ED87B6] focus:border-transparent transition-all"
@@ -279,7 +405,7 @@ export default function CatalogoPage() {
                   <input
                     type="number"
                     value={filters.precioMax}
-                    onChange={(e) => handleFilterChange('precioMax', e.target.value)}
+                    onChange={(e) => setFilter('precioMax', e.target.value)}
                     placeholder="Max"
                     aria-label="Precio máximo"
                     className="w-1/2 py-2 px-3 text-sm border border-[#F0E0EC] rounded-xl focus:outline-none focus:ring-2 focus:ring-[#ED87B6] focus:border-transparent transition-all"
@@ -287,14 +413,33 @@ export default function CatalogoPage() {
                 </div>
               </div>
 
-              {/* Marcas */}
-              {marcas.length > 0 && (
+              {/* Marcas (derived from products across all pages) */}
+              {knownMarcas.length > 0 && (
                 <div>
                   <h3 className="text-xs font-black text-[#4A4A4A] uppercase tracking-widest mb-3">Marca</h3>
                   <div className="space-y-0.5 max-h-40 overflow-y-auto">
-                    <button onClick={() => handleFilterChange('marca', '')} className={`block w-full text-left text-sm px-3 py-2 rounded-xl transition-colors ${filters.marca === '' ? 'bg-[#FFF5FA] text-[#ED87B6] font-bold' : 'text-[#4A4A4A] hover:bg-[#FFF5FA]'}`}>Todas</button>
-                    {marcas.map((m) => (
-                      <button key={m} onClick={() => handleFilterChange('marca', m)} className={`block w-full text-left text-sm px-3 py-2 rounded-xl transition-colors ${filters.marca === m ? 'bg-[#FFF5FA] text-[#ED87B6] font-bold' : 'text-[#4A4A4A] hover:bg-[#FFF5FA]'}`}>{m}</button>
+                    <button
+                      onClick={() => clearFilter('marca')}
+                      className={`block w-full text-left text-sm px-3 py-2 rounded-xl transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none ${
+                        filters.marca === ''
+                          ? 'bg-[#FFF5FA] text-[#ED87B6] font-bold'
+                          : 'text-[#4A4A4A] hover:bg-[#FFF5FA]'
+                      }`}
+                    >
+                      Todas
+                    </button>
+                    {knownMarcas.map((m) => (
+                      <button
+                        key={m}
+                        onClick={() => setFilter('marca', m)}
+                        className={`block w-full text-left text-sm px-3 py-2 rounded-xl transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none ${
+                          filters.marca === m
+                            ? 'bg-[#FFF5FA] text-[#ED87B6] font-bold'
+                            : 'text-[#4A4A4A] hover:bg-[#FFF5FA]'
+                        }`}
+                      >
+                        {m}
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -304,11 +449,26 @@ export default function CatalogoPage() {
               <div>
                 <h3 className="text-xs font-black text-[#4A4A4A] uppercase tracking-widest mb-3">Disponibilidad</h3>
                 <div className="space-y-0.5">
-                  {[{ value: '', label: 'Todas' }, { value: 'ENTREGA_INMEDIATA', label: 'Entrega inmediata' }, { value: 'POR_PEDIDO', label: 'Por pedido' }].map(({ value, label }) => (
-                    <button key={value} onClick={() => handleFilterChange('modalidad', value)} className={`block w-full text-left text-sm px-3 py-2 rounded-xl transition-colors ${filters.modalidad === value ? 'bg-[#FFF5FA] text-[#ED87B6] font-bold' : 'text-[#4A4A4A] hover:bg-[#FFF5FA]'}`}>{label}</button>
+                  {[
+                    { value: '',                  label: 'Todas' },
+                    { value: 'ENTREGA_INMEDIATA', label: 'Entrega inmediata' },
+                    { value: 'POR_PEDIDO',        label: 'Por pedido' },
+                  ].map(({ value, label }) => (
+                    <button
+                      key={value}
+                      onClick={() => setFilter('modalidad', value)}
+                      className={`block w-full text-left text-sm px-3 py-2 rounded-xl transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none ${
+                        filters.modalidad === value
+                          ? 'bg-[#FFF5FA] text-[#ED87B6] font-bold'
+                          : 'text-[#4A4A4A] hover:bg-[#FFF5FA]'
+                      }`}
+                    >
+                      {label}
+                    </button>
                   ))}
                 </div>
               </div>
+
             </div>
           </aside>
 
@@ -317,23 +477,65 @@ export default function CatalogoPage() {
             {loading ? (
               <ProductGridSkeleton count={12} cols="grid-cols-2 md:grid-cols-3" />
             ) : error ? (
-              <ErrorState retry={loadProducts} />
+              <ErrorState retry={isRetryable ? retry : undefined} />
             ) : products.length === 0 ? (
               <EmptyState
                 title="No encontramos productos con estos filtros"
-                description="Prueba con otros criterios o limpia los filtros."
+                description="Prueba con otros criterios o limpia los filtros para ver todo el catálogo."
                 action={
-                  <button onClick={clearFilters} className="px-6 py-2.5 bg-[#ED87B6] text-white font-bold rounded-full text-sm hover:bg-[#E06FA3] transition-colors">
+                  <button
+                    onClick={clearFilters}
+                    className="px-6 py-2.5 bg-[#ED87B6] text-white font-bold rounded-full text-sm hover:bg-[#E06FA3] transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:ring-offset-2 focus-visible:outline-none"
+                  >
                     Limpiar filtros
                   </button>
                 }
               />
             ) : (
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4 lg:gap-6">
-                {products.map((p) => (
-                  <ProductCard key={p.id} product={p} onAddToCart={addToCart} />
-                ))}
-              </div>
+              <>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4 lg:gap-6">
+                  {products.map((p) => (
+                    <ProductCard key={p.id} product={p} onAddToCart={addToCart} />
+                  ))}
+                </div>
+
+                {/* ── Pagination ── */}
+                {/* Paginación client-side temporal — ver WEB2A_GAPS_BACKEND.md GAP-001 */}
+                {pagination.totalPages > 1 && (
+                  <nav
+                    className="mt-10 flex items-center justify-center gap-3"
+                    aria-label="Paginación del catálogo"
+                  >
+                    <button
+                      onClick={() => setPage(pagination.page - 1)}
+                      disabled={pagination.page <= 1}
+                      className="flex items-center gap-1.5 px-4 py-2.5 rounded-2xl border-2 border-[#F0E0EC] text-sm font-bold text-[#4A4A4A] hover:border-[#ED87B6] hover:text-[#ED87B6] transition-all focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[#F0E0EC] disabled:hover:text-[#4A4A4A]"
+                      aria-label="Página anterior"
+                    >
+                      <ChevronLeft size={16} aria-hidden="true" />
+                      Anterior
+                    </button>
+
+                    <span
+                      className="px-5 py-2.5 rounded-2xl bg-[#FFF5FA] border border-[#F6BAD6] text-sm font-black text-[#ED87B6] select-none"
+                      aria-current="page"
+                      aria-live="polite"
+                    >
+                      Página {pagination.page} de {pagination.totalPages}
+                    </span>
+
+                    <button
+                      onClick={() => setPage(pagination.page + 1)}
+                      disabled={pagination.page >= pagination.totalPages}
+                      className="flex items-center gap-1.5 px-4 py-2.5 rounded-2xl border-2 border-[#F0E0EC] text-sm font-bold text-[#4A4A4A] hover:border-[#ED87B6] hover:text-[#ED87B6] transition-all focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[#F0E0EC] disabled:hover:text-[#4A4A4A]"
+                      aria-label="Página siguiente"
+                    >
+                      Siguiente
+                      <ChevronRight size={16} aria-hidden="true" />
+                    </button>
+                  </nav>
+                )}
+              </>
             )}
           </div>
         </div>

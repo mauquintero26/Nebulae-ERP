@@ -1,19 +1,12 @@
 "use client";
 
 /**
- * Store Layout — WEB-1
+ * Store Layout — WEB-2A
  *
- * Cambios respecto a la versión anterior:
- * - Logo dinámico desde StoreLogo (reemplazable sin redeploy)
- * - Navegación desktop desde API (mega-menú con jerarquía)
- * - Menú móvil completo con subcategorías
- * - Carrito con updateQty + clearCart
- * - persistencia de carrito en localStorage
- * - Footer compartido (StoreFooter) — sin duplicado en page.tsx
- * - Paleta Nebulae aplicada (#ED87B6, #B5E1F6, #C2D987, etc.)
- * - Focus visible en todos los controles interactivos
- * - Soporta prefers-reduced-motion en animaciones
- * - URL normalizada: /store/catalogo (sin tilde)
+ * Cambios respecto a WEB-1:
+ * - Migrado a store-api (listCategorias, getSiteConfig) — no más raw fetch()
+ * - Errores tipados y observables (isStoreError)
+ * - formatCOP centralizado en store-api/query
  */
 
 import {
@@ -26,18 +19,12 @@ import {
 import { StoreLogo }  from '@/components/store/StoreLogo';
 import { StoreFooter } from '@/components/store/StoreFooter';
 import { NavTreeItem } from '@/components/store/NavTreeItem';
-import type { CartItem, CartContextType, RawCategoria, NavNode } from '@/types/store';
-import { normalizeCategories } from '@/lib/categoryTree';
+import type { CartItem, CartContextType, NavNode } from '@/types/store';
+import { listCategorias, getSiteConfig, formatCOP, isStoreError } from '@/lib/store-api';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1';
 const CART_STORAGE_KEY = 'nebulae_cart_v1';
-
-const formatCOP = (v: number) =>
-  new Intl.NumberFormat('es-CO', {
-    style: 'currency', currency: 'COP', minimumFractionDigits: 0,
-  }).format(v);
 
 // ─── Cart Context ─────────────────────────────────────────────────────────────
 
@@ -97,37 +84,32 @@ export default function StoreLayout({ children }: { children: React.ReactNode })
     if (hydrated) saveCart(items);
   }, [items, hydrated]);
 
-  // ── Fetch categories and site config ──
+  // ── Fetch categories and site config via store-api ──
   useEffect(() => {
+    const controller = new AbortController();
+
     // Categories — non-fatal: nav degrades to empty state
-    fetch(`${API}/ecommerce/categorias`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((data) => {
-        const raw: RawCategoria[] = Array.isArray(data) ? data : (data?.data ?? []);
-        setNavNodes(normalizeCategories(raw));
+    listCategorias({ signal: controller.signal })
+      .then((nodes) => {
+        setNavNodes(nodes);
       })
       .catch((err: unknown) => {
-        // Navigation degrades gracefully: header and cart remain functional
-        console.warn('[Nebulae] Categorías no disponibles:', err instanceof Error ? err.message : String(err));
+        if (isStoreError(err) && err.isAborted) return;
+        console.warn('[Nebulae] Categorías no disponibles:', isStoreError(err) ? err.publicMessage : String(err));
       });
 
     // Site config (logo + contact) — non-fatal: falls back to /logo.png
-    fetch(`${API}/ecommerce/web-builder/config`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
+    getSiteConfig({ signal: controller.signal })
       .then((cfg) => {
-        const data = cfg?.data ?? cfg;
-        if (data?.logo_url) setLogoUrl(data.logo_url);
-        if (data?.contact)  setContactInfo(data.contact);
+        if (cfg?.logo_url) setLogoUrl(cfg.logo_url);
+        if (cfg?.contact)  setContactInfo(cfg.contact);
       })
       .catch((err: unknown) => {
-        console.warn('[Nebulae] Config no disponible:', err instanceof Error ? err.message : String(err));
+        if (isStoreError(err) && err.isAborted) return;
+        console.warn('[Nebulae] Config no disponible:', isStoreError(err) ? err.publicMessage : String(err));
       });
+
+    return () => { controller.abort(); };
   }, []);
 
   // ─── Cart operations ─────────────────────────────────────────────────────────

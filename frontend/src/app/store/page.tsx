@@ -11,16 +11,16 @@
  * - Reintento controlado en caso de falla de red
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { ArrowRight, Sparkles, Package, RefreshCw } from 'lucide-react';
 import { useCart } from './layout';
 import { ProductCard } from '@/components/store/ProductCard';
 import { ProductGridSkeleton, EmptyState, ErrorState } from '@/components/store/States';
-import type { Product, WebConfig, NavNode } from '@/types/store';
-import { normalizeCategories } from '@/lib/categoryTree';
+import type { WebConfig, NavNode } from '@/types/store';
+import type { NormalizedProduct } from '@/lib/store-api';
+import { listProductos, listCategorias, getSiteConfig, isStoreError } from '@/lib/store-api';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1';
 
 // ── Fallback texts — intentionally general, NOT maternal/bebés ──
 const FALLBACK_TITLE   = 'Productos para ti y toda tu familia';
@@ -43,70 +43,64 @@ export default function StoreHomePage() {
   const { addToCart } = useCart();
 
   const [config, setConfig]         = useState<WebConfig>({});
-  const [products, setProducts]     = useState<Product[]>([]);
+  const [products, setProducts]     = useState<NormalizedProduct[]>([]);
   const [featuredCats, setFeaturedCats] = useState<NavNode[]>([]);
   const [loading, setLoading]       = useState(true);
   const [prodError, setProdError]   = useState(false);
   const [configError, setConfigError] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
 
+  const abortRef = useRef<AbortController | null>(null);
+
   const fetchData = useCallback(() => {
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setLoading(true);
     setProdError(false);
     setConfigError(false);
 
-    // Config fetch — degraded gracefully, no hard failure
-    fetch(`${API}/ecommerce/web-builder/config`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`Config ${r.status}`);
-        return r.json();
-      })
+    // Site config — non-fatal: fallbacks in place
+    getSiteConfig({ signal: controller.signal })
       .then((cfg) => {
-        const data: WebConfig = cfg?.data ?? cfg ?? {};
-        setConfig(data);
+        // Merge BackendWebConfig into WebConfig shape
+        setConfig(cfg as unknown as WebConfig);
       })
       .catch((err: unknown) => {
-        // Config failure is non-fatal: store still functions
-        console.warn('[Nebulae] Config no disponible:', err instanceof Error ? err.message : String(err));
+        if (isStoreError(err) && err.isAborted) return;
+        console.warn('[Nebulae] Config no disponible:', isStoreError(err) ? err.publicMessage : String(err));
         setConfigError(true);
       });
 
-    // Categories fetch — non-fatal failure
-    fetch(`${API}/ecommerce/categorias`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`Categorias ${r.status}`);
-        return r.json();
-      })
-      .then((data) => {
-        const raw = Array.isArray(data) ? data : (data?.data ?? []);
-        const nodes = normalizeCategories(raw);
+    // Categories — non-fatal: featured section degrades gracefully
+    listCategorias({ signal: controller.signal })
+      .then((nodes) => {
         setFeaturedCats(nodes.slice(0, 6));
       })
       .catch((err: unknown) => {
-        console.warn('[Nebulae] Categorías no disponibles:', err instanceof Error ? err.message : String(err));
-        // Featured categories section will show empty state — navigation still works
+        if (isStoreError(err) && err.isAborted) return;
+        console.warn('[Nebulae] Categorías no disponibles:', isStoreError(err) ? err.publicMessage : String(err));
       });
 
-    // Products fetch — primary content
-    fetch(`${API}/ecommerce/catalogo?publicado=true&limit=8`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`Catalogo ${r.status}`);
-        return r.json();
-      })
-      .then((prods) => {
-        const list: Product[] = Array.isArray(prods) ? prods : (prods?.data ?? prods?.items ?? []);
-        setProducts(list);
+    // Products — primary content, shows error state on failure
+    listProductos({ publicado: true, limit: 8 }, { signal: controller.signal })
+      .then(({ products: prods }) => {
+        setProducts(prods);
         setLoading(false);
       })
       .catch((err: unknown) => {
-        console.warn('[Nebulae] Productos no disponibles:', err instanceof Error ? err.message : String(err));
+        if (isStoreError(err) && err.isAborted) return;
+        console.warn('[Nebulae] Productos no disponibles:', isStoreError(err) ? err.publicMessage : String(err));
         setProdError(true);
         setLoading(false);
       });
+
+    return () => { controller.abort(); };
   }, [retryCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* eslint-disable react-hooks/set-state-in-effect */
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => { return fetchData(); }, [fetchData]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // ── Config-derived values with neutral fallbacks ──
