@@ -17,7 +17,7 @@
  */
 
 import {
-  ShoppingBag, X, Menu, Search, ChevronDown, ChevronRight, ArrowRight,
+  ShoppingBag, X, Menu, Search, ChevronDown, ArrowRight,
 } from 'lucide-react';
 import Link from 'next/link';
 import {
@@ -25,9 +25,9 @@ import {
 } from 'react';
 import { StoreLogo }  from '@/components/store/StoreLogo';
 import { StoreFooter } from '@/components/store/StoreFooter';
-import type { CartItem, CartContextType, RawCategoria } from '@/types/store';
+import { NavTreeItem } from '@/components/store/NavTreeItem';
+import type { CartItem, CartContextType, RawCategoria, NavNode } from '@/types/store';
 import { normalizeCategories } from '@/lib/categoryTree';
-import type { NavNode }  from '@/types/store';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -82,7 +82,6 @@ export default function StoreLayout({ children }: { children: React.ReactNode })
   const [contactInfo, setContactInfo]   = useState<{ phone?: string; whatsapp?: string; email?: string; address?: string }>({});
   const [megaOpen, setMegaOpen]         = useState(false);
   const [mobileOpen, setMobileOpen]     = useState(false);
-  const [mobileExpanded, setMobileExpanded] = useState<Record<string, boolean>>({});
   const megaTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Hydrate cart from localStorage (runs once, reading external storage) ──
@@ -100,24 +99,35 @@ export default function StoreLayout({ children }: { children: React.ReactNode })
 
   // ── Fetch categories and site config ──
   useEffect(() => {
-    // Categories
+    // Categories — non-fatal: nav degrades to empty state
     fetch(`${API}/ecommerce/categorias`)
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((data) => {
         const raw: RawCategoria[] = Array.isArray(data) ? data : (data?.data ?? []);
         setNavNodes(normalizeCategories(raw));
       })
-      .catch(() => {});
+      .catch((err: unknown) => {
+        // Navigation degrades gracefully: header and cart remain functional
+        console.warn('[Nebulae] Categorías no disponibles:', err instanceof Error ? err.message : String(err));
+      });
 
-    // Site config (logo + contact)
+    // Site config (logo + contact) — non-fatal: falls back to /logo.png
     fetch(`${API}/ecommerce/web-builder/config`)
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((cfg) => {
         const data = cfg?.data ?? cfg;
         if (data?.logo_url) setLogoUrl(data.logo_url);
         if (data?.contact)  setContactInfo(data.contact);
       })
-      .catch(() => {});
+      .catch((err: unknown) => {
+        console.warn('[Nebulae] Config no disponible:', err instanceof Error ? err.message : String(err));
+      });
   }, []);
 
   // ─── Cart operations ─────────────────────────────────────────────────────────
@@ -165,10 +175,6 @@ export default function StoreLayout({ children }: { children: React.ReactNode })
     megaTimer.current = setTimeout(() => setMegaOpen(false), 150);
   };
 
-  const toggleMobileCategory = (id: string) => {
-    setMobileExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
-  };
-
   return (
     <CartContext.Provider value={{
       items, addToCart, removeFromCart, updateQty, clearCart,
@@ -178,7 +184,7 @@ export default function StoreLayout({ children }: { children: React.ReactNode })
 
         {/* ── Top bar ── */}
         <div className="hidden sm:block bg-[#FFF5FA] border-b border-[#F0E0EC] text-xs text-center text-[#8A8A8E] py-1.5 px-4">
-          ✨ Ropa maternal y para bebé con diseño y calidad — Envíos a toda Colombia
+          Productos seleccionados para toda la familia — Envíos a toda Colombia
         </div>
 
         {/* ── Header ── */}
@@ -237,25 +243,13 @@ export default function StoreLayout({ children }: { children: React.ReactNode })
                       <div className="grid gap-6" style={{ gridTemplateColumns: `repeat(${Math.min(navNodes.length, 4)}, 1fr)` }}>
                         {navNodes.map((node) => (
                           <div key={node.id}>
-                            <Link
-                              href={node.href}
-                              role="menuitem"
-                              className="block font-black text-[#1C1C1E] text-xs uppercase tracking-wider hover:text-[#ED87B6] transition-colors mb-2 focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none rounded"
-                              onClick={() => setMegaOpen(false)}
-                            >
-                              {node.label}
-                            </Link>
-                            {node.children.map((child) => (
-                              <Link
-                                key={child.id}
-                                href={child.href}
-                                role="menuitem"
-                                className="block text-xs text-[#8A8A8E] hover:text-[#ED87B6] transition-colors py-1 pl-2 border-l-2 border-transparent hover:border-[#ED87B6] focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none rounded"
-                                onClick={() => setMegaOpen(false)}
-                              >
-                                {child.label}
-                              </Link>
-                            ))}
+                            {/* NavTreeItem renders the node and all its children recursively */}
+                            <NavTreeItem
+                              node={node}
+                              mode="desktop"
+                              depth={0}
+                              onNavigate={() => setMegaOpen(false)}
+                            />
                           </div>
                         ))}
                         {/* "Ver todo" footer */}
@@ -324,52 +318,20 @@ export default function StoreLayout({ children }: { children: React.ReactNode })
                   Inicio
                 </Link>
 
-                {/* Catálogo with expandable subcategories */}
-                <div>
-                  <div className="flex items-center">
-                    <Link
-                      href="/store/catalogo"
-                      className="flex-1 block px-3 py-2.5 font-bold text-[#1C1C1E] hover:text-[#ED87B6] hover:bg-[#FFF5FA] rounded-xl transition-colors"
-                      onClick={() => setMobileOpen(false)}
-                    >
-                      Catálogo
-                    </Link>
-                    {navNodes.length > 0 && (
-                      <button
-                        onClick={() => toggleMobileCategory('catalogo')}
-                        aria-label={mobileExpanded.catalogo ? 'Colapsar categorías' : 'Expandir categorías'}
-                        className="p-2 rounded-xl hover:bg-[#FFF5FA] text-[#8A8A8E] hover:text-[#ED87B6] transition-colors"
-                      >
-                        <ChevronRight size={16} className={`transition-transform ${mobileExpanded.catalogo ? 'rotate-90' : ''}`} />
-                      </button>
-                    )}
+                {/* Categorías de navegación — recursivas, desde API */}
+                {navNodes.length > 0 && (
+                  <div className="border-t border-[#F0E0EC] pt-1">
+                    {navNodes.map((node) => (
+                      <NavTreeItem
+                        key={node.id}
+                        node={node}
+                        mode="mobile"
+                        depth={0}
+                        onNavigate={() => setMobileOpen(false)}
+                      />
+                    ))}
                   </div>
-                  {mobileExpanded.catalogo && navNodes.length > 0 && (
-                    <div className="pl-4 pb-2 space-y-0.5">
-                      {navNodes.map((node) => (
-                        <div key={node.id}>
-                          <Link
-                            href={node.href}
-                            className="block px-3 py-2 text-sm font-bold text-[#4A4A4A] hover:text-[#ED87B6] hover:bg-[#FFF5FA] rounded-xl transition-colors"
-                            onClick={() => setMobileOpen(false)}
-                          >
-                            {node.label}
-                          </Link>
-                          {node.children.map((child) => (
-                            <Link
-                              key={child.id}
-                              href={child.href}
-                              className="block px-5 py-1.5 text-xs text-[#8A8A8E] hover:text-[#ED87B6] transition-colors"
-                              onClick={() => setMobileOpen(false)}
-                            >
-                              → {child.label}
-                            </Link>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                )}
 
                 <Link href="/store/blog" className="block px-3 py-2.5 font-bold text-[#1C1C1E] hover:text-[#ED87B6] hover:bg-[#FFF5FA] rounded-xl transition-colors" onClick={() => setMobileOpen(false)}>
                   Blog

@@ -1,31 +1,55 @@
 /**
  * Nebulae Storefront — Shared TypeScript Types
  * Source of truth for all store-facing data shapes.
+ *
+ * WEB-1 (rev 2): RawCategoria extended for arbitrary-depth hierarchy and
+ * flat parent_id assembly. RawSubCategoria is now fully compatible with
+ * RawCategoria (same fields) to enable uniform recursive processing.
  */
 
 // ─── Category / Navigation ────────────────────────────────────────────────────
 
-/** Raw shape returned by GET /api/v1/ecommerce/categorias */
+/**
+ * Raw shape returned by GET /api/v1/ecommerce/categorias.
+ *
+ * Supports three API response shapes simultaneously:
+ *   1. Legacy string-only sub_categorias: ["Niño", "Niña"]
+ *   2. Object sub_categorias with minimal fields
+ *   3. Full hierarchical objects with children, parent_id, id, slug
+ *   4. Flat lists related by parent_id (assembled by normalizeCategories)
+ */
 export type RawCategoria = {
-  id?: string | number;
+  id?: string | number | null;
   nombre: string;
-  slug?: string;
-  sub_categorias?: string[] | RawSubCategoria[];
-  orden?: number;
-  activa?: boolean;
-  visible_en_menu?: boolean;
+  slug?: string | null;
+  /** Legacy: string[] or richer object sub_categorias */
+  sub_categorias?: (string | RawSubCategoria)[];
+  /** Full recursive children — supersedes sub_categorias when present */
+  children?: RawCategoria[];
+  orden?: number | null;
+  activa?: boolean | null;
+  visible_en_menu?: boolean | null;
+  /** Flat-list parent reference; used by normalizeCategories to build tree */
   parent_id?: string | number | null;
 };
 
+/**
+ * A subcategory node in the API response.
+ * May itself carry children for 3+ level hierarchies.
+ */
 export type RawSubCategoria = {
-  id?: string | number;
+  id?: string | number | null;
   nombre: string;
-  slug?: string;
-  orden?: number;
-  activa?: boolean;
+  slug?: string | null;
+  orden?: number | null;
+  activa?: boolean | null;
+  visible_en_menu?: boolean | null;
+  /** Nested children for ≥3 level support */
+  children?: RawSubCategoria[];
+  sub_categorias?: (string | RawSubCategoria)[];
 };
 
-/** Normalized tree node used by the frontend */
+/** Normalized tree node used by the frontend — depth-independent */
 export type NavNode = {
   id: string;
   label: string;
@@ -105,6 +129,18 @@ export type CartContextType = {
 
 // ─── Site Config (Web Builder) ────────────────────────────────────────────────
 
+/**
+ * A featured category entry from web builder config.
+ * Allows the admin to pin specific categories on the home page.
+ */
+export type FeaturedCategory = {
+  /** Stable category slug from the ERP */
+  slug: string;
+  label: string;
+  emoji?: string;
+  href?: string;
+};
+
 export type WebConfig = {
   hero?: {
     title?: string;
@@ -113,6 +149,8 @@ export type WebConfig = {
     cta_href?: string;
     bg_image?: string;
     badge_text?: string;
+    /** Informational bar displayed above / below hero */
+    info_bar?: string;
   };
   contact?: {
     phone?: string;
@@ -132,6 +170,8 @@ export type WebConfig = {
     default_title?: string;
     default_description?: string;
   };
+  /** Pinned categories to highlight on the home page */
+  featured_categories?: FeaturedCategory[];
 };
 
 // ─── Availability ─────────────────────────────────────────────────────────────

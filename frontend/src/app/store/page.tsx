@@ -1,72 +1,148 @@
 "use client";
 
 /**
- * Store Home — WEB-1
+ * Store Home — WEB-1 (rev 2)
  *
- * Cambios respecto a la versión anterior:
- * - Usa ProductCard unificado
- * - URL de API normalizada: /ecommerce/catalogo (sin tilde ni mayúscula)
- * - Hero muestra logo real, paleta Nebulae pastel
- * - Footer eliminado (ahora en StoreLayout)
- * - Colores actualizados a paleta Nebulae
- * - Skeleton mejorado
+ * Changes:
+ * - Categorías destacadas ahora vienen de la API (no hardcodeadas)
+ * - Textos del hero son reemplazables vía configuración; fallback neutral/general
+ * - Barra informativa (info_bar) configurable
+ * - Errores manejados con estado visible — no .catch(() => {})
+ * - Reintento controlado en caso de falla de red
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { ArrowRight, Sparkles, Package } from 'lucide-react';
+import { ArrowRight, Sparkles, Package, RefreshCw } from 'lucide-react';
 import { useCart } from './layout';
 import { ProductCard } from '@/components/store/ProductCard';
-import { ProductGridSkeleton, EmptyState } from '@/components/store/States';
-import type { Product, WebConfig } from '@/types/store';
+import { ProductGridSkeleton, EmptyState, ErrorState } from '@/components/store/States';
+import type { Product, WebConfig, NavNode } from '@/types/store';
+import { normalizeCategories } from '@/lib/categoryTree';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1';
 
+// ── Fallback texts — intentionally general, NOT maternal/bebés ──
+const FALLBACK_TITLE   = 'Productos para ti y toda tu familia';
+const FALLBACK_SUBTITLE = 'Compra en línea productos por pedido y de entrega inmediata.';
+const FALLBACK_CTA     = 'Explorar Catálogo';
+const FALLBACK_BADGE   = '✨ Nueva Colección 2026';
+const FALLBACK_INFO    = 'Productos seleccionados para toda la familia — Envíos a toda Colombia';
+
+// ── Category card colors (cycling palette) ──
+const PALETTE_COLORS = [
+  { bg: 'bg-[#F6BAD6]', text: 'text-[#9B2461]' },
+  { bg: 'bg-[#B5E1F6]', text: 'text-[#1A5F7A]' },
+  { bg: 'bg-[#D1BADB]', text: 'text-[#5B3478]' },
+  { bg: 'bg-[#C2D987]', text: 'text-[#3A5A0F]' },
+  { bg: 'bg-[#FFEE83]', text: 'text-[#7A6200]' },
+  { bg: 'bg-[#F9BF92]', text: 'text-[#8B4500]' },
+];
+
 export default function StoreHomePage() {
   const { addToCart } = useCart();
-  const [config, setConfig]   = useState<WebConfig>({});
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState(false);
 
-  useEffect(() => {
-    Promise.all([
-      fetch(`${API}/ecommerce/web-builder/config`).then((r) => r.json()).catch(() => ({})),
-      fetch(`${API}/ecommerce/catalogo?publicado=true&limit=8`).then((r) => r.json()).catch(() => null),
-    ]).then(([cfg, prods]) => {
-      const data = cfg?.data ?? cfg;
-      setConfig(data || {});
-      if (prods === null) {
-        setError(true);
-      } else {
-        const list = Array.isArray(prods) ? prods : (prods?.data ?? prods?.items ?? []);
+  const [config, setConfig]         = useState<WebConfig>({});
+  const [products, setProducts]     = useState<Product[]>([]);
+  const [featuredCats, setFeaturedCats] = useState<NavNode[]>([]);
+  const [loading, setLoading]       = useState(true);
+  const [prodError, setProdError]   = useState(false);
+  const [configError, setConfigError] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
+
+  const fetchData = useCallback(() => {
+    setLoading(true);
+    setProdError(false);
+    setConfigError(false);
+
+    // Config fetch — degraded gracefully, no hard failure
+    fetch(`${API}/ecommerce/web-builder/config`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`Config ${r.status}`);
+        return r.json();
+      })
+      .then((cfg) => {
+        const data: WebConfig = cfg?.data ?? cfg ?? {};
+        setConfig(data);
+      })
+      .catch((err: unknown) => {
+        // Config failure is non-fatal: store still functions
+        console.warn('[Nebulae] Config no disponible:', err instanceof Error ? err.message : String(err));
+        setConfigError(true);
+      });
+
+    // Categories fetch — non-fatal failure
+    fetch(`${API}/ecommerce/categorias`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`Categorias ${r.status}`);
+        return r.json();
+      })
+      .then((data) => {
+        const raw = Array.isArray(data) ? data : (data?.data ?? []);
+        const nodes = normalizeCategories(raw);
+        setFeaturedCats(nodes.slice(0, 6));
+      })
+      .catch((err: unknown) => {
+        console.warn('[Nebulae] Categorías no disponibles:', err instanceof Error ? err.message : String(err));
+        // Featured categories section will show empty state — navigation still works
+      });
+
+    // Products fetch — primary content
+    fetch(`${API}/ecommerce/catalogo?publicado=true&limit=8`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`Catalogo ${r.status}`);
+        return r.json();
+      })
+      .then((prods) => {
+        const list: Product[] = Array.isArray(prods) ? prods : (prods?.data ?? prods?.items ?? []);
         setProducts(list);
-      }
-      setLoading(false);
-    });
-  }, []);
+        setLoading(false);
+      })
+      .catch((err: unknown) => {
+        console.warn('[Nebulae] Productos no disponibles:', err instanceof Error ? err.message : String(err));
+        setProdError(true);
+        setLoading(false);
+      });
+  }, [retryCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const logoUrl     = config?.logo_url;
-  const heroTitle   = config?.hero?.title    ?? 'Comodidad que se adapta a ti.';
-  const heroSub     = config?.hero?.subtitle ?? 'Ropa maternal y para bebé con diseño y calidad.';
-  const heroCta     = config?.hero?.cta_text ?? 'Explorar Colección';
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => { fetchData(); }, [fetchData]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  // ── Config-derived values with neutral fallbacks ──
+  const heroTitle   = config?.hero?.title    ?? FALLBACK_TITLE;
+  const heroSub     = config?.hero?.subtitle ?? FALLBACK_SUBTITLE;
+  const heroCta     = config?.hero?.cta_text ?? FALLBACK_CTA;
   const heroBg      = config?.hero?.bg_image;
-  const badgeText   = config?.hero?.badge_text ?? '✨ Nueva Colección 2026';
+  const badgeText   = config?.hero?.badge_text ?? FALLBACK_BADGE;
+  const infoBar     = config?.hero?.info_bar ?? FALLBACK_INFO;
+
+  // ── Featured categories: prefer config override, else use API nodes ──
+  const configFeatured = config?.featured_categories;
+  const showApiCats = !configFeatured && featuredCats.length > 0;
 
   return (
     <div>
+      {/* ── Info bar ── */}
+      {infoBar && (
+        <div
+          className="w-full bg-[#1C1C1E] text-white text-xs font-bold text-center py-2 px-4 tracking-wide"
+          role="note"
+          aria-label="Información de envío"
+        >
+          {infoBar}
+        </div>
+      )}
+
       {/* ── Hero ── */}
       <section aria-label="Banner principal" className="relative w-full min-h-[70vh] overflow-hidden">
-        {/* Background */}
         {heroBg ? (
           <img src={heroBg} alt="" aria-hidden="true" className="absolute inset-0 w-full h-full object-cover" />
         ) : (
           <div className="absolute inset-0 bg-gradient-to-br from-[#F6BAD6] via-[#D1BADB] to-[#B5E1F6]" aria-hidden="true" />
         )}
-        {/* Overlay */}
         <div className="absolute inset-0 bg-white/20" aria-hidden="true" />
 
-        {/* Content */}
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-full min-h-[70vh] flex flex-col items-start justify-center py-20">
           {badgeText && (
             <span className="inline-flex items-center gap-2 bg-white/80 backdrop-blur-sm text-[#ED87B6] font-black text-xs tracking-wider px-4 py-2 rounded-full mb-6 shadow-sm">
@@ -82,7 +158,7 @@ export default function StoreHomePage() {
           </p>
           <div className="flex flex-wrap gap-3">
             <Link
-              href="/store/catalogo"
+              href={config?.hero?.cta_href ?? '/store/catalogo'}
               className="inline-flex items-center gap-2 px-8 py-4 bg-[#ED87B6] text-white rounded-full font-bold hover:bg-[#E06FA3] transition-all hover:scale-105 shadow-lg shadow-[#ED87B6]/30 focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:ring-offset-2 focus-visible:outline-none"
             >
               {heroCta} <ArrowRight size={18} aria-hidden="true" />
@@ -99,28 +175,40 @@ export default function StoreHomePage() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
 
-        {/* ── Categorías rápidas ── */}
-        <section className="mb-16" aria-label="Categorías">
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            {[
-              { emoji: '👶', label: 'Bebés',    href: '/store/categoria/Bebe' },
-              { emoji: '👗', label: 'Ropa',     href: '/store/categoria/Ropa' },
-              { emoji: '👟', label: 'Calzado',  href: '/store/categoria/Calzado' },
-              { emoji: '🧸', label: 'Juguetes', href: '/store/categoria/Juguetes' },
-              { emoji: '💚', label: 'Bienestar',href: '/store/categoria/Bienestar' },
-              { emoji: '🏷️', label: 'Ofertas',  href: '/store/catalogo' },
-            ].map(({ emoji, label, href }) => (
-              <Link
-                key={label}
-                href={href}
-                className="flex flex-col items-center justify-center gap-2 p-4 bg-white rounded-2xl border border-[#F0E0EC] hover:border-[#ED87B6] hover:bg-[#FFF5FA] transition-all text-center group shadow-sm hover:shadow-md focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none"
-              >
-                <span className="text-2xl group-hover:scale-110 transition-transform">{emoji}</span>
-                <span className="text-xs font-bold text-[#4A4A4A] group-hover:text-[#ED87B6] transition-colors">{label}</span>
-              </Link>
-            ))}
-          </div>
-        </section>
+        {/* ── Categorías destacadas (dinámicas) ── */}
+        {(configFeatured || showApiCats) && (
+          <section className="mb-16" aria-label="Categorías">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              {configFeatured
+                ? configFeatured.map(({ slug, label, emoji, href }, i) => {
+                    const color = PALETTE_COLORS[i % PALETTE_COLORS.length];
+                    return (
+                      <Link
+                        key={slug}
+                        href={href ?? `/store/categoria/${encodeURIComponent(slug)}`}
+                        className={`flex flex-col items-center justify-center gap-2 p-4 ${color.bg} rounded-2xl hover:opacity-90 hover:scale-105 transition-all text-center group shadow-sm hover:shadow-md focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none`}
+                      >
+                        {emoji && <span className="text-2xl group-hover:scale-110 transition-transform">{emoji}</span>}
+                        <span className={`text-xs font-bold ${color.text}`}>{label}</span>
+                      </Link>
+                    );
+                  })
+                : featuredCats.map((cat, i) => {
+                    const color = PALETTE_COLORS[i % PALETTE_COLORS.length];
+                    return (
+                      <Link
+                        key={cat.id}
+                        href={cat.href}
+                        className={`flex flex-col items-center justify-center gap-2 p-4 ${color.bg} rounded-2xl hover:opacity-90 hover:scale-105 transition-all text-center group shadow-sm hover:shadow-md focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none`}
+                      >
+                        <span className={`text-sm font-bold ${color.text}`}>{cat.label}</span>
+                      </Link>
+                    );
+                  })
+              }
+            </div>
+          </section>
+        )}
 
         {/* ── Productos destacados ── */}
         <section aria-label="Productos recién llegados">
@@ -136,19 +224,22 @@ export default function StoreHomePage() {
 
           {loading ? (
             <ProductGridSkeleton count={8} />
-          ) : error ? (
-            <EmptyState
-              icon={<Package size={56} />}
+          ) : prodError ? (
+            <ErrorState
               title="No pudimos cargar los productos"
               description="Verifica tu conexión o intenta más tarde."
               action={
-                <Link href="/store/catalogo" className="px-6 py-2.5 bg-[#ED87B6] text-white font-bold rounded-full text-sm hover:bg-[#E06FA3] transition-colors">
-                  Ver catálogo
-                </Link>
+                <button
+                  onClick={() => setRetryCount((c) => c + 1)}
+                  className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#ED87B6] text-white font-bold rounded-full text-sm hover:bg-[#E06FA3] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ED87B6]"
+                >
+                  <RefreshCw size={14} aria-hidden="true" /> Reintentar
+                </button>
               }
             />
           ) : products.length === 0 ? (
             <EmptyState
+              icon={<Package size={56} />}
               title="No hay productos disponibles todavía"
               description="Vuelve pronto — estamos preparando nuestra colección."
             />
@@ -162,28 +253,29 @@ export default function StoreHomePage() {
         </section>
 
         {/* ── CTA Banner ── */}
-        <section aria-label="Llamado a acción — registro" className="mt-20">
-          <div className="rounded-3xl bg-gradient-to-r from-[#ED87B6] to-[#D1BADB] p-10 sm:p-14 text-center relative overflow-hidden">
-            {/* Decorative circles */}
-            <div className="absolute -top-8 -right-8 w-32 h-32 bg-white/10 rounded-full" aria-hidden="true" />
-            <div className="absolute -bottom-8 -left-8 w-24 h-24 bg-white/10 rounded-full" aria-hidden="true" />
-            <div className="relative">
-              <span className="text-3xl mb-4 block" aria-hidden="true">⭐</span>
-              <h2 className="text-2xl sm:text-3xl font-black text-white mb-3">
-                ¿Primera vez con nosotros?
-              </h2>
-              <p className="text-white/80 mb-6 max-w-md mx-auto text-sm sm:text-base">
-                Crea tu cuenta y disfruta de acceso anticipado a colecciones exclusivas.
-              </p>
-              <Link
-                href="/store/cuenta"
-                className="inline-flex items-center gap-2 px-8 py-3 bg-white text-[#ED87B6] rounded-full font-bold hover:bg-[#FFF5FA] transition-colors shadow-lg focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-[#ED87B6] focus-visible:outline-none"
-              >
-                Crear Cuenta <ArrowRight size={16} aria-hidden="true" />
-              </Link>
+        {!configError && (
+          <section aria-label="Llamado a acción — registro" className="mt-20">
+            <div className="rounded-3xl bg-gradient-to-r from-[#ED87B6] to-[#D1BADB] p-10 sm:p-14 text-center relative overflow-hidden">
+              <div className="absolute -top-8 -right-8 w-32 h-32 bg-white/10 rounded-full" aria-hidden="true" />
+              <div className="absolute -bottom-8 -left-8 w-24 h-24 bg-white/10 rounded-full" aria-hidden="true" />
+              <div className="relative">
+                <span className="text-3xl mb-4 block" aria-hidden="true">⭐</span>
+                <h2 className="text-2xl sm:text-3xl font-black text-white mb-3">
+                  ¿Primera vez con nosotros?
+                </h2>
+                <p className="text-white/80 mb-6 max-w-md mx-auto text-sm sm:text-base">
+                  Crea tu cuenta y disfruta de acceso anticipado a colecciones exclusivas.
+                </p>
+                <Link
+                  href="/store/cuenta"
+                  className="inline-flex items-center gap-2 px-8 py-3 bg-white text-[#ED87B6] rounded-full font-bold hover:bg-[#FFF5FA] transition-colors shadow-lg focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-[#ED87B6] focus-visible:outline-none"
+                >
+                  Crear Cuenta <ArrowRight size={16} aria-hidden="true" />
+                </Link>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        )}
 
       </div>
     </div>
