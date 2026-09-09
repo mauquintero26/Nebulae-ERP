@@ -134,6 +134,7 @@ class TestPreflight(unittest.TestCase):
                 "NEBULAE_ENV": "production",
                 "SECRET_KEY": "a" * 64,
                 "CORS_ALLOWED_ORIGINS": "https://nebulaekids.com",
+                "REQUIRED_ALEMBIC_VERSION": "fa6_004",  # version autorizada actual
             },
         )
         self.assertTrue(exited, "Version incorrecta en produccion debe abortar")
@@ -155,7 +156,7 @@ class TestPreflight(unittest.TestCase):
 
     def test_produccion_version_correcta_pasa(self):
         """En produccion, version correcta y DB correcta -> OK."""
-        engine = _make_mock_engine("erpdb", "fa6_002")
+        engine = _make_mock_engine("erpdb", "fa6_004")  # version head actual
         exited, code, stderr, result = _call_preflight(
             db_url="postgresql://u:x@h:5432/erpdb",
             expected_db="erpdb",
@@ -165,12 +166,13 @@ class TestPreflight(unittest.TestCase):
                 "NEBULAE_ENV": "production",
                 "SECRET_KEY": "a" * 64,
                 "CORS_ALLOWED_ORIGINS": "https://nebulaekids.com",
+                "REQUIRED_ALEMBIC_VERSION": "fa6_004",  # variable obligatoria
             },
         )
         self.assertFalse(exited, f"Version correcta en produccion debe pasar. stderr={stderr}")
         self.assertIsNotNone(result)
         self.assertEqual(result["current_db"], "erpdb")
-        self.assertEqual(result["alembic_version"], "fa6_002")
+        self.assertEqual(result["alembic_version"], "fa6_004")
 
     def test_credenciales_no_aparecen_en_stderr(self):
         """Las credenciales de la URL no deben aparecer en stderr."""
@@ -295,7 +297,49 @@ class TestPreflight(unittest.TestCase):
         self.assertTrue(exited, "NEBULAE_ENV != production debe abortar")
         self.assertEqual(code, 2)
 
+    def test_produccion_sin_required_alembic_version_aborta(self):
+        """En produccion, si REQUIRED_ALEMBIC_VERSION no esta definida, debe abortar con exit 2."""
+        import os
+        engine = _make_mock_engine("erpdb", "fa6_004")
+        # Asegurarse de que la variable NO este en el entorno
+        env_without_rav = {k: v for k, v in os.environ.items()
+                          if k != "REQUIRED_ALEMBIC_VERSION"}
+        with mock.patch.dict(os.environ, env_without_rav, clear=True):
+            exited, code, stderr, _ = _call_preflight(
+                db_url="postgresql://u:x@h:5432/erpdb",
+                expected_db="erpdb",
+                nebulae_env="production",
+                mock_engine=engine,
+                extra_env={
+                    "NEBULAE_ENV": "production",
+                    "SECRET_KEY": "a" * 64,
+                    "CORS_ALLOWED_ORIGINS": "https://nebulaekids.com",
+                    # REQUIRED_ALEMBIC_VERSION deliberadamente ausente
+                },
+            )
+        self.assertTrue(exited, "Sin REQUIRED_ALEMBIC_VERSION en produccion debe abortar")
+        self.assertEqual(code, 2, f"Exit code debe ser 2, obtuvo {code}")
+        self.assertIn("REQUIRED_ALEMBIC_VERSION", stderr)
+
+    def test_produccion_required_alembic_version_correcta_pasa(self):
+        """En produccion, REQUIRED_ALEMBIC_VERSION=fa6_004 + DB en fa6_004 -> OK."""
+        engine = _make_mock_engine("erpdb", "fa6_004")
+        exited, code, stderr, result = _call_preflight(
+            db_url="postgresql://u:x@h:5432/erpdb",
+            expected_db="erpdb",
+            nebulae_env="production",
+            mock_engine=engine,
+            extra_env={
+                "NEBULAE_ENV": "production",
+                "SECRET_KEY": "a" * 64,
+                "CORS_ALLOWED_ORIGINS": "https://nebulaekids.com",
+                "REQUIRED_ALEMBIC_VERSION": "fa6_004",
+            },
+        )
+        self.assertFalse(exited, f"REQUIRED_ALEMBIC_VERSION correcta debe pasar. stderr={stderr}")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["alembic_version"], "fa6_004")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-

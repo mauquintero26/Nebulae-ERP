@@ -21,6 +21,10 @@ load_dotenv(_BACKEND / ".env")
 
 PROD_URL = os.environ.get("DATABASE_URL", "")
 TEST_URL = os.environ.get("TEST_DATABASE_URL", "")
+# URL de erpdb real (para tests de guardia que verifican que producción no fue alterada).
+# Si DATABASE_URL apunta a staging (certificación), setear PROD_ERPDB_DATABASE_URL apuntando a erpdb real.
+# Si no se setea, cae al valor de DATABASE_URL (comportamiento anterior por compatibilidad).
+PROD_ERPDB_URL = os.environ.get("PROD_ERPDB_DATABASE_URL", PROD_URL)
 
 # ---- SAFETY CHECKS --------------------------------------------------------
 if not TEST_URL:

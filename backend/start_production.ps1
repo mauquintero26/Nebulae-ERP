@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     start_production.ps1 -- Nebulae ERP Backend (Produccion/Staging) - Windows
@@ -25,11 +25,11 @@
     Segundos max esperando health check (defecto: 30)
 #>
 param(
-    [string]$EnvFile   = $env:ENV_FILE   ?? ".env",
-    [int]   $Port      = [int]($env:PORT ?? 5000),
-    [string]$HostBind  = $env:HOST       ?? "127.0.0.1",
-    [int]   $Workers   = [int]($env:WORKERS ?? 2),
-    [string]$LogLevel  = $env:LOG_LEVEL  ?? "info",
+    [string]$EnvFile      = $(if ($null -eq $env:ENV_FILE   -or $env:ENV_FILE   -eq '') { ".env"      } else { $env:ENV_FILE }),
+    [int]   $Port         = $(if ($null -eq $env:PORT       -or $env:PORT       -eq '') { 5000        } else { [int]$env:PORT }),
+    [string]$HostBind     = $(if ($null -eq $env:HOST       -or $env:HOST       -eq '') { "127.0.0.1" } else { $env:HOST }),
+    [int]   $Workers      = $(if ($null -eq $env:WORKERS    -or $env:WORKERS    -eq '') { 2           } else { [int]$env:WORKERS }),
+    [string]$LogLevel     = $(if ($null -eq $env:LOG_LEVEL  -or $env:LOG_LEVEL  -eq '') { "info"      } else { $env:LOG_LEVEL }),
     [int]   $HealthTimeout = 30
 )
 
@@ -42,7 +42,7 @@ $PYTHON      = "venv\Scripts\python.exe"
 
 Write-Host "==================================================================="
 Write-Host " Nebulae ERP Backend -- Arranque (Windows PowerShell)"
-Write-Host " Ambiente: $($env:NEBULAE_ENV ?? 'production')"
+Write-Host " Ambiente: $(if ($null -eq $env:NEBULAE_ENV -or $env:NEBULAE_ENV -eq '') { 'production' } else { $env:NEBULAE_ENV })"
 Write-Host " Host:     ${HostBind}:${Port}"
 Write-Host " Workers:  ${Workers}"
 Write-Host "==================================================================="
@@ -188,7 +188,7 @@ for ($i = 1; $i -le $HealthTimeout; $i++) {
         if ($resp.StatusCode -eq 200) {
             $body = $resp.Content | ConvertFrom-Json -ErrorAction SilentlyContinue
             if ($body.status -eq "ok") {
-                Write-Host "[INFO] Health check OK (${i}s) — status: ok"
+                Write-Host "[INFO] Health check OK (${i}s) - status: ok"
                 $healthy = $true
                 break
             }
@@ -205,7 +205,10 @@ if (-not $healthy) {
         # Esperar hasta 10s
         $proc.WaitForExit(10000) | Out-Null
         if (-not $proc.HasExited) {
-            [System.Diagnostics.Process]::GetProcessById($uvicornPID)?.Kill()
+            try {
+                $p2 = [System.Diagnostics.Process]::GetProcessById($uvicornPID)
+                $p2.Kill()
+            } catch { }
         }
     } catch { }
     Remove-Item -Path $PID_FILE -ErrorAction SilentlyContinue

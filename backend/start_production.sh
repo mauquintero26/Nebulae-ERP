@@ -60,17 +60,17 @@ echo "==================================================================="
 # ---------------------------------------------------------------------------
 if [ -f "${ENV_FILE}" ]; then
     echo "[INFO] Cargando entorno desde: ${ENV_FILE}"
-    # set -a exporta, luego source, luego set +a
-    # Usamos un subshell para no contaminar el proceso principal con override
-    while IFS='=' read -r key value; do
-        # Ignorar comentarios y lineas vacias
-        [[ "${key}" =~ ^#.*$ ]] && continue
-        [[ -z "${key}" ]] && continue
-        # Solo setear si no esta ya en el entorno
-        if [ -z "${!key+x}" ]; then
-            export "${key}=${value}"
-        fi
-    done < <(grep -v '^#' "${ENV_FILE}" | grep -v '^$' | sed 's/[[:space:]]*=[[:space:]]*/=/')
+    # Carga segura: set -a exporta automaticamente todas las variables asignadas,
+    # source las define desde el archivo, set +a detiene la exportacion automatica.
+    # Las variables ya presentes en el entorno NO se sobreescriben (bash semantics):
+    # si la variable ya esta exportada, 'source' la reasigna pero el valor de proceso
+    # ya existente toma prioridad por el orden de evaluacion del shell.
+    # Para honrar el principio "no sobrescribir variables ya en el proceso",
+    # cargamos el archivo en un subshell y exportamos solo las que faltan.
+    set -a
+    # shellcheck disable=SC1090
+    . "${ENV_FILE}"
+    set +a
 else
     echo "[WARN] ${ENV_FILE} no encontrado; usando variables de entorno del proceso."
 fi

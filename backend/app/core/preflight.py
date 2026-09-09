@@ -32,7 +32,19 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Constantes de configuracion
 # ---------------------------------------------------------------------------
-_PRODUCTION_REQUIRED_VERSION = "fa6_002"  # Version autorizada para produccion
+# La version requerida se lee de REQUIRED_ALEMBIC_VERSION en tiempo de ejecucion.
+# En produccion la variable es OBLIGATORIA; en otros ambientes es opcional.
+# No existe valor hardcodeado: actualizar la variable de entorno al desplegar
+# una nueva migracion aprobada (ej: fa6_004).
+def _get_required_version(env: str) -> "Optional[str]":
+    val = os.environ.get("REQUIRED_ALEMBIC_VERSION", "").strip()
+    if not val and env == "production":
+        _abort(
+            "REQUIRED_ALEMBIC_VERSION es obligatoria en produccion. "
+            "Define la revision Alembic aprobada (ej: fa6_004) antes de iniciar el backend.",
+            exit_code=2,
+        )
+    return val or None
 
 
 def _mask_url(url: str) -> str:
@@ -192,7 +204,9 @@ def run_preflight_or_abort(
 
             # 4. En produccion: exigir version autorizada
             if env == "production":
-                target_ver = req_version or _PRODUCTION_REQUIRED_VERSION
+                # req_version: parametro explícito (tests de override) tiene prioridad;
+                # si no se paso, lee REQUIRED_ALEMBIC_VERSION (obligatoria en produccion).
+                target_ver = req_version if req_version else _get_required_version(env)
                 if alembic_version != target_ver:
                     _abort(
                         f"El esquema de la base '{current_db}' esta en version "
