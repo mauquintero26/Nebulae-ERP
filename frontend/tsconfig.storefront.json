@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "skipLibCheck": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": [
+    "src/lib/store-api/**/*.ts",
+    "src/hooks/**/*.ts",
+    "src/app/store/**/*.ts",
+    "src/app/store/**/*.tsx"
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "node_modules"
+  ]
+}

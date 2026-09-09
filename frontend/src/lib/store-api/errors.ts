@@ -63,7 +63,6 @@ export class StoreError extends Error {
     this.status = options?.status;
     this.isAborted = code === 'ABORTED';
     if (options?.cause && this instanceof Error) {
-      // @ts-expect-error — ES2022 Error.cause not typed in all targets
       this.cause = options.cause;
     }
   }

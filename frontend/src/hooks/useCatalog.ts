@@ -152,7 +152,7 @@ export function useCatalog(options?: UseCatalogOptions): UseCatalogResult {
       controller.abort();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, filters.categoria, filters.publicado, retryCount]);
+  }, [debouncedSearch, filters.categoria, retryCount]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // ── Apply client-side filters ──

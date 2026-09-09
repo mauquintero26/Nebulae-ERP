@@ -64,7 +64,8 @@ export type BackendProductAtributo = {
 };
 
 export type BackendProductVariante = {
-  id?: string | number;
+  /** ID is stored as string to match ProductVariante in @/types/store */
+  id?: string;
   sku?: string;
   atributos?: Record<string, string>;
   precio_venta?: number;

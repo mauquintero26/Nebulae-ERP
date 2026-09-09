@@ -9,13 +9,13 @@ import { storeClient } from './client';
 import type { CategoriasResponse, WebConfigResponse, BackendWebConfig } from './types';
 import type { FetchOptions } from './client';
 import { normalizeCategories } from '@/lib/categoryTree';
-import type { NavNode } from '@/types/store';
+import type { RawCategoria, NavNode } from '@/types/store';
 
 // ─── Categories ───────────────────────────────────────────────────────────────
 
 /**
  * Obtiene el árbol de categorías de navegación.
- * Compatible con: array plano, array anidado, respuesta envuelpe con data.
+ * Compatible con: array plano, array anidado, respuesta envuelta con data.
  * Preserva la jerarquía recursiva certificada en WEB-1.
  */
 export async function listCategorias(options?: FetchOptions): Promise<NavNode[]> {
@@ -26,10 +26,10 @@ export async function listCategorias(options?: FetchOptions): Promise<NavNode[]>
   );
 
   // Handle both array and envelope formats
-  const items = Array.isArray(raw)
-    ? raw
+  const items: RawCategoria[] = Array.isArray(raw)
+    ? (raw as unknown as RawCategoria[])
     : Array.isArray((raw as { data?: unknown }).data)
-    ? (raw as { data: unknown[] }).data
+    ? ((raw as { data: unknown[] }).data as unknown as RawCategoria[])
     : [];
 
   return normalizeCategories(items);

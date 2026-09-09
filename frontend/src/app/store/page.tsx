@@ -222,14 +222,7 @@ export default function StoreHomePage() {
             <ErrorState
               title="No pudimos cargar los productos"
               description="Verifica tu conexión o intenta más tarde."
-              action={
-                <button
-                  onClick={() => setRetryCount((c) => c + 1)}
-                  className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#ED87B6] text-white font-bold rounded-full text-sm hover:bg-[#E06FA3] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ED87B6]"
-                >
-                  <RefreshCw size={14} aria-hidden="true" /> Reintentar
-                </button>
-              }
+              retry={() => setRetryCount((c) => c + 1)}
             />
           ) : products.length === 0 ? (
             <EmptyState
