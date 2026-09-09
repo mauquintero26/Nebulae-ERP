@@ -341,5 +341,87 @@ class TestPreflight(unittest.TestCase):
         self.assertEqual(result["alembic_version"], "fa6_004")
 
 
+    def test_produccion_required_alembic_version_version_futura_aborta(self):
+        """
+        En produccion, REQUIRED_ALEMBIC_VERSION con version futura (ej: fa7_001)
+        que NO coincide con la DB (fa6_004) debe abortar con exit 2.
+
+        Garantia: produccion no arranca accidentalmente con una revision futura
+        no autorizada aunque el operador configure una version incorrecta.
+        """
+        engine = _make_mock_engine("erpdb", "fa6_004")
+        exited, code, stderr, _ = _call_preflight(
+            db_url="postgresql://u:x@h:5432/erpdb",
+            expected_db="erpdb",
+            nebulae_env="production",
+            mock_engine=engine,
+            extra_env={
+                "NEBULAE_ENV": "production",
+                "SECRET_KEY": "a" * 64,
+                "CORS_ALLOWED_ORIGINS": "https://nebulaekids.com",
+                # Version futura que NO existe en la DB
+                "REQUIRED_ALEMBIC_VERSION": "fa7_001",
+            },
+        )
+        self.assertTrue(exited, "Version futura no autorizada debe abortar")
+        self.assertEqual(code, 4, f"Exit code debe ser 4 (version mismatch), obtuvo {code}")
+
+    def test_staging_sin_required_alembic_version_pasa(self):
+        """
+        En staging/testing, REQUIRED_ALEMBIC_VERSION NO es requerida.
+        El arranque debe proceder sin abortar aunque la variable este ausente.
+        """
+        import os
+        engine = _make_mock_engine("erp_staging_v22", "fa6_004")
+        env_without_rav = {k: v for k, v in os.environ.items()
+                           if k != "REQUIRED_ALEMBIC_VERSION"}
+        with mock.patch.dict(os.environ, env_without_rav, clear=True):
+            exited, code, stderr, result = _call_preflight(
+                db_url="postgresql://u:x@h:5432/erp_staging_v22",
+                expected_db="erp_staging_v22",
+                nebulae_env="staging",
+                mock_engine=engine,
+                extra_env={
+                    "NEBULAE_ENV": "staging",
+                    "SECRET_KEY": "a" * 64,
+                    "CORS_ALLOWED_ORIGINS": "https://nebulaekids.com",
+                    # REQUIRED_ALEMBIC_VERSION deliberadamente ausente
+                },
+            )
+        self.assertFalse(
+            exited,
+            f"En staging, sin REQUIRED_ALEMBIC_VERSION debe pasar. stderr={stderr}"
+        )
+        self.assertIsNotNone(result)
+
+    def test_produccion_required_alembic_version_incorrecta_aborta(self):
+        """
+        En produccion, REQUIRED_ALEMBIC_VERSION con valor que NO coincide
+        con la version real de la DB debe abortar con exit 2.
+
+        Caso: la DB esta en fa6_003 pero el operador configura REQUIRED_ALEMBIC_VERSION=fa6_004.
+        Esto protege contra deploys parciales donde el push llego pero la migracion no se ejecuto.
+        """
+        engine = _make_mock_engine("erpdb", "fa6_003")  # DB en version anterior
+        exited, code, stderr, _ = _call_preflight(
+            db_url="postgresql://u:x@h:5432/erpdb",
+            expected_db="erpdb",
+            nebulae_env="production",
+            mock_engine=engine,
+            extra_env={
+                "NEBULAE_ENV": "production",
+                "SECRET_KEY": "a" * 64,
+                "CORS_ALLOWED_ORIGINS": "https://nebulaekids.com",
+                # Operador configuró fa6_004 pero la DB esta en fa6_003
+                "REQUIRED_ALEMBIC_VERSION": "fa6_004",
+            },
+        )
+        self.assertTrue(
+            exited,
+            "Version incorrecta (DB en fa6_003, RAV=fa6_004) debe abortar"
+        )
+        self.assertEqual(code, 4, f"Exit code debe ser 4, obtuvo {code}")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
