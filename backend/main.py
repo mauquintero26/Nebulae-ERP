@@ -16,15 +16,40 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="Nebulae ERP & CRM API", version="1.0.0")
 
+import os as _os
+
+def _build_cors_origins() -> list[str]:
+    """
+    Construye la lista de orígenes permitidos por ambiente.
+    NUNCA combinar wildcard ('*') con allow_credentials=True (viola RFC 6454,
+    browsers lo rechazan con error CORS).
+    """
+    explicit = _os.environ.get("CORS_ALLOWED_ORIGINS", "").strip()
+    if explicit:
+        return [o.strip() for o in explicit.split(",") if o.strip()]
+    _env = _os.environ.get("NEBULAE_ENV", "development")
+    if _env == "production":
+        return [
+            "https://nebulaekids.com",
+            "https://www.nebulaekids.com",
+        ]
+    elif _env == "staging":
+        return [
+            "http://localhost:5100",
+            "http://127.0.0.1:5100",
+            "http://localhost:3000",
+        ]
+    else:  # development
+        return [
+            "http://localhost:3000",
+            "http://localhost:5100",
+            "http://127.0.0.1:5100",
+            "http://127.0.0.1:3000",
+        ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5100",
-        "http://127.0.0.1:5100",
-        "https://nebulaekids.com",
-        "https://www.nebulaekids.com",
-        "*",   # Allow web chat widget from any domain
-    ],
+    allow_origins=_build_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

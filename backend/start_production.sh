@@ -97,11 +97,19 @@ if [ -z "${DATABASE_URL:-}" ]; then
 fi
 
 # Mostrar destino enmascarado (sin usuario/contrasena)
+# IMPORTANTE: leer desde os.environ, NUNCA interpolar DATABASE_URL en bash
 _db_display=$(python3 -c "
+import os
 from urllib.parse import urlparse
-u = '${DATABASE_URL}'
-p = urlparse(u)
-print(f'{p.scheme}://***:***@{p.hostname}:{p.port}{p.path}')
+u = os.environ.get('DATABASE_URL', '')
+if not u:
+    print('<DATABASE_URL no definida>')
+else:
+    try:
+        p = urlparse(u)
+        print(f'{p.scheme}://***:***@{p.hostname}:{p.port}{p.path}')
+    except Exception:
+        print('<URL no analizable>')
 " 2>/dev/null || echo "<URL no analizable>")
 echo "[INFO] DATABASE_URL -> ${_db_display}"
 
@@ -192,7 +200,20 @@ for i in $(seq 1 ${HEALTH_TIMEOUT}); do
 done
 
 if [ "${_healthy}" -eq 0 ]; then
-    echo "[WARN] Health check no respondio en ${HEALTH_TIMEOUT}s. Verificar logs." >&2
+    echo "[ERROR] Health check no respondio en ${HEALTH_TIMEOUT}s. Terminando uvicorn..." >&2
+    # Terminar uvicorn ordenadamente primero
+    kill -TERM "${UVICORN_PID}" 2>/dev/null || true
+    # Esperar hasta 10s a que cierre
+    _wait=0
+    while kill -0 "${UVICORN_PID}" 2>/dev/null && [ "${_wait}" -lt 10 ]; do
+        sleep 1
+        _wait=$((_wait + 1))
+    done
+    # Forzar si todavia vive
+    kill -KILL "${UVICORN_PID}" 2>/dev/null || true
+    rm -f "${PID_FILE}"
+    echo "[ERROR] Backend terminado por health check fallido. Exit code: 2." >&2
+    exit 2
 fi
 
 # ---------------------------------------------------------------------------
