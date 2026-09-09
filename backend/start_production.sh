@@ -56,23 +56,28 @@ echo " Log:      ${LOG_LEVEL}"
 echo "==================================================================="
 
 # ---------------------------------------------------------------------------
-# 1. Cargar archivo de entorno (sin sobrescribir variables ya en el proceso)
+# 1. Cargar archivo de entorno via python-dotenv (override=False)
 # ---------------------------------------------------------------------------
-if [ -f "${ENV_FILE}" ]; then
-    echo "[INFO] Cargando entorno desde: ${ENV_FILE}"
-    # Carga segura: set -a exporta automaticamente todas las variables asignadas,
-    # source las define desde el archivo, set +a detiene la exportacion automatica.
-    # Las variables ya presentes en el entorno NO se sobreescriben (bash semantics):
-    # si la variable ya esta exportada, 'source' la reasigna pero el valor de proceso
-    # ya existente toma prioridad por el orden de evaluacion del shell.
-    # Para honrar el principio "no sobrescribir variables ya en el proceso",
-    # cargamos el archivo en un subshell y exportamos solo las que faltan.
-    set -a
-    # shellcheck disable=SC1090
-    . "${ENV_FILE}"
-    set +a
-else
-    echo "[WARN] ${ENV_FILE} no encontrado; usando variables de entorno del proceso."
+# IMPORTANTE: NO se usa 'set -a; source .env; set +a' ni ninguna variante.
+# Un archivo .env NO debe ejecutarse como codigo shell porque puede contener
+# valores con $, comillas, =, espacios y otros simbolos que el shell interpreta
+# de forma peligrosa o incorrecta.
+#
+# La carga segura se realiza a traves de launch_production.py, que invoca
+# dotenv.dotenv_values() con override=False:
+#   - El .env NO se interpreta como codigo shell.
+#   - Espacios, comillas, '=', valores vacios y simbolos son manejados
+#     correctamente por el parser de dotenv.
+#   - Las variables ya en el entorno del proceso NO son sobreescritas.
+#   - Ningun secreto se imprime en los logs.
+#
+# Desde este punto, la ejecucion completa (carga de entorno + preflight +
+# uvicorn) es responsabilidad de launch_production.py.
+LAUNCH_SCRIPT="$(dirname "$0")/launch_production.py"
+
+if [ ! -f "${LAUNCH_SCRIPT}" ]; then
+    echo "[ERROR] launch_production.py no encontrado en $(dirname "$0")." >&2
+    exit 1
 fi
 
 # ---------------------------------------------------------------------------
