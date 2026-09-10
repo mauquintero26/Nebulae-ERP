@@ -1,40 +1,28 @@
 ﻿#!/usr/bin/env bash
-# start_production.sh -- Nebulae ERP Backend (Produccion/Staging)
-# Bloque 8: Servicio administrado SIN --reload
-# HEAD: 486ef36
+# start_production.sh -- Wrapper minimo para launch_production.py
+#
+# Este script localiza el interprete Python del venv y delega TODA la logica
+# al lanzador Python: carga de .env, validacion, preflight, health check
+# y supervision de uvicorn.
 #
 # USO:
-#   Produccion:  ENV_FILE=.env          ./start_production.sh
-#   Staging:     ENV_FILE=.env.staging  ./start_production.sh
-
+#   ./start_production.sh
+#   ENV_FILE=.env.staging PORT=5002 WORKERS=1 ./start_production.sh
+#
 set -euo pipefail
 
-ENV_FILE=${ENV_FILE:-.env}
-PORT=${PORT:-5000}
-HOST=${HOST:-127.0.0.1}
-WORKERS=${WORKERS:-2}
-LOG_LEVEL=${LOG_LEVEL:-info}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON="${SCRIPT_DIR}/venv/bin/python"
 
-echo "Iniciando Nebulae ERP: ${HOST}:${PORT} workers=${WORKERS}"
-
-# Cargar variables de entorno desde archivo
-if [ -f "${ENV_FILE}" ]; then
-  set -a
-  source "${ENV_FILE}"
-  set +a
+if [ ! -f "${PYTHON}" ]; then
+    echo "[ERROR] Interprete Python no encontrado: ${PYTHON}" >&2
+    echo "[ERROR] Ejecute: python3 -m venv venv && venv/bin/pip install -r requirements.txt" >&2
+    exit 1
 fi
 
-# Verificar SECRET_KEY no es la de desarrollo
-if [ "${SECRET_KEY}" = "super-secret-key-for-development-change-me" ]; then
-  echo "ERROR: SECRET_KEY es el valor por defecto de desarrollo." >&2
-  exit 1
-fi
-
-# Uvicorn SIN --reload
-exec venv/Scripts/uvicorn main:app \
-  --host "${HOST}" \
-  --port "${PORT}" \
-  --workers "${WORKERS}" \
-  --log-level "${LOG_LEVEL}" \
-  --access-log \
-  --timeout-keep-alive 30
+exec "${PYTHON}" "${SCRIPT_DIR}/launch_production.py" \
+    --env-file  "${ENV_FILE:-.env}"        \
+    --host      "${HOST:-127.0.0.1}"       \
+    --port      "${PORT:-5000}"            \
+    --workers   "${WORKERS:-2}"            \
+    --log-level "${LOG_LEVEL:-info}"

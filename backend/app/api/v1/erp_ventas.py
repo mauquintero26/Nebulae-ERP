@@ -558,7 +558,15 @@ def list_pedidos(
 @router.post("/pedidos", status_code=201)
 def create_pedido(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
-    numero = _gen_numero(db, "PVEN-", "seq_ven")
+    from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+    from fastapi import status as http_status
+    try:
+        numero = _gen_numero(db, "PVEN-", "seq_ven")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"No se pudo generar el numero de pedido: {type(exc).__name__}",
+        )
     saldo = float(body.get("total_cop", 0)) - float(body.get("anticipo_cop", 0))
     ven = SaleOrder(
         numero=numero,
@@ -583,9 +591,22 @@ def create_pedido(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *R
         productos=body.get("productos", []),
         created_by=body.get("created_by"),
     )
-    db.add(ven)
-    db.commit()
-    db.refresh(ven)
+    try:
+        db.add(ven)
+        db.commit()
+        db.refresh(ven)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Error de integridad al crear el pedido: {str(exc.orig) if hasattr(exc, 'orig') else str(exc)}",
+        )
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Error de base de datos al crear el pedido: {type(exc).__name__}",
+        )
     _log(db, "VEN", ven.id, ven.numero, "CREATED",
          f"Pedido de Venta {ven.numero} creado",
          new_estado="PENDIENTE_COMPRA", user_name=body.get("created_by"))

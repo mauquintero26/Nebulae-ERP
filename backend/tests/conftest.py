@@ -21,6 +21,10 @@ load_dotenv(_BACKEND / ".env")
 
 PROD_URL = os.environ.get("DATABASE_URL", "")
 TEST_URL = os.environ.get("TEST_DATABASE_URL", "")
+# URL de erpdb real (para tests de guardia que verifican que producción no fue alterada).
+# Si DATABASE_URL apunta a staging (certificación), setear PROD_ERPDB_DATABASE_URL apuntando a erpdb real.
+# Si no se setea, cae al valor de DATABASE_URL (comportamiento anterior por compatibilidad).
+PROD_ERPDB_URL = os.environ.get("PROD_ERPDB_DATABASE_URL", PROD_URL)
 
 # ---- SAFETY CHECKS --------------------------------------------------------
 if not TEST_URL:
@@ -87,7 +91,10 @@ def setup_test_db():
         )
 
     env = os.environ.copy()
-    env["DATABASE_URL"] = TEST_URL
+    env["DATABASE_URL"] = TEST_URL       # Backward compat for any old code
+    env["TEST_DATABASE_URL"] = TEST_URL  # env.py en modo testing usa esta
+    env["ALEMBIC_ENV"] = "testing"       # Declara explicitamente el modo
+    env.pop("ALLOW_PRODUCTION_MIGRATION", None)  # Jamas debe haber autorización de prod aqui
     result = subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
         cwd=str(_BACKEND),
@@ -144,8 +151,13 @@ def setup_test_db():
         """))
         role_exists = conn.execute(text("SELECT 1 FROM pg_roles WHERE rolname='nebulae_test'")).scalar()
         if role_exists:
-            conn.execute(text("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO nebulae_test;"))
-            conn.execute(text("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO nebulae_test;"))
+            try:
+                conn.execute(text("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO nebulae_test;"))
+                conn.execute(text("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO nebulae_test;"))
+            except Exception:
+                # InternalError: tuple concurrently updated — otro proceso de pytest ya está otorgando
+                # permisos simultáneamente. Best-effort: si ya están otorgados, no hay problema.
+                conn.rollback()
         conn.commit()
     yield
     # Safety: ensure DB is at head before cleanup (migration tests may have left it downgraded)

@@ -18,7 +18,7 @@ import pathlib
 import pytest
 from sqlalchemy import create_engine, text
 
-from tests.conftest import TEST_URL, PROD_URL, _BACKEND
+from tests.conftest import TEST_URL, PROD_URL, PROD_ERPDB_URL, _BACKEND
 
 
 class TestFase3Migrations:
@@ -241,7 +241,7 @@ class TestFase3Migrations:
 
         with eng.connect() as conn:
             v_final = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-            assert v_final in ("fa3_002", "fa4_001", "fa4_002", "fa5_001", "fa5_002", "fa6_001", "fa6_002"), f"Versión final esperada fa3_002 o posterior, obtenida {v_final}"
+            assert v_final in ("fa3_002", "fa4_001", "fa4_002", "fa5_001", "fa5_002", "fa6_001", "fa6_002", "fa6_003", "fa6_004"), f"Versión final esperada fa3_002 o posterior, obtenida {v_final}"
 
             # Comparar tipo de dato, longitud, nulabilidad de columnas principales
             col_info = conn.execute(text("""
@@ -284,7 +284,7 @@ class TestFase3Migrations:
 
     def test_erpdb_produccion_permanece_inalterada(self):
         """Verifica que la base de datos de producción erpdb no ha sido modificada y sigue en fa1a_002."""
-        eng_prod = create_engine(PROD_URL)
+        eng_prod = create_engine(PROD_ERPDB_URL)
         with eng_prod.connect() as conn:
             prod_v = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
             assert prod_v == "fa1a_002", f"ALERTA: erpdb fue alterada y tiene versión {prod_v}"
