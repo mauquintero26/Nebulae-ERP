@@ -164,6 +164,7 @@ def setup_test_db():
     try:
         env_cleanup = os.environ.copy()
         env_cleanup["DATABASE_URL"] = TEST_URL
+        env_cleanup["ALEMBIC_ENV"] = "testing"  # prevent ABORT when both DB URLs are set
         subprocess.run(
             [sys.executable, "-m", "alembic", "upgrade", "head"],
             cwd=str(_BACKEND), env=env_cleanup,
@@ -171,6 +172,7 @@ def setup_test_db():
         )
     except Exception:
         pass  # best-effort
+
 
     # Cleanup: truncate all test data (best-effort, ignore missing tables)
     with test_engine.connect() as conn:
@@ -404,8 +406,23 @@ def warehouse(db):
 @pytest.fixture()
 def inv_level_zero(db, sku, warehouse):
     from app.models.inventory import InventoryLevel
-    lvl = InventoryLevel(sku_id=sku.id, warehouse_id=warehouse.id, quantity=0)
-    db.add(lvl); db.commit(); return lvl
+    # Use MERGE (INSERT or UPDATE) to guarantee we start from 0 regardless of prior state.
+    # This prevents flakiness when previous tests left dirty inventory_levels rows
+    # for the same (sku_id, warehouse_id) pair.
+    from sqlalchemy import text as _text
+    db.execute(_text("""
+        INSERT INTO inventory_levels (sku_id, warehouse_id, quantity)
+        VALUES (:sku_id, :wh_id, 0)
+        ON CONFLICT (sku_id, warehouse_id) DO UPDATE SET quantity = 0
+    """), {"sku_id": sku.id, "wh_id": warehouse.id})
+    db.commit()
+    lvl = db.query(InventoryLevel).filter_by(sku_id=sku.id, warehouse_id=warehouse.id).first()
+    if lvl is None:
+        lvl = InventoryLevel(sku_id=sku.id, warehouse_id=warehouse.id, quantity=0)
+        db.add(lvl)
+        db.commit()
+    return lvl
+
 
 
 # ---- SUPPLIER ---------------------------------------------------------------

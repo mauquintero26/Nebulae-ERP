@@ -28,10 +28,12 @@ class TestFase3Migrations:
         yield
         env = os.environ.copy()
         env["DATABASE_URL"] = TEST_URL
+        env["ALEMBIC_ENV"] = "testing"  # prevent ABORT when both DB URLs are set
         subprocess.run(
             [sys.executable, "-m", "alembic", "upgrade", "head"],
             cwd=str(_BACKEND), env=env, capture_output=True, text=True
         )
+
         eng = create_engine(TEST_URL)
         with eng.connect() as conn:
             conn.execute(text("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO nebulae_test;"))
@@ -127,7 +129,9 @@ class TestFase3Migrations:
         """
         env = os.environ.copy()
         env["DATABASE_URL"] = TEST_URL
+        env["ALEMBIC_ENV"] = "testing"  # prevent ABORT when both DB URLs are set
         eng = create_engine(TEST_URL)
+
 
         # 1. Asegurar estado inicial en head (fa3_002)
         up_init = subprocess.run(

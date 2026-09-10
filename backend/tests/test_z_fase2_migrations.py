@@ -22,6 +22,7 @@ _BACKEND = pathlib.Path(__file__).parent.parent
 def _run(cmd_suffix):
     env = os.environ.copy()
     env["DATABASE_URL"] = TEST_URL
+    env["ALEMBIC_ENV"] = "testing"  # prevent ABORT when both DB URLs are set
     result = subprocess.run(
         [sys.executable, "-m", "alembic"] + cmd_suffix,
         cwd=str(_BACKEND),
@@ -30,6 +31,7 @@ def _run(cmd_suffix):
         text=True,
     )
     return result.returncode, result.stdout + result.stderr
+
 
 
 FA2_TABLES = [

@@ -4,6 +4,7 @@
  * Acceso al catálogo de productos y detalle de producto.
  * Endpoints: GET /ecommerce/catalogo, GET /ecommerce/catalogo/{id}
  * WEB-2B.1: normalizeProduct incluye sku_id, purchasable, requires_configuration, availability_source.
+ * WEB-2B.2: getProductVariantes, getAtributos, server-side pagination.
  */
 
 import { storeClient } from './client';
@@ -13,9 +14,13 @@ import type {
   CatalogQueryParams,
   BackendProduct,
   NormalizedProduct,
+  ProductVariantesResponse,
+  AtributosResponse,
+  AtributosFilterData,
 } from './types';
 import { hasRealDiscount } from './query';
 import type { FetchOptions } from './client';
+
 
 // ─── Normalizer ───────────────────────────────────────────────────────────────
 
@@ -99,8 +104,12 @@ export function normalizeProduct(raw: BackendProduct): NormalizedProduct {
         ? raw.modalidad_disponible
         : modalidad
     ) as 'ENTREGA_INMEDIATA' | 'POR_PEDIDO' | 'DISPONIBILIDAD_POR_CONFIRMAR',
+    // WEB-2B.2: stable URL slug (GAP-005)
+    slug: raw.slug ?? null,
   };
 }
+
+
 
 
 // ─── API calls ────────────────────────────────────────────────────────────────
@@ -108,21 +117,30 @@ export function normalizeProduct(raw: BackendProduct): NormalizedProduct {
 /**
  * Lista productos del catálogo público.
  *
- * NOTA IMPORTANTE sobre paginación:
- * El backend no soporta offset/page real. Se solicita hasta `limit` (máx 500)
- * y la paginación se realiza client-side.
- * Ver WEB2A_GAPS_BACKEND.md GAP-001.
+ * WEB-2B.2: soporta paginación server-side (offset, limit), filtros (marca,
+ * precio_min/max, modalidad, disponible) y ordenamiento server-side.
+ * Ver WEB2A_GAPS_BACKEND.md GAP-001, GAP-002, GAP-003.
  */
 export async function listProductos(
   params: CatalogQueryParams,
   options?: FetchOptions,
-): Promise<{ products: NormalizedProduct[]; total: number }> {
+): Promise<{ products: NormalizedProduct[]; total: number; offset: number; has_more: boolean }> {
   const queryParams: Record<string, string | number | boolean> = {};
 
   if (params.search)             queryParams.search    = params.search;
   if (params.categoria)          queryParams.categoria = params.categoria;
   if (params.publicado !== undefined) queryParams.publicado = params.publicado;
-  queryParams.limit = params.limit ?? 500;
+  queryParams.limit = params.limit ?? 24;
+  // WEB-2B.2: server-side pagination
+  if (typeof params.offset === 'number') queryParams.offset = params.offset;
+  // WEB-2B.2: server-side filters
+  if ((params as Record<string, unknown>).marca)        queryParams.marca      = (params as Record<string, unknown>).marca as string;
+  if (typeof (params as Record<string, unknown>).precio_min === 'number') queryParams.precio_min = (params as Record<string, unknown>).precio_min as number;
+  if (typeof (params as Record<string, unknown>).precio_max === 'number') queryParams.precio_max = (params as Record<string, unknown>).precio_max as number;
+  if ((params as Record<string, unknown>).modalidad)    queryParams.modalidad  = (params as Record<string, unknown>).modalidad as string;
+  if ((params as Record<string, unknown>).disponible !== undefined) queryParams.disponible = (params as Record<string, unknown>).disponible as boolean;
+  // WEB-2B.2: server-side ordering
+  if ((params as Record<string, unknown>).ordenar)      queryParams.ordenar    = (params as Record<string, unknown>).ordenar as string;
 
   const raw = await storeClient.get<CatalogListResponse>(
     '/ecommerce/catalogo',
@@ -138,10 +156,14 @@ export async function listProductos(
     : [];
 
   const total = typeof raw?.total === 'number' ? raw.total : items.length;
+  const offset = typeof raw?.offset === 'number' ? raw.offset : 0;
+  const has_more = raw?.has_more ?? false;
 
   return {
     products: items.map(normalizeProduct),
     total,
+    offset,
+    has_more,
   };
 }
 
@@ -178,4 +200,51 @@ export async function getProducto(
   }
 
   return normalizeProduct(product);
+}
+
+// ─── WEB-2B.2: Variantes reales (GAP-006) ────────────────────────────────────
+
+/**
+ * Obtiene las variantes reales de un producto con stock real y sku_id.
+ * Endpoint: GET /ecommerce/catalogo/{id}/variantes
+ */
+export async function getProductVariantes(
+  productId: number,
+  options?: FetchOptions,
+): Promise<ProductVariantesResponse> {
+  if (!Number.isInteger(productId) || productId <= 0) {
+    throw new StoreError('NOT_FOUND', { detail: `Invalid product ID: ${productId}` });
+  }
+
+  const raw = await storeClient.get<ProductVariantesResponse>(
+    `/ecommerce/catalogo/${productId}/variantes`,
+    undefined,
+    options,
+  );
+  return raw;
+}
+
+// ─── WEB-2B.2: Atributos dinámicos (GAP-007) ─────────────────────────────────
+
+/**
+ * Obtiene atributos dinámicos para filtros del catálogo.
+ * Endpoint: GET /ecommerce/atributos
+ */
+export async function getAtributos(
+  categoria?: string,
+  options?: FetchOptions,
+): Promise<AtributosFilterData> {
+  const queryParams: Record<string, string> = {};
+  if (categoria) queryParams.categoria = categoria;
+
+  const raw = await storeClient.get<AtributosResponse>(
+    '/ecommerce/atributos',
+    queryParams,
+    options,
+  );
+
+  return raw?.data ?? {
+    precio_min: 0, precio_max: 0,
+    marcas: [], categorias: [], tallas: [], colores: [],
+  };
 }

@@ -17,6 +17,7 @@ BACKEND = Path(__file__).parent.parent
 def _run(args, cwd=BACKEND):
     env = os.environ.copy()
     env["DATABASE_URL"] = TEST_URL
+    env["ALEMBIC_ENV"] = "testing"  # prevent ABORT when both DB URLs are set
     result = subprocess.run(
         [sys.executable, "-m", "alembic"] + args,
         cwd=cwd,
@@ -25,6 +26,7 @@ def _run(args, cwd=BACKEND):
         env=env,
     )
     return result
+
 
 
 @pytest.fixture(autouse=True)

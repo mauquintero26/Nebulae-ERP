@@ -43,12 +43,14 @@ import { useCart } from '../../layout';
 import {
   getProducto,
   getProductAvailability,
+  getProductVariantes,
   formatCOP,
   isStoreError,
 } from '@/lib/store-api';
 import { AvailabilityBadge, getAvailabilityStatus } from '@/components/store/AvailabilityBadge';
 import { ModalityBadge } from '@/components/store/ModalityBadge';
-import type { NormalizedProduct, ProductAvailability } from '@/lib/store-api';
+import { VariantSelector } from '@/components/store/VariantSelector';
+import type { NormalizedProduct, ProductAvailability, ProductVariantReal, ProductVariantesResponse } from '@/lib/store-api';
 
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -194,6 +196,12 @@ export default function ProductoDetailPage({
     | { status: 'error'; message: string }
   >({ status: 'idle' });
 
+  // WEB-2B.2: Variantes reales
+  const [variantsData, setVariantsData] = useState<ProductVariantesResponse | null>(null);
+  const [variantLoading, setVariantLoading] = useState(false);
+  const [variantError, setVariantError] = useState<string | null>(null);
+  const [selectedVariant, setSelectedVariant] = useState<ProductVariantReal | null>(null);
+
   // ── Fetch product ──
   const fetchProduct = useCallback(() => {
     const controller = new AbortController();
@@ -203,6 +211,11 @@ export default function ProductoDetailPage({
     setActiveImg(0);
     setQty(1);
     setSelectedAttrs({});
+    // WEB-2B.2: Reset variant state
+    setVariantsData(null);
+    setVariantLoading(false);
+    setVariantError(null);
+    setSelectedVariant(null);
 
     getProducto(id, { signal: controller.signal })
       .then((product) => {
@@ -217,7 +230,23 @@ export default function ProductoDetailPage({
               message: 'No pudimos confirmar disponibilidad',
             }));
         }
+        // WEB-2B.2: Fetch real variants
+        const numId = Number(product.id);
+        if (Number.isInteger(numId) && numId > 0) {
+          setVariantLoading(true);
+          getProductVariantes(numId, { signal: controller.signal })
+            .then((vr) => {
+              setVariantsData(vr);
+              setVariantLoading(false);
+            })
+            .catch((err: unknown) => {
+              if (isStoreError(err) && err.isAborted) return;
+              setVariantLoading(false);
+              setVariantError('No se pudieron cargar las variantes');
+            });
+        }
       })
+
       .catch((err: unknown) => {
         if (isStoreError(err) && err.isAborted) return;
         if (isStoreError(err) && err.code === 'NOT_FOUND') {
@@ -295,12 +324,23 @@ export default function ProductoDetailPage({
   const availabilityError = availabilityState.status === 'error';
   const isNotPurchasable = !product.purchasable || !product.sku_id;
 
+  // WEB-2B.2: If product has real variants, a variant must be selected and purchasable
+  const hasRealVariants = variantsData?.has_variants === true;
+  const variantSelectionRequired = hasRealVariants && !selectedVariant;
+  const variantNotPurchasable = hasRealVariants && selectedVariant ? !selectedVariant.disponible : false;
+
   const isCartDisabled =
     isNotPurchasable ||
     !allAttrsSelected ||
     availabilityLoading ||
     availabilityError ||
+    variantSelectionRequired ||
+    variantNotPurchasable ||
     (availabilityState.status === 'ok' && !availabilityState.data.disponible);
+
+  // Cart button tooltip for "Consultar" state
+  const isConsultar = product.requires_configuration ||
+    product.modalidad_disponible === 'DISPONIBILIDAD_POR_CONFIRMAR';
 
   const handleAddToCart = async () => {
     if (isCartDisabled) return;
@@ -324,38 +364,50 @@ export default function ProductoDetailPage({
       }
     }
 
-    const variant = Object.entries(selectedAttrs)
+    const variantLabel = Object.entries(selectedAttrs)
       .map(([k, v]) => `${k}: ${v}`)
       .join(', ');
 
-    // WEB-2B.1: Cart payload includes sku_id and variant_id (if resolved from variantes)
-    const selectedVariant = product.variantes?.find((v) => {
-      if (typeof v !== 'object' || !v) return false;
-      const vObj = v as Record<string, unknown>;
-      // Check both flat keys and nested atributos
-      const attrs = (vObj['atributos'] ?? {}) as Record<string, unknown>;
-      return Object.entries(selectedAttrs).every(
-        ([k, val]) => attrs[k] === val || vObj[k] === val
-      );
-    }) as Record<string, unknown> | undefined;
+    // WEB-2B.2: use real selectedVariant sku_id and id if available;
+    // fallback to legacy attr-matching for products without real variants
+    const effectiveSkuId = selectedVariant?.sku_id ?? product.sku_id ?? undefined;
+    const effectiveVariantId = selectedVariant?.id != null
+      ? String(selectedVariant.id)
+      : (() => {
+        const legacyV = product.variantes?.find((v) => {
+          if (typeof v !== 'object' || !v) return false;
+          const vObj = v as Record<string, unknown>;
+          const attrs = (vObj['atributos'] ?? {}) as Record<string, unknown>;
+          return Object.entries(selectedAttrs).every(
+            ([k, val]) => attrs[k] === val || vObj[k] === val
+          );
+        }) as Record<string, unknown> | undefined;
+        return legacyV?.['variant_id'] as string | undefined;
+      })();
+
+    // WEB-2B.2: Use variant price if selected variant has a different price
+    const effectivePrice = selectedVariant?.precio_venta ?? product.precio_venta;
 
     addToCart({
       id: product.id,
       name: product.nombre,
-      price: product.precio_venta,
+      price: effectivePrice,
       qty,
-      variant,
+      variant: variantLabel,
       img: images[0] ?? '',
-      modalidad: product.modalidad,
-      // WEB-2B.1: canonical identifiers for order processing
-      sku_id: product.sku_id ?? undefined,
-      variant_id: selectedVariant?.['variant_id'] as string | undefined,
+      modalidad: selectedVariant?.modalidad ?? product.modalidad,
+      // WEB-2B.1+2B.2: canonical identifiers for order processing
+      sku_id: effectiveSkuId,
+      variant_id: effectiveVariantId,
     });
 
     setAdded(true);
     if (addedTimer.current) clearTimeout(addedTimer.current);
     addedTimer.current = setTimeout(() => setAdded(false), 2500);
   };
+
+
+
 
 
 
@@ -471,7 +523,10 @@ export default function ProductoDetailPage({
           {/* Price */}
           <div className="flex items-center gap-3 flex-wrap">
             <span className="text-4xl font-black text-[#1C1C1E]">
-              {product.precio_venta > 0 ? formatCOP(product.precio_venta) : '—'}
+              {/* WEB-2B.2: Show variant price if selected, otherwise product price */}
+              {(selectedVariant?.precio_venta ?? product.precio_venta) > 0
+                ? formatCOP(selectedVariant?.precio_venta ?? product.precio_venta)
+                : '—'}
             </span>
             {product.tiene_descuento && product.precio_comparacion > 0 && (
               <span className="text-xl text-[#8A8A8E] line-through">
@@ -583,6 +638,51 @@ export default function ProductoDetailPage({
                   Selecciona todas las opciones antes de agregar al carrito.
                 </p>
               )}
+            </div>
+          )}
+
+          {/* WEB-2B.2: VariantSelector — real variants from ecommerce_product_variants */}
+          {(variantsData?.has_variants || variantLoading || variantError) && (
+            <div>
+              <h3 className="text-sm font-bold text-[#1C1C1E] mb-3">Variante</h3>
+              <VariantSelector
+                variants={variantsData?.data ?? []}
+                selectedVariantId={selectedVariant?.id ?? null}
+                onVariantChange={setSelectedVariant}
+                loading={variantLoading}
+                error={variantError}
+                onRetry={() => {
+                  const numId = Number(product.id);
+                  if (!Number.isInteger(numId) || numId <= 0) return;
+                  setVariantLoading(true);
+                  setVariantError(null);
+                  getProductVariantes(numId)
+                    .then((vr) => { setVariantsData(vr); setVariantLoading(false); })
+                    .catch(() => { setVariantLoading(false); setVariantError('No se pudieron cargar las variantes'); });
+                }}
+              />
+              {/* Variant selection required hint */}
+              {hasRealVariants && !selectedVariant && !variantLoading && (
+                <p className="text-xs text-[#E55B8A] font-medium mt-2" role="alert">
+                  Selecciona una variante antes de agregar al carrito.
+                </p>
+              )}
+              {/* Agotado */}
+              {hasRealVariants && selectedVariant && !selectedVariant.disponible && (
+                <p className="text-xs text-[#E55B8A] font-medium mt-2" role="alert">
+                  Esta variante está agotada.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Consultar message for products without configuration */}
+          {isConsultar && (
+            <div className="rounded-xl bg-[#FFF5FA] border border-[#F6BAD6] px-4 py-3">
+              <p className="text-sm text-[#C44A77] font-medium">
+                Este producto requiere confirmación de disponibilidad.{' '}
+                <span className="font-bold">Contáctanos para asesorarte.</span>
+              </p>
             </div>
           )}
 

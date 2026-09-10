@@ -4,6 +4,7 @@
  * Punto de entrada público de la capa API del storefront.
  * Importar desde '@/lib/store-api' en lugar de archivos individuales.
  * WEB-2B.1: añade ProductAvailability, AvailabilityResponse, availability API functions.
+ * WEB-2B.2: añade getProductVariantes, getAtributos, nuevos tipos de variantes/atributos.
  */
 
 // Errors
@@ -26,6 +27,11 @@ export type {
   // WEB-2B.1
   ProductAvailability,
   AvailabilityResponse,
+  // WEB-2B.2
+  ProductVariantReal,
+  ProductVariantesResponse,
+  AtributosFilterData,
+  AtributosResponse,
 } from './types';
 export { EMPTY_FILTERS } from './types';
 
@@ -33,7 +39,7 @@ export { EMPTY_FILTERS } from './types';
 export { storeClient } from './client';
 
 // Catalog
-export { listProductos, getProducto, normalizeProduct } from './catalog';
+export { listProductos, getProducto, normalizeProduct, getProductVariantes, getAtributos } from './catalog';
 
 // Availability (WEB-2B.1)
 export {
@@ -60,3 +66,4 @@ export {
   formatCOP,
   hasRealDiscount,
 } from './query';
+

@@ -33,6 +33,7 @@ class TestFase4Migrations:
         yield
         env = os.environ.copy()
         env["DATABASE_URL"] = TEST_URL
+        env["ALEMBIC_ENV"] = "testing"  # prevent ABORT when both DB URLs are set
         subprocess.run(
             [sys.executable, "-m", "alembic", "upgrade", "head"],
             cwd=str(_BACKEND), env=env, capture_output=True, text=True
@@ -42,6 +43,7 @@ class TestFase4Migrations:
             conn.execute(text("GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO nebulae_test;"))
             conn.execute(text("GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO nebulae_test;"))
             conn.commit()
+
 
     def test_fa4_001_y_fa4_002_tablas_columnas_checks_indices(self, db):
         """Verifica la existencia física de las 7 tablas de Fase 4, columnas agregadas, checks e índices de fa4_002."""
@@ -119,7 +121,9 @@ class TestFase4Migrations:
         """
         env = os.environ.copy()
         env["DATABASE_URL"] = TEST_URL
+        env["ALEMBIC_ENV"] = "testing"  # prevent ABORT when both DB URLs are set
         eng = create_engine(TEST_URL)
+
 
         # 1. Downgrade a fa4_001
         down_fa4_001 = subprocess.run(

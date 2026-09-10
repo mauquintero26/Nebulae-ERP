@@ -74,6 +74,8 @@ export type BackendProduct = {
   requires_configuration?: boolean;
   /** Fuente del stock reportado: REAL | MANUAL | UNCONFIRMED */
   availability_source?: 'REAL' | 'MANUAL' | 'UNCONFIRMED';
+  // WEB-2B.2: stable URL slug (GAP-005)
+  slug?: string | null;
 };
 
 
@@ -93,8 +95,54 @@ export type BackendProductVariante = {
   stock?: number;
 };
 
+// ─── WEB-2B.2: Variantes reales (GET /catalogo/{id}/variantes) ───────────────
+
+/**
+ * Variante real devuelta por GET /ecommerce/catalogo/{id}/variantes.
+ * Cada variante está asociada a un ProductSKU del ERP (sku_id).
+ */
+export type ProductVariantReal = {
+  id: number | null;
+  sku_id: number | null;
+  nombre: string;
+  /** Atributos filtrados: talla, color, presentacion, material, capacidad, sabor */
+  atributos: Record<string, string>;
+  precio_venta: number;
+  stock_vendible: number;
+  disponible: boolean;
+  modalidad: 'ENTREGA_INMEDIATA' | 'POR_PEDIDO' | 'DISPONIBILIDAD_POR_CONFIRMAR';
+  max_orderable: number | null;
+};
+
+export type ProductVariantesResponse = {
+  status: 'success';
+  product_id: number;
+  has_variants: boolean;
+  data: ProductVariantReal[];
+};
+
+// ─── WEB-2B.2: Atributos dinámicos (GET /atributos) ──────────────────────────
+
+export type AtributosFilterData = {
+  precio_min: number;
+  precio_max: number;
+  marcas: string[];
+  categorias: string[];
+  tallas: string[];
+  colores: string[];
+};
+
+export type AtributosResponse = {
+  status: 'success';
+  data: AtributosFilterData;
+};
+
 export type CatalogListResponse = ApiEnvelope<BackendProduct[]> & {
   total: number;
+  // WEB-2B.2: server-side pagination (GAP-001)
+  offset?: number;
+  limit?: number;
+  has_more?: boolean;
 };
 
 // ─── Disponibilidad endpoint (WEB-2B.1) ──────────────────────────────────────
@@ -212,9 +260,9 @@ export type WebConfigResponse = ApiEnvelope<BackendWebConfig> & {
 // ─── Catalog query params ─────────────────────────────────────────────────────
 
 /**
- * Parámetros de consulta soportados por el backend real.
- * NOTA: el backend NO soporta offset/page — solo limit (máx 500).
- * La paginación real es un GAP documentado en WEB2A_GAPS_BACKEND.md.
+ * Parámetros de consulta soportados por el backend.
+ * WEB-2B.2: incluye paginación server-side, filtros avanzados y ordenamiento.
+ * Ver WEB2A_GAPS_BACKEND.md GAP-001, GAP-002, GAP-003.
  */
 export type CatalogQueryParams = {
   /** Búsqueda por nombre, SKU o descripción (ILIKE) */
@@ -223,8 +271,18 @@ export type CatalogQueryParams = {
   categoria?: string;
   /** Solo productos publicados en web */
   publicado?: boolean;
-  /** Máximo 500 — único mecanismo de "paginación" disponible */
+  /** Ítems por página (default 24, máx 500) */
   limit?: number;
+  // WEB-2B.2: server-side pagination (GAP-001)
+  offset?: number;
+  // WEB-2B.2: server-side filters (GAP-002)
+  marca?: string;
+  precio_min?: number;
+  precio_max?: number;
+  modalidad?: string;
+  disponible?: boolean;
+  // WEB-2B.2: server-side ordering (GAP-003)
+  ordenar?: 'nombre_asc' | 'nombre_desc' | 'precio_asc' | 'precio_desc' | 'recientes';
 };
 
 // ─── Normalized product (frontend) ───────────────────────────────────────────
@@ -234,6 +292,7 @@ export type CatalogQueryParams = {
  * Garantiza que campos críticos no sean null/undefined.
  *
  * WEB-2B.1: añade sku_id, purchasable, requires_configuration, availability_source.
+ * WEB-2B.2: añade slug.
  */
 export type NormalizedProduct = {
   id: string;
@@ -286,7 +345,10 @@ export type NormalizedProduct = {
    * DISPONIBILIDAD_POR_CONFIRMAR en cualquier otro caso.
    */
   modalidad_disponible: 'ENTREGA_INMEDIATA' | 'POR_PEDIDO' | 'DISPONIBILIDAD_POR_CONFIRMAR';
+  // WEB-2B.2: stable URL slug (GAP-005)
+  slug: string | null;
 };
+
 
 // ─── Pagination state (client-side) ──────────────────────────────────────────
 

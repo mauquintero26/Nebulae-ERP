@@ -672,56 +672,110 @@ def recuperar_carrito(cart_id: int, body: dict, user: User = Depends(require_rol
 
 # --- CATALOGO DIGITAL ---
 @router.get("/catalogo")
-def list_catalogo(search: Optional[str] = None, categoria: Optional[str] = None, publicado: Optional[bool] = None, limit: int = Query(100, le=500), db: Session = Depends(get_db)):
+def list_catalogo(
+    search: Optional[str] = None,
+    categoria: Optional[str] = None,
+    publicado: Optional[bool] = None,
+    limit: int = Query(100, le=500),
+    # WEB-2B.2: server-side pagination (GAP-001)
+    offset: int = Query(0, ge=0),
+    # WEB-2B.2: server-side filters (GAP-002)
+    marca: Optional[str] = None,
+    precio_min: Optional[float] = None,
+    precio_max: Optional[float] = None,
+    modalidad: Optional[str] = None,
+    disponible: Optional[bool] = None,
+    # WEB-2B.2: server-side ordering (GAP-003)
+    ordenar: Optional[str] = Query(None, pattern="^(nombre_asc|nombre_desc|precio_asc|precio_desc|recientes)$"),
+    db: Session = Depends(get_db),
+):
+
     _ensure_ecommerce_tables(db)
     where_clauses = []
-    params: dict = {"limit": limit}
+    params: dict = {"limit": limit, "offset": offset}
+
     if search:
-        where_clauses.append("(nombre ILIKE :s OR sku ILIKE :s OR descripcion ILIKE :s)")
+        where_clauses.append("(ep.nombre ILIKE :s OR ep.sku ILIKE :s OR ep.descripcion ILIKE :s)")
         params["s"] = f"%{search}%"
     if categoria:
-        where_clauses.append("categoria ILIKE :c")
+        where_clauses.append("ep.categoria ILIKE :c")
         params["c"] = f"%{categoria}%"
     if publicado is not None:
-        where_clauses.append("publicado_web = :pub")
+        where_clauses.append("ep.publicado_web = :pub")
         params["pub"] = publicado
+    # WEB-2B.2: server-side filters (GAP-002)
+    if marca:
+        where_clauses.append("ep.marca ILIKE :marca")
+        params["marca"] = f"%{marca}%"
+    if precio_min is not None:
+        where_clauses.append("ep.precio_venta >= :precio_min")
+        params["precio_min"] = precio_min
+    if precio_max is not None:
+        where_clauses.append("ep.precio_venta <= :precio_max")
+        params["precio_max"] = precio_max
+    if modalidad:
+        where_clauses.append("COALESCE(ep.modalidad, 'POR_PEDIDO') = :modalidad")
+        params["modalidad"] = modalidad
+    if disponible is True:
+        where_clauses.append("COALESCE(ep.purchasable, FALSE) = TRUE AND ep.sku_id IS NOT NULL")
+    elif disponible is False:
+        where_clauses.append("(COALESCE(ep.purchasable, FALSE) = FALSE OR ep.sku_id IS NULL)")
+
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    # WEB-2B.2: server-side ordering (GAP-003)
+    order_map = {
+        "nombre_asc":  "ep.nombre ASC",
+        "nombre_desc": "ep.nombre DESC",
+        "precio_asc":  "ep.precio_venta ASC",
+        "precio_desc": "ep.precio_venta DESC",
+        "recientes":   "ep.created_at DESC NULLS LAST",
+    }
+    order_sql = order_map.get(ordenar or "", "ep.nombre ASC")
+
     try:
-        # WEB-2B.1: Include new fields sku_id, purchasable, requires_configuration, availability_source, modalidad
-        rows = db.execute(text(
-            f"SELECT id, nombre, descripcion, sku, precio_venta, precio_comparacion, descuento_pct, "
-            f"impuesto_pct, categoria, sub_categoria, marca, tipo_producto, imagenes, atributos, variantes, "
-            f"stock_disponible, alerta_stock_minimo, publicado_web, rastrear_inventario, seo_titulo, "
-            f"created_at, updated_at, "
-            f"COALESCE(sku_id, NULL) AS sku_id, "
-            f"COALESCE(purchasable, FALSE) AS purchasable, "
-            f"COALESCE(requires_configuration, FALSE) AS requires_configuration, "
-            f"COALESCE(availability_source, 'MANUAL') AS availability_source, "
-                        f"COALESCE(modalidad, 'POR_PEDIDO') AS modalidad "
-            f"FROM ecommerce_products {where_sql} ORDER BY nombre LIMIT :limit"
-        ), params).fetchall()
-        total = int(db.execute(text(f"SELECT COUNT(*) FROM ecommerce_products {where_sql}"), {k:v for k,v in params.items() if k!="limit"}).scalar() or 0)
+        # WEB-2B.1+2B.2: Select all relevant fields from ecommerce_products
+        select_sql = (
+            f"SELECT ep.id, ep.nombre, ep.descripcion, ep.sku, ep.precio_venta, ep.precio_comparacion, "
+            f"ep.descuento_pct, ep.impuesto_pct, ep.categoria, ep.sub_categoria, ep.marca, ep.tipo_producto, "
+            f"ep.imagenes, ep.atributos, ep.variantes, ep.stock_disponible, ep.alerta_stock_minimo, "
+            f"ep.publicado_web, ep.rastrear_inventario, ep.seo_titulo, ep.created_at, ep.updated_at, "
+            f"COALESCE(ep.sku_id, NULL) AS sku_id, "
+            f"COALESCE(ep.purchasable, FALSE) AS purchasable, "
+            f"COALESCE(ep.requires_configuration, FALSE) AS requires_configuration, "
+            f"COALESCE(ep.availability_source, 'MANUAL') AS availability_source, "
+            f"COALESCE(ep.modalidad, 'POR_PEDIDO') AS modalidad, "
+            f"ep.slug "
+            f"FROM ecommerce_products ep "
+            f"{where_sql} ORDER BY {order_sql} LIMIT :limit OFFSET :offset"
+        )
+        rows = db.execute(text(select_sql), params).fetchall()
+
+        count_params = {k: v for k, v in params.items() if k not in ("limit", "offset")}
+        total = int(
+            db.execute(text(f"SELECT COUNT(*) FROM ecommerce_products ep {where_sql}"), count_params).scalar() or 0
+        )
 
         # WEB-2B.1: Resolve authorized warehouses ONCE for the entire catalog response
         auth_whs, _ = _get_authorized_ecommerce_warehouses(db)
         auth_wh_ids = [w.id for w in auth_whs] if auth_whs else []
 
         data = []
-        seen_skus = set()
+        seen_skus: set = set()
         for r in rows:
-            # r indices: 0=id,1=nombre,2=desc,3=sku,4=pv,5=pc,6=dpct,7=ipct,8=cat,9=subcat,10=marca,11=tipo
-            # 12=img,13=attr,14=var,15=stock,16=alerta,17=pub,18=rastrear,19=seo,20=cat,21=upd
-            # 22=sku_id,23=purchasable,24=requires_conf,25=avail_source,26=modalidad
+            # Indices: 0=id,1=nombre,2=desc,3=sku,4=pv,5=pc,6=dpct,7=ipct,8=cat,9=subcat,10=marca,
+            # 11=tipo,12=img,13=attr,14=var,15=stock,16=alerta,17=pub,18=rastrear,19=seo,20=created,21=updated
+            # 22=sku_id,23=purchasable,24=requires_conf,25=avail_source,26=modalidad,27=slug
             sku_code = r[3]
-            sku_id_db = r[22]  # FK to product_skus
+            sku_id_db = r[22]
             purchasable_db = bool(r[23])
             availability_source_db = r[25] or "MANUAL"
             modalidad_db = r[26] or "POR_PEDIDO"
+            slug_val = r[27] if len(r) > 27 else None
 
             stock_disp = float(r[15] or 0)
 
             # WEB-2B.1: Real stock only via FK sku_id, scoped to authorized warehouses only.
-            # No SKU-string lookup fallback.
             if sku_id_db:
                 real_stock = _get_real_sellable_stock(
                     db, sku_id_db, owner="NEBULAE",
@@ -776,9 +830,20 @@ def list_catalogo(search: Optional[str] = None, categoria: Optional[str] = None,
                 "created_at": r[20].isoformat() if r[20] else None,
                 "updated_at": r[21].isoformat() if r[21] else None,
                 "is_low_stock": is_low,
+                # WEB-2B.2: stable URL slug (GAP-005)
+                "slug": slug_val,
             })
 
-        return {"status": "success", "total": total, "data": data}
+        return {
+            "status": "success",
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "has_more": (offset + limit) < total,
+            "data": data,
+        }
+    except HTTPException:
+        raise
     except Exception:
         # WEB-2B.1: Never return HTTP 200 with an error key — this leaks internal details
         # and confuses clients into thinking the catalog is empty.
@@ -786,6 +851,7 @@ def list_catalogo(search: Optional[str] = None, categoria: Optional[str] = None,
             status_code=503,
             detail={"error": "CATALOG_ERROR", "message": "Error al cargar el catálogo. Intente de nuevo."}
         )
+
 
 
 
@@ -971,6 +1037,224 @@ def get_product_disponibilidad(product_id: int, db: Session = Depends(get_db)):
             "timestamp": now_ts,
         }
     }
+
+
+# WEB-2B.2 — Variantes reales (GAP-006)
+@router.get("/catalogo/{product_id}/variantes")
+def get_product_variantes(product_id: int, db: Session = Depends(get_db)):
+    """
+    WEB-2B.2: Returns real variants for a product, each with:
+    - sku_id: FK to product_skus (required for checkout)
+    - atributos: {talla, color, presentacion, ...}
+    - precio_venta: per-variant price (or product default if null)
+    - stock_vendible: real stock for NEBULAE owner in authorized warehouses
+    - disponible: strict purchasability check
+    - is_active: only active variants returned
+
+    Security: never exposes warehouse_id, cost, internal notes.
+    """
+    _ensure_ecommerce_tables(db)
+
+    # Verify product exists and is published
+    product_row = db.execute(
+        text(
+            "SELECT id, nombre, sku_id, purchasable, requires_configuration, modalidad, precio_venta "
+            "FROM ecommerce_products WHERE id = :pid AND publicado_web = TRUE"
+        ),
+        {"pid": product_id},
+    ).fetchone()
+
+    if not product_row:
+        raise HTTPException(status_code=404, detail={"error": "PRODUCT_NOT_FOUND"})
+
+    product_purchasable = bool(product_row[3])
+    product_requires_conf = bool(product_row[4])
+    product_modalidad = product_row[5] or "POR_PEDIDO"
+    product_precio = float(product_row[6] or 0)
+
+    # Resolve authorized warehouses once
+    auth_whs, _ = _get_authorized_ecommerce_warehouses(db)
+    auth_wh_ids = [w.id for w in auth_whs] if auth_whs else []
+
+    # Fetch variants from ecommerce_product_variants (WEB-2B.2 table)
+    variant_rows = db.execute(
+        text(
+            "SELECT id, sku_id, nombre, atributos, precio_venta, stock_override, is_active "
+            "FROM ecommerce_product_variants "
+            "WHERE product_id = :pid AND is_active = TRUE "
+            "ORDER BY id ASC"
+        ),
+        {"pid": product_id},
+    ).fetchall()
+
+    # If no structured variants exist, build a synthetic single-variant from product itself
+    if not variant_rows:
+        product_sku_id = product_row[2]
+        real_stock = 0.0
+        if product_sku_id and auth_wh_ids:
+            real_stock = float(_get_real_sellable_stock(
+                db, product_sku_id, owner="NEBULAE",
+                authorized_warehouse_ids=auth_wh_ids,
+            ))
+        elif product_sku_id:
+            real_stock = 0.0
+
+        can_purchase = (
+            product_purchasable
+            and bool(product_sku_id)
+            and product_modalidad in ("ENTREGA_INMEDIATA", "POR_PEDIDO")
+            and not product_requires_conf
+            and (product_modalidad == "POR_PEDIDO" or real_stock > 0)
+        )
+
+        return {
+            "status": "success",
+            "product_id": product_id,
+            "has_variants": False,
+            "data": [{
+                "id": None,
+                "sku_id": product_sku_id,
+                "nombre": product_row[1],
+                "atributos": {},
+                "precio_venta": product_precio,
+                "stock_vendible": real_stock,
+                "disponible": can_purchase,
+                "modalidad": product_modalidad,
+                "max_orderable": max(0, int(real_stock)) if product_modalidad == "ENTREGA_INMEDIATA" else None,
+            }],
+        }
+
+    # Build variant list with real stock
+    variants_out = []
+    for vr in variant_rows:
+        var_id, var_sku_id, var_nombre, var_attrs, var_precio, var_stock_override, _ = vr
+        var_attrs = var_attrs or {}
+        var_precio_final = float(var_precio) if var_precio is not None else product_precio
+
+        # Real stock per variant SKU
+        real_var_stock = 0.0
+        if var_sku_id and auth_wh_ids:
+            real_var_stock = float(_get_real_sellable_stock(
+                db, var_sku_id, owner="NEBULAE",
+                authorized_warehouse_ids=auth_wh_ids,
+            ))
+        elif var_sku_id:
+            real_var_stock = 0.0  # no auth warehouses → 0
+
+        # Use stock_override only if > 0 and no real sku_id link
+        if var_stock_override is not None and not var_sku_id:
+            real_var_stock = float(var_stock_override)
+
+        # Determine variant modalidad (inherit product if not set in attrs)
+        var_modalidad = var_attrs.get("modalidad", product_modalidad)
+
+        can_buy_var = (
+            product_purchasable
+            and bool(var_sku_id)
+            and var_modalidad in ("ENTREGA_INMEDIATA", "POR_PEDIDO")
+            and not product_requires_conf
+            and (var_modalidad == "POR_PEDIDO" or real_var_stock > 0)
+        )
+
+        max_ord = max(0, int(real_var_stock)) if var_modalidad == "ENTREGA_INMEDIATA" else None
+
+        variants_out.append({
+            "id": var_id,
+            "sku_id": var_sku_id,
+            "nombre": var_nombre or product_row[1],
+            # Safe: expose only purchasable-relevant attributes
+            "atributos": {
+                k: v for k, v in var_attrs.items()
+                if k in ("talla", "color", "presentacion", "material", "capacidad", "sabor")
+            },
+            "precio_venta": var_precio_final,
+            "stock_vendible": real_var_stock,
+            "disponible": can_buy_var,
+            "modalidad": var_modalidad,
+            "max_orderable": max_ord,
+        })
+
+    return {
+        "status": "success",
+        "product_id": product_id,
+        "has_variants": True,
+        "data": variants_out,
+    }
+
+
+# WEB-2B.2 — Atributos dinámicos por categoría (GAP-007)
+@router.get("/atributos")
+def get_atributos_web(categoria: Optional[str] = None, db: Session = Depends(get_db)):
+    """
+    WEB-2B.2: Returns dynamic attribute values for filtering.
+    If categoria is provided, filters to that category.
+    Returns: {marcas, categorias, precio_min, precio_max, tallas, colores}
+    Extracts tallas/colores from ecommerce_products.atributos JSONB array.
+    """
+    _ensure_ecommerce_tables(db)
+    try:
+        where_sql = "WHERE publicado_web = TRUE"
+        params: dict = {}
+        if categoria:
+            where_sql += " AND categoria ILIKE :c"
+            params["c"] = f"%{categoria}%"
+
+        # Aggregate min/max precio and distinct marcas/categorias
+        agg = db.execute(text(
+            f"SELECT MIN(precio_venta), MAX(precio_venta), "
+            f"ARRAY_AGG(DISTINCT marca) FILTER (WHERE marca IS NOT NULL AND marca != ''), "
+            f"ARRAY_AGG(DISTINCT categoria) FILTER (WHERE categoria IS NOT NULL AND categoria != '') "
+            f"FROM ecommerce_products {where_sql}"
+        ), params).fetchone()
+
+        precio_min_val = float(agg[0]) if agg[0] else 0.0
+        precio_max_val = float(agg[1]) if agg[1] else 0.0
+        marcas = sorted(agg[2] or [])
+        categorias = sorted(agg[3] or [])
+
+        # Extract tallas and colores from atributos JSONB
+        attr_rows = db.execute(text(
+            f"SELECT atributos FROM ecommerce_products {where_sql} AND atributos IS NOT NULL"
+        ), params).fetchall()
+
+        tallas: set = set()
+        colores: set = set()
+        for row in attr_rows:
+            attrs = row[0] or []
+            if isinstance(attrs, list):
+                for attr in attrs:
+                    if isinstance(attr, dict):
+                        name_lower = (attr.get("nombre") or attr.get("name") or "").lower()
+                        val = attr.get("valor") or attr.get("value") or attr.get("opciones") or attr.get("options")
+                        if "talla" in name_lower or "size" in name_lower:
+                            if isinstance(val, list):
+                                tallas.update(str(v) for v in val if v)
+                            elif val:
+                                tallas.add(str(val))
+                        elif "color" in name_lower or "colour" in name_lower:
+                            if isinstance(val, list):
+                                colores.update(str(v) for v in val if v)
+                            elif val:
+                                colores.add(str(val))
+
+        return {
+            "status": "success",
+            "data": {
+                "precio_min": precio_min_val,
+                "precio_max": precio_max_val,
+                "marcas": marcas,
+                "categorias": categorias,
+                "tallas": sorted(tallas),
+                "colores": sorted(colores),
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        return {"status": "success", "data": {
+            "precio_min": 0.0, "precio_max": 0.0,
+            "marcas": [], "categorias": [], "tallas": [], "colores": [],
+        }}
 
 
 @router.post("/catalogo", status_code=201)
