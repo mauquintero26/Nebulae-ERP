@@ -61,7 +61,7 @@ export class StoreError extends Error {
     this.code = code;
     this.publicMessage = publicMessage;
     this.status = options?.status;
-    this.isAborted = code === 'ABORTED';
+    this.isAborted = code === 'ABORTED' || code === 'TIMEOUT';
     if (options?.cause && this instanceof Error) {
       this.cause = options.cause;
     }
@@ -86,6 +86,8 @@ export function fromHttpStatus(status: number, detail?: string): StoreError {
 }
 
 export function fromNetworkError(cause: unknown): StoreError {
+  // StoreError instances are always re-thrown as-is
+  if (cause instanceof StoreError) return cause;
   if (cause instanceof DOMException && cause.name === 'AbortError') {
     return new StoreError('ABORTED', { cause });
   }

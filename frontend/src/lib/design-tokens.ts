@@ -121,16 +121,21 @@ export const CLS = {
 
 // ─── Availability Status Classes ──────────────────────────────────────────────
 
-export const AVAILABILITY_CLS = {
-  available:    { label: 'Disponible',        cls: 'bg-[#F4FAE6] text-[#7A9A40] border-[#C2D987]' },
-  low_stock:    { label: 'Últimas unidades',  cls: 'bg-[#FFF5EC] text-[#C47A3A] border-[#F9BF92]' },
-  out_of_stock: { label: 'Agotado',           cls: 'bg-[#FFEEF4] text-[#E55B8A] border-[#F6BAD6]' },
-  by_order:     { label: 'Por pedido',        cls: 'bg-[#EBF7FF] text-[#3A8FC4] border-[#B5E1F6]' },
-} as const;
+export const AVAILABILITY_CLS: Record<string, { label: string; cls: string }> = {
+  available:    { label: 'Disponible',                    cls: 'bg-[#F4FAE6] text-[#7A9A40] border-[#C2D987]' },
+  low_stock:    { label: 'Últimas unidades',              cls: 'bg-[#FFF5EC] text-[#C47A3A] border-[#F9BF92]' },
+  out_of_stock: { label: 'Agotado',                      cls: 'bg-[#FFEEF4] text-[#E55B8A] border-[#F6BAD6]' },
+  by_order:     { label: 'Por pedido',                   cls: 'bg-[#EBF7FF] text-[#3A8FC4] border-[#B5E1F6]' },
+  /** Disponibilidad sujeta a confirmación — stock puede ser manual (GAP-004) */
+  unconfirmed:  { label: 'Disponibilidad sujeta a confirmación', cls: 'bg-[#F5F5F5] text-[#8A8A8E] border-[#D1D1D6]' },
+};
 
 // ─── Modality Classes ─────────────────────────────────────────────────────────
 
-export const MODALITY_CLS = {
-  ENTREGA_INMEDIATA: { label: 'Entrega inmediata', cls: 'bg-[#F4FAE6] text-[#7A9A40] border-[#C2D987]' },
-  POR_PEDIDO:        { label: 'Por pedido',         cls: 'bg-[#EBF7FF] text-[#3A8FC4] border-[#B5E1F6]' },
-} as const;
+export const MODALITY_CLS: Record<string, { label: string; cls: string }> = {
+  ENTREGA_INMEDIATA:             { label: 'Entrega inmediata',                    cls: 'bg-[#F4FAE6] text-[#7A9A40] border-[#C2D987]' },
+  POR_PEDIDO:                    { label: 'Por pedido',                           cls: 'bg-[#EBF7FF] text-[#3A8FC4] border-[#B5E1F6]' },
+  /** Stock no vinculado a SKU canónico — no afirmar entrega inmediata (GAP-004) */
+  DISPONIBILIDAD_POR_CONFIRMAR:  { label: 'Disponibilidad sujeta a confirmación', cls: 'bg-[#F5F5F5] text-[#8A8A8E] border-[#D1D1D6]' },
+};
+

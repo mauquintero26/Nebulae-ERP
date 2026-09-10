@@ -29,16 +29,23 @@ export function normalizeProduct(raw: BackendProduct): NormalizedProduct {
   const descuento_pct =
     typeof raw.descuento_pct === 'number' ? raw.descuento_pct : 0;
 
-  // Prefer server-computed modalidad_disponible; fall back to legacy field or infer
+  // ── Modalidad segura ──────────────────────────────────────────────────────
+  //
+  // Prioridad canónica (de mayor a menor confianza):
+  //   1. modalidad_disponible = campo calculado por el servidor en tiempo real.
+  //   2. modalidad = campo legacy manual — válido pero menos fiable.
+  //   3. DISPONIBILIDAD_POR_CONFIRMAR — no inferir ENTREGA_INMEDIATA desde stock.
+  //
+  // NUNCA se infiere ENTREGA_INMEDIATA únicamente porque stock_disponible > 0,
+  // ya que stock_disponible puede ser un valor manual no vinculado a un SKU canónico.
+  // Ver WEB2A_GAPS_BACKEND.md GAP-004.
   const modalidad: NormalizedProduct['modalidad'] =
     raw.modalidad_disponible === 'ENTREGA_INMEDIATA' ||
     raw.modalidad_disponible === 'POR_PEDIDO'
       ? raw.modalidad_disponible
       : raw.modalidad === 'ENTREGA_INMEDIATA' || raw.modalidad === 'POR_PEDIDO'
       ? raw.modalidad
-      : (raw.stock_disponible ?? 0) > 0
-      ? 'ENTREGA_INMEDIATA'
-      : 'POR_PEDIDO';
+      : 'DISPONIBILIDAD_POR_CONFIRMAR';
 
   return {
     id: String(raw.id),

@@ -81,20 +81,22 @@ describe('normalizeProduct', () => {
     expect(p.modalidad).toBe('ENTREGA_INMEDIATA');
   });
 
-  it('infers modalidad from stock when no field provided', () => {
+  it('uses DISPONIBILIDAD_POR_CONFIRMAR when no canonical modalidad provided (safe behavior)', () => {
+    // Previously inferred ENTREGA_INMEDIATA from stock > 0 — unsafe (GAP-004).
+    // Now correctly uses DISPONIBILIDAD_POR_CONFIRMAR to avoid false promises.
     const withStock = normalizeProduct(makeBackendProduct({
       modalidad_disponible: undefined,
       modalidad: undefined,
       stock_disponible: 5,
     }));
-    expect(withStock.modalidad).toBe('ENTREGA_INMEDIATA');
+    expect(withStock.modalidad).toBe('DISPONIBILIDAD_POR_CONFIRMAR');
 
     const noStock = normalizeProduct(makeBackendProduct({
       modalidad_disponible: undefined,
       modalidad: undefined,
       stock_disponible: 0,
     }));
-    expect(noStock.modalidad).toBe('POR_PEDIDO');
+    expect(noStock.modalidad).toBe('DISPONIBILIDAD_POR_CONFIRMAR');
   });
 
   it('filters null/empty strings from imagenes array', () => {

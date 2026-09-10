@@ -76,7 +76,7 @@
 | **Campos requeridos** | `stock_vendible: float`, `modalidad: enum`, `fuente: 'real'|'manual'`, `timestamp: ISO` |
 | **Pruebas necesarias** | Verificar que el campo `fuente=real` usa `InventoryOwnerBalance.owner=NEBULAE` y descuenta reservas activas |
 | **Fase sugerida** | WEB-2B (P0 — antes del checkout real) |
-| **Solución temporal WEB-2A** | Mostrar "Disponibilidad sujeta a confirmación" para productos ENTREGA_INMEDIATA. No mostrar cifra exacta como garantía. |
+| **Solución frontend WEB-2A (FASE 3)** | `normalizeProduct` ya NO infiere `ENTREGA_INMEDIATA` desde `stock_disponible > 0`. Si no existe `modalidad_disponible` o `modalidad` canónica válida, el producto recibe `DISPONIBILIDAD_POR_CONFIRMAR`. `getAvailabilityStatus` muestra `unconfirmed` → badge gris "Disponibilidad sujeta a confirmación". Las páginas catálogo, producto y home ya reflejan este comportamiento. Verificado con 19/19 pruebas en `availability.test.ts`. |
 
 ---
 

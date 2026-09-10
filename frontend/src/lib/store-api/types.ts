@@ -190,7 +190,14 @@ export type NormalizedProduct = {
   atributos: BackendProductAtributo[];
   variantes: BackendProductVariante[];
   stock_disponible: number;
-  modalidad: 'ENTREGA_INMEDIATA' | 'POR_PEDIDO';
+  /**
+   * Modalidad de entrega resuelta para el frontend.
+   * - ENTREGA_INMEDIATA: confirmado por modalidad_disponible del servidor.
+   * - POR_PEDIDO: confirmado por modalidad_disponible o legacy modalidad del servidor.
+   * - DISPONIBILIDAD_POR_CONFIRMAR: no existe modalidad canónica verificable;
+   *   el stock puede ser un valor manual. Ver GAP-004.
+   */
+  modalidad: 'ENTREGA_INMEDIATA' | 'POR_PEDIDO' | 'DISPONIBILIDAD_POR_CONFIRMAR';
   alerta_stock_minimo: number;
   publicado_web: boolean;
   rastrear_inventario: boolean;

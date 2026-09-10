@@ -82,7 +82,7 @@ export type Product = {
   tipo_producto?: string;
   publicado_web?: boolean;
   rastrear_inventario?: boolean;
-  modalidad?: 'ENTREGA_INMEDIATA' | 'POR_PEDIDO';
+  modalidad?: 'ENTREGA_INMEDIATA' | 'POR_PEDIDO' | 'DISPONIBILIDAD_POR_CONFIRMAR';
   seo_titulo?: string;
   seo_descripcion?: string;
   created_at?: string;
@@ -112,7 +112,7 @@ export type CartItem = {
   variant: string;
   img: string;
   sku?: string;
-  modalidad?: 'ENTREGA_INMEDIATA' | 'POR_PEDIDO';
+  modalidad?: 'ENTREGA_INMEDIATA' | 'POR_PEDIDO' | 'DISPONIBILIDAD_POR_CONFIRMAR';
 };
 
 export type CartContextType = {
@@ -177,10 +177,12 @@ export type WebConfig = {
 // ─── Availability ─────────────────────────────────────────────────────────────
 
 export type AvailabilityStatus =
-  | 'available'       // stock_disponible > alerta_stock_minimo
-  | 'low_stock'       // 0 < stock_disponible <= alerta_stock_minimo
+  | 'available'       // stock_disponible > alerta_stock_minimo AND modalidad canónica ENTREGA_INMEDIATA
+  | 'low_stock'       // 0 < stock_disponible <= alerta_stock_minimo AND modalidad canónica ENTREGA_INMEDIATA
   | 'out_of_stock'    // stock_disponible == 0
-  | 'by_order';       // modalidad == POR_PEDIDO
+  | 'by_order'        // modalidad == POR_PEDIDO (no depende de stock local)
+  | 'unconfirmed';    // modalidad no pudo verificarse como canónica — stock puede ser manual
+
 
 // ─── Filter State ─────────────────────────────────────────────────────────────
 

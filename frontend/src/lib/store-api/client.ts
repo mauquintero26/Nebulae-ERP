@@ -74,12 +74,35 @@ async function storeGet<T>(
     timeoutController.abort(new DOMException('Request timed out', 'TimeoutError'));
   }, timeoutMs);
 
-  // Merge signals
-  const signals: AbortSignal[] = [timeoutController.signal];
-  if (options?.signal) signals.push(options.signal);
-  const combinedSignal = AbortSignal.any
-    ? AbortSignal.any(signals)
-    : signals[0]; // fallback for older environments
+  // ── Combinar señales de timeout y del consumidor ──────────────────────────
+  //
+  // Se deben respetar simultáneamente:
+  //   1. El timeout interno (siempre activo).
+  //   2. La AbortSignal del componente (cancelación por desmontaje o nueva búsqueda).
+  //
+  // Si AbortSignal.any() está disponible (Chrome 116+, Node 20+), lo usamos.
+  // Fallback manual: escuchar ambas señales y propagar abort al controller propio.
+  // NUNCA ignorar la señal del consumidor aunque AbortSignal.any() no exista.
+  let combinedSignal: AbortSignal;
+  if (typeof AbortSignal.any === 'function') {
+    combinedSignal = AbortSignal.any([timeoutController.signal, ...(options?.signal ? [options.signal] : [])]);
+  } else if (options?.signal) {
+    // Fallback manual: crear un controller puente que escuche ambas señales
+    const bridge = new AbortController();
+    const forwardAbort = (reason?: unknown) => bridge.abort(reason);
+
+    if (timeoutController.signal.aborted) {
+      bridge.abort(timeoutController.signal.reason);
+    } else if (options.signal.aborted) {
+      bridge.abort(options.signal.reason);
+    } else {
+      timeoutController.signal.addEventListener('abort', () => forwardAbort(timeoutController.signal.reason), { once: true });
+      options.signal.addEventListener('abort', () => forwardAbort(options.signal!.reason), { once: true });
+    }
+    combinedSignal = bridge.signal;
+  } else {
+    combinedSignal = timeoutController.signal;
+  }
 
   try {
     const response = await fetch(url.toString(), {
