@@ -50,9 +50,16 @@ function makeProduct(overrides: Partial<NormalizedProduct> = {}): NormalizedProd
     updated_at: '2026-01-01T00:00:00',
     is_low_stock: false,
     tiene_descuento: false,
+    // WEB-2B.1: canonical fields — null when no ERP link
+    sku_id: null,
+    purchasable: false,
+    requires_configuration: false,
+    availability_source: 'MANUAL' as const,
+    modalidad_disponible: 'DISPONIBILIDAD_POR_CONFIRMAR' as const,
     ...overrides,
   };
 }
+
 
 // ─── parseUrlToFilters ────────────────────────────────────────────────────────
 

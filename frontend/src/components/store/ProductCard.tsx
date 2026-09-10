@@ -48,25 +48,29 @@ export function ProductCard({ product, onAddToCart, layout = 'grid' }: Props) {
     product.modalidad,
   );
 
-  // WEB-2B.1: canAdd now also checks purchasable and sku_id.
-  // A product without a canonical SKU link cannot be added to cart.
-  // purchasable = false means the product needs admin configuration first.
+  // WEB-2B.1: canAdd uses strict AND. A product must have BOTH purchasable=true
+  // AND sku_id (FK to product_skus) to be addable from the catalog card.
+  // If either is missing → redirect to detail page for consultation.
   const hasSKULink = !!(product as { sku_id?: number | null }).sku_id;
   const isPurchasable = !!(product as { purchasable?: boolean }).purchasable;
   const requiresConfig = !!(product as { requires_configuration?: boolean }).requires_configuration;
 
+  // WEB-2B.1: Strict AND — purchasable AND sku_id, NOT (purchasable OR sku_id)
   const canAdd =
     availability !== 'out_of_stock' &&
     !requiresConfig &&
-    (isPurchasable || hasSKULink);
+    isPurchasable &&
+    hasSKULink;
 
-  // Label for cart button based on product state
+  // Label: no availability info without canonical link → redirect to detail
   const cartButtonLabel =
     availability === 'out_of_stock'
       ? 'Agotado'
-      : requiresConfig || (!isPurchasable && !hasSKULink)
-      ? 'Consultar'
+      : requiresConfig || !isPurchasable || !hasSKULink
+      ? 'Ver Producto'
       : 'Agregar al Carrito';
+
+
 
   const handleAdd = (e: React.MouseEvent) => {
     e.preventDefault();

@@ -142,9 +142,10 @@ describe('getMaxOrderable', () => {
     expect(getMaxOrderable(avail)).toBe(8);
   });
 
-  it('Case 16: POR_PEDIDO → 99', () => {
-    const avail = makeAvailability({ modalidad_disponible: 'POR_PEDIDO', max_orderable: 99 });
-    expect(getMaxOrderable(avail)).toBe(99);
+  it('Case 16: POR_PEDIDO → null (no ceiling, not 99)', () => {
+    // WEB-2B.1: max_orderable=null for POR_PEDIDO — frontend uses its own UI limit
+    const avail = makeAvailability({ modalidad_disponible: 'POR_PEDIDO', max_orderable: null });
+    expect(getMaxOrderable(avail)).toBeNull();
   });
 
   it('Case 17: ENTREGA_INMEDIATA with max_orderable=0 → 0', () => {
@@ -206,11 +207,12 @@ describe('ProductAvailability type contract', () => {
       modalidad_disponible: 'DISPONIBILIDAD_POR_CONFIRMAR',
       availability_source: 'UNCONFIRMED',
       stock_vendible: 0,
-      max_orderable: 0,
+      max_orderable: null,  // WEB-2B.1: null, not 0, for non-purchasable
       disponible: false,
     });
     expect(isProductPurchasable(avail)).toBe(false);
     expect(getAvailabilityMessage(avail)).toBe('Consultar disponibilidad');
-    expect(getMaxOrderable(avail)).toBe(0);
+    expect(getMaxOrderable(avail)).toBeNull();
   });
+
 });

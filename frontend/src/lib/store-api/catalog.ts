@@ -90,9 +90,18 @@ export function normalizeProduct(raw: BackendProduct): NormalizedProduct {
     sku_id: raw.sku_id ?? null,
     purchasable: raw.purchasable ?? false,
     requires_configuration: raw.requires_configuration ?? false,
-    availability_source: raw.availability_source ?? 'MANUAL',
+    availability_source: (raw.availability_source ?? 'MANUAL') as 'REAL' | 'MANUAL' | 'UNCONFIRMED',
+    // WEB-2B.1: modalidad_disponible — server-computed honest modality.
+    // Falls back to the client-resolved modalidad when not provided by the server.
+    modalidad_disponible: (
+      raw.modalidad_disponible &&
+      ['ENTREGA_INMEDIATA', 'POR_PEDIDO', 'DISPONIBILIDAD_POR_CONFIRMAR'].includes(raw.modalidad_disponible)
+        ? raw.modalidad_disponible
+        : modalidad
+    ) as 'ENTREGA_INMEDIATA' | 'POR_PEDIDO' | 'DISPONIBILIDAD_POR_CONFIRMAR',
   };
 }
+
 
 // ─── API calls ────────────────────────────────────────────────────────────────
 

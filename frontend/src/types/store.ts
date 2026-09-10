@@ -113,7 +113,12 @@ export type CartItem = {
   img: string;
   sku?: string;
   modalidad?: 'ENTREGA_INMEDIATA' | 'POR_PEDIDO' | 'DISPONIBILIDAD_POR_CONFIRMAR';
+  /** WEB-2B.1: FK canónico a product_skus.id para procesamiento de órdenes */
+  sku_id?: number;
+  /** WEB-2B.1: ID de variante específica si aplica */
+  variant_id?: string;
 };
+
 
 export type CartContextType = {
   items: CartItem[];

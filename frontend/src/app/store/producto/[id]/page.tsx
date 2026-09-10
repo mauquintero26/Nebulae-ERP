@@ -42,12 +42,14 @@ import {
 import { useCart } from '../../layout';
 import {
   getProducto,
+  getProductAvailability,
   formatCOP,
   isStoreError,
 } from '@/lib/store-api';
 import { AvailabilityBadge, getAvailabilityStatus } from '@/components/store/AvailabilityBadge';
 import { ModalityBadge } from '@/components/store/ModalityBadge';
-import type { NormalizedProduct } from '@/lib/store-api';
+import type { NormalizedProduct, ProductAvailability } from '@/lib/store-api';
+
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -184,11 +186,20 @@ export default function ProductoDetailPage({
   const [added, setAdded] = useState(false);
   const addedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── Fetch ──
+  // WEB-2B.1: Real-time availability state
+  const [availabilityState, setAvailabilityState] = useState<
+    | { status: 'idle' }
+    | { status: 'loading' }
+    | { status: 'ok'; data: ProductAvailability }
+    | { status: 'error'; message: string }
+  >({ status: 'idle' });
+
+  // ── Fetch product ──
   const fetchProduct = useCallback(() => {
     const controller = new AbortController();
 
     setPageState({ status: 'loading' });
+    setAvailabilityState({ status: 'idle' });
     setActiveImg(0);
     setQty(1);
     setSelectedAttrs({});
@@ -196,21 +207,26 @@ export default function ProductoDetailPage({
     getProducto(id, { signal: controller.signal })
       .then((product) => {
         setPageState({ status: 'success', product });
+        // WEB-2B.1: Fetch availability right after loading product
+        if (product.purchasable && product.sku_id) {
+          setAvailabilityState({ status: 'loading' });
+          getProductAvailability(product.id)
+            .then((avail) => setAvailabilityState({ status: 'ok', data: avail }))
+            .catch(() => setAvailabilityState({
+              status: 'error',
+              message: 'No pudimos confirmar disponibilidad',
+            }));
+        }
       })
       .catch((err: unknown) => {
-        // Silently ignore intentional cancellations
         if (isStoreError(err) && err.isAborted) return;
-
         if (isStoreError(err) && err.code === 'NOT_FOUND') {
           setPageState({ status: 'not_found' });
           return;
         }
-
         setPageState({
           status: 'error',
-          message: isStoreError(err)
-            ? err.publicMessage
-            : 'Ocurrió un error inesperado.',
+          message: isStoreError(err) ? err.publicMessage : 'Ocurrió un error inesperado.',
           retryable: isStoreError(err) ? err.isRetryable() : true,
         });
       });
@@ -249,7 +265,15 @@ export default function ProductoDetailPage({
 
   const images = product.imagenes.length > 0 ? product.imagenes : [];
   const isPorPedido = product.modalidad === 'POR_PEDIDO';
-  const maxQty = isPorPedido ? 99 : Math.max(product.stock_disponible, 1);
+
+  // WEB-2B.1: maxQty from real availability API (max_orderable=null means no ceiling)
+  const apiMaxOrdeable =
+    availabilityState.status === 'ok' ? availabilityState.data.max_orderable : null;
+  const maxQty = apiMaxOrdeable != null
+    ? apiMaxOrdeable
+    : isPorPedido
+    ? 999
+    : Math.max(product.stock_disponible, 1);
 
   /** Atributos with array valor — user must select one */
   const selectableAttrs = (product.atributos ?? []).filter(
@@ -266,12 +290,54 @@ export default function ProductoDetailPage({
     product.modalidad
   );
 
-  const handleAddToCart = () => {
-    if (!allAttrsSelected) return;
+  // WEB-2B.1: Strict AND — not purchasable or no sku_id → disabled
+  const availabilityLoading = availabilityState.status === 'loading';
+  const availabilityError = availabilityState.status === 'error';
+  const isNotPurchasable = !product.purchasable || !product.sku_id;
+
+  const isCartDisabled =
+    isNotPurchasable ||
+    !allAttrsSelected ||
+    availabilityLoading ||
+    availabilityError ||
+    (availabilityState.status === 'ok' && !availabilityState.data.disponible);
+
+  const handleAddToCart = async () => {
+    if (isCartDisabled) return;
+
+    // WEB-2B.1: Re-check availability immediately before adding to cart
+    if (product.sku_id) {
+      setAvailabilityState({ status: 'loading' });
+      try {
+        const freshAvail = await getProductAvailability(product.id);
+        setAvailabilityState({ status: 'ok', data: freshAvail });
+        if (!freshAvail.disponible) {
+          // Availability changed — do not add
+          return;
+        }
+      } catch {
+        setAvailabilityState({
+          status: 'error',
+          message: 'No pudimos confirmar disponibilidad',
+        });
+        return;
+      }
+    }
 
     const variant = Object.entries(selectedAttrs)
       .map(([k, v]) => `${k}: ${v}`)
       .join(', ');
+
+    // WEB-2B.1: Cart payload includes sku_id and variant_id (if resolved from variantes)
+    const selectedVariant = product.variantes?.find((v) => {
+      if (typeof v !== 'object' || !v) return false;
+      const vObj = v as Record<string, unknown>;
+      // Check both flat keys and nested atributos
+      const attrs = (vObj['atributos'] ?? {}) as Record<string, unknown>;
+      return Object.entries(selectedAttrs).every(
+        ([k, val]) => attrs[k] === val || vObj[k] === val
+      );
+    }) as Record<string, unknown> | undefined;
 
     addToCart({
       id: product.id,
@@ -281,6 +347,9 @@ export default function ProductoDetailPage({
       variant,
       img: images[0] ?? '',
       modalidad: product.modalidad,
+      // WEB-2B.1: canonical identifiers for order processing
+      sku_id: product.sku_id ?? undefined,
+      variant_id: selectedVariant?.['variant_id'] as string | undefined,
     });
 
     setAdded(true);
@@ -288,7 +357,10 @@ export default function ProductoDetailPage({
     addedTimer.current = setTimeout(() => setAdded(false), 2500);
   };
 
-  const isCartDisabled = !allAttrsSelected;
+
+
+
+
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -555,12 +627,31 @@ export default function ProductoDetailPage({
           </div>
 
           {/* Add to cart */}
+
+          {/* WEB-2B.1: Availability error message */}
+          {availabilityError && (
+            <p role="alert" className="text-sm text-amber-600 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2 text-center">
+              No pudimos confirmar disponibilidad. Intente de nuevo antes de agregar al carrito.
+            </p>
+          )}
+          {isNotPurchasable && (
+            <p className="text-sm text-[#8A8A8E] bg-[#FFF5FA] rounded-xl px-4 py-2 text-center">
+              Este producto requiere configuración. Contáctanos para más información.
+            </p>
+          )}
+
           <button
             onClick={handleAddToCart}
             disabled={isCartDisabled}
             aria-label={
               added
                 ? 'Producto agregado al carrito'
+                : availabilityLoading
+                ? 'Verificando disponibilidad...'
+                : availabilityError
+                ? 'No pudimos confirmar disponibilidad'
+                : isNotPurchasable
+                ? 'Este producto no está disponible para compra en línea'
                 : isCartDisabled
                 ? 'Selecciona las opciones requeridas para agregar al carrito'
                 : `Agregar ${product.nombre} al carrito`
@@ -583,6 +674,11 @@ export default function ProductoDetailPage({
               <>
                 <Check size={22} aria-hidden="true" />
                 ¡Agregado al Carrito!
+              </>
+            ) : availabilityLoading ? (
+              <>
+                <RefreshCw size={22} className="animate-spin" aria-hidden="true" />
+                Verificando disponibilidad...
               </>
             ) : (
               <>

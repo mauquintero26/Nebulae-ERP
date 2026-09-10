@@ -76,6 +76,7 @@ export type BackendProduct = {
   availability_source?: 'REAL' | 'MANUAL' | 'UNCONFIRMED';
 };
 
+
 export type BackendProductAtributo = {
   nombre: string;
   valor: string | string[];
@@ -110,8 +111,9 @@ export type ProductAvailability = {
   sku: string | null;
   /** Unidades vendibles reales: InventoryOwnerBalance(NEBULAE) - InventoryReservation(ACTIVE) */
   stock_vendible: number;
-  /** Máximo orderable: boundado por stock si ENTREGA_INMEDIATA, 99 si POR_PEDIDO */
-  max_orderable: number;
+  /** Máximo orderable: boundado por stock si ENTREGA_INMEDIATA, null si POR_PEDIDO (sin techo) */
+  max_orderable: number | null;
+
   /** true si hay stock o si no se rastrea inventario o si es POR_PEDIDO */
   disponible: boolean;
   /** Política de entrega configurada en ecommerce_products */
@@ -278,6 +280,12 @@ export type NormalizedProduct = {
   requires_configuration: boolean;
   /** Fuente del stock reportado: REAL | MANUAL | UNCONFIRMED */
   availability_source: 'REAL' | 'MANUAL' | 'UNCONFIRMED';
+  /**
+   * Modalidad honesta computada por el servidor.
+   * Solo ENTREGA_INMEDIATA o POR_PEDIDO cuando purchasable=true y sku_id existe.
+   * DISPONIBILIDAD_POR_CONFIRMAR en cualquier otro caso.
+   */
+  modalidad_disponible: 'ENTREGA_INMEDIATA' | 'POR_PEDIDO' | 'DISPONIBILIDAD_POR_CONFIRMAR';
 };
 
 // ─── Pagination state (client-side) ──────────────────────────────────────────
