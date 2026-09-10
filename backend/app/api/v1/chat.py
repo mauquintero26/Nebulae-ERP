@@ -1,5 +1,6 @@
 import os
 import hmac, hashlib
+from typing import Optional
 from app.models.users import User
 from app.api.dependencies import require_roles, ROLE_ADMIN, ROLE_FINANZAS, ROLE_ASESOR, normalize_role
 from app.core.security import SECRET_KEY, ALGORITHM
