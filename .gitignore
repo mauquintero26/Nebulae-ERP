@@ -63,6 +63,10 @@ Thumbs.db
 # Added by security cleanup
 *.env
 backend/test_results*.txt
+
+# Added by security cleanup
+*.env
+backend/test_results*.txt
 check_ambiguos.py
 *.pyc
 
@@ -70,3 +74,10 @@ check_ambiguos.py
 .env.production
 .env.*.local
 
+# Infraestructura de servidor (NO subir a Git)
+backend/caddy_bin/
+backend/caddy.zip
+backend/caddy_access.log
+backend/nebulae_backend.pid
+backend/Caddyfile
+backend/Caddyfile.http_test
