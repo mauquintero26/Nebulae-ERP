@@ -3,6 +3,7 @@
  *
  * Punto de entrada público de la capa API del storefront.
  * Importar desde '@/lib/store-api' en lugar de archivos individuales.
+ * WEB-2B.1: añade ProductAvailability, AvailabilityResponse, availability API functions.
  */
 
 // Errors
@@ -22,6 +23,9 @@ export type {
   PaginationState,
   ApiEnvelope,
   CatalogListResponse,
+  // WEB-2B.1
+  ProductAvailability,
+  AvailabilityResponse,
 } from './types';
 export { EMPTY_FILTERS } from './types';
 
@@ -30,6 +34,14 @@ export { storeClient } from './client';
 
 // Catalog
 export { listProductos, getProducto, normalizeProduct } from './catalog';
+
+// Availability (WEB-2B.1)
+export {
+  getProductAvailability,
+  isProductPurchasable,
+  getAvailabilityMessage,
+  getMaxOrderable,
+} from './availability';
 
 // Categories + Config
 export { listCategorias, getSiteConfig } from './categories';

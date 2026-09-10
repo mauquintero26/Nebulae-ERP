@@ -24,7 +24,7 @@ import type { Metadata } from 'next';
 // Note: Metadata from server component would go here.
 // Page title is set via document.title in useEffect for client component.
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, Suspense } from 'react';
 import Link from 'next/link';
 import {
   Search, SlidersHorizontal, X, RefreshCw, ChevronRight,
@@ -91,7 +91,7 @@ function buildChips(filters: CatalogFilterState): ActiveChip[] {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function CatalogoPage() {
+function CatalogoPageInner() {
   const { addToCart } = useCart();
 
   const {
@@ -541,5 +541,15 @@ export default function CatalogoPage() {
         </div>
       </div>
     </>
+  );
+}
+
+// WEB-2B.1 preexisting fix: useSearchParams() in useCatalog requires Suspense boundary
+// See: https://nextjs.org/docs/messages/missing-suspense-with-csr-bailout
+export default function CatalogoPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#FFF5FA]" />}>
+      <CatalogoPageInner />
+    </Suspense>
   );
 }

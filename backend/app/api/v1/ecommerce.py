@@ -115,12 +115,34 @@ def _ensure_ecommerce_tables(db: Session):
                 seo_keywords TEXT,
                 created_at TIMESTAMP DEFAULT NOW(),
                 updated_at TIMESTAMP DEFAULT NOW(),
-                created_by VARCHAR(150)
+                created_by VARCHAR(150),
+                -- WEB-2B.1: SKU link and availability contract fields
+                sku_id INTEGER REFERENCES product_skus(id) ON DELETE SET NULL,
+                purchasable BOOLEAN NOT NULL DEFAULT FALSE,
+                requires_configuration BOOLEAN NOT NULL DEFAULT FALSE,
+                availability_source VARCHAR(20) NOT NULL DEFAULT 'MANUAL',
+                modalidad VARCHAR(30) NOT NULL DEFAULT 'POR_PEDIDO'
             )
         """))
         db.commit()
     except Exception:
         db.rollback()
+
+    # WEB-2B.1: Ensure new columns exist in pre-existing tables (idempotent ALTER).
+    # Runs independently so legacy tables created before WEB-2B.1 get the new fields.
+    for col_ddl in [
+        "ALTER TABLE ecommerce_products ADD COLUMN IF NOT EXISTS sku_id INTEGER REFERENCES product_skus(id) ON DELETE SET NULL",
+        "ALTER TABLE ecommerce_products ADD COLUMN IF NOT EXISTS purchasable BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE ecommerce_products ADD COLUMN IF NOT EXISTS requires_configuration BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE ecommerce_products ADD COLUMN IF NOT EXISTS availability_source VARCHAR(20) NOT NULL DEFAULT 'MANUAL'",
+        "ALTER TABLE ecommerce_products ADD COLUMN IF NOT EXISTS modalidad VARCHAR(30) NOT NULL DEFAULT 'POR_PEDIDO'",
+    ]:
+        try:
+            db.execute(text(col_ddl))
+            db.commit()
+        except Exception:
+            db.rollback()
+
 
 # --- ECOMMERCE STATS ---
 @router.get("/stats")
@@ -172,9 +194,24 @@ def list_web_orders(estado: Optional[str] = None, search: Optional[str] = None, 
 
 def _get_real_sellable_stock(db: Session, sku_id: int, warehouse_id: Optional[int] = None, owner: str = "NEBULAE") -> Decimal:
     """
-    Calcula la disponibilidad vendible real:
-    disponible = stock_fisico_owner - reservas_activas_owner - cuarentena_owner.
-    Nunca publica inventario reservado, en cuarentena, perdido o de otro propietario.
+    Calcula el stock vendible real del propietario para un SKU.
+
+    Fórmula:
+        stock_vendible = InventoryOwnerBalance(owner, sku, [wh]) - InventoryReservation(ACTIVE, owner, sku, [wh])
+
+    Notas de implementación:
+    - InventoryOwnerBalance ya representa EXCLUSIVAMENTE unidades físicas conformes del propietario.
+      Las unidades en cuarentena (InventoryQuarantine) NO están incluidas en InventoryOwnerBalance,
+      por lo que no se restan nuevamente aquí (hacerlo causaría doble descuento).
+    - Las reservas ACTIVE bloquean stock comprometido para pedidos en proceso.
+    - Los estados RELEASED, CONVERTED y EXPIRED no reducen el vendible.
+    - NUNCA mezcla inventario de MAU con NEBULAE ni de un warehouse con otro.
+    - Siempre retorna max(disponible, 0) — nunca negativo.
+    - Si warehouse_id es None, suma todos los warehouses donde exista balance del owner.
+
+    Prohibiciones:
+    - No usar Warehouse.first(), warehouse_id=1 o cualquier fallback de bodega.
+    - No inferir disponibilidad de ProductSKU.inventory_levels (legacy).
     """
     # 1. Balance por propietario
     bal_q = db.query(func.coalesce(func.sum(InventoryOwnerBalance.quantity), 0)).filter(
@@ -558,7 +595,9 @@ def create_web_order(body: dict, db: Session = Depends(get_db)):
 
     # 10. Creacion de lineas canonicas y reservas fisicas para articulos inmediatos
     for vl in validated_lines:
-        wh_id = vl["warehouse_id"] or default_wh_id
+        # WEB-2B.1 fix: resolved_wh_id is the validated warehouse from step 6.
+        # default_wh_id was undefined here — caused NameError on edge case.
+        wh_id = vl["warehouse_id"] or resolved_wh_id
         so_line = SaleOrderLineErp(
             so_id=order.id,
             sku_id=vl["sku"].id,
@@ -693,22 +732,59 @@ def list_catalogo(search: Optional[str] = None, categoria: Optional[str] = None,
         params["pub"] = publicado
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
     try:
-        rows = db.execute(text(f"SELECT id, nombre, descripcion, sku, precio_venta, precio_comparacion, descuento_pct, impuesto_pct, categoria, sub_categoria, marca, tipo_producto, imagenes, atributos, variantes, stock_disponible, alerta_stock_minimo, publicado_web, rastrear_inventario, seo_titulo, created_at, updated_at FROM ecommerce_products {where_sql} ORDER BY nombre LIMIT :limit"), params).fetchall()
+        # WEB-2B.1: Include new fields sku_id, purchasable, requires_configuration, availability_source, modalidad
+        rows = db.execute(text(
+            f"SELECT id, nombre, descripcion, sku, precio_venta, precio_comparacion, descuento_pct, "
+            f"impuesto_pct, categoria, sub_categoria, marca, tipo_producto, imagenes, atributos, variantes, "
+            f"stock_disponible, alerta_stock_minimo, publicado_web, rastrear_inventario, seo_titulo, "
+            f"created_at, updated_at, "
+            f"COALESCE(sku_id, NULL) AS sku_id, "
+            f"COALESCE(purchasable, FALSE) AS purchasable, "
+            f"COALESCE(requires_configuration, FALSE) AS requires_configuration, "
+            f"COALESCE(availability_source, 'MANUAL') AS availability_source, "
+            f"COALESCE(modalidad, 'POR_PEDIDO') AS modalidad "
+            f"FROM ecommerce_products {where_sql} ORDER BY nombre LIMIT :limit"
+        ), params).fetchall()
         total = int(db.execute(text(f"SELECT COUNT(*) FROM ecommerce_products {where_sql}"), {k:v for k,v in params.items() if k!="limit"}).scalar() or 0)
         data = []
         seen_skus = set()
         for r in rows:
+            # r indices: 0=id,1=nombre,2=desc,3=sku,4=pv,5=pc,6=dpct,7=ipct,8=cat,9=subcat,10=marca,11=tipo
+            # 12=img,13=attr,14=var,15=stock,16=alerta,17=pub,18=rastrear,19=seo,20=cat,21=upd
+            # 22=sku_id,23=purchasable,24=requires_conf,25=avail_source,26=modalidad
             sku_code = r[3]
+            sku_id_db = r[22]  # FK to product_skus
+            purchasable_db = r[23]
+            availability_source_db = r[25] or "MANUAL"
+            modalidad_db = r[26] or "POR_PEDIDO"
+
             stock_disp = float(r[15] or 0)
-            if sku_code:
+
+            # WEB-2B.1: Resolve real stock only if sku_id is linked
+            if sku_id_db:
+                real_stock = _get_real_sellable_stock(db, sku_id_db, owner="NEBULAE")
+                stock_disp = float(real_stock)
+                availability_source_db = "REAL"
+            elif sku_code:
                 seen_skus.add(sku_code)
                 sku_record = db.query(ProductSKU).filter(ProductSKU.sku == sku_code).first()
                 if sku_record:
                     real_stock = _get_real_sellable_stock(db, sku_record.id, owner="NEBULAE")
                     stock_disp = float(real_stock)
+                    availability_source_db = "REAL"
 
-            modalidad = "ENTREGA_INMEDIATA" if stock_disp > 0 else "POR_PEDIDO"
-            is_low = stock_disp <= (r[16] or 5)
+            # WEB-2B.1: NEVER infer ENTREGA_INMEDIATA from stock alone.
+            # Use explicit modalidad field. Legacy products without sku_id get DISPONIBILIDAD_POR_CONFIRMAR.
+            if purchasable_db and modalidad_db in ("ENTREGA_INMEDIATA", "POR_PEDIDO"):
+                modalidad_disponible = modalidad_db
+            elif sku_id_db and modalidad_db in ("ENTREGA_INMEDIATA", "POR_PEDIDO"):
+                modalidad_disponible = modalidad_db
+            else:
+                # No canonical link — cannot confirm modality
+                modalidad_disponible = "DISPONIBILIDAD_POR_CONFIRMAR"
+
+            alerta = r[16] or 5
+            is_low = stock_disp > 0 and stock_disp <= alerta
 
             data.append({
                 "id": r[0],
@@ -727,8 +803,15 @@ def list_catalogo(search: Optional[str] = None, categoria: Optional[str] = None,
                 "atributos": r[13] or [],
                 "variantes": r[14] or [],
                 "stock_disponible": stock_disp,
-                "modalidad_disponible": modalidad,
-                "alerta_stock_minimo": r[16] or 5,
+                # WEB-2B.1: Honest modality — never inferred from stock
+                "modalidad_disponible": modalidad_disponible,
+                "modalidad": modalidad_db,
+                # WEB-2B.1: New fields
+                "sku_id": sku_id_db,
+                "purchasable": bool(purchasable_db),
+                "requires_configuration": bool(r[24]),
+                "availability_source": availability_source_db,
+                "alerta_stock_minimo": alerta,
                 "publicado_web": r[17],
                 "rastrear_inventario": r[18],
                 "seo_titulo": r[19],
@@ -748,7 +831,7 @@ def list_catalogo(search: Optional[str] = None, categoria: Optional[str] = None,
             if canon_sku.sku not in seen_skus:
                 prod = canon_sku.product
                 real_stock = float(_get_real_sellable_stock(db, canon_sku.id, owner="NEBULAE"))
-                modalidad = "ENTREGA_INMEDIATA" if real_stock > 0 else "POR_PEDIDO"
+                # WEB-2B.1: ERP-only SKUs have no ecommerce modalidad configured — use DISPONIBILIDAD_POR_CONFIRMAR
                 data.append({
                     "id": canon_sku.id,
                     "nombre": prod.name if prod else canon_sku.sku,
@@ -766,7 +849,14 @@ def list_catalogo(search: Optional[str] = None, categoria: Optional[str] = None,
                     "atributos": [],
                     "variantes": [],
                     "stock_disponible": real_stock,
-                    "modalidad_disponible": modalidad,
+                    # WEB-2B.1: ERP-only: cannot confirm ecommerce modality without explicit config
+                    "modalidad_disponible": "DISPONIBILIDAD_POR_CONFIRMAR",
+                    "modalidad": "POR_PEDIDO",
+                    # WEB-2B.1: New fields — sku_id IS the canonical sku_id here
+                    "sku_id": canon_sku.id,
+                    "purchasable": False,  # Requires explicit ecommerce config to become purchasable
+                    "requires_configuration": True,
+                    "availability_source": "REAL",
                     "alerta_stock_minimo": 5,
                     "publicado_web": True,
                     "rastrear_inventario": True,
@@ -782,35 +872,93 @@ def list_catalogo(search: Optional[str] = None, categoria: Optional[str] = None,
     except Exception as e:
         return {"status": "success", "total": 0, "data": [], "error": str(e)}
 
+
 @router.get("/catalogo/{product_id}")
 def get_catalogo_product(product_id: int, db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
-    row = db.execute(text("SELECT * FROM ecommerce_products WHERE id=:id"), {"id": product_id}).fetchone()
+    # WEB-2B.1: Query includes new fields with graceful fallback for pre-migration tables
+    row = db.execute(text(
+        "SELECT id, nombre, descripcion, descripcion_larga, sku, precio_venta, precio_comparacion, "
+        "descuento_pct, impuesto_pct, categoria, sub_categoria, marca, tipo_producto, imagenes, "
+        "atributos, variantes, stock_disponible, alerta_stock_minimo, publicado_web, rastrear_inventario, "
+        "codigo_aduana, peso_kg, notas_internas, seo_titulo, seo_descripcion, seo_keywords, "
+        "created_at, updated_at, created_by, "
+        "COALESCE(sku_id, NULL) AS sku_id, "
+        "COALESCE(purchasable, FALSE) AS purchasable, "
+        "COALESCE(requires_configuration, FALSE) AS requires_configuration, "
+        "COALESCE(availability_source, 'MANUAL') AS availability_source, "
+        "COALESCE(modalidad, 'POR_PEDIDO') AS modalidad "
+        "FROM ecommerce_products WHERE id=:id"
+    ), {"id": product_id}).fetchone()
     if not row:
-        prod = db.query(Product).filter(Product.id == product_id).first()
-        if prod:
-            sku_first = prod.skus[0] if prod.skus else None
-            stock_disp = float(_get_real_sellable_stock(db, sku_first.id, owner="NEBULAE")) if sku_first else 0.0
+        # WEB-2B.1: Fallback to canonical Product (not ambiguous prod.skus[0])
+        # Try first as a ProductSKU id, then as Product id
+        sku_rec = db.query(ProductSKU).filter(ProductSKU.id == product_id).first()
+        prod = None
+        if sku_rec:
+            prod = sku_rec.product
+        else:
+            prod = db.query(Product).filter(Product.id == product_id).first()
+            sku_rec = prod.skus[0] if (prod and prod.skus) else None
+
+        if prod and sku_rec:
+            real_stock = float(_get_real_sellable_stock(db, sku_rec.id, owner="NEBULAE"))
             return {
                 "status": "success",
                 "data": {
                     "id": prod.id,
                     "nombre": prod.name,
                     "descripcion": getattr(prod, "description", "") or "",
-                    "sku": sku_first.sku if sku_first else "",
-                    "precio_venta": float(sku_first.sale_price or 0) if sku_first else 0.0,
-                    "precio_comparacion": float(sku_first.sale_price or 0) if sku_first else 0.0,
+                    "sku": sku_rec.sku,
+                    "precio_venta": float(sku_rec.sale_price or 0),
+                    "precio_comparacion": float(sku_rec.sale_price or 0),
                     "descuento_pct": 0.0,
                     "categoria": prod.category.name if prod.category else "",
                     "marca": prod.brand.name if prod.brand else "",
-                    "stock_disponible": stock_disp,
-                    "publicado_web": True
+                    "stock_disponible": real_stock,
+                    "modalidad_disponible": "DISPONIBILIDAD_POR_CONFIRMAR",
+                    "modalidad": "POR_PEDIDO",
+                    "sku_id": sku_rec.id,
+                    "purchasable": False,
+                    "requires_configuration": True,
+                    "availability_source": "REAL",
+                    "publicado_web": True,
                 }
             }
         raise HTTPException(404, "Producto no encontrado")
-    keys = ["id","nombre","descripcion","descripcion_larga","sku","precio_venta","precio_comparacion","descuento_pct","impuesto_pct","categoria","sub_categoria","marca","tipo_producto","imagenes","atributos","variantes","stock_disponible","alerta_stock_minimo","publicado_web","rastrear_inventario","codigo_aduana","peso_kg","notas_internas","seo_titulo","seo_descripcion","seo_keywords","created_at","updated_at","created_by"]
+    # Map row to dict including WEB-2B.1 fields
+    keys = [
+        "id","nombre","descripcion","descripcion_larga","sku","precio_venta","precio_comparacion",
+        "descuento_pct","impuesto_pct","categoria","sub_categoria","marca","tipo_producto","imagenes",
+        "atributos","variantes","stock_disponible","alerta_stock_minimo","publicado_web","rastrear_inventario",
+        "codigo_aduana","peso_kg","notas_internas","seo_titulo","seo_descripcion","seo_keywords",
+        "created_at","updated_at","created_by",
+        "sku_id","purchasable","requires_configuration","availability_source","modalidad"
+    ]
     data = dict(zip(keys, row))
-    # Sales analytics for this product
+    # Resolve real stock if sku_id is linked
+    sku_id_db = data.get("sku_id")
+    availability_source_db = data.get("availability_source") or "MANUAL"
+    modalidad_db = data.get("modalidad") or "POR_PEDIDO"
+    purchasable_db = bool(data.get("purchasable"))
+
+    if sku_id_db:
+        real_stock = float(_get_real_sellable_stock(db, sku_id_db, owner="NEBULAE"))
+        data["stock_disponible"] = real_stock
+        availability_source_db = "REAL"
+
+    # WEB-2B.1: Honest modality — never inferred from stock
+    if purchasable_db and modalidad_db in ("ENTREGA_INMEDIATA", "POR_PEDIDO"):
+        data["modalidad_disponible"] = modalidad_db
+    elif sku_id_db and modalidad_db in ("ENTREGA_INMEDIATA", "POR_PEDIDO"):
+        data["modalidad_disponible"] = modalidad_db
+    else:
+        data["modalidad_disponible"] = "DISPONIBILIDAD_POR_CONFIRMAR"
+
+    data["availability_source"] = availability_source_db
+    data["purchasable"] = purchasable_db
+
+    # Sales analytics
     ventas_prod = db.query(SaleOrder).filter(SaleOrder.canal_venta=='WEB', SaleOrder.estado!='CANCELADO').all()
     total_vendido = sum(p.get("qty", p.get("cantidad", 0)) for o in ventas_prod for p in (o.productos or []) if p.get("sku") == data.get("sku") or p.get("nombre","").lower() == (data.get("nombre") or "").lower())
     data["total_vendido"] = total_vendido
@@ -818,6 +966,127 @@ def get_catalogo_product(product_id: int, db: Session = Depends(get_db)):
         if data.get(k) and hasattr(data[k],"isoformat"):
             data[k] = data[k].isoformat()
     return {"status": "success", "data": data}
+
+
+@router.get("/catalogo/{product_id}/disponibilidad")
+def get_product_disponibilidad(product_id: int, db: Session = Depends(get_db)):
+    """
+    WEB-2B.1: Endpoint público de disponibilidad real para un producto.
+    No requiere autenticación — solo expone campos seguros para el frontend.
+
+    Permite al frontend consultar disponibilidad sin recargar el producto completo.
+    Responde con:
+    - stock_vendible: unidades vendibles NEBULAE reales (InventoryOwnerBalance - InventoryReservation ACTIVE)
+    - modalidad: política de entrega configurada en ecommerce_products
+    - modalidad_disponible: modalidad honesta (DISPONIBILIDAD_POR_CONFIRMAR si sin vínculo canónico)
+    - purchasable: si el producto está listo para compra (tiene sku_id válido y modalidad configurada)
+    - availability_source: REAL | MANUAL | UNCONFIRMED
+    - requires_supplier_confirmation: True si no es ENTREGA_INMEDIATA directa
+    """
+    _ensure_ecommerce_tables(db)
+    now_ts = datetime.datetime.utcnow().isoformat() + "Z"
+
+    # Try ecommerce_products first
+    row = db.execute(text(
+        "SELECT id, sku, "
+        "COALESCE(sku_id, NULL) AS sku_id, "
+        "COALESCE(purchasable, FALSE) AS purchasable, "
+        "COALESCE(requires_configuration, FALSE) AS requires_configuration, "
+        "COALESCE(availability_source, 'MANUAL') AS availability_source, "
+        "COALESCE(modalidad, 'POR_PEDIDO') AS modalidad, "
+        "COALESCE(alerta_stock_minimo, 5) AS alerta, "
+        "COALESCE(rastrear_inventario, TRUE) AS rastrear "
+        "FROM ecommerce_products WHERE id=:id"
+    ), {"id": product_id}).fetchone()
+
+    if not row:
+        # Fallback: try ProductSKU (product_id could be a sku_id in the ERP)
+        sku_rec = db.query(ProductSKU).filter(ProductSKU.id == product_id).first()
+        if not sku_rec:
+            raise HTTPException(404, "Producto no encontrado")
+        real_stock = float(_get_real_sellable_stock(db, sku_rec.id, owner="NEBULAE"))
+        return {
+            "status": "success",
+            "data": {
+                "product_id": product_id,
+                "sku_id": sku_rec.id,
+                "sku": sku_rec.sku,
+                "stock_vendible": real_stock,
+                "max_orderable": int(real_stock),
+                "disponible": real_stock > 0,
+                "modalidad": "POR_PEDIDO",
+                "modalidad_disponible": "DISPONIBILIDAD_POR_CONFIRMAR",
+                "purchasable": False,
+                "requires_configuration": True,
+                "requires_supplier_confirmation": True,
+                "availability_source": "REAL",
+                "warehouse_id": None,
+                "timestamp": now_ts,
+            }
+        }
+
+    sku_id_db = row[2]
+    purchasable_db = bool(row[3])
+    requires_conf_db = bool(row[4])
+    availability_source_db = row[5] or "MANUAL"
+    modalidad_db = row[6] or "POR_PEDIDO"
+    alerta_db = int(row[7] or 5)
+    rastrear = bool(row[8])
+
+    # Resolve real sellable stock
+    if sku_id_db:
+        real_stock = float(_get_real_sellable_stock(db, sku_id_db, owner="NEBULAE"))
+        availability_source_db = "REAL"
+    elif row[1]:  # sku string
+        sku_rec = db.query(ProductSKU).filter(ProductSKU.sku == row[1]).first()
+        if sku_rec:
+            real_stock = float(_get_real_sellable_stock(db, sku_rec.id, owner="NEBULAE"))
+            sku_id_db = sku_rec.id
+            availability_source_db = "REAL"
+        else:
+            real_stock = 0.0
+            availability_source_db = "UNCONFIRMED"
+    else:
+        real_stock = 0.0
+        availability_source_db = "UNCONFIRMED"
+
+    # Determine honest modality
+    if purchasable_db and modalidad_db in ("ENTREGA_INMEDIATA", "POR_PEDIDO"):
+        modalidad_disponible = modalidad_db
+    elif sku_id_db and modalidad_db in ("ENTREGA_INMEDIATA", "POR_PEDIDO"):
+        modalidad_disponible = modalidad_db
+    else:
+        modalidad_disponible = "DISPONIBILIDAD_POR_CONFIRMAR"
+
+    requires_supplier_confirmation = (modalidad_disponible != "ENTREGA_INMEDIATA")
+
+    # max_orderable: bounded by real stock for ENTREGA_INMEDIATA, 99 otherwise
+    if modalidad_disponible == "ENTREGA_INMEDIATA":
+        max_orderable = max(0, int(real_stock))
+    else:
+        max_orderable = 99  # POR_PEDIDO or UNCONFIRMED — no stock ceiling
+
+    return {
+        "status": "success",
+        "data": {
+            "product_id": product_id,
+            "sku_id": sku_id_db,
+            "sku": row[1],
+            "stock_vendible": real_stock,
+            "max_orderable": max_orderable,
+            "disponible": real_stock > 0 or not rastrear or modalidad_disponible == "POR_PEDIDO",
+            "modalidad": modalidad_db,
+            "modalidad_disponible": modalidad_disponible,
+            "purchasable": purchasable_db,
+            "requires_configuration": requires_conf_db,
+            "requires_supplier_confirmation": requires_supplier_confirmation,
+            "availability_source": availability_source_db,
+            "alerta_stock_minimo": alerta_db,
+            "warehouse_id": None,  # Aggregated across all authorized warehouses
+            "timestamp": now_ts,
+        }
+    }
+
 
 @router.post("/catalogo", status_code=201)
 def create_catalogo_product(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):

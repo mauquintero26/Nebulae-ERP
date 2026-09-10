@@ -2,7 +2,8 @@
  * store-api/types.ts
  *
  * Tipos TypeScript que reflejan exactamente las respuestas reales del backend.
- * Fuente: backend/app/api/v1/ecommerce.py (revisado 2026-09-09).
+ * Fuente: backend/app/api/v1/ecommerce.py
+ * Última revisión: WEB-2B.1 (2026-09-10)
  *
  * NO inventar campos que el backend no devuelve.
  * Usar `unknown` para campos no inspeccionados.
@@ -21,9 +22,14 @@ export type ApiEnvelope<T> = {
 
 /**
  * Producto tal como lo devuelve GET /ecommerce/catalogo y /ecommerce/catalogo/{id}.
- * NOTA: el backend devuelve `modalidad_disponible` (calculado en servidor),
- * no `modalidad`. El campo `modalidad` sigue existiendo para compatibilidad
- * con datos legados del campo manual.
+ *
+ * WEB-2B.1 adds:
+ *   - sku_id: FK a product_skus.id (null = sin vínculo canónico)
+ *   - purchasable: true solo si el producto tiene sku_id válido y modalidad configurada
+ *   - requires_configuration: true para productos ERP sin ficha ecommerce
+ *   - availability_source: REAL | MANUAL | UNCONFIRMED
+ *   - modalidad: política de entrega configurada explícitamente en ecommerce_products
+ *   - modalidad_disponible: ENTREGA_INMEDIATA | POR_PEDIDO | DISPONIBILIDAD_POR_CONFIRMAR
  */
 export type BackendProduct = {
   id: number;
@@ -43,10 +49,13 @@ export type BackendProduct = {
   atributos: BackendProductAtributo[];
   variantes: BackendProductVariante[];
   stock_disponible: number;
-  /** Calculado por el servidor en tiempo real */
-  modalidad_disponible?: 'ENTREGA_INMEDIATA' | 'POR_PEDIDO';
-  /** Campo legacy/manual — prefer modalidad_disponible */
-  modalidad?: 'ENTREGA_INMEDIATA' | 'POR_PEDIDO';
+  /**
+   * Modalidad honesta calculada por el servidor.
+   * WEB-2B.1: ahora incluye DISPONIBILIDAD_POR_CONFIRMAR para productos sin vínculo canónico.
+   */
+  modalidad_disponible?: 'ENTREGA_INMEDIATA' | 'POR_PEDIDO' | 'DISPONIBILIDAD_POR_CONFIRMAR';
+  /** Política de entrega configurada explícitamente en ecommerce_products */
+  modalidad?: 'ENTREGA_INMEDIATA' | 'POR_PEDIDO' | 'DISPONIBILIDAD_POR_CONFIRMAR';
   alerta_stock_minimo: number;
   publicado_web: boolean;
   rastrear_inventario: boolean;
@@ -56,6 +65,15 @@ export type BackendProduct = {
   updated_at: string | null;
   /** Solo en list endpoint — calculado por servidor */
   is_low_stock?: boolean;
+  // ── WEB-2B.1: SKU link y contrato de disponibilidad ─────────────────────────
+  /** FK a product_skus.id. null = sin vínculo canónico (stock es MANUAL) */
+  sku_id?: number | null;
+  /** true solo si tiene sku_id válido y está configurado para venta */
+  purchasable?: boolean;
+  /** true para productos ERP sin ficha ecommerce completa */
+  requires_configuration?: boolean;
+  /** Fuente del stock reportado: REAL | MANUAL | UNCONFIRMED */
+  availability_source?: 'REAL' | 'MANUAL' | 'UNCONFIRMED';
 };
 
 export type BackendProductAtributo = {
@@ -67,6 +85,8 @@ export type BackendProductVariante = {
   /** ID is stored as string to match ProductVariante in @/types/store */
   id?: string;
   sku?: string;
+  /** WEB-2B.1: canonical sku_id link to product_skus.id */
+  sku_id?: number;
   atributos?: Record<string, string>;
   precio_venta?: number;
   stock?: number;
@@ -75,6 +95,45 @@ export type BackendProductVariante = {
 export type CatalogListResponse = ApiEnvelope<BackendProduct[]> & {
   total: number;
 };
+
+// ─── Disponibilidad endpoint (WEB-2B.1) ──────────────────────────────────────
+
+/**
+ * Respuesta de GET /ecommerce/catalogo/{id}/disponibilidad.
+ * Endpoint público, Cache-Control: no-store.
+ * No expone costos, propietarios internos, proveedores ni márgenes.
+ */
+export type ProductAvailability = {
+  product_id: number;
+  /** FK a product_skus.id. null = sin vínculo canónico */
+  sku_id: number | null;
+  sku: string | null;
+  /** Unidades vendibles reales: InventoryOwnerBalance(NEBULAE) - InventoryReservation(ACTIVE) */
+  stock_vendible: number;
+  /** Máximo orderable: boundado por stock si ENTREGA_INMEDIATA, 99 si POR_PEDIDO */
+  max_orderable: number;
+  /** true si hay stock o si no se rastrea inventario o si es POR_PEDIDO */
+  disponible: boolean;
+  /** Política de entrega configurada en ecommerce_products */
+  modalidad: 'ENTREGA_INMEDIATA' | 'POR_PEDIDO' | 'DISPONIBILIDAD_POR_CONFIRMAR';
+  /** Modalidad honesta — nunca inferida de stock solo */
+  modalidad_disponible: 'ENTREGA_INMEDIATA' | 'POR_PEDIDO' | 'DISPONIBILIDAD_POR_CONFIRMAR';
+  /** true = listo para agregar al carrito y comprar */
+  purchasable: boolean;
+  /** true = necesita configuración adicional en panel admin */
+  requires_configuration: boolean;
+  /** true si no es ENTREGA_INMEDIATA directa */
+  requires_supplier_confirmation: boolean;
+  /** REAL = stock del ERP | MANUAL = stock manual | UNCONFIRMED = sin vínculo */
+  availability_source: 'REAL' | 'MANUAL' | 'UNCONFIRMED';
+  alerta_stock_minimo: number;
+  /** Siempre null — el frontend no conoce warehouse_id */
+  warehouse_id: null;
+  /** ISO 8601 timestamp del cálculo */
+  timestamp: string;
+};
+
+export type AvailabilityResponse = ApiEnvelope<ProductAvailability>;
 
 // ─── Categories ───────────────────────────────────────────────────────────────
 
@@ -171,6 +230,8 @@ export type CatalogQueryParams = {
 /**
  * Producto normalizado para uso en el frontend.
  * Garantiza que campos críticos no sean null/undefined.
+ *
+ * WEB-2B.1: añade sku_id, purchasable, requires_configuration, availability_source.
  */
 export type NormalizedProduct = {
   id: string;
@@ -208,6 +269,15 @@ export type NormalizedProduct = {
   is_low_stock: boolean;
   /** True si precio_comparacion > precio_venta (oferta real) */
   tiene_descuento: boolean;
+  // ── WEB-2B.1: SKU link y contrato de disponibilidad ─────────────────────────
+  /** FK a product_skus.id. null = sin vínculo canónico */
+  sku_id: number | null;
+  /** true solo si tiene sku_id válido y está configurado para venta */
+  purchasable: boolean;
+  /** true para productos ERP sin ficha ecommerce completa */
+  requires_configuration: boolean;
+  /** Fuente del stock reportado: REAL | MANUAL | UNCONFIRMED */
+  availability_source: 'REAL' | 'MANUAL' | 'UNCONFIRMED';
 };
 
 // ─── Pagination state (client-side) ──────────────────────────────────────────

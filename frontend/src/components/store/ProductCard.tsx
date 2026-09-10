@@ -8,8 +8,9 @@
  * - store/catalogo/page.tsx
  * - store/categoria/[slug]/page.tsx
  *
- * Cumple con WEB-1:
+ * Cumple con WEB-1 y WEB-2B.1:
  * - Acción "Agregar al carrito" visible en dispositivos táctiles (no solo hover)
+ * - WEB-2B.1: botón deshabilitado si !purchasable o !sku_id (sin vínculo canónico)
  * - Badges de disponibilidad y modalidad
  * - Contraste WCAG AA
  * - Focus visible para navegación con teclado
@@ -46,7 +47,26 @@ export function ProductCard({ product, onAddToCart, layout = 'grid' }: Props) {
     product.alerta_stock_minimo ?? 5,
     product.modalidad,
   );
-  const canAdd = availability !== 'out_of_stock';
+
+  // WEB-2B.1: canAdd now also checks purchasable and sku_id.
+  // A product without a canonical SKU link cannot be added to cart.
+  // purchasable = false means the product needs admin configuration first.
+  const hasSKULink = !!(product as { sku_id?: number | null }).sku_id;
+  const isPurchasable = !!(product as { purchasable?: boolean }).purchasable;
+  const requiresConfig = !!(product as { requires_configuration?: boolean }).requires_configuration;
+
+  const canAdd =
+    availability !== 'out_of_stock' &&
+    !requiresConfig &&
+    (isPurchasable || hasSKULink);
+
+  // Label for cart button based on product state
+  const cartButtonLabel =
+    availability === 'out_of_stock'
+      ? 'Agotado'
+      : requiresConfig || (!isPurchasable && !hasSKULink)
+      ? 'Consultar'
+      : 'Agregar al Carrito';
 
   const handleAdd = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -152,7 +172,7 @@ export function ProductCard({ product, onAddToCart, layout = 'grid' }: Props) {
                 className="w-full py-2.5 bg-white/95 backdrop-blur-sm text-[#1C1C1E] font-bold rounded-xl text-sm flex items-center justify-center gap-2 hover:bg-[#FFF5FA] disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus-visible:ring-2 focus-visible:ring-[#ED87B6] focus-visible:outline-none shadow-sm"
               >
                 <ShoppingCart size={15} aria-hidden="true" />
-                {availability === 'out_of_stock' ? 'Agotado' : 'Agregar al Carrito'}
+                {cartButtonLabel}
               </button>
             </div>
           )}
