@@ -16,14 +16,23 @@ de forma aislada sin el conftest global de tests/.
 Ejecución:
     C:\\Python314\\python.exe -m pytest tests/prod_smoke/test_auth_me_prod.py -v --noconftest
 """
+import os
 import urllib.request
 import urllib.error
 import urllib.parse
 import json
+import pytest
 
-BASE_URL = "http://127.0.0.1:5003"
-ADMIN_EMAIL = "jmquintero2691@gmail.com"
-ADMIN_PASSWORD = "Admin123!"
+BASE_URL = os.environ.get("SMOKE_BASE_URL", "http://127.0.0.1:5003")
+ADMIN_EMAIL = os.environ.get("SMOKE_ADMIN_EMAIL", "")
+ADMIN_PASSWORD = os.environ.get("SMOKE_ADMIN_PASSWORD", "")
+
+if not ADMIN_EMAIL or not ADMIN_PASSWORD:
+    pytest.skip(
+        "SMOKE_ADMIN_EMAIL y SMOKE_ADMIN_PASSWORD no están definidas. "
+        "Exportar antes de correr: $env:SMOKE_ADMIN_EMAIL='...'; $env:SMOKE_ADMIN_PASSWORD='...'",
+        allow_module_level=True,
+    )
 
 # ---------------------------------------------------------------------------
 # Helpers
