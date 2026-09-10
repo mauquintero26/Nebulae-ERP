@@ -296,10 +296,16 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    # isolation_level="AUTOCOMMIT" es obligatorio en SQLAlchemy 2.x con PostgreSQL:
+    # sin él, SQLAlchemy envuelve la conexión en una transacción implícita que
+    # hace rollback silencioso al salir del bloque with, deshaciendo toda la DDL.
+    # render_as_batch se omite: es exclusivo de SQLite (batch mode),
+    # en PostgreSQL causaba comportamiento inesperado con transacciones.
     connectable = engine_from_config(
         alembic_config.get_section(alembic_config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        isolation_level="AUTOCOMMIT",
     )
 
     with connectable.connect() as connection:
@@ -313,12 +319,11 @@ def run_migrations_online() -> None:
             connection.execute(
                 text(f"SET search_path TO {_alembic_schema}, public")
             )
-            connection.commit()
 
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            render_as_batch=True,
+            transaction_per_migration=True,
         )
         with context.begin_transaction():
             context.run_migrations()
