@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 export const dynamic = 'force-dynamic';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
@@ -12,17 +12,7 @@ import {
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
-async function apiFetch(path: string, opts: RequestInit = {}) {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...opts,
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(opts.headers as any || {}) },
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
-  return data.data ?? data;
-}
+import { apiFetch, API_URL, getToken } from '@/lib/api';
 
 const fCOP  = (v: any) => { const n = Number(v)||0; return '$'+n.toLocaleString('es-CO'); };
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
@@ -58,7 +48,7 @@ function IAPanelVenta({pedido,apiBase}:{pedido:any;apiBase:string}) {
   async function generar() {
     setLoading(true);
     try{
-      const token=typeof window!=='undefined'?localStorage.getItem('access_token'):'';
+      const token=getToken();
       const res=await fetch(`${apiBase}/ventas/pedidos/${pedido.id}/ia-analisis`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`}});
       const d=await res.json().catch(()=>({}));
       if(res.ok){setAnalisis(d.data?.analisis||d.analisis||JSON.stringify(d));}

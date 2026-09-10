@@ -1,4 +1,4 @@
-﻿// ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
 //  NEBULAE ERP — Design System
 //  Archivo: frontend/src/lib/design-system.ts
 //
@@ -263,18 +263,4 @@ export const daysDiff = (iso: any): number =>
   iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 86400000) : 999;
 
 // ─── API FETCH HELPER ────────────────────────────────────────────────
-export const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
-export async function apiFetch(path: string, opts: RequestInit = {}) {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...opts,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(opts.headers as Record<string,string> || {}),
-    },
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
-  return data.data ?? data;
-}
+export { apiFetch } from './api';

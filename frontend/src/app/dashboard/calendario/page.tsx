@@ -10,12 +10,10 @@ import {
 import toast from 'react-hot-toast';
 import Link from 'next/link';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
+import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 
 async function apiFetch(path, opts = {}) {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-  const headers = { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) };
-  const res = await fetch(API_URL + path, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
+  const res = await _apiFetch(path, opts);
   if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || 'HTTP ' + res.status); }
   const json = await res.json();
   return json.data ?? json;

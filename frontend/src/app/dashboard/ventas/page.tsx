@@ -9,6 +9,7 @@ import {
   ShoppingBag, FileText, Package, BarChart3
 } from 'lucide-react';
 import { usePathname, useRouter } from 'next/navigation';
+import { apiFetch, API_URL } from '@/lib/api';
 
 const SUB_MODULES = [
   { name: 'Solicitud de Cliente', path: '/dashboard/ventas/solicitud' },
@@ -19,18 +20,6 @@ const SUB_MODULES = [
   { name: 'Sincronizacion DB',    path: '/dashboard/ventas/sincronizacion' },
   { name: 'Proyecciones',         path: '/dashboard/ventas/proyecciones' },
 ];
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
-async function apiFetch(path: string, opts: RequestInit = {}) {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...opts,
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(opts.headers as any || {}) },
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
-  return data.data ?? data;
-}
 
 const fCOP  = (v: any) => { const n = Number(v)||0; return n > 0 ? '$'+n.toLocaleString('es-CO') : '-'; };
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';

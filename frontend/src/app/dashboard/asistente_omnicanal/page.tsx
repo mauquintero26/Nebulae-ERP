@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
@@ -8,7 +8,7 @@ import {
   MoveRight, ShoppingCart, User, AlertCircle,
   ExternalLink, Circle, Check, UserPlus, Camera
 } from 'lucide-react';
-import { calculateQuotation } from '@/lib/api';
+import { calculateQuotation, apiFetch, API_URL } from '@/lib/api';
 
 // Brand icons (lucide-react has no brand icons)
 const IGIcon = ({ size = 22, className = '', style = {} }: any) => (
@@ -23,21 +23,6 @@ const FBIcon = ({ size = 22, className = '', style = {} }: any) => (
     <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/>
   </svg>
 );
-
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
-
-async function apiFetch(path: string, opts: RequestInit = {}) {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(opts.headers as Record<string, string> || {}),
-  };
-  const res = await fetch(`${API}${path}`, { ...opts, headers });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
-  return data.data ?? data;
-}
 
 const CHANNEL_CONFIG: Record<string, { label: string; color: string; bg: string; Icon: any }> = {
   all:       { label: 'Todos',     color: '#6366f1', bg: '#eef2ff', Icon: LayoutGrid },

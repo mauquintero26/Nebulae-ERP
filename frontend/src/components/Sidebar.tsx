@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Users, CalendarDays, KanbanSquare,
   MessageSquare, ShoppingCart, TrendingUp, ShoppingBag, Archive,
   Globe, Megaphone, Puzzle, Sparkles, Tag, ChevronDown, ChevronRight,
-  PanelLeftClose, PanelLeftOpen, LogOut, SlidersHorizontal, Settings
+  PanelLeftClose, PanelLeftOpen, LogOut, SlidersHorizontal, Settings, UserCircle2
 } from 'lucide-react';
 
 export function Sidebar() {
@@ -244,6 +244,15 @@ export function Sidebar() {
           {isCollapsed ? <PanelLeftOpen className="w-5 h-5 text-slate-400" /> : <PanelLeftClose className="w-5 h-5 text-slate-400 mr-3" />}
           {!isCollapsed && <span>Contraer Menú</span>}
         </button>
+
+        <Link
+          href="/dashboard/perfil"
+          className={`flex items-center w-full px-3 py-2.5 text-sm font-medium rounded-lg text-slate-600 hover:bg-purple-50 hover:text-purple-700 transition-colors ${isCollapsed ? 'justify-center' : ''}`}
+          title={isCollapsed ? 'Mi Perfil' : ''}
+        >
+          <UserCircle2 className={`w-5 h-5 text-slate-400 ${isCollapsed ? '' : 'mr-3'}`} />
+          {!isCollapsed && <span>Mi Perfil</span>}
+        </Link>
 
         <button 
           onClick={handleLogout}
