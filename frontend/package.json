@@ -6,8 +6,10 @@
     "dev": "next dev -p 5100",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node tests/test_apifetch_401.mjs"
   },
+
   "dependencies": {
     "chart.js": "^4.5.1",
     "chartjs-plugin-zoom": "^2.2.0",

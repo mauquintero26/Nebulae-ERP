@@ -1,18 +1,28 @@
-'use client';
+﻿'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { Mail, Lock, ArrowRight, Loader2, Sparkles, Eye, EyeOff } from 'lucide-react';
+import { Suspense, useState, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Mail, Lock, ArrowRight, Loader2, Sparkles, Eye, EyeOff, AlertCircle } from 'lucide-react';
 import { login } from '@/lib/api';
 import Link from 'next/link';
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const reason = searchParams.get('reason');
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [infoMessage, setInfoMessage] = useState('');
+
+  useEffect(() => {
+    if (reason === 'session-expired') {
+      setInfoMessage('Tu sesión venció. Inicia sesión nuevamente para continuar.');
+    }
+  }, [reason]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -21,8 +31,19 @@ export default function LoginPage() {
 
     try {
       const data = await login(email, password);
+      // Overwrite any previous token
       localStorage.setItem('token', data.access_token);
-      router.push('/dashboard');
+
+      // Return to stored returnUrl or default to /dashboard
+      let returnUrl = '/dashboard';
+      if (typeof window !== 'undefined') {
+        const storedUrl = sessionStorage.getItem('returnUrl');
+        if (storedUrl && !storedUrl.startsWith('/login')) {
+          returnUrl = storedUrl;
+          sessionStorage.removeItem('returnUrl');
+        }
+      }
+      router.replace(returnUrl);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -48,6 +69,13 @@ export default function LoginPage() {
             
             <h1 className="text-3xl font-extrabold text-slate-900 text-center mb-2 tracking-tight">Nebulae Hub</h1>
             <p className="text-slate-500 text-center mb-8 text-sm font-medium">Bienvenido de vuelta. Ingresa a tu panel.</p>
+
+            {infoMessage && (
+              <div className="bg-amber-50 border border-amber-200 text-amber-800 p-3.5 rounded-xl text-sm mb-6 text-center font-semibold flex items-center justify-center gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>{infoMessage}</span>
+              </div>
+            )}
 
             {error && (
               <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm mb-6 text-center font-medium">
@@ -129,5 +157,13 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-400">Cargando...</div>}>
+      <LoginForm />
+    </Suspense>
   );
 }

@@ -12,6 +12,9 @@ export const getHeaders = () => {
   };
 };
 
+// Guard against repeated redirects when multiple requests fail with 401 concurrently
+let isRedirectingToLogin = false;
+
 /**
  * Canonical authenticated fetch helper.
  * Returns the parsed JSON response body directly (not the raw Response).
@@ -30,11 +33,28 @@ export async function apiFetch(
   };
   const res = await fetch(`${API_URL}${path}`, { ...options, headers });
   if (!res.ok) {
+    if (res.status === 401) {
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('token');
+        const currentPath = window.location.pathname + window.location.search;
+        if (currentPath && !currentPath.startsWith('/login')) {
+          sessionStorage.setItem('returnUrl', currentPath);
+        }
+        if (!isRedirectingToLogin) {
+          isRedirectingToLogin = true;
+          // Redirect once to login page with reason parameter
+          window.location.replace('/login?reason=session-expired');
+        }
+      }
+      throw new Error('Tu sesión venció. Inicia sesión nuevamente para continuar.');
+    }
+
     const errBody = await res.json().catch(() => ({}));
     throw new Error(errBody.detail || errBody.message || `HTTP ${res.status}`);
   }
   return res.json().catch(() => ({}));
 }
+
 
 export async function handleResponse(res: Response) {
   const data = await res.json().catch(() => ({}));
