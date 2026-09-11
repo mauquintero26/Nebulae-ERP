@@ -320,7 +320,7 @@ export function AnalisisCompras({ rawData }: AnalisisComprasProps) {
       console.error(error);
       setMessages(prev => [...prev, { role: 'ai', text: '❌ Error de conexión con FastAPI. Verifica que el servidor python esté en ejecución.' }]);
     } finally {
-      setIsLoading(false);
+      setIsChatLoading(false);
     }
   };
 

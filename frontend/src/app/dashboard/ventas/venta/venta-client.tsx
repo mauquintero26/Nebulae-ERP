@@ -194,9 +194,9 @@ export default function VentaClient() {
         modalidad_pago: pecForm.modalidad_pago,
         notas: pecForm.notas,
         productos: (selectedPedido.productos||[]).map((p:any)=>({
-          producto_nombre: p.descripcion||p.producto_nombre||'',
-          qty: p.cantidad||1,
-          unit_price_cop: p.precio_unitario||0,
+          producto_nombre: p.product_name || p.nombre || p.descripcion || p.producto_nombre || 'Producto',
+          qty: p.qty || p.cantidad || 1,
+          unit_price_cop: p.precio_unitario || p.total_cop || 0,
         })),
         created_by: user,
       })});

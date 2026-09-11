@@ -1,18 +1,18 @@
 "use client";
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { getCustomers, createCustomer, updateCustomer, deleteCustomer, createClienteSolicitud, getSolicitudTipos, getHeaders, API_URL } from '@/lib/api';
 import toast from 'react-hot-toast';
+import Link from 'next/link';
 import {
-  Search, Filter, Plus,
-  ChevronLeft, Calendar, MessageSquare, Settings,
-  Upload, ChevronDown, FileText, User,
-  DollarSign, ShoppingBag, MapPin, Tag, Activity,
-  Phone, Mail, X, ArrowRight, Trash2, Edit, Download, CheckCircle2
+  Search, Plus, Calendar, MessageSquare, Settings,
+  User, DollarSign, ShoppingBag, MapPin, Activity,
+  Phone, Mail, X, ArrowRight, Trash2, CheckCircle2, ExternalLink,
+  MessageCircle, Clock, AlertTriangle, ChevronRight, FileText
 } from 'lucide-react';
 
-// ─── Helper ────────────────────────────────────────────────────────────────────
 function timeAgo(isoString: string) {
+  if (!isoString) return 'Hoy';
   const date = new Date(isoString);
   const now = new Date();
   const diff = Math.floor((now.getTime() - date.getTime()) / 1000);
@@ -23,31 +23,39 @@ function timeAgo(isoString: string) {
   return date.toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+function formatCOP(v: number | string | null | undefined) {
+  const num = Number(v) || 0;
+  return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(num);
+}
+
 const STATUS_COLOR_MAP: Record<string, string> = {
   DRAFT: 'bg-slate-100 text-slate-700',
+  BORRADOR: 'bg-slate-100 text-slate-700',
   QUOTATION: 'bg-indigo-100 text-indigo-700',
-  TO_INVOICE: 'bg-amber-100 text-amber-700',
-  INVOICED: 'bg-emerald-100 text-emerald-700',
+  COTIZADA: 'bg-indigo-100 text-indigo-700',
+  CONFIRMADA: 'bg-emerald-100 text-emerald-700',
+  PENDIENTE_COMPRA: 'bg-amber-100 text-amber-700',
+  EN_COMPRA: 'bg-blue-100 text-blue-700',
+  EN_TRANSITO: 'bg-purple-100 text-purple-700',
+  RECIBIDO: 'bg-teal-100 text-teal-700',
+  ENTREGADO: 'bg-emerald-100 text-emerald-700',
   CANCELLED: 'bg-red-100 text-red-700',
-  DONE: 'bg-emerald-100 text-emerald-700',
-  PAID: 'bg-emerald-100 text-emerald-700',
+  CANCELADA: 'bg-red-100 text-red-700',
 };
 
 const TIMELINE_DOT_COLOR: Record<string, string> = {
-  DRAFT: 'bg-slate-400',
-  QUOTATION: 'bg-indigo-500',
-  TO_INVOICE: 'bg-amber-500',
-  INVOICED: 'bg-emerald-500',
-  CANCELLED: 'bg-red-400',
-  DONE: 'bg-emerald-500',
-  PAID: 'bg-emerald-500',
-  CREATED: 'bg-purple-500',
+  customer_request: 'bg-indigo-500',
+  quotation: 'bg-amber-500',
+  sale_order: 'bg-blue-500',
+  payment: 'bg-emerald-500',
+  delivery: 'bg-teal-500',
+  calendar_event: 'bg-purple-500',
+  created: 'bg-slate-400',
 };
 
-// ─── Main Component ────────────────────────────────────────────────────────────
 export default function AgendaPage() {
   const [selectedClient, setSelectedClient] = useState<any | null>(null);
-  const [activeTab, setActiveTab] = useState('Información y Bitácora');
+  const [activeTab, setActiveTab] = useState('Información y Ficha');
   const [entityType, setEntityType] = useState('Individuo');
   const [showModal, setShowModal] = useState<string | null>(null);
   const [customers, setCustomers] = useState<any[]>([]);
@@ -60,7 +68,6 @@ export default function AgendaPage() {
     'Solicitud de Soporte Técnico',
   ]);
   const [customer360, setCustomer360] = useState<any>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [agendaForm, setAgendaForm] = useState<any>({
@@ -68,7 +75,6 @@ export default function AgendaPage() {
     start_datetime: '', end_datetime: '', location: '', notes: '',
   });
 
-  // Fetch customers list
   const fetchCustomers = async () => {
     try {
       const raw = await getCustomers();
@@ -77,7 +83,7 @@ export default function AgendaPage() {
         setCustomers(list.map((c: any) => ({
           id: `CLI-${String(c.id).padStart(4, '0')}`,
           realId: c.id,
-          name: `${c.first_name} ${c.last_name}`.trim(),
+          name: `${c.first_name || ''} ${c.last_name || ''}`.trim() || 'Cliente Sin Nombre',
           first_name: c.first_name,
           last_name: c.last_name,
           email: c.email || '',
@@ -86,12 +92,8 @@ export default function AgendaPage() {
           address: c.address || '',
           city: c.city || '',
           type: 'Regular',
-          sector: 'N/A',
           source: 'Registro CRM',
-          initial: c.first_name ? c.first_name.charAt(0).toUpperCase() : 'C',
-          country: 'Colombia',
-          category: 'Regular',
-          tags: [],
+          initial: (c.first_name ? c.first_name.charAt(0).toUpperCase() : 'C'),
         })));
       }
     } catch (e) {
@@ -99,12 +101,13 @@ export default function AgendaPage() {
     }
   };
 
-  // Fetch 360 profile for selected client
   const fetchProfile = async (realId: number) => {
     try {
       const res = await fetch(`${API_URL}/crm/customers/${realId}/profile-360`, { headers: getHeaders() });
       const json = await res.json();
-      if (json.status === 'success') setCustomer360(json.data);
+      if (json.status === 'success') {
+        setCustomer360(json.data);
+      }
     } catch (e) {
       console.error('Error perfil 360', e);
     }
@@ -112,8 +115,7 @@ export default function AgendaPage() {
 
   useEffect(() => {
     fetchCustomers();
-    // Load pipeline tipos from backend (dynamic — if a new type is added to the backend, it appears here)
-    getSolicitudTipos().then(tipos => { if (tipos.length > 0) setSolicitudTipos(tipos); });
+    getSolicitudTipos().then(tipos => { if (tipos && tipos.length > 0) setSolicitudTipos(tipos); });
   }, []);
 
   useEffect(() => {
@@ -124,29 +126,24 @@ export default function AgendaPage() {
     }
   }, [selectedClient]);
 
-  // ─── Reset form when switching clients ──────────────────────────────────────
   const openClient = (client: any) => {
     setSelectedClient(client);
     setFormData({});
-    setImagePreview(null);
-    setActiveTab('Información y Bitácora');
+    setActiveTab('Información y Ficha');
   };
 
   const openNew = () => {
     setSelectedClient('NEW');
     setFormData({ first_name: '', last_name: '', email: '', phone: '', document: '', address: '', city: '' });
-    setImagePreview(null);
-    setActiveTab('Información y Bitácora');
+    setActiveTab('Información y Ficha');
   };
 
   const goBack = () => {
     setSelectedClient(null);
     setFormData({});
-    setImagePreview(null);
     setCustomer360(null);
   };
 
-  // ─── CRUD Handlers ──────────────────────────────────────────────────────────
   const handleCreate = async () => {
     if (!formData.first_name?.trim()) return toast.error('El nombre es obligatorio.');
     setIsSaving(true);
@@ -195,11 +192,10 @@ export default function AgendaPage() {
       await updateCustomer(selectedClient.realId, payload);
       toast.success('Cambios guardados', { id: tid });
       fetchCustomers();
-      // Refresh local selected client data
       setSelectedClient({ ...selectedClient, ...payload, name: `${payload.first_name || selectedClient.first_name} ${payload.last_name || selectedClient.last_name}` });
       setFormData({});
     } catch (err: any) {
-      toast.error(err.message || 'Error al guardar', { id: tid });
+      toast.error(err.message || 'Error al actualizar', { id: tid });
     } finally {
       setIsSaving(false);
     }
@@ -230,10 +226,9 @@ export default function AgendaPage() {
         producto: solicitudForm.producto,
         detalles: solicitudForm.detalles,
       });
-      toast.success(`¡Solicitud #${result.data?.id} creada! Ingresada al pipeline de Ventas.`, { id: tid });
+      toast.success(`¡Solicitud creada!`, { id: tid });
       setShowModal(null);
       setSolicitudForm({ sale_type: 'ON_DEMAND', tipo: 'Solicitud de Cotización', producto: '', detalles: '' });
-      // Refresh 360 profile to show new order in timeline
       fetchProfile(selectedClient.realId);
     } catch (err: any) {
       toast.error(err.message || 'Error al crear solicitud', { id: tid });
@@ -260,22 +255,19 @@ export default function AgendaPage() {
       };
       const res = await fetch(`${API_URL}/crm/events`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getHeaders() },
+        headers: getHeaders(),
         body: JSON.stringify(payload),
       });
       if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || 'Error'); }
       toast.success('¡Evento creado en el Calendario! ✅', { id: tid });
       setShowModal(null);
       setAgendaForm({ title: '', event_type: 'MEETING', color: 'indigo', start_datetime: '', end_datetime: '', location: '', notes: '' });
-      // Refresh the 360 profile so the calendar event appears in the bitácora
       if (selectedClient?.realId) fetchProfile(selectedClient.realId);
     } catch (err: any) {
       toast.error(err.message || 'Error al crear evento', { id: tid });
     }
   };
 
-
-  // ─── Filtered Customers ─────────────────────────────────────────────────────
   const filteredCustomers = customers.filter(c =>
     c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     c.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -283,334 +275,509 @@ export default function AgendaPage() {
     c.id.includes(searchTerm)
   );
 
-  // ─── VIEW 1: LIST ───────────────────────────────────────────────────────────
+  const sf = (field: string, val: any) => setFormData((prev: any) => ({ ...prev, [field]: val }));
+  const fv = (field: string) => formData[field] !== undefined ? formData[field] : (selectedClient && selectedClient !== 'NEW' ? selectedClient[field] : '');
+
+  // ─── VIEW 1: LISTADO CLIENTES ───────────────────────────────────────────────
   if (!selectedClient) {
     return (
-      <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-5 overflow-y-auto animate-in fade-in">
-        <div className="flex justify-between items-center mb-4">
+      <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-6 overflow-y-auto animate-in fade-in">
+        <div className="flex justify-between items-center mb-6">
           <div className="flex items-center gap-3">
-            <div className="text-slate-900"><User size={32} /></div>
+            <div className="w-12 h-12 rounded-2xl bg-purple-600 flex items-center justify-center text-white shadow-md">
+              <User size={26} />
+            </div>
             <div>
-              <h1 className="text-3xl font-bold text-slate-900">Agenda de Clientes</h1>
-              <p className="text-slate-500 text-sm mt-1">Base de datos de tus prospectos y clientes activos.</p>
+              <h1 className="text-2xl font-black text-slate-900">Agenda de Clientes</h1>
+              <p className="text-slate-500 text-xs mt-0.5">Ficha única centralizada, historial comercial y contacto directo.</p>
             </div>
           </div>
           <button
             onClick={openNew}
-            className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-lg font-bold text-sm shadow-sm transition-colors flex items-center gap-2"
+            className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-md transition-all flex items-center gap-2"
           >
-            <Plus size={18} /> Nuevo Cliente
+            <Plus size={16} /> Nuevo Cliente
           </button>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-3 mb-4 flex justify-between items-center">
-          <div className="flex items-center">
-            <button className="px-4 py-2 font-bold text-sm border-b-2 border-purple-600 text-purple-700">
-              Todos mis clientes ({customers.length})
-            </button>
+        {/* Search */}
+        <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200/80 mb-6 flex items-center justify-between gap-4">
+          <div className="relative flex-1">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+            <input
+              type="text"
+              placeholder="Buscar por nombre, teléfono, email, identificación..."
+              value={searchTerm}
+              onChange={e => setSearchTerm(e.target.value)}
+              className="w-full pl-11 pr-4 py-2.5 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-purple-600 transition-colors"
+            />
           </div>
-          <div className="flex items-center gap-3">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-              <input
-                type="text"
-                placeholder="Buscar por nombre, email, teléfono..."
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-                className="pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm w-72 outline-none focus:border-purple-600"
-              />
-            </div>
-            <button className="p-2 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50"><Filter size={18} /></button>
-          </div>
+          <span className="text-xs font-bold text-slate-500 shrink-0">
+            {filteredCustomers.length} clientes encontrados
+          </span>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-b border-slate-100">
-                <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Cliente</th>
-                <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Contacto</th>
-                <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Tipo</th>
-                <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Ciudad</th>
-                <th className="px-6 py-4 text-xs font-bold text-slate-400 uppercase tracking-wider">Ingresado Por</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filteredCustomers.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-6 py-12 text-center text-slate-400">
-                    {searchTerm ? 'No se encontraron clientes con esa búsqueda.' : 'Aún no tienes clientes registrados. ¡Crea el primero!'}
-                  </td>
-                </tr>
-              )}
-              {filteredCustomers.map((client) => (
-                <tr key={client.id} onClick={() => openClient(client)} className="hover:bg-slate-50 cursor-pointer transition-colors">
-                  <td className="px-6 py-4">
+        {/* Customer Cards Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredCustomers.map(client => {
+            const cleanPhone = client.phone.replace(/\D/g, '');
+            return (
+              <div
+                key={client.id}
+                onClick={() => openClient(client)}
+                className="bg-white rounded-2xl border border-slate-200 p-5 hover:border-purple-300 hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
+              >
+                <div>
+                  <div className="flex items-start justify-between mb-3">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center text-purple-700 font-bold">{client.initial}</div>
+                      <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-600 text-white font-black text-lg flex items-center justify-center shadow-sm">
+                        {client.initial}
+                      </div>
                       <div>
-                        <span className="font-bold text-slate-800 block">{client.name}</span>
-                        <span className="text-xs text-slate-400">{client.id}</span>
+                        <h3 className="font-bold text-slate-900 text-base group-hover:text-purple-600 transition-colors leading-tight">
+                          {client.name}
+                        </h3>
+                        <span className="text-[11px] font-semibold text-slate-400">{client.id}</span>
                       </div>
                     </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <p className="text-sm font-medium text-slate-800">{client.email || '—'}</p>
-                    <p className="text-sm text-slate-500">{client.phone || '—'}</p>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="bg-blue-50 text-blue-600 font-bold px-3 py-1 rounded-md text-xs border border-blue-100">{client.type}</span>
-                  </td>
-                  <td className="px-6 py-4 text-sm text-slate-600 font-medium">{client.city || '—'}</td>
-                  <td className="px-6 py-4">
-                    <span className="text-sm font-bold text-slate-800">{client.source}</span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  </div>
+
+                  <div className="space-y-1.5 text-xs text-slate-600 mt-2">
+                    {client.phone && (
+                      <div className="flex items-center gap-2">
+                        <Phone size={13} className="text-slate-400 shrink-0" />
+                        <span className="font-medium">{client.phone}</span>
+                      </div>
+                    )}
+                    {client.email && (
+                      <div className="flex items-center gap-2">
+                        <Mail size={13} className="text-slate-400 shrink-0" />
+                        <span className="truncate">{client.email}</span>
+                      </div>
+                    )}
+                    {client.city && (
+                      <div className="flex items-center gap-2">
+                        <MapPin size={13} className="text-slate-400 shrink-0" />
+                        <span>{client.city}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="pt-4 mt-4 border-t border-slate-100 flex items-center justify-between">
+                  {cleanPhone ? (
+                    <a
+                      href={`https://wa.me/57${cleanPhone}?text=${encodeURIComponent('Hola ' + client.name + ', te saludamos de Nebulae Hub.')}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={e => e.stopPropagation()}
+                      className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-600 hover:text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200 transition-colors"
+                    >
+                      <MessageCircle size={14} /> WhatsApp
+                    </a>
+                  ) : (
+                    <span className="text-[11px] text-slate-400">Sin teléfono</span>
+                  )}
+
+                  <span className="text-xs font-bold text-purple-600 flex items-center gap-1 group-hover:translate-x-0.5 transition-transform">
+                    Ver ficha <ChevronRight size={14} />
+                  </span>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
     );
   }
 
-  // ─── VIEW 2: DETAIL / NEW ───────────────────────────────────────────────────
+  // ─── VIEW 2: FICHA ÚNICA DEL CLIENTE SELECCIONADO ───────────────────────────
   const isNew = selectedClient === 'NEW';
-  const clientData = isNew ? {
-    id: 'Nuevo', realId: null, name: '', initial: '+', source: 'Tú',
-    first_name: '', last_name: '', email: '', phone: '', document: '', address: '', city: '', country: '', category: '', tags: []
-  } : selectedClient;
+  const clientData = isNew ? {} : selectedClient;
+  const cleanPhone = (clientData.phone || '').replace(/\D/g, '');
 
-  const showBitacora = !isNew && activeTab === 'Información y Bitácora';
-
-  // Controlled form value: use formData if user has touched it, else fall back to clientData
-  const fv = (key: string) => formData[key] !== undefined ? formData[key] : (clientData[key] || '');
-  const sf = (key: string, val: string) => setFormData({ ...formData, [key]: val });
+  const saldoPendiente = customer360?.financials?.saldo_pendiente_cop ?? customer360?.saldo_pendiente_cop ?? 0;
+  const totalComprado = customer360?.financials?.total_comprado_cop ?? customer360?.ltv ?? 0;
+  const totalPagado = customer360?.financials?.total_pagado_cop ?? 0;
 
   return (
-    <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-5 overflow-y-auto animate-in fade-in custom-scrollbar">
+    <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-6 overflow-y-auto animate-in fade-in">
+      {/* Back Button & Header */}
+      <div className="mb-4">
+        <button
+          onClick={goBack}
+          className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 transition-colors mb-3"
+        >
+          ← Volver al listado de clientes
+        </button>
 
-      {/* Header */}
-      <div className="flex justify-between items-start mb-4">
-        <div className="flex items-center gap-4">
-          <button onClick={goBack} className="w-10 h-10 bg-white border border-slate-200 rounded-xl flex items-center justify-center text-slate-500 hover:bg-slate-50 shadow-sm">
-            <ChevronLeft size={20} />
-          </button>
-          <div className="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center text-purple-700 font-bold text-xl">
-            {isNew ? <Plus size={22} /> : clientData.initial}
+        <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-purple-600 to-indigo-600 text-white font-black text-2xl flex items-center justify-center shadow-md">
+              {isNew ? <Plus size={28} /> : clientData.initial}
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl font-black text-slate-900">{isNew ? 'Nuevo Cliente' : clientData.name}</h1>
+                {!isNew && (
+                  <span className="text-xs font-bold px-2.5 py-0.5 bg-slate-100 text-slate-600 rounded-full">
+                    {clientData.id}
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {isNew ? 'Ingresa los datos para registrar en el CRM.' : (
+                  <>
+                    Doc: <span className="font-semibold text-slate-700">{clientData.document || 'N/A'}</span> · 
+                    Ciudad: <span className="font-semibold text-slate-700">{clientData.city || 'No especificada'}</span>
+                  </>
+                )}
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-2xl font-bold text-slate-900">{isNew ? 'Nuevo Cliente' : clientData.name}</h1>
-            <p className="text-slate-500 text-sm">
-              {isNew ? 'Completar el formulario y presionar "Crear Cliente".' : <>Ingresado por: <span className="text-amber-600 font-bold">{clientData.source}</span></>}
+
+          {/* Quick Actions */}
+          {!isNew && (
+            <div className="flex flex-wrap items-center gap-2.5">
+              {cleanPhone && (
+                <a
+                  href={`https://wa.me/57${cleanPhone}?text=${encodeURIComponent('Hola ' + clientData.name + ', te saludamos de Nebulae Hub.')}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm flex items-center gap-1.5 transition-colors"
+                >
+                  <MessageCircle size={15} /> WhatsApp
+                </a>
+              )}
+              {clientData.phone && (
+                <a
+                  href={`tel:${cleanPhone}`}
+                  className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3.5 py-2 rounded-xl font-bold text-xs shadow-sm flex items-center gap-1.5 transition-colors"
+                >
+                  <Phone size={14} /> Llamar
+                </a>
+              )}
+              <Link
+                href={`/dashboard/ventas/solicitud?customer_id=${clientData.realId}`}
+                className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm flex items-center gap-1.5 transition-colors"
+              >
+                <Plus size={14} /> Nueva Solicitud
+              </Link>
+              <button
+                onClick={() => setShowModal('Agendar')}
+                className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3.5 py-2 rounded-xl font-bold text-xs shadow-sm flex items-center gap-1.5 transition-colors"
+              >
+                <Calendar size={14} /> Agendar
+              </button>
+              <button
+                onClick={handleDelete}
+                className="p-2 border border-slate-200 text-red-500 hover:bg-red-50 rounded-xl transition-colors"
+                title="Eliminar Cliente"
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Financial KPI Banner */}
+      {!isNew && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          <div className={`p-5 rounded-2xl border shadow-sm ${saldoPendiente > 0 ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800'}`}>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[11px] font-black uppercase tracking-wider">Saldo por Cobrar</span>
+              {saldoPendiente > 0 ? <AlertTriangle size={16} className="text-rose-600" /> : <CheckCircle2 size={16} className="text-emerald-600" />}
+            </div>
+            <h3 className="text-2xl font-black">{formatCOP(saldoPendiente)}</h3>
+            <p className="text-[11px] font-semibold mt-1 opacity-80">
+              {saldoPendiente > 0 ? 'Pendiente pago de saldos (40%)' : 'Cliente al día con sus pagos'}
             </p>
           </div>
-        </div>
 
-        {!isNew && (
-          <div className="flex items-center gap-3">
-            <button onClick={() => {
-                const now = new Date(); now.setSeconds(0,0);
-                now.setMinutes(now.getMinutes() >= 30 ? 60 : 0);
-                // Build local datetime string (not UTC)
-                const pad = (n: number) => String(n).padStart(2,'0');
-                const localStr = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-                const startStr = localStr(now);
-                const endD = new Date(now.getTime() + 3600000); // +1 hour default
-                const endStr = localStr(endD);
-                setAgendaForm((prev: any) => ({ ...prev, title: `Reunión con ${selectedClient?.name || ''}`, start_datetime: startStr, end_datetime: endStr }));
-                setShowModal('Agendar');
-              }} className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-colors flex items-center gap-2">
-              <Calendar size={16} /> Agendar
-            </button>
-            <button onClick={() => setShowModal('Contactar')} className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-colors flex items-center gap-2">
-              <MessageSquare size={16} /> Contactar
-            </button>
-            <button onClick={() => setShowModal('Nueva Solicitud')} className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-lg font-bold text-sm shadow-sm transition-colors flex items-center gap-2">
-              <Plus size={16} /> Nueva Solicitud
-            </button>
-            <button onClick={() => setShowModal('Opciones de Cliente')} className="bg-white border border-slate-200 p-2.5 rounded-lg text-slate-500 hover:bg-slate-50 shadow-sm"><Settings size={18} /></button>
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+            <span className="text-[11px] font-black text-slate-400 uppercase tracking-wider block mb-1">Total Comprado (LTV)</span>
+            <h3 className="text-2xl font-black text-slate-900">{formatCOP(totalComprado)}</h3>
+            <p className="text-[11px] text-slate-400 font-medium mt-1">Facturación histórica total</p>
           </div>
-        )}
-      </div>
+
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+            <span className="text-[11px] font-black text-slate-400 uppercase tracking-wider block mb-1">Total Pagado</span>
+            <h3 className="text-2xl font-black text-emerald-600">{formatCOP(totalPagado)}</h3>
+            <p className="text-[11px] text-slate-400 font-medium mt-1">Recibido en caja / bancos</p>
+          </div>
+
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+            <span className="text-[11px] font-black text-slate-400 uppercase tracking-wider block mb-1">Pedidos Activos</span>
+            <h3 className="text-2xl font-black text-purple-600">{customer360?.pedidos?.length || customer360?.active_orders?.length || 0}</h3>
+            <p className="text-[11px] text-slate-400 font-medium mt-1">En compras, tránsito o entrega</p>
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       {!isNew && (
-        <div className="flex flex-wrap border-b border-slate-200 mb-4 gap-x-6 gap-y-2">
-          {['Información y Bitácora', 'Contactos Adicionales', 'Historial de Compra'].map(tab => (
+        <div className="flex border-b border-slate-200 mb-6 gap-6">
+          {[
+            { id: 'Información y Ficha', label: 'Información y Ficha' },
+            { id: 'Solicitudes y Cotizaciones', label: `Solicitudes (${customer360?.solicitudes?.length || 0}) / Cotizaciones (${customer360?.cotizaciones?.length || 0})` },
+            { id: 'Pedidos de Venta (PVEN)', label: `Pedidos de Venta (${customer360?.pedidos?.length || 0})` },
+            { id: 'Historial y Bitácora', label: 'Historial y Bitácora' },
+          ].map(tab => (
             <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`pb-3 font-bold text-sm border-b-2 transition-colors whitespace-nowrap ${activeTab === tab ? 'border-purple-600 text-purple-700' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`pb-3 font-bold text-sm border-b-2 transition-colors whitespace-nowrap ${activeTab === tab.id ? 'border-purple-600 text-purple-700' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
             >
-              {tab}
+              {tab.label}
             </button>
           ))}
         </div>
       )}
 
-      <div className={`flex gap-4 items-start ${isNew ? 'justify-center' : ''}`}>
-        {/* LEFT COLUMN */}
-        <div className={`flex-1 space-y-4 ${isNew ? 'max-w-5xl w-full' : 'w-full'}`}>
+      <div className="flex gap-6 items-start">
+        {/* Main Content Area */}
+        <div className="flex-1 space-y-6">
 
-          {/* ── Información y Bitácora tab (also used for NEW) ── */}
-          {(activeTab === 'Información y Bitácora') && (
-            <>
-              {/* Image upload */}
-              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex items-center gap-6">
-                {imagePreview ? (
-                  <img src={imagePreview} alt="Preview" className="w-24 h-24 rounded-full object-cover shadow-inner shrink-0 border-2 border-slate-300" />
-                ) : (
-                  <div className="w-24 h-24 bg-slate-100 rounded-full flex flex-col items-center justify-center text-slate-400 border-2 border-dashed border-slate-300">
-                    <User size={32} className="mb-1 opacity-50" />
-                  </div>
-                )}
+          {/* TAB 1: INFORMACIÓN Y FICHA */}
+          {(isNew || activeTab === 'Información y Ficha') && (
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 space-y-5">
+              <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider">Datos Personales y Ubicación</h3>
+
+              <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <h3 className="font-bold text-slate-800">Fotografía / Logo</h3>
-                  <p className="text-xs text-slate-500 mb-3">Sube una imagen para identificar rápidamente al cliente.</p>
-                  <input type="file" id="upload-image" className="hidden" accept="image/*" onChange={(e) => {
-                    if (e.target.files && e.target.files[0]) {
-                      setImagePreview(URL.createObjectURL(e.target.files[0]));
-                      toast.success('Imagen cargada');
-                    }
-                  }} />
-                  <label htmlFor="upload-image" className="cursor-pointer text-sm font-bold border border-slate-300 px-4 py-1.5 rounded-lg text-slate-700 hover:bg-slate-50">Subir imagen</label>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">Tipo de Entidad</label>
+                  <div className="flex bg-slate-100 p-1 rounded-xl">
+                    <button onClick={() => setEntityType('Individuo')} className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-colors ${entityType === 'Individuo' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>Individuo</button>
+                    <button onClick={() => setEntityType('Compañía')} className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-colors ${entityType === 'Compañía' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>Compañía</button>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">Identificación (CC / NIT / Pasaporte)</label>
+                  <input type="text" value={fv('document')} onChange={e => sf('document', e.target.value)} placeholder="12345678" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
                 </div>
               </div>
 
-              {/* Basic Info Form */}
-              <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
-                <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider mb-6">Información Básica</h3>
-
-                {/* Entity type + Name row */}
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1">Entidad</label>
-                    <div className="flex bg-slate-100 p-1 rounded-xl">
-                      <button onClick={() => setEntityType('Individuo')} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-colors ${entityType === 'Individuo' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>Individuo</button>
-                      <button onClick={() => setEntityType('Compañía')} className={`flex-1 py-1.5 text-sm font-bold rounded-lg transition-colors ${entityType === 'Compañía' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>Compañía</button>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1">Identificación (CC/NIT/Pasaporte)</label>
-                    <input type="text" value={fv('document')} onChange={e => sf('document', e.target.value)} className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                  </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">Nombre (s) *</label>
+                  <input type="text" value={fv('first_name')} onChange={e => sf('first_name', e.target.value)} placeholder="Ej. Carlos" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
                 </div>
-
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1">Nombre (s)</label>
-                    <input type="text" value={fv('first_name')} onChange={e => sf('first_name', e.target.value)} placeholder="Ej. Juan Pablo" className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1">Apellido (s) / Razón Social</label>
-                    <input type="text" value={fv('last_name')} onChange={e => sf('last_name', e.target.value)} placeholder="Ej. García López" className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1">Correo Electrónico</label>
-                    <input type="email" value={fv('email')} onChange={e => sf('email', e.target.value)} placeholder="correo@ejemplo.com" className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-1">Teléfono / WhatsApp</label>
-                    <input type="text" value={fv('phone')} onChange={e => sf('phone', e.target.value)} placeholder="+57 300 000 0000" className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-4 mb-6">
-                  <div className="col-span-1">
-                    <label className="block text-xs font-bold text-slate-500 mb-1">Ciudad</label>
-                    <input type="text" value={fv('city')} onChange={e => sf('city', e.target.value)} placeholder="Bogotá" className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="block text-xs font-bold text-slate-500 mb-1">Dirección de Facturación / Entrega</label>
-                    <input type="text" value={fv('address')} onChange={e => sf('address', e.target.value)} placeholder="Calle 123 # 45-67" className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                  </div>
-                </div>
-
-                <div className="flex gap-3">
-                  <button
-                    onClick={isNew ? handleCreate : handleUpdate}
-                    disabled={isSaving}
-                    className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm transition-colors"
-                  >
-                    {isSaving ? 'Guardando...' : isNew ? '✓ Crear Cliente' : 'Guardar Cambios'}
-                  </button>
-                  {!isNew && (
-                    <button onClick={goBack} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors">
-                      Cancelar
-                    </button>
-                  )}
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">Apellido (s)</label>
+                  <input type="text" value={fv('last_name')} onChange={e => sf('last_name', e.target.value)} placeholder="Ej. Restrepo" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
                 </div>
               </div>
-            </>
-          )}
 
-          {/* ── Contactos Adicionales ── */}
-          {!isNew && activeTab === 'Contactos Adicionales' && (
-            <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 min-h-[400px]">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider">Contactos Relacionados</h3>
-                <button className="bg-slate-100 text-slate-700 px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 hover:bg-slate-200 transition-colors">
-                  <Plus size={14} /> Agregar Contacto
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">Teléfono / WhatsApp</label>
+                  <input type="text" value={fv('phone')} onChange={e => sf('phone', e.target.value)} placeholder="3109876543" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">Correo Electrónico</label>
+                  <input type="email" value={fv('email')} onChange={e => sf('email', e.target.value)} placeholder="cliente@ejemplo.co" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">Ciudad</label>
+                  <input type="text" value={fv('city')} onChange={e => sf('city', e.target.value)} placeholder="Barranquilla" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-xs font-bold text-slate-500 mb-1">Dirección de Entrega</label>
+                  <input type="text" value={fv('address')} onChange={e => sf('address', e.target.value)} placeholder="Carrera 53 # 82-100" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-3">
+                <button
+                  onClick={isNew ? handleCreate : handleUpdate}
+                  disabled={isSaving}
+                  className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-md transition-colors"
+                >
+                  {isSaving ? 'Guardando...' : isNew ? '✓ Crear Cliente' : 'Guardar Cambios'}
                 </button>
+                {!isNew && (
+                  <button onClick={goBack} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-5 py-2.5 rounded-xl font-bold text-sm transition-colors">
+                    Cancelar
+                  </button>
+                )}
               </div>
-              <p className="text-xs text-slate-400 italic">No hay contactos adicionales registrados para este cliente.</p>
             </div>
           )}
 
-          {/* ── Historial de Compra ── */}
-          {!isNew && activeTab === 'Historial de Compra' && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-3 gap-4">
-                <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-5 rounded-2xl text-white shadow-md">
-                  <p className="text-xs font-bold uppercase tracking-wider opacity-80 mb-1">Lifetime Value</p>
-                  <h2 className="text-3xl font-black">${parseFloat(customer360?.ltv || '0').toLocaleString('es-CO')}</h2>
-                  <p className="text-sm opacity-90 mt-2">En {customer360?.total_orders || 0} transacciones</p>
+          {/* TAB 2: SOLICITUDES Y COTIZACIONES */}
+          {!isNew && activeTab === 'Solicitudes y Cotizaciones' && (
+            <div className="space-y-6">
+              {/* Solicitudes (SC) */}
+              <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                    <FileText size={16} className="text-purple-600" /> Solicitudes de Cotización (SC)
+                  </h3>
+                  <Link
+                    href={`/dashboard/ventas/solicitud?customer_id=${clientData.realId}`}
+                    className="bg-purple-50 text-purple-700 hover:bg-purple-100 px-3.5 py-1.5 rounded-xl font-bold text-xs border border-purple-200 flex items-center gap-1"
+                  >
+                    <Plus size={14} /> Nueva Solicitud
+                  </Link>
                 </div>
-                <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
-                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1"><DollarSign size={14} /> Trámites Activos</p>
-                  <h2 className="text-2xl font-black text-slate-800">{customer360?.active_orders?.length || 0}</h2>
-                  <p className="text-xs font-bold text-slate-500 mt-2">En el pipeline de ventas</p>
-                </div>
-                <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm">
-                  <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1"><ShoppingBag size={14} /> Total Órdenes</p>
-                  <h2 className="text-2xl font-black text-slate-800">{customer360?.total_orders || 0}</h2>
-                  <p className="text-xs font-bold text-slate-500 mt-2">Historial completo</p>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100">
+                        <th className="px-4 py-3">Número</th>
+                        <th className="px-4 py-3">Fecha</th>
+                        <th className="px-4 py-3">Estado</th>
+                        <th className="px-4 py-3 text-right">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {customer360?.solicitudes?.length > 0 ? customer360.solicitudes.map((sc: any) => (
+                        <tr key={sc.id} className="hover:bg-slate-50/80">
+                          <td className="px-4 py-3.5 font-bold text-slate-900">{sc.numero}</td>
+                          <td className="px-4 py-3.5 text-slate-500">{timeAgo(sc.created_at)}</td>
+                          <td className="px-4 py-3.5">
+                            <span className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${STATUS_COLOR_MAP[sc.estado] || 'bg-slate-100 text-slate-700'}`}>
+                              {sc.estado}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3.5 text-right">
+                            <Link
+                              href={`/dashboard/ventas/solicitud?sc_id=${sc.id}`}
+                              className="text-purple-600 hover:underline font-bold inline-flex items-center gap-1"
+                            >
+                              Ver en Solicitud <ExternalLink size={12} />
+                            </Link>
+                          </td>
+                        </tr>
+                      )) : (
+                        <tr>
+                          <td colSpan={4} className="px-4 py-6 text-center text-slate-400">Sin solicitudes registradas para este cliente.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
 
-              <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-                <div className="p-5 border-b border-slate-100">
-                  <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider">Detalle de Órdenes</h3>
+              {/* Cotizaciones (COT) */}
+              <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                    <DollarSign size={16} className="text-indigo-600" /> Cotizaciones Emitidas (COT)
+                  </h3>
+                  <Link
+                    href={`/dashboard/ventas/cotizacion`}
+                    className="text-indigo-600 hover:underline text-xs font-bold flex items-center gap-1"
+                  >
+                    Ver todas las cotizaciones <ArrowRight size={14} />
+                  </Link>
                 </div>
-                <table className="w-full text-left">
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100">
+                        <th className="px-4 py-3">Número</th>
+                        <th className="px-4 py-3">Total COP</th>
+                        <th className="px-4 py-3">Fecha</th>
+                        <th className="px-4 py-3">Estado</th>
+                        <th className="px-4 py-3 text-right">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {customer360?.cotizaciones?.length > 0 ? customer360.cotizaciones.map((cot: any) => (
+                        <tr key={cot.id} className="hover:bg-slate-50/80">
+                          <td className="px-4 py-3.5 font-bold text-slate-900">{cot.numero}</td>
+                          <td className="px-4 py-3.5 font-bold text-slate-900">{formatCOP(cot.total_cop)}</td>
+                          <td className="px-4 py-3.5 text-slate-500">{timeAgo(cot.created_at)}</td>
+                          <td className="px-4 py-3.5">
+                            <span className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${STATUS_COLOR_MAP[cot.estado] || 'bg-slate-100 text-slate-700'}`}>
+                              {cot.estado}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3.5 text-right">
+                            <Link
+                              href={`/dashboard/ventas/cotizacion?id=${cot.id}`}
+                              className="text-indigo-600 hover:underline font-bold inline-flex items-center gap-1"
+                            >
+                              Ver Cotización <ExternalLink size={12} />
+                            </Link>
+                          </td>
+                        </tr>
+                      )) : (
+                        <tr>
+                          <td colSpan={5} className="px-4 py-6 text-center text-slate-400">Sin cotizaciones registradas para este cliente.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: PEDIDOS DE VENTA (PVEN) */}
+          {!isNew && activeTab === 'Pedidos de Venta (PVEN)' && (
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                    <ShoppingBag size={16} className="text-blue-600" /> Pedidos de Venta Canónicos (PVEN)
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-0.5">Control de Anticipo 60%, Saldo 40% y estado de despacho.</p>
+                </div>
+                <Link
+                  href="/dashboard/ventas/venta"
+                  className="bg-blue-50 text-blue-700 hover:bg-blue-100 px-3.5 py-1.5 rounded-xl font-bold text-xs border border-blue-200 flex items-center gap-1"
+                >
+                  Ir a Ventas Hub <ArrowRight size={14} />
+                </Link>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
                   <thead>
-                    <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider border-b border-slate-100">
-                      <th className="px-6 py-3 font-bold">Orden / Fecha</th>
-                      <th className="px-6 py-3 font-bold">Artículos</th>
-                      <th className="px-6 py-3 font-bold">Total</th>
-                      <th className="px-6 py-3 font-bold">Estado</th>
+                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100">
+                      <th className="px-4 py-3">Número</th>
+                      <th className="px-4 py-3">Total</th>
+                      <th className="px-4 py-3">Anticipo (60%)</th>
+                      <th className="px-4 py-3">Saldo (40%)</th>
+                      <th className="px-4 py-3">Estado</th>
+                      <th className="px-4 py-3 text-right">Acción</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100 text-sm">
-                    {customer360?.active_orders?.length > 0 ? customer360.active_orders.map((o: any) => (
-                      <tr key={o.id} className="hover:bg-slate-50 cursor-pointer">
-                        <td className="px-6 py-4">
-                          <div className="font-bold text-slate-800">#ORD-{String(o.id).padStart(4, '0')}</div>
-                          <div className="text-slate-500 text-xs">{o.created_at ? new Date(o.created_at).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</div>
+                  <tbody className="divide-y divide-slate-100">
+                    {customer360?.pedidos?.length > 0 ? customer360.pedidos.map((p: any) => (
+                      <tr key={p.id} className="hover:bg-slate-50/80">
+                        <td className="px-4 py-3.5">
+                          <span className="font-bold text-slate-900 block">{p.numero}</span>
+                          <span className="text-[10px] text-slate-400">{timeAgo(p.created_at)}</span>
                         </td>
-                        <td className="px-6 py-4 text-slate-700">{o.lines_count || 0} artículo(s)</td>
-                        <td className="px-6 py-4 font-bold text-slate-800">${parseFloat(o.total || 0).toLocaleString('es-CO')}</td>
-                        <td className="px-6 py-4">
-                          <span className={`font-bold px-2 py-1 rounded text-xs ${STATUS_COLOR_MAP[o.status] || 'bg-slate-100 text-slate-700'}`}>{o.status_label || o.status}</span>
+                        <td className="px-4 py-3.5 font-black text-slate-900">{formatCOP(p.total_cop)}</td>
+                        <td className="px-4 py-3.5 font-bold text-emerald-600">{formatCOP(p.anticipo_cop)}</td>
+                        <td className="px-4 py-3.5 font-black text-rose-600">{formatCOP(p.saldo_cop)}</td>
+                        <td className="px-4 py-3.5">
+                          <span className={`px-2.5 py-1 rounded-full font-black text-[10px] ${STATUS_COLOR_MAP[p.estado] || 'bg-blue-100 text-blue-700'}`}>
+                            {p.estado}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3.5 text-right">
+                          <Link
+                            href={`/dashboard/ventas/venta?id=${p.id}`}
+                            className="text-blue-600 hover:underline font-bold inline-flex items-center gap-1"
+                          >
+                            Abrir Pedido <ExternalLink size={12} />
+                          </Link>
                         </td>
                       </tr>
                     )) : (
                       <tr>
-                        <td colSpan={4} className="px-6 py-8 text-center text-slate-400 text-sm">Este cliente no tiene órdenes registradas aún.</td>
+                        <td colSpan={6} className="px-4 py-8 text-center text-slate-400">Sin pedidos de venta registrados aún.</td>
                       </tr>
                     )}
                   </tbody>
@@ -618,326 +785,192 @@ export default function AgendaPage() {
               </div>
             </div>
           )}
-        </div>
 
-        {/* RIGHT COLUMN: Bitácora */}
-        {showBitacora && (
-          <div className="w-[420px] bg-white rounded-2xl shadow-sm border border-slate-100 flex flex-col h-[700px] sticky top-0 flex-shrink-0">
-            <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-              <h3 className="font-bold text-slate-800 flex items-center gap-2">
-                <Activity className="text-purple-600" size={18} /> Bitácora de Actividad
+          {/* TAB 4: HISTORIAL Y BITÁCORA */}
+          {!isNew && activeTab === 'Historial y Bitácora' && (
+            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
+              <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider mb-6 flex items-center gap-2">
+                <Activity size={16} className="text-purple-600" /> Bitácora de Eventos y Actividad
               </h3>
-              <button onClick={() => setShowModal('Nueva Solicitud')} className="bg-purple-600 hover:bg-purple-700 text-white border border-purple-600 px-3 py-1.5 rounded-lg font-bold text-xs shadow-sm transition-colors flex items-center gap-1">
-                <Plus size={12} /> Solicitud
-              </button>
-            </div>
 
-            {/* Trámites Activos Summary */}
-            <div className="p-4 border-b border-slate-100 bg-white space-y-2">
-              <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Trámites Activos en CRM</h4>
-              {customer360?.active_orders?.length > 0 ? (
-                customer360.active_orders.map((order: any) => (
-                  <div key={order.id} className="flex justify-between items-center border p-3 rounded-xl bg-indigo-50/50 border-indigo-100">
-                    <div>
-                      <p className="text-xs font-bold text-indigo-900">Orden #{String(order.id).padStart(4, '0')}</p>
-                      <p className="text-[10px] text-indigo-600 mt-0.5">{order.status_label || order.status}</p>
-                    </div>
-                    <span className={`text-[10px] font-bold px-2 py-1 rounded ${STATUS_COLOR_MAP[order.status] || 'bg-slate-100 text-slate-700'}`}>
-                      ${parseFloat(order.total || 0).toLocaleString('es-CO')}
-                    </span>
-                  </div>
-                ))
-              ) : (
-                <p className="text-xs text-slate-400 italic py-1">Sin trámites activos en este momento.</p>
-              )}
-            </div>
-
-            {/* Timeline */}
-            <div className="flex-1 p-5 relative overflow-y-auto custom-scrollbar bg-slate-50/30">
-              <div className="absolute left-[27px] top-5 bottom-5 w-0.5 bg-slate-200"></div>
-              <div className="space-y-4 relative">
+              <div className="relative pl-6 space-y-6 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-200">
                 {customer360?.timeline?.length > 0 ? customer360.timeline.map((event: any, idx: number) => {
-                  const isCalEvent = event.type === 'calendar_event';
-                  const isCreated  = event.type === 'created';
-                  // Color dot classes
-                  const calColorDot: Record<string, string> = {
-                    indigo: 'bg-indigo-500', green: 'bg-green-500', blue: 'bg-blue-500',
-                    amber: 'bg-amber-500', purple: 'bg-purple-500', rose: 'bg-rose-500',
-                  };
-                  const dotClass = isCalEvent
-                    ? (calColorDot[event.color] || 'bg-indigo-500')
-                    : (TIMELINE_DOT_COLOR[event.status] || 'bg-slate-400');
+                  const dotColor = TIMELINE_DOT_COLOR[event.type] || 'bg-purple-600';
                   return (
-                    <div key={`${event.type}-${event.id}-${idx}`} className="relative pl-8">
-                      <div className={`absolute left-[-5px] top-1.5 w-3 h-3 rounded-full border-2 border-white shadow-sm ${dotClass}`}></div>
-                      {isCalEvent ? (
-                        // Calendar event card — special style
-                        <div className="bg-white border border-indigo-100 rounded-xl p-3 shadow-sm hover:border-indigo-300 transition-colors">
-                          <div className="flex justify-between items-start mb-1">
-                            <div className="flex items-center gap-1.5">
-                              <Calendar size={11} className="text-indigo-500 flex-shrink-0" />
-                              <h4 className="font-bold text-indigo-800 text-sm leading-tight">{event.status_label}</h4>
-                            </div>
-                            <span className="text-[10px] text-slate-400 font-medium shrink-0 ml-2">{event.created_at ? timeAgo(event.created_at) : 'Hoy'}</span>
-                          </div>
-                          <p className="text-xs font-bold text-indigo-600 mb-1">📅 {event.estado_label}</p>
-                          <p className="text-xs text-slate-500">{event.description}</p>
-                          {event.created_by && (
-                            <p className="text-[10px] text-slate-400 mt-1.5 font-medium">Por: {event.created_by}</p>
-                          )}
+                    <div key={`${event.type}-${event.id}-${idx}`} className="relative">
+                      <div className={`absolute -left-[21px] top-1.5 w-3 h-3 rounded-full border-2 border-white shadow-sm ${dotColor}`} />
+                      <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4">
+                        <div className="flex justify-between items-start mb-1">
+                          <span className="font-bold text-slate-900 text-xs">{event.status_label || event.type}</span>
+                          <span className="text-[10px] text-slate-400 font-medium">{event.created_at ? timeAgo(event.created_at) : 'Hoy'}</span>
                         </div>
-                      ) : (
-                        // Sales order / created card — original style
-                        <div className={`bg-white border rounded-xl p-3 shadow-sm hover:border-purple-200 transition-colors ${isCreated ? 'border-purple-100' : 'border-slate-100'}`}>
-                          <div className="flex justify-between items-start mb-1">
-                            <h4 className="font-bold text-slate-800 text-sm">{event.solicitud_tipo || event.status_label || event.status}</h4>
-                            <span className="text-[10px] text-slate-400 font-medium shrink-0 ml-2">{event.created_at ? timeAgo(event.created_at) : 'Hoy'}</span>
-                          </div>
-                          {event.estado_label && !isCreated && (
-                            <p className="text-xs font-bold text-indigo-600 mb-1">ESTADO: {event.estado_label}</p>
-                          )}
-                          <p className="text-xs text-slate-500">{event.description}</p>
-                          {event.total > 0 && (
-                            <p className="text-xs font-bold text-slate-700 mt-1">${parseFloat(event.total).toLocaleString('es-CO')}</p>
-                          )}
-                        </div>
-                      )}
+                        <p className="text-xs text-slate-600">{event.description}</p>
+                        {event.total > 0 && (
+                          <p className="text-xs font-black text-slate-900 mt-1">{formatCOP(event.total)}</p>
+                        )}
+                      </div>
                     </div>
                   );
                 }) : (
-                  <div className="relative pl-8">
-                    <div className="absolute left-[-5px] top-1 w-3 h-3 rounded-full bg-purple-500 border-2 border-white shadow-sm"></div>
-                    <div className="bg-white border border-slate-100 rounded-xl p-3 shadow-sm">
-                      <div className="flex justify-between items-start mb-1">
-                        <h4 className="font-bold text-slate-800 text-sm">Cliente Creado</h4>
-                        <span className="text-[10px] text-slate-400 font-medium">Hoy</span>
-                      </div>
-                      <p className="text-xs text-slate-500">Ficha del cliente registrada en el sistema CRM.</p>
-                    </div>
-                  </div>
+                  <p className="text-xs text-slate-400">Sin historial registrado.</p>
                 )}
               </div>
+            </div>
+          )}
+
+        </div>
+
+        {/* Right Sidebar Widget: Acciones Rápidas & Contacto */}
+        {!isNew && (
+          <div className="w-80 shrink-0 bg-white rounded-3xl shadow-sm border border-slate-200 p-5 space-y-5">
+            <div>
+              <h4 className="text-xs font-black text-slate-400 uppercase tracking-wider mb-3">Contacto Directo</h4>
+              <div className="space-y-2">
+                {cleanPhone ? (
+                  <a
+                    href={`https://wa.me/57${cleanPhone}?text=${encodeURIComponent('Hola ' + clientData.name + ', te saludamos de Nebulae Hub.')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 shadow-sm transition-colors"
+                  >
+                    <MessageCircle size={16} /> Abrir WhatsApp
+                  </a>
+                ) : (
+                  <button disabled className="w-full bg-slate-100 text-slate-400 font-bold text-xs py-2.5 px-4 rounded-xl cursor-not-allowed">
+                    Sin WhatsApp registrado
+                  </button>
+                )}
+
+                {clientData.phone && (
+                  <a
+                    href={`tel:${cleanPhone}`}
+                    className="w-full bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 shadow-sm transition-colors"
+                  >
+                    <Phone size={15} /> Llamar ({clientData.phone})
+                  </a>
+                )}
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-slate-100">
+              <h4 className="text-xs font-black text-slate-400 uppercase tracking-wider mb-2">Trámites Activos</h4>
+              {customer360?.pedidos?.length > 0 ? (
+                <div className="space-y-2">
+                  {customer360.pedidos.slice(0, 3).map((ped: any) => (
+                    <div key={ped.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="font-bold text-slate-800 text-xs">{ped.numero}</span>
+                        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full ${STATUS_COLOR_MAP[ped.estado] || 'bg-blue-100 text-blue-700'}`}>
+                          {ped.estado}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-[10px] text-slate-500">
+                        <span>Saldo pendiente:</span>
+                        <span className="font-bold text-rose-600">{formatCOP(ped.saldo_cop)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400 italic">No hay pedidos activos.</p>
+              )}
+            </div>
+
+            <div className="pt-4 border-t border-slate-100">
+              <Link
+                href={`/dashboard/ventas/solicitud?customer_id=${clientData.realId}`}
+                className="w-full py-2.5 bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold text-xs rounded-xl border border-purple-200 flex items-center justify-center gap-1.5 transition-colors"
+              >
+                <Plus size={14} /> Crear Solicitud Comercial
+              </Link>
             </div>
           </div>
         )}
       </div>
 
-      {/* ─── MODALS ──────────────────────────────────────────────────────────── */}
-      {showModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col border border-slate-100 animate-in zoom-in-95 duration-200">
-            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-gradient-to-r from-purple-50 to-white">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-purple-600 text-white rounded-lg shadow-sm">
-                  {showModal === 'Agendar' ? <Calendar size={20} /> : showModal === 'Contactar' ? <MessageSquare size={20} /> : showModal === 'Opciones de Cliente' ? <Settings size={20} /> : <Plus size={20} />}
-                </div>
-                <h3 className="font-extrabold text-slate-800 text-lg leading-tight">{showModal}</h3>
-              </div>
-              <button onClick={() => setShowModal(null)} className="text-slate-400 hover:bg-slate-200 hover:text-slate-700 p-2 rounded-full transition-colors">
-                <X size={20} />
+      {/* Modal: Agendar Reunión */}
+      {showModal === 'Agendar' && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl border border-slate-200">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-black text-slate-900 text-lg flex items-center gap-2">
+                <Calendar size={18} className="text-purple-600" /> Agendar Evento
+              </h3>
+              <button onClick={() => setShowModal(null)} className="text-slate-400 hover:text-slate-600">
+                <X size={18} />
               </button>
             </div>
 
-            <div className="p-6">
-
-              {/* ── AGENDAR ── */}
-              {showModal === 'Agendar' && (() => {
-                // Inline agenda form state managed via agendaForm on the parent
-                return (
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-2">Título del Evento *</label>
-                      <input
-                        type="text"
-                        value={agendaForm.title}
-                        onChange={e => setAgendaForm({ ...agendaForm, title: e.target.value })}
-                        placeholder="Ej. Reunión de seguimiento cotización"
-                        className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600"
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-2">Tipo</label>
-                        <select
-                          value={agendaForm.event_type}
-                          onChange={e => setAgendaForm({ ...agendaForm, event_type: e.target.value })}
-                          className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-700 focus:outline-none focus:border-purple-600 bg-white"
-                        >
-                          <option value="MEETING">Reunión</option>
-                          <option value="CALL">Llamada</option>
-                          <option value="VIDEO">Videollamada</option>
-                          <option value="FOLLOWUP">Seguimiento</option>
-                          <option value="DEMO">Demo</option>
-                          <option value="TASK">Tarea</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-2">Color</label>
-                        <select
-                          value={agendaForm.color}
-                          onChange={e => setAgendaForm({ ...agendaForm, color: e.target.value })}
-                          className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-700 focus:outline-none focus:border-purple-600 bg-white"
-                        >
-                          <option value="indigo">Índigo</option>
-                          <option value="purple">Morado</option>
-                          <option value="green">Verde</option>
-                          <option value="blue">Azul</option>
-                          <option value="amber">Ámbar</option>
-                          <option value="rose">Rosa</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-2">Inicio *</label>
-                        <input
-                          type="datetime-local"
-                          value={agendaForm.start_datetime}
-                          onChange={e => setAgendaForm({ ...agendaForm, start_datetime: e.target.value })}
-                          className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-600"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-500 mb-2">Fin</label>
-                        <input
-                          type="datetime-local"
-                          value={agendaForm.end_datetime}
-                          onChange={e => setAgendaForm({ ...agendaForm, end_datetime: e.target.value })}
-                          className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-600"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-2">Lugar / Enlace</label>
-                      <input
-                        type="text"
-                        value={agendaForm.location}
-                        onChange={e => setAgendaForm({ ...agendaForm, location: e.target.value })}
-                        placeholder="Ej. Oficina principal, https://meet.google.com/..."
-                        className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-purple-600"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-500 mb-2">Notas</label>
-                      <textarea
-                        rows={2}
-                        value={agendaForm.notes}
-                        onChange={e => setAgendaForm({ ...agendaForm, notes: e.target.value })}
-                        placeholder="Temas a tratar, documentos a preparar..."
-                        className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-purple-600 resize-none"
-                      />
-                    </div>
-                    <button
-                      onClick={handleCreateAgendaEvent}
-                      className="w-full bg-purple-600 text-white font-bold py-3 rounded-xl shadow-md hover:bg-purple-700 transition-colors mt-2 flex items-center justify-center gap-2"
-                    >
-                      <Calendar size={16} /> Confirmar en Calendario
-                    </button>
-                  </div>
-                );
-              })()}
-
-              {/* ── CONTACTAR ── */}
-              {showModal === 'Contactar' && (
-                <div className="space-y-3">
-                  <p className="text-sm font-bold text-slate-600 mb-2">Selecciona el canal de comunicación:</p>
-                  {[
-                    { label: 'WhatsApp', color: 'green', icon: <MessageSquare size={16} /> },
-                    { label: 'Instagram', color: 'pink', icon: <MessageSquare size={16} /> },
-                    { label: 'Facebook Messenger', color: 'blue', icon: <MessageSquare size={16} /> },
-                    { label: 'Correo Electrónico', color: 'red', icon: <Mail size={16} /> },
-                    { label: 'Llamada Telefónica', color: 'purple', icon: <Phone size={16} /> },
-                  ].map(ch => (
-                    <button key={ch.label} onClick={() => { toast.success(`Abriendo ${ch.label}...`); setShowModal(null); }} className={`w-full flex items-center gap-3 p-3 border border-slate-200 rounded-xl hover:bg-${ch.color}-50 hover:border-${ch.color}-300 transition-colors group`}>
-                      <div className={`w-8 h-8 rounded-full bg-${ch.color}-100 flex items-center justify-center text-${ch.color}-600`}>{ch.icon}</div>
-                      <span className="font-bold text-slate-700">{ch.label}</span>
-                    </button>
-                  ))}
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">Título *</label>
+                <input
+                  type="text"
+                  value={agendaForm.title}
+                  onChange={e => setAgendaForm((prev: any) => ({ ...prev, title: e.target.value }))}
+                  placeholder={`Llamada con ${selectedClient?.name || 'Cliente'}`}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:border-purple-600"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">Fecha y Hora Inicio *</label>
+                  <input
+                    type="datetime-local"
+                    value={agendaForm.start_datetime}
+                    onChange={e => setAgendaForm((prev: any) => ({ ...prev, start_datetime: e.target.value }))}
+                    className="w-full border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-medium focus:outline-none focus:border-purple-600"
+                  />
                 </div>
-              )}
-
-              {/* ── NUEVA SOLICITUD ── */}
-              {showModal === 'Nueva Solicitud' && (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-2">Tipo de Solicitud</label>
-                    <div className="relative">
-                      <select
-                        value={solicitudForm.tipo}
-                        onChange={e => setSolicitudForm({ ...solicitudForm, tipo: e.target.value })}
-                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-700 appearance-none focus:outline-none focus:border-purple-600"
-                      >
-                        {solicitudTipos.map(tipo => (
-                          <option key={tipo} value={tipo}>{tipo}</option>
-                        ))}
-                      </select>
-                      <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-2">Producto o Requerimiento Específico</label>
-                    <input
-                      type="text"
-                      value={solicitudForm.producto}
-                      onChange={e => setSolicitudForm({ ...solicitudForm, producto: e.target.value })}
-                      placeholder="Ej. Extractor eléctrico doble..."
-                      className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-2">Detalles Adicionales</label>
-                    <textarea
-                      rows={3}
-                      value={solicitudForm.detalles}
-                      onChange={e => setSolicitudForm({ ...solicitudForm, detalles: e.target.value })}
-                      placeholder="Describe brevemente lo que necesita el cliente..."
-                      className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600 resize-none"
-                    />
-                  </div>
-                  <button
-                    onClick={handleCreateSolicitud}
-                    className="w-full bg-purple-600 text-white font-bold py-3 rounded-xl shadow-md hover:bg-purple-700 transition-colors mt-2 flex items-center justify-center gap-2"
-                  >
-                    Ingresar al Pipeline de Ventas <ArrowRight size={16} />
-                  </button>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">Fecha y Hora Fin</label>
+                  <input
+                    type="datetime-local"
+                    value={agendaForm.end_datetime}
+                    onChange={e => setAgendaForm((prev: any) => ({ ...prev, end_datetime: e.target.value }))}
+                    className="w-full border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-medium focus:outline-none focus:border-purple-600"
+                  />
                 </div>
-              )}
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">Lugar / Medio</label>
+                <input
+                  type="text"
+                  value={agendaForm.location}
+                  onChange={e => setAgendaForm((prev: any) => ({ ...prev, location: e.target.value }))}
+                  placeholder="Google Meet, WhatsApp o Presencial"
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:border-purple-600"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">Notas / Objetivo</label>
+                <textarea
+                  value={agendaForm.notes}
+                  onChange={e => setAgendaForm((prev: any) => ({ ...prev, notes: e.target.value }))}
+                  rows={2}
+                  placeholder="Detalles sobre la reunión..."
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:border-purple-600 resize-none"
+                />
+              </div>
+            </div>
 
-              {/* ── OPCIONES DE CLIENTE ── */}
-              {showModal === 'Opciones de Cliente' && (
-                <div className="space-y-3">
-                  <p className="text-sm font-bold text-slate-600 mb-4 text-center">Configuración y gestión de datos de este cliente:</p>
-                  <button onClick={() => { setActiveTab('Información y Bitácora'); setShowModal(null); }} className="w-full flex items-center gap-3 p-4 border border-slate-200 rounded-xl hover:bg-blue-50 hover:border-blue-300 transition-colors group shadow-sm">
-                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600"><Edit size={18} /></div>
-                    <div className="text-left">
-                      <h4 className="font-bold text-slate-800 group-hover:text-blue-700">Modificar Cliente</h4>
-                      <p className="text-xs text-slate-500">Actualiza la información básica del cliente.</p>
-                    </div>
-                  </button>
-                  <button onClick={() => { toast.success('Descarga de reporte iniciada...'); setShowModal(null); }} className="w-full flex items-center gap-3 p-4 border border-slate-200 rounded-xl hover:bg-emerald-50 hover:border-emerald-300 transition-colors group shadow-sm">
-                    <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600"><Download size={18} /></div>
-                    <div className="text-left">
-                      <h4 className="font-bold text-slate-800 group-hover:text-emerald-700">Exportar Información</h4>
-                      <p className="text-xs text-slate-500">Descarga su historial, compras y bitácora.</p>
-                    </div>
-                  </button>
-                  <div className="pt-4 mt-4 border-t border-slate-100">
-                    <button onClick={handleDelete} className="w-full flex items-center gap-3 p-4 border border-red-100 rounded-xl hover:bg-red-50 hover:border-red-300 transition-colors group shadow-sm bg-red-50/50">
-                      <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center text-red-600"><Trash2 size={18} /></div>
-                      <div className="text-left">
-                        <h4 className="font-bold text-red-700">Eliminar Cliente</h4>
-                        <p className="text-xs text-red-500">Borrar permanentemente su ficha del CRM.</p>
-                      </div>
-                    </button>
-                  </div>
-                </div>
-              )}
-
+            <div className="flex gap-2.5 mt-6">
+              <button
+                onClick={handleCreateAgendaEvent}
+                className="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-bold text-sm py-2.5 rounded-xl shadow-sm transition-colors"
+              >
+                Guardar Evento
+              </button>
+              <button
+                onClick={() => setShowModal(null)}
+                className="px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm py-2.5 rounded-xl transition-colors"
+              >
+                Cancelar
+              </button>
             </div>
           </div>
         </div>
       )}
-
     </div>
   );
 }

@@ -377,18 +377,23 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
                 <div className="p-4 border-b border-gray-100"><p className="text-xs font-black text-gray-400 uppercase">Productos del PEC</p></div>
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 text-xs text-gray-400 font-black uppercase border-b">
-                    <tr><th className="px-4 py-3 text-left">Producto</th><th className="px-4 py-3 text-center">Qty</th><th className="px-4 py-3 text-right">Precio</th><th className="px-4 py-3 text-right">Subtotal</th></tr>
+                    <tr><th className="px-4 py-3 text-left">Producto</th><th className="px-4 py-3 text-center">Destino</th><th className="px-4 py-3 text-center">Qty</th><th className="px-4 py-3 text-right">Precio</th><th className="px-4 py-3 text-right">Subtotal</th></tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {(detail?.productos||[]).map((p:any,i:number)=>(
                       <tr key={i} className="hover:bg-gray-50">
                         <td className="px-4 py-3 font-medium truncate max-w-[160px]">{p.producto_nombre||p.descripcion||p.nombre||'-'}</td>
+                        <td className="px-4 py-3 text-center">
+                          <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${p.destino==='MAU'?'bg-purple-100 text-purple-700':p.destino==='NEBULAE'?'bg-blue-100 text-blue-700':'bg-emerald-100 text-emerald-700'}`}>
+                            {p.destino==='MAU'?'Socio Mau':p.destino==='NEBULAE'?'Stock Nebulae':(p.cliente_nombre ? `Cliente (${p.cliente_nombre})` : 'Cliente')}
+                          </span>
+                        </td>
                         <td className="px-4 py-3 text-center font-bold">{p.qty||p.cantidad||0}</td>
                         <td className="px-4 py-3 text-right text-gray-500">{fCOP(p.unit_price_cop||p.precio_unitario||0)}</td>
                         <td className="px-4 py-3 text-right font-bold">{fCOP((p.qty||p.cantidad||0)*(p.unit_price_cop||p.precio_unitario||0))}</td>
                       </tr>
                     ))}
-                    {!(detail?.productos?.length) && <tr><td colSpan={4} className="text-center py-8 text-gray-400 text-xs">Sin productos</td></tr>}
+                    {!(detail?.productos?.length) && <tr><td colSpan={5} className="text-center py-8 text-gray-400 text-xs">Sin productos</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -482,7 +487,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
     setSupplierTimer(t);
   };
 
-  const addProduct = () => setProductos(prev => [...prev, {nombre:'',descripcion:'',qty:1,unit_price_cop:0,impuesto_pct:0,tracking:'',entrega_est:'',casillero:'',notas:'',estado:'PENDIENTE'}]);
+  const addProduct = () => setProductos(prev => [...prev, {nombre:'',descripcion:'',qty:1,unit_price_cop:0,impuesto_pct:0,tracking:'',entrega_est:'',casillero:'',notas:'',estado:'PENDIENTE',destino:'CLIENTE'}]);
   const setProd = (i:number, k:string, v:any) => setProductos(prev => prev.map((p,idx)=>idx===i?{...p,[k]:v}:p));
   const delProd = (i:number) => setProductos(prev => prev.filter((_,idx)=>idx!==i));
 
@@ -666,6 +671,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
                           <thead className="border-b border-gray-200 text-xs text-gray-400 font-black uppercase">
                             <tr>
                               <th className="pb-2 text-left pr-3 min-w-[180px]">Producto</th>
+                              <th className="pb-2 text-center w-28">Destino</th>
                               <th className="pb-2 text-center w-16">Qty</th>
                               <th className="pb-2 text-right w-28">Precio COP</th>
                               <th className="pb-2 text-center w-16">IVA %</th>
@@ -679,6 +685,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
                             {productos.map((p,i)=>(
                               <tr key={i} className="group">
                                 <td className="py-2 pr-3"><input value={p.nombre||p.descripcion||''} onChange={e=>setProd(i,'descripcion',e.target.value)} placeholder="Nombre / descripcion del producto" className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-purple-200"/></td>
+                                <td className="py-2 pr-2 text-center"><select value={p.destino||'CLIENTE'} onChange={e=>setProd(i,'destino',e.target.value)} className="w-28 border border-gray-200 rounded-lg px-1.5 py-1.5 text-xs outline-none focus:ring-2 focus:ring-purple-200 bg-white font-semibold"><option value="CLIENTE">Cliente</option><option value="NEBULAE">Stock Nebulae</option><option value="MAU">Socio Mau</option></select></td>
                                 <td className="py-2 text-center"><input type="number" min={1} value={p.qty} onChange={e=>setProd(i,'qty',e.target.value)} className="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-center outline-none focus:ring-2 focus:ring-purple-200"/></td>
                                 <td className="py-2"><input type="number" min={0} value={p.unit_price_cop} onChange={e=>setProd(i,'unit_price_cop',e.target.value)} className="w-28 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-right outline-none focus:ring-2 focus:ring-purple-200"/></td>
                                 <td className="py-2 text-center"><input type="number" min={0} max={100} value={p.impuesto_pct} onChange={e=>setProd(i,'impuesto_pct',e.target.value)} className="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-center outline-none focus:ring-2 focus:ring-purple-200"/></td>

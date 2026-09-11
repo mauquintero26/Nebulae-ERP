@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
-import { Sparkles, ArrowLeft, Plus, Save, Trash2, RefreshCw, CheckCircle2, AlertCircle, X, Image, Upload, Palette, CalendarClock, Share2, Camera, Monitor, Smartphone, Instagram, MessageCircle, Globe, Tag, DollarSign, Eye, Zap, Play } from 'lucide-react';
+import { Sparkles, ArrowLeft, Plus, Save, Trash2, RefreshCw, CheckCircle2, AlertCircle, X, Image, Upload, Palette, CalendarClock, Share2, Camera, Monitor, Smartphone, MessageCircle, Globe, Tag, DollarSign, Eye, Zap, Play } from 'lucide-react';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1';
 async function apiFetch(path: string, opts?: RequestInit) {

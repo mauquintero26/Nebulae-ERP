@@ -58,6 +58,7 @@ export function Sidebar() {
         path: '/dashboard/compras', 
         icon: ShoppingBag,
         subItems: [
+          { name: '📋 Lista de Compras', path: '/dashboard/compras/lista-compras' },
           { name: '🛒 Pedido de Compra', path: '/dashboard/compras/pedidos' },
           { name: '🚚 Mercancía en Tránsito', path: '/dashboard/compras/transito' },
           { name: '📥 Recepciones', path: '/dashboard/compras/recepciones' },
@@ -168,7 +169,7 @@ export function Sidebar() {
                 const hasSubItems = !!item.subItems;
                 const isExpanded = openMenus[item.name];
 
-                if (item.disabled) {
+                if ((item as any).disabled) {
                   return (
                     <li key={itemIdx}>
                       <div className={`flex items-center px-3 py-2.5 text-sm font-medium rounded-lg text-slate-400 cursor-not-allowed ${isCollapsed ? 'justify-center' : ''}`} title={isCollapsed ? item.name : ''}>

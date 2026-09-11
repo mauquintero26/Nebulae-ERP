@@ -67,3 +67,32 @@ def change_password(
     current_user.password_hash = get_password_hash(payload.new_password)
     db.commit()
     return {"status": "success", "message": "Contraseña actualizada correctamente"}
+
+@router.get("/users")
+def list_users(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    users = db.query(User).order_by(User.id.asc()).all()
+    return {"status": "success", "data": [UserResponse.model_validate(u).model_dump() for u in users]}
+
+@router.patch("/users/{user_id}/role")
+def update_user_role(
+    user_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Solo administradores pueden cambiar roles")
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    new_role = payload.get("role")
+    if not new_role:
+        raise HTTPException(status_code=400, detail="Rol requerido")
+    user.role = new_role
+    db.commit()
+    db.refresh(user)
+    return {"status": "success", "data": UserResponse.model_validate(user).model_dump()}
+

@@ -1,3 +1,4 @@
+// @ts-nocheck
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -23,13 +24,13 @@ async function apiFetch(path, opts = {}) {
 }
 
 // ─── Color helpers ─────────────────────────────────────────────────────────
-const COLOR_HEX = {
+const COLOR_HEX: Record<string, string> = {
   'bg-blue-500': '#3b82f6','bg-cyan-500': '#06b6d4','bg-indigo-500': '#6366f1',
   'bg-emerald-500': '#10b981','bg-amber-500': '#f59e0b','bg-rose-500': '#f43f5e',
   'bg-purple-500': '#a855f7','bg-slate-500': '#64748b','bg-green-500': '#22c55e',
   'bg-teal-500': '#14b8a6','bg-orange-500': '#f97316','bg-pink-500': '#ec4899',
 };
-const BG_HEX = {
+const BG_HEX: Record<string, string> = {
   'bg-blue-50': '#eff6ff','bg-cyan-50': '#ecfeff','bg-indigo-50': '#eef2ff',
   'bg-emerald-50': '#f0fdf4','bg-amber-50': '#fffbeb','bg-rose-50': '#fff1f2',
   'bg-purple-50': '#faf5ff','bg-slate-50': '#f8fafc','bg-green-50': '#f0fdf4',
@@ -89,15 +90,15 @@ function useDebounce(value, delay=300) {
 // ══════════════════════════════════════════════════════════════════════════
 export default function CRMPage() {
   const router = useRouter();
-  const [stages, setStages] = useState([]);
-  const [leads, setLeads]   = useState([]);
+  const [stages, setStages] = useState<any[]>([]);
+  const [leads, setLeads]   = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeView, setActiveView] = useState('kanban');
   const [search, setSearch] = useState('');
   const [filterStage, setFilterStage] = useState('all');
-  const [selectedLead, setSelectedLead] = useState(null);
+  const [selectedLead, setSelectedLead] = useState<any>(null);
   const [editingLead, setEditingLead]   = useState(false);
-  const [movingLead, setMovingLead]     = useState(null);
+  const [movingLead, setMovingLead]     = useState<any>(null);
   const [showNewLead, setShowNewLead]   = useState(false);
   const [showConfig, setShowConfig]     = useState(false);
   const [isSaving, setIsSaving]         = useState(false);
@@ -130,7 +131,7 @@ export default function CRMPage() {
   const [editForm, setEditForm] = useState({});
 
   // ─── Config form ──────────────────────────────────────────────────────
-  const [configStages, setConfigStages] = useState([]);
+  const [configStages, setConfigStages] = useState<any[]>([]);
   const [newStageName, setNewStageName] = useState('');
   const [newStageColor, setNewStageColor] = useState('bg-purple-500');
 

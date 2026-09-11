@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { 
   Globe, Search, Play, Pause, Settings, RefreshCw, 
-  ExternalLink, Tag, TrendingDown, Percent, Box, Plus, Image as ImageIcon
+  ExternalLink, Tag, TrendingDown, Percent, Box, Plus, Image as ImageIcon, Clock
 } from 'lucide-react';
 
 const TARGET_STORES = [

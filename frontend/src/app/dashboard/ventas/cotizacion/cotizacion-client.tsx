@@ -511,7 +511,7 @@ export default function CotizacionClient() {
   });
 
   // Alert check for selected cot: no products but type is cotizacion
-  const selectedNoProds = selected && !(selected.productos || []).length > 0;
+  const selectedNoProds = selected && (selected.productos || []).length === 0;
   const selectedNoNotes = selected && !(selected.notas || '').trim();
 
   return (
