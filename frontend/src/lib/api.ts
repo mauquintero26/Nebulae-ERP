@@ -52,6 +52,7 @@ export async function apiFetch(
     const errBody = await res.json().catch(() => ({}));
     throw new Error(errBody.detail || errBody.message || `HTTP ${res.status}`);
   }
+  const parsed = await res.json().catch(() => ({}));
   if (parsed && typeof parsed === 'object') {
     try {
       if (!('ok' in parsed)) {

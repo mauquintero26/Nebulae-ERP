@@ -33,7 +33,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
           throw new Error("Invalid session");
         }
       })
-      .catch(() => {
+      .catch((err) => {
+        console.error("AuthGuard session check error:", err);
         if (!isMounted) return;
         if (typeof window !== "undefined") {
           localStorage.removeItem("token");
