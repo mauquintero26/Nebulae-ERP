@@ -131,7 +131,7 @@ export default function VentaClient() {
 
   const fetchPedidos = async () => {
     setLoading(true);
-    try { const d=await apiFetch('/ventas/pedidos?limit=200'); setPedidos(Array.isArray(d)?d:[]); }
+    try { const d=await apiFetch('/ventas/pedidos?limit=200'); setPedidos(Array.isArray(d)?d:(d?.data??[])); }
     catch(err:any) { showToast(err.message,'error'); }
     finally { setLoading(false); }
   };
@@ -139,7 +139,7 @@ export default function VentaClient() {
   const fetchDetail = async (id:number) => {
     try {
       const d=await apiFetch(`/ventas/pedidos/${id}`);
-      setSelectedPedido(d); setPanelTab('actividad');
+      setSelectedPedido(d?.data??d); setPanelTab('actividad');
       setEditForm({ estado:d.estado, notas:d.notas||'', fecha_entrega_estimada:d.fecha_entrega_estimada?d.fecha_entrega_estimada.split('T')[0]:'', direccion_entrega:d.direccion_entrega||'', pec_numero:d.pec_numero||'' });
     } catch(err:any) { showToast(err.message,'error'); }
   };

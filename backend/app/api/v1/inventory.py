@@ -23,7 +23,10 @@ from app.models.inventory import Warehouse
 
 @router.post("/warehouses", status_code=status.HTTP_201_CREATED)
 def create_warehouse(warehouse: schemas.WarehouseCreate, db: Session = Depends(get_db)):
-    db_warehouse = Warehouse(**warehouse.model_dump())
+    data = warehouse.model_dump()
+    loc = data.pop("location", None)
+    loc_type = data.pop("location_type", None) or loc or "Central"
+    db_warehouse = Warehouse(name=data["name"], location_type=loc_type)
     db.add(db_warehouse)
     db.commit()
     db.refresh(db_warehouse)

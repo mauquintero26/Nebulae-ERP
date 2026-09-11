@@ -17,6 +17,7 @@ class ShippingMethodResponse(ShippingMethodBase):
 class WarehouseBase(BaseModel):
     name: str
     location: Optional[str] = None
+    location_type: Optional[str] = "Central"
     is_active: bool = True
 
 class WarehouseCreate(WarehouseBase):

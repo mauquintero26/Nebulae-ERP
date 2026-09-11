@@ -478,7 +478,7 @@ export default function SolicitudClient() {
   },[searchParams]);
 
   async function loadDetail(id:number) {
-    try{const d=await apiFetch(`/ventas/solicitudes/${id}`);setSelected(d);setPanelTab('info');setEditForm({advisor_name:d.advisor_name||'',tipo_solicitud:d.tipo_solicitud||'Cotizacion de Producto',modalidad_pago:d.modalidad_pago||'Contado',notas:d.notas||'',fecha_vencimiento:d.fecha_vencimiento?d.fecha_vencimiento.split('T')[0]:''});}
+    try{const raw=await apiFetch(`/ventas/solicitudes/${id}`);const d=raw?.data??raw;setSelected(d);setPanelTab('info');setEditForm({advisor_name:d.advisor_name||'',tipo_solicitud:d.tipo_solicitud||'Cotizacion de Producto',modalidad_pago:d.modalidad_pago||'Contado',notas:d.notas||'',fecha_vencimiento:d.fecha_vencimiento?d.fecha_vencimiento.split('T')[0]:''});}
     catch(err:any){showToast('Error: '+err.message,'err');}
   }
 
@@ -548,7 +548,8 @@ export default function SolicitudClient() {
     try{
       const body:any={...editForm,updated_by:currentUser};
       if(editForm.fecha_vencimiento) body.fecha_vencimiento=new Date(editForm.fecha_vencimiento+'T12:00:00').toISOString();
-      const d=await apiFetch(`/ventas/solicitudes/${selected.id}`,{method:'PATCH',body:JSON.stringify(body)});
+      const raw=await apiFetch(`/ventas/solicitudes/${selected.id}`,{method:'PATCH',body:JSON.stringify(body)});
+      const d=raw?.data??raw;
       setSelected((prev:any)=>({...prev,...d}));
       setSolicitudes(prev=>prev.map(s=>s.id===selected.id?{...s,...d}:s));
       setEditMode(false);showToast('Solicitud actualizada');
