@@ -1121,6 +1121,26 @@ def eliminar_permanente(sc_id: int, user: User = Depends(require_roles(*ROLE_ADM
     return {"status": "success", "data": {"deleted": sc_id}}
 
 
+@router.post("/solicitudes/{sc_id}/restaurar")
+def restaurar_solicitud(sc_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+        db: Session = Depends(get_db)):
+    """Restaura una SC de la papelera (estado CANCELADA) a BORRADOR."""
+    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
+    if not sc:
+        raise HTTPException(404, "SC no encontrada")
+    old_estado = sc.estado
+    sc.estado = "BORRADOR"
+    try:
+        db.execute(text("UPDATE customer_requests SET eliminada_at=NULL, estado='BORRADOR', updated_at=NOW() WHERE id=:id"), {"id": sc_id})
+        db.commit()
+    except Exception:
+        db.rollback()
+        sc.estado = "BORRADOR"
+        db.commit()
+    _log(db, "SC", sc_id, sc.numero, "RESTORED", "Solicitud restaurada a Borrador", old_estado, "BORRADOR", getattr(user, 'email', ''))
+    return {"status": "success", "data": {"id": sc_id, "estado": "BORRADOR"}}
+
+
 # ─── FORMATO CONFIRMACIÓN ────────────────────────────────────────────────────
 
 @router.get("/solicitudes/{sc_id}/formato-confirmacion")

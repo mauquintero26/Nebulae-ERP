@@ -360,7 +360,8 @@ export default function CotizacionClient() {
 
   async function loadDetail(id: number) {
     try {
-      const d = await apiFetch(`/ventas/cotizaciones/${id}`);
+      const raw = await apiFetch(`/ventas/cotizaciones/${id}`);
+      const d = raw?.data ?? raw;
       setSelected(d);
       setEditForm({
         notas: d.notas || '',
@@ -373,15 +374,17 @@ export default function CotizacionClient() {
   }
 
   async function saveEdit() {
-    if (!selected) return;
+    const cotId = Number(selected?.id ?? selected?.data?.id);
+    if (!cotId || isNaN(cotId)) return;
     setSavingEdit(true);
     try {
-      const d = await apiFetch(`/ventas/cotizaciones/${selected.id}`, {
+      const raw = await apiFetch(`/ventas/cotizaciones/${cotId}`, {
         method: 'PATCH',
         body: JSON.stringify({ ...editForm, updated_by: currentUser }),
       });
+      const d = raw?.data ?? raw;
       setSelected({ ...selected, ...d });
-      setCotizaciones(prev => prev.map(c => c.id === selected.id ? { ...c, ...d } : c));
+      setCotizaciones(prev => prev.map(c => c.id === cotId ? { ...c, ...d } : c));
       setEditMode(false);
       showToast('Cotizacion actualizada');
     } catch (err: any) { showToast('Error: ' + err.message, 'err'); }
@@ -389,37 +392,40 @@ export default function CotizacionClient() {
   }
 
   async function changeEstado(newEstado: string) {
-    if (!selected) return;
+    const cotId = Number(selected?.id ?? selected?.data?.id);
+    if (!cotId || isNaN(cotId)) return;
     setSaving(true);
     try {
-      const d = await apiFetch(`/ventas/cotizaciones/${selected.id}`, {
+      await apiFetch(`/ventas/cotizaciones/${cotId}`, {
         method: 'PATCH',
         body: JSON.stringify({ estado: newEstado, updated_by: currentUser }),
       });
-      await loadDetail(selected.id);
-      setCotizaciones(prev => prev.map(c => c.id === selected.id ? { ...c, estado: newEstado } : c));
+      await loadDetail(cotId);
+      setCotizaciones(prev => prev.map(c => c.id === cotId ? { ...c, estado: newEstado } : c));
       showToast(`Estado cambiado a ${ESTADOS[newEstado]?.label || newEstado}`);
     } catch (err: any) { showToast('Error: ' + err.message, 'err'); }
     setSaving(false);
   }
 
   async function enviarCotizacion() {
-    if (!selected) return;
+    const cotId = Number(selected?.id ?? selected?.data?.id);
+    if (!cotId || isNaN(cotId)) return;
     setSaving(true);
     try {
-      await apiFetch(`/ventas/cotizaciones/${selected.id}`, {
+      await apiFetch(`/ventas/cotizaciones/${cotId}`, {
         method: 'PATCH',
         body: JSON.stringify({ estado: 'ENVIADA', updated_by: currentUser }),
       });
-      await loadDetail(selected.id);
-      setCotizaciones(prev => prev.map(c => c.id === selected.id ? { ...c, estado: 'ENVIADA' } : c));
+      await loadDetail(cotId);
+      setCotizaciones(prev => prev.map(c => c.id === cotId ? { ...c, estado: 'ENVIADA' } : c));
       showToast('Cotizacion marcada como enviada al cliente. En espera de confirmacion.');
     } catch (err: any) { showToast('Error: ' + err.message, 'err'); }
     setSaving(false);
   }
 
   async function confirmar() {
-    if (!selected) return;
+    const cotId = Number(selected?.id ?? selected?.data?.id);
+    if (!cotId || isNaN(cotId)) return;
     // Alert if no products and no notes
     const hasProds = (selected.productos || []).length > 0;
     const hasNotes = (selected.notas || '').trim().length > 0;
@@ -428,30 +434,30 @@ export default function CotizacionClient() {
       return;
     }
     if (!hasProds && hasNotes) {
-      const ok = window.confirm('No hay productos especificados. Las notas mencionan el producto. Â¿Confirmar de todas formas?');
+      const ok = window.confirm('No hay productos especificados. Las notas mencionan el producto. ¿Confirmar de todas formas?');
       if (!ok) return;
     }
-    if (!selected?.id) return;
     setConfirming(true);
     try {
-      const d = await apiFetch(`/ventas/cotizaciones/${selected.id}/confirmar`, {
+      const d = await apiFetch(`/ventas/cotizaciones/${cotId}/confirmar`, {
         method: 'POST',
         body: JSON.stringify({ user_name: currentUser }),
       });
       const dataObj = d?.data ?? d;
       const venObj = dataObj?.pedido_venta || dataObj?.pedido || d?.pedido_venta || d?.pedido;
       showToast(`Pedido de Venta ${venObj?.numero || ''} creado exitosamente`);
-      await loadDetail(selected.id);
+      await loadDetail(cotId);
       load();
     } catch (err: any) { showToast('Error: ' + err.message, 'err'); }
     setConfirming(false);
   }
 
   async function deleteCot() {
-    if (!selected) return;
+    const cotId = Number(selected?.id ?? selected?.data?.id);
+    if (!cotId || isNaN(cotId)) return;
     try {
       // No DELETE endpoint: change to RECHAZADA as soft-delete
-      await apiFetch(`/ventas/cotizaciones/${selected.id}`, {
+      await apiFetch(`/ventas/cotizaciones/${cotId}`, {
         method: 'PATCH',
         body: JSON.stringify({ estado: 'RECHAZADA', updated_by: currentUser }),
       });
@@ -463,15 +469,20 @@ export default function CotizacionClient() {
   }
 
   async function onCalcSave(data: any) {
-    if (!selected) return;
+    const cotId = Number(selected?.id ?? selected?.data?.id);
+    if (!cotId || isNaN(cotId)) {
+      showToast('Error: ID de cotización no válido', 'err');
+      return;
+    }
     setSaving(true);
     try {
-      const d = await apiFetch(`/ventas/cotizaciones/${selected.id}`, {
+      const raw = await apiFetch(`/ventas/cotizaciones/${cotId}`, {
         method: 'PATCH',
         body: JSON.stringify({ ...data, updated_by: currentUser }),
       });
-      setSelected((prev: any) => ({ ...prev, ...data }));
-      setCotizaciones(prev => prev.map(c => c.id === selected.id ? { ...c, total_cop: data.total_cop } : c));
+      const d = raw?.data ?? raw;
+      setSelected((prev: any) => ({ ...prev, ...d, ...data }));
+      setCotizaciones(prev => prev.map(c => c.id === cotId ? { ...c, total_cop: data.total_cop } : c));
       setShowCalc(false);
       showToast('Cotizacion calculada y guardada');
     } catch (err: any) { showToast('Error: ' + err.message, 'err'); }

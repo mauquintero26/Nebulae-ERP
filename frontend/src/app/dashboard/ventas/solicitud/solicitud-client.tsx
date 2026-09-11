@@ -512,6 +512,15 @@ export default function SolicitudClient() {
     }catch(err:any){showToast('Error: '+err.message,'err');}
   }
 
+  async function restaurarSC(id:number) {
+    try{
+      await apiFetch(`/ventas/solicitudes/${id}/restaurar`,{method:'POST'});
+      showToast('Solicitud restaurada a Borrador','ok');
+      await loadPapelera();
+      await load();
+    }catch(err:any){showToast('Error: '+err.message,'err');}
+  }
+
   function onCustSearch(q:string) {
     setCustSearch(q);setSelectedCust(null);setCustSearchDone(false);
     if(custTimer.current) clearTimeout(custTimer.current);
@@ -853,6 +862,7 @@ export default function SolicitudClient() {
                           <p className={`text-xs font-black ${sc.dias_restantes<=5?'text-red-600':'text-amber-600'}`}>{sc.dias_restantes} días</p>
                           <p className="text-[10px] text-slate-400">para eliminar</p>
                         </div>
+                        <button onClick={()=>restaurarSC(sc.id)} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg text-xs font-bold border border-emerald-200 flex items-center gap-1"><RotateCcw size={11}/>Restaurar</button>
                         <button onClick={()=>eliminarPermanente(sc.id)} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1"><Trash2 size={11}/>Eliminar ya</button>
                       </div>
                     </div>
