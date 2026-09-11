@@ -14,3 +14,7 @@ class UserResponse(UserBase):
     created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str

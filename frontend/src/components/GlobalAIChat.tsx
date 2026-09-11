@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import { Sparkles, X, Send, Bot, Minimize2, Maximize2, Paperclip } from 'lucide-react';
+import { getToken } from '@/lib/api';
 
 
 export function GlobalAIChat() {
@@ -82,7 +83,7 @@ export function GlobalAIChat() {
 
     // REST fallback — try backend chat endpoint
     try {
-      const token = localStorage.getItem('access_token');
+      const token = getToken();
       const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
       const res = await fetch(`${API_BASE}/chat/message`, {
         method: 'POST',

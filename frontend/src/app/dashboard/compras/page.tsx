@@ -11,13 +11,9 @@ import {
   ChevronRight, ChevronUp, Plus, Eye, ShoppingCart
 } from 'lucide-react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
+import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 async function apiFetch(path: string, opts: any = {}) {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('access_token') : null;
-  const res = await fetch(API_BASE + path, {
-    ...opts,
-    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(opts.headers || {}) },
-  });
+  const res = await _apiFetch(path, opts);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.detail || data.message || 'Error');
   return data.data ?? data;

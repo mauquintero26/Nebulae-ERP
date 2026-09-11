@@ -1,12 +1,35 @@
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1';
 
+/** Returns the JWT stored by login/page.tsx under key 'token'. */
+export const getToken = (): string | null =>
+  typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+
 export const getHeaders = () => {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+  const token = getToken();
   return {
     'Content-Type': 'application/json',
     ...(token ? { 'Authorization': `Bearer ${token}` } : {})
   };
 };
+
+/**
+ * Canonical authenticated fetch helper.
+ * Replaces the 25+ inline `apiFetch` copies across page files that
+ * incorrectly read `localStorage.getItem('access_token')`.
+ * Always uses the correct key `'token'` via getToken().
+ */
+export async function apiFetch(
+  path: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const token = getToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers as Record<string, string> || {}),
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+  };
+  return fetch(`${API_URL}${path}`, { ...options, headers });
+}
 
 export async function handleResponse(res: Response) {
   const data = await res.json().catch(() => ({}));
