@@ -1,5 +1,5 @@
-# ------------------------------------------
-# Stage 1: deps — install node_modules
+ï»¿# ------------------------------------------
+# Stage 1: deps - install node_modules
 # ------------------------------------------
 FROM node:20-alpine AS deps
 WORKDIR /app
@@ -7,7 +7,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
 
 # ------------------------------------------
-# Stage 2: builder — build Next.js
+# Stage 2: builder - build Next.js
 # ------------------------------------------
 FROM node:20-alpine AS builder
 WORKDIR /app
@@ -15,6 +15,10 @@ WORKDIR /app
 # NEXT_PUBLIC_* vars must be present at BUILD time for Next.js
 ARG NEXT_PUBLIC_API_URL=https://api.nebulaekids.com/api/v1
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
+ARG NEXT_PUBLIC_APP_ENV=production
+ENV NEXT_PUBLIC_APP_ENV=$NEXT_PUBLIC_APP_ENV
+
 ENV NODE_ENV=production
 
 COPY --from=deps /app/node_modules ./node_modules
@@ -23,7 +27,7 @@ COPY . .
 RUN npm run build
 
 # ------------------------------------------
-# Stage 3: runner — minimal production image
+# Stage 3: runner - minimal production image
 # ------------------------------------------
 FROM node:20-alpine AS runner
 WORKDIR /app
