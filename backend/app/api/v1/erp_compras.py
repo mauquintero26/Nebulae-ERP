@@ -2478,14 +2478,14 @@ def add_to_lista_compras(
     pven_id = body.get("pven_id")
     pven_numero = body.get("pven_numero")
     notas = body.get("notas") or ""
-    created_by = body.get("created_by") or (user.full_name if user else "Sistema")
+    created_by = body.get("created_by") or (getattr(user, "full_name", None) or getattr(user, "name", None) or getattr(user, "email", "Sistema") if user else "Sistema")
     now_iso = datetime.datetime.utcnow().isoformat()
     
     added = []
     prods = body.get("productos")
     if prods and isinstance(prods, list):
         for p in prods:
-            prod_name = p.get("producto_nombre") or p.get("nombre") or p.get("producto") or p.get("description") or "Producto"
+            prod_name = p.get("producto_nombre") or p.get("product_name") or p.get("nombre") or p.get("producto") or p.get("description") or "Producto"
             qty = int(p.get("qty") or p.get("cantidad") or 1)
             
             dup = next((it for it in items if it.get("pven_id") == pven_id and it.get("producto") == prod_name and it.get("estado") == "PENDIENTE"), None)

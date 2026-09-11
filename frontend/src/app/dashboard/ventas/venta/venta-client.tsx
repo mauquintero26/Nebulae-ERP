@@ -219,8 +219,8 @@ export default function VentaClient() {
         pven_id: selectedPedido.id,
         pven_numero: selectedPedido.numero,
         productos: (selectedPedido.productos||[]).map((p:any)=>({
-          producto_nombre: p.descripcion||p.producto_nombre||'Sin nombre',
-          qty: p.cantidad||1,
+          producto_nombre: p.product_name || p.nombre || p.descripcion || p.producto_nombre || 'Sin nombre',
+          qty: p.qty || p.cantidad || 1,
         })),
         notas: `PVEN: ${selectedPedido.numero} â€” Cliente: ${selectedPedido.customer_name||''}`,
         created_by: user,
