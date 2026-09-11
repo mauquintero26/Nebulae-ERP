@@ -14,21 +14,26 @@ export const getHeaders = () => {
 
 /**
  * Canonical authenticated fetch helper.
- * Replaces the 25+ inline `apiFetch` copies across page files that
- * incorrectly read `localStorage.getItem('access_token')`.
- * Always uses the correct key `'token'` via getToken().
+ * Returns the parsed JSON response body directly (not the raw Response).
+ * All callers in the codebase use the result as JSON (e.g. d?.data, Array.isArray(d)).
+ * Always uses the correct auth key `'token'` via getToken().
  */
 export async function apiFetch(
   path: string,
   options: RequestInit = {}
-): Promise<Response> {
+): Promise<any> {
   const token = getToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> || {}),
     ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
   };
-  return fetch(`${API_URL}${path}`, { ...options, headers });
+  const res = await fetch(`${API_URL}${path}`, { ...options, headers });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.detail || errBody.message || `HTTP ${res.status}`);
+  }
+  return res.json().catch(() => ({}));
 }
 
 export async function handleResponse(res: Response) {
