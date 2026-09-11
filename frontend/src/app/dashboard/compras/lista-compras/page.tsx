@@ -159,11 +159,12 @@ export default function ListaComprasPage() {
           created_by: user,
         }),
       });
+      const pecObj = pec?.data ?? pec;
       await apiFetch(`/compras/lista-compras/${pecModalItem.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ estado: 'EN_PEDIDO', pec_id: pec.id, pec_numero: pec.numero }),
+        body: JSON.stringify({ estado: 'EN_PEDIDO', pec_id: pecObj.id, pec_numero: pecObj.numero }),
       });
-      showToast(`PEC ${pec.numero} creado y vinculado`);
+      showToast(`PEC ${pecObj.numero || ''} creado y vinculado`);
       setShowPecModal(false);
       load();
     } catch (e) { showToast(e.message, 'err'); }

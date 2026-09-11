@@ -200,7 +200,8 @@ export default function VentaClient() {
         })),
         created_by: user,
       })});
-      showToast(`PEC ${pec.numero} creado y vinculado al pedido`);
+      const pecObj = pec?.data ?? pec;
+      showToast(`PEC ${pecObj.numero || ''} creado y vinculado al pedido`);
       setShowPecModal(false);
       fetchDetail(selectedPedido.id);
       fetchPedidos();

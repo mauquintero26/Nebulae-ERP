@@ -92,7 +92,7 @@ function CalculadorModal({
   const [descuento, setDescuento] = useState(cot.descuento_pct || 0);
   const [fechaEntrega, setFechaEntrega] = useState(cot.fecha_entrega_estimada ? cot.fecha_entrega_estimada.split('T')[0] : '');
   const [notas, setNotas] = useState(cot.notas || '');
-  const [anticipo, setAnticipo] = useState(cot.anticipo_cop || 0);
+  const [anticipo, setAnticipo] = useState<string | number>(cot.anticipo_cop ?? 0);
 
   const addProd = () => setProductos(p => [...p, { product_name: '', qty: 1, cost_usd: 0, margen_pct: 30, flete_usd: 0 }]);
   const removeProd = (i: number) => setProductos(p => p.filter((_, idx) => idx !== i));
@@ -111,8 +111,9 @@ function CalculadorModal({
   const subtotal = computedProd.reduce((s, p) => s + p.total_cop, 0);
   const descTotal = subtotal * (Number(descuento) || 0) / 100;
   const total = subtotal - descTotal;
-  const anticipo_cop = Number(anticipo) || 0;
-  const saldo = total - anticipo_cop;
+  const numAnticipo = anticipo === '' ? 0 : Number(anticipo);
+  const anticipo_cop = Math.min(Math.max(0, isNaN(numAnticipo) ? 0 : numAnticipo), total);
+  const saldo = Math.max(0, total - anticipo_cop);
 
   const handleSave = () => {
     const prods = computedProd.map(p => ({
@@ -241,8 +242,15 @@ function CalculadorModal({
             </div>
             <div className="grid grid-cols-2 gap-3 mt-2">
               <div>
-                <label className="text-xs font-black text-slate-500 uppercase mb-1 block">Anticipo COP</label>
-                <input type="number" min="0" value={anticipo} onChange={e => setAnticipo(Number(e.target.value))}
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-black text-slate-500 uppercase block">Anticipo COP</label>
+                  <div className="flex gap-1">
+                    <button type="button" onClick={() => setAnticipo(Math.round(total * 0.6))} className="text-[10px] px-1.5 py-0.5 bg-amber-100 hover:bg-amber-200 text-amber-800 rounded font-bold">60%</button>
+                    <button type="button" onClick={() => setAnticipo(total)} className="text-[10px] px-1.5 py-0.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 rounded font-bold">100%</button>
+                    <button type="button" onClick={() => setAnticipo(0)} className="text-[10px] px-1.5 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded font-bold">0%</button>
+                  </div>
+                </div>
+                <input type="number" min="0" max={total} value={anticipo} onChange={e => setAnticipo(e.target.value)}
                   className="w-full border border-amber-200 rounded-xl px-3 py-2 text-sm font-bold focus:ring-2 focus:ring-amber-200 outline-none bg-white" />
               </div>
               <div className="flex flex-col justify-end">
@@ -423,13 +431,16 @@ export default function CotizacionClient() {
       const ok = window.confirm('No hay productos especificados. Las notas mencionan el producto. Â¿Confirmar de todas formas?');
       if (!ok) return;
     }
+    if (!selected?.id) return;
     setConfirming(true);
     try {
       const d = await apiFetch(`/ventas/cotizaciones/${selected.id}/confirmar`, {
         method: 'POST',
         body: JSON.stringify({ user_name: currentUser }),
       });
-      showToast(`Pedido de Venta ${d.pedido?.numero || ''} creado exitosamente`);
+      const dataObj = d?.data ?? d;
+      const venObj = dataObj?.pedido_venta || dataObj?.pedido || d?.pedido_venta || d?.pedido;
+      showToast(`Pedido de Venta ${venObj?.numero || ''} creado exitosamente`);
       await loadDetail(selected.id);
       load();
     } catch (err: any) { showToast('Error: ' + err.message, 'err'); }

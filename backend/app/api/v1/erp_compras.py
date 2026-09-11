@@ -2362,3 +2362,221 @@ def _mark_done_external(op_key: str, exec_token: str, response_data: dict, now: 
             _s.commit()
     except Exception:
         pass
+
+
+# ─── LISTA DE COMPRAS (PENDIENTE POR COMPRAR) ────────────────────────────────
+
+def _load_lista_compras(db: Session) -> list:
+    import json
+    row = db.execute(text("SELECT config_value FROM web_builder_config WHERE config_key='erp_lista_compras'")).fetchone()
+    if not row or not row[0]:
+        return []
+    val = row[0]
+    if isinstance(val, str):
+        try:
+            return json.loads(val)
+        except Exception:
+            return []
+    elif isinstance(val, list):
+        return val
+    return []
+
+
+def _save_lista_compras(db: Session, items: list):
+    import json
+    val_json = json.dumps(items)
+    bind = db.get_bind()
+    if bind and bind.dialect.name == "postgresql":
+        db.execute(
+            text("INSERT INTO web_builder_config (config_key, config_value, updated_at) "
+                 "VALUES ('erp_lista_compras', CAST(:v AS jsonb), NOW()) "
+                 "ON CONFLICT (config_key) DO UPDATE SET config_value=CAST(:v AS jsonb), updated_at=NOW()"),
+            {"v": val_json}
+        )
+    else:
+        existing = db.execute(text("SELECT id FROM web_builder_config WHERE config_key='erp_lista_compras'")).fetchone()
+        if existing:
+            db.execute(text("UPDATE web_builder_config SET config_value=:v WHERE config_key='erp_lista_compras'"), {"v": val_json})
+        else:
+            db.execute(text("INSERT INTO web_builder_config (config_key, config_value) VALUES ('erp_lista_compras', :v)"), {"v": val_json})
+    db.commit()
+
+
+@router.get("/lista-compras")
+def list_lista_compras(
+    estado: Optional[str] = None,
+    search: Optional[str] = None,
+    proveedor: Optional[str] = None,
+    fecha_desde: Optional[str] = None,
+    fecha_hasta: Optional[str] = None,
+    limit: int = 200,
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+    db: Session = Depends(get_db)
+):
+    items = _load_lista_compras(db)
+    
+    filtered = []
+    for it in items:
+        if estado and it.get("estado") != estado:
+            continue
+        if proveedor and proveedor.lower() not in (it.get("proveedor") or "").lower():
+            continue
+        if search:
+            s = search.lower()
+            match = (
+                s in (it.get("producto") or "").lower() or
+                s in (it.get("pven_numero") or "").lower() or
+                s in (it.get("pec_numero") or "").lower() or
+                s in (it.get("notas") or "").lower() or
+                s in (it.get("proveedor") or "").lower()
+            )
+            if not match:
+                continue
+        if fecha_desde:
+            f = (it.get("fecha") or "")[:10]
+            if f and f < fecha_desde:
+                continue
+        if fecha_hasta:
+            f = (it.get("fecha") or "")[:10]
+            if f and f > fecha_hasta:
+                continue
+        filtered.append(it)
+        
+    filtered.sort(key=lambda x: x.get("id", 0), reverse=True)
+    return {"status": "success", "data": filtered[:limit]}
+
+
+@router.get("/lista-compras/stats")
+def stats_lista_compras(
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+    db: Session = Depends(get_db)
+):
+    items = _load_lista_compras(db)
+    pendientes = sum(1 for it in items if it.get("estado") == "PENDIENTE")
+    en_pedido = sum(1 for it in items if it.get("estado") == "EN_PEDIDO")
+    recibidos = sum(1 for it in items if it.get("estado") == "RECIBIDO")
+    return {
+        "status": "success",
+        "data": {
+            "pendientes": pendientes,
+            "en_pedido": en_pedido,
+            "recibidos": recibidos,
+            "total": len(items),
+        }
+    }
+
+
+@router.post("/lista-compras", status_code=201)
+def add_to_lista_compras(
+    body: dict,
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+    db: Session = Depends(get_db)
+):
+    items = _load_lista_compras(db)
+    max_id = max([it.get("id", 0) for it in items], default=0)
+    
+    pven_id = body.get("pven_id")
+    pven_numero = body.get("pven_numero")
+    notas = body.get("notas") or ""
+    created_by = body.get("created_by") or (user.full_name if user else "Sistema")
+    now_iso = datetime.datetime.utcnow().isoformat()
+    
+    added = []
+    prods = body.get("productos")
+    if prods and isinstance(prods, list):
+        for p in prods:
+            prod_name = p.get("producto_nombre") or p.get("nombre") or p.get("producto") or p.get("description") or "Producto"
+            qty = int(p.get("qty") or p.get("cantidad") or 1)
+            
+            dup = next((it for it in items if it.get("pven_id") == pven_id and it.get("producto") == prod_name and it.get("estado") == "PENDIENTE"), None)
+            if dup:
+                dup["cantidad"] = qty
+                added.append(dup)
+                continue
+                
+            max_id += 1
+            new_item = {
+                "id": max_id,
+                "pven_id": pven_id,
+                "pven_numero": pven_numero,
+                "producto": prod_name,
+                "cantidad": qty,
+                "proveedor": p.get("proveedor") or body.get("proveedor") or "",
+                "pec_id": None,
+                "pec_numero": None,
+                "estado": "PENDIENTE",
+                "fecha": now_iso,
+                "notas": notas,
+                "created_by": created_by,
+            }
+            items.append(new_item)
+            added.append(new_item)
+    else:
+        prod_name = body.get("producto") or body.get("producto_nombre") or "Producto"
+        qty = int(body.get("cantidad") or body.get("qty") or 1)
+        max_id += 1
+        new_item = {
+            "id": max_id,
+            "pven_id": pven_id,
+            "pven_numero": pven_numero,
+            "producto": prod_name,
+            "cantidad": qty,
+            "proveedor": body.get("proveedor") or "",
+            "pec_id": None,
+            "pec_numero": None,
+            "estado": "PENDIENTE",
+            "fecha": now_iso,
+            "notas": notas,
+            "created_by": created_by,
+        }
+        items.append(new_item)
+        added.append(new_item)
+        
+    _save_lista_compras(db, items)
+    return {"status": "success", "data": added}
+
+
+@router.patch("/lista-compras/{item_id}")
+def update_item_lista_compras(
+    item_id: int,
+    body: dict,
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+    db: Session = Depends(get_db)
+):
+    items = _load_lista_compras(db)
+    item = next((it for it in items if it.get("id") == item_id), None)
+    if not item:
+        raise HTTPException(404, "Item no encontrado en la lista de compras")
+        
+    for k in ["estado", "proveedor", "pec_id", "pec_numero", "notas", "cantidad", "producto"]:
+        if k in body:
+            item[k] = body[k]
+            
+    if body.get("pec_id") and item.get("pven_id"):
+        ven = db.query(SaleOrder).filter(SaleOrder.id == item["pven_id"]).first()
+        if ven:
+            ven.pec_id = body["pec_id"]
+            if body.get("pec_numero"):
+                ven.pec_numero = body["pec_numero"]
+            if ven.estado == "PENDIENTE_COMPRA":
+                ven.estado = "EN_PROCESO"
+            db.commit()
+            
+    _save_lista_compras(db, items)
+    return {"status": "success", "data": item}
+
+
+@router.delete("/lista-compras/{item_id}")
+def delete_item_lista_compras(
+    item_id: int,
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+    db: Session = Depends(get_db)
+):
+    items = _load_lista_compras(db)
+    original_len = len(items)
+    items = [it for it in items if it.get("id") != item_id]
+    if len(items) == original_len:
+        raise HTTPException(404, "Item no encontrado")
+    _save_lista_compras(db, items)
+    return {"status": "success", "message": "Item eliminado"}
+

@@ -100,7 +100,8 @@ function NewClientModal({onSave, onClose}: {onSave:(c:any)=>void; onClose:()=>vo
     setSaving(true);
     try {
       const d = await apiFetch('/crm/customers', {method:'POST', body:JSON.stringify(form)});
-      onSave(d);
+      const custObj = d?.data ?? d;
+      onSave(custObj);
     } catch(err:any) { alert('Error: '+err.message); }
     setSaving(false);
   }
@@ -588,7 +589,8 @@ export default function SolicitudClient() {
     setConfirming(true);
     try{
       const d=await apiFetch(`/ventas/solicitudes/${selected.id}/confirmar`,{method:'POST',body:JSON.stringify({user_name:currentUser})});
-      const cotNum=d?.cotizacion?.numero||'';
+      const dataObj=d?.data??d;
+      const cotNum=dataObj?.cotizacion?.numero||d?.cotizacion?.numero||'';
       showToast(`Cotizacion ${cotNum} creada`);
       // CRM Pipeline: advance lead to COT stage if customer_id exists
       if(selected.customer_id){
@@ -706,7 +708,7 @@ export default function SolicitudClient() {
   return (
     <div className="w-full bg-slate-50 min-h-full">
       {toast&&<Toast msg={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
-      {showNewClient&&<NewClientModal onSave={c=>{setSelectedCust(c);setCustSearch(`${c.first_name} ${c.last_name}`.trim());setCustResults([]);setShowNewClient(false);setShowCreate(true);}} onClose={()=>setShowNewClient(false)}/>}
+      {showNewClient&&<NewClientModal onSave={c=>{const cust=c?.data??c; setSelectedCust(cust);setCustSearch(`${cust.first_name||''} ${cust.last_name||''}`.trim());setCustResults([]);setShowNewClient(false);setShowCreate(true);showToast('Cliente creado exitosamente');}} onClose={()=>setShowNewClient(false)}/>}
 
       {/* Sub-module nav */}
       <div className="bg-white border-b border-slate-200 px-6 py-2 overflow-x-auto flex items-center gap-2 shadow-sm sticky top-0 z-30">
