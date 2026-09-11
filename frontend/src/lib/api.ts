@@ -52,12 +52,17 @@ export async function apiFetch(
     const errBody = await res.json().catch(() => ({}));
     throw new Error(errBody.detail || errBody.message || `HTTP ${res.status}`);
   }
-  const parsed = await res.json().catch(() => ({}));
   if (parsed && typeof parsed === 'object') {
     try {
-      Object.defineProperty(parsed, 'ok', { value: true, writable: true, configurable: true });
-      Object.defineProperty(parsed, 'status', { value: res.status, writable: true, configurable: true });
-      Object.defineProperty(parsed, 'json', { value: async () => parsed, writable: true, configurable: true });
+      if (!('ok' in parsed)) {
+        Object.defineProperty(parsed, 'ok', { value: true, writable: true, configurable: true });
+      }
+      if (!('status' in parsed)) {
+        Object.defineProperty(parsed, 'status', { value: res.status, writable: true, configurable: true });
+      }
+      if (!('json' in parsed)) {
+        Object.defineProperty(parsed, 'json', { value: async () => parsed, writable: true, configurable: true });
+      }
     } catch {}
   }
   return parsed;

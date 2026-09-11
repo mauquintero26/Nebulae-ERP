@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
@@ -26,7 +26,8 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     apiFetch("/auth/me")
       .then((data) => {
         if (!isMounted) return;
-        if (data && (data.status === "success" || data.id || data.email)) {
+        const user = data?.data || data;
+        if (data && (data.status === "success" || data.status === 200 || user?.id || user?.email)) {
           setAuthorized(true);
         } else {
           throw new Error("Invalid session");
