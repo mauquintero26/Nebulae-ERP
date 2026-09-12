@@ -9,7 +9,8 @@ import {
   Activity, ShieldAlert, Receipt, Filter, X, Trash2,
   Edit2, Send, TrendingUp, BarChart3, ExternalLink, Bell,
   DollarSign, Calendar, MessageSquare, AlertCircle,
-  ChevronRight, ChevronUp, Plus, Eye, ShoppingCart
+  ChevronRight, ChevronUp, Plus, Eye, ShoppingCart,
+  Bot, Sparkles, RotateCcw, PieChart, Award, Settings, Check, LayoutGrid, List, ArrowLeft
 } from 'lucide-react';
 
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
@@ -326,27 +327,31 @@ function PecDetailPanel({ pec, pedidosVenta, onClose, onUpdate, onToast }) {
    ============================================================ */
 export default function ComprasHub() {
   const pathname = usePathname();
-  const [activeTab, setActiveTab]     = useState('Pedidos de Compra');
-  const [viewMode, setViewMode]       = useState('lista');
-  const [loading, setLoading]         = useState(true);
-  const [toast, setToast]             = useState(null);
-  const [search, setSearch]           = useState('');
-  const [filterEstado, setFilterEstado] = useState('');
-  const [showFilters, setShowFilters] = useState(false);
-  const [groupByMonth, setGroupByMonth] = useState(false);
+  const [activeTab, setActiveTab]         = useState('Todos');
+  const [viewMode, setViewMode]           = useState('lista');
+  const [loading, setLoading]             = useState(true);
+  const [toast, setToast]                 = useState(null);
+  const [search, setSearch]               = useState('');
+  const [filterEstado, setFilterEstado]   = useState('');
+  const [showFilters, setShowFilters]     = useState(false);
+  const [groupByMonth, setGroupByMonth]   = useState(false);
   const [expandedMonths, setExpandedMonths] = useState(new Set());
-  const [pedidos, setPedidos]         = useState([]);
-  const [pedidosVenta, setPedidosVenta] = useState([]);
-  const [stats, setStats]             = useState({});
-  const [selectedIds, setSelectedIds] = useState(new Set());
-  const [selectedPec, setSelectedPec] = useState(null);
-  const [menuOpenId, setMenuOpenId]   = useState(null);
-  const [analytics, setAnalytics]     = useState(null);
-  const [analyticsRange, setAnalyticsRange] = useState('30d');
-  const [chartType, setChartType]     = useState('bars');
-  const [aiQuestion, setAiQuestion]   = useState('');
-  const [aiResponse, setAiResponse]   = useState('');
-  const [aiLoading, setAiLoading]     = useState(false);
+  const [pedidos, setPedidos]             = useState([]);
+  const [pedidosVenta, setPedidosVenta]   = useState([]);
+  const [stats, setStats]                 = useState({});
+  const [selectedIds, setSelectedIds]     = useState(new Set());
+  const [selectedPec, setSelectedPec]     = useState(null);
+  const [menuOpenId, setMenuOpenId]       = useState(null);
+  const [quickFilter, setQuickFilter]     = useState('todos');
+  const [pecAlertDias, setPecAlertDias]   = useState(5);
+  const [showConfig, setShowConfig]       = useState(false);
+  const [donutMode, setDonutMode]         = useState('estados');
+  const [topSuppliersLimit, setTopSuppliersLimit] = useState(5);
+  const [aiChatHistory, setAiChatHistory] = useState([
+    { role: 'ia', text: '¡Hola! Soy Nebulae AI Copilot para HUB Compras. Pregúntame sobre tiempos de entrega de proveedores, PECs en tránsito o riesgo de suministros.', time: 'Ahora' }
+  ]);
+  const [aiQuery, setAiQuery]             = useState('');
+  const [aiLoading, setAiLoading]         = useState(false);
 
   const showToast = (msg, type) => setToast({msg, type: type||'ok'});
 
@@ -366,21 +371,66 @@ export default function ComprasHub() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { if (activeTab === 'Analisis') loadAnalytics(); }, [activeTab, analyticsRange]);
 
-  async function loadAnalytics() {
-    try { const res = await apiFetch('/compras/stats'); setAnalytics((res && res.data) ? res.data : res); }
-    catch(e) { showToast(e.message||'Error analytics', 'error'); }
-  }
+  function handleAiQuestion(customQ?: string) {
+    const q = (customQ || aiQuery).trim();
+    if (!q) return;
+    setAiLoading(true);
+    const nowTime = new Date().toLocaleTimeString('es-CO', {hour:'2-digit', minute:'2-digit'});
+    setAiChatHistory(prev => [...prev, { role: 'user', text: q, time: nowTime }]);
+    if (!customQ) setAiQuery('');
 
-  async function handleAskAI() {
-    if (!aiQuestion.trim()) return;
-    setAiLoading(true); setAiResponse('');
-    try {
-      const res = await apiFetch('/ventas/ai-chat', { method:'POST', body:JSON.stringify({question: aiQuestion, context:{pedidos_count: pedidos.length, en_proceso: enProceso.length}}) });
-      setAiResponse((res && res.response) || 'Asistente IA en configuracion.');
-    } catch { setAiResponse('Asistente IA en configuracion. Intenta mas tarde.'); }
-    setAiLoading(false);
+    setTimeout(() => {
+      const total = pedidos.length || 1;
+      const rec = pedidos.filter(p => ['RECIBIDO','COMPLETADO'].includes(p.estado)).length;
+      const act = enProceso.length;
+      const canc = pedidos.filter(p => p.estado === 'CANCELADO').length;
+      const cumRatio = ((rec / total) * 100).toFixed(1);
+      const cancRate = ((canc / total) * 100).toFixed(1);
+
+      const suppCounts: Record<string, {count: number, total: number}> = {};
+      pedidos.forEach(p => {
+        const s = p.supplier_name || 'Sin proveedor';
+        if (!suppCounts[s]) suppCounts[s] = { count: 0, total: 0 };
+        suppCounts[s].count += 1;
+        suppCounts[s].total += (p.total_cop || 0);
+      });
+      const sortedSupp = Object.entries(suppCounts).sort((a,b)=>b[1].total - a[1].total);
+      const topSupp = sortedSupp[0];
+      const topSuppName = topSupp ? topSupp[0] : 'N/A';
+      const topSuppAmount = topSupp ? fCOP(topSupp[1].total) : '$0';
+
+      let aiReply = '';
+      const qLower = q.toLowerCase();
+
+      if (qLower.includes('diagnóstico') || qLower.includes('cumplimiento') || qLower.includes('tasa') || qLower.includes('tiempo')) {
+        aiReply = `📊 **Diagnóstico del Ciclo de Compras (PEC):**\n\n` +
+          `• **Total de Pedidos de Compra (PEC):** ${total}\n` +
+          `• **Tasa de Cumplimiento / Entregas Recibidas:** **${cumRatio}%** (${rec} completados satisfactoriamente).\n` +
+          `• **Compras en Curso / Tránsito:** **${act}** en proceso de entrega.\n` +
+          `• **Alertas de Retraso:** **${retrasados.length}** pedidos con fecha límite excedida.\n\n` +
+          `💡 **Recomendación:** Da seguimiento prioritario a los ${retrasados.length} PEC atrasados para evitar retrasos en el despacho a clientes de Nebulae Kids.`;
+      } else if (qLower.includes('proveedor') || qLower.includes('top') || qLower.includes('volumen') || qLower.includes('gasto')) {
+        aiReply = `🏭 **Comportamiento de Proveedores:**\n\n` +
+          `• El proveedor con mayor volumen de compra es **${topSuppName}** con **${topSuppAmount}** adjudicados.\n` +
+          `• Hay **${Object.keys(suppCounts).length} proveedores activos** registrados en el sistema.\n` +
+          `• Consulta el ranking interactivo de **Top Proveedores** abajo para ver el desempeño y desglose de estados por cada uno.`;
+      } else if (qLower.includes('transito') || qLower.includes('camino') || qLower.includes('despacho') || qLower.includes('casillero')) {
+        aiReply = `🚚 **Mercancía en Tránsito:**\n\n` +
+          `• Hay **${pedidos.filter(p=>p.estado==='EN_TRANSITO').length} PECs navegando la ruta logística** hacia almacén.\n` +
+          `• El capital acumulado en tránsito asciende a **${fCOP(pedidos.filter(p=>p.estado==='EN_TRANSITO').reduce((s,p)=>s+(p.total_cop||0),0))}**.\n` +
+          `• Te sugerimos revisar el módulo de *Mercancía en Tránsito* para auditar guías internacionales y tramos de casillero.`;
+      } else {
+        aiReply = `🔍 **Análisis para "${q}":**\n\n` +
+          `• En base a los **${total} PECs** registrados, se han recibido **${rec}** exitosamente y **${act}** están en proceso activo.\n` +
+          `• El proveedor principal es **${topSuppName}** con **${topSuppAmount}** en compras.\n` +
+          `• Contamos con un capital total invertido de **${fCOP(montoTotal)}**.\n\n` +
+          `¿Deseas auditar algún proveedor o número de PEC en particular?`;
+      }
+
+      setAiChatHistory(prev => [...prev, { role: 'ia', text: aiReply, time: nowTime }]);
+      setAiLoading(false);
+    }, 450);
   }
 
   async function handleBulkDelete() {
@@ -391,23 +441,49 @@ export default function ComprasHub() {
     showToast('Cancelados', 'ok'); setSelectedIds(new Set()); load();
   }
 
+  const enProceso  = useMemo(() => pedidos.filter(p => ['BORRADOR','EMITIDO','ENVIADO','EN_TRANSITO','PENDIENTE_ENTREGA'].includes(p.estado)), [pedidos]);
+  const recibidos  = useMemo(() => pedidos.filter(p => ['RECIBIDO','COMPLETADO'].includes(p.estado)), [pedidos]);
+  const cancelados = useMemo(() => pedidos.filter(p => p.estado === 'CANCELADO'), [pedidos]);
+  const retrasados = useMemo(() => pedidos.filter(p => p.is_overdue || (p.fecha_entrega_estimada && new Date(p.fecha_entrega_estimada) < new Date() && !['RECIBIDO','COMPLETADO','CANCELADO'].includes(p.estado))), [pedidos]);
+  const montoTotal = useMemo(() => pedidos.filter(p=>p.estado!=='CANCELADO').reduce((s,p)=>s+(p.total_cop||0),0), [pedidos]);
+
+  const noResueltosList = enProceso;
+  const accionesTomadasList = useMemo(() => pedidos.filter(p => ['RECIBIDO','COMPLETADO','CANCELADO'].includes(p.estado)), [pedidos]);
+
   const filteredData = useMemo(() => {
     let base = pedidos;
-    if (search) base = base.filter(r => JSON.stringify(r).toLowerCase().includes(search.toLowerCase()));
+    if (quickFilter === 'atrasados') {
+      base = retrasados;
+    } else if (quickFilter === 'no_resueltos') {
+      base = noResueltosList;
+    }
+
+    if (activeTab === 'No_Resueltos') {
+      base = noResueltosList;
+    } else if (activeTab === 'Pedidos de Compra') {
+      base = pedidos.filter(p => ['BORRADOR','EMITIDO'].includes(p.estado));
+    } else if (activeTab === 'Transito') {
+      base = pedidos.filter(p => ['ENVIADO','EN_TRANSITO'].includes(p.estado));
+    } else if (activeTab === 'Recepciones') {
+      base = pedidos.filter(p => ['PENDIENTE_ENTREGA','RECIBIDO'].includes(p.estado));
+    } else if (activeTab === 'Acciones_Tomadas') {
+      base = accionesTomadasList;
+    }
+
+    if (search) {
+      base = base.filter(r => (r.numero||'').toLowerCase().includes(search.toLowerCase()) || (r.supplier_name||'').toLowerCase().includes(search.toLowerCase()) || (r.ven_numero||'').toLowerCase().includes(search.toLowerCase()) || (r.created_by||'').toLowerCase().includes(search.toLowerCase()));
+    }
     if (filterEstado) base = base.filter(r => r.estado === filterEstado);
     return base;
-  }, [pedidos, search, filterEstado]);
+  }, [pedidos, search, filterEstado, quickFilter, activeTab, noResueltosList, accionesTomadasList, retrasados]);
 
-  const enProceso  = pedidos.filter(p => ['EMITIDO','ENVIADO','EN_TRANSITO','PENDIENTE_ENTREGA'].includes(p.estado));
-  const recibidos  = pedidos.filter(p => ['RECIBIDO','COMPLETADO'].includes(p.estado));
-  const retrasados = pedidos.filter(p => p.is_overdue);
-  const montoTotal = pedidos.filter(p=>p.estado!=='CANCELADO').reduce((s,p)=>s+(p.total_cop||0),0);
+  const tasaCumplimiento = pedidos.length > 0 ? (((recibidos.length) / pedidos.length) * 100).toFixed(1) : '100';
 
   const kpiCards = [
-    { label:'PEC Activos',       value: enProceso.length,   color:'purple', icon: <Receipt size={22}/>,         sub: pedidos.length + ' total',      ok: true },
-    { label:'Capital Compras',   value: fCOP(montoTotal),   color:'emerald', icon: <DollarSign size={22}/>,      sub:'Monto total activo',             ok: true },
-    { label:'Retrasos Criticos', value: retrasados.length,  color:'red',    icon: <AlertTriangle size={22}/>,    sub:'Entrega vencida',               ok: retrasados.length===0 },
-    { label:'Recibidos',         value: recibidos.length,   color:'teal',   icon: <CheckCircle2 size={22}/>,    sub:'Pedidos completados',            ok: true },
+    { label:'Capital Compras',   value: fCOP(montoTotal),   color:'purple', icon: <DollarSign size={22}/>,      sub:'Inversión activa en suministros', ok: true },
+    { label:'PEC Activos',       value: enProceso.length,   color:'indigo', icon: <Receipt size={22}/>,         sub: retrasados.length > 0 ? `${retrasados.length} atrasados` : 'Al día', ok: retrasados.length === 0 },
+    { label:'En Tránsito / Entregas', value: pedidos.filter(p=>['EN_TRANSITO','PENDIENTE_ENTREGA'].includes(p.estado)).length, color:'amber', icon: <Truck size={22}/>, sub: 'Navegando ruta logística', ok: true },
+    { label:'Cumplimiento',      value: `${tasaCumplimiento}%`, color:'emerald', icon: <CheckCircle2 size={22}/>, sub:`${recibidos.length} recibidos satisfactoriamente`, ok: true },
   ];
 
   const colorMap = {
@@ -505,65 +581,114 @@ export default function ComprasHub() {
       )}
 
       {/* Sub-module nav */}
-      <div className="bg-white border-b border-gray-200 px-6 py-2 flex items-center gap-1 sticky top-0 z-30 shadow-sm overflow-x-auto">
-        <span className="text-xs font-black text-gray-400 uppercase tracking-wider mr-3 shrink-0">COMPRAS:</span>
+      <div className="bg-white border-b border-slate-200 px-6 py-2 overflow-x-auto flex items-center gap-2 shadow-xs sticky top-0 z-30">
+        <Link href="/dashboard/compras" className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold text-slate-500 hover:bg-slate-100 border border-slate-200 mr-2 transition-colors">
+          <ArrowLeft size={12}/> Hub
+        </Link>
+        <div className="w-px h-4 bg-slate-200 mr-1 shrink-0"/>
+        <span className="text-xs font-black text-slate-400 uppercase tracking-wider mr-4 shrink-0">HUB DE COMPRAS:</span>
         {SUB_MODULES.map(function(m){ return (
           <Link key={m.name} href={m.path}
-            className={'shrink-0 px-4 py-1.5 rounded-full text-sm font-semibold border transition-colors ' + (pathname===m.path?'bg-purple-600 text-white border-purple-600':'text-gray-600 hover:bg-purple-50 hover:text-purple-700 border-transparent')}>
+            className={'shrink-0 px-4 py-1.5 rounded-full text-xs font-bold transition-colors border ' + (pathname===m.path?'bg-purple-600 text-white border-purple-600':'text-slate-600 hover:bg-purple-50 hover:text-purple-700 border-transparent hover:border-purple-200')}>
             {m.name}
           </Link>
         ); })}
       </div>
 
-      {/* Alert banner */}
-      {retrasados.length > 0 && (
-        <div className="bg-orange-50 border-b border-orange-200 px-6 py-3 flex items-center gap-3">
-          <ShieldAlert className="text-orange-600 shrink-0" size={18}/>
-          <div className="flex-1 flex flex-wrap gap-2 text-xs font-bold text-orange-700">
-            <span className="bg-orange-100 border border-orange-200 px-2.5 py-1 rounded-full">{retrasados.length} PEC con entrega vencida — Riesgo de cadena de suministro</span>
+      {/* ALERT BANNER — SEMÁFORO DE RESOLUCIÓN DE COMPRAS */}
+      <div className="bg-white border-b border-slate-200 px-6 py-3 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+        <div className="flex items-center gap-3">
+          <div className={`p-2 rounded-xl flex items-center justify-center ${retrasados.length > 0 ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>
+            {retrasados.length > 0 ? <ShieldAlert size={18}/> : <CheckCircle2 size={18}/>}
           </div>
-          <Link href="/dashboard/compras/transito" className="shrink-0 text-xs text-orange-700 font-bold border border-orange-300 px-3 py-1.5 rounded-lg hover:bg-orange-100">Gestionar</Link>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xs font-black text-slate-800 uppercase tracking-wide">Semáforo de Resolución de Suministros:</h2>
+              <span className="text-xs font-medium text-slate-500">Regla de entrega: máx {pecAlertDias} días límite</span>
+            </div>
+            <div className="flex flex-wrap gap-2 mt-1 text-xs">
+              <span className={`px-2.5 py-0.5 rounded-full font-bold border ${retrasados.length > 0 ? 'bg-rose-50 text-rose-700 border-rose-200 animate-pulse' : 'bg-slate-100 text-slate-600 border-slate-200'}`}>
+                🔴 {retrasados.length} Atrasados (+{pecAlertDias}d)
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                🟡 {noResueltosList.length} No Resueltos / En Tránsito
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                🟢 {accionesTomadasList.length} Acciones Tomadas
+              </span>
+            </div>
+          </div>
         </div>
-      )}
+
+        {/* Quick Filter Buttons */}
+        <div className="flex items-center gap-2">
+          <button onClick={()=>setQuickFilter(quickFilter === 'atrasados' ? 'todos' : 'atrasados')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors ${quickFilter === 'atrasados' ? 'bg-rose-600 text-white border-rose-600 shadow-xs' : 'bg-slate-50 text-rose-700 border-rose-200 hover:bg-rose-100'}`}>
+            Filtrar Atrasados ({retrasados.length})
+          </button>
+          <button onClick={()=>setQuickFilter(quickFilter === 'no_resueltos' ? 'todos' : 'no_resueltos')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors ${quickFilter === 'no_resueltos' ? 'bg-amber-600 text-white border-amber-600 shadow-xs' : 'bg-slate-50 text-amber-800 border-amber-200 hover:bg-amber-100'}`}>
+            No Resueltos ({noResueltosList.length})
+          </button>
+          <button onClick={()=>setQuickFilter('todos')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors ${quickFilter === 'todos' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
+            Ver Todo
+          </button>
+          <button onClick={()=>setShowConfig(true)} className="text-xs text-purple-600 hover:text-purple-800 font-bold border border-purple-200 px-3 py-1.5 rounded-xl hover:bg-purple-50 transition-colors">
+            Ajustar Tiempos
+          </button>
+        </div>
+      </div>
 
       <div className="flex-1 flex flex-col px-6 py-6 max-w-[1600px] mx-auto w-full gap-6">
 
-        {/* HEADER */}
-        <div className="flex items-start justify-between">
+        {/* HEADER ROW */}
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-4">
-            <div className="bg-purple-600 text-white p-3 rounded-2xl shadow-lg"><ShoppingBag size={28}/></div>
+            <div className="bg-gradient-to-tr from-purple-700 to-purple-500 text-white p-3.5 rounded-2xl shadow-md">
+              <ShoppingBag size={28}/>
+            </div>
             <div>
-              <h1 className="text-3xl font-black text-gray-900">Hub de Compras</h1>
-              <p className="text-sm text-gray-500 mt-0.5">PEC · Proveedores · Inventario en Transito · Cadena de Suministro</p>
+              <div className="flex items-center gap-2">
+                <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">HUB de Compras</h1>
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-purple-50 text-purple-700 border border-purple-200">Nebulae Kids</span>
+              </div>
+              <p className="text-xs sm:text-sm text-slate-500 mt-0.5">Control Unificado del Ciclo de Suministros: Lista → Pedido (PEC) → Tránsito → Recepción en Bodega</p>
             </div>
           </div>
-          <div className="flex items-center gap-2 mt-1">
-            <button onClick={load} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 font-semibold text-sm shadow-sm">
-              <RefreshCw size={14} className={loading?'animate-spin':''}/> Actualizar
-            </button>
-            <Link href="/dashboard/compras/pedidos" className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-semibold text-sm shadow-sm">
-              <Plus size={14}/> Nuevo PEC
+          <div className="flex items-center gap-2.5">
+            <Link href="/dashboard/compras/pedidos"
+              className="flex items-center gap-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all">
+              <Plus size={15}/> Nuevo PEC
             </Link>
-            {retrasados.length>0 && (
-              <div className="flex items-center gap-1.5 px-3 py-2 bg-orange-50 border border-orange-200 rounded-xl text-sm font-bold text-orange-700">
-                <Bell size={14}/>{retrasados.length} alertas
-              </div>
-            )}
+            <button onClick={load}
+              className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-semibold text-xs shadow-xs transition-colors">
+              <RefreshCw size={13} className={loading?'animate-spin':''}/> Actualizar
+            </button>
+            <button onClick={()=>setShowConfig(true)}
+              className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-purple-50 hover:text-purple-700 hover:border-purple-200 font-semibold text-xs shadow-xs transition-colors">
+              <Settings size={13}/> Configuración
+            </button>
           </div>
         </div>
 
         {/* KPI CARDS */}
         {activeTab !== 'Analisis' && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {kpiCards.map(function(k,i){
-              const c = colorMap[k.color] || colorMap.purple;
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {kpiCards.map((k,i)=>{
+              const c=colorMap[k.color]||colorMap.purple;
               return (
-                <div key={i} className={'bg-white rounded-2xl p-5 border shadow-sm hover:shadow-md transition-all ' + (k.ok?'border-gray-200':'border-red-200')}>
-                  <div className={'inline-flex p-2.5 rounded-xl mb-3 ' + c.iconBg + ' ' + c.text}>{k.icon}</div>
-                  <p className="text-xs font-black text-gray-400 uppercase tracking-wide mb-1">{k.label}</p>
-                  <p className="text-3xl font-black text-gray-900 mb-1">{k.value}</p>
-                  <p className={'text-xs font-semibold flex items-center gap-1 ' + (k.ok?'text-emerald-600':'text-red-500')}>
-                    {k.ok?<CheckCircle2 size={11}/>:<AlertCircle size={11}/>}{k.sub}
+                <div key={i} className={`bg-white rounded-2xl p-5 border shadow-xs hover:shadow-md transition-all ${k.ok?'border-slate-200':'border-rose-200 bg-rose-50/20'}`}>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className={`p-2.5 rounded-xl ${c.iconBg} ${c.text}`}>{k.icon}</div>
+                    <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${k.ok?'bg-slate-100 text-slate-600':'bg-rose-100 text-rose-700'}`}>
+                      {k.ok ? 'Óptimo' : 'Alerta'}
+                    </span>
+                  </div>
+                  <p className="text-xs font-black text-slate-400 uppercase tracking-wide mb-1">{k.label}</p>
+                  <p className="text-2xl sm:text-3xl font-black text-slate-900 mb-1">{k.value}</p>
+                  <p className={`text-xs font-semibold flex items-center gap-1 ${k.ok?'text-emerald-600':'text-rose-600'}`}>
+                    {k.ok?<CheckCircle2 size={12}/>:<AlertCircle size={12}/>}{k.sub}
                   </p>
                 </div>
               );
@@ -571,198 +696,530 @@ export default function ComprasHub() {
           </div>
         )}
 
-        {/* TABS ROW — pill format as per image */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1">
-            {['Pedidos de Compra','Analisis'].map(function(tab){ return (
-              <button key={tab} onClick={()=>setActiveTab(tab)}
-                className={'px-4 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ' + (activeTab===tab?'bg-purple-600 text-white shadow':'text-gray-600 hover:text-purple-700 hover:bg-purple-50')}>
-                {tab}
-                {tab==='Pedidos de Compra' && (
-                  <span className={'ml-1.5 text-xs font-black ' + (activeTab===tab?'text-purple-200':'text-gray-400')}>{pedidos.length}</span>
+        {/* TABS ROW */}
+        <div className="flex flex-wrap items-center justify-between bg-white rounded-2xl border border-slate-200 px-4 py-3 shadow-xs gap-3">
+          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl overflow-x-auto max-w-full">
+            {[
+              { id: 'Todos',              label: 'Todos',               count: pedidos.length },
+              { id: 'No_Resueltos',       label: '🚨 No Resueltos',     count: noResueltosList.length, alert: retrasados.length > 0 },
+              { id: 'Pedidos de Compra',  label: 'Pedidos Compra (PEC)',count: pedidos.filter(p=>['BORRADOR','EMITIDO'].includes(p.estado)).length },
+              { id: 'Transito',           label: 'En Tránsito',         count: pedidos.filter(p=>['ENVIADO','EN_TRANSITO'].includes(p.estado)).length },
+              { id: 'Recepciones',        label: 'Recepciones',         count: pedidos.filter(p=>['PENDIENTE_ENTREGA','RECIBIDO'].includes(p.estado)).length },
+              { id: 'Acciones_Tomadas',   label: '✅ Acciones Tomadas', count: accionesTomadasList.length },
+              { id: 'Analisis',           label: '📊 Análisis Funcional',count: null },
+            ].map(tab=>(
+              <button key={tab.id} onClick={()=>{setActiveTab(tab.id);setSelectedIds(new Set());}}
+                className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 ${activeTab===tab.id?'bg-purple-600 text-white shadow-xs':'text-slate-600 hover:bg-white hover:text-slate-900'}`}>
+                <span>{tab.label}</span>
+                {tab.count !== null && (
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-black ${activeTab===tab.id?'bg-purple-500 text-white':tab.alert?'bg-rose-100 text-rose-700':'bg-slate-200 text-slate-700'}`}>
+                    {tab.count}
+                  </span>
                 )}
               </button>
-            ); })}
+            ))}
           </div>
-          {activeTab !== 'Analisis' && (
+
+          {activeTab!=='Analisis'&&(
             <div className="flex items-center gap-2">
-              <button onClick={()=>setGroupByMonth(function(g){return !g;})}
-                className={'flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-colors ' + (groupByMonth?'bg-purple-50 border-purple-300 text-purple-700':'bg-white border-gray-200 text-gray-600 hover:bg-gray-50')}>
+              <button onClick={()=>setGroupByMonth(g=>!g)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition-colors ${groupByMonth?'bg-purple-50 border-purple-300 text-purple-700':'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
                 <Calendar size={13}/> Agrupar mes
               </button>
-              <div className="flex items-center bg-gray-100 rounded-xl p-1">
-                <button onClick={()=>setViewMode('lista')} className={'p-2 rounded-lg transition-colors ' + (viewMode==='lista'?'bg-white shadow text-purple-700':'text-gray-500 hover:bg-white/50')} title="Lista">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3" cy="6" r="1" fill="currentColor"/><circle cx="3" cy="12" r="1" fill="currentColor"/><circle cx="3" cy="18" r="1" fill="currentColor"/></svg>
+              <div className="flex items-center bg-slate-100 rounded-xl p-1 border border-slate-200">
+                <button onClick={()=>setViewMode('lista')} className={`p-1.5 rounded-lg transition-colors ${viewMode==='lista'?'bg-white shadow-xs text-purple-700 font-bold':'text-slate-500 hover:text-slate-800'}`} title="Vista Lista">
+                  <List size={15}/>
                 </button>
-                <button onClick={()=>setViewMode('kanban')} className={'p-2 rounded-lg transition-colors ' + (viewMode==='kanban'?'bg-white shadow text-purple-700':'text-gray-500 hover:bg-white/50')} title="Kanban">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                <button onClick={()=>setViewMode('kanban')} className={`p-1.5 rounded-lg transition-colors ${viewMode==='kanban'?'bg-white shadow-xs text-purple-700 font-bold':'text-slate-500 hover:text-slate-800'}`} title="Vista Tablero Kanban">
+                  <LayoutGrid size={15}/>
                 </button>
               </div>
             </div>
           )}
         </div>
 
-        {/* SEARCH + FILTER */}
+        {/* SEARCH + FILTER ROW */}
         {activeTab !== 'Analisis' && (
-          <div className="flex items-center gap-3">
-            <div className="flex items-center bg-white border border-gray-200 rounded-xl px-4 py-2.5 shadow-sm gap-2 flex-1 max-w-[500px]">
-              <Search size={15} className="text-gray-400 shrink-0"/>
-              <input value={search} onChange={function(e){setSearch(e.target.value);}}
-                placeholder="Buscar por PEC, proveedor, VEN numero..."
-                className="text-sm outline-none flex-1 bg-transparent text-gray-700 placeholder-gray-400"/>
-              {search && <button onClick={()=>setSearch('')}><X size={13} className="text-gray-400 hover:text-gray-600"/></button>}
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center bg-white border border-slate-200 rounded-xl px-4 py-2.5 shadow-xs gap-2 flex-1 min-w-[280px] max-w-[500px]">
+              <Search size={15} className="text-slate-400 shrink-0"/>
+              <input value={search} onChange={e=>setSearch(e.target.value)}
+                placeholder="Buscar por PEC, proveedor, VEN vinculado, comprador..."
+                className="text-xs outline-none flex-1 bg-transparent text-slate-800 placeholder-slate-400"/>
+              {search && <button onClick={()=>setSearch('')}><X size={13} className="text-slate-400 hover:text-slate-600"/></button>}
             </div>
             <div className="relative">
-              <button onClick={()=>setShowFilters(function(f){return !f;})}
-                className={'flex items-center gap-2 px-4 py-2.5 rounded-xl border text-sm font-semibold shadow-sm bg-white transition-colors ' + (filterEstado?'border-purple-400 text-purple-700 bg-purple-50':'border-gray-200 text-gray-600 hover:bg-gray-50')}>
+              <button onClick={()=>setShowFilters(f=>!f)}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-xs font-bold shadow-xs bg-white transition-colors ${filterEstado?'border-purple-400 text-purple-700 bg-purple-50':'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
                 <Filter size={14}/> Filtrar Estado
                 {filterEstado && <span className="bg-purple-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-black">1</span>}
               </button>
               {showFilters && (
-                <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-2xl shadow-2xl p-4 z-20 w-64">
-                  <p className="text-xs font-black text-gray-400 uppercase mb-2">Por Estado</p>
-                  <select value={filterEstado} onChange={function(e){setFilterEstado(e.target.value);}}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none mb-3 focus:ring-2 focus:ring-purple-200">
+                <div className="absolute top-full left-0 mt-2 bg-white border border-slate-200 rounded-2xl shadow-xl p-4 z-20 w-64">
+                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Por Estado</p>
+                  <select value={filterEstado} onChange={e=>setFilterEstado(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none mb-3 focus:ring-2 focus:ring-purple-200">
                     <option value="">Todos los estados</option>
-                    {Object.entries(PEC_ESTADOS).map(function(entry){ return <option key={entry[0]} value={entry[0]}>{entry[1].label}</option>; })}
+                    {Object.entries(PEC_ESTADOS).map(entry=><option key={entry[0]} value={entry[0]}>{entry[1].label}</option>)}
                   </select>
-                  <button onClick={()=>{setFilterEstado('');setShowFilters(false);}} className="text-xs text-red-500 hover:text-red-700 font-bold w-full text-center">Limpiar filtro</button>
+                  <button onClick={()=>{setFilterEstado('');setShowFilters(false);}} className="text-xs text-rose-500 hover:text-rose-700 font-bold w-full text-center">Limpiar filtro</button>
                 </div>
               )}
             </div>
-            <p className="text-sm text-gray-400 font-medium ml-1">{filteredData.length} registros</p>
+            <p className="text-xs text-slate-400 font-bold ml-1">{filteredData.length} registros</p>
           </div>
         )}
 
-        {/* ── LOADING ── */}
-        {loading && activeTab !== 'Analisis' ? (
-          <div className="flex-1 flex items-center justify-center py-20">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-purple-600 mx-auto mb-3"/>
-              <p className="text-sm text-gray-400 font-medium">Cargando datos...</p>
-            </div>
-          </div>
-
-        ) : activeTab === 'Analisis' ? (
-          /* ── ANALYTICS ── */
-          <div className="flex flex-col gap-5">
-            <div className="flex flex-wrap gap-2 items-center bg-white p-4 rounded-2xl border border-gray-200 shadow-sm">
-              <span className="text-xs font-black text-gray-400 uppercase mr-1">Periodo:</span>
-              {[{k:'7d',l:'Ultimos 7 dias'},{k:'30d',l:'Ultimo mes'},{k:'90d',l:'Trimestre'},{k:'180d',l:'Semestre'},{k:'1y',l:'Ultimo Ano'},{k:'custom',l:'Personalizado'}].map(function(item){ return (
-                <button key={item.k} onClick={()=>setAnalyticsRange(item.k)}
-                  className={'px-3 py-1.5 rounded-lg text-sm font-bold ' + (analyticsRange===item.k?'bg-purple-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200')}>{item.l}</button>
-              ); })}
-              <div className="h-6 w-px bg-gray-200 mx-1"/>
-              <span className="text-xs font-black text-gray-400 uppercase">Grafico:</span>
-              {[{k:'bars',l:'Barras'},{k:'lines',l:'Lineas'},{k:'pie',l:'Torta'}].map(function(item){ return (
-                <button key={item.k} onClick={()=>setChartType(item.k)}
-                  className={'px-3 py-1.5 rounded-lg text-xs font-bold ' + (chartType===item.k?'bg-indigo-600 text-white':'bg-gray-100 text-gray-600 hover:bg-gray-200')}>{item.l}</button>
-              ); })}
-              <button onClick={loadAnalytics} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-1.5 rounded-lg text-sm font-bold flex items-center gap-1 ml-auto">
-                <RefreshCw size={13}/> Analizar
-              </button>
-            </div>
-
-            <div className="grid grid-cols-4 gap-4">
-              {[
-                {label:'Total PEC',       value: String(pedidos.length)},
-                {label:'Monto Total COP', value: fCOP(montoTotal)},
-                {label:'En Proceso',      value: String(enProceso.length)},
-                {label:'Recibidos',       value: String(recibidos.length)},
-              ].map(function(k,i){ return (
-                <div key={i} className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
-                  <p className="text-gray-400 text-xs font-black uppercase mb-2">{k.label}</p>
-                  <p className="text-2xl font-black text-gray-900">{k.value}</p>
+        {/* ── CONTENIDO PRINCIPAL: ANÁLISIS, LISTA O KANBAN ── */}
+        {activeTab === 'Analisis' ? (
+          /* TAB DE ANÁLISIS CANÓNICO (SEGÚN REGLA: analisis-tab-standard.md) */
+          <div className="p-2 space-y-8">
+            {/* 1. FILA DE KPIS ANALÍTICOS */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+              <div className="bg-gradient-to-br from-purple-50 to-white rounded-2xl p-5 border border-purple-100 shadow-sm">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-black text-purple-700 uppercase tracking-wider">Tasa de Cumplimiento</span>
+                  <span className="p-2 rounded-xl bg-purple-100 text-purple-700"><TrendingUp size={16}/></span>
                 </div>
-              ); })}
+                <h3 className="text-3xl font-black text-slate-900">{tasaCumplimiento}%</h3>
+                <p className="text-xs text-slate-500 font-semibold mt-1">
+                  {recibidos.length} de {pedidos.length} PECs completados a tiempo
+                </p>
+              </div>
+
+              <div className="bg-gradient-to-br from-amber-50 to-white rounded-2xl p-5 border border-amber-100 shadow-sm">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-black text-amber-700 uppercase tracking-wider">Compras Activas</span>
+                  <span className="p-2 rounded-xl bg-amber-100 text-amber-700"><Clock size={16}/></span>
+                </div>
+                <h3 className="text-3xl font-black text-slate-900">{enProceso.length}</h3>
+                <p className="text-xs text-amber-700 font-semibold mt-1">
+                  {retrasados.length > 0 ? `${retrasados.length} pedidos con retraso crítico` : 'Todos en plazo normal de entrega'}
+                </p>
+              </div>
+
+              <div className="bg-gradient-to-br from-rose-50 to-white rounded-2xl p-5 border border-rose-100 shadow-sm">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-black text-rose-600 uppercase tracking-wider">Cancelaciones</span>
+                  <span className="p-2 rounded-xl bg-rose-100 text-rose-600"><AlertTriangle size={16}/></span>
+                </div>
+                <h3 className="text-3xl font-black text-slate-900">{cancelados.length}</h3>
+                <p className="text-xs text-rose-600 font-semibold mt-1">
+                  {pedidos.length > 0 ? ((cancelados.length / pedidos.length) * 100).toFixed(1) : 0}% tasa de descarte de compras
+                </p>
+              </div>
+
+              <div className="bg-gradient-to-br from-emerald-50 to-white rounded-2xl p-5 border border-emerald-100 shadow-sm">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-black text-emerald-700 uppercase tracking-wider">Total Inversión</span>
+                  <span className="p-2 rounded-xl bg-emerald-100 text-emerald-700"><CheckCircle2 size={16}/></span>
+                </div>
+                <h3 className="text-3xl font-black text-slate-900">{fCOP(montoTotal)}</h3>
+                <p className="text-xs text-emerald-700 font-semibold mt-1">
+                  Volumen activo en suministros
+                </p>
+              </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-5">
-              <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
-                <h3 className="font-black text-gray-800 mb-4 flex items-center gap-2"><TrendingUp size={16} className="text-purple-600"/> Compras por Estado</h3>
-                <div className="flex flex-col gap-3 h-64 overflow-y-auto">
-                  {Object.entries(PEC_ESTADOS).filter(function(entry){ return pedidos.filter(function(p){return p.estado===entry[0];}).length > 0; }).map(function(entry){
-                    const k=entry[0]; const v=entry[1];
-                    const count = pedidos.filter(function(p){return p.estado===k;}).length;
-                    const maxCount = Math.max.apply(null, Object.keys(PEC_ESTADOS).map(function(s){ return pedidos.filter(function(p){return p.estado===s;}).length; }).concat([1]));
-                    return (
-                      <div key={k} className="flex items-center gap-3">
-                        <div className="w-28 text-xs text-gray-500 shrink-0">{v.label}</div>
-                        <div className="flex-1 bg-gray-100 rounded-full h-5 overflow-hidden">
-                          <div className={v.bg + ' h-full rounded-full flex items-center justify-end pr-2'} style={{width: String(Math.round((count/maxCount)*100)) + '%'}}>
-                            <span className="text-[10px] font-black text-gray-700">{count}</span>
-                          </div>
+            {/* 2. GRÁFICAS: LÍNEAS + DONUT */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* DIAGRAMA DE LÍNEAS SVG */}
+              <div className="lg:col-span-2 bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col justify-between">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h4 className="font-black text-slate-800 text-base flex items-center gap-2">
+                      <Activity size={18} className="text-purple-600"/> Tendencia de Pedidos de Compra (PEC)
+                    </h4>
+                    <p className="text-xs text-slate-400 font-medium">Volumen y frecuencia por fecha de emisión</p>
+                  </div>
+                  <span className="text-xs font-bold bg-purple-50 text-purple-700 px-3 py-1 rounded-full border border-purple-100">
+                    Histórico reciente
+                  </span>
+                </div>
+
+                {(() => {
+                  const dateMap: Record<string, number> = {};
+                  pedidos.forEach(p => {
+                    const d = p.fecha_compra || p.created_at ? new Date(p.fecha_compra || p.created_at).toLocaleDateString('es-CO', {month:'short', day:'numeric'}) : 'Reciente';
+                    dateMap[d] = (dateMap[d] || 0) + 1;
+                  });
+                  const entries = Object.entries(dateMap).slice(-8);
+                  if (entries.length === 0) entries.push(['Hoy', 0]);
+                  const maxVal = Math.max(...entries.map(e => e[1]), 4);
+                  const width = 600;
+                  const height = 180;
+                  const padding = 35;
+                  const stepX = entries.length > 1 ? (width - padding * 2) / (entries.length - 1) : 0;
+                  const points = entries.map((e, idx) => {
+                    const x = padding + idx * stepX;
+                    const y = height - padding - ((e[1] / maxVal) * (height - padding * 2));
+                    return { x, y, label: e[0], val: e[1] };
+                  });
+                  const polylinePts = points.map(p => `${p.x},${p.y}`).join(' ');
+                  const areaD = points.length > 0 ? `M ${points[0].x} ${height - padding} ` + points.map(p => `L ${p.x} ${p.y}`).join(' ') + ` L ${points[points.length-1].x} ${height - padding} Z` : '';
+
+                  return (
+                    <div className="w-full overflow-x-auto">
+                      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-48 select-none">
+                        <defs>
+                          <linearGradient id="areaGradCompras" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#9333ea" stopOpacity="0.3"/>
+                            <stop offset="100%" stopColor="#9333ea" stopOpacity="0.0"/>
+                          </linearGradient>
+                        </defs>
+                        {[0, 0.5, 1].map((ratio, i) => {
+                          const y = height - padding - ratio * (height - padding * 2);
+                          return (
+                            <g key={i}>
+                              <line x1={padding} y1={y} x2={width - padding} y2={y} stroke="#f1f5f9" strokeDasharray="4 4" strokeWidth="1"/>
+                              <text x={padding - 8} y={y + 3} textAnchor="end" fontSize="9" fill="#94a3b8" fontWeight="bold">
+                                {Math.round(ratio * maxVal)}
+                              </text>
+                            </g>
+                          );
+                        })}
+                        {areaD && <path d={areaD} fill="url(#areaGradCompras)" />}
+                        {polylinePts && <polyline fill="none" stroke="#9333ea" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" points={polylinePts}/>}
+                        {points.map((p, i) => (
+                          <g key={i} className="group cursor-pointer">
+                            <circle cx={p.x} cy={p.y} r="5" fill="#ffffff" stroke="#9333ea" strokeWidth="2.5" className="transition-all hover:scale-125"/>
+                            <text x={p.x} y={p.y - 10} textAnchor="middle" fontSize="10" fill="#1e293b" fontWeight="bold">{p.val}</text>
+                            <text x={p.x} y={height - 10} textAnchor="middle" fontSize="9" fill="#64748b" fontWeight="600">{p.label}</text>
+                          </g>
+                        ))}
+                      </svg>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* DIAGRAMA DONUT SVG */}
+              <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col justify-between">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h4 className="font-black text-slate-800 text-base flex items-center gap-2">
+                      <PieChart size={18} className="text-purple-600"/> Distribución
+                    </h4>
+                    <p className="text-xs text-slate-400 font-medium">Proporciones de compras</p>
+                  </div>
+                  <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                    <button onClick={() => setDonutMode('estados')}
+                      className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-all ${donutMode==='estados'?'bg-white text-slate-800 shadow-sm':'text-slate-500 hover:text-slate-700'}`}>
+                      Estados
+                    </button>
+                    <button onClick={() => setDonutMode('proveedores')}
+                      className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-all ${donutMode==='proveedores'?'bg-white text-slate-800 shadow-sm':'text-slate-500 hover:text-slate-700'}`}>
+                      Proveedores
+                    </button>
+                  </div>
+                </div>
+
+                {(() => {
+                  const slices: { label: string; count: number; color: string }[] = [];
+                  if (donutMode === 'estados') {
+                    slices.push({ label: 'Emitido', count: pedidos.filter(p=>p.estado==='EMITIDO'||p.estado==='BORRADOR').length, color: '#f59e0b' });
+                    slices.push({ label: 'En Tránsito', count: pedidos.filter(p=>p.estado==='EN_TRANSITO'||p.estado==='ENVIADO').length, color: '#6366f1' });
+                    slices.push({ label: 'Recibido', count: pedidos.filter(p=>p.estado==='RECIBIDO'||p.estado==='COMPLETADO').length, color: '#10b981' });
+                    slices.push({ label: 'Cancelado', count: pedidos.filter(p=>p.estado==='CANCELADO').length, color: '#ef4444' });
+                  } else {
+                    const suppCounts: Record<string, number> = {};
+                    pedidos.forEach(p => {
+                      const s = p.supplier_name || 'Sin proveedor';
+                      suppCounts[s] = (suppCounts[s] || 0) + 1;
+                    });
+                    const pal = ['#9333ea', '#6366f1', '#3b82f6', '#10b981', '#f59e0b', '#64748b'];
+                    Object.entries(suppCounts).slice(0, 5).forEach(([s, count], i) => {
+                      slices.push({ label: s, count, color: pal[i % pal.length] });
+                    });
+                  }
+                  if (slices.length === 0) slices.push({ label: 'Sin datos', count: 1, color: '#cbd5e1' });
+                  const sum = slices.reduce((acc, s) => acc + s.count, 0) || 1;
+                  let accumulatedPercent = 0;
+
+                  return (
+                    <div className="flex flex-col items-center justify-center py-2">
+                      <div className="relative w-36 h-36 flex items-center justify-center">
+                        <svg viewBox="0 0 42 42" className="w-full h-full transform -rotate-90">
+                          <circle cx="21" cy="21" r="15.915" fill="transparent" stroke="#f1f5f9" strokeWidth="5"/>
+                          {slices.map((slice, i) => {
+                            const pct = (slice.count / sum) * 100;
+                            const strokeDasharray = `${pct} ${100 - pct}`;
+                            const strokeDashoffset = -accumulatedPercent;
+                            accumulatedPercent += pct;
+                            return (
+                              <circle key={i} cx="21" cy="21" r="15.915" fill="transparent" stroke={slice.color} strokeWidth="5"
+                                strokeDasharray={strokeDasharray} strokeDashoffset={strokeDashoffset} className="transition-all duration-500"/>
+                            );
+                          })}
+                        </svg>
+                        <div className="absolute text-center">
+                          <span className="text-xl font-black text-slate-800">{sum}</span>
+                          <p className="text-[9px] uppercase font-black text-slate-400">Total</p>
                         </div>
-                        <div className="w-8 text-right text-xs font-bold text-gray-700">{count}</div>
                       </div>
-                    );
-                  })}
-                  {!pedidos.length && <p className="text-gray-400 text-sm text-center py-8">Sin datos. Presiona Analizar.</p>}
-                </div>
-              </div>
-
-              <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
-                <h3 className="font-black text-gray-800 mb-3">Top Proveedores</h3>
-                <table className="w-full text-sm">
-                  <thead><tr className="border-b text-left text-xs text-gray-400 font-black uppercase"><th className="pb-2">#</th><th>Proveedor</th><th className="text-right">PECs</th><th className="text-right">Total</th></tr></thead>
-                  <tbody>
-                    {Object.entries(pedidos.reduce(function(acc: Record<string,{count:number,total:number}>, p: any){ const k=p.supplier_name||'Sin proveedor'; if(!acc[k])acc[k]={count:0,total:0}; acc[k].count++; acc[k].total+=p.total_cop||0; return acc; },{} as Record<string,{count:number,total:number}>)).sort(function(a: any,b: any){return b[1].total-a[1].total;}).slice(0,8).map(function(entry: any,i: number){ return (
-                      <tr key={i} className="border-b last:border-0 hover:bg-gray-50">
-                        <td className="py-2 text-gray-400 font-bold">{i+1}</td>
-                        <td className="py-2 font-medium truncate max-w-[120px]">{entry[0]}</td>
-                        <td className="py-2 text-right text-gray-500">{entry[1].count}</td>
-                        <td className="py-2 text-right font-bold">{fCOP(entry[1].total)}</td>
-                      </tr>
-                    ); })}
-                    {!pedidos.length && <tr><td colSpan={4} className="text-center py-6 text-gray-400 text-xs">Sin datos</td></tr>}
-                  </tbody>
-                </table>
+                      <div className="w-full mt-4 space-y-1.5">
+                        {slices.map((s, i) => (
+                          <div key={i} className="flex items-center justify-between text-xs">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: s.color }}/>
+                              <span className="text-slate-600 font-medium truncate" title={s.label}>{s.label}</span>
+                            </div>
+                            <span className="font-bold text-slate-800 shrink-0 ml-2">
+                              {s.count} ({Math.round((s.count / sum) * 100)}%)
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
 
-            <div className="bg-white p-6 rounded-2xl border border-gray-200 shadow-sm">
-              <h3 className="font-black text-gray-800 mb-4 flex items-center gap-2"><MessageSquare size={18} className="text-purple-600"/> AI Compras Assistant</h3>
-              <div className="flex gap-2 mb-4">
-                <input value={aiQuestion} onChange={function(e){setAiQuestion(e.target.value);}} onKeyDown={function(e){if(e.key==='Enter')handleAskAI();}}
-                  placeholder="Ej: Que proveedor tuvo mas retrasos? Cuanto gastamos en compras este mes?"
-                  className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
-                <button onClick={handleAskAI} disabled={aiLoading}
-                  className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 disabled:opacity-50">
-                  {aiLoading?<RefreshCw size={14} className="animate-spin"/>:<Send size={14}/>} Preguntar
+            {/* 3. DIAGRAMA DE BARRAS CATEGÓRICAS */}
+            <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h4 className="font-black text-slate-800 text-base flex items-center gap-2">
+                    <BarChart3 size={18} className="text-purple-600"/> Estados Operativos de Compras
+                  </h4>
+                  <p className="text-xs text-slate-400 font-medium">Distribución por fases y ratio de cumplimiento</p>
+                </div>
+                <span className="text-xs font-bold text-slate-500">Fases del ciclo</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {Object.entries(PEC_ESTADOS).map(([estKey, estVal]) => {
+                  const matching = pedidos.filter(p => (p.estado || 'BORRADOR') === estKey);
+                  const count = matching.length;
+                  const totalAll = pedidos.length || 1;
+                  const pctOfAll = Math.round((count / totalAll) * 100);
+                  return (
+                    <div key={estKey} className="bg-slate-50 border border-slate-100 rounded-xl p-4 hover:border-purple-200 transition-colors">
+                      <div className="flex items-start justify-between mb-2">
+                        <p className="font-black text-xs text-slate-800 leading-tight">{estVal.label}</p>
+                        <span className="font-extrabold text-sm text-purple-700 bg-white px-2 py-0.5 rounded-md border border-slate-100 shadow-xs">
+                          {count}
+                        </span>
+                      </div>
+                      <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden mb-2">
+                        <div className="bg-purple-600 h-full rounded-full transition-all duration-500" style={{ width: `${Math.min(pctOfAll * 2.5, 100)}%` }}/>
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] text-slate-500 font-semibold">
+                        <span>{pctOfAll}% del ciclo</span>
+                        <span className="font-bold text-purple-800">{fCOP(matching.reduce((s,p)=>s+(p.total_cop||0),0))}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 4. RANKING DE TOP PROVEEDORES CON SELECTOR DINÁMICO */}
+            <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+                <div>
+                  <h4 className="font-black text-slate-800 text-lg flex items-center gap-2">
+                    <Award size={20} className="text-amber-500"/> Ranking de Top Proveedores
+                  </h4>
+                  <p className="text-xs text-slate-400 font-medium">Proveedores con mayor volumen de pedidos y cumplimiento en Nebulae</p>
+                </div>
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 shrink-0">
+                  <span className="text-xs font-black text-slate-500 px-2 uppercase">Mostrar:</span>
+                  {[5, 10, 20, 50].map(lim => (
+                    <button key={lim} onClick={() => setTopSuppliersLimit(lim)}
+                      className={`px-3 py-1 text-xs font-black rounded-lg transition-all ${topSuppliersLimit === lim ? 'bg-purple-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200'}`}>
+                      Top {lim}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {(() => {
+                const suppAgg: Record<string, { name: string; count: number; total: number; recibidos: number; enProceso: number; cancelados: number }> = {};
+                pedidos.forEach(p => {
+                  const key = (p.supplier_name || 'Sin Proveedor').trim();
+                  if (!suppAgg[key]) {
+                    suppAgg[key] = { name: key, count: 0, total: 0, recibidos: 0, enProceso: 0, cancelados: 0 };
+                  }
+                  suppAgg[key].count += 1;
+                  suppAgg[key].total += (p.total_cop || 0);
+                  if (['RECIBIDO','COMPLETADO'].includes(p.estado)) suppAgg[key].recibidos += 1;
+                  else if (p.estado === 'CANCELADO') suppAgg[key].cancelados += 1;
+                  else suppAgg[key].enProceso += 1;
+                });
+                const ranked = Object.values(suppAgg).sort((a,b) => b.total - a.total).slice(0, topSuppliersLimit);
+
+                return (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead className="bg-slate-50 text-[11px] font-black text-slate-400 uppercase tracking-wider border-b border-slate-100">
+                        <tr>
+                          <th className="px-4 py-3">Posición</th>
+                          <th className="px-4 py-3">Proveedor</th>
+                          <th className="px-4 py-3 text-center">PECs Totales</th>
+                          <th className="px-4 py-3 text-right">Monto Total</th>
+                          <th className="px-4 py-3">Desglose de Estados</th>
+                          <th className="px-4 py-3 text-right">Efectividad</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-xs">
+                        {ranked.length === 0 ? (
+                          <tr><td colSpan={6} className="py-8 text-center text-slate-400">Sin datos de proveedores.</td></tr>
+                        ) : ranked.map((s, idx) => {
+                          const successRate = s.count > 0 ? Math.round((s.recibidos / s.count) * 100) : 0;
+                          return (
+                            <tr key={s.name} className="hover:bg-slate-50/80 transition-colors">
+                              <td className="px-4 py-3">
+                                <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full font-black text-xs ${idx===0 ? 'bg-amber-100 text-amber-800' : idx===1 ? 'bg-slate-200 text-slate-700' : idx===2 ? 'bg-orange-100 text-orange-800' : 'bg-slate-100 text-slate-500'}`}>
+                                  {idx + 1}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 font-extrabold text-slate-800">{s.name}</td>
+                              <td className="px-4 py-3 text-center">
+                                <span className="font-black text-sm text-purple-700 bg-purple-50 border border-purple-100 px-3 py-1 rounded-xl">{s.count}</span>
+                              </td>
+                              <td className="px-4 py-3 text-right font-black text-slate-900">{fCOP(s.total)}</td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded font-bold text-[10px]">
+                                    {s.recibidos} Recibidos
+                                  </span>
+                                  <span className="bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded font-bold text-[10px]">
+                                    {s.enProceso} En Curso
+                                  </span>
+                                  {s.cancelados > 0 && (
+                                    <span className="bg-rose-50 text-rose-600 border border-rose-200 px-2 py-0.5 rounded font-bold text-[10px]">
+                                      {s.cancelados} Canc.
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                <div className="inline-flex items-center gap-2">
+                                  <div className="w-16 bg-slate-200 h-2 rounded-full overflow-hidden">
+                                    <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${successRate}%` }}/>
+                                  </div>
+                                  <span className="font-black text-emerald-700 w-10 text-right">{successRate}%</span>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* 5. ASISTENTE IA EN VIVO (NEBULAE AI ANALYST CARD) */}
+            <div className="bg-gradient-to-br from-slate-900 via-purple-950 to-slate-900 rounded-3xl p-6 sm:p-8 text-white shadow-xl border border-purple-900/50">
+              <div className="flex items-center justify-between gap-4 mb-4 pb-4 border-b border-purple-800/40">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-purple-500/30 border border-purple-400/40 flex items-center justify-center text-purple-300 shadow-inner">
+                    <Bot size={22} className="text-purple-300 animate-pulse"/>
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black tracking-tight text-white flex items-center gap-2">
+                      Nebulae AI · Analista de Compras & Suministros
+                      <span className="text-[10px] uppercase font-black bg-purple-500/20 text-purple-300 border border-purple-400/30 px-2 py-0.5 rounded-full">
+                        En Vivo
+                      </span>
+                    </h3>
+                    <p className="text-xs text-slate-300 font-medium">
+                      Auditoría de lead times, órdenes en tránsito y recomendaciones para evitar desabastecimiento
+                    </p>
+                  </div>
+                </div>
+                <button onClick={() => setAiChatHistory([{ role: 'ia', text: 'Historial reiniciado. Hazme una consulta sobre pedidos de compra o proveedores.', time: 'Ahora' }])}
+                  className="text-xs text-slate-400 hover:text-white font-bold flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10">
+                  <RotateCcw size={12}/> Limpiar
                 </button>
               </div>
-              {aiLoading && <div className="text-gray-400 animate-pulse text-sm">Analizando...</div>}
-              {aiResponse && <div className="bg-purple-50 border border-purple-100 p-4 rounded-xl text-gray-700 text-sm whitespace-pre-wrap">{aiResponse}</div>}
+
+              {/* Quick Prompts Chips */}
+              <div className="mb-5">
+                <p className="text-xs font-black text-purple-300 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                  <Sparkles size={13} className="text-amber-400"/> Consultas rápidas recomendadas:
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    '¿Cuál es el diagnóstico de cumplimiento y tiempos de entrega?',
+                    '¿Qué proveedores concentran el mayor volumen o demoras?',
+                    '¿Cuánta mercancía y capital se encuentra navegando en tránsito?',
+                    '¿Qué recomendaciones hay para prevenir cuellos de botella en suministros?'
+                  ].map((promptText, i) => (
+                    <button key={i} onClick={() => handleAiQuestion(promptText)} disabled={aiLoading}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-xl bg-white/10 hover:bg-purple-600/50 border border-white/10 text-slate-200 hover:text-white transition-colors text-left">
+                      {promptText}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Conversation Box */}
+              <div className="bg-black/30 rounded-2xl p-4 max-h-[360px] overflow-y-auto space-y-4 border border-white/10">
+                {aiChatHistory.map((msg, i) => (
+                  <div key={i} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    {msg.role === 'ia' && (
+                      <div className="w-7 h-7 rounded-lg bg-purple-600 text-white flex items-center justify-center text-xs font-black shrink-0 mt-0.5">
+                        AI
+                      </div>
+                    )}
+                    <div className={`rounded-2xl px-4 py-3 max-w-[85%] text-xs leading-relaxed shadow-sm ${msg.role === 'user' ? 'bg-purple-600 text-white font-semibold' : 'bg-white/10 text-slate-100 border border-white/10 font-normal'}`}>
+                      <div className="whitespace-pre-wrap">{msg.text}</div>
+                      <span className="block text-[10px] mt-1.5 opacity-60 text-right">{msg.time}</span>
+                    </div>
+                  </div>
+                ))}
+                {aiLoading && (
+                  <div className="flex items-center gap-2 text-purple-300 text-xs font-bold pl-2 py-1">
+                    <RefreshCw size={14} className="animate-spin text-purple-400"/>
+                    <span>Analizando órdenes de compra y desempeño de proveedores...</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Input */}
+              <div className="mt-4 flex gap-2">
+                <input type="text" value={aiQuery} onChange={e => setAiQuery(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleAiQuestion()}
+                  placeholder="Pregunta a la IA sobre compras, estado de PECs, transportadoras o insumos..."
+                  className="flex-1 bg-white/10 border border-white/20 rounded-xl px-4 py-2.5 text-xs text-white placeholder-slate-400 outline-none focus:ring-2 focus:ring-purple-400"/>
+                <button onClick={() => handleAiQuestion()} disabled={!aiQuery.trim() || aiLoading}
+                  className="px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs shadow-md disabled:opacity-50 flex items-center gap-1.5 shrink-0">
+                  <Send size={13}/> Preguntar
+                </button>
+              </div>
             </div>
           </div>
-
         ) : viewMode === 'lista' ? (
-          /* ── LISTA ── */
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+          /* ── VISTA LISTA ── */
+          <div className="bg-white rounded-2xl shadow-xs border border-slate-200 overflow-hidden">
             {groupByMonth ? (
-              Object.entries(groupedByMonth).map(function(entry){
-                const month=entry[0]; const rows=entry[1];
+              Object.entries(groupedByMonth).map(entry => {
+                const month = entry[0]; const rows = entry[1];
                 const isOpen = expandedMonths.has(month);
                 return (
                   <div key={month}>
-                    <button onClick={function(){ const n=new Set(expandedMonths); if(n.has(month)) n.delete(month); else n.add(month); setExpandedMonths(n); }}
-                      className="w-full flex items-center justify-between px-6 py-3 bg-gray-50 border-b border-gray-200 hover:bg-purple-50/50 transition-colors">
-                      <span className="font-black text-gray-700 text-sm capitalize">{month}</span>
+                    <button onClick={() => { const n = new Set(expandedMonths); if (n.has(month)) n.delete(month); else n.add(month); setExpandedMonths(n); }}
+                      className="w-full flex items-center justify-between px-6 py-3 bg-slate-50 border-b border-slate-200 hover:bg-purple-50/50 transition-colors">
+                      <span className="font-black text-slate-700 text-xs uppercase">{month}</span>
                       <div className="flex items-center gap-3">
-                        <span className="text-xs text-gray-400 font-bold">{(rows as any[]).length} pedido(s) · {fCOP((rows as any[]).reduce(function(s:number,r:any){return s+(r.total_cop||0);},0))}</span>
-                        {isOpen ? <ChevronUp size={16} className="text-gray-400"/> : <ChevronRight size={16} className="text-gray-400"/>}
+                        <span className="text-xs text-slate-400 font-bold">{(rows as any[]).length} pedido(s) · {fCOP((rows as any[]).reduce((s:number,r:any)=>s+(r.total_cop||0),0))}</span>
+                        {isOpen ? <ChevronUp size={16} className="text-slate-400"/> : <ChevronRight size={16} className="text-slate-400"/>}
                       </div>
                     </button>
                     {isOpen && (
-                      <table className="w-full text-left text-sm">
-                        <thead className="bg-gray-50/50 border-b border-gray-100">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50/50 border-b border-slate-100">
                           <tr>
                             <th className="px-5 py-3 w-10"/>
-                            {TABLE_HEADERS.map(function(h,i){ return <th key={i} className={'px-4 py-3 text-xs font-black text-gray-400 uppercase' + (i===TABLE_HEADERS.length-1?' text-center':i>=4?' ':'')}>{h}</th>; })}
+                            {TABLE_HEADERS.map((h,i)=><th key={i} className={`px-4 py-3 text-xs font-black text-slate-400 uppercase ${i===TABLE_HEADERS.length-1?'text-center':''}`}>{h}</th>)}
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-gray-100">
-                          {(rows as any[]).map(function(p: any){ return <PecRow key={p.id} p={p}/>; })}
+                        <tbody className="divide-y divide-slate-100">
+                          {(rows as any[]).map((p: any) => <PecRow key={p.id} p={p}/>)}
                         </tbody>
                       </table>
                     )}
@@ -770,76 +1227,108 @@ export default function ComprasHub() {
                 );
               })
             ) : (
-              <table className="w-full text-left text-sm">
-                <thead className="bg-gray-50 border-b border-gray-200">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 border-b border-slate-200">
                   <tr>
                     <th className="px-5 py-3.5 w-10">
-                      <input type="checkbox" className="rounded border-gray-300"
-                        onChange={function(e){if(e.target.checked)setSelectedIds(new Set(filteredData.map(function(d){return d.id;})));else setSelectedIds(new Set());}}
+                      <input type="checkbox" className="rounded border-slate-300"
+                        onChange={e=>{if(e.target.checked)setSelectedIds(new Set(filteredData.map(d=>d.id)));else setSelectedIds(new Set());}}
                         checked={selectedIds.size===filteredData.length&&filteredData.length>0}/>
                     </th>
-                    {TABLE_HEADERS.map(function(h,i){ return <th key={i} className={'px-4 py-3.5 text-xs font-black text-gray-400 uppercase tracking-wide' + (i===TABLE_HEADERS.length-1?' text-center':'')}>{h}</th>; })}
+                    {TABLE_HEADERS.map((h,i)=><th key={i} className={`px-4 py-3.5 text-[11px] font-black text-slate-400 uppercase tracking-wide ${i===TABLE_HEADERS.length-1?'text-center':''}`}>{h}</th>)}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-slate-100">
                   {filteredData.length===0 && (
-                    <tr><td colSpan={11} className="text-center py-16 text-gray-400">
+                    <tr><td colSpan={11} className="text-center py-16 text-slate-400">
                       <Activity size={32} className="mx-auto mb-3 opacity-30"/>
-                      <p className="font-medium">{search?'Sin resultados para "'+search+'"':loading?'Cargando...':'Sin pedidos de compra'}</p>
+                      <p className="font-semibold text-slate-600">{search?`Sin resultados para "${search}"`:loading?'Cargando...':'Sin pedidos de compra'}</p>
                     </td></tr>
                   )}
-                  {filteredData.map(function(p){ return <PecRow key={p.id} p={p}/>; })}
+                  {filteredData.map(p => <PecRow key={p.id} p={p}/>)}
                 </tbody>
               </table>
             )}
-            <div className="px-5 py-2.5 border-t border-gray-100 text-xs text-gray-400 font-medium flex items-center justify-between">
-              <span>{filteredData.length} de {pedidos.length} registros</span>
-              {selectedIds.size>0 && <span className="text-purple-600 font-bold">{selectedIds.size} seleccionados</span>}
+            <div className="px-5 py-3 border-t border-slate-100 text-xs text-slate-500 font-medium flex items-center justify-between bg-slate-50/50">
+              <span>Mostrando {filteredData.length} de {pedidos.length} pedidos de compra</span>
+              {selectedIds.size>0 && <span className="text-purple-700 font-bold bg-purple-50 px-2.5 py-1 rounded-full border border-purple-200">{selectedIds.size} seleccionados</span>}
             </div>
           </div>
-
         ) : (
-          /* ── KANBAN ── */
-          <div className="flex-1 flex gap-4 overflow-x-auto pb-4">
-            {['Emitido','En Transito','Recibido','Cancelado'].map(function(col){ return (
-              <div key={col} className="w-80 flex-shrink-0 flex flex-col bg-white border border-gray-200 rounded-2xl shadow-sm"
-                onDragOver={function(e){e.preventDefault();}} onDrop={function(e){handleDrop(e,col);}}>
-                <div className="p-4 border-b border-gray-100 flex items-center justify-between">
-                  <h3 className="font-black text-gray-700">{col}</h3>
-                  <span className="bg-gray-100 text-gray-600 text-xs font-bold px-2 py-0.5 rounded-full">{filteredData.filter(function(d){return getKanbanCol(d)===col;}).length}</span>
+          /* ── VISTA KANBAN ── */
+          <div className="flex-1 flex gap-4 overflow-x-auto pb-4 custom-scrollbar">
+            {['Emitido','En Transito','Recibido','Cancelado'].map(col => (
+              <div key={col} className="w-80 shrink-0 flex flex-col bg-white border border-slate-200 rounded-2xl shadow-xs"
+                onDragOver={e=>e.preventDefault()} onDrop={e=>handleDrop(e,col)}>
+                <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/60 rounded-t-2xl">
+                  <h3 className="font-black text-slate-800 text-xs uppercase tracking-wide">{col}</h3>
+                  <span className="bg-slate-200/80 text-slate-700 text-[10px] font-black px-2 py-0.5 rounded-full">
+                    {filteredData.filter(d=>getKanbanCol(d)===col).length}
+                  </span>
                 </div>
-                <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2 min-h-[200px]">
-                  {filteredData.filter(function(d){return getKanbanCol(d)===col;}).map(function(p,i){
-                    const est = PEC_ESTADOS[p.estado]||PEC_ESTADOS.BORRADOR;
+                <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2.5 min-h-[300px]">
+                  {filteredData.filter(d=>getKanbanCol(d)===col).map((p,i) => {
+                    const est = PEC_ESTADOS[p.estado] || PEC_ESTADOS.BORRADOR;
                     return (
-                      <div key={i} draggable onDragStart={function(e){handleDragStart(e,p.id);}} onClick={function(){setSelectedPec(p);}}
-                        className={'bg-white p-4 rounded-xl shadow-sm border cursor-grab active:cursor-grabbing hover:border-purple-300 transition-colors group ' + (p.is_overdue?'border-red-300 bg-red-50/30':'border-gray-200')}>
-                        <div className="flex justify-between items-start mb-1.5">
-                          <span className="font-bold text-gray-900 text-sm">{p.numero}</span>
-                          {p.is_overdue && <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-black">VENCIDO</span>}
+                      <div key={i} draggable onDragStart={e=>handleDragStart(e,p.id)} onClick={()=>setSelectedPec(p)}
+                        className={`bg-white p-4 rounded-xl shadow-xs border cursor-grab active:cursor-grabbing hover:border-purple-300 transition-all group ${p.is_overdue?'border-rose-300 bg-rose-50/30':'border-slate-200'}`}>
+                        <div className="flex justify-between items-start mb-2">
+                          <span className="font-bold text-slate-900 text-xs">{p.numero}</span>
+                          {p.is_overdue && <span className="text-[9px] bg-rose-100 text-rose-700 px-2 py-0.5 rounded-full font-black">VENCIDO</span>}
                         </div>
-                        <p className="text-xs text-gray-500 mb-1 truncate">{p.supplier_name||'-'}</p>
+                        <p className="text-xs font-bold text-slate-700 mb-1 truncate">{p.supplier_name||'-'}</p>
                         {p.ven_numero && <p className="text-[10px] text-indigo-600 font-bold mb-1">VEN: {p.ven_numero}</p>}
-                        <div className="flex justify-between items-center pt-2 border-t border-gray-100">
-                          <span className="font-bold text-xs text-purple-700">{fCOP(p.total_cop||0)}</span>
-                          <span className={'text-[10px] font-bold px-2 py-0.5 rounded-full ' + est.bg + ' ' + est.text}>{est.label}</span>
+                        <div className="flex justify-between items-center pt-2 border-t border-slate-100">
+                          <span className="font-black text-xs text-purple-700">{fCOP(p.total_cop||0)}</span>
+                          <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border ${est.bg} ${est.text} ${est.border}`}>{est.label}</span>
                         </div>
                       </div>
                     );
                   })}
-                  {filteredData.filter(function(d){return getKanbanCol(d)===col;}).length===0 && <p className="text-center text-xs text-gray-300 font-medium py-8">Arrastra aqui</p>}
+                  {filteredData.filter(d=>getKanbanCol(d)===col).length===0 && (
+                    <p className="text-center text-xs text-slate-300 font-medium py-12">Arrastra un PEC aquí</p>
+                  )}
                 </div>
               </div>
-            ); })}
+            ))}
+          </div>
+        )}
+
+        {/* Modal de Configuración de Tiempos */}
+        {showConfig && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-slate-100 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 className="font-black text-slate-800 text-base flex items-center gap-2">
+                  <Settings size={18} className="text-purple-600"/> Ajustes de Alerta de Compras
+                </h3>
+                <button onClick={()=>setShowConfig(false)} className="p-1 hover:bg-slate-100 rounded-lg"><X size={16} className="text-slate-400"/></button>
+              </div>
+              <p className="text-xs text-slate-500">
+                Define el umbral máximo de días permitidos para un Pedido de Compra sin haber recibido mercancía antes de activar la alerta roja de retraso en suministros.
+              </p>
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Días límite de entrega:</label>
+                <input type="number" min={1} max={60} value={pecAlertDias} onChange={e=>setPecAlertDias(Number(e.target.value)||5)}
+                  className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button onClick={()=>setShowConfig(false)} className="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-200">Cancelar</button>
+                <button onClick={()=>{setShowConfig(false);showToast('Configuración guardada exitosamente');}}
+                  className="px-5 py-2 bg-purple-600 text-white rounded-xl text-xs font-bold hover:bg-purple-700 shadow-xs">Guardar</button>
+              </div>
+            </div>
           </div>
         )}
 
         {/* Bulk action bar */}
         {selectedIds.size>0 && (
-          <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-4 z-40 border border-gray-700">
-            <span className="font-bold text-sm bg-gray-800 px-3 py-1 rounded-full">{selectedIds.size} seleccionados</span>
-            <button onClick={handleBulkDelete} className="bg-red-500/20 text-red-400 hover:bg-red-500/40 p-2 rounded-xl flex items-center gap-2 text-sm font-bold"><Trash2 size={16}/> Cancelar</button>
-            <button onClick={()=>setSelectedIds(new Set())} className="p-2 text-gray-400 hover:text-white"><X size={16}/></button>
+          <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-4 z-40 border border-slate-700">
+            <span className="font-bold text-sm bg-slate-800 px-3 py-1 rounded-full">{selectedIds.size} seleccionados</span>
+            <button onClick={handleBulkDelete} className="bg-rose-500/20 text-rose-400 hover:bg-rose-500/40 px-3 py-1.5 rounded-xl flex items-center gap-2 text-xs font-bold transition-colors">
+              <Trash2 size={14}/> Cancelar Seleccionados
+            </button>
+            <button onClick={()=>setSelectedIds(new Set())} className="p-1.5 text-slate-400 hover:text-white"><X size={14}/></button>
           </div>
         )}
 

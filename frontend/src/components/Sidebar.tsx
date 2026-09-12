@@ -54,7 +54,7 @@ export function Sidebar() {
         ]
       },
       { 
-        name: 'Compras', 
+        name: 'HUB de Compras', 
         path: '/dashboard/compras', 
         icon: ShoppingBag,
         subItems: [
@@ -68,7 +68,7 @@ export function Sidebar() {
         ]
       },
       { 
-        name: 'Inventario', 
+        name: 'HUB de Inventario', 
         path: '/dashboard/inventario', 
         icon: Archive,
         subItems: [
