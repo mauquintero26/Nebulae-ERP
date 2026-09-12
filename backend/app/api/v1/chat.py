@@ -1072,3 +1072,131 @@ def list_omnichannel_interactions(
             "created_at": i.created_at.isoformat() if i.created_at else None,
         } for i in items]
     }
+
+
+# ─── POST /copilot/query — Asistente IA del ERP General ───────────────────────
+@router.post("/copilot/query", response_model=dict)
+def erp_copilot_query(
+    body: dict,
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *ROLE_FINANZAS)),
+    db: Session = Depends(get_db)
+):
+    """
+    Motor Copilot de IA para la Torre de Control y el ERP de Nebulae.
+    Integra métricas vivas de inventario, ventas, compras y clientes.
+    Usa LLM si hay API Key disponible o motor de inferencia operativo local.
+    """
+    prompt = (body.get("prompt") or body.get("question") or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt requerido")
+
+    # 1. Recolección de contexto vivo del ERP
+    total_customers = db.execute(text("SELECT COUNT(*) FROM customers")).scalar() or 0
+    total_products = db.execute(text("SELECT COUNT(*) FROM products")).scalar() or 0
+    
+    # Inventario
+    inv_res = db.execute(text("""
+        SELECT 
+            COALESCE(SUM(quantity_real), 0) as total_fisico,
+            COALESCE(SUM(quantity_reserved), 0) as total_reservado
+        FROM product_inventory
+    """)).mappings().first()
+    fisico = float(inv_res["total_fisico"]) if inv_res else 0.0
+    reservado = float(inv_res["total_reservado"]) if inv_res else 0.0
+    disponible = max(0.0, fisico - reservado)
+
+    # Compras en transito
+    transito_pecs = db.execute(text("""
+        SELECT numero, estado, total_cop, fecha_pedido
+        FROM purchase_orders_full
+        WHERE estado IN ('EN_TRANSITO', 'PENDIENTE_ENVIO', 'EN_PUERTO')
+        ORDER BY fecha_pedido DESC LIMIT 5
+    """)).mappings().all()
+
+    # Pedidos de venta recientes
+    recent_pvens = db.execute(text("""
+        SELECT numero, customer_name, estado, total_cop, anticipo_cop
+        FROM sale_orders
+        ORDER BY created_at DESC LIMIT 5
+    """)).mappings().all()
+
+    # Saldos pendientes
+    saldo_total = db.execute(text("""
+        SELECT COALESCE(SUM(monto_pendiente), 0) FROM payment_pendings WHERE estado = 'PENDIENTE'
+    """)).scalar() or 0
+
+    metrics = {
+        "clientes": total_customers,
+        "productos": total_products,
+        "stock_fisico": fisico,
+        "stock_comprometido": reservado,
+        "stock_disponible": disponible,
+        "pecs_en_transito": len(transito_pecs),
+        "saldo_pendiente_cop": float(saldo_total),
+    }
+
+    # Contexto para el LLM
+    context_text = f"""
+    Contexto en tiempo real del ERP Nebulae:
+    - Clientes registrados: {total_customers}
+    - Catálogo de productos: {total_products} items
+    - Flujo de Inventario:
+      * Físico en bodega: {fisico:,.0f} unidades
+      * Comprometido en preventa: {reservado:,.0f} unidades
+      * Disponible para venta inmediata: {disponible:,.0f} unidades
+    - Pedidos de compra en tránsito (PECs): {len(transito_pecs)}
+    - Cuentas por cobrar pendientes: ${float(saldo_total):,.0f} COP
+    """
+
+    # 2. Intento de llamada a LLM si existe API key
+    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    openai_key = os.environ.get("OPENAI_API_KEY")
+
+    if gemini_key:
+        try:
+            import urllib.request
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+            payload = {
+                "contents": [{
+                    "parts": [{
+                        "text": f"Eres el asistente inteligente oficial de Nebulae ERP Hub. Responde de forma ejecutiva, precisa y en español basándote en estos datos del sistema:\n{context_text}\nPregunta del usuario: {prompt}"
+                    }]
+                }]
+            }
+            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+                text_ans = result["candidates"][0]["content"]["parts"][0]["text"]
+                return {"status": "success", "data": {"answer": text_ans, "source": "gemini-1.5-flash", "metrics": metrics}}
+        except Exception:
+            pass
+
+    # 3. Motor analítico inteligente local si no hay LLM externo configurado
+    p_lower = prompt.lower()
+    if any(k in p_lower for k in ["inventario", "stock", "bodega", "disponible", "cuanto hay"]):
+        answer = (
+            f"📦 **Estado Actual del Inventario:**\n"
+            f"- **Físico en Bodega:** {fisico:,.0f} unidades.\n"
+            f"- **Comprometido (con anticipo pagado):** {reservado:,.0f} unidades reservadas para pedidos de venta.\n"
+            f"- **Venta Inmediata (Libre):** {disponible:,.0f} unidades disponibles en este instante.\n"
+            f"- **En Tránsito:** {len(transito_pecs)} pedidos de compra (PECs) activos camino a almacén."
+        )
+    elif any(k in p_lower for k in ["transito", "aduana", "pec", "compras", "importacion", "pedido de compra"]):
+        if transito_pecs:
+            pec_list = ", ".join([f"{p['numero']} ({p['estado']})" for p in transito_pecs])
+            answer = f"🚢 **Tránsito de Compras:** Hay {len(transito_pecs)} PECs en movimiento: {pec_list}. Una vez recepcionados por Bodega, alimentarán el stock físico y desbloquearán las entregas de venta pendientes."
+        else:
+            answer = "🚢 **Tránsito de Compras:** No hay pedidos de compra en aduana o puerto actualmente. Todos los despachos anteriores han sido completados o están en preparación de orden."
+    elif any(k in p_lower for k in ["cartera", "cobrar", "saldo", "deuda", "financiero", "dinero", "anticipo"]):
+        answer = f"💰 **Resumen Financiero:** El saldo pendiente por cobrar a clientes asciende a **${float(saldo_total):,.0f} COP**. Recuerda que las entregas solo se programan cuando el pedido cuenta con al menos el anticipo registrado."
+    elif any(k in p_lower for k in ["ventas", "pedidos", "clientes", "pven"]):
+        answer = f"👥 **Comercial & Clientes:** Tenemos **{total_customers} clientes** en base de datos. Los últimos pedidos de venta registrados están procesándose en el embudo de ventas y cotizaciones."
+    else:
+        answer = (
+            f"🧠 **Brief Operativo Nebulae:**\n"
+            f"Actualmente tienes **{total_products} productos** en catálogo con **{disponible:,.0f} unidades libres** para venta inmediata y **{reservado:,.0f} unidades comprometidas**. "
+            f"Cartera pendiente: **${float(saldo_total):,.0f} COP**. "
+            f"¿En qué área operativa específica deseas profundizar (Inventario, Tránsito PEC, Ventas o Cartera)?"
+        )
+
+    return {"status": "success", "data": {"answer": answer, "source": "nebulae-kernel-ai", "metrics": metrics}}

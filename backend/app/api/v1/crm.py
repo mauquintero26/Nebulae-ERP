@@ -217,24 +217,54 @@ def update_customer(customer_id: int, customer: CustomerUpdate, user: User = Dep
 
 
 @router.delete("/customers/{customer_id}", response_model=dict)
-def delete_customer(customer_id: int, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
+def delete_customer(customer_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     db_customer = db.query(Customer).filter(Customer.id == customer_id).first()
     if not db_customer:
         raise HTTPException(status_code=404, detail="Customer not found")
     try:
-        # Remove linked sales orders first to avoid FK constraint violations
+        from app.models.erp_documents import CustomerRequest, SalesQuotation, SaleOrder as ErpSaleOrder, PaymentPending
+        from app.models.fase4 import SaleOrderReturn, SaleOrderDelivery, SalePackingSession
+        from app.models.fase5 import CustomerAgendaActivity, OmnichannelInteraction, CustomerContactPreference
+        from app.models.crm import CustomerAddress, Lead, CRMEvent
+
+        # 1. Unlink ERP document foreign keys
+        db.query(CustomerRequest).filter(CustomerRequest.customer_id == customer_id).update({"customer_id": None})
+        db.query(SalesQuotation).filter(SalesQuotation.customer_id == customer_id).update({"customer_id": None})
+        db.query(ErpSaleOrder).filter(ErpSaleOrder.customer_id == customer_id).update({"customer_id": None})
+        db.query(PaymentPending).filter(PaymentPending.customer_id == customer_id).update({"customer_id": None})
+
+        # 2. Despachos y empaques fase4 vinculados al cliente
+        db.query(SaleOrderReturn).filter(SaleOrderReturn.customer_id == customer_id).delete(synchronize_session=False)
+        deliveries = db.query(SaleOrderDelivery).filter(SaleOrderDelivery.customer_id == customer_id).all()
+        for d in deliveries:
+            db.delete(d)
+        packing_sessions = db.query(SalePackingSession).filter(SalePackingSession.customer_id == customer_id).all()
+        for p in packing_sessions:
+            db.delete(p)
+
+        # 3. Fase 5 (Agenda, omnicanal, preferencias)
+        db.query(CustomerAgendaActivity).filter(CustomerAgendaActivity.customer_id == customer_id).delete(synchronize_session=False)
+        db.query(OmnichannelInteraction).filter(OmnichannelInteraction.customer_id == customer_id).update({"customer_id": None})
+        db.query(CustomerContactPreference).filter(CustomerContactPreference.customer_id == customer_id).delete(synchronize_session=False)
+
+        # 4. CRM addresses, events, leads
+        db.query(CustomerAddress).filter(CustomerAddress.customer_id == customer_id).delete(synchronize_session=False)
+        db.query(CRMEvent).filter(CRMEvent.customer_id == customer_id).delete(synchronize_session=False)
+        db.query(Lead).filter(Lead.customer_id == customer_id).update({"customer_id": None})
+
+        # 5. Remove linked sales orders & quotations
         for order in db_customer.sales_orders:
             for line in order.lines:
                 db.delete(line)
             db.delete(order)
-        # Remove linked quotations
         for q in db_customer.quotations:
             db.delete(q)
+
         db.delete(db_customer)
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail=f"No se puede eliminar: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"No se pudo eliminar el cliente: {str(e)}")
     return {"status": "success", "data": {"message": "Cliente eliminado correctamente."}}
 
 

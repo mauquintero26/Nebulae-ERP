@@ -273,6 +273,21 @@ def update_supplier(supplier_id: int, body: dict, user: User = Depends(require_r
     db.refresh(s)
     return {"status": "success", "data": _supplier_dict(s)}
 
+
+@router.delete("/proveedores/{supplier_id}")
+def delete_supplier(
+    supplier_id: int,
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
+    db: Session = Depends(get_db),
+):
+    s = db.query(Supplier).filter(Supplier.id == supplier_id).first()
+    if not s:
+        raise HTTPException(404, "Proveedor no encontrado")
+    db.delete(s)
+    db.commit()
+    return {"status": "success", "message": "Proveedor eliminado correctamente"}
+
+
 # ─── PEDIDOS DE COMPRA (PEC) ─────────────────────────────────────────────────
 
 

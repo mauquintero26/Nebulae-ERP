@@ -1,14 +1,18 @@
 "use client";
 
 import { useState, useEffect } from 'react';
-import { getCustomers, createCustomer, updateCustomer, deleteCustomer, createClienteSolicitud, getSolicitudTipos, getHeaders, API_URL } from '@/lib/api';
+import {
+  getCustomers, createCustomer, updateCustomer, deleteCustomer,
+  createClienteSolicitud, getSolicitudTipos, getHeaders, API_URL, apiFetch
+} from '@/lib/api';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
 import {
   Search, Plus, Calendar, MessageSquare, Settings,
   User, DollarSign, ShoppingBag, MapPin, Activity,
   Phone, Mail, X, ArrowRight, Trash2, CheckCircle2, ExternalLink,
-  MessageCircle, Clock, AlertTriangle, ChevronRight, FileText
+  MessageCircle, Clock, AlertTriangle, ChevronRight, FileText,
+  Truck, Building2, Globe, Edit2, ShieldAlert
 } from 'lucide-react';
 
 function timeAgo(isoString: string) {
@@ -54,10 +58,15 @@ const TIMELINE_DOT_COLOR: Record<string, string> = {
 };
 
 export default function AgendaPage() {
+  // ─── PESTAÑA PRINCIPAL (Clientes vs Proveedores) ───────────────────────────
+  const [mainTab, setMainTab] = useState<'clientes' | 'proveedores'>('clientes');
+
+  // ─── ESTADOS DE CLIENTES ───────────────────────────────────────────────────
   const [selectedClient, setSelectedClient] = useState<any | null>(null);
   const [activeTab, setActiveTab] = useState('Información y Ficha');
   const [entityType, setEntityType] = useState('Individuo');
   const [showModal, setShowModal] = useState<string | null>(null);
+  const [deleteConfirmClient, setDeleteConfirmClient] = useState<any | null>(null);
   const [customers, setCustomers] = useState<any[]>([]);
   const [formData, setFormData] = useState<any>({});
   const [solicitudForm, setSolicitudForm] = useState<any>({ sale_type: 'ON_DEMAND', tipo: 'Solicitud de Cotización', producto: '', detalles: '' });
@@ -75,6 +84,28 @@ export default function AgendaPage() {
     start_datetime: '', end_datetime: '', location: '', notes: '',
   });
 
+  // ─── ESTADOS DE PROVEEDORES ───────────────────────────────────────────────
+  const [suppliers, setSuppliers] = useState<any[]>([]);
+  const [selectedSupplier, setSelectedSupplier] = useState<any | null>(null);
+  const [loadingSuppliers, setLoadingSuppliers] = useState(false);
+  const [supplierSearch, setSupplierSearch] = useState('');
+  const [supplierPecs, setSupplierPecs] = useState<any[]>([]);
+  const [supplierModal, setSupplierModal] = useState<'NEW' | 'EDIT' | null>(null);
+  const [deleteConfirmSupplier, setDeleteConfirmSupplier] = useState<any | null>(null);
+  const [supplierForm, setSupplierForm] = useState({
+    nombre: '',
+    contacto_nombre: '',
+    email: '',
+    telefono: '',
+    direccion: '',
+    ciudad: '',
+    pais: 'Colombia',
+    moneda_default: 'COP',
+    condiciones_pago: 'Contado',
+    tiempo_entrega_dias: 7,
+  });
+
+  // ─── CARGA DE CLIENTES ─────────────────────────────────────────────────────
   const fetchCustomers = async () => {
     try {
       const raw = await getCustomers();
@@ -113,8 +144,33 @@ export default function AgendaPage() {
     }
   };
 
+  // ─── CARGA DE PROVEEDORES ──────────────────────────────────────────────────
+  const fetchSuppliers = async () => {
+    setLoadingSuppliers(true);
+    try {
+      const res = await apiFetch('/compras/proveedores');
+      const list = res?.data || res || [];
+      setSuppliers(Array.isArray(list) ? list : []);
+    } catch (e) {
+      console.error('Error cargando proveedores', e);
+    } finally {
+      setLoadingSuppliers(false);
+    }
+  };
+
+  const openSupplier = async (sup: any) => {
+    setSelectedSupplier(sup);
+    try {
+      const res = await apiFetch(`/compras/pedidos?supplier_id=${sup.id}`);
+      setSupplierPecs(res?.data || res || []);
+    } catch {
+      setSupplierPecs([]);
+    }
+  };
+
   useEffect(() => {
     fetchCustomers();
+    fetchSuppliers();
     getSolicitudTipos().then(tipos => { if (tipos && tipos.length > 0) setSolicitudTipos(tipos); });
   }, []);
 
@@ -140,79 +196,88 @@ export default function AgendaPage() {
 
   const goBack = () => {
     setSelectedClient(null);
-    setFormData({});
     setCustomer360(null);
   };
 
-  const handleCreate = async () => {
-    if (!formData.first_name?.trim()) return toast.error('El nombre es obligatorio.');
-    setIsSaving(true);
-    const tid = toast.loading('Creando cliente...');
-    try {
-      await createCustomer({
-        first_name: formData.first_name.trim(),
-        last_name: formData.last_name?.trim() || 'N/A',
-        email: formData.email?.trim() || null,
-        phone: formData.phone?.trim() || null,
-        city: formData.city?.trim() || null,
-        document: formData.document?.trim() || null,
-        address: formData.address?.trim() || null,
-      });
-      toast.success('¡Cliente creado exitosamente!', { id: tid });
-      goBack();
-      fetchCustomers();
-    } catch (err: any) {
-      toast.error(err.message || 'Error al crear cliente', { id: tid });
-    } finally {
-      setIsSaving(false);
-    }
+  const goBackSupplier = () => {
+    setSelectedSupplier(null);
+    setSupplierPecs([]);
   };
 
-  const handleUpdate = async () => {
-    if (!selectedClient?.realId) return;
+  // ─── ACCIONES CLIENTES ─────────────────────────────────────────────────────
+  const handleSaveClient = async () => {
     setIsSaving(true);
-    const tid = toast.loading('Guardando cambios...');
+    const tid = toast.loading('Guardando cliente...');
     try {
-      const payload: any = {};
-      if (formData.first_name !== undefined) payload.first_name = formData.first_name?.trim() || selectedClient.first_name;
-      if (formData.last_name !== undefined) payload.last_name = formData.last_name?.trim() || selectedClient.last_name;
-      if (formData.email !== undefined) payload.email = formData.email?.trim() || null;
-      if (formData.phone !== undefined) payload.phone = formData.phone?.trim() || null;
-      if (formData.city !== undefined) payload.city = formData.city?.trim() || null;
-      if (formData.document !== undefined) payload.document = formData.document?.trim() || null;
-      if (formData.address !== undefined) payload.address = formData.address?.trim() || null;
+      if (selectedClient === 'NEW') {
+        if (!formData.first_name && !formData.last_name) {
+          toast.error('Nombre o apellido requerido', { id: tid });
+          setIsSaving(false);
+          return;
+        }
+        const created = await createCustomer({
+          first_name: formData.first_name || '',
+          last_name: formData.last_name || '',
+          email: formData.email || '',
+          phone: formData.phone || '',
+          document: formData.document || '',
+          address: formData.address || '',
+          city: formData.city || '',
+        });
+        toast.success('Cliente creado con éxito', { id: tid });
+        await fetchCustomers();
+        if (created?.data?.id) {
+          openClient({
+            id: `CLI-${String(created.data.id).padStart(4, '0')}`,
+            realId: created.data.id,
+            name: `${created.data.first_name || ''} ${created.data.last_name || ''}`.trim(),
+            first_name: created.data.first_name,
+            last_name: created.data.last_name,
+            email: created.data.email,
+            phone: created.data.phone,
+            document: created.data.document,
+            address: created.data.address,
+            city: created.data.city,
+            initial: (created.data.first_name ? created.data.first_name.charAt(0).toUpperCase() : 'C'),
+          });
+        } else {
+          goBack();
+        }
+      } else {
+        const payload: any = {};
+        if (formData.first_name !== undefined) payload.first_name = formData.first_name;
+        if (formData.last_name !== undefined) payload.last_name = formData.last_name;
+        if (formData.email !== undefined) payload.email = formData.email;
+        if (formData.phone !== undefined) payload.phone = formData.phone;
+        if (formData.document !== undefined) payload.document = formData.document;
+        if (formData.address !== undefined) payload.address = formData.address;
+        if (formData.city !== undefined) payload.city = formData.city;
 
-      if (Object.keys(payload).length === 0) {
-        toast.dismiss(tid);
-        toast('No hay cambios que guardar.');
-        setIsSaving(false);
-        return;
+        await updateCustomer(selectedClient.realId, payload);
+        toast.success('Cliente actualizado correctamente', { id: tid });
+        await fetchCustomers();
+        setSelectedClient((prev: any) => ({ ...prev, ...payload, name: `${payload.first_name ?? prev.first_name} ${payload.last_name ?? prev.last_name}`.trim() }));
       }
-
-      await updateCustomer(selectedClient.realId, payload);
-      toast.success('Cambios guardados', { id: tid });
-      fetchCustomers();
-      setSelectedClient({ ...selectedClient, ...payload, name: `${payload.first_name || selectedClient.first_name} ${payload.last_name || selectedClient.last_name}` });
-      setFormData({});
     } catch (err: any) {
-      toast.error(err.message || 'Error al actualizar', { id: tid });
+      toast.error(err.message || 'Error al guardar', { id: tid });
     } finally {
       setIsSaving(false);
     }
   };
 
-  const handleDelete = async () => {
-    if (!selectedClient?.realId) return;
-    if (!window.confirm(`¿Estás seguro de que deseas eliminar a ${selectedClient.name}? Esta acción no se puede deshacer.`)) return;
+  const handleConfirmDeleteClient = async () => {
+    if (!deleteConfirmClient?.realId) return;
     const tid = toast.loading('Eliminando cliente...');
     try {
-      await deleteCustomer(selectedClient.realId);
-      toast.success('Cliente eliminado.', { id: tid });
-      setShowModal(null);
-      goBack();
-      fetchCustomers();
+      await deleteCustomer(deleteConfirmClient.realId);
+      toast.success('Cliente eliminado correctamente.', { id: tid });
+      setDeleteConfirmClient(null);
+      if (selectedClient?.realId === deleteConfirmClient.realId) {
+        goBack();
+      }
+      await fetchCustomers();
     } catch (err: any) {
-      toast.error(err.message || 'Error al eliminar', { id: tid });
+      toast.error(err.message || 'Error al eliminar cliente', { id: tid });
     }
   };
 
@@ -220,13 +285,13 @@ export default function AgendaPage() {
     if (!selectedClient?.realId) return;
     const tid = toast.loading('Ingresando solicitud al CRM...');
     try {
-      const result = await createClienteSolicitud(selectedClient.realId, {
+      await createClienteSolicitud(selectedClient.realId, {
         sale_type: solicitudForm.sale_type || 'ON_DEMAND',
         tipo: solicitudForm.tipo,
         producto: solicitudForm.producto,
         detalles: solicitudForm.detalles,
       });
-      toast.success(`¡Solicitud creada!`, { id: tid });
+      toast.success('¡Solicitud creada!', { id: tid });
       setShowModal(null);
       setSolicitudForm({ sale_type: 'ON_DEMAND', tipo: 'Solicitud de Cotización', producto: '', detalles: '' });
       fetchProfile(selectedClient.realId);
@@ -238,25 +303,22 @@ export default function AgendaPage() {
   const handleCreateAgendaEvent = async () => {
     if (!agendaForm.title.trim()) { toast.error('El título del evento es obligatorio.'); return; }
     if (!agendaForm.start_datetime) { toast.error('Selecciona la fecha y hora de inicio.'); return; }
-    const tid = toast.loading('Creando evento en el calendario...');
+    const tid = toast.loading('Guardando en la agenda...');
     try {
-      const payload: any = {
-        title: agendaForm.title.trim(),
-        event_type: agendaForm.event_type,
-        color: agendaForm.color,
-        start_datetime: agendaForm.start_datetime,
-        end_datetime: agendaForm.end_datetime || null,
-        location: agendaForm.location || '',
-        description: agendaForm.notes || '',
-        customer_id: selectedClient?.realId || null,
-        customer_name: selectedClient?.name || '',
-        created_by: 'Agenda CRM',
-        sync_source: 'INTERNAL',
-      };
-      const res = await fetch(`${API_URL}/crm/events`, {
+      const res = await fetch(`${API_URL}/crm/calendar/events`, {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          title: agendaForm.title,
+          description: agendaForm.notes || undefined,
+          start_datetime: new Date(agendaForm.start_datetime).toISOString(),
+          end_datetime: agendaForm.end_datetime ? new Date(agendaForm.end_datetime).toISOString() : undefined,
+          event_type: agendaForm.event_type || 'MEETING',
+          location: agendaForm.location || undefined,
+          color: agendaForm.color || 'indigo',
+          customer_id: selectedClient?.realId || undefined,
+          customer_name: selectedClient?.name || undefined,
+        }),
       });
       if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || 'Error'); }
       toast.success('¡Evento creado en el Calendario! ✅', { id: tid });
@@ -268,6 +330,86 @@ export default function AgendaPage() {
     }
   };
 
+  // ─── ACCIONES PROVEEDORES ─────────────────────────────────────────────────
+  const openNewSupplier = () => {
+    setSupplierForm({
+      nombre: '',
+      contacto_nombre: '',
+      email: '',
+      telefono: '',
+      direccion: '',
+      ciudad: '',
+      pais: 'Colombia',
+      moneda_default: 'COP',
+      condiciones_pago: 'Contado',
+      tiempo_entrega_dias: 7,
+    });
+    setSupplierModal('NEW');
+  };
+
+  const openEditSupplier = (sup: any) => {
+    setSupplierForm({
+      nombre: sup.nombre || '',
+      contacto_nombre: sup.contacto_nombre || '',
+      email: sup.email || '',
+      telefono: sup.telefono || '',
+      direccion: sup.direccion || '',
+      ciudad: sup.ciudad || '',
+      pais: sup.pais || 'Colombia',
+      moneda_default: sup.moneda_default || 'COP',
+      condiciones_pago: sup.condiciones_pago || 'Contado',
+      tiempo_entrega_dias: sup.tiempo_entrega_dias || 7,
+    });
+    setSupplierModal('EDIT');
+  };
+
+  const handleSaveSupplier = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!supplierForm.nombre.trim()) {
+      toast.error('El nombre comercial del proveedor es obligatorio');
+      return;
+    }
+    const tid = toast.loading('Guardando proveedor...');
+    try {
+      if (supplierModal === 'EDIT' && selectedSupplier?.id) {
+        const res = await apiFetch(`/compras/proveedores/${selectedSupplier.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(supplierForm),
+        });
+        toast.success('Proveedor actualizado', { id: tid });
+        setSelectedSupplier(res.data || { ...selectedSupplier, ...supplierForm });
+      } else {
+        await apiFetch('/compras/proveedores', {
+          method: 'POST',
+          body: JSON.stringify(supplierForm),
+        });
+        toast.success('Proveedor creado exitosamente', { id: tid });
+      }
+      setSupplierModal(null);
+      await fetchSuppliers();
+    } catch (err: any) {
+      toast.error(err.message || 'Error guardando proveedor', { id: tid });
+    }
+  };
+
+  const handleConfirmDeleteSupplier = async () => {
+    if (!deleteConfirmSupplier?.id) return;
+    const tid = toast.loading('Eliminando proveedor...');
+    try {
+      await apiFetch(`/compras/proveedores/${deleteConfirmSupplier.id}`, {
+        method: 'DELETE',
+      });
+      toast.success('Proveedor eliminado correctamente.', { id: tid });
+      setDeleteConfirmSupplier(null);
+      if (selectedSupplier?.id === deleteConfirmSupplier.id) {
+        goBackSupplier();
+      }
+      await fetchSuppliers();
+    } catch (err: any) {
+      toast.error(err.message || 'Error al eliminar proveedor', { id: tid });
+    }
+  };
+
   const filteredCustomers = customers.filter(c =>
     c.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     c.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -275,13 +417,638 @@ export default function AgendaPage() {
     c.id.includes(searchTerm)
   );
 
+  const filteredSuppliers = suppliers.filter(s =>
+    (s.nombre || '').toLowerCase().includes(supplierSearch.toLowerCase()) ||
+    (s.contacto_nombre || '').toLowerCase().includes(supplierSearch.toLowerCase()) ||
+    (s.email || '').toLowerCase().includes(supplierSearch.toLowerCase()) ||
+    (s.ciudad || '').toLowerCase().includes(supplierSearch.toLowerCase())
+  );
+
   const sf = (field: string, val: any) => setFormData((prev: any) => ({ ...prev, [field]: val }));
   const fv = (field: string) => formData[field] !== undefined ? formData[field] : (selectedClient && selectedClient !== 'NEW' ? selectedClient[field] : '');
 
-  // ─── VIEW 1: LISTADO CLIENTES ───────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SECCIÓN PROVEEDORES
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (mainTab === 'proveedores') {
+    if (!selectedSupplier) {
+      return (
+        <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-6 overflow-y-auto animate-in fade-in">
+          {/* Top Switcher Tab Bar */}
+          <div className="flex items-center bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm w-fit mb-6">
+            <button
+              onClick={() => { setMainTab('clientes'); setSelectedClient(null); }}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-black transition-all text-slate-600 hover:text-slate-900 hover:bg-slate-50"
+            >
+              <User size={15} /> Clientes ({customers.length})
+            </button>
+            <button
+              onClick={() => { setMainTab('proveedores'); }}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-black transition-all bg-teal-600 text-white shadow-sm"
+            >
+              <Truck size={15} /> Proveedores ({suppliers.length})
+            </button>
+          </div>
+
+          <div className="flex justify-between items-center mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-teal-600 flex items-center justify-center text-white shadow-md">
+                <Truck size={26} />
+              </div>
+              <div>
+                <h1 className="text-2xl font-black text-slate-900">Agenda de Proveedores</h1>
+                <p className="text-slate-500 text-xs mt-0.5">Gestión de fabricantes, distribuidores, condiciones comerciales y pedidos de compra.</p>
+              </div>
+            </div>
+            <button
+              onClick={openNewSupplier}
+              className="bg-teal-600 hover:bg-teal-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-md transition-all flex items-center gap-2"
+            >
+              <Plus size={16} /> Nuevo Proveedor
+            </button>
+          </div>
+
+          {/* Search Bar */}
+          <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200/80 mb-6 flex items-center justify-between gap-4">
+            <div className="relative flex-1">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+              <input
+                type="text"
+                placeholder="Buscar por nombre de empresa, contacto, ciudad o email..."
+                value={supplierSearch}
+                onChange={e => setSupplierSearch(e.target.value)}
+                className="w-full pl-11 pr-4 py-2.5 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:border-teal-600 transition-colors"
+              />
+            </div>
+            <span className="text-xs font-bold text-slate-500 shrink-0">
+              {filteredSuppliers.length} proveedores registrados
+            </span>
+          </div>
+
+          {/* Grid Proveedores */}
+          {loadingSuppliers ? (
+            <div className="py-20 text-center text-slate-400 text-sm">Cargando proveedores...</div>
+          ) : filteredSuppliers.length === 0 ? (
+            <div className="bg-white rounded-3xl p-12 text-center border border-slate-200 shadow-sm max-w-lg mx-auto">
+              <Building2 className="text-slate-300 mx-auto mb-3" size={48} />
+              <h3 className="font-black text-slate-800 text-lg">Sin proveedores registrados</h3>
+              <p className="text-xs text-slate-500 mt-1 mb-6">Crea el primer proveedor para gestionar compras y pedidos PEC.</p>
+              <button
+                onClick={openNewSupplier}
+                className="bg-teal-600 hover:bg-teal-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-md"
+              >
+                + Registrar Proveedor
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredSuppliers.map(sup => {
+                const cleanPhone = (sup.telefono || '').replace(/\D/g, '');
+                return (
+                  <div
+                    key={sup.id}
+                    onClick={() => openSupplier(sup)}
+                    className="bg-white rounded-2xl border border-slate-200 p-5 hover:border-teal-400 hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
+                  >
+                    <div>
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-teal-500 to-emerald-600 text-white font-black text-lg flex items-center justify-center shadow-sm uppercase">
+                            {(sup.nombre || 'P').charAt(0)}
+                          </div>
+                          <div>
+                            <h3 className="font-bold text-slate-900 text-base group-hover:text-teal-600 transition-colors leading-tight">
+                              {sup.nombre}
+                            </h3>
+                            <span className="text-[11px] font-semibold text-slate-400">PROV-{String(sup.id).padStart(4, '0')}</span>
+                          </div>
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeleteConfirmSupplier(sup);
+                          }}
+                          className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Eliminar Proveedor"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+
+                      <div className="space-y-1.5 text-xs text-slate-600 mt-2">
+                        {sup.contacto_nombre && (
+                          <div className="flex items-center gap-2">
+                            <User size={13} className="text-slate-400 shrink-0" />
+                            <span className="font-medium text-slate-700">{sup.contacto_nombre}</span>
+                          </div>
+                        )}
+                        {sup.telefono && (
+                          <div className="flex items-center gap-2">
+                            <Phone size={13} className="text-slate-400 shrink-0" />
+                            <span className="font-medium">{sup.telefono}</span>
+                          </div>
+                        )}
+                        {sup.email && (
+                          <div className="flex items-center gap-2">
+                            <Mail size={13} className="text-slate-400 shrink-0" />
+                            <span className="truncate">{sup.email}</span>
+                          </div>
+                        )}
+                        {(sup.ciudad || sup.pais) && (
+                          <div className="flex items-center gap-2">
+                            <MapPin size={13} className="text-slate-400 shrink-0" />
+                            <span>{[sup.ciudad, sup.pais].filter(Boolean).join(', ')}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
+                      <span className="text-[11px] font-bold px-2 py-0.5 rounded-lg bg-teal-50 text-teal-700 border border-teal-100">
+                        {sup.condiciones_pago || 'Contado'} · {sup.moneda_default || 'COP'}
+                      </span>
+                      <span className="text-xs font-bold text-teal-600 flex items-center gap-1 group-hover:translate-x-0.5 transition-transform">
+                        Ficha 360 <ChevronRight size={14} />
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Modal Confirmación Eliminación Proveedor */}
+          {deleteConfirmSupplier && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in">
+              <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-slate-200">
+                <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+                  <div className="w-10 h-10 rounded-2xl bg-red-100 text-red-700 flex items-center justify-center shrink-0">
+                    <ShieldAlert size={20} />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-base text-slate-800">Eliminar Proveedor</h3>
+                    <p className="text-xs text-slate-400">Esta acción no se puede revertir</p>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  ¿Estás seguro de que deseas eliminar a <strong className="text-slate-800">{deleteConfirmSupplier.nombre}</strong>?
+                </p>
+                <div className="pt-2 flex gap-2.5">
+                  <button
+                    onClick={() => setDeleteConfirmSupplier(null)}
+                    className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleConfirmDeleteSupplier}
+                    className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-black shadow-sm"
+                  >
+                    Sí, Eliminar Proveedor
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Modal Crear / Editar Proveedor */}
+          {supplierModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in">
+              <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-6 space-y-4 border border-slate-200">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <h3 className="font-black text-base text-slate-800">
+                    {supplierModal === 'EDIT' ? 'Editar Proveedor' : 'Nuevo Proveedor'}
+                  </h3>
+                  <button onClick={() => setSupplierModal(null)} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-full">
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <form onSubmit={handleSaveSupplier} className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Nombre Comercial *</label>
+                    <input
+                      required
+                      type="text"
+                      value={supplierForm.nombre}
+                      onChange={e => setSupplierForm(f => ({ ...f, nombre: e.target.value }))}
+                      placeholder="Ej. MegaDistribuciones SAS"
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-teal-600"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1">Persona de Contacto</label>
+                      <input
+                        type="text"
+                        value={supplierForm.contacto_nombre}
+                        onChange={e => setSupplierForm(f => ({ ...f, contacto_nombre: e.target.value }))}
+                        placeholder="Ej. Juan Pérez"
+                        className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-teal-600"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1">Teléfono / WhatsApp</label>
+                      <input
+                        type="tel"
+                        value={supplierForm.telefono}
+                        onChange={e => setSupplierForm(f => ({ ...f, telefono: e.target.value }))}
+                        placeholder="Ej. 3001234567"
+                        className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-teal-600"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1">Correo Electrónico</label>
+                      <input
+                        type="email"
+                        value={supplierForm.email}
+                        onChange={e => setSupplierForm(f => ({ ...f, email: e.target.value }))}
+                        placeholder="contacto@proveedor.com"
+                        className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-teal-600"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1">Ciudad / País</label>
+                      <input
+                        type="text"
+                        value={supplierForm.ciudad}
+                        onChange={e => setSupplierForm(f => ({ ...f, ciudad: e.target.value }))}
+                        placeholder="Barranquilla, Colombia"
+                        className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-teal-600"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1">Condiciones de Pago</label>
+                      <select
+                        value={supplierForm.condiciones_pago}
+                        onChange={e => setSupplierForm(f => ({ ...f, condiciones_pago: e.target.value }))}
+                        className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none bg-white focus:border-teal-600"
+                      >
+                        <option value="Contado">Contado</option>
+                        <option value="Anticipo 50% / Saldo Entrega">Anticipo 50% / Saldo Entrega</option>
+                        <option value="Credito 15 Dias">Crédito 15 Días</option>
+                        <option value="Credito 30 Dias">Crédito 30 Días</option>
+                        <option value="Contra Entrega">Contra Entrega</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-500 mb-1">Moneda Principal</label>
+                      <select
+                        value={supplierForm.moneda_default}
+                        onChange={e => setSupplierForm(f => ({ ...f, moneda_default: e.target.value }))}
+                        className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none bg-white focus:border-teal-600"
+                      >
+                        <option value="COP">COP ($)</option>
+                        <option value="USD">USD ($)</option>
+                        <option value="EUR">EUR (€)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 flex gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setSupplierModal(null)}
+                      className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      className="flex-1 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-black shadow-sm"
+                    >
+                      {supplierModal === 'EDIT' ? 'Guardar Cambios' : 'Crear Proveedor'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── DETALLE PROVEEDOR (FICHA 360) ─────────────────────────────────────────
+    const cleanPhone = (selectedSupplier.telefono || '').replace(/\D/g, '');
+
+    return (
+      <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-6 overflow-y-auto animate-in fade-in">
+        {/* Back Button */}
+        <div className="mb-4">
+          <button
+            onClick={goBackSupplier}
+            className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-800 transition-colors mb-3"
+          >
+            ← Volver a la lista de proveedores
+          </button>
+
+          <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-teal-600 to-emerald-600 text-white font-black text-2xl flex items-center justify-center shadow-md uppercase">
+                {(selectedSupplier.nombre || 'P').charAt(0)}
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-2xl font-black text-slate-900">{selectedSupplier.nombre}</h1>
+                  <span className="text-xs font-bold px-2.5 py-0.5 bg-teal-50 text-teal-700 rounded-full border border-teal-200">
+                    PROV-{String(selectedSupplier.id).padStart(4, '0')}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Contacto: <span className="font-semibold text-slate-700">{selectedSupplier.contacto_nombre || 'N/A'}</span> · 
+                  Ubicación: <span className="font-semibold text-slate-700">{[selectedSupplier.ciudad, selectedSupplier.pais].filter(Boolean).join(', ') || 'No especificada'}</span>
+                </p>
+              </div>
+            </div>
+
+            {/* Quick Actions */}
+            <div className="flex flex-wrap items-center gap-2.5">
+              {cleanPhone && (
+                <a
+                  href={`https://wa.me/57${cleanPhone}?text=${encodeURIComponent('Hola ' + (selectedSupplier.contacto_nombre || selectedSupplier.nombre) + ', te saludamos del equipo de Compras de Nebulae.')}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm flex items-center gap-1.5 transition-colors"
+                >
+                  <MessageCircle size={15} /> WhatsApp
+                </a>
+              )}
+              {selectedSupplier.email && (
+                <a
+                  href={`mailto:${selectedSupplier.email}`}
+                  className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3.5 py-2 rounded-xl font-bold text-xs shadow-sm flex items-center gap-1.5 transition-colors"
+                >
+                  <Mail size={14} /> Correo
+                </a>
+              )}
+              <button
+                onClick={() => openEditSupplier(selectedSupplier)}
+                className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3.5 py-2 rounded-xl font-bold text-xs shadow-sm flex items-center gap-1.5 transition-colors"
+              >
+                <Edit2 size={14} /> Editar
+              </button>
+              <button
+                onClick={() => setDeleteConfirmSupplier(selectedSupplier)}
+                className="p-2 border border-slate-200 text-red-500 hover:bg-red-50 rounded-xl transition-colors"
+                title="Eliminar Proveedor"
+              >
+                <Trash2 size={16} />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* KPIs Proveedor */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          <div className="p-5 rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Condiciones de Pago</span>
+            <p className="text-lg font-black text-slate-800 mt-1">{selectedSupplier.condiciones_pago || 'Contado'}</p>
+          </div>
+          <div className="p-5 rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Moneda Habitual</span>
+            <p className="text-lg font-black text-teal-600 mt-1">{selectedSupplier.moneda_default || 'COP'}</p>
+          </div>
+          <div className="p-5 rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Tiempo Entrega Estimado</span>
+            <p className="text-lg font-black text-slate-800 mt-1">{selectedSupplier.tiempo_entrega_dias || 7} días</p>
+          </div>
+          <div className="p-5 rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Pedidos PEC Emitidos</span>
+            <p className="text-lg font-black text-indigo-600 mt-1">{supplierPecs.length} ordenes</p>
+          </div>
+        </div>
+
+        {/* Historial de Pedidos de Compra (PECs) */}
+        <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+            <div>
+              <h3 className="text-base font-black text-slate-800 flex items-center gap-2">
+                <Truck size={18} className="text-teal-600" /> Pedidos de Compra Asociados (PECs)
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">Historial de órdenes de compra emitidas a este proveedor.</p>
+            </div>
+            <Link
+              href="/dashboard/compras/pedidos"
+              className="px-4 py-2 bg-teal-50 border border-teal-200 text-teal-700 rounded-xl text-xs font-bold hover:bg-teal-100 transition-colors flex items-center gap-1.5"
+            >
+              + Nuevo Pedido PEC
+            </Link>
+          </div>
+
+          {supplierPecs.length === 0 ? (
+            <div className="py-12 text-center text-slate-400 text-xs">
+              No hay pedidos de compra emitidos aún a este proveedor.
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {supplierPecs.map((pec: any) => (
+                <div key={pec.id} className="py-3.5 flex items-center justify-between hover:bg-slate-50 px-3 rounded-xl transition-colors">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-bold text-xs text-slate-800">{pec.numero}</span>
+                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${STATUS_COLOR_MAP[pec.estado] || 'bg-slate-100 text-slate-600'}`}>
+                        {pec.estado}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Fecha: {pec.fecha_pedido ? new Date(pec.fecha_pedido).toLocaleDateString('es-CO') : '-'}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs font-black text-slate-800">{formatCOP(pec.total_cop)}</p>
+                    <Link
+                      href="/dashboard/compras/pedidos"
+                      className="text-[10px] font-bold text-teal-600 hover:underline inline-flex items-center gap-0.5 mt-0.5"
+                    >
+                      Ver en Compras <ChevronRight size={11} />
+                    </Link>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Modal Confirmación Eliminación Proveedor */}
+        {deleteConfirmSupplier && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in">
+            <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-slate-200">
+              <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+                <div className="w-10 h-10 rounded-2xl bg-red-100 text-red-700 flex items-center justify-center shrink-0">
+                  <ShieldAlert size={20} />
+                </div>
+                <div>
+                  <h3 className="font-black text-base text-slate-800">Eliminar Proveedor</h3>
+                  <p className="text-xs text-slate-400">Esta acción no se puede revertir</p>
+                </div>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                ¿Estás seguro de que deseas eliminar permanentemente a <strong className="text-slate-800">{deleteConfirmSupplier.nombre}</strong>?
+              </p>
+              <div className="pt-2 flex gap-2.5">
+                <button
+                  onClick={() => setDeleteConfirmSupplier(null)}
+                  className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleConfirmDeleteSupplier}
+                  className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-black shadow-sm"
+                >
+                  Sí, Eliminar Proveedor
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal Editar Proveedor */}
+        {supplierModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in">
+            <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-6 space-y-4 border border-slate-200">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <h3 className="font-black text-base text-slate-800">Editar Proveedor</h3>
+                <button onClick={() => setSupplierModal(null)} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-full">
+                  <X size={18} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveSupplier} className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">Nombre Comercial *</label>
+                  <input
+                    required
+                    type="text"
+                    value={supplierForm.nombre}
+                    onChange={e => setSupplierForm(f => ({ ...f, nombre: e.target.value }))}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-teal-600"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Persona de Contacto</label>
+                    <input
+                      type="text"
+                      value={supplierForm.contacto_nombre}
+                      onChange={e => setSupplierForm(f => ({ ...f, contacto_nombre: e.target.value }))}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-teal-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Teléfono / WhatsApp</label>
+                    <input
+                      type="tel"
+                      value={supplierForm.telefono}
+                      onChange={e => setSupplierForm(f => ({ ...f, telefono: e.target.value }))}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-teal-600"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Correo Electrónico</label>
+                    <input
+                      type="email"
+                      value={supplierForm.email}
+                      onChange={e => setSupplierForm(f => ({ ...f, email: e.target.value }))}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-teal-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Ciudad / País</label>
+                    <input
+                      type="text"
+                      value={supplierForm.ciudad}
+                      onChange={e => setSupplierForm(f => ({ ...f, ciudad: e.target.value }))}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-teal-600"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Condiciones de Pago</label>
+                    <select
+                      value={supplierForm.condiciones_pago}
+                      onChange={e => setSupplierForm(f => ({ ...f, condiciones_pago: e.target.value }))}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none bg-white focus:border-teal-600"
+                    >
+                      <option value="Contado">Contado</option>
+                      <option value="Anticipo 50% / Saldo Entrega">Anticipo 50% / Saldo Entrega</option>
+                      <option value="Credito 15 Dias">Crédito 15 Días</option>
+                      <option value="Credito 30 Dias">Crédito 30 Días</option>
+                      <option value="Contra Entrega">Contra Entrega</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-1">Moneda Principal</label>
+                    <select
+                      value={supplierForm.moneda_default}
+                      onChange={e => setSupplierForm(f => ({ ...f, moneda_default: e.target.value }))}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none bg-white focus:border-teal-600"
+                    >
+                      <option value="COP">COP ($)</option>
+                      <option value="USD">USD ($)</option>
+                      <option value="EUR">EUR (€)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="pt-2 flex gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setSupplierModal(null)}
+                    className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-black shadow-sm"
+                  >
+                    Guardar Cambios
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SECCIÓN CLIENTES — VIEW 1: LISTADO CLIENTES
+  // ═══════════════════════════════════════════════════════════════════════════
   if (!selectedClient) {
     return (
       <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-6 overflow-y-auto animate-in fade-in">
+        {/* Top Switcher Tab Bar */}
+        <div className="flex items-center bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm w-fit mb-6">
+          <button
+            onClick={() => { setMainTab('clientes'); }}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-black transition-all bg-purple-600 text-white shadow-sm"
+          >
+            <User size={15} /> Clientes ({customers.length})
+          </button>
+          <button
+            onClick={() => { setMainTab('proveedores'); setSelectedSupplier(null); fetchSuppliers(); }}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-black transition-all text-slate-600 hover:text-slate-900 hover:bg-slate-50"
+          >
+            <Truck size={15} /> Proveedores ({suppliers.length})
+          </button>
+        </div>
+
         <div className="flex justify-between items-center mb-6">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-2xl bg-purple-600 flex items-center justify-center text-white shadow-md">
@@ -340,6 +1107,16 @@ export default function AgendaPage() {
                         <span className="text-[11px] font-semibold text-slate-400">{client.id}</span>
                       </div>
                     </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeleteConfirmClient(client);
+                      }}
+                      className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      title="Eliminar Cliente"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </div>
 
                   <div className="space-y-1.5 text-xs text-slate-600 mt-2">
@@ -364,16 +1141,16 @@ export default function AgendaPage() {
                   </div>
                 </div>
 
-                <div className="pt-4 mt-4 border-t border-slate-100 flex items-center justify-between">
+                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
                   {cleanPhone ? (
                     <a
-                      href={`https://wa.me/57${cleanPhone}?text=${encodeURIComponent('Hola ' + client.name + ', te saludamos de Nebulae Hub.')}`}
+                      href={`https://wa.me/57${cleanPhone}?text=${encodeURIComponent('Hola ' + client.name + ', te saludamos de Nebulae.')}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       onClick={e => e.stopPropagation()}
-                      className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-600 hover:text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200 transition-colors"
+                      className="text-xs font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-1 bg-emerald-50 px-2.5 py-1 rounded-lg transition-colors"
                     >
-                      <MessageCircle size={14} /> WhatsApp
+                      <MessageCircle size={13} /> WhatsApp
                     </a>
                   ) : (
                     <span className="text-[11px] text-slate-400">Sin teléfono</span>
@@ -387,11 +1164,47 @@ export default function AgendaPage() {
             );
           })}
         </div>
+
+        {/* Modal Confirmación Eliminación Cliente */}
+        {deleteConfirmClient && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in">
+            <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-slate-200">
+              <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+                <div className="w-10 h-10 rounded-2xl bg-red-100 text-red-700 flex items-center justify-center shrink-0">
+                  <ShieldAlert size={20} />
+                </div>
+                <div>
+                  <h3 className="font-black text-base text-slate-800">Eliminar Cliente</h3>
+                  <p className="text-xs text-slate-400">Esta acción no se puede revertir</p>
+                </div>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                ¿Estás seguro de que deseas eliminar a <strong className="text-slate-800">{deleteConfirmClient.name}</strong>? Se desvincularán sus documentos asociados y se eliminará su ficha del CRM.
+              </p>
+              <div className="pt-2 flex gap-2.5">
+                <button
+                  onClick={() => setDeleteConfirmClient(null)}
+                  className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleConfirmDeleteClient}
+                  className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-black shadow-sm"
+                >
+                  Sí, Eliminar Cliente
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
 
-  // ─── VIEW 2: FICHA ÚNICA DEL CLIENTE SELECCIONADO ───────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SECCIÓN CLIENTES — VIEW 2: FICHA ÚNICA DEL CLIENTE SELECCIONADO
+  // ═══════════════════════════════════════════════════════════════════════════
   const isNew = selectedClient === 'NEW';
   const clientData = isNew ? {} : selectedClient;
   const cleanPhone = (clientData.phone || '').replace(/\D/g, '');
@@ -449,19 +1262,17 @@ export default function AgendaPage() {
                   <MessageCircle size={15} /> WhatsApp
                 </a>
               )}
-              {clientData.phone && (
-                <a
-                  href={`tel:${cleanPhone}`}
-                  className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3.5 py-2 rounded-xl font-bold text-xs shadow-sm flex items-center gap-1.5 transition-colors"
-                >
-                  <Phone size={14} /> Llamar
-                </a>
-              )}
-              <Link
-                href={`/dashboard/ventas/solicitud?customer_id=${clientData.realId}`}
-                className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm flex items-center gap-1.5 transition-colors"
+              <button
+                onClick={() => setShowModal('Solicitud')}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm flex items-center gap-1.5 transition-colors"
               >
-                <Plus size={14} /> Nueva Solicitud
+                <Plus size={15} /> Nueva Solicitud
+              </button>
+              <Link
+                href={`/dashboard/ventas/cotizacion?customer_id=${selectedClient.realId}`}
+                className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-3.5 py-2 rounded-xl font-bold text-xs shadow-sm flex items-center gap-1.5 transition-colors"
+              >
+                <FileText size={14} /> Cotizar
               </Link>
               <button
                 onClick={() => setShowModal('Agendar')}
@@ -470,7 +1281,7 @@ export default function AgendaPage() {
                 <Calendar size={14} /> Agendar
               </button>
               <button
-                onClick={handleDelete}
+                onClick={() => setDeleteConfirmClient(selectedClient)}
                 className="p-2 border border-slate-200 text-red-500 hover:bg-red-50 rounded-xl transition-colors"
                 title="Eliminar Cliente"
               >
@@ -489,414 +1300,345 @@ export default function AgendaPage() {
               <span className="text-[11px] font-black uppercase tracking-wider">Saldo por Cobrar</span>
               {saldoPendiente > 0 ? <AlertTriangle size={16} className="text-rose-600" /> : <CheckCircle2 size={16} className="text-emerald-600" />}
             </div>
-            <h3 className="text-2xl font-black">{formatCOP(saldoPendiente)}</h3>
-            <p className="text-[11px] font-semibold mt-1 opacity-80">
-              {saldoPendiente > 0 ? 'Pendiente pago de saldos (40%)' : 'Cliente al día con sus pagos'}
+            <p className="text-2xl font-black">{formatCOP(saldoPendiente)}</p>
+            <p className="text-[10px] opacity-75 mt-0.5">
+              {saldoPendiente > 0 ? 'Cobro pendiente antes del despacho' : 'Al día con pagos'}
             </p>
           </div>
 
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-            <span className="text-[11px] font-black text-slate-400 uppercase tracking-wider block mb-1">Total Comprado (LTV)</span>
-            <h3 className="text-2xl font-black text-slate-900">{formatCOP(totalComprado)}</h3>
-            <p className="text-[11px] text-slate-400 font-medium mt-1">Facturación histórica total</p>
+            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Total Comprado (LTV)</span>
+            <p className="text-2xl font-black text-slate-900 mt-1">{formatCOP(totalComprado)}</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">{customer360?.sales_orders?.length || 0} pedidos históricos</p>
           </div>
 
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-            <span className="text-[11px] font-black text-slate-400 uppercase tracking-wider block mb-1">Total Pagado</span>
-            <h3 className="text-2xl font-black text-emerald-600">{formatCOP(totalPagado)}</h3>
-            <p className="text-[11px] text-slate-400 font-medium mt-1">Recibido en caja / bancos</p>
+            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Total Pagado</span>
+            <p className="text-2xl font-black text-emerald-600 mt-1">{formatCOP(totalPagado)}</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Anticipos + pagos registrados</p>
           </div>
 
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-            <span className="text-[11px] font-black text-slate-400 uppercase tracking-wider block mb-1">Pedidos Activos</span>
-            <h3 className="text-2xl font-black text-purple-600">{customer360?.pedidos?.length || customer360?.active_orders?.length || 0}</h3>
-            <p className="text-[11px] text-slate-400 font-medium mt-1">En compras, tránsito o entrega</p>
+            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Cotizaciones Vivas</span>
+            <p className="text-2xl font-black text-indigo-600 mt-1">{customer360?.quotations?.length || 0}</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">{customer360?.customer_requests?.length || 0} solicitudes activas</p>
           </div>
         </div>
       )}
 
-      {/* Tabs */}
-      {!isNew && (
-        <div className="flex border-b border-slate-200 mb-6 gap-6">
-          {[
-            { id: 'Información y Ficha', label: 'Información y Ficha' },
-            { id: 'Solicitudes y Cotizaciones', label: `Solicitudes (${customer360?.solicitudes?.length || 0}) / Cotizaciones (${customer360?.cotizaciones?.length || 0})` },
-            { id: 'Pedidos de Venta (PVEN)', label: `Pedidos de Venta (${customer360?.pedidos?.length || 0})` },
-            { id: 'Historial y Bitácora', label: 'Historial y Bitácora' },
-          ].map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`pb-3 font-bold text-sm border-b-2 transition-colors whitespace-nowrap ${activeTab === tab.id ? 'border-purple-600 text-purple-700' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* Tabs Menu */}
+      <div className="bg-white border-b border-slate-200 px-6 rounded-t-3xl flex gap-6 shrink-0 shadow-sm">
+        {['Información y Ficha', 'Historial Comercial', 'Timeline Unificado'].map(tab => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`py-4 text-xs font-bold border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === tab
+                ? 'border-purple-600 text-purple-600 font-black'
+                : 'border-transparent text-slate-400 hover:text-slate-700'
+            }`}
+          >
+            {tab === 'Información y Ficha' && <User size={14} />}
+            {tab === 'Historial Comercial' && <ShoppingBag size={14} />}
+            {tab === 'Timeline Unificado' && <Activity size={14} />}
+            {tab}
+          </button>
+        ))}
+      </div>
 
-      <div className="flex gap-6 items-start">
-        {/* Main Content Area */}
-        <div className="flex-1 space-y-6">
-
-          {/* TAB 1: INFORMACIÓN Y FICHA */}
-          {(isNew || activeTab === 'Información y Ficha') && (
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 space-y-5">
-              <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider">Datos Personales y Ubicación</h3>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">Tipo de Entidad</label>
-                  <div className="flex bg-slate-100 p-1 rounded-xl">
-                    <button onClick={() => setEntityType('Individuo')} className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-colors ${entityType === 'Individuo' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>Individuo</button>
-                    <button onClick={() => setEntityType('Compañía')} className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-colors ${entityType === 'Compañía' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500'}`}>Compañía</button>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">Identificación (CC / NIT / Pasaporte)</label>
-                  <input type="text" value={fv('document')} onChange={e => sf('document', e.target.value)} placeholder="12345678" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                </div>
+      {/* Tab Contents */}
+      <div className="bg-white border border-t-0 border-slate-200 rounded-b-3xl p-6 shadow-sm flex-1">
+        {/* TAB 1: INFORMACIÓN Y FICHA */}
+        {activeTab === 'Información y Ficha' && (
+          <div className="space-y-6 max-w-4xl">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">Nombre *</label>
+                <input
+                  type="text"
+                  value={fv('first_name')}
+                  onChange={e => sf('first_name', e.target.value)}
+                  placeholder="Ej. Juan"
+                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-medium outline-none focus:border-purple-600"
+                />
               </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">Nombre (s) *</label>
-                  <input type="text" value={fv('first_name')} onChange={e => sf('first_name', e.target.value)} placeholder="Ej. Carlos" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">Apellido (s)</label>
-                  <input type="text" value={fv('last_name')} onChange={e => sf('last_name', e.target.value)} placeholder="Ej. Restrepo" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">Apellido *</label>
+                <input
+                  type="text"
+                  value={fv('last_name')}
+                  onChange={e => sf('last_name', e.target.value)}
+                  placeholder="Ej. Pérez"
+                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-medium outline-none focus:border-purple-600"
+                />
               </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">Teléfono / WhatsApp</label>
-                  <input type="text" value={fv('phone')} onChange={e => sf('phone', e.target.value)} placeholder="3109876543" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">Correo Electrónico</label>
-                  <input type="email" value={fv('email')} onChange={e => sf('email', e.target.value)} placeholder="cliente@ejemplo.co" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">Correo Electrónico</label>
+                <input
+                  type="email"
+                  value={fv('email')}
+                  onChange={e => sf('email', e.target.value)}
+                  placeholder="juan.perez@ejemplo.com"
+                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-medium outline-none focus:border-purple-600"
+                />
               </div>
-
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">Ciudad</label>
-                  <input type="text" value={fv('city')} onChange={e => sf('city', e.target.value)} placeholder="Barranquilla" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                </div>
-                <div className="col-span-2">
-                  <label className="block text-xs font-bold text-slate-500 mb-1">Dirección de Entrega</label>
-                  <input type="text" value={fv('address')} onChange={e => sf('address', e.target.value)} placeholder="Carrera 53 # 82-100" className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:outline-none focus:border-purple-600" />
-                </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">Teléfono / Celular (WhatsApp)</label>
+                <input
+                  type="tel"
+                  value={fv('phone')}
+                  onChange={e => sf('phone', e.target.value)}
+                  placeholder="3001234567"
+                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-medium outline-none focus:border-purple-600"
+                />
               </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">Documento / NIT</label>
+                <input
+                  type="text"
+                  value={fv('document')}
+                  onChange={e => sf('document', e.target.value)}
+                  placeholder="CC o NIT"
+                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-medium outline-none focus:border-purple-600"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">Ciudad</label>
+                <input
+                  type="text"
+                  value={fv('city')}
+                  onChange={e => sf('city', e.target.value)}
+                  placeholder="Barranquilla"
+                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-medium outline-none focus:border-purple-600"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-xs font-bold text-slate-500 mb-1">Dirección de Entrega</label>
+                <input
+                  type="text"
+                  value={fv('address')}
+                  onChange={e => sf('address', e.target.value)}
+                  placeholder="Calle 100 # 50 - 20, Apto 502"
+                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-medium outline-none focus:border-purple-600"
+                />
+              </div>
+            </div>
 
-              <div className="flex gap-3 pt-3">
+            <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
+              {!isNew && (
                 <button
-                  onClick={isNew ? handleCreate : handleUpdate}
-                  disabled={isSaving}
-                  className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-md transition-colors"
+                  type="button"
+                  onClick={() => setDeleteConfirmClient(selectedClient)}
+                  className="text-xs font-bold text-red-500 hover:text-red-700 flex items-center gap-1.5"
                 >
-                  {isSaving ? 'Guardando...' : isNew ? '✓ Crear Cliente' : 'Guardar Cambios'}
+                  <Trash2 size={14} /> Eliminar este cliente
                 </button>
-                {!isNew && (
-                  <button onClick={goBack} className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-5 py-2.5 rounded-xl font-bold text-sm transition-colors">
-                    Cancelar
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* TAB 2: SOLICITUDES Y COTIZACIONES */}
-          {!isNew && activeTab === 'Solicitudes y Cotizaciones' && (
-            <div className="space-y-6">
-              {/* Solicitudes (SC) */}
-              <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
-                    <FileText size={16} className="text-purple-600" /> Solicitudes de Cotización (SC)
-                  </h3>
-                  <Link
-                    href={`/dashboard/ventas/solicitud?customer_id=${clientData.realId}`}
-                    className="bg-purple-50 text-purple-700 hover:bg-purple-100 px-3.5 py-1.5 rounded-xl font-bold text-xs border border-purple-200 flex items-center gap-1"
-                  >
-                    <Plus size={14} /> Nueva Solicitud
-                  </Link>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100">
-                        <th className="px-4 py-3">Número</th>
-                        <th className="px-4 py-3">Fecha</th>
-                        <th className="px-4 py-3">Estado</th>
-                        <th className="px-4 py-3 text-right">Acción</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {customer360?.solicitudes?.length > 0 ? customer360.solicitudes.map((sc: any) => (
-                        <tr key={sc.id} className="hover:bg-slate-50/80">
-                          <td className="px-4 py-3.5 font-bold text-slate-900">{sc.numero}</td>
-                          <td className="px-4 py-3.5 text-slate-500">{timeAgo(sc.created_at)}</td>
-                          <td className="px-4 py-3.5">
-                            <span className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${STATUS_COLOR_MAP[sc.estado] || 'bg-slate-100 text-slate-700'}`}>
-                              {sc.estado}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3.5 text-right">
-                            <Link
-                              href={`/dashboard/ventas/solicitud?sc_id=${sc.id}`}
-                              className="text-purple-600 hover:underline font-bold inline-flex items-center gap-1"
-                            >
-                              Ver en Solicitud <ExternalLink size={12} />
-                            </Link>
-                          </td>
-                        </tr>
-                      )) : (
-                        <tr>
-                          <td colSpan={4} className="px-4 py-6 text-center text-slate-400">Sin solicitudes registradas para este cliente.</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* Cotizaciones (COT) */}
-              <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
-                    <DollarSign size={16} className="text-indigo-600" /> Cotizaciones Emitidas (COT)
-                  </h3>
-                  <Link
-                    href={`/dashboard/ventas/cotizacion`}
-                    className="text-indigo-600 hover:underline text-xs font-bold flex items-center gap-1"
-                  >
-                    Ver todas las cotizaciones <ArrowRight size={14} />
-                  </Link>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100">
-                        <th className="px-4 py-3">Número</th>
-                        <th className="px-4 py-3">Total COP</th>
-                        <th className="px-4 py-3">Fecha</th>
-                        <th className="px-4 py-3">Estado</th>
-                        <th className="px-4 py-3 text-right">Acción</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {customer360?.cotizaciones?.length > 0 ? customer360.cotizaciones.map((cot: any) => (
-                        <tr key={cot.id} className="hover:bg-slate-50/80">
-                          <td className="px-4 py-3.5 font-bold text-slate-900">{cot.numero}</td>
-                          <td className="px-4 py-3.5 font-bold text-slate-900">{formatCOP(cot.total_cop)}</td>
-                          <td className="px-4 py-3.5 text-slate-500">{timeAgo(cot.created_at)}</td>
-                          <td className="px-4 py-3.5">
-                            <span className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${STATUS_COLOR_MAP[cot.estado] || 'bg-slate-100 text-slate-700'}`}>
-                              {cot.estado}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3.5 text-right">
-                            <Link
-                              href={`/dashboard/ventas/cotizacion?id=${cot.id}`}
-                              className="text-indigo-600 hover:underline font-bold inline-flex items-center gap-1"
-                            >
-                              Ver Cotización <ExternalLink size={12} />
-                            </Link>
-                          </td>
-                        </tr>
-                      )) : (
-                        <tr>
-                          <td colSpan={5} className="px-4 py-6 text-center text-slate-400">Sin cotizaciones registradas para este cliente.</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* TAB 3: PEDIDOS DE VENTA (PVEN) */}
-          {!isNew && activeTab === 'Pedidos de Venta (PVEN)' && (
-            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
-              <div className="flex justify-between items-center mb-4">
-                <div>
-                  <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
-                    <ShoppingBag size={16} className="text-blue-600" /> Pedidos de Venta Canónicos (PVEN)
-                  </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">Control de Anticipo 60%, Saldo 40% y estado de despacho.</p>
-                </div>
-                <Link
-                  href="/dashboard/ventas/venta"
-                  className="bg-blue-50 text-blue-700 hover:bg-blue-100 px-3.5 py-1.5 rounded-xl font-bold text-xs border border-blue-200 flex items-center gap-1"
-                >
-                  Ir a Ventas Hub <ArrowRight size={14} />
-                </Link>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-100">
-                      <th className="px-4 py-3">Número</th>
-                      <th className="px-4 py-3">Total</th>
-                      <th className="px-4 py-3">Anticipo (60%)</th>
-                      <th className="px-4 py-3">Saldo (40%)</th>
-                      <th className="px-4 py-3">Estado</th>
-                      <th className="px-4 py-3 text-right">Acción</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {customer360?.pedidos?.length > 0 ? customer360.pedidos.map((p: any) => (
-                      <tr key={p.id} className="hover:bg-slate-50/80">
-                        <td className="px-4 py-3.5">
-                          <span className="font-bold text-slate-900 block">{p.numero}</span>
-                          <span className="text-[10px] text-slate-400">{timeAgo(p.created_at)}</span>
-                        </td>
-                        <td className="px-4 py-3.5 font-black text-slate-900">{formatCOP(p.total_cop)}</td>
-                        <td className="px-4 py-3.5 font-bold text-emerald-600">{formatCOP(p.anticipo_cop)}</td>
-                        <td className="px-4 py-3.5 font-black text-rose-600">{formatCOP(p.saldo_cop)}</td>
-                        <td className="px-4 py-3.5">
-                          <span className={`px-2.5 py-1 rounded-full font-black text-[10px] ${STATUS_COLOR_MAP[p.estado] || 'bg-blue-100 text-blue-700'}`}>
-                            {p.estado}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3.5 text-right">
-                          <Link
-                            href={`/dashboard/ventas/venta?id=${p.id}`}
-                            className="text-blue-600 hover:underline font-bold inline-flex items-center gap-1"
-                          >
-                            Abrir Pedido <ExternalLink size={12} />
-                          </Link>
-                        </td>
-                      </tr>
-                    )) : (
-                      <tr>
-                        <td colSpan={6} className="px-4 py-8 text-center text-slate-400">Sin pedidos de venta registrados aún.</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* TAB 4: HISTORIAL Y BITÁCORA */}
-          {!isNew && activeTab === 'Historial y Bitácora' && (
-            <div className="bg-white rounded-3xl shadow-sm border border-slate-200 p-6">
-              <h3 className="text-sm font-black text-slate-800 uppercase tracking-wider mb-6 flex items-center gap-2">
-                <Activity size={16} className="text-purple-600" /> Bitácora de Eventos y Actividad
-              </h3>
-
-              <div className="relative pl-6 space-y-6 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-200">
-                {customer360?.timeline?.length > 0 ? customer360.timeline.map((event: any, idx: number) => {
-                  const dotColor = TIMELINE_DOT_COLOR[event.type] || 'bg-purple-600';
-                  return (
-                    <div key={`${event.type}-${event.id}-${idx}`} className="relative">
-                      <div className={`absolute -left-[21px] top-1.5 w-3 h-3 rounded-full border-2 border-white shadow-sm ${dotColor}`} />
-                      <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4">
-                        <div className="flex justify-between items-start mb-1">
-                          <span className="font-bold text-slate-900 text-xs">{event.status_label || event.type}</span>
-                          <span className="text-[10px] text-slate-400 font-medium">{event.created_at ? timeAgo(event.created_at) : 'Hoy'}</span>
-                        </div>
-                        <p className="text-xs text-slate-600">{event.description}</p>
-                        {event.total > 0 && (
-                          <p className="text-xs font-black text-slate-900 mt-1">{formatCOP(event.total)}</p>
-                        )}
-                      </div>
-                    </div>
-                  );
-                }) : (
-                  <p className="text-xs text-slate-400">Sin historial registrado.</p>
-                )}
-              </div>
-            </div>
-          )}
-
-        </div>
-
-        {/* Right Sidebar Widget: Acciones Rápidas & Contacto */}
-        {!isNew && (
-          <div className="w-80 shrink-0 bg-white rounded-3xl shadow-sm border border-slate-200 p-5 space-y-5">
-            <div>
-              <h4 className="text-xs font-black text-slate-400 uppercase tracking-wider mb-3">Contacto Directo</h4>
-              <div className="space-y-2">
-                {cleanPhone ? (
-                  <a
-                    href={`https://wa.me/57${cleanPhone}?text=${encodeURIComponent('Hola ' + clientData.name + ', te saludamos de Nebulae Hub.')}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 shadow-sm transition-colors"
-                  >
-                    <MessageCircle size={16} /> Abrir WhatsApp
-                  </a>
-                ) : (
-                  <button disabled className="w-full bg-slate-100 text-slate-400 font-bold text-xs py-2.5 px-4 rounded-xl cursor-not-allowed">
-                    Sin WhatsApp registrado
-                  </button>
-                )}
-
-                {clientData.phone && (
-                  <a
-                    href={`tel:${cleanPhone}`}
-                    className="w-full bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold text-xs py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 shadow-sm transition-colors"
-                  >
-                    <Phone size={15} /> Llamar ({clientData.phone})
-                  </a>
-                )}
-              </div>
-            </div>
-
-            <div className="pt-4 border-t border-slate-100">
-              <h4 className="text-xs font-black text-slate-400 uppercase tracking-wider mb-2">Trámites Activos</h4>
-              {customer360?.pedidos?.length > 0 ? (
-                <div className="space-y-2">
-                  {customer360.pedidos.slice(0, 3).map((ped: any) => (
-                    <div key={ped.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                      <div className="flex justify-between items-center mb-1">
-                        <span className="font-bold text-slate-800 text-xs">{ped.numero}</span>
-                        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full ${STATUS_COLOR_MAP[ped.estado] || 'bg-blue-100 text-blue-700'}`}>
-                          {ped.estado}
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-[10px] text-slate-500">
-                        <span>Saldo pendiente:</span>
-                        <span className="font-bold text-rose-600">{formatCOP(ped.saldo_cop)}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-slate-400 italic">No hay pedidos activos.</p>
               )}
+              <div className="flex gap-2.5 ml-auto">
+                <button
+                  type="button"
+                  onClick={goBack}
+                  className="px-5 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={handleSaveClient}
+                  className="px-6 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-black shadow-sm transition-all disabled:opacity-50"
+                >
+                  {isSaving ? 'Guardando...' : (isNew ? 'Crear Cliente' : 'Guardar Cambios')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 2: HISTORIAL COMERCIAL */}
+        {activeTab === 'Historial Comercial' && (
+          <div className="space-y-6">
+            {/* Solicitudes de Cliente */}
+            <div>
+              <h3 className="text-xs font-black text-slate-400 uppercase tracking-wider mb-3">Solicitudes de Cliente</h3>
+              <div className="bg-slate-50 rounded-2xl border border-slate-100 divide-y divide-slate-100">
+                {(customer360?.customer_requests || []).length === 0 ? (
+                  <div className="p-6 text-center text-xs text-slate-400">Sin solicitudes registradas</div>
+                ) : (
+                  (customer360?.customer_requests || []).map((sc: any) => (
+                    <div key={sc.id} className="p-3.5 flex items-center justify-between hover:bg-white transition-colors">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-xs text-slate-800">{sc.numero}</span>
+                          <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${STATUS_COLOR_MAP[sc.estado] || 'bg-slate-100 text-slate-600'}`}>{sc.estado}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-0.5">{sc.tipo_solicitud || 'Cotización'} · {timeAgo(sc.created_at)}</p>
+                      </div>
+                      <Link href={`/dashboard/ventas/solicitudes`} className="text-xs font-bold text-indigo-600 hover:underline">Ver SC →</Link>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
 
-            <div className="pt-4 border-t border-slate-100">
-              <Link
-                href={`/dashboard/ventas/solicitud?customer_id=${clientData.realId}`}
-                className="w-full py-2.5 bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold text-xs rounded-xl border border-purple-200 flex items-center justify-center gap-1.5 transition-colors"
-              >
-                <Plus size={14} /> Crear Solicitud Comercial
-              </Link>
+            {/* Pedidos de Venta */}
+            <div>
+              <h3 className="text-xs font-black text-slate-400 uppercase tracking-wider mb-3">Pedidos de Venta (PVEN)</h3>
+              <div className="bg-slate-50 rounded-2xl border border-slate-100 divide-y divide-slate-100">
+                {(customer360?.sales_orders || []).length === 0 ? (
+                  <div className="p-6 text-center text-xs text-slate-400">Sin pedidos de venta registrados</div>
+                ) : (
+                  (customer360?.sales_orders || []).map((so: any) => (
+                    <div key={so.id} className="p-3.5 flex items-center justify-between hover:bg-white transition-colors">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-xs text-slate-800">{so.numero}</span>
+                          <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${STATUS_COLOR_MAP[so.estado] || 'bg-slate-100 text-slate-600'}`}>{so.estado}</span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-0.5">Total: {formatCOP(so.total_cop)} · Anticipo: {formatCOP(so.anticipo_cop)}</p>
+                      </div>
+                      <Link href={`/dashboard/ventas/pedidos`} className="text-xs font-bold text-indigo-600 hover:underline">Ver Pedido →</Link>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 3: TIMELINE UNIFICADO */}
+        {activeTab === 'Timeline Unificado' && (
+          <div className="space-y-4">
+            <h3 className="text-xs font-black text-slate-400 uppercase tracking-wider mb-3">Actividad Cronológica del Cliente</h3>
+            <div className="relative pl-6 border-l-2 border-slate-200 space-y-6">
+              {(customer360?.timeline || []).length === 0 ? (
+                <div className="py-8 text-center text-xs text-slate-400">Sin eventos cronológicos aún</div>
+              ) : (
+                (customer360?.timeline || []).map((t: any, idx: number) => (
+                  <div key={idx} className="relative">
+                    <span className={`absolute -left-[31px] top-1 w-3.5 h-3.5 rounded-full border-2 border-white shadow-sm ${TIMELINE_DOT_COLOR[t.event_type] || 'bg-slate-400'}`} />
+                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 hover:bg-white transition-colors">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-bold text-slate-800">{t.title}</span>
+                        <span className="text-[10px] text-slate-400">{timeAgo(t.date)}</span>
+                      </div>
+                      <p className="text-xs text-slate-600">{t.description}</p>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         )}
       </div>
 
-      {/* Modal: Agendar Reunión */}
+      {/* Modal Confirmación Eliminación Cliente */}
+      {deleteConfirmClient && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-slate-200">
+            <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+              <div className="w-10 h-10 rounded-2xl bg-red-100 text-red-700 flex items-center justify-center shrink-0">
+                <ShieldAlert size={20} />
+              </div>
+              <div>
+                <h3 className="font-black text-base text-slate-800">Eliminar Cliente</h3>
+                <p className="text-xs text-slate-400">Esta acción no se puede revertir</p>
+              </div>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              ¿Estás seguro de que deseas eliminar permanentemente a <strong className="text-slate-800">{deleteConfirmClient.name}</strong>? Se desvincularán sus documentos asociados y se eliminará su ficha del CRM.
+            </p>
+            <div className="pt-2 flex gap-2.5">
+              <button
+                onClick={() => setDeleteConfirmClient(null)}
+                className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleConfirmDeleteClient}
+                className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-black shadow-sm"
+              >
+                Sí, Eliminar Cliente
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Nueva Solicitud */}
+      {showModal === 'Solicitud' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-slate-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-black text-base text-slate-800">Nueva Solicitud de Cliente</h3>
+              <button onClick={() => setShowModal(null)} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-full">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">Tipo de Solicitud</label>
+                <select
+                  value={solicitudForm.tipo}
+                  onChange={e => setSolicitudForm((prev: any) => ({ ...prev, tipo: e.target.value }))}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none bg-white focus:border-indigo-600"
+                >
+                  {solicitudTipos.map((t, idx) => (
+                    <option key={idx} value={t}>{t}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">Producto o Interés *</label>
+                <input
+                  type="text"
+                  value={solicitudForm.producto}
+                  onChange={e => setSolicitudForm((prev: any) => ({ ...prev, producto: e.target.value }))}
+                  placeholder="Ej. Coche Paseador Bebé"
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-indigo-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">Detalles / Requerimiento</label>
+                <textarea
+                  value={solicitudForm.detalles}
+                  onChange={e => setSolicitudForm((prev: any) => ({ ...prev, detalles: e.target.value }))}
+                  rows={3}
+                  placeholder="Especificaciones o notas adicionales..."
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-indigo-600 resize-none"
+                />
+              </div>
+            </div>
+
+            <div className="pt-2 flex gap-2.5">
+              <button
+                onClick={() => setShowModal(null)}
+                className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleCreateSolicitud}
+                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black shadow-sm"
+              >
+                Crear Solicitud
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Agendar Evento */}
       {showModal === 'Agendar' && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-          <div className="bg-white rounded-3xl p-6 w-full max-w-md shadow-2xl border border-slate-200">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="font-black text-slate-900 text-lg flex items-center gap-2">
-                <Calendar size={18} className="text-purple-600" /> Agendar Evento
-              </h3>
-              <button onClick={() => setShowModal(null)} className="text-slate-400 hover:text-slate-600">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 space-y-4 border border-slate-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-black text-base text-slate-800">Agendar Evento / Cita</h3>
+              <button onClick={() => setShowModal(null)} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-full">
                 <X size={18} />
               </button>
             </div>
@@ -909,7 +1651,7 @@ export default function AgendaPage() {
                   value={agendaForm.title}
                   onChange={e => setAgendaForm((prev: any) => ({ ...prev, title: e.target.value }))}
                   placeholder={`Llamada con ${selectedClient?.name || 'Cliente'}`}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:border-purple-600"
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-purple-600"
                 />
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -919,7 +1661,7 @@ export default function AgendaPage() {
                     type="datetime-local"
                     value={agendaForm.start_datetime}
                     onChange={e => setAgendaForm((prev: any) => ({ ...prev, start_datetime: e.target.value }))}
-                    className="w-full border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-medium focus:outline-none focus:border-purple-600"
+                    className="w-full border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-medium outline-none focus:border-purple-600"
                   />
                 </div>
                 <div>
@@ -928,7 +1670,7 @@ export default function AgendaPage() {
                     type="datetime-local"
                     value={agendaForm.end_datetime}
                     onChange={e => setAgendaForm((prev: any) => ({ ...prev, end_datetime: e.target.value }))}
-                    className="w-full border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-medium focus:outline-none focus:border-purple-600"
+                    className="w-full border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-medium outline-none focus:border-purple-600"
                   />
                 </div>
               </div>
@@ -939,7 +1681,7 @@ export default function AgendaPage() {
                   value={agendaForm.location}
                   onChange={e => setAgendaForm((prev: any) => ({ ...prev, location: e.target.value }))}
                   placeholder="Google Meet, WhatsApp o Presencial"
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:border-purple-600"
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-purple-600"
                 />
               </div>
               <div>
@@ -949,23 +1691,23 @@ export default function AgendaPage() {
                   onChange={e => setAgendaForm((prev: any) => ({ ...prev, notes: e.target.value }))}
                   rows={2}
                   placeholder="Detalles sobre la reunión..."
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:outline-none focus:border-purple-600 resize-none"
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium outline-none focus:border-purple-600 resize-none"
                 />
               </div>
             </div>
 
-            <div className="flex gap-2.5 mt-6">
-              <button
-                onClick={handleCreateAgendaEvent}
-                className="flex-1 bg-purple-600 hover:bg-purple-700 text-white font-bold text-sm py-2.5 rounded-xl shadow-sm transition-colors"
-              >
-                Guardar Evento
-              </button>
+            <div className="flex gap-2.5 pt-2">
               <button
                 onClick={() => setShowModal(null)}
-                className="px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-sm py-2.5 rounded-xl transition-colors"
+                className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50"
               >
                 Cancelar
+              </button>
+              <button
+                onClick={handleCreateAgendaEvent}
+                className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-black shadow-sm"
+              >
+                Guardar Evento
               </button>
             </div>
           </div>
