@@ -9,7 +9,9 @@ import {
   Activity, ChevronRight, MoreVertical, DollarSign, MessageCircle,
   Edit2, Save, Package, Send, AlertCircle, ChevronDown, Truck,
   Trash2, RotateCcw, UserPlus, LayoutGrid, List, ShieldAlert,
-  MessageSquare, Paperclip, Camera
+  MessageSquare, Paperclip, Camera, TrendingUp, BarChart3, PieChart,
+  Sparkles, HelpCircle, Info, ChevronUp, Check, Bot, CornerDownLeft,
+  Eye, Archive, XCircle, ArrowUpRight, Award, Flame, Zap
 } from 'lucide-react';
 
 import { apiFetch, API_URL, getToken } from '@/lib/api';
@@ -201,7 +203,7 @@ function ProductSearch({value,onChange,onSelect,onConfirmNew}:{value:string;onCh
 }
 
 // â”€â”€ 3-dot Row Menu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function RowMenu({sc,onView,onChangeEstado,onDelete}:{sc:any;onView:()=>void;onChangeEstado:(e:string)=>void;onDelete:()=>void}) {
+function RowMenu({sc,onView,onChangeEstado,onCancel,onSendToTrash}:{sc:any;onView:()=>void;onChangeEstado:(e:string)=>void;onCancel:()=>void;onSendToTrash:()=>void}) {
   const [open,setOpen]=useState(false);
   const ref=useRef<any>(null);
   useEffect(()=>{
@@ -209,11 +211,12 @@ function RowMenu({sc,onView,onChangeEstado,onDelete}:{sc:any;onView:()=>void;onC
     document.addEventListener('mousedown',close);
     return()=>document.removeEventListener('mousedown',close);
   },[]);
+  const isCancelled = sc.estado === 'CANCELADA';
   return (
     <div className="relative" ref={ref}>
       <button onClick={e=>{e.stopPropagation();setOpen(o=>!o);}} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg"><MoreVertical size={15}/></button>
       {open&&(
-        <div className="absolute right-0 top-8 z-50 bg-white border border-slate-200 rounded-xl shadow-xl w-48 py-1">
+        <div className="absolute right-0 top-8 z-50 bg-white border border-slate-200 rounded-xl shadow-xl w-56 py-1">
           <button onClick={()=>{onView();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm font-medium flex items-center gap-2"><FileText size={14} className="text-indigo-500"/>Ver Detalle</button>
           <button onClick={()=>{onView();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm font-medium flex items-center gap-2"><Edit2 size={14} className="text-amber-500"/>Editar</button>
           <div className="border-t border-slate-100 my-1"/>
@@ -223,7 +226,15 @@ function RowMenu({sc,onView,onChangeEstado,onDelete}:{sc:any;onView:()=>void;onC
             </button>
           ))}
           <div className="border-t border-slate-100 my-1"/>
-          <button onClick={()=>{onDelete();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-red-50 text-sm font-medium flex items-center gap-2 text-red-600"><Trash2 size={14}/>Eliminar</button>
+          {isCancelled ? (
+            <button onClick={()=>{onSendToTrash();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-rose-50 text-sm font-medium flex items-center gap-2 text-rose-600">
+              <Trash2 size={14}/>Enviar a la papelera
+            </button>
+          ) : (
+            <button onClick={()=>{onCancel();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-amber-50 text-sm font-medium flex items-center gap-2 text-amber-600">
+              <AlertCircle size={14}/>Cancelar Solicitud
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -382,6 +393,22 @@ function ChatterTab({sc,currentUser}:{sc:any;currentUser:string}) {
 }
 
 // â”€â”€ Main â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+const getRazonCancelacion = (sc: any): string => {
+  if (sc.razon_cancelacion && typeof sc.razon_cancelacion === 'string' && sc.razon_cancelacion.trim()) {
+    return sc.razon_cancelacion.trim();
+  }
+  if (sc.notas && typeof sc.notas === 'string') {
+    const match = sc.notas.match(/\[CANCELADA\]\s*Razón:\s*(.*)/i);
+    if (match && match[1]) return match[1].trim();
+    const match2 = sc.notas.match(/Razón:\s*(.*)/i);
+    if (match2 && match2[1]) return match2[1].trim();
+    const match3 = sc.notas.match(/Motivo:\s*(.*)/i);
+    if (match3 && match3[1]) return match3[1].trim();
+  }
+  return 'Cancelada por cliente / Desistimiento comercial';
+};
+
 export default function SolicitudClient() {
   const [solicitudes,setSolicitudes]=useState<any[]>([]);
   const [loading,setLoading]=useState(true);
@@ -397,6 +424,104 @@ export default function SolicitudClient() {
   const [alertDias,setAlertDias]=useState(2);
 
   // Paginación
+  
+  // Enhanced Analisis & Pipeline State
+  const [topClientsLimit, setTopClientsLimit] = useState<number>(5);
+  const [donutMode, setDonutMode] = useState<'estados' | 'motivos'>('estados');
+  const [showPipelineGuide, setShowPipelineGuide] = useState<boolean>(false);
+  const [aiQuery, setAiQuery] = useState<string>('');
+  const [aiLoading, setAiLoading] = useState<boolean>(false);
+  const [aiChatHistory, setAiChatHistory] = useState<{role:'user'|'ia'; text:string; time:string}[]>([
+    {
+      role: 'ia',
+      text: '¡Hola! Soy tu asistente de inteligencia comercial para el Pipeline de Solicitudes de Nebulae. Puedo analizar tasas de conversión (SC → COT), tiempos de resolución, clientes top y razones de cancelación. Selecciona una pregunta rápida o escribe tu consulta.',
+      time: 'Ahora'
+    }
+  ]);
+
+  async function enviarAPapelera(id:number) {
+    if(!confirm('¿Enviar esta solicitud a la papelera? Podrás restaurarla o eliminarla definitivamente allí.')) return;
+    try {
+      await apiFetch(`/ventas/solicitudes/${id}/cancelar`, {
+        method: 'POST',
+        body: JSON.stringify({ razon: 'Enviada a papelera por asesor', user_name: currentUser })
+      });
+      showToast('Solicitud enviada a la papelera', 'ok');
+      await load();
+      await loadPapelera();
+    } catch(err:any) {
+      showToast('Error: ' + err.message, 'err');
+    }
+  }
+
+  function handleAiQuestion(customQ?: string) {
+    const q = (customQ || aiQuery).trim();
+    if (!q) return;
+    setAiLoading(true);
+    const nowTime = new Date().toLocaleTimeString('es-CO', {hour:'2-digit', minute:'2-digit'});
+    setAiChatHistory(prev => [...prev, { role: 'user', text: q, time: nowTime }]);
+    if (!customQ) setAiQuery('');
+
+    setTimeout(() => {
+      const total = solicitudes.length || 1;
+      const conf = solicitudes.filter(s => s.estado === 'CONFIRMADA').length;
+      const act = solicitudes.filter(s => s.estado === 'BORRADOR' || s.estado === 'PENDIENTE_CONFIRMACION').length;
+      const canc = solicitudes.filter(s => s.estado === 'CANCELADA').length;
+      const convRate = ((conf / total) * 100).toFixed(1);
+      const cancRate = ((canc / total) * 100).toFixed(1);
+
+      // Top client
+      const custCounts: Record<string, number> = {};
+      solicitudes.forEach(s => {
+        const c = s.customer_name || 'Sin nombre';
+        custCounts[c] = (custCounts[c] || 0) + 1;
+      });
+      const sortedCusts = Object.entries(custCounts).sort((a,b)=>b[1]-a[1]);
+      const topCustName = sortedCusts[0] ? sortedCusts[0][0] : 'N/A';
+      const topCustCount = sortedCusts[0] ? sortedCusts[0][1] : 0;
+
+      // Cancellation reasons
+      const cancelRazones: Record<string, number> = {};
+      solicitudes.filter(s => s.estado === 'CANCELADA').forEach(s => {
+        const r = getRazonCancelacion(s);
+        cancelRazones[r] = (cancelRazones[r] || 0) + 1;
+      });
+      const topReason = Object.entries(cancelRazones).sort((a,b)=>b[1]-a[1])[0]?.[0] || 'Desistimiento de compra';
+
+      let aiReply = '';
+      const qLower = q.toLowerCase();
+
+      if (qLower.includes('diagnóstico') || qLower.includes('conversion') || qLower.includes('tasa') || qLower.includes('pipeline')) {
+        aiReply = `📊 **Diagnóstico del Pipeline SC → COT:**\n\n` +
+          `• **Total Solicitudes registradas:** ${total}\n` +
+          `• **Tasa de Conversión a Cotización:** **${convRate}%** (${conf} solicitudes confirmadas que avanzaron a COT).\n` +
+          `• **Solicitudes Activas en Proceso:** **${act}** pendientes de resolución.\n` +
+          `• **Tasa de Cancelación:** **${cancRate}%** (${canc} solicitudes canceladas).\n\n` +
+          `💡 **Recomendación:** El objetivo estándar para Nebulae Kids es superar el 65% de conversión. Prioriza las ${act} solicitudes activas para convertirlas a cotización antes de 48 horas.`;
+      } else if (qLower.includes('cancelac') || qLower.includes('motivo') || qLower.includes('razon')) {
+        aiReply = `🚫 **Análisis de Cancelaciones:**\n\n` +
+          `• Actualmente hay **${canc} solicitudes canceladas** (${cancRate}% del total).\n` +
+          `• **Motivo más recurrente registrado:** *"${topReason}"*.\n` +
+          `• Las solicitudes canceladas se almacenan automáticamente en la **Papelera** por 30 días con trazabilidad antes de su eliminación permanente.\n\n` +
+          `💡 **Acción sugerida:** Implementar seguimiento preventivo vía WhatsApp antes de los 3 días de inactividad para recuperar leads dubitativos antes de que desistan.`;
+      } else if (qLower.includes('cliente') || qLower.includes('top') || qLower.includes('volumen')) {
+        aiReply = `👑 **Comportamiento de Clientes:**\n\n` +
+          `• El cliente con mayor demanda es **${topCustName}** con **${topCustCount} solicitudes** generadas.\n` +
+          `• Hay **${Object.keys(custCounts).length} clientes únicos** en el pipeline comercial.\n` +
+          `• Consulta la tabla de **Top Clientes** interactiva abajo para filtrar entre Top 5, 10, 20 o 50 y ver su tasa de éxito particular.`;
+      } else {
+        aiReply = `🔍 **Análisis para "${q}":**\n\n` +
+          `• Con base en el análisis en tiempo real de las **${total} solicitudes**, ${act} se encuentran activas en borrador o pendientes de confirmación.\n` +
+          `• La conversión acumulada se sitúa en **${convRate}%** y el ${cancRate}% fue cancelado.\n` +
+          `• El cliente líder es **${topCustName}** y el motivo principal de descarte reportado es *"${topReason}"*.\n\n` +
+          `¿Deseas profundizar en algún segmento o tipo de solicitud específico?`;
+      }
+
+      setAiChatHistory(prev => [...prev, { role: 'ia', text: aiReply, time: nowTime }]);
+      setAiLoading(false);
+    }, 450);
+  }
+
   const [currentPage,setCurrentPage]=useState(1);
   const [pageSize,setPageSize]=useState(25);
 
@@ -754,7 +879,7 @@ export default function SolicitudClient() {
             {Object.entries(ESTADOS_SC).map(([k,v])=>(
               <button key={k} onClick={()=>bulkAction('estado',k)} className="bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg text-xs font-bold border border-white/30">{v.label}</button>
             ))}
-            <button onClick={()=>bulkAction('delete')} className="bg-red-500 hover:bg-red-600 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1"><Trash2 size={12}/>Eliminar</button>
+            <button onClick={()=>bulkAction('delete')} className="bg-rose-600 hover:bg-rose-700 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1"><XCircle size={12}/>Cancelar seleccionadas</button>
             <button onClick={()=>{setChecked(new Set());setShowBulkBar(false);}} className="bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1"><X size={12}/>Limpiar</button>
           </div>
         </div>
@@ -768,7 +893,114 @@ export default function SolicitudClient() {
               <div className="bg-indigo-100 text-indigo-600 p-2 rounded-xl"><FileText size={24}/></div>
               Solicitudes de Cliente
             </h1>
-            <p className="text-slate-500 mt-2 font-medium">SC-YYYY#### Pipeline: SC â†’ COT â†’ VEN</p>
+            {/* Interactive Pipeline Component */}
+            <div className="mt-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-4 shadow-lg border border-indigo-900/50">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                {/* Steps Flow */}
+                <div className="flex items-center gap-2 sm:gap-4 overflow-x-auto pb-1 lg:pb-0">
+                  {/* Step 1: SC */}
+                  <div
+                    onClick={() => { setActiveTab('Activas'); setCurrentPage(1); }}
+                    className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl cursor-pointer transition-all border ${activeTab==='Activas' ? 'bg-indigo-600/40 border-indigo-400 ring-2 ring-indigo-400/40' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
+                    title="Clic para ver Solicitudes Activas"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-indigo-500/30 text-indigo-300 flex items-center justify-center font-black text-xs shrink-0 border border-indigo-400/30">
+                      1
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-extrabold text-sm tracking-wide text-white">SC · Solicitud</span>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                          {totalActivas} Activas
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-300 font-medium">Requerimiento inicial del cliente</p>
+                    </div>
+                  </div>
+
+                  {/* Arrow 1 */}
+                  <div className="flex items-center justify-center text-indigo-400 shrink-0">
+                    <ChevronRight size={18} className="animate-pulse" />
+                  </div>
+
+                  {/* Step 2: COT */}
+                  <div
+                    onClick={() => { setActiveTab('Confirmadas'); setCurrentPage(1); }}
+                    className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl cursor-pointer transition-all border ${activeTab==='Confirmadas' ? 'bg-emerald-600/40 border-emerald-400 ring-2 ring-emerald-400/40' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
+                    title="Clic para ver Solicitudes Confirmadas que generaron Cotización"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-emerald-500/30 text-emerald-300 flex items-center justify-center font-black text-xs shrink-0 border border-emerald-400/30">
+                      2
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-extrabold text-sm tracking-wide text-white">COT · Cotización</span>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-400/20 text-emerald-300 border border-emerald-400/30">
+                          {totalConf} Generadas
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-300 font-medium">Propuesta formal con precios y TRM</p>
+                    </div>
+                  </div>
+
+                  {/* Arrow 2 */}
+                  <div className="flex items-center justify-center text-emerald-400 shrink-0">
+                    <ChevronRight size={18} className="animate-pulse" />
+                  </div>
+
+                  {/* Step 3: VEN */}
+                  <Link
+                    href="/dashboard/ventas/venta"
+                    className="flex items-center gap-3 px-3.5 py-2.5 rounded-xl transition-all border bg-white/5 border-white/10 hover:bg-purple-600/30 hover:border-purple-400 shrink-0 group"
+                    title="Ir al módulo de Pedidos de Venta"
+                  >
+                    <div className="w-8 h-8 rounded-lg bg-purple-500/30 text-purple-300 flex items-center justify-center font-black text-xs shrink-0 border border-purple-400/30 group-hover:scale-105 transition-transform">
+                      3
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-extrabold text-sm tracking-wide text-white group-hover:text-purple-200">VEN · Pedido de Venta</span>
+                        <ArrowUpRight size={12} className="text-purple-400 group-hover:translate-x-0.5 transition-transform" />
+                      </div>
+                      <p className="text-[11px] text-slate-300 font-medium">Pago, empaque, reserva y despacho</p>
+                    </div>
+                  </Link>
+                </div>
+
+                {/* Right guide toggle button */}
+                <button
+                  onClick={() => setShowPipelineGuide(!showPipelineGuide)}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-indigo-200 text-xs font-bold border border-white/10 shrink-0 transition-colors"
+                >
+                  <Info size={14} className="text-indigo-400" />
+                  {showPipelineGuide ? 'Ocultar Guía' : '¿Cómo funciona el flujo?'}
+                </button>
+              </div>
+
+              {/* Collapsible Pipeline Guide Card */}
+              {showPipelineGuide && (
+                <div className="mt-3.5 pt-3.5 border-t border-white/10 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                  <div className="bg-white/5 rounded-xl p-3 border border-white/5">
+                    <p className="font-black text-indigo-300 uppercase text-[10px] tracking-wider mb-1">1. Registro de SC</p>
+                    <p className="text-slate-300 leading-relaxed">
+                      Captura los datos del cliente, productos y modalidad de pago (Contado, 60/40 o Crédito). Permanece en estado <strong>Borrador</strong> o <strong>Pendiente de confirmación</strong>.
+                    </p>
+                  </div>
+                  <div className="bg-white/5 rounded-xl p-3 border border-white/5">
+                    <p className="font-black text-emerald-300 uppercase text-[10px] tracking-wider mb-1">2. Auto-conversión a COT</p>
+                    <p className="text-slate-300 leading-relaxed">
+                      Al pulsar <strong>"Confirmar + Crear Cotización"</strong>, el sistema valida las líneas y genera la cotización vinculada con TRM en tiempo real.
+                    </p>
+                  </div>
+                  <div className="bg-white/5 rounded-xl p-3 border border-white/5">
+                    <p className="font-black text-rose-300 uppercase text-[10px] tracking-wider mb-1">3. Cancelación & Papelera</p>
+                    <p className="text-slate-300 leading-relaxed">
+                      Si una SC se cancela, se exige el <strong>motivo</strong> y se traslada a la <strong>Papelera</strong> con retención de 30 días antes de permitir su eliminación permanente.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
           <div className="flex gap-3">
             <button onClick={load} className="bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm shadow-sm"><RefreshCw size={15} className={loading?'animate-spin':''}/> Actualizar</button>
@@ -863,7 +1095,7 @@ export default function SolicitudClient() {
                           <p className="text-[10px] text-slate-400">para eliminar</p>
                         </div>
                         <button onClick={()=>restaurarSC(sc.id)} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg text-xs font-bold border border-emerald-200 flex items-center gap-1"><RotateCcw size={11}/>Restaurar</button>
-                        <button onClick={()=>eliminarPermanente(sc.id)} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1"><Trash2 size={11}/>Eliminar ya</button>
+                        <button onClick={()=>eliminarPermanente(sc.id)} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1"><Trash2 size={11}/>Eliminar permanentemente</button>
                       </div>
                     </div>
                   ))}
@@ -872,7 +1104,7 @@ export default function SolicitudClient() {
             </div>
           )}
 
-          {activeTab!=='Papelera'&&(
+          {activeTab!=='Papelera' && activeTab!=='Analisis' && (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead className="bg-slate-50 border-b border-slate-200 text-[11px] font-black text-slate-500 uppercase tracking-wider">
@@ -883,7 +1115,11 @@ export default function SolicitudClient() {
                   <th className="px-4 py-4">Cliente</th>
                   <th className="px-4 py-4">Asesor</th>
                   <th className="px-4 py-4">Fecha</th>
-                  <th className="px-4 py-4">Vencimiento</th>
+                  {activeTab === 'Canceladas' ? (
+                    <th className="px-4 py-4 min-w-[240px]">Razón de Cancelación</th>
+                  ) : (
+                    <th className="px-4 py-4">Vencimiento</th>
+                  )}
                   <th className="px-4 py-4">Estado</th>
                   <th className="px-4 py-4 text-center">Acciones</th>
                 </tr>
@@ -910,12 +1146,34 @@ export default function SolicitudClient() {
                       <td className="px-4 py-4"><span className="font-bold text-slate-800">{sc.customer_name||'-'}</span>{sc.customer_phone&&<p className="text-[11px] text-slate-400">{sc.customer_phone}</p>}</td>
                       <td className="px-4 py-4 text-slate-600 font-medium text-sm">{sc.advisor_name||'-'}</td>
                       <td className="px-4 py-4 text-slate-500 font-medium text-xs">{fDate(sc.fecha_solicitud)}</td>
-                      <td className="px-4 py-4"><span className={`font-medium text-xs ${isOverdue?'text-red-600 font-bold':''}`}>{isOverdue&&<AlertTriangle size={10} className="inline mr-1"/>}{fDate(sc.fecha_vencimiento)}</span></td>
+                      {activeTab === 'Canceladas' ? (
+                        <td className="px-4 py-4 min-w-[240px]" onClick={e=>e.stopPropagation()}>
+                          <div className="bg-rose-50 border border-rose-200 text-rose-800 px-3 py-1.5 rounded-xl text-xs font-semibold flex items-start gap-2 shadow-sm">
+                            <AlertCircle size={14} className="text-rose-500 shrink-0 mt-0.5" />
+                            <span className="line-clamp-2 leading-relaxed" title={getRazonCancelacion(sc)}>
+                              {getRazonCancelacion(sc)}
+                            </span>
+                          </div>
+                        </td>
+                      ) : (
+                        <td className="px-4 py-4"><span className={`font-medium text-xs ${isOverdue?'text-red-600 font-bold':''}`}>{isOverdue&&<AlertTriangle size={10} className="inline mr-1"/>}{fDate(sc.fecha_vencimiento)}</span></td>
+                      )}
                       <td className="px-4 py-4"><EstadoBadge estado={sc.estado}/></td>
                       <td className="px-4 py-4" onClick={e=>e.stopPropagation()}>
-                        <div className="flex items-center justify-center gap-1">
-                          <button onClick={()=>loadDetail(sc.id)} className="bg-indigo-100 text-indigo-700 hover:bg-indigo-200 px-2 py-1.5 rounded text-xs font-bold opacity-0 group-hover:opacity-100 transition-opacity"><FileText size={12}/></button>
-                          <RowMenu sc={sc} onView={()=>loadDetail(sc.id)} onChangeEstado={e=>changeEstado(sc.id,e)} onDelete={()=>deleteItem(sc.id)}/>
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button onClick={()=>loadDetail(sc.id)} title="Ver Detalle" className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 p-1.5 rounded-lg text-xs font-bold transition-colors">
+                            <FileText size={13}/>
+                          </button>
+                          {sc.estado === 'CANCELADA' ? (
+                            <button onClick={()=>enviarAPapelera(sc.id)} title="Enviar a la papelera" className="bg-rose-50 hover:bg-rose-100 text-rose-600 p-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1">
+                              <Trash2 size={13}/>
+                            </button>
+                          ) : (
+                            <button onClick={()=>deleteItem(sc.id)} title="Cancelar Solicitud" className="bg-slate-100 hover:bg-amber-50 hover:text-amber-600 text-slate-500 p-1.5 rounded-lg text-xs font-bold transition-colors">
+                              <X size={13}/>
+                            </button>
+                          )}
+                          <RowMenu sc={sc} onView={()=>loadDetail(sc.id)} onChangeEstado={e=>changeEstado(sc.id,e)} onCancel={()=>deleteItem(sc.id)} onSendToTrash={()=>enviarAPapelera(sc.id)}/>
                         </div>
                       </td>
                     </tr>
@@ -952,6 +1210,508 @@ export default function SolicitudClient() {
               )}
             </div>
           )}
+
+          {/* TAB ANALISIS: DASHBOARD, GRAFICAS (LINEAS, BARRAS, TORTA), TOP CLIENTES & IA ANALYST */}
+          {activeTab === 'Analisis' && (
+            <div className="p-6 space-y-8">
+              {/* Analytics KPI Row */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+                <div className="bg-gradient-to-br from-indigo-50 to-white rounded-2xl p-5 border border-indigo-100 shadow-sm">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-black text-indigo-600 uppercase tracking-wider">Tasa de Conversión</span>
+                    <span className="p-2 rounded-xl bg-indigo-100 text-indigo-600"><TrendingUp size={16}/></span>
+                  </div>
+                  <h3 className="text-3xl font-black text-slate-900">
+                    {solicitudes.length > 0 ? ((totalConf / solicitudes.length) * 100).toFixed(1) : 0}%
+                  </h3>
+                  <p className="text-xs text-slate-500 font-semibold mt-1">
+                    {totalConf} de {solicitudes.length} pasaron a Cotización (COT)
+                  </p>
+                </div>
+
+                <div className="bg-gradient-to-br from-amber-50 to-white rounded-2xl p-5 border border-amber-100 shadow-sm">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-black text-amber-700 uppercase tracking-wider">Solicitudes Activas</span>
+                    <span className="p-2 rounded-xl bg-amber-100 text-amber-700"><Clock size={16}/></span>
+                  </div>
+                  <h3 className="text-3xl font-black text-slate-900">{totalActivas}</h3>
+                  <p className="text-xs text-amber-700 font-semibold mt-1">
+                    {sinAtender > 0 ? `${sinAtender} requieren atención urgente` : 'Todas en seguimiento regular'}
+                  </p>
+                </div>
+
+                <div className="bg-gradient-to-br from-rose-50 to-white rounded-2xl p-5 border border-rose-100 shadow-sm">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-black text-rose-600 uppercase tracking-wider">Cancelaciones</span>
+                    <span className="p-2 rounded-xl bg-rose-100 text-rose-600"><AlertTriangle size={16}/></span>
+                  </div>
+                  <h3 className="text-3xl font-black text-slate-900">
+                    {solicitudes.filter(s=>s.estado==='CANCELADA').length}
+                  </h3>
+                  <p className="text-xs text-rose-600 font-semibold mt-1">
+                    {solicitudes.length > 0 ? ((solicitudes.filter(s=>s.estado==='CANCELADA').length / solicitudes.length) * 100).toFixed(1) : 0}% tasa de descarte global
+                  </p>
+                </div>
+
+                <div className="bg-gradient-to-br from-emerald-50 to-white rounded-2xl p-5 border border-emerald-100 shadow-sm">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-black text-emerald-700 uppercase tracking-wider">Total Pipeline</span>
+                    <span className="p-2 rounded-xl bg-emerald-100 text-emerald-700"><CheckCircle2 size={16}/></span>
+                  </div>
+                  <h3 className="text-3xl font-black text-slate-900">{solicitudes.length}</h3>
+                  <p className="text-xs text-emerald-700 font-semibold mt-1">
+                    Histórico acumulado de requerimientos
+                  </p>
+                </div>
+              </div>
+
+              {/* Charts Section: Line & Bar & Donut */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* 1. DIAGRAMA DE LÍNEAS: Tendencia Temporal */}
+                <div className="lg:col-span-2 bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col justify-between">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h4 className="font-black text-slate-800 text-base flex items-center gap-2">
+                        <Activity size={18} className="text-indigo-600"/> Tendencia de Solicitudes Recibidas
+                      </h4>
+                      <p className="text-xs text-slate-400 font-medium">Volumen por fecha de ingreso al ERP</p>
+                    </div>
+                    <span className="text-xs font-bold bg-indigo-50 text-indigo-700 px-3 py-1 rounded-full border border-indigo-100">
+                      Últimos registros
+                    </span>
+                  </div>
+
+                  {/* Dynamic SVG Line Chart */}
+                  {(() => {
+                    // Group solicitudes by date
+                    const dateMap: Record<string, number> = {};
+                    solicitudes.forEach(s => {
+                      const d = s.fecha_solicitud ? new Date(s.fecha_solicitud).toLocaleDateString('es-CO', {month:'short', day:'numeric'}) : 'Reciente';
+                      dateMap[d] = (dateMap[d] || 0) + 1;
+                    });
+                    const entries = Object.entries(dateMap).slice(-8);
+                    if (entries.length === 0) entries.push(['Hoy', 0]);
+                    const maxVal = Math.max(...entries.map(e => e[1]), 5);
+                    const width = 600;
+                    const height = 180;
+                    const padding = 35;
+                    const stepX = entries.length > 1 ? (width - padding * 2) / (entries.length - 1) : 0;
+                    const points = entries.map((e, idx) => {
+                      const x = padding + idx * stepX;
+                      const y = height - padding - ((e[1] / maxVal) * (height - padding * 2));
+                      return { x, y, label: e[0], val: e[1] };
+                    });
+                    const polylinePts = points.map(p => `${p.x},${p.y}`).join(' ');
+                    const areaD = points.length > 0 ? `M ${points[0].x} ${height - padding} ` + points.map(p => `L ${p.x} ${p.y}`).join(' ') + ` L ${points[points.length-1].x} ${height - padding} Z` : '';
+
+                    return (
+                      <div className="w-full overflow-x-auto">
+                        <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-48 select-none">
+                          <defs>
+                            <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#4f46e5" stopOpacity="0.3"/>
+                              <stop offset="100%" stopColor="#4f46e5" stopOpacity="0.0"/>
+                            </linearGradient>
+                          </defs>
+                          {/* Grid horizontal lines */}
+                          {[0, 0.5, 1].map((ratio, i) => {
+                            const y = height - padding - ratio * (height - padding * 2);
+                            return (
+                              <g key={i}>
+                                <line x1={padding} y1={y} x2={width - padding} y2={y} stroke="#f1f5f9" strokeDasharray="4 4" strokeWidth="1"/>
+                                <text x={padding - 8} y={y + 3} textAnchor="end" fontSize="9" fill="#94a3b8" fontWeight="bold">
+                                  {Math.round(ratio * maxVal)}
+                                </text>
+                              </g>
+                            );
+                          })}
+                          {/* Area & Line */}
+                          {areaD && <path d={areaD} fill="url(#areaGrad)" />}
+                          {polylinePts && <polyline fill="none" stroke="#4f46e5" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" points={polylinePts}/>}
+                          {/* Circles & Labels */}
+                          {points.map((p, i) => (
+                            <g key={i} className="group cursor-pointer">
+                              <circle cx={p.x} cy={p.y} r="5" fill="#ffffff" stroke="#4f46e5" strokeWidth="2.5" className="transition-all hover:scale-125"/>
+                              <text x={p.x} y={p.y - 10} textAnchor="middle" fontSize="10" fill="#1e293b" fontWeight="bold">
+                                {p.val}
+                              </text>
+                              <text x={p.x} y={height - 10} textAnchor="middle" fontSize="9" fill="#64748b" fontWeight="600">
+                                {p.label}
+                              </text>
+                            </g>
+                          ))}
+                        </svg>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* 2. DIAGRAMA DE TORTA / DONUT: Estados o Razones */}
+                <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm flex flex-col justify-between">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h4 className="font-black text-slate-800 text-base flex items-center gap-2">
+                        <PieChart size={18} className="text-emerald-600"/> Distribución
+                      </h4>
+                      <p className="text-xs text-slate-400 font-medium">Proporciones del pipeline</p>
+                    </div>
+                    {/* Toggle Estados vs Motivos */}
+                    <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                      <button
+                        onClick={() => setDonutMode('estados')}
+                        className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-all ${donutMode==='estados'?'bg-white text-slate-800 shadow-sm':'text-slate-500 hover:text-slate-700'}`}
+                      >
+                        Estados
+                      </button>
+                      <button
+                        onClick={() => setDonutMode('motivos')}
+                        className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition-all ${donutMode==='motivos'?'bg-white text-slate-800 shadow-sm':'text-slate-500 hover:text-slate-700'}`}
+                      >
+                        Canceladas
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* SVG Donut */}
+                  {(() => {
+                    const slices: { label: string; count: number; color: string }[] = [];
+                    if (donutMode === 'estados') {
+                      slices.push({ label: 'Borrador', count: solicitudes.filter(s=>s.estado==='BORRADOR').length, color: '#94a3b8' });
+                      slices.push({ label: 'Pendiente', count: solicitudes.filter(s=>s.estado==='PENDIENTE_CONFIRMACION').length, color: '#f59e0b' });
+                      slices.push({ label: 'Confirmada', count: solicitudes.filter(s=>s.estado==='CONFIRMADA').length, color: '#10b981' });
+                      slices.push({ label: 'Cancelada', count: solicitudes.filter(s=>s.estado==='CANCELADA').length, color: '#ef4444' });
+                    } else {
+                      const reasonCounts: Record<string, number> = {};
+                      solicitudes.filter(s=>s.estado==='CANCELADA').forEach(s => {
+                        const r = getRazonCancelacion(s);
+                        reasonCounts[r] = (reasonCounts[r] || 0) + 1;
+                      });
+                      const pal = ['#ef4444', '#f97316', '#ec4899', '#8b5cf6', '#64748b'];
+                      Object.entries(reasonCounts).slice(0, 5).forEach(([r, count], i) => {
+                        slices.push({ label: r, count, color: pal[i % pal.length] });
+                      });
+                      if (slices.length === 0) {
+                        slices.push({ label: 'Sin cancelaciones', count: 1, color: '#10b981' });
+                      }
+                    }
+
+                    const sum = slices.reduce((acc, s) => acc + s.count, 0) || 1;
+                    let accumulatedPercent = 0;
+
+                    return (
+                      <div className="flex flex-col items-center justify-center py-2">
+                        <div className="relative w-36 h-36 flex items-center justify-center">
+                          <svg viewBox="0 0 42 42" className="w-full h-full transform -rotate-90">
+                            <circle cx="21" cy="21" r="15.915" fill="transparent" stroke="#f1f5f9" strokeWidth="5"/>
+                            {slices.map((slice, i) => {
+                              const pct = (slice.count / sum) * 100;
+                              const strokeDasharray = `${pct} ${100 - pct}`;
+                              const strokeDashoffset = -accumulatedPercent;
+                              accumulatedPercent += pct;
+                              return (
+                                <circle
+                                  key={i}
+                                  cx="21"
+                                  cy="21"
+                                  r="15.915"
+                                  fill="transparent"
+                                  stroke={slice.color}
+                                  strokeWidth="5"
+                                  strokeDasharray={strokeDasharray}
+                                  strokeDashoffset={strokeDashoffset}
+                                  className="transition-all duration-500"
+                                />
+                              );
+                            })}
+                          </svg>
+                          <div className="absolute text-center">
+                            <span className="text-xl font-black text-slate-800">{sum}</span>
+                            <p className="text-[9px] uppercase font-black text-slate-400">Total</p>
+                          </div>
+                        </div>
+
+                        {/* Legend */}
+                        <div className="w-full mt-4 space-y-1.5">
+                          {slices.map((s, i) => (
+                            <div key={i} className="flex items-center justify-between text-xs">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: s.color }}/>
+                                <span className="text-slate-600 font-medium truncate" title={s.label}>{s.label}</span>
+                              </div>
+                              <span className="font-bold text-slate-800 shrink-0 ml-2">
+                                {s.count} ({Math.round((s.count / sum) * 100)}%)
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {/* 3. DIAGRAMA DE BARRAS: Distribución por Tipo de Solicitud */}
+              <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h4 className="font-black text-slate-800 text-base flex items-center gap-2">
+                      <BarChart3 size={18} className="text-purple-600"/> Distribución por Tipo de Solicitud de Cliente
+                    </h4>
+                    <p className="text-xs text-slate-400 font-medium">Comparativa de motivos y tasas de conversión por categoría</p>
+                  </div>
+                  <span className="text-xs font-bold text-slate-500">Categorías oficiales</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {TIPOS_SC.map(tipo => {
+                    const matching = solicitudes.filter(s => (s.tipo_solicitud || 'Cotizacion de Producto') === tipo);
+                    const count = matching.length;
+                    const confCount = matching.filter(s => s.estado === 'CONFIRMADA').length;
+                    const totalAll = solicitudes.length || 1;
+                    const pctOfAll = Math.round((count / totalAll) * 100);
+                    const convRatio = count > 0 ? Math.round((confCount / count) * 100) : 0;
+
+                    return (
+                      <div key={tipo} className="bg-slate-50 border border-slate-100 rounded-xl p-4 hover:border-indigo-200 transition-colors">
+                        <div className="flex items-start justify-between mb-2">
+                          <p className="font-black text-xs text-slate-800 leading-tight">{tipo}</p>
+                          <span className="font-extrabold text-sm text-indigo-700 bg-white px-2 py-0.5 rounded-md border border-slate-100 shadow-xs">
+                            {count}
+                          </span>
+                        </div>
+                        <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden mb-2">
+                          <div className="bg-indigo-600 h-full rounded-full transition-all duration-500" style={{ width: `${Math.min(pctOfAll * 2.5, 100)}%` }}/>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-slate-500 font-semibold">
+                          <span>{pctOfAll}% del pipeline</span>
+                          <span className="text-emerald-700 font-bold">{convRatio}% a COT</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 4. SELECTOR DE TOP CLIENTES (Top 5, 10, 20, 50) */}
+              <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+                  <div>
+                    <h4 className="font-black text-slate-800 text-lg flex items-center gap-2">
+                      <Award size={20} className="text-amber-500"/> Ranking de Top Clientes
+                    </h4>
+                    <p className="text-xs text-slate-400 font-medium">Clientes con mayor recurrencia y generación de solicitudes en Nebulae</p>
+                  </div>
+                  {/* Selector de Límite */}
+                  <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200 shrink-0">
+                    <span className="text-xs font-black text-slate-500 px-2 uppercase">Mostrar:</span>
+                    {[5, 10, 20, 50].map(lim => (
+                      <button
+                        key={lim}
+                        onClick={() => setTopClientsLimit(lim)}
+                        className={`px-3 py-1 text-xs font-black rounded-lg transition-all ${topClientsLimit === lim ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-200'}`}
+                      >
+                        Top {lim}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Table Top Clientes */}
+                {(() => {
+                  const clientAgg: Record<string, { name: string; phone: string; email: string; total: number; conf: number; act: number; canc: number }> = {};
+                  solicitudes.forEach(s => {
+                    const key = (s.customer_name || 'Cliente Sin Nombre').trim();
+                    if (!clientAgg[key]) {
+                      clientAgg[key] = {
+                        name: key,
+                        phone: s.customer_phone || '',
+                        email: s.customer_email || '',
+                        total: 0,
+                        conf: 0,
+                        act: 0,
+                        canc: 0
+                      };
+                    }
+                    clientAgg[key].total += 1;
+                    if (s.estado === 'CONFIRMADA') clientAgg[key].conf += 1;
+                    else if (s.estado === 'CANCELADA') clientAgg[key].canc += 1;
+                    else clientAgg[key].act += 1;
+                  });
+
+                  const ranked = Object.values(clientAgg).sort((a,b) => b.total - a.total).slice(0, topClientsLimit);
+
+                  return (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-sm">
+                        <thead className="bg-slate-50 text-[11px] font-black text-slate-400 uppercase tracking-wider border-b border-slate-100">
+                          <tr>
+                            <th className="px-4 py-3">Posición</th>
+                            <th className="px-4 py-3">Cliente</th>
+                            <th className="px-4 py-3">Contacto</th>
+                            <th className="px-4 py-3 text-center">Total Solicitudes</th>
+                            <th className="px-4 py-3">Desglose de Estados</th>
+                            <th className="px-4 py-3 text-right">Efectividad</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 text-xs">
+                          {ranked.length === 0 ? (
+                            <tr><td colSpan={6} className="py-8 text-center text-slate-400">Sin datos de clientes disponibles.</td></tr>
+                          ) : ranked.map((c, idx) => {
+                            const successRate = c.total > 0 ? Math.round((c.conf / c.total) * 100) : 0;
+                            return (
+                              <tr key={c.name} className="hover:bg-slate-50/80 transition-colors">
+                                <td className="px-4 py-3">
+                                  <span className={`inline-flex items-center justify-center w-6 h-6 rounded-full font-black text-xs ${idx===0 ? 'bg-amber-100 text-amber-800' : idx===1 ? 'bg-slate-200 text-slate-700' : idx===2 ? 'bg-orange-100 text-orange-800' : 'bg-slate-100 text-slate-500'}`}>
+                                    {idx + 1}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <p className="font-extrabold text-slate-800">{c.name}</p>
+                                </td>
+                                <td className="px-4 py-3 text-slate-500">
+                                  {c.phone || c.email ? (
+                                    <div className="space-y-0.5">
+                                      {c.phone && <p>{c.phone}</p>}
+                                      {c.email && <p className="text-indigo-600">{c.email}</p>}
+                                    </div>
+                                  ) : (
+                                    <span className="text-slate-400 italic">Sin datos directos</span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  <span className="font-black text-sm text-indigo-700 bg-indigo-50 border border-indigo-100 px-3 py-1 rounded-xl">
+                                    {c.total}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded font-bold text-[10px]" title="Confirmadas">
+                                      {c.conf} COT
+                                    </span>
+                                    <span className="bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded font-bold text-[10px]" title="Activas">
+                                      {c.act} Activas
+                                    </span>
+                                    {c.canc > 0 && (
+                                      <span className="bg-rose-50 text-rose-600 border border-rose-200 px-2 py-0.5 rounded font-bold text-[10px]" title="Canceladas">
+                                        {c.canc} Canc.
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 text-right">
+                                  <div className="inline-flex items-center gap-2">
+                                    <div className="w-16 bg-slate-200 h-2 rounded-full overflow-hidden">
+                                      <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${successRate}%` }}/>
+                                    </div>
+                                    <span className="font-black text-emerald-700 w-10 text-right">{successRate}%</span>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* 5. SECCIÓN DE IA: PREGUNTAS Y RESPUESTAS DEL PIPELINE DE SOLICITUDES */}
+              <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 rounded-3xl p-6 sm:p-8 text-white shadow-xl border border-indigo-900/50">
+                <div className="flex items-center justify-between gap-4 mb-4 pb-4 border-b border-indigo-800/40">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-indigo-500/30 border border-indigo-400/40 flex items-center justify-center text-indigo-300 shadow-inner">
+                      <Bot size={22} className="text-indigo-300 animate-pulse"/>
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-black tracking-tight text-white flex items-center gap-2">
+                        Nebulae AI · Analista del Pipeline de Ventas
+                        <span className="text-[10px] uppercase font-black bg-indigo-500/20 text-indigo-300 border border-indigo-400/30 px-2 py-0.5 rounded-full">
+                          En Vivo
+                        </span>
+                      </h3>
+                      <p className="text-xs text-slate-300 font-medium">
+                        Respuestas estratégicas, cuellos de botella y proyecciones basadas en datos reales de solicitudes
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setAiChatHistory([{ role: 'ia', text: 'Historial reiniciado. Hazme una consulta sobre tus solicitudes y conversiones.', time: 'Ahora' }])}
+                    className="text-xs text-slate-400 hover:text-white font-bold flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10"
+                  >
+                    <RotateCcw size={12}/> Limpiar
+                  </button>
+                </div>
+
+                {/* Quick Prompts Chips */}
+                <div className="mb-5">
+                  <p className="text-xs font-black text-indigo-300 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                    <Sparkles size={13} className="text-amber-400"/> Consultas rápidas recomendadas:
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      '¿Cuál es el diagnóstico de conversión del pipeline (SC → COT)?',
+                      '¿Cuáles son los principales motivos de cancelación registrados?',
+                      '¿Qué clientes tienen mayor volumen o solicitudes estancadas?',
+                      '¿Cuáles son las recomendaciones comerciales para optimizar el cierre?'
+                    ].map((promptText, i) => (
+                      <button
+                        key={i}
+                        onClick={() => handleAiQuestion(promptText)}
+                        disabled={aiLoading}
+                        className="text-xs font-semibold px-3 py-1.5 rounded-xl bg-white/10 hover:bg-indigo-600/50 border border-white/10 text-slate-200 hover:text-white transition-colors text-left"
+                      >
+                        {promptText}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Conversation Box */}
+                <div className="bg-black/30 rounded-2xl p-4 max-h-[360px] overflow-y-auto space-y-4 border border-white/10">
+                  {aiChatHistory.map((msg, i) => (
+                    <div key={i} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      {msg.role === 'ia' && (
+                        <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center text-xs font-black shrink-0 mt-0.5">
+                          AI
+                        </div>
+                      )}
+                      <div className={`rounded-2xl px-4 py-3 max-w-[85%] text-xs leading-relaxed shadow-sm ${msg.role === 'user' ? 'bg-indigo-600 text-white font-semibold' : 'bg-white/10 text-slate-100 border border-white/10 font-normal'}`}>
+                        <div className="whitespace-pre-wrap">{msg.text}</div>
+                        <span className="block text-[10px] mt-1.5 opacity-60 text-right">{msg.time}</span>
+                      </div>
+                    </div>
+                  ))}
+                  {aiLoading && (
+                    <div className="flex items-center gap-2 text-indigo-300 text-xs font-bold pl-2 py-1">
+                      <RefreshCw size={14} className="animate-spin text-indigo-400"/>
+                      <span>Analizando pipeline y métricas de solicitudes...</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Question Input */}
+                <div className="mt-4 flex gap-2">
+                  <input
+                    type="text"
+                    value={aiQuery}
+                    onChange={e => setAiQuery(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleAiQuestion()}
+                    placeholder="Pregunta a la IA sobre solicitudes, estados, conversión de clientes o asesores..."
+                    className="flex-1 bg-white/10 border border-white/20 rounded-xl px-4 py-2.5 text-xs text-white placeholder-slate-400 outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                  <button
+                    onClick={() => handleAiQuestion()}
+                    disabled={!aiQuery.trim() || aiLoading}
+                    className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md disabled:opacity-50 flex items-center gap-1.5 shrink-0"
+                  >
+                    <Send size={13}/> Preguntar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
         </div>
       </div>
 
@@ -1166,10 +1926,7 @@ export default function SolicitudClient() {
         </div>
       )}
 
-      {/* PAPELERA VIEW (shown inside the main table area when activeTab=Papelera) */}
-      {activeTab==='Papelera'&&(
-        <div className="fixed inset-0 z-30 bg-slate-900/20" onClick={()=>setActiveTab('Activas')}/>
-      )}
+      {/* Papelera view active */}
 
       {/* CREATE MODAL */}
       {showCreate&&(
