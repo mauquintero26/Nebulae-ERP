@@ -252,6 +252,41 @@ def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
     return {"status": "success", "data": _sc_dict(sc)}
 
 
+@router.get("/solicitudes/papelera")
+def get_papelera(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+        db: Session = Depends(get_db)):
+    """Lista SCs canceladas con días restantes antes de eliminación permanente."""
+    try:
+        # Auto-purge SCs older than 30 days in papelera
+        db.execute(text("""
+            DELETE FROM customer_requests
+            WHERE estado='CANCELADA' AND eliminada_at IS NOT NULL
+            AND eliminada_at < NOW() - INTERVAL '30 days'
+        """))
+        db.commit()
+        rows = db.execute(text("""
+            SELECT id, numero, customer_name, advisor_name, tipo_solicitud,
+                   razon_cancelacion, eliminada_at, created_at, updated_at,
+                   EXTRACT(DAY FROM NOW() - eliminada_at) as dias_en_papelera
+            FROM customer_requests
+            WHERE estado='CANCELADA'
+            ORDER BY COALESCE(eliminada_at, updated_at) DESC
+            LIMIT 200
+        """)).mappings().all()
+        data = []
+        for r in rows:
+            d = dict(r)
+            dias = float(d.get("dias_en_papelera") or 0)
+            d["dias_en_papelera"] = int(dias)
+            d["dias_restantes"] = max(0, 30 - int(dias)) if d.get("eliminada_at") else 30
+            d["eliminada_at"] = str(d["eliminada_at"]) if d.get("eliminada_at") else None
+            d["created_at"] = str(d["created_at"]) if d.get("created_at") else None
+            data.append(d)
+        return {"status": "success", "data": data}
+    except Exception as e:
+        return {"status": "success", "data": []}
+
+
 @router.get("/solicitudes/{sc_id}")
 def get_solicitud(sc_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
         db: Session = Depends(get_db)):
@@ -1071,45 +1106,7 @@ def cancelar_solicitud(sc_id: int, body: CancelarSolicitudBody,
 
 # ─── PAPELERA (SCs canceladas, purga 30 días) ────────────────────────────────
 
-@router.get("/solicitudes/papelera")
-def get_papelera(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
-        db: Session = Depends(get_db)):
-    """Lista SCs canceladas con días restantes antes de eliminación permanente."""
-    try:
-        # Ensure columns exist
-        db.execute(text("""
-            ALTER TABLE customer_requests ADD COLUMN IF NOT EXISTS razon_cancelacion TEXT;
-            ALTER TABLE customer_requests ADD COLUMN IF NOT EXISTS eliminada_at TIMESTAMPTZ;
-        """))
-        db.commit()
-        # Auto-purge SCs older than 30 days in papelera
-        db.execute(text("""
-            DELETE FROM customer_requests
-            WHERE estado='CANCELADA' AND eliminada_at IS NOT NULL
-            AND eliminada_at < NOW() - INTERVAL '30 days'
-        """))
-        db.commit()
-        rows = db.execute(text("""
-            SELECT id, numero, customer_name, advisor_name, tipo_solicitud,
-                   razon_cancelacion, eliminada_at, created_at, updated_at,
-                   EXTRACT(DAY FROM NOW() - eliminada_at) as dias_en_papelera
-            FROM customer_requests
-            WHERE estado='CANCELADA'
-            ORDER BY COALESCE(eliminada_at, updated_at) DESC
-            LIMIT 200
-        """)).mappings().all()
-        data = []
-        for r in rows:
-            d = dict(r)
-            dias = float(d.get("dias_en_papelera") or 0)
-            d["dias_en_papelera"] = int(dias)
-            d["dias_restantes"] = max(0, 30 - int(dias)) if d.get("eliminada_at") else 30
-            d["eliminada_at"] = str(d["eliminada_at"]) if d.get("eliminada_at") else None
-            d["created_at"] = str(d["created_at"]) if d.get("created_at") else None
-            data.append(d)
-        return {"status": "success", "data": data}
-    except Exception as e:
-        return {"status": "success", "data": []}
+# get_papelera moved above /solicitudes/{sc_id} to fix route shadowing
 
 
 @router.delete("/solicitudes/{sc_id}/permanente")
