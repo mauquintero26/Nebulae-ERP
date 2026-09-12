@@ -442,9 +442,14 @@ export default function SolicitudClient() {
   async function enviarAPapelera(id:number) {
     if(!confirm('¿Enviar esta solicitud a la papelera? Podrás restaurarla o eliminarla definitivamente allí.')) return;
     try {
+      const existing = solicitudes.find(s => s.id === id);
+      const razonToSend = (existing && getRazonCancelacion(existing)) || 'Enviada a papelera por asesor';
       await apiFetch(`/ventas/solicitudes/${id}/cancelar`, {
         method: 'POST',
-        body: JSON.stringify({ razon: 'Enviada a papelera por asesor', user_name: currentUser })
+        body: JSON.stringify({
+          razon: razonToSend.length >= 5 ? razonToSend : 'Enviada a papelera por asesor',
+          user_name: currentUser || 'asesor'
+        })
       });
       showToast('Solicitud enviada a la papelera', 'ok');
       await load();

@@ -1080,25 +1080,12 @@ def cancelar_solicitud(sc_id: int, body: CancelarSolicitudBody,
         raise HTTPException(404, "SC no encontrada")
     old_estado = sc.estado
     sc.estado = "CANCELADA"
-    # Store cancellation reason and date in notas or extra field
+    sc.razon_cancelacion = razon
+    sc.eliminada_at = datetime.datetime.utcnow()
     sc.notas = f"{sc.notas or ''}\n[CANCELADA] Razón: {razon}".strip()
     sc.updated_at = datetime.datetime.utcnow()
-    # Mark eliminada_at via extra column (safe if not present — try/except)
-    try:
-        db.execute(text("""
-            ALTER TABLE customer_requests ADD COLUMN IF NOT EXISTS razon_cancelacion TEXT;
-            ALTER TABLE customer_requests ADD COLUMN IF NOT EXISTS eliminada_at TIMESTAMPTZ;
-        """))
-        db.commit()
-        db.execute(text("""
-            UPDATE customer_requests SET razon_cancelacion=:razon, eliminada_at=NOW(), estado='CANCELADA', updated_at=NOW()
-            WHERE id=:id
-        """), {"razon": razon, "id": sc_id})
-        db.commit()
-    except Exception:
-        db.rollback()
-        sc.estado = "CANCELADA"
-        db.commit()
+    db.commit()
+    db.refresh(sc)
     user_name = getattr(body, "user_name", None) or getattr(user, "username", None) or getattr(user, "email", "")
     _log(db, "SC", sc_id, sc.numero, "CANCELLED", f"Cancelada: {razon}", old_estado, "CANCELADA", user_name)
     return {"status": "success", "data": {"id": sc_id, "estado": "CANCELADA", "razon": razon}}
