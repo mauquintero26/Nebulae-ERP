@@ -40,7 +40,7 @@ export function Sidebar() {
       { name: 'Asistente Omnicanal', path: '/dashboard/asistente_omnicanal', icon: MessageSquare },
       { name: 'Cotiza', path: '/dashboard/cotiza', icon: ShoppingCart },
       { 
-        name: 'Ventas', 
+        name: 'HUB Ventas', 
         path: '/dashboard/ventas', 
         icon: TrendingUp,
         subItems: [
