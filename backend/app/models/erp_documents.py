@@ -52,6 +52,8 @@ class CustomerRequest(Base):
     created_at       = Column(DateTime, default=_now)
     updated_at       = Column(DateTime, default=_now, onupdate=_now)
     created_by       = Column(String(150), nullable=True)
+    razon_cancelacion= Column(Text, nullable=True)
+    eliminada_at     = Column(DateTime, nullable=True)
 
     customer   = relationship("Customer", foreign_keys=[customer_id])
     quotations = relationship("SalesQuotation", back_populates="customer_request")

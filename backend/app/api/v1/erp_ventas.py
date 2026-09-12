@@ -73,6 +73,8 @@ def _sc_dict(sc: CustomerRequest) -> dict:
         "created_at": sc.created_at.isoformat() if sc.created_at else None,
         "updated_at": sc.updated_at.isoformat() if sc.updated_at else None,
         "created_by": sc.created_by,
+        "razon_cancelacion": getattr(sc, "razon_cancelacion", None),
+        "eliminada_at": sc.eliminada_at.isoformat() if getattr(sc, "eliminada_at", None) else None,
     }
 
 def _cot_dict(cot: SalesQuotation) -> dict:
@@ -1062,7 +1064,8 @@ def cancelar_solicitud(sc_id: int, body: CancelarSolicitudBody,
         db.rollback()
         sc.estado = "CANCELADA"
         db.commit()
-    _log(db, "SC", sc_id, sc.numero, "CANCELLED", f"Cancelada: {razon}", old_estado, "CANCELADA", body.get("user_name",""))
+    user_name = getattr(body, "user_name", None) or getattr(user, "username", None) or getattr(user, "email", "")
+    _log(db, "SC", sc_id, sc.numero, "CANCELLED", f"Cancelada: {razon}", old_estado, "CANCELADA", user_name)
     return {"status": "success", "data": {"id": sc_id, "estado": "CANCELADA", "razon": razon}}
 
 
