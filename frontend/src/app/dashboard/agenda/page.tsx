@@ -67,6 +67,7 @@ export default function AgendaPage() {
   const [entityType, setEntityType] = useState('Individuo');
   const [showModal, setShowModal] = useState<string | null>(null);
   const [deleteConfirmClient, setDeleteConfirmClient] = useState<any | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [customers, setCustomers] = useState<any[]>([]);
   const [formData, setFormData] = useState<any>({});
   const [solicitudForm, setSolicitudForm] = useState<any>({ sale_type: 'ON_DEMAND', tipo: 'Solicitud de Cotización', producto: '', detalles: '' });
@@ -266,18 +267,30 @@ export default function AgendaPage() {
   };
 
   const handleConfirmDeleteClient = async () => {
-    if (!deleteConfirmClient?.realId) return;
+    const rawId = deleteConfirmClient?.realId ?? deleteConfirmClient?.id;
+    const targetId = typeof rawId === 'string' && rawId.startsWith('CLI-')
+      ? parseInt(rawId.replace('CLI-', ''), 10)
+      : Number(rawId);
+
+    if (!targetId || isNaN(targetId)) {
+      toast.error('No se pudo identificar el ID del cliente');
+      return;
+    }
+
+    setIsDeleting(true);
     const tid = toast.loading('Eliminando cliente...');
     try {
-      await deleteCustomer(deleteConfirmClient.realId);
+      await deleteCustomer(targetId);
       toast.success('Cliente eliminado correctamente.', { id: tid });
       setDeleteConfirmClient(null);
-      if (selectedClient?.realId === deleteConfirmClient.realId) {
+      if (selectedClient?.realId === targetId || selectedClient?.id === deleteConfirmClient?.id) {
         goBack();
       }
       await fetchCustomers();
     } catch (err: any) {
       toast.error(err.message || 'Error al eliminar cliente', { id: tid });
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -1183,16 +1196,18 @@ export default function AgendaPage() {
               </p>
               <div className="pt-2 flex gap-2.5">
                 <button
+                  disabled={isDeleting}
                   onClick={() => setDeleteConfirmClient(null)}
-                  className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50"
+                  className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                 >
                   Cancelar
                 </button>
                 <button
+                  disabled={isDeleting}
                   onClick={handleConfirmDeleteClient}
-                  className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-black shadow-sm"
+                  className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-black shadow-sm disabled:opacity-50"
                 >
-                  Sí, Eliminar Cliente
+                  {isDeleting ? 'Eliminando...' : 'Sí, Eliminar Cliente'}
                 </button>
               </div>
             </div>
@@ -1550,16 +1565,18 @@ export default function AgendaPage() {
             </p>
             <div className="pt-2 flex gap-2.5">
               <button
+                disabled={isDeleting}
                 onClick={() => setDeleteConfirmClient(null)}
-                className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50"
+                className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
               >
                 Cancelar
               </button>
               <button
+                disabled={isDeleting}
                 onClick={handleConfirmDeleteClient}
-                className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-black shadow-sm"
+                className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-black shadow-sm disabled:opacity-50"
               >
-                Sí, Eliminar Cliente
+                {isDeleting ? 'Eliminando...' : 'Sí, Eliminar Cliente'}
               </button>
             </div>
           </div>

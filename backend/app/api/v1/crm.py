@@ -225,15 +225,15 @@ def delete_customer(customer_id: int, user: User = Depends(require_roles(*ROLE_A
         from app.models.erp_documents import CustomerRequest, SalesQuotation, SaleOrder as ErpSaleOrder, PaymentPending
         from app.models.fase4 import SaleOrderReturn, SaleOrderDelivery, SalePackingSession
         from app.models.fase5 import CustomerAgendaActivity, OmnichannelInteraction, CustomerContactPreference
-        from app.models.crm import CustomerAddress, Lead, CRMEvent
+        from app.models.sales import SalesOrder, SalesOrderLine, Quotation, QuotationLine
 
-        # 1. Unlink ERP document foreign keys
+        # 1. Unlink nullable ERP document foreign keys
         db.query(CustomerRequest).filter(CustomerRequest.customer_id == customer_id).update({"customer_id": None})
         db.query(SalesQuotation).filter(SalesQuotation.customer_id == customer_id).update({"customer_id": None})
         db.query(ErpSaleOrder).filter(ErpSaleOrder.customer_id == customer_id).update({"customer_id": None})
         db.query(PaymentPending).filter(PaymentPending.customer_id == customer_id).update({"customer_id": None})
 
-        # 2. Despachos y empaques fase4 vinculados al cliente
+        # 2. Despachos y empaques fase4 vinculados al cliente si existieran
         db.query(SaleOrderReturn).filter(SaleOrderReturn.customer_id == customer_id).delete(synchronize_session=False)
         deliveries = db.query(SaleOrderDelivery).filter(SaleOrderDelivery.customer_id == customer_id).all()
         for d in deliveries:
@@ -247,19 +247,15 @@ def delete_customer(customer_id: int, user: User = Depends(require_roles(*ROLE_A
         db.query(OmnichannelInteraction).filter(OmnichannelInteraction.customer_id == customer_id).update({"customer_id": None})
         db.query(CustomerContactPreference).filter(CustomerContactPreference.customer_id == customer_id).delete(synchronize_session=False)
 
-        # 4. CRM addresses, events, leads
-        db.query(CustomerAddress).filter(CustomerAddress.customer_id == customer_id).delete(synchronize_session=False)
-        db.query(CRMEvent).filter(CRMEvent.customer_id == customer_id).delete(synchronize_session=False)
-        db.query(Lead).filter(Lead.customer_id == customer_id).update({"customer_id": None})
-
-        # 5. Remove linked sales orders & quotations
-        for order in db_customer.sales_orders:
-            for line in order.lines:
-                db.delete(line)
-            db.delete(order)
-        for q in db_customer.quotations:
+        # 4. Remove linked legacy sales orders & quotations
+        for so in db.query(SalesOrder).filter(SalesOrder.customer_id == customer_id).all():
+            db.query(SalesOrderLine).filter(SalesOrderLine.sales_order_id == so.id).delete(synchronize_session=False)
+            db.delete(so)
+        for q in db.query(Quotation).filter(Quotation.customer_id == customer_id).all():
+            db.query(QuotationLine).filter(QuotationLine.quotation_id == q.id).delete(synchronize_session=False)
             db.delete(q)
 
+        # 5. Delete customer
         db.delete(db_customer)
         db.commit()
     except Exception as e:
