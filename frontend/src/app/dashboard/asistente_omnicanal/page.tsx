@@ -72,7 +72,7 @@ export default function AsistenteOmnicanal() {
           src={CHATWOOT_URL}
           className="absolute inset-0 w-full h-full border-none"
           title="Chatwoot — Asistente Omnicanal Nebulae Kids"
-          allow="camera; microphone; clipboard-write"
+          allow="camera; microphone; clipboard-write; clipboard-read; storage-access; cross-origin-isolated"
         />
       </div>
     </div>
