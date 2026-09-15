@@ -1,5 +1,8 @@
 import os
 import hmac, hashlib
+import logging
+import urllib.request
+import urllib.error
 from typing import Optional
 from app.models.users import User
 from app.api.dependencies import require_roles, ROLE_ADMIN, ROLE_FINANZAS, ROLE_ASESOR, normalize_role
@@ -11,6 +14,37 @@ from sqlalchemy import text
 from app.db.database import get_db
 import datetime, secrets, json
 from decimal import Decimal
+
+logger = logging.getLogger("chat_api")
+
+# Configuración Chatwoot (Omnicanal)
+CHATWOOT_BASE_URL = os.getenv("CHATWOOT_BASE_URL", "https://chatbot-crn-chatwoot.ionwxk.easypanel.host").rstrip("/")
+CHATWOOT_API_TOKEN = os.getenv("CHATWOOT_API_TOKEN", "2JhqHhEBTUe5ENMfizwszmNk")
+CHATWOOT_ACCOUNT_ID = int(os.getenv("CHATWOOT_ACCOUNT_ID", "1"))
+
+def _send_to_chatwoot(chatwoot_conv_id: str, content: str):
+    """Despacha mensaje saliente a Chatwoot para entregarlo en Telegram o WhatsApp."""
+    try:
+        url = f"{CHATWOOT_BASE_URL}/api/v1/accounts/{CHATWOOT_ACCOUNT_ID}/conversations/{chatwoot_conv_id}/messages"
+        payload = json.dumps({
+            "content": content,
+            "message_type": "outgoing",
+            "private": False,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "api_access_token": CHATWOOT_API_TOKEN,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        logger.error("Error despachando mensaje a Chatwoot conv %s: %s", chatwoot_conv_id, e)
+        return None
 
 router = APIRouter()
 
@@ -158,6 +192,16 @@ def reply_to_conversation(conv_id: int, body: dict, user: User = Depends(require
         WHERE id=:id
     """), {"msg": content[:120], "id": conv_id})
     db.commit()
+
+    # Despachar a Chatwoot si la conversación proviene de un canal externo (Telegram, WhatsApp)
+    try:
+        conv = db.execute(text(
+            "SELECT channel, external_id FROM chat_conversations WHERE id=:id"
+        ), {"id": conv_id}).mappings().first()
+        if conv and conv.get("external_id") and conv.get("channel") in ("telegram", "whatsapp"):
+            _send_to_chatwoot(conv["external_id"], content)
+    except Exception as e:
+        logger.warning("No se pudo reenviar mensaje a Chatwoot: %s", e)
 
     return {
         "status": "success",
@@ -1200,3 +1244,210 @@ def erp_copilot_query(
         )
 
     return {"status": "success", "data": {"answer": answer, "source": "nebulae-kernel-ai", "metrics": metrics}}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# INTEGRACIÓN CHATWOOT (OMNICANAL: TELEGRAM / WHATSAPP)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/webhook/chatwoot", summary="Webhook receptor de eventos Chatwoot")
+async def chatwoot_webhook(request: Request, db: Session = Depends(get_db)):
+    """
+    Recibe eventos de Chatwoot (message_created).
+    Sincroniza mensajes entrantes en chat_conversations y chat_messages.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {"status": "error", "detail": "Invalid JSON"}
+
+    event = body.get("event")
+    if event != "message_created":
+        return {"status": "ignored", "event": event}
+
+    conv_data = body.get("conversation", {})
+    cw_conv_id = str(conv_data.get("id") or "")
+    if not cw_conv_id:
+        return {"status": "ignored", "detail": "No conversation ID"}
+
+    channel_type = str(conv_data.get("channel") or "").lower()
+    inbox_name = str(body.get("inbox", {}).get("name") or "").lower()
+
+    if "telegram" in channel_type or "telegram" in inbox_name:
+        channel = "telegram"
+    elif "whatsapp" in channel_type or "whatsapp" in inbox_name:
+        channel = "whatsapp"
+    else:
+        channel = "web"
+
+    content = body.get("content") or ""
+    msg_type = body.get("message_type")
+    # In Chatwoot, message_type: 0 / 'incoming', 1 / 'outgoing'
+    is_incoming = msg_type in (0, "0", "incoming")
+    sender = body.get("sender", {})
+    sender_name = sender.get("name") or ("Cliente" if is_incoming else "Asesor")
+    sender_phone = sender.get("phone_number")
+    sender_email = sender.get("email")
+
+    # Si el mensaje fue saliente y enviado desde nuestro propio sistema, omitir duplicación
+    if not is_incoming:
+        # Actualizar last_message de la conversación si ya existe
+        db.execute(text("""
+            UPDATE chat_conversations
+            SET last_message=:msg, last_message_at=NOW(), updated_at=NOW()
+            WHERE external_id=:eid
+        """), {"msg": content[:120] if content else "Mensaje", "eid": cw_conv_id})
+        db.commit()
+        return {"status": "ignored_outgoing", "external_id": cw_conv_id}
+
+    # Buscar conversación existente en Nebulae por external_id
+    existing_conv = db.execute(text(
+        "SELECT id, unread_count FROM chat_conversations WHERE external_id=:eid"
+    ), {"eid": cw_conv_id}).mappings().first()
+
+    if existing_conv:
+        local_conv_id = existing_conv["id"]
+        unread = (existing_conv["unread_count"] or 0) + 1
+        db.execute(text("""
+            UPDATE chat_conversations
+            SET last_message=:msg, last_message_at=NOW(), unread_count=:unread, updated_at=NOW()
+            WHERE id=:id
+        """), {
+            "msg": content[:120] if content else "Adjunto",
+            "unread": unread,
+            "id": local_conv_id,
+        })
+    else:
+        # Crear nueva conversación sincronizada
+        res = db.execute(text("""
+            INSERT INTO chat_conversations
+                (channel, customer_name, customer_email, customer_phone,
+                 status, unread_count, last_message, last_message_at,
+                 ai_mode, external_id)
+            VALUES
+                (:channel, :name, :email, :phone,
+                 'open', 1, :msg, NOW(),
+                 'suggestion', :eid)
+            RETURNING id
+        """), {
+            "channel": channel,
+            "name": sender_name,
+            "email": sender_email,
+            "phone": sender_phone,
+            "msg": content[:120] if content else "Nuevo chat",
+            "eid": cw_conv_id,
+        }).mappings().first()
+        local_conv_id = res["id"]
+
+    # Insertar en chat_messages
+    db.execute(text("""
+        INSERT INTO chat_messages
+            (conversation_id, direction, content, sender_name, is_ai_generated, is_auto_sent)
+        VALUES
+            (:cid, 'in', :content, :sender, FALSE, FALSE)
+    """), {
+        "cid": local_conv_id,
+        "content": content,
+        "sender": sender_name,
+    })
+    db.commit()
+
+    return {"status": "success", "conversation_id": local_conv_id, "external_id": cw_conv_id}
+
+
+@router.post("/sync-chatwoot", summary="Sincronizar conversaciones desde Chatwoot")
+def sync_chatwoot(
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+    db: Session = Depends(get_db)
+):
+    """Importa o actualiza conversaciones existentes de Chatwoot a Nebulae ERP."""
+    try:
+        url = f"{CHATWOOT_BASE_URL}/api/v1/accounts/{CHATWOOT_ACCOUNT_ID}/conversations"
+        req = urllib.request.Request(
+            url,
+            headers={"api_access_token": CHATWOOT_API_TOKEN},
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        logger.error("Error conectando a Chatwoot API: %s", e)
+        raise HTTPException(status_code=502, detail=f"Error conectando a Chatwoot: {str(e)}")
+
+    convs = data.get("data", {}).get("payload", [])
+    synced = 0
+
+    for cw in convs:
+        cw_id = str(cw.get("id"))
+        chan_meta = str(cw.get("meta", {}).get("channel", "")).lower()
+        channel = "telegram" if "telegram" in chan_meta else "whatsapp" if "whatsapp" in chan_meta else "web"
+
+        sender_info = cw.get("meta", {}).get("sender", {}) or {}
+        contact_name = sender_info.get("name") or "Usuario Telegram"
+        contact_phone = sender_info.get("phone_number")
+
+        last_msg_obj = cw.get("last_non_activity_message") or {}
+        last_msg = last_msg_obj.get("content") or "Conversación iniciada"
+
+        existing = db.execute(text(
+            "SELECT id FROM chat_conversations WHERE external_id=:eid"
+        ), {"eid": cw_id}).mappings().first()
+
+        if existing:
+            local_id = existing["id"]
+            db.execute(text("""
+                UPDATE chat_conversations
+                SET last_message=:msg, last_message_at=NOW(), channel=:channel, updated_at=NOW()
+                WHERE id=:id
+            """), {"msg": last_msg[:120], "channel": channel, "id": local_id})
+        else:
+            res = db.execute(text("""
+                INSERT INTO chat_conversations
+                    (channel, customer_name, customer_phone, status, unread_count,
+                     last_message, last_message_at, ai_mode, external_id)
+                VALUES
+                    (:channel, :name, :phone, 'open', 0,
+                     :msg, NOW(), 'suggestion', :eid)
+                RETURNING id
+            """), {
+                "channel": channel,
+                "name": contact_name,
+                "phone": contact_phone,
+                "msg": last_msg[:120],
+                "eid": cw_id,
+            }).mappings().first()
+            local_id = res["id"]
+
+        # Traer historial de mensajes de Chatwoot
+        try:
+            m_url = f"{CHATWOOT_BASE_URL}/api/v1/accounts/{CHATWOOT_ACCOUNT_ID}/conversations/{cw_id}/messages"
+            m_req = urllib.request.Request(m_url, headers={"api_access_token": CHATWOOT_API_TOKEN}, method="GET")
+            with urllib.request.urlopen(m_req, timeout=10) as m_resp:
+                m_data = json.loads(m_resp.read().decode("utf-8"))
+                for m in m_data.get("payload", []):
+                    m_content = m.get("content") or ""
+                    if not m_content:
+                        continue
+                    m_type = m.get("message_type")
+                    direction = "in" if m_type in (0, "0", "incoming") else "out"
+                    m_sender = m.get("sender", {}).get("name") or ("Cliente" if direction == "in" else "Asesor")
+
+                    msg_exists = db.execute(text("""
+                        SELECT id FROM chat_messages 
+                        WHERE conversation_id=:cid AND content=:content AND direction=:dir
+                        LIMIT 1
+                    """), {"cid": local_id, "content": m_content, "dir": direction}).scalar()
+
+                    if not msg_exists:
+                        db.execute(text("""
+                            INSERT INTO chat_messages (conversation_id, direction, content, sender_name, is_ai_generated)
+                            VALUES (:cid, :dir, :content, :sender, FALSE)
+                        """), {"cid": local_id, "dir": direction, "content": m_content, "sender": m_sender})
+        except Exception as e:
+            logger.warning("Error trayendo mensajes para cw_conv %s: %s", cw_id, e)
+
+        synced += 1
+
+    db.commit()
+    return {"status": "success", "synced_conversations": synced}
+

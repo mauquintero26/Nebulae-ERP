@@ -23,10 +23,17 @@ const FBIcon = ({ size = 22, className = '', style = {} }: any) => (
     <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/>
   </svg>
 );
+const TelegramIcon = ({ size = 22, className = '', style = {} }: any) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" className={className} style={style}>
+    <path d="M21.5 2L2 9.5l7 3.5 3 7 2-4.5 5.5 3.5L21.5 2z"/>
+    <path d="M9 13l5-4"/>
+  </svg>
+);
 
 const CHANNEL_CONFIG: Record<string, { label: string; color: string; bg: string; Icon: any }> = {
   all:       { label: 'Todos',     color: '#6366f1', bg: '#eef2ff', Icon: LayoutGrid },
   web:       { label: 'Web Chat',  color: '#0ea5e9', bg: '#f0f9ff', Icon: Globe },
+  telegram:  { label: 'Telegram',  color: '#0088cc', bg: '#f0f9ff', Icon: TelegramIcon },
   whatsapp:  { label: 'WhatsApp',  color: '#25d366', bg: '#f0fdf4', Icon: MessageCircle },
   instagram: { label: 'Instagram', color: '#e1306c', bg: '#fdf2f8', Icon: IGIcon },
   facebook:  { label: 'Facebook',  color: '#1877f2', bg: '#eff6ff', Icon: FBIcon },
@@ -98,6 +105,10 @@ export default function AsistenteOmnicanal() {
   }, []);
   const changeInboxFont = (v: FontSize) => { setInboxFontSize(v); localStorage.setItem('omni_inbox_font', v); };
   const changeCrmFont   = (v: FontSize) => { setCrmFontSize(v);   localStorage.setItem('omni_crm_font', v); };
+
+  const [viewMode, setViewMode] = useState<'crm' | 'chatwoot'>('crm');
+  const [syncingChatwoot, setSyncingChatwoot] = useState(false);
+  const [chatwootSyncMsg, setChatwootSyncMsg] = useState('');
 
   const [currentUser, setCurrentUser] = useState('');
   const [showMyLeads, setShowMyLeads] = useState(false);
@@ -219,6 +230,22 @@ export default function AsistenteOmnicanal() {
       if (arr.length > 0 && !activeConvId) setActiveConvId(arr[0].id);
     } catch { } finally { setLoadingConvs(false); }
   }, [activeChannel, activeConvId]);
+
+  const handleSyncChatwoot = async () => {
+    setSyncingChatwoot(true);
+    setChatwootSyncMsg('');
+    try {
+      const res = await apiFetch('/chat/sync-chatwoot', { method: 'POST' });
+      setChatwootSyncMsg(`Sincronizadas: ${res?.synced_conversations ?? 0}`);
+      await loadConversations();
+      setTimeout(() => setChatwootSyncMsg(''), 4000);
+    } catch (err: any) {
+      setChatwootSyncMsg('Error sincronizando');
+      setTimeout(() => setChatwootSyncMsg(''), 4000);
+    } finally {
+      setSyncingChatwoot(false);
+    }
+  };
 
   useEffect(() => {
     setLoadingConvs(true);
@@ -442,9 +469,82 @@ export default function AsistenteOmnicanal() {
     c.last_message?.toLowerCase().includes(searchInbox.toLowerCase()));
 
   return (
-    <div className="h-full w-full bg-white flex overflow-hidden">
+    <div className="h-full w-full bg-white flex flex-col overflow-hidden">
 
-      {/* COL 1: CHANNELS */}
+      {/* HEADER BAR CON SELECTOR DE MODO Y BOTÓN DE SINCRONIZACIÓN */}
+      <div className="h-12 border-b border-slate-200 bg-white px-4 flex items-center justify-between flex-shrink-0 z-10">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+            <h1 className="text-sm font-black text-slate-800 tracking-tight">Asistente Omnicanal</h1>
+          </div>
+
+          {/* Selector de Modo */}
+          <div className="flex items-center bg-slate-100 p-1 rounded-xl gap-1">
+            <button
+              onClick={() => setViewMode('crm')}
+              className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
+                viewMode === 'crm'
+                  ? 'bg-white text-indigo-600 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Vista CRM (4 Columnas)
+            </button>
+            <button
+              onClick={() => setViewMode('chatwoot')}
+              className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
+                viewMode === 'chatwoot'
+                  ? 'bg-white text-indigo-600 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Consola Chatwoot
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {chatwootSyncMsg && (
+            <span className="text-xs font-semibold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200">
+              {chatwootSyncMsg}
+            </span>
+          )}
+          <button
+            onClick={handleSyncChatwoot}
+            disabled={syncingChatwoot}
+            title="Sincronizar conversaciones desde Chatwoot (Telegram / WhatsApp)"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors disabled:opacity-50"
+          >
+            <RefreshCw size={12} className={syncingChatwoot ? 'animate-spin text-indigo-600' : ''} />
+            <span>{syncingChatwoot ? 'Sincronizando...' : 'Sincronizar Chatwoot'}</span>
+          </button>
+          {viewMode === 'chatwoot' && (
+            <a
+              href="https://chatbot-crn-chatwoot.ionwxk.easypanel.host/app/accounts/1/conversations"
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center gap-1 px-3 py-1.5 text-xs font-bold text-indigo-600 hover:bg-indigo-50 rounded-xl border border-indigo-200 transition-colors"
+            >
+              <span>Abrir en pestaña</span>
+              <ExternalLink size={12} />
+            </a>
+          )}
+        </div>
+      </div>
+
+      {viewMode === 'chatwoot' ? (
+        <div className="flex-1 w-full bg-slate-50 relative">
+          <iframe
+            src="https://chatbot-crn-chatwoot.ionwxk.easypanel.host/app/accounts/1/conversations"
+            className="w-full h-full border-none"
+            title="Consola Chatwoot Nebulae"
+          />
+        </div>
+      ) : (
+        <div className="flex-1 w-full bg-white flex overflow-hidden">
+
+          {/* COL 1: CHANNELS */}
       <div className="w-[70px] bg-slate-50 border-r border-slate-200 flex flex-col items-center py-5 gap-3 flex-shrink-0">
         {Object.entries(CHANNEL_CONFIG).map(([id, cfg]) => {
           const unread = id === 'all'
@@ -1260,6 +1360,8 @@ export default function AsistenteOmnicanal() {
               )}
             </div>
           </div>
+        </div>
+      )}
         </div>
       )}
     </div>
