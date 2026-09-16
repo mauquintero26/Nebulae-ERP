@@ -81,3 +81,8 @@ backend/caddy_access.log
 backend/nebulae_backend.pid
 backend/Caddyfile
 backend/Caddyfile.http_test
+
+# Auditoria interna (2026-09) — contiene modelo de amenazas de seguridad detallado
+# (endpoints sin auth, bypass de RBAC, estado real del incidente de credenciales).
+# Este repo es PUBLICO: nunca commitear esta carpeta.
+abraham nebulae/

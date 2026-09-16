@@ -1451,3 +1451,347 @@ def sync_chatwoot(
     db.commit()
     return {"status": "success", "synced_conversations": synced}
 
+
+# ─── EXTENSIÓN: COLUMNA DE CONTEXTO ERP & COPILOTO IA ─────────────────────────
+
+def _gen_sc_number(db: Session) -> str:
+    """Genera número correlativo único para CustomerRequest (ej: SC-20260012)."""
+    year = datetime.datetime.utcnow().year
+    try:
+        seq = db.execute(text("SELECT nextval('seq_sc')")).scalar()
+        return f"SC-{year}{seq:04d}"
+    except Exception:
+        db.rollback()
+        max_id = db.execute(text("SELECT COALESCE(MAX(id), 0) + 1 FROM customer_requests")).scalar() or 1
+        return f"SC-{year}{max_id:04d}"
+
+
+@router.get("/search-customers")
+def search_customers_for_chat(
+    q: str = Query("", min_length=1),
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR))
+):
+    """Buscador rápido de clientes por nombre, teléfono o email para la columna de contexto."""
+    term = f"%{q.strip()}%"
+    rows = db.execute(text("""
+        SELECT id, first_name, last_name, phone, email, city, document
+        FROM customers
+        WHERE first_name ILIKE :term 
+           OR last_name ILIKE :term 
+           OR (first_name || ' ' || last_name) ILIKE :term
+           OR phone ILIKE :term 
+           OR email ILIKE :term
+        ORDER BY first_name ASC
+        LIMIT :limit
+    """), {"term": term, "limit": limit}).mappings().all()
+
+    results = []
+    for r in rows:
+        results.append({
+            "id": r["id"],
+            "name": f"{r['first_name']} {r['last_name']}".strip(),
+            "phone": r["phone"] or "",
+            "email": r["email"] or "",
+            "city": r["city"] or "",
+            "document": r["document"] or "",
+        })
+    return {"status": "success", "data": results}
+
+
+@router.get("/customer-context")
+def get_customer_context_for_chat(
+    customer_id: Optional[int] = None,
+    phone: Optional[str] = None,
+    email: Optional[str] = None,
+    q: Optional[str] = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR))
+):
+    """
+    Obtiene el perfil completo 360 del cliente para la columna de contexto:
+    - Datos del cliente
+    - Revenue acumulado, ticket promedio y cantidad de órdenes
+    - Pedidos activos (en curso, preparación, bodega, tránsito)
+    - Pedidos cerrados o entregados
+    - Solicitudes previas
+    - Resumen y sugerencias de IA
+    """
+    cust = None
+    if customer_id:
+        cust = db.execute(text("SELECT * FROM customers WHERE id=:id"), {"id": customer_id}).mappings().first()
+
+    if not cust and phone:
+        clean_phone = "".join(ch for ch in phone if ch.isdigit())
+        if len(clean_phone) >= 7:
+            last7 = f"%{clean_phone[-7:]}%"
+            cust = db.execute(text("""
+                SELECT * FROM customers 
+                WHERE REPLACE(REPLACE(REPLACE(COALESCE(phone, ''), ' ', ''), '-', ''), '+', '') LIKE :p
+                LIMIT 1
+            """), {"p": last7}).mappings().first()
+
+    if not cust and email:
+        cust = db.execute(text("SELECT * FROM customers WHERE LOWER(email)=LOWER(:email) LIMIT 1"), {"email": email.strip()}).mappings().first()
+
+    if not cust and q:
+        t = f"%{q.strip()}%"
+        cust = db.execute(text("""
+            SELECT * FROM customers 
+            WHERE first_name ILIKE :t OR last_name ILIKE :t OR phone ILIKE :t OR email ILIKE :t
+            LIMIT 1
+        """), {"t": t}).mappings().first()
+
+    if not cust:
+        return {
+            "status": "success",
+            "found": False,
+            "data": None,
+            "message": "No se encontró cliente vinculado en el ERP con estos datos."
+        }
+
+    cid = cust["id"]
+    customer_data = {
+        "id": cid,
+        "name": f"{cust['first_name']} {cust['last_name']}".strip(),
+        "first_name": cust["first_name"],
+        "last_name": cust["last_name"],
+        "phone": cust.get("phone") or "",
+        "email": cust.get("email") or "",
+        "city": cust.get("city") or "",
+        "address": cust.get("address") or "",
+        "document": cust.get("document") or "",
+    }
+
+    orders_rows = db.execute(text("""
+        SELECT id, numero, fecha_cotizacion, fecha_entrega_estimada,
+               total_cop, anticipo_cop, saldo_cop, estado, productos,
+               created_at
+        FROM sale_orders
+        WHERE customer_id = :cid
+        ORDER BY created_at DESC
+    """), {"cid": cid}).mappings().all()
+
+    active_orders = []
+    closed_orders = []
+    total_spent = Decimal("0.0")
+    completed_orders_count = 0
+
+    for o in orders_rows:
+        estado = (o["estado"] or "").upper()
+        tot = Decimal(str(o["total_cop"] or 0))
+        
+        prods_raw = o["productos"] or []
+        prods_summary = []
+        if isinstance(prods_raw, list):
+            for p in prods_raw[:3]:
+                if isinstance(p, dict):
+                    name = p.get("nombre") or p.get("name") or p.get("sku") or "Producto"
+                    qty = p.get("cantidad") or p.get("qty") or 1
+                    prods_summary.append(f"{qty}x {name}")
+                elif isinstance(p, str):
+                    prods_summary.append(p)
+
+        order_item = {
+            "id": o["id"],
+            "numero": o["numero"] or f"PV-{o['id']}",
+            "estado": estado,
+            "total_cop": float(tot),
+            "anticipo_cop": float(Decimal(str(o["anticipo_cop"] or 0))),
+            "saldo_cop": float(Decimal(str(o["saldo_cop"] or 0))),
+            "fecha": (o["created_at"] or o["fecha_cotizacion"] or datetime.datetime.utcnow()).strftime("%d/%m/%Y"),
+            "fecha_entrega": o["fecha_entrega_estimada"].strftime("%d/%m/%Y") if o["fecha_entrega_estimada"] else None,
+            "productos_resumen": ", ".join(prods_summary) if prods_summary else "Varios ítems",
+        }
+
+        if estado in ("ENTREGADO", "COMPLETADO"):
+            closed_orders.append(order_item)
+            total_spent += tot
+            completed_orders_count += 1
+        elif estado not in ("CANCELADO", "ANULADO"):
+            active_orders.append(order_item)
+            total_spent += tot
+
+    total_orders_count = len(active_orders) + len(closed_orders)
+    avg_ticket = float(total_spent / total_orders_count) if total_orders_count > 0 else 0.0
+
+    sc_rows = db.execute(text("""
+        SELECT id, numero, estado, tipo_solicitud, advisor_name, fecha_solicitud, notas
+        FROM customer_requests
+        WHERE customer_id = :cid
+        ORDER BY created_at DESC
+        LIMIT 5
+    """), {"cid": cid}).mappings().all()
+
+    requests_list = []
+    for s in sc_rows:
+        requests_list.append({
+            "id": s["id"],
+            "numero": s["numero"],
+            "estado": s["estado"],
+            "tipo": s["tipo_solicitud"] or "Cotización",
+            "asesor": s["advisor_name"] or "Sin asignar",
+            "fecha": s["fecha_solicitud"].strftime("%d/%m/%Y") if s["fecha_solicitud"] else "",
+            "notas": (s["notas"] or "")[:80],
+        })
+
+    if total_spent > 15000000:
+        segmento = "Cliente VIP / Alto Valor"
+    elif total_spent > 3000000:
+        segmento = "Cliente Frecuente"
+    elif total_orders_count > 0:
+        segmento = "Cliente Recurrente"
+    else:
+        segmento = "Nuevo Prospecto / Sin compras"
+
+    ai_bullet_points = [
+        f"Segmento: {segmento} con {total_orders_count} órdenes registradas.",
+    ]
+    if active_orders:
+        ai_bullet_points.append(f"Tiene {len(active_orders)} pedido(s) activo(s) ({active_orders[0]['numero']} en estado {active_orders[0]['estado']}).")
+    if closed_orders:
+        ai_bullet_points.append(f"Última compra entregada: {closed_orders[0]['numero']} por ${closed_orders[0]['total_cop']:,.0f} COP.")
+    if requests_list:
+        ai_bullet_points.append(f"Solicitud reciente: {requests_list[0]['numero']} ({requests_list[0]['estado']}).")
+
+    return {
+        "status": "success",
+        "found": True,
+        "data": {
+            "customer": customer_data,
+            "revenue": {
+                "total_spent_cop": float(total_spent),
+                "total_orders_count": total_orders_count,
+                "completed_orders_count": completed_orders_count,
+                "active_orders_count": len(active_orders),
+                "avg_ticket_cop": avg_ticket,
+                "segmento": segmento,
+            },
+            "active_orders": active_orders,
+            "closed_orders": closed_orders,
+            "customer_requests": requests_list,
+            "ai_insights": {
+                "summary": " ".join(ai_bullet_points),
+                "bullets": ai_bullet_points,
+            }
+        }
+    }
+
+
+@router.post("/create-customer-request", status_code=201)
+def create_customer_request_endpoint(
+    body: dict,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR))
+):
+    """Crea una Solicitud de Cliente (SC) desde la columna de contexto del Asistente Omnicanal."""
+    from app.models.erp_documents import CustomerRequest
+    
+    customer_id = body.get("customer_id")
+    customer_name = body.get("customer_name") or "Cliente Omnicanal"
+    customer_phone = body.get("customer_phone") or ""
+    customer_email = body.get("customer_email") or ""
+    tipo_solicitud = body.get("tipo_solicitud") or "Cotizacion de Producto"
+    modalidad_pago = body.get("modalidad_pago") or "Contado"
+    notas = body.get("notas") or ""
+    productos = body.get("productos") or []
+    advisor = body.get("advisor_name") or user.name or "Asesor Omnicanal"
+
+    if customer_id:
+        c = db.execute(text("SELECT first_name, last_name, phone, email, address FROM customers WHERE id=:id"), {"id": customer_id}).mappings().first()
+        if c:
+            customer_name = f"{c['first_name']} {c['last_name']}".strip()
+            customer_phone = customer_phone or c.get("phone") or ""
+            customer_email = customer_email or c.get("email") or ""
+
+    numero = _gen_sc_number(db)
+    venc = datetime.datetime.utcnow() + datetime.timedelta(days=30)
+
+    sc = CustomerRequest(
+        numero=numero,
+        customer_id=customer_id,
+        customer_name=customer_name,
+        customer_phone=customer_phone,
+        customer_email=customer_email,
+        advisor_name=advisor,
+        tipo_solicitud=tipo_solicitud,
+        modalidad_pago=modalidad_pago,
+        estado="BORRADOR",
+        fecha_vencimiento=venc,
+        notas=notas,
+        productos=productos,
+        created_by=user.name or "Asesor Omnicanal",
+    )
+    db.add(sc)
+    db.commit()
+    db.refresh(sc)
+
+    return {
+        "status": "success",
+        "message": f"Solicitud {numero} creada con éxito.",
+        "data": {
+            "id": sc.id,
+            "numero": sc.numero,
+            "estado": sc.estado,
+            "customer_name": sc.customer_name,
+            "created_at": sc.created_at.isoformat() if sc.created_at else None,
+        }
+    }
+
+
+@router.post("/ai-copilot-suggest")
+def ai_copilot_suggest_endpoint(
+    body: dict,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR))
+):
+    """Genera respuestas inteligentes y sugerencias de seguimiento para el asesor."""
+    customer_name = body.get("customer_name") or "estimado/a cliente"
+    active_orders = body.get("active_orders") or []
+    customer_requests = body.get("customer_requests") or []
+
+    suggestions = []
+
+    if active_orders:
+        first_order = active_orders[0]
+        st = first_order.get("estado", "en proceso")
+        num = first_order.get("numero", "su pedido")
+        suggestions.append({
+            "title": "Actualización de Pedido Activo",
+            "type": "order_status",
+            "badge": "Logística",
+            "text": f"¡Hola {customer_name}! Revisando nuestro sistema, te confirmo que tu pedido {num} se encuentra actualmente en estado: {st}. Nuestro equipo logístico está gestionándolo para despacharlo a la mayor brevedad. ¿Deseas información detallada de la entrega?",
+        })
+
+    if customer_requests:
+        first_sc = customer_requests[0]
+        sc_num = first_sc.get("numero", "su solicitud")
+        suggestions.append({
+            "title": "Seguimiento de Cotización",
+            "type": "quote_followup",
+            "badge": "Comercial",
+            "text": f"Hola {customer_name}, ya tenemos registrada tu solicitud {sc_num}. Con gusto te comparto los detalles para que podamos formalizar tu pedido hoy mismo y garantizar la reserva de los productos. ¿Quedó alguna duda sobre los ítems?",
+        })
+    else:
+        suggestions.append({
+            "title": "Apertura de Cotización",
+            "type": "new_quote",
+            "badge": "Ventas",
+            "text": f"Con mucho gusto {customer_name}. He tomado nota de tu consulta y puedo generarte de inmediato una cotización formal desde nuestro sistema. ¿Podrías confirmarme tu ciudad de entrega y el producto exacto que requieres?",
+        })
+
+    suggestions.append({
+        "title": "Cierre Cordial / Disponibilidad",
+        "type": "support_closing",
+        "badge": "Atención",
+        "text": f"Entendido, {customer_name}. Quedo atento a cualquier otra inquietud o detalle que necesites. En Nebulae Kids estamos para brindarte el mejor servicio. ¡Feliz día!",
+    })
+
+    return {
+        "status": "success",
+        "data": {
+            "customer_name": customer_name,
+            "suggestions": suggestions,
+        }
+    }
