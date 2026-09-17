@@ -3,11 +3,12 @@ from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.models.inventory import ShippingMethod, InventoryOperation, InventoryMovement
 from app.schemas import inventory as schemas
+from app.api.dependencies import require_roles, ALL_ERP_ROLES
 
 router = APIRouter()
 
 @router.post("/shipping-methods", status_code=status.HTTP_201_CREATED)
-def create_shipping_method(method: schemas.ShippingMethodCreate, db: Session = Depends(get_db)):
+def create_shipping_method(method: schemas.ShippingMethodCreate, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
     db_method = ShippingMethod(**method.model_dump())
     db.add(db_method)
     db.commit()
@@ -15,14 +16,14 @@ def create_shipping_method(method: schemas.ShippingMethodCreate, db: Session = D
     return {"status": "success", "data": schemas.ShippingMethodResponse.model_validate(db_method).model_dump()}
 
 @router.get("/shipping-methods")
-def list_shipping_methods(db: Session = Depends(get_db)):
+def list_shipping_methods(db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
     methods = db.query(ShippingMethod).all()
     return {"status": "success", "data": [schemas.ShippingMethodResponse.model_validate(m).model_dump() for m in methods]}
 
 from app.models.inventory import Warehouse
 
 @router.post("/warehouses", status_code=status.HTTP_201_CREATED)
-def create_warehouse(warehouse: schemas.WarehouseCreate, db: Session = Depends(get_db)):
+def create_warehouse(warehouse: schemas.WarehouseCreate, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
     data = warehouse.model_dump()
     loc = data.pop("location", None)
     loc_type = data.pop("location_type", None) or loc or "Central"
@@ -33,19 +34,19 @@ def create_warehouse(warehouse: schemas.WarehouseCreate, db: Session = Depends(g
     return {"status": "success", "data": schemas.WarehouseResponse.model_validate(db_warehouse).model_dump()}
 
 @router.get("/warehouses")
-def list_warehouses(db: Session = Depends(get_db)):
+def list_warehouses(db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
     warehouses = db.query(Warehouse).all()
     return {"status": "success", "data": [schemas.WarehouseResponse.model_validate(w).model_dump() for w in warehouses]}
 
 @router.post("/operations", status_code=status.HTTP_201_CREATED)
-def create_inventory_operation(op: schemas.InventoryOperationCreate, db: Session = Depends(get_db)):
+def create_inventory_operation(op: schemas.InventoryOperationCreate, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
     op_data = op.model_dump(exclude={"movements"})
     db_op = InventoryOperation(**op_data)
-    
+
     for mov in op.movements:
         db_mov = InventoryMovement(**mov.model_dump())
         db_op.movements.append(db_mov)
-        
+
     db.add(db_op)
     try:
         db.commit()
@@ -54,17 +55,17 @@ def create_inventory_operation(op: schemas.InventoryOperationCreate, db: Session
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(e))
-        
+
 @router.get("/operations")
-def list_inventory_operations(db: Session = Depends(get_db)):
+def list_inventory_operations(db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
     operations = db.query(InventoryOperation).all()
     return {"status": "success", "data": [schemas.InventoryOperationResponse.model_validate(o).model_dump() for o in operations]}
-    
+
 from app.models.crm import Alert
 import datetime
 
 @router.get("/calendar")
-def get_inventory_calendar(db: Session = Depends(get_db)):
+def get_inventory_calendar(db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
     alerts = db.query(Alert).filter(Alert.alert_type == "INVENTORY_TRACKING").all()
     
     # Group by date (YYYY-MM-DD)
