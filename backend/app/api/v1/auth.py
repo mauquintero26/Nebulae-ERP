@@ -5,7 +5,7 @@ from app.db.database import get_db
 from app.models.users import User
 from app.schemas.users import UserCreate, UserResponse, PasswordChange
 from app.core.security import get_password_hash, verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user, normalize_role
 from datetime import timedelta
 
 router = APIRouter()
@@ -15,7 +15,13 @@ def register_user(user: UserCreate, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.email == user.email).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Email already registered")
-    
+
+    if normalize_role(user.role) == "ADMIN":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No se puede autoasignar el rol de Administrador en el registro público",
+        )
+
     hashed_password = get_password_hash(user.password)
     new_user = User(
         email=user.email,
