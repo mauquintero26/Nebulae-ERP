@@ -86,3 +86,7 @@ backend/Caddyfile.http_test
 # (endpoints sin auth, bypass de RBAC, estado real del incidente de credenciales).
 # Este repo es PUBLICO: nunca commitear esta carpeta.
 abraham nebulae/
+
+# Worktrees aislados y artefactos de ejecucion (superpowers subagent-driven-development)
+.worktrees/
+.superpowers/
