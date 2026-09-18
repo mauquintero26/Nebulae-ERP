@@ -23,16 +23,16 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     conn = op.get_bind()
-    conn.execute(sa.text("DROP TABLE IF EXISTS payment_transactions CASCADE"))
+    conn.execute(sa.text("DROP TABLE IF EXISTS td03_consolidacion.payment_transactions CASCADE"))
 
 
 def downgrade() -> None:
     conn = op.get_bind()
     conn.execute(sa.text("""
-        CREATE TABLE IF NOT EXISTS payment_transactions (
+        CREATE TABLE IF NOT EXISTS td03_consolidacion.payment_transactions (
             id                SERIAL PRIMARY KEY,
-            pxp_id            INTEGER NOT NULL REFERENCES payment_pendings(id) ON DELETE CASCADE,
-            sale_order_id     INTEGER REFERENCES sale_orders(id) ON DELETE SET NULL,
+            pxp_id            INTEGER NOT NULL REFERENCES td03_consolidacion.payment_pendings(id) ON DELETE CASCADE,
+            sale_order_id     INTEGER REFERENCES td03_consolidacion.sale_orders(id) ON DELETE SET NULL,
             transaction_type  VARCHAR(20) NOT NULL,
             monto             NUMERIC(14,2) NOT NULL,
             moneda            VARCHAR(10) NOT NULL DEFAULT 'COP',
@@ -43,18 +43,18 @@ def downgrade() -> None:
             notas             TEXT,
             created_at        TIMESTAMP,
             is_reversed       BOOLEAN NOT NULL DEFAULT FALSE,
-            reversed_by_id    INTEGER REFERENCES payment_transactions(id) ON DELETE SET NULL
+            reversed_by_id    INTEGER REFERENCES td03_consolidacion.payment_transactions(id) ON DELETE SET NULL
         )
     """))
     conn.execute(sa.text(
-        "CREATE INDEX IF NOT EXISTS ix_pt_pxp_id ON payment_transactions(pxp_id)"
+        "CREATE INDEX IF NOT EXISTS ix_pt_pxp_id ON td03_consolidacion.payment_transactions(pxp_id)"
     ))
     conn.execute(sa.text(
-        "CREATE INDEX IF NOT EXISTS ix_pt_sale_order ON payment_transactions(sale_order_id)"
+        "CREATE INDEX IF NOT EXISTS ix_pt_sale_order ON td03_consolidacion.payment_transactions(sale_order_id)"
     ))
     conn.execute(sa.text(
-        "CREATE INDEX IF NOT EXISTS ix_pt_type ON payment_transactions(transaction_type)"
+        "CREATE INDEX IF NOT EXISTS ix_pt_type ON td03_consolidacion.payment_transactions(transaction_type)"
     ))
     conn.execute(sa.text(
-        "CREATE INDEX IF NOT EXISTS ix_pt_fecha ON payment_transactions(fecha_pago)"
+        "CREATE INDEX IF NOT EXISTS ix_pt_fecha ON td03_consolidacion.payment_transactions(fecha_pago)"
     ))
