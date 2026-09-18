@@ -42,7 +42,6 @@ FA1B_TABLES = [
     "goods_receipt_line_allocations",
     "inventory_owner_balances",
     "inventory_reservations",
-    "payment_transactions",
 ]
 
 
