@@ -1,0 +1,94 @@
+import json
+from sqlalchemy import text
+from app.api.v1.ecommerce import _ensure_ecommerce_tables
+
+
+def test_backfill_copies_matched_sku(db, sku):
+    _ensure_ecommerce_tables(db)
+    db.execute(text("""
+        INSERT INTO ecommerce_products (nombre, sku, descripcion_larga, precio_comparacion, descuento_pct, imagenes, seo_titulo, publicado_web, rastrear_inventario)
+        VALUES ('Producto Test', :sku, 'Descripcion larga de prueba', 99000, 10, CAST(:imagenes AS jsonb), 'SEO Test', TRUE, TRUE)
+    """), {"sku": sku.sku, "imagenes": json.dumps(["http://example.com/1.jpg"])})
+    db.commit()
+
+    from scripts.backfill_product_web_listings import backfill, get_conn
+    conn = get_conn()
+    try:
+        result = backfill(conn, dry_run=False)
+    finally:
+        conn.close()
+
+    assert sku.sku not in result["orphaned"]
+    row = db.execute(text(
+        "SELECT descripcion_larga, seo_titulo, publicado_web FROM product_web_listings WHERE sku_id = :id"
+    ), {"id": sku.id}).fetchone()
+    assert row is not None
+    assert row[0] == "Descripcion larga de prueba"
+    assert row[1] == "SEO Test"
+    assert row[2] is True
+
+
+def test_backfill_reports_orphan_without_creating_product(db):
+    _ensure_ecommerce_tables(db)
+    db.execute(text("""
+        INSERT INTO ecommerce_products (nombre, sku, publicado_web)
+        VALUES ('Producto Huerfano', 'SKU-NO-EXISTE-999', TRUE)
+    """))
+    db.commit()
+
+    from scripts.backfill_product_web_listings import backfill, get_conn
+    conn = get_conn()
+    try:
+        result = backfill(conn, dry_run=False)
+    finally:
+        conn.close()
+
+    assert "SKU-NO-EXISTE-999" in result["orphaned"]
+    count = db.execute(text(
+        "SELECT COUNT(*) FROM product_web_listings pwl JOIN product_skus s ON pwl.sku_id = s.id "
+        "WHERE s.sku = 'SKU-NO-EXISTE-999'"
+    )).scalar()
+    assert count == 0
+
+
+def test_backfill_dry_run_does_not_write(db, sku):
+    _ensure_ecommerce_tables(db)
+    db.execute(text("""
+        INSERT INTO ecommerce_products (nombre, sku, publicado_web)
+        VALUES ('Producto Dry Run', :sku, TRUE)
+    """), {"sku": sku.sku})
+    db.commit()
+
+    from scripts.backfill_product_web_listings import backfill, get_conn
+    conn = get_conn()
+    try:
+        backfill(conn, dry_run=True)
+    finally:
+        conn.close()
+
+    count = db.execute(text(
+        "SELECT COUNT(*) FROM product_web_listings WHERE sku_id = :id"
+    ), {"id": sku.id}).scalar()
+    assert count == 0
+
+
+def test_backfill_is_idempotent(db, sku):
+    _ensure_ecommerce_tables(db)
+    db.execute(text("""
+        INSERT INTO ecommerce_products (nombre, sku, seo_titulo, publicado_web)
+        VALUES ('Producto Repetido', :sku, 'Titulo Original', TRUE)
+    """), {"sku": sku.sku})
+    db.commit()
+
+    from scripts.backfill_product_web_listings import backfill, get_conn
+    conn = get_conn()
+    try:
+        backfill(conn, dry_run=False)
+        backfill(conn, dry_run=False)  # segunda corrida, no debe duplicar ni fallar
+    finally:
+        conn.close()
+
+    count = db.execute(text(
+        "SELECT COUNT(*) FROM product_web_listings WHERE sku_id = :id"
+    ), {"id": sku.id}).scalar()
+    assert count == 1
