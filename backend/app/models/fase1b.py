@@ -7,7 +7,7 @@ que se conservan como snapshot para compatibilidad con el frontend actual.
 """
 from sqlalchemy import (
     Column, Integer, String, Numeric, ForeignKey,
-    DateTime, Text, Boolean, Date, UniqueConstraint, Index,
+    DateTime, Text, UniqueConstraint, Index,
     CheckConstraint, func, text
 )
 from sqlalchemy.orm import relationship
