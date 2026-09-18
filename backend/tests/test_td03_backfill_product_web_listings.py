@@ -92,3 +92,28 @@ def test_backfill_is_idempotent(db, sku):
         "SELECT COUNT(*) FROM product_web_listings WHERE sku_id = :id"
     ), {"id": sku.id}).scalar()
     assert count == 1
+
+
+def test_backfill_reports_null_sku_as_orphaned(db):
+    _ensure_ecommerce_tables(db)
+    # Insert a product with NULL sku (no matching product in product_skus)
+    db.execute(text("""
+        INSERT INTO ecommerce_products (nombre, sku, publicado_web)
+        VALUES ('Producto Sin SKU', NULL, TRUE)
+    """))
+    db.commit()
+
+    from scripts.backfill_product_web_listings import backfill, get_conn
+    conn = get_conn()
+    try:
+        result = backfill(conn, dry_run=False)
+    finally:
+        conn.close()
+
+    # NULL sku should be reported as orphaned
+    assert None in result["orphaned"]
+    # No product should be created for NULL sku
+    count = db.execute(text(
+        "SELECT COUNT(*) FROM product_web_listings WHERE sku_id IS NULL"
+    )).scalar()
+    assert count == 0

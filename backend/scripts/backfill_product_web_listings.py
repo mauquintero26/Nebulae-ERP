@@ -43,7 +43,7 @@ def backfill(conn, dry_run: bool = False) -> dict:
         SELECT sku, descripcion_larga, precio_comparacion, descuento_pct, imagenes,
                seo_titulo, seo_descripcion, seo_keywords, codigo_aduana, peso_kg,
                notas_internas, publicado_web, rastrear_inventario
-        FROM ecommerce_products WHERE sku IS NOT NULL AND sku != ''
+        FROM ecommerce_products
     """)
     rows = cur.fetchall()
 
@@ -51,6 +51,11 @@ def backfill(conn, dry_run: bool = False) -> dict:
     orphaned = []
     for r in rows:
         sku_code = r[0]
+        # Rows with no SKU (NULL or empty string) are reported as orphaned
+        if not sku_code:
+            orphaned.append(sku_code)
+            continue
+
         cur.execute("SELECT id FROM product_skus WHERE sku = %s", (sku_code,))
         sku_row = cur.fetchone()
         if not sku_row:
