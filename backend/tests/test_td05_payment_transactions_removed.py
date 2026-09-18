@@ -8,8 +8,8 @@ from sqlalchemy import text
 def test_payment_transactions_table_does_not_exist(db):
     row = db.execute(text(
         "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
-        "WHERE table_name = 'payment_transactions')"
-    )).scalar()
+        "WHERE table_schema='public' AND table_name=:t)"
+    ), {"t": "payment_transactions"}).scalar()
     assert row is False, "payment_transactions debería haber sido eliminada (TD-05)"
 
 

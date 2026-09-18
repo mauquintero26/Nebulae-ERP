@@ -194,7 +194,6 @@ def setup_test_db():
             "sale_order_lines_erp", "sales_quotation_lines", "customer_request_lines",
             "purchase_order_lines",
             "inventory_reservations", "inventory_owner_balances",
-            "payment_transactions",
             # Fase 1A y base
             "inventory_movements", "inventory_operations", "inventory_levels",
             "activity_logs", "idempotency_requests",
