@@ -18,3 +18,9 @@ def test_payment_transaction_model_not_importable():
     assert not hasattr(fase1b_module, "PaymentTransaction"), (
         "El modelo PaymentTransaction debería haberse eliminado junto con la tabla"
     )
+
+
+def test_payment_transaction_schemas_not_importable():
+    import app.api.v1.schemas_fase1b as schemas_module
+    for name in ("CreatePaymentTransactionBody", "PaymentTransactionOut", "ReverseTransactionBody", "TransactionTypeEnum"):
+        assert not hasattr(schemas_module, name), f"{name} debería haberse eliminado junto con payment_transactions"
