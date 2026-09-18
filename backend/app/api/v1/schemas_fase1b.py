@@ -7,7 +7,7 @@ Aliases conservan los nombres que espera el frontend actual.
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, Literal
 from decimal import Decimal
-from datetime import date, datetime
+from datetime import datetime
 
 
 # ---------------------------------------------------------------------------
