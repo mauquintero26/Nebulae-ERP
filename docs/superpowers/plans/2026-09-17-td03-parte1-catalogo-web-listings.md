@@ -635,6 +635,14 @@ git commit -m "feat(td-03): script de backfill hacia product_web_listings"
 
 ## Al completar todas las tareas
 
+**Antes de desplegar esta migración a producción**, `REQUIRED_ALEMBIC_VERSION` debe
+actualizarse en lockstep — de lo contrario `preflight.py` aborta el arranque del
+backend (exit code 2) por desajuste. Orden obligatorio:
+1. Actualizar `REQUIRED_ALEMBIC_VERSION=fa6_010` en la configuración de producción.
+2. Ejecutar `alembic upgrade head` contra la base de datos de producción.
+3. Reiniciar el backend.
+4. Solo entonces, ejecutar el backfill (paso siguiente).
+
 Seguir **superpowers:finishing-a-development-branch**. Antes de considerar la Parte 1 realmente cerrada en producción: correr `python scripts/backfill_product_web_listings.py --dry-run` contra staging/producción real y revisar la lista de huérfanos con el usuario antes de decidir si se ejecuta sin `--dry-run` ahí.
 
 **Qué sigue (fuera de este plan, a planear después):**

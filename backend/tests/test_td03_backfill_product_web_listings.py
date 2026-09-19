@@ -18,7 +18,7 @@ def test_backfill_copies_matched_sku(db, sku):
     finally:
         conn.close()
 
-    assert sku.sku not in result["orphaned"]
+    assert not any(o[2] == sku.sku for o in result["orphaned"])
     row = db.execute(text(
         "SELECT descripcion_larga, seo_titulo, publicado_web FROM product_web_listings WHERE sku_id = :id"
     ), {"id": sku.id}).fetchone()
@@ -43,12 +43,16 @@ def test_backfill_reports_orphan_without_creating_product(db):
     finally:
         conn.close()
 
-    assert "SKU-NO-EXISTE-999" in result["orphaned"]
+    assert any(o[2] == "SKU-NO-EXISTE-999" for o in result["orphaned"])
     count = db.execute(text(
         "SELECT COUNT(*) FROM product_web_listings pwl JOIN product_skus s ON pwl.sku_id = s.id "
         "WHERE s.sku = 'SKU-NO-EXISTE-999'"
     )).scalar()
     assert count == 0
+    sku_count = db.execute(text(
+        "SELECT COUNT(*) FROM product_skus WHERE sku = 'SKU-NO-EXISTE-999'"
+    )).scalar()
+    assert sku_count == 0
 
 
 def test_backfill_dry_run_does_not_write(db, sku):
@@ -103,6 +107,8 @@ def test_backfill_reports_null_sku_as_orphaned(db):
     """))
     db.commit()
 
+    count_before = db.execute(text("SELECT COUNT(*) FROM product_web_listings")).scalar()
+
     from scripts.backfill_product_web_listings import backfill, get_conn
     conn = get_conn()
     try:
@@ -111,9 +117,7 @@ def test_backfill_reports_null_sku_as_orphaned(db):
         conn.close()
 
     # NULL sku should be reported as orphaned
-    assert None in result["orphaned"]
-    # No product should be created for NULL sku
-    count = db.execute(text(
-        "SELECT COUNT(*) FROM product_web_listings WHERE sku_id IS NULL"
-    )).scalar()
-    assert count == 0
+    assert any(o[2] is None for o in result["orphaned"])
+    # No new listing row should be created for the NULL-sku product
+    count_after = db.execute(text("SELECT COUNT(*) FROM product_web_listings")).scalar()
+    assert count_after == count_before

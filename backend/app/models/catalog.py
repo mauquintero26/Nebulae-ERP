@@ -80,7 +80,7 @@ class ProductSKU(Base):
     inventory_movements = relationship("InventoryMovement", back_populates="sku")
     sales_order_lines = relationship("SalesOrderLine", back_populates="sku")
     quotation_lines = relationship("QuotationLine", back_populates="sku")
-    web_listing = relationship("ProductWebListing", back_populates="sku", uselist=False)
+    web_listing = relationship("ProductWebListing", back_populates="sku", uselist=False, cascade="all, delete-orphan", passive_deletes=True)
 
 
 class ProductWebListing(Base):
@@ -100,6 +100,6 @@ class ProductWebListing(Base):
     publicado_web = Column(Boolean, nullable=False, default=False)
     rastrear_inventario = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     sku = relationship("ProductSKU", back_populates="web_listing")
