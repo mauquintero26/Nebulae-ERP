@@ -99,6 +99,11 @@ class ProductWebListing(Base):
     notas_internas = Column(Text)
     publicado_web = Column(Boolean, nullable=False, default=False)
     rastrear_inventario = Column(Boolean, nullable=False, default=True)
+    impuesto_pct = Column(Numeric(5, 2), nullable=False, default=0)
+    sub_categoria = Column(String(200))
+    variantes = Column(JSON, nullable=False, default=list)
+    alerta_stock_minimo = Column(Integer, nullable=False, default=5)
+    created_by = Column(String(150))
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
