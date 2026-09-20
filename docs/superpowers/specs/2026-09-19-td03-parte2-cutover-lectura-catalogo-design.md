@@ -63,7 +63,9 @@ Fuente de cada campo (cuando el producto tiene `ProductSKU` coincidente):
 - `tipo_producto` ← `Product.type` (acepta la diferencia de convención de valores frente a `ecommerce_products.tipo_producto`; ya es así hoy en la rama "solo canónico", que hardcodea `"Fisico"` — Parte 2 generaliza ese comportamiento existente, no introduce una discrepancia nueva)
 - `stock_disponible`, `modalidad_disponible`, `is_low_stock` ← sin cambios, ya se calculan en vivo vía `_get_real_sellable_stock`
 
-**Huérfanos** (fila de `ecommerce_products` cuyo `sku` no coincide con ningún `ProductSKU`, incluyendo `sku` NULL): se incluyen usando el mismo código de lectura de `ecommerce_products` que existe hoy, aplicado solo a ese subconjunto — antes era la fuente principal de todo, ahora es el fallback solo para lo que el catálogo canónico no cubre. `GET /catalogo/{id}` intenta `ProductSKU.id` primero; si no resuelve, cae a `ecommerce_products.id` (igual que hoy, pero como fallback en vez de intento principal).
+**Huérfanos** (fila de `ecommerce_products` cuyo `sku` no coincide con ningún `ProductSKU`, incluyendo `sku` NULL): se incluyen usando el mismo código de lectura de `ecommerce_products` que existe hoy, aplicado solo a ese subconjunto — antes era la fuente principal de todo, ahora es el fallback solo para lo que el catálogo canónico no cubre.
+
+**Desambiguación de `id` (afinado durante la escritura del plan, no estaba resuelto así en la versión original de esta sección):** `ecommerce_products.id` y `ProductSKU.id` son dos secuencias autoincrementales independientes que ambas empiezan en 1 — un huérfano con `ecommerce_products.id=3` colisionaría con el `ProductSKU.id=3` de un producto canónico cualquiera si ambos se devolvieran como el mismo entero positivo. Para evitarlo, los huérfanos devuelven `id = -ecommerce_products.id` (negativo). `GET /catalogo/{id}` resuelve así: `product_id > 0` → buscar `ProductSKU.id == product_id`; `product_id < 0` → buscar `ecommerce_products.id == -product_id`. Sigue siendo un entero (FastAPI acepta negativos en un path param tipado `int`), así que no cambia el tipo del contrato JSON, solo su rango.
 
 ### 5.2 `GET /categorias`
 
