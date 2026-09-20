@@ -431,6 +431,18 @@ def _ensure_ecommerce_tables(db: Session):
     except Exception:
         db.rollback()
 
+def _count_publicados_canonico(db: Session) -> int:
+    q = db.query(ProductSKU).outerjoin(ProductWebListing, ProductWebListing.sku_id == ProductSKU.id)
+    q = q.filter((ProductWebListing.publicado_web == True) | (ProductWebListing.id.is_(None)))
+    matched = q.count()
+    huerfano_count = int(db.execute(text(
+        "SELECT COUNT(*) FROM ecommerce_products "
+        "WHERE publicado_web=TRUE "
+        "AND (sku IS NULL OR NOT EXISTS (SELECT 1 FROM product_skus ps WHERE ps.sku = ecommerce_products.sku))"
+    )).scalar() or 0)
+    return matched + huerfano_count
+
+
 # --- ECOMMERCE STATS ---
 @router.get("/stats")
 def get_ecommerce_stats(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
@@ -451,7 +463,10 @@ def get_ecommerce_stats(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_AS
         carritos_count, carritos_valor = 0, 0
 
     try:
-        prod_pub = int(db.execute(text("SELECT COUNT(*) FROM ecommerce_products WHERE publicado_web=TRUE")).scalar() or 0)
+        if _lectura_canonica():
+            prod_pub = _count_publicados_canonico(db)
+        else:
+            prod_pub = int(db.execute(text("SELECT COUNT(*) FROM ecommerce_products WHERE publicado_web=TRUE")).scalar() or 0)
     except Exception:
         prod_pub = 0
 

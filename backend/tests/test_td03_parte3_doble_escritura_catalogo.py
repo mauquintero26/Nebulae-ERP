@@ -189,3 +189,66 @@ def test_delete_huerfano_con_flag_on_usa_ruta_legacy(app_client, db, admin_token
     assert resp.status_code == 200
     row = db.execute(text("SELECT id FROM ecommerce_products WHERE id=:id"), {"id": ecom_id}).fetchone()
     assert row is None
+
+
+def test_stats_flag_off_cuenta_solo_ecommerce_products(app_client, db, admin_token, monkeypatch):
+    _ensure_ecommerce_tables(db)
+    monkeypatch.delenv("CATALOGO_LECTURA", raising=False)
+    resp_before = app_client.get("/api/v1/ecommerce/stats", headers={"Authorization": f"Bearer {admin_token}"})
+    count_before = resp_before.json()["data"]["productos_publicados"]
+
+    sku_nuevo = f"SKU-P3-STATS-OFF-{uuid.uuid4().hex[:8]}"
+    db.execute(
+        text("INSERT INTO ecommerce_products (nombre, sku, publicado_web) VALUES ('Stats Off', :sku, TRUE)"),
+        {"sku": sku_nuevo},
+    )
+    db.commit()
+    try:
+        resp_after = app_client.get("/api/v1/ecommerce/stats", headers={"Authorization": f"Bearer {admin_token}"})
+        count_after = resp_after.json()["data"]["productos_publicados"]
+        assert count_after - count_before == 1
+    finally:
+        db.execute(text("DELETE FROM ecommerce_products WHERE sku=:sku"), {"sku": sku_nuevo})
+        db.commit()
+
+
+def test_stats_flag_on_cuenta_emparejados_y_huerfanos_publicados(app_client, db, admin_token, monkeypatch):
+    from app.models.catalog import ProductWebListing, Product, ProductSKU, Brand, Category
+    _ensure_ecommerce_tables(db)
+    monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
+    resp_before = app_client.get("/api/v1/ecommerce/stats", headers={"Authorization": f"Bearer {admin_token}"})
+    count_before = resp_before.json()["data"]["productos_publicados"]
+
+    brand = Brand(name=f"TestBrandP3-{uuid.uuid4().hex[:6]}")
+    category = Category(name=f"TestCategoryP3-{uuid.uuid4().hex[:6]}")
+    db.add(brand)
+    db.add(category)
+    db.commit()
+    prod1 = Product(brand_id=brand.id, category_id=category.id, name="ProdPub", type="Fisico", base_currency="USD")
+    prod2 = Product(brand_id=brand.id, category_id=category.id, name="ProdNoPub", type="Fisico", base_currency="USD")
+    db.add(prod1)
+    db.add(prod2)
+    db.commit()
+    sku1 = ProductSKU(product_id=prod1.id, sku=f"STATS-PUB-{uuid.uuid4().hex[:8]}", sale_price=10)
+    sku2 = ProductSKU(product_id=prod2.id, sku=f"STATS-NOPUB-{uuid.uuid4().hex[:8]}", sale_price=10)
+    db.add(sku1)
+    db.add(sku2)
+    db.commit()
+    db.add(ProductWebListing(sku_id=sku1.id, publicado_web=True))
+    db.add(ProductWebListing(sku_id=sku2.id, publicado_web=False))
+    db.commit()
+
+    sku_huerfano = f"STATS-HUERFANO-{uuid.uuid4().hex[:8]}"
+    db.execute(
+        text("INSERT INTO ecommerce_products (nombre, sku, publicado_web) VALUES ('Huerfano Stats', :sku, TRUE)"),
+        {"sku": sku_huerfano},
+    )
+    db.commit()
+    try:
+        resp_after = app_client.get("/api/v1/ecommerce/stats", headers={"Authorization": f"Bearer {admin_token}"})
+        assert resp_after.status_code == 200
+        count_after = resp_after.json()["data"]["productos_publicados"]
+        assert count_after - count_before == 2
+    finally:
+        db.execute(text("DELETE FROM ecommerce_products WHERE sku=:sku"), {"sku": sku_huerfano})
+        db.commit()
