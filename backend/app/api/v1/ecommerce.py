@@ -159,6 +159,17 @@ def _update_catalogo_producto_canonico(db: Session, sku_id: int, body: dict) -> 
     return {"status": "success"}
 
 
+def _delete_catalogo_producto_canonico(db: Session, sku_id: int) -> dict:
+    canon_sku = db.query(ProductSKU).filter(ProductSKU.id == sku_id).first()
+    if not canon_sku:
+        raise HTTPException(404, "Producto no encontrado")
+    if canon_sku.web_listing:
+        db.delete(canon_sku.web_listing)
+    db.execute(text("DELETE FROM ecommerce_products WHERE sku=:sku"), {"sku": canon_sku.sku})
+    db.commit()
+    return {"status": "success"}
+
+
 def _serialize_catalogo_item_canonico(db: Session, canon_sku: ProductSKU) -> dict:
     prod = canon_sku.product
     listing = canon_sku.web_listing
@@ -1162,7 +1173,9 @@ def update_catalogo_product(product_id: int, body: dict, user: User = Depends(re
 @router.delete("/catalogo/{product_id}")
 def delete_catalogo_product(product_id: int, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
-    db.execute(text("DELETE FROM ecommerce_products WHERE id=:id"), {"id": product_id})
+    if _es_id_canonico(product_id):
+        return _delete_catalogo_producto_canonico(db, product_id)
+    db.execute(text("DELETE FROM ecommerce_products WHERE id=:id"), {"id": abs(product_id)})
     db.commit()
     return {"status": "success"}
 
