@@ -75,3 +75,41 @@ def test_catalogo_canonico_incluye_huerfanos_con_id_negativo(app_client, db, mon
     finally:
         db.execute(text("DELETE FROM ecommerce_products WHERE sku = :sku"), {"sku": sku_huerfano})
         db.commit()
+
+
+def test_catalogo_detalle_canonico_por_sku_id(app_client, db, sku, monkeypatch):
+    monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
+    resp = app_client.get(f"/api/v1/ecommerce/catalogo/{sku.id}")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["id"] == sku.id
+    assert data["sku"] == sku.sku
+    assert data["precio_venta"] == float(sku.sale_price)
+
+
+def test_catalogo_detalle_canonico_huerfano_por_id_negativo(app_client, db, monkeypatch):
+    _ensure_ecommerce_tables(db)
+    sku_huerfano = f"SKU-HUERFANO-DETALLE-{uuid.uuid4().hex[:8]}"
+    result = db.execute(text("""
+        INSERT INTO ecommerce_products (nombre, sku, publicado_web)
+        VALUES ('Producto Huerfano Detalle', :sku, TRUE)
+        RETURNING id
+    """), {"sku": sku_huerfano})
+    ecom_id = result.fetchone()[0]
+    db.commit()
+    try:
+        monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
+        resp = app_client.get(f"/api/v1/ecommerce/catalogo/{-ecom_id}")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["sku"] == sku_huerfano
+        assert data["id"] == -ecom_id
+    finally:
+        db.execute(text("DELETE FROM ecommerce_products WHERE sku = :sku"), {"sku": sku_huerfano})
+        db.commit()
+
+
+def test_catalogo_detalle_canonico_404_si_no_existe(app_client, db, monkeypatch):
+    monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
+    resp = app_client.get("/api/v1/ecommerce/catalogo/999999999")
+    assert resp.status_code == 404

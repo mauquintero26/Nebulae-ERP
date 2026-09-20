@@ -167,6 +167,42 @@ def _list_catalogo_canonico(db: Session, search, categoria, publicado, limit: in
 
     return {"status": "success", "total": total, "data": data}
 
+
+def _serialize_catalogo_item_detalle_canonico(db: Session, canon_sku: ProductSKU) -> dict:
+    base = _serialize_catalogo_item_canonico(db, canon_sku)
+    listing = canon_sku.web_listing
+    base["descripcion_larga"] = listing.descripcion_larga if listing else None
+    base["seo_descripcion"] = listing.seo_descripcion if listing else None
+    base["seo_keywords"] = listing.seo_keywords if listing else None
+    base["codigo_aduana"] = listing.codigo_aduana if listing else None
+    base["peso_kg"] = float(listing.peso_kg) if listing and listing.peso_kg is not None else None
+    base["notas_internas"] = listing.notas_internas if listing else None
+    base["created_by"] = listing.created_by if listing else None
+    return base
+
+
+def _get_catalogo_product_canonico(db: Session, product_id: int) -> dict:
+    if product_id > 0:
+        canon_sku = db.query(ProductSKU).filter(ProductSKU.id == product_id).first()
+        if not canon_sku:
+            raise HTTPException(404, "Producto no encontrado")
+        data = _serialize_catalogo_item_detalle_canonico(db, canon_sku)
+    else:
+        row = db.execute(text("SELECT * FROM ecommerce_products WHERE id=:id"), {"id": -product_id}).fetchone()
+        if not row:
+            raise HTTPException(404, "Producto no encontrado")
+        keys = ["id","nombre","descripcion","descripcion_larga","sku","precio_venta","precio_comparacion","descuento_pct","impuesto_pct","categoria","sub_categoria","marca","tipo_producto","imagenes","atributos","variantes","stock_disponible","alerta_stock_minimo","publicado_web","rastrear_inventario","codigo_aduana","peso_kg","notas_internas","seo_titulo","seo_descripcion","seo_keywords","created_at","updated_at","created_by"]
+        data = dict(zip(keys, row))
+        data["id"] = -data["id"]
+        for k in ["created_at", "updated_at"]:
+            if data.get(k) and hasattr(data[k], "isoformat"):
+                data[k] = data[k].isoformat()
+
+    ventas_prod = db.query(SaleOrder).filter(SaleOrder.canal_venta=='WEB', SaleOrder.estado!='CANCELADO').all()
+    total_vendido = sum(p.get("qty", p.get("cantidad", 0)) for o in ventas_prod for p in (o.productos or []) if p.get("sku") == data.get("sku") or p.get("nombre","").lower() == (data.get("nombre") or "").lower())
+    data["total_vendido"] = total_vendido
+    return {"status": "success", "data": data}
+
 def _ensure_ecommerce_tables(db: Session):
     try:
         db.execute(text("""
@@ -907,6 +943,8 @@ def list_catalogo(search: Optional[str] = None, categoria: Optional[str] = None,
 @router.get("/catalogo/{product_id}")
 def get_catalogo_product(product_id: int, db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
+    if _lectura_canonica():
+        return _get_catalogo_product_canonico(db, product_id)
     row = db.execute(text("SELECT * FROM ecommerce_products WHERE id=:id"), {"id": product_id}).fetchone()
     if not row:
         prod = db.query(Product).filter(Product.id == product_id).first()
