@@ -252,3 +252,52 @@ def test_stats_flag_on_cuenta_emparejados_y_huerfanos_publicados(app_client, db,
     finally:
         db.execute(text("DELETE FROM ecommerce_products WHERE sku=:sku"), {"sku": sku_huerfano})
         db.commit()
+
+
+def test_update_canonico_luego_flag_off_muestra_valores_editados_via_legacy(app_client, db, sku, admin_token, monkeypatch):
+    _ensure_ecommerce_tables(db)
+    monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
+
+    resp = app_client.patch(
+        f"/api/v1/ecommerce/catalogo/{sku.id}",
+        json={"descuento_pct": 25, "seo_titulo": "Rollback Seo"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert resp.status_code == 200
+
+    monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
+    resp_legacy = app_client.get("/api/v1/ecommerce/catalogo", params={"search": sku.sku})
+    assert resp_legacy.status_code == 200
+    item = next(p for p in resp_legacy.json()["data"] if p["sku"] == sku.sku)
+    assert item["descuento_pct"] == 25.0
+    assert item["seo_titulo"] == "Rollback Seo"
+    assert item["precio_venta"] == float(sku.sale_price)
+
+
+def test_update_canonico_404_si_sku_id_no_existe(app_client, db, admin_token, monkeypatch):
+    monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
+    resp = app_client.patch(
+        "/api/v1/ecommerce/catalogo/999999999",
+        json={"descuento_pct": 5},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert resp.status_code == 404
+
+
+def test_delete_canonico_404_si_sku_id_no_existe(app_client, db, admin_token, monkeypatch):
+    monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
+    resp = app_client.delete(
+        "/api/v1/ecommerce/catalogo/999999999",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert resp.status_code == 404
+
+
+def test_update_canonico_sin_campos_relevantes_devuelve_400(app_client, db, sku, admin_token, monkeypatch):
+    monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
+    resp = app_client.patch(
+        f"/api/v1/ecommerce/catalogo/{sku.id}",
+        json={"nombre": "Este Campo No Aplica"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert resp.status_code == 400

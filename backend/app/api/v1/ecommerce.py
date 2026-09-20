@@ -94,6 +94,7 @@ def _upsert_espejo_ecommerce_products(db: Session, canon_sku: ProductSKU, listin
     }
     existing = db.execute(text("SELECT id FROM ecommerce_products WHERE sku=:sku"), {"sku": canon_sku.sku}).fetchone()
     if existing:
+        values["row_id"] = existing[0]
         db.execute(text("""
             UPDATE ecommerce_products SET
                 nombre=:nombre, descripcion=:descripcion, descripcion_larga=:descripcion_larga, precio_venta=:precio_venta,
@@ -104,7 +105,7 @@ def _upsert_espejo_ecommerce_products(db: Session, canon_sku: ProductSKU, listin
                 rastrear_inventario=:rastrear_inventario, codigo_aduana=:codigo_aduana, peso_kg=:peso_kg,
                 notas_internas=:notas_internas, seo_titulo=:seo_titulo, seo_descripcion=:seo_descripcion,
                 seo_keywords=:seo_keywords, created_by=:created_by, updated_at=:now
-            WHERE sku=:sku
+            WHERE id=:row_id
         """), values)
     else:
         db.execute(text("""
@@ -126,6 +127,15 @@ def _update_catalogo_producto_canonico(db: Session, sku_id: int, body: dict) -> 
     if not canon_sku:
         raise HTTPException(404, "Producto no encontrado")
 
+    campos_listing = [
+        "precio_comparacion", "descuento_pct", "impuesto_pct", "sub_categoria",
+        "alerta_stock_minimo", "publicado_web", "rastrear_inventario", "seo_titulo",
+        "descripcion_larga", "seo_descripcion", "seo_keywords", "codigo_aduana",
+        "peso_kg", "notas_internas", "created_by", "imagenes", "variantes",
+    ]
+    if not any(k in body for k in campos_listing):
+        raise HTTPException(400, "Nada que actualizar")
+
     listing = canon_sku.web_listing
     if not listing:
         listing = ProductWebListing(
@@ -143,12 +153,6 @@ def _update_catalogo_producto_canonico(db: Session, sku_id: int, body: dict) -> 
         )
         db.add(listing)
 
-    campos_listing = [
-        "precio_comparacion", "descuento_pct", "impuesto_pct", "sub_categoria",
-        "alerta_stock_minimo", "publicado_web", "rastrear_inventario", "seo_titulo",
-        "descripcion_larga", "seo_descripcion", "seo_keywords", "codigo_aduana",
-        "peso_kg", "notas_internas", "created_by", "imagenes", "variantes",
-    ]
     for k in campos_listing:
         if k in body:
             setattr(listing, k, body[k])
@@ -165,7 +169,9 @@ def _delete_catalogo_producto_canonico(db: Session, sku_id: int) -> dict:
         raise HTTPException(404, "Producto no encontrado")
     if canon_sku.web_listing:
         db.delete(canon_sku.web_listing)
-    db.execute(text("DELETE FROM ecommerce_products WHERE sku=:sku"), {"sku": canon_sku.sku})
+    espejo = db.execute(text("SELECT id FROM ecommerce_products WHERE sku=:sku"), {"sku": canon_sku.sku}).fetchone()
+    if espejo:
+        db.execute(text("DELETE FROM ecommerce_products WHERE id=:id"), {"id": espejo[0]})
     db.commit()
     return {"status": "success"}
 
@@ -468,6 +474,7 @@ def get_ecommerce_stats(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_AS
         else:
             prod_pub = int(db.execute(text("SELECT COUNT(*) FROM ecommerce_products WHERE publicado_web=TRUE")).scalar() or 0)
     except Exception:
+        db.rollback()
         prod_pub = 0
 
     total_carts = carritos_count + web_orders_today
