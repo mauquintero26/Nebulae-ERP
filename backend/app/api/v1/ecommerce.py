@@ -203,6 +203,40 @@ def _get_catalogo_product_canonico(db: Session, product_id: int) -> dict:
     data["total_vendido"] = total_vendido
     return {"status": "success", "data": data}
 
+def _get_categorias_web_canonico(db: Session) -> dict:
+    rows = (
+        db.query(Category.name, ProductWebListing.sub_categoria)
+        .join(Product, Product.category_id == Category.id)
+        .join(ProductSKU, ProductSKU.product_id == Product.id)
+        .outerjoin(ProductWebListing, ProductWebListing.sku_id == ProductSKU.id)
+        .filter((ProductWebListing.publicado_web == True) | (ProductWebListing.id.is_(None)))
+        .distinct()
+        .order_by(Category.name, ProductWebListing.sub_categoria)
+        .all()
+    )
+    cat_map: dict = {}
+    for cat, sub in rows:
+        cat = cat or "General"
+        if cat not in cat_map:
+            cat_map[cat] = {"nombre": cat, "sub_categorias": []}
+        if sub and sub not in cat_map[cat]["sub_categorias"]:
+            cat_map[cat]["sub_categorias"].append(sub)
+
+    huerfano_rows = db.execute(text(
+        "SELECT DISTINCT categoria, sub_categoria FROM ecommerce_products "
+        "WHERE publicado_web=TRUE AND categoria IS NOT NULL "
+        "AND (sku IS NULL OR sku NOT IN (SELECT sku FROM product_skus)) "
+        "ORDER BY categoria, sub_categoria"
+    )).fetchall()
+    for cat, sub in huerfano_rows:
+        cat = cat or "General"
+        if cat not in cat_map:
+            cat_map[cat] = {"nombre": cat, "sub_categorias": []}
+        if sub and sub not in cat_map[cat]["sub_categorias"]:
+            cat_map[cat]["sub_categorias"].append(sub)
+
+    return {"status": "success", "data": list(cat_map.values())}
+
 def _ensure_ecommerce_tables(db: Session):
     try:
         db.execute(text("""
@@ -1024,6 +1058,8 @@ def delete_catalogo_product(product_id: int, user: User = Depends(require_roles(
 @router.get("/categorias")
 def get_categorias_web(db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
+    if _lectura_canonica():
+        return _get_categorias_web_canonico(db)
     try:
         rows = db.execute(text("SELECT DISTINCT categoria, sub_categoria FROM ecommerce_products WHERE publicado_web=TRUE AND categoria IS NOT NULL ORDER BY categoria, sub_categoria")).fetchall()
         cat_map: dict = {}

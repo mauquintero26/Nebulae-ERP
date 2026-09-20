@@ -113,3 +113,50 @@ def test_catalogo_detalle_canonico_404_si_no_existe(app_client, db, monkeypatch)
     monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
     resp = app_client.get("/api/v1/ecommerce/catalogo/999999999")
     assert resp.status_code == 404
+
+
+def test_categorias_canonico_incluye_categoria_y_subcategoria(app_client, db, sku, monkeypatch):
+    from app.models.catalog import ProductWebListing
+    listing = ProductWebListing(sku_id=sku.id, sub_categoria="Deportivas", publicado_web=True)
+    db.add(listing)
+    db.commit()
+    monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
+
+    resp = app_client.get("/api/v1/ecommerce/categorias")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    cat_nombre = sku.product.category.name
+    cat_entry = next((c for c in data if c["nombre"] == cat_nombre), None)
+    assert cat_entry is not None
+    assert "Deportivas" in cat_entry["sub_categorias"]
+
+
+def test_categorias_canonico_sku_sin_listing_usa_default_publicado(app_client, db, sku, monkeypatch):
+    # Sin ProductWebListing, publicado_web por default es True (Global Constraints) --
+    # la categoria debe seguir apareciendo en el filtro.
+    monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
+    resp = app_client.get("/api/v1/ecommerce/categorias")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    cat_nombre = sku.product.category.name
+    assert any(c["nombre"] == cat_nombre for c in data)
+
+
+def test_categorias_canonico_incluye_categoria_de_huerfano(app_client, db, monkeypatch):
+    _ensure_ecommerce_tables(db)
+    sku_huerfano = f"SKU-HUERFANO-CAT-{uuid.uuid4().hex[:8]}"
+    cat_huerfana = f"CategoriaHuerfana-{uuid.uuid4().hex[:6]}"
+    db.execute(text("""
+        INSERT INTO ecommerce_products (nombre, sku, categoria, publicado_web)
+        VALUES ('Producto Huerfano Cat', :sku, :cat, TRUE)
+    """), {"sku": sku_huerfano, "cat": cat_huerfana})
+    db.commit()
+    try:
+        monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
+        resp = app_client.get("/api/v1/ecommerce/categorias")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert any(c["nombre"] == cat_huerfana for c in data)
+    finally:
+        db.execute(text("DELETE FROM ecommerce_products WHERE sku = :sku"), {"sku": sku_huerfano})
+        db.commit()
