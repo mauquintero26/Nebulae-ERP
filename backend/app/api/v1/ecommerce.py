@@ -51,6 +51,114 @@ def _lectura_canonica() -> bool:
     return os.environ.get("CATALOGO_LECTURA", "legacy") == "canonico"
 
 
+def _es_id_canonico(product_id: int) -> bool:
+    return _lectura_canonica() and product_id > 0
+
+
+def _upsert_espejo_ecommerce_products(db: Session, canon_sku: ProductSKU, listing: ProductWebListing) -> None:
+    prod = canon_sku.product
+    now = datetime.datetime.utcnow()
+    atributos = [
+        {"atributo": av.attribute.name, "valor": av.value}
+        for av in canon_sku.attribute_values
+    ]
+    stock_disp = float(_get_real_sellable_stock(db, canon_sku.id, owner="NEBULAE"))
+    values = {
+        "sku": canon_sku.sku,
+        "nombre": prod.name if prod else canon_sku.sku,
+        "descripcion": (prod.description if prod else "") or "",
+        "descripcion_larga": listing.descripcion_larga,
+        "precio_venta": float(canon_sku.sale_price or 0),
+        "precio_comparacion": float(listing.precio_comparacion) if listing.precio_comparacion is not None else float(canon_sku.sale_price or 0),
+        "descuento_pct": float(listing.descuento_pct or 0),
+        "impuesto_pct": float(listing.impuesto_pct or 0),
+        "categoria": prod.category.name if prod and prod.category else None,
+        "sub_categoria": listing.sub_categoria,
+        "marca": prod.brand.name if prod and prod.brand else None,
+        "tipo_producto": (prod.type if prod else None) or "Bienes",
+        "imagenes": json_mod.dumps(listing.imagenes or []),
+        "atributos": json_mod.dumps(atributos),
+        "variantes": json_mod.dumps(listing.variantes or []),
+        "stock_disponible": int(stock_disp),
+        "alerta_stock_minimo": listing.alerta_stock_minimo,
+        "publicado_web": listing.publicado_web,
+        "rastrear_inventario": listing.rastrear_inventario,
+        "codigo_aduana": listing.codigo_aduana,
+        "peso_kg": listing.peso_kg,
+        "notas_internas": listing.notas_internas,
+        "seo_titulo": listing.seo_titulo,
+        "seo_descripcion": listing.seo_descripcion,
+        "seo_keywords": listing.seo_keywords,
+        "created_by": listing.created_by,
+        "now": now,
+    }
+    existing = db.execute(text("SELECT id FROM ecommerce_products WHERE sku=:sku"), {"sku": canon_sku.sku}).fetchone()
+    if existing:
+        db.execute(text("""
+            UPDATE ecommerce_products SET
+                nombre=:nombre, descripcion=:descripcion, descripcion_larga=:descripcion_larga, precio_venta=:precio_venta,
+                precio_comparacion=:precio_comparacion, descuento_pct=:descuento_pct, impuesto_pct=:impuesto_pct,
+                categoria=:categoria, sub_categoria=:sub_categoria, marca=:marca, tipo_producto=:tipo_producto,
+                imagenes=CAST(:imagenes AS jsonb), atributos=CAST(:atributos AS jsonb), variantes=CAST(:variantes AS jsonb),
+                stock_disponible=:stock_disponible, alerta_stock_minimo=:alerta_stock_minimo, publicado_web=:publicado_web,
+                rastrear_inventario=:rastrear_inventario, codigo_aduana=:codigo_aduana, peso_kg=:peso_kg,
+                notas_internas=:notas_internas, seo_titulo=:seo_titulo, seo_descripcion=:seo_descripcion,
+                seo_keywords=:seo_keywords, created_by=:created_by, updated_at=:now
+            WHERE sku=:sku
+        """), values)
+    else:
+        db.execute(text("""
+            INSERT INTO ecommerce_products
+                (nombre,descripcion,descripcion_larga,sku,precio_venta,precio_comparacion,descuento_pct,impuesto_pct,
+                 categoria,sub_categoria,marca,tipo_producto,imagenes,atributos,variantes,stock_disponible,
+                 alerta_stock_minimo,publicado_web,rastrear_inventario,codigo_aduana,peso_kg,notas_internas,
+                 seo_titulo,seo_descripcion,seo_keywords,created_at,updated_at,created_by)
+            VALUES
+                (:nombre,:descripcion,:descripcion_larga,:sku,:precio_venta,:precio_comparacion,:descuento_pct,:impuesto_pct,
+                 :categoria,:sub_categoria,:marca,:tipo_producto,CAST(:imagenes AS jsonb),CAST(:atributos AS jsonb),CAST(:variantes AS jsonb),:stock_disponible,
+                 :alerta_stock_minimo,:publicado_web,:rastrear_inventario,:codigo_aduana,:peso_kg,:notas_internas,
+                 :seo_titulo,:seo_descripcion,:seo_keywords,:now,:now,:created_by)
+        """), values)
+
+
+def _update_catalogo_producto_canonico(db: Session, sku_id: int, body: dict) -> dict:
+    canon_sku = db.query(ProductSKU).filter(ProductSKU.id == sku_id).first()
+    if not canon_sku:
+        raise HTTPException(404, "Producto no encontrado")
+
+    listing = canon_sku.web_listing
+    if not listing:
+        listing = ProductWebListing(
+            sku_id=canon_sku.id,
+            descuento_pct=0,
+            impuesto_pct=0,
+            publicado_web=True,
+            rastrear_inventario=True,
+            alerta_stock_minimo=5,
+            sub_categoria="",
+            imagenes=[],
+            variantes=[],
+            precio_comparacion=canon_sku.sale_price,
+            seo_titulo=(canon_sku.product.name if canon_sku.product else canon_sku.sku),
+        )
+        db.add(listing)
+
+    campos_listing = [
+        "precio_comparacion", "descuento_pct", "impuesto_pct", "sub_categoria",
+        "alerta_stock_minimo", "publicado_web", "rastrear_inventario", "seo_titulo",
+        "descripcion_larga", "seo_descripcion", "seo_keywords", "codigo_aduana",
+        "peso_kg", "notas_internas", "created_by", "imagenes", "variantes",
+    ]
+    for k in campos_listing:
+        if k in body:
+            setattr(listing, k, body[k])
+
+    db.flush()
+    _upsert_espejo_ecommerce_products(db, canon_sku, listing)
+    db.commit()
+    return {"status": "success"}
+
+
 def _serialize_catalogo_item_canonico(db: Session, canon_sku: ProductSKU) -> dict:
     prod = canon_sku.product
     listing = canon_sku.web_listing
@@ -1029,6 +1137,9 @@ def create_catalogo_product(body: dict, user: User = Depends(require_roles(*ROLE
 @router.patch("/catalogo/{product_id}")
 def update_catalogo_product(product_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
+    if _es_id_canonico(product_id):
+        return _update_catalogo_producto_canonico(db, product_id, body)
+    product_id = abs(product_id)
     allowed = ["nombre","descripcion","descripcion_larga","sku","precio_venta","precio_comparacion","descuento_pct","impuesto_pct","categoria","sub_categoria","marca","tipo_producto","stock_disponible","alerta_stock_minimo","publicado_web","rastrear_inventario","codigo_aduana","peso_kg","notas_internas","seo_titulo","seo_descripcion","seo_keywords"]
     json_fields = ["imagenes","atributos","variantes"]
     sets = []
