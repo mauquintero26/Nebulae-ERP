@@ -144,9 +144,9 @@ def _list_catalogo_canonico(db: Session, search, categoria, publicado, limit: in
             q = q.filter(ProductWebListing.publicado_web == False)
 
     total = q.count()
-    data = [_serialize_catalogo_item_canonico(db, s) for s in q.order_by(Product.name).limit(limit).all()]
+    data = [_serialize_catalogo_item_canonico(db, s) for s in q.order_by(Product.name, ProductSKU.id).limit(limit).all()]
 
-    where_clauses = ["(sku IS NULL OR sku NOT IN (SELECT sku FROM product_skus))"]
+    where_clauses = ["(sku IS NULL OR NOT EXISTS (SELECT 1 FROM product_skus ps WHERE ps.sku = ecommerce_products.sku))"]
     params: dict = {"limit": limit}
     if search:
         where_clauses.append("(nombre ILIKE :s OR sku ILIKE :s OR descripcion ILIKE :s)")
@@ -225,7 +225,7 @@ def _get_categorias_web_canonico(db: Session) -> dict:
     huerfano_rows = db.execute(text(
         "SELECT DISTINCT categoria, sub_categoria FROM ecommerce_products "
         "WHERE publicado_web=TRUE AND categoria IS NOT NULL "
-        "AND (sku IS NULL OR sku NOT IN (SELECT sku FROM product_skus)) "
+        "AND (sku IS NULL OR NOT EXISTS (SELECT 1 FROM product_skus ps WHERE ps.sku = ecommerce_products.sku)) "
         "ORDER BY categoria, sub_categoria"
     )).fetchall()
     for cat, sub in huerfano_rows:

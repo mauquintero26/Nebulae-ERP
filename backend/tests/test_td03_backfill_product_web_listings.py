@@ -149,3 +149,39 @@ def test_backfill_copies_campos_parte2(db, sku):
     assert row[2] == [{"talla": "M"}]
     assert row[3] == 8
     assert row[4] == "admin@nebulae.test"
+
+
+def test_backfill_updates_campos_parte2_en_fila_existente(db, sku):
+    _ensure_ecommerce_tables(db)
+    from app.models.catalog import ProductWebListing
+    listing = ProductWebListing(sku_id=sku.id, descripcion_larga="Ya existente")
+    db.add(listing)
+    db.commit()
+
+    db.execute(text("""
+        INSERT INTO ecommerce_products (nombre, sku, impuesto_pct, sub_categoria, variantes, alerta_stock_minimo, created_by, publicado_web)
+        VALUES ('Producto Ya Respaldado', :sku, 19.00, 'Camisetas', CAST(:variantes AS jsonb), 8, 'admin@nebulae.test', TRUE)
+    """), {"sku": sku.sku, "variantes": json.dumps([{"talla": "M"}])})
+    db.commit()
+    try:
+        from scripts.backfill_product_web_listings import backfill, get_conn
+        conn = get_conn()
+        try:
+            backfill(conn, dry_run=False)
+        finally:
+            conn.close()
+
+        row = db.execute(text(
+            "SELECT descripcion_larga, impuesto_pct, sub_categoria, variantes, alerta_stock_minimo, created_by "
+            "FROM product_web_listings WHERE sku_id = :id"
+        ), {"id": sku.id}).fetchone()
+        assert row is not None
+        assert row[0] == "Ya existente"
+        assert row[1] == Decimal("19.00")
+        assert row[2] == "Camisetas"
+        assert row[3] == [{"talla": "M"}]
+        assert row[4] == 8
+        assert row[5] == "admin@nebulae.test"
+    finally:
+        db.execute(text("DELETE FROM ecommerce_products WHERE sku = :sku"), {"sku": sku.sku})
+        db.commit()

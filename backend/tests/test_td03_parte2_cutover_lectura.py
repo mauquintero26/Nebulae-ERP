@@ -41,11 +41,32 @@ def test_catalogo_canonico_incluye_datos_de_web_listing(app_client, db, sku, mon
 
 
 def test_catalogo_canonico_precio_venta_coincide_con_sale_price(app_client, db, sku, monkeypatch):
-    monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
-    resp = app_client.get("/api/v1/ecommerce/catalogo", params={"search": sku.sku})
-    assert resp.status_code == 200
-    item = next(p for p in resp.json()["data"] if p["sku"] == sku.sku)
-    assert item["precio_venta"] == float(sku.sale_price)
+    _ensure_ecommerce_tables(db)
+    # Fila conflictiva en ecommerce_products con un precio distinto -- reproduce
+    # el escenario real del bug de fraude falso-positivo documentado en la
+    # auditoria de Fase C: GET /catalogo mostraba este precio, pero
+    # create_web_order valida contra ProductSKU.sale_price.
+    db.execute(text("""
+        INSERT INTO ecommerce_products (nombre, sku, precio_venta, publicado_web)
+        VALUES ('Producto Precio Divergente', :sku, 99999, TRUE)
+    """), {"sku": sku.sku})
+    db.commit()
+    try:
+        monkeypatch.setenv("CATALOGO_LECTURA", "canonico")
+        resp = app_client.get("/api/v1/ecommerce/catalogo", params={"search": sku.sku})
+        assert resp.status_code == 200
+        item = next(p for p in resp.json()["data"] if p["sku"] == sku.sku)
+        assert item["precio_venta"] == float(sku.sale_price)
+
+        # Documenta el bug original: con el flag apagado, legacy SI muestra
+        # el precio divergente de ecommerce_products.
+        monkeypatch.setenv("CATALOGO_LECTURA", "legacy")
+        resp_legacy = app_client.get("/api/v1/ecommerce/catalogo", params={"search": sku.sku})
+        item_legacy = next(p for p in resp_legacy.json()["data"] if p["sku"] == sku.sku)
+        assert item_legacy["precio_venta"] == 99999.0
+    finally:
+        db.execute(text("DELETE FROM ecommerce_products WHERE sku = :sku"), {"sku": sku.sku})
+        db.commit()
 
 
 def test_catalogo_canonico_sku_sin_listing_usa_defaults(app_client, db, sku, monkeypatch):
@@ -160,3 +181,43 @@ def test_categorias_canonico_incluye_categoria_de_huerfano(app_client, db, monke
     finally:
         db.execute(text("DELETE FROM ecommerce_products WHERE sku = :sku"), {"sku": sku_huerfano})
         db.commit()
+
+
+def test_catalogo_detalle_legacy_usa_ruta_antigua_con_flag_off(app_client, db, sku, monkeypatch):
+    from app.models.catalog import ProductWebListing
+    _ensure_ecommerce_tables(db)
+    result = db.execute(text("""
+        INSERT INTO ecommerce_products (nombre, sku, publicado_web)
+        VALUES ('Producto Legacy Detalle', :sku, TRUE)
+        RETURNING id
+    """), {"sku": sku.sku})
+    ecom_id = result.fetchone()[0]
+    db.commit()
+    listing = ProductWebListing(sku_id=sku.id, descripcion_larga="Version canonica", publicado_web=True)
+    db.add(listing)
+    db.commit()
+    monkeypatch.delenv("CATALOGO_LECTURA", raising=False)
+
+    try:
+        resp = app_client.get(f"/api/v1/ecommerce/catalogo/{ecom_id}")
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        # Legacy lee directo de ecommerce_products por su propio id -- nunca
+        # ve la version canonica del ProductWebListing, aunque exista.
+        assert data.get("descripcion_larga") != "Version canonica"
+    finally:
+        db.execute(text("DELETE FROM ecommerce_products WHERE id = :id"), {"id": ecom_id})
+        db.commit()
+
+
+def test_categorias_legacy_ignora_web_listing_con_flag_off(app_client, db, sku, monkeypatch):
+    from app.models.catalog import ProductWebListing
+    listing = ProductWebListing(sku_id=sku.id, sub_categoria="SoloCanonicoSubcat", publicado_web=True)
+    db.add(listing)
+    db.commit()
+    monkeypatch.delenv("CATALOGO_LECTURA", raising=False)
+
+    resp = app_client.get("/api/v1/ecommerce/categorias")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert not any("SoloCanonicoSubcat" in c.get("sub_categorias", []) for c in data)

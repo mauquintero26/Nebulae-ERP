@@ -1,8 +1,10 @@
 """
-backfill_product_web_listings.py -- TD-03 (Parte 1)
+backfill_product_web_listings.py -- TD-03 (Parte 1 + Parte 2)
 
 Copia los campos de marketing/SEO de ecommerce_products hacia
-product_web_listings, emparejando por SKU exacto.
+product_web_listings, emparejando por SKU exacto. Incluye (Parte 2)
+impuesto_pct, sub_categoria, variantes, alerta_stock_minimo y
+created_by.
 
 Modos:
   --dry-run : muestra estadisticas sin escribir nada
@@ -90,7 +92,12 @@ def backfill(conn, dry_run: bool = False) -> dict:
                      notas_internas, publicado_web, rastrear_inventario,
                      impuesto_pct, sub_categoria, variantes, alerta_stock_minimo, created_by)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (sku_id) DO NOTHING
+                ON CONFLICT (sku_id) DO UPDATE SET
+                    impuesto_pct = EXCLUDED.impuesto_pct,
+                    sub_categoria = EXCLUDED.sub_categoria,
+                    variantes = EXCLUDED.variantes,
+                    alerta_stock_minimo = EXCLUDED.alerta_stock_minimo,
+                    created_by = EXCLUDED.created_by
             """, (
                 sku_row[0], r[3], r[4], r[5], json.dumps(r[6] or []),
                 r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14],
