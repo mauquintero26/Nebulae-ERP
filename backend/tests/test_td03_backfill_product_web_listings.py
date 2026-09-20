@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal
 from sqlalchemy import text
 from app.api.v1.ecommerce import _ensure_ecommerce_tables
 
@@ -121,3 +122,30 @@ def test_backfill_reports_null_sku_as_orphaned(db):
     # No new listing row should be created for the NULL-sku product
     count_after = db.execute(text("SELECT COUNT(*) FROM product_web_listings")).scalar()
     assert count_after == count_before
+
+
+def test_backfill_copies_campos_parte2(db, sku):
+    _ensure_ecommerce_tables(db)
+    db.execute(text("""
+        INSERT INTO ecommerce_products (nombre, sku, impuesto_pct, sub_categoria, variantes, alerta_stock_minimo, created_by, publicado_web)
+        VALUES ('Producto Parte 2', :sku, 19.00, 'Camisetas', CAST(:variantes AS jsonb), 8, 'admin@nebulae.test', TRUE)
+    """), {"sku": sku.sku, "variantes": json.dumps([{"talla": "M"}])})
+    db.commit()
+
+    from scripts.backfill_product_web_listings import backfill, get_conn
+    conn = get_conn()
+    try:
+        backfill(conn, dry_run=False)
+    finally:
+        conn.close()
+
+    row = db.execute(text(
+        "SELECT impuesto_pct, sub_categoria, variantes, alerta_stock_minimo, created_by "
+        "FROM product_web_listings WHERE sku_id = :id"
+    ), {"id": sku.id}).fetchone()
+    assert row is not None
+    assert row[0] == Decimal("19.00")
+    assert row[1] == "Camisetas"
+    assert row[2] == [{"talla": "M"}]
+    assert row[3] == 8
+    assert row[4] == "admin@nebulae.test"

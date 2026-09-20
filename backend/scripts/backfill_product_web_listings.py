@@ -58,7 +58,8 @@ def backfill(conn, dry_run: bool = False) -> dict:
     cur.execute("""
         SELECT id, nombre, sku, descripcion_larga, precio_comparacion, descuento_pct, imagenes,
                seo_titulo, seo_descripcion, seo_keywords, codigo_aduana, peso_kg,
-               notas_internas, publicado_web, rastrear_inventario
+               notas_internas, publicado_web, rastrear_inventario,
+               impuesto_pct, sub_categoria, variantes, alerta_stock_minimo, created_by
         FROM ecommerce_products
     """)
     rows = cur.fetchall()
@@ -86,12 +87,14 @@ def backfill(conn, dry_run: bool = False) -> dict:
                 INSERT INTO product_web_listings
                     (sku_id, descripcion_larga, precio_comparacion, descuento_pct, imagenes,
                      seo_titulo, seo_descripcion, seo_keywords, codigo_aduana, peso_kg,
-                     notas_internas, publicado_web, rastrear_inventario)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     notas_internas, publicado_web, rastrear_inventario,
+                     impuesto_pct, sub_categoria, variantes, alerta_stock_minimo, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (sku_id) DO NOTHING
             """, (
                 sku_row[0], r[3], r[4], r[5], json.dumps(r[6] or []),
                 r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14],
+                r[15], r[16], json.dumps(r[17] or []), r[18], r[19],
             ))
 
     if not dry_run:
