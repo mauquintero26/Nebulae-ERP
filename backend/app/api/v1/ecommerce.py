@@ -3,7 +3,7 @@ from app.api.dependencies import require_roles, ROLE_ADMIN, ROLE_FINANZAS, ROLE_
 import hashlib
 
 from decimal import Decimal
-from app.models.catalog import ProductSKU, Product
+from app.models.catalog import ProductSKU, Product, ProductWebListing, Category
 from app.models.inventory import InventoryLevel, Warehouse
 from app.models.fase1b import InventoryOwnerBalance, InventoryReservation, SaleOrderLineErp
 from app.models.fase3 import InventoryQuarantine
@@ -46,6 +46,126 @@ def _gen_pweb_numero(db: Session) -> str:
     year = datetime.datetime.utcnow().year
     n = _next_seq_pweb(db)
     return f"PWEB-{year}{n:04d}"
+
+def _lectura_canonica() -> bool:
+    return os.environ.get("CATALOGO_LECTURA", "legacy") == "canonico"
+
+
+def _serialize_catalogo_item_canonico(db: Session, canon_sku: ProductSKU) -> dict:
+    prod = canon_sku.product
+    listing = canon_sku.web_listing
+    real_stock = float(_get_real_sellable_stock(db, canon_sku.id, owner="NEBULAE"))
+    alerta_min = listing.alerta_stock_minimo if listing else 5
+    modalidad = "ENTREGA_INMEDIATA" if real_stock > 0 else "POR_PEDIDO"
+    atributos = [
+        {"atributo": av.attribute.name, "valor": av.value}
+        for av in canon_sku.attribute_values
+    ]
+    return {
+        "id": canon_sku.id,
+        "nombre": prod.name if prod else canon_sku.sku,
+        "descripcion": (prod.description if prod else "") or "",
+        "sku": canon_sku.sku,
+        "precio_venta": float(canon_sku.sale_price or 0),
+        "precio_comparacion": float(listing.precio_comparacion) if listing and listing.precio_comparacion is not None else float(canon_sku.sale_price or 0),
+        "descuento_pct": float(listing.descuento_pct) if listing else 0.0,
+        "impuesto_pct": float(listing.impuesto_pct) if listing else 0.0,
+        "categoria": prod.category.name if prod and prod.category else "",
+        "sub_categoria": (listing.sub_categoria if listing else None) or "",
+        "marca": prod.brand.name if prod and prod.brand else "",
+        "tipo_producto": prod.type if prod else "Fisico",
+        "imagenes": listing.imagenes if listing else [],
+        "atributos": atributos,
+        "variantes": listing.variantes if listing else [],
+        "stock_disponible": real_stock,
+        "modalidad_disponible": modalidad,
+        "alerta_stock_minimo": alerta_min,
+        "publicado_web": listing.publicado_web if listing else True,
+        "rastrear_inventario": listing.rastrear_inventario if listing else True,
+        "seo_titulo": (listing.seo_titulo if listing else None) or (prod.name if prod else canon_sku.sku),
+        "created_at": listing.created_at.isoformat() if listing and listing.created_at else None,
+        "updated_at": listing.updated_at.isoformat() if listing and listing.updated_at else None,
+        "is_low_stock": real_stock <= alerta_min,
+    }
+
+
+_HUERFANO_SELECT_COLS = (
+    "id, nombre, descripcion, sku, precio_venta, precio_comparacion, descuento_pct, "
+    "impuesto_pct, categoria, sub_categoria, marca, tipo_producto, imagenes, atributos, "
+    "variantes, stock_disponible, alerta_stock_minimo, publicado_web, rastrear_inventario, "
+    "seo_titulo, created_at, updated_at"
+)
+
+
+def _serialize_catalogo_item_huerfano(r) -> dict:
+    stock_disp = float(r[15] or 0)
+    alerta_min = r[16] or 5
+    modalidad = "ENTREGA_INMEDIATA" if stock_disp > 0 else "POR_PEDIDO"
+    return {
+        "id": -r[0],
+        "nombre": r[1],
+        "descripcion": r[2],
+        "sku": r[3],
+        "precio_venta": float(r[4] or 0),
+        "precio_comparacion": float(r[5] or 0),
+        "descuento_pct": float(r[6] or 0),
+        "impuesto_pct": float(r[7] or 0),
+        "categoria": r[8],
+        "sub_categoria": r[9],
+        "marca": r[10],
+        "tipo_producto": r[11],
+        "imagenes": r[12] or [],
+        "atributos": r[13] or [],
+        "variantes": r[14] or [],
+        "stock_disponible": stock_disp,
+        "modalidad_disponible": modalidad,
+        "alerta_stock_minimo": alerta_min,
+        "publicado_web": r[17],
+        "rastrear_inventario": r[18],
+        "seo_titulo": r[19],
+        "created_at": r[20].isoformat() if r[20] else None,
+        "updated_at": r[21].isoformat() if r[21] else None,
+        "is_low_stock": stock_disp <= alerta_min,
+    }
+
+
+def _list_catalogo_canonico(db: Session, search, categoria, publicado, limit: int) -> dict:
+    q = db.query(ProductSKU).join(Product, ProductSKU.product_id == Product.id)
+    if search:
+        like = f"%{search}%"
+        q = q.filter(ProductSKU.sku.ilike(like) | Product.name.ilike(like) | Product.description.ilike(like))
+    if categoria:
+        q = q.join(Category, Product.category_id == Category.id).filter(Category.name.ilike(f"%{categoria}%"))
+    if publicado is not None:
+        q = q.outerjoin(ProductWebListing, ProductWebListing.sku_id == ProductSKU.id)
+        if publicado:
+            q = q.filter((ProductWebListing.publicado_web == True) | (ProductWebListing.id.is_(None)))
+        else:
+            q = q.filter(ProductWebListing.publicado_web == False)
+
+    total = q.count()
+    data = [_serialize_catalogo_item_canonico(db, s) for s in q.order_by(Product.name).limit(limit).all()]
+
+    where_clauses = ["(sku IS NULL OR sku NOT IN (SELECT sku FROM product_skus))"]
+    params: dict = {"limit": limit}
+    if search:
+        where_clauses.append("(nombre ILIKE :s OR sku ILIKE :s OR descripcion ILIKE :s)")
+        params["s"] = f"%{search}%"
+    if categoria:
+        where_clauses.append("categoria ILIKE :c")
+        params["c"] = f"%{categoria}%"
+    if publicado is not None:
+        where_clauses.append("publicado_web = :pub")
+        params["pub"] = publicado
+    where_sql = "WHERE " + " AND ".join(where_clauses)
+    rows = db.execute(text(
+        f"SELECT {_HUERFANO_SELECT_COLS} FROM ecommerce_products {where_sql} ORDER BY nombre LIMIT :limit"
+    ), params).fetchall()
+    for r in rows:
+        data.append(_serialize_catalogo_item_huerfano(r))
+        total += 1
+
+    return {"status": "success", "total": total, "data": data}
 
 def _ensure_ecommerce_tables(db: Session):
     try:
@@ -680,6 +800,8 @@ def recuperar_carrito(cart_id: int, body: dict, user: User = Depends(require_rol
 @router.get("/catalogo")
 def list_catalogo(search: Optional[str] = None, categoria: Optional[str] = None, publicado: Optional[bool] = None, limit: int = Query(100, le=500), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
+    if _lectura_canonica():
+        return _list_catalogo_canonico(db, search, categoria, publicado, limit)
     where_clauses = []
     params: dict = {"limit": limit}
     if search:
