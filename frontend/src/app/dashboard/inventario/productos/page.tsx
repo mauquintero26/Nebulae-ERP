@@ -120,17 +120,32 @@ export default function ProductosPage() {
     setSaving(true);
     try {
       const body = { ...form, is_published: isPublished };
+      let productId: number;
       if (isNew) {
         const nuevo = await apiFetch('/products', { method: 'POST', body: JSON.stringify(body) });
-        if (combinaciones.length > 0) {
-          await guardarVariantes(nuevo.id);
-        }
+        productId = nuevo.id;
+        // Flip out of "isNew" as soon as the product exists, so that if the SKU step
+        // below fails, a retry PATCHes this real product instead of POSTing a duplicate.
+        setSelectedProduct(nuevo);
       } else {
         await apiFetch(`/products/${selectedProduct.id}`, { method: 'PATCH', body: JSON.stringify(body) });
-        if (combinaciones.length > 0) {
-          await guardarVariantes(selectedProduct.id);
+        productId = selectedProduct.id;
+      }
+
+      if (combinaciones.length > 0) {
+        try {
+          await guardarVariantes(productId);
+        } catch (skuErr: any) {
+          // The product itself was already created/updated successfully; only the SKU
+          // step failed. Keep the user on the form (don't reset/close) so "Guardar"
+          // retries just the SKU step against the now-existing product, instead of
+          // creating a second, duplicate product.
+          alert(`El producto se guardó, pero ocurrió un error creando las variantes: ${skuErr.message}. Vuelve a presionar "Guardar" para reintentar solo las variantes.`);
+          setSaving(false);
+          return;
         }
       }
+
       setSelectedProduct(null);
       setCombinaciones([]);
       setAtributosElegidos([{ nombre: '', valores: '' }]);
@@ -141,6 +156,14 @@ export default function ProductosPage() {
   }
 
   function openNew() {
+    // Reset any abandoned variants-wizard state from a previous, unsaved attempt
+    // (e.g. Nuevo Producto -> generate combinations -> go back without saving).
+    // Otherwise those leftover combinations would silently ride along and get
+    // bulk-attached to whichever product is opened next.
+    setCombinaciones([]);
+    setAtributosElegidos([{ nombre: '', valores: '' }]);
+    setPasoVariantes('atributos');
+    setWarehouseId('');
     setForm({ name: '', description: '', type: 'Fisico', base_currency: 'COP', uom: 'Unidad',
       brand_id: '', category_id: '', sale_price: '', cost_price: '', tax_rate: 0, reference: '',
       track_inventory: true, auto_replenish: false, is_active: true, is_published: false, ecommerce_category: '', low_stock_alert: 0 });
@@ -150,6 +173,12 @@ export default function ProductosPage() {
   }
 
   function openEdit(p: any) {
+    // Same reset as openNew(): don't let leftover wizard state from a previous,
+    // unsaved product attempt attach bogus SKUs to this unrelated existing product.
+    setCombinaciones([]);
+    setAtributosElegidos([{ nombre: '', valores: '' }]);
+    setPasoVariantes('atributos');
+    setWarehouseId('');
     setForm({
       name: p.name || '', description: p.description || '', type: p.type || 'Fisico',
       base_currency: p.base_currency || 'COP', uom: p.uom || 'Unidad',
