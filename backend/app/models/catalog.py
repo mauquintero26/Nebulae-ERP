@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String, Boolean, Numeric, ForeignKey, Table
+from sqlalchemy import Column, Integer, String, Boolean, Numeric, ForeignKey, Table, Text, JSON, DateTime
 from sqlalchemy.orm import relationship
+from sqlalchemy.sql import func
 from app.db.database import Base
 
 sku_attribute_values = Table(
@@ -79,3 +80,31 @@ class ProductSKU(Base):
     inventory_movements = relationship("InventoryMovement", back_populates="sku")
     sales_order_lines = relationship("SalesOrderLine", back_populates="sku")
     quotation_lines = relationship("QuotationLine", back_populates="sku")
+    web_listing = relationship("ProductWebListing", back_populates="sku", uselist=False, cascade="all, delete-orphan", passive_deletes=True)
+
+
+class ProductWebListing(Base):
+    __tablename__ = "product_web_listings"
+    id = Column(Integer, primary_key=True, index=True)
+    sku_id = Column(Integer, ForeignKey("product_skus.id", ondelete="CASCADE"), nullable=False, unique=True)
+    descripcion_larga = Column(Text)
+    precio_comparacion = Column(Numeric(14, 2))
+    descuento_pct = Column(Numeric(5, 2), nullable=False, default=0)
+    imagenes = Column(JSON, nullable=False, default=list)
+    seo_titulo = Column(String(300))
+    seo_descripcion = Column(Text)
+    seo_keywords = Column(Text)
+    codigo_aduana = Column(String(100))
+    peso_kg = Column(Numeric(8, 2))
+    notas_internas = Column(Text)
+    publicado_web = Column(Boolean, nullable=False, default=False)
+    rastrear_inventario = Column(Boolean, nullable=False, default=True)
+    impuesto_pct = Column(Numeric(5, 2), nullable=False, default=0)
+    sub_categoria = Column(String(200))
+    variantes = Column(JSON, nullable=False, default=list)
+    alerta_stock_minimo = Column(Integer, nullable=False, default=5)
+    created_by = Column(String(150))
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    sku = relationship("ProductSKU", back_populates="web_listing")

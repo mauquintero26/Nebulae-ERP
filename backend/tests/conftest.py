@@ -201,6 +201,7 @@ def setup_test_db():
             "sale_orders", "sales_quotations", "customer_requests",
             "payment_pendings",
             "product_skus", "products", "brands", "categories",
+            "ecommerce_products",
             "warehouses", "suppliers", "users",
         ]:
             try:
