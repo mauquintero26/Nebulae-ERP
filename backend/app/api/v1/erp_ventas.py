@@ -77,6 +77,12 @@ def _sc_dict(sc: CustomerRequest) -> dict:
         "created_by": sc.created_by,
         "razon_cancelacion": getattr(sc, "razon_cancelacion", None),
         "eliminada_at": sc.eliminada_at.isoformat() if getattr(sc, "eliminada_at", None) else None,
+        "tipo_problema": sc.tipo_problema,
+        "descripcion_problema": sc.descripcion_problema,
+        "urgencia": sc.urgencia,
+        "evidencia_descripcion": sc.evidencia_descripcion,
+        "asignado_a_user_id": sc.asignado_a_user_id,
+        "estado_soporte": sc.estado_soporte,
     }
 
 def _cot_dict(cot: SalesQuotation) -> dict:
@@ -229,6 +235,8 @@ def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
             cust_email = cust_email or c.email or ""
             cust_addr  = cust_addr or c.address or ""
 
+    es_soporte = body.get("tipo_solicitud") == "Soporte Tecnico"
+
     sc = CustomerRequest(
         numero=numero,
         customer_id=body.get("customer_id"),
@@ -240,7 +248,13 @@ def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
         advisor_user_id=body.get("advisor_user_id"),
         tipo_solicitud=body.get("tipo_solicitud", "Cotizacion de Producto"),
         modalidad_pago=body.get("modalidad_pago", "Contado"),
-        estado="BORRADOR",
+        estado="N/A_SOPORTE" if es_soporte else "BORRADOR",
+        tipo_problema=body.get("tipo_problema"),
+        descripcion_problema=body.get("descripcion_problema"),
+        urgencia=body.get("urgencia"),
+        evidencia_descripcion=body.get("evidencia_descripcion"),
+        asignado_a_user_id=body.get("asignado_a_user_id"),
+        estado_soporte="ABIERTO" if es_soporte else None,
         fecha_vencimiento=venc,
         notas=body.get("notas"),
         productos=body.get("productos", []),
@@ -951,16 +965,28 @@ def _get_alert_days(db: Session, key: str = "alerta_sc_dias") -> int:
         return 2
 
 
+def _get_alert_hours_soporte(db: Session, urgencia: str) -> int:
+    key_map = {"Alta": "alerta_soporte_alta_horas", "Media": "alerta_soporte_media_horas", "Baja": "alerta_soporte_baja_horas"}
+    default_map = {"Alta": 4, "Media": 24, "Baja": 48}
+    key = key_map.get(urgencia, "alerta_soporte_baja_horas")
+    try:
+        r = db.execute(text("SELECT value FROM admin_config WHERE key = :key"), {"key": key}).fetchone()
+        return int(r[0]) if r else default_map.get(urgencia, 48)
+    except Exception:
+        return default_map.get(urgencia, 48)
+
+
 @router.get("/alertas")
 def get_alertas(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *ROLE_COMPRAS)),
         db: Session = Depends(get_db)):
     dias = _get_alert_days(db)
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=dias)
 
-    # SC activos sin cambio de estado en N dias
+    # SC activos sin cambio de estado en N dias (excluye Soporte Tecnico, que tiene su propio umbral)
     sc_alertas = db.query(CustomerRequest).filter(
         CustomerRequest.updated_at <= cutoff,
-        CustomerRequest.estado.notin_(["CONFIRMADA", "CANCELADA"])
+        CustomerRequest.estado.notin_(["CONFIRMADA", "CANCELADA"]),
+        CustomerRequest.tipo_solicitud != "Soporte Tecnico",
     ).all()
 
     # COT activas sin cambio de estado en N dias
@@ -968,6 +994,17 @@ def get_alertas(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *R
         SalesQuotation.updated_at <= cutoff,
         SalesQuotation.estado.notin_(["CONFIRMADA", "RECHAZADA"])
     ).all()
+
+    # Soporte Tecnico: umbral propio por urgencia, solo tickets abiertos/en proceso
+    soporte_abiertos = db.query(CustomerRequest).filter(
+        CustomerRequest.tipo_solicitud == "Soporte Tecnico",
+        CustomerRequest.estado_soporte.in_(["ABIERTO", "EN_PROCESO"]),
+    ).all()
+    soporte_alertas = []
+    for sc in soporte_abiertos:
+        horas = _get_alert_hours_soporte(db, sc.urgencia)
+        if sc.updated_at <= datetime.datetime.utcnow() - datetime.timedelta(hours=horas):
+            soporte_alertas.append(sc)
 
     return {
         "status": "success",
@@ -977,6 +1014,8 @@ def get_alertas(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *R
             "cot_sin_atender": [_cot_dict(c) for c in cot_alertas],
             "sc_count": len(sc_alertas),
             "cot_count": len(cot_alertas),
+            "soporte_sin_atender": [_sc_dict(sc) for sc in soporte_alertas],
+            "soporte_count": len(soporte_alertas),
         }
     }
 

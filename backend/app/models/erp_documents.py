@@ -55,6 +55,12 @@ class CustomerRequest(Base):
     created_by       = Column(String(150), nullable=True)
     razon_cancelacion= Column(Text, nullable=True)
     eliminada_at     = Column(DateTime, nullable=True)
+    tipo_problema         = Column(String(50), nullable=True)
+    descripcion_problema  = Column(Text, nullable=True)
+    urgencia              = Column(String(20), nullable=True)
+    evidencia_descripcion = Column(Text, nullable=True)
+    asignado_a_user_id    = Column(Integer, ForeignKey("users.id"), nullable=True)
+    estado_soporte        = Column(String(20), nullable=True)
 
     customer   = relationship("Customer", foreign_keys=[customer_id])
     quotations = relationship("SalesQuotation", back_populates="customer_request")

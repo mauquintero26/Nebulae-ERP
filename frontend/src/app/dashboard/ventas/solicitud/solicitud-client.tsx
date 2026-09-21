@@ -553,7 +553,7 @@ export default function SolicitudClient() {
   const [savingEdit,setSavingEdit]=useState(false);
 
   // Create form
-  const [form,setForm]=useState({advisor_name:'',advisor_user_id:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:30});
+  const [form,setForm]=useState({advisor_name:'',advisor_user_id:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:30,tipo_problema:'',descripcion_problema:'',urgencia:'',evidencia_descripcion:''});
   const [prodName,setProdName]=useState('');
   const [prodQty,setProdQty]=useState(1);
   const [productos,setProductos]=useState<any[]>([]);
@@ -813,7 +813,7 @@ export default function SolicitudClient() {
     setProductos([]);setProdName('');setProdQty(1);setSegSearch('');setSegResults([]);
     setEnvio({nombre_completo:'',cedula:'',direccion:'',ciudad:'',telefono:'',transportadora:'',tipo_envio:'Contraentrega',ven_ids:''});
     setDevVen('');setDevPec('');setDevMotivo('');
-    setForm({advisor_name:currentUser,advisor_user_id:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:30});
+    setForm({advisor_name:currentUser,advisor_user_id:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:30,tipo_problema:'',descripcion_problema:'',urgencia:'',evidencia_descripcion:''});
   }
 
   function toggleCheck(id:number) {
@@ -854,6 +854,7 @@ export default function SolicitudClient() {
   const isSeguimiento=form.tipo_solicitud==='Seguimiento';
   const isProgramarEntrega=form.tipo_solicitud==='Programar Entrega';
   const isDevolucion=form.tipo_solicitud==='Devolucion de Producto';
+  const isSoporte=form.tipo_solicitud==='Soporte Tecnico';
 
   return (
     <div className="w-full bg-slate-50 min-h-full">
@@ -2093,6 +2094,28 @@ export default function SolicitudClient() {
                       {devMotivo.includes('menor')&&<p>* Se afectara el margen en el Pedido de Venta {devVen}</p>}
                       {devMotivo.includes('total')&&<p>* Se ajustara el inventario en el PEC {devPec} (ajuste negativo)</p>}
                     </div>}
+                  </div>
+                )}
+
+                {isSoporte && (
+                  <div className="col-span-2 bg-purple-50 border border-purple-200 rounded-2xl p-4 space-y-3">
+                    <select value={form.tipo_problema||''} onChange={e=>setForm(f=>({...f,tipo_problema:e.target.value}))}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
+                      <option value="">Tipo de problema...</option>
+                      <option>Falla del producto</option><option>Garantia</option>
+                      <option>Duda de uso</option><option>Problema con el pedido o envio</option><option>Otro</option>
+                    </select>
+                    <textarea placeholder="Descripcion del problema" value={form.descripcion_problema||''}
+                      onChange={e=>setForm(f=>({...f,descripcion_problema:e.target.value}))}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" rows={3} />
+                    <select value={form.urgencia||''} onChange={e=>setForm(f=>({...f,urgencia:e.target.value}))}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
+                      <option value="">Urgencia...</option>
+                      <option>Baja</option><option>Media</option><option>Alta</option>
+                    </select>
+                    <textarea placeholder="Descripcion de la evidencia (fotos recibidas por fuera del sistema, etc.)"
+                      value={form.evidencia_descripcion||''} onChange={e=>setForm(f=>({...f,evidencia_descripcion:e.target.value}))}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" rows={2} />
                   </div>
                 )}
 
