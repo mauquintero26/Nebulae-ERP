@@ -1660,6 +1660,14 @@ def create_lead_v2(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *
     customer = db.query(Customer).filter(Customer.id == customer_id).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
+    tipo = body.get("solicitud_tipo", "Solicitud de Cotizacion")
+    if tipo == "Soporte Tecnico":
+        # Soporte Tecnico tiene su propio flujo de estados (estado_soporte en
+        # CustomerRequest) y no siempre termina en una venta: nunca debe generar
+        # una tarjeta en el pipeline de Leads de ventas, sin importar quien llame
+        # a este endpoint (el frontend ya evita llamarlo para este tipo, pero esto
+        # cierra el caso por completo a nivel de API).
+        return {"status": "success", "data": None}
     stage_id = body.get("pipeline_stage_id")
     stage = None
     pipeline_status = "DRAFT"
@@ -1672,7 +1680,6 @@ def create_lead_v2(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *
         if stage:
             stage_id = stage.id
             pipeline_status = stage.maps_to_status or "DRAFT"
-    tipo = body.get("solicitud_tipo", "Solicitud de Cotizacion")
     new_order = SalesOrder(
         customer_id=customer_id,
         status=pipeline_status,

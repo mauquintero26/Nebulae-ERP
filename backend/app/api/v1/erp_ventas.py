@@ -331,7 +331,9 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     old_estado = sc.estado
     allowed = ["customer_id","customer_name","customer_phone","customer_email",
                "customer_address","advisor_name","advisor_user_id","tipo_solicitud","modalidad_pago","estado",
-               "fecha_vencimiento","notas","productos"]
+               "fecha_vencimiento","notas","productos",
+               "tipo_problema","descripcion_problema","urgencia","evidencia_descripcion",
+               "asignado_a_user_id","estado_soporte"]
     for k in allowed:
         if k in body:
             setattr(sc, k, body[k])

@@ -212,6 +212,7 @@ function RowMenu({sc,onView,onChangeEstado,onCancel,onSendToTrash}:{sc:any;onVie
     return()=>document.removeEventListener('mousedown',close);
   },[]);
   const isCancelled = sc.estado === 'CANCELADA';
+  const isSoporte = sc.tipo_solicitud === 'Soporte Tecnico';
   return (
     <div className="relative" ref={ref}>
       <button onClick={e=>{e.stopPropagation();setOpen(o=>!o);}} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg"><MoreVertical size={15}/></button>
@@ -219,12 +220,19 @@ function RowMenu({sc,onView,onChangeEstado,onCancel,onSendToTrash}:{sc:any;onVie
         <div className="absolute right-0 top-8 z-50 bg-white border border-slate-200 rounded-xl shadow-xl w-56 py-1">
           <button onClick={()=>{onView();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm font-medium flex items-center gap-2"><FileText size={14} className="text-indigo-500"/>Ver Detalle</button>
           <button onClick={()=>{onView();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm font-medium flex items-center gap-2"><Edit2 size={14} className="text-amber-500"/>Editar</button>
-          <div className="border-t border-slate-100 my-1"/>
-          {Object.entries(ESTADOS_SC).map(([k,v])=>(
-            <button key={k} onClick={()=>{onChangeEstado(k);setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-xs font-bold" style={{color:v.color}}>
-              Estado: {v.label}
-            </button>
-          ))}
+          {/* Soporte Tecnico no participa del estado ligado a Cotizacion (siempre
+              N/A_SOPORTE) — su estado propio (estado_soporte) se cambia desde el
+              panel de detalle, no con estos botones */}
+          {!isSoporte && (
+            <>
+              <div className="border-t border-slate-100 my-1"/>
+              {Object.entries(ESTADOS_SC).map(([k,v])=>(
+                <button key={k} onClick={()=>{onChangeEstado(k);setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-xs font-bold" style={{color:v.color}}>
+                  Estado: {v.label}
+                </button>
+              ))}
+            </>
+          )}
           <div className="border-t border-slate-100 my-1"/>
           {isCancelled ? (
             <button onClick={()=>{onSendToTrash();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-rose-50 text-sm font-medium flex items-center gap-2 text-rose-600">
@@ -553,7 +561,7 @@ export default function SolicitudClient() {
   const [savingEdit,setSavingEdit]=useState(false);
 
   // Create form
-  const [form,setForm]=useState({advisor_name:'',advisor_user_id:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:30,tipo_problema:'',descripcion_problema:'',urgencia:'',evidencia_descripcion:''});
+  const [form,setForm]=useState({advisor_name:'',advisor_user_id:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:30,tipo_problema:'',descripcion_problema:'',urgencia:'',evidencia_descripcion:'',asignado_a_user_id:''});
   const [prodName,setProdName]=useState('');
   const [prodQty,setProdQty]=useState(1);
   const [productos,setProductos]=useState<any[]>([]);
@@ -717,6 +725,17 @@ export default function SolicitudClient() {
     setSaving(false);
   }
 
+  async function changeEstadoSoporte(scId:number,newEstado:string) {
+    setSaving(true);
+    try{
+      await apiFetch(`/ventas/solicitudes/${scId}`,{method:'PATCH',body:JSON.stringify({estado_soporte:newEstado,updated_by:currentUser})});
+      if(selected?.id===scId) await loadDetail(scId);
+      setSolicitudes(prev=>prev.map(s=>s.id===scId?{...s,estado_soporte:newEstado}:s));
+      showToast('Estado de soporte actualizado');
+    }catch(err:any){showToast('Error: '+err.message,'err');}
+    setSaving(false);
+  }
+
   function deleteItem(scId:number) {
     setCancelTarget(scId);setCancelRazon('');setShowCancelModal(true);
   }
@@ -724,6 +743,11 @@ export default function SolicitudClient() {
   async function bulkAction(action:'delete'|'estado',estado?:string) {
     const ids=Array.from(checked);
     for(const id of ids){
+      if(action==='estado'){
+        // Soporte Tecnico usa su propio flujo (estado_soporte), no el de Cotizacion
+        const sc=solicitudes.find(s=>s.id===id);
+        if(sc?.tipo_solicitud==='Soporte Tecnico') continue;
+      }
       if(action==='delete') await changeEstado(id,'CANCELADA');
       else if(estado) await changeEstado(id,estado);
     }
@@ -788,9 +812,12 @@ export default function SolicitudClient() {
         customer_name:selectedCust?`${selectedCust.first_name} ${selectedCust.last_name}`.trim():custSearch,
         customer_phone:selectedCust?.phone||'',customer_email:selectedCust?.email||'',customer_address:selectedCust?.address||'',
         productos:prodsToSend,created_by:currentUser,
+        // asignado_a_user_id es Integer/nullable en el backend: nunca enviar '' (rompe el INSERT)
+        asignado_a_user_id:form.asignado_a_user_id||null,
       })});
-      // Auto-create CRM Lead silently (only if customer_id exists)
-      if(selectedCust?.id){
+      // Auto-create CRM Lead silently (only if customer_id exists; Soporte Tecnico
+      // tiene su propio flujo y no debe generar una tarjeta en el pipeline de ventas)
+      if(selectedCust?.id && form.tipo_solicitud!=='Soporte Tecnico'){
         apiFetch('/crm/leads',{method:'POST',body:JSON.stringify({
           customer_id:selectedCust.id,
           sc_id:scData?.data?.id,
@@ -813,7 +840,7 @@ export default function SolicitudClient() {
     setProductos([]);setProdName('');setProdQty(1);setSegSearch('');setSegResults([]);
     setEnvio({nombre_completo:'',cedula:'',direccion:'',ciudad:'',telefono:'',transportadora:'',tipo_envio:'Contraentrega',ven_ids:''});
     setDevVen('');setDevPec('');setDevMotivo('');
-    setForm({advisor_name:currentUser,advisor_user_id:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:30,tipo_problema:'',descripcion_problema:'',urgencia:'',evidencia_descripcion:''});
+    setForm({advisor_name:currentUser,advisor_user_id:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:30,tipo_problema:'',descripcion_problema:'',urgencia:'',evidencia_descripcion:'',asignado_a_user_id:''});
   }
 
   function toggleCheck(id:number) {
@@ -847,6 +874,7 @@ export default function SolicitudClient() {
     if(activeTab==='Activas') return sc.estado==='BORRADOR'||sc.estado==='PENDIENTE_CONFIRMACION';
     if(activeTab==='Confirmadas') return sc.estado==='CONFIRMADA';
     if(activeTab==='Canceladas') return sc.estado==='CANCELADA';
+    if(activeTab==='Soporte') return sc.tipo_solicitud==='Soporte Tecnico';
     return true;
   });
 
@@ -1048,12 +1076,12 @@ export default function SolicitudClient() {
             {/* ROW 1: TABS + VIEW TOGGLE */}
             <div className="flex items-center justify-between pb-0">
               <div className="flex items-center gap-1 overflow-x-auto">
-                {(['Activas','Confirmadas','Canceladas','Papelera','Analisis'] as const).map(tab=>(
+                {(['Activas','Confirmadas','Canceladas','Soporte','Papelera','Analisis'] as const).map(tab=>(
                   <button key={tab} onClick={()=>{setActiveTab(tab as any);setCurrentPage(1);if(tab==='Papelera')loadPapelera();}}
                     className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${activeTab===tab?'bg-indigo-600 text-white shadow-sm':'text-gray-600 hover:text-indigo-700 hover:bg-indigo-50'}`}>
                     {tab==='Papelera'?'🗑️ Papelera':tab}
                     {tab!=='Analisis'&&tab!=='Papelera'&&<span className={`ml-1.5 text-xs font-black ${activeTab===tab?'text-indigo-200':'text-gray-400'}`}>
-                      {tab==='Activas'?solicitudes.filter(s=>s.estado==='BORRADOR'||s.estado==='PENDIENTE_CONFIRMACION').length:tab==='Confirmadas'?solicitudes.filter(s=>s.estado==='CONFIRMADA').length:solicitudes.filter(s=>s.estado==='CANCELADA').length}
+                      {tab==='Activas'?solicitudes.filter(s=>s.estado==='BORRADOR'||s.estado==='PENDIENTE_CONFIRMACION').length:tab==='Confirmadas'?solicitudes.filter(s=>s.estado==='CONFIRMADA').length:tab==='Soporte'?solicitudes.filter(s=>s.tipo_solicitud==='Soporte Tecnico').length:solicitudes.filter(s=>s.estado==='CANCELADA').length}
                     </span>}
                   </button>
                 ))}
@@ -1827,12 +1855,28 @@ export default function SolicitudClient() {
 
                 {/* Estado change */}
                 <div>
-                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Cambiar Estado</p>
-                  <div className="flex gap-2 flex-wrap">
-                    {Object.entries(ESTADOS_SC).filter(([k])=>k!==selected.estado).map(([k,v])=>(
-                      <button key={k} onClick={()=>changeEstado(selected.id,k)} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs font-bold border hover:opacity-80 disabled:opacity-40" style={{backgroundColor:v.bg,color:v.color,borderColor:v.border}}>{v.label}</button>
-                    ))}
-                  </div>
+                  {selected.tipo_solicitud==='Soporte Tecnico'?(
+                    <>
+                      <p className="text-xs font-black text-slate-400 uppercase mb-2">Estado del Ticket de Soporte</p>
+                      <select value={selected.estado_soporte||'ABIERTO'} disabled={saving}
+                        onChange={e=>changeEstadoSoporte(selected.id,e.target.value)}
+                        className="w-full border border-purple-200 bg-purple-50 rounded-xl px-3 py-2 text-sm font-bold text-purple-700 outline-none focus:ring-2 focus:ring-purple-200 disabled:opacity-40">
+                        <option value="ABIERTO">Abierto</option>
+                        <option value="EN_PROCESO">En Proceso</option>
+                        <option value="RESUELTO">Resuelto</option>
+                        <option value="CERRADO">Cerrado</option>
+                      </select>
+                    </>
+                  ):(
+                    <>
+                      <p className="text-xs font-black text-slate-400 uppercase mb-2">Cambiar Estado</p>
+                      <div className="flex gap-2 flex-wrap">
+                        {Object.entries(ESTADOS_SC).filter(([k])=>k!==selected.estado).map(([k,v])=>(
+                          <button key={k} onClick={()=>changeEstado(selected.id,k)} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs font-bold border hover:opacity-80 disabled:opacity-40" style={{backgroundColor:v.bg,color:v.color,borderColor:v.border}}>{v.label}</button>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -2116,6 +2160,16 @@ export default function SolicitudClient() {
                     <textarea placeholder="Descripcion de la evidencia (fotos recibidas por fuera del sistema, etc.)"
                       value={form.evidencia_descripcion||''} onChange={e=>setForm(f=>({...f,evidencia_descripcion:e.target.value}))}
                       className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" rows={2} />
+                    <select value={form.asignado_a_user_id||''} onChange={e=>{
+                      const uid = e.target.value ? Number(e.target.value) : '';
+                      setForm(f=>({...f, asignado_a_user_id: uid as any}));
+                    }}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
+                      <option value="">Asignar a...</option>
+                      {usuarios.filter(u=>u.role==='Admin'||u.role==='Vendedor').map(u=>(
+                        <option key={u.id} value={u.id}>{u.email}</option>
+                      ))}
+                    </select>
                   </div>
                 )}
 
