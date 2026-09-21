@@ -235,19 +235,19 @@ class TestSincronizacionEstados:
 
     def test_enviar_cotizacion_deja_solicitud_en_espera_confirmacion(self, app_client, admin_token):
         sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token)
-        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "Enviada"}, headers=_headers(admin_token))
+        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "ENVIADA"}, headers=_headers(admin_token))
         r = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
         assert r.json()["data"]["estado"] == "EN_ESPERA_CONFIRMACION"
 
     def test_confirmar_cotizacion_manualmente_deja_solicitud_confirmada(self, app_client, admin_token):
         sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token)
-        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "Confirmada"}, headers=_headers(admin_token))
+        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "CONFIRMADA"}, headers=_headers(admin_token))
         r = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
         assert r.json()["data"]["estado"] == "CONFIRMADA"
 
     def test_rechazar_cotizacion_deja_solicitud_rechazada(self, app_client, admin_token):
         sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token)
-        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "Rechazada"}, headers=_headers(admin_token))
+        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "RECHAZADA"}, headers=_headers(admin_token))
         r = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
         assert r.json()["data"]["estado"] == "RECHAZADA"
 ```
@@ -294,12 +294,12 @@ En `backend/app/api/v1/erp_ventas.py`, agregar esta función antes de `update_co
 
 ```python
 _MAPA_ESTADO_COTIZACION_A_SOLICITUD = {
-    "Borrador": "COTIZADA",
-    "Enviada": "EN_ESPERA_CONFIRMACION",
-    "Pend. confirmación": "EN_ESPERA_CONFIRMACION",
-    "Confirmada": "CONFIRMADA",
-    "Rechazada": "RECHAZADA",
-    "Vencida": "VENCIDA",
+    "BORRADOR": "COTIZADA",
+    "ENVIADA": "EN_ESPERA_CONFIRMACION",
+    "PENDIENTE_CONFIRMACION": "EN_ESPERA_CONFIRMACION",
+    "CONFIRMADA": "CONFIRMADA",
+    "RECHAZADA": "RECHAZADA",
+    "VENCIDA": "VENCIDA",
 }
 
 
@@ -447,7 +447,7 @@ class TestMovimientoAutomaticoDeLead:
     def test_enviar_cotizacion_mueve_lead_a_quotation(self, app_client, admin_token, customer_test):
         sc, lead = _crear_solicitud_con_lead(app_client, admin_token, customer_test.id)
         cot = app_client.post(f"/api/v1/ventas/solicitudes/{sc['id']}/confirmar", json={}, headers=_headers(admin_token)).json()["data"]["cotizacion"]
-        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "Enviada"}, headers=_headers(admin_token))
+        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "ENVIADA"}, headers=_headers(admin_token))
         r = app_client.get("/api/v1/crm/leads", headers=_headers(admin_token))
         lead_actualizado = next(l for l in r.json()["data"] if l["id"] == lead["id"])
         assert lead_actualizado["status"] == "QUOTATION"
@@ -455,7 +455,7 @@ class TestMovimientoAutomaticoDeLead:
     def test_rechazar_cotizacion_mueve_lead_a_cancelled(self, app_client, admin_token, customer_test):
         sc, lead = _crear_solicitud_con_lead(app_client, admin_token, customer_test.id)
         cot = app_client.post(f"/api/v1/ventas/solicitudes/{sc['id']}/confirmar", json={}, headers=_headers(admin_token)).json()["data"]["cotizacion"]
-        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "Rechazada"}, headers=_headers(admin_token))
+        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "RECHAZADA"}, headers=_headers(admin_token))
         r = app_client.get("/api/v1/crm/leads?stage_id=", headers=_headers(admin_token))
         # Los leads CANCELLED se excluyen de la vista por defecto (status != CANCELLED);
         # se verifica directo contra la base para no depender de ese filtro.
@@ -470,7 +470,7 @@ Nota para quien implemente: el tercer test necesita el fixture `db` para verific
         from app.models.sales import SalesOrder
         sc, lead = _crear_solicitud_con_lead(app_client, admin_token, customer_test.id)
         cot = app_client.post(f"/api/v1/ventas/solicitudes/{sc['id']}/confirmar", json={}, headers=_headers(admin_token)).json()["data"]["cotizacion"]
-        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "Rechazada"}, headers=_headers(admin_token))
+        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "RECHAZADA"}, headers=_headers(admin_token))
         db.expire_all()
         orden = db.query(SalesOrder).filter(SalesOrder.id == lead["id"]).first()
         assert orden.status == "CANCELLED"
@@ -489,7 +489,7 @@ Nota para quien implemente: el tercer test necesita el fixture `db` para verific
         from crm import PipelineStage  # ajustar el import real al de crm.py si difiere
         sc, lead = _crear_solicitud_con_lead(app_client, admin_token, customer_test.id)
         cot = app_client.post(f"/api/v1/ventas/solicitudes/{sc['id']}/confirmar", json={}, headers=_headers(admin_token)).json()["data"]["cotizacion"]
-        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "Enviada"}, headers=_headers(admin_token))
+        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "ENVIADA"}, headers=_headers(admin_token))
         mapeos = {s[0] for s in db.execute(text("SELECT maps_to_status FROM pipeline_stages")).fetchall()}
         assert {"DRAFT", "QUOTATION", "EN_NEGOCIACION", "INVOICED", "CANCELLED"}.issubset(mapeos)
 ```
@@ -581,9 +581,9 @@ from app.api.v1.crm import mover_lead_de_solicitud
 En `update_cotizacion`, dentro del mismo `if body.get("estado") and body["estado"] != old_estado:` de Task 2, después de la llamada a `_sincronizar_estado_solicitud_desde_cotizacion(cot, db)`, agregar:
 
 ```python
-        if cot.estado == "Enviada":
+        if cot.estado == "ENVIADA":
             mover_lead_de_solicitud(cot.sc_id, "QUOTATION", db)
-        elif cot.estado == "Rechazada":
+        elif cot.estado == "RECHAZADA":
             mover_lead_de_solicitud(cot.sc_id, "CANCELLED", db)
 ```
 
@@ -1017,7 +1017,7 @@ def test_actualizar_cotizacion_guarda_canal_envio(app_client, admin_token):
         "customer_name": f"Cliente-{uuid.uuid4().hex[:6]}",
     }, headers=_headers(admin_token)).json()["data"]
     r = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}",
-                          json={"estado": "Enviada", "canal_envio": "WhatsApp"},
+                          json={"estado": "ENVIADA", "canal_envio": "WhatsApp"},
                           headers=_headers(admin_token))
     assert r.status_code == 200
     assert r.json()["data"]["canal_envio"] == "WhatsApp"
