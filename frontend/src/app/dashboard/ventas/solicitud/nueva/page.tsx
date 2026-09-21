@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 export default function NuevaSolicitudRedirect() {
   const router = useRouter();
   useEffect(() => {
-    router.replace('/dashboard/ventas/solicitud');
+    router.replace('/dashboard/ventas/solicitud?new=1');
   }, [router]);
   return (
     <div className="flex items-center justify-center min-h-screen">

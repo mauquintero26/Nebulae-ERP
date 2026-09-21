@@ -607,6 +607,10 @@ export default function SolicitudClient() {
     const idParam = searchParams?.get('id');
     if(idParam){ const numId=Number(idParam); if(!isNaN(numId)) loadDetail(numId); }
   },[searchParams]);
+  // Auto-open create form if navigated here with ?new=1 (from "Nueva Solicitud" button on Ventas hub)
+  useEffect(()=>{
+    if(searchParams?.get('new')) setShowCreate(true);
+  },[searchParams]);
 
   async function loadDetail(id:number) {
     try{const raw=await apiFetch(`/ventas/solicitudes/${id}`);const d=raw?.data??raw;setSelected(d);setPanelTab('info');setEditForm({advisor_name:d.advisor_name||'',tipo_solicitud:d.tipo_solicitud||'Cotizacion de Producto',modalidad_pago:d.modalidad_pago||'Contado',notas:d.notas||'',fecha_vencimiento:d.fecha_vencimiento?d.fecha_vencimiento.split('T')[0]:''});}
