@@ -1264,8 +1264,10 @@ def move_lead_stage(lead_id: int, body: dict, user: User = Depends(require_roles
     stage = db.query(PipelineStage).filter(PipelineStage.id == body.get("pipeline_stage_id")).first()
     if not stage:
         raise HTTPException(status_code=404, detail="Stage not found")
-    _mover_lead_a_status(order, stage.maps_to_status or order.status, db)
-    db.refresh(order)
+    order.pipeline_stage_id = stage.id
+    order.status = stage.maps_to_status or order.status
+    order.updated_at = datetime.datetime.utcnow()
+    db.commit(); db.refresh(order)
     customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
     return {"status": "success", "data": _lead_to_dict(order, customer, stage)}
 

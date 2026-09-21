@@ -94,3 +94,44 @@ class TestMovimientoAutomaticoDeLead:
         app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "ENVIADA"}, headers=_headers(admin_token))
         mapeos = {s[0] for s in db.execute(text("SELECT maps_to_status FROM pipeline_stages")).fetchall()}
         assert {"DRAFT", "QUOTATION", "EN_NEGOCIACION", "INVOICED", "CANCELLED"}.issubset(mapeos)
+
+    def test_move_lead_stage_respeta_el_id_exacto_de_la_etapa_elegida(self, app_client, admin_token, customer_test, db):
+        """
+        Regresion: move_lead_stage es el endpoint que usa el tablero Kanban del CRM
+        cuando el usuario arrastra una tarjeta a una columna especifica, e identifica
+        esa columna por su `id` exacto (body.get("pipeline_stage_id")). Debe fijar
+        pipeline_stage_id a ESE id exacto — nunca debe re-resolver la etapa buscando
+        por maps_to_status, porque eso puede aterrizar en una etapa distinta a la que
+        el usuario realmente solto.
+
+        Esto es real y alcanzable, no un caso hipotetico: el boton "Nueva Etapa" del
+        CRM (frontend/src/app/dashboard/crm/page.tsx:510) siempre envia
+        maps_to_status='DRAFT' sin importar el nombre que el usuario le de a la
+        etapa, y no hay UI para cambiarlo despues. Cualquier tablero con mas de una
+        etapa mapeada a DRAFT (muy plausible — _asegurar_etapas_estandar de esta
+        misma tarea agrega una) puede terminar con dos o mas filas de
+        pipeline_stages compartiendo maps_to_status='DRAFT'.
+        """
+        from app.api.v1.crm import PipelineStage
+        from app.models.sales import SalesOrder
+
+        sc, lead = _crear_solicitud_con_lead(app_client, admin_token, customer_test.id)
+
+        max_pos = db.execute(text("SELECT COALESCE(MAX(position),0) FROM pipeline_stages")).scalar() or 0
+        etapa_a = PipelineStage(name="Etapa Custom A", color="bg-purple-500", bg_color="bg-purple-50",
+                                 position=max_pos + 1, maps_to_status="DRAFT")
+        etapa_b = PipelineStage(name="Etapa Custom B", color="bg-purple-500", bg_color="bg-purple-50",
+                                 position=max_pos + 2, maps_to_status="DRAFT")
+        db.add(etapa_a); db.add(etapa_b); db.commit()
+
+        r = app_client.patch(
+            f"/api/v1/crm/leads/{lead['id']}/stage",
+            json={"pipeline_stage_id": etapa_b.id},
+            headers=_headers(admin_token),
+        )
+        assert r.status_code == 200
+
+        db.expire_all()
+        orden = db.query(SalesOrder).filter(SalesOrder.id == lead["id"]).first()
+        assert orden.pipeline_stage_id == etapa_b.id
+        assert orden.pipeline_stage_id != etapa_a.id
