@@ -78,6 +78,7 @@ class ProductBase(BaseModel):
     base_currency: str
     uom: Optional[str] = None
     is_active: bool = True
+    necesita_revision: bool = False
 
 class ProductCreate(ProductBase):
     pass

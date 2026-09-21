@@ -21,6 +21,7 @@ export default function ProductosPage() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [soloRevision, setSoloRevision] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<any | null>(null);
   const [activeTab, setActiveTab] = useState(TABS[0]);
   const [categories, setCategories] = useState<any[]>([]);
@@ -53,12 +54,13 @@ export default function ProductosPage() {
     try {
       const params = new URLSearchParams();
       if (search) params.set('search', search);
+      if (soloRevision) params.set('necesita_revision', 'true');
       const d = await apiFetch(`/products?${params}&limit=100`);
       setProducts(Array.isArray(d) ? d : (d?.data ?? d?.products ?? []));
       setTotal(d?.total ?? (Array.isArray(d) ? d.length : 0));
     } catch { setProducts([]); }
     finally { setLoading(false); }
-  }, [search]);
+  }, [search, soloRevision]);
 
   useEffect(() => {
     load();
@@ -226,6 +228,10 @@ export default function ProductosPage() {
               <button onClick={load} className="p-2 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50">
                 <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
               </button>
+              <button onClick={() => setSoloRevision(v => !v)}
+                className={`px-3 py-2 rounded-lg text-xs font-bold border ${soloRevision ? 'bg-amber-100 border-amber-300 text-amber-700' : 'border-slate-200 text-slate-500'}`}>
+                Requiere revisión
+              </button>
             </div>
             <span className="text-sm text-slate-500">Total: <span className="font-bold text-slate-800">{total} productos</span></span>
           </div>
@@ -257,6 +263,9 @@ export default function ProductosPage() {
                       <td className="px-6 py-4">
                         <div className="font-semibold text-slate-800">{p.name}</div>
                         {p.reference && <div className="text-xs text-slate-400">Ref: {p.reference}</div>}
+                        {p.necesita_revision && (
+                          <span className="inline-block mt-1 text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">Requiere revisión</span>
+                        )}
                       </td>
                       <td className="px-6 py-4">
                         <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">{p.type}</span>

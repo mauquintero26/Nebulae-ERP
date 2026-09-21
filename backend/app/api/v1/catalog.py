@@ -161,12 +161,14 @@ def create_product(product: schemas.ProductCreate, db: Session = Depends(get_db)
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/products")
-def list_products(brand_id: Optional[int] = None, category_id: Optional[int] = None, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
+def list_products(brand_id: Optional[int] = None, category_id: Optional[int] = None, necesita_revision: Optional[bool] = None, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
     query = db.query(Product)
     if brand_id:
         query = query.filter(Product.brand_id == brand_id)
     if category_id:
         query = query.filter(Product.category_id == category_id)
+    if necesita_revision is not None:
+        query = query.filter(Product.necesita_revision == necesita_revision)
 
     products = query.all()
     return {"status": "success", "data": [schemas.ProductResponse.model_validate(p).model_dump() for p in products]}

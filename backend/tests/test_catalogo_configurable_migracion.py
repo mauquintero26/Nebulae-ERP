@@ -105,3 +105,10 @@ class TestMigracionCatalogoLegacy:
 
         errores_ids = [e["legacy_id"] for e in stats["errores"]]
         assert id_dos in errores_ids
+
+    def test_filtro_necesita_revision_en_listado(self, app_client, admin_token):
+        r = app_client.get("/api/v1/products?necesita_revision=true",
+                            headers={"Authorization": f"Bearer {admin_token}"})
+        assert r.status_code == 200
+        for p in r.json()["data"]:
+            assert p["necesita_revision"] is True
