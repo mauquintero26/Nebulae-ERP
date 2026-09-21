@@ -176,15 +176,15 @@ function CalculadorModal({
   const [trm, setTrm] = useState(cot.trm_rate || 4200);
   const [productos, setProductos] = useState<any[]>(
     (cot.productos || []).length > 0
-      ? cot.productos.map((p: any) => ({ ...p, cost_usd: p.cost_usd || 0, margen_pct: p.margen_pct || 30, flete_usd: p.flete_usd || 0, es_libre: !!p.es_libre }))
-      : [{ product_name: '', qty: 1, cost_usd: 0, margen_pct: 30, flete_usd: 0, es_libre: false }]
+      ? cot.productos.map((p: any) => ({ ...p, cost_usd: p.cost_usd || 0, margen_pct: p.margen_pct || 30, flete_usd: p.flete_usd || 0, es_libre: !!p.es_libre, _rowId: crypto.randomUUID() }))
+      : [{ product_name: '', qty: 1, cost_usd: 0, margen_pct: 30, flete_usd: 0, es_libre: false, _rowId: crypto.randomUUID() }]
   );
   const [descuento, setDescuento] = useState(cot.descuento_pct || 0);
   const [fechaEntrega, setFechaEntrega] = useState(cot.fecha_entrega_estimada ? cot.fecha_entrega_estimada.split('T')[0] : '');
   const [notas, setNotas] = useState(cot.notas || '');
   const [anticipo, setAnticipo] = useState<string | number>(cot.anticipo_cop ?? 0);
 
-  const addProd = () => setProductos(p => [...p, { product_name: '', qty: 1, cost_usd: 0, margen_pct: 30, flete_usd: 0, es_libre: false }]);
+  const addProd = () => setProductos(p => [...p, { product_name: '', qty: 1, cost_usd: 0, margen_pct: 30, flete_usd: 0, es_libre: false, _rowId: crypto.randomUUID() }]);
   const removeProd = (i: number) => setProductos(p => p.filter((_, idx) => idx !== i));
   const setProdFields = (i: number, patch: any) =>
     setProductos(p => p.map((item, idx) => idx === i ? { ...item, ...patch } : item));
@@ -282,7 +282,7 @@ function CalculadorModal({
                 </thead>
                 <tbody className="divide-y divide-slate-50">
                   {computedProd.map((p, i) => (
-                    <tr key={i}>
+                    <tr key={p._rowId}>
                       <td className="px-3 py-2">
                         <ProductoAutocomplete
                           value={p.product_name}
