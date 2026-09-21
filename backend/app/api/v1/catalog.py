@@ -173,6 +173,36 @@ def list_products(brand_id: Optional[int] = None, category_id: Optional[int] = N
     products = query.all()
     return {"status": "success", "data": [schemas.ProductResponse.model_validate(p).model_dump() for p in products]}
 
+@router.patch("/products/{product_id}")
+def update_product(product_id: int, body: schemas.ProductUpdate, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
+    db_product = db.query(Product).filter(Product.id == product_id).first()
+    if not db_product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    body_dict = body.model_dump(exclude_unset=True)
+
+    if "brand_id" in body_dict and body.brand_id is not None:
+        if not db.query(Brand).filter(Brand.id == body.brand_id).first():
+            raise HTTPException(status_code=400, detail="La marca indicada no existe")
+        db_product.brand_id = body.brand_id
+
+    if "category_id" in body_dict and body.category_id is not None:
+        if not db.query(Category).filter(Category.id == body.category_id).first():
+            raise HTTPException(status_code=400, detail="La categoria indicada no existe")
+        db_product.category_id = body.category_id
+
+    for field in ("name", "description", "type", "base_currency", "uom", "is_active", "necesita_revision"):
+        if field in body_dict:
+            setattr(db_product, field, body_dict[field])
+
+    try:
+        db.commit()
+        db.refresh(db_product)
+        return {"status": "success", "data": schemas.ProductResponse.model_validate(db_product).model_dump()}
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="No se pudo actualizar el producto")
+
 @router.post("/products/{product_id}/skus", status_code=status.HTTP_201_CREATED)
 def create_sku(product_id: int, sku: schemas.SKUCreate, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
     db_product = db.query(Product).filter(Product.id == product_id).first()

@@ -68,3 +68,31 @@ class TestCreacionMasivaSKUs:
         nivel = db.query(InventoryLevel).filter(InventoryLevel.sku_id == sku.id).first()
         assert nivel is not None
         assert nivel.quantity == 25
+
+
+class TestActualizacionProducto:
+
+    def test_actualiza_nombre_y_otro_campo_plano(self, app_client, admin_token, product):
+        nuevo_nombre = f"Producto-Editado-{uuid.uuid4().hex[:6]}"
+        body = {"name": nuevo_nombre, "description": "Descripcion actualizada"}
+        r = app_client.patch(f"/api/v1/products/{product.id}", json=body, headers=_headers(admin_token))
+        assert r.status_code == 200
+        data = r.json()["data"]
+        assert data["name"] == nuevo_nombre
+        assert data["description"] == "Descripcion actualizada"
+
+    def test_rechaza_brand_id_inexistente_y_no_modifica_producto(self, app_client, admin_token, product, db):
+        brand_id_original = product.brand_id
+        r = app_client.patch(f"/api/v1/products/{product.id}", json={"brand_id": 9999999},
+                              headers=_headers(admin_token))
+        assert r.status_code == 400
+        db.refresh(product)
+        assert product.brand_id == brand_id_original
+
+    def test_rechaza_category_id_inexistente_y_no_modifica_producto(self, app_client, admin_token, product, db):
+        category_id_original = product.category_id
+        r = app_client.patch(f"/api/v1/products/{product.id}", json={"category_id": 9999999},
+                              headers=_headers(admin_token))
+        assert r.status_code == 400
+        db.refresh(product)
+        assert product.category_id == category_id_original

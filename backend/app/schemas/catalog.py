@@ -90,6 +90,17 @@ class ProductResponse(ProductBase):
     skus: List[SKUResponse] = []
     model_config = {"from_attributes": True}
 
+class ProductUpdate(BaseModel):
+    brand_id: Optional[int] = None
+    category_id: Optional[int] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    type: Optional[str] = None
+    base_currency: Optional[str] = None
+    uom: Optional[str] = None
+    is_active: Optional[bool] = None
+    necesita_revision: Optional[bool] = None
+
 # Bulk SKU creation (para el asistente de variantes)
 class SKUAttributePair(BaseModel):
     attribute_name: str
