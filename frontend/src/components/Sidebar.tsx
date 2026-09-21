@@ -67,12 +67,13 @@ export function Sidebar() {
           { name: '📈 Proyecciones', path: '/dashboard/compras/proyecciones' }
         ]
       },
-      { 
-        name: 'HUB de Inventario', 
-        path: '/dashboard/inventario', 
+      {
+        name: 'HUB de Inventario',
+        path: '/dashboard/inventario',
         icon: Archive,
         subItems: [
           { name: '📦 Stock y Catálogo', path: '/dashboard/inventario/stock' },
+          { name: '🏷️ Categorías', path: '/dashboard/inventario/categorias' },
           { name: '📥 Recepciones', path: '/dashboard/inventario/recepciones' },
           { name: '📤 Entregas', path: '/dashboard/inventario/entregas' },
           { name: '🔄 Traslados Internos', path: '/dashboard/inventario/traslados' },
