@@ -106,9 +106,34 @@ class TestMigracionCatalogoLegacy:
         errores_ids = [e["legacy_id"] for e in stats["errores"]]
         assert id_dos in errores_ids
 
-    def test_filtro_necesita_revision_en_listado(self, app_client, admin_token):
+    def test_filtro_necesita_revision_en_listado(self, db, brand, category, app_client, admin_token):
+        # Create two products: one that needs revision, one that doesn't
+        prod_revision = Product(
+            brand_id=brand.id, category_id=category.id,
+            name="Producto Necesita Revision", type="Fisico",
+            base_currency="COP", necesita_revision=True
+        )
+        prod_no_revision = Product(
+            brand_id=brand.id, category_id=category.id,
+            name="Producto OK", type="Fisico",
+            base_currency="COP", necesita_revision=False
+        )
+        db.add(prod_revision)
+        db.add(prod_no_revision)
+        db.commit()
+
+        # Call endpoint with filter
         r = app_client.get("/api/v1/products?necesita_revision=true",
                             headers={"Authorization": f"Bearer {admin_token}"})
         assert r.status_code == 200
-        for p in r.json()["data"]:
+        data = r.json()["data"]
+
+        # Verify response is non-empty and contains only the product that needs revision
+        assert len(data) > 0
+        product_ids = {p["id"] for p in data}
+        assert prod_revision.id in product_ids, "Product with necesita_revision=True should be in results"
+        assert prod_no_revision.id not in product_ids, "Product with necesita_revision=False should NOT be in results"
+
+        # Verify all returned products have necesita_revision=True
+        for p in data:
             assert p["necesita_revision"] is True
