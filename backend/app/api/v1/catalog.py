@@ -4,6 +4,7 @@ from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 from app.db.database import get_db
 from app.models.catalog import Brand, Category, Product, ProductSKU, Attribute, AttributeValue
+from app.models.inventory import Warehouse, InventoryLevel
 from app.schemas import catalog as schemas
 from app.api.dependencies import require_roles, ALL_ERP_ROLES
 
@@ -175,20 +176,20 @@ def create_sku(product_id: int, sku: schemas.SKUCreate, db: Session = Depends(ge
     db_product = db.query(Product).filter(Product.id == product_id).first()
     if not db_product:
         raise HTTPException(status_code=404, detail="Product not found")
-        
+
     # Get the Attribute Values to link
     attr_values = []
     if sku.attribute_value_ids:
         attr_values = db.query(AttributeValue).filter(AttributeValue.id.in_(sku.attribute_value_ids)).all()
         if len(attr_values) != len(sku.attribute_value_ids):
             raise HTTPException(status_code=400, detail="One or more attribute values are invalid")
-    
+
     sku_data = sku.model_dump(exclude={"attribute_value_ids"})
     db_sku = ProductSKU(**sku_data, product_id=product_id)
-    
+
     # Associate dynamic attributes
     db_sku.attribute_values.extend(attr_values)
-    
+
     try:
         db.add(db_sku)
         db.commit()
@@ -197,3 +198,63 @@ def create_sku(product_id: int, sku: schemas.SKUCreate, db: Session = Depends(ge
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=400, detail="SKU code or barcode already exists")
+
+@router.post("/products/{product_id}/skus/bulk", status_code=status.HTTP_201_CREATED)
+def create_skus_bulk(product_id: int, body: schemas.BulkSKUCreate, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
+    db_product = db.query(Product).filter(Product.id == product_id).first()
+    if not db_product:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    codigos_en_lote = [item.sku for item in body.skus]
+    if len(codigos_en_lote) != len(set(codigos_en_lote)):
+        raise HTTPException(status_code=400, detail="Hay codigos de SKU repetidos en el mismo lote")
+
+    warehouse = None
+    if body.warehouse_id:
+        warehouse = db.query(Warehouse).filter(Warehouse.id == body.warehouse_id).first()
+        if not warehouse:
+            raise HTTPException(status_code=400, detail="La bodega indicada no existe")
+
+    sku_ids = []
+    try:
+        for item in body.skus:
+            attr_values = []
+            for par in item.attributes:
+                attr = db.query(Attribute).filter(Attribute.name.ilike(par.attribute_name)).first()
+                if not attr:
+                    attr = Attribute(name=par.attribute_name)
+                    db.add(attr)
+                    db.flush()
+                val = db.query(AttributeValue).filter(
+                    AttributeValue.attribute_id == attr.id, AttributeValue.value.ilike(par.value)
+                ).first()
+                if not val:
+                    val = AttributeValue(attribute_id=attr.id, value=par.value)
+                    db.add(val)
+                    db.flush()
+                attr_values.append(val)
+
+            db_sku = ProductSKU(
+                product_id=product_id, sku=item.sku, barcode=item.barcode,
+                sale_price=item.sale_price, cost_price=item.cost_price,
+            )
+            db_sku.attribute_values.extend(attr_values)
+            db.add(db_sku)
+            db.flush()
+            sku_ids.append(db_sku.id)
+
+            if item.initial_stock and item.initial_stock > 0:
+                if warehouse is None:
+                    warehouse = db.query(Warehouse).first()
+                    if warehouse is None:
+                        warehouse = Warehouse(name="Bodega Principal", location_type="Central")
+                        db.add(warehouse)
+                        db.flush()
+                db.add(InventoryLevel(sku_id=db_sku.id, warehouse_id=warehouse.id, quantity=item.initial_stock))
+
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Uno o mas codigos de SKU o codigos de barras ya existen")
+
+    return {"status": "success", "data": {"created": len(sku_ids), "sku_ids": sku_ids}}

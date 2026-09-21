@@ -88,3 +88,20 @@ class ProductResponse(ProductBase):
     category: CategoryResponse
     skus: List[SKUResponse] = []
     model_config = {"from_attributes": True}
+
+# Bulk SKU creation (para el asistente de variantes)
+class SKUAttributePair(BaseModel):
+    attribute_name: str
+    value: str
+
+class BulkSKUItem(BaseModel):
+    sku: str
+    barcode: Optional[str] = None
+    sale_price: Decimal
+    cost_price: Optional[Decimal] = None
+    initial_stock: Optional[int] = 0
+    attributes: List[SKUAttributePair] = []
+
+class BulkSKUCreate(BaseModel):
+    warehouse_id: Optional[int] = None
+    skus: List[BulkSKUItem]
