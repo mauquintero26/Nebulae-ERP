@@ -5,20 +5,15 @@ Agrega parent_id a categories para soportar categoria/subcategoria como
 el mismo concepto (una subcategoria es una categoria cuyo padre es otra).
 
 Revision ID: fa6_014
-Revises: fa6_016
+Revises: fa6_013
 Create Date: 2026-09-21
-
-Nota: down_revision apunta a fa6_016 (no fa6_013) porque la rama hermana
-solicitud-cotizacion-crm completo su propia migracion fa6_016 primero
-contra la misma base de datos de pruebas compartida. Se reconcilia aqui
-para evitar la colision de heads; se documenta en el ledger de este plan.
 """
 from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
 revision: str = "fa6_014"
-down_revision: Union[str, Sequence[str], None] = "fa6_016"
+down_revision: Union[str, Sequence[str], None] = "fa6_013"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
