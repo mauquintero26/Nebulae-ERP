@@ -341,15 +341,16 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
     if sc.estado not in ("BORRADOR", "PENDIENTE_CONFIRMACION"):
         raise HTTPException(400, f"No se puede confirmar en estado {sc.estado}")
 
-    # Update SC estado
+    # Al crear el borrador de cotizacion, la solicitud pasa a COTIZADA (no CONFIRMADA:
+    # eso solo ocurre cuando el cliente realmente confirma la cotizacion).
     old_estado = sc.estado
-    sc.estado = "CONFIRMADA"
+    sc.estado = "COTIZADA"
     sc.updated_at = datetime.datetime.utcnow()
     db.commit()
 
     _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
-         "Solicitud confirmada - Cotizacion creada",
-         old_estado=old_estado, new_estado="CONFIRMADA",
+         "Solicitud cotizada - Cotizacion creada",
+         old_estado=old_estado, new_estado="COTIZADA",
          user_name=body.get("user_name"))
 
     # Create COT automatically
@@ -481,6 +482,30 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
     return {"status": "success", "data": d}
 
 
+_MAPA_ESTADO_COTIZACION_A_SOLICITUD = {
+    "Borrador": "COTIZADA",
+    "Enviada": "EN_ESPERA_CONFIRMACION",
+    "Pend. confirmación": "EN_ESPERA_CONFIRMACION",
+    "Confirmada": "CONFIRMADA",
+    "Rechazada": "RECHAZADA",
+    "Vencida": "VENCIDA",
+}
+
+
+def _sincronizar_estado_solicitud_desde_cotizacion(cot: "SalesQuotation", db: Session) -> None:
+    """Mantiene CustomerRequest.estado como reflejo fiel del estado real de su Cotizacion."""
+    if not cot.sc_id:
+        return
+    nuevo_estado = _MAPA_ESTADO_COTIZACION_A_SOLICITUD.get(cot.estado)
+    if not nuevo_estado:
+        return
+    sc = db.query(CustomerRequest).filter(CustomerRequest.id == cot.sc_id).first()
+    if sc and sc.estado != nuevo_estado:
+        sc.estado = nuevo_estado
+        sc.updated_at = datetime.datetime.utcnow()
+        db.commit()
+
+
 @router.patch("/cotizaciones/{cot_id}")
 def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
@@ -499,6 +524,7 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     db.commit()
     db.refresh(cot)
     if body.get("estado") and body["estado"] != old_estado:
+        _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
         _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {cot.estado}",
              old_estado=old_estado, new_estado=cot.estado,
