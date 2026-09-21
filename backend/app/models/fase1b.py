@@ -7,7 +7,7 @@ que se conservan como snapshot para compatibilidad con el frontend actual.
 """
 from sqlalchemy import (
     Column, Integer, String, Numeric, ForeignKey,
-    DateTime, Text, Boolean, Date, UniqueConstraint, Index,
+    DateTime, Text, UniqueConstraint, Index,
     CheckConstraint, func, text
 )
 from sqlalchemy.orm import relationship
@@ -289,36 +289,3 @@ class InventoryReservation(Base):
     __table_args__ = (
         Index("ix_inv_res_sku_wh_status", "sku_id", "warehouse_id", "status"),
     )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GRUPO 5: Transacciones de pago
-# ─────────────────────────────────────────────────────────────────────────────
-
-class PaymentTransaction(Base):
-    """Transacción individual de pago ligada a un PaymentPending (PXP).
-
-    Permite auditoría granular: cada anticipo, abono, saldo, devolución
-    o reversión queda registrado como una fila independiente.
-    """
-    __tablename__ = "payment_transactions"
-
-    id                = Column(Integer, primary_key=True, index=True)
-    pxp_id            = Column(Integer, ForeignKey("payment_pendings.id", ondelete="CASCADE"), nullable=False)
-    sale_order_id     = Column(Integer, ForeignKey("sale_orders.id", ondelete="SET NULL"), nullable=True)
-    transaction_type  = Column(String(20), nullable=False)
-    # ANTICIPO | ABONO | SALDO | DEVOLUCION | REVERSION
-    monto             = Column(Numeric(14, 2), nullable=False)
-    moneda            = Column(String(10), nullable=False, default="COP")
-    metodo_pago       = Column(String(50), nullable=True)
-    referencia        = Column(String(150), nullable=True)
-    fecha_pago        = Column(Date, nullable=False)
-    user_name         = Column(String(150), nullable=True)
-    notas             = Column(Text, nullable=True)
-    created_at        = Column(DateTime, default=_now)
-    is_reversed       = Column(Boolean, nullable=False, default=False)
-    reversed_by_id    = Column(Integer, ForeignKey("payment_transactions.id", ondelete="SET NULL"), nullable=True)
-
-    pxp               = relationship("PaymentPending", foreign_keys=[pxp_id])
-    sale_order        = relationship("SaleOrder", foreign_keys=[sale_order_id])
-    reversed_by       = relationship("PaymentTransaction", remote_side=[id], foreign_keys=[reversed_by_id])

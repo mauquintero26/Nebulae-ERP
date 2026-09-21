@@ -42,7 +42,6 @@ FA1B_TABLES = [
     "goods_receipt_line_allocations",
     "inventory_owner_balances",
     "inventory_reservations",
-    "payment_transactions",
 ]
 
 
@@ -69,7 +68,7 @@ class TestFase1bMigrations:
 
 
     def test_all_fa1b_tables_exist_after_upgrade(self, setup_test_db):
-        """Después del upgrade head, las 10 tablas Fase 1B existen."""
+        """Después del upgrade head, las 9 tablas Fase 1B existen."""
         with test_engine.connect() as conn:
             for table in FA1B_TABLES:
                 exists = _table_exists(conn, table)

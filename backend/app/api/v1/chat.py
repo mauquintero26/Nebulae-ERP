@@ -761,7 +761,7 @@ def update_conv_status(conv_id: int, body: dict, user: User = Depends(require_ro
 from app.models.customers import Customer
 from app.models.erp_documents import CustomerRequest, SalesQuotation, SaleOrder
 from app.models.fase1b import SaleOrderLineErp
-from app.models.fase4 import SalePackingSession, SaleOrderDelivery, SaleOrderReturn, SaleOrderPayment
+from app.models.fase4 import SalePackingSession, SaleOrderDelivery, SaleOrderReturn
 from app.models.fase5 import OmnichannelInteraction
 from app.api.v1.schemas_fase5 import OmnichannelQueryRequest, OmnichannelQueryResponse
 
