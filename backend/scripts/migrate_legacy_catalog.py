@@ -20,11 +20,23 @@ from app.models.inventory import Warehouse, InventoryLevel
 
 
 def _resolver_o_crear_categoria(db: Session, nombre: str, parent_id: int | None) -> Category | None:
+    """Busca una categoria existente por nombre (case-insensitive).
+
+    Si el nombre ya existe pero bajo un padre distinto al solicitado, el dato
+    legacy es ambiguo (categoria/sub_categoria de texto libre puede repetir
+    el mismo nombre bajo dos jerarquias distintas -- ej. "Accesorios" bajo
+    "Ropa" y bajo "Electronica"). En ese caso NO se reutiliza (asignaria el
+    producto a la jerarquia equivocada) ni se crea un duplicado (Category.name
+    es unico). Se devuelve None para que el llamador marque el producto para
+    revision manual en vez de adivinar.
+    """
     if not nombre or not nombre.strip():
         return None
     existente = db.query(Category).filter(Category.name.ilike(nombre.strip())).first()
     if existente:
-        return existente
+        if existente.parent_id == parent_id:
+            return existente
+        return None
     nueva = Category(name=nombre.strip(), parent_id=parent_id)
     db.add(nueva)
     db.flush()
@@ -76,54 +88,73 @@ def run_migration(db: Session) -> dict:
 
     migrados = 0
     saltados = 0
+    errores = []
 
     for fila in filas:
-        ya_existe = db.query(Product).filter(Product.legacy_ecommerce_product_id == fila.id).first()
-        if ya_existe:
-            saltados += 1
-            continue
+        try:
+            ya_existe = db.query(Product).filter(Product.legacy_ecommerce_product_id == fila.id).first()
+            if ya_existe:
+                saltados += 1
+                continue
 
-        categoria_padre = _resolver_o_crear_categoria(db, fila.categoria, None)
-        categoria_final = categoria_padre
-        if fila.sub_categoria and categoria_padre:
-            categoria_final = _resolver_o_crear_categoria(db, fila.sub_categoria, categoria_padre.id)
-        if categoria_final is None:
-            categoria_final = _resolver_o_crear_categoria(db, "Sin Categoria", None)
+            # Se rastrea si alguna resolucion de categoria/sub_categoria fue
+            # ambigua (mismo nombre, padre distinto al esperado) para forzar
+            # necesita_revision aunque las variantes esten vacias.
+            categoria_ambigua = False
 
-        marca = _resolver_o_crear_marca(db, fila.marca)
+            categoria_padre = _resolver_o_crear_categoria(db, fila.categoria, None)
+            if categoria_padre is None and fila.categoria and fila.categoria.strip():
+                categoria_ambigua = True
 
-        producto = Product(
-            legacy_ecommerce_product_id=fila.id,
-            brand_id=marca.id,
-            category_id=categoria_final.id,
-            name=fila.nombre or f"Producto legacy #{fila.id}",
-            description=fila.descripcion,
-            type="Fisico",
-            base_currency="COP",
-            necesita_revision=_tiene_variantes_reales(fila.variantes),
-        )
-        db.add(producto)
-        db.flush()
+            categoria_final = categoria_padre
+            if fila.sub_categoria and categoria_padre:
+                categoria_final = _resolver_o_crear_categoria(db, fila.sub_categoria, categoria_padre.id)
+                if categoria_final is None:
+                    categoria_ambigua = True
 
-        sku = ProductSKU(
-            product_id=producto.id,
-            sku=fila.sku or f"LEGACY-{fila.id}",
-            sale_price=fila.precio_venta or 0,
-        )
-        db.add(sku)
-        db.flush()
+            if categoria_final is None:
+                categoria_final = _resolver_o_crear_categoria(db, "Sin Categoria", None)
 
-        db.add(ProductWebListing(sku_id=sku.id))
+            marca = _resolver_o_crear_marca(db, fila.marca)
 
-        stock = fila.stock_disponible or 0
-        if stock > 0:
-            bodega = _bodega_por_defecto(db)
-            db.add(InventoryLevel(sku_id=sku.id, warehouse_id=bodega.id, quantity=stock))
+            producto = Product(
+                legacy_ecommerce_product_id=fila.id,
+                brand_id=marca.id,
+                category_id=categoria_final.id,
+                name=fila.nombre or f"Producto legacy #{fila.id}",
+                description=fila.descripcion,
+                type="Fisico",
+                base_currency="COP",
+                necesita_revision=_tiene_variantes_reales(fila.variantes) or categoria_ambigua,
+            )
+            db.add(producto)
+            db.flush()
 
-        migrados += 1
+            sku = ProductSKU(
+                product_id=producto.id,
+                sku=fila.sku or f"LEGACY-{fila.id}",
+                sale_price=fila.precio_venta or 0,
+            )
+            db.add(sku)
+            db.flush()
 
-    db.commit()
-    return {"migrados": migrados, "saltados": saltados}
+            db.add(ProductWebListing(sku_id=sku.id))
+
+            stock = fila.stock_disponible or 0
+            if stock > 0:
+                bodega = _bodega_por_defecto(db)
+                db.add(InventoryLevel(sku_id=sku.id, warehouse_id=bodega.id, quantity=stock))
+
+            # Commit por fila: si una fila posterior falla (ej. sku duplicado,
+            # que ecommerce_products nunca exigio unico), el rollback de esa
+            # fila no debe deshacer el trabajo ya confirmado de filas previas.
+            db.commit()
+            migrados += 1
+        except Exception as e:
+            db.rollback()
+            errores.append({"legacy_id": fila.id, "error": str(e)})
+
+    return {"migrados": migrados, "saltados": saltados, "errores": errores}
 
 
 if __name__ == "__main__":
@@ -137,6 +168,11 @@ if __name__ == "__main__":
     session = SessionLocal()
     try:
         resultado = run_migration(session)
-        print(f"Migracion completa: {resultado['migrados']} migrados, {resultado['saltados']} ya existian")
+        print(
+            f"Migracion completa: {resultado['migrados']} migrados, "
+            f"{resultado['saltados']} ya existian, {len(resultado['errores'])} con error"
+        )
+        for err in resultado["errores"]:
+            print(f"  ERROR legacy_id={err['legacy_id']}: {err['error']}")
     finally:
         session.close()
