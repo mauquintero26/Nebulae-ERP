@@ -37,6 +37,8 @@ class Product(Base):
     base_currency = Column(String, nullable=False) # "USD, COP"
     uom = Column(String) # "Unidad de medida (Ud, Lb, Kg)"
     is_active = Column(Boolean, default=True)
+    legacy_ecommerce_product_id = Column(Integer, unique=True, nullable=True, index=True)
+    necesita_revision = Column(Boolean, nullable=False, default=False)
 
     brand = relationship("Brand", back_populates="products")
     category = relationship("Category", back_populates="products")
