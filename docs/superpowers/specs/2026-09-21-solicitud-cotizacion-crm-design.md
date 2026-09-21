@@ -6,13 +6,13 @@ El descubrimiento del 2026-09-21 (`docs/audit/2026-09-21-flujo-comercial-complet
 
 ## Decisiones ya confirmadas con el usuario
 
-1. **Pipeline de CRM — 5 etapas estándar**, cada una con un valor `maps_to_status` para que el servidor pueda moverlas automáticamente:
-   - Nuevo Lead → `NUEVO`
-   - Cotización Enviada → `COTIZACION_ENVIADA`
-   - En Negociación → `EN_NEGOCIACION`
-   - Ganado → `GANADO`
-   - Perdido → `PERDIDO`
-   Recotizar después de un rechazo mueve el Lead de `PERDIDO` de regreso a `COTIZACION_ENVIADA`.
+1. **Pipeline de CRM — 5 etapas estándar.** Un "Lead" en este sistema no es una tabla separada: es una fila de `SalesOrder` reutilizada, con un `status` que ya tiene un vocabulario establecido y usado en varias partes de `crm.py` (`STATUS_LABELS`, `STATUS_COLORS`, endpoints `/leads/{id}/to-cotizacion` y `/leads/{id}/to-pedido`). Para no chocar con eso, las 5 etapas reutilizan ese vocabulario donde ya existe, y solo agregan un valor nuevo donde hace falta:
+   - Nuevo Lead → `DRAFT` (ya es el valor por defecto al crear un lead)
+   - Cotización Enviada → `QUOTATION` (mismo valor que ya usa `/leads/{id}/to-cotizacion`)
+   - En Negociación → `EN_NEGOCIACION` (nuevo, agregado de forma aditiva — no reemplaza nada existente)
+   - Ganado → `INVOICED` (mismo valor que ya usa `/leads/{id}/to-pedido`)
+   - Perdido → `CANCELLED` (ya es un estado terminal existente, ya excluido de la vista principal de leads)
+   Recotizar después de un rechazo mueve el Lead de `CANCELLED` de regreso a `QUOTATION`.
 2. **Soporte Técnico** tiene su propio conjunto de campos (tipo de problema, descripción, urgencia, evidencia, asignado a, producto/pedido relacionado opcional) y su propio flujo de estados (Abierto → En Proceso → Resuelto → Cerrado), **y no participa del pipeline de ventas del CRM** — es un flujo de servicio separado.
 3. La urgencia de Soporte Técnico ajusta el plazo de alerta por desatención: Alta 4 horas, Media 1 día, Baja 2 días (el default general actual).
 
@@ -25,11 +25,11 @@ Crear Solicitud (con cliente real obligatorio)
   └─► crea CustomerRequest + Lead en "Nuevo Lead" (servidor, siempre, nunca falla en silencio)
 
 Crear Cotización (borrador)          → CustomerRequest.estado se deriva de Cotizacion.estado
-Enviar Cotización (elige canal)      → Lead → "Cotización Enviada"          (servidor)
+Enviar Cotización (elige canal)      → Lead → "Cotización Enviada" (status=QUOTATION, servidor)
 Cliente confirma                     → CustomerRequest.estado = CONFIRMADA
-Cliente rechaza (sin recotizar)      → Lead → "Perdido"                     (servidor)
-Recotizar                            → Lead → "Cotización Enviada" de nuevo (servidor)
-Crear Pedido de Venta desde Cotización → Lead → "Ganado"                    (servidor)
+Cliente rechaza (sin recotizar)      → Lead → "Perdido" (status=CANCELLED, servidor)
+Recotizar                            → Lead → "Cotización Enviada" de nuevo (status=QUOTATION, servidor)
+Crear Pedido de Venta desde Cotización → Lead → "Ganado" (status=INVOICED, servidor)
 ```
 
 ## Componente 1 — Solicitud de Cliente
@@ -73,11 +73,11 @@ Esto reemplaza la asignación directa que hoy pone "CONFIRMADA" apenas se crea u
 
 **Lead siempre se crea:** al quedar resuelto que toda Solicitud tiene un cliente real (Componente 1), se elimina la condición "solo si el cliente ya existía" — el Lead se crea siempre, en la etapa "Nuevo Lead".
 
-**Movimiento de etapa en el servidor, no en el navegador:** se agrega una función central (`_mover_lead_pipeline(lead, maps_to_status)`) que busca la `PipelineStage` cuyo `maps_to_status` coincide y mueve el Lead ahí, llamada desde el servidor en estos momentos exactos:
-- Al enviar una cotización → `COTIZACION_ENVIADA`.
-- Al crear el Pedido de Venta desde una cotización confirmada → `GANADO`.
-- Al rechazar una cotización sin que se vuelva a cotizar → `PERDIDO`.
-- Al recotizar después de un rechazo → `COTIZACION_ENVIADA` de nuevo.
+**Movimiento de etapa en el servidor, no en el navegador:** ya existe la lógica correcta para esto (`/leads/{id}/to-cotizacion`, `/leads/{id}/to-pedido`, ambas en `crm.py`) — solo se usa manualmente hoy. Se extrae su lógica común a una función interna reutilizable y se llama automáticamente desde el servidor en estos momentos exactos:
+- Al enviar una cotización → status `QUOTATION` ("Cotización Enviada").
+- Al crear el Pedido de Venta desde una cotización confirmada → status `INVOICED` ("Ganado").
+- Al rechazar una cotización sin que se vuelva a cotizar → status `CANCELLED` ("Perdido").
+- Al recotizar después de un rechazo → status `QUOTATION` de nuevo ("Cotización Enviada").
 
 Esto reemplaza la lógica actual que vive solo en el frontend y que hoy puede fallar sin avisar a nadie.
 
