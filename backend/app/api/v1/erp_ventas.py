@@ -19,6 +19,7 @@ from app.api.dependencies import (
 )
 from app.models.users import User
 from app.api.v1.schemas_compras import CancelarSolicitudBody
+from app.api.v1.crm import mover_lead_de_solicitud
 import datetime
 
 router = APIRouter()
@@ -458,6 +459,8 @@ def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN
     db.add(cot)
     db.commit()
     db.refresh(cot)
+    if cot.sc_id:
+        mover_lead_de_solicitud(cot.sc_id, "QUOTATION", db)
     _log(db, "COT", cot.id, cot.numero, "CREATED",
          f"Cotizacion {cot.numero} creada",
          new_estado="BORRADOR", user_name=body.get("created_by"))
@@ -525,6 +528,10 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     db.refresh(cot)
     if body.get("estado") and body["estado"] != old_estado:
         _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
+        if cot.estado == "ENVIADA":
+            mover_lead_de_solicitud(cot.sc_id, "QUOTATION", db)
+        elif cot.estado == "RECHAZADA":
+            mover_lead_de_solicitud(cot.sc_id, "CANCELLED", db)
         _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {cot.estado}",
              old_estado=old_estado, new_estado=cot.estado,
@@ -549,6 +556,8 @@ def confirmar_cotizacion(cot_id: int, body: dict = Body(default_factory=dict), u
     # Return format compatible with legacy expectations
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
     ven = db.query(SaleOrder).filter(SaleOrder.id == res["sale_order_id"]).first()
+    if res.get("sale_order_id"):
+        mover_lead_de_solicitud(cot.sc_id if cot else None, "INVOICED", db)
     return {
         "status": "success",
         "data": {

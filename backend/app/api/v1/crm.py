@@ -1215,6 +1215,47 @@ def get_leads(
     return {"status": "success", "data": leads, "total": total}
 
 
+def _mover_lead_a_status(order: SalesOrder, maps_to_status: str, db: Session) -> None:
+    stage = db.query(PipelineStage).filter(PipelineStage.maps_to_status == maps_to_status).first()
+    if stage:
+        order.pipeline_stage_id = stage.id
+    order.status = maps_to_status
+    order.updated_at = datetime.datetime.utcnow()
+    db.commit()
+
+
+_ETAPAS_ESTANDAR = [
+    ("Nuevo Lead", "DRAFT", "bg-blue-500", "bg-blue-50"),
+    ("Cotización Enviada", "QUOTATION", "bg-indigo-500", "bg-indigo-50"),
+    ("En Negociación", "EN_NEGOCIACION", "bg-amber-500", "bg-amber-50"),
+    ("Ganado", "INVOICED", "bg-emerald-500", "bg-emerald-50"),
+    ("Perdido", "CANCELLED", "bg-red-500", "bg-red-50"),
+]
+
+
+def _asegurar_etapas_estandar(db: Session) -> None:
+    existentes = {s.maps_to_status for s in db.query(PipelineStage.maps_to_status).all()}
+    max_pos = db.execute(text("SELECT COALESCE(MAX(position),0) FROM pipeline_stages")).scalar() or 0
+    creo_alguna = False
+    for nombre, status, color, bg in _ETAPAS_ESTANDAR:
+        if status not in existentes:
+            max_pos += 1
+            db.add(PipelineStage(name=nombre, color=color, bg_color=bg, position=max_pos, maps_to_status=status))
+            creo_alguna = True
+    if creo_alguna:
+        db.commit()
+
+
+def mover_lead_de_solicitud(sc_id: int, maps_to_status: str, db: Session) -> None:
+    """Mueve el Lead vinculado a una Solicitud (si existe) a la etapa dada. No falla si no hay Lead."""
+    if not sc_id:
+        return
+    _asegurar_etapas_estandar(db)
+    order = db.query(SalesOrder).filter(SalesOrder.canonical_customer_request_id == sc_id).first()
+    if order:
+        _mover_lead_a_status(order, maps_to_status, db)
+
+
 @router.patch("/leads/{lead_id}/stage", response_model=dict)
 def move_lead_stage(lead_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     order = db.query(SalesOrder).filter(SalesOrder.id == lead_id).first()
@@ -1223,10 +1264,8 @@ def move_lead_stage(lead_id: int, body: dict, user: User = Depends(require_roles
     stage = db.query(PipelineStage).filter(PipelineStage.id == body.get("pipeline_stage_id")).first()
     if not stage:
         raise HTTPException(status_code=404, detail="Stage not found")
-    order.pipeline_stage_id = stage.id
-    order.status = stage.maps_to_status or order.status
-    order.updated_at = datetime.datetime.utcnow()
-    db.commit(); db.refresh(order)
+    _mover_lead_a_status(order, stage.maps_to_status or order.status, db)
+    db.refresh(order)
     customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
     return {"status": "success", "data": _lead_to_dict(order, customer, stage)}
 
@@ -1645,6 +1684,7 @@ def create_lead_v2(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *
         lead_product_sku_id=body.get("lead_product_sku_id"),
         lead_qty=body.get("lead_qty", 1),
         advisor_name=body.get("advisor_name", ""),
+        canonical_customer_request_id=body.get("sc_id"),
     )
     db.add(new_order)
     try:

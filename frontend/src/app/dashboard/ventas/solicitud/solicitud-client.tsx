@@ -791,6 +791,7 @@ export default function SolicitudClient() {
       if(selectedCust?.id){
         apiFetch('/crm/leads',{method:'POST',body:JSON.stringify({
           customer_id:selectedCust.id,
+          sc_id:scData?.data?.id,
           advisor_name:form.advisor_name||currentUser,
           solicitud_tipo:form.tipo_solicitud||'Cotizacion de Producto',
           description:`SC creada: ${scData?.numero||''} - ${form.notas||''}`.substring(0,500),

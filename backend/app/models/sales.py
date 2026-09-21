@@ -34,6 +34,7 @@ class SalesOrder(Base):
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     canonical_sale_order_id = Column(Integer, ForeignKey("sale_orders.id"), nullable=True)
+    canonical_customer_request_id = Column(Integer, ForeignKey("customer_requests.id"), nullable=True)
     status = Column(String, nullable=False)
     
     import_date = Column(DateTime, nullable=True)
