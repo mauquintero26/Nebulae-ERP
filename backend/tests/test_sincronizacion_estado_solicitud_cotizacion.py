@@ -1,7 +1,8 @@
 import uuid
-from app.models.erp_documents import SalesQuotation
+from app.models.erp_documents import SalesQuotation, CustomerRequest
 from app.db.database import get_db
 from sqlalchemy.orm import Session
+import datetime
 
 
 def _headers(admin_token):
@@ -63,13 +64,28 @@ class TestSincronizacionEstados:
         assert cot.estado == "BORRADOR"
 
     def test_sincronizacion_noop_con_estado_no_reconocido(self, db: Session):
-        """Verifica que _sincronizar no crashea con un estado no mapeado"""
+        """Verifica que _sincronizar no crashea con un estado no mapeado (no en el mapping dict)"""
         from app.api.v1.erp_ventas import _sincronizar_estado_solicitud_desde_cotizacion
 
-        # Crear cotizacion con estado no mapeado
+        # Crear una solicitud primero
+        sc = CustomerRequest(
+            numero="SC-TEST-UNMAPPED",
+            customer_name="Cliente Unmapped Test",
+            tipo_solicitud="Cotizacion de Producto",
+            estado="COTIZADA",
+            fecha_solicitud=datetime.datetime.utcnow(),
+            fecha_vencimiento=datetime.datetime.utcnow() + datetime.timedelta(days=5),
+        )
+        db.add(sc)
+        db.commit()
+
+        estado_sc_inicial = sc.estado
+
+        # Crear cotizacion con estado no mapeado, pero vinculada a la solicitud
         cot = SalesQuotation(
             numero="COT-TEST-UNMAPPED",
-            estado="ESTADO_INEXISTENTE",
+            sc_id=sc.id,
+            estado="ESTADO_INEXISTENTE",  # Valor no en el mapping dict
             customer_name="Test Customer",
         )
         db.add(cot)
@@ -78,6 +94,6 @@ class TestSincronizacionEstados:
         # No debe crashear
         _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
 
-        # Verificar que no cambio nada
-        db.refresh(cot)
-        assert cot.estado == "ESTADO_INEXISTENTE"
+        # Verificar que la solicitud NO cambio (porque el estado no esta en el mapping)
+        db.refresh(sc)
+        assert sc.estado == estado_sc_inicial
