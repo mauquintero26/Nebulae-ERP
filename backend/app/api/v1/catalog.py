@@ -45,6 +45,65 @@ def list_categories(db: Session = Depends(get_db), _user=Depends(require_roles(*
     categories = db.query(Category).all()
     return {"status": "success", "data": [schemas.CategoryResponse.model_validate(c).model_dump() for c in categories]}
 
+def _es_descendiente(db: Session, categoria_id: int, posible_ancestro_id: int) -> bool:
+    """True si posible_ancestro_id aparece en la cadena de padres de categoria_id (o es el mismo)."""
+    actual_id = categoria_id
+    visitados = set()
+    while actual_id is not None:
+        if actual_id == posible_ancestro_id:
+            return True
+        if actual_id in visitados:
+            return False  # ciclo ya existente, no seguir para siempre
+        visitados.add(actual_id)
+        fila = db.query(Category.parent_id).filter(Category.id == actual_id).first()
+        actual_id = fila[0] if fila else None
+    return False
+
+@router.put("/categories/{category_id}")
+def update_category(category_id: int, body: schemas.CategoryUpdate, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
+    db_category = db.query(Category).filter(Category.id == category_id).first()
+    if not db_category:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    if body.parent_id is not None:
+        if body.parent_id == category_id:
+            raise HTTPException(status_code=400, detail="Una categoria no puede ser su propio padre")
+        nuevo_padre = db.query(Category).filter(Category.id == body.parent_id).first()
+        if not nuevo_padre:
+            raise HTTPException(status_code=400, detail="La categoria padre indicada no existe")
+        if _es_descendiente(db, body.parent_id, category_id):
+            raise HTTPException(status_code=400, detail="Esto crearia un ciclo de categorias")
+        db_category.parent_id = body.parent_id
+
+    if body.name is not None:
+        db_category.name = body.name
+
+    try:
+        db.commit()
+        db.refresh(db_category)
+        return {"status": "success", "data": schemas.CategoryResponse.model_validate(db_category).model_dump()}
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Ya existe una categoria con ese nombre")
+
+@router.delete("/categories/{category_id}")
+def delete_category(category_id: int, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
+    db_category = db.query(Category).filter(Category.id == category_id).first()
+    if not db_category:
+        raise HTTPException(status_code=404, detail="Category not found")
+
+    hijos = db.query(Category).filter(Category.parent_id == category_id).count()
+    if hijos > 0:
+        raise HTTPException(status_code=409, detail=f"No se puede borrar: tiene {hijos} subcategoria(s)")
+
+    productos = db.query(Product).filter(Product.category_id == category_id).count()
+    if productos > 0:
+        raise HTTPException(status_code=409, detail=f"No se puede borrar: tiene {productos} producto(s) asociado(s)")
+
+    db.delete(db_category)
+    db.commit()
+    return {"status": "success"}
+
 # --- ATTRIBUTES ---
 @router.post("/attributes", status_code=status.HTTP_201_CREATED)
 def create_attribute(attribute: schemas.AttributeCreate, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
