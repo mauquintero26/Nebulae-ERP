@@ -19,7 +19,7 @@ logger = logging.getLogger("chat_api")
 
 # Configuración Chatwoot (Omnicanal)
 CHATWOOT_BASE_URL = os.getenv("CHATWOOT_BASE_URL", "https://chatbot-crn-chatwoot.ionwxk.easypanel.host").rstrip("/")
-CHATWOOT_API_TOKEN = os.getenv("CHATWOOT_API_TOKEN", "2JhqHhEBTUe5ENMfizwszmNk")
+CHATWOOT_API_TOKEN = os.getenv("CHATWOOT_API_TOKEN", "")
 CHATWOOT_ACCOUNT_ID = int(os.getenv("CHATWOOT_ACCOUNT_ID", "1"))
 
 def _send_to_chatwoot(chatwoot_conv_id: str, content: str):

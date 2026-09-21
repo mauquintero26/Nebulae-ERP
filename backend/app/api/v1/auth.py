@@ -5,7 +5,7 @@ from app.db.database import get_db
 from app.models.users import User
 from app.schemas.users import UserCreate, UserResponse, PasswordChange
 from app.core.security import get_password_hash, verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user, require_roles, ROLE_ADMIN, normalize_role
 from datetime import timedelta
 
 router = APIRouter()
@@ -15,7 +15,13 @@ def register_user(user: UserCreate, db: Session = Depends(get_db)):
     db_user = db.query(User).filter(User.email == user.email).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Email already registered")
-    
+
+    if normalize_role(user.role) == "ADMIN":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No se puede autoasignar el rol de Administrador en el registro público",
+        )
+
     hashed_password = get_password_hash(user.password)
     new_user = User(
         email=user.email,
@@ -81,18 +87,15 @@ def update_user_role(
     user_id: int,
     payload: dict,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(require_roles(*ROLE_ADMIN)),
 ):
-    is_admin = current_user.role == "admin" or current_user.id == 1 or "jmquintero" in current_user.email.lower()
-    if not is_admin:
-        raise HTTPException(status_code=403, detail="Solo administradores pueden cambiar roles")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     new_role = payload.get("role")
     if not new_role:
         raise HTTPException(status_code=400, detail="Rol requerido")
-    if user.id == 1 and new_role != "admin":
+    if user.id == 1 and normalize_role(new_role) != "ADMIN":
         raise HTTPException(status_code=400, detail="No se puede retirar el rol de Administrador de la cuenta principal del sistema")
     user.role = new_role
     db.commit()

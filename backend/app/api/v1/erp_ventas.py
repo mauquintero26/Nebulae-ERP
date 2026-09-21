@@ -908,7 +908,7 @@ def ventas_analytics(
 
 def _get_alert_days(db: Session, key: str = "alerta_sc_dias") -> int:
     try:
-        r = db.execute(text(f"SELECT value FROM admin_config WHERE key = '{key}'")).fetchone()
+        r = db.execute(text("SELECT value FROM admin_config WHERE key = :key"), {"key": key}).fetchone()
         return int(r[0]) if r else 2
     except Exception:
         return 2
@@ -960,10 +960,13 @@ def get_config(user: User = Depends(require_roles(*ROLE_ADMIN)),
 def update_config(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)),
         db: Session = Depends(get_db)):
     for k, v in body.items():
-        db.execute(text(
-            f"INSERT INTO admin_config (key, value, updated_at) VALUES ('{k}', '{v}', NOW()) "
-            f"ON CONFLICT (key) DO UPDATE SET value = '{v}', updated_at = NOW()"
-        ))
+        db.execute(
+            text(
+                "INSERT INTO admin_config (key, value, updated_at) VALUES (:k, :v, NOW()) "
+                "ON CONFLICT (key) DO UPDATE SET value = :v, updated_at = NOW()"
+            ),
+            {"k": k, "v": str(v)},
+        )
     db.commit()
     return {"status": "success"}
 
