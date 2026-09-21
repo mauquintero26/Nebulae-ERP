@@ -1159,6 +1159,12 @@ def cancelar_solicitud(sc_id: int, body: CancelarSolicitudBody,
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     if not sc:
         raise HTTPException(404, "SC no encontrada")
+    if sc.tipo_solicitud == "Soporte Tecnico":
+        # Soporte Tecnico no usa el flujo de cancelacion ligado a Cotizacion:
+        # este endpoint marca eliminada_at (purga en 30 dias via papelera), lo
+        # que perderia un ticket de soporte real. Su ciclo de vida se maneja
+        # exclusivamente con estado_soporte (PATCH /solicitudes/{id}).
+        raise HTTPException(400, "Soporte Tecnico no usa este flujo de cancelacion; cambia su estado_soporte en su lugar")
     old_estado = sc.estado
     sc.estado = "CANCELADA"
     sc.razon_cancelacion = razon

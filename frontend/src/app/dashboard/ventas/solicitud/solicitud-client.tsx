@@ -221,8 +221,10 @@ function RowMenu({sc,onView,onChangeEstado,onCancel,onSendToTrash}:{sc:any;onVie
           <button onClick={()=>{onView();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm font-medium flex items-center gap-2"><FileText size={14} className="text-indigo-500"/>Ver Detalle</button>
           <button onClick={()=>{onView();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm font-medium flex items-center gap-2"><Edit2 size={14} className="text-amber-500"/>Editar</button>
           {/* Soporte Tecnico no participa del estado ligado a Cotizacion (siempre
-              N/A_SOPORTE) — su estado propio (estado_soporte) se cambia desde el
-              panel de detalle, no con estos botones */}
+              N/A_SOPORTE) ni de su flujo de cancelacion/papelera — su estado
+              propio (estado_soporte) se cambia desde el panel de detalle, no con
+              estos botones (cancelar aqui marcaria eliminada_at y lo mandaria a
+              purga en 30 dias, perdiendo el ticket de soporte real) */}
           {!isSoporte && (
             <>
               <div className="border-t border-slate-100 my-1"/>
@@ -231,17 +233,17 @@ function RowMenu({sc,onView,onChangeEstado,onCancel,onSendToTrash}:{sc:any;onVie
                   Estado: {v.label}
                 </button>
               ))}
+              <div className="border-t border-slate-100 my-1"/>
+              {isCancelled ? (
+                <button onClick={()=>{onSendToTrash();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-rose-50 text-sm font-medium flex items-center gap-2 text-rose-600">
+                  <Trash2 size={14}/>Enviar a la papelera
+                </button>
+              ) : (
+                <button onClick={()=>{onCancel();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-amber-50 text-sm font-medium flex items-center gap-2 text-amber-600">
+                  <AlertCircle size={14}/>Cancelar Solicitud
+                </button>
+              )}
             </>
-          )}
-          <div className="border-t border-slate-100 my-1"/>
-          {isCancelled ? (
-            <button onClick={()=>{onSendToTrash();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-rose-50 text-sm font-medium flex items-center gap-2 text-rose-600">
-              <Trash2 size={14}/>Enviar a la papelera
-            </button>
-          ) : (
-            <button onClick={()=>{onCancel();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-amber-50 text-sm font-medium flex items-center gap-2 text-amber-600">
-              <AlertCircle size={14}/>Cancelar Solicitud
-            </button>
           )}
         </div>
       )}
@@ -743,11 +745,12 @@ export default function SolicitudClient() {
   async function bulkAction(action:'delete'|'estado',estado?:string) {
     const ids=Array.from(checked);
     for(const id of ids){
-      if(action==='estado'){
-        // Soporte Tecnico usa su propio flujo (estado_soporte), no el de Cotizacion
-        const sc=solicitudes.find(s=>s.id===id);
-        if(sc?.tipo_solicitud==='Soporte Tecnico') continue;
-      }
+      // Soporte Tecnico usa su propio flujo (estado_soporte) y su propio ciclo
+      // de vida: ni el cambio masivo de estado de Cotizacion ni la cancelacion
+      // masiva deben tocarlo (cancelar aqui lo mandaria a purga en 30 dias,
+      // perdiendo el ticket de soporte real)
+      const sc=solicitudes.find(s=>s.id===id);
+      if(sc?.tipo_solicitud==='Soporte Tecnico') continue;
       if(action==='delete') await changeEstado(id,'CANCELADA');
       else if(estado) await changeEstado(id,estado);
     }
@@ -1209,14 +1212,16 @@ export default function SolicitudClient() {
                           <button onClick={()=>loadDetail(sc.id)} title="Ver Detalle" className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 p-1.5 rounded-lg text-xs font-bold transition-colors">
                             <FileText size={13}/>
                           </button>
-                          {sc.estado === 'CANCELADA' ? (
-                            <button onClick={()=>enviarAPapelera(sc.id)} title="Enviar a la papelera" className="bg-rose-50 hover:bg-rose-100 text-rose-600 p-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1">
-                              <Trash2 size={13}/>
-                            </button>
-                          ) : (
-                            <button onClick={()=>deleteItem(sc.id)} title="Cancelar Solicitud" className="bg-slate-100 hover:bg-amber-50 hover:text-amber-600 text-slate-500 p-1.5 rounded-lg text-xs font-bold transition-colors">
-                              <X size={13}/>
-                            </button>
+                          {sc.tipo_solicitud!=='Soporte Tecnico' && (
+                            sc.estado === 'CANCELADA' ? (
+                              <button onClick={()=>enviarAPapelera(sc.id)} title="Enviar a la papelera" className="bg-rose-50 hover:bg-rose-100 text-rose-600 p-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1">
+                                <Trash2 size={13}/>
+                              </button>
+                            ) : (
+                              <button onClick={()=>deleteItem(sc.id)} title="Cancelar Solicitud" className="bg-slate-100 hover:bg-amber-50 hover:text-amber-600 text-slate-500 p-1.5 rounded-lg text-xs font-bold transition-colors">
+                                <X size={13}/>
+                              </button>
+                            )
                           )}
                           <RowMenu sc={sc} onView={()=>loadDetail(sc.id)} onChangeEstado={e=>changeEstado(sc.id,e)} onCancel={()=>deleteItem(sc.id)} onSendToTrash={()=>enviarAPapelera(sc.id)}/>
                         </div>

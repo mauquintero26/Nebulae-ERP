@@ -121,3 +121,26 @@ class TestSoporteTecnico:
         assert lead_resp2.status_code == 200
         leads2 = db.query(SalesOrder).filter(SalesOrder.canonical_customer_request_id == sc_id2).all()
         assert len(leads2) == 1, "Una Cotizacion de Producto normal si debe generar su Lead"
+
+    def test_cancelar_endpoint_rechaza_soporte_tecnico(self, app_client, admin_token):
+        """/solicitudes/{id}/cancelar marca eliminada_at (purga en 30 dias via
+        papelera) ademas de estado=CANCELADA: aplicado a un ticket de Soporte
+        Tecnico perderia datos reales de soporte. Su ciclo de vida se maneja
+        exclusivamente con estado_soporte, no con este flujo de cancelacion."""
+        r = app_client.post("/api/v1/ventas/solicitudes", json={
+            "customer_name": f"Cliente-{uuid.uuid4().hex[:6]}",
+            "tipo_solicitud": "Soporte Tecnico",
+            "urgencia": "Media",
+        }, headers=_headers(admin_token))
+        sc_id = r.json()["data"]["id"]
+
+        r2 = app_client.post(f"/api/v1/ventas/solicitudes/{sc_id}/cancelar", json={
+            "razon": "Intento de cancelacion invalido para este tipo",
+        }, headers=_headers(admin_token))
+        assert r2.status_code == 400
+
+        # El ticket debe quedar intacto: ni estado ni eliminada_at deben cambiar
+        r3 = app_client.get(f"/api/v1/ventas/solicitudes/{sc_id}", headers=_headers(admin_token))
+        data = r3.json()["data"]
+        assert data["estado"] == "N/A_SOPORTE"
+        assert data["eliminada_at"] is None
