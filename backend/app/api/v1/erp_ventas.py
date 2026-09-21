@@ -483,12 +483,12 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
 
 
 _MAPA_ESTADO_COTIZACION_A_SOLICITUD = {
-    "Borrador": "COTIZADA",
-    "Enviada": "EN_ESPERA_CONFIRMACION",
-    "Pend. confirmación": "EN_ESPERA_CONFIRMACION",
-    "Confirmada": "CONFIRMADA",
-    "Rechazada": "RECHAZADA",
-    "Vencida": "VENCIDA",
+    "BORRADOR": "COTIZADA",
+    "ENVIADA": "EN_ESPERA_CONFIRMACION",
+    "PENDIENTE_CONFIRMACION": "EN_ESPERA_CONFIRMACION",
+    "CONFIRMADA": "CONFIRMADA",
+    "RECHAZADA": "RECHAZADA",
+    "VENCIDA": "VENCIDA",
 }
 
 
