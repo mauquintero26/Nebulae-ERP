@@ -63,6 +63,7 @@ def _sc_dict(sc: CustomerRequest) -> dict:
         "customer_email": sc.customer_email,
         "customer_address": sc.customer_address,
         "advisor_name": sc.advisor_name,
+        "advisor_user_id": sc.advisor_user_id,
         "tipo_solicitud": sc.tipo_solicitud or "Cotizacion de Producto",
         "modalidad_pago": sc.modalidad_pago,
         "estado": sc.estado,
@@ -211,8 +212,8 @@ def list_solicitudes(
 def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
     numero = _gen_numero(db, "SC-", "seq_sc")
-    # Auto vencimiento: 30 days
-    venc = datetime.datetime.utcnow() + datetime.timedelta(days=body.get("dias_vencimiento", 30))
+    # Auto vencimiento: 5 dias por defecto
+    venc = datetime.datetime.utcnow() + datetime.timedelta(days=body.get("dias_vencimiento", 5))
 
     # If customer_id provided, fetch customer data
     cust_name = body.get("customer_name", "")
@@ -235,6 +236,7 @@ def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
         customer_email=cust_email,
         customer_address=cust_addr,
         advisor_name=body.get("advisor_name"),
+        advisor_user_id=body.get("advisor_user_id"),
         tipo_solicitud=body.get("tipo_solicitud", "Cotizacion de Producto"),
         modalidad_pago=body.get("modalidad_pago", "Contado"),
         estado="BORRADOR",
@@ -313,7 +315,7 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         raise HTTPException(404, "Solicitud no encontrada")
     old_estado = sc.estado
     allowed = ["customer_id","customer_name","customer_phone","customer_email",
-               "customer_address","advisor_name","tipo_solicitud","modalidad_pago","estado",
+               "customer_address","advisor_name","advisor_user_id","tipo_solicitud","modalidad_pago","estado",
                "fecha_vencimiento","notas","productos"]
     for k in allowed:
         if k in body:

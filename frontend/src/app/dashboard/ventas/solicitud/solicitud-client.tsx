@@ -553,10 +553,13 @@ export default function SolicitudClient() {
   const [savingEdit,setSavingEdit]=useState(false);
 
   // Create form
-  const [form,setForm]=useState({advisor_name:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:30});
+  const [form,setForm]=useState({advisor_name:'',advisor_user_id:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:30});
   const [prodName,setProdName]=useState('');
   const [prodQty,setProdQty]=useState(1);
   const [productos,setProductos]=useState<any[]>([]);
+
+  // Usuarios para selector de asesor
+  const [usuarios,setUsuarios]=useState<{id:number;email:string;role:string}[]>([]);
 
   // Customer autocomplete
   const [custSearch,setCustSearch]=useState('');
@@ -585,6 +588,7 @@ export default function SolicitudClient() {
     const u=localStorage.getItem('user_name')||localStorage.getItem('username')||'';
     setCurrentUser(u);
     setForm(f=>({...f,advisor_name:u}));
+    apiFetch('/auth/users').then((d:any) => setUsuarios(Array.isArray(d)?d:(d?.data??[]))).catch(()=>{});
   },[]);
 
   const load=useCallback(async()=>{
@@ -806,7 +810,7 @@ export default function SolicitudClient() {
     setProductos([]);setProdName('');setProdQty(1);setSegSearch('');setSegResults([]);
     setEnvio({nombre_completo:'',cedula:'',direccion:'',ciudad:'',telefono:'',transportadora:'',tipo_envio:'Contraentrega',ven_ids:''});
     setDevVen('');setDevPec('');setDevMotivo('');
-    setForm({advisor_name:currentUser,tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:30});
+    setForm({advisor_name:currentUser,advisor_user_id:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:30});
   }
 
   function toggleCheck(id:number) {
@@ -2091,7 +2095,17 @@ export default function SolicitudClient() {
 
                 {/* Asesor + Vencimiento */}
                 <div className="grid grid-cols-2 gap-4">
-                  <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Asesor</label><input type="text" value={form.advisor_name} onChange={e=>setForm(f=>({...f,advisor_name:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none"/></div>
+                  <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Asesor</label><select value={form.advisor_user_id||''} onChange={e=>{
+                    const uid = e.target.value ? Number(e.target.value) : '';
+                    const u = usuarios.find(x=>x.id===uid);
+                    setForm(f=>({...f, advisor_user_id: uid, advisor_name: u?.email || f.advisor_name}));
+                  }}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-indigo-400">
+                  <option value="">Seleccionar asesor...</option>
+                  {usuarios.filter(u=>u.role==='Admin'||u.role==='Vendedor').map(u=>(
+                    <option key={u.id} value={u.id}>{u.email}</option>
+                  ))}
+                </select></div>
                   <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Dias Vencimiento</label><input type="number" min="1" max="365" value={form.dias_vencimiento} onChange={e=>setForm(f=>({...f,dias_vencimiento:Number(e.target.value)}))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none"/></div>
                 </div>
 
