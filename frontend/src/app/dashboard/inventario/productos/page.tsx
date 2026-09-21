@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Package, Search, Filter, Plus, ChevronLeft, Save,
-  Globe, Tag, Layers, DollarSign, RefreshCw, AlertCircle
+  Globe, Tag, Layers, DollarSign, RefreshCw
 } from 'lucide-react';
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 
@@ -27,6 +27,12 @@ export default function ProductosPage() {
   const [brands, setBrands] = useState<any[]>([]);
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
+
+  const [pasoVariantes, setPasoVariantes] = useState<'atributos' | 'combinaciones'>('atributos');
+  const [atributosElegidos, setAtributosElegidos] = useState<{ nombre: string; valores: string }[]>([{ nombre: '', valores: '' }]);
+  const [combinaciones, setCombinaciones] = useState<{ clave: string; atributos: Record<string, string>; sku: string; sale_price: string; cost_price: string; initial_stock: string }[]>([]);
+  const [warehouseId, setWarehouseId] = useState('');
+  const [productoRecienCreadoId, setProductoRecienCreadoId] = useState<number | null>(null);
 
   const [canSell, setCanSell] = useState(true);
   const [canBuy, setCanBuy] = useState(true);
@@ -61,17 +67,74 @@ export default function ProductosPage() {
     apiFetch('/inventory/warehouses').then(d => setWarehouses(Array.isArray(d) ? d : (d?.data ?? []))).catch(()=>{});
   }, [load]);
 
+  function generarCombinaciones() {
+    const atributosValidos = atributosElegidos
+      .filter(a => a.nombre.trim() && a.valores.trim())
+      .map(a => ({ nombre: a.nombre.trim(), valores: a.valores.split(',').map(v => v.trim()).filter(Boolean) }));
+
+    if (atributosValidos.length === 0) {
+      setCombinaciones([]);
+      return;
+    }
+
+    let filas: Record<string, string>[] = [{}];
+    for (const attr of atributosValidos) {
+      const nuevasFilas: Record<string, string>[] = [];
+      for (const fila of filas) {
+        for (const valor of attr.valores) {
+          nuevasFilas.push({ ...fila, [attr.nombre]: valor });
+        }
+      }
+      filas = nuevasFilas;
+    }
+
+    setCombinaciones(filas.map(fila => {
+      const sufijo = Object.values(fila).join('-').toUpperCase().replace(/\s+/g, '');
+      const base = (form.name || 'SKU').toUpperCase().replace(/\s+/g, '').slice(0, 10);
+      return { clave: Object.values(fila).join('|'), atributos: fila, sku: `${base}-${sufijo}`, sale_price: form.sale_price || '', cost_price: form.cost_price || '', initial_stock: '' };
+    }));
+    setPasoVariantes('combinaciones');
+  }
+
+  function aplicarATodas(campo: 'sale_price' | 'cost_price' | 'initial_stock', valor: string) {
+    setCombinaciones(prev => prev.map(c => ({ ...c, [campo]: valor })));
+  }
+
+  async function guardarVariantes(productId: number) {
+    if (combinaciones.length === 0) return;
+    const body = {
+      warehouse_id: warehouseId ? Number(warehouseId) : undefined,
+      skus: combinaciones.map(c => ({
+        sku: c.sku,
+        sale_price: Number(c.sale_price) || 0,
+        cost_price: c.cost_price ? Number(c.cost_price) : undefined,
+        initial_stock: c.initial_stock ? Number(c.initial_stock) : 0,
+        attributes: Object.entries(c.atributos).map(([attribute_name, value]) => ({ attribute_name, value })),
+      })),
+    };
+    await apiFetch(`/products/${productId}/skus/bulk`, { method: 'POST', body: JSON.stringify(body) });
+  }
+
   async function saveProduct(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
     try {
       const body = { ...form, is_published: isPublished };
       if (isNew) {
-        await apiFetch('/products', { method: 'POST', body: JSON.stringify(body) });
+        const nuevo = await apiFetch('/products', { method: 'POST', body: JSON.stringify(body) });
+        if (combinaciones.length > 0) {
+          await guardarVariantes(nuevo.id);
+        }
       } else {
         await apiFetch(`/products/${selectedProduct.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+        if (combinaciones.length > 0) {
+          await guardarVariantes(selectedProduct.id);
+        }
       }
       setSelectedProduct(null);
+      setCombinaciones([]);
+      setAtributosElegidos([{ nombre: '', valores: '' }]);
+      setPasoVariantes('atributos');
       load();
     } catch (err: any) { alert(err.message); }
     setSaving(false);
@@ -268,7 +331,14 @@ export default function ProductosPage() {
                   <select value={form.category_id} onChange={e=>setForm(f=>({...f,category_id:e.target.value}))}
                     className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400">
                     <option value="">Seleccionar...</option>
-                    {categories.map((c:any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    {categories.filter((c:any) => !c.parent_id).map((c:any) => (
+                      <optgroup key={c.id} label={c.name}>
+                        <option value={c.id}>{c.name}</option>
+                        {categories.filter((h:any) => h.parent_id === c.id).map((h:any) => (
+                          <option key={h.id} value={h.id}>&nbsp;&nbsp;{h.name}</option>
+                        ))}
+                      </optgroup>
+                    ))}
                   </select>
                 </div>
                 <div>
@@ -354,16 +424,9 @@ export default function ProductosPage() {
         )}
 
         {activeTab === 'SKUs y Variantes' && (
-          <div className="max-w-3xl">
-            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3 mb-6">
-              <AlertCircle size={16} className="text-amber-500 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-sm font-bold text-amber-700">Gestion de SKUs</p>
-                <p className="text-xs text-amber-600 mt-0.5">Los SKUs y variantes se gestionan despues de guardar el producto.</p>
-              </div>
-            </div>
+          <div className="max-w-4xl">
             {!isNew && selectedProduct?.skus?.length > 0 ? (
-              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden mb-6">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50"><tr className="text-xs text-slate-400 uppercase">
                     <th className="px-4 py-3 text-left">SKU</th><th className="px-4 py-3 text-left">Variantes</th>
@@ -373,7 +436,9 @@ export default function ProductosPage() {
                     {selectedProduct.skus.map((s: any) => (
                       <tr key={s.id} className="border-t border-slate-50">
                         <td className="px-4 py-3 font-mono text-sm">{s.sku}</td>
-                        <td className="px-4 py-3 text-slate-600">{s.attributes?.join(', ') || '-'}</td>
+                        <td className="px-4 py-3 text-slate-600">
+                          {(s.attribute_values || []).map((av: any) => av.value).join(', ') || '-'}
+                        </td>
                         <td className="px-4 py-3 text-right">${Number(s.cost_price||0).toLocaleString('es-CO')}</td>
                         <td className="px-4 py-3 text-right">${Number(s.sale_price||0).toLocaleString('es-CO')}</td>
                       </tr>
@@ -381,8 +446,77 @@ export default function ProductosPage() {
                   </tbody>
                 </table>
               </div>
+            ) : null}
+
+            {pasoVariantes === 'atributos' ? (
+              <div className="bg-white border border-slate-200 rounded-2xl p-5">
+                <h3 className="font-black text-sm text-slate-700 mb-1">Variantes (opcional)</h3>
+                <p className="text-xs text-slate-400 mb-4">Ej: Talla con valores "S, M, L" y Color con valores "Rojo, Azul". Deja vacio si el producto no tiene variantes.</p>
+                {atributosElegidos.map((a, i) => (
+                  <div key={i} className="grid grid-cols-2 gap-3 mb-2">
+                    <input placeholder="Atributo (ej: Talla)" value={a.nombre}
+                      onChange={e => setAtributosElegidos(prev => prev.map((x, idx) => idx === i ? { ...x, nombre: e.target.value } : x))}
+                      className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400" />
+                    <input placeholder="Valores separados por coma (ej: S, M, L)" value={a.valores}
+                      onChange={e => setAtributosElegidos(prev => prev.map((x, idx) => idx === i ? { ...x, valores: e.target.value } : x))}
+                      className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400" />
+                  </div>
+                ))}
+                <button type="button" onClick={() => setAtributosElegidos(prev => [...prev, { nombre: '', valores: '' }])}
+                  className="text-xs font-bold text-purple-600 mt-1">+ Agregar otro atributo</button>
+                <div className="mt-4">
+                  <button type="button" onClick={generarCombinaciones}
+                    className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-xl font-bold text-sm">
+                    Generar combinaciones
+                  </button>
+                </div>
+              </div>
             ) : (
-              <p className="text-slate-400 text-sm">Sin SKUs configurados.</p>
+              <div className="bg-white border border-slate-200 rounded-2xl p-5">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-black text-sm text-slate-700">{combinaciones.length} combinaciones generadas</h3>
+                  <button type="button" onClick={() => setPasoVariantes('atributos')} className="text-xs font-bold text-slate-500">← Cambiar atributos</button>
+                </div>
+                <div className="mb-3">
+                  <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Bodega para el stock inicial</label>
+                  <select value={warehouseId} onChange={e => setWarehouseId(e.target.value)}
+                    className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-purple-400">
+                    <option value="">Seleccionar...</option>
+                    {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                  </select>
+                </div>
+                <table className="w-full text-sm">
+                  <thead><tr className="text-xs text-slate-400 uppercase">
+                    <th className="text-left py-2">Variante</th><th className="text-left py-2">SKU</th>
+                    <th className="text-right py-2">Precio <button type="button" className="text-purple-600 font-bold ml-1" onClick={() => aplicarATodas('sale_price', combinaciones[0]?.sale_price || '')}>(aplicar a todas)</button></th>
+                    <th className="text-right py-2">Costo</th><th className="text-right py-2">Stock inicial</th>
+                  </tr></thead>
+                  <tbody>
+                    {combinaciones.map((c, i) => (
+                      <tr key={c.clave} className="border-t border-slate-50">
+                        <td className="py-2">{Object.values(c.atributos).join(' / ')}</td>
+                        <td className="py-2">
+                          <input value={c.sku} onChange={e => setCombinaciones(prev => prev.map((x, idx) => idx === i ? { ...x, sku: e.target.value } : x))}
+                            className="w-32 border border-slate-200 rounded-lg px-2 py-1 text-xs font-mono" />
+                        </td>
+                        <td className="py-2 text-right">
+                          <input type="number" value={c.sale_price} onChange={e => setCombinaciones(prev => prev.map((x, idx) => idx === i ? { ...x, sale_price: e.target.value } : x))}
+                            className="w-24 border border-slate-200 rounded-lg px-2 py-1 text-xs text-right" />
+                        </td>
+                        <td className="py-2 text-right">
+                          <input type="number" value={c.cost_price} onChange={e => setCombinaciones(prev => prev.map((x, idx) => idx === i ? { ...x, cost_price: e.target.value } : x))}
+                            className="w-24 border border-slate-200 rounded-lg px-2 py-1 text-xs text-right" />
+                        </td>
+                        <td className="py-2 text-right">
+                          <input type="number" value={c.initial_stock} onChange={e => setCombinaciones(prev => prev.map((x, idx) => idx === i ? { ...x, initial_stock: e.target.value } : x))}
+                            className="w-20 border border-slate-200 rounded-lg px-2 py-1 text-xs text-right" />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="text-xs text-slate-400 mt-3">Las combinaciones se crean al guardar el producto con el botón "Guardar" de arriba.</p>
+              </div>
             )}
           </div>
         )}
