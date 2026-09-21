@@ -30,6 +30,12 @@ def list_brands(db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_
 # --- CATEGORIES ---
 @router.post("/categories", status_code=status.HTTP_201_CREATED)
 def create_category(category: schemas.CategoryCreate, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
+    # Validate parent_id exists if provided
+    if category.parent_id is not None:
+        padre = db.query(Category).filter(Category.id == category.parent_id).first()
+        if not padre:
+            raise HTTPException(status_code=400, detail="La categoria padre indicada no existe")
+
     db_category = Category(**category.model_dump())
     try:
         db.add(db_category)
@@ -65,14 +71,19 @@ def update_category(category_id: int, body: schemas.CategoryUpdate, db: Session 
     if not db_category:
         raise HTTPException(status_code=404, detail="Category not found")
 
-    if body.parent_id is not None:
-        if body.parent_id == category_id:
-            raise HTTPException(status_code=400, detail="Una categoria no puede ser su propio padre")
-        nuevo_padre = db.query(Category).filter(Category.id == body.parent_id).first()
-        if not nuevo_padre:
-            raise HTTPException(status_code=400, detail="La categoria padre indicada no existe")
-        if _es_descendiente(db, body.parent_id, category_id):
-            raise HTTPException(status_code=400, detail="Esto crearia un ciclo de categorias")
+    # Check if parent_id was explicitly provided (including null)
+    body_dict = body.model_dump(exclude_unset=True)
+    if "parent_id" in body_dict:
+        if body.parent_id is not None:
+            # Validating non-null parent_id
+            if body.parent_id == category_id:
+                raise HTTPException(status_code=400, detail="Una categoria no puede ser su propio padre")
+            nuevo_padre = db.query(Category).filter(Category.id == body.parent_id).first()
+            if not nuevo_padre:
+                raise HTTPException(status_code=400, detail="La categoria padre indicada no existe")
+            if _es_descendiente(db, body.parent_id, category_id):
+                raise HTTPException(status_code=400, detail="Esto crearia un ciclo de categorias")
+        # Set parent_id whether it's null or a valid ID (null clears it)
         db_category.parent_id = body.parent_id
 
     if body.name is not None:

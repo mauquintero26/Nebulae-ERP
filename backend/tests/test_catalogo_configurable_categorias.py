@@ -64,3 +64,19 @@ class TestCategoriasJerarquia:
         a = _crear_categoria(app_client, admin_token, f"CategoriaVacia-{uuid.uuid4().hex[:6]}").json()["data"]
         r = app_client.delete(f"/api/v1/categories/{a['id']}", headers=_headers(admin_token))
         assert r.status_code == 200
+
+    def test_editar_categoria_puede_quitar_el_padre(self, app_client, admin_token):
+        """Test that PUT with explicit null parent_id promotes subcategory to top-level."""
+        padre = _crear_categoria(app_client, admin_token, f"Padre-{uuid.uuid4().hex[:6]}").json()["data"]
+        hijo = _crear_categoria(app_client, admin_token, f"Hijo-{uuid.uuid4().hex[:6]}", parent_id=padre["id"]).json()["data"]
+        assert hijo["parent_id"] == padre["id"]
+        # Promote back to top-level by explicitly setting parent_id to null
+        r = app_client.put(f"/api/v1/categories/{hijo['id']}", json={"parent_id": None}, headers=_headers(admin_token))
+        assert r.status_code == 200
+        assert r.json()["data"]["parent_id"] is None
+
+    def test_crear_categoria_con_parent_id_inexistente_falla(self, app_client, admin_token):
+        """Test that POST with non-existent parent_id returns 400."""
+        r = _crear_categoria(app_client, admin_token, f"Huerfana-{uuid.uuid4().hex[:6]}", parent_id=99999)
+        assert r.status_code == 400
+        assert "padre" in r.json()["detail"].lower()
