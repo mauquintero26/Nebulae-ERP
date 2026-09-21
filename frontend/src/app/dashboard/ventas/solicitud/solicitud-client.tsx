@@ -765,10 +765,12 @@ export default function SolicitudClient() {
 
   async function createSolicitud(e:React.FormEvent) {
     e.preventDefault();
-    if(!selectedCust&&!custSearch){showToast('Selecciona un cliente','err');return;}
-    // If search done but no client selected and no customer found, force create
-    if(custSearchDone&&custResults.length===0&&!selectedCust){
-      setShowNewClient(true);return;
+    if(!selectedCust){
+      if(custSearchDone&&custResults.length===0){
+        setShowNewClient(true);return;
+      }
+      showToast('Selecciona un cliente existente o crea uno nuevo — no se puede continuar sin un cliente real','err');
+      return;
     }
     setSaving(true);
     try{
