@@ -21,6 +21,9 @@ from app.models.users import User
 from app.api.v1.schemas_compras import CancelarSolicitudBody
 from app.api.v1.crm import mover_lead_de_solicitud
 import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -544,11 +547,15 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     db.commit()
     db.refresh(cot)
     if body.get("estado") and body["estado"] != old_estado:
-        _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
-        if cot.estado == "ENVIADA":
-            mover_lead_de_solicitud(cot.sc_id, "QUOTATION", db)
-        elif cot.estado == "RECHAZADA":
-            mover_lead_de_solicitud(cot.sc_id, "CANCELLED", db)
+        try:
+            _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
+            if cot.estado == "ENVIADA":
+                mover_lead_de_solicitud(cot.sc_id, "QUOTATION", db)
+            elif cot.estado == "RECHAZADA":
+                mover_lead_de_solicitud(cot.sc_id, "CANCELLED", db)
+        except Exception as exc:
+            db.rollback()
+            logger.error(f"Error al sincronizar Solicitud/Lead tras actualizar cotizacion {cot.id}: {exc}", exc_info=True)
         _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {cot.estado}",
              old_estado=old_estado, new_estado=cot.estado,
@@ -574,7 +581,13 @@ def confirmar_cotizacion(cot_id: int, body: dict = Body(default_factory=dict), u
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
     ven = db.query(SaleOrder).filter(SaleOrder.id == res["sale_order_id"]).first()
     if res.get("sale_order_id"):
-        mover_lead_de_solicitud(cot.sc_id if cot else None, "INVOICED", db)
+        try:
+            mover_lead_de_solicitud(cot.sc_id if cot else None, "INVOICED", db)
+            if cot:
+                _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
+        except Exception as exc:
+            db.rollback()
+            logger.error(f"Error al sincronizar Solicitud/Lead tras confirmar cotizacion {cot_id}: {exc}", exc_info=True)
     return {
         "status": "success",
         "data": {

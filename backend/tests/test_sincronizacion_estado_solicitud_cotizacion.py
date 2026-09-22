@@ -37,6 +37,28 @@ class TestSincronizacionEstados:
         r = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
         assert r.json()["data"]["estado"] == "CONFIRMADA"
 
+    def test_confirmar_cotizacion_por_endpoint_real_deja_solicitud_confirmada(self, app_client, admin_token):
+        """
+        C2 (regresion): ninguna UI real hace PATCH .../cotizaciones/{id} con
+        estado=CONFIRMADA directamente. El unico camino real para cerrar una
+        venta es POST /cotizaciones/{id}/confirmar (el mismo que usa el boton
+        "Confirmar" en la pantalla de detalle de cotizacion), que internamente
+        crea el Pedido de Venta via convertir_cotizacion_a_venta. Antes del fix,
+        ese endpoint nunca llamaba a _sincronizar_estado_solicitud_desde_cotizacion,
+        asi que la Solicitud se quedaba en EN_ESPERA_CONFIRMACION para siempre
+        aunque la venta ya estuviera cerrada. Esta prueba ejercita exactamente
+        esa secuencia real, no el atajo de PATCH usado en el test anterior.
+        """
+        sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token)
+        r = app_client.post(f"/api/v1/ventas/cotizaciones/{cot['id']}/confirmar", json={}, headers=_headers(admin_token))
+        assert r.status_code == 200, r.text
+        data = r.json()["data"]
+        assert data["sale_order_id"]
+        assert data["cotizacion"]["estado"] == "CONFIRMADA"
+
+        r_sc = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
+        assert r_sc.json()["data"]["estado"] == "CONFIRMADA"
+
     def test_rechazar_cotizacion_deja_solicitud_rechazada(self, app_client, admin_token):
         sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token)
         app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "RECHAZADA"}, headers=_headers(admin_token))
