@@ -379,39 +379,39 @@ function CalculadorModal({
 // â”€â”€ Delete Confirm Dialog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function DeleteConfirm({ cot, onConfirm, onCancel }: { cot: any; onConfirm: () => void; onCancel: () => void }) {
   return (
-    <div className=”fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm”>
-      <div className=”bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4”>
-        <div className=”w-14 h-14 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4”>
-          <Trash2 className=”text-red-600” size={24}/>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4">
+        <div className="w-14 h-14 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <Trash2 className="text-red-600" size={24}/>
         </div>
-        <h3 className=”font-extrabold text-xl text-slate-900 text-center mb-2”>Eliminar Cotizacion</h3>
-        <p className=”text-slate-500 text-center text-sm mb-2”>
+        <h3 className="font-extrabold text-xl text-slate-900 text-center mb-2">Eliminar Cotizacion</h3>
+        <p className="text-slate-500 text-center text-sm mb-2">
           Â¿Estas seguro de eliminar <strong>{cot.numero}</strong>?
         </p>
-        <p className=”text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-3 text-center mb-6”>
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-3 text-center mb-6">
           La Solicitud de Cliente vinculada (<strong>{cot.sc_numero}</strong>) no sera eliminada y podra generar una nueva cotizacion.
         </p>
-        <div className=”flex gap-3”>
-          <button onClick={onCancel} className=”flex-1 py-3 rounded-xl border border-slate-300 text-slate-700 font-bold hover:bg-slate-50”>Cancelar</button>
-          <button onClick={onConfirm} className=”flex-1 py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700”>Si, Eliminar</button>
+        <div className="flex gap-3">
+          <button onClick={onCancel} className="flex-1 py-3 rounded-xl border border-slate-300 text-slate-700 font-bold hover:bg-slate-50">Cancelar</button>
+          <button onClick={onConfirm} className="flex-1 py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700">Si, Eliminar</button>
         </div>
       </div>
     </div>
   );
 }
 
-function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, saving, customerHasPhone }: { selectedChannel: string|null; onSelectChannel: (ch: string) => void; onConfirm: () => void; onCancel: () => void; saving: boolean; customerHasPhone: boolean }) {
+function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, saving, customerHasPhone }: { selectedChannel: 'WhatsApp'|'Email'|'Otro'|null; onSelectChannel: (ch: 'WhatsApp'|'Email'|'Otro') => void; onConfirm: () => void; onCancel: () => void; saving: boolean; customerHasPhone: boolean }) {
   return (
-    <div className=”fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm”>
-      <div className=”bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4”>
-        <div className=”w-14 h-14 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4”>
-          <Send className=”text-blue-600” size={24}/>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4">
+        <div className="w-14 h-14 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <Send className="text-blue-600" size={24}/>
         </div>
-        <h3 className=”font-extrabold text-xl text-slate-900 text-center mb-2”>Seleccionar Canal de Envio</h3>
-        <p className=”text-slate-500 text-center text-sm mb-6”>
+        <h3 className="font-extrabold text-xl text-slate-900 text-center mb-2">Seleccionar Canal de Envio</h3>
+        <p className="text-slate-500 text-center text-sm mb-6">
           ÂżPor cual canal deseas enviar la cotizacion?
         </p>
-        <div className=”space-y-2 mb-6”>
+        <div className="space-y-2 mb-6">
           <button
             onClick={() => onSelectChannel('WhatsApp')}
             disabled={!customerHasPhone}
@@ -446,9 +446,9 @@ function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, s
             <span>Otro</span>
           </button>
         </div>
-        <div className=”flex gap-3”>
-          <button onClick={onCancel} disabled={saving} className=”flex-1 py-3 rounded-xl border border-slate-300 text-slate-700 font-bold hover:bg-slate-50 disabled:opacity-50”>Cancelar</button>
-          <button onClick={onConfirm} disabled={!selectedChannel || saving} className=”flex-1 py-3 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 disabled:opacity-50”>Enviar</button>
+        <div className="flex gap-3">
+          <button onClick={onCancel} disabled={saving} className="flex-1 py-3 rounded-xl border border-slate-300 text-slate-700 font-bold hover:bg-slate-50 disabled:opacity-50">Cancelar</button>
+          <button onClick={onConfirm} disabled={!selectedChannel || saving} className="flex-1 py-3 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 disabled:opacity-50">Enviar</button>
         </div>
       </div>
     </div>
