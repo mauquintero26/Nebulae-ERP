@@ -152,7 +152,7 @@ export default function CotizacionDetallePage() {
       if (selectedChannel === 'WhatsApp' && cotizacion?.customer_phone) {
         const phoneNumber = cotizacion.customer_phone.replace(/\D/g, '');
         const mensaje = `Hola, aqui esta tu cotizacion ${cotizacion.numero}`;
-        window.open(`https://wa.me/${phoneNumber}?text=${encodeURIComponent(mensaje)}`, '_blank');
+        window.open(`https://wa.me/57${phoneNumber}?text=${encodeURIComponent(mensaje)}`, '_blank');
       }
 
       await loadCotizacion();
