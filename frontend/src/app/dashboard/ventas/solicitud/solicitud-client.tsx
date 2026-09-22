@@ -55,6 +55,18 @@ const ESTADOS_SC: Record<string, {label:string; color:string; bg:string; border:
   'N/A_SOPORTE':          {label:'Soporte',            color:'#7e22ce',bg:'#faf5ff',border:'#e9d5ff'},
 };
 
+// Subconjunto de ESTADOS_SC seguro para menus de "forzar estado manualmente"
+// (3-dot menu, bulk-action bar, panel de detalle). ESTADOS_SC completo sirve
+// para badges/tabs/labels (incluye estados que solo deben alcanzarse via los
+// flujos reales de backend: confirmar_solicitud, sincronizacion con la
+// Cotizacion). Si estos 5 estados nuevos se agregaran aqui tambien, cualquier
+// Solicitud podria forzarse a, por ejemplo, "Cotizada" o "Soporte" con un
+// click, sin Cotizacion vinculada ni backend involucrado -- exactamente lo que
+// estos menus nunca pudieron hacer antes de que ESTADOS_SC creciera.
+const ESTADOS_SC_MANUALES: Record<string, {label:string; color:string; bg:string; border:string}> = Object.fromEntries(
+  Object.entries(ESTADOS_SC).filter(([k]) => ['BORRADOR','PENDIENTE_CONFIRMACION','CONFIRMADA','CANCELADA'].includes(k))
+);
+
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
 const fTime = (iso: any) => iso ? new Date(iso).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}) : '';
 const fCOP  = (v: any)   => { const n=Number(v)||0; return n>0?'$'+n.toLocaleString('es-CO'):'-'; };
@@ -233,7 +245,7 @@ function RowMenu({sc,onView,onChangeEstado,onCancel,onSendToTrash}:{sc:any;onVie
           {!isSoporte && (
             <>
               <div className="border-t border-slate-100 my-1"/>
-              {Object.entries(ESTADOS_SC).map(([k,v])=>(
+              {Object.entries(ESTADOS_SC_MANUALES).map(([k,v])=>(
                 <button key={k} onClick={()=>{onChangeEstado(k);setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-xs font-bold" style={{color:v.color}}>
                   Estado: {v.label}
                 </button>
@@ -929,7 +941,7 @@ export default function SolicitudClient() {
         <div className="bg-indigo-600 text-white px-6 py-3 flex items-center gap-4 shadow-lg">
           <span className="font-bold text-sm">{checked.size} seleccionada(s)</span>
           <div className="flex gap-2">
-            {Object.entries(ESTADOS_SC).map(([k,v])=>(
+            {Object.entries(ESTADOS_SC_MANUALES).map(([k,v])=>(
               <button key={k} onClick={()=>bulkAction('estado',k)} className="bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg text-xs font-bold border border-white/30">{v.label}</button>
             ))}
             <button onClick={()=>bulkAction('delete')} className="bg-rose-600 hover:bg-rose-700 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1"><XCircle size={12}/>Cancelar seleccionadas</button>
@@ -1881,7 +1893,7 @@ export default function SolicitudClient() {
                     <>
                       <p className="text-xs font-black text-slate-400 uppercase mb-2">Cambiar Estado</p>
                       <div className="flex gap-2 flex-wrap">
-                        {Object.entries(ESTADOS_SC).filter(([k])=>k!==selected.estado).map(([k,v])=>(
+                        {Object.entries(ESTADOS_SC_MANUALES).filter(([k])=>k!==selected.estado).map(([k,v])=>(
                           <button key={k} onClick={()=>changeEstado(selected.id,k)} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs font-bold border hover:opacity-80 disabled:opacity-40" style={{backgroundColor:v.bg,color:v.color,borderColor:v.border}}>{v.label}</button>
                         ))}
                       </div>
