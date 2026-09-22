@@ -6,7 +6,7 @@ Solicitud — solo coincidian por customer_id y texto libre. Este campo
 sigue el mismo patron que canonical_sale_order_id, ya existente.
 
 Revision ID: fa6_017
-Revises: fa6_015
+Revises: fa6_016
 Create Date: 2026-09-21
 """
 from typing import Sequence, Union
@@ -14,7 +14,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision: str = "fa6_017"
-down_revision: Union[str, Sequence[str], None] = "fa6_015"
+down_revision: Union[str, Sequence[str], None] = "fa6_016"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
