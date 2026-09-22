@@ -46,8 +46,13 @@ const MODALIDADES_PAGO = [
 const ESTADOS_SC: Record<string, {label:string; color:string; bg:string; border:string}> = {
   BORRADOR:               {label:'Borrador',           color:'#64748b',bg:'#f1f5f9',border:'#e2e8f0'},
   PENDIENTE_CONFIRMACION: {label:'Pend. confirmacion', color:'#b45309',bg:'#fffbeb',border:'#fde68a'},
+  COTIZADA:               {label:'Cotizada',           color:'#1d4ed8',bg:'#eff6ff',border:'#bfdbfe'},
+  EN_ESPERA_CONFIRMACION: {label:'En espera confirmacion', color:'#c2410c',bg:'#fff7ed',border:'#fed7aa'},
   CONFIRMADA:             {label:'Confirmada',         color:'#065f46',bg:'#f0fdf4',border:'#a7f3d0'},
+  RECHAZADA:              {label:'Rechazada',          color:'#9f1239',bg:'#fff1f2',border:'#fecdd3'},
+  VENCIDA:                {label:'Vencida',            color:'#854d0e',bg:'#fefce8',border:'#fef08a'},
   CANCELADA:              {label:'Cancelada',          color:'#991b1b',bg:'#fef2f2',border:'#fecaca'},
+  'N/A_SOPORTE':          {label:'Soporte',            color:'#7e22ce',bg:'#faf5ff',border:'#e9d5ff'},
 };
 
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
@@ -860,7 +865,7 @@ export default function SolicitudClient() {
   }
 
   // Stats
-  const totalActivas=solicitudes.filter(s=>s.estado==='BORRADOR'||s.estado==='PENDIENTE_CONFIRMACION').length;
+  const totalActivas=solicitudes.filter(s=>s.tipo_solicitud!=='Soporte Tecnico'&&s.estado!=='CONFIRMADA'&&s.estado!=='CANCELADA').length;
   const totalConf=solicitudes.filter(s=>s.estado==='CONFIRMADA').length;
   const sinAtender=solicitudes.filter(s=>{
     if(s.estado!=='BORRADOR') return false;
@@ -874,7 +879,7 @@ export default function SolicitudClient() {
   const filtered=solicitudes.filter(sc=>{
     const ms=!search||(sc.numero||'').toLowerCase().includes(search.toLowerCase())||(sc.customer_name||'').toLowerCase().includes(search.toLowerCase())||(sc.advisor_name||'').toLowerCase().includes(search.toLowerCase());
     if(!ms) return false;
-    if(activeTab==='Activas') return sc.estado==='BORRADOR'||sc.estado==='PENDIENTE_CONFIRMACION';
+    if(activeTab==='Activas') return sc.tipo_solicitud!=='Soporte Tecnico'&&sc.estado!=='CONFIRMADA'&&sc.estado!=='CANCELADA';
     if(activeTab==='Confirmadas') return sc.estado==='CONFIRMADA';
     if(activeTab==='Canceladas') return sc.estado==='CANCELADA';
     if(activeTab==='Soporte') return sc.tipo_solicitud==='Soporte Tecnico';
@@ -1084,7 +1089,7 @@ export default function SolicitudClient() {
                     className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${activeTab===tab?'bg-indigo-600 text-white shadow-sm':'text-gray-600 hover:text-indigo-700 hover:bg-indigo-50'}`}>
                     {tab==='Papelera'?'🗑️ Papelera':tab}
                     {tab!=='Analisis'&&tab!=='Papelera'&&<span className={`ml-1.5 text-xs font-black ${activeTab===tab?'text-indigo-200':'text-gray-400'}`}>
-                      {tab==='Activas'?solicitudes.filter(s=>s.estado==='BORRADOR'||s.estado==='PENDIENTE_CONFIRMACION').length:tab==='Confirmadas'?solicitudes.filter(s=>s.estado==='CONFIRMADA').length:tab==='Soporte'?solicitudes.filter(s=>s.tipo_solicitud==='Soporte Tecnico').length:solicitudes.filter(s=>s.estado==='CANCELADA').length}
+                      {tab==='Activas'?totalActivas:tab==='Confirmadas'?solicitudes.filter(s=>s.estado==='CONFIRMADA').length:tab==='Soporte'?solicitudes.filter(s=>s.tipo_solicitud==='Soporte Tecnico').length:solicitudes.filter(s=>s.estado==='CANCELADA').length}
                     </span>}
                   </button>
                 ))}
