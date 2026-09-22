@@ -377,7 +377,7 @@ export default function CotizacionDetallePage() {
                           {fCOP(item.unit_price_cop)}
                         </td>
                         <td className="px-4 py-3 font-black text-slate-800 text-right">
-                          {fCOP((Number(item.unit_price_cop) || 0) * (Number(item.qty) || 0))}
+                          {fCOP(item.total_cop != null ? item.total_cop : (Number(item.unit_price_cop) || 0) * (Number(item.qty) || 0))}
                         </td>
                       </tr>
                     ))}
