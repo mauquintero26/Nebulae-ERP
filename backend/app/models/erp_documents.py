@@ -85,6 +85,7 @@ class SalesQuotation(Base):
     total_cop             = Column(Numeric(14, 2), default=0)
     anticipo_cop          = Column(Numeric(14, 2), default=0)
     estado                = Column(String(50), nullable=False, default="BORRADOR")
+    canal_envio           = Column(String(20), nullable=True)
     fecha_cotizacion      = Column(DateTime, default=_now)
     fecha_entrega_estimada= Column(DateTime, nullable=True)
     notas                 = Column(Text, nullable=True)

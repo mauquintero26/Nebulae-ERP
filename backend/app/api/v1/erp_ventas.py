@@ -104,6 +104,7 @@ def _cot_dict(cot: SalesQuotation) -> dict:
         "total_cop": float(cot.total_cop) if cot.total_cop else 0,
         "anticipo_cop": float(cot.anticipo_cop) if cot.anticipo_cop else 0,
         "estado": cot.estado,
+        "canal_envio": cot.canal_envio,
         "fecha_cotizacion": cot.fecha_cotizacion.isoformat() if cot.fecha_cotizacion else None,
         "fecha_entrega_estimada": cot.fecha_entrega_estimada.isoformat() if cot.fecha_entrega_estimada else None,
         "notas": cot.notas,
@@ -534,7 +535,7 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     old_estado = cot.estado
     allowed = ["sc_id","customer_id","customer_name","customer_phone","customer_email",
                "customer_address","cotizador","direccion_entrega","trm_rate","subtotal_cop",
-               "descuento_pct","total_cop","anticipo_cop","estado","fecha_entrega_estimada",
+               "descuento_pct","total_cop","anticipo_cop","estado","canal_envio","fecha_entrega_estimada",
                "notas","productos","pec_id","pec_numero"]
     for k in allowed:
         if k in body:

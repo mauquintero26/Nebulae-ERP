@@ -379,21 +379,76 @@ function CalculadorModal({
 // â”€â”€ Delete Confirm Dialog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function DeleteConfirm({ cot, onConfirm, onCancel }: { cot: any; onConfirm: () => void; onCancel: () => void }) {
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4">
-        <div className="w-14 h-14 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-          <Trash2 className="text-red-600" size={24}/>
+    <div className=”fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm”>
+      <div className=”bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4”>
+        <div className=”w-14 h-14 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4”>
+          <Trash2 className=”text-red-600” size={24}/>
         </div>
-        <h3 className="font-extrabold text-xl text-slate-900 text-center mb-2">Eliminar Cotizacion</h3>
-        <p className="text-slate-500 text-center text-sm mb-2">
+        <h3 className=”font-extrabold text-xl text-slate-900 text-center mb-2”>Eliminar Cotizacion</h3>
+        <p className=”text-slate-500 text-center text-sm mb-2”>
           Â¿Estas seguro de eliminar <strong>{cot.numero}</strong>?
         </p>
-        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-3 text-center mb-6">
+        <p className=”text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-3 text-center mb-6”>
           La Solicitud de Cliente vinculada (<strong>{cot.sc_numero}</strong>) no sera eliminada y podra generar una nueva cotizacion.
         </p>
-        <div className="flex gap-3">
-          <button onClick={onCancel} className="flex-1 py-3 rounded-xl border border-slate-300 text-slate-700 font-bold hover:bg-slate-50">Cancelar</button>
-          <button onClick={onConfirm} className="flex-1 py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700">Si, Eliminar</button>
+        <div className=”flex gap-3”>
+          <button onClick={onCancel} className=”flex-1 py-3 rounded-xl border border-slate-300 text-slate-700 font-bold hover:bg-slate-50”>Cancelar</button>
+          <button onClick={onConfirm} className=”flex-1 py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700”>Si, Eliminar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, saving, customerHasPhone }: { selectedChannel: string|null; onSelectChannel: (ch: string) => void; onConfirm: () => void; onCancel: () => void; saving: boolean; customerHasPhone: boolean }) {
+  return (
+    <div className=”fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm”>
+      <div className=”bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4”>
+        <div className=”w-14 h-14 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4”>
+          <Send className=”text-blue-600” size={24}/>
+        </div>
+        <h3 className=”font-extrabold text-xl text-slate-900 text-center mb-2”>Seleccionar Canal de Envio</h3>
+        <p className=”text-slate-500 text-center text-sm mb-6”>
+          ÂżPor cual canal deseas enviar la cotizacion?
+        </p>
+        <div className=”space-y-2 mb-6”>
+          <button
+            onClick={() => onSelectChannel('WhatsApp')}
+            disabled={!customerHasPhone}
+            className={`w-full py-3 px-4 rounded-xl border-2 font-bold text-left transition-all flex items-center gap-3 ${
+              selectedChannel === 'WhatsApp'
+                ? 'border-green-500 bg-green-50 text-green-700'
+                : customerHasPhone
+                ? 'border-slate-300 bg-white text-slate-700 hover:border-green-300'
+                : 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed'
+            }`}>
+            <Phone size={18}/>
+            <span>WhatsApp{!customerHasPhone ? ' (sin telefono)' : ''}</span>
+          </button>
+          <button
+            onClick={() => onSelectChannel('Email')}
+            className={`w-full py-3 px-4 rounded-xl border-2 font-bold text-left transition-all flex items-center gap-3 ${
+              selectedChannel === 'Email'
+                ? 'border-blue-500 bg-blue-50 text-blue-700'
+                : 'border-slate-300 bg-white text-slate-700 hover:border-blue-300'
+            }`}>
+            <Mail size={18}/>
+            <span>Email</span>
+          </button>
+          <button
+            onClick={() => onSelectChannel('Otro')}
+            className={`w-full py-3 px-4 rounded-xl border-2 font-bold text-left transition-all flex items-center gap-3 ${
+              selectedChannel === 'Otro'
+                ? 'border-slate-500 bg-slate-50 text-slate-700'
+                : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'
+            }`}>
+            <MessageCircle size={18}/>
+            <span>Otro</span>
+          </button>
+        </div>
+        <div className=”flex gap-3”>
+          <button onClick={onCancel} disabled={saving} className=”flex-1 py-3 rounded-xl border border-slate-300 text-slate-700 font-bold hover:bg-slate-50 disabled:opacity-50”>Cancelar</button>
+          <button onClick={onConfirm} disabled={!selectedChannel || saving} className=”flex-1 py-3 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 disabled:opacity-50”>Enviar</button>
         </div>
       </div>
     </div>
@@ -425,6 +480,8 @@ export default function CotizacionClient() {
   const [chatterInput, setChatterInput] = useState('');
   const [chatterSending, setChatterSending] = useState(false);
   const [alertDias, setAlertDias] = useState(2);
+  const [showChannelModal, setShowChannelModal] = useState(false);
+  const [selectedChannel, setSelectedChannel] = useState<'WhatsApp'|'Email'|'Otro'|null>(null);
 
   useEffect(() => {
     const u = localStorage.getItem('user_name') || localStorage.getItem('username') || '';
@@ -507,17 +564,41 @@ export default function CotizacionClient() {
   async function enviarCotizacion() {
     const cotId = Number(selected?.id ?? selected?.data?.id);
     if (!cotId || isNaN(cotId)) return;
+    // Show channel modal instead of immediately sending
+    setShowChannelModal(true);
+  }
+
+  async function confirmarEnvio() {
+    const cotId = Number(selected?.id ?? selected?.data?.id);
+    if (!cotId || isNaN(cotId)) return;
+    if (!selectedChannel) return;
     setSaving(true);
     try {
       await apiFetch(`/ventas/cotizaciones/${cotId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ estado: 'ENVIADA', updated_by: currentUser }),
+        body: JSON.stringify({ estado: 'ENVIADA', canal_envio: selectedChannel, updated_by: currentUser }),
       });
+
+      // If WhatsApp and customer has phone, open WhatsApp deep link
+      if (selectedChannel === 'WhatsApp' && selected?.customer_phone) {
+        const phoneNumber = selected.customer_phone.replace(/\D/g, '');
+        const cotizacionNumber = selected.numero;
+        const mensaje = `Hola, aqui esta tu cotizacion ${cotizacionNumber}`;
+        window.open(`https://wa.me/${phoneNumber}?text=${encodeURIComponent(mensaje)}`, '_blank');
+      }
+
       await loadDetail(cotId);
-      setCotizaciones(prev => prev.map(c => c.id === cotId ? { ...c, estado: 'ENVIADA' } : c));
+      setCotizaciones(prev => prev.map(c => c.id === cotId ? { ...c, estado: 'ENVIADA', canal_envio: selectedChannel } : c));
       showToast('Cotizacion marcada como enviada al cliente. En espera de confirmacion.');
+      setShowChannelModal(false);
+      setSelectedChannel(null);
     } catch (err: any) { showToast('Error: ' + err.message, 'err'); }
     setSaving(false);
+  }
+
+  function cancelarEnvio() {
+    setShowChannelModal(false);
+    setSelectedChannel(null);
   }
 
   async function confirmar() {
@@ -1311,6 +1392,7 @@ export default function CotizacionClient() {
           {/* Modals */}
           {showCalc && <CalculadorModal cot={selected} onSave={onCalcSave} onClose={() => setShowCalc(false)}/>}
           {showDelete && <DeleteConfirm cot={selected} onConfirm={deleteCot} onCancel={() => setShowDelete(false)}/>}
+          {showChannelModal && <ChannelModal selectedChannel={selectedChannel} onSelectChannel={setSelectedChannel} onConfirm={confirmarEnvio} onCancel={cancelarEnvio} saving={saving} customerHasPhone={!!selected?.customer_phone}/>}
         </>
       )}
     </div>
