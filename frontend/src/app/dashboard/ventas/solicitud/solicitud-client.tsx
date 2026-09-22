@@ -1848,7 +1848,7 @@ export default function SolicitudClient() {
                       <div>
                         <p className="text-xs font-black text-slate-400 uppercase mb-2">Cotizaciones</p>
                         {selected.cotizaciones.map((c:any)=>(
-                          <Link key={c.id} href="/dashboard/ventas/cotizacion" className="flex items-center justify-between p-3 bg-amber-50 border border-amber-200 rounded-xl mb-2 hover:bg-amber-100">
+                          <Link key={c.id} href={`/dashboard/ventas/cotizacion/${c.id}`} className="flex items-center justify-between p-3 bg-amber-50 border border-amber-200 rounded-xl mb-2 hover:bg-amber-100">
                             <div><span className="font-bold text-amber-800">{c.numero}</span><p className="text-xs text-amber-600 mt-0.5">{c.estado}</p></div>
                             <ChevronRight size={15} className="text-amber-500"/>
                           </Link>
@@ -1907,7 +1907,7 @@ export default function SolicitudClient() {
                             </button>
                           )}
                           {(selected.cotizaciones||[]).length>0&&(
-                            <Link href="/dashboard/ventas/cotizacion" className="bg-amber-50 border border-amber-200 text-amber-700 px-4 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-amber-100 text-sm">
+                            <Link href={`/dashboard/ventas/cotizacion/${selected.cotizaciones[selected.cotizaciones.length-1].id}`} className="bg-amber-50 border border-amber-200 text-amber-700 px-4 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-amber-100 text-sm">
                               <ArrowRight size={14}/>Ver Cotizacion
                             </Link>
                           )}
