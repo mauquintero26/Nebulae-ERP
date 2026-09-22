@@ -1237,10 +1237,11 @@ _ETAPAS_ESTANDAR = [
 
 def _asegurar_etapas_estandar(db: Session) -> None:
     existentes = {s.maps_to_status for s in db.query(PipelineStage.maps_to_status).all()}
+    existentes_nombres = {s.name for s in db.query(PipelineStage.name).all()}
     max_pos = db.execute(text("SELECT COALESCE(MAX(position),0) FROM pipeline_stages")).scalar() or 0
     creo_alguna = False
     for nombre, status, color, bg in _ETAPAS_ESTANDAR:
-        if status not in existentes:
+        if status not in existentes and nombre not in existentes_nombres:
             max_pos += 1
             db.add(PipelineStage(name=nombre, color=color, bg_color=bg, position=max_pos, maps_to_status=status))
             creo_alguna = True
