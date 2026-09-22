@@ -584,7 +584,7 @@ export default function CotizacionClient() {
         const phoneNumber = selected.customer_phone.replace(/\D/g, '');
         const cotizacionNumber = selected.numero;
         const mensaje = `Hola, aqui esta tu cotizacion ${cotizacionNumber}`;
-        window.open(`https://wa.me/${phoneNumber}?text=${encodeURIComponent(mensaje)}`, '_blank');
+        window.open(`https://wa.me/57${phoneNumber}?text=${encodeURIComponent(mensaje)}`, '_blank');
       }
 
       await loadDetail(cotId);
