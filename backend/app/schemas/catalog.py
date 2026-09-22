@@ -16,9 +16,14 @@ class BrandResponse(BrandBase):
 # Category
 class CategoryBase(BaseModel):
     name: str
+    parent_id: Optional[int] = None
 
 class CategoryCreate(CategoryBase):
     pass
+
+class CategoryUpdate(BaseModel):
+    name: Optional[str] = None
+    parent_id: Optional[int] = None
 
 class CategoryResponse(CategoryBase):
     id: int
@@ -73,6 +78,7 @@ class ProductBase(BaseModel):
     base_currency: str
     uom: Optional[str] = None
     is_active: bool = True
+    necesita_revision: bool = False
 
 class ProductCreate(ProductBase):
     pass
@@ -83,3 +89,31 @@ class ProductResponse(ProductBase):
     category: CategoryResponse
     skus: List[SKUResponse] = []
     model_config = {"from_attributes": True}
+
+class ProductUpdate(BaseModel):
+    brand_id: Optional[int] = None
+    category_id: Optional[int] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    type: Optional[str] = None
+    base_currency: Optional[str] = None
+    uom: Optional[str] = None
+    is_active: Optional[bool] = None
+    necesita_revision: Optional[bool] = None
+
+# Bulk SKU creation (para el asistente de variantes)
+class SKUAttributePair(BaseModel):
+    attribute_name: str
+    value: str
+
+class BulkSKUItem(BaseModel):
+    sku: str
+    barcode: Optional[str] = None
+    sale_price: Decimal
+    cost_price: Optional[Decimal] = None
+    initial_stock: Optional[int] = 0
+    attributes: List[SKUAttributePair] = []
+
+class BulkSKUCreate(BaseModel):
+    warehouse_id: Optional[int] = None
+    skus: List[BulkSKUItem]

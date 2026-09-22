@@ -20,8 +20,11 @@ class Category(Base):
     __tablename__ = "categories"
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True, nullable=False)
+    parent_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
 
     products = relationship("Product", back_populates="category")
+    parent = relationship("Category", remote_side=[id], back_populates="children")
+    children = relationship("Category", back_populates="parent")
 
 class Product(Base):
     __tablename__ = "products"
@@ -34,6 +37,8 @@ class Product(Base):
     base_currency = Column(String, nullable=False) # "USD, COP"
     uom = Column(String) # "Unidad de medida (Ud, Lb, Kg)"
     is_active = Column(Boolean, default=True)
+    legacy_ecommerce_product_id = Column(Integer, unique=True, nullable=True, index=True)
+    necesita_revision = Column(Boolean, nullable=False, default=False)
 
     brand = relationship("Brand", back_populates="products")
     category = relationship("Category", back_populates="products")
