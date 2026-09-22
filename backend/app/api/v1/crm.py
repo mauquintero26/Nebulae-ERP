@@ -271,6 +271,7 @@ def delete_customer(customer_id: int, user: User = Depends(require_roles(*ROLE_A
 STATUS_LABELS = {
     "DRAFT": "Borrador",
     "QUOTATION": "Pendiente por cotizar",
+    "EN_NEGOCIACION": "En Negociación",
     "TO_INVOICE": "Pendiente de facturación",
     "INVOICED": "Facturado",
     "CANCELLED": "Cancelado",
@@ -284,6 +285,7 @@ STATUS_LABELS = {
 STATUS_COLORS = {
     "DRAFT": "slate",
     "QUOTATION": "indigo",
+    "EN_NEGOCIACION": "amber",
     "TO_INVOICE": "amber",
     "INVOICED": "emerald",
     "CANCELLED": "red",
