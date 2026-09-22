@@ -271,6 +271,7 @@ def delete_customer(customer_id: int, user: User = Depends(require_roles(*ROLE_A
 STATUS_LABELS = {
     "DRAFT": "Borrador",
     "QUOTATION": "Pendiente por cotizar",
+    "EN_NEGOCIACION": "En Negociación",
     "TO_INVOICE": "Pendiente de facturación",
     "INVOICED": "Facturado",
     "CANCELLED": "Cancelado",
@@ -284,6 +285,7 @@ STATUS_LABELS = {
 STATUS_COLORS = {
     "DRAFT": "slate",
     "QUOTATION": "indigo",
+    "EN_NEGOCIACION": "amber",
     "TO_INVOICE": "amber",
     "INVOICED": "emerald",
     "CANCELLED": "red",
@@ -1215,6 +1217,48 @@ def get_leads(
     return {"status": "success", "data": leads, "total": total}
 
 
+def _mover_lead_a_status(order: SalesOrder, maps_to_status: str, db: Session) -> None:
+    stage = db.query(PipelineStage).filter(PipelineStage.maps_to_status == maps_to_status).first()
+    if stage:
+        order.pipeline_stage_id = stage.id
+    order.status = maps_to_status
+    order.updated_at = datetime.datetime.utcnow()
+    db.commit()
+
+
+_ETAPAS_ESTANDAR = [
+    ("Nuevo Lead", "DRAFT", "bg-blue-500", "bg-blue-50"),
+    ("Cotización Enviada", "QUOTATION", "bg-indigo-500", "bg-indigo-50"),
+    ("En Negociación", "EN_NEGOCIACION", "bg-amber-500", "bg-amber-50"),
+    ("Ganado", "INVOICED", "bg-emerald-500", "bg-emerald-50"),
+    ("Perdido", "CANCELLED", "bg-red-500", "bg-red-50"),
+]
+
+
+def _asegurar_etapas_estandar(db: Session) -> None:
+    existentes = {s.maps_to_status for s in db.query(PipelineStage.maps_to_status).all()}
+    existentes_nombres = {s.name for s in db.query(PipelineStage.name).all()}
+    max_pos = db.execute(text("SELECT COALESCE(MAX(position),0) FROM pipeline_stages")).scalar() or 0
+    creo_alguna = False
+    for nombre, status, color, bg in _ETAPAS_ESTANDAR:
+        if status not in existentes and nombre not in existentes_nombres:
+            max_pos += 1
+            db.add(PipelineStage(name=nombre, color=color, bg_color=bg, position=max_pos, maps_to_status=status))
+            creo_alguna = True
+    if creo_alguna:
+        db.commit()
+
+
+def mover_lead_de_solicitud(sc_id: int, maps_to_status: str, db: Session) -> None:
+    """Mueve el Lead vinculado a una Solicitud (si existe) a la etapa dada. No falla si no hay Lead."""
+    if not sc_id:
+        return
+    _asegurar_etapas_estandar(db)
+    order = db.query(SalesOrder).filter(SalesOrder.canonical_customer_request_id == sc_id).first()
+    if order:
+        _mover_lead_a_status(order, maps_to_status, db)
+
+
 @router.patch("/leads/{lead_id}/stage", response_model=dict)
 def move_lead_stage(lead_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     order = db.query(SalesOrder).filter(SalesOrder.id == lead_id).first()
@@ -1619,6 +1663,14 @@ def create_lead_v2(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *
     customer = db.query(Customer).filter(Customer.id == customer_id).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
+    tipo = body.get("solicitud_tipo", "Solicitud de Cotizacion")
+    if tipo == "Soporte Tecnico":
+        # Soporte Tecnico tiene su propio flujo de estados (estado_soporte en
+        # CustomerRequest) y no siempre termina en una venta: nunca debe generar
+        # una tarjeta en el pipeline de Leads de ventas, sin importar quien llame
+        # a este endpoint (el frontend ya evita llamarlo para este tipo, pero esto
+        # cierra el caso por completo a nivel de API).
+        return {"status": "success", "data": None}
     stage_id = body.get("pipeline_stage_id")
     stage = None
     pipeline_status = "DRAFT"
@@ -1631,7 +1683,6 @@ def create_lead_v2(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *
         if stage:
             stage_id = stage.id
             pipeline_status = stage.maps_to_status or "DRAFT"
-    tipo = body.get("solicitud_tipo", "Solicitud de Cotizacion")
     new_order = SalesOrder(
         customer_id=customer_id,
         status=pipeline_status,
@@ -1645,6 +1696,7 @@ def create_lead_v2(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *
         lead_product_sku_id=body.get("lead_product_sku_id"),
         lead_qty=body.get("lead_qty", 1),
         advisor_name=body.get("advisor_name", ""),
+        canonical_customer_request_id=body.get("sc_id"),
     )
     db.add(new_order)
     try:

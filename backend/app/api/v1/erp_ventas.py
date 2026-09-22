@@ -19,7 +19,11 @@ from app.api.dependencies import (
 )
 from app.models.users import User
 from app.api.v1.schemas_compras import CancelarSolicitudBody
+from app.api.v1.crm import mover_lead_de_solicitud
 import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -63,6 +67,7 @@ def _sc_dict(sc: CustomerRequest) -> dict:
         "customer_email": sc.customer_email,
         "customer_address": sc.customer_address,
         "advisor_name": sc.advisor_name,
+        "advisor_user_id": sc.advisor_user_id,
         "tipo_solicitud": sc.tipo_solicitud or "Cotizacion de Producto",
         "modalidad_pago": sc.modalidad_pago,
         "estado": sc.estado,
@@ -75,6 +80,12 @@ def _sc_dict(sc: CustomerRequest) -> dict:
         "created_by": sc.created_by,
         "razon_cancelacion": getattr(sc, "razon_cancelacion", None),
         "eliminada_at": sc.eliminada_at.isoformat() if getattr(sc, "eliminada_at", None) else None,
+        "tipo_problema": sc.tipo_problema,
+        "descripcion_problema": sc.descripcion_problema,
+        "urgencia": sc.urgencia,
+        "evidencia_descripcion": sc.evidencia_descripcion,
+        "asignado_a_user_id": sc.asignado_a_user_id,
+        "estado_soporte": sc.estado_soporte,
     }
 
 def _cot_dict(cot: SalesQuotation) -> dict:
@@ -96,6 +107,7 @@ def _cot_dict(cot: SalesQuotation) -> dict:
         "total_cop": float(cot.total_cop) if cot.total_cop else 0,
         "anticipo_cop": float(cot.anticipo_cop) if cot.anticipo_cop else 0,
         "estado": cot.estado,
+        "canal_envio": cot.canal_envio,
         "fecha_cotizacion": cot.fecha_cotizacion.isoformat() if cot.fecha_cotizacion else None,
         "fecha_entrega_estimada": cot.fecha_entrega_estimada.isoformat() if cot.fecha_entrega_estimada else None,
         "notas": cot.notas,
@@ -211,8 +223,8 @@ def list_solicitudes(
 def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
     numero = _gen_numero(db, "SC-", "seq_sc")
-    # Auto vencimiento: 30 days
-    venc = datetime.datetime.utcnow() + datetime.timedelta(days=body.get("dias_vencimiento", 30))
+    # Auto vencimiento: 5 dias por defecto
+    venc = datetime.datetime.utcnow() + datetime.timedelta(days=body.get("dias_vencimiento", 5))
 
     # If customer_id provided, fetch customer data
     cust_name = body.get("customer_name", "")
@@ -227,6 +239,8 @@ def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
             cust_email = cust_email or c.email or ""
             cust_addr  = cust_addr or c.address or ""
 
+    es_soporte = body.get("tipo_solicitud") == "Soporte Tecnico"
+
     sc = CustomerRequest(
         numero=numero,
         customer_id=body.get("customer_id"),
@@ -235,9 +249,16 @@ def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
         customer_email=cust_email,
         customer_address=cust_addr,
         advisor_name=body.get("advisor_name"),
+        advisor_user_id=body.get("advisor_user_id"),
         tipo_solicitud=body.get("tipo_solicitud", "Cotizacion de Producto"),
         modalidad_pago=body.get("modalidad_pago", "Contado"),
-        estado="BORRADOR",
+        estado="N/A_SOPORTE" if es_soporte else "BORRADOR",
+        tipo_problema=body.get("tipo_problema"),
+        descripcion_problema=body.get("descripcion_problema"),
+        urgencia=body.get("urgencia"),
+        evidencia_descripcion=body.get("evidencia_descripcion"),
+        asignado_a_user_id=body.get("asignado_a_user_id"),
+        estado_soporte="ABIERTO" if es_soporte else None,
         fecha_vencimiento=venc,
         notas=body.get("notas"),
         productos=body.get("productos", []),
@@ -313,8 +334,10 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         raise HTTPException(404, "Solicitud no encontrada")
     old_estado = sc.estado
     allowed = ["customer_id","customer_name","customer_phone","customer_email",
-               "customer_address","advisor_name","tipo_solicitud","modalidad_pago","estado",
-               "fecha_vencimiento","notas","productos"]
+               "customer_address","advisor_name","advisor_user_id","tipo_solicitud","modalidad_pago","estado",
+               "fecha_vencimiento","notas","productos",
+               "tipo_problema","descripcion_problema","urgencia","evidencia_descripcion",
+               "asignado_a_user_id","estado_soporte"]
     for k in allowed:
         if k in body:
             setattr(sc, k, body[k])
@@ -339,15 +362,16 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
     if sc.estado not in ("BORRADOR", "PENDIENTE_CONFIRMACION"):
         raise HTTPException(400, f"No se puede confirmar en estado {sc.estado}")
 
-    # Update SC estado
+    # Al crear el borrador de cotizacion, la solicitud pasa a COTIZADA (no CONFIRMADA:
+    # eso solo ocurre cuando el cliente realmente confirma la cotizacion).
     old_estado = sc.estado
-    sc.estado = "CONFIRMADA"
+    sc.estado = "COTIZADA"
     sc.updated_at = datetime.datetime.utcnow()
     db.commit()
 
     _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
-         "Solicitud confirmada - Cotizacion creada",
-         old_estado=old_estado, new_estado="CONFIRMADA",
+         "Solicitud cotizada - Cotizacion creada",
+         old_estado=old_estado, new_estado="COTIZADA",
          user_name=body.get("user_name"))
 
     # Create COT automatically
@@ -455,6 +479,8 @@ def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN
     db.add(cot)
     db.commit()
     db.refresh(cot)
+    if cot.sc_id:
+        mover_lead_de_solicitud(cot.sc_id, "QUOTATION", db)
     _log(db, "COT", cot.id, cot.numero, "CREATED",
          f"Cotizacion {cot.numero} creada",
          new_estado="BORRADOR", user_name=body.get("created_by"))
@@ -479,6 +505,30 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
     return {"status": "success", "data": d}
 
 
+_MAPA_ESTADO_COTIZACION_A_SOLICITUD = {
+    "BORRADOR": "COTIZADA",
+    "ENVIADA": "EN_ESPERA_CONFIRMACION",
+    "PENDIENTE_CONFIRMACION": "EN_ESPERA_CONFIRMACION",
+    "CONFIRMADA": "CONFIRMADA",
+    "RECHAZADA": "RECHAZADA",
+    "VENCIDA": "VENCIDA",
+}
+
+
+def _sincronizar_estado_solicitud_desde_cotizacion(cot: "SalesQuotation", db: Session) -> None:
+    """Mantiene CustomerRequest.estado como reflejo fiel del estado real de su Cotizacion."""
+    if not cot.sc_id:
+        return
+    nuevo_estado = _MAPA_ESTADO_COTIZACION_A_SOLICITUD.get(cot.estado)
+    if not nuevo_estado:
+        return
+    sc = db.query(CustomerRequest).filter(CustomerRequest.id == cot.sc_id).first()
+    if sc and sc.estado != nuevo_estado:
+        sc.estado = nuevo_estado
+        sc.updated_at = datetime.datetime.utcnow()
+        db.commit()
+
+
 @router.patch("/cotizaciones/{cot_id}")
 def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
@@ -488,7 +538,7 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     old_estado = cot.estado
     allowed = ["sc_id","customer_id","customer_name","customer_phone","customer_email",
                "customer_address","cotizador","direccion_entrega","trm_rate","subtotal_cop",
-               "descuento_pct","total_cop","anticipo_cop","estado","fecha_entrega_estimada",
+               "descuento_pct","total_cop","anticipo_cop","estado","canal_envio","fecha_entrega_estimada",
                "notas","productos","pec_id","pec_numero"]
     for k in allowed:
         if k in body:
@@ -497,6 +547,15 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     db.commit()
     db.refresh(cot)
     if body.get("estado") and body["estado"] != old_estado:
+        try:
+            _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
+            if cot.estado == "ENVIADA":
+                mover_lead_de_solicitud(cot.sc_id, "QUOTATION", db)
+            elif cot.estado == "RECHAZADA":
+                mover_lead_de_solicitud(cot.sc_id, "CANCELLED", db)
+        except Exception as exc:
+            db.rollback()
+            logger.error(f"Error al sincronizar Solicitud/Lead tras actualizar cotizacion {cot.id}: {exc}", exc_info=True)
         _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {cot.estado}",
              old_estado=old_estado, new_estado=cot.estado,
@@ -521,6 +580,14 @@ def confirmar_cotizacion(cot_id: int, body: dict = Body(default_factory=dict), u
     # Return format compatible with legacy expectations
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
     ven = db.query(SaleOrder).filter(SaleOrder.id == res["sale_order_id"]).first()
+    if res.get("sale_order_id"):
+        try:
+            mover_lead_de_solicitud(cot.sc_id if cot else None, "INVOICED", db)
+            if cot:
+                _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
+        except Exception as exc:
+            db.rollback()
+            logger.error(f"Error al sincronizar Solicitud/Lead tras confirmar cotizacion {cot_id}: {exc}", exc_info=True)
     return {
         "status": "success",
         "data": {
@@ -914,16 +981,28 @@ def _get_alert_days(db: Session, key: str = "alerta_sc_dias") -> int:
         return 2
 
 
+def _get_alert_hours_soporte(db: Session, urgencia: str) -> int:
+    key_map = {"Alta": "alerta_soporte_alta_horas", "Media": "alerta_soporte_media_horas", "Baja": "alerta_soporte_baja_horas"}
+    default_map = {"Alta": 4, "Media": 24, "Baja": 48}
+    key = key_map.get(urgencia, "alerta_soporte_baja_horas")
+    try:
+        r = db.execute(text("SELECT value FROM admin_config WHERE key = :key"), {"key": key}).fetchone()
+        return int(r[0]) if r else default_map.get(urgencia, 48)
+    except Exception:
+        return default_map.get(urgencia, 48)
+
+
 @router.get("/alertas")
 def get_alertas(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *ROLE_COMPRAS)),
         db: Session = Depends(get_db)):
     dias = _get_alert_days(db)
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=dias)
 
-    # SC activos sin cambio de estado en N dias
+    # SC activos sin cambio de estado en N dias (excluye Soporte Tecnico, que tiene su propio umbral)
     sc_alertas = db.query(CustomerRequest).filter(
         CustomerRequest.updated_at <= cutoff,
-        CustomerRequest.estado.notin_(["CONFIRMADA", "CANCELADA"])
+        CustomerRequest.estado.notin_(["CONFIRMADA", "CANCELADA"]),
+        CustomerRequest.tipo_solicitud != "Soporte Tecnico",
     ).all()
 
     # COT activas sin cambio de estado en N dias
@@ -931,6 +1010,17 @@ def get_alertas(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *R
         SalesQuotation.updated_at <= cutoff,
         SalesQuotation.estado.notin_(["CONFIRMADA", "RECHAZADA"])
     ).all()
+
+    # Soporte Tecnico: umbral propio por urgencia, solo tickets abiertos/en proceso
+    soporte_abiertos = db.query(CustomerRequest).filter(
+        CustomerRequest.tipo_solicitud == "Soporte Tecnico",
+        CustomerRequest.estado_soporte.in_(["ABIERTO", "EN_PROCESO"]),
+    ).all()
+    soporte_alertas = []
+    for sc in soporte_abiertos:
+        horas = _get_alert_hours_soporte(db, sc.urgencia)
+        if sc.updated_at <= datetime.datetime.utcnow() - datetime.timedelta(hours=horas):
+            soporte_alertas.append(sc)
 
     return {
         "status": "success",
@@ -940,6 +1030,8 @@ def get_alertas(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *R
             "cot_sin_atender": [_cot_dict(c) for c in cot_alertas],
             "sc_count": len(sc_alertas),
             "cot_count": len(cot_alertas),
+            "soporte_sin_atender": [_sc_dict(sc) for sc in soporte_alertas],
+            "soporte_count": len(soporte_alertas),
         }
     }
 
@@ -1081,6 +1173,12 @@ def cancelar_solicitud(sc_id: int, body: CancelarSolicitudBody,
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     if not sc:
         raise HTTPException(404, "SC no encontrada")
+    if sc.tipo_solicitud == "Soporte Tecnico":
+        # Soporte Tecnico no usa el flujo de cancelacion ligado a Cotizacion:
+        # este endpoint marca eliminada_at (purga en 30 dias via papelera), lo
+        # que perderia un ticket de soporte real. Su ciclo de vida se maneja
+        # exclusivamente con estado_soporte (PATCH /solicitudes/{id}).
+        raise HTTPException(400, "Soporte Tecnico no usa este flujo de cancelacion; cambia su estado_soporte en su lugar")
     old_estado = sc.estado
     sc.estado = "CANCELADA"
     sc.razon_cancelacion = razon

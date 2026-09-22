@@ -80,24 +80,115 @@ function ActionDot({ action }: { action: string }) {
 }
 
 // â”€â”€ Calculator Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Aviso de producto no encontrado en catalogo, con fallback a texto libre (es_libre)
+function ProductoNoEncontradoAviso({
+  nombre, onAgregarComoComentario, onCancelar
+}: { nombre: string; onAgregarComoComentario: () => void; onCancelar: () => void }) {
+  return (
+    <div className="absolute top-full left-0 right-0 z-50 bg-amber-50 border border-amber-200 rounded-xl shadow-xl mt-1 p-3 min-w-[260px]">
+      <p className="text-xs font-bold text-amber-800 flex items-center gap-1.5 mb-1">
+        <AlertCircle size={12}/> Producto no encontrado en el catalogo
+      </p>
+      <p className="text-xs text-amber-700 mb-2">
+        "{nombre}" no existe en el catalogo. Puedes agregarlo como texto libre sin bloquear la cotizacion.
+      </p>
+      <div className="flex gap-2">
+        <button type="button" onClick={onCancelar}
+          className="flex-1 px-2 py-1.5 rounded-lg border border-amber-300 text-amber-700 text-xs font-bold hover:bg-amber-100">
+          Cancelar
+        </button>
+        <button type="button" onClick={onAgregarComoComentario}
+          className="flex-1 px-2 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-bold hover:bg-amber-700">
+          Agregar como comentario
+        </button>
+      </div>
+      {/* Cuando exista el asistente de creacion de producto de la spec Catalogo Configurable,
+          aqui se agregara un enlace directo para crear el producto en el catalogo. */}
+    </div>
+  );
+}
+
+// Autocompletar producto de catalogo, mismo patron de busqueda con debounce que ProductSearch en solicitud-client.tsx
+function ProductoAutocomplete({
+  value, esLibre, onTyping, onSelect, onFreeText
+}: {
+  value: string;
+  esLibre?: boolean;
+  onTyping: (v: string) => void;
+  onSelect: (p: any) => void;
+  onFreeText: (nombre: string) => void;
+}) {
+  const [results, setResults] = useState<any[]>([]);
+  const [open, setOpen] = useState(false);
+  const [showAviso, setShowAviso] = useState(false);
+  const [pending, setPending] = useState('');
+  const timer = useRef<any>(null);
+
+  function handle(v: string) {
+    onTyping(v);
+    setShowAviso(false); setOpen(false);
+    if (timer.current) clearTimeout(timer.current);
+    if (!v.trim()) { setResults([]); return; }
+    timer.current = setTimeout(async () => {
+      try {
+        const d = await apiFetch(`/crm/products/search?q=${encodeURIComponent(v)}&limit=8`);
+        const list = Array.isArray(d) ? d : (d?.data ?? []);
+        setResults(list); setOpen(list.length > 0);
+        if (list.length === 0 && v.trim().length > 2) { setPending(v); setShowAviso(true); }
+      } catch { setResults([]); }
+    }, 300);
+  }
+
+  return (
+    <div className="relative">
+      <input type="text" value={value} onChange={e => handle(e.target.value)}
+        placeholder="Buscar producto en catalogo..."
+        className="w-full border-0 bg-transparent outline-none font-medium text-slate-700 placeholder-slate-300" />
+      {esLibre && value && (
+        <p className="text-[9px] font-black text-amber-600 uppercase tracking-wide mt-0.5">Texto libre</p>
+      )}
+      {open && results.length > 0 && (
+        <div className="absolute top-full left-0 right-0 z-50 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-48 overflow-y-auto min-w-[240px]">
+          {results.map((p: any) => (
+            <button key={p.id || p.product_name} type="button"
+              onClick={() => { onSelect(p); setOpen(false); }}
+              className="w-full text-left px-3 py-2 hover:bg-amber-50 text-sm border-b border-slate-50 last:border-0">
+              <span className="font-bold text-slate-800">{p.product_name || p.name}</span>
+              {p.sku && <span className="ml-2 text-xs text-slate-400">SKU:{p.sku}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      {showAviso && (
+        <ProductoNoEncontradoAviso
+          nombre={pending}
+          onAgregarComoComentario={() => { onFreeText(pending); setShowAviso(false); }}
+          onCancelar={() => { onTyping(''); setShowAviso(false); setPending(''); }}
+        />
+      )}
+    </div>
+  );
+}
+
 function CalculadorModal({
   cot, onSave, onClose
 }: { cot: any; onSave: (data: any) => void; onClose: () => void }) {
   const [trm, setTrm] = useState(cot.trm_rate || 4200);
   const [productos, setProductos] = useState<any[]>(
     (cot.productos || []).length > 0
-      ? cot.productos.map((p: any) => ({ ...p, cost_usd: p.cost_usd || 0, margen_pct: p.margen_pct || 30, flete_usd: p.flete_usd || 0 }))
-      : [{ product_name: '', qty: 1, cost_usd: 0, margen_pct: 30, flete_usd: 0 }]
+      ? cot.productos.map((p: any) => ({ ...p, cost_usd: p.cost_usd || 0, margen_pct: p.margen_pct || 30, flete_usd: p.flete_usd || 0, es_libre: !!p.es_libre, _rowId: crypto.randomUUID() }))
+      : [{ product_name: '', qty: 1, cost_usd: 0, margen_pct: 30, flete_usd: 0, es_libre: false, _rowId: crypto.randomUUID() }]
   );
   const [descuento, setDescuento] = useState(cot.descuento_pct || 0);
   const [fechaEntrega, setFechaEntrega] = useState(cot.fecha_entrega_estimada ? cot.fecha_entrega_estimada.split('T')[0] : '');
   const [notas, setNotas] = useState(cot.notas || '');
   const [anticipo, setAnticipo] = useState<string | number>(cot.anticipo_cop ?? 0);
 
-  const addProd = () => setProductos(p => [...p, { product_name: '', qty: 1, cost_usd: 0, margen_pct: 30, flete_usd: 0 }]);
+  const addProd = () => setProductos(p => [...p, { product_name: '', qty: 1, cost_usd: 0, margen_pct: 30, flete_usd: 0, es_libre: false, _rowId: crypto.randomUUID() }]);
   const removeProd = (i: number) => setProductos(p => p.filter((_, idx) => idx !== i));
-  const updateProd = (i: number, k: string, v: any) =>
-    setProductos(p => p.map((item, idx) => idx === i ? { ...item, [k]: v } : item));
+  const setProdFields = (i: number, patch: any) =>
+    setProductos(p => p.map((item, idx) => idx === i ? { ...item, ...patch } : item));
+  const updateProd = (i: number, k: string, v: any) => setProdFields(i, { [k]: v });
 
   const computedProd = productos.map(p => {
     const costo_cop = (Number(p.cost_usd) || 0) * Number(trm);
@@ -124,6 +215,7 @@ function CalculadorModal({
       margen_pct: Number(p.margen_pct),
       unit_price_cop: p.price_cop_unit,
       total_cop: p.total_cop,
+      es_libre: !!p.es_libre,
     }));
     onSave({
       productos: prods, trm_rate: Number(trm),
@@ -190,10 +282,15 @@ function CalculadorModal({
                 </thead>
                 <tbody className="divide-y divide-slate-50">
                   {computedProd.map((p, i) => (
-                    <tr key={i}>
+                    <tr key={p._rowId}>
                       <td className="px-3 py-2">
-                        <input type="text" value={p.product_name} onChange={e => updateProd(i, 'product_name', e.target.value)}
-                          placeholder="Nombre del producto" className="w-full border-0 bg-transparent outline-none font-medium text-slate-700 placeholder-slate-300" />
+                        <ProductoAutocomplete
+                          value={p.product_name}
+                          esLibre={p.es_libre}
+                          onTyping={v => setProdFields(i, { product_name: v, es_libre: false })}
+                          onSelect={sel => setProdFields(i, { product_name: sel.product_name || sel.name, es_libre: false })}
+                          onFreeText={nombre => setProdFields(i, { product_name: nombre, es_libre: true })}
+                        />
                       </td>
                       <td className="px-3 py-2">
                         <input type="number" min="1" value={p.qty} onChange={e => updateProd(i, 'qty', e.target.value)}
@@ -303,6 +400,61 @@ function DeleteConfirm({ cot, onConfirm, onCancel }: { cot: any; onConfirm: () =
   );
 }
 
+export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, saving, customerHasPhone }: { selectedChannel: 'WhatsApp'|'Email'|'Otro'|null; onSelectChannel: (ch: 'WhatsApp'|'Email'|'Otro') => void; onConfirm: () => void; onCancel: () => void; saving: boolean; customerHasPhone: boolean }) {
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4">
+        <div className="w-14 h-14 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <Send className="text-blue-600" size={24}/>
+        </div>
+        <h3 className="font-extrabold text-xl text-slate-900 text-center mb-2">Seleccionar Canal de Envio</h3>
+        <p className="text-slate-500 text-center text-sm mb-6">
+          ÂżPor cual canal deseas enviar la cotizacion?
+        </p>
+        <div className="space-y-2 mb-6">
+          <button
+            onClick={() => onSelectChannel('WhatsApp')}
+            disabled={!customerHasPhone}
+            className={`w-full py-3 px-4 rounded-xl border-2 font-bold text-left transition-all flex items-center gap-3 ${
+              selectedChannel === 'WhatsApp'
+                ? 'border-green-500 bg-green-50 text-green-700'
+                : customerHasPhone
+                ? 'border-slate-300 bg-white text-slate-700 hover:border-green-300'
+                : 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed'
+            }`}>
+            <Phone size={18}/>
+            <span>WhatsApp{!customerHasPhone ? ' (sin telefono)' : ''}</span>
+          </button>
+          <button
+            onClick={() => onSelectChannel('Email')}
+            className={`w-full py-3 px-4 rounded-xl border-2 font-bold text-left transition-all flex items-center gap-3 ${
+              selectedChannel === 'Email'
+                ? 'border-blue-500 bg-blue-50 text-blue-700'
+                : 'border-slate-300 bg-white text-slate-700 hover:border-blue-300'
+            }`}>
+            <Mail size={18}/>
+            <span>Email</span>
+          </button>
+          <button
+            onClick={() => onSelectChannel('Otro')}
+            className={`w-full py-3 px-4 rounded-xl border-2 font-bold text-left transition-all flex items-center gap-3 ${
+              selectedChannel === 'Otro'
+                ? 'border-slate-500 bg-slate-50 text-slate-700'
+                : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'
+            }`}>
+            <MessageCircle size={18}/>
+            <span>Otro</span>
+          </button>
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onCancel} disabled={saving} className="flex-1 py-3 rounded-xl border border-slate-300 text-slate-700 font-bold hover:bg-slate-50 disabled:opacity-50">Cancelar</button>
+          <button onClick={onConfirm} disabled={!selectedChannel || saving} className="flex-1 py-3 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 disabled:opacity-50">Enviar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // â”€â”€ Main Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export default function CotizacionClient() {
   const [cotizaciones, setCotizaciones] = useState<any[]>([]);
@@ -328,6 +480,8 @@ export default function CotizacionClient() {
   const [chatterInput, setChatterInput] = useState('');
   const [chatterSending, setChatterSending] = useState(false);
   const [alertDias, setAlertDias] = useState(2);
+  const [showChannelModal, setShowChannelModal] = useState(false);
+  const [selectedChannel, setSelectedChannel] = useState<'WhatsApp'|'Email'|'Otro'|null>(null);
 
   useEffect(() => {
     const u = localStorage.getItem('user_name') || localStorage.getItem('username') || '';
@@ -410,17 +564,41 @@ export default function CotizacionClient() {
   async function enviarCotizacion() {
     const cotId = Number(selected?.id ?? selected?.data?.id);
     if (!cotId || isNaN(cotId)) return;
+    // Show channel modal instead of immediately sending
+    setShowChannelModal(true);
+  }
+
+  async function confirmarEnvio() {
+    const cotId = Number(selected?.id ?? selected?.data?.id);
+    if (!cotId || isNaN(cotId)) return;
+    if (!selectedChannel) return;
     setSaving(true);
     try {
       await apiFetch(`/ventas/cotizaciones/${cotId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ estado: 'ENVIADA', updated_by: currentUser }),
+        body: JSON.stringify({ estado: 'ENVIADA', canal_envio: selectedChannel, updated_by: currentUser }),
       });
+
+      // If WhatsApp and customer has phone, open WhatsApp deep link
+      if (selectedChannel === 'WhatsApp' && selected?.customer_phone) {
+        const phoneNumber = selected.customer_phone.replace(/\D/g, '');
+        const cotizacionNumber = selected.numero;
+        const mensaje = `Hola, aqui esta tu cotizacion ${cotizacionNumber}`;
+        window.open(`https://wa.me/57${phoneNumber}?text=${encodeURIComponent(mensaje)}`, '_blank');
+      }
+
       await loadDetail(cotId);
-      setCotizaciones(prev => prev.map(c => c.id === cotId ? { ...c, estado: 'ENVIADA' } : c));
+      setCotizaciones(prev => prev.map(c => c.id === cotId ? { ...c, estado: 'ENVIADA', canal_envio: selectedChannel } : c));
       showToast('Cotizacion marcada como enviada al cliente. En espera de confirmacion.');
+      setShowChannelModal(false);
+      setSelectedChannel(null);
     } catch (err: any) { showToast('Error: ' + err.message, 'err'); }
     setSaving(false);
+  }
+
+  function cancelarEnvio() {
+    setShowChannelModal(false);
+    setSelectedChannel(null);
   }
 
   async function confirmar() {
@@ -1214,6 +1392,7 @@ export default function CotizacionClient() {
           {/* Modals */}
           {showCalc && <CalculadorModal cot={selected} onSave={onCalcSave} onClose={() => setShowCalc(false)}/>}
           {showDelete && <DeleteConfirm cot={selected} onConfirm={deleteCot} onCancel={() => setShowDelete(false)}/>}
+          {showChannelModal && <ChannelModal selectedChannel={selectedChannel} onSelectChannel={setSelectedChannel} onConfirm={confirmarEnvio} onCancel={cancelarEnvio} saving={saving} customerHasPhone={!!selected?.customer_phone}/>}
         </>
       )}
     </div>
