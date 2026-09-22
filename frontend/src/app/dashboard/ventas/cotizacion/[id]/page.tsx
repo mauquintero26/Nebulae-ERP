@@ -10,6 +10,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
+import { ChannelModal } from '../cotizacion-client';
 
 const ESTADOS_COT: Record<string, {label:string; color:string; bg:string; border:string}> = {
   BORRADOR:               {label:'Borrador',            color:'#64748b',bg:'#f1f5f9',border:'#e2e8f0'},
@@ -51,6 +52,8 @@ export default function CotizacionDetallePage() {
   const [currentUser, setCurrentUser] = useState('');
   const [sending, setSending] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [showChannelModal, setShowChannelModal] = useState(false);
+  const [selectedChannel, setSelectedChannel] = useState<'WhatsApp'|'Email'|'Otro'|null>(null);
 
   // Right panel tabs
   const [cotPanelTab, setCotPanelTab] = useState<'actividad'|'ia'>('actividad');
@@ -128,19 +131,42 @@ export default function CotizacionDetallePage() {
   const ventaGenerada = pedidosVenta.length > 0;
   const pedidoReciente = ventaGenerada ? pedidosVenta[pedidosVenta.length - 1] : null;
 
-  async function handleEnviarCotizacion() {
+  function handleEnviarCotizacion() {
     if (!cotizacion?.id) return;
+    // Mismo patron que cotizacion-client.tsx (Task 7): mostrar el modal de
+    // seleccion de canal en vez de enviar directamente sin canal.
+    setShowChannelModal(true);
+  }
+
+  async function confirmarEnvio() {
+    if (!cotizacion?.id) return;
+    if (!selectedChannel) return;
     setSending(true);
     try {
       await apiFetch(`/ventas/cotizaciones/${cotizacion.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({estado: 'ENVIADA', updated_by: currentUser}),
+        body: JSON.stringify({estado: 'ENVIADA', canal_envio: selectedChannel, updated_by: currentUser}),
       });
+
+      // Si es WhatsApp y el cliente tiene telefono, abrir el deep link (igual que cotizacion-client.tsx)
+      if (selectedChannel === 'WhatsApp' && cotizacion?.customer_phone) {
+        const phoneNumber = cotizacion.customer_phone.replace(/\D/g, '');
+        const mensaje = `Hola, aqui esta tu cotizacion ${cotizacion.numero}`;
+        window.open(`https://wa.me/${phoneNumber}?text=${encodeURIComponent(mensaje)}`, '_blank');
+      }
+
       await loadCotizacion();
+      setShowChannelModal(false);
+      setSelectedChannel(null);
     } catch (err: any) {
       alert('Error al enviar la cotizacion: ' + err.message);
     }
     setSending(false);
+  }
+
+  function cancelarEnvio() {
+    setShowChannelModal(false);
+    setSelectedChannel(null);
   }
 
   async function handleConfirmarVenta() {
@@ -506,6 +532,17 @@ export default function CotizacionDetallePage() {
 
         </div>
       </div>
+
+      {showChannelModal && (
+        <ChannelModal
+          selectedChannel={selectedChannel}
+          onSelectChannel={setSelectedChannel}
+          onConfirm={confirmarEnvio}
+          onCancel={cancelarEnvio}
+          saving={sending}
+          customerHasPhone={!!cotizacion?.customer_phone}
+        />
+      )}
     </div>
   );
 }
