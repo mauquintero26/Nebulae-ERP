@@ -150,6 +150,7 @@ def _gr_dict(g: GoodsReceipt) -> dict:
         "created_at": g.created_at.isoformat() if g.created_at else None,
         "updated_at": g.updated_at.isoformat() if g.updated_at else None,
         "created_by": g.created_by,
+        "confirmed_by": g.confirmed_by,
     }
 
 
