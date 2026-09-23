@@ -32,6 +32,14 @@ const TRACKING_STAGES = [
   { stage: 'ENTREGADO',           label: 'Entregado',             labelShort: 'Entregado' },
 ];
 
+// Estados reales de PurchaseOrderFull.estado (confirmado leyendo erp_compras.py:
+// create_pec -> "BORRADOR"; update_tracking -> "EN_TRANSITO"/"RECIBIDO";
+// confirmar_recepcion -> "RECIBIDA"/"PARCIALMENTE_RECIBIDA"; update_pec/PecDetailPanel
+// (pedidos/page.tsx) permite fijar manualmente cualquier valor de PEC_ESTADOS,
+// incluido "CANCELADO"). Un pedido "en transito" es cualquiera que NO sea
+// borrador (nunca enviado), cancelado, o ya completamente recibido.
+const ESTADOS_EXCLUIDOS_TRANSITO = ['BORRADOR', 'CANCELADO', 'RECIBIDO', 'RECIBIDA', 'COMPLETADO'];
+
 const fDate = (iso: string | null) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 const fCOP = (v: number) => v > 0 ? `$${Number(v).toLocaleString('es-CO')}` : '-';
 
@@ -49,8 +57,12 @@ export default function TransitoPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const d = await apiFetch('/compras/transito');
-      setPedidos(Array.isArray(d) ? d : (d?.data ?? []));
+      // No existe /compras/transito en el backend: esta pantalla siempre
+      // trabaja sobre Pedidos de Compra (PEC) reales, igual que updateTracking()
+      // mas abajo. GET /compras/pedidos responde {status, total, data: [...]}.
+      const d = await apiFetch('/compras/pedidos?limit=200');
+      const lista = Array.isArray(d) ? d : (Array.isArray(d?.data) ? d.data : []);
+      setPedidos(lista.filter((p: any) => !ESTADOS_EXCLUIDOS_TRANSITO.includes(p.estado)));
     } catch { setPedidos([]); }
     finally { setLoading(false); }
   }, []);
