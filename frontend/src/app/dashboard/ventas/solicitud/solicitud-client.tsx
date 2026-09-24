@@ -7,7 +7,7 @@ import {
   FileText, AlertTriangle, CheckCircle2, Clock, Search, Plus, X,
   User, Phone, Mail, MapPin, ExternalLink, RefreshCw, ArrowRight, ArrowLeft,
   Activity, ChevronRight, MoreVertical, DollarSign, MessageCircle,
-  Edit2, Save, Package, Send, AlertCircle, ChevronDown, Truck,
+  Edit2, Save, Send, AlertCircle, ChevronDown, Truck,
   Trash2, RotateCcw, UserPlus, LayoutGrid, List, ShieldAlert,
   MessageSquare, Paperclip, Camera, TrendingUp, BarChart3, PieChart,
   Sparkles, HelpCircle, Info, ChevronUp, Check, Bot, CornerDownLeft,
@@ -164,42 +164,38 @@ function NewClientModal({onSave, onClose}: {onSave:(c:any)=>void; onClose:()=>vo
 }
 
 // â”€â”€ Product Not Found Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function ProductNotFoundModal({name,onConfirm,onCancel}: {name:string;onConfirm:()=>void;onCancel:()=>void}) {
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl p-7 max-w-sm w-full mx-4 text-center">
-        <div className="w-14 h-14 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4"><Package className="text-amber-600" size={24}/></div>
-        <h3 className="font-extrabold text-lg text-slate-900 mb-2">Producto no encontrado</h3>
-        <p className="text-slate-600 text-sm mb-1">El producto <strong>"{name}"</strong> no existe en la base de datos.</p>
-        <p className="text-slate-500 text-xs mb-6">Puedes continuar con este nombre o dejarlo en Notas para cotizarlo.</p>
-        <div className="flex gap-3">
-          <button onClick={onCancel} className="flex-1 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-bold text-sm">No, Cancelar</button>
-          <button onClick={onConfirm} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-sm">Si, Continuar</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// â”€â”€ Product Search â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function ProductSearch({value,onChange,onSelect,onConfirmNew}:{value:string;onChange:(v:string)=>void;onSelect:(p:any)=>void;onConfirmNew:(n:string)=>void}) {
+// ── Product Search ──────────────────────────────────────────────────────────
+function ProductSearch({value,onChange,onSelect}:{value:string;onChange:(v:string)=>void;onSelect:(p:any)=>void}) {
   const [results,setResults]=useState<any[]>([]);
-  const [showModal,setShowModal]=useState(false);
   const [open,setOpen]=useState(false);
-  const [pending,setPending]=useState('');
+  const [searched,setSearched]=useState(false);
+  const [creating,setCreating]=useState(false);
   const timer=useRef<any>(null);
   function handle(v:string) {
-    onChange(v); setShowModal(false); setOpen(false);
+    onChange(v); setOpen(false); setSearched(false);
     if(timer.current) clearTimeout(timer.current);
     if(!v.trim()){setResults([]);return;}
     timer.current=setTimeout(async()=>{
       try{
         const d=await apiFetch(`/crm/products/search?q=${encodeURIComponent(v)}&limit=8`);
         const list=Array.isArray(d)?d:(d?.data??[]);
-        setResults(list); setOpen(true);
-        if(list.length===0&&v.length>2){setPending(v);setShowModal(true);}
+        setResults(list);
       }catch{setResults([]);}
+      setOpen(true); setSearched(true);
     },300);
+  }
+  async function crearNuevo() {
+    if(!value.trim()||creating) return;
+    setCreating(true);
+    try{
+      const p=await apiFetch('/crm/products/quick-create',{method:'POST',body:JSON.stringify({name:value.trim(),sale_price:0})});
+      onSelect(p?.data||p);
+      setOpen(false); setSearched(false);
+    }catch{
+      // Si falla la creacion, se deja el texto tecleado tal cual (queda como
+      // producto libre, igual que si el usuario nunca hubiera hecho clic).
+    }
+    setCreating(false);
   }
   return (
     <div className="relative">
@@ -214,7 +210,15 @@ function ProductSearch({value,onChange,onSelect,onConfirmNew}:{value:string;onCh
           ))}
         </div>
       )}
-      {showModal&&<ProductNotFoundModal name={pending} onConfirm={()=>{onConfirmNew(pending);setShowModal(false);}} onCancel={()=>{onChange('');setShowModal(false);setPending('');}}/>}
+      {open&&searched&&results.length===0&&value.trim().length>2&&(
+        <div className="mt-1.5 bg-amber-50 border border-amber-200 rounded-xl p-2.5 flex items-center justify-between gap-2">
+          <span className="text-xs text-amber-700">Producto no encontrado en el catalogo.</span>
+          <button type="button" onClick={crearNuevo} disabled={creating}
+            className="shrink-0 bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-50">
+            {creating?'Creando...':'+ Crear producto nuevo'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -832,7 +836,8 @@ export default function SolicitudClient() {
         customer_name:selectedCust?`${selectedCust.first_name} ${selectedCust.last_name}`.trim():custSearch,
         customer_phone:selectedCust?.phone||'',customer_email:selectedCust?.email||'',customer_address:selectedCust?.address||'',
         productos:prodsToSend,created_by:currentUser,
-        // asignado_a_user_id es Integer/nullable en el backend: nunca enviar '' (rompe el INSERT)
+        // advisor_user_id / asignado_a_user_id son Integer/nullable en el backend: nunca enviar '' (rompe el INSERT)
+        advisor_user_id:form.advisor_user_id||null,
         asignado_a_user_id:form.asignado_a_user_id||null,
       })});
       // Auto-create CRM Lead silently (only if customer_id exists; Soporte Tecnico
@@ -2073,7 +2078,7 @@ export default function SolicitudClient() {
                 {isCotizacion&&(
                   <div>
                     <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Producto a Cotizar <span className="text-slate-300 font-medium">(opcional)</span></label>
-                    <ProductSearch value={prodName} onChange={v=>setProdName(v)} onSelect={p=>{setProdName(p.name||p.product_name);}} onConfirmNew={n=>setProdName(n)}/>
+                    <ProductSearch value={prodName} onChange={v=>setProdName(v)} onSelect={p=>{setProdName(p.name||p.product_name);}}/>
                     {prodName&&(
                       <div className="mt-2 flex items-center gap-2">
                         <label className="text-xs text-slate-500">Cantidad:</label>

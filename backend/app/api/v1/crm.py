@@ -1517,7 +1517,7 @@ def search_customers(q: str = "", user: User = Depends(require_roles(*ALL_ERP_RO
 # CRM — BÚSQUEDA DE PRODUCTOS (autocomplete para campo de cotización)
 # ══════════════════════════════════════════════════════════════════════════════
 
-from app.models.catalog import Product, ProductSKU
+from app.models.catalog import Product, ProductSKU, Brand, Category
 
 @router.get("/products/search", response_model=dict)
 def search_products(q: str = "", user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Session = Depends(get_db)):
@@ -1550,6 +1550,28 @@ def search_products(q: str = "", user: User = Depends(require_roles(*ALL_ERP_ROL
         return {"status": "success", "data": [], "warning": str(e)}
 
 
+_PLACEHOLDER_BRAND_CATEGORY_NAME = "Sin clasificar"
+
+
+def _get_or_create_placeholder_brand_category(db: Session):
+    """Los <select> de creacion rapida (boton 'crear producto nuevo' en el
+    autocompletar de Solicitud y en el modal de Leads del CRM) solo piden un
+    nombre. Desde que Catalogo Configurable volvio brand_id/category_id
+    NOT NULL en `products`, hace falta algo real ahi. En vez de pedirle al
+    usuario elegir marca/categoria en ese flujo rapido, se reutiliza una
+    marca/categoria placeholder y el producto queda marcado
+    necesita_revision=True para completarlo despues."""
+    brand = db.query(Brand).filter(Brand.name == _PLACEHOLDER_BRAND_CATEGORY_NAME).first()
+    if not brand:
+        brand = Brand(name=_PLACEHOLDER_BRAND_CATEGORY_NAME)
+        db.add(brand); db.flush()
+    category = db.query(Category).filter(Category.name == _PLACEHOLDER_BRAND_CATEGORY_NAME).first()
+    if not category:
+        category = Category(name=_PLACEHOLDER_BRAND_CATEGORY_NAME)
+        db.add(category); db.flush()
+    return brand, category
+
+
 @router.post("/products/quick-create", response_model=dict)
 def quick_create_product(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Quick-create a product from within the lead modal."""
@@ -1558,8 +1580,10 @@ def quick_create_product(body: dict, user: User = Depends(require_roles(*ROLE_AD
         raise HTTPException(status_code=400, detail="Product name is required")
     price = body.get("sale_price", 0)
     try:
+        brand, category = _get_or_create_placeholder_brand_category(db)
         product = Product(name=name, description=body.get("description", ""), is_active=True,
-                          base_currency="COP", uom="unidad")
+                          base_currency="COP", uom="unidad", type="Fisico",
+                          brand_id=brand.id, category_id=category.id, necesita_revision=True)
         db.add(product); db.flush()
         sku = ProductSKU(product_id=product.id, sku=body.get("sku", name[:20].upper().replace(" ", "-")),
                          sale_price=price, cost_price=body.get("cost_price", 0))
