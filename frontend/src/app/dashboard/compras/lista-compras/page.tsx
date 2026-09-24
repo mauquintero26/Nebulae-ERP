@@ -62,7 +62,8 @@ export default function ListaComprasPage() {
   const [editingId, setEditingId] = useState(null);
   const [editProveedor, setEditProveedor] = useState('');
   const [showPecModal, setShowPecModal] = useState(false);
-  const [pecModalItem, setPecModalItem] = useState(null);
+  const [pecModalItems, setPecModalItems] = useState<any[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [suppliers, setSuppliers] = useState([]);
   const [supplierSearch, setSupplierSearch] = useState('');
   const [selectedSupplier, setSelectedSupplier] = useState(null);
@@ -132,17 +133,27 @@ export default function ListaComprasPage() {
     } catch (e) { showToast(e.message, 'err'); }
   };
 
-  const openPecModal = (item) => {
-    setPecModalItem(item);
+  const toggleSelect = (id) => {
+    setSelectedIds(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  };
+  const toggleSelectAllPendientes = () => {
+    const pendientesIds = displayed.filter(it=>it.estado==='PENDIENTE').map(it=>it.id);
+    const allSelected = pendientesIds.length>0 && pendientesIds.every(id=>selectedIds.has(id));
+    setSelectedIds(allSelected ? new Set() : new Set(pendientesIds));
+  };
+
+  const openPecModal = (itemsToOrder) => {
+    setPecModalItems(itemsToOrder);
     setSelectedSupplier(null);
     setSupplierSearch('');
     setSuppliers([]);
-    setPecForm({ dias_entrega: 15, modalidad_pago: 'Contado', notas: `Desde Lista de Compras - ${item.pven_numero || ''}` });
+    const pvens = [...new Set(itemsToOrder.map(it=>it.pven_numero).filter(Boolean))];
+    setPecForm({ dias_entrega: 15, modalidad_pago: 'Contado', notas: `Desde Lista de Compras - ${pvens.join(', ')}` });
     setShowPecModal(true);
   };
 
   const handleCrearPEC = async () => {
-    if (!pecModalItem) return;
+    if (!pecModalItems.length) return;
     setPecSaving(true);
     try {
       const user = localStorage.getItem('user_name') || '';
@@ -151,22 +162,27 @@ export default function ListaComprasPage() {
         body: JSON.stringify({
           supplier_id: selectedSupplier?.id,
           supplier_name: selectedSupplier?.name || supplierSearch,
-          ven_id: pecModalItem.pven_id,
-          ven_numero: pecModalItem.pven_numero,
+          ven_id: pecModalItems[0]?.pven_id,
+          ven_numero: pecModalItems[0]?.pven_numero,
           dias_entrega: pecForm.dias_entrega,
           modalidad_pago: pecForm.modalidad_pago,
           notas: pecForm.notas,
-          productos: [{ producto_nombre: pecModalItem.producto, qty: pecModalItem.cantidad }],
+          productos: pecModalItems.map(it=>({ producto_nombre: it.producto, qty: it.cantidad })),
           created_by: user,
         }),
       });
       const pecObj = pec?.data ?? pec;
-      await apiFetch(`/compras/lista-compras/${pecModalItem.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ estado: 'EN_PEDIDO', pec_id: pecObj.id, pec_numero: pecObj.numero }),
-      });
-      showToast(`PEC ${pecObj.numero || ''} creado y vinculado`);
+      // Vincula CADA item seleccionado (puede ser de distintos PVEN) a esta PEC;
+      // el PATCH ya se encarga de propagar pec_id/estado al Pedido de Venta de cada uno.
+      for (const it of pecModalItems) {
+        await apiFetch(`/compras/lista-compras/${it.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ estado: 'EN_PEDIDO', pec_id: pecObj.id, pec_numero: pecObj.numero }),
+        }).catch(()=>{});
+      }
+      showToast(`PEC ${pecObj.numero || ''} creado con ${pecModalItems.length} producto(s)`);
       setShowPecModal(false);
+      setSelectedIds(new Set());
       load();
     } catch (e) { showToast(e.message, 'err'); }
     finally { setPecSaving(false); }
@@ -320,6 +336,18 @@ export default function ListaComprasPage() {
         <span className="text-sm text-gray-400 font-medium ml-auto">{totalItems} registros</span>
       </div>
 
+      {selectedIds.size > 0 && (
+        <div className="px-8 py-3 bg-purple-50 border-b border-purple-200 flex items-center gap-3">
+          <ListChecks size={16} className="text-purple-600"/>
+          <span className="text-sm font-bold text-purple-800">{selectedIds.size} producto(s) seleccionado(s)</span>
+          <button onClick={()=>openPecModal(items.filter(it=>selectedIds.has(it.id)))}
+            className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold shadow-sm">
+            <ShoppingCart size={14}/> Crear Pedido de Compra con seleccionados
+          </button>
+          <button onClick={()=>setSelectedIds(new Set())} className="text-xs text-purple-500 hover:text-purple-700 font-bold">Cancelar seleccion</button>
+        </div>
+      )}
+
       {activeTab === 'Lista' && (
       <>
       {/* Tabla */}
@@ -328,6 +356,12 @@ export default function ListaComprasPage() {
           <table className="w-full text-left text-sm">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
+                <th className="px-4 py-3.5 w-10">
+                  <input type="checkbox"
+                    checked={displayed.some(it=>it.estado==='PENDIENTE') && displayed.filter(it=>it.estado==='PENDIENTE').every(it=>selectedIds.has(it.id))}
+                    onChange={toggleSelectAllPendientes}
+                    className="rounded border-gray-300 text-purple-600"/>
+                </th>
                 <th className="px-4 py-3.5 text-xs font-black text-gray-400 uppercase tracking-wide">Producto</th>
                 <th className="px-4 py-3.5 text-xs font-black text-gray-400 uppercase tracking-wide text-center">Qty</th>
                 <th className="px-4 py-3.5 text-xs font-black text-gray-400 uppercase tracking-wide">PVEN</th>
@@ -340,13 +374,13 @@ export default function ListaComprasPage() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {loading && (
-                <tr><td colSpan={8} className="py-16 text-center">
+                <tr><td colSpan={9} className="py-16 text-center">
                   <RefreshCw size={24} className="animate-spin text-purple-400 mx-auto mb-2"/>
                   <p className="text-gray-400 text-sm">Cargando...</p>
                 </td></tr>
               )}
               {!loading && displayed.length === 0 && (
-                <tr><td colSpan={8} className="py-16 text-center">
+                <tr><td colSpan={9} className="py-16 text-center">
                   <Package size={32} className="mx-auto mb-3 text-gray-300"/>
                   <p className="text-gray-500 font-medium">No hay productos en la lista</p>
                   <p className="text-gray-400 text-xs mt-1">Los productos se agregan desde Pedidos de Venta en estado Pendiente Compra</p>
@@ -355,7 +389,13 @@ export default function ListaComprasPage() {
               {displayed.map((item) => {
                 const est = ESTADO_STYLES[item.estado] || ESTADO_STYLES.PENDIENTE;
                 return (
-                  <tr key={item.id} className="hover:bg-gray-50 group transition-colors">
+                  <tr key={item.id} className={`hover:bg-gray-50 group transition-colors ${selectedIds.has(item.id)?'bg-purple-50/60':''}`}>
+                    <td className="px-4 py-3.5">
+                      {item.estado === 'PENDIENTE' && (
+                        <input type="checkbox" checked={selectedIds.has(item.id)} onChange={()=>toggleSelect(item.id)}
+                          className="rounded border-gray-300 text-purple-600"/>
+                      )}
+                    </td>
                     <td className="px-4 py-3.5">
                       <p className="font-bold text-gray-900 truncate max-w-[220px]" title={item.producto}>{item.producto}</p>
                       {item.notas && <p className="text-xs text-gray-400 truncate max-w-[200px]">{item.notas}</p>}
@@ -400,16 +440,10 @@ export default function ListaComprasPage() {
                     <td className="px-4 py-3.5">
                       <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         {item.estado === 'PENDIENTE' && (
-                          <>
-                            <button onClick={()=>openPecModal(item)}
-                              className="flex items-center gap-1 px-2.5 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-bold hover:bg-purple-700">
-                              <ShoppingCart size={11}/> Crear PEC
-                            </button>
-                            <button onClick={()=>handleMarkEstado(item.id,'RECIBIDO')}
-                              className="p-1.5 rounded-lg border border-emerald-200 text-emerald-600 hover:bg-emerald-50" title="Marcar recibido">
-                              <CheckCircle2 size={13}/>
-                            </button>
-                          </>
+                          <button onClick={()=>handleMarkEstado(item.id,'RECIBIDO')}
+                            className="p-1.5 rounded-lg border border-emerald-200 text-emerald-600 hover:bg-emerald-50" title="Marcar recibido">
+                            <CheckCircle2 size={13}/>
+                          </button>
                         )}
                         {item.estado === 'EN_PEDIDO' && (
                           <button onClick={()=>handleMarkEstado(item.id,'RECIBIDO')}
@@ -514,17 +548,25 @@ export default function ListaComprasPage() {
       )}
 
       {/* Modal Crear PEC */}
-      {showPecModal && pecModalItem && (
+      {showPecModal && pecModalItems.length > 0 && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/50 backdrop-blur-sm p-4">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md">
             <div className="px-6 py-5 border-b border-gray-100 flex justify-between items-center">
               <div>
                 <h3 className="text-xl font-black text-gray-900">Crear Pedido de Compra</h3>
-                <p className="text-sm text-gray-500 mt-0.5">Producto: <strong>{pecModalItem.producto}</strong></p>
+                <p className="text-sm text-gray-500 mt-0.5">{pecModalItems.length} producto(s) seleccionado(s)</p>
               </div>
               <button onClick={()=>setShowPecModal(false)} className="p-2 text-gray-400 hover:bg-gray-100 rounded-xl"><X size={18}/></button>
             </div>
             <div className="p-6 space-y-4">
+              <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 max-h-32 overflow-y-auto space-y-1">
+                {pecModalItems.map(it=>(
+                  <div key={it.id} className="flex justify-between text-xs text-gray-700">
+                    <span className="truncate max-w-[240px]">{it.producto} {it.pven_numero&&<span className="text-gray-400">· {it.pven_numero}</span>}</span>
+                    <span className="font-bold ml-2 shrink-0">× {it.cantidad}</span>
+                  </div>
+                ))}
+              </div>
               <div>
                 <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Proveedor</label>
                 <input value={supplierSearch} onChange={e=>onSupplierSearch(e.target.value)}
