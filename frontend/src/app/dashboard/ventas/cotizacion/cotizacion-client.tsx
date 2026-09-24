@@ -1175,7 +1175,7 @@ export default function CotizacionClient() {
                   <div>
                     <p className="text-xs font-black text-slate-400 uppercase mb-2">Pedidos de Venta Generados</p>
                     {selected.pedidos_venta.map((v: any) => (
-                      <Link key={v.id} href="/dashboard/ventas/venta"
+                      <Link key={v.id} href={`/dashboard/ventas/venta?id=${v.id}`}
                         className="flex items-center justify-between p-3 bg-emerald-50 border border-emerald-200 rounded-xl mb-2 hover:bg-emerald-100 transition-colors">
                         <div>
                           <span className="font-bold text-emerald-800">{v.numero}</span>
@@ -1256,7 +1256,7 @@ export default function CotizacionClient() {
 
                           {/* Ver VEN */}
                           {(selected.pedidos_venta || []).length > 0 && (
-                            <Link href="/dashboard/ventas/venta"
+                            <Link href={`/dashboard/ventas/venta?id=${selected.pedidos_venta[selected.pedidos_venta.length - 1].id}`}
                               className="col-span-2 bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-emerald-100 transition-colors">
                               <ArrowRight size={14}/> Ver Pedido de Venta
                             </Link>

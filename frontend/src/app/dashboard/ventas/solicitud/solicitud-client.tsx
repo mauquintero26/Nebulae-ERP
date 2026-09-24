@@ -1932,7 +1932,7 @@ export default function SolicitudClient() {
                             </button>
                           )}
                           {(selected.cotizaciones||[]).length>0&&(
-                            <Link href={`/dashboard/ventas/cotizacion?id=${selected.cotizaciones[selected.cotizaciones.length-1].id}`} className="bg-amber-50 border border-amber-200 text-amber-700 px-4 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-amber-100 text-sm">
+                            <Link href={`/dashboard/ventas/cotizacion/${selected.cotizaciones[selected.cotizaciones.length-1].id}`} className="bg-amber-50 border border-amber-200 text-amber-700 px-4 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-amber-100 text-sm">
                               <ArrowRight size={14}/>Ver Cotizacion
                             </Link>
                           )}
