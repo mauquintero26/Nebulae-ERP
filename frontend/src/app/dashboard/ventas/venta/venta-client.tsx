@@ -677,10 +677,10 @@ export default function VentaClient() {
                   <tbody>
                     {(selectedPedido.productos||[]).map((p:any,i:number)=>(
                       <tr key={i} className="border-b last:border-0">
-                        <td className="p-2 truncate max-w-[140px]" title={p.descripcion||p.producto_nombre}>{p.descripcion||p.producto_nombre}</td>
-                        <td className="p-2 text-center">{p.cantidad}</td>
-                        <td className="p-2 text-right">{fCOP(p.precio_unitario)}</td>
-                        <td className="p-2 text-right font-bold">{fCOP(p.subtotal)}</td>
+                        <td className="p-2 truncate max-w-[140px]" title={p.product_name||p.descripcion||p.producto_nombre}>{p.product_name||p.descripcion||p.producto_nombre}</td>
+                        <td className="p-2 text-center">{p.qty??p.cantidad}</td>
+                        <td className="p-2 text-right">{fCOP(p.unit_price_cop??p.precio_unitario)}</td>
+                        <td className="p-2 text-right font-bold">{fCOP(p.total_cop??p.subtotal)}</td>
                       </tr>
                     ))}
                     {(!selectedPedido.productos||selectedPedido.productos.length===0)&&<tr><td colSpan={4} className="text-center py-4 text-gray-400 text-xs">Sin productos registrados</td></tr>}
@@ -874,8 +874,8 @@ export default function VentaClient() {
                   <div className="space-y-1">
                     {(selectedPedido.productos||[]).slice(0,5).map((p:any,i:number)=>(
                       <div key={i} className="flex justify-between text-xs text-gray-700">
-                        <span className="truncate max-w-[260px]">{p.descripcion||p.producto_nombre}</span>
-                        <span className="font-bold ml-2 shrink-0">Ã— {p.cantidad}</span>
+                        <span className="truncate max-w-[260px]">{p.product_name||p.descripcion||p.producto_nombre}</span>
+                        <span className="font-bold ml-2 shrink-0">Ã— {p.qty??p.cantidad}</span>
                       </div>
                     ))}
                     {(selectedPedido.productos||[]).length > 5 && (
