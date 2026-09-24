@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 
 import { apiFetch, API_URL } from '@/lib/api';
+import { computeMarginPrice, MARGIN_PCT_CAP } from '@/lib/pricing';
 
 const SUB_MODULES = [
   { name: 'Solicitud',      path: '/dashboard/ventas/solicitud' },
@@ -194,9 +195,8 @@ function CalculadorModal({
     const costo_cop = (Number(p.cost_usd) || 0) * Number(trm);
     const flete_cop = (Number(p.flete_usd) || 0) * Number(trm);
     const costo_total = (costo_cop + flete_cop) * (Number(p.qty) || 1);
-    const margen = Number(p.margen_pct) || 0;
-    const price_cop = margen > 0 ? costo_total / (1 - margen / 100) : costo_total;
-    return { ...p, price_cop_unit: costo_total / (Number(p.qty) || 1) * (1 + margen / 100), total_cop: price_cop };
+    const { totalCop, unitPriceCop, margenPct } = computeMarginPrice(costo_total, p.margen_pct, Number(p.qty) || 1);
+    return { ...p, margen_pct: margenPct, price_cop_unit: unitPriceCop, total_cop: totalCop };
   });
 
   const subtotal = computedProd.reduce((s, p) => s + p.total_cop, 0);
@@ -305,7 +305,7 @@ function CalculadorModal({
                           className="w-20 border border-slate-200 rounded px-2 py-1 text-right font-bold outline-none focus:ring-1 focus:ring-amber-200" />
                       </td>
                       <td className="px-3 py-2">
-                        <input type="number" min="0" max="100" value={p.margen_pct} onChange={e => updateProd(i, 'margen_pct', e.target.value)}
+                        <input type="number" min="0" max={MARGIN_PCT_CAP} value={p.margen_pct} onChange={e => updateProd(i, 'margen_pct', Math.min(MARGIN_PCT_CAP, Math.max(0, Number(e.target.value) || 0)))}
                           className="w-16 border border-slate-200 rounded px-2 py-1 text-right font-bold outline-none focus:ring-1 focus:ring-amber-200" />
                       </td>
                       <td className="px-3 py-2 text-right font-black text-amber-700">{fCOP(p.total_cop)}</td>

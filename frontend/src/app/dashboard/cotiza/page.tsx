@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Calculator, ArrowRight, DollarSign, Percent, Scale, TrendingUp, User, Plus, FileText, CheckCircle2 } from 'lucide-react';
 import { getCustomers, apiFetch, API_URL, getHeaders } from '@/lib/api';
+import { computeMarginPrice, MARGIN_PCT_CAP } from '@/lib/pricing';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
 
@@ -35,8 +36,9 @@ export default function CotizaPage() {
   const fleteCop = (fleteUsd || 0) * trm;
   const totalCostCop = totalCostUsd * trm;
 
-  const margenFactor = (100 - (margenPct || 0)) / 100;
-  const precioVentaCop = margenFactor > 0 ? Math.round(totalCostCop / margenFactor) : totalCostCop;
+  const { totalCop: precioVentaCopRaw, unitPriceCop: unitPriceCopRaw } = computeMarginPrice(totalCostCop, margenPct, 1);
+  const precioVentaCop = Math.round(precioVentaCopRaw);
+  const unitPriceCop = Math.round(unitPriceCopRaw);
   const utilidadCop = Math.max(0, precioVentaCop - totalCostCop);
   const anticipo60 = Math.round(precioVentaCop * 0.60);
   const saldo40 = precioVentaCop - anticipo60;
@@ -71,6 +73,7 @@ export default function CotizaPage() {
           cost_usd: costUsd,
           flete_usd: fleteUsd,
           margen_pct: margenPct,
+          unit_price_cop: unitPriceCop,
           total_cop: precioVentaCop
         }],
         notas: `Cotizado desde Calculadora Rápida. Margen: ${margenPct}% | TRM: ${trm}`
@@ -181,9 +184,9 @@ export default function CotizaPage() {
               <input
                 type="number"
                 min="0"
-                max="90"
+                max={MARGIN_PCT_CAP}
                 value={margenPct}
-                onChange={e => setMargenPct(parseFloat(e.target.value) || 0)}
+                onChange={e => setMargenPct(Math.min(MARGIN_PCT_CAP, Math.max(0, parseFloat(e.target.value) || 0)))}
                 className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:ring-2 focus:ring-purple-200 focus:border-purple-600 outline-none font-bold text-purple-700"
               />
             </div>
