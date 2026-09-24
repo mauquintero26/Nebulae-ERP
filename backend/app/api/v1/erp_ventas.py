@@ -66,6 +66,18 @@ def _log(db: Session, entity_type: str, entity_id: int, entity_numero: str,
     db.add(log)
     db.commit()
 
+def _lista_compras_items_de(db: Session, pven_id: int) -> list:
+    """Items de la Lista de Compras (JSON en web_builder_config) que pertenecen
+    a este Pedido de Venta -- usado para saber si ya se eligio esa via de
+    compra, sin duplicar el modelo de datos de erp_compras.py."""
+    import json
+    row = db.execute(text("SELECT config_value FROM web_builder_config WHERE config_key='erp_lista_compras'")).fetchone()
+    if not row or not row[0]:
+        return []
+    val = row[0]
+    items = json.loads(val) if isinstance(val, str) else (val if isinstance(val, list) else [])
+    return [it for it in items if it.get("pven_id") == pven_id]
+
 def _sc_dict(sc: CustomerRequest) -> dict:
     return {
         "id": sc.id,
@@ -743,6 +755,7 @@ def get_pedido(ven_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     d["actividades"] = [_log_dict(l) for l in logs]
     pxps = db.query(PaymentPending).filter(PaymentPending.ven_id == ven_id).all()
     d["pxps"] = [_pxp_dict(p) for p in pxps]
+    d["lista_compras_items"] = _lista_compras_items_de(db, ven_id)
     return {"status": "success", "data": d}
 
 

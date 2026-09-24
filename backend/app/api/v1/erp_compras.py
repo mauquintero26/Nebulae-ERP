@@ -395,7 +395,8 @@ def create_pec(body: CrearPecBody, user: User = Depends(require_roles(*ROLE_ADMI
         if ven:
             ven.pec_id = pec.id
             ven.pec_numero = pec.numero
-            ven.estado = "EN_TRANSITO"
+            if ven.estado == "PENDIENTE_COMPRA":
+                ven.estado = "EN_PROCESO"
             ven.updated_at = datetime.datetime.utcnow()
             db.commit()
     _log(db, "PEC", pec.id, pec.numero, "CREATED",
@@ -419,6 +420,32 @@ def get_pec(pec_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     grs = db.query(GoodsReceipt).filter(GoodsReceipt.pec_id == pec_id).all()
     d["recepciones"] = [_gr_dict(g) for g in grs]
     return {"status": "success", "data": d}
+
+
+def _desvincular_pec_cancelado(db: Session, pec_id: int, pec_numero: str, user_name: str = None):
+    """Al cancelar una PEC, desvincula los Pedidos de Venta y los items de la
+    Lista de Compras que apuntaban a ella, para que vuelvan a mostrar la
+    eleccion "Pendiente de Compra" en vez de quedar apuntando a una PEC muerta."""
+    ventas = db.query(SaleOrder).filter(SaleOrder.pec_id == pec_id).all()
+    for v in ventas:
+        v.pec_id = None
+        v.pec_numero = None
+        if v.estado == "EN_PROCESO":
+            v.estado = "PENDIENTE_COMPRA"
+        _log(db, "VEN", v.id, v.numero, "PEC_DESVINCULADO",
+             f"PEC {pec_numero} fue cancelada; el pedido vuelve a Pendiente de Compra",
+             user_name=user_name)
+    items = _load_lista_compras(db)
+    changed = False
+    for it in items:
+        if it.get("pec_id") == pec_id:
+            it["pec_id"] = None
+            it["pec_numero"] = None
+            it["estado"] = "PENDIENTE"
+            changed = True
+    if changed:
+        _save_lista_compras(db, items)
+    db.commit()
 
 
 @router.patch("/pedidos/{pec_id}")
@@ -497,6 +524,8 @@ def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE
              f"Estado cambiado a {p.estado}",
              old_estado=old_estado, new_estado=p.estado,
              user_name=body.get("updated_by"))
+        if p.estado == "CANCELADO":
+            _desvincular_pec_cancelado(db, p.id, p.numero, body.get("updated_by"))
     return {"status": "success", "data": _pec_dict(p)}
 
 
@@ -2555,8 +2584,13 @@ def add_to_lista_compras(
         }
         items.append(new_item)
         added.append(new_item)
-        
+
     _save_lista_compras(db, items)
+    if pven_id and added:
+        nombres = ", ".join(it["producto"] for it in added)
+        _log(db, "VEN", pven_id, pven_numero, "SENT_TO_LISTA_COMPRAS",
+             f"Enviado a Lista de Compras: {nombres}",
+             user_name=created_by)
     return {"status": "success", "data": added}
 
 
