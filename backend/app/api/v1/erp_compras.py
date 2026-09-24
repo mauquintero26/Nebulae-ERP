@@ -9,6 +9,7 @@ Recepciones de Inventario (ENINV)
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import text, func
 from typing import Optional
 from app.db.database import get_db
@@ -514,7 +515,13 @@ def update_tracking(pec_id: int, body: ActualizarTrackingBody,
     stage_name = body.stage_name  # aliased from 'stage'
     new_status = body.new_status  # aliased from 'status'
     tracking_num = body.tracking_number
-    stages = list(p.tracking_stages or [])
+    # Copia nueva de cada dict de etapa (no solo de la lista contenedora):
+    # si stages[i] siguiera siendo el MISMO objeto dict que
+    # p.tracking_stages[i], mutarlo aqui abajo tambien mutaria en el acto
+    # el valor "antiguo" que SQLAlchemy usa para decidir si la columna JSON
+    # realmente cambio — con ambos lados iguales, el UPDATE nunca se emite
+    # aunque el commit no falle y el request devuelva 200.
+    stages = [dict(s) for s in (p.tracking_stages or [])]
     now = datetime.datetime.utcnow().isoformat()
     for i, s in enumerate(stages):
         if s["stage"] == stage_name:
@@ -534,6 +541,7 @@ def update_tracking(pec_id: int, body: ActualizarTrackingBody,
                 stages[i]["tracking_history"] = history
             break
     p.tracking_stages = stages
+    flag_modified(p, "tracking_stages")
     p.updated_at = datetime.datetime.utcnow()
     # Auto-update PEC estado based on tracking completions
     last_stage = stages[-1] if stages else {}
