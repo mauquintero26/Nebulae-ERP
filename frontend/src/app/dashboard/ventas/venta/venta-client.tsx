@@ -226,6 +226,7 @@ export default function VentaClient() {
         created_by: user,
       })});
       showToast('Productos agregados a la Lista de Compras');
+      fetchDetail(selectedPedido.id);
     } catch(err:any){ showToast(err.message,'error'); }
     finally{ setListaSaving(false); }
   };
@@ -693,7 +694,7 @@ export default function VentaClient() {
             <div className="w-[55%] bg-white p-7 overflow-y-auto flex flex-col gap-4">
 
               {/* â”€â”€â”€ BLOQUE ACCIONES DE COMPRA (solo cuando PENDIENTE_COMPRA) â”€â”€â”€ */}
-              {selectedPedido.estado === 'PENDIENTE_COMPRA' && !selectedPedido.pec_numero && (
+              {selectedPedido.estado === 'PENDIENTE_COMPRA' && !selectedPedido.pec_numero && (selectedPedido.lista_compras_items||[]).length===0 && (
                 <div className="rounded-2xl border-2 border-orange-200 bg-orange-50 p-5">
                   <div className="flex items-center gap-2 mb-1">
                     <ShoppingCart size={18} className="text-orange-600"/>
@@ -739,16 +740,38 @@ export default function VentaClient() {
                 </div>
               )}
 
-              {/* Si ya tiene PEC vinculado, mostrar badge */}
+              {/* Decision ya tomada: PEC creado directamente */}
               {selectedPedido.pec_numero && (
-                <div className="flex items-center gap-2 px-4 py-3 bg-purple-50 border border-purple-200 rounded-xl">
-                  <CheckCircle2 size={16} className="text-purple-600 shrink-0"/>
-                  <div className="flex-1">
-                    <p className="text-sm font-black text-purple-800">PEC Vinculado: {selectedPedido.pec_numero}</p>
-                    <p className="text-xs text-purple-600">Pedido de compra creado para este PVEN</p>
+                <div className="rounded-2xl border border-purple-200 bg-purple-50 p-5">
+                  <div className="flex items-center gap-2 mb-1">
+                    <CheckCircle2 size={18} className="text-purple-600"/>
+                    <h3 className="text-sm font-black text-purple-800 uppercase tracking-wide">Pedido de Compra Creado</h3>
                   </div>
-                  <Link href="/dashboard/compras/pedidos" className="text-xs text-purple-600 font-bold hover:underline flex items-center gap-1">
-                    Ver PEC <ExternalLink size={11}/>
+                  <div className="mt-2 space-y-1">
+                    {(selectedPedido.productos||[]).map((p:any,i:number)=>(
+                      <p key={i} className="text-xs text-purple-700">&middot; {p.product_name||p.descripcion||p.producto_nombre||'Producto'} <span className="text-purple-400">&times;{p.qty??p.cantidad??1}</span></p>
+                    ))}
+                  </div>
+                  <Link href="/dashboard/compras/pedidos" className="mt-3 inline-flex items-center gap-1 text-xs text-purple-700 font-bold hover:underline">
+                    Ir a {selectedPedido.pec_numero} <ExternalLink size={11}/>
+                  </Link>
+                </div>
+              )}
+
+              {/* Decision ya tomada: enviado a Lista de Compras (aun sin PEC) */}
+              {!selectedPedido.pec_numero && (selectedPedido.lista_compras_items||[]).length>0 && (
+                <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-5">
+                  <div className="flex items-center gap-2 mb-1">
+                    <ListChecks size={18} className="text-indigo-600"/>
+                    <h3 className="text-sm font-black text-indigo-800 uppercase tracking-wide">Agregado a Lista de Compras</h3>
+                  </div>
+                  <div className="mt-2 space-y-1">
+                    {selectedPedido.lista_compras_items.map((it:any)=>(
+                      <p key={it.id} className="text-xs text-indigo-700">&middot; {it.producto} <span className="text-indigo-400">&times;{it.cantidad}</span></p>
+                    ))}
+                  </div>
+                  <Link href="/dashboard/compras/lista-compras" className="mt-3 inline-flex items-center gap-1 text-xs text-indigo-700 font-bold hover:underline">
+                    Ir a Lista de Compras <ExternalLink size={11}/>
                   </Link>
                 </div>
               )}
