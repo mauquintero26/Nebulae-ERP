@@ -513,7 +513,11 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
         supplier_name: selectedSupplier.name,
         supplier_ref: selectedSupplier.reference,
         ven_id: pvensSelected[0]?.id || null,
-        ven_numero: pvensSelected.map((p:any)=>p.numero).join(', ') || null,
+        // ven_numero es VARCHAR(20) en la BD -- no cabe una lista unida por comas
+        // de varios PVEN reales. El vinculo real de cada PVEN adicional vive en
+        // su propio pec_id/pec_numero (ver loop de PATCH mas abajo), asi que aqui
+        // solo va el primero como referencia legible.
+        ven_numero: pvensSelected[0]?.numero || null,
         modalidad_pago: form.modalidad_pago,
         metodo_pago: form.metodo_pago || null,
         tipo_envio: form.tipo_envio,
@@ -527,7 +531,17 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
         total_cop: form.total_cop,
         created_by: user,
       };
-      await apiFetch('/compras/pedidos',{method:'POST',body:JSON.stringify(payload)});
+      const pec = await apiFetch('/compras/pedidos',{method:'POST',body:JSON.stringify(payload)});
+      const pecObj = pec?.data ?? pec;
+      // El POST solo vincula el primer PVEN seleccionado (payload.ven_id); el resto
+      // se vincula aqui explicitamente para que TODOS los PVEN marcados queden con
+      // pec_id/pec_numero, no solo el primero.
+      const restantes = pvensSelected.slice(1);
+      for (const pv of restantes) {
+        await apiFetch(`/ventas/pedidos/${pv.id}`,{method:'PATCH',body:JSON.stringify({
+          pec_id: pecObj.id, pec_numero: pecObj.numero, estado:'EN_PROCESO', updated_by:user,
+        })}).catch(()=>{});
+      }
       onToast('PEC creado exitosamente','ok');
       onCreated();
       onClose();
