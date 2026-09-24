@@ -1487,10 +1487,13 @@ def search_customers(q: str = "", user: User = Depends(require_roles(*ALL_ERP_RO
     if not q or len(q) < 1:
         customers = db.query(Customer).limit(10).all()
     else:
+        from sqlalchemy import func as _func
         q_lower = f"%{q.lower()}%"
+        full_name = _func.concat(Customer.first_name, ' ', Customer.last_name)
         customers = db.query(Customer).filter(
             (Customer.first_name.ilike(q_lower)) |
             (Customer.last_name.ilike(q_lower)) |
+            (full_name.ilike(q_lower)) |
             (Customer.email.ilike(q_lower)) |
             (Customer.phone.ilike(q_lower)) |
             (Customer.document.ilike(q_lower))
