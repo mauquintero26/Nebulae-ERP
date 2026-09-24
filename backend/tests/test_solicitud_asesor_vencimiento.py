@@ -26,3 +26,17 @@ class TestAsesorYVencimiento:
         }, headers=_headers(admin_token))
         assert r.status_code == 201
         assert r.json()["data"]["advisor_user_id"] == user_admin.id
+
+    def test_advisor_user_id_vacio_no_causa_500(self, app_client, admin_token):
+        """Reproduce el bug reportado: el formulario de 'Nueva Solicitud' envia
+        advisor_user_id: '' (string vacio) cuando no se selecciona asesor, porque
+        es un campo opcional. El endpoint debe tratarlo como ausente (None), no
+        intentar insertarlo tal cual en una columna Integer."""
+        r = app_client.post("/api/v1/ventas/solicitudes", json={
+            "customer_name": f"Cliente-{uuid.uuid4().hex[:6]}",
+            "tipo_solicitud": "Cotizacion de Producto",
+            "advisor_user_id": "",
+            "asignado_a_user_id": "",
+        }, headers=_headers(admin_token))
+        assert r.status_code == 201, r.text
+        assert r.json()["data"]["advisor_user_id"] is None

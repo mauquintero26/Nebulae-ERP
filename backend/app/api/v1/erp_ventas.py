@@ -31,6 +31,15 @@ API = "http://localhost:5000/api/v1"
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
+def _int_or_none(v):
+    """Los endpoints de este modulo reciben `body: dict` sin validacion de
+    Pydantic. Los <select> opcionales del frontend (asesor, asignado_a) usan
+    '' como valor 'nada seleccionado', lo que rompe el INSERT/UPDATE en
+    columnas Integer (psycopg2 DataError) si se pasa tal cual."""
+    if v in (None, ""):
+        return None
+    return int(v)
+
 def _next_seq(db: Session, seq_name: str) -> int:
     r = db.execute(text(f"SELECT nextval(\'{seq_name}\')")).scalar()
     return r
@@ -249,7 +258,7 @@ def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
         customer_email=cust_email,
         customer_address=cust_addr,
         advisor_name=body.get("advisor_name"),
-        advisor_user_id=body.get("advisor_user_id"),
+        advisor_user_id=_int_or_none(body.get("advisor_user_id")),
         tipo_solicitud=body.get("tipo_solicitud", "Cotizacion de Producto"),
         modalidad_pago=body.get("modalidad_pago", "Contado"),
         estado="N/A_SOPORTE" if es_soporte else "BORRADOR",
@@ -257,7 +266,7 @@ def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
         descripcion_problema=body.get("descripcion_problema"),
         urgencia=body.get("urgencia"),
         evidencia_descripcion=body.get("evidencia_descripcion"),
-        asignado_a_user_id=body.get("asignado_a_user_id"),
+        asignado_a_user_id=_int_or_none(body.get("asignado_a_user_id")),
         estado_soporte="ABIERTO" if es_soporte else None,
         fecha_vencimiento=venc,
         notas=body.get("notas"),
@@ -340,7 +349,10 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
                "asignado_a_user_id","estado_soporte"]
     for k in allowed:
         if k in body:
-            setattr(sc, k, body[k])
+            v = body[k]
+            if k in ("advisor_user_id", "asignado_a_user_id"):
+                v = _int_or_none(v)
+            setattr(sc, k, v)
     sc.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(sc)

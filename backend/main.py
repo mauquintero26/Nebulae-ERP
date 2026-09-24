@@ -47,9 +47,11 @@ def _build_cors_origins() -> list[str]:
             "http://127.0.0.1:3000",
         ]
 
+_CORS_ORIGINS = _build_cors_origins()
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_build_cors_origins(),
+    allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -68,10 +70,21 @@ async def startup_preflight():
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    return JSONResponse(
+    # Starlette monta el handler de `Exception` en ServerErrorMiddleware, que
+    # envuelve a CORSMiddleware por FUERA. Cuando este handler dispara, la
+    # respuesta nunca pasa por CORSMiddleware y sale sin
+    # Access-Control-Allow-Origin — el navegador entonces bloquea la
+    # respuesta y el frontend solo ve "Failed to fetch", ocultando el error
+    # real. Hay que agregar el header a mano en cada 500 no controlado.
+    response = JSONResponse(
         status_code=500,
         content={"status": "error", "message": "Internal Server Error"},
     )
+    origin = request.headers.get("origin")
+    if origin in _CORS_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
