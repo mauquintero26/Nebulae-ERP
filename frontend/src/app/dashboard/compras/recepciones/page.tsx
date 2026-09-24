@@ -545,11 +545,11 @@ export default function RecepcionesPage() {
                               </span>
                             </td>
                             <td className="px-4 py-3 text-center font-bold text-slate-700">
-                              {linea.quantity_expected || linea.qty || linea.cantidad || 1}
+                              {linea.qty_esperada ?? linea.quantity_expected ?? linea.qty ?? linea.cantidad ?? 1}
                             </td>
                             <td className="px-4 py-3 text-center">
                               <span className="font-bold text-teal-700 bg-teal-50 px-2 py-1 rounded-lg">
-                                {linea.quantity_received || linea.qty || 1}
+                                {linea.qty_recibida ?? linea.quantity_received ?? 0}
                               </span>
                             </td>
                           </tr>
