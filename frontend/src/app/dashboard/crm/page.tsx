@@ -88,6 +88,101 @@ function useDebounce(value, delay=300) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// AUTOCOMPLETE FIELDS (reusable) — module scope, not nested in CRMPage, so
+// React keeps the same component identity across every keystroke instead of
+// unmounting/remounting the <input> (which was stealing focus after every
+// single character typed).
+// ══════════════════════════════════════════════════════════════════════════
+function CustomerAutocomplete({ query, showDropdown, suggestions, onQueryChange, onFocus, onSelect, onCreateNew }) {
+  return (
+    <div className="relative">
+      <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">
+        Cliente *
+      </label>
+      <input
+        value={query}
+        onChange={e => onQueryChange(e.target.value)}
+        onFocus={onFocus}
+        placeholder="Nombre, email o teléfono..."
+        className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-500"
+      />
+      {showDropdown && query.length > 0 && (
+        <div className="absolute z-50 top-full left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-52 overflow-y-auto">
+          {suggestions.length > 0 ? (
+            <>
+              {suggestions.map(c => (
+                <button key={c.id} onClick={() => onSelect(c)}
+                  className="w-full text-left px-3 py-2.5 hover:bg-indigo-50 transition-colors border-b border-slate-50 last:border-0">
+                  <p className="text-sm font-bold text-slate-800">{c.full_name}</p>
+                  <p className="text-xs text-slate-400">{c.email || c.phone || c.city || 'Sin contacto'}</p>
+                </button>
+              ))}
+              <div className="p-2 border-t border-slate-100 bg-slate-50">
+                <p className="text-xs text-slate-400 text-center">
+                  {suggestions.length} resultado(s) — escribe para filtrar
+                </p>
+              </div>
+            </>
+          ) : (
+            <div className="p-4 text-center">
+              <AlertCircle size={18} className="text-amber-400 mx-auto mb-2"/>
+              <p className="text-sm font-bold text-slate-700">Cliente no encontrado</p>
+              <p className="text-xs text-slate-400 mb-3">"{query}" no existe en la base de datos</p>
+              <button onClick={onCreateNew}
+                className="w-full bg-purple-600 text-white text-xs font-bold py-2 px-4 rounded-lg hover:bg-purple-700">
+                + Crear cliente "{query}"
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProductAutocomplete({ query, showDropdown, suggestions, onQueryChange, onFocus, onSelect, onCreateNew }) {
+  return (
+    <div className="relative">
+      <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">
+        Producto / Servicio (cotización)
+      </label>
+      <input
+        value={query}
+        onChange={e => onQueryChange(e.target.value)}
+        onFocus={onFocus}
+        placeholder="Nombre del producto..."
+        className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-500"
+      />
+      {showDropdown && query.length > 0 && (
+        <div className="absolute z-50 top-full left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-52 overflow-y-auto">
+          {suggestions.length > 0 ? (
+            <>
+              {suggestions.map(p => (
+                <button key={p.id} onClick={() => onSelect(p)}
+                  className="w-full text-left px-3 py-2.5 hover:bg-indigo-50 transition-colors border-b border-slate-50 last:border-0">
+                  <p className="text-sm font-bold text-slate-800">{p.product_name}</p>
+                  <p className="text-xs text-slate-400">{p.sku ? `SKU: ${p.sku} · ` : ''}{formatCOP(p.sale_price)}</p>
+                </button>
+              ))}
+            </>
+          ) : (
+            <div className="p-4 text-center">
+              <Package size={18} className="text-amber-400 mx-auto mb-2"/>
+              <p className="text-sm font-bold text-slate-700">Producto no encontrado</p>
+              <p className="text-xs text-slate-400 mb-3">¿Desea crear "{query}"?</p>
+              <button onClick={onCreateNew}
+                className="w-full bg-indigo-600 text-white text-xs font-bold py-2 px-4 rounded-lg hover:bg-indigo-700">
+                + Crear producto "{query}"
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 export default function CRMPage() {
   const router = useRouter();
   const [stages, setStages] = useState<any[]>([]);
@@ -264,7 +359,7 @@ export default function CRMPage() {
   }
 
   // ─── Quick-create customer if not found ───────────────────────────────
-  async function handleCreateCustomerQuick() {
+  async function handleCreateCustomerQuick(isEdit=false) {
     const parts = custQuery.trim().split(' ');
     const first_name = parts[0] || 'Nuevo';
     const last_name = parts.slice(1).join(' ') || 'Cliente';
@@ -272,19 +367,19 @@ export default function CRMPage() {
     try {
       const c = await apiFetch('/crm/customers', { method: 'POST',
         body: JSON.stringify({ first_name, last_name }) });
-      selectCustomer({ id: c.id, full_name: `${c.first_name} ${c.last_name}` });
+      selectCustomer({ id: c.id, full_name: `${c.first_name} ${c.last_name}` }, isEdit);
       toast.success(`Cliente "${c.first_name} ${c.last_name}" creado`, { id: tid });
       setCustSugs([]); setShowCustDrop(false);
     } catch (e) { toast.error(e.message, { id: tid }); }
   }
 
   // ─── Quick-create product if not found ────────────────────────────────
-  async function handleCreateProductQuick() {
+  async function handleCreateProductQuick(isEdit=false) {
     const tid = toast.loading('Creando producto...');
     try {
       const p = await apiFetch('/crm/products/quick-create', { method: 'POST',
         body: JSON.stringify({ name: prodQuery.trim(), sale_price: 0 }) });
-      selectProduct({ id: p.id, product_name: p.product_name, sale_price: p.sale_price });
+      selectProduct({ id: p.id, product_name: p.product_name, sale_price: p.sale_price }, isEdit);
       toast.success(`Producto "${p.product_name}" creado`, { id: tid });
     } catch (e) { toast.error(e.message, { id: tid }); }
   }
@@ -632,102 +727,38 @@ export default function CRMPage() {
     );
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // AUTOCOMPLETE FIELDS (reusable)
-  // ══════════════════════════════════════════════════════════════════════════
-  function CustomerAutocomplete({ isEdit=false }) {
-    return (
-      <div className="relative">
-        <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">
-          Cliente *
-        </label>
-        <input
-          value={custQuery}
-          onChange={e => { setCustQuery(e.target.value); setShowCustDrop(true);
-            if (isEdit) setEditForm(f => ({...f, customer_id:'', customer_name:e.target.value}));
-            else setNlForm(f => ({...f, customer_id:'', customer_name:e.target.value})); }}
-          onFocus={() => setShowCustDrop(true)}
-          placeholder="Nombre, email o teléfono..."
-          className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-500"
-        />
-        {showCustDrop && custQuery.length > 0 && (
-          <div className="absolute z-50 top-full left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-52 overflow-y-auto">
-            {custSugs.length > 0 ? (
-              <>
-                {custSugs.map(c => (
-                  <button key={c.id} onClick={() => selectCustomer(c, isEdit)}
-                    className="w-full text-left px-3 py-2.5 hover:bg-indigo-50 transition-colors border-b border-slate-50 last:border-0">
-                    <p className="text-sm font-bold text-slate-800">{c.full_name}</p>
-                    <p className="text-xs text-slate-400">{c.email || c.phone || c.city || 'Sin contacto'}</p>
-                  </button>
-                ))}
-                <div className="p-2 border-t border-slate-100 bg-slate-50">
-                  <p className="text-xs text-slate-400 text-center">
-                    {custSugs.length} resultado(s) — escribe para filtrar
-                  </p>
-                </div>
-              </>
-            ) : (
-              <div className="p-4 text-center">
-                <AlertCircle size={18} className="text-amber-400 mx-auto mb-2"/>
-                <p className="text-sm font-bold text-slate-700">Cliente no encontrado</p>
-                <p className="text-xs text-slate-400 mb-3">"{custQuery}" no existe en la base de datos</p>
-                <button onClick={handleCreateCustomerQuick}
-                  className="w-full bg-purple-600 text-white text-xs font-bold py-2 px-4 rounded-lg hover:bg-purple-700">
-                  + Crear cliente "{custQuery}"
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    );
+  // Autocomplete fields are now module-scope components (see top of file) —
+  // pass all state/handlers explicitly instead of via closures.
+  function customerAutocompleteProps(isEdit) {
+    return {
+      query: custQuery,
+      showDropdown: showCustDrop,
+      suggestions: custSugs,
+      onQueryChange: (v) => {
+        setCustQuery(v); setShowCustDrop(true);
+        if (isEdit) setEditForm(f => ({...f, customer_id:'', customer_name:v}));
+        else setNlForm(f => ({...f, customer_id:'', customer_name:v}));
+      },
+      onFocus: () => setShowCustDrop(true),
+      onSelect: (c) => selectCustomer(c, isEdit),
+      onCreateNew: () => handleCreateCustomerQuick(isEdit),
+    };
   }
 
-  function ProductAutocomplete({ isEdit=false }) {
-    const tipo = isEdit ? editForm.solicitud_tipo : nlForm.solicitud_tipo;
-    if (!isQuotacion(tipo)) return null;
-    return (
-      <div className="relative">
-        <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">
-          Producto / Servicio (cotización)
-        </label>
-        <input
-          value={prodQuery}
-          onChange={e => { setProdQuery(e.target.value); setShowProdDrop(true);
-            if (isEdit) setEditForm(f => ({...f, lead_product_name: e.target.value, lead_product_sku_id:''}));
-            else setNlForm(f => ({...f, lead_product_name: e.target.value, lead_product_sku_id:''})); }}
-          onFocus={() => setShowProdDrop(true)}
-          placeholder="Nombre del producto..."
-          className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-500"
-        />
-        {showProdDrop && prodQuery.length > 0 && (
-          <div className="absolute z-50 top-full left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-52 overflow-y-auto">
-            {prodSugs.length > 0 ? (
-              <>
-                {prodSugs.map(p => (
-                  <button key={p.id} onClick={() => selectProduct(p, isEdit)}
-                    className="w-full text-left px-3 py-2.5 hover:bg-indigo-50 transition-colors border-b border-slate-50 last:border-0">
-                    <p className="text-sm font-bold text-slate-800">{p.product_name}</p>
-                    <p className="text-xs text-slate-400">{p.sku ? `SKU: ${p.sku} · ` : ''}{formatCOP(p.sale_price)}</p>
-                  </button>
-                ))}
-              </>
-            ) : (
-              <div className="p-4 text-center">
-                <Package size={18} className="text-amber-400 mx-auto mb-2"/>
-                <p className="text-sm font-bold text-slate-700">Producto no encontrado</p>
-                <p className="text-xs text-slate-400 mb-3">¿Desea crear "{prodQuery}"?</p>
-                <button onClick={handleCreateProductQuick}
-                  className="w-full bg-indigo-600 text-white text-xs font-bold py-2 px-4 rounded-lg hover:bg-indigo-700">
-                  + Crear producto "{prodQuery}"
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    );
+  function productAutocompleteProps(isEdit) {
+    return {
+      query: prodQuery,
+      showDropdown: showProdDrop,
+      suggestions: prodSugs,
+      onQueryChange: (v) => {
+        setProdQuery(v); setShowProdDrop(true);
+        if (isEdit) setEditForm(f => ({...f, lead_product_name: v, lead_product_sku_id:''}));
+        else setNlForm(f => ({...f, lead_product_name: v, lead_product_sku_id:''}));
+      },
+      onFocus: () => setShowProdDrop(true),
+      onSelect: (p) => selectProduct(p, isEdit),
+      onCreateNew: () => handleCreateProductQuick(isEdit),
+    };
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -1180,7 +1211,7 @@ export default function CRMPage() {
                     {/* ── EDIT MODE ── */}
                     {editingLead && (
                       <div className="p-5 space-y-4" onClick={e=>e.stopPropagation()}>
-                        <CustomerAutocomplete isEdit={true}/>
+                        <CustomerAutocomplete {...customerAutocompleteProps(true)}/>
                         <div>
                           <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">Tipo de Solicitud</label>
                           <select value={editForm.solicitud_tipo} onChange={e=>setEditForm(f=>({...f,solicitud_tipo:e.target.value}))}
@@ -1188,7 +1219,7 @@ export default function CRMPage() {
                             {SOLICITUD_TIPOS.map(t=><option key={t} value={t}>{t}</option>)}
                           </select>
                         </div>
-                        <ProductAutocomplete isEdit={true}/>
+                        {isQuotacion(editForm.solicitud_tipo) && <ProductAutocomplete {...productAutocompleteProps(true)}/>}
                         {isQuotacion(editForm.solicitud_tipo) && editForm.lead_product_name && (
                           <div>
                             <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">Cantidad</label>
@@ -1322,7 +1353,7 @@ export default function CRMPage() {
 
             <div className="p-6 space-y-4" onClick={e => e.stopPropagation()}>
               {/* Customer autocomplete */}
-              <CustomerAutocomplete isEdit={false}/>
+              <CustomerAutocomplete {...customerAutocompleteProps(false)}/>
 
               {/* Tipo */}
               <div>
@@ -1335,7 +1366,7 @@ export default function CRMPage() {
               </div>
 
               {/* Product (only for cotización) */}
-              <ProductAutocomplete isEdit={false}/>
+              {isQuotacion(nlForm.solicitud_tipo) && <ProductAutocomplete {...productAutocompleteProps(false)}/>}
 
               {isQuotacion(nlForm.solicitud_tipo) && nlForm.lead_product_name && (
                 <div>
