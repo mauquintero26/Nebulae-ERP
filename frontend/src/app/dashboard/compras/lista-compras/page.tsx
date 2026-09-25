@@ -7,7 +7,7 @@ import {
   ShoppingCart, Search, RefreshCw, X, Filter, Plus,
   Package, Clock, CheckCircle2, AlertCircle, Trash2,
   ChevronDown, ExternalLink, ArrowLeft, ShoppingBag,
-  Calendar, User, Edit2, Save, ListChecks
+  Calendar, User, Edit2, Save, ListChecks, UserPlus
 } from 'lucide-react';
 
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
@@ -35,6 +35,46 @@ const SUB_MODULES = [
   { name: 'Registro OCR/Manual',   path: '/dashboard/compras/registro' },
   { name: 'Proyecciones',          path: '/dashboard/compras/proyecciones' },
 ];
+
+function NewSupplierModal({onSave, onClose}) {
+  const [form, setForm] = useState({name:'',reference:'',contact_name:'',phone:'',email:'',address:'',city:'',country:'Colombia',payment_terms:'',notes:''});
+  const [saving, setSaving] = useState(false);
+  const set = (k,v) => setForm(f=>({...f,[k]:v}));
+  async function save(e) {
+    e.preventDefault();
+    if (!form.name.trim()) return;
+    setSaving(true);
+    try { const d = await apiFetch('/compras/proveedores',{method:'POST',body:JSON.stringify(form)}); onSave(d); }
+    catch(err) { alert('Error: '+err.message); }
+    setSaving(false);
+  }
+  return (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg mx-4">
+        <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-purple-50 rounded-t-3xl">
+          <div><h3 className="font-black text-gray-900 text-lg">Nuevo Proveedor</h3><p className="text-xs text-gray-500 mt-0.5">Agregar a la agenda de proveedores</p></div>
+          <button onClick={onClose} className="p-2 hover:bg-purple-100 rounded-xl"><X size={18}/></button>
+        </div>
+        <form onSubmit={save} className="p-6 space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Nombre *</label><input required value={form.name} onChange={e=>set('name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Referencia / NIT</label><input value={form.reference} onChange={e=>set('reference',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Contacto</label><input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Telefono</label><input value={form.phone} onChange={e=>set('phone',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Email</label><input type="email" value={form.email} onChange={e=>set('email',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Ciudad</label><input value={form.city} onChange={e=>set('city',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+          </div>
+          <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
+            <button type="button" onClick={onClose} className="px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50">Cancelar</button>
+            <button type="submit" disabled={saving} className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2">
+              {saving?<RefreshCw size={14} className="animate-spin"/>:<UserPlus size={14}/>} Agregar Proveedor
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
 
 export default function ListaComprasPage() {
   const [items, setItems]         = useState([]);
@@ -67,7 +107,8 @@ export default function ListaComprasPage() {
   const [suppliers, setSuppliers] = useState([]);
   const [supplierSearch, setSupplierSearch] = useState('');
   const [selectedSupplier, setSelectedSupplier] = useState(null);
-  const [pecForm, setPecForm]     = useState({ dias_entrega: 15, modalidad_pago: 'Contado', notas: '' });
+  const [showNewSupplier, setShowNewSupplier] = useState(false);
+  const [pecForm, setPecForm]     = useState({ dias_entrega: 15, modalidad_pago: 'Contado', tipo_envio: 'casillero', notas: '' });
   const [pecSaving, setPecSaving] = useState(false);
   const supplierTimer = useRef(null);
 
@@ -99,11 +140,14 @@ export default function ListaComprasPage() {
   const onSupplierSearch = (q) => {
     setSupplierSearch(q);
     setSelectedSupplier(null);
+    setShowNewSupplier(false);
     if (supplierTimer.current) clearTimeout(supplierTimer.current);
     if (!q.trim()) { setSuppliers([]); return; }
     supplierTimer.current = setTimeout(async () => {
       const d = await apiFetch(`/compras/proveedores/search?q=${encodeURIComponent(q)}`).catch(() => ({ data: [] }));
-      setSuppliers(Array.isArray(d) ? d : (d?.data ?? []));
+      const arr = Array.isArray(d) ? d : (d?.data ?? []);
+      setSuppliers(arr);
+      if (arr.length === 0) setShowNewSupplier(true);
     }, 300);
   };
 
@@ -143,20 +187,31 @@ export default function ListaComprasPage() {
   };
 
   const openPecModal = (itemsToOrder) => {
-    setPecModalItems(itemsToOrder);
+    setPecModalItems(itemsToOrder.map(it => ({...it, precio_unitario_cop: it.precio_unitario_cop || 0})));
     setSelectedSupplier(null);
     setSupplierSearch('');
     setSuppliers([]);
+    setShowNewSupplier(false);
     const pvens = [...new Set(itemsToOrder.map(it=>it.pven_numero).filter(Boolean))];
-    setPecForm({ dias_entrega: 15, modalidad_pago: 'Contado', notas: `Desde Lista de Compras - ${pvens.join(', ')}` });
+    setPecForm({ dias_entrega: 15, modalidad_pago: 'Contado', tipo_envio: 'casillero', notas: `Desde Lista de Compras - ${pvens.join(', ')}` });
     setShowPecModal(true);
+  };
+
+  const setItemPrecio = (id, precio) => {
+    setPecModalItems(prev => prev.map(it => it.id === id ? {...it, precio_unitario_cop: precio} : it));
   };
 
   const handleCrearPEC = async () => {
     if (!pecModalItems.length) return;
+    const sinPrecio = pecModalItems.find(it => !(Number(it.precio_unitario_cop) > 0));
+    if (sinPrecio) {
+      showToast(`"${sinPrecio.producto}" no tiene precio. Ingresa un precio antes de crear el pedido de compra.`, 'err');
+      return;
+    }
     setPecSaving(true);
     try {
       const user = localStorage.getItem('user_name') || '';
+      const totalCalc = pecModalItems.reduce((s, it) => s + Number(it.cantidad || 0) * Number(it.precio_unitario_cop || 0), 0);
       const pec = await apiFetch('/compras/pedidos', {
         method: 'POST',
         body: JSON.stringify({
@@ -166,8 +221,11 @@ export default function ListaComprasPage() {
           ven_numero: pecModalItems[0]?.pven_numero,
           dias_entrega: pecForm.dias_entrega,
           modalidad_pago: pecForm.modalidad_pago,
+          tipo_envio: pecForm.tipo_envio,
           notas: pecForm.notas,
-          productos: pecModalItems.map(it=>({ producto_nombre: it.producto, qty: it.cantidad })),
+          productos: pecModalItems.map(it=>({ producto_nombre: it.producto, qty: it.cantidad, unit_price_cop: Number(it.precio_unitario_cop) })),
+          subtotal_cop: totalCalc,
+          total_cop: totalCalc,
           created_by: user,
         }),
       });
@@ -548,6 +606,12 @@ export default function ListaComprasPage() {
       )}
 
       {/* Modal Crear PEC */}
+      {showNewSupplier && (
+        <NewSupplierModal
+          onSave={(s)=>{setSelectedSupplier(s);setSupplierSearch(s.name);setSuppliers([]);setShowNewSupplier(false);}}
+          onClose={()=>setShowNewSupplier(false)}
+        />
+      )}
       {showPecModal && pecModalItems.length > 0 && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/50 backdrop-blur-sm p-4">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md">
@@ -559,11 +623,18 @@ export default function ListaComprasPage() {
               <button onClick={()=>setShowPecModal(false)} className="p-2 text-gray-400 hover:bg-gray-100 rounded-xl"><X size={18}/></button>
             </div>
             <div className="p-6 space-y-4">
-              <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 max-h-32 overflow-y-auto space-y-1">
+              <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 max-h-48 overflow-y-auto space-y-2">
                 {pecModalItems.map(it=>(
-                  <div key={it.id} className="flex justify-between text-xs text-gray-700">
-                    <span className="truncate max-w-[240px]">{it.producto} {it.pven_numero&&<span className="text-gray-400">· {it.pven_numero}</span>}</span>
-                    <span className="font-bold ml-2 shrink-0">× {it.cantidad}</span>
+                  <div key={it.id} className="flex items-center justify-between gap-2 text-xs text-gray-700">
+                    <div className="min-w-0">
+                      <p className="truncate">{it.producto} {it.pven_numero&&<span className="text-gray-400">· {it.pven_numero}</span>}</p>
+                      <p className="text-gray-400">× {it.cantidad}</p>
+                    </div>
+                    <div className="shrink-0 w-32">
+                      <input type="number" min="0" value={it.precio_unitario_cop||''} onChange={e=>setItemPrecio(it.id, e.target.value)}
+                        placeholder="Precio COP"
+                        className={'w-full border rounded-lg px-2 py-1.5 text-xs text-right outline-none focus:ring-2 focus:ring-purple-200 ' + (!(Number(it.precio_unitario_cop)>0)?'border-red-300 bg-red-50':'border-gray-200')}/>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -596,6 +667,14 @@ export default function ListaComprasPage() {
                   <select value={pecForm.modalidad_pago} onChange={e=>setPecForm(f=>({...f,modalidad_pago:e.target.value}))}
                     className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200">
                     {['Contado','Credito 30d','Credito 60d','Adelanto 50%','Contra entrega'].map(p=><option key={p}>{p}</option>)}
+                  </select>
+                </div>
+                <div className="col-span-2">
+                  <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Tipo de Envio</label>
+                  <select value={pecForm.tipo_envio} onChange={e=>setPecForm(f=>({...f,tipo_envio:e.target.value}))}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200">
+                    <option value="casillero">Via Casillero</option>
+                    <option value="directo">Directo Colombia</option>
                   </select>
                 </div>
               </div>
