@@ -44,6 +44,27 @@ def _next_seq(db: Session, seq_name: str) -> int:
     r = db.execute(text(f"SELECT nextval(\'{seq_name}\')")).scalar()
     return r
 
+def _validar_precios_productos(productos: list) -> None:
+    """La Calculadora de Cotizacion permite guardar filas sin costo/precio
+    (quedan en $0). Bloqueamos el guardado -- igual que create_pec en
+    erp_compras.py -- para que nunca quede una cotizacion 'creada' con un
+    producto a precio cero."""
+    if not productos:
+        return
+    for prod in productos:
+        precio = (prod.get("unit_price_cop") or prod.get("total_cop") or prod.get("precio_cop")
+                  or prod.get("precio_unitario") or prod.get("cost_usd") or 0)
+        try:
+            precio = float(precio)
+        except (TypeError, ValueError):
+            precio = 0
+        if precio <= 0:
+            nombre_prod = prod.get("product_name") or prod.get("nombre") or prod.get("producto") or "producto"
+            raise HTTPException(
+                422,
+                f"El producto '{nombre_prod}' no tiene precio definido. Ingresa un costo/precio antes de guardar la cotizacion.",
+            )
+
 def _gen_numero(db: Session, prefix: str, seq: str) -> str:
     year = datetime.datetime.utcnow().year
     n = _next_seq(db, seq)
@@ -69,14 +90,27 @@ def _log(db: Session, entity_type: str, entity_id: int, entity_numero: str,
 def _lista_compras_items_de(db: Session, pven_id: int) -> list:
     """Items de la Lista de Compras (JSON en web_builder_config) que pertenecen
     a este Pedido de Venta -- usado para saber si ya se eligio esa via de
-    compra, sin duplicar el modelo de datos de erp_compras.py."""
-    import json
-    row = db.execute(text("SELECT config_value FROM web_builder_config WHERE config_key='erp_lista_compras'")).fetchone()
-    if not row or not row[0]:
+    compra, sin duplicar el modelo de datos de erp_compras.py.
+
+    web_builder_config NO se trunca entre corridas de pytest/reset de datos,
+    a diferencia de sale_orders -- si un PVEN es eliminado y el id numerico
+    se reutiliza, un item huerfano con ese mismo pven_id podia "adjuntarse"
+    a un PVEN completamente distinto. Se valida contra el numero real del
+    pedido y se auto-limpian los items huerfanos que ya no correspondan."""
+    from app.api.v1.erp_compras import _load_lista_compras, _save_lista_compras
+    items = _load_lista_compras(db)
+    candidatos = [it for it in items if it.get("pven_id") == pven_id]
+    if not candidatos:
         return []
-    val = row[0]
-    items = json.loads(val) if isinstance(val, str) else (val if isinstance(val, list) else [])
-    return [it for it in items if it.get("pven_id") == pven_id]
+
+    ven = db.query(SaleOrder).filter(SaleOrder.id == pven_id).first()
+    vigentes = [it for it in candidatos if ven and it.get("pven_numero") == ven.numero]
+    if len(vigentes) != len(candidatos):
+        # Hay items huerfanos (numero no coincide o el PVEN ya no existe) -- se purgan.
+        ids_vigentes = {it.get("id") for it in vigentes}
+        items_limpios = [it for it in items if it.get("pven_id") != pven_id or it.get("id") in ids_vigentes]
+        _save_lista_compras(db, items_limpios)
+    return vigentes
 
 def _sc_dict(sc: CustomerRequest) -> dict:
     return {
@@ -473,6 +507,7 @@ def list_cotizaciones(
 @router.post("/cotizaciones", status_code=201)
 def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
+    _validar_precios_productos(body.get("productos") or [])
     numero = _gen_numero(db, "COT-", "seq_cot")
     entrega_est = None
     if body.get("dias_entrega"):
@@ -559,6 +594,8 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
     if not cot:
         raise HTTPException(404, "Cotizacion no encontrada")
+    if "productos" in body:
+        _validar_precios_productos(body.get("productos") or [])
     old_estado = cot.estado
     allowed = ["sc_id","customer_id","customer_name","customer_phone","customer_email",
                "customer_address","cotizador","direccion_entrega","trm_rate","subtotal_cop",

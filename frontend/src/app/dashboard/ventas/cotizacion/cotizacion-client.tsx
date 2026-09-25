@@ -184,6 +184,7 @@ function CalculadorModal({
   const [fechaEntrega, setFechaEntrega] = useState(cot.fecha_entrega_estimada ? cot.fecha_entrega_estimada.split('T')[0] : '');
   const [notas, setNotas] = useState(cot.notas || '');
   const [anticipo, setAnticipo] = useState<string | number>(cot.anticipo_cop ?? 0);
+  const [error, setError] = useState('');
 
   const addProd = () => setProductos(p => [...p, { product_name: '', qty: 1, cost_usd: 0, margen_pct: 30, flete_usd: 0, es_libre: false, _rowId: crypto.randomUUID() }]);
   const removeProd = (i: number) => setProductos(p => p.filter((_, idx) => idx !== i));
@@ -207,6 +208,15 @@ function CalculadorModal({
   const saldo = Math.max(0, total - anticipo_cop);
 
   const handleSave = () => {
+    if (computedProd.length === 0 || computedProd.some(p => !p.total_cop || p.total_cop <= 0)) {
+      setError('Cada producto necesita un costo mayor a $0 antes de guardar la cotizacion.');
+      return;
+    }
+    if (total <= 0) {
+      setError('El total de la cotizacion debe ser mayor a $0.');
+      return;
+    }
+    setError('');
     const prods = computedProd.map(p => ({
       product_name: p.product_name,
       qty: Number(p.qty),
@@ -365,11 +375,16 @@ function CalculadorModal({
           </div>
         </div>
 
-        <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-3 bg-slate-50">
-          <button onClick={onClose} className="px-5 py-2.5 rounded-xl border border-slate-300 text-slate-600 font-bold text-sm hover:bg-slate-100">Cancelar</button>
-          <button onClick={handleSave} className="px-6 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-sm shadow-md flex items-center gap-2">
-            <Save size={14}/> Guardar Cotizacion
-          </button>
+        <div className="px-6 py-4 border-t border-slate-100 bg-slate-50">
+          {error && (
+            <p className="text-xs text-red-600 font-bold mb-3 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>
+          )}
+          <div className="flex justify-end gap-3">
+            <button onClick={onClose} className="px-5 py-2.5 rounded-xl border border-slate-300 text-slate-600 font-bold text-sm hover:bg-slate-100">Cancelar</button>
+            <button onClick={handleSave} className="px-6 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-sm shadow-md flex items-center gap-2">
+              <Save size={14}/> Guardar Cotizacion
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -394,6 +409,39 @@ function DeleteConfirm({ cot, onConfirm, onCancel }: { cot: any; onConfirm: () =
         <div className="flex gap-3">
           <button onClick={onCancel} className="flex-1 py-3 rounded-xl border border-slate-300 text-slate-700 font-bold hover:bg-slate-50">Cancelar</button>
           <button onClick={onConfirm} className="flex-1 py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700">Si, Eliminar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm, onCancel, saving }: { pven: any; totalAnterior: number; totalNuevo: number; onConfirm: () => void; onCancel: () => void; saving: boolean }) {
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4">
+        <div className="w-14 h-14 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <RotateCcw className="text-indigo-600" size={24}/>
+        </div>
+        <h3 className="font-extrabold text-xl text-slate-900 text-center mb-2">Actualizar Pedido de Venta</h3>
+        <p className="text-slate-500 text-center text-sm mb-4">
+          Esta cotizacion ya tiene el pedido <strong>{pven?.numero}</strong> generado. Los nuevos precios no se
+          reflejan alli automaticamente.
+        </p>
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 mb-6 flex items-center justify-center gap-3 text-sm">
+          <span className="text-slate-400 line-through">{fCOP(totalAnterior)}</span>
+          <ArrowRight size={14} className="text-slate-400"/>
+          <span className="font-black text-indigo-700">{fCOP(totalNuevo)}</span>
+        </div>
+        <p className="text-[11px] text-slate-400 text-center mb-6">
+          El anticipo y los pagos ya registrados en el pedido no se modifican, solo productos y precios.
+        </p>
+        <div className="flex flex-col gap-2">
+          <button disabled={saving} onClick={onConfirm} className="py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 disabled:opacity-50">
+            Si, actualizar tambien el pedido
+          </button>
+          <button disabled={saving} onClick={onCancel} className="py-3 rounded-xl border border-slate-300 text-slate-700 font-bold hover:bg-slate-50 disabled:opacity-50">
+            Solo guardar la cotizacion
+          </button>
         </div>
       </div>
     </div>
@@ -471,6 +519,7 @@ export default function CotizacionClient() {
   // Panel state
   const [showCalc, setShowCalc] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
+  const [pendingCalcData, setPendingCalcData] = useState<any | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
   const [savingEdit, setSavingEdit] = useState(false);
@@ -646,7 +695,19 @@ export default function CotizacionClient() {
     } catch (err: any) { showToast('Error: ' + err.message, 'err'); }
   }
 
-  async function onCalcSave(data: any) {
+  function onCalcSave(data: any) {
+    const pvenVigente = (selected?.pedidos_venta || []).filter((v: any) => v.estado !== 'CANCELADA').pop();
+    if (pvenVigente) {
+      // Ya existe un Pedido de Venta generado desde esta cotizacion -- preguntar
+      // si los nuevos precios deben reflejarse tambien alli antes de guardar.
+      setShowCalc(false);
+      setPendingCalcData(data);
+      return;
+    }
+    commitCalcSave(data, false);
+  }
+
+  async function commitCalcSave(data: any, propagarAPven: boolean) {
     const cotId = Number(selected?.id ?? selected?.data?.id);
     if (!cotId || isNaN(cotId)) {
       showToast('Error: ID de cotización no válido', 'err');
@@ -661,8 +722,35 @@ export default function CotizacionClient() {
       const d = raw?.data ?? raw;
       setSelected((prev: any) => ({ ...prev, ...d, ...data }));
       setCotizaciones(prev => prev.map(c => c.id === cotId ? { ...c, total_cop: data.total_cop } : c));
+
+      const pvenVigente = (selected?.pedidos_venta || []).filter((v: any) => v.estado !== 'CANCELADA').pop();
+      if (propagarAPven && pvenVigente) {
+        const nuevoSaldo = Math.max(0, Number(data.total_cop || 0) - Number(pvenVigente.anticipo_cop || 0));
+        await apiFetch(`/ventas/pedidos/${pvenVigente.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            productos: data.productos,
+            subtotal_cop: data.subtotal_cop,
+            descuento_pct: data.descuento_pct,
+            total_cop: data.total_cop,
+            saldo_cop: nuevoSaldo,
+            updated_by: currentUser,
+          }),
+        });
+        await apiFetch(`/ventas/pedidos/${pvenVigente.id}/actividad`, {
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'UPDATED',
+            description: `Precios actualizados por re-cotizacion de ${selected?.numero || ''} (anticipo y pagos existentes no se modificaron)`,
+            user_name: currentUser,
+          }),
+        });
+        showToast(`Cotizacion recalculada y propagada a ${pvenVigente.numero}`);
+      } else {
+        showToast('Cotizacion calculada y guardada');
+      }
       setShowCalc(false);
-      showToast('Cotizacion calculada y guardada');
+      setPendingCalcData(null);
     } catch (err: any) { showToast('Error: ' + err.message, 'err'); }
     setSaving(false);
   }
@@ -1392,6 +1480,16 @@ export default function CotizacionClient() {
           {/* Modals */}
           {showCalc && <CalculadorModal cot={selected} onSave={onCalcSave} onClose={() => setShowCalc(false)}/>}
           {showDelete && <DeleteConfirm cot={selected} onConfirm={deleteCot} onCancel={() => setShowDelete(false)}/>}
+          {pendingCalcData && (
+            <PropagarPvenConfirm
+              pven={(selected?.pedidos_venta || []).filter((v: any) => v.estado !== 'CANCELADA').pop()}
+              totalAnterior={Number(selected?.total_cop || 0)}
+              totalNuevo={Number(pendingCalcData.total_cop || 0)}
+              saving={saving}
+              onConfirm={() => commitCalcSave(pendingCalcData, true)}
+              onCancel={() => commitCalcSave(pendingCalcData, false)}
+            />
+          )}
           {showChannelModal && <ChannelModal selectedChannel={selectedChannel} onSelectChannel={setSelectedChannel} onConfirm={confirmarEnvio} onCancel={cancelarEnvio} saving={saving} customerHasPhone={!!selected?.customer_phone}/>}
         </>
       )}

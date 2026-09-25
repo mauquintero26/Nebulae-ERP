@@ -2917,6 +2917,11 @@ def update_item_lista_compras(
             
     if body.get("pec_id") and item.get("pven_id"):
         ven = db.query(SaleOrder).filter(SaleOrder.id == item["pven_id"]).first()
+        # Si web_builder_config sobrevivio a un reset de datos que sale_orders
+        # no, el pven_id puede haber sido reciclado por otro pedido -- validar
+        # el numero antes de mutar un SaleOrder que ya no es el correcto.
+        if ven and item.get("pven_numero") and ven.numero != item.get("pven_numero"):
+            ven = None
         if ven:
             ven.pec_id = body["pec_id"]
             if body.get("pec_numero"):
