@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
   Package, Search, Filter, Plus, ChevronLeft, Save,
   Globe, Tag, Layers, DollarSign, RefreshCw
@@ -17,6 +18,9 @@ async function apiFetch(path: string, opts: RequestInit = {}) {
 const TABS = ['Informacion General', 'SKUs y Variantes', 'Stock', 'E-Commerce'];
 
 export default function ProductosPage() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const [products, setProducts] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -196,6 +200,22 @@ export default function ProductosPage() {
     setSelectedProduct(p);
   }
 
+  function closeProduct() {
+    setSelectedProduct(null);
+    if (searchParams.get('id')) router.replace(pathname);
+  }
+
+  // Deep-link: Abastecimiento "Ver Producto" enlaza aqui con ?id=<product_id>
+  // para abrir directamente su ficha. load() trae hasta 100 productos sin
+  // filtro -- si el catalogo crece mas alla de eso, este match puede fallar
+  // para productos fuera de esa primera pagina.
+  useEffect(() => {
+    const idParam = searchParams.get('id');
+    if (!idParam || loading || selectedProduct) return;
+    const found = products.find(p => String(p.id) === idParam);
+    if (found) openEdit(found);
+  }, [searchParams, products, loading]);
+
   // ─── PRODUCT LIST ───
   if (!selectedProduct) {
     return (
@@ -299,7 +319,7 @@ export default function ProductosPage() {
   return (
     <div className="h-full w-full bg-[#f8f9fa] flex flex-col overflow-hidden">
       <div className="bg-white border-b border-slate-100 px-6 py-4 flex items-center gap-4 flex-shrink-0">
-        <button onClick={() => setSelectedProduct(null)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-xl">
+        <button onClick={closeProduct} className="p-2 text-slate-400 hover:bg-slate-100 rounded-xl">
           <ChevronLeft size={20} />
         </button>
         <div className="flex-1">

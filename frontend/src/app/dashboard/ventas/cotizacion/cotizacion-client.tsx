@@ -1117,7 +1117,7 @@ export default function CotizacionClient() {
                       <div>
                         <p className="font-bold text-slate-900">{selected.customer_name}</p>
                         {selected.customer_id && (
-                          <Link href="/dashboard/agenda" className="text-xs text-amber-600 hover:underline flex items-center gap-0.5">
+                          <Link href={`/dashboard/agenda?customer_id=${selected.customer_id}`} className="text-xs text-amber-600 hover:underline flex items-center gap-0.5">
                             Ver perfil <ExternalLink size={9}/>
                           </Link>
                         )}

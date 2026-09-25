@@ -7,6 +7,7 @@ import {
 } from '@/lib/api';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
   Search, Plus, Calendar, MessageSquare, Settings,
   User, DollarSign, ShoppingBag, MapPin, Activity,
@@ -58,6 +59,10 @@ const TIMELINE_DOT_COLOR: Record<string, string> = {
 };
 
 export default function AgendaPage() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+
   // ─── PESTAÑA PRINCIPAL (Clientes vs Proveedores) ───────────────────────────
   const [mainTab, setMainTab] = useState<'clientes' | 'proveedores'>('clientes');
 
@@ -198,7 +203,17 @@ export default function AgendaPage() {
   const goBack = () => {
     setSelectedClient(null);
     setCustomer360(null);
+    if (searchParams.get('customer_id')) router.replace(pathname);
   };
+
+  // Deep-link: otras paginas (ej. Cotizacion "Ver perfil") enlazan aqui con
+  // ?customer_id=<id real> para abrir directamente la ficha de ese cliente.
+  useEffect(() => {
+    const idParam = searchParams.get('customer_id');
+    if (!idParam || customers.length === 0) return;
+    const found = customers.find(c => String(c.realId) === idParam);
+    if (found) openClient(found);
+  }, [searchParams, customers]);
 
   const goBackSupplier = () => {
     setSelectedSupplier(null);

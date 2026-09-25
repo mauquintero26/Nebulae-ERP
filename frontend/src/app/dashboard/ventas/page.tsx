@@ -945,12 +945,12 @@ export default function VentasHub() {
                         {/* Accion sugerida segun el tipo y estado */}
                         <td className="px-3 py-3 text-center">
                           {row.tipo === 'SC' && row.estado !== 'CONFIRMADA' && row.estado !== 'CANCELADA' ? (
-                            <button onClick={e=>{e.stopPropagation();router.push(`/dashboard/ventas/cotizacion?sc_id=${row.id}`);}}
+                            <button onClick={e=>{e.stopPropagation();router.push(`/dashboard/ventas/solicitud?id=${row.id}`);}}
                               className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[10px] rounded-lg border border-indigo-200 transition-colors">
                               Cotizar →
                             </button>
                           ) : row.tipo === 'COT' && row.estado !== 'CONFIRMADA' && row.estado !== 'RECHAZADA' ? (
-                            <button onClick={e=>{e.stopPropagation();router.push(`/dashboard/ventas/venta?cot_id=${row.id}`);}}
+                            <button onClick={e=>{e.stopPropagation();router.push(`/dashboard/ventas/cotizacion?id=${row.id}`);}}
                               className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-[10px] rounded-lg border border-amber-200 transition-colors">
                               Aprobar Venta →
                             </button>

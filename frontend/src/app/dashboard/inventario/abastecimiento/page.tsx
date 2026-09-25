@@ -231,7 +231,7 @@ export default function AbastecimientoPage() {
                               <ShoppingCart size={11} /> Crear PEC
                             </Link>
                           )}
-                          <Link href="/dashboard/inventario/productos"
+                          <Link href={`/dashboard/inventario/productos?id=${p.id}`}
                             className="bg-slate-100 text-slate-700 hover:bg-slate-200 px-3 py-1.5 rounded text-xs font-bold">
                             Ver Producto
                           </Link>
