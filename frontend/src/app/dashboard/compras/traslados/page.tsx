@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowLeftRight, ShieldAlert, Activity, Clock, Package,
   CheckCircle2, Search, Plus, X, Check, RefreshCw,
@@ -50,6 +51,9 @@ const fDate = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 
 export default function TrasladosPage() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const [traslados, setTraslados] = useState<any[]>([]);
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -107,6 +111,22 @@ export default function TrasladosPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Deep-link: HUB de Inventario enlaza aqui con ?id=<operation_id> para abrir
+  // directamente el detalle de ese traslado. No hay GET /inventory/operations/{id}
+  // individual, asi que solo funciona si el traslado esta entre los ultimos 100
+  // cargados por load() -- suficiente para el volumen actual de este modulo.
+  useEffect(() => {
+    const idParam = searchParams.get('id');
+    if (!idParam || loading) return;
+    const found = traslados.find(t => String(t.id) === idParam);
+    if (found) setSelected(found);
+  }, [searchParams, traslados, loading]);
+
+  const closeSelected = useCallback(() => {
+    setSelected(null);
+    if (searchParams.get('id')) router.replace(pathname);
+  }, [searchParams, router, pathname]);
 
   function addProd() {
     if (!newProd.sku_id) return;
@@ -407,7 +427,7 @@ export default function TrasladosPage() {
       {/* Drawer */}
       {selected && (
         <div className="fixed inset-0 z-40 flex items-start justify-end">
-          <div className="absolute inset-0 bg-slate-900/30 backdrop-blur-sm" onClick={() => setSelected(null)} />
+          <div className="absolute inset-0 bg-slate-900/30 backdrop-blur-sm" onClick={closeSelected} />
           <div className="relative w-full max-w-md h-full bg-white shadow-2xl border-l border-slate-200 flex flex-col overflow-hidden">
             <div className="px-6 py-5 border-b border-slate-100 flex items-start justify-between bg-gradient-to-r from-orange-50 to-white">
               <div>
@@ -415,7 +435,7 @@ export default function TrasladosPage() {
                 <p className="text-xs text-slate-500 mt-0.5">Traslado Interno</p>
                 <div className="mt-2"><Badge estado={selected.status || 'DRAFT'} /></div>
               </div>
-              <button onClick={() => setSelected(null)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-xl">
+              <button onClick={closeSelected} className="p-2 text-slate-400 hover:bg-slate-100 rounded-xl">
                 <X size={18} />
               </button>
             </div>

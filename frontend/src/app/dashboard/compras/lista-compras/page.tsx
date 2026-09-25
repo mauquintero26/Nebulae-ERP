@@ -486,7 +486,7 @@ export default function ListaComprasPage() {
                     </td>
                     <td className="px-4 py-3.5">
                       {item.pec_numero ? (
-                        <Link href="/dashboard/compras/pedidos" className="text-purple-600 font-bold hover:underline flex items-center gap-1 text-xs">
+                        <Link href={`/dashboard/compras/pedidos?id=${item.pec_id}`} className="text-purple-600 font-bold hover:underline flex items-center gap-1 text-xs">
                           {item.pec_numero}<ExternalLink size={10}/>
                         </Link>
                       ) : <span className="text-gray-300 text-xs">-</span>}

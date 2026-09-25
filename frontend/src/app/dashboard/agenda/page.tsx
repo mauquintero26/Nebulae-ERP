@@ -877,7 +877,7 @@ export default function AgendaPage() {
                   <div className="text-right">
                     <p className="text-xs font-black text-slate-800">{formatCOP(pec.total_cop)}</p>
                     <Link
-                      href="/dashboard/compras/pedidos"
+                      href={`/dashboard/compras/pedidos?id=${pec.id}`}
                       className="text-[10px] font-bold text-teal-600 hover:underline inline-flex items-center gap-0.5 mt-0.5"
                     >
                       Ver en Compras <ChevronRight size={11} />

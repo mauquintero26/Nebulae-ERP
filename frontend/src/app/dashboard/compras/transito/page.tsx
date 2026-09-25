@@ -269,7 +269,7 @@ export default function TransitoPage() {
                         </td>
                         <td className="px-4 py-3">
                           {p.ven_numero ? (
-                            <Link href="/dashboard/ventas/venta" className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold hover:bg-emerald-200 inline-flex items-center gap-1">
+                            <Link href={`/dashboard/ventas/venta?id=${p.ven_id}`} className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold hover:bg-emerald-200 inline-flex items-center gap-1">
                               {p.ven_numero} <ChevronRight size={10} />
                             </Link>
                           ) : <span className="text-slate-300 text-xs">-</span>}

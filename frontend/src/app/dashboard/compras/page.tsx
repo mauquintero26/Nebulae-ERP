@@ -139,7 +139,7 @@ function PecDetailPanel({ pec, pedidosVenta, onClose, onUpdate, onToast }) {
               {menuOpen && (
                 <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-2xl shadow-2xl py-2 w-52 z-10">
                   <button onClick={()=>{setEditEstado(true);setMenuOpen(false);}} className="w-full text-left px-4 py-2.5 hover:bg-purple-50 text-sm font-medium flex items-center gap-2"><Edit2 size={13} className="text-purple-600"/> Cambiar Estado</button>
-                  <Link href="/dashboard/compras/pedidos" className="block w-full text-left px-4 py-2.5 hover:bg-blue-50 text-sm font-medium text-blue-600" onClick={()=>setMenuOpen(false)}>Ver en Pedidos</Link>
+                  <Link href={`/dashboard/compras/pedidos?id=${pec.id}`} className="block w-full text-left px-4 py-2.5 hover:bg-blue-50 text-sm font-medium text-blue-600" onClick={()=>setMenuOpen(false)}>Ver en Pedidos</Link>
                   <div className="border-t border-gray-100 my-1"/>
                   <button onClick={handleDelete} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm font-medium flex items-center gap-2 text-red-600"><Trash2 size={13}/> Cancelar PEC</button>
                 </div>

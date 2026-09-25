@@ -190,7 +190,7 @@ export default function InventarioRecepcionesPage() {
                     <td className="px-6 py-4 font-black text-orange-700">{r.numero}</td>
                     <td className="px-6 py-4">
                       {r.pec_numero ? (
-                        <Link href="/dashboard/compras/pedidos" onClick={e => e.stopPropagation()}
+                        <Link href={`/dashboard/compras/pedidos?id=${r.pec_id}`} onClick={e => e.stopPropagation()}
                           className="text-purple-600 font-bold hover:underline text-sm">{r.pec_numero}</Link>
                       ) : <span className="text-slate-400 text-sm">-</span>}
                     </td>
@@ -211,7 +211,7 @@ export default function InventarioRecepcionesPage() {
                     </td>
                     <td className="px-6 py-4 text-center">
                       <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Link href="/dashboard/compras/recepciones" onClick={e => e.stopPropagation()}
+                        <Link href={`/dashboard/compras/recepciones/${r.id}`} onClick={e => e.stopPropagation()}
                           className="bg-orange-100 text-orange-700 hover:bg-orange-200 px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1">
                           Ver en Compras <ChevronRight size={12} />
                         </Link>

@@ -720,7 +720,14 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
                 ) : pvens.map((v:string,i:number)=>(
                   <div key={i} className="flex items-center justify-between p-3 bg-indigo-50 rounded-xl border border-indigo-100 mb-2">
                     <span className="font-bold text-indigo-700">{v}</span>
-                    <Link href="/dashboard/ventas" className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-1 font-bold"><ExternalLink size={11}/> Ver</Link>
+                    {/* ven_id en el PEC solo guarda el primer PVEN consolidado -- los
+                        demas numeros (i>0) no tienen id real aqui, asi que no se
+                        arma un link que podria apuntar al pedido equivocado. */}
+                    {i === 0 && detail?.ven_id ? (
+                      <Link href={`/dashboard/ventas/venta?id=${detail.ven_id}`} className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-1 font-bold"><ExternalLink size={11}/> Ver</Link>
+                    ) : (
+                      <Link href="/dashboard/ventas/venta" className="text-xs text-gray-400 hover:text-indigo-600 flex items-center gap-1 font-bold"><ExternalLink size={11}/> Buscar</Link>
+                    )}
                   </div>
                 ))}
               </div>

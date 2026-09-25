@@ -319,7 +319,7 @@ export default function PedidoVentaDetallePage() {
                     <p key={i} className="text-xs text-purple-700">&middot; {p.product_name || p.descripcion || p.producto_nombre || 'Producto'} <span className="text-purple-400">&times;{p.qty ?? p.cantidad ?? 1}</span></p>
                   ))}
                 </div>
-                <Link href="/dashboard/compras/pedidos" className="mt-3 inline-flex items-center gap-1 text-xs text-purple-700 font-bold hover:underline">
+                <Link href={`/dashboard/compras/pedidos?id=${pedido.pec_id}`} className="mt-3 inline-flex items-center gap-1 text-xs text-purple-700 font-bold hover:underline">
                   Ir a {pedido.pec_numero} <ExternalLink size={11} />
                 </Link>
               </div>

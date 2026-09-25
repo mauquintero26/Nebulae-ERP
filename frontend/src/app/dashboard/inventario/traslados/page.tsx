@@ -190,7 +190,7 @@ export default function InventarioTrasladosPage() {
                     </td>
                     <td className="px-6 py-4 text-center">
                       <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Link href="/dashboard/compras/traslados" onClick={e => e.stopPropagation()}
+                        <Link href={`/dashboard/compras/traslados?id=${t.id}`} onClick={e => e.stopPropagation()}
                           className="bg-orange-100 text-orange-700 hover:bg-orange-200 px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1">
                           Ver en Compras <ChevronRight size={12} />
                         </Link>
@@ -256,7 +256,7 @@ export default function InventarioTrasladosPage() {
                   </div>
                 </div>
               )}
-              <Link href="/dashboard/compras/traslados"
+              <Link href={`/dashboard/compras/traslados?id=${selected.id}`}
                 className="w-full flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 text-white py-2.5 rounded-xl font-bold text-sm">
                 Gestionar en Compras <ChevronRight size={14} />
               </Link>
