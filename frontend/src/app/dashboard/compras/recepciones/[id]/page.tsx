@@ -41,6 +41,12 @@ export default function RecepcionDetallePage() {
   const [items, setItems] = useState<any[]>([]);
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [warehouses, setWarehouses] = useState<any[]>([]);
+  const [savingWarehouse, setSavingWarehouse] = useState(false);
+
+  useEffect(() => {
+    apiFetch('/inventory/warehouses').then(d => setWarehouses(Array.isArray(d) ? d : (d?.data ?? []))).catch(() => {});
+  }, []);
 
   useEffect(() => {
     setCurrentUser(localStorage.getItem('user_name') || localStorage.getItem('username') || '');
@@ -113,6 +119,27 @@ export default function RecepcionDetallePage() {
   function updateReceived(idx: number, val: number) {
     if (!isEditable) return;
     setItems(prev => prev.map((it, i) => (i === idx ? { ...it, qty_recibida: val } : it)));
+  }
+
+  // Bodega Receptora used to be read-only, showing warehouse_name straight
+  // from the backend — which falls back to the SUPPLIER's name when the PEC
+  // never had a warehouse_id (nothing upstream lets you set one), so this was
+  // the only place confirmar's "Debe seleccionar una bodega antes de
+  // confirmar" could ever actually be resolved.
+  async function updateWarehouse(warehouseId: string) {
+    if (!data?.id || !warehouseId) return;
+    setSavingWarehouse(true);
+    try {
+      await apiFetch(`/compras/recepciones/${data.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ warehouse_id: Number(warehouseId) }),
+      });
+      await loadRecepcion();
+    } catch (err: any) {
+      alert('Error al asignar la bodega: ' + err.message);
+    } finally {
+      setSavingWarehouse(false);
+    }
   }
 
   // Guarda el conteo actual de todas las lineas en un solo PATCH (batched-on-save).
@@ -295,9 +322,21 @@ export default function RecepcionDetallePage() {
 
                 <div className="col-span-2">
                   <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Bodega Receptora</label>
-                  <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800">
-                    {data?.warehouse_name || 'Sin bodega asignada'}
-                  </div>
+                  {isEditable ? (
+                    <select
+                      value={data?.warehouse_id || ''}
+                      disabled={savingWarehouse}
+                      onChange={e => updateWarehouse(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 disabled:opacity-50"
+                    >
+                      <option value="" disabled>{data?.warehouse_id ? (data.warehouse_name || 'Bodega desconocida') : 'Selecciona una bodega...'}</option>
+                      {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                    </select>
+                  ) : (
+                    <div className="bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800">
+                      {data?.warehouse_name || 'Sin bodega asignada'}
+                    </div>
+                  )}
                 </div>
 
                 <div className="col-span-2">

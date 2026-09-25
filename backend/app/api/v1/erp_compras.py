@@ -965,7 +965,12 @@ def crear_recepcion_desde_pec(
         raise HTTPException(404, "Pedido de compra no encontrado")
     eninv_numero = _gen_numero(db, "ENINV-", "seq_eninv")
     wh = None
-    wh_name = p.supplier_name or "Bodega Principal"
+    # Was `p.supplier_name or "Bodega Principal"` — showed the SUPPLIER's name
+    # as the receiving warehouse whenever the PEC had no warehouse_id (there's
+    # no way to set one upstream), which is a different real-world entity and
+    # just confusing. None here is fine: the receiving UI now has an actual
+    # warehouse picker for exactly this case, gated on warehouse_id being unset.
+    wh_name = None
     wid = body.warehouse_id or p.warehouse_id
     if wid:
         wh = db.query(Warehouse).filter(Warehouse.id == wid).first()
@@ -1488,6 +1493,14 @@ def update_recepcion(eninv_id: int, body: dict, user: User = Depends(require_rol
     for k in allowed_non_prod:
         if k in body:
             setattr(g, k, body[k])
+    if "warehouse_id" in body:
+        # warehouse_name must always be derived from warehouse_id, never trust
+        # a client-supplied one for it — otherwise (as happened live: PATCH
+        # {warehouse_id: 1} on a receipt whose name was already wrong) the two
+        # drift out of sync and the UI shows a name that isn't the bodega the
+        # id actually points at.
+        wh = db.query(Warehouse).filter(Warehouse.id == body["warehouse_id"]).first() if body["warehouse_id"] else None
+        g.warehouse_name = wh.name if wh else None
     g.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(g)

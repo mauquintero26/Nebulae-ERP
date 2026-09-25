@@ -30,6 +30,13 @@ const PEC_ESTADOS: Record<string,{bg:string;text:string;border:string;label:stri
   EN_TRANSITO:       {bg:'bg-indigo-100',  text:'text-indigo-800',  border:'border-indigo-200',  label:'En Transito'},
   PENDIENTE_ENTREGA: {bg:'bg-orange-100',  text:'text-orange-800',  border:'border-orange-200',  label:'Pend. Entrega'},
   RECIBIDO:          {bg:'bg-emerald-100', text:'text-emerald-800', border:'border-emerald-200', label:'Recibido'},
+  // confirmar_recepcion sets the PEC's own estado to one of these two on the
+  // parent PurchaseOrderFull — distinct from RECIBIDO above (set only by the
+  // tracking-stage flow) and missing here entirely, so a PEC that had gone
+  // through a real reception confirmation fell through to PEC_ESTADOS.BORRADOR
+  // and displayed as "Borrador" regardless of its real state.
+  RECIBIDA:            {bg:'bg-emerald-100', text:'text-emerald-800', border:'border-emerald-200', label:'Recibido'},
+  PARCIALMENTE_RECIBIDA:{bg:'bg-amber-100',  text:'text-amber-800',  border:'border-amber-200',   label:'Parcialmente Recibido'},
   COMPLETADO:        {bg:'bg-green-100',   text:'text-green-800',   border:'border-green-200',   label:'Completado'},
   CANCELADO:         {bg:'bg-red-100',     text:'text-red-700',     border:'border-red-200',     label:'Cancelado'},
 };
@@ -921,9 +928,45 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
     setCasilleroTimer(t);
   };
 
-  const addProduct = () => setProductos(prev => [...prev, {nombre:'',descripcion:'',qty:1,unit_price_cop:0,impuesto_pct:0,tracking:'',entrega_est:'',casillero:'',notas:'',estado:'PENDIENTE',destino:'CLIENTE'}]);
+  const addProduct = () => setProductos(prev => [...prev, {nombre:'',descripcion:'',sku_id:null,qty:1,unit_price_cop:0,impuesto_pct:0,tracking:'',entrega_est:'',casillero:'',notas:'',estado:'PENDIENTE',destino:'CLIENTE'}]);
   const setProd = (i:number, k:string, v:any) => setProductos(prev => prev.map((p,idx)=>idx===i?{...p,[k]:v}:p));
   const delProd = (i:number) => setProductos(prev => prev.filter((_,idx)=>idx!==i));
+
+  // Product autocomplete for PEC lines — without this, descripcion is free
+  // text with no sku_id, so purchase_order_lines.sku_id (and everything that
+  // depends on it downstream: goods_receipt_lines, InventoryLevel) stays
+  // NULL forever and a completed reception never actually moves stock, no
+  // matter how many tracking stages get marked done. Confirmed live: a
+  // 5-unit reception on a text-only line closed as "Validado" but
+  // stock_actualizado stayed false because receipt_type=="FISICA" still
+  // requires a real sku_id to touch InventoryLevel.
+  const [prodSearchIdx, setProdSearchIdx] = useState<number|null>(null);
+  const [prodSearchResults, setProdSearchResults] = useState<any[]>([]);
+  const [prodSearchTimer, setProdSearchTimer] = useState<any>(null);
+
+  const searchProduct = (i:number, val:string) => {
+    setProd(i, 'descripcion', val);
+    setProd(i, 'sku_id', null); // typing again after picking one un-links it — must re-pick to relink
+    setProdSearchIdx(i);
+    if (prodSearchTimer) clearTimeout(prodSearchTimer);
+    if (!val || val.length < 1) { setProdSearchResults([]); return; }
+    const t = setTimeout(async () => {
+      try {
+        const res = await apiFetch('/crm/products/search?q='+encodeURIComponent(val));
+        setProdSearchResults(Array.isArray(res) ? res : (res?.data || []));
+      } catch { setProdSearchResults([]); }
+    }, 300);
+    setProdSearchTimer(t);
+  };
+
+  const pickProduct = (i:number, item:any) => {
+    setProductos(prev => prev.map((p,idx)=>idx===i?{
+      ...p, descripcion: item.display || item.product_name, sku_id: item.id,
+      unit_price_cop: Number(p.unit_price_cop) > 0 ? p.unit_price_cop : item.sale_price,
+    }:p));
+    setProdSearchIdx(null);
+    setProdSearchResults([]);
+  };
 
   useEffect(() => {
     // Always derive from the current lines — falling back to the previous
@@ -1161,7 +1204,23 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
                           <tbody className="divide-y divide-gray-100">
                             {productos.map((p,i)=>(
                               <tr key={i} className="group">
-                                <td className="py-2 pr-3"><input value={p.nombre||p.descripcion||''} onChange={e=>setProd(i,'descripcion',e.target.value)} placeholder="Nombre / descripcion del producto" className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-purple-200"/></td>
+                                <td className="py-2 pr-3 relative">
+                                  <input value={p.nombre||p.descripcion||''} onChange={e=>searchProduct(i,e.target.value)} onFocus={()=>setProdSearchIdx(i)}
+                                    placeholder="Buscar producto del catalogo..."
+                                    className={`w-full border rounded-lg px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-purple-200 ${p.sku_id ? 'border-emerald-300 bg-emerald-50' : 'border-gray-200'}`}/>
+                                  {p.sku_id && <span className="absolute right-2 top-1.5 text-[10px] text-emerald-600" title="Vinculado al catalogo (sku_id presente)">&#10003;</span>}
+                                  {prodSearchIdx===i && prodSearchResults.length>0 && (
+                                    <div className="absolute z-20 top-full left-0 w-64 bg-white border border-gray-200 rounded-lg shadow-lg mt-1 max-h-48 overflow-y-auto">
+                                      {prodSearchResults.map((r:any)=>(
+                                        <button type="button" key={r.id} onClick={()=>pickProduct(i,r)}
+                                          className="w-full text-left px-3 py-2 text-xs hover:bg-purple-50 border-b border-gray-100 last:border-0">
+                                          <div className="font-bold text-gray-800">{r.product_name}</div>
+                                          {r.sku && <div className="text-gray-400">{r.sku} · {fCOP(r.sale_price)}</div>}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
+                                </td>
                                 <td className="py-2 pr-2 text-center"><select value={p.destino||'CLIENTE'} onChange={e=>setProd(i,'destino',e.target.value)} className="w-28 border border-gray-200 rounded-lg px-1.5 py-1.5 text-xs outline-none focus:ring-2 focus:ring-purple-200 bg-white font-semibold"><option value="CLIENTE">Cliente</option><option value="NEBULAE">Stock Nebulae</option><option value="MAU">Socio Mau</option></select></td>
                                 <td className="py-2 text-center"><input type="number" min={1} value={p.qty} onChange={e=>setProd(i,'qty',e.target.value)} className="w-16 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-center outline-none focus:ring-2 focus:ring-purple-200"/></td>
                                 <td className="py-2"><input type="number" min={0} value={p.unit_price_cop} onChange={e=>setProd(i,'unit_price_cop',e.target.value)} className="w-28 border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-right outline-none focus:ring-2 focus:ring-purple-200"/></td>
