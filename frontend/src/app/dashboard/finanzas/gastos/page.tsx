@@ -1,22 +1,77 @@
 "use client";
 
-import { CreditCard, Search, Filter, Plus, DollarSign, Download } from 'lucide-react';
-import { useState } from 'react';
+import { CreditCard, Search, Filter, Plus, X } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { apiFetch } from '@/lib/api';
+import toast from 'react-hot-toast';
 
-const GASTOS_MOCK = [
-  { id: 'EXP-401', fecha: '2026-08-23', categoria: 'Pauta Digital', concepto: 'Meta Ads Campaign (Agosto)', monto: '$1,200.00', tipo: 'Variable', estado: 'Pagado' },
-  { id: 'EXP-402', fecha: '2026-08-20', categoria: 'Nómina', concepto: 'Salarios 1ra Quincena', monto: '$4,500.00', tipo: 'Recurrente', estado: 'Pagado' },
-  { id: 'EXP-403', fecha: '2026-08-15', categoria: 'Arriendo', concepto: 'Bodega Central', monto: '$2,800.00', tipo: 'Recurrente', estado: 'Pagado' },
-  { id: 'EXP-404', fecha: '2026-08-12', categoria: 'Suscripciones', concepto: 'AWS & Vercel Hosting', monto: '$150.00', tipo: 'Recurrente', estado: 'Pagado' },
-  { id: 'EXP-405', fecha: '2026-08-10', categoria: 'Equipos', concepto: 'Reparación Computador Caja', monto: '$85.00', tipo: 'Variable', estado: 'Pendiente' },
-];
+const CATEGORIAS = ['Pauta Digital', 'Nómina', 'Arriendo', 'Suscripciones', 'Equipos', 'Servicios Públicos', 'Transporte', 'Otro'];
+
+function formatMonto(amount) {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(amount) || 0);
+}
+
+function formatFecha(iso) {
+  if (!iso) return '';
+  return new Date(iso).toISOString().slice(0, 10);
+}
 
 export default function GastosPage() {
+  const [expenses, setExpenses] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({ category: CATEGORIAS[0], description: '', amount: '', incurred_date: '', is_recurring: false });
+
+  async function loadExpenses() {
+    setLoading(true);
+    try {
+      const data = await apiFetch('/finance/expenses');
+      const list = Array.isArray(data) ? data : (data?.data ?? []);
+      setExpenses(list.sort((a, b) => new Date(b.incurred_date) - new Date(a.incurred_date)));
+    } catch (e) {
+      toast.error('Error cargando gastos: ' + e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { loadExpenses(); }, []);
+
+  async function handleCreate() {
+    if (!form.category || !form.amount) { toast.error('Categoría y monto son obligatorios.'); return; }
+    setSaving(true);
+    try {
+      await apiFetch('/finance/expenses', {
+        method: 'POST',
+        body: JSON.stringify({
+          category: form.category,
+          description: form.description || null,
+          amount: parseFloat(form.amount),
+          incurred_date: form.incurred_date ? new Date(form.incurred_date).toISOString() : null,
+          is_recurring: form.is_recurring,
+        }),
+      });
+      toast.success('Gasto registrado');
+      setShowModal(false);
+      setForm({ category: CATEGORIAS[0], description: '', amount: '', incurred_date: '', is_recurring: false });
+      loadExpenses();
+    } catch (e) {
+      toast.error('Error al registrar gasto: ' + e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const filtered = expenses.filter(g => {
+    const q = search.toLowerCase();
+    return !q || (g.category || '').toLowerCase().includes(q) || (g.description || '').toLowerCase().includes(q);
+  });
 
   return (
     <div className="p-8 h-full overflow-y-auto space-y-6 animate-in fade-in duration-500 custom-scrollbar bg-slate-50">
-      
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -28,19 +83,18 @@ export default function GastosPage() {
           </h1>
           <p className="text-slate-500 mt-1">Gestión de nómina, pauta, arriendos y otros gastos operativos.</p>
         </div>
-        
+
         <div className="flex items-center gap-3">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <input 
-              type="text" 
-              placeholder="Buscar gasto..." 
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Buscar gasto..."
               className="pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-rose-500 outline-none w-64 shadow-sm"
             />
           </div>
-          <button className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-bold text-sm shadow-sm transition-colors">
-            <Filter size={16} /> Filtros
-          </button>
           <button onClick={() => setShowModal(true)} className="flex items-center gap-2 px-4 py-2 bg-rose-600 text-white rounded-xl hover:bg-rose-700 font-bold text-sm shadow-md shadow-rose-200 transition-colors">
             <Plus size={16} /> Añadir Gasto
           </button>
@@ -57,42 +111,91 @@ export default function GastosPage() {
                 <th className="p-4">Categoría</th>
                 <th className="p-4">Concepto</th>
                 <th className="p-4">Tipo</th>
-                <th className="p-4 text-right">Monto (USD)</th>
-                <th className="p-4 pr-6 text-right">Estado</th>
+                <th className="p-4 pr-6 text-right">Monto (USD)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-sm">
-              {GASTOS_MOCK.map((gasto) => (
+              {loading && (
+                <tr><td colSpan={5} className="p-8 text-center text-slate-400">Cargando...</td></tr>
+              )}
+              {!loading && filtered.length === 0 && (
+                <tr><td colSpan={5} className="p-8 text-center text-slate-400">Sin gastos registrados.</td></tr>
+              )}
+              {!loading && filtered.map((gasto) => (
                 <tr key={gasto.id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="p-4 pl-6">
-                    <div className="font-bold text-slate-800 font-mono">{gasto.id}</div>
-                    <div className="text-xs text-slate-500">{gasto.fecha}</div>
+                    <div className="font-bold text-slate-800 font-mono">EXP-{gasto.id}</div>
+                    <div className="text-xs text-slate-500">{formatFecha(gasto.incurred_date)}</div>
                   </td>
                   <td className="p-4">
                     <span className="px-2.5 py-1 bg-slate-100 text-slate-700 rounded-md text-xs font-bold border border-slate-200">
-                      {gasto.categoria}
+                      {gasto.category}
                     </span>
                   </td>
-                  <td className="p-4 font-medium text-slate-600">{gasto.concepto}</td>
+                  <td className="p-4 font-medium text-slate-600">{gasto.description || '—'}</td>
                   <td className="p-4">
-                    <span className={`text-xs font-bold ${gasto.tipo === 'Recurrente' ? 'text-blue-600' : 'text-amber-600'}`}>
-                      {gasto.tipo}
+                    <span className={`text-xs font-bold ${gasto.is_recurring ? 'text-blue-600' : 'text-amber-600'}`}>
+                      {gasto.is_recurring ? 'Recurrente' : 'Variable'}
                     </span>
                   </td>
-                  <td className="p-4 text-right font-black text-slate-800 text-base">{gasto.monto}</td>
-                  <td className="p-4 pr-6 text-right">
-                    <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${
-                      gasto.estado === 'Pagado' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
-                    }`}>
-                      {gasto.estado}
-                    </span>
-                  </td>
+                  <td className="p-4 pr-6 text-right font-black text-slate-800 text-base">{formatMonto(gasto.amount)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </div>
+
+      {/* Modal Añadir Gasto */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setShowModal(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-extrabold text-slate-900">Añadir Gasto</h2>
+              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600"><X size={20} /></button>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">Categoría *</label>
+              <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-rose-500">
+                {CATEGORIAS.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">Concepto</label>
+              <input value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+                placeholder="Ej. Salarios 1ra Quincena" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-rose-500" />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">Monto (USD) *</label>
+                <input type="number" value={form.amount} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
+                  placeholder="0.00" className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-rose-500" />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">Fecha</label>
+                <input type="date" value={form.incurred_date} onChange={e => setForm(f => ({ ...f, incurred_date: e.target.value }))}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-rose-500" />
+              </div>
+            </div>
+
+            <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
+              <input type="checkbox" checked={form.is_recurring} onChange={e => setForm(f => ({ ...f, is_recurring: e.target.checked }))} />
+              Gasto recurrente
+            </label>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button onClick={() => setShowModal(false)} className="px-4 py-2.5 border border-slate-200 text-slate-600 rounded-xl text-sm font-bold hover:bg-slate-50">Cancelar</button>
+              <button onClick={handleCreate} disabled={saving} className="px-4 py-2.5 bg-rose-600 text-white rounded-xl text-sm font-bold hover:bg-rose-700 disabled:opacity-50">
+                {saving ? 'Guardando...' : 'Guardar Gasto'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
