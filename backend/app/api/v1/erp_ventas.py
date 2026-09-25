@@ -209,6 +209,9 @@ def _ven_dict(v: SaleOrder) -> dict:
         "canal_venta": v.canal_venta or "CRM",
         "pweb_numero": v.pweb_numero,
         "canal_metadata": v.canal_metadata,
+        "cancellation_reason": v.cancellation_reason,
+        "cancellation_authorized_by": v.cancellation_authorized_by,
+        "cancelled_at": v.cancelled_at.isoformat() if v.cancelled_at else None,
         "created_at": v.created_at.isoformat() if v.created_at else None,
         "updated_at": v.updated_at.isoformat() if v.updated_at else None,
         "created_by": v.created_by,
@@ -806,10 +809,15 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
     if not v:
         raise HTTPException(404, "Pedido de venta no encontrado")
     old_estado = v.estado
+    if body.get("estado") == "CANCELADO" and old_estado in ("ENTREGADO", "FACTURADO"):
+        raise HTTPException(422, f"No se puede cancelar un pedido en estado {old_estado}")
+    if body.get("estado") == "CANCELADO" and not body.get("cancellation_authorized_by"):
+        body["cancellation_authorized_by"] = getattr(user, "email", None)
     allowed = ["estado","notas","productos","pec_id","pec_numero","pxp_id","pxp_numero",
                "fecha_entrega_estimada","direccion_entrega","customer_id","customer_name",
                "customer_phone","customer_email","customer_address","trm_rate",
-               "subtotal_cop","descuento_pct","total_cop","anticipo_cop","saldo_cop"]
+               "subtotal_cop","descuento_pct","total_cop","anticipo_cop","saldo_cop",
+               "cancellation_reason","cancellation_authorized_by","cancelled_at"]
     for k in allowed:
         if k in body:
             setattr(v, k, body[k])

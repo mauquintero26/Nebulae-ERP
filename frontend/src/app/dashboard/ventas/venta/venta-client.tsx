@@ -156,6 +156,10 @@ export default function VentaClient() {
   const [chatterMsg, setChatterMsg]     = useState('');
   const [chatterSending, setChatterSending] = useState(false);
   const [openMenu, setOpenMenu]         = useState<number|null>(null);
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelTargetId, setCancelTargetId]   = useState<number|null>(null);
+  const [cancelRazon, setCancelRazon]         = useState('');
+  const [cancelling, setCancelling]           = useState(false);
   // â”€â”€ PEC Modal state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   const [showPecModal, setShowPecModal]   = useState(false);
   const [pecSaving, setPecSaving]         = useState(false);
@@ -208,6 +212,28 @@ export default function VentaClient() {
   const handleCrearPXP = async (id:number) => {
     try { await apiFetch(`/ventas/pedidos/${id}/crear-pxp`,{method:'POST',body:JSON.stringify({monto_anticipo:selectedPedido?.saldo_cop||0})}); showToast('PXP Creado'); fetchDetail(id); fetchPedidos(); }
     catch(err:any){ showToast(err.message,'error'); }
+  };
+
+  const openCancelModal = (id:number) => { setCancelTargetId(id); setCancelRazon(''); setShowCancelModal(true); };
+
+  const handleCancelarPedido = async () => {
+    if(!cancelTargetId) return;
+    if(cancelRazon.trim().length < 5){ showToast('La razon de cancelacion debe tener al menos 5 caracteres','error'); return; }
+    setCancelling(true);
+    try {
+      const user = localStorage.getItem('user_name')||'';
+      await apiFetch(`/ventas/pedidos/${cancelTargetId}`,{method:'PATCH',body:JSON.stringify({
+        estado: 'CANCELADO',
+        cancellation_reason: cancelRazon.trim(),
+        cancellation_authorized_by: user,
+        cancelled_at: new Date().toISOString(),
+      })});
+      showToast('Pedido cancelado');
+      setShowCancelModal(false); setCancelTargetId(null); setCancelRazon('');
+      if(selectedPedido?.id===cancelTargetId) fetchDetail(cancelTargetId);
+      fetchPedidos();
+    } catch(err:any){ showToast(err.message,'error'); }
+    finally{ setCancelling(false); }
   };
 
   // Supplier autocomplete
@@ -593,10 +619,14 @@ export default function VentaClient() {
                             <button className="w-full text-left px-4 py-2.5 hover:bg-gray-50 text-sm font-medium flex items-center gap-2 text-gray-700" onClick={()=>{setOpenMenu(null);handleCrearPXP(p.id);}}>
                               <DollarSign size={14}/> Crear PXP
                             </button>
-                            <div className="border-t border-gray-100 my-1"/>
-                            <button className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm font-medium text-red-600 flex items-center gap-2">
-                              <X size={14}/> Cancelar Pedido
-                            </button>
+                            {!['ENTREGADO','FACTURADO','CANCELADO'].includes(p.estado)&&(
+                              <>
+                                <div className="border-t border-gray-100 my-1"/>
+                                <button className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm font-medium text-red-600 flex items-center gap-2" onClick={()=>{setOpenMenu(null);openCancelModal(p.id);}}>
+                                  <X size={14}/> Cancelar Pedido
+                                </button>
+                              </>
+                            )}
                           </div>
                         </>
                       )}
@@ -708,8 +738,11 @@ export default function VentaClient() {
                     <div><label className="text-xs text-gray-500 mb-1 block">Direccion Entrega</label><input type="text" value={editForm.direccion_entrega} onChange={e=>setEditForm({...editForm,direccion_entrega:e.target.value})} className="w-full border border-gray-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-200"/></div>
                     <div><label className="text-xs text-gray-500 mb-1 block">Estado</label>
                       <select value={editForm.estado} onChange={e=>setEditForm({...editForm,estado:e.target.value})} className="w-full border border-gray-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-200">
-                        {Object.keys(VEN_ESTADOS).map(k=><option key={k} value={k}>{VEN_ESTADOS[k].label}</option>)}
+                        {Object.keys(VEN_ESTADOS).filter(k=>k!=='CANCELADO'||editForm.estado==='CANCELADO').map(k=><option key={k} value={k}>{VEN_ESTADOS[k].label}</option>)}
                       </select>
+                      {editForm.estado!=='CANCELADO'&&(
+                        <p className="text-[11px] text-gray-400 mt-1">Para cancelar el pedido usa el boton "Cancelar Pedido" (registra el motivo).</p>
+                      )}
                     </div>
                     <div><label className="text-xs text-gray-500 mb-1 block">PEC Numero</label><input type="text" value={editForm.pec_numero} onChange={e=>setEditForm({...editForm,pec_numero:e.target.value})} className="w-full border border-gray-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-200"/></div>
                     <div><label className="text-xs text-gray-500 mb-1 block">Notas</label><textarea value={editForm.notas} onChange={e=>setEditForm({...editForm,notas:e.target.value})} rows={3} className="w-full border border-gray-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-200 resize-none"/></div>
@@ -844,6 +877,11 @@ export default function VentaClient() {
                   <span className="flex items-center gap-1.5 px-4 py-2 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-sm font-bold">
                     <CheckCircle2 size={14}/> PXP: {selectedPedido.pxp_numero}
                   </span>
+                )}
+                {!['ENTREGADO','FACTURADO','CANCELADO'].includes(selectedPedido.estado)&&(
+                  <button onClick={()=>openCancelModal(selectedPedido.id)} className="flex items-center gap-2 px-4 py-2 bg-white border border-red-200 text-red-600 rounded-xl text-sm font-bold hover:bg-red-50">
+                    <X size={14}/> Cancelar Pedido
+                  </button>
                 )}
                 <div className="flex-1"/>
                 <button className="flex items-center gap-1.5 px-3 py-2 bg-[#25D366] text-white rounded-xl text-sm font-bold hover:bg-[#1ebe5d] shadow-sm"
@@ -1024,6 +1062,31 @@ export default function VentaClient() {
           onSave={(s)=>{setSelectedSupplier(s);setSupplierSearch(s.name);setSuppliers([]);setShowNewSupplier(false);}}
           onClose={()=>setShowNewSupplier(false)}
         />
+      )}
+
+      {showCancelModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-2">
+              <AlertCircle size={20} className="text-red-600"/>
+              <h3 className="font-extrabold text-lg text-gray-900">Cancelar Pedido de Venta</h3>
+            </div>
+            <div className="p-6 space-y-3">
+              <p className="text-sm text-gray-500">Esta accion marca el pedido como <strong>CANCELADO</strong>. Indica el motivo de la cancelacion (minimo 5 caracteres).</p>
+              <textarea value={cancelRazon} onChange={e=>setCancelRazon(e.target.value)} rows={3} autoFocus
+                placeholder="Ej: Cliente desistio de la compra, error en el pedido, etc."
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-red-200 resize-none"/>
+            </div>
+            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3 bg-gray-50 rounded-b-3xl">
+              <button onClick={()=>{setShowCancelModal(false);setCancelTargetId(null);}} className="px-5 py-2.5 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-white">Volver</button>
+              <button onClick={handleCancelarPedido} disabled={cancelling}
+                className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50">
+                {cancelling ? <RefreshCw size={14} className="animate-spin"/> : <X size={14}/>}
+                Confirmar Cancelacion
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
