@@ -2760,6 +2760,47 @@ def _save_lista_compras(db: Session, items: list):
     db.commit()
 
 
+def _sincronizar_pvens_pendientes_a_lista(db: Session) -> list:
+    """Todo PVEN en estado PENDIENTE_COMPRA es elegible para armar un PEC
+    (ver 'Pedidos de Venta disponibles' en Nuevo Pedido de Compra), pero
+    antes solo entraba a la Lista de Compras si alguien presionaba
+    'Agregar a Lista de Compras' manualmente en el detalle del pedido --
+    dejando pedidos pendientes de compra que nunca aparecian aqui.
+    Autocompleta un item PENDIENTE por cada producto de cada PVEN
+    pendiente que todavia no este representado, para que ambas vistas
+    sean siempre consistentes."""
+    items = _load_lista_compras(db)
+    existentes = {(it.get("pven_id"), it.get("producto")) for it in items if it.get("pven_id")}
+    pendientes = db.query(SaleOrder).filter(SaleOrder.estado == "PENDIENTE_COMPRA").all()
+    max_id = max([it.get("id", 0) for it in items], default=0)
+    nuevos = []
+    for ven in pendientes:
+        for p in (ven.productos or []):
+            prod_name = (p.get("producto_nombre") or p.get("product_name") or p.get("nombre")
+                         or p.get("producto") or p.get("description") or "Producto")
+            if (ven.id, prod_name) in existentes:
+                continue
+            max_id += 1
+            nuevos.append({
+                "id": max_id,
+                "pven_id": ven.id,
+                "pven_numero": ven.numero,
+                "producto": prod_name,
+                "cantidad": int(p.get("qty") or p.get("cantidad") or 1),
+                "proveedor": "",
+                "pec_id": None,
+                "pec_numero": None,
+                "estado": "PENDIENTE",
+                "fecha": ven.created_at.isoformat() if ven.created_at else datetime.datetime.utcnow().isoformat(),
+                "notas": f"PVEN: {ven.numero} - Cliente: {ven.customer_name or ''}",
+                "created_by": "Sistema (auto)",
+            })
+    if nuevos:
+        items = items + nuevos
+        _save_lista_compras(db, items)
+    return items
+
+
 @router.get("/lista-compras")
 def list_lista_compras(
     estado: Optional[str] = None,
@@ -2771,8 +2812,8 @@ def list_lista_compras(
     user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
-    items = _load_lista_compras(db)
-    
+    items = _sincronizar_pvens_pendientes_a_lista(db)
+
     filtered = []
     for it in items:
         if estado and it.get("estado") != estado:
@@ -2809,7 +2850,7 @@ def stats_lista_compras(
     user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
-    items = _load_lista_compras(db)
+    items = _sincronizar_pvens_pendientes_a_lista(db)
     pendientes = sum(1 for it in items if it.get("estado") == "PENDIENTE")
     en_pedido = sum(1 for it in items if it.get("estado") == "EN_PEDIDO")
     recibidos = sum(1 for it in items if it.get("estado") == "RECIBIDO")
