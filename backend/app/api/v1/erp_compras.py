@@ -126,15 +126,22 @@ def _parse_dt(v):
 
 
 def _stage_alert(stage: dict, base_date) -> Optional[dict]:
-    """Alerta calculada en vivo para UNA etapa (no se guarda en BD).
+    """Timer/alerta calculada en vivo para UNA etapa (no se guarda en BD).
+
+    Antes solo devolvia algo cuando la etapa YA estaba vencida (alerta
+    roja), asi que un bloque recien iniciado, dentro de plazo, no mostraba
+    ningun timer -- quedaba en blanco hasta el dia en que se atrasaba. Ahora
+    siempre que haya una fecha limite relevante se devuelve su estado:
+    nivel='ok' mientras falten dias (timer informativo), nivel='atrasado'
+    una vez vencido (mismo mensaje de alerta que antes).
 
     Dos casos, igual que en la especificacion del usuario:
-    - La etapa ya tiene ETA propia (fue confirmada/iniciada): alerta si
-      `hoy > eta + alert_overdue_days` ("entrega atrasada").
-    - La etapa aun no tiene ETA (nadie la ha confirmado): alerta si
-      `hoy > fecha_base_etapa_anterior + alert_confirm_days` ("confirmacion atrasada"),
-      donde fecha_base es el timestamp en que se completo la etapa anterior
-      (o fecha_compra para la primera etapa).
+    - La etapa ya tiene ETA propia (fue confirmada/iniciada): cuenta contra
+      `eta + alert_overdue_days` ("entrega atrasada" si ya paso).
+    - La etapa aun no tiene ETA (nadie la ha confirmado): cuenta contra
+      `fecha_base_etapa_anterior + alert_confirm_days` ("confirmacion atrasada"
+      si ya paso), donde fecha_base es el timestamp en que se completo la
+      etapa anterior (o fecha_compra para la primera etapa).
     """
     if stage.get("status") == "COMPLETADO":
         return None
@@ -142,16 +149,23 @@ def _stage_alert(stage: dict, base_date) -> Optional[dict]:
     eta_dt = _parse_dt(stage.get("eta"))
     if eta_dt:
         overdue_days = stage.get("alert_overdue_days")
-        if overdue_days is not None and now > eta_dt + datetime.timedelta(days=overdue_days):
-            dias = (now - eta_dt).days
-            return {"nivel": "atrasado", "mensaje": f"Entrega atrasada por {dias} dia(s) (ETA {eta_dt.strftime('%d/%m/%Y')})"}
-        return None
+        if overdue_days is None:
+            return None
+        limite = eta_dt + datetime.timedelta(days=overdue_days)
+        dias_restantes = (limite - now).days
+        if now > limite:
+            return {"nivel": "atrasado", "mensaje": f"Entrega atrasada por {(now-eta_dt).days} dia(s) (ETA {eta_dt.strftime('%d/%m/%Y')})", "dias_restantes": dias_restantes}
+        return {"nivel": "ok", "mensaje": f"ETA {eta_dt.strftime('%d/%m/%Y')} · {dias_restantes} dia(s) para confirmacion atrasada", "dias_restantes": dias_restantes}
     confirm_days = stage.get("alert_confirm_days")
     base_dt = _parse_dt(base_date)
-    if confirm_days is not None and base_dt and now > base_dt + datetime.timedelta(days=confirm_days):
-        dias = (now - (base_dt + datetime.timedelta(days=confirm_days))).days
-        return {"nivel": "atrasado", "mensaje": f"Confirmacion pendiente atrasada por {dias} dia(s)"}
-    return None
+    if confirm_days is None or not base_dt:
+        return None
+    limite = base_dt + datetime.timedelta(days=confirm_days)
+    dias_restantes = (limite - now).days
+    if now > limite:
+        dias = (now - limite).days
+        return {"nivel": "atrasado", "mensaje": f"Confirmacion pendiente atrasada por {dias} dia(s)", "dias_restantes": dias_restantes}
+    return {"nivel": "ok", "mensaje": f"{dias_restantes} dia(s) para confirmar esta etapa", "dias_restantes": dias_restantes}
 
 
 def _annotate_stage_alerts(stages: list, fecha_compra) -> list:
@@ -708,6 +722,14 @@ def get_pec(pec_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     d["actividades"] = [_log_dict(l) for l in logs]
     grs = db.query(GoodsReceipt).filter(GoodsReceipt.pec_id == pec_id).all()
     d["recepciones"] = [_gr_dict(g) for g in grs]
+    # p.ven_id/ven_numero solo guardan el primer PVEN de una compra
+    # consolidada (varios PVEN en un mismo PEC) -- SaleOrder.pec_id es el
+    # vinculo real y completo (ver _desvincular_pec_cancelado, que ya lo usa
+    # para desligar TODOS los PVEN al cancelar), asi que se expone aqui para
+    # que el detalle muestre y enlace a cada uno, no solo al primero.
+    from app.api.v1.erp_ventas import _ven_dict
+    vens = db.query(SaleOrder).filter(SaleOrder.pec_id == pec_id).all()
+    d["pedidos_venta"] = [_ven_dict(v) for v in vens]
     return {"status": "success", "data": d}
 
 
@@ -816,6 +838,30 @@ def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE
         if p.estado == "CANCELADO":
             _desvincular_pec_cancelado(db, p.id, p.numero, body.get("updated_by"))
     return {"status": "success", "data": _pec_dict(p)}
+
+
+@router.delete("/pedidos/{pec_id}")
+def delete_pec(pec_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
+    """Elimina definitivamente un PEC. Solo permitido si ya esta CANCELADO
+    (cancelar primero desvincula PVEN/Lista de Compras via
+    _desvincular_pec_cancelado) y si nunca llego a tener una recepcion real
+    -- una PEC con GoodsReceipt asociado no se puede borrar sin arrastrar
+    ese historial."""
+    p = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == pec_id).first()
+    if not p:
+        raise HTTPException(404, "Pedido de compra no encontrado")
+    if p.estado != "CANCELADO":
+        raise HTTPException(422, f"Solo se pueden eliminar PEC cancelados. {p.numero} esta en estado {p.estado} -- cancelalo primero.")
+    n_recepciones = db.query(GoodsReceipt).filter(GoodsReceipt.pec_id == pec_id).count()
+    if n_recepciones > 0:
+        raise HTTPException(422, f"{p.numero} tiene {n_recepciones} recepcion(es) asociada(s) y no se puede eliminar.")
+    # Defensivo: por si quedo algo sin desvincular de antes de cancelar.
+    _desvincular_pec_cancelado(db, p.id, p.numero, None)
+    numero = p.numero
+    db.delete(p)
+    db.commit()
+    return {"status": "success", "message": f"PEC {numero} eliminado"}
 
 
 @router.patch("/pedidos/{pec_id}/tracking")

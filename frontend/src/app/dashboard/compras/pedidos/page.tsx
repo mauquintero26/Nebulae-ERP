@@ -437,9 +437,15 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
               {dias && status !== 'COMPLETADO' && <span className={'font-bold ' + dias.color}>{dias.txt}</span>}
             </div>
             {sd.alert && status !== 'COMPLETADO' && (
-              <div className="mb-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-lg text-xs font-bold text-red-700 flex items-center gap-1.5">
-                <AlertTriangle size={12}/> {sd.alert.mensaje}
-              </div>
+              sd.alert.nivel === 'atrasado' ? (
+                <div className="mb-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-lg text-xs font-bold text-red-700 flex items-center gap-1.5">
+                  <AlertTriangle size={12}/> {sd.alert.mensaje}
+                </div>
+              ) : (
+                <div className="mb-2 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg text-xs font-bold text-blue-700 flex items-center gap-1.5">
+                  <Clock size={12}/> {sd.alert.mensaje}
+                </div>
+              )
             )}
 
             {/* Edit form */}
@@ -514,6 +520,9 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
   const [editEstado, setEditEstado] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
   const [goingToRecepcion, setGoingToRecepcion] = useState(false);
+  const [infoEdit, setInfoEdit] = useState(false);
+  const [infoForm, setInfoForm] = useState<any>({});
+  const [savingInfo, setSavingInfo] = useState(false);
 
   // "Hacer Recepcion": ir directo a LA recepcion de este PEC, no al hub general
   // (con cientos de pedidos, aterrizar en la lista completa obliga a buscarla).
@@ -554,15 +563,47 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
     setEditEstado(false);
   };
 
+  // El backend ya acepta editar proveedor/notas/fechas/modalidad via el mismo
+  // PATCH que usa el cambio de estado -- solo faltaba exponerlo en la UI, que
+  // antes solo mostraba estos campos como texto fijo.
+  const openInfoEdit = () => {
+    setInfoForm({
+      supplier_name: detail?.supplier_name || '',
+      supplier_ref: detail?.supplier_ref || '',
+      modalidad_pago: detail?.modalidad_pago || 'Contado',
+      metodo_pago: detail?.metodo_pago || '',
+      fecha_entrega_estimada: detail?.fecha_entrega_estimada ? detail.fecha_entrega_estimada.slice(0,10) : '',
+      notas: detail?.notas || '',
+    });
+    setInfoEdit(true);
+  };
+  const saveInfo = async () => {
+    setSavingInfo(true);
+    try {
+      await apiFetch('/compras/pedidos/'+pec.id,{method:'PATCH',body:JSON.stringify({...infoForm,updated_by:localStorage.getItem('user_name')||''})});
+      onToast('Informacion actualizada','ok'); onUpdate(); await loadFull();
+      setInfoEdit(false);
+    } catch(e:any){ onToast(e.message,'error'); }
+    setSavingInfo(false);
+  };
+
   const cancelPec = async () => {
     if (!confirm('Cancelar este PEC?')) return;
     await changeEstado('CANCELADO');
     onClose();
   };
 
+  const deletePec = async () => {
+    if (!confirm(`Eliminar definitivamente ${detail?.numero || pec.numero}? Esta accion no se puede deshacer.`)) return;
+    try {
+      await apiFetch('/compras/pedidos/'+pec.id, {method:'DELETE'});
+      onToast('PEC eliminado','ok'); onUpdate(); onClose();
+    } catch(e:any){ onToast(e.message,'error'); }
+  };
+
   if (!pec) return null;
   const est = PEC_ESTADOS[detail?.estado] || PEC_ESTADOS.BORRADOR;
-  const pvens = (detail?.ven_numero||'').split(',').map((s:string)=>s.trim()).filter(Boolean);
+  const pvens = detail?.pedidos_venta?.length ? detail.pedidos_venta.map((v:any)=>v.numero) : (detail?.ven_numero ? [detail.ven_numero] : []);
 
   return (
     <>
@@ -591,7 +632,11 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
                 <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-2xl shadow-2xl py-2 w-52 z-10" onClick={(e:any)=>e.stopPropagation()}>
                   <button onClick={()=>{setMenuOpen(false);loadFull();}} className="w-full text-left px-4 py-2.5 hover:bg-gray-50 text-sm flex items-center gap-2"><RefreshCw size={13}/> Recargar</button>
                   <div className="border-t border-gray-100 my-1"/>
-                  <button onClick={()=>{cancelPec();setMenuOpen(false);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Cancelar PEC</button>
+                  {detail?.estado !== 'CANCELADO' ? (
+                    <button onClick={()=>{cancelPec();setMenuOpen(false);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Cancelar PEC</button>
+                  ) : (
+                    <button onClick={()=>{deletePec();setMenuOpen(false);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Eliminar definitivamente</button>
+                  )}
                 </div>
               )}
             </div>
@@ -615,18 +660,28 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
           ))}
         </div>
 
-        {/* Mercancia recibida -> falta hacer la recepcion fisica */}
-        {['RECIBIDO','RECIBIDA'].includes(detail?.estado) && !(detail?.recepciones?.length > 0) && (
+        {/* Mercancia recibida: falta hacer la recepcion fisica, o ya existe y
+            hay que poder volver a ella -- antes el banner (y su unico link a
+            la recepcion) desaparecia por completo en cuanto se creaba una,
+            dejando sin forma de volver a encontrarla desde el PEC. */}
+        {['RECIBIDO','RECIBIDA'].includes(detail?.estado) && (
           <div className="mx-8 mt-4 bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex items-center justify-between shrink-0">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 bg-white rounded-full flex items-center justify-center text-emerald-600 shadow-sm"><PackageCheck size={18}/></div>
               <div>
-                <p className="font-black text-emerald-900 text-sm">Mercancia recibida en bodega — pendiente por recepcion</p>
-                <p className="text-xs text-emerald-700">Inicia el conteo fisico de este pedido.</p>
+                <p className="font-black text-emerald-900 text-sm">
+                  {detail?.recepciones?.length > 0 ? 'Mercancia recibida en bodega' : 'Mercancia recibida en bodega — pendiente por recepcion'}
+                </p>
+                <p className="text-xs text-emerald-700">
+                  {detail?.recepciones?.length > 0
+                    ? `Recepcion ${detail.recepciones[detail.recepciones.length-1].numero} en curso.`
+                    : 'Inicia el conteo fisico de este pedido.'}
+                </p>
               </div>
             </div>
             <button onClick={goToRecepcion} disabled={goingToRecepcion} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm hover:bg-emerald-700 transition-colors shrink-0 disabled:opacity-50 flex items-center gap-2">
-              {goingToRecepcion && <RefreshCw size={12} className="animate-spin"/>} Hacer Recepcion
+              {goingToRecepcion && <RefreshCw size={12} className="animate-spin"/>}
+              {detail?.recepciones?.length > 0 ? 'Ver Recepcion' : 'Hacer Recepcion'}
             </button>
           </div>
         )}
@@ -715,19 +770,19 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
             {!loading && tab === 'pvens' && (
               <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
                 <p className="text-xs font-black text-gray-400 uppercase mb-4">Pedidos de Venta Asociados</p>
-                {pvens.length === 0 ? (
+                {/* pedidos_venta viene de SaleOrder.pec_id (el vinculo real y
+                    completo) en vez del ven_id/ven_numero del PEC, que solo
+                    guardan el primer PVEN de una compra consolidada -- asi se
+                    ven y enlazan TODOS los PVEN, no solo el primero. */}
+                {!(detail?.pedidos_venta?.length) ? (
                   <p className="text-gray-400 text-sm text-center py-6">Sin PVEN asociados</p>
-                ) : pvens.map((v:string,i:number)=>(
-                  <div key={i} className="flex items-center justify-between p-3 bg-indigo-50 rounded-xl border border-indigo-100 mb-2">
-                    <span className="font-bold text-indigo-700">{v}</span>
-                    {/* ven_id en el PEC solo guarda el primer PVEN consolidado -- los
-                        demas numeros (i>0) no tienen id real aqui, asi que no se
-                        arma un link que podria apuntar al pedido equivocado. */}
-                    {i === 0 && detail?.ven_id ? (
-                      <Link href={`/dashboard/ventas/venta?id=${detail.ven_id}`} className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-1 font-bold"><ExternalLink size={11}/> Ver</Link>
-                    ) : (
-                      <Link href="/dashboard/ventas/venta" className="text-xs text-gray-400 hover:text-indigo-600 flex items-center gap-1 font-bold"><ExternalLink size={11}/> Buscar</Link>
-                    )}
+                ) : detail.pedidos_venta.map((v:any)=>(
+                  <div key={v.id} className="flex items-center justify-between p-3 bg-indigo-50 rounded-xl border border-indigo-100 mb-2">
+                    <div>
+                      <span className="font-bold text-indigo-700 block">{v.numero}</span>
+                      <span className="text-xs text-gray-500">{v.customer_name||'-'} · {fCOP(v.total_cop)}</span>
+                    </div>
+                    <Link href={`/dashboard/ventas/venta?id=${v.id}`} className="text-xs text-indigo-600 hover:text-indigo-800 flex items-center gap-1 font-bold"><ExternalLink size={11}/> Ver</Link>
                   </div>
                 ))}
               </div>
@@ -736,12 +791,50 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
             {!loading && tab === 'info' && (
               <div className="space-y-4">
                 <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-sm">
-                  <p className="text-xs font-black text-gray-400 uppercase mb-4">Informacion del PEC</p>
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    {[['Numero',detail?.numero],['Estado',detail?.estado],['Modalidad Pago',detail?.modalidad_pago||'-'],['Metodo Pago',detail?.metodo_pago||'-'],['Creado por',detail?.created_by||'-'],['Actualizado',fDate(detail?.updated_at)]].map(([l,v],i)=>(
-                      <div key={i}><span className="block text-gray-400 text-xs font-black uppercase mb-0.5">{l}</span><span className="font-bold text-gray-900">{v||'-'}</span></div>
-                    ))}
+                  <div className="flex items-center justify-between mb-4">
+                    <p className="text-xs font-black text-gray-400 uppercase">Informacion del PEC</p>
+                    {!infoEdit ? (
+                      <button onClick={openInfoEdit} className="flex items-center gap-1 text-xs font-bold text-purple-600 hover:text-purple-800"><Edit2 size={12}/> Editar</button>
+                    ) : (
+                      <div className="flex gap-2">
+                        <button onClick={()=>setInfoEdit(false)} disabled={savingInfo} className="text-xs font-bold text-gray-500 hover:text-gray-700 disabled:opacity-50">Cancelar</button>
+                        <button onClick={saveInfo} disabled={savingInfo} className="flex items-center gap-1 text-xs font-bold text-white bg-purple-600 hover:bg-purple-700 px-3 py-1 rounded-lg disabled:opacity-50">
+                          {savingInfo && <RefreshCw size={11} className="animate-spin"/>} Guardar
+                        </button>
+                      </div>
+                    )}
                   </div>
+                  {!infoEdit ? (
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      {[['Numero',detail?.numero],['Estado',detail?.estado],['Proveedor',detail?.supplier_name||'-'],['Ref/NIT',detail?.supplier_ref||'-'],['Modalidad Pago',detail?.modalidad_pago||'-'],['Metodo Pago',detail?.metodo_pago||'-'],['Entrega Est.',fDate(detail?.fecha_entrega_estimada)],['Creado por',detail?.created_by||'-'],['Actualizado',fDate(detail?.updated_at)]].map(([l,v],i)=>(
+                        <div key={i}><span className="block text-gray-400 text-xs font-black uppercase mb-0.5">{l}</span><span className="font-bold text-gray-900">{v||'-'}</span></div>
+                      ))}
+                      <div className="col-span-2"><span className="block text-gray-400 text-xs font-black uppercase mb-0.5">Notas</span><span className="font-bold text-gray-900 whitespace-pre-wrap">{detail?.notas||'-'}</span></div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div><label className="block text-gray-400 text-xs font-black uppercase mb-1">Proveedor</label>
+                        <input value={infoForm.supplier_name} onChange={e=>setInfoForm((f:any)=>({...f,supplier_name:e.target.value}))} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+                      <div><label className="block text-gray-400 text-xs font-black uppercase mb-1">Ref/NIT</label>
+                        <input value={infoForm.supplier_ref} onChange={e=>setInfoForm((f:any)=>({...f,supplier_ref:e.target.value}))} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+                      <div><label className="block text-gray-400 text-xs font-black uppercase mb-1">Modalidad Pago</label>
+                        <select value={infoForm.modalidad_pago} onChange={e=>setInfoForm((f:any)=>({...f,modalidad_pago:e.target.value}))} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200">
+                          {/* Si el valor guardado no esta en esta lista (formato viejo/libre,
+                              ej. "Credito 60d" en vez de "Credito 60 dias"), se agrega como
+                              opcion extra para que el select muestre el valor real en vez de
+                              caer en la primera opcion silenciosamente. */}
+                          {(['Contado','60/40 (60% anticipo)','Credito 30 dias','Credito 60 dias','Otro'] as string[])
+                            .concat(infoForm.modalidad_pago && !['Contado','60/40 (60% anticipo)','Credito 30 dias','Credito 60 dias','Otro'].includes(infoForm.modalidad_pago) ? [infoForm.modalidad_pago] : [])
+                            .map(o=><option key={o}>{o}</option>)}
+                        </select></div>
+                      <div><label className="block text-gray-400 text-xs font-black uppercase mb-1">Metodo Pago</label>
+                        <input value={infoForm.metodo_pago} onChange={e=>setInfoForm((f:any)=>({...f,metodo_pago:e.target.value}))} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+                      <div><label className="block text-gray-400 text-xs font-black uppercase mb-1">Fecha Entrega Est.</label>
+                        <input type="date" value={infoForm.fecha_entrega_estimada} onChange={e=>setInfoForm((f:any)=>({...f,fecha_entrega_estimada:e.target.value}))} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+                      <div className="col-span-2"><label className="block text-gray-400 text-xs font-black uppercase mb-1">Notas</label>
+                        <textarea value={infoForm.notas} onChange={e=>setInfoForm((f:any)=>({...f,notas:e.target.value}))} rows={3} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none outline-none focus:ring-2 focus:ring-purple-200"/></div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1166,6 +1259,7 @@ export default function PedidosCompraPage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [selectedPec, setSelectedPec] = useState<any>(null);
   const [menuOpenId, setMenuOpenId]   = useState<number|null>(null);
+  const [menuPos, setMenuPos] = useState<{top?:number; bottom?:number; left:number}|null>(null);
   const [showNuevoPec, setShowNuevoPec] = useState(false);
   // Analytics
   const [analyticsRange, setAnalyticsRange] = useState('30d');
@@ -1230,6 +1324,7 @@ export default function PedidosCompraPage() {
   const activos    = pedidos.filter(p=>['EMITIDO','ENVIADO','EN_TRANSITO','PENDIENTE_ENTREGA'].includes(p.estado));
   const enTransito = pedidos.filter(p=>['EN_TRANSITO','ENVIADO'].includes(p.estado));
   const recibidos  = pedidos.filter(p=>['RECIBIDO','COMPLETADO'].includes(p.estado));
+  const cancelados = pedidos.filter(p=>p.estado==='CANCELADO');
   const vencidos   = pedidos.filter(p=>p.is_overdue);
   const montoTotal = pedidos.filter(p=>p.estado!=='CANCELADO').reduce((s,p)=>s+(p.total_cop||0),0);
 
@@ -1251,6 +1346,7 @@ export default function PedidosCompraPage() {
     {k:'Activos',    count:activos.length,      data:activos},
     {k:'En Transito',count:enTransito.length,   data:enTransito},
     {k:'Recibidos',  count:recibidos.length,    data:recibidos},
+    {k:'Cancelados', count:cancelados.length,    data:cancelados},
     {k:'Analisis',   count:null,                data:[]},
   ];
 
@@ -1288,6 +1384,29 @@ export default function PedidosCompraPage() {
   function PecRow({p}: {p:any}) {
     const est = PEC_ESTADOS[p.estado]||PEC_ESTADOS.BORRADOR;
     const isSelected = selectedIds.has(p.id);
+    const menuBtnRef = useRef<HTMLButtonElement|null>(null);
+    // menuPos vive en el padre (no aqui) -- PecRow se redefine en cada render
+    // del padre (es una funcion anidada dentro de su cuerpo), asi que un
+    // setMenuOpenId del padre remonta esta fila con un tipo "nuevo" y
+    // cualquier estado local propio de PecRow se perdia justo despues de
+    // calcularlo, dejando el menu con menuPos=null para siempre.
+    const toggleMenu = () => {
+      if (menuOpenId === p.id) { setMenuOpenId(null); return; }
+      const rect = menuBtnRef.current?.getBoundingClientRect();
+      if (rect) {
+        // Menu es ~150px alto; si no cabe hacia abajo en el viewport (el caso
+        // de la ultima fila visible, sea o no la ultima fila de la tabla),
+        // se abre hacia arriba en vez de quedar cortado por el overflow-hidden
+        // del contenedor de la tabla.
+        const menuHeight = 150;
+        if (rect.bottom + menuHeight > window.innerHeight) {
+          setMenuPos({ bottom: window.innerHeight - rect.top + 4, left: rect.right - 208 });
+        } else {
+          setMenuPos({ top: rect.bottom + 4, left: rect.right - 208 });
+        }
+      }
+      setMenuOpenId(p.id);
+    };
     return (
       <tr className={'group hover:bg-purple-50/30 cursor-pointer transition-colors ' + (p.is_overdue?'border-l-4 border-l-red-400 bg-red-50/20 ':'') + (isSelected?'bg-purple-50/40':'')}
         onClick={(e:any)=>{const t=e.target as HTMLElement;if(t.closest('input')||t.closest('button'))return;setSelectedPec(p);}}>
@@ -1312,13 +1431,19 @@ export default function PedidosCompraPage() {
           <div className="flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100">
             <button onClick={e=>{e.stopPropagation();setSelectedPec(p);}} className="p-1.5 rounded-lg bg-purple-50 text-purple-600 hover:bg-purple-100"><Eye size={13}/></button>
             <div className="relative">
-              <button onClick={e=>{e.stopPropagation();setMenuOpenId(menuOpenId===p.id?null:p.id);}} className="p-1.5 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200"><MoreHorizontal size={13}/></button>
-              {menuOpenId===p.id && (
-                <div className="absolute right-0 top-full mt-1 bg-white border border-gray-200 rounded-2xl shadow-2xl py-2 w-52 z-20" onClick={(e:any)=>e.stopPropagation()}>
+              <button ref={menuBtnRef} onClick={e=>{e.stopPropagation();toggleMenu();}} className="p-1.5 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200"><MoreHorizontal size={13}/></button>
+              {menuOpenId===p.id && menuPos && (
+                <div style={{position:'fixed', top:menuPos.top, bottom:menuPos.bottom, left:menuPos.left}} className="bg-white border border-gray-200 rounded-2xl shadow-2xl py-2 w-52 z-50" onClick={(e:any)=>e.stopPropagation()}>
                   <button onClick={()=>{setSelectedPec(p);setMenuOpenId(null);}} className="w-full text-left px-4 py-2.5 hover:bg-purple-50 text-sm flex items-center gap-2"><Eye size={13} className="text-purple-600"/> Ver Detalle</button>
-                  <button onClick={async()=>{try{await apiFetch('/compras/pedidos/'+p.id,{method:'PATCH',body:JSON.stringify({estado:'EMITIDO'})});showToast('Marcado como Emitido','ok');load();}catch(ex:any){showToast(ex.message,'error');}setMenuOpenId(null);}} className="w-full text-left px-4 py-2.5 hover:bg-amber-50 text-sm flex items-center gap-2 text-amber-700"><Send size={13}/> Marcar Emitido</button>
+                  {p.estado !== 'CANCELADO' && (
+                    <button onClick={async()=>{try{await apiFetch('/compras/pedidos/'+p.id,{method:'PATCH',body:JSON.stringify({estado:'EMITIDO'})});showToast('Marcado como Emitido','ok');load();}catch(ex:any){showToast(ex.message,'error');}setMenuOpenId(null);}} className="w-full text-left px-4 py-2.5 hover:bg-amber-50 text-sm flex items-center gap-2 text-amber-700"><Send size={13}/> Marcar Emitido</button>
+                  )}
                   <div className="border-t border-gray-100 my-1"/>
-                  <button onClick={async()=>{try{await apiFetch('/compras/pedidos/'+p.id,{method:'PATCH',body:JSON.stringify({estado:'CANCELADO'})});showToast('Cancelado','ok');load();}catch(ex:any){showToast(ex.message,'error');}setMenuOpenId(null);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Cancelar PEC</button>
+                  {p.estado !== 'CANCELADO' ? (
+                    <button onClick={async()=>{try{await apiFetch('/compras/pedidos/'+p.id,{method:'PATCH',body:JSON.stringify({estado:'CANCELADO'})});showToast('Cancelado','ok');load();}catch(ex:any){showToast(ex.message,'error');}setMenuOpenId(null);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Cancelar PEC</button>
+                  ) : (
+                    <button onClick={async()=>{if(!confirm(`Eliminar definitivamente ${p.numero}? Esta accion no se puede deshacer.`))return;try{await apiFetch('/compras/pedidos/'+p.id,{method:'DELETE'});showToast('PEC eliminado','ok');load();}catch(ex:any){showToast(ex.message,'error');}setMenuOpenId(null);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Eliminar definitivamente</button>
+                  )}
                 </div>
               )}
             </div>
