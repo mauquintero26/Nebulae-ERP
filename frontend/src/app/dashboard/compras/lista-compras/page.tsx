@@ -44,7 +44,7 @@ function NewSupplierModal({onSave, onClose}) {
     e.preventDefault();
     if (!form.name.trim()) return;
     setSaving(true);
-    try { const d = await apiFetch('/compras/proveedores',{method:'POST',body:JSON.stringify(form)}); onSave(d); }
+    try { const raw = await apiFetch('/compras/proveedores',{method:'POST',body:JSON.stringify(form)}); onSave(raw?.data ?? raw); }
     catch(err) { alert('Error: '+err.message); }
     setSaving(false);
   }

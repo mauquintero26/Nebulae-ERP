@@ -5,9 +5,9 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Search, RefreshCw, Plus, MoreHorizontal, X, Edit2, Save,
   Clock, Truck, FileText, FileCheck, Phone, Mail, MessageCircle,
-  AlertCircle, ShoppingCart, TrendingUp, Activity, CheckCircle2, 
+  AlertCircle, ShoppingCart, TrendingUp, Activity, CheckCircle2,
   Package, DollarSign, ChevronDown, ArrowLeft, ListChecks, ShoppingBag,
-  ExternalLink
+  ExternalLink, UserPlus
 } from 'lucide-react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -99,6 +99,47 @@ function IAPanelVenta({pedido,apiBase}:{pedido:any;apiBase:string}) {
   );
 }
 
+function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClose:()=>void}) {
+  const [form, setForm] = useState({name:'',reference:'',contact_name:'',phone:'',email:'',address:'',city:'',country:'Colombia',payment_terms:'',notes:''});
+  const [saving, setSaving] = useState(false);
+  const set = (k:string,v:string) => setForm(f=>({...f,[k]:v}));
+  async function save(e:React.FormEvent) {
+    e.preventDefault();
+    if (!form.name.trim()) return;
+    setSaving(true);
+    try { const raw = await apiFetch('/compras/proveedores',{method:'POST',body:JSON.stringify(form)}); onSave(raw?.data ?? raw); }
+    catch(err:any) { alert('Error: '+err.message); }
+    setSaving(false);
+  }
+  return (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg mx-4">
+        <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-purple-50 rounded-t-3xl">
+          <div><h3 className="font-black text-gray-900 text-lg">Nuevo Proveedor</h3><p className="text-xs text-gray-500 mt-0.5">Agregar a la agenda de proveedores</p></div>
+          <button onClick={onClose} className="p-2 hover:bg-purple-100 rounded-xl"><X size={18}/></button>
+        </div>
+        <form onSubmit={save} className="p-6 space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Nombre *</label><input required value={form.name} onChange={e=>set('name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Referencia / NIT</label><input value={form.reference} onChange={e=>set('reference',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Contacto</label><input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Telefono</label><input value={form.phone} onChange={e=>set('phone',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Email</label><input type="email" value={form.email} onChange={e=>set('email',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Ciudad</label><input value={form.city} onChange={e=>set('city',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Terminos de Pago</label><input value={form.payment_terms} onChange={e=>set('payment_terms',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+          </div>
+          <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
+            <button type="button" onClick={onClose} className="px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50">Cancelar</button>
+            <button type="submit" disabled={saving} className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2">
+              {saving?<RefreshCw size={14} className="animate-spin"/>:<UserPlus size={14}/>} Agregar Proveedor
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function VentaClient() {
   const [pedidos, setPedidos]           = useState<any[]>([]);
   const [loading, setLoading]           = useState(true);
@@ -122,6 +163,7 @@ export default function VentaClient() {
   const [supplierSearch, setSupplierSearch] = useState('');
   const [suppliers, setSuppliers]         = useState<any[]>([]);
   const [selectedSupplier, setSelectedSupplier] = useState<any>(null);
+  const [showNewSupplier, setShowNewSupplier] = useState(false);
   const [listaSaving, setListaSaving]     = useState(false);
   const supplierTimer = useRef<any>(null);
 
@@ -175,29 +217,44 @@ export default function VentaClient() {
     if(!q.trim()){ setSuppliers([]); return; }
     supplierTimer.current = setTimeout(async()=>{
       const d = await apiFetch(`/compras/proveedores/search?q=${encodeURIComponent(q)}`).catch(()=>({data:[]}));
-      setSuppliers(Array.isArray(d)?d:(d?.data??[]));
+      const arr = Array.isArray(d)?d:(d?.data??[]);
+      setSuppliers(arr);
+      if (arr.length === 0) setShowNewSupplier(true);
     },300);
   };
 
   // Opcion 1: Crear PEC directamente vinculado al PVEN
   const handleCrearPEC = async () => {
     if(!selectedPedido) return;
+    if(!selectedSupplier){ showToast('Selecciona un proveedor (o crea uno nuevo) antes de crear el PEC','error'); return; }
     setPecSaving(true);
     try {
       const user = localStorage.getItem('user_name')||'';
+      // El PVEN guarda el precio por linea en unit_price_cop (mismo shape que
+      // arma la Calculadora de Cotizacion) -- usar total_cop/qty como fallback
+      // solo si de verdad no viene unit_price_cop, nunca al reves, o una
+      // cantidad >1 duplicaria el precio (unit_price_cop = total de la linea).
+      const productosPec = (selectedPedido.productos||[]).map((p:any) => {
+        const qty = Number(p.qty || p.cantidad || 1);
+        const unitPrice = Number(p.unit_price_cop ?? p.precio_unitario ?? (p.total_cop ? p.total_cop / qty : 0));
+        return {
+          producto_nombre: p.product_name || p.nombre || p.descripcion || p.producto_nombre || 'Producto',
+          qty,
+          unit_price_cop: unitPrice,
+        };
+      });
+      const totalPec = productosPec.reduce((s, p) => s + p.qty * p.unit_price_cop, 0);
       const pec = await apiFetch('/compras/pedidos',{method:'POST',body:JSON.stringify({
-        supplier_id: selectedSupplier?.id,
-        supplier_name: selectedSupplier?.name||supplierSearch,
+        supplier_id: selectedSupplier.id,
+        supplier_name: selectedSupplier.name,
         ven_id: selectedPedido.id,
         ven_numero: selectedPedido.numero,
         dias_entrega: pecForm.dias_entrega,
         modalidad_pago: pecForm.modalidad_pago,
         notas: pecForm.notas,
-        productos: (selectedPedido.productos||[]).map((p:any)=>({
-          producto_nombre: p.product_name || p.nombre || p.descripcion || p.producto_nombre || 'Producto',
-          qty: p.qty || p.cantidad || 1,
-          unit_price_cop: p.precio_unitario || p.total_cop || 0,
-        })),
+        productos: productosPec,
+        subtotal_cop: totalPec,
+        total_cop: totalPec,
         created_by: user,
       })});
       const pecObj = pec?.data ?? pec;
@@ -752,7 +809,7 @@ export default function VentaClient() {
                       <p key={i} className="text-xs text-purple-700">&middot; {p.product_name||p.descripcion||p.producto_nombre||'Producto'} <span className="text-purple-400">&times;{p.qty??p.cantidad??1}</span></p>
                     ))}
                   </div>
-                  <Link href="/dashboard/compras/pedidos" className="mt-3 inline-flex items-center gap-1 text-xs text-purple-700 font-bold hover:underline">
+                  <Link href={`/dashboard/compras/pedidos?id=${selectedPedido.pec_id}`} className="mt-3 inline-flex items-center gap-1 text-xs text-purple-700 font-bold hover:underline">
                     Ir a {selectedPedido.pec_numero} <ExternalLink size={11}/>
                   </Link>
                 </div>
@@ -960,6 +1017,13 @@ export default function VentaClient() {
             </div>
           </div>
         </div>
+      )}
+
+      {showNewSupplier && (
+        <NewSupplierModal
+          onSave={(s)=>{setSelectedSupplier(s);setSupplierSearch(s.name);setSuppliers([]);setShowNewSupplier(false);}}
+          onClose={()=>setShowNewSupplier(false)}
+        />
       )}
     </div>
   );

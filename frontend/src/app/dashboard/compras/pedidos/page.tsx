@@ -64,7 +64,7 @@ function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClose:()=>
     e.preventDefault();
     if (!form.name.trim()) return;
     setSaving(true);
-    try { const d = await apiFetch('/compras/proveedores',{method:'POST',body:JSON.stringify(form)}); onSave(d); }
+    try { const raw = await apiFetch('/compras/proveedores',{method:'POST',body:JSON.stringify(form)}); onSave(raw?.data ?? raw); }
     catch(err:any) { alert('Error: '+err.message); }
     setSaving(false);
   }
@@ -108,7 +108,7 @@ function NewCasilleroModal({onSave, onClose}: {onSave:(c:any)=>void; onClose:()=
     e.preventDefault();
     if (!form.name.trim()) return;
     setSaving(true);
-    try { const d = await apiFetch('/compras/casilleros',{method:'POST',body:JSON.stringify(form)}); onSave(d); }
+    try { const raw = await apiFetch('/compras/casilleros',{method:'POST',body:JSON.stringify(form)}); onSave(raw?.data ?? raw); }
     catch(err:any) { alert('Error: '+err.message); }
     setSaving(false);
   }
