@@ -70,8 +70,11 @@ class SKUResponse(SKUBase):
 
 # Product
 class ProductBase(BaseModel):
-    brand_id: int
-    category_id: int
+    # Optional at the schema level so a client that omits brand/category (e.g.
+    # no brands/categories exist yet) doesn't 422 before create_product gets a
+    # chance to fall back to the placeholder brand/category.
+    brand_id: Optional[int] = None
+    category_id: Optional[int] = None
     name: str
     description: Optional[str] = None
     type: str

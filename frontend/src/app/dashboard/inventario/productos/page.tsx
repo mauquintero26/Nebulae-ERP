@@ -106,11 +106,11 @@ export default function ProductosPage() {
     setCombinaciones(prev => prev.map(c => ({ ...c, [campo]: valor })));
   }
 
-  async function guardarVariantes(productId: number) {
-    if (combinaciones.length === 0) return;
+  async function guardarVariantes(productId: number, skus: typeof combinaciones) {
+    if (skus.length === 0) return;
     const body = {
       warehouse_id: warehouseId ? Number(warehouseId) : undefined,
-      skus: combinaciones.map(c => ({
+      skus: skus.map(c => ({
         sku: c.sku,
         sale_price: Number(c.sale_price) || 0,
         cost_price: c.cost_price ? Number(c.cost_price) : undefined,
@@ -125,7 +125,15 @@ export default function ProductosPage() {
     e.preventDefault();
     setSaving(true);
     try {
-      const body = { ...form, is_published: isPublished };
+      // brand_id/category_id are '' when nothing is picked (e.g. the dropdown
+      // has no options yet because no brands/categories exist) — the backend
+      // expects Optional[int] and 400s on an empty string, so null them out.
+      const body = {
+        ...form,
+        brand_id: form.brand_id ? Number(form.brand_id) : null,
+        category_id: form.category_id ? Number(form.category_id) : null,
+        is_published: isPublished,
+      };
       let productId: number;
       if (isNew) {
         const nuevo = await apiFetch('/products', { method: 'POST', body: JSON.stringify(body) });
@@ -138,9 +146,22 @@ export default function ProductosPage() {
         productId = selectedProduct.id;
       }
 
-      if (combinaciones.length > 0) {
+      // A product with no variants (the common case — "Variantes (opcional)"
+      // tells the user to leave that step empty) otherwise saves with zero
+      // SKUs: no stock, and nothing Compras/Ventas/Inventario can reference,
+      // even though Precio de Venta/Costo were filled in right here. Create
+      // the one implicit SKU it needs, same as a single-row combinaciones.
+      const skuPayload = combinaciones.length > 0
+        ? combinaciones
+        : (isNew && form.sale_price ? [{
+            clave: '', atributos: {},
+            sku: (form.reference || form.name || 'SKU').toUpperCase().replace(/\s+/g, '').slice(0, 20),
+            sale_price: form.sale_price, cost_price: form.cost_price, initial_stock: '',
+          }] : []);
+
+      if (skuPayload.length > 0) {
         try {
-          await guardarVariantes(productId);
+          await guardarVariantes(productId, skuPayload);
         } catch (skuErr: any) {
           // The product itself was already created/updated successfully; only the SKU
           // step failed. Keep the user on the form (don't reset/close) so "Guardar"

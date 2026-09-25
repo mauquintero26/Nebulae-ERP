@@ -148,9 +148,39 @@ def list_attribute_values(attribute_id: int, db: Session = Depends(get_db), _use
     return {"status": "success", "data": [schemas.AttributeValueResponse.model_validate(v).model_dump() for v in values]}
 
 # --- PRODUCTS & SKUS ---
+_PLACEHOLDER_BRAND_CATEGORY_NAME = "Sin clasificar"
+
+def _get_or_create_placeholder_brand_category(db: Session):
+    """Same fallback used by /crm/products/quick-create: brand_id/category_id
+    are NOT NULL on products, so a client that has no brands/categories to
+    offer yet (e.g. a fresh catalog) gets a real, reusable placeholder row
+    instead of a 422/400, and the product is flagged necesita_revision=True
+    to be classified properly later."""
+    brand = db.query(Brand).filter(Brand.name == _PLACEHOLDER_BRAND_CATEGORY_NAME).first()
+    if not brand:
+        brand = Brand(name=_PLACEHOLDER_BRAND_CATEGORY_NAME)
+        db.add(brand); db.flush()
+    category = db.query(Category).filter(Category.name == _PLACEHOLDER_BRAND_CATEGORY_NAME).first()
+    if not category:
+        category = Category(name=_PLACEHOLDER_BRAND_CATEGORY_NAME)
+        db.add(category); db.flush()
+    return brand, category
+
 @router.post("/products", status_code=status.HTTP_201_CREATED)
 def create_product(product: schemas.ProductCreate, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
-    db_product = Product(**product.model_dump())
+    data = product.model_dump()
+    needs_review = False
+    if not data.get("brand_id") or not data.get("category_id"):
+        brand, category = _get_or_create_placeholder_brand_category(db)
+        if not data.get("brand_id"):
+            data["brand_id"] = brand.id
+            needs_review = True
+        if not data.get("category_id"):
+            data["category_id"] = category.id
+            needs_review = True
+    if needs_review:
+        data["necesita_revision"] = True
+    db_product = Product(**data)
     db.add(db_product)
     try:
         db.commit()

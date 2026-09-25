@@ -926,7 +926,12 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
   const delProd = (i:number) => setProductos(prev => prev.filter((_,idx)=>idx!==i));
 
   useEffect(() => {
-    const sub = form.subtotal_cop || productos.reduce((s,p)=>s+(Number(p.qty||0)*Number(p.unit_price_cop||0)),0);
+    // Always derive from the current lines — falling back to the previous
+    // form.subtotal_cop when it was already non-zero (as this used to do)
+    // meant that once any line got a price, editing qty/price afterward on
+    // any line no longer recalculated the total: it stuck at whatever the
+    // subtotal happened to be the first time this effect saw a non-zero value.
+    const sub = productos.reduce((s,p)=>s+(Number(p.qty||0)*Number(p.unit_price_cop||0)),0);
     setF('subtotal_cop', sub);
     setF('total_cop', sub);
   }, [productos]);
