@@ -27,14 +27,15 @@ const INV_NAV = [
   { name: 'Bodegas',         path: '/dashboard/inventario/bodegas' },
 ];
 
-// direction real: IN | OUT | ADJUST | TRANSFER_IN | TRANSFER_OUT | QUARANTINE (ver erp_inventario.py get_kardex)
+// direction real: IN | OUT | ADJUST_IN | ADJUST_OUT | TRANSFER_IN | TRANSFER_OUT | QUARANTINE (ver erp_inventario.py get_kardex)
 const DIRECTIONS = [
   { value: '', label: 'Todas' },
   { value: 'IN', label: 'Entrada' },
   { value: 'OUT', label: 'Salida' },
   { value: 'TRANSFER_IN', label: 'Traslado (entra)' },
   { value: 'TRANSFER_OUT', label: 'Traslado (sale)' },
-  { value: 'ADJUST', label: 'Ajuste' },
+  { value: 'ADJUST_IN', label: 'Ajuste (entrada)' },
+  { value: 'ADJUST_OUT', label: 'Ajuste (salida)' },
   { value: 'QUARANTINE', label: 'Cuarentena' },
 ];
 
@@ -43,7 +44,8 @@ const DIR_STYLE: Record<string, { label: string; cls: string; icon: any }> = {
   OUT:           { label: 'Salida',           cls: 'bg-red-100 text-red-700',       icon: ArrowUpRight },
   TRANSFER_IN:   { label: 'Traslado (entra)', cls: 'bg-blue-100 text-blue-700',     icon: RefreshCw },
   TRANSFER_OUT:  { label: 'Traslado (sale)',  cls: 'bg-blue-100 text-blue-700',     icon: RefreshCw },
-  ADJUST:        { label: 'Ajuste',           cls: 'bg-amber-100 text-amber-700',   icon: RefreshCw },
+  ADJUST_IN:     { label: 'Ajuste (entrada)', cls: 'bg-amber-100 text-amber-700',   icon: ArrowDownRight },
+  ADJUST_OUT:    { label: 'Ajuste (salida)',  cls: 'bg-amber-100 text-amber-700',   icon: ArrowUpRight },
   QUARANTINE:    { label: 'Cuarentena',       cls: 'bg-purple-100 text-purple-700', icon: RefreshCw },
 };
 
@@ -240,8 +242,8 @@ export default function KardexPage() {
                 ) : items.map((mov: any) => {
                   const style = DIR_STYLE[mov.direction] || { label: mov.direction || '-', cls: 'bg-slate-100 text-slate-600', icon: RefreshCw };
                   const Icon = style.icon;
-                  const isPositive = ['IN', 'TRANSFER_IN'].includes(mov.direction);
-                  const isNegative = ['OUT', 'TRANSFER_OUT'].includes(mov.direction);
+                  const isPositive = ['IN', 'TRANSFER_IN', 'ADJUST_IN'].includes(mov.direction);
+                  const isNegative = ['OUT', 'TRANSFER_OUT', 'ADJUST_OUT'].includes(mov.direction);
                   return (
                     <tr key={mov.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="p-4 pl-6 text-xs text-slate-500">{fDateTime(mov.created_at)}</td>

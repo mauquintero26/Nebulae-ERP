@@ -87,7 +87,7 @@ class InventoryMovement(Base):
     idempotency_key = Column(String(150), nullable=True, unique=True, index=True)
     # SHA-256(operation_id:sku_id:direction:owner:dest_warehouse)
     direction       = Column(String(30), nullable=True)
-    # IN | OUT | ADJUST | TRANSFER_IN | TRANSFER_OUT
+    # IN | OUT | ADJUST_IN | ADJUST_OUT | TRANSFER_IN | TRANSFER_OUT
     owner           = Column(String(20), nullable=True, default="NEBULAE")
     # NEBULAE | MAU
     # ── Fase 3: Trazabilidad de bodega, fecha inmutable y usuario ───────────

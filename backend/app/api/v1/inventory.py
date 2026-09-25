@@ -112,9 +112,10 @@ def create_inventory_operation(op: schemas.InventoryOperationCreate,
                 _movement(mov.sku_id, op.dest_warehouse_id, qty, "TRANSFER_IN")
             elif op.operation_type == "ADJUSTMENT":
                 wid = op.dest_warehouse_id or op.source_warehouse_id
-                signed = abs(qty) if (mov.direction or "IN").upper() == "IN" else -abs(qty)
+                is_in = (mov.direction or "IN").upper() == "IN"
+                signed = abs(qty) if is_in else -abs(qty)
                 _apply_inventory_level(db, mov.sku_id, wid, signed)
-                _movement(mov.sku_id, wid, qty, "ADJUST")
+                _movement(mov.sku_id, wid, qty, "ADJUST_IN" if is_in else "ADJUST_OUT")
             else:
                 # RECEIPT/DELIVERY/PHYSICAL_INVENTORY/LOGISTIC_EVENT: se registra el
                 # movimiento suelto, sin tocar InventoryLevel (esos flujos ya mueven

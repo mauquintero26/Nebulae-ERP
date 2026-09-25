@@ -98,7 +98,7 @@ export default function AjustesPage() {
     setSaving(false);
   }
 
-  const direccionDe = (a: any) => a.movements?.[0]?.direction === 'OUT' ? 'SALIDA' : 'ENTRADA';
+  const direccionDe = (a: any) => a.movements?.[0]?.direction === 'ADJUST_OUT' ? 'SALIDA' : 'ENTRADA';
   const entradas = ajustes.filter(a => direccionDe(a) === 'ENTRADA').length;
   const salidas = ajustes.filter(a => direccionDe(a) === 'SALIDA').length;
 

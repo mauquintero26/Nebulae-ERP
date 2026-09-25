@@ -267,7 +267,7 @@ def get_kardex(
     sku_id: Optional[int] = Query(None, description="Filtrar por SKU"),
     warehouse_id: Optional[int] = Query(None, description="Filtrar por Bodega"),
     owner: Optional[str] = Query(None, description="Filtrar por propietario: NEBULAE o MAU"),
-    direction: Optional[str] = Query(None, description="IN | OUT | ADJUST | TRANSFER_IN | TRANSFER_OUT | QUARANTINE"),
+    direction: Optional[str] = Query(None, description="IN | OUT | ADJUST_IN | ADJUST_OUT | TRANSFER_IN | TRANSFER_OUT | QUARANTINE"),
     start_date: Optional[datetime.date] = Query(None, description="Fecha inicial"),
     end_date: Optional[datetime.date] = Query(None, description="Fecha final"),
     limit: int = Query(50, ge=1, le=500),
