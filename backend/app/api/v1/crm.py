@@ -1752,13 +1752,10 @@ def lead_to_solicitud(lead_id: int, user: User = Depends(require_roles(*ROLE_ADM
     order = db.query(SalesOrder).filter(SalesOrder.id == lead_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Lead not found")
-    # Move to stage 2 (Solicitud de Cliente) if it exists
-    stage = db.query(PipelineStage).filter(PipelineStage.maps_to_status == "PENDING").first()
-    if stage:
-        order.pipeline_stage_id = stage.id
-        order.status = "PENDING"
-    else:
-        order.status = "PENDING"
+    # No pipeline stage maps to "PENDING" in the current 5-stage model (Nuevo
+    # Lead/Cotizacion Enviada/En Negociacion/Ganado/Perdido) — this used to set
+    # status to an orphaned value matching no stage. Left as a bookmark only
+    # (no stage/status change) until this actually creates a CustomerRequest.
     order.updated_at = datetime.datetime.utcnow()
     db.commit(); db.refresh(order)
     return {"status": "success", "data": {"id": order.id, "status": order.status,
@@ -1799,7 +1796,7 @@ def lead_to_pedido(lead_id: int, user: User = Depends(require_roles(*ROLE_ADMIN,
     order.updated_at = datetime.datetime.utcnow()
     db.commit(); db.refresh(order)
     return {"status": "success", "data": {"id": order.id, "status": "INVOICED",
-            "message": "Lead promovido a Pedido de Venta", "redirect": f"/dashboard/ventas/pedido"}}
+            "message": "Lead promovido a Pedido de Venta", "redirect": f"/dashboard/ventas/venta"}}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
