@@ -9,14 +9,7 @@ import {
   Send, CheckCircle2, ShoppingBag, BarChart3, Layers, ToggleLeft, ToggleRight,
   MessageSquare, ExternalLink, Star, Activity, ChevronDown, ChevronUp, Grid, List
 } from 'lucide-react';
-
-const API = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1';
-
-async function apiFetch(path: string, opts?: RequestInit) {
-  const r = await fetch(API + path, { headers: { 'Content-Type': 'application/json' }, ...opts });
-  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || e.message || r.statusText); }
-  return r.json();
-}
+import { apiFetch } from '@/lib/api';
 
 const fCOP = (v: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0);
 const fDate = (d: any) => d ? new Date(d).toLocaleDateString('es-CO', { year: 'numeric', month: 'short', day: 'numeric' }) : '-';
@@ -407,7 +400,7 @@ export default function EcommercePage() {
 
   useEffect(() => { loadStats(); }, [loadStats]);
   useEffect(() => { if (activeTab === 'Panel') { loadWebOrders(); loadCarritos(); } }, [activeTab, loadWebOrders, loadCarritos]);
-  useEffect(() => { if (activeTab === 'CatÃ¡logo') loadCatalogo(); }, [activeTab, loadCatalogo]);
+  useEffect(() => { if (activeTab === 'Catálogo') loadCatalogo(); }, [activeTab, loadCatalogo]);
   useEffect(() => {
     if (activeTab === 'Pagos') {
       apiFetch('/ecommerce/pagos/config').then(d => setPayConfig(d.data || payConfig)).catch(() => {});
@@ -460,7 +453,7 @@ export default function EcommercePage() {
             <Link href="/store" target="_blank" className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 font-semibold text-sm shadow-sm">
               <Globe size={14}/> Ver Tienda
             </Link>
-            {activeTab === 'CatÃ¡logo' && (
+            {activeTab === 'Catálogo' && (
               <button onClick={() => setShowNewProduct(true)} className="flex items-center gap-2 px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-sm shadow-sm">
                 <Plus size={15}/> Nuevo Producto
               </button>
@@ -577,7 +570,7 @@ export default function EcommercePage() {
         )}
 
         {/* CATALOGO */}
-        {activeTab === 'CatÃ¡logo' && (
+        {activeTab === 'Catálogo' && (
           <div className="flex flex-col gap-4">
             <div className="flex items-center gap-3">
               <div className="flex items-center bg-white border border-gray-200 rounded-xl px-4 py-2.5 shadow-sm gap-2 flex-1 max-w-[400px]">

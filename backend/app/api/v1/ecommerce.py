@@ -1158,11 +1158,18 @@ def get_catalogo_product(product_id: int, db: Session = Depends(get_db)):
 def create_catalogo_product(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
     _ensure_ecommerce_tables(db)
     now = datetime.datetime.utcnow()
+    # peso_kg is NUMERIC(8,2) — the frontend's new-product form defaults it to
+    # '' (empty string), which Postgres rejects outright ("invalid input syntax
+    # for type numeric"). Every other numeric field defaults to 0 in the form,
+    # so this is the only one that needs coercing to NULL.
+    peso_kg = body.get("peso_kg")
+    if peso_kg == "":
+        peso_kg = None
     result = db.execute(text("""
         INSERT INTO ecommerce_products (nombre,descripcion,descripcion_larga,sku,precio_venta,precio_comparacion,descuento_pct,impuesto_pct,categoria,sub_categoria,marca,tipo_producto,imagenes,atributos,variantes,stock_disponible,alerta_stock_minimo,publicado_web,rastrear_inventario,codigo_aduana,peso_kg,notas_internas,seo_titulo,seo_descripcion,seo_keywords,created_at,updated_at,created_by)
         VALUES (:nombre,:descripcion,:descripcion_larga,:sku,:precio_venta,:precio_comparacion,:descuento_pct,:impuesto_pct,:categoria,:sub_categoria,:marca,:tipo_producto,CAST(:imagenes AS jsonb),CAST(:atributos AS jsonb),CAST(:variantes AS jsonb),:stock_disponible,:alerta_stock_minimo,:publicado_web,:rastrear_inventario,:codigo_aduana,:peso_kg,:notas_internas,:seo_titulo,:seo_descripcion,:seo_keywords,:now,:now,:created_by)
         RETURNING id
-    """), {"nombre": body.get("nombre",""), "descripcion": body.get("descripcion"), "descripcion_larga": body.get("descripcion_larga"), "sku": body.get("sku"), "precio_venta": body.get("precio_venta",0), "precio_comparacion": body.get("precio_comparacion",0), "descuento_pct": body.get("descuento_pct",0), "impuesto_pct": body.get("impuesto_pct",0), "categoria": body.get("categoria"), "sub_categoria": body.get("sub_categoria"), "marca": body.get("marca"), "tipo_producto": body.get("tipo_producto","Bienes"), "imagenes": json_mod.dumps(body.get("imagenes",[])), "atributos": json_mod.dumps(body.get("atributos",[])), "variantes": json_mod.dumps(body.get("variantes",[])), "stock_disponible": body.get("stock_disponible",0), "alerta_stock_minimo": body.get("alerta_stock_minimo",5), "publicado_web": body.get("publicado_web",False), "rastrear_inventario": body.get("rastrear_inventario",True), "codigo_aduana": body.get("codigo_aduana"), "peso_kg": body.get("peso_kg"), "notas_internas": body.get("notas_internas"), "seo_titulo": body.get("seo_titulo"), "seo_descripcion": body.get("seo_descripcion"), "seo_keywords": body.get("seo_keywords"), "now": now, "created_by": body.get("created_by","")})
+    """), {"nombre": body.get("nombre",""), "descripcion": body.get("descripcion"), "descripcion_larga": body.get("descripcion_larga"), "sku": body.get("sku"), "precio_venta": body.get("precio_venta",0), "precio_comparacion": body.get("precio_comparacion",0), "descuento_pct": body.get("descuento_pct",0), "impuesto_pct": body.get("impuesto_pct",0), "categoria": body.get("categoria"), "sub_categoria": body.get("sub_categoria"), "marca": body.get("marca"), "tipo_producto": body.get("tipo_producto","Bienes"), "imagenes": json_mod.dumps(body.get("imagenes",[])), "atributos": json_mod.dumps(body.get("atributos",[])), "variantes": json_mod.dumps(body.get("variantes",[])), "stock_disponible": body.get("stock_disponible",0), "alerta_stock_minimo": body.get("alerta_stock_minimo",5), "publicado_web": body.get("publicado_web",False), "rastrear_inventario": body.get("rastrear_inventario",True), "codigo_aduana": body.get("codigo_aduana"), "peso_kg": peso_kg, "notas_internas": body.get("notas_internas"), "seo_titulo": body.get("seo_titulo"), "seo_descripcion": body.get("seo_descripcion"), "seo_keywords": body.get("seo_keywords"), "now": now, "created_by": body.get("created_by","")})
     db.commit()
     new_id = result.fetchone()[0]
     return {"status": "success", "data": {"id": new_id}}
@@ -1180,7 +1187,10 @@ def update_catalogo_product(product_id: int, body: dict, user: User = Depends(re
     for k in allowed:
         if k in body:
             sets.append(f"{k}=:{k}")
-            params[k] = body[k]
+            v = body[k]
+            if k == "peso_kg" and v == "":
+                v = None
+            params[k] = v
     for k in json_fields:
         if k in body:
             sets.append(f"{k}=CAST(:{k} AS jsonb)")
