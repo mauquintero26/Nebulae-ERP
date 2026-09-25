@@ -54,6 +54,10 @@ def _create_sku_db(db):
 
 
 def _create_pec_api(client, token, sup_id, wh_id, productos):
+    # create_pec ahora rechaza (422) productos sin precio -- estos tests
+    # existian antes de esa validacion y no la ejercitan, asi que se les
+    # da un precio por defecto salvo que ya traigan uno propio.
+    productos = [{**p, "unit_price_cop": p.get("unit_price_cop") or 100000} for p in productos]
     r = client.post("/api/v1/compras/pedidos", headers=_auth(token),
                     json={"supplier_id": sup_id, "supplier_name": "TestSup",
                           "warehouse_id": wh_id, "productos": productos})

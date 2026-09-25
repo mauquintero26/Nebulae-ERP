@@ -78,7 +78,7 @@ class TestRollbackTransaccional:
             headers=_auth(admin_token),
             json={"supplier_id": sup_id, "supplier_name": "Sup",
                   "warehouse_id": wh_id,
-                  "productos": [{"sku_id": sku_id, "qty": 5, "nombre": "Prod"}]},
+                  "productos": [{"sku_id": sku_id, "qty": 5, "nombre": "Prod", "unit_price_cop": 100000}]},
         )
         assert r_pec.status_code == 201
         pec_id = r_pec.json()["data"]["id"]
