@@ -117,21 +117,35 @@ class TestMovimientoAutomaticoDeLead:
 
         sc, lead = _crear_solicitud_con_lead(app_client, admin_token, customer_test.id)
 
+        # pipeline_stages es config persistente (como customers), no se trunca
+        # entre corridas de pytest -- estas dos filas deben borrarse al final
+        # o se acumulan indefinidamente (18 pares encontrados en erp_test antes
+        # de este fix, viviendo como columnas fantasma en el Kanban real).
         max_pos = db.execute(text("SELECT COALESCE(MAX(position),0) FROM pipeline_stages")).scalar() or 0
         etapa_a = PipelineStage(name="Etapa Custom A", color="bg-purple-500", bg_color="bg-purple-50",
                                  position=max_pos + 1, maps_to_status="DRAFT")
         etapa_b = PipelineStage(name="Etapa Custom B", color="bg-purple-500", bg_color="bg-purple-50",
                                  position=max_pos + 2, maps_to_status="DRAFT")
         db.add(etapa_a); db.add(etapa_b); db.commit()
+        etapa_a_id, etapa_b_id = etapa_a.id, etapa_b.id
 
-        r = app_client.patch(
-            f"/api/v1/crm/leads/{lead['id']}/stage",
-            json={"pipeline_stage_id": etapa_b.id},
-            headers=_headers(admin_token),
-        )
-        assert r.status_code == 200
+        try:
+            r = app_client.patch(
+                f"/api/v1/crm/leads/{lead['id']}/stage",
+                json={"pipeline_stage_id": etapa_b.id},
+                headers=_headers(admin_token),
+            )
+            assert r.status_code == 200
 
-        db.expire_all()
-        orden = db.query(SalesOrder).filter(SalesOrder.id == lead["id"]).first()
-        assert orden.pipeline_stage_id == etapa_b.id
-        assert orden.pipeline_stage_id != etapa_a.id
+            db.expire_all()
+            orden = db.query(SalesOrder).filter(SalesOrder.id == lead["id"]).first()
+            assert orden.pipeline_stage_id == etapa_b.id
+            assert orden.pipeline_stage_id != etapa_a.id
+        finally:
+            db.expire_all()
+            orden = db.query(SalesOrder).filter(SalesOrder.id == lead["id"]).first()
+            if orden and orden.pipeline_stage_id in (etapa_a_id, etapa_b_id):
+                orden.pipeline_stage_id = None
+                db.commit()
+            db.query(PipelineStage).filter(PipelineStage.id.in_([etapa_a_id, etapa_b_id])).delete(synchronize_session=False)
+            db.commit()

@@ -1120,6 +1120,7 @@ def create_pipeline_stage(body: dict, user: User = Depends(require_roles(*ROLE_A
         maps_to_status=body.get("maps_to_status", "DRAFT"),
     )
     db.add(stage); db.commit(); db.refresh(stage)
+    _invalidate_stages_cache()
     return {"status": "success", "data": _stage_to_dict(stage)}
 
 @router.put("/pipeline-stages/{stage_id}", response_model=dict)
@@ -1131,6 +1132,7 @@ def update_pipeline_stage(stage_id: int, body: dict, user: User = Depends(requir
         if field in body:
             setattr(stage, field, body[field])
     db.commit(); db.refresh(stage)
+    _invalidate_stages_cache()
     return {"status": "success", "data": _stage_to_dict(stage)}
 
 @router.delete("/pipeline-stages/{stage_id}", response_model=dict)
@@ -1139,6 +1141,7 @@ def delete_pipeline_stage(stage_id: int, user: User = Depends(require_roles(*ROL
     if not stage:
         raise HTTPException(status_code=404, detail="Stage not found")
     db.delete(stage); db.commit()
+    _invalidate_stages_cache()
     return {"status": "success", "data": {"message": "Etapa eliminada."}}
 
 

@@ -116,7 +116,7 @@ def setup_test_db():
                 maps_to_status VARCHAR(50)
             );
             INSERT INTO pipeline_stages (name, color, bg_color, position, maps_to_status)
-            SELECT 'Nuevo Lead', 'bg-blue-500', 'bg-blue-50', 1, 'PENDING'
+            SELECT 'Nuevo Lead', 'bg-blue-500', 'bg-blue-50', 1, 'DRAFT'
             WHERE NOT EXISTS (SELECT 1 FROM pipeline_stages);
             CREATE TABLE IF NOT EXISTS chat_conversations (
                 id SERIAL PRIMARY KEY,
