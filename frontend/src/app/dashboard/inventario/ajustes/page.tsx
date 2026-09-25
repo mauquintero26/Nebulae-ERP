@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import {
   SlidersHorizontal, Activity, TrendingUp, TrendingDown, Plus,
@@ -40,14 +40,28 @@ export default function AjustesPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [saving, setSaving] = useState(false);
   const [currentUser, setCurrentUser] = useState('');
-  const [form, setForm] = useState({
-    tipo: 'ENTRADA', product_name: '', warehouse_id: '', qty: 1, motivo: 'Conteo fisico', notas: '',
+  const [form, setForm] = useState<{ tipo: string; sku_id: number|null; product_name: string; warehouse_id: string; qty: number; motivo: string; notas: string }>({
+    tipo: 'ENTRADA', sku_id: null, product_name: '', warehouse_id: '', qty: 1, motivo: 'Conteo fisico', notas: '',
   });
+  const [productResults, setProductResults] = useState<any[]>([]);
+  const productTimer = useRef<any>(null);
 
   useEffect(() => {
     setCurrentUser(localStorage.getItem('user_name') || '');
     apiFetch('/inventory/warehouses').then(d => setWarehouses(Array.isArray(d) ? d : (d?.data ?? []))).catch(() => {});
   }, []);
+
+  function onProductSearch(q: string) {
+    setForm(f => ({ ...f, product_name: q, sku_id: null }));
+    clearTimeout(productTimer.current);
+    if (!q.trim()) { setProductResults([]); return; }
+    productTimer.current = setTimeout(async () => {
+      try {
+        const d = await apiFetch('/crm/products/search?q=' + encodeURIComponent(q));
+        setProductResults(Array.isArray(d) ? d : (d?.data ?? []));
+      } catch { setProductResults([]); }
+    }, 300);
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -62,39 +76,37 @@ export default function AjustesPage() {
 
   async function createAjuste(e: React.FormEvent) {
     e.preventDefault();
+    if (!form.sku_id) { alert('Selecciona un producto de la lista'); return; }
     setSaving(true);
     try {
       await apiFetch('/inventory/operations', {
         method: 'POST',
         body: JSON.stringify({
           operation_type: 'ADJUSTMENT',
-          adjustment_type: form.tipo,
-          warehouse_id: parseInt(form.warehouse_id),
-          product_name: form.product_name,
-          quantity: form.qty,
-          motivo: form.motivo,
-          notas: form.notas,
+          dest_warehouse_id: parseInt(form.warehouse_id),
+          notas: form.motivo + (form.notas ? ` — ${form.notas}` : ''),
+          movements: [{ sku_id: form.sku_id, quantity: form.qty, direction: form.tipo === 'ENTRADA' ? 'IN' : 'OUT' }],
           created_by: currentUser,
         }),
       });
       setShowCreate(false);
-      setForm({ tipo: 'ENTRADA', product_name: '', warehouse_id: '', qty: 1, motivo: 'Conteo fisico', notas: '' });
+      setForm({ tipo: 'ENTRADA', sku_id: null, product_name: '', warehouse_id: '', qty: 1, motivo: 'Conteo fisico', notas: '' });
       load();
-    } catch {
-      alert('Ajuste registrado.');
-      setShowCreate(false);
+    } catch (err: any) {
+      alert('Error al registrar el ajuste: ' + (err?.message || 'intenta de nuevo'));
     }
     setSaving(false);
   }
 
-  const entradas = ajustes.filter(a => a.adjustment_type === 'ENTRADA' || a.operation_subtype === 'ENTRADA').length;
-  const salidas = ajustes.filter(a => a.adjustment_type === 'SALIDA' || a.operation_subtype === 'SALIDA').length;
+  const direccionDe = (a: any) => a.movements?.[0]?.direction === 'OUT' ? 'SALIDA' : 'ENTRADA';
+  const entradas = ajustes.filter(a => direccionDe(a) === 'ENTRADA').length;
+  const salidas = ajustes.filter(a => direccionDe(a) === 'SALIDA').length;
 
   const filtered = ajustes.filter(a => {
     const ms = !search || JSON.stringify(a).toLowerCase().includes(search.toLowerCase());
     if (!ms) return false;
-    if (activeTab === 'Entradas') return a.adjustment_type === 'ENTRADA' || a.operation_subtype === 'ENTRADA';
-    if (activeTab === 'Salidas') return a.adjustment_type === 'SALIDA' || a.operation_subtype === 'SALIDA';
+    if (activeTab === 'Entradas') return direccionDe(a) === 'ENTRADA';
+    if (activeTab === 'Salidas') return direccionDe(a) === 'SALIDA';
     return true;
   });
 
@@ -212,15 +224,15 @@ export default function AjustesPage() {
                     <td className="px-6 py-4 font-black text-amber-700">AJU-{String(a.id || i+1).padStart(4, '0')}</td>
                     <td className="px-6 py-4">
                       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold border ${
-                        a.adjustment_type === 'ENTRADA' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'
+                        direccionDe(a) === 'ENTRADA' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'
                       }`}>
-                        {a.adjustment_type === 'ENTRADA' ? <><TrendingUp size={11} /> Entrada</> : <><TrendingDown size={11} /> Salida</>}
+                        {direccionDe(a) === 'ENTRADA' ? <><TrendingUp size={11} /> Entrada</> : <><TrendingDown size={11} /> Salida</>}
                       </span>
                     </td>
-                    <td className="px-6 py-4 font-medium text-slate-800">{a.product_name || a.sku_id || '-'}</td>
-                    <td className="px-6 py-4 text-slate-600">{a.warehouse_name || a.warehouse_id || '-'}</td>
-                    <td className="px-6 py-4 font-bold text-slate-800">{a.quantity || a.qty || 0}</td>
-                    <td className="px-6 py-4 text-slate-600">{a.motivo || a.notes || '-'}</td>
+                    <td className="px-6 py-4 font-medium text-slate-800">SKU #{a.movements?.[0]?.sku_id ?? '-'}</td>
+                    <td className="px-6 py-4 text-slate-600">{warehouses.find((w: any) => w.id === (a.dest_warehouse_id ?? a.source_warehouse_id))?.name || '-'}</td>
+                    <td className="px-6 py-4 font-bold text-slate-800">{a.movements?.[0]?.quantity ?? 0}</td>
+                    <td className="px-6 py-4 text-slate-600">{a.notas || '-'}</td>
                     <td className="px-6 py-4 text-slate-600">{fDate(a.created_at)}</td>
                     <td className="px-6 py-4 text-center">
                       <div className="flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
@@ -250,11 +262,11 @@ export default function AjustesPage() {
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 {[
-                  { label: 'Tipo', value: selected.adjustment_type || '-' },
-                  { label: 'Producto', value: selected.product_name || selected.sku_id || '-' },
-                  { label: 'Bodega', value: selected.warehouse_name || selected.warehouse_id || '-' },
-                  { label: 'Cantidad', value: selected.quantity || selected.qty || 0 },
-                  { label: 'Motivo', value: selected.motivo || selected.notes || '-' },
+                  { label: 'Tipo', value: direccionDe(selected) },
+                  { label: 'Producto', value: `SKU #${selected.movements?.[0]?.sku_id ?? '-'}` },
+                  { label: 'Bodega', value: warehouses.find((w: any) => w.id === (selected.dest_warehouse_id ?? selected.source_warehouse_id))?.name || '-' },
+                  { label: 'Cantidad', value: selected.movements?.[0]?.quantity ?? 0 },
+                  { label: 'Motivo', value: selected.notas || '-' },
                   { label: 'Fecha', value: fDate(selected.created_at) },
                 ].map(({ label, value }) => (
                   <div key={label} className="bg-slate-50 rounded-xl p-3">
@@ -295,11 +307,22 @@ export default function AjustesPage() {
                   </select>
                 </div>
               </div>
-              <div>
+              <div className="relative">
                 <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Producto *</label>
-                <input required value={form.product_name} onChange={e => setForm(f => ({ ...f, product_name: e.target.value }))}
-                  placeholder="Nombre del producto..."
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none" />
+                <input required value={form.product_name} onChange={e => onProductSearch(e.target.value)}
+                  placeholder="Buscar producto..."
+                  className={`w-full border rounded-xl px-3 py-2.5 text-sm outline-none ${form.sku_id ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200'}`} />
+                {productResults.length > 0 && !form.sku_id && (
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl z-10 max-h-48 overflow-y-auto">
+                    {productResults.map((p: any) => (
+                      <button key={p.id} type="button"
+                        onClick={() => { setForm(f => ({ ...f, sku_id: p.id, product_name: p.display || p.product_name })); setProductResults([]); }}
+                        className="w-full text-left px-4 py-2.5 hover:bg-amber-50 text-sm border-b last:border-0 border-slate-50">
+                        {p.display || p.product_name}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>

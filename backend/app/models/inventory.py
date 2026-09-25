@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, UniqueConstraint, DateTime
+from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, UniqueConstraint, DateTime, Text
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 
@@ -48,11 +48,12 @@ class InventoryOperation(Base):
     dest_warehouse_id   = Column(Integer, ForeignKey("warehouses.id"), nullable=True)
     shipping_method_id  = Column(Integer, ForeignKey("shipping_methods.id"), nullable=True)
     operation_type      = Column(String, nullable=False)
-    # RECEIPT | DELIVERY | TRANSFER | PHYSICAL_INVENTORY | LOGISTIC_EVENT
+    # RECEIPT | DELIVERY | TRANSFER | PHYSICAL_INVENTORY | ADJUSTMENT | LOGISTIC_EVENT
     tracking_number     = Column(String, nullable=True)
     package_type        = Column(String, nullable=True)
     status              = Column(String, nullable=False, default="DRAFT")
     # DRAFT | READY | DONE | CANCELLED
+    notas               = Column(Text, nullable=True)
 
     # ── Fase 1A: trazabilidad de documento origen ────────────────────────────
     # Añadidos por migración fa1a_002. Permiten el UNIQUE constraint que evita

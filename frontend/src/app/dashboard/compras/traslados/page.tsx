@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeftRight, ShieldAlert, Activity, Clock, Package,
@@ -25,11 +25,15 @@ const SUB_MODULES = [
   { name: 'Proyecciones',            path: '/dashboard/compras/proyecciones' },
 ];
 
+// Valores reales de InventoryOperation.status (ver models/inventory.py):
+// DRAFT | READY | DONE | CANCELLED. El frontend antes filtraba/mostraba
+// valores que el backend nunca produce (EN_PROCESO/COMPLETADO en mayus.
+// sin traducir), asi que ningun traslado real coincidia con ningun filtro.
 const ESTADOS: Record<string, { label: string; color: string; bg: string; border: string }> = {
-  BORRADOR:    { label: 'Borrador',     color: '#64748b', bg: '#f1f5f9', border: '#e2e8f0' },
-  EN_PROCESO:  { label: 'En Proceso',   color: '#1d4ed8', bg: '#eff6ff', border: '#bfdbfe' },
-  COMPLETADO:  { label: 'Completado',   color: '#065f46', bg: '#f0fdf4', border: '#a7f3d0' },
-  CANCELADO:   { label: 'Cancelado',    color: '#991b1b', bg: '#fef2f2', border: '#fecaca' },
+  DRAFT:     { label: 'Borrador',   color: '#64748b', bg: '#f1f5f9', border: '#e2e8f0' },
+  READY:     { label: 'Listo',      color: '#1d4ed8', bg: '#eff6ff', border: '#bfdbfe' },
+  DONE:      { label: 'Completado', color: '#065f46', bg: '#f0fdf4', border: '#a7f3d0' },
+  CANCELLED: { label: 'Cancelado',  color: '#991b1b', bg: '#fef2f2', border: '#fecaca' },
 };
 
 function Badge({ estado }: { estado: string }) {
@@ -70,7 +74,9 @@ export default function TrasladosPage() {
   const [form, setForm] = useState({
     origen_id: '', destino_id: '', notas: '', productos: [] as any[],
   });
-  const [newProd, setNewProd] = useState({ product_name: '', qty: 1 });
+  const [newProd, setNewProd] = useState<{ sku_id: number|null; product_name: string; qty: number }>({ sku_id: null, product_name: '', qty: 1 });
+  const [productResults, setProductResults] = useState<any[]>([]);
+  const productTimer = useRef<any>(null);
 
   useEffect(() => {
     setCurrentUser(localStorage.getItem('user_name') || '');
@@ -78,6 +84,18 @@ export default function TrasladosPage() {
       .then(d => setWarehouses(Array.isArray(d) ? d : (d?.data ?? [])))
       .catch(() => {});
   }, []);
+
+  function onProductSearch(q: string) {
+    setNewProd(p => ({ ...p, product_name: q, sku_id: null }));
+    clearTimeout(productTimer.current);
+    if (!q.trim()) { setProductResults([]); return; }
+    productTimer.current = setTimeout(async () => {
+      try {
+        const d = await apiFetch('/crm/products/search?q=' + encodeURIComponent(q));
+        setProductResults(Array.isArray(d) ? d : (d?.data ?? []));
+      } catch { setProductResults([]); }
+    }, 300);
+  }
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -91,14 +109,16 @@ export default function TrasladosPage() {
   useEffect(() => { load(); }, [load]);
 
   function addProd() {
-    if (!newProd.product_name) return;
+    if (!newProd.sku_id) return;
     setForm(f => ({ ...f, productos: [...f.productos, { ...newProd }] }));
-    setNewProd({ product_name: '', qty: 1 });
+    setNewProd({ sku_id: null, product_name: '', qty: 1 });
+    setProductResults([]);
   }
 
   async function createTraslado(e: React.FormEvent) {
     e.preventDefault();
     if (!form.origen_id || !form.destino_id) { alert('Selecciona bodega origen y destino'); return; }
+    if (!form.productos.length) { alert('Agrega al menos un producto'); return; }
     setSaving(true);
     try {
       await apiFetch('/inventory/operations', {
@@ -107,7 +127,7 @@ export default function TrasladosPage() {
           source_warehouse_id: parseInt(form.origen_id),
           dest_warehouse_id: parseInt(form.destino_id),
           operation_type: 'TRANSFER',
-          productos: form.productos,
+          movements: form.productos.map(p => ({ sku_id: p.sku_id, quantity: Number(p.qty) })),
           notas: form.notas,
           created_by: currentUser,
         }),
@@ -116,21 +136,19 @@ export default function TrasladosPage() {
       setForm({ origen_id: '', destino_id: '', notas: '', productos: [] });
       load();
     } catch (err: any) {
-      // If endpoint not available, show placeholder success
-      alert('Traslado registrado. El sistema de traslados estara completamente integrado pronto.');
-      setShowCreate(false);
+      alert('Error al crear el traslado: ' + (err?.message || 'intenta de nuevo'));
     }
     setSaving(false);
   }
 
-  const enProceso = traslados.filter(t => t.status === 'IN_PROGRESS' || t.status === 'EN_PROCESO').length;
-  const completados = traslados.filter(t => t.status === 'COMPLETED' || t.status === 'COMPLETADO').length;
+  const enProceso = traslados.filter(t => t.status === 'DRAFT' || t.status === 'READY').length;
+  const completados = traslados.filter(t => t.status === 'DONE').length;
 
   const filtered = traslados.filter(t => {
     const matchSearch = !search || JSON.stringify(t).toLowerCase().includes(search.toLowerCase());
     if (!matchSearch) return false;
-    if (filterTab === 'En Proceso') return t.status === 'IN_PROGRESS' || t.status === 'EN_PROCESO';
-    if (filterTab === 'Completados') return t.status === 'COMPLETED' || t.status === 'COMPLETADO';
+    if (filterTab === 'En Proceso') return t.status === 'DRAFT' || t.status === 'READY';
+    if (filterTab === 'Completados') return t.status === 'DONE';
     return true;
   });
 
@@ -300,9 +318,9 @@ export default function TrasladosPage() {
                     <td className="px-6 py-4 font-black text-orange-700">TRL-{String(t.id).padStart(4, '0')}</td>
                     <td className="px-6 py-4 font-medium text-slate-800">{t.source_warehouse_name || t.source_warehouse_id || '-'}</td>
                     <td className="px-6 py-4 font-medium text-slate-800">{t.dest_warehouse_name || t.dest_warehouse_id || '-'}</td>
-                    <td className="px-6 py-4 text-slate-600">{(t.items?.length || t.productos?.length || 0)} items</td>
+                    <td className="px-6 py-4 text-slate-600">{Math.ceil((t.movements?.length || 0) / 2)} producto(s)</td>
                     <td className="px-6 py-4 text-slate-600">{fDate(t.created_at)}</td>
-                    <td className="px-6 py-4"><Badge estado={t.status || 'BORRADOR'} /></td>
+                    <td className="px-6 py-4"><Badge estado={t.status || 'DRAFT'} /></td>
                     <td className="px-6 py-4 text-center">
                       <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button className="bg-orange-100 text-orange-700 hover:bg-orange-200 px-3 py-1.5 rounded text-xs font-bold">
@@ -395,7 +413,7 @@ export default function TrasladosPage() {
               <div>
                 <h2 className="font-extrabold text-slate-900 text-xl">TRL-{String(selected.id).padStart(4, '0')}</h2>
                 <p className="text-xs text-slate-500 mt-0.5">Traslado Interno</p>
-                <div className="mt-2"><Badge estado={selected.status || 'BORRADOR'} /></div>
+                <div className="mt-2"><Badge estado={selected.status || 'DRAFT'} /></div>
               </div>
               <button onClick={() => setSelected(null)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-xl">
                 <X size={18} />
@@ -426,7 +444,7 @@ export default function TrasladosPage() {
                   <p className="font-mono text-sm font-bold">{selected.tracking_number}</p>
                 </div>
               )}
-              {(selected.items || selected.productos || []).length > 0 && (
+              {(selected.movements || []).filter((m: any) => m.direction !== 'TRANSFER_IN').length > 0 && (
                 <div>
                   <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos</p>
                   <div className="border border-slate-200 rounded-xl overflow-hidden">
@@ -436,10 +454,10 @@ export default function TrasladosPage() {
                         <th className="px-3 py-2 text-right">Qty</th>
                       </tr></thead>
                       <tbody>
-                        {(selected.items || selected.productos || []).map((p: any, i: number) => (
+                        {selected.movements.filter((m: any) => m.direction !== 'TRANSFER_IN').map((p: any, i: number) => (
                           <tr key={i} className="border-t border-slate-50">
-                            <td className="px-3 py-2 font-medium">{p.product_name || p.sku_id || `SKU ${i+1}`}</td>
-                            <td className="px-3 py-2 text-right font-bold">{p.qty || p.quantity || 0}</td>
+                            <td className="px-3 py-2 font-medium">SKU #{p.sku_id}</td>
+                            <td className="px-3 py-2 text-right font-bold">{p.quantity || 0}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -509,9 +527,22 @@ export default function TrasladosPage() {
                   </div>
                 )}
                 <div className="grid grid-cols-4 gap-2">
-                  <input placeholder="Producto" value={newProd.product_name}
-                    onChange={e => setNewProd(p => ({ ...p, product_name: e.target.value }))}
-                    className="col-span-3 border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none" />
+                  <div className="col-span-3 relative">
+                    <input placeholder="Buscar producto..." value={newProd.product_name}
+                      onChange={e => onProductSearch(e.target.value)}
+                      className={`w-full border rounded-xl px-3 py-2 text-sm outline-none ${newProd.sku_id ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200'}`} />
+                    {productResults.length > 0 && !newProd.sku_id && (
+                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl z-10 max-h-48 overflow-y-auto">
+                        {productResults.map((p: any) => (
+                          <button key={p.id} type="button"
+                            onClick={() => { setNewProd(n => ({ ...n, sku_id: p.id, product_name: p.display || p.product_name })); setProductResults([]); }}
+                            className="w-full text-left px-4 py-2.5 hover:bg-orange-50 text-sm border-b last:border-0 border-slate-50">
+                            {p.display || p.product_name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                   <input type="number" placeholder="Qty" min={1} value={newProd.qty}
                     onChange={e => setNewProd(p => ({ ...p, qty: parseInt(e.target.value) || 1 }))}
                     className="border border-slate-200 rounded-xl px-2 py-2 text-sm outline-none text-center" />
