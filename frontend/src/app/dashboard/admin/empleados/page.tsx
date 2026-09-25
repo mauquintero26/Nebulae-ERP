@@ -49,18 +49,21 @@ export default function EmpleadosHub() {
       const res = await apiFetch('/auth/users').catch(() => []);
       const userList = Array.isArray(res) ? res : (res?.data ?? []);
       setUsers(userList);
-      if (userList.length > 0 && !selectedUser) {
-        setSelectedUser(userList[0]);
-      } else if (selectedUser) {
-        const found = userList.find((u: any) => u.id === selectedUser.id);
-        if (found) setSelectedUser(found);
-      }
+      // Functional update so this callback never needs selectedUser in its
+      // closure — reading it directly here made loadUsers's identity change
+      // on every call (since it always wrote a fresh object reference back),
+      // which retriggered the effect below and looped /auth/users forever.
+      setSelectedUser(prev => {
+        if (!prev) return userList[0] ?? null;
+        const found = userList.find((u: any) => u.id === prev.id);
+        return found ?? prev;
+      });
     } catch {
       setUsers([]);
     } finally {
       setLoading(false);
     }
-  }, [selectedUser]);
+  }, []);
 
   useEffect(() => {
     loadUsers();
