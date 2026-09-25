@@ -1138,23 +1138,25 @@ def erp_copilot_query(
     total_customers = db.execute(text("SELECT COUNT(*) FROM customers")).scalar() or 0
     total_products = db.execute(text("SELECT COUNT(*) FROM products")).scalar() or 0
     
-    # Inventario
+    # Inventario — product_inventory never existed as a table; physical stock
+    # lives in inventory_levels and reservations in inventory_reservations
+    # (same tables /inventory/stock-summary already reads correctly).
     inv_res = db.execute(text("""
-        SELECT 
-            COALESCE(SUM(quantity_real), 0) as total_fisico,
-            COALESCE(SUM(quantity_reserved), 0) as total_reservado
-        FROM product_inventory
+        SELECT
+            COALESCE((SELECT SUM(quantity) FROM inventory_levels), 0) as total_fisico,
+            COALESCE((SELECT SUM(quantity_reserved) FROM inventory_reservations WHERE status = 'ACTIVE'), 0) as total_reservado
     """)).mappings().first()
     fisico = float(inv_res["total_fisico"]) if inv_res else 0.0
     reservado = float(inv_res["total_reservado"]) if inv_res else 0.0
     disponible = max(0.0, fisico - reservado)
 
-    # Compras en transito
+    # Compras en transito — purchase_orders_full has no fecha_pedido column,
+    # the real date field is fecha_compra.
     transito_pecs = db.execute(text("""
-        SELECT numero, estado, total_cop, fecha_pedido
+        SELECT numero, estado, total_cop, fecha_compra
         FROM purchase_orders_full
         WHERE estado IN ('EN_TRANSITO', 'PENDIENTE_ENVIO', 'EN_PUERTO')
-        ORDER BY fecha_pedido DESC LIMIT 5
+        ORDER BY fecha_compra DESC LIMIT 5
     """)).mappings().all()
 
     # Pedidos de venta recientes
