@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams, useRouter } from 'next/navigation';
 import {
   ShoppingBag, Package, Truck, CheckCircle2, AlertTriangle, Activity,
   Search, MoreHorizontal, RefreshCw, Filter, X, Trash2, Edit2, Send,
@@ -1118,6 +1118,8 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
    ================================================================ */
 export default function PedidosCompraPage() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const [loading, setLoading]         = useState(true);
   const [toast, setToast]             = useState<{msg:string;type:string}|null>(null);
   const [pedidos, setPedidos]         = useState<any[]>([]);
@@ -1161,6 +1163,21 @@ export default function PedidosCompraPage() {
   }, []);
 
   useEffect(()=>{ load(); }, [load]);
+
+  // Deep-link: otras paginas (ej. Mercancia en Transito) enlazan aqui con
+  // ?id=<pec_id> para abrir directamente el panel de detalle de ese PEC.
+  useEffect(() => {
+    const idParam = searchParams.get('id');
+    if (!idParam || loading) return;
+    const found = pedidos.find(p => String(p.id) === idParam);
+    if (found) { setSelectedPec(found); return; }
+    apiFetch('/compras/pedidos/'+idParam).then(setSelectedPec).catch(()=>{});
+  }, [searchParams, pedidos, loading]);
+
+  const closePecPanel = useCallback(() => {
+    setSelectedPec(null);
+    if (searchParams.get('id')) router.replace(pathname);
+  }, [searchParams, router, pathname]);
 
   async function handleAskAI() {
     if (!aiQuestion.trim()) return;
@@ -1291,7 +1308,7 @@ export default function PedidosCompraPage() {
       {selectedPec && (
         <PecDetailPanel
           pec={selectedPec}
-          onClose={()=>setSelectedPec(null)}
+          onClose={closePecPanel}
           onUpdate={load}
           onToast={showToast}
         />

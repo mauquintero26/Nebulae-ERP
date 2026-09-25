@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import {
   Truck, ShieldAlert, Activity, Clock, AlertCircle,
-  CheckCircle2, RefreshCw, Check, Package, DollarSign,
-  ChevronRight, TrendingUp
+  CheckCircle2, RefreshCw, Package,
+  ChevronRight, Search, ExternalLink, ChevronLeft
 } from 'lucide-react';
 
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
@@ -25,14 +25,6 @@ const SUB_MODULES = [
   { name: 'Proyecciones',            path: '/dashboard/compras/proyecciones' },
 ];
 
-// Tailwind necesita clases literales (no puede interpolar grid-cols-${n}), y el
-// pipeline de etapas ahora es dinamico -- de ahi este mapa chico en vez de una
-// constante fija de 4 columnas.
-const GRID_COLS_CLASS: Record<number,string> = {
-  1: 'grid-cols-1', 2: 'grid-cols-2', 3: 'grid-cols-3', 4: 'grid-cols-4',
-  5: 'grid-cols-5', 6: 'grid-cols-6',
-};
-
 // Estados reales de PurchaseOrderFull.estado (confirmado leyendo erp_compras.py:
 // create_pec -> "BORRADOR"; update_tracking -> "EN_TRANSITO"/"RECIBIDO";
 // confirmar_recepcion -> "RECIBIDA"/"PARCIALMENTE_RECIBIDA"; update_pec/PecDetailPanel
@@ -44,11 +36,19 @@ const ESTADOS_EXCLUIDOS_TRANSITO = ['BORRADOR', 'CANCELADO', 'RECIBIDO', 'RECIBI
 const fDate = (iso: string | null) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 const fCOP = (v: number) => v > 0 ? `$${Number(v).toLocaleString('es-CO')}` : '-';
 
+// La etapa "actual" de un embarque es la primera que aun no esta COMPLETADA
+// (el pipeline es dinamico/configurable, asi que nunca se asume una posicion fija).
+const currentStageOf = (p: any) => (p.tracking_stages || []).find((s: any) => s.status !== 'COMPLETADO') || null;
+
 export default function TransitoPage() {
   const [pedidos, setPedidos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState('');
   const [updatingId, setUpdatingId] = useState<number | null>(null);
+  const [search, setSearch] = useState('');
+  const [onlyOverdue, setOnlyOverdue] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 15;
 
   useEffect(() => {
     setCurrentUser(localStorage.getItem('user_name') || '');
@@ -91,6 +91,29 @@ export default function TransitoPage() {
     ? Math.round(pedidos.reduce((s, p) => s + (p.tracking_stages || []).length, 0) / pedidos.length)
     : 0;
 
+  // Filtro + orden: vencidos primero, luego por menor cantidad de dias restantes,
+  // para que la tabla priorice sola lo mas urgente sin que el usuario tenga que ordenar.
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    let list = pedidos.filter(p => {
+      if (onlyOverdue && !p.is_overdue) return false;
+      if (!q) return true;
+      return [p.numero, p.supplier_name, p.ven_numero].filter(Boolean)
+        .some((v: string) => v.toLowerCase().includes(q));
+    });
+    list = [...list].sort((a, b) => {
+      if (!!a.is_overdue !== !!b.is_overdue) return a.is_overdue ? -1 : 1;
+      const da = a.days_until_delivery ?? 9999;
+      const db = b.days_until_delivery ?? 9999;
+      return da - db;
+    });
+    return list;
+  }, [pedidos, search, onlyOverdue]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const paged = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  useEffect(() => { setCurrentPage(1); }, [search, onlyOverdue]);
+
   return (
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
 
@@ -116,13 +139,13 @@ export default function TransitoPage() {
             <h4 className="text-sm font-black text-red-800">ALERTA DE RETRASO EN CADENA DE SUMINISTRO</h4>
             <p className="text-xs font-bold text-red-600 mt-1">{overdue} pedido(s) con fecha de entrega vencida. Riesgo de incumplimiento a clientes.</p>
           </div>
-          <Link href="/dashboard/compras/pedidos" className="bg-red-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-red-700 shrink-0">
-            Gestionar Retrasos
-          </Link>
+          <button onClick={() => setOnlyOverdue(true)} className="bg-red-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-red-700 shrink-0">
+            Ver Vencidos
+          </button>
         </div>
       )}
 
-      <div className="p-8 max-w-[1600px] mx-auto space-y-8">
+      <div className="p-8 max-w-[1600px] mx-auto space-y-6">
 
         {/* Header */}
         <div className="flex justify-between items-center">
@@ -177,15 +200,33 @@ export default function TransitoPage() {
           </div>
         </div>
 
-        {/* Tracking Cards */}
+        {/* Toolbar */}
+        <div className="flex items-center gap-3">
+          <div className="relative flex-1 max-w-sm">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar PEC, proveedor, PVEN..."
+              className="w-full bg-white border border-slate-200 rounded-xl pl-9 pr-3 py-2.5 text-sm outline-none focus:border-blue-400" />
+          </div>
+          <button onClick={() => setOnlyOverdue(v => !v)}
+            className={`px-4 py-2.5 rounded-xl text-sm font-bold border transition-colors flex items-center gap-2 ${
+              onlyOverdue ? 'bg-red-600 text-white border-red-600' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+            }`}>
+            <AlertCircle size={14} /> Solo vencidos
+          </button>
+          <span className="text-xs text-slate-400 font-semibold ml-auto">{filtered.length} embarque(s)</span>
+        </div>
+
+        {/* Tracking Table */}
         {loading ? (
           <div className="flex justify-center pt-8">
             <RefreshCw size={28} className="animate-spin text-blue-400" />
           </div>
-        ) : pedidos.length === 0 ? (
+        ) : filtered.length === 0 ? (
           <div className="bg-white rounded-3xl border border-slate-200 p-20 text-center shadow-sm">
             <Truck size={52} className="mx-auto mb-4 text-slate-200" />
-            <p className="text-slate-500 font-semibold text-lg">Sin mercancia en transito</p>
+            <p className="text-slate-500 font-semibold text-lg">
+              {pedidos.length === 0 ? 'Sin mercancia en transito' : 'Ningun embarque coincide con el filtro'}
+            </p>
             <p className="text-slate-400 text-sm mt-2">Los pedidos de compra activos apareceran aqui cuando esten en camino</p>
             <Link href="/dashboard/compras/pedidos"
               className="inline-flex items-center gap-2 mt-6 bg-blue-600 text-white px-5 py-2.5 rounded-xl font-bold text-sm hover:bg-blue-700">
@@ -193,144 +234,118 @@ export default function TransitoPage() {
             </Link>
           </div>
         ) : (
-          <div className="grid gap-5">
-            {pedidos.map(p => {
-              const totalStages = (p.tracking_stages || []).length || 1;
-              const completedStages = (p.tracking_stages || []).filter((s: any) => s.status === 'COMPLETADO').length;
-              const progressPct = Math.round((completedStages / totalStages) * 100);
-              const daysLeft = p.days_until_delivery;
-              const isUpdating = updatingId === p.id;
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left whitespace-nowrap">
+                <thead className="bg-slate-50 border-b border-slate-200">
+                  <tr>
+                    <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase">Pedido de Compra</th>
+                    <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase">Cliente / PVEN</th>
+                    <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase">Tipo</th>
+                    <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase">Etapa Actual</th>
+                    <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase">Progreso</th>
+                    <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase">Entrega Est.</th>
+                    <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase text-right">Monto</th>
+                    <th className="px-4 py-3 text-xs font-black text-slate-400 uppercase text-center">Accion</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {paged.map(p => {
+                    const totalStages = (p.tracking_stages || []).length || 1;
+                    const completedStages = (p.tracking_stages || []).filter((s: any) => s.status === 'COMPLETADO').length;
+                    const progressPct = Math.round((completedStages / totalStages) * 100);
+                    const daysLeft = p.days_until_delivery;
+                    const isUpdating = updatingId === p.id;
+                    const stage = currentStageOf(p);
+                    const stageActive = stage?.status === 'EN_PROCESO';
 
-              return (
-                <div key={p.id} className={`bg-white rounded-3xl shadow-sm border p-6 transition-all hover:shadow-md ${
-                  p.is_overdue ? 'border-red-200 bg-red-50/20' : 'border-slate-100'
-                }`}>
-                  {/* Card header */}
-                  <div className="flex items-start justify-between mb-5">
-                    <div className="flex items-start gap-4">
-                      <div className={`w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 ${
-                        p.is_overdue ? 'bg-red-100 text-red-600' : progressPct === 100 ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-100 text-blue-600'
-                      }`}>
-                        <Truck size={22} />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-extrabold text-xl text-purple-700">{p.numero}</span>
-                          {p.ven_numero && (
-                            <Link href="/dashboard/ventas/venta"
-                              className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold hover:bg-emerald-200 flex items-center gap-1">
+                    return (
+                      <tr key={p.id} className={`hover:bg-slate-50 transition-colors ${p.is_overdue ? 'bg-red-50/40' : ''}`}>
+                        <td className="px-4 py-3">
+                          <Link href={`/dashboard/compras/pedidos?id=${p.id}`} className="font-extrabold text-purple-700 hover:underline flex items-center gap-1.5">
+                            {p.numero} <ExternalLink size={11} className="opacity-40" />
+                          </Link>
+                          <p className="text-xs text-slate-500 mt-0.5">{p.supplier_name || 'Sin proveedor'}</p>
+                        </td>
+                        <td className="px-4 py-3">
+                          {p.ven_numero ? (
+                            <Link href="/dashboard/ventas/venta" className="text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold hover:bg-emerald-200 inline-flex items-center gap-1">
                               {p.ven_numero} <ChevronRight size={10} />
                             </Link>
-                          )}
-                          {p.is_overdue && (
-                            <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
-                              <AlertCircle size={10} /> Vencido
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-slate-600 font-semibold mt-0.5">{p.supplier_name || 'Sin proveedor'}</p>
-                        <p className="text-xs text-slate-400 mt-0.5">Entrega est.: {fDate(p.fecha_entrega_estimada)}</p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-extrabold text-2xl text-slate-900">{fCOP(p.total_cop)}</p>
-                      {daysLeft !== null && daysLeft !== undefined && !p.is_overdue && (
-                        <p className={`text-sm font-bold mt-1 flex items-center gap-1 justify-end ${
-                          daysLeft <= 3 ? 'text-amber-500' : 'text-slate-400'
-                        }`}>
-                          <Clock size={12} /> {daysLeft} dia(s)
-                        </p>
-                      )}
-                      {p.is_overdue && (
-                        <p className="text-sm font-bold mt-1 text-red-500 flex items-center gap-1 justify-end">
-                          <AlertCircle size={12} /> {Math.abs(daysLeft || 0)} dias de retraso
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Progress bar */}
-                  <div className="mb-5">
-                    <div className="flex justify-between text-xs text-slate-400 mb-2">
-                      <span className="font-semibold">Progreso del embarque</span>
-                      <span className="font-bold">{completedStages}/{totalStages} etapas ({progressPct}%)</span>
-                    </div>
-                    <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
-                      <div className={`h-full rounded-full transition-all duration-700 ${
-                        p.is_overdue ? 'bg-gradient-to-r from-red-500 to-red-400'
-                        : progressPct === 100 ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
-                        : 'bg-gradient-to-r from-blue-500 to-indigo-500'
-                      }`} style={{ width: `${progressPct}%` }} />
-                    </div>
-                  </div>
-
-                  {/* Tracking stages -- la etiqueta viene siempre de s.label (snapshot
-                      propio de esta PEC), nunca de una lista posicional aparte: el
-                      pipeline es dinamico/configurable y puede tener cualquier cantidad
-                      de etapas, en cualquier orden. */}
-                  <div className={`grid gap-3 mb-4 ${GRID_COLS_CLASS[(p.tracking_stages || []).length] || 'grid-cols-4'}`}>
-                    {(p.tracking_stages || []).map((s: any, i: number) => {
-                      const isDone = s.status === 'COMPLETADO';
-                      const isActive = s.status === 'EN_PROCESO';
-                      return (
-                        <div key={s.stage} className={`p-3 rounded-2xl text-center border transition-all ${
-                          isDone ? 'bg-emerald-50 border-emerald-200'
-                          : isActive ? 'bg-blue-50 border-blue-200 ring-2 ring-blue-200'
-                          : 'bg-slate-50 border-slate-100'
-                        }`}>
-                          <div className={`w-9 h-9 rounded-full flex items-center justify-center mx-auto mb-2 text-sm font-black shadow-sm ${
-                            isDone ? 'bg-emerald-500 text-white'
-                            : isActive ? 'bg-blue-500 text-white'
-                            : 'bg-slate-200 text-slate-500'
-                          }`}>
-                            {isDone ? <Check size={14} /> : i + 1}
+                          ) : <span className="text-slate-300 text-xs">-</span>}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className="text-xs font-bold text-slate-500 capitalize">{p.tipo_envio === 'directo' ? 'Directo' : 'Casillero'}</span>
+                        </td>
+                        <td className="px-4 py-3 max-w-[220px]">
+                          {stage ? (
+                            <>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-xs font-bold text-slate-700 truncate">{stage.label || stage.stage}</span>
+                                <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${
+                                  stageActive ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500'
+                                }`}>{stage.status}</span>
+                              </div>
+                              {stage.alert && (
+                                <p className="text-[10px] text-red-600 font-bold flex items-center gap-1 mt-0.5">
+                                  <AlertCircle size={10} /> {stage.alert.mensaje}
+                                </p>
+                              )}
+                            </>
+                          ) : <span className="text-slate-300 text-xs">-</span>}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <div className="w-16 h-1.5 bg-slate-100 rounded-full overflow-hidden shrink-0">
+                              <div className={`h-full rounded-full ${progressPct === 100 ? 'bg-emerald-500' : 'bg-blue-500'}`} style={{ width: `${progressPct}%` }} />
+                            </div>
+                            <span className="text-xs font-bold text-slate-500 shrink-0">{completedStages}/{totalStages}</span>
                           </div>
-                          <p className={`text-xs font-black leading-tight mb-2 ${
-                            isDone ? 'text-emerald-700' : isActive ? 'text-blue-700' : 'text-slate-400'
-                          }`}>{s.label || s.stage}</p>
-                          {!isDone && !isUpdating && (
+                        </td>
+                        <td className="px-4 py-3">
+                          <p className="text-xs text-slate-500">{fDate(p.fecha_entrega_estimada)}</p>
+                          {p.is_overdue ? (
+                            <p className="text-xs font-bold text-red-600 flex items-center gap-1"><AlertCircle size={10} /> {Math.abs(daysLeft || 0)}d atraso</p>
+                          ) : daysLeft !== null && daysLeft !== undefined ? (
+                            <p className={`text-xs font-bold ${daysLeft <= 3 ? 'text-amber-500' : 'text-slate-400'}`}>{daysLeft}d restante(s)</p>
+                          ) : null}
+                        </td>
+                        <td className="px-4 py-3 text-right font-black text-slate-800">{fCOP(p.total_cop)}</td>
+                        <td className="px-4 py-3 text-center">
+                          {stage && !isUpdating && (
                             <button
-                              onClick={() => updateTracking(p.id, s.stage, isActive ? 'COMPLETADO' : 'EN_PROCESO')}
-                              className={`text-xs px-2 py-1.5 rounded-lg font-bold w-full transition-colors ${
-                                isActive ? 'bg-emerald-600 text-white hover:bg-emerald-700'
-                                : 'bg-slate-200 text-slate-600 hover:bg-blue-100 hover:text-blue-700'
+                              onClick={() => updateTracking(p.id, stage.stage, stageActive ? 'COMPLETADO' : 'EN_PROCESO')}
+                              className={`text-xs px-3 py-1.5 rounded-lg font-bold transition-colors ${
+                                stageActive ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'bg-slate-100 text-slate-600 hover:bg-blue-100 hover:text-blue-700'
                               }`}>
-                              {isActive ? 'Completar' : 'Iniciar'}
+                              {stageActive ? 'Completar' : 'Iniciar'}
                             </button>
                           )}
-                          {isUpdating && <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mx-auto" />}
-                          {isDone && s.timestamp && (
-                            <p className="text-xs text-emerald-600 font-medium">{fDate(s.timestamp)}</p>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
+                          {isUpdating && <RefreshCw size={14} className="animate-spin text-blue-400 mx-auto" />}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
 
-                  {/* Products summary + footer */}
-                  <div className="flex items-center justify-between pt-4 border-t border-slate-100">
-                    <div className="flex gap-2 flex-wrap">
-                      {(p.productos || []).slice(0, 3).map((pr: any, i: number) => (
-                        <span key={i} className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">
-                          {pr.product_name || pr.sku_id} x{pr.qty}
-                        </span>
-                      ))}
-                      {(p.productos || []).length > 3 && (
-                        <span className="text-xs text-slate-400">+{(p.productos || []).length - 3} mas</span>
-                      )}
-                    </div>
-                    <Link href="/dashboard/compras/recepciones"
-                      className={`text-xs font-bold px-4 py-2 rounded-xl flex items-center gap-1.5 transition-colors ${
-                        completedStages === totalStages
-                          ? 'bg-emerald-600 text-white hover:bg-emerald-700'
-                          : 'bg-slate-100 text-slate-500 cursor-default'
-                      }`}>
-                      {completedStages === totalStages ? <><CheckCircle2 size={13} /> Recepcionar</> : <><Package size={13} /> Pendiente entrega</>}
-                    </Link>
-                  </div>
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100">
+                <span className="text-xs text-slate-400 font-semibold">Pagina {currentPage} de {totalPages}</span>
+                <div className="flex gap-2">
+                  <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1}
+                    className="p-2 rounded-lg border border-slate-200 text-slate-500 disabled:opacity-30 hover:bg-slate-50">
+                    <ChevronLeft size={14} />
+                  </button>
+                  <button onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages}
+                    className="p-2 rounded-lg border border-slate-200 text-slate-500 disabled:opacity-30 hover:bg-slate-50">
+                    <ChevronRight size={14} />
+                  </button>
                 </div>
-              );
-            })}
+              </div>
+            )}
           </div>
         )}
       </div>
