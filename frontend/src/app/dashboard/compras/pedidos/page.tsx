@@ -8,7 +8,7 @@ import {
   TrendingUp, DollarSign, Calendar, MessageSquare, AlertCircle, ChevronRight,
   ChevronUp, Plus, Eye, ShoppingCart, FileText, LayoutGrid, List,
   Bell, Receipt, Clock, MapPin, ArrowRight, Save, ChevronDown,
-  ExternalLink, RotateCcw, Layers, Tag, Hash, UserPlus
+  ExternalLink, RotateCcw, Layers, Tag, Hash, UserPlus, Settings2, PackageCheck
 } from 'lucide-react';
 
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
@@ -33,16 +33,6 @@ const PEC_ESTADOS: Record<string,{bg:string;text:string;border:string;label:stri
   COMPLETADO:        {bg:'bg-green-100',   text:'text-green-800',   border:'border-green-200',   label:'Completado'},
   CANCELADO:         {bg:'bg-red-100',     text:'text-red-700',     border:'border-red-200',     label:'Cancelado'},
 };
-
-const TRACKING_STAGES_CASILLERO = [
-  {stage:'PROVEEDOR_CASILLERO', label:'Proveedor → Casillero', icon:'📦'},
-  {stage:'CASILLERO_NEBULAE',   label:'Casillero → Nebulae',   icon:'✈️'},
-  {stage:'PENDIENTE_RECEPCION', label:'Pendiente Recepcion',   icon:'🏭'},
-];
-const TRACKING_STAGES_DIRECTO = [
-  {stage:'PROVEEDOR_COLOMBIA',  label:'Proveedor → Colombia',  icon:'🚚'},
-  {stage:'PENDIENTE_RECEPCION', label:'Pendiente Recepcion',   icon:'🏭'},
-];
 
 const SUB_MODULES = [
   {name:'Lista de Compras',      path:'/dashboard/compras/lista-compras'},
@@ -108,35 +98,271 @@ function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClose:()=>
 }
 
 /* ================================================================
-   TRACKING PANEL — Barra interactiva de tracking
+   NUEVO CASILLERO MODAL
+   ================================================================ */
+function NewCasilleroModal({onSave, onClose}: {onSave:(c:any)=>void; onClose:()=>void}) {
+  const [form, setForm] = useState({name:'',address:'',reception_point:'',contact_name:'',phone:'',email:'',city:'',country:'Estados Unidos',notes:''});
+  const [saving, setSaving] = useState(false);
+  const set = (k:string,v:string) => setForm(f=>({...f,[k]:v}));
+  async function save(e:React.FormEvent) {
+    e.preventDefault();
+    if (!form.name.trim()) return;
+    setSaving(true);
+    try { const d = await apiFetch('/compras/casilleros',{method:'POST',body:JSON.stringify(form)}); onSave(d); }
+    catch(err:any) { alert('Error: '+err.message); }
+    setSaving(false);
+  }
+  return (
+    <div className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg mx-4">
+        <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-indigo-50 rounded-t-3xl">
+          <div><h3 className="font-black text-gray-900 text-lg">Nuevo Casillero</h3><p className="text-xs text-gray-500 mt-0.5">Punto de recepcion / forwarder</p></div>
+          <button onClick={onClose} className="p-2 hover:bg-indigo-100 rounded-xl"><X size={18}/></button>
+        </div>
+        <form onSubmit={save} className="p-6 space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Nombre *</label><input required value={form.name} onChange={e=>set('name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+            <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Direccion</label><input value={form.address} onChange={e=>set('address',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+            <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Punto de Recepcion</label><input value={form.reception_point} onChange={e=>set('reception_point',e.target.value)} placeholder="ej: Bodega 4, Muelle B" className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Contacto</label><input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Telefono</label><input value={form.phone} onChange={e=>set('phone',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Ciudad</label><input value={form.city} onChange={e=>set('city',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Pais</label><input value={form.country} onChange={e=>set('country',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+          </div>
+          <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
+            <button type="button" onClick={onClose} className="px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50">Cancelar</button>
+            <button type="submit" disabled={saving} className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2">
+              {saving?<RefreshCw size={14} className="animate-spin"/>:<MapPin size={14}/>} Agregar Casillero
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================
+   TRACKING CONFIG MODAL — icono de configuracion (Etapas/Alertas + Casilleros)
+   ================================================================ */
+function TrackingConfigModal({onClose, onToast}: {onClose:()=>void; onToast:(m:string,t?:string)=>void}) {
+  const [tab, setTab] = useState<'etapas'|'casilleros'>('etapas');
+  const [tipoEnvio, setTipoEnvio] = useState<'casillero'|'directo'>('casillero');
+  const [config, setConfig] = useState<any>(null);
+  const [stages, setStages] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [casilleros, setCasilleros] = useState<any[]>([]);
+  const [showNewCasillero, setShowNewCasillero] = useState(false);
+
+  const loadConfig = useCallback(async () => {
+    setLoading(true);
+    try { const d = await apiFetch('/compras/tracking-config'); setConfig(d); setStages(d[tipoEnvio]||[]); }
+    catch(e:any) { onToast(e.message,'error'); }
+    setLoading(false);
+  }, [tipoEnvio]);
+  const loadCasilleros = async () => {
+    try { const d = await apiFetch('/compras/casilleros?limit=100'); setCasilleros(Array.isArray(d)?d:(d?.data||[])); }
+    catch {}
+  };
+  useEffect(()=>{ loadConfig(); loadCasilleros(); }, []);
+  useEffect(()=>{ if(config) setStages(config[tipoEnvio]||[]); }, [tipoEnvio]);
+
+  const setStage = (i:number, k:string, v:any) => setStages(prev=>prev.map((s,idx)=>idx===i?{...s,[k]:v}:s));
+  const addStage = () => setStages(prev=>[...prev, {key:'',label:'',alert_confirm_days:2,alert_overdue_days:1,active:true}]);
+  const removeStage = (i:number) => setStages(prev=>prev.filter((_,idx)=>idx!==i));
+  const moveStage = (i:number, dir:number) => setStages(prev=>{
+    const n=[...prev]; const j=i+dir; if(j<0||j>=n.length) return prev;
+    [n[i],n[j]]=[n[j],n[i]]; return n;
+  });
+
+  const saveStages = async () => {
+    if (stages.some(s=>!s.key || !String(s.key).trim())) { onToast('Cada etapa necesita una key (identificador unico)','error'); return; }
+    setSaving(true);
+    try {
+      await apiFetch(`/compras/tracking-config/${tipoEnvio}`, {method:'PUT', body:JSON.stringify({stages})});
+      onToast('Configuracion de etapas guardada','ok');
+      loadConfig();
+    } catch(e:any) { onToast(e.message,'error'); }
+    setSaving(false);
+  };
+
+  const deleteCasillero = async (id:number) => {
+    if (!confirm('Eliminar este casillero?')) return;
+    try { await apiFetch(`/compras/casilleros/${id}`,{method:'DELETE'}); loadCasilleros(); onToast('Casillero eliminado','ok'); }
+    catch(e:any) { onToast(e.message,'error'); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+      {showNewCasillero && (
+        <NewCasilleroModal onClose={()=>setShowNewCasillero(false)} onSave={()=>{setShowNewCasillero(false);loadCasilleros();}}/>
+      )}
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+        <div className="px-6 py-5 border-b border-gray-100 flex justify-between items-center shrink-0">
+          <div>
+            <h3 className="font-black text-gray-900 text-lg flex items-center gap-2"><Settings2 size={18} className="text-purple-600"/> Configuracion de Tracking</h3>
+            <p className="text-xs text-gray-500 mt-0.5">Etapas, alertas y casilleros del pipeline logistico</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-xl"><X size={18}/></button>
+        </div>
+        <div className="flex gap-1 px-6 pt-4 shrink-0">
+          {[{k:'etapas',l:'Etapas y Alertas'},{k:'casilleros',l:'Casilleros'}].map(({k,l}:any)=>(
+            <button key={k} onClick={()=>setTab(k)} className={'px-3 py-1.5 rounded-lg text-sm font-bold ' + (tab===k?'bg-purple-600 text-white':'bg-gray-100 text-gray-600 hover:bg-purple-50')}>{l}</button>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6">
+          {tab === 'etapas' && (
+            <div className="space-y-4">
+              <div className="flex gap-2">
+                {(['casillero','directo'] as const).map(t=>(
+                  <button key={t} onClick={()=>setTipoEnvio(t)} className={'px-3 py-1.5 rounded-lg text-xs font-bold border ' + (tipoEnvio===t?'bg-indigo-600 text-white border-indigo-600':'bg-white text-gray-600 border-gray-200 hover:bg-gray-50')}>
+                    {t==='casillero'?'Via Casillero':'Directo Colombia'}
+                  </button>
+                ))}
+              </div>
+              {loading ? <div className="text-center py-8 text-gray-400 text-sm">Cargando...</div> : (
+                <div className="space-y-2">
+                  {stages.map((s,i)=>(
+                    <div key={i} className="border border-gray-200 rounded-2xl p-4 bg-gray-50">
+                      <div className="grid grid-cols-12 gap-2 items-end">
+                        <div className="col-span-4">
+                          <label className="text-[10px] font-black text-gray-400 uppercase">Etiqueta</label>
+                          <input value={s.label||''} onChange={e=>setStage(i,'label',e.target.value)} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-purple-200"/>
+                        </div>
+                        <div className="col-span-3">
+                          <label className="text-[10px] font-black text-gray-400 uppercase">Key (unica)</label>
+                          <input value={s.key||''} onChange={e=>setStage(i,'key',e.target.value.toUpperCase().replace(/\s+/g,'_'))} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-purple-200 font-mono"/>
+                        </div>
+                        <div className="col-span-2">
+                          <label className="text-[10px] font-black text-gray-400 uppercase">Confirm. (d)</label>
+                          <input type="number" min={0} value={s.alert_confirm_days??''} onChange={e=>setStage(i,'alert_confirm_days',e.target.value===''?null:Number(e.target.value))} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-purple-200"/>
+                        </div>
+                        <div className="col-span-2">
+                          <label className="text-[10px] font-black text-gray-400 uppercase">Atraso (d)</label>
+                          <input type="number" min={0} value={s.alert_overdue_days??''} onChange={e=>setStage(i,'alert_overdue_days',e.target.value===''?null:Number(e.target.value))} className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs outline-none focus:ring-2 focus:ring-purple-200"/>
+                        </div>
+                        <div className="col-span-1 flex flex-col items-center gap-1">
+                          <button onClick={()=>moveStage(i,-1)} disabled={i===0} className="text-gray-400 hover:text-purple-600 disabled:opacity-20"><ChevronUp size={14}/></button>
+                          <button onClick={()=>moveStage(i,1)} disabled={i===stages.length-1} className="text-gray-400 hover:text-purple-600 disabled:opacity-20"><ChevronDown size={14}/></button>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between mt-2">
+                        <label className="flex items-center gap-1.5 text-xs text-gray-500 font-bold">
+                          <input type="checkbox" checked={s.active!==false} onChange={e=>setStage(i,'active',e.target.checked)} className="rounded border-gray-300"/> Activa
+                        </label>
+                        <button onClick={()=>removeStage(i)} className="text-xs text-red-500 hover:text-red-700 font-bold flex items-center gap-1"><Trash2 size={12}/> Eliminar etapa</button>
+                      </div>
+                    </div>
+                  ))}
+                  <button onClick={addStage} className="w-full py-2.5 border-2 border-dashed border-gray-300 rounded-2xl text-sm font-bold text-gray-500 hover:border-purple-400 hover:text-purple-600 flex items-center justify-center gap-2"><Plus size={14}/> Agregar etapa</button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === 'casilleros' && (
+            <div className="space-y-2">
+              <button onClick={()=>setShowNewCasillero(true)} className="w-full py-2.5 border-2 border-dashed border-gray-300 rounded-2xl text-sm font-bold text-gray-500 hover:border-indigo-400 hover:text-indigo-600 flex items-center justify-center gap-2 mb-2"><Plus size={14}/> Nuevo Casillero</button>
+              {casilleros.length === 0 && <p className="text-center py-8 text-gray-400 text-sm">Sin casilleros registrados</p>}
+              {casilleros.map(c=>(
+                <div key={c.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-200">
+                  <div>
+                    <p className="font-bold text-sm text-gray-900">{c.name}</p>
+                    <p className="text-xs text-gray-400">{[c.address,c.city].filter(Boolean).join(' · ')||'Sin direccion'}</p>
+                  </div>
+                  <button onClick={()=>deleteCasillero(c.id)} className="p-1.5 hover:bg-red-50 rounded-lg text-gray-400 hover:text-red-500"><Trash2 size={14}/></button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {tab === 'etapas' && (
+          <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3 shrink-0">
+            <button onClick={onClose} className="px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50">Cerrar</button>
+            <button onClick={saveStages} disabled={saving} className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2">
+              {saving?<RefreshCw size={14} className="animate-spin"/>:<Save size={14}/>} Guardar Etapas
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ================================================================
+   TRACKING PANEL — Barra interactiva de tracking (renderiza SIEMPRE
+   directamente pec.tracking_stages, la fuente de verdad real -- nunca
+   una plantilla separada por nombre, que fue la causa raiz del bug
+   "las etapas no se marcan": el backend y un template hardcodeado en
+   este archivo usaban nombres de etapa distintos, asi que el PATCH de
+   las etapas 2/3/4 nunca encontraba coincidencia y no hacia nada).
    ================================================================ */
 function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; onToast:(m:string,t?:string)=>void}) {
   const [updating, setUpdating] = useState<string|null>(null);
   const [editStage, setEditStage] = useState<string|null>(null);
   const [guia, setGuia] = useState('');
   const [notas, setNotas] = useState('');
+  const [eta, setEta] = useState('');
+  const [carrier, setCarrier] = useState('');
+  const [casilleroId, setCasilleroId] = useState<number|null>(null);
+  const [casilleroSearch, setCasilleroSearch] = useState('');
+  const [casilleroResults, setCasilleroResults] = useState<any[]>([]);
+  const [showNewCasillero, setShowNewCasillero] = useState(false);
+  const casilleroTimer = useRef<any>(null);
 
   const stages: any[] = pec.tracking_stages || [];
-  const tipoEnvio = pec.tipo_envio || 'casillero';
-  const templateStages = tipoEnvio === 'directo' ? TRACKING_STAGES_DIRECTO : TRACKING_STAGES_CASILLERO;
 
-  async function updateStage(stageName: string, status: string, trackingNum?: string) {
+  async function updateStage(stageName: string, status: string) {
     setUpdating(stageName);
     try {
       await apiFetch('/compras/pedidos/' + pec.id + '/tracking', {
         method: 'PATCH',
-        body: JSON.stringify({stage: stageName, status, tracking_number: trackingNum || undefined, notes: notas || undefined, user_name: localStorage.getItem('user_name') || ''})
+        body: JSON.stringify({
+          stage: stageName, status,
+          tracking_number: guia || undefined,
+          notes: notas || undefined,
+          eta: eta || undefined,
+          carrier: carrier || undefined,
+          casillero_id: casilleroId || undefined,
+          user_name: localStorage.getItem('user_name') || '',
+        })
       });
       onToast('Etapa actualizada', 'ok');
       onUpdate();
-      setEditStage(null);
-      setGuia('');
-      setNotas('');
+      closeEdit();
     } catch(e:any) { onToast(e.message, 'error'); }
     setUpdating(null);
   }
 
-  const getStageData = (stageName: string) => stages.find((s:any) => s.stage === stageName) || {};
+  function openEdit(s:any) {
+    if (editStage === s.stage) { closeEdit(); return; }
+    setEditStage(s.stage);
+    setGuia(s.tracking_number||'');
+    setNotas(s.notes||'');
+    setEta(s.eta ? String(s.eta).slice(0,10) : '');
+    setCarrier(s.carrier||'');
+    setCasilleroId(s.casillero_id||null);
+    setCasilleroSearch(s.casillero_nombre||'');
+    setCasilleroResults([]);
+  }
+  function closeEdit() {
+    setEditStage(null); setGuia(''); setNotas(''); setEta(''); setCarrier(''); setCasilleroId(null); setCasilleroSearch(''); setCasilleroResults([]);
+  }
+
+  function onCasilleroSearch(q:string) {
+    setCasilleroSearch(q);
+    setCasilleroId(null);
+    clearTimeout(casilleroTimer.current);
+    if (!q.trim()) { setCasilleroResults([]); return; }
+    casilleroTimer.current = setTimeout(async () => {
+      try {
+        const d = await apiFetch('/compras/casilleros/search?q='+encodeURIComponent(q));
+        setCasilleroResults(Array.isArray(d)?d:(d?.data||[]));
+      } catch {}
+    }, 300);
+  }
 
   const stageColor = (status: string) => {
     if (status === 'COMPLETADO') return 'bg-emerald-500 border-emerald-500';
@@ -144,26 +370,40 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
     return 'bg-gray-200 border-gray-300';
   };
 
+  const diasTexto = (etaVal: string|null) => {
+    if (!etaVal) return null;
+    const d = Math.ceil((new Date(etaVal).getTime() - Date.now()) / 86400000);
+    if (d > 0) return {txt:`${d} dia(s) restante(s)`, color:'text-blue-600'};
+    if (d === 0) return {txt:'Vence hoy', color:'text-amber-600'};
+    return {txt:`${Math.abs(d)} dia(s) de atraso`, color:'text-red-600'};
+  };
+
+  if (stages.length === 0) {
+    return <p className="text-center py-10 text-gray-400 text-sm">Sin etapas de tracking configuradas para este pedido.</p>;
+  }
+
   return (
     <div className="space-y-3">
+      {showNewCasillero && (
+        <NewCasilleroModal onClose={()=>setShowNewCasillero(false)} onSave={(c:any)=>{setCasilleroId(c.id);setCasilleroSearch(c.name);setCasilleroResults([]);setShowNewCasillero(false);}}/>
+      )}
       {/* Visual progress bar */}
       <div className="flex items-center gap-1 mb-6">
-        {templateStages.map((ts,i) => {
-          const sd = getStageData(ts.stage);
+        {stages.map((sd,i) => {
           const status = sd.status || 'PENDIENTE';
           return (
-            <React.Fragment key={ts.stage}>
+            <React.Fragment key={sd.stage}>
               <div className="flex flex-col items-center flex-1">
                 <div className={'w-10 h-10 rounded-full flex items-center justify-center text-lg border-2 transition-all ' + stageColor(status)}>
                   {status === 'COMPLETADO' ? <CheckCircle2 size={18} className="text-white"/> :
                    status === 'EN_PROCESO' ? <Clock size={18} className="text-white"/> :
                    <span className="text-gray-400 text-sm">{i+1}</span>}
                 </div>
-                <p className="text-[10px] text-center text-gray-500 mt-1 max-w-[70px] leading-tight">{ts.label}</p>
+                <p className="text-[10px] text-center text-gray-500 mt-1 max-w-[70px] leading-tight">{sd.label}</p>
                 {sd.tracking_number && <p className="text-[9px] text-indigo-600 font-bold mt-0.5 max-w-[70px] truncate">{sd.tracking_number}</p>}
               </div>
-              {i < templateStages.length - 1 && (
-                <div className={'flex-none h-0.5 w-8 mt-[-24px] ' + (getStageData(templateStages[i+1].stage).status !== 'PENDIENTE' ? 'bg-emerald-400' : 'bg-gray-200')}/>
+              {i < stages.length - 1 && (
+                <div className={'flex-none h-0.5 w-8 mt-[-24px] ' + (stages[i+1].status !== 'PENDIENTE' ? 'bg-emerald-400' : 'bg-gray-200')}/>
               )}
             </React.Fragment>
           );
@@ -171,40 +411,72 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
       </div>
 
       {/* Stage cards */}
-      {templateStages.map((ts) => {
-        const sd = getStageData(ts.stage);
+      {stages.map((sd) => {
         const status = sd.status || 'PENDIENTE';
         const history: any[] = sd.tracking_history || [];
-        const isEditing = editStage === ts.stage;
+        const isEditing = editStage === sd.stage;
+        const dias = diasTexto(sd.eta);
         return (
-          <div key={ts.stage} className={'rounded-2xl border p-4 transition-all ' + (status==='COMPLETADO'?'border-emerald-200 bg-emerald-50':status==='EN_PROCESO'?'border-blue-200 bg-blue-50':'border-gray-200 bg-white')}>
+          <div key={sd.stage} className={'rounded-2xl border p-4 transition-all ' + (status==='COMPLETADO'?'border-emerald-200 bg-emerald-50':status==='EN_PROCESO'?'border-blue-200 bg-blue-50':'border-gray-200 bg-white')}>
             <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <span className="text-lg">{ts.icon}</span>
-                <div>
-                  <p className="font-bold text-sm text-gray-900">{ts.label}</p>
-                  {sd.timestamp && <p className="text-[10px] text-gray-400">{fDate(sd.timestamp)}</p>}
-                </div>
+              <div>
+                <p className="font-bold text-sm text-gray-900">{sd.label}</p>
+                {sd.timestamp && <p className="text-[10px] text-gray-400">{fDate(sd.timestamp)}</p>}
               </div>
               <div className="flex items-center gap-2">
                 <span className={'text-xs font-black px-2 py-1 rounded-full ' + (status==='COMPLETADO'?'bg-emerald-100 text-emerald-700':status==='EN_PROCESO'?'bg-blue-100 text-blue-700':'bg-gray-100 text-gray-500')}>{status}</span>
-                <button onClick={()=>{setEditStage(isEditing?null:ts.stage);setGuia(sd.tracking_number||'');setNotas(sd.notes||'');}} className="p-1.5 hover:bg-white rounded-lg border border-gray-200 text-gray-500"><Edit2 size={12}/></button>
+                <button onClick={()=>openEdit(sd)} className="p-1.5 hover:bg-white rounded-lg border border-gray-200 text-gray-500"><Edit2 size={12}/></button>
               </div>
             </div>
+
+            {/* ETA / carrier / casillero / timer */}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500 mb-1">
+              {sd.eta && <span className="flex items-center gap-1"><Clock size={11}/> ETA: <strong className="text-gray-700">{fDate(sd.eta)}</strong></span>}
+              {sd.carrier && <span>Carrier: <strong className="text-gray-700">{sd.carrier}</strong></span>}
+              {sd.casillero_nombre && <span className="flex items-center gap-1"><MapPin size={11}/> {sd.casillero_nombre}</span>}
+              {dias && status !== 'COMPLETADO' && <span className={'font-bold ' + dias.color}>{dias.txt}</span>}
+            </div>
+            {sd.alert && status !== 'COMPLETADO' && (
+              <div className="mb-2 px-3 py-1.5 bg-red-50 border border-red-200 rounded-lg text-xs font-bold text-red-700 flex items-center gap-1.5">
+                <AlertTriangle size={12}/> {sd.alert.mensaje}
+              </div>
+            )}
 
             {/* Edit form */}
             {isEditing && (
               <div className="mt-3 pt-3 border-t border-gray-200 space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <div><label className="text-xs font-black text-gray-400 uppercase mb-1 block">ETA de esta etapa</label>
+                    <input type="date" value={eta} onChange={e=>setEta(e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
+                  </div>
+                  <div><label className="text-xs font-black text-gray-400 uppercase mb-1 block">Carrier</label>
+                    <input value={carrier} onChange={e=>setCarrier(e.target.value)} placeholder="ej: DHL" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
+                  </div>
+                </div>
                 <div><label className="text-xs font-black text-gray-400 uppercase mb-1 block">Numero de Guia / Tracking</label>
                   <input value={guia} onChange={e=>setGuia(e.target.value)} placeholder="ej: 1Z999AA1234567890" className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
+                </div>
+                <div className="relative">
+                  <label className="text-xs font-black text-gray-400 uppercase mb-1 block">Casillero</label>
+                  <input value={casilleroSearch} onChange={e=>onCasilleroSearch(e.target.value)} placeholder="Buscar casillero..." className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
+                  {casilleroResults.length > 0 && (
+                    <div className="absolute left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-10 max-h-32 overflow-y-auto">
+                      {casilleroResults.map((c:any)=>(
+                        <button key={c.id} type="button" onClick={()=>{setCasilleroId(c.id);setCasilleroSearch(c.name);setCasilleroResults([]);}} className="w-full text-left px-3 py-2 hover:bg-purple-50 text-sm">{c.name}</button>
+                      ))}
+                    </div>
+                  )}
+                  {casilleroSearch && !casilleroId && (
+                    <button type="button" onClick={()=>setShowNewCasillero(true)} className="mt-1 text-xs text-purple-600 font-bold hover:underline">+ Crear casillero "{casilleroSearch}"</button>
+                  )}
                 </div>
                 <div><label className="text-xs font-black text-gray-400 uppercase mb-1 block">Notas</label>
                   <input value={notas} onChange={e=>setNotas(e.target.value)} placeholder="Notas de esta etapa..." className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
                 </div>
                 <div className="flex gap-2 flex-wrap">
-                  {status !== 'EN_PROCESO' && <button onClick={()=>updateStage(ts.stage,'EN_PROCESO',guia||undefined)} disabled={!!updating} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-xl text-xs font-bold disabled:opacity-50"><Clock size={12}/> Marcar En Proceso</button>}
-                  {status !== 'COMPLETADO' && <button onClick={()=>updateStage(ts.stage,'COMPLETADO',guia||undefined)} disabled={!!updating} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-bold disabled:opacity-50"><CheckCircle2 size={12}/> Marcar Completado</button>}
-                  {status !== 'PENDIENTE' && <button onClick={()=>updateStage(ts.stage,'PENDIENTE')} disabled={!!updating} className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 text-gray-600 rounded-xl text-xs font-bold disabled:opacity-50"><RotateCcw size={12}/> Revertir</button>}
+                  {status !== 'EN_PROCESO' && <button onClick={()=>updateStage(sd.stage,'EN_PROCESO')} disabled={!!updating} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-xl text-xs font-bold disabled:opacity-50"><Clock size={12}/> Marcar En Proceso</button>}
+                  {status !== 'COMPLETADO' && <button onClick={()=>updateStage(sd.stage,'COMPLETADO')} disabled={!!updating} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-bold disabled:opacity-50"><CheckCircle2 size={12}/> Marcar Completado</button>}
+                  {status !== 'PENDIENTE' && <button onClick={()=>updateStage(sd.stage,'PENDIENTE')} disabled={!!updating} className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-100 text-gray-600 rounded-xl text-xs font-bold disabled:opacity-50"><RotateCcw size={12}/> Revertir</button>}
                 </div>
               </div>
             )}
@@ -216,7 +488,7 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
                 {history.map((h:any,i:number) => (
                   <div key={i} className="flex items-center gap-2 text-[10px] text-gray-500">
                     <span className="text-indigo-600 font-bold">{h.numero}</span>
-                    <span className="text-gray-300">·</span>
+                    <span className="text-gray-300">&middot;</span>
                     <span>{fDate(h.fecha)}</span>
                     {h.notas && <span className="text-gray-400 italic truncate">"{h.notas}"</span>}
                   </div>
@@ -239,6 +511,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
   const [tab, setTab] = useState('tracking');
   const [menuOpen, setMenuOpen] = useState(false);
   const [editEstado, setEditEstado] = useState(false);
+  const [showConfig, setShowConfig] = useState(false);
 
   useEffect(()=>{setDetail(pec);setTab('tracking');},[pec?.id]);
 
@@ -271,6 +544,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
 
   return (
     <>
+      {showConfig && <TrackingConfigModal onClose={()=>setShowConfig(false)} onToast={onToast}/>}
       <div className="fixed inset-0 bg-gray-900/20 backdrop-blur-sm z-40" onClick={onClose}/>
       <div className="fixed top-0 bottom-0 right-0 z-50 bg-white shadow-2xl flex flex-col" style={{left:'240px'}}>
         {/* Header */}
@@ -288,6 +562,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
           </div>
           <div className="flex items-center gap-2">
             <button onClick={()=>setEditEstado(x=>!x)} className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-50 border border-purple-200 text-purple-700 rounded-xl text-xs font-bold hover:bg-purple-100"><Edit2 size={12}/> Estado</button>
+            <button onClick={()=>setShowConfig(true)} title="Configurar etapas, alertas y casilleros" className="p-2 hover:bg-gray-100 rounded-xl text-gray-500"><Settings2 size={16}/></button>
             <div className="relative">
               <button onClick={()=>setMenuOpen(m=>!m)} className="p-2 hover:bg-gray-100 rounded-xl text-gray-500"><MoreHorizontal size={18}/></button>
               {menuOpen && (
@@ -317,6 +592,22 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
             <button key={k} onClick={()=>setTab(k)} className={'px-3 py-1.5 rounded-lg text-sm font-bold transition-all ' + (tab===k?'bg-purple-600 text-white shadow':'text-gray-600 hover:bg-purple-50 hover:text-purple-700')}>{l}</button>
           ))}
         </div>
+
+        {/* Mercancia recibida -> falta hacer la recepcion fisica */}
+        {['RECIBIDO','RECIBIDA'].includes(detail?.estado) && !(detail?.recepciones?.length > 0) && (
+          <div className="mx-8 mt-4 bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 bg-white rounded-full flex items-center justify-center text-emerald-600 shadow-sm"><PackageCheck size={18}/></div>
+              <div>
+                <p className="font-black text-emerald-900 text-sm">Mercancia recibida en bodega — pendiente por recepcion</p>
+                <p className="text-xs text-emerald-700">Ve a Recepciones para iniciar el conteo fisico de este pedido.</p>
+              </div>
+            </div>
+            <Link href="/dashboard/compras/recepciones" className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm hover:bg-emerald-700 transition-colors shrink-0">
+              Hacer Recepcion
+            </Link>
+          </div>
+        )}
 
         {/* Body */}
         <div className="flex flex-1 overflow-hidden">
@@ -351,7 +642,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
             <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
               <p className="text-xs font-black text-gray-400 uppercase mb-3">Logistica</p>
               <div className="grid grid-cols-2 gap-3 text-xs text-gray-600">
-                {[['Modalidad',detail?.modalidad_pago||'-'],['Carrier',detail?.carrier||'-'],['Casillero',detail?.casillero||'-'],['Tracking',detail?.tracking_number||'-']].map(([l,v],i)=>(
+                {[['Modalidad',detail?.modalidad_pago||'-'],['Carrier',detail?.carrier||'-'],['Casillero',detail?.casillero_nombre||'-'],['Tracking',detail?.tracking_number||'-']].map(([l,v],i)=>(
                   <div key={i}><span className="block text-gray-400 font-black uppercase mb-0.5">{l}</span>{v}</div>
                 ))}
               </div>
@@ -458,8 +749,13 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
   const [selectedSupplier, setSelectedSupplier] = useState<any>(null);
   const [showNewSupplier, setShowNewSupplier] = useState(false);
   const [supplierTimer, setSupplierTimer] = useState<any>(null);
+  const [casilleroSearch, setCasilleroSearch] = useState('');
+  const [casilleroResults, setCasilleroResults] = useState<any[]>([]);
+  const [selectedCasillero, setSelectedCasillero] = useState<any>(null);
+  const [showNewCasillero, setShowNewCasillero] = useState(false);
+  const [casilleroTimer, setCasilleroTimer] = useState<any>(null);
   const [form, setForm] = useState({
-    modalidad_pago:'Contado', metodo_pago:'', tipo_envio:'casillero', casillero:'',
+    modalidad_pago:'Contado', metodo_pago:'', tipo_envio:'casillero',
     fecha_entrega_estimada:'', notas:'', carrier:'', dias_entrega:15,
     subtotal_cop:0, total_cop:0,
   });
@@ -487,6 +783,22 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
     setSupplierTimer(t);
   };
 
+  const onCasilleroType = (val: string) => {
+    setCasilleroSearch(val);
+    setSelectedCasillero(null);
+    clearTimeout(casilleroTimer);
+    if (!val.trim()) { setCasilleroResults([]); return; }
+    const t = setTimeout(async () => {
+      try {
+        const res = await apiFetch('/compras/casilleros/search?q='+encodeURIComponent(val));
+        const arr = Array.isArray(res) ? res : (res?.data || []);
+        setCasilleroResults(arr);
+        if (arr.length === 0) setShowNewCasillero(true);
+      } catch {}
+    }, 350);
+    setCasilleroTimer(t);
+  };
+
   const addProduct = () => setProductos(prev => [...prev, {nombre:'',descripcion:'',qty:1,unit_price_cop:0,impuesto_pct:0,tracking:'',entrega_est:'',casillero:'',notas:'',estado:'PENDIENTE',destino:'CLIENTE'}]);
   const setProd = (i:number, k:string, v:any) => setProductos(prev => prev.map((p,idx)=>idx===i?{...p,[k]:v}:p));
   const delProd = (i:number) => setProductos(prev => prev.filter((_,idx)=>idx!==i));
@@ -504,6 +816,11 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
 
   async function submit() {
     if (!selectedSupplier) { onToast('Selecciona un proveedor','error'); return; }
+    const sinPrecio = productos.find(p => !(Number(p.unit_price_cop) > 0));
+    if (sinPrecio) {
+      onToast(`"${sinPrecio.nombre || sinPrecio.descripcion || 'Un producto'}" no tiene precio. Ingresa un precio antes de crear el pedido.`, 'error');
+      return;
+    }
     setSaving(true);
     try {
       const user = localStorage.getItem('user_name') || '';
@@ -521,7 +838,7 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
         modalidad_pago: form.modalidad_pago,
         metodo_pago: form.metodo_pago || null,
         tipo_envio: form.tipo_envio,
-        casillero: form.casillero || null,
+        casillero_id: selectedCasillero?.id || null,
         carrier: form.carrier || null,
         dias_entrega: Number(form.dias_entrega) || 15,
         fecha_entrega_estimada: form.fecha_entrega_estimada || null,
@@ -557,6 +874,12 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
         <NewSupplierModal
           onSave={(s)=>{setSelectedSupplier(s);setSupplierSearch(s.name);setSupplierResults([]);setShowNewSupplier(false);}}
           onClose={()=>setShowNewSupplier(false)}
+        />
+      )}
+      {showNewCasillero && (
+        <NewCasilleroModal
+          onSave={(c)=>{setSelectedCasillero(c);setCasilleroSearch(c.name);setCasilleroResults([]);setShowNewCasillero(false);}}
+          onClose={()=>setShowNewCasillero(false)}
         />
       )}
       <div className="fixed inset-0 z-[80] flex items-start justify-center bg-slate-900/60 backdrop-blur-sm p-4 overflow-auto">
@@ -638,9 +961,22 @@ function NuevoPecModal({pedidosVenta, onClose, onCreated, onToast}: {pedidosVent
                         </select>
                       </div>
                       {form.tipo_envio === 'casillero' && (
-                        <div>
+                        <div className="relative">
                           <label className="block text-xs font-black text-gray-500 uppercase mb-1">Casillero</label>
-                          <input value={form.casillero} onChange={e=>setF('casillero',e.target.value)} placeholder="ID Casillero" className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
+                          <input value={casilleroSearch} onChange={e=>onCasilleroType(e.target.value)}
+                            placeholder="Buscar casillero..."
+                            className={'w-full border rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200 ' + (selectedCasillero?'border-emerald-300 bg-emerald-50':'border-gray-200')}/>
+                          {selectedCasillero && <CheckCircle2 size={16} className="absolute right-3 top-9 text-emerald-600"/>}
+                          {casilleroResults.length > 0 && !selectedCasillero && (
+                            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-2xl shadow-2xl z-10 overflow-hidden">
+                              {casilleroResults.map((c:any)=>(
+                                <button key={c.id} type="button" onClick={()=>{setSelectedCasillero(c);setCasilleroSearch(c.name);setCasilleroResults([]);}} className="w-full text-left px-4 py-2.5 hover:bg-purple-50 text-sm">{c.name}</button>
+                              ))}
+                              <button type="button" onClick={()=>setShowNewCasillero(true)} className="w-full text-left px-4 py-3 hover:bg-purple-50 text-sm flex items-center gap-2 text-purple-600 font-bold border-t border-gray-100">
+                                <Plus size={13}/> Agregar nuevo casillero
+                              </button>
+                            </div>
+                          )}
                         </div>
                       )}
                       <div>
