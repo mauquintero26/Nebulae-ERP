@@ -506,12 +506,34 @@ function TrackingPanel({pec, onUpdate, onToast}: {pec:any; onUpdate:()=>void; on
    PEC DETAIL PANEL — full-width slide-over (left: 240px)
    ================================================================ */
 function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=>void; onUpdate:()=>void; onToast:(m:string,t?:string)=>void}) {
+  const router = useRouter();
   const [detail, setDetail] = useState<any>(pec);
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState('tracking');
   const [menuOpen, setMenuOpen] = useState(false);
   const [editEstado, setEditEstado] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
+  const [goingToRecepcion, setGoingToRecepcion] = useState(false);
+
+  // "Hacer Recepcion": ir directo a LA recepcion de este PEC, no al hub general
+  // (con cientos de pedidos, aterrizar en la lista completa obliga a buscarla).
+  // Si ya existe una (GoodsReceipt), abrirla; si no, crearla y abrir la nueva.
+  async function goToRecepcion() {
+    setGoingToRecepcion(true);
+    try {
+      const existing = detail?.recepciones?.[detail.recepciones.length - 1];
+      if (existing?.id) { router.push(`/dashboard/compras/recepciones/${existing.id}`); return; }
+      const user = localStorage.getItem('user_name') || '';
+      const r = await apiFetch(`/compras/pedidos/${pec.id}/recepcionar`, {
+        method: 'POST',
+        body: JSON.stringify({ created_by: user, force_full: false }),
+      });
+      router.push(`/dashboard/compras/recepciones/${r.id}`);
+    } catch (e: any) {
+      onToast(e.message, 'error');
+    }
+    setGoingToRecepcion(false);
+  }
 
   useEffect(()=>{setDetail(pec);setTab('tracking');},[pec?.id]);
 
@@ -600,12 +622,12 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
               <div className="w-9 h-9 bg-white rounded-full flex items-center justify-center text-emerald-600 shadow-sm"><PackageCheck size={18}/></div>
               <div>
                 <p className="font-black text-emerald-900 text-sm">Mercancia recibida en bodega — pendiente por recepcion</p>
-                <p className="text-xs text-emerald-700">Ve a Recepciones para iniciar el conteo fisico de este pedido.</p>
+                <p className="text-xs text-emerald-700">Inicia el conteo fisico de este pedido.</p>
               </div>
             </div>
-            <Link href="/dashboard/compras/recepciones" className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm hover:bg-emerald-700 transition-colors shrink-0">
-              Hacer Recepcion
-            </Link>
+            <button onClick={goToRecepcion} disabled={goingToRecepcion} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold text-xs shadow-sm hover:bg-emerald-700 transition-colors shrink-0 disabled:opacity-50 flex items-center gap-2">
+              {goingToRecepcion && <RefreshCw size={12} className="animate-spin"/>} Hacer Recepcion
+            </button>
           </div>
         )}
 
