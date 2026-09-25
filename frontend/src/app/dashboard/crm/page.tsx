@@ -635,11 +635,13 @@ export default function CRMPage() {
     setShowConfig(true);
   }
 
-  // Open detail panel (and populate edit form)
-  function openDetail(lead) {
-    setSelectedLead(lead);
-    setEditingLead(false);
-    setEditForm({
+  // Build the edit form snapshot from a lead's CURRENT data (used both when
+  // opening the detail panel and when entering edit mode, so a stage move
+  // made via "Mover a etapa" while the panel is open — which updates
+  // selectedLead but not editForm — can't be silently reverted by a later
+  // unrelated save that submits a stale pipeline_stage_id).
+  function buildEditForm(lead) {
+    return {
       solicitud_tipo: lead.solicitud_tipo || '',
       lead_value: String(lead.value || ''),
       lead_source: lead.source || 'CRM',
@@ -649,7 +651,14 @@ export default function CRMPage() {
       lead_qty: String(lead.lead_qty || 1),
       advisor_name: lead.advisor_name || '',
       pipeline_stage_id: String(lead.pipeline_stage_id || ''),
-    });
+    };
+  }
+
+  // Open detail panel (and populate edit form)
+  function openDetail(lead) {
+    setSelectedLead(lead);
+    setEditingLead(false);
+    setEditForm(buildEditForm(lead));
     setCustQuery(lead.client || '');
     setProdQuery(lead.lead_product_name || '');
   }
@@ -1128,7 +1137,7 @@ export default function CRMPage() {
                     </div>
                     <div className="flex items-center gap-2 ml-2">
                       {!editingLead ? (
-                        <button onClick={() => setEditingLead(true)}
+                        <button onClick={() => { setEditForm(buildEditForm(selectedLead)); setEditingLead(true); }}
                           className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-100">
                           <Edit3 size={13}/> Editar
                         </button>
@@ -1319,7 +1328,7 @@ export default function CRMPage() {
 
                         {/* Agenda link */}
                         <div className="grid grid-cols-2 gap-2 pt-1">
-                          <Link href="/dashboard/agenda"
+                          <Link href={`/dashboard/agenda?customer_id=${selectedLead.customer_id}`}
                             className="flex items-center justify-center gap-1.5 py-2 bg-slate-50 border border-slate-200 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-100">
                             <User size={13}/> Ver en Agenda
                           </Link>

@@ -1301,10 +1301,15 @@ def update_lead(lead_id: int, body: dict, user: User = Depends(require_roles(*RO
                 setattr(order, attr, body[key])
             except AttributeError:
                 pass
+    stage = db.query(PipelineStage).filter(PipelineStage.id == order.pipeline_stage_id).first() if order.pipeline_stage_id else None
+    if "pipeline_stage_id" in body and "status" not in body:
+        # Keep status in sync with the stage, same as move_lead_stage — otherwise
+        # a plain field edit that carries a (possibly stale) pipeline_stage_id can
+        # silently desync status from the stage it now points to.
+        order.status = (stage.maps_to_status if stage else None) or order.status
     order.updated_at = datetime.datetime.utcnow()
     db.commit(); db.refresh(order)
     customer = db.query(Customer).filter(Customer.id == order.customer_id).first()
-    stage = db.query(PipelineStage).filter(PipelineStage.id == order.pipeline_stage_id).first() if order.pipeline_stage_id else None
     return {"status": "success", "data": _lead_to_dict(order, customer, stage, db)}
 
 @router.delete("/leads/{lead_id}", response_model=dict)
