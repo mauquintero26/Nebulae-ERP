@@ -25,12 +25,13 @@ const SUB_MODULES = [
   { name: 'Proyecciones',            path: '/dashboard/compras/proyecciones' },
 ];
 
-const TRACKING_STAGES = [
-  { stage: 'PROVEEDOR_CASILLERO', label: 'Proveedor → Casillero', labelShort: 'Proveedor' },
-  { stage: 'CASILLERO_ADUANA',    label: 'Casillero → Aduana',    labelShort: 'Aduana' },
-  { stage: 'ADUANA_BODEGA',       label: 'Aduana → Bodega',       labelShort: 'Bodega' },
-  { stage: 'ENTREGADO',           label: 'Entregado',             labelShort: 'Entregado' },
-];
+// Tailwind necesita clases literales (no puede interpolar grid-cols-${n}), y el
+// pipeline de etapas ahora es dinamico -- de ahi este mapa chico en vez de una
+// constante fija de 4 columnas.
+const GRID_COLS_CLASS: Record<number,string> = {
+  1: 'grid-cols-1', 2: 'grid-cols-2', 3: 'grid-cols-3', 4: 'grid-cols-4',
+  5: 'grid-cols-5', 6: 'grid-cols-6',
+};
 
 // Estados reales de PurchaseOrderFull.estado (confirmado leyendo erp_compras.py:
 // create_pec -> "BORRADOR"; update_tracking -> "EN_TRANSITO"/"RECIBIDO";
@@ -80,8 +81,14 @@ export default function TransitoPage() {
 
   const overdue = pedidos.filter(p => p.is_overdue).length;
   const montoTotal = pedidos.reduce((s, p) => s + (p.total_cop || 0), 0);
+  // El pipeline de etapas ahora es dinamico (configurable via el icono de
+  // ajustes en Pedidos de Compra): "directo" tiene 3 etapas, "casillero" 4,
+  // y un admin puede agregar mas. Nunca asumir un total fijo de 4.
   const promedioEtapas = pedidos.length > 0
     ? Math.round(pedidos.reduce((s, p) => s + ((p.tracking_stages || []).filter((t: any) => t.status === 'COMPLETADO').length), 0) / pedidos.length * 10) / 10
+    : 0;
+  const promedioTotalEtapas = pedidos.length > 0
+    ? Math.round(pedidos.reduce((s, p) => s + (p.tracking_stages || []).length, 0) / pedidos.length)
     : 0;
 
   return (
@@ -158,7 +165,7 @@ export default function TransitoPage() {
           <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group hover:border-amber-300 transition-all">
             <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 mb-4 group-hover:scale-110 transition-transform"><Clock size={24} /></div>
             <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Promedio Etapas</p>
-            <h2 className="text-4xl font-black text-slate-800">{promedioEtapas}/4</h2>
+            <h2 className="text-4xl font-black text-slate-800">{promedioEtapas}/{promedioTotalEtapas || '-'}</h2>
             <p className="text-xs font-bold text-slate-500 mt-2">Etapas completadas promedio</p>
           </div>
 
@@ -188,8 +195,9 @@ export default function TransitoPage() {
         ) : (
           <div className="grid gap-5">
             {pedidos.map(p => {
+              const totalStages = (p.tracking_stages || []).length || 1;
               const completedStages = (p.tracking_stages || []).filter((s: any) => s.status === 'COMPLETADO').length;
-              const progressPct = Math.round((completedStages / 4) * 100);
+              const progressPct = Math.round((completedStages / totalStages) * 100);
               const daysLeft = p.days_until_delivery;
               const isUpdating = updatingId === p.id;
 
@@ -245,7 +253,7 @@ export default function TransitoPage() {
                   <div className="mb-5">
                     <div className="flex justify-between text-xs text-slate-400 mb-2">
                       <span className="font-semibold">Progreso del embarque</span>
-                      <span className="font-bold">{completedStages}/4 etapas ({progressPct}%)</span>
+                      <span className="font-bold">{completedStages}/{totalStages} etapas ({progressPct}%)</span>
                     </div>
                     <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
                       <div className={`h-full rounded-full transition-all duration-700 ${
@@ -256,10 +264,12 @@ export default function TransitoPage() {
                     </div>
                   </div>
 
-                  {/* Tracking stages */}
-                  <div className="grid grid-cols-4 gap-3 mb-4">
+                  {/* Tracking stages -- la etiqueta viene siempre de s.label (snapshot
+                      propio de esta PEC), nunca de una lista posicional aparte: el
+                      pipeline es dinamico/configurable y puede tener cualquier cantidad
+                      de etapas, en cualquier orden. */}
+                  <div className={`grid gap-3 mb-4 ${GRID_COLS_CLASS[(p.tracking_stages || []).length] || 'grid-cols-4'}`}>
                     {(p.tracking_stages || []).map((s: any, i: number) => {
-                      const meta = TRACKING_STAGES[i] || { label: s.stage, labelShort: s.stage };
                       const isDone = s.status === 'COMPLETADO';
                       const isActive = s.status === 'EN_PROCESO';
                       return (
@@ -277,7 +287,7 @@ export default function TransitoPage() {
                           </div>
                           <p className={`text-xs font-black leading-tight mb-2 ${
                             isDone ? 'text-emerald-700' : isActive ? 'text-blue-700' : 'text-slate-400'
-                          }`}>{meta.labelShort}</p>
+                          }`}>{s.label || s.stage}</p>
                           {!isDone && !isUpdating && (
                             <button
                               onClick={() => updateTracking(p.id, s.stage, isActive ? 'COMPLETADO' : 'EN_PROCESO')}
@@ -311,11 +321,11 @@ export default function TransitoPage() {
                     </div>
                     <Link href="/dashboard/compras/recepciones"
                       className={`text-xs font-bold px-4 py-2 rounded-xl flex items-center gap-1.5 transition-colors ${
-                        completedStages === 4
+                        completedStages === totalStages
                           ? 'bg-emerald-600 text-white hover:bg-emerald-700'
                           : 'bg-slate-100 text-slate-500 cursor-default'
                       }`}>
-                      {completedStages === 4 ? <><CheckCircle2 size={13} /> Recepcionar</> : <><Package size={13} /> Pendiente entrega</>}
+                      {completedStages === totalStages ? <><CheckCircle2 size={13} /> Recepcionar</> : <><Package size={13} /> Pendiente entrega</>}
                     </Link>
                   </div>
                 </div>

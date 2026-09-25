@@ -60,9 +60,14 @@ export default function RecepcionesPage() {
       const pecList = Array.isArray(pecs) ? pecs : (pecs?.data ?? []);
 
       setRecepciones(recList);
-      // Filtrar PECs que esten en camino o listos para recepcion fisica
-      setPecsEnTransito(pecList.filter((p: any) => 
-        ['EN_TRANSITO', 'ORDENADO', 'CONFIRMADO', 'EN_CASILLERO_MIAMI', 'EN_ADUANA_DIAN', 'RECIBIDO_BODEGA'].includes(p.estado)
+      // Filtrar PECs que esten en camino o listos para recepcion fisica.
+      // Los valores reales de PurchaseOrderFull.estado son EN_TRANSITO (tracking
+      // en curso) y RECIBIDO/RECIBIDA (todas las etapas de tracking completadas
+      // -- ver update_tracking en erp_compras.py). Antes esta lista solo tenia
+      // nombres que erp_compras.py nunca produce, asi que un PEC que terminaba
+      // su tracking (RECIBIDO) desaparecia de este picker en vez de aparecer.
+      setPecsEnTransito(pecList.filter((p: any) =>
+        ['EN_TRANSITO', 'RECIBIDO', 'RECIBIDA'].includes(p.estado)
       ));
     } catch {
       showToast('Error al cargar recepciones', 'error');
