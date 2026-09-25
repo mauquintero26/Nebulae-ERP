@@ -110,7 +110,10 @@ def _lista_compras_items_de(db: Session, pven_id: int) -> list:
         ids_vigentes = {it.get("id") for it in vigentes}
         items_limpios = [it for it in items if it.get("pven_id") != pven_id or it.get("id") in ids_vigentes]
         _save_lista_compras(db, items_limpios)
-    return vigentes
+    # Un item DESCARTADO (eliminado por el usuario) ya no cuenta como
+    # "decision tomada" -- el bloque para elegir de nuevo entre Crear Pedido
+    # de Compra / Agregar a Lista de Compras debe volver a aparecer.
+    return [it for it in vigentes if it.get("estado") != "DESCARTADO"]
 
 def _sc_dict(sc: CustomerRequest) -> dict:
     return {

@@ -2816,7 +2816,10 @@ def list_lista_compras(
 
     filtered = []
     for it in items:
-        if estado and it.get("estado") != estado:
+        if estado:
+            if it.get("estado") != estado:
+                continue
+        elif it.get("estado") == "DESCARTADO":
             continue
         if proveedor and proveedor.lower() not in (it.get("proveedor") or "").lower():
             continue
@@ -2850,7 +2853,7 @@ def stats_lista_compras(
     user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
-    items = _sincronizar_pvens_pendientes_a_lista(db)
+    items = [it for it in _sincronizar_pvens_pendientes_a_lista(db) if it.get("estado") != "DESCARTADO"]
     pendientes = sum(1 for it in items if it.get("estado") == "PENDIENTE")
     en_pedido = sum(1 for it in items if it.get("estado") == "EN_PEDIDO")
     recibidos = sum(1 for it in items if it.get("estado") == "RECIBIDO")
@@ -2981,11 +2984,17 @@ def delete_item_lista_compras(
     user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
+    # Soft-delete (estado=DESCARTADO) en vez de remover el item del JSON: si el
+    # PVEN sigue en PENDIENTE_COMPRA, _sincronizar_pvens_pendientes_a_lista lo
+    # volvia a crear en la siguiente carga de la pagina (mismo pven_id+producto
+    # sin representacion), haciendo que "Eliminar" pareciera no hacer nada.
+    # Al dejar el item marcado (en vez de removerlo), el sync lo sigue viendo
+    # como "ya representado" y no lo recrea.
     items = _load_lista_compras(db)
-    original_len = len(items)
-    items = [it for it in items if it.get("id") != item_id]
-    if len(items) == original_len:
+    item = next((it for it in items if it.get("id") == item_id), None)
+    if not item:
         raise HTTPException(404, "Item no encontrado")
+    item["estado"] = "DESCARTADO"
     _save_lista_compras(db, items)
     return {"status": "success", "message": "Item eliminado"}
 
