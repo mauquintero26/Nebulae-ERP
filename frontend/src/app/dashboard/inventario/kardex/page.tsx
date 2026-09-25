@@ -1,115 +1,297 @@
-"use client";
+'use client';
 
-import { ArrowRightLeft, Search, Filter, Download, ArrowUpRight, ArrowDownRight, RefreshCw } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import Link from 'next/link';
+import {
+  ArrowRightLeft, Search, ArrowUpRight, ArrowDownRight, RefreshCw,
+  ChevronLeft, ChevronRight, X, Filter
+} from 'lucide-react';
+import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 
-const KARDEX_MOCK = [
-  { id: 'MOV-1001', fecha: '2026-08-23 08:30', tipo: 'Entrada', sku: 'IP15P-SG', producto: 'iPhone 15 Pro - Space Gray', cantidad: 50, origen: 'Proveedor (Apple Inc)', destino: 'Bodega Central', usuario: 'Admin' },
-  { id: 'MOV-1002', fecha: '2026-08-23 10:15', tipo: 'Salida', sku: 'CAM-BLA-M', producto: 'Camiseta Básica - Blanco M', cantidad: 2, origen: 'Bodega Central', destino: 'Cliente (Orden #4092)', usuario: 'Ventas Web' },
-  { id: 'MOV-1003', fecha: '2026-08-23 11:45', tipo: 'Traslado', sku: 'MAC-M3-512', producto: 'MacBook Pro M3 - 512GB', cantidad: 5, origen: 'Bodega Central', destino: 'Punto de Venta 1', usuario: 'Logística' },
-  { id: 'MOV-1004', fecha: '2026-08-22 16:20', tipo: 'Ajuste', sku: 'AUD-AIR-P2', producto: 'AirPods Pro 2', cantidad: -1, origen: 'Bodega Central', destino: 'Pérdida/Daño', usuario: 'Supervisor' },
-  { id: 'MOV-1005', fecha: '2026-08-22 09:10', tipo: 'Entrada', sku: 'CAM-BLA-M', producto: 'Camiseta Básica - Blanco M', cantidad: 100, origen: 'Proveedor (Textiles S.A)', destino: 'Bodega Central', usuario: 'Admin' },
+async function apiFetch(path: string, opts: RequestInit = {}) {
+  const res = await _apiFetch(path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || data.message || 'Error');
+  return data.data ?? data;
+}
+
+const INV_NAV = [
+  { name: 'Productos',       path: '/dashboard/inventario/productos' },
+  { name: 'Stock',           path: '/dashboard/inventario/stock' },
+  { name: 'Kardex',          path: '/dashboard/inventario/kardex' },
+  { name: 'Recepciones',     path: '/dashboard/inventario/recepciones' },
+  { name: 'Entregas',        path: '/dashboard/inventario/entregas' },
+  { name: 'Traslados',       path: '/dashboard/inventario/traslados' },
+  { name: 'Ajustes',         path: '/dashboard/inventario/ajustes' },
+  { name: 'Abastecimiento',  path: '/dashboard/inventario/abastecimiento' },
+  { name: 'Bodegas',         path: '/dashboard/inventario/bodegas' },
 ];
 
+// direction real: IN | OUT | ADJUST | TRANSFER_IN | TRANSFER_OUT | QUARANTINE (ver erp_inventario.py get_kardex)
+const DIRECTIONS = [
+  { value: '', label: 'Todas' },
+  { value: 'IN', label: 'Entrada' },
+  { value: 'OUT', label: 'Salida' },
+  { value: 'TRANSFER_IN', label: 'Traslado (entra)' },
+  { value: 'TRANSFER_OUT', label: 'Traslado (sale)' },
+  { value: 'ADJUST', label: 'Ajuste' },
+  { value: 'QUARANTINE', label: 'Cuarentena' },
+];
+
+const DIR_STYLE: Record<string, { label: string; cls: string; icon: any }> = {
+  IN:            { label: 'Entrada',          cls: 'bg-green-100 text-green-700',   icon: ArrowDownRight },
+  OUT:           { label: 'Salida',           cls: 'bg-red-100 text-red-700',       icon: ArrowUpRight },
+  TRANSFER_IN:   { label: 'Traslado (entra)', cls: 'bg-blue-100 text-blue-700',     icon: RefreshCw },
+  TRANSFER_OUT:  { label: 'Traslado (sale)',  cls: 'bg-blue-100 text-blue-700',     icon: RefreshCw },
+  ADJUST:        { label: 'Ajuste',           cls: 'bg-amber-100 text-amber-700',   icon: RefreshCw },
+  QUARANTINE:    { label: 'Cuarentena',       cls: 'bg-purple-100 text-purple-700', icon: RefreshCw },
+};
+
+const fDateTime = (iso: string | null) => iso ? new Date(iso).toLocaleString('es-CO', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-';
+const fCOP = (v: number | null) => v ? `$${Number(v).toLocaleString('es-CO')}` : '-';
+
 export default function KardexPage() {
+  const [items, setItems] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [warehouses, setWarehouses] = useState<any[]>([]);
+
+  const [productSearch, setProductSearch] = useState('');
+  const [productResults, setProductResults] = useState<any[]>([]);
+  const [skuId, setSkuId] = useState<number | null>(null);
+  const [warehouseId, setWarehouseId] = useState('');
+  const [direction, setDirection] = useState('');
+  const [owner, setOwner] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [page, setPage] = useState(0);
+  const pageSize = 25;
+  const productTimer = useRef<any>(null);
+
+  useEffect(() => {
+    apiFetch('/inventory/warehouses').then(d => setWarehouses(Array.isArray(d) ? d : (d?.data ?? []))).catch(() => {});
+  }, []);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (skuId) params.set('sku_id', String(skuId));
+      if (warehouseId) params.set('warehouse_id', warehouseId);
+      if (direction) params.set('direction', direction);
+      if (owner) params.set('owner', owner);
+      if (startDate) params.set('start_date', startDate);
+      if (endDate) params.set('end_date', endDate);
+      params.set('limit', String(pageSize));
+      params.set('offset', String(page * pageSize));
+      const d = await apiFetch('/inventory/kardex?' + params.toString());
+      setItems(d?.items ?? []);
+      setTotal(d?.total ?? 0);
+    } catch { setItems([]); setTotal(0); }
+    finally { setLoading(false); }
+  }, [skuId, warehouseId, direction, owner, startDate, endDate, page]);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setPage(0); }, [skuId, warehouseId, direction, owner, startDate, endDate]);
+
+  function onProductSearch(q: string) {
+    setProductSearch(q);
+    setSkuId(null);
+    clearTimeout(productTimer.current);
+    if (!q.trim()) { setProductResults([]); return; }
+    productTimer.current = setTimeout(async () => {
+      try {
+        const d = await apiFetch('/crm/products/search?q=' + encodeURIComponent(q));
+        setProductResults(Array.isArray(d) ? d : (d?.data ?? []));
+      } catch { setProductResults([]); }
+    }, 300);
+  }
+
+  function clearFilters() {
+    setProductSearch(''); setSkuId(null); setProductResults([]);
+    setWarehouseId(''); setDirection(''); setOwner(''); setStartDate(''); setEndDate('');
+  }
+  const hasFilters = skuId || warehouseId || direction || owner || startDate || endDate;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
   return (
-    <div className="p-8 h-full overflow-y-auto space-y-6 animate-in fade-in duration-500 custom-scrollbar bg-slate-50">
-      
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight flex items-center gap-3">
-            <div className="p-2 bg-emerald-600 text-white rounded-lg shadow-md shadow-emerald-200">
-              <ArrowRightLeft size={24} />
-            </div>
-            Movimientos (Kardex)
-          </h1>
-          <p className="text-slate-500 mt-1">Historial detallado de entradas, salidas y traslados de inventario.</p>
-        </div>
-        
-        <div className="flex items-center gap-3">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <input 
-              type="text" 
-              placeholder="Buscar por SKU, producto..." 
-              className="pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 outline-none w-64 shadow-sm"
-            />
-          </div>
-          <button className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-bold text-sm shadow-sm transition-colors">
-            <Filter size={16} /> Filtros
-          </button>
-          <button className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-bold text-sm shadow-sm transition-colors">
-            <Download size={16} /> Exportar
-          </button>
-        </div>
+    <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
+      {/* Sub-module nav */}
+      <div className="bg-white border-b border-slate-200 px-6 py-2 overflow-x-auto flex items-center gap-2 shadow-sm sticky top-0 z-30">
+        <span className="text-xs font-black text-slate-400 uppercase tracking-wider mr-4 shrink-0">Inventario:</span>
+        {INV_NAV.map(mod => (
+          <Link key={mod.name} href={mod.path}
+            className={`shrink-0 px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${
+              mod.path === '/dashboard/inventario/kardex'
+                ? 'bg-emerald-600 text-white border-emerald-600'
+                : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-700 border-transparent hover:border-emerald-200'
+            }`}>{mod.name}
+          </Link>
+        ))}
       </div>
 
-      {/* Tabla Kardex */}
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-50/80 border-b border-slate-200 text-xs uppercase tracking-wider text-slate-500 font-bold">
-                <th className="p-4 pl-6">ID / Fecha</th>
-                <th className="p-4">Tipo</th>
-                <th className="p-4">SKU / Producto</th>
-                <th className="p-4 text-center">Cant.</th>
-                <th className="p-4">Origen ➔ Destino</th>
-                <th className="p-4 pr-6">Usuario</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-sm">
-              {KARDEX_MOCK.map((mov) => (
-                <tr key={mov.id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="p-4 pl-6">
-                    <div className="font-bold text-slate-800">{mov.id}</div>
-                    <div className="text-xs text-slate-500">{mov.fecha}</div>
-                  </td>
-                  <td className="p-4">
-                    <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${
-                      mov.tipo === 'Entrada' ? 'bg-green-100 text-green-700' :
-                      mov.tipo === 'Salida' ? 'bg-red-100 text-red-700' :
-                      mov.tipo === 'Traslado' ? 'bg-blue-100 text-blue-700' :
-                      'bg-amber-100 text-amber-700'
-                    }`}>
-                      {mov.tipo === 'Entrada' && <ArrowDownRight size={12} className="mr-1" />}
-                      {mov.tipo === 'Salida' && <ArrowUpRight size={12} className="mr-1" />}
-                      {mov.tipo === 'Traslado' && <RefreshCw size={12} className="mr-1" />}
-                      {mov.tipo}
-                    </span>
-                  </td>
-                  <td className="p-4">
-                    <div className="font-bold text-slate-700 font-mono text-xs mb-0.5">{mov.sku}</div>
-                    <div className="text-slate-600 font-medium truncate max-w-[200px]">{mov.producto}</div>
-                  </td>
-                  <td className="p-4">
-                    <div className={`text-center font-black ${
-                      mov.cantidad > 0 ? 'text-green-600' : 'text-red-600'
-                    }`}>
-                      {mov.cantidad > 0 ? `+${mov.cantidad}` : mov.cantidad}
-                    </div>
-                  </td>
-                  <td className="p-4">
-                    <div className="text-xs font-medium text-slate-500 mb-0.5"><span className="text-slate-400">De:</span> {mov.origen}</div>
-                    <div className="text-xs font-medium text-slate-800"><span className="text-slate-400">A:</span> {mov.destino}</div>
-                  </td>
-                  <td className="p-4 pr-6">
-                    <div className="inline-flex items-center px-2 py-1 bg-slate-100 rounded-md text-xs font-bold text-slate-600">
-                      {mov.usuario}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <div className="p-8 max-w-[1600px] mx-auto space-y-6">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight flex items-center gap-3">
+              <div className="p-2 bg-emerald-600 text-white rounded-lg shadow-md shadow-emerald-200">
+                <ArrowRightLeft size={24} />
+              </div>
+              Movimientos (Kardex)
+            </h1>
+            <p className="text-slate-500 mt-1">Historial inmutable de entradas, salidas, traslados y ajustes de inventario.</p>
+          </div>
+          <button onClick={load} className="flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-bold text-sm shadow-sm transition-colors">
+            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> Actualizar
+          </button>
         </div>
-        
-        {/* Pagination mock */}
-        <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between text-sm text-slate-500">
-          <div>Mostrando 1 a 5 de 1,245 movimientos</div>
-          <div className="flex gap-1">
-            <button className="px-3 py-1 bg-white border border-slate-200 rounded-md hover:bg-slate-50">Anterior</button>
-            <button className="px-3 py-1 bg-white border border-slate-200 rounded-md hover:bg-slate-50">Siguiente</button>
+
+        {/* Filters */}
+        <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-wrap items-end gap-3">
+          <div className="relative">
+            <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Producto / SKU</label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
+              <input value={productSearch} onChange={e => onProductSearch(e.target.value)} placeholder="Buscar..."
+                className={`pl-8 pr-3 py-2 border rounded-xl text-sm outline-none w-52 ${skuId ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200'}`} />
+            </div>
+            {productResults.length > 0 && !skuId && (
+              <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl z-20 max-h-48 overflow-y-auto">
+                {productResults.map((p: any) => (
+                  <button key={p.id} type="button"
+                    onClick={() => { setSkuId(p.id); setProductSearch(p.display || p.product_name); setProductResults([]); }}
+                    className="w-full text-left px-3 py-2 hover:bg-emerald-50 text-xs border-b last:border-0 border-slate-50">
+                    {p.display || p.product_name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div>
+            <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Bodega</label>
+            <select value={warehouseId} onChange={e => setWarehouseId(e.target.value)}
+              className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none bg-white">
+              <option value="">Todas</option>
+              {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Direccion</label>
+            <select value={direction} onChange={e => setDirection(e.target.value)}
+              className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none bg-white">
+              {DIRECTIONS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Propietario</label>
+            <select value={owner} onChange={e => setOwner(e.target.value)}
+              className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none bg-white">
+              <option value="">Todos</option>
+              <option value="NEBULAE">Nebulae</option>
+              <option value="MAU">Mau</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Desde</label>
+            <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
+              className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none" />
+          </div>
+          <div>
+            <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Hasta</label>
+            <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
+              className="border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none" />
+          </div>
+          {hasFilters && (
+            <button onClick={clearFilters} className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-slate-500 hover:text-red-600">
+              <X size={13} /> Limpiar
+            </button>
+          )}
+        </div>
+
+        {/* Tabla Kardex */}
+        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50/80 border-b border-slate-200 text-xs uppercase tracking-wider text-slate-500 font-bold">
+                  <th className="p-4 pl-6">Fecha</th>
+                  <th className="p-4">Direccion</th>
+                  <th className="p-4">SKU / Producto</th>
+                  <th className="p-4">Bodega</th>
+                  <th className="p-4 text-center">Cant.</th>
+                  <th className="p-4">Propietario</th>
+                  <th className="p-4">Documento Origen</th>
+                  <th className="p-4 text-right">Costo Unit.</th>
+                  <th className="p-4 pr-6">Usuario</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-sm">
+                {loading ? (
+                  <tr><td colSpan={9} className="p-16 text-center">
+                    <RefreshCw size={24} className="animate-spin text-emerald-400 mx-auto mb-2" />
+                    <span className="text-slate-400">Cargando kardex...</span>
+                  </td></tr>
+                ) : items.length === 0 ? (
+                  <tr><td colSpan={9} className="p-16 text-center">
+                    <ArrowRightLeft size={36} className="mx-auto mb-3 text-slate-200" />
+                    <p className="text-slate-500 font-medium">Sin movimientos {hasFilters ? 'para este filtro' : 'registrados'}</p>
+                  </td></tr>
+                ) : items.map((mov: any) => {
+                  const style = DIR_STYLE[mov.direction] || { label: mov.direction || '-', cls: 'bg-slate-100 text-slate-600', icon: RefreshCw };
+                  const Icon = style.icon;
+                  const isPositive = ['IN', 'TRANSFER_IN'].includes(mov.direction);
+                  const isNegative = ['OUT', 'TRANSFER_OUT'].includes(mov.direction);
+                  return (
+                    <tr key={mov.id} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="p-4 pl-6 text-xs text-slate-500">{fDateTime(mov.created_at)}</td>
+                      <td className="p-4">
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${style.cls}`}>
+                          <Icon size={12} className="mr-1" /> {style.label}
+                        </span>
+                      </td>
+                      <td className="p-4">
+                        <div className="font-bold text-slate-700 font-mono text-xs mb-0.5">{mov.sku || `SKU #${mov.sku_id}`}</div>
+                        <div className="text-slate-600 font-medium truncate max-w-[200px]">{mov.product_name || '-'}</div>
+                      </td>
+                      <td className="p-4 text-slate-600 text-xs">{mov.warehouse_name || '-'}</td>
+                      <td className="p-4">
+                        <div className={`text-center font-black ${isPositive ? 'text-green-600' : isNegative ? 'text-red-600' : 'text-amber-600'}`}>
+                          {isPositive ? '+' : isNegative ? '-' : ''}{mov.quantity}
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        <span className="text-xs font-bold text-slate-500">{mov.owner || 'NEBULAE'}</span>
+                      </td>
+                      <td className="p-4 text-xs text-slate-500">
+                        {mov.source_document_numero || (mov.operation_type ? `${mov.operation_type} #${mov.operation_id}` : '-')}
+                      </td>
+                      <td className="p-4 text-right text-xs text-slate-600">{fCOP(mov.unit_cost_cop)}</td>
+                      <td className="p-4 pr-6">
+                        <div className="inline-flex items-center px-2 py-1 bg-slate-100 rounded-md text-xs font-bold text-slate-600 truncate max-w-[120px]">
+                          {mov.created_by || 'Sistema'}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination */}
+          <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between text-sm text-slate-500">
+            <div>{total > 0 ? `Mostrando ${page * pageSize + 1} a ${Math.min((page + 1) * pageSize, total)} de ${total} movimientos` : 'Sin movimientos'}</div>
+            <div className="flex gap-1">
+              <button disabled={page === 0} onClick={() => setPage(p => p - 1)}
+                className="px-3 py-1.5 bg-white border border-slate-200 rounded-md hover:bg-slate-50 disabled:opacity-40 flex items-center gap-1 font-bold text-xs">
+                <ChevronLeft size={13} /> Anterior
+              </button>
+              <button disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}
+                className="px-3 py-1.5 bg-white border border-slate-200 rounded-md hover:bg-slate-50 disabled:opacity-40 flex items-center gap-1 font-bold text-xs">
+                Siguiente <ChevronRight size={13} />
+              </button>
+            </div>
           </div>
         </div>
       </div>
