@@ -2,13 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { Target, Plus, ArrowLeft, RefreshCw, Megaphone, Users, DollarSign, TrendingUp, BarChart3, CheckCircle2, AlertCircle, X, Calendar, Globe, Mail, Phone, Tag, Send, Edit2, Trash2, Zap, PauseCircle, Play, ChevronRight, Filter, Search, Copy, ExternalLink } from 'lucide-react';
-
-const API = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1';
-async function apiFetch(path: string, opts?: RequestInit) {
-  const r = await fetch(API + path, { headers: { 'Content-Type': 'application/json' }, ...opts });
-  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || r.statusText); }
-  return r.json();
-}
+import { apiFetch } from '@/lib/api';
 const fCOP = (v: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0);
 const fDate = (d: any) => d ? new Date(d).toLocaleDateString('es-CO', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
 

@@ -2,13 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { Network, ArrowLeft, Plus, Save, Trash2, RefreshCw, CheckCircle2, AlertCircle, X, Zap, MessageCircle, Mail, Send, UserPlus, Tag, ToggleLeft, ToggleRight, Play, Pause, ChevronRight, ChevronDown, Edit2, Globe } from 'lucide-react';
-
-const API = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1';
-async function apiFetch(path: string, opts?: RequestInit) {
-  const r = await fetch(API + path, { headers: { 'Content-Type': 'application/json' }, ...opts });
-  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || r.statusText); }
-  return r.json();
-}
+import { apiFetch } from '@/lib/api';
 
 const CANALES_FLUJO = [
   { id: 'INSTAGRAM', label: 'Instagram', color: 'from-purple-500 to-pink-500', emoji: '📸' },

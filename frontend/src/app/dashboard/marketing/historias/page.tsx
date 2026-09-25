@@ -2,13 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { Sparkles, ArrowLeft, Plus, Save, Trash2, RefreshCw, CheckCircle2, AlertCircle, X, Image, Upload, Palette, CalendarClock, Share2, Camera, Monitor, Smartphone, MessageCircle, Globe, Tag, DollarSign, Eye, Zap, Play } from 'lucide-react';
-
-const API = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1';
-async function apiFetch(path: string, opts?: RequestInit) {
-  const r = await fetch(API + path, { headers: { 'Content-Type': 'application/json' }, ...opts });
-  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || r.statusText); }
-  return r.json();
-}
+import { apiFetch } from '@/lib/api';
 const fCOP = (v: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0);
 
 const CANALES_POST = ['Instagram','WhatsApp','Facebook','TikTok','YouTube','Email','SMS'];

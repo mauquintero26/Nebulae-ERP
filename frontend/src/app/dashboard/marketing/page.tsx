@@ -7,8 +7,8 @@ import {
   RefreshCw, DollarSign, CheckCircle2
 } from 'lucide-react';
 import Link from 'next/link';
+import { apiFetch } from '@/lib/api';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1';
 const fCOP = (v: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0);
 
 export default function MarketingDashboard() {
@@ -17,8 +17,7 @@ export default function MarketingDashboard() {
 
   const loadStats = () => {
     setLoading(true);
-    fetch(`${API}/marketing/stats`, { headers: { 'Content-Type': 'application/json' } })
-      .then(r => r.json())
+    apiFetch('/marketing/stats')
       .then(d => { setStats(d.data || {}); })
       .catch(() => {})
       .finally(() => setLoading(false));

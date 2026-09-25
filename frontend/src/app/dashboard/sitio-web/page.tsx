@@ -9,14 +9,7 @@ import {
   AlertCircle, CheckCircle2, Sparkles, Monitor, Tablet, Smartphone,
   Save, Undo, Layout, Edit3, User, Mail, MapPin, Star
 } from 'lucide-react';
-
-const API = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1';
-
-async function apiFetch(path: string, opts?: RequestInit) {
-  const r = await fetch(API + path, { headers: { 'Content-Type': 'application/json' }, ...opts });
-  if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || e.message || r.statusText); }
-  return r.json();
-}
+import { apiFetch } from '@/lib/api';
 
 function Toast({ msg, type, onClose }: { msg: string; type: string; onClose: () => void }) {
   useEffect(() => { const t = setTimeout(onClose, 3500); return () => clearTimeout(t); }, [onClose]);
