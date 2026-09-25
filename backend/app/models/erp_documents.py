@@ -32,6 +32,25 @@ class Supplier(Base):
     purchase_orders = relationship("PurchaseOrderFull", back_populates="supplier")
 
 
+class Casillero(Base):
+    __tablename__ = "casilleros"
+    id              = Column(Integer, primary_key=True, index=True)
+    name            = Column(String(200), nullable=False)
+    address         = Column(String(300), nullable=True)
+    reception_point = Column(String(300), nullable=True)
+    contact_name    = Column(String(150), nullable=True)
+    phone           = Column(String(50), nullable=True)
+    email           = Column(String(150), nullable=True)
+    city            = Column(String(100), nullable=True)
+    country         = Column(String(100), nullable=True, default="Estados Unidos")
+    notes           = Column(Text, nullable=True)
+    is_active       = Column(Boolean, default=True)
+    created_at      = Column(DateTime, default=_now)
+    updated_at      = Column(DateTime, default=_now, onupdate=_now)
+
+    purchase_orders = relationship("PurchaseOrderFull", back_populates="casillero")
+
+
 class CustomerRequest(Base):
     __tablename__ = "customer_requests"
     id               = Column(Integer, primary_key=True, index=True)
@@ -198,6 +217,8 @@ class PurchaseOrderFull(Base):
     carrier               = Column(String(150), nullable=True)
     tracking_number       = Column(String(200), nullable=True)
     tracking_stages       = Column(JSON, nullable=True, default=list)
+    tipo_envio            = Column(String(20), nullable=False, default="casillero")
+    casillero_id          = Column(Integer, ForeignKey("casilleros.id"), nullable=True)
     estado                = Column(String(50), nullable=False, default="BORRADOR")
     fecha_compra          = Column(DateTime, default=_now)
     fecha_entrega_estimada= Column(DateTime, nullable=True)
@@ -211,6 +232,7 @@ class PurchaseOrderFull(Base):
     created_by            = Column(String(150), nullable=True)
 
     supplier       = relationship("Supplier", back_populates="purchase_orders")
+    casillero      = relationship("Casillero", back_populates="purchase_orders")
     goods_receipts = relationship("GoodsReceipt", back_populates="purchase_order")
 
 

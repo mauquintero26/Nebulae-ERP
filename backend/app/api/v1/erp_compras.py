@@ -14,7 +14,7 @@ from sqlalchemy import text, func
 from typing import Optional
 from app.db.database import get_db
 from app.models.erp_documents import (
-    Supplier, PurchaseOrderFull, GoodsReceipt, ActivityLog, SaleOrder
+    Supplier, Casillero, PurchaseOrderFull, GoodsReceipt, ActivityLog, SaleOrder
 )
 from app.models.inventory import InventoryLevel, Warehouse, InventoryOperation, InventoryMovement
 from app.models.fase1b import (
@@ -96,8 +96,83 @@ def _supplier_dict(s: Supplier) -> dict:
     }
 
 
+def _casillero_dict(c: Casillero) -> dict:
+
+    return {
+        "id": c.id,
+        "name": c.name,
+        "address": c.address,
+        "reception_point": c.reception_point,
+        "contact_name": c.contact_name,
+        "phone": c.phone,
+        "email": c.email,
+        "city": c.city,
+        "country": c.country,
+        "notes": c.notes,
+        "is_active": c.is_active,
+        "created_at": c.created_at.isoformat() if c.created_at else None,
+    }
+
+
+def _parse_dt(v):
+    if not v:
+        return None
+    if isinstance(v, datetime.datetime):
+        return v
+    try:
+        return datetime.datetime.fromisoformat(str(v).replace("Z", ""))
+    except ValueError:
+        return None
+
+
+def _stage_alert(stage: dict, base_date) -> Optional[dict]:
+    """Alerta calculada en vivo para UNA etapa (no se guarda en BD).
+
+    Dos casos, igual que en la especificacion del usuario:
+    - La etapa ya tiene ETA propia (fue confirmada/iniciada): alerta si
+      `hoy > eta + alert_overdue_days` ("entrega atrasada").
+    - La etapa aun no tiene ETA (nadie la ha confirmado): alerta si
+      `hoy > fecha_base_etapa_anterior + alert_confirm_days` ("confirmacion atrasada"),
+      donde fecha_base es el timestamp en que se completo la etapa anterior
+      (o fecha_compra para la primera etapa).
+    """
+    if stage.get("status") == "COMPLETADO":
+        return None
+    now = datetime.datetime.utcnow()
+    eta_dt = _parse_dt(stage.get("eta"))
+    if eta_dt:
+        overdue_days = stage.get("alert_overdue_days")
+        if overdue_days is not None and now > eta_dt + datetime.timedelta(days=overdue_days):
+            dias = (now - eta_dt).days
+            return {"nivel": "atrasado", "mensaje": f"Entrega atrasada por {dias} dia(s) (ETA {eta_dt.strftime('%d/%m/%Y')})"}
+        return None
+    confirm_days = stage.get("alert_confirm_days")
+    base_dt = _parse_dt(base_date)
+    if confirm_days is not None and base_dt and now > base_dt + datetime.timedelta(days=confirm_days):
+        dias = (now - (base_dt + datetime.timedelta(days=confirm_days))).days
+        return {"nivel": "atrasado", "mensaje": f"Confirmacion pendiente atrasada por {dias} dia(s)"}
+    return None
+
+
+def _annotate_stage_alerts(stages: list, fecha_compra) -> list:
+    out = []
+    base = fecha_compra
+    for s in stages:
+        s = dict(s)
+        s["alert"] = _stage_alert(s, base)
+        out.append(s)
+        if s.get("status") == "COMPLETADO" and s.get("timestamp"):
+            base = s["timestamp"]
+    return out
+
+
 def _pec_dict(p: PurchaseOrderFull) -> dict:
 
+    casillero_nombre = None
+    try:
+        casillero_nombre = p.casillero.name if p.casillero_id and p.casillero else None
+    except Exception:
+        casillero_nombre = None
     return {
         "id": p.id,
         "numero": p.numero,
@@ -111,7 +186,10 @@ def _pec_dict(p: PurchaseOrderFull) -> dict:
         "warehouse_id": p.warehouse_id,
         "carrier": p.carrier,
         "tracking_number": p.tracking_number,
-        "tracking_stages": p.tracking_stages or [],
+        "tracking_stages": _annotate_stage_alerts(p.tracking_stages or [], p.fecha_compra),
+        "tipo_envio": p.tipo_envio or "casillero",
+        "casillero_id": p.casillero_id,
+        "casillero_nombre": casillero_nombre,
         "estado": p.estado,
         "fecha_compra": p.fecha_compra.isoformat() if p.fecha_compra else None,
         "fecha_entrega_estimada": p.fecha_entrega_estimada.isoformat() if p.fecha_entrega_estimada else None,
@@ -290,6 +368,196 @@ def delete_supplier(
     return {"status": "success", "message": "Proveedor eliminado correctamente"}
 
 
+# ─── CASILLEROS (puntos de recepcion / forwarders) ────────────────────────────
+
+
+@router.get("/casilleros")
+def list_casilleros(
+    search: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    limit: int = Query(50, le=200),
+    offset: int = 0,
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+    db: Session = Depends(get_db)
+):
+    q = db.query(Casillero)
+    if is_active is not None:
+        q = q.filter(Casillero.is_active == is_active)
+    if search:
+        like = f"%{search}%"
+        q = q.filter(
+            Casillero.name.ilike(like) |
+            Casillero.city.ilike(like) |
+            Casillero.contact_name.ilike(like)
+        )
+    total = q.count()
+    items = q.order_by(Casillero.name).offset(offset).limit(limit).all()
+    return {"status": "success", "total": total, "data": [_casillero_dict(c) for c in items]}
+
+
+@router.get("/casilleros/search")
+def search_casilleros(q: str = "", user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+        db: Session = Depends(get_db)):
+    like = f"%{q}%"
+    items = db.query(Casillero).filter(
+        Casillero.is_active == True,
+        Casillero.name.ilike(like) | Casillero.city.ilike(like)
+    ).limit(10).all()
+    return {"status": "success", "data": [_casillero_dict(c) for c in items]}
+
+
+@router.post("/casilleros", status_code=201)
+def create_casillero(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
+    name = body.get("name") or body.get("nombre")
+    if not name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="El campo 'name' es requerido para crear un casillero.",
+        )
+    c = Casillero(
+        name=name,
+        address=body.get("address"),
+        reception_point=body.get("reception_point"),
+        contact_name=body.get("contact_name"),
+        phone=body.get("phone"),
+        email=body.get("email"),
+        city=body.get("city"),
+        country=body.get("country", "Estados Unidos"),
+        notes=body.get("notes"),
+    )
+    db.add(c)
+    db.commit()
+    db.refresh(c)
+    return {"status": "success", "data": _casillero_dict(c)}
+
+
+@router.get("/casilleros/{casillero_id}")
+def get_casillero(casillero_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
+        db: Session = Depends(get_db)):
+    c = db.query(Casillero).filter(Casillero.id == casillero_id).first()
+    if not c:
+        raise HTTPException(404, "Casillero no encontrado")
+    return {"status": "success", "data": _casillero_dict(c)}
+
+
+@router.patch("/casilleros/{casillero_id}")
+def update_casillero(casillero_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
+    c = db.query(Casillero).filter(Casillero.id == casillero_id).first()
+    if not c:
+        raise HTTPException(404, "Casillero no encontrado")
+    for k in ["name","address","reception_point","contact_name","phone","email","city","country","notes","is_active"]:
+        if k in body:
+            setattr(c, k, body[k])
+    c.updated_at = datetime.datetime.utcnow()
+    db.commit()
+    db.refresh(c)
+    return {"status": "success", "data": _casillero_dict(c)}
+
+
+@router.delete("/casilleros/{casillero_id}")
+def delete_casillero(
+    casillero_id: int,
+    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
+    db: Session = Depends(get_db),
+):
+    c = db.query(Casillero).filter(Casillero.id == casillero_id).first()
+    if not c:
+        raise HTTPException(404, "Casillero no encontrado")
+    db.delete(c)
+    db.commit()
+    return {"status": "success", "message": "Casillero eliminado correctamente"}
+
+
+# ─── TRACKING CONFIG (pipeline de etapas dinamico, por tipo_envio) ────────────
+
+DEFAULT_TRACKING_STAGES = {
+    "casillero": [
+        {"key": "PENDIENTE_DESPACHO",  "label": "Pendiente Despacho Proveedor", "alert_confirm_days": 2,  "alert_overdue_days": 1, "active": True},
+        {"key": "PROVEEDOR_CASILLERO", "label": "Proveedor -> Casillero",       "alert_confirm_days": 1,  "alert_overdue_days": 1, "active": True},
+        {"key": "CASILLERO_BODEGA",    "label": "Casillero -> Bodega Nebulae",  "alert_confirm_days": 10, "alert_overdue_days": 1, "active": True},
+        {"key": "RECIBIDO",            "label": "Recibido",                     "alert_confirm_days": None, "alert_overdue_days": None, "active": True},
+    ],
+    "directo": [
+        {"key": "PENDIENTE_DESPACHO", "label": "Pendiente Despacho Proveedor", "alert_confirm_days": 2, "alert_overdue_days": 1, "active": True},
+        {"key": "PROVEEDOR_BODEGA",   "label": "Proveedor -> Bodega Nebulae",  "alert_confirm_days": 1, "alert_overdue_days": 1, "active": True},
+        {"key": "RECIBIDO",           "label": "Recibido",                     "alert_confirm_days": None, "alert_overdue_days": None, "active": True},
+    ],
+}
+
+
+def _load_tracking_config(db: Session) -> dict:
+    import json
+    row = db.execute(text("SELECT config_value FROM web_builder_config WHERE config_key='erp_tracking_stages'")).fetchone()
+    if not row or not row[0]:
+        return {k: [dict(s) for s in v] for k, v in DEFAULT_TRACKING_STAGES.items()}
+    val = row[0]
+    if isinstance(val, str):
+        try:
+            val = json.loads(val)
+        except Exception:
+            val = {}
+    if not isinstance(val, dict):
+        val = {}
+    for k, v in DEFAULT_TRACKING_STAGES.items():
+        if not val.get(k):
+            val[k] = [dict(s) for s in v]
+    return val
+
+
+def _save_tracking_config(db: Session, data: dict):
+    import json
+    val_json = json.dumps(data)
+    bind = db.get_bind()
+    if bind and bind.dialect.name == "postgresql":
+        db.execute(
+            text("INSERT INTO web_builder_config (config_key, config_value, updated_at) "
+                 "VALUES ('erp_tracking_stages', CAST(:v AS jsonb), NOW()) "
+                 "ON CONFLICT (config_key) DO UPDATE SET config_value=CAST(:v AS jsonb), updated_at=NOW()"),
+            {"v": val_json}
+        )
+    else:
+        existing = db.execute(text("SELECT id FROM web_builder_config WHERE config_key='erp_tracking_stages'")).fetchone()
+        if existing:
+            db.execute(text("UPDATE web_builder_config SET config_value=:v WHERE config_key='erp_tracking_stages'"), {"v": val_json})
+        else:
+            db.execute(text("INSERT INTO web_builder_config (config_key, config_value) VALUES ('erp_tracking_stages', :v)"), {"v": val_json})
+    db.commit()
+
+
+@router.get("/tracking-config")
+def get_tracking_config(user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Session = Depends(get_db)):
+    return {"status": "success", "data": _load_tracking_config(db)}
+
+
+@router.put("/tracking-config/{tipo_envio}")
+def update_tracking_config(tipo_envio: str, body: dict,
+        user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
+        db: Session = Depends(get_db)):
+    if tipo_envio not in ("casillero", "directo"):
+        raise HTTPException(422, "tipo_envio debe ser 'casillero' o 'directo'")
+    stages = body.get("stages")
+    if not isinstance(stages, list) or not stages:
+        raise HTTPException(422, "Debes incluir al menos una etapa")
+    keys = [s.get("key") for s in stages]
+    if any(not k for k in keys):
+        raise HTTPException(422, "Cada etapa debe tener una 'key'")
+    if len(keys) != len(set(keys)):
+        raise HTTPException(422, "Las 'key' de las etapas deben ser unicas")
+    clean = [{
+        "key": s["key"],
+        "label": s.get("label") or s["key"],
+        "alert_confirm_days": s.get("alert_confirm_days"),
+        "alert_overdue_days": s.get("alert_overdue_days"),
+        "active": s.get("active", True),
+    } for s in stages]
+    cfg = _load_tracking_config(db)
+    cfg[tipo_envio] = clean
+    _save_tracking_config(db, cfg)
+    return {"status": "success", "data": cfg[tipo_envio]}
+
+
 # ─── PEDIDOS DE COMPRA (PEC) ─────────────────────────────────────────────────
 
 
@@ -327,11 +595,17 @@ def create_pec(body: CrearPecBody, user: User = Depends(require_roles(*ROLE_ADMI
     days = body.dias_entrega
     entrega_est = datetime.datetime.utcnow() + datetime.timedelta(days=days)
     alerta = entrega_est
+    tipo_envio = body.tipo_envio if body.tipo_envio in ("casillero", "directo") else "casillero"
+    template = _load_tracking_config(db).get(tipo_envio) or DEFAULT_TRACKING_STAGES["casillero"]
     tracking_stages = [
-        {"stage": "PROVEEDOR_CASILLERO", "label": "Proveedor -> Casillero", "status": "PENDIENTE", "timestamp": None},
-        {"stage": "CASILLERO_ADUANA",    "label": "Casillero -> Aduana",    "status": "PENDIENTE", "timestamp": None},
-        {"stage": "ADUANA_BODEGA",       "label": "Aduana -> Bodega",       "status": "PENDIENTE", "timestamp": None},
-        {"stage": "ENTREGADO",           "label": "Entregado en Bodega",    "status": "PENDIENTE", "timestamp": None},
+        {
+            "stage": s["key"], "label": s["label"], "status": "PENDIENTE", "timestamp": None,
+            "eta": None, "carrier": None, "tracking_number": None, "tracking_history": [],
+            "casillero_id": None, "casillero_nombre": None, "notes": None,
+            "alert_confirm_days": s.get("alert_confirm_days"),
+            "alert_overdue_days": s.get("alert_overdue_days"),
+        }
+        for s in template if s.get("active", True)
     ]
     supplier_name = body.supplier_name or ""
     supplier_ref  = body.supplier_ref or ""
@@ -344,6 +618,19 @@ def create_pec(body: CrearPecBody, user: User = Depends(require_roles(*ROLE_ADMI
         p.model_dump() if hasattr(p, "model_dump") else dict(p)
         for p in body.productos
     ] if body.productos else []
+    for prod in productos_raw:
+        precio = (prod.get("unit_price_cop") or prod.get("precio_cop") or prod.get("precio_unitario")
+                  or prod.get("precio_usd") or prod.get("cost_usd") or prod.get("cost_cop") or 0)
+        try:
+            precio = float(precio)
+        except (TypeError, ValueError):
+            precio = 0
+        if precio <= 0:
+            nombre_prod = prod.get("nombre") or prod.get("producto_nombre") or prod.get("name") or prod.get("product_name") or "producto"
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"El producto '{nombre_prod}' no tiene precio definido. Ingresa un precio antes de crear el pedido de compra.",
+            )
     pec = PurchaseOrderFull(
         numero=numero,
         supplier_id=body.supplier_id,
@@ -357,6 +644,8 @@ def create_pec(body: CrearPecBody, user: User = Depends(require_roles(*ROLE_ADMI
         carrier=body.carrier,
         tracking_number=body.tracking_number,
         tracking_stages=tracking_stages,
+        tipo_envio=tipo_envio,
+        casillero_id=body.casillero_id,
         estado="BORRADOR",
         fecha_entrega_estimada=entrega_est,
         fecha_alerta=alerta,
@@ -512,7 +801,7 @@ def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE
                         "tracking_number","tracking_stages","fecha_entrega_estimada",
                         "fecha_alerta","subtotal_cop","total_cop","notas",
                         "ven_id","ven_numero","tracking_history","tipo_envio",
-                        "casillero","fecha_compra"]
+                        "casillero_id","fecha_compra"]
     for k in allowed_non_prod:
         if k in body:
             setattr(p, k, body[k])
@@ -552,11 +841,21 @@ def update_tracking(pec_id: int, body: ActualizarTrackingBody,
     # aunque el commit no falle y el request devuelva 200.
     stages = [dict(s) for s in (p.tracking_stages or [])]
     now = datetime.datetime.utcnow().isoformat()
+    matched = False
     for i, s in enumerate(stages):
         if s["stage"] == stage_name:
+            matched = True
             stages[i]["status"] = new_status
             stages[i]["timestamp"] = now
             stages[i]["notes"] = body.notes or s.get("notes")
+            if body.eta is not None:
+                stages[i]["eta"] = body.eta
+            if body.carrier is not None:
+                stages[i]["carrier"] = body.carrier
+            if body.casillero_id is not None:
+                cas = db.query(Casillero).filter(Casillero.id == body.casillero_id).first()
+                stages[i]["casillero_id"] = body.casillero_id
+                stages[i]["casillero_nombre"] = cas.name if cas else None
             if tracking_num:
                 stages[i]["tracking_number"] = tracking_num
                 # Append to tracking history for this stage
@@ -569,6 +868,12 @@ def update_tracking(pec_id: int, body: ActualizarTrackingBody,
                 })
                 stages[i]["tracking_history"] = history
             break
+    if not matched:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"La etapa '{stage_name}' no existe en el tracking de {p.numero}. "
+                   f"Etapas validas: {', '.join(s['stage'] for s in stages)}",
+        )
     p.tracking_stages = stages
     flag_modified(p, "tracking_stages")
     p.updated_at = datetime.datetime.utcnow()

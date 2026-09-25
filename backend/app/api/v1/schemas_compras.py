@@ -79,6 +79,12 @@ class ActualizarTrackingBody(BaseModel):
     tracking_number: Optional[str] = Field(default=None, max_length=200)
     notes: Optional[str] = None
     user_name: Optional[str] = None
+    eta: Optional[str] = Field(
+        default=None,
+        description="Fecha estimada de entrega/confirmacion de ESTA etapa (ISO 8601). Base para su alerta de atraso.",
+    )
+    carrier: Optional[str] = Field(default=None, max_length=150)
+    casillero_id: Optional[int] = None
 
     model_config = {"populate_by_name": True}
 
@@ -112,6 +118,8 @@ class CrearPecBody(BaseModel):
     warehouse_id: Optional[int] = None
     carrier: Optional[str] = None
     tracking_number: Optional[str] = None
+    tipo_envio: Optional[str] = "casillero"
+    casillero_id: Optional[int] = None
     dias_entrega: int = Field(default=15, ge=1, le=365)
     subtotal_cop: float = Field(default=0, ge=0)
     total_cop: float = Field(default=0, ge=0)
