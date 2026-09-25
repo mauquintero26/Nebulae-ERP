@@ -333,7 +333,7 @@ export default function AgendaPage() {
     if (!agendaForm.start_datetime) { toast.error('Selecciona la fecha y hora de inicio.'); return; }
     const tid = toast.loading('Guardando en la agenda...');
     try {
-      const res = await fetch(`${API_URL}/crm/calendar/events`, {
+      const res = await fetch(`${API_URL}/crm/events`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({

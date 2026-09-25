@@ -246,6 +246,7 @@ def delete_customer(customer_id: int, user: User = Depends(require_roles(*ROLE_A
         db.query(CustomerAgendaActivity).filter(CustomerAgendaActivity.customer_id == customer_id).delete(synchronize_session=False)
         db.query(OmnichannelInteraction).filter(OmnichannelInteraction.customer_id == customer_id).update({"customer_id": None})
         db.query(CustomerContactPreference).filter(CustomerContactPreference.customer_id == customer_id).delete(synchronize_session=False)
+        db.query(CalendarEvent).filter(CalendarEvent.customer_id == customer_id).update({"customer_id": None})
 
         # 4. Remove linked legacy sales orders & quotations
         for so in db.query(SalesOrder).filter(SalesOrder.customer_id == customer_id).all():
