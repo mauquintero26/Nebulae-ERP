@@ -111,10 +111,11 @@ function ProductoNoEncontradoAviso({
 
 // Autocompletar producto de catalogo, mismo patron de busqueda con debounce que ProductSearch en solicitud-client.tsx
 function ProductoAutocomplete({
-  value, esLibre, onTyping, onSelect, onFreeText
+  value, esLibre, skuId, onTyping, onSelect, onFreeText
 }: {
   value: string;
   esLibre?: boolean;
+  skuId?: number | null;
   onTyping: (v: string) => void;
   onSelect: (p: any) => void;
   onFreeText: (nombre: string) => void;
@@ -147,6 +148,9 @@ function ProductoAutocomplete({
         className="w-full border-0 bg-transparent outline-none font-medium text-slate-700 placeholder-slate-300" />
       {esLibre && value && (
         <p className="text-[9px] font-black text-amber-600 uppercase tracking-wide mt-0.5">Texto libre</p>
+      )}
+      {!esLibre && skuId && (
+        <p className="text-[9px] font-black text-emerald-600 uppercase tracking-wide mt-0.5">Vinculado a catalogo</p>
       )}
       {open && results.length > 0 && (
         <div className="absolute top-full left-0 right-0 z-50 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-48 overflow-y-auto min-w-[240px]">
@@ -219,6 +223,7 @@ function CalculadorModal({
     setError('');
     const prods = computedProd.map(p => ({
       product_name: p.product_name,
+      sku_id: p.sku_id || null,
       qty: Number(p.qty),
       cost_usd: Number(p.cost_usd),
       flete_usd: Number(p.flete_usd),
@@ -297,9 +302,10 @@ function CalculadorModal({
                         <ProductoAutocomplete
                           value={p.product_name}
                           esLibre={p.es_libre}
-                          onTyping={v => setProdFields(i, { product_name: v, es_libre: false })}
-                          onSelect={sel => setProdFields(i, { product_name: sel.product_name || sel.name, es_libre: false })}
-                          onFreeText={nombre => setProdFields(i, { product_name: nombre, es_libre: true })}
+                          skuId={p.sku_id}
+                          onTyping={v => setProdFields(i, { product_name: v, sku_id: null, es_libre: false })}
+                          onSelect={sel => setProdFields(i, { product_name: sel.product_name || sel.name, sku_id: sel.id, es_libre: false })}
+                          onFreeText={nombre => setProdFields(i, { product_name: nombre, sku_id: null, es_libre: true })}
                         />
                       </td>
                       <td className="px-3 py-2">

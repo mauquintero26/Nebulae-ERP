@@ -38,6 +38,8 @@ export default function EntregasPage() {
   const [selected, setSelected] = useState<any | null>(null);
   const [updating, setUpdating] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'error' } | null>(null);
+  const [warehouses, setWarehouses] = useState<any[]>([]);
+  const [warehouseId, setWarehouseId] = useState('');
 
   const showToast = (msg: string, type: 'ok' | 'error' = 'ok') => {
     setToast({ msg, type });
@@ -59,14 +61,19 @@ export default function EntregasPage() {
 
   useEffect(() => {
     loadData();
+    apiFetch('/inventory/warehouses').then(d => {
+      const list = Array.isArray(d) ? d : (d?.data ?? []);
+      setWarehouses(list);
+      if (list.length === 1) setWarehouseId(String(list[0].id));
+    }).catch(() => {});
   }, [loadData]);
 
   // Manejar el despacho seguro
   const handleDespachar = async (pedido: any, forzarConSaldo: boolean = false) => {
     const total = Number(pedido.total_cop || 0);
     const anticipo = Number(pedido.anticipo_cop || (total * 0.6));
-    const saldoPendiente = pedido.saldo_pendiente_cop !== undefined 
-      ? Number(pedido.saldo_pendiente_cop) 
+    const saldoPendiente = pedido.saldo_pendiente_cop !== undefined
+      ? Number(pedido.saldo_pendiente_cop)
       : Math.max(0, total - anticipo);
 
     if (saldoPendiente > 0 && !forzarConSaldo) {
@@ -80,6 +87,12 @@ Este pedido tiene un saldo pendiente de ${fCOP(saldoPendiente)} (40%).
       if (!confirmacion) return;
     }
 
+    const tieneLineasDeCatalogo = (pedido.productos || []).some((p: any) => p.sku_id);
+    if (tieneLineasDeCatalogo && !warehouseId) {
+      showToast('Selecciona la bodega de despacho antes de continuar', 'error');
+      return;
+    }
+
     setUpdating(true);
     try {
       await apiFetch(`/ventas/pedidos/${pedido.id}`, {
@@ -87,6 +100,7 @@ Este pedido tiene un saldo pendiente de ${fCOP(saldoPendiente)} (40%).
         body: JSON.stringify({
           estado: 'ENTREGADO',
           fecha_entrega: new Date().toISOString(),
+          warehouse_id: warehouseId ? parseInt(warehouseId) : undefined,
           notas: pedido.notas ? `${pedido.notas} | Despachado el ${new Date().toLocaleDateString()}` : 'Despachado desde mesa de entregas'
         })
       });
@@ -531,6 +545,24 @@ Este pedido tiene un saldo pendiente de ${fCOP(saldoPendiente)} (40%).
                   </table>
                 </div>
               </div>
+
+              {/* Bodega de Despacho -- solo aplica si hay lineas vinculadas a catalogo (con sku_id) */}
+              {(selected.productos || []).some((p: any) => p.sku_id) && selected.estado !== 'ENTREGADO' && selected.estado !== 'COMPLETADO' && (
+                <div>
+                  <h4 className="text-xs font-black text-slate-400 uppercase tracking-wider mb-2.5">
+                    Bodega de Despacho
+                  </h4>
+                  <select
+                    value={warehouseId}
+                    onChange={e => setWarehouseId(e.target.value)}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-rose-200"
+                  >
+                    <option value="">Seleccionar...</option>
+                    {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                  </select>
+                  <p className="text-[11px] text-slate-400 mt-1">Este pedido tiene productos de catálogo: se descontará el stock real de la bodega elegida al despachar.</p>
+                </div>
+              )}
             </div>
 
             {/* Drawer Footer */}

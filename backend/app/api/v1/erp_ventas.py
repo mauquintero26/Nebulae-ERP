@@ -5,14 +5,17 @@ Pedidos de Venta (VEN), Ordenes Pendientes por Pagar (PXP)
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
-from sqlalchemy import text, func
+from sqlalchemy import text, func, select
 from typing import Optional, List
+from decimal import Decimal
 from app.db.database import get_db
 from app.models.erp_documents import (
     CustomerRequest, SalesQuotation, SaleOrder,
     PaymentPending, ActivityLog
 )
 from app.models.customers import Customer
+from app.models.inventory import InventoryLevel, InventoryOperation, InventoryMovement
+from app.models.fase1b import InventoryOwnerBalance
 from app.api.dependencies import (
     require_roles, get_current_user,
     ROLE_ADMIN, ROLE_ASESOR, ROLE_COMPRAS, ROLE_FINANZAS, ALL_ERP_ROLES
@@ -21,6 +24,7 @@ from app.models.users import User
 from app.api.v1.schemas_compras import CancelarSolicitudBody
 from app.api.v1.crm import mover_lead_de_solicitud
 import datetime
+import hashlib
 import logging
 
 logger = logging.getLogger(__name__)
@@ -802,6 +806,71 @@ def get_pedido(ven_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     return {"status": "success", "data": d}
 
 
+def _descontar_inventario_despacho(db: Session, v: SaleOrder, warehouse_id, user_label: Optional[str] = None) -> None:
+    """Al despachar un PVEN (estado -> ENTREGADO), descuenta stock fisico real
+    de las lineas de v.productos que tengan sku_id vinculado a catalogo (lineas
+    de texto libre / es_libre no mueven inventario, no hay nada que descontar).
+    Se ejecuta antes del commit del caller: si falta stock de cualquier linea,
+    la excepcion aborta la transaccion completa (ni el despacho ni el descuento
+    parcial quedan guardados)."""
+    lineas = [p for p in (v.productos or []) if isinstance(p, dict) and p.get("sku_id")]
+    if not lineas:
+        return
+    if not warehouse_id:
+        raise HTTPException(422, "Debes indicar la bodega de despacho para descontar el inventario de este pedido")
+    warehouse_id = int(warehouse_id)
+    now = datetime.datetime.utcnow()
+    owner = "NEBULAE"
+
+    inv_op = InventoryOperation(
+        source_warehouse_id=warehouse_id,
+        operation_type="DELIVERY",
+        status="DONE",
+        source_document_type="PVEN",
+        source_document_id=v.id,
+        source_document_numero=v.numero,
+    )
+    db.add(inv_op)
+    db.flush()
+
+    for p in lineas:
+        sku_id = int(p["sku_id"])
+        qty = Decimal(str(p.get("qty") or p.get("quantity") or 1))
+
+        level = db.execute(
+            select(InventoryLevel)
+            .where(InventoryLevel.sku_id == sku_id, InventoryLevel.warehouse_id == warehouse_id)
+            .with_for_update()
+        ).scalar_one_or_none()
+        current = Decimal(str(level.quantity)) if level and level.quantity is not None else Decimal("0.00")
+        if current < qty:
+            raise HTTPException(
+                409,
+                f"Stock insuficiente para despachar el SKU {sku_id} (disponible: {current}, requerido: {qty})",
+            )
+        level.quantity = current - qty
+
+        ob = db.execute(
+            select(InventoryOwnerBalance)
+            .where(
+                InventoryOwnerBalance.sku_id == sku_id,
+                InventoryOwnerBalance.warehouse_id == warehouse_id,
+                InventoryOwnerBalance.owner == owner,
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
+        if ob:
+            ob.quantity = Decimal(str(ob.quantity)) - qty
+            ob.updated_at = now
+
+        mv_key = hashlib.sha256(f"{inv_op.id}:{sku_id}:OUT:{owner}:{warehouse_id}".encode()).hexdigest()
+        db.add(InventoryMovement(
+            operation_id=inv_op.id, sku_id=sku_id, quantity=qty, direction="OUT",
+            owner=owner, warehouse_id=warehouse_id, idempotency_key=mv_key,
+            created_at=now, created_by=user_label,
+        ))
+
+
 @router.patch("/pedidos/{ven_id}")
 def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
@@ -821,6 +890,8 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
     for k in allowed:
         if k in body:
             setattr(v, k, body[k])
+    if body.get("estado") == "ENTREGADO" and old_estado != "ENTREGADO":
+        _descontar_inventario_despacho(db, v, body.get("warehouse_id"), getattr(user, "email", None))
     v.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(v)
