@@ -2,7 +2,6 @@
 'use client';
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
 import {
   ShoppingBag, AlertTriangle, Package, CheckCircle2,
   Clock, Truck, Search, MoreHorizontal, RefreshCw,
@@ -10,8 +9,10 @@ import {
   Edit2, Send, TrendingUp, BarChart3, ExternalLink, Bell,
   DollarSign, Calendar, MessageSquare, AlertCircle,
   ChevronRight, ChevronUp, Plus, Eye, ShoppingCart,
-  Bot, Sparkles, RotateCcw, PieChart, Award, Settings, Check, LayoutGrid, List, ArrowLeft
+  Bot, Sparkles, RotateCcw, PieChart, Award, Settings, Check, LayoutGrid, List
 } from 'lucide-react';
+import { SubNav, PageHeader, StatCard, Badge, Modal, Toast, Button } from '@/components/ui';
+import { COMP_NAV } from './comp-nav';
 
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 async function apiFetch(path: string, opts: any = {}) {
@@ -35,25 +36,6 @@ const PEC_ESTADOS = {
   COMPLETADO:        { bg:'bg-green-100',   text:'text-green-800',   border:'border-green-200',   label:'Completado' },
   CANCELADO:         { bg:'bg-red-100',     text:'text-red-700',     border:'border-red-200',     label:'Cancelado' },
 };
-
-const SUB_MODULES = [
-  { name: 'Lista de Compras',      path: '/dashboard/compras/lista-compras' },
-  { name: 'Pedidos de Compra',     path: '/dashboard/compras/pedidos' },
-  { name: 'Mercancia en Transito', path: '/dashboard/compras/transito' },
-  { name: 'Recepciones (Entrada)', path: '/dashboard/compras/recepciones' },
-  { name: 'Traslados Internos',    path: '/dashboard/compras/traslados' },
-  { name: 'Registro OCR/Manual',   path: '/dashboard/compras/registro' },
-  { name: 'Proyecciones',          path: '/dashboard/compras/proyecciones' },
-];
-
-function Toast({ msg, type, onClose }) {
-  useEffect(() => { const t = setTimeout(onClose, 4000); return () => clearTimeout(t); }, [onClose]);
-  return (
-    <div className={'fixed top-5 right-5 z-[200] px-5 py-3 rounded-2xl shadow-2xl font-bold text-sm flex items-center gap-3 ' + (type==='ok'?'bg-emerald-600':'bg-red-600') + ' text-white'}>
-      <span>{msg}</span><button onClick={onClose}><X size={16}/></button>
-    </div>
-  );
-}
 
 /* ============================================================
    PEC DETAIL PANEL
@@ -326,7 +308,6 @@ function PecDetailPanel({ pec, pedidosVenta, onClose, onUpdate, onToast }) {
    MAIN COMPONENT — ComprasHub
    ============================================================ */
 export default function ComprasHub() {
-  const pathname = usePathname();
   const [activeTab, setActiveTab]         = useState('Todos');
   const [viewMode, setViewMode]           = useState('lista');
   const [loading, setLoading]             = useState(true);
@@ -569,7 +550,7 @@ export default function ComprasHub() {
   /* ═══ RETURN JSX ═══ */
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
-      {toast && <Toast msg={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
+      <Toast toast={toast} onClose={()=>setToast(null)}/>
       {selectedPec && (
         <PecDetailPanel
           pec={selectedPec}
@@ -580,20 +561,7 @@ export default function ComprasHub() {
         />
       )}
 
-      {/* Sub-module nav */}
-      <div className="bg-white border-b border-slate-200 px-6 py-2 overflow-x-auto flex items-center gap-2 shadow-xs sticky top-0 z-30">
-        <Link href="/dashboard/compras" className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold text-slate-500 hover:bg-slate-100 border border-slate-200 mr-2 transition-colors">
-          <ArrowLeft size={12}/> Hub
-        </Link>
-        <div className="w-px h-4 bg-slate-200 mr-1 shrink-0"/>
-        <span className="text-xs font-black text-slate-400 uppercase tracking-wider mr-4 shrink-0">HUB DE COMPRAS:</span>
-        {SUB_MODULES.map(function(m){ return (
-          <Link key={m.name} href={m.path}
-            className={'shrink-0 px-4 py-1.5 rounded-full text-xs font-bold transition-colors border ' + (pathname===m.path?'bg-purple-600 text-white border-purple-600':'text-slate-600 hover:bg-purple-50 hover:text-purple-700 border-transparent hover:border-purple-200')}>
-            {m.name}
-          </Link>
-        ); })}
-      </div>
+      <SubNav label="Hub de Compras" items={COMP_NAV} currentPath="/dashboard/compras" color="purple" hub={{ href: '/dashboard/compras' }} />
 
       {/* ALERT BANNER — SEMÁFORO DE RESOLUCIÓN DE COMPRAS */}
       <div className="bg-white border-b border-slate-200 px-6 py-3 flex flex-wrap items-center justify-between gap-3 shadow-xs">
@@ -643,34 +611,23 @@ export default function ComprasHub() {
       <div className="flex-1 flex flex-col px-6 py-6 max-w-[1600px] mx-auto w-full gap-6">
 
         {/* HEADER ROW */}
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div className="bg-gradient-to-tr from-purple-700 to-purple-500 text-white p-3.5 rounded-2xl shadow-md">
-              <ShoppingBag size={28}/>
+        <PageHeader
+          icon={ShoppingBag} color="purple"
+          title="HUB de Compras"
+          subtitle="Control Unificado del Ciclo de Suministros: Lista → Pedido (PEC) → Tránsito → Recepción en Bodega"
+          actions={(
+            <div className="flex items-center gap-2.5">
+              <Link href="/dashboard/compras/pedidos"
+                className="flex items-center gap-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all">
+                <Plus size={15}/> Nuevo PEC
+              </Link>
+              <button onClick={load}
+                className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-semibold text-xs shadow-xs transition-colors">
+                <RefreshCw size={13} className={loading?'animate-spin':''}/> Actualizar
+              </button>
+              <Button variant="secondary" size="sm" color="purple" icon={Settings} onClick={()=>setShowConfig(true)}>Configuración</Button>
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">HUB de Compras</h1>
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-purple-50 text-purple-700 border border-purple-200">Nebulae Kids</span>
-              </div>
-              <p className="text-xs sm:text-sm text-slate-500 mt-0.5">Control Unificado del Ciclo de Suministros: Lista → Pedido (PEC) → Tránsito → Recepción en Bodega</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2.5">
-            <Link href="/dashboard/compras/pedidos"
-              className="flex items-center gap-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all">
-              <Plus size={15}/> Nuevo PEC
-            </Link>
-            <button onClick={load}
-              className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-semibold text-xs shadow-xs transition-colors">
-              <RefreshCw size={13} className={loading?'animate-spin':''}/> Actualizar
-            </button>
-            <button onClick={()=>setShowConfig(true)}
-              className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-purple-50 hover:text-purple-700 hover:border-purple-200 font-semibold text-xs shadow-xs transition-colors">
-              <Settings size={13}/> Configuración
-            </button>
-          </div>
-        </div>
+          )} />
 
         {/* KPI CARDS */}
         {activeTab !== 'Analisis' && (
@@ -681,9 +638,7 @@ export default function ComprasHub() {
                 <div key={i} className={`bg-white rounded-2xl p-5 border shadow-xs hover:shadow-md transition-all ${k.ok?'border-slate-200':'border-rose-200 bg-rose-50/20'}`}>
                   <div className="flex items-center justify-between mb-3">
                     <div className={`p-2.5 rounded-xl ${c.iconBg} ${c.text}`}>{k.icon}</div>
-                    <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${k.ok?'bg-slate-100 text-slate-600':'bg-rose-100 text-rose-700'}`}>
-                      {k.ok ? 'Óptimo' : 'Alerta'}
-                    </span>
+                    <Badge tone={k.ok ? 'neutral' : 'danger'}>{k.ok ? 'Óptimo' : 'Alerta'}</Badge>
                   </div>
                   <p className="text-xs font-black text-slate-400 uppercase tracking-wide mb-1">{k.label}</p>
                   <p className="text-2xl sm:text-3xl font-black text-slate-900 mb-1">{k.value}</p>
@@ -1296,29 +1251,23 @@ export default function ComprasHub() {
 
         {/* Modal de Configuración de Tiempos */}
         {showConfig && (
-          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl border border-slate-100 space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <h3 className="font-black text-slate-800 text-base flex items-center gap-2">
-                  <Settings size={18} className="text-purple-600"/> Ajustes de Alerta de Compras
-                </h3>
-                <button onClick={()=>setShowConfig(false)} className="p-1 hover:bg-slate-100 rounded-lg"><X size={16} className="text-slate-400"/></button>
-              </div>
-              <p className="text-xs text-slate-500">
-                Define el umbral máximo de días permitidos para un Pedido de Compra sin haber recibido mercancía antes de activar la alerta roja de retraso en suministros.
-              </p>
-              <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1">Días límite de entrega:</label>
-                <input type="number" min={1} max={60} value={pecAlertDias} onChange={e=>setPecAlertDias(Number(e.target.value)||5)}
-                  className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
-              </div>
-              <div className="flex justify-end gap-2 pt-2">
-                <button onClick={()=>setShowConfig(false)} className="px-4 py-2 bg-slate-100 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-200">Cancelar</button>
-                <button onClick={()=>{setShowConfig(false);showToast('Configuración guardada exitosamente');}}
-                  className="px-5 py-2 bg-purple-600 text-white rounded-xl text-xs font-bold hover:bg-purple-700 shadow-xs">Guardar</button>
-              </div>
+          <Modal title="Ajustes de Alerta de Compras" icon={Settings} color="purple" maxWidth="md"
+            onClose={()=>setShowConfig(false)}
+            footer={(
+              <>
+                <Button variant="secondary" onClick={()=>setShowConfig(false)}>Cancelar</Button>
+                <Button color="purple" onClick={()=>{setShowConfig(false);showToast('Configuración guardada exitosamente');}}>Guardar</Button>
+              </>
+            )}>
+            <p className="text-xs text-slate-500">
+              Define el umbral máximo de días permitidos para un Pedido de Compra sin haber recibido mercancía antes de activar la alerta roja de retraso en suministros.
+            </p>
+            <div>
+              <label className="text-xs font-bold text-slate-700 block mb-1">Días límite de entrega:</label>
+              <input type="number" min={1} max={60} value={pecAlertDias} onChange={e=>setPecAlertDias(Number(e.target.value)||5)}
+                className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
             </div>
-          </div>
+          </Modal>
         )}
 
         {/* Bulk action bar */}
