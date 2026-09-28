@@ -10,18 +10,10 @@ import {
   ArrowRight, Phone, Check, AlertTriangle, HelpCircle,
   DollarSign, ExternalLink, Calendar, Plus
 } from 'lucide-react';
-import { usePathname, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { apiFetch, API_URL } from '@/lib/api';
-
-const SUB_MODULES = [
-  { name: 'Solicitud de Cliente', path: '/dashboard/ventas/solicitud' },
-  { name: 'Cotización',           path: '/dashboard/ventas/cotizacion' },
-  { name: 'Pedido de Venta',      path: '/dashboard/ventas/venta' },
-  { name: 'Exportar Día',         path: '/dashboard/ventas/exportar-dia' },
-  { name: 'Exportar Rango',       path: '/dashboard/ventas/exportar-rango' },
-  { name: 'Sincronización DB',    path: '/dashboard/ventas/sincronizacion' },
-  { name: 'Proyecciones',         path: '/dashboard/ventas/proyecciones' },
-];
+import { SubNav, PageHeader, Badge, Drawer, Toast } from '@/components/ui';
+import { VEN_NAV } from './ven-nav';
 
 const fCOP  = (v: any) => { const n = Number(v)||0; return n > 0 ? '$' + n.toLocaleString('es-CO') : '$' + 0; };
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
@@ -81,15 +73,6 @@ const getTipoLabel = (t: string) => ({
   VEN: 'Pedido Venta',
 } as Record<string,string>)[t] || t;
 
-function Toast({msg,type,onClose}:{msg:string,type:'ok'|'error',onClose:()=>void}) {
-  useEffect(()=>{const t=setTimeout(onClose,4000);return()=>clearTimeout(t);},[onClose]);
-  return (
-    <div className={`fixed top-5 right-5 z-[200] px-5 py-3 rounded-2xl shadow-2xl font-bold text-sm flex items-center gap-3 ${type==='ok'?'bg-emerald-600':'bg-red-600'} text-white`}>
-      <span>{msg}</span><button onClick={onClose}><X size={16}/></button>
-    </div>
-  );
-}
-
 /* ── Activities floating panel ── */
 function ActivitiesPanel({row,onClose}:{row:any,onClose:()=>void}) {
   const [detail, setDetail] = useState<any>(null);
@@ -111,57 +94,52 @@ function ActivitiesPanel({row,onClose}:{row:any,onClose:()=>void}) {
   const chatter=acts.filter((a:any)=>a.action==='CHATTER');
   const hist=acts.filter((a:any)=>a.action!=='CHATTER');
   return (
-    <>
-      <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-40" onClick={onClose}/>
-      <div className="fixed top-0 right-0 bottom-0 z-50 bg-white shadow-2xl flex flex-col w-[480px] border-l border-slate-200">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${getTipoClass(row.tipo)}`}>{row.tipo}</span>
-              <span className="font-bold text-slate-800">{row.numero}</span>
-            </div>
-            <p className="text-xs text-slate-500 mt-0.5">{row.customer_name||row.cliente?.nombre||'Cliente Nebulae'}</p>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-xl text-slate-500"><X size={18}/></button>
+    <Drawer onClose={onClose} header={(
+      <div>
+        <div className="flex items-center gap-2">
+          <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${getTipoClass(row.tipo)}`}>{row.tipo}</span>
+          <span className="font-bold text-slate-800">{row.numero}</span>
         </div>
-        {loading?(
-          <div className="flex-1 flex items-center justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"/></div>
-        ):(
-          <div className="flex-1 overflow-y-auto p-5 space-y-5">
-            {chatter.length>0&&(
-              <div>
-                <p className="text-xs font-black text-slate-400 uppercase mb-3 flex items-center gap-1"><MessageCircle size={12}/> Chatter con Cliente</p>
-                <div className="space-y-2">
-                  {chatter.map((a:any,i:number)=>(
-                    <div key={i} className="bg-green-50 border border-green-100 rounded-xl p-3">
-                      <p className="text-sm text-green-900">{a.description}</p>
-                      <p className="text-xs text-green-600 mt-1">{a.user_name || 'Asesor'} - {fDate(a.created_at)}</p>
+        <p className="text-xs text-slate-500 mt-0.5">{row.customer_name||row.cliente?.nombre||'Cliente Nebulae'}</p>
+      </div>
+    )}>
+      {loading?(
+        <div className="flex items-center justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"/></div>
+      ):(
+        <>
+          {chatter.length>0&&(
+            <div>
+              <p className="text-xs font-black text-slate-400 uppercase mb-3 flex items-center gap-1"><MessageCircle size={12}/> Chatter con Cliente</p>
+              <div className="space-y-2">
+                {chatter.map((a:any,i:number)=>(
+                  <div key={i} className="bg-green-50 border border-green-100 rounded-xl p-3">
+                    <p className="text-sm text-green-900">{a.description}</p>
+                    <p className="text-xs text-green-600 mt-1">{a.user_name || 'Asesor'} - {fDate(a.created_at)}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <div>
+            <p className="text-xs font-black text-slate-400 uppercase mb-3 flex items-center gap-1"><Activity size={12}/> Historial de Acciones Tomadas</p>
+            {hist.length===0?<p className="text-xs text-slate-400 italic">Sin actividad registrada</p>:(
+              <div className="space-y-3 relative before:absolute before:left-2 before:top-0 before:bottom-0 before:w-0.5 before:bg-slate-100">
+                {[...hist].reverse().map((a:any,i:number)=>(
+                  <div key={i} className="flex gap-3 pl-7 relative">
+                    <div className="absolute left-0 top-2 w-4 h-4 rounded-full border-2 border-white"
+                      style={{backgroundColor:({CREATED:'#6366f1',ESTADO_CHANGED:'#f59e0b',SENT:'#10b981',CONFIRMED:'#059669',REJECTED:'#ef4444',UPDATED:'#3b82f6'}as any)[a.action]||'#94a3b8'}}/>
+                    <div className="flex-1 bg-white border border-slate-100 rounded-xl p-3 shadow-xs">
+                      <p className="text-sm font-medium text-slate-700">{a.description}</p>
+                      <p className="text-xs text-slate-400 mt-1">{fDate(a.created_at)} {fTime(a.created_at)}{a.user_name&&<span className="ml-2 font-medium">- {a.user_name}</span>}</p>
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
               </div>
             )}
-            <div>
-              <p className="text-xs font-black text-slate-400 uppercase mb-3 flex items-center gap-1"><Activity size={12}/> Historial de Acciones Tomadas</p>
-              {hist.length===0?<p className="text-xs text-slate-400 italic">Sin actividad registrada</p>:(
-                <div className="space-y-3 relative before:absolute before:left-2 before:top-0 before:bottom-0 before:w-0.5 before:bg-slate-100">
-                  {[...hist].reverse().map((a:any,i:number)=>(
-                    <div key={i} className="flex gap-3 pl-7 relative">
-                      <div className="absolute left-0 top-2 w-4 h-4 rounded-full border-2 border-white"
-                        style={{backgroundColor:({CREATED:'#6366f1',ESTADO_CHANGED:'#f59e0b',SENT:'#10b981',CONFIRMED:'#059669',REJECTED:'#ef4444',UPDATED:'#3b82f6'}as any)[a.action]||'#94a3b8'}}/>
-                      <div className="flex-1 bg-white border border-slate-100 rounded-xl p-3 shadow-xs">
-                        <p className="text-sm font-medium text-slate-700">{a.description}</p>
-                        <p className="text-xs text-slate-400 mt-1">{fDate(a.created_at)} {fTime(a.created_at)}{a.user_name&&<span className="ml-2 font-medium">- {a.user_name}</span>}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
           </div>
-        )}
-      </div>
-    </>
+        </>
+      )}
+    </Drawer>
   );
 }
 
@@ -196,17 +174,18 @@ function ConfigPanel({alertDias,onSave,onClose}:{alertDias:any,onSave:(cfg:any)=
     </div>
   );
   return (
-    <>
-      <div className="fixed inset-0 bg-slate-900/40 z-[60]" onClick={onClose}/>
-      <div className="fixed top-0 right-0 bottom-0 z-[70] bg-white shadow-2xl flex flex-col w-[520px] border-l border-slate-200">
-        <div className="flex items-center justify-between px-6 py-5 border-b border-slate-100 bg-gradient-to-r from-indigo-50 to-white">
-          <div className="flex items-center gap-3">
-            <div className="bg-indigo-600 text-white p-2.5 rounded-xl shadow-md"><Settings size={20}/></div>
-            <div><h2 className="font-black text-slate-800 text-lg">Configuración de HUB Ventas</h2><p className="text-xs text-slate-500">Parámetros de resolución, alertas y automatizaciones</p></div>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-xl text-slate-500"><X size={18}/></button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+    <Drawer onClose={onClose} maxWidth="md" header={(
+      <div className="flex items-center gap-3">
+        <div className="bg-indigo-600 text-white p-2.5 rounded-xl shadow-md"><Settings size={20}/></div>
+        <div><h2 className="font-black text-slate-800 text-lg">Configuración de HUB Ventas</h2><p className="text-xs text-slate-500">Parámetros de resolución, alertas y automatizaciones</p></div>
+      </div>
+    )} footer={(
+      <button onClick={save} disabled={saving}
+        className={`w-full py-3 rounded-xl font-black flex items-center justify-center gap-2 transition-colors ${saved?'bg-emerald-500 text-white':'bg-indigo-600 hover:bg-indigo-700 text-white'} disabled:opacity-50`}>
+        {saving?<RefreshCw size={16} className="animate-spin"/>:saved?<CheckCircle2 size={16}/>:<Save size={16}/>}
+        {saved?'¡Configuración Guardada!':'Guardar Configuración'}
+      </button>
+    )}>
           <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5">
             <div className="flex items-center gap-2 mb-1"><Bell size={16} className="text-amber-600"/><h3 className="font-black text-amber-800 text-sm uppercase tracking-wide">Alertas de No Resolución</h3></div>
             <p className="text-xs text-amber-700 mb-4">Si una solicitud, cotización o pedido pasa más de X días sin cambio de estado o acción tomada, se marcará en color rojo de alerta.</p>
@@ -231,16 +210,7 @@ function ConfigPanel({alertDias,onSave,onClose}:{alertDias:any,onSave:(cfg:any)=
               <Toggle k="notif_whatsapp" label="Notificación WhatsApp automática" desc="Al pasar el pedido a LISTO ENTREGA, avisa al cliente con su número de orden."/>
             </div>
           </div>
-        </div>
-        <div className="p-5 border-t border-slate-100 bg-white">
-          <button onClick={save} disabled={saving}
-            className={`w-full py-3 rounded-xl font-black flex items-center justify-center gap-2 transition-colors ${saved?'bg-emerald-500 text-white':'bg-indigo-600 hover:bg-indigo-700 text-white'} disabled:opacity-50`}>
-            {saving?<RefreshCw size={16} className="animate-spin"/>:saved?<CheckCircle2 size={16}/>:<Save size={16}/>}
-            {saved?'¡Configuración Guardada!':'Guardar Configuración'}
-          </button>
-        </div>
-      </div>
-    </>
+    </Drawer>
   );
 }
 
@@ -248,7 +218,6 @@ function ConfigPanel({alertDias,onSave,onClose}:{alertDias:any,onSave:(cfg:any)=
    MAIN COMPONENT: HUB VENTAS
    ════════════════════════════════════════════════════════════ */
 export default function VentasHub() {
-  const pathname = usePathname();
   const router = useRouter();
   const [activeTab, setActiveTab]       = useState('Todos');
   const [viewMode, setViewMode]         = useState<'lista'|'kanban'>('lista');
@@ -484,22 +453,11 @@ export default function VentasHub() {
   /* ════════════════ RENDER ════════════════ */
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
-      {toast && <Toast msg={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
+      <Toast toast={toast} onClose={()=>setToast(null)}/>
       {actRow && <ActivitiesPanel row={actRow} onClose={()=>setActRow(null)}/>}
       {showConfig && <ConfigPanel alertDias={alertDias} onSave={cfg=>{setAlertDias(cfg);setShowConfig(false);loadData();}} onClose={()=>setShowConfig(false)}/>}
 
-      {/* Sub-module nav */}
-      <div className="bg-white border-b border-slate-200 px-6 py-2.5 flex items-center gap-1 sticky top-0 z-30 shadow-xs overflow-x-auto">
-        <span className="text-xs font-black text-indigo-700 tracking-wider mr-3 shrink-0 flex items-center gap-1.5">
-          <TrendingUp size={14}/> HUB VENTAS:
-        </span>
-        {SUB_MODULES.map(m=>(
-          <Link key={m.name} href={m.path}
-            className={`shrink-0 px-3.5 py-1.5 rounded-full text-xs font-bold border transition-colors ${pathname===m.path?'bg-indigo-600 text-white border-indigo-600 shadow-xs':'text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 border-transparent'}`}>
-            {m.name}
-          </Link>
-        ))}
-      </div>
+      <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas" color="indigo" />
 
       {/* ALERT BANNER — SEMÁFORO DE RESOLUCIÓN */}
       <div className="bg-white border-b border-slate-200 px-6 py-3 flex flex-wrap items-center justify-between gap-3 shadow-xs">
@@ -549,34 +507,26 @@ export default function VentasHub() {
       <div className="flex-1 flex flex-col px-6 py-6 max-w-[1600px] mx-auto w-full gap-6">
 
         {/* HEADER ROW */}
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div className="bg-gradient-to-tr from-indigo-700 to-indigo-500 text-white p-3.5 rounded-2xl shadow-md">
-              <TrendingUp size={28}/>
+        <PageHeader
+          icon={TrendingUp} color="indigo"
+          title="HUB Ventas"
+          subtitle="Control Unificado del Ciclo Comercial: Solicitud (SC) → Cotización (COT) → Pedido (PVEN) → Facturación y Despacho"
+          actions={(
+            <div className="flex items-center gap-2.5">
+              <Link href="/dashboard/ventas/solicitud/nueva"
+                className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all">
+                <Plus size={15}/> Nueva Solicitud
+              </Link>
+              <button onClick={loadData}
+                className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-semibold text-xs shadow-xs transition-colors">
+                <RefreshCw size={13} className={loading?'animate-spin':''}/> Actualizar
+              </button>
+              <button onClick={()=>setShowConfig(true)}
+                className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 font-semibold text-xs shadow-xs transition-colors">
+                <Settings size={13}/> Configuración
+              </button>
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">HUB Ventas</h1>
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-indigo-50 text-indigo-700 border border-indigo-200">Nebulae Kids</span>
-              </div>
-              <p className="text-xs sm:text-sm text-slate-500 mt-0.5">Control Unificado del Ciclo Comercial: Solicitud (SC) → Cotización (COT) → Pedido (PVEN) → Facturación y Despacho</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2.5">
-            <Link href="/dashboard/ventas/solicitud/nueva"
-              className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all">
-              <Plus size={15}/> Nueva Solicitud
-            </Link>
-            <button onClick={loadData}
-              className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-semibold text-xs shadow-xs transition-colors">
-              <RefreshCw size={13} className={loading?'animate-spin':''}/> Actualizar
-            </button>
-            <button onClick={()=>setShowConfig(true)}
-              className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 font-semibold text-xs shadow-xs transition-colors">
-              <Settings size={13}/> Configuración
-            </button>
-          </div>
-        </div>
+          )} />
 
         {/* KPI CARDS */}
         {activeTab !== 'Analisis' && (
@@ -587,9 +537,7 @@ export default function VentasHub() {
                 <div key={i} className={`bg-white rounded-2xl p-5 border shadow-xs hover:shadow-md transition-all ${k.ok?'border-slate-200':'border-rose-200 bg-rose-50/20'}`}>
                   <div className="flex items-center justify-between mb-3">
                     <div className={`p-2.5 rounded-xl ${c.iconBg} ${c.text}`}>{k.icon}</div>
-                    <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full ${k.ok?'bg-slate-100 text-slate-600':'bg-rose-100 text-rose-700'}`}>
-                      {k.tipo}
-                    </span>
+                    <Badge tone={k.ok ? 'neutral' : 'danger'}>{k.tipo}</Badge>
                   </div>
                   <p className="text-xs font-black text-slate-400 uppercase tracking-wide mb-1">{k.label}</p>
                   <p className="text-2xl sm:text-3xl font-black text-slate-900 mb-1">{k.value}</p>
