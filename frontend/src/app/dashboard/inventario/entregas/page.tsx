@@ -360,7 +360,7 @@ Este pedido tiene un saldo pendiente de ${fCOP(saldoPendiente)} (40%).
                           </span>
                         </td>
                         <td className="px-6 py-3.5 text-center">
-                          {saldo === 0 || ven.pago_estado === 'PAGADO_TOTAL' ? (
+                          {saldo <= 0 ? (
                             <span className="inline-flex items-center gap-1 text-[10px] font-black px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
                               <CheckCircle2 size={11} /> 100% Pagado
                             </span>
