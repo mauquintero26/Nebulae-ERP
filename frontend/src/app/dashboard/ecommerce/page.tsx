@@ -10,30 +10,19 @@ import {
   MessageSquare, ExternalLink, Star, Activity, ChevronDown, ChevronUp, Grid, List
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import { PageHeader, StatCard, Badge, Drawer, Toast as SharedToast } from '@/components/ui';
 
 const fCOP = (v: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0);
 const fDate = (d: any) => d ? new Date(d).toLocaleDateString('es-CO', { year: 'numeric', month: 'short', day: 'numeric' }) : '-';
 const fDateTime = (d: any) => d ? new Date(d).toLocaleString('es-CO', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-';
 
-const PWEB_ESTADOS: Record<string, { label: string; bg: string; text: string; border: string }> = {
-  PENDIENTE_DESPACHO: { label: 'Pendiente Despacho', bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
-  DESPACHADO:        { label: 'Despachado',         bg: 'bg-blue-50',   text: 'text-blue-700',   border: 'border-blue-200' },
-  ENTREGADO:         { label: 'Entregado',           bg: 'bg-emerald-50',text: 'text-emerald-700',border: 'border-emerald-200' },
-  CANCELADO:         { label: 'Cancelado',           bg: 'bg-red-50',    text: 'text-red-700',    border: 'border-red-200' },
-  EN_TRANSITO:       { label: 'En Tránsito',         bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200' },
+const PWEB_ESTADOS: Record<string, { label: string; tone: 'warning'|'info'|'success'|'danger'|'purple' }> = {
+  PENDIENTE_DESPACHO: { label: 'Pendiente Despacho', tone: 'warning' },
+  DESPACHADO:        { label: 'Despachado',         tone: 'info' },
+  ENTREGADO:         { label: 'Entregado',           tone: 'success' },
+  CANCELADO:         { label: 'Cancelado',           tone: 'danger' },
+  EN_TRANSITO:       { label: 'En Tránsito',         tone: 'purple' },
 };
-
-function Toast({ msg, type, onClose }: { msg: string; type: string; onClose: () => void }) {
-  useEffect(() => { const t = setTimeout(onClose, 3800); return () => clearTimeout(t); }, [onClose]);
-  const bg = type === 'ok' ? 'bg-emerald-600' : 'bg-red-600';
-  return (
-    <div className={`fixed bottom-8 right-8 z-[100] flex items-center gap-3 ${bg} text-white px-5 py-3 rounded-2xl shadow-2xl`}>
-      {type === 'ok' ? <CheckCircle2 size={18}/> : <AlertCircle size={18}/>}
-      <span className="font-semibold text-sm">{msg}</span>
-      <button onClick={onClose}><X size={14}/></button>
-    </div>
-  );
-}
 
 /* =====================================================================
    MODAL PRODUCTO — Crear / Editar (Odoo-inspired, Nebulae design)
@@ -431,52 +420,42 @@ export default function EcommercePage() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
-      {toast && <Toast msg={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+      <SharedToast toast={toast ? { msg: toast.msg, type: toast.type === 'ok' ? 'ok' : 'error' } : null} onClose={() => setToast(null)} />
       {(showNewProduct || editProduct) && (
         <ProductModal product={editProduct || null} onSave={loadCatalogo} onClose={() => { setShowNewProduct(false); setEditProduct(null); }} onToast={showToast} />
       )}
 
       <div className="flex-1 flex flex-col px-6 py-6 gap-6 max-w-[1600px] mx-auto w-full">
         {/* HEADER */}
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-4">
-            <div className="bg-purple-600 text-white p-3 rounded-2xl shadow-lg"><ShoppingCart size={26}/></div>
-            <div>
-              <h1 className="text-3xl font-black text-gray-900">E-Commerce Center</h1>
-              <p className="text-sm text-gray-400 mt-0.5">GestiÃ³n de ventas web Â· PWEB-YYYY#### Â· CatÃ¡logo Digital</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 mt-1">
-            <button onClick={loadStats} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 font-semibold text-sm shadow-sm">
-              <RefreshCw size={14} className={statsLoading ? 'animate-spin' : ''}/> Actualizar
-            </button>
-            <Link href="/store" target="_blank" className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 font-semibold text-sm shadow-sm">
-              <Globe size={14}/> Ver Tienda
-            </Link>
-            {activeTab === 'Catálogo' && (
-              <button onClick={() => setShowNewProduct(true)} className="flex items-center gap-2 px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-sm shadow-sm">
-                <Plus size={15}/> Nuevo Producto
+        <PageHeader icon={ShoppingCart} color="purple"
+          title="E-Commerce Center"
+          subtitle="Gestión de ventas web · PWEB-YYYY#### · Catálogo Digital"
+          actions={(
+            <div className="flex items-center gap-2 mt-1">
+              <button onClick={loadStats} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 font-semibold text-sm shadow-sm">
+                <RefreshCw size={14} className={statsLoading ? 'animate-spin' : ''}/> Actualizar
               </button>
-            )}
-          </div>
-        </div>
+              <Link href="/store" target="_blank" className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 font-semibold text-sm shadow-sm">
+                <Globe size={14}/> Ver Tienda
+              </Link>
+              {activeTab === 'Catálogo' && (
+                <button onClick={() => setShowNewProduct(true)} className="flex items-center gap-2 px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-sm shadow-sm">
+                  <Plus size={15}/> Nuevo Producto
+                </button>
+              )}
+            </div>
+          )} />
 
         {/* KPIs */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {[
-            { l: 'Ventas Hoy', v: fCOP(stats.revenue_today||0), s: `${stats.web_orders_today||0} pedidos web`, ic: <TrendingUp size={22}/>, ibg: 'bg-purple-100', it: 'text-purple-700', ok: true },
-            { l: 'Ventas del Mes', v: fCOP(stats.revenue_month||0), s: `${stats.web_orders_month||0} pedidos PWEB`, ic: <BarChart3 size={22}/>, ibg: 'bg-indigo-100', it: 'text-indigo-700', ok: true },
-            { l: 'Carritos Abandonados', v: String(stats.carritos_abandonados_count||0), s: fCOP(stats.carritos_abandonados_valor||0)+' en fuga', ic: <AlertCircle size={22}/>, ibg: 'bg-rose-100', it: 'text-rose-700', ok: (stats.carritos_abandonados_count||0)===0 },
-            { l: 'Productos Publicados', v: String(stats.productos_publicados||catPublicados||0), s: catBajoStock>0?`${catBajoStock} con stock bajo`:'Inventario OK', ic: <Package size={22}/>, ibg: 'bg-emerald-100', it: 'text-emerald-700', ok: catBajoStock===0 },
+            { l: 'Ventas Hoy', v: fCOP(stats.revenue_today||0), s: `${stats.web_orders_today||0} pedidos web`, ic: TrendingUp, color: 'purple', ok: true },
+            { l: 'Ventas del Mes', v: fCOP(stats.revenue_month||0), s: `${stats.web_orders_month||0} pedidos PWEB`, ic: BarChart3, color: 'indigo', ok: true },
+            { l: 'Carritos Abandonados', v: String(stats.carritos_abandonados_count||0), s: fCOP(stats.carritos_abandonados_valor||0)+' en fuga', ic: AlertCircle, color: 'rose', ok: (stats.carritos_abandonados_count||0)===0 },
+            { l: 'Productos Publicados', v: String(stats.productos_publicados||catPublicados||0), s: catBajoStock>0?`${catBajoStock} con stock bajo`:'Inventario OK', ic: Package, color: 'emerald', ok: catBajoStock===0 },
           ].map((k,i) => (
-            <div key={i} className={`bg-white rounded-2xl border shadow-sm hover:shadow-md transition-all p-5 ${k.ok?'border-gray-200':'border-red-200'}`}>
-              <div className={`inline-flex p-2.5 rounded-xl mb-3 ${k.ibg} ${k.it}`}>{k.ic}</div>
-              <p className="text-xs font-black text-gray-400 uppercase tracking-wide mb-1">{k.l}</p>
-              <p className="text-2xl font-black text-gray-900 mb-1">{statsLoading?'...':k.v}</p>
-              <p className={`text-xs font-semibold flex items-center gap-1 ${k.ok?'text-emerald-600':'text-rose-500'}`}>
-                {k.ok?<CheckCircle2 size={11}/>:<AlertCircle size={11}/>}{k.s}
-              </p>
-            </div>
+            <StatCard key={i} icon={k.ic} color={k.color as any} tone={k.ok ? undefined : 'danger'}
+              label={k.l} value={statsLoading?'...':k.v} hint={k.s} />
           ))}
         </div>
 
@@ -548,14 +527,14 @@ export default function EcommercePage() {
                     <tbody className="divide-y divide-gray-100">
                       {webOrders.length===0&&<tr><td colSpan={7} className="text-center py-16 text-gray-400"><Globe size={32} className="mx-auto mb-3 opacity-30"/><p>Sin pedidos web</p><p className="text-xs mt-1">Los pedidos PWEB-YYYY#### aparecerÃ¡n aquÃ­</p></td></tr>}
                       {webOrders.map((o: any) => {
-                        const est = PWEB_ESTADOS[o.estado]||{label:o.estado,bg:'bg-gray-50',text:'text-gray-600',border:'border-gray-200'};
+                        const est = PWEB_ESTADOS[o.estado]||{label:o.estado,tone:'neutral' as const};
                         return (
                           <tr key={o.id} className="hover:bg-purple-50/30 cursor-pointer transition-colors" onClick={() => setSelectedOrder(o)}>
                             <td className="px-5 py-3.5"><span className="font-black text-purple-700 text-sm">{o.numero}</span><br/><span className="text-[10px] text-gray-400">{o.pven_numero}</span></td>
                             <td className="px-5 py-3.5"><p className="font-bold text-gray-900">{o.customer_name}</p><p className="text-[10px] text-gray-400">{o.customer_email}</p></td>
                             <td className="px-5 py-3.5 font-black text-gray-900">{fCOP(o.total_cop)}</td>
                             <td className="px-5 py-3.5 text-xs text-gray-500">{(o.productos||[]).length}</td>
-                            <td className="px-5 py-3.5"><span className={`px-2.5 py-1 rounded-full text-xs font-black border ${est.bg} ${est.text} ${est.border}`}>{est.label}</span></td>
+                            <td className="px-5 py-3.5"><Badge tone={est.tone as any}>{est.label}</Badge></td>
                             <td className="px-5 py-3.5 text-xs text-gray-400">{fDate(o.created_at)}</td>
                             <td className="px-5 py-3.5"><button className="p-1.5 rounded-lg bg-purple-50 text-purple-600" onClick={e=>{e.stopPropagation();setSelectedOrder(o);}}><Eye size={13}/></button></td>
                           </tr>
@@ -719,16 +698,11 @@ export default function EcommercePage() {
 
       {/* Order Detail Slide-over */}
       {selectedOrder && (
-        <>
-          <div className="fixed inset-0 bg-gray-900/20 backdrop-blur-sm z-40" onClick={() => setSelectedOrder(null)}/>
-          <div className="fixed top-0 bottom-0 right-0 z-50 bg-white shadow-2xl w-[560px] flex flex-col">
-            <div className="px-6 py-4 border-b border-gray-100 bg-purple-50 flex items-center justify-between shrink-0">
-              <div><h2 className="text-lg font-black text-gray-900">{selectedOrder.numero}</h2><p className="text-xs text-gray-500">{selectedOrder.pven_numero} Â· {selectedOrder.customer_name}</p></div>
-              <button onClick={() => setSelectedOrder(null)} className="p-2 hover:bg-purple-100 rounded-xl"><X size={18}/></button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        <Drawer onClose={() => setSelectedOrder(null)} header={(
+          <div><h2 className="text-lg font-black text-gray-900">{selectedOrder.numero}</h2><p className="text-xs text-gray-500">{selectedOrder.pven_numero} · {selectedOrder.customer_name}</p></div>
+        )}>
               <div className="grid grid-cols-2 gap-3">
-                {[['Cliente',selectedOrder.customer_name],['Email',selectedOrder.customer_email],['TelÃ©fono',selectedOrder.customer_phone||'-'],['Total',fCOP(selectedOrder.total_cop)],['Fecha',fDate(selectedOrder.created_at)],['Estado',selectedOrder.estado]].map(([l,v]) => (
+                {[['Cliente',selectedOrder.customer_name],['Email',selectedOrder.customer_email],['Teléfono',selectedOrder.customer_phone||'-'],['Total',fCOP(selectedOrder.total_cop)],['Fecha',fDate(selectedOrder.created_at)],['Estado',selectedOrder.estado]].map(([l,v]) => (
                   <div key={l} className="bg-gray-50 rounded-2xl p-3"><p className="text-xs font-black text-gray-400 uppercase mb-1">{l}</p><p className="font-bold text-gray-900 text-sm">{v}</p></div>
                 ))}
               </div>
@@ -745,9 +719,7 @@ export default function EcommercePage() {
                   </table>
                 </div>
               )}
-            </div>
-          </div>
-        </>
+        </Drawer>
       )}
     </div>
   );
