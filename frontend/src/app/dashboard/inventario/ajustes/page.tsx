@@ -1,12 +1,12 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import Link from 'next/link';
 import {
   SlidersHorizontal, Activity, TrendingUp, TrendingDown, Plus,
-  Search, X, RefreshCw, AlertCircle, Package, MoreVertical
+  Search, X, RefreshCw
 } from 'lucide-react';
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
+import { SubNav, PageHeader, StatCard, Badge, Modal, Button, EmptyState } from '@/components/ui';
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
   const res = await _apiFetch(path, opts);
@@ -112,61 +112,21 @@ export default function AjustesPage() {
 
   return (
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
-      <div className="bg-white border-b border-slate-200 px-6 py-2 overflow-x-auto flex items-center gap-2 shadow-sm sticky top-0 z-30">
-        <span className="text-xs font-black text-slate-400 uppercase tracking-wider mr-4 shrink-0">Inventario:</span>
-        {INV_NAV.map(mod => (
-          <Link key={mod.name} href={mod.path}
-            className={`shrink-0 px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${
-              mod.path === '/dashboard/inventario/ajustes'
-                ? 'bg-amber-600 text-white border-amber-600'
-                : 'text-slate-600 hover:bg-orange-50 hover:text-orange-700 border-transparent hover:border-orange-200'
-            }`}>{mod.name}
-          </Link>
-        ))}
-      </div>
+      <SubNav label="Inventario" items={INV_NAV} currentPath="/dashboard/inventario/ajustes" color="amber" />
 
-      <div className="p-8 max-w-[1600px] mx-auto space-y-8">
-        <div className="flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">
-              <div className="bg-amber-100 text-amber-600 p-2 rounded-xl shadow-inner"><SlidersHorizontal size={24} /></div>
-              Ajustes de Inventario
-            </h1>
-            <p className="text-slate-500 mt-2 font-medium">Correcciones de stock por mermas, conteos fisicos o diferencias.</p>
-          </div>
-          <button onClick={() => setShowCreate(true)}
-            className="bg-amber-600 hover:bg-amber-700 text-white px-6 py-3 rounded-xl font-bold shadow-md flex items-center gap-2">
-            <Plus size={18} /> Nuevo Ajuste
-          </button>
-        </div>
+      <div className="p-8 max-w-[1600px] mx-auto space-y-6">
+        <PageHeader icon={SlidersHorizontal} color="amber"
+          title="Ajustes de Inventario"
+          subtitle="Correcciones de stock por mermas, conteos fisicos o diferencias."
+          actionLabel="Nuevo Ajuste" actionIcon={Plus} onAction={() => setShowCreate(true)} />
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-amber-300 transition-all">
-            <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 mb-4 group-hover:scale-110 transition-transform"><SlidersHorizontal size={24} /></div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Total Ajustes</p>
-            <h2 className="text-4xl font-black text-slate-800">{ajustes.length}</h2>
-            <p className="text-xs font-bold text-amber-600 mt-2">Todos los periodos</p>
-          </div>
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-emerald-300 transition-all"
-            onClick={() => setActiveTab('Entradas')}>
-            <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 mb-4 group-hover:scale-110 transition-transform"><TrendingUp size={24} /></div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Ajustes Positivos</p>
-            <h2 className="text-4xl font-black text-slate-800">{entradas}</h2>
-            <p className="text-xs font-bold text-emerald-600 mt-2">Sobrantes / Entradas</p>
-          </div>
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-red-300 transition-all"
-            onClick={() => setActiveTab('Salidas')}>
-            <div className="w-12 h-12 rounded-xl bg-red-50 flex items-center justify-center text-red-600 mb-4 group-hover:scale-110 transition-transform"><TrendingDown size={24} /></div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Ajustes Negativos</p>
-            <h2 className="text-4xl font-black text-slate-800">{salidas}</h2>
-            <p className="text-xs font-bold text-red-600 mt-2">Mermas / Salidas</p>
-          </div>
-          <div className="bg-gradient-to-br from-amber-500 to-yellow-600 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
-            <div className="absolute right-0 top-0 opacity-10"><Activity size={120} /></div>
-            <p className="text-xs font-black text-amber-100 uppercase tracking-wider mb-1 relative z-10">Diferencia Neta</p>
-            <h2 className="text-4xl font-black text-white relative z-10">{entradas - salidas > 0 ? '+' : ''}{entradas - salidas}</h2>
-            <p className="text-xs font-bold text-amber-100 mt-2 relative z-10">{entradas} entradas vs {salidas} salidas</p>
-          </div>
+          <StatCard icon={SlidersHorizontal} color="amber" label="Total Ajustes" value={ajustes.length} hint="Todos los periodos" />
+          <StatCard icon={TrendingUp} color="emerald" label="Ajustes Positivos" value={entradas} hint="Sobrantes / Entradas" onClick={() => setActiveTab('Entradas')} />
+          <StatCard icon={TrendingDown} color="rose" label="Ajustes Negativos" value={salidas} hint="Mermas / Salidas" onClick={() => setActiveTab('Salidas')} />
+          <StatCard variant="gradient" icon={Activity} color="amber" label="Diferencia Neta"
+            value={`${entradas - salidas > 0 ? '+' : ''}${entradas - salidas}`}
+            hint={`${entradas} entradas vs ${salidas} salidas`} />
         </div>
 
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
@@ -213,21 +173,17 @@ export default function AjustesPage() {
                     <span className="text-slate-400">Cargando ajustes...</span>
                   </td></tr>
                 ) : filtered.length === 0 ? (
-                  <tr><td colSpan={8} className="px-6 py-20 text-center">
-                    <SlidersHorizontal size={40} className="mx-auto mb-3 text-slate-300" />
-                    <p className="text-slate-500 font-medium">Sin ajustes registrados</p>
-                    <p className="text-slate-400 text-sm mt-1">Los ajustes corrigen diferencias de stock detectadas en conteo fisico</p>
+                  <tr><td colSpan={8}>
+                    <EmptyState icon={SlidersHorizontal} message="Sin ajustes registrados" hint="Los ajustes corrigen diferencias de stock detectadas en conteo fisico" />
                   </td></tr>
                 ) : filtered.map((a: any, i) => (
                   <tr key={a.id || i} onClick={() => setSelected(a)}
                     className="hover:bg-slate-50/80 transition-colors group cursor-pointer">
                     <td className="px-6 py-4 font-black text-amber-700">AJU-{String(a.id || i+1).padStart(4, '0')}</td>
                     <td className="px-6 py-4">
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold border ${
-                        direccionDe(a) === 'ENTRADA' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'
-                      }`}>
-                        {direccionDe(a) === 'ENTRADA' ? <><TrendingUp size={11} /> Entrada</> : <><TrendingDown size={11} /> Salida</>}
-                      </span>
+                      <Badge tone={direccionDe(a) === 'ENTRADA' ? 'success' : 'danger'} icon={direccionDe(a) === 'ENTRADA' ? TrendingUp : TrendingDown}>
+                        {direccionDe(a) === 'ENTRADA' ? 'Entrada' : 'Salida'}
+                      </Badge>
                     </td>
                     <td className="px-6 py-4 font-medium text-slate-800">SKU #{a.movements?.[0]?.sku_id ?? '-'}</td>
                     <td className="px-6 py-4 text-slate-600">{warehouses.find((w: any) => w.id === (a.dest_warehouse_id ?? a.source_warehouse_id))?.name || '-'}</td>
@@ -282,77 +238,72 @@ export default function AjustesPage() {
 
       {/* Create Modal */}
       {showCreate && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col">
-            <div className="px-6 py-5 border-b flex justify-between items-center bg-gradient-to-r from-amber-50 to-white">
-              <h3 className="font-extrabold text-xl text-slate-900">Nuevo Ajuste de Inventario</h3>
-              <button onClick={() => setShowCreate(false)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full"><X size={20} /></button>
-            </div>
-            <form onSubmit={createAjuste} className="flex-1 overflow-y-auto p-6 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Tipo *</label>
-                  <select required value={form.tipo} onChange={e => setForm(f => ({ ...f, tipo: e.target.value }))}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none">
-                    <option value="ENTRADA">Entrada (Sobrante)</option>
-                    <option value="SALIDA">Salida (Merma)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Bodega *</label>
-                  <select required value={form.warehouse_id} onChange={e => setForm(f => ({ ...f, warehouse_id: e.target.value }))}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none">
-                    <option value="">Seleccionar...</option>
-                    {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.name}</option>)}
-                  </select>
-                </div>
-              </div>
-              <div className="relative">
-                <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Producto *</label>
-                <input required value={form.product_name} onChange={e => onProductSearch(e.target.value)}
-                  placeholder="Buscar producto..."
-                  className={`w-full border rounded-xl px-3 py-2.5 text-sm outline-none ${form.sku_id ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200'}`} />
-                {productResults.length > 0 && !form.sku_id && (
-                  <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl z-10 max-h-48 overflow-y-auto">
-                    {productResults.map((p: any) => (
-                      <button key={p.id} type="button"
-                        onClick={() => { setForm(f => ({ ...f, sku_id: p.id, product_name: p.display || p.product_name })); setProductResults([]); }}
-                        className="w-full text-left px-4 py-2.5 hover:bg-amber-50 text-sm border-b last:border-0 border-slate-50">
-                        {p.display || p.product_name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Cantidad *</label>
-                  <input required type="number" min={1} value={form.qty} onChange={e => setForm(f => ({ ...f, qty: parseInt(e.target.value) || 1 }))}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none" />
-                </div>
-                <div>
-                  <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Motivo *</label>
-                  <select required value={form.motivo} onChange={e => setForm(f => ({ ...f, motivo: e.target.value }))}
-                    className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none">
-                    {MOTIVOS.map(m => <option key={m}>{m}</option>)}
-                  </select>
-                </div>
+        <Modal title="Nuevo Ajuste de Inventario" icon={SlidersHorizontal} color="amber" onClose={() => setShowCreate(false)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setShowCreate(false)}>Cancelar</Button>
+              <Button type="submit" form="ajuste-form" loading={saving} color={form.tipo === 'ENTRADA' ? 'emerald' : 'red'} icon={SlidersHorizontal}>
+                {saving ? 'Registrando...' : `Registrar ${form.tipo === 'ENTRADA' ? 'Sobrante' : 'Merma'}`}
+              </Button>
+            </>
+          )}>
+          <form id="ajuste-form" onSubmit={createAjuste} className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Tipo *</label>
+                <select required value={form.tipo} onChange={e => setForm(f => ({ ...f, tipo: e.target.value }))}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none">
+                  <option value="ENTRADA">Entrada (Sobrante)</option>
+                  <option value="SALIDA">Salida (Merma)</option>
+                </select>
               </div>
               <div>
-                <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Notas adicionales</label>
-                <textarea rows={2} value={form.notas} onChange={e => setForm(f => ({ ...f, notas: e.target.value }))}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none resize-none" />
+                <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Bodega *</label>
+                <select required value={form.warehouse_id} onChange={e => setForm(f => ({ ...f, warehouse_id: e.target.value }))}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none">
+                  <option value="">Seleccionar...</option>
+                  {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.name}</option>)}
+                </select>
               </div>
-              <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setShowCreate(false)} className="flex-1 py-3 border border-slate-200 rounded-xl text-sm font-bold text-slate-600">Cancelar</button>
-                <button type="submit" disabled={saving} className={`flex-1 py-3 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center justify-center gap-2 ${form.tipo === 'ENTRADA' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-red-600 hover:bg-red-700'}`}>
-                  {saving ? <RefreshCw size={14} className="animate-spin" /> : <SlidersHorizontal size={14} />}
-                  {saving ? 'Registrando...' : `Registrar ${form.tipo === 'ENTRADA' ? 'Sobrante' : 'Merma'}`}
-                </button>
+            </div>
+            <div className="relative">
+              <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Producto *</label>
+              <input required value={form.product_name} onChange={e => onProductSearch(e.target.value)}
+                placeholder="Buscar producto..."
+                className={`w-full border rounded-xl px-3 py-2.5 text-sm outline-none ${form.sku_id ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200'}`} />
+              {productResults.length > 0 && !form.sku_id && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl z-10 max-h-48 overflow-y-auto">
+                  {productResults.map((p: any) => (
+                    <button key={p.id} type="button"
+                      onClick={() => { setForm(f => ({ ...f, sku_id: p.id, product_name: p.display || p.product_name })); setProductResults([]); }}
+                      className="w-full text-left px-4 py-2.5 hover:bg-amber-50 text-sm border-b last:border-0 border-slate-50">
+                      {p.display || p.product_name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Cantidad *</label>
+                <input required type="number" min={1} value={form.qty} onChange={e => setForm(f => ({ ...f, qty: parseInt(e.target.value) || 1 }))}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none" />
               </div>
-            </form>
-          </div>
-        </div>
+              <div>
+                <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Motivo *</label>
+                <select required value={form.motivo} onChange={e => setForm(f => ({ ...f, motivo: e.target.value }))}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none">
+                  {MOTIVOS.map(m => <option key={m}>{m}</option>)}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Notas adicionales</label>
+              <textarea rows={2} value={form.notas} onChange={e => setForm(f => ({ ...f, notas: e.target.value }))}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none resize-none" />
+            </div>
+          </form>
+        </Modal>
       )}
     </div>
   );
