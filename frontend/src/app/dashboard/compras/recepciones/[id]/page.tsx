@@ -9,6 +9,7 @@ import {
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { apiFetch } from '@/lib/api';
+import { Badge, Button } from '@/components/ui';
 
 const fDateLong = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 
@@ -19,15 +20,15 @@ const fDateLong = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO', 
 // se deriva localmente comparando qty_esperada vs qty_recibida mientras esta BORRADOR.
 function estadoInfo(estado: string, hasDiscrepancy: boolean) {
   if (estado === 'COMPLETADA' || estado === 'COMPLETADA_LOGISTICA') {
-    return { label: 'Validado (Facturable)', cls: 'bg-emerald-100 text-emerald-700 border-emerald-200', kind: 'validado' as const };
+    return { label: 'Validado (Facturable)', tone: 'success' as const, icon: ShieldCheck };
   }
   if (estado === 'CANCELADA') {
-    return { label: 'Cancelada', cls: 'bg-rose-100 text-rose-700 border-rose-200', kind: 'cancelada' as const };
+    return { label: 'Cancelada', tone: 'danger' as const, icon: undefined };
   }
   if (hasDiscrepancy) {
-    return { label: 'Discrepancia', cls: 'bg-amber-100 text-amber-700 border-amber-200', kind: 'discrepancia' as const };
+    return { label: 'Discrepancia', tone: 'warning' as const, icon: MessageSquareWarning };
   }
-  return { label: 'Pendiente de Conteo', cls: 'bg-slate-100 text-slate-700 border-slate-200', kind: 'pendiente' as const };
+  return { label: 'Pendiente de Conteo', tone: 'neutral' as const, icon: undefined };
 }
 
 export default function RecepcionDetallePage() {
@@ -232,11 +233,7 @@ export default function RecepcionDetallePage() {
               <h1 className="text-2xl font-black text-slate-800">
                 {data?.numero || String(params.id).toUpperCase()}
               </h1>
-              <span className={`px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-1.5 ${est.cls}`}>
-                {est.kind === 'validado' && <ShieldCheck size={14} />}
-                {est.kind === 'discrepancia' && <MessageSquareWarning size={14} />}
-                {est.label}
-              </span>
+              <Badge tone={est.tone} icon={est.icon}>{est.label}</Badge>
             </div>
           </div>
         </div>
@@ -244,12 +241,12 @@ export default function RecepcionDetallePage() {
         <div className="flex items-center gap-3">
           {isEditable ? (
             <>
-              <button onClick={guardarConteo} disabled={saving || confirming} className="flex items-center gap-2 px-4 py-2 border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 rounded-xl font-bold text-sm transition-colors shadow-sm disabled:opacity-50">
-                {saving ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />} Guardar Borrador
-              </button>
-              <button onClick={validateConteo} disabled={saving || confirming} className="flex items-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm transition-colors shadow-sm disabled:opacity-50">
-                {confirming ? <RefreshCw size={16} className="animate-spin" /> : <PackageCheck size={16} />} Cerrar y Validar Conteo
-              </button>
+              <Button variant="secondary" icon={Save} loading={saving} disabled={confirming} onClick={guardarConteo}>
+                Guardar Borrador
+              </Button>
+              <Button color="teal" icon={PackageCheck} loading={confirming} disabled={saving} onClick={validateConteo}>
+                Cerrar y Validar Conteo
+              </Button>
             </>
           ) : (
             <span className="text-xs font-bold text-slate-400 px-3 py-2">Recepcion no editable en este estado</span>
