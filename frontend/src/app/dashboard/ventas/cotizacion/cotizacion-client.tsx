@@ -7,22 +7,14 @@ import {
   FileText, Clock, CheckCircle2, DollarSign, Activity,
   Search, X, RefreshCw, AlertCircle, MoreVertical, Plus,
   Phone, Mail, MapPin, ChevronRight, ShieldAlert, Package,
-  Calculator, Send, Trash2, Edit2, Save, ArrowRight, ArrowLeft,
+  Calculator, Send, Trash2, Edit2, Save, ArrowRight,
   MessageCircle, ExternalLink, User, TrendingUp, ChevronDown, RotateCcw
 } from 'lucide-react';
 
 import { apiFetch, API_URL } from '@/lib/api';
 import { computeMarginPrice, MARGIN_PCT_CAP } from '@/lib/pricing';
-
-const SUB_MODULES = [
-  { name: 'Solicitud',      path: '/dashboard/ventas/solicitud' },
-  { name: 'Cotizacion',     path: '/dashboard/ventas/cotizacion' },
-  { name: 'Venta',          path: '/dashboard/ventas/venta' },
-  { name: 'Exportar Dia',   path: '/dashboard/ventas/exportar-dia' },
-  { name: 'Exportar Rango', path: '/dashboard/ventas/exportar-rango' },
-  { name: 'Sincronizacion', path: '/dashboard/ventas/sincronizacion' },
-  { name: 'Proyecciones',   path: '/dashboard/ventas/proyecciones' },
-];
+import { SubNav, PageHeader, StatCard, Modal, Button, Toast, EmptyState } from '@/components/ui';
+import { VEN_NAV } from '../ven-nav';
 
 const ESTADOS: Record<string, { label: string; color: string; bg: string; border: string }> = {
   BORRADOR:              { label: 'Borrador',              color: '#64748b', bg: '#f1f5f9', border: '#e2e8f0' },
@@ -33,24 +25,16 @@ const ESTADOS: Record<string, { label: string; color: string; bg: string; border
   VENCIDA:               { label: 'Vencida',               color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe' },
 };
 
-function Badge({ estado }: { estado: string }) {
+// Mapa de estados propio de Cotizacion (rico, varios estados reales del negocio) --
+// se mantiene como pastilla a medida en vez del Badge generico de tono semantico,
+// pero con la misma forma (rounded-full, border, text-xs font-bold, px-2.5 py-1).
+function EstadoBadge({ estado }: { estado: string }) {
   const cfg = ESTADOS[estado] || { label: estado, color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe' };
   return (
-    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold border"
+    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border"
       style={{ backgroundColor: cfg.bg, color: cfg.color, borderColor: cfg.border }}>
       {cfg.label}
     </span>
-  );
-}
-
-function Toast({ msg, type, onClose }: { msg: string; type: 'ok'|'err'; onClose: () => void }) {
-  useEffect(() => { const t = setTimeout(onClose, 3500); return () => clearTimeout(t); }, [onClose]);
-  return (
-    <div className={`fixed top-5 right-5 z-[100] px-5 py-3 rounded-2xl shadow-2xl font-bold text-sm flex items-center gap-3 ${type === 'ok' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'}`}>
-      {type === 'ok' ? <CheckCircle2 size={16}/> : <AlertCircle size={16}/>}
-      {msg}
-      <button onClick={onClose}><X size={14}/></button>
-    </div>
   );
 }
 
@@ -242,19 +226,20 @@ function CalculadorModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
-        <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-gradient-to-r from-amber-50 to-white">
-          <div>
-            <h3 className="font-extrabold text-xl text-slate-900 flex items-center gap-2">
-              <Calculator className="text-amber-600" size={20}/> Calculadora de Cotizacion
-            </h3>
-            <p className="text-xs text-slate-500 mt-0.5">{cot.numero} â€” {cot.customer_name}</p>
+    <Modal title="Calculadora de Cotización" subtitle={`${cot.numero} — ${cot.customer_name}`}
+      icon={Calculator} color="amber" maxWidth="3xl" onClose={onClose}
+      footer={(
+        <div className="w-full">
+          {error && (
+            <p className="text-xs text-red-600 font-bold mb-3 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>
+          )}
+          <div className="flex justify-end gap-3">
+            <Button variant="secondary" onClick={onClose}>Cancelar</Button>
+            <Button color="amber" icon={Save} onClick={handleSave}>Guardar Cotización</Button>
           </div>
-          <button onClick={onClose} className="p-2 text-slate-400 hover:bg-slate-100 rounded-xl"><X size={18}/></button>
         </div>
-
-        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+      )}>
+        <div className="space-y-5">
           {/* TRM */}
           <div className="grid grid-cols-3 gap-4">
             <div>
@@ -380,44 +365,27 @@ function CalculadorModal({
               className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400 outline-none" />
           </div>
         </div>
-
-        <div className="px-6 py-4 border-t border-slate-100 bg-slate-50">
-          {error && (
-            <p className="text-xs text-red-600 font-bold mb-3 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>
-          )}
-          <div className="flex justify-end gap-3">
-            <button onClick={onClose} className="px-5 py-2.5 rounded-xl border border-slate-300 text-slate-600 font-bold text-sm hover:bg-slate-100">Cancelar</button>
-            <button onClick={handleSave} className="px-6 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-sm shadow-md flex items-center gap-2">
-              <Save size={14}/> Guardar Cotizacion
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
 // â”€â”€ Delete Confirm Dialog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function DeleteConfirm({ cot, onConfirm, onCancel }: { cot: any; onConfirm: () => void; onCancel: () => void }) {
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4">
-        <div className="w-14 h-14 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
-          <Trash2 className="text-red-600" size={24}/>
-        </div>
-        <h3 className="font-extrabold text-xl text-slate-900 text-center mb-2">Eliminar Cotizacion</h3>
-        <p className="text-slate-500 text-center text-sm mb-2">
-          Â¿Estas seguro de eliminar <strong>{cot.numero}</strong>?
-        </p>
-        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-3 text-center mb-6">
-          La Solicitud de Cliente vinculada (<strong>{cot.sc_numero}</strong>) no sera eliminada y podra generar una nueva cotizacion.
-        </p>
-        <div className="flex gap-3">
-          <button onClick={onCancel} className="flex-1 py-3 rounded-xl border border-slate-300 text-slate-700 font-bold hover:bg-slate-50">Cancelar</button>
-          <button onClick={onConfirm} className="flex-1 py-3 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700">Si, Eliminar</button>
-        </div>
-      </div>
-    </div>
+    <Modal title="Eliminar Cotización" icon={Trash2} color="red" maxWidth="md" onClose={onCancel}
+      footer={(
+        <>
+          <Button variant="secondary" onClick={onCancel}>Cancelar</Button>
+          <Button variant="danger" onClick={onConfirm}>Sí, Eliminar</Button>
+        </>
+      )}>
+      <p className="text-slate-500 text-sm">
+        ¿Estás seguro de eliminar <strong>{cot.numero}</strong>?
+      </p>
+      <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-3">
+        La Solicitud de Cliente vinculada (<strong>{cot.sc_numero}</strong>) no será eliminada y podrá generar una nueva cotización.
+      </p>
+    </Modal>
   );
 }
 
@@ -425,95 +393,81 @@ function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm, onCan
   const anticipoYaPagado = Number(pven?.anticipo_cop || 0);
   const creditoAFavor = anticipoYaPagado - totalNuevo;
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4">
-        <div className="w-14 h-14 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-4">
-          <RotateCcw className="text-indigo-600" size={24}/>
+    <Modal title="Actualizar Pedido de Venta" icon={RotateCcw} color="indigo" maxWidth="md" onClose={onCancel}
+      footer={(
+        <div className="flex flex-col w-full gap-2">
+          <Button color="indigo" disabled={saving} onClick={onConfirm}>Sí, actualizar también el pedido</Button>
+          <Button variant="secondary" disabled={saving} onClick={onCancel}>Solo guardar la cotización</Button>
         </div>
-        <h3 className="font-extrabold text-xl text-slate-900 text-center mb-2">Actualizar Pedido de Venta</h3>
-        <p className="text-slate-500 text-center text-sm mb-4">
-          Esta cotizacion ya tiene el pedido <strong>{pven?.numero}</strong> generado. Los nuevos precios no se
-          reflejan alli automaticamente.
-        </p>
-        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 mb-6 flex items-center justify-center gap-3 text-sm">
-          <span className="text-slate-400 line-through">{fCOP(totalAnterior)}</span>
-          <ArrowRight size={14} className="text-slate-400"/>
-          <span className="font-black text-indigo-700">{fCOP(totalNuevo)}</span>
-        </div>
-        {creditoAFavor > 0 && (
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-xs text-amber-800">
-            <p className="font-bold mb-1">⚠ El cliente ya pago {fCOP(anticipoYaPagado)}, mas que el nuevo total.</p>
-            <p>Al continuar, el pedido quedara con un credito a favor del cliente de <strong>{fCOP(creditoAFavor)}</strong> (saldo negativo). Esto no genera el reembolso automaticamente -- coordina con el cliente o finanzas por separado.</p>
-          </div>
-        )}
-        <p className="text-[11px] text-slate-400 text-center mb-6">
-          El anticipo y los pagos ya registrados en el pedido no se modifican, solo productos y precios.
-        </p>
-        <div className="flex flex-col gap-2">
-          <button disabled={saving} onClick={onConfirm} className="py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 disabled:opacity-50">
-            Si, actualizar tambien el pedido
-          </button>
-          <button disabled={saving} onClick={onCancel} className="py-3 rounded-xl border border-slate-300 text-slate-700 font-bold hover:bg-slate-50 disabled:opacity-50">
-            Solo guardar la cotizacion
-          </button>
-        </div>
+      )}>
+      <p className="text-slate-500 text-sm">
+        Esta cotización ya tiene el pedido <strong>{pven?.numero}</strong> generado. Los nuevos precios no se
+        reflejan allí automáticamente.
+      </p>
+      <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center justify-center gap-3 text-sm">
+        <span className="text-slate-400 line-through">{fCOP(totalAnterior)}</span>
+        <ArrowRight size={14} className="text-slate-400"/>
+        <span className="font-black text-indigo-700">{fCOP(totalNuevo)}</span>
       </div>
-    </div>
+      {creditoAFavor > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
+          <p className="font-bold mb-1">⚠ El cliente ya pagó {fCOP(anticipoYaPagado)}, más que el nuevo total.</p>
+          <p>Al continuar, el pedido quedará con un crédito a favor del cliente de <strong>{fCOP(creditoAFavor)}</strong> (saldo negativo). Esto no genera el reembolso automáticamente -- coordina con el cliente o finanzas por separado.</p>
+        </div>
+      )}
+      <p className="text-[11px] text-slate-400 text-center">
+        El anticipo y los pagos ya registrados en el pedido no se modifican, solo productos y precios.
+      </p>
+    </Modal>
   );
 }
 
 export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, saving, customerHasPhone }: { selectedChannel: 'WhatsApp'|'Email'|'Otro'|null; onSelectChannel: (ch: 'WhatsApp'|'Email'|'Otro') => void; onConfirm: () => void; onCancel: () => void; saving: boolean; customerHasPhone: boolean }) {
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4">
-        <div className="w-14 h-14 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
-          <Send className="text-blue-600" size={24}/>
-        </div>
-        <h3 className="font-extrabold text-xl text-slate-900 text-center mb-2">Seleccionar Canal de Envio</h3>
-        <p className="text-slate-500 text-center text-sm mb-6">
-          ÂżPor cual canal deseas enviar la cotizacion?
-        </p>
-        <div className="space-y-2 mb-6">
-          <button
-            onClick={() => onSelectChannel('WhatsApp')}
-            disabled={!customerHasPhone}
-            className={`w-full py-3 px-4 rounded-xl border-2 font-bold text-left transition-all flex items-center gap-3 ${
-              selectedChannel === 'WhatsApp'
-                ? 'border-green-500 bg-green-50 text-green-700'
-                : customerHasPhone
-                ? 'border-slate-300 bg-white text-slate-700 hover:border-green-300'
-                : 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed'
-            }`}>
-            <Phone size={18}/>
-            <span>WhatsApp{!customerHasPhone ? ' (sin telefono)' : ''}</span>
-          </button>
-          <button
-            onClick={() => onSelectChannel('Email')}
-            className={`w-full py-3 px-4 rounded-xl border-2 font-bold text-left transition-all flex items-center gap-3 ${
-              selectedChannel === 'Email'
-                ? 'border-blue-500 bg-blue-50 text-blue-700'
-                : 'border-slate-300 bg-white text-slate-700 hover:border-blue-300'
-            }`}>
-            <Mail size={18}/>
-            <span>Email</span>
-          </button>
-          <button
-            onClick={() => onSelectChannel('Otro')}
-            className={`w-full py-3 px-4 rounded-xl border-2 font-bold text-left transition-all flex items-center gap-3 ${
-              selectedChannel === 'Otro'
-                ? 'border-slate-500 bg-slate-50 text-slate-700'
-                : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'
-            }`}>
-            <MessageCircle size={18}/>
-            <span>Otro</span>
-          </button>
-        </div>
-        <div className="flex gap-3">
-          <button onClick={onCancel} disabled={saving} className="flex-1 py-3 rounded-xl border border-slate-300 text-slate-700 font-bold hover:bg-slate-50 disabled:opacity-50">Cancelar</button>
-          <button onClick={onConfirm} disabled={!selectedChannel || saving} className="flex-1 py-3 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 disabled:opacity-50">Enviar</button>
-        </div>
+    <Modal title="Seleccionar Canal de Envío" subtitle="¿Por cuál canal deseas enviar la cotización?"
+      icon={Send} color="blue" maxWidth="md" onClose={onCancel}
+      footer={(
+        <>
+          <Button variant="secondary" disabled={saving} onClick={onCancel}>Cancelar</Button>
+          <Button color="blue" disabled={!selectedChannel || saving} onClick={onConfirm}>Enviar</Button>
+        </>
+      )}>
+      <div className="space-y-2">
+        <button
+          onClick={() => onSelectChannel('WhatsApp')}
+          disabled={!customerHasPhone}
+          className={`w-full py-3 px-4 rounded-xl border-2 font-bold text-left transition-all flex items-center gap-3 ${
+            selectedChannel === 'WhatsApp'
+              ? 'border-green-500 bg-green-50 text-green-700'
+              : customerHasPhone
+              ? 'border-slate-300 bg-white text-slate-700 hover:border-green-300'
+              : 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed'
+          }`}>
+          <Phone size={18}/>
+          <span>WhatsApp{!customerHasPhone ? ' (sin telefono)' : ''}</span>
+        </button>
+        <button
+          onClick={() => onSelectChannel('Email')}
+          className={`w-full py-3 px-4 rounded-xl border-2 font-bold text-left transition-all flex items-center gap-3 ${
+            selectedChannel === 'Email'
+              ? 'border-blue-500 bg-blue-50 text-blue-700'
+              : 'border-slate-300 bg-white text-slate-700 hover:border-blue-300'
+          }`}>
+          <Mail size={18}/>
+          <span>Email</span>
+        </button>
+        <button
+          onClick={() => onSelectChannel('Otro')}
+          className={`w-full py-3 px-4 rounded-xl border-2 font-bold text-left transition-all flex items-center gap-3 ${
+            selectedChannel === 'Otro'
+              ? 'border-slate-500 bg-slate-50 text-slate-700'
+              : 'border-slate-300 bg-white text-slate-700 hover:border-slate-400'
+          }`}>
+          <MessageCircle size={18}/>
+          <span>Otro</span>
+        </button>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -527,7 +481,7 @@ export default function CotizacionClient() {
   const [pageSize, setPageSize] = useState(25);
   const [selected, setSelected] = useState<any | null>(null);
   const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null);
+  const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'error' } | null>(null);
   const [currentUser, setCurrentUser] = useState('');
 
   // Panel state
@@ -551,7 +505,7 @@ export default function CotizacionClient() {
     setCurrentUser(u);
   }, []);
 
-  const showToast = (msg: string, type: 'ok' | 'err' = 'ok') => setToast({ msg, type });
+  const showToast = (msg: string, type: 'ok' | 'error' = 'ok') => setToast({ msg, type });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -587,7 +541,7 @@ export default function CotizacionClient() {
         direccion_entrega: d.direccion_entrega || '',
         estado: d.estado,
       });
-    } catch (err: any) { showToast('Error al cargar detalle: ' + err.message, 'err'); }
+    } catch (err: any) { showToast('Error al cargar detalle: ' + err.message, 'error'); }
   }
 
   async function saveEdit() {
@@ -604,7 +558,7 @@ export default function CotizacionClient() {
       setCotizaciones(prev => prev.map(c => c.id === cotId ? { ...c, ...d } : c));
       setEditMode(false);
       showToast('Cotizacion actualizada');
-    } catch (err: any) { showToast('Error: ' + err.message, 'err'); }
+    } catch (err: any) { showToast('Error: ' + err.message, 'error'); }
     setSavingEdit(false);
   }
 
@@ -620,7 +574,7 @@ export default function CotizacionClient() {
       await loadDetail(cotId);
       setCotizaciones(prev => prev.map(c => c.id === cotId ? { ...c, estado: newEstado } : c));
       showToast(`Estado cambiado a ${ESTADOS[newEstado]?.label || newEstado}`);
-    } catch (err: any) { showToast('Error: ' + err.message, 'err'); }
+    } catch (err: any) { showToast('Error: ' + err.message, 'error'); }
     setSaving(false);
   }
 
@@ -655,7 +609,7 @@ export default function CotizacionClient() {
       showToast('Cotizacion marcada como enviada al cliente. En espera de confirmacion.');
       setShowChannelModal(false);
       setSelectedChannel(null);
-    } catch (err: any) { showToast('Error: ' + err.message, 'err'); }
+    } catch (err: any) { showToast('Error: ' + err.message, 'error'); }
     setSaving(false);
   }
 
@@ -671,7 +625,7 @@ export default function CotizacionClient() {
     const hasProds = (selected.productos || []).length > 0;
     const hasNotes = (selected.notas || '').trim().length > 0;
     if (!hasProds && !hasNotes) {
-      showToast('No hay productos ni notas. Por favor cotiza primero o agrega informacion.', 'err');
+      showToast('No hay productos ni notas. Por favor cotiza primero o agrega informacion.', 'error');
       return;
     }
     if (!hasProds && hasNotes) {
@@ -689,7 +643,7 @@ export default function CotizacionClient() {
       showToast(`Pedido de Venta ${venObj?.numero || ''} creado exitosamente`);
       await loadDetail(cotId);
       load();
-    } catch (err: any) { showToast('Error: ' + err.message, 'err'); }
+    } catch (err: any) { showToast('Error: ' + err.message, 'error'); }
     setConfirming(false);
   }
 
@@ -706,7 +660,7 @@ export default function CotizacionClient() {
       setSelected(null);
       setShowDelete(false);
       load();
-    } catch (err: any) { showToast('Error: ' + err.message, 'err'); }
+    } catch (err: any) { showToast('Error: ' + err.message, 'error'); }
   }
 
   function onCalcSave(data: any) {
@@ -724,7 +678,7 @@ export default function CotizacionClient() {
   async function commitCalcSave(data: any, propagarAPven: boolean) {
     const cotId = Number(selected?.id ?? selected?.data?.id);
     if (!cotId || isNaN(cotId)) {
-      showToast('Error: ID de cotización no válido', 'err');
+      showToast('Error: ID de cotización no válido', 'error');
       return;
     }
     setSaving(true);
@@ -770,7 +724,7 @@ export default function CotizacionClient() {
       }
       setShowCalc(false);
       setPendingCalcData(null);
-    } catch (err: any) { showToast('Error: ' + err.message, 'err'); }
+    } catch (err: any) { showToast('Error: ' + err.message, 'error'); }
     setSaving(false);
   }
 
@@ -803,25 +757,10 @@ export default function CotizacionClient() {
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
 
       {/* Toast */}
-      {toast && <Toast msg={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+      <Toast toast={toast} onClose={() => setToast(null)} />
 
       {/* Sub-module nav */}
-      <div className="bg-white border-b border-slate-200 px-6 py-2 overflow-x-auto flex items-center gap-2 shadow-sm sticky top-0 z-30">
-        <Link href="/dashboard/ventas" className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold text-gray-500 hover:bg-gray-100 border border-gray-200 mr-2 transition-colors">
-          <ArrowLeft size={12}/> Hub
-        </Link>
-        <div className="w-px h-4 bg-gray-200 mr-1 shrink-0"/>
-        <span className="text-xs font-black text-slate-400 uppercase tracking-wider mr-4 shrink-0">Ventas:</span>
-        {SUB_MODULES.map(mod => (
-          <Link key={mod.name} href={mod.path}
-            className={`shrink-0 px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${
-              mod.path === '/dashboard/ventas/cotizacion'
-                ? 'bg-amber-600 text-white border-amber-600'
-                : 'text-slate-600 hover:bg-amber-50 hover:text-amber-700 border-transparent hover:border-amber-200'
-            }`}>{mod.name}
-          </Link>
-        ))}
-      </div>
+      <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas/cotizacion" color="amber" hub={{ href: '/dashboard/ventas' }} />
 
       {/* Alert Banner */}
       {(sinCalc > 0 || vencenPronto > 0 || sinAtender > 0) && (
@@ -842,44 +781,34 @@ export default function CotizacionClient() {
       <div className="p-8 max-w-[1600px] mx-auto space-y-8">
 
         {/* Header */}
-        <div className="flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">
-              <div className="bg-amber-100 text-amber-600 p-2 rounded-xl shadow-inner"><FileText size={24}/></div>
-              Cotizaciones
-            </h1>
-            <p className="text-slate-500 mt-2 font-medium">COT-YYYY#### â€” Genera precios, envia al cliente y confirma para crear Pedido de Venta.</p>
-          </div>
-          <div className="flex gap-3">
-            <button onClick={load} className="bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm shadow-sm">
-              <RefreshCw size={15} className={loading ? 'animate-spin' : ''}/> Actualizar
-            </button>
-            <Link href="/dashboard/ventas/solicitud" className="bg-amber-600 hover:bg-amber-700 text-white px-6 py-2.5 rounded-xl font-bold shadow-md flex items-center gap-2 text-sm">
-              <Plus size={16}/> Nueva desde SC
-            </Link>
-          </div>
-        </div>
+        <PageHeader
+          icon={FileText} color="amber"
+          title="Cotizaciones"
+          subtitle="COT-YYYY#### — Genera precios, envía al cliente y confirma para crear Pedido de Venta."
+          actions={(
+            <div className="flex gap-3">
+              <button onClick={load} className="bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm shadow-sm">
+                <RefreshCw size={15} className={loading ? 'animate-spin' : ''}/> Actualizar
+              </button>
+              <Link href="/dashboard/ventas/solicitud" className="bg-amber-600 hover:bg-amber-700 text-white px-6 py-2.5 rounded-xl font-bold shadow-md flex items-center gap-2 text-sm">
+                <Plus size={16}/> Nueva desde SC
+              </Link>
+            </div>
+          )}
+        />
 
         {/* KPI Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-amber-300 transition-all" onClick={() => setActiveTab('Activas')}>
-            <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 mb-4 group-hover:scale-110 transition-transform">
-              <FileText size={24}/>
-            </div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Activas</p>
-            <h2 className="text-4xl font-black text-slate-800">{activas.length}</h2>
-            <p className="text-xs font-bold text-amber-600 mt-2">{sinCalc > 0 ? `${sinCalc} sin precio` : 'Todas calculadas'}</p>
-          </div>
+          <StatCard icon={FileText} color="amber" label="Activas" value={activas.length}
+            hint={sinCalc > 0 ? `${sinCalc} sin precio` : 'Todas calculadas'}
+            onClick={() => setActiveTab('Activas')} />
 
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-emerald-300 transition-all" onClick={() => setActiveTab('Confirmadas')}>
-            <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 mb-4 group-hover:scale-110 transition-transform">
-              <CheckCircle2 size={24}/>
-            </div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Confirmadas</p>
-            <h2 className="text-4xl font-black text-slate-800">{confirmadas.length}</h2>
-            <p className="text-xs font-bold text-slate-500 mt-2">Generaron Pedido de Venta</p>
-          </div>
+          <StatCard icon={CheckCircle2} color="emerald" label="Confirmadas" value={confirmadas.length}
+            hint="Generaron Pedido de Venta"
+            onClick={() => setActiveTab('Confirmadas')} />
 
+          {/* Sin acento neutro/gris disponible en AccentColor -- se deja a medida para
+              conservar la misma paleta (slate) en vez de forzar un color del hub. */}
           <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-slate-300 transition-all">
             <div className="w-12 h-12 rounded-xl bg-slate-50 flex items-center justify-center text-slate-600 mb-4 group-hover:scale-110 transition-transform">
               <DollarSign size={24}/>
@@ -889,14 +818,9 @@ export default function CotizacionClient() {
             <p className="text-xs font-bold text-slate-400 mt-2">{confirmadas.length} cotizaciones cerradas</p>
           </div>
 
-          <div className="bg-gradient-to-br from-amber-500 to-orange-600 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden cursor-pointer" onClick={() => setActiveTab('Activas')}>
-            <div className="absolute right-0 top-0 opacity-10"><Activity size={100}/></div>
-            <p className="text-xs font-black text-amber-100 uppercase tracking-wider mb-1 relative z-10">Total Cotizaciones</p>
-            <h2 className="text-4xl font-black relative z-10">{cotizaciones.length}</h2>
-            <p className="text-xs font-bold text-amber-100 mt-2 relative z-10 flex items-center gap-1">
-              <TrendingUp size={12}/> {rechazadas.length} rechazadas
-            </p>
-          </div>
+          <StatCard icon={Activity} color="amber" variant="gradient" label="Total Cotizaciones" value={cotizaciones.length}
+            hint={`${rechazadas.length} rechazadas`}
+            onClick={() => setActiveTab('Activas')} />
         </div>
 
         {/* Main Table */}
@@ -965,10 +889,10 @@ export default function CotizacionClient() {
                     <p className="text-slate-400">Cargando cotizaciones...</p>
                   </td></tr>
                 ) : filtered.length === 0 ? (
-                  <tr><td colSpan={8} className="px-6 py-16 text-center text-slate-500 font-medium">
-                    No hay cotizaciones en esta categoria.
+                  <tr><td colSpan={8}>
+                    <EmptyState icon={FileText} message="No hay cotizaciones en esta categoría." />
                     {activeTab === 'Activas' && (
-                      <div className="mt-3">
+                      <div className="text-center pb-8 -mt-6">
                         <Link href="/dashboard/ventas/solicitud" className="inline-flex items-center gap-1 bg-amber-600 text-white px-4 py-2 rounded-xl font-bold text-xs hover:bg-amber-700">
                           <ArrowRight size={12}/> Ir a Solicitudes para crear una COT
                         </Link>
@@ -1009,7 +933,7 @@ export default function CotizacionClient() {
                           {fDate(cot.fecha_entrega_estimada)}
                         </span>
                       </td>
-                      <td className="px-6 py-4"><Badge estado={cot.estado}/></td>
+                      <td className="px-6 py-4"><EstadoBadge estado={cot.estado}/></td>
                       <td className="px-6 py-4">
                         <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                           <button onClick={e => { e.stopPropagation(); loadDetail(cot.id); }}
@@ -1077,21 +1001,15 @@ export default function CotizacionClient() {
                     {selected.sc_numero && <span className="ml-2 text-indigo-600">de {selected.sc_numero}</span>}
                   </p>
                 </div>
-                <Badge estado={selected.estado}/>
+                <EstadoBadge estado={selected.estado}/>
               </div>
               <div className="flex items-center gap-2">
                 {!editMode ? (
-                  <button onClick={() => setEditMode(true)}
-                    className="bg-white border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 flex items-center gap-1 hover:bg-slate-50">
-                    <Edit2 size={12}/> Editar
-                  </button>
+                  <Button size="sm" variant="secondary" icon={Edit2} onClick={() => setEditMode(true)}>Editar</Button>
                 ) : (
                   <>
-                    <button onClick={() => setEditMode(false)} className="bg-white border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-500 hover:bg-slate-50">Cancelar</button>
-                    <button onClick={saveEdit} disabled={savingEdit}
-                      className="bg-amber-600 text-white px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 hover:bg-amber-700 disabled:opacity-50">
-                      {savingEdit ? <RefreshCw size={12} className="animate-spin"/> : <Save size={12}/>} Guardar
-                    </button>
+                    <Button size="sm" variant="secondary" onClick={() => setEditMode(false)}>Cancelar</Button>
+                    <Button size="sm" color="amber" icon={Save} loading={savingEdit} onClick={saveEdit}>Guardar</Button>
                   </>
                 )}
                 <button onClick={() => { setSelected(null); setEditMode(false); }}
@@ -1332,33 +1250,35 @@ export default function CotizacionClient() {
                         <div className="grid grid-cols-2 gap-2">
 
                           {/* Calculadora / Re-Cotizar */}
-                          <button onClick={()=>{
-                            if(Number(selected.total_cop)>0){
-                              setCotHistory(h=>[...h,{fecha:new Date().toISOString(),total:selected.total_cop,anticipo:selected.anticipo_cop,productos:selected.productos}]);
-                            }
-                            setShowCalc(true);
-                          }}
-                            className={`col-span-2 ${Number(selected.total_cop)>0?'bg-orange-500 hover:bg-orange-600':'bg-amber-600 hover:bg-amber-700'} text-white px-4 py-3 rounded-xl font-bold flex items-center gap-2 shadow-md transition-colors`}>
-                            {Number(selected.total_cop)>0?<RotateCcw size={15}/>:<Calculator size={15}/>}
-                            {Number(selected.total_cop)>0?'Re-Cotizar â€” Actualizar Precios':'Cotiza â€” Calcular Precios'}
-                          </button>
+                          <div className="col-span-2">
+                            <Button size="lg" color={Number(selected.total_cop) > 0 ? 'orange' : 'amber'}
+                              icon={Number(selected.total_cop) > 0 ? RotateCcw : Calculator}
+                              onClick={()=>{
+                                if(Number(selected.total_cop)>0){
+                                  setCotHistory(h=>[...h,{fecha:new Date().toISOString(),total:selected.total_cop,anticipo:selected.anticipo_cop,productos:selected.productos}]);
+                                }
+                                setShowCalc(true);
+                              }}>
+                              {Number(selected.total_cop)>0?'Re-Cotizar — Actualizar Precios':'Cotiza — Calcular Precios'}
+                            </Button>
+                          </div>
 
                           {/* Enviar */}
                           {(selected.estado === 'BORRADOR' || selected.estado === 'ENVIADA') && (
-                            <button onClick={enviarCotizacion} disabled={saving}
-                              className="col-span-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 rounded-xl font-bold flex items-center gap-2 shadow-md disabled:opacity-50 transition-colors">
-                              {saving ? <RefreshCw size={14} className="animate-spin"/> : <Send size={14}/>}
-                              {selected.estado === 'ENVIADA' ? 'Re-enviar al Cliente' : 'Enviar al Cliente'}
-                            </button>
+                            <div className="col-span-2">
+                              <Button size="lg" color="blue" icon={Send} loading={saving} onClick={enviarCotizacion}>
+                                {selected.estado === 'ENVIADA' ? 'Re-enviar al Cliente' : 'Enviar al Cliente'}
+                              </Button>
+                            </div>
                           )}
 
                           {/* Confirmar */}
                           {(selected.estado === 'ENVIADA' || selected.estado === 'PENDIENTE_CONFIRMACION' || selected.estado === 'BORRADOR') && selected.estado !== 'CONFIRMADA' && (
-                            <button onClick={confirmar} disabled={confirming}
-                              className="col-span-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-3 rounded-xl font-bold flex items-center gap-2 shadow-md disabled:opacity-50 transition-colors">
-                              {confirming ? <RefreshCw size={14} className="animate-spin"/> : <CheckCircle2 size={14}/>}
-                              Confirmar + Crear Pedido de Venta
-                            </button>
+                            <div className="col-span-2">
+                              <Button size="lg" color="emerald" icon={CheckCircle2} loading={confirming} onClick={confirmar}>
+                                Confirmar + Crear Pedido de Venta
+                              </Button>
+                            </div>
                           )}
 
                           {/* Ver VEN */}
@@ -1434,9 +1354,9 @@ export default function CotizacionClient() {
                                 <p className="text-sm font-bold text-slate-700">{a.description}</p>
                                 {a.old_estado && a.new_estado && (
                                   <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
-                                    <Badge estado={a.old_estado}/>
+                                    <EstadoBadge estado={a.old_estado}/>
                                     <ArrowRight size={10} className="text-slate-300"/>
-                                    <Badge estado={a.new_estado}/>
+                                    <EstadoBadge estado={a.new_estado}/>
                                   </p>
                                 )}
                                 <p className="text-xs text-slate-400 mt-1">

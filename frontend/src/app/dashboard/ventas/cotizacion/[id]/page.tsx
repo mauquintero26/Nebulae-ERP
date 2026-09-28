@@ -10,6 +10,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
+import { Button } from '@/components/ui';
 import { ChannelModal } from '../cotizacion-client';
 
 const ESTADOS_COT: Record<string, {label:string; color:string; bg:string; border:string}> = {
@@ -219,7 +220,7 @@ export default function CotizacionDetallePage() {
                 {isNew ? 'Nueva Cotizacion' : (cotizacion?.numero || String(params.id || '').toUpperCase())}
               </h1>
               {!isNew && cotizacion && (
-                <span className="px-3 py-1 rounded-full text-xs font-bold border"
+                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold border"
                   style={{backgroundColor: estadoCfg.bg, color: estadoCfg.color, borderColor: estadoCfg.border}}>
                   {estadoCfg.label}
                 </span>
@@ -230,14 +231,10 @@ export default function CotizacionDetallePage() {
 
         <div className="flex items-center gap-3">
           {!isNew && estadoActual === 'BORRADOR' && (
-            <button onClick={handleEnviarCotizacion} disabled={sending} className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm transition-colors shadow-sm disabled:opacity-50">
-              {sending ? <RefreshCw size={16} className="animate-spin" /> : <Send size={16} />} Enviar al Cliente
-            </button>
+            <Button color="blue" icon={Send} loading={sending} onClick={handleEnviarCotizacion}>Enviar al Cliente</Button>
           )}
           {!isNew && (estadoActual === 'ENVIADA' || estadoActual === 'PENDIENTE_CONFIRMACION') && (
-            <button onClick={handleConfirmarVenta} disabled={confirming} className="flex items-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm transition-colors shadow-sm disabled:opacity-50">
-              {confirming ? <RefreshCw size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} Cliente Acepto (Generar Venta)
-            </button>
+            <Button color="emerald" icon={CheckCircle2} loading={confirming} onClick={handleConfirmarVenta}>Cliente Acepto (Generar Venta)</Button>
           )}
         </div>
       </div>
@@ -441,12 +438,12 @@ export default function CotizacionDetallePage() {
                     <div className="bg-indigo-600 rounded-lg px-2 py-1 text-white font-black text-xs">AI</div>
                     <div><p className="font-extrabold text-indigo-900 text-sm">Analisis de Cotizacion</p><p className="text-[10px] text-indigo-500">Nebulae Analytics</p></div>
                   </div>
-                  <button onClick={()=>{
+                  <Button size="sm" color="indigo" disabled={!cotizacion} onClick={()=>{
                     const prods = cotizacion?.productos || [];
                     const actividades = cotizacion?.actividades || [];
                     const txt=`ANALISIS DE COTIZACION\n\nEstado: ${estadoCfg.label}\nTotal: ${fCOP(cotizacion?.total_cop)}\nSubtotal: ${fCOP(cotizacion?.subtotal_cop)}\nDescuento: ${Number(cotizacion?.descuento_pct)||0}%\n\nArticulos: ${prods.length} linea(s)\n${prods.map((p:any)=>`- ${p.product_name||'Producto'} x${p.qty||0} - ${fCOP((Number(p.unit_price_cop)||0)*(Number(p.qty)||0))}`).join('\n')}\n\nActividad: ${actividades.length} evento(s) registrados.`;
                     setCotAnalisis(txt);
-                  }} disabled={!cotizacion} className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-50">Analizar</button>
+                  }}>Analizar</Button>
                 </div>
                 {!cotAnalisis&&<p className="text-xs text-indigo-700 italic text-center py-3">Genera un analisis con los precios, productos y estado de la cotizacion.</p>}
                 {cotAnalisis&&<pre className="text-xs text-slate-800 whitespace-pre-wrap font-medium leading-relaxed bg-white/70 rounded-xl p-3 border border-indigo-100 mt-2">{cotAnalisis}</pre>}
