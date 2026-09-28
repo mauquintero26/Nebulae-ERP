@@ -50,6 +50,16 @@ function Badge({ estado }: { estado: string }) {
 const fDate = (iso: string | null) =>
   iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 
+// InventoryOperationResponse (backend) solo trae *_warehouse_id -- nunca un
+// *_warehouse_name denormalizado. Antes este archivo hacia `t.source_warehouse_name
+// || t.source_warehouse_id`, que siempre caia al id crudo porque ese campo no
+// existe en la respuesta. Se resuelve el nombre localmente contra /inventory/warehouses,
+// igual que ya hacen ajustes/page.tsx e inventario/traslados/page.tsx.
+function whNameFrom(warehouses: any[], id: number | null | undefined) {
+  if (!id) return '-';
+  return warehouses.find((w: any) => w.id === id)?.name || `Bodega #${id}`;
+}
+
 export default function TrasladosPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -160,6 +170,8 @@ export default function TrasladosPage() {
     }
     setSaving(false);
   }
+
+  const whName = (id: number | null | undefined) => whNameFrom(warehouses, id);
 
   const enProceso = traslados.filter(t => t.status === 'DRAFT' || t.status === 'READY').length;
   const completados = traslados.filter(t => t.status === 'DONE').length;
@@ -336,8 +348,8 @@ export default function TrasladosPage() {
                   <tr key={t.id} onClick={() => setSelected(t)}
                     className={`hover:bg-slate-50/80 transition-colors group cursor-pointer ${selected?.id === t.id ? 'bg-orange-50/30' : ''}`}>
                     <td className="px-6 py-4 font-black text-orange-700">TRL-{String(t.id).padStart(4, '0')}</td>
-                    <td className="px-6 py-4 font-medium text-slate-800">{t.source_warehouse_name || t.source_warehouse_id || '-'}</td>
-                    <td className="px-6 py-4 font-medium text-slate-800">{t.dest_warehouse_name || t.dest_warehouse_id || '-'}</td>
+                    <td className="px-6 py-4 font-medium text-slate-800">{whName(t.source_warehouse_id)}</td>
+                    <td className="px-6 py-4 font-medium text-slate-800">{whName(t.dest_warehouse_id)}</td>
                     <td className="px-6 py-4 text-slate-600">{Math.ceil((t.movements?.length || 0) / 2)} producto(s)</td>
                     <td className="px-6 py-4 text-slate-600">{fDate(t.created_at)}</td>
                     <td className="px-6 py-4"><Badge estado={t.status || 'DRAFT'} /></td>
@@ -443,11 +455,11 @@ export default function TrasladosPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-slate-50 rounded-xl p-3">
                   <p className="text-xs text-slate-400 mb-1">Bodega Origen</p>
-                  <p className="font-bold text-sm text-slate-800">{selected.source_warehouse_name || selected.source_warehouse_id || '-'}</p>
+                  <p className="font-bold text-sm text-slate-800">{whName(selected.source_warehouse_id)}</p>
                 </div>
                 <div className="bg-slate-50 rounded-xl p-3">
                   <p className="text-xs text-slate-400 mb-1">Bodega Destino</p>
-                  <p className="font-bold text-sm text-slate-800">{selected.dest_warehouse_name || selected.dest_warehouse_id || '-'}</p>
+                  <p className="font-bold text-sm text-slate-800">{whName(selected.dest_warehouse_id)}</p>
                 </div>
                 <div className="bg-slate-50 rounded-xl p-3">
                   <p className="text-xs text-slate-400 mb-1">Fecha Creacion</p>
