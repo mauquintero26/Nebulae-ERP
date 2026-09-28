@@ -4,9 +4,11 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Users, ShieldAlert, UserPlus, Search, ShieldCheck,
   UserMinus, Mail, MapPin, Building, Key, RefreshCw,
-  CheckCircle2, AlertCircle, X, Shield, Lock
+  CheckCircle2, AlertCircle, Shield, Lock
 } from 'lucide-react';
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
+import { SubNav, PageHeader, Toast, Modal, Button } from '@/components/ui';
+import { ADM_NAV } from '../adm-nav';
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
   const res = await _apiFetch(path, opts);
@@ -126,15 +128,9 @@ export default function EmpleadosHub() {
 
   return (
     <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden animate-in fade-in">
-      {/* Toast Notification */}
-      {toast && (
-        <div className={`fixed bottom-6 right-6 z-50 px-5 py-3 rounded-2xl shadow-xl text-white text-sm font-semibold flex items-center gap-2 ${
-          toast.type === 'ok' ? 'bg-emerald-600' : 'bg-red-600'
-        }`}>
-          {toast.type === 'ok' ? <CheckCircle2 size={16}/> : <AlertCircle size={16}/>}
-          {toast.msg}
-        </div>
-      )}
+      <Toast toast={toast} onClose={() => setToast(null)} />
+
+      <SubNav label="Admin" items={ADM_NAV} currentPath="/dashboard/admin/empleados" color="indigo" />
 
       {/* Warning Banner */}
       <div className="bg-amber-50 border-b border-amber-200 px-8 py-2.5 flex items-center gap-3">
@@ -145,27 +141,21 @@ export default function EmpleadosHub() {
       </div>
 
       {/* Top Action Bar */}
-      <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between z-20 shadow-sm shrink-0">
-        <div>
-          <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2">
-            <Users className="text-indigo-600" size={22} /> Empleados, Roles & Permisos
-          </h1>
-          <p className="text-xs text-slate-500 font-medium mt-0.5">Control de cuentas de acceso y asignación de perfiles funcionales.</p>
-        </div>
-        <div className="flex gap-2.5">
-          <button
-            onClick={loadUsers}
-            className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-3.5 py-2 rounded-xl font-bold text-xs shadow-sm transition-colors flex items-center gap-1.5"
-          >
-            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Actualizar
-          </button>
-          <button
-            onClick={() => setShowModal(true)}
-            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl font-bold shadow-sm transition-colors text-xs flex items-center gap-1.5"
-          >
-            <UserPlus size={15} /> Nuevo Empleado
-          </button>
-        </div>
+      <div className="bg-white px-6 py-4 border-b border-slate-200 shrink-0">
+        <PageHeader icon={Users} color="indigo"
+          title="Empleados, Roles & Permisos"
+          subtitle="Control de cuentas de acceso y asignación de perfiles funcionales."
+          actions={(
+            <div className="flex gap-2.5">
+              <button
+                onClick={loadUsers}
+                className="bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-3.5 py-2 rounded-xl font-bold text-xs shadow-sm transition-colors flex items-center gap-1.5"
+              >
+                <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Actualizar
+              </button>
+              <Button color="indigo" size="sm" icon={UserPlus} onClick={() => setShowModal(true)}>Nuevo Empleado</Button>
+            </div>
+          )} />
       </div>
 
       <div className="flex-1 flex flex-row overflow-hidden">
@@ -309,19 +299,15 @@ export default function EmpleadosHub() {
 
       {/* Modal Nuevo Empleado */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 space-y-5">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div>
-                <h3 className="font-black text-lg text-slate-800">Registrar Nuevo Empleado</h3>
-                <p className="text-xs text-slate-400 mt-0.5">Crea la credencial de acceso para el equipo</p>
-              </div>
-              <button onClick={() => setShowModal(false)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full">
-                <X size={18} />
-              </button>
-            </div>
-
-            <form onSubmit={handleCreateUser} className="space-y-4">
+        <Modal title="Registrar Nuevo Empleado" subtitle="Crea la credencial de acceso para el equipo" icon={UserPlus} color="indigo"
+          onClose={() => setShowModal(false)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setShowModal(false)}>Cancelar</Button>
+              <Button type="submit" form="nuevo-empleado-form" color="indigo" loading={saving}>Crear Empleado</Button>
+            </>
+          )}>
+            <form id="nuevo-empleado-form" onSubmit={handleCreateUser} className="space-y-4">
               <div>
                 <label className="block text-xs font-black text-slate-500 uppercase mb-1">Correo Electrónico *</label>
                 <input
@@ -359,44 +345,27 @@ export default function EmpleadosHub() {
                 </select>
               </div>
 
-              <div className="pt-3 border-t border-slate-100 flex gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setShowModal(false)}
-                  className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black shadow-sm disabled:opacity-50"
-                >
-                  {saving ? 'Guardando...' : 'Crear Empleado'}
-                </button>
-              </div>
             </form>
-          </div>
-        </div>
+        </Modal>
       )}
 
       {/* Modal Confirmación de Cambio de Rol */}
       {confirmRoleModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in">
-          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full p-6 space-y-5 border border-slate-200">
-            <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
-              <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
-                <ShieldAlert size={20} />
-              </div>
-              <div className="flex-1">
-                <h3 className="font-black text-base text-slate-800">Confirmar Cambio de Rol</h3>
-                <p className="text-xs text-slate-400">Esta acción modifica los permisos de acceso inmediatamente</p>
-              </div>
-              <button onClick={() => setConfirmRoleModal(null)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full">
-                <X size={18} />
-              </button>
-            </div>
-
+        <Modal title="Confirmar Cambio de Rol" subtitle="Esta acción modifica los permisos de acceso inmediatamente" icon={ShieldAlert} color="amber"
+          onClose={() => setConfirmRoleModal(null)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setConfirmRoleModal(null)}>Cancelar</Button>
+              <Button color="indigo" loading={saving}
+                disabled={confirmRoleModal.user.id === 1 && confirmRoleModal.roleObj.id !== 'admin'}
+                onClick={async () => {
+                  await handleUpdateRole(confirmRoleModal.user.id, confirmRoleModal.roleObj.id);
+                  setConfirmRoleModal(null);
+                }}>
+                Aceptar y Asignar
+              </Button>
+            </>
+          )}>
             <div className="space-y-4">
               <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
                 <div className="flex justify-between text-xs">
@@ -433,29 +402,7 @@ export default function EmpleadosHub() {
                 </div>
               )}
             </div>
-
-            <div className="pt-2 border-t border-slate-100 flex gap-2.5">
-              <button
-                type="button"
-                onClick={() => setConfirmRoleModal(null)}
-                className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                disabled={saving || (confirmRoleModal.user.id === 1 && confirmRoleModal.roleObj.id !== 'admin')}
-                onClick={async () => {
-                  await handleUpdateRole(confirmRoleModal.user.id, confirmRoleModal.roleObj.id);
-                  setConfirmRoleModal(null);
-                }}
-                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {saving ? 'Aplicando...' : 'Aceptar y Asignar'}
-              </button>
-            </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

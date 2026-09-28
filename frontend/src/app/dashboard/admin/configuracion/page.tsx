@@ -1,10 +1,12 @@
 "use client";
 
 import { useState } from 'react';
-import { 
-  Settings, Building2, Paintbrush, Globe2, TerminalSquare, 
+import {
+  Settings, Building2, Paintbrush, Globe2, TerminalSquare,
   Barcode, ShieldAlert, KeyRound
 } from 'lucide-react';
+import { SubNav, PageHeader } from '@/components/ui';
+import { ADM_NAV } from '../adm-nav';
 
 const TABS = [
   { id: 'empresa', label: 'Info de la Empresa', icon: Building2 },
@@ -21,6 +23,8 @@ export default function ConfiguracionHub() {
   return (
     <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden animate-in fade-in">
       
+      <SubNav label="Admin" items={ADM_NAV} currentPath="/dashboard/admin/configuracion" color="red" />
+
       {/* Warning Banner */}
       <div className="bg-red-50 border-b border-red-200 px-8 py-3 flex items-center gap-3 shrink-0">
         <ShieldAlert className="text-red-600" size={20} />
@@ -29,10 +33,9 @@ export default function ConfiguracionHub() {
 
       {/* Top Header */}
       <div className="bg-white px-8 py-8 border-b border-slate-200 shrink-0">
-        <h1 className="text-3xl font-black text-slate-800 flex items-center gap-3">
-          <Settings className="text-slate-800" size={32} /> Configuración General
-        </h1>
-        <p className="text-slate-500 mt-2 font-medium">Personaliza el comportamiento global, marca blanca y llaves maestras de Nebulae.</p>
+        <PageHeader icon={Settings} color="red"
+          title="Configuración General"
+          subtitle="Personaliza el comportamiento global, marca blanca y llaves maestras de Nebulae." />
       </div>
 
       <div className="flex-1 flex overflow-hidden">

@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from 'react';
-import { 
+import {
   SlidersHorizontal, Search, Settings2, ShieldAlert
 } from 'lucide-react';
+import { SubNav, PageHeader, Button } from '@/components/ui';
+import { ADM_NAV } from '../adm-nav';
 
 const MODULES = ['CRM', 'Ventas', 'Compras', 'Inventario', 'Marketing', 'E-Commerce'];
 
@@ -13,6 +15,8 @@ export default function AjustesHub() {
   return (
     <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden animate-in fade-in">
       
+      <SubNav label="Admin" items={ADM_NAV} currentPath="/dashboard/admin/ajustes" color="rose" />
+
       {/* Warning Banner */}
       <div className="bg-red-50 border-b border-red-200 px-8 py-3 flex items-center gap-3">
         <ShieldAlert className="text-red-600" size={20} />
@@ -20,16 +24,11 @@ export default function AjustesHub() {
       </div>
 
       {/* Top Action Bar */}
-      <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between z-20 shadow-sm shrink-0">
-        <div>
-          <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2">
-            <SlidersHorizontal className="text-pink-600" size={24} /> Ajustes por Módulo
-          </h1>
-          <p className="text-sm text-slate-500 font-medium mt-1">Configura las variables y comportamientos por defecto de cada bloque.</p>
-        </div>
-        <button className="bg-slate-800 hover:bg-slate-900 text-white px-5 py-2.5 rounded-xl font-bold shadow-sm transition-colors">
-          Guardar Cambios Globales
-        </button>
+      <div className="bg-white px-6 py-4 border-b border-slate-200 shrink-0">
+        <PageHeader icon={SlidersHorizontal} color="rose"
+          title="Ajustes por Módulo"
+          subtitle="Configura las variables y comportamientos por defecto de cada bloque."
+          actions={<Button color="rose">Guardar Cambios Globales</Button>} />
       </div>
 
       <div className="flex-1 flex flex-row overflow-hidden">
