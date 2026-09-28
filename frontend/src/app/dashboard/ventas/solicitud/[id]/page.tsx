@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
+import { Badge, Button } from '@/components/ui';
 
 export default function SolicitudDetallePage() {
   const params = useParams();
@@ -80,7 +81,7 @@ export default function SolicitudDetallePage() {
       newEvents.push({
         id: Date.now() + 1, type: 'status', title: 'Cotización Creada (COT-0089)', 
         desc: 'Se ha creado el documento borrador para costear los artículos.', 
-        date: 'Ahora mismo', user: 'Sistema', icon: Box, color: 'text-purple-500 bg-purple-50'
+        date: 'Ahora mismo', user: 'Sistema', icon: Box, color: 'text-indigo-500 bg-indigo-50'
       });
     }
 
@@ -102,23 +103,15 @@ export default function SolicitudDetallePage() {
                 {isNew ? 'Nueva Solicitud' : String(params.id).toUpperCase()}
               </h1>
               {!isNew && (
-                <span className={`px-3 py-1 rounded-full text-xs font-bold border ${
-                  currentStatus === 'Pendiente Confirmación' ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-amber-100 text-amber-700 border-amber-200'
-                }`}>
-                  {currentStatus}
-                </span>
+                <Badge tone={currentStatus === 'Pendiente Confirmación' ? 'info' : 'warning'}>{currentStatus}</Badge>
               )}
             </div>
           </div>
         </div>
         
         <div className="flex items-center gap-3">
-          <button className="flex items-center gap-2 px-4 py-2 border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 rounded-xl font-bold text-sm transition-colors shadow-sm">
-            <Save size={16} /> Guardar Borrador
-          </button>
-          <button onClick={handleProcesarSolicitud} className="flex items-center gap-2 px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-sm transition-colors shadow-sm">
-            <CheckCircle2 size={16} /> Solicitud Creada (Procesar)
-          </button>
+          <Button variant="secondary" icon={Save}>Guardar Borrador</Button>
+          <Button color="indigo" icon={CheckCircle2} onClick={handleProcesarSolicitud}>Solicitud Creada (Procesar)</Button>
         </div>
       </div>
 
@@ -129,15 +122,15 @@ export default function SolicitudDetallePage() {
         <div className="flex-1 overflow-y-auto px-8 py-8 custom-scrollbar bg-white relative">
           
           {cotizacionGenerada && (
-            <div className="bg-purple-50 border border-purple-200 rounded-2xl p-4 mb-8 flex items-center justify-between shadow-sm animate-in fade-in slide-in-from-top-4">
+            <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-4 mb-8 flex items-center justify-between shadow-sm animate-in fade-in slide-in-from-top-4">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-purple-600 shadow-sm"><Box size={20}/></div>
+                <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-indigo-600 shadow-sm"><Box size={20}/></div>
                 <div>
-                  <h3 className="font-black text-purple-900">Cotización COT-0089 Generada Exitosamente</h3>
-                  <p className="text-sm text-purple-700">Se requiere asignar valores a los artículos para enviarla al cliente.</p>
+                  <h3 className="font-black text-indigo-900">Cotización COT-0089 Generada Exitosamente</h3>
+                  <p className="text-sm text-indigo-700">Se requiere asignar valores a los artículos para enviarla al cliente.</p>
                 </div>
               </div>
-              <Link href="/dashboard/ventas/cotizacion" className="bg-purple-600 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-sm hover:bg-purple-700 transition-colors">
+              <Link href="/dashboard/ventas/cotizacion" className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-sm hover:bg-indigo-700 transition-colors">
                 Ver Cotización
               </Link>
             </div>
@@ -147,21 +140,21 @@ export default function SolicitudDetallePage() {
           {!isNew && (
             <div className="bg-white p-6 border-b border-slate-100 mb-8 flex justify-between relative">
               <div className="absolute top-1/2 left-10 right-10 h-1 bg-slate-100 -translate-y-1/2 z-0" />
-              <div className={`absolute top-1/2 left-10 h-1 bg-purple-600 -translate-y-1/2 z-0 transition-all duration-500 ${currentStatus === 'Pendiente Confirmación' ? 'right-1/4' : 'right-1/2'}`} />
+              <div className={`absolute top-1/2 left-10 h-1 bg-indigo-600 -translate-y-1/2 z-0 transition-all duration-500 ${currentStatus === 'Pendiente Confirmación' ? 'right-1/4' : 'right-1/2'}`} />
               
               <div className="relative z-10 flex flex-col items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-purple-600 text-white flex items-center justify-center font-bold shadow-md shadow-purple-200"><CheckCircle2 size={16} /></div>
+                <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold shadow-md shadow-indigo-200"><CheckCircle2 size={16} /></div>
                 <span className="text-xs font-bold text-slate-800">Nuevo</span>
               </div>
               <div className="relative z-10 flex flex-col items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-purple-600 text-white flex items-center justify-center font-bold shadow-md shadow-purple-200"><CheckCircle2 size={16} /></div>
-                <span className="text-xs font-bold text-purple-700">En Proceso</span>
+                <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold shadow-md shadow-indigo-200"><CheckCircle2 size={16} /></div>
+                <span className="text-xs font-bold text-indigo-700">En Proceso</span>
               </div>
               <div className="relative z-10 flex flex-col items-center gap-2">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold transition-colors ${currentStatus === 'Pendiente Confirmación' ? 'bg-purple-600 text-white shadow-md shadow-purple-200' : 'bg-white border-2 border-slate-200 text-slate-300'}`}>
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold transition-colors ${currentStatus === 'Pendiente Confirmación' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200' : 'bg-white border-2 border-slate-200 text-slate-300'}`}>
                   {currentStatus === 'Pendiente Confirmación' ? <CheckCircle2 size={16} /> : <Circle size={16} />}
                 </div>
-                <span className={`text-xs font-bold ${currentStatus === 'Pendiente Confirmación' ? 'text-purple-700' : 'text-slate-400'}`}>Pendiente Conf.</span>
+                <span className={`text-xs font-bold ${currentStatus === 'Pendiente Confirmación' ? 'text-indigo-700' : 'text-slate-400'}`}>Pendiente Conf.</span>
               </div>
               <div className="relative z-10 flex flex-col items-center gap-2">
                 <div className="w-8 h-8 rounded-full bg-white border-2 border-slate-200 text-slate-300 flex items-center justify-center font-bold"><Circle size={16} /></div>
@@ -173,7 +166,7 @@ export default function SolicitudDetallePage() {
           {/* Área de Formulario Abierta (Sin Caja) */}
           <div className="max-w-4xl mx-auto">
             <h2 className="text-xl font-black text-slate-800 mb-8 flex items-center gap-2">
-              <FileText className="text-purple-600" size={24} /> Información Principal
+              <FileText className="text-indigo-600" size={24} /> Información Principal
             </h2>
 
             <div className="grid grid-cols-2 gap-8 mb-10">
@@ -184,9 +177,9 @@ export default function SolicitudDetallePage() {
                 <div className="flex items-center gap-2">
                   <div className="relative flex-1">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                    <input type="text" defaultValue={isNew ? '' : 'Empresa XYZ'} placeholder="Buscar cliente en DB..." className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-3 text-sm font-bold focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none transition-all text-slate-800" />
+                    <input type="text" defaultValue={isNew ? '' : 'Empresa XYZ'} placeholder="Buscar cliente en DB..." className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-3 text-sm font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-slate-800" />
                   </div>
-                  <button className="flex items-center justify-center gap-2 bg-purple-50 text-purple-700 border border-purple-200 px-4 py-3 rounded-xl font-bold text-sm hover:bg-purple-100 transition-colors shrink-0">
+                  <button className="flex items-center justify-center gap-2 bg-indigo-50 text-indigo-700 border border-indigo-200 px-4 py-3 rounded-xl font-bold text-sm hover:bg-indigo-100 transition-colors shrink-0">
                     <UserPlus size={16} /> Nuevo
                   </button>
                 </div>
@@ -194,7 +187,7 @@ export default function SolicitudDetallePage() {
 
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Fecha de Creación</label>
-                <input type="date" defaultValue="2026-08-26" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none transition-all text-slate-700" />
+                <input type="date" defaultValue="2026-08-26" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-slate-700" />
               </div>
               
               <div className="col-span-2">
@@ -202,21 +195,21 @@ export default function SolicitudDetallePage() {
                 <div className="grid grid-cols-3 gap-4">
                   <button 
                     onClick={() => setTipoSolicitud('cotizacion')}
-                    className={`flex flex-col items-center justify-center gap-3 p-5 rounded-2xl border-2 transition-all ${tipoSolicitud === 'cotizacion' ? 'border-purple-600 bg-purple-50 text-purple-700' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50'}`}
+                    className={`flex flex-col items-center justify-center gap-3 p-5 rounded-2xl border-2 transition-all ${tipoSolicitud === 'cotizacion' ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50'}`}
                   >
                     <Box size={28} />
                     <span className="text-sm font-bold">Por Cotización</span>
                   </button>
                   <button 
                     onClick={() => setTipoSolicitud('seguimiento')}
-                    className={`flex flex-col items-center justify-center gap-3 p-5 rounded-2xl border-2 transition-all ${tipoSolicitud === 'seguimiento' ? 'border-purple-600 bg-purple-50 text-purple-700' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50'}`}
+                    className={`flex flex-col items-center justify-center gap-3 p-5 rounded-2xl border-2 transition-all ${tipoSolicitud === 'seguimiento' ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50'}`}
                   >
                     <HelpCircle size={28} />
                     <span className="text-sm font-bold">Por Seguimiento</span>
                   </button>
                   <button 
                     onClick={() => setTipoSolicitud('devolucion')}
-                    className={`flex flex-col items-center justify-center gap-3 p-5 rounded-2xl border-2 transition-all ${tipoSolicitud === 'devolucion' ? 'border-purple-600 bg-purple-50 text-purple-700' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50'}`}
+                    className={`flex flex-col items-center justify-center gap-3 p-5 rounded-2xl border-2 transition-all ${tipoSolicitud === 'devolucion' ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50'}`}
                   >
                     <Archive size={28} />
                     <span className="text-sm font-bold">Por Devolución</span>
@@ -232,23 +225,23 @@ export default function SolicitudDetallePage() {
             {tipoSolicitud === 'cotizacion' && (
               <div className="animate-in fade-in slide-in-from-bottom-4">
                 <h3 className="text-base font-black text-slate-800 mb-6 flex items-center gap-2">
-                  <Box className="text-purple-600" size={20} /> Requerimientos de Cotización
+                  <Box className="text-indigo-600" size={20} /> Requerimientos de Cotización
                 </h3>
                 <div className="grid grid-cols-12 gap-6 bg-slate-50 p-6 rounded-2xl border border-slate-200">
                   <div className="col-span-5">
                     <label className="block text-xs font-bold text-slate-500 mb-2">Producto / Servicio</label>
-                    <input type="text" placeholder="Ej. Laptops Dell Latitude..." className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-purple-500 outline-none" />
+                    <input type="text" placeholder="Ej. Laptops Dell Latitude..." className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-indigo-500 outline-none" />
                   </div>
                   <div className="col-span-5">
                     <label className="block text-xs font-bold text-slate-500 mb-2">Atributos / Variantes</label>
-                    <input type="text" placeholder="Ej. 16GB RAM, 512GB SSD" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-purple-500 outline-none" />
+                    <input type="text" placeholder="Ej. 16GB RAM, 512GB SSD" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-indigo-500 outline-none" />
                   </div>
                   <div className="col-span-2">
                     <label className="block text-xs font-bold text-slate-500 mb-2">Cantidad</label>
-                    <input type="number" min="1" defaultValue="1" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-purple-500 outline-none text-center font-bold" />
+                    <input type="number" min="1" defaultValue="1" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-indigo-500 outline-none text-center font-bold" />
                   </div>
                   <div className="col-span-12 mt-2">
-                    <button className="text-purple-600 text-sm font-bold hover:text-purple-800 transition-colors flex items-center gap-2 bg-purple-50 px-4 py-2 rounded-lg w-fit">
+                    <button className="text-indigo-600 text-sm font-bold hover:text-indigo-800 transition-colors flex items-center gap-2 bg-indigo-50 px-4 py-2 rounded-lg w-fit">
                       <Plus size={16} /> Agregar otro producto
                     </button>
                   </div>
@@ -259,13 +252,13 @@ export default function SolicitudDetallePage() {
             {tipoSolicitud === 'seguimiento' && (
               <div className="animate-in fade-in slide-in-from-bottom-4">
                 <h3 className="text-base font-black text-slate-800 mb-6 flex items-center gap-2">
-                  <HelpCircle className="text-purple-600" size={20} /> Referencia de Seguimiento
+                  <HelpCircle className="text-indigo-600" size={20} /> Referencia de Seguimiento
                 </h3>
                 <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 max-w-2xl">
                   <label className="block text-xs font-bold text-slate-500 mb-3">ID de la Solicitud, Cotización o Venta a seguir</label>
                   <div className="relative">
                     <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                    <input type="text" placeholder="Ej. COT-0045, VEN-0102..." className="w-full bg-white border border-slate-200 rounded-xl pl-12 pr-4 py-3 text-sm font-bold text-slate-700 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none uppercase" />
+                    <input type="text" placeholder="Ej. COT-0045, VEN-0102..." className="w-full bg-white border border-slate-200 rounded-xl pl-12 pr-4 py-3 text-sm font-bold text-slate-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none uppercase" />
                   </div>
                   <p className="text-xs text-slate-500 mt-3 font-medium">El sistema enlazará automáticamente el historial del documento ingresado.</p>
                 </div>
@@ -275,25 +268,25 @@ export default function SolicitudDetallePage() {
             {tipoSolicitud === 'devolucion' && (
               <div className="animate-in fade-in slide-in-from-bottom-4">
                 <h3 className="text-base font-black text-slate-800 mb-6 flex items-center gap-2">
-                  <Archive className="text-purple-600" size={20} /> Expediente de Devolución
+                  <Archive className="text-indigo-600" size={20} /> Expediente de Devolución
                 </h3>
                 
                 <div className="space-y-6 bg-slate-50 p-6 rounded-2xl border border-slate-200">
                   <div className="max-w-md">
                     <label className="block text-xs font-bold text-slate-500 mb-2">ID de la Venta a devolver <span className="text-rose-500">*</span></label>
-                    <input type="text" placeholder="Ej. VEN-0012" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold focus:border-purple-500 outline-none uppercase" />
+                    <input type="text" placeholder="Ej. VEN-0012" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold focus:border-indigo-500 outline-none uppercase" />
                   </div>
                   
                   <div>
                     <label className="block text-xs font-bold text-slate-500 mb-2">Descripción y Motivos de la Devolución <span className="text-rose-500">*</span></label>
-                    <textarea rows={4} placeholder="Detalla aquí las razones expuestas por el cliente..." className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm focus:border-purple-500 outline-none resize-none"></textarea>
+                    <textarea rows={4} placeholder="Detalla aquí las razones expuestas por el cliente..." className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none resize-none"></textarea>
                   </div>
 
                   <div>
                     <label className="block text-xs font-bold text-slate-500 mb-2">Adjuntar Pruebas (Imágenes/Documentos)</label>
-                    <div className="border-2 border-dashed border-slate-300 rounded-2xl bg-white p-8 flex flex-col items-center justify-center text-slate-500 hover:border-purple-400 hover:bg-purple-50 transition-colors cursor-pointer group">
-                      <ImageIcon size={40} className="text-slate-300 group-hover:text-purple-500 mb-3 transition-colors" />
-                      <p className="text-base font-bold text-slate-700 group-hover:text-purple-700">Haz clic o arrastra las fotos aquí</p>
+                    <div className="border-2 border-dashed border-slate-300 rounded-2xl bg-white p-8 flex flex-col items-center justify-center text-slate-500 hover:border-indigo-400 hover:bg-indigo-50 transition-colors cursor-pointer group">
+                      <ImageIcon size={40} className="text-slate-300 group-hover:text-indigo-500 mb-3 transition-colors" />
+                      <p className="text-base font-bold text-slate-700 group-hover:text-indigo-700">Haz clic o arrastra las fotos aquí</p>
                       <p className="text-sm mt-2 font-medium text-slate-400">Archivos PNG, JPG o PDF soportados (Máx. 10MB)</p>
                     </div>
                   </div>
@@ -306,7 +299,7 @@ export default function SolicitudDetallePage() {
         {/* Resizer Handle */}
         <div 
           onMouseDown={handleMouseDown}
-          className="w-1.5 bg-slate-200 hover:bg-purple-500 cursor-col-resize shrink-0 transition-colors z-30"
+          className="w-1.5 bg-slate-200 hover:bg-indigo-500 cursor-col-resize shrink-0 transition-colors z-30"
           title="Arrastrar para ajustar panel de actividades"
         />
 
@@ -322,25 +315,21 @@ export default function SolicitudDetallePage() {
           {/* Activity Input Area */}
           <div className="p-5 border-b border-slate-200 bg-slate-50 z-10 shrink-0">
             <div className="flex gap-2 mb-4">
-              <button className="flex-1 flex items-center justify-center gap-2 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 py-2.5 rounded-xl text-xs font-bold transition-colors shadow-sm">
-                <MessageSquare size={16} /> Registrar Nota
-              </button>
-              <button className="flex-1 flex items-center justify-center gap-2 bg-purple-600 hover:bg-purple-700 text-white border border-purple-700 py-2.5 rounded-xl text-xs font-bold transition-colors shadow-sm">
-                <Mail size={16} /> Enviar al Cliente
-              </button>
+              <div className="flex-1 [&>button]:w-full"><Button variant="secondary" icon={MessageSquare}>Registrar Nota</Button></div>
+              <div className="flex-1 [&>button]:w-full"><Button color="indigo" icon={Mail}>Enviar al Cliente</Button></div>
             </div>
             
             <div className="relative">
               <textarea 
                 rows={3} 
                 placeholder="Escribe un mensaje o registra una nota interna..." 
-                className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-sm focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none resize-none transition-colors shadow-sm"
+                className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none resize-none transition-colors shadow-sm"
               />
               <div className="absolute bottom-3 left-3 flex gap-2">
-                <button className="p-1.5 text-slate-400 hover:text-purple-600 rounded-md hover:bg-purple-50 transition-colors"><Paperclip size={18} /></button>
-                <button className="p-1.5 text-slate-400 hover:text-purple-600 rounded-md hover:bg-purple-50 transition-colors"><ImageIcon size={18} /></button>
+                <button className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-md hover:bg-indigo-50 transition-colors"><Paperclip size={18} /></button>
+                <button className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-md hover:bg-indigo-50 transition-colors"><ImageIcon size={18} /></button>
               </div>
-              <button className="absolute bottom-3 right-3 bg-purple-600 hover:bg-purple-700 text-white p-2 rounded-lg shadow-sm transition-colors">
+              <button className="absolute bottom-3 right-3 bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg shadow-sm transition-colors">
                 <Send size={16} />
               </button>
             </div>

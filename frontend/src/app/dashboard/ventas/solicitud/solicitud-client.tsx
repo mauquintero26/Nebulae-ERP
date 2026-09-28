@@ -15,16 +15,8 @@ import {
 } from 'lucide-react';
 
 import { apiFetch, API_URL, getToken } from '@/lib/api';
-
-const SUB_MODULES = [
-  { name: 'Solicitud',      path: '/dashboard/ventas/solicitud' },
-  { name: 'Cotizacion',     path: '/dashboard/ventas/cotizacion' },
-  { name: 'Venta',          path: '/dashboard/ventas/venta' },
-  { name: 'Exportar Dia',   path: '/dashboard/ventas/exportar-dia' },
-  { name: 'Exportar Rango', path: '/dashboard/ventas/exportar-rango' },
-  { name: 'Sincronizacion', path: '/dashboard/ventas/sincronizacion' },
-  { name: 'Proyecciones',   path: '/dashboard/ventas/proyecciones' },
-];
+import { SubNav, PageHeader, StatCard, Badge as SharedBadge, Modal, Toast as SharedToast, Button, EmptyState } from '@/components/ui';
+import { VEN_NAV } from '../ven-nav';
 
 const TIPOS_SC = [
   'Cotizacion de Producto',
@@ -71,37 +63,34 @@ const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:
 const fTime = (iso: any) => iso ? new Date(iso).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}) : '';
 const fCOP  = (v: any)   => { const n=Number(v)||0; return n>0?'$'+n.toLocaleString('es-CO'):'-'; };
 
+// Mapa de 9 estados propios de Solicitud de Cliente -- se mantiene bespoke
+// (mas de los ~6 tonos semanticos que cubre el Badge compartido), pero la
+// forma de la pastilla ahora coincide con la de Badge (rounded-full, border,
+// text-xs font-bold, px-2.5 py-1).
 function EstadoBadge({estado}: {estado:string}) {
   const cfg = ESTADOS_SC[estado] || {label:estado,color:'#4338ca',bg:'#eef2ff',border:'#c7d2fe'};
   return (
-    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold border"
+    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border"
       style={{backgroundColor:cfg.bg,color:cfg.color,borderColor:cfg.border}}>
       {cfg.label}
     </span>
   );
 }
 
+// 6 tipos de solicitud con colores categoricos deliberadamente distintos
+// (indigo/blue/teal/orange/purple/emerald) que no colapsan limpiamente sobre
+// los 6 tonos semanticos de Badge (neutral/success/warning/danger/info/purple)
+// sin perder distincion real -- se mantiene bespoke, solo se alinea la forma.
 function TipoBadge({tipo}: {tipo:string}) {
   const map: Record<string,string> = {
-    'Cotizacion de Producto':'bg-indigo-100 text-indigo-700',
-    'Seguimiento':           'bg-blue-100 text-blue-700',
-    'Programar Entrega':     'bg-teal-100 text-teal-700',
-    'Devolucion de Producto':'bg-orange-100 text-orange-700',
-    'Soporte Tecnico':       'bg-purple-100 text-purple-700',
-    'Nuevo Lead':            'bg-emerald-100 text-emerald-700',
+    'Cotizacion de Producto':'bg-indigo-100 text-indigo-700 border-indigo-200',
+    'Seguimiento':           'bg-blue-100 text-blue-700 border-blue-200',
+    'Programar Entrega':     'bg-teal-100 text-teal-700 border-teal-200',
+    'Devolucion de Producto':'bg-orange-100 text-orange-700 border-orange-200',
+    'Soporte Tecnico':       'bg-purple-100 text-purple-700 border-purple-200',
+    'Nuevo Lead':            'bg-emerald-100 text-emerald-700 border-emerald-200',
   };
-  return <span className={`inline-flex px-2 py-0.5 rounded text-[11px] font-bold ${map[tipo]||'bg-slate-100 text-slate-600'}`}>{tipo||'Sin tipo'}</span>;
-}
-
-function Toast({msg,type,onClose}: {msg:string;type:'ok'|'err';onClose:()=>void}) {
-  useEffect(()=>{const t=setTimeout(onClose,4000);return()=>clearTimeout(t);},[onClose]);
-  return (
-    <div className={`fixed top-5 right-5 z-[100] px-5 py-3 rounded-2xl shadow-2xl font-bold text-sm flex items-center gap-3 text-white ${type==='ok'?'bg-emerald-600':'bg-red-600'}`}>
-      {type==='ok'?<CheckCircle2 size={16}/>:<AlertCircle size={16}/>}
-      <span>{msg}</span>
-      <button onClick={onClose}><X size={14}/></button>
-    </div>
-  );
+  return <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border ${map[tipo]||'bg-slate-100 text-slate-600 border-slate-200'}`}>{tipo||'Sin tipo'}</span>;
 }
 
 function ActionDot({action}: {action:string}) {
@@ -125,41 +114,32 @@ function NewClientModal({onSave, onClose}: {onSave:(c:any)=>void; onClose:()=>vo
     setSaving(false);
   }
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
-      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg mx-4">
-        <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-indigo-50 rounded-t-3xl">
-          <div>
-            <h3 className="font-extrabold text-lg text-slate-900 flex items-center gap-2"><UserPlus size={20} className="text-indigo-600"/>Nuevo Cliente</h3>
-            <p className="text-xs text-slate-500">El cliente no esta en la base de datos. Completar para continuar.</p>
-          </div>
-          <button onClick={onClose}><X size={18} className="text-slate-400"/></button>
+    <Modal title="Nuevo Cliente" subtitle="El cliente no esta en la base de datos. Completar para continuar." icon={UserPlus} color="indigo" onClose={onClose}
+      footer={(
+        <>
+          <Button variant="secondary" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" form="sc-new-client-form" color="indigo" icon={UserPlus} loading={saving}>Guardar Cliente</Button>
+        </>
+      )}>
+      <form id="sc-new-client-form" onSubmit={save} className="space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="text-xs font-bold text-slate-500 mb-1 block">Nombre *</label>
+            <input required value={form.first_name} onChange={e=>setForm(f=>({...f,first_name:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+          <div><label className="text-xs font-bold text-slate-500 mb-1 block">Apellido</label>
+            <input value={form.last_name} onChange={e=>setForm(f=>({...f,last_name:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
         </div>
-        <form onSubmit={save} className="p-6 space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="text-xs font-bold text-slate-500 mb-1 block">Nombre *</label>
-              <input required value={form.first_name} onChange={e=>setForm(f=>({...f,first_name:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-            <div><label className="text-xs font-bold text-slate-500 mb-1 block">Apellido</label>
-              <input value={form.last_name} onChange={e=>setForm(f=>({...f,last_name:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className="text-xs font-bold text-slate-500 mb-1 block">Telefono</label>
-              <input value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-            <div><label className="text-xs font-bold text-slate-500 mb-1 block">Email</label>
-              <input type="email" value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-          </div>
-          <div><label className="text-xs font-bold text-slate-500 mb-1 block">Direccion</label>
-            <input value={form.address} onChange={e=>setForm(f=>({...f,address:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-          <div><label className="text-xs font-bold text-slate-500 mb-1 block">Ciudad</label>
-            <input value={form.city} onChange={e=>setForm(f=>({...f,city:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-          <div className="flex gap-3 pt-2">
-            <button type="button" onClick={onClose} className="flex-1 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-bold text-sm">Cancelar</button>
-            <button type="submit" disabled={saving} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-bold text-sm shadow disabled:opacity-50 flex items-center justify-center gap-2">
-              {saving?<RefreshCw size={14} className="animate-spin"/>:<UserPlus size={14}/>} Guardar Cliente
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div><label className="text-xs font-bold text-slate-500 mb-1 block">Telefono</label>
+            <input value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+          <div><label className="text-xs font-bold text-slate-500 mb-1 block">Email</label>
+            <input type="email" value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+        </div>
+        <div><label className="text-xs font-bold text-slate-500 mb-1 block">Direccion</label>
+          <input value={form.address} onChange={e=>setForm(f=>({...f,address:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+        <div><label className="text-xs font-bold text-slate-500 mb-1 block">Ciudad</label>
+          <input value={form.city} onChange={e=>setForm(f=>({...f,city:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
+      </form>
+    </Modal>
   );
 }
 
@@ -914,20 +894,11 @@ export default function SolicitudClient() {
 
   return (
     <div className="w-full bg-slate-50 min-h-full">
-      {toast&&<Toast msg={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
+      {toast&&<SharedToast toast={{msg:toast.msg,type:toast.type==='ok'?'ok':'error'}} onClose={()=>setToast(null)}/>}
       {showNewClient&&<NewClientModal onSave={c=>{const cust=c?.data??c; setSelectedCust(cust);setCustSearch(`${cust.first_name||''} ${cust.last_name||''}`.trim());setCustResults([]);setShowNewClient(false);setShowCreate(true);showToast('Cliente creado exitosamente');}} onClose={()=>setShowNewClient(false)}/>}
 
       {/* Sub-module nav */}
-      <div className="bg-white border-b border-slate-200 px-6 py-2 overflow-x-auto flex items-center gap-2 shadow-sm sticky top-0 z-30">
-        <Link href="/dashboard/ventas" className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold text-gray-500 hover:bg-gray-100 border border-gray-200 mr-2 transition-colors">
-          <ArrowLeft size={12}/> Hub
-        </Link>
-        <div className="w-px h-4 bg-gray-200 mr-1 shrink-0"/>
-        <span className="text-xs font-black text-slate-400 uppercase tracking-wider mr-4 shrink-0">Ventas:</span>
-        {SUB_MODULES.map(mod=>(
-          <Link key={mod.name} href={mod.path} className={`shrink-0 px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${mod.path==='/dashboard/ventas/solicitud'?'bg-indigo-600 text-white border-indigo-600':'text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 border-transparent hover:border-indigo-200'}`}>{mod.name}</Link>
-        ))}
-      </div>
+      <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas/solicitud" color="indigo" hub={{ href: '/dashboard/ventas' }} />
 
       {/* Alert Banner */}
       {(sinAtender>0||vencidas>0)&&(
@@ -960,14 +931,19 @@ export default function SolicitudClient() {
 
       <div className="p-8 max-w-[1600px] mx-auto space-y-8">
         {/* Header */}
-        <div className="flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">
-              <div className="bg-indigo-100 text-indigo-600 p-2 rounded-xl"><FileText size={24}/></div>
-              Solicitudes de Cliente
-            </h1>
-            {/* Interactive Pipeline Component */}
-            <div className="mt-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-4 shadow-lg border border-indigo-900/50">
+        <PageHeader
+          icon={FileText} color="indigo"
+          title="Solicitudes de Cliente"
+          subtitle="Pipeline: Solicitud (SC) → Cotización (COT) → Pedido de Venta (PVEN)"
+          actions={(
+            <div className="flex gap-3">
+              <button onClick={load} className="bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm shadow-sm"><RefreshCw size={15} className={loading?'animate-spin':''}/> Actualizar</button>
+              <Button onClick={()=>setShowCreate(true)} color="indigo" icon={Plus}>Nueva Solicitud</Button>
+            </div>
+          )} />
+
+        {/* Interactive Pipeline Component */}
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-4 shadow-lg border border-indigo-900/50">
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                 {/* Steps Flow */}
                 <div className="flex items-center gap-2 sm:gap-4 overflow-x-auto pb-1 lg:pb-0">
@@ -1074,28 +1050,13 @@ export default function SolicitudClient() {
                 </div>
               )}
             </div>
-          </div>
-          <div className="flex gap-3">
-            <button onClick={load} className="bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm shadow-sm"><RefreshCw size={15} className={loading?'animate-spin':''}/> Actualizar</button>
-            <button onClick={()=>setShowCreate(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-2.5 rounded-xl font-bold shadow-md flex items-center gap-2 text-sm"><Plus size={16}/>Nueva Solicitud</button>
-          </div>
-        </div>
 
         {/* KPI Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          {[
-            {label:'Activas',val:totalActivas,sub:sinAtender>0?`${sinAtender} sin atender`:'Todas atendidas',cls:'border-amber-200 hover:border-amber-300',icls:'bg-amber-50 text-amber-600',icon:<FileText size={24}/>},
-            {label:'Confirmadas (COT)',val:totalConf,sub:`${totalConf} generaron cotizacion`,cls:'border-emerald-200 hover:border-emerald-300',icls:'bg-emerald-50 text-emerald-600',icon:<CheckCircle2 size={24}/>},
-            {label:'Canceladas',val:solicitudes.filter(s=>s.estado==='CANCELADA').length,sub:'Fuera del pipeline',cls:'border-red-200 hover:border-red-300',icls:'bg-red-50 text-red-500',icon:<X size={24}/>},
-            {label:'Total',val:solicitudes.length,sub:`${totalConf} convertidas a COT`,cls:'border-indigo-200 hover:border-indigo-300',icls:'bg-indigo-50 text-indigo-600',icon:<Activity size={24}/>},
-          ].map(card=>(
-            <div key={card.label} className={`bg-white rounded-2xl p-6 border shadow-sm cursor-pointer transition-all ${card.cls}`}>
-              <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-4 ${card.icls}`}>{card.icon}</div>
-              <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">{card.label}</p>
-              <h2 className="text-4xl font-black text-slate-800">{card.val}</h2>
-              <p className="text-xs font-bold text-slate-500 mt-2">{card.sub}</p>
-            </div>
-          ))}
+          <StatCard icon={FileText} label="Activas" value={totalActivas} hint={sinAtender>0?`${sinAtender} sin atender`:'Todas atendidas'} color="amber"/>
+          <StatCard icon={CheckCircle2} label="Confirmadas (COT)" value={totalConf} hint={`${totalConf} generaron cotizacion`} color="emerald"/>
+          <StatCard icon={X} label="Canceladas" value={solicitudes.filter(s=>s.estado==='CANCELADA').length} hint="Fuera del pipeline" color="red"/>
+          <StatCard icon={Activity} label="Total" value={solicitudes.length} hint={`${totalConf} convertidas a COT`} color="indigo"/>
         </div>
 
         {/* Table */}
@@ -1150,14 +1111,14 @@ export default function SolicitudClient() {
                 <p className="text-xs font-black text-slate-500 uppercase">Solicitudes en Papelera — Se eliminan permanentemente a los 30 días</p>
                 <button onClick={loadPapelera} className="text-xs text-slate-400 hover:text-slate-600 font-bold flex items-center gap-1"><RefreshCw size={11} className={loadingPapelera?'animate-spin':''}/> Actualizar</button>
               </div>
-              {loadingPapelera?<div className="flex justify-center py-8"><RefreshCw size={20} className="animate-spin text-slate-400"/></div>:papelera.length===0?<p className="text-center text-slate-400 py-8 text-sm">La papelera está vacía.</p>:(
+              {loadingPapelera?<div className="flex justify-center py-8"><RefreshCw size={20} className="animate-spin text-slate-400"/></div>:papelera.length===0?<EmptyState icon={Trash2} message="La papelera está vacía." hint="Las solicitudes canceladas aparecen aquí por 30 días."/>:(
                 <div className="space-y-2">
                   {papelera.map((sc:any)=>(
                     <div key={sc.id} className="bg-white border border-red-100 rounded-xl p-4 flex items-center justify-between hover:border-red-300 transition-colors">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="font-black text-red-700 text-sm">{sc.numero}</span>
-                          <span className="text-[10px] bg-red-100 text-red-600 px-2 py-0.5 rounded font-bold">{sc.tipo_solicitud||'SC'}</span>
+                          <SharedBadge tone="danger">{sc.tipo_solicitud||'SC'}</SharedBadge>
                         </div>
                         <p className="text-xs text-slate-600 font-medium">{sc.customer_name||'-'} — {sc.advisor_name||'-'}</p>
                         {sc.razon_cancelacion&&<p className="text-xs text-slate-500 mt-1 italic">Razón: {sc.razon_cancelacion}</p>}
@@ -1201,7 +1162,7 @@ export default function SolicitudClient() {
                 {loading?(
                   <tr><td colSpan={9} className="px-6 py-16 text-center"><RefreshCw size={24} className="animate-spin text-indigo-400 mx-auto mb-2"/><p className="text-slate-400">Cargando...</p></td></tr>
                 ):filtered.length===0?(
-                  <tr><td colSpan={9} className="px-6 py-16 text-center text-slate-500">No hay registros.</td></tr>
+                  <tr><td colSpan={9}><EmptyState icon={FileText} message="No hay registros." hint="Ajusta la búsqueda o el filtro, o crea una nueva solicitud."/></td></tr>
                 ):filtered.slice((currentPage-1)*pageSize, currentPage*pageSize).map(sc=>{
                   const isOverdue=sc.fecha_vencimiento&&new Date(sc.fecha_vencimiento)<new Date();
                   const isStale=(Date.now()-new Date(sc.updated_at||sc.fecha_solicitud).getTime())/3600000>alertDias*24;
@@ -1291,53 +1252,22 @@ export default function SolicitudClient() {
             <div className="p-6 space-y-8">
               {/* Analytics KPI Row */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-                <div className="bg-gradient-to-br from-indigo-50 to-white rounded-2xl p-5 border border-indigo-100 shadow-sm">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-black text-indigo-600 uppercase tracking-wider">Tasa de Conversión</span>
-                    <span className="p-2 rounded-xl bg-indigo-100 text-indigo-600"><TrendingUp size={16}/></span>
-                  </div>
-                  <h3 className="text-3xl font-black text-slate-900">
-                    {solicitudes.length > 0 ? ((totalConf / solicitudes.length) * 100).toFixed(1) : 0}%
-                  </h3>
-                  <p className="text-xs text-slate-500 font-semibold mt-1">
-                    {totalConf} de {solicitudes.length} pasaron a Cotización (COT)
-                  </p>
-                </div>
-
-                <div className="bg-gradient-to-br from-amber-50 to-white rounded-2xl p-5 border border-amber-100 shadow-sm">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-black text-amber-700 uppercase tracking-wider">Solicitudes Activas</span>
-                    <span className="p-2 rounded-xl bg-amber-100 text-amber-700"><Clock size={16}/></span>
-                  </div>
-                  <h3 className="text-3xl font-black text-slate-900">{totalActivas}</h3>
-                  <p className="text-xs text-amber-700 font-semibold mt-1">
-                    {sinAtender > 0 ? `${sinAtender} requieren atención urgente` : 'Todas en seguimiento regular'}
-                  </p>
-                </div>
-
-                <div className="bg-gradient-to-br from-rose-50 to-white rounded-2xl p-5 border border-rose-100 shadow-sm">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-black text-rose-600 uppercase tracking-wider">Cancelaciones</span>
-                    <span className="p-2 rounded-xl bg-rose-100 text-rose-600"><AlertTriangle size={16}/></span>
-                  </div>
-                  <h3 className="text-3xl font-black text-slate-900">
-                    {solicitudes.filter(s=>s.estado==='CANCELADA').length}
-                  </h3>
-                  <p className="text-xs text-rose-600 font-semibold mt-1">
-                    {solicitudes.length > 0 ? ((solicitudes.filter(s=>s.estado==='CANCELADA').length / solicitudes.length) * 100).toFixed(1) : 0}% tasa de descarte global
-                  </p>
-                </div>
-
-                <div className="bg-gradient-to-br from-emerald-50 to-white rounded-2xl p-5 border border-emerald-100 shadow-sm">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-black text-emerald-700 uppercase tracking-wider">Total Pipeline</span>
-                    <span className="p-2 rounded-xl bg-emerald-100 text-emerald-700"><CheckCircle2 size={16}/></span>
-                  </div>
-                  <h3 className="text-3xl font-black text-slate-900">{solicitudes.length}</h3>
-                  <p className="text-xs text-emerald-700 font-semibold mt-1">
-                    Histórico acumulado de requerimientos
-                  </p>
-                </div>
+                <StatCard icon={TrendingUp} color="indigo"
+                  label="Tasa de Conversión"
+                  value={`${solicitudes.length > 0 ? ((totalConf / solicitudes.length) * 100).toFixed(1) : 0}%`}
+                  hint={`${totalConf} de ${solicitudes.length} pasaron a Cotización (COT)`}/>
+                <StatCard icon={Clock} color="amber"
+                  label="Solicitudes Activas"
+                  value={totalActivas}
+                  hint={sinAtender > 0 ? `${sinAtender} requieren atención urgente` : 'Todas en seguimiento regular'}/>
+                <StatCard icon={AlertTriangle} color="rose"
+                  label="Cancelaciones"
+                  value={solicitudes.filter(s=>s.estado==='CANCELADA').length}
+                  hint={`${solicitudes.length > 0 ? ((solicitudes.filter(s=>s.estado==='CANCELADA').length / solicitudes.length) * 100).toFixed(1) : 0}% tasa de descarte global`}/>
+                <StatCard icon={CheckCircle2} color="emerald"
+                  label="Total Pipeline"
+                  value={solicitudes.length}
+                  hint="Histórico acumulado de requerimientos"/>
               </div>
 
               {/* Charts Section: Line & Bar & Donut */}
@@ -1807,11 +1737,11 @@ export default function SolicitudClient() {
               </div>
               <div className="flex items-center gap-2">
                 {!editMode?(
-                  <button onClick={()=>setEditMode(true)} className="bg-white border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 flex items-center gap-1 hover:bg-slate-50"><Edit2 size={12}/>Editar</button>
+                  <Button variant="secondary" size="sm" icon={Edit2} onClick={()=>setEditMode(true)}>Editar</Button>
                 ):(
                   <>
-                    <button onClick={()=>setEditMode(false)} className="bg-white border border-slate-200 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-500 hover:bg-slate-50">Cancelar</button>
-                    <button onClick={saveEdit} disabled={savingEdit} className="bg-indigo-600 text-white px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 hover:bg-indigo-700 disabled:opacity-50">{savingEdit?<RefreshCw size={12} className="animate-spin"/>:<Save size={12}/>}Guardar</button>
+                    <Button variant="secondary" size="sm" onClick={()=>setEditMode(false)}>Cancelar</Button>
+                    <Button color="indigo" size="sm" icon={Save} loading={savingEdit} onClick={saveEdit}>Guardar</Button>
                   </>
                 )}
                 <button onClick={()=>{setSelected(null);setEditMode(false);setPanelTab('info');}} className="p-2 text-slate-400 hover:bg-slate-100 rounded-xl"><X size={18}/></button>
@@ -1927,9 +1857,9 @@ export default function SolicitudClient() {
                         <p className="text-xs font-black text-slate-400 uppercase mb-3">Acciones Principales</p>
                         <div className="grid grid-cols-2 gap-2">
                           {(selected.estado==='BORRADOR'||selected.estado==='PENDIENTE_CONFIRMACION')&&(
-                            <button onClick={confirmarSC} disabled={confirming} className="col-span-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md disabled:opacity-50">
-                              {confirming?<RefreshCw size={14} className="animate-spin"/>:<CheckCircle2 size={14}/>}Confirmar + Crear Cotizacion
-                            </button>
+                            <div className="col-span-2 [&>button]:w-full">
+                              <Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Confirmar + Crear Cotizacion</Button>
+                            </div>
                           )}
                           {(selected.cotizaciones||[]).length>0&&(
                             <Link href={`/dashboard/ventas/cotizacion/${selected.cotizaciones[selected.cotizaciones.length-1].id}`} className="bg-amber-50 border border-amber-200 text-amber-700 px-4 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-amber-100 text-sm">
@@ -1982,54 +1912,42 @@ export default function SolicitudClient() {
 
       {/* MODAL: RAZÓN DE CANCELACIÓN */}
       {showCancelModal&&(
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-[90] p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden border border-red-100">
-            <div className="px-6 py-5 bg-red-50 border-b border-red-100 flex justify-between items-center">
-              <div>
-                <h3 className="font-extrabold text-lg text-red-900 flex items-center gap-2">
-                  <Trash2 size={18} className="text-red-600"/>Cancelar Solicitud
-                </h3>
-                <p className="text-xs text-red-600 mt-0.5">Esta acción pasará la SC a la papelera por 30 días antes de eliminarse.</p>
-              </div>
-              <button onClick={()=>setShowCancelModal(false)}><X size={18} className="text-slate-400"/></button>
-            </div>
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Razón de Cancelación *</label>
-                <textarea
-                  value={cancelRazon}
-                  onChange={e=>setCancelRazon(e.target.value)}
-                  rows={3}
-                  placeholder="Describe el motivo de la cancelación..."
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-red-200 outline-none"
-                  autoFocus
-                />
-                {!cancelRazon.trim()&&<p className="text-xs text-red-500 mt-1">La razón es obligatoria para continuar.</p>}
-              </div>
-              <div className="flex gap-3">
-                <button type="button" onClick={()=>setShowCancelModal(false)} className="flex-1 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-bold text-sm">No, mantener</button>
-                <button onClick={cancelWithReason} disabled={!cancelRazon.trim()||cancelling} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white font-bold text-sm shadow disabled:opacity-50 flex items-center justify-center gap-2">
-                  {cancelling?<RefreshCw size={14} className="animate-spin"/>:<Trash2 size={14}/>} Cancelar SC
-                </button>
-              </div>
-            </div>
+        <Modal title="Cancelar Solicitud" subtitle="Esta acción pasará la SC a la papelera por 30 días antes de eliminarse." icon={Trash2} color="red" maxWidth="md"
+          onClose={()=>setShowCancelModal(false)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={()=>setShowCancelModal(false)}>No, mantener</Button>
+              <Button variant="danger" icon={Trash2} loading={cancelling} disabled={!cancelRazon.trim()} onClick={cancelWithReason}>Cancelar SC</Button>
+            </>
+          )}>
+          <div>
+            <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Razón de Cancelación *</label>
+            <textarea
+              value={cancelRazon}
+              onChange={e=>setCancelRazon(e.target.value)}
+              rows={3}
+              placeholder="Describe el motivo de la cancelación..."
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-red-200 outline-none"
+              autoFocus
+            />
+            {!cancelRazon.trim()&&<p className="text-xs text-red-500 mt-1">La razón es obligatoria para continuar.</p>}
           </div>
-        </div>
+        </Modal>
       )}
 
       {/* Papelera view active */}
 
       {/* CREATE MODAL */}
       {showCreate&&(
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[92vh] overflow-hidden flex flex-col">
-            <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-gradient-to-r from-indigo-50 to-white flex-shrink-0">
-              <div><h3 className="font-extrabold text-xl text-slate-900">Nueva Solicitud de Cliente</h3><p className="text-xs text-slate-500 mt-0.5">El numero SC se asignara automaticamente</p></div>
-              <button onClick={()=>{setShowCreate(false);resetCreateForm();}}><X size={18} className="text-slate-400"/></button>
-            </div>
-
-            <form onSubmit={createSolicitud} className="flex-1 overflow-y-auto">
-              <div className="p-6 space-y-5">
+        <Modal title="Nueva Solicitud de Cliente" subtitle="El numero SC se asignara automaticamente" icon={Plus} color="indigo" maxWidth="3xl"
+          onClose={()=>{setShowCreate(false);resetCreateForm();}}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={()=>{setShowCreate(false);resetCreateForm();}}>Cancelar</Button>
+              <Button type="submit" form="sc-create-form" color="indigo" icon={Plus} loading={saving}>Crear Solicitud</Button>
+            </>
+          )}>
+          <form id="sc-create-form" onSubmit={createSolicitud} className="space-y-5">
                 {/* Cliente */}
                 <div>
                   <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Cliente *</label>
@@ -2224,17 +2142,8 @@ export default function SolicitudClient() {
                   <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Notas / Observaciones</label>
                   <textarea value={form.notas} onChange={e=>setForm(f=>({...f,notas:e.target.value}))} rows={3} placeholder="Detalles de la solicitud..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-200 outline-none"/>
                 </div>
-              </div>
-
-              <div className="px-6 py-4 border-t border-slate-100 flex justify-end gap-3 bg-slate-50 flex-shrink-0">
-                <button type="button" onClick={()=>{setShowCreate(false);resetCreateForm();}} className="px-5 py-2.5 rounded-xl border border-slate-300 text-slate-600 font-bold text-sm hover:bg-slate-100">Cancelar</button>
-                <button type="submit" disabled={saving} className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-md flex items-center gap-2 disabled:opacity-50">
-                  {saving?<RefreshCw size={14} className="animate-spin"/>:<Plus size={14}/>}Crear Solicitud
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+          </form>
+        </Modal>
       )}
     </div>
   );
