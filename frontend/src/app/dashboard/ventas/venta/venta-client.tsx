@@ -6,13 +6,15 @@ import {
   Search, RefreshCw, Plus, MoreHorizontal, X, Edit2, Save,
   Clock, Truck, FileText, FileCheck, Phone, Mail, MessageCircle,
   AlertCircle, ShoppingCart, TrendingUp, Activity, CheckCircle2,
-  Package, DollarSign, ChevronDown, ArrowLeft, ListChecks, ShoppingBag,
+  Package, DollarSign, ChevronDown, ListChecks, ShoppingBag,
   ExternalLink, UserPlus
 } from 'lucide-react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 
 import { apiFetch, API_URL, getToken } from '@/lib/api';
+import { SubNav, PageHeader, StatCard, Button, EmptyState, Toast, Modal } from '@/components/ui';
+import { VEN_NAV } from '../ven-nav';
 
 const fCOP  = (v: any) => { const n = Number(v)||0; return '$'+n.toLocaleString('es-CO'); };
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
@@ -25,17 +27,6 @@ const VEN_ESTADOS: Record<string, { bg: string; text: string; border: string; la
   FACTURADO:        { bg:'bg-green-100',  text:'text-green-700',  border:'border-green-200',  label:'Facturado' },
   CANCELADO:        { bg:'bg-red-100',    text:'text-red-700',    border:'border-red-200',    label:'Cancelado' },
 };
-
-const SUB_MODULES = [
-  { path:'/dashboard/ventas/solicitud',      label:'Solicitud' },
-  { path:'/dashboard/ventas/cotizacion',     label:'Cotizacion' },
-  { path:'/dashboard/ventas/venta',          label:'Venta' },
-  { path:'/dashboard/ventas/exportar-dia',   label:'Exportar Dia' },
-  { path:'/dashboard/ventas/exportar-rango', label:'Exportar Rango' },
-  { path:'/dashboard/ventas/sincronizacion', label:'Sincronizacion' },
-  { path:'/dashboard/ventas/proyecciones',   label:'Proyecciones' },
-];
-
 
 // ── IA Panel Venta ─────────────────────────────────────────────────────────────
 function IAPanelVenta({pedido,apiBase}:{pedido:any;apiBase:string}) {
@@ -112,31 +103,23 @@ function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClose:()=>
     setSaving(false);
   }
   return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
-      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg mx-4">
-        <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-purple-50 rounded-t-3xl">
-          <div><h3 className="font-black text-gray-900 text-lg">Nuevo Proveedor</h3><p className="text-xs text-gray-500 mt-0.5">Agregar a la agenda de proveedores</p></div>
-          <button onClick={onClose} className="p-2 hover:bg-purple-100 rounded-xl"><X size={18}/></button>
-        </div>
-        <form onSubmit={save} className="p-6 space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Nombre *</label><input required value={form.name} onChange={e=>set('name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Referencia / NIT</label><input value={form.reference} onChange={e=>set('reference',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Contacto</label><input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Telefono</label><input value={form.phone} onChange={e=>set('phone',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Email</label><input type="email" value={form.email} onChange={e=>set('email',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Ciudad</label><input value={form.city} onChange={e=>set('city',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Terminos de Pago</label><input value={form.payment_terms} onChange={e=>set('payment_terms',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-          </div>
-          <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
-            <button type="button" onClick={onClose} className="px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50">Cancelar</button>
-            <button type="submit" disabled={saving} className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2">
-              {saving?<RefreshCw size={14} className="animate-spin"/>:<UserPlus size={14}/>} Agregar Proveedor
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+    <Modal title="Nuevo Proveedor" subtitle="Agregar a la agenda de proveedores" icon={UserPlus} color="purple" onClose={onClose}
+      footer={(
+        <>
+          <Button variant="secondary" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" form="new-supplier-form" color="purple" icon={UserPlus} loading={saving}>Agregar Proveedor</Button>
+        </>
+      )}>
+      <form id="new-supplier-form" onSubmit={save} className="grid grid-cols-2 gap-4">
+        <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Nombre *</label><input required value={form.name} onChange={e=>set('name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+        <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Referencia / NIT</label><input value={form.reference} onChange={e=>set('reference',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+        <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Contacto</label><input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+        <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Telefono</label><input value={form.phone} onChange={e=>set('phone',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+        <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Email</label><input type="email" value={form.email} onChange={e=>set('email',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+        <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Ciudad</label><input value={form.city} onChange={e=>set('city',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+        <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Terminos de Pago</label><input value={form.payment_terms} onChange={e=>set('payment_terms',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+      </form>
+    </Modal>
   );
 }
 
@@ -149,7 +132,7 @@ export default function VentaClient() {
   const [pageSize, setPageSize]         = useState(25);
   const [selectedIds, setSelectedIds]   = useState<Set<number>>(new Set());
   const [selectedPedido, setSelectedPedido] = useState<any>(null);
-  const [toast, setToast]               = useState<{msg:string,type:'success'|'error'}|null>(null);
+  const [toast, setToast]               = useState<{msg:string,type:'ok'|'error'}|null>(null);
   const [isEditMode, setIsEditMode]     = useState(false);
   const [editForm, setEditForm]         = useState<any>({});
   const [panelTab, setPanelTab]         = useState<'actividad'|'chatter'>('actividad');
@@ -171,8 +154,8 @@ export default function VentaClient() {
   const [listaSaving, setListaSaving]     = useState(false);
   const supplierTimer = useRef<any>(null);
 
-  const showToast = (msg:string, type:'success'|'error'='success') => {
-    setToast({msg,type}); setTimeout(()=>setToast(null),3500);
+  const showToast = (msg:string, type:'ok'|'error'='ok') => {
+    setToast({msg,type});
   };
 
   const fetchPedidos = async () => {
@@ -350,86 +333,34 @@ export default function VentaClient() {
 
   return (
     <div className="flex flex-col min-h-screen bg-gray-50 font-sans text-gray-900">
-      {/* Toast */}
-      {toast&&(
-        <div className={`fixed top-5 right-5 z-[200] px-5 py-3 rounded-2xl shadow-xl text-sm font-bold flex items-center gap-2 ${toast.type==='error'?'bg-red-500 text-white':'bg-emerald-500 text-white'}`}>
-          {toast.msg}<button onClick={()=>setToast(null)}><X size={14}/></button>
-        </div>
-      )}
+      <Toast toast={toast} onClose={()=>setToast(null)} />
 
-      {/* Sub-module nav */}
-      <div className="bg-white border-b border-gray-200 px-6 py-2 flex items-center gap-1 sticky top-0 z-30 shadow-sm overflow-x-auto">
-        <Link href="/dashboard/ventas" className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold text-gray-500 hover:bg-gray-100 border border-gray-200 mr-2 transition-colors">
-          <ArrowLeft size={12}/> Hub
-        </Link>
-        <div className="w-px h-4 bg-gray-200 mr-2 shrink-0"/>
-        <span className="text-xs font-black text-gray-400 uppercase tracking-wider mr-3 shrink-0">VENTAS:</span>
-        {SUB_MODULES.map(m=>(
-          <Link key={m.path} href={m.path}
-            className={`shrink-0 px-4 py-1.5 rounded-full text-sm font-semibold border transition-colors ${m.label==='Venta'?'bg-indigo-600 text-white border-indigo-600':'text-gray-600 hover:bg-indigo-50 hover:text-indigo-700 border-transparent'}`}>
-            {m.label}
-          </Link>
-        ))}
-      </div>
+      <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas/venta" color="indigo" hub={{ href: '/dashboard/ventas' }} />
 
       {/* HEADER */}
       <div className="bg-white border-b border-gray-100 px-8 py-6">
-        <div className="flex justify-between items-start">
-          <div className="flex items-center gap-4">
-            <div className="bg-indigo-50 text-indigo-600 p-3 rounded-2xl">
-              <ShoppingCart size={30}/>
+        <PageHeader
+          icon={ShoppingCart} color="indigo"
+          title="Pedidos de Venta"
+          subtitle="PVEN-YYYY#### • Pipeline: SC → COT → PVEN → PEC → ENINV → PXP"
+          actions={(
+            <div className="flex items-center gap-3">
+              <button onClick={fetchPedidos} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 font-semibold text-sm shadow-sm">
+                <RefreshCw size={14} className={loading?'animate-spin':''}/> Actualizar
+              </button>
+              <Button color="indigo" icon={Plus}>Nuevo Pedido</Button>
             </div>
-            <div>
-              <h1 className="text-3xl font-black text-gray-900">Pedidos de Venta</h1>
-              <p className="text-sm text-gray-400 mt-0.5">PVEN-YYYY#### &nbsp;â€¢&nbsp; Pipeline: SC â†’ COT â†’ PVEN â†’ PEC â†’ ENINV â†’ PXP</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3 mt-1">
-            <button onClick={fetchPedidos} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 font-semibold text-sm shadow-sm">
-              <RefreshCw size={14} className={loading?'animate-spin':''}/> Actualizar
-            </button>
-            <button className="flex items-center gap-2 px-5 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 font-bold text-sm shadow-sm">
-              <Plus size={15}/> Nuevo Pedido
-            </button>
-          </div>
-        </div>
+          )} />
       </div>
 
       {/* KPI CARDS */}
       <div className="px-8 py-5 bg-white border-b border-gray-100">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="border border-gray-200 rounded-2xl p-5 hover:shadow-md transition-shadow">
-            <div className="bg-indigo-100 text-indigo-600 w-10 h-10 rounded-xl flex items-center justify-center mb-3">
-              <FileText size={20}/>
-            </div>
-            <p className="text-xs font-black text-gray-400 uppercase tracking-wide mb-1">Total Pedidos</p>
-            <p className="text-3xl font-black text-gray-900">{kpis.total}</p>
-            <p className="text-xs text-gray-400 mt-1">{pedidos.filter(p=>!['ENTREGADO','FACTURADO','CANCELADO'].includes(p.estado)).length} activos</p>
-          </div>
-          <div className="border border-gray-200 rounded-2xl p-5 hover:shadow-md transition-shadow">
-            <div className="bg-emerald-100 text-emerald-600 w-10 h-10 rounded-xl flex items-center justify-center mb-3">
-              <DollarSign size={20}/>
-            </div>
-            <p className="text-xs font-black text-gray-400 uppercase tracking-wide mb-1">Total Monto</p>
-            <p className="text-3xl font-black text-gray-900">{fCOP(kpis.monto)}</p>
-            <p className="text-xs text-gray-400 mt-1">COP acumulado</p>
-          </div>
-          <div className="border border-orange-200 bg-orange-50/30 rounded-2xl p-5 hover:shadow-md transition-shadow">
-            <div className="bg-orange-100 text-orange-600 w-10 h-10 rounded-xl flex items-center justify-center mb-3">
-              <Package size={20}/>
-            </div>
-            <p className="text-xs font-black text-gray-400 uppercase tracking-wide mb-1">Pendiente Compra</p>
-            <p className="text-3xl font-black text-orange-700">{kpis.pCompra}</p>
-            <p className="text-xs text-orange-500 mt-1">Requieren PEC</p>
-          </div>
-          <div className="border border-red-200 bg-red-50/30 rounded-2xl p-5 hover:shadow-md transition-shadow">
-            <div className="bg-red-100 text-red-600 w-10 h-10 rounded-xl flex items-center justify-center mb-3">
-              <AlertCircle size={20}/>
-            </div>
-            <p className="text-xs font-black text-gray-400 uppercase tracking-wide mb-1">Saldo Pendiente</p>
-            <p className="text-3xl font-black text-red-600">{fCOP(kpis.sCobro)}</p>
-            <p className="text-xs text-red-400 mt-1">Por cobrar</p>
-          </div>
+          <StatCard icon={FileText} color="indigo" label="Total Pedidos" value={kpis.total}
+            hint={`${pedidos.filter(p=>!['ENTREGADO','FACTURADO','CANCELADO'].includes(p.estado)).length} activos`} />
+          <StatCard icon={DollarSign} color="emerald" label="Total Monto" value={fCOP(kpis.monto)} hint="COP acumulado" />
+          <StatCard icon={Package} color="orange" label="Pendiente Compra" value={kpis.pCompra} hint="Requieren PEC" />
+          <StatCard icon={AlertCircle} color="red" label="Saldo Pendiente" value={fCOP(kpis.sCobro)} hint="Por cobrar" />
         </div>
       </div>
 
@@ -578,9 +509,8 @@ export default function VentaClient() {
                   Cargando pedidos...
                 </td></tr>
               ):filtered.length===0?(
-                <tr><td colSpan={9} className="text-center py-16 text-gray-400">
-                  <ShoppingCart size={36} className="mx-auto mb-3 opacity-25"/>
-                  <p className="font-medium">{search?`Sin resultados para "${search}"`:'Sin pedidos de venta'}</p>
+                <tr><td colSpan={9}>
+                  <EmptyState icon={ShoppingCart} message={search?`Sin resultados para "${search}"`:'Sin pedidos de venta'} />
                 </td></tr>
               ):filtered.slice((currentPage-1)*pageSize, currentPage*pageSize).map(p=>{
                 const st=VEN_ESTADOS[p.estado]||{bg:'bg-gray-100',text:'text-gray-700',border:'border-gray-200',label:p.estado};
@@ -598,7 +528,7 @@ export default function VentaClient() {
                     <td className="px-4 py-4 text-red-600 font-bold" onClick={()=>fetchDetail(p.id)}>{fCOP(p.saldo_cop)}</td>
                     <td className="px-4 py-4 text-gray-500 text-xs" onClick={()=>fetchDetail(p.id)}>{fDate(p.fecha_entrega_estimada)}</td>
                     <td className="px-4 py-4" onClick={()=>fetchDetail(p.id)}>
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-medium border ${st.bg} ${st.text} ${st.border}`}>{st.label}</span>
+                      <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${st.bg} ${st.text} ${st.border}`}>{st.label}</span>
                     </td>
                     <td className="px-4 py-4 text-right relative">
                       <button onClick={(e)=>{e.stopPropagation();setOpenMenu(isOpen?null:p.id);}}
@@ -675,11 +605,11 @@ export default function VentaClient() {
               <div>
                 <div className="flex items-center gap-3">
                   <h2 className="text-xl font-black text-gray-900">Pedido {selectedPedido.numero}</h2>
-                  <span className={`px-3 py-1 rounded-full text-xs font-medium border ${(VEN_ESTADOS[selectedPedido.estado]||{bg:'bg-gray-100',text:'text-gray-700',border:'border-gray-200'}).bg} ${(VEN_ESTADOS[selectedPedido.estado]||{}).text} ${(VEN_ESTADOS[selectedPedido.estado]||{}).border}`}>
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${(VEN_ESTADOS[selectedPedido.estado]||{bg:'bg-gray-100',text:'text-gray-700',border:'border-gray-200'}).bg} ${(VEN_ESTADOS[selectedPedido.estado]||{}).text} ${(VEN_ESTADOS[selectedPedido.estado]||{}).border}`}>
                     {(VEN_ESTADOS[selectedPedido.estado]||{label:selectedPedido.estado}).label}
                   </span>
                 </div>
-                <p className="text-xs text-gray-400 mt-0.5">{selectedPedido.customer_name} &nbsp;â€¢&nbsp; {fDate(selectedPedido.created_at)}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{selectedPedido.customer_name} &nbsp;•&nbsp; {fDate(selectedPedido.created_at)}</p>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -869,9 +799,7 @@ export default function VentaClient() {
               {/* Action buttons row */}
               <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 flex flex-wrap gap-2">
                 {!selectedPedido.pxp_id&&(
-                  <button onClick={()=>handleCrearPXP(selectedPedido.id)} className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 shadow-sm">
-                    <DollarSign size={14}/> Crear PXP
-                  </button>
+                  <Button color="emerald" icon={DollarSign} onClick={()=>handleCrearPXP(selectedPedido.id)}>Crear PXP</Button>
                 )}
                 {selectedPedido.pxp_numero&&(
                   <span className="flex items-center gap-1.5 px-4 py-2 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-sm font-bold">
@@ -879,21 +807,15 @@ export default function VentaClient() {
                   </span>
                 )}
                 {!['ENTREGADO','FACTURADO','CANCELADO'].includes(selectedPedido.estado)&&(
-                  <button onClick={()=>openCancelModal(selectedPedido.id)} className="flex items-center gap-2 px-4 py-2 bg-white border border-red-200 text-red-600 rounded-xl text-sm font-bold hover:bg-red-50">
-                    <X size={14}/> Cancelar Pedido
-                  </button>
+                  <Button variant="danger" icon={X} onClick={()=>openCancelModal(selectedPedido.id)}>Cancelar Pedido</Button>
                 )}
                 <div className="flex-1"/>
                 <button className="flex items-center gap-1.5 px-3 py-2 bg-[#25D366] text-white rounded-xl text-sm font-bold hover:bg-[#1ebe5d] shadow-sm"
                   onClick={()=>{if(selectedPedido.customer_phone) window.open(`https://wa.me/57${selectedPedido.customer_phone.replace(/\D/g,'')}?text=Hola,%20somos%20Nebulae.%20Su%20pedido%20${selectedPedido.numero}...`,'_blank');}}>
                   <MessageCircle size={14}/> WhatsApp
                 </button>
-                <button className="flex items-center gap-1.5 px-3 py-2 bg-gray-200 text-gray-700 rounded-xl text-sm font-bold hover:bg-gray-300">
-                  <Phone size={14}/> Llamar
-                </button>
-                <button className="flex items-center gap-1.5 px-3 py-2 bg-gray-200 text-gray-700 rounded-xl text-sm font-bold hover:bg-gray-300">
-                  <Mail size={14}/> Email
-                </button>
+                <Button variant="secondary" size="md" icon={Phone}>Llamar</Button>
+                <Button variant="secondary" size="md" icon={Mail}>Email</Button>
               </div>
 
               {/* Actividad/Chatter area */}
@@ -973,88 +895,75 @@ export default function VentaClient() {
 
       {/* â”€â”€â”€ MODAL CREAR PEC â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
       {showPecModal && selectedPedido && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg">
-            <div className="px-6 py-5 border-b border-gray-100 flex justify-between items-center bg-gradient-to-r from-purple-50 to-white rounded-t-3xl">
-              <div>
-                <h3 className="text-xl font-black text-gray-900 flex items-center gap-2">
-                  <ShoppingCart size={20} className="text-purple-600"/> Crear Pedido de Compra
-                </h3>
-                <p className="text-sm text-gray-500 mt-0.5">Vinculado a <strong>{selectedPedido.numero}</strong> â€” {selectedPedido.customer_name}</p>
-              </div>
-              <button onClick={()=>setShowPecModal(false)} className="p-2 text-gray-400 hover:bg-gray-100 rounded-xl"><X size={18}/></button>
-            </div>
-            <div className="p-6 space-y-4">
-              {/* Productos summary */}
-              {(selectedPedido.productos||[]).length > 0 && (
-                <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
-                  <p className="text-xs font-black text-gray-400 uppercase mb-2">Productos a comprar</p>
-                  <div className="space-y-1">
-                    {(selectedPedido.productos||[]).slice(0,5).map((p:any,i:number)=>(
-                      <div key={i} className="flex justify-between text-xs text-gray-700">
-                        <span className="truncate max-w-[260px]">{p.product_name||p.descripcion||p.producto_nombre}</span>
-                        <span className="font-bold ml-2 shrink-0">Ã— {p.qty??p.cantidad}</span>
-                      </div>
-                    ))}
-                    {(selectedPedido.productos||[]).length > 5 && (
-                      <p className="text-xs text-gray-400">+{(selectedPedido.productos||[]).length - 5} mÃ¡s...</p>
-                    )}
+        <Modal title="Crear Pedido de Compra" icon={ShoppingCart} color="purple"
+          subtitle={`Vinculado a ${selectedPedido.numero} — ${selectedPedido.customer_name}`}
+          onClose={()=>setShowPecModal(false)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={()=>setShowPecModal(false)}>Cancelar</Button>
+              <Button color="purple" icon={ShoppingCart} loading={pecSaving} onClick={handleCrearPEC}>Crear PEC</Button>
+            </>
+          )}>
+          {/* Productos summary */}
+          {(selectedPedido.productos||[]).length > 0 && (
+            <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
+              <p className="text-xs font-black text-gray-400 uppercase mb-2">Productos a comprar</p>
+              <div className="space-y-1">
+                {(selectedPedido.productos||[]).slice(0,5).map((p:any,i:number)=>(
+                  <div key={i} className="flex justify-between text-xs text-gray-700">
+                    <span className="truncate max-w-[260px]">{p.product_name||p.descripcion||p.producto_nombre}</span>
+                    <span className="font-bold ml-2 shrink-0">× {p.qty??p.cantidad}</span>
                   </div>
-                </div>
-              )}
-              {/* Proveedor */}
-              <div>
-                <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Proveedor</label>
-                <input value={supplierSearch} onChange={e=>onSupplierSearch(e.target.value)}
-                  placeholder="Buscar proveedor..." className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
-                {suppliers.length > 0 && (
-                  <div className="border border-gray-200 rounded-xl shadow-lg mt-1 max-h-36 overflow-y-auto z-10">
-                    {suppliers.map((s:any)=>(
-                      <button key={s.id} onClick={()=>{setSelectedSupplier(s);setSupplierSearch(s.name);setSuppliers([]);}}
-                        className="w-full text-left px-4 py-2.5 hover:bg-purple-50 text-sm font-medium border-b last:border-0">
-                        {s.name} {s.city&&<span className="text-gray-400">Â· {s.city}</span>}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {selectedSupplier && (
-                  <p className="text-xs text-purple-700 font-bold mt-1 flex items-center gap-1">
-                    <CheckCircle2 size={12}/> {selectedSupplier.name} seleccionado
-                  </p>
+                ))}
+                {(selectedPedido.productos||[]).length > 5 && (
+                  <p className="text-xs text-gray-400">+{(selectedPedido.productos||[]).length - 5} más...</p>
                 )}
               </div>
-              {/* Dias + Modalidad */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Dias Entrega Estimada</label>
-                  <input type="number" min="1" value={pecForm.dias_entrega} onChange={e=>setPecForm(f=>({...f,dias_entrega:Number(e.target.value)}))}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
-                </div>
-                <div>
-                  <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Modalidad de Pago</label>
-                  <select value={pecForm.modalidad_pago} onChange={e=>setPecForm(f=>({...f,modalidad_pago:e.target.value}))}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200">
-                    {['Contado','Credito 30d','Credito 60d','Adelanto 50%','Contra entrega'].map(p=><option key={p}>{p}</option>)}
-                  </select>
-                </div>
-              </div>
-              {/* Notas */}
-              <div>
-                <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Notas</label>
-                <textarea value={pecForm.notas} onChange={e=>setPecForm(f=>({...f,notas:e.target.value}))}
-                  rows={2} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none outline-none focus:ring-2 focus:ring-purple-200"/>
-              </div>
             </div>
-            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3 bg-gray-50 rounded-b-3xl">
-              <button onClick={()=>setShowPecModal(false)} className="px-5 py-2.5 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-white">Cancelar</button>
-              <button onClick={handleCrearPEC} disabled={pecSaving}
-                className="px-6 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50">
-                {pecSaving ? <RefreshCw size={14} className="animate-spin"/> : <ShoppingCart size={14}/>}
-                Crear PEC
-              </button>
+          )}
+          {/* Proveedor */}
+          <div>
+            <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Proveedor</label>
+            <input value={supplierSearch} onChange={e=>onSupplierSearch(e.target.value)}
+              placeholder="Buscar proveedor..." className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
+            {suppliers.length > 0 && (
+              <div className="border border-gray-200 rounded-xl shadow-lg mt-1 max-h-36 overflow-y-auto z-10">
+                {suppliers.map((s:any)=>(
+                  <button key={s.id} onClick={()=>{setSelectedSupplier(s);setSupplierSearch(s.name);setSuppliers([]);}}
+                    className="w-full text-left px-4 py-2.5 hover:bg-purple-50 text-sm font-medium border-b last:border-0">
+                    {s.name} {s.city&&<span className="text-gray-400">· {s.city}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+            {selectedSupplier && (
+              <p className="text-xs text-purple-700 font-bold mt-1 flex items-center gap-1">
+                <CheckCircle2 size={12}/> {selectedSupplier.name} seleccionado
+              </p>
+            )}
+          </div>
+          {/* Dias + Modalidad */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Dias Entrega Estimada</label>
+              <input type="number" min="1" value={pecForm.dias_entrega} onChange={e=>setPecForm(f=>({...f,dias_entrega:Number(e.target.value)}))}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
+            </div>
+            <div>
+              <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Modalidad de Pago</label>
+              <select value={pecForm.modalidad_pago} onChange={e=>setPecForm(f=>({...f,modalidad_pago:e.target.value}))}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200">
+                {['Contado','Credito 30d','Credito 60d','Adelanto 50%','Contra entrega'].map(p=><option key={p}>{p}</option>)}
+              </select>
             </div>
           </div>
-        </div>
+          {/* Notas */}
+          <div>
+            <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Notas</label>
+            <textarea value={pecForm.notas} onChange={e=>setPecForm(f=>({...f,notas:e.target.value}))}
+              rows={2} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none outline-none focus:ring-2 focus:ring-purple-200"/>
+          </div>
+        </Modal>
       )}
 
       {showNewSupplier && (
@@ -1065,28 +974,19 @@ export default function VentaClient() {
       )}
 
       {showCancelModal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="px-6 py-5 border-b border-gray-100 flex items-center gap-2">
-              <AlertCircle size={20} className="text-red-600"/>
-              <h3 className="font-extrabold text-lg text-gray-900">Cancelar Pedido de Venta</h3>
-            </div>
-            <div className="p-6 space-y-3">
-              <p className="text-sm text-gray-500">Esta accion marca el pedido como <strong>CANCELADO</strong>. Indica el motivo de la cancelacion (minimo 5 caracteres).</p>
-              <textarea value={cancelRazon} onChange={e=>setCancelRazon(e.target.value)} rows={3} autoFocus
-                placeholder="Ej: Cliente desistio de la compra, error en el pedido, etc."
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-red-200 resize-none"/>
-            </div>
-            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3 bg-gray-50 rounded-b-3xl">
-              <button onClick={()=>{setShowCancelModal(false);setCancelTargetId(null);}} className="px-5 py-2.5 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-white">Volver</button>
-              <button onClick={handleCancelarPedido} disabled={cancelling}
-                className="px-6 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50">
-                {cancelling ? <RefreshCw size={14} className="animate-spin"/> : <X size={14}/>}
-                Confirmar Cancelacion
-              </button>
-            </div>
-          </div>
-        </div>
+        <Modal title="Cancelar Pedido de Venta" icon={AlertCircle} color="red" maxWidth="md"
+          onClose={()=>{setShowCancelModal(false);setCancelTargetId(null);}}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={()=>{setShowCancelModal(false);setCancelTargetId(null);}}>Volver</Button>
+              <Button variant="danger" icon={X} loading={cancelling} onClick={handleCancelarPedido}>Confirmar Cancelacion</Button>
+            </>
+          )}>
+          <p className="text-sm text-gray-500">Esta accion marca el pedido como <strong>CANCELADO</strong>. Indica el motivo de la cancelacion (minimo 5 caracteres).</p>
+          <textarea value={cancelRazon} onChange={e=>setCancelRazon(e.target.value)} rows={3} autoFocus
+            placeholder="Ej: Cliente desistio de la compra, error en el pedido, etc."
+            className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-red-200 resize-none"/>
+        </Modal>
       )}
     </div>
   );

@@ -10,6 +10,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
+import { Button } from '@/components/ui';
 
 const fCOP  = (v: any) => { const n = Number(v) || 0; return '$' + n.toLocaleString('es-CO'); };
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
@@ -169,7 +170,7 @@ export default function PedidoVentaDetallePage() {
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-black text-slate-800">{pedido?.numero || String(params.id || '').toUpperCase()}</h1>
-              <span className={`px-3 py-1 rounded-full text-xs font-bold border ${estadoCfg.bg} ${estadoCfg.text} ${estadoCfg.border}`}>
+              <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${estadoCfg.bg} ${estadoCfg.text} ${estadoCfg.border}`}>
                 {estadoCfg.label}
               </span>
             </div>
@@ -179,9 +180,7 @@ export default function PedidoVentaDetallePage() {
 
         <div className="flex items-center gap-3">
           {!pedido?.pxp_id && (
-            <button onClick={handleCrearPxp} disabled={creatingPxp} className="flex items-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm transition-colors shadow-sm disabled:opacity-50">
-              {creatingPxp ? <RefreshCw size={16} className="animate-spin" /> : <DollarSign size={16} />} Crear PXP
-            </button>
+            <Button color="emerald" icon={DollarSign} loading={creatingPxp} onClick={handleCrearPxp}>Crear PXP</Button>
           )}
           {pedido?.pxp_numero && (
             <span className="flex items-center gap-1.5 px-5 py-2 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl font-bold text-sm">
