@@ -4,10 +4,11 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
-  ArrowLeftRight, ShieldAlert, Activity, Clock, Package,
-  CheckCircle2, Search, Plus, X, Check, RefreshCw,
-  ArrowRight, AlertCircle, MoreVertical, Warehouse
+  ArrowLeftRight, Activity, CheckCircle2, Search, Plus, X, RefreshCw,
+  MoreVertical, Warehouse
 } from 'lucide-react';
+import { SubNav, PageHeader, StatCard, Badge, Drawer, Modal, Button, EmptyState } from '@/components/ui';
+import { COMP_NAV } from '../comp-nav';
 
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 async function apiFetch(path: string, opts: RequestInit = {}) {
@@ -17,34 +18,18 @@ async function apiFetch(path: string, opts: RequestInit = {}) {
   return data.data ?? data;
 }
 
-const SUB_MODULES = [
-  { name: 'Pedidos de Compra',       path: '/dashboard/compras/pedidos' },
-  { name: 'Mercancia en Transito',   path: '/dashboard/compras/transito' },
-  { name: 'Recepciones (Entrada)',   path: '/dashboard/compras/recepciones' },
-  { name: 'Traslados Internos',      path: '/dashboard/compras/traslados' },
-  { name: 'Registro OCR/Manual',     path: '/dashboard/compras/registro' },
-  { name: 'Proyecciones',            path: '/dashboard/compras/proyecciones' },
-];
-
 // Valores reales de InventoryOperation.status (ver models/inventory.py):
 // DRAFT | READY | DONE | CANCELLED. El frontend antes filtraba/mostraba
 // valores que el backend nunca produce (EN_PROCESO/COMPLETADO en mayus.
 // sin traducir), asi que ningun traslado real coincidia con ningun filtro.
-const ESTADOS: Record<string, { label: string; color: string; bg: string; border: string }> = {
-  DRAFT:     { label: 'Borrador',   color: '#64748b', bg: '#f1f5f9', border: '#e2e8f0' },
-  READY:     { label: 'Listo',      color: '#1d4ed8', bg: '#eff6ff', border: '#bfdbfe' },
-  DONE:      { label: 'Completado', color: '#065f46', bg: '#f0fdf4', border: '#a7f3d0' },
-  CANCELLED: { label: 'Cancelado',  color: '#991b1b', bg: '#fef2f2', border: '#fecaca' },
+const ESTADO_TONE: Record<string, 'neutral' | 'info' | 'success' | 'danger'> = {
+  DRAFT: 'neutral', READY: 'info', DONE: 'success', CANCELLED: 'danger',
 };
-
-function Badge({ estado }: { estado: string }) {
-  const cfg = ESTADOS[estado] || { label: estado, color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe' };
-  return (
-    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold border"
-      style={{ backgroundColor: cfg.bg, color: cfg.color, borderColor: cfg.border }}>
-      {cfg.label}
-    </span>
-  );
+const ESTADO_LABEL: Record<string, string> = {
+  DRAFT: 'Borrador', READY: 'Listo', DONE: 'Completado', CANCELLED: 'Cancelado',
+};
+function EstadoBadge({ estado }: { estado: string }) {
+  return <Badge tone={ESTADO_TONE[estado] || 'purple'}>{ESTADO_LABEL[estado] || estado}</Badge>;
 }
 
 const fDate = (iso: string | null) =>
@@ -204,78 +189,27 @@ export default function TrasladosPage() {
   return (
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
 
-      {/* Sub-module nav */}
-      <div className="bg-white border-b border-slate-200 px-6 py-2 overflow-x-auto flex items-center gap-2 shadow-sm sticky top-0 z-30">
-        <span className="text-xs font-black text-slate-400 uppercase tracking-wider mr-4 shrink-0">Modulos:</span>
-        {SUB_MODULES.map(mod => (
-          <Link key={mod.name} href={mod.path}
-            className={`shrink-0 px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${
-              mod.path === '/dashboard/compras/traslados'
-                ? 'bg-orange-600 text-white border-orange-600'
-                : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-700 border-transparent hover:border-emerald-200'
-            }`}>
-            {mod.name}
-          </Link>
-        ))}
-      </div>
+      <SubNav label="Hub de Compras" items={COMP_NAV} currentPath="/dashboard/compras/traslados" color="orange" hub={{ href: '/dashboard/compras' }} />
 
       <div className="p-8 max-w-[1600px] mx-auto space-y-8">
 
         {/* Header */}
-        <div className="flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">
-              <div className="bg-orange-100 text-orange-600 p-2 rounded-xl shadow-inner"><ArrowLeftRight size={24} /></div>
-              Traslados Internos
-            </h1>
-            <p className="text-slate-500 mt-2 font-medium">Movimiento de mercancia entre bodegas propias de la empresa.</p>
-          </div>
-          <button onClick={() => setShowCreate(true)}
-            className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-3 rounded-xl font-bold shadow-md transition-colors flex items-center gap-2">
-            <Plus size={18} /> Nuevo Traslado
-          </button>
-        </div>
+        <PageHeader icon={ArrowLeftRight} color="orange"
+          title="Traslados Internos"
+          subtitle="Movimiento de mercancia entre bodegas propias de la empresa."
+          actions={(
+            <Button color="orange" size="lg" icon={Plus} onClick={() => setShowCreate(true)}>Nuevo Traslado</Button>
+          )} />
 
         {/* KPI cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-blue-300 transition-all"
-            onClick={() => setFilterTab('En Proceso')}>
-            <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 mb-4 group-hover:scale-110 transition-transform">
-              <ArrowLeftRight size={24} />
-            </div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">En Proceso</p>
-            <h2 className="text-4xl font-black text-slate-800">{enProceso}</h2>
-            <p className="text-xs font-bold text-blue-600 mt-2 flex items-center gap-1"><Clock size={13} /> Traslados activos</p>
-          </div>
-
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-emerald-300 transition-all"
-            onClick={() => setFilterTab('Completados')}>
-            <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 mb-4 group-hover:scale-110 transition-transform">
-              <CheckCircle2 size={24} />
-            </div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Completados</p>
-            <h2 className="text-4xl font-black text-slate-800">{completados}</h2>
-            <p className="text-xs font-bold text-slate-500 mt-2">Traslados finalizados</p>
-          </div>
-
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-amber-300 transition-all">
-            <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 mb-4 group-hover:scale-110 transition-transform">
-              <Warehouse size={24} />
-            </div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Bodegas Activas</p>
-            <h2 className="text-4xl font-black text-slate-800">{warehouses.length}</h2>
-            <p className="text-xs font-bold text-slate-500 mt-2">Ubicaciones disponibles</p>
-          </div>
-
-          <div className="bg-gradient-to-br from-orange-500 to-amber-600 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden cursor-pointer">
-            <div className="absolute right-0 top-0 opacity-10"><Activity size={120} /></div>
-            <p className="text-xs font-black text-orange-100 uppercase tracking-wider mb-1 relative z-10">Total Traslados</p>
-            <h2 className="text-4xl font-black text-white relative z-10">{traslados.length}</h2>
-            <p className="text-xs font-bold text-orange-100 mt-2 relative z-10">{completados} completados</p>
-          </div>
+          <StatCard icon={ArrowLeftRight} color="blue" label="En Proceso" value={enProceso} hint="Traslados activos" onClick={() => setFilterTab('En Proceso')} />
+          <StatCard icon={CheckCircle2} color="emerald" label="Completados" value={completados} hint="Traslados finalizados" onClick={() => setFilterTab('Completados')} />
+          <StatCard icon={Warehouse} color="amber" label="Bodegas Activas" value={warehouses.length} hint="Ubicaciones disponibles" />
+          <StatCard variant="gradient" color="orange" icon={Activity} label="Total Traslados" value={traslados.length} hint={`${completados} completados`} />
         </div>
 
-        {/* Main Tabs: Traslados / Análisis */}
+        {/* Main Tabs: Traslados / Análisis -- alternador simple, no forma parte del set de componentes compartidos */}
         <div className="flex items-center gap-2">
           {['Traslados', 'Análisis'].map(tab => (
             <button key={tab} onClick={() => setActiveTab(tab === 'Análisis' ? 'Analisis' : tab)}
@@ -339,10 +273,8 @@ export default function TrasladosPage() {
                     <span className="text-slate-400">Cargando traslados...</span>
                   </td></tr>
                 ) : filtered.length === 0 ? (
-                  <tr><td colSpan={7} className="px-6 py-20 text-center">
-                    <ArrowLeftRight size={40} className="mx-auto mb-3 text-slate-300" />
-                    <p className="text-slate-500 font-medium">Sin traslados internos registrados</p>
-                    <p className="text-slate-400 text-sm mt-1">Crea un traslado para mover mercancia entre bodegas</p>
+                  <tr><td colSpan={7}>
+                    <EmptyState icon={ArrowLeftRight} message="Sin traslados internos registrados" hint="Crea un traslado para mover mercancia entre bodegas" />
                   </td></tr>
                 ) : pagedRows.map((t: any) => (
                   <tr key={t.id} onClick={() => setSelected(t)}
@@ -352,7 +284,7 @@ export default function TrasladosPage() {
                     <td className="px-6 py-4 font-medium text-slate-800">{whName(t.dest_warehouse_id)}</td>
                     <td className="px-6 py-4 text-slate-600">{Math.ceil((t.movements?.length || 0) / 2)} producto(s)</td>
                     <td className="px-6 py-4 text-slate-600">{fDate(t.created_at)}</td>
-                    <td className="px-6 py-4"><Badge estado={t.status || 'DRAFT'} /></td>
+                    <td className="px-6 py-4"><EstadoBadge estado={t.status || 'DRAFT'} /></td>
                     <td className="px-6 py-4 text-center">
                       <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button className="bg-orange-100 text-orange-700 hover:bg-orange-200 px-3 py-1.5 rounded text-xs font-bold">
@@ -438,173 +370,150 @@ export default function TrasladosPage() {
 
       {/* Drawer */}
       {selected && (
-        <div className="fixed inset-0 z-40 flex items-start justify-end">
-          <div className="absolute inset-0 bg-slate-900/30 backdrop-blur-sm" onClick={closeSelected} />
-          <div className="relative w-full max-w-md h-full bg-white shadow-2xl border-l border-slate-200 flex flex-col overflow-hidden">
-            <div className="px-6 py-5 border-b border-slate-100 flex items-start justify-between bg-gradient-to-r from-orange-50 to-white">
-              <div>
-                <h2 className="font-extrabold text-slate-900 text-xl">TRL-{String(selected.id).padStart(4, '0')}</h2>
-                <p className="text-xs text-slate-500 mt-0.5">Traslado Interno</p>
-                <div className="mt-2"><Badge estado={selected.status || 'DRAFT'} /></div>
-              </div>
-              <button onClick={closeSelected} className="p-2 text-slate-400 hover:bg-slate-100 rounded-xl">
-                <X size={18} />
-              </button>
+        <Drawer onClose={closeSelected} header={(
+          <div>
+            <h2 className="font-extrabold text-slate-900 text-xl">TRL-{String(selected.id).padStart(4, '0')}</h2>
+            <p className="text-xs text-slate-500 mt-0.5">Traslado Interno</p>
+            <div className="mt-2"><EstadoBadge estado={selected.status || 'DRAFT'} /></div>
+          </div>
+        )}>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-slate-50 rounded-xl p-3">
+              <p className="text-xs text-slate-400 mb-1">Bodega Origen</p>
+              <p className="font-bold text-sm text-slate-800">{whName(selected.source_warehouse_id)}</p>
             </div>
-            <div className="flex-1 overflow-y-auto p-6 space-y-5">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-slate-50 rounded-xl p-3">
-                  <p className="text-xs text-slate-400 mb-1">Bodega Origen</p>
-                  <p className="font-bold text-sm text-slate-800">{whName(selected.source_warehouse_id)}</p>
-                </div>
-                <div className="bg-slate-50 rounded-xl p-3">
-                  <p className="text-xs text-slate-400 mb-1">Bodega Destino</p>
-                  <p className="font-bold text-sm text-slate-800">{whName(selected.dest_warehouse_id)}</p>
-                </div>
-                <div className="bg-slate-50 rounded-xl p-3">
-                  <p className="text-xs text-slate-400 mb-1">Fecha Creacion</p>
-                  <p className="font-bold text-sm">{fDate(selected.created_at)}</p>
-                </div>
-                <div className="bg-slate-50 rounded-xl p-3">
-                  <p className="text-xs text-slate-400 mb-1">Metodo de Envio</p>
-                  <p className="font-bold text-sm">{selected.shipping_method_name || 'Interno'}</p>
-                </div>
-              </div>
-              {selected.tracking_number && (
-                <div className="bg-slate-50 rounded-xl p-3">
-                  <p className="text-xs text-slate-400 mb-1">Tracking</p>
-                  <p className="font-mono text-sm font-bold">{selected.tracking_number}</p>
-                </div>
-              )}
-              {(selected.movements || []).filter((m: any) => m.direction !== 'TRANSFER_IN').length > 0 && (
-                <div>
-                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos</p>
-                  <div className="border border-slate-200 rounded-xl overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead className="bg-slate-50"><tr className="text-slate-400 uppercase">
-                        <th className="px-3 py-2 text-left">Producto</th>
-                        <th className="px-3 py-2 text-right">Qty</th>
-                      </tr></thead>
-                      <tbody>
-                        {selected.movements.filter((m: any) => m.direction !== 'TRANSFER_IN').map((p: any, i: number) => (
-                          <tr key={i} className="border-t border-slate-50">
-                            <td className="px-3 py-2 font-medium">SKU #{p.sku_id}</td>
-                            <td className="px-3 py-2 text-right font-bold">{p.quantity || 0}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
+            <div className="bg-slate-50 rounded-xl p-3">
+              <p className="text-xs text-slate-400 mb-1">Bodega Destino</p>
+              <p className="font-bold text-sm text-slate-800">{whName(selected.dest_warehouse_id)}</p>
+            </div>
+            <div className="bg-slate-50 rounded-xl p-3">
+              <p className="text-xs text-slate-400 mb-1">Fecha Creacion</p>
+              <p className="font-bold text-sm">{fDate(selected.created_at)}</p>
+            </div>
+            <div className="bg-slate-50 rounded-xl p-3">
+              <p className="text-xs text-slate-400 mb-1">Metodo de Envio</p>
+              <p className="font-bold text-sm">{selected.shipping_method_name || 'Interno'}</p>
             </div>
           </div>
-        </div>
+          {selected.tracking_number && (
+            <div className="bg-slate-50 rounded-xl p-3">
+              <p className="text-xs text-slate-400 mb-1">Tracking</p>
+              <p className="font-mono text-sm font-bold">{selected.tracking_number}</p>
+            </div>
+          )}
+          {(selected.movements || []).filter((m: any) => m.direction !== 'TRANSFER_IN').length > 0 && (
+            <div>
+              <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos</p>
+              <div className="border border-slate-200 rounded-xl overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50"><tr className="text-slate-400 uppercase">
+                    <th className="px-3 py-2 text-left">Producto</th>
+                    <th className="px-3 py-2 text-right">Qty</th>
+                  </tr></thead>
+                  <tbody>
+                    {selected.movements.filter((m: any) => m.direction !== 'TRANSFER_IN').map((p: any, i: number) => (
+                      <tr key={i} className="border-t border-slate-50">
+                        <td className="px-3 py-2 font-medium">SKU #{p.sku_id}</td>
+                        <td className="px-3 py-2 text-right font-bold">{p.quantity || 0}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </Drawer>
       )}
 
       {/* Create Modal */}
       {showCreate && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col">
-            <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-gradient-to-r from-orange-50 to-white">
-              <div>
-                <h3 className="font-extrabold text-xl text-slate-900">Nuevo Traslado Interno</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Mover mercancia entre bodegas</p>
+        <Modal title="Nuevo Traslado Interno" subtitle="Mover mercancia entre bodegas" icon={ArrowLeftRight} color="orange"
+          onClose={() => setShowCreate(false)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setShowCreate(false)}>Cancelar</Button>
+              <Button type="submit" form="traslado-form" color="orange" loading={saving} icon={ArrowLeftRight}>
+                {saving ? 'Creando...' : 'Crear Traslado'}
+              </Button>
+            </>
+          )}>
+          <form id="traslado-form" onSubmit={createTraslado} className="space-y-4">
+            <div>
+              <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Bodega Origen *</label>
+              <select required value={form.origen_id} onChange={e => setForm(f => ({ ...f, origen_id: e.target.value }))}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-orange-400">
+                <option value="">Seleccionar bodega origen...</option>
+                {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Bodega Destino *</label>
+              <select required value={form.destino_id} onChange={e => setForm(f => ({ ...f, destino_id: e.target.value }))}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-orange-400">
+                <option value="">Seleccionar bodega destino...</option>
+                {warehouses.filter((w: any) => String(w.id) !== form.origen_id).map((w: any) => (
+                  <option key={w.id} value={w.id}>{w.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Products */}
+            <div>
+              <label className="block text-xs font-black text-slate-500 uppercase mb-2">Productos a Trasladar</label>
+              {form.productos.length > 0 && (
+                <div className="mb-3 border border-slate-100 rounded-xl overflow-hidden">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-50"><tr className="text-slate-400">
+                      <th className="px-3 py-2 text-left">Producto</th><th className="px-3 py-2 text-right">Qty</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                      {form.productos.map((p, i) => (
+                        <tr key={i} className="border-t border-slate-50">
+                          <td className="px-3 py-2">{p.product_name}</td>
+                          <td className="px-3 py-2 text-right">{p.qty}</td>
+                          <td className="px-3 py-2">
+                            <button type="button" onClick={() => setForm(f => ({ ...f, productos: f.productos.filter((_, j) => j !== i) }))} className="text-red-400"><X size={11} /></button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div className="grid grid-cols-4 gap-2">
+                <div className="col-span-3 relative">
+                  <input placeholder="Buscar producto..." value={newProd.product_name}
+                    onChange={e => onProductSearch(e.target.value)}
+                    className={`w-full border rounded-xl px-3 py-2 text-sm outline-none ${newProd.sku_id ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200'}`} />
+                  {productResults.length > 0 && !newProd.sku_id && (
+                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl z-10 max-h-48 overflow-y-auto">
+                      {productResults.map((p: any) => (
+                        <button key={p.id} type="button"
+                          onClick={() => { setNewProd(n => ({ ...n, sku_id: p.id, product_name: p.display || p.product_name })); setProductResults([]); }}
+                          className="w-full text-left px-4 py-2.5 hover:bg-orange-50 text-sm border-b last:border-0 border-slate-50">
+                          {p.display || p.product_name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <input type="number" placeholder="Qty" min={1} value={newProd.qty}
+                  onChange={e => setNewProd(p => ({ ...p, qty: parseInt(e.target.value) || 1 }))}
+                  className="border border-slate-200 rounded-xl px-2 py-2 text-sm outline-none text-center" />
               </div>
-              <button onClick={() => setShowCreate(false)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full">
-                <X size={20} />
+              <button type="button" onClick={addProd}
+                className="mt-2 w-full border border-dashed border-orange-300 text-orange-600 rounded-xl py-2 text-xs font-bold hover:bg-orange-50 flex items-center justify-center gap-1">
+                <Plus size={13} /> Agregar producto
               </button>
             </div>
-            <form onSubmit={createTraslado} className="flex-1 overflow-y-auto p-6 space-y-4">
-              <div>
-                <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Bodega Origen *</label>
-                <select required value={form.origen_id} onChange={e => setForm(f => ({ ...f, origen_id: e.target.value }))}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-orange-400">
-                  <option value="">Seleccionar bodega origen...</option>
-                  {warehouses.map((w: any) => <option key={w.id} value={w.id}>{w.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Bodega Destino *</label>
-                <select required value={form.destino_id} onChange={e => setForm(f => ({ ...f, destino_id: e.target.value }))}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-orange-400">
-                  <option value="">Seleccionar bodega destino...</option>
-                  {warehouses.filter((w: any) => String(w.id) !== form.origen_id).map((w: any) => (
-                    <option key={w.id} value={w.id}>{w.name}</option>
-                  ))}
-                </select>
-              </div>
 
-              {/* Products */}
-              <div>
-                <label className="block text-xs font-black text-slate-500 uppercase mb-2">Productos a Trasladar</label>
-                {form.productos.length > 0 && (
-                  <div className="mb-3 border border-slate-100 rounded-xl overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead className="bg-slate-50"><tr className="text-slate-400">
-                        <th className="px-3 py-2 text-left">Producto</th><th className="px-3 py-2 text-right">Qty</th><th></th>
-                      </tr></thead>
-                      <tbody>
-                        {form.productos.map((p, i) => (
-                          <tr key={i} className="border-t border-slate-50">
-                            <td className="px-3 py-2">{p.product_name}</td>
-                            <td className="px-3 py-2 text-right">{p.qty}</td>
-                            <td className="px-3 py-2">
-                              <button type="button" onClick={() => setForm(f => ({ ...f, productos: f.productos.filter((_, j) => j !== i) }))} className="text-red-400"><X size={11} /></button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-                <div className="grid grid-cols-4 gap-2">
-                  <div className="col-span-3 relative">
-                    <input placeholder="Buscar producto..." value={newProd.product_name}
-                      onChange={e => onProductSearch(e.target.value)}
-                      className={`w-full border rounded-xl px-3 py-2 text-sm outline-none ${newProd.sku_id ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200'}`} />
-                    {productResults.length > 0 && !newProd.sku_id && (
-                      <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl z-10 max-h-48 overflow-y-auto">
-                        {productResults.map((p: any) => (
-                          <button key={p.id} type="button"
-                            onClick={() => { setNewProd(n => ({ ...n, sku_id: p.id, product_name: p.display || p.product_name })); setProductResults([]); }}
-                            className="w-full text-left px-4 py-2.5 hover:bg-orange-50 text-sm border-b last:border-0 border-slate-50">
-                            {p.display || p.product_name}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <input type="number" placeholder="Qty" min={1} value={newProd.qty}
-                    onChange={e => setNewProd(p => ({ ...p, qty: parseInt(e.target.value) || 1 }))}
-                    className="border border-slate-200 rounded-xl px-2 py-2 text-sm outline-none text-center" />
-                </div>
-                <button type="button" onClick={addProd}
-                  className="mt-2 w-full border border-dashed border-orange-300 text-orange-600 rounded-xl py-2 text-xs font-bold hover:bg-orange-50 flex items-center justify-center gap-1">
-                  <Plus size={13} /> Agregar producto
-                </button>
-              </div>
-
-              <div>
-                <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Notas</label>
-                <textarea rows={2} value={form.notas} onChange={e => setForm(f => ({ ...f, notas: e.target.value }))}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none resize-none" />
-              </div>
-
-              <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => setShowCreate(false)}
-                  className="flex-1 py-3 border border-slate-200 rounded-xl text-sm font-bold text-slate-600 hover:bg-slate-50">
-                  Cancelar
-                </button>
-                <button type="submit" disabled={saving}
-                  className="flex-1 py-3 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center justify-center gap-2">
-                  {saving ? <RefreshCw size={14} className="animate-spin" /> : <ArrowLeftRight size={14} />}
-                  {saving ? 'Creando...' : 'Crear Traslado'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+            <div>
+              <label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Notas</label>
+              <textarea rows={2} value={form.notas} onChange={e => setForm(f => ({ ...f, notas: e.target.value }))}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none resize-none" />
+            </div>
+          </form>
+        </Modal>
       )}
     </div>
   );

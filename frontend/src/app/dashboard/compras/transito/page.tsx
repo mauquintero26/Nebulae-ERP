@@ -4,9 +4,11 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import {
   Truck, ShieldAlert, Activity, Clock, AlertCircle,
-  CheckCircle2, RefreshCw, Package,
+  RefreshCw, Package,
   ChevronRight, Search, ExternalLink, ChevronLeft
 } from 'lucide-react';
+import { SubNav, PageHeader, StatCard, Badge, Button } from '@/components/ui';
+import { COMP_NAV } from '../comp-nav';
 
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 async function apiFetch(path: string, opts: RequestInit = {}) {
@@ -15,15 +17,6 @@ async function apiFetch(path: string, opts: RequestInit = {}) {
   if (!res.ok) throw new Error(data.detail || data.message || 'Error');
   return data.data ?? data;
 }
-
-const SUB_MODULES = [
-  { name: 'Pedidos de Compra',       path: '/dashboard/compras/pedidos' },
-  { name: 'Mercancia en Transito',   path: '/dashboard/compras/transito' },
-  { name: 'Recepciones (Entrada)',   path: '/dashboard/compras/recepciones' },
-  { name: 'Traslados Internos',      path: '/dashboard/compras/traslados' },
-  { name: 'Registro OCR/Manual',     path: '/dashboard/compras/registro' },
-  { name: 'Proyecciones',            path: '/dashboard/compras/proyecciones' },
-];
 
 // Estados reales de PurchaseOrderFull.estado (confirmado leyendo erp_compras.py:
 // create_pec -> "BORRADOR"; update_tracking -> "EN_TRANSITO"/"RECIBIDO";
@@ -117,19 +110,7 @@ export default function TransitoPage() {
   return (
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
 
-      {/* Sub-module nav */}
-      <div className="bg-white border-b border-slate-200 px-6 py-2 overflow-x-auto flex items-center gap-2 shadow-sm sticky top-0 z-30">
-        <span className="text-xs font-black text-slate-400 uppercase tracking-wider mr-4 shrink-0">Modulos:</span>
-        {SUB_MODULES.map(mod => (
-          <Link key={mod.name} href={mod.path}
-            className={`shrink-0 px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${
-              mod.path === '/dashboard/compras/transito'
-                ? 'bg-blue-600 text-white border-blue-600'
-                : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-700 border-transparent hover:border-emerald-200'
-            }`}>{mod.name}
-          </Link>
-        ))}
-      </div>
+      <SubNav label="Hub de Compras" items={COMP_NAV} currentPath="/dashboard/compras/transito" color="blue" hub={{ href: '/dashboard/compras' }} />
 
       {/* Alert banner */}
       {overdue > 0 && (
@@ -139,65 +120,38 @@ export default function TransitoPage() {
             <h4 className="text-sm font-black text-red-800">ALERTA DE RETRASO EN CADENA DE SUMINISTRO</h4>
             <p className="text-xs font-bold text-red-600 mt-1">{overdue} pedido(s) con fecha de entrega vencida. Riesgo de incumplimiento a clientes.</p>
           </div>
-          <button onClick={() => setOnlyOverdue(true)} className="bg-red-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-red-700 shrink-0">
-            Ver Vencidos
-          </button>
+          <div className="shrink-0">
+            <Button variant="danger" size="sm" onClick={() => setOnlyOverdue(true)}>Ver Vencidos</Button>
+          </div>
         </div>
       )}
 
       <div className="p-8 max-w-[1600px] mx-auto space-y-6">
 
         {/* Header */}
-        <div className="flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">
-              <div className="bg-blue-100 text-blue-600 p-2 rounded-xl shadow-inner"><Truck size={24} /></div>
-              Mercancia en Transito
-            </h1>
-            <p className="text-slate-500 mt-2 font-medium">Seguimiento en tiempo real de los embarques activos y su progreso por etapas.</p>
-          </div>
-          <div className="flex gap-3">
-            <button onClick={load} className="bg-white border border-slate-200 px-4 py-3 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2">
-              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> Actualizar
-            </button>
-            <Link href="/dashboard/compras/pedidos"
-              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold shadow-md flex items-center gap-2">
-              <Package size={18} /> Ver Pedidos
-            </Link>
-          </div>
-        </div>
+        <PageHeader icon={Truck} color="blue"
+          title="Mercancia en Transito"
+          subtitle="Seguimiento en tiempo real de los embarques activos y su progreso por etapas."
+          actions={(
+            <div className="flex gap-3">
+              <button onClick={load} className="bg-white border border-slate-200 px-4 py-3 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2">
+                <RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> Actualizar
+              </button>
+              <Link href="/dashboard/compras/pedidos"
+                className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-bold shadow-md flex items-center gap-2">
+                <Package size={18} /> Ver Pedidos
+              </Link>
+            </div>
+          )} />
 
         {/* KPI Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group hover:border-blue-300 transition-all">
-            <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 mb-4 group-hover:scale-110 transition-transform"><Truck size={24} /></div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">En Transito Activo</p>
-            <h2 className="text-4xl font-black text-slate-800">{pedidos.length}</h2>
-            <p className="text-xs font-bold text-blue-600 mt-2">Embarques en seguimiento</p>
-          </div>
-
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group hover:border-red-300 transition-all">
-            <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform ${overdue > 0 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
-              <AlertCircle size={24} />
-            </div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Vencidos (Overdue)</p>
-            <h2 className={`text-4xl font-black ${overdue > 0 ? 'text-red-600' : 'text-slate-800'}`}>{overdue}</h2>
-            <p className={`text-xs font-bold mt-2 ${overdue > 0 ? 'text-red-500' : 'text-emerald-500'}`}>{overdue > 0 ? 'Requieren atencion inmediata' : 'Todos en tiempo'}</p>
-          </div>
-
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group hover:border-amber-300 transition-all">
-            <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 mb-4 group-hover:scale-110 transition-transform"><Clock size={24} /></div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Promedio Etapas</p>
-            <h2 className="text-4xl font-black text-slate-800">{promedioEtapas}/{promedioTotalEtapas || '-'}</h2>
-            <p className="text-xs font-bold text-slate-500 mt-2">Etapas completadas promedio</p>
-          </div>
-
-          <div className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
-            <div className="absolute right-0 top-0 opacity-10"><Activity size={120} /></div>
-            <p className="text-xs font-black text-blue-100 uppercase tracking-wider mb-1 relative z-10">Monto en Movimiento</p>
-            <h2 className="text-2xl font-black text-white relative z-10">{fCOP(montoTotal)}</h2>
-            <p className="text-xs font-bold text-blue-100 mt-2 relative z-10">Capital flotante en transito</p>
-          </div>
+          <StatCard icon={Truck} color="blue" label="En Transito Activo" value={pedidos.length} hint="Embarques en seguimiento" />
+          <StatCard icon={AlertCircle} tone={overdue > 0 ? 'danger' : 'success'} label="Vencidos (Overdue)" value={overdue}
+            hint={overdue > 0 ? 'Requieren atencion inmediata' : 'Todos en tiempo'} />
+          <StatCard icon={Clock} color="amber" label="Promedio Etapas" value={`${promedioEtapas}/${promedioTotalEtapas || '-'}`} hint="Etapas completadas promedio" />
+          <StatCard variant="gradient" color="blue" icon={Activity} label="Monto en Movimiento"
+            value={<span className="text-2xl">{fCOP(montoTotal)}</span>} hint="Capital flotante en transito" />
         </div>
 
         {/* Toolbar */}
@@ -282,9 +236,7 @@ export default function TransitoPage() {
                             <>
                               <div className="flex items-center gap-1.5 flex-wrap">
                                 <span className="text-xs font-bold text-slate-700 truncate">{stage.label || stage.stage}</span>
-                                <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full shrink-0 ${
-                                  stageActive ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-500'
-                                }`}>{stage.status}</span>
+                                <Badge tone={stageActive ? 'info' : 'neutral'}>{stage.status}</Badge>
                               </div>
                               {stage.alert && (
                                 <p className="text-[10px] text-red-600 font-bold flex items-center gap-1 mt-0.5">
