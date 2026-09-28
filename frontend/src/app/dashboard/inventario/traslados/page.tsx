@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 import { SubNav, PageHeader, StatCard, Badge, Drawer, EmptyState } from '@/components/ui';
+import { INV_NAV } from '../inv-nav';
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
   const res = await _apiFetch(path, opts);
@@ -15,17 +16,6 @@ async function apiFetch(path: string, opts: RequestInit = {}) {
   if (!res.ok) throw new Error(data.detail || data.message || 'Error');
   return data.data ?? data;
 }
-
-const INV_NAV = [
-  { name: 'Productos',       path: '/dashboard/inventario/productos' },
-  { name: 'Stock',           path: '/dashboard/inventario/stock' },
-  { name: 'Recepciones',     path: '/dashboard/inventario/recepciones' },
-  { name: 'Entregas',        path: '/dashboard/inventario/entregas' },
-  { name: 'Traslados',       path: '/dashboard/inventario/traslados' },
-  { name: 'Ajustes',         path: '/dashboard/inventario/ajustes' },
-  { name: 'Abastecimiento',  path: '/dashboard/inventario/abastecimiento' },
-  { name: 'Bodegas',         path: '/dashboard/inventario/bodegas' },
-];
 
 // Valores reales de InventoryOperation.status (models/inventory.py): DRAFT | READY | DONE | CANCELLED.
 const fDate = (iso: string | null) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';

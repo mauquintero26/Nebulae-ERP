@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 import { SubNav, PageHeader, StatCard, Badge, EmptyState } from '@/components/ui';
+import { INV_NAV } from '../inv-nav';
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
   const res = await _apiFetch(path, opts);
@@ -16,17 +17,6 @@ async function apiFetch(path: string, opts: RequestInit = {}) {
   if (!res.ok) throw new Error(data.detail || data.message || 'Error');
   return data.data ?? data;
 }
-
-const INV_NAV = [
-  { name: 'Productos',       path: '/dashboard/inventario/productos' },
-  { name: 'Stock y Catálogo', path: '/dashboard/inventario/stock' },
-  { name: 'Recepciones',     path: '/dashboard/inventario/recepciones' },
-  { name: 'Entregas',        path: '/dashboard/inventario/entregas' },
-  { name: 'Traslados',       path: '/dashboard/inventario/traslados' },
-  { name: 'Ajustes',         path: '/dashboard/inventario/ajustes' },
-  { name: 'Abastecimiento',  path: '/dashboard/inventario/abastecimiento' },
-  { name: 'Bodegas',         path: '/dashboard/inventario/bodegas' },
-];
 
 const fCOP = (v: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0);
 

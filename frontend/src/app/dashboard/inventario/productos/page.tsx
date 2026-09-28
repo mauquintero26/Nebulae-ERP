@@ -8,17 +8,7 @@ import {
 } from 'lucide-react';
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 import { SubNav, PageHeader, Badge, EmptyState, Button } from '@/components/ui';
-
-const INV_NAV = [
-  { name: 'Productos',       path: '/dashboard/inventario/productos' },
-  { name: 'Stock',           path: '/dashboard/inventario/stock' },
-  { name: 'Recepciones',     path: '/dashboard/inventario/recepciones' },
-  { name: 'Entregas',        path: '/dashboard/inventario/entregas' },
-  { name: 'Traslados',       path: '/dashboard/inventario/traslados' },
-  { name: 'Ajustes',         path: '/dashboard/inventario/ajustes' },
-  { name: 'Abastecimiento',  path: '/dashboard/inventario/abastecimiento' },
-  { name: 'Bodegas',         path: '/dashboard/inventario/bodegas' },
-];
+import { INV_NAV } from '../inv-nav';
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
   const res = await _apiFetch(path, opts);
