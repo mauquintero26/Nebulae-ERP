@@ -3,10 +3,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import {
-  ShoppingCart, Activity, AlertCircle, CheckCircle2, TrendingUp,
-  Search, RefreshCw, Package, ArrowRight, AlertTriangle
+  ShoppingCart, Activity, AlertCircle, CheckCircle2,
+  Search, RefreshCw, Package, AlertTriangle
 } from 'lucide-react';
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
+import { SubNav, PageHeader, StatCard, Badge, EmptyState } from '@/components/ui';
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
   const res = await _apiFetch(path, opts);
@@ -73,18 +74,7 @@ export default function AbastecimientoPage() {
 
   return (
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
-      <div className="bg-white border-b border-slate-200 px-6 py-2 overflow-x-auto flex items-center gap-2 shadow-sm sticky top-0 z-30">
-        <span className="text-xs font-black text-slate-400 uppercase tracking-wider mr-4 shrink-0">Inventario:</span>
-        {INV_NAV.map(mod => (
-          <Link key={mod.name} href={mod.path}
-            className={`shrink-0 px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${
-              mod.path === '/dashboard/inventario/abastecimiento'
-                ? 'bg-emerald-600 text-white border-emerald-600'
-                : 'text-slate-600 hover:bg-orange-50 hover:text-orange-700 border-transparent hover:border-orange-200'
-            }`}>{mod.name}
-          </Link>
-        ))}
-      </div>
+      <SubNav label="Inventario" items={INV_NAV} currentPath="/dashboard/inventario/abastecimiento" color="emerald" />
 
       {/* Alert if there are critical stockouts */}
       {sinStock > 0 && (
@@ -100,49 +90,22 @@ export default function AbastecimientoPage() {
         </div>
       )}
 
-      <div className="p-8 max-w-[1600px] mx-auto space-y-8">
-        <div className="flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">
-              <div className="bg-emerald-100 text-emerald-600 p-2 rounded-xl shadow-inner"><ShoppingCart size={24} /></div>
-              Abastecimiento
-            </h1>
-            <p className="text-slate-500 mt-2 font-medium">Productos que requieren reabastecimiento segun niveles de alerta.</p>
-          </div>
-          <Link href="/dashboard/compras/pedidos"
-            className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-xl font-bold shadow-md flex items-center gap-2">
-            <ShoppingCart size={18} /> Crear Pedido de Compra
-          </Link>
-        </div>
+      <div className="p-8 max-w-[1600px] mx-auto space-y-6">
+        <PageHeader icon={ShoppingCart} color="emerald"
+          title="Abastecimiento"
+          subtitle="Productos que requieren reabastecimiento segun niveles de alerta."
+          actions={(
+            <Link href="/dashboard/compras/pedidos"
+              className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-xl font-bold shadow-md flex items-center gap-2">
+              <ShoppingCart size={18} /> Crear Pedido de Compra
+            </Link>
+          )} />
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-red-300 transition-all"
-            onClick={() => setActiveTab('Urgente (0 stock)')}>
-            <div className="w-12 h-12 rounded-xl bg-red-50 flex items-center justify-center text-red-600 mb-4 group-hover:scale-110 transition-transform"><AlertCircle size={24} /></div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Sin Stock (0)</p>
-            <h2 className="text-4xl font-black text-slate-800">{sinStock}</h2>
-            <p className="text-xs font-bold text-red-600 mt-2 flex items-center gap-1"><AlertTriangle size={11} /> Orden urgente requerida</p>
-          </div>
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-amber-300 transition-all"
-            onClick={() => setActiveTab('Bajo Minimo')}>
-            <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 mb-4 group-hover:scale-110 transition-transform"><Package size={24} /></div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Bajo Minimo</p>
-            <h2 className="text-4xl font-black text-slate-800">{bajoMin}</h2>
-            <p className="text-xs font-bold text-amber-600 mt-2">Menor al stock minimo configurado</p>
-          </div>
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-emerald-300 transition-all"
-            onClick={() => setActiveTab('En Orden')}>
-            <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 mb-4 group-hover:scale-110 transition-transform"><CheckCircle2 size={24} /></div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Bien Abastecidos</p>
-            <h2 className="text-4xl font-black text-slate-800">{ok}</h2>
-            <p className="text-xs font-bold text-slate-500 mt-2">Stock sobre el minimo</p>
-          </div>
-          <div className="bg-gradient-to-br from-emerald-600 to-teal-700 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
-            <div className="absolute right-0 top-0 opacity-10"><Activity size={120} /></div>
-            <p className="text-xs font-black text-emerald-100 uppercase tracking-wider mb-1 relative z-10">PEC Activos</p>
-            <h2 className="text-4xl font-black text-white relative z-10">{comprasStats?.pec_activos ?? comprasStats?.pec_total ?? '?'}</h2>
-            <p className="text-xs font-bold text-emerald-100 mt-2 relative z-10">Pedidos de compra en curso</p>
-          </div>
+          <StatCard icon={AlertCircle} color="red" label="Sin Stock (0)" value={sinStock} hint="Orden urgente requerida" onClick={() => setActiveTab('Urgente (0 stock)')} />
+          <StatCard icon={Package} color="amber" label="Bajo Minimo" value={bajoMin} hint="Menor al stock minimo configurado" onClick={() => setActiveTab('Bajo Minimo')} />
+          <StatCard icon={CheckCircle2} color="emerald" label="Bien Abastecidos" value={ok} hint="Stock sobre el minimo" onClick={() => setActiveTab('En Orden')} />
+          <StatCard variant="gradient" color="teal" icon={Activity} label="PEC Activos" value={comprasStats?.pec_activos ?? comprasStats?.pec_total ?? '?'} hint="Pedidos de compra en curso" />
         </div>
 
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
@@ -188,9 +151,8 @@ export default function AbastecimientoPage() {
                     <span className="text-slate-400">Cargando catalogo...</span>
                   </td></tr>
                 ) : filtered.length === 0 ? (
-                  <tr><td colSpan={7} className="px-6 py-20 text-center">
-                    <Package size={40} className="mx-auto mb-3 text-slate-300" />
-                    <p className="text-slate-500 font-medium">Sin productos en esta categoria</p>
+                  <tr><td colSpan={7}>
+                    <EmptyState icon={Package} message="Sin productos en esta categoria" />
                   </td></tr>
                 ) : filtered.map((p: any) => {
                   const stock = p.current_stock ?? p.quantity ?? 0;
@@ -213,15 +175,9 @@ export default function AbastecimientoPage() {
                       </td>
                       <td className="px-6 py-4 text-right font-medium text-slate-500">{min || '-'}</td>
                       <td className="px-6 py-4">
-                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold border ${
-                          status === 'SIN_STOCK'     ? 'bg-red-50 text-red-700 border-red-200'
-                          : status === 'BAJO_MINIMO' ? 'bg-amber-50 text-amber-700 border-amber-200'
-                          :                             'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        }`}>
-                          {status === 'SIN_STOCK' ? <><AlertCircle size={10} /> Sin Stock</>
-                          : status === 'BAJO_MINIMO' ? <><AlertTriangle size={10} /> Bajo Minimo</>
-                          : <><CheckCircle2 size={10} /> OK</>}
-                        </span>
+                        {status === 'SIN_STOCK' ? <Badge tone="danger" icon={AlertCircle}>Sin Stock</Badge>
+                        : status === 'BAJO_MINIMO' ? <Badge tone="warning" icon={AlertTriangle}>Bajo Minimo</Badge>
+                        : <Badge tone="success" icon={CheckCircle2}>OK</Badge>}
                       </td>
                       <td className="px-6 py-4 text-center">
                         <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">

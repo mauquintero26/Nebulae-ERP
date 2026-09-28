@@ -4,9 +4,10 @@ import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import {
   ArrowDownToLine, Activity, Package, CheckCircle2, Clock,
-  Search, X, RefreshCw, AlertCircle, Warehouse, ChevronRight, MoreVertical
+  Search, X, RefreshCw, AlertCircle, Warehouse, ChevronRight
 } from 'lucide-react';
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
+import { SubNav, PageHeader, StatCard, Badge, Drawer, EmptyState } from '@/components/ui';
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
   const res = await _apiFetch(path, opts);
@@ -65,76 +66,26 @@ export default function InventarioRecepcionesPage() {
 
   return (
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
-      {/* Sub-module nav */}
-      <div className="bg-white border-b border-slate-200 px-6 py-2 overflow-x-auto flex items-center gap-2 shadow-sm sticky top-0 z-30">
-        <span className="text-xs font-black text-slate-400 uppercase tracking-wider mr-4 shrink-0">Inventario:</span>
-        {INV_NAV.map(mod => (
-          <Link key={mod.name} href={mod.path}
-            className={`shrink-0 px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${
-              mod.path === '/dashboard/inventario/recepciones'
-                ? 'bg-orange-600 text-white border-orange-600'
-                : 'text-slate-600 hover:bg-orange-50 hover:text-orange-700 border-transparent hover:border-orange-200'
-            }`}>{mod.name}
-          </Link>
-        ))}
-      </div>
+      <SubNav label="Inventario" items={INV_NAV} currentPath="/dashboard/inventario/recepciones" color="orange" />
 
-      <div className="p-8 max-w-[1600px] mx-auto space-y-8">
-        {/* Header */}
-        <div className="flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">
-              <div className="bg-orange-100 text-orange-600 p-2 rounded-xl shadow-inner"><ArrowDownToLine size={24} /></div>
-              Entradas de Inventario
-            </h1>
-            <p className="text-slate-500 mt-2 font-medium">Registro de mercancia que ingresa a las bodegas desde compras.</p>
-          </div>
-          <Link href="/dashboard/compras/pedidos"
-            className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-3 rounded-xl font-bold shadow-md transition-colors flex items-center gap-2">
-            <Package size={18} /> Ver Pedidos de Compra
-          </Link>
-        </div>
+      <div className="p-8 max-w-[1600px] mx-auto space-y-6">
+        <PageHeader icon={ArrowDownToLine} color="orange"
+          title="Entradas de Inventario"
+          subtitle="Registro de mercancia que ingresa a las bodegas desde compras."
+          actions={(
+            <Link href="/dashboard/compras/pedidos"
+              className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-3 rounded-xl font-bold shadow-md transition-colors flex items-center gap-2">
+              <Package size={18} /> Ver Pedidos de Compra
+            </Link>
+          )} />
 
-        {/* KPI */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-amber-300 transition-all"
-            onClick={() => setActiveTab('Por Confirmar')}>
-            <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 mb-4 group-hover:scale-110 transition-transform">
-              <Clock size={24} />
-            </div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Por Confirmar</p>
-            <h2 className="text-4xl font-black text-slate-800">{pendientes}</h2>
-            <p className="text-xs font-bold text-amber-600 mt-2 flex items-center gap-1"><AlertCircle size={12} /> Stock aun no actualizado</p>
-          </div>
-
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-emerald-300 transition-all"
-            onClick={() => setActiveTab('Completadas')}>
-            <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 mb-4 group-hover:scale-110 transition-transform">
-              <CheckCircle2 size={24} />
-            </div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Completadas</p>
-            <h2 className="text-4xl font-black text-slate-800">{completadas}</h2>
-            <p className="text-xs font-bold text-slate-500 mt-2">Stock actualizado correctamente</p>
-          </div>
-
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-blue-300 transition-all">
-            <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 mb-4 group-hover:scale-110 transition-transform">
-              <Warehouse size={24} />
-            </div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Bodegas Activas</p>
-            <h2 className="text-4xl font-black text-slate-800">{warehouses.length}</h2>
-            <p className="text-xs font-bold text-slate-500 mt-2">Puntos de almacenamiento</p>
-          </div>
-
-          <div className="bg-gradient-to-br from-orange-500 to-amber-600 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
-            <div className="absolute right-0 top-0 opacity-10"><Activity size={120} /></div>
-            <p className="text-xs font-black text-orange-100 uppercase tracking-wider mb-1 relative z-10">Total Entradas</p>
-            <h2 className="text-4xl font-black text-white relative z-10">{recepciones.length}</h2>
-            <p className="text-xs font-bold text-orange-100 mt-2 relative z-10">{stockActualizado} con stock confirmado</p>
-          </div>
+          <StatCard icon={Clock} color="amber" label="Por Confirmar" value={pendientes} hint="Stock aun no actualizado" onClick={() => setActiveTab('Por Confirmar')} />
+          <StatCard icon={CheckCircle2} color="emerald" label="Completadas" value={completadas} hint="Stock actualizado correctamente" onClick={() => setActiveTab('Completadas')} />
+          <StatCard icon={Warehouse} color="blue" label="Bodegas Activas" value={warehouses.length} hint="Puntos de almacenamiento" />
+          <StatCard variant="gradient" color="orange" icon={Activity} label="Total Entradas" value={recepciones.length} hint={`${stockActualizado} con stock confirmado`} />
         </div>
 
-        {/* Table */}
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
           <div className="border-b border-slate-200 bg-slate-50/50 p-4 flex justify-between items-center gap-4">
             <div className="flex gap-2">
@@ -179,10 +130,8 @@ export default function InventarioRecepcionesPage() {
                     <span className="text-slate-400">Cargando entradas...</span>
                   </td></tr>
                 ) : filtered.length === 0 ? (
-                  <tr><td colSpan={8} className="px-6 py-20 text-center">
-                    <ArrowDownToLine size={40} className="mx-auto mb-3 text-slate-300" />
-                    <p className="text-slate-500 font-medium">Sin entradas registradas</p>
-                    <p className="text-slate-400 text-sm mt-1">Las entradas se generan al recepcionar un Pedido de Compra</p>
+                  <tr><td colSpan={8}>
+                    <EmptyState icon={ArrowDownToLine} message="Sin entradas registradas" hint="Las entradas se generan al recepcionar un Pedido de Compra" />
                   </td></tr>
                 ) : filtered.map((r: any) => (
                   <tr key={r.id} onClick={() => setSelected(r)}
@@ -199,15 +148,11 @@ export default function InventarioRecepcionesPage() {
                     <td className="px-6 py-4 text-slate-600">{(r.productos || []).length} items</td>
                     <td className="px-6 py-4 text-slate-600">{fDate(r.fecha_recepcion || r.created_at)}</td>
                     <td className="px-6 py-4">
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold border ${
-                        r.estado === 'COMPLETADA' || r.estado === 'CONFIRMADA'
-                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                          : 'bg-amber-50 text-amber-700 border-amber-200'
-                      }`}>
-                        {r.estado === 'COMPLETADA' || r.estado === 'CONFIRMADA'
-                          ? <><CheckCircle2 size={11} /> Confirmada</>
-                          : <><Clock size={11} /> Pendiente</>}
-                      </span>
+                      {r.estado === 'COMPLETADA' || r.estado === 'CONFIRMADA' ? (
+                        <Badge tone="success" icon={CheckCircle2}>Confirmada</Badge>
+                      ) : (
+                        <Badge tone="warning" icon={Clock}>Pendiente</Badge>
+                      )}
                     </td>
                     <td className="px-6 py-4 text-center">
                       <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -227,61 +172,57 @@ export default function InventarioRecepcionesPage() {
 
       {/* Drawer */}
       {selected && (
-        <div className="fixed inset-0 z-40 flex items-start justify-end">
-          <div className="absolute inset-0 bg-slate-900/30 backdrop-blur-sm" onClick={() => setSelected(null)} />
-          <div className="relative w-full max-w-md h-full bg-white shadow-2xl border-l border-slate-200 flex flex-col">
-            <div className="px-6 py-5 border-b bg-gradient-to-r from-orange-50 to-white flex items-start justify-between">
-              <div>
-                <h2 className="font-extrabold text-xl text-slate-900">{selected.numero}</h2>
-                <p className="text-xs text-slate-400">Entrada de Inventario</p>
-                <span className={`mt-2 inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold border ${
-                  selected.estado === 'COMPLETADA' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-700 border-amber-200'
-                }`}>{selected.estado}</span>
+        <Drawer
+          onClose={() => setSelected(null)}
+          header={(
+            <div>
+              <h2 className="font-extrabold text-xl text-slate-900">{selected.numero}</h2>
+              <p className="text-xs text-slate-400">Entrada de Inventario</p>
+              <div className="mt-2">
+                <Badge tone={selected.estado === 'COMPLETADA' ? 'success' : 'warning'}>{selected.estado}</Badge>
               </div>
-              <button onClick={() => setSelected(null)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-xl"><X size={18} /></button>
             </div>
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                {[
-                  { label: 'PEC Origen', value: selected.pec_numero || '-' },
-                  { label: 'Proveedor', value: selected.supplier_name || '-' },
-                  { label: 'Bodega', value: selected.warehouse_name || '-' },
-                  { label: 'Fecha', value: fDate(selected.fecha_recepcion || selected.created_at) },
-                ].map(({ label, value }) => (
-                  <div key={label} className="bg-slate-50 rounded-xl p-3">
-                    <p className="text-xs text-slate-400 mb-1">{label}</p>
-                    <p className="font-bold text-sm text-slate-800">{value}</p>
-                  </div>
-                ))}
+          )}
+        >
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              { label: 'PEC Origen', value: selected.pec_numero || '-' },
+              { label: 'Proveedor', value: selected.supplier_name || '-' },
+              { label: 'Bodega', value: selected.warehouse_name || '-' },
+              { label: 'Fecha', value: fDate(selected.fecha_recepcion || selected.created_at) },
+            ].map(({ label, value }) => (
+              <div key={label} className="bg-slate-50 rounded-xl p-3">
+                <p className="text-xs text-slate-400 mb-1">{label}</p>
+                <p className="font-bold text-sm text-slate-800">{value}</p>
               </div>
-              {selected.productos?.length > 0 && (
-                <div>
-                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos Recibidos</p>
-                  <div className="border border-slate-200 rounded-xl overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead className="bg-slate-50"><tr className="text-slate-400 uppercase">
-                        <th className="px-3 py-2 text-left">Producto</th>
-                        <th className="px-3 py-2 text-right">Esperado</th>
-                        <th className="px-3 py-2 text-right">Recibido</th>
-                      </tr></thead>
-                      <tbody>
-                        {selected.productos.map((p: any, i: number) => (
-                          <tr key={i} className="border-t border-slate-50">
-                            <td className="px-3 py-2 font-medium">{p.product_name || p.sku_id}</td>
-                            <td className="px-3 py-2 text-right">{p.qty_esperada || p.qty || 0}</td>
-                            <td className={`px-3 py-2 text-right font-bold ${p.qty_recibida < p.qty_esperada ? 'text-red-600' : 'text-emerald-600'}`}>
-                              {p.qty_recibida ?? p.qty ?? 0}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
+            ))}
           </div>
-        </div>
+          {selected.productos?.length > 0 && (
+            <div>
+              <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos Recibidos</p>
+              <div className="border border-slate-200 rounded-xl overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50"><tr className="text-slate-400 uppercase">
+                    <th className="px-3 py-2 text-left">Producto</th>
+                    <th className="px-3 py-2 text-right">Esperado</th>
+                    <th className="px-3 py-2 text-right">Recibido</th>
+                  </tr></thead>
+                  <tbody>
+                    {selected.productos.map((p: any, i: number) => (
+                      <tr key={i} className="border-t border-slate-50">
+                        <td className="px-3 py-2 font-medium">{p.product_name || p.sku_id}</td>
+                        <td className="px-3 py-2 text-right">{p.qty_esperada || p.qty || 0}</td>
+                        <td className={`px-3 py-2 text-right font-bold ${p.qty_recibida < p.qty_esperada ? 'text-red-600' : 'text-emerald-600'}`}>
+                          {p.qty_recibida ?? p.qty ?? 0}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </Drawer>
       )}
     </div>
   );

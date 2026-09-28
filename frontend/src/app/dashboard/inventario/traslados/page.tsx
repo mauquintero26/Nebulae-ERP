@@ -4,9 +4,10 @@ import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeftRight, Activity, Package, CheckCircle2, Clock,
-  Search, X, RefreshCw, Warehouse, ChevronRight
+  Search, RefreshCw, Warehouse, ChevronRight
 } from 'lucide-react';
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
+import { SubNav, PageHeader, StatCard, Badge, Drawer, EmptyState } from '@/components/ui';
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
   const res = await _apiFetch(path, opts);
@@ -66,67 +67,26 @@ export default function InventarioTrasladosPage() {
 
   return (
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
-      {/* Sub-module nav */}
-      <div className="bg-white border-b border-slate-200 px-6 py-2 overflow-x-auto flex items-center gap-2 shadow-sm sticky top-0 z-30">
-        <span className="text-xs font-black text-slate-400 uppercase tracking-wider mr-4 shrink-0">Inventario:</span>
-        {INV_NAV.map(mod => (
-          <Link key={mod.name} href={mod.path}
-            className={`shrink-0 px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${
-              mod.path === '/dashboard/inventario/traslados'
-                ? 'bg-orange-600 text-white border-orange-600'
-                : 'text-slate-600 hover:bg-orange-50 hover:text-orange-700 border-transparent hover:border-orange-200'
-            }`}>{mod.name}
-          </Link>
-        ))}
-      </div>
+      <SubNav label="Inventario" items={INV_NAV} currentPath="/dashboard/inventario/traslados" color="orange" />
 
-      <div className="p-8 max-w-[1600px] mx-auto space-y-8">
-        {/* Header */}
-        <div className="flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">
-              <div className="bg-orange-100 text-orange-600 p-2 rounded-xl shadow-inner"><ArrowLeftRight size={24} /></div>
-              Traslados Internos
-            </h1>
-            <p className="text-slate-500 mt-2 font-medium">Movimiento de mercancia entre bodegas propias de la empresa.</p>
-          </div>
-          <Link href="/dashboard/compras/traslados"
-            className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-3 rounded-xl font-bold shadow-md transition-colors flex items-center gap-2">
-            <Package size={18} /> Gestionar Traslados
-          </Link>
-        </div>
+      <div className="p-8 max-w-[1600px] mx-auto space-y-6">
+        <PageHeader icon={ArrowLeftRight} color="orange"
+          title="Traslados Internos"
+          subtitle="Movimiento de mercancia entre bodegas propias de la empresa."
+          actions={(
+            <Link href="/dashboard/compras/traslados"
+              className="bg-orange-600 hover:bg-orange-700 text-white px-6 py-3 rounded-xl font-bold shadow-md transition-colors flex items-center gap-2">
+              <Package size={18} /> Gestionar Traslados
+            </Link>
+          )} />
 
-        {/* KPI */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-blue-300 transition-all"
-            onClick={() => setActiveTab('En Proceso')}>
-            <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 mb-4 group-hover:scale-110 transition-transform"><Clock size={24} /></div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">En Proceso</p>
-            <h2 className="text-4xl font-black text-slate-800">{enProceso}</h2>
-            <p className="text-xs font-bold text-blue-600 mt-2">Traslados activos</p>
-          </div>
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group cursor-pointer hover:border-emerald-300 transition-all"
-            onClick={() => setActiveTab('Completados')}>
-            <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 mb-4 group-hover:scale-110 transition-transform"><CheckCircle2 size={24} /></div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Completados</p>
-            <h2 className="text-4xl font-black text-slate-800">{completados}</h2>
-            <p className="text-xs font-bold text-slate-500 mt-2">Traslados finalizados</p>
-          </div>
-          <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm group hover:border-amber-300 transition-all">
-            <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600 mb-4 group-hover:scale-110 transition-transform"><Warehouse size={24} /></div>
-            <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Bodegas Activas</p>
-            <h2 className="text-4xl font-black text-slate-800">{warehouses.length}</h2>
-            <p className="text-xs font-bold text-slate-500 mt-2">Ubicaciones disponibles</p>
-          </div>
-          <div className="bg-gradient-to-br from-orange-500 to-amber-600 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden">
-            <div className="absolute right-0 top-0 opacity-10"><Activity size={120} /></div>
-            <p className="text-xs font-black text-orange-100 uppercase tracking-wider mb-1 relative z-10">Total Traslados</p>
-            <h2 className="text-4xl font-black text-white relative z-10">{traslados.length}</h2>
-            <p className="text-xs font-bold text-orange-100 mt-2 relative z-10">{completados} completados</p>
-          </div>
+          <StatCard icon={Clock} color="blue" label="En Proceso" value={enProceso} hint="Traslados activos" onClick={() => setActiveTab('En Proceso')} />
+          <StatCard icon={CheckCircle2} color="emerald" label="Completados" value={completados} hint="Traslados finalizados" onClick={() => setActiveTab('Completados')} />
+          <StatCard icon={Warehouse} color="amber" label="Bodegas Activas" value={warehouses.length} hint="Ubicaciones disponibles" />
+          <StatCard variant="gradient" color="orange" icon={Activity} label="Total Traslados" value={traslados.length} hint={`${completados} completados`} />
         </div>
 
-        {/* Table */}
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm flex flex-col overflow-hidden">
           <div className="border-b border-slate-200 bg-slate-50/50 p-4 flex justify-between items-center gap-4">
             <div className="flex gap-2">
@@ -170,10 +130,8 @@ export default function InventarioTrasladosPage() {
                     <span className="text-slate-400">Cargando traslados...</span>
                   </td></tr>
                 ) : filtered.length === 0 ? (
-                  <tr><td colSpan={7} className="px-6 py-20 text-center">
-                    <ArrowLeftRight size={40} className="mx-auto mb-3 text-slate-300" />
-                    <p className="text-slate-500 font-medium">Sin traslados internos registrados</p>
-                    <p className="text-slate-400 text-sm mt-1">Usa "Gestionar Traslados" para crear uno nuevo</p>
+                  <tr><td colSpan={7}>
+                    <EmptyState icon={ArrowLeftRight} message="Sin traslados internos registrados" hint='Usa "Gestionar Traslados" para crear uno nuevo' />
                   </td></tr>
                 ) : filtered.map((t: any) => (
                   <tr key={t.id} onClick={() => setSelected(t)}
@@ -184,9 +142,7 @@ export default function InventarioTrasladosPage() {
                     <td className="px-6 py-4 text-slate-600">{Math.ceil((t.movements?.length || 0) / 2)} producto(s)</td>
                     <td className="px-6 py-4 text-slate-600">{fDate(t.created_at)}</td>
                     <td className="px-6 py-4">
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold border ${
-                        t.status === 'DONE' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-slate-50 text-slate-600 border-slate-200'
-                      }`}>{t.status === 'DONE' ? 'Completado' : t.status === 'CANCELLED' ? 'Cancelado' : 'Borrador'}</span>
+                      <Badge tone={t.status === 'DONE' ? 'success' : 'neutral'}>{t.status === 'DONE' ? 'Completado' : t.status === 'CANCELLED' ? 'Cancelado' : 'Borrador'}</Badge>
                     </td>
                     <td className="px-6 py-4 text-center">
                       <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -206,63 +162,59 @@ export default function InventarioTrasladosPage() {
 
       {/* Drawer */}
       {selected && (
-        <div className="fixed inset-0 z-40 flex items-start justify-end">
-          <div className="absolute inset-0 bg-slate-900/30 backdrop-blur-sm" onClick={() => setSelected(null)} />
-          <div className="relative w-full max-w-md h-full bg-white shadow-2xl border-l border-slate-200 flex flex-col overflow-hidden">
-            <div className="px-6 py-5 border-b border-slate-100 flex items-start justify-between bg-gradient-to-r from-orange-50 to-white">
-              <div>
-                <h2 className="font-extrabold text-slate-900 text-xl">TRL-{String(selected.id).padStart(4, '0')}</h2>
-                <p className="text-xs text-slate-500 mt-0.5">Traslado Interno</p>
-              </div>
-              <button onClick={() => setSelected(null)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-xl"><X size={18} /></button>
+        <Drawer
+          onClose={() => setSelected(null)}
+          header={(
+            <div>
+              <h2 className="font-extrabold text-slate-900 text-xl">TRL-{String(selected.id).padStart(4, '0')}</h2>
+              <p className="text-xs text-slate-500 mt-0.5">Traslado Interno</p>
             </div>
-            <div className="flex-1 overflow-y-auto p-6 space-y-5">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-slate-50 rounded-xl p-3">
-                  <p className="text-xs text-slate-400 mb-1">Bodega Origen</p>
-                  <p className="font-bold text-sm text-slate-800">{selected.source_warehouse_id ? whName(selected.source_warehouse_id) : '-'}</p>
-                </div>
-                <div className="bg-slate-50 rounded-xl p-3">
-                  <p className="text-xs text-slate-400 mb-1">Bodega Destino</p>
-                  <p className="font-bold text-sm text-slate-800">{selected.dest_warehouse_id ? whName(selected.dest_warehouse_id) : '-'}</p>
-                </div>
-                <div className="bg-slate-50 rounded-xl p-3">
-                  <p className="text-xs text-slate-400 mb-1">Fecha Creacion</p>
-                  <p className="font-bold text-sm">{fDate(selected.created_at)}</p>
-                </div>
-                <div className="bg-slate-50 rounded-xl p-3">
-                  <p className="text-xs text-slate-400 mb-1">Notas</p>
-                  <p className="font-bold text-sm">{selected.notas || '-'}</p>
-                </div>
-              </div>
-              {(selected.movements || []).filter((m: any) => m.direction === 'TRANSFER_OUT').length > 0 && (
-                <div>
-                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos</p>
-                  <div className="border border-slate-200 rounded-xl overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead className="bg-slate-50"><tr className="text-slate-400 uppercase">
-                        <th className="px-3 py-2 text-left">SKU</th>
-                        <th className="px-3 py-2 text-right">Qty</th>
-                      </tr></thead>
-                      <tbody>
-                        {selected.movements.filter((m: any) => m.direction === 'TRANSFER_OUT').map((m: any, i: number) => (
-                          <tr key={i} className="border-t border-slate-50">
-                            <td className="px-3 py-2 font-medium">SKU #{m.sku_id}</td>
-                            <td className="px-3 py-2 text-right font-bold">{m.quantity}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-              <Link href={`/dashboard/compras/traslados?id=${selected.id}`}
-                className="w-full flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 text-white py-2.5 rounded-xl font-bold text-sm">
-                Gestionar en Compras <ChevronRight size={14} />
-              </Link>
+          )}
+        >
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-slate-50 rounded-xl p-3">
+              <p className="text-xs text-slate-400 mb-1">Bodega Origen</p>
+              <p className="font-bold text-sm text-slate-800">{selected.source_warehouse_id ? whName(selected.source_warehouse_id) : '-'}</p>
+            </div>
+            <div className="bg-slate-50 rounded-xl p-3">
+              <p className="text-xs text-slate-400 mb-1">Bodega Destino</p>
+              <p className="font-bold text-sm text-slate-800">{selected.dest_warehouse_id ? whName(selected.dest_warehouse_id) : '-'}</p>
+            </div>
+            <div className="bg-slate-50 rounded-xl p-3">
+              <p className="text-xs text-slate-400 mb-1">Fecha Creacion</p>
+              <p className="font-bold text-sm">{fDate(selected.created_at)}</p>
+            </div>
+            <div className="bg-slate-50 rounded-xl p-3">
+              <p className="text-xs text-slate-400 mb-1">Notas</p>
+              <p className="font-bold text-sm">{selected.notas || '-'}</p>
             </div>
           </div>
-        </div>
+          {(selected.movements || []).filter((m: any) => m.direction === 'TRANSFER_OUT').length > 0 && (
+            <div>
+              <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos</p>
+              <div className="border border-slate-200 rounded-xl overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50"><tr className="text-slate-400 uppercase">
+                    <th className="px-3 py-2 text-left">SKU</th>
+                    <th className="px-3 py-2 text-right">Qty</th>
+                  </tr></thead>
+                  <tbody>
+                    {selected.movements.filter((m: any) => m.direction === 'TRANSFER_OUT').map((m: any, i: number) => (
+                      <tr key={i} className="border-t border-slate-50">
+                        <td className="px-3 py-2 font-medium">SKU #{m.sku_id}</td>
+                        <td className="px-3 py-2 text-right font-bold">{m.quantity}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          <Link href={`/dashboard/compras/traslados?id=${selected.id}`}
+            className="w-full flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 text-white py-2.5 rounded-xl font-bold text-sm">
+            Gestionar en Compras <ChevronRight size={14} />
+          </Link>
+        </Drawer>
       )}
     </div>
   );

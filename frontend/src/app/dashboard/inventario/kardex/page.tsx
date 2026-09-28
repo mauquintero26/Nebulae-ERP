@@ -7,6 +7,7 @@ import {
   ChevronLeft, ChevronRight, X, Filter
 } from 'lucide-react';
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
+import { SubNav, PageHeader, EmptyState } from '@/components/ui';
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
   const res = await _apiFetch(path, opts);
@@ -39,14 +40,19 @@ const DIRECTIONS = [
   { value: 'QUARANTINE', label: 'Cuarentena' },
 ];
 
+// Paleta propia (no la de Badge/tones): la distincion de color entre IN/OUT
+// normales vs ADJUST_IN/OUT es semantica a proposito (ambar = fue un ajuste
+// manual, no un movimiento de flujo normal) y se pierde si se reduce a los
+// tonos genericos success/danger -- se mantiene el color, solo se unifica la
+// forma de la pastilla (rounded-full + borde) con el resto del proyecto.
 const DIR_STYLE: Record<string, { label: string; cls: string; icon: any }> = {
-  IN:            { label: 'Entrada',          cls: 'bg-green-100 text-green-700',   icon: ArrowDownRight },
-  OUT:           { label: 'Salida',           cls: 'bg-red-100 text-red-700',       icon: ArrowUpRight },
-  TRANSFER_IN:   { label: 'Traslado (entra)', cls: 'bg-blue-100 text-blue-700',     icon: RefreshCw },
-  TRANSFER_OUT:  { label: 'Traslado (sale)',  cls: 'bg-blue-100 text-blue-700',     icon: RefreshCw },
-  ADJUST_IN:     { label: 'Ajuste (entrada)', cls: 'bg-amber-100 text-amber-700',   icon: ArrowDownRight },
-  ADJUST_OUT:    { label: 'Ajuste (salida)',  cls: 'bg-amber-100 text-amber-700',   icon: ArrowUpRight },
-  QUARANTINE:    { label: 'Cuarentena',       cls: 'bg-purple-100 text-purple-700', icon: RefreshCw },
+  IN:            { label: 'Entrada',          cls: 'bg-green-50 text-green-700 border-green-200',   icon: ArrowDownRight },
+  OUT:           { label: 'Salida',           cls: 'bg-red-50 text-red-700 border-red-200',         icon: ArrowUpRight },
+  TRANSFER_IN:   { label: 'Traslado (entra)', cls: 'bg-blue-50 text-blue-700 border-blue-200',      icon: RefreshCw },
+  TRANSFER_OUT:  { label: 'Traslado (sale)',  cls: 'bg-blue-50 text-blue-700 border-blue-200',      icon: RefreshCw },
+  ADJUST_IN:     { label: 'Ajuste (entrada)', cls: 'bg-amber-50 text-amber-700 border-amber-200',   icon: ArrowDownRight },
+  ADJUST_OUT:    { label: 'Ajuste (salida)',  cls: 'bg-amber-50 text-amber-700 border-amber-200',   icon: ArrowUpRight },
+  QUARANTINE:    { label: 'Cuarentena',       cls: 'bg-purple-50 text-purple-700 border-purple-200', icon: RefreshCw },
 };
 
 const fDateTime = (iso: string | null) => iso ? new Date(iso).toLocaleString('es-CO', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-';
@@ -118,36 +124,17 @@ export default function KardexPage() {
 
   return (
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
-      {/* Sub-module nav */}
-      <div className="bg-white border-b border-slate-200 px-6 py-2 overflow-x-auto flex items-center gap-2 shadow-sm sticky top-0 z-30">
-        <span className="text-xs font-black text-slate-400 uppercase tracking-wider mr-4 shrink-0">Inventario:</span>
-        {INV_NAV.map(mod => (
-          <Link key={mod.name} href={mod.path}
-            className={`shrink-0 px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${
-              mod.path === '/dashboard/inventario/kardex'
-                ? 'bg-emerald-600 text-white border-emerald-600'
-                : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-700 border-transparent hover:border-emerald-200'
-            }`}>{mod.name}
-          </Link>
-        ))}
-      </div>
+      <SubNav label="Inventario" items={INV_NAV} currentPath="/dashboard/inventario/kardex" color="emerald" />
 
       <div className="p-8 max-w-[1600px] mx-auto space-y-6">
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight flex items-center gap-3">
-              <div className="p-2 bg-emerald-600 text-white rounded-lg shadow-md shadow-emerald-200">
-                <ArrowRightLeft size={24} />
-              </div>
-              Movimientos (Kardex)
-            </h1>
-            <p className="text-slate-500 mt-1">Historial inmutable de entradas, salidas, traslados y ajustes de inventario.</p>
-          </div>
-          <button onClick={load} className="flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-bold text-sm shadow-sm transition-colors">
-            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> Actualizar
-          </button>
-        </div>
+        <PageHeader icon={ArrowRightLeft} color="emerald"
+          title="Movimientos (Kardex)"
+          subtitle="Historial inmutable de entradas, salidas, traslados y ajustes de inventario."
+          actions={(
+            <button onClick={load} className="flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-bold text-sm shadow-sm transition-colors">
+              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} /> Actualizar
+            </button>
+          )} />
 
         {/* Filters */}
         <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-wrap items-end gap-3">
@@ -235,9 +222,8 @@ export default function KardexPage() {
                     <span className="text-slate-400">Cargando kardex...</span>
                   </td></tr>
                 ) : items.length === 0 ? (
-                  <tr><td colSpan={9} className="p-16 text-center">
-                    <ArrowRightLeft size={36} className="mx-auto mb-3 text-slate-200" />
-                    <p className="text-slate-500 font-medium">Sin movimientos {hasFilters ? 'para este filtro' : 'registrados'}</p>
+                  <tr><td colSpan={9}>
+                    <EmptyState icon={ArrowRightLeft} message={`Sin movimientos ${hasFilters ? 'para este filtro' : 'registrados'}`} />
                   </td></tr>
                 ) : items.map((mov: any) => {
                   const style = DIR_STYLE[mov.direction] || { label: mov.direction || '-', cls: 'bg-slate-100 text-slate-600', icon: RefreshCw };
@@ -248,8 +234,8 @@ export default function KardexPage() {
                     <tr key={mov.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="p-4 pl-6 text-xs text-slate-500">{fDateTime(mov.created_at)}</td>
                       <td className="p-4">
-                        <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-wider ${style.cls}`}>
-                          <Icon size={12} className="mr-1" /> {style.label}
+                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border ${style.cls}`}>
+                          <Icon size={12} /> {style.label}
                         </span>
                       </td>
                       <td className="p-4">

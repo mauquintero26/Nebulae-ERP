@@ -7,6 +7,18 @@ import {
   Globe, Tag, Layers, DollarSign, RefreshCw
 } from 'lucide-react';
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
+import { SubNav, PageHeader, Badge, EmptyState, Button } from '@/components/ui';
+
+const INV_NAV = [
+  { name: 'Productos',       path: '/dashboard/inventario/productos' },
+  { name: 'Stock',           path: '/dashboard/inventario/stock' },
+  { name: 'Recepciones',     path: '/dashboard/inventario/recepciones' },
+  { name: 'Entregas',        path: '/dashboard/inventario/entregas' },
+  { name: 'Traslados',       path: '/dashboard/inventario/traslados' },
+  { name: 'Ajustes',         path: '/dashboard/inventario/ajustes' },
+  { name: 'Abastecimiento',  path: '/dashboard/inventario/abastecimiento' },
+  { name: 'Bodegas',         path: '/dashboard/inventario/bodegas' },
+];
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
   const res = await _apiFetch(path, opts);
@@ -240,76 +252,67 @@ export default function ProductosPage() {
   // ─── PRODUCT LIST ───
   if (!selectedProduct) {
     return (
-      <div className="h-full w-full bg-[#f8f9fa] flex flex-col p-5 overflow-y-auto">
-        <div className="flex justify-between items-start mb-6">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-white rounded-xl shadow-sm border border-slate-200 flex items-center justify-center text-purple-600">
-              <Package size={24} />
-            </div>
-            <div>
-              <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Catalogo de Productos</h1>
-              <p className="text-slate-500 text-sm mt-1">{total} productos • Sincronizado con E-commerce</p>
-            </div>
-          </div>
-          <button onClick={openNew}
-            className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm flex items-center gap-2">
-            <Plus size={18} /> Nuevo Producto
-          </button>
-        </div>
+      <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
+        <SubNav label="Inventario" items={INV_NAV} currentPath="/dashboard/inventario/productos" color="purple" />
 
-        <div className="bg-white rounded-3xl shadow-sm border border-slate-100 flex-1 flex flex-col overflow-hidden">
-          <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-            <div className="flex items-center gap-3">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-                  placeholder="Buscar por nombre, SKU, referencia..."
-                  className="pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-lg text-sm w-80 outline-none focus:border-purple-400" />
-              </div>
-              <button onClick={load} className="p-2 border border-slate-200 rounded-lg text-slate-500 hover:bg-slate-50">
-                <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
-              </button>
-              <button onClick={() => setSoloRevision(v => !v)}
-                className={`px-3 py-2 rounded-lg text-xs font-bold border ${soloRevision ? 'bg-amber-100 border-amber-300 text-amber-700' : 'border-slate-200 text-slate-500'}`}>
-                Requiere revisión
-              </button>
-            </div>
-            <span className="text-sm text-slate-500">Total: <span className="font-bold text-slate-800">{total} productos</span></span>
-          </div>
+        <div className="p-8 max-w-[1600px] mx-auto space-y-6">
+          <PageHeader icon={Package} color="purple"
+            title="Catalogo de Productos"
+            subtitle={`${total} productos • Sincronizado con E-commerce`}
+            actionLabel="Nuevo Producto" actionIcon={Plus} onAction={openNew} />
 
-          <div className="flex-1 overflow-y-auto">
-            {loading ? (
-              <div className="flex justify-center pt-16"><RefreshCw size={24} className="animate-spin text-purple-400" /></div>
-            ) : products.length === 0 ? (
-              <div className="text-center pt-16 text-slate-400">
-                <Package size={48} className="mx-auto mb-4 opacity-20" />
-                <p>Sin productos. Crea el primero.</p>
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
+            <div className="border-b border-slate-200 bg-slate-50/50 p-4 flex justify-between items-center gap-4">
+              <div className="flex items-center gap-3">
+                <div className="relative flex items-center bg-white border border-slate-300 rounded-xl px-3 py-2 shadow-sm">
+                  <Search className="text-slate-400 mr-2" size={16} />
+                  <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+                    placeholder="Buscar por nombre, SKU, referencia..."
+                    className="bg-transparent text-sm outline-none w-72" />
+                  <button onClick={load} className="ml-2 text-slate-400"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /></button>
+                </div>
+                <button onClick={() => setSoloRevision(v => !v)}
+                  className={`px-3 py-2 rounded-xl text-xs font-bold border transition-colors ${soloRevision ? 'bg-amber-100 border-amber-300 text-amber-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+                  Requiere revisión
+                </button>
               </div>
-            ) : (
-              <table className="w-full text-left">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-100 text-xs text-slate-400 uppercase tracking-wider sticky top-0">
-                    <th className="px-6 py-4 font-bold">Producto</th>
-                    <th className="px-6 py-4 font-bold">Tipo</th>
-                    <th className="px-6 py-4 font-bold">Precio Venta</th>
-                    <th className="px-6 py-4 font-bold">Costo</th>
-                    <th className="px-6 py-4 font-bold text-center">E-Commerce</th>
-                    <th className="px-6 py-4 font-bold text-center">Activo</th>
+              <span className="text-sm text-slate-500">Total: <span className="font-bold text-slate-800">{total} productos</span></span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead className="bg-slate-50 border-b border-slate-200 text-[11px] font-black text-slate-500 uppercase tracking-wider">
+                  <tr>
+                    <th className="px-6 py-4">Producto</th>
+                    <th className="px-6 py-4">Tipo</th>
+                    <th className="px-6 py-4">Precio Venta</th>
+                    <th className="px-6 py-4">Costo</th>
+                    <th className="px-6 py-4 text-center">E-Commerce</th>
+                    <th className="px-6 py-4 text-center">Activo</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {products.map((p: any) => (
+                <tbody className="divide-y divide-slate-100 text-sm">
+                  {loading ? (
+                    <tr><td colSpan={6} className="px-6 py-16 text-center">
+                      <RefreshCw size={24} className="animate-spin text-purple-400 mx-auto mb-2" />
+                      <span className="text-slate-400">Cargando productos...</span>
+                    </td></tr>
+                  ) : products.length === 0 ? (
+                    <tr><td colSpan={6}>
+                      <EmptyState icon={Package} message="Sin productos. Crea el primero." />
+                    </td></tr>
+                  ) : products.map((p: any) => (
                     <tr key={p.id} onClick={() => openEdit(p)}
-                      className="border-b border-slate-50 cursor-pointer hover:bg-purple-50/30 transition-colors">
+                      className="hover:bg-slate-50/80 transition-colors cursor-pointer">
                       <td className="px-6 py-4">
-                        <div className="font-semibold text-slate-800">{p.name}</div>
+                        <div className="font-bold text-slate-800">{p.name}</div>
                         {p.reference && <div className="text-xs text-slate-400">Ref: {p.reference}</div>}
                         {p.necesita_revision && (
-                          <span className="inline-block mt-1 text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">Requiere revisión</span>
+                          <div className="mt-1"><Badge tone="warning">Requiere revisión</Badge></div>
                         )}
                       </td>
                       <td className="px-6 py-4">
-                        <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-medium">{p.type}</span>
+                        <Badge tone="neutral">{p.type}</Badge>
                       </td>
                       <td className="px-6 py-4 font-medium text-slate-800">
                         {p.sale_price ? `$${Number(p.sale_price).toLocaleString('es-CO')}` : '-'}
@@ -318,9 +321,7 @@ export default function ProductosPage() {
                         {p.cost_price ? `$${Number(p.cost_price).toLocaleString('es-CO')}` : '-'}
                       </td>
                       <td className="px-6 py-4 text-center">
-                        <span className={`inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full ${p.is_published ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>
-                          <Globe size={10} />{p.is_published ? 'Publicado' : 'No publicado'}
-                        </span>
+                        <Badge tone={p.is_published ? 'success' : 'neutral'} icon={Globe}>{p.is_published ? 'Publicado' : 'No publicado'}</Badge>
                       </td>
                       <td className="px-6 py-4 text-center">
                         <span className={`w-2 h-2 rounded-full inline-block ${p.is_active ? 'bg-emerald-400' : 'bg-slate-300'}`} />
@@ -329,7 +330,7 @@ export default function ProductosPage() {
                   ))}
                 </tbody>
               </table>
-            )}
+            </div>
           </div>
         </div>
       </div>
@@ -339,6 +340,7 @@ export default function ProductosPage() {
   // ─── PRODUCT FORM ───
   return (
     <div className="h-full w-full bg-[#f8f9fa] flex flex-col overflow-hidden">
+      <SubNav label="Inventario" items={INV_NAV} currentPath="/dashboard/inventario/productos" color="purple" />
       <div className="bg-white border-b border-slate-100 px-6 py-4 flex items-center gap-4 flex-shrink-0">
         <button onClick={closeProduct} className="p-2 text-slate-400 hover:bg-slate-100 rounded-xl">
           <ChevronLeft size={20} />
@@ -356,11 +358,9 @@ export default function ProductosPage() {
             <input type="checkbox" checked={canBuy} onChange={e=>setCanBuy(e.target.checked)} className="w-4 h-4" />
             <span className="font-medium text-slate-600">Se puede comprar</span>
           </label>
-          <button onClick={saveProduct} disabled={saving}
-            className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2 rounded-xl font-bold text-sm flex items-center gap-2 disabled:opacity-50">
-            {saving ? <RefreshCw size={14} className="animate-spin" /> : <Save size={16} />}
+          <Button color="purple" icon={Save} loading={saving} onClick={saveProduct}>
             {saving ? 'Guardando...' : 'Guardar'}
-          </button>
+          </Button>
         </div>
       </div>
 
