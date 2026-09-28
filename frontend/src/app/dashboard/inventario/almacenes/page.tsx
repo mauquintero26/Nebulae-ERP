@@ -6,22 +6,23 @@ import {
   Warehouse
 } from 'lucide-react';
 import { ResizableHeader } from '@/components/ResizableHeader';
+import { SubNav, PageHeader } from '@/components/ui';
+import { INV_NAV } from '../inv-nav';
 
 export default function AlmacenesHub() {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeView, setActiveView] = useState('list');
 
   return (
-    <div className="w-full bg-slate-50 flex flex-col px-8 py-6 min-h-max animate-in fade-in">
-      
+    <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
+      <SubNav label="Inventario" items={INV_NAV} currentPath="/dashboard/inventario/almacenes" color="emerald" />
+
+      <div className="px-8 py-6 flex flex-col">
       {/* Cabecera */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
-        <div>
-          <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-2">
-            <Warehouse className="text-emerald-600" size={28} /> Gestión de Almacenes
-          </h1>
-          <p className="text-slate-500 mt-1 font-medium">Administración de bodegas principales y centros de distribución.</p>
-        </div>
+      <div className="mb-6">
+        <PageHeader icon={Warehouse} color="emerald"
+          title="Gestión de Almacenes"
+          subtitle="Administración de bodegas principales y centros de distribución." />
       </div>
 
       {/* Barra de Filtros y Búsqueda */}
@@ -81,6 +82,7 @@ export default function AlmacenesHub() {
             <p className="font-bold text-lg text-slate-500">Vista de cuadrícula en construcción</p>
           </div>
         )}
+      </div>
       </div>
     </div>
   );
