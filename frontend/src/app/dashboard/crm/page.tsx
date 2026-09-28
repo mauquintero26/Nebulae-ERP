@@ -15,6 +15,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
+import { SubNav, PageHeader, Drawer, Modal, Button } from '@/components/ui';
+import { CRM_NAV } from './crm-nav';
 
 async function apiFetch(path, opts = {}) {
   const res = await _apiFetch(path, opts);
@@ -104,7 +106,7 @@ function CustomerAutocomplete({ query, showDropdown, suggestions, onQueryChange,
         onChange={e => onQueryChange(e.target.value)}
         onFocus={onFocus}
         placeholder="Nombre, email o teléfono..."
-        className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-500"
+        className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500"
       />
       {showDropdown && query.length > 0 && (
         <div className="absolute z-50 top-full left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-52 overflow-y-auto">
@@ -129,7 +131,7 @@ function CustomerAutocomplete({ query, showDropdown, suggestions, onQueryChange,
               <p className="text-sm font-bold text-slate-700">Cliente no encontrado</p>
               <p className="text-xs text-slate-400 mb-3">"{query}" no existe en la base de datos</p>
               <button onClick={onCreateNew}
-                className="w-full bg-purple-600 text-white text-xs font-bold py-2 px-4 rounded-lg hover:bg-purple-700">
+                className="w-full bg-indigo-600 text-white text-xs font-bold py-2 px-4 rounded-lg hover:bg-indigo-700">
                 + Crear cliente "{query}"
               </button>
             </div>
@@ -151,7 +153,7 @@ function ProductAutocomplete({ query, showDropdown, suggestions, onQueryChange, 
         onChange={e => onQueryChange(e.target.value)}
         onFocus={onFocus}
         placeholder="Nombre del producto..."
-        className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-500"
+        className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500"
       />
       {showDropdown && query.length > 0 && (
         <div className="absolute z-50 top-full left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-52 overflow-y-auto">
@@ -782,40 +784,35 @@ export default function CRMPage() {
       onPointerLeave={dragging ? onCardPointerCancel : undefined}
       style={dragging ? { userSelect: 'none', cursor: 'grabbing' } : undefined}>
 
+      <SubNav label="CRM" items={CRM_NAV} currentPath="/dashboard/crm" color="indigo" />
+
       {/* ── Header ── */}
-      <div className="flex items-center justify-between px-6 py-4 bg-white border-b border-slate-200 flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center text-indigo-600">
-            <LayoutGrid size={22}/>
-          </div>
-          <div>
-            <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">CRM Pipeline</h1>
-            <p className="text-slate-500 text-xs mt-0.5">{leads.length} leads · {formatCOP(totalValue)} en pipeline</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={openConfig}
-            className="p-2.5 rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-indigo-600 transition-colors" title="Configurar CRM">
-            <Settings size={17}/>
-          </button>
-          <button onClick={loadAll} className="p-2.5 rounded-xl border border-slate-200 text-slate-400 hover:bg-slate-50 transition-colors">
-            <RefreshCw size={17} className={loading ? 'animate-spin' : ''}/>
-          </button>
-          {/* View switcher */}
-          <div className="flex bg-slate-100 rounded-xl p-1 gap-0.5">
-            {[['kanban','Kanban',<LayoutGrid size={14}/>],['lista','Lista',<List size={14}/>],['analisis','Análisis',<BarChart3 size={14}/>]].map(([v,l,icon]) => (
-              <button key={v} onClick={() => setActiveView(v)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all
-                  ${activeView===v ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                {icon}{l}
+      <div className="bg-white border-b border-slate-200 flex-shrink-0 px-6 py-4">
+        <PageHeader icon={LayoutGrid} color="indigo"
+          title="CRM Pipeline"
+          subtitle={`${leads.length} leads · ${formatCOP(totalValue)} en pipeline`}
+          actions={(
+            <div className="flex items-center gap-2 flex-wrap">
+              <button onClick={openConfig}
+                className="p-2.5 rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-indigo-600 transition-colors" title="Configurar CRM">
+                <Settings size={17}/>
               </button>
-            ))}
-          </div>
-          <button onClick={() => setShowNewLead(true)}
-            className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded-xl shadow-md shadow-indigo-200 transition-colors">
-            <Plus size={17}/> Nuevo Lead
-          </button>
-        </div>
+              <button onClick={loadAll} className="p-2.5 rounded-xl border border-slate-200 text-slate-400 hover:bg-slate-50 transition-colors">
+                <RefreshCw size={17} className={loading ? 'animate-spin' : ''}/>
+              </button>
+              {/* View switcher */}
+              <div className="flex bg-slate-100 rounded-xl p-1 gap-0.5">
+                {[['kanban','Kanban',<LayoutGrid size={14}/>],['lista','Lista',<List size={14}/>],['analisis','Análisis',<BarChart3 size={14}/>]].map(([v,l,icon]) => (
+                  <button key={v} onClick={() => setActiveView(v)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all
+                      ${activeView===v ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                    {icon}{l}
+                  </button>
+                ))}
+              </div>
+              <Button color="indigo" icon={Plus} onClick={() => setShowNewLead(true)}>Nuevo Lead</Button>
+            </div>
+          )} />
       </div>
 
       {/* ── Toolbar: search + filter ── */}
@@ -1114,52 +1111,43 @@ export default function CRMPage() {
       )}
 
       {/* ══ PANEL — DETALLE LEAD (600px, con edición y acciones Ventas) ════ */}
-      {selectedLead && (
-        <>
-          <div className="fixed inset-0 bg-slate-900/20 backdrop-blur-sm z-40" onClick={() => { setSelectedLead(null); setEditingLead(false); }}/>
-          <div className="fixed top-0 right-0 bottom-0 w-[620px] bg-white shadow-2xl border-l border-slate-200 z-50 flex flex-col" onClick={e=>e.stopPropagation()}>
-            {/* Panel header */}
-            {(() => {
-              const stage = stages.find(s => s.id === selectedLead.pipeline_stage_id);
-              return (
-                <>
-                  <div className="p-5 border-b border-slate-100 bg-slate-50 flex items-start justify-between">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        {stage && <span className="text-xs font-black px-2 py-0.5 rounded-md"
-                          style={{ color: COLOR_HEX[stage.color], backgroundColor: BG_HEX[stage.bg_color]||'#f8fafc' }}>
-                          {stage.name}
-                        </span>}
-                        <span className="text-xs text-slate-400">{timeAgo(selectedLead.updated_at)}</span>
-                      </div>
-                      <h2 className="text-xl font-black text-slate-800">{selectedLead.client}</h2>
-                      <p className="text-sm text-indigo-600 font-bold mt-0.5">{selectedLead.solicitud_tipo || selectedLead.tag}</p>
-                    </div>
-                    <div className="flex items-center gap-2 ml-2">
-                      {!editingLead ? (
-                        <button onClick={() => { setEditForm(buildEditForm(selectedLead)); setEditingLead(true); }}
-                          className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-100">
-                          <Edit3 size={13}/> Editar
-                        </button>
-                      ) : (
-                        <>
-                          <button onClick={() => setEditingLead(false)}
-                            className="px-3 py-1.5 border border-slate-200 text-slate-500 rounded-xl text-xs font-bold hover:bg-slate-100">
-                            Cancelar
-                          </button>
-                          <button onClick={handleUpdateLead} disabled={isSaving}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 disabled:opacity-60">
-                            <Save size={13}/> {isSaving ? 'Guardando...' : 'Guardar'}
-                          </button>
-                        </>
-                      )}
-                      <button onClick={() => { setSelectedLead(null); setEditingLead(false); }}
-                        className="p-2 hover:bg-slate-200 rounded-full text-slate-400"><X size={16}/></button>
-                    </div>
-                  </div>
-
-                  {/* Panel body */}
-                  <div className="flex-1 overflow-y-auto">
+      {selectedLead && (() => {
+        const stage = stages.find(s => s.id === selectedLead.pipeline_stage_id);
+        return (
+          <Drawer onClose={() => { setSelectedLead(null); setEditingLead(false); }} header={(
+            <div className="flex-1 flex items-start justify-between gap-2 min-w-0">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  {stage && <span className="text-xs font-black px-2 py-0.5 rounded-md"
+                    style={{ color: COLOR_HEX[stage.color], backgroundColor: BG_HEX[stage.bg_color]||'#f8fafc' }}>
+                    {stage.name}
+                  </span>}
+                  <span className="text-xs text-slate-400">{timeAgo(selectedLead.updated_at)}</span>
+                </div>
+                <h2 className="text-xl font-black text-slate-800">{selectedLead.client}</h2>
+                <p className="text-sm text-indigo-600 font-bold mt-0.5">{selectedLead.solicitud_tipo || selectedLead.tag}</p>
+              </div>
+              <div className="flex items-center gap-2 ml-2">
+                {!editingLead ? (
+                  <button onClick={() => { setEditForm(buildEditForm(selectedLead)); setEditingLead(true); }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-600 rounded-xl text-xs font-bold hover:bg-slate-100">
+                    <Edit3 size={13}/> Editar
+                  </button>
+                ) : (
+                  <>
+                    <button onClick={() => setEditingLead(false)}
+                      className="px-3 py-1.5 border border-slate-200 text-slate-500 rounded-xl text-xs font-bold hover:bg-slate-100">
+                      Cancelar
+                    </button>
+                    <button onClick={handleUpdateLead} disabled={isSaving}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 disabled:opacity-60">
+                      <Save size={13}/> {isSaving ? 'Guardando...' : 'Guardar'}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}>
 
                     {/* ── VIEW MODE ── */}
                     {!editingLead && (
@@ -1224,7 +1212,7 @@ export default function CRMPage() {
                         <div>
                           <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">Tipo de Solicitud</label>
                           <select value={editForm.solicitud_tipo} onChange={e=>setEditForm(f=>({...f,solicitud_tipo:e.target.value}))}
-                            className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-500 bg-white">
+                            className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500 bg-white">
                             {SOLICITUD_TIPOS.map(t=><option key={t} value={t}>{t}</option>)}
                           </select>
                         </div>
@@ -1234,7 +1222,7 @@ export default function CRMPage() {
                             <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">Cantidad</label>
                             <input type="number" min="1" value={editForm.lead_qty}
                               onChange={e=>setEditForm(f=>({...f,lead_qty:e.target.value}))}
-                              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-500"/>
+                              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500"/>
                           </div>
                         )}
                         <div className="grid grid-cols-2 gap-3">
@@ -1242,12 +1230,12 @@ export default function CRMPage() {
                             <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">Valor (COP)</label>
                             <input type="number" value={editForm.lead_value}
                               onChange={e=>setEditForm(f=>({...f,lead_value:e.target.value}))}
-                              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-500"/>
+                              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500"/>
                           </div>
                           <div>
                             <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">Origen</label>
                             <select value={editForm.lead_source} onChange={e=>setEditForm(f=>({...f,lead_source:e.target.value}))}
-                              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-500 bg-white">
+                              className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500 bg-white">
                               {LEAD_SOURCES.map(s=><option key={s} value={s}>{s}</option>)}
                             </select>
                           </div>
@@ -1256,12 +1244,12 @@ export default function CRMPage() {
                           <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">Asesor</label>
                           <input value={editForm.advisor_name} onChange={e=>setEditForm(f=>({...f,advisor_name:e.target.value}))}
                             placeholder="Nombre del asesor"
-                            className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-500"/>
+                            className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500"/>
                         </div>
                         <div>
                           <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">Etapa del Pipeline</label>
                           <select value={editForm.pipeline_stage_id} onChange={e=>setEditForm(f=>({...f,pipeline_stage_id:e.target.value}))}
-                            className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-500 bg-white">
+                            className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500 bg-white">
                             <option value="">Sin etapa</option>
                             {stages.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
                           </select>
@@ -1269,7 +1257,7 @@ export default function CRMPage() {
                         <div>
                           <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">Descripción</label>
                           <textarea value={editForm.description} onChange={e=>setEditForm(f=>({...f,description:e.target.value}))}
-                            rows={3} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-500 resize-none"/>
+                            rows={3} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-indigo-500 resize-none"/>
                         </div>
                       </div>
                     )}
@@ -1339,28 +1327,20 @@ export default function CRMPage() {
                         </div>
                       </div>
                     )}
-                  </div>
-                </>
-              );
-            })()}
-          </div>
-        </>
-      )}
+          </Drawer>
+        );
+      })()}
 
       {/* ══ MODAL — NUEVO LEAD ═════════════════════════════════════════════ */}
       {showNewLead && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[95vh] overflow-y-auto"
-            onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-gradient-to-r from-indigo-50 to-white sticky top-0 z-10">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-indigo-600 text-white rounded-lg"><Plus size={18}/></div>
-                <h3 className="font-extrabold text-slate-800 text-lg">Nuevo Lead</h3>
-              </div>
-              <button onClick={() => setShowNewLead(false)} className="p-2 hover:bg-slate-100 rounded-full text-slate-400"><X size={18}/></button>
-            </div>
-
-            <div className="p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <Modal title="Nuevo Lead" icon={Plus} color="indigo" onClose={() => setShowNewLead(false)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setShowNewLead(false)}>Cancelar</Button>
+              <Button color="indigo" loading={isSaving} disabled={!nlForm.customer_id} onClick={handleCreateLead}>Crear Lead</Button>
+            </>
+          )}>
+          <div onClick={e => e.stopPropagation()} className="space-y-4">
               {/* Customer autocomplete */}
               <CustomerAutocomplete {...customerAutocompleteProps(false)}/>
 
@@ -1436,36 +1416,18 @@ export default function CRMPage() {
                   <p className="text-xs text-amber-700 font-medium">Debes seleccionar o crear el cliente para continuar.</p>
                 </div>
               )}
-            </div>
-
-            <div className="flex gap-3 px-6 pb-6">
-              <button onClick={() => setShowNewLead(false)}
-                className="flex-1 py-2.5 border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50 text-sm">
-                Cancelar
-              </button>
-              <button onClick={handleCreateLead} disabled={isSaving || !nlForm.customer_id}
-                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm shadow-md shadow-indigo-200 disabled:opacity-50">
-                {isSaving ? 'Creando...' : 'Crear Lead'}
-              </button>
-            </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {/* ══ PANEL — CONFIGURACIÓN CRM ══════════════════════════════════════ */}
       {showConfig && (
-        <>
-          <div className="fixed inset-0 bg-slate-900/20 backdrop-blur-sm z-40" onClick={() => setShowConfig(false)}/>
-          <div className="fixed top-0 right-0 bottom-0 w-[520px] bg-white shadow-2xl border-l border-slate-200 z-50 flex flex-col">
-            <div className="p-5 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-slate-700 text-white rounded-xl"><Settings size={18}/></div>
-                <h2 className="font-black text-slate-800 text-lg">Configuración CRM</h2>
-              </div>
-              <button onClick={() => setShowConfig(false)} className="p-2 hover:bg-slate-200 rounded-full text-slate-400"><X size={16}/></button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-5 space-y-6">
+        <Drawer onClose={() => setShowConfig(false)} header={(
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-slate-700 text-white rounded-xl"><Settings size={18}/></div>
+            <h2 className="font-black text-slate-800 text-lg">Configuración CRM</h2>
+          </div>
+        )}>
               {/* Pipeline stages management */}
               <div>
                 <h3 className="font-black text-slate-700 text-sm uppercase tracking-wider mb-3">Etapas del Pipeline</h3>
@@ -1548,9 +1510,7 @@ export default function CRMPage() {
                 <p className="font-bold mb-1">Alertas automáticas</p>
                 <p>Los leads que superen los días configurados por etapa aparecerán marcados en rojo/ámbar en el Kanban y en la vista Análisis para que el equipo pueda hacer seguimiento a tiempo.</p>
               </div>
-            </div>
-          </div>
-        </>
+        </Drawer>
       )}
     </div>
   );

@@ -9,6 +9,8 @@ import {
   ChevronRight, DollarSign, Package
 } from 'lucide-react';
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
+import { SubNav, PageHeader, StatCard } from '@/components/ui';
+import { CRM_NAV } from '../crm-nav';
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
   const res = await _apiFetch(path, opts);
@@ -51,11 +53,6 @@ function daysInStage(iso: string | null) {
 
 const fCOP = (v: number) => v > 0 ? `$${Number(v).toLocaleString('es-CO')}` : '-';
 
-const SUB_MODULES = [
-  { name: 'Tablero Kanban',  path: '/dashboard/crm' },
-  { name: 'Seguimientos',    path: '/dashboard/crm/calendario' },
-];
-
 export default function SeguimientosPage() {
   const [leads, setLeads] = useState<any[]>([]);
   const [stages, setStages] = useState<any[]>([]);
@@ -96,19 +93,7 @@ export default function SeguimientosPage() {
   return (
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
 
-      {/* Sub-module nav */}
-      <div className="bg-white border-b border-slate-200 px-6 py-2 overflow-x-auto flex items-center gap-2 shadow-sm sticky top-0 z-30">
-        <span className="text-xs font-black text-slate-400 uppercase tracking-wider mr-4 shrink-0">CRM:</span>
-        {SUB_MODULES.map(mod => (
-          <Link key={mod.name} href={mod.path}
-            className={`shrink-0 px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${
-              mod.path === '/dashboard/crm/calendario'
-                ? 'bg-purple-600 text-white border-purple-600'
-                : 'text-slate-600 hover:bg-purple-50 hover:text-purple-700 border-transparent hover:border-purple-200'
-            }`}>{mod.name}
-          </Link>
-        ))}
-      </div>
+      <SubNav label="CRM" items={CRM_NAV} currentPath="/dashboard/crm/calendario" color="indigo" />
 
       {/* Alert urgentes */}
       {urgentes.length > 0 && (
@@ -123,63 +108,53 @@ export default function SeguimientosPage() {
       <div className="p-8 max-w-[1600px] mx-auto space-y-6">
 
         {/* Header */}
-        <div className="flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">
-              <div className="bg-purple-100 text-purple-600 p-2 rounded-xl shadow-inner"><Phone size={24} /></div>
-              Seguimientos CRM
-            </h1>
-            <p className="text-slate-500 mt-1 font-medium">Gestiona el pipeline de ventas por etapa — {leads.length} leads activos</p>
-          </div>
-          <div className="flex gap-3">
-            <button onClick={load} className="bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm">
-              <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> Actualizar
-            </button>
-            <Link href="/dashboard/crm"
-              className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-xl font-bold shadow-md flex items-center gap-2 text-sm">
-              Ir al Kanban
-            </Link>
-          </div>
-        </div>
+        <PageHeader icon={Phone} color="indigo"
+          title="Seguimientos CRM"
+          subtitle={`Gestiona el pipeline de ventas por etapa — ${leads.length} leads activos`}
+          actions={(
+            <div className="flex gap-3">
+              <button onClick={load} className="bg-white border border-slate-200 px-4 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-50 flex items-center gap-2 text-sm">
+                <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> Actualizar
+              </button>
+              <Link href="/dashboard/crm"
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl font-bold shadow-md flex items-center gap-2 text-sm">
+                Ir al Kanban
+              </Link>
+            </div>
+          )} />
 
         {/* KPI Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {stages.slice(0, 3).map((s: any) => {
             const count = leads.filter(l => l.pipeline_stage_id === s.id).length;
             return (
-              <div key={s.id} className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm cursor-pointer hover:border-purple-200 transition-all"
+              <div key={s.id} className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm cursor-pointer hover:border-indigo-200 transition-all"
                 onClick={() => setActiveStage(s.id.toString())}>
-                <div className="w-3 h-3 rounded-full mb-3" style={{ backgroundColor: s.color || '#a855f7' }} />
+                <div className="w-3 h-3 rounded-full mb-3" style={{ backgroundColor: s.color || '#6366f1' }} />
                 <p className="text-xs font-black text-slate-400 uppercase mb-1 truncate">{s.name}</p>
                 <h2 className="text-3xl font-black text-slate-800">{count}</h2>
               </div>
             );
           })}
-          <div className="bg-gradient-to-br from-purple-600 to-indigo-700 rounded-2xl p-5 text-white shadow-lg relative overflow-hidden cursor-pointer"
-            onClick={() => setActiveStage('all')}>
-            <div className="absolute right-0 top-0 opacity-10"><Activity size={80} /></div>
-            <p className="text-xs font-black text-purple-100 uppercase mb-1 relative z-10">Total Leads</p>
-            <h2 className="text-3xl font-black relative z-10">{leads.length}</h2>
-            <p className="text-xs font-bold text-purple-100 mt-1 relative z-10">{urgentes.length} urgentes</p>
-          </div>
+          <StatCard variant="gradient" color="indigo" icon={Activity} label="Total Leads" value={leads.length} hint={`${urgentes.length} urgentes`} onClick={() => setActiveStage('all')} />
         </div>
 
         {/* Stage filter + Search */}
         <div className="flex gap-3 flex-wrap items-center">
           <button onClick={() => setActiveStage('all')}
-            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeStage === 'all' ? 'bg-purple-600 text-white' : 'bg-white border border-slate-200 text-slate-600'}`}>
+            className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeStage === 'all' ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-600'}`}>
             Todos ({leads.length})
           </button>
           {stages.map((s: any) => {
             const count = leads.filter(l => l.pipeline_stage_id === s.id).length;
             return (
               <button key={s.id} onClick={() => setActiveStage(s.id.toString())}
-                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeStage === s.id.toString() ? 'bg-purple-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:border-purple-200'}`}>
+                className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${activeStage === s.id.toString() ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:border-indigo-200'}`}>
                 {s.name} ({count})
               </button>
             );
           })}
-          <div className="ml-auto flex items-center bg-white border border-slate-300 rounded-xl px-3 py-2 shadow-sm focus-within:border-purple-400">
+          <div className="ml-auto flex items-center bg-white border border-slate-300 rounded-xl px-3 py-2 shadow-sm focus-within:border-indigo-400">
             <Search className="text-slate-400 mr-2" size={15} />
             <input type="text" value={search} onChange={e => setSearch(e.target.value)}
               placeholder="Buscar cliente, producto..."
@@ -190,14 +165,14 @@ export default function SeguimientosPage() {
         {/* Content */}
         {loading ? (
           <div className="flex justify-center py-20">
-            <RefreshCw size={28} className="animate-spin text-purple-400" />
+            <RefreshCw size={28} className="animate-spin text-indigo-400" />
           </div>
         ) : filtered.length === 0 ? (
           <div className="bg-white rounded-3xl border border-slate-200 p-20 text-center shadow-sm">
             <Activity size={48} className="mx-auto mb-4 text-slate-200" />
             <p className="text-slate-500 font-semibold">Sin leads en esta etapa</p>
             <Link href="/dashboard/crm"
-              className="inline-flex items-center gap-2 mt-4 bg-purple-600 text-white px-5 py-2 rounded-xl font-bold text-sm hover:bg-purple-700">
+              className="inline-flex items-center gap-2 mt-4 bg-indigo-600 text-white px-5 py-2 rounded-xl font-bold text-sm hover:bg-indigo-700">
               Ir al Kanban <ChevronRight size={14} />
             </Link>
           </div>
@@ -224,7 +199,7 @@ export default function SeguimientosPage() {
                         return (
                           <div key={lead.id} onClick={() => setSelected(selected?.id === lead.id ? null : lead)}
                             className={`bg-white rounded-2xl border shadow-sm p-5 cursor-pointer transition-all hover:shadow-md ${
-                              selected?.id === lead.id ? 'border-purple-400 ring-2 ring-purple-100' : isUrgent ? 'border-amber-200' : 'border-slate-100'
+                              selected?.id === lead.id ? 'border-indigo-400 ring-2 ring-indigo-100' : isUrgent ? 'border-amber-200' : 'border-slate-100'
                             }`}>
                             <div className="flex items-start justify-between mb-3">
                               <div>
@@ -278,7 +253,7 @@ export default function SeguimientosPage() {
                                 </a>
                               )}
                               <Link href="/dashboard/crm"
-                                className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-purple-50 text-purple-700 rounded-lg text-xs font-bold hover:bg-purple-100" onClick={e => e.stopPropagation()}>
+                                className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-100" onClick={e => e.stopPropagation()}>
                                 <MoreVertical size={11}/> CRM
                               </Link>
                             </div>
