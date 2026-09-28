@@ -6,9 +6,11 @@ import Link from 'next/link';
 import {
   ShoppingCart, Search, RefreshCw, X, Filter, Plus,
   Package, Clock, CheckCircle2, AlertCircle, Trash2,
-  ChevronDown, ExternalLink, ArrowLeft, ShoppingBag,
+  ChevronDown, ExternalLink, ShoppingBag,
   Calendar, User, Edit2, Save, ListChecks, UserPlus
 } from 'lucide-react';
+import { SubNav, PageHeader, StatCard, Badge, Modal, Toast, Button } from '@/components/ui';
+import { COMP_NAV } from '../comp-nav';
 
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 async function apiFetch(path: string, opts: any = {}) {
@@ -21,20 +23,10 @@ async function apiFetch(path: string, opts: any = {}) {
 const fDate = (iso) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 
 const ESTADO_STYLES = {
-  PENDIENTE: { bg: 'bg-amber-100', text: 'text-amber-800', label: 'Pendiente' },
-  EN_PEDIDO: { bg: 'bg-blue-100',  text: 'text-blue-800',  label: 'En Pedido' },
-  RECIBIDO:  { bg: 'bg-emerald-100', text: 'text-emerald-800', label: 'Recibido' },
+  PENDIENTE: { tone: 'warning', label: 'Pendiente' },
+  EN_PEDIDO: { tone: 'info',    label: 'En Pedido' },
+  RECIBIDO:  { tone: 'success', label: 'Recibido' },
 };
-
-const SUB_MODULES = [
-  { name: 'Lista de Compras',      path: '/dashboard/compras/lista-compras' },
-  { name: 'Pedidos de Compra',     path: '/dashboard/compras/pedidos' },
-  { name: 'Mercancia en Transito', path: '/dashboard/compras/transito' },
-  { name: 'Recepciones (Entrada)', path: '/dashboard/compras/recepciones' },
-  { name: 'Traslados Internos',    path: '/dashboard/compras/traslados' },
-  { name: 'Registro OCR/Manual',   path: '/dashboard/compras/registro' },
-  { name: 'Proyecciones',          path: '/dashboard/compras/proyecciones' },
-];
 
 function NewSupplierModal({onSave, onClose}) {
   const [form, setForm] = useState({name:'',reference:'',contact_name:'',phone:'',email:'',address:'',city:'',country:'Colombia',payment_terms:'',notes:''});
@@ -49,30 +41,22 @@ function NewSupplierModal({onSave, onClose}) {
     setSaving(false);
   }
   return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm">
-      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg mx-4">
-        <div className="px-6 py-5 border-b border-slate-100 flex justify-between items-center bg-purple-50 rounded-t-3xl">
-          <div><h3 className="font-black text-gray-900 text-lg">Nuevo Proveedor</h3><p className="text-xs text-gray-500 mt-0.5">Agregar a la agenda de proveedores</p></div>
-          <button onClick={onClose} className="p-2 hover:bg-purple-100 rounded-xl"><X size={18}/></button>
-        </div>
-        <form onSubmit={save} className="p-6 space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Nombre *</label><input required value={form.name} onChange={e=>set('name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Referencia / NIT</label><input value={form.reference} onChange={e=>set('reference',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Contacto</label><input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Telefono</label><input value={form.phone} onChange={e=>set('phone',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Email</label><input type="email" value={form.email} onChange={e=>set('email',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-            <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Ciudad</label><input value={form.city} onChange={e=>set('city',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
-          </div>
-          <div className="flex justify-end gap-3 pt-2 border-t border-gray-100">
-            <button type="button" onClick={onClose} className="px-4 py-2 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50">Cancelar</button>
-            <button type="submit" disabled={saving} className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2">
-              {saving?<RefreshCw size={14} className="animate-spin"/>:<UserPlus size={14}/>} Agregar Proveedor
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+    <Modal title="Nuevo Proveedor" subtitle="Agregar a la agenda de proveedores" color="purple" onClose={onClose}
+      footer={(
+        <>
+          <Button variant="secondary" onClick={onClose}>Cancelar</Button>
+          <Button type="submit" form="new-supplier-form" color="purple" icon={UserPlus} loading={saving}>Agregar Proveedor</Button>
+        </>
+      )}>
+      <form id="new-supplier-form" onSubmit={save} className="grid grid-cols-2 gap-4">
+        <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Nombre *</label><input required value={form.name} onChange={e=>set('name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+        <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Referencia / NIT</label><input value={form.reference} onChange={e=>set('reference',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+        <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Contacto</label><input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+        <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Telefono</label><input value={form.phone} onChange={e=>set('phone',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+        <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Email</label><input type="email" value={form.email} onChange={e=>set('email',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+        <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Ciudad</label><input value={form.city} onChange={e=>set('city',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
+      </form>
+    </Modal>
   );
 }
 
@@ -265,63 +249,29 @@ export default function ListaComprasPage() {
 
   return (
     <div className="flex flex-col min-h-screen bg-gray-50">
-      {toast && (
-        <div className={`fixed top-5 right-5 z-[200] px-5 py-3 rounded-2xl shadow-xl text-sm font-bold flex items-center gap-2 ${toast.type==='err'?'bg-red-500':'bg-emerald-500'} text-white`}>
-          {toast.msg}<button onClick={()=>setToast(null)}><X size={14}/></button>
-        </div>
-      )}
+      <Toast toast={toast} onClose={()=>setToast(null)} />
 
-      {/* Sub-module nav */}
-      <div className="bg-white border-b border-gray-200 px-6 py-2 flex items-center gap-1 sticky top-0 z-30 shadow-sm overflow-x-auto">
-        <Link href="/dashboard/compras" className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold text-gray-500 hover:bg-gray-100 border border-gray-200 mr-2 transition-colors">
-          <ArrowLeft size={12}/> Hub
-        </Link>
-        <div className="w-px h-4 bg-gray-200 mr-2 shrink-0"/>
-        <span className="text-xs font-black text-gray-400 uppercase tracking-wider mr-3 shrink-0">COMPRAS:</span>
-        {SUB_MODULES.map(m => (
-          <Link key={m.path} href={m.path}
-            className={`shrink-0 px-4 py-1.5 rounded-full text-sm font-semibold border transition-colors ${
-              m.path === '/dashboard/compras/lista-compras'
-                ? 'bg-purple-600 text-white border-purple-600'
-                : 'text-gray-600 hover:bg-purple-50 hover:text-purple-700 border-transparent'
-            }`}>{m.name}
-          </Link>
-        ))}
-      </div>
+      <SubNav label="Hub de Compras" items={COMP_NAV} currentPath="/dashboard/compras/lista-compras" color="purple" hub={{ href: '/dashboard/compras' }} />
 
       {/* Header */}
       <div className="bg-white border-b border-gray-100 px-8 py-6">
-        <div className="flex justify-between items-start">
-          <div className="flex items-center gap-4">
-            <div className="bg-purple-50 text-purple-600 p-3 rounded-2xl">
-              <ListChecks size={30}/>
-            </div>
-            <div>
-              <h1 className="text-3xl font-black text-gray-900">Lista de Productos por Comprar</h1>
-              <p className="text-sm text-gray-400 mt-0.5">Productos pendientes de compra desde Pedidos de Venta</p>
-            </div>
-          </div>
-          <button onClick={load} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 font-semibold text-sm shadow-sm mt-1">
-            <RefreshCw size={14} className={loading?'animate-spin':''}/> Actualizar
-          </button>
-        </div>
+        <PageHeader icon={ListChecks} color="purple"
+          title="Lista de Productos por Comprar"
+          subtitle="Productos pendientes de compra desde Pedidos de Venta"
+          actions={(
+            <button onClick={load} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 font-semibold text-sm shadow-sm">
+              <RefreshCw size={14} className={loading?'animate-spin':''}/> Actualizar
+            </button>
+          )} />
       </div>
 
       {/* KPI Cards */}
       <div className="px-8 py-5 bg-white border-b border-gray-100">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          {[
-            { label:'Pendientes',  value: stats.pendientes ?? 0, color:'text-amber-700',   bg:'bg-amber-100',   icon:<Clock size={20}/> },
-            { label:'En Pedido',   value: stats.en_pedido ?? 0,  color:'text-blue-700',    bg:'bg-blue-100',    icon:<ShoppingCart size={20}/> },
-            { label:'Recibidos',   value: stats.recibidos ?? 0,  color:'text-emerald-700', bg:'bg-emerald-100', icon:<CheckCircle2 size={20}/> },
-            { label:'Total Items', value: stats.total ?? 0,      color:'text-gray-700',    bg:'bg-gray-100',    icon:<Package size={20}/> },
-          ].map((k,i) => (
-            <div key={i} className="border border-gray-200 rounded-2xl p-5 hover:shadow-md transition-shadow bg-white">
-              <div className={`${k.bg} ${k.color} w-10 h-10 rounded-xl flex items-center justify-center mb-3`}>{k.icon}</div>
-              <p className="text-xs font-black text-gray-400 uppercase tracking-wide mb-1">{k.label}</p>
-              <p className="text-3xl font-black text-gray-900">{k.value}</p>
-            </div>
-          ))}
+          <StatCard icon={Clock} label="Pendientes" value={stats.pendientes ?? 0} color="amber" />
+          <StatCard icon={ShoppingCart} label="En Pedido" value={stats.en_pedido ?? 0} color="blue" />
+          <StatCard icon={CheckCircle2} label="Recibidos" value={stats.recibidos ?? 0} color="emerald" />
+          <StatCard icon={Package} label="Total Items" value={stats.total ?? 0} color="purple" />
         </div>
       </div>
 
@@ -398,10 +348,9 @@ export default function ListaComprasPage() {
         <div className="px-8 py-3 bg-purple-50 border-b border-purple-200 flex items-center gap-3">
           <ListChecks size={16} className="text-purple-600"/>
           <span className="text-sm font-bold text-purple-800">{selectedIds.size} producto(s) seleccionado(s)</span>
-          <button onClick={()=>openPecModal(items.filter(it=>selectedIds.has(it.id)))}
-            className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold shadow-sm">
-            <ShoppingCart size={14}/> Crear Pedido de Compra con seleccionados
-          </button>
+          <Button size="sm" color="purple" icon={ShoppingCart} onClick={()=>openPecModal(items.filter(it=>selectedIds.has(it.id)))}>
+            Crear Pedido de Compra con seleccionados
+          </Button>
           <button onClick={()=>setSelectedIds(new Set())} className="text-xs text-purple-500 hover:text-purple-700 font-bold">Cancelar seleccion</button>
         </div>
       )}
@@ -492,7 +441,7 @@ export default function ListaComprasPage() {
                       ) : <span className="text-gray-300 text-xs">-</span>}
                     </td>
                     <td className="px-4 py-3.5">
-                      <span className={`px-3 py-1 rounded-full text-xs font-black ${est.bg} ${est.text}`}>{est.label}</span>
+                      <Badge tone={est.tone}>{est.label}</Badge>
                     </td>
                     <td className="px-4 py-3.5 text-xs text-gray-500">{fDate(item.fecha_creacion)}</td>
                     <td className="px-4 py-3.5">
@@ -606,94 +555,87 @@ export default function ListaComprasPage() {
       )}
 
       {/* Modal Crear PEC */}
+      {showPecModal && pecModalItems.length > 0 && (
+        <Modal title="Crear Pedido de Compra" subtitle={`${pecModalItems.length} producto(s) seleccionado(s)`}
+          color="purple" maxWidth="md" onClose={()=>setShowPecModal(false)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={()=>setShowPecModal(false)}>Cancelar</Button>
+              <Button color="purple" icon={ShoppingCart} loading={pecSaving} onClick={handleCrearPEC}>Crear PEC</Button>
+            </>
+          )}>
+          <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 max-h-48 overflow-y-auto space-y-2">
+            {pecModalItems.map(it=>(
+              <div key={it.id} className="flex items-center justify-between gap-2 text-xs text-gray-700">
+                <div className="min-w-0">
+                  <p className="truncate">{it.producto} {it.pven_numero&&<span className="text-gray-400">· {it.pven_numero}</span>}</p>
+                  <p className="text-gray-400">× {it.cantidad}</p>
+                </div>
+                <div className="shrink-0 w-32">
+                  <input type="number" min="0" value={it.precio_unitario_cop||''} onChange={e=>setItemPrecio(it.id, e.target.value)}
+                    placeholder="Precio COP"
+                    className={'w-full border rounded-lg px-2 py-1.5 text-xs text-right outline-none focus:ring-2 focus:ring-purple-200 ' + (!(Number(it.precio_unitario_cop)>0)?'border-red-300 bg-red-50':'border-gray-200')}/>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div>
+            <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Proveedor</label>
+            <input value={supplierSearch} onChange={e=>onSupplierSearch(e.target.value)}
+              placeholder="Buscar proveedor..." className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
+            {suppliers.length > 0 && (
+              <div className="border border-gray-200 rounded-xl shadow-lg mt-1 max-h-40 overflow-y-auto">
+                {suppliers.map(s => (
+                  <button key={s.id} onClick={()=>{setSelectedSupplier(s);setSupplierSearch(s.name);setSuppliers([]);}}
+                    className="w-full text-left px-4 py-2.5 hover:bg-purple-50 text-sm font-medium border-b last:border-0">
+                    {s.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            {selectedSupplier && (
+              <p className="text-xs text-purple-700 font-bold mt-1">✓ {selectedSupplier.name} seleccionado</p>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Dias Entrega</label>
+              <input type="number" min="1" value={pecForm.dias_entrega} onChange={e=>setPecForm(f=>({...f,dias_entrega:Number(e.target.value)}))}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
+            </div>
+            <div>
+              <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Modalidad</label>
+              <select value={pecForm.modalidad_pago} onChange={e=>setPecForm(f=>({...f,modalidad_pago:e.target.value}))}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200">
+                {['Contado','Credito 30d','Credito 60d','Adelanto 50%','Contra entrega'].map(p=><option key={p}>{p}</option>)}
+              </select>
+            </div>
+            <div className="col-span-2">
+              <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Tipo de Envio</label>
+              <select value={pecForm.tipo_envio} onChange={e=>setPecForm(f=>({...f,tipo_envio:e.target.value}))}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200">
+                <option value="casillero">Via Casillero</option>
+                <option value="directo">Directo Colombia</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Notas</label>
+            <textarea value={pecForm.notas} onChange={e=>setPecForm(f=>({...f,notas:e.target.value}))}
+              rows={2} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none outline-none focus:ring-2 focus:ring-purple-200"/>
+          </div>
+        </Modal>
+      )}
+
+      {/* Nested modal: crear proveedor al vuelo desde el modal de PEC. Debe pintarse
+          DESPUES del modal de PEC en el DOM (mismo z-50 de <Modal>, empatan por
+          orden de pintado) para quedar encima -- antes usaba z-[110] vs z-[100]
+          explicito; ahora depende del orden de render. */}
       {showNewSupplier && (
         <NewSupplierModal
           onSave={(s)=>{setSelectedSupplier(s);setSupplierSearch(s.name);setSuppliers([]);setShowNewSupplier(false);}}
           onClose={()=>setShowNewSupplier(false)}
         />
-      )}
-      {showPecModal && pecModalItems.length > 0 && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-gray-900/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md">
-            <div className="px-6 py-5 border-b border-gray-100 flex justify-between items-center">
-              <div>
-                <h3 className="text-xl font-black text-gray-900">Crear Pedido de Compra</h3>
-                <p className="text-sm text-gray-500 mt-0.5">{pecModalItems.length} producto(s) seleccionado(s)</p>
-              </div>
-              <button onClick={()=>setShowPecModal(false)} className="p-2 text-gray-400 hover:bg-gray-100 rounded-xl"><X size={18}/></button>
-            </div>
-            <div className="p-6 space-y-4">
-              <div className="bg-gray-50 rounded-xl p-3 border border-gray-100 max-h-48 overflow-y-auto space-y-2">
-                {pecModalItems.map(it=>(
-                  <div key={it.id} className="flex items-center justify-between gap-2 text-xs text-gray-700">
-                    <div className="min-w-0">
-                      <p className="truncate">{it.producto} {it.pven_numero&&<span className="text-gray-400">· {it.pven_numero}</span>}</p>
-                      <p className="text-gray-400">× {it.cantidad}</p>
-                    </div>
-                    <div className="shrink-0 w-32">
-                      <input type="number" min="0" value={it.precio_unitario_cop||''} onChange={e=>setItemPrecio(it.id, e.target.value)}
-                        placeholder="Precio COP"
-                        className={'w-full border rounded-lg px-2 py-1.5 text-xs text-right outline-none focus:ring-2 focus:ring-purple-200 ' + (!(Number(it.precio_unitario_cop)>0)?'border-red-300 bg-red-50':'border-gray-200')}/>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div>
-                <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Proveedor</label>
-                <input value={supplierSearch} onChange={e=>onSupplierSearch(e.target.value)}
-                  placeholder="Buscar proveedor..." className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
-                {suppliers.length > 0 && (
-                  <div className="border border-gray-200 rounded-xl shadow-lg mt-1 max-h-40 overflow-y-auto">
-                    {suppliers.map(s => (
-                      <button key={s.id} onClick={()=>{setSelectedSupplier(s);setSupplierSearch(s.name);setSuppliers([]);}}
-                        className="w-full text-left px-4 py-2.5 hover:bg-purple-50 text-sm font-medium border-b last:border-0">
-                        {s.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {selectedSupplier && (
-                  <p className="text-xs text-purple-700 font-bold mt-1">✓ {selectedSupplier.name} seleccionado</p>
-                )}
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Dias Entrega</label>
-                  <input type="number" min="1" value={pecForm.dias_entrega} onChange={e=>setPecForm(f=>({...f,dias_entrega:Number(e.target.value)}))}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
-                </div>
-                <div>
-                  <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Modalidad</label>
-                  <select value={pecForm.modalidad_pago} onChange={e=>setPecForm(f=>({...f,modalidad_pago:e.target.value}))}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200">
-                    {['Contado','Credito 30d','Credito 60d','Adelanto 50%','Contra entrega'].map(p=><option key={p}>{p}</option>)}
-                  </select>
-                </div>
-                <div className="col-span-2">
-                  <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Tipo de Envio</label>
-                  <select value={pecForm.tipo_envio} onChange={e=>setPecForm(f=>({...f,tipo_envio:e.target.value}))}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200">
-                    <option value="casillero">Via Casillero</option>
-                    <option value="directo">Directo Colombia</option>
-                  </select>
-                </div>
-              </div>
-              <div>
-                <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Notas</label>
-                <textarea value={pecForm.notas} onChange={e=>setPecForm(f=>({...f,notas:e.target.value}))}
-                  rows={2} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none outline-none focus:ring-2 focus:ring-purple-200"/>
-              </div>
-            </div>
-            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
-              <button onClick={()=>setShowPecModal(false)} className="px-5 py-2.5 border border-gray-200 rounded-xl text-sm font-bold text-gray-600 hover:bg-gray-50">Cancelar</button>
-              <button onClick={handleCrearPEC} disabled={pecSaving}
-                className="px-6 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold shadow-sm flex items-center gap-2 disabled:opacity-50">
-                {pecSaving ? <RefreshCw size={14} className="animate-spin"/> : <ShoppingCart size={14}/>}
-                Crear PEC
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );

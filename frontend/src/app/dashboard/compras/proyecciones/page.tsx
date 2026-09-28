@@ -1,8 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import Link from 'next/link';
-import { ArrowLeft, TrendingUp, Calculator, AlertCircle, Loader2 } from 'lucide-react';
+import { TrendingUp, Calculator, AlertCircle } from 'lucide-react';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -15,6 +14,8 @@ import {
   Filler,
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
+import { SubNav, PageHeader, Button } from '@/components/ui';
+import { COMP_NAV } from '../comp-nav';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -143,82 +144,76 @@ export default function ComprasProyeccionesPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6 w-full h-full pb-10">
-      <div className="flex flex-col items-start justify-between">
-        <Link href="/dashboard/compras" className="flex items-center text-sm font-semibold text-slate-500 hover:text-emerald-600 mb-4 transition-colors">
-          <ArrowLeft className="w-4 h-4 mr-1" /> Volver a Dashboard Compras
-        </Link>
-        <div className="flex items-center justify-between w-full">
+    <div className="w-full h-full flex flex-col">
+      <SubNav label="Hub de Compras" items={COMP_NAV} currentPath="/dashboard/compras/proyecciones" color="purple" hub={{ href: '/dashboard/compras' }} />
+
+      <div className="flex flex-col gap-6 w-full p-6 pb-10">
+        <PageHeader
+          icon={TrendingUp} color="purple"
+          title="Proyecciones de Compras"
+          subtitle="Calcula tendencias y pronósticos de futuras inversiones en inventario o volumen de unidades."
+        />
+
+        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm flex flex-wrap gap-4 items-end">
           <div>
-            <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
-              <TrendingUp className="w-6 h-6 text-emerald-600" /> Proyecciones de Compras
-            </h1>
-            <p className="text-sm text-slate-500 mt-1">Calcula tendencias y pronósticos de futuras inversiones en inventario o volumen de unidades.</p>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Proyección a (Meses)</label>
+            <select value={months} onChange={e => setMonths(e.target.value)} className="w-40 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-emerald-500 font-medium">
+              <option value="3">3 Meses</option>
+              <option value="6">6 Meses</option>
+              <option value="12">12 Meses</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Agrupar Por</label>
+            <select value={freq} onChange={e => setFreq(e.target.value)} className="w-40 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-emerald-500 font-medium">
+              <option value="Y">Año</option>
+              <option value="M">Mes</option>
+              <option value="W">Semana</option>
+              <option value="D">Día</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Métrica Objetivo</label>
+            <select value={metric} onChange={e => setMetric(e.target.value)} className="w-40 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-emerald-500 font-medium">
+              <option value="Valor_Total">Inversión ($)</option>
+              <option value="Cantidad">Unidades</option>
+            </select>
+          </div>
+
+          <div className="ml-auto">
+            <Button onClick={handleCalculate} disabled={comprasData.length === 0} loading={isLoading} color="purple" icon={Calculator}>
+              {isLoading ? 'Calculando...' : 'Generar Proyección'}
+            </Button>
           </div>
         </div>
-      </div>
 
-      <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm flex flex-wrap gap-4 items-end">
-        <div>
-          <label className="block text-xs font-bold text-slate-600 mb-1">Proyección a (Meses)</label>
-          <select value={months} onChange={e => setMonths(e.target.value)} className="w-40 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-emerald-500 font-medium">
-            <option value="3">3 Meses</option>
-            <option value="6">6 Meses</option>
-            <option value="12">12 Meses</option>
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs font-bold text-slate-600 mb-1">Agrupar Por</label>
-          <select value={freq} onChange={e => setFreq(e.target.value)} className="w-40 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-emerald-500 font-medium">
-            <option value="Y">Año</option>
-            <option value="M">Mes</option>
-            <option value="W">Semana</option>
-            <option value="D">Día</option>
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs font-bold text-slate-600 mb-1">Métrica Objetivo</label>
-          <select value={metric} onChange={e => setMetric(e.target.value)} className="w-40 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm outline-none focus:border-emerald-500 font-medium">
-            <option value="Valor_Total">Inversión ($)</option>
-            <option value="Cantidad">Unidades</option>
-          </select>
-        </div>
-        
-        <button 
-          onClick={handleCalculate}
-          disabled={isLoading || comprasData.length === 0}
-          className="ml-auto bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-bold py-2.5 px-6 rounded-lg transition-colors flex items-center gap-2 shadow-sm"
-        >
-          {isLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Calculando...</> : <><Calculator className="w-4 h-4" /> Generar Proyección</>}
-        </button>
-      </div>
-
-      {error && (
-        <div className="bg-red-50 text-red-700 border border-red-200 p-4 rounded-lg flex items-center gap-2 text-sm font-medium">
-          <AlertCircle className="w-5 h-5" /> {error}
-        </div>
-      )}
-
-      {forecastData.length === 0 && !isLoading && !error && (
-        <div className="bg-white border border-slate-200 rounded-xl p-12 shadow-sm flex flex-col items-center justify-center text-center mt-2">
-          <TrendingUp className="w-12 h-12 text-slate-300 mb-4" />
-          <h3 className="text-lg font-bold text-slate-700 mb-2">Aún no has generado un forecast</h3>
-          <p className="text-sm text-slate-500 max-w-md mb-6">
-            Ajusta los parámetros arriba y presiona "Generar Proyección" para estimar tus futuras compras.
-          </p>
-        </div>
-      )}
-
-      {forecastData.length > 0 && (
-        <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm min-h-[450px] mt-2">
-          <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2">
-            Gráfica de Tendencia Futura
-          </h3>
-          <div className="w-full h-[350px]">
-            <Line data={chartData} options={chartOptions} />
+        {error && (
+          <div className="bg-red-50 text-red-700 border border-red-200 p-4 rounded-lg flex items-center gap-2 text-sm font-medium">
+            <AlertCircle className="w-5 h-5" /> {error}
           </div>
-        </div>
-      )}
+        )}
+
+        {forecastData.length === 0 && !isLoading && !error && (
+          <div className="bg-white border border-slate-200 rounded-xl p-12 shadow-sm flex flex-col items-center justify-center text-center mt-2">
+            <TrendingUp className="w-12 h-12 text-slate-300 mb-4" />
+            <h3 className="text-lg font-bold text-slate-700 mb-2">Aún no has generado un forecast</h3>
+            <p className="text-sm text-slate-500 max-w-md mb-6">
+              Ajusta los parámetros arriba y presiona "Generar Proyección" para estimar tus futuras compras.
+            </p>
+          </div>
+        )}
+
+        {forecastData.length > 0 && (
+          <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm min-h-[450px] mt-2">
+            <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2">
+              Gráfica de Tendencia Futura
+            </h3>
+            <div className="w-full h-[350px]">
+              <Line data={chartData} options={chartOptions} />
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

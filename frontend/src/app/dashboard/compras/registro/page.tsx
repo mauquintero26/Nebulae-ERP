@@ -2,8 +2,8 @@
 
 import { useState } from 'react';
 import { ShoppingBag, UploadCloud, Plus, Save, Trash2, Camera, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react';
-import Link from 'next/link';
-import { ArrowLeft } from 'lucide-react';
+import { SubNav, PageHeader, Button } from '@/components/ui';
+import { COMP_NAV } from '../comp-nav';
 
 export default function ComprasRegistroPage() {
   const [isOcrLoading, setIsOcrLoading] = useState(false);
@@ -124,20 +124,17 @@ export default function ComprasRegistroPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6 w-full h-full pb-10">
-      <div className="flex flex-col items-start justify-between">
-        <Link href="/dashboard/compras" className="flex items-center text-sm font-semibold text-slate-500 hover:text-emerald-600 mb-4 transition-colors">
-          <ArrowLeft className="w-4 h-4 mr-1" /> Volver a Dashboard Compras
-        </Link>
-        <div>
-          <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
-            <Camera className="w-6 h-6 text-emerald-600" /> Registro de Compras
-          </h1>
-          <p className="text-sm text-slate-500 mt-1">Sube capturas de tus órdenes para extraer los datos con IA, o regístralas de forma manual.</p>
-        </div>
-      </div>
+    <div className="w-full h-full flex flex-col">
+      <SubNav label="Hub de Compras" items={COMP_NAV} currentPath="/dashboard/compras/registro" color="purple" hub={{ href: '/dashboard/compras' }} />
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+      <div className="flex flex-col gap-6 w-full p-6 pb-10">
+        <PageHeader
+          icon={Camera} color="purple"
+          title="Registro de Compras"
+          subtitle="Sube capturas de tus órdenes para extraer los datos con IA, o regístralas de forma manual."
+        />
+
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
         
         {/* Left: OCR Upload */}
         <div className="flex flex-col gap-4">
@@ -250,18 +247,23 @@ export default function ComprasRegistroPage() {
                 </div>
               )}
 
-              <button 
-                onClick={handleManualSave}
-                disabled={isManualLoading}
-                className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-bold py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2 shadow-sm"
-              >
-                {isManualLoading ? <><Loader2 className="w-5 h-5 animate-spin" /> Guardando...</> : <><Save className="w-5 h-5" /> Guardar Compra</>}
-              </button>
+              <div className="flex justify-end">
+                <Button
+                  onClick={handleManualSave}
+                  loading={isManualLoading}
+                  color="purple"
+                  size="lg"
+                  icon={Save}
+                >
+                  {isManualLoading ? 'Guardando...' : 'Guardar Compra'}
+                </Button>
+              </div>
             </div>
 
           </div>
         </div>
 
+        </div>
       </div>
     </div>
   );
