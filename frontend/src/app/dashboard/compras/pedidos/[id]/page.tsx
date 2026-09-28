@@ -10,6 +10,7 @@ import {
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { apiFetch } from '@/lib/api';
+import { Badge, Button } from '@/components/ui';
 
 // Los 4 stages reales de PurchaseOrderFull.tracking_stages, en orden
 // (ver create_pec en erp_compras.py:328-333). El indice de este arreglo
@@ -184,20 +185,14 @@ export default function PedidoCompraDetallePage() {
                 {isNew ? 'Nuevo Pedido de Compra' : (pedido?.numero || String(params.id).toUpperCase())}
               </h1>
               {!isNew && pedido && (
-                <span className={`px-3 py-1 rounded-full text-xs font-bold border ${
-                  isRecibido ? 'bg-emerald-100 text-emerald-700 border-emerald-200' : 'bg-amber-100 text-amber-700 border-amber-200'
-                }`}>
-                  {estadoLabel}
-                </span>
+                <Badge tone={isRecibido ? 'success' : 'warning'}>{estadoLabel}</Badge>
               )}
             </div>
           </div>
         </div>
 
         <div className="flex items-center gap-3">
-          <button className="flex items-center gap-2 px-4 py-2 border border-slate-200 text-slate-600 bg-white hover:bg-slate-50 rounded-xl font-bold text-sm transition-colors shadow-sm">
-            <Save size={16} /> Guardar Cambios
-          </button>
+          <Button variant="secondary" icon={Save}>Guardar Cambios</Button>
         </div>
       </div>
 
@@ -312,9 +307,7 @@ export default function PedidoCompraDetallePage() {
                   <div className="flex justify-between items-center mb-6">
                     <span className="text-sm font-bold text-slate-700">Progreso de la Importacion/Ruta</span>
                     {!isNew && completedCount < STAGE_NODES.length && (
-                      <button onClick={avanzarTracking} disabled={advancing} className="text-xs font-bold bg-blue-600 text-white px-3 py-1.5 rounded-lg shadow-sm hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center gap-1.5">
-                        {advancing ? <RefreshCw size={12} className="animate-spin" /> : <Truck size={12} />} Avanzar Etapa Logistica
-                      </button>
+                      <Button size="sm" color="blue" icon={Truck} loading={advancing} onClick={avanzarTracking}>Avanzar Etapa Logistica</Button>
                     )}
                   </div>
 
@@ -386,7 +379,7 @@ export default function PedidoCompraDetallePage() {
                           <td className="px-4 py-3 text-center font-bold text-slate-700">{qty}</td>
                           <td className="px-4 py-3 text-sm text-slate-700 text-right font-medium">{fCOP(priceUnit)}</td>
                           <td className="px-4 py-3">
-                            <span className="bg-amber-100 text-amber-700 border border-amber-200 px-2 py-1 rounded text-[10px] font-bold uppercase">{estadoLabel}</span>
+                            <Badge tone="warning">{estadoLabel}</Badge>
                           </td>
                           <td className="px-4 py-3 font-black text-slate-800 text-right">{fCOP(qty * priceUnit)}</td>
                         </tr>

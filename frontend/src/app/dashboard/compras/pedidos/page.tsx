@@ -10,6 +10,8 @@ import {
   Bell, Receipt, Clock, MapPin, ArrowRight, Save, ChevronDown,
   ExternalLink, RotateCcw, Layers, Tag, Hash, UserPlus, Settings2, PackageCheck
 } from 'lucide-react';
+import { SubNav, PageHeader, Badge, Toast, ToastMsg, Button, EmptyState } from '@/components/ui';
+import { COMP_NAV } from '../comp-nav';
 
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 async function apiFetch(path: string, opts: any = {}) {
@@ -40,25 +42,6 @@ const PEC_ESTADOS: Record<string,{bg:string;text:string;border:string;label:stri
   COMPLETADO:        {bg:'bg-green-100',   text:'text-green-800',   border:'border-green-200',   label:'Completado'},
   CANCELADO:         {bg:'bg-red-100',     text:'text-red-700',     border:'border-red-200',     label:'Cancelado'},
 };
-
-const SUB_MODULES = [
-  {name:'Lista de Compras',      path:'/dashboard/compras/lista-compras'},
-  {name:'Pedidos de Compra',     path:'/dashboard/compras/pedidos'},
-  {name:'Mercancia en Transito', path:'/dashboard/compras/transito'},
-  {name:'Recepciones (Entrada)', path:'/dashboard/compras/recepciones'},
-  {name:'Traslados Internos',    path:'/dashboard/compras/traslados'},
-  {name:'Registro OCR/Manual',   path:'/dashboard/compras/registro'},
-  {name:'Proyecciones',          path:'/dashboard/compras/proyecciones'},
-];
-
-function Toast({msg,type,onClose}: {msg:string;type:string;onClose:()=>void}) {
-  useEffect(()=>{const t=setTimeout(onClose,4000);return()=>clearTimeout(t);},[onClose]);
-  return (
-    <div className={'fixed top-5 right-5 z-[200] px-5 py-3 rounded-2xl shadow-2xl font-bold text-sm flex items-center gap-3 ' + (type==='ok'?'bg-emerald-600':'bg-red-600') + ' text-white'}>
-      <span>{msg}</span><button onClick={onClose}><X size={16}/></button>
-    </div>
-  );
-}
 
 /* ================================================================
    NUEVO PROVEEDOR MODAL
@@ -1307,7 +1290,7 @@ export default function PedidosCompraPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const [loading, setLoading]         = useState(true);
-  const [toast, setToast]             = useState<{msg:string;type:string}|null>(null);
+  const [toast, setToast]             = useState<ToastMsg>(null);
   const [pedidos, setPedidos]         = useState<any[]>([]);
   const [pedidosVenta, setPedidosVenta] = useState<any[]>([]);
   const [stats, setStats]             = useState<any>({});
@@ -1332,7 +1315,7 @@ export default function PedidosCompraPage() {
   const [aiResponse, setAiResponse]   = useState('');
   const [aiLoading, setAiLoading]     = useState(false);
 
-  const showToast = (msg:string, type:string='ok') => setToast({msg,type});
+  const showToast = (msg:string, type:'ok'|'error'='ok') => setToast({msg,type});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1522,7 +1505,7 @@ export default function PedidosCompraPage() {
   /* ═══════════════ RETURN JSX ═══════════════ */
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
-      {toast && <Toast msg={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
+      <Toast toast={toast} onClose={()=>setToast(null)}/>
       {selectedPec && (
         <PecDetailPanel
           pec={selectedPec}
@@ -1540,16 +1523,7 @@ export default function PedidosCompraPage() {
         />
       )}
 
-      {/* Sub-module nav */}
-      <div className="bg-white border-b border-gray-200 px-6 py-2 flex items-center gap-1 sticky top-0 z-30 shadow-sm overflow-x-auto">
-        <span className="text-xs font-black text-gray-400 uppercase tracking-wider mr-3 shrink-0">COMPRAS:</span>
-        {SUB_MODULES.map(m=>(
-          <Link key={m.name} href={m.path}
-            className={'shrink-0 px-4 py-1.5 rounded-full text-sm font-semibold border transition-colors ' + (pathname===m.path?'bg-purple-600 text-white border-purple-600':'text-gray-600 hover:bg-purple-50 hover:text-purple-700 border-transparent')}>
-            {m.name}
-          </Link>
-        ))}
-      </div>
+      <SubNav label="Hub de Compras" items={COMP_NAV} currentPath={pathname} color="purple" hub={{ href: '/dashboard/compras' }} />
 
       {/* Alert vencidos */}
       {vencidos.length > 0 && (
@@ -1561,24 +1535,20 @@ export default function PedidosCompraPage() {
 
       <div className="flex-1 flex flex-col px-6 py-6 max-w-[1600px] mx-auto w-full gap-6">
 
-        {/* HEADER — Solicitud de Cliente style */}
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-4">
-            <div className="bg-purple-600 text-white p-3 rounded-2xl shadow-lg"><ShoppingBag size={26}/></div>
-            <div>
-              <h1 className="text-3xl font-black text-gray-900">Pedidos de Compra</h1>
-              <p className="text-sm text-gray-400 mt-0.5">PEC-YYYY#### · Pipeline: BORRADOR → EMITIDO → EN_TRANSITO → RECIBIDO</p>
+        {/* HEADER */}
+        <PageHeader
+          icon={ShoppingBag} color="purple"
+          title="Pedidos de Compra"
+          subtitle="PEC-YYYY#### · Pipeline: BORRADOR → EMITIDO → EN_TRANSITO → RECIBIDO"
+          actions={(
+            <div className="flex items-center gap-2.5">
+              <button onClick={load} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 font-semibold text-sm shadow-sm transition-colors">
+                <RefreshCw size={14} className={loading?'animate-spin':''}/> Actualizar
+              </button>
+              <Button color="purple" icon={Plus} onClick={()=>setShowNuevoPec(true)}>Nuevo PEC</Button>
             </div>
-          </div>
-          <div className="flex items-center gap-2 mt-1">
-            <button onClick={load} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 font-semibold text-sm shadow-sm">
-              <RefreshCw size={14} className={loading?'animate-spin':''}/> Actualizar
-            </button>
-            <button onClick={()=>setShowNuevoPec(true)} className="flex items-center gap-2 px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold text-sm shadow-sm">
-              <Plus size={15}/> Nuevo PEC
-            </button>
-          </div>
-        </div>
+          )}
+        />
 
         {/* KPI CARDS */}
         {activeTab !== 'Analisis' && (
@@ -1586,12 +1556,15 @@ export default function PedidosCompraPage() {
             {kpiCards.map((k,i)=>{
               const c = colorMap[k.color]||colorMap.purple;
               return (
-                <div key={i} className={'bg-white rounded-2xl border shadow-sm hover:shadow-md transition-all p-5 ' + (k.ok?'border-gray-200':'border-red-200')}>
-                  <div className={'inline-flex p-2.5 rounded-xl mb-3 '+c.iconBg+' '+c.text}>{k.icon}</div>
-                  <p className="text-xs font-black text-gray-400 uppercase tracking-wide mb-1">{k.label}</p>
-                  <p className="text-3xl font-black text-gray-900 mb-1">{k.value}</p>
-                  <p className={'text-xs font-semibold flex items-center gap-1 '+(k.ok?'text-emerald-600':'text-red-500')}>
-                    {k.ok?<CheckCircle2 size={11}/>:<AlertCircle size={11}/>}{k.sub}
+                <div key={i} className={`bg-white rounded-2xl p-5 border shadow-xs hover:shadow-md transition-all ${k.ok?'border-slate-200':'border-rose-200 bg-rose-50/20'}`}>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className={`p-2.5 rounded-xl ${c.iconBg} ${c.text}`}>{k.icon}</div>
+                    <Badge tone={k.ok ? 'neutral' : 'danger'}>{k.ok ? 'Óptimo' : 'Alerta'}</Badge>
+                  </div>
+                  <p className="text-xs font-black text-slate-400 uppercase tracking-wide mb-1">{k.label}</p>
+                  <p className="text-2xl sm:text-3xl font-black text-slate-900 mb-1">{k.value}</p>
+                  <p className={`text-xs font-semibold flex items-center gap-1 ${k.ok?'text-emerald-600':'text-rose-600'}`}>
+                    {k.ok?<CheckCircle2 size={12}/>:<AlertCircle size={12}/>}{k.sub}
                   </p>
                 </div>
               );
@@ -1772,10 +1745,10 @@ export default function PedidosCompraPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {filteredData.length===0&&(
-                    <tr><td colSpan={11} className="text-center py-16 text-gray-400">
-                      <Package size={32} className="mx-auto mb-3 opacity-30"/>
-                      <p className="font-medium">{search?'Sin resultados para "'+search+'"':'Sin pedidos de compra registrados'}</p>
-                      <button onClick={()=>setShowNuevoPec(true)} className="mt-3 px-4 py-2 bg-purple-600 text-white rounded-xl text-sm font-bold">+ Nuevo PEC</button>
+                    <tr><td colSpan={11}>
+                      <EmptyState icon={Package}
+                        message={search?`Sin resultados para "${search}"`:'Sin pedidos de compra registrados'}
+                        hint={search?undefined:'Usa el boton "Nuevo PEC" arriba para crear el primero'} />
                     </td></tr>
                   )}
                   {filteredData.slice((currentPage-1)*pageSize, currentPage*pageSize).map((p:any)=><PecRow key={p.id} p={p}/>)}
@@ -1849,7 +1822,7 @@ export default function PedidosCompraPage() {
         {selectedIds.size>0&&(
           <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center gap-4 z-40">
             <span className="font-bold text-sm bg-gray-800 px-3 py-1 rounded-full">{selectedIds.size} seleccionados</span>
-            <button onClick={handleBulkCancel} className="bg-red-500/20 text-red-400 hover:bg-red-500/40 p-2 rounded-xl flex items-center gap-2 text-sm font-bold"><Trash2 size={16}/> Cancelar</button>
+            <Button variant="danger" size="sm" icon={Trash2} onClick={handleBulkCancel}>Cancelar</Button>
             <button onClick={()=>setSelectedIds(new Set())} className="p-2 text-gray-400 hover:text-white"><X size={16}/></button>
           </div>
         )}
