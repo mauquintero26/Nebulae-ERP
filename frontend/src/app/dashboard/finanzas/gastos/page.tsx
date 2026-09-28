@@ -1,9 +1,11 @@
 "use client";
 
-import { CreditCard, Search, Filter, Plus, X } from 'lucide-react';
+import { CreditCard, Search, Plus } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { apiFetch } from '@/lib/api';
 import toast from 'react-hot-toast';
+import { SubNav, PageHeader, Modal, Button, EmptyState } from '@/components/ui';
+import { FIN_NAV } from '../fin-nav';
 
 const CATEGORIAS = ['Pauta Digital', 'Nómina', 'Arriendo', 'Suscripciones', 'Equipos', 'Servicios Públicos', 'Transporte', 'Otro'];
 
@@ -70,36 +72,30 @@ export default function GastosPage() {
   });
 
   return (
-    <div className="p-8 h-full overflow-y-auto space-y-6 animate-in fade-in duration-500 custom-scrollbar bg-slate-50">
+    <div className="w-full h-full overflow-y-auto animate-in fade-in duration-500 custom-scrollbar bg-slate-50">
+      <SubNav label="Finanzas" items={FIN_NAV} currentPath="/dashboard/finanzas/gastos" color="rose" />
+
+      <div className="p-8 space-y-6">
 
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight flex items-center gap-3">
-            <div className="p-2 bg-rose-600 text-white rounded-lg shadow-md shadow-rose-200">
-              <CreditCard size={24} />
+      <PageHeader icon={CreditCard} color="rose"
+        title="Control de Gastos (OPEX)"
+        subtitle="Gestión de nómina, pauta, arriendos y otros gastos operativos."
+        actions={(
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+              <input
+                type="text"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Buscar gasto..."
+                className="pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-rose-500 outline-none w-64 shadow-sm"
+              />
             </div>
-            Control de Gastos (OPEX)
-          </h1>
-          <p className="text-slate-500 mt-1">Gestión de nómina, pauta, arriendos y otros gastos operativos.</p>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Buscar gasto..."
-              className="pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-rose-500 outline-none w-64 shadow-sm"
-            />
+            <Button color="rose" icon={Plus} onClick={() => setShowModal(true)}>Añadir Gasto</Button>
           </div>
-          <button onClick={() => setShowModal(true)} className="flex items-center gap-2 px-4 py-2 bg-rose-600 text-white rounded-xl hover:bg-rose-700 font-bold text-sm shadow-md shadow-rose-200 transition-colors">
-            <Plus size={16} /> Añadir Gasto
-          </button>
-        </div>
-      </div>
+        )} />
 
       {/* Tabla OPEX */}
       <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
@@ -119,7 +115,7 @@ export default function GastosPage() {
                 <tr><td colSpan={5} className="p-8 text-center text-slate-400">Cargando...</td></tr>
               )}
               {!loading && filtered.length === 0 && (
-                <tr><td colSpan={5} className="p-8 text-center text-slate-400">Sin gastos registrados.</td></tr>
+                <tr><td colSpan={5}><EmptyState icon={CreditCard} message="Sin gastos registrados." /></td></tr>
               )}
               {!loading && filtered.map((gasto) => (
                 <tr key={gasto.id} className="hover:bg-slate-50/50 transition-colors">
@@ -148,13 +144,13 @@ export default function GastosPage() {
 
       {/* Modal Añadir Gasto */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setShowModal(false)}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-extrabold text-slate-900">Añadir Gasto</h2>
-              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600"><X size={20} /></button>
-            </div>
-
+        <Modal title="Añadir Gasto" icon={CreditCard} color="rose" onClose={() => setShowModal(false)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setShowModal(false)}>Cancelar</Button>
+              <Button color="rose" loading={saving} onClick={handleCreate}>Guardar Gasto</Button>
+            </>
+          )}>
             <div>
               <label className="text-xs font-bold text-slate-500 uppercase block mb-1.5">Categoría *</label>
               <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
@@ -186,16 +182,9 @@ export default function GastosPage() {
               <input type="checkbox" checked={form.is_recurring} onChange={e => setForm(f => ({ ...f, is_recurring: e.target.checked }))} />
               Gasto recurrente
             </label>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button onClick={() => setShowModal(false)} className="px-4 py-2.5 border border-slate-200 text-slate-600 rounded-xl text-sm font-bold hover:bg-slate-50">Cancelar</button>
-              <button onClick={handleCreate} disabled={saving} className="px-4 py-2.5 bg-rose-600 text-white rounded-xl text-sm font-bold hover:bg-rose-700 disabled:opacity-50">
-                {saving ? 'Guardando...' : 'Guardar Gasto'}
-              </button>
-            </div>
-          </div>
-        </div>
+        </Modal>
       )}
+      </div>
     </div>
   );
 }

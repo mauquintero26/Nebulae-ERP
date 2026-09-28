@@ -5,6 +5,8 @@ import {
   Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend, ArcElement
 } from 'chart.js';
 import { Bar, Doughnut } from 'react-chartjs-2';
+import { SubNav, PageHeader } from '@/components/ui';
+import { FIN_NAV } from '../fin-nav';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend, ArcElement);
 
@@ -37,18 +39,15 @@ export default function ResumenFinancieroPage() {
   };
 
   return (
-    <div className="p-8 h-full overflow-y-auto space-y-6 animate-in fade-in duration-500 custom-scrollbar bg-slate-50">
-      
+    <div className="w-full h-full overflow-y-auto animate-in fade-in duration-500 custom-scrollbar bg-slate-50">
+      <SubNav label="Finanzas" items={FIN_NAV} currentPath="/dashboard/finanzas/resumen" color="blue" />
+
+      <div className="p-8 space-y-6">
+
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight flex items-center gap-3">
-          <div className="p-2 bg-blue-600 text-white rounded-lg shadow-md shadow-blue-200">
-            <Activity size={24} />
-          </div>
-          Dashboard P&L (Pérdidas y Ganancias)
-        </h1>
-        <p className="text-slate-500 mt-1">Visión financiera global, márgenes de utilidad y alertas del CFO Virtual.</p>
-      </div>
+      <PageHeader icon={Activity} color="blue"
+        title="Dashboard P&L (Pérdidas y Ganancias)"
+        subtitle="Visión financiera global, márgenes de utilidad y alertas del CFO Virtual." />
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         
@@ -167,6 +166,7 @@ export default function ResumenFinancieroPage() {
             </div>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );
