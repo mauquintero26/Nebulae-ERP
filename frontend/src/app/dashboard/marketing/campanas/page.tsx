@@ -1,8 +1,9 @@
 ﻿"use client";
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import Link from 'next/link';
-import { Target, Plus, ArrowLeft, RefreshCw, Megaphone, Users, DollarSign, TrendingUp, BarChart3, CheckCircle2, AlertCircle, X, Calendar, Globe, Mail, Phone, Tag, Send, Edit2, Trash2, Zap, PauseCircle, Play, ChevronRight, Filter, Search, Copy, ExternalLink } from 'lucide-react';
+import { Target, Plus, RefreshCw, Megaphone, Users, DollarSign, TrendingUp, BarChart3, CheckCircle2, AlertCircle, X, Calendar, Globe, Mail, Phone, Tag, Send, Edit2, Trash2, Zap, PauseCircle, Play, ChevronRight, Filter, Search, Copy, ExternalLink } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import { SubNav, PageHeader, Toast, Modal, Button, StatCard } from '@/components/ui';
+import { MKT_NAV } from '../mkt-nav';
 const fCOP = (v: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0);
 const fDate = (d: any) => d ? new Date(d).toLocaleDateString('es-CO', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
 
@@ -108,26 +109,25 @@ export default function CampanasPage() {
 
   return (
     <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden">
-      {/* Toast */}
-      {toast && (<div className={`fixed bottom-6 right-6 z-50 px-5 py-3 rounded-2xl shadow-xl text-white text-sm font-semibold flex items-center gap-2 ${toast.type==='ok'?'bg-emerald-600':'bg-red-600'}`}>{toast.type==='ok'?<CheckCircle2 size={16}/>:<AlertCircle size={16}/>}{toast.msg}</div>)}
-      
+      <Toast toast={toast as any} onClose={() => setToast(null)} />
+
+      <SubNav label="Marketing" items={MKT_NAV} currentPath="/dashboard/marketing/campanas" color="emerald" hub={{ href: '/dashboard/marketing' }} />
+
       {/* HEADER */}
-      <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between shrink-0 shadow-sm">
-        <div>
-          <Link href="/dashboard/marketing" className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 mb-1"><ArrowLeft size={12}/> Marketing</Link>
-          <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2"><Target className="text-emerald-600" size={22}/> Campañas de Mercadeo</h1>
-          <p className="text-xs text-slate-400 mt-0.5">Crea, planifica y lanza campañas en todos los canales · Numeración MKT-YYYY####</p>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={loadCampanas} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 font-semibold text-sm">
-            <RefreshCw size={13} className={loading?'animate-spin':''}/> Actualizar
-          </button>
-          <button onClick={()=>{setForm({nombre:'',tipo:'OMNICANAL',estado:'BORRADOR',fecha_inicio:'',fecha_fin:'',presupuesto_cop:0,objetivo:'',canales:[],descripcion:'',codigo_descuento:'',descuento_pct:0});setEditMode(false);setShowForm(true);}} className="flex items-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm shadow-sm">
-            <Plus size={15}/> Nueva Campaña
-          </button>
-        </div>
+      <div className="bg-white px-6 py-4 border-b border-slate-200 shrink-0 shadow-sm">
+        <PageHeader icon={Target} color="emerald"
+          title="Campañas de Mercadeo"
+          subtitle="Crea, planifica y lanza campañas en todos los canales · Numeración MKT-YYYY####"
+          actions={(
+            <div className="flex gap-2">
+              <button onClick={loadCampanas} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 font-semibold text-sm">
+                <RefreshCw size={13} className={loading?'animate-spin':''}/> Actualizar
+              </button>
+              <Button color="emerald" icon={Plus} onClick={()=>{setForm({nombre:'',tipo:'OMNICANAL',estado:'BORRADOR',fecha_inicio:'',fecha_fin:'',presupuesto_cop:0,objetivo:'',canales:[],descripcion:'',codigo_descuento:'',descuento_pct:0});setEditMode(false);setShowForm(true);}}>Nueva Campaña</Button>
+            </div>
+          )} />
       </div>
-      
+
       <div className="flex-1 flex overflow-hidden">
         {/* COLUMNA IZQUIERDA — Lista de campañas */}
         <div className="w-72 shrink-0 bg-white border-r border-slate-200 flex flex-col">
@@ -289,18 +289,10 @@ export default function CampanasPage() {
               {activeTab==='metricas' && (
                 <div className="space-y-5">
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    {[
-                      {l:'Leads Totales',v:selected.leads_count||0,icon:<Users size={18}/>,color:'bg-blue-50 text-blue-700'},
-                      {l:'Convertidos',v:leads.filter((l:any)=>l.estado==='CONVERTIDO').length,icon:<CheckCircle2 size={18}/>,color:'bg-emerald-50 text-emerald-700'},
-                      {l:'Ventas Atribuidas',v:fCOP(selected.ventas_cop||0),icon:<DollarSign size={18}/>,color:'bg-purple-50 text-purple-700'},
-                      {l:'ROI',v:selected.presupuesto_cop>0?`+${(((selected.ventas_cop||0)/selected.presupuesto_cop)*100-100).toFixed(0)}%`:'N/A',icon:<TrendingUp size={18}/>,color:'bg-amber-50 text-amber-700'},
-                    ].map((k,i)=>(
-                      <div key={i} className="bg-white rounded-2xl border border-slate-200 p-5">
-                        <div className={`inline-flex p-2 rounded-xl mb-3 ${k.color}`}>{k.icon}</div>
-                        <p className="text-xs font-black text-slate-400 uppercase mb-1">{k.l}</p>
-                        <p className="text-2xl font-black text-slate-900">{k.v}</p>
-                      </div>
-                    ))}
+                    <StatCard icon={Users} color="blue" label="Leads Totales" value={selected.leads_count||0} />
+                    <StatCard icon={CheckCircle2} color="emerald" label="Convertidos" value={leads.filter((l:any)=>l.estado==='CONVERTIDO').length} />
+                    <StatCard icon={DollarSign} color="purple" label="Ventas Atribuidas" value={fCOP(selected.ventas_cop||0)} />
+                    <StatCard icon={TrendingUp} color="amber" label="ROI" value={selected.presupuesto_cop>0?`+${(((selected.ventas_cop||0)/selected.presupuesto_cop)*100-100).toFixed(0)}%`:'N/A'} />
                   </div>
                   {/* Presupuesto progress */}
                   {selected.presupuesto_cop>0 && (
@@ -356,13 +348,15 @@ export default function CampanasPage() {
       
       {/* MODAL / PANEL FORMULARIO */}
       {showForm && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-              <h2 className="text-xl font-black text-slate-800">{editMode?'Editar Campaña':'Nueva Campaña'}</h2>
-              <button onClick={()=>setShowForm(false)}><X size={20} className="text-slate-400"/></button>
-            </div>
-            <div className="p-6 space-y-5">
+        <Modal title={editMode?'Editar Campaña':'Nueva Campaña'} icon={Megaphone} color="emerald" maxWidth="xl"
+          onClose={()=>setShowForm(false)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={()=>setShowForm(false)}>Cancelar</Button>
+              <Button color="emerald" onClick={saveCampana}>{editMode?'Guardar Cambios':'Crear Campaña'}</Button>
+            </>
+          )}>
+            <div className="space-y-5">
               <div><label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Nombre *</label><input value={form.nombre} onChange={e=>setForm(f=>({...f,nombre:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-200" placeholder="Ej. Black Friday 2026"/></div>
               <div className="grid grid-cols-2 gap-4">
                 <div><label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Tipo</label><select value={form.tipo} onChange={e=>setForm(f=>({...f,tipo:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-200 bg-white">{TIPOS_CAMPANA.map(t=><option key={t}>{t}</option>)}</select></div>
@@ -380,12 +374,7 @@ export default function CampanasPage() {
                 <div><label className="block text-xs font-black text-slate-500 uppercase mb-1.5">Descuento %</label><input type="number" min="0" max="100" value={form.descuento_pct} onChange={e=>setForm(f=>({...f,descuento_pct:Number(e.target.value)}))} className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-200"/></div>
               </div>
             </div>
-            <div className="p-6 border-t border-slate-100 flex gap-3">
-              <button onClick={saveCampana} className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-sm">{editMode?'Guardar Cambios':'Crear Campaña'}</button>
-              <button onClick={()=>setShowForm(false)} className="px-6 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold text-sm">Cancelar</button>
-            </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

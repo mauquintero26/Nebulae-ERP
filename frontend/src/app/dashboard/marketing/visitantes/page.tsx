@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from 'react';
-import Link from 'next/link';
-import { 
-  Users, Search, Filter, Globe, MousePointerClick, 
+import {
+  Users, Search, MousePointerClick,
   MapPin, Clock, Tag, ExternalLink
-, ArrowLeft } from 'lucide-react';
+} from 'lucide-react';
 import { ResizableHeader } from '@/components/ResizableHeader';
+import { SubNav, PageHeader } from '@/components/ui';
+import { MKT_NAV } from '../mkt-nav';
 
 const MOCK_VISITANTES = Array.from({ length: 15 }, (_, i) => {
   const num = i + 1;
@@ -27,19 +28,15 @@ export default function VisitantesHub() {
   const [searchTerm, setSearchTerm] = useState('');
 
   return (
-    <div className="w-full bg-slate-50 flex flex-col px-8 py-6 min-h-max animate-in fade-in">
-      
+    <div className="w-full bg-slate-50 flex flex-col min-h-max animate-in fade-in">
+      <SubNav label="Marketing" items={MKT_NAV} currentPath="/dashboard/marketing/visitantes" color="amber" hub={{ href: '/dashboard/marketing' }} />
+
+      <div className="px-8 py-6">
       {/* Cabecera */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
-        <div>
-        <Link href="/dashboard/marketing" className="inline-flex items-center gap-2 text-sm font-bold text-slate-400 hover:text-slate-600 transition-colors mb-2">
-          <ArrowLeft size={16} /> Volver al Hub de Marketing
-        </Link>
-          <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-2">
-            <Users className="text-amber-600" size={28} /> Visitantes & Leads Web
-          </h1>
-          <p className="text-slate-500 mt-1 font-medium">Analítica de tráfico, atribución de canales y generación de Leads CRM.</p>
-        </div>
+        <PageHeader icon={Users} color="amber"
+          title="Visitantes & Leads Web"
+          subtitle="Analítica de tráfico, atribución de canales y generación de Leads CRM." />
       </div>
 
       {/* KPIs Grid */}
@@ -134,6 +131,7 @@ export default function VisitantesHub() {
             </tbody>
           </table>
         </div>
+      </div>
       </div>
     </div>
   );

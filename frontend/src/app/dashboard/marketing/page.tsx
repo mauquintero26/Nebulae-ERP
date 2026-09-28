@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
+import { PageHeader, StatCard } from '@/components/ui';
 
 const fCOP = (v: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0);
 
@@ -34,52 +35,30 @@ export default function MarketingDashboard() {
 
   return (
     <div className="w-full bg-slate-50 flex flex-col px-8 py-8 min-h-max animate-in fade-in custom-scrollbar">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-10 gap-4">
-        <div>
-          <h1 className="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">
-            <div className="bg-slate-800 text-white p-2 rounded-xl shadow-sm"><Megaphone size={24} /></div>
-            Centro de Marketing & Crecimiento
-          </h1>
-          <p className="text-slate-500 mt-2 font-medium max-w-2xl">
-            Campanas multicanal · Flujos automaticos · Historias & Publicaciones · Leads & Conversion
-          </p>
-        </div>
-        <button onClick={loadStats} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 font-semibold text-sm shadow-sm">
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''}/> Actualizar
-        </button>
+      <div className="mb-10">
+        <PageHeader icon={Megaphone} color="purple"
+          title="Centro de Marketing & Crecimiento"
+          subtitle="Campanas multicanal · Flujos automaticos · Historias & Publicaciones · Leads & Conversion"
+          actions={(
+            <button onClick={loadStats} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 font-semibold text-sm shadow-sm">
+              <RefreshCw size={14} className={loading ? 'animate-spin' : ''}/> Actualizar
+            </button>
+          )} />
       </div>
 
       <div className="grid grid-cols-4 gap-4 mb-10">
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
-          <div className="inline-flex p-2 rounded-xl bg-blue-100 text-blue-700 mb-3"><Target size={18}/></div>
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Campanas Activas</p>
-          <h3 className="text-3xl font-black text-slate-800">{loading ? '...' : (stats.campanas_activas ?? 0)}</h3>
-          <p className="text-xs font-bold text-slate-400 mt-1">{loading ? '' : `${stats.campanas_total ?? 0} campanas totales`}</p>
-        </div>
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
-          <div className="inline-flex p-2 rounded-xl bg-emerald-100 text-emerald-700 mb-3"><Users size={18}/></div>
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Leads Capturados</p>
-          <h3 className="text-3xl font-black text-slate-800">{loading ? '...' : (stats.leads_total ?? 0)}</h3>
-          <p className="text-xs font-bold text-emerald-500 mt-1 flex items-center gap-1">
-            <CheckCircle2 size={11}/> {loading ? '' : `${stats.leads_convertidos ?? 0} convertidos (${stats.tasa_conversion_pct ?? 0}%)`}
-          </p>
-        </div>
-        <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
-          <div className="inline-flex p-2 rounded-xl bg-purple-100 text-purple-700 mb-3"><DollarSign size={18}/></div>
-          <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">Ventas Atribuidas</p>
-          <h3 className="text-2xl font-black text-slate-800">{loading ? '...' : fCOP(stats.ventas_atribuidas_cop ?? 0)}</h3>
-          <p className="text-xs font-bold text-purple-500 mt-1 flex items-center gap-1">
-            <TrendingUp size={11}/> {loading ? '' : `ROI: ${stats.roi_pct ?? 0}%`}
-          </p>
-        </div>
-        <div className="bg-gradient-to-br from-purple-600 to-indigo-600 p-5 rounded-2xl shadow-sm text-white">
-          <div className="inline-flex p-2 rounded-xl bg-white/20 mb-3"><Sparkles size={18}/></div>
-          <p className="text-xs font-bold uppercase tracking-wider mb-1 opacity-80">Flujos Activos</p>
-          <h3 className="text-3xl font-black">{loading ? '...' : (stats.flujos_activos ?? 0)}</h3>
-          <p className="text-xs font-medium opacity-80 mt-1 flex items-center gap-1">
-            <MousePointerClick size={14}/> {loading ? '' : `${stats.posts_total ?? 0} posts publicados`}
-          </p>
-        </div>
+        <StatCard icon={Target} color="blue" label="Campanas Activas"
+          value={loading ? '...' : (stats.campanas_activas ?? 0)}
+          hint={loading ? '' : `${stats.campanas_total ?? 0} campanas totales`} />
+        <StatCard icon={Users} color="emerald" label="Leads Capturados"
+          value={loading ? '...' : (stats.leads_total ?? 0)}
+          hint={loading ? '' : `${stats.leads_convertidos ?? 0} convertidos (${stats.tasa_conversion_pct ?? 0}%)`} />
+        <StatCard icon={DollarSign} color="purple" label="Ventas Atribuidas"
+          value={loading ? '...' : fCOP(stats.ventas_atribuidas_cop ?? 0)}
+          hint={loading ? '' : `ROI: ${stats.roi_pct ?? 0}%`} />
+        <StatCard variant="gradient" color="purple" icon={Sparkles} label="Flujos Activos"
+          value={loading ? '...' : (stats.flujos_activos ?? 0)}
+          hint={loading ? '' : `${stats.posts_total ?? 0} posts publicados`} />
       </div>
 
       <h2 className="text-xl font-black text-slate-800 mb-6 flex items-center gap-2">

@@ -1,8 +1,9 @@
 "use client";
 import { useState, useEffect, useCallback } from 'react';
-import Link from 'next/link';
-import { Network, ArrowLeft, Plus, Save, Trash2, RefreshCw, CheckCircle2, AlertCircle, X, Zap, MessageCircle, Mail, Send, UserPlus, Tag, ToggleLeft, ToggleRight, Play, Pause, ChevronRight, ChevronDown, Edit2, Globe } from 'lucide-react';
+import { Network, Plus, Save, Trash2, RefreshCw, CheckCircle2, AlertCircle, X, Zap, MessageCircle, Mail, Send, UserPlus, Tag, ToggleLeft, ToggleRight, Play, Pause, ChevronRight, ChevronDown, Edit2, Globe } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import { SubNav, PageHeader, Toast } from '@/components/ui';
+import { MKT_NAV } from '../mkt-nav';
 
 const CANALES_FLUJO = [
   { id: 'INSTAGRAM', label: 'Instagram', color: 'from-purple-500 to-pink-500', emoji: '📸' },
@@ -126,24 +127,22 @@ export default function FlujosPage() {
 
   return (
     <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden">
-      {toast && <div className={`fixed bottom-6 right-6 z-50 px-5 py-3 rounded-2xl shadow-xl text-white text-sm font-semibold flex items-center gap-2 ${toast.type==='ok'?'bg-blue-600':'bg-red-600'}`}>{toast.msg}</div>}
-      
+      <Toast toast={toast as any} onClose={() => setToast(null)} />
+
+      <SubNav label="Marketing" items={MKT_NAV} currentPath="/dashboard/marketing/flujos" color="blue" hub={{ href: '/dashboard/marketing' }} />
+
       {/* HEADER */}
-      <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between shrink-0 shadow-sm">
-        <div>
-          <Link href="/dashboard/marketing" className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 mb-1"><ArrowLeft size={12}/> Marketing</Link>
-          <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2"><Network className="text-blue-600" size={22}/> Flujos de Automatización</h1>
-          <p className="text-xs text-slate-400 mt-0.5">Configura respuestas automáticas por palabra clave en cada canal social</p>
-        </div>
-        {selected && (
-          <div className="flex gap-2">
+      <div className="bg-white px-6 py-4 border-b border-slate-200 shrink-0 shadow-sm">
+        <PageHeader icon={Network} color="blue"
+          title="Flujos de Automatización"
+          subtitle="Configura respuestas automáticas por palabra clave en cada canal social"
+          actions={selected && (
             <button onClick={saveFlujo} disabled={saving} className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm disabled:opacity-50">
               <Save size={14}/>{saving?'Guardando...':'Guardar Flujo'}
             </button>
-          </div>
-        )}
+          )} />
       </div>
-      
+
       <div className="flex-1 flex overflow-hidden">
         {/* COL 1: Selector de Canal + Lista Flujos */}
         <div className="w-72 shrink-0 bg-white border-r border-slate-200 flex flex-col">

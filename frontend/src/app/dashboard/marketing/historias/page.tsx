@@ -1,8 +1,9 @@
 "use client";
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import Link from 'next/link';
-import { Sparkles, ArrowLeft, Plus, Save, Trash2, RefreshCw, CheckCircle2, AlertCircle, X, Image, Upload, Palette, CalendarClock, Share2, Camera, Monitor, Smartphone, MessageCircle, Globe, Tag, DollarSign, Eye, Zap, Play } from 'lucide-react';
+import { Sparkles, Plus, Save, Trash2, RefreshCw, CheckCircle2, AlertCircle, X, Image, Upload, Palette, CalendarClock, Share2, Camera, Monitor, Smartphone, MessageCircle, Globe, Tag, DollarSign, Eye, Zap, Play } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import { SubNav, PageHeader, Toast } from '@/components/ui';
+import { MKT_NAV } from '../mkt-nav';
 const fCOP = (v: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0);
 
 const CANALES_POST = ['Instagram','WhatsApp','Facebook','TikTok','YouTube','Email','SMS'];
@@ -101,17 +102,17 @@ export default function HistoriasPage() {
 
   return (
     <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden">
-      {toast && <div className={`fixed bottom-6 right-6 z-50 px-5 py-3 rounded-2xl shadow-xl text-white text-sm font-semibold flex items-center gap-2 ${toast.type==='ok'?'bg-purple-600':'bg-red-600'}`}>{toast.msg}</div>}
-      
+      <Toast toast={toast as any} onClose={() => setToast(null)} />
+
+      <SubNav label="Marketing" items={MKT_NAV} currentPath="/dashboard/marketing/historias" color="purple" hub={{ href: '/dashboard/marketing' }} />
+
       {/* HEADER */}
-      <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between shrink-0 shadow-sm">
-        <div>
-          <Link href="/dashboard/marketing" className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 mb-1"><ArrowLeft size={12}/> Marketing</Link>
-          <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2"><Sparkles className="text-purple-600" size={22}/> Historias y Publicaciones</h1>
-          <p className="text-xs text-slate-400 mt-0.5">Crea, diseña y programa contenido para tus redes sociales · Sincronización con inventario</p>
-        </div>
+      <div className="bg-white px-6 py-4 border-b border-slate-200 shrink-0 shadow-sm">
+        <PageHeader icon={Sparkles} color="purple"
+          title="Historias y Publicaciones"
+          subtitle="Crea, diseña y programa contenido para tus redes sociales · Sincronización con inventario" />
       </div>
-      
+
       <div className="flex-1 flex overflow-hidden">
         {/* PANEL IZQUIERDO: Formulario */}
         <div className="w-80 shrink-0 bg-white border-r border-slate-200 flex flex-col overflow-y-auto">
