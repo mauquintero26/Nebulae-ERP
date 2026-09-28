@@ -422,6 +422,8 @@ function DeleteConfirm({ cot, onConfirm, onCancel }: { cot: any; onConfirm: () =
 }
 
 function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm, onCancel, saving }: { pven: any; totalAnterior: number; totalNuevo: number; onConfirm: () => void; onCancel: () => void; saving: boolean }) {
+  const anticipoYaPagado = Number(pven?.anticipo_cop || 0);
+  const creditoAFavor = anticipoYaPagado - totalNuevo;
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm">
       <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full mx-4">
@@ -438,6 +440,12 @@ function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm, onCan
           <ArrowRight size={14} className="text-slate-400"/>
           <span className="font-black text-indigo-700">{fCOP(totalNuevo)}</span>
         </div>
+        {creditoAFavor > 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-xs text-amber-800">
+            <p className="font-bold mb-1">⚠ El cliente ya pago {fCOP(anticipoYaPagado)}, mas que el nuevo total.</p>
+            <p>Al continuar, el pedido quedara con un credito a favor del cliente de <strong>{fCOP(creditoAFavor)}</strong> (saldo negativo). Esto no genera el reembolso automaticamente -- coordina con el cliente o finanzas por separado.</p>
+          </div>
+        )}
         <p className="text-[11px] text-slate-400 text-center mb-6">
           El anticipo y los pagos ya registrados en el pedido no se modifican, solo productos y precios.
         </p>
@@ -731,7 +739,11 @@ export default function CotizacionClient() {
 
       const pvenVigente = (selected?.pedidos_venta || []).filter((v: any) => v.estado !== 'CANCELADA').pop();
       if (propagarAPven && pvenVigente) {
-        const nuevoSaldo = Math.max(0, Number(data.total_cop || 0) - Number(pvenVigente.anticipo_cop || 0));
+        // Signed a proposito: si el anticipo ya cobrado supera el nuevo total
+        // (p.ej. se quito una linea despues de cobrar), esto queda negativo a
+        // proposito para reflejar un credito real a favor del cliente en vez
+        // de ocultarlo con un saldo en $0 que parece "todo pagado sin novedad".
+        const nuevoSaldo = Number(data.total_cop || 0) - Number(pvenVigente.anticipo_cop || 0);
         await apiFetch(`/ventas/pedidos/${pvenVigente.id}`, {
           method: 'PATCH',
           body: JSON.stringify({
@@ -743,15 +755,16 @@ export default function CotizacionClient() {
             updated_by: currentUser,
           }),
         });
+        const notaCredito = nuevoSaldo < 0 ? ` Credito a favor del cliente: $${Math.abs(nuevoSaldo).toLocaleString('es-CO')} COP.` : '';
         await apiFetch(`/ventas/pedidos/${pvenVigente.id}/actividad`, {
           method: 'POST',
           body: JSON.stringify({
             action: 'UPDATED',
-            description: `Precios actualizados por re-cotizacion de ${selected?.numero || ''} (anticipo y pagos existentes no se modificaron)`,
+            description: `Precios actualizados por re-cotizacion de ${selected?.numero || ''} (anticipo y pagos existentes no se modificaron).${notaCredito}`,
             user_name: currentUser,
           }),
         });
-        showToast(`Cotizacion recalculada y propagada a ${pvenVigente.numero}`);
+        showToast(nuevoSaldo < 0 ? `Cotizacion propagada a ${pvenVigente.numero} -- credito a favor del cliente` : `Cotizacion recalculada y propagada a ${pvenVigente.numero}`);
       } else {
         showToast('Cotizacion calculada y guardada');
       }

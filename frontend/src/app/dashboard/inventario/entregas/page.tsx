@@ -30,6 +30,14 @@ const INV_NAV = [
 const fCOP = (v: number) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0);
 const fDate = (iso: string | null) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 
+// sale_orders no tiene columna saldo_pendiente_cop/pago_estado -- esos nombres
+// nunca existieron en el backend, asi que el chequeo `!== undefined` de abajo
+// caia siempre en el fallback. El campo real es saldo_cop (ya lo mantiene el
+// backend, incluyendo casos de credito a favor del cliente: puede ser negativo
+// a proposito, no se debe forzar a 0 aqui).
+const anticipoDe = (v: any) => Number(v?.anticipo_cop || 0);
+const saldoDe = (v: any) => v?.saldo_cop != null ? Number(v.saldo_cop) : Number(v?.total_cop || 0) - anticipoDe(v);
+
 export default function EntregasPage() {
   const [ventas, setVentas] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -70,11 +78,7 @@ export default function EntregasPage() {
 
   // Manejar el despacho seguro
   const handleDespachar = async (pedido: any, forzarConSaldo: boolean = false) => {
-    const total = Number(pedido.total_cop || 0);
-    const anticipo = Number(pedido.anticipo_cop || (total * 0.6));
-    const saldoPendiente = pedido.saldo_pendiente_cop !== undefined
-      ? Number(pedido.saldo_pendiente_cop)
-      : Math.max(0, total - anticipo);
+    const saldoPendiente = saldoDe(pedido);
 
     if (saldoPendiente > 0 && !forzarConSaldo) {
       const confirmacion = window.confirm(
@@ -122,14 +126,13 @@ Este pedido tiene un saldo pendiente de ${fCOP(saldoPendiente)} (40%).
       await apiFetch(`/ventas/pedidos/${pedido.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
-          saldo_pendiente_cop: 0,
-          pago_estado: 'PAGADO_TOTAL',
+          saldo_cop: 0,
           notas: pedido.notas ? `${pedido.notas} | Saldo 40% cobrado y verificado` : 'Saldo 40% verificado'
         })
       });
 
       showToast('Cobro de saldo registrado. Pedido listo para despacho.');
-      setSelected((prev: any) => prev ? { ...prev, saldo_pendiente_cop: 0, pago_estado: 'PAGADO_TOTAL' } : null);
+      setSelected((prev: any) => prev ? { ...prev, saldo_cop: 0 } : null);
       loadData();
     } catch (e: any) {
       showToast(e.message, 'error');
@@ -143,13 +146,10 @@ Este pedido tiene un saldo pendiente de ${fCOP(saldoPendiente)} (40%).
   const despachados = ventas.filter(v => v.estado === 'ENTREGADO' || v.estado === 'COMPLETADO').length;
   const enEspera = ventas.filter(v => v.estado !== 'ENTREGADO' && v.estado !== 'COMPLETADO' && v.estado !== 'CANCELADO');
   
-  // Saldo retenido total
-  const saldoRetenidoTotal = enEspera.reduce((acc, v) => {
-    const total = Number(v.total_cop || 0);
-    const anticipo = Number(v.anticipo_cop || (total * 0.6));
-    const saldo = v.saldo_pendiente_cop !== undefined ? Number(v.saldo_pendiente_cop) : Math.max(0, total - anticipo);
-    return acc + saldo;
-  }, 0);
+  // Saldo retenido total (solo saldos positivos: un credito a favor del
+  // cliente en un pedido no debe "restar" del total que falta por recaudar
+  // de los demas)
+  const saldoRetenidoTotal = enEspera.reduce((acc, v) => acc + Math.max(0, saldoDe(v)), 0);
 
   const filtered = ventas.filter(v => {
     const term = search.toLowerCase();
@@ -161,9 +161,7 @@ Este pedido tiene un saldo pendiente de ${fCOP(saldoPendiente)} (40%).
     if (!match) return false;
 
     const isDespachado = v.estado === 'ENTREGADO' || v.estado === 'COMPLETADO';
-    const total = Number(v.total_cop || 0);
-    const anticipo = Number(v.anticipo_cop || (total * 0.6));
-    const saldo = v.saldo_pendiente_cop !== undefined ? Number(v.saldo_pendiente_cop) : Math.max(0, total - anticipo);
+    const saldo = saldoDe(v);
 
     if (activeTab === 'PendientesCobro') return !isDespachado && saldo > 0;
     if (activeTab === 'ListosDespacho') return !isDespachado && saldo === 0;
@@ -332,8 +330,7 @@ Este pedido tiene un saldo pendiente de ${fCOP(saldoPendiente)} (40%).
                 ) : (
                   filtered.map((ven: any) => {
                     const total = Number(ven.total_cop || 0);
-                    const anticipo = Number(ven.anticipo_cop || (total * 0.6));
-                    const saldo = ven.saldo_pendiente_cop !== undefined ? Number(ven.saldo_pendiente_cop) : Math.max(0, total - anticipo);
+                    const saldo = saldoDe(ven);
                     const isDespachado = ven.estado === 'ENTREGADO' || ven.estado === 'COMPLETADO';
                     const tel = (ven.cliente_telefono || ven.customer_phone || '').replace(/[^0-9]/g, '');
 
@@ -463,9 +460,10 @@ Este pedido tiene un saldo pendiente de ${fCOP(saldoPendiente)} (40%).
               {/* Semáforo Financiero 60/40 */}
               {(() => {
                 const total = Number(selected.total_cop || 0);
-                const anticipo = Number(selected.anticipo_cop || (total * 0.6));
-                const saldo = selected.saldo_pendiente_cop !== undefined ? Number(selected.saldo_pendiente_cop) : Math.max(0, total - anticipo);
+                const anticipo = anticipoDe(selected);
+                const saldo = saldoDe(selected);
                 const tieneSaldo = saldo > 0;
+                const tieneCredito = saldo < 0;
 
                 return (
                   <div className={`p-5 rounded-2xl border ${
@@ -496,6 +494,12 @@ Este pedido tiene un saldo pendiente de ${fCOP(saldoPendiente)} (40%).
                         <p className={`font-black text-xs mt-0.5 ${tieneSaldo ? 'text-rose-600' : 'text-emerald-700'}`}>{fCOP(saldo)}</p>
                       </div>
                     </div>
+
+                    {tieneCredito && (
+                      <p className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg px-3 py-2 mt-1">
+                        El cliente pago de mas: hay un credito a favor de <strong>{fCOP(Math.abs(saldo))}</strong> pendiente de coordinar (reembolso o abono a otro pedido).
+                      </p>
+                    )}
 
                     {tieneSaldo && (
                       <div className="mt-3 flex items-center justify-between gap-3">
