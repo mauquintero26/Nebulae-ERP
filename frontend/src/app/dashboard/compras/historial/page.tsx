@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { Table2, History, FolderOpen, X, Download, CloudDownload, Filter, Search, Loader2, RefreshCw } from 'lucide-react';
 import { SubNav, PageHeader, Badge, Button, EmptyState } from '@/components/ui';
 import { COMP_NAV } from '../comp-nav';
+import { apiFetch } from '@/lib/api';
 
 export default function ComprasHistorialPage() {
   const [comprasData, setComprasData] = useState<any[]>([]);
@@ -38,17 +39,14 @@ export default function ComprasHistorialPage() {
     const loadRecentHistory = async () => {
       setIsLoading(true);
       try {
-        const res = await fetch(process.env.NEXT_PUBLIC_API_URL + '/api/history/compras');
-        const data = await res.json();
+        const data = await apiFetch('/history/compras');
 
         if (data.files && data.files.length > 0) {
           const latestFile = data.files[0].filename;
-          const loadRes = await fetch(process.env.NEXT_PUBLIC_API_URL + '/api/history/compras/load', {
+          const loadData = await apiFetch('/history/compras/load', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ filenames: [latestFile] })
           });
-          const loadData = await loadRes.json();
           if (loadData.data) {
             setComprasData(loadData.data);
             setFilteredData(loadData.data);
@@ -65,12 +63,9 @@ export default function ComprasHistorialPage() {
 
   const fetchHistory = async () => {
     try {
-      const res = await fetch(process.env.NEXT_PUBLIC_API_URL + '/api/history/compras');
-      if (res.ok) {
-        const data = await res.json();
-        setHistoryFiles(data.files || []);
-        setShowHistory(true);
-      }
+      const data = await apiFetch('/history/compras');
+      setHistoryFiles(data.files || []);
+      setShowHistory(true);
     } catch (err) {
       setError('No se pudo cargar la lista de historial.');
     }
@@ -80,12 +75,10 @@ export default function ComprasHistorialPage() {
     setIsLoading(true);
     setShowHistory(false);
     try {
-      const res = await fetch(process.env.NEXT_PUBLIC_API_URL + '/api/history/compras/load', {
+      const data = await apiFetch('/history/compras/load', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filenames: [filename] })
       });
-      const data = await res.json();
       if (data.data) {
         setComprasData(data.data);
         setFilteredData(data.data);

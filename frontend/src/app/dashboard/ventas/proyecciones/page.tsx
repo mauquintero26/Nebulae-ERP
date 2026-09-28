@@ -16,6 +16,7 @@ import {
 import { Line } from 'react-chartjs-2';
 import { SubNav, PageHeader, Button } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
+import { apiFetch } from '@/lib/api';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -32,16 +33,12 @@ export default function ProyeccionesPage() {
   useEffect(() => {
     const fetchHistory = async () => {
       try {
-        const res = await fetch(process.env.NEXT_PUBLIC_API_URL + '/api/history/load', {
+        const data = await apiFetch('/history/load', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ domain: 'ventas', force: false })
         });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.status === 'success' && data.data) {
-            setRawData(data.data);
-          }
+        if (data.status === 'success' && data.data) {
+          setRawData(data.data);
         }
       } catch (err) {
         console.error('Error loading history for forecast:', err);

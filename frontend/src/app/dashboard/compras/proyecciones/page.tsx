@@ -16,6 +16,7 @@ import {
 import { Line } from 'react-chartjs-2';
 import { SubNav, PageHeader, Button } from '@/components/ui';
 import { COMP_NAV } from '../comp-nav';
+import { apiFetch } from '@/lib/api';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -34,20 +35,15 @@ export default function ComprasProyeccionesPage() {
   useEffect(() => {
     const fetchHistory = async () => {
       try {
-        const res = await fetch(process.env.NEXT_PUBLIC_API_URL + '/api/history/compras');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.files && data.files.length > 0) {
-            const latestFile = data.files[0].filename;
-            const loadRes = await fetch(process.env.NEXT_PUBLIC_API_URL + '/api/history/compras/load', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ filenames: [latestFile] })
-            });
-            const loadData = await loadRes.json();
-            if (loadData.data) {
-              setComprasData(loadData.data);
-            }
+        const data = await apiFetch('/history/compras');
+        if (data.files && data.files.length > 0) {
+          const latestFile = data.files[0].filename;
+          const loadData = await apiFetch('/history/compras/load', {
+            method: 'POST',
+            body: JSON.stringify({ filenames: [latestFile] })
+          });
+          if (loadData.data) {
+            setComprasData(loadData.data);
           }
         }
       } catch (err) {

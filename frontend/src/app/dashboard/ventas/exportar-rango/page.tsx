@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Upload, FileText, CheckCircle2, AlertCircle, ArrowRight, Table2, CloudDownload, Calendar, History, FolderOpen, X } from 'lucide-react';
 import { SubNav, PageHeader, Button, EmptyState } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
+import { apiFetch } from '@/lib/api';
 
 export default function ExportarRangoPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -75,12 +76,9 @@ export default function ExportarRangoPage() {
 
   const fetchHistory = async () => {
     try {
-      const res = await fetch(process.env.NEXT_PUBLIC_API_URL + '/api/history');
-      if (res.ok) {
-        const data = await res.json();
-        setHistoryFiles(data.files || []);
-        setShowHistory(true);
-      }
+      const data = await apiFetch('/history');
+      setHistoryFiles(data.files || []);
+      setShowHistory(true);
     } catch (err) {
       setError('No se pudo cargar el historial.');
     }
@@ -90,12 +88,10 @@ export default function ExportarRangoPage() {
     setIsLoading(true);
     setShowHistory(false);
     try {
-      const res = await fetch(process.env.NEXT_PUBLIC_API_URL + '/api/history/load', {
+      const data = await apiFetch('/history/load', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ filenames: [filename] })
       });
-      const data = await res.json();
       if (data.data) {
         setSalesData(data.data || []);
       } else {
