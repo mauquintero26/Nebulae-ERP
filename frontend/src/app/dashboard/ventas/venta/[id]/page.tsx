@@ -58,6 +58,8 @@ export default function PedidoVentaDetallePage() {
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelRazon, setCancelRazon] = useState('');
   const [cancelling, setCancelling] = useState(false);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editForm, setEditForm] = useState<any>({});
   const supplierTimer = useRef<any>(null);
 
   useEffect(() => {
@@ -71,7 +73,15 @@ export default function PedidoVentaDetallePage() {
     setLoadError('');
     try {
       const raw = await apiFetch(`/ventas/pedidos/${params.id}`);
-      setPedido(raw?.data ?? raw);
+      const d = raw?.data ?? raw;
+      setPedido(d);
+      setEditForm({
+        estado: d.estado,
+        notas: d.notas || '',
+        fecha_entrega_estimada: d.fecha_entrega_estimada ? d.fecha_entrega_estimada.split('T')[0] : '',
+        direccion_entrega: d.direccion_entrega || '',
+        pec_numero: d.pec_numero || '',
+      });
     } catch (err: any) {
       setLoadError(err.message || 'No se pudo cargar el pedido de venta');
     }
@@ -248,6 +258,17 @@ export default function PedidoVentaDetallePage() {
     setCancelling(false);
   }
 
+  async function handleSaveEdit() {
+    if (!pedido) return;
+    try {
+      await apiFetch(`/ventas/pedidos/${pedido.id}`, { method: 'PATCH', body: JSON.stringify(editForm) });
+      setIsEditMode(false);
+      await loadPedido();
+    } catch (err: any) {
+      alert('Error al guardar: ' + err.message);
+    }
+  }
+
   if (loading) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-white">
@@ -300,6 +321,10 @@ export default function PedidoVentaDetallePage() {
               <CheckCircle2 size={16} /> PXP: {pedido.pxp_numero}
             </span>
           )}
+          <button onClick={() => setIsEditMode(!isEditMode)}
+            className={`p-2.5 rounded-xl border transition-colors ${isEditMode ? 'bg-indigo-100 text-indigo-700 border-indigo-300' : 'text-slate-500 border-slate-200 hover:bg-slate-100'}`}>
+            <Edit2 size={18} />
+          </button>
           {!['ENTREGADO', 'FACTURADO', 'CANCELADO'].includes(estadoActual) && (
             <Button variant="danger" icon={X} onClick={() => setShowCancelModal(true)}>Cancelar Pedido</Button>
           )}
@@ -361,11 +386,39 @@ export default function PedidoVentaDetallePage() {
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Entrega Estimada</label>
-                <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700">
-                  {fDate(pedido?.fecha_entrega_estimada)}
-                </div>
+                {isEditMode ? (
+                  <input type="date" value={editForm.fecha_entrega_estimada} onChange={e => setEditForm((f: any) => ({ ...f, fecha_entrega_estimada: e.target.value }))}
+                    className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-200" />
+                ) : (
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700">
+                    {fDate(pedido?.fecha_entrega_estimada)}
+                  </div>
+                )}
               </div>
             </div>
+
+            {isEditMode && (
+              <div className="grid grid-cols-2 gap-6 mb-10">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Dirección de Entrega</label>
+                  <input type="text" value={editForm.direccion_entrega} onChange={e => setEditForm((f: any) => ({ ...f, direccion_entrega: e.target.value }))}
+                    className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-200" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">PEC Número (manual)</label>
+                  <input type="text" value={editForm.pec_numero} onChange={e => setEditForm((f: any) => ({ ...f, pec_numero: e.target.value }))}
+                    className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-200" />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Notas</label>
+                  <textarea value={editForm.notas} onChange={e => setEditForm((f: any) => ({ ...f, notas: e.target.value }))} rows={3}
+                    className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm resize-none outline-none focus:ring-2 focus:ring-indigo-200" />
+                </div>
+                <div className="col-span-2 flex justify-end">
+                  <Button color="indigo" icon={Save} onClick={handleSaveEdit}>Guardar Cambios</Button>
+                </div>
+              </div>
+            )}
 
             {/* Resumen Financiero */}
             <div>
