@@ -90,7 +90,7 @@ function IAPanelVenta({pedido,apiBase}:{pedido:any;apiBase:string}) {
   );
 }
 
-function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClose:()=>void}) {
+export function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClose:()=>void}) {
   const [form, setForm] = useState({name:'',reference:'',contact_name:'',phone:'',email:'',address:'',city:'',country:'Colombia',payment_terms:'',notes:''});
   const [saving, setSaving] = useState(false);
   const set = (k:string,v:string) => setForm(f=>({...f,[k]:v}));

@@ -4,13 +4,14 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ArrowLeft, DollarSign, MessageCircle, Phone, Mail, CheckCircle2, Circle,
   ShoppingCart, RefreshCw, AlertCircle, ListChecks, ExternalLink, Send,
-  Activity, FileText,
+  Activity, FileText, X, Edit2, Save,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
-import { Button } from '@/components/ui';
+import { Button, Modal } from '@/components/ui';
+import { NewSupplierModal } from '../venta-client';
 
 const fCOP  = (v: any) => { const n = Number(v) || 0; return '$' + n.toLocaleString('es-CO'); };
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
@@ -46,6 +47,15 @@ export default function PedidoVentaDetallePage() {
   const [creatingPxp, setCreatingPxp] = useState(false);
   const [nota, setNota] = useState('');
   const [sendingNota, setSendingNota] = useState(false);
+  const [showPecModal, setShowPecModal] = useState(false);
+  const [pecSaving, setPecSaving] = useState(false);
+  const [pecForm, setPecForm] = useState({ dias_entrega: 15, modalidad_pago: 'Contado', notas: '' });
+  const [supplierSearch, setSupplierSearch] = useState('');
+  const [suppliers, setSuppliers] = useState<any[]>([]);
+  const [selectedSupplier, setSelectedSupplier] = useState<any>(null);
+  const [showNewSupplier, setShowNewSupplier] = useState(false);
+  const [listaSaving, setListaSaving] = useState(false);
+  const supplierTimer = useRef<any>(null);
 
   useEffect(() => {
     const u = localStorage.getItem('user_name') || localStorage.getItem('username') || '';
@@ -133,6 +143,83 @@ export default function PedidoVentaDetallePage() {
       alert('Error al registrar nota: ' + err.message);
     }
     setSendingNota(false);
+  }
+
+  function onSupplierSearch(q: string) {
+    setSupplierSearch(q); setSelectedSupplier(null);
+    if (supplierTimer.current) clearTimeout(supplierTimer.current);
+    if (!q.trim()) { setSuppliers([]); return; }
+    supplierTimer.current = setTimeout(async () => {
+      const d = await apiFetch(`/compras/proveedores/search?q=${encodeURIComponent(q)}`).catch(() => ({ data: [] }));
+      const arr = Array.isArray(d) ? d : (d?.data ?? []);
+      setSuppliers(arr);
+      if (arr.length === 0) setShowNewSupplier(true);
+    }, 300);
+  }
+
+  async function handleCrearPEC() {
+    if (!pedido) return;
+    if (!selectedSupplier) { alert('Selecciona un proveedor (o crea uno nuevo) antes de crear el PEC'); return; }
+    setPecSaving(true);
+    try {
+      const productosPec = (pedido.productos || []).map((p: any) => {
+        const qty = Number(p.qty || p.cantidad || 1);
+        const unitPrice = Number(p.unit_price_cop ?? p.precio_unitario ?? (p.total_cop ? p.total_cop / qty : 0));
+        return {
+          producto_nombre: p.product_name || p.nombre || p.descripcion || p.producto_nombre || 'Producto',
+          qty,
+          unit_price_cop: unitPrice,
+        };
+      });
+      const totalPec = productosPec.reduce((s: number, p: any) => s + p.qty * p.unit_price_cop, 0);
+      const pec = await apiFetch('/compras/pedidos', {
+        method: 'POST',
+        body: JSON.stringify({
+          supplier_id: selectedSupplier.id,
+          supplier_name: selectedSupplier.name,
+          ven_id: pedido.id,
+          ven_numero: pedido.numero,
+          dias_entrega: pecForm.dias_entrega,
+          modalidad_pago: pecForm.modalidad_pago,
+          notas: pecForm.notas,
+          productos: productosPec,
+          subtotal_cop: totalPec,
+          total_cop: totalPec,
+          created_by: currentUser,
+        }),
+      });
+      const pecObj = pec?.data ?? pec;
+      setShowPecModal(false);
+      await loadPedido();
+      alert(`PEC ${pecObj.numero || ''} creado y vinculado al pedido`);
+    } catch (err: any) {
+      alert('Error al crear PEC: ' + err.message);
+    }
+    setPecSaving(false);
+  }
+
+  async function handleAgregarLista() {
+    if (!pedido) return;
+    setListaSaving(true);
+    try {
+      await apiFetch('/compras/lista-compras', {
+        method: 'POST',
+        body: JSON.stringify({
+          pven_id: pedido.id,
+          pven_numero: pedido.numero,
+          productos: (pedido.productos || []).map((p: any) => ({
+            producto_nombre: p.product_name || p.nombre || p.descripcion || p.producto_nombre || 'Sin nombre',
+            qty: p.qty || p.cantidad || 1,
+          })),
+          notas: `PVEN: ${pedido.numero} — Cliente: ${pedido.customer_name || ''}`,
+          created_by: currentUser,
+        }),
+      });
+      await loadPedido();
+    } catch (err: any) {
+      alert('Error al agregar a la lista de compras: ' + err.message);
+    }
+    setListaSaving(false);
   }
 
   if (loading) {
@@ -344,11 +431,35 @@ export default function PedidoVentaDetallePage() {
                   <h3 className="text-sm font-black text-orange-800 uppercase tracking-wide">Pendiente de Compra</h3>
                 </div>
                 <p className="text-xs text-orange-600 mb-4">
-                  Este pedido requiere la compra de {productos.length} producto(s). Gestiona la compra desde el panel de Pedidos de Venta.
+                  Este pedido requiere la compra de {productos.length} producto(s). Selecciona cómo proceder:
                 </p>
-                <Link href={`/dashboard/ventas/venta?id=${pedido.id}`} className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border-2 border-orange-300 rounded-xl text-sm font-black text-orange-800 hover:bg-orange-100 transition-colors">
-                  <ListChecks size={16} /> Ir a Crear Pedido de Compra / Lista de Compras
-                </Link>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => {
+                      setSupplierSearch(''); setSelectedSupplier(null); setSuppliers([]);
+                      setPecForm({ dias_entrega: 15, modalidad_pago: 'Contado', notas: `Pedido de compra para PVEN ${pedido.numero} — ${pedido.customer_name || ''}` });
+                      setShowPecModal(true);
+                    }}
+                    className="flex flex-col items-start gap-2 p-4 bg-white border-2 border-orange-300 rounded-xl hover:border-purple-400 hover:bg-purple-50 transition-all text-left shadow-sm">
+                    <div className="bg-purple-100 text-purple-600 p-2 rounded-xl"><ShoppingCart size={18} /></div>
+                    <div>
+                      <p className="text-sm font-black text-slate-900">Crear Pedido de Compra</p>
+                      <p className="text-xs text-slate-500 mt-0.5 leading-tight">Genera un PEC vinculado directamente a este PVEN</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={handleAgregarLista}
+                    disabled={listaSaving}
+                    className="flex flex-col items-start gap-2 p-4 bg-white border-2 border-orange-300 rounded-xl hover:border-indigo-400 hover:bg-indigo-50 transition-all text-left shadow-sm disabled:opacity-50">
+                    <div className="bg-indigo-100 text-indigo-600 p-2 rounded-xl">
+                      {listaSaving ? <RefreshCw size={18} className="animate-spin" /> : <ListChecks size={18} />}
+                    </div>
+                    <div>
+                      <p className="text-sm font-black text-slate-900">Agregar a Lista de Compras</p>
+                      <p className="text-xs text-slate-500 mt-0.5 leading-tight">Envía los productos a la lista pendiente de comprar (pool)</p>
+                    </div>
+                  </button>
+                </div>
               </div>
             )}
 
@@ -417,6 +528,76 @@ export default function PedidoVentaDetallePage() {
           </div>
         </div>
       </div>
+      {showPecModal && pedido && (
+        <Modal title="Crear Pedido de Compra" icon={ShoppingCart} color="purple"
+          subtitle={`Vinculado a ${pedido.numero} — ${pedido.customer_name}`}
+          onClose={() => setShowPecModal(false)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setShowPecModal(false)}>Cancelar</Button>
+              <Button color="purple" icon={ShoppingCart} loading={pecSaving} onClick={handleCrearPEC}>Crear PEC</Button>
+            </>
+          )}>
+          {(pedido.productos || []).length > 0 && (
+            <div className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+              <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos a comprar</p>
+              <div className="space-y-1">
+                {(pedido.productos || []).slice(0, 5).map((p: any, i: number) => (
+                  <div key={i} className="flex justify-between text-xs text-slate-700">
+                    <span className="truncate max-w-[260px]">{p.product_name || p.descripcion || p.producto_nombre}</span>
+                    <span className="font-bold ml-2 shrink-0">× {p.qty ?? p.cantidad}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <div>
+            <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Proveedor</label>
+            <input value={supplierSearch} onChange={e => onSupplierSearch(e.target.value)}
+              placeholder="Buscar proveedor..." className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200" />
+            {suppliers.length > 0 && (
+              <div className="border border-slate-200 rounded-xl shadow-lg mt-1 max-h-36 overflow-y-auto z-10">
+                {suppliers.map((s: any) => (
+                  <button key={s.id} onClick={() => { setSelectedSupplier(s); setSupplierSearch(s.name); setSuppliers([]); }}
+                    className="w-full text-left px-4 py-2.5 hover:bg-purple-50 text-sm font-medium border-b last:border-0">
+                    {s.name} {s.city && <span className="text-slate-400">· {s.city}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+            {selectedSupplier && (
+              <p className="text-xs text-purple-700 font-bold mt-1 flex items-center gap-1">
+                <CheckCircle2 size={12} /> {selectedSupplier.name} seleccionado
+              </p>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Días Entrega Estimada</label>
+              <input type="number" min="1" value={pecForm.dias_entrega} onChange={e => setPecForm(f => ({ ...f, dias_entrega: Number(e.target.value) }))}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200" />
+            </div>
+            <div>
+              <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Modalidad de Pago</label>
+              <select value={pecForm.modalidad_pago} onChange={e => setPecForm(f => ({ ...f, modalidad_pago: e.target.value }))}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200">
+                {['Contado', 'Credito 30d', 'Credito 60d', 'Adelanto 50%', 'Contra entrega'].map(p => <option key={p}>{p}</option>)}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Notas</label>
+            <textarea value={pecForm.notas} onChange={e => setPecForm(f => ({ ...f, notas: e.target.value }))}
+              rows={2} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none outline-none focus:ring-2 focus:ring-purple-200" />
+          </div>
+        </Modal>
+      )}
+      {showNewSupplier && (
+        <NewSupplierModal
+          onSave={(s) => { setSelectedSupplier(s); setSupplierSearch(s.name); setSuppliers([]); setShowNewSupplier(false); }}
+          onClose={() => setShowNewSupplier(false)}
+        />
+      )}
     </div>
   );
 }
