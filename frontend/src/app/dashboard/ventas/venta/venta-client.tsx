@@ -1,12 +1,11 @@
 'use client';
 
 export const dynamic = 'force-dynamic';
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Search, RefreshCw, Plus, MoreHorizontal, X, Edit2, FileCheck,
   FileText, AlertCircle, ShoppingCart, Package, DollarSign, UserPlus
 } from 'lucide-react';
-import Link from 'next/link';
 import { useSearchParams, useRouter } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
