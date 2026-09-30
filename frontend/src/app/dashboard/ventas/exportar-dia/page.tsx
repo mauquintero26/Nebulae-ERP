@@ -29,7 +29,7 @@ export default function ExportarDiaPage() {
       return;
     }
 
-    setError('Esta función (extraer ventas desde un chat de WhatsApp) todavía no está conectada al servidor — está pendiente de construirse. Usa "Historial" para cargar una extracción ya guardada anteriormente.');
+    setError('Esta función (extraer ventas desde un chat de WhatsApp) todavía no está conectada al servidor — está pendiente de construirse.');
   };
 
   const fetchHistory = async () => {

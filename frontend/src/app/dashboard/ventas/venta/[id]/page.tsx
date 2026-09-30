@@ -77,13 +77,6 @@ export default function PedidoVentaDetallePage() {
       const raw = await apiFetch(`/ventas/pedidos/${params.id}`);
       const d = raw?.data ?? raw;
       setPedido(d);
-      setEditForm({
-        estado: d.estado,
-        notas: d.notas || '',
-        fecha_entrega_estimada: d.fecha_entrega_estimada ? d.fecha_entrega_estimada.split('T')[0] : '',
-        direccion_entrega: d.direccion_entrega || '',
-        pec_numero: d.pec_numero || '',
-      });
     } catch (err: any) {
       setLoadError(err.message || 'No se pudo cargar el pedido de venta');
     }
@@ -266,6 +259,7 @@ export default function PedidoVentaDetallePage() {
           cancellation_reason: cancelRazon.trim(),
           cancellation_authorized_by: currentUser,
           cancelled_at: new Date().toISOString(),
+          updated_by: currentUser,
         }),
       });
       setShowCancelModal(false);
@@ -282,7 +276,7 @@ export default function PedidoVentaDetallePage() {
     try {
       await apiFetch(`/ventas/pedidos/${pedido.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ ...editForm, fecha_entrega_estimada: editForm.fecha_entrega_estimada || null }),
+        body: JSON.stringify({ ...editForm, fecha_entrega_estimada: editForm.fecha_entrega_estimada || null, updated_by: currentUser }),
       });
       setIsEditMode(false);
       await loadPedido();
@@ -343,7 +337,18 @@ export default function PedidoVentaDetallePage() {
               <CheckCircle2 size={16} /> PXP: {pedido.pxp_numero}
             </span>
           )}
-          <button onClick={() => setIsEditMode(!isEditMode)}
+          <button onClick={() => {
+              if (!isEditMode && pedido) {
+                setEditForm({
+                  estado: pedido.estado,
+                  notas: pedido.notas || '',
+                  fecha_entrega_estimada: pedido.fecha_entrega_estimada ? pedido.fecha_entrega_estimada.split('T')[0] : '',
+                  direccion_entrega: pedido.direccion_entrega || '',
+                  pec_numero: pedido.pec_numero || '',
+                });
+              }
+              setIsEditMode(!isEditMode);
+            }}
             className={`p-2.5 rounded-xl border transition-colors ${isEditMode ? 'bg-indigo-100 text-indigo-700 border-indigo-300' : 'text-slate-500 border-slate-200 hover:bg-slate-100'}`}>
             <Edit2 size={18} />
           </button>
@@ -380,9 +385,21 @@ export default function PedidoVentaDetallePage() {
             </div>
           )}
           {estadoActual === 'CANCELADO' && (
-            <div className="bg-red-50 border border-red-200 rounded-2xl p-4 mb-8 flex items-center gap-3">
-              <AlertCircle className="text-red-500" size={20} />
-              <p className="text-sm font-bold text-red-700">Este pedido de venta fue cancelado.</p>
+            <div className="bg-red-50 border border-red-200 rounded-2xl p-4 mb-8 flex items-start gap-3">
+              <AlertCircle className="text-red-500 shrink-0 mt-0.5" size={20} />
+              <div>
+                <p className="text-sm font-bold text-red-700">Este pedido de venta fue cancelado.</p>
+                {pedido?.cancellation_reason && (
+                  <p className="text-xs text-red-600 mt-1">Motivo: {pedido.cancellation_reason}</p>
+                )}
+                {(pedido?.cancellation_authorized_by || pedido?.cancelled_at) && (
+                  <p className="text-xs text-red-500 mt-1">
+                    {pedido?.cancellation_authorized_by && <>Por: {pedido.cancellation_authorized_by}</>}
+                    {pedido?.cancellation_authorized_by && pedido?.cancelled_at && ' · '}
+                    {pedido?.cancelled_at && fDate(pedido.cancelled_at)}
+                  </p>
+                )}
+              </div>
             </div>
           )}
 
@@ -423,14 +440,23 @@ export default function PedidoVentaDetallePage() {
               <div className="grid grid-cols-2 gap-6 mb-10">
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Estado</label>
-                  <select value={editForm.estado} onChange={e => setEditForm((f: any) => ({ ...f, estado: e.target.value }))}
-                    className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-200">
-                    {Object.keys(VEN_ESTADOS).filter(k => k !== 'CANCELADO' || editForm.estado === 'CANCELADO').map(k => (
-                      <option key={k} value={k}>{VEN_ESTADOS[k].label}</option>
-                    ))}
-                  </select>
-                  {editForm.estado !== 'CANCELADO' && (
-                    <p className="text-[11px] text-slate-400 mt-1">Para cancelar el pedido usa el boton "Cancelar Pedido" (registra el motivo).</p>
+                  {['ENTREGADO', 'FACTURADO', 'CANCELADO'].includes(estadoActual) ? (
+                    <>
+                      <div className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium bg-slate-50 text-slate-500">
+                        {VEN_ESTADOS[estadoActual]?.label || estadoActual}
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-1">Este estado ya no se puede cambiar manualmente desde aquí.</p>
+                    </>
+                  ) : (
+                    <>
+                      <select value={editForm.estado} onChange={e => setEditForm((f: any) => ({ ...f, estado: e.target.value }))}
+                        className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-200">
+                        {['PENDIENTE_COMPRA', 'EN_PROCESO', 'LISTO_ENTREGA'].map(k => (
+                          <option key={k} value={k}>{VEN_ESTADOS[k].label}</option>
+                        ))}
+                      </select>
+                      <p className="text-[11px] text-slate-400 mt-1">Para marcar Entregado o Facturado usa el flujo de Entregas; para cancelar usa el botón "Cancelar Pedido" (registra el motivo).</p>
+                    </>
                   )}
                 </div>
                 <div>
@@ -440,8 +466,17 @@ export default function PedidoVentaDetallePage() {
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">PEC Número (manual)</label>
-                  <input type="text" value={editForm.pec_numero} onChange={e => setEditForm((f: any) => ({ ...f, pec_numero: e.target.value }))}
-                    className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-200" />
+                  {pedido?.pec_id ? (
+                    <>
+                      <div className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium bg-slate-50 text-slate-500">
+                        {editForm.pec_numero}
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-1">Ya está vinculado a un Pedido de Compra real; no se puede editar manualmente.</p>
+                    </>
+                  ) : (
+                    <input type="text" value={editForm.pec_numero} onChange={e => setEditForm((f: any) => ({ ...f, pec_numero: e.target.value }))}
+                      className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-200" />
+                  )}
                 </div>
                 <div className="col-span-2">
                   <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Notas</label>
@@ -508,6 +543,27 @@ export default function PedidoVentaDetallePage() {
                 </table>
               </div>
             </div>
+
+            {(pedido?.notas || pedido?.direccion_entrega) && !isEditMode && (
+              <div className="grid grid-cols-2 gap-6">
+                {pedido?.direccion_entrega && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Dirección de Entrega</label>
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700">
+                      {pedido.direccion_entrega}
+                    </div>
+                  </div>
+                )}
+                {pedido?.notas && (
+                  <div className={pedido?.direccion_entrega ? '' : 'col-span-2'}>
+                    <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Notas</label>
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 whitespace-pre-wrap">
+                      {pedido.notas}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Compra vinculada -- 3 estados derivados, igual que en el panel de Pedido de Venta */}
             {pedido?.pec_numero ? (

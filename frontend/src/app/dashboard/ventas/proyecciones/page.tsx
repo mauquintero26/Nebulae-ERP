@@ -42,6 +42,7 @@ export default function ProyeccionesPage() {
         }
       } catch (err) {
         console.error('Error loading history for forecast:', err);
+        setError('No se pudo cargar el histórico de ventas — el servicio todavía no está conectado al servidor. "Recalcular Proyección" no estará disponible hasta entonces.');
       }
     };
     fetchHistory();
