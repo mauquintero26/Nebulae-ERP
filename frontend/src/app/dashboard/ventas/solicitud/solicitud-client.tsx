@@ -1748,6 +1748,31 @@ export default function SolicitudClient() {
               </div>
             </div>
 
+            {/* Progreso del Flujo -- SC -> COT -> PVEN (no aplica a Soporte Tecnico, que tiene su propio ciclo) */}
+            {selected.tipo_solicitud!=='Soporte Tecnico' && (() => {
+              const cotizacionesSC = selected.cotizaciones || [];
+              const pipelineStep = cotizacionesSC.some((c: any) => c.estado === 'CONFIRMADA') ? 2
+                : cotizacionesSC.length > 0 ? 1 : 0;
+              const steps = ['Solicitud', 'Cotización', 'Pedido de Venta'];
+              return (
+                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex-shrink-0">
+                  <div className="flex items-center max-w-md">
+                    {steps.map((label, i) => (
+                      <div key={label} className="flex items-center flex-1 last:flex-none">
+                        <div className="flex flex-col items-center gap-1">
+                          <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black ${i < pipelineStep ? 'bg-emerald-500 text-white' : i === pipelineStep ? 'bg-indigo-600 text-white' : 'bg-white border-2 border-slate-200 text-slate-300'}`}>
+                            {i < pipelineStep ? '✓' : i + 1}
+                          </div>
+                          <span className={`text-[10px] font-bold whitespace-nowrap ${i <= pipelineStep ? 'text-slate-700' : 'text-slate-300'}`}>{label}</span>
+                        </div>
+                        {i < steps.length - 1 && <div className={`flex-1 h-0.5 mx-2 ${i < pipelineStep ? 'bg-emerald-400' : 'bg-slate-200'}`} />}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Split pane */}
             <div className="flex-1 flex overflow-hidden min-h-0">
               {/* LEFT 45% */}

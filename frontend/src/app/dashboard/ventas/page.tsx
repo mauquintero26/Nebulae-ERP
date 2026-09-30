@@ -1056,6 +1056,45 @@ export default function VentasHub() {
               </div>
 
               <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {/* Progreso del Flujo -- linea temporal compacta SC -> COT -> PVEN */}
+                {(() => {
+                  const pipelineStep = quickDetailDoc.tipo === 'VEN' ? 2
+                    : quickDetailDoc.tipo === 'COT' ? ((quickDetailDoc.pedidos_venta || []).length > 0 ? 2 : 1)
+                    : ((quickDetailDoc.cotizaciones || []).some((c: any) => c.estado === 'CONFIRMADA') ? 2 : (quickDetailDoc.cotizaciones || []).length > 0 ? 1 : 0);
+                  return (
+                    <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide mb-3">Progreso del Flujo</p>
+                      <div className="flex items-center">
+                        <div className="flex flex-col items-center gap-1">
+                          <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black ${pipelineStep > 0 ? 'bg-emerald-500 text-white' : 'bg-indigo-600 text-white'}`}>{pipelineStep > 0 ? '✓' : '1'}</div>
+                          <span className="text-[9px] font-bold text-slate-700">Solicitud</span>
+                        </div>
+                        <div className={`flex-1 h-0.5 mx-1 ${pipelineStep >= 1 ? 'bg-emerald-400' : 'bg-slate-100'}`} />
+                        <div className="flex flex-col items-center gap-1">
+                          <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black ${pipelineStep > 1 ? 'bg-emerald-500 text-white' : pipelineStep === 1 ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-400'}`}>{pipelineStep > 1 ? '✓' : '2'}</div>
+                          <span className={`text-[9px] font-bold ${pipelineStep >= 1 ? 'text-slate-700' : 'text-slate-300'}`}>Cotización</span>
+                        </div>
+                        <div className={`flex-1 h-0.5 mx-1 ${pipelineStep >= 2 ? 'bg-emerald-400' : 'bg-slate-100'}`} />
+                        <div className="flex flex-col items-center gap-1">
+                          <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-black ${pipelineStep === 2 ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-400'}`}>3</div>
+                          <span className={`text-[9px] font-bold ${pipelineStep >= 2 ? 'text-slate-700' : 'text-slate-300'}`}>Pedido de Venta</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Que se esta pidiendo -- tipo de solicitud + notas, solo aplica a SC */}
+                {quickDetailDoc.tipo === 'SC' && (quickDetailDoc.tipo_solicitud || quickDetailDoc.notas) && (
+                  <div className="bg-indigo-50 rounded-2xl p-4 border border-indigo-100 space-y-2">
+                    <p className="text-[10px] font-black text-indigo-400 uppercase tracking-wide">Qué se está pidiendo</p>
+                    {quickDetailDoc.tipo_solicitud && (
+                      <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-black bg-white text-indigo-700 border border-indigo-200">{quickDetailDoc.tipo_solicitud}</span>
+                    )}
+                    {quickDetailDoc.notas && <p className="text-xs text-indigo-900 leading-relaxed">{quickDetailDoc.notas}</p>}
+                  </div>
+                )}
+
                 {/* Customer Card */}
                 <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2">
                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Información del Cliente</p>
@@ -1098,10 +1137,10 @@ export default function VentasHub() {
                       {quickDetailDoc.productos.map((item:any, idx:number)=>(
                         <div key={idx} className="py-2 flex justify-between items-center text-xs">
                           <div>
-                            <p className="font-bold text-slate-800">{item.nombre || item.producto_nombre || item.sku || `Ítem #${idx+1}`}</p>
-                            <p className="text-[10px] text-slate-400">Cant: {item.cantidad || item.qty || 1} {item.talla ? `· Talla: ${item.talla}` : ''}</p>
+                            <p className="font-bold text-slate-800">{item.product_name || item.nombre || item.producto_nombre || item.sku || `Ítem #${idx+1}`}</p>
+                            <p className="text-[10px] text-slate-400">Cant: {item.qty || item.cantidad || 1} {item.talla ? `· Talla: ${item.talla}` : ''}</p>
                           </div>
-                          <span className="font-bold text-slate-700">{fCOP(item.precio_unitario || item.precio || 0)}</span>
+                          <span className="font-bold text-slate-700">{fCOP(item.unit_price_cop || item.precio_unitario || item.precio || 0)}</span>
                         </div>
                       ))}
                     </div>
@@ -1135,8 +1174,8 @@ export default function VentasHub() {
                   <button onClick={()=>{
                     const q = quickDetailDoc;
                     if(q.tipo==='SC')  router.push(`/dashboard/ventas/solicitud?id=${q.id}`);
-                    if(q.tipo==='COT') router.push(`/dashboard/ventas/cotizacion?id=${q.id}`);
-                    if(q.tipo==='VEN') router.push(`/dashboard/ventas/venta?id=${q.id}`);
+                    if(q.tipo==='COT') router.push(`/dashboard/ventas/cotizacion/${q.id}`);
+                    if(q.tipo==='VEN') router.push(`/dashboard/ventas/venta/${q.id}`);
                   }}
                   className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors">
                     Abrir en Módulo Detallado <ArrowRight size={14}/>
