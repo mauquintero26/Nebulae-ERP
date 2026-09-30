@@ -29,40 +29,7 @@ export default function ExportarDiaPage() {
       return;
     }
 
-    setIsLoading(true);
-    setError('');
-
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('tipo', 'diario');
-
-    try {
-      const res = await fetch(process.env.NEXT_PUBLIC_API_URL + '/api/ventas/upload_chat', {
-        method: 'POST',
-        body: formData
-      });
-
-      if (!res.ok) throw new Error('Error en el servidor al procesar el archivo.');
-
-      const data = await res.json();
-
-      if (data.status === 'error') {
-        throw new Error(data.message || 'Error al procesar.');
-      }
-
-      if (data.data && data.data.length > 0) {
-        setSalesData(data.data);
-      } else {
-        setError('El archivo fue procesado pero no se encontraron ventas con fecha de hoy.');
-        setSalesData([]);
-      }
-
-    } catch (err: any) {
-      setError(err.message || 'Ocurrió un error inesperado.');
-      setSalesData([]);
-    } finally {
-      setIsLoading(false);
-    }
+    setError('Esta función (extraer ventas desde un chat de WhatsApp) todavía no está conectada al servidor — está pendiente de construirse. Usa "Historial" para cargar una extracción ya guardada anteriormente.');
   };
 
   const fetchHistory = async () => {
