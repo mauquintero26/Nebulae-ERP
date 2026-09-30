@@ -312,7 +312,7 @@ export default function PedidoVentaDetallePage() {
   }
 
   const productos = pedido?.productos || [];
-  const actividades = (pedido?.actividades || []).filter((a: any) => a.action !== 'CHATTER');
+  const actividades = pedido?.actividades || [];
 
   return (
     <div className="w-full h-full bg-white flex flex-col overflow-hidden">
