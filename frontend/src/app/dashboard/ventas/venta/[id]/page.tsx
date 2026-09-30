@@ -160,6 +160,23 @@ export default function PedidoVentaDetallePage() {
     setSendingNota(false);
   }
 
+  async function handleEnviarWhatsApp() {
+    if (!pedido?.customer_phone) return;
+    const text = encodeURIComponent(nota || `Hola, somos Nebulae. Su pedido ${pedido.numero}...`);
+    window.open(`https://wa.me/57${pedido.customer_phone.replace(/\D/g, '')}?text=${text}`, '_blank');
+    if (!nota.trim()) return;
+    try {
+      await apiFetch(`/ventas/pedidos/${pedido.id}/actividad`, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'CHATTER', description: nota, user_name: currentUser }),
+      });
+      setNota('');
+      await loadPedido();
+    } catch (err: any) {
+      alert('Error al registrar el mensaje: ' + err.message);
+    }
+  }
+
   function onSupplierSearch(q: string) {
     setSupplierSearch(q); setSelectedSupplier(null);
     if (supplierTimer.current) clearTimeout(supplierTimer.current);
@@ -605,7 +622,7 @@ export default function PedidoVentaDetallePage() {
             <>
               <div className="p-5 border-b border-slate-200 bg-slate-50 z-10 shrink-0 space-y-3">
                 <div className="grid grid-cols-3 gap-2">
-                  <button onClick={() => { if (pedido?.customer_phone) window.open(`https://wa.me/57${pedido.customer_phone.replace(/\D/g, '')}?text=${encodeURIComponent(nota || `Hola, somos Nebulae. Su pedido ${pedido.numero}...`)}`, '_blank'); }}
+                  <button onClick={handleEnviarWhatsApp}
                     disabled={!pedido?.customer_phone}
                     className="flex items-center justify-center gap-1.5 py-2.5 bg-[#25D366] text-white rounded-xl text-xs font-bold hover:bg-[#1ebe5d] transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed">
                     <MessageCircle size={14} /> WhatsApp
