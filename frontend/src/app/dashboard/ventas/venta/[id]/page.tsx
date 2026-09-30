@@ -55,6 +55,9 @@ export default function PedidoVentaDetallePage() {
   const [selectedSupplier, setSelectedSupplier] = useState<any>(null);
   const [showNewSupplier, setShowNewSupplier] = useState(false);
   const [listaSaving, setListaSaving] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelRazon, setCancelRazon] = useState('');
+  const [cancelling, setCancelling] = useState(false);
   const supplierTimer = useRef<any>(null);
 
   useEffect(() => {
@@ -222,6 +225,29 @@ export default function PedidoVentaDetallePage() {
     setListaSaving(false);
   }
 
+  async function handleCancelarPedido() {
+    if (!pedido) return;
+    if (cancelRazon.trim().length < 5) { alert('La razón de cancelación debe tener al menos 5 caracteres'); return; }
+    setCancelling(true);
+    try {
+      await apiFetch(`/ventas/pedidos/${pedido.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          estado: 'CANCELADO',
+          cancellation_reason: cancelRazon.trim(),
+          cancellation_authorized_by: currentUser,
+          cancelled_at: new Date().toISOString(),
+        }),
+      });
+      setShowCancelModal(false);
+      setCancelRazon('');
+      await loadPedido();
+    } catch (err: any) {
+      alert('Error al cancelar: ' + err.message);
+    }
+    setCancelling(false);
+  }
+
   if (loading) {
     return (
       <div className="w-full h-full flex items-center justify-center bg-white">
@@ -273,6 +299,9 @@ export default function PedidoVentaDetallePage() {
             <span className="flex items-center gap-1.5 px-5 py-2 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl font-bold text-sm">
               <CheckCircle2 size={16} /> PXP: {pedido.pxp_numero}
             </span>
+          )}
+          {!['ENTREGADO', 'FACTURADO', 'CANCELADO'].includes(estadoActual) && (
+            <Button variant="danger" icon={X} onClick={() => setShowCancelModal(true)}>Cancelar Pedido</Button>
           )}
         </div>
       </div>
@@ -597,6 +626,21 @@ export default function PedidoVentaDetallePage() {
           onSave={(s) => { setSelectedSupplier(s); setSupplierSearch(s.name); setSuppliers([]); setShowNewSupplier(false); }}
           onClose={() => setShowNewSupplier(false)}
         />
+      )}
+      {showCancelModal && (
+        <Modal title="Cancelar Pedido de Venta" icon={AlertCircle} color="red" maxWidth="md"
+          onClose={() => setShowCancelModal(false)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setShowCancelModal(false)}>Volver</Button>
+              <Button variant="danger" icon={X} loading={cancelling} onClick={handleCancelarPedido}>Confirmar Cancelación</Button>
+            </>
+          )}>
+          <p className="text-sm text-slate-500">Esta acción marca el pedido como <strong>CANCELADO</strong>. Indica el motivo (mínimo 5 caracteres).</p>
+          <textarea value={cancelRazon} onChange={e => setCancelRazon(e.target.value)} rows={3} autoFocus
+            placeholder="Ej: Cliente desistió de la compra, error en el pedido, etc."
+            className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-red-200 resize-none" />
+        </Modal>
       )}
     </div>
   );
