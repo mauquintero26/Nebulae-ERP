@@ -3,92 +3,15 @@
 export const dynamic = 'force-dynamic';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  Search, RefreshCw, Plus, MoreHorizontal, X, Edit2, Save,
-  Clock, Truck, FileText, FileCheck, Phone, Mail, MessageCircle,
-  AlertCircle, ShoppingCart, TrendingUp, Activity, CheckCircle2,
-  Package, DollarSign, ChevronDown, ListChecks, ShoppingBag,
-  ExternalLink, UserPlus
+  Search, RefreshCw, Plus, MoreHorizontal, X, Edit2, FileCheck,
+  FileText, AlertCircle, ShoppingCart, Package, DollarSign, UserPlus
 } from 'lucide-react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 
-import { apiFetch, API_URL, getToken } from '@/lib/api';
+import { apiFetch } from '@/lib/api';
 import { SubNav, PageHeader, StatCard, Button, EmptyState, Toast, Modal } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
-
-const fCOP  = (v: any) => { const n = Number(v)||0; return '$'+n.toLocaleString('es-CO'); };
-const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
-
-const VEN_ESTADOS: Record<string, { bg: string; text: string; border: string; label: string }> = {
-  PENDIENTE_COMPRA: { bg:'bg-orange-100', text:'text-orange-700', border:'border-orange-200', label:'Pend. Compra' },
-  EN_PROCESO:       { bg:'bg-purple-100', text:'text-purple-700', border:'border-purple-200', label:'En Proceso' },
-  LISTO_ENTREGA:    { bg:'bg-teal-100',   text:'text-teal-700',   border:'border-teal-200',   label:'Listo Entrega' },
-  ENTREGADO:        { bg:'bg-emerald-100',text:'text-emerald-700',border:'border-emerald-200',label:'Entregado' },
-  FACTURADO:        { bg:'bg-green-100',  text:'text-green-700',  border:'border-green-200',  label:'Facturado' },
-  CANCELADO:        { bg:'bg-red-100',    text:'text-red-700',    border:'border-red-200',    label:'Cancelado' },
-};
-
-// ── IA Panel Venta ─────────────────────────────────────────────────────────────
-function IAPanelVenta({pedido,apiBase}:{pedido:any;apiBase:string}) {
-  const [analisis,setAnalisis]=useState('');
-  const [loading,setLoading]=useState(false);
-  const [chat,setChat]=useState('');
-  const [chatHistory,setChatHistory]=useState<{role:'user'|'ia';text:string}[]>([]);
-  const [sending,setSending]=useState(false);
-
-  async function generar() {
-    setLoading(true);
-    try{
-      const token=getToken();
-      const res=await fetch(`${apiBase}/ventas/pedidos/${pedido.id}/ia-analisis`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`}});
-      const d=await res.json().catch(()=>({}));
-      if(res.ok){setAnalisis(d.data?.analisis||d.analisis||JSON.stringify(d));}
-      else{
-        // Fallback local analysis
-        const prods=(pedido.productos||[]).map((p:any)=>p.product_name||p.nombre).join(', ')||'No especificados';
-        setAnalisis(`📊 ANÁLISIS DE PEDIDO ${pedido.numero}\n\nCliente: ${pedido.customer_name||'N/A'}\nEstado: ${pedido.estado}\nTotal: $${(pedido.total_cop||0).toLocaleString('es-CO')} COP\nAnticipo: $${(pedido.anticipo_cop||0).toLocaleString('es-CO')} COP\nSaldo: $${(pedido.saldo_cop||0).toLocaleString('es-CO')} COP\n\nProductos: ${prods}\n\nEntrega Estimada: ${pedido.fecha_entrega_estimada||'No definida'}\n\nActividad: ${(pedido.actividades||[]).length} eventos registrados.`);
-      }
-    }catch(e:any){setAnalisis('Error generando análisis: '+e.message);}
-    setLoading(false);
-  }
-  function askChat() {
-    if(!chat.trim()) return;
-    const msg=chat; setChat('');
-    setChatHistory(h=>[...h,{role:'user',text:msg}]);
-    const ctx=analisis||`Pedido ${pedido.numero}, cliente ${pedido.customer_name}, estado ${pedido.estado}.`;
-    setChatHistory(h=>[...h,{role:'ia',text:`Con base en ${pedido.numero}: ${ctx.slice(0,200)}... Consulta: "${msg}"`}]);
-  }
-
-  return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl p-4 border border-indigo-100">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <div className="bg-indigo-600 rounded-lg px-2 py-1 text-white font-black text-xs">AI</div>
-              <div><p className="font-extrabold text-indigo-900 text-sm">Análisis de Pedido de Venta</p><p className="text-[10px] text-indigo-500">Nebulae Analytics · {pedido.numero}</p></div>
-            </div>
-            <button onClick={generar} disabled={loading} className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-50 flex items-center gap-1">
-              {loading&&<span className="animate-spin inline-block w-3 h-3 border border-white border-t-transparent rounded-full"/>} Analizar
-            </button>
-          </div>
-          {!analisis&&!loading&&<p className="text-xs text-indigo-700 italic text-center py-3">Genera un análisis completo: estado, pagos pendientes, trazabilidad y próximos pasos.</p>}
-          {loading&&<p className="text-xs text-center text-indigo-500 py-3 animate-pulse">Analizando pedido...</p>}
-          {analisis&&<pre className="text-xs text-slate-800 whitespace-pre-wrap font-medium leading-relaxed bg-white/70 rounded-xl p-3 border border-indigo-100 mt-2">{analisis}</pre>}
-        </div>
-        {chatHistory.map((m,i)=>(
-          <div key={i} className={`flex ${m.role==='user'?'justify-end':''}`}>
-            <div className={`rounded-2xl px-3 py-2 text-xs max-w-[85%] ${m.role==='user'?'bg-indigo-600 text-white':'bg-white border border-slate-200 text-slate-700'}`}>{m.text}</div>
-          </div>
-        ))}
-      </div>
-      <div className="border-t border-gray-100 p-3 flex gap-2 bg-white">
-        <input value={chat} onChange={e=>setChat(e.target.value)} onKeyDown={e=>e.key==='Enter'&&askChat()} placeholder="Pregunta sobre este pedido..." className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-indigo-200"/>
-        <button onClick={askChat} disabled={!chat.trim()||sending} className="bg-indigo-600 text-white px-3 py-2 rounded-xl text-xs font-bold disabled:opacity-50">Enviar</button>
-      </div>
-    </div>
-  );
-}
 
 export function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClose:()=>void}) {
   const [form, setForm] = useState({name:'',reference:'',contact_name:'',phone:'',email:'',address:'',city:'',country:'Colombia',payment_terms:'',notes:''});
@@ -123,7 +46,20 @@ export function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClo
   );
 }
 
+const fCOP  = (v: any) => { const n = Number(v)||0; return '$'+n.toLocaleString('es-CO'); };
+const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
+
+const VEN_ESTADOS: Record<string, { bg: string; text: string; border: string; label: string }> = {
+  PENDIENTE_COMPRA: { bg:'bg-orange-100', text:'text-orange-700', border:'border-orange-200', label:'Pend. Compra' },
+  EN_PROCESO:       { bg:'bg-purple-100', text:'text-purple-700', border:'border-purple-200', label:'En Proceso' },
+  LISTO_ENTREGA:    { bg:'bg-teal-100',   text:'text-teal-700',   border:'border-teal-200',   label:'Listo Entrega' },
+  ENTREGADO:        { bg:'bg-emerald-100',text:'text-emerald-700',border:'border-emerald-200',label:'Entregado' },
+  FACTURADO:        { bg:'bg-green-100',  text:'text-green-700',  border:'border-green-200',  label:'Facturado' },
+  CANCELADO:        { bg:'bg-red-100',    text:'text-red-700',    border:'border-red-200',    label:'Cancelado' },
+};
+
 export default function VentaClient() {
+  const router = useRouter();
   const [pedidos, setPedidos]           = useState<any[]>([]);
   const [loading, setLoading]           = useState(true);
   const [search, setSearch]             = useState('');
@@ -131,28 +67,8 @@ export default function VentaClient() {
   const [currentPage, setCurrentPage]   = useState(1);
   const [pageSize, setPageSize]         = useState(25);
   const [selectedIds, setSelectedIds]   = useState<Set<number>>(new Set());
-  const [selectedPedido, setSelectedPedido] = useState<any>(null);
   const [toast, setToast]               = useState<{msg:string,type:'ok'|'error'}|null>(null);
-  const [isEditMode, setIsEditMode]     = useState(false);
-  const [editForm, setEditForm]         = useState<any>({});
-  const [panelTab, setPanelTab]         = useState<'actividad'|'chatter'>('actividad');
-  const [chatterMsg, setChatterMsg]     = useState('');
-  const [chatterSending, setChatterSending] = useState(false);
   const [openMenu, setOpenMenu]         = useState<number|null>(null);
-  const [showCancelModal, setShowCancelModal] = useState(false);
-  const [cancelTargetId, setCancelTargetId]   = useState<number|null>(null);
-  const [cancelRazon, setCancelRazon]         = useState('');
-  const [cancelling, setCancelling]           = useState(false);
-  // â”€â”€ PEC Modal state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  const [showPecModal, setShowPecModal]   = useState(false);
-  const [pecSaving, setPecSaving]         = useState(false);
-  const [pecForm, setPecForm]             = useState({ dias_entrega:15, modalidad_pago:'Contado', notas:'' });
-  const [supplierSearch, setSupplierSearch] = useState('');
-  const [suppliers, setSuppliers]         = useState<any[]>([]);
-  const [selectedSupplier, setSelectedSupplier] = useState<any>(null);
-  const [showNewSupplier, setShowNewSupplier] = useState(false);
-  const [listaSaving, setListaSaving]     = useState(false);
-  const supplierTimer = useRef<any>(null);
 
   const showToast = (msg:string, type:'ok'|'error'='ok') => {
     setToast({msg,type});
@@ -165,147 +81,19 @@ export default function VentaClient() {
     finally { setLoading(false); }
   };
 
-  const fetchDetail = async (id:number) => {
-    try {
-      const d=await apiFetch(`/ventas/pedidos/${id}`);
-      setSelectedPedido(d?.data??d); setPanelTab('actividad');
-      setEditForm({ estado:d.estado, notas:d.notas||'', fecha_entrega_estimada:d.fecha_entrega_estimada?d.fecha_entrega_estimada.split('T')[0]:'', direccion_entrega:d.direccion_entrega||'', pec_numero:d.pec_numero||'' });
-    } catch(err:any) { showToast(err.message,'error'); }
-  };
-
   const searchParams = useSearchParams();
 
   useEffect(()=>{ fetchPedidos(); },[]);
 
-  // Auto-open detail if navigated here with ?id= from Hub
+  // Compatibilidad con enlaces antiguos que abrian el detalle con ?id=:
+  // redirige a la pagina canonica en vez de duplicar la vista aqui.
   useEffect(()=>{
     const idParam = searchParams?.get('id');
     if(idParam){
       const numId = Number(idParam);
-      if(!isNaN(numId)) fetchDetail(numId);
+      if(!isNaN(numId)) router.replace(`/dashboard/ventas/venta/${numId}`);
     }
-  },[searchParams]);
-
-  const handleSaveEdit = async () => {
-    if(!selectedPedido) return;
-    try { await apiFetch(`/ventas/pedidos/${selectedPedido.id}`,{method:'PATCH',body:JSON.stringify(editForm)}); showToast('Pedido actualizado'); setIsEditMode(false); fetchDetail(selectedPedido.id); fetchPedidos(); }
-    catch(err:any){ showToast(err.message,'error'); }
-  };
-
-  const handleCrearPXP = async (id:number) => {
-    try { await apiFetch(`/ventas/pedidos/${id}/crear-pxp`,{method:'POST',body:JSON.stringify({monto_anticipo:selectedPedido?.saldo_cop||0})}); showToast('PXP Creado'); fetchDetail(id); fetchPedidos(); }
-    catch(err:any){ showToast(err.message,'error'); }
-  };
-
-  const openCancelModal = (id:number) => { setCancelTargetId(id); setCancelRazon(''); setShowCancelModal(true); };
-
-  const handleCancelarPedido = async () => {
-    if(!cancelTargetId) return;
-    if(cancelRazon.trim().length < 5){ showToast('La razon de cancelacion debe tener al menos 5 caracteres','error'); return; }
-    setCancelling(true);
-    try {
-      const user = localStorage.getItem('user_name')||'';
-      await apiFetch(`/ventas/pedidos/${cancelTargetId}`,{method:'PATCH',body:JSON.stringify({
-        estado: 'CANCELADO',
-        cancellation_reason: cancelRazon.trim(),
-        cancellation_authorized_by: user,
-        cancelled_at: new Date().toISOString(),
-      })});
-      showToast('Pedido cancelado');
-      setShowCancelModal(false); setCancelTargetId(null); setCancelRazon('');
-      if(selectedPedido?.id===cancelTargetId) fetchDetail(cancelTargetId);
-      fetchPedidos();
-    } catch(err:any){ showToast(err.message,'error'); }
-    finally{ setCancelling(false); }
-  };
-
-  // Supplier autocomplete
-  const onSupplierSearch = (q:string) => {
-    setSupplierSearch(q); setSelectedSupplier(null);
-    if(supplierTimer.current) clearTimeout(supplierTimer.current);
-    if(!q.trim()){ setSuppliers([]); return; }
-    supplierTimer.current = setTimeout(async()=>{
-      const d = await apiFetch(`/compras/proveedores/search?q=${encodeURIComponent(q)}`).catch(()=>({data:[]}));
-      const arr = Array.isArray(d)?d:(d?.data??[]);
-      setSuppliers(arr);
-      if (arr.length === 0) setShowNewSupplier(true);
-    },300);
-  };
-
-  // Opcion 1: Crear PEC directamente vinculado al PVEN
-  const handleCrearPEC = async () => {
-    if(!selectedPedido) return;
-    if(!selectedSupplier){ showToast('Selecciona un proveedor (o crea uno nuevo) antes de crear el PEC','error'); return; }
-    setPecSaving(true);
-    try {
-      const user = localStorage.getItem('user_name')||'';
-      // El PVEN guarda el precio por linea en unit_price_cop (mismo shape que
-      // arma la Calculadora de Cotizacion) -- usar total_cop/qty como fallback
-      // solo si de verdad no viene unit_price_cop, nunca al reves, o una
-      // cantidad >1 duplicaria el precio (unit_price_cop = total de la linea).
-      const productosPec = (selectedPedido.productos||[]).map((p:any) => {
-        const qty = Number(p.qty || p.cantidad || 1);
-        const unitPrice = Number(p.unit_price_cop ?? p.precio_unitario ?? (p.total_cop ? p.total_cop / qty : 0));
-        return {
-          producto_nombre: p.product_name || p.nombre || p.descripcion || p.producto_nombre || 'Producto',
-          qty,
-          unit_price_cop: unitPrice,
-        };
-      });
-      const totalPec = productosPec.reduce((s, p) => s + p.qty * p.unit_price_cop, 0);
-      const pec = await apiFetch('/compras/pedidos',{method:'POST',body:JSON.stringify({
-        supplier_id: selectedSupplier.id,
-        supplier_name: selectedSupplier.name,
-        ven_id: selectedPedido.id,
-        ven_numero: selectedPedido.numero,
-        dias_entrega: pecForm.dias_entrega,
-        modalidad_pago: pecForm.modalidad_pago,
-        notas: pecForm.notas,
-        productos: productosPec,
-        subtotal_cop: totalPec,
-        total_cop: totalPec,
-        created_by: user,
-      })});
-      const pecObj = pec?.data ?? pec;
-      showToast(`PEC ${pecObj.numero || ''} creado y vinculado al pedido`);
-      setShowPecModal(false);
-      fetchDetail(selectedPedido.id);
-      fetchPedidos();
-    } catch(err:any){ showToast(err.message,'error'); }
-    finally{ setPecSaving(false); }
-  };
-
-  // Opcion 2: Enviar a Lista de Productos por Comprar
-  const handleAgregarLista = async () => {
-    if(!selectedPedido) return;
-    setListaSaving(true);
-    try {
-      const user = localStorage.getItem('user_name')||'';
-      await apiFetch('/compras/lista-compras',{method:'POST',body:JSON.stringify({
-        pven_id: selectedPedido.id,
-        pven_numero: selectedPedido.numero,
-        productos: (selectedPedido.productos||[]).map((p:any)=>({
-          producto_nombre: p.product_name || p.nombre || p.descripcion || p.producto_nombre || 'Sin nombre',
-          qty: p.qty || p.cantidad || 1,
-        })),
-        notas: `PVEN: ${selectedPedido.numero} â€” Cliente: ${selectedPedido.customer_name||''}`,
-        created_by: user,
-      })});
-      showToast('Productos agregados a la Lista de Compras');
-      fetchDetail(selectedPedido.id);
-    } catch(err:any){ showToast(err.message,'error'); }
-    finally{ setListaSaving(false); }
-  };
-
-  const handleSendChatter = async () => {
-    if(!chatterMsg.trim()||!selectedPedido) return;
-    setChatterSending(true);
-    try {
-      await apiFetch(`/ventas/pedidos/${selectedPedido.id}/actividad`,{method:'POST',body:JSON.stringify({action:panelTab==='chatter'?'CHATTER':'UPDATED',description:chatterMsg})});
-      setChatterMsg(''); fetchDetail(selectedPedido.id); showToast('Registrado');
-    } catch(err:any){ showToast(err.message,'error'); }
-    finally{ setChatterSending(false); }
-  };
+  },[searchParams, router]);
 
   const TABS = ['Todos','Pend. Compra','En Proceso','Listo Entrega','Entregado','Facturado','Cancelado','Analisis'];
   const tabEstado:Record<string,string> = {'Pend. Compra':'PENDIENTE_COMPRA','En Proceso':'EN_PROCESO','Listo Entrega':'LISTO_ENTREGA','Entregado':'ENTREGADO','Facturado':'FACTURADO','Cancelado':'CANCELADO'};
@@ -518,16 +306,16 @@ export default function VentaClient() {
                 return (
                   <tr key={p.id} className="hover:bg-indigo-50/30 cursor-pointer transition-colors group">
                     <td className="px-5 py-4"><input type="checkbox" className="rounded border-gray-300" checked={selectedIds.has(p.id)} onChange={()=>toggleSelect(p.id)}/></td>
-                    <td className="px-4 py-4" onClick={()=>fetchDetail(p.id)}>
+                    <td className="px-4 py-4 cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>
                       <p className="font-bold text-indigo-700 hover:underline">{p.numero}</p>
                       <p className="text-xs text-gray-400 mt-0.5">{[p.sc_numero,p.cot_numero].filter(Boolean).join(' / ')}</p>
                     </td>
-                    <td className="px-4 py-4 text-gray-700 font-medium" onClick={()=>fetchDetail(p.id)}>{p.customer_name||'-'}</td>
-                    <td className="px-4 py-4 font-bold text-gray-900" onClick={()=>fetchDetail(p.id)}>{fCOP(p.total_cop)}</td>
-                    <td className="px-4 py-4 text-emerald-600 font-bold" onClick={()=>fetchDetail(p.id)}>{fCOP(p.anticipo_cop)}</td>
-                    <td className="px-4 py-4 text-red-600 font-bold" onClick={()=>fetchDetail(p.id)}>{fCOP(p.saldo_cop)}</td>
-                    <td className="px-4 py-4 text-gray-500 text-xs" onClick={()=>fetchDetail(p.id)}>{fDate(p.fecha_entrega_estimada)}</td>
-                    <td className="px-4 py-4" onClick={()=>fetchDetail(p.id)}>
+                    <td className="px-4 py-4 text-gray-700 font-medium cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>{p.customer_name||'-'}</td>
+                    <td className="px-4 py-4 font-bold text-gray-900 cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>{fCOP(p.total_cop)}</td>
+                    <td className="px-4 py-4 text-emerald-600 font-bold cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>{fCOP(p.anticipo_cop)}</td>
+                    <td className="px-4 py-4 text-red-600 font-bold cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>{fCOP(p.saldo_cop)}</td>
+                    <td className="px-4 py-4 text-gray-500 text-xs cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>{fDate(p.fecha_entrega_estimada)}</td>
+                    <td className="px-4 py-4 cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>
                       <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${st.bg} ${st.text} ${st.border}`}>{st.label}</span>
                     </td>
                     <td className="px-4 py-4 text-right relative">
@@ -539,20 +327,20 @@ export default function VentaClient() {
                         <>
                           <div className="fixed inset-0 z-10" onClick={()=>setOpenMenu(null)}/>
                           <div className="absolute right-6 top-12 bg-white border border-gray-200 rounded-2xl shadow-2xl py-2 w-52 z-20">
-                            <button className="w-full text-left px-4 py-2.5 hover:bg-indigo-50 text-sm font-medium text-indigo-700 flex items-center gap-2" onClick={()=>{setOpenMenu(null);fetchDetail(p.id);}}>
+                            <button className="w-full text-left px-4 py-2.5 hover:bg-indigo-50 text-sm font-medium text-indigo-700 flex items-center gap-2" onClick={()=>{setOpenMenu(null);router.push(`/dashboard/ventas/venta/${p.id}`);}}>
                               <FileCheck size={14}/> Ver Detalle
                             </button>
-                            <button className="w-full text-left px-4 py-2.5 hover:bg-gray-50 text-sm font-medium flex items-center gap-2 text-gray-700" onClick={()=>{setOpenMenu(null);fetchDetail(p.id);setIsEditMode(true);}}>
+                            <button className="w-full text-left px-4 py-2.5 hover:bg-gray-50 text-sm font-medium flex items-center gap-2 text-gray-700" onClick={()=>{setOpenMenu(null);router.push(`/dashboard/ventas/venta/${p.id}`);}}>
                               <Edit2 size={14}/> Editar
                             </button>
                             <div className="border-t border-gray-100 my-1"/>
-                            <button className="w-full text-left px-4 py-2.5 hover:bg-gray-50 text-sm font-medium flex items-center gap-2 text-gray-700" onClick={()=>{setOpenMenu(null);handleCrearPXP(p.id);}}>
+                            <button className="w-full text-left px-4 py-2.5 hover:bg-gray-50 text-sm font-medium flex items-center gap-2 text-gray-700" onClick={()=>{setOpenMenu(null);router.push(`/dashboard/ventas/venta/${p.id}`);}}>
                               <DollarSign size={14}/> Crear PXP
                             </button>
                             {!['ENTREGADO','FACTURADO','CANCELADO'].includes(p.estado)&&(
                               <>
                                 <div className="border-t border-gray-100 my-1"/>
-                                <button className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm font-medium text-red-600 flex items-center gap-2" onClick={()=>{setOpenMenu(null);openCancelModal(p.id);}}>
+                                <button className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm font-medium text-red-600 flex items-center gap-2" onClick={()=>{setOpenMenu(null);router.push(`/dashboard/ventas/venta/${p.id}`);}}>
                                   <X size={14}/> Cancelar Pedido
                                 </button>
                               </>
@@ -595,399 +383,7 @@ export default function VentaClient() {
         </div>
       </div>
 
-      {/* DETAIL PANEL (full-width left:240px) */}
-      {selectedPedido&&(
-        <div className="fixed top-0 bottom-0 right-0 z-50 bg-white shadow-2xl border-l border-gray-200 flex flex-col" style={{left:'240px'}}>
-          {/* Panel Header */}
-          <div className="bg-gradient-to-r from-indigo-50 to-white px-8 py-5 border-b border-gray-100 flex justify-between items-center">
-            <div className="flex items-center gap-4">
-              <div className="bg-indigo-600 text-white p-2.5 rounded-xl shadow"><ShoppingCart size={22}/></div>
-              <div>
-                <div className="flex items-center gap-3">
-                  <h2 className="text-xl font-black text-gray-900">Pedido {selectedPedido.numero}</h2>
-                  <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${(VEN_ESTADOS[selectedPedido.estado]||{bg:'bg-gray-100',text:'text-gray-700',border:'border-gray-200'}).bg} ${(VEN_ESTADOS[selectedPedido.estado]||{}).text} ${(VEN_ESTADOS[selectedPedido.estado]||{}).border}`}>
-                    {(VEN_ESTADOS[selectedPedido.estado]||{label:selectedPedido.estado}).label}
-                  </span>
-                </div>
-                <p className="text-xs text-gray-400 mt-0.5">{selectedPedido.customer_name} &nbsp;•&nbsp; {fDate(selectedPedido.created_at)}</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <button onClick={()=>setIsEditMode(!isEditMode)}
-                className={`p-2.5 rounded-xl border transition-colors ${isEditMode?'bg-indigo-100 text-indigo-700 border-indigo-300':'text-gray-500 border-gray-200 hover:bg-gray-100'}`}>
-                <Edit2 size={18}/>
-              </button>
-              <button onClick={()=>{setSelectedPedido(null);setIsEditMode(false);}} className="p-2.5 rounded-xl border border-gray-200 text-gray-500 hover:bg-gray-100">
-                <X size={18}/>
-              </button>
-            </div>
-          </div>
 
-          {/* Panel Body split */}
-          <div className="flex flex-1 overflow-hidden">
-
-            {/* LEFT 45% â€” Info */}
-            <div className="w-[45%] border-r border-gray-100 p-7 overflow-y-auto space-y-5 bg-gray-50/40">
-
-              {/* Cliente */}
-              <section className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm">
-                <h3 className="text-xs font-black text-gray-400 uppercase tracking-wide mb-3">Informacion del Cliente</h3>
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div><p className="text-gray-400 text-xs mb-0.5">Nombre</p><p className="font-bold">{selectedPedido.customer_name||'-'}</p></div>
-                  <div><p className="text-gray-400 text-xs mb-0.5">Telefono</p><p>{selectedPedido.customer_phone||'-'}</p></div>
-                  <div><p className="text-gray-400 text-xs mb-0.5">Email</p><p className="truncate">{selectedPedido.customer_email||'-'}</p></div>
-                  <div><p className="text-gray-400 text-xs mb-0.5">COT / SC</p><p className="text-indigo-600 font-medium">{selectedPedido.cot_numero||'-'} / {selectedPedido.sc_numero||'-'}</p></div>
-                </div>
-              </section>
-
-              {/* Resumen Financiero */}
-              <section className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm">
-                <h3 className="text-xs font-black text-gray-400 uppercase tracking-wide mb-4">Resumen Financiero</h3>
-                <div className="flex justify-between items-end mb-4">
-                  <div>
-                    <p className="text-gray-400 text-xs mb-1">Total a Pagar</p>
-                    <p className="text-3xl font-black text-gray-900">{fCOP(selectedPedido.total_cop)}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-gray-400 text-xs mb-1">Saldo Pendiente</p>
-                    <p className="text-xl font-black text-red-600">{fCOP(selectedPedido.saldo_cop)}</p>
-                  </div>
-                </div>
-                <div className="w-full bg-gray-200 rounded-full h-2.5 mb-2 overflow-hidden">
-                  <div className="bg-emerald-500 h-2.5 rounded-full transition-all" style={{width:`${Math.min(100,((selectedPedido.anticipo_cop||0)/(selectedPedido.total_cop||1))*100)}%`}}/>
-                </div>
-                <p className="text-xs text-gray-400 text-right">Anticipo: <span className="text-emerald-600 font-bold">{fCOP(selectedPedido.anticipo_cop)}</span></p>
-              </section>
-
-              {/* Datos Entrega */}
-              <section className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm">
-                <h3 className="text-xs font-black text-gray-400 uppercase tracking-wide mb-3">Datos de Entrega</h3>
-                {isEditMode?(
-                  <div className="space-y-3 text-sm">
-                    <div><label className="text-xs text-gray-500 mb-1 block">Fecha Estimada</label><input type="date" value={editForm.fecha_entrega_estimada} onChange={e=>setEditForm({...editForm,fecha_entrega_estimada:e.target.value})} className="w-full border border-gray-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-                    <div><label className="text-xs text-gray-500 mb-1 block">Direccion Entrega</label><input type="text" value={editForm.direccion_entrega} onChange={e=>setEditForm({...editForm,direccion_entrega:e.target.value})} className="w-full border border-gray-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-                    <div><label className="text-xs text-gray-500 mb-1 block">Estado</label>
-                      <select value={editForm.estado} onChange={e=>setEditForm({...editForm,estado:e.target.value})} className="w-full border border-gray-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-200">
-                        {Object.keys(VEN_ESTADOS).filter(k=>k!=='CANCELADO'||editForm.estado==='CANCELADO').map(k=><option key={k} value={k}>{VEN_ESTADOS[k].label}</option>)}
-                      </select>
-                      {editForm.estado!=='CANCELADO'&&(
-                        <p className="text-[11px] text-gray-400 mt-1">Para cancelar el pedido usa el boton "Cancelar Pedido" (registra el motivo).</p>
-                      )}
-                    </div>
-                    <div><label className="text-xs text-gray-500 mb-1 block">PEC Numero</label><input type="text" value={editForm.pec_numero} onChange={e=>setEditForm({...editForm,pec_numero:e.target.value})} className="w-full border border-gray-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-                    <div><label className="text-xs text-gray-500 mb-1 block">Notas</label><textarea value={editForm.notas} onChange={e=>setEditForm({...editForm,notas:e.target.value})} rows={3} className="w-full border border-gray-200 rounded-xl px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-200 resize-none"/></div>
-                    <button onClick={handleSaveEdit} className="w-full bg-indigo-600 text-white py-2.5 rounded-xl flex items-center justify-center gap-2 font-bold hover:bg-indigo-700">
-                      <Save size={14}/> Guardar Cambios
-                    </button>
-                  </div>
-                ):(
-                  <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div><p className="text-gray-400 text-xs mb-0.5">Fecha Estimada</p><p className="font-medium">{fDate(selectedPedido.fecha_entrega_estimada)}</p></div>
-                    <div><p className="text-gray-400 text-xs mb-0.5">PEC Numero</p><p className="font-medium">{selectedPedido.pec_numero||'-'}</p></div>
-                    <div className="col-span-2"><p className="text-gray-400 text-xs mb-0.5">Direccion Entrega</p><p>{selectedPedido.direccion_entrega||'-'}</p></div>
-                    <div className="col-span-2"><p className="text-gray-400 text-xs mb-0.5">Notas</p><p className="bg-gray-50 border border-gray-100 rounded-xl p-3 text-gray-700">{selectedPedido.notas||'Sin notas.'}</p></div>
-                  </div>
-                )}
-              </section>
-
-              {/* Productos */}
-              <section className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm">
-                <h3 className="text-xs font-black text-gray-400 uppercase tracking-wide mb-3">Productos</h3>
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b border-gray-100"><tr><th className="p-2 text-left text-xs font-bold text-gray-400">Producto</th><th className="p-2 text-center text-xs font-bold text-gray-400">Cant</th><th className="p-2 text-right text-xs font-bold text-gray-400">P.U.</th><th className="p-2 text-right text-xs font-bold text-gray-400">Subtotal</th></tr></thead>
-                  <tbody>
-                    {(selectedPedido.productos||[]).map((p:any,i:number)=>(
-                      <tr key={i} className="border-b last:border-0">
-                        <td className="p-2 truncate max-w-[140px]" title={p.product_name||p.descripcion||p.producto_nombre}>{p.product_name||p.descripcion||p.producto_nombre}</td>
-                        <td className="p-2 text-center">{p.qty??p.cantidad}</td>
-                        <td className="p-2 text-right">{fCOP(p.unit_price_cop??p.precio_unitario)}</td>
-                        <td className="p-2 text-right font-bold">{fCOP(p.total_cop??p.subtotal)}</td>
-                      </tr>
-                    ))}
-                    {(!selectedPedido.productos||selectedPedido.productos.length===0)&&<tr><td colSpan={4} className="text-center py-4 text-gray-400 text-xs">Sin productos registrados</td></tr>}
-                  </tbody>
-                </table>
-              </section>
-            </div>
-
-            {/* RIGHT 55% â€” Acciones + Actividad/Chatter */}
-            <div className="w-[55%] bg-white p-7 overflow-y-auto flex flex-col gap-4">
-
-              {/* â”€â”€â”€ BLOQUE ACCIONES DE COMPRA (solo cuando PENDIENTE_COMPRA) â”€â”€â”€ */}
-              {selectedPedido.estado === 'PENDIENTE_COMPRA' && !selectedPedido.pec_numero && (selectedPedido.lista_compras_items||[]).length===0 && (
-                <div className="rounded-2xl border-2 border-orange-200 bg-orange-50 p-5">
-                  <div className="flex items-center gap-2 mb-1">
-                    <ShoppingCart size={18} className="text-orange-600"/>
-                    <h3 className="text-sm font-black text-orange-800 uppercase tracking-wide">Pendiente de Compra</h3>
-                  </div>
-                  <p className="text-xs text-orange-600 mb-4">Este pedido requiere la compra de {(selectedPedido.productos||[]).length} producto(s). Selecciona como proceder:</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    {/* Opcion 1 */}
-                    <button
-                      onClick={()=>{
-                        setSupplierSearch(''); setSelectedSupplier(null); setSuppliers([]);
-                        setPecForm({dias_entrega:15, modalidad_pago:'Contado', notas:`Pedido de compra para PVEN ${selectedPedido.numero} â€” ${selectedPedido.customer_name||''}`});
-                        setShowPecModal(true);
-                      }}
-                      className="flex flex-col items-start gap-2 p-4 bg-white border-2 border-orange-300 rounded-xl hover:border-purple-400 hover:bg-purple-50 transition-all group text-left shadow-sm">
-                      <div className="bg-purple-100 text-purple-600 p-2 rounded-xl group-hover:bg-purple-200 transition-colors">
-                        <ShoppingCart size={18}/>
-                      </div>
-                      <div>
-                        <p className="text-sm font-black text-gray-900">Crear Pedido de Compra</p>
-                        <p className="text-xs text-gray-500 mt-0.5 leading-tight">Genera un PEC vinculado directamente a este PVEN</p>
-                      </div>
-                    </button>
-                    {/* Opcion 2 */}
-                    <button
-                      onClick={handleAgregarLista}
-                      disabled={listaSaving}
-                      className="flex flex-col items-start gap-2 p-4 bg-white border-2 border-orange-300 rounded-xl hover:border-indigo-400 hover:bg-indigo-50 transition-all group text-left shadow-sm disabled:opacity-50">
-                      <div className="bg-indigo-100 text-indigo-600 p-2 rounded-xl group-hover:bg-indigo-200 transition-colors">
-                        {listaSaving ? <RefreshCw size={18} className="animate-spin"/> : <ListChecks size={18}/>}
-                      </div>
-                      <div>
-                        <p className="text-sm font-black text-gray-900">Agregar a Lista de Compras</p>
-                        <p className="text-xs text-gray-500 mt-0.5 leading-tight">Envia los productos a la lista pendiente de comprar</p>
-                      </div>
-                    </button>
-                  </div>
-                  <div className="mt-3 flex justify-end">
-                    <Link href="/dashboard/compras/lista-compras" className="text-xs text-indigo-600 font-bold hover:underline flex items-center gap-1">
-                      Ver Lista de Compras <ExternalLink size={11}/>
-                    </Link>
-                  </div>
-                </div>
-              )}
-
-              {/* Decision ya tomada: PEC creado directamente */}
-              {selectedPedido.pec_numero && (
-                <div className="rounded-2xl border border-purple-200 bg-purple-50 p-5">
-                  <div className="flex items-center gap-2 mb-1">
-                    <CheckCircle2 size={18} className="text-purple-600"/>
-                    <h3 className="text-sm font-black text-purple-800 uppercase tracking-wide">Pedido de Compra Creado</h3>
-                  </div>
-                  <div className="mt-2 space-y-1">
-                    {(selectedPedido.productos||[]).map((p:any,i:number)=>(
-                      <p key={i} className="text-xs text-purple-700">&middot; {p.product_name||p.descripcion||p.producto_nombre||'Producto'} <span className="text-purple-400">&times;{p.qty??p.cantidad??1}</span></p>
-                    ))}
-                  </div>
-                  <Link href={`/dashboard/compras/pedidos?id=${selectedPedido.pec_id}`} className="mt-3 inline-flex items-center gap-1 text-xs text-purple-700 font-bold hover:underline">
-                    Ir a {selectedPedido.pec_numero} <ExternalLink size={11}/>
-                  </Link>
-                </div>
-              )}
-
-              {/* Decision ya tomada: enviado a Lista de Compras (aun sin PEC) */}
-              {!selectedPedido.pec_numero && (selectedPedido.lista_compras_items||[]).length>0 && (
-                <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-5">
-                  <div className="flex items-center gap-2 mb-1">
-                    <ListChecks size={18} className="text-indigo-600"/>
-                    <h3 className="text-sm font-black text-indigo-800 uppercase tracking-wide">Agregado a Lista de Compras</h3>
-                  </div>
-                  <div className="mt-2 space-y-1">
-                    {selectedPedido.lista_compras_items.map((it:any)=>(
-                      <p key={it.id} className="text-xs text-indigo-700">&middot; {it.producto} <span className="text-indigo-400">&times;{it.cantidad}</span></p>
-                    ))}
-                  </div>
-                  <Link href="/dashboard/compras/lista-compras" className="mt-3 inline-flex items-center gap-1 text-xs text-indigo-700 font-bold hover:underline">
-                    Ir a Lista de Compras <ExternalLink size={11}/>
-                  </Link>
-                </div>
-              )}
-
-              {/* Action buttons row */}
-              <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100 flex flex-wrap gap-2">
-                {!selectedPedido.pxp_id&&(
-                  <Button color="emerald" icon={DollarSign} onClick={()=>handleCrearPXP(selectedPedido.id)}>Crear PXP</Button>
-                )}
-                {selectedPedido.pxp_numero&&(
-                  <span className="flex items-center gap-1.5 px-4 py-2 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-sm font-bold">
-                    <CheckCircle2 size={14}/> PXP: {selectedPedido.pxp_numero}
-                  </span>
-                )}
-                {!['ENTREGADO','FACTURADO','CANCELADO'].includes(selectedPedido.estado)&&(
-                  <Button variant="danger" icon={X} onClick={()=>openCancelModal(selectedPedido.id)}>Cancelar Pedido</Button>
-                )}
-                <div className="flex-1"/>
-                <button className="flex items-center gap-1.5 px-3 py-2 bg-[#25D366] text-white rounded-xl text-sm font-bold hover:bg-[#1ebe5d] shadow-sm"
-                  onClick={()=>{if(selectedPedido.customer_phone) window.open(`https://wa.me/57${selectedPedido.customer_phone.replace(/\D/g,'')}?text=Hola,%20somos%20Nebulae.%20Su%20pedido%20${selectedPedido.numero}...`,'_blank');}}>
-                  <MessageCircle size={14}/> WhatsApp
-                </button>
-                <Button variant="secondary" size="md" icon={Phone}>Llamar</Button>
-                <Button variant="secondary" size="md" icon={Mail}>Email</Button>
-              </div>
-
-              {/* Actividad/Chatter area */}
-              <div className="flex-1 border border-gray-100 rounded-2xl overflow-hidden flex flex-col bg-white shadow-sm">
-                <div className="flex border-b border-gray-100 bg-gray-50/50">
-                  <button onClick={()=>setPanelTab('actividad')}
-                    className={`px-6 py-3.5 text-sm font-bold border-b-2 transition-colors ${panelTab==='actividad'?'text-indigo-700 border-indigo-600 bg-white':'text-gray-500 border-transparent hover:text-gray-700'}`}>
-                    Actividad y Notas
-                  </button>
-                  <button onClick={()=>setPanelTab('chatter')}
-                    className={`px-6 py-3.5 text-sm font-bold border-b-2 transition-colors ${panelTab==='chatter'?'text-indigo-700 border-indigo-600 bg-white':'text-gray-500 border-transparent hover:text-gray-700'}`}>
-                    Chatter
-                  </button>
-                  <button onClick={()=>setPanelTab('ia' as any)}
-                    className={`px-6 py-3.5 text-sm font-bold border-b-2 transition-colors ${panelTab===('ia' as any)?'text-indigo-700 border-indigo-600 bg-white':'text-gray-500 border-transparent hover:text-gray-700'}`}>
-                    🤖 IA
-                  </button>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-5 bg-gray-50/30">
-                  {panelTab==='actividad'?(
-                    <div className="space-y-3 relative before:absolute before:left-4 before:top-0 before:bottom-0 before:w-0.5 before:bg-gray-100">
-                      {(selectedPedido.actividades||[]).filter((a:any)=>a.action!=='CHATTER').length===0&&<p className="text-center text-gray-400 text-sm py-8">Sin actividad registrada.</p>}
-                      {[...(selectedPedido.actividades||[]).filter((a:any)=>a.action!=='CHATTER')].reverse().map((a:any,i:number)=>(
-                        <div key={i} className="flex gap-4 pl-10 relative">
-                          <div className="absolute left-2 top-2 w-4 h-4 rounded-full border-2 border-white shadow" style={{backgroundColor:({CREATED:'#6366f1',UPDATED:'#3b82f6',ESTADO_CHANGED:'#f59e0b',SENT:'#10b981',CONFIRMED:'#059669',REJECTED:'#ef4444'}as any)[a.action]||'#94a3b8'}}/>
-                          <div className="flex-1 bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
-                            <div className="flex justify-between items-start">
-                              <p className="font-bold text-gray-800 text-sm">{a.description||a.action}</p>
-                              <p className="text-xs text-gray-400 ml-3 shrink-0">{fDate(a.created_at)}</p>
-                            </div>
-                            {a.user_name&&<p className="text-xs text-gray-400 mt-0.5">{a.user_name}</p>}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ):(
-                    <div className="space-y-3">
-                      {(selectedPedido.actividades||[]).filter((a:any)=>a.action==='CHATTER').length===0&&<p className="text-center text-gray-400 text-sm py-8">Sin mensajes de chatter.</p>}
-                      {(selectedPedido.actividades||[]).filter((a:any)=>a.action==='CHATTER').map((a:any,i:number)=>(
-                        <div key={i} className="bg-green-50 border border-green-100 rounded-xl p-4">
-                          <p className="text-sm text-green-900">{a.description}</p>
-                          <p className="text-xs text-green-600 mt-1 font-medium">{a.user_name} â€” {fDate(a.created_at)}</p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {panelTab===('ia' as any)&&(
-                  <IAPanelVenta pedido={selectedPedido} apiBase={process.env.NEXT_PUBLIC_API_URL||'https://api.nebulaekids.com/api/v1'}/>
-                )}
-
-                {panelTab!==('ia' as any)&&(
-                <div className="p-4 border-t border-gray-100 bg-white">
-                  <div className="flex gap-2">
-                    <input type="text" value={chatterMsg} onChange={e=>setChatterMsg(e.target.value)}
-                      onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleSendChatter();}}}
-                      placeholder={panelTab==='chatter'?'Mensaje de chatter...':'Registrar nota...'}
-                      className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/>
-                    <button onClick={()=>window.open(`https://wa.me/57${(selectedPedido.customer_phone||'').replace(/\D/g,'')}?text=${encodeURIComponent(chatterMsg)}`,'_blank')}
-                      className="px-3 py-2.5 bg-[#25D366] text-white rounded-xl hover:bg-[#1ebe5d]" title="WhatsApp">
-                      <MessageCircle size={15}/>
-                    </button>
-                    <button onClick={handleSendChatter} disabled={chatterSending||!chatterMsg.trim()}
-                      className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl text-sm font-bold hover:bg-indigo-700 disabled:opacity-50">
-                      {chatterSending?'...':'Registrar'}
-                    </button>
-                  </div>
-                </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* â”€â”€â”€ MODAL CREAR PEC â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */}
-      {showPecModal && selectedPedido && (
-        <Modal title="Crear Pedido de Compra" icon={ShoppingCart} color="purple"
-          subtitle={`Vinculado a ${selectedPedido.numero} — ${selectedPedido.customer_name}`}
-          onClose={()=>setShowPecModal(false)}
-          footer={(
-            <>
-              <Button variant="secondary" onClick={()=>setShowPecModal(false)}>Cancelar</Button>
-              <Button color="purple" icon={ShoppingCart} loading={pecSaving} onClick={handleCrearPEC}>Crear PEC</Button>
-            </>
-          )}>
-          {/* Productos summary */}
-          {(selectedPedido.productos||[]).length > 0 && (
-            <div className="bg-gray-50 rounded-xl p-3 border border-gray-100">
-              <p className="text-xs font-black text-gray-400 uppercase mb-2">Productos a comprar</p>
-              <div className="space-y-1">
-                {(selectedPedido.productos||[]).slice(0,5).map((p:any,i:number)=>(
-                  <div key={i} className="flex justify-between text-xs text-gray-700">
-                    <span className="truncate max-w-[260px]">{p.product_name||p.descripcion||p.producto_nombre}</span>
-                    <span className="font-bold ml-2 shrink-0">× {p.qty??p.cantidad}</span>
-                  </div>
-                ))}
-                {(selectedPedido.productos||[]).length > 5 && (
-                  <p className="text-xs text-gray-400">+{(selectedPedido.productos||[]).length - 5} más...</p>
-                )}
-              </div>
-            </div>
-          )}
-          {/* Proveedor */}
-          <div>
-            <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Proveedor</label>
-            <input value={supplierSearch} onChange={e=>onSupplierSearch(e.target.value)}
-              placeholder="Buscar proveedor..." className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
-            {suppliers.length > 0 && (
-              <div className="border border-gray-200 rounded-xl shadow-lg mt-1 max-h-36 overflow-y-auto z-10">
-                {suppliers.map((s:any)=>(
-                  <button key={s.id} onClick={()=>{setSelectedSupplier(s);setSupplierSearch(s.name);setSuppliers([]);}}
-                    className="w-full text-left px-4 py-2.5 hover:bg-purple-50 text-sm font-medium border-b last:border-0">
-                    {s.name} {s.city&&<span className="text-gray-400">· {s.city}</span>}
-                  </button>
-                ))}
-              </div>
-            )}
-            {selectedSupplier && (
-              <p className="text-xs text-purple-700 font-bold mt-1 flex items-center gap-1">
-                <CheckCircle2 size={12}/> {selectedSupplier.name} seleccionado
-              </p>
-            )}
-          </div>
-          {/* Dias + Modalidad */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Dias Entrega Estimada</label>
-              <input type="number" min="1" value={pecForm.dias_entrega} onChange={e=>setPecForm(f=>({...f,dias_entrega:Number(e.target.value)}))}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/>
-            </div>
-            <div>
-              <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Modalidad de Pago</label>
-              <select value={pecForm.modalidad_pago} onChange={e=>setPecForm(f=>({...f,modalidad_pago:e.target.value}))}
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200">
-                {['Contado','Credito 30d','Credito 60d','Adelanto 50%','Contra entrega'].map(p=><option key={p}>{p}</option>)}
-              </select>
-            </div>
-          </div>
-          {/* Notas */}
-          <div>
-            <label className="text-xs font-black text-gray-500 uppercase mb-2 block">Notas</label>
-            <textarea value={pecForm.notas} onChange={e=>setPecForm(f=>({...f,notas:e.target.value}))}
-              rows={2} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none outline-none focus:ring-2 focus:ring-purple-200"/>
-          </div>
-        </Modal>
-      )}
-
-      {showNewSupplier && (
-        <NewSupplierModal
-          onSave={(s)=>{setSelectedSupplier(s);setSupplierSearch(s.name);setSuppliers([]);setShowNewSupplier(false);}}
-          onClose={()=>setShowNewSupplier(false)}
-        />
-      )}
-
-      {showCancelModal && (
-        <Modal title="Cancelar Pedido de Venta" icon={AlertCircle} color="red" maxWidth="md"
-          onClose={()=>{setShowCancelModal(false);setCancelTargetId(null);}}
-          footer={(
-            <>
-              <Button variant="secondary" onClick={()=>{setShowCancelModal(false);setCancelTargetId(null);}}>Volver</Button>
-              <Button variant="danger" icon={X} loading={cancelling} onClick={handleCancelarPedido}>Confirmar Cancelacion</Button>
-            </>
-          )}>
-          <p className="text-sm text-gray-500">Esta accion marca el pedido como <strong>CANCELADO</strong>. Indica el motivo de la cancelacion (minimo 5 caracteres).</p>
-          <textarea value={cancelRazon} onChange={e=>setCancelRazon(e.target.value)} rows={3} autoFocus
-            placeholder="Ej: Cliente desistio de la compra, error en el pedido, etc."
-            className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-red-200 resize-none"/>
-        </Modal>
-      )}
     </div>
   );
 }
