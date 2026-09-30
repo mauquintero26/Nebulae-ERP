@@ -60,6 +60,8 @@ export default function PedidoVentaDetallePage() {
   const [cancelling, setCancelling] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
+  const [panelTab, setPanelTab] = useState<'actividad' | 'ia'>('actividad');
+  const [iaAnalisis, setIaAnalisis] = useState('');
   const supplierTimer = useRef<any>(null);
 
   useEffect(() => {
@@ -560,22 +562,6 @@ export default function PedidoVentaDetallePage() {
               </div>
             )}
 
-            {/* Contactar cliente */}
-            <div>
-              <p className="text-xs font-black text-slate-400 uppercase mb-3">Contactar Cliente</p>
-              <div className="grid grid-cols-3 gap-2">
-                <button onClick={() => { if (pedido?.customer_phone) window.open(`https://wa.me/57${pedido.customer_phone.replace(/\D/g, '')}?text=${encodeURIComponent('Hola, somos Nebulae. Su pedido ' + pedido.numero + '...')}`, '_blank'); }}
-                  className="flex items-center justify-center gap-2 px-3 py-2.5 bg-[#25D366] text-white rounded-xl text-sm font-bold hover:bg-[#1ebe5d] shadow-sm">
-                  <MessageCircle size={14} /> WhatsApp
-                </button>
-                <a href={pedido?.customer_phone ? `tel:${pedido.customer_phone}` : undefined} className="flex items-center justify-center gap-2 px-3 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-sm font-bold hover:bg-slate-200">
-                  <Phone size={14} /> Llamar
-                </a>
-                <a href={pedido?.customer_email ? `mailto:${pedido.customer_email}` : undefined} className="flex items-center justify-center gap-2 px-3 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-sm font-bold hover:bg-slate-200">
-                  <Mail size={14} /> Email
-                </a>
-              </div>
-            </div>
           </div>
         </div>
 
@@ -590,39 +576,83 @@ export default function PedidoVentaDetallePage() {
             </h3>
           </div>
 
-          <div className="p-5 border-b border-slate-200 bg-slate-50 z-10 shrink-0">
-            <div className="relative">
-              <textarea rows={3} value={nota} onChange={e => setNota(e.target.value)}
-                placeholder="Registra una nota interna..."
-                className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none resize-none transition-colors shadow-sm" />
-              <button onClick={handleRegistrarNota} disabled={sendingNota || !nota.trim()}
-                className="absolute bottom-3 right-3 bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg shadow-sm transition-colors disabled:opacity-50">
-                <Send size={16} />
-              </button>
-            </div>
+          <div className="flex border-b border-slate-200 bg-slate-50/50 shrink-0">
+            <button onClick={() => setPanelTab('actividad')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${panelTab === 'actividad' ? 'text-indigo-700 border-indigo-600 bg-white' : 'text-slate-500 border-transparent hover:text-slate-700'}`}>Actividad</button>
+            <button onClick={() => setPanelTab('ia')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${panelTab === 'ia' ? 'text-indigo-700 border-indigo-600 bg-white' : 'text-slate-500 border-transparent hover:text-slate-700'}`}>IA</button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-white">
-            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-6">Linea Temporal</h4>
-            <div className="space-y-6 relative before:absolute before:inset-0 before:ml-4 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-200 before:to-transparent">
-              {[...actividades].reverse().map((a: any, i: number) => (
-                <div key={i} className="relative flex items-start gap-4 group animate-in fade-in slide-in-from-bottom-2">
-                  <div className="flex items-center justify-center w-8 h-8 rounded-full border-2 border-white bg-white shadow-sm shrink-0 z-10"
-                    style={{ color: ACTIVITY_STYLE[a.action] || '#94a3b8' }}>
-                    <Activity size={14} />
+          {panelTab === 'ia' && (
+            <div className="flex-1 overflow-y-auto p-5 bg-slate-50/30 space-y-4">
+              <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl p-4 border border-indigo-100">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="bg-indigo-600 rounded-lg px-2 py-1 text-white font-black text-xs">AI</div>
+                    <div><p className="font-extrabold text-indigo-900 text-sm">Análisis de Pedido</p><p className="text-[10px] text-indigo-500">Nebulae Analytics</p></div>
                   </div>
-                  <div className="flex-1 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-bold text-slate-800 text-sm">{a.description || a.action}</span>
-                      <span className="text-[10px] font-bold text-slate-400">{fDate(a.created_at)}</span>
-                    </div>
-                    <p className="text-xs font-medium text-slate-500">{a.user_name || 'Sistema'}</p>
-                  </div>
+                  <Button size="sm" color="indigo" disabled={!pedido} onClick={() => {
+                    const prods = pedido?.productos || [];
+                    const txt = `ANÁLISIS DE PEDIDO\n\nEstado: ${estadoCfg.label}\nTotal: ${fCOP(pedido?.total_cop)}\nAnticipo: ${fCOP(pedido?.anticipo_cop)}\nSaldo: ${fCOP(pedido?.saldo_cop)}\n\nProductos: ${prods.length} línea(s)\n${prods.map((p: any) => `- ${p.product_name || p.descripcion || 'Producto'} x${p.qty ?? p.cantidad ?? 0}`).join('\n')}\n\nActividad: ${actividades.length} evento(s) registrados.`;
+                    setIaAnalisis(txt);
+                  }}>Analizar</Button>
                 </div>
-              ))}
+                {!iaAnalisis && <p className="text-xs text-indigo-700 italic text-center py-3">Genera un análisis con los montos, productos y estado del pedido.</p>}
+                {iaAnalisis && <pre className="text-xs text-slate-800 whitespace-pre-wrap font-medium leading-relaxed bg-white/70 rounded-xl p-3 border border-indigo-100 mt-2">{iaAnalisis}</pre>}
+              </div>
             </div>
-            {actividades.length === 0 && <p className="text-xs text-slate-400 italic text-center py-8">Sin actividad registrada todavia.</p>}
-          </div>
+          )}
+
+          {panelTab === 'actividad' && (
+            <>
+              <div className="p-5 border-b border-slate-200 bg-slate-50 z-10 shrink-0 space-y-3">
+                <div className="grid grid-cols-3 gap-2">
+                  <button onClick={() => { if (pedido?.customer_phone) window.open(`https://wa.me/57${pedido.customer_phone.replace(/\D/g, '')}?text=${encodeURIComponent(nota || `Hola, somos Nebulae. Su pedido ${pedido.numero}...`)}`, '_blank'); }}
+                    disabled={!pedido?.customer_phone}
+                    className="flex items-center justify-center gap-1.5 py-2.5 bg-[#25D366] text-white rounded-xl text-xs font-bold hover:bg-[#1ebe5d] transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed">
+                    <MessageCircle size={14} /> WhatsApp
+                  </button>
+                  <a href={pedido?.customer_phone ? `tel:${pedido.customer_phone}` : undefined}
+                    className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold shadow-sm transition-colors ${pedido?.customer_phone ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-slate-50 text-slate-300 pointer-events-none'}`}>
+                    <Phone size={14} /> Llamar
+                  </a>
+                  <a href={pedido?.customer_email ? `mailto:${pedido.customer_email}` : undefined}
+                    className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold shadow-sm transition-colors ${pedido?.customer_email ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-slate-50 text-slate-300 pointer-events-none'}`}>
+                    <Mail size={14} /> Email
+                  </a>
+                </div>
+                <div className="relative">
+                  <textarea rows={3} value={nota} onChange={e => setNota(e.target.value)}
+                    placeholder="Escribe un mensaje o registra una nota interna..."
+                    className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none resize-none transition-colors shadow-sm" />
+                  <button onClick={handleRegistrarNota} disabled={sendingNota || !nota.trim()}
+                    className="absolute bottom-3 right-3 bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg shadow-sm transition-colors disabled:opacity-50">
+                    {sendingNota ? <RefreshCw size={16} className="animate-spin" /> : <Send size={16} />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-white">
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-6">Linea Temporal</h4>
+                <div className="space-y-6 relative before:absolute before:inset-0 before:ml-4 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-200 before:to-transparent">
+                  {[...actividades].reverse().map((a: any, i: number) => (
+                    <div key={i} className="relative flex items-start gap-4 group animate-in fade-in slide-in-from-bottom-2">
+                      <div className="flex items-center justify-center w-8 h-8 rounded-full border-2 border-white bg-white shadow-sm shrink-0 z-10"
+                        style={{ color: ACTIVITY_STYLE[a.action] || '#94a3b8' }}>
+                        <Activity size={14} />
+                      </div>
+                      <div className="flex-1 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="font-bold text-slate-800 text-sm">{a.description || a.action}</span>
+                          <span className="text-[10px] font-bold text-slate-400">{fDate(a.created_at)}</span>
+                        </div>
+                        <p className="text-xs font-medium text-slate-500">{a.user_name || 'Sistema'}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {actividades.length === 0 && <p className="text-xs text-slate-400 italic text-center py-8">Sin actividad registrada todavia.</p>}
+              </div>
+            </>
+          )}
         </div>
       </div>
       {showPecModal && pedido && (
