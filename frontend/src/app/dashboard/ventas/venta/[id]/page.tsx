@@ -164,7 +164,7 @@ export default function PedidoVentaDetallePage() {
       {/* Top Action Bar */}
       <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between z-20 shadow-sm shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/dashboard/ventas/venta" className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 transition-colors">
+          <Link href={pedido?.cot_id ? `/dashboard/ventas/cotizacion/${pedido.cot_id}` : '/dashboard/ventas/venta'} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 transition-colors">
             <ArrowLeft size={20} />
           </Link>
           <div>
@@ -236,7 +236,7 @@ export default function PedidoVentaDetallePage() {
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Origen</label>
                 {pedido?.cot_id ? (
-                  <Link href={`/dashboard/ventas/cotizacion?id=${pedido.cot_id}`} className="flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl px-4 py-3 text-sm font-bold hover:bg-blue-100 transition-colors">
+                  <Link href={`/dashboard/ventas/cotizacion/${pedido.cot_id}`} className="flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl px-4 py-3 text-sm font-bold hover:bg-blue-100 transition-colors">
                     {pedido.cot_numero || `COT-${pedido.cot_id}`}
                   </Link>
                 ) : (

@@ -2,33 +2,19 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  ArrowLeft, Send, Mail, FileText, CheckCircle2, Circle,
-  MessageSquare, Paperclip, Calculator, Search, RefreshCw,
-  AlertCircle, XCircle, Activity
+  ArrowLeft, ArrowRight, Send, Mail, FileText, CheckCircle2, Circle,
+  MessageSquare, Calculator, Search, RefreshCw, Package, Trash2, RotateCcw,
+  AlertCircle, XCircle, Activity, MessageCircle, Phone, Sparkles
 } from 'lucide-react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
 import { Button } from '@/components/ui';
-import { ChannelModal } from '../cotizacion-client';
-
-const ESTADOS_COT: Record<string, {label:string; color:string; bg:string; border:string}> = {
-  BORRADOR:               {label:'Borrador',            color:'#64748b',bg:'#f1f5f9',border:'#e2e8f0'},
-  ENVIADA:                {label:'Enviada al Cliente',   color:'#92400e',bg:'#fef3c7',border:'#fde68a'},
-  PENDIENTE_CONFIRMACION: {label:'Esp. Confirmacion',    color:'#1d4ed8',bg:'#eff6ff',border:'#bfdbfe'},
-  CONFIRMADA:             {label:'Confirmada',           color:'#065f46',bg:'#f0fdf4',border:'#a7f3d0'},
-  RECHAZADA:              {label:'Rechazada',            color:'#991b1b',bg:'#fef2f2',border:'#fecaca'},
-  VENCIDA:                {label:'Vencida',              color:'#7c3aed',bg:'#f5f3ff',border:'#ddd6fe'},
-};
-
-const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
-const fTime = (iso: any) => iso ? new Date(iso).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}) : '';
-const fCOP = (v: any) => {
-  const n = Number(v) || 0;
-  if (n === 0) return '$0';
-  return new Intl.NumberFormat('es-CO', {style:'currency', currency:'COP', minimumFractionDigits:0}).format(n);
-};
+import {
+  ChannelModal, CalculadorModal, DeleteConfirm, PropagarPvenConfirm,
+  ESTADOS as ESTADOS_COT, fCOP, fDate, fTime,
+} from '../cotizacion-client';
 
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
 const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
@@ -45,6 +31,7 @@ const DEFAULT_ACTIVITY_STYLE = {icon: Activity, color: 'text-slate-500 bg-slate-
 
 export default function CotizacionDetallePage() {
   const params = useParams();
+  const router = useRouter();
   const isNew = params.id === 'nueva';
 
   const [cotizacion, setCotizacion] = useState<any>(null);
@@ -55,6 +42,17 @@ export default function CotizacionDetallePage() {
   const [confirming, setConfirming] = useState(false);
   const [showChannelModal, setShowChannelModal] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<'WhatsApp'|'Email'|'Otro'|null>(null);
+
+  // Acciones (Calculadora / Eliminar / Propagar a Pedido de Venta)
+  const [showCalc, setShowCalc] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
+  const [pendingCalcData, setPendingCalcData] = useState<any | null>(null);
+  const [savingCalc, setSavingCalc] = useState(false);
+  const [creatingProductIdx, setCreatingProductIdx] = useState<number | null>(null);
+
+  // Chatter (compose real, reemplaza el placeholder sin funcionalidad)
+  const [chatterInput, setChatterInput] = useState('');
+  const [chatterSending, setChatterSending] = useState(false);
 
   // Right panel tabs
   const [cotPanelTab, setCotPanelTab] = useState<'actividad'|'ia'>('actividad');
@@ -134,8 +132,6 @@ export default function CotizacionDetallePage() {
 
   function handleEnviarCotizacion() {
     if (!cotizacion?.id) return;
-    // Mismo patron que cotizacion-client.tsx (Task 7): mostrar el modal de
-    // seleccion de canal en vez de enviar directamente sin canal.
     setShowChannelModal(true);
   }
 
@@ -149,7 +145,6 @@ export default function CotizacionDetallePage() {
         body: JSON.stringify({estado: 'ENVIADA', canal_envio: selectedChannel, updated_by: currentUser}),
       });
 
-      // Si es WhatsApp y el cliente tiene telefono, abrir el deep link (igual que cotizacion-client.tsx)
       if (selectedChannel === 'WhatsApp' && cotizacion?.customer_phone) {
         const phoneNumber = cotizacion.customer_phone.replace(/\D/g, '');
         const mensaje = `Hola, aqui esta tu cotizacion ${cotizacion.numero}`;
@@ -172,6 +167,16 @@ export default function CotizacionDetallePage() {
 
   async function handleConfirmarVenta() {
     if (!cotizacion?.id) return;
+    const hasProds = productos.length > 0;
+    const hasNotes = (cotizacion.notas || '').trim().length > 0;
+    if (!hasProds && !hasNotes) {
+      alert('No hay productos ni notas. Cotiza primero o agrega información antes de confirmar.');
+      return;
+    }
+    if (!hasProds && hasNotes) {
+      const ok = window.confirm('No hay productos especificados. Las notas mencionan el producto. ¿Confirmar de todas formas?');
+      if (!ok) return;
+    }
     setConfirming(true);
     try {
       await apiFetch(`/ventas/cotizaciones/${cotizacion.id}/confirmar`, {
@@ -183,6 +188,131 @@ export default function CotizacionDetallePage() {
       alert('Error al confirmar la venta: ' + err.message);
     }
     setConfirming(false);
+  }
+
+  function onCalcSave(data: any) {
+    const pvenVigente = pedidosVenta.filter((v: any) => v.estado !== 'CANCELADA').pop();
+    if (pvenVigente) {
+      setShowCalc(false);
+      setPendingCalcData(data);
+      return;
+    }
+    commitCalcSave(data, false);
+  }
+
+  async function commitCalcSave(data: any, propagarAPven: boolean) {
+    if (!cotizacion?.id) return;
+    setSavingCalc(true);
+    try {
+      await apiFetch(`/ventas/cotizaciones/${cotizacion.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ ...data, updated_by: currentUser }),
+      });
+      const pvenVigente = pedidosVenta.filter((v: any) => v.estado !== 'CANCELADA').pop();
+      if (propagarAPven && pvenVigente) {
+        const nuevoSaldo = Number(data.total_cop || 0) - Number(pvenVigente.anticipo_cop || 0);
+        await apiFetch(`/ventas/pedidos/${pvenVigente.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            productos: data.productos,
+            subtotal_cop: data.subtotal_cop,
+            descuento_pct: data.descuento_pct,
+            total_cop: data.total_cop,
+            saldo_cop: nuevoSaldo,
+            updated_by: currentUser,
+          }),
+        });
+        const notaCredito = nuevoSaldo < 0 ? ` Crédito a favor del cliente: ${fCOP(Math.abs(nuevoSaldo))}.` : '';
+        await apiFetch(`/ventas/pedidos/${pvenVigente.id}/actividad`, {
+          method: 'POST',
+          body: JSON.stringify({
+            action: 'UPDATED',
+            description: `Precios actualizados por re-cotización de ${cotizacion?.numero || ''} (anticipo y pagos existentes no se modificaron).${notaCredito}`,
+            user_name: currentUser,
+          }),
+        });
+      }
+      setShowCalc(false);
+      setPendingCalcData(null);
+      await loadCotizacion();
+    } catch (err: any) {
+      alert('Error al guardar la cotización: ' + err.message);
+    }
+    setSavingCalc(false);
+  }
+
+  async function changeEstado(newEstado: string) {
+    if (!cotizacion?.id) return;
+    try {
+      await apiFetch(`/ventas/cotizaciones/${cotizacion.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ estado: newEstado, updated_by: currentUser }),
+      });
+      await loadCotizacion();
+    } catch (err: any) {
+      alert('Error: ' + err.message);
+    }
+  }
+
+  async function deleteCot() {
+    if (!cotizacion?.id) return;
+    try {
+      // No hay DELETE real: se marca como RECHAZADA (soft-delete), igual que en el listado.
+      await apiFetch(`/ventas/cotizaciones/${cotizacion.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ estado: 'RECHAZADA', updated_by: currentUser }),
+      });
+      setShowDelete(false);
+      router.push('/dashboard/ventas/cotizacion');
+    } catch (err: any) {
+      alert('Error: ' + err.message);
+    }
+  }
+
+  async function handleQuickCreateProduct(idx: number) {
+    const item = productos[idx];
+    if (!item || item.sku_id || !cotizacion?.id) return;
+    setCreatingProductIdx(idx);
+    try {
+      const p = await apiFetch('/crm/products/quick-create', {
+        method: 'POST',
+        body: JSON.stringify({ name: item.product_name, sale_price: item.unit_price_cop || 0 }),
+      });
+      const prod = p?.data ?? p;
+      const nuevosProductos = productos.map((it: any, i: number) => i === idx ? { ...it, sku_id: prod.id, es_libre: false } : it);
+      await apiFetch(`/ventas/cotizaciones/${cotizacion.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ productos: nuevosProductos, updated_by: currentUser }),
+      });
+      await loadCotizacion();
+    } catch (err: any) {
+      alert('Error al crear el producto: ' + err.message);
+    }
+    setCreatingProductIdx(null);
+  }
+
+  async function enviarChatter(viaWhatsApp: boolean) {
+    if (!cotizacion?.id) return;
+    if (viaWhatsApp) {
+      if (!cotizacion?.customer_phone) return;
+      const text = encodeURIComponent(chatterInput || `Hola, aqui esta tu cotizacion ${cotizacion.numero}`);
+      window.open(`https://wa.me/57${cotizacion.customer_phone.replace(/\D/g, '')}?text=${text}`, '_blank');
+      if (!chatterInput.trim()) return;
+    } else if (!chatterInput.trim()) {
+      return;
+    }
+    setChatterSending(true);
+    try {
+      await apiFetch(`/ventas/cotizaciones/${cotizacion.id}/actividad`, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'CHATTER', description: chatterInput, user_name: currentUser }),
+      });
+      setChatterInput('');
+      await loadCotizacion();
+    } catch (err: any) {
+      alert('Error al registrar el mensaje: ' + err.message);
+    }
+    setChatterSending(false);
   }
 
   if (loading) {
@@ -228,15 +358,6 @@ export default function CotizacionDetallePage() {
             </div>
           </div>
         </div>
-
-        <div className="flex items-center gap-3">
-          {!isNew && estadoActual === 'BORRADOR' && (
-            <Button color="blue" icon={Send} loading={sending} onClick={handleEnviarCotizacion}>Enviar al Cliente</Button>
-          )}
-          {!isNew && (estadoActual === 'ENVIADA' || estadoActual === 'PENDIENTE_CONFIRMACION') && (
-            <Button color="emerald" icon={CheckCircle2} loading={confirming} onClick={handleConfirmarVenta}>Cliente Acepto (Generar Venta)</Button>
-          )}
-        </div>
       </div>
 
       {/* Main Content Layout (Split Pane) */}
@@ -246,17 +367,12 @@ export default function CotizacionDetallePage() {
         <div className="flex-1 overflow-y-auto px-8 py-8 custom-scrollbar bg-white relative">
 
           {ventaGenerada && pedidoReciente && (
-            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 mb-8 flex items-center justify-between shadow-sm animate-in fade-in slide-in-from-top-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-emerald-600 shadow-sm"><CheckCircle2 size={20}/></div>
-                <div>
-                  <h3 className="font-black text-emerald-900">Pedido {pedidoReciente.numero} creado exitosamente</h3>
-                  <p className="text-sm text-emerald-700">La cotizacion fue aceptada y ya paso a operaciones/logistica.</p>
-                </div>
+            <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 mb-8 flex items-center gap-3 shadow-sm animate-in fade-in slide-in-from-top-4">
+              <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-emerald-600 shadow-sm shrink-0"><CheckCircle2 size={20}/></div>
+              <div>
+                <h3 className="font-black text-emerald-900">Pedido {pedidoReciente.numero} creado exitosamente</h3>
+                <p className="text-sm text-emerald-700">La cotizacion fue aceptada y ya paso a operaciones/logistica. Ver acción "Ver Pedido de Venta" abajo.</p>
               </div>
-              <Link href={`/dashboard/ventas/venta?id=${pedidoReciente.id}`} className="bg-emerald-600 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-sm hover:bg-emerald-700 transition-colors">
-                Ver Pedido de Venta
-              </Link>
             </div>
           )}
 
@@ -336,51 +452,60 @@ export default function CotizacionDetallePage() {
               </div>
             </div>
 
+            {cotizacion?.notas && (
+              <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-10">
+                <p className="text-xs font-black text-blue-600 uppercase mb-1.5">Notas</p>
+                <p className="text-sm text-blue-900">{cotizacion.notas}</p>
+              </div>
+            )}
+
             {/* ARTICULOS Y PRECIOS */}
             <div className="mb-10">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
-                  <Calculator className="text-blue-600" size={20} /> Valorizacion de Articulos
+                  <Package className="text-blue-600" size={20} /> Producto{productos.length !== 1 ? 's' : ''} Cotizado{productos.length !== 1 ? 's' : ''}
                 </h3>
               </div>
 
-              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
-                <table className="w-full text-left">
-                  <thead className="bg-slate-50 border-b border-slate-200">
-                    <tr>
-                      <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">Producto / Descripcion</th>
-                      <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-24 text-center">Cant.</th>
-                      <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-36">Precio Unit.</th>
-                      <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-36 text-right">Subtotal</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {productos.length === 0 && (
-                      <tr>
-                        <td colSpan={4} className="px-4 py-6 text-center text-sm text-slate-400 italic">
-                          Sin productos registrados en esta cotizacion.
-                        </td>
-                      </tr>
-                    )}
-                    {productos.map((item: any, idx: number) => (
-                      <tr key={idx} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 font-bold text-slate-800 text-sm">
-                          {item.product_name || item.name || 'Producto sin nombre'}
-                        </td>
-                        <td className="px-4 py-3 text-center text-sm font-bold text-slate-700">
-                          {item.qty ?? 0}
-                        </td>
-                        <td className="px-4 py-3 text-sm font-bold text-slate-700">
-                          {fCOP(item.unit_price_cop)}
-                        </td>
-                        <td className="px-4 py-3 font-black text-slate-800 text-right">
-                          {fCOP(item.total_cop != null ? item.total_cop : (Number(item.unit_price_cop) || 0) * (Number(item.qty) || 0))}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              {productos.length === 0 ? (
+                <div className="bg-slate-50 border border-dashed border-slate-300 rounded-2xl p-8 text-center text-sm text-slate-400 italic">
+                  Sin productos registrados en esta cotización.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {productos.map((item: any, idx: number) => (
+                    <div key={idx} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center gap-4 hover:border-blue-200 transition-colors">
+                      <div className="w-14 h-14 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 shrink-0 overflow-hidden">
+                        {item.image_url ? (
+                          <img src={item.image_url} alt="" className="w-full h-full object-cover"/>
+                        ) : (
+                          <Package size={26}/>
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-black text-slate-900 text-base truncate">{item.product_name || item.name || 'Producto sin nombre'}</p>
+                        <div className="flex items-center gap-2 mt-1 flex-wrap">
+                          {item.sku_id ? (
+                            <span className="text-[10px] font-black text-emerald-600 uppercase tracking-wide bg-emerald-50 px-1.5 py-0.5 rounded">Vinculado a catálogo</span>
+                          ) : (
+                            <>
+                              <span className="text-[10px] font-black text-amber-600 uppercase tracking-wide bg-amber-50 px-1.5 py-0.5 rounded">Texto libre</span>
+                              <button onClick={() => handleQuickCreateProduct(idx)} disabled={creatingProductIdx === idx}
+                                className="text-[10px] font-black text-blue-600 hover:text-blue-800 underline disabled:opacity-50">
+                                {creatingProductIdx === idx ? 'Creando...' : '+ Ingresar como producto'}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-xs text-slate-400">Cant. {item.qty ?? 0} &times; {fCOP(item.unit_price_cop)}</p>
+                        <p className="font-black text-slate-900 text-lg">{fCOP(item.total_cop != null ? item.total_cop : (Number(item.unit_price_cop) || 0) * (Number(item.qty) || 0))}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {/* TOTALES */}
               <div className="flex justify-end mt-6">
@@ -404,6 +529,72 @@ export default function CotizacionDetallePage() {
               </div>
             </div>
 
+            {/* BLOQUE DE ACCIONES — estandarizado: primero mover el flujo (enviar/confirmar),
+                al final Re-Cotizar y Ver Pedido de Venta, y lo destructivo/edge-case al fondo. */}
+            {!isNew && cotizacion && (
+              <div className="mb-4">
+                <h3 className="text-lg font-black text-slate-800 mb-4 flex items-center gap-2">
+                  <Sparkles className="text-amber-500" size={20} /> Acciones
+                </h3>
+                <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
+
+                  {(estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA' || estadoActual === 'PENDIENTE_CONFIRMACION') && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {(estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA') && (
+                        <Button color="blue" icon={Send} loading={sending} onClick={handleEnviarCotizacion}>
+                          {estadoActual === 'ENVIADA' ? 'Re-enviar al Cliente' : 'Enviar al Cliente'}
+                        </Button>
+                      )}
+                      {(estadoActual === 'ENVIADA' || estadoActual === 'PENDIENTE_CONFIRMACION') && (
+                        <Button color="emerald" icon={CheckCircle2} loading={confirming} onClick={handleConfirmarVenta}>
+                          Confirmar + Crear Pedido de Venta
+                        </Button>
+                      )}
+                    </div>
+                  )}
+
+                  <div className={`grid grid-cols-1 sm:grid-cols-2 gap-3 ${(estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA' || estadoActual === 'PENDIENTE_CONFIRMACION') ? 'pt-4 border-t border-slate-100' : ''}`}>
+                    <Button color={Number(cotizacion?.total_cop) > 0 ? 'orange' : 'blue'}
+                      icon={Number(cotizacion?.total_cop) > 0 ? RotateCcw : Calculator}
+                      onClick={() => setShowCalc(true)}>
+                      {Number(cotizacion?.total_cop) > 0 ? 'Re-Cotizar — Actualizar Precios' : 'Cotizar — Calcular Precios'}
+                    </Button>
+                    {ventaGenerada && pedidoReciente ? (
+                      <Link href={`/dashboard/ventas/venta/${pedidoReciente.id}`}
+                        className="flex items-center justify-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-emerald-100 transition-colors">
+                        Ver Pedido de Venta <ArrowRight size={14} />
+                      </Link>
+                    ) : (
+                      <div className="flex items-center justify-center px-4 py-2.5 rounded-xl border border-dashed border-slate-200 text-slate-300 text-sm font-bold">
+                        Pedido de Venta pendiente de confirmar
+                      </div>
+                    )}
+                  </div>
+
+                  {estadoActual !== 'CONFIRMADA' && (
+                    <div className="pt-4 border-t border-slate-100">
+                      <p className="text-xs font-black text-slate-400 uppercase mb-2">Cambiar Estado</p>
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {Object.entries(ESTADOS_COT).filter(([k]) => k !== estadoActual && k !== 'CONFIRMADA').map(([k, v]: any) => (
+                          <button key={k} onClick={() => {
+                            if (k === 'RECHAZADA' && !window.confirm('¿Marcar como Rechazada? La SC vinculada permanecerá activa.')) return;
+                            changeEstado(k);
+                          }}
+                            className="px-3 py-1.5 rounded-lg text-xs font-bold border hover:opacity-80 transition-opacity"
+                            style={{ backgroundColor: v.bg, color: v.color, borderColor: v.border }}>
+                            {v.label}
+                          </button>
+                        ))}
+                      </div>
+                      <button onClick={() => setShowDelete(true)} className="flex items-center gap-1.5 text-red-500 hover:text-red-700 text-xs font-bold">
+                        <Trash2 size={12} /> Eliminar cotización
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
           </div>
         </div>
 
@@ -414,12 +605,12 @@ export default function CotizacionDetallePage() {
           title="Arrastrar para ajustar panel de actividades"
         />
 
-        {/* BLOQUE 2: Actividades y Bitacora (Chatter) */}
+        {/* BLOQUE 2: Actividades y Bitacora (Chatter) -- la actividad es la informacion principal */}
         <div style={{width: rightWidth}} className="bg-white flex flex-col overflow-hidden shrink-0 shadow-[-10px_0_15px_-10px_rgba(0,0,0,0.05)]">
 
           <div className="p-5 border-b border-slate-200 bg-white flex items-center justify-between shadow-sm z-10 shrink-0">
             <h3 className="font-black text-slate-800 flex items-center gap-2 text-lg">
-              <MessageSquare className="text-slate-400" size={20} /> Actividades
+              <MessageSquare className="text-slate-400" size={20} /> Actividad
             </h3>
           </div>
 
@@ -452,28 +643,34 @@ export default function CotizacionDetallePage() {
           )}
 
           {cotPanelTab==='actividad'&&(
-          <>{/* Activity Input Area */}
-          <div className="p-5 border-b border-slate-200 bg-slate-50 z-10 shrink-0">
-            <div className="flex gap-2 mb-4">
-              <button className="flex-1 flex items-center justify-center gap-2 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 py-2.5 rounded-xl text-xs font-bold transition-colors shadow-sm">
-                <MessageSquare size={16} /> Nota
+          <>{/* Contactar + Chatter Input Area -- reemplaza el placeholder anterior sin funcionalidad */}
+          <div className="p-5 border-b border-slate-200 bg-slate-50 z-10 shrink-0 space-y-3">
+            <div className="grid grid-cols-3 gap-2">
+              <button onClick={() => enviarChatter(true)} disabled={!cotizacion?.customer_phone}
+                className="flex items-center justify-center gap-1.5 py-2.5 bg-[#25D366] text-white rounded-xl text-xs font-bold hover:bg-[#1ebe5d] transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed">
+                <MessageCircle size={14} /> WhatsApp
               </button>
-              <button className="flex-1 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white border border-blue-700 py-2.5 rounded-xl text-xs font-bold transition-colors shadow-sm">
-                <Mail size={16} /> Correo
-              </button>
+              <a href={cotizacion?.customer_phone ? `tel:${cotizacion.customer_phone}` : undefined}
+                className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold shadow-sm transition-colors ${cotizacion?.customer_phone ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-slate-50 text-slate-300 pointer-events-none'}`}>
+                <Phone size={14} /> Llamar
+              </a>
+              <a href={cotizacion?.customer_email ? `mailto:${cotizacion.customer_email}?subject=Cotización ${cotizacion.numero}` : undefined}
+                className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold shadow-sm transition-colors ${cotizacion?.customer_email ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-slate-50 text-slate-300 pointer-events-none'}`}>
+                <Mail size={14} /> Email
+              </a>
             </div>
 
             <div className="relative">
               <textarea
                 rows={3}
+                value={chatterInput}
+                onChange={e => setChatterInput(e.target.value)}
                 placeholder="Escribe un mensaje o registra una nota interna..."
                 className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none resize-none transition-colors shadow-sm"
               />
-              <div className="absolute bottom-3 left-3 flex gap-2">
-                <button className="p-1.5 text-slate-400 hover:text-blue-600 rounded-md hover:bg-blue-50 transition-colors"><Paperclip size={18} /></button>
-              </div>
-              <button className="absolute bottom-3 right-3 bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg shadow-sm transition-colors">
-                <Send size={16} />
+              <button onClick={() => enviarChatter(false)} disabled={chatterSending || !chatterInput.trim()}
+                className="absolute bottom-3 right-3 bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg shadow-sm transition-colors disabled:opacity-40">
+                {chatterSending ? <RefreshCw size={16} className="animate-spin" /> : <Send size={16} />}
               </button>
             </div>
           </div>
@@ -483,7 +680,7 @@ export default function CotizacionDetallePage() {
             <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-6">Linea Temporal</h4>
 
             <div className="space-y-6 relative before:absolute before:inset-0 before:ml-4 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-200 before:to-transparent">
-              {(cotizacion?.actividades || []).map((a:any) => {
+              {[...(cotizacion?.actividades || [])].reverse().map((a:any) => {
                 const style = ACTIVITY_STYLE[a.action] || DEFAULT_ACTIVITY_STYLE;
                 const Icon = style.icon;
                 return (
@@ -538,6 +735,18 @@ export default function CotizacionDetallePage() {
           onCancel={cancelarEnvio}
           saving={sending}
           customerHasPhone={!!cotizacion?.customer_phone}
+        />
+      )}
+      {showCalc && cotizacion && <CalculadorModal cot={cotizacion} onSave={onCalcSave} onClose={() => setShowCalc(false)} />}
+      {showDelete && cotizacion && <DeleteConfirm cot={cotizacion} onConfirm={deleteCot} onCancel={() => setShowDelete(false)} />}
+      {pendingCalcData && (
+        <PropagarPvenConfirm
+          pven={pedidosVenta.filter((v: any) => v.estado !== 'CANCELADA').pop()}
+          totalAnterior={Number(cotizacion?.total_cop || 0)}
+          totalNuevo={Number(pendingCalcData.total_cop || 0)}
+          saving={savingCalc}
+          onConfirm={() => commitCalcSave(pendingCalcData, true)}
+          onCancel={() => commitCalcSave(pendingCalcData, false)}
         />
       )}
     </div>

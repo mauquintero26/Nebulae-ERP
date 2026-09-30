@@ -2,21 +2,21 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import {
-  FileText, Clock, CheckCircle2, DollarSign, Activity,
+  FileText, CheckCircle2, DollarSign, Activity,
   Search, X, RefreshCw, AlertCircle, MoreVertical, Plus,
-  Phone, Mail, MapPin, ChevronRight, ShieldAlert, Package,
-  Calculator, Send, Trash2, Edit2, Save, ArrowRight,
-  MessageCircle, ExternalLink, User, TrendingUp, ChevronDown, RotateCcw
+  Phone, Mail, ShieldAlert,
+  Calculator, Send, Trash2, Save, ArrowRight,
+  MessageCircle, RotateCcw
 } from 'lucide-react';
 
 import { apiFetch, API_URL } from '@/lib/api';
 import { computeMarginPrice, MARGIN_PCT_CAP } from '@/lib/pricing';
-import { SubNav, PageHeader, StatCard, Modal, Button, Toast, EmptyState } from '@/components/ui';
+import { SubNav, PageHeader, StatCard, Modal, Button, EmptyState } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
 
-const ESTADOS: Record<string, { label: string; color: string; bg: string; border: string }> = {
+export const ESTADOS: Record<string, { label: string; color: string; bg: string; border: string }> = {
   BORRADOR:              { label: 'Borrador',              color: '#64748b', bg: '#f1f5f9', border: '#e2e8f0' },
   ENVIADA:               { label: 'Enviada al cliente',    color: '#92400e', bg: '#fef3c7', border: '#fde68a' },
   PENDIENTE_CONFIRMACION:{ label: 'Esp. confirmacion',     color: '#1d4ed8', bg: '#eff6ff', border: '#bfdbfe' },
@@ -28,7 +28,7 @@ const ESTADOS: Record<string, { label: string; color: string; bg: string; border
 // Mapa de estados propio de Cotizacion (rico, varios estados reales del negocio) --
 // se mantiene como pastilla a medida en vez del Badge generico de tono semantico,
 // pero con la misma forma (rounded-full, border, text-xs font-bold, px-2.5 py-1).
-function EstadoBadge({ estado }: { estado: string }) {
+export function EstadoBadge({ estado }: { estado: string }) {
   const cfg = ESTADOS[estado] || { label: estado, color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe' };
   return (
     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border"
@@ -38,11 +38,11 @@ function EstadoBadge({ estado }: { estado: string }) {
   );
 }
 
-const fDate = (iso: string | null | undefined) =>
+export const fDate = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
-const fTime = (iso: string | null | undefined) =>
+export const fTime = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }) : '';
-const fCOP = (v: number | null | undefined) => {
+export const fCOP = (v: number | null | undefined) => {
   const n = Number(v) || 0;
   if (n === 0) return '$0';
   return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(n);
@@ -55,7 +55,7 @@ const isExpiringSoon = (iso: string | null | undefined) => {
 };
 
 // â”€â”€ ActionIcon for activity â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function ActionDot({ action }: { action: string }) {
+export function ActionDot({ action }: { action: string }) {
   const colors: Record<string, string> = {
     CREATED: '#6366f1', ESTADO_CHANGED: '#f59e0b', SENT: '#10b981',
     CONFIRMED: '#059669', REJECTED: '#ef4444', UPDATED: '#3b82f6',
@@ -159,7 +159,7 @@ function ProductoAutocomplete({
   );
 }
 
-function CalculadorModal({
+export function CalculadorModal({
   cot, onSave, onClose
 }: { cot: any; onSave: (data: any) => void; onClose: () => void }) {
   const [trm, setTrm] = useState(cot.trm_rate || 4200);
@@ -243,7 +243,7 @@ function CalculadorModal({
           {/* TRM */}
           <div className="grid grid-cols-3 gap-4">
             <div>
-              <label className="text-xs font-black text-slate-500 uppercase mb-1 block">TRM (USDâ†’COP)</label>
+              <label className="text-xs font-black text-slate-500 uppercase mb-1 block">TRM (USD → COP)</label>
               <input type="number" value={trm} onChange={e => setTrm(Number(e.target.value))}
                 className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold focus:ring-2 focus:ring-amber-200 focus:border-amber-400 outline-none" />
             </div>
@@ -370,7 +370,7 @@ function CalculadorModal({
 }
 
 // â”€â”€ Delete Confirm Dialog â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function DeleteConfirm({ cot, onConfirm, onCancel }: { cot: any; onConfirm: () => void; onCancel: () => void }) {
+export function DeleteConfirm({ cot, onConfirm, onCancel }: { cot: any; onConfirm: () => void; onCancel: () => void }) {
   return (
     <Modal title="Eliminar Cotización" icon={Trash2} color="red" maxWidth="md" onClose={onCancel}
       footer={(
@@ -389,7 +389,7 @@ function DeleteConfirm({ cot, onConfirm, onCancel }: { cot: any; onConfirm: () =
   );
 }
 
-function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm, onCancel, saving }: { pven: any; totalAnterior: number; totalNuevo: number; onConfirm: () => void; onCancel: () => void; saving: boolean }) {
+export function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm, onCancel, saving }: { pven: any; totalAnterior: number; totalNuevo: number; onConfirm: () => void; onCancel: () => void; saving: boolean }) {
   const anticipoYaPagado = Number(pven?.anticipo_cop || 0);
   const creditoAFavor = anticipoYaPagado - totalNuevo;
   return (
@@ -473,39 +473,14 @@ export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCa
 
 // â”€â”€ Main Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export default function CotizacionClient() {
+  const router = useRouter();
   const [cotizaciones, setCotizaciones] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState('Activas');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [selected, setSelected] = useState<any | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'error' } | null>(null);
-  const [currentUser, setCurrentUser] = useState('');
-
-  // Panel state
-  const [showCalc, setShowCalc] = useState(false);
-  const [showDelete, setShowDelete] = useState(false);
-  const [pendingCalcData, setPendingCalcData] = useState<any | null>(null);
-  const [editMode, setEditMode] = useState(false);
-  const [editForm, setEditForm] = useState<any>({});
-  const [savingEdit, setSavingEdit] = useState(false);
-  const [confirming, setConfirming] = useState(false);
-  const [panelTab, setPanelTab] = useState<'acciones'|'actividad'|'chatter'>('acciones');
-  const [cotHistory, setCotHistory] = useState<any[]>([]);
-  const [chatterInput, setChatterInput] = useState('');
-  const [chatterSending, setChatterSending] = useState(false);
   const [alertDias, setAlertDias] = useState(2);
-  const [showChannelModal, setShowChannelModal] = useState(false);
-  const [selectedChannel, setSelectedChannel] = useState<'WhatsApp'|'Email'|'Otro'|null>(null);
-
-  useEffect(() => {
-    const u = localStorage.getItem('user_name') || localStorage.getItem('username') || '';
-    setCurrentUser(u);
-  }, []);
-
-  const showToast = (msg: string, type: 'ok' | 'error' = 'ok') => setToast({ msg, type });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -523,212 +498,14 @@ export default function CotizacionClient() {
   useEffect(() => { load(); }, [load]);
 
   const searchParams = useSearchParams();
-  // Auto-open detail if navigated here with ?id= from Hub
+  // Compatibilidad con enlaces antiguos que abrian el detalle con ?id= (Hub, SC, PVEN):
+  // se redirige a la pagina canonica de detalle en vez de duplicar la vista aqui.
   useEffect(() => {
     const idParam = searchParams?.get('id');
-    if (idParam) { const numId = Number(idParam); if (!isNaN(numId)) loadDetail(numId); }
-  }, [searchParams]);
+    if (idParam) { const numId = Number(idParam); if (!isNaN(numId)) router.replace(`/dashboard/ventas/cotizacion/${numId}`); }
+  }, [searchParams, router]);
 
-  async function loadDetail(id: number) {
-    try {
-      const raw = await apiFetch(`/ventas/cotizaciones/${id}`);
-      const d = raw?.data ?? raw;
-      setSelected(d);
-      setEditForm({
-        notas: d.notas || '',
-        fecha_entrega_estimada: d.fecha_entrega_estimada ? d.fecha_entrega_estimada.split('T')[0] : '',
-        cotizador: d.cotizador || '',
-        direccion_entrega: d.direccion_entrega || '',
-        estado: d.estado,
-      });
-    } catch (err: any) { showToast('Error al cargar detalle: ' + err.message, 'error'); }
-  }
-
-  async function saveEdit() {
-    const cotId = Number(selected?.id ?? selected?.data?.id);
-    if (!cotId || isNaN(cotId)) return;
-    setSavingEdit(true);
-    try {
-      const raw = await apiFetch(`/ventas/cotizaciones/${cotId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ ...editForm, updated_by: currentUser }),
-      });
-      const d = raw?.data ?? raw;
-      setSelected({ ...selected, ...d });
-      setCotizaciones(prev => prev.map(c => c.id === cotId ? { ...c, ...d } : c));
-      setEditMode(false);
-      showToast('Cotizacion actualizada');
-    } catch (err: any) { showToast('Error: ' + err.message, 'error'); }
-    setSavingEdit(false);
-  }
-
-  async function changeEstado(newEstado: string) {
-    const cotId = Number(selected?.id ?? selected?.data?.id);
-    if (!cotId || isNaN(cotId)) return;
-    setSaving(true);
-    try {
-      await apiFetch(`/ventas/cotizaciones/${cotId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ estado: newEstado, updated_by: currentUser }),
-      });
-      await loadDetail(cotId);
-      setCotizaciones(prev => prev.map(c => c.id === cotId ? { ...c, estado: newEstado } : c));
-      showToast(`Estado cambiado a ${ESTADOS[newEstado]?.label || newEstado}`);
-    } catch (err: any) { showToast('Error: ' + err.message, 'error'); }
-    setSaving(false);
-  }
-
-  async function enviarCotizacion() {
-    const cotId = Number(selected?.id ?? selected?.data?.id);
-    if (!cotId || isNaN(cotId)) return;
-    // Show channel modal instead of immediately sending
-    setShowChannelModal(true);
-  }
-
-  async function confirmarEnvio() {
-    const cotId = Number(selected?.id ?? selected?.data?.id);
-    if (!cotId || isNaN(cotId)) return;
-    if (!selectedChannel) return;
-    setSaving(true);
-    try {
-      await apiFetch(`/ventas/cotizaciones/${cotId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ estado: 'ENVIADA', canal_envio: selectedChannel, updated_by: currentUser }),
-      });
-
-      // If WhatsApp and customer has phone, open WhatsApp deep link
-      if (selectedChannel === 'WhatsApp' && selected?.customer_phone) {
-        const phoneNumber = selected.customer_phone.replace(/\D/g, '');
-        const cotizacionNumber = selected.numero;
-        const mensaje = `Hola, aqui esta tu cotizacion ${cotizacionNumber}`;
-        window.open(`https://wa.me/57${phoneNumber}?text=${encodeURIComponent(mensaje)}`, '_blank');
-      }
-
-      await loadDetail(cotId);
-      setCotizaciones(prev => prev.map(c => c.id === cotId ? { ...c, estado: 'ENVIADA', canal_envio: selectedChannel } : c));
-      showToast('Cotizacion marcada como enviada al cliente. En espera de confirmacion.');
-      setShowChannelModal(false);
-      setSelectedChannel(null);
-    } catch (err: any) { showToast('Error: ' + err.message, 'error'); }
-    setSaving(false);
-  }
-
-  function cancelarEnvio() {
-    setShowChannelModal(false);
-    setSelectedChannel(null);
-  }
-
-  async function confirmar() {
-    const cotId = Number(selected?.id ?? selected?.data?.id);
-    if (!cotId || isNaN(cotId)) return;
-    // Alert if no products and no notes
-    const hasProds = (selected.productos || []).length > 0;
-    const hasNotes = (selected.notas || '').trim().length > 0;
-    if (!hasProds && !hasNotes) {
-      showToast('No hay productos ni notas. Por favor cotiza primero o agrega informacion.', 'error');
-      return;
-    }
-    if (!hasProds && hasNotes) {
-      const ok = window.confirm('No hay productos especificados. Las notas mencionan el producto. ¿Confirmar de todas formas?');
-      if (!ok) return;
-    }
-    setConfirming(true);
-    try {
-      const d = await apiFetch(`/ventas/cotizaciones/${cotId}/confirmar`, {
-        method: 'POST',
-        body: JSON.stringify({ user_name: currentUser }),
-      });
-      const dataObj = d?.data ?? d;
-      const venObj = dataObj?.pedido_venta || dataObj?.pedido || d?.pedido_venta || d?.pedido;
-      showToast(`Pedido de Venta ${venObj?.numero || ''} creado exitosamente`);
-      await loadDetail(cotId);
-      load();
-    } catch (err: any) { showToast('Error: ' + err.message, 'error'); }
-    setConfirming(false);
-  }
-
-  async function deleteCot() {
-    const cotId = Number(selected?.id ?? selected?.data?.id);
-    if (!cotId || isNaN(cotId)) return;
-    try {
-      // No DELETE endpoint: change to RECHAZADA as soft-delete
-      await apiFetch(`/ventas/cotizaciones/${cotId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ estado: 'RECHAZADA', updated_by: currentUser }),
-      });
-      showToast('Cotizacion eliminada (marcada como Rechazada). La SC vinculada permanece activa.');
-      setSelected(null);
-      setShowDelete(false);
-      load();
-    } catch (err: any) { showToast('Error: ' + err.message, 'error'); }
-  }
-
-  function onCalcSave(data: any) {
-    const pvenVigente = (selected?.pedidos_venta || []).filter((v: any) => v.estado !== 'CANCELADA').pop();
-    if (pvenVigente) {
-      // Ya existe un Pedido de Venta generado desde esta cotizacion -- preguntar
-      // si los nuevos precios deben reflejarse tambien alli antes de guardar.
-      setShowCalc(false);
-      setPendingCalcData(data);
-      return;
-    }
-    commitCalcSave(data, false);
-  }
-
-  async function commitCalcSave(data: any, propagarAPven: boolean) {
-    const cotId = Number(selected?.id ?? selected?.data?.id);
-    if (!cotId || isNaN(cotId)) {
-      showToast('Error: ID de cotización no válido', 'error');
-      return;
-    }
-    setSaving(true);
-    try {
-      const raw = await apiFetch(`/ventas/cotizaciones/${cotId}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ ...data, updated_by: currentUser }),
-      });
-      const d = raw?.data ?? raw;
-      setSelected((prev: any) => ({ ...prev, ...d, ...data }));
-      setCotizaciones(prev => prev.map(c => c.id === cotId ? { ...c, total_cop: data.total_cop } : c));
-
-      const pvenVigente = (selected?.pedidos_venta || []).filter((v: any) => v.estado !== 'CANCELADA').pop();
-      if (propagarAPven && pvenVigente) {
-        // Signed a proposito: si el anticipo ya cobrado supera el nuevo total
-        // (p.ej. se quito una linea despues de cobrar), esto queda negativo a
-        // proposito para reflejar un credito real a favor del cliente en vez
-        // de ocultarlo con un saldo en $0 que parece "todo pagado sin novedad".
-        const nuevoSaldo = Number(data.total_cop || 0) - Number(pvenVigente.anticipo_cop || 0);
-        await apiFetch(`/ventas/pedidos/${pvenVigente.id}`, {
-          method: 'PATCH',
-          body: JSON.stringify({
-            productos: data.productos,
-            subtotal_cop: data.subtotal_cop,
-            descuento_pct: data.descuento_pct,
-            total_cop: data.total_cop,
-            saldo_cop: nuevoSaldo,
-            updated_by: currentUser,
-          }),
-        });
-        const notaCredito = nuevoSaldo < 0 ? ` Credito a favor del cliente: $${Math.abs(nuevoSaldo).toLocaleString('es-CO')} COP.` : '';
-        await apiFetch(`/ventas/pedidos/${pvenVigente.id}/actividad`, {
-          method: 'POST',
-          body: JSON.stringify({
-            action: 'UPDATED',
-            description: `Precios actualizados por re-cotizacion de ${selected?.numero || ''} (anticipo y pagos existentes no se modificaron).${notaCredito}`,
-            user_name: currentUser,
-          }),
-        });
-        showToast(nuevoSaldo < 0 ? `Cotizacion propagada a ${pvenVigente.numero} -- credito a favor del cliente` : `Cotizacion recalculada y propagada a ${pvenVigente.numero}`);
-      } else {
-        showToast('Cotizacion calculada y guardada');
-      }
-      setShowCalc(false);
-      setPendingCalcData(null);
-    } catch (err: any) { showToast('Error: ' + err.message, 'error'); }
-    setSaving(false);
-  }
-
-  // â”€â”€ Derived stats â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // Derived stats
   const activas     = cotizaciones.filter(c => c.estado !== 'CONFIRMADA' && c.estado !== 'RECHAZADA');
   const confirmadas = cotizaciones.filter(c => c.estado === 'CONFIRMADA');
   const rechazadas  = cotizaciones.filter(c => c.estado === 'RECHAZADA');
@@ -749,15 +526,8 @@ export default function CotizacionClient() {
     return true;
   });
 
-  // Alert check for selected cot: no products but type is cotizacion
-  const selectedNoProds = selected && (selected.productos || []).length === 0;
-  const selectedNoNotes = selected && !(selected.notas || '').trim();
-
   return (
     <div className="w-full bg-slate-50 min-h-full animate-in fade-in">
-
-      {/* Toast */}
-      <Toast toast={toast} onClose={() => setToast(null)} />
 
       {/* Sub-module nav */}
       <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas/cotizacion" color="amber" hub={{ href: '/dashboard/ventas' }} />
@@ -767,7 +537,7 @@ export default function CotizacionClient() {
         <div className="bg-amber-50 border-b border-amber-200 px-6 py-3 flex items-start gap-4">
           <ShieldAlert className="text-amber-600 shrink-0 mt-0.5" size={20} />
           <div className="flex-1">
-            <h4 className="text-sm font-black text-amber-800">ATENCION â€” Cotizaciones requieren accion (Alerta {alertDias} dias)</h4>
+            <h4 className="text-sm font-black text-amber-800">ATENCIÓN — Cotizaciones requieren acción (Alerta {alertDias} días)</h4>
             <p className="text-xs font-bold text-amber-700 mt-1">
               {sinAtender > 0 && `* ${sinAtender} cotizacion(es) sin atender mas de ${alertDias} dias `}
               {sinCalc > 0 && `* ${sinCalc} sin calcular / sin precio `}
@@ -903,8 +673,8 @@ export default function CotizacionClient() {
                   const overdue = isOverdue(cot.fecha_entrega_estimada);
                   const expiring = isExpiringSoon(cot.fecha_entrega_estimada);
                   return (
-                    <tr key={cot.id} onClick={() => loadDetail(cot.id)}
-                      className={`hover:bg-slate-50/80 transition-colors group cursor-pointer ${selected?.id === cot.id ? 'bg-amber-50/30' : ''}`}>
+                    <tr key={cot.id} onClick={() => router.push(`/dashboard/ventas/cotizacion/${cot.id}`)}
+                      className="hover:bg-slate-50/80 transition-colors group cursor-pointer">
                       <td className="px-6 py-4">
                         <span className="font-black text-amber-700">{cot.numero}</span>
                         {cot.sc_numero && (
@@ -936,7 +706,7 @@ export default function CotizacionClient() {
                       <td className="px-6 py-4"><EstadoBadge estado={cot.estado}/></td>
                       <td className="px-6 py-4">
                         <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button onClick={e => { e.stopPropagation(); loadDetail(cot.id); }}
+                          <button onClick={e => { e.stopPropagation(); router.push(`/dashboard/ventas/cotizacion/${cot.id}`); }}
                             className="bg-amber-100 text-amber-700 hover:bg-amber-200 px-3 py-1.5 rounded text-xs font-bold flex items-center gap-1">
                             <FileText size={12}/> Ver
                           </button>
@@ -982,456 +752,6 @@ export default function CotizacionClient() {
         </div>
       </div>
 
-      {/* â”€â”€ DETAIL PANEL â”€â”€ */}
-      {selected && (
-        <>
-          <div className="fixed inset-0 z-40 bg-slate-900/30 backdrop-blur-sm" onClick={() => { setSelected(null); setEditMode(false); }}/>
-
-          {/* Full-width panel from sidebar (240px) to right edge */}
-          <div className="fixed top-0 bottom-0 right-0 z-40 bg-white shadow-2xl border-l border-slate-200 flex flex-col overflow-hidden"
-            style={{ left: '240px' }}>
-
-            {/* Panel Header */}
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-amber-50 to-white flex-shrink-0">
-              <div className="flex items-center gap-4">
-                <div>
-                  <h2 className="font-extrabold text-slate-900 text-xl">{selected.numero}</h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Cotizacion
-                    {selected.sc_numero && <span className="ml-2 text-indigo-600">de {selected.sc_numero}</span>}
-                  </p>
-                </div>
-                <EstadoBadge estado={selected.estado}/>
-              </div>
-              <div className="flex items-center gap-2">
-                {!editMode ? (
-                  <Button size="sm" variant="secondary" icon={Edit2} onClick={() => setEditMode(true)}>Editar</Button>
-                ) : (
-                  <>
-                    <Button size="sm" variant="secondary" onClick={() => setEditMode(false)}>Cancelar</Button>
-                    <Button size="sm" color="amber" icon={Save} loading={savingEdit} onClick={saveEdit}>Guardar</Button>
-                  </>
-                )}
-                <button onClick={() => { setSelected(null); setEditMode(false); }}
-                  className="p-2 text-slate-400 hover:bg-slate-100 rounded-xl">
-                  <X size={18}/>
-                </button>
-              </div>
-            </div>
-
-            {/* Alert: no products */}
-            {selectedNoProds && selectedNoNotes && selected.estado !== 'CONFIRMADA' && selected.estado !== 'RECHAZADA' && (
-              <div className="bg-amber-50 border-b border-amber-200 px-6 py-2.5 flex items-center gap-3">
-                <AlertCircle className="text-amber-600 shrink-0" size={16}/>
-                <p className="text-xs font-bold text-amber-700">
-                  Esta cotizacion no tiene productos ni notas. Usa "Cotiza" para agregar precios o agrega notas con el producto a cotizar.
-                </p>
-              </div>
-            )}
-            {selectedNoProds && !selectedNoNotes && selected.estado === 'BORRADOR' && (
-              <div className="bg-blue-50 border-b border-blue-200 px-6 py-2.5 flex items-center gap-3">
-                <AlertCircle className="text-blue-500 shrink-0" size={16}/>
-                <p className="text-xs font-bold text-blue-700">
-                  Sin productos pero hay notas. Revisa las notas y usa "Cotiza" para agregar el precio antes de enviar.
-                </p>
-              </div>
-            )}
-
-            {/* Split pane body */}
-            <div className="flex-1 flex overflow-hidden min-h-0">
-
-              {/* LEFT: Info 45% */}
-              <div className="w-[45%] border-r border-slate-100 overflow-y-auto p-6 space-y-5">
-
-                {/* Cliente */}
-                <div className="bg-slate-50 rounded-2xl p-4">
-                  <p className="text-xs font-black text-slate-400 uppercase mb-3">Cliente</p>
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 bg-amber-100 rounded-full flex items-center justify-center text-amber-600 flex-shrink-0">
-                        <User size={15}/>
-                      </div>
-                      <div>
-                        <p className="font-bold text-slate-900">{selected.customer_name}</p>
-                        {selected.customer_id && (
-                          <Link href={`/dashboard/agenda?customer_id=${selected.customer_id}`} className="text-xs text-amber-600 hover:underline flex items-center gap-0.5">
-                            Ver perfil <ExternalLink size={9}/>
-                          </Link>
-                        )}
-                      </div>
-                    </div>
-                    {selected.customer_phone && (
-                      <a href={`tel:${selected.customer_phone}`} className="flex items-center gap-2 text-sm text-slate-600 hover:text-emerald-600 pl-1">
-                        <Phone size={13} className="text-slate-400"/> {selected.customer_phone}
-                      </a>
-                    )}
-                    {selected.customer_email && (
-                      <a href={`mailto:${selected.customer_email}`} className="flex items-center gap-2 text-sm text-slate-600 hover:text-amber-600 pl-1">
-                        <Mail size={13} className="text-slate-400"/> {selected.customer_email}
-                      </a>
-                    )}
-                    {selected.customer_address && (
-                      <p className="flex items-start gap-2 text-sm text-slate-600 pl-1">
-                        <MapPin size={13} className="text-slate-400 mt-0.5 flex-shrink-0"/> {selected.customer_address}
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {/* Detalles editables */}
-                <div className="space-y-3">
-                  <p className="text-xs font-black text-slate-400 uppercase">Detalles de la Cotizacion</p>
-
-                  {editMode ? (
-                    <div className="space-y-3">
-                      <div>
-                        <label className="text-xs font-bold text-slate-500 mb-1 block">Cotizador</label>
-                        <input type="text" value={editForm.cotizador} onChange={e => setEditForm((f: any) => ({ ...f, cotizador: e.target.value }))}
-                          className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-amber-200 outline-none"/>
-                      </div>
-                      <div>
-                        <label className="text-xs font-bold text-slate-500 mb-1 block">Direccion de Entrega</label>
-                        <input type="text" value={editForm.direccion_entrega} onChange={e => setEditForm((f: any) => ({ ...f, direccion_entrega: e.target.value }))}
-                          className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-amber-200 outline-none"/>
-                      </div>
-                      <div>
-                        <label className="text-xs font-bold text-slate-500 mb-1 block">Fecha de Entrega Estimada</label>
-                        <input type="date" value={editForm.fecha_entrega_estimada} onChange={e => setEditForm((f: any) => ({ ...f, fecha_entrega_estimada: e.target.value }))}
-                          className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-amber-200 outline-none"/>
-                      </div>
-                      <div>
-                        <label className="text-xs font-bold text-slate-500 mb-1 block">Notas</label>
-                        <textarea value={editForm.notas} onChange={e => setEditForm((f: any) => ({ ...f, notas: e.target.value }))}
-                          rows={3} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-amber-200 outline-none"/>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-2 gap-3">
-                      {[
-                        { label: 'Cotizador', value: selected.cotizador || '-' },
-                        { label: 'Modalidad Pago', value: selected.modalidad_pago || '-' },
-                        { label: 'Fecha Cotizacion', value: fDate(selected.fecha_cotizacion) },
-                        { label: 'Entrega Estimada', value: fDate(selected.fecha_entrega_estimada) },
-                      ].map(item => (
-                        <div key={item.label} className="bg-white border border-slate-100 rounded-xl p-3 shadow-sm">
-                          <p className="text-xs text-slate-400 mb-1">{item.label}</p>
-                          <p className="font-bold text-sm text-slate-800">{item.value}</p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Precios */}
-                <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4">
-                  <p className="text-xs font-black text-amber-700 uppercase mb-3">Valores</p>
-                  <div className="space-y-1.5 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Subtotal</span>
-                      <span className="font-bold">{fCOP(selected.subtotal_cop)}</span>
-                    </div>
-                    {selected.descuento_pct > 0 && (
-                      <div className="flex justify-between text-red-600">
-                        <span>Descuento ({selected.descuento_pct}%)</span>
-                        <span className="font-bold">-{fCOP(selected.subtotal_cop * selected.descuento_pct / 100)}</span>
-                      </div>
-                    )}
-                    <div className="flex justify-between font-black text-base border-t border-amber-200 pt-1.5">
-                      <span>TOTAL</span>
-                      <span className="text-amber-700">{fCOP(selected.total_cop)}</span>
-                    </div>
-                    {selected.anticipo_cop > 0 && (
-                      <>
-                        <div className="flex justify-between text-emerald-600 text-xs font-bold">
-                          <span>Anticipo</span>
-                          <span>{fCOP(selected.anticipo_cop)}</span>
-                        </div>
-                        <div className="flex justify-between text-slate-600 text-xs font-bold">
-                          <span>Saldo</span>
-                          <span>{fCOP((selected.total_cop || 0) - (selected.anticipo_cop || 0))}</span>
-                        </div>
-                      </>
-                    )}
-                    {selected.trm_rate && (
-                      <p className="text-xs text-slate-400 mt-1">TRM: ${Number(selected.trm_rate).toLocaleString('es-CO')}</p>
-                    )}
-                  </div>
-                </div>
-
-                {/* Productos */}
-                {(selected.productos || []).length > 0 && (
-                  <div>
-                    <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos Cotizados</p>
-                    <div className="border border-slate-200 rounded-xl overflow-hidden">
-                      <table className="w-full text-xs">
-                        <thead className="bg-slate-50 text-slate-400 uppercase font-black">
-                          <tr>
-                            <th className="px-3 py-2 text-left">Producto</th>
-                            <th className="px-3 py-2 text-right">Qty</th>
-                            <th className="px-3 py-2 text-right">Unit</th>
-                            <th className="px-3 py-2 text-right">Total</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-50">
-                          {selected.productos.map((p: any, i: number) => (
-                            <tr key={i}>
-                              <td className="px-3 py-2 font-medium text-slate-700">{p.product_name}</td>
-                              <td className="px-3 py-2 text-right text-slate-600">{p.qty}</td>
-                              <td className="px-3 py-2 text-right text-slate-600">{fCOP(p.unit_price_cop || 0)}</td>
-                              <td className="px-3 py-2 text-right font-bold text-amber-700">{fCOP(p.qty * (p.unit_price_cop || 0))}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-
-                {/* Notas */}
-                {selected.notas && !editMode && (
-                  <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
-                    <p className="text-xs font-black text-blue-600 uppercase mb-1.5">Notas</p>
-                    <p className="text-sm text-blue-900">{selected.notas}</p>
-                  </div>
-                )}
-
-                {/* Pedidos de Venta vinculados */}
-                {(selected.pedidos_venta || []).length > 0 && (
-                  <div>
-                    <p className="text-xs font-black text-slate-400 uppercase mb-2">Pedidos de Venta Generados</p>
-                    {selected.pedidos_venta.map((v: any) => (
-                      <Link key={v.id} href={`/dashboard/ventas/venta?id=${v.id}`}
-                        className="flex items-center justify-between p-3 bg-emerald-50 border border-emerald-200 rounded-xl mb-2 hover:bg-emerald-100 transition-colors">
-                        <div>
-                          <span className="font-bold text-emerald-800">{v.numero}</span>
-                          <p className="text-xs text-emerald-600 mt-0.5">{v.estado}</p>
-                        </div>
-                        <ChevronRight size={15} className="text-emerald-500"/>
-                      </Link>
-                    ))}
-                  </div>
-                )}
-
-                {/* Estado change */}
-                <div>
-                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Cambiar Estado</p>
-                  <div className="flex gap-2 flex-wrap">
-                    {Object.entries(ESTADOS)
-                      .filter(([k]) => k !== selected.estado && k !== 'CONFIRMADA')
-                      .map(([k, v]) => (
-                        <button key={k} onClick={() => {
-                          if (k === 'RECHAZADA' && !window.confirm(`Â¿Marcar como Rechazada? La SC vinculada permanecera activa.`)) return;
-                          changeEstado(k);
-                        }}
-                          className="px-3 py-1.5 rounded-lg text-xs font-bold border hover:opacity-80 transition-opacity"
-                          style={{ backgroundColor: v.bg, color: v.color, borderColor: v.border }}>
-                          {v.label}
-                        </button>
-                      ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* RIGHT: Tabbed panel 55% */}
-              <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50">
-                {/* Tab bar */}
-                <div className="border-b border-slate-200 px-4 pt-3 flex gap-1 bg-white flex-shrink-0">
-                  {([['acciones','Acciones'],['actividad','Actividad'],['chatter','Chatter']] as const).map(([k,l])=>(
-                    <button key={k} onClick={()=>setPanelTab(k)} className={`px-4 py-2 rounded-t-lg text-sm font-bold border-b-2 transition-colors ${panelTab===k?'text-amber-700 border-amber-600 bg-amber-50/50':'text-slate-500 border-transparent hover:text-slate-700'}`}>{l}</button>
-                  ))}
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-6 space-y-5">
-                  {panelTab==='acciones'&&(
-                    <>
-                      {/* Primary Actions - HALF WIDTH grid */}
-                      <div>
-                        <p className="text-xs font-black text-slate-400 uppercase mb-3">Acciones Principales</p>
-                        <div className="grid grid-cols-2 gap-2">
-
-                          {/* Calculadora / Re-Cotizar */}
-                          <div className="col-span-2">
-                            <Button size="lg" color={Number(selected.total_cop) > 0 ? 'orange' : 'amber'}
-                              icon={Number(selected.total_cop) > 0 ? RotateCcw : Calculator}
-                              onClick={()=>{
-                                if(Number(selected.total_cop)>0){
-                                  setCotHistory(h=>[...h,{fecha:new Date().toISOString(),total:selected.total_cop,anticipo:selected.anticipo_cop,productos:selected.productos}]);
-                                }
-                                setShowCalc(true);
-                              }}>
-                              {Number(selected.total_cop)>0?'Re-Cotizar — Actualizar Precios':'Cotiza — Calcular Precios'}
-                            </Button>
-                          </div>
-
-                          {/* Enviar */}
-                          {(selected.estado === 'BORRADOR' || selected.estado === 'ENVIADA') && (
-                            <div className="col-span-2">
-                              <Button size="lg" color="blue" icon={Send} loading={saving} onClick={enviarCotizacion}>
-                                {selected.estado === 'ENVIADA' ? 'Re-enviar al Cliente' : 'Enviar al Cliente'}
-                              </Button>
-                            </div>
-                          )}
-
-                          {/* Confirmar */}
-                          {(selected.estado === 'ENVIADA' || selected.estado === 'PENDIENTE_CONFIRMACION' || selected.estado === 'BORRADOR') && selected.estado !== 'CONFIRMADA' && (
-                            <div className="col-span-2">
-                              <Button size="lg" color="emerald" icon={CheckCircle2} loading={confirming} onClick={confirmar}>
-                                Confirmar + Crear Pedido de Venta
-                              </Button>
-                            </div>
-                          )}
-
-                          {/* Ver VEN */}
-                          {(selected.pedidos_venta || []).length > 0 && (
-                            <Link href={`/dashboard/ventas/venta/${selected.pedidos_venta[selected.pedidos_venta.length - 1].id}`}
-                              className="col-span-2 bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-3 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-emerald-100 transition-colors">
-                              <ArrowRight size={14}/> Ver Pedido de Venta
-                            </Link>
-                          )}
-
-                          {/* Eliminar */}
-                          {selected.estado !== 'CONFIRMADA' && (
-                            <button onClick={() => setShowDelete(true)}
-                              className="flex items-center justify-center gap-2 text-red-600 hover:text-red-800 text-xs font-bold border border-red-200 px-3 py-2.5 rounded-xl hover:bg-red-50 transition-colors">
-                              <Trash2 size={13}/> Eliminar
-                            </button>
-                          )}
-                        </div>
-
-                        {/* History of re-cotizaciones */}
-                        {cotHistory.length>0&&(
-                          <div className="mt-3 border border-orange-200 rounded-xl bg-orange-50 p-3">
-                            <p className="text-xs font-black text-orange-700 uppercase mb-2">Historial de Re-Cotizaciones</p>
-                            {cotHistory.map((h:any,i:number)=>(
-                              <div key={i} className="bg-white rounded-lg p-2 mb-1 flex justify-between text-xs">
-                                <span className="text-slate-600">Re-Cotizacion #{i+1}</span>
-                                <span className="font-bold text-orange-700">{new Intl.NumberFormat('es-CO',{style:'currency',currency:'COP',minimumFractionDigits:0}).format(h.total)}</span>
-                                <span className="text-slate-400">{new Date(h.fecha).toLocaleDateString('es-CO')}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Contactar */}
-                      <div>
-                        <p className="text-xs font-black text-slate-400 uppercase mb-3">Contactar al Cliente</p>
-                        <div className="grid grid-cols-3 gap-2">
-                          {selected.customer_phone && (
-                            <a href={`https://wa.me/57${selected.customer_phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer"
-                              className="flex flex-col items-center gap-1 py-3 bg-green-50 border border-green-200 text-green-700 rounded-xl font-bold text-xs hover:bg-green-100 transition-colors">
-                              <MessageCircle size={16}/>WhatsApp
-                            </a>
-                          )}
-                          {selected.customer_phone && (
-                            <a href={`tel:${selected.customer_phone}`}
-                              className="flex flex-col items-center gap-1 py-3 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl font-bold text-xs hover:bg-blue-100 transition-colors">
-                              <Phone size={16}/>Llamar
-                            </a>
-                          )}
-                          {selected.customer_email && (
-                            <a href={`mailto:${selected.customer_email}?subject=Cotizacion ${selected.numero}`}
-                              className="flex flex-col items-center gap-1 py-3 bg-slate-50 border border-slate-200 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-100 transition-colors">
-                              <Mail size={16}/>Email
-                            </a>
-                          )}
-                        </div>
-                      </div>
-                    </>
-                  )}
-
-                  {panelTab==='actividad'&&(
-                    <div>
-                      <p className="text-xs font-black text-slate-400 uppercase mb-3">Historial de Actividad</p>
-                      {(selected.actividades || []).length === 0 ? (
-                        <p className="text-xs text-slate-400 italic">Sin actividad registrada</p>
-                      ) : (
-                        <div className="space-y-4 relative before:absolute before:left-2 before:top-0 before:bottom-0 before:w-0.5 before:bg-slate-100">
-                          {[...(selected.actividades || [])].reverse().filter((a:any)=>a.action!=='CHATTER').map((a: any) => (
-                            <div key={a.id} className="flex gap-4 pl-7 relative">
-                              <ActionDot action={a.action}/>
-                              <div className="flex-1 bg-white border border-slate-100 rounded-xl p-3 shadow-sm">
-                                <p className="text-sm font-bold text-slate-700">{a.description}</p>
-                                {a.old_estado && a.new_estado && (
-                                  <p className="text-xs text-slate-400 mt-1 flex items-center gap-1">
-                                    <EstadoBadge estado={a.old_estado}/>
-                                    <ArrowRight size={10} className="text-slate-300"/>
-                                    <EstadoBadge estado={a.new_estado}/>
-                                  </p>
-                                )}
-                                <p className="text-xs text-slate-400 mt-1">
-                                  {fDate(a.created_at)} a las {fTime(a.created_at)}
-                                  {a.user_name && <span className="ml-2 font-medium">â€¢ {a.user_name}</span>}
-                                </p>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {panelTab==='chatter'&&(
-                    <div className="flex flex-col h-full">
-                      <div className="flex-1 space-y-3 min-h-[200px]">
-                        {(selected.actividades||[]).filter((a:any)=>a.action==='CHATTER').map((a:any)=>(
-                          <div key={a.id} className="bg-slate-100 rounded-xl p-3 max-w-[85%]">
-                            <p className="text-sm text-slate-800">{a.description}</p>
-                            <p className="text-xs text-slate-400 mt-1">{a.user_name} - {fDate(a.created_at)}</p>
-                          </div>
-                        ))}
-                        {!(selected.actividades||[]).some((a:any)=>a.action==='CHATTER')&&(
-                          <p className="text-xs text-slate-400 italic text-center py-8">Sin mensajes. Escribe abajo para chatear con el cliente.</p>
-                        )}
-                      </div>
-                      <div className="border-t border-slate-100 pt-3 mt-3">
-                        <textarea value={chatterInput} onChange={e=>setChatterInput(e.target.value)} rows={2} placeholder="Escribe un mensaje..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-amber-200 outline-none mb-2"/>
-                        <div className="flex gap-2">
-                          <button onClick={async()=>{
-                            if(!selected.customer_phone) return;
-                            const text=encodeURIComponent(chatterInput||`Hola, te contactamos sobre tu cotizacion ${selected.numero}`);
-                            window.open(`https://wa.me/57${selected.customer_phone.replace(/\D/g,'')}?text=${text}`,'_blank');
-                            if(chatterInput){
-                              try{await apiFetch(`/ventas/cotizaciones/${selected.id}/actividad`,{method:'POST',body:JSON.stringify({action:'CHATTER',description:chatterInput,user_name:currentUser})});}catch{}
-                              setChatterInput('');
-                              await loadDetail(selected.id);
-                            }
-                          }} disabled={!selected.customer_phone} className="flex-1 bg-green-500 hover:bg-green-600 text-white py-2 rounded-xl font-bold text-xs flex items-center justify-center gap-1 disabled:opacity-50">
-                            <MessageCircle size={12}/>WhatsApp
-                          </button>
-                          <button onClick={async()=>{
-                            if(!chatterInput.trim()||chatterSending) return;
-                            setChatterSending(true);
-                            try{await apiFetch(`/ventas/cotizaciones/${selected.id}/actividad`,{method:'POST',body:JSON.stringify({action:'CHATTER',description:chatterInput,user_name:currentUser})});setChatterInput('');await loadDetail(selected.id);}catch{}
-                            setChatterSending(false);
-                          }} disabled={!chatterInput.trim()||chatterSending} className="flex-1 bg-amber-600 hover:bg-amber-700 text-white py-2 rounded-xl font-bold text-xs flex items-center justify-center gap-1 disabled:opacity-50">
-                            {chatterSending?<RefreshCw size={12} className="animate-spin"/>:<Send size={12}/>}Registrar
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Modals */}
-          {showCalc && <CalculadorModal cot={selected} onSave={onCalcSave} onClose={() => setShowCalc(false)}/>}
-          {showDelete && <DeleteConfirm cot={selected} onConfirm={deleteCot} onCancel={() => setShowDelete(false)}/>}
-          {pendingCalcData && (
-            <PropagarPvenConfirm
-              pven={(selected?.pedidos_venta || []).filter((v: any) => v.estado !== 'CANCELADA').pop()}
-              totalAnterior={Number(selected?.total_cop || 0)}
-              totalNuevo={Number(pendingCalcData.total_cop || 0)}
-              saving={saving}
-              onConfirm={() => commitCalcSave(pendingCalcData, true)}
-              onCancel={() => commitCalcSave(pendingCalcData, false)}
-            />
-          )}
-          {showChannelModal && <ChannelModal selectedChannel={selectedChannel} onSelectChannel={setSelectedChannel} onConfirm={confirmarEnvio} onCancel={cancelarEnvio} saving={saving} customerHasPhone={!!selected?.customer_phone}/>}
-        </>
-      )}
     </div>
   );
 }
