@@ -261,7 +261,10 @@ export default function PedidoVentaDetallePage() {
   async function handleSaveEdit() {
     if (!pedido) return;
     try {
-      await apiFetch(`/ventas/pedidos/${pedido.id}`, { method: 'PATCH', body: JSON.stringify(editForm) });
+      await apiFetch(`/ventas/pedidos/${pedido.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ ...editForm, fecha_entrega_estimada: editForm.fecha_entrega_estimada || null }),
+      });
       setIsEditMode(false);
       await loadPedido();
     } catch (err: any) {
@@ -399,6 +402,18 @@ export default function PedidoVentaDetallePage() {
 
             {isEditMode && (
               <div className="grid grid-cols-2 gap-6 mb-10">
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Estado</label>
+                  <select value={editForm.estado} onChange={e => setEditForm((f: any) => ({ ...f, estado: e.target.value }))}
+                    className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-200">
+                    {Object.keys(VEN_ESTADOS).filter(k => k !== 'CANCELADO' || editForm.estado === 'CANCELADO').map(k => (
+                      <option key={k} value={k}>{VEN_ESTADOS[k].label}</option>
+                    ))}
+                  </select>
+                  {editForm.estado !== 'CANCELADO' && (
+                    <p className="text-[11px] text-slate-400 mt-1">Para cancelar el pedido usa el boton "Cancelar Pedido" (registra el motivo).</p>
+                  )}
+                </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Dirección de Entrega</label>
                   <input type="text" value={editForm.direccion_entrega} onChange={e => setEditForm((f: any) => ({ ...f, direccion_entrega: e.target.value }))}
