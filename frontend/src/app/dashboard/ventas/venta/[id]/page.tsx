@@ -60,6 +60,7 @@ export default function PedidoVentaDetallePage() {
   const [cancelling, setCancelling] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
+  const editEntryEstado = useRef('');
   const [panelTab, setPanelTab] = useState<'actividad' | 'ia'>('actividad');
   const [iaAnalisis, setIaAnalisis] = useState('');
   const supplierTimer = useRef<any>(null);
@@ -275,11 +276,12 @@ export default function PedidoVentaDetallePage() {
     if (!pedido) return;
     try {
       const body: any = { ...editForm, fecha_entrega_estimada: editForm.fecha_entrega_estimada || null, updated_by: currentUser };
-      // editForm se congela al abrir el modo edicion; si el pedido paso a un
-      // estado terminal o ya se vinculo a un PEC real por OTRA accion mientras
-      // el modo edicion seguia abierto, nunca se reenvian estos dos campos con
-      // el valor viejo (evita des-cancelar el pedido o desvincular el PEC real).
-      if (['ENTREGADO', 'FACTURADO', 'CANCELADO'].includes(estadoActual)) delete body.estado;
+      // editForm se congela al abrir el modo edicion; si OTRA accion cambio el
+      // estado (cancelar, entregar, o el auto-avance a EN_PROCESO al crear un
+      // PEC) o vinculo un PEC real mientras el modo edicion seguia abierto, no
+      // se reenvia el valor viejo. "estado" solo se envia si el usuario en
+      // verdad lo cambio con el selector (difiere del valor al entrar a editar).
+      if (editForm.estado === editEntryEstado.current) delete body.estado;
       if (pedido.pec_id) delete body.pec_numero;
       await apiFetch(`/ventas/pedidos/${pedido.id}`, {
         method: 'PATCH',
@@ -353,6 +355,7 @@ export default function PedidoVentaDetallePage() {
                   direccion_entrega: pedido.direccion_entrega || '',
                   pec_numero: pedido.pec_numero || '',
                 });
+                editEntryEstado.current = pedido.estado;
               }
               setIsEditMode(!isEditMode);
             }}
