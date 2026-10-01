@@ -274,9 +274,16 @@ export default function PedidoVentaDetallePage() {
   async function handleSaveEdit() {
     if (!pedido) return;
     try {
+      const body: any = { ...editForm, fecha_entrega_estimada: editForm.fecha_entrega_estimada || null, updated_by: currentUser };
+      // editForm se congela al abrir el modo edicion; si el pedido paso a un
+      // estado terminal o ya se vinculo a un PEC real por OTRA accion mientras
+      // el modo edicion seguia abierto, nunca se reenvian estos dos campos con
+      // el valor viejo (evita des-cancelar el pedido o desvincular el PEC real).
+      if (['ENTREGADO', 'FACTURADO', 'CANCELADO'].includes(estadoActual)) delete body.estado;
+      if (pedido.pec_id) delete body.pec_numero;
       await apiFetch(`/ventas/pedidos/${pedido.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ ...editForm, fecha_entrega_estimada: editForm.fecha_entrega_estimada || null, updated_by: currentUser }),
+        body: JSON.stringify(body),
       });
       setIsEditMode(false);
       await loadPedido();
@@ -469,7 +476,7 @@ export default function PedidoVentaDetallePage() {
                   {pedido?.pec_id ? (
                     <>
                       <div className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium bg-slate-50 text-slate-500">
-                        {editForm.pec_numero}
+                        {pedido.pec_numero}
                       </div>
                       <p className="text-[11px] text-slate-400 mt-1">Ya está vinculado a un Pedido de Compra real; no se puede editar manualmente.</p>
                     </>
