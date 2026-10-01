@@ -1,33 +1,74 @@
 "use client";
 
-import { useState, useRef, useEffect } from 'react';
-import { 
-  ArrowLeft, Save, Send, Paperclip, MessageSquare, 
-  Mail, Phone, FileText, CheckCircle2, Circle, 
-  Image as ImageIcon, HelpCircle, Package, Archive, Box, Plus, Search, UserPlus
+import { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  ArrowLeft, ArrowRight, ChevronRight, Edit2, Save, Trash2, CheckCircle2,
+  User, Phone, Mail, MapPin, MessageCircle, RefreshCw, AlertCircle,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
-import { Badge, Button } from '@/components/ui';
+import { useParams } from 'next/navigation';
+
+import { apiFetch } from '@/lib/api';
+import { Button, Modal } from '@/components/ui';
+import {
+  EstadoBadge, TipoBadge, ActionDot, ChatterTab, IAPanelSC,
+  ESTADOS_SC_MANUALES, TIPOS_SC, MODALIDADES_PAGO, fDate, fTime, fCOP,
+} from '../solicitud-client';
 
 export default function SolicitudDetallePage() {
   const params = useParams();
-  const router = useRouter();
-  const isNew = params.id === 'nueva';
-  
-  // State for conditional rendering
-  const [tipoSolicitud, setTipoSolicitud] = useState('cotizacion');
-  
-  // Status and Timeline State
-  const [currentStatus, setCurrentStatus] = useState(isNew ? 'Nuevo' : 'En Proceso');
-  const [timeline, setTimeline] = useState([
-    { id: 1, type: 'status', title: 'Solicitud Creada', date: '26 Ago 2026, 09:30 AM', user: 'Ana Gómez', icon: FileText, color: 'text-blue-500 bg-blue-50' },
-    { id: 2, type: 'note', title: 'Nota Interna', desc: 'El cliente solicita validación urgente por parte de almacén.', date: '26 Ago 2026, 10:15 AM', user: 'Carlos Ruiz', icon: MessageSquare, color: 'text-amber-500 bg-amber-50' },
-  ]);
-  const [cotizacionGenerada, setCotizacionGenerada] = useState(false);
 
-  // Resizable Right Pane Logic
-  const [rightWidth, setRightWidth] = useState(400); // px
+  const [solicitud, setSolicitud] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [currentUser, setCurrentUser] = useState('');
+
+  const [editMode, setEditMode] = useState(false);
+  const [editForm, setEditForm] = useState<any>({});
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+
+  const [panelTab, setPanelTab] = useState<'acciones' | 'actividad' | 'chatter' | 'ia'>('acciones');
+
+  // Cancelar con razon (mismo endpoint/flujo que solicitud-client.tsx, duplicado
+  // aqui como estado propio de la pagina -- mismo patron que "Cancelar Pedido"
+  // en venta/[id]/page.tsx). Antes solo era alcanzable desde la lista (fila /
+  // menu de 3 puntos); ahora tambien se puede disparar desde el detalle.
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelRazon, setCancelRazon] = useState('');
+  const [cancelling, setCancelling] = useState(false);
+
+  useEffect(() => {
+    const u = localStorage.getItem('user_name') || localStorage.getItem('username') || '';
+    setCurrentUser(u);
+  }, []);
+
+  const loadSolicitud = useCallback(async () => {
+    if (!params.id) { setLoading(false); return; }
+    setLoading(true);
+    setLoadError('');
+    try {
+      const raw = await apiFetch(`/ventas/solicitudes/${params.id}`);
+      const d = raw?.data ?? raw;
+      setSolicitud(d);
+      setEditForm({
+        advisor_name: d.advisor_name || '',
+        tipo_solicitud: d.tipo_solicitud || 'Cotizacion de Producto',
+        modalidad_pago: d.modalidad_pago || 'Contado',
+        notas: d.notas || '',
+        fecha_vencimiento: d.fecha_vencimiento ? d.fecha_vencimiento.split('T')[0] : '',
+      });
+    } catch (err: any) {
+      setLoadError(err.message || 'No se pudo cargar la solicitud');
+    }
+    setLoading(false);
+  }, [params.id]);
+
+  useEffect(() => { loadSolicitud(); }, [loadSolicitud]);
+
+  // Resizable Right Pane Logic (mismo patron que cotizacion/[id]/page.tsx y venta/[id]/page.tsx)
+  const [rightWidth, setRightWidth] = useState(400);
   const isDragging = useRef(false);
   const startX = useRef(0);
   const startWidth = useRef(0);
@@ -37,20 +78,16 @@ export default function SolicitudDetallePage() {
     isDragging.current = true;
     startX.current = e.clientX;
     startWidth.current = rightWidth;
-    
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
   };
-
   const handleMouseMove = (e: MouseEvent) => {
     if (!isDragging.current) return;
-    const delta = startX.current - e.clientX; 
-    const newWidth = Math.min(Math.max(300, startWidth.current + delta), 800);
-    setRightWidth(newWidth);
+    const delta = startX.current - e.clientX;
+    setRightWidth(Math.min(Math.max(300, startWidth.current + delta), 800));
   };
-
   const handleMouseUp = () => {
     isDragging.current = false;
     document.removeEventListener('mousemove', handleMouseMove);
@@ -58,322 +95,379 @@ export default function SolicitudDetallePage() {
     document.body.style.cursor = 'default';
     document.body.style.userSelect = 'auto';
   };
-
-  useEffect(() => {
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
+  useEffect(() => () => {
+    document.removeEventListener('mousemove', handleMouseMove);
+    document.removeEventListener('mouseup', handleMouseUp);
   }, []);
 
-  const handleProcesarSolicitud = () => {
-    setCurrentStatus('Pendiente Confirmación');
-    
-    const newEvents = [];
-    newEvents.push({
-      id: Date.now(), type: 'whatsapp', title: 'Mensaje Automático (WhatsApp)', 
-      desc: 'Se ha notificado al cliente que su solicitud está en proceso.', 
-      date: 'Ahora mismo', user: 'Sistema', icon: Phone, color: 'text-emerald-500 bg-emerald-50'
-    });
-
-    if (tipoSolicitud === 'cotizacion') {
-      setCotizacionGenerada(true);
-      newEvents.push({
-        id: Date.now() + 1, type: 'status', title: 'Cotización Creada (COT-0089)', 
-        desc: 'Se ha creado el documento borrador para costear los artículos.', 
-        date: 'Ahora mismo', user: 'Sistema', icon: Box, color: 'text-indigo-500 bg-indigo-50'
-      });
+  async function saveEdit() {
+    if (!solicitud) return;
+    setSavingEdit(true);
+    try {
+      const body: any = { ...editForm, updated_by: currentUser };
+      if (editForm.fecha_vencimiento) body.fecha_vencimiento = new Date(editForm.fecha_vencimiento + 'T12:00:00').toISOString();
+      await apiFetch(`/ventas/solicitudes/${solicitud.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+      setEditMode(false);
+      await loadSolicitud();
+    } catch (err: any) {
+      alert('Error al guardar: ' + err.message);
     }
+    setSavingEdit(false);
+  }
 
-    setTimeline([...timeline, ...newEvents]);
-  };
+  async function changeEstado(newEstado: string) {
+    if (!solicitud) return;
+    if (newEstado === 'CANCELADA' && !window.confirm('Cancelar esta solicitud?')) return;
+    setSaving(true);
+    try {
+      await apiFetch(`/ventas/solicitudes/${solicitud.id}`, { method: 'PATCH', body: JSON.stringify({ estado: newEstado, updated_by: currentUser }) });
+      await loadSolicitud();
+    } catch (err: any) {
+      alert('Error: ' + err.message);
+    }
+    setSaving(false);
+  }
+
+  async function changeEstadoSoporte(newEstado: string) {
+    if (!solicitud) return;
+    setSaving(true);
+    try {
+      await apiFetch(`/ventas/solicitudes/${solicitud.id}`, { method: 'PATCH', body: JSON.stringify({ estado_soporte: newEstado, updated_by: currentUser }) });
+      await loadSolicitud();
+    } catch (err: any) {
+      alert('Error: ' + err.message);
+    }
+    setSaving(false);
+  }
+
+  async function confirmarSC() {
+    if (!solicitud) return;
+    setConfirming(true);
+    try {
+      const d = await apiFetch(`/ventas/solicitudes/${solicitud.id}/confirmar`, { method: 'POST', body: JSON.stringify({ user_name: currentUser }) });
+      const dataObj = d?.data ?? d;
+      const cotNum = dataObj?.cotizacion?.numero || d?.cotizacion?.numero || '';
+      // CRM Pipeline: avanza el lead a la etapa COT si el cliente tiene customer_id
+      // (misma logica best-effort que tenia confirmarSC() en solicitud-client.tsx)
+      if (solicitud.customer_id) {
+        try {
+          const leads = await apiFetch(`/crm/leads/v2?limit=50`).catch(() => ({ data: [] }));
+          const leadList = Array.isArray(leads) ? leads : (leads?.data ?? []);
+          const myLead = leadList.find((l: any) => l.customer_id === solicitud.customer_id && l.lead_source === 'SC');
+          if (myLead) {
+            const stages = await apiFetch('/crm/pipeline-stages').catch(() => ({ data: [] }));
+            const stageList = Array.isArray(stages) ? stages : (stages?.data ?? []);
+            const curIdx = stageList.findIndex((s: any) => s.id === myLead.pipeline_stage_id);
+            const nextStage = stageList[curIdx + 1];
+            if (nextStage) {
+              await apiFetch(`/crm/leads/${myLead.id}/stage`, { method: 'PATCH', body: JSON.stringify({ stage_id: nextStage.id, cotizacion_numero: cotNum }) }).catch(() => {});
+            }
+          }
+        } catch {}
+      }
+      await loadSolicitud();
+      alert(`Cotización ${cotNum} creada`);
+    } catch (err: any) {
+      alert('Error: ' + err.message);
+    }
+    setConfirming(false);
+  }
+
+  async function cancelWithReason() {
+    if (!solicitud || !cancelRazon.trim()) { alert('La razón es obligatoria'); return; }
+    setCancelling(true);
+    try {
+      await apiFetch(`/ventas/solicitudes/${solicitud.id}/cancelar`, { method: 'POST', body: JSON.stringify({ razon: cancelRazon, user_name: currentUser }) });
+      setShowCancelModal(false);
+      setCancelRazon('');
+      await loadSolicitud();
+    } catch (err: any) {
+      alert('Error al cancelar: ' + err.message);
+    }
+    setCancelling(false);
+  }
+
+  if (loading) {
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-white">
+        <RefreshCw className="animate-spin text-indigo-600" size={28} />
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="w-full h-full flex flex-col items-center justify-center gap-3 bg-white">
+        <AlertCircle className="text-rose-500" size={32} />
+        <p className="text-slate-600 font-medium">{loadError}</p>
+        <Link href="/dashboard/ventas/solicitud" className="text-indigo-600 font-bold text-sm hover:underline">
+          Volver al listado de solicitudes
+        </Link>
+      </div>
+    );
+  }
+
+  const cotizaciones = solicitud?.cotizaciones || [];
+  const actividades = solicitud?.actividades || [];
+  const isSoporte = solicitud?.tipo_solicitud === 'Soporte Tecnico';
+  const pipelineStep = cotizaciones.some((c: any) => c.estado === 'CONFIRMADA') ? 2 : cotizaciones.length > 0 ? 1 : 0;
 
   return (
     <div className="w-full h-full bg-white flex flex-col overflow-hidden">
-      
+
       {/* Top Action Bar */}
       <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between z-20 shadow-sm shrink-0">
         <div className="flex items-center gap-4">
           <Link href="/dashboard/ventas/solicitud" className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 transition-colors">
             <ArrowLeft size={20} />
           </Link>
-          <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-black text-slate-800">
-                {isNew ? 'Nueva Solicitud' : String(params.id).toUpperCase()}
-              </h1>
-              {!isNew && (
-                <Badge tone={currentStatus === 'Pendiente Confirmación' ? 'info' : 'warning'}>{currentStatus}</Badge>
-              )}
-            </div>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-black text-slate-800">{solicitud?.numero || String(params.id || '').toUpperCase()}</h1>
+            {solicitud && <EstadoBadge estado={solicitud.estado} />}
+            {solicitud && <TipoBadge tipo={solicitud.tipo_solicitud || 'Cotizacion de Producto'} />}
           </div>
         </div>
-        
-        <div className="flex items-center gap-3">
-          <Button variant="secondary" icon={Save}>Guardar Borrador</Button>
-          <Button color="indigo" icon={CheckCircle2} onClick={handleProcesarSolicitud}>Solicitud Creada (Procesar)</Button>
+
+        <div className="flex items-center gap-2">
+          {!editMode ? (
+            <Button variant="secondary" size="sm" icon={Edit2} onClick={() => setEditMode(true)}>Editar</Button>
+          ) : (
+            <>
+              <Button variant="secondary" size="sm" onClick={() => setEditMode(false)}>Cancelar</Button>
+              <Button color="indigo" size="sm" icon={Save} loading={savingEdit} onClick={saveEdit}>Guardar</Button>
+            </>
+          )}
+          {solicitud && solicitud.estado !== 'CANCELADA' && !isSoporte && (
+            <Button variant="danger" size="sm" icon={Trash2} onClick={() => setShowCancelModal(true)}>Cancelar Solicitud</Button>
+          )}
         </div>
       </div>
 
+      {/* Progreso del Flujo -- SC -> COT -> PVEN (no aplica a Soporte Tecnico, que tiene su propio ciclo) */}
+      {!isSoporte && (
+        <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex-shrink-0">
+          <div className="flex items-center max-w-md">
+            {['Solicitud', 'Cotización', 'Pedido de Venta'].map((label, i) => (
+              <div key={label} className="flex items-center flex-1 last:flex-none">
+                <div className="flex flex-col items-center gap-1">
+                  <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black ${i < pipelineStep ? 'bg-emerald-500 text-white' : i === pipelineStep ? 'bg-indigo-600 text-white' : 'bg-white border-2 border-slate-200 text-slate-300'}`}>
+                    {i < pipelineStep ? '✓' : i + 1}
+                  </div>
+                  <span className={`text-[10px] font-bold whitespace-nowrap ${i <= pipelineStep ? 'text-slate-700' : 'text-slate-300'}`}>{label}</span>
+                </div>
+                {i < 2 && <div className={`flex-1 h-0.5 mx-2 ${i < pipelineStep ? 'bg-emerald-400' : 'bg-slate-200'}`} />}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Main Content Layout (Split Pane) */}
       <div className="flex-1 flex flex-row overflow-hidden">
-        
-        {/* BLOQUE 1: Información de la Solicitud (Formulario sin límites) */}
-        <div className="flex-1 overflow-y-auto px-8 py-8 custom-scrollbar bg-white relative">
-          
-          {cotizacionGenerada && (
-            <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-4 mb-8 flex items-center justify-between shadow-sm animate-in fade-in slide-in-from-top-4">
+
+        {/* LEFT: Informacion de la Solicitud (Cliente, datos, estado) */}
+        <div className="flex-1 border-r border-slate-100 overflow-y-auto p-6 space-y-5">
+          {/* Cliente */}
+          <div className="bg-slate-50 rounded-2xl p-4">
+            <p className="text-xs font-black text-slate-400 uppercase mb-3">Cliente</p>
+            <div className="space-y-2">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center text-indigo-600 shadow-sm"><Box size={20}/></div>
+                <div className="w-9 h-9 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 flex-shrink-0"><User size={15} /></div>
+                <div><p className="font-bold text-slate-900">{solicitud?.customer_name}</p></div>
+              </div>
+              {solicitud?.customer_phone && <a href={`tel:${solicitud.customer_phone}`} className="flex items-center gap-2 text-sm text-slate-600 hover:text-emerald-600 pl-1"><Phone size={13} className="text-slate-400" />{solicitud.customer_phone}</a>}
+              {solicitud?.customer_email && <a href={`mailto:${solicitud.customer_email}`} className="flex items-center gap-2 text-sm text-slate-600 hover:text-indigo-600 pl-1"><Mail size={13} className="text-slate-400" />{solicitud.customer_email}</a>}
+              {solicitud?.customer_address && <p className="flex items-start gap-2 text-sm text-slate-600 pl-1"><MapPin size={13} className="text-slate-400 mt-0.5 flex-shrink-0" />{solicitud.customer_address}</p>}
+            </div>
+          </div>
+
+          {/* Edit mode */}
+          {editMode ? (
+            <div className="space-y-3">
+              <p className="text-xs font-black text-slate-400 uppercase">Editar</p>
+              {[{ l: 'Tipo de Solicitud', k: 'tipo_solicitud', opts: TIPOS_SC }, { l: 'Modalidad de Pago', k: 'modalidad_pago', opts: MODALIDADES_PAGO }].map(f => (
+                <div key={f.k}>
+                  <label className="text-xs font-bold text-slate-500 mb-1 block">{f.l}</label>
+                  <select value={editForm[f.k]} onChange={e => setEditForm((ef: any) => ({ ...ef, [f.k]: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">
+                    {f.opts.map(o => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
+              ))}
+              <div><label className="text-xs font-bold text-slate-500 mb-1 block">Asesor</label><input type="text" value={editForm.advisor_name} onChange={e => setEditForm((ef: any) => ({ ...ef, advisor_name: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none" /></div>
+              <div><label className="text-xs font-bold text-slate-500 mb-1 block">Fecha Vencimiento</label><input type="date" value={editForm.fecha_vencimiento} onChange={e => setEditForm((ef: any) => ({ ...ef, fecha_vencimiento: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none" /></div>
+              <div><label className="text-xs font-bold text-slate-500 mb-1 block">Notas</label><textarea value={editForm.notas} onChange={e => setEditForm((ef: any) => ({ ...ef, notas: e.target.value }))} rows={3} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-200 outline-none" /></div>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                {[{ l: 'Asesor', v: solicitud?.advisor_name || '-' }, { l: 'Modalidad Pago', v: solicitud?.modalidad_pago || '-' }, { l: 'Fecha Solicitud', v: fDate(solicitud?.fecha_solicitud) }, { l: 'Vencimiento', v: fDate(solicitud?.fecha_vencimiento) }].map(item => (
+                  <div key={item.l} className="bg-white border border-slate-100 rounded-xl p-3 shadow-sm"><p className="text-xs text-slate-400 mb-1">{item.l}</p><p className="font-bold text-sm text-slate-800">{item.v}</p></div>
+                ))}
+              </div>
+              {solicitud?.modalidad_pago?.includes('60/40') && (
+                <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3">
+                  <p className="text-xs font-black text-indigo-700 uppercase mb-2">Modalidad 60/40</p>
+                  <div className="flex gap-4">
+                    <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Anticipo</p><p className="font-black text-indigo-700">60%</p></div>
+                    <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Pendiente</p><p className="font-black text-slate-700">40%</p></div>
+                  </div>
+                </div>
+              )}
+              {(solicitud?.productos || []).length > 0 && (
                 <div>
-                  <h3 className="font-black text-indigo-900">Cotización COT-0089 Generada Exitosamente</h3>
-                  <p className="text-sm text-indigo-700">Se requiere asignar valores a los artículos para enviarla al cliente.</p>
+                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos</p>
+                  <div className="border border-slate-200 rounded-xl overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead className="bg-slate-50 text-slate-400 uppercase font-black"><tr><th className="px-3 py-2 text-left">Producto</th><th className="px-3 py-2 text-right">Qty</th><th className="px-3 py-2 text-right">Precio</th></tr></thead>
+                      <tbody className="divide-y divide-slate-50">
+                        {solicitud.productos.map((p: any, i: number) => (
+                          <tr key={i}><td className="px-3 py-2 font-medium text-slate-700">{p.product_name}</td><td className="px-3 py-2 text-right text-slate-600">{p.qty}</td><td className="px-3 py-2 text-right font-bold text-indigo-700">{fCOP(p.unit_price_cop)}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
-              <Link href="/dashboard/ventas/cotizacion" className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-sm hover:bg-indigo-700 transition-colors">
-                Ver Cotización
-              </Link>
-            </div>
+              )}
+              {solicitud?.notas && <div className="bg-amber-50 border border-amber-100 rounded-xl p-4"><p className="text-xs font-black text-amber-700 uppercase mb-1.5">Notas</p><p className="text-sm text-amber-900">{solicitud.notas}</p></div>}
+              {cotizaciones.length > 0 && (
+                <div>
+                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Cotizaciones</p>
+                  {cotizaciones.map((c: any) => (
+                    <Link key={c.id} href={`/dashboard/ventas/cotizacion/${c.id}`} className="flex items-center justify-between p-3 bg-amber-50 border border-amber-200 rounded-xl mb-2 hover:bg-amber-100">
+                      <div><span className="font-bold text-amber-800">{c.numero}</span><p className="text-xs text-amber-600 mt-0.5">{c.estado}</p></div>
+                      <ChevronRight size={15} className="text-amber-500" />
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </>
           )}
 
-          {/* Status Tracker */}
-          {!isNew && (
-            <div className="bg-white p-6 border-b border-slate-100 mb-8 flex justify-between relative">
-              <div className="absolute top-1/2 left-10 right-10 h-1 bg-slate-100 -translate-y-1/2 z-0" />
-              <div className={`absolute top-1/2 left-10 h-1 bg-indigo-600 -translate-y-1/2 z-0 transition-all duration-500 ${currentStatus === 'Pendiente Confirmación' ? 'right-1/4' : 'right-1/2'}`} />
-              
-              <div className="relative z-10 flex flex-col items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold shadow-md shadow-indigo-200"><CheckCircle2 size={16} /></div>
-                <span className="text-xs font-bold text-slate-800">Nuevo</span>
-              </div>
-              <div className="relative z-10 flex flex-col items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold shadow-md shadow-indigo-200"><CheckCircle2 size={16} /></div>
-                <span className="text-xs font-bold text-indigo-700">En Proceso</span>
-              </div>
-              <div className="relative z-10 flex flex-col items-center gap-2">
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold transition-colors ${currentStatus === 'Pendiente Confirmación' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200' : 'bg-white border-2 border-slate-200 text-slate-300'}`}>
-                  {currentStatus === 'Pendiente Confirmación' ? <CheckCircle2 size={16} /> : <Circle size={16} />}
+          {/* Estado change */}
+          <div>
+            {isSoporte ? (
+              <>
+                <p className="text-xs font-black text-slate-400 uppercase mb-2">Estado del Ticket de Soporte</p>
+                <select value={solicitud?.estado_soporte || 'ABIERTO'} disabled={saving}
+                  onChange={e => changeEstadoSoporte(e.target.value)}
+                  className="w-full border border-purple-200 bg-purple-50 rounded-xl px-3 py-2 text-sm font-bold text-purple-700 outline-none focus:ring-2 focus:ring-purple-200 disabled:opacity-40">
+                  <option value="ABIERTO">Abierto</option>
+                  <option value="EN_PROCESO">En Proceso</option>
+                  <option value="RESUELTO">Resuelto</option>
+                  <option value="CERRADO">Cerrado</option>
+                </select>
+              </>
+            ) : (
+              <>
+                <p className="text-xs font-black text-slate-400 uppercase mb-2">Cambiar Estado</p>
+                <div className="flex gap-2 flex-wrap">
+                  {Object.entries(ESTADOS_SC_MANUALES).filter(([k]) => k !== solicitud?.estado).map(([k, v]) => (
+                    <button key={k} onClick={() => changeEstado(k)} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs font-bold border hover:opacity-80 disabled:opacity-40" style={{ backgroundColor: v.bg, color: v.color, borderColor: v.border }}>{v.label}</button>
+                  ))}
                 </div>
-                <span className={`text-xs font-bold ${currentStatus === 'Pendiente Confirmación' ? 'text-indigo-700' : 'text-slate-400'}`}>Pendiente Conf.</span>
-              </div>
-              <div className="relative z-10 flex flex-col items-center gap-2">
-                <div className="w-8 h-8 rounded-full bg-white border-2 border-slate-200 text-slate-300 flex items-center justify-center font-bold"><Circle size={16} /></div>
-                <span className="text-xs font-bold text-slate-400">Resuelto</span>
-              </div>
-            </div>
-          )}
-
-          {/* Área de Formulario Abierta (Sin Caja) */}
-          <div className="max-w-4xl mx-auto">
-            <h2 className="text-xl font-black text-slate-800 mb-8 flex items-center gap-2">
-              <FileText className="text-indigo-600" size={24} /> Información Principal
-            </h2>
-
-            <div className="grid grid-cols-2 gap-8 mb-10">
-              
-              {/* Cliente Autocomplete / Agregar Nuevo */}
-              <div>
-                <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Cliente</label>
-                <div className="flex items-center gap-2">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                    <input type="text" defaultValue={isNew ? '' : 'Empresa XYZ'} placeholder="Buscar cliente en DB..." className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-3 text-sm font-bold focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-slate-800" />
-                  </div>
-                  <button className="flex items-center justify-center gap-2 bg-indigo-50 text-indigo-700 border border-indigo-200 px-4 py-3 rounded-xl font-bold text-sm hover:bg-indigo-100 transition-colors shrink-0">
-                    <UserPlus size={16} /> Nuevo
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Fecha de Creación</label>
-                <input type="date" defaultValue="2026-08-26" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all text-slate-700" />
-              </div>
-              
-              <div className="col-span-2">
-                <label className="block text-xs font-bold text-slate-500 mb-4 uppercase tracking-wider">Tipo de Solicitud</label>
-                <div className="grid grid-cols-3 gap-4">
-                  <button 
-                    onClick={() => setTipoSolicitud('cotizacion')}
-                    className={`flex flex-col items-center justify-center gap-3 p-5 rounded-2xl border-2 transition-all ${tipoSolicitud === 'cotizacion' ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50'}`}
-                  >
-                    <Box size={28} />
-                    <span className="text-sm font-bold">Por Cotización</span>
-                  </button>
-                  <button 
-                    onClick={() => setTipoSolicitud('seguimiento')}
-                    className={`flex flex-col items-center justify-center gap-3 p-5 rounded-2xl border-2 transition-all ${tipoSolicitud === 'seguimiento' ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50'}`}
-                  >
-                    <HelpCircle size={28} />
-                    <span className="text-sm font-bold">Por Seguimiento</span>
-                  </button>
-                  <button 
-                    onClick={() => setTipoSolicitud('devolucion')}
-                    className={`flex flex-col items-center justify-center gap-3 p-5 rounded-2xl border-2 transition-all ${tipoSolicitud === 'devolucion' ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50'}`}
-                  >
-                    <Archive size={28} />
-                    <span className="text-sm font-bold">Por Devolución</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="h-px w-full bg-slate-200 mb-10" />
-
-            {/* Condicionales por Tipo de Solicitud */}
-            
-            {tipoSolicitud === 'cotizacion' && (
-              <div className="animate-in fade-in slide-in-from-bottom-4">
-                <h3 className="text-base font-black text-slate-800 mb-6 flex items-center gap-2">
-                  <Box className="text-indigo-600" size={20} /> Requerimientos de Cotización
-                </h3>
-                <div className="grid grid-cols-12 gap-6 bg-slate-50 p-6 rounded-2xl border border-slate-200">
-                  <div className="col-span-5">
-                    <label className="block text-xs font-bold text-slate-500 mb-2">Producto / Servicio</label>
-                    <input type="text" placeholder="Ej. Laptops Dell Latitude..." className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-indigo-500 outline-none" />
-                  </div>
-                  <div className="col-span-5">
-                    <label className="block text-xs font-bold text-slate-500 mb-2">Atributos / Variantes</label>
-                    <input type="text" placeholder="Ej. 16GB RAM, 512GB SSD" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-indigo-500 outline-none" />
-                  </div>
-                  <div className="col-span-2">
-                    <label className="block text-xs font-bold text-slate-500 mb-2">Cantidad</label>
-                    <input type="number" min="1" defaultValue="1" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:border-indigo-500 outline-none text-center font-bold" />
-                  </div>
-                  <div className="col-span-12 mt-2">
-                    <button className="text-indigo-600 text-sm font-bold hover:text-indigo-800 transition-colors flex items-center gap-2 bg-indigo-50 px-4 py-2 rounded-lg w-fit">
-                      <Plus size={16} /> Agregar otro producto
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {tipoSolicitud === 'seguimiento' && (
-              <div className="animate-in fade-in slide-in-from-bottom-4">
-                <h3 className="text-base font-black text-slate-800 mb-6 flex items-center gap-2">
-                  <HelpCircle className="text-indigo-600" size={20} /> Referencia de Seguimiento
-                </h3>
-                <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200 max-w-2xl">
-                  <label className="block text-xs font-bold text-slate-500 mb-3">ID de la Solicitud, Cotización o Venta a seguir</label>
-                  <div className="relative">
-                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                    <input type="text" placeholder="Ej. COT-0045, VEN-0102..." className="w-full bg-white border border-slate-200 rounded-xl pl-12 pr-4 py-3 text-sm font-bold text-slate-700 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none uppercase" />
-                  </div>
-                  <p className="text-xs text-slate-500 mt-3 font-medium">El sistema enlazará automáticamente el historial del documento ingresado.</p>
-                </div>
-              </div>
-            )}
-
-            {tipoSolicitud === 'devolucion' && (
-              <div className="animate-in fade-in slide-in-from-bottom-4">
-                <h3 className="text-base font-black text-slate-800 mb-6 flex items-center gap-2">
-                  <Archive className="text-indigo-600" size={20} /> Expediente de Devolución
-                </h3>
-                
-                <div className="space-y-6 bg-slate-50 p-6 rounded-2xl border border-slate-200">
-                  <div className="max-w-md">
-                    <label className="block text-xs font-bold text-slate-500 mb-2">ID de la Venta a devolver <span className="text-rose-500">*</span></label>
-                    <input type="text" placeholder="Ej. VEN-0012" className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold focus:border-indigo-500 outline-none uppercase" />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-2">Descripción y Motivos de la Devolución <span className="text-rose-500">*</span></label>
-                    <textarea rows={4} placeholder="Detalla aquí las razones expuestas por el cliente..." className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 outline-none resize-none"></textarea>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 mb-2">Adjuntar Pruebas (Imágenes/Documentos)</label>
-                    <div className="border-2 border-dashed border-slate-300 rounded-2xl bg-white p-8 flex flex-col items-center justify-center text-slate-500 hover:border-indigo-400 hover:bg-indigo-50 transition-colors cursor-pointer group">
-                      <ImageIcon size={40} className="text-slate-300 group-hover:text-indigo-500 mb-3 transition-colors" />
-                      <p className="text-base font-bold text-slate-700 group-hover:text-indigo-700">Haz clic o arrastra las fotos aquí</p>
-                      <p className="text-sm mt-2 font-medium text-slate-400">Archivos PNG, JPG o PDF soportados (Máx. 10MB)</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              </>
             )}
           </div>
         </div>
 
         {/* Resizer Handle */}
-        <div 
+        <div
           onMouseDown={handleMouseDown}
           className="w-1.5 bg-slate-200 hover:bg-indigo-500 cursor-col-resize shrink-0 transition-colors z-30"
           title="Arrastrar para ajustar panel de actividades"
         />
 
-        {/* BLOQUE 2: Actividades y Bitácora (Chatter) */}
-        <div style={{ width: rightWidth }} className="bg-white flex flex-col overflow-hidden shrink-0 shadow-[-10px_0_15px_-10px_rgba(0,0,0,0.05)]">
-          
-          <div className="p-5 border-b border-slate-200 bg-white flex items-center justify-between shadow-sm z-10 shrink-0">
-            <h3 className="font-black text-slate-800 flex items-center gap-2 text-lg">
-              <MessageSquare className="text-slate-400" size={20} /> Actividades
-            </h3>
+        {/* RIGHT: Acciones / Actividad / Chatter / IA */}
+        <div style={{ width: rightWidth }} className="bg-slate-50/50 flex flex-col overflow-hidden shrink-0 shadow-[-10px_0_15px_-10px_rgba(0,0,0,0.05)]">
+          {/* Tab bar */}
+          <div className="border-b border-slate-200 px-4 pt-3 flex gap-1 bg-white flex-shrink-0">
+            {([['acciones', 'Acciones'], ['actividad', 'Actividad'], ['chatter', 'Chatter'], ['ia', '🤖 IA']] as const).map(([k, l]) => (
+              <button key={k} onClick={() => setPanelTab(k)} className={`px-4 py-2 rounded-t-lg text-sm font-bold border-b-2 transition-colors ${panelTab === k ? 'text-indigo-700 border-indigo-600 bg-indigo-50/50' : 'text-slate-500 border-transparent hover:text-slate-700'}`}>{l}</button>
+            ))}
           </div>
 
-          {/* Activity Input Area */}
-          <div className="p-5 border-b border-slate-200 bg-slate-50 z-10 shrink-0">
-            <div className="flex gap-2 mb-4">
-              <div className="flex-1 [&>button]:w-full"><Button variant="secondary" icon={MessageSquare}>Registrar Nota</Button></div>
-              <div className="flex-1 [&>button]:w-full"><Button color="indigo" icon={Mail}>Enviar al Cliente</Button></div>
-            </div>
-            
-            <div className="relative">
-              <textarea 
-                rows={3} 
-                placeholder="Escribe un mensaje o registra una nota interna..." 
-                className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none resize-none transition-colors shadow-sm"
-              />
-              <div className="absolute bottom-3 left-3 flex gap-2">
-                <button className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-md hover:bg-indigo-50 transition-colors"><Paperclip size={18} /></button>
-                <button className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-md hover:bg-indigo-50 transition-colors"><ImageIcon size={18} /></button>
-              </div>
-              <button className="absolute bottom-3 right-3 bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg shadow-sm transition-colors">
-                <Send size={16} />
-              </button>
-            </div>
-          </div>
-
-          {/* Timeline / Bitácora */}
-          <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-white">
-            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-6">Línea Temporal</h4>
-            
-            <div className="space-y-6 relative before:absolute before:inset-0 before:ml-4 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-200 before:to-transparent">
-              {timeline.map((item) => (
-                <div key={item.id} className="relative flex items-start gap-4 group animate-in fade-in slide-in-from-bottom-2">
-                  {/* Icon */}
-                  <div className={`flex items-center justify-center w-8 h-8 rounded-full border-2 border-white bg-white shadow-sm shrink-0 z-10 ${item.color}`}>
-                    <item.icon size={14} />
-                  </div>
-                  
-                  {/* Card */}
-                  <div className="flex-1 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-bold text-slate-800 text-sm">{item.title}</span>
-                      <span className="text-[10px] font-bold text-slate-400">{item.date}</span>
-                    </div>
-                    {item.desc && <p className="text-sm text-slate-600 mb-3 leading-relaxed">{item.desc}</p>}
-                    <div className="flex items-center gap-2">
-                      <div className="w-5 h-5 rounded-full bg-slate-200 flex items-center justify-center text-[8px] font-bold text-slate-600 border border-slate-300">
-                        {item.user.split(' ').map(n => n[0]).join('')}
+          <div className="flex-1 overflow-y-auto p-6 space-y-5">
+            {panelTab === 'acciones' && (
+              <>
+                <div>
+                  <p className="text-xs font-black text-slate-400 uppercase mb-3">Acciones Principales</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(solicitud?.estado === 'BORRADOR' || solicitud?.estado === 'PENDIENTE_CONFIRMACION') && (
+                      <div className="col-span-2 [&>button]:w-full">
+                        <Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Confirmar + Crear Cotizacion</Button>
                       </div>
-                      <span className="text-xs font-medium text-slate-500">{item.user}</span>
-                    </div>
+                    )}
+                    {cotizaciones.length > 0 && (
+                      <Link href={`/dashboard/ventas/cotizacion/${cotizaciones[cotizaciones.length - 1].id}`} className="bg-amber-50 border border-amber-200 text-amber-700 px-4 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-amber-100 text-sm">
+                        <ArrowRight size={14} />Ver Cotizacion
+                      </Link>
+                    )}
                   </div>
                 </div>
-              ))}
-            </div>
+                <div>
+                  <p className="text-xs font-black text-slate-400 uppercase mb-3">Contactar Cliente</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {solicitud?.customer_phone && <a href={`https://wa.me/57${solicitud.customer_phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer" className="flex flex-col items-center gap-1.5 py-3 bg-green-50 border border-green-200 text-green-700 rounded-xl font-bold text-xs hover:bg-green-100"><MessageCircle size={18} />WhatsApp</a>}
+                    {solicitud?.customer_phone && <a href={`tel:${solicitud.customer_phone}`} className="flex flex-col items-center gap-1.5 py-3 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl font-bold text-xs hover:bg-blue-100"><Phone size={18} />Llamar</a>}
+                    {solicitud?.customer_email && <a href={`mailto:${solicitud.customer_email}?subject=Solicitud ${solicitud.numero}`} className="flex flex-col items-center gap-1.5 py-3 bg-slate-50 border border-slate-200 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-100"><Mail size={18} />Email</a>}
+                  </div>
+                </div>
+              </>
+            )}
 
-            <div className="text-center mt-8">
-              <span className="text-xs font-bold text-slate-400 bg-slate-50 px-3 py-1 rounded-full border border-slate-200">
-                Fin del historial
-              </span>
-            </div>
+            {panelTab === 'actividad' && (
+              <div>
+                <p className="text-xs font-black text-slate-400 uppercase mb-3">Historial</p>
+                {actividades.filter((a: any) => a.action !== 'CHATTER').length === 0 ? (
+                  <p className="text-xs text-slate-400 italic">Sin actividad.</p>
+                ) : (
+                  <div className="space-y-4 relative before:absolute before:left-2 before:top-0 before:bottom-0 before:w-0.5 before:bg-slate-100">
+                    {[...actividades].reverse().filter((a: any) => a.action !== 'CHATTER').map((a: any) => (
+                      <div key={a.id} className="flex gap-4 pl-7 relative">
+                        <ActionDot action={a.action} />
+                        <div className="flex-1 bg-white border border-slate-100 rounded-xl p-3 shadow-sm">
+                          <p className="text-sm font-bold text-slate-700">{a.description}</p>
+                          {a.old_estado && a.new_estado && <p className="text-xs text-slate-400 mt-1 flex items-center gap-1"><EstadoBadge estado={a.old_estado} /><ArrowRight size={10} className="text-slate-300" /><EstadoBadge estado={a.new_estado} /></p>}
+                          <p className="text-xs text-slate-400 mt-1">{fDate(a.created_at)} {fTime(a.created_at)}{a.user_name && <span className="ml-2 font-medium">- {a.user_name}</span>}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {panelTab === 'chatter' && <ChatterTab sc={solicitud} currentUser={currentUser} />}
+
+            {panelTab === 'ia' && <IAPanelSC sc={solicitud} apiBase={process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1'} />}
           </div>
-
         </div>
       </div>
+
+      {/* MODAL: RAZÓN DE CANCELACIÓN */}
+      {showCancelModal && (
+        <Modal title="Cancelar Solicitud" subtitle="Esta acción pasará la SC a la papelera por 30 días antes de eliminarse." icon={Trash2} color="red" maxWidth="md"
+          onClose={() => setShowCancelModal(false)}
+          footer={(
+            <>
+              <Button variant="secondary" onClick={() => setShowCancelModal(false)}>No, mantener</Button>
+              <Button variant="danger" icon={Trash2} loading={cancelling} disabled={!cancelRazon.trim()} onClick={cancelWithReason}>Cancelar SC</Button>
+            </>
+          )}>
+          <div>
+            <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Razón de Cancelación *</label>
+            <textarea
+              value={cancelRazon}
+              onChange={e => setCancelRazon(e.target.value)}
+              rows={3}
+              placeholder="Describe el motivo de la cancelación..."
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-red-200 outline-none"
+              autoFocus
+            />
+            {!cancelRazon.trim() && <p className="text-xs text-red-500 mt-1">La razón es obligatoria para continuar.</p>}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

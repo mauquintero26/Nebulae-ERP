@@ -2,12 +2,12 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
   FileText, AlertTriangle, CheckCircle2, Clock, Search, Plus, X,
-  User, Phone, Mail, MapPin, ExternalLink, RefreshCw, ArrowRight, ArrowLeft,
+  Mail, ExternalLink, RefreshCw, ArrowLeft,
   Activity, ChevronRight, MoreVertical, DollarSign, MessageCircle,
-  Edit2, Save, Send, AlertCircle, ChevronDown, Truck,
+  Edit2, Send, AlertCircle, ChevronDown, Truck,
   Trash2, RotateCcw, UserPlus, LayoutGrid, List, ShieldAlert,
   MessageSquare, Paperclip, Camera, TrendingUp, BarChart3, PieChart,
   Sparkles, HelpCircle, Info, ChevronUp, Check, Bot, CornerDownLeft,
@@ -18,7 +18,7 @@ import { apiFetch, API_URL, getToken } from '@/lib/api';
 import { SubNav, PageHeader, StatCard, Badge as SharedBadge, Modal, Toast as SharedToast, Button, EmptyState } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
 
-const TIPOS_SC = [
+export const TIPOS_SC = [
   'Cotizacion de Producto',
   'Seguimiento',
   'Programar Entrega',
@@ -27,7 +27,7 @@ const TIPOS_SC = [
   'Nuevo Lead',
 ];
 
-const MODALIDADES_PAGO = [
+export const MODALIDADES_PAGO = [
   'Contado',
   '60/40 (60% anticipo - 40% pendiente)',
   'Credito 30 dias',
@@ -55,19 +55,19 @@ const ESTADOS_SC: Record<string, {label:string; color:string; bg:string; border:
 // Solicitud podria forzarse a, por ejemplo, "Cotizada" o "Soporte" con un
 // click, sin Cotizacion vinculada ni backend involucrado -- exactamente lo que
 // estos menus nunca pudieron hacer antes de que ESTADOS_SC creciera.
-const ESTADOS_SC_MANUALES: Record<string, {label:string; color:string; bg:string; border:string}> = Object.fromEntries(
+export const ESTADOS_SC_MANUALES: Record<string, {label:string; color:string; bg:string; border:string}> = Object.fromEntries(
   Object.entries(ESTADOS_SC).filter(([k]) => ['BORRADOR','PENDIENTE_CONFIRMACION','CONFIRMADA','CANCELADA'].includes(k))
 );
 
-const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
-const fTime = (iso: any) => iso ? new Date(iso).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}) : '';
-const fCOP  = (v: any)   => { const n=Number(v)||0; return n>0?'$'+n.toLocaleString('es-CO'):'-'; };
+export const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
+export const fTime = (iso: any) => iso ? new Date(iso).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}) : '';
+export const fCOP  = (v: any)   => { const n=Number(v)||0; return n>0?'$'+n.toLocaleString('es-CO'):'-'; };
 
 // Mapa de 9 estados propios de Solicitud de Cliente -- se mantiene bespoke
 // (mas de los ~6 tonos semanticos que cubre el Badge compartido), pero la
 // forma de la pastilla ahora coincide con la de Badge (rounded-full, border,
 // text-xs font-bold, px-2.5 py-1).
-function EstadoBadge({estado}: {estado:string}) {
+export function EstadoBadge({estado}: {estado:string}) {
   const cfg = ESTADOS_SC[estado] || {label:estado,color:'#4338ca',bg:'#eef2ff',border:'#c7d2fe'};
   return (
     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border"
@@ -81,7 +81,7 @@ function EstadoBadge({estado}: {estado:string}) {
 // (indigo/blue/teal/orange/purple/emerald) que no colapsan limpiamente sobre
 // los 6 tonos semanticos de Badge (neutral/success/warning/danger/info/purple)
 // sin perder distincion real -- se mantiene bespoke, solo se alinea la forma.
-function TipoBadge({tipo}: {tipo:string}) {
+export function TipoBadge({tipo}: {tipo:string}) {
   const map: Record<string,string> = {
     'Cotizacion de Producto':'bg-indigo-100 text-indigo-700 border-indigo-200',
     'Seguimiento':           'bg-blue-100 text-blue-700 border-blue-200',
@@ -93,7 +93,7 @@ function TipoBadge({tipo}: {tipo:string}) {
   return <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border ${map[tipo]||'bg-slate-100 text-slate-600 border-slate-200'}`}>{tipo||'Sin tipo'}</span>;
 }
 
-function ActionDot({action}: {action:string}) {
+export function ActionDot({action}: {action:string}) {
   const colors: Record<string,string> = {CREATED:'#6366f1',ESTADO_CHANGED:'#f59e0b',NOTE_ADDED:'#3b82f6',CONFIRMED:'#059669',CANCELLED:'#ef4444',UPDATED:'#8b5cf6',CHATTER:'#0891b2'};
   return <div className="absolute left-0 top-2 w-4 h-4 rounded-full border-2 border-white" style={{backgroundColor:colors[action]||'#94a3b8'}}/>;
 }
@@ -254,7 +254,7 @@ function RowMenu({sc,onView,onChangeEstado,onCancel,onSendToTrash}:{sc:any;onVie
 
 
 // ── IA Panel SC ────────────────────────────────────────────────────────────────
-function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
+export function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
   const [analisis,setAnalisis]=useState('');
   const [loading,setLoading]=useState(false);
   const [chat,setChat]=useState('');
@@ -346,7 +346,7 @@ function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
 }
 
 // â”€â”€ Chatter Tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function ChatterTab({sc,currentUser}:{sc:any;currentUser:string}) {
+export function ChatterTab({sc,currentUser}:{sc:any;currentUser:string}) {
   const [messages,setMessages]=useState<any[]>([]);
   const [input,setInput]=useState('');
   const [sending,setSending]=useState(false);
@@ -425,11 +425,8 @@ export default function SolicitudClient() {
   const [loading,setLoading]=useState(true);
   const [search,setSearch]=useState('');
   const [activeTab,setActiveTab]=useState('Activas');
-  const [selected,setSelected]=useState<any|null>(null);
-  const [panelTab,setPanelTab]=useState<'info'|'actividad'|'chatter'|'ia'>('info');
   const [showCreate,setShowCreate]=useState(false);
   const [saving,setSaving]=useState(false);
-  const [confirming,setConfirming]=useState(false);
   const [toast,setToast]=useState<{msg:string;type:'ok'|'err'}|null>(null);
   const [currentUser,setCurrentUser]=useState('');
   const [alertDias,setAlertDias]=useState(2);
@@ -558,11 +555,6 @@ export default function SolicitudClient() {
   const [checked,setChecked]=useState<Set<number>>(new Set());
   const [showBulkBar,setShowBulkBar]=useState(false);
 
-  // Panel edit
-  const [editMode,setEditMode]=useState(false);
-  const [editForm,setEditForm]=useState<any>({});
-  const [savingEdit,setSavingEdit]=useState(false);
-
   // Create form
   const [form,setForm]=useState({advisor_name:'',advisor_user_id:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:5,tipo_problema:'',descripcion_problema:'',urgencia:'',evidencia_descripcion:'',asignado_a_user_id:''});
   const [prodName,setProdName]=useState('');
@@ -618,20 +610,20 @@ export default function SolicitudClient() {
   useEffect(()=>{load();},[load]);
 
   const searchParams = useSearchParams();
-  // Auto-open detail if navigated here with ?id= from Hub
+  const router = useRouter();
+  // Compatibilidad con enlaces antiguos que abrian el detalle con ?id=:
+  // redirige a la pagina canonica en vez de duplicar la vista aqui.
   useEffect(()=>{
     const idParam = searchParams?.get('id');
-    if(idParam){ const numId=Number(idParam); if(!isNaN(numId)) loadDetail(numId); }
-  },[searchParams]);
+    if(idParam){
+      const numId = Number(idParam);
+      if(!isNaN(numId)) router.replace(`/dashboard/ventas/solicitud/${numId}`);
+    }
+  },[searchParams, router]);
   // Auto-open create form if navigated here with ?new=1 (from "Nueva Solicitud" button on Ventas hub)
   useEffect(()=>{
     if(searchParams?.get('new')) setShowCreate(true);
   },[searchParams]);
-
-  async function loadDetail(id:number) {
-    try{const raw=await apiFetch(`/ventas/solicitudes/${id}`);const d=raw?.data??raw;setSelected(d);setPanelTab('info');setEditForm({advisor_name:d.advisor_name||'',tipo_solicitud:d.tipo_solicitud||'Cotizacion de Producto',modalidad_pago:d.modalidad_pago||'Contado',notas:d.notas||'',fecha_vencimiento:d.fecha_vencimiento?d.fecha_vencimiento.split('T')[0]:''});}
-    catch(err:any){showToast('Error: '+err.message,'err');}
-  }
 
   async function loadPapelera() {
     setLoadingPapelera(true);
@@ -647,7 +639,6 @@ export default function SolicitudClient() {
       await apiFetch(`/ventas/solicitudes/${cancelTarget}/cancelar`,{method:'POST',body:JSON.stringify({razon:cancelRazon,user_name:currentUser})});
       showToast('Solicitud cancelada','ok');
       setShowCancelModal(false);setCancelTarget(null);setCancelRazon('');
-      if(selected?.id===cancelTarget){setSelected(null);setEditMode(false);}
       await load();
     }catch(err:any){showToast('Error: '+err.message,'err');}
     setCancelling(false);
@@ -704,40 +695,13 @@ export default function SolicitudClient() {
     },300);
   }
 
-  async function saveEdit() {
-    if(!selected) return;
-    setSavingEdit(true);
-    try{
-      const body:any={...editForm,updated_by:currentUser};
-      if(editForm.fecha_vencimiento) body.fecha_vencimiento=new Date(editForm.fecha_vencimiento+'T12:00:00').toISOString();
-      const raw=await apiFetch(`/ventas/solicitudes/${selected.id}`,{method:'PATCH',body:JSON.stringify(body)});
-      const d=raw?.data??raw;
-      setSelected((prev:any)=>({...prev,...d}));
-      setSolicitudes(prev=>prev.map(s=>s.id===selected.id?{...s,...d}:s));
-      setEditMode(false);showToast('Solicitud actualizada');
-    }catch(err:any){showToast('Error: '+err.message,'err');}
-    setSavingEdit(false);
-  }
-
   async function changeEstado(scId:number,newEstado:string) {
     if(newEstado==='CANCELADA'&&!window.confirm('Cancelar esta solicitud?')) return;
     setSaving(true);
     try{
       await apiFetch(`/ventas/solicitudes/${scId}`,{method:'PATCH',body:JSON.stringify({estado:newEstado,updated_by:currentUser})});
-      if(selected?.id===scId) await loadDetail(scId);
       setSolicitudes(prev=>prev.map(s=>s.id===scId?{...s,estado:newEstado}:s));
       showToast('Estado cambiado');
-    }catch(err:any){showToast('Error: '+err.message,'err');}
-    setSaving(false);
-  }
-
-  async function changeEstadoSoporte(scId:number,newEstado:string) {
-    setSaving(true);
-    try{
-      await apiFetch(`/ventas/solicitudes/${scId}`,{method:'PATCH',body:JSON.stringify({estado_soporte:newEstado,updated_by:currentUser})});
-      if(selected?.id===scId) await loadDetail(scId);
-      setSolicitudes(prev=>prev.map(s=>s.id===scId?{...s,estado_soporte:newEstado}:s));
-      showToast('Estado de soporte actualizado');
     }catch(err:any){showToast('Error: '+err.message,'err');}
     setSaving(false);
   }
@@ -760,38 +724,6 @@ export default function SolicitudClient() {
     }
     setChecked(new Set());setShowBulkBar(false);
     showToast(`${ids.length} solicitudes actualizadas`);
-  }
-
-  async function confirmarSC() {
-    if(!selected) return;
-    setConfirming(true);
-    try{
-      const d=await apiFetch(`/ventas/solicitudes/${selected.id}/confirmar`,{method:'POST',body:JSON.stringify({user_name:currentUser})});
-      const dataObj=d?.data??d;
-      const cotNum=dataObj?.cotizacion?.numero||d?.cotizacion?.numero||'';
-      showToast(`Cotizacion ${cotNum} creada`);
-      // CRM Pipeline: advance lead to COT stage if customer_id exists
-      if(selected.customer_id){
-        try{
-          // Get leads for this customer and advance the most recent one
-          const leads=await apiFetch(`/crm/leads/v2?limit=50`).catch(()=>({data:[]}));
-          const leadList=Array.isArray(leads)?leads:(leads?.data??[]);
-          const myLead=leadList.find((l:any)=>l.customer_id===selected.customer_id&&l.lead_source==='SC');
-          if(myLead){
-            // Get pipeline stages and advance to next
-            const stages=await apiFetch('/crm/pipeline-stages').catch(()=>({data:[]}));
-            const stageList=Array.isArray(stages)?stages:(stages?.data??[]);
-            const curIdx=stageList.findIndex((s:any)=>s.id===myLead.pipeline_stage_id);
-            const nextStage=stageList[curIdx+1];
-            if(nextStage){
-              await apiFetch(`/crm/leads/${myLead.id}/stage`,{method:'PATCH',body:JSON.stringify({stage_id:nextStage.id,cotizacion_numero:cotNum})}).catch(()=>{});
-            }
-          }
-        }catch{}
-      }
-      await loadDetail(selected.id);load();
-    }catch(err:any){showToast('Error: '+err.message,'err');}
-    setConfirming(false);
   }
 
   async function createSolicitud(e:React.FormEvent) {
@@ -1167,7 +1099,7 @@ export default function SolicitudClient() {
                   const isOverdue=sc.fecha_vencimiento&&new Date(sc.fecha_vencimiento)<new Date();
                   const isStale=(Date.now()-new Date(sc.updated_at||sc.fecha_solicitud).getTime())/3600000>alertDias*24;
                   return (
-                    <tr key={sc.id} onClick={()=>loadDetail(sc.id)} className={`hover:bg-slate-50/80 transition-colors group cursor-pointer ${selected?.id===sc.id?'bg-indigo-50/40':''} ${isStale&&sc.estado==='BORRADOR'?'bg-rose-50/30':''}`}>
+                    <tr key={sc.id} onClick={()=>router.push(`/dashboard/ventas/solicitud/${sc.id}`)} className={`hover:bg-slate-50/80 transition-colors group cursor-pointer ${isStale&&sc.estado==='BORRADOR'?'bg-rose-50/30':''}`}>
                       <td className="px-4 py-4" onClick={e=>e.stopPropagation()}>
                         <input type="checkbox" checked={checked.has(sc.id)} onChange={()=>toggleCheck(sc.id)} className="rounded border-slate-300"/>
                       </td>
@@ -1195,7 +1127,7 @@ export default function SolicitudClient() {
                       <td className="px-4 py-4"><EstadoBadge estado={sc.estado}/></td>
                       <td className="px-4 py-4" onClick={e=>e.stopPropagation()}>
                         <div className="flex items-center justify-center gap-1.5">
-                          <button onClick={()=>loadDetail(sc.id)} title="Ver Detalle" className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 p-1.5 rounded-lg text-xs font-bold transition-colors">
+                          <button onClick={()=>router.push(`/dashboard/ventas/solicitud/${sc.id}`)} title="Ver Detalle" className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 p-1.5 rounded-lg text-xs font-bold transition-colors">
                             <FileText size={13}/>
                           </button>
                           {sc.tipo_solicitud!=='Soporte Tecnico' && (
@@ -1209,7 +1141,7 @@ export default function SolicitudClient() {
                               </button>
                             )
                           )}
-                          <RowMenu sc={sc} onView={()=>loadDetail(sc.id)} onChangeEstado={e=>changeEstado(sc.id,e)} onCancel={()=>deleteItem(sc.id)} onSendToTrash={()=>enviarAPapelera(sc.id)}/>
+                          <RowMenu sc={sc} onView={()=>router.push(`/dashboard/ventas/solicitud/${sc.id}`)} onChangeEstado={e=>changeEstado(sc.id,e)} onCancel={()=>deleteItem(sc.id)} onSendToTrash={()=>enviarAPapelera(sc.id)}/>
                         </div>
                       </td>
                     </tr>
@@ -1719,221 +1651,6 @@ export default function SolicitudClient() {
 
         </div>
       </div>
-
-      {/* DETAIL PANEL */}
-      {selected&&(
-        <>
-          <div className="fixed inset-0 z-40 bg-slate-900/30 backdrop-blur-sm" onClick={()=>{setSelected(null);setEditMode(false);setPanelTab('info');}}/>
-          <div className="fixed top-0 bottom-0 right-0 z-40 bg-white shadow-2xl border-l border-slate-200 flex flex-col overflow-hidden" style={{left:'240px'}}>
-            {/* Header */}
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-indigo-50 to-white flex-shrink-0">
-              <div className="flex items-center gap-4">
-                <div>
-                  <h2 className="font-extrabold text-slate-900 text-xl">{selected.numero}</h2>
-                  <p className="text-xs text-slate-500 mt-0.5">Solicitud de Cliente</p>
-                </div>
-                <EstadoBadge estado={selected.estado}/>
-                <TipoBadge tipo={selected.tipo_solicitud||'Cotizacion de Producto'}/>
-              </div>
-              <div className="flex items-center gap-2">
-                {!editMode?(
-                  <Button variant="secondary" size="sm" icon={Edit2} onClick={()=>setEditMode(true)}>Editar</Button>
-                ):(
-                  <>
-                    <Button variant="secondary" size="sm" onClick={()=>setEditMode(false)}>Cancelar</Button>
-                    <Button color="indigo" size="sm" icon={Save} loading={savingEdit} onClick={saveEdit}>Guardar</Button>
-                  </>
-                )}
-                <button onClick={()=>{setSelected(null);setEditMode(false);setPanelTab('info');}} className="p-2 text-slate-400 hover:bg-slate-100 rounded-xl"><X size={18}/></button>
-              </div>
-            </div>
-
-            {/* Progreso del Flujo -- SC -> COT -> PVEN (no aplica a Soporte Tecnico, que tiene su propio ciclo) */}
-            {selected.tipo_solicitud!=='Soporte Tecnico' && (() => {
-              const cotizacionesSC = selected.cotizaciones || [];
-              const pipelineStep = cotizacionesSC.some((c: any) => c.estado === 'CONFIRMADA') ? 2
-                : cotizacionesSC.length > 0 ? 1 : 0;
-              const steps = ['Solicitud', 'Cotización', 'Pedido de Venta'];
-              return (
-                <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex-shrink-0">
-                  <div className="flex items-center max-w-md">
-                    {steps.map((label, i) => (
-                      <div key={label} className="flex items-center flex-1 last:flex-none">
-                        <div className="flex flex-col items-center gap-1">
-                          <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-black ${i < pipelineStep ? 'bg-emerald-500 text-white' : i === pipelineStep ? 'bg-indigo-600 text-white' : 'bg-white border-2 border-slate-200 text-slate-300'}`}>
-                            {i < pipelineStep ? '✓' : i + 1}
-                          </div>
-                          <span className={`text-[10px] font-bold whitespace-nowrap ${i <= pipelineStep ? 'text-slate-700' : 'text-slate-300'}`}>{label}</span>
-                        </div>
-                        {i < steps.length - 1 && <div className={`flex-1 h-0.5 mx-2 ${i < pipelineStep ? 'bg-emerald-400' : 'bg-slate-200'}`} />}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* Split pane */}
-            <div className="flex-1 flex overflow-hidden min-h-0">
-              {/* LEFT 45% */}
-              <div className="w-[45%] border-r border-slate-100 overflow-y-auto p-6 space-y-5">
-                {/* Cliente */}
-                <div className="bg-slate-50 rounded-2xl p-4">
-                  <p className="text-xs font-black text-slate-400 uppercase mb-3">Cliente</p>
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 flex-shrink-0"><User size={15}/></div>
-                      <div><p className="font-bold text-slate-900">{selected.customer_name}</p></div>
-                    </div>
-                    {selected.customer_phone&&<a href={`tel:${selected.customer_phone}`} className="flex items-center gap-2 text-sm text-slate-600 hover:text-emerald-600 pl-1"><Phone size={13} className="text-slate-400"/>{selected.customer_phone}</a>}
-                    {selected.customer_email&&<a href={`mailto:${selected.customer_email}`} className="flex items-center gap-2 text-sm text-slate-600 hover:text-indigo-600 pl-1"><Mail size={13} className="text-slate-400"/>{selected.customer_email}</a>}
-                    {selected.customer_address&&<p className="flex items-start gap-2 text-sm text-slate-600 pl-1"><MapPin size={13} className="text-slate-400 mt-0.5 flex-shrink-0"/>{selected.customer_address}</p>}
-                  </div>
-                </div>
-
-                {/* Edit mode */}
-                {editMode?(
-                  <div className="space-y-3">
-                    <p className="text-xs font-black text-slate-400 uppercase">Editar</p>
-                    {[{l:'Tipo de Solicitud',k:'tipo_solicitud',opts:TIPOS_SC},{l:'Modalidad de Pago',k:'modalidad_pago',opts:MODALIDADES_PAGO}].map(f=>(
-                      <div key={f.k}><label className="text-xs font-bold text-slate-500 mb-1 block">{f.l}</label>
-                        <select value={editForm[f.k]} onChange={e=>setEditForm((ef:any)=>({...ef,[f.k]:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">{f.opts.map(o=><option key={o} value={o}>{o}</option>)}</select>
-                      </div>
-                    ))}
-                    <div><label className="text-xs font-bold text-slate-500 mb-1 block">Asesor</label><input type="text" value={editForm.advisor_name} onChange={e=>setEditForm((ef:any)=>({...ef,advisor_name:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none"/></div>
-                    <div><label className="text-xs font-bold text-slate-500 mb-1 block">Fecha Vencimiento</label><input type="date" value={editForm.fecha_vencimiento} onChange={e=>setEditForm((ef:any)=>({...ef,fecha_vencimiento:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none"/></div>
-                    <div><label className="text-xs font-bold text-slate-500 mb-1 block">Notas</label><textarea value={editForm.notas} onChange={e=>setEditForm((ef:any)=>({...ef,notas:e.target.value}))} rows={3} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-200 outline-none"/></div>
-                  </div>
-                ):(
-                  <>
-                    <div className="grid grid-cols-2 gap-3">
-                      {[{l:'Asesor',v:selected.advisor_name||'-'},{l:'Modalidad Pago',v:selected.modalidad_pago||'-'},{l:'Fecha Solicitud',v:fDate(selected.fecha_solicitud)},{l:'Vencimiento',v:fDate(selected.fecha_vencimiento)}].map(item=>(
-                        <div key={item.l} className="bg-white border border-slate-100 rounded-xl p-3 shadow-sm"><p className="text-xs text-slate-400 mb-1">{item.l}</p><p className="font-bold text-sm text-slate-800">{item.v}</p></div>
-                      ))}
-                    </div>
-                    {selected.modalidad_pago?.includes('60/40')&&(
-                      <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3">
-                        <p className="text-xs font-black text-indigo-700 uppercase mb-2">Modalidad 60/40</p>
-                        <div className="flex gap-4"><div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Anticipo</p><p className="font-black text-indigo-700">60%</p></div><div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Pendiente</p><p className="font-black text-slate-700">40%</p></div></div>
-                      </div>
-                    )}
-                    {(selected.productos||[]).length>0&&(
-                      <div>
-                        <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos</p>
-                        <div className="border border-slate-200 rounded-xl overflow-hidden"><table className="w-full text-xs"><thead className="bg-slate-50 text-slate-400 uppercase font-black"><tr><th className="px-3 py-2 text-left">Producto</th><th className="px-3 py-2 text-right">Qty</th><th className="px-3 py-2 text-right">Precio</th></tr></thead><tbody className="divide-y divide-slate-50">{selected.productos.map((p:any,i:number)=><tr key={i}><td className="px-3 py-2 font-medium text-slate-700">{p.product_name}</td><td className="px-3 py-2 text-right text-slate-600">{p.qty}</td><td className="px-3 py-2 text-right font-bold text-indigo-700">{fCOP(p.unit_price_cop)}</td></tr>)}</tbody></table></div>
-                      </div>
-                    )}
-                    {selected.notas&&<div className="bg-amber-50 border border-amber-100 rounded-xl p-4"><p className="text-xs font-black text-amber-700 uppercase mb-1.5">Notas</p><p className="text-sm text-amber-900">{selected.notas}</p></div>}
-                    {(selected.cotizaciones||[]).length>0&&(
-                      <div>
-                        <p className="text-xs font-black text-slate-400 uppercase mb-2">Cotizaciones</p>
-                        {selected.cotizaciones.map((c:any)=>(
-                          <Link key={c.id} href={`/dashboard/ventas/cotizacion?id=${c.id}`} className="flex items-center justify-between p-3 bg-amber-50 border border-amber-200 rounded-xl mb-2 hover:bg-amber-100">
-                            <div><span className="font-bold text-amber-800">{c.numero}</span><p className="text-xs text-amber-600 mt-0.5">{c.estado}</p></div>
-                            <ChevronRight size={15} className="text-amber-500"/>
-                          </Link>
-                        ))}
-                      </div>
-                    )}
-                  </>
-                )}
-
-                {/* Estado change */}
-                <div>
-                  {selected.tipo_solicitud==='Soporte Tecnico'?(
-                    <>
-                      <p className="text-xs font-black text-slate-400 uppercase mb-2">Estado del Ticket de Soporte</p>
-                      <select value={selected.estado_soporte||'ABIERTO'} disabled={saving}
-                        onChange={e=>changeEstadoSoporte(selected.id,e.target.value)}
-                        className="w-full border border-purple-200 bg-purple-50 rounded-xl px-3 py-2 text-sm font-bold text-purple-700 outline-none focus:ring-2 focus:ring-purple-200 disabled:opacity-40">
-                        <option value="ABIERTO">Abierto</option>
-                        <option value="EN_PROCESO">En Proceso</option>
-                        <option value="RESUELTO">Resuelto</option>
-                        <option value="CERRADO">Cerrado</option>
-                      </select>
-                    </>
-                  ):(
-                    <>
-                      <p className="text-xs font-black text-slate-400 uppercase mb-2">Cambiar Estado</p>
-                      <div className="flex gap-2 flex-wrap">
-                        {Object.entries(ESTADOS_SC_MANUALES).filter(([k])=>k!==selected.estado).map(([k,v])=>(
-                          <button key={k} onClick={()=>changeEstado(selected.id,k)} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs font-bold border hover:opacity-80 disabled:opacity-40" style={{backgroundColor:v.bg,color:v.color,borderColor:v.border}}>{v.label}</button>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* RIGHT 55% */}
-              <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50">
-                {/* Tab bar */}
-                <div className="border-b border-slate-200 px-4 pt-3 flex gap-1 bg-white flex-shrink-0">
-                  {([['info','Acciones'],['actividad','Actividad'],['chatter','Chatter'],['ia','🤖 IA']] as const).map(([k,l])=>(
-                    <button key={k} onClick={()=>setPanelTab(k)} className={`px-4 py-2 rounded-t-lg text-sm font-bold border-b-2 transition-colors ${panelTab===k?'text-indigo-700 border-indigo-600 bg-indigo-50/50':'text-slate-500 border-transparent hover:text-slate-700'}`}>{l}</button>
-                  ))}
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-6 space-y-5">
-                  {panelTab==='info'&&(
-                    <>
-                      {/* Primary Actions - HALF WIDTH */}
-                      <div>
-                        <p className="text-xs font-black text-slate-400 uppercase mb-3">Acciones Principales</p>
-                        <div className="grid grid-cols-2 gap-2">
-                          {(selected.estado==='BORRADOR'||selected.estado==='PENDIENTE_CONFIRMACION')&&(
-                            <div className="col-span-2 [&>button]:w-full">
-                              <Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Confirmar + Crear Cotizacion</Button>
-                            </div>
-                          )}
-                          {(selected.cotizaciones||[]).length>0&&(
-                            <Link href={`/dashboard/ventas/cotizacion/${selected.cotizaciones[selected.cotizaciones.length-1].id}`} className="bg-amber-50 border border-amber-200 text-amber-700 px-4 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-amber-100 text-sm">
-                              <ArrowRight size={14}/>Ver Cotizacion
-                            </Link>
-                          )}
-                        </div>
-                      </div>
-                      {/* Contactar - HALF WIDTH grid */}
-                      <div>
-                        <p className="text-xs font-black text-slate-400 uppercase mb-3">Contactar Cliente</p>
-                        <div className="grid grid-cols-3 gap-2">
-                          {selected.customer_phone&&<a href={`https://wa.me/57${selected.customer_phone.replace(/\D/g,'')}`} target="_blank" rel="noreferrer" className="flex flex-col items-center gap-1.5 py-3 bg-green-50 border border-green-200 text-green-700 rounded-xl font-bold text-xs hover:bg-green-100"><MessageCircle size={18}/>WhatsApp</a>}
-                          {selected.customer_phone&&<a href={`tel:${selected.customer_phone}`} className="flex flex-col items-center gap-1.5 py-3 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl font-bold text-xs hover:bg-blue-100"><Phone size={18}/>Llamar</a>}
-                          {selected.customer_email&&<a href={`mailto:${selected.customer_email}?subject=Solicitud ${selected.numero}`} className="flex flex-col items-center gap-1.5 py-3 bg-slate-50 border border-slate-200 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-100"><Mail size={18}/>Email</a>}
-                        </div>
-                      </div>
-                    </>
-                  )}
-
-                  {panelTab==='actividad'&&(
-                    <div>
-                      <p className="text-xs font-black text-slate-400 uppercase mb-3">Historial</p>
-                      {(selected.actividades||[]).length===0?<p className="text-xs text-slate-400 italic">Sin actividad.</p>:(
-                        <div className="space-y-4 relative before:absolute before:left-2 before:top-0 before:bottom-0 before:w-0.5 before:bg-slate-100">
-                          {[...(selected.actividades||[])].reverse().filter((a:any)=>a.action!=='CHATTER').map((a:any)=>(
-                            <div key={a.id} className="flex gap-4 pl-7 relative">
-                              <ActionDot action={a.action}/>
-                              <div className="flex-1 bg-white border border-slate-100 rounded-xl p-3 shadow-sm">
-                                <p className="text-sm font-bold text-slate-700">{a.description}</p>
-                                {a.old_estado&&a.new_estado&&<p className="text-xs text-slate-400 mt-1 flex items-center gap-1"><EstadoBadge estado={a.old_estado}/><ArrowRight size={10} className="text-slate-300"/><EstadoBadge estado={a.new_estado}/></p>}
-                                <p className="text-xs text-slate-400 mt-1">{fDate(a.created_at)} {fTime(a.created_at)}{a.user_name&&<span className="ml-2 font-medium">- {a.user_name}</span>}</p>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {panelTab==='chatter'&&<ChatterTab sc={selected} currentUser={currentUser}/>}
-
-                  {panelTab==='ia'&&<IAPanelSC sc={selected} apiBase={process.env.NEXT_PUBLIC_API_URL||'https://api.nebulaekids.com/api/v1'}/>}
-                </div>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
 
       {/* MODAL: RAZÓN DE CANCELACIÓN */}
       {showCancelModal&&(
