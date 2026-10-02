@@ -193,3 +193,137 @@ def test_crear_solicitud_sin_asesor_sigue_en_borrador(app_client, admin_token):
 # test_asignar_asesor_promueve_a_asignada (arriba) desde la implementacion original de
 # este Task -- confirmado (no duplicado) por la corrida completa de este archivo tras
 # este Round.
+
+
+def test_confirmar_solicitud_rechaza_tras_desvincular_cotizacion(app_client, db, admin_token, user_admin):
+    """Round 6: repro exacto encontrado por un security review dedicado -- el guard de
+    'cero Cotizaciones vinculadas' (Round 4) resulto falseable desvinculando la COT
+    despues de que la sincronizacion COT->SC (preexistente, protegida) escribiera
+    CONFIRMADA: crear una COT vinculada, confirmarla (la sincronizacion real escribe
+    SC.estado="CONFIRMADA"), desvincularla (PATCH /cotizaciones/{id} {"sc_id": null})
+    deja la SC en CONFIRMADA con cero Cotizaciones vinculadas -- exactamente la
+    condicion que ese guard trataba como prueba de legitimidad. 4 llamadas normales de
+    ROLE_ASESOR, sin acceso exotico. gate1_confirmed_at (nunca escrito, porque la SC
+    nunca paso por el link publico) es la defensa real que esto prueba; se simula el
+    estado resultante directamente (misma tecnica que el test de Round 4 para este
+    mismo escenario), porque lo que esta bajo prueba es la precondicion de
+    confirmar_solicitud, no la sincronizacion en si."""
+    from app.models.erp_documents import CustomerRequest, SalesQuotation
+    sc = CustomerRequest(numero="SC-TESTCONF8", customer_name="Cliente Prueba",
+                          estado="ASIGNADA", advisor_user_id=user_admin.id)
+    db.add(sc); db.commit(); db.refresh(sc)
+    cot = SalesQuotation(numero="COT-TESTCONF8", sc_id=sc.id, sc_numero=sc.numero,
+                          customer_name="Cliente Prueba", estado="CONFIRMADA")
+    db.add(cot); db.commit()
+    sc.estado = "CONFIRMADA"  # lo que la sincronizacion real habria escrito
+    db.commit()
+    cot.sc_id = None  # desvinculada -- cero Cotizaciones vinculadas otra vez
+    db.commit()
+    db.refresh(sc)
+    assert sc.gate1_confirmed_at is None  # nunca hubo una confirmacion real por link
+
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/confirmar", json={"user_name": "test"}, headers=auth(admin_token))
+    assert resp.status_code == 400
+
+    db.refresh(sc)
+    assert sc.estado == "CONFIRMADA"  # sin escritura parcial
+
+
+def test_reset_a_borrador_con_asesor_todavia_puesto_vuelve_a_asignada(app_client, db, admin_token, user_admin):
+    """Round 6: el invariante generalizado dice que una SC nunca debe quedar en
+    BORRADOR con un asesor ya asignado. Si la pastilla manual pide "BORRADOR" pero
+    advisor_user_id sigue siendo no nulo (no se toco en el mismo PATCH), la SC se
+    promueve de inmediato de vuelta a ASIGNADA en vez de quedarse en BORRADOR."""
+    from app.models.erp_documents import CustomerRequest
+    sc = CustomerRequest(numero="SC-TESTCONF9", customer_name="Cliente Prueba",
+                          estado="ASIGNADA", advisor_user_id=user_admin.id)
+    db.add(sc); db.commit(); db.refresh(sc)
+
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": "BORRADOR", "updated_by": "test"}, headers=auth(admin_token))
+    assert resp.status_code == 200
+    assert resp.json()["data"]["estado"] == "ASIGNADA"
+
+
+def test_restaurar_solicitud_con_asesor_todavia_puesto_vuelve_a_asignada(app_client, db, admin_token, user_admin):
+    """Round 6: restaurar_solicitud (papelera) no pasa por update_solicitud -- hace su
+    propio UPDATE crudo -- asi que necesita el mismo invariante por separado. Una SC
+    cancelada que todavia tenga advisor_user_id (cancelar_solicitud no lo limpia) debe
+    restaurarse a ASIGNADA, no a un BORRADOR-con-asesor sin salida."""
+    import datetime
+    from app.models.erp_documents import CustomerRequest
+    sc = CustomerRequest(numero="SC-TESTCONF13", customer_name="Cliente Prueba",
+                          estado="CANCELADA", advisor_user_id=user_admin.id,
+                          razon_cancelacion="Prueba", eliminada_at=datetime.datetime.utcnow())
+    db.add(sc); db.commit(); db.refresh(sc)
+
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/restaurar", headers=auth(admin_token))
+    assert resp.status_code == 200
+    assert resp.json()["data"]["estado"] == "ASIGNADA"
+
+
+def test_quitar_asesor_estando_pendiente_degrada_a_borrador_y_revoca_token(app_client, db, admin_token, user_admin):
+    """Round 6: caso inverso del invariante -- si un PATCH deja advisor_user_id en
+    null mientras la SC estaba ASIGNADA o PENDIENTE_CONFIRMACION, se degrada a
+    BORRADOR (en vez de quedar "flotando" ofreciendo acciones de Gate 1 sin asesor) y
+    se revoca cualquier token pendiente."""
+    from app.models.erp_documents import CustomerRequest
+    sc = CustomerRequest(numero="SC-TESTCONF10", customer_name="Cliente Prueba",
+                          customer_email="cliente10@test.com", estado="ASIGNADA", advisor_user_id=user_admin.id)
+    db.add(sc); db.commit(); db.refresh(sc)
+
+    send_resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/enviar-confirmacion", json={"user_name": "test"}, headers=auth(admin_token))
+    assert send_resp.status_code == 200  # old_estado ahora es PENDIENTE_CONFIRMACION
+
+    from app.core.confirmation_tokens import create_confirmation_token
+    raw = create_confirmation_token(db, "SC", sc.id)
+
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"advisor_user_id": "", "updated_by": "test"}, headers=auth(admin_token))
+    assert resp.status_code == 200
+    assert resp.json()["data"]["estado"] == "BORRADOR"
+
+    # El token que ya existia (emitido antes de quitar el asesor) queda revocado.
+    get_resp = app_client.get(f"/api/v1/confirmar/{raw}")
+    assert get_resp.status_code == 400
+
+
+def test_reenviar_confirmacion_desde_pendiente_revoca_el_anterior(app_client, db, admin_token, user_admin):
+    """Round 6: cierra el callejon sin salida de un link vencido (TTL 2 dias) sin
+    ninguna forma de pedir uno nuevo -- enviar-confirmacion ahora tambien acepta
+    PENDIENTE_CONFIRMACION como estado de entrada (reenvio), revocando el token
+    anterior antes de emitir uno nuevo."""
+    from app.models.erp_documents import CustomerRequest
+    sc = CustomerRequest(numero="SC-TESTCONF11", customer_name="Cliente Prueba",
+                          customer_email="cliente11@test.com", estado="ASIGNADA", advisor_user_id=user_admin.id)
+    db.add(sc); db.commit(); db.refresh(sc)
+
+    first = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/enviar-confirmacion", json={"user_name": "test"}, headers=auth(admin_token))
+    assert first.status_code == 200
+
+    from app.core.confirmation_tokens import create_confirmation_token
+    old_raw = create_confirmation_token(db, "SC", sc.id)  # simula el link ya enviado
+
+    second = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/enviar-confirmacion", json={"user_name": "test"}, headers=auth(admin_token))
+    assert second.status_code == 200
+    db.refresh(sc)
+    assert sc.estado == "PENDIENTE_CONFIRMACION"  # sigue pendiente, no hubo cambio real de estado
+
+    old_get = app_client.get(f"/api/v1/confirmar/{old_raw}")
+    assert old_get.status_code == 400  # el link viejo ya no funciona
+
+    new_link = second.json()["link_confirmacion"]
+    new_token = new_link.rsplit("/", 1)[-1]
+    new_get = app_client.get(f"/api/v1/confirmar/{new_token}")
+    assert new_get.status_code == 200  # el link nuevo si funciona
+
+
+def test_enviar_confirmacion_rechaza_sin_asesor_aunque_este_asignada(app_client, db, admin_token):
+    """Round 6: red de seguridad barata -- ASIGNADA/PENDIENTE_CONFIRMACION implican un
+    asesor por construccion hoy (ver update_solicitud/promueve_asignada y
+    create_solicitud), pero se valida explicitamente en vez de asumirlo. Estado
+    sintetico (no alcanzable por el flujo normal) solo para probar el check en si."""
+    from app.models.erp_documents import CustomerRequest
+    sc = CustomerRequest(numero="SC-TESTCONF12", customer_name="Cliente Prueba", estado="ASIGNADA")
+    db.add(sc); db.commit(); db.refresh(sc)
+
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/enviar-confirmacion", json={"user_name": "test"}, headers=auth(admin_token))
+    assert resp.status_code == 400

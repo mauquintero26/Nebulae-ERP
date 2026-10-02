@@ -43,10 +43,13 @@ def _forzar_confirmada(db, sc_id):
     aceptar BORRADOR directamente. Estos tests ejercitan el movimiento automatico
     del lead que ocurre despues de crear la cotizacion, no el flujo de confirmacion
     por link -- se fuerza el estado aqui por DB, igual que en los demas tests de
-    este plan afectados por el mismo cambio de precondicion."""
+    este plan afectados por el mismo cambio de precondicion. Round 6 agrego una
+    segunda exigencia (gate1_confirmed_at no nulo) -- se simula aqui tambien."""
+    import datetime
     from app.models.erp_documents import CustomerRequest
     sc_row = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     sc_row.estado = "CONFIRMADA"
+    sc_row.gate1_confirmed_at = datetime.datetime.utcnow()
     db.commit()
 
 

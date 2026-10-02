@@ -32,10 +32,16 @@ def test_confirmar_solicitud_calcula_fecha_segun_modalidad(app_client, db, admin
     sc_id = sc_resp.json()["data"]["id"]
     # Fuerza el estado a CONFIRMADA -- Task 4 cambio la precondicion de confirmar_solicitud
     # para exigir que el cliente ya haya confirmado via el link publico (Gate 1), en vez de
-    # aceptar BORRADOR/PENDIENTE_CONFIRMACION directamente.
+    # aceptar BORRADOR/PENDIENTE_CONFIRMACION directamente. Round 6 agrego una segunda
+    # exigencia (gate1_confirmed_at no nulo, la marca de procedencia real que solo
+    # confirmar_via_token escribe) -- se simula aqui tambien, por el mismo motivo que
+    # estado: esta prueba ejercita el calculo de fecha_entrega_estimada en
+    # confirmar_solicitud, no el flujo de confirmacion por link en si.
+    import datetime as _dt
     from app.models.erp_documents import CustomerRequest
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     sc.estado = "CONFIRMADA"
+    sc.gate1_confirmed_at = _dt.datetime.utcnow()
     db.commit()
 
     confirm_resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc_id}/confirmar", json={"user_name": "test"}, headers=auth(admin_token))

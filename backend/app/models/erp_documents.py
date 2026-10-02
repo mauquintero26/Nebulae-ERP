@@ -82,6 +82,15 @@ class CustomerRequest(Base):
     evidencia_descripcion = Column(Text, nullable=True)
     asignado_a_user_id    = Column(Integer, ForeignKey("users.id"), nullable=True)
     estado_soporte        = Column(String(20), nullable=True)
+    # Gate 1 (Round 6): marca de procedencia de un solo uso. SOLO confirmar_via_token
+    # (confirmacion_publica.py) la escribe, al mismo tiempo que pone estado="CONFIRMADA".
+    # confirmar_solicitud exige que no sea None (ademas de estado=="CONFIRMADA") y la
+    # limpia (None) en el mismo commit en que avanza a COTIZADA -- de un solo uso, igual
+    # que el token: nunca queda una prueba de confirmacion valida para un ciclo futuro.
+    # Reemplaza la inferencia por "cero Cotizaciones vinculadas" (Round 4), que resulto
+    # ser falseable desvinculando la COT despues de que la sincronizacion escribiera
+    # CONFIRMADA (sc_id=null via PATCH /cotizaciones/{id}, sin relacion con este campo).
+    gate1_confirmed_at     = Column(DateTime, nullable=True)
 
     customer   = relationship("Customer", foreign_keys=[customer_id])
     quotations = relationship("SalesQuotation", back_populates="customer_request")

@@ -425,13 +425,6 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         raise HTTPException(400, "CONFIRMADA solo se alcanza cuando el cliente confirma via el enlace enviado (no se puede forzar manualmente).")
     old_estado = sc.estado
     fecha_vieja = sc.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
-    # Gate 1 (ver confirmacion_publica.py): asignar asesor por primera vez a una SC
-    # en BORRADOR la promueve automaticamente a ASIGNADA -- habilita el boton
-    # "Enviar para Confirmacion" sin que nadie tenga que forzar el estado a mano.
-    promueve_asignada = (
-        "advisor_user_id" in body and body.get("advisor_user_id")
-        and not sc.advisor_user_id and sc.estado == "BORRADOR"
-    )
     allowed = ["customer_id","customer_name","customer_phone","customer_email",
                "customer_address","advisor_name","advisor_user_id","tipo_solicitud","modalidad_pago","estado",
                "fecha_vencimiento","fecha_entrega_estimada","notas","productos",
@@ -443,8 +436,32 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
             if k in ("advisor_user_id", "asignado_a_user_id"):
                 v = _int_or_none(v)
             setattr(sc, k, v)
+    # Gate 1 -- invariante (Round 6, generaliza la version de la implementacion original
+    # de este Task): una SC nunca debe quedar en BORRADOR con un asesor ya asignado. La
+    # version original solo evaluaba esto en la primera asignacion (not sc.advisor_user_id
+    # antes del loop), lo que dejaba un callejon sin salida: una SC que volviera a BORRADOR
+    # (pastilla manual, restaurar_solicitud, etc.) sin perder su advisor_user_id no tenia
+    # forma de volver a ASIGNADA salvo desasignar y reasignar. Se evalua sobre el estado
+    # RESULTANTE de este PATCH (despues del loop de arriba) para cubrir ambos casos con
+    # una sola condicion: primera asignacion (sc.estado ya era BORRADOR y no cambia aqui,
+    # advisor_user_id pasa de None a un id real) y reset-con-asesor-todavia-puesto (el
+    # body pide "estado": "BORRADOR" explicitamente pero advisor_user_id sigue siendo no
+    # nulo) -- en ambos casos se promueve a ASIGNADA de inmediato.
+    promueve_asignada = sc.estado == "BORRADOR" and sc.advisor_user_id is not None
     if promueve_asignada:
         sc.estado = "ASIGNADA"
+    # Gate 1 -- caso inverso (Round 6): si este PATCH deja a la SC sin asesor
+    # (advisor_user_id resultante nulo) mientras estaba ASIGNADA o PENDIENTE_CONFIRMACION,
+    # no debe quedar en ese estado sin asesor ofreciendo acciones que ya no aplican
+    # ("Enviar para Confirmacion" sin nadie a quien atribuirselo) -- se degrada a
+    # BORRADOR, mismos efectos de reinicio que la pastilla manual. Mutuamente excluyente
+    # con promueve_asignada por construccion: una exige advisor_user_id resultante no
+    # nulo, la otra exige que sea nulo.
+    desasigna_a_borrador = (
+        sc.advisor_user_id is None and old_estado in ("ASIGNADA", "PENDIENTE_CONFIRMACION")
+    )
+    if desasigna_a_borrador:
+        sc.estado = "BORRADOR"
     sc.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(sc)
@@ -455,11 +472,16 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
              user_name=body.get("updated_by"))
     if promueve_asignada and not (body.get("estado") and body["estado"] != old_estado):
         # El check de arriba solo loguea cuando el REQUEST manda "estado" explicitamente.
-        # promueve_asignada cambia sc.estado sin que el body lo pida (solo manda
-        # advisor_user_id), asi que sin este bloque la transicion BORRADOR->ASIGNADA
-        # quedaria invisible en el Chatter/Actividad. El guard evita un doble log en
-        # el caso raro de que el mismo PATCH mande advisor_user_id Y un estado explicito.
+        # promueve_asignada puede cambiar sc.estado sin que el body lo pida (solo manda
+        # advisor_user_id), asi que sin este bloque la transicion a ASIGNADA quedaria
+        # invisible en el Chatter/Actividad. El guard evita un doble log en el caso raro
+        # de que el mismo PATCH mande advisor_user_id Y un estado explicito distinto.
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Estado cambiado a ASIGNADA (asesor asignado)",
+             old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"))
+    if desasigna_a_borrador and not (body.get("estado") and body["estado"] != old_estado):
+        # Mismo motivo que el bloque anterior: esta transicion ocurre sin que el body
+        # mande "estado" (solo limpia advisor_user_id), asi que necesita su propio log.
+        _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Estado cambiado a BORRADOR (asesor retirado)",
              old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"))
     if fecha_vieja is not None and sc.fecha_entrega_estimada and sc.fecha_entrega_estimada != fecha_vieja:
         diff_dias = (sc.fecha_entrega_estimada - fecha_vieja).days
@@ -468,13 +490,17 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
              f"Fecha de entrega modificada: {fecha_vieja.strftime('%d/%m/%Y')} -> "
              f"{sc.fecha_entrega_estimada.strftime('%d/%m/%Y')} ({signo}{diff_dias} día{'s' if abs(diff_dias)!=1 else ''})",
              user_name=body.get("updated_by"))
-    if body.get("estado") == "BORRADOR":
-        # Gate 1: forzar la SC de vuelta a BORRADOR (pastilla manual de
-        # ESTADOS_SC_MANUALES) reinicia el flujo -- cualquier link de confirmacion
-        # ya enviado para un ciclo anterior queda obsoleto y no debe seguir siendo
-        # utilizable.
+    if body.get("estado") == "BORRADOR" or desasigna_a_borrador:
+        # Gate 1: tanto forzar la SC de vuelta a BORRADOR (pastilla manual de
+        # ESTADOS_SC_MANUALES) como quedarse sin asesor mientras estaba
+        # ASIGNADA/PENDIENTE_CONFIRMACION reinician el flujo -- cualquier link de
+        # confirmacion ya enviado para un ciclo anterior queda obsoleto, y cualquier
+        # marca de confirmacion ya obtenida (gate1_confirmed_at) deja de ser valida
+        # para un ciclo que esta siendo reiniciado.
         from app.core.confirmation_tokens import revoke_pending_tokens
         revoke_pending_tokens(db, "SC", sc.id)
+        sc.gate1_confirmed_at = None
+        db.commit()
     return {"status": "success", "data": _sc_dict(sc)}
 
 
@@ -483,28 +509,44 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
         user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Gate 1: genera un link de confirmacion de un solo uso y lo envia al cliente.
 
-    Solo valido cuando la SC ya tiene asesor asignado (estado ASIGNADA, ver
-    update_solicitud/promueve_asignada). La SC pasa a PENDIENTE_CONFIRMACION
-    hasta que el cliente confirme via el link (ver confirmacion_publica.py)."""
+    Valido cuando la SC ya tiene asesor asignado y esta ASIGNADA (ver
+    update_solicitud/promueve_asignada), o cuando ya esta PENDIENTE_CONFIRMACION --
+    este segundo caso es un reenvio (Round 6: cierra el callejon sin salida de un
+    link vencido, TTL de 2 dias, sin ninguna forma de pedir uno nuevo). La SC
+    queda/permanece en PENDIENTE_CONFIRMACION hasta que el cliente confirme via el
+    link (ver confirmacion_publica.py)."""
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
-    if sc.estado != "ASIGNADA":
+    if sc.estado not in ("ASIGNADA", "PENDIENTE_CONFIRMACION"):
         raise HTTPException(400, f"La solicitud debe estar Asignada antes de enviar para confirmación (estado actual: {sc.estado})")
+    # Round 6: red de seguridad barata -- hoy ASIGNADA y PENDIENTE_CONFIRMACION ya
+    # implican un asesor por construccion (ver update_solicitud/promueve_asignada y
+    # create_solicitud), pero se valida explicitamente en vez de asumirlo, porque este
+    # mismo endpoint es ahora tambien la base del reenvio mas abajo.
+    if not sc.advisor_user_id:
+        raise HTTPException(400, "La solicitud no tiene un asesor asignado.")
 
-    from app.core.confirmation_tokens import create_confirmation_token
+    from app.core.confirmation_tokens import create_confirmation_token, revoke_pending_tokens
     from app.core.email import send_email
     import os
+
+    old_estado = sc.estado
+    es_reenvio = old_estado == "PENDIENTE_CONFIRMACION"
+    if es_reenvio:
+        # El link anterior (si todavia no vencio) muere aqui -- nunca deben quedar
+        # dos tokens validos a la vez para la misma SC.
+        revoke_pending_tokens(db, "SC", sc.id)
 
     raw_token = create_confirmation_token(db, "SC", sc.id)
     frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5100").rstrip("/")
     link = f"{frontend_url}/confirmar/{raw_token}"
 
-    old_estado = sc.estado
     sc.estado = "PENDIENTE_CONFIRMACION"
     sc.updated_at = datetime.datetime.utcnow()
     db.commit()
-    _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Enviada para confirmación del cliente",
+    _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
+         "Enlace de confirmación reenviado al cliente" if es_reenvio else "Enviada para confirmación del cliente",
          old_estado=old_estado, new_estado="PENDIENTE_CONFIRMACION", user_name=body.get("user_name"))
 
     if sc.customer_email:
@@ -523,24 +565,32 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
         raise HTTPException(404, "Solicitud no encontrada")
     if sc.estado != "CONFIRMADA":
         raise HTTPException(400, f"No se puede confirmar en estado {sc.estado}")
-    # Gate 1, segunda capa: _sincronizar_estado_solicitud_desde_cotizacion (mecanismo
-    # preexistente y protegido, ver update_cotizacion/confirmar_cotizacion) tambien
-    # escribe SC.estado = "CONFIRMADA" cuando su Cotizacion vinculada se confirma --
-    # una accion de venta completamente normal, no un intento de bypass. Sin este
-    # check, cualquier venta cerrada reabriria "Confirmar + Crear Cotizacion" sobre
-    # una SC que ya tiene su Cotizacion real, permitiendo crear una COT duplicada.
-    # Esa sincronizacion SOLO puede producir CONFIRMADA en una SC que ya tenga al
-    # menos una Cotizacion vinculada (se dispara desde una accion sobre esa COT) --
-    # exigir cero Cotizaciones vinculadas aqui cierra esa ruta sin tocar la
-    # sincronizacion en si, y tiene sentido como regla de negocio por si sola:
-    # nunca se deberia poder re-crear una COT desde una SC que ya tiene una.
+    # Gate 1, segunda capa (Round 4): _sincronizar_estado_solicitud_desde_cotizacion
+    # (mecanismo preexistente y protegido, ver update_cotizacion/confirmar_cotizacion)
+    # tambien escribe SC.estado = "CONFIRMADA" cuando su Cotizacion vinculada se
+    # confirma -- una accion de venta completamente normal, no un intento de bypass.
+    # Mantenido como defensa en profundidad (es correcto por si solo: nunca se deberia
+    # poder re-crear una COT desde una SC que ya tiene una vinculada) pero YA NO es la
+    # unica capa -- un security review encontro que es falseable desvinculando la COT
+    # despues de que la sincronizacion escribiera CONFIRMADA (PATCH /cotizaciones/{id}
+    # {"sc_id": null}), dejando la SC en CONFIRMADA con cero Cotizaciones vinculadas,
+    # exactamente la condicion que este check trataba como prueba de legitimidad.
     if db.query(SalesQuotation).filter(SalesQuotation.sc_id == sc.id).first():
         raise HTTPException(400, "Esta solicitud ya tiene una Cotización vinculada; no se puede crear otra.")
+    # Gate 1, capa real (Round 6): marca de procedencia de un solo uso en vez de
+    # inferir legitimidad de otros campos mutables. gate1_confirmed_at SOLO la escribe
+    # confirmar_via_token (confirmacion_publica.py) -- nunca ningun PATCH ni la
+    # sincronizacion COT->SC. Se consume (vuelve a None) mas abajo, en el mismo commit
+    # que avanza a COTIZADA, para que no quede una prueba reutilizable por un ciclo
+    # de venta futuro y no relacionado sobre la misma SC.
+    if sc.gate1_confirmed_at is None:
+        raise HTTPException(400, "Esta solicitud no tiene una confirmación de cliente válida y sin usar; no se puede crear la Cotización.")
 
     # Al crear el borrador de cotizacion, la solicitud pasa a COTIZADA (no CONFIRMADA:
     # eso solo ocurre cuando el cliente realmente confirma la cotizacion).
     old_estado = sc.estado
     sc.estado = "COTIZADA"
+    sc.gate1_confirmed_at = None  # consumido -- de un solo uso, igual que el token
     sc.updated_at = datetime.datetime.utcnow()
 
     # Calculate delivery date based on modalidad_entrega
@@ -1482,6 +1532,7 @@ def cancelar_solicitud(sc_id: int, body: CancelarSolicitudBody,
     sc.razon_cancelacion = razon
     sc.eliminada_at = datetime.datetime.utcnow()
     sc.notas = f"{sc.notas or ''}\n[CANCELADA] Razón: {razon}".strip()
+    sc.gate1_confirmed_at = None  # Round 6: cancelar invalida cualquier confirmacion previa sin consumir
     sc.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(sc)
@@ -1514,7 +1565,8 @@ def eliminar_permanente(sc_id: int, user: User = Depends(require_roles(*ROLE_ADM
 @router.post("/solicitudes/{sc_id}/restaurar")
 def restaurar_solicitud(sc_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
-    """Restaura una SC de la papelera (estado CANCELADA) a BORRADOR."""
+    """Restaura una SC de la papelera (estado CANCELADA) a BORRADOR -- o a ASIGNADA si
+    todavia tiene un asesor puesto (ver Gate 1 mas abajo)."""
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     if not sc:
         raise HTTPException(404, "SC no encontrada")
@@ -1527,8 +1579,21 @@ def restaurar_solicitud(sc_id: int, user: User = Depends(require_roles(*ROLE_ADM
         db.rollback()
         sc.estado = "BORRADOR"
         db.commit()
-    _log(db, "SC", sc_id, sc.numero, "RESTORED", "Solicitud restaurada a Borrador", old_estado, "BORRADOR", getattr(user, 'email', ''))
-    return {"status": "success", "data": {"id": sc_id, "estado": "BORRADOR"}}
+    db.refresh(sc)
+    # Gate 1 (Round 6): mismo invariante que update_solicitud/promueve_asignada -- una
+    # SC nunca debe quedar en BORRADOR con un asesor ya asignado. Este endpoint no pasa
+    # por update_solicitud (hace su propio UPDATE crudo arriba), asi que sin este check
+    # una SC cancelada que todavia tuviera advisor_user_id (cancelar_solicitud no lo
+    # limpia) aterrizaria en un BORRADOR-con-asesor del que nada la volveria a
+    # promover -- exactamente el callejon sin salida que este Round cierra en todas
+    # las rutas que pueden producirlo, no solo en el PATCH generico.
+    estado_final = "BORRADOR"
+    if sc.advisor_user_id is not None:
+        sc.estado = "ASIGNADA"
+        estado_final = "ASIGNADA"
+        db.commit()
+    _log(db, "SC", sc_id, sc.numero, "RESTORED", f"Solicitud restaurada a {estado_final}", old_estado, estado_final, getattr(user, 'email', ''))
+    return {"status": "success", "data": {"id": sc_id, "estado": estado_final}}
 
 
 # ─── FORMATO CONFIRMACIÓN ────────────────────────────────────────────────────

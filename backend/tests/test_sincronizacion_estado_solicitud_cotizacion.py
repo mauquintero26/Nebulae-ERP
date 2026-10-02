@@ -20,9 +20,12 @@ def _crear_solicitud_y_confirmar(client, admin_token, db):
     # sincronizacion de estados SC<->COT que ocurre despues de crear la cotizacion,
     # no el flujo de confirmacion por link -- se fuerza el estado aqui por DB,
     # igual que test_fecha_entrega_sc_cotizacion.py ajusto para el mismo cambio.
+    # Round 6 agrego una segunda exigencia (gate1_confirmed_at no nulo) -- se simula
+    # aqui tambien, por el mismo motivo.
     from app.models.erp_documents import CustomerRequest
     sc_row = db.query(CustomerRequest).filter(CustomerRequest.id == sc["id"]).first()
     sc_row.estado = "CONFIRMADA"
+    sc_row.gate1_confirmed_at = datetime.datetime.utcnow()
     db.commit()
     r = client.post(f"/api/v1/ventas/solicitudes/{sc['id']}/confirmar", json={}, headers=_headers(admin_token))
     return sc, r.json()["data"]["cotizacion"]

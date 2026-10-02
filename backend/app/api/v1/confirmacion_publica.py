@@ -98,6 +98,12 @@ def confirmar_via_token(token: str, idempotency_key: str = Header(..., alias="Id
             raise HTTPException(400, GENERIC_ERROR)
         old_estado = sc.estado
         sc.estado = "CONFIRMADA"
+        # Round 6: marca de procedencia de un solo uso -- ESTA es la UNICA linea del
+        # codebase que escribe gate1_confirmed_at. confirmar_solicitud la exige (ademas
+        # de estado=="CONFIRMADA") y la consume (vuelve a None) al avanzar a COTIZADA,
+        # para que ninguna otra escritura futura de CONFIRMADA (p.ej. la sincronizacion
+        # COT->SC en una venta completamente distinta) pueda reutilizarla.
+        sc.gate1_confirmed_at = datetime.datetime.utcnow()
         sc.updated_at = datetime.datetime.utcnow()
         db.commit()
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Confirmada por el cliente vía enlace",
