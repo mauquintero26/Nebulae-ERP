@@ -221,7 +221,18 @@ def _pec_dict(p: PurchaseOrderFull) -> dict:
     }
 
 
-def _gr_dict(g: GoodsReceipt) -> dict:
+def _gr_dict(g: GoodsReceipt, db: Session) -> dict:
+
+    # Compute dias_retraso: compare actual fecha_recepcion against promised fecha_entrega_estimada
+    # with 1-day tolerance (receipt within 1 day of promised date is NOT late).
+    dias_retraso = None
+    if g.pec_id and g.fecha_recepcion:
+        pec_ref = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == g.pec_id).first()
+        if pec_ref and pec_ref.fecha_entrega_estimada:
+            limite_con_tolerancia = pec_ref.fecha_entrega_estimada + datetime.timedelta(days=1)
+            delta = (g.fecha_recepcion - limite_con_tolerancia).days
+            if delta > 0:
+                dias_retraso = delta
 
     return {
         "id": g.id,
@@ -244,6 +255,7 @@ def _gr_dict(g: GoodsReceipt) -> dict:
         "updated_at": g.updated_at.isoformat() if g.updated_at else None,
         "created_by": g.created_by,
         "confirmed_by": g.confirmed_by,
+        "dias_retraso": dias_retraso,
     }
 
 
@@ -727,7 +739,7 @@ def get_pec(pec_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     d = _pec_dict(p)
     d["actividades"] = [_log_dict(l) for l in logs]
     grs = db.query(GoodsReceipt).filter(GoodsReceipt.pec_id == pec_id).all()
-    d["recepciones"] = [_gr_dict(g) for g in grs]
+    d["recepciones"] = [_gr_dict(g, db) for g in grs]
     # p.ven_id/ven_numero solo guardan el primer PVEN de una compra
     # consolidada (varios PVEN en un mismo PEC) -- SaleOrder.pec_id es el
     # vinculo real y completo (ver _desvincular_pec_cancelado, que ya lo usa
@@ -1185,7 +1197,7 @@ def crear_recepcion_desde_pec(
     ]
     db.commit()
     db.refresh(gr)
-    return {"status": "success", "data": _gr_dict(gr)}
+    return {"status": "success", "data": _gr_dict(gr, db)}
 
 
 @router.get("/recepciones")
@@ -1204,7 +1216,7 @@ def list_recepciones(
         q = q.filter(GoodsReceipt.pec_id == pec_id)
     total = q.count()
     items = q.order_by(GoodsReceipt.created_at.desc()).offset(offset).limit(limit).all()
-    return {"status": "success", "total": total, "data": [_gr_dict(g) for g in items]}
+    return {"status": "success", "total": total, "data": [_gr_dict(g, db) for g in items]}
 
 
 @router.post("/recepciones", status_code=201)
@@ -1291,7 +1303,7 @@ def create_recepcion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
     _log(db, "ENINV", gr.id, gr.numero, "CREATED",
          f"Recepcion {gr.numero} creada con {len(productos_gr)} lineas normalizadas",
          new_estado="BORRADOR", user_name=body.get("created_by"))
-    return {"status": "success", "data": _gr_dict(gr)}
+    return {"status": "success", "data": _gr_dict(gr, db)}
 
 
 @router.get("/recepciones/{eninv_id}")
@@ -1304,7 +1316,7 @@ def get_recepcion(eninv_id: int, user: User = Depends(require_roles(*ALL_ERP_ROL
         ActivityLog.entity_type == "ENINV",
         ActivityLog.entity_id == eninv_id
     ).order_by(ActivityLog.created_at.asc()).all()
-    d = _gr_dict(g)
+    d = _gr_dict(g, db)
     d["actividades"] = [_log_dict(l) for l in logs]
     return {"status": "success", "data": d}
 
@@ -1523,7 +1535,7 @@ def update_recepcion(eninv_id: int, body: dict, user: User = Depends(require_rol
              f"Estado cambiado a {g.estado}",
              old_estado=old_estado, new_estado=g.estado,
              user_name=body.get("updated_by"))
-    return {"status": "success", "data": _gr_dict(g)}
+    return {"status": "success", "data": _gr_dict(g, db)}
 
 
 @router.post("/recepciones/{eninv_id}/lineas")
@@ -2643,7 +2655,7 @@ def confirmar_recepcion(
 
         # ─── PREPARAR RESPUESTA JSON ──────────────────────────────────────────
 
-        response_data = _gr_dict(g)
+        response_data = _gr_dict(g, db)
 
         # ─── MARCAR IDEMPOTENCIA DONE (dentro de la transaccion principal) ────
 
