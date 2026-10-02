@@ -151,19 +151,32 @@ export default function CotizacionDetallePage() {
     if (!selectedChannel) return;
     setSending(true);
     try {
+      // canal_envio es solo informativo (para que se pueda ver el canal que se usara
+      // ir enviarlo) -- se guarda con un PATCH normal, que ya no puede tocar el estado
+      // de Gate 2. El envio real (que crea y emite el token) pasa por su propio
+      // endpoint dedicado -- Round 2 (adversarial review): antes este mismo PATCH
+      // ponia 'PENDIENTE_CONFIRMACION' directamente, que es exactamente lo que el
+      // drag-and-drop del Kanban del Hub tambien manda al soltar una tarjeta en "No
+      // Resuelto" -- un PATCH generico nunca debe poder disparar el envio de un email
+      // de confirmacion como efecto secundario.
       await apiFetch(`/ventas/cotizaciones/${cotizacion.id}`, {
         method: 'PATCH',
-        // Gate 2: el backend ahora genera y envia el link de confirmacion de un solo
-        // uso cuando el PATCH deja la cotizacion en PENDIENTE_CONFIRMACION (ver
-        // update_cotizacion en erp_ventas.py) -- antes este PATCH ponia 'ENVIADA' y
-        // "Confirmar + Crear Pedido de Venta" saltaba directo a crear el pedido sin
-        // que el cliente confirmara nada.
-        body: JSON.stringify({estado: 'PENDIENTE_CONFIRMACION', canal_envio: selectedChannel, updated_by: currentUser}),
+        body: JSON.stringify({canal_envio: selectedChannel, updated_by: currentUser}),
       });
+      const d = await apiFetch(`/ventas/cotizaciones/${cotizacion.id}/enviar-confirmacion`, {
+        method: 'POST',
+        body: JSON.stringify({user_name: currentUser}),
+      });
+      const link = d?.link_confirmacion || '';
 
       if (selectedChannel === 'WhatsApp' && cotizacion?.customer_phone) {
         const phoneNumber = cotizacion.customer_phone.replace(/\D/g, '');
-        const mensaje = `Hola, aqui esta tu cotizacion ${cotizacion.numero}`;
+        // Hallazgo #3 (spec): el mensaje de WhatsApp debe incluir el link -- sin esto,
+        // un cliente que solo recibe por WhatsApp (o sin email registrado) no tenia
+        // ninguna forma real de llegar al link de confirmacion.
+        const mensaje = link
+          ? `Hola, aqui esta tu cotizacion ${cotizacion.numero}. Confírmala aquí: ${link}`
+          : `Hola, aqui esta tu cotizacion ${cotizacion.numero}`;
         window.open(`https://wa.me/57${phoneNumber}?text=${encodeURIComponent(mensaje)}`, '_blank');
       }
 
@@ -569,11 +582,18 @@ export default function CotizacionDetallePage() {
                   {/* Gate 2: "Crear Pedido de Venta" solo cuando el cliente ya confirmo via el
                       enlace publico (estado === 'CONFIRMADA') -- separado de "Enviar al
                       Cliente", que ahora solo manda el link de confirmacion (ver
-                      confirmarEnvio). !ventaGenerada evita que el boton seguiria ofreciendose
+                      confirmarEnvio). !ventaGenerada evita que el boton siga ofreciendose
                       despues de usado: a diferencia del flujo viejo, CONFIRMADA ya no es solo un
                       estado terminal post-conversion -- ahora tambien es el estado intermedio
-                      mientras el PVEN todavia no existe. */}
-                  {(estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA' || estadoActual === 'PENDIENTE_CONFIRMACION' || (estadoActual === 'CONFIRMADA' && !ventaGenerada)) && (
+                      mientras el PVEN todavia no existe.
+                      Round 2 (adversarial review, hallazgo bundled): pvenCreadoNumero se
+                      incluye como condicion aparte (en vez de depender solo de
+                      "CONFIRMADA && !ventaGenerada") porque loadCotizacion() ya deja
+                      ventaGenerada=true ANTES de que el mensaje de exito se renderice --
+                      sin esto, el mensaje nunca llegaba a mostrarse (el `!ventaGenerada`
+                      de la condicion original ya era falso para cuando pvenCreadoNumero se
+                      alcanzaba a setear). */}
+                  {(estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA' || estadoActual === 'PENDIENTE_CONFIRMACION' || (estadoActual === 'CONFIRMADA' && !ventaGenerada) || pvenCreadoNumero) && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {(estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA') && (
                         <Button color="blue" icon={Send} loading={sending} onClick={handleEnviarCotizacion}>
@@ -585,21 +605,19 @@ export default function CotizacionDetallePage() {
                           Esperando confirmación del cliente
                         </div>
                       )}
-                      {estadoActual === 'CONFIRMADA' && !ventaGenerada && (
-                        pvenCreadoNumero ? (
-                          <div className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm font-bold animate-in fade-in">
-                            <CheckCircle2 size={16} /> Pedido {pvenCreadoNumero} creado exitosamente
-                          </div>
-                        ) : (
-                          <Button color="emerald" icon={CheckCircle2} loading={confirming} onClick={handleConfirmarVenta}>
-                            Crear Pedido de Venta
-                          </Button>
-                        )
+                      {pvenCreadoNumero ? (
+                        <div className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm font-bold animate-in fade-in">
+                          <CheckCircle2 size={16} /> Pedido {pvenCreadoNumero} creado exitosamente
+                        </div>
+                      ) : estadoActual === 'CONFIRMADA' && !ventaGenerada && (
+                        <Button color="emerald" icon={CheckCircle2} loading={confirming} onClick={handleConfirmarVenta}>
+                          Crear Pedido de Venta
+                        </Button>
                       )}
                     </div>
                   )}
 
-                  <div className={`grid grid-cols-1 sm:grid-cols-2 gap-3 ${(estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA' || estadoActual === 'PENDIENTE_CONFIRMACION' || (estadoActual === 'CONFIRMADA' && !ventaGenerada)) ? 'pt-4 border-t border-slate-100' : ''}`}>
+                  <div className={`grid grid-cols-1 sm:grid-cols-2 gap-3 ${(estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA' || estadoActual === 'PENDIENTE_CONFIRMACION' || (estadoActual === 'CONFIRMADA' && !ventaGenerada) || pvenCreadoNumero) ? 'pt-4 border-t border-slate-100' : ''}`}>
                     <Button color={Number(cotizacion?.total_cop) > 0 ? 'orange' : 'blue'}
                       icon={Number(cotizacion?.total_cop) > 0 ? RotateCcw : Calculator}
                       onClick={() => setShowCalc(true)}>

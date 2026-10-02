@@ -2692,7 +2692,17 @@ def convertir_cotizacion_a_venta(
     - Rechaza conversiones incompatibles/divergentes con 409 Conflict.
     - Conserva cot_id, cliente, lineas, SKU, modalidad (ENTREGA_INMEDIATA / POR_PEDIDO), precios, descuentos, etc.
     """
-    cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).with_for_update().first()
+    # Round 2 (adversarial review): .populate_existing() es necesario porque el wrapper
+    # confirmar_cotizacion (erp_ventas.py) ya carga su propio `cot` ANTES de llamar a
+    # esta funcion, en la MISMA sesion -- sin esto, el identity map de SQLAlchemy le
+    # devolveria a este with_for_update() el mismo objeto Python ya cacheado sin
+    # refrescar sus atributos, y la fila SI quedaria bloqueada a nivel de DB pero la
+    # lectura en memoria no seria la autoritativa (un UPDATE concurrente entre el
+    # primer load del wrapper y este punto no se veria reflejado aqui). Con
+    # populate_existing(), el SELECT ... FOR UPDATE siempre re-puebla el objeto, sin
+    # importar que llamador (esta misma ruta registrada por separado, o el wrapper) lo
+    # haya cargado antes.
+    cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).populate_existing().with_for_update().first()
     if not cot:
         raise HTTPException(status_code=404, detail=f"Cotizacion {cot_id} no encontrada.")
 

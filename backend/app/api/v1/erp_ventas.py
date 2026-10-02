@@ -813,20 +813,37 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     if not cot:
         raise HTTPException(404, "Cotizacion no encontrada")
     # Gate 2 (Task 5, mismo criterio que update_solicitud para Gate 1 -- ver ese
-    # comentario, mas abajo en este archivo): CONFIRMADA solo se alcanza cuando el
-    # cliente confirma via el enlace publico de un solo uso (confirmacion_publica.py).
-    # Sin este check, este PATCH generico seguiria permitiendo que cualquier
-    # ROLE_ADMIN/ROLE_ASESOR forzara CONFIRMADA directamente con {"estado":
-    # "CONFIRMADA"}. No es la defensa real (el gate que de verdad importa esta en
-    # convertir_cotizacion_a_venta, via gate2_confirmed_at -- ver mas abajo), pero
-    # evita que un PATCH crudo deje la COT etiquetada "Confirmada" de forma
-    # cosmeticamente inconsistente con lo que en verdad paso.
-    if body.get("estado") == "CONFIRMADA":
-        raise HTTPException(400, "CONFIRMADA solo se alcanza cuando el cliente confirma la cotización vía el enlace enviado (no se puede forzar manualmente).")
+    # comentario, mas abajo en este archivo): CONFIRMADA y PENDIENTE_CONFIRMACION solo
+    # se alcanzan por rutas dedicadas (el enlace publico y
+    # enviar_cotizacion_para_confirmacion, respectivamente -- ver mas abajo), nunca por
+    # este PATCH generico. Round 2 (adversarial review): la version original de este
+    # Task SI dejaba que este PATCH pusiera PENDIENTE_CONFIRMACION directamente (y
+    # creaba el token ahi mismo) -- exactamente lo que el drag-and-drop del Kanban del
+    # Hub manda al soltar una tarjeta en "No Resuelto" (incluso una BORRADOR sin
+    # precios, o para revivir una RECHAZADA), emitiendo un email de confirmacion como
+    # efecto secundario de un PATCH generico. Mismo criterio que Gate 1 ya aplicaba
+    # desde el principio: enviar_solicitud_para_confirmacion es su propio endpoint
+    # dedicado precisamente para que esto nunca pueda pasar por una via generica.
+    if body.get("estado") in ("CONFIRMADA", "PENDIENTE_CONFIRMACION"):
+        raise HTTPException(400, "Este estado solo se alcanza por el flujo de confirmación del cliente (no se puede forzar manualmente con este PATCH).")
     if "productos" in body:
         _validar_precios_productos(body.get("productos") or [])
     old_estado = cot.estado
     fecha_vieja = cot.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
+    # Round 2 (hallazgo #5, "congelar" el precio confirmado): captura ANTES del loop
+    # de abajo los valores de todo lo que afecta el precio/entrega que el cliente vio y
+    # confirmo (o esta por confirmar). Si esta COT esta en el ciclo vigente de Gate 2
+    # (PENDIENTE_CONFIRMACION, o CONFIRMADA sin un Pedido de Venta todavia -- una vez
+    # que existe un PVEN, re-cotizar es la operacion legitima de actualizar un trato YA
+    # CERRADO, no una confirmacion que se vuelve obsoleta) y este PATCH de verdad
+    # CAMBIA alguno de esos valores (no solo "la llave vino en el body" -- un reenvio
+    # del mismo valor no debe disparar esto), la confirmacion del cliente (dada o
+    # pendiente) ya no aplica al precio nuevo: se reinicia el ciclo a BORRADOR, lo que
+    # a su vez dispara sale_de_gate2 mas abajo (mismo mecanismo de revocar+limpiar que
+    # ya usa cualquier otra salida del ciclo, sin duplicar esa logica aqui).
+    PRICE_FREEZE_FIELDS = ["productos", "total_cop", "subtotal_cop", "descuento_pct",
+                           "anticipo_cop", "trm_rate", "fecha_entrega_estimada", "sc_id"]
+    old_price_values = {k: getattr(cot, k) for k in PRICE_FREEZE_FIELDS}
     allowed = ["sc_id","customer_id","customer_name","customer_phone","customer_email",
                "customer_address","cotizador","direccion_entrega","trm_rate","subtotal_cop",
                "descuento_pct","total_cop","anticipo_cop","estado","canal_envio","fecha_entrega_estimada",
@@ -834,16 +851,45 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     for k in allowed:
         if k in body:
             setattr(cot, k, body[k])
+
+    def _freeze_cmp(field, v):
+        """Normaliza para comparar -- fecha_entrega_estimada en particular: el valor
+        VIEJO (ya en el ORM) es un datetime real, pero el NUEVO (si vino en el body) es
+        un string crudo recien parseado del JSON -- sin normalizar, un datetime nunca es
+        == a un string aunque representen el mismo dia, lo que convertiria CUALQUIER
+        guardado desde la Calculadora en un 'cambio' (manda fecha_entrega_estimada
+        siempre, la haya tocado el usuario o no). Se compara solo a nivel de DIA (no el
+        timestamp completo) porque el selector de fecha del frontend tampoco captura
+        hora -- comparar con precision de segundos generaria el mismo falso positivo
+        por puro ruido de hora."""
+        if field != "fecha_entrega_estimada" or v is None:
+            return v
+        if isinstance(v, str):
+            return v[:10]
+        if isinstance(v, datetime.datetime):
+            return v.date().isoformat()
+        return v
+
+    ya_tiene_pven = db.query(SaleOrder).filter(SaleOrder.cot_id == cot.id).first() is not None
+    precio_congelado = old_estado == "PENDIENTE_CONFIRMACION" or (old_estado == "CONFIRMADA" and not ya_tiene_pven)
+    hubo_cambio_de_precio = any(
+        _freeze_cmp(k, getattr(cot, k)) != _freeze_cmp(k, old_price_values[k])
+        for k in PRICE_FREEZE_FIELDS
+    )
+    rompe_congelamiento = precio_congelado and hubo_cambio_de_precio
+    if rompe_congelamiento:
+        cot.estado = "BORRADOR"
     # Gate 2 -- capturar AHORA, antes de cualquier commit/refresh, si ESTE PATCH saca a
     # la COT del ciclo vigente de Gate 2 (PENDIENTE_CONFIRMACION o CONFIRMADA) hacia
     # cualquier otro estado. No hay un cancelar_cotizacion/restaurar_cotizacion
     # dedicado como en SC -- este PATCH generico es la UNICA salida real del ciclo, asi
     # que es el unico lugar que necesita revocar el token pendiente y limpiar la marca
     # (ver el bloque al final de esta funcion). Capturado aqui, comparando old_estado
-    # contra el estado YA ASIGNADO en memoria por el loop de arriba, para no repetir el
-    # bug de concurrencia de Task 4 (Round 7->8): comparar esto DESPUES de
-    # db.refresh(cot) podria confundir el commit de ESTE request con el de un click de
-    # confirmacion del cliente llegando al mismo tiempo por otra conexion.
+    # contra el estado YA ASIGNADO en memoria por el loop de arriba (y por el
+    # rompe_congelamiento de arriba), para no repetir el bug de concurrencia de Task 4
+    # (Round 7->8): comparar esto DESPUES de db.refresh(cot) podria confundir el commit
+    # de ESTE request con el de un click de confirmacion del cliente llegando al mismo
+    # tiempo por otra conexion.
     sale_de_gate2 = old_estado in ("PENDIENTE_CONFIRMACION", "CONFIRMADA") and cot.estado != old_estado
     cot.updated_at = datetime.datetime.utcnow()
     db.commit()
@@ -855,27 +901,28 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
                 mover_lead_de_solicitud(cot.sc_id, "QUOTATION", db)
             elif cot.estado == "RECHAZADA":
                 mover_lead_de_solicitud(cot.sc_id, "CANCELLED", db)
-            if cot.estado == "PENDIENTE_CONFIRMACION":
-                # Gate 2 (Task 5): genera y envia el link de confirmacion de un solo
-                # uso. Igual que el bloque de arriba, va DENTRO de este try para que un
-                # fallo de envio de correo no rompa la transaccion principal (el PATCH
-                # de estado ya se commiteo arriba).
-                from app.core.confirmation_tokens import create_confirmation_token
-                from app.core.email import send_email
-                import os
-                raw_token = create_confirmation_token(db, "COT", cot.id)
-                frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5100").rstrip("/")
-                link = f"{frontend_url}/confirmar/{raw_token}"
-                if cot.customer_email:
-                    send_email(cot.customer_email, f"Confirma tu cotización {cot.numero} - Nebulae",
-                                f'<p>Revisa y confirma tu cotización aquí: <a href="{link}">{link}</a></p>')
         except Exception as exc:
             db.rollback()
-            logger.error(f"Error al sincronizar Solicitud/Lead/token tras actualizar cotizacion {cot.id}: {exc}", exc_info=True)
+            logger.error(f"Error al sincronizar Solicitud/Lead tras actualizar cotizacion {cot.id}: {exc}", exc_info=True)
         _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {cot.estado}",
              old_estado=old_estado, new_estado=cot.estado,
              user_name=body.get("updated_by"))
+    elif rompe_congelamiento:
+        # El check de arriba solo loguea cuando el REQUEST manda "estado" explicitamente
+        # Y distinto del original. rompe_congelamiento cambia cot.estado sin que el body
+        # lo pida (el caso tipico: solo manda productos/total_cop desde la Calculadora),
+        # asi que sin este bloque la transicion a BORRADOR quedaria invisible en el
+        # Chatter/Actividad -- mismo motivo que ya tienen los bloques equivalentes de
+        # promueve_asignada/desasigna_a_borrador en update_solicitud.
+        try:
+            _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
+        except Exception as exc:
+            db.rollback()
+            logger.error(f"Error al sincronizar Solicitud tras romper congelamiento de precio en cotizacion {cot.id}: {exc}", exc_info=True)
+        _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
+             "Estado cambiado a BORRADOR (la cotización fue editada tras la confirmación del cliente; esa confirmación ya no es válida)",
+             old_estado=old_estado, new_estado="BORRADOR", user_name=body.get("updated_by"))
     if fecha_vieja is not None and cot.fecha_entrega_estimada and cot.fecha_entrega_estimada != fecha_vieja:
         diff_dias = (cot.fecha_entrega_estimada - fecha_vieja).days
         signo = "+" if diff_dias >= 0 else ""
@@ -892,6 +939,69 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         cot.gate2_confirmed_at = None
         db.commit()
     return {"status": "success", "data": _cot_dict(cot)}
+
+
+@router.post("/cotizaciones/{cot_id}/enviar-confirmacion")
+def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_factory=dict),
+        user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
+    """Gate 2: genera un link de confirmacion de un solo uso y lo envia al cliente.
+
+    Round 2 (adversarial review): antes, update_cotizacion (el PATCH generico) creaba
+    este mismo token con solo mandar {"estado": "PENDIENTE_CONFIRMACION"} -- exactamente
+    lo que el drag-and-drop del Kanban del Hub manda al soltar una tarjeta en "No
+    Resuelto" (ver dashboard/ventas/page.tsx), alcanzable incluso para una COT BORRADOR
+    sin precios calculados o para revivir una RECHAZADA con un solo drag. Mismo patron
+    que enviar_solicitud_para_confirmacion (Gate 1) ya usa desde el principio: un
+    endpoint dedicado es la UNICA via real para que un PATCH generico nunca pueda
+    disparar un envio de correo como efecto secundario.
+
+    A diferencia de enviar_solicitud_para_confirmacion, este endpoint NO acepta
+    reenvio-mientras-PENDIENTE_CONFIRMACION (solo BORRADOR/ENVIADA) -- decision
+    explicita de este Round, no una omision: una COT no tiene el mismo callejon sin
+    salida de "link vencido sin forma de pedir uno nuevo" que motivo esa excepcion
+    para SC, porque update_cotizacion siempre puede reiniciar el ciclo a BORRADOR
+    primero (vía cualquier edicion de precio, o la pastilla generica) y desde ahi
+    volver a pedir un envio nuevo.
+    """
+    cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
+    if not cot:
+        raise HTTPException(404, "Cotizacion no encontrada")
+    if cot.estado not in ("BORRADOR", "ENVIADA"):
+        raise HTTPException(400, f"La cotización debe estar en Borrador o Enviada antes de enviar para confirmación (estado actual: {cot.estado}).")
+    # Una cotizacion sin productos ni precio calculado no tiene nada que el cliente
+    # pueda confirmar -- cierra la variante "tarjeta BORRADOR vacia" del hallazgo #1.
+    if not cot.productos or not cot.total_cop:
+        raise HTTPException(400, "La cotización no tiene productos ni precio calculado; cotiza primero antes de enviar para confirmación.")
+    if db.query(SaleOrder).filter(SaleOrder.cot_id == cot.id).first():
+        raise HTTPException(400, "Esta cotización ya tiene un Pedido de Venta vinculado; no tiene sentido volver a pedir confirmación.")
+
+    from app.core.confirmation_tokens import create_confirmation_token, revoke_pending_tokens
+    from app.core.email import send_email
+    import os
+
+    old_estado = cot.estado
+    # Mismo criterio que enviar_solicitud_para_confirmacion: revocar incondicionalmente
+    # antes de emitir, por si quedo un token vivo de un ciclo anterior sin terminar.
+    revoke_pending_tokens(db, "COT", cot.id)
+
+    raw_token = create_confirmation_token(db, "COT", cot.id)
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5100").rstrip("/")
+    link = f"{frontend_url}/confirmar/{raw_token}"
+
+    cot.estado = "PENDIENTE_CONFIRMACION"
+    cot.updated_at = datetime.datetime.utcnow()
+    db.commit()
+    db.refresh(cot)
+    _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
+    _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
+         "Enviada para confirmación del cliente",
+         old_estado=old_estado, new_estado="PENDIENTE_CONFIRMACION", user_name=body.get("user_name"))
+
+    if cot.customer_email:
+        send_email(cot.customer_email, f"Confirma tu cotización {cot.numero} - Nebulae",
+                    f'<p>Revisa y confirma tu cotización aquí: <a href="{link}">{link}</a></p>')
+
+    return {"status": "success", "data": _cot_dict(cot), "link_confirmacion": link}
 
 
 @router.post("/cotizaciones/{cot_id}/confirmar")

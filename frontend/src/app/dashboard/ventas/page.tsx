@@ -395,6 +395,20 @@ export default function VentasHub() {
       'Acción Tomada':{SC:'CONFIRMADA',COT:'CONFIRMADA',VEN:'LISTO_ENTREGA'},
       'Cancelado':{SC:'CANCELADA',COT:'RECHAZADA',VEN:'CANCELADO'},
     };
+    // Gate 2 (Round 2, adversarial review): soltar una COT en "No Resuelto" mapeaba a
+    // un PATCH directo {estado:'PENDIENTE_CONFIRMACION'} -- exactamente el bypass que
+    // creaba y enviaba un email de confirmacion como efecto secundario de un PATCH
+    // generico, alcanzable con soltar una tarjeta BORRADOR sin precios (o revivir una
+    // RECHAZADA) en esa columna. Ahora pasa por el mismo endpoint dedicado que usa el
+    // boton "Enviar al Cliente" (enviar_cotizacion_para_confirmacion), que exige
+    // precios reales calculados y rechaza si ya existe un Pedido de Venta -- el gesto
+    // de arrastrar sigue funcionando, solo que ahora por la via gateada.
+    if (tipo === 'COT' && (m[col] || {})[tipo] === 'PENDIENTE_CONFIRMACION') {
+      await apiFetch(`/ventas/cotizaciones/${id}/enviar-confirmacion`, {method:'POST', body: JSON.stringify({})})
+        .catch((err: any) => alert('No se pudo enviar para confirmación: ' + (err?.message || 'la cotización necesita precios calculados primero.')));
+      loadData();
+      return;
+    }
     await apiFetch(path,{method:'PATCH',body:JSON.stringify({estado:(m[col]||{})[tipo]||col})}).catch(()=>{});
     loadData();
   };
