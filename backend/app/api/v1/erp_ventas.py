@@ -406,9 +406,10 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
     old_estado = sc.estado
+    fecha_vieja = sc.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
     allowed = ["customer_id","customer_name","customer_phone","customer_email",
                "customer_address","advisor_name","advisor_user_id","tipo_solicitud","modalidad_pago","estado",
-               "fecha_vencimiento","notas","productos",
+               "fecha_vencimiento","fecha_entrega_estimada","notas","productos",
                "tipo_problema","descripcion_problema","urgencia","evidencia_descripcion",
                "asignado_a_user_id","estado_soporte"]
     for k in allowed:
@@ -424,6 +425,13 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {sc.estado}",
              old_estado=old_estado, new_estado=sc.estado,
+             user_name=body.get("updated_by"))
+    if fecha_vieja is not None and sc.fecha_entrega_estimada and sc.fecha_entrega_estimada != fecha_vieja:
+        diff_dias = (sc.fecha_entrega_estimada - fecha_vieja).days
+        signo = "+" if diff_dias >= 0 else ""
+        _log(db, "SC", sc.id, sc.numero, "FECHA_ENTREGA_MODIFICADA",
+             f"Fecha de entrega modificada: {fecha_vieja.strftime('%d/%m/%Y')} -> "
+             f"{sc.fecha_entrega_estimada.strftime('%d/%m/%Y')} ({signo}{diff_dias} día{'s' if abs(diff_dias)!=1 else ''})",
              user_name=body.get("updated_by"))
     return {"status": "success", "data": _sc_dict(sc)}
 
@@ -646,6 +654,7 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     if "productos" in body:
         _validar_precios_productos(body.get("productos") or [])
     old_estado = cot.estado
+    fecha_vieja = cot.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
     allowed = ["sc_id","customer_id","customer_name","customer_phone","customer_email",
                "customer_address","cotizador","direccion_entrega","trm_rate","subtotal_cop",
                "descuento_pct","total_cop","anticipo_cop","estado","canal_envio","fecha_entrega_estimada",
@@ -669,6 +678,13 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {cot.estado}",
              old_estado=old_estado, new_estado=cot.estado,
+             user_name=body.get("updated_by"))
+    if fecha_vieja is not None and cot.fecha_entrega_estimada and cot.fecha_entrega_estimada != fecha_vieja:
+        diff_dias = (cot.fecha_entrega_estimada - fecha_vieja).days
+        signo = "+" if diff_dias >= 0 else ""
+        _log(db, "COT", cot.id, cot.numero, "FECHA_ENTREGA_MODIFICADA",
+             f"Fecha de entrega modificada: {fecha_vieja.strftime('%d/%m/%Y')} -> "
+             f"{cot.fecha_entrega_estimada.strftime('%d/%m/%Y')} ({signo}{diff_dias} día{'s' if abs(diff_dias)!=1 else ''})",
              user_name=body.get("updated_by"))
     return {"status": "success", "data": _cot_dict(cot)}
 
@@ -917,6 +933,7 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
     if not v:
         raise HTTPException(404, "Pedido de venta no encontrado")
     old_estado = v.estado
+    fecha_vieja = v.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
     if body.get("estado") == "CANCELADO" and old_estado in ("ENTREGADO", "FACTURADO"):
         raise HTTPException(422, f"No se puede cancelar un pedido en estado {old_estado}")
     if body.get("estado") == "CANCELADO" and not body.get("cancellation_authorized_by"):
@@ -938,6 +955,13 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
         _log(db, "VEN", v.id, v.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {v.estado}",
              old_estado=old_estado, new_estado=v.estado,
+             user_name=body.get("updated_by"))
+    if fecha_vieja is not None and v.fecha_entrega_estimada and v.fecha_entrega_estimada != fecha_vieja:
+        diff_dias = (v.fecha_entrega_estimada - fecha_vieja).days
+        signo = "+" if diff_dias >= 0 else ""
+        _log(db, "VEN", v.id, v.numero, "FECHA_ENTREGA_MODIFICADA",
+             f"Fecha de entrega modificada: {fecha_vieja.strftime('%d/%m/%Y')} -> "
+             f"{v.fecha_entrega_estimada.strftime('%d/%m/%Y')} ({signo}{diff_dias} día{'s' if abs(diff_dias)!=1 else ''})",
              user_name=body.get("updated_by"))
     return {"status": "success", "data": _ven_dict(v)}
 

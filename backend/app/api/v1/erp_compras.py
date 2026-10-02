@@ -606,8 +606,14 @@ def list_pec(
 def create_pec(body: CrearPecBody, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_COMPRAS)),
         db: Session = Depends(get_db)):
     numero = _gen_numero(db, "PEC-", "seq_pec")
-    days = body.dias_entrega
-    entrega_est = datetime.datetime.utcnow() + datetime.timedelta(days=days)
+    entrega_est = None
+    if body.ven_id:
+        ven = db.query(SaleOrder).filter(SaleOrder.id == body.ven_id).first()
+        if ven and ven.fecha_entrega_estimada:
+            entrega_est = ven.fecha_entrega_estimada
+    if entrega_est is None:
+        # Sin ven_id, o el PVEN no tiene fecha propia todavia (caso raro): comportamiento actual
+        entrega_est = datetime.datetime.utcnow() + datetime.timedelta(days=body.dias_entrega)
     alerta = entrega_est
     tipo_envio = body.tipo_envio if body.tipo_envio in ("casillero", "directo") else "casillero"
     template = _load_tracking_config(db).get(tipo_envio) or DEFAULT_TRACKING_STAGES["casillero"]
@@ -783,6 +789,7 @@ def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE
     if not p:
         raise HTTPException(404, "Pedido de compra no encontrado")
     old_estado = p.estado
+    fecha_vieja = p.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
     # Si el payload trae productos, aplicar logica normalizada
     if "productos" in body:
         # Verificar si ya tiene recepciones
@@ -837,6 +844,13 @@ def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE
              user_name=body.get("updated_by"))
         if p.estado == "CANCELADO":
             _desvincular_pec_cancelado(db, p.id, p.numero, body.get("updated_by"))
+    if fecha_vieja is not None and p.fecha_entrega_estimada and p.fecha_entrega_estimada != fecha_vieja:
+        diff_dias = (p.fecha_entrega_estimada - fecha_vieja).days
+        signo = "+" if diff_dias >= 0 else ""
+        _log(db, "PEC", p.id, p.numero, "FECHA_ENTREGA_MODIFICADA",
+             f"Fecha de entrega modificada: {fecha_vieja.strftime('%d/%m/%Y')} -> "
+             f"{p.fecha_entrega_estimada.strftime('%d/%m/%Y')} ({signo}{diff_dias} día{'s' if abs(diff_dias)!=1 else ''})",
+             user_name=body.get("updated_by"))
     return {"status": "success", "data": _pec_dict(p)}
 
 
