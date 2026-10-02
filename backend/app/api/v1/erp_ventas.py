@@ -435,6 +435,14 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
              f"Estado cambiado a {sc.estado}",
              old_estado=old_estado, new_estado=sc.estado,
              user_name=body.get("updated_by"))
+    if promueve_asignada and not (body.get("estado") and body["estado"] != old_estado):
+        # El check de arriba solo loguea cuando el REQUEST manda "estado" explicitamente.
+        # promueve_asignada cambia sc.estado sin que el body lo pida (solo manda
+        # advisor_user_id), asi que sin este bloque la transicion BORRADOR->ASIGNADA
+        # quedaria invisible en el Chatter/Actividad. El guard evita un doble log en
+        # el caso raro de que el mismo PATCH mande advisor_user_id Y un estado explicito.
+        _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Estado cambiado a ASIGNADA (asesor asignado)",
+             old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"))
     if fecha_vieja is not None and sc.fecha_entrega_estimada and sc.fecha_entrega_estimada != fecha_vieja:
         diff_dias = (sc.fecha_entrega_estimada - fecha_vieja).days
         signo = "+" if diff_dias >= 0 else ""

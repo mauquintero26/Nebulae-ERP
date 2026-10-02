@@ -260,12 +260,13 @@ function SolicitudDetalleContent() {
   const isSoporte = solicitud?.tipo_solicitud === 'Soporte Tecnico';
   const pipelineStep = cotizaciones.some((c: any) => c.estado === 'CONFIRMADA') ? 2 : cotizaciones.length > 0 ? 1 : 0;
 
-  // Unico estado en el que "Confirmar + Crear Cotizacion" (confirmarSC) es valido hoy.
-  // Reutilizado por el boton "Cotizar" del bloque Cotizaciones (panel izquierdo) y por
-  // el tab Acciones -- si el estado es otro (ej. CONFIRMADA sin cotizacion vinculada,
-  // caso raro), no se ofrece ninguna accion en vez de inventar un flujo nuevo fuera de
-  // alcance (el rediseno de Estados de Solicitud se esta discutiendo por separado).
-  const canConfirmarSC = solicitud?.estado === 'BORRADOR' || solicitud?.estado === 'PENDIENTE_CONFIRMACION';
+  // Gate 1 (confirmacion por link): "Confirmar + Crear Cotizacion" (confirmarSC) ahora
+  // solo es valido cuando el cliente ya confirmo via el link publico, es decir
+  // estado === CONFIRMADA -- confirmar_solicitud en el backend exige exactamente eso
+  // (ver erp_ventas.py). Reutilizado por el boton "Cotizar" del bloque Cotizaciones
+  // (panel izquierdo) y por el tab Acciones; en cualquier otro estado no se ofrece esa
+  // accion (ASIGNADA tiene su propia accion -- "Enviar para Confirmacion", ver abajo).
+  const canConfirmarSC = solicitud?.estado === 'CONFIRMADA';
 
   // Filtro por tipo del tab Actividad: "Todos" + los tipos que realmente aparecen en
   // esta SC (orden preferido primero, luego cualquier tipo futuro no listado arriba).

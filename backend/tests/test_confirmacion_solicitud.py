@@ -30,6 +30,17 @@ def test_asignar_asesor_promueve_a_asignada(app_client, db, admin_token, user_ad
     assert resp.status_code == 200
     assert resp.json()["data"]["estado"] == "ASIGNADA"
 
+    # La transicion BORRADOR->ASIGNADA debe quedar en el Chatter/Actividad aunque el
+    # PATCH no haya mandado "estado" explicitamente (solo advisor_user_id) -- sin este
+    # log la promocion automatica seria invisible para quien revise el historial.
+    from app.models.erp_documents import ActivityLog
+    log = db.query(ActivityLog).filter(
+        ActivityLog.entity_type == "SC", ActivityLog.entity_id == sc.id, ActivityLog.action == "ESTADO_CHANGED"
+    ).order_by(ActivityLog.id.desc()).first()
+    assert log is not None
+    assert log.old_estado == "BORRADOR"
+    assert log.new_estado == "ASIGNADA"
+
 
 def test_enviar_y_confirmar_via_link(app_client, db, admin_token, user_admin):
     from app.models.erp_documents import CustomerRequest
