@@ -857,7 +857,12 @@ def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE
         if p.estado == "CANCELADO":
             _desvincular_pec_cancelado(db, p.id, p.numero, body.get("updated_by"))
     if fecha_vieja is not None and p.fecha_entrega_estimada and p.fecha_entrega_estimada != fecha_vieja:
-        diff_dias = (p.fecha_entrega_estimada - fecha_vieja).days
+        # Final whole-branch review (hallazgo #2) -- ver el comentario equivalente en
+        # update_solicitud (erp_ventas.py) para la explicacion completa: las fechas
+        # guardadas traen hora real, pero la UI de edicion manda solo fecha -- restar los
+        # timestamps crudos reportaba una diferencia de dias incorrecta en casi
+        # cualquier edicion real. .date() en ambos lados antes de restar.
+        diff_dias = (p.fecha_entrega_estimada.date() - fecha_vieja.date()).days
         signo = "+" if diff_dias >= 0 else ""
         _log(db, "PEC", p.id, p.numero, "FECHA_ENTREGA_MODIFICADA",
              f"Fecha de entrega modificada: {fecha_vieja.strftime('%d/%m/%Y')} -> "

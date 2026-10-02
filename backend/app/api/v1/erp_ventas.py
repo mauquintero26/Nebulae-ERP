@@ -423,6 +423,19 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     # ofrece como pastillas) siguen permitidos sin restriccion aqui.
     if body.get("estado") == "CONFIRMADA":
         raise HTTPException(400, "CONFIRMADA solo se alcanza cuando el cliente confirma via el enlace enviado (no se puede forzar manualmente).")
+    # Final whole-branch review (hallazgo #3): mismo tipo de bypass que ya se cerro para
+    # Cotizacion (Gate 2) -- ASIGNADA y PENDIENTE_CONFIRMACION tampoco deben alcanzarse
+    # por este PATCH generico. ASIGNADA solo se alcanza por la auto-promocion real
+    # (promueve_asignada, mas abajo, que SI sigue escribiendo sc.estado directamente en
+    # memoria -- este check solo bloquea cuando el BODY lo pide explicitamente) y
+    # PENDIENTE_CONFIRMACION solo por enviar_solicitud_para_confirmacion (el endpoint
+    # dedicado, unico lugar que crea el token). El drop del Kanban del Hub en la columna
+    # "En Gestion" mandaba exactamente {"estado": "PENDIENTE_CONFIRMACION"} por esta via
+    # generica, sin advisor necesariamente involucrado y sin ningun token -- dejaba la SC
+    # mal etiquetada. Confirmado seguro: el formulario de edicion de la SC nunca manda
+    # "estado" en su PATCH, asi que esto no rompe el flujo real de edicion.
+    if body.get("estado") in ("ASIGNADA", "PENDIENTE_CONFIRMACION"):
+        raise HTTPException(400, "Este estado solo se alcanza automáticamente (asignar un asesor) o por el flujo de confirmación del cliente (no se puede forzar manualmente con este PATCH).")
     old_estado = sc.estado
     fecha_vieja = sc.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
     allowed = ["customer_id","customer_name","customer_phone","customer_email",
@@ -496,7 +509,15 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Estado cambiado a BORRADOR (asesor retirado)",
              old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"))
     if fecha_vieja is not None and sc.fecha_entrega_estimada and sc.fecha_entrega_estimada != fecha_vieja:
-        diff_dias = (sc.fecha_entrega_estimada - fecha_vieja).days
+        # Final whole-branch review (hallazgo #2): .date() en ambos lados antes de
+        # restar -- las fechas se calculan como utcnow() + timedelta(...) (Task 1), asi
+        # que el valor guardado SIEMPRE trae una hora real (no medianoche), pero cada UI
+        # de edicion (incluida la de esta misma SC) manda un string de solo fecha
+        # ('YYYY-MM-DD', hora implicita medianoche) al guardar. Restar los timestamps
+        # crudos reportaba una diferencia de dias incorrecta (off-by-one en el limite del
+        # dia) en practicamente cualquier edicion real -- a veces hasta reportando "un
+        # cambio" cuando la fecha de calendario en realidad no se habia movido.
+        diff_dias = (sc.fecha_entrega_estimada.date() - fecha_vieja.date()).days
         signo = "+" if diff_dias >= 0 else ""
         _log(db, "SC", sc.id, sc.numero, "FECHA_ENTREGA_MODIFICADA",
              f"Fecha de entrega modificada: {fecha_vieja.strftime('%d/%m/%Y')} -> "
@@ -580,7 +601,12 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
 def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
     """Confirm SC -> creates COT automatically"""
-    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
+    # Final whole-branch review (hallazgo #5): .with_for_update() -- sin esto, dos
+    # requests concurrentes podian pasar ambos el chequeo del marcador (lectura sin
+    # bloqueo) y crear dos Cotizaciones distintas desde UNA sola confirmacion del
+    # cliente. Mismo patron que convertir_cotizacion_a_venta (Gate 2) ya usa desde el
+    # principio -- Gate 1 nunca tuvo este endurecimiento.
+    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
     if sc.estado != "CONFIRMADA":
@@ -618,14 +644,13 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
     entrega_est = datetime.datetime.utcnow() + datetime.timedelta(days=dias)
     sc.fecha_entrega_estimada = entrega_est
 
-    db.commit()
-
-    _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
-         "Solicitud cotizada - Cotizacion creada",
-         old_estado=old_estado, new_estado="COTIZADA",
-         user_name=body.get("user_name"))
-
-    # Create COT automatically
+    # Final whole-branch review (hallazgo #5): el avance a COTIZADA+consumo del
+    # marcador se consolida en el MISMO commit que crea la COT (ya no son dos commits
+    # separados) -- antes, una falla entre ambos (o, sin el lock de arriba, una
+    # segunda request concurrente) podia dejar la SC consumida (COTIZADA, sin
+    # marcador) pero SIN ninguna Cotizacion creada -- un estado sin salida, porque ni
+    # el chequeo de "ya tiene Cotizacion" ni el de estado=="CONFIRMADA" permiten
+    # reintentar desde ahi. Mismo patron que convertir_cotizacion_a_venta (Gate 2).
     cot_numero = _gen_numero(db, "COT-", "seq_cot")
     cot = SalesQuotation(
         numero=cot_numero,
@@ -645,6 +670,13 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
     db.add(cot)
     db.commit()
     db.refresh(cot)
+    # Los dos _log de abajo van DESPUES del unico commit que de verdad importa (arriba)
+    # -- cada _log hace su propio commit interno, solo para la fila de ActivityLog, asi
+    # que su orden relativo entre si no afecta la atomicidad de lo que ya se escribio.
+    _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
+         "Solicitud cotizada - Cotizacion creada",
+         old_estado=old_estado, new_estado="COTIZADA",
+         user_name=body.get("user_name"))
     _log(db, "COT", cot.id, cot.numero, "CREATED",
          f"Cotizacion {cot.numero} creada desde {sc.numero}",
          new_estado="BORRADOR", user_name=body.get("user_name"))
@@ -979,7 +1011,10 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
              "Estado cambiado a BORRADOR (la cotización fue editada tras la confirmación del cliente; esa confirmación ya no es válida)",
              old_estado=old_estado, new_estado="BORRADOR", user_name=body.get("updated_by"))
     if fecha_vieja is not None and cot.fecha_entrega_estimada and cot.fecha_entrega_estimada != fecha_vieja:
-        diff_dias = (cot.fecha_entrega_estimada - fecha_vieja).days
+        # Final whole-branch review (hallazgo #2) -- ver el comentario equivalente en
+        # update_solicitud para la explicacion completa (mismo patron, mismo bug, en
+        # las 4 entidades que registran este mismo tipo de cambio: SC/COT/VEN/PEC).
+        diff_dias = (cot.fecha_entrega_estimada.date() - fecha_vieja.date()).days
         signo = "+" if diff_dias >= 0 else ""
         _log(db, "COT", cot.id, cot.numero, "FECHA_ENTREGA_MODIFICADA",
              f"Fecha de entrega modificada: {fecha_vieja.strftime('%d/%m/%Y')} -> "
@@ -1368,7 +1403,9 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
              old_estado=old_estado, new_estado=v.estado,
              user_name=body.get("updated_by"))
     if fecha_vieja is not None and v.fecha_entrega_estimada and v.fecha_entrega_estimada != fecha_vieja:
-        diff_dias = (v.fecha_entrega_estimada - fecha_vieja).days
+        # Final whole-branch review (hallazgo #2) -- ver el comentario equivalente en
+        # update_solicitud para la explicacion completa.
+        diff_dias = (v.fecha_entrega_estimada.date() - fecha_vieja.date()).days
         signo = "+" if diff_dias >= 0 else ""
         _log(db, "VEN", v.id, v.numero, "FECHA_ENTREGA_MODIFICADA",
              f"Fecha de entrega modificada: {fecha_vieja.strftime('%d/%m/%Y')} -> "
@@ -1646,10 +1683,35 @@ def alertas_resumen(user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Ses
         SaleOrder.updated_at < ahora - datetime.timedelta(days=ven_dias),
     ).count()
 
+    # Final whole-branch review (hallazgo #4): no_resolucion trata CONFIRMADA como
+    # "resuelto" para SC y COT -- pero una SC CONFIRMADA con gate1_confirmed_at todavia
+    # puesto (el cliente dijo que si, el asesor todavia no le da clic a "Crear
+    # Cotizacion") y una COT CONFIRMADA con gate2_confirmed_at todavia puesto y SIN
+    # Pedido de Venta vinculado todavia (el cliente dijo que si, el asesor todavia no
+    # convierte a PVEN) son exactamente los documentos que mas urgentemente necesitan
+    # atencion -- el cliente ya actuo, falta que el negocio actue. El badge no los veia
+    # en absoluto. Mismo criterio de umbral (dias sin actividad) que las demas cuentas
+    # de esta funcion, no un conteo inmediato/incondicional -- si no, el badge se
+    # dispararia el instante mismo en que el cliente confirma, lo que seria ruido, no
+    # una alerta de "lleva tiempo sin atenderse".
+    sc_confirmadas_sin_accion = db.query(CustomerRequest).filter(
+        CustomerRequest.estado == "CONFIRMADA",
+        CustomerRequest.gate1_confirmed_at.isnot(None),
+        CustomerRequest.updated_at < ahora - datetime.timedelta(days=sc_dias),
+    ).count()
+
+    cot_confirmadas_sin_accion = db.query(SalesQuotation).filter(
+        SalesQuotation.estado == "CONFIRMADA",
+        SalesQuotation.gate2_confirmed_at.isnot(None),
+        SalesQuotation.updated_at < ahora - datetime.timedelta(days=cot_dias),
+        ~db.query(SaleOrder).filter(SaleOrder.cot_id == SalesQuotation.id).exists(),
+    ).count()
+
     return {
         "status": "success",
         "data": {
             "atrasados": sc_atrasadas + cot_atrasadas + ven_atrasados
+                         + sc_confirmadas_sin_accion + cot_confirmadas_sin_accion
         }
     }
 
@@ -1943,5 +2005,11 @@ def get_formato_confirmacion(sc_id: int, user: User = Depends(require_roles(*ROL
         "productos": productos,
         "total_cop": total,
         "notas": sc.notas,
-        "link_confirmacion": f"/confirmar/{sc.numero}",
+        # Bundle trivial (final whole-branch review): este endpoint es anterior al
+        # flujo real de Gate 1 (confirmacion_publica.py) y no mintea ningun token real
+        # -- el campo "link_confirmacion" que tenia antes (f"/confirmar/{sc.numero}")
+        # resuelve hoy a una pagina publica real que solo dice "enlace invalido",
+        # porque nunca se creo un token que coincida con ese valor. Se quita en vez de
+        # mintear uno nuevo aqui (este endpoint no es el lugar real donde se genera un
+        # link -- eso es enviar_solicitud_para_confirmacion).
     }}

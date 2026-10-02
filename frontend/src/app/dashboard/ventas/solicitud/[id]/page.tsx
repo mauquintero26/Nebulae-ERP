@@ -15,6 +15,17 @@ import {
   EstadoBadge, TipoBadge, ChatterTab, IAPanelSC,
   ESTADOS_SC_MANUALES, TIPOS_SC, MODALIDADES_PAGO, fDate, fTime, fCOP,
 } from '../solicitud-client';
+// Final whole-branch review (hallazgo #1, el mas severo): Gate 1 no tenia NINGUNA via
+// de UI para entregarle el link de confirmacion al cliente -- enviarParaConfirmacion
+// llamaba al endpoint y tiraba la respuesta entera, sin selector de canal ni manejo
+// del link devuelto. Sin SMTP real configurado (el estado actual) o para cualquier SC
+// sin email registrado, Gate 1 nunca se podia completar, bloqueando todo el flujo
+// SC->COT. Se trae a paridad con lo que COT ya tiene (ChannelModal es un export
+// generico y reusable de cotizacion-client.tsx, no especifico de COT) -- MISMO patron,
+// no uno mejor (el propio hueco de COT en el canal Email/Otro, donde el link tampoco
+// llega a ningun lado, es un problema ya conocido y diferido por separado, simetrico
+// entre ambos gates -- no se corrige aqui).
+import { ChannelModal } from '../../cotizacion/cotizacion-client';
 
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
 // (mismo patron que cotizacion/[id]/page.tsx; valores reales emitidos por el backend para
@@ -63,6 +74,9 @@ function SolicitudDetalleContent() {
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [sendingConfirmacion, setSendingConfirmacion] = useState(false);
+  // Hallazgo #1: mismo estado que cotizacion/[id]/page.tsx usa para su propio ChannelModal.
+  const [showChannelModal, setShowChannelModal] = useState(false);
+  const [selectedChannel, setSelectedChannel] = useState<'WhatsApp'|'Email'|'Otro'|null>(null);
 
   const [panelTab, setPanelTab] = useState<'acciones' | 'actividad' | 'chatter' | 'ia'>('acciones');
   const [activityFilter, setActivityFilter] = useState<string>('all');
@@ -215,16 +229,42 @@ function SolicitudDetalleContent() {
     setConfirming(false);
   }
 
+  // Hallazgo #1: mismo patron que confirmarEnvio en cotizacion/[id]/page.tsx -- llama al
+  // endpoint dedicado, lee link_confirmacion de la respuesta, y si el canal elegido es
+  // WhatsApp (y la SC tiene telefono), abre wa.me con el link incluido en el mensaje.
+  function handleEnviarParaConfirmacion() {
+    if (!solicitud) return;
+    setShowChannelModal(true);
+  }
+
   async function enviarParaConfirmacion() {
     if (!solicitud) return;
+    if (!selectedChannel) return;
     setSendingConfirmacion(true);
     try {
-      await apiFetch(`/ventas/solicitudes/${solicitud.id}/enviar-confirmacion`, { method: 'POST', body: JSON.stringify({ user_name: currentUser }) });
+      const d = await apiFetch(`/ventas/solicitudes/${solicitud.id}/enviar-confirmacion`, { method: 'POST', body: JSON.stringify({ user_name: currentUser }) });
+      const link = d?.link_confirmacion || '';
+
+      if (selectedChannel === 'WhatsApp' && solicitud?.customer_phone) {
+        const phoneNumber = solicitud.customer_phone.replace(/\D/g, '');
+        const mensaje = link
+          ? `Hola, aqui esta tu solicitud ${solicitud.numero}. Confírmala aquí: ${link}`
+          : `Hola, aqui esta tu solicitud ${solicitud.numero}`;
+        window.open(`https://wa.me/57${phoneNumber}?text=${encodeURIComponent(mensaje)}`, '_blank');
+      }
+
       await loadSolicitud();
+      setShowChannelModal(false);
+      setSelectedChannel(null);
     } catch (err: any) {
       alert('Error: ' + err.message);
     }
     setSendingConfirmacion(false);
+  }
+
+  function cancelarEnvioConfirmacion() {
+    setShowChannelModal(false);
+    setSelectedChannel(null);
   }
 
   async function cancelWithReason() {
@@ -501,7 +541,7 @@ function SolicitudDetalleContent() {
                     </div>
                   ) : solicitud?.estado === 'ASIGNADA' ? (
                     <div className="[&>button]:w-full">
-                      <Button color="indigo" size="lg" icon={Send} loading={sendingConfirmacion} onClick={enviarParaConfirmacion}>Enviar para Confirmación</Button>
+                      <Button color="indigo" size="lg" icon={Send} loading={sendingConfirmacion} onClick={handleEnviarParaConfirmacion}>Enviar para Confirmación</Button>
                     </div>
                   ) : (
                     <div className="flex items-center justify-center px-4 py-2.5 rounded-xl border border-dashed border-slate-200 text-slate-300 text-sm font-bold">
@@ -611,6 +651,18 @@ function SolicitudDetalleContent() {
             {!cancelRazon.trim() && <p className="text-xs text-red-500 mt-1">La razón es obligatoria para continuar.</p>}
           </div>
         </Modal>
+      )}
+
+      {/* Hallazgo #1: mismo ChannelModal generico que usa cotizacion/[id]/page.tsx */}
+      {showChannelModal && (
+        <ChannelModal
+          selectedChannel={selectedChannel}
+          onSelectChannel={setSelectedChannel}
+          onConfirm={enviarParaConfirmacion}
+          onCancel={cancelarEnvioConfirmacion}
+          saving={sendingConfirmacion}
+          customerHasPhone={!!solicitud?.customer_phone}
+        />
       )}
     </div>
   );

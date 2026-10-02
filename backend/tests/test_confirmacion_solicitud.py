@@ -116,6 +116,28 @@ def test_patch_generico_no_puede_forzar_confirmada(app_client, db, admin_token):
     assert sc.estado == "PENDIENTE_CONFIRMACION"
 
 
+def test_patch_generico_no_puede_forzar_asignada_ni_pendiente_confirmacion(app_client, db, admin_token):
+    """Final whole-branch review (hallazgo #3): mismo tipo de bypass que ya se cerro
+    para Cotizacion (Gate 2, Rounds 1-2) -- ASIGNADA y PENDIENTE_CONFIRMACION tampoco
+    deben alcanzarse por este PATCH generico. El drop del Kanban del Hub en la columna
+    "En Gestion" mandaba exactamente {"estado": "PENDIENTE_CONFIRMACION"} por esta via,
+    sin advisor necesariamente involucrado y sin ningun token -- dejaba la SC mal
+    etiquetada."""
+    from app.models.erp_documents import CustomerRequest
+    sc = CustomerRequest(numero="SC-TESTCONF16", customer_name="Cliente Prueba", estado="BORRADOR")
+    db.add(sc); db.commit(); db.refresh(sc)
+
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": "ASIGNADA", "updated_by": "test"}, headers=auth(admin_token))
+    assert resp.status_code == 400
+    db.refresh(sc)
+    assert sc.estado == "BORRADOR"
+
+    resp2 = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": "PENDIENTE_CONFIRMACION", "updated_by": "test"}, headers=auth(admin_token))
+    assert resp2.status_code == 400
+    db.refresh(sc)
+    assert sc.estado == "BORRADOR"
+
+
 def test_confirmar_solicitud_rechaza_si_ya_tiene_cotizacion(app_client, db, admin_token):
     """Bypass real encontrado en security review: _sincronizar_estado_solicitud_desde_cotizacion
     (mecanismo preexistente y protegido) tambien escribe SC.estado = "CONFIRMADA" cuando

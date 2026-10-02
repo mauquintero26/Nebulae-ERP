@@ -421,6 +421,19 @@ export default function VentasHub() {
       loadData();
       return;
     }
+    // Final whole-branch review (hallazgo #3): mismo bypass que el de COT arriba, pero
+    // del lado de Solicitud (Gate 1) -- soltar una SC en "En Gestion" mapeaba a un
+    // PATCH directo {estado:'PENDIENTE_CONFIRMACION'}, sin token, sin necesariamente un
+    // asesor involucrado. Mismo remate: pasa por el endpoint dedicado, que exige que la
+    // SC ya este Asignada (con asesor) antes de aceptar el envio.
+    if (tipo === 'SC' && (m[col] || {})[tipo] === 'PENDIENTE_CONFIRMACION') {
+      if (!window.confirm(`¿Enviar "${item?.numero || id}" al cliente para confirmación? Esto genera y envía un link de confirmación real.`)) return;
+      await apiFetch(`/ventas/solicitudes/${id}/enviar-confirmacion`, {method:'POST', body: JSON.stringify({})})
+        .then(() => setToast({msg: 'Enviada para confirmación del cliente', type: 'ok'}))
+        .catch((err: any) => setToast({msg: 'No se pudo enviar para confirmación: ' + (err?.message || 'la solicitud necesita un asesor asignado primero.'), type: 'error'}));
+      loadData();
+      return;
+    }
     await apiFetch(path,{method:'PATCH',body:JSON.stringify({estado:(m[col]||{})[tipo]||col})})
       .then(() => setToast({msg: 'Estado actualizado', type: 'ok'}))
       .catch((err: any) => setToast({msg: 'No se pudo mover: ' + (err?.message || 'intenta de nuevo.'), type: 'error'}));

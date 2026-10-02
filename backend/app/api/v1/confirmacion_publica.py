@@ -10,6 +10,9 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.core.confirmation_tokens import peek_token, verify_and_consume_token
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -108,7 +111,13 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
     if document_type == "SC":
         from app.api.v1.erp_ventas import CustomerRequest, _log
         import datetime
-        sc = db.query(CustomerRequest).filter(CustomerRequest.id == document_id).first()
+        # Final whole-branch review (hallazgo #5): .populate_existing().with_for_update()
+        # -- mismo endurecimiento que la rama COT de aqui abajo ya tiene desde Round 3,
+        # para la misma simetria/consistencia (una lectura sin bloqueo seguida de una
+        # escritura incondicional es siempre una garantia mas debil que una bloqueada,
+        # sin importar si hoy existe o no un escritor concurrente especifico del lado SC
+        # equivalente al congelamiento de precio de COT).
+        sc = db.query(CustomerRequest).filter(CustomerRequest.id == document_id).populate_existing().with_for_update().first()
         if not sc or sc.estado != "PENDIENTE_CONFIRMACION":
             # El token ya fue consumido por verify_and_consume_token de cualquier
             # forma (es de un solo uso) -- si la SC fue cancelada o movida de estado
@@ -169,7 +178,15 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
         # despues de que convertir_cotizacion_a_venta devuelve un sale_order_id real),
         # no en este solo confirmar el precio -- verificado releyendo esa cadena de
         # llamadas antes de escribir esto, tal como pedia el plan.
-        _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
+        # Bundle trivial (final whole-branch review): envuelto en try/except -- sin
+        # esto, una falla aqui devolveria 500 al cliente DESPUES de que el token ya se
+        # consumio y la COT ya quedo CONFIRMADA (ambos ya committeados arriba); el
+        # cliente veria un error pese a que su confirmacion si se registro de verdad.
+        try:
+            _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
+        except Exception as exc:
+            db.rollback()
+            logger.error(f"Error al sincronizar Solicitud tras confirmar cotizacion {cot.id} via enlace: {exc}", exc_info=True)
         _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED", "Confirmada por el cliente vía enlace",
              old_estado=old_estado, new_estado="CONFIRMADA", user_name="Cliente (confirmación por link)")
         return {"status": "success", "message": "Cotización confirmada. Gracias."}
