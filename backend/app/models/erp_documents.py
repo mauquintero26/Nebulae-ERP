@@ -125,6 +125,17 @@ class SalesQuotation(Base):
     created_at            = Column(DateTime, default=_now)
     updated_at            = Column(DateTime, default=_now, onupdate=_now)
     created_by            = Column(String(150), nullable=True)
+    # Gate 2 (Task 5, mismo patron que CustomerRequest.gate1_confirmed_at arriba):
+    # marca de procedencia de un solo uso. SOLO confirmar_via_token
+    # (confirmacion_publica.py) la escribe, al mismo tiempo que pone estado="CONFIRMADA".
+    # convertir_cotizacion_a_venta (erp_ventas_fase4.py) exige que no sea None antes de
+    # crear el Pedido de Venta y la limpia (None) en el mismo commit que crea el PVEN --
+    # de un solo uso, igual que el token: nunca queda una prueba de confirmacion valida
+    # para un ciclo de venta futuro y no relacionado sobre la misma Cotizacion. Un replay
+    # idempotente (misma COT, ya convertida) no vuelve a chequear esta marca -- ver el
+    # bloque de "ya existe un SaleOrder vinculado" en convertir_cotizacion_a_venta, que
+    # retorna antes de llegar al check.
+    gate2_confirmed_at    = Column(DateTime, nullable=True)
 
     customer_request = relationship("CustomerRequest", back_populates="quotations")
     customer         = relationship("Customer", foreign_keys=[customer_id])

@@ -31,6 +31,21 @@ def _crear_solicitud_y_confirmar(client, admin_token, db):
     return sc, r.json()["data"]["cotizacion"]
 
 
+def _forzar_cot_confirmada(db, cot_id):
+    """Task 5 (confirmacion por link, Gate 2): convertir_cotizacion_a_venta (y su
+    wrapper /cotizaciones/{id}/confirmar) ahora exige que la COT ya este CONFIRMADA
+    (via el link publico que el cliente recibe) Y gate2_confirmed_at no nulo, en vez
+    de aceptar cualquier estado convertible directamente. El test que usa este helper
+    ejercita la sincronizacion SC<->COT que ocurre despues de crear el Pedido de
+    Venta, no el flujo de confirmacion por link -- se fuerza el estado aqui por DB,
+    mismo criterio que _crear_solicitud_y_confirmar arriba aplica para Gate 1."""
+    from app.models.erp_documents import SalesQuotation
+    cot_row = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
+    cot_row.estado = "CONFIRMADA"
+    cot_row.gate2_confirmed_at = datetime.datetime.utcnow()
+    db.commit()
+
+
 class TestSincronizacionEstados:
 
     def test_crear_cotizacion_deja_solicitud_en_cotizada_no_confirmada(self, app_client, admin_token, db):
@@ -44,11 +59,19 @@ class TestSincronizacionEstados:
         r = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
         assert r.json()["data"]["estado"] == "EN_ESPERA_CONFIRMACION"
 
-    def test_confirmar_cotizacion_manualmente_deja_solicitud_confirmada(self, app_client, admin_token, db):
+    def test_patch_directo_a_confirmada_ya_no_es_posible_ni_sincroniza(self, app_client, admin_token, db):
+        """Task 5 (Gate 2): este PATCH directo a CONFIRMADA, que esta prueba antes
+        aceptaba como una via para ejercitar la sincronizacion SC<->COT, ahora esta
+        bloqueado -- mismo cierre de atajo que Gate 1 ya aplica para SC via
+        update_solicitud (ver test_patch_generico_no_puede_forzar_confirmada en
+        test_confirmacion_solicitud.py). CONFIRMADA solo se alcanza por el link
+        publico. La sincronizacion en si sigue probada por la via real en el
+        siguiente test (test_confirmar_cotizacion_por_endpoint_real_deja_solicitud_confirmada)."""
         sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token, db)
-        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "CONFIRMADA"}, headers=_headers(admin_token))
+        resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "CONFIRMADA"}, headers=_headers(admin_token))
+        assert resp.status_code == 400
         r = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
-        assert r.json()["data"]["estado"] == "CONFIRMADA"
+        assert r.json()["data"]["estado"] == "COTIZADA"  # sin sincronizar -- el PATCH nunca se aplico
 
     def test_confirmar_cotizacion_por_endpoint_real_deja_solicitud_confirmada(self, app_client, admin_token, db):
         """
@@ -63,6 +86,7 @@ class TestSincronizacionEstados:
         esa secuencia real, no el atajo de PATCH usado en el test anterior.
         """
         sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token, db)
+        _forzar_cot_confirmada(db, cot["id"])
         r = app_client.post(f"/api/v1/ventas/cotizaciones/{cot['id']}/confirmar", json={}, headers=_headers(admin_token))
         assert r.status_code == 200, r.text
         data = r.json()["data"]

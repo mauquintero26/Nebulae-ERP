@@ -87,7 +87,13 @@ def ver_confirmacion(body: TokenBody, db: Session = Depends(get_db)):
     elif document_type == "COT":
         from app.api.v1.erp_ventas import SalesQuotation
         doc = db.query(SalesQuotation).filter(SalesQuotation.id == document_id).first()
-        if not doc:
+        if not doc or doc.estado != "PENDIENTE_CONFIRMACION":
+            # Mismo criterio que la rama SC arriba (Task 5): hoy no hay ningun camino
+            # real que deje un token sin revocar para una COT que ya no esta
+            # PENDIENTE_CONFIRMACION (update_cotizacion revoca en toda transicion real
+            # de salida del ciclo de Gate 2 -- ver ese comentario), pero se valida
+            # explicitamente en vez de asumirlo, misma defensa en profundidad que ya
+            # existe para SC. Mismo error generico, nunca se distingue el motivo.
             raise HTTPException(400, GENERIC_ERROR)
         return {"status": "success", "data": _cot_confirmacion_dict(doc)}
     raise HTTPException(400, GENERIC_ERROR)
@@ -123,6 +129,38 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
              old_estado=old_estado, new_estado="CONFIRMADA", user_name="Cliente (confirmación por link)")
         return {"status": "success", "message": "Solicitud confirmada. Gracias."}
     elif document_type == "COT":
-        # Implementado en Task 5 -- este bloque se completa ahí, no antes.
-        raise HTTPException(501, "Confirmación de Cotización aún no implementada (Task 5)")
+        from app.api.v1.erp_ventas import SalesQuotation, _log, _sincronizar_estado_solicitud_desde_cotizacion
+        import datetime
+        cot = db.query(SalesQuotation).filter(SalesQuotation.id == document_id).first()
+        if not cot or cot.estado != "PENDIENTE_CONFIRMACION":
+            # El token ya fue consumido por verify_and_consume_token de cualquier
+            # forma (es de un solo uso) -- si la COT fue movida de estado despues de
+            # enviarse el link (el PATCH generico es la unica via real, y siempre
+            # revoca -- ver update_cotizacion), este click no debe revivirla a
+            # CONFIRMADA. Mismo error generico, nunca se distingue el motivo.
+            raise HTTPException(400, GENERIC_ERROR)
+        old_estado = cot.estado
+        cot.estado = "CONFIRMADA"
+        # Gate 2 (Task 5, mismo patron que gate1_confirmed_at en la rama SC arriba):
+        # marca de procedencia de un solo uso. ESTA es la UNICA linea del codebase que
+        # escribe gate2_confirmed_at. convertir_cotizacion_a_venta (erp_ventas_fase4.py)
+        # la exige (ademas de estado=="CONFIRMADA") y la consume (vuelve a None) en el
+        # mismo commit en que crea el Pedido de Venta, para que no quede una prueba
+        # reutilizable por un ciclo de venta futuro y no relacionado sobre la misma COT.
+        cot.gate2_confirmed_at = datetime.datetime.utcnow()
+        cot.updated_at = datetime.datetime.utcnow()
+        db.commit()
+        db.refresh(cot)
+        # Mantiene la SC vinculada en sync -- mismo mecanismo preexistente y protegido
+        # que ya usan update_cotizacion/confirmar_cotizacion para este mismo efecto
+        # (_MAPA_ESTADO_COTIZACION_A_SOLICITUD mapea CONFIRMADA->CONFIRMADA). NO se
+        # llama mover_lead_de_solicitud aqui: el movimiento del Lead a "Ganado"/INVOICED
+        # ocurre al crear el Pedido de Venta (confirmar_cotizacion en erp_ventas.py,
+        # despues de que convertir_cotizacion_a_venta devuelve un sale_order_id real),
+        # no en este solo confirmar el precio -- verificado releyendo esa cadena de
+        # llamadas antes de escribir esto, tal como pedia el plan.
+        _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
+        _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED", "Confirmada por el cliente vía enlace",
+             old_estado=old_estado, new_estado="CONFIRMADA", user_name="Cliente (confirmación por link)")
+        return {"status": "success", "message": "Cotización confirmada. Gracias."}
     raise HTTPException(400, GENERIC_ERROR)

@@ -812,6 +812,17 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
     if not cot:
         raise HTTPException(404, "Cotizacion no encontrada")
+    # Gate 2 (Task 5, mismo criterio que update_solicitud para Gate 1 -- ver ese
+    # comentario, mas abajo en este archivo): CONFIRMADA solo se alcanza cuando el
+    # cliente confirma via el enlace publico de un solo uso (confirmacion_publica.py).
+    # Sin este check, este PATCH generico seguiria permitiendo que cualquier
+    # ROLE_ADMIN/ROLE_ASESOR forzara CONFIRMADA directamente con {"estado":
+    # "CONFIRMADA"}. No es la defensa real (el gate que de verdad importa esta en
+    # convertir_cotizacion_a_venta, via gate2_confirmed_at -- ver mas abajo), pero
+    # evita que un PATCH crudo deje la COT etiquetada "Confirmada" de forma
+    # cosmeticamente inconsistente con lo que en verdad paso.
+    if body.get("estado") == "CONFIRMADA":
+        raise HTTPException(400, "CONFIRMADA solo se alcanza cuando el cliente confirma la cotización vía el enlace enviado (no se puede forzar manualmente).")
     if "productos" in body:
         _validar_precios_productos(body.get("productos") or [])
     old_estado = cot.estado
@@ -823,6 +834,17 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     for k in allowed:
         if k in body:
             setattr(cot, k, body[k])
+    # Gate 2 -- capturar AHORA, antes de cualquier commit/refresh, si ESTE PATCH saca a
+    # la COT del ciclo vigente de Gate 2 (PENDIENTE_CONFIRMACION o CONFIRMADA) hacia
+    # cualquier otro estado. No hay un cancelar_cotizacion/restaurar_cotizacion
+    # dedicado como en SC -- este PATCH generico es la UNICA salida real del ciclo, asi
+    # que es el unico lugar que necesita revocar el token pendiente y limpiar la marca
+    # (ver el bloque al final de esta funcion). Capturado aqui, comparando old_estado
+    # contra el estado YA ASIGNADO en memoria por el loop de arriba, para no repetir el
+    # bug de concurrencia de Task 4 (Round 7->8): comparar esto DESPUES de
+    # db.refresh(cot) podria confundir el commit de ESTE request con el de un click de
+    # confirmacion del cliente llegando al mismo tiempo por otra conexion.
+    sale_de_gate2 = old_estado in ("PENDIENTE_CONFIRMACION", "CONFIRMADA") and cot.estado != old_estado
     cot.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(cot)
@@ -833,9 +855,23 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
                 mover_lead_de_solicitud(cot.sc_id, "QUOTATION", db)
             elif cot.estado == "RECHAZADA":
                 mover_lead_de_solicitud(cot.sc_id, "CANCELLED", db)
+            if cot.estado == "PENDIENTE_CONFIRMACION":
+                # Gate 2 (Task 5): genera y envia el link de confirmacion de un solo
+                # uso. Igual que el bloque de arriba, va DENTRO de este try para que un
+                # fallo de envio de correo no rompa la transaccion principal (el PATCH
+                # de estado ya se commiteo arriba).
+                from app.core.confirmation_tokens import create_confirmation_token
+                from app.core.email import send_email
+                import os
+                raw_token = create_confirmation_token(db, "COT", cot.id)
+                frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5100").rstrip("/")
+                link = f"{frontend_url}/confirmar/{raw_token}"
+                if cot.customer_email:
+                    send_email(cot.customer_email, f"Confirma tu cotización {cot.numero} - Nebulae",
+                                f'<p>Revisa y confirma tu cotización aquí: <a href="{link}">{link}</a></p>')
         except Exception as exc:
             db.rollback()
-            logger.error(f"Error al sincronizar Solicitud/Lead tras actualizar cotizacion {cot.id}: {exc}", exc_info=True)
+            logger.error(f"Error al sincronizar Solicitud/Lead/token tras actualizar cotizacion {cot.id}: {exc}", exc_info=True)
         _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {cot.estado}",
              old_estado=old_estado, new_estado=cot.estado,
@@ -847,6 +883,14 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
              f"Fecha de entrega modificada: {fecha_vieja.strftime('%d/%m/%Y')} -> "
              f"{cot.fecha_entrega_estimada.strftime('%d/%m/%Y')} ({signo}{diff_dias} día{'s' if abs(diff_dias)!=1 else ''})",
              user_name=body.get("updated_by"))
+    if sale_de_gate2:
+        # Ver el comentario junto a sale_de_gate2 arriba -- revoca cualquier token
+        # pendiente y limpia la marca de procedencia, para que ninguno de los dos
+        # quede vivo y reutilizable fuera de este ciclo.
+        from app.core.confirmation_tokens import revoke_pending_tokens
+        revoke_pending_tokens(db, "COT", cot.id)
+        cot.gate2_confirmed_at = None
+        db.commit()
     return {"status": "success", "data": _cot_dict(cot)}
 
 
@@ -857,6 +901,30 @@ def confirmar_cotizacion(cot_id: int, body: dict = Body(default_factory=dict), u
     from app.api.v1.erp_ventas_fase4 import convertir_cotizacion_a_venta
     from app.api.v1.schemas_fase5 import ConvertirCotizacionVentaRequest
 
+    cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
+    if not cot:
+        raise HTTPException(404, "Cotizacion no encontrada")
+    # Gate 2 (Task 5): replay idempotente PRIMERO -- si esta COT ya tiene un Pedido de
+    # Venta vinculado, convertir_cotizacion_a_venta (mas abajo) ya sabe devolver ese
+    # replay sin exigir nada mas. Exigir el marcador tambien aqui ANTES de chequear el
+    # replay romperia esa reconfirmacion idempotente: se consume (vuelve a None) en la
+    # conversion real y nunca se repone, asi que una segunda llamada legitima a este
+    # mismo wrapper (p.ej. un doble click, o un reintento del frontend) encontraria
+    # gate2_confirmed_at en None aunque la primera conversion haya sido perfectamente
+    # valida. Mismo orden que usa convertir_cotizacion_a_venta internamente: primero
+    # el replay, despues el gate real.
+    ya_convertida = db.query(SaleOrder).filter(SaleOrder.cot_id == cot.id).first() is not None
+    if not ya_convertida:
+        # Mensaje legible para el caso comun (nunca confirmada por el cliente). La
+        # marca de procedencia (gate2_confirmed_at) es el gate real -- ver
+        # convertir_cotizacion_a_venta, que la vuelve a exigir por ser SU PROPIA ruta
+        # registrada por separado (POST /cotizaciones/{id}/convertir-a-venta); gatear
+        # solo este wrapper dejaria esa ruta completamente abierta.
+        if cot.estado != "CONFIRMADA":
+            raise HTTPException(400, f"La cotización debe estar Confirmada por el cliente antes de crear el Pedido de Venta (estado actual: {cot.estado}).")
+        if cot.gate2_confirmed_at is None:
+            raise HTTPException(400, "Esta cotización no tiene una confirmación de cliente válida y sin usar; no se puede crear el Pedido de Venta.")
+
     req = ConvertirCotizacionVentaRequest(
         idempotency_key=body.get("idempotency_key"),
         user_name=body.get("user_name"),
@@ -864,8 +932,9 @@ def confirmar_cotizacion(cot_id: int, body: dict = Body(default_factory=dict), u
         notas=body.get("notas"),
     )
     res = convertir_cotizacion_a_venta(cot_id, req, user, db)
-    # Return format compatible with legacy expectations
-    cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
+    # Return format compatible with legacy expectations (cot ya se consulto arriba;
+    # solo se refresca para reflejar lo que convertir_cotizacion_a_venta commiteo).
+    db.refresh(cot)
     ven = db.query(SaleOrder).filter(SaleOrder.id == res["sale_order_id"]).first()
     if res.get("sale_order_id"):
         try:

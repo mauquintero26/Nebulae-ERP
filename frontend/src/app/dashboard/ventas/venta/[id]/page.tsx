@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import {
   ArrowLeft, DollarSign, MessageCircle, Phone, Mail, CheckCircle2, Circle,
   ShoppingCart, RefreshCw, AlertCircle, ListChecks, ExternalLink, Send,
   Activity, FileText, X, Edit2, Save,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
 import { Button, Modal } from '@/components/ui';
@@ -37,8 +37,14 @@ const ACTIVITY_STYLE: Record<string, string> = {
   SENT: '#10b981', CONFIRMED: '#059669', REJECTED: '#ef4444',
 };
 
-export default function PedidoVentaDetallePage() {
+function PedidoVentaDetalleContent() {
   const params = useParams();
+  const searchParams = useSearchParams();
+  // "Volver al origen" -- mismo patron que solicitud/[id]/page.tsx y
+  // cotizacion/[id]/page.tsx (Gate 2): solo se confia en return_to si es una ruta
+  // interna relativa, nunca un esquema http(s) ni "//" (protocol-relative).
+  const rawReturnTo = searchParams?.get('return_to') || '';
+  const safeReturnTo = rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//') ? rawReturnTo : '';
 
   const [pedido, setPedido] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -323,9 +329,16 @@ export default function PedidoVentaDetallePage() {
       {/* Top Action Bar */}
       <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between z-20 shadow-sm shrink-0">
         <div className="flex items-center gap-4">
-          <Link href={pedido?.cot_id ? `/dashboard/ventas/cotizacion/${pedido.cot_id}` : '/dashboard/ventas/venta'} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 transition-colors">
-            <ArrowLeft size={20} />
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link href={pedido?.cot_id ? `/dashboard/ventas/cotizacion/${pedido.cot_id}` : '/dashboard/ventas/venta'} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 transition-colors">
+              <ArrowLeft size={20} />
+            </Link>
+            {safeReturnTo && (
+              <Link href={safeReturnTo} className="text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:underline whitespace-nowrap">
+                ← Volver
+              </Link>
+            )}
+          </div>
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-black text-slate-800">{pedido?.numero || String(params.id || '').toUpperCase()}</h1>
@@ -824,5 +837,19 @@ export default function PedidoVentaDetallePage() {
         </Modal>
       )}
     </div>
+  );
+}
+
+// useSearchParams() exige un limite de Suspense para no romper el prerenderizado estatico
+// (mismo patron ya usado en solicitud/[id]/page.tsx, agregado aqui en Gate 2 al leer return_to).
+export default function PedidoVentaDetallePage() {
+  return (
+    <Suspense fallback={(
+      <div className="w-full h-full flex items-center justify-center bg-white">
+        <RefreshCw className="animate-spin text-indigo-600" size={28} />
+      </div>
+    )}>
+      <PedidoVentaDetalleContent />
+    </Suspense>
   );
 }

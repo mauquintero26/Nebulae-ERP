@@ -42,6 +42,10 @@ export default function CotizacionDetallePage() {
   const [confirming, setConfirming] = useState(false);
   const [showChannelModal, setShowChannelModal] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<'WhatsApp'|'Email'|'Otro'|null>(null);
+  // Gate 2: numero del PVEN recien creado, para el mensaje de exito con fade (4s) tras
+  // "Crear Pedido de Venta" -- distinto del banner permanente de arriba (ventaGenerada),
+  // que sigue mostrandose en cada visita a la pagina mientras exista un PVEN vinculado.
+  const [pvenCreadoNumero, setPvenCreadoNumero] = useState<string | null>(null);
 
   // Acciones (Calculadora / Eliminar / Propagar a Pedido de Venta)
   const [showCalc, setShowCalc] = useState(false);
@@ -77,6 +81,13 @@ export default function CotizacionDetallePage() {
   }, [params.id, isNew]);
 
   useEffect(() => { loadCotizacion(); }, [loadCotizacion]);
+
+  useEffect(() => {
+    if (pvenCreadoNumero) {
+      const t = setTimeout(() => setPvenCreadoNumero(null), 4000);
+      return () => clearTimeout(t);
+    }
+  }, [pvenCreadoNumero]);
 
   // Resizable Right Pane Logic
   const [rightWidth, setRightWidth] = useState(400);
@@ -142,7 +153,12 @@ export default function CotizacionDetallePage() {
     try {
       await apiFetch(`/ventas/cotizaciones/${cotizacion.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({estado: 'ENVIADA', canal_envio: selectedChannel, updated_by: currentUser}),
+        // Gate 2: el backend ahora genera y envia el link de confirmacion de un solo
+        // uso cuando el PATCH deja la cotizacion en PENDIENTE_CONFIRMACION (ver
+        // update_cotizacion en erp_ventas.py) -- antes este PATCH ponia 'ENVIADA' y
+        // "Confirmar + Crear Pedido de Venta" saltaba directo a crear el pedido sin
+        // que el cliente confirmara nada.
+        body: JSON.stringify({estado: 'PENDIENTE_CONFIRMACION', canal_envio: selectedChannel, updated_by: currentUser}),
       });
 
       if (selectedChannel === 'WhatsApp' && cotizacion?.customer_phone) {
@@ -179,11 +195,14 @@ export default function CotizacionDetallePage() {
     }
     setConfirming(true);
     try {
-      await apiFetch(`/ventas/cotizaciones/${cotizacion.id}/confirmar`, {
+      const d = await apiFetch(`/ventas/cotizaciones/${cotizacion.id}/confirmar`, {
         method: 'POST',
         body: JSON.stringify({user_name: currentUser}),
       });
+      const dataObj = d?.data ?? d;
+      const pvenNumero = dataObj?.pedido_venta?.numero || d?.pedido_venta?.numero || '';
       await loadCotizacion();
+      if (pvenNumero) setPvenCreadoNumero(pvenNumero);
     } catch (err: any) {
       alert('Error al confirmar la venta: ' + err.message);
     }
@@ -547,29 +566,47 @@ export default function CotizacionDetallePage() {
                 </h3>
                 <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
 
-                  {(estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA' || estadoActual === 'PENDIENTE_CONFIRMACION') && (
+                  {/* Gate 2: "Crear Pedido de Venta" solo cuando el cliente ya confirmo via el
+                      enlace publico (estado === 'CONFIRMADA') -- separado de "Enviar al
+                      Cliente", que ahora solo manda el link de confirmacion (ver
+                      confirmarEnvio). !ventaGenerada evita que el boton seguiria ofreciendose
+                      despues de usado: a diferencia del flujo viejo, CONFIRMADA ya no es solo un
+                      estado terminal post-conversion -- ahora tambien es el estado intermedio
+                      mientras el PVEN todavia no existe. */}
+                  {(estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA' || estadoActual === 'PENDIENTE_CONFIRMACION' || (estadoActual === 'CONFIRMADA' && !ventaGenerada)) && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {(estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA') && (
                         <Button color="blue" icon={Send} loading={sending} onClick={handleEnviarCotizacion}>
                           {estadoActual === 'ENVIADA' ? 'Re-enviar al Cliente' : 'Enviar al Cliente'}
                         </Button>
                       )}
-                      {(estadoActual === 'ENVIADA' || estadoActual === 'PENDIENTE_CONFIRMACION') && (
-                        <Button color="emerald" icon={CheckCircle2} loading={confirming} onClick={handleConfirmarVenta}>
-                          Confirmar + Crear Pedido de Venta
-                        </Button>
+                      {estadoActual === 'PENDIENTE_CONFIRMACION' && (
+                        <div className="flex items-center justify-center px-4 py-2.5 rounded-xl border border-dashed border-blue-200 bg-blue-50 text-blue-500 text-sm font-bold">
+                          Esperando confirmación del cliente
+                        </div>
+                      )}
+                      {estadoActual === 'CONFIRMADA' && !ventaGenerada && (
+                        pvenCreadoNumero ? (
+                          <div className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm font-bold animate-in fade-in">
+                            <CheckCircle2 size={16} /> Pedido {pvenCreadoNumero} creado exitosamente
+                          </div>
+                        ) : (
+                          <Button color="emerald" icon={CheckCircle2} loading={confirming} onClick={handleConfirmarVenta}>
+                            Crear Pedido de Venta
+                          </Button>
+                        )
                       )}
                     </div>
                   )}
 
-                  <div className={`grid grid-cols-1 sm:grid-cols-2 gap-3 ${(estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA' || estadoActual === 'PENDIENTE_CONFIRMACION') ? 'pt-4 border-t border-slate-100' : ''}`}>
+                  <div className={`grid grid-cols-1 sm:grid-cols-2 gap-3 ${(estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA' || estadoActual === 'PENDIENTE_CONFIRMACION' || (estadoActual === 'CONFIRMADA' && !ventaGenerada)) ? 'pt-4 border-t border-slate-100' : ''}`}>
                     <Button color={Number(cotizacion?.total_cop) > 0 ? 'orange' : 'blue'}
                       icon={Number(cotizacion?.total_cop) > 0 ? RotateCcw : Calculator}
                       onClick={() => setShowCalc(true)}>
                       {Number(cotizacion?.total_cop) > 0 ? 'Re-Cotizar — Actualizar Precios' : 'Cotizar — Calcular Precios'}
                     </Button>
                     {ventaGenerada && pedidoReciente ? (
-                      <Link href={`/dashboard/ventas/venta/${pedidoReciente.id}`}
+                      <Link href={`/dashboard/ventas/venta/${pedidoReciente.id}?return_to=${encodeURIComponent('/dashboard/ventas/cotizacion/' + cotizacion.id)}`}
                         className="flex items-center justify-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-emerald-100 transition-colors">
                         Ver Pedido de Venta <ArrowRight size={14} />
                       </Link>
@@ -583,18 +620,29 @@ export default function CotizacionDetallePage() {
                   {estadoActual !== 'CONFIRMADA' && (
                     <div className="pt-4 border-t border-slate-100">
                       <p className="text-xs font-black text-slate-400 uppercase mb-2">Cambiar Estado</p>
-                      <div className="flex flex-wrap gap-2 mb-3">
-                        {Object.entries(ESTADOS_COT).filter(([k]) => k !== estadoActual && k !== 'CONFIRMADA').map(([k, v]: any) => (
-                          <button key={k} onClick={() => {
-                            if (k === 'RECHAZADA' && !window.confirm('¿Marcar como Rechazada? La SC vinculada permanecerá activa.')) return;
-                            changeEstado(k);
-                          }}
-                            className="px-3 py-1.5 rounded-lg text-xs font-bold border hover:opacity-80 transition-opacity"
-                            style={{ backgroundColor: v.bg, color: v.color, borderColor: v.border }}>
-                            {v.label}
-                          </button>
+                      {/* Gate 2: PENDIENTE_CONFIRMACION (igual que CONFIRMADA) se excluye de las
+                          opciones manuales -- solo se alcanza vía "Enviar al Cliente" (que crea y
+                          envía el link de confirmación real), nunca por esta selección directa.
+                          Esta pastilla SI sigue visible mientras la cotización esta
+                          PENDIENTE_CONFIRMACION (no se agrega esa exclusion al `estadoActual !==
+                          'CONFIRMADA'` de arriba): es la unica salida real de ese ciclo (ver
+                          update_cotizacion en el backend), para que un asesor pueda revertir una
+                          cotizacion enviada por error. Un solo <select> en vez de pastillas -- mismo
+                          patron que venta/[id]/page.tsx para su selector de Estado. */}
+                      <select
+                        value=""
+                        onChange={e => {
+                          const k = e.target.value;
+                          if (!k) return;
+                          if (k === 'RECHAZADA' && !window.confirm('¿Marcar como Rechazada? La SC vinculada permanecerá activa.')) return;
+                          changeEstado(k);
+                        }}
+                        className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-600 outline-none focus:ring-2 focus:ring-amber-200 mb-3">
+                        <option value="">Seleccionar nuevo estado...</option>
+                        {Object.entries(ESTADOS_COT).filter(([k]) => k !== estadoActual && k !== 'CONFIRMADA' && k !== 'PENDIENTE_CONFIRMACION').map(([k, v]: any) => (
+                          <option key={k} value={k}>{v.label}</option>
                         ))}
-                      </div>
+                      </select>
                       <button onClick={() => setShowDelete(true)} className="flex items-center gap-1.5 text-red-500 hover:text-red-700 text-xs font-bold">
                         <Trash2 size={12} /> Eliminar cotización
                       </button>

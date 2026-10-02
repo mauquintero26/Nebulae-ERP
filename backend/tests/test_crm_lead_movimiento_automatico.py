@@ -53,6 +53,23 @@ def _forzar_confirmada(db, sc_id):
     db.commit()
 
 
+def _forzar_cot_confirmada(db, cot_id):
+    """Task 5 (confirmacion por link, Gate 2): convertir_cotizacion_a_venta (y su
+    wrapper /cotizaciones/{id}/confirmar, usado en
+    test_confirmar_pedido_desde_cotizacion_mueve_lead_a_invoiced mas abajo) ahora
+    exige que la COT ya este CONFIRMADA (via el link publico que el cliente recibe)
+    Y gate2_confirmed_at no nulo, en vez de aceptar cualquier estado convertible
+    directamente. Este archivo ejercita el movimiento automatico del lead que ocurre
+    despues de crear el Pedido de Venta, no el flujo de confirmacion por link -- se
+    fuerza el estado aqui por DB, igual que _forzar_confirmada arriba para Gate 1."""
+    import datetime
+    from app.models.erp_documents import SalesQuotation
+    cot_row = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
+    cot_row.estado = "CONFIRMADA"
+    cot_row.gate2_confirmed_at = datetime.datetime.utcnow()
+    db.commit()
+
+
 class TestMovimientoAutomaticoDeLead:
 
     def test_lead_se_crea_vinculado_a_la_solicitud(self, app_client, admin_token, customer_test, db):
@@ -100,6 +117,7 @@ class TestMovimientoAutomaticoDeLead:
         sc, lead = _crear_solicitud_con_lead(app_client, admin_token, customer_test.id)
         _forzar_confirmada(db, sc["id"])
         cot = app_client.post(f"/api/v1/ventas/solicitudes/{sc['id']}/confirmar", json={}, headers=_headers(admin_token)).json()["data"]["cotizacion"]
+        _forzar_cot_confirmada(db, cot["id"])
         app_client.post(f"/api/v1/ventas/cotizaciones/{cot['id']}/confirmar", json={}, headers=_headers(admin_token))
         db.expire_all()
         orden = db.query(SalesOrder).filter(SalesOrder.id == lead["id"]).first()

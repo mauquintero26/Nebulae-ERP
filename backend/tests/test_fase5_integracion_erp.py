@@ -275,7 +275,13 @@ class TestFase5IntegracionErp:
             customer_email=cust.email,
             total_cop=Decimal("1350000.00"),
             anticipo_cop=Decimal("810000.00"),
-            estado="APROBADA"
+            estado="APROBADA",
+            # Task 5 (Gate 2): convertir_cotizacion_a_venta ahora exige
+            # gate2_confirmed_at (no solo un estado "convertible") -- se simula aqui
+            # directamente porque esta prueba ejercita la conversion de lineas mixtas,
+            # no el flujo de confirmacion por link. Mismo criterio que
+            # _forzar_confirmada en test_crm_lead_movimiento_automatico.py para Gate 1.
+            gate2_confirmed_at=datetime.datetime.utcnow(),
         )
         db.add(cot)
         db.flush()
@@ -344,7 +350,9 @@ class TestFase5IntegracionErp:
             total_cop=Decimal("450000.00"),
             anticipo_cop=Decimal("270000.00"),
             estado="APROBADA",
-            productos=[{"sku": sku.sku, "sku_id": sku.id, "qty": 1, "unit_price_cop": 450000.0, "modalidad": "POR_PEDIDO"}]
+            productos=[{"sku": sku.sku, "sku_id": sku.id, "qty": 1, "unit_price_cop": 450000.0, "modalidad": "POR_PEDIDO"}],
+            # Task 5 (Gate 2) -- ver comentario equivalente en test_03 de esta misma clase.
+            gate2_confirmed_at=datetime.datetime.utcnow(),
         )
         db.add(cot)
         db.commit()
@@ -405,7 +413,9 @@ class TestFase5IntegracionErp:
             total_cop=Decimal("450000.00"),
             anticipo_cop=Decimal("270000.00"),
             estado="APROBADA",
-            productos=[{"sku": sku.sku, "sku_id": sku.id, "qty": 1, "unit_price_cop": 450000.0, "modalidad": "POR_PEDIDO"}]
+            productos=[{"sku": sku.sku, "sku_id": sku.id, "qty": 1, "unit_price_cop": 450000.0, "modalidad": "POR_PEDIDO"}],
+            # Task 5 (Gate 2) -- ver comentario equivalente en test_03 de esta misma clase.
+            gate2_confirmed_at=datetime.datetime.utcnow(),
         )
         db.add(cot_conf)
         db.commit()
@@ -778,7 +788,15 @@ class TestFase5IntegracionErp:
             customer_name=f"{cust.first_name} {cust.last_name}",
             total_cop=Decimal("500000.00"),
             anticipo_cop=Decimal("300000.00"),
-            estado="PENDIENTE_CONFIRMACION",
+            # Task 5 (Gate 2): estado PENDIENTE_CONFIRMACION ya no es suficiente para
+            # que el wrapper /cotizaciones/{id}/confirmar acepte la conversion -- debe
+            # estar CONFIRMADA (el cliente ya confirmo via el link publico) Y traer la
+            # marca de procedencia. Se simulan ambas aqui directamente porque esta
+            # prueba ejercita la compatibilidad de la ruta legacy, no el flujo de
+            # confirmacion por link. Mismo criterio que test_03/04/05 de esta misma
+            # clase (TestFase5IntegracionErp) mas arriba en este archivo.
+            estado="CONFIRMADA",
+            gate2_confirmed_at=datetime.datetime.utcnow(),
             productos=[{"sku": sku.sku, "qty": 1, "unit_price_cop": 500000.0}]
         )
         db.add(cot)

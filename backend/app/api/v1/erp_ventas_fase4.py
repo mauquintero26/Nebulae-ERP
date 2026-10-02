@@ -2725,6 +2725,25 @@ def convertir_cotizacion_a_venta(
             "message": f"Cotizacion ya convertida previamente al pedido {existing_so.numero} (Replay)."
         }
 
+    # Gate 2 (Task 5): marca de procedencia de un solo uso, EN VEZ de inferir
+    # legitimidad del estado solo. gate2_confirmed_at SOLO la escribe confirmar_via_token
+    # (confirmacion_publica.py), al mismo tiempo que pone estado="CONFIRMADA". Se
+    # consume (vuelve a None) mas abajo, en el mismo commit que crea el Pedido de
+    # Venta, para que no quede una prueba reutilizable por un ciclo de venta futuro y
+    # no relacionado sobre esta misma Cotizacion. Critico: este check vive AQUI, dentro
+    # de convertir_cotizacion_a_venta, no solo en el wrapper confirmar_cotizacion
+    # (erp_ventas.py) -- esta funcion es SU PROPIA ruta registrada por separado (POST
+    # /cotizaciones/{id}/convertir-a-venta); gatear solo el wrapper dejaria esta ruta
+    # directamente alcanzable y completamente sin gate. Colocado DESPUES del bloque de
+    # replay idempotente de arriba (nunca antes): un replay legitimo de una COT ya
+    # convertida no debe volver a exigir la marca, que ya se consumio correctamente la
+    # primera vez que esta COT se convirtio.
+    if cot.gate2_confirmed_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Esta cotización no tiene una confirmación de cliente válida y sin usar; no se puede crear el Pedido de Venta."
+        )
+
     # 2. Generar numero unico de pedido PVEN
     ven_numero = _gen_numero(db, "PVEN-", "seq_ven")
 
@@ -2940,6 +2959,11 @@ def convertir_cotizacion_a_venta(
 
     cot.estado = "CONFIRMADA"
     cot.updated_at = datetime.datetime.utcnow()
+    # Gate 2 -- consumida -- de un solo uso, igual que el token (ver el check de arriba
+    # junto al bloque de replay idempotente). Se limpia en este mismo commit, el que de
+    # verdad crea el Pedido de Venta, no antes -- para que una falla entre el check y
+    # este punto deje la marca intacta y la operacion siga siendo reintentable.
+    cot.gate2_confirmed_at = None
 
     # 6. Auditoria
     log = ActivityLog(
