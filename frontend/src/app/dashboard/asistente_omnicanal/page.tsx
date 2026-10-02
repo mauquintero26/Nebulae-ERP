@@ -1,12 +1,17 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { 
+import { useState, useEffect, useRef } from 'react';
+import {
   ExternalLink, RefreshCw, MessageSquare, Maximize2, Minimize2,
-  User, Package, CheckCircle2, Clock, PlusCircle,
+  User, Package, CheckCircle2, Clock, PlusCircle, UserPlus,
   Sparkles, Copy, Check, Search, X, FileText, Phone, MapPin, Layers
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+// Mismo modal de cliente nuevo y buscador de producto que usa la Solicitud de
+// Cliente real (/dashboard/ventas/solicitud) -- se reutilizan tal cual para
+// que "Crear Solicitud de Cliente" dispare exactamente el mismo flujo, no una
+// reimplementacion paralela.
+import { NewClientModal, ProductSearch } from '../ventas/solicitud/solicitud-client';
 
 const CHATWOOT_URL = 'https://chatbot-crn-chatwoot.ionwxk.easypanel.host/app/accounts/1/conversations';
 
@@ -46,16 +51,40 @@ export default function AsistenteOmnicanal() {
   // Pestaña en columna de contexto
   const [activeTab, setActiveTab] = useState<'activos' | 'cerrados' | 'solicitudes' | 'copiloto'>('activos');
 
-  // Modal para Crear Solicitud de Cliente (SC)
+  // Modal para Crear Solicitud de Cliente (SC) -- dispara el MISMO flujo real
+  // que /dashboard/ventas/solicitud (POST /ventas/solicitudes + POST /crm/leads
+  // si hay cliente), no el endpoint simplificado /chat/create-customer-request.
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [submittingSc, setSubmittingSc] = useState(false);
+  const [scError, setScError] = useState('');
   const [scFormData, setScFormData] = useState({
     tipo_solicitud: 'Cotizacion de Producto',
     modalidad_pago: 'Contado',
     notas: '',
-    productos_texto: '',
     advisor_name: '',
   });
+
+  // Producto a cotizar (solo aplica cuando el Tipo involucra producto) --
+  // mismo patron que solicitud-client.tsx: ProductSearch contra el catalogo
+  // real (GET /crm/products/search, alta rapida POST /crm/products/quick-create)
+  // en vez de una sola linea de texto libre.
+  const [prodName, setProdName] = useState('');
+  const [prodQty, setProdQty] = useState(1);
+  const [productos, setProductos] = useState<any[]>([]);
+
+  // Cliente de la SC en creacion. Se inicializa con el activeCustomer ya
+  // resuelto por el buscador superior / sincronizacion con Chatwoot al abrir
+  // el modal (se salta el paso de busqueda), pero el asesor puede buscar
+  // (GET /crm/customers/search) o crear uno nuevo (NewClientModal real) si no
+  // hay match o quiere vincular a alguien distinto -- igual que en la pagina
+  // real de Solicitud de Cliente.
+  const [scCustomer, setScCustomer] = useState<any | null>(null);
+  const [scCustQuery, setScCustQuery] = useState('');
+  const [scCustResults, setScCustResults] = useState<any[]>([]);
+  const [scCustSearchDone, setScCustSearchDone] = useState(false);
+  const [scShowNewClient, setScShowNewClient] = useState(false);
+  const scCustTimer = useRef<any>(null);
+  const scCustReqId = useRef(0);
 
   // Copiloto de IA
   const [aiSuggestions, setAiSuggestions] = useState<any[]>([]);
@@ -63,6 +92,13 @@ export default function AsistenteOmnicanal() {
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
   const handleRefresh = () => setIframeKey(k => k + 1);
+
+  // Asesor por defecto = usuario logueado (mismo origen de dato que usa
+  // solicitud-client.tsx), para que advisor_name no viaje vacio al backend.
+  useEffect(() => {
+    const u = localStorage.getItem('user_name') || localStorage.getItem('username') || '';
+    if (u) setScFormData(f => ({ ...f, advisor_name: u }));
+  }, []);
 
   // Búsqueda de clientes con debouncing
   useEffect(() => {
@@ -179,50 +215,122 @@ export default function AsistenteOmnicanal() {
     setTimeout(() => setCopiedIndex(null), 2000);
   };
 
-  // Enviar creación de Solicitud de Cliente (SC)
+  // Buscar cliente dentro del modal de SC (igual que onCustSearch en
+  // solicitud-client.tsx) -- separado del buscador de la cabecera para no
+  // interferir con el cliente activo del contexto ERP mientras se busca uno
+  // distinto para esta SC puntual.
+  const onScCustSearch = (q: string) => {
+    setScCustQuery(q);
+    setScCustomer(null);
+    setScCustSearchDone(false);
+    if (scCustTimer.current) clearTimeout(scCustTimer.current);
+    if (!q.trim()) { setScCustResults([]); return; }
+    const reqId = ++scCustReqId.current;
+    scCustTimer.current = setTimeout(async () => {
+      try {
+        const d = await apiFetch(`/crm/customers/search?q=${encodeURIComponent(q.trim())}`);
+        if (reqId !== scCustReqId.current) return; // respuesta obsoleta de una busqueda anterior
+        const list = Array.isArray(d) ? d : (d?.data ?? []);
+        setScCustResults(list);
+      } catch {
+        setScCustResults([]);
+      }
+      setScCustSearchDone(true);
+    }, 300);
+  };
+
+  const resetScForm = () => {
+    setScFormData(f => ({
+      tipo_solicitud: 'Cotizacion de Producto',
+      modalidad_pago: 'Contado',
+      notas: '',
+      advisor_name: f.advisor_name,
+    }));
+    setProductos([]); setProdName(''); setProdQty(1);
+    setScCustomer(null); setScCustQuery(''); setScCustResults([]); setScCustSearchDone(false);
+    setScError('');
+  };
+
+  const closeScModal = () => {
+    setIsModalOpen(false);
+    resetScForm();
+  };
+
+  // Enviar creación de Solicitud de Cliente (SC) -- misma secuencia real que
+  // solicitud-client.tsx: POST /ventas/solicitudes (backend/app/api/v1/erp_ventas.py
+  // create_solicitud) con el payload completo, mas POST /crm/leads si hay
+  // cliente vinculado. Ya NO llama /chat/create-customer-request.
   const handleCreateSc = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeCustomer && !scFormData.notas) return;
+    setScError('');
+
+    if (!scCustomer) {
+      if (scCustSearchDone && scCustResults.length === 0) {
+        setIsModalOpen(false);
+        setScShowNewClient(true);
+        return;
+      }
+      setScError('Selecciona un cliente existente o crea uno nuevo — no se puede continuar sin un cliente real.');
+      return;
+    }
 
     setSubmittingSc(true);
     try {
-      const prods = scFormData.productos_texto
-        ? scFormData.productos_texto.split('\n').filter(Boolean).map(l => ({ nombre: l.trim(), cantidad: 1 }))
-        : [];
+      const prodsToSend = productos.length > 0
+        ? productos
+        : (prodName ? [{ product_name: prodName, qty: prodQty, unit_price_cop: 0 }] : []);
 
-      const payload = {
-        customer_id: activeCustomer?.id,
-        customer_name: activeCustomer?.name,
-        customer_phone: activeCustomer?.phone,
-        customer_email: activeCustomer?.email,
-        tipo_solicitud: scFormData.tipo_solicitud,
-        modalidad_pago: scFormData.modalidad_pago,
-        notas: scFormData.notas,
-        productos: prods,
-        advisor_name: scFormData.advisor_name,
-      };
+      const customerName = scCustomer.name
+        || `${scCustomer.first_name || ''} ${scCustomer.last_name || ''}`.trim();
 
-      const res = await apiFetch('/chat/create-customer-request', {
+      const scData = await apiFetch('/ventas/solicitudes', {
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          customer_id: scCustomer.id,
+          customer_name: customerName,
+          customer_phone: scCustomer.phone || '',
+          customer_email: scCustomer.email || '',
+          customer_address: scCustomer.address || '',
+          tipo_solicitud: scFormData.tipo_solicitud,
+          modalidad_pago: scFormData.modalidad_pago,
+          notas: scFormData.notas,
+          productos: prodsToSend,
+          advisor_name: scFormData.advisor_name,
+          // advisor_user_id es Integer/nullable en el backend (erp_ventas.py
+          // _int_or_none): no hay selector de asesor en este modal, se deja null.
+          advisor_user_id: null,
+          created_by: scFormData.advisor_name || 'Asesor Omnicanal',
+        }),
       });
 
-      if (res?.status === 'success') {
-        setIsModalOpen(false);
-        setScFormData({
-          tipo_solicitud: 'Cotizacion de Producto',
-          modalidad_pago: 'Contado',
-          notas: '',
-          productos_texto: '',
-          advisor_name: '',
-        });
-        if (activeCustomer?.id) {
-          loadCustomerContext({ id: activeCustomer.id });
-        }
-        setActiveTab('solicitudes');
+      // Auto-crear Lead de CRM (best-effort, igual que solicitud-client.tsx) --
+      // esto es lo que el endpoint anterior /chat/create-customer-request nunca
+      // hacia, dejando la SC invisible para el pipeline de ventas.
+      if (scCustomer.id && scFormData.tipo_solicitud !== 'Soporte Tecnico') {
+        apiFetch('/crm/leads', {
+          method: 'POST',
+          body: JSON.stringify({
+            customer_id: scCustomer.id,
+            sc_id: scData?.data?.id,
+            advisor_name: scFormData.advisor_name,
+            solicitud_tipo: scFormData.tipo_solicitud || 'Cotizacion de Producto',
+            description: `SC creada: ${scData?.data?.numero || ''} - ${scFormData.notas || ''}`.substring(0, 500),
+            lead_source: 'SC',
+            lead_product_name: prodsToSend[0]?.product_name || '',
+            lead_qty: prodsToSend[0]?.qty || 1,
+          }),
+        }).catch(() => {}); // Silencioso -- el Lead de CRM es best-effort
       }
-    } catch (err) {
+
+      setIsModalOpen(false);
+      resetScForm();
+      if (scCustomer.id) {
+        loadCustomerContext({ id: scCustomer.id });
+      }
+      setActiveTab('solicitudes');
+    } catch (err: any) {
       console.error('Error creando solicitud:', err);
+      setScError(err?.message || 'Error creando la solicitud.');
     } finally {
       setSubmittingSc(false);
     }
@@ -419,7 +527,7 @@ export default function AsistenteOmnicanal() {
 
                   {/* BOTÓN PRINCIPAL: CREAR SOLICITUD DE CLIENTE */}
                   <button
-                    onClick={() => setIsModalOpen(true)}
+                    onClick={() => { setScCustomer(activeCustomer); setIsModalOpen(true); }}
                     className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white rounded-xl font-bold text-xs shadow-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
                   >
                     <PlusCircle size={15} />
@@ -663,8 +771,8 @@ export default function AsistenteOmnicanal() {
                 <FileText size={16} className="text-indigo-600" />
                 <h3 className="text-sm font-black text-slate-800">Nueva Solicitud de Cliente (SC)</h3>
               </div>
-              <button 
-                onClick={() => setIsModalOpen(false)}
+              <button
+                onClick={closeScModal}
                 className="text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
               >
                 <X size={18} />
@@ -672,15 +780,67 @@ export default function AsistenteOmnicanal() {
             </div>
 
             <form onSubmit={handleCreateSc} className="p-5 space-y-3.5">
-              {/* Cliente */}
+              {/* Cliente -- pre-resuelto desde el contexto ERP si ya hay uno
+                  activo, pero buscable/reemplazable (GET /crm/customers/search)
+                  o creable (NewClientModal real) si no hay match o el asesor
+                  quiere vincular a otra persona. */}
               <div>
-                <label className="block text-[11px] font-bold text-slate-600 mb-1">Cliente Vinculado</label>
-                <div className="p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 flex items-center justify-between">
-                  <span>{activeCustomer ? activeCustomer.name : 'Cliente no registrado'}</span>
-                  {activeCustomer?.phone && (
-                    <span className="text-[11px] font-normal text-slate-500">{activeCustomer.phone}</span>
-                  )}
-                </div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">Cliente Vinculado *</label>
+                {scCustomer ? (
+                  <div className="p-2 bg-indigo-50 border border-indigo-200 rounded-xl text-xs font-bold text-indigo-800 flex items-center justify-between">
+                    <span>{scCustomer.name || `${scCustomer.first_name || ''} ${scCustomer.last_name || ''}`.trim()}</span>
+                    <div className="flex items-center gap-2">
+                      {scCustomer.phone && (
+                        <span className="text-[11px] font-normal text-indigo-500">{scCustomer.phone}</span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => { setScCustomer(null); setScCustQuery(''); setScCustResults([]); setScCustSearchDone(false); }}
+                        className="text-indigo-400 hover:text-indigo-700 cursor-pointer"
+                        title="Cambiar cliente"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={scCustQuery}
+                      onChange={e => onScCustSearch(e.target.value)}
+                      placeholder="Buscar por nombre, teléfono o email..."
+                      className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 font-medium"
+                    />
+                    {scCustResults.length > 0 && (
+                      <div className="absolute top-full left-0 right-0 z-50 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-48 overflow-y-auto">
+                        {scCustResults.map((c: any) => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => { setScCustomer(c); setScCustQuery(''); setScCustResults([]); }}
+                            className="w-full text-left px-3 py-2 hover:bg-indigo-50 text-xs border-b border-slate-50 last:border-0 cursor-pointer"
+                          >
+                            <span className="font-bold text-slate-800">{c.first_name} {c.last_name}</span>
+                            <span className="ml-2 text-slate-400">{c.phone || c.email}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {scCustSearchDone && scCustResults.length === 0 && scCustQuery && (
+                      <div className="mt-1.5 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-bold text-amber-700">Cliente no encontrado.</span>
+                        <button
+                          type="button"
+                          onClick={() => { setIsModalOpen(false); setScShowNewClient(true); }}
+                          className="shrink-0 bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <UserPlus size={12} /> Crear Cliente
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Tipo y Modalidad */}
@@ -712,19 +872,56 @@ export default function AsistenteOmnicanal() {
                 </div>
               </div>
 
-              {/* Productos o requerimiento */}
-              <div>
-                <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                  Productos solicitados (1 por línea o requerimiento)
-                </label>
-                <textarea
-                  rows={2}
-                  placeholder="Ej: Cuna colecho convertible blanco&#10;Colchón ortopédico infantil"
-                  value={scFormData.productos_texto}
-                  onChange={e => setScFormData({ ...scFormData, productos_texto: e.target.value })}
-                  className="w-full p-2.5 text-xs bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 font-medium"
-                />
-              </div>
+              {/* Producto -- catalogo real (ProductSearch), no texto libre.
+                  Oculto solo para Consulta General, que es pura indagacion sin
+                  producto asociado (igual de condicional que isCotizacion en
+                  la pagina real de Solicitud de Cliente). */}
+              {scFormData.tipo_solicitud !== 'Consulta General' && (
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                    Producto solicitado <span className="text-slate-300 font-medium">(opcional)</span>
+                  </label>
+                  <ProductSearch
+                    value={prodName}
+                    onChange={v => setProdName(v)}
+                    onSelect={p => setProdName(p.name || p.product_name)}
+                  />
+                  {prodName && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <label className="text-[11px] text-slate-500">Cantidad:</label>
+                      <input
+                        type="number" min="1" value={prodQty}
+                        onChange={e => setProdQty(Number(e.target.value))}
+                        className="w-16 border border-slate-200 rounded-lg px-2 py-1 text-xs text-center font-bold outline-none focus:ring-1 focus:ring-indigo-200"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => { if (prodName) { setProductos(p => [...p, { product_name: prodName, qty: prodQty, unit_price_cop: 0 }]); setProdName(''); setProdQty(1); } }}
+                        className="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-lg text-xs font-bold hover:bg-indigo-200 cursor-pointer"
+                      >
+                        + Agregar
+                      </button>
+                    </div>
+                  )}
+                  {productos.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {productos.map((p, i) => (
+                        <div key={i} className="flex items-center justify-between bg-slate-50 rounded-lg px-3 py-1.5">
+                          <span className="text-xs font-bold text-slate-700">{p.product_name} x{p.qty}</span>
+                          <button
+                            type="button"
+                            onClick={() => setProductos(prev => prev.filter((_, idx) => idx !== i))}
+                            className="text-red-400 hover:text-red-600 cursor-pointer"
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-[11px] text-slate-400 mt-1">Si no existe en el catálogo, déjalo en blanco y detállalo en Notas.</p>
+                </div>
+              )}
 
               {/* Notas de la conversación */}
               <div>
@@ -738,11 +935,18 @@ export default function AsistenteOmnicanal() {
                 />
               </div>
 
+              {/* Error de validación o del backend */}
+              {scError && (
+                <div className="bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">
+                  <span className="text-[11px] font-bold text-rose-700">{scError}</span>
+                </div>
+              )}
+
               {/* Botones de acción */}
               <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  onClick={closeScModal}
                   className="px-4 py-2 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
                 >
                   Cancelar
@@ -768,6 +972,23 @@ export default function AsistenteOmnicanal() {
             </form>
           </div>
         </div>
+      )}
+
+      {/* MODAL: CLIENTE NUEVO -- mismo componente real (POST /crm/customers)
+          que usa /dashboard/ventas/solicitud. Mutuamente excluyente con el
+          modal de SC (igual patrón que solicitud-client.tsx): se oculta la SC
+          mientras se crea el cliente y se reabre ya con el cliente nuevo. */}
+      {scShowNewClient && (
+        <NewClientModal
+          onSave={c => {
+            const cust = c?.data ?? c;
+            setScCustomer(cust);
+            setScCustQuery(''); setScCustResults([]); setScCustSearchDone(false);
+            setScShowNewClient(false);
+            setIsModalOpen(true);
+          }}
+          onClose={() => { setScShowNewClient(false); setIsModalOpen(true); }}
+        />
       )}
 
     </div>

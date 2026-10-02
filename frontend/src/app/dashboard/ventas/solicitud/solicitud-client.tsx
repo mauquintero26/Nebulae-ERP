@@ -99,7 +99,7 @@ export function ActionDot({action}: {action:string}) {
 }
 
 // â”€â”€ New Client Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function NewClientModal({onSave, onClose}: {onSave:(c:any)=>void; onClose:()=>void}) {
+export function NewClientModal({onSave, onClose}: {onSave:(c:any)=>void; onClose:()=>void}) {
   const [form, setForm] = useState({first_name:'',last_name:'',phone:'',email:'',address:'',city:''});
   const [saving, setSaving] = useState(false);
   async function save(e: React.FormEvent) {
@@ -145,7 +145,7 @@ function NewClientModal({onSave, onClose}: {onSave:(c:any)=>void; onClose:()=>vo
 
 // â”€â”€ Product Not Found Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // ── Product Search ──────────────────────────────────────────────────────────
-function ProductSearch({value,onChange,onSelect}:{value:string;onChange:(v:string)=>void;onSelect:(p:any)=>void}) {
+export function ProductSearch({value,onChange,onSelect}:{value:string;onChange:(v:string)=>void;onSelect:(p:any)=>void}) {
   const [results,setResults]=useState<any[]>([]);
   const [open,setOpen]=useState(false);
   const [searched,setSearched]=useState(false);
