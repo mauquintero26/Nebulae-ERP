@@ -1610,6 +1610,50 @@ def _get_alert_hours_soporte(db: Session, urgencia: str) -> int:
         return default_map.get(urgencia, 48)
 
 
+@router.get("/alertas/resumen")
+def alertas_resumen(user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Session = Depends(get_db)):
+    """Endpoint that returns a count of late documents (SC, COT, VEN) for global alert badge.
+
+    Uses configurable thresholds:
+    - alerta_sc_dias: days threshold for CustomerRequest (SC)
+    - alerta_cot_dias: days threshold for SalesQuotation (COT)
+    - alerta_ven_dias: days threshold for SaleOrder (VEN)
+
+    Each defaults to 2 days if not configured in admin_config.
+    """
+    sc_dias = _get_alert_days(db, "alerta_sc_dias")
+    cot_dias = _get_alert_days(db, "alerta_cot_dias")
+    ven_dias = _get_alert_days(db, "alerta_ven_dias")
+
+    ahora = datetime.datetime.utcnow()
+    no_resolucion = [
+        "BORRADOR", "PENDIENTE_CONFIRMACION", "ASIGNADA", "ENVIADA",
+        "PENDIENTE_COMPRA", "PENDIENTE_PAGO", "EN_PROCESO", "EN_TRANSITO"
+    ]
+
+    sc_atrasadas = db.query(CustomerRequest).filter(
+        CustomerRequest.estado.in_(no_resolucion),
+        CustomerRequest.updated_at < ahora - datetime.timedelta(days=sc_dias),
+    ).count()
+
+    cot_atrasadas = db.query(SalesQuotation).filter(
+        SalesQuotation.estado.in_(no_resolucion),
+        SalesQuotation.updated_at < ahora - datetime.timedelta(days=cot_dias),
+    ).count()
+
+    ven_atrasados = db.query(SaleOrder).filter(
+        SaleOrder.estado.in_(no_resolucion),
+        SaleOrder.updated_at < ahora - datetime.timedelta(days=ven_dias),
+    ).count()
+
+    return {
+        "status": "success",
+        "data": {
+            "atrasados": sc_atrasadas + cot_atrasadas + ven_atrasados
+        }
+    }
+
+
 @router.get("/alertas")
 def get_alertas(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *ROLE_COMPRAS)),
         db: Session = Depends(get_db)):
