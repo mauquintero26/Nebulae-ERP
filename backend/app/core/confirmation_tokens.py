@@ -11,6 +11,7 @@ link enviado por correo -- nunca se persiste ni se loguea.
 """
 import secrets, hashlib
 from datetime import datetime, timedelta
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.models.confirmation import DocumentConfirmationToken
 
@@ -29,15 +30,47 @@ def create_confirmation_token(db: Session, document_type: str, document_id: int)
 
 
 def verify_and_consume_token(db: Session, token: str) -> tuple[str, int] | None:
+    """Reclama el token de forma atomica: un UPDATE condicional (no un SELECT seguido
+    de un UPDATE separado) para que dos POST concurrentes con el mismo token nunca
+    puedan pasar ambos la validacion -- el segundo UPDATE, al re-evaluar su propio
+    WHERE despues de que el primero ya committeo used_at, simplemente no afecta
+    ninguna fila. Mismo patron de UPDATE parametrizado que ya usa restaurar_solicitud
+    en erp_ventas.py (db.execute(text(...), {...}), nunca interpolacion de string)."""
     token_hash = hashlib.sha256(token.encode()).hexdigest()
-    row = db.query(DocumentConfirmationToken).filter(
-        DocumentConfirmationToken.token_hash == token_hash
-    ).first()
-    if not row or row.used_at is not None or row.expires_at < datetime.utcnow():
-        return None
-    row.used_at = datetime.utcnow()
+    now = datetime.utcnow()
+    result = db.execute(
+        text("""
+            UPDATE document_confirmation_tokens
+            SET used_at = :now
+            WHERE token_hash = :token_hash AND used_at IS NULL AND expires_at > :now
+            RETURNING document_type, document_id
+        """),
+        {"token_hash": token_hash, "now": now},
+    )
+    row = result.first()
     db.commit()
-    return (row.document_type, row.document_id)
+    if not row:
+        return None
+    return (row[0], row[1])
+
+
+def revoke_pending_tokens(db: Session, document_type: str, document_id: int) -> None:
+    """Invalida cualquier token sin usar de este documento -- se llama cuando una SC
+    se cancela o se fuerza de vuelta a BORRADOR (ver cancelar_solicitud/update_solicitud
+    en erp_ventas.py), para que un link ya enviado por correo no pueda confirmar un
+    documento que ya cambio de curso por otra via. Reutiliza used_at como marca de
+    invalidacion (consistente con el modelo existente, sin agregar columnas nuevas):
+    un token revocado es, para todo efecto practico, identico a uno ya usado."""
+    now = datetime.utcnow()
+    db.execute(
+        text("""
+            UPDATE document_confirmation_tokens
+            SET used_at = :now
+            WHERE document_type = :document_type AND document_id = :document_id AND used_at IS NULL
+        """),
+        {"document_type": document_type, "document_id": document_id, "now": now},
+    )
+    db.commit()
 
 
 def peek_token(db: Session, token: str) -> tuple[str, int] | None:

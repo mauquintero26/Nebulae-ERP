@@ -461,6 +461,13 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
              f"Fecha de entrega modificada: {fecha_vieja.strftime('%d/%m/%Y')} -> "
              f"{sc.fecha_entrega_estimada.strftime('%d/%m/%Y')} ({signo}{diff_dias} día{'s' if abs(diff_dias)!=1 else ''})",
              user_name=body.get("updated_by"))
+    if body.get("estado") == "BORRADOR":
+        # Gate 1: forzar la SC de vuelta a BORRADOR (pastilla manual de
+        # ESTADOS_SC_MANUALES) reinicia el flujo -- cualquier link de confirmacion
+        # ya enviado para un ciclo anterior queda obsoleto y no debe seguir siendo
+        # utilizable.
+        from app.core.confirmation_tokens import revoke_pending_tokens
+        revoke_pending_tokens(db, "SC", sc.id)
     return {"status": "success", "data": _sc_dict(sc)}
 
 
@@ -509,6 +516,19 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
         raise HTTPException(404, "Solicitud no encontrada")
     if sc.estado != "CONFIRMADA":
         raise HTTPException(400, f"No se puede confirmar en estado {sc.estado}")
+    # Gate 1, segunda capa: _sincronizar_estado_solicitud_desde_cotizacion (mecanismo
+    # preexistente y protegido, ver update_cotizacion/confirmar_cotizacion) tambien
+    # escribe SC.estado = "CONFIRMADA" cuando su Cotizacion vinculada se confirma --
+    # una accion de venta completamente normal, no un intento de bypass. Sin este
+    # check, cualquier venta cerrada reabriria "Confirmar + Crear Cotizacion" sobre
+    # una SC que ya tiene su Cotizacion real, permitiendo crear una COT duplicada.
+    # Esa sincronizacion SOLO puede producir CONFIRMADA en una SC que ya tenga al
+    # menos una Cotizacion vinculada (se dispara desde una accion sobre esa COT) --
+    # exigir cero Cotizaciones vinculadas aqui cierra esa ruta sin tocar la
+    # sincronizacion en si, y tiene sentido como regla de negocio por si sola:
+    # nunca se deberia poder re-crear una COT desde una SC que ya tiene una.
+    if db.query(SalesQuotation).filter(SalesQuotation.sc_id == sc.id).first():
+        raise HTTPException(400, "Esta solicitud ya tiene una Cotización vinculada; no se puede crear otra.")
 
     # Al crear el borrador de cotizacion, la solicitud pasa a COTIZADA (no CONFIRMADA:
     # eso solo ocurre cuando el cliente realmente confirma la cotizacion).
@@ -1460,6 +1480,10 @@ def cancelar_solicitud(sc_id: int, body: CancelarSolicitudBody,
     db.refresh(sc)
     user_name = getattr(body, "user_name", None) or getattr(user, "username", None) or getattr(user, "email", "")
     _log(db, "SC", sc_id, sc.numero, "CANCELLED", f"Cancelada: {razon}", old_estado, "CANCELADA", user_name)
+    # Gate 1: un link de confirmacion ya enviado no debe poder revivir una SC que
+    # el asesor acaba de cancelar -- revoca cualquier token pendiente de esta SC.
+    from app.core.confirmation_tokens import revoke_pending_tokens
+    revoke_pending_tokens(db, "SC", sc_id)
     return {"status": "success", "data": {"id": sc_id, "estado": "CANCELADA", "razon": razon}}
 
 

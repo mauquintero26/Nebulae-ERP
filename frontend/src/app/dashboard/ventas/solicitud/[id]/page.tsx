@@ -261,12 +261,15 @@ function SolicitudDetalleContent() {
   const pipelineStep = cotizaciones.some((c: any) => c.estado === 'CONFIRMADA') ? 2 : cotizaciones.length > 0 ? 1 : 0;
 
   // Gate 1 (confirmacion por link): "Confirmar + Crear Cotizacion" (confirmarSC) ahora
-  // solo es valido cuando el cliente ya confirmo via el link publico, es decir
-  // estado === CONFIRMADA -- confirmar_solicitud en el backend exige exactamente eso
-  // (ver erp_ventas.py). Reutilizado por el boton "Cotizar" del bloque Cotizaciones
-  // (panel izquierdo) y por el tab Acciones; en cualquier otro estado no se ofrece esa
-  // accion (ASIGNADA tiene su propia accion -- "Enviar para Confirmacion", ver abajo).
-  const canConfirmarSC = solicitud?.estado === 'CONFIRMADA';
+  // solo es valido cuando el cliente ya confirmo via el link publico (estado ===
+  // CONFIRMADA) Y la SC todavia no tiene ninguna Cotizacion vinculada -- el backend
+  // (confirmar_solicitud en erp_ventas.py) exige exactamente ambas cosas: una venta
+  // cerrada normal puede volver a dejar la SC en CONFIRMADA via la sincronizacion con
+  // su Cotizacion, pero eso nunca debe reabrir la creacion de una Cotizacion duplicada.
+  // Reutilizado por el boton "Cotizar" del bloque Cotizaciones (panel izquierdo) y por
+  // el tab Acciones; en cualquier otro caso no se ofrece esa accion (ASIGNADA tiene su
+  // propia accion -- "Enviar para Confirmacion", ver abajo).
+  const canConfirmarSC = solicitud?.estado === 'CONFIRMADA' && cotizaciones.length === 0;
 
   // Filtro por tipo del tab Actividad: "Todos" + los tipos que realmente aparecen en
   // esta SC (orden preferido primero, luego cualquier tipo futuro no listado arriba).

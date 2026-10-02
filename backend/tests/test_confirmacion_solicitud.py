@@ -106,3 +106,59 @@ def test_patch_generico_no_puede_forzar_confirmada(app_client, db, admin_token):
     # No debe haber escritura parcial: el estado original se preserva intacto.
     db.refresh(sc)
     assert sc.estado == "PENDIENTE_CONFIRMACION"
+
+
+def test_confirmar_solicitud_rechaza_si_ya_tiene_cotizacion(app_client, db, admin_token):
+    """Bypass real encontrado en security review: _sincronizar_estado_solicitud_desde_cotizacion
+    (mecanismo preexistente y protegido) tambien escribe SC.estado = "CONFIRMADA" cuando
+    su Cotizacion vinculada se confirma -- una accion de venta normal, no un ataque. Sin
+    este check, cualquier venta cerrada reabriria "Confirmar + Crear Cotizacion" sobre una
+    SC que ya tiene su Cotizacion real, permitiendo crear una COT duplicada. Se simula el
+    estado posterior a esa sincronizacion directamente (misma tecnica que _forzar_confirmada
+    en test_crm_lead_movimiento_automatico.py), sin ejercitar update_cotizacion -- lo que se
+    prueba aqui es la precondicion de confirmar_solicitud, no la sincronizacion en si."""
+    from app.models.erp_documents import CustomerRequest, SalesQuotation
+    sc = CustomerRequest(numero="SC-TESTCONF6", customer_name="Cliente Prueba", estado="BORRADOR")
+    db.add(sc); db.commit(); db.refresh(sc)
+    cot = SalesQuotation(numero="COT-TESTCONF6", sc_id=sc.id, sc_numero=sc.numero,
+                          customer_name="Cliente Prueba", estado="CONFIRMADA")
+    db.add(cot); db.commit()
+    sc.estado = "CONFIRMADA"
+    db.commit(); db.refresh(sc)
+
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/confirmar", json={"user_name": "test"}, headers=auth(admin_token))
+    assert resp.status_code == 400
+
+    db.refresh(sc)
+    assert sc.estado == "CONFIRMADA"  # sin escritura parcial (no debio pasar a COTIZADA)
+
+
+def test_link_no_confirma_sc_cancelada(app_client, db, admin_token, user_admin):
+    """Bypass real encontrado en security review: el token de confirmacion no revisaba
+    el estado de la SC al canjearse. Si un asesor cancela la SC despues de enviarla para
+    confirmacion, un cliente que aun tenga el link (todavia valido, no vencido) podia
+    revivirla a CONFIRMADA pese a estar en la papelera (eliminada_at/razon_cancelacion ya
+    establecidos). Prueba el flujo real completo: enviar -> cancelar -> click en el link."""
+    from app.models.erp_documents import CustomerRequest
+    sc = CustomerRequest(numero="SC-TESTCONF7", customer_name="Cliente Prueba",
+                          customer_email="cliente7@test.com", estado="ASIGNADA", advisor_user_id=user_admin.id)
+    db.add(sc); db.commit(); db.refresh(sc)
+
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/enviar-confirmacion", json={"user_name": "test"}, headers=auth(admin_token))
+    assert resp.status_code == 200
+
+    from app.core.confirmation_tokens import create_confirmation_token
+    raw = create_confirmation_token(db, "SC", sc.id)
+
+    cancel_resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/cancelar", json={"razon": "Cliente desistio", "user_name": "test"}, headers=auth(admin_token))
+    assert cancel_resp.status_code == 200
+
+    # El cliente, sin saber que la SC fue cancelada, hace clic en el link que ya tenia.
+    get_resp = app_client.get(f"/api/v1/confirmar/{raw}")
+    assert get_resp.status_code == 400
+
+    post_resp = app_client.post(f"/api/v1/confirmar/{raw}", headers={"Idempotency-Key": "test-key-cancel"})
+    assert post_resp.status_code == 400
+
+    db.refresh(sc)
+    assert sc.estado == "CANCELADA"  # nunca revivida a CONFIRMADA
