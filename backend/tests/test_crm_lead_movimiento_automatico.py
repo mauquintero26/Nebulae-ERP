@@ -102,6 +102,31 @@ class TestMovimientoAutomaticoDeLead:
         lead_actualizado = next(l for l in r.json()["data"] if l["id"] == lead["id"])
         assert lead_actualizado["status"] == "QUOTATION"
 
+    def test_enviar_cotizacion_para_confirmacion_mueve_lead_a_quotation(self, app_client, admin_token, customer_test, db):
+        """Round 3 (adversarial review): el endpoint dedicado enviar_cotizacion_para_confirmacion
+        (que reemplazo al PATCH directo a PENDIENTE_CONFIRMACION -- ver Round 2) tambien
+        debe mover el Lead a QUOTATION. El test anterior (PATCH directo a ENVIADA) sigue
+        haciendolo por su propia rama en update_cotizacion, pero el camino REAL de "enviar
+        para que el cliente confirme" es este endpoint, y se le habia quedado sin este
+        efecto -- regresion que el reviewer encontro y que se cierra aqui."""
+        from app.models.erp_documents import SalesQuotation
+        sc, lead = _crear_solicitud_con_lead(app_client, admin_token, customer_test.id)
+        _forzar_confirmada(db, sc["id"])
+        cot = app_client.post(f"/api/v1/ventas/solicitudes/{sc['id']}/confirmar", json={}, headers=_headers(admin_token)).json()["data"]["cotizacion"]
+        # enviar_cotizacion_para_confirmacion exige precio real calculado -- la COT recien
+        # creada desde la SC (sin productos) no lo tiene; se simula aqui por DB, igual que
+        # el resto de este archivo simula lo que no es el foco de la prueba (_forzar_confirmada).
+        cot_row = db.query(SalesQuotation).filter(SalesQuotation.id == cot["id"]).first()
+        cot_row.productos = [{"product_name": "X", "qty": 1, "unit_price_cop": 1000}]
+        cot_row.total_cop = 1000
+        db.commit()
+
+        resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot['id']}/enviar-confirmacion", json={}, headers=_headers(admin_token))
+        assert resp.status_code == 200
+        r = app_client.get("/api/v1/crm/leads", headers=_headers(admin_token))
+        lead_actualizado = next(l for l in r.json()["data"] if l["id"] == lead["id"])
+        assert lead_actualizado["status"] == "QUOTATION"
+
     def test_rechazar_cotizacion_mueve_lead_a_cancelled(self, app_client, admin_token, customer_test, db):
         from app.models.sales import SalesOrder
         sc, lead = _crear_solicitud_con_lead(app_client, admin_token, customer_test.id)

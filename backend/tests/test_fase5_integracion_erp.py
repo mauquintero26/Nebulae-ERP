@@ -275,12 +275,15 @@ class TestFase5IntegracionErp:
             customer_email=cust.email,
             total_cop=Decimal("1350000.00"),
             anticipo_cop=Decimal("810000.00"),
-            estado="APROBADA",
             # Task 5 (Gate 2): convertir_cotizacion_a_venta ahora exige
-            # gate2_confirmed_at (no solo un estado "convertible") -- se simula aqui
+            # estado=="CONFIRMADA" Y gate2_confirmed_at (no solo un estado
+            # "convertible" generico como la "APROBADA" original -- Round 3 cerro la
+            # ventana donde la marca sola, sin el estado explicito, podia quedar
+            # vigente sobre una cotizacion que ya no es CONFIRMADA) -- se simula aqui
             # directamente porque esta prueba ejercita la conversion de lineas mixtas,
             # no el flujo de confirmacion por link. Mismo criterio que
             # _forzar_confirmada en test_crm_lead_movimiento_automatico.py para Gate 1.
+            estado="CONFIRMADA",
             gate2_confirmed_at=datetime.datetime.utcnow(),
         )
         db.add(cot)
@@ -349,9 +352,9 @@ class TestFase5IntegracionErp:
             customer_name=f"{cust.first_name} {cust.last_name}",
             total_cop=Decimal("450000.00"),
             anticipo_cop=Decimal("270000.00"),
-            estado="APROBADA",
+            # Task 5 (Gate 2), Round 3 -- ver comentario equivalente en test_03 de esta misma clase.
+            estado="CONFIRMADA",
             productos=[{"sku": sku.sku, "sku_id": sku.id, "qty": 1, "unit_price_cop": 450000.0, "modalidad": "POR_PEDIDO"}],
-            # Task 5 (Gate 2) -- ver comentario equivalente en test_03 de esta misma clase.
             gate2_confirmed_at=datetime.datetime.utcnow(),
         )
         db.add(cot)
@@ -412,9 +415,9 @@ class TestFase5IntegracionErp:
             customer_name=f"{cust.first_name} {cust.last_name}",
             total_cop=Decimal("450000.00"),
             anticipo_cop=Decimal("270000.00"),
-            estado="APROBADA",
+            # Task 5 (Gate 2), Round 3 -- ver comentario equivalente en test_03 de esta misma clase.
+            estado="CONFIRMADA",
             productos=[{"sku": sku.sku, "sku_id": sku.id, "qty": 1, "unit_price_cop": 450000.0, "modalidad": "POR_PEDIDO"}],
-            # Task 5 (Gate 2) -- ver comentario equivalente en test_03 de esta misma clase.
             gate2_confirmed_at=datetime.datetime.utcnow(),
         )
         db.add(cot_conf)

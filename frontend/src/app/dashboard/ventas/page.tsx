@@ -388,6 +388,12 @@ export default function VentasHub() {
   const handleDrop=async(e:React.DragEvent,col:string)=>{
     const idStr=e.dataTransfer.getData('idStr'); if(!idStr) return;
     const [tipo,id]=idStr.split('|');
+    // Round 3 (adversarial review, hallazgo #3): un drag abortado o un click impreciso
+    // puede soltar la tarjeta en la MISMA columna en la que ya estaba -- sin este
+    // chequeo, eso disparaba el mismo envio de correo real que un drag intencional a
+    // "No Resuelto" (ver mas abajo), solo por soltarla donde ya estaba.
+    const item = allData.find((d:any) => d.tipo === tipo && String(d.id) === id);
+    if (item && getKanbanCol(item) === col) return;
     const path=tipo==='SC'?`/ventas/solicitudes/${id}`:tipo==='COT'?`/ventas/cotizaciones/${id}`:`/ventas/pedidos/${id}`;
     const m:Record<string,Record<string,string>>={
       'No Resuelto':{SC:'BORRADOR',COT:'PENDIENTE_CONFIRMACION',VEN:'PENDIENTE_COMPRA'},
@@ -403,13 +409,21 @@ export default function VentasHub() {
     // boton "Enviar al Cliente" (enviar_cotizacion_para_confirmacion), que exige
     // precios reales calculados y rechaza si ya existe un Pedido de Venta -- el gesto
     // de arrastrar sigue funcionando, solo que ahora por la via gateada.
+    // Round 3: ademas, esto SI envia un correo real al cliente -- a diferencia de los
+    // demas drops (que solo cambian un estado interno), se confirma explicitamente
+    // antes de disparar el POST, para que un drag accidental no termine emailando a un
+    // cliente sin que nadie lo haya decidido a proposito.
     if (tipo === 'COT' && (m[col] || {})[tipo] === 'PENDIENTE_CONFIRMACION') {
+      if (!window.confirm(`¿Enviar "${item?.numero || id}" al cliente para confirmación? Esto genera y envía un link de confirmación real.`)) return;
       await apiFetch(`/ventas/cotizaciones/${id}/enviar-confirmacion`, {method:'POST', body: JSON.stringify({})})
-        .catch((err: any) => alert('No se pudo enviar para confirmación: ' + (err?.message || 'la cotización necesita precios calculados primero.')));
+        .then(() => setToast({msg: 'Enviada para confirmación del cliente', type: 'ok'}))
+        .catch((err: any) => setToast({msg: 'No se pudo enviar para confirmación: ' + (err?.message || 'la cotización necesita precios calculados primero.'), type: 'error'}));
       loadData();
       return;
     }
-    await apiFetch(path,{method:'PATCH',body:JSON.stringify({estado:(m[col]||{})[tipo]||col})}).catch(()=>{});
+    await apiFetch(path,{method:'PATCH',body:JSON.stringify({estado:(m[col]||{})[tipo]||col})})
+      .then(() => setToast({msg: 'Estado actualizado', type: 'ok'}))
+      .catch((err: any) => setToast({msg: 'No se pudo mover: ' + (err?.message || 'intenta de nuevo.'), type: 'error'}));
     loadData();
   };
 

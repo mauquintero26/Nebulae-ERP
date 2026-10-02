@@ -75,7 +75,15 @@ export default function ConfirmarPublicoPage() {
             {productos.map((p: any, i: number) => (
               <div key={i} className="flex justify-between gap-3 text-sm text-slate-700">
                 <span className="truncate">{p.product_name}{p.qty ? ` × ${p.qty}` : ''}</span>
-                <span className="font-bold shrink-0">{fCOP(p.unit_price_cop)}</span>
+                {/* Round 3 (adversarial review, hallazgo #4): los productos de una
+                    Solicitud (SC, Gate 1) genuinamente no tienen precio por linea todavia
+                    (unit_price_cop viene en 0 por diseno -- el precio recien existe cuando
+                    se crea la Cotizacion) -- mostrar "$0" junto a cada producto en esa
+                    pagina se veia como un error. Se omite el precio cuando no es > 0, en
+                    vez de ramificar esta pagina por tipo de documento. */}
+                {Number(p.unit_price_cop) > 0 && (
+                  <span className="font-bold shrink-0">{fCOP(p.unit_price_cop)}</span>
+                )}
               </div>
             ))}
           </div>

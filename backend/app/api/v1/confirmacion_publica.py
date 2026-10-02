@@ -131,7 +131,14 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
     elif document_type == "COT":
         from app.api.v1.erp_ventas import SalesQuotation, _log, _sincronizar_estado_solicitud_desde_cotizacion
         import datetime
-        cot = db.query(SalesQuotation).filter(SalesQuotation.id == document_id).first()
+        # Round 3 (adversarial review, hallazgo #2): .populate_existing().with_for_update()
+        # -- sin esto, una re-cotizacion concurrente (update_cotizacion rompiendo el
+        # congelamiento de precio justo en este instante, por otra conexion) podria
+        # escribir su propio commit entre la lectura de aqui y el commit de mas abajo sin
+        # que esta transaccion lo vea, dejando CONFIRMADA + la marca puestas sobre una COT
+        # cuyo precio ya cambio por debajo. El lock hace que esta transaccion espere (o
+        # vea el estado ya actualizado) en vez de pisarlo a ciegas.
+        cot = db.query(SalesQuotation).filter(SalesQuotation.id == document_id).populate_existing().with_for_update().first()
         if not cot or cot.estado != "PENDIENTE_CONFIRMACION":
             # El token ya fue consumido por verify_and_consume_token de cualquier
             # forma (es de un solo uso) -- si la COT fue movida de estado despues de
@@ -144,9 +151,12 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
         # Gate 2 (Task 5, mismo patron que gate1_confirmed_at en la rama SC arriba):
         # marca de procedencia de un solo uso. ESTA es la UNICA linea del codebase que
         # escribe gate2_confirmed_at. convertir_cotizacion_a_venta (erp_ventas_fase4.py)
-        # la exige (ademas de estado=="CONFIRMADA") y la consume (vuelve a None) en el
-        # mismo commit en que crea el Pedido de Venta, para que no quede una prueba
-        # reutilizable por un ciclo de venta futuro y no relacionado sobre la misma COT.
+        # exige EXPLICITAMENTE tanto estado=="CONFIRMADA" como gate2_confirmed_at no nulo
+        # (dos checks separados desde Round 3, no uno que asuma al otro -- ver el
+        # comentario alli sobre la ventana entre el congelamiento de precio y la limpieza
+        # del marcador) y la consume (vuelve a None) en el mismo commit en que crea el
+        # Pedido de Venta, para que no quede una prueba reutilizable por un ciclo de venta
+        # futuro y no relacionado sobre la misma COT.
         cot.gate2_confirmed_at = datetime.datetime.utcnow()
         cot.updated_at = datetime.datetime.utcnow()
         db.commit()

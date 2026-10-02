@@ -229,6 +229,50 @@ def test_convertir_a_venta_rechaza_confirmada_sin_marcador(app_client, db, admin
     assert resp.status_code == 400
 
 
+def test_convertir_a_venta_rechaza_marcador_sin_estado_confirmada(app_client, db, admin_token):
+    """Round 3 (adversarial review, hallazgo #2): el caso inverso del test anterior --
+    simula la ventana real entre el commit del congelamiento de precio (nuevo precio +
+    estado=BORRADOR, en update_cotizacion) y el commit que de verdad limpia
+    gate2_confirmed_at (varios commits intermedios despues). Una COT en ese instante
+    exacto: estado YA es BORRADOR, pero la marca TODAVIA esta puesta. Antes de este
+    Round, el check solo miraba la marca -- esto habria pasado. Ahora exige
+    estado=='CONFIRMADA' explicitamente tambien."""
+    import datetime
+    from app.models.erp_documents import SalesQuotation
+    cot = SalesQuotation(numero="COT-TESTCONF4C", customer_name="Cliente Prueba", estado="BORRADOR",
+                          productos=[{"product_name": "X", "qty": 1, "unit_price_cop": 1000}])
+    db.add(cot); db.commit(); db.refresh(cot)
+    cot.gate2_confirmed_at = datetime.datetime.utcnow()  # simula la ventana de la race
+    db.commit()
+
+    resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/convertir-a-venta", json={"user_name": "test"}, headers=auth(admin_token))
+    assert resp.status_code == 400
+    db.refresh(cot)
+    assert cot.estado == "BORRADOR"  # sin escritura parcial
+    from app.models.erp_documents import SaleOrder
+    assert db.query(SaleOrder).filter(SaleOrder.cot_id == cot.id).first() is None
+
+
+def test_enviar_confirmacion_limpia_marcador_viejo(app_client, db, admin_token):
+    """Round 3 (hallazgo #2, defensa en profundidad): si por cualquier motivo una COT
+    en BORRADOR/ENVIADA todavia trae una marca vieja puesta (no deberia pasar por
+    construccion, pero se simula igual que el test anterior), enviar_cotizacion_para_confirmacion
+    debe limpiarla al iniciar un ciclo nuevo -- nunca debe arrastrarse hacia el ciclo nuevo."""
+    import datetime
+    from app.models.erp_documents import SalesQuotation
+    cot = SalesQuotation(numero="COT-TESTCONF4D", customer_name="Cliente Prueba", estado="BORRADOR",
+                          total_cop=1000, productos=[{"product_name": "X", "qty": 1, "unit_price_cop": 1000}])
+    db.add(cot); db.commit(); db.refresh(cot)
+    cot.gate2_confirmed_at = datetime.datetime.utcnow()
+    db.commit()
+
+    resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/enviar-confirmacion", json={"user_name": "test"}, headers=auth(admin_token))
+    assert resp.status_code == 200
+    db.refresh(cot)
+    assert cot.estado == "PENDIENTE_CONFIRMACION"
+    assert cot.gate2_confirmed_at is None  # la marca vieja no sobrevive al ciclo nuevo
+
+
 def test_confirmar_cotizacion_wrapper_exige_marcador(app_client, db, admin_token):
     """El wrapper (POST /cotizaciones/{id}/confirmar, usado por el frontend) tambien
     debe rechazar sin marcador -- no solo la ruta directa."""
@@ -420,6 +464,39 @@ def test_editar_precio_mientras_confirmada_sin_pven_reinicia_y_limpia_marcador(a
     db.refresh(cot)
     assert cot.estado == "BORRADOR"
     assert cot.gate2_confirmed_at is None  # la confirmacion ya consumida/vigente no aplica al precio nuevo
+
+
+def test_reenviar_precio_con_ruido_de_punto_flotante_no_rompe_el_congelamiento(app_client, db, admin_token):
+    """URGENTE (Round 3, adversarial review): hallazgo real, no hipotetico -- computeMarginPrice
+    (frontend/src/lib/pricing.js) no redondea su salida (totalCop = costoTotalCop / (1 -
+    margen/100)), asi que un guardado real de la Calculadora con, p.ej., costo_total=42000 y
+    margen=30% produce 42000 / 0.7 == 60000.00000000001 (ruido de punto flotante real,
+    reproducido aqui con el MISMO calculo, no un numero inventado). El valor VIEJO en el ORM
+    (Decimal, ya redondeado a 2 decimales por la columna Numeric de Postgres al guardarse la
+    primera vez) es Decimal('60000.00') -- Decimal('60000.00') != 60000.00000000001 en Python
+    (son valores distintos de verdad). Sin cuantizar antes de comparar, ESTE guardado --
+    exactamente el que produce la formula real con numeros de negocio normales, no un edge
+    case -- disparaba el congelamiento en practicamente cualquier guardado real desde la
+    Calculadora, lo que habria hecho Gate 2 inutilizable en operacion normal."""
+    from decimal import Decimal
+    costo_total = 42000
+    margen_pct = 30
+    total_con_ruido = costo_total / (1 - margen_pct / 100)
+    assert total_con_ruido != 60000.00  # confirma que de verdad hay ruido, no es un round number
+
+    from app.models.erp_documents import SalesQuotation
+    cot = SalesQuotation(numero="COT-TESTFREEZE7", customer_name="Cliente Prueba",
+                          estado="PENDIENTE_CONFIRMACION", total_cop=60000.00,
+                          productos=[{"product_name": "X", "qty": 1, "unit_price_cop": 60000.00}])
+    db.add(cot); db.commit(); db.refresh(cot)
+    assert cot.total_cop == Decimal("60000.00")  # confirma el redondeo real de la columna Numeric
+
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={
+        "total_cop": total_con_ruido, "updated_by": "test",
+    }, headers=auth(admin_token))
+    assert resp.status_code == 200
+    db.refresh(cot)
+    assert cot.estado == "PENDIENTE_CONFIRMACION"  # NO debe reiniciar -- es el mismo precio
 
 
 def test_editar_precio_mientras_confirmada_con_pven_no_reinicia(app_client, db, admin_token):

@@ -2748,6 +2748,23 @@ def convertir_cotizacion_a_venta(
     # replay idempotente de arriba (nunca antes): un replay legitimo de una COT ya
     # convertida no debe volver a exigir la marca, que ya se consumio correctamente la
     # primera vez que esta COT se convirtio.
+    # Round 3 (adversarial review, hallazgo #2): el marcador por si solo no es atomico
+    # contra una conversion -- entre el commit del congelamiento de precio (nuevo precio
+    # + estado=BORRADOR, en update_cotizacion) y el commit que de verdad limpia
+    # gate2_confirmed_at (varios commits intermedios despues: refresh, sync de SC, _log,
+    # revoke_pending_tokens), hay una ventana donde el marcador TODAVIA esta puesto pero
+    # el precio YA cambio. Una conversion que aterrizara en esa ventana exacta pasaria el
+    # check de arriba contra una COT ya re-cotizada. Exigir estado=="CONFIRMADA"
+    # explicitamente aqui (en vez de confiar en que gate2_confirmed_at implica
+    # correctamente ese estado) cierra esa ventana: dentro de ella, cot.estado ya es
+    # "BORRADOR" (se escribe en el PRIMER commit del congelamiento, antes que nada mas),
+    # asi que este check la rechaza sin importar en que momento exacto de la limpieza del
+    # marcador caiga la conversion.
+    if cot.estado != "CONFIRMADA":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cotizacion en estado '{cot.estado}' no tiene una confirmación de cliente vigente; no se puede crear el Pedido de Venta."
+        )
     if cot.gate2_confirmed_at is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

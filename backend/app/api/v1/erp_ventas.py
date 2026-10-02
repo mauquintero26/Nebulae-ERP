@@ -852,22 +852,44 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         if k in body:
             setattr(cot, k, body[k])
 
+    _PRICE_DECIMAL_FIELDS = ("total_cop", "subtotal_cop", "anticipo_cop", "descuento_pct", "trm_rate")
+
     def _freeze_cmp(field, v):
-        """Normaliza para comparar -- fecha_entrega_estimada en particular: el valor
-        VIEJO (ya en el ORM) es un datetime real, pero el NUEVO (si vino en el body) es
-        un string crudo recien parseado del JSON -- sin normalizar, un datetime nunca es
-        == a un string aunque representen el mismo dia, lo que convertiria CUALQUIER
-        guardado desde la Calculadora en un 'cambio' (manda fecha_entrega_estimada
-        siempre, la haya tocado el usuario o no). Se compara solo a nivel de DIA (no el
-        timestamp completo) porque el selector de fecha del frontend tampoco captura
-        hora -- comparar con precision de segundos generaria el mismo falso positivo
-        por puro ruido de hora."""
-        if field != "fecha_entrega_estimada" or v is None:
+        """Normaliza para comparar. Dos problemas distintos de tipo/precision, cada uno
+        capaz de disparar el congelamiento en CUALQUIER guardado normal si no se
+        normalizan:
+
+        1. fecha_entrega_estimada: el valor VIEJO (ya en el ORM) es un datetime real,
+        pero el NUEVO (si vino en el body) es un string crudo recien parseado del JSON --
+        sin normalizar, un datetime nunca es == a un string aunque representen el mismo
+        dia. Se compara solo a nivel de DIA (no el timestamp completo) porque el selector
+        de fecha del frontend tampoco captura hora.
+
+        2. total_cop/subtotal_cop/anticipo_cop/descuento_pct/trm_rate: URGENTE (Round 3)
+        -- el valor VIEJO es un Decimal ya REDONDEADO por la propia columna Numeric(x,2)
+        de Postgres al escribirse (p.ej. Decimal('60000.00')), pero el NUEVO es el float
+        crudo que manda el body, SIN redondear -- y computeMarginPrice (frontend,
+        pricing.js) no redondea su salida, asi que casi cualquier guardado real de la
+        Calculadora produce un valor como 60000.00000000001 por ruido de punto flotante.
+        Decimal('60000.00') != 60000.00000000001 en Python (son distintos de verdad, no
+        es un bug de comparacion) -- sin cuantizar ambos lados a 2 decimales antes de
+        comparar, el congelamiento se disparaba en ESENCIALMENTE CADA guardado real desde
+        la Calculadora (incluso uno que solo tocara 'notas'), lo que habria hecho Gate 2
+        inutilizable en operacion normal. Se cuantiza a 2 decimales (misma precision que
+        las columnas Numeric reales) antes de comparar."""
+        if v is None:
+            return None
+        if field == "fecha_entrega_estimada":
+            if isinstance(v, str):
+                return v[:10]
+            if isinstance(v, datetime.datetime):
+                return v.date().isoformat()
             return v
-        if isinstance(v, str):
-            return v[:10]
-        if isinstance(v, datetime.datetime):
-            return v.date().isoformat()
+        if field in _PRICE_DECIMAL_FIELDS:
+            try:
+                return Decimal(str(v)).quantize(Decimal("0.01"))
+            except Exception:
+                return v
         return v
 
     ya_tiene_pven = db.query(SaleOrder).filter(SaleOrder.cot_id == cot.id).first() is not None
@@ -989,10 +1011,26 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     link = f"{frontend_url}/confirmar/{raw_token}"
 
     cot.estado = "PENDIENTE_CONFIRMACION"
+    # Round 3 (adversarial review, hallazgo #2): limpia cualquier marca que pudiera haber
+    # quedado de un ciclo anterior (defensa en profundidad -- por construccion, llegar
+    # aqui ya implica que no deberia haber una vigente, dado que solo estados BORRADOR/
+    # ENVIADA pasan el check de arriba, y el marcador solo es no-nulo mientras
+    # estado=="CONFIRMADA"), para que un reenvio nunca arrastre una marca vieja hacia el
+    # ciclo nuevo.
+    cot.gate2_confirmed_at = None
     cot.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(cot)
-    _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
+    try:
+        _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
+        # Restaura el movimiento de Lead a "QUOTATION" que el flujo viejo (PATCH directo
+        # a ENVIADA) disparaba al enviar una cotizacion -- el endpoint dedicado de este
+        # Round es ahora el unico lugar real donde "se envia la cotizacion", asi que el
+        # efecto tiene que vivir aqui.
+        mover_lead_de_solicitud(cot.sc_id, "QUOTATION", db)
+    except Exception as exc:
+        db.rollback()
+        logger.error(f"Error al sincronizar Solicitud/Lead tras enviar cotizacion {cot.id} para confirmacion: {exc}", exc_info=True)
     _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
          "Enviada para confirmación del cliente",
          old_estado=old_estado, new_estado="PENDIENTE_CONFIRMACION", user_name=body.get("user_name"))
