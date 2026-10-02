@@ -37,6 +37,19 @@ def _crear_solicitud_con_lead(client, admin_token, customer_id):
     return sc, lead
 
 
+def _forzar_confirmada(db, sc_id):
+    """Task 4 (confirmacion por link, Gate 1): confirmar_solicitud ahora exige que
+    la SC ya este CONFIRMADA (via el link publico que recibe el cliente), en vez de
+    aceptar BORRADOR directamente. Estos tests ejercitan el movimiento automatico
+    del lead que ocurre despues de crear la cotizacion, no el flujo de confirmacion
+    por link -- se fuerza el estado aqui por DB, igual que en los demas tests de
+    este plan afectados por el mismo cambio de precondicion."""
+    from app.models.erp_documents import CustomerRequest
+    sc_row = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
+    sc_row.estado = "CONFIRMADA"
+    db.commit()
+
+
 class TestMovimientoAutomaticoDeLead:
 
     def test_lead_se_crea_vinculado_a_la_solicitud(self, app_client, admin_token, customer_test, db):
@@ -60,8 +73,9 @@ class TestMovimientoAutomaticoDeLead:
         assert orden.canonical_customer_request_id == sc["id"]
         assert lead["status"] not in ("QUOTATION", "CANCELLED", "INVOICED")
 
-    def test_enviar_cotizacion_mueve_lead_a_quotation(self, app_client, admin_token, customer_test):
+    def test_enviar_cotizacion_mueve_lead_a_quotation(self, app_client, admin_token, customer_test, db):
         sc, lead = _crear_solicitud_con_lead(app_client, admin_token, customer_test.id)
+        _forzar_confirmada(db, sc["id"])
         cot = app_client.post(f"/api/v1/ventas/solicitudes/{sc['id']}/confirmar", json={}, headers=_headers(admin_token)).json()["data"]["cotizacion"]
         app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "ENVIADA"}, headers=_headers(admin_token))
         r = app_client.get("/api/v1/crm/leads", headers=_headers(admin_token))
@@ -71,6 +85,7 @@ class TestMovimientoAutomaticoDeLead:
     def test_rechazar_cotizacion_mueve_lead_a_cancelled(self, app_client, admin_token, customer_test, db):
         from app.models.sales import SalesOrder
         sc, lead = _crear_solicitud_con_lead(app_client, admin_token, customer_test.id)
+        _forzar_confirmada(db, sc["id"])
         cot = app_client.post(f"/api/v1/ventas/solicitudes/{sc['id']}/confirmar", json={}, headers=_headers(admin_token)).json()["data"]["cotizacion"]
         app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "RECHAZADA"}, headers=_headers(admin_token))
         db.expire_all()
@@ -80,6 +95,7 @@ class TestMovimientoAutomaticoDeLead:
     def test_confirmar_pedido_desde_cotizacion_mueve_lead_a_invoiced(self, app_client, admin_token, customer_test, db):
         from app.models.sales import SalesOrder
         sc, lead = _crear_solicitud_con_lead(app_client, admin_token, customer_test.id)
+        _forzar_confirmada(db, sc["id"])
         cot = app_client.post(f"/api/v1/ventas/solicitudes/{sc['id']}/confirmar", json={}, headers=_headers(admin_token)).json()["data"]["cotizacion"]
         app_client.post(f"/api/v1/ventas/cotizaciones/{cot['id']}/confirmar", json={}, headers=_headers(admin_token))
         db.expire_all()
@@ -90,6 +106,7 @@ class TestMovimientoAutomaticoDeLead:
         from app.models.catalog import Category  # noqa: F401 (solo para asegurar imports de modelos ya cargados)
         from app.api.v1.crm import PipelineStage  # noqa: F401 (mismo modulo real usado en el resto del backend)
         sc, lead = _crear_solicitud_con_lead(app_client, admin_token, customer_test.id)
+        _forzar_confirmada(db, sc["id"])
         cot = app_client.post(f"/api/v1/ventas/solicitudes/{sc['id']}/confirmar", json={}, headers=_headers(admin_token)).json()["data"]["cotizacion"]
         app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "ENVIADA"}, headers=_headers(admin_token))
         mapeos = {s[0] for s in db.execute(text("SELECT maps_to_status FROM pipeline_stages")).fetchall()}

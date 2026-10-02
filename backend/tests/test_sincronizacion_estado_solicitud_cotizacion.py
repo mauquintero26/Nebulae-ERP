@@ -9,35 +9,45 @@ def _headers(admin_token):
     return {"Authorization": f"Bearer {admin_token}"}
 
 
-def _crear_solicitud_y_confirmar(client, admin_token):
+def _crear_solicitud_y_confirmar(client, admin_token, db):
     sc = client.post("/api/v1/ventas/solicitudes", json={
         "customer_name": f"Cliente-{uuid.uuid4().hex[:6]}",
         "tipo_solicitud": "Cotizacion de Producto",
     }, headers=_headers(admin_token)).json()["data"]
+    # Task 4 (confirmacion por link, Gate 1): confirmar_solicitud ahora exige que la
+    # SC ya este CONFIRMADA (via el link publico que el cliente recibe por correo),
+    # en vez de aceptar BORRADOR directamente. Estos tests ejercitan la
+    # sincronizacion de estados SC<->COT que ocurre despues de crear la cotizacion,
+    # no el flujo de confirmacion por link -- se fuerza el estado aqui por DB,
+    # igual que test_fecha_entrega_sc_cotizacion.py ajusto para el mismo cambio.
+    from app.models.erp_documents import CustomerRequest
+    sc_row = db.query(CustomerRequest).filter(CustomerRequest.id == sc["id"]).first()
+    sc_row.estado = "CONFIRMADA"
+    db.commit()
     r = client.post(f"/api/v1/ventas/solicitudes/{sc['id']}/confirmar", json={}, headers=_headers(admin_token))
     return sc, r.json()["data"]["cotizacion"]
 
 
 class TestSincronizacionEstados:
 
-    def test_crear_cotizacion_deja_solicitud_en_cotizada_no_confirmada(self, app_client, admin_token):
-        sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token)
+    def test_crear_cotizacion_deja_solicitud_en_cotizada_no_confirmada(self, app_client, admin_token, db):
+        sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token, db)
         r = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
         assert r.json()["data"]["estado"] == "COTIZADA"
 
-    def test_enviar_cotizacion_deja_solicitud_en_espera_confirmacion(self, app_client, admin_token):
-        sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token)
+    def test_enviar_cotizacion_deja_solicitud_en_espera_confirmacion(self, app_client, admin_token, db):
+        sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token, db)
         app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "ENVIADA"}, headers=_headers(admin_token))
         r = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
         assert r.json()["data"]["estado"] == "EN_ESPERA_CONFIRMACION"
 
-    def test_confirmar_cotizacion_manualmente_deja_solicitud_confirmada(self, app_client, admin_token):
-        sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token)
+    def test_confirmar_cotizacion_manualmente_deja_solicitud_confirmada(self, app_client, admin_token, db):
+        sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token, db)
         app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "CONFIRMADA"}, headers=_headers(admin_token))
         r = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
         assert r.json()["data"]["estado"] == "CONFIRMADA"
 
-    def test_confirmar_cotizacion_por_endpoint_real_deja_solicitud_confirmada(self, app_client, admin_token):
+    def test_confirmar_cotizacion_por_endpoint_real_deja_solicitud_confirmada(self, app_client, admin_token, db):
         """
         C2 (regresion): ninguna UI real hace PATCH .../cotizaciones/{id} con
         estado=CONFIRMADA directamente. El unico camino real para cerrar una
@@ -49,7 +59,7 @@ class TestSincronizacionEstados:
         aunque la venta ya estuviera cerrada. Esta prueba ejercita exactamente
         esa secuencia real, no el atajo de PATCH usado en el test anterior.
         """
-        sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token)
+        sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token, db)
         r = app_client.post(f"/api/v1/ventas/cotizaciones/{cot['id']}/confirmar", json={}, headers=_headers(admin_token))
         assert r.status_code == 200, r.text
         data = r.json()["data"]
@@ -59,8 +69,8 @@ class TestSincronizacionEstados:
         r_sc = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
         assert r_sc.json()["data"]["estado"] == "CONFIRMADA"
 
-    def test_rechazar_cotizacion_deja_solicitud_rechazada(self, app_client, admin_token):
-        sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token)
+    def test_rechazar_cotizacion_deja_solicitud_rechazada(self, app_client, admin_token, db):
+        sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token, db)
         app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "RECHAZADA"}, headers=_headers(admin_token))
         r = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
         assert r.json()["data"]["estado"] == "RECHAZADA"

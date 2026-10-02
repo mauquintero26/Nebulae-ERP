@@ -1,4 +1,5 @@
 from app.models.users import User, RolePermission, PasswordResetToken
+from app.models.confirmation import DocumentConfirmationToken
 from app.models.customers import Customer
 from app.models.catalog import Brand, Category, Product, ProductImage, Attribute, AttributeValue, ProductSKU, sku_attribute_values
 from app.models.inventory import Warehouse, InventoryLevel, InventoryMovement, ShippingMethod, InventoryOperation, StockReplenishmentRule

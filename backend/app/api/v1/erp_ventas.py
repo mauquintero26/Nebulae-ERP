@@ -407,6 +407,13 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         raise HTTPException(404, "Solicitud no encontrada")
     old_estado = sc.estado
     fecha_vieja = sc.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
+    # Gate 1 (ver confirmacion_publica.py): asignar asesor por primera vez a una SC
+    # en BORRADOR la promueve automaticamente a ASIGNADA -- habilita el boton
+    # "Enviar para Confirmacion" sin que nadie tenga que forzar el estado a mano.
+    promueve_asignada = (
+        "advisor_user_id" in body and body.get("advisor_user_id")
+        and not sc.advisor_user_id and sc.estado == "BORRADOR"
+    )
     allowed = ["customer_id","customer_name","customer_phone","customer_email",
                "customer_address","advisor_name","advisor_user_id","tipo_solicitud","modalidad_pago","estado",
                "fecha_vencimiento","fecha_entrega_estimada","notas","productos",
@@ -418,6 +425,8 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
             if k in ("advisor_user_id", "asignado_a_user_id"):
                 v = _int_or_none(v)
             setattr(sc, k, v)
+    if promueve_asignada:
+        sc.estado = "ASIGNADA"
     sc.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(sc)
@@ -436,6 +445,42 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     return {"status": "success", "data": _sc_dict(sc)}
 
 
+@router.post("/solicitudes/{sc_id}/enviar-confirmacion")
+def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
+        user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
+    """Gate 1: genera un link de confirmacion de un solo uso y lo envia al cliente.
+
+    Solo valido cuando la SC ya tiene asesor asignado (estado ASIGNADA, ver
+    update_solicitud/promueve_asignada). La SC pasa a PENDIENTE_CONFIRMACION
+    hasta que el cliente confirme via el link (ver confirmacion_publica.py)."""
+    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
+    if not sc:
+        raise HTTPException(404, "Solicitud no encontrada")
+    if sc.estado != "ASIGNADA":
+        raise HTTPException(400, f"La solicitud debe estar Asignada antes de enviar para confirmación (estado actual: {sc.estado})")
+
+    from app.core.confirmation_tokens import create_confirmation_token
+    from app.core.email import send_email
+    import os
+
+    raw_token = create_confirmation_token(db, "SC", sc.id)
+    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5100").rstrip("/")
+    link = f"{frontend_url}/confirmar/{raw_token}"
+
+    old_estado = sc.estado
+    sc.estado = "PENDIENTE_CONFIRMACION"
+    sc.updated_at = datetime.datetime.utcnow()
+    db.commit()
+    _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Enviada para confirmación del cliente",
+         old_estado=old_estado, new_estado="PENDIENTE_CONFIRMACION", user_name=body.get("user_name"))
+
+    if sc.customer_email:
+        send_email(sc.customer_email, f"Confirma tu solicitud {sc.numero} - Nebulae",
+                    f'<p>Por favor confirma tu solicitud haciendo clic aquí: <a href="{link}">{link}</a></p>')
+
+    return {"status": "success", "data": _sc_dict(sc), "link_confirmacion": link}
+
+
 @router.post("/solicitudes/{sc_id}/confirmar")
 def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
@@ -443,7 +488,7 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
-    if sc.estado not in ("BORRADOR", "PENDIENTE_CONFIRMACION"):
+    if sc.estado != "CONFIRMADA":
         raise HTTPException(400, f"No se puede confirmar en estado {sc.estado}")
 
     # Al crear el borrador de cotizacion, la solicitud pasa a COTIZADA (no CONFIRMADA:

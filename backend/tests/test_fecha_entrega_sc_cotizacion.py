@@ -30,10 +30,12 @@ def test_confirmar_solicitud_calcula_fecha_segun_modalidad(app_client, db, admin
         "advisor_name": "Asesor Prueba", "created_by": "test",
     }, headers=auth(admin_token))
     sc_id = sc_resp.json()["data"]["id"]
-    # Fuerza el estado a PENDIENTE_CONFIRMACION que es el que acepta confirmar_solicitud hoy
+    # Fuerza el estado a CONFIRMADA -- Task 4 cambio la precondicion de confirmar_solicitud
+    # para exigir que el cliente ya haya confirmado via el link publico (Gate 1), en vez de
+    # aceptar BORRADOR/PENDIENTE_CONFIRMACION directamente.
     from app.models.erp_documents import CustomerRequest
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
-    sc.estado = "PENDIENTE_CONFIRMACION"
+    sc.estado = "CONFIRMADA"
     db.commit()
 
     confirm_resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc_id}/confirmar", json={"user_name": "test"}, headers=auth(admin_token))

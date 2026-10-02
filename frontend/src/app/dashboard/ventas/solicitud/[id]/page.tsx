@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import {
   ArrowLeft, ArrowRight, ChevronRight, Edit2, Save, Trash2, CheckCircle2,
   User, Phone, Mail, MapPin, MessageCircle, RefreshCw, AlertCircle,
-  FileText, Activity, XCircle, MessageSquare, RotateCcw, Filter,
+  FileText, Activity, XCircle, MessageSquare, RotateCcw, Filter, Send,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
@@ -62,6 +62,7 @@ function SolicitudDetalleContent() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [sendingConfirmacion, setSendingConfirmacion] = useState(false);
 
   const [panelTab, setPanelTab] = useState<'acciones' | 'actividad' | 'chatter' | 'ia'>('acciones');
   const [activityFilter, setActivityFilter] = useState<string>('all');
@@ -206,6 +207,18 @@ function SolicitudDetalleContent() {
       alert('Error: ' + err.message);
     }
     setConfirming(false);
+  }
+
+  async function enviarParaConfirmacion() {
+    if (!solicitud) return;
+    setSendingConfirmacion(true);
+    try {
+      await apiFetch(`/ventas/solicitudes/${solicitud.id}/enviar-confirmacion`, { method: 'POST', body: JSON.stringify({ user_name: currentUser }) });
+      await loadSolicitud();
+    } catch (err: any) {
+      alert('Error: ' + err.message);
+    }
+    setSendingConfirmacion(false);
   }
 
   async function cancelWithReason() {
@@ -459,6 +472,10 @@ function SolicitudDetalleContent() {
                   {canConfirmarSC ? (
                     <div className="[&>button]:w-full">
                       <Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Confirmar + Crear Cotizacion</Button>
+                    </div>
+                  ) : solicitud?.estado === 'ASIGNADA' ? (
+                    <div className="[&>button]:w-full">
+                      <Button color="indigo" size="lg" icon={Send} loading={sendingConfirmacion} onClick={enviarParaConfirmacion}>Enviar para Confirmación</Button>
                     </div>
                   ) : (
                     <div className="flex items-center justify-center px-4 py-2.5 rounded-xl border border-dashed border-slate-200 text-slate-300 text-sm font-bold">

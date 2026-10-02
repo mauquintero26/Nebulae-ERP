@@ -37,6 +37,7 @@ export const MODALIDADES_PAGO = [
 
 const ESTADOS_SC: Record<string, {label:string; color:string; bg:string; border:string}> = {
   BORRADOR:               {label:'Borrador',           color:'#64748b',bg:'#f1f5f9',border:'#e2e8f0'},
+  ASIGNADA:               {label:'Asignada',           color:'#0e7490',bg:'#ecfeff',border:'#a5f3fc'},
   PENDIENTE_CONFIRMACION: {label:'Pend. confirmacion', color:'#b45309',bg:'#fffbeb',border:'#fde68a'},
   COTIZADA:               {label:'Cotizada',           color:'#1d4ed8',bg:'#eff6ff',border:'#bfdbfe'},
   EN_ESPERA_CONFIRMACION: {label:'En espera confirmacion', color:'#c2410c',bg:'#fff7ed',border:'#fed7aa'},
@@ -56,7 +57,7 @@ const ESTADOS_SC: Record<string, {label:string; color:string; bg:string; border:
 // click, sin Cotizacion vinculada ni backend involucrado -- exactamente lo que
 // estos menus nunca pudieron hacer antes de que ESTADOS_SC creciera.
 export const ESTADOS_SC_MANUALES: Record<string, {label:string; color:string; bg:string; border:string}> = Object.fromEntries(
-  Object.entries(ESTADOS_SC).filter(([k]) => ['BORRADOR','PENDIENTE_CONFIRMACION','CONFIRMADA','CANCELADA'].includes(k))
+  Object.entries(ESTADOS_SC).filter(([k]) => ['BORRADOR','CANCELADA'].includes(k))
 );
 
 export const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
