@@ -67,6 +67,8 @@ class CustomerRequest(Base):
     estado           = Column(String(50), nullable=False, default="BORRADOR")
     fecha_solicitud  = Column(DateTime, default=_now)
     fecha_vencimiento= Column(DateTime, nullable=True)
+    fecha_entrega_estimada = Column(DateTime, nullable=True)
+    modalidad_entrega      = Column(String(20), nullable=False, default="NORMAL")
     notas            = Column(Text, nullable=True)
     productos        = Column(JSON, nullable=True, default=list)
     created_at       = Column(DateTime, default=_now)

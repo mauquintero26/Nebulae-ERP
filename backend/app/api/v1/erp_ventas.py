@@ -33,6 +33,9 @@ router = APIRouter()
 
 API = "http://localhost:5000/api/v1"
 
+# ─── Delivery Date Constants ──────────────────────────────────────────────────
+DIAS_ENTREGA_DEFAULT = {"NORMAL": 18, "INMEDIATA": 3}
+
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def _int_or_none(v):
@@ -135,6 +138,8 @@ def _sc_dict(sc: CustomerRequest) -> dict:
         "estado": sc.estado,
         "fecha_solicitud": sc.fecha_solicitud.isoformat() if sc.fecha_solicitud else None,
         "fecha_vencimiento": sc.fecha_vencimiento.isoformat() if sc.fecha_vencimiento else None,
+        "fecha_entrega_estimada": sc.fecha_entrega_estimada.isoformat() if sc.fecha_entrega_estimada else None,
+        "modalidad_entrega": sc.modalidad_entrega,
         "notas": sc.notas,
         "productos": sc.productos or [],
         "created_at": sc.created_at.isoformat() if sc.created_at else None,
@@ -305,6 +310,8 @@ def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
             cust_addr  = cust_addr or c.address or ""
 
     es_soporte = body.get("tipo_solicitud") == "Soporte Tecnico"
+    # Derive modalidad_entrega from tipo_solicitud
+    modalidad_entrega = "INMEDIATA" if body.get("tipo_solicitud") == "Pedido Inmediato" else "NORMAL"
 
     sc = CustomerRequest(
         numero=numero,
@@ -325,6 +332,7 @@ def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
         asignado_a_user_id=_int_or_none(body.get("asignado_a_user_id")),
         estado_soporte="ABIERTO" if es_soporte else None,
         fecha_vencimiento=venc,
+        modalidad_entrega=modalidad_entrega,
         notas=body.get("notas"),
         productos=body.get("productos", []),
         created_by=body.get("created_by"),
@@ -435,6 +443,12 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
     old_estado = sc.estado
     sc.estado = "COTIZADA"
     sc.updated_at = datetime.datetime.utcnow()
+
+    # Calculate delivery date based on modalidad_entrega
+    dias = DIAS_ENTREGA_DEFAULT.get(sc.modalidad_entrega, DIAS_ENTREGA_DEFAULT["NORMAL"])
+    entrega_est = datetime.datetime.utcnow() + datetime.timedelta(days=dias)
+    sc.fecha_entrega_estimada = entrega_est
+
     db.commit()
 
     _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
@@ -444,7 +458,6 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
 
     # Create COT automatically
     cot_numero = _gen_numero(db, "COT-", "seq_cot")
-    entrega_est = datetime.datetime.utcnow() + datetime.timedelta(days=15)
     cot = SalesQuotation(
         numero=cot_numero,
         sc_id=sc.id,
