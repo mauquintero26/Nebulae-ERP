@@ -312,6 +312,13 @@ def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
     es_soporte = body.get("tipo_solicitud") == "Soporte Tecnico"
     # Derive modalidad_entrega from tipo_solicitud
     modalidad_entrega = "INMEDIATA" if body.get("tipo_solicitud") == "Pedido Inmediato" else "NORMAL"
+    # Gate 1: si ya se elige asesor al crear la SC, arranca directamente en ASIGNADA
+    # en vez de BORRADOR -- mismo criterio de "hay un advisor_user_id real" que
+    # promueve_asignada usa en update_solicitud. Sin esto, una SC creada con asesor
+    # quedaba en BORRADOR igual y dependia de una edicion posterior (que hasta este
+    # fix ni siquiera existia en la UI) solo para que el flujo de confirmacion
+    # pudiera empezar.
+    estado_inicial = "N/A_SOPORTE" if es_soporte else ("ASIGNADA" if body.get("advisor_user_id") else "BORRADOR")
 
     sc = CustomerRequest(
         numero=numero,
@@ -324,7 +331,7 @@ def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
         advisor_user_id=_int_or_none(body.get("advisor_user_id")),
         tipo_solicitud=body.get("tipo_solicitud", "Cotizacion de Producto"),
         modalidad_pago=body.get("modalidad_pago", "Contado"),
-        estado="N/A_SOPORTE" if es_soporte else "BORRADOR",
+        estado=estado_inicial,
         tipo_problema=body.get("tipo_problema"),
         descripcion_problema=body.get("descripcion_problema"),
         urgencia=body.get("urgencia"),
@@ -342,7 +349,7 @@ def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
     db.refresh(sc)
     _log(db, "SC", sc.id, sc.numero, "CREATED",
          f"Solicitud {sc.numero} creada",
-         new_estado="BORRADOR", user_name=body.get("created_by"))
+         new_estado=estado_inicial, user_name=body.get("created_by"))
     return {"status": "success", "data": _sc_dict(sc)}
 
 

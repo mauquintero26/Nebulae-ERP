@@ -162,3 +162,34 @@ def test_link_no_confirma_sc_cancelada(app_client, db, admin_token, user_admin):
 
     db.refresh(sc)
     assert sc.estado == "CANCELADA"  # nunca revivida a CONFIRMADA
+
+
+def test_crear_solicitud_con_asesor_empieza_asignada(app_client, admin_token, user_admin):
+    """Round 5 (gap de alcanzabilidad por UI, decidido por el usuario): crear una SC
+    con advisor_user_id ya elegido debe arrancar directamente en ASIGNADA, no en
+    BORRADOR. Antes de este fix, la unica forma de llegar a ASIGNADA con un asesor
+    elegido desde el principio era editar la SC despues -- y el formulario de edicion
+    ni siquiera tenia un selector de asesor hasta este mismo round."""
+    resp = app_client.post("/api/v1/ventas/solicitudes", json={
+        "customer_name": "Cliente Prueba", "tipo_solicitud": "Cotizacion de Producto",
+        "advisor_user_id": user_admin.id, "created_by": "test",
+    }, headers=auth(admin_token))
+    assert resp.status_code == 201
+    assert resp.json()["data"]["estado"] == "ASIGNADA"
+
+
+def test_crear_solicitud_sin_asesor_sigue_en_borrador(app_client, admin_token):
+    """Regresion: sin advisor_user_id al crear, el comportamiento historico (BORRADOR)
+    no cambia -- el fix de arriba es condicional, no un cambio del default."""
+    resp = app_client.post("/api/v1/ventas/solicitudes", json={
+        "customer_name": "Cliente Prueba", "tipo_solicitud": "Cotizacion de Producto",
+        "created_by": "test",
+    }, headers=auth(admin_token))
+    assert resp.status_code == 201
+    assert resp.json()["data"]["estado"] == "BORRADOR"
+
+# Nota: el caso "PATCH estilo formulario de edicion con advisor_user_id sobre una SC
+# BORRADOR sin asesor promueve a ASIGNADA" ya esta cubierto por
+# test_asignar_asesor_promueve_a_asignada (arriba) desde la implementacion original de
+# este Task -- confirmado (no duplicado) por la corrida completa de este archivo tras
+# este Round.

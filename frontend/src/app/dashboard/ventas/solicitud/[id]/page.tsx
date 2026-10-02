@@ -67,6 +67,10 @@ function SolicitudDetalleContent() {
   const [panelTab, setPanelTab] = useState<'acciones' | 'actividad' | 'chatter' | 'ia'>('acciones');
   const [activityFilter, setActivityFilter] = useState<string>('all');
 
+  // Usuarios para el selector de asesor en modo edicion (mismo endpoint y filtro de
+  // rol que el selector equivalente en el modal de creacion, solicitud-client.tsx).
+  const [usuarios, setUsuarios] = useState<{ id: number; email: string; role: string }[]>([]);
+
   // Cancelar con razon (mismo endpoint/flujo que solicitud-client.tsx, duplicado
   // aqui como estado propio de la pagina -- mismo patron que "Cancelar Pedido"
   // en venta/[id]/page.tsx). Antes solo era alcanzable desde la lista (fila /
@@ -78,6 +82,7 @@ function SolicitudDetalleContent() {
   useEffect(() => {
     const u = localStorage.getItem('user_name') || localStorage.getItem('username') || '';
     setCurrentUser(u);
+    apiFetch('/auth/users').then((d: any) => setUsuarios(Array.isArray(d) ? d : (d?.data ?? []))).catch(() => {});
   }, []);
 
   const loadSolicitud = useCallback(async () => {
@@ -90,6 +95,7 @@ function SolicitudDetalleContent() {
       setSolicitud(d);
       setEditForm({
         advisor_name: d.advisor_name || '',
+        advisor_user_id: d.advisor_user_id || '',
         tipo_solicitud: d.tipo_solicitud || 'Cotizacion de Producto',
         modalidad_pago: d.modalidad_pago || 'Contado',
         notas: d.notas || '',
@@ -368,7 +374,23 @@ function SolicitudDetalleContent() {
                   </select>
                 </div>
               ))}
-              <div><label className="text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider block">Asesor</label><input type="text" value={editForm.advisor_name} onChange={e => setEditForm((ef: any) => ({ ...ef, advisor_name: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none" /></div>
+              <div>
+                <label className="text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider block">Asesor</label>
+                {/* Gate 1: asignar asesor aqui es la unica forma de promover una SC creada
+                    sin asesor (BORRADOR) a ASIGNADA -- update_solicitud/promueve_asignada
+                    decide la promocion en el backend, este selector solo manda el id real
+                    (mismo patron que el selector de asesor en el modal de creacion). */}
+                <select value={editForm.advisor_user_id || ''} onChange={e => {
+                  const uid = e.target.value ? Number(e.target.value) : '';
+                  const u = usuarios.find(x => x.id === uid);
+                  setEditForm((ef: any) => ({ ...ef, advisor_user_id: uid, advisor_name: u?.email || ef.advisor_name }));
+                }} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">
+                  <option value="">Seleccionar asesor...</option>
+                  {usuarios.filter(u => u.role === 'Admin' || u.role === 'Vendedor').map(u => (
+                    <option key={u.id} value={u.id}>{u.email}</option>
+                  ))}
+                </select>
+              </div>
               <div><label className="text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider block">Fecha Vencimiento</label><input type="date" value={editForm.fecha_vencimiento} onChange={e => setEditForm((ef: any) => ({ ...ef, fecha_vencimiento: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none" /></div>
               <div><label className="text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider block">Notas</label><textarea value={editForm.notas} onChange={e => setEditForm((ef: any) => ({ ...ef, notas: e.target.value }))} rows={3} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-200 outline-none" /></div>
             </div>
