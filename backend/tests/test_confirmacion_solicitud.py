@@ -85,3 +85,24 @@ def test_confirmar_solicitud_exige_confirmada(app_client, db, admin_token):
     db.add(sc); db.commit(); db.refresh(sc)
     resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/confirmar", json={"user_name": "test"}, headers=auth(admin_token))
     assert resp.status_code == 400
+
+
+def test_patch_generico_no_puede_forzar_confirmada(app_client, db, admin_token):
+    """Requisito de seguridad del plan (Global Constraint), no solo UX: CONFIRMADA
+    solo se alcanza vía el enlace público de un solo uso. Antes de este fix, PATCH
+    /solicitudes/{id} con {"estado": "CONFIRMADA"} funcionaba igual que antes de toda
+    esta tarea -- el retiro de CONFIRMADA de ESTADOS_SC_MANUALES en el frontend (Step 12)
+    solo ocultaba el atajo en la pastilla de un clic, no cerraba la ruta real por API.
+    Un ROLE_ASESOR/ROLE_ADMIN (el actor que esta funcionalidad existe para restringir)
+    podía seguir confirmando con una sola llamada cruda, sin que el cliente confirmara
+    nada."""
+    from app.models.erp_documents import CustomerRequest
+    sc = CustomerRequest(numero="SC-TESTCONF5", customer_name="Cliente Prueba", estado="PENDIENTE_CONFIRMACION")
+    db.add(sc); db.commit(); db.refresh(sc)
+
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": "CONFIRMADA", "updated_by": "test"}, headers=auth(admin_token))
+    assert resp.status_code == 400
+
+    # No debe haber escritura parcial: el estado original se preserva intacto.
+    db.refresh(sc)
+    assert sc.estado == "PENDIENTE_CONFIRMACION"

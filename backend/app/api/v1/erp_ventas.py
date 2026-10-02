@@ -405,6 +405,17 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
+    # Gate 1 (requisito de seguridad, no solo UX -- ver Global Constraint del plan):
+    # CONFIRMADA solo se alcanza cuando el cliente confirma via el enlace publico de
+    # un solo uso (confirmacion_publica.py). Sin este check, este PATCH generico
+    # seguia permitiendo que cualquier ROLE_ADMIN/ROLE_ASESOR forzara CONFIRMADA
+    # directamente con {"estado": "CONFIRMADA"} -- el mismo atajo de un click que
+    # esta tarea existe para cerrar, solo que por una ruta distinta a la pastilla de
+    # ESTADOS_SC_MANUALES del frontend (que si se corrigio en Step 12). Los demas
+    # valores de estado (incluyendo BORRADOR/CANCELADA, que ESTADOS_SC_MANUALES si
+    # ofrece como pastillas) siguen permitidos sin restriccion aqui.
+    if body.get("estado") == "CONFIRMADA":
+        raise HTTPException(400, "CONFIRMADA solo se alcanza cuando el cliente confirma via el enlace enviado (no se puede forzar manualmente).")
     old_estado = sc.estado
     fecha_vieja = sc.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
     # Gate 1 (ver confirmacion_publica.py): asignar asesor por primera vez a una SC
