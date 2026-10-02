@@ -523,15 +523,41 @@ def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN
     if body.get("dias_entrega"):
         entrega_est = datetime.datetime.utcnow() + datetime.timedelta(days=body["dias_entrega"])
 
+    sc_id = body.get("sc_id")
+    sc_numero = body.get("sc_numero")
+    customer_id = body.get("customer_id")
+    customer_name = body.get("customer_name")
+    customer_phone = body.get("customer_phone")
+    customer_email = body.get("customer_email")
+    customer_address = body.get("customer_address")
+    if sc_id:
+        # La Solicitud de Cliente es la fuente autoritativa de estos datos.
+        # No confiar en lo que mande el body para ellos: si el llamador (ej.
+        # Cotizador Rapido en /dashboard/cotiza) manda sc_id pero omite
+        # sc_numero/customer_name, antes quedaban vacios para siempre y el
+        # chip "Origen" terminaba mostrando el id crudo (SC-8) en vez del
+        # numero real (SC-20260317). Ver confirmar_solicitud() arriba, que
+        # ya hacia esto bien por tener el objeto SC en memoria.
+        sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
+        if sc:
+            sc_numero = sc.numero
+            customer_id = sc.customer_id
+            customer_name = sc.customer_name
+            customer_phone = sc.customer_phone
+            customer_email = sc.customer_email
+            customer_address = sc.customer_address
+        # Si no existe (caso raro), se mantiene el comportamiento anterior:
+        # usar lo que vino en el body tal cual.
+
     cot = SalesQuotation(
         numero=numero,
-        sc_id=body.get("sc_id"),
-        sc_numero=body.get("sc_numero"),
-        customer_id=body.get("customer_id"),
-        customer_name=body.get("customer_name"),
-        customer_phone=body.get("customer_phone"),
-        customer_email=body.get("customer_email"),
-        customer_address=body.get("customer_address"),
+        sc_id=sc_id,
+        sc_numero=sc_numero,
+        customer_id=customer_id,
+        customer_name=customer_name,
+        customer_phone=customer_phone,
+        customer_email=customer_email,
+        customer_address=customer_address,
         cotizador=body.get("cotizador"),
         direccion_entrega=body.get("direccion_entrega"),
         trm_rate=body.get("trm_rate"),

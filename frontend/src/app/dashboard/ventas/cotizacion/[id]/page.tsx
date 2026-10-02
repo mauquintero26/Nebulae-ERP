@@ -425,6 +425,15 @@ export default function CotizacionDetallePage() {
               <FileText className="text-blue-600" size={24} /> Datos de la Cotizacion
             </h2>
 
+            {!isNew && cotizacion && !cotizacion.customer_name && (
+              <div className="mb-6 flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-red-700">
+                <AlertCircle size={20} className="shrink-0 mt-0.5" />
+                <p className="text-sm font-bold">
+                  Falta el nombre del cliente — esta cotización no puede completarse sin esta información.
+                </p>
+              </div>
+            )}
+
             <div className="grid grid-cols-3 gap-6 mb-10">
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Cliente</label>
