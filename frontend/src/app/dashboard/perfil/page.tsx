@@ -21,6 +21,10 @@ export default function PerfilPage() {
   const [user, setUser] = useState<any | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
 
+  const [username, setUsername] = useState('');
+  const [loadingUsername, setLoadingUsername] = useState(false);
+  const [usernameResult, setUsernameResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
   const [form, setForm] = useState({
     current_password: '',
     new_password: '',
@@ -38,7 +42,9 @@ export default function PerfilPage() {
       setLoadingUser(true);
       try {
         const res = await apiFetch('/auth/me');
-        setUser(res?.data || res);
+        const u = res?.data || res;
+        setUser(u);
+        setUsername(u?.username || '');
       } catch {
         // Fallback a localStorage
         const email = localStorage.getItem('user_email') || localStorage.getItem('user_name') || 'Usuario Nebulae';
@@ -85,6 +91,37 @@ export default function PerfilPage() {
       setResult({ type: 'error', message: err.message || 'Error al cambiar la contraseña.' });
     } finally {
       setLoadingPass(false);
+    }
+  };
+
+  const handleUsernameSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setUsernameResult(null);
+
+    const trimmed = username.trim();
+    if (!/^[A-Za-z0-9_]{3,32}$/.test(trimmed)) {
+      setUsernameResult({
+        type: 'error',
+        message: 'El nombre de usuario debe tener 3-32 caracteres: letras, números o guion bajo, sin espacios.',
+      });
+      return;
+    }
+
+    setLoadingUsername(true);
+    try {
+      const res = await apiFetch('/auth/username', {
+        method: 'PATCH',
+        body: JSON.stringify({ username: trimmed }),
+      });
+      const updated = res?.data || res;
+      const newUsername = updated?.username ?? trimmed;
+      setUser((prev: any) => ({ ...prev, username: newUsername }));
+      setUsername(newUsername);
+      setUsernameResult({ type: 'success', message: '¡Nombre de usuario actualizado!' });
+    } catch (err: any) {
+      setUsernameResult({ type: 'error', message: err.message || 'Error al actualizar el nombre de usuario.' });
+    } finally {
+      setLoadingUsername(false);
     }
   };
 
@@ -155,6 +192,59 @@ export default function PerfilPage() {
               <LogOut size={13} /> Cerrar Sesión
             </button>
           </div>
+        </div>
+
+        {/* Sección de Nombre de Usuario */}
+        <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+          <div className="px-6 py-5 border-b border-slate-100 flex items-center gap-3 bg-slate-50/50">
+            <div className="p-2 bg-indigo-100 text-indigo-700 rounded-xl">
+              <UserCircle size={18} />
+            </div>
+            <div>
+              <h2 className="text-sm font-black text-slate-800 uppercase tracking-wider">
+                Nombre de Usuario
+              </h2>
+              <p className="text-xs text-slate-400">Puedes iniciar sesión con tu email o con este nombre de usuario</p>
+            </div>
+          </div>
+
+          <form onSubmit={handleUsernameSubmit} className="p-6 space-y-4">
+            {usernameResult && (
+              <div
+                className={`p-4 rounded-2xl flex items-center gap-3 text-xs font-bold ${
+                  usernameResult.type === 'success'
+                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                    : 'bg-red-50 text-red-700 border border-red-200'
+                }`}
+              >
+                {usernameResult.type === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+                {usernameResult.message}
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+              <div className="flex-1">
+                <label className="block text-xs font-black text-slate-500 uppercase mb-1">
+                  Nombre de Usuario (3-32 caracteres, sin espacios)
+                </label>
+                <input
+                  type="text"
+                  name="username"
+                  value={username}
+                  onChange={(e) => { setUsername(e.target.value); setUsernameResult(null); }}
+                  placeholder="ej. jmquintero"
+                  className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs outline-none focus:ring-2 focus:ring-indigo-300"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loadingUsername}
+                className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl shadow-sm transition-all disabled:opacity-50 flex items-center justify-center gap-1.5 whitespace-nowrap"
+              >
+                {loadingUsername ? 'Guardando...' : (<><Check size={14} /> Guardar</>)}
+              </button>
+            </div>
+          </form>
         </div>
 
         {/* Sección de Seguridad y Contraseña */}

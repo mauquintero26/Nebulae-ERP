@@ -95,6 +95,40 @@ export async function login(email: string, password: string) {
   return handleResponse(res);
 }
 
+export async function forgotPassword(email: string) {
+  const res = await fetch(`${API_URL}/auth/forgot-password`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ email }),
+  });
+
+  return handleResponse(res);
+}
+
+export async function resetPassword(token: string, newPassword: string) {
+  const res = await fetch(`${API_URL}/auth/reset-password`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ token, new_password: newPassword }),
+  });
+
+  return handleResponse(res);
+}
+
+export async function updateUsername(username: string) {
+  const res = await fetch(`${API_URL}/auth/username`, {
+    method: 'PATCH',
+    headers: getHeaders(),
+    body: JSON.stringify({ username }),
+  });
+
+  return handleResponse(res);
+}
+
 export async function register(email: string, password: string, fullName: string = '') {
   const res = await fetch(`${API_URL}/auth/register`, {
     method: 'POST',

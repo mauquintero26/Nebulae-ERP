@@ -10,6 +10,7 @@ function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const reason = searchParams.get('reason');
+  const reset = searchParams.get('reset');
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -21,8 +22,10 @@ function LoginForm() {
   useEffect(() => {
     if (reason === 'session-expired') {
       setInfoMessage('Tu sesión venció. Inicia sesión nuevamente para continuar.');
+    } else if (reset === 'ok') {
+      setInfoMessage('Tu contraseña fue actualizada. Ya puedes iniciar sesión.');
     }
-  }, [reason]);
+  }, [reason, reset]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,7 +105,12 @@ function LoginForm() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Contraseña</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Contraseña</label>
+                  <Link href="/forgot-password" className="text-xs font-bold text-slate-500 hover:text-purple-600 transition-colors">
+                    ¿Olvidaste tu contraseña?
+                  </Link>
+                </div>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
                     <Lock className="h-5 w-5 text-slate-400" />
