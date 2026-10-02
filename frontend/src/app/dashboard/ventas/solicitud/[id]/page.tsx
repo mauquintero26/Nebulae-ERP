@@ -1,22 +1,56 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import {
   ArrowLeft, ArrowRight, ChevronRight, Edit2, Save, Trash2, CheckCircle2,
   User, Phone, Mail, MapPin, MessageCircle, RefreshCw, AlertCircle,
+  FileText, Activity, XCircle, MessageSquare, RotateCcw, Filter,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
 import { Button, Modal } from '@/components/ui';
 import {
-  EstadoBadge, TipoBadge, ActionDot, ChatterTab, IAPanelSC,
+  EstadoBadge, TipoBadge, ChatterTab, IAPanelSC,
   ESTADOS_SC_MANUALES, TIPOS_SC, MODALIDADES_PAGO, fDate, fTime, fCOP,
 } from '../solicitud-client';
 
-export default function SolicitudDetallePage() {
+// Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
+// (mismo patron que cotizacion/[id]/page.tsx; valores reales emitidos por el backend para
+// Solicitudes -- ver erp_ventas.py: CREATED, ESTADO_CHANGED, NOTE_ADDED, CHATTER, CANCELLED,
+// RESTORED).
+const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
+  CREATED:        {icon: FileText,      color: 'text-indigo-500 bg-indigo-50'},
+  ESTADO_CHANGED: {icon: Activity,      color: 'text-amber-500 bg-amber-50'},
+  NOTE_ADDED:     {icon: MessageSquare, color: 'text-blue-500 bg-blue-50'},
+  CHATTER:        {icon: MessageSquare, color: 'text-cyan-600 bg-cyan-50'},
+  CANCELLED:      {icon: XCircle,       color: 'text-rose-500 bg-rose-50'},
+  RESTORED:       {icon: RotateCcw,     color: 'text-emerald-500 bg-emerald-50'},
+};
+const DEFAULT_ACTIVITY_STYLE = {icon: Activity, color: 'text-slate-500 bg-slate-50'};
+
+// Etiquetas legibles para el filtro por tipo del tab Actividad. Un tipo de accion
+// que no este listado aqui (futuro) igual se muestra, usando el valor crudo como label.
+const ACTIVITY_TYPE_LABELS: Record<string, string> = {
+  ESTADO_CHANGED: 'Cambios de Estado',
+  NOTE_ADDED: 'Notas',
+  CREATED: 'Creación',
+  CHATTER: 'Chatter',
+  CANCELLED: 'Cancelación',
+  RESTORED: 'Restauración',
+};
+const ACTIVITY_TYPE_ORDER = ['ESTADO_CHANGED', 'NOTE_ADDED', 'CREATED', 'CHATTER', 'CANCELLED', 'RESTORED'];
+
+function SolicitudDetalleContent() {
   const params = useParams();
+  const searchParams = useSearchParams();
+  const rawReturnTo = searchParams?.get('return_to') || '';
+  // Convencion "volver al origen" (aplicada aqui primero, se formalizara luego en mas
+  // pantallas): solo se confia en return_to si es una ruta interna relativa -- nunca un
+  // esquema http(s) ni "//" (protocol-relative), que redirigirian fuera del dominio.
+  const safeReturnTo = rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//') ? rawReturnTo : '';
+  const currentPath = `/dashboard/ventas/solicitud/${String(params.id || '')}`;
 
   const [solicitud, setSolicitud] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -30,6 +64,7 @@ export default function SolicitudDetallePage() {
   const [confirming, setConfirming] = useState(false);
 
   const [panelTab, setPanelTab] = useState<'acciones' | 'actividad' | 'chatter' | 'ia'>('acciones');
+  const [activityFilter, setActivityFilter] = useState<string>('all');
 
   // Cancelar con razon (mismo endpoint/flujo que solicitud-client.tsx, duplicado
   // aqui como estado propio de la pagina -- mismo patron que "Cancelar Pedido"
@@ -212,15 +247,38 @@ export default function SolicitudDetallePage() {
   const isSoporte = solicitud?.tipo_solicitud === 'Soporte Tecnico';
   const pipelineStep = cotizaciones.some((c: any) => c.estado === 'CONFIRMADA') ? 2 : cotizaciones.length > 0 ? 1 : 0;
 
+  // Unico estado en el que "Confirmar + Crear Cotizacion" (confirmarSC) es valido hoy.
+  // Reutilizado por el boton "Cotizar" del bloque Cotizaciones (panel izquierdo) y por
+  // el tab Acciones -- si el estado es otro (ej. CONFIRMADA sin cotizacion vinculada,
+  // caso raro), no se ofrece ninguna accion en vez de inventar un flujo nuevo fuera de
+  // alcance (el rediseno de Estados de Solicitud se esta discutiendo por separado).
+  const canConfirmarSC = solicitud?.estado === 'BORRADOR' || solicitud?.estado === 'PENDIENTE_CONFIRMACION';
+
+  // Filtro por tipo del tab Actividad: "Todos" + los tipos que realmente aparecen en
+  // esta SC (orden preferido primero, luego cualquier tipo futuro no listado arriba).
+  const activityFilterOptions = [
+    { key: 'all', label: 'Todos' },
+    ...ACTIVITY_TYPE_ORDER.filter(t => actividades.some((a: any) => a.action === t)).map(t => ({ key: t, label: ACTIVITY_TYPE_LABELS[t] || t })),
+    ...Array.from(new Set(actividades.map((a: any) => a.action).filter((t: string) => t && !ACTIVITY_TYPE_ORDER.includes(t)))).map((t: any) => ({ key: t, label: t })),
+  ];
+  const actividadesFiltradas = [...actividades].reverse().filter((a: any) => activityFilter === 'all' || a.action === activityFilter);
+
   return (
     <div className="w-full h-full bg-white flex flex-col overflow-hidden">
 
       {/* Top Action Bar */}
       <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between z-20 shadow-sm shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/dashboard/ventas/solicitud" className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 transition-colors">
-            <ArrowLeft size={20} />
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link href="/dashboard/ventas/solicitud" className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 transition-colors">
+              <ArrowLeft size={20} />
+            </Link>
+            {safeReturnTo && (
+              <Link href={safeReturnTo} className="text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:underline whitespace-nowrap">
+                ← Volver
+              </Link>
+            )}
+          </div>
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-black text-slate-800">{solicitud?.numero || String(params.id || '').toUpperCase()}</h1>
             {solicitud && <EstadoBadge estado={solicitud.estado} />}
@@ -268,8 +326,8 @@ export default function SolicitudDetallePage() {
         {/* LEFT: Informacion de la Solicitud (Cliente, datos, estado) */}
         <div className="flex-1 border-r border-slate-100 overflow-y-auto p-6 space-y-5">
           {/* Cliente */}
-          <div className="bg-slate-50 rounded-2xl p-4">
-            <p className="text-xs font-black text-slate-400 uppercase mb-3">Cliente</p>
+          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Cliente</p>
             <div className="space-y-2">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 flex-shrink-0"><User size={15} /></div>
@@ -284,24 +342,24 @@ export default function SolicitudDetallePage() {
           {/* Edit mode */}
           {editMode ? (
             <div className="space-y-3">
-              <p className="text-xs font-black text-slate-400 uppercase">Editar</p>
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Editar</p>
               {[{ l: 'Tipo de Solicitud', k: 'tipo_solicitud', opts: TIPOS_SC }, { l: 'Modalidad de Pago', k: 'modalidad_pago', opts: MODALIDADES_PAGO }].map(f => (
                 <div key={f.k}>
-                  <label className="text-xs font-bold text-slate-500 mb-1 block">{f.l}</label>
+                  <label className="text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider block">{f.l}</label>
                   <select value={editForm[f.k]} onChange={e => setEditForm((ef: any) => ({ ...ef, [f.k]: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">
                     {f.opts.map(o => <option key={o} value={o}>{o}</option>)}
                   </select>
                 </div>
               ))}
-              <div><label className="text-xs font-bold text-slate-500 mb-1 block">Asesor</label><input type="text" value={editForm.advisor_name} onChange={e => setEditForm((ef: any) => ({ ...ef, advisor_name: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none" /></div>
-              <div><label className="text-xs font-bold text-slate-500 mb-1 block">Fecha Vencimiento</label><input type="date" value={editForm.fecha_vencimiento} onChange={e => setEditForm((ef: any) => ({ ...ef, fecha_vencimiento: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none" /></div>
-              <div><label className="text-xs font-bold text-slate-500 mb-1 block">Notas</label><textarea value={editForm.notas} onChange={e => setEditForm((ef: any) => ({ ...ef, notas: e.target.value }))} rows={3} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-200 outline-none" /></div>
+              <div><label className="text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider block">Asesor</label><input type="text" value={editForm.advisor_name} onChange={e => setEditForm((ef: any) => ({ ...ef, advisor_name: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none" /></div>
+              <div><label className="text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider block">Fecha Vencimiento</label><input type="date" value={editForm.fecha_vencimiento} onChange={e => setEditForm((ef: any) => ({ ...ef, fecha_vencimiento: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none" /></div>
+              <div><label className="text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider block">Notas</label><textarea value={editForm.notas} onChange={e => setEditForm((ef: any) => ({ ...ef, notas: e.target.value }))} rows={3} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-200 outline-none" /></div>
             </div>
           ) : (
             <>
               <div className="grid grid-cols-2 gap-3">
                 {[{ l: 'Asesor', v: solicitud?.advisor_name || '-' }, { l: 'Modalidad Pago', v: solicitud?.modalidad_pago || '-' }, { l: 'Fecha Solicitud', v: fDate(solicitud?.fecha_solicitud) }, { l: 'Vencimiento', v: fDate(solicitud?.fecha_vencimiento) }].map(item => (
-                  <div key={item.l} className="bg-white border border-slate-100 rounded-xl p-3 shadow-sm"><p className="text-xs text-slate-400 mb-1">{item.l}</p><p className="font-bold text-sm text-slate-800">{item.v}</p></div>
+                  <div key={item.l} className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3"><p className="text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider">{item.l}</p><p className="font-bold text-sm text-slate-800">{item.v}</p></div>
                 ))}
               </div>
               {solicitud?.modalidad_pago?.includes('60/40') && (
@@ -315,7 +373,7 @@ export default function SolicitudDetallePage() {
               )}
               {(solicitud?.productos || []).length > 0 && (
                 <div>
-                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos</p>
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Productos</p>
                   <div className="border border-slate-200 rounded-xl overflow-hidden">
                     <table className="w-full text-xs">
                       <thead className="bg-slate-50 text-slate-400 uppercase font-black"><tr><th className="px-3 py-2 text-left">Producto</th><th className="px-3 py-2 text-right">Qty</th><th className="px-3 py-2 text-right">Precio</th></tr></thead>
@@ -329,17 +387,24 @@ export default function SolicitudDetallePage() {
                 </div>
               )}
               {solicitud?.notas && <div className="bg-amber-50 border border-amber-100 rounded-xl p-4"><p className="text-xs font-black text-amber-700 uppercase mb-1.5">Notas</p><p className="text-sm text-amber-900">{solicitud.notas}</p></div>}
-              {cotizaciones.length > 0 && (
-                <div>
-                  <p className="text-xs font-black text-slate-400 uppercase mb-2">Cotizaciones</p>
-                  {cotizaciones.map((c: any) => (
-                    <Link key={c.id} href={`/dashboard/ventas/cotizacion/${c.id}`} className="flex items-center justify-between p-3 bg-amber-50 border border-amber-200 rounded-xl mb-2 hover:bg-amber-100">
+              <div>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Cotizaciones</p>
+                {cotizaciones.length > 0 ? (
+                  cotizaciones.map((c: any) => (
+                    <Link key={c.id} href={`/dashboard/ventas/cotizacion/${c.id}?return_to=${encodeURIComponent(currentPath)}`} className="flex items-center justify-between p-3 bg-amber-50 border border-amber-200 rounded-xl mb-2 hover:bg-amber-100">
                       <div><span className="font-bold text-amber-800">{c.numero}</span><p className="text-xs text-amber-600 mt-0.5">{c.estado}</p></div>
                       <ChevronRight size={15} className="text-amber-500" />
                     </Link>
-                  ))}
-                </div>
-              )}
+                  ))
+                ) : (
+                  <div className="bg-slate-50 border border-dashed border-slate-300 rounded-xl p-4 text-center">
+                    <p className="text-xs text-slate-400 italic mb-3">Aún no se ha realizado ninguna cotización.</p>
+                    {canConfirmarSC && (
+                      <Button color="emerald" size="sm" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Cotizar</Button>
+                    )}
+                  </div>
+                )}
+              </div>
             </>
           )}
 
@@ -347,7 +412,7 @@ export default function SolicitudDetallePage() {
           <div>
             {isSoporte ? (
               <>
-                <p className="text-xs font-black text-slate-400 uppercase mb-2">Estado del Ticket de Soporte</p>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Estado del Ticket de Soporte</p>
                 <select value={solicitud?.estado_soporte || 'ABIERTO'} disabled={saving}
                   onChange={e => changeEstadoSoporte(e.target.value)}
                   className="w-full border border-purple-200 bg-purple-50 rounded-xl px-3 py-2 text-sm font-bold text-purple-700 outline-none focus:ring-2 focus:ring-purple-200 disabled:opacity-40">
@@ -359,7 +424,7 @@ export default function SolicitudDetallePage() {
               </>
             ) : (
               <>
-                <p className="text-xs font-black text-slate-400 uppercase mb-2">Cambiar Estado</p>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Cambiar Estado</p>
                 <div className="flex gap-2 flex-wrap">
                   {Object.entries(ESTADOS_SC_MANUALES).filter(([k]) => k !== solicitud?.estado).map(([k, v]) => (
                     <button key={k} onClick={() => changeEstado(k)} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs font-bold border hover:opacity-80 disabled:opacity-40" style={{ backgroundColor: v.bg, color: v.color, borderColor: v.border }}>{v.label}</button>
@@ -390,22 +455,19 @@ export default function SolicitudDetallePage() {
             {panelTab === 'acciones' && (
               <>
                 <div>
-                  <p className="text-xs font-black text-slate-400 uppercase mb-3">Acciones Principales</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {(solicitud?.estado === 'BORRADOR' || solicitud?.estado === 'PENDIENTE_CONFIRMACION') && (
-                      <div className="col-span-2 [&>button]:w-full">
-                        <Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Confirmar + Crear Cotizacion</Button>
-                      </div>
-                    )}
-                    {cotizaciones.length > 0 && (
-                      <Link href={`/dashboard/ventas/cotizacion/${cotizaciones[cotizaciones.length - 1].id}`} className="bg-amber-50 border border-amber-200 text-amber-700 px-4 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-amber-100 text-sm">
-                        <ArrowRight size={14} />Ver Cotizacion
-                      </Link>
-                    )}
-                  </div>
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Acciones Principales</p>
+                  {canConfirmarSC ? (
+                    <div className="[&>button]:w-full">
+                      <Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Confirmar + Crear Cotizacion</Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center px-4 py-2.5 rounded-xl border border-dashed border-slate-200 text-slate-300 text-sm font-bold">
+                      Sin acciones principales disponibles
+                    </div>
+                  )}
                 </div>
                 <div>
-                  <p className="text-xs font-black text-slate-400 uppercase mb-3">Contactar Cliente</p>
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Contactar Cliente</p>
                   <div className="grid grid-cols-3 gap-2">
                     {solicitud?.customer_phone && <a href={`https://wa.me/57${solicitud.customer_phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer" className="flex flex-col items-center gap-1.5 py-3 bg-green-50 border border-green-200 text-green-700 rounded-xl font-bold text-xs hover:bg-green-100"><MessageCircle size={18} />WhatsApp</a>}
                     {solicitud?.customer_phone && <a href={`tel:${solicitud.customer_phone}`} className="flex flex-col items-center gap-1.5 py-3 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl font-bold text-xs hover:bg-blue-100"><Phone size={18} />Llamar</a>}
@@ -417,21 +479,60 @@ export default function SolicitudDetallePage() {
 
             {panelTab === 'actividad' && (
               <div>
-                <p className="text-xs font-black text-slate-400 uppercase mb-3">Historial</p>
-                {actividades.filter((a: any) => a.action !== 'CHATTER').length === 0 ? (
-                  <p className="text-xs text-slate-400 italic">Sin actividad.</p>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Historial de Actividad</p>
+
+                {/* Filtro por tipo -- "Todos" + los tipos reales presentes en esta SC */}
+                <div className="flex items-center gap-1.5 flex-wrap mb-4">
+                  <Filter size={12} className="text-slate-300 shrink-0" />
+                  {activityFilterOptions.map(opt => (
+                    <button
+                      key={opt.key}
+                      onClick={() => setActivityFilter(opt.key)}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-colors ${
+                        activityFilter === opt.key
+                          ? 'bg-indigo-600 text-white border-indigo-600'
+                          : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+
+                {actividadesFiltradas.length === 0 ? (
+                  <p className="text-xs text-slate-400 italic text-center py-8">
+                    {activityFilter === 'all' ? 'Sin actividad registrada.' : 'Sin actividad de este tipo.'}
+                  </p>
                 ) : (
-                  <div className="space-y-4 relative before:absolute before:left-2 before:top-0 before:bottom-0 before:w-0.5 before:bg-slate-100">
-                    {[...actividades].reverse().filter((a: any) => a.action !== 'CHATTER').map((a: any) => (
-                      <div key={a.id} className="flex gap-4 pl-7 relative">
-                        <ActionDot action={a.action} />
-                        <div className="flex-1 bg-white border border-slate-100 rounded-xl p-3 shadow-sm">
-                          <p className="text-sm font-bold text-slate-700">{a.description}</p>
-                          {a.old_estado && a.new_estado && <p className="text-xs text-slate-400 mt-1 flex items-center gap-1"><EstadoBadge estado={a.old_estado} /><ArrowRight size={10} className="text-slate-300" /><EstadoBadge estado={a.new_estado} /></p>}
-                          <p className="text-xs text-slate-400 mt-1">{fDate(a.created_at)} {fTime(a.created_at)}{a.user_name && <span className="ml-2 font-medium">- {a.user_name}</span>}</p>
+                  <div className="space-y-5 relative before:absolute before:inset-0 before:ml-4 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-200 before:to-transparent">
+                    {actividadesFiltradas.map((a: any) => {
+                      const style = ACTIVITY_STYLE[a.action] || DEFAULT_ACTIVITY_STYLE;
+                      const Icon = style.icon;
+                      return (
+                        <div key={a.id} className="relative flex items-start gap-3">
+                          <div className={`flex items-center justify-center w-8 h-8 rounded-full border-2 border-white shadow-sm shrink-0 z-10 ${style.color}`}>
+                            <Icon size={14} />
+                          </div>
+                          <div className="flex-1 bg-white border border-slate-200 rounded-xl p-3 shadow-sm min-w-0">
+                            <div className="flex items-start justify-between gap-2 mb-1.5">
+                              <span className="font-bold text-slate-800 text-sm">{a.description || a.action}</span>
+                              <span className="text-[10px] font-bold text-slate-400 whitespace-nowrap shrink-0">{fDate(a.created_at)} {fTime(a.created_at)}</span>
+                            </div>
+                            {a.old_estado && a.new_estado && (
+                              <p className="flex items-center gap-1.5 mb-2 flex-wrap">
+                                <EstadoBadge estado={a.old_estado} /><ArrowRight size={10} className="text-slate-300" /><EstadoBadge estado={a.new_estado} />
+                              </p>
+                            )}
+                            <div className="flex items-center gap-2">
+                              <div className="w-5 h-5 rounded-full bg-slate-200 flex items-center justify-center text-[8px] font-bold text-slate-600 border border-slate-300">
+                                {(a.user_name || 'S').split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()}
+                              </div>
+                              <span className="text-xs font-medium text-slate-500">{a.user_name || 'Sistema'}</span>
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -469,5 +570,19 @@ export default function SolicitudDetallePage() {
         </Modal>
       )}
     </div>
+  );
+}
+
+// useSearchParams() exige un limite de Suspense para no romper el prerenderizado estatico
+// (mismo patron ya usado en solicitud/page.tsx para SolicitudClient).
+export default function SolicitudDetallePage() {
+  return (
+    <Suspense fallback={(
+      <div className="w-full h-full flex items-center justify-center bg-white">
+        <RefreshCw className="animate-spin text-indigo-600" size={28} />
+      </div>
+    )}>
+      <SolicitudDetalleContent />
+    </Suspense>
   );
 }
