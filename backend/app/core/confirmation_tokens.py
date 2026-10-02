@@ -55,12 +55,15 @@ def verify_and_consume_token(db: Session, token: str) -> tuple[str, int] | None:
 
 
 def revoke_pending_tokens(db: Session, document_type: str, document_id: int) -> None:
-    """Invalida cualquier token sin usar de este documento -- se llama cuando una SC
-    se cancela o se fuerza de vuelta a BORRADOR (ver cancelar_solicitud/update_solicitud
-    en erp_ventas.py), para que un link ya enviado por correo no pueda confirmar un
-    documento que ya cambio de curso por otra via. Reutiliza used_at como marca de
-    invalidacion (consistente con el modelo existente, sin agregar columnas nuevas):
-    un token revocado es, para todo efecto practico, identico a uno ya usado."""
+    """Invalida cualquier token sin usar de este documento -- se llama en cada punto
+    donde una SC sale del ciclo vigente de Gate 1: cancelar_solicitud, cualquier
+    transicion real de estado via update_solicitud (no solo el reset a BORRADOR),
+    restaurar_solicitud, y siempre antes de emitir un token nuevo en
+    enviar_solicitud_para_confirmacion (ver erp_ventas.py) -- para que un link ya
+    enviado por correo nunca pueda confirmar un documento que ya cambio de curso por
+    otra via, cualquiera que sea. Reutiliza used_at como marca de invalidacion
+    (consistente con el modelo existente, sin agregar columnas nuevas): un token
+    revocado es, para todo efecto practico, identico a uno ya usado."""
     now = datetime.utcnow()
     db.execute(
         text("""

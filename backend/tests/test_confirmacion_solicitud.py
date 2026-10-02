@@ -79,7 +79,7 @@ def test_enviar_y_confirmar_via_link(app_client, db, admin_token, user_admin):
     # confirmar_via_token (lo que se acaba de ejercitar) es la UNICA linea que escribe
     # gate1_confirmed_at -- debe quedar puesta aqui. Se consume (vuelve a None) recien
     # cuando confirmar_solicitud avanza a COTIZADA, lo que este test no ejercita -- ver
-    # test_confirmacion_consume_gate1_confirmed_at_al_crear_cotizacion mas abajo.
+    # test_confirmar_solicitud_consume_gate1_confirmed_at_al_crear_cotizacion mas abajo.
     assert sc.gate1_confirmed_at is not None
 
     # Reintento con el mismo token ya usado
@@ -359,8 +359,23 @@ def test_pill_cancelar_restaurar_reenviar_revoca_token_viejo(app_client, db, adm
     CANCELADA revoca (estado resultante != old_estado, fix ampliado en
     update_solicitud), restaurar_solicitud revoca de nuevo por defensa en profundidad,
     y enviar_solicitud_para_confirmacion revoca SIEMPRE antes de emitir -- T1 no
-    sobrevive ninguno de los pasos."""
+    sobrevive ninguno de los pasos.
+
+    Round 8 (re-review): cada uno de los 3 puntos de revocacion se prueba por separado,
+    consultando la fila del token directamente en la DB justo despues de cada paso --
+    antes de esto, los 3 podian revertirse individualmente y los 33 tests seguian en
+    verde, porque solo se verificaba el estado FINAL de la cadena completa (y
+    /confirmar/ver tampoco distingue "revocado" de "estado rechazado" desde afuera)."""
+    import hashlib
     from app.models.erp_documents import CustomerRequest
+    from app.models.confirmation import DocumentConfirmationToken
+
+    def _used_at(raw_token):
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        row = db.query(DocumentConfirmationToken).filter(DocumentConfirmationToken.token_hash == token_hash).first()
+        assert row is not None
+        return row.used_at
+
     sc = CustomerRequest(numero="SC-TESTCONF14", customer_name="Cliente Prueba",
                           customer_email="cliente14@test.com", estado="ASIGNADA", advisor_user_id=user_admin.id)
     db.add(sc); db.commit(); db.refresh(sc)
@@ -375,16 +390,27 @@ def test_pill_cancelar_restaurar_reenviar_revoca_token_viejo(app_client, db, adm
     patch_resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": "CANCELADA", "updated_by": "test"}, headers=auth(admin_token))
     assert patch_resp.status_code == 200
     assert patch_resp.json()["data"]["estado"] == "CANCELADA"
+    assert _used_at(t1) is not None  # (a) prueba directa: el PATCH generico a CANCELADA SI revoco T1
+
+    # (b) Mintar un token NUEVO mientras la SC esta CANCELADA, para probar
+    # especificamente el revoke propio de restaurar_solicitud (no el del PATCH de arriba).
+    t_cancelada = create_confirmation_token(db, "SC", sc.id)
 
     restaurar_resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/restaurar", headers=auth(admin_token))
     assert restaurar_resp.status_code == 200
     assert restaurar_resp.json()["data"]["estado"] == "ASIGNADA"  # asesor intacto durante todo el ciclo
+    assert _used_at(t_cancelada) is not None  # (b) prueba directa: restaurar_solicitud SI lo revoco
+
+    # (c) Mintar otro token mientras la SC esta ASIGNADA (ya restaurada), para probar
+    # especificamente el revoke-antes-de-emitir de enviar_solicitud_para_confirmacion.
+    t_asignada = create_confirmation_token(db, "SC", sc.id)
 
     second = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/enviar-confirmacion", json={"user_name": "test"}, headers=auth(admin_token))
     assert second.status_code == 200
+    assert _used_at(t_asignada) is not None  # (c) prueba directa: enviar SI lo revoco antes de emitir el nuevo
     t2 = second.json()["link_confirmacion"].rsplit("/", 1)[-1]
 
-    # T1 (del primer envio, nunca usado) debe estar muerto en cada paso que pudo matarlo.
+    # T1 (del primer envio, nunca usado por el cliente) sigue muerto de punta a punta.
     t1_get = app_client.post("/api/v1/confirmar/ver", json={"token": t1})
     assert t1_get.status_code == 400
 

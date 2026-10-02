@@ -462,6 +462,18 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     )
     if desasigna_a_borrador:
         sc.estado = "BORRADOR"
+    # Round 8 (fix de concurrencia encontrado en re-review): captura la transicion
+    # de ESTE request AHORA, antes de cualquier commit/refresh. db.refresh(sc) mas
+    # abajo re-lee la fila desde la DB -- si otro request (p.ej. el cliente
+    # confirmando por el link publico, concurrentemente) ya comiteo su propio
+    # cambio de estado para esta misma SC, sc.estado despues del refresh reflejaria
+    # ESE otro commit, no el de este request. Comparar sc.estado contra old_estado
+    # DESPUES del refresh (como se hacia antes) detectaba una "transicion" que este
+    # request nunca causo, y revocaba/limpiaba una confirmacion de cliente legitima
+    # y recien hecha. Capturando el booleano aqui, antes de que nada mas pueda
+    # pisar sc.estado en memoria, la decision de revocar queda atada unicamente a
+    # lo que este request de verdad cambio.
+    transiciona = sc.estado != old_estado
     sc.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(sc)
@@ -490,16 +502,18 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
              f"Fecha de entrega modificada: {fecha_vieja.strftime('%d/%m/%Y')} -> "
              f"{sc.fecha_entrega_estimada.strftime('%d/%m/%Y')} ({signo}{diff_dias} día{'s' if abs(diff_dias)!=1 else ''})",
              user_name=body.get("updated_by"))
-    if sc.estado != old_estado:
-        # Gate 1 (Round 7, ampliado): CUALQUIER transicion real de estado por este PATCH
-        # generico reinicia el flujo -- no solo el reset a BORRADOR o desasignar. Un
-        # security review probo que la pastilla generica "Cambiar Estado -> Cancelada"
-        # (que no pasa por cancelar_solicitud) dejaba vivo el token y la marca de un
-        # ciclo anterior; lo mismo aplica a cualquier otro estado que este PATCH pueda
-        # escribir. Revocar+limpiar en cualquier transicion real es mas simple y
-        # estrictamente mas seguro que enumerar cada estado destino especificamente
-        # (y es un no-op barato cuando no habia nada que revocar, p.ej. en la primera
-        # promocion BORRADOR->ASIGNADA via promueve_asignada).
+    if transiciona:
+        # Gate 1 (Round 7, ampliado; Round 8, usa el booleano capturado arriba en vez
+        # de comparar sc.estado otra vez aqui): CUALQUIER transicion real de estado
+        # causada por ESTE PATCH reinicia el flujo -- no solo el reset a BORRADOR o
+        # desasignar. Un security review probo que la pastilla generica "Cambiar
+        # Estado -> Cancelada" (que no pasa por cancelar_solicitud) dejaba vivo el
+        # token y la marca de un ciclo anterior; lo mismo aplica a cualquier otro
+        # estado que este PATCH pueda escribir. Revocar+limpiar en cualquier
+        # transicion real es mas simple y estrictamente mas seguro que enumerar cada
+        # estado destino especificamente (y es un no-op barato cuando no habia nada
+        # que revocar, p.ej. en la primera promocion BORRADOR->ASIGNADA via
+        # promueve_asignada).
         from app.core.confirmation_tokens import revoke_pending_tokens
         revoke_pending_tokens(db, "SC", sc.id)
         sc.gate1_confirmed_at = None
