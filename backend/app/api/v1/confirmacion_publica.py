@@ -6,6 +6,7 @@ solo uso que le llega por correo. Ver app/core/confirmation_tokens.py para
 el mecanismo de token (mismo patron que el reset de contraseña).
 """
 from fastapi import APIRouter, HTTPException, Depends, Header
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.core.confirmation_tokens import peek_token, verify_and_consume_token
@@ -13,6 +14,18 @@ from app.core.confirmation_tokens import peek_token, verify_and_consume_token
 router = APIRouter()
 
 GENERIC_ERROR = "El enlace no es válido o ya expiró."
+
+
+class TokenBody(BaseModel):
+    """Mismo shape que ResetPasswordRequest (app/schemas/users.py) -- el token va en
+    el body JSON, nunca en la URL. Round 7: un uvicorn con access log encendido (el
+    caso real en Dockerfile/start_production.sh/nebulae_service_wrapper.py, ninguno
+    filtra uvicorn.access) escribe la URL completa de cada request en el log de
+    servicio; con el token como path param, eso incluye el token crudo en texto
+    plano en cada GET/POST -- exactamente lo que el Global Constraint del plan
+    prohibe ("el token crudo nunca se loguea"). El password-reset que este modulo
+    copia siempre evito esto por tomar el token en el body, nunca en la URL."""
+    token: str
 
 
 def _productos_publicos(productos: list) -> list:
@@ -56,9 +69,9 @@ def _cot_confirmacion_dict(cot) -> dict:
     }
 
 
-@router.get("/confirmar/{token}")
-def ver_confirmacion(token: str, db: Session = Depends(get_db)):
-    resolved = peek_token(db, token)
+@router.post("/confirmar/ver")
+def ver_confirmacion(body: TokenBody, db: Session = Depends(get_db)):
+    resolved = peek_token(db, body.token)
     if not resolved:
         raise HTTPException(400, GENERIC_ERROR)
     document_type, document_id = resolved
@@ -80,9 +93,9 @@ def ver_confirmacion(token: str, db: Session = Depends(get_db)):
     raise HTTPException(400, GENERIC_ERROR)
 
 
-@router.post("/confirmar/{token}")
-def confirmar_via_token(token: str, idempotency_key: str = Header(..., alias="Idempotency-Key"), db: Session = Depends(get_db)):
-    resolved = verify_and_consume_token(db, token)
+@router.post("/confirmar/confirmar")
+def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alias="Idempotency-Key"), db: Session = Depends(get_db)):
+    resolved = verify_and_consume_token(db, body.token)
     if not resolved:
         raise HTTPException(400, GENERIC_ERROR)
     document_type, document_id = resolved

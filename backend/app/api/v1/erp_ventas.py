@@ -490,13 +490,16 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
              f"Fecha de entrega modificada: {fecha_vieja.strftime('%d/%m/%Y')} -> "
              f"{sc.fecha_entrega_estimada.strftime('%d/%m/%Y')} ({signo}{diff_dias} día{'s' if abs(diff_dias)!=1 else ''})",
              user_name=body.get("updated_by"))
-    if body.get("estado") == "BORRADOR" or desasigna_a_borrador:
-        # Gate 1: tanto forzar la SC de vuelta a BORRADOR (pastilla manual de
-        # ESTADOS_SC_MANUALES) como quedarse sin asesor mientras estaba
-        # ASIGNADA/PENDIENTE_CONFIRMACION reinician el flujo -- cualquier link de
-        # confirmacion ya enviado para un ciclo anterior queda obsoleto, y cualquier
-        # marca de confirmacion ya obtenida (gate1_confirmed_at) deja de ser valida
-        # para un ciclo que esta siendo reiniciado.
+    if sc.estado != old_estado:
+        # Gate 1 (Round 7, ampliado): CUALQUIER transicion real de estado por este PATCH
+        # generico reinicia el flujo -- no solo el reset a BORRADOR o desasignar. Un
+        # security review probo que la pastilla generica "Cambiar Estado -> Cancelada"
+        # (que no pasa por cancelar_solicitud) dejaba vivo el token y la marca de un
+        # ciclo anterior; lo mismo aplica a cualquier otro estado que este PATCH pueda
+        # escribir. Revocar+limpiar en cualquier transicion real es mas simple y
+        # estrictamente mas seguro que enumerar cada estado destino especificamente
+        # (y es un no-op barato cuando no habia nada que revocar, p.ej. en la primera
+        # promocion BORRADOR->ASIGNADA via promueve_asignada).
         from app.core.confirmation_tokens import revoke_pending_tokens
         revoke_pending_tokens(db, "SC", sc.id)
         sc.gate1_confirmed_at = None
@@ -533,10 +536,13 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
 
     old_estado = sc.estado
     es_reenvio = old_estado == "PENDIENTE_CONFIRMACION"
-    if es_reenvio:
-        # El link anterior (si todavia no vencio) muere aqui -- nunca deben quedar
-        # dos tokens validos a la vez para la misma SC.
-        revoke_pending_tokens(db, "SC", sc.id)
+    # Round 7: revocar-y-emitir SIEMPRE (no solo cuando es_reenvio) -- un security
+    # review encontro que un envio "fresco" desde ASIGNADA puede en realidad seguir
+    # a un ciclo anterior sin terminar (cancelar via la pastilla generica de estado,
+    # restaurar, reenviar) cuyo token previo nunca se revoco por esa ruta. Revocar
+    # incondicionalmente aqui es mas simple Y estrictamente mas seguro que tratar de
+    # enumerar cada combinacion de donde pudo quedar un token vivo.
+    revoke_pending_tokens(db, "SC", sc.id)
 
     raw_token = create_confirmation_token(db, "SC", sc.id)
     frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5100").rstrip("/")
@@ -1591,7 +1597,15 @@ def restaurar_solicitud(sc_id: int, user: User = Depends(require_roles(*ROLE_ADM
     if sc.advisor_user_id is not None:
         sc.estado = "ASIGNADA"
         estado_final = "ASIGNADA"
-        db.commit()
+    # Gate 1 (Round 7): mismo revoke+clear que cancelar_solicitud y update_solicitud ya
+    # tienen -- defensa en profundidad para que una SC restaurada desde la papelera
+    # nunca pueda cargar un token o una marca de confirmacion de un ciclo anterior
+    # (cancelar_solicitud ya los limpia al cancelar, pero esto no depende de esa ruta
+    # especifica para seguir siendo correcto).
+    from app.core.confirmation_tokens import revoke_pending_tokens
+    revoke_pending_tokens(db, "SC", sc_id)
+    sc.gate1_confirmed_at = None
+    db.commit()
     _log(db, "SC", sc_id, sc.numero, "RESTORED", f"Solicitud restaurada a {estado_final}", old_estado, estado_final, getattr(user, 'email', ''))
     return {"status": "success", "data": {"id": sc_id, "estado": estado_final}}
 

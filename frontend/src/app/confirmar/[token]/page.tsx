@@ -16,7 +16,14 @@ export default function ConfirmarPublicoPage() {
   useEffect(() => {
     (async () => {
       try {
-        const raw = await apiFetch(`/confirmar/${token}`);
+        // Round 7: el token va en el body JSON, nunca en la URL de la API (la URL de
+        // ESTA pagina si lo lleva -- params.token, inevitable, igual que
+        // /reset-password?token= -- lo que cambia es solo como esta pagina habla con
+        // el backend, para que un access log de uvicorn nunca vea el token crudo).
+        const raw = await apiFetch(`/confirmar/ver`, {
+          method: 'POST',
+          body: JSON.stringify({ token }),
+        });
         setData(raw?.data ?? raw);
       } catch (err: any) {
         setError(err.message || 'El enlace no es válido o ya expiró.');
@@ -28,9 +35,10 @@ export default function ConfirmarPublicoPage() {
   async function confirmar() {
     setConfirming(true);
     try {
-      await apiFetch(`/confirmar/${token}`, {
+      await apiFetch(`/confirmar/confirmar`, {
         method: 'POST',
         headers: { 'Idempotency-Key': `confirm-${token.slice(0, 16)}` },
+        body: JSON.stringify({ token }),
       });
       setDone(true);
     } catch (err: any) {
