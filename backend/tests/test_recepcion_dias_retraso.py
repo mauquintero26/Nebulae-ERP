@@ -9,7 +9,12 @@ from datetime import datetime, timedelta
 import pytest
 
 
-def test_recepcion_a_tiempo_no_marca_retraso(client, db_session, auth_headers):
+def auth(token):
+    """Helper to create auth headers."""
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_recepcion_a_tiempo_no_marca_retraso(app_client, db, admin_token):
     """
     Test that a GoodsReceipt received within tolerance (1 day) of the promised date
     shows dias_retraso = None.
@@ -24,9 +29,9 @@ def test_recepcion_a_tiempo_no_marca_retraso(client, db_session, auth_headers):
         tracking_stages=[],
         productos=[]
     )
-    db_session.add(pec)
-    db_session.commit()
-    db_session.refresh(pec)
+    db.add(pec)
+    db.commit()
+    db.refresh(pec)
 
     gr = GoodsReceipt(
         numero="ENINV-TEST001",
@@ -35,16 +40,16 @@ def test_recepcion_a_tiempo_no_marca_retraso(client, db_session, auth_headers):
         fecha_recepcion=datetime.utcnow(),  # llegó el mismo día + tolerancia
         productos=[]
     )
-    db_session.add(gr)
-    db_session.commit()
-    db_session.refresh(gr)
+    db.add(gr)
+    db.commit()
+    db.refresh(gr)
 
-    resp = client.get(f"/api/v1/compras/recepciones/{gr.id}", headers=auth_headers)
+    resp = app_client.get(f"/api/v1/compras/recepciones/{gr.id}", headers=auth(admin_token))
     assert resp.status_code == 200
     assert resp.json()["data"]["dias_retraso"] is None
 
 
-def test_recepcion_tardia_marca_dias_retraso(client, db_session, auth_headers):
+def test_recepcion_tardia_marca_dias_retraso(app_client, db, admin_token):
     """
     Test that a GoodsReceipt received late (beyond tolerance) shows the correct
     dias_retraso value (actual delay minus 1-day tolerance).
@@ -59,9 +64,9 @@ def test_recepcion_tardia_marca_dias_retraso(client, db_session, auth_headers):
         tracking_stages=[],
         productos=[]
     )
-    db_session.add(pec)
-    db_session.commit()
-    db_session.refresh(pec)
+    db.add(pec)
+    db.commit()
+    db.refresh(pec)
 
     gr = GoodsReceipt(
         numero="ENINV-TEST002",
@@ -70,10 +75,10 @@ def test_recepcion_tardia_marca_dias_retraso(client, db_session, auth_headers):
         fecha_recepcion=datetime.utcnow(),  # 5 días después del estimado (+1 tolerancia = 4 de retraso real)
         productos=[]
     )
-    db_session.add(gr)
-    db_session.commit()
-    db_session.refresh(gr)
+    db.add(gr)
+    db.commit()
+    db.refresh(gr)
 
-    resp = client.get(f"/api/v1/compras/recepciones/{gr.id}", headers=auth_headers)
+    resp = app_client.get(f"/api/v1/compras/recepciones/{gr.id}", headers=auth(admin_token))
     assert resp.status_code == 200
     assert resp.json()["data"]["dias_retraso"] == 4
