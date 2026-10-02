@@ -168,7 +168,7 @@ La versión con notificación real (email/push sin que nadie tenga el sistema ab
 2. Agregar valor `ASIGNADA` donde el estado de SC esté restringido por un CHECK constraint, si existe uno (confirmar al implementar — `ESTADOS_SC_MANUALES` hoy vive solo en el frontend según el levantamiento previo, pero el backend podría tener su propia validación).
 3. Tabla nueva `document_confirmation_tokens` (ver sección 2).
 4. `purchase_orders_full` (PEC): sin cambio de esquema — solo cambia la LÓGICA de cálculo en `create_pec`.
-5. `goods_receipts`: agregar `fecha_entrega_comprometida` (DateTime, nullable), `dias_retraso` (Integer, nullable).
+5. `goods_receipts`: **sin cambio de esquema** (revisado al planear: `confirmar_recepcion` tiene una transacción de idempotencia de 2 fases ya sensible — en vez de persistir, `dias_retraso` se calcula al leer en `_gr_dict`, comparando `GoodsReceipt.fecha_recepcion` ya existente contra `PurchaseOrderFull.fecha_entrega_estimada` del PEC vinculado, con 1 día de tolerancia. Decisión de menor riesgo, mismo resultado visible para el usuario).
 
 ## 5. Qué NO cambia
 
