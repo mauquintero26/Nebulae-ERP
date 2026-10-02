@@ -508,7 +508,7 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         # mande "estado" (solo limpia advisor_user_id), asi que necesita su propio log.
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Estado cambiado a BORRADOR (asesor retirado)",
              old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"))
-    if fecha_vieja is not None and sc.fecha_entrega_estimada and sc.fecha_entrega_estimada != fecha_vieja:
+    if fecha_vieja is not None and sc.fecha_entrega_estimada and sc.fecha_entrega_estimada.date() != fecha_vieja.date():
         # Final whole-branch review (hallazgo #2): .date() en ambos lados antes de
         # restar -- las fechas se calculan como utcnow() + timedelta(...) (Task 1), asi
         # que el valor guardado SIEMPRE trae una hora real (no medianoche), pero cada UI
@@ -1010,7 +1010,7 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
              "Estado cambiado a BORRADOR (la cotización fue editada tras la confirmación del cliente; esa confirmación ya no es válida)",
              old_estado=old_estado, new_estado="BORRADOR", user_name=body.get("updated_by"))
-    if fecha_vieja is not None and cot.fecha_entrega_estimada and cot.fecha_entrega_estimada != fecha_vieja:
+    if fecha_vieja is not None and cot.fecha_entrega_estimada and cot.fecha_entrega_estimada.date() != fecha_vieja.date():
         # Final whole-branch review (hallazgo #2) -- ver el comentario equivalente en
         # update_solicitud para la explicacion completa (mismo patron, mismo bug, en
         # las 4 entidades que registran este mismo tipo de cambio: SC/COT/VEN/PEC).
@@ -1402,7 +1402,7 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
              f"Estado cambiado a {v.estado}",
              old_estado=old_estado, new_estado=v.estado,
              user_name=body.get("updated_by"))
-    if fecha_vieja is not None and v.fecha_entrega_estimada and v.fecha_entrega_estimada != fecha_vieja:
+    if fecha_vieja is not None and v.fecha_entrega_estimada and v.fecha_entrega_estimada.date() != fecha_vieja.date():
         # Final whole-branch review (hallazgo #2) -- ver el comentario equivalente en
         # update_solicitud para la explicacion completa.
         diff_dias = (v.fecha_entrega_estimada.date() - fecha_vieja.date()).days
@@ -1698,6 +1698,11 @@ def alertas_resumen(user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Ses
         CustomerRequest.estado == "CONFIRMADA",
         CustomerRequest.gate1_confirmed_at.isnot(None),
         CustomerRequest.updated_at < ahora - datetime.timedelta(days=sc_dias),
+        # Re-review del fix final: sin este exists(), una SC que ya tiene una Cotizacion
+        # vinculada (p.ej. reenviada y re-confirmada por error, marca que nunca se puede
+        # consumir porque canConfirmarSC ya es False) quedaba contada para siempre --
+        # misma guarda que ya usa cot_confirmadas_sin_accion para su propio PVEN.
+        ~db.query(SalesQuotation).filter(SalesQuotation.sc_id == CustomerRequest.id).exists(),
     ).count()
 
     cot_confirmadas_sin_accion = db.query(SalesQuotation).filter(

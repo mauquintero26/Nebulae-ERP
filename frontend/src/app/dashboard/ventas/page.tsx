@@ -414,6 +414,15 @@ export default function VentasHub() {
     // antes de disparar el POST, para que un drag accidental no termine emailando a un
     // cliente sin que nadie lo haya decidido a proposito.
     if (tipo === 'COT' && (m[col] || {})[tipo] === 'PENDIENTE_CONFIRMACION') {
+      // Re-review del fix final (Minor 5a): getKanbanCol no tiene un caso explicito para
+      // PENDIENTE_CONFIRMACION, asi que una tarjeta ya pendiente cae en "No Resuelto" por
+      // defecto -- arrastrarla desde ahi hasta "En Gestión" no la detecta el chequeo de
+      // "misma columna" de arriba, y sin esto reenviaria de verdad (revocando el link ya
+      // entregado al cliente) solo por un drag entre columnas, no por una decision real.
+      if (item?.estado === 'PENDIENTE_CONFIRMACION') {
+        setToast({msg: 'Ya está pendiente de confirmación del cliente.', type: 'error'});
+        return;
+      }
       if (!window.confirm(`¿Enviar "${item?.numero || id}" al cliente para confirmación? Esto genera y envía un link de confirmación real.`)) return;
       await apiFetch(`/ventas/cotizaciones/${id}/enviar-confirmacion`, {method:'POST', body: JSON.stringify({})})
         .then(() => setToast({msg: 'Enviada para confirmación del cliente', type: 'ok'}))
@@ -427,6 +436,14 @@ export default function VentasHub() {
     // asesor involucrado. Mismo remate: pasa por el endpoint dedicado, que exige que la
     // SC ya este Asignada (con asesor) antes de aceptar el envio.
     if (tipo === 'SC' && (m[col] || {})[tipo] === 'PENDIENTE_CONFIRMACION') {
+      // Re-review del fix final (Minor 5a, mismo caso que COT arriba): SC pendiente
+      // tambien cae en "No Resuelto" por defecto en getKanbanCol -- un drag entre
+      // columnas no detectado por el chequeo de "misma columna" no debe reenviar de
+      // verdad.
+      if (item?.estado === 'PENDIENTE_CONFIRMACION') {
+        setToast({msg: 'Ya está pendiente de confirmación del cliente.', type: 'error'});
+        return;
+      }
       if (!window.confirm(`¿Enviar "${item?.numero || id}" al cliente para confirmación? Esto genera y envía un link de confirmación real.`)) return;
       await apiFetch(`/ventas/solicitudes/${id}/enviar-confirmacion`, {method:'POST', body: JSON.stringify({})})
         .then(() => setToast({msg: 'Enviada para confirmación del cliente', type: 'ok'}))

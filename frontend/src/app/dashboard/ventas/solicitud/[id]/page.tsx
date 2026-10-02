@@ -662,6 +662,7 @@ function SolicitudDetalleContent() {
           onCancel={cancelarEnvioConfirmacion}
           saving={sendingConfirmacion}
           customerHasPhone={!!solicitud?.customer_phone}
+          documentLabel="solicitud"
         />
       )}
     </div>

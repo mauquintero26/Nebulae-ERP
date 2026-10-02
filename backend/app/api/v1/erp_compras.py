@@ -229,8 +229,12 @@ def _gr_dict(g: GoodsReceipt, db: Session) -> dict:
     if g.pec_id and g.fecha_recepcion:
         pec_ref = db.query(PurchaseOrderFull).filter(PurchaseOrderFull.id == g.pec_id).first()
         if pec_ref and pec_ref.fecha_entrega_estimada:
-            limite_con_tolerancia = pec_ref.fecha_entrega_estimada + datetime.timedelta(days=1)
-            delta = (g.fecha_recepcion - limite_con_tolerancia).days
+            # Comparar por .date() en ambos lados -- fecha_entrega_estimada lleva hora de
+            # creacion (utcnow()+timedelta), asi que restar datetimes crudos corria el
+            # limite de tolerancia una cantidad de horas arbitraria (mismo bug que
+            # FECHA_ENTREGA_MODIFICADA, Round final de la revision de rama completa).
+            limite_con_tolerancia = pec_ref.fecha_entrega_estimada.date() + datetime.timedelta(days=1)
+            delta = (g.fecha_recepcion.date() - limite_con_tolerancia).days
             if delta > 0:
                 dias_retraso = delta
 
@@ -856,7 +860,7 @@ def update_pec(pec_id: int, body: dict, user: User = Depends(require_roles(*ROLE
              user_name=body.get("updated_by"))
         if p.estado == "CANCELADO":
             _desvincular_pec_cancelado(db, p.id, p.numero, body.get("updated_by"))
-    if fecha_vieja is not None and p.fecha_entrega_estimada and p.fecha_entrega_estimada != fecha_vieja:
+    if fecha_vieja is not None and p.fecha_entrega_estimada and p.fecha_entrega_estimada.date() != fecha_vieja.date():
         # Final whole-branch review (hallazgo #2) -- ver el comentario equivalente en
         # update_solicitud (erp_ventas.py) para la explicacion completa: las fechas
         # guardadas traen hora real, pero la UI de edicion manda solo fecha -- restar los

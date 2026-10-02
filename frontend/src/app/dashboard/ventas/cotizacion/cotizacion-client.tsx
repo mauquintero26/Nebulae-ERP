@@ -422,9 +422,9 @@ export function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm
   );
 }
 
-export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, saving, customerHasPhone }: { selectedChannel: 'WhatsApp'|'Email'|'Otro'|null; onSelectChannel: (ch: 'WhatsApp'|'Email'|'Otro') => void; onConfirm: () => void; onCancel: () => void; saving: boolean; customerHasPhone: boolean }) {
+export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, saving, customerHasPhone, documentLabel = 'cotización' }: { selectedChannel: 'WhatsApp'|'Email'|'Otro'|null; onSelectChannel: (ch: 'WhatsApp'|'Email'|'Otro') => void; onConfirm: () => void; onCancel: () => void; saving: boolean; customerHasPhone: boolean; documentLabel?: string }) {
   return (
-    <Modal title="Seleccionar Canal de Envío" subtitle="¿Por cuál canal deseas enviar la cotización?"
+    <Modal title="Seleccionar Canal de Envío" subtitle={`¿Por cuál canal deseas enviar la ${documentLabel}?`}
       icon={Send} color="blue" maxWidth="md" onClose={onCancel}
       footer={(
         <>
