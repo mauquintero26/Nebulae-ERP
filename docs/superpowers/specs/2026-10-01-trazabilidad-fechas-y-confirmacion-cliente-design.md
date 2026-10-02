@@ -16,6 +16,16 @@ Investigación de código previa (no repetir, ya confirmada por lectura directa)
 - Dos patrones reusables ya existen en el código: autenticación dual staff/cliente (`chat.py:770-841`, hoy solo lectura) y endpoints públicos de escritura protegidos con idempotency-key (`store.py:69-74`, `ecommerce.py:603`).
 - El agente que está construyendo el reset de contraseña (en curso, commit separado) ya implementa exactamente el patrón de token seguro que este diseño necesita: `secrets.token_urlsafe(32)`, hash SHA-256 almacenado (nunca el token crudo), expiración, marca de uso único, y un helper `send_email()` desacoplado del proveedor SMTP. **Este diseño reutiliza esa infraestructura en vez de duplicarla.**
 
+## Corrección post-aprobación (2026-10-01, antes de escribir el plan)
+
+Al preparar el plan de implementación se encontró que **ya existe, de una sesión anterior (spec `docs/superpowers/specs/2026-09-21-solicitud-cotizacion-crm-design.md`, ya implementada), un mecanismo real de sincronización** `_sincronizar_estado_solicitud_desde_cotizacion` (`erp_ventas.py:613-624`) que mantiene `CustomerRequest.estado` como reflejo fiel del `SalesQuotation.estado` vinculado, más movimiento automático del Lead de CRM (`mover_lead_de_solicitud`, disparado desde `update_cotizacion`, `erp_ventas.py:627-660`). La tabla de sincronización (`_MAPA_ESTADO_COTIZACION_A_SOLICITUD`, líneas 603-610) **ya anticipa** `PENDIENTE_CONFIRMACION` y `VENCIDA` como valores reales de Cotización, pero **ningún código los dispara todavía** — son el hueco exacto que este diseño llena, no algo que haya que inventar desde cero.
+
+Esto reemplaza las secciones de "Estados" más abajo: en vez de una sola máquina de estados compartida, son **dos confirmaciones secuenciales del cliente, en dos momentos distintos** (confirmado explícitamente con el usuario):
+1. **Confirmar la Solicitud** = "sí quiero que me cotices esto" (antes de que exista un precio). Gatea si el asesor puede crear la Cotización.
+2. **Confirmar la Cotización** = "acepto este precio/condiciones" (después de cotizar). Gatea si se puede crear el Pedido de Venta.
+
+Cada una usa la MISMA infraestructura compartida de tokens (sección 2), pero son dos acciones, dos links, dos momentos — no una sola confirmación que mueva ambas pantallas a la vez.
+
 ## Alcance de este documento
 
 Cubre: Solicitud de Cliente (SC) y Cotización (COT). Pedido de Venta (PVEN) y Pedido de Compra (PEC) participan solo en la parte de fecha de entrega (heredar/propagar), no se les agrega máquina de estados nueva ni confirmación por link en esta iteración — el usuario no lo pidió para esos documentos todavía.
@@ -105,39 +115,46 @@ Reusa `send_email()` del trabajo de reset de contraseña para el correo. Para Wh
 
 El campo `link_confirmacion` (`erp_ventas.py:1427`) se actualiza para apuntar a la URL real (`{FRONTEND_URL}/confirmar/{token}`) en vez del valor ficticio `/confirmar/{numero}` que nunca existió.
 
-### Estados — Solicitud de Cliente
+### Gate 1 — Confirmar la Solicitud (antes de cotizar)
 
-Se mantienen los valores internos ya existentes donde es seguro (evita romper filtros/badges/color-maps que ya referencian estos strings en el resto de la app), agregando solo lo genuinamente nuevo:
+Valores internos de `CustomerRequest.estado`, todos ya existentes en el código/color-map hoy (`ESTADOS_SC`, `solicitud-client.tsx:38-43`) — no se inventa ningún string nuevo salvo `ASIGNADA`:
 
-| Valor interno (sin cambio) | Etiqueta nueva mostrada al usuario | Notas |
+| Valor interno | Etiqueta | Cómo se alcanza |
 |---|---|---|
 | `BORRADOR` | **Nueva** | Se crea siempre en este estado |
-| *(nuevo)* `ASIGNADA` | **Asignada** | Solo alcanzable si `advisor_user_id` ya está seteado — validación server-side, rechaza la transición si no hay asesor asignado |
-| `PENDIENTE_CONFIRMACION` | **Pendiente por confirmación** | Ahora solo alcanzable enviando el link al cliente (no como botón rápido suelto) |
-| `CONFIRMADA` | **Confirmada** | Ahora **solo** alcanzable vía `POST /confirmar/{token}` — ya no aparece en los botones rápidos de cambio manual |
-| `CANCELADA` | Cancelada | Sin cambios |
+| *(nuevo)* `ASIGNADA` | **Asignada** | **Server-computed, no un botón manual**: en `update_solicitud`, si el PATCH setea `advisor_user_id` (antes nulo) y `estado` sigue en `BORRADOR`, el servidor promueve automáticamente a `ASIGNADA`. No se puede estar "Asignada" sin asesor — es una consecuencia, no una elección |
+| `PENDIENTE_CONFIRMACION` | **Pendiente por confirmación** | Nueva acción dedicada "Enviar para confirmación" (requiere `ASIGNADA` primero) → crea token (`document_type='SC'`) → envía WhatsApp/email con el link → setea este estado como efecto del envío, no como PATCH suelto |
+| `CONFIRMADA` | **Confirmada** | **Solo** vía `POST /confirmar/{token}` (el cliente hace clic) |
+| `CANCELADA` | Cancelada | Sin cambios (ya tiene su propio flujo con motivo obligatorio) |
 
-**Cambio de seguridad que esto arregla de raíz:** hoy `ESTADOS_SC_MANUALES` permite saltar a `CONFIRMADA` con un clic sin pasar por `confirmarSC()` (hallazgo ⚠️⚠️2 del levantamiento de hoy — una Solicitud puede quedar "Confirmada" sin Cotización real). Con este diseño, `CONFIRMADA` deja de estar en la lista de botones rápidos — el único camino para llegar ahí es el link del cliente. Mismo criterio para `PENDIENTE_CONFIRMACION`: se quita de los botones rápidos, solo se alcanza enviando el link de verdad.
+`ESTADOS_SC_MANUALES` (los botones rápidos) se reduce a **solo** `BORRADOR` y `CANCELADA` — `ASIGNADA`/`PENDIENTE_CONFIRMACION`/`CONFIRMADA` dejan de ser botones de un clic; se alcanzan únicamente por sus acciones dedicadas. Esto cierra de raíz el hallazgo ⚠️⚠️2 de hoy (una Solicitud podía quedar "Confirmada" sin que el cliente confirmara nada).
 
-### Estados — Cotización
+**`confirmar_solicitud()` (crea la Cotización) cambia su precondición:** hoy acepta `estado in ("BORRADOR", "PENDIENTE_CONFIRMACION")` (`erp_ventas.py:430`) — pasa a exigir **`estado == "CONFIRMADA"`** (el cliente ya dijo que sí antes de que el asesor pueda cotizar). Al confirmarse, sigue pasando a `COTIZADA` exactamente como hoy (sin cambios ahí) y sigue creando la Cotización con la fecha heredada de la sección 1.
 
-| Valor interno (a confirmar contra el enum real al implementar) | Etiqueta nueva | Notas |
+### Gate 2 — Confirmar la Cotización (acepta el precio)
+
+`SalesQuotation.estado` ya tiene, confirmado por lectura directa de `_MAPA_ESTADO_COTIZACION_A_SOLICITUD` (`erp_ventas.py:603-610`) y de `update_cotizacion`/`confirmar_cotizacion` (líneas 627-682): `BORRADOR`, `ENVIADA`, `PENDIENTE_CONFIRMACION` (anticipado en la tabla de sync, nunca disparado todavía), `CONFIRMADA`, `RECHAZADA`, `VENCIDA` (igual, anticipado, nunca disparado). La sincronización hacia `CustomerRequest.estado` (`_sincronizar_estado_solicitud_desde_cotizacion`) y el movimiento de Lead de CRM **ya funcionan y no se tocan** — ambos ya se disparan automáticamente desde `update_cotizacion` para cualquier cambio de estado, vengan de donde vengan.
+
+| Valor interno | Etiqueta | Cómo se alcanza |
 |---|---|---|
-| `BORRADOR` | **Pendiente por cotizar** | Alerta de 2 días si no se ha cotizado (ya existe `alerta_cot_dias` configurable) |
-| `ENVIADA` | **Pendiente por confirmación** | Ya solo alcanzable enviando el link al cliente (hoy el botón dedicado "Enviar al Cliente" ya hace esto bien — ver siguiente punto) |
-| `CONFIRMADA` | **Confirmada** | Ya excluida de las pastillas de cambio rápido hoy (`[id]/page.tsx:578-587` ya filtra `k !== 'CONFIRMADA'`) — este diseño solo cierra el hueco que falta: la pastilla "Enviada al cliente" (⚠️⚠️ hallazgo de hoy, dos caminos con payload distinto) se elimina, dejando el botón dedicado como único camino |
+| `BORRADOR` | **Pendiente por cotizar** | Ya es el valor inicial |
+| `PENDIENTE_CONFIRMACION` | **Pendiente por confirmación** | El botón "Enviar al Cliente" (`ChannelModal`) cambia su destino: en vez de `estado:'ENVIADA'`, ahora crea un token (`document_type='COT'`) y setea `estado:'PENDIENTE_CONFIRMACION'` — `ENVIADA` deja de ser un valor que el código nuevo produce (queda como legado para registros viejos, sin migrarlos) |
+| `CONFIRMADA` | **Confirmada** | **Solo** vía `POST /confirmar/{token}` (el cliente hace clic) — ya NO ocurre como parte de "Confirmar + Crear Pedido de Venta" (ver Gate 2 → PVEN abajo) |
+| `RECHAZADA` | Rechazada | Sin cambios |
 
-Cotización ya estaba parcialmente protegida (CONFIRMADA ya excluida de las pastillas); este diseño corrige el hallazgo pendiente (la pastilla "Enviada al cliente" duplicada) como parte natural del mismo cambio, no como un parche aparte.
-
-### Botón de Estado como selector (punto 8 del usuario, Cotización)
-
-Se reemplazan las pastillas sueltas por un `<select>` dentro del modo "Editar" (mismo patrón ya usado en Pedido de Venta y ahora en Solicitud) — con las mismas exclusiones de arriba (no se puede seleccionar `CONFIRMADA` manualmente; `ENVIADA`/"Pendiente por confirmación" tampoco, para forzar que pase por el envío real).
+Pastillas de cambio rápido: hoy ya excluyen `CONFIRMADA` (`[id]/page.tsx:578-587`, `k !== 'CONFIRMADA'`) — se agrega `PENDIENTE_CONFIRMACION` a esa misma exclusión (cierra el hallazgo ⚠️⚠️ de hoy, la pastilla "Enviada al cliente" con payload distinto al botón dedicado). Quedan solo `BORRADOR`/`RECHAZADA` como pastillas manuales, convertidas en un `<select>` dentro de "Editar" (punto 8 del usuario).
 
 ### Crear Pedido de Venta desde Cotización (puntos 6-7 del usuario)
 
-- El botón "Crear Pedido de Venta" se muestra **solo** si `estado === 'CONFIRMADA'` (hoy no hay ninguna restricción de estado para esto — se agrega).
-- Mensaje de éxito "PVEN-xxxx creado exitosamente" se muestra con un `setTimeout` de ~4 segundos, después queda solo el botón "Ver Pedido de Venta" + el número — patrón puramente de frontend, sin cambios de backend.
-- El link resultante usa la convención `return_to` ya implementada hoy en Solicitud (`?return_to=` url-encoded) para que el Pedido de Venta creado pueda volver a esta Cotización — mismo mecanismo, no uno nuevo.
+`confirmar_cotizacion()` (`erp_ventas.py:663`, hoy sin precondición de estado — es la única forma de llegar a "confirmado" hoy) pasa a exigir **`cot.estado == "CONFIRMADA"` ya alcanzado** (vía el link del cliente) antes de poder crear el Pedido de Venta — separa lo que hoy es una sola acción atómica en dos pasos reales. El resto de su lógica (`convertir_cotizacion_a_venta`, movimiento de Lead a `INVOICED`) no cambia.
+
+- El botón "Crear Pedido de Venta" se muestra **solo** si `estado === 'CONFIRMADA'`.
+- Mensaje de éxito "PVEN-xxxx creado exitosamente" se muestra con un `setTimeout` de ~4 segundos, después queda solo el botón "Ver Pedido de Venta" + el número — patrón puramente de frontend.
+- El link resultante usa la convención `return_to` ya implementada hoy en Solicitud (`?return_to=` url-encoded) para que el Pedido de Venta creado pueda volver a esta Cotización.
+
+### Alerta de 2 días (`VENCIDA`)
+
+Sin scheduler (ver sección 3), `VENCIDA` no se escribe en la base todavía — se mantiene como cálculo en vivo (mismo patrón que `isDocAtrasado` ya existente), mostrado en el badge global, no persistido. Escribir `estado='VENCIDA'` de verdad queda para cuando exista el scheduler de la iteración futura.
 
 ## 3. Alertas — versión "ahora" (sin scheduler)
 
