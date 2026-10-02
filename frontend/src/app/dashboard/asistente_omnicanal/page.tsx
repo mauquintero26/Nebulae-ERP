@@ -139,8 +139,14 @@ export default function AsistenteOmnicanal() {
 
   // Escuchar mensajes de Chatwoot (Auto-sincronización con la conversación activa)
   useEffect(() => {
+    const chatwootOrigin = new URL(CHATWOOT_URL).origin;
     const handleWindowMessage = (event: MessageEvent) => {
       try {
+        // Solo se acepta este mensaje si viene del iframe de Chatwoot embebido
+        // en esta misma pagina -- cualquier otro origen podria falsificar un
+        // evento "CHATWOOT_CONVERSATION_ACTIVE" y hacer que esta pagina cargue
+        // el contexto ERP de un cliente arbitrario.
+        if (event.origin !== chatwootOrigin) return;
         if (!event.data) return;
         let msgData = event.data;
         if (typeof msgData === 'string' && msgData.startsWith('{')) {
