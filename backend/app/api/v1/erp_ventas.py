@@ -854,10 +854,36 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
 
     _PRICE_DECIMAL_FIELDS = ("total_cop", "subtotal_cop", "anticipo_cop", "descuento_pct", "trm_rate")
 
+    def _quantize_cop(v):
+        if v is None:
+            return None
+        try:
+            return Decimal(str(v)).quantize(Decimal("0.01"))
+        except Exception:
+            return v
+
+    def _freeze_producto_proyectado(p):
+        """Round 4 (adversarial review): proyecta cada linea a SOLO lo que el cliente
+        realmente vio y confirmo -- mismos 2 primeros campos (product_name, qty) que ya
+        usa _productos_publicos en confirmacion_publica.py para la proyeccion publica de
+        /confirmar/ver (mismo criterio: nunca costos/margenes de proveedor ni otros
+        campos internos), mas unit_price_cop/total_cop cuantizados (esos dos
+        _productos_publicos no los necesita cuantizar porque solo sirven para mostrarse,
+        no para comparar). Critico: NUNCA sku_id/es_libre -- vincular una linea de texto
+        libre a un SKU real del catalogo ("+ Ingresar como producto", quick-create) solo
+        cambia esos dos campos de bookkeeping interno, nada que el cliente haya visto, y
+        antes de este fix comparar el JSON crudo completo hacia que esa accion, por si
+        sola, rompiera el congelamiento -- justo el tipo de edicion que un asesor hace
+        normalmente poco antes de crear el Pedido de Venta, cuando la COT ya esta
+        CONFIRMADA con mas frecuencia."""
+        if not isinstance(p, dict):
+            return p
+        return (p.get("product_name"), p.get("qty"), _quantize_cop(p.get("unit_price_cop")), _quantize_cop(p.get("total_cop")))
+
     def _freeze_cmp(field, v):
-        """Normaliza para comparar. Dos problemas distintos de tipo/precision, cada uno
-        capaz de disparar el congelamiento en CUALQUIER guardado normal si no se
-        normalizan:
+        """Normaliza para comparar. Problemas distintos de tipo/precision/bookkeeping,
+        cada uno capaz de disparar el congelamiento en una edicion normal que el cliente
+        ni siquiera percibiria como "un cambio de precio", si no se normalizan:
 
         1. fecha_entrega_estimada: el valor VIEJO (ya en el ORM) es un datetime real,
         pero el NUEVO (si vino en el body) es un string crudo recien parseado del JSON --
@@ -876,7 +902,13 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         comparar, el congelamiento se disparaba en ESENCIALMENTE CADA guardado real desde
         la Calculadora (incluso uno que solo tocara 'notas'), lo que habria hecho Gate 2
         inutilizable en operacion normal. Se cuantiza a 2 decimales (misma precision que
-        las columnas Numeric reales) antes de comparar."""
+        las columnas Numeric reales) antes de comparar.
+
+        3. productos: Round 4 -- comparar la lista de dicts CRUDA (sku_id, es_libre y
+        demas campos internos incluidos) hacia que vincular una linea de texto libre a un
+        SKU real del catalogo (que no cambia nada visible para el cliente) rompiera el
+        congelamiento igual que si el precio hubiera cambiado de verdad. Se proyecta cada
+        linea con _freeze_producto_proyectado antes de comparar."""
         if v is None:
             return None
         if field == "fecha_entrega_estimada":
@@ -885,11 +917,12 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
             if isinstance(v, datetime.datetime):
                 return v.date().isoformat()
             return v
-        if field in _PRICE_DECIMAL_FIELDS:
-            try:
-                return Decimal(str(v)).quantize(Decimal("0.01"))
-            except Exception:
+        if field == "productos":
+            if not isinstance(v, list):
                 return v
+            return [_freeze_producto_proyectado(p) for p in v]
+        if field in _PRICE_DECIMAL_FIELDS:
+            return _quantize_cop(v)
         return v
 
     ya_tiene_pven = db.query(SaleOrder).filter(SaleOrder.cot_id == cot.id).first() is not None

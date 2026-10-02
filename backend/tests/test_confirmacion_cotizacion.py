@@ -520,6 +520,34 @@ def test_editar_precio_mientras_confirmada_con_pven_no_reinicia(app_client, db, 
     assert cot.estado == "CONFIRMADA"  # NO se reinicia -- ya hay un PVEN real vinculado
 
 
+def test_vincular_producto_a_sku_no_rompe_el_congelamiento(app_client, db, admin_token):
+    """Round 4 (adversarial review): el boton '+ Ingresar como producto'
+    (handleQuickCreateProduct en cotizacion/[id]/page.tsx) vincula una linea de texto
+    libre a un SKU real del catalogo mandando un PATCH de 'productos' donde SOLO
+    sku_id/es_libre cambian para esa linea -- product_name/qty/unit_price_cop/total_cop
+    quedan identicos a lo que el cliente ya vio y confirmo. Antes de este fix, comparar
+    la lista de productos cruda (sku_id/es_libre incluidos) hacia que esta edicion
+    puramente interna rompiera el congelamiento igual que un cambio de precio real --
+    un escenario realista, ya que un asesor tipicamente vincula productos justo antes de
+    crear el Pedido de Venta, cuando la COT esta mas probablemente CONFIRMADA."""
+    from app.models.erp_documents import SalesQuotation
+    cot = SalesQuotation(numero="COT-TESTFREEZE8", customer_name="Cliente Prueba",
+                          estado="PENDIENTE_CONFIRMACION", total_cop=1000,
+                          productos=[{"product_name": "X", "qty": 1, "unit_price_cop": 1000,
+                                      "total_cop": 1000, "sku_id": None, "es_libre": True}])
+    db.add(cot); db.commit(); db.refresh(cot)
+
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={
+        "productos": [{"product_name": "X", "qty": 1, "unit_price_cop": 1000,
+                       "total_cop": 1000, "sku_id": 42, "es_libre": False}],
+        "updated_by": "test",
+    }, headers=auth(admin_token))
+    assert resp.status_code == 200
+    db.refresh(cot)
+    assert cot.estado == "PENDIENTE_CONFIRMACION"  # solo bookkeeping interno -- no es un cambio real
+    assert cot.productos[0]["sku_id"] == 42  # el PATCH si se aplico de verdad
+
+
 def test_reenvio_mismo_valor_no_rompe_el_congelamiento(app_client, db, admin_token):
     """No basta con que la llave venga en el body -- debe ser un cambio REAL de valor.
     Un PATCH que reenvia exactamente los mismos productos/total_cop (p.ej. un guardado
