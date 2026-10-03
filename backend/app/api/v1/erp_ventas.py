@@ -403,6 +403,14 @@ def get_solicitud(sc_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)
     # linked quotations
     cots = db.query(SalesQuotation).filter(SalesQuotation.sc_id == sc_id).all()
     d["cotizaciones"] = [_cot_dict(c) for c in cots]
+    # Pedidos de Venta de esta Solicitud, para poder navegar SC -> COT -> PVEN desde el
+    # detalle de la SC: por sc_id propio o por cualquiera de sus cotizaciones (un PVEN
+    # creado desde una COT que despues se desvinculo de la SC conserva el cot_id).
+    ven_filter = SaleOrder.sc_id == sc_id
+    if cots:
+        ven_filter = ven_filter | SaleOrder.cot_id.in_([c.id for c in cots])
+    vens = db.query(SaleOrder).filter(ven_filter).order_by(SaleOrder.id.asc()).all()
+    d["pedidos_venta"] = [_ven_dict(v) for v in vens]
     return {"status": "success", "data": d}
 
 

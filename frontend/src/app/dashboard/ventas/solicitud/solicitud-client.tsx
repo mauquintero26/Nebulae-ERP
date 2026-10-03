@@ -17,6 +17,7 @@ import {
 import { apiFetch, API_URL, getToken } from '@/lib/api';
 import { SubNav, PageHeader, StatCard, Badge as SharedBadge, Modal, Toast as SharedToast, Button, EmptyState } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
+import { esAsesorElegible, getUsuarioActual } from '../flujo';
 
 export const TIPOS_SC = [
   'Cotizacion de Producto',
@@ -244,6 +245,19 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
     apiFetch('/auth/users').then((d: any) => setUsuarios(Array.isArray(d) ? d : (d?.data ?? []))).catch(() => {});
   }, []);
 
+  // El asesor por defecto es quien crea la solicitud (si puede ser asesor): una SC sin
+  // asesor queda en BORRADOR y no puede avanzar hasta que alguien se lo asigne. Se aplica
+  // una sola vez por montaje para que el usuario siga pudiendo dejarlo vacio a proposito.
+  const asesorPorDefectoAplicado = useRef(false);
+  useEffect(() => {
+    if (asesorPorDefectoAplicado.current || usuarios.length === 0) return;
+    asesorPorDefectoAplicado.current = true;
+    if (form.advisor_user_id) return;
+    const yo = usuarios.find(u => u.id === getUsuarioActual().id && esAsesorElegible(u.role));
+    if (yo) setForm(f => ({ ...f, advisor_user_id: yo.id, advisor_name: yo.email }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usuarios]);
+
   function onSegSearch(q: string) {
     setSegSearch(q);
     if (segTimer.current) clearTimeout(segTimer.current);
@@ -426,7 +440,7 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
           }}
             className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
             <option value="">Asignar a...</option>
-            {usuarios.filter(u=>u.role==='Admin'||u.role==='Vendedor').map(u=>(
+            {usuarios.filter(u=>esAsesorElegible(u.role)).map(u=>(
               <option key={u.id} value={u.id}>{u.email}</option>
             ))}
           </select>
@@ -442,7 +456,7 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
         }}
         className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-indigo-400">
         <option value="">Seleccionar asesor...</option>
-        {usuarios.filter(u=>u.role==='Admin'||u.role==='Vendedor').map(u=>(
+        {usuarios.filter(u=>esAsesorElegible(u.role)).map(u=>(
           <option key={u.id} value={u.id}>{u.email}</option>
         ))}
       </select></div>

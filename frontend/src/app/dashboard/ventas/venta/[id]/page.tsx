@@ -438,12 +438,23 @@ function PedidoVentaDetalleContent() {
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Origen</label>
-                {pedido?.cot_id ? (
-                  <Link href={`/dashboard/ventas/cotizacion/${pedido.cot_id}`} className="flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl px-4 py-3 text-sm font-bold hover:bg-blue-100 transition-colors">
-                    {pedido.cot_numero || `COT-${pedido.cot_id}`}
-                  </Link>
+                {/* Cadena SC -> COT -> PVEN: la Solicitud y la Cotizacion de origen, cada una
+                    con su "volver" hacia este pedido. */}
+                {(pedido?.sc_id || pedido?.cot_id) ? (
+                  <div className="flex flex-col gap-2">
+                    {pedido?.sc_id && (
+                      <Link href={`/dashboard/ventas/solicitud/${pedido.sc_id}?return_to=${encodeURIComponent(`/dashboard/ventas/venta/${params.id}`)}`} className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-xl px-4 py-3 text-sm font-bold hover:bg-indigo-100 transition-colors">
+                        {pedido.sc_numero || `SC-${pedido.sc_id}`}
+                      </Link>
+                    )}
+                    {pedido?.cot_id && (
+                      <Link href={`/dashboard/ventas/cotizacion/${pedido.cot_id}?return_to=${encodeURIComponent(`/dashboard/ventas/venta/${params.id}`)}`} className="flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl px-4 py-3 text-sm font-bold hover:bg-blue-100 transition-colors">
+                        {pedido.cot_numero || `COT-${pedido.cot_id}`}
+                      </Link>
+                    )}
+                  </div>
                 ) : (
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-400">Sin cotizacion de origen</div>
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-400">Sin cotizacion ni solicitud de origen</div>
                 )}
               </div>
               <div>

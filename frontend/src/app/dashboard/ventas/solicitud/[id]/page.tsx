@@ -7,7 +7,7 @@ import {
   FileText, Activity, XCircle, MessageSquare, RotateCcw, Filter, Send,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useParams, useSearchParams } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
 import { Button, Modal } from '@/components/ui';
@@ -26,6 +26,9 @@ import {
 // llega a ningun lado, es un problema ya conocido y diferido por separado, simetrico
 // entre ambos gates -- no se corrige aqui).
 import { ChannelModal } from '../../cotizacion/cotizacion-client';
+import {
+  NextStepCard, EnlaceConfirmacionModal, esAsesorElegible, getUsuarioActual, type UsuarioActual,
+} from '../../flujo';
 
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
 // (mismo patron que cotizacion/[id]/page.tsx; valores reales emitidos por el backend para
@@ -55,6 +58,7 @@ const ACTIVITY_TYPE_ORDER = ['ESTADO_CHANGED', 'NOTE_ADDED', 'CREATED', 'CHATTER
 
 function SolicitudDetalleContent() {
   const params = useParams();
+  const router = useRouter();
   const searchParams = useSearchParams();
   const rawReturnTo = searchParams?.get('return_to') || '';
   // Convencion "volver al origen" (aplicada aqui primero, se formalizara luego en mas
@@ -77,6 +81,13 @@ function SolicitudDetalleContent() {
   // Hallazgo #1: mismo estado que cotizacion/[id]/page.tsx usa para su propio ChannelModal.
   const [showChannelModal, setShowChannelModal] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<'WhatsApp'|'Email'|'Otro'|null>(null);
+  // Enlace de confirmacion recien generado: el token crudo solo viaja en la respuesta del
+  // envio, asi que se muestra (copiar/abrir) apenas llega.
+  const [confirmLink, setConfirmLink] = useState<string | null>(null);
+  // Asignar asesor desde la propia pagina (BORRADOR -> ASIGNADA), sin tener que entrar a Editar.
+  const [me, setMe] = useState<UsuarioActual>({ id: null, email: '', name: '', role: '' });
+  const [assigning, setAssigning] = useState(false);
+  const [assignUserId, setAssignUserId] = useState<number | ''>('');
 
   const [panelTab, setPanelTab] = useState<'acciones' | 'actividad' | 'chatter' | 'ia'>('acciones');
   const [activityFilter, setActivityFilter] = useState<string>('all');
@@ -96,6 +107,7 @@ function SolicitudDetalleContent() {
   useEffect(() => {
     const u = localStorage.getItem('user_name') || localStorage.getItem('username') || '';
     setCurrentUser(u);
+    setMe(getUsuarioActual());
     apiFetch('/auth/users').then((d: any) => setUsuarios(Array.isArray(d) ? d : (d?.data ?? []))).catch(() => {});
   }, []);
 
@@ -221,12 +233,42 @@ function SolicitudDetalleContent() {
           }
         } catch {}
       }
+      const cotId = dataObj?.cotizacion?.id || d?.cotizacion?.id;
+      if (cotId) {
+        // El siguiente paso es calcular precios y enviar la cotizacion al cliente: se
+        // lleva al usuario directo a ella, con "Volver" hacia esta solicitud.
+        router.push(`/dashboard/ventas/cotizacion/${cotId}?return_to=${encodeURIComponent(currentPath)}`);
+        return;
+      }
       await loadSolicitud();
       alert(`Cotización ${cotNum} creada`);
     } catch (err: any) {
       alert('Error: ' + err.message);
     }
     setConfirming(false);
+  }
+
+  // BORRADOR -> ASIGNADA: update_solicitud promueve el estado solo cuando se le manda un
+  // advisor_user_id real (el id, no solo el nombre).
+  async function asignarAsesor(userId: number) {
+    if (!solicitud) return;
+    const u = usuarios.find(x => x.id === userId);
+    setAssigning(true);
+    try {
+      await apiFetch(`/ventas/solicitudes/${solicitud.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          advisor_user_id: userId,
+          advisor_name: u?.email || (userId === me.id ? me.email : '') || solicitud.advisor_name || '',
+          updated_by: currentUser,
+        }),
+      });
+      setAssignUserId('');
+      await loadSolicitud();
+    } catch (err: any) {
+      alert('Error al asignar el asesor: ' + err.message);
+    }
+    setAssigning(false);
   }
 
   // Hallazgo #1: mismo patron que confirmarEnvio en cotizacion/[id]/page.tsx -- llama al
@@ -256,6 +298,7 @@ function SolicitudDetalleContent() {
       await loadSolicitud();
       setShowChannelModal(false);
       setSelectedChannel(null);
+      if (link) setConfirmLink(link);
     } catch (err: any) {
       alert('Error: ' + err.message);
     }
@@ -304,7 +347,11 @@ function SolicitudDetalleContent() {
   const cotizaciones = solicitud?.cotizaciones || [];
   const actividades = solicitud?.actividades || [];
   const isSoporte = solicitud?.tipo_solicitud === 'Soporte Tecnico';
-  const pipelineStep = cotizaciones.some((c: any) => c.estado === 'CONFIRMADA') ? 2 : cotizaciones.length > 0 ? 1 : 0;
+  // 'CANCELADO' (masculino) es el estado real de un Pedido de Venta cancelado.
+  const pedidosVigentes = (solicitud?.pedidos_venta || []).filter((v: any) => v.estado !== 'CANCELADO');
+  const pipelineStep = pedidosVigentes.length > 0 ? 3
+    : cotizaciones.some((c: any) => c.estado === 'CONFIRMADA') ? 2
+    : cotizaciones.length > 0 ? 1 : 0;
 
   // Gate 1 (confirmacion por link): "Confirmar + Crear Cotizacion" (confirmarSC) ahora
   // solo es valido cuando el cliente ya confirmo via el link publico (estado ===
@@ -316,6 +363,137 @@ function SolicitudDetalleContent() {
   // el tab Acciones; en cualquier otro caso no se ofrece esa accion (ASIGNADA tiene su
   // propia accion -- "Enviar para Confirmacion", ver abajo).
   const canConfirmarSC = solicitud?.estado === 'CONFIRMADA' && cotizaciones.length === 0;
+
+  const asesoresElegibles = usuarios.filter(u => esAsesorElegible(u.role));
+  const yoPuedoSerAsesor = me.id !== null && asesoresElegibles.some(u => u.id === me.id);
+  const LINK_ACCION = 'flex items-center justify-center gap-2 rounded-xl font-bold px-6 py-3 text-sm text-white shadow-md';
+
+  // Cada estado le dice al usuario cual es su siguiente paso -- antes solo ASIGNADA y
+  // CONFIRMADA ofrecian algo y el resto (incluida una SC recien creada sin asesor,
+  // BORRADOR) mostraba "Sin acciones principales disponibles" sin ninguna pista.
+  function renderSiguientePaso() {
+    if (!solicitud) return null;
+    const estado = solicitud.estado;
+
+    if (isSoporte) {
+      return (
+        <NextStepCard tone="slate" title="Ticket de soporte">
+          Las solicitudes de Soporte Técnico no pasan por cotización: gestiona el avance del ticket en
+          &ldquo;Estado del Ticket de Soporte&rdquo;, en el panel izquierdo.
+        </NextStepCard>
+      );
+    }
+    if (estado === 'CANCELADA') {
+      return (
+        <NextStepCard tone="rose" title="Solicitud cancelada">
+          Esta solicitud está cancelada y no puede avanzar. Puedes restaurarla desde la Papelera del listado de solicitudes.
+        </NextStepCard>
+      );
+    }
+    if (pedidosVigentes.length > 0) {
+      return (
+        <NextStepCard
+          tone="emerald"
+          title="Pedido de Venta generado"
+          actions={pedidosVigentes.map((v: any) => (
+            <Link key={v.id} href={`/dashboard/ventas/venta/${v.id}?return_to=${encodeURIComponent(currentPath)}`} className={`${LINK_ACCION} bg-emerald-600 hover:bg-emerald-700`}>
+              Ver {v.numero} <ArrowRight size={14} />
+            </Link>
+          ))}
+        >
+          El flujo Solicitud → Cotización → Pedido de Venta está completo. El seguimiento (compra, entrega) continúa en el Pedido.
+        </NextStepCard>
+      );
+    }
+    if (cotizaciones.length > 0) {
+      return (
+        <NextStepCard
+          tone="indigo"
+          title="Continúa en la cotización"
+          actions={cotizaciones.map((c: any) => (
+            <Link key={c.id} href={`/dashboard/ventas/cotizacion/${c.id}?return_to=${encodeURIComponent(currentPath)}`} className={`${LINK_ACCION} bg-indigo-600 hover:bg-indigo-700`}>
+              Ver {c.numero} <ArrowRight size={14} />
+            </Link>
+          ))}
+        >
+          La cotización ya fue creada desde esta solicitud: calcula los precios, envíala al cliente y, cuando confirme,
+          crea el Pedido de Venta desde ahí.
+        </NextStepCard>
+      );
+    }
+    if (canConfirmarSC) {
+      return (
+        <NextStepCard
+          tone="emerald"
+          title="El cliente confirmó la solicitud"
+          actions={<Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Crear Cotización</Button>}
+        >
+          Crea la cotización para calcular los precios y enviársela al cliente.
+        </NextStepCard>
+      );
+    }
+    if (estado === 'PENDIENTE_CONFIRMACION') {
+      return (
+        <NextStepCard
+          tone="blue"
+          title="Esperando confirmación del cliente"
+          actions={<Button color="blue" icon={Send} loading={sendingConfirmacion} onClick={handleEnviarParaConfirmacion}>Reenviar enlace de confirmación</Button>}
+        >
+          Ya se envió el enlace. Cuando el cliente confirme, aquí aparecerá &ldquo;Crear Cotización&rdquo;.
+          Si el enlace venció (dura 2 días) o no le llegó, genera uno nuevo.
+        </NextStepCard>
+      );
+    }
+    if (estado === 'ASIGNADA') {
+      return (
+        <NextStepCard
+          tone="indigo"
+          title="Envía la solicitud al cliente para que la confirme"
+          actions={<Button color="indigo" size="lg" icon={Send} loading={sendingConfirmacion} onClick={handleEnviarParaConfirmacion}>Enviar para Confirmación</Button>}
+        >
+          El cliente confirma desde un enlace de un solo uso. Cuando lo haga, podrás crear la cotización.
+        </NextStepCard>
+      );
+    }
+    if (estado === 'BORRADOR') {
+      return (
+        <NextStepCard
+          tone="amber"
+          title="Asigna un asesor para continuar"
+          actions={(
+            <>
+              {yoPuedoSerAsesor && (
+                <Button color="indigo" size="lg" icon={User} loading={assigning} onClick={() => asignarAsesor(me.id as number)}>
+                  Asignarme esta solicitud
+                </Button>
+              )}
+              <div className="flex gap-2">
+                <select
+                  value={assignUserId}
+                  onChange={e => setAssignUserId(e.target.value ? Number(e.target.value) : '')}
+                  className="flex-1 min-w-0 border border-slate-200 bg-white rounded-xl px-3 py-2 text-sm font-medium outline-none focus:ring-2 focus:ring-amber-200"
+                >
+                  <option value="">{asesoresElegibles.length ? 'Elegir otro asesor...' : 'No hay asesores disponibles'}</option>
+                  {asesoresElegibles.map(u => <option key={u.id} value={u.id}>{u.email}</option>)}
+                </select>
+                <Button variant="secondary" size="sm" loading={assigning} disabled={!assignUserId} onClick={() => asignarAsesor(Number(assignUserId))}>
+                  Asignar
+                </Button>
+              </div>
+            </>
+          )}
+        >
+          Esta solicitud todavía no tiene asesor. Con asesor se puede enviar a confirmación del cliente y, cuando
+          confirme, crear la cotización.
+        </NextStepCard>
+      );
+    }
+    return (
+      <NextStepCard tone="slate" title={`Solicitud ${String(estado || '').toLowerCase().replace(/_/g, ' ')}`}>
+        Esta solicitud no tiene un siguiente paso automático. Si quieres retomarla, pásala a Borrador desde &ldquo;Cambiar Estado&rdquo;.
+      </NextStepCard>
+    );
+  }
 
   // Filtro por tipo del tab Actividad: "Todos" + los tipos que realmente aparecen en
   // esta SC (orden preferido primero, luego cualquier tipo futuro no listado arriba).
@@ -426,7 +604,7 @@ function SolicitudDetalleContent() {
                   setEditForm((ef: any) => ({ ...ef, advisor_user_id: uid, advisor_name: u?.email || ef.advisor_name }));
                 }} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">
                   <option value="">Seleccionar asesor...</option>
-                  {usuarios.filter(u => u.role === 'Admin' || u.role === 'Vendedor').map(u => (
+                  {asesoresElegibles.map(u => (
                     <option key={u.id} value={u.id}>{u.email}</option>
                   ))}
                 </select>
@@ -479,11 +657,22 @@ function SolicitudDetalleContent() {
                   <div className="bg-slate-50 border border-dashed border-slate-300 rounded-xl p-4 text-center">
                     <p className="text-xs text-slate-400 italic mb-3">Aún no se ha realizado ninguna cotización.</p>
                     {canConfirmarSC && (
-                      <Button color="emerald" size="sm" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Cotizar</Button>
+                      <Button color="emerald" size="sm" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Crear Cotización</Button>
                     )}
                   </div>
                 )}
               </div>
+              {pedidosVigentes.length > 0 && (
+                <div>
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Pedidos de Venta</p>
+                  {pedidosVigentes.map((v: any) => (
+                    <Link key={v.id} href={`/dashboard/ventas/venta/${v.id}?return_to=${encodeURIComponent(currentPath)}`} className="flex items-center justify-between p-3 bg-emerald-50 border border-emerald-200 rounded-xl mb-2 hover:bg-emerald-100">
+                      <div><span className="font-bold text-emerald-800">{v.numero}</span><p className="text-xs text-emerald-600 mt-0.5">{v.estado}{v.cot_numero ? ` · desde ${v.cot_numero}` : ''}</p></div>
+                      <ChevronRight size={15} className="text-emerald-500" />
+                    </Link>
+                  ))}
+                </div>
+              )}
             </>
           )}
 
@@ -535,19 +724,7 @@ function SolicitudDetalleContent() {
               <>
                 <div>
                   <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Acciones Principales</p>
-                  {canConfirmarSC ? (
-                    <div className="[&>button]:w-full">
-                      <Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Confirmar + Crear Cotizacion</Button>
-                    </div>
-                  ) : solicitud?.estado === 'ASIGNADA' ? (
-                    <div className="[&>button]:w-full">
-                      <Button color="indigo" size="lg" icon={Send} loading={sendingConfirmacion} onClick={handleEnviarParaConfirmacion}>Enviar para Confirmación</Button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-center px-4 py-2.5 rounded-xl border border-dashed border-slate-200 text-slate-300 text-sm font-bold">
-                      Sin acciones principales disponibles
-                    </div>
-                  )}
+                  {renderSiguientePaso()}
                 </div>
                 <div>
                   <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Contactar Cliente</p>
@@ -664,6 +841,10 @@ function SolicitudDetalleContent() {
           customerHasPhone={!!solicitud?.customer_phone}
           documentLabel="solicitud"
         />
+      )}
+
+      {confirmLink && (
+        <EnlaceConfirmacionModal documento={`la solicitud ${solicitud?.numero || ''}`} link={confirmLink} color="indigo" onClose={() => setConfirmLink(null)} />
       )}
     </div>
   );

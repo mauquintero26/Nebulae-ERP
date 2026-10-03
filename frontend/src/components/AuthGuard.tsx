@@ -28,6 +28,15 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
         if (!isMounted) return;
         const user = data?.data || data;
         if (data && (data.status === "success" || data.status === 200 || user?.id || user?.email)) {
+          // Las paginas leen user_name / user_id para atribuir acciones (actividad,
+          // asesor por defecto). Antes nadie escribia estas claves, asi que toda la
+          // app registraba acciones sin responsable y dejaba el asesor vacio.
+          try {
+            localStorage.setItem("user_id", String(user?.id ?? ""));
+            localStorage.setItem("user_email", user?.email || "");
+            localStorage.setItem("user_name", user?.username || user?.email || "");
+            localStorage.setItem("user_role", user?.role || "");
+          } catch {}
           setAuthorized(true);
         } else {
           throw new Error("Invalid session");

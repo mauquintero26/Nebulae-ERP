@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import {
   ArrowLeft, ArrowRight, Send, Mail, FileText, CheckCircle2, Circle,
   MessageSquare, Calculator, Search, RefreshCw, Package, Trash2, RotateCcw,
   AlertCircle, XCircle, Activity, MessageCircle, Phone, Sparkles
 } from 'lucide-react';
 import Link from 'next/link';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
 import { Button } from '@/components/ui';
@@ -15,6 +15,7 @@ import {
   ChannelModal, CalculadorModal, DeleteConfirm, PropagarPvenConfirm,
   ESTADOS as ESTADOS_COT, fCOP, fDate, fTime,
 } from '../cotizacion-client';
+import { NextStepCard, EnlaceConfirmacionModal, returnToSeguro } from '../../flujo';
 
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
 const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
@@ -29,10 +30,15 @@ const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
 };
 const DEFAULT_ACTIVITY_STYLE = {icon: Activity, color: 'text-slate-500 bg-slate-50'};
 
-export default function CotizacionDetallePage() {
+function CotizacionDetalleContent() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const isNew = params.id === 'nueva';
+  // "Volver al origen" (mismo patron que solicitud/[id] y venta/[id]): la Solicitud ya
+  // construye ?return_to= al enlazar a esta cotizacion, pero esta pagina lo ignoraba.
+  const safeReturnTo = returnToSeguro(searchParams?.get('return_to'));
+  const currentPath = `/dashboard/ventas/cotizacion/${String(params.id || '')}`;
 
   const [cotizacion, setCotizacion] = useState<any>(null);
   const [loading, setLoading] = useState(!isNew);
@@ -42,6 +48,10 @@ export default function CotizacionDetallePage() {
   const [confirming, setConfirming] = useState(false);
   const [showChannelModal, setShowChannelModal] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<'WhatsApp'|'Email'|'Otro'|null>(null);
+  // Enlace de confirmacion recien generado: el token crudo solo viaja en la respuesta del
+  // envio, asi que se muestra (copiar/abrir) apenas llega -- con el canal Email/Otro, o
+  // sin SMTP configurado, no llegaba a ningun lado.
+  const [confirmLink, setConfirmLink] = useState<string | null>(null);
   // Gate 2: numero del PVEN recien creado, para el mensaje de exito con fade (4s) tras
   // "Crear Pedido de Venta" -- distinto del banner permanente de arriba (ventaGenerada),
   // que sigue mostrandose en cada visita a la pagina mientras exista un PVEN vinculado.
@@ -183,6 +193,7 @@ export default function CotizacionDetallePage() {
       await loadCotizacion();
       setShowChannelModal(false);
       setSelectedChannel(null);
+      if (link) setConfirmLink(link);
     } catch (err: any) {
       alert('Error al enviar la cotizacion: ' + err.message);
     }
@@ -223,7 +234,10 @@ export default function CotizacionDetallePage() {
   }
 
   function onCalcSave(data: any) {
-    const pvenVigente = pedidosVenta.filter((v: any) => v.estado !== 'CANCELADA').pop();
+    // 'CANCELADO' (masculino) es el estado real de un Pedido de Venta cancelado: con
+    // 'CANCELADA' el filtro nunca excluia nada y un recotizado podia reescribir los
+    // precios de un pedido ya cancelado.
+    const pvenVigente = pedidosVenta.filter((v: any) => v.estado !== 'CANCELADO').pop();
     if (pvenVigente) {
       setShowCalc(false);
       setPendingCalcData(data);
@@ -240,7 +254,7 @@ export default function CotizacionDetallePage() {
         method: 'PATCH',
         body: JSON.stringify({ ...data, updated_by: currentUser }),
       });
-      const pvenVigente = pedidosVenta.filter((v: any) => v.estado !== 'CANCELADA').pop();
+      const pvenVigente = pedidosVenta.filter((v: any) => v.estado !== 'CANCELADO').pop();
       if (propagarAPven && pvenVigente) {
         const nuevoSaldo = Number(data.total_cop || 0) - Number(pvenVigente.anticipo_cop || 0);
         await apiFetch(`/ventas/pedidos/${pvenVigente.id}`, {
@@ -367,6 +381,87 @@ export default function CotizacionDetallePage() {
     );
   }
 
+  // Cada estado le dice al usuario cual es su siguiente paso, en vez de dejar botones
+  // sueltos (incluido "Enviar al Cliente", que el backend rechaza mientras la cotizacion
+  // no tenga productos ni precio calculado).
+  const cotizada = productos.length > 0 && Number(cotizacion?.total_cop) > 0;
+  // La tarjeta de siguiente paso ya ofrece "Calcular Precios" en este caso; evita
+  // repetir el mismo boton justo debajo.
+  const cardOfreceCalculo = !(ventaGenerada && pedidoReciente) && !cotizada
+    && (estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA');
+  const LINK_ACCION = 'flex items-center justify-center gap-2 rounded-xl font-bold px-6 py-3 text-sm text-white shadow-md';
+
+  function renderSiguientePaso() {
+    if (!cotizacion) return null;
+    if (ventaGenerada && pedidoReciente) {
+      return (
+        <NextStepCard
+          tone="emerald"
+          title="Pedido de Venta generado"
+          actions={(
+            <Link href={`/dashboard/ventas/venta/${pedidoReciente.id}?return_to=${encodeURIComponent(currentPath)}`} className={`${LINK_ACCION} bg-emerald-600 hover:bg-emerald-700`}>
+              Ver {pedidoReciente.numero} <ArrowRight size={14} />
+            </Link>
+          )}
+        >
+          La cotización ya se convirtió en pedido. El seguimiento (compra, entrega) continúa en el Pedido de Venta.
+        </NextStepCard>
+      );
+    }
+    if (estadoActual === 'CONFIRMADA') {
+      return (
+        <NextStepCard
+          tone="emerald"
+          title="El cliente confirmó la cotización"
+          actions={<Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} onClick={handleConfirmarVenta}>Crear Pedido de Venta</Button>}
+        >
+          Crea el Pedido de Venta para pasar a compra y entrega.
+        </NextStepCard>
+      );
+    }
+    if (estadoActual === 'PENDIENTE_CONFIRMACION') {
+      return (
+        <NextStepCard tone="blue" title="Esperando confirmación del cliente">
+          Cuando el cliente confirme desde el enlace, aquí aparecerá &ldquo;Crear Pedido de Venta&rdquo;. Si el enlace venció
+          (dura 2 días) o no le llegó, pasa la cotización a Borrador desde &ldquo;Cambiar Estado&rdquo; y envíala de nuevo
+          para generar uno nuevo.
+        </NextStepCard>
+      );
+    }
+    if (estadoActual === 'RECHAZADA' || estadoActual === 'VENCIDA') {
+      return (
+        <NextStepCard tone="slate" title={`Cotización ${estadoActual === 'RECHAZADA' ? 'rechazada' : 'vencida'}`}>
+          Para retomarla, pásala a Borrador desde &ldquo;Cambiar Estado&rdquo;, ajusta los precios y envíala de nuevo.
+        </NextStepCard>
+      );
+    }
+    // BORRADOR / ENVIADA
+    if (!cotizada) {
+      return (
+        <NextStepCard
+          tone="amber"
+          title="Calcula los precios de la cotización"
+          actions={<Button color="blue" size="lg" icon={Calculator} onClick={() => setShowCalc(true)}>Cotizar — Calcular Precios</Button>}
+        >
+          Hasta que tenga precios, la cotización no se puede enviar al cliente ni convertir en pedido.
+        </NextStepCard>
+      );
+    }
+    return (
+      <NextStepCard
+        tone="blue"
+        title={estadoActual === 'ENVIADA' ? 'Enviada al cliente: reenvíala si hace falta' : 'Envía la cotización al cliente para que la confirme'}
+        actions={(
+          <Button color="blue" size="lg" icon={Send} loading={sending} onClick={handleEnviarCotizacion}>
+            {estadoActual === 'ENVIADA' ? 'Re-enviar al Cliente' : 'Enviar al Cliente'}
+          </Button>
+        )}
+      >
+        El cliente confirma desde un enlace de un solo uso. Cuando lo haga, podrás crear el Pedido de Venta.
+      </NextStepCard>
+    );
+  }
+
   return (
     <div className="w-full h-full bg-white flex flex-col overflow-hidden">
 
@@ -376,6 +471,11 @@ export default function CotizacionDetallePage() {
           <Link href="/dashboard/ventas/cotizacion" className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 transition-colors">
             <ArrowLeft size={20} />
           </Link>
+          {safeReturnTo && (
+            <Link href={safeReturnTo} className="text-xs font-bold text-blue-600 hover:text-blue-800 hover:underline whitespace-nowrap">
+              ← Volver
+            </Link>
+          )}
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-black text-slate-800">
@@ -476,7 +576,7 @@ export default function CotizacionDetallePage() {
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Origen</label>
                 {cotizacion?.sc_id ? (
-                  <Link href={`/dashboard/ventas/solicitud?id=${cotizacion.sc_id}`} className="flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl px-4 py-3 text-sm font-bold hover:bg-blue-100 transition-colors">
+                  <Link href={`/dashboard/ventas/solicitud/${cotizacion.sc_id}?return_to=${encodeURIComponent(currentPath)}`} className="flex items-center gap-2 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl px-4 py-3 text-sm font-bold hover:bg-blue-100 transition-colors">
                     <Search size={16} /> {cotizacion.sc_numero || `SC-${cotizacion.sc_id}`}
                   </Link>
                 ) : (
@@ -580,57 +680,30 @@ export default function CotizacionDetallePage() {
                 <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
 
                   {/* Gate 2: "Crear Pedido de Venta" solo cuando el cliente ya confirmo via el
-                      enlace publico (estado === 'CONFIRMADA') -- separado de "Enviar al
-                      Cliente", que ahora solo manda el link de confirmacion (ver
-                      confirmarEnvio). !ventaGenerada evita que el boton siga ofreciendose
-                      despues de usado: a diferencia del flujo viejo, CONFIRMADA ya no es solo un
-                      estado terminal post-conversion -- ahora tambien es el estado intermedio
-                      mientras el PVEN todavia no existe.
-                      Round 2 (adversarial review, hallazgo bundled): pvenCreadoNumero se
-                      incluye como condicion aparte (en vez de depender solo de
-                      "CONFIRMADA && !ventaGenerada") porque loadCotizacion() ya deja
-                      ventaGenerada=true ANTES de que el mensaje de exito se renderice --
-                      sin esto, el mensaje nunca llegaba a mostrarse (el `!ventaGenerada`
-                      de la condicion original ya era falso para cuando pvenCreadoNumero se
-                      alcanzaba a setear). */}
-                  {(estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA' || estadoActual === 'PENDIENTE_CONFIRMACION' || (estadoActual === 'CONFIRMADA' && !ventaGenerada) || pvenCreadoNumero) && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {(estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA') && (
-                        <Button color="blue" icon={Send} loading={sending} onClick={handleEnviarCotizacion}>
-                          {estadoActual === 'ENVIADA' ? 'Re-enviar al Cliente' : 'Enviar al Cliente'}
-                        </Button>
-                      )}
-                      {estadoActual === 'PENDIENTE_CONFIRMACION' && (
-                        <div className="flex items-center justify-center px-4 py-2.5 rounded-xl border border-dashed border-blue-200 bg-blue-50 text-blue-500 text-sm font-bold">
-                          Esperando confirmación del cliente
-                        </div>
-                      )}
-                      {pvenCreadoNumero ? (
-                        <div className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm font-bold animate-in fade-in">
-                          <CheckCircle2 size={16} /> Pedido {pvenCreadoNumero} creado exitosamente
-                        </div>
-                      ) : estadoActual === 'CONFIRMADA' && !ventaGenerada && (
-                        <Button color="emerald" icon={CheckCircle2} loading={confirming} onClick={handleConfirmarVenta}>
-                          Crear Pedido de Venta
-                        </Button>
-                      )}
+                      enlace publico (estado === 'CONFIRMADA') y todavia no existe el pedido --
+                      lo decide renderSiguientePaso(). pvenCreadoNumero (mensaje de exito, 4 s)
+                      va aparte: loadCotizacion() ya deja ventaGenerada=true ANTES de que este
+                      mensaje se renderice, asi que la tarjeta de siguiente paso ya muestra
+                      "Pedido de Venta generado" cuando el mensaje aparece. */}
+                  {pvenCreadoNumero && (
+                    <div className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm font-bold animate-in fade-in">
+                      <CheckCircle2 size={16} /> Pedido {pvenCreadoNumero} creado exitosamente
                     </div>
                   )}
 
-                  <div className={`grid grid-cols-1 sm:grid-cols-2 gap-3 ${(estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA' || estadoActual === 'PENDIENTE_CONFIRMACION' || (estadoActual === 'CONFIRMADA' && !ventaGenerada) || pvenCreadoNumero) ? 'pt-4 border-t border-slate-100' : ''}`}>
-                    <Button color={Number(cotizacion?.total_cop) > 0 ? 'orange' : 'blue'}
-                      icon={Number(cotizacion?.total_cop) > 0 ? RotateCcw : Calculator}
-                      onClick={() => setShowCalc(true)}>
-                      {Number(cotizacion?.total_cop) > 0 ? 'Re-Cotizar — Actualizar Precios' : 'Cotizar — Calcular Precios'}
-                    </Button>
-                    {ventaGenerada && pedidoReciente ? (
-                      <Link href={`/dashboard/ventas/venta/${pedidoReciente.id}?return_to=${encodeURIComponent('/dashboard/ventas/cotizacion/' + cotizacion.id)}`}
-                        className="flex items-center justify-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-700 px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-emerald-100 transition-colors">
-                        Ver Pedido de Venta <ArrowRight size={14} />
-                      </Link>
-                    ) : (
-                      <div className="flex items-center justify-center px-4 py-2.5 rounded-xl border border-dashed border-slate-200 text-slate-300 text-sm font-bold">
-                        Pedido de Venta pendiente de confirmar
+                  {renderSiguientePaso()}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-4 border-t border-slate-100">
+                    {!cardOfreceCalculo && (
+                      <Button color={Number(cotizacion?.total_cop) > 0 ? 'orange' : 'blue'}
+                        icon={Number(cotizacion?.total_cop) > 0 ? RotateCcw : Calculator}
+                        onClick={() => setShowCalc(true)}>
+                        {Number(cotizacion?.total_cop) > 0 ? 'Re-Cotizar — Actualizar Precios' : 'Cotizar — Calcular Precios'}
+                      </Button>
+                    )}
+                    {!ventaGenerada && estadoActual !== 'CONFIRMADA' && (
+                      <div className="flex items-center justify-center px-4 py-2.5 rounded-xl border border-dashed border-slate-200 text-slate-400 text-xs font-bold text-center">
+                        El Pedido de Venta se habilita cuando el cliente confirma la cotización
                       </div>
                     )}
                   </div>
@@ -816,7 +889,7 @@ export default function CotizacionDetallePage() {
       {showDelete && cotizacion && <DeleteConfirm cot={cotizacion} onConfirm={deleteCot} onCancel={() => setShowDelete(false)} />}
       {pendingCalcData && (
         <PropagarPvenConfirm
-          pven={pedidosVenta.filter((v: any) => v.estado !== 'CANCELADA').pop()}
+          pven={pedidosVenta.filter((v: any) => v.estado !== 'CANCELADO').pop()}
           totalAnterior={Number(cotizacion?.total_cop || 0)}
           totalNuevo={Number(pendingCalcData.total_cop || 0)}
           saving={savingCalc}
@@ -824,6 +897,23 @@ export default function CotizacionDetallePage() {
           onCancel={() => commitCalcSave(pendingCalcData, false)}
         />
       )}
+      {confirmLink && (
+        <EnlaceConfirmacionModal documento={`la cotización ${cotizacion?.numero || ''}`} link={confirmLink} color="blue" onClose={() => setConfirmLink(null)} />
+      )}
     </div>
+  );
+}
+
+// useSearchParams() exige un limite de Suspense para no romper el prerenderizado estatico
+// (mismo patron que solicitud/[id] y venta/[id]).
+export default function CotizacionDetallePage() {
+  return (
+    <Suspense fallback={(
+      <div className="w-full h-full flex items-center justify-center bg-white">
+        <RefreshCw className="animate-spin text-blue-600" size={28} />
+      </div>
+    )}>
+      <CotizacionDetalleContent />
+    </Suspense>
   );
 }
