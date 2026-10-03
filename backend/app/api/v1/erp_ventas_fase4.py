@@ -38,6 +38,7 @@ from app.models.fase4 import (
     SaleOrderReturnLine,
 )
 from app.models.users import User
+from app.core.ventas_dinero import redondear_peso
 from app.api.dependencies import (
     require_roles, get_current_user,
     ROLE_ADMIN, ROLE_ASESOR, ROLE_BODEGA, ROLE_COMPRAS, ROLE_FINANZAS, ALL_ERP_ROLES
@@ -2775,10 +2776,11 @@ def convertir_cotizacion_a_venta(
     ven_numero = _gen_numero(db, "PVEN-", "seq_ven")
 
     # 3. Datos del cliente y financieros
-    total_cop = Decimal(str(cot.total_cop or 0))
-    anticipo_cop = Decimal(str(cot.anticipo_cop or 0))
+    # H42: el pedido nace en pesos enteros aunque la COT (datos viejos) traiga centavos.
+    total_cop = redondear_peso(cot.total_cop)
+    anticipo_cop = redondear_peso(cot.anticipo_cop)
     saldo_cop = total_cop - anticipo_cop
-    subtotal_cop = Decimal(str(cot.subtotal_cop or total_cop))
+    subtotal_cop = redondear_peso(cot.subtotal_cop or total_cop)
     descuento_pct = Decimal(str(cot.descuento_pct or 0))
 
     new_so = SaleOrder(

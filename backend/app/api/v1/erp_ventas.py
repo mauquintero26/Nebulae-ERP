@@ -23,6 +23,7 @@ from app.api.dependencies import (
 from app.models.users import User
 from app.core.busqueda import productos_ilike
 from app.core import cambios_documento
+from app.core.ventas_dinero import redondear_peso
 from app.api.v1.schemas_compras import CancelarSolicitudBody
 from app.api.v1.crm import mover_lead_de_solicitud
 import datetime
@@ -73,6 +74,21 @@ def _validar_precios_productos(productos: list) -> None:
                 422,
                 f"El producto '{nombre_prod}' no tiene precio definido. Ingresa un costo/precio antes de guardar la cotizacion.",
             )
+
+def _monto_en_pesos(valor, campo: str) -> Decimal:
+    """H42: un monto que llega del cliente se guarda en pesos enteros (redondear_peso). Si no es un monto
+    (texto no numerico, NaN...) responde 422 con el nombre del campo en vez de dejar que llegue a la base."""
+    try:
+        return redondear_peso(valor)
+    except ValueError:
+        raise HTTPException(422, f"El campo {campo} debe ser un monto numérico.")
+
+def _redondear_montos_del_body(body: dict, campos) -> None:
+    """Redondea al peso, en el propio body, los montos de `campos` que vengan con valor (los ausentes o
+    None no se tocan: un PATCH que no manda montos no cambia los guardados)."""
+    for k in campos:
+        if body.get(k) is not None:
+            body[k] = _monto_en_pesos(body[k], k)
 
 def _tiene_productos_para_cotizar(productos) -> bool:
     """Al menos una linea con nombre (del catalogo o texto libre). Una Solicitud sin productos no
@@ -819,6 +835,9 @@ def list_cotizaciones(
 def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
     _validar_precios_productos(body.get("productos") or [])
+    # H42: la cabecera se guarda en pesos enteros (antes de gastar un numero de la secuencia).
+    subtotal_cop = _monto_en_pesos(body.get("subtotal_cop"), "subtotal_cop")
+    total_cop = _monto_en_pesos(body.get("total_cop"), "total_cop")
     numero = _gen_numero(db, "COT-", "seq_cot")
     entrega_est = None
     if body.get("dias_entrega"):
@@ -862,9 +881,9 @@ def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN
         cotizador=body.get("cotizador"),
         direccion_entrega=body.get("direccion_entrega"),
         trm_rate=body.get("trm_rate"),
-        subtotal_cop=body.get("subtotal_cop", 0),
+        subtotal_cop=subtotal_cop,
         descuento_pct=body.get("descuento_pct", 0),
-        total_cop=body.get("total_cop", 0),
+        total_cop=total_cop,
         anticipo_cop=body.get("anticipo_cop", 0),
         estado="BORRADOR",
         fecha_entrega_estimada=entrega_est,
@@ -968,6 +987,8 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
                "customer_address","cotizador","direccion_entrega","trm_rate","subtotal_cop",
                "descuento_pct","total_cop","anticipo_cop","estado","canal_envio","fecha_entrega_estimada",
                "notas","productos","pec_id","pec_numero"]
+    # H42: la cabecera de la COT queda en pesos enteros aunque el cliente mande decimales.
+    _redondear_montos_del_body(body, ("subtotal_cop", "total_cop"))
     for k in allowed:
         if k in body:
             setattr(cot, k, body[k])
@@ -1329,6 +1350,10 @@ def create_pedido(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *R
         db: Session = Depends(get_db)):
     from sqlalchemy.exc import IntegrityError, SQLAlchemyError
     from fastapi import status as http_status
+    # H42: montos en pesos enteros; el saldo se calcula con los ya redondeados para que cuadre sin centavos.
+    subtotal_cop = _monto_en_pesos(body.get("subtotal_cop"), "subtotal_cop")
+    total_cop = _monto_en_pesos(body.get("total_cop"), "total_cop")
+    anticipo_cop = _monto_en_pesos(body.get("anticipo_cop"), "anticipo_cop")
     try:
         numero = _gen_numero(db, "PVEN-", "seq_ven")
     except Exception as exc:
@@ -1336,7 +1361,7 @@ def create_pedido(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *R
             status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"No se pudo generar el numero de pedido: {type(exc).__name__}",
         )
-    saldo = float(body.get("total_cop", 0)) - float(body.get("anticipo_cop", 0))
+    saldo = total_cop - anticipo_cop
     ven = SaleOrder(
         numero=numero,
         sc_id=body.get("sc_id"),
@@ -1350,10 +1375,10 @@ def create_pedido(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *R
         customer_address=body.get("customer_address"),
         direccion_entrega=body.get("direccion_entrega"),
         trm_rate=body.get("trm_rate"),
-        subtotal_cop=body.get("subtotal_cop", 0),
+        subtotal_cop=subtotal_cop,
         descuento_pct=body.get("descuento_pct", 0),
-        total_cop=body.get("total_cop", 0),
-        anticipo_cop=body.get("anticipo_cop", 0),
+        total_cop=total_cop,
+        anticipo_cop=anticipo_cop,
         saldo_cop=saldo,
         estado="PENDIENTE_COMPRA",
         notas=body.get("notas"),
@@ -1483,6 +1508,9 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
                "customer_phone","customer_email","customer_address","trm_rate",
                "subtotal_cop","descuento_pct","total_cop","anticipo_cop","saldo_cop",
                "cancellation_reason","cancellation_authorized_by","cancelled_at"]
+    # R11 (H42): la re-cotizacion propaga total, subtotal y saldo (y el anticipo) con decimales al PVEN:
+    # el servidor los deja en pesos enteros.
+    _redondear_montos_del_body(body, ("subtotal_cop", "total_cop", "saldo_cop", "anticipo_cop"))
     for k in allowed:
         if k in body:
             setattr(v, k, body[k])
