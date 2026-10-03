@@ -74,6 +74,16 @@ def _validar_precios_productos(productos: list) -> None:
                 f"El producto '{nombre_prod}' no tiene precio definido. Ingresa un costo/precio antes de guardar la cotizacion.",
             )
 
+def _tiene_productos_para_cotizar(productos) -> bool:
+    """Al menos una linea con nombre (del catalogo o texto libre). Una Solicitud sin productos no
+    tiene nada que el cliente pueda confirmar ni que cotizar: la Cotizacion saldria vacia."""
+    if not isinstance(productos, list):
+        return False
+    return any(
+        isinstance(p, dict) and str(p.get("product_name") or p.get("nombre") or p.get("name") or "").strip()
+        for p in productos
+    )
+
 def _gen_numero(db: Session, prefix: str, seq: str) -> str:
     year = datetime.datetime.utcnow().year
     n = _next_seq(db, seq)
@@ -520,6 +530,20 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     )
     if desasigna_a_borrador:
         sc.estado = "BORRADOR"
+    # Gate 1: el cliente confirma ESTOS productos. Si cambian con el enlace pendiente o ya
+    # confirmado (y todavia sin Cotizacion), esa confirmacion ya no aplica: vuelve a
+    # ASIGNADA para reenviarla -- `transiciona` (abajo) revoca el token y limpia
+    # gate1_confirmed_at. Mismo criterio que el congelamiento de precio de Gate 2 en
+    # update_cotizacion. Vincular una linea al catalogo no cuenta (cambian_productos).
+    invalida_por_productos = (
+        "productos" in body
+        and sc.estado == old_estado
+        and old_estado in ("PENDIENTE_CONFIRMACION", "CONFIRMADA")
+        and cambios_documento.cambian_productos(antes_log.get("productos"), sc.productos)
+        and db.query(SalesQuotation.id).filter(SalesQuotation.sc_id == sc.id).first() is None
+    )
+    if invalida_por_productos:
+        sc.estado = "ASIGNADA" if sc.advisor_user_id else "BORRADOR"
     # Round 8 (fix de concurrencia encontrado en re-review): captura la transicion
     # de ESTE request AHORA, antes de cualquier commit/refresh. db.refresh(sc) mas
     # abajo re-lee la fila desde la DB -- si otro request (p.ej. el cliente
@@ -556,6 +580,12 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         # mande "estado" (solo limpia advisor_user_id), asi que necesita su propio log.
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Estado cambiado a BORRADOR (asesor retirado)",
              old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"))
+    if invalida_por_productos:
+        _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
+             f"Estado cambiado a {sc.estado}: se modificaron los productos, así que la confirmación del cliente "
+             f"ya no es válida y hay que reenviarle la solicitud",
+             old_estado=old_estado, new_estado=sc.estado,
+             user_name=body.get("updated_by") or getattr(user, "email", None))
     if fecha_vieja is not None and sc.fecha_entrega_estimada and sc.fecha_entrega_estimada.date() != fecha_vieja.date():
         # Final whole-branch review (hallazgo #2): .date() en ambos lados antes de
         # restar -- las fechas se calculan como utcnow() + timedelta(...) (Task 1), asi
@@ -612,6 +642,9 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
     # mismo endpoint es ahora tambien la base del reenvio mas abajo.
     if not sc.advisor_user_id:
         raise HTTPException(400, "La solicitud no tiene un asesor asignado.")
+    if not _tiene_productos_para_cotizar(sc.productos):
+        raise HTTPException(400, "Agrega al menos un producto a la solicitud antes de enviarla al cliente: "
+                                 "sin productos no hay nada que confirmar ni que cotizar.")
 
     from app.core.confirmation_tokens import create_confirmation_token, revoke_pending_tokens
     from app.core.email import send_email
@@ -679,6 +712,11 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
     # de venta futuro y no relacionado sobre la misma SC.
     if sc.gate1_confirmed_at is None:
         raise HTTPException(400, "Esta solicitud no tiene una confirmación de cliente válida y sin usar; no se puede crear la Cotización.")
+    # Una SC confirmada antes de que se exigieran productos para enviarla podria no tener
+    # ninguno: la Cotizacion saldria vacia. Se agregan en la SC (lo que pide reconfirmar).
+    if not _tiene_productos_para_cotizar(sc.productos):
+        raise HTTPException(400, "La solicitud no tiene productos para cotizar. Agrégalos en la solicitud "
+                                 "y vuelve a enviársela al cliente para que la confirme.")
 
     # Al crear el borrador de cotizacion, la solicitud pasa a COTIZADA (no CONFIRMADA:
     # eso solo ocurre cuando el cliente realmente confirma la cotizacion).

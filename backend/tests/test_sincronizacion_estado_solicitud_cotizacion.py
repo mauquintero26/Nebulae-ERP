@@ -13,6 +13,8 @@ def _crear_solicitud_y_confirmar(client, admin_token, db):
     sc = client.post("/api/v1/ventas/solicitudes", json={
         "customer_name": f"Cliente-{uuid.uuid4().hex[:6]}",
         "tipo_solicitud": "Cotizacion de Producto",
+        # confirmar_solicitud exige productos: sin ellos la cotizacion saldria vacia.
+        "productos": [{"product_name": "Producto Prueba", "qty": 1}],
     }, headers=_headers(admin_token)).json()["data"]
     # Task 4 (confirmacion por link, Gate 1): confirmar_solicitud ahora exige que la
     # SC ya este CONFIRMADA (via el link publico que el cliente recibe por correo),

@@ -28,6 +28,8 @@ def test_confirmar_solicitud_calcula_fecha_segun_modalidad(app_client, db, admin
     sc_resp = app_client.post("/api/v1/ventas/solicitudes", json={
         "customer_name": "Cliente Prueba", "tipo_solicitud": "Pedido Inmediato",
         "advisor_name": "Asesor Prueba", "created_by": "test",
+        # confirmar_solicitud exige productos: sin ellos la cotizacion saldria vacia.
+        "productos": [{"product_name": "Producto Prueba", "qty": 1}],
     }, headers=auth(admin_token))
     sc_id = sc_resp.json()["data"]["id"]
     # Fuerza el estado a CONFIRMADA -- Task 4 cambio la precondicion de confirmar_solicitud

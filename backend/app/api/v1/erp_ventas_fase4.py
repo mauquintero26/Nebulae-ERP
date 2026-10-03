@@ -3002,6 +3002,18 @@ def convertir_cotizacion_a_venta(
         user_name=request.user_name or getattr(user, "email", "system")
     )
     db.add(log)
+    # El pedido tambien registra su origen: sin esto su linea de tiempo de Actividad arrancaba
+    # vacia ("Sin actividad registrada") aunque acababa de nacer de una cotizacion confirmada.
+    db.add(ActivityLog(
+        entity_type="VEN",
+        entity_id=new_so.id,
+        entity_numero=new_so.numero,
+        action="CREATED",
+        description=f"Pedido {new_so.numero} creado desde la cotización {cot.numero}"
+                    + (f" (solicitud {cot.sc_numero})" if cot.sc_numero else "") + ", confirmada por el cliente",
+        new_estado=new_so.estado,
+        user_name=request.user_name or getattr(user, "email", "system")
+    ))
 
     db.commit()
     db.refresh(new_so)

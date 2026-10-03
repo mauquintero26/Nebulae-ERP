@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import {
   ArrowLeft, ArrowRight, ChevronRight, Edit2, Save, Trash2, CheckCircle2,
   User, Phone, Mail, MapPin, MessageCircle, RefreshCw, AlertCircle,
-  FileText, Activity, XCircle, MessageSquare, RotateCcw, Filter, Send,
+  FileText, Activity, XCircle, MessageSquare, RotateCcw, Filter, Send, Plus,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
@@ -13,7 +13,7 @@ import { apiFetch } from '@/lib/api';
 import { Button, Modal } from '@/components/ui';
 import {
   EstadoBadge, TipoBadge, ChatterTab, IAPanelSC,
-  ESTADOS_SC_MANUALES, TIPOS_SC, MODALIDADES_PAGO, fDate, fTime, fCOP,
+  ESTADOS_SC_MANUALES, TIPOS_SC, MODALIDADES_PAGO, fDate, fTime,
 } from '../solicitud-client';
 // Final whole-branch review (hallazgo #1, el mas severo): Gate 1 no tenia NINGUNA via
 // de UI para entregarle el link de confirmacion al cliente -- enviarParaConfirmacion
@@ -27,6 +27,7 @@ import {
 // entre ambos gates -- no se corrige aqui).
 import { ChannelModal } from '../../cotizacion/cotizacion-client';
 import { CambiosDeActividad } from '../../flujo';
+import { ProductosSolicitud } from './productos-solicitud';
 import {
   NextStepCard, EnlaceConfirmacionModal, esAsesorElegible, getUsuarioActual, type UsuarioActual,
 } from '../../flujo';
@@ -107,6 +108,7 @@ function SolicitudDetalleContent() {
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelRazon, setCancelRazon] = useState('');
   const [cancelling, setCancelling] = useState(false);
+  const [editandoProductos, setEditandoProductos] = useState(false);
 
   useEffect(() => {
     const u = localStorage.getItem('user_name') || localStorage.getItem('username') || '';
@@ -356,6 +358,11 @@ function SolicitudDetalleContent() {
   const pipelineStep = pedidosVigentes.length > 0 ? 3
     : cotizaciones.some((c: any) => c.estado === 'CONFIRMADA') ? 2
     : cotizaciones.length > 0 ? 1 : 0;
+  // Sin productos no hay nada que el cliente confirme ni que cotizar: el backend no deja
+  // enviarla ni crear la cotizacion. Se editan aqui mientras la SC no tenga cotizacion.
+  const productosSC = solicitud?.productos || [];
+  const tieneProductos = productosSC.some((p: any) => String(p?.product_name || p?.nombre || p?.name || '').trim());
+  const puedeEditarProductos = !!solicitud && !isSoporte && solicitud.estado !== 'CANCELADA' && cotizaciones.length === 0;
 
   // Gate 1 (confirmacion por link): "Confirmar + Crear Cotizacion" (confirmarSC) ahora
   // solo es valido cuando el cliente ya confirmo via el link publico (estado ===
@@ -366,11 +373,16 @@ function SolicitudDetalleContent() {
   // Reutilizado por el boton "Cotizar" del bloque Cotizaciones (panel izquierdo) y por
   // el tab Acciones; en cualquier otro caso no se ofrece esa accion (ASIGNADA tiene su
   // propia accion -- "Enviar para Confirmacion", ver abajo).
-  const canConfirmarSC = solicitud?.estado === 'CONFIRMADA' && cotizaciones.length === 0;
+  const canConfirmarSC = solicitud?.estado === 'CONFIRMADA' && cotizaciones.length === 0 && tieneProductos;
 
   const asesoresElegibles = usuarios.filter(u => esAsesorElegible(u.role));
   const yoPuedoSerAsesor = me.id !== null && asesoresElegibles.some(u => u.id === me.id);
   const LINK_ACCION = 'flex items-center justify-center gap-2 rounded-xl font-bold px-6 py-3 text-sm text-white shadow-md';
+
+  function abrirEditorProductos() {
+    setEditandoProductos(true);
+    setTimeout(() => document.getElementById('productos-solicitud')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+  }
 
   // Cada estado le dice al usuario cual es su siguiente paso -- antes solo ASIGNADA y
   // CONFIRMADA ofrecian algo y el resto (incluida una SC recien creada sin asesor,
@@ -422,6 +434,18 @@ function SolicitudDetalleContent() {
         >
           La cotización ya fue creada desde esta solicitud: calcula los precios, envíala al cliente y, cuando confirme,
           crea el Pedido de Venta desde ahí.
+        </NextStepCard>
+      );
+    }
+    if (!tieneProductos && ['ASIGNADA', 'PENDIENTE_CONFIRMACION', 'CONFIRMADA'].includes(estado)) {
+      return (
+        <NextStepCard
+          tone="amber"
+          title="Agrega los productos a cotizar"
+          actions={puedeEditarProductos ? <Button color="amber" size="lg" icon={Plus} onClick={abrirEditorProductos}>Agregar productos</Button> : undefined}
+        >
+          Esta solicitud no tiene productos: sin ellos no hay nada que el cliente pueda confirmar ni que cotizar.
+          {estado === 'ASIGNADA' ? ' Después podrás enviarla al cliente para que la confirme.' : ' Cuando los agregues, tendrás que reenviarle la solicitud al cliente.'}
         </NextStepCard>
       );
     }
@@ -632,20 +656,20 @@ function SolicitudDetalleContent() {
                   </div>
                 </div>
               )}
-              {(solicitud?.productos || []).length > 0 && (
-                <div>
-                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Productos</p>
-                  <div className="border border-slate-200 rounded-xl overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead className="bg-slate-50 text-slate-400 uppercase font-black"><tr><th className="px-3 py-2 text-left">Producto</th><th className="px-3 py-2 text-right">Qty</th><th className="px-3 py-2 text-right">Precio</th></tr></thead>
-                      <tbody className="divide-y divide-slate-50">
-                        {solicitud.productos.map((p: any, i: number) => (
-                          <tr key={i}><td className="px-3 py-2 font-medium text-slate-700">{p.product_name}</td><td className="px-3 py-2 text-right text-slate-600">{p.qty}</td><td className="px-3 py-2 text-right font-bold text-indigo-700">{fCOP(p.unit_price_cop)}</td></tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
+              {!isSoporte && solicitud && (
+                <ProductosSolicitud
+                  scId={solicitud.id}
+                  productos={productosSC}
+                  editable={puedeEditarProductos}
+                  motivoBloqueo={cotizaciones.length > 0
+                    ? `Los productos ya pasaron a la cotización ${cotizaciones[0].numero}: ajústalos allí con "Re-Cotizar".`
+                    : solicitud.estado === 'CANCELADA' ? 'La solicitud está cancelada.' : undefined}
+                  anulaConfirmacion={['PENDIENTE_CONFIRMACION', 'CONFIRMADA'].includes(solicitud.estado)}
+                  editando={editandoProductos}
+                  setEditando={setEditandoProductos}
+                  currentUser={currentUser}
+                  onGuardado={loadSolicitud}
+                />
               )}
               {solicitud?.notas && <div className="bg-amber-50 border border-amber-100 rounded-xl p-4"><p className="text-xs font-black text-amber-700 uppercase mb-1.5">Notas</p><p className="text-sm text-amber-900">{solicitud.notas}</p></div>}
               <div>

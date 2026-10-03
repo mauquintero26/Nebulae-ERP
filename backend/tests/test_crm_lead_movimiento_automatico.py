@@ -28,6 +28,8 @@ def _crear_solicitud_con_lead(client, admin_token, customer_id):
         "customer_id": customer_id,
         "customer_name": "Cliente Lead Test",
         "tipo_solicitud": "Cotizacion de Producto",
+        # confirmar_solicitud exige productos: sin ellos la cotizacion saldria vacia.
+        "productos": [{"product_name": "Producto Prueba", "qty": 1}],
     }, headers=_headers(admin_token)).json()["data"]
     lead = client.post("/api/v1/crm/leads", json={
         "customer_id": customer_id,
@@ -114,7 +116,7 @@ class TestMovimientoAutomaticoDeLead:
         _forzar_confirmada(db, sc["id"])
         cot = app_client.post(f"/api/v1/ventas/solicitudes/{sc['id']}/confirmar", json={}, headers=_headers(admin_token)).json()["data"]["cotizacion"]
         # enviar_cotizacion_para_confirmacion exige precio real calculado -- la COT recien
-        # creada desde la SC (sin productos) no lo tiene; se simula aqui por DB, igual que
+        # creada desde la SC (productos todavia sin precio) no lo tiene; se simula aqui por DB, igual que
         # el resto de este archivo simula lo que no es el foco de la prueba (_forzar_confirmada).
         cot_row = db.query(SalesQuotation).filter(SalesQuotation.id == cot["id"]).first()
         cot_row.productos = [{"product_name": "X", "qty": 1, "unit_price_cop": 1000}]

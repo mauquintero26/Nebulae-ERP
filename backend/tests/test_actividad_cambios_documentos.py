@@ -218,6 +218,20 @@ def test_sin_updated_by_el_renglon_queda_a_nombre_del_usuario_autenticado(app_cl
     assert actividad["user_name"] and "@" in actividad["user_name"]
 
 
+def test_crear_el_pedido_desde_la_cotizacion_deja_su_registro_en_el_pedido(app_client, db, admin_token):
+    """El pedido nacia con la Actividad vacia: solo la cotizacion registraba la conversion."""
+    cot = _cot(db, "COT-ACT009", estado="CONFIRMADA", sc_numero="SC-ACT009", total_cop=2000, subtotal_cop=2000,
+               productos=[_linea("Cuna", 2, 1000)], gate2_confirmed_at=datetime.utcnow())
+    resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/confirmar", json={"user_name": "asesor@test"},
+                           headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    ven_id = resp.json()["data"]["sale_order_id"]
+    creado = [a for a in _actividades(app_client, admin_token, "pedidos", ven_id) if a["action"] == "CREATED"]
+    assert len(creado) == 1
+    assert "creado desde la cotización COT-ACT009 (solicitud SC-ACT009)" in creado[0]["description"]
+    assert creado[0]["user_name"] == "asesor@test"
+
+
 def _es_utc_con_zona_y_reciente(created_at):
     assert created_at.endswith("Z"), created_at
     instante = datetime.fromisoformat(created_at.replace("Z", "+00:00"))

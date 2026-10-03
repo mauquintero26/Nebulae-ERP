@@ -257,6 +257,12 @@ def afecta_precio(cambios):
     return any(c["campo"] in _AFECTA_PRECIO for c in cambios)
 
 
+def cambian_productos(antes, despues):
+    """True si cambio algo de los productos que ve el cliente (linea agregada o quitada, nombre,
+    cantidad o precio). Vincular una linea al catalogo (sku) no cuenta, ni reordenarlas."""
+    return any(c["campo"] == "productos" for c in _cambios_productos(_lineas(antes), _lineas(despues)))
+
+
 def _titulo_edicion(entidad, cambios):
     etiquetas = []
     for c in cambios:

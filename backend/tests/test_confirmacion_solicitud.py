@@ -14,9 +14,14 @@ def auth(token):
     return {"Authorization": f"Bearer {token}"}
 
 
+# enviar-confirmacion y confirmar exigen productos (una SC sin productos no tiene nada que el
+# cliente pueda confirmar ni que cotizar), asi que las SC de estas pruebas los traen.
+PRODUCTOS = [{"product_name": "Producto Prueba", "qty": 1}]
+
+
 def test_enviar_sc_para_confirmacion_requiere_asesor(app_client, db, admin_token):
     from app.models.erp_documents import CustomerRequest
-    sc = CustomerRequest(numero="SC-TESTCONF1", customer_name="Cliente Prueba", estado="BORRADOR")
+    sc = CustomerRequest(productos=PRODUCTOS, numero="SC-TESTCONF1", customer_name="Cliente Prueba", estado="BORRADOR")
     db.add(sc); db.commit(); db.refresh(sc)
 
     resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/enviar-confirmacion", json={"user_name": "test"}, headers=auth(admin_token))
@@ -25,7 +30,7 @@ def test_enviar_sc_para_confirmacion_requiere_asesor(app_client, db, admin_token
 
 def test_asignar_asesor_promueve_a_asignada(app_client, db, admin_token, user_admin):
     from app.models.erp_documents import CustomerRequest
-    sc = CustomerRequest(numero="SC-TESTCONF2", customer_name="Cliente Prueba", estado="BORRADOR")
+    sc = CustomerRequest(productos=PRODUCTOS, numero="SC-TESTCONF2", customer_name="Cliente Prueba", estado="BORRADOR")
     db.add(sc); db.commit(); db.refresh(sc)
 
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"advisor_user_id": user_admin.id, "updated_by": "test"}, headers=auth(admin_token))
@@ -46,7 +51,7 @@ def test_asignar_asesor_promueve_a_asignada(app_client, db, admin_token, user_ad
 
 def test_enviar_y_confirmar_via_link(app_client, db, admin_token, user_admin):
     from app.models.erp_documents import CustomerRequest
-    sc = CustomerRequest(numero="SC-TESTCONF3", customer_name="Cliente Prueba",
+    sc = CustomerRequest(productos=PRODUCTOS, numero="SC-TESTCONF3", customer_name="Cliente Prueba",
                           customer_email="cliente@test.com", estado="ASIGNADA", advisor_user_id=user_admin.id)
     db.add(sc); db.commit(); db.refresh(sc)
 
@@ -89,7 +94,7 @@ def test_enviar_y_confirmar_via_link(app_client, db, admin_token, user_admin):
 
 def test_confirmar_solicitud_exige_confirmada(app_client, db, admin_token):
     from app.models.erp_documents import CustomerRequest
-    sc = CustomerRequest(numero="SC-TESTCONF4", customer_name="Cliente Prueba", estado="ASIGNADA")
+    sc = CustomerRequest(productos=PRODUCTOS, numero="SC-TESTCONF4", customer_name="Cliente Prueba", estado="ASIGNADA")
     db.add(sc); db.commit(); db.refresh(sc)
     resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/confirmar", json={"user_name": "test"}, headers=auth(admin_token))
     assert resp.status_code == 400
@@ -105,7 +110,7 @@ def test_patch_generico_no_puede_forzar_confirmada(app_client, db, admin_token):
     podía seguir confirmando con una sola llamada cruda, sin que el cliente confirmara
     nada."""
     from app.models.erp_documents import CustomerRequest
-    sc = CustomerRequest(numero="SC-TESTCONF5", customer_name="Cliente Prueba", estado="PENDIENTE_CONFIRMACION")
+    sc = CustomerRequest(productos=PRODUCTOS, numero="SC-TESTCONF5", customer_name="Cliente Prueba", estado="PENDIENTE_CONFIRMACION")
     db.add(sc); db.commit(); db.refresh(sc)
 
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": "CONFIRMADA", "updated_by": "test"}, headers=auth(admin_token))
@@ -124,7 +129,7 @@ def test_patch_generico_no_puede_forzar_asignada_ni_pendiente_confirmacion(app_c
     sin advisor necesariamente involucrado y sin ningun token -- dejaba la SC mal
     etiquetada."""
     from app.models.erp_documents import CustomerRequest
-    sc = CustomerRequest(numero="SC-TESTCONF16", customer_name="Cliente Prueba", estado="BORRADOR")
+    sc = CustomerRequest(productos=PRODUCTOS, numero="SC-TESTCONF16", customer_name="Cliente Prueba", estado="BORRADOR")
     db.add(sc); db.commit(); db.refresh(sc)
 
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": "ASIGNADA", "updated_by": "test"}, headers=auth(admin_token))
@@ -148,7 +153,7 @@ def test_confirmar_solicitud_rechaza_si_ya_tiene_cotizacion(app_client, db, admi
     en test_crm_lead_movimiento_automatico.py), sin ejercitar update_cotizacion -- lo que se
     prueba aqui es la precondicion de confirmar_solicitud, no la sincronizacion en si."""
     from app.models.erp_documents import CustomerRequest, SalesQuotation
-    sc = CustomerRequest(numero="SC-TESTCONF6", customer_name="Cliente Prueba", estado="BORRADOR")
+    sc = CustomerRequest(productos=PRODUCTOS, numero="SC-TESTCONF6", customer_name="Cliente Prueba", estado="BORRADOR")
     db.add(sc); db.commit(); db.refresh(sc)
     cot = SalesQuotation(numero="COT-TESTCONF6", sc_id=sc.id, sc_numero=sc.numero,
                           customer_name="Cliente Prueba", estado="CONFIRMADA")
@@ -170,7 +175,7 @@ def test_link_no_confirma_sc_cancelada(app_client, db, admin_token, user_admin):
     revivirla a CONFIRMADA pese a estar en la papelera (eliminada_at/razon_cancelacion ya
     establecidos). Prueba el flujo real completo: enviar -> cancelar -> click en el link."""
     from app.models.erp_documents import CustomerRequest
-    sc = CustomerRequest(numero="SC-TESTCONF7", customer_name="Cliente Prueba",
+    sc = CustomerRequest(productos=PRODUCTOS, numero="SC-TESTCONF7", customer_name="Cliente Prueba",
                           customer_email="cliente7@test.com", estado="ASIGNADA", advisor_user_id=user_admin.id)
     db.add(sc); db.commit(); db.refresh(sc)
 
@@ -248,7 +253,7 @@ def test_confirmar_solicitud_rechaza_tras_desvincular_cotizacion(app_client, db,
     mismo escenario), porque lo que esta bajo prueba es la precondicion de
     confirmar_solicitud, no la sincronizacion en si."""
     from app.models.erp_documents import CustomerRequest, SalesQuotation
-    sc = CustomerRequest(numero="SC-TESTCONF8", customer_name="Cliente Prueba",
+    sc = CustomerRequest(productos=PRODUCTOS, numero="SC-TESTCONF8", customer_name="Cliente Prueba",
                           estado="ASIGNADA", advisor_user_id=user_admin.id)
     db.add(sc); db.commit(); db.refresh(sc)
     cot = SalesQuotation(numero="COT-TESTCONF8", sc_id=sc.id, sc_numero=sc.numero,
@@ -274,7 +279,7 @@ def test_reset_a_borrador_con_asesor_todavia_puesto_vuelve_a_asignada(app_client
     advisor_user_id sigue siendo no nulo (no se toco en el mismo PATCH), la SC se
     promueve de inmediato de vuelta a ASIGNADA en vez de quedarse en BORRADOR."""
     from app.models.erp_documents import CustomerRequest
-    sc = CustomerRequest(numero="SC-TESTCONF9", customer_name="Cliente Prueba",
+    sc = CustomerRequest(productos=PRODUCTOS, numero="SC-TESTCONF9", customer_name="Cliente Prueba",
                           estado="ASIGNADA", advisor_user_id=user_admin.id)
     db.add(sc); db.commit(); db.refresh(sc)
 
@@ -292,7 +297,7 @@ def test_restaurar_solicitud_con_asesor_todavia_puesto_vuelve_a_asignada(app_cli
     restaurarse a ASIGNADA, no a un BORRADOR-con-asesor sin salida."""
     import datetime
     from app.models.erp_documents import CustomerRequest
-    sc = CustomerRequest(numero="SC-TESTCONF13", customer_name="Cliente Prueba",
+    sc = CustomerRequest(productos=PRODUCTOS, numero="SC-TESTCONF13", customer_name="Cliente Prueba",
                           estado="CANCELADA", advisor_user_id=user_admin.id,
                           razon_cancelacion="Prueba", eliminada_at=datetime.datetime.utcnow())
     db.add(sc); db.commit(); db.refresh(sc)
@@ -308,7 +313,7 @@ def test_quitar_asesor_estando_pendiente_degrada_a_borrador_y_revoca_token(app_c
     BORRADOR (en vez de quedar "flotando" ofreciendo acciones de Gate 1 sin asesor) y
     se revoca cualquier token pendiente."""
     from app.models.erp_documents import CustomerRequest
-    sc = CustomerRequest(numero="SC-TESTCONF10", customer_name="Cliente Prueba",
+    sc = CustomerRequest(productos=PRODUCTOS, numero="SC-TESTCONF10", customer_name="Cliente Prueba",
                           customer_email="cliente10@test.com", estado="ASIGNADA", advisor_user_id=user_admin.id)
     db.add(sc); db.commit(); db.refresh(sc)
 
@@ -333,7 +338,7 @@ def test_reenviar_confirmacion_desde_pendiente_revoca_el_anterior(app_client, db
     PENDIENTE_CONFIRMACION como estado de entrada (reenvio), revocando el token
     anterior antes de emitir uno nuevo."""
     from app.models.erp_documents import CustomerRequest
-    sc = CustomerRequest(numero="SC-TESTCONF11", customer_name="Cliente Prueba",
+    sc = CustomerRequest(productos=PRODUCTOS, numero="SC-TESTCONF11", customer_name="Cliente Prueba",
                           customer_email="cliente11@test.com", estado="ASIGNADA", advisor_user_id=user_admin.id)
     db.add(sc); db.commit(); db.refresh(sc)
 
@@ -363,7 +368,7 @@ def test_enviar_confirmacion_rechaza_sin_asesor_aunque_este_asignada(app_client,
     create_solicitud), pero se valida explicitamente en vez de asumirlo. Estado
     sintetico (no alcanzable por el flujo normal) solo para probar el check en si."""
     from app.models.erp_documents import CustomerRequest
-    sc = CustomerRequest(numero="SC-TESTCONF12", customer_name="Cliente Prueba", estado="ASIGNADA")
+    sc = CustomerRequest(productos=PRODUCTOS, numero="SC-TESTCONF12", customer_name="Cliente Prueba", estado="ASIGNADA")
     db.add(sc); db.commit(); db.refresh(sc)
 
     resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/enviar-confirmacion", json={"user_name": "test"}, headers=auth(admin_token))
@@ -398,7 +403,7 @@ def test_pill_cancelar_restaurar_reenviar_revoca_token_viejo(app_client, db, adm
         assert row is not None
         return row.used_at
 
-    sc = CustomerRequest(numero="SC-TESTCONF14", customer_name="Cliente Prueba",
+    sc = CustomerRequest(productos=PRODUCTOS, numero="SC-TESTCONF14", customer_name="Cliente Prueba",
                           customer_email="cliente14@test.com", estado="ASIGNADA", advisor_user_id=user_admin.id)
     db.add(sc); db.commit(); db.refresh(sc)
 
@@ -452,7 +457,7 @@ def test_confirmar_solicitud_consume_gate1_confirmed_at_al_crear_cotizacion(app_
     endpoints publicos reales -> confirmar_solicitud -> 200 -> la marca debe quedar
     en None."""
     from app.models.erp_documents import CustomerRequest
-    sc = CustomerRequest(numero="SC-TESTCONF15", customer_name="Cliente Prueba",
+    sc = CustomerRequest(productos=PRODUCTOS, numero="SC-TESTCONF15", customer_name="Cliente Prueba",
                           customer_email="cliente15@test.com", estado="ASIGNADA", advisor_user_id=user_admin.id)
     db.add(sc); db.commit(); db.refresh(sc)
 

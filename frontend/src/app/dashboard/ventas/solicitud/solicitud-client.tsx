@@ -233,6 +233,9 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
   const [usuarios, setUsuarios] = useState<{id:number;email:string;role:string}[]>([]);
   const [prodName, setProdName] = useState('');
   const [prodQty, setProdQty] = useState(1);
+  // SKU del producto elegido en el catalogo: viaja en la linea para que la Cotizacion (y el
+  // Pedido) lo hereden vinculado, en vez de como texto libre. Se borra si se edita el texto.
+  const [prodSku, setProdSku] = useState<number | null>(null);
   const [productos, setProductos] = useState<any[]>([]);
   const [segSearch, setSegSearch] = useState('');
   const [segResults, setSegResults] = useState<any[]>([]);
@@ -280,7 +283,7 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
 
   useImperativeHandle(ref, () => ({
     getExtras: () => {
-      const prodsToSend = productos.length > 0 ? productos : (prodName ? [{ product_name: prodName, qty: prodQty, unit_price_cop: 0 }] : []);
+      const prodsToSend = productos.length > 0 ? productos : (prodName ? [{ product_name: prodName, qty: prodQty, unit_price_cop: 0, sku_id: prodSku }] : []);
       let notasConExtras = form.notas;
       if (form.tipo_solicitud === 'Programar Entrega' && envio.nombre_completo) {
         notasConExtras = `ENVIO: ${JSON.stringify(envio)}\n${form.notas}`;
@@ -290,7 +293,7 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
       return { productos: prodsToSend, notasConExtras };
     },
     reset: () => {
-      setProductos([]); setProdName(''); setProdQty(1);
+      setProductos([]); setProdName(''); setProdQty(1); setProdSku(null);
       setSegSearch(''); setSegResults([]);
       setEnvio({nombre_completo:'',cedula:'',direccion:'',ciudad:'',telefono:'',transportadora:'',tipo_envio:'Contraentrega',ven_ids:''});
       setDevVen(''); setDevPec(''); setDevMotivo('');
@@ -325,24 +328,24 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
       {/* TYPE-SPECIFIC FIELDS */}
       {isCotizacion&&(
         <div>
-          <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Producto a Cotizar <span className="text-slate-300 font-medium">(opcional)</span></label>
-          <ProductSearch value={prodName} onChange={v=>setProdName(v)} onSelect={p=>{setProdName(p.name||p.product_name);}}/>
+          <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Productos a Cotizar <span className="text-slate-300 font-medium">(puedes agregarlos después)</span></label>
+          <ProductSearch value={prodName} onChange={v=>{setProdName(v);setProdSku(null);}} onSelect={p=>{setProdName(p.name||p.product_name);setProdSku(p.id??null);}}/>
           {prodName&&(
             <div className="mt-2 flex items-center gap-2">
               <label className="text-xs text-slate-500">Cantidad:</label>
               <input type="number" min="1" value={prodQty} onChange={e=>setProdQty(Number(e.target.value))} className="w-20 border border-slate-200 rounded-lg px-2 py-1 text-sm text-center font-bold outline-none focus:ring-1 focus:ring-indigo-200"/>
-              <button type="button" onClick={()=>{if(prodName){setProductos(p=>[...p,{product_name:prodName,qty:prodQty,unit_price_cop:0}]);setProdName('');setProdQty(1);}}} className="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-lg text-xs font-bold hover:bg-indigo-200">+ Agregar</button>
+              <button type="button" onClick={()=>{if(prodName){setProductos(p=>[...p,{product_name:prodName,qty:prodQty,unit_price_cop:0,sku_id:prodSku}]);setProdName('');setProdQty(1);setProdSku(null);}}} className="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-lg text-xs font-bold hover:bg-indigo-200">+ Agregar</button>
             </div>
           )}
           {productos.length>0&&(
             <div className="mt-2 space-y-1">{productos.map((p,i)=>(
               <div key={i} className="flex items-center justify-between bg-slate-50 rounded-lg px-3 py-1.5">
-                <span className="text-sm font-bold text-slate-700">{p.product_name} x{p.qty}</span>
+                <span className="text-sm font-bold text-slate-700">{p.product_name} x{p.qty}{!p.sku_id&&<span className="ml-1.5 text-[10px] font-bold text-slate-400 uppercase">texto libre</span>}</span>
                 <button type="button" onClick={()=>setProductos(prev=>prev.filter((_,idx)=>idx!==i))} className="text-red-400 hover:text-red-600"><X size={13}/></button>
               </div>
             ))}</div>
           )}
-          <p className="text-xs text-slate-400 mt-2">Si no existe en el catalogo, dejalo en blanco y detallalo en Notas.</p>
+          <p className="text-xs text-slate-400 mt-2">Busca en el catálogo o escribe el nombre: si no existe, se agrega como texto libre. Sin productos la solicitud no se puede enviar al cliente ni cotizar.</p>
         </div>
       )}
 
