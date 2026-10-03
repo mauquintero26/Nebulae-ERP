@@ -45,4 +45,28 @@ console.log('--- TEST 4: margen 0 no altera el costo ---');
   assert.equal(unitPriceCop, 50000);
 }
 
+console.log('--- TEST 5: precio a peso entero (costo 222.600 con margen 35% -> $342.462) ---');
+{
+  const { totalCop, unitPriceCop } = computeMarginPrice(222600, 35, 1);
+  assert.equal(unitPriceCop, 342462, 'unitario redondeado al peso');
+  assert.equal(totalCop, 342462, 'total redondeado al peso');
+  assert.ok(Number.isInteger(unitPriceCop) && Number.isInteger(totalCop), 'ambos son enteros');
+}
+
+console.log('--- TEST 6: con qty > 1 el total es unitario x qty, entero y sin centavos ---');
+{
+  const { totalCop, unitPriceCop } = computeMarginPrice(445200, 35, 2);
+  assert.equal(unitPriceCop, 342462);
+  assert.equal(totalCop, 684924, 'dos unidades dan 684.924, no 684.923,077');
+  assert.equal(totalCop, unitPriceCop * 2, 'unitario * qty === total exacto');
+  assert.ok(Number.isInteger(unitPriceCop) && Number.isInteger(totalCop), 'ambos son enteros');
+}
+
+console.log('--- TEST 7: sin margen el costo tambien se redondea al peso ---');
+{
+  const { totalCop, unitPriceCop } = computeMarginPrice(50000.4, 0, 1);
+  assert.equal(unitPriceCop, 50000);
+  assert.equal(totalCop, 50000);
+}
+
 console.log('✓ Todos los tests de pricing pasaron exitosamente.');
