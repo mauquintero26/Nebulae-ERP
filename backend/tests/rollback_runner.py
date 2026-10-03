@@ -296,7 +296,9 @@ for nombre, fn in recolectar():
             return valor
 
         fn(**{p: resolver(p) for p in inspect.signature(fn).parameters})
-    except Exception:
+    except KeyboardInterrupt:
+        raise
+    except BaseException:  # pytest.fail / pytest.skip derivan de BaseException
         ok = False
         detalles.append(traceback.format_exc())
     try:
