@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { apiFetch, API_URL } from '@/lib/api';
+import { coincideProducto } from '@/lib/busqueda';
 import { SubNav, PageHeader, Badge, Drawer, Toast } from '@/components/ui';
 import { VEN_NAV } from './ven-nav';
 
@@ -322,7 +323,8 @@ export default function VentasHub() {
         (r.numero || '').toLowerCase().includes(q) ||
         (r.customer_name || r.cliente?.nombre || '').toLowerCase().includes(q) ||
         (r.advisor_name || r.asesor?.nombre || '').toLowerCase().includes(q) ||
-        (r.estado || '').toLowerCase().includes(q)
+        (r.estado || '').toLowerCase().includes(q) ||
+        coincideProducto(r, search)
       );
     }
     if(filterEstado) base = base.filter(r => r.estado === filterEstado);
@@ -652,7 +654,7 @@ export default function VentasHub() {
             <div className="flex items-center bg-white border border-slate-200 rounded-xl px-4 py-2.5 shadow-xs gap-2 flex-1 min-w-[280px] max-w-[500px]">
               <Search size={15} className="text-slate-400 shrink-0"/>
               <input value={search} onChange={e=>setSearch(e.target.value)}
-                placeholder="Buscar por número, cliente, asesor, estado..."
+                placeholder="Buscar por número, cliente, asesor, producto, estado..."
                 className="text-xs outline-none flex-1 bg-transparent text-slate-800 placeholder-slate-400"/>
               {search&&<button onClick={()=>setSearch('')}><X size={13} className="text-slate-400 hover:text-slate-600"/></button>}
             </div>

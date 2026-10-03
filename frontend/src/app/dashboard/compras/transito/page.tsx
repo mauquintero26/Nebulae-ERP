@@ -11,6 +11,7 @@ import { SubNav, PageHeader, StatCard, Badge, Button } from '@/components/ui';
 import { COMP_NAV } from '../comp-nav';
 
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
+import { coincideProducto } from '@/lib/busqueda';
 async function apiFetch(path: string, opts: RequestInit = {}) {
   const res = await _apiFetch(path, opts);
   const data = await res.json().catch(() => ({}));
@@ -92,7 +93,7 @@ export default function TransitoPage() {
       if (onlyOverdue && !p.is_overdue) return false;
       if (!q) return true;
       return [p.numero, p.supplier_name, p.ven_numero].filter(Boolean)
-        .some((v: string) => v.toLowerCase().includes(q));
+        .some((v: string) => v.toLowerCase().includes(q)) || coincideProducto(p, q);
     });
     list = [...list].sort((a, b) => {
       if (!!a.is_overdue !== !!b.is_overdue) return a.is_overdue ? -1 : 1;
@@ -158,7 +159,7 @@ export default function TransitoPage() {
         <div className="flex items-center gap-3">
           <div className="relative flex-1 max-w-sm">
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar PEC, proveedor, PVEN..."
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar PEC, proveedor, PVEN, producto..."
               className="w-full bg-white border border-slate-200 rounded-xl pl-9 pr-3 py-2.5 text-sm outline-none focus:border-blue-400" />
           </div>
           <button onClick={() => setOnlyOverdue(v => !v)}

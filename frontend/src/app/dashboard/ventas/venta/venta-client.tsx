@@ -9,6 +9,7 @@ import {
 import { useSearchParams, useRouter } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
+import { coincideProducto } from '@/lib/busqueda';
 import { SubNav, PageHeader, StatCard, Button, EmptyState, Toast, Modal } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
 
@@ -103,7 +104,7 @@ export default function VentaClient() {
   const filtered = useMemo(()=>{
     let base=pedidos;
     if(activeTab!=='Todos') base=base.filter(p=>p.estado===tabEstado[activeTab]);
-    if(search){ const s=search.toLowerCase(); base=base.filter(p=>p.numero?.toLowerCase().includes(s)||p.customer_name?.toLowerCase().includes(s)||p.cot_numero?.toLowerCase().includes(s)||p.sc_numero?.toLowerCase().includes(s)); }
+    if(search){ const s=search.toLowerCase(); base=base.filter(p=>p.numero?.toLowerCase().includes(s)||p.customer_name?.toLowerCase().includes(s)||p.cot_numero?.toLowerCase().includes(s)||p.sc_numero?.toLowerCase().includes(s)||coincideProducto(p,search)); }
     return base;
   },[pedidos,activeTab,search]);
 
@@ -186,7 +187,7 @@ export default function VentaClient() {
           <div className="flex items-center bg-white border border-gray-200 rounded-xl px-3 py-2 gap-2 flex-1 max-w-[420px] shadow-sm">
             <Search size={14} className="text-gray-400 shrink-0"/>
             <input value={search} onChange={e=>setSearch(e.target.value)}
-              placeholder="Buscar por numero, cliente, asesor..."
+              placeholder="Buscar por numero, cliente, producto..."
               className="text-sm bg-transparent outline-none flex-1 placeholder-gray-400"/>
             {search&&<button onClick={()=>setSearch('')}><X size={13} className="text-gray-400 hover:text-gray-600"/></button>}
           </div>

@@ -13,6 +13,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import text, func
 from typing import Optional
 from app.db.database import get_db
+from app.core.busqueda import productos_ilike
 from app.models.erp_documents import (
     Supplier, Casillero, PurchaseOrderFull, GoodsReceipt, ActivityLog, SaleOrder
 )
@@ -611,7 +612,8 @@ def list_pec(
         q = q.filter(
             PurchaseOrderFull.numero.ilike(like) |
             PurchaseOrderFull.supplier_name.ilike(like) |
-            PurchaseOrderFull.ven_numero.ilike(like)
+            PurchaseOrderFull.ven_numero.ilike(like) |
+            productos_ilike(PurchaseOrderFull.productos, like)
         )
     total = q.count()
     items = q.order_by(PurchaseOrderFull.created_at.desc()).offset(offset).limit(limit).all()

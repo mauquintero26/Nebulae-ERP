@@ -21,6 +21,7 @@ from app.api.dependencies import (
     ROLE_ADMIN, ROLE_ASESOR, ROLE_COMPRAS, ROLE_FINANZAS, ALL_ERP_ROLES
 )
 from app.models.users import User
+from app.core.busqueda import productos_ilike
 from app.api.v1.schemas_compras import CancelarSolicitudBody
 from app.api.v1.crm import mover_lead_de_solicitud
 import datetime
@@ -282,7 +283,8 @@ def list_solicitudes(
         q = q.filter(
             CustomerRequest.numero.ilike(like) |
             CustomerRequest.customer_name.ilike(like) |
-            CustomerRequest.advisor_name.ilike(like)
+            CustomerRequest.advisor_name.ilike(like) |
+            productos_ilike(CustomerRequest.productos, like)
         )
     total = q.count()
     items = q.order_by(CustomerRequest.created_at.desc()).offset(offset).limit(limit).all()
@@ -729,7 +731,8 @@ def list_cotizaciones(
             SalesQuotation.numero.ilike(like) |
             SalesQuotation.customer_name.ilike(like) |
             SalesQuotation.cotizador.ilike(like) |
-            SalesQuotation.sc_numero.ilike(like)
+            SalesQuotation.sc_numero.ilike(like) |
+            productos_ilike(SalesQuotation.productos, like)
         )
     total = q.count()
     items = q.order_by(SalesQuotation.created_at.desc()).offset(offset).limit(limit).all()
@@ -1232,7 +1235,8 @@ def list_pedidos(
             SaleOrder.customer_name.ilike(like) |
             SaleOrder.sc_numero.ilike(like) |
             SaleOrder.cot_numero.ilike(like) |
-            SaleOrder.pweb_numero.ilike(like)
+            SaleOrder.pweb_numero.ilike(like) |
+            productos_ilike(SaleOrder.productos, like)
         )
     total = q.count()
     items = q.order_by(SaleOrder.created_at.desc()).offset(offset).limit(limit).all()

@@ -625,7 +625,7 @@ export default function CotizacionClient() {
             <div className="flex items-center gap-3 pt-3 pb-1 border-t border-slate-100 mt-3">
               <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-2 gap-2 flex-1 max-w-[420px] shadow-sm focus-within:border-amber-400 focus-within:ring-2 focus-within:ring-amber-100">
                 <Search className="text-slate-400 shrink-0" size={14}/>
-                <input type="text" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar COT, cliente, SC..." className="w-full bg-transparent text-sm font-medium text-slate-700 outline-none placeholder-slate-400"/>
+                <input type="text" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar COT, cliente, SC, producto..." className="w-full bg-transparent text-sm font-medium text-slate-700 outline-none placeholder-slate-400"/>
                 {search&&<button onClick={()=>setSearch('')}><X size={13} className="text-slate-400 hover:text-slate-600"/></button>}
               </div>
               <button onClick={load} className="flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-600 text-sm font-semibold hover:bg-slate-50 shadow-sm">

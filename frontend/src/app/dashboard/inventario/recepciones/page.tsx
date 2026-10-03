@@ -95,7 +95,7 @@ export default function InventarioRecepcionesPage() {
             <div className="relative flex items-center bg-white border border-slate-300 rounded-xl px-3 py-2 shadow-sm">
               <Search className="text-slate-400 mr-2" size={16} />
               <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-                placeholder="Buscar ENINV, PEC..." className="bg-transparent text-sm outline-none w-52 text-slate-700" />
+                placeholder="Buscar ENINV, PEC, producto..." className="bg-transparent text-sm outline-none w-60 text-slate-700" />
               <button onClick={load} className="ml-2 text-slate-400"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /></button>
             </div>
           </div>

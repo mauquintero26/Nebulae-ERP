@@ -8,6 +8,7 @@ import {
   DollarSign, ShieldAlert, MessageCircle
 } from 'lucide-react';
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
+import { coincideProducto } from '@/lib/busqueda';
 import { SubNav, PageHeader, StatCard, Badge, Drawer, Button, Toast, ToastMsg } from '@/components/ui';
 import { INV_NAV } from '../inv-nav';
 
@@ -142,7 +143,8 @@ Este pedido tiene un saldo pendiente de ${fCOP(saldoPendiente)} (40%).
     const match = !search ||
       (v.numero || '').toLowerCase().includes(term) ||
       (v.customer_name || '').toLowerCase().includes(term) ||
-      (v.cliente_telefono || '').toLowerCase().includes(term);
+      (v.cliente_telefono || '').toLowerCase().includes(term) ||
+      coincideProducto(v, search);
 
     if (!match) return false;
 
@@ -213,7 +215,7 @@ Este pedido tiene un saldo pendiente de ${fCOP(saldoPendiente)} (40%).
                 type="text"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder="Buscar PVEN, cliente o teléfono..."
+                placeholder="Buscar PVEN, cliente, teléfono o producto..."
                 className="pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-xs outline-none focus:ring-2 focus:ring-rose-400 w-full"
               />
             </div>

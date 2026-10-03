@@ -18,6 +18,7 @@ import { apiFetch, API_URL, getToken } from '@/lib/api';
 import { SubNav, PageHeader, StatCard, Badge as SharedBadge, Modal, Toast as SharedToast, Button, EmptyState } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
 import { esAsesorElegible, getUsuarioActual } from '../flujo';
+import { coincideProducto } from '@/lib/busqueda';
 
 export const TIPOS_SC = [
   'Cotizacion de Producto',
@@ -349,7 +350,7 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
         <div>
           <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Buscar SC / COT / Pedido de Venta</label>
           <div className="relative">
-            <input type="text" value={segSearch} onChange={e=>onSegSearch(e.target.value)} placeholder="Numero o nombre de cliente..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-200 outline-none"/>
+            <input type="text" value={segSearch} onChange={e=>onSegSearch(e.target.value)} placeholder="Numero, cliente o producto..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-200 outline-none"/>
             {segResults.length>0&&(
               <div className="absolute top-full left-0 right-0 z-50 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-48 overflow-y-auto">
                 {segResults.map((r:any,i:number)=>(
@@ -1033,7 +1034,7 @@ export default function SolicitudClient() {
   }).length;
 
   const filtered=solicitudes.filter(sc=>{
-    const ms=!search||(sc.numero||'').toLowerCase().includes(search.toLowerCase())||(sc.customer_name||'').toLowerCase().includes(search.toLowerCase())||(sc.advisor_name||'').toLowerCase().includes(search.toLowerCase());
+    const ms=!search||(sc.numero||'').toLowerCase().includes(search.toLowerCase())||(sc.customer_name||'').toLowerCase().includes(search.toLowerCase())||(sc.advisor_name||'').toLowerCase().includes(search.toLowerCase())||coincideProducto(sc,search);
     if(!ms) return false;
     if(activeTab==='Activas') return sc.tipo_solicitud!=='Soporte Tecnico'&&sc.estado!=='CONFIRMADA'&&sc.estado!=='CANCELADA';
     if(activeTab==='Confirmadas') return sc.estado==='CONFIRMADA';
@@ -1242,7 +1243,7 @@ export default function SolicitudClient() {
               <div className="flex items-center gap-3 pt-3 mt-3 border-t border-slate-100">
                 <div className="flex items-center bg-white border border-slate-200 rounded-xl px-3 py-2 gap-2 flex-1 max-w-[420px] shadow-sm">
                   <Search className="text-slate-400 shrink-0" size={14}/>
-                  <input type="text" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar SC, cliente, asesor..." className="w-full bg-transparent text-sm font-medium text-slate-700 outline-none placeholder-slate-400"/>
+                  <input type="text" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar SC, cliente, asesor, producto..." className="w-full bg-transparent text-sm font-medium text-slate-700 outline-none placeholder-slate-400"/>
                   {search&&<button onClick={()=>setSearch('')}><X size={13} className="text-slate-400 hover:text-slate-600"/></button>}
                 </div>
                 <button onClick={load} className="flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-600 text-sm font-semibold hover:bg-slate-50 shadow-sm">

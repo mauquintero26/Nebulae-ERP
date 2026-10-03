@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from typing import Optional
 from app.db.database import get_db
+from app.core.busqueda import productos_ilike
 from app.models.erp_documents import SaleOrder, ActivityLog
 from app.models.customers import Customer
 import datetime
@@ -493,7 +494,7 @@ def list_web_orders(estado: Optional[str] = None, search: Optional[str] = None, 
     if estado: q = q.filter(SaleOrder.estado == estado)
     if search:
         like = f"%{search}%"
-        q = q.filter(SaleOrder.pweb_numero.ilike(like) | SaleOrder.customer_name.ilike(like) | SaleOrder.customer_email.ilike(like))
+        q = q.filter(SaleOrder.pweb_numero.ilike(like) | SaleOrder.customer_name.ilike(like) | SaleOrder.customer_email.ilike(like) | productos_ilike(SaleOrder.productos, like))
     total = q.count()
     items = q.order_by(SaleOrder.created_at.desc()).offset(offset).limit(limit).all()
     data = [{"id": o.id, "numero": o.pweb_numero or o.numero, "pven_numero": o.numero, "customer_name": o.customer_name or "Cliente Web", "customer_email": o.customer_email or "", "customer_phone": o.customer_phone or "", "total_cop": float(o.total_cop or 0), "estado": o.estado, "canal_venta": o.canal_venta, "productos": o.productos or [], "created_at": o.created_at.isoformat() if o.created_at else None} for o in items]

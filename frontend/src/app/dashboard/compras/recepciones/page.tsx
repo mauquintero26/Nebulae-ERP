@@ -7,6 +7,7 @@ import {
   Plus, Info, Check
 } from 'lucide-react';
 import { apiFetch as _apiFetch } from '@/lib/api';
+import { coincideProducto } from '@/lib/busqueda';
 import { SubNav, PageHeader, StatCard, Badge, Modal, Drawer, Toast, Button, EmptyState } from '@/components/ui';
 import { COMP_NAV } from '../comp-nav';
 
@@ -131,7 +132,8 @@ export default function RecepcionesPage() {
     const match = !search ||
       (r.numero || '').toLowerCase().includes(term) ||
       (r.pec_numero || '').toLowerCase().includes(term) ||
-      (r.proveedor_nombre || '').toLowerCase().includes(term);
+      (r.proveedor_nombre || '').toLowerCase().includes(term) ||
+      coincideProducto(r, search);
 
     if (!match) return false;
     if (activeTab === 'Pendientes') return r.estado === 'PENDIENTE' || !r.stock_actualizado;
@@ -218,7 +220,7 @@ export default function RecepcionesPage() {
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Buscar ENINV, PEC, Proveedor..."
+              placeholder="Buscar ENINV, PEC, Proveedor, producto..."
               className="pl-9 pr-4 py-2 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-teal-500 w-full bg-white"
             />
           </div>

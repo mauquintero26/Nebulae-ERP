@@ -1618,7 +1618,7 @@ export default function PedidosCompraPage() {
           <div className="flex items-center gap-3">
             <div className="flex items-center bg-white border border-gray-200 rounded-xl px-4 py-2.5 shadow-sm gap-2 flex-1 max-w-[500px]">
               <Search size={15} className="text-gray-400 shrink-0"/>
-              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar PEC, proveedor, PVEN numero..." className="text-sm outline-none flex-1 bg-transparent text-gray-700 placeholder-gray-400"/>
+              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar PEC, proveedor, PVEN o producto..." className="text-sm outline-none flex-1 bg-transparent text-gray-700 placeholder-gray-400"/>
               {search && <button onClick={()=>setSearch('')}><X size={13} className="text-gray-400 hover:text-gray-600"/></button>}
             </div>
             <div className="relative">
