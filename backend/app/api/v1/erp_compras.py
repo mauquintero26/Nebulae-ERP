@@ -271,7 +271,8 @@ def _log_dict(l: ActivityLog) -> dict:
         "entity_numero": l.entity_numero, "action": l.action,
         "description": l.description, "old_estado": l.old_estado,
         "new_estado": l.new_estado, "user_name": l.user_name,
-        "created_at": l.created_at.isoformat() if l.created_at else None,
+        # UTC sin zona (utcnow): con la "Z" el navegador la convierte a la hora local (ver _log_dict de erp_ventas.py).
+        "created_at": (l.created_at.isoformat() + "Z") if l.created_at else None,
         "extra_data": l.extra_data,
     }
 

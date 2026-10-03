@@ -15,6 +15,7 @@ import { apiFetch, API_URL } from '@/lib/api';
 import { coincideProducto } from '@/lib/busqueda';
 import { SubNav, PageHeader, Badge, Drawer, Toast } from '@/components/ui';
 import { VEN_NAV } from './ven-nav';
+import { CambiosDeActividad } from './flujo';
 
 const fCOP  = (v: any) => { const n = Number(v)||0; return n > 0 ? '$' + n.toLocaleString('es-CO') : '$' + 0; };
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
@@ -128,9 +129,10 @@ function ActivitiesPanel({row,onClose}:{row:any,onClose:()=>void}) {
                 {[...hist].reverse().map((a:any,i:number)=>(
                   <div key={i} className="flex gap-3 pl-7 relative">
                     <div className="absolute left-0 top-2 w-4 h-4 rounded-full border-2 border-white"
-                      style={{backgroundColor:({CREATED:'#6366f1',ESTADO_CHANGED:'#f59e0b',SENT:'#10b981',CONFIRMED:'#059669',REJECTED:'#ef4444',UPDATED:'#3b82f6'}as any)[a.action]||'#94a3b8'}}/>
+                      style={{backgroundColor:({CREATED:'#6366f1',ESTADO_CHANGED:'#f59e0b',SENT:'#10b981',CONFIRMED:'#059669',REJECTED:'#ef4444',UPDATED:'#3b82f6',RECOTIZADA:'#f97316'}as any)[a.action]||'#94a3b8'}}/>
                     <div className="flex-1 bg-white border border-slate-100 rounded-xl p-3 shadow-xs">
                       <p className="text-sm font-medium text-slate-700">{a.description}</p>
+                      <div className="mt-1.5"><CambiosDeActividad extra={a.extra_data}/></div>
                       <p className="text-xs text-slate-400 mt-1">{fDate(a.created_at)} {fTime(a.created_at)}{a.user_name&&<span className="ml-2 font-medium">- {a.user_name}</span>}</p>
                     </div>
                   </div>

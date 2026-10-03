@@ -26,6 +26,7 @@ import {
 // llega a ningun lado, es un problema ya conocido y diferido por separado, simetrico
 // entre ambos gates -- no se corrige aqui).
 import { ChannelModal } from '../../cotizacion/cotizacion-client';
+import { CambiosDeActividad } from '../../flujo';
 import {
   NextStepCard, EnlaceConfirmacionModal, esAsesorElegible, getUsuarioActual, type UsuarioActual,
 } from '../../flujo';
@@ -41,6 +42,7 @@ const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
   CHATTER:        {icon: MessageSquare, color: 'text-cyan-600 bg-cyan-50'},
   CANCELLED:      {icon: XCircle,       color: 'text-rose-500 bg-rose-50'},
   RESTORED:       {icon: RotateCcw,     color: 'text-emerald-500 bg-emerald-50'},
+  UPDATED:        {icon: FileText,      color: 'text-purple-500 bg-purple-50'},
 };
 const DEFAULT_ACTIVITY_STYLE = {icon: Activity, color: 'text-slate-500 bg-slate-50'};
 
@@ -53,8 +55,10 @@ const ACTIVITY_TYPE_LABELS: Record<string, string> = {
   CHATTER: 'Chatter',
   CANCELLED: 'Cancelación',
   RESTORED: 'Restauración',
+  UPDATED: 'Ediciones',
+  FECHA_ENTREGA_MODIFICADA: 'Fecha de entrega',
 };
-const ACTIVITY_TYPE_ORDER = ['ESTADO_CHANGED', 'NOTE_ADDED', 'CREATED', 'CHATTER', 'CANCELLED', 'RESTORED'];
+const ACTIVITY_TYPE_ORDER = ['ESTADO_CHANGED', 'UPDATED', 'FECHA_ENTREGA_MODIFICADA', 'NOTE_ADDED', 'CREATED', 'CHATTER', 'CANCELLED', 'RESTORED'];
 
 function SolicitudDetalleContent() {
   const params = useParams();
@@ -778,6 +782,7 @@ function SolicitudDetalleContent() {
                               <span className="font-bold text-slate-800 text-sm">{a.description || a.action}</span>
                               <span className="text-[10px] font-bold text-slate-400 whitespace-nowrap shrink-0">{fDate(a.created_at)} {fTime(a.created_at)}</span>
                             </div>
+                            <CambiosDeActividad extra={a.extra_data} />
                             {a.old_estado && a.new_estado && (
                               <p className="flex items-center gap-1.5 mb-2 flex-wrap">
                                 <EstadoBadge estado={a.old_estado} /><ArrowRight size={10} className="text-slate-300" /><EstadoBadge estado={a.new_estado} />

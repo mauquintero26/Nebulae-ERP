@@ -15,7 +15,7 @@ import {
   ChannelModal, CalculadorModal, DeleteConfirm, PropagarPvenConfirm,
   ESTADOS as ESTADOS_COT, fCOP, fDate, fTime,
 } from '../cotizacion-client';
-import { NextStepCard, EnlaceConfirmacionModal, returnToSeguro } from '../../flujo';
+import { NextStepCard, EnlaceConfirmacionModal, CambiosDeActividad, returnToSeguro } from '../../flujo';
 
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
 const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
@@ -25,6 +25,7 @@ const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
   CONFIRMED:      {icon: CheckCircle2,  color: 'text-emerald-500 bg-emerald-50'},
   REJECTED:       {icon: XCircle,       color: 'text-rose-500 bg-rose-50'},
   UPDATED:        {icon: FileText,      color: 'text-purple-500 bg-purple-50'},
+  RECOTIZADA:     {icon: RotateCcw,     color: 'text-orange-500 bg-orange-50'},
   CHATTER:        {icon: MessageSquare, color: 'text-cyan-600 bg-cyan-50'},
   NOTE_ADDED:     {icon: MessageSquare, color: 'text-blue-500 bg-blue-50'},
 };
@@ -252,11 +253,15 @@ function CotizacionDetalleContent() {
     try {
       await apiFetch(`/ventas/cotizaciones/${cotizacion.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ ...data, updated_by: currentUser }),
+        // recotizacion: el backend lo deja en la Actividad como RECOTIZADA aunque los precios queden igual.
+        body: JSON.stringify({ ...data, recotizacion: true, updated_by: currentUser }),
       });
       const pvenVigente = pedidosVenta.filter((v: any) => v.estado !== 'CANCELADO').pop();
       if (propagarAPven && pvenVigente) {
         const nuevoSaldo = Number(data.total_cop || 0) - Number(pvenVigente.anticipo_cop || 0);
+        const notaCredito = nuevoSaldo < 0 ? ` Crédito a favor del cliente: ${fCOP(Math.abs(nuevoSaldo))}.` : '';
+        // El PATCH del pedido ya registra su propio renglon de Actividad (con el detalle de lo que
+        // cambio); "motivo" le pone el titulo, en vez de un segundo POST /actividad que duplicaria el evento.
         await apiFetch(`/ventas/pedidos/${pvenVigente.id}`, {
           method: 'PATCH',
           body: JSON.stringify({
@@ -265,16 +270,8 @@ function CotizacionDetalleContent() {
             descuento_pct: data.descuento_pct,
             total_cop: data.total_cop,
             saldo_cop: nuevoSaldo,
+            motivo: `Precios actualizados por re-cotización de ${cotizacion?.numero || ''} (anticipo y pagos existentes no se modificaron).${notaCredito}`,
             updated_by: currentUser,
-          }),
-        });
-        const notaCredito = nuevoSaldo < 0 ? ` Crédito a favor del cliente: ${fCOP(Math.abs(nuevoSaldo))}.` : '';
-        await apiFetch(`/ventas/pedidos/${pvenVigente.id}/actividad`, {
-          method: 'POST',
-          body: JSON.stringify({
-            action: 'UPDATED',
-            description: `Precios actualizados por re-cotización de ${cotizacion?.numero || ''} (anticipo y pagos existentes no se modificaron).${notaCredito}`,
-            user_name: currentUser,
           }),
         });
       }
@@ -842,6 +839,7 @@ function CotizacionDetalleContent() {
                         <span className="font-bold text-slate-800 text-sm">{a.description || a.action}</span>
                         <span className="text-[10px] font-bold text-slate-400">{fDate(a.created_at)} {fTime(a.created_at)}</span>
                       </div>
+                      <CambiosDeActividad extra={a.extra_data} />
                       {a.old_estado && a.new_estado && (
                         <p className="text-sm text-slate-600 mb-3 leading-relaxed">{a.old_estado} / {a.new_estado}</p>
                       )}

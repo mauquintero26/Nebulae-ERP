@@ -22,6 +22,7 @@ from app.api.dependencies import (
 )
 from app.models.users import User
 from app.core.busqueda import productos_ilike
+from app.core import cambios_documento
 from app.api.v1.schemas_compras import CancelarSolicitudBody
 from app.api.v1.crm import mover_lead_de_solicitud
 import datetime
@@ -94,6 +95,37 @@ def _log(db: Session, entity_type: str, entity_id: int, entity_numero: str,
     )
     db.add(log)
     db.commit()
+
+def _registrar_cambios(db: Session, entidad: str, doc, antes: dict, body: dict, user: User,
+                       recotizacion: bool = False):
+    """Deja en la Actividad un renglon con lo que cambio este PATCH (campo: antes -> despues).
+
+    `antes` es la foto (cambios_documento.tomar_foto) tomada ANTES de aplicar el body; aqui se
+    toma la de despues, ya recargada de la DB, para que ambas tengan los mismos tipos. Un PATCH
+    que no cambia nada no registra nada (el formulario de edicion reenvia todos sus campos).
+    `motivo` en el body reemplaza el titulo automatico (p.ej. 'por re-cotizacion de COT-...').
+    Es un registro auxiliar: si falla, el cambio ya quedo guardado y no se debe devolver un error."""
+    try:
+        despues = cambios_documento.tomar_foto(doc, entidad)
+        ids_usuarios = {i for i in (antes.get("asignado_a_user_id"), despues.get("asignado_a_user_id")) if i}
+        usuarios = {}
+        if ids_usuarios:
+            usuarios = {u.id: u.email for u in db.query(User).filter(User.id.in_(ids_usuarios)).all()}
+        cambios = cambios_documento.comparar(entidad, antes, despues, usuarios)
+        registro = cambios_documento.describir(entidad, cambios, antes, despues, recotizacion)
+        if registro is None:
+            return
+        accion, descripcion = registro
+        motivo = body.get("motivo")
+        if isinstance(motivo, str) and motivo.strip():
+            descripcion = motivo.strip()[:300]
+        _log(db, entidad, doc.id, doc.numero, accion, descripcion,
+             user_name=body.get("updated_by") or getattr(user, "email", None),
+             extra_data={"cambios": cambios})
+    except Exception:
+        db.rollback()
+        logger.warning("No se pudo registrar en la Actividad los cambios de %s %s", entidad,
+                       getattr(doc, "numero", "?"), exc_info=True)
 
 def _lista_compras_items_de(db: Session, pven_id: int) -> list:
     """Items de la Lista de Compras (JSON en web_builder_config) que pertenecen
@@ -256,7 +288,9 @@ def _log_dict(l: ActivityLog) -> dict:
         "old_estado": l.old_estado,
         "new_estado": l.new_estado,
         "user_name": l.user_name,
-        "created_at": l.created_at.isoformat() if l.created_at else None,
+        # created_at es UTC sin zona (utcnow): sin la "Z" el navegador lo lee como hora local y la
+        # linea de tiempo de Actividad muestra la hora con 5 h de adelanto en Colombia.
+        "created_at": (l.created_at.isoformat() + "Z") if l.created_at else None,
         "extra_data": l.extra_data,
     }
 
@@ -448,6 +482,7 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         raise HTTPException(400, "Este estado solo se alcanza automáticamente (asignar un asesor) o por el flujo de confirmación del cliente (no se puede forzar manualmente con este PATCH).")
     old_estado = sc.estado
     fecha_vieja = sc.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
+    antes_log = cambios_documento.tomar_foto(sc, "SC")
     allowed = ["customer_id","customer_name","customer_phone","customer_email",
                "customer_address","advisor_name","advisor_user_id","tipo_solicitud","modalidad_pago","estado",
                "fecha_vencimiento","fecha_entrega_estimada","notas","productos",
@@ -500,6 +535,9 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     sc.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(sc)
+    # Primero lo editado y despues el cambio de estado que provoca (p.ej. asignar asesor ->
+    # ASIGNADA), para que la linea de tiempo se lea en el orden causal.
+    _registrar_cambios(db, "SC", sc, antes_log, body, user)
     if body.get("estado") and body["estado"] != old_estado:
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {sc.estado}",
@@ -873,6 +911,7 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         _validar_precios_productos(body.get("productos") or [])
     old_estado = cot.estado
     fecha_vieja = cot.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
+    antes_log = cambios_documento.tomar_foto(cot, "COT")
     # Round 2 (hallazgo #5, "congelar" el precio confirmado): captura ANTES del loop
     # de abajo los valores de todo lo que afecta el precio/entrega que el cliente vio y
     # confirmo (o esta por confirmar). Si esta COT esta en el ciclo vigente de Gate 2
@@ -992,6 +1031,10 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     cot.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(cot)
+    # "Re-Cotizar" (la Calculadora) manda recotizacion=true: queda registrado aunque los
+    # precios no hayan cambiado. Va antes del cambio de estado que pueda provocar
+    # (rompe_congelamiento) para que la linea de tiempo se lea en orden causal.
+    _registrar_cambios(db, "COT", cot, antes_log, body, user, recotizacion=bool(body.get("recotizacion")))
     if body.get("estado") and body["estado"] != old_estado:
         try:
             _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
@@ -1392,6 +1435,7 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
         raise HTTPException(404, "Pedido de venta no encontrado")
     old_estado = v.estado
     fecha_vieja = v.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
+    antes_log = cambios_documento.tomar_foto(v, "VEN")
     if body.get("estado") == "CANCELADO" and old_estado in ("ENTREGADO", "FACTURADO"):
         raise HTTPException(422, f"No se puede cancelar un pedido en estado {old_estado}")
     if body.get("estado") == "CANCELADO" and not body.get("cancellation_authorized_by"):
@@ -1409,6 +1453,7 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
     v.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(v)
+    _registrar_cambios(db, "VEN", v, antes_log, body, user)
     if body.get("estado") and body["estado"] != old_estado:
         _log(db, "VEN", v.id, v.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {v.estado}",

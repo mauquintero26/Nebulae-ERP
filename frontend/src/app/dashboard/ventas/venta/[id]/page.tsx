@@ -12,6 +12,7 @@ import { useParams, useSearchParams } from 'next/navigation';
 import { apiFetch } from '@/lib/api';
 import { Button, Modal } from '@/components/ui';
 import { NewSupplierModal } from '../venta-client';
+import { CambiosDeActividad } from '../../flujo';
 
 const fCOP  = (v: any) => { const n = Number(v) || 0; return '$' + n.toLocaleString('es-CO'); };
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
@@ -749,8 +750,11 @@ function PedidoVentaDetalleContent() {
                       <div className="flex-1 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
                         <div className="flex items-center justify-between mb-2">
                           <span className="font-bold text-slate-800 text-sm">{a.description || a.action}</span>
-                          <span className="text-[10px] font-bold text-slate-400">{fDate(a.created_at)}</span>
+                          <span className="text-[10px] font-bold text-slate-400">
+                            {fDate(a.created_at)}{a.created_at ? ` ${new Date(a.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}` : ''}
+                          </span>
                         </div>
+                        <CambiosDeActividad extra={a.extra_data} />
                         <p className="text-xs font-medium text-slate-500">{a.user_name || 'Sistema'}</p>
                       </div>
                     </div>

@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { Link2, Copy, Check, ExternalLink } from 'lucide-react';
+import { Link2, Copy, Check, ExternalLink, ArrowRight } from 'lucide-react';
 import { Modal, Button } from '@/components/ui';
 import type { AccentColor } from '@/components/ui';
 
@@ -134,5 +134,34 @@ export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', onC
         Solo el cliente debería confirmar: si abres el enlace y confirmas tú, queda registrado como la confirmación del cliente.
       </p>
     </Modal>
+  );
+}
+
+type CambioActividad = { campo?: string; etiqueta: string; antes?: string | null; despues?: string | null };
+
+// Detalle de lo que cambio en una edicion o re-cotizacion. El backend lo guarda en
+// extra_data.cambios (ver backend/app/core/cambios_documento.py) y lo muestran las lineas
+// de tiempo de Actividad de SC, COT, PVEN y el panel del Hub.
+export function CambiosDeActividad({ extra }: { extra?: any }) {
+  const cambios: CambioActividad[] = Array.isArray(extra?.cambios) ? extra.cambios : [];
+  if (cambios.length === 0) return null;
+  return (
+    <ul className="mb-2 space-y-1">
+      {cambios.map((c, i) => {
+        // Un campo suelto (Notas, Total...) siempre muestra antes y despues, con "—" si estaba
+        // vacio. Las lineas de producto (agregado, eliminado, cantidad...) solo lo que traen.
+        const esCampo = !!c.campo && !['productos', 'productos_sku', 'mas'].includes(c.campo);
+        const antes = c.antes ?? (esCampo ? '—' : null);
+        const despues = c.despues ?? (esCampo ? '—' : null);
+        return (
+          <li key={i} className="text-xs text-slate-600 flex flex-wrap items-baseline gap-x-1.5">
+            <span className="font-bold text-slate-700">{c.etiqueta}{antes || despues ? ':' : ''}</span>
+            {antes && <span className="text-slate-400 line-through">{antes}</span>}
+            {antes && despues && <ArrowRight size={10} className="text-slate-300 self-center" />}
+            {despues && <span className="font-semibold text-slate-800">{despues}</span>}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
