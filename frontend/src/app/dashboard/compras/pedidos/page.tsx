@@ -548,7 +548,7 @@ function PecDetailPanel({pec, onClose, onUpdate, onToast}: {pec:any; onClose:()=
   const changeEstado = async (est: string) => {
     try {
       await apiFetch('/compras/pedidos/'+pec.id,{method:'PATCH',body:JSON.stringify({estado:est,updated_by:localStorage.getItem('user_name')||''})});
-      onToast('Estado actualizado','ok'); onUpdate(); loadFull();
+      onToast(est==='CANCELADO' ? 'PEC cancelado: lo encuentras en la pestaña Cancelados' : 'Estado actualizado','ok'); onUpdate(); loadFull();
     } catch(e:any){ onToast(e.message,'error'); }
     setEditEstado(false);
   };
@@ -1364,22 +1364,26 @@ export default function PedidosCompraPage() {
     for (const id of Array.from(selectedIds)) {
       await apiFetch('/compras/pedidos/'+id,{method:'PATCH',body:JSON.stringify({estado:'CANCELADO'})}).catch(()=>{});
     }
-    showToast('Cancelados','ok'); setSelectedIds(new Set()); load();
+    showToast('PEC cancelados: los encuentras en la pestaña Cancelados','ok'); setSelectedIds(new Set()); load();
   }
 
   // Computed tabs
+  // Un PEC cancelado vive solo en la pestaña "Cancelados": "Todos", los KPI y el monto
+  // trabajan sobre los vigentes (antes "Todos" los mezclaba con los cancelados, y el KPI
+  // "Total" contaba cancelados mientras su monto no).
+  const vigentes   = useMemo(()=>pedidos.filter(p=>p.estado!=='CANCELADO'), [pedidos]);
   const activos    = pedidos.filter(p=>['EMITIDO','ENVIADO','EN_TRANSITO','PENDIENTE_ENTREGA'].includes(p.estado));
   const enTransito = pedidos.filter(p=>['EN_TRANSITO','ENVIADO'].includes(p.estado));
   const recibidos  = pedidos.filter(p=>['RECIBIDO','COMPLETADO'].includes(p.estado));
   const cancelados = pedidos.filter(p=>p.estado==='CANCELADO');
-  const vencidos   = pedidos.filter(p=>p.is_overdue);
-  const montoTotal = pedidos.filter(p=>p.estado!=='CANCELADO').reduce((s,p)=>s+(p.total_cop||0),0);
+  const vencidos   = vigentes.filter(p=>p.is_overdue);
+  const montoTotal = vigentes.reduce((s,p)=>s+(p.total_cop||0),0);
 
   const kpiCards = [
-    {label:'PEC Activos',  value:activos.length,     color:'purple', icon:<Receipt size={22}/>,      sub:pedidos.length+' total',       ok:true},
+    {label:'PEC Activos',  value:activos.length,     color:'purple', icon:<Receipt size={22}/>,      sub:vigentes.length+' total',      ok:true},
     {label:'En Transito',  value:enTransito.length,  color:'blue',   icon:<Truck size={22}/>,         sub:'Enviados + En transito',      ok:true},
     {label:'Vencidos',     value:vencidos.length,    color:'red',    icon:<AlertTriangle size={22}/>, sub:'Entrega vencida',             ok:vencidos.length===0},
-    {label:'Total',        value:pedidos.length,     color:'teal',   icon:<Activity size={22}/>,      sub:fCOP(montoTotal)+' en compras',ok:true},
+    {label:'Total',        value:vigentes.length,    color:'teal',   icon:<Activity size={22}/>,      sub:fCOP(montoTotal)+' en compras',ok:true},
   ];
   const colorMap: Record<string,any> = {
     purple:{bg:'bg-purple-50',text:'text-purple-700',iconBg:'bg-purple-100'},
@@ -1389,7 +1393,7 @@ export default function PedidosCompraPage() {
   };
 
   const tabConfig = [
-    {k:'Todos',      count:pedidos.length,     data:pedidos},
+    {k:'Todos',      count:vigentes.length,     data:vigentes},
     {k:'Activos',    count:activos.length,      data:activos},
     {k:'En Transito',count:enTransito.length,   data:enTransito},
     {k:'Recibidos',  count:recibidos.length,    data:recibidos},
@@ -1397,7 +1401,11 @@ export default function PedidosCompraPage() {
     {k:'Analisis',   count:null,                data:[]},
   ];
 
-  const baseData = tabConfig.find(t=>t.k===activeTab)?.data || pedidos;
+  // Filtrar explicitamente por estado "Cancelado" desde "Todos" sigue funcionando: sin esta
+  // excepcion el filtro devolveria siempre cero registros porque la base ya excluye cancelados.
+  const baseData = (activeTab==='Todos' && filterEstado==='CANCELADO')
+    ? pedidos
+    : (tabConfig.find(t=>t.k===activeTab)?.data || vigentes);
   const filteredData = useMemo(()=>{
     let d = baseData;
     if (search) d = d.filter((r:any)=>JSON.stringify(r).toLowerCase().includes(search.toLowerCase()));
@@ -1423,7 +1431,11 @@ export default function PedidosCompraPage() {
   const handleDrop = async (e:React.DragEvent, col:string) => {
     const id = e.dataTransfer.getData('pecId'); if (!id) return;
     const m: Record<string,string> = {'Borrador':'BORRADOR','Emitido':'EMITIDO','En Transito':'EN_TRANSITO','Recibido':'RECIBIDO','Cancelado':'CANCELADO'};
-    await apiFetch('/compras/pedidos/'+id,{method:'PATCH',body:JSON.stringify({estado:m[col]||'BORRADOR'})}).catch(()=>{});
+    try {
+      await apiFetch('/compras/pedidos/'+id,{method:'PATCH',body:JSON.stringify({estado:m[col]||'BORRADOR'})});
+      // Un PEC cancelado sale de "Todos": sin este aviso la tarjeta parece desaparecer.
+      if (m[col]==='CANCELADO') showToast('PEC cancelado: lo encuentras en la pestaña Cancelados','ok');
+    } catch(ex:any) { showToast(ex.message,'error'); }
     load();
   };
 
@@ -1487,7 +1499,7 @@ export default function PedidosCompraPage() {
                   )}
                   <div className="border-t border-gray-100 my-1"/>
                   {p.estado !== 'CANCELADO' ? (
-                    <button onClick={async()=>{try{await apiFetch('/compras/pedidos/'+p.id,{method:'PATCH',body:JSON.stringify({estado:'CANCELADO'})});showToast('Cancelado','ok');load();}catch(ex:any){showToast(ex.message,'error');}setMenuOpenId(null);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Cancelar PEC</button>
+                    <button onClick={async()=>{try{await apiFetch('/compras/pedidos/'+p.id,{method:'PATCH',body:JSON.stringify({estado:'CANCELADO'})});showToast('PEC cancelado: lo encuentras en la pestaña Cancelados','ok');load();}catch(ex:any){showToast(ex.message,'error');}setMenuOpenId(null);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Cancelar PEC</button>
                   ) : (
                     <button onClick={async()=>{if(!confirm(`Eliminar definitivamente ${p.numero}? Esta accion no se puede deshacer.`))return;try{await apiFetch('/compras/pedidos/'+p.id,{method:'DELETE'});showToast('PEC eliminado','ok');load();}catch(ex:any){showToast(ex.message,'error');}setMenuOpenId(null);}} className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm text-red-600 flex items-center gap-2"><Trash2 size={13}/> Eliminar definitivamente</button>
                   )}
