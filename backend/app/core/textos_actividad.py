@@ -2,10 +2,12 @@
 
 Modulo puro, sin FastAPI ni DB, para que lo importen erp_ventas.py y erp_ventas_fase4.py sin import circular.
 ETIQUETAS_ESTADO es la FUENTE UNICA de los nombres de estado en el backend: la Actividad ('Estado cambiado a
-Rechazada'), los mensajes de error ('estado actual: Esperando confirmación del cliente') y la validacion de
-"estado inexistente" de update_pedido (ETIQUETAS_ESTADO['VEN']) salen de aqui. El frontend tiene su espejo en
-frontend/src/lib/estados-pedido.js (estados del pedido); backend/tests/test_estados_pedido.py comprueba que no
-se desalineen. Las columnas old_estado / new_estado de ActivityLog siguen guardando el CODIGO, nunca la etiqueta.
+Rechazada') y los mensajes de error ('estado actual: Esperando confirmación del cliente') salen de aqui. El
+frontend tiene su espejo en frontend/src/lib/estados-pedido.js (estados del pedido); backend/tests/
+test_estados_pedido.py comprueba que cada estado del pedido se llame igual en los dos lados. Las columnas
+old_estado / new_estado de ActivityLog siguen guardando el CODIGO, nunca la etiqueta.
+
+Este mapa NO decide que estados se pueden poner por PATCH: eso es estados_pedido.ESTADOS_VEN_DESTINOS.
 """
 
 ETIQUETAS_ESTADO = {
@@ -31,18 +33,31 @@ ETIQUETAS_ESTADO = {
         "RECHAZADA": "Rechazada",
         "VENCIDA": "Vencida",
     },
-    # Pedido de Venta: SOLO los estados que se pueden poner por PATCH /ventas/pedidos/{id}. update_pedido rechaza
-    # con 422 lo que no este aqui. Los estados que solo pone fase4 (PARCIALMENTE_ENTREGADO, DEVUELTO_TOTAL...) no
-    # van: salen legibles por el respaldo de etiqueta_estado.
+    # Pedido de Venta: TODOS los estados que el backend puede poner (los 18 de frontend/src/lib/estados-pedido.js,
+    # con las mismas etiquetas): ninguno depende del respaldo de etiqueta_estado, que no pone tildes ni 'de'.
+    # Cuales se pueden poner por PATCH lo dice estados_pedido.ESTADOS_VEN_DESTINOS, no este mapa.
     "VEN": {
+        # Ventas / Compras
         "PENDIENTE_COMPRA": "Pendiente de compra",
-        "PENDIENTE_PAGO": "Pendiente de pago",
         "EN_PROCESO": "En proceso",
         "EN_TRANSITO": "En tránsito",
         "LISTO_ENTREGA": "Listo para entrega",
         "ENTREGADO": "Entregado",
         "FACTURADO": "Facturado",
         "CANCELADO": "Cancelado",
+        # tienda / webhooks
+        "PENDIENTE_PAGO": "Pendiente de pago",
+        "PAGADO": "Pagado",
+        # erp_ventas_fase4 (recalculate_sale_order_state y ALLOWED_TRANSITIONS_SALE_ORDER)
+        "BORRADOR": "Borrador",
+        "PENDIENTE_ANTICIPO": "Pendiente de anticipo",
+        "CONFIRMADO": "Confirmado",
+        "PARCIALMENTE_DISPONIBLE": "Parcialmente disponible",
+        "DISPONIBLE": "Disponible",
+        "PENDIENTE_SALDO": "Pendiente de saldo",
+        "LISTO_PARA_ENTREGA": "Listo para entrega",
+        "PARCIALMENTE_ENTREGADO": "Entregado parcialmente",
+        "DEVUELTO_TOTAL": "Devuelto",
     },
 }
 

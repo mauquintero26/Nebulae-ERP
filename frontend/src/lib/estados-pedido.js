@@ -16,15 +16,32 @@
  * @typedef {{ label: string, clases: ClasesEstado, paso: number }} InfoEstadoPedido
  */
 
-const BASE = { bg: 'bg-gray-100', text: 'text-gray-700', border: 'border-gray-200' };
+/**
+ * Congela el objeto y todo lo que cuelga de el: estas tablas son la fuente unica de los estados, y si una
+ * pantalla las mutara por accidente se desalinearian todas. Mutarlas lanza TypeError (los modulos ESM son
+ * estrictos); para ordenar o filtrar hay que copiar primero ([...lista].sort()).
+ * @template T
+ * @param {T} valor
+ * @returns {T}
+ */
+function congelar(valor) {
+  if (valor !== null && typeof valor === 'object' && !Object.isFrozen(valor)) {
+    Object.values(valor).forEach(congelar);
+    Object.freeze(valor);
+  }
+  return valor;
+}
+
+const BASE = congelar({ bg: 'bg-gray-100', text: 'text-gray-700', border: 'border-gray-200' });
 
 /**
  * Todos los estados que el backend puede poner a un pedido. `paso` es el lugar en el stepper de 5 pasos
  * (PASOS_PEDIDO): 0..4, o -1 para cancelado/devuelto (el stepper no se muestra). Las clases son literales
  * completas para que Tailwind las encuentre.
- * @type {Record<string, InfoEstadoPedido>}
+ * Inmutable.
+ * @type {Readonly<Record<string, Readonly<InfoEstadoPedido>>>}
  */
-export const ESTADOS_PEDIDO = {
+export const ESTADOS_PEDIDO = congelar({
   // Ventas / Compras
   PENDIENTE_COMPRA: { label: 'Pendiente de compra', clases: { bg: 'bg-orange-100', text: 'text-orange-700', border: 'border-orange-200' }, paso: 0 },
   EN_PROCESO: { label: 'En proceso', clases: { bg: 'bg-purple-100', text: 'text-purple-700', border: 'border-purple-200' }, paso: 1 },
@@ -37,7 +54,7 @@ export const ESTADOS_PEDIDO = {
   PENDIENTE_PAGO: { label: 'Pendiente de pago', clases: { bg: 'bg-amber-100', text: 'text-amber-700', border: 'border-amber-200' }, paso: 0 },
   PAGADO: { label: 'Pagado', clases: { bg: 'bg-lime-100', text: 'text-lime-700', border: 'border-lime-200' }, paso: 1 },
   // erp_ventas_fase4: recalculate_sale_order_state y ALLOWED_TRANSITIONS_SALE_ORDER
-  BORRADOR: { label: 'Borrador', clases: { ...BASE }, paso: 0 },
+  BORRADOR: { label: 'Borrador', clases: BASE, paso: 0 },
   PENDIENTE_ANTICIPO: { label: 'Pendiente de anticipo', clases: { bg: 'bg-amber-100', text: 'text-amber-700', border: 'border-amber-200' }, paso: 0 },
   CONFIRMADO: { label: 'Confirmado', clases: { bg: 'bg-indigo-100', text: 'text-indigo-700', border: 'border-indigo-200' }, paso: 0 },
   PARCIALMENTE_DISPONIBLE: { label: 'Parcialmente disponible', clases: { bg: 'bg-cyan-100', text: 'text-cyan-700', border: 'border-cyan-200' }, paso: 1 },
@@ -46,43 +63,58 @@ export const ESTADOS_PEDIDO = {
   LISTO_PARA_ENTREGA: { label: 'Listo para entrega', clases: { bg: 'bg-teal-100', text: 'text-teal-700', border: 'border-teal-200' }, paso: 2 },
   PARCIALMENTE_ENTREGADO: { label: 'Entregado parcialmente', clases: { bg: 'bg-lime-100', text: 'text-lime-700', border: 'border-lime-200' }, paso: 2 },
   DEVUELTO_TOTAL: { label: 'Devuelto', clases: { bg: 'bg-rose-100', text: 'text-rose-700', border: 'border-rose-200' }, paso: -1 },
-};
+});
 
-/** Los 5 pasos del stepper del detalle del pedido; el estado exacto se lee en la etiqueta. Tambien son las pestañas de la lista (con 'Cancelado'). */
-export const PASOS_PEDIDO = [
+/**
+ * Los 5 pasos del stepper del detalle del pedido; el estado exacto se lee en la etiqueta. Tambien son las pestañas
+ * de la lista (con 'Cancelado'). Inmutable.
+ * @type {ReadonlyArray<Readonly<{ key: string, label: string }>>}
+ */
+export const PASOS_PEDIDO = congelar([
   { key: 'PENDIENTE_COMPRA', label: 'Pend. Compra' },
   { key: 'EN_PROCESO', label: 'En Proceso' },
   { key: 'LISTO_ENTREGA', label: 'Listo Entrega' },
   { key: 'ENTREGADO', label: 'Entregado' },
   { key: 'FACTURADO', label: 'Facturado' },
-];
+]);
 
 const GRUPO_CANCELADO = 'Cancelado';
 
-/** Estados "en curso": entre ellos el pedido se mueve libremente (espejo de ESTADOS_VEN_OPERATIVOS del backend). */
-export const ESTADOS_PEDIDO_OPERATIVOS = ['PENDIENTE_COMPRA', 'PENDIENTE_PAGO', 'EN_PROCESO', 'EN_TRANSITO', 'LISTO_ENTREGA'];
+/**
+ * Estados "en curso": entre ellos el pedido se mueve libremente (espejo de ESTADOS_VEN_OPERATIVOS del backend). Inmutable.
+ * @type {ReadonlyArray<string>}
+ */
+export const ESTADOS_PEDIDO_OPERATIVOS = congelar(['PENDIENTE_COMPRA', 'PENDIENTE_PAGO', 'EN_PROCESO', 'EN_TRANSITO', 'LISTO_ENTREGA']);
 
-/** Los que se pueden elegir a mano (panel rapido del Hub, editor del pedido). Una sola lista para todas las pantallas; EN_TRANSITO se mantiene por decision del usuario (N2). Espejo de ESTADOS_VEN_MANUALES. */
-export const ESTADOS_PEDIDO_MANUALES = ['PENDIENTE_COMPRA', 'EN_PROCESO', 'EN_TRANSITO', 'LISTO_ENTREGA'];
+/**
+ * Los que se pueden elegir a mano (panel rapido del Hub, editor del pedido). Una sola lista para todas las
+ * pantallas; EN_TRANSITO se mantiene por decision del usuario (N2). Espejo de ESTADOS_VEN_MANUALES. Inmutable.
+ * @type {ReadonlyArray<string>}
+ */
+export const ESTADOS_PEDIDO_MANUALES = congelar(['PENDIENTE_COMPRA', 'EN_PROCESO', 'EN_TRANSITO', 'LISTO_ENTREGA']);
 
-/** Estados terminales: no cuentan como pedidos activos. */
-export const ESTADOS_PEDIDO_CERRADOS = ['ENTREGADO', 'FACTURADO', 'CANCELADO', 'DEVUELTO_TOTAL'];
+/**
+ * Estados terminales: no cuentan como pedidos activos. Inmutable.
+ * @type {ReadonlyArray<string>}
+ */
+export const ESTADOS_PEDIDO_CERRADOS = congelar(['ENTREGADO', 'FACTURADO', 'CANCELADO', 'DEVUELTO_TOTAL']);
 
-const DESDE_OPERATIVO = [...ESTADOS_PEDIDO_OPERATIVOS, 'ENTREGADO', 'CANCELADO'];
+// Un solo arreglo (congelado) compartido por los 5 operativos y por los estados desconocidos.
+const DESDE_OPERATIVO = congelar([...ESTADOS_PEDIDO_OPERATIVOS, 'ENTREGADO', 'CANCELADO']);
 
 /**
  * Desde que estado se puede ir a cual por PATCH /ventas/pedidos/{id} (espejo de TRANSICIONES_VEN_PATCH del
- * backend, que es la autoridad: la pantalla solo ofrece lo que el servidor va a aceptar).
- * @type {Record<string, string[]>}
+ * backend, que es la autoridad: la pantalla solo ofrece lo que el servidor va a aceptar). Inmutable.
+ * @type {Readonly<Record<string, ReadonlyArray<string>>>}
  */
-export const TRANSICIONES_PEDIDO_PATCH = {
+export const TRANSICIONES_PEDIDO_PATCH = congelar({
   ...Object.fromEntries(ESTADOS_PEDIDO_OPERATIVOS.map((e) => [e, DESDE_OPERATIVO])),
   ENTREGADO: ['FACTURADO'], // 'Facturado' solo se alcanza desde ENTREGADO
   FACTURADO: [],
   CANCELADO: [],
   DEVUELTO_TOTAL: [],
   PARCIALMENTE_ENTREGADO: ['ENTREGADO'],
-};
+});
 
 const tiene = (obj, clave) => Object.prototype.hasOwnProperty.call(obj, clave);
 
@@ -95,11 +127,11 @@ function humanizar(e) {
 /**
  * Etiqueta, clases de color y paso de un estado de pedido. Una clave desconocida sale humanizada, en gris y en
  * el primer paso: nunca el codigo crudo.
- * @returns {InfoEstadoPedido}
+ * @returns {Readonly<InfoEstadoPedido>}
  */
 export function infoEstadoPedido(e) {
   if (typeof e === 'string' && tiene(ESTADOS_PEDIDO, e)) return ESTADOS_PEDIDO[e];
-  return { label: humanizar(e), clases: { ...BASE }, paso: 0 };
+  return congelar({ label: humanizar(e), clases: { ...BASE }, paso: 0 });
 }
 
 /** Lugar del estado en el stepper: 0..4, o -1 si esta cancelado o devuelto. Un estado desconocido va al primer paso (la etiqueta dice el estado real). */
@@ -122,7 +154,7 @@ export function grupoPedido(e) {
 /**
  * A que estados se puede pasar desde `e` por PATCH. Un estado que no esta en la tabla (heredado, como PAGADO de
  * la tienda, o desconocido) se trata como operativo, igual que en el backend.
- * @returns {string[]}
+ * @returns {ReadonlyArray<string>}
  */
 export function transicionesPedido(e) {
   return typeof e === 'string' && tiene(TRANSICIONES_PEDIDO_PATCH, e) ? TRANSICIONES_PEDIDO_PATCH[e] : DESDE_OPERATIVO;

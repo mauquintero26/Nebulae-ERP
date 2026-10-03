@@ -155,4 +155,33 @@ console.log('--- TEST 8: tablas de transicion (espejo del backend) ---');
   assert.ok(operativos.has('PENDIENTE_PAGO'));
 }
 
+console.log('--- TEST 9: los exports son inmutables (fuente unica: nadie la cambia por accidente) ---');
+{
+  // Los modulos ESM corren en modo estricto: mutar un objeto congelado lanza TypeError.
+  assert.throws(() => { ESTADOS_PEDIDO.NUEVO = { label: 'x' }; }, TypeError, 'ESTADOS_PEDIDO');
+  assert.throws(() => { ESTADOS_PEDIDO.EN_PROCESO.label = 'x'; }, TypeError, 'entrada de ESTADOS_PEDIDO');
+  assert.throws(() => { ESTADOS_PEDIDO.EN_PROCESO.clases.bg = 'x'; }, TypeError, 'clases de una entrada');
+  assert.throws(() => { infoEstadoPedido('EN_PROCESO').paso = 9; }, TypeError, 'lo que devuelve infoEstadoPedido');
+  assert.throws(() => { infoEstadoPedido('ALGO_NUEVO').clases.bg = 'x'; }, TypeError, 'infoEstadoPedido de una clave desconocida');
+  assert.throws(() => { PASOS_PEDIDO.push({ key: 'X', label: 'X' }); }, TypeError, 'PASOS_PEDIDO');
+  assert.throws(() => { PASOS_PEDIDO[0].label = 'x'; }, TypeError, 'un paso');
+  assert.throws(() => { ESTADOS_PEDIDO_OPERATIVOS.push('X'); }, TypeError, 'ESTADOS_PEDIDO_OPERATIVOS');
+  assert.throws(() => { ESTADOS_PEDIDO_MANUALES.push('X'); }, TypeError, 'ESTADOS_PEDIDO_MANUALES');
+  assert.throws(() => { ESTADOS_PEDIDO_CERRADOS.push('X'); }, TypeError, 'ESTADOS_PEDIDO_CERRADOS');
+  assert.throws(() => { TRANSICIONES_PEDIDO_PATCH.NUEVO = []; }, TypeError, 'TRANSICIONES_PEDIDO_PATCH');
+  assert.throws(() => { TRANSICIONES_PEDIDO_PATCH.ENTREGADO.push('CANCELADO'); }, TypeError, 'destinos de ENTREGADO');
+  // El arreglo de los operativos se comparte entre 5 estados: mutar uno cambiaria los demas
+  assert.throws(() => { TRANSICIONES_PEDIDO_PATCH.EN_PROCESO.push('FACTURADO'); }, TypeError, 'destinos compartidos de los operativos');
+  assert.throws(() => { transicionesPedido('PAGADO').push('FACTURADO'); }, TypeError, 'destinos de un estado heredado');
+  assert.throws(() => { transicionesPedido('ALGO_NUEVO').push('FACTURADO'); }, TypeError, 'destinos de un estado desconocido');
+  for (const e of Object.keys(ESTADOS_PEDIDO)) {
+    assert.ok(Object.isFrozen(ESTADOS_PEDIDO[e]) && Object.isFrozen(ESTADOS_PEDIDO[e].clases), `${e} sin congelar`);
+  }
+  // y nada se altero
+  assert.equal(ESTADOS_PEDIDO.EN_PROCESO.label, 'En proceso');
+  assert.ok(!('NUEVO' in ESTADOS_PEDIDO) && !('NUEVO' in TRANSICIONES_PEDIDO_PATCH));
+  assert.deepEqual(TRANSICIONES_PEDIDO_PATCH.ENTREGADO, ['FACTURADO']);
+  assert.equal(PASOS_PEDIDO.length, 5);
+}
+
 console.log('\nOK: test_estados_pedido.mjs');

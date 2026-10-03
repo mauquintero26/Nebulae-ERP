@@ -49,19 +49,38 @@ def test_etiquetas_de_cot():
     }
 
 
-def test_etiquetas_de_ven_incluyen_en_transito_con_tilde():
-    # El choque de la especificacion: sin EN_TRANSITO en el mapa, el respaldo mostraba 'En transito' sin tilde.
+def test_etiquetas_de_ven_cubren_los_18_estados_del_pedido_con_las_del_frontend():
+    # Fuente unica con el frontend (N10, frontend/src/lib/estados-pedido.js): ningun estado del pedido depende
+    # del respaldo humanizado (que no pone tildes: sin EN_TRANSITO en el mapa saldria 'En transito').
     assert ETIQUETAS_ESTADO['VEN'] == {
+        # Ventas / Compras
         'PENDIENTE_COMPRA': 'Pendiente de compra',
-        'PENDIENTE_PAGO': 'Pendiente de pago',
         'EN_PROCESO': 'En proceso',
         'EN_TRANSITO': 'En tránsito',
         'LISTO_ENTREGA': 'Listo para entrega',
         'ENTREGADO': 'Entregado',
         'FACTURADO': 'Facturado',
         'CANCELADO': 'Cancelado',
+        # tienda / webhooks
+        'PENDIENTE_PAGO': 'Pendiente de pago',
+        'PAGADO': 'Pagado',
+        # fase4
+        'BORRADOR': 'Borrador',
+        'PENDIENTE_ANTICIPO': 'Pendiente de anticipo',
+        'CONFIRMADO': 'Confirmado',
+        'PARCIALMENTE_DISPONIBLE': 'Parcialmente disponible',
+        'DISPONIBLE': 'Disponible',
+        'PENDIENTE_SALDO': 'Pendiente de saldo',
+        'LISTO_PARA_ENTREGA': 'Listo para entrega',
+        'PARCIALMENTE_ENTREGADO': 'Entregado parcialmente',
+        'DEVUELTO_TOTAL': 'Devuelto',
     }
+    assert len(ETIQUETAS_ESTADO['VEN']) == 18
     assert etiqueta_estado('VEN', 'EN_TRANSITO') == 'En tránsito'
+    assert etiqueta_estado('VEN', 'PARCIALMENTE_ENTREGADO') == 'Entregado parcialmente'
+    assert etiqueta_estado('VEN', 'DEVUELTO_TOTAL') == 'Devuelto'
+    assert etiqueta_estado('VEN', 'PENDIENTE_ANTICIPO') == 'Pendiente de anticipo'
+    assert etiqueta_estado('VEN', 'PENDIENTE_SALDO') == 'Pendiente de saldo'
 
 
 def test_ninguna_etiqueta_es_el_codigo_ni_lleva_guion_bajo():
@@ -79,9 +98,9 @@ def test_etiqueta_estado_resuelve_cada_codigo_del_mapa():
 
 
 def test_etiqueta_estado_respaldo_para_estados_fuera_del_mapa():
-    # Estados de fase4 que el mapa de VEN no lista (no se pueden poner por PATCH): salen legibles, nunca el codigo.
-    assert etiqueta_estado('VEN', 'PARCIALMENTE_ENTREGADO') == 'Parcialmente entregado'
-    assert etiqueta_estado('VEN', 'DEVUELTO_TOTAL') == 'Devuelto total'
+    # Un estado nuevo que aun no esta en el mapa sale legible, nunca el codigo crudo.
+    assert etiqueta_estado('VEN', 'PENDIENTE_ALGO') == 'Pendiente algo'
+    assert etiqueta_estado('SC', 'EN_REVISION_TECNICA') == 'En revision tecnica'
     # Entidades que el mapa no cubre (PEC, PXP...) usan solo el respaldo.
     assert etiqueta_estado('PEC', 'BORRADOR') == 'Borrador'
     assert etiqueta_estado('PXP', 'PENDIENTE') == 'Pendiente'

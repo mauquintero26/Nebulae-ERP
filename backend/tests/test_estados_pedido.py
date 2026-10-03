@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from app.core.estados_pedido import (
+    ESTADOS_VEN_DESTINOS,
     ESTADOS_VEN_MANUALES,
     ESTADOS_VEN_OPERATIVOS,
     TRANSICIONES_VEN_PATCH,
@@ -86,15 +87,30 @@ def test_las_tablas_son_inmutables():
         ESTADOS_VEN_OPERATIVOS.append('PAGADO')
     with pytest.raises((AttributeError, TypeError)):
         ESTADOS_VEN_MANUALES.append('PAGADO')
+    with pytest.raises(TypeError):
+        TRANSICIONES_VEN_PATCH['NUEVO'] = frozenset()
+    with pytest.raises(TypeError):
+        del TRANSICIONES_VEN_PATCH['CANCELADO']
 
 
-def test_los_estados_que_se_pueden_poner_por_patch_son_los_de_las_etiquetas_de_ven():
-    # Fuente unica: update_pedido valida "estado inexistente" con ETIQUETAS_ESTADO['VEN'], asi que el mapa
-    # debe tener exactamente los estados a los que la tabla deja llegar.
-    destinos = set().union(*TRANSICIONES_VEN_PATCH.values())
-    assert destinos == set(ETIQUETAS_ESTADO['VEN'])
-    # y los origenes de la tabla son esos mas los dos de fase4, que solo pueden ser origen
-    assert set(TRANSICIONES_VEN_PATCH) == set(ETIQUETAS_ESTADO['VEN']) | {'DEVUELTO_TOTAL', 'PARCIALMENTE_ENTREGADO'}
+def test_los_destinos_de_un_patch_son_los_ocho_estados_que_se_pueden_poner():
+    # ESTADOS_VEN_DESTINOS es lo que update_pedido (T4) usa para "estado inexistente" / "no se puede poner a
+    # mano": NO sale del mapa de etiquetas, que trae los 18 estados (tambien los que solo pone fase4).
+    assert ESTADOS_VEN_DESTINOS == _OPERATIVOS | {'ENTREGADO', 'FACTURADO', 'CANCELADO'}
+    assert ESTADOS_VEN_DESTINOS == frozenset().union(*TRANSICIONES_VEN_PATCH.values())
+    assert len(ESTADOS_VEN_DESTINOS) == 8
+    for e in ('DEVUELTO_TOTAL', 'PARCIALMENTE_ENTREGADO', 'PAGADO', 'CONFIRMADO', 'PENDIENTE_SALDO', 'BORRADOR'):
+        assert e not in ESTADOS_VEN_DESTINOS, f'{e} no se puede poner por PATCH'
+    with pytest.raises((AttributeError, TypeError)):
+        ESTADOS_VEN_DESTINOS.add('PAGADO')
+
+
+def test_todo_estado_de_las_tablas_tiene_etiqueta_en_ven():
+    # origenes, destinos y listas estan en el mapa de etiquetas: nunca salen por el respaldo humanizado
+    estados = set(TRANSICIONES_VEN_PATCH) | set(ESTADOS_VEN_DESTINOS) | set(ESTADOS_VEN_OPERATIVOS) | set(ESTADOS_VEN_MANUALES)
+    assert estados <= set(ETIQUETAS_ESTADO['VEN'])
+    # los origenes de la tabla son los destinos mas los dos de fase4, que solo pueden ser origen
+    assert set(TRANSICIONES_VEN_PATCH) == set(ESTADOS_VEN_DESTINOS) | {'DEVUELTO_TOTAL', 'PARCIALMENTE_ENTREGADO'}
 
 
 # --- paridad con el espejo del frontend (frontend/src/lib/estados-pedido.js) ---------------------------
@@ -128,8 +144,16 @@ def _espejo_frontend():
 
 def test_el_frontend_espeja_las_etiquetas_de_ven():
     espejo = _espejo_frontend()
-    for codigo, etiqueta in ETIQUETAS_ESTADO['VEN'].items():
-        assert espejo['labels'].get(codigo) == etiqueta, f'{codigo}: backend {etiqueta!r}, frontend {espejo["labels"].get(codigo)!r}'
+    # Cada estado que el frontend etiqueta sale IGUAL del backend y por el mapa: si el backend usara el respaldo
+    # humanizado ('Pendiente anticipo' en vez de 'Pendiente de anticipo') esta prueba falla.
+    assert len(espejo['labels']) == 18
+    for codigo, etiqueta_front in espejo['labels'].items():
+        assert codigo in ETIQUETAS_ESTADO['VEN'], f'{codigo}: el frontend lo etiqueta y el backend no lo tiene en el mapa'
+        assert etiqueta_estado('VEN', codigo) == etiqueta_front, \
+            f'{codigo}: backend {etiqueta_estado("VEN", codigo)!r}, frontend {etiqueta_front!r}'
+    # y el backend no etiqueta estados que el frontend desconoce
+    assert set(ETIQUETAS_ESTADO['VEN']) == set(espejo['labels'])
+    # el respaldo humanizado de una clave desconocida es el mismo en los dos lados
     assert espejo['desconocido'] == etiqueta_estado('VEN', 'PENDIENTE_ALGO')
 
 
