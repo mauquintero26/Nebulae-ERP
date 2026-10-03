@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -203,6 +203,260 @@ export function ProductSearch({value,onChange,onSelect}:{value:string;onChange:(
     </div>
   );
 }
+
+// Campos dependientes del Tipo de Solicitud + Asesor/Vencimiento. Bloque
+// reutilizable: Tipo/Modalidad, los 5 sub-formularios por tipo (Cotizacion,
+// Seguimiento, Programar Entrega, Devolucion de Producto, Soporte Tecnico) y
+// el selector de Asesor + Dias Vencimiento, identicos a los que usa la pagina
+// real de Solicitud de Cliente. Se extrajo para que cualquier otro punto de
+// entrada (p.ej. el Asistente Omnicanal) dispare EXACTAMENTE el mismo
+// formulario en vez de una reimplementacion paralela que termina divergiendo.
+export type SolicitudTipoYDetalleHandle = {
+  getExtras: () => { productos: any[]; notasConExtras: string };
+  reset: () => void;
+};
+
+type SolicitudFormState = {
+  advisor_name: string; advisor_user_id: number | '';
+  tipo_solicitud: string; modalidad_pago: string; notas: string;
+  dias_vencimiento: number;
+  tipo_problema: string; descripcion_problema: string; urgencia: string;
+  evidencia_descripcion: string; asignado_a_user_id: number | '';
+};
+
+export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
+  form: SolicitudFormState;
+  setForm: (updater: (f: SolicitudFormState) => SolicitudFormState) => void;
+}>(function SolicitudTipoYDetalle({ form, setForm }, ref) {
+  const [usuarios, setUsuarios] = useState<{id:number;email:string;role:string}[]>([]);
+  const [prodName, setProdName] = useState('');
+  const [prodQty, setProdQty] = useState(1);
+  const [productos, setProductos] = useState<any[]>([]);
+  const [segSearch, setSegSearch] = useState('');
+  const [segResults, setSegResults] = useState<any[]>([]);
+  const segTimer = useRef<any>(null);
+  const [envio, setEnvio] = useState({nombre_completo:'',cedula:'',direccion:'',ciudad:'',telefono:'',transportadora:'',tipo_envio:'Contraentrega',ven_ids:''});
+  const [devVen, setDevVen] = useState('');
+  const [devPec, setDevPec] = useState('');
+  const [devMotivo, setDevMotivo] = useState('');
+
+  useEffect(() => {
+    apiFetch('/auth/users').then((d: any) => setUsuarios(Array.isArray(d) ? d : (d?.data ?? []))).catch(() => {});
+  }, []);
+
+  function onSegSearch(q: string) {
+    setSegSearch(q);
+    if (segTimer.current) clearTimeout(segTimer.current);
+    if (!q.trim()) { setSegResults([]); return; }
+    segTimer.current = setTimeout(async () => {
+      const [sc, cot, ven] = await Promise.all([
+        apiFetch(`/ventas/solicitudes?search=${encodeURIComponent(q)}&limit=5`).catch(() => []),
+        apiFetch(`/ventas/cotizaciones?search=${encodeURIComponent(q)}&limit=5`).catch(() => []),
+        apiFetch(`/ventas/pedidos?search=${encodeURIComponent(q)}&limit=5`).catch(() => []),
+      ]);
+      const arr = [
+        ...(Array.isArray(sc) ? sc : (sc?.data ?? [])).map((x: any) => ({ ...x, _tipo: 'SC' })),
+        ...(Array.isArray(cot) ? cot : (cot?.data ?? [])).map((x: any) => ({ ...x, _tipo: 'COT' })),
+        ...(Array.isArray(ven) ? ven : (ven?.data ?? [])).map((x: any) => ({ ...x, _tipo: 'VEN' })),
+      ];
+      setSegResults(arr);
+    }, 300);
+  }
+
+  useImperativeHandle(ref, () => ({
+    getExtras: () => {
+      const prodsToSend = productos.length > 0 ? productos : (prodName ? [{ product_name: prodName, qty: prodQty, unit_price_cop: 0 }] : []);
+      let notasConExtras = form.notas;
+      if (form.tipo_solicitud === 'Programar Entrega' && envio.nombre_completo) {
+        notasConExtras = `ENVIO: ${JSON.stringify(envio)}\n${form.notas}`;
+      } else if (form.tipo_solicitud === 'Devolucion de Producto') {
+        notasConExtras = `DEVOLUCION VEN:${devVen} PEC:${devPec} MOTIVO:${devMotivo}\n${form.notas}`;
+      }
+      return { productos: prodsToSend, notasConExtras };
+    },
+    reset: () => {
+      setProductos([]); setProdName(''); setProdQty(1);
+      setSegSearch(''); setSegResults([]);
+      setEnvio({nombre_completo:'',cedula:'',direccion:'',ciudad:'',telefono:'',transportadora:'',tipo_envio:'Contraentrega',ven_ids:''});
+      setDevVen(''); setDevPec(''); setDevMotivo('');
+    },
+  }));
+
+  const isCotizacion = form.tipo_solicitud === 'Cotizacion de Producto';
+  const isSeguimiento = form.tipo_solicitud === 'Seguimiento';
+  const isProgramarEntrega = form.tipo_solicitud === 'Programar Entrega';
+  const isDevolucion = form.tipo_solicitud === 'Devolucion de Producto';
+  const isSoporte = form.tipo_solicitud === 'Soporte Tecnico';
+
+  return (
+    <>
+      {/* Tipo + Modalidad (Modalidad solo para Cotizacion) */}
+      <div className={`grid gap-4 ${isCotizacion ? 'grid-cols-2' : 'grid-cols-1'}`}>
+        <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Tipo de Solicitud</label>
+          <select value={form.tipo_solicitud} onChange={e=>setForm(f=>({...f,tipo_solicitud:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">{TIPOS_SC.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
+        {isCotizacion&&(
+          <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Modalidad de Pago</label>
+            <select value={form.modalidad_pago} onChange={e=>setForm(f=>({...f,modalidad_pago:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">{MODALIDADES_PAGO.map(m=><option key={m} value={m}>{m}</option>)}</select></div>
+        )}
+      </div>
+
+      {isCotizacion&&form.modalidad_pago.includes('60/40')&&(
+        <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 flex gap-4">
+          <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Anticipo</p><p className="font-black text-indigo-700 text-lg">60%</p></div>
+          <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Saldo al entregar</p><p className="font-black text-slate-700 text-lg">40%</p></div>
+        </div>
+      )}
+
+      {/* TYPE-SPECIFIC FIELDS */}
+      {isCotizacion&&(
+        <div>
+          <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Producto a Cotizar <span className="text-slate-300 font-medium">(opcional)</span></label>
+          <ProductSearch value={prodName} onChange={v=>setProdName(v)} onSelect={p=>{setProdName(p.name||p.product_name);}}/>
+          {prodName&&(
+            <div className="mt-2 flex items-center gap-2">
+              <label className="text-xs text-slate-500">Cantidad:</label>
+              <input type="number" min="1" value={prodQty} onChange={e=>setProdQty(Number(e.target.value))} className="w-20 border border-slate-200 rounded-lg px-2 py-1 text-sm text-center font-bold outline-none focus:ring-1 focus:ring-indigo-200"/>
+              <button type="button" onClick={()=>{if(prodName){setProductos(p=>[...p,{product_name:prodName,qty:prodQty,unit_price_cop:0}]);setProdName('');setProdQty(1);}}} className="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-lg text-xs font-bold hover:bg-indigo-200">+ Agregar</button>
+            </div>
+          )}
+          {productos.length>0&&(
+            <div className="mt-2 space-y-1">{productos.map((p,i)=>(
+              <div key={i} className="flex items-center justify-between bg-slate-50 rounded-lg px-3 py-1.5">
+                <span className="text-sm font-bold text-slate-700">{p.product_name} x{p.qty}</span>
+                <button type="button" onClick={()=>setProductos(prev=>prev.filter((_,idx)=>idx!==i))} className="text-red-400 hover:text-red-600"><X size={13}/></button>
+              </div>
+            ))}</div>
+          )}
+          <p className="text-xs text-slate-400 mt-2">Si no existe en el catalogo, dejalo en blanco y detallalo en Notas.</p>
+        </div>
+      )}
+
+      {isSeguimiento&&(
+        <div>
+          <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Buscar SC / COT / Pedido de Venta</label>
+          <div className="relative">
+            <input type="text" value={segSearch} onChange={e=>onSegSearch(e.target.value)} placeholder="Numero o nombre de cliente..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-200 outline-none"/>
+            {segResults.length>0&&(
+              <div className="absolute top-full left-0 right-0 z-50 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-48 overflow-y-auto">
+                {segResults.map((r:any,i:number)=>(
+                  <button key={i} type="button" onClick={()=>{setSegSearch(`${r._tipo}: ${r.numero}`);setSegResults([]);setForm(f=>({...f,notas:`Seguimiento a ${r._tipo} ${r.numero} - ${r.customer_name||''}\n${f.notas}`}));}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm border-b border-slate-50 last:border-0">
+                    <span className="font-bold">{r.numero}</span>
+                    <span className="ml-2 text-xs text-slate-400">{r._tipo} - {r.estado} - {r.customer_name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {segSearch&&<div className="mt-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2"><p className="text-xs font-bold text-blue-700 flex items-center gap-1"><CheckCircle2 size={11}/>Referencia: {segSearch}</p></div>}
+        </div>
+      )}
+
+      {isProgramarEntrega&&(
+        <div className="space-y-3 bg-teal-50 border border-teal-100 rounded-xl p-4">
+          <p className="text-xs font-black text-teal-700 uppercase">Datos de Envio</p>
+          <div className="grid grid-cols-2 gap-3">
+            {[{l:'Nombre Completo',k:'nombre_completo'},{l:'Cedula',k:'cedula'},{l:'Telefono',k:'telefono'},{l:'Ciudad',k:'ciudad'},{l:'Transportadora',k:'transportadora'}].map(f=>(
+              <div key={f.k}><label className="text-xs font-bold text-teal-600 mb-1 block">{f.l}</label><input type="text" value={(envio as any)[f.k]} onChange={e=>setEnvio(ev=>({...ev,[f.k]:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-200"/></div>
+            ))}
+            <div><label className="text-xs font-bold text-teal-600 mb-1 block">Tipo Envio</label>
+              <select value={envio.tipo_envio} onChange={e=>setEnvio(ev=>({...ev,tipo_envio:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-200"><option>Contraentrega</option><option>Contado</option></select></div>
+          </div>
+          <div><label className="text-xs font-bold text-teal-600 mb-1 block">Direccion</label><input type="text" value={envio.direccion} onChange={e=>setEnvio(ev=>({...ev,direccion:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-200"/></div>
+          <div><label className="text-xs font-bold text-teal-600 mb-1 block">Pedido(s) de Venta (PVEN#)</label><input type="text" value={envio.ven_ids} onChange={e=>setEnvio(ev=>({...ev,ven_ids:e.target.value}))} placeholder="PVEN-20260001, PVEN-20260002..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-200"/></div>
+          {envio.nombre_completo&&(
+            <div className="mt-2">
+              <p className="text-xs font-black text-teal-700 mb-1">Enviar Resumen:</p>
+              <div className="flex gap-2">
+                <a href={`https://wa.me/57${envio.telefono.replace(/\D/g,'')}?text=${encodeURIComponent(`Hola ${envio.nombre_completo}, tu pedido ${envio.ven_ids} sera enviado por ${envio.transportadora} a ${envio.direccion}, ${envio.ciudad}. Tipo: ${envio.tipo_envio}`)}`} target="_blank" rel="noreferrer" className="flex-1 bg-green-500 text-white py-2 rounded-xl text-xs font-bold text-center flex items-center justify-center gap-1"><MessageCircle size={12}/>WhatsApp</a>
+                {form.modalidad_pago&&<a href={`mailto:?subject=Informacion de envio&body=${encodeURIComponent(`Destinatario: ${envio.nombre_completo}\nCedula: ${envio.cedula}\nDireccion: ${envio.direccion}, ${envio.ciudad}\nTransportadora: ${envio.transportadora}\nTipo: ${envio.tipo_envio}`)}`} className="flex-1 bg-blue-500 text-white py-2 rounded-xl text-xs font-bold text-center flex items-center justify-center gap-1"><Mail size={12}/>Email</a>}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {isDevolucion&&(
+        <div className="space-y-3 bg-orange-50 border border-orange-100 rounded-xl p-4">
+          <p className="text-xs font-black text-orange-700 uppercase">Datos de Devolucion</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-xs font-bold text-orange-600 mb-1 block">Pedido de Venta (PVEN)</label><input type="text" value={devVen} onChange={e=>setDevVen(e.target.value)} placeholder="PVEN-20260001" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"/></div>
+            <div><label className="text-xs font-bold text-orange-600 mb-1 block">Pedido de Compra (PEC)</label><input type="text" value={devPec} onChange={e=>setDevPec(e.target.value)} placeholder="PEC-20260001" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"/></div>
+          </div>
+          <div><label className="text-xs font-bold text-orange-600 mb-1 block">Motivo / Tipo de Devolucion</label>
+            <select value={devMotivo} onChange={e=>setDevMotivo(e.target.value)} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200">
+              <option value="">Seleccionar...</option>
+              <option>Dano menor - Ajustar precio de venta</option>
+              <option>Dano total - Ajuste inventario negativo</option>
+              <option>Producto incorrecto</option>
+              <option>El cliente cambio de decision</option>
+            </select>
+          </div>
+          <div><label className="text-xs font-bold text-orange-600 mb-1 block">Pruebas (URLs de imagenes o descripcion)</label>
+            <textarea rows={2} placeholder="Enlace a foto o descripcion del estado del producto..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none outline-none focus:ring-2 focus:ring-orange-200" onChange={e=>setForm(f=>({...f,notas:`PRUEBAS: ${e.target.value}\n${f.notas}`}))}/></div>
+          {devMotivo&&<div className="bg-orange-100 rounded-xl p-3 text-xs text-orange-800 font-bold">
+            <p>Logica de backend:</p>
+            {devMotivo.includes('menor')&&<p>* Se afectara el margen en el Pedido de Venta {devVen}</p>}
+            {devMotivo.includes('total')&&<p>* Se ajustara el inventario en el PEC {devPec} (ajuste negativo)</p>}
+          </div>}
+        </div>
+      )}
+
+      {isSoporte && (
+        <div className="bg-purple-50 border border-purple-200 rounded-2xl p-4 space-y-3">
+          <select value={form.tipo_problema||''} onChange={e=>setForm(f=>({...f,tipo_problema:e.target.value}))}
+            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
+            <option value="">Tipo de problema...</option>
+            <option>Falla del producto</option><option>Garantia</option>
+            <option>Duda de uso</option><option>Problema con el pedido o envio</option><option>Otro</option>
+          </select>
+          <textarea placeholder="Descripcion del problema" value={form.descripcion_problema||''}
+            onChange={e=>setForm(f=>({...f,descripcion_problema:e.target.value}))}
+            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" rows={3} />
+          <select value={form.urgencia||''} onChange={e=>setForm(f=>({...f,urgencia:e.target.value}))}
+            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
+            <option value="">Urgencia...</option>
+            <option>Baja</option><option>Media</option><option>Alta</option>
+          </select>
+          <textarea placeholder="Descripcion de la evidencia (fotos recibidas por fuera del sistema, etc.)"
+            value={form.evidencia_descripcion||''} onChange={e=>setForm(f=>({...f,evidencia_descripcion:e.target.value}))}
+            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" rows={2} />
+          <select value={form.asignado_a_user_id||''} onChange={e=>{
+            const uid = e.target.value ? Number(e.target.value) : '';
+            setForm(f=>({...f, asignado_a_user_id: uid as any}));
+          }}
+            className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
+            <option value="">Asignar a...</option>
+            {usuarios.filter(u=>u.role==='Admin'||u.role==='Vendedor').map(u=>(
+              <option key={u.id} value={u.id}>{u.email}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {/* Asesor + Vencimiento */}
+      <div className="grid grid-cols-2 gap-4">
+        <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Asesor</label><select value={form.advisor_user_id||''} onChange={e=>{
+          const uid = e.target.value ? Number(e.target.value) : '';
+          const u = usuarios.find(x=>x.id===uid);
+          setForm(f=>({...f, advisor_user_id: uid, advisor_name: u?.email || f.advisor_name}));
+        }}
+        className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-indigo-400">
+        <option value="">Seleccionar asesor...</option>
+        {usuarios.filter(u=>u.role==='Admin'||u.role==='Vendedor').map(u=>(
+          <option key={u.id} value={u.id}>{u.email}</option>
+        ))}
+      </select></div>
+        <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Dias Vencimiento</label><input type="number" min="1" max="365" value={form.dias_vencimiento} onChange={e=>setForm(f=>({...f,dias_vencimiento:Number(e.target.value)}))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none"/></div>
+      </div>
+
+      {/* Notas */}
+      <div>
+        <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Notas / Observaciones</label>
+        <textarea value={form.notas} onChange={e=>setForm(f=>({...f,notas:e.target.value}))} rows={3} placeholder="Detalles de la solicitud..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-200 outline-none"/>
+      </div>
+    </>
+  );
+});
 
 // â”€â”€ 3-dot Row Menu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function RowMenu({sc,onView,onChangeEstado,onCancel,onSendToTrash}:{sc:any;onView:()=>void;onChangeEstado:(e:string)=>void;onCancel:()=>void;onSendToTrash:()=>void}) {
@@ -557,13 +811,10 @@ export default function SolicitudClient() {
   const [showBulkBar,setShowBulkBar]=useState(false);
 
   // Create form
-  const [form,setForm]=useState({advisor_name:'',advisor_user_id:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:5,tipo_problema:'',descripcion_problema:'',urgencia:'',evidencia_descripcion:'',asignado_a_user_id:''});
-  const [prodName,setProdName]=useState('');
-  const [prodQty,setProdQty]=useState(1);
-  const [productos,setProductos]=useState<any[]>([]);
-
-  // Usuarios para selector de asesor
-  const [usuarios,setUsuarios]=useState<{id:number;email:string;role:string}[]>([]);
+  const [form,setForm]=useState<SolicitudFormState>({advisor_name:'',advisor_user_id:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:5,tipo_problema:'',descripcion_problema:'',urgencia:'',evidencia_descripcion:'',asignado_a_user_id:''});
+  // Producto/envio/devolucion/seguimiento/asesor viven en <SolicitudTipoYDetalle>,
+  // montado via este ref mas abajo (ver createSolicitud/resetCreateForm).
+  const tipoDetalleRef = useRef<SolicitudTipoYDetalleHandle>(null);
 
   // Customer autocomplete
   const [custSearch,setCustSearch]=useState('');
@@ -574,26 +825,12 @@ export default function SolicitudClient() {
   const custTimer=useRef<any>(null);
   const custReqId=useRef(0);
 
-  // Seguimiento search
-  const [segSearch,setSegSearch]=useState('');
-  const [segResults,setSegResults]=useState<any[]>([]);
-  const segTimer=useRef<any>(null);
-
-  // Programar Entrega fields
-  const [envio,setEnvio]=useState({nombre_completo:'',cedula:'',direccion:'',ciudad:'',telefono:'',transportadora:'',tipo_envio:'Contraentrega',ven_ids:''});
-
-  // Devolucion fields
-  const [devVen,setDevVen]=useState('');
-  const [devPec,setDevPec]=useState('');
-  const [devMotivo,setDevMotivo]=useState('');
-
   const showToast=(msg:string,type:'ok'|'err'='ok')=>setToast({msg,type});
 
   useEffect(()=>{
     const u=localStorage.getItem('user_name')||localStorage.getItem('username')||'';
     setCurrentUser(u);
     setForm(f=>({...f,advisor_name:u}));
-    apiFetch('/auth/users').then((d:any) => setUsuarios(Array.isArray(d)?d:(d?.data??[]))).catch(()=>{});
   },[]);
 
   const load=useCallback(async()=>{
@@ -677,25 +914,6 @@ export default function SolicitudClient() {
     },300);
   }
 
-  function onSegSearch(q:string) {
-    setSegSearch(q);
-    if(segTimer.current) clearTimeout(segTimer.current);
-    if(!q.trim()){setSegResults([]);return;}
-    segTimer.current=setTimeout(async()=>{
-      const [sc,cot,ven]=await Promise.all([
-        apiFetch(`/ventas/solicitudes?search=${encodeURIComponent(q)}&limit=5`).catch(()=>[]),
-        apiFetch(`/ventas/cotizaciones?search=${encodeURIComponent(q)}&limit=5`).catch(()=>[]),
-        apiFetch(`/ventas/pedidos?search=${encodeURIComponent(q)}&limit=5`).catch(()=>[]),
-      ]);
-      const arr=[
-        ...(Array.isArray(sc)?sc:(sc?.data??[])).map((x:any)=>({...x,_tipo:'SC'})),
-        ...(Array.isArray(cot)?cot:(cot?.data??[])).map((x:any)=>({...x,_tipo:'COT'})),
-        ...(Array.isArray(ven)?ven:(ven?.data??[])).map((x:any)=>({...x,_tipo:'VEN'})),
-      ];
-      setSegResults(arr);
-    },300);
-  }
-
   async function changeEstado(scId:number,newEstado:string) {
     if(newEstado==='CANCELADA'&&!window.confirm('Cancelar esta solicitud?')) return;
     setSaving(true);
@@ -738,14 +956,7 @@ export default function SolicitudClient() {
     }
     setSaving(true);
     try{
-      const prodsToSend=productos.length>0?productos:(prodName?[{product_name:prodName,qty:prodQty,unit_price_cop:0}]:[]);
-      // Build extra fields based on tipo
-      let extraNotas=form.notas;
-      if(form.tipo_solicitud==='Programar Entrega'&&envio.nombre_completo){
-        extraNotas=`ENVIO: ${JSON.stringify(envio)}\n${form.notas}`;
-      } else if(form.tipo_solicitud==='Devolucion de Producto'){
-        extraNotas=`DEVOLUCION VEN:${devVen} PEC:${devPec} MOTIVO:${devMotivo}\n${form.notas}`;
-      }
+      const {productos:prodsToSend,notasConExtras:extraNotas}=tipoDetalleRef.current?.getExtras()??{productos:[],notasConExtras:form.notas};
       const scData = await apiFetch('/ventas/solicitudes',{method:'POST',body:JSON.stringify({
         ...form,notas:extraNotas,
         customer_id:selectedCust?.id||null,
@@ -778,9 +989,7 @@ export default function SolicitudClient() {
 
   function resetCreateForm() {
     setSelectedCust(null);setCustSearch('');setCustResults([]);setCustSearchDone(false);
-    setProductos([]);setProdName('');setProdQty(1);setSegSearch('');setSegResults([]);
-    setEnvio({nombre_completo:'',cedula:'',direccion:'',ciudad:'',telefono:'',transportadora:'',tipo_envio:'Contraentrega',ven_ids:''});
-    setDevVen('');setDevPec('');setDevMotivo('');
+    tipoDetalleRef.current?.reset();
     setForm({advisor_name:currentUser,advisor_user_id:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:5,tipo_problema:'',descripcion_problema:'',urgencia:'',evidencia_descripcion:'',asignado_a_user_id:''});
   }
 
@@ -818,12 +1027,6 @@ export default function SolicitudClient() {
     if(activeTab==='Soporte') return sc.tipo_solicitud==='Soporte Tecnico';
     return true;
   });
-
-  const isCotizacion=form.tipo_solicitud==='Cotizacion de Producto';
-  const isSeguimiento=form.tipo_solicitud==='Seguimiento';
-  const isProgramarEntrega=form.tipo_solicitud==='Programar Entrega';
-  const isDevolucion=form.tipo_solicitud==='Devolucion de Producto';
-  const isSoporte=form.tipo_solicitud==='Soporte Tecnico';
 
   return (
     <div className="w-full bg-slate-50 min-h-full">
@@ -1721,170 +1924,7 @@ export default function SolicitudClient() {
                   )}
                 </div>
 
-                {/* Tipo + Modalidad (Modalidad solo para Cotizacion) */}
-                <div className={`grid gap-4 ${isCotizacion ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                  <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Tipo de Solicitud</label>
-                    <select value={form.tipo_solicitud} onChange={e=>setForm(f=>({...f,tipo_solicitud:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">{TIPOS_SC.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
-                  {isCotizacion&&(
-                    <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Modalidad de Pago</label>
-                      <select value={form.modalidad_pago} onChange={e=>setForm(f=>({...f,modalidad_pago:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">{MODALIDADES_PAGO.map(m=><option key={m} value={m}>{m}</option>)}</select></div>
-                  )}
-                </div>
-
-                {isCotizacion&&form.modalidad_pago.includes('60/40')&&(
-                  <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 flex gap-4">
-                    <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Anticipo</p><p className="font-black text-indigo-700 text-lg">60%</p></div>
-                    <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Saldo al entregar</p><p className="font-black text-slate-700 text-lg">40%</p></div>
-                  </div>
-                )}
-
-                {/* TYPE-SPECIFIC FIELDS */}
-                {isCotizacion&&(
-                  <div>
-                    <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Producto a Cotizar <span className="text-slate-300 font-medium">(opcional)</span></label>
-                    <ProductSearch value={prodName} onChange={v=>setProdName(v)} onSelect={p=>{setProdName(p.name||p.product_name);}}/>
-                    {prodName&&(
-                      <div className="mt-2 flex items-center gap-2">
-                        <label className="text-xs text-slate-500">Cantidad:</label>
-                        <input type="number" min="1" value={prodQty} onChange={e=>setProdQty(Number(e.target.value))} className="w-20 border border-slate-200 rounded-lg px-2 py-1 text-sm text-center font-bold outline-none focus:ring-1 focus:ring-indigo-200"/>
-                        <button type="button" onClick={()=>{if(prodName){setProductos(p=>[...p,{product_name:prodName,qty:prodQty,unit_price_cop:0}]);setProdName('');setProdQty(1);}}} className="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-lg text-xs font-bold hover:bg-indigo-200">+ Agregar</button>
-                      </div>
-                    )}
-                    {productos.length>0&&(
-                      <div className="mt-2 space-y-1">{productos.map((p,i)=>(
-                        <div key={i} className="flex items-center justify-between bg-slate-50 rounded-lg px-3 py-1.5">
-                          <span className="text-sm font-bold text-slate-700">{p.product_name} x{p.qty}</span>
-                          <button type="button" onClick={()=>setProductos(prev=>prev.filter((_,idx)=>idx!==i))} className="text-red-400 hover:text-red-600"><X size={13}/></button>
-                        </div>
-                      ))}</div>
-                    )}
-                    <p className="text-xs text-slate-400 mt-2">Si no existe en el catalogo, dejalo en blanco y detallalo en Notas.</p>
-                  </div>
-                )}
-
-                {isSeguimiento&&(
-                  <div>
-                    <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Buscar SC / COT / Pedido de Venta</label>
-                    <div className="relative">
-                      <input type="text" value={segSearch} onChange={e=>onSegSearch(e.target.value)} placeholder="Numero o nombre de cliente..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-200 outline-none"/>
-                      {segResults.length>0&&(
-                        <div className="absolute top-full left-0 right-0 z-50 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-48 overflow-y-auto">
-                          {segResults.map((r:any,i:number)=>(
-                            <button key={i} type="button" onClick={()=>{setSegSearch(`${r._tipo}: ${r.numero}`);setSegResults([]);setForm(f=>({...f,notas:`Seguimiento a ${r._tipo} ${r.numero} - ${r.customer_name||''}\n${f.notas}`}));}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm border-b border-slate-50 last:border-0">
-                              <span className="font-bold">{r.numero}</span>
-                              <span className="ml-2 text-xs text-slate-400">{r._tipo} - {r.estado} - {r.customer_name}</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    {segSearch&&<div className="mt-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2"><p className="text-xs font-bold text-blue-700 flex items-center gap-1"><CheckCircle2 size={11}/>Referencia: {segSearch}</p></div>}
-                  </div>
-                )}
-
-                {isProgramarEntrega&&(
-                  <div className="space-y-3 bg-teal-50 border border-teal-100 rounded-xl p-4">
-                    <p className="text-xs font-black text-teal-700 uppercase">Datos de Envio</p>
-                    <div className="grid grid-cols-2 gap-3">
-                      {[{l:'Nombre Completo',k:'nombre_completo'},{l:'Cedula',k:'cedula'},{l:'Telefono',k:'telefono'},{l:'Ciudad',k:'ciudad'},{l:'Transportadora',k:'transportadora'}].map(f=>(
-                        <div key={f.k}><label className="text-xs font-bold text-teal-600 mb-1 block">{f.l}</label><input type="text" value={(envio as any)[f.k]} onChange={e=>setEnvio(ev=>({...ev,[f.k]:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-200"/></div>
-                      ))}
-                      <div><label className="text-xs font-bold text-teal-600 mb-1 block">Tipo Envio</label>
-                        <select value={envio.tipo_envio} onChange={e=>setEnvio(ev=>({...ev,tipo_envio:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-200"><option>Contraentrega</option><option>Contado</option></select></div>
-                    </div>
-                    <div><label className="text-xs font-bold text-teal-600 mb-1 block">Direccion</label><input type="text" value={envio.direccion} onChange={e=>setEnvio(ev=>({...ev,direccion:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-200"/></div>
-                    <div><label className="text-xs font-bold text-teal-600 mb-1 block">Pedido(s) de Venta (PVEN#)</label><input type="text" value={envio.ven_ids} onChange={e=>setEnvio(ev=>({...ev,ven_ids:e.target.value}))} placeholder="PVEN-20260001, PVEN-20260002..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-200"/></div>
-                    {envio.nombre_completo&&(
-                      <div className="mt-2">
-                        <p className="text-xs font-black text-teal-700 mb-1">Enviar Resumen:</p>
-                        <div className="flex gap-2">
-                          <a href={`https://wa.me/57${envio.telefono.replace(/\D/g,'')}?text=${encodeURIComponent(`Hola ${envio.nombre_completo}, tu pedido ${envio.ven_ids} sera enviado por ${envio.transportadora} a ${envio.direccion}, ${envio.ciudad}. Tipo: ${envio.tipo_envio}`)}`} target="_blank" rel="noreferrer" className="flex-1 bg-green-500 text-white py-2 rounded-xl text-xs font-bold text-center flex items-center justify-center gap-1"><MessageCircle size={12}/>WhatsApp</a>
-                          {form.modalidad_pago&&<a href={`mailto:?subject=Informacion de envio&body=${encodeURIComponent(`Destinatario: ${envio.nombre_completo}\nCedula: ${envio.cedula}\nDireccion: ${envio.direccion}, ${envio.ciudad}\nTransportadora: ${envio.transportadora}\nTipo: ${envio.tipo_envio}`)}`} className="flex-1 bg-blue-500 text-white py-2 rounded-xl text-xs font-bold text-center flex items-center justify-center gap-1"><Mail size={12}/>Email</a>}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {isDevolucion&&(
-                  <div className="space-y-3 bg-orange-50 border border-orange-100 rounded-xl p-4">
-                    <p className="text-xs font-black text-orange-700 uppercase">Datos de Devolucion</p>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div><label className="text-xs font-bold text-orange-600 mb-1 block">Pedido de Venta (PVEN)</label><input type="text" value={devVen} onChange={e=>setDevVen(e.target.value)} placeholder="PVEN-20260001" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"/></div>
-                      <div><label className="text-xs font-bold text-orange-600 mb-1 block">Pedido de Compra (PEC)</label><input type="text" value={devPec} onChange={e=>setDevPec(e.target.value)} placeholder="PEC-20260001" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"/></div>
-                    </div>
-                    <div><label className="text-xs font-bold text-orange-600 mb-1 block">Motivo / Tipo de Devolucion</label>
-                      <select value={devMotivo} onChange={e=>setDevMotivo(e.target.value)} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200">
-                        <option value="">Seleccionar...</option>
-                        <option>Dano menor - Ajustar precio de venta</option>
-                        <option>Dano total - Ajuste inventario negativo</option>
-                        <option>Producto incorrecto</option>
-                        <option>El cliente cambio de decision</option>
-                      </select>
-                    </div>
-                    <div><label className="text-xs font-bold text-orange-600 mb-1 block">Pruebas (URLs de imagenes o descripcion)</label>
-                      <textarea rows={2} placeholder="Enlace a foto o descripcion del estado del producto..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none outline-none focus:ring-2 focus:ring-orange-200" onChange={e=>setForm(f=>({...f,notas:`PRUEBAS: ${e.target.value}\n${f.notas}`}))}/></div>
-                    {devMotivo&&<div className="bg-orange-100 rounded-xl p-3 text-xs text-orange-800 font-bold">
-                      <p>Logica de backend:</p>
-                      {devMotivo.includes('menor')&&<p>* Se afectara el margen en el Pedido de Venta {devVen}</p>}
-                      {devMotivo.includes('total')&&<p>* Se ajustara el inventario en el PEC {devPec} (ajuste negativo)</p>}
-                    </div>}
-                  </div>
-                )}
-
-                {isSoporte && (
-                  <div className="col-span-2 bg-purple-50 border border-purple-200 rounded-2xl p-4 space-y-3">
-                    <select value={form.tipo_problema||''} onChange={e=>setForm(f=>({...f,tipo_problema:e.target.value}))}
-                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
-                      <option value="">Tipo de problema...</option>
-                      <option>Falla del producto</option><option>Garantia</option>
-                      <option>Duda de uso</option><option>Problema con el pedido o envio</option><option>Otro</option>
-                    </select>
-                    <textarea placeholder="Descripcion del problema" value={form.descripcion_problema||''}
-                      onChange={e=>setForm(f=>({...f,descripcion_problema:e.target.value}))}
-                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" rows={3} />
-                    <select value={form.urgencia||''} onChange={e=>setForm(f=>({...f,urgencia:e.target.value}))}
-                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
-                      <option value="">Urgencia...</option>
-                      <option>Baja</option><option>Media</option><option>Alta</option>
-                    </select>
-                    <textarea placeholder="Descripcion de la evidencia (fotos recibidas por fuera del sistema, etc.)"
-                      value={form.evidencia_descripcion||''} onChange={e=>setForm(f=>({...f,evidencia_descripcion:e.target.value}))}
-                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" rows={2} />
-                    <select value={form.asignado_a_user_id||''} onChange={e=>{
-                      const uid = e.target.value ? Number(e.target.value) : '';
-                      setForm(f=>({...f, asignado_a_user_id: uid as any}));
-                    }}
-                      className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
-                      <option value="">Asignar a...</option>
-                      {usuarios.filter(u=>u.role==='Admin'||u.role==='Vendedor').map(u=>(
-                        <option key={u.id} value={u.id}>{u.email}</option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                {/* Asesor + Vencimiento */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Asesor</label><select value={form.advisor_user_id||''} onChange={e=>{
-                    const uid = e.target.value ? Number(e.target.value) : '';
-                    const u = usuarios.find(x=>x.id===uid);
-                    setForm(f=>({...f, advisor_user_id: uid, advisor_name: u?.email || f.advisor_name}));
-                  }}
-                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-indigo-400">
-                  <option value="">Seleccionar asesor...</option>
-                  {usuarios.filter(u=>u.role==='Admin'||u.role==='Vendedor').map(u=>(
-                    <option key={u.id} value={u.id}>{u.email}</option>
-                  ))}
-                </select></div>
-                  <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Dias Vencimiento</label><input type="number" min="1" max="365" value={form.dias_vencimiento} onChange={e=>setForm(f=>({...f,dias_vencimiento:Number(e.target.value)}))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none"/></div>
-                </div>
-
-                {/* Notas */}
-                <div>
-                  <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Notas / Observaciones</label>
-                  <textarea value={form.notas} onChange={e=>setForm(f=>({...f,notas:e.target.value}))} rows={3} placeholder="Detalles de la solicitud..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-200 outline-none"/>
-                </div>
+                <SolicitudTipoYDetalle ref={tipoDetalleRef} form={form} setForm={setForm} />
           </form>
         </Modal>
       )}

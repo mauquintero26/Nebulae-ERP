@@ -7,11 +7,13 @@ import {
   Sparkles, Copy, Check, Search, X, FileText, Phone, MapPin, Layers
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
-// Mismo modal de cliente nuevo y buscador de producto que usa la Solicitud de
-// Cliente real (/dashboard/ventas/solicitud) -- se reutilizan tal cual para
-// que "Crear Solicitud de Cliente" dispare exactamente el mismo flujo, no una
-// reimplementacion paralela.
-import { NewClientModal, ProductSearch } from '../ventas/solicitud/solicitud-client';
+// Mismo modal de cliente nuevo y el mismo bloque de Tipo/Modalidad/campos por
+// tipo que usa la Solicitud de Cliente real (/dashboard/ventas/solicitud) --
+// se reutilizan tal cual para que "Crear Solicitud de Cliente" dispare
+// EXACTAMENTE el mismo formulario, no una reimplementacion paralela que
+// termina divergiendo (ya paso una vez: tipos/modalidades hardcodeados aqui
+// no coincidian con los reales).
+import { NewClientModal, SolicitudTipoYDetalle, type SolicitudTipoYDetalleHandle } from '../ventas/solicitud/solicitud-client';
 
 const CHATWOOT_URL = 'https://chatbot-crn-chatwoot.ionwxk.easypanel.host/app/accounts/1/conversations';
 
@@ -58,19 +60,15 @@ export default function AsistenteOmnicanal() {
   const [submittingSc, setSubmittingSc] = useState(false);
   const [scError, setScError] = useState('');
   const [scFormData, setScFormData] = useState({
-    tipo_solicitud: 'Cotizacion de Producto',
-    modalidad_pago: 'Contado',
-    notas: '',
-    advisor_name: '',
+    advisor_name: '', advisor_user_id: '' as number | '',
+    tipo_solicitud: 'Cotizacion de Producto', modalidad_pago: 'Contado', notas: '',
+    dias_vencimiento: 5,
+    tipo_problema: '', descripcion_problema: '', urgencia: '', evidencia_descripcion: '',
+    asignado_a_user_id: '' as number | '',
   });
-
-  // Producto a cotizar (solo aplica cuando el Tipo involucra producto) --
-  // mismo patron que solicitud-client.tsx: ProductSearch contra el catalogo
-  // real (GET /crm/products/search, alta rapida POST /crm/products/quick-create)
-  // en vez de una sola linea de texto libre.
-  const [prodName, setProdName] = useState('');
-  const [prodQty, setProdQty] = useState(1);
-  const [productos, setProductos] = useState<any[]>([]);
+  // Producto/envio/devolucion/seguimiento/asesor viven en <SolicitudTipoYDetalle>,
+  // el mismo bloque que usa /dashboard/ventas/solicitud (ver handleCreateSc/resetScForm).
+  const tipoDetalleRef = useRef<SolicitudTipoYDetalleHandle>(null);
 
   // Cliente de la SC en creacion. Se inicializa con el activeCustomer ya
   // resuelto por el buscador superior / sincronizacion con Chatwoot al abrir
@@ -241,12 +239,13 @@ export default function AsistenteOmnicanal() {
 
   const resetScForm = () => {
     setScFormData(f => ({
-      tipo_solicitud: 'Cotizacion de Producto',
-      modalidad_pago: 'Contado',
-      notas: '',
-      advisor_name: f.advisor_name,
+      advisor_name: f.advisor_name, advisor_user_id: '',
+      tipo_solicitud: 'Cotizacion de Producto', modalidad_pago: 'Contado', notas: '',
+      dias_vencimiento: 5,
+      tipo_problema: '', descripcion_problema: '', urgencia: '', evidencia_descripcion: '',
+      asignado_a_user_id: '',
     }));
-    setProductos([]); setProdName(''); setProdQty(1);
+    tipoDetalleRef.current?.reset();
     setScCustomer(null); setScCustQuery(''); setScCustResults([]); setScCustSearchDone(false);
     setScError('');
   };
@@ -276,9 +275,7 @@ export default function AsistenteOmnicanal() {
 
     setSubmittingSc(true);
     try {
-      const prodsToSend = productos.length > 0
-        ? productos
-        : (prodName ? [{ product_name: prodName, qty: prodQty, unit_price_cop: 0 }] : []);
+      const {productos: prodsToSend, notasConExtras} = tipoDetalleRef.current?.getExtras() ?? {productos: [], notasConExtras: scFormData.notas};
 
       const customerName = scCustomer.name
         || `${scCustomer.first_name || ''} ${scCustomer.last_name || ''}`.trim();
@@ -286,19 +283,18 @@ export default function AsistenteOmnicanal() {
       const scData = await apiFetch('/ventas/solicitudes', {
         method: 'POST',
         body: JSON.stringify({
+          ...scFormData,
+          notas: notasConExtras,
           customer_id: scCustomer.id,
           customer_name: customerName,
           customer_phone: scCustomer.phone || '',
           customer_email: scCustomer.email || '',
           customer_address: scCustomer.address || '',
-          tipo_solicitud: scFormData.tipo_solicitud,
-          modalidad_pago: scFormData.modalidad_pago,
-          notas: scFormData.notas,
           productos: prodsToSend,
-          advisor_name: scFormData.advisor_name,
-          // advisor_user_id es Integer/nullable en el backend (erp_ventas.py
-          // _int_or_none): no hay selector de asesor en este modal, se deja null.
-          advisor_user_id: null,
+          // advisor_user_id / asignado_a_user_id son Integer/nullable en el
+          // backend (erp_ventas.py _int_or_none): nunca enviar '' (rompe el INSERT).
+          advisor_user_id: scFormData.advisor_user_id || null,
+          asignado_a_user_id: scFormData.asignado_a_user_id || null,
           created_by: scFormData.advisor_name || 'Asesor Omnicanal',
         }),
       });
@@ -843,97 +839,11 @@ export default function AsistenteOmnicanal() {
                 )}
               </div>
 
-              {/* Tipo y Modalidad */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">Tipo de Solicitud</label>
-                  <select
-                    value={scFormData.tipo_solicitud}
-                    onChange={e => setScFormData({ ...scFormData, tipo_solicitud: e.target.value })}
-                    className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500"
-                  >
-                    <option value="Cotizacion de Producto">Cotización de Producto</option>
-                    <option value="Pedido Inmediato">Pedido Inmediato</option>
-                    <option value="Pedido de Importacion">Pedido de Importación</option>
-                    <option value="Consulta General">Consulta General</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">Modalidad de Pago</label>
-                  <select
-                    value={scFormData.modalidad_pago}
-                    onChange={e => setScFormData({ ...scFormData, modalidad_pago: e.target.value })}
-                    className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500"
-                  >
-                    <option value="Contado">Contado</option>
-                    <option value="50% Anticipo / 50% Entrega">50% Anticipo / 50% Entrega</option>
-                    <option value="Credito">Crédito Comercial</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Producto -- catalogo real (ProductSearch), no texto libre.
-                  Oculto solo para Consulta General, que es pura indagacion sin
-                  producto asociado (igual de condicional que isCotizacion en
-                  la pagina real de Solicitud de Cliente). */}
-              {scFormData.tipo_solicitud !== 'Consulta General' && (
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
-                    Producto solicitado <span className="text-slate-300 font-medium">(opcional)</span>
-                  </label>
-                  <ProductSearch
-                    value={prodName}
-                    onChange={v => setProdName(v)}
-                    onSelect={p => setProdName(p.name || p.product_name)}
-                  />
-                  {prodName && (
-                    <div className="mt-2 flex items-center gap-2">
-                      <label className="text-[11px] text-slate-500">Cantidad:</label>
-                      <input
-                        type="number" min="1" value={prodQty}
-                        onChange={e => setProdQty(Number(e.target.value))}
-                        className="w-16 border border-slate-200 rounded-lg px-2 py-1 text-xs text-center font-bold outline-none focus:ring-1 focus:ring-indigo-200"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => { if (prodName) { setProductos(p => [...p, { product_name: prodName, qty: prodQty, unit_price_cop: 0 }]); setProdName(''); setProdQty(1); } }}
-                        className="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-lg text-xs font-bold hover:bg-indigo-200 cursor-pointer"
-                      >
-                        + Agregar
-                      </button>
-                    </div>
-                  )}
-                  {productos.length > 0 && (
-                    <div className="mt-2 space-y-1">
-                      {productos.map((p, i) => (
-                        <div key={i} className="flex items-center justify-between bg-slate-50 rounded-lg px-3 py-1.5">
-                          <span className="text-xs font-bold text-slate-700">{p.product_name} x{p.qty}</span>
-                          <button
-                            type="button"
-                            onClick={() => setProductos(prev => prev.filter((_, idx) => idx !== i))}
-                            className="text-red-400 hover:text-red-600 cursor-pointer"
-                          >
-                            <X size={13} />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <p className="text-[11px] text-slate-400 mt-1">Si no existe en el catálogo, déjalo en blanco y detállalo en Notas.</p>
-                </div>
-              )}
-
-              {/* Notas de la conversación */}
-              <div>
-                <label className="block text-[11px] font-bold text-slate-600 mb-1">Notas / Instrucciones del Chat</label>
-                <textarea
-                  rows={2}
-                  placeholder="Detalles conversados con el cliente en Chatwoot..."
-                  value={scFormData.notas}
-                  onChange={e => setScFormData({ ...scFormData, notas: e.target.value })}
-                  className="w-full p-2.5 text-xs bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 font-medium"
-                />
-              </div>
+              {/* Mismo bloque de Tipo/Modalidad/campos-por-tipo/Asesor/Vencimiento
+                  que usa la pagina real de Solicitud de Cliente -- incluye Notas,
+                  asi que la caja de Notas propia de este modal queda redundante
+                  y se retira mas abajo. */}
+              <SolicitudTipoYDetalle ref={tipoDetalleRef} form={scFormData} setForm={setScFormData} />
 
               {/* Error de validación o del backend */}
               {scError && (
