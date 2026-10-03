@@ -7,12 +7,25 @@ import datetime
 from decimal import Decimal
 
 
+class VerificacionAnticipo(BaseModel):
+    """N1: pago del anticipo que el asesor verifico antes de crear el Pedido de Venta. monto en pesos (se
+    redondea al peso); metodo_pago de ventas_dinero.METODOS_PAGO_ANTICIPO; referencia obligatoria (en efectivo,
+    el numero de recibo); fecha_pago por defecto hoy (Bogota), nunca futura."""
+    model_config = ConfigDict(str_strip_whitespace=True)
+    monto: Decimal = Field(..., gt=Decimal("0"))
+    metodo_pago: str = Field(..., min_length=2, max_length=50)
+    referencia: str = Field(..., min_length=3, max_length=150)
+    fecha_pago: Optional[datetime.date] = None
+
+
 class ConvertirCotizacionVentaRequest(BaseModel):
     idempotency_key: Optional[str] = Field(None, max_length=150)
     user_name: Optional[str] = Field(None, max_length=150)
     fecha_entrega_estimada: Optional[datetime.date] = None
     direccion_entrega: Optional[str] = Field(None, max_length=300)
     notas: Optional[str] = None
+    # N1: obligatoria cuando el anticipo que falta por verificar es > 0 (ver convertir_cotizacion_a_venta).
+    verificacion_anticipo: Optional[VerificacionAnticipo] = None
 
 
 class AgendaActivityCreate(BaseModel):

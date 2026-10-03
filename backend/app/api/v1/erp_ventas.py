@@ -7,12 +7,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func, select
 from typing import Optional, List
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import pydantic
 from app.db.database import get_db
 from app.models.erp_documents import (
     CustomerRequest, SalesQuotation, SaleOrder,
     PaymentPending, ActivityLog
 )
+from app.models.fase4 import SaleOrderPayment
 from app.models.customers import Customer
 from app.models.inventory import InventoryLevel, InventoryOperation, InventoryMovement
 from app.models.fase1b import InventoryOwnerBalance
@@ -23,7 +25,11 @@ from app.api.dependencies import (
 from app.models.users import User
 from app.core.busqueda import productos_ilike
 from app.core import cambios_documento
-from app.core.ventas_dinero import redondear_peso
+from app.core.ventas_dinero import (
+    redondear_peso, pesos, formato_pct, pct_anticipo_cotizacion, anticipo_requerido, saldos_a_favor_de_cotizacion,
+    PCT_ANTICIPO_POR_DEFECTO,
+)
+from app.core.textos_actividad import etiqueta_estado
 from app.api.v1.schemas_compras import CancelarSolicitudBody
 from app.api.v1.crm import mover_lead_de_solicitud
 import datetime
@@ -107,7 +113,10 @@ def _gen_numero(db: Session, prefix: str, seq: str) -> str:
 
 def _log(db: Session, entity_type: str, entity_id: int, entity_numero: str,
          action: str, description: str = None, old_estado: str = None,
-         new_estado: str = None, user_name: str = None, extra_data: dict = None):
+         new_estado: str = None, user_name: str = None, extra_data: dict = None,
+         commit: bool = True):
+    """Agrega un renglon de Actividad. commit=False lo deja en la sesion para que lo confirme el commit del
+    llamador (una sola transaccion: choque H36/H29 en update_solicitud)."""
     log = ActivityLog(
         entity_type=entity_type,
         entity_id=entity_id,
@@ -120,7 +129,8 @@ def _log(db: Session, entity_type: str, entity_id: int, entity_numero: str,
         extra_data=extra_data,
     )
     db.add(log)
-    db.commit()
+    if commit:
+        db.commit()
 
 def _registrar_cambios(db: Session, entidad: str, doc, antes: dict, body: dict, user: User,
                        recotizacion: bool = False):
@@ -181,6 +191,87 @@ def _lista_compras_items_de(db: Session, pven_id: int) -> list:
     # de Compra / Agregar a Lista de Compras debe volver a aparecer.
     return [it for it in vigentes if it.get("estado") != "DESCARTADO"]
 
+def _pven_vigente_de_cotizacion(db: Session, cot_id: int):
+    """El Pedido de Venta vigente (estado != CANCELADO) de la cotizacion, el mas nuevo, o None (helper de N4)."""
+    return (db.query(SaleOrder)
+            .filter(SaleOrder.cot_id == cot_id, SaleOrder.estado != "CANCELADO")
+            .order_by(SaleOrder.id.desc()).first())
+
+# H36+H43: cotizaciones "abiertas" cuyo anticipo sigue a la modalidad de su SC.
+_ESTADOS_COT_ANTICIPO_ABIERTO = ("BORRADOR", "ENVIADA", "PENDIENTE_CONFIRMACION", "CONFIRMADA")
+
+def _recalcular_anticipo_por_modalidad(db: Session, sc: CustomerRequest, user_name: Optional[str]) -> None:
+    """H36+H43: cambio la modalidad de pago de la SC -> recalcula el anticipo de sus COT abiertas sin pedido
+    vigente (el % manual, si lo hay, se respeta: R3) y deja un renglon UPDATED en la Actividad de cada COT que
+    cambia. Sin commit: lo confirma el commit de update_solicitud (choque H36/H29, una sola transaccion)."""
+    cots = (db.query(SalesQuotation)
+            .filter(SalesQuotation.sc_id == sc.id, SalesQuotation.estado.in_(_ESTADOS_COT_ANTICIPO_ABIERTO))
+            .order_by(SalesQuotation.id.asc()).all())
+    for cot in cots:
+        if _pven_vigente_de_cotizacion(db, cot.id) is not None:
+            continue
+        pct, _ = pct_anticipo_cotizacion(cot, db, sc=sc)
+        viejo = Decimal(str(cot.anticipo_cop or 0))
+        nuevo = anticipo_requerido(cot.total_cop, pct)
+        if nuevo == viejo:
+            continue
+        cot.anticipo_cop = nuevo
+        cot.updated_at = datetime.datetime.utcnow()
+        _log(db, "COT", cot.id, cot.numero, "UPDATED",
+             f"Anticipo recalculado por cambio de modalidad de pago de {sc.numero} "
+             f"({sc.modalidad_pago or 'sin modalidad'}): {pesos(viejo)} → {pesos(nuevo)}",
+             user_name=user_name,
+             extra_data={"anticipo_antes": str(viejo), "anticipo_despues": str(nuevo),
+                         "modalidad_pago": sc.modalidad_pago, "anticipo_pct": str(pct)},
+             commit=False)
+
+def _leer_ajuste_anticipo_manual(db: Session, cot: SalesQuotation, body: dict):
+    """R3: valida el anticipo manual del PATCH de la COT ANTES de tocar nada.
+
+    None si el body no trae 'anticipo_pct_manual'. Si lo trae: (pct, nota) a guardar, o (None, None) para volver
+    a la modalidad. 409 si la COT esta rechazada/cancelada o ya se convirtio (pedido vigente); 422 si el % no esta
+    entre 0 y 100 o la nota tiene menos de 5 caracteres."""
+    if "anticipo_pct_manual" not in body:
+        return None
+    if cot.estado in ("RECHAZADA", "CANCELADA"):
+        raise HTTPException(409, f"El anticipo ya no se puede ajustar: la cotización está "
+                                 f"{etiqueta_estado('COT', cot.estado).lower()}.")
+    vigente = _pven_vigente_de_cotizacion(db, cot.id)
+    if vigente is not None:
+        raise HTTPException(409, f"El anticipo ya no se puede ajustar: la cotización ya tiene el pedido "
+                                 f"{vigente.numero} vigente.")
+    valor = body.get("anticipo_pct_manual")
+    if valor is None:
+        return (None, None)
+    try:
+        if isinstance(valor, bool):
+            raise ValueError
+        pct = Decimal(str(valor).strip())
+        if not pct.is_finite() or pct < 0 or pct > 100:
+            raise ValueError
+    except (InvalidOperation, ValueError):
+        raise HTTPException(422, "El anticipo manual debe ser un porcentaje entre 0% y 100%.")
+    nota = body.get("anticipo_manual_nota")
+    nota = nota.strip() if isinstance(nota, str) else ""
+    if len(nota) < 5:
+        raise HTTPException(422, "Escribe una nota de al menos 5 caracteres que explique el anticipo manual.")
+    return (pct.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), nota)
+
+def _pago_dict(p: SaleOrderPayment) -> dict:
+    return {
+        "id": p.id,
+        "tipo": p.tipo,
+        "monto": float(p.monto) if p.monto is not None else 0,
+        "metodo_pago": p.metodo_pago,
+        "referencia_bancaria": p.referencia_bancaria,
+        "usuario": p.usuario,
+        "fecha": p.fecha.isoformat() if p.fecha else None,
+        "estado": p.estado,
+        "notes": p.notes,
+        # UTC sin zona en la base: con "Z" para que el navegador no lo lea como hora local.
+        "created_at": (p.created_at.isoformat() + "Z") if p.created_at else None,
+    }
+
 def _sc_dict(sc: CustomerRequest) -> dict:
     return {
         "id": sc.id,
@@ -232,6 +323,9 @@ def _cot_dict(cot: SalesQuotation) -> dict:
         "descuento_pct": float(cot.descuento_pct) if cot.descuento_pct else 0,
         "total_cop": float(cot.total_cop) if cot.total_cop else 0,
         "anticipo_cop": float(cot.anticipo_cop) if cot.anticipo_cop else 0,
+        # R3: anticipo puesto a mano (None = sigue la modalidad de la SC) y su nota.
+        "anticipo_pct_manual": float(cot.anticipo_pct_manual) if cot.anticipo_pct_manual is not None else None,
+        "anticipo_manual_nota": cot.anticipo_manual_nota,
         "estado": cot.estado,
         "canal_envio": cot.canal_envio,
         "fecha_cotizacion": cot.fecha_cotizacion.isoformat() if cot.fecha_cotizacion else None,
@@ -267,6 +361,7 @@ def _ven_dict(v: SaleOrder) -> dict:
         "total_cop": float(v.total_cop) if v.total_cop else 0,
         "anticipo_cop": float(v.anticipo_cop) if v.anticipo_cop else 0,
         "saldo_cop": float(v.saldo_cop) if v.saldo_cop else 0,
+        "anticipo_pct": float(v.anticipo_pct_snapshot) if v.anticipo_pct_snapshot is not None else None,
         "estado": v.estado,
         "notas": v.notas,
         "productos": v.productos or [],
@@ -560,6 +655,10 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     )
     if invalida_por_productos:
         sc.estado = "ASIGNADA" if sc.advisor_user_id else "BORRADOR"
+    # H36+H43: si cambio la modalidad de pago, el anticipo de sus COT abiertas sin pedido vigente se recalcula
+    # aqui, ANTES del commit de abajo y con _log(commit=False): sin commits intermedios (choque H36/H29).
+    if "modalidad_pago" in body and antes_log.get("modalidad_pago") != sc.modalidad_pago:
+        _recalcular_anticipo_por_modalidad(db, sc, body.get("updated_by") or getattr(user, "email", None))
     # Round 8 (fix de concurrencia encontrado en re-review): captura la transicion
     # de ESTE request AHORA, antes de cualquier commit/refresh. db.refresh(sc) mas
     # abajo re-lee la fila desde la DB -- si otro request (p.ej. el cliente
@@ -838,12 +937,14 @@ def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN
     # H42: la cabecera se guarda en pesos enteros (antes de gastar un numero de la secuencia).
     subtotal_cop = _monto_en_pesos(body.get("subtotal_cop"), "subtotal_cop")
     total_cop = _monto_en_pesos(body.get("total_cop"), "total_cop")
+    anticipo_cop = _monto_en_pesos(body.get("anticipo_cop"), "anticipo_cop")
     numero = _gen_numero(db, "COT-", "seq_cot")
     entrega_est = None
     if body.get("dias_entrega"):
         entrega_est = datetime.datetime.utcnow() + datetime.timedelta(days=body["dias_entrega"])
 
     sc_id = body.get("sc_id")
+    sc = None
     sc_numero = body.get("sc_numero")
     customer_id = body.get("customer_id")
     customer_name = body.get("customer_name")
@@ -884,13 +985,17 @@ def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN
         subtotal_cop=subtotal_cop,
         descuento_pct=body.get("descuento_pct", 0),
         total_cop=total_cop,
-        anticipo_cop=body.get("anticipo_cop", 0),
+        # Sin SC (Cotizador Rapido) se respeta el anticipo que manda, en pesos enteros.
+        anticipo_cop=anticipo_cop,
         estado="BORRADOR",
         fecha_entrega_estimada=entrega_est,
         notas=body.get("notas"),
         productos=body.get("productos", []),
         created_by=body.get("created_by"),
     )
+    if sc is not None:
+        # H36+H43: con SC, el anticipo sale de su modalidad de pago (o 60%), nunca del body.
+        cot.anticipo_cop = anticipo_requerido(total_cop, pct_anticipo_cotizacion(cot, db, sc=sc)[0])
     db.add(cot)
     db.commit()
     db.refresh(cot)
@@ -917,6 +1022,20 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
     # linked VEN
     vens = db.query(SaleOrder).filter(SaleOrder.cot_id == cot_id).all()
     d["pedidos_venta"] = [_ven_dict(v) for v in vens]
+    # Anticipo (H36+H43, N1, R3, R6): lo mismo que exigira convertir_cotizacion_a_venta. Solo en el detalle (no en
+    # _cot_dict) para no hacer una consulta por fila en el listado.
+    pct, modalidad = pct_anticipo_cotizacion(cot, db)
+    total = redondear_peso(cot.total_cop)
+    requerido = anticipo_requerido(total, pct)
+    saldos = saldos_a_favor_de_cotizacion(db, cot.id)
+    saldo_a_favor = sum((s["monto"] for s in saldos), Decimal("0"))
+    d["anticipo_pct"] = float(pct.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    d["sc_modalidad_pago"] = modalidad
+    d["anticipo_requerido"] = float(requerido)
+    d["saldo_a_favor"] = float(saldo_a_favor)
+    d["saldo_a_favor_detalle"] = [{"pven_id": s["pedido"].id, "pven_numero": s["pedido"].numero,
+                                   "monto": float(s["monto"])} for s in saldos]
+    d["anticipo_por_verificar"] = float(max(Decimal("0"), requerido - min(saldo_a_favor, total)))
     return {"status": "success", "data": d}
 
 
@@ -966,6 +1085,8 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         raise HTTPException(400, "Este estado solo se alcanza por el flujo de confirmación del cliente (no se puede forzar manualmente con este PATCH).")
     if "productos" in body:
         _validar_precios_productos(body.get("productos") or [])
+    # R3: anticipo manual con nota obligatoria. Se valida aqui, antes de tocar nada (409/422).
+    ajuste_manual = _leer_ajuste_anticipo_manual(db, cot, body)
     old_estado = cot.estado
     fecha_vieja = cot.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
     antes_log = cambios_documento.tomar_foto(cot, "COT")
@@ -980,20 +1101,32 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     # pendiente) ya no aplica al precio nuevo: se reinicia el ciclo a BORRADOR, lo que
     # a su vez dispara sale_de_gate2 mas abajo (mismo mecanismo de revocar+limpiar que
     # ya usa cualquier otra salida del ciclo, sin duplicar esa logica aqui).
+    # H36+H43: el anticipo NO congela el precio. El cliente nunca lo ve (confirmacion_publica solo expone total y
+    # productos), asi que recalcularlo no regresa a BORRADOR una COT pendiente de confirmacion o confirmada.
     PRICE_FREEZE_FIELDS = ["productos", "total_cop", "subtotal_cop", "descuento_pct",
-                           "anticipo_cop", "trm_rate", "fecha_entrega_estimada", "sc_id"]
+                           "trm_rate", "fecha_entrega_estimada", "sc_id"]
     old_price_values = {k: getattr(cot, k) for k in PRICE_FREEZE_FIELDS}
+    # H36+H43: % de anticipo con los valores de ANTES del PATCH: el de una COT sin SC sale del anticipo/total
+    # anteriores (y es el "antes" del renglon del anticipo manual).
+    pct_previo, _ = pct_anticipo_cotizacion(cot, db)
+    manual_previo = cot.anticipo_pct_manual
+    # 'anticipo_cop' ya no es editable: lo calcula siempre el servidor (el del body se ignora).
     allowed = ["sc_id","customer_id","customer_name","customer_phone","customer_email",
                "customer_address","cotizador","direccion_entrega","trm_rate","subtotal_cop",
-               "descuento_pct","total_cop","anticipo_cop","estado","canal_envio","fecha_entrega_estimada",
+               "descuento_pct","total_cop","estado","canal_envio","fecha_entrega_estimada",
                "notas","productos","pec_id","pec_numero"]
     # H42: la cabecera de la COT queda en pesos enteros aunque el cliente mande decimales.
     _redondear_montos_del_body(body, ("subtotal_cop", "total_cop"))
     for k in allowed:
         if k in body:
             setattr(cot, k, body[k])
+    cambia_manual = False
+    if ajuste_manual is not None:
+        pct_manual, nota_manual = ajuste_manual
+        cambia_manual = (pct_manual != cot.anticipo_pct_manual) or (nota_manual != cot.anticipo_manual_nota)
+        cot.anticipo_pct_manual, cot.anticipo_manual_nota = pct_manual, nota_manual
 
-    _PRICE_DECIMAL_FIELDS = ("total_cop", "subtotal_cop", "anticipo_cop", "descuento_pct", "trm_rate")
+    _PRICE_DECIMAL_FIELDS = ("total_cop", "subtotal_cop", "descuento_pct", "trm_rate")
 
     def _quantize_cop(v):
         if v is None:
@@ -1032,7 +1165,7 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         dia. Se compara solo a nivel de DIA (no el timestamp completo) porque el selector
         de fecha del frontend tampoco captura hora.
 
-        2. total_cop/subtotal_cop/anticipo_cop/descuento_pct/trm_rate: URGENTE (Round 3)
+        2. total_cop/subtotal_cop/descuento_pct/trm_rate: URGENTE (Round 3)
         -- el valor VIEJO es un Decimal ya REDONDEADO por la propia columna Numeric(x,2)
         de Postgres al escribirse (p.ej. Decimal('60000.00')), pero el NUEVO es el float
         crudo que manda el body, SIN redondear -- y computeMarginPrice (frontend,
@@ -1066,6 +1199,24 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
             return _quantize_cop(v)
         return v
 
+    # H36+H43 / R3: el servidor recalcula el anticipo al re-cotizar (aunque el total no cambie: corrige los
+    # anticipos viejos en $0), cuando cambia el total o cuando se pone o quita el % manual.
+    cambia_total = _quantize_cop(cot.total_cop) != _quantize_cop(old_price_values["total_cop"])
+    recalcula_por_precio = bool(body.get("recotizacion")) or cambia_total
+    pct_nuevo = pct_previo
+    if recalcula_por_precio or cambia_manual:
+        if cot.anticipo_pct_manual is not None or cot.sc_id:
+            pct_nuevo, _ = pct_anticipo_cotizacion(cot, db)
+        elif manual_previo is not None:
+            # Se quito el manual de una COT sin SC: no hay modalidad que seguir, y el % "que ya tenia" seria el
+            # manual. R2: modalidad vacia -> 60%.
+            pct_nuevo = PCT_ANTICIPO_POR_DEFECTO
+        cot.anticipo_cop = anticipo_requerido(cot.total_cop, pct_nuevo)
+        if cambia_manual and not recalcula_por_precio:
+            # El ajuste manual deja su propio renglon (abajo): que la edicion no repita el cambio del anticipo
+            # como si fuera una re-cotizacion.
+            antes_log["anticipo_cop"] = cot.anticipo_cop
+
     ya_tiene_pven = db.query(SaleOrder).filter(SaleOrder.cot_id == cot.id).first() is not None
     precio_congelado = old_estado == "PENDIENTE_CONFIRMACION" or (old_estado == "CONFIRMADA" and not ya_tiene_pven)
     hubo_cambio_de_precio = any(
@@ -1094,6 +1245,18 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     # precios no hayan cambiado. Va antes del cambio de estado que pueda provocar
     # (rompe_congelamiento) para que la linea de tiempo se lea en orden causal.
     _registrar_cambios(db, "COT", cot, antes_log, body, user, recotizacion=bool(body.get("recotizacion")))
+    if cambia_manual:
+        extra_manual = {"pct_antes": str(pct_previo), "pct_despues": str(pct_nuevo),
+                        "anticipo_despues": str(cot.anticipo_cop), "nota": cot.anticipo_manual_nota}
+        if cot.anticipo_pct_manual is not None:
+            _log(db, "COT", cot.id, cot.numero, "ANTICIPO_MANUAL",
+                 f"Anticipo ajustado a mano: {formato_pct(cot.anticipo_pct_manual)} (antes {formato_pct(pct_previo)}). "
+                 f"Nota: {cot.anticipo_manual_nota}",
+                 user_name=body.get("updated_by") or getattr(user, "email", None), extra_data=extra_manual)
+        else:
+            _log(db, "COT", cot.id, cot.numero, "ANTICIPO_MODALIDAD",
+                 f"Anticipo vuelve a la modalidad ({formato_pct(pct_nuevo)})",
+                 user_name=body.get("updated_by") or getattr(user, "email", None), extra_data=extra_manual)
     if body.get("estado") and body["estado"] != old_estado:
         try:
             _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
@@ -1254,12 +1417,22 @@ def confirmar_cotizacion(cot_id: int, body: dict = Body(default_factory=dict), u
         if cot.gate2_confirmed_at is None:
             raise HTTPException(400, "Esta cotización no tiene una confirmación de cliente válida y sin usar; no se puede crear el Pedido de Venta.")
 
-    req = ConvertirCotizacionVentaRequest(
-        idempotency_key=body.get("idempotency_key"),
-        user_name=body.get("user_name"),
-        direccion_entrega=body.get("direccion_entrega"),
-        notas=body.get("notas"),
-    )
+    # N1: la verificacion del anticipo viaja tal cual a convertir_cotizacion_a_venta, que decide si hace falta.
+    # Un body mal formado aqui seria un 500 (sin headers CORS: el navegador lo veria como "Failed to fetch").
+    try:
+        req = ConvertirCotizacionVentaRequest(
+            idempotency_key=body.get("idempotency_key"),
+            user_name=body.get("user_name"),
+            direccion_entrega=body.get("direccion_entrega"),
+            notas=body.get("notas"),
+            verificacion_anticipo=body.get("verificacion_anticipo"),
+        )
+    except pydantic.ValidationError as exc:
+        errores = exc.errors()
+        if any(e.get("loc") and e["loc"][0] == "verificacion_anticipo" for e in errores):
+            raise HTTPException(422, "La verificación del anticipo está incompleta: indica monto, método de pago y referencia.")
+        campos = ", ".join(sorted({str(e["loc"][0]) for e in errores if e.get("loc")}))
+        raise HTTPException(422, f"Datos no válidos para crear el pedido: {campos}.")
     res = convertir_cotizacion_a_venta(cot_id, req, user, db)
     # Return format compatible with legacy expectations (cot ya se consulto arriba;
     # solo se refresca para reflejar lo que convertir_cotizacion_a_venta commiteo).
@@ -1422,6 +1595,17 @@ def get_pedido(ven_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     pxps = db.query(PaymentPending).filter(PaymentPending.ven_id == ven_id).all()
     d["pxps"] = [_pxp_dict(p) for p in pxps]
     d["lista_compras_items"] = _lista_compras_items_de(db, ven_id)
+    # N1 / R4 / R6: el libro de pagos del pedido (verificados, trasladados...) y cuanto anticipo falta. El
+    # requerido usa el % guardado al crear el pedido; lo pagado es total - saldo (lo mismo que
+    # recalculate_sale_order_state).
+    pagos = (db.query(SaleOrderPayment).filter(SaleOrderPayment.sale_order_id == ven_id)
+             .order_by(SaleOrderPayment.created_at.asc(), SaleOrderPayment.id.asc()).all())
+    d["pagos"] = [_pago_dict(p) for p in pagos]
+    pct = v.anticipo_pct_snapshot if v.anticipo_pct_snapshot is not None else PCT_ANTICIPO_POR_DEFECTO
+    requerido = anticipo_requerido(v.total_cop, pct)
+    pagado = Decimal(str(v.total_cop or 0)) - Decimal(str(v.saldo_cop or 0))
+    d["anticipo_requerido"] = float(requerido)
+    d["anticipo_pendiente"] = float(redondear_peso(max(Decimal("0"), requerido - pagado)))
     return {"status": "success", "data": d}
 
 

@@ -32,7 +32,8 @@ class SaleOrderPayment(Base):
     usuario             = Column(String(150), nullable=True)
     idempotency_key     = Column(String(150), unique=True, nullable=True)
     estado              = Column(String(30), nullable=False, default="CONFIRMADO")
-    # CONFIRMADO | REVERTIDO | ANULADO
+    # CONFIRMADO | REVERTIDO | ANULADO | TRASLADADO (dinero de un pedido cancelado que paso como saldo a favor
+    # a otro pedido de la misma cotizacion: ahi vive ahora, como un pago metodo 'TRASLADO')
     reversed_payment_id = Column(Integer, ForeignKey("sale_order_payments.id", ondelete="SET NULL"), nullable=True)
     notes               = Column(Text, nullable=True)
     created_at          = Column(DateTime, default=_now)
@@ -43,7 +44,7 @@ class SaleOrderPayment(Base):
 
     __table_args__ = (
         CheckConstraint("tipo IN ('ANTICIPO', 'ABONO', 'PAGO_TOTAL', 'PAGO_SALDO', 'DEVOLUCION', 'REVERSION', 'AJUSTE_AUTORIZADO')", name="chk_sop_tipo"),
-        CheckConstraint("estado IN ('CONFIRMADO', 'REVERTIDO', 'ANULADO')", name="chk_sop_estado"),
+        CheckConstraint("estado IN ('CONFIRMADO', 'REVERTIDO', 'ANULADO', 'TRASLADADO')", name="chk_sop_estado"),
         CheckConstraint("monto > 0", name="chk_sop_monto"),
         Index("ix_sop_so_estado", "sale_order_id", "estado"),
         Index("ix_sop_customer", "customer_id"),

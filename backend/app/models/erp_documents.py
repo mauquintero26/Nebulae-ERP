@@ -136,6 +136,10 @@ class SalesQuotation(Base):
     # bloque de "ya existe un SaleOrder vinculado" en convertir_cotizacion_a_venta, que
     # retorna antes de llegar al check.
     gate2_confirmed_at    = Column(DateTime, nullable=True)
+    # R3 (Ventas Bloque 1): % de anticipo puesto a mano por el asesor, con nota obligatoria. NULL = el anticipo
+    # sigue la modalidad de pago de la solicitud (ventas_dinero.pct_anticipo_cotizacion).
+    anticipo_pct_manual   = Column(Numeric(5, 2), nullable=True)
+    anticipo_manual_nota  = Column(Text, nullable=True)
 
     customer_request = relationship("CustomerRequest", back_populates="quotations")
     customer         = relationship("Customer", foreign_keys=[customer_id])

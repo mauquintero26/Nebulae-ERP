@@ -165,20 +165,30 @@ def test_convertir_sin_subtotal_usa_el_total_redondeado(app_client, db, admin_to
 
 
 def test_convertir_redondea_el_anticipo_y_el_saldo_queda_entero(app_client, db, admin_token):
+    """N1 (T3): el anticipo ya no se da por pagado al convertir: se verifica. El requerido (60% de una SC 60/40)
+    y el pago verificado quedan en pesos enteros, y el saldo cuadra sin centavos."""
     from datetime import datetime
-    from app.models.erp_documents import SaleOrder
+    from app.models.erp_documents import CustomerRequest, SaleOrder
     from app.models.fase4 import SaleOrderPayment
-    cot = _cot(db, "COT-PESOS006", estado="CONFIRMADA", total_cop=Decimal('2786923.08'),
+    sc = CustomerRequest(numero="SC-PESOS006", customer_name="Cliente Prueba", estado="CONFIRMADA",
+                         modalidad_pago="60/40 (60% anticipo - 40% pendiente)")
+    db.add(sc); db.commit()
+    cot = _cot(db, "COT-PESOS006", estado="CONFIRMADA", sc_id=sc.id, total_cop=Decimal('2786923.08'),
                subtotal_cop=Decimal('2786923.08'), anticipo_cop=Decimal('1672153.80'),
                productos=[_linea("Cuna", 1, 2786923)], gate2_confirmed_at=datetime.utcnow())
-    resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/convertir-a-venta", json={"user_name": "asesor@test"},
-                           headers=auth(admin_token))
+    resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/convertir-a-venta", json={
+        "user_name": "asesor@test",
+        "verificacion_anticipo": {"monto": 1672153.8, "metodo_pago": "Transferencia bancaria", "referencia": "PESOS-6"},
+    }, headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
+    assert resp.json()["anticipo_requerido"] == 1672154   # 60% de 2.786.923 = 1.672.153,8
     so = db.query(SaleOrder).filter(SaleOrder.cot_id == cot.id).one()
     assert so.anticipo_cop == Decimal('1672154')
     assert so.saldo_cop == Decimal('1114769')  # 2.786.923 - 1.672.154
     pago = db.query(SaleOrderPayment).filter(SaleOrderPayment.sale_order_id == so.id).one()
     assert pago.monto == Decimal('1672154')
+    db.refresh(cot)
+    assert cot.anticipo_cop == Decimal('1672154')
 
 
 # --- Pedido de Venta: crear y guardar (R11) --------------------------------------------------------

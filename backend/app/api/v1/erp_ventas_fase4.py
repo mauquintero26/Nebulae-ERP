@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status, 
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func, text, and_, or_
 from typing import Optional, List, Dict, Any
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import datetime
 import hashlib
 import json
@@ -38,7 +38,11 @@ from app.models.fase4 import (
     SaleOrderReturnLine,
 )
 from app.models.users import User
-from app.core.ventas_dinero import redondear_peso
+from app.core.ventas_dinero import (
+    redondear_peso, pesos, formato_pct, pct_anticipo_cotizacion, anticipo_requerido, saldos_a_favor_de_cotizacion,
+    metodo_pago_anticipo, METODOS_PAGO_ANTICIPO, METODO_PAGO_TRASLADO, METODO_PAGO_SALDO_A_FAVOR,
+    ESTADO_PAGO_TRASLADADO,
+)
 from app.api.dependencies import (
     require_roles, get_current_user,
     ROLE_ADMIN, ROLE_ASESOR, ROLE_BODEGA, ROLE_COMPRAS, ROLE_FINANZAS, ALL_ERP_ROLES
@@ -237,10 +241,13 @@ def recalculate_sale_order_state(so: SaleOrder, db: Session) -> str:
     if any_delivered:
         return "PARCIALMENTE_ENTREGADO"
 
-    # Pagos
-    anticipo_req_pct = Decimal(str(so.anticipo_pct_snapshot or 60.00))
+    # Pagos. El % real del pedido: una venta a credito guarda 0, que con `or 60` volvia a exigir el 60%
+    # (H36+H43, R12). El requerido en pesos enteros, igual que al convertir la cotizacion (anticipo_requerido):
+    # pagar exactamente el anticipo que se pidio lo cubre, sin que unos centavos lo dejen pendiente.
+    anticipo_req_pct = (Decimal(str(so.anticipo_pct_snapshot)) if so.anticipo_pct_snapshot is not None
+                        else Decimal("60.00"))
     total_cop = Decimal(str(so.total_cop or 0))
-    anticipo_min_cop = (total_cop * anticipo_req_pct / Decimal("100.00")).quantize(Decimal("0.01"))
+    anticipo_min_cop = anticipo_requerido(total_cop, anticipo_req_pct)
     saldo_cop = Decimal(str(so.saldo_cop or 0))
     pagado_cop = total_cop - saldo_cop
 
@@ -2680,6 +2687,63 @@ def get_sale_order_profitability(
 # FASE 5: COTIZA → VENTA CANONICA E IDEMPOTENTE
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _trasladar_saldos_a_favor(db: Session, saldos: list, monto_a_trasladar: Decimal, new_so: SaleOrder,
+                              cot: SalesQuotation, usuario: Optional[str], hoy: datetime.date) -> list:
+    """R6: pasa al pedido nuevo `monto_a_trasladar` (<= total) del dinero de los pedidos cancelados de la COT.
+
+    `saldos` sale de saldos_a_favor_de_cotizacion(..., bloquear=True), del pedido cancelado mas viejo al mas nuevo.
+    Por cada pedido cancelado que aporta:
+    - el pedido nuevo recibe un pago ANTICIPO CONFIRMADO metodo 'TRASLADO' con referencia = numero del cancelado;
+    - los pagos de origen (ingresos y devoluciones CONFIRMADO) quedan TRASLADADO: su dinero vive ahora en el
+      pedido nuevo, no se vuelve a trasladar y las sumas de pagos CONFIRMADO (cartera, CRM 360) no lo cuentan
+      dos veces;
+    - si no cupo todo (el total nuevo es menor), lo que sobra queda en el cancelado como un pago CONFIRMADO
+      metodo 'SALDO_A_FAVOR': sigue siendo del cliente y cuenta para una conversion futura.
+    Deja la Actividad del cancelado; devuelve la del pedido nuevo para agregarla despues de su CREATED."""
+    renglones_del_nuevo = []
+    restante = monto_a_trasladar
+    for saldo in saldos:
+        if restante <= 0:
+            break
+        origen = saldo["pedido"]
+        monto = min(saldo["monto"], restante)
+        queda = saldo["monto"] - monto
+        nota_origen = f"Trasladado como saldo a favor a {new_so.numero} ({hoy.isoformat()})"
+        for p in saldo["pagos"]:
+            p.estado = ESTADO_PAGO_TRASLADADO
+            p.notes = f"{p.notes} | {nota_origen}" if p.notes else nota_origen
+        db.add(SaleOrderPayment(
+            sale_order_id=new_so.id, customer_id=cot.customer_id, tipo="ANTICIPO", monto=monto, moneda="COP",
+            metodo_pago=METODO_PAGO_TRASLADO, fecha=hoy, referencia_bancaria=origen.numero, usuario=usuario,
+            idempotency_key=f"TRASLADO_{origen.id}_{new_so.id}", estado="CONFIRMADO",
+            notes=f"Saldo a favor trasladado desde el pedido cancelado {origen.numero}",
+        ))
+        if queda > 0:
+            db.add(SaleOrderPayment(
+                sale_order_id=origen.id, customer_id=origen.customer_id, tipo="ANTICIPO", monto=queda, moneda="COP",
+                metodo_pago=METODO_PAGO_SALDO_A_FAVOR, fecha=hoy, referencia_bancaria=origen.numero, usuario=usuario,
+                idempotency_key=f"SALDO_A_FAVOR_{origen.id}_{new_so.id}", estado="CONFIRMADO",
+                notes=(f"Saldo a favor que no cupo en {new_so.numero}: de {pesos(saldo['monto'])} se trasladaron "
+                       f"{pesos(monto)}"),
+            ))
+        db.add(ActivityLog(
+            entity_type="VEN", entity_id=origen.id, entity_numero=origen.numero, action="SALDO_A_FAVOR_TRASLADADO",
+            description=(f"Saldo a favor de {pesos(monto)} trasladado hacia {new_so.numero}"
+                         + (f". Queda a favor del cliente {pesos(queda)}" if queda > 0 else "")),
+            user_name=usuario,
+            extra_data={"monto": str(monto), "queda_a_favor": str(queda), "hacia_pven_id": new_so.id,
+                        "hacia_pven_numero": new_so.numero, "pagos_trasladados": [p.id for p in saldo["pagos"]]},
+        ))
+        renglones_del_nuevo.append(ActivityLog(
+            entity_type="VEN", entity_id=new_so.id, entity_numero=new_so.numero, action="SALDO_A_FAVOR_TRASLADADO",
+            description=f"Saldo a favor de {pesos(monto)} trasladado desde {origen.numero}",
+            user_name=usuario,
+            extra_data={"monto": str(monto), "desde_pven_id": origen.id, "desde_pven_numero": origen.numero},
+        ))
+        restante -= monto
+    return renglones_del_nuevo
+
+
 @router.post("/cotizaciones/{cot_id}/convertir-a-venta", status_code=status.HTTP_200_OK)
 def convertir_cotizacion_a_venta(
     cot_id: int,
@@ -2714,8 +2778,11 @@ def convertir_cotizacion_a_venta(
             detail=f"Cotizacion en estado '{cot.estado}' no puede ser convertida a pedido de venta."
         )
 
-    # 1. Verificar si ya existe un Pedido de Venta vinculado a esta cotizacion
-    existing_so = db.query(SaleOrder).filter(SaleOrder.cot_id == cot.id).first()
+    # 1. Verificar si ya existe un Pedido de Venta VIGENTE vinculado a esta cotizacion. Uno CANCELADO no es un
+    # replay (H46+U25): la cotizacion se puede convertir otra vez y su dinero pasa como saldo a favor (R6).
+    existing_so = (db.query(SaleOrder)
+                   .filter(SaleOrder.cot_id == cot.id, SaleOrder.estado != "CANCELADO")
+                   .order_by(SaleOrder.id.desc()).first())
     if existing_so:
         existing_meta = existing_so.canal_metadata or {}
         existing_key = existing_meta.get("idempotency_key") if isinstance(existing_meta, dict) else None
@@ -2772,16 +2839,70 @@ def convertir_cotizacion_a_venta(
             detail="Esta cotización no tiene una confirmación de cliente válida y sin usar; no se puede crear el Pedido de Venta."
         )
 
-    # 2. Generar numero unico de pedido PVEN
+    # 2. Anticipo (H36+H43, N1, R3, R4, R6). El requerido se recalcula aqui con la modalidad de la SC (o el %
+    # manual) y el total de hoy: nunca se toma el anticipo guardado, que puede estar viejo. Todo se valida ANTES
+    # de gastar un numero o escribir nada: un 422 deja la COT CONFIRMADA y la marca de Gate 2 intacta para
+    # reintentar. H42: el pedido nace en pesos enteros aunque la COT (datos viejos) traiga centavos.
+    total_cop = redondear_peso(cot.total_cop)
+    pct, modalidad = pct_anticipo_cotizacion(cot, db)
+    requerido = anticipo_requerido(total_cop, pct)
+    origen_pct = (f"anticipo manual de {formato_pct(pct)}" if cot.anticipo_pct_manual is not None
+                  else (modalidad or formato_pct(pct)))
+    # R6: el dinero de pedidos CANCELADO de esta misma COT pasa al pedido nuevo como saldo a favor (hasta el
+    # total) y descuenta lo que falta por verificar. FOR UPDATE: esos pagos se marcan TRASLADADO mas abajo.
+    saldos_a_favor = saldos_a_favor_de_cotizacion(db, cot.id, bloquear=True)
+    traslado = min(sum((s["monto"] for s in saldos_a_favor), Decimal("0")), total_cop)
+    por_verificar = max(Decimal("0"), requerido - traslado)
+    ver = request.verificacion_anticipo
+    verificado = Decimal("0")
+    metodo_verificado = None
+    if por_verificar > 0 and ver is None:
+        if traslado > 0:
+            exige = (f"Esta cotización exige un anticipo de {pesos(requerido)} ({origen_pct}); el saldo a favor de "
+                     f"{pesos(traslado)} de un pedido cancelado cubre una parte y faltan {pesos(por_verificar)}. ")
+        else:
+            exige = f"Esta cotización exige un anticipo de {pesos(requerido)} ({origen_pct}). "
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exige + "Verifica el pago del cliente (monto, método y referencia) antes de crear el pedido.",
+        )
+    if ver is not None:
+        # R4: un pago menor que lo que falta se acepta (el pedido queda debiendo la diferencia); mayor que 0 y,
+        # junto con el saldo a favor trasladado, sin pasar del total.
+        verificado = redondear_peso(ver.monto)
+        metodo_verificado = metodo_pago_anticipo(ver.metodo_pago)
+        if metodo_verificado is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Método de pago no válido: '{ver.metodo_pago}'. Usa uno de: {', '.join(METODOS_PAGO_ANTICIPO)}.",
+            )
+        if verificado <= 0:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="El monto verificado debe ser mayor que $0.")
+        if verificado + traslado > total_cop:
+            if traslado > 0:
+                detalle = (f"El pago verificado ({pesos(verificado)}) más el saldo a favor trasladado "
+                           f"({pesos(traslado)}) supera el total del pedido ({pesos(total_cop)}).")
+            else:
+                detalle = f"El pago verificado ({pesos(verificado)}) supera el total del pedido ({pesos(total_cop)})."
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detalle)
+        if ver.fecha_pago and ver.fecha_pago > _now_bogota().date():
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="La fecha del pago no puede ser posterior a hoy.")
+    pagado_cop = traslado + verificado
+    # Quien verifica es el usuario autenticado que crea el pedido (asesor o administracion), no el user_name del
+    # body: ese solo firma el renglon CREATED, como antes.
+    verificador = getattr(user, "email", None)
+
+    # 3. Generar numero unico de pedido PVEN
     ven_numero = _gen_numero(db, "PVEN-", "seq_ven")
 
-    # 3. Datos del cliente y financieros
-    # H42: el pedido nace en pesos enteros aunque la COT (datos viejos) traiga centavos.
-    total_cop = redondear_peso(cot.total_cop)
-    anticipo_cop = redondear_peso(cot.anticipo_cop)
-    saldo_cop = total_cop - anticipo_cop
+    # 4. Datos del cliente y financieros
+    anticipo_cop = pagado_cop
+    saldo_cop = total_cop - pagado_cop
     subtotal_cop = redondear_peso(cot.subtotal_cop or total_cop)
     descuento_pct = Decimal(str(cot.descuento_pct or 0))
+    pct_snapshot = pct.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     new_so = SaleOrder(
         numero=ven_numero,
@@ -2803,6 +2924,9 @@ def convertir_cotizacion_a_venta(
         total_cop=total_cop,
         anticipo_cop=anticipo_cop,
         saldo_cop=saldo_cop,
+        # H36+H43: el % real (100 contado, 0 credito, el manual...), no el 60/40 por defecto del modelo.
+        anticipo_pct_snapshot=pct_snapshot,
+        saldo_pct_snapshot=Decimal("100.00") - pct_snapshot,
         estado="PENDIENTE_COMPRA",
         notas=request.notas or cot.notas,
         productos=cot.productos or [],
@@ -2815,27 +2939,54 @@ def convertir_cotizacion_a_venta(
     db.add(new_so)
     db.flush()
 
-    if anticipo_cop > Decimal("0"):
-        pay_idem = f"PAY_CONV_COT_{cot.id}_{new_so.id}"
-        existing_pay = db.query(SaleOrderPayment).filter(SaleOrderPayment.idempotency_key == pay_idem).first()
-        if not existing_pay:
-            sop = SaleOrderPayment(
-                sale_order_id=new_so.id,
-                customer_id=cot.customer_id,
-                tipo="ANTICIPO",
-                monto=anticipo_cop,
-                moneda="COP",
-                metodo_pago="CONVERSION_COTIZACION",
-                fecha=datetime.datetime.utcnow().date(),
-                referencia_bancaria=f"COT-{cot.numero}",
-                usuario=request.user_name or getattr(user, "email", "system"),
-                idempotency_key=pay_idem,
-                estado="CONFIRMADO",
-                notes=f"Anticipo registrado por conversion de cotizacion {cot.numero}"
-            )
-            db.add(sop)
+    # Pagos del pedido nuevo. Ya no existe el pago automatico 'CONVERSION_COTIZACION' (N1): solo entra el
+    # saldo a favor trasladado (R6) y el pago que el asesor verifico.
+    hoy = _now_bogota().date()
+    renglones_de_pago = []  # Actividad del pedido nuevo: se agrega despues de su renglon CREATED
+    if traslado > 0:
+        renglones_de_pago += _trasladar_saldos_a_favor(db, saldos_a_favor, traslado, new_so, cot, verificador, hoy)
+    if verificado > 0:
+        fecha_pago = ver.fecha_pago or hoy
+        db.add(SaleOrderPayment(
+            sale_order_id=new_so.id,
+            customer_id=cot.customer_id,
+            tipo="ANTICIPO",
+            monto=verificado,
+            moneda="COP",
+            metodo_pago=metodo_verificado,
+            fecha=fecha_pago,
+            referencia_bancaria=ver.referencia,
+            usuario=verificador,
+            idempotency_key=f"PAY_CONV_COT_{cot.id}_{new_so.id}",
+            estado="CONFIRMADO",
+            notes=f"Anticipo verificado por {verificador} al crear el pedido desde la cotización {cot.numero}",
+        ))
+        parcial = verificado < por_verificar
+        pendiente = por_verificar - verificado if parcial else Decimal("0")
+        quien = f"{verificador} ({metodo_verificado}, ref. {ver.referencia})"
+        if parcial:
+            # R4: el pedido se crea igual y queda debiendo la diferencia del anticipo.
+            descripcion = (f"Anticipo parcial verificado: {pesos(verificado)} de {pesos(por_verificar)} requerido. "
+                           f"Queda debiendo {pesos(pendiente)} de anticipo. Verificado por {quien}.")
+        else:
+            descripcion = f"Anticipo de {pesos(verificado)} verificado por {quien}"
+        renglones_de_pago.append(ActivityLog(
+            entity_type="VEN",
+            entity_id=new_so.id,
+            entity_numero=new_so.numero,
+            action="ANTICIPO_VERIFICADO",
+            description=descripcion,
+            user_name=verificador,
+            extra_data={
+                "monto": str(verificado), "anticipo_requerido": str(requerido),
+                "saldo_a_favor_trasladado": str(traslado), "por_verificar": str(por_verificar),
+                "parcial": parcial, "anticipo_pendiente": str(pendiente),
+                "metodo_pago": metodo_verificado, "referencia": ver.referencia, "fecha_pago": str(fecha_pago),
+                "verificado_por": verificador,
+            },
+        ))
 
-    # 4. Convertir lineas normalizadas
+    # 5. Convertir lineas normalizadas
     quotation_lines = db.query(SalesQuotationLine).filter(SalesQuotationLine.sq_id == cot.id).all()
     created_lines = []
     has_por_pedido = False
@@ -2978,7 +3129,7 @@ def convertir_cotizacion_a_venta(
 
             created_lines.append(so_line)
 
-    # 5. Derivar estado global del pedido
+    # 6. Derivar estado global del pedido
     if has_por_pedido:
         new_so.estado = "PENDIENTE_COMPRA"
     elif all(l.estado == "RESERVADA" for l in created_lines):
@@ -2987,6 +3138,8 @@ def convertir_cotizacion_a_venta(
         new_so.estado = "EN_PROCESO"
 
     cot.estado = "CONFIRMADA"
+    # El anticipo de la COT queda en el requerido recalculado, en el mismo commit que crea el pedido.
+    cot.anticipo_cop = requerido
     cot.updated_at = datetime.datetime.utcnow()
     # Gate 2 -- consumida -- de un solo uso, igual que el token (ver el check de arriba
     # junto al bloque de replay idempotente). Se limpia en este mismo commit, el que de
@@ -2994,13 +3147,18 @@ def convertir_cotizacion_a_venta(
     # este punto deje la marca intacta y la operacion siga siendo reintentable.
     cot.gate2_confirmed_at = None
 
-    # 6. Auditoria
+    # 7. Auditoria
+    descripcion_conversion = f"Cotizacion {cot.numero} convertida al pedido {new_so.numero}. Lineas: {len(created_lines)}."
+    if verificado > 0:
+        descripcion_conversion += f" Anticipo verificado: {pesos(verificado)}."
+    if traslado > 0:
+        descripcion_conversion += f" Saldo a favor trasladado: {pesos(traslado)}."
     log = ActivityLog(
         entity_type="COT",
         entity_id=cot.id,
         entity_numero=cot.numero,
         action="CONVERTIDA_A_VENTA",
-        description=f"Cotizacion {cot.numero} convertida al pedido {new_so.numero}. Lineas: {len(created_lines)}.",
+        description=descripcion_conversion,
         user_name=request.user_name or getattr(user, "email", "system")
     )
     db.add(log)
@@ -3016,6 +3174,8 @@ def convertir_cotizacion_a_venta(
         new_estado=new_so.estado,
         user_name=request.user_name or getattr(user, "email", "system")
     ))
+    # Despues del CREATED, para que la Actividad del pedido se lea en orden (nace, y luego su dinero).
+    db.add_all(renglones_de_pago)
 
     db.commit()
     db.refresh(new_so)
@@ -3029,6 +3189,8 @@ def convertir_cotizacion_a_venta(
         "total_cop": float(new_so.total_cop or 0),
         "saldo_cop": float(new_so.saldo_cop or 0),
         "anticipo_cop": float(new_so.anticipo_cop or 0),
+        "anticipo_requerido": float(requerido),
+        "saldo_a_favor_trasladado": float(traslado),
         "lines_count": len(created_lines),
         "message": f"Cotizacion {cot.numero} convertida exitosamente a Pedido {new_so.numero}."
     }

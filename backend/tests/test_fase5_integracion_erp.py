@@ -315,7 +315,9 @@ class TestFase5IntegracionErp:
         payload = {
             "idempotency_key": f"IDEM_CONV_{cot.id}",
             "direccion_entrega": "Calle 72 #45-12",
-            "user_name": "asesor_fase5@nebulaekids.com"
+            "user_name": "asesor_fase5@nebulaekids.com",
+            # N1 (Ventas Bloque 1): una COT con anticipo exige verificar el pago antes de crear el pedido.
+            "verificacion_anticipo": {"monto": 810000, "metodo_pago": "Transferencia bancaria", "referencia": "TEST-03"},
         }
         res = app_client.post(
             f"/api/v1/ventas/cotizaciones/{cot.id}/convertir-a-venta",
@@ -361,10 +363,12 @@ class TestFase5IntegracionErp:
         db.commit()
 
         idem_key = f"IDEM_TEST_04_{cot.id}"
+        # N1 (Ventas Bloque 1): una COT con anticipo exige verificar el pago antes de crear el pedido.
+        verificacion = {"monto": 270000, "metodo_pago": "Transferencia bancaria", "referencia": "TEST-04"}
         # Primer llamado de conversión
         res1 = app_client.post(
             f"/api/v1/ventas/cotizaciones/{cot.id}/convertir-a-venta",
-            json={"idempotency_key": idem_key, "user_name": "asesor_idem"},
+            json={"idempotency_key": idem_key, "user_name": "asesor_idem", "verificacion_anticipo": verificacion},
             headers=auth_tokens["asesor"]["headers"]
         )
         assert res1.status_code == 200
@@ -375,7 +379,7 @@ class TestFase5IntegracionErp:
         # Reintento idéntico
         res2 = app_client.post(
             f"/api/v1/ventas/cotizaciones/{cot.id}/convertir-a-venta",
-            json={"idempotency_key": idem_key, "user_name": "asesor_idem"},
+            json={"idempotency_key": idem_key, "user_name": "asesor_idem", "verificacion_anticipo": verificacion},
             headers=auth_tokens["asesor"]["headers"]
         )
         assert res2.status_code == 200
@@ -423,10 +427,12 @@ class TestFase5IntegracionErp:
         db.add(cot_conf)
         db.commit()
 
-        # Primer llamado
+        # Primer llamado (N1, Ventas Bloque 1: con la verificacion del anticipo)
         res_a = app_client.post(
             f"/api/v1/ventas/cotizaciones/{cot_conf.id}/convertir-a-venta",
-            json={"idempotency_key": f"KEY_A_{cot_conf.id}"},
+            json={"idempotency_key": f"KEY_A_{cot_conf.id}",
+                  "verificacion_anticipo": {"monto": 270000, "metodo_pago": "Transferencia bancaria",
+                                            "referencia": "TEST-05"}},
             headers=auth_tokens["asesor"]["headers"]
         )
         assert res_a.status_code == 200
@@ -808,7 +814,10 @@ class TestFase5IntegracionErp:
         # Invocar ruta legacy /cotizaciones/{id}/confirmar
         res = app_client.post(
             f"/api/v1/ventas/cotizaciones/{cot.id}/confirmar",
-            json={"user_name": "legacy_caller"},
+            json={"user_name": "legacy_caller",
+                  # N1 (Ventas Bloque 1): una COT con anticipo exige verificar el pago antes de crear el pedido.
+                  "verificacion_anticipo": {"monto": 300000, "metodo_pago": "Transferencia bancaria",
+                                            "referencia": "TEST-17"}},
             headers=auth_tokens["asesor"]["headers"]
         )
         assert res.status_code == 200
