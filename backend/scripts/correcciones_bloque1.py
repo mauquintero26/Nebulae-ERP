@@ -298,7 +298,6 @@ class Contexto:
     base: str
     carpeta: Path
     excl: Excluidos
-    numeros_reales: tuple
     ids: Optional[list] = None
     numeros: Optional[list] = None
     decisiones: Optional[dict] = None
@@ -694,8 +693,8 @@ def listar_h44(db, excl, **_) -> Listado:
     _marcar_excluidos(l, excluidas, lambda f: f"{f['numero']} (pedido {f['pven']})")
     l.notas.append("Los montos que quedan salen del pedido de HOY (total, total - saldo, saldo): si N1 (b) cambia "
                    "el saldo de un pedido, vuelve a correr este listado después de aplicar N1.")
-    l.notas.append("Los renglones viejos de Actividad con '$1,724,400' y sin autor no se corrigen aquí (no se sabe "
-                   "quién los creó); el texto de los montos lo cubre el paso h7 solo en lo que ya sabe corregir.")
+    l.notas.append("Los renglones viejos de Actividad con '$1,724,400' y sin autor se dejan como están: no se sabe "
+                   "quién los creó, y h7 tampoco cambia montos con coma ya guardados.")
     return l
 
 
@@ -1485,8 +1484,7 @@ def aplicar_paso(db, paso, base, carpeta_respaldos=CARPETA_RESPALDOS, excluidos=
         return ResultadoAplicar(paso, detalle=[f"No aplica: {motivo}"])
     try:
         ctx = Contexto(db=db, base=base, carpeta=Path(carpeta_respaldos), excl=calcular_excluidos(db, excluidos),
-                       numeros_reales=tuple(excluidos), ids=ids, numeros=numeros, decisiones=decisiones,
-                       tabla_respaldo=tabla_respaldo)
+                       ids=ids, numeros=numeros, decisiones=decisiones, tabla_respaldo=tabla_respaldo)
         resultado = APLICADORES[paso](ctx)
         db.commit()
         return resultado
@@ -1563,7 +1561,7 @@ def main(argv=None) -> int:
             iniciar_solo_lectura(db)
         base = base_actual(db)
         print(f"SELECT current_database() -> {base}")
-        print(f"Fecha (UTC): {datetime.datetime.utcnow():%Y-%m-%d %H:%M:%S}")
+        print(f"Fecha (UTC): {datetime.datetime.now(datetime.timezone.utc):%Y-%m-%d %H:%M:%S}")
         if args.listar:
             db.rollback()
             iniciar_solo_lectura(db)

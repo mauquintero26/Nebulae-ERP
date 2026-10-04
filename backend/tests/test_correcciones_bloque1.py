@@ -506,6 +506,8 @@ def test_n2_lista_las_tres_consultas_y_aplicar_no_escribe(db):
     assert reabierto.numero in _numeros(listado, "b") and real.numero not in _numeros(listado, "b")
     assert sin_motivo.numero in _numeros(listado, "c") and con_motivo.numero not in _numeros(listado, "c")
     assert any(real.numero in x for x in listado.excluidos)
+    texto = cb.texto_listado(listado)                               # (c) se imprime como lista de numeros
+    assert sin_motivo.numero in texto and con_motivo.numero not in texto
     with _carpeta() as carpeta:
         res = cb.aplicar_paso(db, "n2", base=_base(db), carpeta_respaldos=carpeta, excluidos=(real.numero,),
                               numeros=[revivido.numero])
