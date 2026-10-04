@@ -43,6 +43,7 @@ from app.core.ventas_dinero import (
     saldos_a_favor_de_cotizacion, metodo_pago_anticipo, METODOS_PAGO_ANTICIPO, METODO_PAGO_TRASLADO,
     METODO_PAGO_SALDO_A_FAVOR, ESTADO_PAGO_TRASLADADO, anular_pxps_de_pedido,
 )
+from app.core.textos_actividad import etiqueta_estado
 from app.api.dependencies import (
     require_roles, get_current_user,
     ROLE_ADMIN, ROLE_ASESOR, ROLE_BODEGA, ROLE_COMPRAS, ROLE_FINANZAS, ALL_ERP_ROLES
@@ -463,7 +464,7 @@ def create_sale_order_canonical(
         entity_id=so.id,
         entity_numero=so.numero,
         action="VENTA_CREADA",
-        description=f"Pedido canónico {so.numero} creado con {len(created_lines)} líneas. Total: ${total_so:,.0f} COP",
+        description=f"Pedido canónico {so.numero} creado con {len(created_lines)} líneas. Total: {pesos(total_so)} COP",
         new_estado=so.estado,
         user_name=user_name,
         extra_data={"lines_count": len(created_lines), "total_cop": str(total_so)}
@@ -685,7 +686,7 @@ def confirm_immediate_sale_line(
         entity_id=so.id,
         entity_numero=so.numero,
         action="RESERVA_INMEDIATA_CREADA",
-        description=f"Reserva inmediata creada por {qty_to_reserve} unidades para SKU {line.sku_id}. Estado pedido: {so.estado}",
+        description=f"Reserva inmediata creada por {qty_to_reserve} unidades para SKU {line.sku_id}. Estado pedido: {etiqueta_estado('VEN', so.estado)}",
         old_estado=old_so_state,
         new_estado=so.estado,
         user_name=user_name,
@@ -862,7 +863,7 @@ def register_sale_order_payment(
         entity_id=so.id,
         entity_numero=so.numero,
         action="REVERSION_PAGO" if tipo == "REVERSION" else ("ANTICIPO_RECIBIDO" if tipo == "ANTICIPO" else "PAGO_REGISTRADO"),
-        description=f"Pago {tipo} registrado por ${monto:,.0f} COP. Neto pagado: ${net_pagado:,.0f} COP. Saldo: ${so.saldo_cop:,.0f} COP",
+        description=f"Pago {tipo} registrado por {pesos(monto)} COP. Neto pagado: {pesos(net_pagado)} COP. Saldo: {pesos(so.saldo_cop)} COP",
         old_estado=old_estado,
         new_estado=so.estado,
         user_name=user_name,
@@ -1298,7 +1299,7 @@ def cancel_sale_order(
         entity_id=so.id,
         entity_numero=so.numero,
         action="VENTA_CANCELADA",
-        description=f"Pedido {so.numero} cancelado. Motivo: {motivo}. Saldo a favor cliente: ${saldo_a_favor:,.0f} COP",
+        description=f"Pedido {so.numero} cancelado. Motivo: {motivo}. Saldo a favor cliente: {pesos(saldo_a_favor)} COP",
         old_estado=old_estado,
         new_estado="CANCELADO",
         user_name=user_name,
@@ -1457,7 +1458,7 @@ def cancel_sale_order_line(
         entity_id=so.id,
         entity_numero=so.numero,
         action="LINEA_CANCELADA",
-        description=f"Línea {line.id} canceló {qty_to_cancel} unidades. Motivo: {body.motivo}. Nuevo total pedido: ${new_total:,.0f} COP",
+        description=f"Línea {line.id} canceló {qty_to_cancel} unidades. Motivo: {body.motivo}. Nuevo total pedido: {pesos(new_total)} COP",
         old_estado=old_so_state,
         new_estado=so.estado,
         user_name=user_name,
@@ -2001,7 +2002,7 @@ def dispatch_delivery(
             if not has_exception:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Despacho rechazado: Pedido {so.numero} tiene saldo pendiente de ${so.saldo_cop:,.0f} COP sin excepción autorizada"
+                    detail=f"Despacho rechazado: Pedido {so.numero} tiene saldo pendiente de {pesos(so.saldo_cop)} COP sin excepción autorizada"
                 )
 
     # Crear operación de inventario de entrega
@@ -2328,7 +2329,7 @@ def create_sale_order_return(
     if refund_amt > total_pagado_elegible:
         raise HTTPException(
             status_code=422,
-            detail=f"refund_amount (${refund_amt:,.0f}) no puede superar el valor total pagado por el cliente (${total_pagado_elegible:,.0f})"
+            detail=f"refund_amount ({pesos(refund_amt)}) no puede superar el valor total pagado por el cliente ({pesos(total_pagado_elegible)})"
         )
 
     ret_numero = _gen_numero(db, "DEV-", "seq_dev")
@@ -2592,7 +2593,7 @@ def create_sale_order_return(
         entity_id=ret.id,
         entity_numero=ret.numero,
         action="DEVOLUCION_PROCESADA",
-        description=f"Devolución {ret.numero} procesada con resolución {body.financial_resolution}. Reembolso: ${refund_amt:,.0f} COP",
+        description=f"Devolución {ret.numero} procesada con resolución {body.financial_resolution}. Reembolso: {pesos(refund_amt)} COP",
         user_name=user_name
     )
 
@@ -2796,13 +2797,13 @@ def convertir_cotizacion_a_venta(
     # haya cargado antes.
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).populate_existing().with_for_update().first()
     if not cot:
-        raise HTTPException(status_code=404, detail=f"Cotizacion {cot_id} no encontrada.")
+        raise HTTPException(status_code=404, detail=f"Cotización {cot_id} no encontrada.")
 
     # Estados no convertibles
     if cot.estado in ("RECHAZADA", "CANCELADA"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"Cotizacion en estado '{cot.estado}' no puede ser convertida a pedido de venta."
+            detail=f"Cotización en estado {etiqueta_estado('COT', cot.estado)} no puede ser convertida a pedido de venta."
         )
 
     # 1. Verificar si ya existe un Pedido de Venta VIGENTE vinculado a esta cotizacion. Uno CANCELADO no es un
@@ -2816,7 +2817,7 @@ def convertir_cotizacion_a_venta(
         if request.idempotency_key and existing_key and request.idempotency_key != existing_key:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Cotizacion {cot.numero} ya fue convertida al pedido {existing_so.numero} con otra clave de idempotencia."
+                detail=f"Cotización {cot.numero} ya fue convertida al pedido {existing_so.numero} con otra clave de idempotencia."
             )
         return {
             "status": "success",
@@ -2827,7 +2828,7 @@ def convertir_cotizacion_a_venta(
             "total_cop": float(existing_so.total_cop or 0),
             "saldo_cop": float(existing_so.saldo_cop or 0),
             "anticipo_cop": float(existing_so.anticipo_cop or 0),
-            "message": f"Cotizacion ya convertida previamente al pedido {existing_so.numero} (Replay)."
+            "message": f"Cotización ya convertida previamente al pedido {existing_so.numero} (Replay)."
         }
 
     # Gate 2 (Task 5): marca de procedencia de un solo uso, EN VEZ de inferir
@@ -2858,7 +2859,7 @@ def convertir_cotizacion_a_venta(
     if cot.estado != "CONFIRMADA":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cotizacion en estado '{cot.estado}' no tiene una confirmación de cliente vigente; no se puede crear el Pedido de Venta."
+            detail=f"Cotización en estado {etiqueta_estado('COT', cot.estado)} no tiene una confirmación de cliente vigente; no se puede crear el Pedido de Venta."
         )
     if cot.gate2_confirmed_at is None:
         raise HTTPException(
@@ -3095,7 +3096,7 @@ def convertir_cotizacion_a_venta(
                         idempotency_key=res_key,
                         user_name=request.user_name or getattr(user, "email", "system"),
                         now=_now(),
-                        notes=f"Auto-reserva conversion cotizacion {cot.numero}"
+                        notes=f"Auto-reserva por conversión de la cotización {cot.numero}"
                     )
                     so_line.quantity_reserved = qty
                     so_line.estado = "RESERVADA"
@@ -3156,7 +3157,7 @@ def convertir_cotizacion_a_venta(
                         idempotency_key=res_key,
                         user_name=request.user_name or getattr(user, "email", "system"),
                         now=_now(),
-                        notes=f"Auto-reserva conversion cotizacion {cot.numero}"
+                        notes=f"Auto-reserva por conversión de la cotización {cot.numero}"
                     )
                     so_line.quantity_reserved = qty
                     so_line.estado = "RESERVADA"
@@ -3185,7 +3186,7 @@ def convertir_cotizacion_a_venta(
     cot.gate2_confirmed_at = None
 
     # 7. Auditoria
-    descripcion_conversion = f"Cotizacion {cot.numero} convertida al pedido {new_so.numero}. Lineas: {len(created_lines)}."
+    descripcion_conversion = f"Cotización {cot.numero} convertida al pedido {new_so.numero}. Líneas: {len(created_lines)}."
     if verificado > 0:
         descripcion_conversion += f" Anticipo verificado: {pesos(verificado)}."
     if traslado > 0:
@@ -3229,5 +3230,5 @@ def convertir_cotizacion_a_venta(
         "anticipo_requerido": float(requerido),
         "saldo_a_favor_trasladado": float(traslado),
         "lines_count": len(created_lines),
-        "message": f"Cotizacion {cot.numero} convertida exitosamente a Pedido {new_so.numero}."
+        "message": f"Cotización {cot.numero} convertida exitosamente a Pedido {new_so.numero}."
     }

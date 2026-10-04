@@ -43,7 +43,7 @@ CAMPOS = {
         "direccion_entrega": "Dirección de entrega",
         **_PRECIOS,
         "saldo_cop": "Saldo", "notas": "Notas", "productos": "Productos",
-        "pec_numero": "Pedido de compra", "pxp_numero": "Pago por procesar",
+        "pec_numero": "Pedido de compra", "pxp_numero": "Orden de pago",
         "cancellation_reason": "Motivo de cancelación",
     },
 }

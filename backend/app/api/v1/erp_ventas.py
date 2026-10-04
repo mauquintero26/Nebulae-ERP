@@ -88,7 +88,7 @@ def _validar_precios_productos(productos: list) -> None:
             nombre_prod = prod.get("product_name") or prod.get("nombre") or prod.get("producto") or "producto"
             raise HTTPException(
                 422,
-                f"El producto '{nombre_prod}' no tiene precio definido. Ingresa un costo/precio antes de guardar la cotizacion.",
+                f"El producto '{nombre_prod}' no tiene precio definido. Ingresa un costo/precio antes de guardar la cotización.",
             )
 
 def _monto_en_pesos(valor, campo: str) -> Decimal:
@@ -810,7 +810,7 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     # ESTADOS_SC_MANUALES del frontend (que si se corrigio en Step 12). Los demas
     # valores de estado se revisan abajo (N4: solo BORRADOR a mano).
     if body.get("estado") == "CONFIRMADA":
-        raise HTTPException(400, "CONFIRMADA solo se alcanza cuando el cliente confirma via el enlace enviado (no se puede forzar manualmente).")
+        raise HTTPException(400, "El estado Confirmada solo se alcanza cuando el cliente confirma vía el enlace enviado (no se puede forzar manualmente).")
     # Final whole-branch review (hallazgo #3): mismo tipo de bypass que ya se cerro para
     # Cotizacion (Gate 2) -- ASIGNADA y PENDIENTE_CONFIRMACION tampoco deben alcanzarse
     # por este PATCH generico. ASIGNADA solo se alcanza por la auto-promocion real
@@ -941,7 +941,7 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     _registrar_cambios(db, "SC", sc, antes_log, body, user, commit=False)
     if body.get("estado") and body["estado"] != old_estado:
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
-             f"Estado cambiado a {sc.estado}",
+             f"Estado cambiado a {etiqueta_estado('SC', sc.estado)}",
              old_estado=old_estado, new_estado=sc.estado,
              user_name=body.get("updated_by"), commit=False)
     if promueve_asignada and not (body.get("estado") and body["estado"] != old_estado):
@@ -950,18 +950,18 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         # advisor_user_id), asi que sin este bloque la transicion a ASIGNADA quedaria
         # invisible en el Chatter/Actividad. El guard evita un doble log en el caso raro
         # de que el mismo PATCH mande advisor_user_id Y un estado explicito distinto.
-        _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Estado cambiado a ASIGNADA (asesor asignado)",
+        _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Estado cambiado a Asignada (asesor asignado)",
              old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"), commit=False)
     if desasigna_a_borrador and not (body.get("estado") and body["estado"] != old_estado):
         # Mismo motivo que el bloque anterior: esta transicion ocurre sin que el body
         # mande "estado" (solo limpia advisor_user_id), asi que necesita su propio log.
-        _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Estado cambiado a BORRADOR (asesor retirado)",
+        _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Estado cambiado a Borrador (asesor retirado)",
              old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"), commit=False)
     if invalida_confirmacion:
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
-             (f"Estado cambiado a {sc.estado}: se modificaron los productos, así que la confirmación del cliente "
+             (f"Estado cambiado a {etiqueta_estado('SC', sc.estado)}: se modificaron los productos, así que la confirmación del cliente "
               f"ya no es válida y hay que reenviarle la solicitud") if cambian_los_productos else
-             (f"Estado cambiado a {sc.estado}: cambió el cliente de la solicitud, así que la confirmación del "
+             (f"Estado cambiado a {etiqueta_estado('SC', sc.estado)}: cambió el cliente de la solicitud, así que la confirmación del "
               f"cliente anterior ya no es válida y hay que enviarle la solicitud al cliente nuevo"),
              old_estado=old_estado, new_estado=sc.estado,
              user_name=body.get("updated_by") or getattr(user, "email", None), commit=False)
@@ -1022,7 +1022,7 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
     if sc.estado not in ("ASIGNADA", "PENDIENTE_CONFIRMACION"):
-        raise HTTPException(400, f"La solicitud debe estar Asignada antes de enviar para confirmación (estado actual: {sc.estado})")
+        raise HTTPException(400, f"La solicitud debe estar Asignada antes de enviar para confirmación (estado actual: {etiqueta_estado('SC', sc.estado)})")
     # Round 6: red de seguridad barata -- hoy ASIGNADA y PENDIENTE_CONFIRMACION ya
     # implican un asesor por construccion (ver update_solicitud/promueve_asignada y
     # create_solicitud), pero se valida explicitamente en vez de asumirlo, porque este
@@ -1089,7 +1089,7 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
     if sc.estado != "CONFIRMADA":
-        raise HTTPException(400, f"No se puede confirmar en estado {sc.estado}")
+        raise HTTPException(400, f"No se puede confirmar en estado {etiqueta_estado('SC', sc.estado)}")
     # Gate 1, segunda capa (Round 4; N7): _sincronizar_estado_solicitud_desde_cotizacion tambien
     # escribe SC.estado = "CONFIRMADA" cuando su Cotizacion vinculada se confirma, y rechazar la
     # unica COT activa deja la SC en CONFIRMADA para crearle otra (N7). Por eso no se crea otra COT
@@ -1162,12 +1162,12 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
     # -- cada _log hace su propio commit interno, solo para la fila de ActivityLog, asi
     # que su orden relativo entre si no afecta la atomicidad de lo que ya se escribio.
     _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
-         "Solicitud cotizada - Cotizacion creada",
+         "Solicitud cotizada - Cotización creada",
          old_estado=old_estado, new_estado="COTIZADA",
          user_name=body.get("user_name"))
     _log(db, "COT", cot.id, cot.numero, "CREATED",
          (f"Cotización {cot.numero} creada desde {sc.numero} (reemplaza a la cotización rechazada {rechazada.numero})"
-          if rechazada else f"Cotizacion {cot.numero} creada desde {sc.numero}"),
+          if rechazada else f"Cotización {cot.numero} creada desde {sc.numero}"),
          new_estado="BORRADOR", user_name=body.get("user_name"))
 
     return {"status": "success", "data": {"sc": _sc_dict(sc), "cotizacion": _cot_dict(cot)}}
@@ -1303,7 +1303,7 @@ def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN
     if cot.sc_id:
         mover_lead_de_solicitud(cot.sc_id, "QUOTATION", db)
     _log(db, "COT", cot.id, cot.numero, "CREATED",
-         f"Cotizacion {cot.numero} creada",
+         f"Cotización {cot.numero} creada",
          new_estado="BORRADOR", user_name=body.get("created_by"))
     return {"status": "success", "data": _cot_dict(cot)}
 
@@ -1313,7 +1313,7 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
         db: Session = Depends(get_db)):
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
     if not cot:
-        raise HTTPException(404, "Cotizacion no encontrada")
+        raise HTTPException(404, "Cotización no encontrada")
     logs = db.query(ActivityLog).filter(
         ActivityLog.entity_type == "COT",
         ActivityLog.entity_id == cot_id
@@ -1552,7 +1552,7 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     # va a escribir, sin que una conversion o una confirmacion concurrente la cambie en medio.
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).with_for_update().first()
     if not cot:
-        raise HTTPException(404, "Cotizacion no encontrada")
+        raise HTTPException(404, "Cotización no encontrada")
     # Primero el cambio de solicitud: bloquea las dos SC en orden de id antes de que la guarda 5 bloquee la actual.
     cambio_de_solicitud = _leer_cambio_de_solicitud(db, cot, body)
     _validar_cambio_de_estado_cotizacion(db, cot, body.get("estado"))
@@ -1788,7 +1788,7 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
             db.rollback()
             logger.error(f"Error al sincronizar Solicitud/Lead tras actualizar cotizacion {cot.id}: {exc}", exc_info=True)
         _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
-             f"Estado cambiado a {cot.estado}",
+             f"Estado cambiado a {etiqueta_estado('COT', cot.estado)}",
              old_estado=old_estado, new_estado=cot.estado,
              user_name=body.get("updated_by"))
     elif rompe_congelamiento:
@@ -1804,7 +1804,7 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
             db.rollback()
             logger.error(f"Error al sincronizar Solicitud tras romper congelamiento de precio en cotizacion {cot.id}: {exc}", exc_info=True)
         _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
-             "Estado cambiado a BORRADOR (la cotización fue editada tras la confirmación del cliente; esa confirmación ya no es válida)",
+             "Estado cambiado a Borrador (la cotización fue editada tras la confirmación del cliente; esa confirmación ya no es válida)",
              old_estado=old_estado, new_estado="BORRADOR", user_name=body.get("updated_by"))
     if fecha_vieja is not None and cot.fecha_entrega_estimada and cot.fecha_entrega_estimada.date() != fecha_vieja.date():
         # Final whole-branch review (hallazgo #2) -- ver el comentario equivalente en
@@ -1851,9 +1851,9 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     """
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
     if not cot:
-        raise HTTPException(404, "Cotizacion no encontrada")
+        raise HTTPException(404, "Cotización no encontrada")
     if cot.estado not in ("BORRADOR", "ENVIADA"):
-        raise HTTPException(400, f"La cotización debe estar en Borrador o Enviada antes de enviar para confirmación (estado actual: {cot.estado}).")
+        raise HTTPException(400, f"La cotización debe estar en Borrador o Enviada antes de enviar para confirmación (estado actual: {etiqueta_estado('COT', cot.estado)}).")
     # N4: una SC cancelada no tiene cotizaciones vivas.
     if cot.sc_id:
         sc = db.query(CustomerRequest).filter(CustomerRequest.id == cot.sc_id).first()
@@ -1935,7 +1935,7 @@ def confirmar_cotizacion(cot_id: int, body: dict = Body(default_factory=dict), u
 
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
     if not cot:
-        raise HTTPException(404, "Cotizacion no encontrada")
+        raise HTTPException(404, "Cotización no encontrada")
     # Gate 2 (Task 5): replay idempotente PRIMERO -- si esta COT ya tiene un Pedido de
     # Venta vinculado, convertir_cotizacion_a_venta (mas abajo) ya sabe devolver ese
     # replay sin exigir nada mas. Exigir el marcador tambien aqui ANTES de chequear el
@@ -1954,7 +1954,7 @@ def confirmar_cotizacion(cot_id: int, body: dict = Body(default_factory=dict), u
         # registrada por separado (POST /cotizaciones/{id}/convertir-a-venta); gatear
         # solo este wrapper dejaria esa ruta completamente abierta.
         if cot.estado != "CONFIRMADA":
-            raise HTTPException(400, f"La cotización debe estar Confirmada por el cliente antes de crear el Pedido de Venta (estado actual: {cot.estado}).")
+            raise HTTPException(400, f"La cotización debe estar Confirmada por el cliente antes de crear el Pedido de Venta (estado actual: {etiqueta_estado('COT', cot.estado)}).")
         if cot.gate2_confirmed_at is None:
             raise HTTPException(400, "Esta cotización no tiene una confirmación de cliente válida y sin usar; no se puede crear el Pedido de Venta.")
 
@@ -2003,7 +2003,7 @@ def add_cot_activity(cot_id: int, body: dict, user: User = Depends(require_roles
         db: Session = Depends(get_db)):
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
     if not cot:
-        raise HTTPException(404, "Cotizacion no encontrada")
+        raise HTTPException(404, "Cotización no encontrada")
     _log(db, "COT", cot.id, cot.numero,
          body.get("action", "NOTE_ADDED"),
          body.get("description"),
@@ -2086,7 +2086,7 @@ def create_pedido(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *R
     except Exception as exc:
         raise HTTPException(
             status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"No se pudo generar el numero de pedido: {type(exc).__name__}",
+            detail=f"No se pudo generar el número de pedido: {type(exc).__name__}",
         )
     saldo = total_cop - anticipo_cop
     ven = SaleOrder(
@@ -2330,8 +2330,8 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
     _registrar_cambios(db, "VEN", v, antes_log, body, user)
     if body.get("estado") and body["estado"] != old_estado:
         _log(db, "VEN", v.id, v.numero, "ESTADO_CHANGED",
-             ("Estado cambiado a ENTREGADO (el inventario ya se había descontado en un despacho anterior; no se "
-              "descuenta otra vez)") if ya_despachado else f"Estado cambiado a {v.estado}",
+             ("Estado cambiado a Entregado (el inventario ya se había descontado en un despacho anterior; no se "
+              "descuenta otra vez)") if ya_despachado else f"Estado cambiado a {etiqueta_estado('VEN', v.estado)}",
              old_estado=old_estado, new_estado=v.estado, user_name=autor)
     if cancela:
         # H46+U25: la cotizacion del pedido vuelve a Borrador para reusarla (no hace fallar la cancelacion).
@@ -2439,7 +2439,7 @@ def update_pxp(pxp_id: int, body: dict, user: User = Depends(require_roles(*ROLE
     db.refresh(p)
     if body.get("estado") and body["estado"] != old_estado:
         _log(db, "PXP", p.id, p.numero, "ESTADO_CHANGED",
-             f"Pago {p.numero} cambiado a {p.estado}",
+             f"Pago {p.numero} cambiado a {etiqueta_estado('PXP', p.estado)}",
              old_estado=old_estado, new_estado=p.estado,
              user_name=body.get("updated_by"))
     return {"status": "success", "data": _pxp_dict(p)}
@@ -2786,7 +2786,7 @@ def ia_analisis_solicitud(sc_id: int, body: dict = {}, user: User = Depends(requ
         prox_accion = "Confirmar despacho" if sc.estado == "CONFIRMADA" else "Seguimiento con asesor"
         resumen = f"""📦 ANÁLISIS DE TRAZABILIDAD — {sc.numero}
 
-Estado actual: {sc.estado}
+Estado actual: {etiqueta_estado('SC', sc.estado)}
 Días desde creación: {dias_desde_creacion} días
 Asesor responsable: {sc.advisor_name or 'No asignado'}
 Cliente: {sc.customer_name or 'N/D'}
@@ -2809,7 +2809,7 @@ Cliente: {sc.customer_name or 'N/D'}
         puede_devolver = en_plazo and estado_ok
         resumen = f"""🔄 ANÁLISIS DE DEVOLUCIÓN — {sc.numero}
 
-Estado de la solicitud: {sc.estado}
+Estado de la solicitud: {etiqueta_estado('SC', sc.estado)}
 Días desde creación: {dias_desde_creacion} días
 {'✅ DENTRO del plazo de 30 días' if en_plazo else '❌ FUERA del plazo de 30 días (policy: máx 30 días)'}
 
@@ -2831,14 +2831,14 @@ Días desde creación: {dias_desde_creacion} días
         resumen = f"""📊 ANÁLISIS DE SOLICITUD — {sc.numero}
 
 Tipo: {tipo}
-Estado: {sc.estado}
+Estado: {etiqueta_estado('SC', sc.estado)}
 Cliente: {sc.customer_name or 'N/D'}
 Asesor: {sc.advisor_name or 'No asignado'}
 Días activo: {dias_desde_creacion} días
 Modalidad: {sc.modalidad_pago or 'No especificada'}
 
 📋 Historial de actividad: {len(list(actividades))} eventos registrados
-🛒 Productos: {len(productos)} item(s)
+🛒 Productos: {len(productos)} ítem(s)
 
 Notas: {sc.notas or 'Sin notas adicionales'}"""
 
@@ -2873,7 +2873,7 @@ def cancelar_solicitud(sc_id: int, body: CancelarSolicitudBody,
         # este endpoint marca eliminada_at (purga en 30 dias via papelera), lo
         # que perderia un ticket de soporte real. Su ciclo de vida se maneja
         # exclusivamente con estado_soporte (PATCH /solicitudes/{id}).
-        raise HTTPException(400, "Soporte Tecnico no usa este flujo de cancelacion; cambia su estado_soporte en su lugar")
+        raise HTTPException(400, "Soporte Técnico no usa este flujo de cancelación; cambia su estado de soporte en su lugar")
     # N4: no se cancela (ni se manda a la papelera) con una cotizacion o un pedido de venta activos.
     cots_activas, pvens_activos = _documentos_activos_de_solicitud(db, sc.id)
     if cots_activas or pvens_activos:
@@ -2995,7 +2995,7 @@ def restaurar_solicitud(sc_id: int, user: User = Depends(require_roles(*ROLE_ADM
     revoke_pending_tokens(db, "SC", sc_id)
     sc.gate1_confirmed_at = None
     db.commit()
-    _log(db, "SC", sc_id, sc.numero, "RESTORED", f"Solicitud restaurada a {estado_final}", old_estado, estado_final, getattr(user, 'email', ''))
+    _log(db, "SC", sc_id, sc.numero, "RESTORED", f"Solicitud restaurada a {etiqueta_estado('SC', estado_final)}", old_estado, estado_final, getattr(user, 'email', ''))
     # N4: cancelar la SC deja el lead perdido; restaurarla lo devuelve a la etapa con la que nace un lead nuevo.
     try:
         reabrir_lead_de_solicitud(sc.id, db)
