@@ -6,6 +6,8 @@
 - Cancelar exige motivo de al menos 5 caracteres (422, R12) y deja cancelled_at.
 - Volver a marcar ENTREGADO un pedido que ya desconto inventario no descuenta otra vez (antes: 500 por
   uq_inv_op_source_doc o 422 por la bodega).
+- A3 (revision final): con un total nuevo (re-cotizacion) el saldo y el anticipo salen del libro de pagos del
+  pedido; los del body se ignoran.
 
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_pedido_venta_transiciones
 """
@@ -238,3 +240,56 @@ def test_un_pedido_entregado_o_facturado_no_cambia_al_recalcular(db):
         assert recalculate_sale_order_state(so, db) == estado
         so.estado = "CONFIRMADO"  # control: con un estado operativo, las mismas lineas si recalculan
         assert recalculate_sale_order_state(so, db) == "CONFIRMADO"
+
+
+# --- A3 (revision final): la re-cotizacion no pisa el saldo con cuentas del navegador ---------------------------
+
+def _pago(db, ven, tipo, monto, sufijo, estado="CONFIRMADO"):
+    import datetime
+    from app.models.fase4 import SaleOrderPayment
+    db.add(SaleOrderPayment(sale_order_id=ven.id, tipo=tipo, monto=monto, moneda="COP", metodo_pago="Nequi",
+                            fecha=datetime.date.today(), idempotency_key=f"TRA-A3-{ven.numero}-{sufijo}",
+                            estado=estado, usuario="t"))
+    db.commit()
+
+
+def _pven_con_anticipo_y_abono(db, numero):
+    """Total 1.000.000; libro: ANTICIPO 400.000 + ABONO 300.000 (y uno revertido que no cuenta) = 700.000 pagados."""
+    ven = _ven(db, numero, estado="EN_PROCESO", total_cop=1000000, anticipo_cop=400000, saldo_cop=300000)
+    _pago(db, ven, "ANTICIPO", 400000, "ant")
+    _pago(db, ven, "ABONO", 300000, "abo")
+    _pago(db, ven, "ABONO", 50000, "rev", estado="REVERTIDO")
+    return ven
+
+
+def test_recotizar_recalcula_saldo_y_anticipo_desde_el_libro_de_pagos(app_client, db, admin_token):
+    from decimal import Decimal
+    ven = _pven_con_anticipo_y_abono(db, "PVEN-TRA013")
+    # Lo que mandaba la pantalla: saldo = total nuevo - anticipo (olvidaba el abono) y un anticipo cualquiera.
+    resp = _patch(app_client, admin_token, ven.id, total_cop=1500000, subtotal_cop=1500000,
+                  saldo_cop=1100000, anticipo_cop=999, motivo="Precios actualizados por re-cotización", updated_by="t")
+    assert resp.status_code == 200, resp.text
+    db.refresh(ven)
+    assert ven.total_cop == Decimal("1500000")
+    assert ven.saldo_cop == Decimal("800000")  # 1.500.000 - 700.000 pagados
+    assert ven.anticipo_cop == Decimal("400000")  # la suma de los ANTICIPO del libro
+    assert resp.json()["data"]["saldo_cop"] == 800000
+
+
+def test_recotizar_con_un_saldo_inventado_lo_ignora(app_client, db, admin_token):
+    from decimal import Decimal
+    ven = _pven_con_anticipo_y_abono(db, "PVEN-TRA014")
+    resp = _patch(app_client, admin_token, ven.id, total_cop=1000000, saldo_cop=5, updated_by="t")
+    assert resp.status_code == 200, resp.text
+    db.refresh(ven)
+    assert (ven.total_cop, ven.saldo_cop, ven.anticipo_cop) == (Decimal("1000000"), Decimal("300000"),
+                                                                Decimal("400000"))
+
+
+def test_recotizar_por_debajo_de_lo_pagado_deja_saldo_cero(app_client, db, admin_token):
+    from decimal import Decimal
+    ven = _pven_con_anticipo_y_abono(db, "PVEN-TRA015")
+    resp = _patch(app_client, admin_token, ven.id, total_cop=600000, saldo_cop=-100000, updated_by="t")
+    assert resp.status_code == 200, resp.text
+    db.refresh(ven)
+    assert (ven.total_cop, ven.saldo_cop) == (Decimal("600000"), Decimal("0"))

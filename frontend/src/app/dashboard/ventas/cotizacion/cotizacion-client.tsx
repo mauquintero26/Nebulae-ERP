@@ -18,6 +18,7 @@ import { humanizarCodigo } from '@/lib/estados-pedido';
 import {
   METODOS_PAGO_ANTICIPO, formatoPct, porcentajeDePesos, hoyLocal, origenAnticipo, cuentaVerificacion,
   evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo, resumenAnticipoCotizacion, montoDesdeTexto,
+  creditoPorRecotizacion,
 } from '@/lib/dinero-ventas';
 import {
   diasAlerta, pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, pestanaCotizacion, situacionPedidoCotizacion,
@@ -403,8 +404,8 @@ export function DeleteConfirm({ cot, onConfirm, onCancel }: { cot: any; onConfir
 }
 
 export function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm, onCancel, saving }: { pven: any; totalAnterior: number; totalNuevo: number; onConfirm: () => void; onCancel: () => void; saving: boolean }) {
-  const anticipoYaPagado = Number(pven?.anticipo_cop || 0);
-  const creditoAFavor = anticipoYaPagado - totalNuevo;
+  // A3: lo pagado es total - saldo del pedido (no solo el anticipo); el servidor deja el saldo en $0, no negativo.
+  const { pagado: yaPagado, credito: creditoAFavor } = creditoPorRecotizacion(pven, totalNuevo);
   return (
     <Modal title="Actualizar Pedido de Venta" icon={RotateCcw} color="indigo" maxWidth="md" onClose={onCancel}
       footer={(
@@ -424,8 +425,8 @@ export function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm
       </div>
       {creditoAFavor > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
-          <p className="font-bold mb-1">⚠ El cliente ya pagó {fCOP(anticipoYaPagado)}, más que el nuevo total.</p>
-          <p>Al continuar, el pedido quedará con un crédito a favor del cliente de <strong>{fCOP(creditoAFavor)}</strong> (saldo negativo). Esto no genera el reembolso automáticamente -- coordina con el cliente o finanzas por separado.</p>
+          <p className="font-bold mb-1">⚠ El cliente ya pagó {fCOP(yaPagado)}, más que el nuevo total.</p>
+          <p>Al continuar, el saldo del pedido queda en $0 y el cliente tiene un crédito a favor de <strong>{fCOP(creditoAFavor)}</strong>. Esto no genera el reembolso automáticamente -- coordina con el cliente o finanzas por separado.</p>
         </div>
       )}
       <p className="text-[11px] text-slate-400 text-center">

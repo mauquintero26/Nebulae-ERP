@@ -195,6 +195,35 @@ export function evaluarVerificacion(cuenta, form, hoy = hoyLocal()) {
   return { monto, parcial, deuda, errores, pendientes, valido: errores.length === 0 && pendientes.length === 0 };
 }
 
+/**
+ * A3: lo pagado del pedido (total - saldo, la cabecera que el servidor deja igual a su libro de pagos) y el credito
+ * a favor del cliente si el total nuevo de la re-cotizacion queda por debajo (el saldo del pedido queda en $0).
+ * @returns {{pagado: number, credito: number}}
+ */
+export function creditoPorRecotizacion(pedido, totalNuevo) {
+  const pagado = Math.max(0, redondearPeso(pedido?.total_cop) - redondearPeso(pedido?.saldo_cop));
+  return { pagado, credito: Math.max(0, pagado - redondearPeso(totalNuevo)) };
+}
+
+/**
+ * A3: el PATCH /ventas/pedidos/{id} que lleva la re-cotizacion de la COT a su pedido vigente. Solo productos y
+ * precios: el saldo y el anticipo los recalcula el servidor desde los pagos del pedido, asi que nunca se mandan. El
+ * aviso de credito compara lo pagado con el total nuevo (creditoPorRecotizacion).
+ */
+export function propagacionRecotizacion(data, pedido, cotNumero, usuario) {
+  const { credito } = creditoPorRecotizacion(pedido, data?.total_cop);
+  const nota = credito > 0 ? ` Crédito a favor del cliente: ${formatoPesos(credito)}.` : '';
+  return {
+    productos: data?.productos,
+    subtotal_cop: data?.subtotal_cop,
+    descuento_pct: data?.descuento_pct,
+    total_cop: data?.total_cop,
+    motivo: `Precios actualizados por re-cotización de ${cotNumero || ''} (anticipo y pagos existentes no se `
+      + `modificaron).${nota}`,
+    updated_by: usuario,
+  };
+}
+
 /** El `verificacion_anticipo` que espera POST /cotizaciones/{id}/confirmar (sin fecha, el servidor pone hoy). */
 export function verificacionParaEnviar(form) {
   const v = { monto: montoDesdeTexto(form?.monto) ?? 0, metodo_pago: texto(form?.metodo), referencia: texto(form?.referencia) };

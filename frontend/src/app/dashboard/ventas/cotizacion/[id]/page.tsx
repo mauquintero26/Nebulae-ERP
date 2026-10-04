@@ -17,7 +17,7 @@ import {
 } from '../cotizacion-client';
 import { NextStepCard, EnlaceConfirmacionModal, CambiosDeActividad, returnToSeguro, getUsuarioActual } from '../../flujo';
 import { situacionPedidoCotizacion } from '@/lib/listas-ventas';
-import { resumenAnticipoCotizacion, formatoPct } from '@/lib/dinero-ventas';
+import { resumenAnticipoCotizacion, formatoPct, propagacionRecotizacion } from '@/lib/dinero-ventas';
 import { comoUTC } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
 
@@ -300,21 +300,12 @@ function CotizacionDetalleContent() {
         body: JSON.stringify({ ...data, recotizacion: true, updated_by: currentUser }),
       });
       if (propagarAPven && pvenVigente) {
-        const nuevoSaldo = Number(data.total_cop || 0) - Number(pvenVigente.anticipo_cop || 0);
-        const notaCredito = nuevoSaldo < 0 ? ` Crédito a favor del cliente: ${fCOP(Math.abs(nuevoSaldo))}.` : '';
+        // A3: solo productos y precios; el servidor recalcula saldo y anticipo desde los pagos del pedido.
         // El PATCH del pedido ya registra su propio renglon de Actividad (con el detalle de lo que
         // cambio); "motivo" le pone el titulo, en vez de un segundo POST /actividad que duplicaria el evento.
         await apiFetch(`/ventas/pedidos/${pvenVigente.id}`, {
           method: 'PATCH',
-          body: JSON.stringify({
-            productos: data.productos,
-            subtotal_cop: data.subtotal_cop,
-            descuento_pct: data.descuento_pct,
-            total_cop: data.total_cop,
-            saldo_cop: nuevoSaldo,
-            motivo: `Precios actualizados por re-cotización de ${cotizacion?.numero || ''} (anticipo y pagos existentes no se modificaron).${notaCredito}`,
-            updated_by: currentUser,
-          }),
+          body: JSON.stringify(propagacionRecotizacion(data, pvenVigente, cotizacion?.numero, currentUser)),
         });
       }
       setShowCalc(false);

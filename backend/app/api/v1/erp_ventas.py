@@ -2353,12 +2353,22 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
                "customer_phone","customer_email","customer_address","trm_rate",
                "subtotal_cop","descuento_pct","total_cop","anticipo_cop","saldo_cop",
                "cancellation_reason","cancellation_authorized_by","cancelled_at"]
-    # R11 (H42): la re-cotizacion propaga total, subtotal y saldo (y el anticipo) con decimales al PVEN:
-    # el servidor los deja en pesos enteros.
+    # A3 (revision final): con un total nuevo (la re-cotizacion de la COT), el saldo y el anticipo salen del libro
+    # de pagos del pedido, no de cuentas del navegador: los del body se ignoran. Un body con solo saldo_cop (el
+    # "Registrar cobro" de Entregas) sigue como antes (hueco anterior a la rama, anotado).
+    recalcula_desde_el_libro = body.get("total_cop") is not None
+    if recalcula_desde_el_libro:
+        body.pop("saldo_cop", None)
+        body.pop("anticipo_cop", None)
+    # R11 (H42): la re-cotizacion propaga total y subtotal con decimales al PVEN: el servidor los deja en pesos
+    # enteros.
     _redondear_montos_del_body(body, ("subtotal_cop", "total_cop", "saldo_cop", "anticipo_cop"))
     for k in allowed:
         if k in body:
             setattr(v, k, body[k])
+    if recalcula_desde_el_libro:
+        from app.api.v1.erp_ventas_fase4 import _cabecera_desde_el_libro_de_pagos
+        _cabecera_desde_el_libro_de_pagos(v, db)
     autor = body.get("updated_by") or getattr(user, "email", None)
     ya_despachado = False
     if body.get("estado") == "ENTREGADO" and old_estado != "ENTREGADO":

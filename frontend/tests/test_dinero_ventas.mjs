@@ -15,7 +15,7 @@ import {
   etiquetaAnticipoCotizacion, origenAnticipo, resumenAnticipoCotizacion,
   cuentaVerificacion, evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo, montoDesdeTexto,
   etiquetaTipoPago, etiquetaMetodoPago, etiquetaEstadoPago, describirPago,
-  etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp, textoChipPxp,
+  etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp, textoChipPxp, propagacionRecotizacion, creditoPorRecotizacion,
 } from '../src/lib/dinero-ventas.js';
 
 console.log('--- N1 TEST 1: los 8 medios de pago son los mismos que acepta el servidor ---');
@@ -328,6 +328,29 @@ console.log('--- H44+N6 / H45 TEST 11: PXP vigente o cancelada y cuando se puede
   assert.equal(pedidoAdmitePxp({ estado: 'EN_PROCESO', saldo_cop: 10, pxp_id: 4 }), false);
   assert.equal(pedidoAdmitePxp({ estado: 'EN_PROCESO', saldo_cop: 10, pxp_id: null }), true);
   assert.equal(pedidoAdmitePxp(null), false);
+}
+
+console.log('--- A3 TEST 12: la re-cotizacion manda precios al pedido, nunca saldo ni anticipo ---');
+{
+  const data = { productos: [{ product_name: 'Cuna' }], subtotal_cop: 1500000, descuento_pct: 0, total_cop: 1500000 };
+  // Pagado 700.000 (anticipo 400.000 + abono 300.000): el saldo lo recalcula el servidor desde el libro.
+  const pedido = { total_cop: 1000000, saldo_cop: 300000, anticipo_cop: 400000 };
+  const body = propagacionRecotizacion(data, pedido, 'COT-1', 'ana@x.com');
+  assert.deepEqual(Object.keys(body).sort(),
+    ['descuento_pct', 'motivo', 'productos', 'subtotal_cop', 'total_cop', 'updated_by']);
+  assert.equal(body.total_cop, 1500000);
+  assert.equal(body.updated_by, 'ana@x.com');
+  assert.equal(body.motivo,
+    'Precios actualizados por re-cotización de COT-1 (anticipo y pagos existentes no se modificaron).');
+  // Total nuevo menor que lo pagado (no solo que el anticipo): el aviso usa lo pagado.
+  const menor = propagacionRecotizacion({ ...data, total_cop: 600000 }, pedido, 'COT-1', 'ana@x.com');
+  assert.equal(menor.motivo, 'Precios actualizados por re-cotización de COT-1 (anticipo y pagos existentes no se '
+    + 'modificaron). Crédito a favor del cliente: $100.000.');
+  assert.ok(!('saldo_cop' in menor) && !('anticipo_cop' in menor));
+  // El modal de confirmacion usa la misma cuenta (antes: anticipo - total y "saldo negativo").
+  assert.deepEqual(creditoPorRecotizacion(pedido, 600000), { pagado: 700000, credito: 100000 });
+  assert.deepEqual(creditoPorRecotizacion(pedido, 1500000), { pagado: 700000, credito: 0 });
+  assert.deepEqual(creditoPorRecotizacion(null, 1000), { pagado: 0, credito: 0 });
 }
 
 console.log('OK test_dinero_ventas.mjs');
