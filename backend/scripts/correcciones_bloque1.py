@@ -11,7 +11,7 @@ Uso (desde backend/, con el python del venv):
 
 Pasos, en el orden OBLIGATORIO (R1; un paso puede depender de que el anterior ya se haya aplicado):
     n1   pagos de anticipo CONVERSION_COTIZACION que nadie verifico       (decision por pedido: a | b)
-    h44  PXP con los montos invertidos
+    h44  PXP con montos que no dicen la verdad del pedido (invertidas, o desactualizadas tras n1 b)
     h45  PXP pendientes de pedidos ya cancelados
     h46  COT confirmadas cuyos pedidos estan todos cancelados -> las reabre
     h36  anticipo de las COT abiertas segun la modalidad de la solicitud
@@ -27,21 +27,34 @@ Seguridad:
   - Al iniciar imprime la URL enmascarada y SELECT current_database(). Nunca lee ni imprime credenciales.
   - --listar corre en una transaccion de SOLO LECTURA (SET TRANSACTION READ ONLY) y termina con rollback.
   - --aplicar exige --base <nombre> igual a current_database(): si no coincide, aborta sin escribir.
-  - --aplicar acepta --ids o --numeros para limitarse a lo aprobado. n1 y n5 piden una decision por fila y no
-    aplican nada sin ella; n2 no escribe nunca; h42 solo escribe lo que esta en --numeros.
-  - Antes de escribir guarda un respaldo JSON con las filas tal como estaban:
-    backend/scripts/respaldos/<paso>-<base>-<fecha>.json (carpeta ignorada por git: trae datos).
+  - --aplicar acepta --ids o --numeros para limitarse a lo aprobado. Un id o un numero que NO esta entre los
+    candidatos del paso (no esta en el listado, es un documento real o esta en un grupo que el paso no escribe)
+    aborta el paso sin escribir y lo nombra. n1 y n5 piden una decision por fila y no aplican nada sin ella; n2 no
+    escribe nunca; h42 solo escribe lo que esta en --numeros; n5 y h42 no aceptan --ids (los ids de SC/COT y de
+    PVEN/COT se repiten) y h7 no acepta --numeros.
   - Un solo commit al final del paso; si algo falla, rollback del paso completo. Excepciones que el codigo
     reutilizado hace commit por su cuenta: h46 (un commit por cotizacion, dentro de
-    _reabrir_cotizacion_por_pven_cancelado) y h7 (un solo commit, dentro de corregir()).
+    _reabrir_cotizacion_por_pven_cancelado; NO es atomico pero si idempotente: si se interrumpe, volver a correrlo
+    continua con las que falten) y h7 (un solo commit, dentro de corregir()).
   - Excluye SIEMPRE los documentos reales del usuario (NUMEROS_REALES) y todo lo encadenado a ellos: la SC, la COT
     y el PVEN de la cadena, sus PXP y pagos, y los ActivityLog cuya entidad sea alguno de ellos.
+
+Respaldos (carpeta backend/scripts/respaldos/, ignorada por git):
+  - Antes de escribir se guarda <paso>-<base>-<fecha>.json con el `id` y SOLO las columnas que el paso cambia
+    (RESPALDO_COLUMNAS), nunca la fila completa: no se copian nombres, correos ni telefonos de clientes.
+  - Si el paso falla despues de escribir el JSON (o termina sin cambiar nada), el archivo se RENOMBRA a
+    <paso>-<base>-<fecha>-NO-APLICADO.json para que no parezca el respaldo de algo aplicado.
+  - Para DESHACER un paso aplicado: por cada fila de cada tabla del JSON, un UPDATE con las columnas guardadas,
+        UPDATE <tabla> SET <columna1> = <valor1>, <columna2> = <valor2> ... WHERE id = <id>;
+    (los `null` del JSON son NULL). Lo que NO se deshace desde el JSON: los renglones de Actividad que agrego el paso
+    (user_name 'Corrección de datos (Bloque 1)'), las etapas estandar del pipeline que h46 pueda crear y, en h7, la
+    tabla de respaldo activity_logs_respaldo_textos queda en la base (su SQL de restauracion esta en
+    corregir_textos_actividad.py).
 """
 import argparse
 import datetime
 import json
 import os
-import re
 import sys
 import textwrap
 from dataclasses import dataclass, field
@@ -60,7 +73,7 @@ from app.core.textos_actividad import (
     ACCIONES_DEL_SISTEMA, ENTIDADES_CORREGIBLES, corregir_descripcion_historica, etiqueta_estado,
 )
 from app.core.ventas_dinero import (
-    METODO_PAGO_SIN_VERIFICAR, anticipo_cotizacion, anular_pxps_de_pedido, metodo_pago_anticipo, pesos,
+    METODO_PAGO_SIN_VERIFICAR, anticipo_cotizacion, anular_pxps_de_pedido, formato_pct, metodo_pago_anticipo, pesos,
     redondear_peso,
 )
 
@@ -73,46 +86,89 @@ PASOS_QUE_ESCRIBEN = tuple(p for p in PASOS if p != "n2")
 AUTOR = "Corrección de datos (Bloque 1)"
 CARPETA_RESPALDOS = Path(_BACKEND_DIR) / "scripts" / "respaldos"
 MAX_FILAS_EN_TEXTO = 150      # por seccion al imprimir (los datos completos siguen en Seccion.filas)
+MAX_CELDA = 120
 
 ESTADOS_SC = ("BORRADOR", "ASIGNADA", "PENDIENTE_CONFIRMACION", "COTIZADA", "EN_ESPERA_CONFIRMACION", "CONFIRMADA",
               "RECHAZADA", "VENCIDA", "CANCELADA", "N/A_SOPORTE")
 ESTADOS_COT = ("BORRADOR", "ENVIADA", "PENDIENTE_CONFIRMACION", "CONFIRMADA", "RECHAZADA", "VENCIDA")
-ESTADOS_COT_ABIERTAS = ("BORRADOR", "ENVIADA", "PENDIENTE_CONFIRMACION", "CONFIRMADA")
+
+AVISO_H46 = ("h46 NO es atómico (hace un commit por cotización) pero sí idempotente: si se interrumpe, volver a "
+             "correrlo continúa con las que falten.")
 
 # Lo que cada paso necesita del esquema. Si falta una tabla o columna, el paso dice "No aplica" y sigue.
 REQUISITOS = {
     "n1": {"sale_order_payments": ["id", "sale_order_id", "metodo_pago", "estado", "monto", "usuario", "created_at",
                                    "referencia_bancaria", "notes"],
-           "sale_orders": ["id", "numero", "estado", "total_cop", "anticipo_cop", "saldo_cop"]},
+           "sale_orders": ["id", "numero", "estado", "total_cop", "anticipo_cop", "saldo_cop", "updated_at"],
+           "payment_pendings": ["ven_id", "numero", "estado", "monto_anticipo", "monto_pendiente"]},
     "h44": {"payment_pendings": ["id", "numero", "ven_id", "estado", "monto_total", "monto_anticipo",
-                                  "monto_pendiente"],
-            "sale_orders": ["id", "numero", "estado", "total_cop", "anticipo_cop", "saldo_cop"]},
+                                  "monto_pendiente", "updated_at"],
+            "sale_orders": ["id", "numero", "estado", "total_cop", "anticipo_cop", "saldo_cop"],
+            "sale_order_payments": ["sale_order_id", "metodo_pago", "estado"]},
     "h45": {"payment_pendings": ["id", "numero", "ven_id", "estado", "monto_pendiente", "notas", "updated_at"],
             "sale_orders": ["id", "numero", "estado", "pxp_id", "pxp_numero"]},
-    "h46": {"sales_quotations": ["id", "numero", "estado", "total_cop", "gate2_confirmed_at"],
-            "sale_orders": ["id", "numero", "estado", "cot_id"]},
+    "h46": {"sales_quotations": ["id", "numero", "sc_id", "estado", "total_cop", "gate2_confirmed_at", "updated_at"],
+            "sale_orders": ["id", "numero", "estado", "cot_id"],
+            "customer_requests": ["id", "estado", "updated_at"],
+            "sales_orders": ["id", "status", "pipeline_stage_id", "canonical_customer_request_id", "updated_at"],
+            "pipeline_stages": ["id", "name", "maps_to_status", "position"],
+            "document_confirmation_tokens": ["id", "document_type", "document_id", "used_at"]},
     "h36": {"sales_quotations": ["id", "numero", "estado", "total_cop", "anticipo_cop", "sc_id",
-                                  "anticipo_pct_manual"],
+                                  "anticipo_pct_manual", "updated_at"],
             "customer_requests": ["id", "numero", "modalidad_pago"],
             "sale_orders": ["id", "cot_id", "estado"]},
     "n4": {"customer_requests": ["id", "numero", "estado", "eliminada_at", "razon_cancelacion", "tipo_solicitud"],
            "sales_quotations": ["id", "numero", "sc_id", "estado"],
-           "sale_orders": ["id", "numero", "sc_id", "estado"]},
+           "sale_orders": ["id", "numero", "sc_id", "estado"],
+           "sales_orders": ["canonical_customer_request_id"]},
     "n2": {"sale_orders": ["id", "numero", "estado", "cancelled_at", "cancellation_reason", "total_cop"],
            "inventory_operations": ["source_document_type", "source_document_id"]},
-    "n5": {"customer_requests": ["id", "numero", "estado", "advisor_user_id"],
-           "sales_quotations": ["id", "numero", "sc_id", "estado"],
+    "n5": {"customer_requests": ["id", "numero", "estado", "advisor_user_id", "updated_at"],
+           "sales_quotations": ["id", "numero", "sc_id", "estado", "updated_at"],
            "sale_orders": ["id", "numero", "sc_id", "cot_id", "estado"]},
     "n10": {"activity_logs": ["id", "entity_type", "entity_id", "entity_numero", "action", "created_at"],
             "sale_order_lines_erp": ["id", "so_id"],
             "sale_orders": ["id", "numero"]},
-    "h7": {"activity_logs": ["id", "entity_type", "entity_id", "action", "description"]},
-    "u9": {"sales_orders": ["id", "status", "lead_source", "lead_description", "canonical_customer_request_id",
-                             "canonical_sale_order_id", "created_at"],
+    "h7": {"activity_logs": ["id", "entity_type", "entity_id", "entity_numero", "action", "description"]},
+    "u9": {"sales_orders": ["id", "status", "pipeline_stage_id", "lead_source", "lead_description",
+                             "canonical_customer_request_id", "canonical_sale_order_id", "created_at"],
+           "pipeline_stages": ["id", "name"],
            "customer_requests": ["id", "numero"]},
-    "h42": {"sale_orders": ["id", "numero", "estado", "total_cop", "subtotal_cop", "anticipo_cop", "saldo_cop"],
-            "sales_quotations": ["id", "numero", "estado", "total_cop", "subtotal_cop", "anticipo_cop"],
+    "h42": {"sale_orders": ["id", "numero", "estado", "total_cop", "subtotal_cop", "anticipo_cop", "saldo_cop",
+                            "updated_at"],
+            "sales_quotations": ["id", "numero", "estado", "total_cop", "subtotal_cop", "anticipo_cop", "updated_at"],
             "sale_order_payments": ["sale_order_id"]},
+}
+
+# Respaldo MINIMO por paso: tabla -> columnas que ese paso cambia (el `id` siempre va). Cubre lo que escribe el paso Y
+# lo que escriben los helpers que reutiliza (verificado leyendolos):
+#   n1 b   _cabecera_desde_el_libro_de_pagos: so.anticipo_cop, so.saldo_cop (+ updated_at, que pone el paso)
+#   h45    anular_pxps_de_pedido: p.estado, p.updated_at, p.notas; so.pxp_id, so.pxp_numero
+#   h46    _reabrir_cotizacion_por_pven_cancelado: cot.estado, gate2_confirmed_at, updated_at; tokens.used_at
+#          (revoke_pending_tokens); sc.estado, updated_at (_sincronizar_estado_solicitud_desde_cotizacion); lead
+#          pipeline_stage_id, status, updated_at (_mover_lead_a_status). Puede INSERTAR etapas estandar faltantes
+#          del pipeline (_asegurar_etapas_estandar) y un renglon de Actividad: filas nuevas, no se restauran.
+#   h7     corregir(): activity_logs.description
+# Ninguna lleva columnas customer_* (nombre, correo, telefono, direccion del cliente).
+RESPALDO_COLUMNAS = {
+    "n1": {"sale_order_payments": ["estado", "metodo_pago", "referencia_bancaria", "notes"],
+           "sale_orders": ["anticipo_cop", "saldo_cop", "updated_at"]},
+    "h44": {"payment_pendings": ["monto_total", "monto_anticipo", "monto_pendiente", "updated_at"]},
+    "h45": {"payment_pendings": ["estado", "notas", "updated_at"],
+            "sale_orders": ["pxp_id", "pxp_numero"]},
+    "h46": {"sales_quotations": ["estado", "gate2_confirmed_at", "updated_at"],
+            "customer_requests": ["estado", "updated_at"],
+            "sales_orders": ["status", "pipeline_stage_id", "updated_at"],
+            "document_confirmation_tokens": ["used_at"]},
+    "h36": {"sales_quotations": ["anticipo_cop", "updated_at"]},
+    "n4": {"customer_requests": ["eliminada_at", "razon_cancelacion"]},
+    "n5": {"customer_requests": ["estado", "updated_at"],
+           "sales_quotations": ["estado", "updated_at"]},
+    "n10": {"activity_logs": ["entity_type", "entity_id", "entity_numero"]},
+    "h7": {"activity_logs": ["description"]},
+    "u9": {"sales_orders": ["lead_description"]},
+    "h42": {"sale_orders": ["total_cop", "subtotal_cop", "anticipo_cop", "saldo_cop", "updated_at"],
+            "sales_quotations": ["total_cop", "subtotal_cop", "anticipo_cop", "updated_at"]},
 }
 
 INFO = {
@@ -123,19 +179,24 @@ INFO = {
                "Cobrado' y quita la alerta de cobro.",
         que_haria="Solo para los pedidos que el usuario decida en --decisiones <archivo.json>: (a) deja el pago y le "
                   "completa el método y la referencia reales; (b) anula el pago (estado ANULADO), recalcula "
-                  "anticipo y saldo con el libro de pagos y deja un renglón en la Actividad del pedido. Sin "
-                  "decisiones no escribe.",
+                  "anticipo y saldo con el libro de pagos y deja un renglón en la Actividad del pedido. Con (b), las "
+                  "PXP del pedido quedan con montos desactualizados: las corrige h44 (grupo b). Sin decisiones no "
+                  "escribe.",
         decision="Por cada pedido: (a) el cliente SÍ pagó (indicar método y referencia reales) o (b) no pagó / no "
                  "se sabe."),
     "h44": dict(
-        titulo="Órdenes de pago (PXP) con los montos invertidos",
-        que_es="PXP creadas con el botón viejo: 'ya pagado' y 'pendiente' salieron al revés (el anticipo de la PXP "
-               "es el saldo del pedido y su pendiente es lo que ya se había pagado).",
-        que_haria="Por cada PXP aprobada (--ids/--numeros): recalcula monto_total, monto_anticipo (lo ya pagado) y "
-                  "monto_pendiente (el saldo) desde el pedido, en pesos enteros, y deja un renglón 'Montos "
-                  "corregidos (estaban invertidos)' en la Actividad de la PXP.",
-        decision="Aprobar la lista (o indicar qué PXP sí). Si N1 (b) cambia el saldo de algún pedido, volver a "
-                 "correr este listado después de aplicar N1."),
+        titulo="Órdenes de pago (PXP) con montos que no dicen la verdad del pedido",
+        que_es="(a) PXP creadas con el botón viejo: 'ya pagado' y 'pendiente' salieron al revés (el anticipo de la "
+               "PXP es el saldo del pedido y su pendiente es lo que ya se había pagado). (b) PXP PENDIENTE de pedidos "
+               "a los que N1 (b) les anuló un pago de anticipo sin verificar y cuyos montos ya no coinciden con el "
+               "pedido de hoy.",
+        que_haria="Por cada PXP aprobada (--ids/--numeros), de (a) o de (b): recalcula monto_total, monto_anticipo "
+                  "(lo ya pagado = total - saldo) y monto_pendiente (el saldo) desde el pedido de HOY, en pesos "
+                  "enteros, y deja un renglón en la Actividad de la PXP ('Montos corregidos (estaban invertidos)' en "
+                  "(a); 'Montos corregidos: recalculados desde el pedido tras anular un pago sin verificar' en (b)).",
+        decision="Aprobar la lista (o indicar qué PXP sí). El grupo (b) solo aparece DESPUÉS de aplicar N1 (b): "
+                 "volver a correr este listado entonces. Si el pedido está cancelado, h45 cancelará esa PXP de "
+                 "todos modos."),
     "h45": dict(
         titulo="Órdenes de pago pendientes de pedidos ya cancelados",
         que_es="PXP en estado PENDIENTE cuyo pedido está CANCELADO: siguen contando como pendientes.",
@@ -148,9 +209,10 @@ INFO = {
         que_es="COT en estado CONFIRMADA con al menos un pedido, todos CANCELADO: no se pueden reajustar ni crear "
                "otro pedido hasta reabrirlas.",
         que_haria="Por cada COT aprobada llama a _reabrir_cotizacion_por_pven_cancelado (la misma regla de cancelar "
-                  "el pedido): la COT vuelve a Borrador, se limpia la confirmación (gate 2) y el enlace pendiente, "
-                  "la solicitud pasa a Cotizada y el lead a Cotización; deja el renglón en la Actividad de la COT. "
-                  "Es idempotente.",
+                  "el pedido): la COT vuelve a Borrador, se limpia la confirmación (gate 2) y se revoca el enlace "
+                  "pendiente, la solicitud pasa a Cotizada y el lead a la etapa de cotización; deja el renglón en la "
+                  "Actividad de la COT. Antes respalda en el JSON la COT, la SC, el lead y los enlaces pendientes. "
+                  + AVISO_H46,
         decision="Aprobar la lista o indicar cuáles reabrir."),
     "h36": dict(
         titulo="Anticipo desactualizado en cotizaciones abiertas",
@@ -166,11 +228,14 @@ INFO = {
         que_es="(a) SC CANCELADA que aún tiene COT o pedidos activos; (b) SC en la papelera (eliminada_at) que no "
                "está cancelada, que la sincronización revivió; (c) SC canceladas con la pastilla vieja: sin "
                "eliminada_at ni motivo (Soporte Técnico no cuenta).",
-        que_haria="Solo el grupo (c): pone eliminada_at = ahora (UTC, para que no queden purgables de inmediato) y, "
-                  "si falta, razon_cancelacion = 'Cancelada con el cambio de estado manual (sin motivo "
-                  "registrado)'. (a) y (b) NO se escriben: se deciden caso por caso.",
+        que_haria="Solo el grupo (c): pone eliminada_at = ahora (UTC) y, si falta, razon_cancelacion = 'Cancelada con "
+                  "el cambio de estado manual (sin motivo registrado)'. CUIDADO: con eliminada_at puesto, la "
+                  "purga de la Papelera BORRA DEFINITIVAMENTE a los 30 días las SC que ningún documento ni lead "
+                  "referencia (la columna 'Referenciada' lo dice por solicitud). (a) y (b) NO se escriben: se "
+                  "deciden caso por caso.",
         decision="(a) por solicitud: restaurarla, o rechazar la COT / cancelar el pedido. (b) por solicitud: qué "
-                 "estado le corresponde. (c) aprobar la lista."),
+                 "estado le corresponde. (c) aprobar la lista sabiendo que las no referenciadas se purgan a los "
+                 "30 días."),
     "n2": dict(
         titulo="Pedidos con estado raro (solo informativo)",
         que_es="(a) Pedidos que ya descontaron inventario pero no están Entregado/Facturado; (b) pedidos "
@@ -214,9 +279,9 @@ INFO = {
         que_es="Pedidos y cotizaciones con total_cop o saldo_cop con decimales (p. ej. $2.786.923,08). Se marca "
                "cuáles tienen pagos registrados.",
         que_haria="SOLO para los documentos SIN pagos y que estén en --numeros: redondea al peso (ROUND_HALF_UP) "
-                  "total, subtotal, anticipo y saldo (en la COT, total, subtotal y anticipo) y deja un renglón en "
-                  "la Actividad. No toca las líneas ni el JSON de productos. Los documentos con pagos no se "
-                  "tocan nunca.",
+                  "total, subtotal y anticipo, y el saldo conservando lo pagado (saldo = total redondeado - pagado "
+                  "redondeado; en la COT, total, subtotal y anticipo), y deja un renglón en la Actividad. No toca "
+                  "las líneas, el JSON de productos ni las PXP. Los documentos con pagos no se tocan nunca.",
         decision="Por documento sin pagos: redondear (lista en --numeros) o dejarlo. El diseño no lo "
                  "recomienda; el usuario pidió hacerlo en documentos sin pagos (R1)."),
 }
@@ -224,6 +289,11 @@ INFO = {
 
 class ErrorCorreccion(Exception):
     """El paso se aborta SIN escribir nada (base equivocada, decisiones invalidas, argumentos incompletos)."""
+
+
+def _ahora_utc() -> datetime.datetime:
+    """Ahora en UTC, naive (el estandar de la app), sin el aviso de datetime.utcnow()."""
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
 
 
 # ─── estructuras ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -236,10 +306,11 @@ class Seccion:
     filas: list = field(default_factory=list)   # dicts COMPLETOS (el texto trunca; los datos no)
     nota: str = ""
     compacta: bool = False                      # se imprime como una lista de numeros, no como tabla
+    total_mostrado: Optional[int] = None        # si la seccion resume otra cosa (h7: filas, no tipos)
 
     @property
     def total(self):
-        return len(self.filas)
+        return self.total_mostrado if self.total_mostrado is not None else len(self.filas)
 
 
 @dataclass
@@ -298,11 +369,19 @@ class Contexto:
     base: str
     carpeta: Path
     excl: Excluidos
+    paso: str = ""
     ids: Optional[list] = None
     numeros: Optional[list] = None
     decisiones: Optional[dict] = None
     tabla_respaldo: Optional[str] = None
-    ahora: datetime.datetime = field(default_factory=datetime.datetime.utcnow)
+    ahora: datetime.datetime = field(default_factory=_ahora_utc)
+    escritos: list = field(default_factory=list)      # respaldos JSON que escribio este paso
+
+    def respaldar(self, tablas) -> str:
+        """Escribe el respaldo minimo del paso (tablas: {tabla: [ids]}) y lo anota para poder marcarlo NO-APLICADO."""
+        ruta = escribir_respaldo(self.db, self.carpeta, self.paso, self.base, tablas, self.ahora)
+        self.escritos.append(ruta)
+        return ruta
 
 
 # ─── formato ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -330,7 +409,7 @@ def _celda(v) -> str:
     if isinstance(v, datetime.date):
         return v.isoformat()
     s = str(v).replace("\n", " ")
-    return s if len(s) <= 70 else s[:67] + "..."
+    return s if len(s) <= MAX_CELDA else s[:MAX_CELDA - 3] + "..."
 
 
 def _tabla(columnas, filas) -> list:
@@ -363,8 +442,9 @@ def texto_listado(l: Listado, indice=None, total=None) -> str:
                                  initial_indent="  ", subsequent_indent="  ")
             continue
         out += _tabla(s.columnas, s.filas[:MAX_FILAS_EN_TEXTO])
-        if s.total > MAX_FILAS_EN_TEXTO:
-            out.append(f"  ... y {s.total - MAX_FILAS_EN_TEXTO} más (se muestran {MAX_FILAS_EN_TEXTO} de {s.total})")
+        if len(s.filas) > MAX_FILAS_EN_TEXTO:
+            out.append(f"  ... y {len(s.filas) - MAX_FILAS_EN_TEXTO} más "
+                       f"(se muestran {MAX_FILAS_EN_TEXTO} de {len(s.filas)})")
     if len(l.secciones) > 1 and "candidatas" not in l.datos:
         partes = ", ".join(f"{s.clave}: {s.total}" for s in l.secciones)
         out += ["", f"Conteo: {l.conteo} ({partes})"]
@@ -485,25 +565,66 @@ def _pasa(fila, ctx) -> bool:
     return True
 
 
+def _exigir_candidatos(ctx, candidatos, excluidas=(), no_escribe=None) -> None:
+    """Un id de --ids o un numero de --numeros que NO esta entre los candidatos del paso aborta el paso SIN escribir y
+    lo nombra, igual en todos los pasos: el usuario cree que aprobo algo que el script no va a tocar. `excluidas` son las
+    filas de documentos reales que coincidian con el paso; `no_escribe`, {nombre_del_grupo: filas} de grupos que el
+    paso lista pero no escribe (n4 a y b)."""
+    pedidos = [("id", i) for i in (ctx.ids or [])] + [("numero", n) for n in (ctx.numeros or [])]
+    esta = lambda filas, clave, valor: any(f.get(clave) == valor for f in filas)
+    faltan = []
+    for clave, valor in pedidos:
+        if esta(candidatos, clave, valor):
+            continue
+        etiqueta = f"id {valor}" if clave == "id" else str(valor)
+        if esta(excluidas, clave, valor):
+            motivo = "es un documento real (o está encadenado a uno): no se toca"
+        else:
+            motivo = "no está entre los candidatos del paso (no sale en su listado)"
+            for nombre, filas in (no_escribe or {}).items():
+                if esta(filas, clave, valor):
+                    motivo = f"está en el grupo {nombre}, que este paso lista pero no escribe"
+        faltan.append(f"{etiqueta}: {motivo}")
+    if faltan:
+        raise ErrorCorreccion(f"{ctx.paso}: no se escribió nada. " + "; ".join(faltan))
+
+
 def _est(entidad, codigo) -> str:
     return etiqueta_estado(entidad, codigo) or "-"
 
 
+def _pven_vigente(db, cot_id):
+    """El pedido vigente (no cancelado) de la COT, con la regla de la app (erp_ventas._pven_vigente_de_cotizacion)."""
+    from app.api.v1.erp_ventas import _pven_vigente_de_cotizacion
+    return _pven_vigente_de_cotizacion(db, cot_id)
+
+
+def _etapa_legible(nombre_etapa, status) -> str:
+    """La etapa del lead como la ve el equipo en el CRM: el nombre de su etapa del pipeline, o el de la etapa estandar
+    de su status ('Nuevo Lead', 'Cotización Enviada', 'Ganado'...), nunca el codigo crudo."""
+    if nombre_etapa:
+        return nombre_etapa
+    from app.api.v1.crm import _ETAPAS_ESTANDAR
+    return {s: n for n, s, _c, _b in _ETAPAS_ESTANDAR}.get(status, status or "-")
+
+
 # ─── respaldo JSON ────────────────────────────────────────────────────────────────────────────────────────────
 
-_TABLAS_RESPALDABLES = {"sale_order_payments", "sale_orders", "payment_pendings", "sales_quotations",
-                        "customer_requests", "activity_logs", "sales_orders"}
-
-
 def escribir_respaldo(db, carpeta, paso, base, tablas, ahora=None) -> str:
-    """Guarda las filas COMPLETAS tal como estan ahora (antes de escribir) en <paso>-<base>-<fecha>.json.
-    tablas: {nombre_de_tabla: [ids]}. Devuelve la ruta."""
-    ahora = ahora or datetime.datetime.utcnow()
-    contenido = {"paso": paso, "base": base, "generado_utc": ahora.isoformat(), "tablas": {}}
+    """Guarda en <paso>-<base>-<fecha>.json, ANTES de escribir, el `id` y solo las columnas que el paso cambia
+    (RESPALDO_COLUMNAS), tal como estan ahora. tablas: {nombre_de_tabla: [ids]}. Devuelve la ruta."""
+    ahora = ahora or _ahora_utc()
+    permitidas = RESPALDO_COLUMNAS.get(paso, {})
+    contenido = {"paso": paso, "base": base, "generado_utc": ahora.isoformat(), "columnas": {}, "tablas": {}}
     for tabla, ids in tablas.items():
-        if tabla not in _TABLAS_RESPALDABLES:
-            raise ErrorCorreccion(f"Tabla no permitida en el respaldo: {tabla}")
-        filas = db.execute(text(f"SELECT * FROM {tabla} WHERE id = ANY(:i) ORDER BY id"), {"i": sorted(set(ids))})
+        columnas = permitidas.get(tabla)
+        if columnas is None:
+            raise ErrorCorreccion(f"Tabla no prevista en el respaldo del paso {paso}: {tabla}")
+        if any(c.startswith("customer_") for c in columnas):
+            raise ErrorCorreccion(f"El respaldo no guarda datos personales del cliente ({tabla})")
+        filas = db.execute(text(f"SELECT id, {', '.join(columnas)} FROM {tabla} WHERE id = ANY(:i) ORDER BY id"),
+                           {"i": sorted(set(ids))})
+        contenido["columnas"][tabla] = ["id"] + list(columnas)
         contenido["tablas"][tabla] = [dict(f) for f in filas.mappings().all()]
     carpeta = Path(carpeta)
     carpeta.mkdir(parents=True, exist_ok=True)
@@ -514,6 +635,19 @@ def escribir_respaldo(db, carpeta, paso, base, tablas, ahora=None) -> str:
         ruta = carpeta / f"{paso}-{base}-{marca}-{n}.json"
     ruta.write_text(json.dumps(contenido, default=str, ensure_ascii=False, indent=1), encoding="utf-8")
     return str(ruta)
+
+
+def _marcar_no_aplicados(rutas) -> list:
+    """Renombra los respaldos de un paso que no se aplico a '...-NO-APLICADO.json' (no se borran: ayudan a diagnosticar)."""
+    nuevas = []
+    for ruta in rutas:
+        destino = ruta[:-len(".json")] + "-NO-APLICADO.json" if ruta.endswith(".json") else ruta + "-NO-APLICADO"
+        try:
+            os.replace(ruta, destino)
+            nuevas.append(destino)
+        except OSError:
+            pass
+    return nuevas
 
 
 def _anexar(nota, texto) -> str:
@@ -545,8 +679,16 @@ def _sel_n1(db, excl):
     filas = _filas(db, _SQL_N1, metodo=METODO_PAGO_SIN_VERIFICAR)
     incluidas = [f for f in filas if f["id"] not in excl.pven and f["pago_id"] not in excl.pagos]
     excluidas = [f for f in filas if f["id"] in excl.pven or f["pago_id"] in excl.pagos]
+    pxps = {}
+    if incluidas:
+        for r in _filas(db, "SELECT ven_id, numero, estado, monto_anticipo, monto_pendiente FROM payment_pendings "
+                            "WHERE ven_id = ANY(:i) ORDER BY id", i=sorted({f["id"] for f in incluidas})):
+            pxps.setdefault(r["ven_id"], []).append(
+                f"{r['numero']} ({_est('PXP', r['estado'])}: pagado {monto_exacto(r['monto_anticipo'])}, "
+                f"pendiente {monto_exacto(r['monto_pendiente'])})")
     for f in incluidas:
         f["estado_txt"] = _est("VEN", f["estado"])
+        f["pxps"] = "; ".join(pxps.get(f["id"], [])) or "ninguna"
     return incluidas, excluidas
 
 
@@ -557,11 +699,13 @@ def listar_n1(db, excl, **_) -> Listado:
         "pagos", "Pagos CONVERSION_COTIZACION en estado CONFIRMADO",
         [("numero", "Pedido"), ("estado_txt", "Estado"), ("total_cop", "Total"), ("monto", "Pago sin verificar"),
          ("anticipo_cop", "Anticipo registrado"), ("saldo_cop", "Saldo"), ("usuario", "Registró"),
-         ("created_at", "Creado (UTC)")], incluidas))
+         ("created_at", "Creado (UTC)"), ("pxps", "PXP del pedido")], incluidas))
     _marcar_excluidos(l, excluidas, lambda f: f"{f['numero']} (pago #{f['pago_id']} sin verificar)")
     l.notas.append("Decisiones: archivo JSON con una entrada por pedido, "
                    '{"PVEN-…": {"opcion": "a", "metodo_pago": "Transferencia bancaria", "referencia": "…"}} '
                    'o {"PVEN-…": {"opcion": "b"}}.')
+    l.notas.append("Con (b) las PXP del pedido quedan con montos desactualizados (la columna 'PXP del pedido' las "
+                   "muestra): después de aplicar n1, h44 (grupo b) las lista y las corrige.")
     return l
 
 
@@ -575,6 +719,7 @@ def _aplicar_n1(ctx) -> ResultadoAplicar:
                            "escribió nada.")
         return res
     incluidas, excluidas = _sel_n1(db, ctx.excl)
+    _exigir_candidatos(ctx, incluidas, excluidas)
     numeros_incl = {f["numero"] for f in incluidas}
     numeros_excl = {f["numero"] for f in excluidas}
     por_pven = {}
@@ -615,9 +760,11 @@ def _aplicar_n1(ctx) -> ResultadoAplicar:
         return res
     sin_decision = sorted(set(por_pven) - set(plan))
     pago_ids = [f["pago_id"] for n in plan for f in por_pven[n]]
-    ven_ids = [por_pven[n][0]["id"] for n in plan]
-    res.respaldo = escribir_respaldo(db, ctx.carpeta, "n1", ctx.base,
-                                     {"sale_order_payments": pago_ids, "sale_orders": ven_ids}, ctx.ahora)
+    ven_ids = [por_pven[n][0]["id"] for n, (opcion, _m, _r) in plan.items() if opcion == "b"]
+    tablas = {"sale_order_payments": pago_ids}
+    if ven_ids:
+        tablas["sale_orders"] = ven_ids
+    res.respaldo = ctx.respaldar(tablas)
     for numero, (opcion, metodo, referencia) in plan.items():
         filas = por_pven[numero]
         so = db.query(SaleOrder).filter(SaleOrder.id == filas[0]["id"]).with_for_update().first()
@@ -652,47 +799,87 @@ def _aplicar_n1(ctx) -> ResultadoAplicar:
         res.detalle.append(f"{numero}: opción {opcion} aplicada ({pesos(monto)})")
     if sin_decision:
         res.detalle.append("Sin decisión (no se tocan): " + ", ".join(sin_decision))
+    if any(o == "b" for o, _m, _r in plan.values()):
+        res.detalle.append("Con (b), las PXP de esos pedidos quedaron desactualizadas: vuelve a correr "
+                           "`h44 --listar` (grupo b).")
     return res
 
 
 # ═══ h44 ══════════════════════════════════════════════════════════════════════════════════════════════════════
 
-_SQL_H44 = """
-SELECT p.id, p.numero, v.id AS ven_id, v.numero AS pven, v.estado AS estado_pven, p.estado AS estado_pxp,
-       p.monto_total, p.monto_anticipo, p.monto_pendiente, v.total_cop, v.anticipo_cop, v.saldo_cop
+_CAMPOS_H44 = """p.id, p.numero, v.id AS ven_id, v.numero AS pven, v.estado AS estado_pven, p.estado AS estado_pxp,
+       p.monto_total, p.monto_anticipo, p.monto_pendiente, v.total_cop, v.anticipo_cop, v.saldo_cop"""
+_SQL_H44_INVERTIDAS = f"""
+SELECT {_CAMPOS_H44}
 FROM payment_pendings p JOIN sale_orders v ON v.id = p.ven_id
 WHERE p.monto_anticipo = v.saldo_cop AND p.monto_pendiente = (v.total_cop - v.saldo_cop)
   AND p.monto_anticipo <> p.monto_pendiente
 ORDER BY p.id"""
+_SQL_H44_TRAS_N1 = f"""
+SELECT {_CAMPOS_H44}
+FROM payment_pendings p JOIN sale_orders v ON v.id = p.ven_id
+WHERE p.estado = 'PENDIENTE'
+  AND EXISTS (SELECT 1 FROM sale_order_payments sp
+              WHERE sp.sale_order_id = v.id AND sp.metodo_pago = :metodo AND sp.estado = 'ANULADO')
+ORDER BY p.id"""
 
 
 def _montos_correctos_pxp(f):
+    """(monto_total, monto_anticipo = lo ya pagado, monto_pendiente = el saldo) del pedido de hoy, en pesos enteros:
+    la misma cuenta de crear_pxp."""
     total = redondear_peso(f["total_cop"])
     pendiente = redondear_peso(f["saldo_cop"])
     return total, total - pendiente, pendiente
 
 
 def _sel_h44(db, excl):
-    filas = _filas(db, _SQL_H44)
-    incluidas = [f for f in filas if f["id"] not in excl.pxp and f["ven_id"] not in excl.pven]
-    excluidas = [f for f in filas if f["id"] in excl.pxp or f["ven_id"] in excl.pven]
-    for f in incluidas:
-        _, f["anticipo_ok"], f["pendiente_ok"] = _montos_correctos_pxp(f)
+    """(invertidas, tras_n1, excluidas). tras_n1: PXP PENDIENTE de pedidos con un pago CONVERSION_COTIZACION ANULADO
+    (lo que deja n1 b) cuyos montos no coinciden con los del pedido de hoy y que no son del grupo invertidas."""
+    es_real = lambda f: f["id"] in excl.pxp or f["ven_id"] in excl.pven
+    invertidas_todas = _filas(db, _SQL_H44_INVERTIDAS)
+    tras_todas = _filas(db, _SQL_H44_TRAS_N1, metodo=METODO_PAGO_SIN_VERIFICAR)
+    ids_invertidas = {f["id"] for f in invertidas_todas}
+    desactualizadas = []
+    for f in tras_todas:
+        total, pagado, pendiente = _montos_correctos_pxp(f)
+        if f["id"] in ids_invertidas:
+            continue
+        hoy = tuple(Decimal(str(f[c] or 0)) for c in ("monto_total", "monto_anticipo", "monto_pendiente"))
+        if hoy != (total, pagado, pendiente):
+            desactualizadas.append(f)
+    invertidas = [f for f in invertidas_todas if not es_real(f)]
+    tras_n1 = [f for f in desactualizadas if not es_real(f)]
+    excluidas = [f for f in invertidas_todas + desactualizadas if es_real(f)]
+    for f in invertidas + tras_n1:
+        f["total_ok"], f["anticipo_ok"], f["pendiente_ok"] = _montos_correctos_pxp(f)
         f["estado_txt"] = _est("PXP", f["estado_pxp"])
-    return incluidas, excluidas
+        f["estado_pven_txt"] = _est("VEN", f["estado_pven"])
+    for f in invertidas:
+        f["causa"] = "invertida"
+    for f in tras_n1:
+        f["causa"] = "tras_n1"
+    return invertidas, tras_n1, excluidas
 
 
 def listar_h44(db, excl, **_) -> Listado:
     l = _nuevo("h44")
-    incluidas, excluidas = _sel_h44(db, excl)
+    invertidas, tras_n1, excluidas = _sel_h44(db, excl)
+    columnas = [("numero", "PXP"), ("pven", "Pedido"), ("estado_pven_txt", "Estado pedido"),
+                ("estado_txt", "Estado PXP"), ("monto_total", "Total (hoy)"), ("monto_anticipo", "Anticipo (hoy)"),
+                ("monto_pendiente", "Pendiente (hoy)"), ("total_ok", "Total (queda)"),
+                ("anticipo_ok", "Anticipo (queda)"), ("pendiente_ok", "Pendiente (queda)")]
     l.secciones.append(Seccion(
-        "invertidas", "PXP con anticipo = saldo del pedido y pendiente = lo ya pagado",
-        [("numero", "PXP"), ("pven", "Pedido"), ("estado_txt", "Estado PXP"), ("monto_total", "Total"),
-         ("monto_anticipo", "Anticipo (hoy)"), ("monto_pendiente", "Pendiente (hoy)"),
-         ("anticipo_ok", "Anticipo (queda)"), ("pendiente_ok", "Pendiente (queda)")], incluidas))
+        "invertidas", "(a) PXP con anticipo = saldo del pedido y pendiente = lo ya pagado (invertidas)",
+        columnas, invertidas))
+    l.secciones.append(Seccion(
+        "tras_n1", "(b) PXP pendientes de pedidos con un pago sin verificar ANULADO (n1 b) y montos desactualizados",
+        columnas, tras_n1))
     _marcar_excluidos(l, excluidas, lambda f: f"{f['numero']} (pedido {f['pven']})")
-    l.notas.append("Los montos que quedan salen del pedido de HOY (total, total - saldo, saldo): si N1 (b) cambia "
-                   "el saldo de un pedido, vuelve a correr este listado después de aplicar N1.")
+    l.notas.append("Los montos que quedan salen del pedido de HOY: total, total - saldo (lo ya pagado) y saldo, en "
+                   "pesos enteros.")
+    l.notas.append("(a) se detecta por el patrón invertido. (b) solo aparece DESPUÉS de aplicar n1 (b) (antes no hay "
+                   "pagos anulados): vuelve a correr este listado entonces. Si el pedido está cancelado, h45 cancela "
+                   "esa PXP de todos modos.")
     l.notas.append("Los renglones viejos de Actividad con '$1,724,400' y sin autor se dejan como están: no se sabe "
                    "quién los creó, y h7 tampoco cambia montos con coma ya guardados.")
     return l
@@ -701,21 +888,23 @@ def listar_h44(db, excl, **_) -> Listado:
 def _aplicar_h44(ctx) -> ResultadoAplicar:
     from app.models.erp_documents import ActivityLog, PaymentPending, SaleOrder
     db, res = ctx.db, ResultadoAplicar("h44")
-    incluidas, _ = _sel_h44(db, ctx.excl)
-    elegidas = [f for f in incluidas if _pasa(f, ctx)]
+    invertidas, tras_n1, excluidas = _sel_h44(db, ctx.excl)
+    _exigir_candidatos(ctx, invertidas + tras_n1, excluidas)
+    elegidas = [f for f in invertidas + tras_n1 if _pasa(f, ctx)]
     if not elegidas:
-        res.detalle.append("Ninguna PXP invertida coincide con --ids/--numeros: no se escribió nada.")
+        res.detalle.append("No hay PXP que corregir (con --ids/--numeros, si se pasaron): no se escribió nada.")
         return res
-    res.respaldo = escribir_respaldo(db, ctx.carpeta, "h44", ctx.base,
-                                     {"payment_pendings": [f["id"] for f in elegidas]}, ctx.ahora)
+    res.respaldo = ctx.respaldar({"payment_pendings": [f["id"] for f in elegidas]})
     for f in elegidas:
         p = db.query(PaymentPending).filter(PaymentPending.id == f["id"]).with_for_update().first()
         so = db.query(SaleOrder).filter(SaleOrder.id == f["ven_id"]).first()
         p.monto_total, p.monto_anticipo, p.monto_pendiente = _montos_correctos_pxp(
             {"total_cop": so.total_cop, "saldo_cop": so.saldo_cop})
         p.updated_at = ctx.ahora
+        descripcion = ("Montos corregidos (estaban invertidos)" if f["causa"] == "invertida" else
+                       "Montos corregidos: recalculados desde el pedido tras anular un pago de anticipo sin verificar")
         db.add(ActivityLog(entity_type="PXP", entity_id=p.id, entity_numero=p.numero, action="UPDATED",
-                           description="Montos corregidos (estaban invertidos)", user_name=AUTOR))
+                           description=descripcion, user_name=AUTOR))
         res.cambiados += 1
         res.detalle.append(f"{p.numero}: anticipo {pesos(p.monto_anticipo)}, pendiente {pesos(p.monto_pendiente)}")
     return res
@@ -751,12 +940,14 @@ def listar_h45(db, excl, **_) -> Listado:
 
 
 def _aplicar_h45(ctx) -> ResultadoAplicar:
-    from app.models.erp_documents import PaymentPending, SaleOrder
+    from app.models.erp_documents import SaleOrder
     db, res = ctx.db, ResultadoAplicar("h45")
-    incluidas, _ = _sel_h45(db, ctx.excl)
+    incluidas, excluidas = _sel_h45(db, ctx.excl)
+    _exigir_candidatos(ctx, incluidas, excluidas)
     elegidas = [f for f in incluidas if _pasa(f, ctx)]
     if not elegidas:
-        res.detalle.append("Ninguna PXP pendiente coincide con --ids/--numeros: no se escribió nada.")
+        res.detalle.append("No hay PXP pendientes de pedidos cancelados (con --ids/--numeros, si se pasaron): no se "
+                           "escribió nada.")
         return res
     por_ven = {}
     for f in elegidas:
@@ -774,8 +965,7 @@ def _aplicar_h45(ctx) -> ResultadoAplicar:
         return res
     ven_ids = list(por_ven)
     pxp_ids = [f["id"] for filas in por_ven.values() for f in filas]
-    res.respaldo = escribir_respaldo(db, ctx.carpeta, "h45", ctx.base,
-                                     {"payment_pendings": pxp_ids, "sale_orders": ven_ids}, ctx.ahora)
+    res.respaldo = ctx.respaldar({"payment_pendings": pxp_ids, "sale_orders": ven_ids})
     for ven_id in ven_ids:
         so = db.query(SaleOrder).filter(SaleOrder.id == ven_id).first()
         canceladas = anular_pxps_de_pedido(db, so, AUTOR, "el pedido ya estaba cancelado")
@@ -787,7 +977,7 @@ def _aplicar_h45(ctx) -> ResultadoAplicar:
 # ═══ h46 ══════════════════════════════════════════════════════════════════════════════════════════════════════
 
 _SQL_H46 = """
-SELECT q.id, q.numero, q.estado, q.total_cop, q.gate2_confirmed_at,
+SELECT q.id, q.numero, q.sc_id, q.estado, q.total_cop, q.gate2_confirmed_at,
        (SELECT string_agg(s.numero, ', ' ORDER BY s.id) FROM sale_orders s WHERE s.cot_id = q.id) AS pedidos
 FROM sales_quotations q
 WHERE q.estado = 'CONFIRMADA'
@@ -800,8 +990,25 @@ def _sel_h46(db, excl):
     filas = _filas(db, _SQL_H46)
     incluidas = [f for f in filas if f["id"] not in excl.cot]
     excluidas = [f for f in filas if f["id"] in excl.cot]
+    sc_ids = sorted({f["sc_id"] for f in incluidas if f["sc_id"]})
+    leads = {}
+    if sc_ids:
+        for r in _filas(db, "SELECT so.id, so.status, so.canonical_customer_request_id AS sc_id, ps.name AS etapa_nombre "
+                            "FROM sales_orders so LEFT JOIN pipeline_stages ps ON ps.id = so.pipeline_stage_id "
+                            "WHERE so.canonical_customer_request_id = ANY(:i) ORDER BY so.id", i=sc_ids):
+            leads.setdefault(r["sc_id"], []).append(r)
+    destino = _filas(db, "SELECT name FROM pipeline_stages WHERE maps_to_status = 'QUOTATION' "
+                         "ORDER BY position, id LIMIT 1")
+    destino = destino[0]["name"] if destino else _etapa_legible(None, "QUOTATION") + " (se crearía)"
     for f in incluidas:
         f["estado_txt"] = _est("COT", f["estado"])
+        lead = (leads.get(f["sc_id"]) or [None])[0]   # _mover_lead_a_status mueve el primero
+        if lead is None:
+            f["lead"], f["lead_etapa"], f["lead_destino"] = "sin lead", "-", "-"
+        else:
+            f["lead"] = f"#{lead['id']}"
+            f["lead_etapa"] = _etapa_legible(lead["etapa_nombre"], lead["status"])
+            f["lead_destino"] = "sin cambio" if lead["status"] == "QUOTATION" else destino
     return incluidas, excluidas
 
 
@@ -811,36 +1018,54 @@ def listar_h46(db, excl, **_) -> Listado:
     l.secciones.append(Seccion(
         "cotizaciones", "COT CONFIRMADA con todos sus pedidos CANCELADO",
         [("numero", "Cotización"), ("estado_txt", "Estado"), ("total_cop", "Total"), ("pedidos", "Pedidos (cancelados)"),
-         ("gate2_confirmed_at", "Confirmación (gate 2)")], incluidas))
+         ("gate2_confirmed_at", "Confirmación (gate 2)"), ("lead", "Lead"), ("lead_etapa", "Etapa del lead (hoy)"),
+         ("lead_destino", "Etapa del lead (pasaría a)")], incluidas))
     _marcar_excluidos(l, excluidas, lambda f: f"{f['numero']} (pedidos {f['pedidos']})")
-    l.notas.append("Reabrir revoca el enlace de confirmación pendiente (no se puede restaurar desde el respaldo).")
+    l.notas.append("Antes de reabrir se respaldan en el JSON la COT, su solicitud, el lead y los enlaces de confirmación "
+                   "pendientes (id y used_at): para deshacer, ver el docstring del script. El helper puede crear "
+                   "etapas estándar faltantes del pipeline y deja un renglón en la Actividad (filas nuevas: no se "
+                   "restauran).")
     return l
 
 
 def _aplicar_h46(ctx) -> ResultadoAplicar:
-    from app.models.erp_documents import CustomerRequest, SaleOrder, SalesQuotation
+    from app.models.erp_documents import ActivityLog, SaleOrder, SalesQuotation
     from app.api.v1.erp_ventas import _reabrir_cotizacion_por_pven_cancelado
     db, res = ctx.db, ResultadoAplicar("h46")
-    incluidas, _ = _sel_h46(db, ctx.excl)
+    incluidas, excluidas = _sel_h46(db, ctx.excl)
+    _exigir_candidatos(ctx, incluidas, excluidas)
     elegidas = [f for f in incluidas if _pasa(f, ctx)]
     if not elegidas:
-        res.detalle.append("Ninguna cotización coincide con --ids/--numeros: no se escribió nada.")
+        res.detalle.append("No hay cotizaciones por reabrir (con --ids/--numeros, si se pasaron): no se escribió nada.")
         return res
     cot_ids = [f["id"] for f in elegidas]
-    sc_ids = [r[0] for r in db.execute(text("SELECT sc_id FROM sales_quotations WHERE id = ANY(:i) AND sc_id IS NOT NULL"),
-                                       {"i": cot_ids})]
-    res.respaldo = escribir_respaldo(db, ctx.carpeta, "h46", ctx.base,
-                                     {"sales_quotations": cot_ids, "customer_requests": sc_ids}, ctx.ahora)
+    sc_ids = sorted({f["sc_id"] for f in elegidas if f["sc_id"]})
+    lead_ids = [r[0] for r in db.execute(
+        text("SELECT id FROM sales_orders WHERE canonical_customer_request_id = ANY(:i) ORDER BY id"), {"i": sc_ids})]
+    token_ids = [r[0] for r in db.execute(
+        text("SELECT id FROM document_confirmation_tokens "
+             "WHERE document_type = 'COT' AND document_id = ANY(:i) AND used_at IS NULL ORDER BY id"), {"i": cot_ids})]
+    res.respaldo = ctx.respaldar({"sales_quotations": cot_ids, "customer_requests": sc_ids,
+                                  "sales_orders": lead_ids, "document_confirmation_tokens": token_ids})
+    res.detalle.append(AVISO_H46)
     for f in elegidas:
-        so = (db.query(SaleOrder).filter(SaleOrder.cot_id == f["id"]).order_by(SaleOrder.id.desc()).first())
+        so = db.query(SaleOrder).filter(SaleOrder.cot_id == f["id"]).order_by(SaleOrder.id.desc()).first()
         # El helper hace su propio commit y traga sus errores: se verifica el resultado, no la excepcion.
         _reabrir_cotizacion_por_pven_cancelado(db, so, AUTOR)
         cot = db.query(SalesQuotation).filter(SalesQuotation.id == f["id"]).populate_existing().first()
-        if cot.estado == "BORRADOR":
+        log = (db.query(ActivityLog.id)
+               .filter(ActivityLog.entity_type == "COT", ActivityLog.entity_id == cot.id,
+                       ActivityLog.action == "ESTADO_CHANGED", ActivityLog.new_estado == "BORRADOR",
+                       ActivityLog.description.contains(so.numero)).first())
+        if cot.estado == "BORRADOR" and log is not None:
             res.cambiados += 1
             res.detalle.append(f"{cot.numero}: reabierta (pedido cancelado {so.numero})")
+        elif cot.estado == "BORRADOR":
+            res.detalle.append(f"{cot.numero}: quedó en Borrador pero NO se encontró su renglón de Actividad "
+                               f"(ESTADO_CHANGED): revisar el log del servidor")
         else:
-            res.detalle.append(f"{cot.numero}: NO se pudo reabrir (sigue {cot.estado}); revisar el log del servidor")
+            res.detalle.append(f"{cot.numero}: NO se pudo reabrir (sigue {cot.estado}); revisar el log del servidor "
+                               f"y volver a correr el paso")
     return res
 
 
@@ -849,10 +1074,11 @@ def _aplicar_h46(ctx) -> ResultadoAplicar:
 def _sel_h36(db, excl):
     """(desactualizadas, excluidas, revisadas): COT abiertas con SC y sin pedido vigente."""
     from app.models.erp_documents import CustomerRequest, SaleOrder, SalesQuotation
+    from app.api.v1.erp_ventas import _ESTADOS_COT_ANTICIPO_ABIERTO
     vivos = db.query(SaleOrder.id).filter(SaleOrder.cot_id == SalesQuotation.id, SaleOrder.estado != "CANCELADO").exists()
     cots = (db.query(SalesQuotation)
             .join(CustomerRequest, CustomerRequest.id == SalesQuotation.sc_id)
-            .filter(SalesQuotation.estado.in_(ESTADOS_COT_ABIERTAS), ~vivos)
+            .filter(SalesQuotation.estado.in_(_ESTADOS_COT_ANTICIPO_ABIERTO), ~vivos)
             .order_by(SalesQuotation.id.asc()).all())
     desactualizadas, excluidas, revisadas = [], [], 0
     for cot in cots:
@@ -860,7 +1086,7 @@ def _sel_h36(db, excl):
         actual = Decimal(str(cot.anticipo_cop or 0))
         fila = {"id": cot.id, "numero": cot.numero, "estado_txt": _est("COT", cot.estado), "modalidad": a.modalidad,
                 "total_cop": cot.total_cop, "anticipo_cop": actual, "anticipo_nuevo": a.requerido,
-                "pct": f"{a.pct.quantize(Decimal('0.01'))}%", "origen": a.origen}
+                "pct": formato_pct(a.pct), "origen": a.origen}
         if cot.id in excl.cot:
             if actual != a.requerido:
                 excluidas.append(fila)
@@ -890,13 +1116,14 @@ def listar_h36(db, excl, **_) -> Listado:
 def _aplicar_h36(ctx) -> ResultadoAplicar:
     from app.models.erp_documents import ActivityLog, SalesQuotation
     db, res = ctx.db, ResultadoAplicar("h36")
-    desactualizadas, _, _ = _sel_h36(db, ctx.excl)
+    desactualizadas, excluidas, _ = _sel_h36(db, ctx.excl)
+    _exigir_candidatos(ctx, desactualizadas, excluidas)
     elegidas = [f for f in desactualizadas if _pasa(f, ctx)]
     if not elegidas:
-        res.detalle.append("Ninguna cotización desactualizada coincide con --ids/--numeros: no se escribió nada.")
+        res.detalle.append("No hay cotizaciones con el anticipo desactualizado (con --ids/--numeros, si se "
+                           "pasaron): no se escribió nada.")
         return res
-    res.respaldo = escribir_respaldo(db, ctx.carpeta, "h36", ctx.base,
-                                     {"sales_quotations": [f["id"] for f in elegidas]}, ctx.ahora)
+    res.respaldo = ctx.respaldar({"sales_quotations": [f["id"] for f in elegidas]})
     for f in elegidas:
         cot = db.query(SalesQuotation).filter(SalesQuotation.id == f["id"]).with_for_update().first()
         nuevo = anticipo_cotizacion(cot, db).requerido
@@ -926,10 +1153,15 @@ ORDER BY cr.id"""
 _SQL_N4_B = """
 SELECT id, numero, estado, eliminada_at FROM customer_requests
 WHERE eliminada_at IS NOT NULL AND estado <> 'CANCELADA' ORDER BY id"""
+# Referenciada = lo mismo que _SQL_SC_CON_DOCUMENTOS de erp_ventas: una SC con COT, pedido o lead no se purga.
 _SQL_N4_C = """
-SELECT id, numero, estado, (razon_cancelacion IS NOT NULL) AS tiene_motivo FROM customer_requests
-WHERE estado = 'CANCELADA' AND eliminada_at IS NULL AND tipo_solicitud IS DISTINCT FROM 'Soporte Tecnico'
-ORDER BY id"""
+SELECT cr.id, cr.numero, cr.estado, (cr.razon_cancelacion IS NOT NULL) AS tiene_motivo,
+       (EXISTS (SELECT 1 FROM sales_quotations q WHERE q.sc_id = cr.id)
+        OR EXISTS (SELECT 1 FROM sale_orders s WHERE s.sc_id = cr.id)
+        OR EXISTS (SELECT 1 FROM sales_orders l WHERE l.canonical_customer_request_id = cr.id)) AS referenciada
+FROM customer_requests cr
+WHERE cr.estado = 'CANCELADA' AND cr.eliminada_at IS NULL AND cr.tipo_solicitud IS DISTINCT FROM 'Soporte Tecnico'
+ORDER BY cr.id"""
 RAZON_SIN_MOTIVO = "Cancelada con el cambio de estado manual (sin motivo registrado)"
 
 
@@ -953,6 +1185,7 @@ def _sel_n4(db, excl):
         f["estado_txt"] = _est("SC", f["estado"])
     for f in c:
         f["motivo"] = "con motivo" if f["tiene_motivo"] else "sin motivo"
+        f["purga"] = "Sí (no se purga)" if f["referenciada"] else "No (se purgaría a los 30 días)"
     part = lambda filas: ([f for f in filas if f["id"] not in excl.sc], [f for f in filas if f["id"] in excl.sc])
     return part(a), part(b), part(c)
 
@@ -969,7 +1202,8 @@ def listar_n4(db, excl, **_) -> Listado:
         [("numero", "Solicitud"), ("estado_txt", "Estado"), ("eliminada_at", "En papelera desde (UTC)")], b))
     l.secciones.append(Seccion(
         "c", "(c) SC canceladas con la pastilla vieja, sin papelera — lo único que escribe --aplicar",
-        [("numero", "Solicitud"), ("estado_txt", "Estado"), ("motivo", "Motivo registrado")], c))
+        [("numero", "Solicitud"), ("estado_txt", "Estado"), ("motivo", "Motivo registrado"),
+         ("purga", "Referenciada (COT, pedido o lead)")], c))
     _marcar_excluidos(l, ax + bx + cx, lambda f: f"{f['numero']} (solicitud)")
     l.notas.append("(c) usa 'tipo_solicitud IS DISTINCT FROM Soporte Tecnico' (el UPDATE del diseño usa <>, que "
                    "dejaría fuera las SC con tipo vacío; Soporte Técnico sigue excluido).")
@@ -978,14 +1212,15 @@ def listar_n4(db, excl, **_) -> Listado:
 
 def _aplicar_n4(ctx) -> ResultadoAplicar:
     db, res = ctx.db, ResultadoAplicar("n4")
-    _, _, (c, _x) = _sel_n4(db, ctx.excl)
+    (a, ax), (b, bx), (c, cx) = _sel_n4(db, ctx.excl)
+    _exigir_candidatos(ctx, c, ax + bx + cx, no_escribe={"(a)": a, "(b)": b})
     elegidas = [f for f in c if _pasa(f, ctx)]
     res.detalle.append("(a) y (b) solo se listan: se deciden una por una y --aplicar no las toca.")
     if not elegidas:
         res.detalle.append("Ninguna SC del grupo (c) coincide con --ids/--numeros: no se escribió nada.")
         return res
     ids = [f["id"] for f in elegidas]
-    res.respaldo = escribir_respaldo(db, ctx.carpeta, "n4", ctx.base, {"customer_requests": ids}, ctx.ahora)
+    res.respaldo = ctx.respaldar({"customer_requests": ids})
     r = db.execute(
         text("UPDATE customer_requests SET eliminada_at = :ahora, "
              "razon_cancelacion = COALESCE(razon_cancelacion, :razon) "
@@ -994,6 +1229,10 @@ def _aplicar_n4(ctx) -> ResultadoAplicar:
         {"ahora": ctx.ahora, "razon": RAZON_SIN_MOTIVO, "ids": ids})
     res.cambiados = r.rowcount
     res.detalle.append(f"(c): {r.rowcount} solicitud(es) a la papelera: " + ", ".join(f["numero"] for f in elegidas))
+    sin_referencias = [f["numero"] for f in elegidas if not f["referenciada"]]
+    if sin_referencias:
+        res.detalle.append("Sin documentos ni lead (la purga de la Papelera las borra a los 30 días): "
+                           + ", ".join(sin_referencias))
     return res
 
 
@@ -1053,9 +1292,7 @@ def _estado_sugerido_cot(db, cot_id, estado) -> str:
     """Un estado valido se queda; uno ajeno pasa a CONFIRMADA si la COT tiene un pedido vigente, o a BORRADOR si no."""
     if estado in ESTADOS_COT:
         return estado
-    vivo = db.execute(text("SELECT 1 FROM sale_orders WHERE cot_id = :c AND estado <> 'CANCELADO' LIMIT 1"),
-                      {"c": cot_id}).first()
-    return "CONFIRMADA" if vivo else "BORRADOR"
+    return "CONFIRMADA" if _pven_vigente(db, cot_id) is not None else "BORRADOR"
 
 
 def _sel_n5(db, excl):
@@ -1083,12 +1320,11 @@ def _sel_n5(db, excl):
         GROUP BY q.id, q.numero, q.estado ORDER BY q.id""")
     for f in b_filas + c_filas:
         f["tipo"] = "COT"
-        vivo = db.execute(text("SELECT 1 FROM sale_orders WHERE cot_id = :c AND estado <> 'CANCELADO' LIMIT 1"),
-                          {"c": f["id"]}).first()
+        vivo = _pven_vigente(db, f["id"]) is not None
         f["sugerido"] = "CONFIRMADA" if vivo else "BORRADOR"
         f["motivo"] = "tiene un pedido vigente" if vivo else "sin pedido vigente"
     for f in a_filas + b_filas + c_filas:
-        f["sugerido_txt"] = f"{f['sugerido']}" if f["sugerido"] else "(sin sugerencia)"
+        f["sugerido_txt"] = _est(f["tipo"], f["sugerido"]) if f["sugerido"] else "(sin sugerencia)"
     parte = lambda filas, conj: ([f for f in filas if f["id"] not in conj], [f for f in filas if f["id"] in conj])
     return parte(a_filas, excl.sc), parte(b_filas, excl.cot), parte(c_filas, excl.cot)
 
@@ -1106,19 +1342,23 @@ def listar_n5(db, excl, **_) -> Listado:
         "c", "(c) Cotizaciones que no están Confirmada pero tienen un pedido vigente",
         cols_cot + [("pedidos", "Pedidos")], c))
     _marcar_excluidos(l, ax + bx + cx, lambda f: f"{f['numero']} ({'solicitud' if f['tipo'] == 'SC' else 'cotización'})")
-    l.notas.append("--aplicar --numeros SC-…,COT-… aplica la corrección sugerida SOLO a esos documentos. Una COT "
-                   "corregida no mueve su solicitud ni su lead: revisa si su SC también aparece en (a).")
+    l.notas.append("--aplicar --numeros SC-…,COT-… aplica la corrección sugerida SOLO a esos documentos (no acepta "
+                   "--ids: los ids de SC y COT se repiten). Una COT corregida no mueve su solicitud ni su lead: "
+                   "revisa si su SC también aparece en (a).")
     return l
 
 
 def _aplicar_n5(ctx) -> ResultadoAplicar:
     from app.models.erp_documents import ActivityLog, CustomerRequest, SalesQuotation
     db, res = ctx.db, ResultadoAplicar("n5")
+    if ctx.ids is not None:
+        raise ErrorCorreccion("n5 solo acepta --numeros: los ids de solicitudes y cotizaciones se repiten")
     if not ctx.numeros:
         res.detalle.append("n5 se decide documento por documento: indica --numeros SC-…,COT-… Sin eso no se "
                            "escribió nada.")
         return res
-    (a, _ax), (b, _bx), (c, _cx) = _sel_n5(db, ctx.excl)
+    (a, ax), (b, bx), (c, cx) = _sel_n5(db, ctx.excl)
+    _exigir_candidatos(ctx, a + b + c, ax + bx + cx)
     vistos, elegidas = set(), []
     for f in a + b + c:
         clave = (f["tipo"], f["id"])
@@ -1126,8 +1366,6 @@ def _aplicar_n5(ctx) -> ResultadoAplicar:
             continue
         vistos.add(clave)
         elegidas.append(f)
-    for numero in sorted(set(ctx.numeros) - {f["numero"] for f in elegidas}):
-        res.detalle.append(f"{numero}: no está en los grupos (a), (b) o (c) (o es un documento real): no se toca")
     ejecutables = []
     for f in elegidas:
         if f["sugerido"] is None:
@@ -1137,10 +1375,9 @@ def _aplicar_n5(ctx) -> ResultadoAplicar:
     if not ejecutables:
         res.detalle.append("Nada que escribir.")
         return res
-    res.respaldo = escribir_respaldo(
-        db, ctx.carpeta, "n5", ctx.base,
+    res.respaldo = ctx.respaldar(
         {"customer_requests": [f["id"] for f in ejecutables if f["tipo"] == "SC"],
-         "sales_quotations": [f["id"] for f in ejecutables if f["tipo"] == "COT"]}, ctx.ahora)
+         "sales_quotations": [f["id"] for f in ejecutables if f["tipo"] == "COT"]})
     for f in ejecutables:
         modelo = CustomerRequest if f["tipo"] == "SC" else SalesQuotation
         doc = db.query(modelo).filter(modelo.id == f["id"]).with_for_update().first()
@@ -1169,14 +1406,14 @@ ORDER BY al.id"""
 
 def _sel_n10(db, excl):
     filas = _filas(db, _SQL_N10)
+    for f in filas:
+        f["numero"] = f["pven"]
     huerfanas = [f for f in filas if f["so_id"] is None]
     con_linea = [f for f in filas if f["so_id"] is not None]
     # excluido si el pedido de la linea es real, o si el id guardado (de la linea) coincide con un pedido real
     es_real = lambda f: f["so_id"] in excl.pven or f["linea_id"] in excl.pven
     incluidas = [f for f in con_linea if not es_real(f)]
     excluidas = [f for f in filas if es_real(f)]
-    for f in incluidas:
-        f["numero"] = f["pven"]
     return incluidas, excluidas, huerfanas, len(filas)
 
 
@@ -1198,13 +1435,14 @@ def listar_n10(db, excl, **_) -> Listado:
 
 def _aplicar_n10(ctx) -> ResultadoAplicar:
     db, res = ctx.db, ResultadoAplicar("n10")
-    incluidas, _x, _h, _t = _sel_n10(db, ctx.excl)
+    incluidas, excluidas, huerfanas, _total = _sel_n10(db, ctx.excl)
+    _exigir_candidatos(ctx, incluidas, excluidas, no_escribe={"de logs sin línea de pedido": huerfanas})
     elegidas = [f for f in incluidas if _pasa(f, ctx)]
     if not elegidas:
-        res.detalle.append("Ningún log coincide con --ids/--numeros: no se escribió nada.")
+        res.detalle.append("No hay logs por corregir (con --ids/--numeros, si se pasaron): no se escribió nada.")
         return res
     ids = [f["id"] for f in elegidas]
-    res.respaldo = escribir_respaldo(db, ctx.carpeta, "n10", ctx.base, {"activity_logs": ids}, ctx.ahora)
+    res.respaldo = ctx.respaldar({"activity_logs": ids})
     r = db.execute(
         text("UPDATE activity_logs al SET entity_type = 'VEN', entity_id = l.so_id, entity_numero = so.numero "
              "FROM sale_order_lines_erp l JOIN sale_orders so ON so.id = l.so_id "
@@ -1225,20 +1463,22 @@ def _excluir_logs_sql() -> str:
 
 def _candidatas_h7(db, excl, ids=None):
     """(ids_a_corregir, excluidas): activity_logs de texto del sistema cuya descripcion corregir() cambiaria, sin
-    los de entidades reales. Usa la regla de textos_actividad: no la duplica."""
-    sql = (f"SELECT id, entity_type, action, description, {_excluir_logs_sql()} AS excluida FROM activity_logs "
-           "WHERE entity_type = ANY(:ent) AND action = ANY(:acc) AND description IS NOT NULL")
+    los de entidades reales (excluidas: dicts {id, numero} de las que SI cambiaria y se saltan). Usa la regla de
+    textos_actividad: no la duplica."""
+    sql = (f"SELECT id, entity_type, entity_id, entity_numero, action, description, {_excluir_logs_sql()} AS excluida "
+           "FROM activity_logs WHERE entity_type = ANY(:ent) AND action = ANY(:acc) AND description IS NOT NULL")
     params = {"ent": sorted(ENTIDADES_CORREGIBLES), "acc": sorted(ACCIONES_DEL_SISTEMA), "sc": sorted(excl.sc),
               "cot": sorted(excl.cot), "pven": sorted(excl.pven), "pxp": sorted(excl.pxp)}
     if ids is not None:
         sql += " AND id = ANY(:ids)"
         params["ids"] = [int(i) for i in ids]
-    candidatas, excluidas = [], 0
+    candidatas, excluidas = [], []
     for fila in db.execute(text(sql + " ORDER BY id"), params).mappings():
         if corregir_descripcion_historica(fila["entity_type"], fila["action"], fila["description"]) is None:
             continue
         if fila["excluida"]:
-            excluidas += 1
+            excluidas.append({"id": fila["id"],
+                              "numero": fila["entity_numero"] or f"{fila['entity_type']} #{fila['entity_id']}"})
         else:
             candidatas.append(fila["id"])
     return candidatas, excluidas
@@ -1249,21 +1489,23 @@ def _corregir_textos():
     return corregir_textos_actividad
 
 
-def listar_h7(db, excl, ids=None, **_) -> Listado:
+def listar_h7(db, excl, ids=None, solo_lectura=False, **_) -> Listado:
     l = _nuevo("h7")
     candidatas, excluidas = _candidatas_h7(db, excl, ids)
-    # corregir(aplicar=False) termina con rollback: va al final, despues de todas las consultas del paso.
+    # corregir(aplicar=False) termina con rollback: va al final, despues de todas las consultas del paso, y la
+    # transaccion siguiente vuelve a ser de solo lectura.
     res = _corregir_textos().corregir(db, aplicar=False, ids=candidatas)
-    l.datos = {"candidatas": res["candidatas"], "excluidas": excluidas, "por_tipo": res["por_tipo"]}
+    if solo_lectura:
+        iniciar_solo_lectura(db)
+    l.datos = {"candidatas": res["candidatas"], "excluidas": len(excluidas), "por_tipo": res["por_tipo"]}
     l.secciones.append(Seccion(
-        "tipos", "Candidatas por tipo de corrección", [("tipo", "Tipo"), ("n", "Filas")],
-        [{"tipo": t, "n": n} for t, n in sorted(res["por_tipo"].items())]))
+        "tipos", "Candidatas por tipo de corrección (filas por tipo)", [("tipo", "Tipo"), ("n", "Filas")],
+        [{"tipo": t, "n": n} for t, n in sorted(res["por_tipo"].items())], total_mostrado=res["candidatas"]))
     l.secciones.append(Seccion(
-        "ejemplos", f"Ejemplos 'antes → después' (hasta {len(res['ejemplos'])})",
+        "ejemplos", f"Ejemplos 'antes → después' (se muestran {len(res['ejemplos'])} de {res['candidatas']})",
         [("id", "Log"), ("antes", "Antes"), ("despues", "Después")],
-        [{"id": i, "antes": a, "despues": d} for i, a, d in res["ejemplos"]]))
-    if excluidas:
-        l.excluidos.append(f"{excluidas} renglón(es) de Actividad de documentos reales que habría corregido")
+        [{"id": i, "antes": a, "despues": d} for i, a, d in res["ejemplos"]], total_mostrado=res["candidatas"]))
+    _marcar_excluidos(l, excluidas, lambda f: f"actividad #{f['id']} de {f['numero']} (habría cambiado su texto)")
     l.notas.append("No corrige filas 'PVEN' ni montos con coma ya guardados ('$1,250,000').")
     l.notas.append(f"Conteo de candidatas (total real): {res['candidatas']}. El respaldo en tabla "
                    f"({_corregir_textos().TABLA_RESPALDO}) y el JSON se hacen con --aplicar.")
@@ -1274,11 +1516,12 @@ def _aplicar_h7(ctx) -> ResultadoAplicar:
     db, res = ctx.db, ResultadoAplicar("h7")
     if ctx.numeros is not None:
         raise ErrorCorreccion("h7 solo acepta --ids (ids de activity_logs), no --numeros")
-    candidatas, _ = _candidatas_h7(db, ctx.excl, ctx.ids)
+    candidatas, excluidas = _candidatas_h7(db, ctx.excl, ctx.ids)
+    _exigir_candidatos(ctx, [{"id": i} for i in candidatas], excluidas)
     if not candidatas:
         res.detalle.append("Ninguna actividad por corregir: no se escribió nada.")
         return res
-    res.respaldo = escribir_respaldo(db, ctx.carpeta, "h7", ctx.base, {"activity_logs": candidatas}, ctx.ahora)
+    res.respaldo = ctx.respaldar({"activity_logs": candidatas})
     modulo = _corregir_textos()
     r = modulo.corregir(db, aplicar=True, ids=candidatas, tabla_respaldo=ctx.tabla_respaldo or modulo.TABLA_RESPALDO)
     res.cambiados = r["corregidas"]
@@ -1291,9 +1534,12 @@ def _aplicar_h7(ctx) -> ResultadoAplicar:
 
 _PATRON_U9 = "SC creada:  -%"
 _SQL_U9 = """
-SELECT so.id, cr.numero, so.status, so.created_at, so.canonical_customer_request_id AS sc_id,
-       so.canonical_sale_order_id AS pven_id, length(so.lead_description) AS largo
-FROM sales_orders so JOIN customer_requests cr ON cr.id = so.canonical_customer_request_id
+SELECT so.id, cr.numero, so.status, ps.name AS etapa_nombre, so.created_at,
+       so.canonical_customer_request_id AS sc_id, so.canonical_sale_order_id AS pven_id,
+       length(so.lead_description) AS largo
+FROM sales_orders so
+JOIN customer_requests cr ON cr.id = so.canonical_customer_request_id
+LEFT JOIN pipeline_stages ps ON ps.id = so.pipeline_stage_id
 WHERE so.lead_source = 'SC' AND so.lead_description LIKE :patron
 ORDER BY so.id"""
 
@@ -1301,6 +1547,8 @@ ORDER BY so.id"""
 def _sel_u9(db, excl):
     filas = _filas(db, _SQL_U9, patron=_PATRON_U9)
     es_real = lambda f: f["sc_id"] in excl.sc or (f["pven_id"] is not None and f["pven_id"] in excl.pven)
+    for f in filas:
+        f["etapa"] = _etapa_legible(f["etapa_nombre"], f["status"])
     return [f for f in filas if not es_real(f)], [f for f in filas if es_real(f)]
 
 
@@ -1309,7 +1557,7 @@ def listar_u9(db, excl, **_) -> Listado:
     incluidas, excluidas = _sel_u9(db, excl)
     l.secciones.append(Seccion(
         "leads", "Leads con la descripción 'SC creada:  - …' (sin número)",
-        [("id", "Lead"), ("numero", "Solicitud"), ("status", "Etapa"), ("largo", "Largo del texto"),
+        [("id", "Lead"), ("numero", "Solicitud"), ("etapa", "Etapa del lead"), ("largo", "Largo del texto"),
          ("created_at", "Creado (UTC)")], incluidas))
     _marcar_excluidos(l, excluidas, lambda f: f"lead #{f['id']} (solicitud {f['numero']})")
     l.notas.append("El texto del lead no se imprime: lleva las notas libres del asesor.")
@@ -1318,13 +1566,14 @@ def listar_u9(db, excl, **_) -> Listado:
 
 def _aplicar_u9(ctx) -> ResultadoAplicar:
     db, res = ctx.db, ResultadoAplicar("u9")
-    incluidas, _ = _sel_u9(db, ctx.excl)
+    incluidas, excluidas = _sel_u9(db, ctx.excl)
+    _exigir_candidatos(ctx, incluidas, excluidas)
     elegidas = [f for f in incluidas if _pasa(f, ctx)]
     if not elegidas:
-        res.detalle.append("Ningún lead coincide con --ids/--numeros: no se escribió nada.")
+        res.detalle.append("No hay leads por corregir (con --ids/--numeros, si se pasaron): no se escribió nada.")
         return res
     ids = [f["id"] for f in elegidas]
-    res.respaldo = escribir_respaldo(db, ctx.carpeta, "u9", ctx.base, {"sales_orders": ids}, ctx.ahora)
+    res.respaldo = ctx.respaldar({"sales_orders": ids})
     r = db.execute(
         text("UPDATE sales_orders so SET lead_description = 'SC creada: ' || cr.numero || "
              "substr(so.lead_description, length('SC creada: ') + 1) "
@@ -1373,41 +1622,44 @@ def listar_h42(db, excl, **_) -> Listado:
     l.notas.append("El diseño NO lo recomienda: reescribir montos de documentos ya confirmados cambia lo que el "
                    "cliente aceptó. El usuario pidió hacerlo solo en documentos SIN pagos (R1); el formateador "
                    "nuevo ya oculta los decimales en pantalla.")
-    l.notas.append("--aplicar redondea únicamente los documentos sin pagos y que estén en --numeros; no toca las "
-                   "líneas ni el JSON de productos. Una cotización Pendiente de confirmación o Confirmada "
-                   "cambiaría el total que el cliente vio.")
+    l.notas.append("--aplicar redondea únicamente los documentos sin pagos y que estén en --numeros (no acepta "
+                   "--ids). NO toca las líneas, el JSON de productos ni las PXP. El saldo redondeado conserva lo "
+                   "pagado (saldo = total redondeado - pagado redondeado). Una cotización Pendiente de "
+                   "confirmación o Confirmada cambiaría el total que el cliente vio.")
     return l
 
 
 def _aplicar_h42(ctx) -> ResultadoAplicar:
     from app.models.erp_documents import ActivityLog, SaleOrder, SalesQuotation
     db, res = ctx.db, ResultadoAplicar("h42")
+    if ctx.ids is not None:
+        raise ErrorCorreccion("h42 solo acepta --numeros: los ids de pedidos y cotizaciones se repiten")
     if not ctx.numeros:
         res.detalle.append("h42 solo redondea los documentos que indiques en --numeros. Sin eso no se escribió nada.")
         return res
-    (ven, _vx), (cot, _cx) = _sel_h42(db, ctx.excl)
+    (ven, vx), (cot, cx) = _sel_h42(db, ctx.excl)
+    _exigir_candidatos(ctx, ven + cot, vx + cx)
     pedidas = set(ctx.numeros)
-    for numero in sorted(pedidas - {f["numero"] for f in ven + cot}):
-        res.detalle.append(f"{numero}: no tiene decimales en total/saldo (o es un documento real): no se toca")
-    elegidas = [f for f in ven if f["numero"] in pedidas] + [f for f in cot if f["numero"] in pedidas]
-    for f in [f for f in elegidas if f["tiene_pagos"]]:
+    for f in [f for f in ven + cot if f["numero"] in pedidas and f["tiene_pagos"]]:
         res.detalle.append(f"{f['numero']}: tiene pagos registrados: NO se toca")
     ven_ok = [f for f in ven if f["numero"] in pedidas and not f["tiene_pagos"]]
     cot_ok = [f for f in cot if f["numero"] in pedidas and not f["tiene_pagos"]]
     if not ven_ok and not cot_ok:
         res.detalle.append("Nada que redondear.")
         return res
-    res.respaldo = escribir_respaldo(db, ctx.carpeta, "h42", ctx.base,
-                                     {"sale_orders": [f["id"] for f in ven_ok],
-                                      "sales_quotations": [f["id"] for f in cot_ok]}, ctx.ahora)
-    for modelo, filas, columnas, entidad in (
-            (SaleOrder, ven_ok, ("total_cop", "subtotal_cop", "anticipo_cop", "saldo_cop"), "VEN"),
-            (SalesQuotation, cot_ok, ("total_cop", "subtotal_cop", "anticipo_cop"), "COT")):
+    res.respaldo = ctx.respaldar({"sale_orders": [f["id"] for f in ven_ok],
+                                  "sales_quotations": [f["id"] for f in cot_ok]})
+    for modelo, filas, entidad in ((SaleOrder, ven_ok, "VEN"), (SalesQuotation, cot_ok, "COT")):
         for f in filas:
             doc = db.query(modelo).filter(modelo.id == f["id"]).with_for_update().first()
             antes = doc.total_cop
-            for c in columnas:
-                setattr(doc, c, redondear_peso(getattr(doc, c)))
+            if entidad == "VEN":
+                # el saldo conserva lo pagado: saldo = total redondeado - pagado redondeado
+                pagado = redondear_peso(Decimal(str(doc.total_cop or 0)) - Decimal(str(doc.saldo_cop or 0)))
+                doc.saldo_cop = redondear_peso(doc.total_cop) - pagado
+            doc.total_cop = redondear_peso(doc.total_cop)
+            doc.subtotal_cop = redondear_peso(doc.subtotal_cop)
+            doc.anticipo_cop = redondear_peso(doc.anticipo_cop)
             doc.updated_at = ctx.ahora
             db.add(ActivityLog(
                 entity_type=entidad, entity_id=doc.id, entity_numero=doc.numero, action="UPDATED",
@@ -1440,22 +1692,24 @@ def listar_paso(db, paso, excluidos=NUMEROS_REALES, solo_lectura=True, excl=None
         motivo = _faltantes(db, paso)
         if motivo:
             return _nuevo(paso, no_aplica=motivo)
-        return LISTADORES[paso](db, excl if excl is not None else calcular_excluidos(db, excluidos), **opciones)
+        excl = excl if excl is not None else calcular_excluidos(db, excluidos)
+        return LISTADORES[paso](db, excl, solo_lectura=solo_lectura, **opciones)
     finally:
         if solo_lectura:
             db.rollback()
 
 
-def listar_todo(db, excluidos=NUMEROS_REALES, solo_lectura=True, pasos=PASOS, **opciones) -> list:
+def listar_todo(db, excluidos=NUMEROS_REALES, solo_lectura=True, pasos=PASOS, excl=None, **opciones) -> list:
     """Los listados de los pasos, en el orden obligatorio. Un paso que falla no tumba a los demas: queda con su
     error en el listado."""
-    if solo_lectura:
-        iniciar_solo_lectura(db)
-    try:
-        excl = calcular_excluidos(db, excluidos)
-    finally:
+    if excl is None:
         if solo_lectura:
-            db.rollback()
+            iniciar_solo_lectura(db)
+        try:
+            excl = calcular_excluidos(db, excluidos)
+        finally:
+            if solo_lectura:
+                db.rollback()
     listados = []
     for paso in pasos:
         try:
@@ -1470,7 +1724,8 @@ def listar_todo(db, excluidos=NUMEROS_REALES, solo_lectura=True, pasos=PASOS, **
 def aplicar_paso(db, paso, base, carpeta_respaldos=CARPETA_RESPALDOS, excluidos=NUMEROS_REALES, ids=None,
                  numeros=None, decisiones=None, tabla_respaldo=None) -> ResultadoAplicar:
     """Escribe un paso. Aborta SIN escribir si `base` no es current_database(). Un solo commit al final; ante
-    cualquier error, rollback del paso completo."""
+    cualquier error, rollback del paso completo y el respaldo JSON que ya se hubiera escrito pasa a
+    '...-NO-APLICADO.json'."""
     if paso not in APLICADORES:
         raise ErrorCorreccion(f"Paso desconocido: {paso!r}")
     actual = base_actual(db)
@@ -1482,15 +1737,22 @@ def aplicar_paso(db, paso, base, carpeta_respaldos=CARPETA_RESPALDOS, excluidos=
     if motivo:
         db.rollback()
         return ResultadoAplicar(paso, detalle=[f"No aplica: {motivo}"])
+    ctx = None
     try:
         ctx = Contexto(db=db, base=base, carpeta=Path(carpeta_respaldos), excl=calcular_excluidos(db, excluidos),
-                       ids=ids, numeros=numeros, decisiones=decisiones, tabla_respaldo=tabla_respaldo)
+                       paso=paso, ids=ids, numeros=numeros, decisiones=decisiones, tabla_respaldo=tabla_respaldo)
         resultado = APLICADORES[paso](ctx)
         db.commit()
-        return resultado
     except Exception:
         db.rollback()
+        if ctx is not None:
+            _marcar_no_aplicados(ctx.escritos)
         raise
+    if resultado.cambiados == 0 and ctx.escritos:
+        nuevas = _marcar_no_aplicados(ctx.escritos)
+        resultado.respaldo = None
+        resultado.detalle.append("No cambió nada: el respaldo quedó como " + ", ".join(os.path.basename(n) for n in nuevas))
+    return resultado
 
 
 # ─── CLI ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1534,10 +1796,19 @@ def armar_parser() -> argparse.ArgumentParser:
 
 
 def _cargar_decisiones(ruta):
+    """El JSON de decisiones de n1. Lee con utf-8-sig (el Bloc de notas de Windows agrega BOM); un archivo que no existe
+    o no es JSON valido es un ErrorCorreccion, no un traceback."""
     if not ruta:
         return None
-    with open(ruta, encoding="utf-8") as f:
-        datos = json.load(f)
+    try:
+        with open(ruta, encoding="utf-8-sig") as f:
+            datos = json.load(f)
+    except FileNotFoundError:
+        raise ErrorCorreccion(f"No existe el archivo de decisiones: {ruta}") from None
+    except json.JSONDecodeError as exc:
+        raise ErrorCorreccion(f"El archivo de decisiones no es JSON válido ({ruta}): {exc}") from None
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ErrorCorreccion(f"No se pudo leer el archivo de decisiones ({ruta}): {exc}") from None
     if not isinstance(datos, dict):
         raise ErrorCorreccion("El archivo de decisiones debe ser un objeto JSON {\"PVEN-…\": {...}}")
     return datos
@@ -1570,7 +1841,7 @@ def main(argv=None) -> int:
             print("Documentos reales protegidos (y lo encadenado a ellos): " + (", ".join(excl.etiquetas) or "ninguno"))
             print()
             pasos = PASOS if args.paso == "todo" else (args.paso,)
-            listados = listar_todo(db, pasos=pasos)
+            listados = listar_todo(db, pasos=pasos, excl=excl)
             for l in listados:
                 print(texto_listado(l, indice=PASOS.index(l.paso) + 1, total=len(PASOS)))
             if len(listados) > 1:
