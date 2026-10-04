@@ -7,6 +7,11 @@
   un replay al convertir y no apaga la alerta de "COT confirmada sin pedido".
 - Una COT con un pedido vigente no cambia de estado por PATCH (409).
 - Un pedido cancelado sigue cancelado aunque una recepcion recalcule su estado.
+- A2 (revision final): cancelar por PATCH libera lo que el pedido tenia apartado en el mismo commit: reservas
+  ACTIVE a RELEASED, lineas CANCELADA, items PENDIENTE de la Lista de Compras a DESCARTADO (tambien por POST
+  /cancelar). Con compras asignadas (ProcurementAllocation) cancela igual y deja 'COMPRA_REVISAR' (la pantalla
+  del detalle no ofrece la decision sobre la mercancia). La Lista de Compras no muestra items de pedidos
+  cancelados.
 
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_pedido_cancelado_reabre_cotizacion
 """
@@ -39,8 +44,9 @@ def _cot_confirmada(db, numero, sc=None, **campos):
         campos.setdefault("sc_numero", sc.numero)
     campos.setdefault("estado", "CONFIRMADA")
     campos.setdefault("gate2_confirmed_at", datetime.datetime.utcnow())
+    campos.setdefault("productos", PRODUCTOS)
     cot = SalesQuotation(numero=numero, customer_name="Cliente Prueba", customer_email="cliente@test.com",
-                         productos=PRODUCTOS, total_cop=1000, subtotal_cop=1000, anticipo_cop=0, **campos)
+                         total_cop=1000, subtotal_cop=1000, anticipo_cop=0, **campos)
     db.add(cot); db.commit(); db.refresh(cot)
     return cot
 
@@ -252,3 +258,207 @@ def test_un_pedido_cancelado_sigue_cancelado_al_recalcular_su_estado(db):
                                 quantity_reserved=1))
         db.commit(); db.refresh(so)
         assert recalculate_sale_order_state(so, db) == estado
+
+
+# --- A2 (revision final): cancelar por PATCH libera lo apartado -------------------------------------------------
+
+def _stock_en_la_bodega_de_la_conversion(db, sku, cantidad):
+    """La conversion reserva en la primera bodega (db.query(Warehouse).first()): el stock del SKU va ahi."""
+    from decimal import Decimal
+    from app.models.inventory import Warehouse, InventoryLevel
+    from app.models.fase1b import InventoryOwnerBalance
+    bodega = db.query(Warehouse).first()
+    if bodega is None:
+        bodega = Warehouse(name="BodegaTest-REA", location_type="Central")
+        db.add(bodega); db.flush()
+    db.add(InventoryLevel(sku_id=sku.id, warehouse_id=bodega.id, quantity=Decimal(cantidad)))
+    db.add(InventoryOwnerBalance(sku_id=sku.id, warehouse_id=bodega.id, owner="NEBULAE", quantity=Decimal(cantidad),
+                                 updated_at=datetime.datetime.utcnow()))
+    db.commit()
+    return bodega
+
+
+def _lineas(db, so_id):
+    from app.models.fase1b import SaleOrderLineErp
+    db.expire_all()
+    return db.query(SaleOrderLineErp).filter(SaleOrderLineErp.so_id == so_id).order_by(SaleOrderLineErp.id).all()
+
+
+def _reservas(db, line_id):
+    from app.models.fase1b import InventoryReservation
+    db.expire_all()
+    return db.query(InventoryReservation).filter(InventoryReservation.sale_order_line_id == line_id).all()
+
+
+def _items_lista(db, pven_ids):
+    """Items guardados de la Lista de Compras (el JSON completo, sin los filtros del GET)."""
+    from app.api.v1.erp_compras import _load_lista_compras
+    return [it for it in _load_lista_compras(db) if it.get("pven_id") in pven_ids]
+
+
+def _cancelar_por_patch(app_client, token, ven_id, **extra):
+    return app_client.patch(f"/api/v1/ventas/pedidos/{ven_id}", json={
+        "estado": "CANCELADO", "cancellation_reason": "Cliente cambió el pedido", "updated_by": "t", **extra},
+        headers=auth(token))
+
+
+def test_cancelar_por_patch_libera_la_reserva_y_la_lista_y_el_pedido_nuevo_reserva(app_client, db, admin_token,
+                                                                                 user_admin, sku):
+    _stock_en_la_bodega_de_la_conversion(db, sku, 1)  # una sola unidad: el pedido nuevo solo reserva si se libero
+    productos = [
+        {"product_name": "Cuna REA012", "sku_id": sku.id, "modalidad": "ENTREGA_INMEDIATA", "qty": 1,
+         "unit_price_cop": 600, "total_cop": 600},
+        {"product_name": "Cobija REA012", "modalidad": "POR_PEDIDO", "qty": 1, "unit_price_cop": 400, "total_cop": 400},
+    ]
+    sc = _sc(db, "SC-REA012", user_admin)
+    cot = _cot_confirmada(db, "COT-REA012", sc, productos=productos)
+    resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/confirmar", json={"user_name": "t"},
+                           headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    pven1 = resp.json()["data"]["sale_order_id"]
+    cuna1, cobija1 = _lineas(db, pven1)
+    assert cuna1.estado == "RESERVADA" and [r.status for r in _reservas(db, cuna1.id)] == ["ACTIVE"]
+    lista = app_client.get("/api/v1/compras/lista-compras?limit=200", headers=auth(admin_token))
+    assert lista.status_code == 200, lista.text
+    assert sorted(it["producto"] for it in _items_lista(db, {pven1})) == ["Cobija REA012", "Cuna REA012"]
+
+    resp = _cancelar_por_patch(app_client, admin_token, pven1)
+    assert resp.status_code == 200, resp.text
+
+    reserva = _reservas(db, cuna1.id)[0]
+    assert reserva.status == "RELEASED" and reserva.released_at is not None
+    for linea in _lineas(db, pven1):
+        assert linea.estado == "CANCELADA"
+        assert linea.quantity_cancelled == linea.quantity - linea.quantity_delivered
+        assert linea.quantity_reserved == 0
+    assert {it["estado"] for it in _items_lista(db, {pven1})} == {"DESCARTADO"}
+
+    # El cliente vuelve a confirmar (el enlace real lo prueba test_cancelar_pven_reabre_la_cotizacion_...).
+    db.refresh(cot)
+    assert cot.estado == "BORRADOR"
+    cot.estado = "CONFIRMADA"
+    cot.gate2_confirmed_at = datetime.datetime.utcnow()
+    db.commit()
+    resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/confirmar", json={"user_name": "t"},
+                           headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    pven2 = resp.json()["data"]["sale_order_id"]
+    assert pven2 != pven1
+    cuna2 = _lineas(db, pven2)[0]
+    assert cuna2.estado == "RESERVADA" and [r.status for r in _reservas(db, cuna2.id)] == ["ACTIVE"]
+
+    lista = app_client.get("/api/v1/compras/lista-compras?limit=200", headers=auth(admin_token)).json()["data"]
+    mios = [it for it in lista if it.get("pven_id") in (pven1, pven2)]
+    assert sorted((it["pven_id"], it["producto"]) for it in mios) == [
+        (pven2, "Cobija REA012"), (pven2, "Cuna REA012")]
+
+
+def _pven_con_compra_asignada(db, numero, cot):
+    """PVEN con una linea POR_PEDIDO asignada a una linea de compra (ProcurementAllocation CUSTOMER_ORDER)."""
+    from decimal import Decimal
+    from app.models.erp_documents import PurchaseOrderFull, Supplier
+    from app.models.fase1b import SaleOrderLineErp, PurchaseOrderLine, ProcurementAllocation
+    ven = _ven(db, numero, cot, estado="EN_PROCESO")
+    linea = SaleOrderLineErp(so_id=ven.id, description="Cuna", quantity=Decimal("2"), unit_price_cop=500,
+                             modalidad="POR_PEDIDO", estado="PENDIENTE_COMPRA")
+    proveedor = Supplier(name=f"Proveedor {numero}")
+    db.add_all([linea, proveedor]); db.flush()
+    pec = PurchaseOrderFull(numero=f"PEC-{numero[-6:]}", supplier_id=proveedor.id, estado="APROBADO", total_cop=1000)
+    db.add(pec); db.flush()
+    pol = PurchaseOrderLine(pec_id=pec.id, quantity_ordered=Decimal("2"), unit_cost_cop=Decimal("300"),
+                            description="Cuna")
+    db.add(pol); db.flush()
+    asignacion = ProcurementAllocation(po_line_id=pol.id, allocation_type="CUSTOMER_ORDER",
+                                       sale_order_line_id=linea.id, quantity_allocated=Decimal("2"))
+    db.add(asignacion); db.commit()
+    return ven, linea, pec, asignacion
+
+
+def test_cancelar_por_patch_con_compras_asignadas_cancela_y_deja_aviso_para_revisar(app_client, db, admin_token,
+                                                                                  user_admin):
+    """La pantalla del detalle cancela por PATCH sin ofrecer la decision sobre la mercancia (esa decision solo existe
+    en POST /cancelar, que ninguna pantalla llama): en vez de un 409 sin salida, cancela y deja el aviso."""
+    from app.models.fase1b import ProcurementAllocation
+    cot = _cot_confirmada(db, "COT-REA013", _sc(db, "SC-REA013", user_admin))
+    ven, linea, pec, asignacion = _pven_con_compra_asignada(db, "PVEN-REA013", cot)
+
+    resp = _cancelar_por_patch(app_client, admin_token, ven.id)
+    assert resp.status_code == 200, resp.text
+    db.refresh(ven)
+    assert ven.estado == "CANCELADO"
+    assert _lineas(db, ven.id)[0].estado == "CANCELADA"
+    aviso = _logs(db, "VEN", ven.id, "COMPRA_REVISAR")
+    assert len(aviso) == 1
+    assert aviso[0].description == (
+        f"El pedido tenía compras asignadas ({pec.numero}: 2 unidades): revisar en Compras qué hacer con esa "
+        "mercancía (pasarla a stock, reasignarla a otro cliente o devolverla al proveedor).")
+    assert aviso[0].user_name == "t"
+    # La asignacion no se toca: la decision queda para quien revise.
+    db.expire_all()
+    assert db.get(ProcurementAllocation, asignacion.id).sale_order_line_id == linea.id
+
+
+def test_cancelar_por_la_ruta_fase4_descarta_los_items_de_la_lista(app_client, db, admin_token, user_admin):
+    cot = _cot_confirmada(db, "COT-REA014", _sc(db, "SC-REA014", user_admin))
+    ven = _ven(db, "PVEN-REA014", cot, productos=[{"product_name": "Silla REA014", "qty": 2}])
+    app_client.get("/api/v1/compras/lista-compras?limit=200", headers=auth(admin_token))
+    assert [it["estado"] for it in _items_lista(db, {ven.id})] == ["PENDIENTE"]
+    resp = app_client.post(f"/api/v1/ventas/pedidos/{ven.id}/cancelar", json={"motivo": "Cliente desistió"},
+                           headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert [it["estado"] for it in _items_lista(db, {ven.id})] == ["DESCARTADO"]
+
+
+def test_solo_se_descartan_los_items_por_comprar_del_pedido(app_client, db, admin_token, user_admin):
+    """Un item ya en un pedido de compra conserva su estado (historial); el GET igual lo oculta. Un item de otro
+    pedido, o con el mismo pven_id pero otro numero (id reciclado), no se toca."""
+    from app.api.v1.erp_compras import _load_lista_compras, _save_lista_compras
+    cot = _cot_confirmada(db, "COT-REA015", _sc(db, "SC-REA015", user_admin))
+    ven = _ven(db, "PVEN-REA015", cot, estado="EN_PROCESO")
+    otro = _ven(db, "PVEN-REA015B", cot, estado="EN_PROCESO")
+    items = _load_lista_compras(db)
+    base = max([it.get("id", 0) for it in items], default=0)
+    items += [
+        {"id": base + 1, "pven_id": ven.id, "pven_numero": ven.numero, "producto": "A", "estado": "PENDIENTE"},
+        {"id": base + 2, "pven_id": ven.id, "pven_numero": ven.numero, "producto": "B", "estado": "EN_PEDIDO",
+         "pec_id": 1, "pec_numero": "PEC-X"},
+        {"id": base + 3, "pven_id": ven.id, "pven_numero": "PVEN-VIEJO", "producto": "C", "estado": "PENDIENTE"},
+        {"id": base + 4, "pven_id": otro.id, "pven_numero": otro.numero, "producto": "D", "estado": "PENDIENTE"},
+    ]
+    _save_lista_compras(db, items)
+    resp = _cancelar_por_patch(app_client, admin_token, ven.id)
+    assert resp.status_code == 200, resp.text
+    estados = {it["producto"]: it["estado"] for it in _items_lista(db, {ven.id, otro.id})}
+    assert estados == {"A": "DESCARTADO", "B": "EN_PEDIDO", "C": "PENDIENTE", "D": "PENDIENTE"}
+
+
+def test_la_lista_de_compras_no_muestra_items_de_pedidos_cancelados(app_client, db, admin_token, user_admin):
+    """Red: un item que quedo PENDIENTE de un pedido ya cancelado (dato de antes del arreglo) no se muestra ni cuenta."""
+    from app.api.v1.erp_compras import _load_lista_compras, _save_lista_compras
+    cot = _cot_confirmada(db, "COT-REA016", _sc(db, "SC-REA016", user_admin))
+    cancelado = _ven(db, "PVEN-REA016", cot, estado="CANCELADO", cancellation_reason="Cliente cambió el pedido")
+    vigente = _ven(db, "PVEN-REA016B", cot, estado="EN_PROCESO")
+    antes = app_client.get("/api/v1/compras/lista-compras/stats", headers=auth(admin_token)).json()["data"]
+    items = _load_lista_compras(db)
+    base = max([it.get("id", 0) for it in items], default=0)
+    items += [
+        {"id": base + 1, "pven_id": cancelado.id, "pven_numero": cancelado.numero, "producto": "Mesa REA016",
+         "estado": "PENDIENTE"},
+        {"id": base + 2, "pven_id": cancelado.id, "pven_numero": cancelado.numero, "producto": "Lampara REA016",
+         "estado": "EN_PEDIDO"},
+        {"id": base + 3, "pven_id": vigente.id, "pven_numero": vigente.numero, "producto": "Silla REA016",
+         "estado": "PENDIENTE"},
+    ]
+    _save_lista_compras(db, items)
+    for filtro in ("", "&estado=PENDIENTE", "&estado=EN_PEDIDO", "&search=REA016"):
+        lista = app_client.get(f"/api/v1/compras/lista-compras?limit=100000{filtro}", headers=auth(admin_token))
+        assert lista.status_code == 200, lista.text
+        productos = {it["producto"] for it in lista.json()["data"]}
+        assert "Mesa REA016" not in productos and "Lampara REA016" not in productos, filtro
+    assert "Silla REA016" in {it["producto"] for it in app_client.get(
+        "/api/v1/compras/lista-compras?limit=200&search=REA016", headers=auth(admin_token)).json()["data"]}
+    # El JSON guardado no se reescribe: solo se oculta al leer. Las cuentas tampoco los incluyen.
+    assert len(_items_lista(db, {cancelado.id})) == 2
+    despues = app_client.get("/api/v1/compras/lista-compras/stats", headers=auth(admin_token)).json()["data"]
+    assert (despues["total"] - antes["total"], despues["pendientes"] - antes["pendientes"],
+            despues["en_pedido"] - antes["en_pedido"]) == (1, 1, 0)

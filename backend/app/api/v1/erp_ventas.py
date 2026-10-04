@@ -13,13 +13,13 @@ import pydantic
 from app.db.database import get_db
 from app.models.erp_documents import (
     CustomerRequest, SalesQuotation, SaleOrder,
-    PaymentPending, ActivityLog
+    PaymentPending, ActivityLog, PurchaseOrderFull
 )
 from app.models.fase4 import SaleOrderPayment
 from app.models.customers import Customer
 from app.models.sales import SalesOrder as LeadCRM  # el lead del CRM (tabla sales_orders), no el Pedido de Venta
 from app.models.inventory import InventoryLevel, InventoryOperation, InventoryMovement
-from app.models.fase1b import InventoryOwnerBalance
+from app.models.fase1b import InventoryOwnerBalance, SaleOrderLineErp, ProcurementAllocation, PurchaseOrderLine
 from app.api.dependencies import (
     require_roles, get_current_user,
     ROLE_ADMIN, ROLE_ASESOR, ROLE_COMPRAS, ROLE_FINANZAS, ALL_ERP_ROLES, normalize_role
@@ -2281,6 +2281,50 @@ def _validar_transicion_pedido(v: SaleOrder, nuevo) -> None:
     raise HTTPException(422, f"Un pedido {_nombre_de_estado('VEN', v.estado).lower()} solo puede pasar a {destinos}.")
 
 
+def _unidades(cantidad) -> str:
+    """'1 unidad', '2 unidades', '2.5 unidades' (sin los ceros de Numeric(10, 2))."""
+    q = Decimal(str(cantidad)).normalize()
+    return f"{q:f} unidad" if q == 1 else f"{q:f} unidades"
+
+
+def _liberar_lo_apartado_del_pedido(db: Session, v: SaleOrder, autor: Optional[str]) -> None:
+    """A2 (revision final): lo que hace la cancelacion por PATCH /ventas/pedidos/{id} con lo que el pedido tenia
+    apartado. Sin commit: va en el mismo commit que la cancelacion.
+
+    - Lineas: lo que falta por entregar queda CANCELADA y sus reservas ACTIVE pasan a RELEASED, con el mismo helper
+      que POST /pedidos/{id}/cancelar sin decision sobre la mercancia. Asi el pedido nuevo de la misma COT (H46, R6)
+      puede reservar esa mercancia.
+    - Lista de Compras: sus items por comprar pasan a DESCARTADO.
+    - Compras asignadas (ProcurementAllocation de las lineas que se cancelan): la pantalla del detalle no ofrece la
+      decision sobre la mercancia (solo la pide POST /cancelar, que ninguna pantalla llama), asi que en vez de un
+      409 sin salida se cancela igual y queda en la Actividad 'COMPRA_REVISAR' con las compras y las unidades. Las
+      asignaciones no se tocan: las decide quien revise."""
+    from app.api.v1.erp_ventas_fase4 import _cancelar_lineas_del_pedido
+    from app.api.v1.erp_compras import descartar_items_lista_de_pedido
+    lineas = (db.query(SaleOrderLineErp).filter(SaleOrderLineErp.so_id == v.id)
+              .order_by(SaleOrderLineErp.id).with_for_update().all())
+    por_cancelar = [l.id for l in lineas if l.quantity - l.quantity_delivered - l.quantity_cancelled > 0]
+    compras = []
+    if por_cancelar:
+        compras = (db.query(PurchaseOrderFull.numero, func.sum(ProcurementAllocation.quantity_allocated))
+                   .select_from(ProcurementAllocation)
+                   .join(PurchaseOrderLine, PurchaseOrderLine.id == ProcurementAllocation.po_line_id)
+                   .outerjoin(PurchaseOrderFull, PurchaseOrderFull.id == PurchaseOrderLine.pec_id)
+                   .filter(ProcurementAllocation.sale_order_line_id.in_(por_cancelar),
+                           ProcurementAllocation.quantity_allocated > 0)
+                   .group_by(PurchaseOrderFull.numero).order_by(PurchaseOrderFull.numero).all())
+    _cancelar_lineas_del_pedido(db, lineas, datetime.datetime.utcnow(), autor)
+    if compras:
+        detalle = "; ".join(f"{numero or 'compra sin número'}: {_unidades(cantidad)}" for numero, cantidad in compras)
+        db.add(ActivityLog(
+            entity_type="VEN", entity_id=v.id, entity_numero=v.numero, action="COMPRA_REVISAR",
+            description=(f"El pedido tenía compras asignadas ({detalle}): revisar en Compras qué hacer con esa "
+                         "mercancía (pasarla a stock, reasignarla a otro cliente o devolverla al proveedor)."),
+            user_name=autor,
+            extra_data={"compras": [{"pec_numero": numero, "cantidad": str(cantidad)} for numero, cantidad in compras]}))
+    descartar_items_lista_de_pedido(db, v)
+
+
 @router.patch("/pedidos/{ven_id}")
 def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
@@ -2329,6 +2373,9 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
         # H45 (R12): la orden de pago pendiente se cancela en el mismo commit que el pedido y el pedido deja de
         # apuntar a ella. Va ANTES del commit; la cotizacion se reabre despues (tiene su propio commit/rollback).
         anular_pxps_de_pedido(db, v, autor, body.get("cancellation_reason"))
+        # A2 (revision final): con H46 + R6 reconvertir la COT es el flujo normal; lo que este pedido tenia
+        # apartado se libera en el mismo commit (reservas, lineas y Lista de Compras).
+        _liberar_lo_apartado_del_pedido(db, v, autor)
     v.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(v)

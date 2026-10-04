@@ -1214,6 +1214,37 @@ def _apply_purchased_goods_decision(
     ).scalar() or Decimal("0.00")
 
 
+def _cancelar_lineas_del_pedido(db: Session, lines, now, user_name: str, decision: Optional[str] = None,
+                                target_customer_id: Optional[int] = None,
+                                target_sale_order_line_id: Optional[int] = None) -> None:
+    """Cancela lo que falta por entregar de cada linea del pedido que se cancela: aplica la decision sobre la
+    mercancia (si la hay), libera sus reservas ACTIVE (RELEASED, released_at) y deja la linea CANCELADA con
+    quantity_cancelled = quantity - quantity_delivered y nada reservado. Sin commit: va en el commit del llamador.
+    Sin decision (cancelacion por PATCH /ventas/pedidos/{id}) solo libera y cancela; las compras asignadas quedan
+    como estan. `lines` vienen bloqueadas (FOR UPDATE) por el llamador."""
+    for l in lines:
+        cancelable_qty = l.quantity - l.quantity_delivered - l.quantity_cancelled
+        if cancelable_qty > Decimal("0.00"):
+            _apply_purchased_goods_decision(
+                decision,
+                l,
+                cancelable_qty,
+                target_customer_id,
+                target_sale_order_line_id,
+                user_name,
+                db
+            )
+            # Liberar reservas activas
+            db.query(InventoryReservation).filter(
+                InventoryReservation.sale_order_line_id == l.id,
+                InventoryReservation.status == "ACTIVE"
+            ).update({"status": "RELEASED", "released_at": now})
+
+            l.quantity_cancelled = l.quantity - l.quantity_delivered
+            l.quantity_reserved = Decimal("0.00")
+            l.estado = "CANCELADA"
+            l.updated_at = now
+
 
 @router.post("/pedidos/{so_id}/cancelar")
 def cancel_sale_order(
@@ -1253,28 +1284,8 @@ def cancel_sale_order(
             detail="El pedido tiene compras asignadas o mercancía reservada. Debe proveer 'purchased_goods_decision' obligatoria."
         )
 
-    for l in lines:
-        cancelable_qty = l.quantity - l.quantity_delivered - l.quantity_cancelled
-        if cancelable_qty > Decimal("0.00"):
-            _apply_purchased_goods_decision(
-                body.purchased_goods_decision,
-                l,
-                cancelable_qty,
-                body.target_customer_id,
-                body.target_sale_order_line_id,
-                user_name,
-                db
-            )
-            # Liberar reservas activas
-            db.query(InventoryReservation).filter(
-                InventoryReservation.sale_order_line_id == l.id,
-                InventoryReservation.status == "ACTIVE"
-            ).update({"status": "RELEASED", "released_at": now})
-
-            l.quantity_cancelled = l.quantity - l.quantity_delivered
-            l.quantity_reserved = Decimal("0.00")
-            l.estado = "CANCELADA"
-            l.updated_at = now
+    _cancelar_lineas_del_pedido(db, lines, now, user_name, body.purchased_goods_decision,
+                                body.target_customer_id, body.target_sale_order_line_id)
 
     old_estado = so.estado
     so.estado = "CANCELADO"
@@ -1317,6 +1328,9 @@ def cancel_sale_order(
 
     # H45 (R12): igual que la cancelacion por PATCH, la orden de pago pendiente se cancela en el mismo commit.
     anular_pxps_de_pedido(db, so, user_name, motivo)
+    # A2 (revision final): lo que el pedido tenia por comprar sale de la Lista de Compras, en el mismo commit.
+    from app.api.v1.erp_compras import descartar_items_lista_de_pedido
+    descartar_items_lista_de_pedido(db, so)
 
     db.commit()
 

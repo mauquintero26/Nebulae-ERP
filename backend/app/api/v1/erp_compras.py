@@ -2840,7 +2840,8 @@ def _load_lista_compras(db: Session) -> list:
     return []
 
 
-def _save_lista_compras(db: Session, items: list):
+def _save_lista_compras(db: Session, items: list, commit: bool = True):
+    """Guarda la Lista completa. commit=False: la escritura queda en la transaccion del llamador."""
     import json
     val_json = json.dumps(items)
     bind = db.get_bind()
@@ -2857,7 +2858,46 @@ def _save_lista_compras(db: Session, items: list):
             db.execute(text("UPDATE web_builder_config SET config_value=:v WHERE config_key='erp_lista_compras'"), {"v": val_json})
         else:
             db.execute(text("INSERT INTO web_builder_config (config_key, config_value) VALUES ('erp_lista_compras', :v)"), {"v": val_json})
-    db.commit()
+    if commit:
+        db.commit()
+
+
+def _es_item_del_pedido(it: dict, so) -> bool:
+    """El item apunta a este pedido: mismo pven_id y, si guardo el numero, el mismo numero (web_builder_config no
+    se trunca con sale_orders: un pven_id reciclado no es este pedido)."""
+    return it.get("pven_id") == so.id and (not it.get("pven_numero") or it.get("pven_numero") == so.numero)
+
+
+def descartar_items_lista_de_pedido(db: Session, so) -> int:
+    """A2 (revision final): al cancelar el pedido `so`, sus items PENDIENTE (aun por comprar) de la Lista de Compras
+    pasan a DESCARTADO. Los que ya estan en un pedido de compra o recibidos conservan su estado (historial de lo
+    comprado); la Lista igual los oculta porque su pedido esta cancelado. Sin commit: lo usan la cancelacion por
+    PATCH /ventas/pedidos/{id} y POST /ventas/pedidos/{id}/cancelar dentro de su propio commit. Devuelve cuantos
+    descarto."""
+    items = _load_lista_compras(db)
+    descartados = 0
+    for it in items:
+        if _es_item_del_pedido(it, so) and it.get("estado") == "PENDIENTE":
+            it["estado"] = "DESCARTADO"
+            descartados += 1
+    if descartados:
+        _save_lista_compras(db, items, commit=False)
+    return descartados
+
+
+def _sin_items_de_pedidos_cancelados(db: Session, items: list) -> list:
+    """Red de A2: los items cuyo pedido de venta esta CANCELADO no se muestran ni se cuentan (datos de antes del
+    arreglo, o los que ya estaban en un pedido de compra al cancelar). Solo filtra la lectura: el JSON no cambia."""
+    pven_ids = {it.get("pven_id") for it in items if it.get("pven_id")}
+    if not pven_ids:
+        return items
+    cancelados = dict(db.query(SaleOrder.id, SaleOrder.numero)
+                      .filter(SaleOrder.id.in_(pven_ids), SaleOrder.estado == "CANCELADO").all())
+    if not cancelados:
+        return items
+    return [it for it in items
+            if not (it.get("pven_id") in cancelados
+                    and (not it.get("pven_numero") or it.get("pven_numero") == cancelados[it.get("pven_id")]))]
 
 
 def _sincronizar_pvens_pendientes_a_lista(db: Session) -> list:
@@ -2868,7 +2908,8 @@ def _sincronizar_pvens_pendientes_a_lista(db: Session) -> list:
     dejando pedidos pendientes de compra que nunca aparecian aqui.
     Autocompleta un item PENDIENTE por cada producto de cada PVEN
     pendiente que todavia no este representado, para que ambas vistas
-    sean siempre consistentes."""
+    sean siempre consistentes. Devuelve la Lista sin los items de pedidos
+    cancelados (A2); lo guardado conserva todos."""
     items = _load_lista_compras(db)
     existentes = {(it.get("pven_id"), it.get("producto")) for it in items if it.get("pven_id")}
     pendientes = db.query(SaleOrder).filter(SaleOrder.estado == "PENDIENTE_COMPRA").all()
@@ -2898,7 +2939,7 @@ def _sincronizar_pvens_pendientes_a_lista(db: Session) -> list:
     if nuevos:
         items = items + nuevos
         _save_lista_compras(db, items)
-    return items
+    return _sin_items_de_pedidos_cancelados(db, items)
 
 
 @router.get("/lista-compras")
