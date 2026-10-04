@@ -184,3 +184,19 @@ def test_contador_cuenta_las_consultas_y_commits_de_una_llamada_al_api(app_clien
 def test_contador_escucha_en_las_clases_engine_y_session(contador_sql):
     assert event.contains(Engine, "before_cursor_execute", contador_sql._al_ejecutar)
     assert event.contains(Session, "after_commit", contador_sql._al_confirmar)
+
+
+# ---- correo real bloqueado -------------------------------------------------------------------------
+def test_correo_real_esta_bloqueado_bajo_el_runner():
+    """Ninguna prueba puede mandar un correo real, aunque el .env compartido tenga SMTP configurado: el runner
+    quita SMTP_USER/SMTP_PASSWORD del entorno (tambien tras importar la app, que recarga el .env) y deja
+    smtplib.SMTP / SMTP_SSL como una clase que lanza. No se imprime ningun valor."""
+    import smtplib
+    from app.core.email import smtp_configurado
+
+    assert "SMTP_USER" not in os.environ
+    assert "SMTP_PASSWORD" not in os.environ
+    assert smtp_configurado() is False
+    for clase in (smtplib.SMTP, smtplib.SMTP_SSL):
+        with pytest.raises(RuntimeError, match="SMTP real bloqueado en pruebas"):
+            clase("localhost", 25, timeout=1)

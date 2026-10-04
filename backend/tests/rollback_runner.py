@@ -34,6 +34,28 @@ sys.path.insert(0, str(BACKEND / "tests"))
 from dotenv import load_dotenv
 load_dotenv(BACKEND / ".env")
 
+
+def _bloquear_correo_real():
+    """Ninguna prueba puede mandar un correo real, sea cual sea el .env compartido.
+
+    1) Quita SMTP_USER y SMTP_PASSWORD del entorno (sin leerlos ni mostrarlos): smtp_configurado() da False y
+       send_email sale antes de abrir conexion para cualquiera que lo llame (auth.py lo importa por nombre).
+    2) Red de seguridad: smtplib.SMTP y smtplib.SMTP_SSL pasan a ser una clase que lanza RuntimeError.
+    Se llama otra vez despues de importar la app: app/db/database.py vuelve a cargar el .env y reponeria las claves."""
+    import smtplib
+    os.environ.pop("SMTP_USER", None)
+    os.environ.pop("SMTP_PASSWORD", None)
+
+    class _SMTPBloqueado:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("SMTP real bloqueado en pruebas")
+
+    smtplib.SMTP = _SMTPBloqueado
+    smtplib.SMTP_SSL = _SMTPBloqueado
+
+
+_bloquear_correo_real()
+
 import pytest
 from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
@@ -46,6 +68,8 @@ import app.api.v1.erp_inventario as m_inv
 import app.api.v1.erp_ventas_fase4 as m_f4
 from app.models.users import User
 from app.core.security import create_access_token
+
+_bloquear_correo_real()  # database.py recargo el .env al importarse: se quitan de nuevo las credenciales SMTP
 
 TABLAS = ["customer_requests", "sales_quotations", "sale_orders", "purchase_orders_full", "activity_logs",
           "document_confirmation_tokens", "customers", "sales_orders",

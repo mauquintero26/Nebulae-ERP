@@ -19,6 +19,17 @@ sys.path.insert(0, str(_BACKEND))
 from dotenv import load_dotenv
 load_dotenv(_BACKEND / ".env")
 
+
+def _sin_credenciales_smtp():
+    """Ninguna prueba manda correo real aunque el .env compartido tenga SMTP: se quitan las credenciales del entorno
+    (sin leerlas ni mostrarlas). app/db/database.py vuelve a cargar el .env al importarse, asi que tambien se llama
+    despues de importar la app."""
+    os.environ.pop("SMTP_USER", None)
+    os.environ.pop("SMTP_PASSWORD", None)
+
+
+_sin_credenciales_smtp()
+
 PROD_URL = os.environ.get("DATABASE_URL", "")
 TEST_URL = os.environ.get("TEST_DATABASE_URL", "")
 # URL de erpdb real (para tests de guardia que verifican que producción no fue alterada).
@@ -229,6 +240,7 @@ def app_client(setup_test_db):
     import app.api.v1.erp_compras as _compras_module
     import app.api.v1.erp_inventario as _inventario_module
     import app.api.v1.erp_ventas_fase4 as _ventas_fase4_module
+    _sin_credenciales_smtp()  # database.py recargo el .env al importarse
 
     # Override FastAPI dependency
     app.dependency_overrides[get_db] = override_get_db
@@ -300,6 +312,7 @@ def db(setup_test_db):
 # ---- SECURITY HELPERS -------------------------------------------------------
 from app.core.security import create_access_token
 from datetime import timedelta
+_sin_credenciales_smtp()  # por si importar la app recargo el .env
 
 TEST_PASSWORD = "Test123!"
 # Pre-hashed bcrypt of TEST_PASSWORD to avoid passlib/bcrypt version issues at import time.
