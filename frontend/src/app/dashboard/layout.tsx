@@ -2,6 +2,7 @@ import { Sidebar } from '@/components/Sidebar';
 import { GlobalAIChat } from '@/components/GlobalAIChat';
 import { AlertasBadge } from '@/components/AlertasBadge';
 import { AuthGuard } from '@/components/AuthGuard';
+import { SessionKeeper } from '@/components/SessionKeeper';
 
 export default function DashboardLayout({
   children,
@@ -16,6 +17,7 @@ export default function DashboardLayout({
           {children}
           <GlobalAIChat />
           <AlertasBadge />
+          <SessionKeeper />
         </main>
       </div>
     </AuthGuard>

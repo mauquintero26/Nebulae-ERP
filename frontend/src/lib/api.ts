@@ -15,15 +15,98 @@ export const getHeaders = () => {
 // Guard against repeated redirects when multiple requests fail with 401 concurrently
 let isRedirectingToLogin = false;
 
+/** Error de las peticiones rechazadas por sesion vencida (401). */
+export class SesionVencidaError extends Error {
+  status = 401;
+
+  constructor() {
+    super('Tu sesión venció. Inicia sesión nuevamente para continuar.');
+    this.name = 'SesionVencidaError';
+  }
+}
+
+// H23: dentro del dashboard SessionKeeper registra un manejador que abre la ventana de re-ingreso. Un 401 espera a
+// que el usuario vuelva a entrar y reintenta UNA vez, en lugar de recargar la pagina y perder lo escrito.
+let manejadorReautenticacion: (() => Promise<void>) | null = null;
+let reautenticacionEnCurso: Promise<void> | null = null;
+
+/** SessionKeeper registra (al montar) o quita (null, al desmontar) el manejador que abre la ventana de re-ingreso. */
+export function registrarReautenticacion(fn: (() => Promise<void>) | null): void {
+  manejadorReautenticacion = fn;
+}
+
+/**
+ * Pide al usuario que vuelva a entrar. Mientras este pendiente, todas las llamadas comparten la misma promesa
+ * (una sola ventana). Sin manejador registrado la rechaza con SesionVencidaError.
+ */
+export function pedirReautenticacion(): Promise<void> {
+  if (reautenticacionEnCurso) return reautenticacionEnCurso;
+  const manejador = manejadorReautenticacion;
+  if (!manejador) return Promise.reject(new SesionVencidaError());
+  // El manejador corre en un microtask: la promesa ya esta registrada como pendiente cuando se abre la ventana.
+  const promesa = Promise.resolve().then(() => manejador());
+  reautenticacionEnCurso = promesa;
+  const limpiar = () => {
+    if (reautenticacionEnCurso === promesa) reautenticacionEnCurso = null;
+  };
+  promesa.then(limpiar, limpiar);
+  return promesa;
+}
+
+export function hayReautenticacionPendiente(): boolean {
+  return reautenticacionEnCurso !== null;
+}
+
+type ResultadoRenovacion = 'ok' | 'no-autorizado' | 'error';
+let renovacionEnCurso: Promise<ResultadoRenovacion> | null = null;
+
+/**
+ * Renueva la sesion con POST /auth/refresh (fetch directo, no apiFetch, para no entrar en recursion).
+ * Una sola renovacion en curso. 'ok' guarda el token nuevo; 'no-autorizado' (401 o sin token) y 'error'
+ * (red, 404 de un backend viejo, 500) no tocan nada: decide SessionKeeper.
+ */
+export function renovarSesion(): Promise<ResultadoRenovacion> {
+  if (renovacionEnCurso) return renovacionEnCurso;
+  const promesa = (async (): Promise<ResultadoRenovacion> => {
+    const token = getToken();
+    if (!token) return 'no-autorizado';
+    try {
+      const res = await fetch(`${API_URL}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      if (res.status === 401) return 'no-autorizado';
+      if (!res.ok) return 'error';
+      const data = await res.json();
+      if (!data || typeof data.access_token !== 'string' || !data.access_token) return 'error';
+      // Si mientras tanto el token cambio (re-ingreso en la ventana), no se pisa con el renovado del viejo.
+      if (getToken() === token) localStorage.setItem('token', data.access_token);
+      return 'ok';
+    } catch {
+      return 'error';
+    }
+  })();
+  renovacionEnCurso = promesa;
+  promesa.then(() => {
+    if (renovacionEnCurso === promesa) renovacionEnCurso = null;
+  });
+  return promesa;
+}
+
 /**
  * Canonical authenticated fetch helper.
  * Returns the parsed JSON response body directly (not the raw Response).
  * All callers in the codebase use the result as JSON (e.g. d?.data, Array.isArray(d)).
  * Always uses the correct auth key `'token'` via getToken().
+ *
+ * Ante un 401 (H23): con SessionKeeper montado espera el re-ingreso y reintenta UNA vez con el token nuevo (el 401
+ * garantiza que el servidor no ejecuto nada); un reintento que vuelve a dar 401 lanza SesionVencidaError sin
+ * redirigir; fuera del dashboard (sin manejador) borra el token, guarda returnUrl y redirige una sola vez a /login.
  */
 export async function apiFetch(
   path: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  _reintento = false
 ): Promise<any> {
   const token = getToken();
   const headers: Record<string, string> = {
@@ -34,6 +117,15 @@ export async function apiFetch(
   const res = await fetch(`${API_URL}${path}`, { ...options, headers });
   if (!res.ok) {
     if (res.status === 401) {
+      if (_reintento) throw new SesionVencidaError();
+      if (manejadorReautenticacion) {
+        try {
+          await pedirReautenticacion();
+        } catch {
+          throw new SesionVencidaError();
+        }
+        return apiFetch(path, options, true);
+      }
       if (typeof window !== 'undefined') {
         localStorage.removeItem('token');
         const currentPath = window.location.pathname + window.location.search;
@@ -46,7 +138,7 @@ export async function apiFetch(
           window.location.replace('/login?reason=session-expired');
         }
       }
-      throw new Error('Tu sesión venció. Inicia sesión nuevamente para continuar.');
+      throw new SesionVencidaError();
     }
 
     const errBody = await res.json().catch(() => ({}));
@@ -73,7 +165,10 @@ export async function apiFetch(
 export async function handleResponse(res: Response) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.status === 'error' || data.status === 'fail') {
-    throw new Error(data.message || data.detail || 'Error en la petición a Producción');
+    // El status HTTP viaja en el error (p. ej. la ventana de re-ingreso distingue 401 = contraseña incorrecta).
+    const error: Error & { status?: number } = new Error(data.message || data.detail || 'Error en la petición a Producción');
+    error.status = res.status;
+    throw error;
   }
   // Standard JSend: { status: 'success', data: { ... } }
   return data.data !== undefined ? data.data : data;

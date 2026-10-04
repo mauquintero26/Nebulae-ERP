@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { AlertTriangle } from 'lucide-react';
-import { apiFetch } from '@/lib/api';
+import { apiFetch, hayReautenticacionPendiente } from '@/lib/api';
 
 export function AlertasBadge() {
   const router = useRouter();
@@ -11,6 +11,9 @@ export function AlertasBadge() {
   useEffect(() => {
     let mounted = true;
     async function load() {
+      // H23: con la ventana de re-ingreso abierta o la pestana oculta no se consulta (no se acumulan peticiones
+      // esperando el re-ingreso en una pestana olvidada).
+      if (hayReautenticacionPendiente() || document.visibilityState === 'hidden') return;
       try {
         const res = await apiFetch('/ventas/alertas/resumen');
         if (mounted) setCount(res?.data?.atrasados ?? 0);

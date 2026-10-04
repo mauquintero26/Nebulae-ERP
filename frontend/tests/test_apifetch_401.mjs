@@ -1,123 +1,245 @@
-﻿/**
- * frontend/tests/test_apifetch_401.test.mjs
- * Test automatizado para verificar el comportamiento de apiFetch ante respuestas HTTP 401:
- * - Limpieza de localStorage.token
- * - Guardado de returnUrl en sessionStorage
- * - Redirección una sola vez a /login?reason=session-expired
- * - Mensaje amigable al usuario (no technical trace)
- * - Ausencia de reintentos automáticos en peticiones POST
+/**
+ * frontend/tests/test_apifetch_401.mjs
+ * H23: apiFetch REAL (src/lib/api.ts, Node 24 quita los tipos) ante un 401.
+ * (a) Con manejador de reautenticacion (SessionKeeper montado): no redirige; pide la reautenticacion una vez y
+ *     reintenta la peticion UNA vez con el token nuevo, devolviendo el JSON del reintento.
+ * (b) Dos 401 concurrentes comparten una sola reautenticacion y ambas se reintentan.
+ * (c) Si el manejador rechaza (boton 'Salir'), lanza 'Tu sesion vencio...' sin reintentar.
+ * (d) Sin manejador (fuera del dashboard): se conserva lo de antes (borra el token, guarda returnUrl, una sola
+ *     redireccion a /login?reason=session-expired y el POST no se reintenta).
+ * (e) Un reintento que vuelve a dar 401 no entra en bucle (2 llamadas a fetch en total).
+ * (f) renovarSesion: POST /auth/refresh con fetch directo, una sola peticion en curso, guarda el token con 200.
+ * Cada caso importa una instancia nueva del modulo (?caso=...) para no compartir el estado interno.
  */
 
 import assert from 'node:assert/strict';
 
-// Simulación del entorno browser (window, localStorage, sessionStorage, fetch)
 class MockStorage {
-  constructor() {
-    this.store = {};
-  }
-  getItem(k) { return this.store[k] ?? null; }
+  constructor() { this.store = {}; }
+  getItem(k) { return Object.prototype.hasOwnProperty.call(this.store, k) ? this.store[k] : null; }
   setItem(k, v) { this.store[k] = String(v); }
   removeItem(k) { delete this.store[k]; }
   clear() { this.store = {}; }
 }
 
-global.localStorage = new MockStorage();
-global.sessionStorage = new MockStorage();
+const definirGlobal = (nombre, valor) =>
+  Object.defineProperty(globalThis, nombre, { value: valor, configurable: true, writable: true });
 
-let redirectedUrls = [];
-global.window = {
+let redirecciones = [];
+definirGlobal('localStorage', new MockStorage());
+definirGlobal('sessionStorage', new MockStorage());
+definirGlobal('window', {
   location: {
-    pathname: '/dashboard/ventas/solicitud',
-    search: '',
-    replace: (url) => {
-      redirectedUrls.push(url);
-    }
-  }
-};
+    pathname: '/dashboard/ventas/venta/12',
+    search: '?tab=chatter',
+    replace: (url) => { redirecciones.push(url); },
+  },
+});
 
-let postFetchCallCount = 0;
-global.fetch = async (url, options = {}) => {
-  if (options.method === 'POST') {
-    postFetchCallCount++;
-  }
-  return {
-    ok: false,
-    status: 401,
-    statusText: 'Unauthorized',
-    json: async () => ({ detail: 'Could not validate credentials' })
-  };
-};
+// fetch simulado: `responder(url, opciones, n)` decide la respuesta de cada llamada; `llamadas` las registra.
+let llamadas = [];
+let responder = () => respuesta(200, {});
+function respuesta(status, cuerpo) {
+  return { ok: status >= 200 && status < 300, status, json: async () => cuerpo };
+}
+definirGlobal('fetch', async (url, opciones = {}) => {
+  llamadas.push({ url, opciones });
+  return responder(url, opciones, llamadas.length);
+});
 
-// Importar apiFetch
-// Cargamos la función emulando el módulo
-let isRedirectingToLogin = false;
-async function apiFetchTest(path, options = {}) {
-  const token = global.localStorage.getItem('token');
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(options.headers || {}),
-    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-  };
-  const res = await global.fetch(`https://api.nebulaekids.com/api/v1${path}`, { ...options, headers });
-  if (!res.ok) {
-    if (res.status === 401) {
-      if (typeof global.window !== 'undefined') {
-        global.localStorage.removeItem('token');
-        const currentPath = global.window.location.pathname + global.window.location.search;
-        if (currentPath && !currentPath.startsWith('/login')) {
-          global.sessionStorage.setItem('returnUrl', currentPath);
-        }
-        if (!isRedirectingToLogin) {
-          isRedirectingToLogin = true;
-          global.window.location.replace('/login?reason=session-expired');
-        }
-      }
-      throw new Error('Tu sesión venció. Inicia sesión nuevamente para continuar.');
-    }
-    const errBody = await res.json().catch(() => ({}));
-    throw new Error(errBody.detail || errBody.message || `HTTP ${res.status}`);
-  }
-  return res.json().catch(() => ({}));
+const MENSAJE = 'Tu sesión venció. Inicia sesión nuevamente para continuar.';
+const autorizacion = (llamada) => llamada.opciones.headers.Authorization;
+
+function reiniciar(token = 'viejo') {
+  localStorage.clear();
+  sessionStorage.clear();
+  if (token) localStorage.setItem('token', token);
+  redirecciones = [];
+  llamadas = [];
 }
 
-async function runTests() {
-  console.log('--- TEST 1: Eliminación de token y guardado de returnUrl ante 401 ---');
-  global.localStorage.setItem('token', 'expired-token-12345');
-  assert.equal(global.localStorage.getItem('token'), 'expired-token-12345');
-  redirectedUrls = [];
-  isRedirectingToLogin = false;
-  postFetchCallCount = 0;
+// 401 mientras el token sea 'viejo'; con cualquier otro token responde 200 con el JSON indicado.
+const r401SiViejo = (cuerpoOk) => (url, opciones) =>
+  opciones.headers.Authorization === 'Bearer viejo' ? respuesta(401, { detail: 'Could not validate credentials' })
+    : respuesta(200, cuerpoOk);
 
-  try {
-    await apiFetchTest('/crm/customers', {
-      method: 'POST',
-      body: JSON.stringify({ first_name: 'Test', last_name: 'User' })
-    });
-    assert.fail('apiFetch debería haber lanzado error con 401');
-  } catch (err) {
-    // Verificar que el token fue eliminado
-    assert.equal(global.localStorage.getItem('token'), null, 'Token debe haber sido eliminado');
-    // Verificar returnUrl
-    assert.equal(global.sessionStorage.getItem('returnUrl'), '/dashboard/ventas/solicitud', 'returnUrl debe ser la ruta actual');
-    // Verificar redirección
-    assert.equal(redirectedUrls.length, 1, 'Debe redirigir exactamente una vez');
-    assert.equal(redirectedUrls[0], '/login?reason=session-expired', 'URL de redirección esperada');
-    // Verificar mensaje amigable
-    assert.equal(err.message, 'Tu sesión venció. Inicia sesión nuevamente para continuar.');
-    assert.ok(!err.message.includes('Could not validate credentials'), 'No debe mostrar mensaje técnico');
-  }
+const cargar = (caso) => import(`../src/lib/api.ts?caso=${caso}`);
 
-  console.log('--- TEST 2: Ausencia de retry automático en POST ---');
-  assert.equal(postFetchCallCount, 1, 'POST debe ejecutarse exactamente 1 vez (sin retries)');
+console.log('--- TEST a: con manejador, un 401 reautentica una vez y reintenta una vez con el token nuevo ---');
+{
+  const api = await cargar('a');
+  reiniciar();
+  let vecesManejador = 0;
+  api.registrarReautenticacion(async () => {
+    vecesManejador++;
+    assert.equal(api.hayReautenticacionPendiente(), true, 'mientras el modal esta abierto hay reautenticacion pendiente');
+    localStorage.setItem('token', 'nuevo');
+  });
+  responder = r401SiViejo({ data: { id: 7, nota: 'guardada' } });
 
-  console.log('--- TEST 3: Múltiples llamadas 401 concurrentes no duplican redirección ---');
+  const cuerpo = JSON.stringify({ texto: 'nota del chatter' });
+  const resultado = await api.apiFetch('/ventas/pedidos/12/notas', { method: 'POST', body: cuerpo });
+
+  assert.equal(vecesManejador, 1, 'el manejador se llama una vez');
+  assert.deepEqual(redirecciones, [], 'no hay redireccion dentro del dashboard');
+  assert.equal(llamadas.length, 2, 'la peticion original y un solo reintento');
+  assert.equal(autorizacion(llamadas[0]), 'Bearer viejo');
+  assert.equal(autorizacion(llamadas[1]), 'Bearer nuevo', 'el reintento lleva el token nuevo');
+  assert.equal(llamadas[1].opciones.method, 'POST');
+  assert.equal(llamadas[1].opciones.body, cuerpo, 'el reintento reenvia el mismo body');
+  assert.ok(llamadas[1].url.endsWith('/ventas/pedidos/12/notas'));
+  assert.equal(resultado.data.nota, 'guardada', 'devuelve el JSON del reintento');
+  assert.equal(localStorage.getItem('token'), 'nuevo', 'el token nuevo no se borra');
+  assert.equal(sessionStorage.getItem('returnUrl'), null);
+  assert.equal(api.hayReautenticacionPendiente(), false, 'al terminar ya no hay reautenticacion pendiente');
+}
+
+console.log('--- TEST b: dos 401 concurrentes comparten una reautenticacion y ambas se reintentan ---');
+{
+  const api = await cargar('b');
+  reiniciar();
+  let vecesManejador = 0;
+  let abrirModal;
+  api.registrarReautenticacion(() => {
+    vecesManejador++;
+    return new Promise((res) => { abrirModal = res; });
+  });
+  responder = (url, opciones) =>
+    opciones.headers.Authorization === 'Bearer viejo' ? respuesta(401, {}) : respuesta(200, { url });
+
+  const p1 = api.apiFetch('/crm/customers', { method: 'POST', body: '{"a":1}' });
+  const p2 = api.apiFetch('/ventas/solicitudes', { method: 'POST', body: '{"b":2}' });
+  // Esperar a que ambas reciban su 401 y queden esperando el modal.
+  for (let i = 0; i < 20 && llamadas.length < 2; i++) await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(llamadas.length, 2);
+  assert.equal(vecesManejador, 1, 'un solo modal para las dos peticiones');
+  assert.equal(api.hayReautenticacionPendiente(), true);
+
+  localStorage.setItem('token', 'nuevo');
+  abrirModal();
+  const [r1, r2] = await Promise.all([p1, p2]);
+  assert.equal(llamadas.length, 4, 'cada una se reintenta una vez');
+  assert.ok(r1.url.endsWith('/crm/customers'));
+  assert.ok(r2.url.endsWith('/ventas/solicitudes'));
+  assert.deepEqual(llamadas.slice(2).map(autorizacion), ['Bearer nuevo', 'Bearer nuevo']);
+  assert.deepEqual(redirecciones, []);
+  assert.equal(api.hayReautenticacionPendiente(), false);
+}
+
+console.log("--- TEST c: si el manejador rechaza ('Salir'), lanza 'Tu sesión venció...' sin reintentar ---");
+{
+  const api = await cargar('c');
+  reiniciar();
+  let vecesManejador = 0;
+  api.registrarReautenticacion(async () => { vecesManejador++; throw new Error('salir'); });
+  responder = () => respuesta(401, { detail: 'Could not validate credentials' });
+
+  await assert.rejects(
+    api.apiFetch('/ventas/pedidos/12/notas', { method: 'POST', body: '{}' }),
+    (err) => {
+      assert.equal(err.message, MENSAJE);
+      assert.ok(err instanceof api.SesionVencidaError, 'es una SesionVencidaError');
+      assert.equal(err.status, 401);
+      return true;
+    },
+  );
+  assert.equal(vecesManejador, 1);
+  assert.equal(llamadas.length, 1, 'sin reintento');
+  assert.deepEqual(redirecciones, [], 'la redireccion la hace SessionKeeper (Salir), no apiFetch');
+  assert.equal(api.hayReautenticacionPendiente(), false);
+}
+
+console.log('--- TEST d: sin manejador se conserva la redireccion a /login (una sola vez, sin reintento) ---');
+{
+  const api = await cargar('d');
+  reiniciar('expired-token-12345');
+  api.registrarReautenticacion(null);
+  responder = () => respuesta(401, { detail: 'Could not validate credentials' });
+
+  await assert.rejects(
+    api.apiFetch('/crm/customers', { method: 'POST', body: JSON.stringify({ first_name: 'Test' }) }),
+    (err) => {
+      assert.equal(err.message, MENSAJE);
+      assert.ok(!err.message.includes('Could not validate credentials'), 'sin mensaje tecnico');
+      assert.ok(err instanceof api.SesionVencidaError);
+      return true;
+    },
+  );
+  assert.equal(localStorage.getItem('token'), null, 'el token se borra');
+  assert.equal(sessionStorage.getItem('returnUrl'), '/dashboard/ventas/venta/12?tab=chatter', 'returnUrl con la query');
+  assert.deepEqual(redirecciones, ['/login?reason=session-expired']);
+  assert.equal(llamadas.length, 1, 'el POST se ejecuta exactamente una vez (sin reintento)');
+
   await Promise.allSettled([
-    apiFetchTest('/crm/customers', { method: 'POST', body: '{}' }),
-    apiFetchTest('/ventas/solicitudes', { method: 'POST', body: '{}' })
+    api.apiFetch('/crm/customers', { method: 'POST', body: '{}' }),
+    api.apiFetch('/ventas/solicitudes', { method: 'POST', body: '{}' }),
   ]);
-  assert.equal(redirectedUrls.length, 1, 'Múltiples llamadas 401 sólo deben generar una redirección');
-
-  console.log('✓ Todos los tests de frontend apiFetch pasaron exitosamente.');
+  assert.equal(redirecciones.length, 1, 'varios 401 solo generan una redireccion');
+  assert.equal(llamadas.length, 3, 'ningun POST se reintenta');
+  await assert.rejects(api.pedirReautenticacion(), (err) => err instanceof api.SesionVencidaError,
+    'sin manejador, pedirReautenticacion rechaza');
 }
 
-runTests();
+console.log('--- TEST e: un reintento que vuelve a dar 401 no entra en bucle ---');
+{
+  const api = await cargar('e');
+  reiniciar();
+  let vecesManejador = 0;
+  api.registrarReautenticacion(async () => { vecesManejador++; localStorage.setItem('token', 'nuevo'); });
+  responder = () => respuesta(401, {});
+
+  await assert.rejects(api.apiFetch('/auth/me'), (err) => err.message === MENSAJE && err.status === 401);
+  assert.equal(llamadas.length, 2, '2 llamadas a fetch en total');
+  assert.equal(vecesManejador, 1);
+  assert.deepEqual(redirecciones, [], 'un reintento fallido no redirige');
+  assert.equal(localStorage.getItem('token'), 'nuevo');
+}
+
+console.log('--- TEST f: los errores que no son 401 no tocan la sesion ---');
+{
+  const api = await cargar('f');
+  reiniciar();
+  let vecesManejador = 0;
+  api.registrarReautenticacion(async () => { vecesManejador++; });
+  responder = () => respuesta(500, { detail: 'Fallo interno' });
+  await assert.rejects(api.apiFetch('/ventas/pedidos'), (err) => err.message === 'Fallo interno');
+  assert.equal(vecesManejador, 0);
+  assert.equal(llamadas.length, 1);
+  assert.equal(localStorage.getItem('token'), 'viejo');
+}
+
+console.log('--- TEST g: renovarSesion usa POST /auth/refresh y guarda el token nuevo ---');
+{
+  const api = await cargar('g');
+  reiniciar();
+  responder = () => respuesta(200, { access_token: 'renovado', token_type: 'bearer', expires_in: 86400 });
+  const [r1, r2] = await Promise.all([api.renovarSesion(), api.renovarSesion()]);
+  assert.equal(r1, 'ok');
+  assert.equal(r2, 'ok');
+  assert.equal(llamadas.length, 1, 'una sola renovacion en curso');
+  assert.ok(llamadas[0].url.endsWith('/auth/refresh'));
+  assert.equal(llamadas[0].opciones.method, 'POST');
+  assert.equal(autorizacion(llamadas[0]), 'Bearer viejo');
+  assert.equal(localStorage.getItem('token'), 'renovado');
+
+  reiniciar();
+  responder = () => respuesta(401, {});
+  assert.equal(await api.renovarSesion(), 'no-autorizado');
+  assert.equal(localStorage.getItem('token'), 'viejo', 'un 401 de la renovacion no borra nada: decide SessionKeeper');
+
+  reiniciar();
+  responder = () => respuesta(404, {});
+  assert.equal(await api.renovarSesion(), 'error', 'backend sin /auth/refresh: se reintenta en el siguiente ciclo');
+
+  reiniciar();
+  responder = () => { throw new TypeError('Failed to fetch'); };
+  assert.equal(await api.renovarSesion(), 'error', 'red caida');
+  assert.equal(localStorage.getItem('token'), 'viejo');
+
+  reiniciar(null);
+  assert.equal(await api.renovarSesion(), 'no-autorizado', 'sin token no hay nada que renovar');
+  assert.equal(llamadas.length, 0);
+}
+
+console.log('✓ Todos los tests de frontend apiFetch pasaron exitosamente.');
