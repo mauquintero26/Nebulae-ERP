@@ -34,7 +34,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Falla a proposito si ya hay pagos TRASLADADO: no se borra ni se reescribe dinero para bajar de version.
+    # Se niega ANTES de tocar nada si ya hay pagos TRASLADADO: no se borra ni se reescribe dinero para bajar de
+    # version, y env.py corre en AUTOCOMMIT (alembic/env.py, isolation_level), asi que un DROP seguido de un ADD
+    # fallido dejaria la tabla sin CHECK.
+    trasladados = op.get_bind().execute(
+        sa.text("SELECT count(*) FROM sale_order_payments WHERE estado = 'TRASLADADO'")).scalar()
+    if trasladados:
+        raise RuntimeError(
+            f"No se puede bajar de fa6_024: hay {trasladados} pagos en estado TRASLADADO (saldo a favor trasladado "
+            "entre pedidos). El CHECK anterior no los admite; resolverlos a mano antes de bajar de version.")
     op.drop_constraint("chk_sop_estado", "sale_order_payments", type_="check")
     op.create_check_constraint("chk_sop_estado", "sale_order_payments", f"estado IN {_ESTADOS_ANTES}")
     op.drop_column("sales_quotations", "anticipo_manual_nota")

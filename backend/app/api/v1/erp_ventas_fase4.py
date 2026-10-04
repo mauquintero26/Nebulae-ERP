@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status, 
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func, text, and_, or_
 from typing import Optional, List, Dict, Any
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 import datetime
 import hashlib
 import json
@@ -39,9 +39,9 @@ from app.models.fase4 import (
 )
 from app.models.users import User
 from app.core.ventas_dinero import (
-    redondear_peso, pesos, formato_pct, pct_anticipo_cotizacion, anticipo_requerido, saldos_a_favor_de_cotizacion,
-    metodo_pago_anticipo, METODOS_PAGO_ANTICIPO, METODO_PAGO_TRASLADO, METODO_PAGO_SALDO_A_FAVOR,
-    ESTADO_PAGO_TRASLADADO,
+    redondear_peso, pesos, formato_pct, pct_anticipo_cotizacion, anticipo_requerido, anticipo_del_pedido,
+    saldos_a_favor_de_cotizacion, metodo_pago_anticipo, METODOS_PAGO_ANTICIPO, METODO_PAGO_TRASLADO,
+    METODO_PAGO_SALDO_A_FAVOR, ESTADO_PAGO_TRASLADADO,
 )
 from app.api.dependencies import (
     require_roles, get_current_user,
@@ -241,18 +241,17 @@ def recalculate_sale_order_state(so: SaleOrder, db: Session) -> str:
     if any_delivered:
         return "PARCIALMENTE_ENTREGADO"
 
-    # Pagos. El % real del pedido: una venta a credito guarda 0, que con `or 60` volvia a exigir el 60%
-    # (H36+H43, R12). El requerido en pesos enteros, igual que al convertir la cotizacion (anticipo_requerido):
-    # pagar exactamente el anticipo que se pidio lo cubre, sin que unos centavos lo dejen pendiente.
-    anticipo_req_pct = (Decimal(str(so.anticipo_pct_snapshot)) if so.anticipo_pct_snapshot is not None
-                        else Decimal("60.00"))
+    # Pagos. anticipo_del_pedido es la misma cuenta que GET /pedidos/{id}: el % real del pedido (una venta a
+    # credito guarda 0, que con `or 60` volvia a exigir el 60%: H36+H43, R12), el requerido en pesos enteros
+    # igual que al convertir la cotizacion, y lo pagado al peso (un pedido viejo con centavos no queda debiendo
+    # $0,15). Pagar exactamente el anticipo que se pidio lo cubre.
     total_cop = Decimal(str(so.total_cop or 0))
-    anticipo_min_cop = anticipo_requerido(total_cop, anticipo_req_pct)
     saldo_cop = Decimal(str(so.saldo_cop or 0))
     pagado_cop = total_cop - saldo_cop
+    _, anticipo_pendiente = anticipo_del_pedido(so)
 
     # Anticipo no cubierto
-    if pagado_cop < anticipo_min_cop and pagado_cop < total_cop:
+    if anticipo_pendiente > 0 and pagado_cop < total_cop:
         return "PENDIENTE_ANTICIPO"
 
     # Líneas reservadas
@@ -708,6 +707,41 @@ def confirm_immediate_sale_line(
 # 3. PAGOS Y REVERSIONES (FINANZAS Y LEDGER INMUTABLE)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _cabecera_desde_el_libro_de_pagos(so: SaleOrder, db: Session) -> Decimal:
+    """Deja anticipo_cop y saldo_cop del pedido iguales a lo que dicen sus pagos CONFIRMADO y devuelve el neto
+    pagado. anticipo_cop = suma de ANTICIPO; saldo_cop = total - (ingresos - devoluciones), nunca negativo. Lee la
+    base: el llamador hace flush() antes de llamarla (las sesiones del API no hacen autoflush)."""
+    pagos_positivos = db.query(
+        func.coalesce(func.sum(SaleOrderPayment.monto), Decimal("0.00"))
+    ).filter(
+        SaleOrderPayment.sale_order_id == so.id,
+        SaleOrderPayment.estado == "CONFIRMADO",
+        SaleOrderPayment.tipo.in_(["ANTICIPO", "ABONO", "PAGO_TOTAL", "PAGO_SALDO", "AJUSTE_AUTORIZADO"])
+    ).scalar() or Decimal("0.00")
+
+    devoluciones = db.query(
+        func.coalesce(func.sum(SaleOrderPayment.monto), Decimal("0.00"))
+    ).filter(
+        SaleOrderPayment.sale_order_id == so.id,
+        SaleOrderPayment.estado == "CONFIRMADO",
+        SaleOrderPayment.tipo == "DEVOLUCION"
+    ).scalar() or Decimal("0.00")
+
+    total_anticipos = db.query(
+        func.coalesce(func.sum(SaleOrderPayment.monto), Decimal("0.00"))
+    ).filter(
+        SaleOrderPayment.sale_order_id == so.id,
+        SaleOrderPayment.estado == "CONFIRMADO",
+        SaleOrderPayment.tipo == "ANTICIPO"
+    ).scalar() or Decimal("0.00")
+
+    total_cop = Decimal(str(so.total_cop or 0))
+    net_pagado = max(Decimal("0.00"), Decimal(str(pagos_positivos)) - Decimal(str(devoluciones)))
+    so.anticipo_cop = total_anticipos
+    so.saldo_cop = max(Decimal("0.00"), total_cop - net_pagado)
+    return net_pagado
+
+
 @router.post("/pedidos/{so_id}/pagos", status_code=status.HTTP_201_CREATED)
 def register_sale_order_payment(
     so_id: int,
@@ -813,34 +847,7 @@ def register_sale_order_payment(
     db.flush()
 
     # Recalcular totales desde el ledger
-    pagos_positivos = db.query(
-        func.coalesce(func.sum(SaleOrderPayment.monto), Decimal("0.00"))
-    ).filter(
-        SaleOrderPayment.sale_order_id == so.id,
-        SaleOrderPayment.estado == "CONFIRMADO",
-        SaleOrderPayment.tipo.in_(["ANTICIPO", "ABONO", "PAGO_TOTAL", "PAGO_SALDO", "AJUSTE_AUTORIZADO"])
-    ).scalar() or Decimal("0.00")
-
-    devoluciones = db.query(
-        func.coalesce(func.sum(SaleOrderPayment.monto), Decimal("0.00"))
-    ).filter(
-        SaleOrderPayment.sale_order_id == so.id,
-        SaleOrderPayment.estado == "CONFIRMADO",
-        SaleOrderPayment.tipo == "DEVOLUCION"
-    ).scalar() or Decimal("0.00")
-
-    total_anticipos = db.query(
-        func.coalesce(func.sum(SaleOrderPayment.monto), Decimal("0.00"))
-    ).filter(
-        SaleOrderPayment.sale_order_id == so.id,
-        SaleOrderPayment.estado == "CONFIRMADO",
-        SaleOrderPayment.tipo == "ANTICIPO"
-    ).scalar() or Decimal("0.00")
-
-    total_cop = Decimal(str(so.total_cop or 0))
-    net_pagado = max(Decimal("0.00"), Decimal(str(pagos_positivos)) - Decimal(str(devoluciones)))
-    so.anticipo_cop = total_anticipos
-    so.saldo_cop = max(Decimal("0.00"), total_cop - net_pagado)
+    net_pagado = _cabecera_desde_el_libro_de_pagos(so, db)
 
     old_estado = so.estado
     so.estado = recalculate_sale_order_state(so, db)
@@ -2698,7 +2705,9 @@ def _trasladar_saldos_a_favor(db: Session, saldos: list, monto_a_trasladar: Deci
       pedido nuevo, no se vuelve a trasladar y las sumas de pagos CONFIRMADO (cartera, CRM 360) no lo cuentan
       dos veces;
     - si no cupo todo (el total nuevo es menor), lo que sobra queda en el cancelado como un pago CONFIRMADO
-      metodo 'SALDO_A_FAVOR': sigue siendo del cliente y cuenta para una conversion futura.
+      metodo 'SALDO_A_FAVOR': sigue siendo del cliente y cuenta para una conversion futura;
+    - la cabecera del cancelado (anticipo_cop / saldo_cop) se recalcula desde su libro, con la misma regla que
+      un pago registrado: el dinero trasladado deja de figurar ahi (solo queda lo que sigue CONFIRMADO).
     Deja la Actividad del cancelado; devuelve la del pedido nuevo para agregarla despues de su CREATED."""
     renglones_del_nuevo = []
     restante = monto_a_trasladar
@@ -2726,6 +2735,9 @@ def _trasladar_saldos_a_favor(db: Session, saldos: list, monto_a_trasladar: Deci
                 notes=(f"Saldo a favor que no cupo en {new_so.numero}: de {pesos(saldo['monto'])} se trasladaron "
                        f"{pesos(monto)}"),
             ))
+        db.flush()
+        _cabecera_desde_el_libro_de_pagos(origen, db)
+        origen.updated_at = _now()
         db.add(ActivityLog(
             entity_type="VEN", entity_id=origen.id, entity_numero=origen.numero, action="SALDO_A_FAVOR_TRASLADADO",
             description=(f"Saldo a favor de {pesos(monto)} trasladado hacia {new_so.numero}"
@@ -2869,7 +2881,11 @@ def convertir_cotizacion_a_venta(
     if ver is not None:
         # R4: un pago menor que lo que falta se acepta (el pedido queda debiendo la diferencia); mayor que 0 y,
         # junto con el saldo a favor trasladado, sin pasar del total.
-        verificado = redondear_peso(ver.monto)
+        try:
+            verificado = redondear_peso(ver.monto)
+        except ValueError:  # p. ej. 1e28: no cabe en la precision; seria un 500
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                                detail="El monto verificado no es un monto válido.")
         metodo_verificado = metodo_pago_anticipo(ver.metodo_pago)
         if metodo_verificado is None:
             raise HTTPException(
@@ -2902,7 +2918,8 @@ def convertir_cotizacion_a_venta(
     saldo_cop = total_cop - pagado_cop
     subtotal_cop = redondear_peso(cot.subtotal_cop or total_cop)
     descuento_pct = Decimal(str(cot.descuento_pct or 0))
-    pct_snapshot = pct.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    # pct ya viene a 2 decimales (pct_anticipo_cotizacion): el snapshot reproduce el mismo requerido.
+    pct_snapshot = pct
 
     new_so = SaleOrder(
         numero=ven_numero,
@@ -2964,7 +2981,12 @@ def convertir_cotizacion_a_venta(
         parcial = verificado < por_verificar
         pendiente = por_verificar - verificado if parcial else Decimal("0")
         quien = f"{verificador} ({metodo_verificado}, ref. {ver.referencia})"
-        if parcial:
+        if parcial and traslado > 0:
+            # R4 + R6: nombrar las dos cifras (lo que faltaba tras el saldo a favor, y el anticipo requerido).
+            descripcion = (f"Anticipo parcial verificado: {pesos(verificado)} de {pesos(por_verificar)} que faltaban "
+                           f"(anticipo requerido {pesos(requerido)}; {pesos(traslado)} cubiertos con saldo a favor). "
+                           f"Queda debiendo {pesos(pendiente)} de anticipo. Verificado por {quien}.")
+        elif parcial:
             # R4: el pedido se crea igual y queda debiendo la diferencia del anticipo.
             descripcion = (f"Anticipo parcial verificado: {pesos(verificado)} de {pesos(por_verificar)} requerido. "
                            f"Queda debiendo {pesos(pendiente)} de anticipo. Verificado por {quien}.")

@@ -6,14 +6,19 @@
   existe el pago automatico 'CONVERSION_COTIZACION'.
 - R4: un pago menor que el requerido se acepta (monto > 0 y <= total): el pedido queda debiendo la diferencia.
 - R6: el dinero de un pedido CANCELADO de la misma cotizacion se traslada al pedido nuevo como saldo a favor
-  (pago 'TRASLADO'); los pagos de origen quedan TRASLADADO y nunca se trasladan dos veces.
-- recalculate_sale_order_state usa el % real del pedido (0 a credito) y el requerido en pesos enteros.
+  (pago 'TRASLADO'); los pagos de origen quedan TRASLADADO y nunca se trasladan dos veces. Los pagos automaticos
+  viejos 'CONVERSION_COTIZACION' (nadie los verifico) no son saldo a favor.
+- recalculate_sale_order_state y GET /pedidos/{id} usan la misma cuenta del anticipo (anticipo_del_pedido): el
+  % real del pedido (0 a credito), el requerido en pesos enteros y lo pagado al peso.
 
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_anticipo_verificado
 """
 import datetime
+import uuid
 import zoneinfo
 from decimal import Decimal
+
+import pytest
 
 MOD_60_40 = "60/40 (60% anticipo - 40% pendiente)"
 TIPOS_INGRESO = ("ANTICIPO", "ABONO", "PAGO_TOTAL", "PAGO_SALDO")
@@ -21,6 +26,16 @@ TIPOS_INGRESO = ("ANTICIPO", "ABONO", "PAGO_TOTAL", "PAGO_SALDO")
 
 def auth(token):
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def compras_token(db):
+    """Usuario COMPRAS (dentro de la transaccion revertida): no crea pedidos ni verifica pagos."""
+    from app.core.security import create_access_token
+    from app.models.users import User
+    u = User(email=f"compras-{uuid.uuid4().hex[:6]}@test.nebulae", password_hash="x", role="COMPRAS", is_active=True)
+    db.add(u); db.commit()
+    return create_access_token({"sub": str(u.id), "role": u.role})
 
 
 def _hoy():
@@ -340,6 +355,8 @@ def test_cancelar_y_convertir_otra_vez_traslada_el_saldo_a_favor_una_sola_vez(ap
     assert traslado.monto == Decimal("600000") and traslado.referencia_bancaria == pven1.numero
     assert pven2.anticipo_cop == Decimal("600000") and pven2.saldo_cop == Decimal("400000")
     assert [p.estado for p in _pagos(db, pven1.id)] == ["TRASLADADO"]
+    # La cabecera del cancelado sale de su libro: el dinero trasladado ya no figura ahi.
+    assert pven1_.anticipo_cop == Decimal("0") and pven1_.saldo_cop == Decimal("1000000")
     assert _dinero_vivo_de_la_cotizacion(db, cot.id) == Decimal("600000")
     assert [l.description for l in _logs(db, "VEN", pven2.id, "SALDO_A_FAVOR_TRASLADADO")] == [
         f"Saldo a favor de $600.000 trasladado desde {pven1.numero}"]
@@ -374,10 +391,12 @@ def test_saldo_a_favor_mayor_que_el_total_nuevo_deja_el_resto_a_favor(app_client
 
     resp = _convertir(app_client, admin_token, cot.id)
     assert resp.status_code == 200, resp.text
-    _, pven2 = _pedidos(db, cot.id)
+    pven1_, pven2 = _pedidos(db, cot.id)
     [traslado] = _pagos(db, pven2.id)
     assert traslado.monto == Decimal("800000") and traslado.metodo_pago == "TRASLADO"
     assert pven2.saldo_cop == Decimal("0")
+    # En la cabecera del cancelado solo queda lo que sigue CONFIRMADO (el resto a favor).
+    assert pven1_.anticipo_cop == Decimal("200000") and pven1_.saldo_cop == Decimal("800000")
     original, resto = _pagos(db, pven1.id)
     assert original.estado == "TRASLADADO"
     assert (resto.estado, resto.tipo, resto.monto, resto.metodo_pago) == (
@@ -472,3 +491,145 @@ def test_estado_del_pedido_usa_el_requerido_en_pesos_enteros(db):
     assert recalculate_sale_order_state(so, db) == "CONFIRMADO"
     so_corto = _so_con_linea(db, "PVEN-EST003", 1000002, 1000002 - 600000, 60)
     assert recalculate_sale_order_state(so_corto, db) == "PENDIENTE_ANTICIPO"
+
+
+def test_pedido_viejo_con_centavos_no_queda_debiendo_centavos(app_client, db, admin_token):
+    """Fix 4: un PVEN heredado de 2.786.923,08 con 1.672.153,85 pagados (el 60% a centavos) tiene cubierto el
+    anticipo: lo pagado se compara al peso."""
+    from app.api.v1.erp_ventas_fase4 import recalculate_sale_order_state
+    so = _so_con_linea(db, "PVEN-EST004", Decimal("2786923.08"), Decimal("2786923.08") - Decimal("1672153.85"), 60)
+    assert recalculate_sale_order_state(so, db) == "CONFIRMADO"
+    d = app_client.get(f"/api/v1/ventas/pedidos/{so.id}", headers=auth(admin_token)).json()["data"]
+    assert d["anticipo_requerido"] == 1672154 and d["anticipo_pendiente"] == 0
+
+
+# --- Fix round 1 de la revision ----------------------------------------------------------------------------
+
+def _pven_cancelado_con_pago(db, cot, numero, monto, metodo):
+    from app.models.erp_documents import SaleOrder
+    from app.models.fase4 import SaleOrderPayment
+    so = SaleOrder(numero=numero, cot_id=cot.id, customer_name="Cliente Prueba", estado="CANCELADO",
+                   total_cop=cot.total_cop, anticipo_cop=monto, saldo_cop=cot.total_cop - monto)
+    db.add(so); db.flush()
+    db.add(SaleOrderPayment(sale_order_id=so.id, tipo="ANTICIPO", monto=monto, moneda="COP", metodo_pago=metodo,
+                            fecha=_hoy(), estado="CONFIRMADO", referencia_bancaria=f"COT-{cot.numero}",
+                            idempotency_key=f"PAGO-{numero}"))
+    db.commit(); db.refresh(so)
+    return so
+
+
+def test_pago_automatico_sin_verificar_no_es_saldo_a_favor(app_client, db, admin_token):
+    """Fix 1: el pago automatico viejo 'CONVERSION_COTIZACION' (nadie lo verifico) no se traslada ni descuenta
+    lo que hay que verificar; queda CONFIRMADO en su pedido para que T14 lo resuelva con el usuario."""
+    sc = _sc(db, "SC-FIX001", MOD_60_40)
+    cot = _cot_confirmada(db, "COT-FIX001", 1000000, 600000, sc)
+    viejo = _pven_cancelado_con_pago(db, cot, "PVEN-FIX001", Decimal("600000"), "CONVERSION_COTIZACION")
+    d = app_client.get(f"/api/v1/ventas/cotizaciones/{cot.id}", headers=auth(admin_token)).json()["data"]
+    assert d["saldo_a_favor"] == 0 and d["saldo_a_favor_detalle"] == []
+    assert d["anticipo_por_verificar"] == d["anticipo_requerido"] == 600000
+
+    resp = _confirmar(app_client, admin_token, cot.id)
+    assert resp.status_code == 422, resp.text
+    assert "anticipo de $600.000" in resp.json()["detail"]
+    assert [p.estado for p in _pagos(db, viejo.id)] == ["CONFIRMADO"]
+
+    resp = _confirmar(app_client, admin_token, cot.id, _ver(600000))
+    assert resp.status_code == 200, resp.text
+    nuevo = [so for so in _pedidos(db, cot.id) if so.id != viejo.id][0]
+    [pago] = _pagos(db, nuevo.id)
+    assert pago.metodo_pago == "Transferencia bancaria" and pago.monto == Decimal("600000")
+    assert [p.estado for p in _pagos(db, viejo.id)] == ["CONFIRMADO"]
+
+
+def test_anticipo_pagado_exacto_con_total_impar_no_queda_pendiente(app_client, db, admin_token):
+    """Fix 3: el requerido del pedido (snapshot) es el mismo que se verifico al crearlo."""
+    from app.api.v1.erp_ventas_fase4 import recalculate_sale_order_state
+    sc = _sc(db, "SC-FIX002", MOD_60_40)
+    cot = _cot_confirmada(db, "COT-FIX002", 1000003, 0, sc)        # 60% = 600.001,8 -> $600.002
+    resp = _confirmar(app_client, admin_token, cot.id, _ver(600002))
+    assert resp.status_code == 200, resp.text
+    [so] = _pedidos(db, cot.id)
+    assert so.estado == "PENDIENTE_COMPRA"
+    d = app_client.get(f"/api/v1/ventas/pedidos/{so.id}", headers=auth(admin_token)).json()["data"]
+    assert d["anticipo_requerido"] == 600002 and d["anticipo_pendiente"] == 0
+    assert recalculate_sale_order_state(so, db) == "CONFIRMADO"
+    [renglon] = _logs(db, "VEN", so.id, "ANTICIPO_VERIFICADO")
+    assert "parcial" not in renglon.description
+
+
+def test_porcentaje_heredado_no_exacto_exige_lo_mismo_en_la_cot_y_en_el_pedido(app_client, db, admin_token):
+    """Fix 3: COT sin SC con un dato viejo de 1.000.000 sobre 1.500.000 (66,666...%): el % sale a 2 decimales
+    (66,67%) en la COT, en la conversion y en el snapshot, asi que pagar lo pedido cubre el anticipo."""
+    from app.api.v1.erp_ventas_fase4 import recalculate_sale_order_state
+    cot = _cot_confirmada(db, "COT-FIX003", 1500000, 1000000)
+    d = app_client.get(f"/api/v1/ventas/cotizaciones/{cot.id}", headers=auth(admin_token)).json()["data"]
+    assert d["anticipo_pct"] == 66.67 and d["anticipo_requerido"] == 1000050
+    resp = _confirmar(app_client, admin_token, cot.id, _ver(1000050))
+    assert resp.status_code == 200, resp.text
+    [so] = _pedidos(db, cot.id)
+    assert so.anticipo_pct_snapshot == Decimal("66.67")
+    d = app_client.get(f"/api/v1/ventas/pedidos/{so.id}", headers=auth(admin_token)).json()["data"]
+    assert d["anticipo_requerido"] == 1000050 and d["anticipo_pendiente"] == 0
+    assert recalculate_sale_order_state(so, db) == "CONFIRMADO"
+
+
+def test_pago_parcial_con_traslado_nombra_las_dos_cifras(app_client, db, admin_token):
+    """Fix 5: con saldo a favor, la Actividad de R4 dice lo que faltaba y el anticipo requerido."""
+    sc = _sc(db, "SC-FIX004", MOD_60_40)
+    cot = _cot_confirmada(db, "COT-FIX004", 1000000, 600000, sc)
+    assert _confirmar(app_client, admin_token, cot.id, _ver(300000)).status_code == 200
+    [pven1] = _pedidos(db, cot.id)
+    _cancelar_y_reconfirmar(app_client, db, admin_token, pven1, cot)
+    resp = _confirmar(app_client, admin_token, cot.id, _ver(200000, referencia="BANCOL-789"))
+    assert resp.status_code == 200, resp.text
+    _, pven2 = _pedidos(db, cot.id)
+    assert pven2.anticipo_cop == Decimal("500000") and pven2.saldo_cop == Decimal("500000")
+    [renglon] = _logs(db, "VEN", pven2.id, "ANTICIPO_VERIFICADO")
+    assert renglon.description.startswith(
+        "Anticipo parcial verificado: $200.000 de $300.000 que faltaban (anticipo requerido $600.000; "
+        "$300.000 cubiertos con saldo a favor). Queda debiendo $100.000 de anticipo.")
+    d = app_client.get(f"/api/v1/ventas/pedidos/{pven2.id}", headers=auth(admin_token)).json()["data"]
+    assert d["anticipo_pendiente"] == 100000
+
+
+def test_monto_enorme_responde_422_no_500(app_client, db, admin_token):
+    """Fix 7: un monto que no cabe en la precision no tumba el servidor, por ninguna de las dos rutas."""
+    cot = _cot_confirmada(db, "COT-FIX005", 1000000, 600000)
+    for llamar in (_confirmar, _convertir):
+        resp = llamar(app_client, admin_token, cot.id, _ver(1e28))
+        assert resp.status_code == 422, resp.text
+        assert "no es un monto válido" in resp.json()["detail"]
+        resp = llamar(app_client, admin_token, cot.id, _ver(1e20))
+        assert resp.status_code == 422, resp.text
+        assert "supera el total del pedido" in resp.json()["detail"]
+    assert _pedidos(db, cot.id) == []
+
+
+def test_traslado_por_la_ruta_de_la_pantalla(app_client, db, admin_token):
+    """Fix 9: R6 tambien por POST /cotizaciones/{id}/confirmar, la ruta que usa la pantalla."""
+    sc = _sc(db, "SC-FIX006", MOD_60_40)
+    cot = _cot_confirmada(db, "COT-FIX006", 1000000, 600000, sc)
+    assert _confirmar(app_client, admin_token, cot.id, _ver(600000)).status_code == 200
+    [pven1] = _pedidos(db, cot.id)
+    _cancelar_y_reconfirmar(app_client, db, admin_token, pven1, cot)
+    resp = _confirmar(app_client, admin_token, cot.id)   # sin verificacion: el traslado cubre el anticipo
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["idempotent_replay"] is False and data["sale_order_id"] != pven1.id
+    assert data["pedido_venta"]["anticipo_cop"] == 600000 and data["pedido_venta"]["saldo_cop"] == 400000
+    [traslado] = _pagos(db, data["sale_order_id"])
+    assert (traslado.metodo_pago, traslado.monto, traslado.referencia_bancaria) == (
+        "TRASLADO", Decimal("600000"), pven1.numero)
+    assert [p.estado for p in _pagos(db, pven1.id)] == ["TRASLADADO"]
+    assert _dinero_vivo_de_la_cotizacion(db, cot.id) == Decimal("600000")
+
+
+def test_compras_no_puede_crear_el_pedido_ni_verificar_el_pago(app_client, db, compras_token):
+    """Fix 9: solo quien crea el pedido (asesor o administracion) verifica el pago."""
+    cot = _cot_confirmada(db, "COT-FIX007", 1000000, 600000)
+    for llamar in (_confirmar, _convertir):
+        resp = llamar(app_client, compras_token, cot.id, _ver(600000))
+        assert resp.status_code == 403, resp.text
+    assert _pedidos(db, cot.id) == []
+    db.refresh(cot)
+    assert cot.gate2_confirmed_at is not None

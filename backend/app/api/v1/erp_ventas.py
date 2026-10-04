@@ -26,8 +26,8 @@ from app.models.users import User
 from app.core.busqueda import productos_ilike
 from app.core import cambios_documento
 from app.core.ventas_dinero import (
-    redondear_peso, pesos, formato_pct, pct_anticipo_cotizacion, anticipo_requerido, saldos_a_favor_de_cotizacion,
-    PCT_ANTICIPO_POR_DEFECTO,
+    redondear_peso, pesos, formato_pct, pct_anticipo_cotizacion, anticipo_requerido, anticipo_del_pedido,
+    saldos_a_favor_de_cotizacion, PCT_ANTICIPO_POR_DEFECTO,
 )
 from app.core.textos_actividad import etiqueta_estado
 from app.api.v1.schemas_compras import CancelarSolicitudBody
@@ -228,11 +228,36 @@ def _recalcular_anticipo_por_modalidad(db: Session, sc: CustomerRequest, user_na
 def _leer_ajuste_anticipo_manual(db: Session, cot: SalesQuotation, body: dict):
     """R3: valida el anticipo manual del PATCH de la COT ANTES de tocar nada.
 
-    None si el body no trae 'anticipo_pct_manual'. Si lo trae: (pct, nota) a guardar, o (None, None) para volver
-    a la modalidad. 409 si la COT esta rechazada/cancelada o ya se convirtio (pedido vigente); 422 si el % no esta
-    entre 0 y 100 o la nota tiene menos de 5 caracteres."""
+    None si el body no trae 'anticipo_pct_manual' o si trae lo mismo que ya esta guardado (un formulario que
+    reenvia el valor no bloquea el resto del PATCH). Si cambia: (pct, nota) a guardar, o (None, None) para volver
+    a la modalidad. 422 si el % no esta entre 0 y 100 o la nota tiene menos de 5 caracteres (un % distinto exige
+    su propia nota; con el mismo % la nota puede omitirse). 409, solo cuando de verdad cambia, si la COT esta
+    rechazada/cancelada o ya se convirtio (pedido vigente)."""
     if "anticipo_pct_manual" not in body:
         return None
+    valor = body.get("anticipo_pct_manual")
+    if valor is None:
+        if cot.anticipo_pct_manual is None:
+            return None
+        ajuste = (None, None)
+    else:
+        try:
+            if isinstance(valor, bool):
+                raise ValueError
+            pct = Decimal(str(valor).strip())
+            if not pct.is_finite() or pct < 0 or pct > 100:
+                raise ValueError
+        except (InvalidOperation, ValueError):
+            raise HTTPException(422, "El anticipo manual debe ser un porcentaje entre 0% y 100%.")
+        pct = pct.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        nota_en_body = "anticipo_manual_nota" in body
+        nota = body.get("anticipo_manual_nota")
+        nota = nota.strip() if isinstance(nota, str) else ""
+        if pct == cot.anticipo_pct_manual and (not nota_en_body or nota == cot.anticipo_manual_nota):
+            return None
+        if len(nota) < 5:
+            raise HTTPException(422, "Escribe una nota de al menos 5 caracteres que explique el anticipo manual.")
+        ajuste = (pct, nota)
     if cot.estado in ("RECHAZADA", "CANCELADA"):
         raise HTTPException(409, f"El anticipo ya no se puede ajustar: la cotización está "
                                  f"{etiqueta_estado('COT', cot.estado).lower()}.")
@@ -240,22 +265,7 @@ def _leer_ajuste_anticipo_manual(db: Session, cot: SalesQuotation, body: dict):
     if vigente is not None:
         raise HTTPException(409, f"El anticipo ya no se puede ajustar: la cotización ya tiene el pedido "
                                  f"{vigente.numero} vigente.")
-    valor = body.get("anticipo_pct_manual")
-    if valor is None:
-        return (None, None)
-    try:
-        if isinstance(valor, bool):
-            raise ValueError
-        pct = Decimal(str(valor).strip())
-        if not pct.is_finite() or pct < 0 or pct > 100:
-            raise ValueError
-    except (InvalidOperation, ValueError):
-        raise HTTPException(422, "El anticipo manual debe ser un porcentaje entre 0% y 100%.")
-    nota = body.get("anticipo_manual_nota")
-    nota = nota.strip() if isinstance(nota, str) else ""
-    if len(nota) < 5:
-        raise HTTPException(422, "Escribe una nota de al menos 5 caracteres que explique el anticipo manual.")
-    return (pct.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), nota)
+    return ajuste
 
 def _pago_dict(p: SaleOrderPayment) -> dict:
     return {
@@ -1595,17 +1605,14 @@ def get_pedido(ven_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     pxps = db.query(PaymentPending).filter(PaymentPending.ven_id == ven_id).all()
     d["pxps"] = [_pxp_dict(p) for p in pxps]
     d["lista_compras_items"] = _lista_compras_items_de(db, ven_id)
-    # N1 / R4 / R6: el libro de pagos del pedido (verificados, trasladados...) y cuanto anticipo falta. El
-    # requerido usa el % guardado al crear el pedido; lo pagado es total - saldo (lo mismo que
-    # recalculate_sale_order_state).
+    # N1 / R4 / R6: el libro de pagos del pedido (verificados, trasladados...) y cuanto anticipo falta, con la
+    # misma cuenta que recalculate_sale_order_state (anticipo_del_pedido).
     pagos = (db.query(SaleOrderPayment).filter(SaleOrderPayment.sale_order_id == ven_id)
              .order_by(SaleOrderPayment.created_at.asc(), SaleOrderPayment.id.asc()).all())
     d["pagos"] = [_pago_dict(p) for p in pagos]
-    pct = v.anticipo_pct_snapshot if v.anticipo_pct_snapshot is not None else PCT_ANTICIPO_POR_DEFECTO
-    requerido = anticipo_requerido(v.total_cop, pct)
-    pagado = Decimal(str(v.total_cop or 0)) - Decimal(str(v.saldo_cop or 0))
+    requerido, pendiente = anticipo_del_pedido(v)
     d["anticipo_requerido"] = float(requerido)
-    d["anticipo_pendiente"] = float(redondear_peso(max(Decimal("0"), requerido - pagado)))
+    d["anticipo_pendiente"] = float(pendiente)
     return {"status": "success", "data": d}
 
 

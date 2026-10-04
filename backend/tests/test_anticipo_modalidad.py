@@ -11,7 +11,10 @@
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_anticipo_modalidad
 """
 import datetime
+import uuid
 from decimal import Decimal
+
+import pytest
 
 from app.core.ventas_dinero import pct_anticipo_de_modalidad
 
@@ -20,6 +23,16 @@ MOD_60_40 = "60/40 (60% anticipo - 40% pendiente)"
 
 def auth(token):
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def compras_token(db):
+    """Usuario COMPRAS (dentro de la transaccion revertida): no edita cotizaciones."""
+    from app.core.security import create_access_token
+    from app.models.users import User
+    u = User(email=f"compras-{uuid.uuid4().hex[:6]}@test.nebulae", password_hash="x", role="COMPRAS", is_active=True)
+    db.add(u); db.commit()
+    return create_access_token({"sub": str(u.id), "role": u.role})
 
 
 def _sc(db, numero, modalidad, **campos):
@@ -436,3 +449,59 @@ def test_el_asesor_puede_ajustar_el_anticipo(app_client, db, vendedor_token):
     assert resp.status_code == 200, resp.text
     db.refresh(cot)
     assert cot.anticipo_cop == Decimal("400000")
+
+
+def test_compras_no_puede_ajustar_el_anticipo(app_client, db, compras_token):
+    """Fix 9: el ajuste manual lo hace quien edita la COT (asesor o administracion)."""
+    sc = _sc(db, "SC-MAN011", MOD_60_40)
+    cot = _cot(db, "COT-MAN011", sc, total_cop=1000000, anticipo_cop=600000)
+    resp = _patch_cot(app_client, compras_token, cot.id, {"anticipo_pct_manual": 0, "anticipo_manual_nota": "Negociado con gerencia"})
+    assert resp.status_code == 403, resp.text
+    db.refresh(cot)
+    assert cot.anticipo_pct_manual is None and cot.anticipo_cop == Decimal("600000")
+
+
+def test_reenviar_el_mismo_anticipo_manual_no_bloquea_el_patch(app_client, db, admin_token):
+    """Fix 6: el 409 solo salta si el anticipo manual de verdad cambia; reenviar lo guardado no bloquea el resto."""
+    from app.models.erp_documents import SaleOrder
+    sc = _sc(db, "SC-MAN012", MOD_60_40)
+    convertida = _cot(db, "COT-MAN012", sc, estado="CONFIRMADA", total_cop=1000000, anticipo_cop=600000)
+    db.add(SaleOrder(numero="PVEN-MAN012", cot_id=convertida.id, customer_name="Cliente Prueba",
+                     estado="PENDIENTE_COMPRA", total_cop=1000000))
+    db.commit()
+    resp = _patch_cot(app_client, admin_token, convertida.id, {"notas": "x", "anticipo_pct_manual": None})
+    assert resp.status_code == 200, resp.text
+    db.refresh(convertida)
+    assert convertida.notas == "x"
+
+    nota = "Negociado con gerencia"
+    rechazada = _cot(db, "COT-MAN013", sc, estado="RECHAZADA", total_cop=1000000, anticipo_cop=500000,
+                     anticipo_pct_manual=Decimal("50"), anticipo_manual_nota=nota)
+    for body in ({"notas": "y", "anticipo_pct_manual": 50, "anticipo_manual_nota": nota},
+                 {"notas": "z", "anticipo_pct_manual": "50.00"}):
+        resp = _patch_cot(app_client, admin_token, rechazada.id, body)
+        assert resp.status_code == 200, (body, resp.text)
+    db.refresh(rechazada)
+    assert rechazada.notas == "z" and rechazada.anticipo_cop == Decimal("500000")
+    for body in ({"anticipo_pct_manual": 40, "anticipo_manual_nota": "Otra negociación"},
+                 {"anticipo_pct_manual": 50, "anticipo_manual_nota": "Otra negociación"},
+                 {"anticipo_pct_manual": None}):
+        resp = _patch_cot(app_client, admin_token, rechazada.id, body)
+        assert resp.status_code == 409, (body, resp.text)
+    db.refresh(rechazada)
+    assert rechazada.anticipo_pct_manual == Decimal("50.00") and rechazada.anticipo_manual_nota == nota
+
+
+def test_guardar_otra_vez_el_mismo_anticipo_manual_no_repite_el_renglon(app_client, db, admin_token):
+    sc = _sc(db, "SC-MAN014", MOD_60_40)
+    cot = _cot(db, "COT-MAN014", sc, total_cop=1000000, anticipo_cop=600000)
+    for _ in range(2):
+        resp = _patch_cot(app_client, admin_token, cot.id, {"anticipo_pct_manual": 50, "anticipo_manual_nota": "Negociado con gerencia"})
+        assert resp.status_code == 200, resp.text
+    assert len(_logs(db, "COT", cot.id, "ANTICIPO_MANUAL")) == 1
+    # Mismo % con otra nota: se guarda la nota nueva y queda su renglon.
+    resp = _patch_cot(app_client, admin_token, cot.id, {"anticipo_pct_manual": 50, "anticipo_manual_nota": "Aprobado por gerencia"})
+    assert resp.status_code == 200, resp.text
+    db.refresh(cot)
+    assert cot.anticipo_manual_nota == "Aprobado por gerencia"
+    assert len(_logs(db, "COT", cot.id, "ANTICIPO_MANUAL")) == 2

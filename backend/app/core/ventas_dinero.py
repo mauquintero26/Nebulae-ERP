@@ -26,6 +26,9 @@ TIPOS_PAGO_INGRESO = ("ANTICIPO", "ABONO", "PAGO_TOTAL", "PAGO_SALDO")
 METODO_PAGO_TRASLADO = "TRASLADO"          # pago del pedido nuevo que trae el saldo a favor
 METODO_PAGO_SALDO_A_FAVOR = "SALDO_A_FAVOR"  # lo que queda a favor en el pedido cancelado si no cupo todo
 ESTADO_PAGO_TRASLADADO = "TRASLADADO"      # pago de origen cuyo dinero ya vive en otro pedido
+# Pago automatico que creaba la conversion antes de N1, sin que nadie lo verificara. NO es saldo a favor: no se
+# traslada ni descuenta lo que hay que verificar (los resuelve T14 con el usuario).
+METODO_PAGO_SIN_VERIFICAR = "CONVERSION_COTIZACION"
 
 
 def redondear_peso(valor) -> Decimal:
@@ -105,17 +108,21 @@ def metodo_pago_anticipo(texto):
 
 
 def _pct_entre_0_y_100(pct) -> Decimal:
-    return max(Decimal("0"), min(Decimal(str(pct)), _CIEN))
+    """Entre 0 y 100 y a 2 decimales (ROUND_HALF_UP): el mismo % que guarda el pedido en anticipo_pct_snapshot
+    (NUMERIC(5,2)), para que el requerido de la conversion y el del pedido salgan siempre iguales."""
+    return max(Decimal("0"), min(Decimal(str(pct)), _CIEN)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def pct_anticipo_cotizacion(cot, db, sc=None):
-    """(pct, modalidad) del anticipo que exige la cotizacion. pct siempre entre 0 y 100 (min(pct, 100)).
+    """(pct, modalidad) del anticipo que exige la cotizacion. pct entre 0 y 100 (min(pct, 100)), a 2 decimales.
 
     - R3: si tiene anticipo manual (anticipo_pct_manual no es None), ese.
     - Si tiene SC: el % de su modalidad de pago (R2), o 60 si no se reconoce.
-    - Sin SC y con total > 0: el % que ya tenia (anticipo_cop * 100 / total_cop, sin cuantizar): la COT del
-      Cotizador Rapido conserva su 60% y las de prueba con anticipo 0 conservan el 0.
+    - Sin SC y con total > 0: el % que ya tenia (anticipo_cop * 100 / total_cop): la COT del Cotizador Rapido
+      conserva su 60% y las de prueba con anticipo 0 conservan el 0.
     - Sin SC y sin total: 60.
+    El % sale a 2 decimales (lo que cabe en el snapshot del pedido): un dato viejo de 66,666...% exige el 66,67%,
+    y el pedido creado con ese % pide exactamente lo mismo que se verifico al crearlo.
     modalidad es el texto de la modalidad de la SC (None sin SC), tambien cuando el % es el manual.
     `sc` evita releer la SC cuando el llamador ya la tiene (update_solicitud)."""
     if sc is None and cot.sc_id:
@@ -130,12 +137,25 @@ def pct_anticipo_cotizacion(cot, db, sc=None):
     total = Decimal(str(cot.total_cop or 0))
     if total > 0:
         return _pct_entre_0_y_100(Decimal(str(cot.anticipo_cop or 0)) * _CIEN / total), None
-    return PCT_ANTICIPO_POR_DEFECTO, None
+    return _pct_entre_0_y_100(PCT_ANTICIPO_POR_DEFECTO), None
 
 
 def anticipo_requerido(total, pct) -> Decimal:
     """round(total x pct / 100) en pesos enteros, sobre el total ya redondeado al peso."""
     return redondear_peso(redondear_peso(total) * Decimal(str(pct)) / _CIEN)
+
+
+def anticipo_del_pedido(so):
+    """(requerido, pendiente) del anticipo de un Pedido de Venta: la UNICA cuenta que usan
+    recalculate_sale_order_state (PENDIENTE_ANTICIPO) y GET /pedidos/{id} (anticipo_pendiente).
+
+    requerido = anticipo_requerido(total, anticipo_pct_snapshot) (60 si el snapshot falta), igual que al convertir
+    la cotizacion; pagado = total - saldo redondeado al peso (los pedidos viejos con centavos no quedan debiendo
+    $0,15); pendiente = requerido - pagado, nunca negativo."""
+    pct = so.anticipo_pct_snapshot if so.anticipo_pct_snapshot is not None else PCT_ANTICIPO_POR_DEFECTO
+    requerido = anticipo_requerido(so.total_cop, pct)
+    pagado = redondear_peso(Decimal(str(so.total_cop or 0)) - Decimal(str(so.saldo_cop or 0)))
+    return requerido, max(Decimal("0"), requerido - pagado)
 
 
 # ─── Saldo a favor de pedidos cancelados (R6) ─────────────────────────────────────────────────────────
@@ -146,7 +166,10 @@ def saldos_a_favor_de_cotizacion(db, cot_id, bloquear=False) -> list:
     Lista de {'pedido': SaleOrder, 'pagos': [...], 'monto': Decimal}, una por pedido cancelado con saldo > 0, del
     mas viejo al mas nuevo. 'pagos' son sus pagos CONFIRMADO de ingreso y de devolucion; monto = ingresos -
     devoluciones (las mismas cuentas que cancel_sale_order), en pesos enteros. Un pago ya trasladado queda
-    TRASLADADO y no vuelve a contar. bloquear=True los lee con FOR UPDATE (antes de marcarlos)."""
+    TRASLADADO y no vuelve a contar. Los pagos automaticos 'CONVERSION_COTIZACION' (anteriores a N1, nadie los
+    verifico) no son saldo a favor: no se cuentan ni se trasladan, y siguen CONFIRMADO en su pedido.
+    bloquear=True los lee con FOR UPDATE (antes de marcarlos)."""
+    from sqlalchemy import func
     from app.models.erp_documents import SaleOrder
     from app.models.fase4 import SaleOrderPayment
     cancelados = (db.query(SaleOrder)
@@ -157,7 +180,8 @@ def saldos_a_favor_de_cotizacion(db, cot_id, bloquear=False) -> list:
     consulta = (db.query(SaleOrderPayment)
                 .filter(SaleOrderPayment.sale_order_id.in_([so.id for so in cancelados]),
                         SaleOrderPayment.estado == "CONFIRMADO",
-                        SaleOrderPayment.tipo.in_(TIPOS_PAGO_INGRESO + ("DEVOLUCION",)))
+                        SaleOrderPayment.tipo.in_(TIPOS_PAGO_INGRESO + ("DEVOLUCION",)),
+                        func.coalesce(SaleOrderPayment.metodo_pago, "") != METODO_PAGO_SIN_VERIFICAR)
                 .order_by(SaleOrderPayment.id.asc()))
     if bloquear:
         consulta = consulta.with_for_update()
