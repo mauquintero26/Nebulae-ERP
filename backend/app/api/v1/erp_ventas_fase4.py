@@ -171,6 +171,15 @@ ALLOWED_TRANSITIONS_SALE_ORDER = {
     "ENTREGADO": {"DEVUELTO_TOTAL"},
     "CANCELADO": set(),
     "DEVUELTO_TOTAL": set(),
+    # N10: los estados operativos con los que Ventas crea y mueve el pedido (estados_pedido.ESTADOS_VEN_OPERATIVOS y
+    # PAGADO de la tienda) solo necesitan poder cancelarse por POST /pedidos/{id}/cancelar (el unico que lee este
+    # mapa); el resto de sus cambios los hace PATCH /ventas/pedidos/{id} con sus propias reglas.
+    "PENDIENTE_COMPRA": {"CANCELADO"},
+    "EN_PROCESO": {"CANCELADO"},
+    "LISTO_ENTREGA": {"CANCELADO"},
+    "PENDIENTE_PAGO": {"CANCELADO"},
+    "PAGADO": {"CANCELADO"},
+    "EN_TRANSITO": {"CANCELADO"},
 }
 
 ALLOWED_TRANSITIONS_SALE_LINE = {

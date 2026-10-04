@@ -25,7 +25,7 @@ from sqlalchemy import select
 from app.models.customers import Customer
 from app.models.catalog import Product, ProductSKU, Brand, Category
 from app.models.inventory import Warehouse, InventoryLevel
-from app.models.erp_documents import SaleOrder, PurchaseOrderFull, GoodsReceipt, Supplier
+from app.models.erp_documents import SaleOrder, PurchaseOrderFull, GoodsReceipt, Supplier, ActivityLog
 from app.models.fase1b import (
     SaleOrderLineErp,
     PurchaseOrderLine,
@@ -170,6 +170,22 @@ class TestFase4AsignacionComprasRecepcion:
         sol_db = db.execute(select(SaleOrderLineErp).where(SaleOrderLineErp.id == line_id)).scalar_one()
         assert Decimal(str(sol_db.quantity_reserved)) == Decimal("5.00")
         assert sol_db.estado == "RESERVADA"
+
+        # 7. N10: el aviso de Compras queda en el PEDIDO ('VEN' + id y numero del pedido, no el id de la linea) y la
+        # linea de tiempo del pedido lo devuelve.
+        so_numero = db.execute(select(SaleOrder.numero).where(SaleOrder.id == so_id)).scalar_one()
+        avisos = db.execute(select(ActivityLog).where(ActivityLog.action == "MERCANCIA_DISPONIBLE",
+                                                      ActivityLog.entity_type == "VEN",
+                                                      ActivityLog.entity_id == so_id)).scalars().all()
+        assert [(a.entity_type, a.entity_id, a.entity_numero) for a in avisos] == [("VEN", so_id, so_numero)]
+        viejos = db.execute(select(ActivityLog).where(ActivityLog.action == "MERCANCIA_DISPONIBLE",
+                                                      ActivityLog.entity_type == "PVEN",
+                                                      ActivityLog.entity_id == line_id,
+                                                      ActivityLog.entity_numero == "")).scalars().all()
+        assert viejos == [], "el aviso no debe seguir guardandose con el id de la linea"
+        resp_det = app_client.get(f"/api/v1/ventas/pedidos/{so_id}", headers=_auth(admin_token))
+        assert resp_det.status_code == 200, resp_det.text
+        assert "MERCANCIA_DISPONIBLE" in [a["action"] for a in resp_det.json()["data"]["actividades"]]
 
     def test_recepcion_parcial_asigna_solo_lo_aceptado(self, app_client, admin_token, db):
         """Recepción de 3 unidades de 5 pedidas asigna reserva por 3 y línea queda PARCIALMENTE_DISPONIBLE."""

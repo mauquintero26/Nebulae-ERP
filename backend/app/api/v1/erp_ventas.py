@@ -5,7 +5,7 @@ Pedidos de Venta (VEN), Ordenes Pendientes por Pagar (PXP)
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
-from sqlalchemy import text, func, select, case
+from sqlalchemy import text, func, select, case, and_, or_
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from typing import Optional, List
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -2140,10 +2140,15 @@ def get_pedido(ven_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     v = db.query(SaleOrder).filter(SaleOrder.id == ven_id).first()
     if not v:
         raise HTTPException(404, "Pedido de venta no encontrado")
-    logs = db.query(ActivityLog).filter(
-        ActivityLog.entity_type == "VEN",
-        ActivityLog.entity_id == ven_id
-    ).order_by(ActivityLog.created_at.asc()).all()
+    # N10: la linea de tiempo del pedido junta lo de Ventas ('VEN') con lo que fase4 registra como 'PVEN' (pagos,
+    # excepcion, reservas, cancelacion; siempre con el numero del pedido). R12: los 'PVEN' tambien se filtran por
+    # numero, porque los MERCANCIA_DISPONIBLE viejos guardan el id de una LINEA con entity_numero vacio y ese id puede
+    # coincidir con el de otro pedido. Los renglones de un mismo flush comparten created_at: el id da el orden causal.
+    logs = db.query(ActivityLog).filter(or_(
+        and_(ActivityLog.entity_type == "VEN", ActivityLog.entity_id == ven_id),
+        and_(ActivityLog.entity_type == "PVEN", ActivityLog.entity_id == ven_id,
+             ActivityLog.entity_numero == v.numero),
+    )).order_by(ActivityLog.created_at.asc(), ActivityLog.id.asc()).all()
     d = _ven_dict(v)
     d["actividades"] = [_log_dict(l) for l in logs]
     pxps = db.query(PaymentPending).filter(PaymentPending.ven_id == ven_id).order_by(PaymentPending.id.asc()).all()

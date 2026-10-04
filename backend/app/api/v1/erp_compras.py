@@ -2349,14 +2349,17 @@ def confirmar_recepcion(
                                             so.estado = recalculate_sale_order_state(so, db)
                                             so.updated_at = now
 
-                                db.add(ActivityLog(
-                                    entity_type="PVEN",
-                                    entity_id=alloc.sale_order_line_id,
-                                    entity_numero="",
-                                    action="MERCANCIA_DISPONIBLE",
-                                    description=f"{take} unidad(es) de SKU {grl.sku_id} recibidas y reservadas en Barranquilla según {g.numero}.",
-                                    user_name=user_label,
-                                ))
+                                        # N10: el aviso queda en el PEDIDO ('VEN' + id y numero del pedido), no en el id de
+                                        # la LINEA: la linea de tiempo del pedido lo muestra y no se mezcla con otro pedido
+                                        # cuyo id coincida con el de la linea. Va dentro de `if sol:` para tener el pedido.
+                                        db.add(ActivityLog(
+                                            entity_type="VEN",
+                                            entity_id=sol.so_id,
+                                            entity_numero=so.numero if so else "",
+                                            action="MERCANCIA_DISPONIBLE",
+                                            description=f"{take} unidad(es) de SKU {grl.sku_id} recibidas y reservadas en Barranquilla según {g.numero}.",
+                                            user_name=user_label,
+                                        ))
                     if rem_recv > 0:
                         owner_increments[(grl.sku_id, "NEBULAE")] = owner_increments.get((grl.sku_id, "NEBULAE"), Decimal("0.00")) + rem_recv
 
