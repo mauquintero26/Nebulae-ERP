@@ -109,3 +109,48 @@ def test_reenviar_el_mismo_estado_de_la_cotizacion_no_falla_aunque_tenga_pedido(
     assert resp.status_code == 200, resp.text
     db.refresh(cot)
     assert cot.estado == "ENVIADA" and cot.notas == "x"
+
+
+# --- Fix round: orden del bloque unico de guardas (R12) y bloqueo de la fila ----------------------------------
+
+def test_el_orden_de_las_guardas_de_la_cotizacion_es_el_de_r12(app_client, db, admin_token):
+    """Cuando aplican dos guardas a la vez, gana la primera en el orden (1) CONFIRMADA/PENDIENTE, (2) ENVIADA o no
+    manual, (3) pedido vigente, (4) SC cancelada, (5) retomar con otra activa."""
+    import datetime
+    from app.models.erp_documents import SaleOrder
+    sc = _sc(db, "SC-EST006", estado="CANCELADA", eliminada_at=datetime.datetime.utcnow())
+    con_pedido = _cot(db, "COT-EST006A", estado="RECHAZADA", sc_id=sc.id, sc_numero=sc.numero)
+    db.add(SaleOrder(numero="PVEN-EST006", cot_id=con_pedido.id, sc_id=sc.id, customer_name="Cliente Prueba",
+                     estado="PENDIENTE_COMPRA"))
+    _cot(db, "COT-EST006B", estado="BORRADOR", sc_id=sc.id, sc_numero=sc.numero)  # otra activa en la SC
+    db.commit()
+    url = f"/api/v1/ventas/cotizaciones/{con_pedido.id}"
+    casos = [
+        # (1) antes que (2), (3), (4) y (5)
+        ("CONFIRMADA", 400, "Este estado solo se alcanza por el flujo de confirmación del cliente"),
+        # (2) antes que (3), (4) y (5)
+        ("ENVIADA", 400, "'Enviada al cliente' no se puede poner a mano"),
+        ("FACTURADO", 400, "El estado «Facturado» no se puede asignar a mano a una cotización."),
+        # (3) antes que (4) y (5)
+        ("BORRADOR", 409, "La cotización tiene el pedido PVEN-EST006 activo."),
+    ]
+    for estado, codigo, inicio in casos:
+        resp = app_client.patch(url, json={"estado": estado}, headers=auth(admin_token))
+        assert resp.status_code == codigo, (estado, resp.text)
+        assert resp.json()["detail"].startswith(inicio), (estado, resp.json()["detail"])
+    # (4) antes que (5): sin el pedido, retomar la rechazada bajo la SC cancelada (que tiene otra activa) da el de N4.
+    db.query(SaleOrder).filter(SaleOrder.numero == "PVEN-EST006").update({"estado": "CANCELADO"})
+    db.commit()
+    resp = app_client.patch(url, json={"estado": "BORRADOR"}, headers=auth(admin_token))
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"].startswith("La solicitud SC-EST006 está cancelada")
+
+
+def test_el_patch_de_la_cotizacion_bloquea_la_fila_que_valida(app_client, db, admin_token, contador_sql):
+    cot = _cot(db, "COT-EST007")
+    with contador_sql.ventana() as v:
+        resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={"notas": "x"},
+                                headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    lectura = next(s for s in v.sentencias if "FROM sales_quotations" in s and "sales_quotations.id =" in s)
+    assert "FOR UPDATE" in lectura

@@ -223,7 +223,10 @@ def _validate_transition(current: str, target: str, allowed_map: Dict[str, set],
 
 
 def recalculate_sale_order_state(so: SaleOrder, db: Session) -> str:
-    if so.estado in ("CANCELADO", "DEVUELTO_TOTAL"):
+    # Estados que ya no cambian solos (N2): ni una recepcion, ni un pago, ni una reserva devuelven a un estado
+    # operativo un pedido cancelado, devuelto, entregado (Entregas lo despacha por PATCH sin tocar las lineas) o
+    # facturado. Desde ENTREGADO solo se pasa a FACTURADO por PATCH (o a DEVUELTO_TOTAL por una devolucion).
+    if so.estado in ("CANCELADO", "DEVUELTO_TOTAL", "ENTREGADO", "FACTURADO"):
         return so.estado
 
     lines = db.query(SaleOrderLineErp).filter(SaleOrderLineErp.so_id == so.id).all()

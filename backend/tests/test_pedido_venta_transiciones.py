@@ -159,3 +159,82 @@ def test_marcar_entregado_sin_despacho_previo_sigue_pidiendo_la_bodega(app_clien
     assert "bodega" in resp.json()["detail"]
     db.refresh(ven)
     assert ven.estado == "PENDIENTE_COMPRA"
+
+
+# --- Fix round -----------------------------------------------------------------------------------------------
+
+def _bodega_con_stock(db, sku, cantidad):
+    import uuid
+    from app.models.inventory import Warehouse, InventoryLevel
+    bodega = Warehouse(name=f"BodegaTest-{uuid.uuid4().hex[:6]}", location_type="Central")
+    db.add(bodega); db.commit()
+    nivel = InventoryLevel(sku_id=sku.id, warehouse_id=bodega.id, quantity=cantidad)
+    db.add(nivel); db.commit()
+    return bodega, nivel
+
+
+def _linea_erp(db, ven, sku, cantidad, entregado):
+    from app.models.fase1b import SaleOrderLineErp
+    db.add(SaleOrderLineErp(so_id=ven.id, sku_id=sku.id, description="X", quantity=cantidad, unit_price_cop=1000,
+                            quantity_delivered=entregado,
+                            estado="ENTREGADA" if entregado >= cantidad else "RESERVADA"))
+    db.commit()
+
+
+def test_entregar_un_pedido_entregado_parcialmente_descuenta_solo_lo_que_falta(app_client, db, admin_token, sku):
+    from decimal import Decimal
+    from app.models.inventory import InventoryMovement, InventoryOperation
+    bodega, nivel = _bodega_con_stock(db, sku, 10)
+    ven = _ven(db, "PVEN-TRA009", estado="PARCIALMENTE_ENTREGADO",
+               productos=[{"product_name": "X", "qty": 3, "sku_id": sku.id}])
+    _linea_erp(db, ven, sku, 3, 2)  # fase4 ya entrego (y desconto) 2 de 3
+    resp = _patch(app_client, admin_token, ven.id, estado="ENTREGADO", warehouse_id=bodega.id)
+    assert resp.status_code == 200, resp.text
+    db.refresh(nivel)
+    assert nivel.quantity == Decimal("9")  # solo la unidad que faltaba
+    op = db.query(InventoryOperation).filter(InventoryOperation.source_document_type == "PVEN",
+                                             InventoryOperation.source_document_id == ven.id).one()
+    assert [m.quantity for m in db.query(InventoryMovement).filter(InventoryMovement.operation_id == op.id)] == [
+        Decimal("1")]
+
+
+def test_entregar_un_pedido_ya_entregado_del_todo_por_fase4_no_descuenta_nada(app_client, db, admin_token, sku):
+    from decimal import Decimal
+    from app.models.inventory import InventoryOperation
+    bodega, nivel = _bodega_con_stock(db, sku, 10)
+    ven = _ven(db, "PVEN-TRA010", estado="PARCIALMENTE_ENTREGADO",
+               productos=[{"product_name": "X", "qty": 3, "sku_id": sku.id}])
+    _linea_erp(db, ven, sku, 3, 3)
+    resp = _patch(app_client, admin_token, ven.id, estado="ENTREGADO")  # sin bodega: no hay nada que descontar
+    assert resp.status_code == 200, resp.text
+    db.refresh(nivel)
+    assert nivel.quantity == Decimal("10")
+    assert db.query(InventoryOperation).filter(InventoryOperation.source_document_type == "PVEN",
+                                               InventoryOperation.source_document_id == ven.id).count() == 0
+
+
+def test_el_patch_del_pedido_bloquea_la_fila_que_valida(app_client, db, admin_token, contador_sql):
+    ven = _ven(db, "PVEN-TRA011")
+    with contador_sql.ventana() as v:
+        resp = _patch(app_client, admin_token, ven.id, estado="EN_PROCESO")
+    assert resp.status_code == 200, resp.text
+    lectura = next(s for s in v.sentencias if "FROM sale_orders" in s and "sale_orders.id =" in s)
+    assert "FOR UPDATE" in lectura
+
+
+def test_un_pedido_entregado_o_facturado_no_cambia_al_recalcular(db):
+    """Entregas despacha por PATCH sin tocar las lineas: una recepcion o un pago que recalculan el estado no deben
+    devolver un pedido ENTREGADO o FACTURADO a un estado operativo (con esas lineas daria CONFIRMADO)."""
+    from app.api.v1.erp_ventas_fase4 import recalculate_sale_order_state
+    from app.models.erp_documents import SaleOrder
+    from app.models.fase1b import SaleOrderLineErp
+    for estado in ("ENTREGADO", "FACTURADO"):
+        so = SaleOrder(numero=f"PVEN-TRA012{estado[0]}", customer_name="Cliente Prueba", estado=estado,
+                       total_cop=1000, saldo_cop=0, anticipo_pct_snapshot=0)
+        db.add(so); db.flush()
+        db.add(SaleOrderLineErp(so_id=so.id, description="Cuna", quantity=1, unit_price_cop=1000,
+                                estado="PENDIENTE_COMPRA"))
+        db.commit(); db.refresh(so)
+        assert recalculate_sale_order_state(so, db) == estado
+        so.estado = "CONFIRMADO"  # control: con un estado operativo, las mismas lineas si recalculan
+        assert recalculate_sale_order_state(so, db) == "CONFIRMADO"

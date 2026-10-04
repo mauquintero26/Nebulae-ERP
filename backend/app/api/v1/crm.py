@@ -1263,6 +1263,28 @@ def mover_lead_de_solicitud(sc_id: int, maps_to_status: str, db: Session) -> Non
         _mover_lead_a_status(order, maps_to_status, db)
 
 
+def _etapa_inicial_del_pipeline(db: Session):
+    """(etapa, status) con que nace un lead nuevo sin etapa elegida: la de menor posicion del tablero y su
+    maps_to_status (DRAFT si no tiene o si no hay etapas)."""
+    stage = db.query(PipelineStage).order_by(PipelineStage.position).first()
+    return stage, ((stage.maps_to_status or "DRAFT") if stage else "DRAFT")
+
+
+def reabrir_lead_de_solicitud(sc_id: int, db: Session) -> None:
+    """Restaurar una Solicitud cancelada (N4: cancelarla deja su lead en CANCELLED): el lead vuelve a la etapa con que
+    nace un lead nuevo (la misma de create_lead_v2). No hace nada si no hay lead o si no estaba perdido."""
+    if not sc_id:
+        return
+    order = db.query(SalesOrder).filter(SalesOrder.canonical_customer_request_id == sc_id).first()
+    if order is None or order.status != "CANCELLED":
+        return
+    stage, status = _etapa_inicial_del_pipeline(db)
+    order.pipeline_stage_id = stage.id if stage else None
+    order.status = status
+    order.updated_at = datetime.datetime.utcnow()
+    db.commit()
+
+
 @router.patch("/leads/{lead_id}/stage", response_model=dict)
 def move_lead_stage(lead_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     order = db.query(SalesOrder).filter(SalesOrder.id == lead_id).first()
@@ -1715,10 +1737,9 @@ def create_lead_v2(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *
         if stage and stage.maps_to_status:
             pipeline_status = stage.maps_to_status
     else:
-        stage = db.query(PipelineStage).order_by(PipelineStage.position).first()
+        stage, pipeline_status = _etapa_inicial_del_pipeline(db)
         if stage:
             stage_id = stage.id
-            pipeline_status = stage.maps_to_status or "DRAFT"
     new_order = SalesOrder(
         customer_id=customer_id,
         status=pipeline_status,

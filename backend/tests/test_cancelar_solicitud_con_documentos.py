@@ -84,7 +84,7 @@ def test_cancelar_solicitud_con_pedido_activo_se_bloquea(app_client, db, admin_t
     detail = resp.json()["detail"]
     assert "pedido de venta PVEN-CAN002, cotización COT-CAN002" in detail
     assert "Primero cancela el pedido de venta y rechaza la cotización;" in detail
-    db.refresh(sc)
+    db.refresh(sc); db.refresh(ven)  # releer de la BD: el 409 no debe haber tocado nada
     assert sc.estado == "CONFIRMADA" and sc.eliminada_at is None
     assert ven.estado == "PENDIENTE_COMPRA"
 
@@ -277,5 +277,83 @@ def test_enviar_a_papelera_una_sc_cancelada_con_documentos_activos_se_bloquea(ap
     _cot(db, "COT-CAN013", sc)
     resp = _cancelar(app_client, admin_token, sc.id)
     assert resp.status_code == 409, resp.text
+    db.refresh(sc)
+    assert sc.eliminada_at is None
+
+
+# --- Fix round: una SC cancelada solo vuelve por /restaurar --------------------------------------------------
+
+def _cliente_con_lead(app_client, db, token, sc):
+    from app.models.customers import Customer
+    cliente = Customer(first_name="Cliente", last_name=f"RestTest-{uuid.uuid4().hex[:6]}",
+                       email=f"rest_{uuid.uuid4().hex[:6]}@test.com")
+    db.add(cliente); db.commit(); db.refresh(cliente)
+    sc.customer_id = cliente.id
+    db.commit()
+    resp = app_client.post("/api/v1/crm/leads", json={"customer_id": cliente.id, "sc_id": sc.id,
+                                                      "solicitud_tipo": "Cotizacion de Producto"}, headers=auth(token))
+    assert resp.status_code in (200, 201), resp.text
+    return resp.json()["data"]
+
+
+def test_una_solicitud_cancelada_no_revive_por_patch(app_client, db, admin_token, user_admin):
+    """La pastilla 'Borrador' o soltarla en el Hub ya no revive una SC cancelada a medias (con eliminada_at, motivo y
+    lead perdido): solo /restaurar."""
+    sc = _sc(db, "SC-CAN014", user_admin)
+    assert _cancelar(app_client, admin_token, sc.id).status_code == 200
+    mensaje = ("La solicitud SC-CAN014 está cancelada: para volver a trabajar en ella, restáurala desde la Papelera "
+               "(botón «Restaurar»).")
+    for estado in ("BORRADOR", "ENTREGADO"):
+        resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": estado, "updated_by": "t"},
+                                headers=auth(admin_token))
+        assert resp.status_code == 409, (estado, resp.text)
+        assert resp.json()["detail"] == mensaje
+    db.refresh(sc)
+    assert sc.estado == "CANCELADA" and sc.eliminada_at is not None
+    # Reenviar su propio estado (un formulario que manda todo) no es un cambio.
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": "CANCELADA", "notas": "x"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+
+
+def test_restaurar_exige_una_solicitud_cancelada_y_sin_documentos_activos(app_client, db, admin_token, user_admin):
+    activa = _sc(db, "SC-CAN015A", user_admin, estado="COTIZADA", gate1_confirmed_at=datetime.datetime.utcnow())
+    _cot(db, "COT-CAN015A", activa)
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{activa.id}/restaurar", headers=auth(admin_token))
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == "La solicitud SC-CAN015A no está cancelada: no hay nada que restaurar."
+    db.refresh(activa)
+    assert activa.estado == "COTIZADA" and activa.gate1_confirmed_at is not None  # nada se reinicio
+
+    # Dato viejo: SC cancelada con la pastilla vieja que todavia tiene una COT activa.
+    vieja = _sc(db, "SC-CAN015B", user_admin, estado="CANCELADA", eliminada_at=datetime.datetime.utcnow())
+    cot = _cot(db, "COT-CAN015B", vieja)
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{vieja.id}/restaurar", headers=auth(admin_token))
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == (
+        f"No se puede restaurar la solicitud SC-CAN015B: tiene documentos activos (cotización {cot.numero}). "
+        "Primero rechaza la cotización; después podrás restaurar la solicitud.")
+    db.refresh(vieja)
+    assert vieja.estado == "CANCELADA" and vieja.eliminada_at is not None
+
+
+def test_cancelar_y_restaurar_devuelve_el_lead_a_su_etapa_inicial(app_client, db, admin_token, user_admin):
+    from app.models.sales import SalesOrder
+    sc = _sc(db, "SC-CAN016", user_admin)
+    lead = _cliente_con_lead(app_client, db, admin_token, sc)
+    inicial = db.query(SalesOrder).filter(SalesOrder.id == lead["id"]).first()
+    etapa_inicial, status_inicial = inicial.pipeline_stage_id, inicial.status
+    assert status_inicial != "CANCELLED"
+
+    assert _cancelar(app_client, admin_token, sc.id).status_code == 200
+    db.expire_all()
+    assert db.query(SalesOrder).filter(SalesOrder.id == lead["id"]).first().status == "CANCELLED"
+
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/restaurar", headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["estado"] == "ASIGNADA"
+    db.expire_all()
+    orden = db.query(SalesOrder).filter(SalesOrder.id == lead["id"]).first()
+    assert (orden.status, orden.pipeline_stage_id) == (status_inicial, etapa_inicial)
     db.refresh(sc)
     assert sc.eliminada_at is None
