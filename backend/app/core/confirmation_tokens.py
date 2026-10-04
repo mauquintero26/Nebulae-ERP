@@ -54,7 +54,7 @@ def verify_and_consume_token(db: Session, token: str) -> tuple[str, int] | None:
     return (row[0], row[1])
 
 
-def revoke_pending_tokens(db: Session, document_type: str, document_id: int) -> None:
+def revoke_pending_tokens(db: Session, document_type: str, document_id: int, commit: bool = True) -> None:
     """Invalida cualquier token sin usar de este documento -- se llama en cada punto
     donde una SC sale del ciclo vigente de Gate 1: cancelar_solicitud, cualquier
     transicion real de estado via update_solicitud (no solo el reset a BORRADOR),
@@ -63,7 +63,10 @@ def revoke_pending_tokens(db: Session, document_type: str, document_id: int) -> 
     enviado por correo nunca pueda confirmar un documento que ya cambio de curso por
     otra via, cualquiera que sea. Reutiliza used_at como marca de invalidacion
     (consistente con el modelo existente, sin agregar columnas nuevas): un token
-    revocado es, para todo efecto practico, identico a uno ya usado."""
+    revocado es, para todo efecto practico, identico a uno ya usado.
+
+    commit=False deja el UPDATE en la transaccion del llamador, que lo confirma junto con el resto de su cambio
+    (update_solicitud, H29: la revocacion y el cambio de estado se confirman o se deshacen juntos)."""
     now = datetime.utcnow()
     db.execute(
         text("""
@@ -73,7 +76,8 @@ def revoke_pending_tokens(db: Session, document_type: str, document_id: int) -> 
         """),
         {"document_type": document_type, "document_id": document_id, "now": now},
     )
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def peek_token(db: Session, token: str) -> tuple[str, int] | None:

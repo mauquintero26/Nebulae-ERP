@@ -135,14 +135,16 @@ def _log(db: Session, entity_type: str, entity_id: int, entity_numero: str,
         db.commit()
 
 def _registrar_cambios(db: Session, entidad: str, doc, antes: dict, body: dict, user: User,
-                       recotizacion: bool = False):
+                       recotizacion: bool = False, commit: bool = True):
     """Deja en la Actividad un renglon con lo que cambio este PATCH (campo: antes -> despues).
 
     `antes` es la foto (cambios_documento.tomar_foto) tomada ANTES de aplicar el body; aqui se
     toma la de despues, ya recargada de la DB, para que ambas tengan los mismos tipos. Un PATCH
     que no cambia nada no registra nada (el formulario de edicion reenvia todos sus campos).
     `motivo` en el body reemplaza el titulo automatico (p.ej. 'por re-cotizacion de COT-...').
-    Es un registro auxiliar: si falla, el cambio ya quedo guardado y no se debe devolver un error."""
+    Es un registro auxiliar: si falla, el cambio ya quedo guardado y no se debe devolver un error.
+    commit=False (update_solicitud, H29): el renglon queda en la sesion y lo confirma el commit unico del llamador;
+    si falla el armado no se hace rollback, porque desharia el cambio que ese commit aun no confirmo."""
     try:
         despues = cambios_documento.tomar_foto(doc, entidad)
         ids_usuarios = {i for i in (antes.get("asignado_a_user_id"), despues.get("asignado_a_user_id")) if i}
@@ -159,9 +161,10 @@ def _registrar_cambios(db: Session, entidad: str, doc, antes: dict, body: dict, 
             descripcion = motivo.strip()[:300]
         _log(db, entidad, doc.id, doc.numero, accion, descripcion,
              user_name=body.get("updated_by") or getattr(user, "email", None),
-             extra_data={"cambios": cambios})
+             extra_data={"cambios": cambios}, commit=commit)
     except Exception:
-        db.rollback()
+        if commit:
+            db.rollback()
         logger.warning("No se pudo registrar en la Actividad los cambios de %s %s", entidad,
                        getattr(doc, "numero", "?"), exc_info=True)
 
@@ -625,10 +628,12 @@ def get_solicitud(sc_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
+    # Los renglones de un mismo PATCH se insertan en el mismo flush y pueden compartir created_at: el id conserva el
+    # orden causal ('editado' antes de 'cambio de estado').
     logs = db.query(ActivityLog).filter(
         ActivityLog.entity_type == "SC",
         ActivityLog.entity_id == sc_id
-    ).order_by(ActivityLog.created_at.asc()).all()
+    ).order_by(ActivityLog.created_at.asc(), ActivityLog.id.asc()).all()
     d = _sc_dict(sc)
     d["actividades"] = [_log_dict(l) for l in logs]
     # linked quotations
@@ -780,16 +785,20 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     # lo que este request de verdad cambio.
     transiciona = sc.estado != old_estado
     sc.updated_at = datetime.datetime.utcnow()
-    db.commit()
+    # H29: guardar la SC es UNA sola transaccion con UN commit (al final). Aqui solo se hace flush: el UPDATE
+    # sale a la base (y bloquea la fila hasta el commit) sin devolver la conexion al pool, y el refresh trae los
+    # valores tipados (las fechas del body llegan como texto) para la foto 'despues' y el calculo de dias.
+    # Todo lo de abajo (Actividad, revocacion del enlace) usa commit=False y se confirma junto con la SC.
+    db.flush()
     db.refresh(sc)
     # Primero lo editado y despues el cambio de estado que provoca (p.ej. asignar asesor ->
     # ASIGNADA), para que la linea de tiempo se lea en el orden causal.
-    _registrar_cambios(db, "SC", sc, antes_log, body, user)
+    _registrar_cambios(db, "SC", sc, antes_log, body, user, commit=False)
     if body.get("estado") and body["estado"] != old_estado:
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {sc.estado}",
              old_estado=old_estado, new_estado=sc.estado,
-             user_name=body.get("updated_by"))
+             user_name=body.get("updated_by"), commit=False)
     if promueve_asignada and not (body.get("estado") and body["estado"] != old_estado):
         # El check de arriba solo loguea cuando el REQUEST manda "estado" explicitamente.
         # promueve_asignada puede cambiar sc.estado sin que el body lo pida (solo manda
@@ -797,12 +806,12 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         # invisible en el Chatter/Actividad. El guard evita un doble log en el caso raro
         # de que el mismo PATCH mande advisor_user_id Y un estado explicito distinto.
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Estado cambiado a ASIGNADA (asesor asignado)",
-             old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"))
+             old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"), commit=False)
     if desasigna_a_borrador and not (body.get("estado") and body["estado"] != old_estado):
         # Mismo motivo que el bloque anterior: esta transicion ocurre sin que el body
         # mande "estado" (solo limpia advisor_user_id), asi que necesita su propio log.
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Estado cambiado a BORRADOR (asesor retirado)",
-             old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"))
+             old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"), commit=False)
     if invalida_confirmacion:
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
              (f"Estado cambiado a {sc.estado}: se modificaron los productos, así que la confirmación del cliente "
@@ -810,9 +819,8 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
              (f"Estado cambiado a {sc.estado}: cambió el cliente de la solicitud, así que la confirmación del "
               f"cliente anterior ya no es válida y hay que enviarle la solicitud al cliente nuevo"),
              old_estado=old_estado, new_estado=sc.estado,
-             user_name=body.get("updated_by") or getattr(user, "email", None))
+             user_name=body.get("updated_by") or getattr(user, "email", None), commit=False)
     if anula_por_cliente:
-        # commit=False: lo confirma el commit de la revocacion de abajo.
         _log(db, "SC", sc.id, sc.numero, "UPDATED",
              "Cambió el cliente de la solicitud: la confirmación del cliente anterior ya no vale y su enlace quedó "
              "anulado. Para crear otra cotización, envíale la solicitud al cliente nuevo para que la confirme.",
@@ -831,7 +839,7 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         _log(db, "SC", sc.id, sc.numero, "FECHA_ENTREGA_MODIFICADA",
              f"Fecha de entrega modificada: {fecha_vieja.strftime('%d/%m/%Y')} -> "
              f"{sc.fecha_entrega_estimada.strftime('%d/%m/%Y')} ({signo}{diff_dias} día{'s' if abs(diff_dias)!=1 else ''})",
-             user_name=body.get("updated_by"))
+             user_name=body.get("updated_by"), commit=False)
     if transiciona or anula_por_cliente:
         # Gate 1 (Round 7, ampliado; Round 8, usa el booleano capturado arriba en vez
         # de comparar sc.estado otra vez aqui): CUALQUIER transicion real de estado
@@ -846,10 +854,12 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         # promueve_asignada). Igual cuando cambio el cliente sin cambio de estado
         # (anula_por_cliente): el enlace y la marca eran del cliente anterior.
         from app.core.confirmation_tokens import revoke_pending_tokens
-        revoke_pending_tokens(db, "SC", sc.id)
+        revoke_pending_tokens(db, "SC", sc.id, commit=False)
         sc.gate1_confirmed_at = None
-        db.commit()
-    return {"status": "success", "data": _sc_dict(sc)}
+    # El dict se arma ANTES del commit: tras el commit el objeto queda expirado y leerlo costaria otro viaje a la base.
+    resp = _sc_dict(sc)
+    db.commit()
+    return {"status": "success", "data": resp}
 
 
 @router.post("/solicitudes/{sc_id}/enviar-confirmacion")
