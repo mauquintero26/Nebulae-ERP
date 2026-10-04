@@ -5,7 +5,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { etiquetaTipoSolicitud, etiquetaModalidad } from '../src/lib/etiquetas-ventas.js';
+import { etiquetaTipoSolicitud, etiquetaModalidad, etiquetaValorCambio } from '../src/lib/etiquetas-ventas.js';
 
 console.log('--- TEST 1: los tipos de solicitud se muestran con tilde ---');
 {
@@ -50,6 +50,22 @@ console.log('--- TEST 5: es idempotente (lo que ya lleva tilde no cambia) ---');
 {
   assert.equal(etiquetaTipoSolicitud('Cotización de Producto'), 'Cotización de Producto');
   assert.equal(etiquetaModalidad('Crédito 30 días'), 'Crédito 30 días');
+}
+
+console.log('--- TEST 6: el detalle de la Actividad (extra_data.cambios) muestra tipo y modalidad con tilde ---');
+{
+  // Renglones ya guardados: el backend los dejo con el valor sin tilde y no se reescriben.
+  assert.equal(etiquetaValorCambio('tipo_solicitud', 'Cotizacion de Producto'), 'Cotización de Producto');
+  assert.equal(etiquetaValorCambio('tipo_solicitud', 'Soporte Tecnico'), 'Soporte Técnico');
+  assert.equal(etiquetaValorCambio('modalidad_pago', 'Credito 30 dias'), 'Crédito 30 días');
+  assert.equal(etiquetaValorCambio('modalidad_pago', 'Contado'), 'Contado');
+  // Otros campos pasan sin tocar, aunque el texto parezca un tipo ('Notas' lo escribio una persona).
+  assert.equal(etiquetaValorCambio('notas', 'Cotizacion de Producto'), 'Cotizacion de Producto');
+  assert.equal(etiquetaValorCambio('advisor_name', 'Credito 30 dias'), 'Credito 30 dias');
+  assert.equal(etiquetaValorCambio(undefined, 'Credito 30 dias'), 'Credito 30 dias');
+  // Un valor vacio sigue vacio (la pantalla pone '—' en los campos sueltos).
+  assert.equal(etiquetaValorCambio('tipo_solicitud', null), null);
+  assert.equal(etiquetaValorCambio('modalidad_pago', undefined), undefined);
 }
 
 console.log('OK test_etiquetas_ventas');

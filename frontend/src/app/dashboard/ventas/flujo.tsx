@@ -4,6 +4,7 @@ import { Link2, Copy, Check, ExternalLink, ArrowRight } from 'lucide-react';
 import { Modal, Button } from '@/components/ui';
 import type { AccentColor } from '@/components/ui';
 import { avisoCorreo } from '@/lib/aviso-correo';
+import { etiquetaValorCambio } from '@/lib/etiquetas-ventas';
 
 // Piezas compartidas por las tres paginas de detalle del flujo SC -> COT -> PVEN, para
 // que cada estado le diga al usuario cual es su siguiente paso en vez de dejar una
@@ -172,8 +173,9 @@ export function CambiosDeActividad({ extra }: { extra?: any }) {
         // Un campo suelto (Notas, Total...) siempre muestra antes y despues, con "—" si estaba
         // vacio. Las lineas de producto (agregado, eliminado, cantidad...) solo lo que traen.
         const esCampo = !!c.campo && !['productos', 'productos_sku', 'mas'].includes(c.campo);
-        const antes = c.antes ?? (esCampo ? '—' : null);
-        const despues = c.despues ?? (esCampo ? '—' : null);
+        // El tipo de solicitud y la modalidad de pago se guardan sin tilde: aqui se muestran con tilde (H7+H41).
+        const antes = etiquetaValorCambio(c.campo, c.antes) ?? (esCampo ? '—' : null);
+        const despues = etiquetaValorCambio(c.campo, c.despues) ?? (esCampo ? '—' : null);
         return (
           <li key={i} className="text-xs text-slate-600 flex flex-wrap items-baseline gap-x-1.5">
             <span className="font-bold text-slate-700">{c.etiqueta}{antes || despues ? ':' : ''}</span>

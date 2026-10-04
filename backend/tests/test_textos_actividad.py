@@ -437,7 +437,7 @@ def test_script_no_pisa_una_descripcion_que_cambio_despues_de_leerla(db):
 
 def test_script_rechaza_un_nombre_de_tabla_de_respaldo_peligroso(db):
     from scripts.corregir_textos_actividad import corregir
-    for nombre in ("x; DROP TABLE users", "Tabla-Con-Guion", "1abc", "", "a b"):
+    for nombre in ("x; DROP TABLE users", "Tabla-Con-Guion", "1abc", "", "a b", "abc\n", "abc\r\n"):
         try:
             corregir(db, aplicar=False, ids=[1], tabla_respaldo=nombre)
         except ValueError:

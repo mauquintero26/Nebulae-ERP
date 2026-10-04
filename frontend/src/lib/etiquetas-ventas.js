@@ -33,3 +33,16 @@ export function etiquetaModalidad(modalidad) {
     .replace(/\bDias\b/g, 'Días')
     .replace(/\bdias\b/g, 'días');
 }
+
+/**
+ * El valor ('antes' o 'despues') de un renglon de extra_data.cambios de la Actividad, listo para mostrar. Solo los
+ * campos 'tipo_solicitud' y 'modalidad_pago' llevan etiqueta (el backend los guarda con el valor sin tilde, tambien
+ * en los renglones ya escritos); cualquier otro campo pasa tal cual, porque puede ser texto de una persona. Un valor
+ * null o undefined se devuelve igual: la pantalla decide si pone '—'.
+ */
+export function etiquetaValorCambio(campo, valor) {
+  if (valor === null || valor === undefined) return valor;
+  if (campo === 'tipo_solicitud') return etiquetaTipoSolicitud(valor);
+  if (campo === 'modalidad_pago') return etiquetaModalidad(valor);
+  return valor;
+}

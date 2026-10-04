@@ -14,6 +14,7 @@ import {
 import { apiFetch, API_URL } from '@/lib/api';
 import { computeMarginPrice, MARGIN_PCT_CAP } from '@/lib/pricing';
 import { formatoPesos } from '@/lib/pesos';
+import { humanizarCodigo } from '@/lib/estados-pedido';
 import {
   METODOS_PAGO_ANTICIPO, formatoPct, porcentajeDePesos, hoyLocal, origenAnticipo, cuentaVerificacion,
   evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo, resumenAnticipoCotizacion, montoDesdeTexto,
@@ -37,7 +38,8 @@ export const ESTADOS: Record<string, { label: string; color: string; bg: string;
 // se mantiene como pastilla a medida en vez del Badge generico de tono semantico,
 // pero con la misma forma (rounded-full, border, text-xs font-bold, px-2.5 py-1).
 export function EstadoBadge({ estado }: { estado: string }) {
-  const cfg = ESTADOS[estado] || { label: estado, color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe' };
+  // Un estado que no esta en ESTADOS sale humanizado ('ALGO_NUEVO' -> 'Algo nuevo'), nunca el codigo crudo.
+  const cfg = ESTADOS[estado] || { label: humanizarCodigo(estado), color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe' };
   return (
     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border"
       style={{ backgroundColor: cfg.bg, color: cfg.color, borderColor: cfg.border }}>

@@ -47,7 +47,8 @@ from app.core.textos_actividad import (
 )
 
 TABLA_RESPALDO = "activity_logs_respaldo_textos"
-_NOMBRE_DE_TABLA = re.compile(r"^[a-z_][a-z0-9_]*$")
+# Se valida con fullmatch y sin '$': '$' tambien acepta un salto de linea al final (un nombre como 'abc' + LF).
+_NOMBRE_DE_TABLA = re.compile(r"[a-z_][a-z0-9_]*")
 MAX_EJEMPLOS = 50
 
 
@@ -74,7 +75,7 @@ def corregir(db, aplicar=False, ids=None, tabla_respaldo=TABLA_RESPALDO) -> dict
     Sin aplicar no escribe nada (ni crea la tabla de respaldo). Con aplicar es UNA transaccion: commit al final y
     rollback ante cualquier error.
     """
-    if not isinstance(tabla_respaldo, str) or not _NOMBRE_DE_TABLA.match(tabla_respaldo):
+    if not isinstance(tabla_respaldo, str) or not _NOMBRE_DE_TABLA.fullmatch(tabla_respaldo):
         raise ValueError(f"Nombre de tabla de respaldo no válido: {tabla_respaldo!r}")
     consulta = ("SELECT id, entity_type, action, description FROM activity_logs "
                 "WHERE entity_type = ANY(:entidades) AND action = ANY(:acciones) AND description IS NOT NULL")

@@ -563,7 +563,7 @@ export function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
     setSending(true);
     const userMsg=chat;setChat('');
     setChatHistory(h=>[...h,{role:'user',text:userMsg}]);
-    setChatHistory(h=>[...h,{role:'ia',text:`Con base en ${sc.numero} (${tipo}): ${(analisis||'Sin analisis previo.').slice(0,150)}... Puedo profundizar en cualquier aspecto.`}]);
+    setChatHistory(h=>[...h,{role:'ia',text:`Con base en ${sc.numero} (${etiquetaTipoSolicitud(tipo)}):${(analisis||'Sin analisis previo.').slice(0,150)}... Puedo profundizar en cualquier aspecto.`}]);
     setSending(false);
   }
   return (
@@ -572,7 +572,7 @@ export function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
         <div className="bg-gradient-to-br from-indigo-50 to-blue-50 rounded-2xl p-4 border border-indigo-100">
           <div className="flex items-center gap-2 mb-3">
             <div className="bg-indigo-600 rounded-lg p-1.5 text-white text-xs">AI</div>
-            <div><p className="font-extrabold text-indigo-900 text-sm">{label}</p><p className="text-[10px] text-indigo-500">Nebulae AI - {tipo}</p></div>
+            <div><p className="font-extrabold text-indigo-900 text-sm">{label}</p><p className="text-[10px] text-indigo-500">Nebulae AI - {etiquetaTipoSolicitud(tipo)}</p></div>
           </div>
           {!analisis&&!loading&&(
             <div className="text-center py-4">
