@@ -156,6 +156,25 @@ export function hintTotalPedidos(k) {
     + (k.total > k.cargados ? ` · se ven los ${k.cargados} más recientes` : '');
 }
 
+/**
+ * A4 (H47): ventas, cartera pendiente y ticket promedio del Dashboard General con la regla de la lista de pedidos
+ * (kpisPedidos): el resumen de GET /ventas/pedidos (todos los pedidos, no solo la pagina) o, si no vino,
+ * resumenPedidos sobre los cargados. Ni las ventas ni la cartera suman pedidos cancelados o devueltos por completo; la
+ * cartera es el saldo de cada pedido (lo que falta cobrar, abonos incluidos), no total - anticipo. El ticket reparte
+ * las ventas entre los pedidos que suman dinero. Acepta la respuesta del API o la lista de pedidos.
+ * @returns {{ventas: number, cartera: number, ticket: number}}
+ */
+export function cifrasVentasDashboard(respuesta) {
+  const pedidos = Array.isArray(respuesta) ? respuesta : (Array.isArray(respuesta?.data) ? respuesta.data : []);
+  const k = kpisPedidos(esObjeto(respuesta?.resumen) ? respuesta.resumen : null, pedidos);
+  let conDinero = 0;
+  for (const [estado, n] of Object.entries(k.porEstado)) {
+    if (!ESTADOS_PEDIDO_SIN_DINERO.includes(estado)) conDinero += Number(n) || 0;
+  }
+  const ventas = redondearPeso(k.monto);
+  return { ventas, cartera: redondearPeso(k.saldo), ticket: conDinero > 0 ? Math.round(ventas / conDinero) : 0 };
+}
+
 // ─── N10: filtro de estado de la lista de pedidos ────────────────────────────────────────────────────
 
 const FILTRO_ESTADOS_BASE = Object.freeze(['PENDIENTE_COMPRA', 'PENDIENTE_PAGO', 'EN_PROCESO', 'EN_TRANSITO',

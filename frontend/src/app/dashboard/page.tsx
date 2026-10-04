@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { apiFetch, API_URL } from '@/lib/api';
+import { cifrasVentasDashboard } from '@/lib/listas-ventas';
 
 function formatCOP(v: number | string | null | undefined) {
   const num = Number(v) || 0;
@@ -68,9 +69,9 @@ export default function DashboardGeneral() {
       const custRes = await apiFetch('/crm/customers').catch(() => []);
       const custList = Array.isArray(custRes) ? custRes : (custRes?.data || []);
 
-      // Cálculos de Ventas
-      const totalVentasSum = salesList.reduce((acc: number, s: any) => acc + Number(s.total_cop || 0), 0);
-      const ticketProm = salesList.length > 0 ? Math.round(totalVentasSum / salesList.length) : 0;
+      // Cálculos de Ventas. A4 (H47): ventas, ticket y cartera con el resumen del API de pedidos (todos los
+      // pedidos), sin cancelados ni devueltos por completo; la cartera es el saldo de cada pedido.
+      const cifrasVentas = cifrasVentasDashboard(salesRes);
 
       const aprobados = salesList.filter((s: any) => ['CONFIRMADA', 'APROBADA', 'PAGADA', 'EN_PROCESO'].includes(s.estado)).length;
       const esperando = salesList.filter((s: any) => ['PENDIENTE_COMPRA', 'ESPERANDO_MERCANCIA', 'EN_TRANSITO'].includes(s.estado)).length;
@@ -99,14 +100,14 @@ export default function DashboardGeneral() {
       }
 
       setMetrics({
-        totalVentas: totalVentasSum,
-        ticketPromedio: ticketProm,
+        totalVentas: cifrasVentas.ventas,
+        ticketPromedio: cifrasVentas.ticket,
         cotizacionesVivas: cotizaciones,
         pedidosAprobados: aprobados,
         esperandoMercancia: esperando,
         pedidosDespachados: despachados,
         totalClientes: custList.length,
-        saldoPendienteCartera: salesList.reduce((acc: number, s: any) => acc + Math.max(0, Number(s.total_cop || 0) - Number(s.anticipo_cop || 0)), 0),
+        saldoPendienteCartera: cifrasVentas.cartera,
         stockFisico: fisico,
         stockComprometido: comprometido,
         stockDisponible: disponible,
