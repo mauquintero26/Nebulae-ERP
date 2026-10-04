@@ -120,6 +120,8 @@ export function validarAjusteAnticipo(pctTexto, nota) {
  * Cuentas del modal con los datos del GET de la cotizacion: total, requerido, saldo a favor de pedidos cancelados de
  * esta misma cotizacion (hasta el total), lo que falta verificar y el maximo que se puede registrar (el pago mas el
  * saldo a favor no pasan del total). Igual que convertir_cotizacion_a_venta.
+ * @returns {{total: number, requerido: number, saldoAFavor: number, porVerificar: number, maximo: number,
+ *   saldos: Array<{numero: string, monto: number}>}}
  */
 export function cuentaVerificacion(cot) {
   const total = redondearPeso(cot?.total_cop);

@@ -13,6 +13,12 @@ import {
 
 import { apiFetch, API_URL } from '@/lib/api';
 import { computeMarginPrice, MARGIN_PCT_CAP } from '@/lib/pricing';
+import { formatoPesos } from '@/lib/pesos';
+import {
+  METODOS_PAGO_ANTICIPO, formatoPct, porcentajeDePesos, hoyLocal, origenAnticipo, cuentaVerificacion,
+  evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo,
+} from '@/lib/dinero-ventas';
+import { pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, pestanaCotizacion } from '@/lib/listas-ventas';
 import { SubNav, PageHeader, StatCard, Modal, Button, EmptyState } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
 
@@ -42,11 +48,8 @@ export const fDate = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
 export const fTime = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }) : '';
-export const fCOP = (v: number | null | undefined) => {
-  const n = Number(v) || 0;
-  if (n === 0) return '$0';
-  return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(n);
-};
+// H42: pesos enteros ('$1.062.523'); se mantiene el export porque lo importan el detalle y otros.
+export const fCOP = (v: number | string | null | undefined) => formatoPesos(v);
 const isOverdue = (iso: string | null | undefined) => iso ? new Date(iso) < new Date() : false;
 const isExpiringSoon = (iso: string | null | undefined) => {
   if (!iso) return false;
@@ -171,7 +174,6 @@ export function CalculadorModal({
   const [descuento, setDescuento] = useState(cot.descuento_pct || 0);
   const [fechaEntrega, setFechaEntrega] = useState(cot.fecha_entrega_estimada ? cot.fecha_entrega_estimada.split('T')[0] : '');
   const [notas, setNotas] = useState(cot.notas || '');
-  const [anticipo, setAnticipo] = useState<string | number>(cot.anticipo_cop ?? 0);
   const [error, setError] = useState('');
 
   const addProd = () => setProductos(p => [...p, { product_name: '', qty: 1, cost_usd: 0, margen_pct: 30, flete_usd: 0, es_libre: false, _rowId: crypto.randomUUID() }]);
@@ -188,12 +190,15 @@ export function CalculadorModal({
     return { ...p, margen_pct: margenPct, price_cop_unit: unitPriceCop, total_cop: totalCop };
   });
 
+  // H42: lineas en pesos enteros; el descuento se redondea al peso y el total cuadra exacto.
   const subtotal = computedProd.reduce((s, p) => s + p.total_cop, 0);
-  const descTotal = subtotal * (Number(descuento) || 0) / 100;
+  const descTotal = Math.round(subtotal * (Number(descuento) || 0) / 100);
   const total = subtotal - descTotal;
-  const numAnticipo = anticipo === '' ? 0 : Number(anticipo);
-  const anticipo_cop = Math.min(Math.max(0, isNaN(numAnticipo) ? 0 : numAnticipo), total);
-  const saldo = Math.max(0, total - anticipo_cop);
+  // H36+H43 / R3: el anticipo ya no se edita aqui; lo calcula el servidor con la modalidad de la SC o el % manual.
+  const anticipoPct = Number(cot.anticipo_pct ?? 60);
+  const anticipo_cop = porcentajeDePesos(total, anticipoPct);
+  const saldo = total - anticipo_cop;
+  const anticipoManual = cot.anticipo_pct_manual !== null && cot.anticipo_pct_manual !== undefined;
 
   const handleSave = () => {
     if (computedProd.length === 0 || computedProd.some(p => !p.total_cop || p.total_cop <= 0)) {
@@ -219,7 +224,7 @@ export function CalculadorModal({
     onSave({
       productos: prods, trm_rate: Number(trm),
       subtotal_cop: subtotal, descuento_pct: Number(descuento),
-      total_cop: total, anticipo_cop: anticipo_cop,
+      total_cop: total,
       notas: notas || cot.notas,
       fecha_entrega_estimada: fechaEntrega || cot.fecha_entrega_estimada,
     });
@@ -340,22 +345,23 @@ export function CalculadorModal({
             </div>
             <div className="grid grid-cols-2 gap-3 mt-2">
               <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-black text-slate-500 uppercase block">Anticipo COP</label>
-                  <div className="flex gap-1">
-                    <button type="button" onClick={() => setAnticipo(Math.round(total * 0.6))} className="text-[10px] px-1.5 py-0.5 bg-amber-100 hover:bg-amber-200 text-amber-800 rounded font-bold">60%</button>
-                    <button type="button" onClick={() => setAnticipo(total)} className="text-[10px] px-1.5 py-0.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 rounded font-bold">100%</button>
-                    <button type="button" onClick={() => setAnticipo(0)} className="text-[10px] px-1.5 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded font-bold">0%</button>
-                  </div>
-                </div>
-                <input type="number" min="0" max={total} value={anticipo} onChange={e => setAnticipo(e.target.value)}
-                  className="w-full border border-amber-200 rounded-xl px-3 py-2 text-sm font-bold focus:ring-2 focus:ring-amber-200 outline-none bg-white" />
+                <p className="text-xs text-slate-500 mb-1">
+                  Anticipo {formatoPct(anticipoPct)} ({anticipoManual ? 'manual' : cot.sc_id ? (cot.sc_modalidad_pago || 'solicitud sin modalidad') : 'sin solicitud: % actual de la cotización'})
+                </p>
+                <p className="font-black text-slate-800">{fCOP(anticipo_cop)}</p>
               </div>
               <div className="flex flex-col justify-end">
                 <p className="text-xs text-slate-500 mb-1">Saldo pendiente</p>
                 <p className="font-black text-slate-800">{fCOP(saldo)}</p>
               </div>
             </div>
+            <p className="text-[11px] text-amber-800">
+              {anticipoManual
+                ? `Anticipo manual: ${formatoPct(cot.anticipo_pct_manual)}${cot.anticipo_manual_nota ? ` — ${cot.anticipo_manual_nota}` : ''}. Para cambiarlo usa “Ajustar anticipo” en la cotización.`
+                : cot.sc_id
+                  ? `El anticipo sigue la modalidad de pago de la solicitud ${cot.sc_numero || ''}. Para cambiarlo, cambia la modalidad en la solicitud o usa “Ajustar anticipo” en la cotización.`
+                  : 'La cotización no tiene solicitud: conserva su % de anticipo. Para cambiarlo usa “Ajustar anticipo” en la cotización.'}
+            </p>
           </div>
 
           {/* Notas */}
@@ -382,9 +388,11 @@ export function DeleteConfirm({ cot, onConfirm, onCancel }: { cot: any; onConfir
       <p className="text-slate-500 text-sm">
         ¿Estás seguro de eliminar <strong>{cot.numero}</strong>?
       </p>
-      <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-3">
-        La Solicitud de Cliente vinculada (<strong>{cot.sc_numero}</strong>) no será eliminada y podrá generar una nueva cotización.
-      </p>
+      {cot.sc_numero && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl p-3">
+          La solicitud <strong>{cot.sc_numero}</strong> seguirá activa y podrás crearle una nueva cotización.
+        </p>
+      )}
     </Modal>
   );
 }
@@ -422,7 +430,12 @@ export function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm
   );
 }
 
-export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, saving, customerHasPhone, documentLabel = 'cotización' }: { selectedChannel: 'WhatsApp'|'Email'|'Otro'|null; onSelectChannel: (ch: 'WhatsApp'|'Email'|'Otro') => void; onConfirm: () => void; onCancel: () => void; saving: boolean; customerHasPhone: boolean; documentLabel?: string }) {
+// H27+H39: `customerEmail` es opcional para no cambiar a quien no lo pasa (Hub, SC). Si se pasa y esta
+// vacio, Email queda deshabilitado ('Email (sin correo)'); en ambos casos se avisa del correo de respaldo.
+export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, saving, customerHasPhone, documentLabel = 'cotización', customerEmail }: { selectedChannel: 'WhatsApp'|'Email'|'Otro'|null; onSelectChannel: (ch: 'WhatsApp'|'Email'|'Otro') => void; onConfirm: () => void; onCancel: () => void; saving: boolean; customerHasPhone: boolean; documentLabel?: string; customerEmail?: string | null }) {
+  const conoceCorreo = customerEmail !== undefined;
+  const correo = (customerEmail || '').trim();
+  const sinCorreo = conoceCorreo && !correo;
   return (
     <Modal title="Seleccionar Canal de Envío" subtitle={`¿Por cuál canal deseas enviar la ${documentLabel}?`}
       icon={Send} color="blue" maxWidth="md" onClose={onCancel}
@@ -448,13 +461,16 @@ export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCa
         </button>
         <button
           onClick={() => onSelectChannel('Email')}
+          disabled={sinCorreo}
           className={`w-full py-3 px-4 rounded-xl border-2 font-bold text-left transition-all flex items-center gap-3 ${
             selectedChannel === 'Email'
               ? 'border-blue-500 bg-blue-50 text-blue-700'
-              : 'border-slate-300 bg-white text-slate-700 hover:border-blue-300'
+              : !sinCorreo
+              ? 'border-slate-300 bg-white text-slate-700 hover:border-blue-300'
+              : 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed'
           }`}>
           <Mail size={18}/>
-          <span>Email</span>
+          <span>Email{sinCorreo ? ' (sin correo)' : ''}</span>
         </button>
         <button
           onClick={() => onSelectChannel('Otro')}
@@ -467,6 +483,146 @@ export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCa
           <span>Otro</span>
         </button>
       </div>
+      {conoceCorreo && (
+        <p className="text-xs text-slate-500">
+          {correo
+            ? `Además se enviará un correo de respaldo a ${correo} con el enlace.`
+            : 'El cliente no tiene correo registrado: no se enviará correo de respaldo.'}
+        </p>
+      )}
+    </Modal>
+  );
+}
+
+// ── N1 / R4 / R6: verificar el pago del anticipo antes de crear el pedido ─────────────────────
+// Se abre cuando la cotizacion tiene anticipo por verificar (anticipo_por_verificar del GET). El
+// pago puede ser menor (R4: el pedido queda debiendo la diferencia, con casilla de confirmacion) y
+// el saldo a favor de un pedido cancelado de esta misma COT se descuenta (R6). `error` es el
+// detail del servidor, que se muestra aqui dentro.
+export function VerificarAnticipoModal({ cot, verificador, saving, error, onConfirm, onCancel }: {
+  cot: any; verificador: string; saving: boolean; error?: string;
+  onConfirm: (verificacion: any) => void; onCancel: () => void;
+}) {
+  const cuenta = cuentaVerificacion(cot);
+  const hoy = hoyLocal();
+  const [form, setForm] = useState({
+    monto: String(cuenta.porVerificar), metodo: '', referencia: '', fecha: hoy,
+    confirmoRevision: false, confirmoParcial: false,
+  });
+  const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
+  const ev = evaluarVerificacion(cuenta, form, hoy);
+  const campo = 'w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400';
+  return (
+    <Modal title="Verificar el pago del anticipo" subtitle={`${cot.numero} — ${cot.customer_name || ''}`}
+      icon={DollarSign} color="emerald" maxWidth="lg" onClose={onCancel}
+      footer={(
+        <>
+          <Button variant="secondary" disabled={saving} onClick={onCancel}>Volver</Button>
+          <Button color="emerald" icon={CheckCircle2} loading={saving} disabled={!ev.valido}
+            onClick={() => onConfirm(verificacionParaEnviar(form))}>
+            Pago verificado — Crear Pedido de Venta
+          </Button>
+        </>
+      )}>
+      <p className="text-sm text-slate-600">
+        {origenAnticipo(cot)}: el cliente debe haber pagado al menos <strong>{fCOP(cuenta.requerido)}</strong> ({formatoPct(cot.anticipo_pct ?? 60)}).
+        Revisa en el banco que el dinero llegó y registra el pago.
+      </p>
+      {cuenta.saldoAFavor > 0 && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-800 space-y-1">
+          {cuenta.saldos.map(s => (
+            <p key={s.numero} className="font-bold">Saldo a favor del pedido cancelado {s.numero}: {fCOP(s.monto)}</p>
+          ))}
+          <p>Se descuenta del anticipo: {cuenta.porVerificar > 0 ? `falta verificar ${fCOP(cuenta.porVerificar)}.` : 'el saldo a favor ya lo cubre.'}</p>
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs font-black text-slate-500 uppercase mb-1 block">Monto recibido</label>
+          <input type="number" min={1} max={cuenta.maximo} step={1} value={form.monto} onChange={e => set('monto', e.target.value)} className={campo} />
+        </div>
+        <div>
+          <label className="text-xs font-black text-slate-500 uppercase mb-1 block">Método de pago</label>
+          <select value={form.metodo} onChange={e => set('metodo', e.target.value)} className={campo}>
+            <option value="">Seleccionar...</option>
+            {METODOS_PAGO_ANTICIPO.map(m => <option key={m} value={m}>{m}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-xs font-black text-slate-500 uppercase mb-1 block">Referencia o número de comprobante</label>
+          <input type="text" value={form.referencia} onChange={e => set('referencia', e.target.value)}
+            placeholder="En efectivo, el número de recibo" className={campo} />
+        </div>
+        <div>
+          <label className="text-xs font-black text-slate-500 uppercase mb-1 block">Fecha del pago</label>
+          <input type="date" max={hoy} value={form.fecha} onChange={e => set('fecha', e.target.value)} className={campo} />
+        </div>
+      </div>
+      {ev.parcial && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800 space-y-2">
+          <p className="font-bold">El pago es menor que el anticipo requerido: el pedido quedará debiendo {fCOP(ev.deuda)}.</p>
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input type="checkbox" checked={form.confirmoParcial} onChange={e => set('confirmoParcial', e.target.checked)} className="mt-0.5" />
+            <span>Entiendo que el pedido se crea debiendo {fCOP(ev.deuda)} de anticipo.</span>
+          </label>
+        </div>
+      )}
+      {ev.errores.length > 0 && (
+        <ul className="text-xs text-rose-600 font-bold space-y-0.5">
+          {ev.errores.map(e => <li key={e}>{e}</li>)}
+        </ul>
+      )}
+      <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
+        <input type="checkbox" checked={form.confirmoRevision} onChange={e => set('confirmoRevision', e.target.checked)} className="mt-1" />
+        <span className="font-bold">Confirmo que revisé y el pago está en la cuenta de Nebulae</span>
+      </label>
+      <p className="text-xs text-slate-400">Verificado por: {verificador || 'usuario actual'}</p>
+      {error && (
+        <p className="text-xs text-red-600 font-bold bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>
+      )}
+    </Modal>
+  );
+}
+
+// ── R3: ajustar el anticipo a mano (porcentaje + nota obligatoria) o volver a la modalidad ─────
+export function AjustarAnticipoModal({ cot, saving, error, onGuardar, onVolverModalidad, onCancel }: {
+  cot: any; saving: boolean; error?: string;
+  onGuardar: (pct: number, nota: string) => void; onVolverModalidad: () => void; onCancel: () => void;
+}) {
+  const manual = cot.anticipo_pct_manual !== null && cot.anticipo_pct_manual !== undefined;
+  const [pct, setPct] = useState(String(manual ? cot.anticipo_pct_manual : (cot.anticipo_pct ?? 60)));
+  const [nota, setNota] = useState(cot.anticipo_manual_nota || '');
+  const v = validarAjusteAnticipo(pct, nota);
+  const campo = 'w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400';
+  return (
+    <Modal title="Ajustar anticipo" subtitle={`${cot.numero} — total ${fCOP(cot.total_cop)}`}
+      icon={DollarSign} color="amber" maxWidth="md" onClose={onCancel}
+      footer={(
+        <>
+          <Button variant="secondary" disabled={saving} onClick={onCancel}>Cancelar</Button>
+          {manual && <Button variant="secondary" disabled={saving} onClick={onVolverModalidad}>Volver a la modalidad</Button>}
+          <Button color="amber" icon={Save} loading={saving} disabled={!!v.error}
+            onClick={() => v.pct !== null && onGuardar(v.pct, v.nota)}>Guardar</Button>
+        </>
+      )}>
+      <p className="text-sm text-slate-600">
+        Hoy: {origenAnticipo(cot)} — {formatoPct(cot.anticipo_pct ?? 60)} = <strong>{fCOP(cot.anticipo_requerido ?? cot.anticipo_cop)}</strong>.
+        Úsalo solo en casos especiales (por ejemplo, un anticipo negociado con el cliente).
+      </p>
+      <div>
+        <label className="text-xs font-black text-slate-500 uppercase mb-1 block">Porcentaje de anticipo (%)</label>
+        <input type="number" min={0} max={100} step="0.01" value={pct} onChange={e => setPct(e.target.value)} className={`${campo} font-bold`} />
+        {v.pct !== null && (
+          <p className="text-xs text-slate-500 mt-1">Anticipo con {formatoPct(v.pct)}: <strong>{fCOP(porcentajeDePesos(cot.total_cop, v.pct))}</strong></p>
+        )}
+      </div>
+      <div>
+        <label className="text-xs font-black text-slate-500 uppercase mb-1 block">Nota (obligatoria)</label>
+        <textarea value={nota} onChange={e => setNota(e.target.value)} rows={3}
+          placeholder="Explica por qué el anticipo es distinto al de la modalidad" className={`${campo} resize-none`} />
+      </div>
+      {(pct !== '' || nota) && v.error && <p className="text-xs text-rose-600 font-bold">{v.error}</p>}
+      {error && <p className="text-xs text-red-600 font-bold bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>}
     </Modal>
   );
 }
@@ -505,13 +661,16 @@ export default function CotizacionClient() {
     if (idParam) { const numId = Number(idParam); if (!isNaN(numId)) router.replace(`/dashboard/ventas/cotizacion/${numId}`); }
   }, [searchParams, router]);
 
-  // Derived stats
-  const activas     = cotizaciones.filter(c => c.estado !== 'CONFIRMADA' && c.estado !== 'RECHAZADA');
-  const confirmadas = cotizaciones.filter(c => c.estado === 'CONFIRMADA');
-  const rechazadas  = cotizaciones.filter(c => c.estado === 'RECHAZADA');
+  // Derived stats -- COT-LISTA: una CONFIRMADA cuyo pedido se cancelo vuelve a 'Activas' (se ajusta y se reenvia)
+  // y no suma en 'Confirmadas' ni en 'Monto Confirmado'.
+  const activas     = cotizaciones.filter(c => pestanaCotizacion(c) === 'Activas');
+  const confirmadas = cotizaciones.filter(c => pestanaCotizacion(c) === 'Confirmadas');
+  const rechazadas  = cotizaciones.filter(c => pestanaCotizacion(c) === 'Rechazadas');
+  const conPedido   = confirmadas.filter(c => pedidoVigente(c));
+  const porConvertir= confirmadas.length - conPedido.length;
   const sinCalc     = activas.filter(c => !(c.total_cop > 0)).length;
   const vencenPronto= activas.filter(c => isExpiringSoon(c.fecha_entrega_estimada)).length;
-  const montoTotal  = confirmadas.reduce((s, c) => s + (c.total_cop || 0), 0);
+  const montoTotal  = confirmadas.reduce((s, c) => s + (Number(c.total_cop) || 0), 0);
   const sinAtender  = activas.filter(c => {
     const ms = (Date.now() - new Date(c.updated_at || c.created_at).getTime());
     return ms / 3600000 > alertDias * 24;
@@ -520,9 +679,7 @@ export default function CotizacionClient() {
   const filtered = cotizaciones.filter(c => {
     const ms = !search || JSON.stringify(c).toLowerCase().includes(search.toLowerCase());
     if (!ms) return false;
-    if (activeTab === 'Activas')    return c.estado !== 'CONFIRMADA' && c.estado !== 'RECHAZADA';
-    if (activeTab === 'Confirmadas') return c.estado === 'CONFIRMADA';
-    if (activeTab === 'Rechazadas')  return c.estado === 'RECHAZADA';
+    if (activeTab === 'Activas' || activeTab === 'Confirmadas' || activeTab === 'Rechazadas') return pestanaCotizacion(c) === activeTab;
     return true;
   });
 
@@ -574,7 +731,7 @@ export default function CotizacionClient() {
             onClick={() => setActiveTab('Activas')} />
 
           <StatCard icon={CheckCircle2} color="emerald" label="Confirmadas" value={confirmadas.length}
-            hint="Generaron Pedido de Venta"
+            hint={confirmadas.length === 0 ? 'Sin confirmadas' : porConvertir > 0 ? `${conPedido.length} con pedido de venta · ${porConvertir} por convertir` : 'Todas con pedido de venta'}
             onClick={() => setActiveTab('Confirmadas')} />
 
           {/* Sin acento neutro/gris disponible en AccentColor -- se deja a medida para
@@ -585,7 +742,7 @@ export default function CotizacionClient() {
             </div>
             <p className="text-xs font-black text-slate-400 uppercase tracking-wider mb-1">Monto Confirmado</p>
             <h2 className="text-xl font-black text-slate-800">{fCOP(montoTotal)}</h2>
-            <p className="text-xs font-bold text-slate-400 mt-2">{confirmadas.length} cotizaciones cerradas</p>
+            <p className="text-xs font-bold text-slate-400 mt-2">{conPedido.length} con pedido de venta vigente</p>
           </div>
 
           <StatCard icon={Activity} color="amber" variant="gradient" label="Total Cotizaciones" value={cotizaciones.length}
@@ -681,6 +838,11 @@ export default function CotizacionClient() {
                           <p className="text-[10px] font-bold text-indigo-500 mt-0.5 flex items-center gap-1">
                             SC: {cot.sc_numero}
                           </p>
+                        )}
+                        {pedidoVigente(cot) ? (
+                          <p className="text-[10px] font-bold text-emerald-600 mt-0.5">Pedido {pedidoVigente(cot)?.numero}</p>
+                        ) : soloPedidosCancelados(cot) && (
+                          <p className="text-[10px] font-bold text-rose-500 mt-0.5">Pedido {ultimoPedidoCancelado(cot)?.numero} cancelado</p>
                         )}
                       </td>
                       <td className="px-6 py-4">
