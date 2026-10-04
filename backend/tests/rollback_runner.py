@@ -19,6 +19,7 @@ Fixtures que resuelve (ademas de las que defina el propio modulo de tests, que t
     user_vendedor, vendedor_token             usuario VENDEDOR creado dentro de la transaccion revertida
     brand, category, product, sku             igual que conftest.py (dentro de la transaccion revertida)
     contador_sql                              cuenta consultas SQL y commits (ver ContadorSQL)
+    clave_de_prueba, hash_clave_de_prueba     la clave de prueba CLAVE_DE_PRUEBA y su hash bcrypt (el de user_vendedor)
 Las fixtures generadoras (yield) entregan el valor del yield y su teardown corre despues de la prueba,
 en orden inverso, ANTES de cerrar la sesion y revertir la transaccion.
 
@@ -190,6 +191,7 @@ def _contador_sql():
         contador.desinstalar()
 
 
+CLAVE_DE_PRUEBA = "Test123!"  # clave de las cuentas de prueba (la misma TEST_PASSWORD de conftest.py)
 _HASH_DE_PRUEBA = []  # cache: el hash bcrypt de la clave de prueba se calcula una sola vez por corrida
 
 
@@ -197,11 +199,24 @@ def _hash_de_prueba():
     if not _HASH_DE_PRUEBA:
         try:
             import bcrypt
-            _HASH_DE_PRUEBA.append(bcrypt.hashpw(b"Test123!", bcrypt.gensalt()).decode())
+            _HASH_DE_PRUEBA.append(bcrypt.hashpw(CLAVE_DE_PRUEBA.encode(), bcrypt.gensalt()).decode())
         except Exception:
             from app.core.security import get_password_hash
-            _HASH_DE_PRUEBA.append(get_password_hash("Test123!"))
+            _HASH_DE_PRUEBA.append(get_password_hash(CLAVE_DE_PRUEBA))
     return _HASH_DE_PRUEBA[0]
+
+
+@_fixture_del_runner
+def _clave_de_prueba():
+    """La clave de prueba (CLAVE_DE_PRUEBA). El runner no se puede importar desde un modulo de tests (volveria a
+    correrlo), asi que se entrega como fixture."""
+    return CLAVE_DE_PRUEBA
+
+
+@_fixture_del_runner
+def _hash_clave_de_prueba():
+    """Hash bcrypt de CLAVE_DE_PRUEBA, el mismo que llevan las cuentas que crea el runner (user_vendedor)."""
+    return _hash_de_prueba()
 
 
 @_fixture_del_runner

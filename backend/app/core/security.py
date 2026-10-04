@@ -69,8 +69,15 @@ else:
 # Otros parametros JWT
 # ---------------------------------------------------------------------------
 ALGORITHM: str = os.environ.get("ALGORITHM", "HS256").strip()
+# Vigencia por defecto de create_access_token sin expires_delta (tokens internos y pruebas). Ya NO controla el
+# login: la sesion de los usuarios usa SESSION_IDLE_TIMEOUT_MINUTES.
 ACCESS_TOKEN_EXPIRE_MINUTES: int = int(
     os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60").strip()
+)
+# H23: minutos sin uso antes de que se cierre la sesion (login y /auth/refresh). Variable nueva a proposito:
+# los entornos ya traen ACCESS_TOKEN_EXPIRE_MINUTES=30/60 y reutilizarla dejaria la sesion en 30-60 minutos.
+SESSION_IDLE_TIMEOUT_MINUTES: int = int(
+    os.environ.get("SESSION_IDLE_TIMEOUT_MINUTES", "1440").strip()
 )
 
 # ---------------------------------------------------------------------------
@@ -89,9 +96,11 @@ def get_password_hash(password: str) -> str:
 
 def create_access_token(data: dict, expires_delta: timedelta = None) -> str:
     to_encode = data.copy()
+    now = datetime.now(timezone.utc)
     if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
+        expire = now + expires_delta
     else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+        expire = now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    # 'iat' (emitido en) le dice al frontend cuando toca renovar la sesion (H23).
+    to_encode.update({"exp": expire, "iat": now})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)

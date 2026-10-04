@@ -96,3 +96,26 @@ class TestJwtExpiration:
 
         user = get_current_user(token=fresh_token, db=mock_db)
         assert user.id == 999
+
+    def test_session_idle_timeout_por_defecto_es_1440(self):
+        # H23: la sesion sin uso dura 24 h salvo que SESSION_IDLE_TIMEOUT_MINUTES diga otra cosa.
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SESSION_IDLE_TIMEOUT_MINUTES", None)
+            mod = _reload_sec({})
+            assert mod.SESSION_IDLE_TIMEOUT_MINUTES == 1440
+        mod = _reload_sec({"SESSION_IDLE_TIMEOUT_MINUTES": "90"})
+        assert mod.SESSION_IDLE_TIMEOUT_MINUTES == 90
+        # ACCESS_TOKEN_EXPIRE_MINUTES sigue siendo independiente (tokens internos y pruebas).
+        assert mod.ACCESS_TOKEN_EXPIRE_MINUTES == 60
+
+    def test_create_access_token_incluye_iat(self):
+        # H23: el frontend usa 'iat' para saber cuando renovar; exp e iat salen del mismo instante.
+        mod = _reload_sec({"ACCESS_TOKEN_EXPIRE_MINUTES": "60"})
+        token = mod.create_access_token(data={"sub": "1", "role": "admin"})
+        payload = jwt.decode(token, _REAL_SECRET, algorithms=["HS256"])
+        assert "iat" in payload
+        assert abs(datetime.now(timezone.utc).timestamp() - payload["iat"]) < 120
+        assert payload["exp"] - payload["iat"] == 60 * 60
+        token = mod.create_access_token(data={"sub": "1", "role": "admin"}, expires_delta=timedelta(minutes=1440))
+        payload = jwt.decode(token, _REAL_SECRET, algorithms=["HS256"])
+        assert payload["exp"] - payload["iat"] == 1440 * 60

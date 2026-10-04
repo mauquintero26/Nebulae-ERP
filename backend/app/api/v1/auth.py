@@ -13,7 +13,7 @@ from app.schemas.users import (
     UserCreate, UserResponse, PasswordChange,
     ForgotPasswordRequest, ResetPasswordRequest, UsernameUpdate,
 )
-from app.core.security import get_password_hash, verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
+from app.core.security import get_password_hash, verify_password, create_access_token, SESSION_IDLE_TIMEOUT_MINUTES
 from app.core.email import send_email
 from app.api.dependencies import get_current_user, require_roles, ROLE_ADMIN, normalize_role
 
@@ -65,7 +65,8 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    # H23: la sesion dura SESSION_IDLE_TIMEOUT_MINUTES (24 h) y el frontend la renueva con /refresh mientras se use.
+    access_token_expires = timedelta(minutes=SESSION_IDLE_TIMEOUT_MINUTES)
     access_token = create_access_token(
         data={"sub": str(user.id), "role": user.role}, expires_delta=access_token_expires
     )
@@ -75,6 +76,18 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 @router.get("/me")
 def read_users_me(current_user: User = Depends(get_current_user)):
     return {"status": "success", "data": UserResponse.model_validate(current_user).model_dump()}
+
+@router.post("/refresh")
+def refresh_session(current_user: User = Depends(get_current_user)):
+    """H23: emite un token nuevo de SESSION_IDLE_TIMEOUT_MINUTES para el usuario del token vigente.
+
+    El frontend (SessionKeeper) lo llama como maximo cada 10 minutos y solo si hubo uso real despues de emitirse
+    el token. get_current_user ya rechaza con 401 un token vencido o de un usuario desactivado."""
+    token = create_access_token(
+        {"sub": str(current_user.id), "role": current_user.role},
+        expires_delta=timedelta(minutes=SESSION_IDLE_TIMEOUT_MINUTES),
+    )
+    return {"access_token": token, "token_type": "bearer", "expires_in": SESSION_IDLE_TIMEOUT_MINUTES * 60}
 
 @router.post("/change-password")
 def change_password(
