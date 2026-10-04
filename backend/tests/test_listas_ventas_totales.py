@@ -11,6 +11,7 @@ Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_lis
 """
 import datetime
 import uuid
+from decimal import Decimal
 
 from sqlalchemy import text
 
@@ -80,6 +81,24 @@ def test_resumen_de_pedidos_cubre_todos_no_solo_la_pagina(app_client, db, admin_
                           headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     assert resp.json()["resumen"] == {"monto_cop": 0, "saldo_cop": 0, "anticipo_cop": 0, "por_estado": {}}
+
+
+def test_resumen_de_pedidos_sale_en_pesos_enteros_aunque_haya_documentos_con_centavos(app_client, db, admin_token):
+    """Regla global de pesos enteros: un pedido viejo con centavos no deja las sumas con decimales."""
+    suf = _suf()
+    cliente = f"Cliente Centavos {suf}"
+    _pedido(db, f"PVEN-CA{suf}", cliente, "PENDIENTE_COMPRA", Decimal("1000000.40"), Decimal("600000.00"),
+            Decimal("400000.40"))
+    _pedido(db, f"PVEN-CB{suf}", cliente, "ENTREGADO", Decimal("500000.40"), Decimal("500000.40"), Decimal("0"))
+    resp = app_client.get("/api/v1/ventas/pedidos", params={"search": cliente, "limit": 200}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    resumen = resp.json()["resumen"]
+    # Sumas exactas: 1.500.000,80 / 400.000,40 / 1.100.000,40 -> al peso.
+    assert resumen["monto_cop"] == 1500001
+    assert resumen["saldo_cop"] == 400000
+    assert resumen["anticipo_cop"] == 1100000
+    for clave in ("monto_cop", "saldo_cop", "anticipo_cop"):
+        assert float(resumen[clave]).is_integer(), (clave, resumen[clave])
 
 
 def test_resumen_de_pedidos_respeta_el_filtro_por_estado(app_client, db, admin_token):
@@ -286,6 +305,25 @@ def test_un_asesor_no_puede_cambiar_la_config(app_client, db, vendedor_token):
         assert _valor_de_config(db, "alerta_sc_dias") == previo
     finally:
         _restaurar_config(db, "alerta_sc_dias", previo)
+
+
+def test_si_falla_la_lectura_de_la_config_responde_vacio_y_queda_en_el_log(app_client, vendedor_token, monkeypatch):
+    """Los asesores la leen ahora: un fallo no se traga en silencio (el 200 vacio se mantiene)."""
+    import app.api.v1.erp_ventas as m
+    texto_real = m.text
+    registro = []
+
+    def texto_que_falla(sql, *a, **k):
+        if "FROM admin_config" in str(sql):
+            raise RuntimeError("fallo simulado de admin_config")
+        return texto_real(sql, *a, **k)
+
+    monkeypatch.setattr(m, "text", texto_que_falla)
+    monkeypatch.setattr(m.logger, "exception", lambda mensaje, *a, **k: registro.append(mensaje))
+    resp = app_client.get("/api/v1/ventas/config", headers=auth(vendedor_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"status": "success", "data": {}}
+    assert registro == ["No se pudo leer admin_config"]
 
 
 def test_sin_sesion_la_config_sigue_cerrada(app_client):

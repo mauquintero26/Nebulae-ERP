@@ -506,7 +506,7 @@ def test_eliminar_permanente_exige_una_solicitud_cancelada(app_client, db, admin
 
 def test_eliminar_permanente_con_una_referencia_de_ultimo_momento_es_409_y_no_500(app_client, db, admin_token,
                                                                                   user_admin, monkeypatch):
-    """Red de seguridad: si el FK salta en el DELETE (se creo una COT entre la revision y el borrado), 409 y no 500."""
+    """Red de seguridad: si una FK que la revision no cubre salta en el DELETE, 409 y no 500."""
     from sqlalchemy.exc import IntegrityError
     from sqlalchemy.orm import Session
     sc = _sc(db, "SC-PAP009", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(1))
@@ -526,3 +526,18 @@ def test_eliminar_permanente_con_una_referencia_de_ultimo_momento_es_409_y_no_50
     assert resp.status_code == 409, resp.text
     assert "Se conserva" in resp.json()["detail"]
     assert _existe(db, "SC-PAP009")  # el rollback dejo la SC en su sitio
+
+
+def test_eliminar_permanente_bloquea_la_solicitud_antes_de_revisar_sus_documentos(app_client, db, admin_token,
+                                                                                  user_admin, contador_sql):
+    """FOR UPDATE como restaurar_solicitud: una COT que se vincule a la SC mientras se borra espera y falla en su FK
+    (sin el bloqueo, el ORM le pondria sc_id = NULL a esa COT al borrar la SC y la dejaria huerfana)."""
+    sc = _sc(db, "SC-PAP010", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(1))
+    with contador_sql.ventana() as v:
+        resp = app_client.delete(f"/api/v1/ventas/solicitudes/{sc.id}/permanente", headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    lecturas = [s for s in v.sentencias if "FROM customer_requests" in s]
+    assert lecturas and "FOR UPDATE" in lecturas[0], lecturas
+    # El bloqueo va antes que la revision de documentos.
+    revision = [i for i, s in enumerate(v.sentencias) if "FROM sales_quotations" in s]
+    assert revision and v.sentencias.index(lecturas[0]) < revision[0]

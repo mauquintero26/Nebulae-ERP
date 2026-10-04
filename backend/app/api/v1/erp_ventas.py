@@ -1971,6 +1971,7 @@ def list_pedidos(
     total = q.count()
     # H47: el resumen cubre TODO lo que cumple el filtro (no solo la pagina). El dinero no suma los pedidos cancelados
     # ni devueltos por completo (siguen guardando su saldo, simplemente no cuentan); por_estado los cuenta a todos.
+    # Las sumas salen en pesos enteros (redondear_peso): un documento viejo con centavos no deja la cifra con decimales.
     vigente = SaleOrder.estado.notin_(ESTADOS_VEN_SIN_DINERO)
     suma = lambda col: func.coalesce(func.sum(case((vigente, col), else_=0)), 0)
     monto, saldo, anticipo = q.with_entities(suma(SaleOrder.total_cop), suma(SaleOrder.saldo_cop),
@@ -1980,8 +1981,8 @@ def list_pedidos(
     # H4: el asesor real de cada pedido (el de su COT o, si no, el de su SC), con 2 consultas en bloque.
     asesores = _asesores_de_pedidos(db, items)
     return {"status": "success", "total": total,
-            "resumen": {"monto_cop": float(monto), "saldo_cop": float(saldo), "anticipo_cop": float(anticipo),
-                        "por_estado": por_estado},
+            "resumen": {"monto_cop": float(redondear_peso(monto)), "saldo_cop": float(redondear_peso(saldo)),
+                        "anticipo_cop": float(redondear_peso(anticipo)), "por_estado": por_estado},
             "data": [{**_ven_dict(v), "advisor_name": asesores.get(v.id)} for v in items]}
 
 
@@ -2650,6 +2651,8 @@ def get_config(user: User = Depends(require_roles(*ALL_ERP_ROLES)),
             data = {k: v for k, v in data.items() if k in _CONFIG_LECTURA_GENERAL}
         return {"status": "success", "data": data}
     except Exception:
+        # Lo leen todos los roles (N8): si la consulta falla (tabla ausente, base caida) que quede rastro en el log.
+        logger.exception("No se pudo leer admin_config")
         return {"status": "success", "data": {}}
 
 
@@ -2834,7 +2837,12 @@ def cancelar_solicitud(sc_id: int, body: CancelarSolicitudBody,
 def eliminar_permanente(sc_id: int, user: User = Depends(require_roles(*ROLE_ADMIN)),
         db: Session = Depends(get_db)):
     """Elimina permanentemente una SC de la papelera (N4: no si tiene cotizaciones, pedidos o leads vinculados)."""
-    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
+    # Bloqueada (FOR UPDATE, como restaurar_solicitud) ANTES de revisar los documentos: un INSERT concurrente que
+    # referencie esta SC (una COT, un pedido, un lead) espera a que termine esta transaccion y despues falla en su
+    # propio FK, en vez de colarse entre la revision y el borrado. Sin el bloqueo, db.delete(sc) borraria la SC y el ORM
+    # (CustomerRequest.quotations no tiene passive_deletes) haria UPDATE sales_quotations SET sc_id = NULL sobre una COT
+    # recien vinculada, dejandola huerfana sin avisar.
+    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
     if not sc or sc.estado != "CANCELADA":
         raise HTTPException(400, "Solo se pueden eliminar permanentemente SCs canceladas")
     cots = [r.numero for r in db.query(SalesQuotation.numero).filter(SalesQuotation.sc_id == sc.id)
@@ -2848,7 +2856,8 @@ def eliminar_permanente(sc_id: int, user: User = Depends(require_roles(*ROLE_ADM
         db.delete(sc)
         db.commit()
     except IntegrityError:
-        # Red de seguridad: un documento se vinculo entre la revision de arriba y el borrado.
+        # Red de seguridad para una referencia que la revision de arriba no cubre (otra FK a customer_requests): 409 en
+        # vez de 500. Las COT, los pedidos y los leads vinculados no llegan aqui: ya los frenaron la revision y el bloqueo.
         db.rollback()
         raise HTTPException(409, _mensaje_solicitud_con_historial(sc, [], [], 0))
     return {"status": "success", "data": {"deleted": sc_id}}
