@@ -11,8 +11,8 @@
 import assert from 'node:assert/strict';
 import {
   ordenParaCancelar, motivoNoCancelable, resumenLote,
-  ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN,
-  diasDesde, textoAntiguedad,
+  ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN, repartirCambioEstadoPVEN,
+  comoUTC, diasDesde, textoAntiguedad,
   ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, tieneProductos, esNoResuelto, esAccionTomada, accionSiguienteSC,
 } from '../src/lib/hub-ventas.js';
 import { ESTADOS_PEDIDO } from '../src/lib/estados-pedido.js';
@@ -249,6 +249,115 @@ console.log('--- H3 TEST 12: esNoResuelto / esAccionTomada ---');
   assert.equal(esAccionTomada({ tipo: 'SC', id: 1, estado: 'CONFIRMADA' }, new Set()), false);
   assert.equal(esAccionTomada({ tipo: 'SC', id: 1, estado: 'CONFIRMADA' }, new Set([1])), true);
   assert.equal(esNoResuelto({ tipo: 'VEN', estado: 'EN_PROCESO' }, new Set()), true);
+}
+
+console.log('--- FIX1 TEST 13: un aviso (nota del rechazo que no quedo) no cuenta como fallo pero sale en el banner ---');
+{
+  const aviso = 'rechazada, pero el motivo no quedó en la Actividad: HTTP 500';
+  const r = resumenLote([
+    { idStr: 'COT|1', numero: 'COT-1', ok: true, aviso },
+    { idStr: 'SC|2', numero: 'SC-2', ok: true },
+  ]);
+  assert.equal(r.exitosos, 2);
+  assert.deepEqual(r.fallidos, []);
+  assert.deepEqual(r.avisos, [{ numero: 'COT-1', error: aviso }]);
+  assert.equal(r.mensaje, '2 documentos cancelados');
+  assert.equal(r.banner.titulo, '2 documentos cancelados (1 aviso):');
+  assert.deepEqual(r.banner.lineas, [{ numero: 'COT-1', error: aviso }]);
+
+  // todo bien y sin avisos: sin banner (solo el toast)
+  assert.equal(resumenLote([{ idStr: 'SC|1', numero: 'SC-1', ok: true }]).banner, null);
+
+  // con un fallo: el titulo de siempre y primero los fallos, luego los avisos
+  const conFallo = resumenLote([
+    { idStr: 'VEN|1', numero: 'PVEN-1', ok: false, error: 'Indica el motivo...' },
+    { idStr: 'COT|2', numero: 'COT-2', ok: true, aviso },
+    { idStr: 'SC|3', numero: 'SC-3', ok: true },
+  ]);
+  assert.equal(conFallo.mensaje, 'No se pudieron cancelar 1 de 3 documentos');
+  assert.equal(conFallo.banner.titulo, 'No se pudieron cancelar 1 de 3 documentos (1 aviso):');
+  assert.deepEqual(conFallo.banner.lineas, [
+    { numero: 'PVEN-1', error: 'Indica el motivo...' },
+    { numero: 'COT-2', error: aviso },
+  ]);
+}
+
+console.log('--- FIX1 TEST 14: repartirCambioEstadoPVEN (cambio masivo solo a los pedidos que pueden pasar) ---');
+{
+  const filas = [
+    { idStr: 'VEN|1', numero: 'PVEN-1', estado: 'ENTREGADO' },
+    { idStr: 'VEN|2', numero: 'PVEN-2', estado: 'EN_PROCESO' },
+    { idStr: 'VEN|3', numero: 'PVEN-3', estado: 'LISTO_ENTREGA' },
+    { idStr: 'VEN|4', numero: 'PVEN-4', estado: 'CANCELADO' },
+  ];
+  const aProceso = repartirCambioEstadoPVEN(filas, 'EN_PROCESO');
+  assert.deepEqual(aProceso.aplican.map((f) => f.idStr), ['VEN|3']);
+  assert.deepEqual(aProceso.omitidos, [
+    { idStr: 'VEN|1', numero: 'PVEN-1', motivo: 'no se puede pasar de Entregado a En proceso' },
+    { idStr: 'VEN|2', numero: 'PVEN-2', motivo: 'ya está en En proceso' },
+    { idStr: 'VEN|4', numero: 'PVEN-4', motivo: 'no se puede pasar de Cancelado a En proceso' },
+  ]);
+
+  // Facturado solo desde Entregado
+  const aFacturado = repartirCambioEstadoPVEN(filas, 'FACTURADO');
+  assert.deepEqual(aFacturado.aplican.map((f) => f.idStr), ['VEN|1']);
+  assert.deepEqual(aFacturado.omitidos.map((o) => o.motivo), [
+    'no se puede pasar de En proceso a Facturado',
+    'no se puede pasar de Listo para entrega a Facturado',
+    'no se puede pasar de Cancelado a Facturado',
+  ]);
+
+  // un estado heredado se trata como operativo; una fila que ya no esta se omite
+  const raras = repartirCambioEstadoPVEN([
+    { idStr: 'VEN|5', numero: 'PVEN-5', estado: 'PAGADO' },
+    { idStr: 'VEN|9', numero: 'Pedido 9' },
+  ], 'LISTO_ENTREGA');
+  assert.deepEqual(raras.aplican.map((f) => f.idStr), ['VEN|5']);
+  assert.deepEqual(raras.omitidos, [{ idStr: 'VEN|9', numero: 'Pedido 9', motivo: 'ya no está en la lista del Hub' }]);
+  assert.deepEqual(repartirCambioEstadoPVEN([], 'EN_PROCESO'), { aplican: [], omitidos: [] });
+}
+
+console.log('--- FIX1 TEST 15: resumenLote con omitidos y destino (cambio masivo) ---');
+{
+  const omitido = { idStr: 'VEN|1', numero: 'PVEN-1', motivo: 'no se puede pasar de Entregado a En proceso' };
+  const r = resumenLote([{ idStr: 'VEN|2', numero: 'PVEN-2', ok: true }], 'actualizados', { omitidos: [omitido], destino: 'En proceso' });
+  assert.equal(r.exitosos, 1);
+  assert.equal(r.mensaje, '1 pedido actualizado a En proceso');
+  assert.deepEqual(r.omitidos, [{ numero: 'PVEN-1', error: 'no se puede pasar de Entregado a En proceso' }]);
+  assert.equal(r.banner.titulo, '1 pedido actualizado a En proceso (se omitió 1 pedido):');
+  assert.deepEqual(r.banner.lineas, [{ numero: 'PVEN-1', error: 'no se puede pasar de Entregado a En proceso' }]);
+
+  // ninguno podia pasar: no se envio nada
+  const ninguno = resumenLote([], 'actualizados', { omitidos: [omitido, { ...omitido, numero: 'PVEN-3' }], destino: 'Facturado' });
+  assert.equal(ninguno.exitosos, 0);
+  assert.equal(ninguno.mensaje, 'Ningún pedido se pudo actualizar a Facturado');
+  assert.equal(ninguno.banner.titulo, 'Ningún pedido se pudo actualizar a Facturado (se omitieron 2 pedidos):');
+
+  // fallo + omitido
+  const mixto = resumenLote([
+    { idStr: 'VEN|2', numero: 'PVEN-2', ok: false, error: 'Un pedido entregado solo puede pasar a Facturado.' },
+    { idStr: 'VEN|3', numero: 'PVEN-3', ok: true },
+  ], 'actualizados', { omitidos: [omitido], destino: 'En proceso' });
+  assert.equal(mixto.mensaje, 'No se pudieron actualizar 1 de 2 pedidos a En proceso');
+  assert.equal(mixto.banner.titulo, 'No se pudieron actualizar 1 de 2 pedidos a En proceso (se omitió 1 pedido):');
+  assert.deepEqual(mixto.banner.lineas.map((l) => l.numero), ['PVEN-2', 'PVEN-1']);
+
+  // sin destino ni omitidos, igual que antes
+  assert.equal(resumenLote([{ numero: 'PVEN-1', ok: true }], 'actualizados').mensaje, '1 pedido actualizado');
+}
+
+console.log('--- FIX1 TEST 16: comoUTC (fechas del API sin zona = UTC) ---');
+{
+  assert.equal(comoUTC('2026-10-04T11:00:00'), '2026-10-04T11:00:00Z');
+  assert.equal(comoUTC('2026-10-04 11:00:00.123456'), '2026-10-04T11:00:00.123456Z');
+  assert.equal(comoUTC('2026-10-04T11:00'), '2026-10-04T11:00Z');
+  assert.equal(comoUTC('2026-10-04T11:00:00Z'), '2026-10-04T11:00:00Z');
+  assert.equal(comoUTC('2026-10-04T11:00:00-05:00'), '2026-10-04T11:00:00-05:00');
+  assert.equal(comoUTC('2026-10-04'), '2026-10-04'); // fecha de calendario: JS ya la lee como UTC
+  assert.equal(comoUTC(null), null);
+  assert.equal(comoUTC(undefined), undefined);
+  // la hora mostrada no depende de la zona del navegador
+  assert.equal(new Date(comoUTC('2026-10-04T03:00:00')).getTime(), Date.UTC(2026, 9, 4, 3, 0, 0));
 }
 
 console.log('OK test_hub_ventas.mjs');

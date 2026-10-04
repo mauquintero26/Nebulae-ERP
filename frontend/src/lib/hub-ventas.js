@@ -63,29 +63,46 @@ const VERBOS_LOTE = {
 
 /**
  * Resumen de un lote procesado en serie (cancelar documentos, N3; cambiar el estado de pedidos, N5).
- * `resultados`: [{idStr, numero, ok, error}]. Devuelve {exitosos, fallidos: [{numero, error}], mensaje}; sin fallidos
- * el mensaje es el del toast ('2 documentos cancelados'), con fallidos es el titulo del banner
- * ('No se pudieron cancelar 1 de 3 documentos'). Ningun error queda en blanco.
- * @param {{idStr?: string, numero?: string, ok: boolean, error?: string}[]} resultados
+ * `resultados`: [{idStr, numero, ok, error, aviso}]: `aviso` es algo que salio a medias en un documento que si se
+ * proceso (p. ej. la nota del motivo de una COT rechazada); cuenta como exitoso pero se muestra.
+ * `opciones.omitidos`: [{numero, motivo}] que no se enviaron (cambio masivo); `opciones.destino`: etiqueta del estado
+ * nuevo ('a En proceso' en el mensaje).
+ * Devuelve {exitosos, fallidos, avisos, omitidos (cada uno [{numero, error}]), mensaje, banner}. Sin fallidos el mensaje
+ * es el del toast ('2 documentos cancelados'); con fallidos, el del banner ('No se pudieron cancelar 1 de 3
+ * documentos'). `banner` ({titulo, lineas}) existe si hay fallidos, avisos u omitidos: primero los fallos, luego los
+ * avisos y al final los omitidos. Ningun error queda en blanco.
+ * @param {{idStr?: string, numero?: string, ok: boolean, error?: string, aviso?: string}[]} resultados
  * @param {'cancelados' | 'actualizados'} [verbo]
- * @returns {{exitosos: number, fallidos: {numero: string, error: string}[], mensaje: string}}
+ * @param {{omitidos?: {numero?: string, motivo?: string}[], destino?: string}} [opciones]
+ * @returns {{exitosos: number, fallidos: {numero: string, error: string}[], avisos: {numero: string, error: string}[],
+ *   omitidos: {numero: string, error: string}[], mensaje: string, banner: {titulo: string, lineas: {numero: string, error: string}[]} | null}}
  */
-export function resumenLote(resultados, verbo = 'cancelados') {
+export function resumenLote(resultados, verbo = 'cancelados', opciones = {}) {
   const v = VERBOS_LOTE[verbo] || VERBOS_LOTE.cancelados;
-  const lista = Array.isArray(resultados) ? resultados : [];
+  const lista = (Array.isArray(resultados) ? resultados : []).filter(Boolean);
+  const linea = (numero, texto, porDefecto) => ({ numero: String(numero || ''), error: String(texto || '').trim() || porDefecto });
   const total = lista.length;
-  const exitosos = lista.filter((r) => r && r.ok).length;
-  const fallidos = lista.filter((r) => r && !r.ok)
-    .map((r) => ({ numero: String(r.numero || ''), error: String(r.error || '').trim() || 'el servidor no dio detalle del error' }));
+  const exitosos = lista.filter((r) => r.ok).length;
+  const fallidos = lista.filter((r) => !r.ok).map((r) => linea(r.numero, r.error, 'el servidor no dio detalle del error'));
+  const avisos = lista.filter((r) => r.ok && r.aviso).map((r) => linea(r.numero, r.aviso, ''));
+  const omitidos = (opciones.omitidos || []).map((o) => linea(o?.numero, o?.motivo, 'se omitió'));
+  const destino = opciones.destino ? ` a ${opciones.destino}` : '';
   let mensaje;
-  if (fallidos.length === 0) {
-    mensaje = exitosos === 1 ? `1 ${v.singular} ${v.participio}` : `${exitosos} ${v.plural} ${v.participio}s`;
+  if (total === 0) {
+    mensaje = `Ningún ${v.singular} se pudo ${v.infinitivo}${destino}`;
+  } else if (fallidos.length === 0) {
+    mensaje = (exitosos === 1 ? `1 ${v.singular} ${v.participio}` : `${exitosos} ${v.plural} ${v.participio}s`) + destino;
   } else if (total === 1) {
-    mensaje = `No se pudo ${v.infinitivo} el ${v.singular}`;
+    mensaje = `No se pudo ${v.infinitivo} el ${v.singular}${destino}`;
   } else {
-    mensaje = `No se pudieron ${v.infinitivo} ${fallidos.length} de ${total} ${v.plural}`;
+    mensaje = `No se pudieron ${v.infinitivo} ${fallidos.length} de ${total} ${v.plural}${destino}`;
   }
-  return { exitosos, fallidos, mensaje };
+  const notas = [];
+  if (omitidos.length) notas.push(omitidos.length === 1 ? `se omitió 1 ${v.singular}` : `se omitieron ${omitidos.length} ${v.plural}`);
+  if (avisos.length) notas.push(avisos.length === 1 ? '1 aviso' : `${avisos.length} avisos`);
+  const lineas = [...fallidos, ...avisos, ...omitidos];
+  const banner = lineas.length ? { titulo: `${mensaje}${notas.length ? ` (${notas.join(', ')})` : ''}:`, lineas } : null;
+  return { exitosos, fallidos, avisos, omitidos, mensaje, banner };
 }
 
 // ─── N2 / N5: estados del pedido desde el Hub ───────────────────────────────────
@@ -124,14 +141,53 @@ export function opcionesEstadoPVEN(estado) {
   };
 }
 
+/**
+ * Cambio masivo de estado (N5): separa los pedidos marcados en los que pueden pasar a `nuevo` desde el Hub (lo que
+ * ofrece opcionesEstadoPVEN: un estado manual o Facturado desde Entregado) y los que se omiten sin enviarse, con el
+ * motivo. `filas`: [{idStr, numero, estado}] (sin estado = la fila ya no esta en la lista).
+ * @param {{idStr: string, numero: string, estado?: string}[]} filas
+ * @param {string} nuevo
+ * @returns {{aplican: {idStr: string, numero: string, estado?: string}[], omitidos: {idStr: string, numero: string, motivo: string}[]}}
+ */
+export function repartirCambioEstadoPVEN(filas, nuevo) {
+  const aplican = [];
+  const omitidos = [];
+  const etiqueta = (e) => infoEstadoPedido(e).label;
+  for (const fila of filas || []) {
+    const { idStr, numero, estado } = fila;
+    let motivo = null;
+    if (!estado) {
+      motivo = 'ya no está en la lista del Hub';
+    } else if (estado === nuevo) {
+      motivo = `ya está en ${etiqueta(nuevo)}`;
+    } else {
+      const op = opcionesEstadoPVEN(estado);
+      if (!op.mover.includes(nuevo) && !(nuevo === 'FACTURADO' && op.facturar)) {
+        motivo = `no se puede pasar de ${etiqueta(estado)} a ${etiqueta(nuevo)}`;
+      }
+    }
+    if (motivo) omitidos.push({ idStr, numero, motivo });
+    else aplican.push(fila);
+  }
+  return { aplican, omitidos };
+}
+
 // ─── H2 (R5): antiguedad ────────────────────────────────────────────────────────
 
 // Fecha y hora sin 'Z' ni desfase: el backend guarda UTC sin zona (utcnow), asi que se lee como UTC y no como hora
 // local (si no, en Colombia todo sale corrido 5 h y un documento de la noche aparece "de mañana").
 const FECHA_HORA_SIN_ZONA = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/;
 
-function comoUTC(iso) {
-  const texto = String(iso).trim();
+/**
+ * Una fecha y hora del API sin zona ('2026-10-04T11:00:00', '2026-10-04 11:00:00.123456') con 'Z' al final, para que
+ * `new Date()` la lea como UTC (diasDesde y las fechas/horas visibles del Hub). Con zona, una fecha de calendario o
+ * algo que no es texto se devuelve igual.
+ * @param {any} iso
+ * @returns {any}
+ */
+export function comoUTC(iso) {
+  if (typeof iso !== 'string') return iso;
+  const texto = iso.trim();
   return FECHA_HORA_SIN_ZONA.test(texto) ? `${texto.replace(' ', 'T')}Z` : texto;
 }
 

@@ -21,14 +21,16 @@ import { ESTADOS_SC } from './solicitud/solicitud-client';
 import { infoEstadoPedido, esCotizacionActiva } from '@/lib/estados-pedido';
 import {
   ordenParaCancelar, motivoNoCancelable, resumenLote, ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN,
+  repartirCambioEstadoPVEN, comoUTC,
   diasDesde, textoAntiguedad, ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, esNoResuelto, esAccionTomada, accionSiguienteSC,
 } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
 import { diasAlerta, pedidoVigente, soloPedidosCancelados } from '@/lib/listas-ventas';
 
 const fCOP  = (v: any) => { const n = Number(v)||0; return n > 0 ? '$' + n.toLocaleString('es-CO') : '$' + 0; };
-const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
-const fTime = (iso: any) => iso ? new Date(iso).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}) : '';
+// Las fechas del API son UTC; si alguna llega sin zona, comoUTC la marca como UTC (no hora local corrida 5 h).
+const fDate = (iso: any) => iso ? new Date(comoUTC(iso)).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
+const fTime = (iso: any) => iso ? new Date(comoUTC(iso)).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}) : '';
 // H2: fechas del API en UTC (aunque vengan sin zona), nunca negativo.
 const daysDiff = (iso: any) => diasDesde(iso);
 
@@ -276,7 +278,7 @@ export default function VentasHub() {
   const [cancelacion, setCancelacion]             = useState<{ids:string[]}|null>(null);
   const [motivoCancelacion, setMotivoCancelacion] = useState('');
   const [cancelando, setCancelando]               = useState(false);
-  const [resultadoLote, setResultadoLote]         = useState<{titulo:string, fallidos:{numero:string,error:string}[]}|null>(null);
+  const [resultadoLote, setResultadoLote]         = useState<{titulo:string, lineas:{numero:string,error:string}[]}|null>(null);
   // H27+H39: al arrastrar una SC o COT para enviarla se pregunta el canal y luego se muestra el enlace con el aviso del correo.
   const [envioHub, setEnvioHub]       = useState<{tipo:'SC'|'COT', id:string, numero:string, telefono:string}|null>(null);
   const [canalHub, setCanalHub]       = useState<'WhatsApp'|'Email'|'Otro'|null>(null);
@@ -395,38 +397,41 @@ export default function VentasHub() {
   const quitarDeSeleccion = (ids: Set<string>) =>
     setSelectedIds(prev => { const n = new Set(prev); ids.forEach(i => n.delete(i)); return n; });
 
-  // N5: el cambio masivo de estado solo aplica a Pedidos de Venta; las SC y COT marcadas se omiten. Los fallos se
-  // muestran con el mensaje del servidor (que es la autoridad de las transiciones) y siguen marcados.
+  // N5: el cambio masivo de estado solo aplica a Pedidos de Venta; las SC y COT marcadas se omiten. Solo se envían
+  // los pedidos que pueden pasar al estado elegido (repartirCambioEstadoPVEN); los demás se omiten con su motivo. Los
+  // fallos salen con el mensaje del servidor. Omitidos y fallidos siguen marcados.
   async function handleBulkChangeEstado(nuevo:string){
     if(!nuevo) return;
     const ids = Array.from(selectedIds);
     const ven = ids.filter(i => i.startsWith('VEN|'));
-    const omitidos = ids.length - ven.length;
+    const otrosOmitidos = ids.length - ven.length;
     if(ven.length === 0){
       setToast({msg:'Selecciona al menos un Pedido de Venta: las solicitudes y cotizaciones no cambian de estado desde aquí.',type:'error'});
       return;
     }
     const etiqueta = ETIQUETA_ESTADO_VEN[nuevo] || nuevo;
-    if(nuevo === 'FACTURADO' && !window.confirm(`¿Marcar ${ven.length === 1 ? '1 pedido' : `${ven.length} pedidos`} como Facturado? Este estado ya no se puede cambiar.`)) return;
+    const {aplican, omitidos} = repartirCambioEstadoPVEN(ven.map(idStr => {
+      const fila = filaPorId(idStr);
+      return {idStr, numero: fila?.numero || `Pedido ${idStr.split('|')[1]}`, estado: fila?.estado};
+    }), nuevo);
+    if(nuevo === 'FACTURADO' && aplican.length > 0
+      && !window.confirm(`¿Marcar ${aplican.length === 1 ? '1 pedido' : `${aplican.length} pedidos`} como Facturado? Este estado ya no se puede cambiar.`)) return;
     setResultadoLote(null);
     const resultados: {idStr:string, numero:string, ok:boolean, error?:string}[] = [];
-    for(const idStr of ven){
-      const id = idStr.split('|')[1];
-      const numero = filaPorId(idStr)?.numero || `Pedido ${id}`;
+    for(const {idStr, numero} of aplican){
       try{
-        await apiFetch(`/ventas/pedidos/${id}`,{method:'PATCH',body:JSON.stringify({estado:nuevo, updated_by:autorActual()})});
+        await apiFetch(`/ventas/pedidos/${idStr.split('|')[1]}`,{method:'PATCH',body:JSON.stringify({estado:nuevo, updated_by:autorActual()})});
         resultados.push({idStr, numero, ok:true});
       }catch(err:any){ resultados.push({idStr, numero, ok:false, error:err?.message}); }
     }
-    const r = resumenLote(resultados, 'actualizados');
-    if(r.fallidos.length === 0){
-      const nota = omitidos === 0 ? '' : omitidos === 1 ? ' · se omitió 1 solicitud/cotización' : ` · se omitieron ${omitidos} solicitudes/cotizaciones`;
-      setToast({msg:`${r.mensaje} a ${etiqueta}${nota}`,type:'ok'});
-    } else {
-      setResultadoLote({titulo:`${r.mensaje}:`, fallidos:r.fallidos});
+    const r = resumenLote(resultados, 'actualizados', {omitidos, destino:etiqueta});
+    if(r.fallidos.length === 0 && r.exitosos > 0){
+      const nota = otrosOmitidos === 0 ? '' : otrosOmitidos === 1 ? ' · se omitió 1 solicitud/cotización' : ` · se omitieron ${otrosOmitidos} solicitudes/cotizaciones`;
+      setToast({msg:`${r.mensaje}${nota}`,type:'ok'});
     }
+    if(r.banner) setResultadoLote(r.banner);
     quitarDeSeleccion(new Set(resultados.filter(x => x.ok).map(x => x.idStr)));
-    loadData();
+    if(resultados.length > 0) loadData();
   }
 
   // N3: cancelar abre un modal con lo que se va a cancelar y el motivo. La acción de fila nunca lee ni cambia la selección.
@@ -448,25 +453,30 @@ export default function VentasHub() {
     setCancelando(true);
     setResultadoLote(null);
     const autor = autorActual();
-    const resultados: {idStr:string, numero:string, ok:boolean, error?:string}[] = [];
+    const resultados: {idStr:string, numero:string, ok:boolean, error?:string, aviso?:string}[] = [];
     for(const {idStr, row} of porCancelar){
+      let aviso: string | undefined;
       try{
         if(row.tipo === 'SC'){
           // La ruta real: guarda el motivo, manda a la papelera y revoca enlaces (bloquea si hay COT o PVEN activos).
           await apiFetch(`/ventas/solicitudes/${row.id}/cancelar`,{method:'POST',body:JSON.stringify({razon:motivo, user_name:autor})});
         } else if(row.tipo === 'COT'){
           await apiFetch(`/ventas/cotizaciones/${row.id}`,{method:'PATCH',body:JSON.stringify({estado:'RECHAZADA', updated_by:autor})});
-          await apiFetch(`/ventas/cotizaciones/${row.id}/actividad`,{method:'POST',body:JSON.stringify({action:'NOTE_ADDED', description:`Motivo del rechazo (Hub): ${motivo}`, user_name:autor})})
-            .catch(()=>{}); // la nota es complementaria: el rechazo ya quedó hecho
+          try{
+            await apiFetch(`/ventas/cotizaciones/${row.id}/actividad`,{method:'POST',body:JSON.stringify({action:'NOTE_ADDED', description:`Motivo del rechazo (Hub): ${motivo}`, user_name:autor})});
+          }catch(errNota:any){
+            // El rechazo ya quedó hecho (cuenta como exitoso), pero el banner avisa que el motivo no quedó registrado.
+            aviso = `rechazada, pero el motivo no quedó en la Actividad: ${errNota?.message || 'el servidor no dio detalle del error'}`;
+          }
         } else {
           await apiFetch(`/ventas/pedidos/${row.id}`,{method:'PATCH',body:JSON.stringify({estado:'CANCELADO', cancellation_reason:motivo, cancelled_at:new Date().toISOString(), updated_by:autor})});
         }
-        resultados.push({idStr, numero:row.numero, ok:true});
+        resultados.push({idStr, numero:row.numero, ok:true, aviso});
       }catch(err:any){ resultados.push({idStr, numero:row.numero, ok:false, error:err?.message}); }
     }
     const r = resumenLote(resultados);
     if(r.fallidos.length === 0) setToast({msg:r.mensaje,type:'ok'});
-    else setResultadoLote({titulo:`${r.mensaje}:`, fallidos:r.fallidos});
+    if(r.banner) setResultadoLote(r.banner);
     const exitosos = new Set(resultados.filter(x => x.ok).map(x => x.idStr));
     quitarDeSeleccion(exitosos);
     setCancelacion(null);
@@ -849,14 +859,15 @@ export default function VentasHub() {
           </div>
         )}
 
-        {/* N3/N5: lo que no se pudo cancelar o actualizar, con el mensaje del servidor (no se traga ningún error) */}
+        {/* N3/N5: lo que no se pudo cancelar o actualizar (mensaje del servidor), los avisos y los pedidos omitidos;
+            no se traga ningún error */}
         {resultadoLote && (
           <div className="bg-rose-50 border border-rose-200 rounded-2xl px-4 py-3 flex items-start gap-3">
             <AlertTriangle size={16} className="text-rose-600 shrink-0 mt-0.5"/>
             <div className="flex-1 min-w-0">
               <p className="text-xs font-black text-rose-800">{resultadoLote.titulo}</p>
               <ul className="mt-1 space-y-0.5">
-                {resultadoLote.fallidos.map((f, i) => (
+                {resultadoLote.lineas.map((f, i) => (
                   <li key={i} className="text-xs text-rose-700"><span className="font-bold">{f.numero}:</span> {f.error}</li>
                 ))}
               </ul>
