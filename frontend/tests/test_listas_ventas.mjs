@@ -15,6 +15,7 @@ import {
   ESTADOS_PEDIDO_SIN_DINERO, pedidoSumaDinero, resumenPedidos, kpisPedidos, hintTotalPedidos, opcionesFiltroEstado,
   generoCotizacion, cotizacionesVigentes, cotizacionesRechazadas, esperaCotizacion, contadoresSolicitudes,
   tasaConversionCotizacion, superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera, pasosParaCancelarSolicitud,
+  repartirCancelacionSolicitudes,
 } from '../src/lib/listas-ventas.js';
 
 console.log('--- N8 TEST 1: diasAlerta lee las tres formas de la configuracion ---');
@@ -333,6 +334,56 @@ console.log('--- N4 TEST 7: estadoEnPapelera (se conserva si tiene documentos; n
   assert.equal(estadoEnPapelera({ dias_restantes: 0, tiene_documentos: false }).texto, '0 días');
   assert.equal(estadoEnPapelera({}).conservada, true, 'sin dias_restantes se conserva (no se promete una eliminacion)');
   assert.equal(estadoEnPapelera({ dias_restantes: 10, tiene_documentos: true }).puedeEliminar, false);
+
+  // Revision T11: 'Se conserva' y 'Eliminar permanentemente' no pueden ir juntos: sin dias_restantes (null o ausente) no se elimina.
+  for (const sc of [{}, { dias_restantes: null }, { dias_restantes: undefined, tiene_documentos: false }, { dias_restantes: null, tiene_documentos: false }]) {
+    const e = estadoEnPapelera(sc);
+    assert.equal(e.conservada, true);
+    assert.equal(e.puedeEliminar, false, `se conserva: no se ofrece eliminar (${JSON.stringify(sc)})`);
+  }
+  assert.equal(estadoEnPapelera(null).puedeEliminar, false);
+}
+
+console.log('--- N4 TEST 7b (revision T11): repartirCancelacionSolicitudes omite las que ya estan en la Papelera y las de soporte ---');
+{
+  const filas = [
+    { id: 1, numero: 'SC-1', estado: 'ASIGNADA', tipo_solicitud: 'Cotizacion de Producto' },
+    { id: 2, numero: 'SC-2', estado: 'CANCELADA', tipo_solicitud: 'Cotizacion de Producto' },
+    { id: 3, numero: 'SC-3', estado: 'N/A_SOPORTE', tipo_solicitud: 'Soporte Tecnico' },
+    { id: 4, numero: 'SC-4', estado: 'BORRADOR' },
+    null,
+  ];
+  const r = repartirCancelacionSolicitudes(filas);
+  assert.deepEqual(r.cancelables.map((s) => s.id), [1, 4], 'no se hace POST /cancelar para las canceladas ni las de soporte');
+  assert.deepEqual(r.omitidas, [
+    { id: 2, numero: 'SC-2', motivo: 'ya está en la Papelera' },
+    { id: 3, numero: 'SC-3', motivo: 'es un ticket de soporte: se cierra desde su estado de soporte' },
+  ]);
+  assert.deepEqual(repartirCancelacionSolicitudes([]), { cancelables: [], omitidas: [] });
+  assert.deepEqual(repartirCancelacionSolicitudes(null), { cancelables: [], omitidas: [] });
+  assert.equal(repartirCancelacionSolicitudes([{ id: 9, estado: 'CANCELADA' }]).omitidas[0].numero, '#9', 'sin numero se nombra por su id');
+}
+
+console.log('--- N4 TEST 7c (revision T11): resumenCancelacionSolicitudes informa las omitidas ---');
+{
+  const omitidas = [{ id: 2, numero: 'SC-2', motivo: 'ya está en la Papelera' }];
+  const conOmitida = resumenCancelacionSolicitudes([{ numero: 'SC-1', ok: true }], omitidas);
+  assert.equal(conOmitida.mensaje, '1 solicitud cancelada. Se omitió SC-2: ya está en la Papelera.');
+  assert.equal(conOmitida.tipo, 'ok', 'omitir una que ya estaba cancelada no es un error');
+
+  const soloOmitidas = resumenCancelacionSolicitudes([], omitidas);
+  assert.equal(soloOmitidas.mensaje, 'No se canceló ninguna solicitud. Se omitió SC-2: ya está en la Papelera.');
+  assert.equal(soloOmitidas.tipo, 'err');
+
+  const varias = resumenCancelacionSolicitudes([{ numero: 'SC-1', ok: true }, { numero: 'SC-5', ok: true }],
+    [...omitidas, { id: 3, numero: 'SC-3', motivo: 'es un ticket de soporte' }]);
+  assert.equal(varias.mensaje, '2 solicitudes canceladas. Se omitieron SC-2: ya está en la Papelera; SC-3: es un ticket de soporte.');
+
+  const conFallo = resumenCancelacionSolicitudes([{ numero: 'SC-1', ok: false, error: 'bloqueada' }], omitidas);
+  assert.equal(conFallo.mensaje, 'No se pudo cancelar: SC-1. Se omitió SC-2: ya está en la Papelera.');
+  assert.equal(conFallo.tipo, 'err');
+  // Sin omitidas el mensaje no cambia.
+  assert.equal(resumenCancelacionSolicitudes([{ numero: 'SC-1', ok: true }], []).mensaje, '1 solicitud cancelada');
 }
 
 console.log('--- N4 TEST 8: pasosParaCancelarSolicitud (primero el pedido, luego la cotizacion; Vencida cuenta) ---');

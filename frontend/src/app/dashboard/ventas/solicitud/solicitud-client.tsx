@@ -21,7 +21,7 @@ import { esAsesorElegible, getUsuarioActual } from '../flujo';
 import { coincideProducto } from '@/lib/busqueda';
 import {
   diasAlerta, generoCotizacion, cotizacionesVigentes, contadoresSolicitudes, tasaConversionCotizacion,
-  superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera,
+  superaDiasAlerta, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera,
 } from '@/lib/listas-ventas';
 
 export const TIPOS_SC = [
@@ -832,6 +832,8 @@ export default function SolicitudClient() {
   const [cancelRazon,setCancelRazon]=useState('');
   const [cancelling,setCancelling]=useState(false);
   const [cancelErrores,setCancelErrores]=useState<string[]>([]);
+  // Marcadas que no se envian a /cancelar (ya estan en la Papelera o son de Soporte): se informan, no se llaman.
+  const [cancelOmitidas,setCancelOmitidas]=useState<{id:any;numero:string;motivo:string}[]>([]);
 
   // Papelera
   const [papelera,setPapelera]=useState<any[]>([]);
@@ -921,7 +923,7 @@ export default function SolicitudClient() {
   }
 
   function cerrarCancelacion() {
-    setShowCancelModal(false);setCancelTarget([]);setCancelRazon('');setCancelErrores([]);
+    setShowCancelModal(false);setCancelTarget([]);setCancelRazon('');setCancelErrores([]);setCancelOmitidas([]);
   }
 
   // N4: toda cancelacion de SC pasa por POST /cancelar (pide el motivo y el servidor revisa que no tenga cotizaciones
@@ -946,12 +948,13 @@ export default function SolicitudClient() {
         fallidas.push(id);
       }
     }
-    const resumen=resumenCancelacionSolicitudes(resultados);
+    const resumen=resumenCancelacionSolicitudes(resultados,cancelOmitidas);
     showToast(resumen.mensaje,resumen.tipo);
     if(fallidas.length===0) cerrarCancelacion();
-    else{setCancelTarget(fallidas);setCancelErrores(resumen.fallidas.map(f=>f.texto));}
-    // Las canceladas dejan de estar seleccionadas; las que fallaron siguen marcadas.
-    setChecked(prev=>{const n=new Set(prev);canceladas.forEach(id=>n.delete(id));setShowBulkBar(n.size>0);return n;});
+    // Las omitidas ya se informaron en el toast: al reintentar solo quedan las que fallaron.
+    else{setCancelTarget(fallidas);setCancelOmitidas([]);setCancelErrores(resumen.fallidas.map(f=>f.texto));}
+    // Las canceladas y las omitidas dejan de estar seleccionadas; las que fallaron siguen marcadas.
+    setChecked(prev=>{const n=new Set(prev);canceladas.forEach(id=>n.delete(id));cancelOmitidas.forEach(o=>n.delete(o.id));setShowBulkBar(n.size>0);return n;});
     await load();
     setCancelling(false);
   }
@@ -1007,21 +1010,29 @@ export default function SolicitudClient() {
   }
 
   function deleteItem(scId:number) {
-    setCancelTarget([scId]);setCancelRazon('');setCancelErrores([]);setShowCancelModal(true);
+    setCancelTarget([scId]);setCancelRazon('');setCancelErrores([]);setCancelOmitidas([]);setShowCancelModal(true);
   }
 
   async function bulkAction(action:'delete'|'estado',estado?:string) {
+    if(action==='delete'){
+      // N4: ya no hace PATCH: abre el modal del motivo y las cancela con POST /cancelar. Las que ya estan canceladas (ya
+      // estan en la Papelera) y las de Soporte Tecnico (su ciclo es estado_soporte: cancelarlas las mandaria a purga en
+      // 30 dias y se perderia el ticket) no se envian al servidor: se informan como omitidas.
+      const {cancelables,omitidas}=repartirCancelacionSolicitudes(Array.from(checked).map(id=>solicitudes.find(s=>s.id===id)||{id}));
+      if(cancelables.length===0){
+        showToast(resumenCancelacionSolicitudes([],omitidas).mensaje,'err');
+        setChecked(new Set());setShowBulkBar(false);
+        return;
+      }
+      setCancelTarget(cancelables.map(s=>s.id));setCancelOmitidas(omitidas);setCancelRazon('');setCancelErrores([]);setShowCancelModal(true);
+      return;
+    }
     // Soporte Tecnico usa su propio flujo (estado_soporte) y su propio ciclo
     // de vida: ni el cambio masivo de estado de Cotizacion ni la cancelacion
     // masiva deben tocarlo (cancelar aqui lo mandaria a purga en 30 dias,
     // perdiendo el ticket de soporte real)
     const ids=Array.from(checked).filter(id=>solicitudes.find(s=>s.id===id)?.tipo_solicitud!=='Soporte Tecnico');
     if(ids.length===0){showToast('Las solicitudes de Soporte Técnico no se cancelan ni cambian de estado desde aquí','err');return;}
-    if(action==='delete'){
-      // N4: ya no hace PATCH: abre el modal del motivo y las cancela con POST /cancelar.
-      setCancelTarget(ids);setCancelRazon('');setCancelErrores([]);setShowCancelModal(true);
-      return;
-    }
     if(!estado) return;
     setSaving(true);
     let cambiadas=0;
@@ -1976,7 +1987,9 @@ export default function SolicitudClient() {
       {/* MODAL: MOTIVO DE CANCELACIÓN (N4: una o varias solicitudes; el servidor revisa que no tengan documentos activos) */}
       {showCancelModal&&(
         <Modal title={cancelTarget.length>1?`Cancelar ${cancelTarget.length} solicitudes`:'Cancelar Solicitud'} subtitle="La solicitud pasa a la Papelera. No se puede cancelar si tiene una cotización o un pedido de venta activos." icon={Trash2} color="red" maxWidth="md"
-          onClose={cerrarCancelacion}
+          // Mientras se cancela, la X y el fondo no cierran la ventana (igual que "No, mantener"): las fallidas y el
+          // detalle del servidor siempre llegan a una ventana abierta.
+          onClose={()=>{if(!cancelling) cerrarCancelacion();}}
           footer={(
             <>
               <Button variant="secondary" disabled={cancelling} onClick={cerrarCancelacion}>No, mantener</Button>
@@ -1984,7 +1997,12 @@ export default function SolicitudClient() {
             </>
           )}>
           <div>
-            {cancelTarget.length>1&&<p className="text-xs font-bold text-slate-500 mb-3">{cancelTarget.map(id=>solicitudes.find(s=>s.id===id)?.numero||`#${id}`).join(', ')}</p>}
+            {(cancelTarget.length>1||cancelOmitidas.length>0)&&<p className="text-xs font-bold text-slate-500 mb-3">{cancelTarget.map(id=>solicitudes.find(s=>s.id===id)?.numero||`#${id}`).join(', ')}</p>}
+            {cancelOmitidas.length>0&&(
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-3">
+                No se enviarán: {cancelOmitidas.map(o=>`${o.numero} ${o.motivo}`).join('; ')}.
+              </p>
+            )}
             <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Motivo de la cancelación *</label>
             <textarea
               value={cancelRazon}

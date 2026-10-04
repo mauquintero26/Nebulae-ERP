@@ -126,9 +126,15 @@ function SolicitudDetalleContent() {
 
   // H29: con { silencioso: true } (tras guardar productos) no se muestra el spinner de pagina, no se reescribe editForm
   // (lo que el usuario este editando) y, si falla, se deja lo que ya esta en pantalla: solo se repinta la solicitud.
+  // Orden de las cargas: cada llamada toma un numero y solo la ULTIMA pinta la solicitud. Una recarga silenciosa mas vieja
+  // (pedida antes de un segundo guardado, que ya se pinto con la respuesta de su PATCH) no pisa lo mas nuevo con datos
+  // anteriores a ese guardado.
+  const cargaRef = useRef(0);
   const loadSolicitud = useCallback(async (opts?: { silencioso?: boolean }) => {
     const silencioso = opts?.silencioso === true;
     if (!params.id) { if (!silencioso) setLoading(false); return; }
+    const miCarga = ++cargaRef.current;
+    const esLaUltima = () => miCarga === cargaRef.current;
     if (!silencioso) {
       setLoading(true);
       setLoadError('');
@@ -136,20 +142,23 @@ function SolicitudDetalleContent() {
     try {
       const raw = await apiFetch(`/ventas/solicitudes/${params.id}`);
       const d = raw?.data ?? raw;
-      setSolicitud(d);
-      if (!silencioso) {
-        setEditForm({
-          advisor_name: d.advisor_name || '',
-          advisor_user_id: d.advisor_user_id || '',
-          tipo_solicitud: d.tipo_solicitud || 'Cotizacion de Producto',
-          modalidad_pago: d.modalidad_pago || 'Contado',
-          notas: d.notas || '',
-          fecha_vencimiento: d.fecha_vencimiento ? d.fecha_vencimiento.split('T')[0] : '',
-        });
+      if (esLaUltima()) {
+        setSolicitud(d);
+        if (!silencioso) {
+          setEditForm({
+            advisor_name: d.advisor_name || '',
+            advisor_user_id: d.advisor_user_id || '',
+            tipo_solicitud: d.tipo_solicitud || 'Cotizacion de Producto',
+            modalidad_pago: d.modalidad_pago || 'Contado',
+            notas: d.notas || '',
+            fecha_vencimiento: d.fecha_vencimiento ? d.fecha_vencimiento.split('T')[0] : '',
+          });
+        }
       }
     } catch (err: any) {
-      if (!silencioso) setLoadError(err.message || 'No se pudo cargar la solicitud');
+      if (!silencioso && esLaUltima()) setLoadError(err.message || 'No se pudo cargar la solicitud');
     }
+    // El spinner de una carga completa siempre se apaga (aunque una mas nueva la haya reemplazado): nunca queda pegado.
     if (!silencioso) setLoading(false);
   }, [params.id]);
 

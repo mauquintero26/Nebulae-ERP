@@ -248,13 +248,37 @@ export function superaDiasAlerta(iso, dias, ahora = Date.now()) {
 }
 
 /**
- * N4: resultado de cancelar varias solicitudes con POST /cancelar, una por una. `resultados`: [{numero, ok, error}].
+ * N4: de las solicitudes marcadas para cancelar, cuáles se cancelan con POST /cancelar y cuáles se omiten (sin llamar al
+ * servidor): las que ya están canceladas (ya están en la Papelera: cancelarlas otra vez solo repite el envío) y las de
+ * Soporte Técnico (su ciclo es estado_soporte). Las filas null se ignoran.
+ * @param {any[] | null | undefined} filas
+ * @returns {{cancelables: any[], omitidas: {id: any, numero: string, motivo: string}[]}}
+ */
+export function repartirCancelacionSolicitudes(filas) {
+  const cancelables = [];
+  const omitidas = [];
+  for (const sc of Array.isArray(filas) ? filas : []) {
+    if (!esObjeto(sc)) continue;
+    const motivo = sc.tipo_solicitud === 'Soporte Tecnico' || sc.estado === 'N/A_SOPORTE'
+      ? 'es un ticket de soporte: se cierra desde su estado de soporte'
+      : sc.estado === 'CANCELADA' ? 'ya está en la Papelera' : null;
+    if (motivo) omitidas.push({ id: sc.id, numero: sc.numero || `#${sc.id}`, motivo });
+    else cancelables.push(sc);
+  }
+  return { cancelables, omitidas };
+}
+
+/**
+ * N4: resultado de cancelar varias solicitudes con POST /cancelar, una por una. `resultados`: [{numero, ok, error}];
+ * `omitidas` (opcional, de repartirCancelacionSolicitudes) se nombran al final del mensaje y no cuentan como error.
  * Devuelve {exitosas, fallidas: [{numero, error, texto}], mensaje, tipo}: `mensaje` va al toast ('2 solicitudes
  * canceladas'; con fallos 'No se pudieron cancelar: SC-1, SC-2') y `fallidas[].texto` es el detalle del servidor para
  * mostrarlo completo (el 409 ya nombra la solicitud, sus documentos activos y qué hacer; ningún error queda en blanco).
+ * @param {{numero?: string, ok: boolean, error?: string}[] | null | undefined} resultados
+ * @param {{numero?: string, motivo?: string}[]} [omitidas]
  * @returns {{exitosas: number, fallidas: {numero: string, error: string, texto: string}[], mensaje: string, tipo: 'ok' | 'err'}}
  */
-export function resumenCancelacionSolicitudes(resultados) {
+export function resumenCancelacionSolicitudes(resultados, omitidas = []) {
   const lista = (Array.isArray(resultados) ? resultados : []).filter(esObjeto);
   const exitosas = lista.filter((r) => r.ok).length;
   const fallidas = lista.filter((r) => !r.ok).map((r) => {
@@ -269,22 +293,27 @@ export function resumenCancelacionSolicitudes(resultados) {
   let mensaje;
   if (fallidas.length === 0) mensaje = exitosas > 0 ? canceladas : 'No se canceló ninguna solicitud';
   else mensaje = exitosas > 0 ? `${canceladas}. ${fallo}` : fallo;
+  const omitidasValidas = (Array.isArray(omitidas) ? omitidas : []).filter(esObjeto);
+  if (omitidasValidas.length > 0) {
+    const detalle = omitidasValidas.map((o) => `${o.numero || 'una solicitud'}: ${o.motivo || 'se omitió'}`).join('; ');
+    mensaje += `. ${omitidasValidas.length === 1 ? 'Se omitió' : 'Se omitieron'} ${detalle}.`;
+  }
   return { exitosas, fallidas, mensaje, tipo: fallidas.length === 0 && exitosas > 0 ? 'ok' : 'err' };
 }
 
 /**
  * N4: cómo se ve una solicitud en la Papelera. El servidor manda `dias_restantes` (null si la solicitud se conserva
  * porque tiene cotizaciones, pedidos o un lead vinculados) y `tiene_documentos`. Sin documentos hay cuenta regresiva
- * ('20 días para eliminar', urgente desde 5); con documentos se conserva y no se puede eliminar definitivamente.
+ * ('20 días para eliminar', urgente desde 5); con documentos se conserva y no se puede eliminar definitivamente. Sin
+ * `dias_restantes` (null o ausente) se conserva: 'Se conserva' y 'Eliminar permanentemente' nunca van juntos.
  * @returns {{conservada: boolean, texto: string, nota: string, urgente: boolean, puedeEliminar: boolean}}
  */
 export function estadoEnPapelera(sc) {
   const dias = sc?.dias_restantes;
-  const puedeEliminar = !sc?.tiene_documentos;
   if (dias === null || dias === undefined) {
-    return { conservada: true, texto: 'Se conserva (tiene documentos vinculados)', nota: '', urgente: false, puedeEliminar };
+    return { conservada: true, texto: 'Se conserva (tiene documentos vinculados)', nota: '', urgente: false, puedeEliminar: false };
   }
-  return { conservada: false, texto: `${dias} ${dias === 1 ? 'día' : 'días'}`, nota: 'para eliminar', urgente: dias <= 5, puedeEliminar };
+  return { conservada: false, texto: `${dias} ${dias === 1 ? 'día' : 'días'}`, nota: 'para eliminar', urgente: dias <= 5, puedeEliminar: !sc?.tiene_documentos };
 }
 
 /**
