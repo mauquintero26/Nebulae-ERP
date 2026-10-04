@@ -18,6 +18,14 @@ export function esAsesorElegible(role?: string | null): boolean {
   return r === 'admin' || r === 'vendedor' || r === 'asesor';
 }
 
+// H44+N6: quien puede crear la orden de pago (PXP) de un pedido: Administracion, Finanzas y el
+// asesor, incluidos los roles legacy (replica normalize_role de dependencies.py y los roles de
+// POST /ventas/pedidos/{id}/crear-pxp). Las condiciones del pedido van en pedidoAdmitePxp.
+export function puedeCrearOrdenDePago(role?: string | null): boolean {
+  const r = (role || '').toLowerCase().trim();
+  return ['admin', 'finanzas', 'asesor', 'vendedor'].includes(r);
+}
+
 export type UsuarioActual = { id: number | null; email: string; name: string; role: string };
 
 // Lo escribe AuthGuard tras validar la sesion (/auth/me).

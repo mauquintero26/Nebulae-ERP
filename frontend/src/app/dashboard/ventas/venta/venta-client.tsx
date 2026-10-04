@@ -3,15 +3,20 @@
 export const dynamic = 'force-dynamic';
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  Search, RefreshCw, Plus, MoreHorizontal, X, Edit2, FileCheck,
+  Search, RefreshCw, MoreHorizontal, X, FileCheck,
   FileText, AlertCircle, ShoppingCart, Package, DollarSign, UserPlus
 } from 'lucide-react';
 import { useSearchParams, useRouter } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
 import { coincideProducto } from '@/lib/busqueda';
+import { formatoPesos } from '@/lib/pesos';
+import { ESTADOS_PEDIDO, infoEstadoPedido, grupoPedido, transicionesPedido } from '@/lib/estados-pedido';
+import { kpisPedidos, hintTotalPedidos, opcionesFiltroEstado, pedidoSumaDinero } from '@/lib/listas-ventas';
+import { pedidoAdmitePxp } from '@/lib/dinero-ventas';
 import { SubNav, PageHeader, StatCard, Button, EmptyState, Toast, Modal } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
+import { getUsuarioActual, puedeCrearOrdenDePago } from '../flujo';
 
 export function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClose:()=>void}) {
   const [form, setForm] = useState({name:'',reference:'',contact_name:'',phone:'',email:'',address:'',city:'',country:'Colombia',payment_terms:'',notes:''});
@@ -46,17 +51,8 @@ export function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClo
   );
 }
 
-const fCOP  = (v: any) => { const n = Number(v)||0; return '$'+n.toLocaleString('es-CO'); };
+const fCOP  = formatoPesos;
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
-
-const VEN_ESTADOS: Record<string, { bg: string; text: string; border: string; label: string }> = {
-  PENDIENTE_COMPRA: { bg:'bg-orange-100', text:'text-orange-700', border:'border-orange-200', label:'Pend. Compra' },
-  EN_PROCESO:       { bg:'bg-purple-100', text:'text-purple-700', border:'border-purple-200', label:'En Proceso' },
-  LISTO_ENTREGA:    { bg:'bg-teal-100',   text:'text-teal-700',   border:'border-teal-200',   label:'Listo Entrega' },
-  ENTREGADO:        { bg:'bg-emerald-100',text:'text-emerald-700',border:'border-emerald-200',label:'Entregado' },
-  FACTURADO:        { bg:'bg-green-100',  text:'text-green-700',  border:'border-green-200',  label:'Facturado' },
-  CANCELADO:        { bg:'bg-red-100',    text:'text-red-700',    border:'border-red-200',    label:'Cancelado' },
-};
 
 export default function VentaClient() {
   const router = useRouter();
@@ -69,6 +65,9 @@ export default function VentaClient() {
   const [selectedIds, setSelectedIds]   = useState<Set<number>>(new Set());
   const [toast, setToast]               = useState<{msg:string,type:'ok'|'error'}|null>(null);
   const [openMenu, setOpenMenu]         = useState<number|null>(null);
+  // H47: resumen del servidor sobre TODOS los pedidos (sin el tope de 200); sin el, se calcula en el navegador.
+  const [resumenServidor, setResumenServidor] = useState<Record<string, unknown> | null>(null);
+  const [creandoPxp, setCreandoPxp]     = useState<number|null>(null);
 
   const showToast = (msg:string, type:'ok'|'error'='ok') => {
     setToast({msg,type});
@@ -76,9 +75,24 @@ export default function VentaClient() {
 
   const fetchPedidos = async () => {
     setLoading(true);
-    try { const d=await apiFetch('/ventas/pedidos?limit=200'); setPedidos(Array.isArray(d)?d:(d?.data??[])); }
+    try {
+      const d=await apiFetch('/ventas/pedidos?limit=200');
+      setPedidos(Array.isArray(d)?d:(d?.data??[]));
+      setResumenServidor(d?.resumen ? {...d.resumen, total: d.total ?? 0} : null);
+    }
     catch(err:any) { showToast(err.message,'error'); }
     finally { setLoading(false); }
+  };
+
+  // R8 / H44+N6: "Crear PXP" del menu de fila la crea de verdad (los montos salen del pedido en el servidor).
+  const crearPxp = async (p:{id:number; numero:string}) => {
+    setCreandoPxp(p.id);
+    try {
+      const r=await apiFetch(`/ventas/pedidos/${p.id}/crear-pxp`,{method:'POST',body:JSON.stringify({})});
+      showToast(`Orden de pago ${r?.data?.numero || ''} creada para ${p.numero}`);
+      await fetchPedidos();
+    } catch(err) { showToast(err instanceof Error ? err.message : String(err),'error'); }
+    finally { setCreandoPxp(null); }
   };
 
   const searchParams = useSearchParams();
@@ -95,26 +109,26 @@ export default function VentaClient() {
     }
   },[searchParams, router]);
 
+  // N10: las pestañas agrupan cualquier estado en su paso (grupoPedido); DEVUELTO_TOTAL va a 'Cancelado'.
   const TABS = ['Todos','Pend. Compra','En Proceso','Listo Entrega','Entregado','Facturado','Cancelado','Analisis'];
-  const tabEstado:Record<string,string> = {'Pend. Compra':'PENDIENTE_COMPRA','En Proceso':'EN_PROCESO','Listo Entrega':'LISTO_ENTREGA','Entregado':'ENTREGADO','Facturado':'FACTURADO','Cancelado':'CANCELADO'};
-  const [viewMode, setViewMode] = useState<'lista'|'kanban'>('lista');
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
   const [filterEstado, setFilterEstado] = useState('');
+  // R8: cambiar de pestaña, filtro o busqueda vuelve a la pagina 1 (si no, la lista puede quedar vacia).
+  const cambiarTab=(t:string)=>{ setActiveTab(t); setCurrentPage(1); };
+  const cambiarFiltro=(e:string)=>{ setFilterEstado(e); setCurrentPage(1); };
+  const cambiarBusqueda=(s:string)=>{ setSearch(s); setCurrentPage(1); };
 
   const filtered = useMemo(()=>{
     let base=pedidos;
-    if(activeTab!=='Todos') base=base.filter(p=>p.estado===tabEstado[activeTab]);
+    if(activeTab!=='Todos') base=base.filter(p=>grupoPedido(p.estado)===activeTab);
+    if(filterEstado) base=base.filter(p=>p.estado===filterEstado);
     if(search){ const s=search.toLowerCase(); base=base.filter(p=>p.numero?.toLowerCase().includes(s)||p.customer_name?.toLowerCase().includes(s)||p.cot_numero?.toLowerCase().includes(s)||p.sc_numero?.toLowerCase().includes(s)||coincideProducto(p,search)); }
     return base;
-  },[pedidos,activeTab,search]);
+  },[pedidos,activeTab,filterEstado,search]);
 
-  const kpis = useMemo(()=>{
-    const total=pedidos.length;
-    const monto=pedidos.reduce((a,p)=>a+(Number(p.total_cop)||0),0);
-    const pCompra=pedidos.filter(p=>p.estado==='PENDIENTE_COMPRA').length;
-    const sCobro=pedidos.reduce((a,p)=>a+(Number(p.saldo_cop)||0),0);
-    return {total,monto,pCompra,sCobro};
-  },[pedidos]);
+  // H47: cifras del servidor (todos los pedidos; el dinero sin cancelados ni devueltos) o, si no vino, del navegador.
+  const kpis = useMemo(()=>kpisPedidos(resumenServidor,pedidos),[pedidos,resumenServidor]);
+  const puedePxpRol = puedeCrearOrdenDePago(getUsuarioActual().role);
 
   const toggleSelect=(id:number)=>{ const n=new Set(selectedIds); if(n.has(id))n.delete(id); else n.add(id); setSelectedIds(n); };
   const toggleAll=()=>{ if(selectedIds.size===filtered.length)setSelectedIds(new Set()); else setSelectedIds(new Set(filtered.map(p=>p.id))); };
@@ -130,25 +144,23 @@ export default function VentaClient() {
         <PageHeader
           icon={ShoppingCart} color="indigo"
           title="Pedidos de Venta"
-          subtitle="PVEN-YYYY#### • Pipeline: SC → COT → PVEN → PEC → ENINV → PXP"
+          subtitle="Pedidos confirmados por tus clientes"
           actions={(
             <div className="flex items-center gap-3">
               <button onClick={fetchPedidos} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 font-semibold text-sm shadow-sm">
                 <RefreshCw size={14} className={loading?'animate-spin':''}/> Actualizar
               </button>
-              <Button color="indigo" icon={Plus}>Nuevo Pedido</Button>
             </div>
           )} />
       </div>
 
-      {/* KPI CARDS */}
+      {/* KPI CARDS -- H47: un pedido solo nace de una cotizacion confirmada (no hay "Nuevo Pedido") */}
       <div className="px-8 py-5 bg-white border-b border-gray-100">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard icon={FileText} color="indigo" label="Total Pedidos" value={kpis.total}
-            hint={`${pedidos.filter(p=>!['ENTREGADO','FACTURADO','CANCELADO'].includes(p.estado)).length} activos`} />
-          <StatCard icon={DollarSign} color="emerald" label="Total Monto" value={fCOP(kpis.monto)} hint="COP acumulado" />
-          <StatCard icon={Package} color="orange" label="Pendiente Compra" value={kpis.pCompra} hint="Requieren PEC" />
-          <StatCard icon={AlertCircle} color="red" label="Saldo Pendiente" value={fCOP(kpis.sCobro)} hint="Por cobrar" />
+          <StatCard icon={FileText} color="indigo" label="Total Pedidos" value={kpis.total} hint={hintTotalPedidos(kpis)} />
+          <StatCard icon={DollarSign} color="emerald" label="Monto vendido" value={fCOP(kpis.monto)} hint="Sin pedidos cancelados ni devueltos" />
+          <StatCard icon={Package} color="orange" label="Pendiente Compra" value={kpis.pCompra} hint="Falta comprar" />
+          <StatCard icon={AlertCircle} color="red" label="Saldo Pendiente" value={fCOP(kpis.saldo)} hint="Por cobrar" />
         </div>
       </div>
 
@@ -156,29 +168,17 @@ export default function VentaClient() {
       <div className="px-8 pt-4 pb-0 bg-white flex items-center justify-between">
         <div className="flex items-center gap-1 overflow-x-auto">
           {TABS.map(tab=>{
-            const est=tabEstado[tab];
-            const count=tab==='Todos'?pedidos.length:tab==='Analisis'?undefined:pedidos.filter(p=>p.estado===est).length;
+            const count=tab==='Todos'?pedidos.length:tab==='Analisis'?undefined:pedidos.filter(p=>grupoPedido(p.estado)===tab).length;
             const isActive=activeTab===tab;
             return (
-              <button key={tab} onClick={()=>setActiveTab(tab)}
+              <button key={tab} onClick={()=>cambiarTab(tab)}
                 className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${isActive?'bg-indigo-600 text-white shadow-sm':'text-gray-600 hover:text-indigo-700 hover:bg-indigo-50'}`}>
                 {tab}{count!==undefined&&<span className={`ml-1.5 text-xs font-black ${isActive?'text-indigo-200':'text-gray-400'}`}>{count}</span>}
               </button>
             );
           })}
         </div>
-        {activeTab!=='Analisis'&&(
-          <div className="flex items-center gap-1 shrink-0 ml-4">
-            <button onClick={()=>setViewMode('lista')}
-              className={`p-2 rounded-lg border transition-colors ${viewMode==='lista'?'bg-indigo-50 border-indigo-200 text-indigo-700':'border-gray-200 text-gray-400 hover:bg-gray-50'}`}>
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="3" width="14" height="2" rx="1" fill="currentColor"/><rect x="1" y="7" width="14" height="2" rx="1" fill="currentColor"/><rect x="1" y="11" width="14" height="2" rx="1" fill="currentColor"/></svg>
-            </button>
-            <button onClick={()=>setViewMode('kanban')}
-              className={`p-2 rounded-lg border transition-colors ${viewMode==='kanban'?'bg-indigo-50 border-indigo-200 text-indigo-700':'border-gray-200 text-gray-400 hover:bg-gray-50'}`}>
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="1" y="1" width="6" height="14" rx="1.5" fill="currentColor"/><rect x="9" y="1" width="6" height="14" rx="1.5" fill="currentColor"/></svg>
-            </button>
-          </div>
-        )}
+        {/* R8: el conmutador Lista/Kanban no tenia vista Kanban (queda para el Bloque 4): oculto. */}
       </div>
 
       {/* ROW 2: SEARCH + FILTER + COUNT */}
@@ -186,27 +186,27 @@ export default function VentaClient() {
         <div className="px-8 py-3 bg-white border-b border-gray-100 flex items-center gap-3">
           <div className="flex items-center bg-white border border-gray-200 rounded-xl px-3 py-2 gap-2 flex-1 max-w-[420px] shadow-sm">
             <Search size={14} className="text-gray-400 shrink-0"/>
-            <input value={search} onChange={e=>setSearch(e.target.value)}
+            <input value={search} onChange={e=>cambiarBusqueda(e.target.value)}
               placeholder="Buscar por numero, cliente, producto..."
               className="text-sm bg-transparent outline-none flex-1 placeholder-gray-400"/>
-            {search&&<button onClick={()=>setSearch('')}><X size={13} className="text-gray-400 hover:text-gray-600"/></button>}
+            {search&&<button onClick={()=>cambiarBusqueda('')}><X size={13} className="text-gray-400 hover:text-gray-600"/></button>}
           </div>
           <div className="relative">
             <button onClick={()=>setShowFilterDropdown(f=>!f)}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-semibold transition-colors shadow-sm ${filterEstado?'bg-indigo-50 border-indigo-300 text-indigo-700':'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M3 7h8M5 11h4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
               Filtrar Estado
-              {filterEstado&&<span className="bg-indigo-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-black leading-none">{filterEstado.replace('_',' ')}</span>}
+              {filterEstado&&<span className="bg-indigo-600 text-white text-[10px] px-1.5 py-0.5 rounded-full font-black leading-none">{infoEstadoPedido(filterEstado).label}</span>}
             </button>
             {showFilterDropdown&&(
               <>
                 <div className="fixed inset-0 z-10" onClick={()=>setShowFilterDropdown(false)}/>
                 <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-2xl shadow-2xl p-4 z-20 w-60">
                   <p className="text-xs font-black text-gray-400 uppercase mb-2">Filtrar por Estado</p>
-                  {['','PENDIENTE_COMPRA','EN_PROCESO','LISTO_ENTREGA','ENTREGADO','FACTURADO','CANCELADO'].map(e=>(
-                    <button key={e} onClick={()=>{setFilterEstado(e);setShowFilterDropdown(false);}}
+                  {['',...opcionesFiltroEstado(pedidos)].map(e=>(
+                    <button key={e} onClick={()=>{cambiarFiltro(e);setShowFilterDropdown(false);}}
                       className={`w-full text-left px-3 py-2 text-sm rounded-xl mb-0.5 font-medium transition-colors ${filterEstado===e?'bg-indigo-50 text-indigo-700 font-bold':'hover:bg-gray-50 text-gray-600'}`}>
-                      {e||'Todos los estados'}
+                      {e?infoEstadoPedido(e).label:'Todos los estados'}
                     </button>
                   ))}
                 </div>
@@ -222,10 +222,10 @@ export default function VentaClient() {
         <div className="flex-1 px-8 py-6 bg-gray-50 border-b border-gray-100">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
             {[
-              {label:'Total Pedidos',value:pedidos.length,color:'text-indigo-700'},
-              {label:'Monto Total',value:fCOP(pedidos.reduce((a,p)=>a+(Number(p.total_cop)||0),0)),color:'text-gray-900'},
-              {label:'Anticipo Cobrado',value:fCOP(pedidos.reduce((a,p)=>a+(Number(p.anticipo_cop)||0),0)),color:'text-emerald-600'},
-              {label:'Saldo Pendiente',value:fCOP(pedidos.reduce((a,p)=>a+(Number(p.saldo_cop)||0),0)),color:'text-red-600'},
+              {label:'Total Pedidos',value:kpis.total,color:'text-indigo-700'},
+              {label:'Monto Total',value:fCOP(kpis.monto),color:'text-gray-900'},
+              {label:'Anticipo verificado',value:fCOP(kpis.anticipo),color:'text-emerald-600'},
+              {label:'Saldo Pendiente',value:fCOP(kpis.saldo),color:'text-red-600'},
             ].map((k,i)=>(
               <div key={i} className="bg-white rounded-2xl p-5 border border-gray-200 shadow-sm">
                 <p className="text-xs font-black text-gray-400 uppercase mb-2">{k.label}</p>
@@ -236,14 +236,16 @@ export default function VentaClient() {
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-white rounded-2xl p-5 border border-gray-200 shadow-sm">
               <h3 className="text-sm font-black text-gray-700 mb-4">Distribucion por Estado</h3>
-              {Object.entries(VEN_ESTADOS).map(([key,st])=>{
-                const cnt=pedidos.filter(p=>p.estado===key).length;
-                const pct=pedidos.length?Math.round((cnt/pedidos.length)*100):0;
+              {/* N10: todos los estados (los del resumen, sobre todos los pedidos), cada uno con su nombre. */}
+              {Object.keys(kpis.porEstado).sort((a,b)=>{const o=(e:string)=>{const i=Object.keys(ESTADOS_PEDIDO).indexOf(e);return i<0?999:i;};return o(a)-o(b);}).map(key=>{
+                const st=infoEstadoPedido(key);
+                const cnt=Number(kpis.porEstado[key])||0;
+                const pct=kpis.total?Math.round((cnt/kpis.total)*100):0;
                 return cnt>0?(
                   <div key={key} className="flex items-center gap-3 mb-2">
-                    <span className={`text-xs font-bold ${st.text} shrink-0 w-28`}>{st.label}</span>
+                    <span className={`text-xs font-bold ${st.clases.text} shrink-0 w-28`}>{st.label}</span>
                     <div className="flex-1 bg-gray-100 rounded-full h-2 overflow-hidden">
-                      <div className={`h-2 rounded-full ${st.bg.replace('bg-','bg-').replace('-100','-400')}`} style={{width:`${pct}%`}}/>
+                      <div className={`h-2 rounded-full bg-current ${st.clases.text}`} style={{width:`${pct}%`}}/>
                     </div>
                     <span className="text-xs text-gray-500 w-12 text-right font-bold">{cnt} ({pct}%)</span>
                   </div>
@@ -253,7 +255,7 @@ export default function VentaClient() {
             <div className="bg-white rounded-2xl p-5 border border-gray-200 shadow-sm">
               <h3 className="text-sm font-black text-gray-700 mb-4">Top 5 Clientes por Monto</h3>
               {Object.entries(
-                pedidos.reduce((acc:any,p:any)=>{
+                pedidos.filter(pedidoSumaDinero).reduce((acc:any,p:any)=>{
                   const k=p.customer_name||'Sin cliente';
                   acc[k]=(acc[k]||0)+(Number(p.total_cop)||0);
                   return acc;
@@ -280,7 +282,7 @@ export default function VentaClient() {
                   <input type="checkbox" className="rounded border-gray-300"
                     onChange={toggleAll} checked={selectedIds.size>0&&selectedIds.size===filtered.length}/>
                 </th>
-                <th className="px-4 py-4 text-xs font-black text-gray-400 uppercase tracking-wide">PVEN / TRAZABILIDAD</th>
+                <th className="px-4 py-4 text-xs font-black text-gray-400 uppercase tracking-wide">Pedido / Origen</th>
                 <th className="px-4 py-4 text-xs font-black text-gray-400 uppercase tracking-wide">Cliente</th>
                 <th className="px-4 py-4 text-xs font-black text-gray-400 uppercase tracking-wide">Total COP</th>
                 <th className="px-4 py-4 text-xs font-black text-gray-400 uppercase tracking-wide">Anticipo</th>
@@ -298,10 +300,11 @@ export default function VentaClient() {
                 </td></tr>
               ):filtered.length===0?(
                 <tr><td colSpan={9}>
-                  <EmptyState icon={ShoppingCart} message={search?`Sin resultados para "${search}"`:'Sin pedidos de venta'} />
+                  <EmptyState icon={ShoppingCart} message={search?`Sin resultados para "${search}"`:'Sin pedidos de venta'}
+                    hint="Los pedidos se crean al convertir una cotización confirmada por el cliente." />
                 </td></tr>
               ):filtered.slice((currentPage-1)*pageSize, currentPage*pageSize).map(p=>{
-                const st=VEN_ESTADOS[p.estado]||{bg:'bg-gray-100',text:'text-gray-700',border:'border-gray-200',label:p.estado};
+                const st=infoEstadoPedido(p.estado).clases;
                 const isOpen=openMenu===p.id;
                 return (
                   <tr key={p.id} className="hover:bg-indigo-50/30 cursor-pointer transition-colors group">
@@ -313,10 +316,10 @@ export default function VentaClient() {
                     <td className="px-4 py-4 text-gray-700 font-medium cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>{p.customer_name||'-'}</td>
                     <td className="px-4 py-4 font-bold text-gray-900 cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>{fCOP(p.total_cop)}</td>
                     <td className="px-4 py-4 text-emerald-600 font-bold cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>{fCOP(p.anticipo_cop)}</td>
-                    <td className="px-4 py-4 text-red-600 font-bold cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>{fCOP(p.saldo_cop)}</td>
+                    <td className={`px-4 py-4 font-bold cursor-pointer ${pedidoSumaDinero(p)?'text-red-600':'text-gray-300'}`} onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>{pedidoSumaDinero(p)?fCOP(p.saldo_cop):'—'}</td>
                     <td className="px-4 py-4 text-gray-500 text-xs cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>{fDate(p.fecha_entrega_estimada)}</td>
                     <td className="px-4 py-4 cursor-pointer" onClick={()=>router.push(`/dashboard/ventas/venta/${p.id}`)}>
-                      <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${st.bg} ${st.text} ${st.border}`}>{st.label}</span>
+                      <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${st.bg} ${st.text} ${st.border}`}>{infoEstadoPedido(p.estado).label}</span>
                     </td>
                     <td className="px-4 py-4 text-right relative">
                       <button onClick={(e)=>{e.stopPropagation();setOpenMenu(isOpen?null:p.id);}}
@@ -330,17 +333,18 @@ export default function VentaClient() {
                             <button className="w-full text-left px-4 py-2.5 hover:bg-indigo-50 text-sm font-medium text-indigo-700 flex items-center gap-2" onClick={()=>{setOpenMenu(null);router.push(`/dashboard/ventas/venta/${p.id}`);}}>
                               <FileCheck size={14}/> Ver Detalle
                             </button>
-                            <button className="w-full text-left px-4 py-2.5 hover:bg-gray-50 text-sm font-medium flex items-center gap-2 text-gray-700" onClick={()=>{setOpenMenu(null);router.push(`/dashboard/ventas/venta/${p.id}`);}}>
-                              <Edit2 size={14}/> Editar
-                            </button>
-                            <div className="border-t border-gray-100 my-1"/>
-                            <button className="w-full text-left px-4 py-2.5 hover:bg-gray-50 text-sm font-medium flex items-center gap-2 text-gray-700" onClick={()=>{setOpenMenu(null);router.push(`/dashboard/ventas/venta/${p.id}`);}}>
-                              <DollarSign size={14}/> Crear PXP
-                            </button>
-                            {!['ENTREGADO','FACTURADO','CANCELADO'].includes(p.estado)&&(
+                            {/* R8: cada opcion hace lo que dice ("Editar" solo abria el detalle: se quito). H44+N6:
+                                "Crear PXP" solo con rol, sin cancelar, con saldo y sin otra PXP vigente. N2:
+                                "Cancelar Pedido" solo si el servidor acepta cancelarlo; abre el modal del detalle. */}
+                            {puedePxpRol&&pedidoAdmitePxp(p)&&(
+                              <button disabled={creandoPxp===p.id} className="w-full text-left px-4 py-2.5 hover:bg-gray-50 text-sm font-medium flex items-center gap-2 text-gray-700 disabled:opacity-50" onClick={()=>{setOpenMenu(null);crearPxp(p);}}>
+                                <DollarSign size={14}/> Crear PXP
+                              </button>
+                            )}
+                            {transicionesPedido(p.estado).includes('CANCELADO')&&(
                               <>
                                 <div className="border-t border-gray-100 my-1"/>
-                                <button className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm font-medium text-red-600 flex items-center gap-2" onClick={()=>{setOpenMenu(null);router.push(`/dashboard/ventas/venta/${p.id}`);}}>
+                                <button className="w-full text-left px-4 py-2.5 hover:bg-red-50 text-sm font-medium text-red-600 flex items-center gap-2" onClick={()=>{setOpenMenu(null);router.push(`/dashboard/ventas/venta/${p.id}?accion=cancelar`);}}>
                                   <X size={14}/> Cancelar Pedido
                                 </button>
                               </>

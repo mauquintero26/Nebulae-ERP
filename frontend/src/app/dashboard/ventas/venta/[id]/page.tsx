@@ -12,26 +12,15 @@ import { useParams, useSearchParams } from 'next/navigation';
 import { apiFetch } from '@/lib/api';
 import { Button, Modal } from '@/components/ui';
 import { NewSupplierModal } from '../venta-client';
-import { CambiosDeActividad } from '../../flujo';
+import { CambiosDeActividad, getUsuarioActual, puedeCrearOrdenDePago } from '../../flujo';
+import { formatoPesos } from '@/lib/pesos';
+import {
+  PASOS_PEDIDO as STEPS, ESTADOS_PEDIDO_MANUALES, ESTADOS_PEDIDO_CERRADOS, infoEstadoPedido, pasoPedido, transicionesPedido,
+} from '@/lib/estados-pedido';
+import { formatoPct, describirPago, etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp } from '@/lib/dinero-ventas';
 
-const fCOP  = (v: any) => { const n = Number(v) || 0; return '$' + n.toLocaleString('es-CO'); };
+const fCOP = formatoPesos;
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
-
-const VEN_ESTADOS: Record<string, { bg: string; text: string; border: string; label: string }> = {
-  PENDIENTE_COMPRA: { bg: 'bg-orange-100',  text: 'text-orange-700',  border: 'border-orange-200',  label: 'Pend. Compra' },
-  EN_PROCESO:       { bg: 'bg-purple-100',  text: 'text-purple-700',  border: 'border-purple-200',  label: 'En Proceso' },
-  LISTO_ENTREGA:    { bg: 'bg-teal-100',    text: 'text-teal-700',    border: 'border-teal-200',    label: 'Listo Entrega' },
-  ENTREGADO:        { bg: 'bg-emerald-100', text: 'text-emerald-700', border: 'border-emerald-200', label: 'Entregado' },
-  FACTURADO:        { bg: 'bg-green-100',   text: 'text-green-700',   border: 'border-green-200',   label: 'Facturado' },
-  CANCELADO:        { bg: 'bg-red-100',     text: 'text-red-700',     border: 'border-red-200',     label: 'Cancelado' },
-};
-const STEPS: { key: string; label: string }[] = [
-  { key: 'PENDIENTE_COMPRA', label: 'Pend. Compra' },
-  { key: 'EN_PROCESO',       label: 'En Proceso' },
-  { key: 'LISTO_ENTREGA',    label: 'Listo Entrega' },
-  { key: 'ENTREGADO',        label: 'Entregado' },
-  { key: 'FACTURADO',        label: 'Facturado' },
-];
 
 const ACTIVITY_STYLE: Record<string, string> = {
   CREATED: '#6366f1', UPDATED: '#3b82f6', ESTADO_CHANGED: '#f59e0b',
@@ -71,6 +60,9 @@ function PedidoVentaDetalleContent() {
   const [panelTab, setPanelTab] = useState<'actividad' | 'ia'>('actividad');
   const [iaAnalisis, setIaAnalisis] = useState('');
   const supplierTimer = useRef<any>(null);
+  // R8: el menu de la lista ("Cancelar Pedido") llega con ?accion=cancelar: tras la primera carga se abre el
+  // mismo modal de cancelacion (una sola vez), si el pedido se puede cancelar.
+  const abrirCancelacion = useRef(searchParams?.get('accion') === 'cancelar');
 
   useEffect(() => {
     const u = localStorage.getItem('user_name') || localStorage.getItem('username') || '';
@@ -85,6 +77,8 @@ function PedidoVentaDetalleContent() {
       const raw = await apiFetch(`/ventas/pedidos/${params.id}`);
       const d = raw?.data ?? raw;
       setPedido(d);
+      if (abrirCancelacion.current && transicionesPedido(d?.estado).includes('CANCELADO')) setShowCancelModal(true);
+      abrirCancelacion.current = false;
     } catch (err: any) {
       setLoadError(err.message || 'No se pudo cargar el pedido de venta');
     }
@@ -127,16 +121,25 @@ function PedidoVentaDetalleContent() {
   }, []);
 
   const estadoActual = pedido?.estado || 'PENDIENTE_COMPRA';
-  const estadoCfg = VEN_ESTADOS[estadoActual] || { bg: 'bg-slate-100', text: 'text-slate-700', border: 'border-slate-200', label: estadoActual };
-  const stepIndex = STEPS.findIndex(s => s.key === estadoActual);
+  // N10: nombre claro de cualquier estado y su lugar en los 5 pasos (-1: cancelado o devuelto, sin stepper).
+  const estadoCfg = infoEstadoPedido(estadoActual);
+  const stepIndex = pasoPedido(estadoActual);
+  // N2: solo se ofrece lo que el servidor acepta por PATCH desde el estado actual.
+  const puedeCancelar = transicionesPedido(estadoActual).includes('CANCELADO');
+  const opcionesEstado = ESTADOS_PEDIDO_MANUALES.filter(k => transicionesPedido(estadoActual).includes(k));
+  const estadoSoloLectura = ESTADOS_PEDIDO_CERRADOS.includes(estadoActual) || opcionesEstado.length === 0;
+  // H44+N6 / H45: la orden de pago vigente (o la ultima cancelada) y si se puede crear otra.
+  const { vigente: pxpVigente, cancelada: pxpCancelada } = pxpsDelPedido(pedido);
+  const puedePxp = puedeCrearOrdenDePago(getUsuarioActual().role) && pedidoAdmitePxp(pedido);
 
   async function handleCrearPxp() {
     if (!pedido?.id) return;
     setCreatingPxp(true);
     try {
+      // H44+N6: los montos salen del pedido en el servidor; el body ya no manda montos.
       await apiFetch(`/ventas/pedidos/${pedido.id}/crear-pxp`, {
         method: 'POST',
-        body: JSON.stringify({ monto_anticipo: pedido?.saldo_cop || 0 }),
+        body: JSON.stringify({}),
       });
       await loadPedido();
     } catch (err: any) {
@@ -323,6 +326,14 @@ function PedidoVentaDetalleContent() {
 
   const productos = pedido?.productos || [];
   const actividades = pedido?.actividades || [];
+  // H35+H48: notas ACTUALES de la SC y de la COT, aparte de la del pedido. Al crear el pedido se copia la nota
+  // de la COT, asi que 'Notas del pedido' solo aparece si es distinta (se edito, o el pedido no viene de una COT).
+  const notaSolicitud = (pedido?.sc_notas || '').trim();
+  const notaCotizacion = (pedido?.cot_notas || '').trim();
+  const notaPedido = (pedido?.notas || '').trim();
+  const mostrarNotaPedido = !!notaPedido && notaPedido !== notaCotizacion;
+  const pagadoCop = (Number(pedido?.total_cop) || 0) - (Number(pedido?.saldo_cop) || 0);
+  const pagos = Array.isArray(pedido?.pagos) ? pedido.pagos : [];
 
   return (
     <div className="w-full h-full bg-white flex flex-col overflow-hidden">
@@ -343,7 +354,7 @@ function PedidoVentaDetalleContent() {
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-black text-slate-800">{pedido?.numero || String(params.id || '').toUpperCase()}</h1>
-              <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${estadoCfg.bg} ${estadoCfg.text} ${estadoCfg.border}`}>
+              <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${estadoCfg.clases.bg} ${estadoCfg.clases.text} ${estadoCfg.clases.border}`}>
                 {estadoCfg.label}
               </span>
             </div>
@@ -352,12 +363,16 @@ function PedidoVentaDetalleContent() {
         </div>
 
         <div className="flex items-center gap-3">
-          {!pedido?.pxp_id && (
+          {puedePxp && (
             <Button color="emerald" icon={DollarSign} loading={creatingPxp} onClick={handleCrearPxp}>Crear PXP</Button>
           )}
-          {pedido?.pxp_numero && (
-            <span className="flex items-center gap-1.5 px-5 py-2 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl font-bold text-sm">
-              <CheckCircle2 size={16} /> PXP: {pedido.pxp_numero}
+          {pxpVigente ? (
+            <span className="flex items-center gap-1.5 px-4 py-2 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl font-bold text-sm">
+              <CheckCircle2 size={16} /> PXP: {pxpVigente.numero} · {etiquetaEstadoPxp(pxpVigente.estado)} · pendiente {fCOP(pxpVigente.monto_pendiente)}
+            </span>
+          ) : pxpCancelada && (
+            <span className="flex items-center gap-1.5 px-4 py-2 bg-slate-100 text-slate-500 border border-slate-200 rounded-xl font-bold text-sm">
+              PXP {pxpCancelada.numero} cancelada
             </span>
           )}
           <button onClick={() => {
@@ -376,7 +391,7 @@ function PedidoVentaDetalleContent() {
             className={`p-2.5 rounded-xl border transition-colors ${isEditMode ? 'bg-indigo-100 text-indigo-700 border-indigo-300' : 'text-slate-500 border-slate-200 hover:bg-slate-100'}`}>
             <Edit2 size={18} />
           </button>
-          {!['ENTREGADO', 'FACTURADO', 'CANCELADO'].includes(estadoActual) && (
+          {puedeCancelar && (
             <Button variant="danger" icon={X} onClick={() => setShowCancelModal(true)}>Cancelar Pedido</Button>
           )}
         </div>
@@ -388,8 +403,9 @@ function PedidoVentaDetalleContent() {
         {/* BLOQUE 1: Info del Pedido */}
         <div className="flex-1 overflow-y-auto px-8 py-8 custom-scrollbar bg-white relative">
 
-          {/* Status Tracker */}
-          {estadoActual !== 'CANCELADO' && (
+          {/* Status Tracker -- N10: los 5 pasos; cada estado cae en el mas cercano y el exacto se lee abajo.
+              Se oculta solo en Cancelado y Devuelto (paso -1). */}
+          {stepIndex >= 0 && (
             <div className="bg-white p-6 border-b border-slate-100 mb-8 flex justify-between relative">
               <div className="absolute top-1/2 left-10 right-10 h-1 bg-slate-100 -translate-y-1/2 z-0" />
               <div className="absolute top-1/2 left-10 h-1 bg-emerald-500 transition-all duration-500 z-0"
@@ -406,6 +422,15 @@ function PedidoVentaDetalleContent() {
                   <span className={`text-xs font-bold ${i <= stepIndex ? 'text-slate-800' : 'text-slate-400'}`}>{s.label}</span>
                 </div>
               ))}
+            </div>
+          )}
+          {stepIndex >= 0 && STEPS[stepIndex]?.key !== estadoActual && (
+            <p className="-mt-6 mb-8 text-center text-xs font-bold text-slate-500">Estado actual: {estadoCfg.label}</p>
+          )}
+          {estadoActual === 'DEVUELTO_TOTAL' && (
+            <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 mb-8 flex items-start gap-3">
+              <AlertCircle className="text-rose-500 shrink-0 mt-0.5" size={20} />
+              <p className="text-sm font-bold text-rose-700">Este pedido fue devuelto totalmente.</p>
             </div>
           )}
           {estadoActual === 'CANCELADO' && (
@@ -475,19 +500,24 @@ function PedidoVentaDetalleContent() {
               <div className="grid grid-cols-2 gap-6 mb-10">
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Estado</label>
-                  {['ENTREGADO', 'FACTURADO', 'CANCELADO'].includes(estadoActual) ? (
+                  {estadoSoloLectura ? (
                     <>
                       <div className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium bg-slate-50 text-slate-500">
-                        {VEN_ESTADOS[estadoActual]?.label || estadoActual}
+                        {estadoCfg.label}
                       </div>
                       <p className="text-[11px] text-slate-400 mt-1">Este estado ya no se puede cambiar manualmente desde aquí.</p>
                     </>
                   ) : (
                     <>
+                      {/* N10: solo los manuales que el servidor acepta desde aqui; un estado que no es manual se
+                          muestra como "(actual)" y no se reenvia si no se cambia (handleSaveEdit). */}
                       <select value={editForm.estado} onChange={e => setEditForm((f: any) => ({ ...f, estado: e.target.value }))}
                         className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-200">
-                        {['PENDIENTE_COMPRA', 'EN_PROCESO', 'LISTO_ENTREGA'].map(k => (
-                          <option key={k} value={k}>{VEN_ESTADOS[k].label}</option>
+                        {!opcionesEstado.includes(estadoActual) && (
+                          <option value={estadoActual} disabled>{estadoCfg.label} (actual)</option>
+                        )}
+                        {opcionesEstado.map(k => (
+                          <option key={k} value={k}>{infoEstadoPedido(k).label}</option>
                         ))}
                       </select>
                       <p className="text-[11px] text-slate-400 mt-1">Para marcar Entregado o Facturado usa el flujo de Entregas; para cancelar usa el botón "Cancelar Pedido" (registra el motivo).</p>
@@ -541,9 +571,34 @@ function PedidoVentaDetalleContent() {
                   </div>
                 </div>
                 <div className="w-full bg-slate-200 rounded-full h-2.5 mb-2 overflow-hidden">
-                  <div className="bg-emerald-500 h-2.5 rounded-full transition-all" style={{ width: `${Math.min(100, ((pedido?.anticipo_cop || 0) / (pedido?.total_cop || 1)) * 100)}%` }} />
+                  <div className="bg-emerald-500 h-2.5 rounded-full transition-all" style={{ width: `${Math.max(0, Math.min(100, (pagadoCop / (Number(pedido?.total_cop) || 1)) * 100))}%` }} />
                 </div>
-                <p className="text-xs text-slate-400 text-right">Anticipo: <span className="text-emerald-600 font-bold">{fCOP(pedido?.anticipo_cop)}</span></p>
+                {/* N1: lo pagado sale del libro de pagos (total - saldo); el requerido, del % guardado en el pedido. */}
+                <div className="flex justify-between text-xs text-slate-400">
+                  <span>Anticipo requerido {pedido?.anticipo_pct != null ? formatoPct(pedido.anticipo_pct) : ''}: <span className="font-bold text-slate-600">{fCOP(pedido?.anticipo_requerido)}</span></span>
+                  <span>Pagado (verificado): <span className="text-emerald-600 font-bold">{fCOP(pagadoCop)}</span></span>
+                </div>
+                {Number(pedido?.anticipo_pendiente) > 0 && (
+                  <p className="mt-2 text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+                    Anticipo pendiente: {fCOP(pedido.anticipo_pendiente)}
+                  </p>
+                )}
+                {pagos.length > 0 && (
+                  <ul className="mt-4 pt-3 border-t border-slate-100 space-y-1.5">
+                    {pagos.map((p: any) => {
+                      const d = describirPago(p);
+                      return (
+                        <li key={p.id} className="text-xs text-slate-600 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                          <span className="font-bold text-slate-800">{d.titulo}</span>
+                          {d.partes.map((parte, i) => <span key={i}>· {parte}</span>)}
+                          {p.fecha && <span>· {fDate(`${p.fecha}T00:00:00`)}</span>}
+                          {d.estado && <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 font-bold">{d.estado}</span>}
+                          {d.sinVerificar && <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-bold">Registrado automáticamente, sin verificar</span>}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
               </div>
             </div>
 
@@ -579,7 +634,7 @@ function PedidoVentaDetalleContent() {
               </div>
             </div>
 
-            {(pedido?.notas || pedido?.direccion_entrega) && !isEditMode && (
+            {(notaSolicitud || notaCotizacion || mostrarNotaPedido || pedido?.direccion_entrega) && !isEditMode && (
               <div className="grid grid-cols-2 gap-6">
                 {pedido?.direccion_entrega && (
                   <div>
@@ -589,12 +644,17 @@ function PedidoVentaDetalleContent() {
                     </div>
                   </div>
                 )}
-                {pedido?.notas && (
-                  <div className={pedido?.direccion_entrega ? '' : 'col-span-2'}>
-                    <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Notas</label>
-                    <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 whitespace-pre-wrap">
-                      {pedido.notas}
-                    </div>
+                {(notaSolicitud || notaCotizacion || mostrarNotaPedido) && (
+                  <div className={`space-y-3 ${pedido?.direccion_entrega ? '' : 'col-span-2'}`}>
+                    {([['Nota de la solicitud', notaSolicitud], ['Nota de la cotización', notaCotizacion],
+                      ['Notas del pedido', mostrarNotaPedido ? notaPedido : '']] as const).filter(([, t]) => t).map(([titulo, t]) => (
+                      <div key={titulo}>
+                        <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">{titulo}</label>
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 whitespace-pre-wrap">
+                          {t}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -845,7 +905,20 @@ function PedidoVentaDetalleContent() {
               <Button variant="danger" icon={X} loading={cancelling} onClick={handleCancelarPedido}>Confirmar Cancelación</Button>
             </>
           )}>
-          <p className="text-sm text-slate-500">Esta acción marca el pedido como <strong>CANCELADO</strong>. Indica el motivo (mínimo 5 caracteres).</p>
+          <p className="text-sm text-slate-500">Esta acción marca el pedido como <strong>Cancelado</strong>. Indica el motivo (mínimo 5 caracteres).</p>
+          {pedido?.cot_numero && (
+            <p className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-xl p-3">
+              La cotización {pedido.cot_numero} volverá a Borrador para que puedas ajustarla, reenviarla al cliente y crear otro pedido.
+            </p>
+          )}
+          {/* H45: el servidor cancela solo las PXP PENDIENTE; una pagada no se toca y deja un aviso de revision. */}
+          {pxpVigente && (
+            <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-3">
+              {pxpVigente.estado === 'PENDIENTE'
+                ? `También se cancelará la orden de pago ${pxpVigente.numero} (pendiente ${fCOP(pxpVigente.monto_pendiente)}).`
+                : `La orden de pago ${pxpVigente.numero} está ${etiquetaEstadoPxp(pxpVigente.estado).toLowerCase()}: no se cancela y queda un aviso para revisar la devolución o el saldo a favor del cliente.`}
+            </p>
+          )}
           <textarea value={cancelRazon} onChange={e => setCancelRazon(e.target.value)} rows={3} autoFocus
             placeholder="Ej: Cliente desistió de la compra, error en el pedido, etc."
             className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-red-200 resize-none" />
