@@ -1,8 +1,13 @@
 @import "tailwindcss";
+/* H1: las clases dark: solo aplican con una clase .dark (que nunca se pone), no con el tema del sistema operativo. */
+@custom-variant dark (&:where(.dark, .dark *));
 
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  /* H1: siempre en modo claro; los controles nativos (fecha, select, scrollbar) tambien. 'only' impide que el
+     navegador oscurezca la pagina a la fuerza. */
+  color-scheme: only light;
 }
 
 @theme inline {
@@ -10,13 +15,6 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {
