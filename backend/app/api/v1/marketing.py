@@ -2,7 +2,7 @@ from fastapi import Request, status
 import jwt, hmac, hashlib
 from app.core.security import SECRET_KEY, ALGORITHM
 from app.models.users import User
-from app.api.dependencies import require_roles, ROLE_ADMIN, ROLE_ASESOR, normalize_role
+from app.api.dependencies import require_roles, ROLE_ADMIN, ROLE_ASESOR, normalize_role, usuario_de_token
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
@@ -657,12 +657,10 @@ def update_customer_contact_preferences(
     if auth_header and auth_header.startswith("Bearer "):
         token = auth_header.split(" ", 1)[1].strip()
         try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-            user_id = payload.get("sub")
-            if user_id:
-                user = db.query(User).filter(User.id == int(user_id)).first()
-                if user and normalize_role(user.role) in ("ADMIN", "ASESOR"):
-                    is_authorized = True
+            # H23: mismas reglas que get_current_user (un usuario desactivado no entra por token ERP).
+            user = usuario_de_token(token, db)
+            if user and normalize_role(user.role) in ("ADMIN", "ASESOR"):
+                is_authorized = True
         except Exception:
             pass
 

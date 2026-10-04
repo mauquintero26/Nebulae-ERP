@@ -5,7 +5,7 @@ import urllib.request
 import urllib.error
 from typing import Optional
 from app.models.users import User
-from app.api.dependencies import require_roles, ROLE_ADMIN, ROLE_FINANZAS, ROLE_ASESOR, normalize_role
+from app.api.dependencies import require_roles, ROLE_ADMIN, ROLE_FINANZAS, ROLE_ASESOR, normalize_role, usuario_de_token
 from app.core.security import SECRET_KEY, ALGORITHM
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
@@ -779,14 +779,12 @@ def _resolve_omnichannel_auth(request, raw_req: Request, db: Session):
     if auth_header and auth_header.startswith("Bearer "):
         token = auth_header.split(" ", 1)[1].strip()
         try:
-            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-            user_id = payload.get("sub")
-            if user_id:
-                user = db.query(User).filter(User.id == int(user_id)).first()
-                if user:
-                    role = normalize_role(user.role)
-                    if role in ("ADMIN", "FINANZAS", "ASESOR"):
-                        return {"auth_type": "ERP_USER", "user": user, "role": role}
+            # H23: mismas reglas que get_current_user (un usuario desactivado no entra por token ERP).
+            user = usuario_de_token(token, db)
+            if user:
+                role = normalize_role(user.role)
+                if role in ("ADMIN", "FINANZAS", "ASESOR"):
+                    return {"auth_type": "ERP_USER", "user": user, "role": role}
         except Exception:
             pass
 

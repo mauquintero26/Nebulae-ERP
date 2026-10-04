@@ -10,23 +10,43 @@ from fastapi import Request
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
+# H23: margen para un desfase de reloj de pocos segundos entre quien emite el token y quien lo valida (PyJWT
+# rechaza un 'iat' en el futuro).
+SESSION_JWT_LEEWAY_SECONDS = 30
+
+
+def usuario_de_token(token: str, db: Session):
+    """Usuario ERP de un token de sesion, o None si el token no sirve: firma o vencimiento invalidos (con
+    SESSION_JWT_LEEWAY_SECONDS de margen), sin 'sub' o con 'sub' no numerico, usuario inexistente o desactivado.
+
+    H23: con sesiones de 24 h un usuario desactivado no puede seguir dentro ni renovar. `is False` porque la
+    columna acepta NULL en filas viejas (NULL sigue entrando, como antes). Lo usan get_current_user,
+    get_optional_current_user y las rutas duales (token ERP o de cliente) de chat y marketing."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], leeway=SESSION_JWT_LEEWAY_SECONDS)
+    except jwt.PyJWTError:
+        return None
+    user_id = payload.get("sub")
+    if user_id is None:
+        return None
+    try:
+        user_id = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None or user.is_active is False:
+        return None
+    return user
+
+
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
-    except jwt.PyJWTError:
-        raise credentials_exception
-    user = db.query(User).filter(User.id == int(user_id)).first()
-    # H23: con sesiones de 24 h un usuario desactivado no puede seguir dentro ni renovar. `is False` porque
-    # la columna acepta NULL en filas viejas (NULL sigue entrando, como antes).
-    if user is None or user.is_active is False:
+    user = usuario_de_token(token, db)
+    if user is None:
         raise credentials_exception
     return user
 
@@ -37,12 +57,7 @@ def get_optional_current_user(
     if not token:
         return None
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("sub")
-        if user_id is None:
-            return None
-        user = db.query(User).filter(User.id == int(user_id)).first()
-        return user
+        return usuario_de_token(token, db)
     except Exception:
         return None
 
