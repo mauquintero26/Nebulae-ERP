@@ -18,7 +18,7 @@ import {
   METODOS_PAGO_ANTICIPO, formatoPct, porcentajeDePesos, hoyLocal, origenAnticipo, cuentaVerificacion,
   evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo, resumenAnticipoCotizacion,
 } from '@/lib/dinero-ventas';
-import { pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, pestanaCotizacion } from '@/lib/listas-ventas';
+import { diasAlerta, pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, pestanaCotizacion } from '@/lib/listas-ventas';
 import { SubNav, PageHeader, StatCard, Modal, Button, EmptyState } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
 
@@ -666,7 +666,8 @@ export default function CotizacionClient() {
         apiFetch('/ventas/config').catch(() => ({})),
       ]);
       setCotizaciones(Array.isArray(d) ? d : (d?.data ?? []));
-      if (cfg?.alerta_cot_dias?.value) setAlertDias(Number(cfg.alerta_cot_dias.value));
+      // N8: GET /ventas/config responde {status, data: {clave: {value}}} (cualquier rol lo lee): diasAlerta lo interpreta y, sin valor valido, usa 2.
+      setAlertDias(diasAlerta(cfg, 'alerta_cot_dias'));
     } catch { setCotizaciones([]); }
     finally { setLoading(false); }
   }, []);

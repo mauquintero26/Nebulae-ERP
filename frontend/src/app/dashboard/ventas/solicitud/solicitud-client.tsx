@@ -19,6 +19,10 @@ import { SubNav, PageHeader, StatCard, Badge as SharedBadge, Modal, Toast as Sha
 import { VEN_NAV } from '../ven-nav';
 import { esAsesorElegible, getUsuarioActual } from '../flujo';
 import { coincideProducto } from '@/lib/busqueda';
+import {
+  diasAlerta, generoCotizacion, cotizacionesVigentes, contadoresSolicitudes, tasaConversionCotizacion,
+  superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera,
+} from '@/lib/listas-ventas';
 
 export const TIPOS_SC = [
   'Cotizacion de Producto',
@@ -58,8 +62,10 @@ export const ESTADOS_SC: Record<string, {label:string; color:string; bg:string; 
 // Solicitud podria forzarse a, por ejemplo, "Cotizada" o "Soporte" con un
 // click, sin Cotizacion vinculada ni backend involucrado -- exactamente lo que
 // estos menus nunca pudieron hacer antes de que ESTADOS_SC creciera.
+// N4: a mano solo se vuelve a Borrador (igual que el PATCH del servidor). Cancelar NO va aqui: se hace con
+// POST /ventas/solicitudes/{id}/cancelar (pide el motivo y revisa que no tenga cotizaciones ni pedidos activos).
 export const ESTADOS_SC_MANUALES: Record<string, {label:string; color:string; bg:string; border:string}> = Object.fromEntries(
-  Object.entries(ESTADOS_SC).filter(([k]) => ['BORRADOR','CANCELADA'].includes(k))
+  Object.entries(ESTADOS_SC).filter(([k]) => ['BORRADOR'].includes(k))
 );
 
 export const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
@@ -487,6 +493,10 @@ function RowMenu({sc,onView,onChangeEstado,onCancel,onSendToTrash}:{sc:any;onVie
   },[]);
   const isCancelled = sc.estado === 'CANCELADA';
   const isSoporte = sc.tipo_solicitud === 'Soporte Tecnico';
+  // N4: una SC cancelada solo vuelve por "Restaurar" en la Papelera (el PATCH a Borrador responde 409) y una que ya
+  // tiene eliminada_at ya esta en la Papelera: no se ofrece mandarla otra vez.
+  const estadosManuales = isCancelled ? [] : Object.entries(ESTADOS_SC_MANUALES).filter(([k]) => k !== sc.estado);
+  const mostrarAcciones = estadosManuales.length > 0 || !isCancelled || !sc.eliminada_at;
   return (
     <div className="relative" ref={ref}>
       <button onClick={e=>{e.stopPropagation();setOpen(o=>!o);}} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg"><MoreVertical size={15}/></button>
@@ -499,15 +509,15 @@ function RowMenu({sc,onView,onChangeEstado,onCancel,onSendToTrash}:{sc:any;onVie
               propio (estado_soporte) se cambia desde el panel de detalle, no con
               estos botones (cancelar aqui marcaria eliminada_at y lo mandaria a
               purga en 30 dias, perdiendo el ticket de soporte real) */}
-          {!isSoporte && (
+          {!isSoporte && mostrarAcciones && (
             <>
               <div className="border-t border-slate-100 my-1"/>
-              {Object.entries(ESTADOS_SC_MANUALES).map(([k,v])=>(
+              {estadosManuales.map(([k,v])=>(
                 <button key={k} onClick={()=>{onChangeEstado(k);setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-xs font-bold" style={{color:v.color}}>
                   Estado: {v.label}
                 </button>
               ))}
-              <div className="border-t border-slate-100 my-1"/>
+              {estadosManuales.length>0&&<div className="border-t border-slate-100 my-1"/>}
               {isCancelled ? (
                 <button onClick={()=>{onSendToTrash();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-rose-50 text-sm font-medium flex items-center gap-2 text-rose-600">
                   <Trash2 size={14}/>Enviar a la papelera
@@ -703,6 +713,8 @@ export default function SolicitudClient() {
   const [toast,setToast]=useState<{msg:string;type:'ok'|'err'}|null>(null);
   const [currentUser,setCurrentUser]=useState('');
   const [alertDias,setAlertDias]=useState(2);
+  // H32: total de solicitudes que informa el servidor (la lista trae como mucho 200).
+  const [totalServidor,setTotalServidor]=useState<number|null>(null);
 
   // Paginación
   
@@ -750,10 +762,12 @@ export default function SolicitudClient() {
 
     setTimeout(() => {
       const total = solicitudes.length || 1;
-      const conf = solicitudes.filter(s => s.estado === 'CONFIRMADA').length;
+      // H32: "conversion" = solicitudes de cotizacion que de verdad generaron una cotizacion (no las que solo estan Confirmadas).
+      const tasa = tasaConversionCotizacion(solicitudes);
+      const conf = tasa.conCot;
       const act = solicitudes.filter(s => s.estado === 'BORRADOR' || s.estado === 'PENDIENTE_CONFIRMACION').length;
       const canc = solicitudes.filter(s => s.estado === 'CANCELADA').length;
-      const convRate = ((conf / total) * 100).toFixed(1);
+      const convRate = tasa.pct.toFixed(1);
       const cancRate = ((canc / total) * 100).toFixed(1);
 
       // Top client
@@ -780,7 +794,7 @@ export default function SolicitudClient() {
       if (qLower.includes('diagnóstico') || qLower.includes('conversion') || qLower.includes('tasa') || qLower.includes('pipeline')) {
         aiReply = `📊 **Diagnóstico del Pipeline SC → COT:**\n\n` +
           `• **Total Solicitudes registradas:** ${total}\n` +
-          `• **Tasa de Conversión a Cotización:** **${convRate}%** (${conf} solicitudes confirmadas que avanzaron a COT).\n` +
+          `• **Tasa de Conversión a Cotización:** **${convRate}%** (${conf} solicitudes que generaron cotización).\n` +
           `• **Solicitudes Activas en Proceso:** **${act}** pendientes de resolución.\n` +
           `• **Tasa de Cancelación:** **${cancRate}%** (${canc} solicitudes canceladas).\n\n` +
           `💡 **Recomendación:** El objetivo estándar para Nebulae Kids es superar el 65% de conversión. Prioriza las ${act} solicitudes activas para convertirlas a cotización antes de 48 horas.`;
@@ -813,13 +827,16 @@ export default function SolicitudClient() {
 
   // Cancelar con razón
   const [showCancelModal,setShowCancelModal]=useState(false);
-  const [cancelTarget,setCancelTarget]=useState<number|null>(null);
+  // N4: ids de las solicitudes a cancelar (una desde la fila o varias desde la barra masiva) y por que fallaron.
+  const [cancelTarget,setCancelTarget]=useState<number[]>([]);
   const [cancelRazon,setCancelRazon]=useState('');
   const [cancelling,setCancelling]=useState(false);
+  const [cancelErrores,setCancelErrores]=useState<string[]>([]);
 
   // Papelera
   const [papelera,setPapelera]=useState<any[]>([]);
   const [loadingPapelera,setLoadingPapelera]=useState(false);
+  const [papeleraError,setPapeleraError]=useState('');
 
   // Formato confirmación
   const [showConfirmFormat,setShowConfirmFormat]=useState(false);
@@ -858,9 +875,12 @@ export default function SolicitudClient() {
         apiFetch('/ventas/solicitudes?limit=200').catch(()=>[]),
         apiFetch('/ventas/config').catch(()=>({})),
       ]);
-      setSolicitudes(Array.isArray(sc)?sc:(sc?.data??[]));
-      if(cfg?.alerta_sc_dias?.value) setAlertDias(Number(cfg.alerta_sc_dias.value));
-    }catch{setSolicitudes([]);}
+      const lista=Array.isArray(sc)?sc:(sc?.data??[]);
+      setSolicitudes(lista);
+      setTotalServidor(typeof sc?.total==='number'?sc.total:null);
+      // N8: los dias de alerta guardados en Configuracion (cualquier rol los lee); sin valor valido, 2.
+      setAlertDias(diasAlerta(cfg,'alerta_sc_dias'));
+    }catch{setSolicitudes([]);setTotalServidor(null);}
     setLoading(false);
   },[]);
   useEffect(()=>{load();},[load]);
@@ -876,27 +896,63 @@ export default function SolicitudClient() {
       if(!isNaN(numId)) router.replace(`/dashboard/ventas/solicitud/${numId}`);
     }
   },[searchParams, router]);
-  // Auto-open create form if navigated here with ?new=1 (from "Nueva Solicitud" button on Ventas hub)
+  // Auto-open create form if navigated here with ?new=1 (from "Nueva Solicitud" button on Ventas hub). U9: el parametro
+  // se consume (la URL queda limpia): al recargar con F5 el formulario ya no se abre solo. Next integra
+  // history.replaceState con useSearchParams; el efecto corre otra vez con new=null y no hace nada, sin remontar la
+  // pagina, asi que showCreate sigue en true.
   useEffect(()=>{
-    if(searchParams?.get('new')) setShowCreate(true);
+    if(searchParams?.get('new')){
+      setShowCreate(true);
+      window.history.replaceState(null,'','/dashboard/ventas/solicitud');
+    }
   },[searchParams]);
 
   async function loadPapelera() {
     setLoadingPapelera(true);
+    setPapeleraError('');
     try{ const d=await apiFetch('/ventas/solicitudes/papelera'); setPapelera(Array.isArray(d)?d:(d?.data??[])); }
-    catch{ setPapelera([]); }
+    catch(err:any){
+      // N4: un fallo ya no se disfraza de "papelera vacia": se avisa y la lista (si habia una) se conserva.
+      const msg=err?.message||'error desconocido';
+      setPapeleraError(msg);
+      showToast('No se pudo cargar la papelera: '+msg,'err');
+    }
     setLoadingPapelera(false);
   }
 
+  function cerrarCancelacion() {
+    setShowCancelModal(false);setCancelTarget([]);setCancelRazon('');setCancelErrores([]);
+  }
+
+  // N4: toda cancelacion de SC pasa por POST /cancelar (pide el motivo y el servidor revisa que no tenga cotizaciones
+  // ni pedidos activos). Una por una: las que fallan se muestran con el detalle del servidor y la ventana queda abierta
+  // solo con ellas, para leerlas; las que se cancelaron salen de la lista.
   async function cancelWithReason() {
-    if(!cancelTarget||!cancelRazon.trim()){showToast('La razón es obligatoria','err');return;}
+    const razon=cancelRazon.trim();
+    if(cancelTarget.length===0||razon.length<5){showToast('El motivo es obligatorio (mínimo 5 caracteres)','err');return;}
     setCancelling(true);
-    try{
-      await apiFetch(`/ventas/solicitudes/${cancelTarget}/cancelar`,{method:'POST',body:JSON.stringify({razon:cancelRazon,user_name:currentUser})});
-      showToast('Solicitud cancelada','ok');
-      setShowCancelModal(false);setCancelTarget(null);setCancelRazon('');
-      await load();
-    }catch(err:any){showToast('Error: '+err.message,'err');}
+    setCancelErrores([]);
+    const resultados:{numero:string;ok:boolean;error?:string}[]=[];
+    const canceladas:number[]=[];
+    const fallidas:number[]=[];
+    for(const id of cancelTarget){
+      const numero=solicitudes.find(s=>s.id===id)?.numero||`#${id}`;
+      try{
+        await apiFetch(`/ventas/solicitudes/${id}/cancelar`,{method:'POST',body:JSON.stringify({razon,user_name:currentUser})});
+        resultados.push({numero,ok:true});
+        canceladas.push(id);
+      }catch(err:any){
+        resultados.push({numero,ok:false,error:err?.message});
+        fallidas.push(id);
+      }
+    }
+    const resumen=resumenCancelacionSolicitudes(resultados);
+    showToast(resumen.mensaje,resumen.tipo);
+    if(fallidas.length===0) cerrarCancelacion();
+    else{setCancelTarget(fallidas);setCancelErrores(resumen.fallidas.map(f=>f.texto));}
+    // Las canceladas dejan de estar seleccionadas; las que fallaron siguen marcadas.
+    setChecked(prev=>{const n=new Set(prev);canceladas.forEach(id=>n.delete(id));setShowBulkBar(n.size>0);return n;});
+    await load();
     setCancelling(false);
   }
 
@@ -932,35 +988,53 @@ export default function SolicitudClient() {
     },300);
   }
 
-  async function changeEstado(scId:number,newEstado:string) {
-    if(newEstado==='CANCELADA'&&!window.confirm('Cancelar esta solicitud?')) return;
-    setSaving(true);
+  // N4: solo se llega aqui para volver a Borrador (ESTADOS_SC_MANUALES); cancelar va por cancelWithReason. El servidor
+  // responde 409 (con el motivo) si la SC tiene cotizacion o pedido activos o esta cancelada: se muestra tal cual.
+  async function patchEstado(scId:number,newEstado:string):Promise<string|null> {
     try{
-      await apiFetch(`/ventas/solicitudes/${scId}`,{method:'PATCH',body:JSON.stringify({estado:newEstado,updated_by:currentUser})});
-      setSolicitudes(prev=>prev.map(s=>s.id===scId?{...s,estado:newEstado}:s));
-      showToast('Estado cambiado');
-    }catch(err:any){showToast('Error: '+err.message,'err');}
+      const r=await apiFetch(`/ventas/solicitudes/${scId}`,{method:'PATCH',body:JSON.stringify({estado:newEstado,updated_by:currentUser})});
+      // Con asesor, Borrador pasa a Asignada: se pinta lo que devolvio el servidor, no lo que se pidio.
+      setSolicitudes(prev=>prev.map(s=>s.id===scId?{...s,...(r?.data||{estado:newEstado})}:s));
+      return null;
+    }catch(err:any){return err?.message||'el servidor no dio detalle del error';}
+  }
+
+  async function changeEstado(scId:number,newEstado:string) {
+    setSaving(true);
+    const error=await patchEstado(scId,newEstado);
+    showToast(error?'Error: '+error:'Estado cambiado',error?'err':'ok');
     setSaving(false);
   }
 
   function deleteItem(scId:number) {
-    setCancelTarget(scId);setCancelRazon('');setShowCancelModal(true);
+    setCancelTarget([scId]);setCancelRazon('');setCancelErrores([]);setShowCancelModal(true);
   }
 
   async function bulkAction(action:'delete'|'estado',estado?:string) {
-    const ids=Array.from(checked);
-    for(const id of ids){
-      // Soporte Tecnico usa su propio flujo (estado_soporte) y su propio ciclo
-      // de vida: ni el cambio masivo de estado de Cotizacion ni la cancelacion
-      // masiva deben tocarlo (cancelar aqui lo mandaria a purga en 30 dias,
-      // perdiendo el ticket de soporte real)
-      const sc=solicitudes.find(s=>s.id===id);
-      if(sc?.tipo_solicitud==='Soporte Tecnico') continue;
-      if(action==='delete') await changeEstado(id,'CANCELADA');
-      else if(estado) await changeEstado(id,estado);
+    // Soporte Tecnico usa su propio flujo (estado_soporte) y su propio ciclo
+    // de vida: ni el cambio masivo de estado de Cotizacion ni la cancelacion
+    // masiva deben tocarlo (cancelar aqui lo mandaria a purga en 30 dias,
+    // perdiendo el ticket de soporte real)
+    const ids=Array.from(checked).filter(id=>solicitudes.find(s=>s.id===id)?.tipo_solicitud!=='Soporte Tecnico');
+    if(ids.length===0){showToast('Las solicitudes de Soporte Técnico no se cancelan ni cambian de estado desde aquí','err');return;}
+    if(action==='delete'){
+      // N4: ya no hace PATCH: abre el modal del motivo y las cancela con POST /cancelar.
+      setCancelTarget(ids);setCancelRazon('');setCancelErrores([]);setShowCancelModal(true);
+      return;
     }
+    if(!estado) return;
+    setSaving(true);
+    let cambiadas=0;
+    const rechazos:string[]=[];
+    for(const id of ids){
+      const error=await patchEstado(id,estado);
+      if(error) rechazos.push(`${solicitudes.find(s=>s.id===id)?.numero||`#${id}`}: ${error}`);
+      else cambiadas++;
+    }
+    setSaving(false);
     setChecked(new Set());setShowBulkBar(false);
-    showToast(`${ids.length} solicitudes actualizadas`);
+    if(rechazos.length===0) showToast(`${cambiadas} solicitud${cambiadas===1?'':'es'} actualizada${cambiadas===1?'':'s'}`);
+    else showToast(`${cambiadas} de ${ids.length} solicitudes actualizadas. No se pudo cambiar: ${rechazos.join(' · ')}`,'err');
   }
 
   async function createSolicitud(e:React.FormEvent) {
@@ -985,20 +1059,28 @@ export default function SolicitudClient() {
         advisor_user_id:form.advisor_user_id||null,
         asignado_a_user_id:form.asignado_a_user_id||null,
       })});
+      // POST /ventas/solicitudes responde {data: <la SC>} con su id y numero.
+      const nueva=scData?.data;
       // Auto-create CRM Lead silently (only if customer_id exists; Soporte Tecnico
       // tiene su propio flujo y no debe generar una tarjeta en el pipeline de ventas)
       if(selectedCust?.id && form.tipo_solicitud!=='Soporte Tecnico'){
         apiFetch('/crm/leads',{method:'POST',body:JSON.stringify({
           customer_id:selectedCust.id,
-          sc_id:scData?.data?.id,
+          sc_id:nueva?.id,
           advisor_name:form.advisor_name||currentUser,
           solicitud_tipo:form.tipo_solicitud||'Cotizacion de Producto',
-          description:`SC creada: ${scData?.numero||''} - ${form.notas||''}`.substring(0,500),
+          // H14: el numero va en la descripcion (que es lo que muestra la tarjeta del CRM): viene en scData.data.
+          description:`SC creada: ${nueva?.numero||''} - ${form.notas||''}`.substring(0,500),
           lead_source:'SC',
           lead_product_name:prodsToSend[0]?.product_name||'',
           lead_qty:prodsToSend[0]?.qty||1,
         })}).catch(()=>{}); // Silent â€” CRM lead is best-effort
       }
+      // U9: crear la SC lleva directo a ella. El return salta setSaving(false) a proposito: el boton "Crear" queda
+      // bloqueado hasta que cambia la pagina y no se puede crear dos veces. Al volver a la lista, se recarga al montar
+      // y la SC aparece arriba (orden created_at desc). El lead de arriba sigue en segundo plano (sin await).
+      if(nueva?.id){ router.push(`/dashboard/ventas/solicitud/${nueva.id}`); return; }
+      // Respaldo si la respuesta no trae id: se queda en la lista como antes.
       showToast('Solicitud creada');
       setShowCreate(false);resetCreateForm();load();
     }catch(err:any){showToast('Error: '+err.message,'err');}
@@ -1026,11 +1108,13 @@ export default function SolicitudClient() {
 
   // Stats
   const totalActivas=solicitudes.filter(s=>s.tipo_solicitud!=='Soporte Tecnico'&&s.estado!=='CONFIRMADA'&&s.estado!=='CANCELADA').length;
-  const totalConf=solicitudes.filter(s=>s.estado==='CONFIRMADA').length;
-  const sinAtender=solicitudes.filter(s=>{
-    if(s.estado!=='BORRADOR') return false;
-    return (Date.now()-new Date(s.updated_at||s.fecha_solicitud).getTime())/3600000>alertDias*24;
-  }).length;
+  // H32: contadores reales: 'Confirmadas' es por estado (igual que la pestana) y avisa cuantas esperan su cotizacion;
+  // 'generaron cotizacion' (conCot) cuenta las que tienen al menos una COT vinculada, en cualquier estado.
+  const {totalConf,conCot,hintConfirmadas,hintTotal}=contadoresSolicitudes(solicitudes,totalServidor);
+  // N4: la tasa de conversion es solo con las solicitudes de cotizacion de producto (decision del usuario).
+  const tasaConv=tasaConversionCotizacion(solicitudes);
+  // N8: 'sin atender' = Borrador que lleva mas de los dias de alerta de Configuracion sin cambios (fechas del API en UTC).
+  const sinAtender=solicitudes.filter(s=>s.estado==='BORRADOR'&&superaDiasAlerta(s.updated_at||s.fecha_solicitud,alertDias)).length;
   const vencidas=solicitudes.filter(s=>{
     if(s.estado==='CANCELADA'||s.estado==='CONFIRMADA') return false;
     return s.fecha_vencimiento&&new Date(s.fecha_vencimiento)<new Date();
@@ -1130,7 +1214,7 @@ export default function SolicitudClient() {
                   <div
                     onClick={() => { setActiveTab('Confirmadas'); setCurrentPage(1); }}
                     className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl cursor-pointer transition-all border ${activeTab==='Confirmadas' ? 'bg-emerald-600/40 border-emerald-400 ring-2 ring-emerald-400/40' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
-                    title="Clic para ver Solicitudes Confirmadas que generaron Cotización"
+                    title="Clic para ver Solicitudes Confirmadas"
                   >
                     <div className="w-8 h-8 rounded-lg bg-emerald-500/30 text-emerald-300 flex items-center justify-center font-black text-xs shrink-0 border border-emerald-400/30">
                       2
@@ -1139,7 +1223,7 @@ export default function SolicitudClient() {
                       <div className="flex items-center gap-2">
                         <span className="font-extrabold text-sm tracking-wide text-white">COT · Cotización</span>
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-400/20 text-emerald-300 border border-emerald-400/30">
-                          {totalConf} Generadas
+                          {conCot} con COT
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-300 font-medium">Propuesta formal con precios y TRM</p>
@@ -1208,9 +1292,9 @@ export default function SolicitudClient() {
         {/* KPI Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
           <StatCard icon={FileText} label="Activas" value={totalActivas} hint={sinAtender>0?`${sinAtender} sin atender`:'Todas atendidas'} color="amber"/>
-          <StatCard icon={CheckCircle2} label="Confirmadas (COT)" value={totalConf} hint={`${totalConf} generaron cotizacion`} color="emerald"/>
+          <StatCard icon={CheckCircle2} label="Confirmadas" value={totalConf} hint={hintConfirmadas} color="emerald"/>
           <StatCard icon={X} label="Canceladas" value={solicitudes.filter(s=>s.estado==='CANCELADA').length} hint="Fuera del pipeline" color="red"/>
-          <StatCard icon={Activity} label="Total" value={solicitudes.length} hint={`${totalConf} convertidas a COT`} color="indigo"/>
+          <StatCard icon={Activity} label="Total" value={solicitudes.length} hint={hintTotal} color="indigo"/>
         </div>
 
         {/* Table */}
@@ -1262,12 +1346,20 @@ export default function SolicitudClient() {
           {activeTab==='Papelera'&&(
             <div className="p-4">
               <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-black text-slate-500 uppercase">Solicitudes en Papelera — Se eliminan permanentemente a los 30 días</p>
+                <p className="text-xs font-black text-slate-500 uppercase">Solicitudes en Papelera — Se eliminan a los 30 días, salvo las que tienen documentos vinculados</p>
                 <button onClick={loadPapelera} className="text-xs text-slate-400 hover:text-slate-600 font-bold flex items-center gap-1"><RefreshCw size={11} className={loadingPapelera?'animate-spin':''}/> Actualizar</button>
               </div>
-              {loadingPapelera?<div className="flex justify-center py-8"><RefreshCw size={20} className="animate-spin text-slate-400"/></div>:papelera.length===0?<EmptyState icon={Trash2} message="La papelera está vacía." hint="Las solicitudes canceladas aparecen aquí por 30 días."/>:(
+              {papeleraError&&(
+                <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl px-4 py-3 mb-3 text-xs font-bold flex items-start gap-2">
+                  <AlertCircle size={14} className="shrink-0 mt-0.5"/>
+                  <span>No se pudo cargar la papelera: {papeleraError}{papelera.length>0?' (se muestra la última lista cargada).':'.'}</span>
+                </div>
+              )}
+              {loadingPapelera?<div className="flex justify-center py-8"><RefreshCw size={20} className="animate-spin text-slate-400"/></div>:papelera.length===0?(papeleraError?null:<EmptyState icon={Trash2} message="La papelera está vacía." hint="Las solicitudes canceladas aparecen aquí; se eliminan a los 30 días salvo las que tienen cotizaciones, pedidos o leads vinculados."/>):(
                 <div className="space-y-2">
-                  {papelera.map((sc:any)=>(
+                  {papelera.map((sc:any)=>{
+                    const enPapelera=estadoEnPapelera(sc);
+                    return (
                     <div key={sc.id} className="bg-white border border-red-100 rounded-xl p-4 flex items-center justify-between hover:border-red-300 transition-colors">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
@@ -1278,15 +1370,16 @@ export default function SolicitudClient() {
                         {sc.razon_cancelacion&&<p className="text-xs text-slate-500 mt-1 italic">Razón: {sc.razon_cancelacion}</p>}
                       </div>
                       <div className="flex items-center gap-3 flex-shrink-0 ml-4">
-                        <div className="text-right">
-                          <p className={`text-xs font-black ${sc.dias_restantes<=5?'text-red-600':'text-amber-600'}`}>{sc.dias_restantes} días</p>
-                          <p className="text-[10px] text-slate-400">para eliminar</p>
+                        <div className="text-right max-w-[220px]">
+                          <p className={`text-xs font-black ${enPapelera.conservada?'text-slate-600':enPapelera.urgente?'text-red-600':'text-amber-600'}`}>{enPapelera.texto}</p>
+                          {enPapelera.nota&&<p className="text-[10px] text-slate-400">{enPapelera.nota}</p>}
                         </div>
                         <button onClick={()=>restaurarSC(sc.id)} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg text-xs font-bold border border-emerald-200 flex items-center gap-1"><RotateCcw size={11}/>Restaurar</button>
-                        <button onClick={()=>eliminarPermanente(sc.id)} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1"><Trash2 size={11}/>Eliminar permanentemente</button>
+                        {enPapelera.puedeEliminar&&<button onClick={()=>eliminarPermanente(sc.id)} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1"><Trash2 size={11}/>Eliminar permanentemente</button>}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1319,7 +1412,7 @@ export default function SolicitudClient() {
                   <tr><td colSpan={9}><EmptyState icon={FileText} message="No hay registros." hint="Ajusta la búsqueda o el filtro, o crea una nueva solicitud."/></td></tr>
                 ):filtered.slice((currentPage-1)*pageSize, currentPage*pageSize).map(sc=>{
                   const isOverdue=sc.fecha_vencimiento&&new Date(sc.fecha_vencimiento)<new Date();
-                  const isStale=(Date.now()-new Date(sc.updated_at||sc.fecha_solicitud).getTime())/3600000>alertDias*24;
+                  const isStale=superaDiasAlerta(sc.updated_at||sc.fecha_solicitud,alertDias);
                   return (
                     <tr key={sc.id} onClick={()=>router.push(`/dashboard/ventas/solicitud/${sc.id}`)} className={`hover:bg-slate-50/80 transition-colors group cursor-pointer ${isStale&&sc.estado==='BORRADOR'?'bg-rose-50/30':''}`}>
                       <td className="px-4 py-4" onClick={e=>e.stopPropagation()}>
@@ -1327,7 +1420,9 @@ export default function SolicitudClient() {
                       </td>
                       <td className="px-4 py-4">
                         <span className="font-black text-indigo-700">{sc.numero}</span>
-                        {(sc.cotizaciones||[]).length>0&&<p className="text-[10px] font-bold text-amber-500 mt-0.5">COT vinculada</p>}
+                        {cotizacionesVigentes(sc).length>0
+                          ?<p className="text-[10px] font-bold text-amber-500 mt-0.5">COT vinculada</p>
+                          :generoCotizacion(sc)&&<p className="text-[10px] font-bold text-rose-500 mt-0.5">COT rechazada</p>}
                         {isStale&&sc.estado==='BORRADOR'&&<p className="text-[10px] font-bold text-rose-500 mt-0.5 flex items-center gap-1"><AlertTriangle size={8}/>Sin atender</p>}
                       </td>
                       <td className="px-4 py-4"><TipoBadge tipo={sc.tipo_solicitud||'Cotizacion de Producto'}/></td>
@@ -1354,9 +1449,12 @@ export default function SolicitudClient() {
                           </button>
                           {sc.tipo_solicitud!=='Soporte Tecnico' && (
                             sc.estado === 'CANCELADA' ? (
+                              // N4: una SC que ya tiene eliminada_at ya esta en la Papelera: no se ofrece mandarla otra vez.
+                              !sc.eliminada_at&&(
                               <button onClick={()=>enviarAPapelera(sc.id)} title="Enviar a la papelera" className="bg-rose-50 hover:bg-rose-100 text-rose-600 p-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1">
                                 <Trash2 size={13}/>
                               </button>
+                              )
                             ) : (
                               <button onClick={()=>deleteItem(sc.id)} title="Cancelar Solicitud" className="bg-slate-100 hover:bg-amber-50 hover:text-amber-600 text-slate-500 p-1.5 rounded-lg text-xs font-bold transition-colors">
                                 <X size={13}/>
@@ -1408,8 +1506,8 @@ export default function SolicitudClient() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
                 <StatCard icon={TrendingUp} color="indigo"
                   label="Tasa de Conversión"
-                  value={`${solicitudes.length > 0 ? ((totalConf / solicitudes.length) * 100).toFixed(1) : 0}%`}
-                  hint={`${totalConf} de ${solicitudes.length} pasaron a Cotización (COT)`}/>
+                  value={`${tasaConv.pct.toFixed(1)}%`}
+                  hint={`${tasaConv.conCot} de ${tasaConv.total} solicitudes de cotización generaron cotización`}/>
                 <StatCard icon={Clock} color="amber"
                   label="Solicitudes Activas"
                   value={totalActivas}
@@ -1625,7 +1723,7 @@ export default function SolicitudClient() {
                   {TIPOS_SC.map(tipo => {
                     const matching = solicitudes.filter(s => (s.tipo_solicitud || 'Cotizacion de Producto') === tipo);
                     const count = matching.length;
-                    const confCount = matching.filter(s => s.estado === 'CONFIRMADA').length;
+                    const confCount = matching.filter(generoCotizacion).length;
                     const totalAll = solicitudes.length || 1;
                     const pctOfAll = Math.round((count / totalAll) * 100);
                     const convRatio = count > 0 ? Math.round((confCount / count) * 100) : 0;
@@ -1692,8 +1790,9 @@ export default function SolicitudClient() {
                       };
                     }
                     clientAgg[key].total += 1;
-                    if (s.estado === 'CONFIRMADA') clientAgg[key].conf += 1;
-                    else if (s.estado === 'CANCELADA') clientAgg[key].canc += 1;
+                    // H32: 'COT' = generó cotización de verdad (no solo Confirmada); Cancelada se revisa primero.
+                    if (s.estado === 'CANCELADA') clientAgg[key].canc += 1;
+                    else if (generoCotizacion(s)) clientAgg[key].conf += 1;
                     else clientAgg[key].act += 1;
                   });
 
@@ -1744,7 +1843,7 @@ export default function SolicitudClient() {
                                 </td>
                                 <td className="px-4 py-3">
                                   <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded font-bold text-[10px]" title="Confirmadas">
+                                    <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded font-bold text-[10px]" title="Generaron cotización">
                                       {c.conf} COT
                                     </span>
                                     <span className="bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded font-bold text-[10px]" title="Activas">
@@ -1874,27 +1973,35 @@ export default function SolicitudClient() {
         </div>
       </div>
 
-      {/* MODAL: RAZÓN DE CANCELACIÓN */}
+      {/* MODAL: MOTIVO DE CANCELACIÓN (N4: una o varias solicitudes; el servidor revisa que no tengan documentos activos) */}
       {showCancelModal&&(
-        <Modal title="Cancelar Solicitud" subtitle="Esta acción pasará la SC a la papelera por 30 días antes de eliminarse." icon={Trash2} color="red" maxWidth="md"
-          onClose={()=>setShowCancelModal(false)}
+        <Modal title={cancelTarget.length>1?`Cancelar ${cancelTarget.length} solicitudes`:'Cancelar Solicitud'} subtitle="La solicitud pasa a la Papelera. No se puede cancelar si tiene una cotización o un pedido de venta activos." icon={Trash2} color="red" maxWidth="md"
+          onClose={cerrarCancelacion}
           footer={(
             <>
-              <Button variant="secondary" onClick={()=>setShowCancelModal(false)}>No, mantener</Button>
-              <Button variant="danger" icon={Trash2} loading={cancelling} disabled={!cancelRazon.trim()} onClick={cancelWithReason}>Cancelar SC</Button>
+              <Button variant="secondary" disabled={cancelling} onClick={cerrarCancelacion}>No, mantener</Button>
+              <Button variant="danger" icon={Trash2} loading={cancelling} disabled={cancelRazon.trim().length<5} onClick={cancelWithReason}>{cancelTarget.length>1?'Cancelar solicitudes':'Cancelar SC'}</Button>
             </>
           )}>
           <div>
-            <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Razón de Cancelación *</label>
+            {cancelTarget.length>1&&<p className="text-xs font-bold text-slate-500 mb-3">{cancelTarget.map(id=>solicitudes.find(s=>s.id===id)?.numero||`#${id}`).join(', ')}</p>}
+            <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Motivo de la cancelación *</label>
             <textarea
               value={cancelRazon}
               onChange={e=>setCancelRazon(e.target.value)}
               rows={3}
+              maxLength={500}
               placeholder="Describe el motivo de la cancelación..."
               className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-red-200 outline-none"
               autoFocus
             />
-            {!cancelRazon.trim()&&<p className="text-xs text-red-500 mt-1">La razón es obligatoria para continuar.</p>}
+            {cancelRazon.trim().length<5&&<p className="text-xs text-red-500 mt-1">El motivo es obligatorio (mínimo 5 caracteres).</p>}
+            {cancelErrores.length>0&&(
+              <div className="mt-3 bg-rose-50 border border-rose-200 rounded-xl p-3 space-y-1.5">
+                <p className="text-xs font-black text-rose-700">No se pudo cancelar:</p>
+                {cancelErrores.map((t,i)=><p key={i} className="text-xs text-rose-700">{t}</p>)}
+              </div>
+            )}
           </div>
         </Modal>
       )}
