@@ -42,8 +42,12 @@ Seguridad:
 Respaldos (carpeta backend/scripts/respaldos/, ignorada por git):
   - Antes de escribir se guarda <paso>-<base>-<fecha>.json con el `id` y SOLO las columnas que el paso cambia
     (RESPALDO_COLUMNAS), nunca la fila completa: no se copian nombres, correos ni telefonos de clientes.
-  - Si el paso falla despues de escribir el JSON (o termina sin cambiar nada), el archivo se RENOMBRA a
-    <paso>-<base>-<fecha>-NO-APLICADO.json para que no parezca el respaldo de algo aplicado.
+  - Si el paso falla despues de escribir el JSON (o termina sin cambiar nada) y NADA llego a escribirse, el archivo se
+    RENOMBRA a <paso>-<base>-<fecha>-NO-APLICADO.json para que no parezca el respaldo de algo aplicado.
+  - h46 es la excepcion: su helper hace commits propios por partes (tokens y COT, luego la SC, luego el lead). Si el
+    paso falla despues de que el helper corrio al menos una vez, el respaldo se renombra a
+    <paso>-<base>-<fecha>-PARCIAL.json (parte SI se escribio: sirve para deshacer esa parte) y el mensaje nombra las COT
+    ya reabiertas. NO-APLICADO queda solo para cuando nada llego a escribirse.
   - Para DESHACER un paso aplicado: por cada fila de cada tabla del JSON, un UPDATE con las columnas guardadas,
         UPDATE <tabla> SET <columna1> = <valor1>, <columna2> = <valor2> ... WHERE id = <id>;
     (los `null` del JSON son NULL). Lo que NO se deshace desde el JSON: los renglones de Actividad que agrego el paso
@@ -92,8 +96,8 @@ ESTADOS_SC = ("BORRADOR", "ASIGNADA", "PENDIENTE_CONFIRMACION", "COTIZADA", "EN_
               "RECHAZADA", "VENCIDA", "CANCELADA", "N/A_SOPORTE")
 ESTADOS_COT = ("BORRADOR", "ENVIADA", "PENDIENTE_CONFIRMACION", "CONFIRMADA", "RECHAZADA", "VENCIDA")
 
-AVISO_H46 = ("h46 NO es atómico (hace un commit por cotización) pero sí idempotente: si se interrumpe, volver a "
-             "correrlo continúa con las que falten.")
+AVISO_H46 = ("h46 NO es atómico (hace un commit por cotización) pero sí idempotente: si se interrumpe, vuelve a "
+             "listar y aprueba las que falten (las ya reabiertas dejan de aparecer).")
 
 # Lo que cada paso necesita del esquema. Si falta una tabla o columna, el paso dice "No aplica" y sigue.
 REQUISITOS = {
@@ -143,7 +147,8 @@ REQUISITOS = {
 # Respaldo MINIMO por paso: tabla -> columnas que ese paso cambia (el `id` siempre va). Cubre lo que escribe el paso Y
 # lo que escriben los helpers que reutiliza (verificado leyendolos):
 #   n1 b   _cabecera_desde_el_libro_de_pagos: so.anticipo_cop, so.saldo_cop (+ updated_at, que pone el paso)
-#   h45    anular_pxps_de_pedido: p.estado, p.updated_at, p.notas; so.pxp_id, so.pxp_numero
+#   h45    anular_pxps_de_pedido: p.estado, p.updated_at, p.notas; so.pxp_id, so.pxp_numero (y, por el onupdate de
+#          SaleOrder, so.updated_at)
 #   h46    _reabrir_cotizacion_por_pven_cancelado: cot.estado, gate2_confirmed_at, updated_at; tokens.used_at
 #          (revoke_pending_tokens); sc.estado, updated_at (_sincronizar_estado_solicitud_desde_cotizacion); lead
 #          pipeline_stage_id, status, updated_at (_mover_lead_a_status). Puede INSERTAR etapas estandar faltantes
@@ -155,7 +160,7 @@ RESPALDO_COLUMNAS = {
            "sale_orders": ["anticipo_cop", "saldo_cop", "updated_at"]},
     "h44": {"payment_pendings": ["monto_total", "monto_anticipo", "monto_pendiente", "updated_at"]},
     "h45": {"payment_pendings": ["estado", "notas", "updated_at"],
-            "sale_orders": ["pxp_id", "pxp_numero"]},
+            "sale_orders": ["pxp_id", "pxp_numero", "updated_at"]},   # SaleOrder.updated_at: onupdate al tocar pxp_*
     "h46": {"sales_quotations": ["estado", "gate2_confirmed_at", "updated_at"],
             "customer_requests": ["estado", "updated_at"],
             "sales_orders": ["status", "pipeline_stage_id", "updated_at"],
@@ -291,6 +296,11 @@ class ErrorCorreccion(Exception):
     """El paso se aborta SIN escribir nada (base equivocada, decisiones invalidas, argumentos incompletos)."""
 
 
+class ErrorPasoParcial(ErrorCorreccion):
+    """El paso fallo cuando parte de lo suyo ya estaba confirmado (los commits propios del helper de h46): NO se escribio
+    nada es falso. El mensaje nombra lo que ya quedo hecho y el respaldo queda como '-PARCIAL.json'."""
+
+
 def _ahora_utc() -> datetime.datetime:
     """Ahora en UTC, naive (el estandar de la app), sin el aviso de datetime.utcnow()."""
     return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
@@ -376,9 +386,12 @@ class Contexto:
     tabla_respaldo: Optional[str] = None
     ahora: datetime.datetime = field(default_factory=_ahora_utc)
     escritos: list = field(default_factory=list)      # respaldos JSON que escribio este paso
+    helper_corrio: bool = False                       # un helper con commits propios (h46) corrio al menos una vez
+    hecho: list = field(default_factory=list)         # lo que esos commits ya dejaron confirmado (numeros de COT)
 
     def respaldar(self, tablas) -> str:
-        """Escribe el respaldo minimo del paso (tablas: {tabla: [ids]}) y lo anota para poder marcarlo NO-APLICADO."""
+        """Escribe el respaldo minimo del paso (tablas: {tabla: [ids]}) y lo anota para poder marcarlo NO-APLICADO o
+        PARCIAL si el paso no se aplica completo."""
         ruta = escribir_respaldo(self.db, self.carpeta, self.paso, self.base, tablas, self.ahora)
         self.escritos.append(ruta)
         return ruta
@@ -637,17 +650,25 @@ def escribir_respaldo(db, carpeta, paso, base, tablas, ahora=None) -> str:
     return str(ruta)
 
 
-def _marcar_no_aplicados(rutas) -> list:
-    """Renombra los respaldos de un paso que no se aplico a '...-NO-APLICADO.json' (no se borran: ayudan a diagnosticar)."""
+def _marcar_respaldos(rutas, sufijo) -> list:
+    """Renombra los respaldos de un paso que no se aplico completo a '...-<sufijo>.json' (no se borran: ayudan a
+    diagnosticar o a deshacer). Si un renombrado falla lo AVISA por stderr (el respaldo queda con su nombre original: no
+    hay que tomarlo por el de algo aplicado) y sigue con los demas. Devuelve las rutas nuevas."""
     nuevas = []
     for ruta in rutas:
-        destino = ruta[:-len(".json")] + "-NO-APLICADO.json" if ruta.endswith(".json") else ruta + "-NO-APLICADO"
+        destino = ruta[:-len(".json")] + f"-{sufijo}.json" if ruta.endswith(".json") else ruta + f"-{sufijo}"
         try:
             os.replace(ruta, destino)
             nuevas.append(destino)
-        except OSError:
-            pass
+        except OSError as exc:
+            print(f"AVISO: no se pudo renombrar el respaldo {ruta} a {os.path.basename(destino)} ({exc}). Queda con "
+                  f"su nombre original: NO lo tomes por el respaldo de algo aplicado.", file=sys.stderr)
     return nuevas
+
+
+def _marcar_no_aplicados(rutas) -> list:
+    """Nada llego a escribirse: '...-NO-APLICADO.json'."""
+    return _marcar_respaldos(rutas, "NO-APLICADO")
 
 
 def _anexar(nota, texto) -> str:
@@ -1050,22 +1071,28 @@ def _aplicar_h46(ctx) -> ResultadoAplicar:
     res.detalle.append(AVISO_H46)
     for f in elegidas:
         so = db.query(SaleOrder).filter(SaleOrder.cot_id == f["id"]).order_by(SaleOrder.id.desc()).first()
-        # El helper hace su propio commit y traga sus errores: se verifica el resultado, no la excepcion.
+        # El helper hace commits propios por partes (tokens y COT, luego la SC, luego el lead) y traga sus errores: desde
+        # esta llamada ya puede haber algo escrito, asi que el respaldo ya no puede quedar como NO-APLICADO.
+        ctx.helper_corrio = True
         _reabrir_cotizacion_por_pven_cancelado(db, so, AUTOR)
         cot = db.query(SalesQuotation).filter(SalesQuotation.id == f["id"]).populate_existing().first()
         log = (db.query(ActivityLog.id)
                .filter(ActivityLog.entity_type == "COT", ActivityLog.entity_id == cot.id,
                        ActivityLog.action == "ESTADO_CHANGED", ActivityLog.new_estado == "BORRADOR",
                        ActivityLog.description.contains(so.numero)).first())
-        if cot.estado == "BORRADOR" and log is not None:
+        if cot.estado == "BORRADOR":
+            # Toda COT que quedo en Borrador SI se escribio, aunque le falte el renglon (su _log puede fallar sin avisar):
+            # la falta del renglon se avisa aparte.
             res.cambiados += 1
-            res.detalle.append(f"{cot.numero}: reabierta (pedido cancelado {so.numero})")
-        elif cot.estado == "BORRADOR":
-            res.detalle.append(f"{cot.numero}: quedó en Borrador pero NO se encontró su renglón de Actividad "
-                               f"(ESTADO_CHANGED): revisar el log del servidor")
+            ctx.hecho.append(cot.numero)
+            if log is not None:
+                res.detalle.append(f"{cot.numero}: reabierta (pedido cancelado {so.numero})")
+            else:
+                res.detalle.append(f"{cot.numero}: reabierta (quedó en Borrador), pero NO se encontró su renglón de "
+                                   f"Actividad (ESTADO_CHANGED): revisar el log del servidor")
         else:
             res.detalle.append(f"{cot.numero}: NO se pudo reabrir (sigue {cot.estado}); revisar el log del servidor "
-                               f"y volver a correr el paso")
+                               f"y volver a listar para ver si falta")
     return res
 
 
@@ -1725,7 +1752,8 @@ def aplicar_paso(db, paso, base, carpeta_respaldos=CARPETA_RESPALDOS, excluidos=
                  numeros=None, decisiones=None, tabla_respaldo=None) -> ResultadoAplicar:
     """Escribe un paso. Aborta SIN escribir si `base` no es current_database(). Un solo commit al final; ante
     cualquier error, rollback del paso completo y el respaldo JSON que ya se hubiera escrito pasa a
-    '...-NO-APLICADO.json'."""
+    '...-NO-APLICADO.json'. Excepcion h46: si su helper (commits propios) llego a correr, el respaldo pasa a
+    '...-PARCIAL.json' y el error (ErrorPasoParcial) nombra las COT ya reabiertas."""
     if paso not in APLICADORES:
         raise ErrorCorreccion(f"Paso desconocido: {paso!r}")
     actual = base_actual(db)
@@ -1743,15 +1771,29 @@ def aplicar_paso(db, paso, base, carpeta_respaldos=CARPETA_RESPALDOS, excluidos=
                        paso=paso, ids=ids, numeros=numeros, decisiones=decisiones, tabla_respaldo=tabla_respaldo)
         resultado = APLICADORES[paso](ctx)
         db.commit()
-    except Exception:
+    except Exception as exc:
         db.rollback()
+        if ctx is not None and ctx.helper_corrio:
+            nuevas = _marcar_respaldos(ctx.escritos, "PARCIAL")
+            ya = ", ".join(ctx.hecho) or "ninguna (el helper corrió pero no se confirmó ninguna en Borrador)"
+            raise ErrorPasoParcial(
+                f"{paso} falló a medio paso ({type(exc).__name__}: {exc}). Ya quedaron confirmadas: {ya}. "
+                f"El respaldo quedó como PARCIAL ({', '.join(os.path.basename(n) for n in nuevas) or 'sin renombrar'}): "
+                f"parte SÍ se escribió. Vuelve a listar y aprueba las que falten.") from exc
         if ctx is not None:
             _marcar_no_aplicados(ctx.escritos)
         raise
     if resultado.cambiados == 0 and ctx.escritos:
-        nuevas = _marcar_no_aplicados(ctx.escritos)
+        if ctx.helper_corrio:
+            nuevas = _marcar_respaldos(ctx.escritos, "PARCIAL")
+            resultado.detalle.append(
+                "El helper corrió pero ninguna cotización quedó en Borrador: pudo haber confirmado partes (enlace, "
+                "solicitud, lead). El respaldo quedó como PARCIAL: " + ", ".join(os.path.basename(n) for n in nuevas))
+        else:
+            nuevas = _marcar_no_aplicados(ctx.escritos)
+            resultado.detalle.append("No cambió nada: el respaldo quedó como "
+                                     + (", ".join(os.path.basename(n) for n in nuevas) or "(sin renombrar)"))
         resultado.respaldo = None
-        resultado.detalle.append("No cambió nada: el respaldo quedó como " + ", ".join(os.path.basename(n) for n in nuevas))
     return resultado
 
 

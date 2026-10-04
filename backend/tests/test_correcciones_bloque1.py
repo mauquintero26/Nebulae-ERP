@@ -53,9 +53,14 @@ def _carpeta():
 
 
 def _respaldos(carpeta, paso):
-    """Respaldos APLICADOS del paso (los '-NO-APLICADO.json' van aparte)."""
+    """Respaldos APLICADOS del paso (los '-NO-APLICADO.json' y '-PARCIAL.json' van aparte)."""
     return sorted(f for f in os.listdir(carpeta)
-                  if f.startswith(f"{paso}-") and f.endswith(".json") and not f.endswith("-NO-APLICADO.json"))
+                  if f.startswith(f"{paso}-") and f.endswith(".json")
+                  and not f.endswith(("-NO-APLICADO.json", "-PARCIAL.json")))
+
+
+def _parciales(carpeta, paso):
+    return sorted(f for f in os.listdir(carpeta) if f.startswith(f"{paso}-") and f.endswith("-PARCIAL.json"))
 
 
 def _no_aplicados(carpeta, paso):
@@ -467,7 +472,7 @@ def test_h45_lista_y_cancela_las_pxp_pendientes_de_pedidos_cancelados(db):
         assert set(fila_pxp) == {"id", "estado", "notas", "updated_at"}
         fila_ven = guardado["tablas"]["sale_orders"][0]
         assert fila_ven["id"] == cancelado.id and fila_ven["pxp_id"] == pxp.id and set(fila_ven) == {
-            "id", "pxp_id", "pxp_numero"}
+            "id", "pxp_id", "pxp_numero", "updated_at"}
     _refrescar(db, pxp, pagada, pxp_viva, pxp_real, cancelado)
     assert pxp.estado == "CANCELADA" and "ya estaba cancelado" in pxp.notas
     assert pagada.estado == "PAGADA" and pxp_viva.estado == "PENDIENTE" and pxp_real.estado == "PENDIENTE"
@@ -534,13 +539,25 @@ def test_h46_reabre_las_cotizaciones_con_todos_sus_pedidos_cancelados(db):
     assert len(log) == 1 and ven.numero in log[0].description and "vuelve a Borrador" in log[0].description
 
 
-def test_h46_no_cuenta_como_reabierta_la_que_queda_sin_su_renglon_de_actividad(db, monkeypatch):
+def _dos_cot_confirmadas_con_pedido_cancelado(db):
+    """Dos COT CONFIRMADA (cada una con su SC y un PVEN cancelado), la primera con id menor."""
+    s = _sfx()
+    cots = []
+    for letra in ("A", "B"):
+        sc = _sc(db, f"SC-T14{letra}{s}", estado="CONFIRMADA")
+        cot = _cot(db, f"COT-T14{letra}{s}", sc, estado="CONFIRMADA", gate2_confirmed_at=datetime.datetime.utcnow())
+        _ven(db, f"PVEN-T14{letra}{s}", cot, estado="CANCELADO")
+        cots.append(cot)
+    return cots
+
+
+def test_h46_una_cot_en_borrador_sin_su_renglon_cuenta_como_escrita_y_el_respaldo_se_conserva(db, monkeypatch):
+    """Ruling: el helper hace commit por partes y su _log puede fallar sin avisar. Una COT que quedo en BORRADOR SI se
+    escribio (el estado, el enlace y la SC ya estan confirmados): cuenta como escrita, la falta del renglon se avisa
+    aparte y el respaldo NO se marca como no aplicado."""
     import app.api.v1.erp_ventas as m_ventas
     cb = _cb()
-    s = _sfx()
-    sc = _sc(db, f"SC-T14{s}", estado="CONFIRMADA")
-    cot = _cot(db, f"COT-T14{s}", sc, estado="CONFIRMADA", gate2_confirmed_at=datetime.datetime.utcnow())
-    _ven(db, f"PVEN-T14{s}", cot, estado="CANCELADO")
+    cot, _ = _dos_cot_confirmadas_con_pedido_cancelado(db)
 
     def _helper_que_deja_borrador_sin_log(db_, so, user_name):          # cambia el estado pero no registra la Actividad
         cot_ = db_.query(type(cot)).filter_by(id=so.cot_id).first()
@@ -550,11 +567,93 @@ def test_h46_no_cuenta_como_reabierta_la_que_queda_sin_su_renglon_de_actividad(d
     monkeypatch.setattr(m_ventas, "_reabrir_cotizacion_por_pven_cancelado", _helper_que_deja_borrador_sin_log)
     with _carpeta() as carpeta:
         res = cb.aplicar_paso(db, "h46", base=_base(db), carpeta_respaldos=carpeta, numeros=[cot.numero])
-        assert res.cambiados == 0
+        assert res.cambiados == 1 and res.escribio                       # escrita aunque le falte el renglon
         assert any(cot.numero in d and "NO se encontró su renglón de Actividad" in d for d in res.detalle)
-        # no cambio nada "contado": el respaldo queda marcado como no aplicado
-        assert _respaldos(carpeta, "h46") == [] and len(_no_aplicados(carpeta, "h46")) == 1
-        assert res.respaldo is None and any("NO-APLICADO" in d for d in res.detalle)
+        assert len(_respaldos(carpeta, "h46")) == 1 and res.respaldo                  # el respaldo se conserva
+        assert _no_aplicados(carpeta, "h46") == [] and _parciales(carpeta, "h46") == []
+    _refrescar(db, cot)
+    assert cot.estado == "BORRADOR"
+
+
+def test_h46_si_falla_despues_de_reabrir_una_cot_el_respaldo_queda_parcial_y_nombra_las_reabiertas(db, monkeypatch):
+    """Dos COT; el helper reabre la primera (commit propio) y revienta en la segunda. Parte SI se escribio: el respaldo
+    pasa a '-PARCIAL.json' (no NO-APLICADO) y el mensaje nombra la COT ya reabierta."""
+    import app.api.v1.erp_ventas as m_ventas
+    cb = _cb()
+    cot1, cot2 = _dos_cot_confirmadas_con_pedido_cancelado(db)
+    original = m_ventas._reabrir_cotizacion_por_pven_cancelado
+    llamadas = []
+
+    def _falla_en_la_segunda(db_, so, user_name):
+        llamadas.append(so.cot_id)
+        if len(llamadas) == 2:
+            raise RuntimeError("falla simulada despues de la primera")
+        return original(db_, so, user_name)
+
+    monkeypatch.setattr(m_ventas, "_reabrir_cotizacion_por_pven_cancelado", _falla_en_la_segunda)
+    with _carpeta() as carpeta:
+        with pytest.raises(cb.ErrorCorreccion) as exc:                   # sale por main como ABORTADO (codigo 2)
+            cb.aplicar_paso(db, "h46", base=_base(db), carpeta_respaldos=carpeta, numeros=[cot1.numero, cot2.numero])
+        mensaje = str(exc.value)
+        assert isinstance(exc.value, cb.ErrorPasoParcial) and isinstance(exc.value.__cause__, RuntimeError)
+        assert cot1.numero in mensaje and "falla simulada" in mensaje and "PARCIAL" in mensaje
+        assert cot2.numero not in mensaje.split("Ya quedaron confirmadas:")[1].split(".")[0]
+        assert _respaldos(carpeta, "h46") == [] and _no_aplicados(carpeta, "h46") == []
+        parcial = _parciales(carpeta, "h46")
+        assert len(parcial) == 1 and parcial[0].startswith(f"h46-{_base(db)}-")
+        guardado = _leer_respaldo(carpeta, parcial[0])
+        assert {f["id"] for f in guardado["tablas"]["sales_quotations"]} == {cot1.id, cot2.id}   # lo anterior a reabrir
+    _refrescar(db, cot1, cot2)
+    assert cot1.estado == "BORRADOR"                                     # lo que el helper alcanzo a confirmar
+    assert cot2.estado == "CONFIRMADA"
+    # el mismo caso por la CLI: ABORTADO con codigo 2, sin traceback
+    cot3, cot4 = _dos_cot_confirmadas_con_pedido_cancelado(db)
+    llamadas.clear()
+    salida, error = io.StringIO(), io.StringIO()
+    with _carpeta() as carpeta, contextlib.redirect_stdout(salida), contextlib.redirect_stderr(error):
+        codigo = cb.main(["h46", "--aplicar", "--base", _base(db), "--numeros", f"{cot3.numero},{cot4.numero}",
+                          "--respaldos", carpeta])
+    assert codigo == 2 and "ABORTADO" in error.getvalue() and cot3.numero in error.getvalue()
+    assert "Traceback" not in error.getvalue()
+
+
+def test_h46_si_el_helper_corrio_pero_ninguna_cot_quedo_en_borrador_el_respaldo_es_parcial(db, monkeypatch):
+    """El helper pudo haber confirmado partes (enlaces, SC) antes de fallar: no se puede decir que no se escribio nada."""
+    import app.api.v1.erp_ventas as m_ventas
+    cb = _cb()
+    cot, _ = _dos_cot_confirmadas_con_pedido_cancelado(db)
+    monkeypatch.setattr(m_ventas, "_reabrir_cotizacion_por_pven_cancelado", lambda db_, so, user_name: None)
+    with _carpeta() as carpeta:
+        res = cb.aplicar_paso(db, "h46", base=_base(db), carpeta_respaldos=carpeta, numeros=[cot.numero])
+        assert res.cambiados == 0
+        assert _respaldos(carpeta, "h46") == [] and _no_aplicados(carpeta, "h46") == []
+        assert len(_parciales(carpeta, "h46")) == 1
+        assert any("PARCIAL" in d for d in res.detalle) and res.respaldo is None
+
+
+def test_el_aviso_de_h46_no_promete_que_repetir_la_misma_lista_continua():
+    cb = _cb()
+    assert "vuelve a listar" in cb.AVISO_H46 and "las ya reabiertas dejan de aparecer" in cb.AVISO_H46
+    assert "volver a correrlo continúa" not in cb.AVISO_H46 and "NO es atómico" in cb.AVISO_H46
+
+
+def test_si_no_se_puede_renombrar_un_respaldo_lo_avisa_por_stderr(db, monkeypatch):
+    cb = _cb()
+    with _carpeta() as carpeta:
+        ruta = os.path.join(carpeta, "h46-erp_test-20261004-120000.json")
+        with open(ruta, "w", encoding="utf-8") as f:
+            f.write("{}")
+
+        def _no_deja_renombrar(origen, destino):
+            raise PermissionError("archivo en uso")
+
+        monkeypatch.setattr(cb.os, "replace", _no_deja_renombrar)
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            nuevas = cb._marcar_no_aplicados([ruta])
+        assert nuevas == [] and os.path.exists(ruta)                    # sigue con su nombre original
+        assert "AVISO" in error.getvalue() and ruta in error.getvalue() and "archivo en uso" in error.getvalue()
+        assert "NO-APLICADO" in error.getvalue()
 
 
 # ─── h36: anticipo de las COT abiertas ────────────────────────────────────────────────────────────────────────
