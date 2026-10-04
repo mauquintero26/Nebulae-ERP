@@ -238,7 +238,7 @@ function CotizacionDetalleContent() {
     await crearPedido();
   }
 
-  async function crearPedido(verificacion?: any) {
+  async function crearPedido(verificacion?: Record<string, unknown>) {
     if (!cotizacion?.id) return;
     setConfirming(true);
     setVerificarError('');

@@ -499,9 +499,19 @@ export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCa
 // pago puede ser menor (R4: el pedido queda debiendo la diferencia, con casilla de confirmacion) y
 // el saldo a favor de un pedido cancelado de esta misma COT se descuenta (R6). `error` es el
 // detail del servidor, que se muestra aqui dentro.
+// Los campos de GET /ventas/cotizaciones/{id} que usan los modales del anticipo.
+type CotizacionAnticipo = {
+  numero?: string; customer_name?: string | null; total_cop?: number | string | null;
+  anticipo_cop?: number | null; anticipo_pct?: number | null; anticipo_requerido?: number | null;
+  anticipo_pct_manual?: number | null; anticipo_manual_nota?: string | null;
+  sc_id?: number | null; sc_modalidad_pago?: string | null;
+  saldo_a_favor?: number | null; anticipo_por_verificar?: number | null;
+  saldo_a_favor_detalle?: { pven_id?: number; pven_numero: string; monto: number }[] | null;
+};
+
 export function VerificarAnticipoModal({ cot, verificador, saving, error, onConfirm, onCancel }: {
-  cot: any; verificador: string; saving: boolean; error?: string;
-  onConfirm: (verificacion: any) => void; onCancel: () => void;
+  cot: CotizacionAnticipo; verificador: string; saving: boolean; error?: string;
+  onConfirm: (verificacion: ReturnType<typeof verificacionParaEnviar>) => void; onCancel: () => void;
 }) {
   const cuenta = cuentaVerificacion(cot);
   const hoy = hoyLocal();
@@ -509,7 +519,7 @@ export function VerificarAnticipoModal({ cot, verificador, saving, error, onConf
     monto: String(cuenta.porVerificar), metodo: '', referencia: '', fecha: hoy,
     confirmoRevision: false, confirmoParcial: false,
   });
-  const set = (k: string, v: any) => setForm(f => ({ ...f, [k]: v }));
+  const set = (k: keyof typeof form, v: string | boolean) => setForm(f => ({ ...f, [k]: v }));
   const ev = evaluarVerificacion(cuenta, form, hoy);
   const campo = 'w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-emerald-200 focus:border-emerald-400';
   return (
@@ -586,7 +596,7 @@ export function VerificarAnticipoModal({ cot, verificador, saving, error, onConf
 
 // ── R3: ajustar el anticipo a mano (porcentaje + nota obligatoria) o volver a la modalidad ─────
 export function AjustarAnticipoModal({ cot, saving, error, onGuardar, onVolverModalidad, onCancel }: {
-  cot: any; saving: boolean; error?: string;
+  cot: CotizacionAnticipo; saving: boolean; error?: string;
   onGuardar: (pct: number, nota: string) => void; onVolverModalidad: () => void; onCancel: () => void;
 }) {
   const manual = cot.anticipo_pct_manual !== null && cot.anticipo_pct_manual !== undefined;
