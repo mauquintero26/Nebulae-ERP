@@ -90,3 +90,6 @@ abraham nebulae/
 # Worktrees aislados y artefactos de ejecucion (superpowers subagent-driven-development)
 .worktrees/
 .superpowers/
+
+# Respaldos JSON y listados de scripts/correcciones_bloque1.py (traen datos de clientes: nunca se versionan)
+backend/scripts/respaldos/
