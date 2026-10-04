@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node tests/test_apifetch_401.mjs && node tests/test_pricing.mjs && node tests/test_busqueda.mjs && node tests/test_pesos.mjs && node tests/test_estados_pedido.mjs"
+    "test": "node tests/test_apifetch_401.mjs && node tests/test_pricing.mjs && node tests/test_busqueda.mjs && node tests/test_pesos.mjs && node tests/test_estados_pedido.mjs && node tests/test_hub_ventas.mjs && node tests/test_whatsapp.mjs && node tests/test_aviso_correo.mjs && node tests/test_listas_ventas.mjs"
   },
 
   "dependencies": {

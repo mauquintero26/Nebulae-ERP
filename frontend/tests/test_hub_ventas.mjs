@@ -1,0 +1,254 @@
+/**
+ * frontend/tests/test_hub_ventas.mjs
+ * Reglas del Hub de Ventas (frontend/src/lib/hub-ventas.js):
+ *  - N3: "Cancelar documento" cancela esa fila, en orden VEN -> COT -> SC, con omitidos y resumen.
+ *  - N2: el panel rapido del pedido solo ofrece lo que el servidor acepta (transicionesPedido).
+ *  - N5: el resumen del cambio masivo de estado de pedidos.
+ *  - H2 (R5): dias desde la creacion, nunca negativos ni "hace hoy"; fechas sin zona = UTC.
+ *  - H3: la proxima accion de una solicitud y el semaforo (no resuelto / accion tomada).
+ */
+
+import assert from 'node:assert/strict';
+import {
+  ordenParaCancelar, motivoNoCancelable, resumenLote,
+  ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN,
+  diasDesde, textoAntiguedad,
+  ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, tieneProductos, esNoResuelto, esAccionTomada, accionSiguienteSC,
+} from '../src/lib/hub-ventas.js';
+import { ESTADOS_PEDIDO } from '../src/lib/estados-pedido.js';
+
+console.log('--- N3 TEST 1: ordenParaCancelar procesa VEN, luego COT, luego SC (orden estable) ---');
+{
+  assert.deepEqual(ordenParaCancelar(['SC|1', 'VEN|3', 'COT|2', 'SC|4', 'VEN|5']), ['VEN|3', 'VEN|5', 'COT|2', 'SC|1', 'SC|4']);
+  assert.deepEqual(ordenParaCancelar([]), []);
+  // no muta la lista que recibe (es la seleccion del usuario)
+  const ids = ['SC|1', 'VEN|2'];
+  ordenParaCancelar(ids);
+  assert.deepEqual(ids, ['SC|1', 'VEN|2']);
+}
+
+console.log('--- N3 TEST 2: motivoNoCancelable ---');
+{
+  assert.equal(typeof motivoNoCancelable({ tipo: 'SC', estado: 'CANCELADA' }), 'string');
+  assert.match(motivoNoCancelable({ tipo: 'SC', estado: 'CANCELADA' }), /ya está cancelada/);
+  assert.match(motivoNoCancelable({ tipo: 'SC', estado: 'ASIGNADA', tipo_solicitud: 'Soporte Tecnico' }), /ticket de soporte/);
+  assert.match(motivoNoCancelable({ tipo: 'SC', estado: 'N/A_SOPORTE' }), /ticket de soporte/);
+  assert.match(motivoNoCancelable({ tipo: 'COT', estado: 'RECHAZADA' }), /ya está rechazada/);
+  assert.match(motivoNoCancelable({ tipo: 'VEN', estado: 'CANCELADO' }), /ya está cancelado/);
+  assert.equal(typeof motivoNoCancelable({ tipo: 'VEN', estado: 'ENTREGADO' }), 'string');
+  assert.match(motivoNoCancelable({ tipo: 'VEN', estado: 'ENTREGADO' }), /entregado/);
+  assert.match(motivoNoCancelable({ tipo: 'VEN', estado: 'FACTURADO' }), /facturado/);
+  // Igual que el servidor (TRANSICIONES_VEN_PATCH): devuelto y entregado parcialmente tampoco se cancelan por PATCH.
+  assert.equal(typeof motivoNoCancelable({ tipo: 'VEN', estado: 'DEVUELTO_TOTAL' }), 'string');
+  assert.equal(typeof motivoNoCancelable({ tipo: 'VEN', estado: 'PARCIALMENTE_ENTREGADO' }), 'string');
+  assert.equal(motivoNoCancelable({ tipo: 'VEN', estado: 'EN_PROCESO' }), null);
+  assert.equal(motivoNoCancelable({ tipo: 'VEN', estado: 'PAGADO' }), null); // heredado = operativo
+  assert.equal(motivoNoCancelable({ tipo: 'COT', estado: 'BORRADOR' }), null);
+  assert.equal(motivoNoCancelable({ tipo: 'COT', estado: 'CONFIRMADA' }), null); // el servidor decide si tiene pedido vigente
+  assert.equal(motivoNoCancelable({ tipo: 'SC', estado: 'ASIGNADA', tipo_solicitud: 'Cotizacion de Producto' }), null);
+}
+
+console.log('--- N3 TEST 3: resumenLote (cancelaciones) ---');
+{
+  const todoOk = resumenLote([{ idStr: 'SC|1', numero: 'SC-1', ok: true }, { idStr: 'COT|2', numero: 'COT-2', ok: true }]);
+  assert.deepEqual(todoOk.fallidos, []);
+  assert.equal(todoOk.exitosos, 2);
+  assert.equal(todoOk.mensaje, '2 documentos cancelados');
+
+  const parcial = resumenLote([
+    { idStr: 'VEN|1', numero: 'PVEN-1', ok: false, error: 'Indica el motivo...' },
+    { idStr: 'COT|2', numero: 'COT-2', ok: true },
+    { idStr: 'SC|3', numero: 'SC-3', ok: true },
+  ]);
+  assert.equal(parcial.mensaje, 'No se pudieron cancelar 1 de 3 documentos');
+  assert.deepEqual(parcial.fallidos, [{ numero: 'PVEN-1', error: 'Indica el motivo...' }]);
+  assert.equal(parcial.exitosos, 2);
+
+  assert.equal(resumenLote([{ idStr: 'SC|1', numero: 'SC-1', ok: true }]).mensaje, '1 documento cancelado');
+  // un fallo sin mensaje del servidor no queda en blanco
+  const sinDetalle = resumenLote([{ idStr: 'SC|1', numero: 'SC-1', ok: false }]);
+  assert.equal(sinDetalle.fallidos.length, 1);
+  assert.ok(sinDetalle.fallidos[0].error.length > 0);
+  assert.ok(!sinDetalle.mensaje.includes('1 de 1 documentos'));
+}
+
+console.log('--- N5 TEST 4: resumenLote con verbo "actualizados" (pedidos) ---');
+{
+  const r = resumenLote([
+    { idStr: 'VEN|1', numero: 'PVEN-1', ok: false, error: 'Un pedido entregado solo puede pasar a Facturado.' },
+    { idStr: 'VEN|2', numero: 'PVEN-2', ok: true },
+  ], 'actualizados');
+  assert.equal(r.mensaje, 'No se pudieron actualizar 1 de 2 pedidos');
+  assert.deepEqual(r.fallidos, [{ numero: 'PVEN-1', error: 'Un pedido entregado solo puede pasar a Facturado.' }]);
+  assert.equal(resumenLote([{ numero: 'PVEN-1', ok: true }, { numero: 'PVEN-2', ok: true }], 'actualizados').mensaje, '2 pedidos actualizados');
+  assert.equal(resumenLote([{ numero: 'PVEN-1', ok: true }], 'actualizados').mensaje, '1 pedido actualizado');
+}
+
+console.log('--- N2 TEST 5: etiquetas y lista manual salen de estados-pedido.js (fuente unica) ---');
+{
+  assert.deepEqual([...ESTADOS_VEN_MANUALES], ['PENDIENTE_COMPRA', 'EN_PROCESO', 'EN_TRANSITO', 'LISTO_ENTREGA']);
+  for (const [clave, info] of Object.entries(ESTADOS_PEDIDO)) assert.equal(ETIQUETA_ESTADO_VEN[clave], info.label);
+  assert.equal(ETIQUETA_ESTADO_VEN.EN_TRANSITO, 'En tránsito');
+  assert.equal(ETIQUETA_ESTADO_VEN.FACTURADO, 'Facturado');
+}
+
+console.log('--- N2 TEST 6: opcionesEstadoPVEN ---');
+{
+  const enProceso = opcionesEstadoPVEN('EN_PROCESO');
+  assert.ok(!enProceso.mover.includes('EN_PROCESO'));
+  assert.ok(enProceso.mover.includes('LISTO_ENTREGA'));
+  assert.ok(enProceso.mover.includes('EN_TRANSITO'));
+  assert.equal(enProceso.cancelar, true);
+  assert.equal(enProceso.despachar, true);
+  assert.equal(enProceso.facturar, false);
+  // nunca hay botones directos a Entregado ni a Cancelado sin motivo
+  assert.ok(!enProceso.mover.includes('ENTREGADO'));
+  assert.ok(!enProceso.mover.includes('CANCELADO'));
+  assert.ok(!enProceso.mover.includes('PENDIENTE_PAGO'));
+
+  const entregado = opcionesEstadoPVEN('ENTREGADO');
+  assert.deepEqual(entregado.mover, []);
+  assert.equal(entregado.facturar, true);
+  assert.equal(entregado.cancelar, false);
+  assert.equal(entregado.despachar, false);
+
+  for (const cerrado of ['CANCELADO', 'FACTURADO', 'DEVUELTO_TOTAL']) {
+    const op = opcionesEstadoPVEN(cerrado);
+    assert.deepEqual(op.mover, [], cerrado);
+    assert.equal(op.despachar || op.cancelar || op.facturar, false, cerrado);
+  }
+
+  // entregado parcialmente: solo se completa la entrega (por Entregas)
+  const parcial = opcionesEstadoPVEN('PARCIALMENTE_ENTREGADO');
+  assert.deepEqual(parcial.mover, []);
+  assert.equal(parcial.despachar, true);
+  assert.equal(parcial.cancelar, false);
+
+  // un estado heredado o desconocido se trata como operativo (igual que el backend)
+  const heredado = opcionesEstadoPVEN('PAGADO');
+  assert.deepEqual(heredado.mover, ['PENDIENTE_COMPRA', 'EN_PROCESO', 'EN_TRANSITO', 'LISTO_ENTREGA']);
+  assert.equal(heredado.cancelar, true);
+}
+
+console.log('--- H2 TEST 7: diasDesde (dias desde la fecha, nunca negativo) ---');
+{
+  const AHORA = Date.UTC(2026, 9, 4, 12, 0, 0);
+  const antes = (ms) => new Date(AHORA - ms).toISOString();
+  const H = 3600 * 1000;
+  assert.equal(diasDesde(antes(1 * H), AHORA), 0);
+  assert.equal(diasDesde(antes(30 * H), AHORA), 1);
+  assert.equal(diasDesde(antes(72 * H), AHORA), 3);
+  assert.equal(diasDesde(antes(-2 * H), AHORA), 0); // 2 h en el futuro (desfase de reloj)
+  assert.equal(diasDesde(null, AHORA), 0);
+  assert.equal(diasDesde('', AHORA), 0);
+  assert.equal(diasDesde('basura', AHORA), 0);
+  // R5: una fecha del API sin zona es UTC (no hora local): no se corre 5 h
+  assert.equal(diasDesde('2026-10-04T11:00:00', AHORA), 0);
+  assert.equal(diasDesde('2026-10-03T06:00:00', AHORA), 1);
+  assert.equal(diasDesde('2026-10-03 06:00:00.123456', AHORA), 1);
+  assert.equal(diasDesde('2026-10-04T07:30:00', AHORA), 0);
+  // documento creado de noche en Colombia (03:00 UTC del dia siguiente) no aparece "de mañana"
+  assert.equal(diasDesde('2026-10-04T03:00:00', Date.UTC(2026, 9, 4, 2, 0, 0)), 0);
+  // con zona explicita se respeta
+  assert.equal(diasDesde('2026-10-03T07:00:00-05:00', AHORA), 1);
+}
+
+console.log('--- H2 TEST 8: textoAntiguedad ---');
+{
+  assert.equal(textoAntiguedad(0), 'hoy');
+  assert.equal(textoAntiguedad(1), 'hace 1 día');
+  assert.equal(textoAntiguedad(5), 'hace 5 días');
+  for (let d = -2; d <= 10; d++) {
+    const t = textoAntiguedad(d);
+    assert.ok(!t.includes('-'), `${d}: ${t}`);
+    assert.ok(!t.includes('hace hoy'), `${d}: ${t}`);
+  }
+}
+
+console.log('--- H3 TEST 9: listas del semaforo ---');
+{
+  assert.ok(ESTADOS_NO_RESOLUCION.includes('ASIGNADA'));
+  assert.ok(ESTADOS_NO_RESOLUCION.includes('BORRADOR'));
+  assert.ok(ESTADOS_ACCION_TOMADA.includes('COTIZADA'));
+  assert.ok(ESTADOS_ACCION_TOMADA.includes('EN_ESPERA_CONFIRMACION'));
+  assert.ok(ESTADOS_ACCION_TOMADA.includes('CONFIRMADA'));
+}
+
+console.log('--- H3 TEST 10: tieneProductos ---');
+{
+  assert.equal(tieneProductos([{ product_name: 'Cuna' }]), true);
+  assert.equal(tieneProductos([{ nombre: 'Coche' }]), true);
+  assert.equal(tieneProductos([{ name: 'Silla' }]), true);
+  assert.equal(tieneProductos([{ product_name: '  ' }]), false);
+  assert.equal(tieneProductos([]), false);
+  assert.equal(tieneProductos(null), false);
+  assert.equal(tieneProductos(undefined), false);
+  assert.equal(tieneProductos([null, 5]), false);
+}
+
+console.log('--- H3 TEST 11: accionSiguienteSC ---');
+{
+  const sc = (estado, extra = {}) => ({ tipo: 'SC', id: 5, estado, productos: [{ product_name: 'Cuna' }], ...extra });
+  const vacio = { cotizaciones: [], pedidos: [] };
+
+  const enviar = accionSiguienteSC(sc('ASIGNADA'), vacio);
+  assert.equal(enviar.label, 'Enviar para confirmación');
+  assert.equal(enviar.href, '/dashboard/ventas/solicitud/5');
+  assert.equal(typeof enviar.tono, 'string');
+
+  assert.equal(accionSiguienteSC(sc('ASIGNADA', { productos: [] }), vacio).label, 'Agregar productos');
+  assert.equal(accionSiguienteSC(sc('ASIGNADA', { productos: [{ product_name: '  ' }] }), vacio).label, 'Agregar productos');
+  assert.equal(accionSiguienteSC(sc('ASIGNADA', { productos: [] }), vacio).href, '/dashboard/ventas/solicitud/5');
+  assert.equal(accionSiguienteSC(sc('BORRADOR'), vacio).label, 'Asignar asesor');
+  assert.equal(accionSiguienteSC(sc('PENDIENTE_CONFIRMACION'), vacio).label, 'Esperando cliente');
+  assert.equal(accionSiguienteSC(sc('CONFIRMADA'), vacio).label, 'Cotizar →');
+  assert.equal(accionSiguienteSC(sc('CONFIRMADA'), vacio).href, '/dashboard/ventas/solicitud/5');
+
+  const verCot = accionSiguienteSC(sc('CONFIRMADA'), { cotizaciones: [{ id: 9, estado: 'CONFIRMADA' }], pedidos: [] });
+  assert.equal(verCot.label, 'Ver cotización');
+  assert.equal(verCot.href, '/dashboard/ventas/cotizacion/9');
+  assert.equal(accionSiguienteSC(sc('COTIZADA'), { cotizaciones: [{ id: 3, estado: 'BORRADOR' }], pedidos: [] }).label, 'Ver cotización');
+  // la mas reciente de las vigentes; una rechazada no cuenta
+  assert.equal(accionSiguienteSC(sc('COTIZADA'), {
+    cotizaciones: [{ id: 3, estado: 'BORRADOR' }, { id: 7, estado: 'ENVIADA' }, { id: 8, estado: 'RECHAZADA' }], pedidos: [],
+  }).href, '/dashboard/ventas/cotizacion/7');
+  // choque H3/N4: una COT VENCIDA cuenta como activa (esCotizacionActiva)
+  assert.equal(accionSiguienteSC(sc('CONFIRMADA'), { cotizaciones: [{ id: 4, estado: 'VENCIDA' }], pedidos: [] }).label, 'Ver cotización');
+  // solo rechazadas: se puede cotizar otra vez
+  assert.equal(accionSiguienteSC(sc('CONFIRMADA'), { cotizaciones: [{ id: 4, estado: 'RECHAZADA' }], pedidos: [] }).label, 'Cotizar →');
+
+  const verPed = accionSiguienteSC(sc('CONFIRMADA'), { cotizaciones: [{ id: 9, estado: 'CONFIRMADA' }], pedidos: [{ id: 4, estado: 'EN_PROCESO' }] });
+  assert.equal(verPed.label, 'Ver pedido');
+  assert.equal(verPed.href, '/dashboard/ventas/venta/4');
+  assert.equal(accionSiguienteSC(sc('COTIZADA'), {
+    cotizaciones: [{ id: 9, estado: 'BORRADOR' }], pedidos: [{ id: 4, estado: 'CANCELADO' }],
+  }).label, 'Ver cotización');
+
+  assert.equal(accionSiguienteSC(sc('CANCELADA'), vacio), null);
+  const ticket = accionSiguienteSC(sc('ASIGNADA', { tipo_solicitud: 'Soporte Tecnico' }), vacio);
+  assert.equal(ticket.label, 'Ver ticket');
+  assert.equal(ticket.href, '/dashboard/ventas/solicitud/5');
+  assert.equal(accionSiguienteSC(sc('N/A_SOPORTE'), vacio).label, 'Ver ticket');
+  assert.equal(accionSiguienteSC(sc('RECHAZADA'), vacio).label, 'Ver solicitud');
+  // sin contexto no rompe
+  assert.equal(accionSiguienteSC(sc('ASIGNADA')).label, 'Enviar para confirmación');
+  // ninguna ruta pasa por /solicitud?id= (redirige)
+  for (const e of ['BORRADOR', 'ASIGNADA', 'PENDIENTE_CONFIRMACION', 'CONFIRMADA', 'RECHAZADA']) {
+    assert.ok(!accionSiguienteSC(sc(e), vacio).href.includes('?id='), e);
+  }
+}
+
+console.log('--- H3 TEST 12: esNoResuelto / esAccionTomada ---');
+{
+  assert.equal(esNoResuelto({ tipo: 'SC', estado: 'ASIGNADA' }, new Set()), true);
+  assert.equal(esNoResuelto({ tipo: 'SC', id: 1, estado: 'CONFIRMADA' }, new Set()), true);
+  assert.equal(esNoResuelto({ tipo: 'SC', id: 1, estado: 'CONFIRMADA' }, new Set([1])), false);
+  assert.equal(esNoResuelto({ tipo: 'SC', estado: 'COTIZADA' }, new Set()), false);
+  assert.equal(esAccionTomada({ tipo: 'SC', estado: 'COTIZADA' }, new Set()), true);
+  assert.equal(esAccionTomada({ tipo: 'COT', estado: 'CONFIRMADA' }, new Set()), true);
+  assert.equal(esAccionTomada({ tipo: 'SC', id: 1, estado: 'CONFIRMADA' }, new Set()), false);
+  assert.equal(esAccionTomada({ tipo: 'SC', id: 1, estado: 'CONFIRMADA' }, new Set([1])), true);
+  assert.equal(esNoResuelto({ tipo: 'VEN', estado: 'EN_PROCESO' }, new Set()), true);
+}
+
+console.log('OK test_hub_ventas.mjs');
