@@ -357,3 +357,172 @@ def test_cancelar_y_restaurar_devuelve_el_lead_a_su_etapa_inicial(app_client, db
     assert (orden.status, orden.pipeline_stage_id) == (status_inicial, etapa_inicial)
     db.refresh(sc)
     assert sc.eliminada_at is None
+
+
+# --- N4 (Papelera): lo que tiene historial se conserva ----------------------------------------------------------
+
+def _hace_dias(dias):
+    # Medios dias donde se cuentan dias enteros: NOW() de la base es la hora de INICIO de la transaccion (en el runner,
+    # la de toda la prueba), unos segundos antes que utcnow() de Python; con dias exactos el conteo daria uno menos.
+    return datetime.datetime.utcnow() - datetime.timedelta(days=dias)
+
+
+def _existe(db, numero):
+    from app.models.erp_documents import CustomerRequest
+    db.expire_all()
+    return db.query(CustomerRequest).filter(CustomerRequest.numero == numero).first() is not None
+
+
+def _lead_de(db, sc):
+    """Una fila del CRM (tabla sales_orders) enlazada a la SC por canonical_customer_request_id."""
+    from app.models.customers import Customer
+    from app.models.sales import SalesOrder
+    cliente = Customer(first_name="Cliente", last_name=f"Pap-{uuid.uuid4().hex[:6]}",
+                       email=f"pap_{uuid.uuid4().hex[:6]}@test.com")
+    db.add(cliente); db.commit(); db.refresh(cliente)
+    lead = SalesOrder(customer_id=cliente.id, status="LEAD", canonical_customer_request_id=sc.id)
+    db.add(lead); db.commit(); db.refresh(lead)
+    return lead
+
+
+def _papelera(app_client, token):
+    resp = app_client.get("/api/v1/ventas/solicitudes/papelera", headers=auth(token))
+    assert resp.status_code == 200, resp.text
+    return {d["numero"]: d for d in resp.json()["data"]}
+
+
+def test_papelera_no_falla_con_solicitud_referenciada(app_client, db, admin_token, user_admin):
+    """Antes, una SC con COT/PVEN/lead rompia el DELETE de la purga y el except dejaba la Papelera vacia para todos.
+    Esta prueba borra DE VERDAD (SC canceladas hace mas de 30 dias sin referencias): solo con el runner de ROLLBACK."""
+    sc_a = _sc(db, "SC-PAP001A", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(40))
+    _cot(db, "COT-PAP001A", sc_a, estado="RECHAZADA")
+    _sc(db, "SC-PAP001B", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(40))
+    papelera = _papelera(app_client, admin_token)
+    assert papelera["SC-PAP001A"]["tiene_documentos"] is True
+    assert papelera["SC-PAP001A"]["dias_restantes"] is None
+    assert "SC-PAP001B" not in papelera
+    assert _existe(db, "SC-PAP001A")
+    assert not _existe(db, "SC-PAP001B")  # la purga si borra la que no tiene nada colgando
+
+
+def test_papelera_conserva_la_solicitud_con_pedido_o_con_lead(app_client, db, admin_token, user_admin):
+    con_pedido = _sc(db, "SC-PAP002A", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(45))
+    _ven(db, "PVEN-PAP002A", con_pedido, None, estado="CANCELADO")
+    con_lead = _sc(db, "SC-PAP002B", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(45))
+    _lead_de(db, con_lead)
+    papelera = _papelera(app_client, admin_token)
+    for numero in ("SC-PAP002A", "SC-PAP002B"):
+        assert papelera[numero]["tiene_documentos"] is True, numero
+        assert papelera[numero]["dias_restantes"] is None, numero
+        assert _existe(db, numero), numero
+
+
+def test_papelera_cuenta_los_dias_restantes_de_las_que_no_tienen_historial(app_client, db, admin_token, user_admin):
+    _sc(db, "SC-PAP003A", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(5.5))
+    _sc(db, "SC-PAP003B", user_admin, estado="CANCELADA")  # cancelada con la pastilla vieja: sin eliminada_at
+    papelera = _papelera(app_client, admin_token)
+    assert papelera["SC-PAP003A"]["tiene_documentos"] is False
+    assert papelera["SC-PAP003A"]["dias_restantes"] == 25
+    assert papelera["SC-PAP003B"]["tiene_documentos"] is False
+    assert papelera["SC-PAP003B"]["dias_restantes"] == 30
+    assert _existe(db, "SC-PAP003A") and _existe(db, "SC-PAP003B")
+
+
+def test_un_fallo_al_purgar_no_vacia_la_papelera(app_client, db, admin_token, user_admin, monkeypatch):
+    """La purga va en su propio try/except: si falla (aqui, el DELETE), el listado sigue saliendo completo."""
+    import app.api.v1.erp_ventas as m
+    _sc(db, "SC-PAP004", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(2.5))
+    texto_real = m.text
+
+    def texto_que_falla_en_la_purga(sql, *a, **k):
+        if "DELETE FROM customer_requests" in str(sql):
+            raise RuntimeError("fallo simulado de la purga")
+        return texto_real(sql, *a, **k)
+
+    registro = []
+    monkeypatch.setattr(m, "text", texto_que_falla_en_la_purga)
+    monkeypatch.setattr(m.logger, "exception", lambda mensaje, *a, **k: registro.append(mensaje))
+    papelera = _papelera(app_client, admin_token)
+    assert "SC-PAP004" in papelera and papelera["SC-PAP004"]["dias_restantes"] == 28
+    assert registro == ["No se pudo purgar la papelera de solicitudes"]  # el fallo queda en el log, no se traga
+
+
+def test_un_fallo_al_listar_la_papelera_responde_500_con_mensaje_y_no_una_lista_vacia(app_client, db, admin_token,
+                                                                                     monkeypatch):
+    import app.api.v1.erp_ventas as m
+    texto_real = m.text
+
+    def texto_que_falla_al_listar(sql, *a, **k):
+        if str(sql).lstrip().startswith("SELECT") and "FROM customer_requests" in str(sql):
+            raise RuntimeError("fallo simulado de la consulta")
+        return texto_real(sql, *a, **k)
+
+    registro = []
+    monkeypatch.setattr(m, "text", texto_que_falla_al_listar)
+    monkeypatch.setattr(m.logger, "exception", lambda mensaje, *a, **k: registro.append(mensaje))
+    resp = app_client.get("/api/v1/ventas/solicitudes/papelera", headers=auth(admin_token))
+    assert resp.status_code == 500, resp.text
+    assert resp.json()["detail"] == "No se pudo cargar la papelera de solicitudes"
+    assert registro == ["No se pudo cargar la papelera de solicitudes"]
+
+
+def test_eliminar_permanente_solicitud_con_documentos_devuelve_409(app_client, db, admin_token, user_admin):
+    sc = _sc(db, "SC-PAP005", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(1))
+    _cot(db, "COT-PAP005", sc, estado="RECHAZADA")
+    _ven(db, "PVEN-PAP005", sc, None, estado="CANCELADO")
+    _lead_de(db, sc)
+    resp = app_client.delete(f"/api/v1/ventas/solicitudes/{sc.id}/permanente", headers=auth(admin_token))
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == (
+        "No se puede eliminar definitivamente la solicitud SC-PAP005: tiene documentos vinculados "
+        "(cotización COT-PAP005, pedido de venta PVEN-PAP005, lead del CRM). "
+        "Se conserva en la Papelera como historial.")
+    assert _existe(db, "SC-PAP005")
+
+
+def test_eliminar_permanente_solo_con_lead_tambien_devuelve_409(app_client, db, admin_token, user_admin):
+    sc = _sc(db, "SC-PAP006", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(1))
+    _lead_de(db, sc)
+    resp = app_client.delete(f"/api/v1/ventas/solicitudes/{sc.id}/permanente", headers=auth(admin_token))
+    assert resp.status_code == 409, resp.text
+    assert "(lead del CRM)" in resp.json()["detail"] and "Se conserva" in resp.json()["detail"]
+    assert _existe(db, "SC-PAP006")
+
+
+def test_eliminar_permanente_solicitud_sin_documentos_funciona(app_client, db, admin_token, user_admin):
+    sc = _sc(db, "SC-PAP007", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(1))
+    resp = app_client.delete(f"/api/v1/ventas/solicitudes/{sc.id}/permanente", headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"] == {"deleted": sc.id}
+    assert not _existe(db, "SC-PAP007")
+
+
+def test_eliminar_permanente_exige_una_solicitud_cancelada(app_client, db, admin_token, user_admin):
+    sc = _sc(db, "SC-PAP008", user_admin)
+    resp = app_client.delete(f"/api/v1/ventas/solicitudes/{sc.id}/permanente", headers=auth(admin_token))
+    assert resp.status_code == 400, resp.text
+    assert _existe(db, "SC-PAP008")
+
+
+def test_eliminar_permanente_con_una_referencia_de_ultimo_momento_es_409_y_no_500(app_client, db, admin_token,
+                                                                                  user_admin, monkeypatch):
+    """Red de seguridad: si el FK salta en el DELETE (se creo una COT entre la revision y el borrado), 409 y no 500."""
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import Session
+    sc = _sc(db, "SC-PAP009", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(1))
+    commit_real = Session.commit
+    armado = {"si": False}
+
+    def commit_que_viola_el_fk(self):
+        # Solo la sesion de la API (no la de la prueba) y solo durante el DELETE.
+        if armado["si"] and self is not db:
+            raise IntegrityError("DELETE FROM customer_requests", {}, Exception("viola la llave foranea"))
+        return commit_real(self)
+
+    monkeypatch.setattr(Session, "commit", commit_que_viola_el_fk)
+    armado["si"] = True
+    resp = app_client.delete(f"/api/v1/ventas/solicitudes/{sc.id}/permanente", headers=auth(admin_token))
+    armado["si"] = False
+    assert resp.status_code == 409, resp.text
+    assert "Se conserva" in resp.json()["detail"]
+    assert _existe(db, "SC-PAP009")  # el rollback dejo la SC en su sitio

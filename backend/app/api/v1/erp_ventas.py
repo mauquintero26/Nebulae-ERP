@@ -6,7 +6,7 @@ Pedidos de Venta (VEN), Ordenes Pendientes por Pagar (PXP)
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func, select, case
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from typing import Optional, List
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import pydantic
@@ -17,6 +17,7 @@ from app.models.erp_documents import (
 )
 from app.models.fase4 import SaleOrderPayment
 from app.models.customers import Customer
+from app.models.sales import SalesOrder as LeadCRM  # el lead del CRM (tabla sales_orders), no el Pedido de Venta
 from app.models.inventory import InventoryLevel, InventoryOperation, InventoryMovement
 from app.models.fase1b import InventoryOwnerBalance
 from app.api.dependencies import (
@@ -251,6 +252,21 @@ def _mensaje_documentos_activos(sc: CustomerRequest, cots, pvens, accion: str = 
 def _mensaje_solicitud_cancelada(sc: CustomerRequest, para: str = "retomar o enviar esta cotización") -> str:
     """409 de N4: una SC cancelada no puede tener cotizaciones vivas."""
     return f"La solicitud {sc.numero} está cancelada: restáurala desde la Papelera antes de {para}."
+
+def _mensaje_solicitud_con_historial(sc: CustomerRequest, cots, pvens, leads: int) -> str:
+    """409 de 'Eliminar permanentemente' (N4, Papelera): la SC tiene documentos vinculados y se conserva como historial.
+    cots y pvens son listas de numeros y leads la cantidad de leads del CRM; sin ninguno (el FK salto en el borrado)
+    el mensaje no los nombra."""
+    partes = []
+    if cots:
+        partes.append(("cotización " if len(cots) == 1 else "cotizaciones ") + ", ".join(cots))
+    if pvens:
+        partes.append(("pedido de venta " if len(pvens) == 1 else "pedidos de venta ") + ", ".join(pvens))
+    if leads:
+        partes.append("lead del CRM" if leads == 1 else "leads del CRM")
+    vinculados = f" ({', '.join(partes)})" if partes else ""
+    return (f"No se puede eliminar definitivamente la solicitud {sc.numero}: tiene documentos vinculados{vinculados}. "
+            f"Se conserva en la Papelera como historial.")
 
 def _cliente_de_la_solicitud(sc: CustomerRequest) -> tuple:
     """Quien confirma la SC por el enlace de Gate 1: su id, correo y telefono, normalizados (un formulario que reenvia
@@ -631,39 +647,61 @@ def create_solicitud(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN,
     return {"status": "success", "data": _sc_dict(sc)}
 
 
+# N4 (Papelera): una SC que tiene (o tuvo) una cotizacion, un pedido de venta o un lead del CRM guardado en
+# sales_orders.canonical_customer_request_id es historial: ni se purga a los 30 dias ni se elimina a mano. Las tres
+# tablas la referencian con una FK sin cascade (borrarla fallaba). `cr` es el alias de customer_requests.
+_SQL_SC_CON_DOCUMENTOS = """(EXISTS(SELECT 1 FROM sales_quotations q WHERE q.sc_id = cr.id)
+                OR EXISTS(SELECT 1 FROM sale_orders s WHERE s.sc_id = cr.id)
+                OR EXISTS(SELECT 1 FROM sales_orders l WHERE l.canonical_customer_request_id = cr.id))"""
+
+
 @router.get("/solicitudes/papelera")
 def get_papelera(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
-    """Lista SCs canceladas con días restantes antes de eliminación permanente."""
+    """Lista SCs canceladas con días restantes antes de eliminación permanente (None si se conservan: tienen
+    documentos vinculados y por eso no se purgan)."""
+    # La purga va aparte: un fallo suyo ya no tumba el listado (antes el except lo devolvia vacio para todos).
     try:
-        # Auto-purge SCs older than 30 days in papelera
-        db.execute(text("""
-            DELETE FROM customer_requests
-            WHERE estado='CANCELADA' AND eliminada_at IS NOT NULL
-            AND eliminada_at < NOW() - INTERVAL '30 days'
+        # Auto-purge SCs older than 30 days in papelera, solo las que nadie referencia.
+        db.execute(text(f"""
+            DELETE FROM customer_requests cr
+            WHERE cr.estado='CANCELADA' AND cr.eliminada_at IS NOT NULL
+            AND cr.eliminada_at < NOW() - INTERVAL '30 days'
+            AND NOT {_SQL_SC_CON_DOCUMENTOS}
         """))
         db.commit()
-        rows = db.execute(text("""
-            SELECT id, numero, customer_name, advisor_name, tipo_solicitud,
-                   razon_cancelacion, eliminada_at, created_at, updated_at,
-                   EXTRACT(DAY FROM NOW() - eliminada_at) as dias_en_papelera
-            FROM customer_requests
-            WHERE estado='CANCELADA'
-            ORDER BY COALESCE(eliminada_at, updated_at) DESC
+    except Exception:
+        db.rollback()
+        logger.exception("No se pudo purgar la papelera de solicitudes")
+    try:
+        rows = db.execute(text(f"""
+            SELECT cr.id, cr.numero, cr.customer_name, cr.advisor_name, cr.tipo_solicitud,
+                   cr.razon_cancelacion, cr.eliminada_at, cr.created_at, cr.updated_at,
+                   EXTRACT(DAY FROM NOW() - cr.eliminada_at) as dias_en_papelera,
+                   {_SQL_SC_CON_DOCUMENTOS} AS tiene_documentos
+            FROM customer_requests cr
+            WHERE cr.estado='CANCELADA'
+            ORDER BY COALESCE(cr.eliminada_at, cr.updated_at) DESC
             LIMIT 200
         """)).mappings().all()
-        data = []
-        for r in rows:
-            d = dict(r)
-            dias = float(d.get("dias_en_papelera") or 0)
-            d["dias_en_papelera"] = int(dias)
+    except Exception:
+        db.rollback()
+        logger.exception("No se pudo cargar la papelera de solicitudes")
+        raise HTTPException(500, "No se pudo cargar la papelera de solicitudes")
+    data = []
+    for r in rows:
+        d = dict(r)
+        dias = float(d.get("dias_en_papelera") or 0)
+        d["dias_en_papelera"] = int(dias)
+        d["tiene_documentos"] = bool(d.get("tiene_documentos"))
+        if d["tiene_documentos"]:
+            d["dias_restantes"] = None
+        else:
             d["dias_restantes"] = max(0, 30 - int(dias)) if d.get("eliminada_at") else 30
-            d["eliminada_at"] = str(d["eliminada_at"]) if d.get("eliminada_at") else None
-            d["created_at"] = str(d["created_at"]) if d.get("created_at") else None
-            data.append(d)
-        return {"status": "success", "data": data}
-    except Exception as e:
-        return {"status": "success", "data": []}
+        d["eliminada_at"] = str(d["eliminada_at"]) if d.get("eliminada_at") else None
+        d["created_at"] = str(d["created_at"]) if d.get("created_at") else None
+        data.append(d)
+    return {"status": "success", "data": data}
 
 
 @router.get("/solicitudes/{sc_id}")
@@ -2795,12 +2833,24 @@ def cancelar_solicitud(sc_id: int, body: CancelarSolicitudBody,
 @router.delete("/solicitudes/{sc_id}/permanente")
 def eliminar_permanente(sc_id: int, user: User = Depends(require_roles(*ROLE_ADMIN)),
         db: Session = Depends(get_db)):
-    """Elimina permanentemente una SC de la papelera."""
+    """Elimina permanentemente una SC de la papelera (N4: no si tiene cotizaciones, pedidos o leads vinculados)."""
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     if not sc or sc.estado != "CANCELADA":
         raise HTTPException(400, "Solo se pueden eliminar permanentemente SCs canceladas")
-    db.delete(sc)
-    db.commit()
+    cots = [r.numero for r in db.query(SalesQuotation.numero).filter(SalesQuotation.sc_id == sc.id)
+            .order_by(SalesQuotation.id.asc()).all()]
+    pvens = [r.numero for r in db.query(SaleOrder.numero).filter(SaleOrder.sc_id == sc.id)
+             .order_by(SaleOrder.id.asc()).all()]
+    leads = db.query(LeadCRM.id).filter(LeadCRM.canonical_customer_request_id == sc.id).count()
+    if cots or pvens or leads:
+        raise HTTPException(409, _mensaje_solicitud_con_historial(sc, cots, pvens, leads))
+    try:
+        db.delete(sc)
+        db.commit()
+    except IntegrityError:
+        # Red de seguridad: un documento se vinculo entre la revision de arriba y el borrado.
+        db.rollback()
+        raise HTTPException(409, _mensaje_solicitud_con_historial(sc, [], [], 0))
     return {"status": "success", "data": {"deleted": sc_id}}
 
 
