@@ -121,7 +121,10 @@ class SaleOrderPaymentResponse(BaseModel):
 
 
 class CancelSaleOrderRequest(BaseModel):
-    motivo: str = Field(..., min_length=5)
+    # N2/H46 (R12): el motivo es obligatorio (minimo 5 caracteres sin espacios), pero lo valida cancel_sale_order
+    # para responder 422 con un mensaje claro, igual que PATCH /pedidos/{id}: la validacion del body de FastAPI
+    # responde 400 en esta app (validation_exception_handler de main.py).
+    motivo: Optional[str] = None
     authorized_by: Optional[str] = None
     purchased_goods_decision: Optional[str] = None
     decision: Optional[str] = None

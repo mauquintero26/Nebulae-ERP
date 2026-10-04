@@ -1211,6 +1211,10 @@ def cancel_sale_order(
 ):
     now = _now()
     user_name = getattr(user, "email", str(getattr(user, "id", "system")))
+    # N2/H46 (R12): mismo motivo obligatorio y mismo 422 que PATCH /ventas/pedidos/{id}.
+    motivo = (body.motivo or "").strip()
+    if len(motivo) < 5:
+        raise HTTPException(status_code=422, detail="Indica el motivo de la cancelación (mínimo 5 caracteres).")
 
     so = db.execute(select(SaleOrder).where(SaleOrder.id == so_id).with_for_update()).scalar_one_or_none()
     if not so:
@@ -1261,7 +1265,7 @@ def cancel_sale_order(
 
     old_estado = so.estado
     so.estado = "CANCELADO"
-    so.cancellation_reason = body.motivo
+    so.cancellation_reason = motivo
     so.cancellation_authorized_by = body.authorized_by or user_name
     so.cancelled_at = now
     so.updated_at = now
@@ -1291,7 +1295,7 @@ def cancel_sale_order(
         entity_id=so.id,
         entity_numero=so.numero,
         action="VENTA_CANCELADA",
-        description=f"Pedido {so.numero} cancelado. Motivo: {body.motivo}. Saldo a favor cliente: ${saldo_a_favor:,.0f} COP",
+        description=f"Pedido {so.numero} cancelado. Motivo: {motivo}. Saldo a favor cliente: ${saldo_a_favor:,.0f} COP",
         old_estado=old_estado,
         new_estado="CANCELADO",
         user_name=user_name,
@@ -1299,6 +1303,11 @@ def cancel_sale_order(
     )
 
     db.commit()
+
+    # H46+U25: igual que la cancelacion por PATCH, la cotizacion del pedido vuelve a Borrador para reusarla
+    # (import local, como el de confirmar_cotizacion en erp_ventas: sin ciclo de imports entre los dos modulos).
+    from app.api.v1.erp_ventas import _reabrir_cotizacion_por_pven_cancelado
+    _reabrir_cotizacion_por_pven_cancelado(db, so, user_name)
 
     return {
         "status": "success",

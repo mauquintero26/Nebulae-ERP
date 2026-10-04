@@ -180,8 +180,9 @@ def test_boton_recotizar_sin_cambios_deja_igualmente_su_registro(app_client, db,
 
 def test_cambiar_solo_el_estado_no_agrega_un_renglon_de_edicion(app_client, db, admin_token):
     cot = _cot(db, "COT-ACT004", total_cop=1000, productos=[_linea("Cuna", 1, 1000)])
+    # H50: ENVIADA ya no se pone a mano; RECHAZADA si.
     resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={
-        "estado": "ENVIADA", "updated_by": "asesor@test"}, headers=auth(admin_token))
+        "estado": "RECHAZADA", "updated_by": "asesor@test"}, headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     assert [a["action"] for a in _actividades(app_client, admin_token, "cotizaciones", cot.id)] == ["ESTADO_CHANGED"]
 

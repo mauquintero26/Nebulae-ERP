@@ -56,8 +56,16 @@ class TestSincronizacionEstados:
         assert r.json()["data"]["estado"] == "COTIZADA"
 
     def test_enviar_cotizacion_deja_solicitud_en_espera_confirmacion(self, app_client, admin_token, db):
+        """H50: el PATCH a ENVIADA ya no existe; se envia con 'Enviar al Cliente' (POST /enviar-confirmacion), que
+        exige precio: se pone por DB, igual que el resto de este archivo simula lo que no es el foco."""
         sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token, db)
-        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "ENVIADA"}, headers=_headers(admin_token))
+        cot_row = db.query(SalesQuotation).filter(SalesQuotation.id == cot["id"]).first()
+        cot_row.productos = [{"product_name": "Producto Prueba", "qty": 1, "unit_price_cop": 1000}]
+        cot_row.total_cop = 1000
+        db.commit()
+        resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot['id']}/enviar-confirmacion", json={},
+                               headers=_headers(admin_token))
+        assert resp.status_code == 200, resp.text
         r = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
         assert r.json()["data"]["estado"] == "EN_ESPERA_CONFIRMACION"
 
@@ -98,11 +106,15 @@ class TestSincronizacionEstados:
         r_sc = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
         assert r_sc.json()["data"]["estado"] == "CONFIRMADA"
 
-    def test_rechazar_cotizacion_deja_solicitud_rechazada(self, app_client, admin_token, db):
+    def test_rechazar_cotizacion_deja_solicitud_confirmada_para_otra(self, app_client, admin_token, db):
+        """N7: rechazar la unica COT deja la SC activa. El helper pone la marca de Gate 1 (que ya no se consume al
+        crear la COT), asi que la SC vuelve a CONFIRMADA, lista para crearle otra cotizacion."""
         sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token, db)
-        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "RECHAZADA"}, headers=_headers(admin_token))
+        resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "RECHAZADA"},
+                                headers=_headers(admin_token))
+        assert resp.status_code == 200, resp.text
         r = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
-        assert r.json()["data"]["estado"] == "RECHAZADA"
+        assert r.json()["data"]["estado"] == "CONFIRMADA"
 
     def test_sincronizacion_noop_cuando_cot_sin_sc_id(self, db: Session):
         """Verifica que _sincronizar no crashea cuando cotizacion no tiene sc_id"""

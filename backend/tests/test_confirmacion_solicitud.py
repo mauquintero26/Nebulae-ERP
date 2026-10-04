@@ -82,9 +82,8 @@ def test_enviar_y_confirmar_via_link(app_client, db, admin_token, user_admin):
     db.refresh(sc)
     assert sc.estado == "CONFIRMADA"
     # confirmar_via_token (lo que se acaba de ejercitar) es la UNICA linea que escribe
-    # gate1_confirmed_at -- debe quedar puesta aqui. Se consume (vuelve a None) recien
-    # cuando confirmar_solicitud avanza a COTIZADA, lo que este test no ejercita -- ver
-    # test_confirmar_solicitud_consume_gate1_confirmed_at_al_crear_cotizacion mas abajo.
+    # gate1_confirmed_at -- debe quedar puesta aqui. N7: ya no se consume al crear la COT --
+    # ver test_confirmar_solicitud_conserva_gate1_confirmed_at_y_no_crea_otra_cotizacion.
     assert sc.gate1_confirmed_at is not None
 
     # Reintento con el mismo token ya usado
@@ -398,6 +397,7 @@ def test_pill_cancelar_restaurar_reenviar_revoca_token_viejo(app_client, db, adm
     from app.models.confirmation import DocumentConfirmationToken
 
     def _used_at(raw_token):
+        db.expire_all()  # se consulta el mismo token antes y despues de un paso: leer siempre de la DB
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
         row = db.query(DocumentConfirmationToken).filter(DocumentConfirmationToken.token_hash == token_hash).first()
         assert row is not None
@@ -413,11 +413,14 @@ def test_pill_cancelar_restaurar_reenviar_revoca_token_viejo(app_client, db, adm
     t1 = create_confirmation_token(db, "SC", sc.id)  # simula el link T1 ya enviado por correo
 
     # Pastilla generica "Cambiar Estado" (PATCH /solicitudes/{id}), NO el endpoint
-    # dedicado cancelar_solicitud -- exactamente la ruta que el review probo.
+    # dedicado cancelar_solicitud -- exactamente la ruta que el review probo. N4: esa ruta
+    # ya no cancela (400, sin tocar nada); cancelar pasa siempre por /cancelar, que revoca.
     patch_resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": "CANCELADA", "updated_by": "test"}, headers=auth(admin_token))
-    assert patch_resp.status_code == 200
-    assert patch_resp.json()["data"]["estado"] == "CANCELADA"
-    assert _used_at(t1) is not None  # (a) prueba directa: el PATCH generico a CANCELADA SI revoco T1
+    assert patch_resp.status_code == 400
+    assert _used_at(t1) is None  # el PATCH rechazado no toco nada
+    cancel_resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/cancelar", json={"razon": "Cliente desistio", "user_name": "test"}, headers=auth(admin_token))
+    assert cancel_resp.status_code == 200
+    assert _used_at(t1) is not None  # (a) prueba directa: cancelar SI revoco T1
 
     # (b) Mintar un token NUEVO mientras la SC esta CANCELADA, para probar
     # especificamente el revoke propio de restaurar_solicitud (no el del PATCH de arriba).
@@ -446,16 +449,17 @@ def test_pill_cancelar_restaurar_reenviar_revoca_token_viejo(app_client, db, adm
     assert t2_get.status_code == 200
 
 
-def test_confirmar_solicitud_consume_gate1_confirmed_at_al_crear_cotizacion(app_client, db, admin_token, user_admin):
+def test_confirmar_solicitud_conserva_gate1_confirmed_at_y_no_crea_otra_cotizacion(app_client, db, admin_token, user_admin):
     """Round 7: el unico test que ejercita el ciclo de vida COMPLETO de
-    gate1_confirmed_at de punta a punta -- sin este test, quitar la linea que la
-    consume en confirmar_solicitud (o cualquiera de las lineas que la limpian al
-    salir del ciclo) dejaba los 31 tests anteriores a este Round en verde igual.
-    Flujo real: enviar -> extraer el token de la respuesta real (link_confirmacion,
-    no uno minteado aparte -- la prueba de ese atajo ya existe en
-    test_enviar_y_confirmar_via_link y se queda como esta) -> canjearlo via los
-    endpoints publicos reales -> confirmar_solicitud -> 200 -> la marca debe quedar
-    en None."""
+    gate1_confirmed_at de punta a punta. Flujo real: enviar -> extraer el token de la
+    respuesta real (link_confirmacion, no uno minteado aparte -- la prueba de ese atajo
+    ya existe en test_enviar_y_confirmar_via_link y se queda como esta) -> canjearlo
+    via los endpoints publicos reales -> confirmar_solicitud -> 200.
+
+    N7: la marca ya NO se consume al crear la COT (significa "confirmacion vigente del
+    cliente sobre los productos actuales": si esa COT se rechaza, la SC puede crear otra
+    sin reconfirmar). El duplicado lo impide ahora el check de COT activa: un segundo
+    POST /confirmar responde 400."""
     from app.models.erp_documents import CustomerRequest
     sc = CustomerRequest(productos=PRODUCTOS, numero="SC-TESTCONF15", customer_name="Cliente Prueba",
                           customer_email="cliente15@test.com", estado="ASIGNADA", advisor_user_id=user_admin.id)
@@ -475,4 +479,9 @@ def test_confirmar_solicitud_consume_gate1_confirmed_at_al_crear_cotizacion(app_
     assert crear_cot_resp.status_code == 200
     db.refresh(sc)
     assert sc.estado == "COTIZADA"
-    assert sc.gate1_confirmed_at is None  # consumida -- de un solo uso, igual que el token
+    assert sc.gate1_confirmed_at is not None  # N7: sigue vigente (no se consume)
+
+    otra = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/confirmar", json={"user_name": "test"}, headers=auth(admin_token))
+    assert otra.status_code == 400
+    from app.models.erp_documents import SalesQuotation
+    assert db.query(SalesQuotation).filter(SalesQuotation.sc_id == sc.id).count() == 1

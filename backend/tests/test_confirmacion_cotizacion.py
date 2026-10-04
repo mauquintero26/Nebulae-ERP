@@ -612,3 +612,76 @@ def test_reenviar_misma_fecha_como_string_no_rompe_el_congelamiento(app_client, 
     assert resp2.status_code == 200
     db.refresh(cot)
     assert cot.estado == "BORRADOR"  # dia realmente distinto -- SI rompe el congelamiento
+
+
+# ── H50: 'Enviada al cliente' ya no se pone a mano ──────────────────────────────────
+# Solo 'Enviar al Cliente' (enviar_cotizacion_para_confirmacion) genera el enlace; el PATCH generico a ENVIADA
+# sacaba la COT de PENDIENTE_CONFIRMACION y revocaba sin querer el enlace que el cliente ya tenia.
+
+MENSAJE_ENVIADA = ("'Enviada al cliente' no se puede poner a mano: usa 'Enviar al Cliente' en la cotización, que "
+                   "genera el enlace de confirmación.")
+
+
+def test_patch_cotizacion_no_acepta_enviada(app_client, db, admin_token):
+    from app.models.erp_documents import CustomerRequest, SalesQuotation
+    from app.models.confirmation import DocumentConfirmationToken
+    sc = CustomerRequest(numero="SC-H50001", customer_name="Cliente Prueba", estado="COTIZADA")
+    db.add(sc); db.commit(); db.refresh(sc)
+    cot = SalesQuotation(numero="COT-H50001", sc_id=sc.id, sc_numero=sc.numero, customer_name="Cliente Prueba",
+                         estado="BORRADOR", productos=[])
+    db.add(cot); db.commit(); db.refresh(cot)
+
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={"estado": "ENVIADA", "updated_by": "test"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["detail"] == MENSAJE_ENVIADA
+    db.refresh(cot); db.refresh(sc)
+    assert cot.estado == "BORRADOR" and sc.estado == "COTIZADA"
+    assert db.query(DocumentConfirmationToken).filter(DocumentConfirmationToken.document_type == "COT",
+                                                      DocumentConfirmationToken.document_id == cot.id).first() is None
+
+
+def test_patch_enviada_no_revoca_enlace_pendiente(app_client, db, admin_token):
+    import hashlib
+    from app.models.erp_documents import SalesQuotation
+    from app.models.confirmation import DocumentConfirmationToken
+    from app.core.confirmation_tokens import create_confirmation_token
+    cot = SalesQuotation(numero="COT-H50002", customer_name="Cliente Prueba", estado="BORRADOR", total_cop=1000,
+                         productos=[{"product_name": "X", "qty": 1, "unit_price_cop": 1000}])
+    db.add(cot); db.commit(); db.refresh(cot)
+    resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/enviar-confirmacion", json={"user_name": "test"},
+                           headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    t1 = create_confirmation_token(db, "COT", cot.id)
+
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={"estado": "ENVIADA", "updated_by": "test"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 400, resp.text
+    db.expire_all()
+    fila = db.query(DocumentConfirmationToken).filter(
+        DocumentConfirmationToken.token_hash == hashlib.sha256(t1.encode()).hexdigest()).first()
+    assert fila.used_at is None
+    assert app_client.post("/api/v1/confirmar/ver", json={"token": t1}).status_code == 200
+
+
+def test_patch_cotizacion_rechaza_estados_no_manuales(app_client, db, admin_token):
+    from app.models.erp_documents import SalesQuotation
+    cot = SalesQuotation(numero="COT-H50003", customer_name="Cliente Prueba", estado="BORRADOR", productos=[])
+    db.add(cot); db.commit(); db.refresh(cot)
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={"estado": "ENTREGADO"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["detail"] == "El estado «Entregado» no se puede asignar a mano a una cotización."
+    db.refresh(cot)
+    assert cot.estado == "BORRADOR"
+
+
+def test_patch_mismo_estado_enviada_es_inocuo(app_client, db, admin_token):
+    from app.models.erp_documents import SalesQuotation
+    cot = SalesQuotation(numero="COT-H50004", customer_name="Cliente Prueba", estado="ENVIADA", productos=[])
+    db.add(cot); db.commit(); db.refresh(cot)
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={"estado": "ENVIADA", "notas": "x"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    db.refresh(cot)
+    assert cot.estado == "ENVIADA" and cot.notas == "x"

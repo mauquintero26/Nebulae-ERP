@@ -95,22 +95,20 @@ class TestMovimientoAutomaticoDeLead:
         assert orden.canonical_customer_request_id == sc["id"]
         assert lead["status"] not in ("QUOTATION", "CANCELLED", "INVOICED")
 
-    def test_enviar_cotizacion_mueve_lead_a_quotation(self, app_client, admin_token, customer_test, db):
+    def test_patch_a_enviada_ya_no_es_la_via_de_enviar_la_cotizacion(self, app_client, admin_token, customer_test, db):
+        """H50: el PATCH a ENVIADA responde 400 (antes movia el lead a QUOTATION). El envio real, y su movimiento
+        del lead, es POST /enviar-confirmacion: lo cubre el test siguiente."""
         sc, lead = _crear_solicitud_con_lead(app_client, admin_token, customer_test.id)
         _forzar_confirmada(db, sc["id"])
         cot = app_client.post(f"/api/v1/ventas/solicitudes/{sc['id']}/confirmar", json={}, headers=_headers(admin_token)).json()["data"]["cotizacion"]
-        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "ENVIADA"}, headers=_headers(admin_token))
-        r = app_client.get("/api/v1/crm/leads", headers=_headers(admin_token))
-        lead_actualizado = next(l for l in r.json()["data"] if l["id"] == lead["id"])
-        assert lead_actualizado["status"] == "QUOTATION"
+        resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "ENVIADA"}, headers=_headers(admin_token))
+        assert resp.status_code == 400, resp.text
 
     def test_enviar_cotizacion_para_confirmacion_mueve_lead_a_quotation(self, app_client, admin_token, customer_test, db):
         """Round 3 (adversarial review): el endpoint dedicado enviar_cotizacion_para_confirmacion
         (que reemplazo al PATCH directo a PENDIENTE_CONFIRMACION -- ver Round 2) tambien
-        debe mover el Lead a QUOTATION. El test anterior (PATCH directo a ENVIADA) sigue
-        haciendolo por su propia rama en update_cotizacion, pero el camino REAL de "enviar
-        para que el cliente confirme" es este endpoint, y se le habia quedado sin este
-        efecto -- regresion que el reviewer encontro y que se cierra aqui."""
+        debe mover el Lead a QUOTATION. Con H50 es el UNICO camino de "enviar para que el
+        cliente confirme" (el PATCH directo a ENVIADA responde 400, ver el test anterior)."""
         from app.models.erp_documents import SalesQuotation
         sc, lead = _crear_solicitud_con_lead(app_client, admin_token, customer_test.id)
         _forzar_confirmada(db, sc["id"])
@@ -129,15 +127,18 @@ class TestMovimientoAutomaticoDeLead:
         lead_actualizado = next(l for l in r.json()["data"] if l["id"] == lead["id"])
         assert lead_actualizado["status"] == "QUOTATION"
 
-    def test_rechazar_cotizacion_mueve_lead_a_cancelled(self, app_client, admin_token, customer_test, db):
+    def test_rechazar_cotizacion_no_marca_lead_perdido(self, app_client, admin_token, customer_test, db):
+        """N7: rechazar la COT deja la SC activa (se le puede crear otra); el lead pasa a perdido (CANCELLED) solo al
+        cancelar la SC (N4, test_cancelar_solicitud_con_documentos)."""
         from app.models.sales import SalesOrder
         sc, lead = _crear_solicitud_con_lead(app_client, admin_token, customer_test.id)
         _forzar_confirmada(db, sc["id"])
         cot = app_client.post(f"/api/v1/ventas/solicitudes/{sc['id']}/confirmar", json={}, headers=_headers(admin_token)).json()["data"]["cotizacion"]
-        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "RECHAZADA"}, headers=_headers(admin_token))
+        resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "RECHAZADA"}, headers=_headers(admin_token))
+        assert resp.status_code == 200, resp.text
         db.expire_all()
         orden = db.query(SalesOrder).filter(SalesOrder.id == lead["id"]).first()
-        assert orden.status == "CANCELLED"
+        assert orden.status != "CANCELLED"
 
     def test_confirmar_pedido_desde_cotizacion_mueve_lead_a_invoiced(self, app_client, admin_token, customer_test, db):
         from app.models.sales import SalesOrder
@@ -153,10 +154,17 @@ class TestMovimientoAutomaticoDeLead:
     def test_las_5_etapas_estandar_se_crean_si_no_existen(self, app_client, admin_token, customer_test, db):
         from app.models.catalog import Category  # noqa: F401 (solo para asegurar imports de modelos ya cargados)
         from app.api.v1.crm import PipelineStage  # noqa: F401 (mismo modulo real usado en el resto del backend)
+        from app.models.erp_documents import SalesQuotation
         sc, lead = _crear_solicitud_con_lead(app_client, admin_token, customer_test.id)
         _forzar_confirmada(db, sc["id"])
         cot = app_client.post(f"/api/v1/ventas/solicitudes/{sc['id']}/confirmar", json={}, headers=_headers(admin_token)).json()["data"]["cotizacion"]
-        app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "ENVIADA"}, headers=_headers(admin_token))
+        # H50: el envio real (que mueve el lead y crea las etapas) es POST /enviar-confirmacion, que exige precio.
+        cot_row = db.query(SalesQuotation).filter(SalesQuotation.id == cot["id"]).first()
+        cot_row.productos = [{"product_name": "X", "qty": 1, "unit_price_cop": 1000}]
+        cot_row.total_cop = 1000
+        db.commit()
+        resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot['id']}/enviar-confirmacion", json={}, headers=_headers(admin_token))
+        assert resp.status_code == 200, resp.text
         mapeos = {s[0] for s in db.execute(text("SELECT maps_to_status FROM pipeline_stages")).fetchall()}
         assert {"DRAFT", "QUOTATION", "EN_NEGOCIACION", "INVOICED", "CANCELLED"}.issubset(mapeos)
 
