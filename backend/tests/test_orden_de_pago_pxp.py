@@ -177,6 +177,16 @@ def test_no_se_crea_pxp_sin_saldo(app_client, db, admin_token):
         assert _pxps(db, ven.id) == []
 
 
+def test_no_se_crea_pxp_si_el_saldo_es_mayor_que_el_total(app_client, db, admin_token):
+    ven = _pven(db, "PVEN-PXP0095", saldo_cop=TOTAL + 1)
+    resp = _crear(app_client, admin_token, ven.id)
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == "Los montos del pedido no cuadran: el saldo es mayor que el total."
+    assert _pxps(db, ven.id) == []
+    db.refresh(ven)
+    assert ven.pxp_id is None and ven.pxp_numero is None
+
+
 def test_se_puede_crear_otra_si_la_anterior_esta_cancelada(app_client, db, admin_token):
     ven = _pven(db, "PVEN-PXP010")
     vieja = _pxp_directa(db, ven, "CANCELADA", "PXP-TST0101")
@@ -263,6 +273,13 @@ def test_cancelar_el_pedido_cancela_su_pxp_pendiente(app_client, db, admin_token
     assert ven.estado == "CANCELADO"
     assert ven.pxp_id is None and ven.pxp_numero is None
 
+    # Efecto colateral: cambios_documento rastrea pxp_numero, asi que el renglon 'Pedido actualizado' (UPDATED) del
+    # PATCH lista que el pedido dejo de apuntar a la PXP. Se fija el campo y sus valores, no su etiqueta (la renombra T12).
+    editado = _logs(db, "VEN", ven.id, "UPDATED")
+    assert len(editado) == 1
+    cambios = {c["campo"]: c for c in editado[0].extra_data["cambios"]}
+    assert cambios["pxp_numero"]["antes"] == pxp_numero and cambios["pxp_numero"]["despues"] is None
+
 
 def test_cancelar_no_toca_una_pxp_pagada(app_client, db, admin_token):
     ven = _pven(db, "PVEN-PXP021")
@@ -275,8 +292,9 @@ def test_cancelar_no_toca_una_pxp_pagada(app_client, db, admin_token):
     assert [p.estado for p in _pxps(db, ven.id)] == ["PAGADA"]
     avisos = _logs(db, "VEN", ven.id, "PXP_REVISAR")
     assert len(avisos) == 1
-    assert avisos[0].description == (f"La orden de pago {pagada.numero} está PAGADA: revisar devolución o saldo a "
+    assert avisos[0].description == (f"La orden de pago {pagada.numero} está pagada: revisar devolución o saldo a "
                                      f"favor del cliente")
+    assert "PAGADA" not in avisos[0].description  # la etiqueta del estado, nunca el codigo crudo
     assert not _logs(db, "VEN", ven.id, "PXP_CANCELADA")
     assert not _logs(db, "PXP", pagada.id, "ESTADO_CHANGED")
     # R12: solo se limpia el vinculo cuando apuntaba a una PXP que se canceló; esta sigue viva.
@@ -367,7 +385,7 @@ def test_cancelar_dos_veces_no_repite_los_renglones(app_client, db, admin_token)
     resp = _patch(app_client, admin_token, ven.id, estado="CANCELADO", cancellation_reason="Cliente desistió")
     assert resp.status_code == 200, resp.text
     resp = _patch(app_client, admin_token, ven.id, estado="CANCELADO", cancellation_reason="Cliente desistió")
-    assert resp.status_code in (200, 422), resp.text
+    assert resp.status_code == 200, resp.text
     assert len(_logs(db, "VEN", ven.id, "PXP_CANCELADA")) == 1
     assert [p.estado for p in _pxps(db, ven.id)] == ["CANCELADA"]
 

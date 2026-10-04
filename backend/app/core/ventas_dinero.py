@@ -244,6 +244,7 @@ def anular_pxps_de_pedido(db, so, autor, motivo=None) -> list:
     revisar la devolucion o el saldo a favor del cliente. R12: si so.pxp_id / so.pxp_numero apuntaban a una PXP
     que se cancelo, quedan en None (la lista y el detalle no se contradicen)."""
     import datetime
+    from app.core.textos_actividad import etiqueta_estado
     from app.models.erp_documents import ActivityLog, PaymentPending
     ahora = datetime.datetime.utcnow()
     canceladas = []
@@ -255,8 +256,8 @@ def anular_pxps_de_pedido(db, so, autor, motivo=None) -> list:
         if p.estado != "PENDIENTE":
             db.add(ActivityLog(
                 entity_type="VEN", entity_id=so.id, entity_numero=so.numero, action="PXP_REVISAR",
-                description=f"La orden de pago {p.numero} está {p.estado}: revisar devolución o saldo a favor del "
-                            f"cliente",
+                description=f"La orden de pago {p.numero} está {etiqueta_estado('PXP', p.estado).lower()}: revisar "
+                            f"devolución o saldo a favor del cliente",
                 user_name=autor))
             continue
         p.estado = "CANCELADA"

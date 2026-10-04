@@ -2156,6 +2156,8 @@ def crear_pxp(ven_id: int, body: dict = Body(default_factory=dict),
     pendiente = redondear_peso(v.saldo_cop)
     if pendiente <= 0:
         raise HTTPException(409, "El pedido no tiene saldo pendiente; no hace falta una orden de pago.")
+    if pendiente > total:
+        raise HTTPException(409, "Los montos del pedido no cuadran: el saldo es mayor que el total.")
     pagado = total - pendiente
     autor = getattr(user, "email", None)
 
