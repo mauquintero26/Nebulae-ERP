@@ -1,0 +1,276 @@
+/**
+ * frontend/tests/test_dinero_ventas.mjs
+ * Dinero de la cotizacion y del pedido en pantalla (frontend/src/lib/dinero-ventas.js):
+ *  - H36+H43 / R3: anticipo por modalidad o manual (etiqueta, resumen, validacion del ajuste con nota).
+ *  - N1 / R4 / R6: cuentas del modal de verificacion (pago parcial con casilla, saldo a favor que se descuenta).
+ *  - Parked de T3: en una COT ya convertida se muestran los valores del pedido, no el anticipo recalculado.
+ *  - Pagos del pedido con etiquetas (TRASLADO / TRASLADADO / SALDO_A_FAVOR nunca en crudo).
+ *  - H44+N6 / H45: PXP vigente o cancelada del pedido y cuando se puede crear otra.
+ */
+
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import {
+  METODOS_PAGO_ANTICIPO, formatoPct, porcentajeDePesos, hoyLocal,
+  etiquetaAnticipoCotizacion, origenAnticipo, resumenAnticipoCotizacion,
+  cuentaVerificacion, evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo,
+  etiquetaTipoPago, etiquetaMetodoPago, etiquetaEstadoPago, describirPago,
+  etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp,
+} from '../src/lib/dinero-ventas.js';
+
+console.log('--- N1 TEST 1: los 8 medios de pago son los mismos que acepta el servidor ---');
+{
+  const py = readFileSync(new URL('../../backend/app/core/ventas_dinero.py', import.meta.url), 'utf8');
+  const bloque = py.match(/METODOS_PAGO_ANTICIPO = \(([\s\S]*?)\)/)[1];
+  const delServidor = [...bloque.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual([...METODOS_PAGO_ANTICIPO], delServidor);
+  assert.equal(METODOS_PAGO_ANTICIPO.length, 8);
+  assert.ok(!METODOS_PAGO_ANTICIPO.includes('TRASLADO'), 'el traslado solo lo pone el servidor');
+}
+
+console.log('--- H42 TEST 2: formatoPct y porcentajeDePesos (exacto al peso, half-up) ---');
+{
+  assert.equal(formatoPct(60), '60%');
+  assert.equal(formatoPct('100.00'), '100%');
+  assert.equal(formatoPct(12.5), '12,5%');
+  assert.equal(formatoPct('66.666'), '66,67%');
+  assert.equal(formatoPct(null), '0%');
+  assert.equal(porcentajeDePesos(2786923, 60), 1672154, 'el recorrido: 1.672.153,8 sube a 1.672.154');
+  assert.equal(porcentajeDePesos(2874000, 60), 1724400);
+  assert.equal(porcentajeDePesos(1000001, 50), 500001, 'empate .5 hacia arriba');
+  assert.equal(porcentajeDePesos('2786923.08', 100), 2786923, 'sobre el total ya redondeado');
+  assert.equal(porcentajeDePesos(1000, 66.66), 667);
+  assert.equal(porcentajeDePesos(1000, 0), 0);
+  assert.equal(porcentajeDePesos(null, 60), 0);
+  assert.equal(hoyLocal(new Date(2026, 9, 4, 23, 30)), '2026-10-04');
+  assert.equal(hoyLocal(new Date(2026, 0, 9, 0, 5)), '2026-01-09');
+}
+
+const cotSc = { sc_id: 7, sc_numero: 'SC-1', anticipo_pct: 60, sc_modalidad_pago: '60/40 (60% anticipo - 40% pendiente)',
+  total_cop: 2786923, anticipo_requerido: 1672154, anticipo_cop: 1724400, anticipo_pct_manual: null };
+
+console.log('--- H36+H43 / R3 TEST 3: de donde sale el anticipo ---');
+{
+  assert.equal(etiquetaAnticipoCotizacion(cotSc), '60% · 60/40 (60% anticipo - 40% pendiente)');
+  assert.equal(origenAnticipo(cotSc), 'Modalidad 60/40 (60% anticipo - 40% pendiente)');
+  const manual = { ...cotSc, anticipo_pct: 50, anticipo_pct_manual: 50, anticipo_manual_nota: 'Negociado' };
+  assert.equal(etiquetaAnticipoCotizacion(manual), '50% · manual');
+  assert.equal(origenAnticipo(manual), 'Anticipo manual de 50%');
+  const sinSc = { sc_id: null, anticipo_pct: 60 };
+  assert.equal(etiquetaAnticipoCotizacion(sinSc), '60% · sin solicitud');
+  assert.equal(origenAnticipo(sinSc), 'Cotización sin solicitud');
+  const scSinModalidad = { sc_id: 3, anticipo_pct: 60, sc_modalidad_pago: '  ' };
+  assert.equal(etiquetaAnticipoCotizacion(scSinModalidad), '60% · solicitud sin modalidad');
+  assert.equal(origenAnticipo(scSinModalidad), 'Solicitud sin modalidad de pago');
+}
+
+console.log('--- H36+H43 TEST 4: resumen del anticipo de una COT sin pedido (usa anticipo_requerido, no el guardado) ---');
+{
+  const r = resumenAnticipoCotizacion(cotSc);
+  assert.equal(r.convertida, false);
+  assert.equal(r.pedido, null);
+  assert.equal(r.requerido, 1672154, 'el requerido del GET, no el anticipo_cop viejo');
+  assert.equal(r.saldo, 2786923 - 1672154);
+  assert.equal(r.etiqueta, '60% · 60/40 (60% anticipo - 40% pendiente)');
+  assert.equal(r.manual, null);
+  const manual = resumenAnticipoCotizacion({ ...cotSc, anticipo_pct: 50, anticipo_pct_manual: 50,
+    anticipo_manual_nota: '  Negociado con el cliente ', anticipo_requerido: 1393462 });
+  assert.deepEqual(manual.manual, { pct: 50, nota: 'Negociado con el cliente' });
+  assert.equal(manual.requerido, 1393462);
+  // GET viejo sin anticipo_requerido: cae al anticipo guardado.
+  assert.equal(resumenAnticipoCotizacion({ total_cop: 1000, anticipo_cop: 600, anticipo_pct: 60 }).requerido, 600);
+}
+
+console.log('--- T3 parked TEST 5: COT ya convertida muestra los valores del pedido, no el recalculo de hoy ---');
+{
+  // La modalidad de la SC cambio a Contado despues de convertir: el GET recalcula 100%, el pedido sigue en 60%.
+  const convertida = { ...cotSc, anticipo_pct: 100, anticipo_requerido: 2786923, sc_modalidad_pago: 'Contado',
+    pedidos_venta: [
+      { id: 1, numero: 'PVEN-1', estado: 'CANCELADO', total_cop: 2786923, saldo_cop: 2786923, anticipo_pct: 60 },
+      { id: 2, numero: 'PVEN-2', estado: 'PENDIENTE_COMPRA', total_cop: 2786923, saldo_cop: 1786923, anticipo_pct: 60 },
+    ] };
+  const r = resumenAnticipoCotizacion(convertida);
+  assert.equal(r.convertida, true);
+  assert.equal(r.pedido.numero, 'PVEN-2');
+  assert.equal(r.pct, 60);
+  assert.equal(r.etiqueta, '60% · pedido PVEN-2');
+  assert.equal(r.requerido, 1672154);
+  assert.equal(r.pagado, 1000000);
+  assert.equal(r.saldo, 1786923);
+  assert.equal(r.pendiente, 672154, 'R4: queda debiendo anticipo');
+  const sinSnapshot = resumenAnticipoCotizacion({ pedidos_venta: [{ numero: 'PVEN-3', estado: 'EN_PROCESO',
+    total_cop: 1000, saldo_cop: 0, anticipo_pct: null }] });
+  assert.equal(sinSnapshot.pct, 60, 'sin snapshot: 60, como anticipo_del_pedido del servidor');
+  assert.equal(sinSnapshot.pendiente, 0);
+}
+
+console.log('--- N1 / R6 TEST 6: cuentaVerificacion descuenta el saldo a favor ---');
+{
+  const simple = cuentaVerificacion({ total_cop: 1000000, anticipo_requerido: 600000, saldo_a_favor: 0,
+    anticipo_por_verificar: 600000, saldo_a_favor_detalle: [] });
+  assert.deepEqual(simple, { total: 1000000, requerido: 600000, saldoAFavor: 0, porVerificar: 600000,
+    maximo: 1000000, saldos: [] });
+
+  const conSaldo = cuentaVerificacion({ total_cop: 1000000, anticipo_requerido: 600000, saldo_a_favor: 250000,
+    anticipo_por_verificar: 350000, saldo_a_favor_detalle: [{ pven_id: 9, pven_numero: 'PVEN-1', monto: 250000 }] });
+  assert.equal(conSaldo.porVerificar, 350000);
+  assert.equal(conSaldo.maximo, 750000, 'el pago mas el saldo a favor no pasan del total');
+  assert.deepEqual(conSaldo.saldos, [{ numero: 'PVEN-1', monto: 250000 }]);
+
+  const saldoMayor = cuentaVerificacion({ total_cop: 500000, anticipo_requerido: 500000, saldo_a_favor: 800000 });
+  assert.equal(saldoMayor.saldoAFavor, 500000, 'el traslado se limita al total');
+  assert.equal(saldoMayor.porVerificar, 0, 'sin anticipo_por_verificar lo calcula igual que el servidor');
+  assert.equal(saldoMayor.maximo, 0);
+}
+
+console.log('--- N1 / R4 TEST 7: evaluarVerificacion (pago completo, parcial con casilla, limites) ---');
+{
+  const cuenta = cuentaVerificacion({ total_cop: 1000000, anticipo_requerido: 600000, saldo_a_favor: 0,
+    anticipo_por_verificar: 600000 });
+  const hoy = '2026-10-04';
+  const base = { monto: '600000', metodo: 'Transferencia bancaria', referencia: 'BANCOL-123', fecha: hoy,
+    confirmoRevision: true, confirmoParcial: false };
+
+  const ok = evaluarVerificacion(cuenta, base, hoy);
+  assert.equal(ok.valido, true);
+  assert.equal(ok.parcial, false);
+  assert.equal(ok.deuda, 0);
+  assert.deepEqual(ok.errores, []);
+
+  assert.equal(evaluarVerificacion(cuenta, { ...base, confirmoRevision: false }, hoy).valido, false,
+    'la casilla de revision es obligatoria');
+
+  const parcial = evaluarVerificacion(cuenta, { ...base, monto: '500000' }, hoy);
+  assert.equal(parcial.parcial, true);
+  assert.equal(parcial.deuda, 100000);
+  assert.equal(parcial.valido, false, 'R4: sin marcar la casilla del pago parcial no se crea');
+  assert.equal(evaluarVerificacion(cuenta, { ...base, monto: '500000', confirmoParcial: true }, hoy).valido, true);
+
+  const mayor = evaluarVerificacion(cuenta, { ...base, monto: '1200000' }, hoy);
+  assert.equal(mayor.valido, false);
+  assert.ok(mayor.errores.some((e) => e.includes('supera el total del pedido ($1.000.000)')), mayor.errores.join('|'));
+
+  const conSaldo = cuentaVerificacion({ total_cop: 1000000, anticipo_requerido: 600000, saldo_a_favor: 250000,
+    anticipo_por_verificar: 350000 });
+  const sobreSaldo = evaluarVerificacion(conSaldo, { ...base, monto: '800000' }, hoy);
+  assert.ok(sobreSaldo.errores.some((e) => e.includes('saldo a favor')), sobreSaldo.errores.join('|'));
+  assert.equal(evaluarVerificacion(conSaldo, { ...base, monto: '350000' }, hoy).valido, true);
+
+  const futura = evaluarVerificacion(cuenta, { ...base, fecha: '2026-10-05' }, hoy);
+  assert.ok(futura.errores.includes('La fecha del pago no puede ser posterior a hoy.'));
+  assert.equal(futura.valido, false);
+
+  const corta = evaluarVerificacion(cuenta, { ...base, referencia: ' ab ' }, hoy);
+  assert.ok(corta.errores.some((e) => e.includes('al menos 3 caracteres')));
+  assert.equal(corta.valido, false);
+
+  const metodoRaro = evaluarVerificacion(cuenta, { ...base, metodo: 'Bitcoin' }, hoy);
+  assert.equal(metodoRaro.valido, false);
+
+  const negativo = evaluarVerificacion(cuenta, { ...base, monto: '-5' }, hoy);
+  assert.ok(negativo.errores.includes('El monto recibido debe ser mayor que $0.'));
+
+  // Campos vacios: no son errores visibles (el boton queda deshabilitado), pero no es valido.
+  const vacio = evaluarVerificacion(cuenta, { monto: '', metodo: '', referencia: '', fecha: '',
+    confirmoRevision: false, confirmoParcial: false }, hoy);
+  assert.equal(vacio.valido, false);
+  assert.deepEqual(vacio.errores, []);
+  assert.ok(vacio.pendientes.length >= 4);
+
+  assert.equal(evaluarVerificacion(cuenta, { ...base, monto: '600000.4' }, hoy).monto, 600000, 'pesos enteros');
+}
+
+console.log('--- N1 TEST 8: verificacionParaEnviar arma el payload del servidor ---');
+{
+  assert.deepEqual(verificacionParaEnviar({ monto: '600000.4', metodo: 'Nequi', referencia: '  REF-1 ', fecha: '2026-10-04' }),
+    { monto: 600000, metodo_pago: 'Nequi', referencia: 'REF-1', fecha_pago: '2026-10-04' });
+  assert.deepEqual(verificacionParaEnviar({ monto: 1000, metodo: 'Efectivo', referencia: 'Recibo 9', fecha: '' }),
+    { monto: 1000, metodo_pago: 'Efectivo', referencia: 'Recibo 9' });
+}
+
+console.log('--- R3 TEST 9: validarAjusteAnticipo (porcentaje 0-100 y nota de al menos 5 caracteres) ---');
+{
+  assert.deepEqual(validarAjusteAnticipo('50', ' Negociado con el cliente '),
+    { pct: 50, nota: 'Negociado con el cliente', error: null });
+  assert.equal(validarAjusteAnticipo('12,5', 'Acuerdo especial').pct, 12.5, 'acepta coma decimal');
+  assert.equal(validarAjusteAnticipo('0', 'Sin anticipo pactado').pct, 0);
+  assert.equal(validarAjusteAnticipo('100', 'Pago total pactado').pct, 100);
+  for (const malo of ['', '101', '-1', 'abc', null]) {
+    assert.equal(validarAjusteAnticipo(malo, 'Nota valida').error,
+      'El anticipo manual debe ser un porcentaje entre 0% y 100%.', String(malo));
+  }
+  for (const nota of ['abc', '   abcd   ', '', null]) {
+    assert.equal(validarAjusteAnticipo('50', nota).error,
+      'Escribe una nota de al menos 5 caracteres que explique el anticipo manual.', String(nota));
+  }
+}
+
+console.log('--- N1 / R6 TEST 10: pagos del pedido con etiquetas, nunca codigos crudos ---');
+{
+  for (const t of ['ANTICIPO', 'ABONO', 'PAGO_TOTAL', 'PAGO_SALDO', 'DEVOLUCION', 'REVERSION', 'AJUSTE_AUTORIZADO']) {
+    const e = etiquetaTipoPago(t);
+    assert.ok(e && e !== t && !e.includes('_'), `${t} -> ${e}`);
+  }
+  for (const s of ['CONFIRMADO', 'REVERTIDO', 'ANULADO', 'TRASLADADO']) {
+    const e = etiquetaEstadoPago(s);
+    assert.ok(e && e !== s && !e.includes('_'), `${s} -> ${e}`);
+  }
+  assert.equal(etiquetaEstadoPago('TRASLADADO'), 'Trasladado a otro pedido');
+  assert.equal(etiquetaEstadoPago('ALGO_NUEVO'), 'Algo nuevo');
+  assert.equal(etiquetaMetodoPago('TRASLADO'), 'Saldo a favor trasladado');
+  assert.equal(etiquetaMetodoPago('SALDO_A_FAVOR'), 'Saldo a favor del cliente');
+  assert.equal(etiquetaMetodoPago('CONVERSION_COTIZACION'), 'Registrado automáticamente');
+  assert.equal(etiquetaMetodoPago('Nequi'), 'Nequi');
+  assert.equal(etiquetaMetodoPago('TRANSFERENCIA'), 'Transferencia');
+  assert.equal(etiquetaMetodoPago(null), 'Sin método');
+  assert.equal(etiquetaTipoPago('DEVOLUCION'), 'Devolución');
+
+  assert.deepEqual(describirPago({ tipo: 'ANTICIPO', monto: 600000, metodo_pago: 'Transferencia bancaria',
+    referencia_bancaria: 'BANCOL-123', usuario: 'a@b.co', estado: 'CONFIRMADO' }),
+  { titulo: 'Anticipo $600.000', partes: ['Transferencia bancaria', 'ref. BANCOL-123', 'verificado por a@b.co'],
+    estado: null, sinVerificar: false });
+  assert.deepEqual(describirPago({ tipo: 'ANTICIPO', monto: 250000, metodo_pago: 'TRASLADO',
+    referencia_bancaria: 'PVEN-1', usuario: 'a@b.co', estado: 'CONFIRMADO' }).partes,
+  ['Saldo a favor trasladado', 'desde PVEN-1', 'registrado por a@b.co']);
+  const origen = describirPago({ tipo: 'ANTICIPO', monto: 250000, metodo_pago: 'Nequi', referencia_bancaria: 'N-1',
+    usuario: 'a@b.co', estado: 'TRASLADADO' });
+  assert.equal(origen.estado, 'Trasladado a otro pedido');
+  assert.deepEqual(describirPago({ tipo: 'ANTICIPO', monto: 50000, metodo_pago: 'SALDO_A_FAVOR',
+    referencia_bancaria: 'PVEN-1', usuario: null, estado: 'CONFIRMADO' }).partes,
+  ['Saldo a favor del cliente', 'ref. PVEN-1']);
+  const viejo = describirPago({ tipo: 'ANTICIPO', monto: 1724400, metodo_pago: 'CONVERSION_COTIZACION',
+    referencia_bancaria: null, usuario: 'sistema', estado: 'CONFIRMADO' });
+  assert.equal(viejo.sinVerificar, true);
+  assert.deepEqual(viejo.partes, ['Registrado automáticamente', 'registrado por sistema']);
+}
+
+console.log('--- H44+N6 / H45 TEST 11: PXP vigente o cancelada y cuando se puede crear ---');
+{
+  assert.equal(etiquetaEstadoPxp('PENDIENTE'), 'Pendiente');
+  assert.equal(etiquetaEstadoPxp('PAGADA'), 'Pagada');
+  assert.equal(etiquetaEstadoPxp('CANCELADA'), 'Cancelada');
+  assert.equal(etiquetaEstadoPxp('EN_REVISION'), 'En revision');
+
+  const ambas = pxpsDelPedido({ pxps: [{ numero: 'PXP-1', estado: 'CANCELADA' }, { numero: 'PXP-2', estado: 'PENDIENTE' }] });
+  assert.equal(ambas.vigente.numero, 'PXP-2');
+  assert.equal(ambas.cancelada.numero, 'PXP-1');
+  const soloCancelada = pxpsDelPedido({ pxps: [{ numero: 'PXP-1', estado: 'CANCELADA' }, { numero: 'PXP-3', estado: 'CANCELADA' }] });
+  assert.equal(soloCancelada.vigente, null);
+  assert.equal(soloCancelada.cancelada.numero, 'PXP-3', 'la cancelada mas reciente');
+  assert.deepEqual(pxpsDelPedido({}), { vigente: null, cancelada: null });
+  assert.deepEqual(pxpsDelPedido(null), { vigente: null, cancelada: null });
+
+  const pven = { estado: 'PENDIENTE_COMPRA', saldo_cop: '1062523.00', pxps: [] };
+  assert.equal(pedidoAdmitePxp(pven), true);
+  assert.equal(pedidoAdmitePxp({ ...pven, estado: 'CANCELADO' }), false);
+  assert.equal(pedidoAdmitePxp({ ...pven, saldo_cop: 0 }), false);
+  assert.equal(pedidoAdmitePxp({ ...pven, pxps: [{ estado: 'PENDIENTE' }] }), false);
+  assert.equal(pedidoAdmitePxp({ ...pven, pxps: [{ estado: 'PAGADA' }] }), false, 'una pagada tambien es vigente');
+  assert.equal(pedidoAdmitePxp({ ...pven, pxps: [{ estado: 'CANCELADA' }] }), true);
+  // Fila de la lista: no trae pxps, mira pxp_id (H45 lo limpia al anular).
+  assert.equal(pedidoAdmitePxp({ estado: 'EN_PROCESO', saldo_cop: 10, pxp_id: 4 }), false);
+  assert.equal(pedidoAdmitePxp({ estado: 'EN_PROCESO', saldo_cop: 10, pxp_id: null }), true);
+  assert.equal(pedidoAdmitePxp(null), false);
+}
+
+console.log('OK test_dinero_ventas.mjs');

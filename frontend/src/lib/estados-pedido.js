@@ -124,6 +124,9 @@ function humanizar(e) {
   return texto.charAt(0).toUpperCase() + texto.slice(1);
 }
 
+/** El mismo respaldo para otros codigos de Ventas sin mapa propio (estados de pago o de PXP): nunca el codigo crudo. */
+export const humanizarCodigo = humanizar;
+
 /**
  * Etiqueta, clases de color y paso de un estado de pedido. Una clave desconocida sale humanizada, en gris y en
  * el primer paso: nunca el codigo crudo.

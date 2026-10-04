@@ -3,9 +3,13 @@
  * con node (frontend/tests/test_listas_ventas.mjs), como busqueda.js y pricing.js.
  *
  *  - N8: diasAlerta, los dias de alerta guardados en Configuracion.
- *  - COT-LISTA: pedidoVigente / soloPedidosCancelados de una cotizacion (con su `pedidos_venta` ligero de la lista o
- *    completo del detalle).
+ *  - COT-LISTA: pedidoVigente / soloPedidosCancelados / pestanaCotizacion de una cotizacion (con su `pedidos_venta`
+ *    ligero de la lista o completo del detalle). H46: ultimoPedidoCancelado.
+ *  - H47: resumenPedidos / kpisPedidos de la lista de pedidos (el dinero no suma cancelados ni devueltos).
+ *  - N10: opcionesFiltroEstado del filtro de estado de la lista de pedidos.
  */
+import { ESTADOS_PEDIDO_CERRADOS } from './estados-pedido.js';
+import { redondearPeso } from './pesos.js';
 
 /**
  * Dias de alerta de `clave` (alerta_sc_dias, alerta_cot_dias, alerta_ven_dias) en la configuracion. Acepta la
@@ -34,4 +38,109 @@ export function pedidoVigente(cot) {
 export function soloPedidosCancelados(cot) {
   const pedidos = pedidosDe(cot);
   return pedidos.length > 0 && pedidos.every((v) => v.estado === 'CANCELADO');
+}
+
+/** H46: el pedido CANCELADO mas reciente de la cotizacion (el GET los trae por id, del mas viejo al mas nuevo), o null. */
+export function ultimoPedidoCancelado(cot) {
+  const cancelados = pedidosDe(cot).filter((v) => v.estado === 'CANCELADO');
+  return cancelados.length > 0 ? cancelados[cancelados.length - 1] : null;
+}
+
+/**
+ * COT-LISTA: pestaña de la lista de Cotizaciones. Una CONFIRMADA cuyo(s) pedido(s) se cancelaron vuelve a 'Activas'
+ * (se ajusta, se reenvia y se crea otro pedido); las demas confirmadas son 'Confirmadas' (con pedido o por convertir).
+ * @returns {'Activas' | 'Confirmadas' | 'Rechazadas'}
+ */
+export function pestanaCotizacion(cot) {
+  if (cot?.estado === 'RECHAZADA') return 'Rechazadas';
+  if (cot?.estado === 'CONFIRMADA' && !soloPedidosCancelados(cot)) return 'Confirmadas';
+  return 'Activas';
+}
+
+// ─── H47: resumen de la lista de pedidos ────────────────────────────────────────────────────────────
+
+/**
+ * Pedidos cuyo dinero no cuenta (ni vendido ni por cobrar): espejo de ESTADOS_VEN_SIN_DINERO
+ * (backend/app/core/estados_pedido.py), el mismo criterio del resumen de GET /ventas/pedidos. Inmutable.
+ * @type {ReadonlyArray<string>}
+ */
+export const ESTADOS_PEDIDO_SIN_DINERO = Object.freeze(['CANCELADO', 'DEVUELTO_TOTAL']);
+
+const esObjeto = (v) => v !== null && typeof v === 'object';
+
+/** El pedido suma en los montos de la lista (no esta cancelado ni devuelto por completo). */
+export function pedidoSumaDinero(p) {
+  return esObjeto(p) && !ESTADOS_PEDIDO_SIN_DINERO.includes(p.estado);
+}
+
+/**
+ * Resumen calculado en el navegador con la misma regla del servidor (si la respuesta no trae `resumen`): `total` y
+ * `por_estado` cuentan todos los pedidos; monto, saldo y anticipo solo los que suman dinero, en pesos enteros. Las
+ * lineas null o que no son objeto se ignoran.
+ * @returns {{total: number, monto_cop: number, saldo_cop: number, anticipo_cop: number, por_estado: Record<string, number>}}
+ */
+export function resumenPedidos(pedidos) {
+  const r = { total: 0, monto_cop: 0, saldo_cop: 0, anticipo_cop: 0, por_estado: {} };
+  for (const p of Array.isArray(pedidos) ? pedidos : []) {
+    if (!esObjeto(p)) continue;
+    r.total += 1;
+    r.por_estado[p.estado] = (r.por_estado[p.estado] || 0) + 1;
+    if (!pedidoSumaDinero(p)) continue;
+    r.monto_cop += Number(p.total_cop) || 0;
+    r.saldo_cop += Number(p.saldo_cop) || 0;
+    r.anticipo_cop += Number(p.anticipo_cop) || 0;
+  }
+  r.monto_cop = redondearPeso(r.monto_cop);
+  r.saldo_cop = redondearPeso(r.saldo_cop);
+  r.anticipo_cop = redondearPeso(r.anticipo_cop);
+  return r;
+}
+
+/**
+ * Cifras de las tarjetas de Pedidos de Venta: del resumen del servidor (todos los pedidos del filtro, sin el tope de
+ * 200) o, si no vino, del navegador sobre los cargados. `activos` = total menos los cerrados (entregados, facturados,
+ * cancelados y devueltos); `cargados` = cuantos trajo la lista.
+ */
+export function kpisPedidos(resumenServidor, pedidos) {
+  const r = esObjeto(resumenServidor) ? resumenServidor : resumenPedidos(pedidos);
+  const pe = esObjeto(r.por_estado) ? r.por_estado : {};
+  const total = Number(r.total) || 0;
+  const cerrados = ESTADOS_PEDIDO_CERRADOS.reduce((s, e) => s + (Number(pe[e]) || 0), 0);
+  return {
+    total,
+    monto: Number(r.monto_cop) || 0,
+    saldo: Number(r.saldo_cop) || 0,
+    anticipo: Number(r.anticipo_cop) || 0,
+    pCompra: Number(pe.PENDIENTE_COMPRA) || 0,
+    cancelados: Number(pe.CANCELADO) || 0,
+    activos: Math.max(0, total - cerrados),
+    cargados: Array.isArray(pedidos) ? pedidos.length : 0,
+    porEstado: pe,
+  };
+}
+
+/** Pista de la tarjeta 'Total Pedidos': '15 activos · 12 cancelados · se ven los 200 más recientes'. */
+export function hintTotalPedidos(k) {
+  return `${k.activos} activos`
+    + (k.cancelados > 0 ? ` · ${k.cancelados} cancelados` : '')
+    + (k.total > k.cargados ? ` · se ven los ${k.cargados} más recientes` : '');
+}
+
+// ─── N10: filtro de estado de la lista de pedidos ────────────────────────────────────────────────────
+
+const FILTRO_ESTADOS_BASE = Object.freeze(['PENDIENTE_COMPRA', 'PENDIENTE_PAGO', 'EN_PROCESO', 'EN_TRANSITO',
+  'LISTO_ENTREGA', 'ENTREGADO', 'FACTURADO', 'CANCELADO']);
+
+/**
+ * Estados que ofrece 'Filtrar Estado': los habituales y, al final, cualquier otro que traigan los pedidos cargados
+ * (p. ej. PENDIENTE_SALDO de fase4), sin repetir. La pantalla los muestra con su etiqueta (infoEstadoPedido).
+ * @returns {string[]}
+ */
+export function opcionesFiltroEstado(pedidos) {
+  const opciones = [...FILTRO_ESTADOS_BASE];
+  for (const p of Array.isArray(pedidos) ? pedidos : []) {
+    const e = esObjeto(p) && typeof p.estado === 'string' ? p.estado.trim() : '';
+    if (e && !opciones.includes(e)) opciones.push(e);
+  }
+  return opciones;
 }
