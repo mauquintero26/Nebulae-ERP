@@ -10,6 +10,7 @@ Reglas de arranque:
       * El valor nunca se imprime en logs; tampoco prefijos ni fragmentos del mismo.
 """
 
+import hashlib
 import os
 import logging
 
@@ -94,7 +95,15 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def create_access_token(data: dict, expires_delta: timedelta = None) -> str:
+def huella_de_clave(password_hash: str) -> str:
+    """A5: los primeros 16 hex del sha256 del hash bcrypt de la clave (claim 'pv' del token de sesion). Cambia cuando
+    cambia la clave; no lleva el hash ni nada reversible."""
+    return hashlib.sha256((password_hash or "").encode()).hexdigest()[:16]
+
+
+def create_access_token(data: dict, expires_delta: timedelta = None, password_hash: str = None) -> str:
+    """Token firmado con `data` + 'exp' e 'iat'. Con `password_hash` (login y /auth/refresh) agrega 'pv'
+    (huella_de_clave): al cambiar o restablecer la clave, las sesiones abiertas dejan de servir (A5)."""
     to_encode = data.copy()
     now = datetime.now(timezone.utc)
     if expires_delta:
@@ -103,4 +112,6 @@ def create_access_token(data: dict, expires_delta: timedelta = None) -> str:
         expire = now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     # 'iat' (emitido en) le dice al frontend cuando toca renovar la sesion (H23).
     to_encode.update({"exp": expire, "iat": now})
+    if password_hash is not None:
+        to_encode["pv"] = huella_de_clave(password_hash)
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)

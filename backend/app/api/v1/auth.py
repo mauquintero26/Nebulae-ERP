@@ -69,8 +69,10 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
         )
     # H23: la sesion dura SESSION_IDLE_TIMEOUT_MINUTES (24 h) y el frontend la renueva con /refresh mientras se use.
     access_token_expires = timedelta(minutes=SESSION_IDLE_TIMEOUT_MINUTES)
+    # A5: 'pv' (huella de la clave) cierra esta sesion si la clave cambia.
     access_token = create_access_token(
-        data={"sub": str(user.id), "role": user.role}, expires_delta=access_token_expires
+        data={"sub": str(user.id), "role": user.role}, expires_delta=access_token_expires,
+        password_hash=user.password_hash,
     )
     # Return standard OAuth2 token format for Swagger UI support
     return {"access_token": access_token, "token_type": "bearer"}
@@ -84,10 +86,12 @@ def refresh_session(current_user: User = Depends(get_current_user)):
     """H23: emite un token nuevo de SESSION_IDLE_TIMEOUT_MINUTES para el usuario del token vigente.
 
     El frontend (SessionKeeper) lo llama como maximo cada 10 minutos y solo si hubo uso real despues de emitirse
-    el token. get_current_user ya rechaza con 401 un token vencido o de un usuario desactivado."""
+    el token. get_current_user ya rechaza con 401 un token vencido, de un usuario desactivado o de una clave que ya
+    cambio (A5). El token nuevo siempre trae 'pv', aunque el viejo no lo trajera."""
     token = create_access_token(
         {"sub": str(current_user.id), "role": current_user.role},
         expires_delta=timedelta(minutes=SESSION_IDLE_TIMEOUT_MINUTES),
+        password_hash=current_user.password_hash,
     )
     return {"access_token": token, "token_type": "bearer", "expires_in": SESSION_IDLE_TIMEOUT_MINUTES * 60}
 

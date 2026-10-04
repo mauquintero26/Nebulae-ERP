@@ -1,8 +1,9 @@
+import hmac
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 import jwt
 from sqlalchemy.orm import Session
-from app.core.security import SECRET_KEY, ALGORITHM
+from app.core.security import SECRET_KEY, ALGORITHM, huella_de_clave
 from app.db.database import get_db
 from app.models.users import User, RolePermission
 from fastapi import Request
@@ -21,7 +22,10 @@ def usuario_de_token(token: str, db: Session):
 
     H23: con sesiones de 24 h un usuario desactivado no puede seguir dentro ni renovar. `is False` porque la
     columna acepta NULL en filas viejas (NULL sigue entrando, como antes). Lo usan get_current_user,
-    get_optional_current_user y las rutas duales (token ERP o de cliente) de chat y marketing."""
+    get_optional_current_user y las rutas duales (token ERP o de cliente) de chat y marketing.
+
+    A5: un token con 'pv' que no coincide con la huella del password_hash actual (la clave cambio o se restablecio)
+    tampoco sirve. Un token sin 'pv' (emitido antes de A5) se acepta: vence solo y /auth/refresh lo cambia."""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], leeway=SESSION_JWT_LEEWAY_SECONDS)
     except jwt.PyJWTError:
@@ -35,6 +39,9 @@ def usuario_de_token(token: str, db: Session):
         return None
     user = db.query(User).filter(User.id == user_id).first()
     if user is None or user.is_active is False:
+        return None
+    pv = payload.get("pv")
+    if pv is not None and not hmac.compare_digest(str(pv), huella_de_clave(user.password_hash)):
         return None
     return user
 

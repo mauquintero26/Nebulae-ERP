@@ -5,6 +5,9 @@
 - El login emite la misma sesion de 24 h; un usuario desactivado recibe el mismo 401 que una clave incorrecta.
 - Las rutas duales (token ERP o de cliente) y get_optional_current_user tampoco aceptan a un desactivado.
 - Un iat unos segundos en el futuro (desfase de reloj) se acepta (leeway).
+- A5 (revision final): login y /auth/refresh ponen el claim 'pv' (16 hex del sha256 del password_hash). Cambiar la
+  clave cierra las sesiones abiertas: un token cuyo 'pv' no coincide con el hash actual da 401. Un token sin 'pv'
+  (emitido antes) se acepta y /auth/refresh lo cambia por uno con 'pv'.
 
 Usa user_vendedor (creado por el runner dentro de la transaccion, con el hash de la clave de prueba) y no toca la
 cuenta QA del runner. SECRET_KEY y ALGORITHM salen de app.api.dependencies, y SESSION_IDLE_TIMEOUT_MINUTES y
@@ -196,3 +199,64 @@ def test_get_optional_current_user_ignora_al_desactivado(db, user_vendedor, vend
     assert get_optional_current_user(token=vendedor_token, db=db).id == user_vendedor.id, "NULL sigue entrando"
     _desactivar(db, user_vendedor)
     assert get_optional_current_user(token=vendedor_token, db=db) is None
+
+
+# ---- A5: cambiar la clave cierra las sesiones abiertas (claim 'pv') ---------------------------------------------
+
+def _huella(password_hash):
+    import hashlib
+    return hashlib.sha256(password_hash.encode()).hexdigest()[:16]
+
+
+def _cambiar_hash(db, usuario):
+    # Como change-password / reset-password, pero solo dentro de la transaccion revertida del runner y con un valor
+    # desechable generado aqui.
+    from app.core.security import get_password_hash
+    usuario.password_hash = get_password_hash(secrets.token_urlsafe(16))
+    db.commit()
+
+
+def test_login_y_refresh_traen_la_huella_de_la_clave(app_client, user_vendedor, clave_de_prueba):
+    r = _login(app_client, user_vendedor.email, clave_de_prueba)
+    assert r.status_code == 200, r.status_code
+    token = r.json()["access_token"]
+    payload = _payload(token)
+    assert payload["pv"] == _huella(user_vendedor.password_hash)
+    assert len(payload["pv"]) == 16 and all(c in "0123456789abcdef" for c in payload["pv"])
+    assert user_vendedor.password_hash not in token and user_vendedor.password_hash not in str(payload)
+    refrescado = app_client.post("/api/v1/auth/refresh", headers=auth(token))
+    assert refrescado.status_code == 200, refrescado.text
+    assert _payload(refrescado.json()["access_token"])["pv"] == _huella(user_vendedor.password_hash)
+
+
+def test_token_con_la_huella_correcta_entra(app_client, user_vendedor, clave_de_prueba):
+    token = _login(app_client, user_vendedor.email, clave_de_prueba).json()["access_token"]
+    me = app_client.get("/api/v1/auth/me", headers=auth(token))
+    assert me.status_code == 200, me.text
+    assert me.json()["data"]["id"] == user_vendedor.id
+
+
+def test_cambiar_la_clave_deja_fuera_al_token_viejo(app_client, db, user_vendedor, clave_de_prueba):
+    viejo = _login(app_client, user_vendedor.email, clave_de_prueba).json()["access_token"]
+    assert app_client.get("/api/v1/auth/me", headers=auth(viejo)).status_code == 200
+    _cambiar_hash(db, user_vendedor)
+    me = app_client.get("/api/v1/auth/me", headers=auth(viejo))
+    assert me.status_code == 401, me.text
+    r = app_client.post("/api/v1/auth/refresh", headers=auth(viejo))
+    assert r.status_code == 401, r.text
+    assert get_optional_current_user(token=viejo, db=db) is None
+
+
+def test_token_sin_huella_entra_y_refresh_lo_cambia_por_uno_con_huella(app_client, db, user_vendedor,
+                                                                      vendedor_token):
+    # Los tokens emitidos antes del despliegue no traen 'pv': se aceptan (vencen solos).
+    assert "pv" not in _payload(vendedor_token)
+    me = app_client.get("/api/v1/auth/me", headers=auth(vendedor_token))
+    assert me.status_code == 200, me.text
+    r = app_client.post("/api/v1/auth/refresh", headers=auth(vendedor_token))
+    assert r.status_code == 200, r.text
+    nuevo = r.json()["access_token"]
+    assert _payload(nuevo)["pv"] == _huella(user_vendedor.password_hash)
+    # Desde ahi, cambiar la clave tambien lo deja fuera.
+    _cambiar_hash(db, user_vendedor)
+    assert app_client.get("/api/v1/auth/me", headers=auth(nuevo)).status_code == 401
