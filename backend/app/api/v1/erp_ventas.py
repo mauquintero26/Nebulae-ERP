@@ -6,6 +6,7 @@ Pedidos de Venta (VEN), Ordenes Pendientes por Pagar (PXP)
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func, select
+from sqlalchemy.exc import DBAPIError
 from typing import Optional, List
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import pydantic
@@ -144,7 +145,9 @@ def _registrar_cambios(db: Session, entidad: str, doc, antes: dict, body: dict, 
     `motivo` en el body reemplaza el titulo automatico (p.ej. 'por re-cotizacion de COT-...').
     Es un registro auxiliar: si falla, el cambio ya quedo guardado y no se debe devolver un error.
     commit=False (update_solicitud, H29): el renglon queda en la sesion y lo confirma el commit unico del llamador;
-    si falla el armado no se hace rollback, porque desharia el cambio que ese commit aun no confirmo."""
+    si falla el armado en Python no se hace rollback, porque desharia el cambio que ese commit aun no confirmo.
+    Un error de la BASE (DBAPIError) con commit=False SI se propaga: deja la transaccion abortada y el commit final
+    seria un ROLLBACK silencioso (PostgreSQL), o sea un 200 sin nada guardado. Con commit=True se conserva lo de siempre."""
     try:
         despues = cambios_documento.tomar_foto(doc, entidad)
         ids_usuarios = {i for i in (antes.get("asignado_a_user_id"), despues.get("asignado_a_user_id")) if i}
@@ -162,9 +165,11 @@ def _registrar_cambios(db: Session, entidad: str, doc, antes: dict, body: dict, 
         _log(db, entidad, doc.id, doc.numero, accion, descripcion,
              user_name=body.get("updated_by") or getattr(user, "email", None),
              extra_data={"cambios": cambios}, commit=commit)
-    except Exception:
+    except Exception as exc:
         if commit:
             db.rollback()
+        elif isinstance(exc, DBAPIError):
+            raise
         logger.warning("No se pudo registrar en la Actividad los cambios de %s %s", entidad,
                        getattr(doc, "numero", "?"), exc_info=True)
 

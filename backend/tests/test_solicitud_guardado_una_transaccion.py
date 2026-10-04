@@ -10,6 +10,7 @@ contaba con tests.conftest.test_engine) no se pueden medir aqui: lo que si se mi
 """
 import datetime
 import hashlib
+import logging
 
 
 def auth(token):
@@ -53,8 +54,10 @@ def test_guardar_productos_de_la_sc_usa_una_sola_transaccion(app_client, db, adm
     assert data["productos"][1]["product_name"] == "Silla"
     assert data["estado"] == "ASIGNADA"
     assert v.commits == 1, f"el PATCH debe confirmar una sola vez, confirmo {v.commits} veces"
-    # Sin releer objetos expirados tras el commit: usuario, SC, UPDATE, relectura del refresh e INSERT de la actividad.
-    assert v.consultas <= 5, f"demasiadas consultas ({v.consultas}):\n" + "\n---\n".join(v.sentencias)
+    # Esperadas 5: SELECT del usuario, SELECT de la SC, UPDATE, SELECT del refresh e INSERT de la actividad. El margen
+    # de 1 evita una prueba fragil si una tarea posterior agrega una consulta legitima; lo que NO debe volver es la
+    # relectura de la SC expirada tras un commit intermedio (cada una seria otro viaje a la base remota).
+    assert v.consultas <= 6, f"demasiadas consultas ({v.consultas}):\n" + "\n---\n".join(v.sentencias)
 
     logs = _actividades_sc(db, sc)
     assert [l.action for l in logs] == ["UPDATED"]
@@ -108,21 +111,71 @@ def test_cambiar_la_modalidad_recalcula_el_anticipo_de_las_cot_en_la_misma_trans
 
 def test_si_falla_armar_la_actividad_los_productos_igual_se_guardan(app_client, db, admin_token, user_admin,
                                                                     monkeypatch):
+    import app.api.v1.erp_ventas as m_ventas
     from app.core import cambios_documento
 
     def describir_roto(*args, **kwargs):
         raise RuntimeError("falla simulada al describir los cambios")
 
+    class _Captura(logging.Handler):
+        def __init__(self):
+            super().__init__(logging.DEBUG)
+            self.registros = []
+
+        def emit(self, registro):
+            self.registros.append(registro)
+
     monkeypatch.setattr(cambios_documento, "describir", describir_roto)
     sc = _sc(db, "SC-RAP003", user_admin, estado="ASIGNADA", productos=[LINEA])
 
-    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={
-        "productos": [LINEA, {"product_name": "Silla", "qty": 2}], "updated_by": "test"},
-        headers=auth(admin_token))
+    captura = _Captura()
+    propagaba = m_ventas.logger.propagate
+    m_ventas.logger.addHandler(captura)
+    m_ventas.logger.propagate = False  # el traceback de la falla simulada no ensucia la salida de la corrida
+    try:
+        resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={
+            "productos": [LINEA, {"product_name": "Silla", "qty": 2}], "updated_by": "test"},
+            headers=auth(admin_token))
+    finally:
+        m_ventas.logger.removeHandler(captura)
+        m_ventas.logger.propagate = propagaba
     assert resp.status_code == 200, resp.text
     db.expire_all()
     db.refresh(sc)
     assert len(sc.productos) == 2
+    assert _actividades_sc(db, sc) == []
+    # El diseno pide dejar un warning en el log (no un error al usuario).
+    avisos = [r for r in captura.registros if r.levelno == logging.WARNING]
+    assert len(avisos) == 1, [r.getMessage() for r in captura.registros]
+    assert "No se pudo registrar en la Actividad" in avisos[0].getMessage()
+    assert "SC-RAP003" in avisos[0].getMessage()
+
+
+def test_si_la_base_falla_al_armar_la_actividad_el_patch_falla_y_no_guarda_nada(
+        app_client, db, admin_token, user_admin, monkeypatch):
+    """Un error de la BASE (no de Python) deja la transaccion abortada: tragarlo y hacer el commit final daria un 200
+    con el ROLLBACK silencioso de PostgreSQL. Debe propagarse como error y la SC quedar sin cambios.
+
+    Limite del runner: usa una sola conexion con savepoints, asi que aqui no se puede abortar de verdad la transaccion
+    de nivel superior; se simula el error con un DBAPIError lanzado dentro del try de _registrar_cambios. Lo que la
+    prueba fija es que ese error ya no se traga (antes: 200 y la SC guardada sin renglon de Actividad)."""
+    from sqlalchemy.exc import OperationalError
+    from app.core import cambios_documento
+
+    def comparar_roto(*args, **kwargs):
+        raise OperationalError("SELECT users", None, Exception("la conexion con la base se perdio"))
+
+    monkeypatch.setattr(cambios_documento, "comparar", comparar_roto)
+    sc = _sc(db, "SC-RAP007", user_admin, estado="ASIGNADA", productos=[LINEA])
+
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={
+        "productos": [LINEA, {"product_name": "Silla", "qty": 2}], "updated_by": "test"},
+        headers=auth(admin_token))
+    assert resp.status_code != 200, "un error de la base no debe terminar en un 200 sin nada guardado"
+    assert resp.status_code >= 500
+    db.expire_all()
+    db.refresh(sc)
+    assert len(sc.productos) == 1  # el UPDATE de la SC se deshizo junto con la transaccion
     assert _actividades_sc(db, sc) == []
 
 
