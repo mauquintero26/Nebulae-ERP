@@ -8,7 +8,7 @@
  *  - H47: resumenPedidos / kpisPedidos de la lista de pedidos (el dinero no suma cancelados ni devueltos).
  *  - N10: opcionesFiltroEstado del filtro de estado de la lista de pedidos.
  */
-import { ESTADOS_PEDIDO_CERRADOS } from './estados-pedido.js';
+import { ESTADOS_PEDIDO_CERRADOS, grupoPedido } from './estados-pedido.js';
 import { redondearPeso } from './pesos.js';
 
 /**
@@ -47,13 +47,38 @@ export function ultimoPedidoCancelado(cot) {
 }
 
 /**
- * COT-LISTA: pestaña de la lista de Cotizaciones. Una CONFIRMADA cuyo(s) pedido(s) se cancelaron vuelve a 'Activas'
- * (se ajusta, se reenvia y se crea otro pedido); las demas confirmadas son 'Confirmadas' (con pedido o por convertir).
+ * H46 / N1: que toca con el pedido de una cotizacion. `confirmacion_vigente` (GET de la COT y filas de la lista) es la
+ * confirmacion del cliente sin usar (gate2_confirmed_at): la pone el enlace en cada confirmacion y la consume la
+ * conversion; sin ella el servidor no convierte.
+ *  - 'pedido_vigente': ya tiene un pedido que no esta cancelado.
+ *  - 'crear_pedido': CONFIRMADA sin pedido vigente. Incluye la re-confirmada por el cliente tras cancelar el pedido
+ *    (flujo normal de H46: el pedido nuevo recibe el saldo a favor, R6).
+ *  - 'reabrir': CONFIRMADA sin confirmacion vigente y con su ultimo pedido cancelado: dato antiguo, de antes de que la
+ *    cancelacion devolviera sola la COT a Borrador. Hay que reabrirla y reenviarla.
+ *  - null: cualquier otro estado.
+ * `cancelado` es el ultimo pedido cancelado cuando no hay vigente; `avisoCancelado` dice si mostrar el aviso "Pedido X
+ * cancelado: ajusta y reenvia" (no tiene sentido si el cliente ya la confirmo otra vez).
+ * @returns {{paso: 'pedido_vigente' | 'crear_pedido' | 'reabrir' | null, vigente: any, cancelado: any, avisoCancelado: boolean}}
+ */
+export function situacionPedidoCotizacion(cot) {
+  const vigente = pedidoVigente(cot);
+  const cancelado = vigente ? null : ultimoPedidoCancelado(cot);
+  const confirmacion = !!cot?.confirmacion_vigente;
+  let paso = null;
+  if (vigente) paso = 'pedido_vigente';
+  else if (cot?.estado === 'CONFIRMADA') paso = !confirmacion && cancelado ? 'reabrir' : 'crear_pedido';
+  return { paso, vigente, cancelado, avisoCancelado: !!cancelado && !confirmacion };
+}
+
+/**
+ * COT-LISTA: pestaña de la lista de Cotizaciones. Una CONFIRMADA que hay que reabrir (pedido cancelado y sin
+ * confirmacion vigente) vuelve a 'Activas'; las demas confirmadas son 'Confirmadas': con pedido vigente o por
+ * convertir (tambien la re-confirmada por el cliente tras cancelar su pedido).
  * @returns {'Activas' | 'Confirmadas' | 'Rechazadas'}
  */
 export function pestanaCotizacion(cot) {
   if (cot?.estado === 'RECHAZADA') return 'Rechazadas';
-  if (cot?.estado === 'CONFIRMADA' && !soloPedidosCancelados(cot)) return 'Confirmadas';
+  if (cot?.estado === 'CONFIRMADA' && situacionPedidoCotizacion(cot).paso !== 'reabrir') return 'Confirmadas';
   return 'Activas';
 }
 
@@ -112,7 +137,8 @@ export function kpisPedidos(resumenServidor, pedidos) {
     saldo: Number(r.saldo_cop) || 0,
     anticipo: Number(r.anticipo_cop) || 0,
     pCompra: Number(pe.PENDIENTE_COMPRA) || 0,
-    cancelados: Number(pe.CANCELADO) || 0,
+    // Los de la pestaña 'Cancelado' (cancelados y devueltos por completo).
+    cancelados: Object.keys(pe).filter((e) => grupoPedido(e) === 'Cancelado').reduce((s, e) => s + (Number(pe[e]) || 0), 0),
     activos: Math.max(0, total - cerrados),
     cargados: Array.isArray(pedidos) ? pedidos.length : 0,
     porEstado: pe,

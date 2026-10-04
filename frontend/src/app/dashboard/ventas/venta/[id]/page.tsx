@@ -17,7 +17,7 @@ import { formatoPesos } from '@/lib/pesos';
 import {
   PASOS_PEDIDO as STEPS, ESTADOS_PEDIDO_MANUALES, ESTADOS_PEDIDO_CERRADOS, infoEstadoPedido, pasoPedido, transicionesPedido,
 } from '@/lib/estados-pedido';
-import { formatoPct, describirPago, etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp } from '@/lib/dinero-ventas';
+import { formatoPct, describirPago, etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp, textoChipPxp } from '@/lib/dinero-ventas';
 
 const fCOP = formatoPesos;
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
@@ -368,7 +368,7 @@ function PedidoVentaDetalleContent() {
           )}
           {pxpVigente ? (
             <span className="flex items-center gap-1.5 px-4 py-2 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl font-bold text-sm">
-              <CheckCircle2 size={16} /> PXP: {pxpVigente.numero} · {etiquetaEstadoPxp(pxpVigente.estado)} · pendiente {fCOP(pxpVigente.monto_pendiente)}
+              <CheckCircle2 size={16} /> {textoChipPxp(pxpVigente)}
             </span>
           ) : pxpCancelada && (
             <span className="flex items-center gap-1.5 px-4 py-2 bg-slate-100 text-slate-500 border border-slate-200 rounded-xl font-bold text-sm">

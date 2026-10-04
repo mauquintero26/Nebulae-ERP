@@ -9,7 +9,7 @@
 
 import assert from 'node:assert/strict';
 import {
-  diasAlerta, pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, pestanaCotizacion,
+  diasAlerta, pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, pestanaCotizacion, situacionPedidoCotizacion,
   ESTADOS_PEDIDO_SIN_DINERO, pedidoSumaDinero, resumenPedidos, kpisPedidos, hintTotalPedidos, opcionesFiltroEstado,
 } from '../src/lib/listas-ventas.js';
 
@@ -64,7 +64,11 @@ console.log('--- COT-LISTA TEST 5: pestanaCotizacion (la confirmada con pedido c
   assert.equal(pestanaCotizacion({ estado: 'RECHAZADA', pedidos_venta: [{ estado: 'CANCELADO' }] }), 'Rechazadas');
   assert.equal(pestanaCotizacion({ estado: 'CONFIRMADA' }), 'Confirmadas', 'confirmada sin pedido: por convertir');
   assert.equal(pestanaCotizacion({ estado: 'CONFIRMADA', pedidos_venta: [{ estado: 'EN_PROCESO' }] }), 'Confirmadas');
-  assert.equal(pestanaCotizacion({ estado: 'CONFIRMADA', pedidos_venta: [{ estado: 'CANCELADO' }] }), 'Activas');
+  assert.equal(pestanaCotizacion({ estado: 'CONFIRMADA', pedidos_venta: [{ estado: 'CANCELADO' }] }), 'Activas',
+    'dato antiguo: confirmada sin confirmacion vigente y con el pedido cancelado (hay que reabrirla)');
+  assert.equal(pestanaCotizacion({ estado: 'CONFIRMADA', confirmacion_vigente: true,
+    pedidos_venta: [{ estado: 'CANCELADO' }] }), 'Confirmadas',
+  're-confirmada por el cliente tras cancelar el pedido: por convertir, suma en Monto Confirmado');
   assert.equal(pestanaCotizacion(null), 'Activas');
 }
 
@@ -121,10 +125,10 @@ console.log('--- H47 TEST 7: kpisPedidos usa el resumen del servidor y, si no vi
   assert.equal(k.saldo, 1200000);
   assert.equal(k.anticipo, 3800000);
   assert.equal(k.pCompra, 10);
-  assert.equal(k.cancelados, 12);
+  assert.equal(k.cancelados, 15, 'cancelados y devueltos, como la pestaña Cancelado');
   assert.equal(k.activos, 15, 'total menos entregados, facturados, cancelados y devueltos');
   assert.equal(k.cargados, 2);
-  assert.equal(hintTotalPedidos(k), '15 activos · 12 cancelados · se ven los 2 más recientes');
+  assert.equal(hintTotalPedidos(k), '15 activos · 15 cancelados · se ven los 2 más recientes');
 
   const sinServidor = kpisPedidos(null, cargados);
   assert.equal(sinServidor.total, 2);
@@ -147,6 +151,40 @@ console.log('--- N10 TEST 8: opcionesFiltroEstado (lista base + los estados que 
     { estado: 'DEVUELTO_TOTAL' }, { estado: 'PENDIENTE_SALDO' }, { estado: '' }]);
   assert.deepEqual(conRaros.slice(-2), ['PENDIENTE_SALDO', 'DEVUELTO_TOTAL']);
   assert.equal(conRaros.length, base.length + 2);
+}
+
+console.log('--- H46 / N1 TEST 9: situacionPedidoCotizacion (crear pedido, reabrir o ya convertida) ---');
+{
+  // Convertida: tiene pedido vigente (la conversion consumio la confirmacion).
+  const convertida = situacionPedidoCotizacion({ estado: 'CONFIRMADA', confirmacion_vigente: false,
+    pedidos_venta: [{ estado: 'CANCELADO', numero: 'PVEN-1' }, { estado: 'EN_PROCESO', numero: 'PVEN-2' }] });
+  assert.equal(convertida.paso, 'pedido_vigente');
+  assert.equal(convertida.vigente.numero, 'PVEN-2');
+  assert.equal(convertida.cancelado, null);
+  assert.equal(convertida.avisoCancelado, false);
+
+  // Re-confirmada por el cliente tras cancelar el pedido (flujo normal de H46): se crea otro pedido YA.
+  const reconfirmada = situacionPedidoCotizacion({ estado: 'CONFIRMADA', confirmacion_vigente: true,
+    pedidos_venta: [{ estado: 'CANCELADO', numero: 'PVEN-1' }] });
+  assert.equal(reconfirmada.paso, 'crear_pedido');
+  assert.equal(reconfirmada.cancelado.numero, 'PVEN-1');
+  assert.equal(reconfirmada.avisoCancelado, false, 'no se ofrece reabrir ni el aviso de reenviar');
+
+  // Dato antiguo: CONFIRMADA sin confirmacion vigente y con el pedido cancelado: hay que reabrirla.
+  const antigua = situacionPedidoCotizacion({ estado: 'CONFIRMADA', confirmacion_vigente: false,
+    pedidos_venta: [{ estado: 'CANCELADO', numero: 'PVEN-1' }, { estado: 'CANCELADO', numero: 'PVEN-3' }] });
+  assert.equal(antigua.paso, 'reabrir');
+  assert.equal(antigua.cancelado.numero, 'PVEN-3');
+  assert.equal(antigua.avisoCancelado, true);
+
+  // Confirmada sin pedidos: crear el pedido (la primera conversion).
+  assert.equal(situacionPedidoCotizacion({ estado: 'CONFIRMADA', confirmacion_vigente: true }).paso, 'crear_pedido');
+  // Reabierta a Borrador por la cancelacion: sin paso de pedido, con el aviso del pedido cancelado.
+  const borrador = situacionPedidoCotizacion({ estado: 'BORRADOR', confirmacion_vigente: false,
+    pedidos_venta: [{ estado: 'CANCELADO', numero: 'PVEN-1' }] });
+  assert.equal(borrador.paso, null);
+  assert.equal(borrador.avisoCancelado, true);
+  assert.deepEqual(situacionPedidoCotizacion(null), { paso: null, vigente: null, cancelado: null, avisoCancelado: false });
 }
 
 console.log('OK test_listas_ventas.mjs');

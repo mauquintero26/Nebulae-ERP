@@ -13,9 +13,9 @@ import { readFileSync } from 'node:fs';
 import {
   METODOS_PAGO_ANTICIPO, formatoPct, porcentajeDePesos, hoyLocal,
   etiquetaAnticipoCotizacion, origenAnticipo, resumenAnticipoCotizacion,
-  cuentaVerificacion, evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo,
+  cuentaVerificacion, evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo, montoDesdeTexto,
   etiquetaTipoPago, etiquetaMetodoPago, etiquetaEstadoPago, describirPago,
-  etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp,
+  etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp, textoChipPxp,
 } from '../src/lib/dinero-ventas.js';
 
 console.log('--- N1 TEST 1: los 8 medios de pago son los mismos que acepta el servidor ---');
@@ -178,12 +178,41 @@ console.log('--- N1 / R4 TEST 7: evaluarVerificacion (pago completo, parcial con
   assert.ok(vacio.pendientes.length >= 4);
 
   assert.equal(evaluarVerificacion(cuenta, { ...base, monto: '600000.4' }, hoy).monto, 600000, 'pesos enteros');
+
+  // Fix 1: el monto escrito con puntos de miles ('600.000') vale; antes el input numerico lo dejaba vacio sin aviso.
+  const conPuntos = evaluarVerificacion(cuenta, { ...base, monto: '$ 600.000' }, hoy);
+  assert.equal(conPuntos.monto, 600000);
+  assert.equal(conPuntos.valido, true);
+  const millon = evaluarVerificacion(cuenta, { ...base, monto: '1.500.000' }, hoy);
+  assert.equal(millon.monto, 1500000);
+  assert.ok(millon.errores.some((e) => e.includes('supera el total del pedido')), 'se ve el monto y por que no vale');
+  const texto = evaluarVerificacion(cuenta, { ...base, monto: 'seiscientos' }, hoy);
+  assert.equal(texto.valido, false);
+  assert.ok(texto.errores.includes('Escribe el monto en pesos, por ejemplo 1.500.000.'));
+}
+
+console.log('--- N1 TEST 7b: montoDesdeTexto (puntos de miles, coma decimal, simbolos) ---');
+{
+  assert.equal(montoDesdeTexto('1.500.000'), 1500000);
+  assert.equal(montoDesdeTexto('$1.500.000'), 1500000);
+  assert.equal(montoDesdeTexto(' 1 500 000 '), 1500000);
+  assert.equal(montoDesdeTexto('1.500'), 1500, 'un punto con 3 cifras es de miles');
+  assert.equal(montoDesdeTexto('1.500.000,50'), 1500001, 'coma decimal, al peso');
+  assert.equal(montoDesdeTexto('600000.4'), 600000, 'un punto que no agrupa de a 3 es decimal');
+  assert.equal(montoDesdeTexto('600000'), 600000);
+  assert.equal(montoDesdeTexto(600000), 600000);
+  assert.equal(montoDesdeTexto('-5'), -5);
+  assert.equal(montoDesdeTexto(''), null);
+  assert.equal(montoDesdeTexto(null), null);
+  assert.equal(montoDesdeTexto('abc'), null);
+  assert.equal(montoDesdeTexto('1.50.0'), null);
 }
 
 console.log('--- N1 TEST 8: verificacionParaEnviar arma el payload del servidor ---');
 {
   assert.deepEqual(verificacionParaEnviar({ monto: '600000.4', metodo: 'Nequi', referencia: '  REF-1 ', fecha: '2026-10-04' }),
     { monto: 600000, metodo_pago: 'Nequi', referencia: 'REF-1', fecha_pago: '2026-10-04' });
+  assert.equal(verificacionParaEnviar({ monto: '1.500.000', metodo: 'PSE', referencia: 'PSE-1' }).monto, 1500000);
   assert.deepEqual(verificacionParaEnviar({ monto: 1000, metodo: 'Efectivo', referencia: 'Recibo 9', fecha: '' }),
     { monto: 1000, metodo_pago: 'Efectivo', referencia: 'Recibo 9' });
 }
@@ -250,6 +279,10 @@ console.log('--- H44+N6 / H45 TEST 11: PXP vigente o cancelada y cuando se puede
   assert.equal(etiquetaEstadoPxp('PAGADA'), 'Pagada');
   assert.equal(etiquetaEstadoPxp('CANCELADA'), 'Cancelada');
   assert.equal(etiquetaEstadoPxp('EN_REVISION'), 'En revision');
+  // Fix 1: el chip solo muestra lo pendiente mientras la PXP esta PENDIENTE (una pagada no debe nada).
+  assert.equal(textoChipPxp({ numero: 'PXP-2', estado: 'PENDIENTE', monto_pendiente: 1062523 }),
+    'PXP: PXP-2 · Pendiente · pendiente $1.062.523');
+  assert.equal(textoChipPxp({ numero: 'PXP-2', estado: 'PAGADA', monto_pendiente: 1062523 }), 'PXP: PXP-2 · Pagada');
 
   const ambas = pxpsDelPedido({ pxps: [{ numero: 'PXP-1', estado: 'CANCELADA' }, { numero: 'PXP-2', estado: 'PENDIENTE' }] });
   assert.equal(ambas.vigente.numero, 'PXP-2');

@@ -16,7 +16,7 @@ import { computeMarginPrice, MARGIN_PCT_CAP } from '@/lib/pricing';
 import { formatoPesos } from '@/lib/pesos';
 import {
   METODOS_PAGO_ANTICIPO, formatoPct, porcentajeDePesos, hoyLocal, origenAnticipo, cuentaVerificacion,
-  evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo,
+  evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo, resumenAnticipoCotizacion,
 } from '@/lib/dinero-ventas';
 import { pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, pestanaCotizacion } from '@/lib/listas-ventas';
 import { SubNav, PageHeader, StatCard, Modal, Button, EmptyState } from '@/components/ui';
@@ -195,10 +195,11 @@ export function CalculadorModal({
   const descTotal = Math.round(subtotal * (Number(descuento) || 0) / 100);
   const total = subtotal - descTotal;
   // H36+H43 / R3: el anticipo ya no se edita aqui; lo calcula el servidor con la modalidad de la SC o el % manual.
-  const anticipoPct = Number(cot.anticipo_pct ?? 60);
+  // Ya convertida: el % y lo pagado DEL PEDIDO (el GET recalcula con la modalidad de hoy, que ya no es el trato).
+  const resumenAnticipo = resumenAnticipoCotizacion(cot);
+  const anticipoPct = resumenAnticipo.pct;
   const anticipo_cop = porcentajeDePesos(total, anticipoPct);
-  const saldo = total - anticipo_cop;
-  const anticipoManual = cot.anticipo_pct_manual !== null && cot.anticipo_pct_manual !== undefined;
+  const saldo = total - (resumenAnticipo.convertida ? Number(resumenAnticipo.pagado) || 0 : anticipo_cop);
 
   const handleSave = () => {
     if (computedProd.length === 0 || computedProd.some(p => !p.total_cop || p.total_cop <= 0)) {
@@ -345,19 +346,19 @@ export function CalculadorModal({
             </div>
             <div className="grid grid-cols-2 gap-3 mt-2">
               <div>
-                <p className="text-xs text-slate-500 mb-1">
-                  Anticipo {formatoPct(anticipoPct)} ({anticipoManual ? 'manual' : cot.sc_id ? (cot.sc_modalidad_pago || 'solicitud sin modalidad') : 'sin solicitud: % actual de la cotización'})
-                </p>
+                <p className="text-xs text-slate-500 mb-1">Anticipo {resumenAnticipo.etiqueta}</p>
                 <p className="font-black text-slate-800">{fCOP(anticipo_cop)}</p>
               </div>
               <div className="flex flex-col justify-end">
-                <p className="text-xs text-slate-500 mb-1">Saldo pendiente</p>
+                <p className="text-xs text-slate-500 mb-1">{resumenAnticipo.convertida ? 'Saldo del pedido' : 'Saldo pendiente'}</p>
                 <p className="font-black text-slate-800">{fCOP(saldo)}</p>
               </div>
             </div>
             <p className="text-[11px] text-amber-800">
-              {anticipoManual
-                ? `Anticipo manual: ${formatoPct(cot.anticipo_pct_manual)}${cot.anticipo_manual_nota ? ` — ${cot.anticipo_manual_nota}` : ''}. Para cambiarlo usa “Ajustar anticipo” en la cotización.`
+              {resumenAnticipo.convertida
+                ? `Ya pagado en el pedido ${resumenAnticipo.pedido?.numero || ''}: ${fCOP(resumenAnticipo.pagado)}. Re-cotizar no cambia el anticipo ni los pagos del pedido.`
+                : resumenAnticipo.manual
+                ? `${origenAnticipo(cot)}${resumenAnticipo.manual.nota ? ` — ${resumenAnticipo.manual.nota}` : ''}. Para cambiarlo usa “Ajustar anticipo” en la cotización.`
                 : cot.sc_id
                   ? `El anticipo sigue la modalidad de pago de la solicitud ${cot.sc_numero || ''}. Para cambiarlo, cambia la modalidad en la solicitud o usa “Ajustar anticipo” en la cotización.`
                   : 'La cotización no tiene solicitud: conserva su % de anticipo. Para cambiarlo usa “Ajustar anticipo” en la cotización.'}
@@ -516,7 +517,7 @@ export function VerificarAnticipoModal({ cot, verificador, saving, error, onConf
   const cuenta = cuentaVerificacion(cot);
   const hoy = hoyLocal();
   const [form, setForm] = useState({
-    monto: String(cuenta.porVerificar), metodo: '', referencia: '', fecha: hoy,
+    monto: formatoPesos(cuenta.porVerificar).replace('$', ''), metodo: '', referencia: '', fecha: hoy,
     confirmoRevision: false, confirmoParcial: false,
   });
   const set = (k: keyof typeof form, v: string | boolean) => setForm(f => ({ ...f, [k]: v }));
@@ -549,7 +550,13 @@ export function VerificarAnticipoModal({ cot, verificador, saving, error, onConf
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="text-xs font-black text-slate-500 uppercase mb-1 block">Monto recibido</label>
-          <input type="number" min={1} max={cuenta.maximo} step={1} value={form.monto} onChange={e => set('monto', e.target.value)} className={campo} />
+          {/* Texto (no number): '1.500.000' con puntos de miles vale; debajo se ve lo que se entendio. Cambiar el
+              monto quita la casilla del pago parcial (R4: se confirma la deuda de ESE monto). */}
+          <input type="text" inputMode="decimal" value={form.monto} placeholder="Ej: 1.500.000"
+            onChange={e => { const monto = e.target.value; setForm(f => ({ ...f, monto, confirmoParcial: false })); }} className={campo} />
+          {form.monto.trim() !== '' && (
+            <p className="text-[11px] text-slate-500 mt-1">= {fCOP(ev.monto)} (máximo {fCOP(cuenta.maximo)})</p>
+          )}
         </div>
         <div>
           <label className="text-xs font-black text-slate-500 uppercase mb-1 block">Método de pago</label>
@@ -587,6 +594,9 @@ export function VerificarAnticipoModal({ cot, verificador, saving, error, onConf
         <span className="font-bold">Confirmo que revisé y el pago está en la cuenta de Nebulae</span>
       </label>
       <p className="text-xs text-slate-400">Verificado por: {verificador || 'usuario actual'}</p>
+      {!ev.valido && ev.pendientes.length > 0 && (
+        <p className="text-xs text-slate-500">Para crear el pedido falta: {ev.pendientes.join(', ')}.</p>
+      )}
       {error && (
         <p className="text-xs text-red-600 font-bold bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>
       )}

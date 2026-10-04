@@ -16,7 +16,7 @@ import {
   ESTADOS as ESTADOS_COT, fCOP, fDate, fTime,
 } from '../cotizacion-client';
 import { NextStepCard, EnlaceConfirmacionModal, CambiosDeActividad, returnToSeguro, getUsuarioActual } from '../../flujo';
-import { pedidoVigente, ultimoPedidoCancelado } from '@/lib/listas-ventas';
+import { situacionPedidoCotizacion } from '@/lib/listas-ventas';
 import { resumenAnticipoCotizacion, formatoPct } from '@/lib/dinero-ventas';
 import { comoUTC } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
@@ -162,10 +162,12 @@ function CotizacionDetalleContent() {
     : 0;
 
   const productos = cotizacion?.productos || [];
-  // H46: solo un pedido vigente es "venta generada" (los cancelados no); si todos se cancelaron, se muestra
-  // el ultimo cancelado y la cotizacion se puede ajustar, reenviar y convertir otra vez.
-  const pvenVigente = pedidoVigente(cotizacion);
-  const pvenCancelado = pvenVigente ? null : ultimoPedidoCancelado(cotizacion);
+  // H46: solo un pedido vigente es "venta generada" (los cancelados no). Con todos cancelados, confirmacion_vigente
+  // (la confirmacion del cliente sin usar) separa la COT re-confirmada, que crea otro pedido ya, de la antigua que
+  // quedo CONFIRMADA y hay que reabrir (situacionPedidoCotizacion).
+  const situacion = situacionPedidoCotizacion(cotizacion);
+  const pvenVigente = situacion.vigente;
+  const pvenCancelado = situacion.cancelado;
   const anticipo = resumenAnticipoCotizacion(cotizacion);
   const puedeAjustarAnticipo = !pvenVigente && !['RECHAZADA', 'CANCELADA'].includes(estadoActual);
 
@@ -446,8 +448,9 @@ function CotizacionDetalleContent() {
         </NextStepCard>
       );
     }
-    if (estadoActual === 'CONFIRMADA' && pvenCancelado) {
-      // H46 (dato antiguo): el pedido se cancelo antes de que la cancelacion devolviera sola la COT a Borrador.
+    if (situacion.paso === 'reabrir' && pvenCancelado) {
+      // H46 (dato antiguo): el pedido se cancelo antes de que la cancelacion devolviera sola la COT a Borrador y la
+      // confirmacion del cliente ya se uso. Una COT re-confirmada (confirmacion vigente) va a "Crear Pedido de Venta".
       return (
         <NextStepCard
           tone="rose"
@@ -458,7 +461,8 @@ function CotizacionDetalleContent() {
         </NextStepCard>
       );
     }
-    if (estadoActual === 'CONFIRMADA') {
+    if (situacion.paso === 'crear_pedido') {
+      // Tambien la re-confirmada tras cancelar el pedido: el pedido nuevo recibe el saldo a favor (R6).
       return (
         <NextStepCard
           tone="emerald"
@@ -466,6 +470,8 @@ function CotizacionDetalleContent() {
           actions={<Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} onClick={handleConfirmarVenta}>Crear Pedido de Venta</Button>}
         >
           Crea el Pedido de Venta para pasar a compra y entrega.
+          {pvenCancelado && Number(cotizacion.saldo_a_favor) > 0
+            && ` El saldo a favor del pedido cancelado ${pvenCancelado.numero} (${fCOP(cotizacion.saldo_a_favor)}) pasa al pedido nuevo.`}
         </NextStepCard>
       );
     }
@@ -784,8 +790,9 @@ function CotizacionDetalleContent() {
                     </div>
                   )}
 
-                  {/* H46+U25: el ultimo pedido se cancelo; la cotizacion se ajusta, se reenvia y da otro pedido. */}
-                  {pvenCancelado && (
+                  {/* H46+U25: el ultimo pedido se cancelo; la cotizacion se ajusta, se reenvia y da otro pedido. No se
+                      muestra si el cliente ya la confirmo otra vez (confirmacion vigente: toca crear el pedido). */}
+                  {situacion.avisoCancelado && pvenCancelado && (
                     <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 space-y-1">
                       <p className="text-sm font-black text-rose-800">Pedido {pvenCancelado.numero} cancelado</p>
                       {pvenCancelado.cancellation_reason && <p className="text-xs text-rose-700">Motivo: {pvenCancelado.cancellation_reason}</p>}

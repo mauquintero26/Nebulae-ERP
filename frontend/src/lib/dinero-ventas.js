@@ -136,8 +136,30 @@ export function cuentaVerificacion(cot) {
 }
 
 /**
+ * Monto en pesos escrito a mano, como se escribe en Colombia: '1.500.000', '$1.500.000', '1 500 000' o con coma
+ * decimal '1.500.000,50' (se redondea al peso). Un punto que no agrupa de a 3 cifras ('600000.4') se toma como decimal.
+ * Un numero se devuelve redondeado. null si esta vacio o no es un monto.
+ * @returns {number | null}
+ */
+export function montoDesdeTexto(valor) {
+  if (typeof valor === 'number') return Number.isFinite(valor) ? redondearPeso(valor) : null;
+  let t = texto(valor).replace(/[$\s]/g, '');
+  if (!t) return null;
+  if (t.includes(',')) {
+    const [entero, ...resto] = t.split(',');
+    if (resto.length !== 1 || !/^-?(\d+|\d{1,3}(\.\d{3})+)$/.test(entero)) return null;
+    t = `${entero.replace(/\./g, '')}.${resto[0]}`;
+  } else if (/^-?\d{1,3}(\.\d{3})+$/.test(t)) {
+    t = t.replace(/\./g, '');
+  }
+  if (!/^-?\d+(\.\d+)?$/.test(t)) return null;
+  return redondearPeso(t);
+}
+
+/**
  * Valida el formulario del modal. `errores`: lo que esta mal y se muestra; `pendientes`: lo que falta llenar (solo
- * deja el boton deshabilitado). R4: un pago menor que lo que falta es `parcial` y exige `confirmoParcial`; `deuda` es
+ * deja el boton deshabilitado; la pantalla los lista). `monto` es lo que se entendio de lo escrito (montoDesdeTexto),
+ * para mostrarlo bajo el campo. R4: un pago menor que lo que falta es `parcial` y exige `confirmoParcial`; `deuda` es
  * el anticipo que el pedido quedara debiendo.
  * form: {monto, metodo, referencia, fecha ('AAAA-MM-DD' o ''), confirmoRevision, confirmoParcial}
  */
@@ -145,8 +167,10 @@ export function evaluarVerificacion(cuenta, form, hoy = hoyLocal()) {
   const errores = [];
   const pendientes = [];
   const montoTexto = texto(form?.monto);
-  const monto = montoTexto === '' ? 0 : redondearPeso(montoTexto);
+  const leido = montoDesdeTexto(form?.monto);
+  const monto = leido ?? 0;
   if (montoTexto === '') pendientes.push('el monto recibido');
+  else if (leido === null) errores.push('Escribe el monto en pesos, por ejemplo 1.500.000.');
   else if (!(monto > 0)) errores.push('El monto recibido debe ser mayor que $0.');
   else if (monto > cuenta.maximo) {
     errores.push(cuenta.saldoAFavor > 0
@@ -172,7 +196,7 @@ export function evaluarVerificacion(cuenta, form, hoy = hoyLocal()) {
 
 /** El `verificacion_anticipo` que espera POST /cotizaciones/{id}/confirmar (sin fecha, el servidor pone hoy). */
 export function verificacionParaEnviar(form) {
-  const v = { monto: redondearPeso(form?.monto), metodo_pago: texto(form?.metodo), referencia: texto(form?.referencia) };
+  const v = { monto: montoDesdeTexto(form?.monto) ?? 0, metodo_pago: texto(form?.metodo), referencia: texto(form?.referencia) };
   const fecha = texto(form?.fecha);
   if (fecha) v.fecha_pago = fecha;
   return v;
@@ -238,6 +262,12 @@ const ESTADOS_PXP = Object.freeze({ PENDIENTE: 'Pendiente', PAGADA: 'Pagada', CA
 
 export function etiquetaEstadoPxp(e) {
   return ESTADOS_PXP[e] || humanizarCodigo(e);
+}
+
+/** Chip de la PXP vigente: 'PXP: X · Pendiente · pendiente $Y'; lo pendiente solo mientras esta PENDIENTE. */
+export function textoChipPxp(pxp) {
+  const base = `PXP: ${pxp?.numero || ''} · ${etiquetaEstadoPxp(pxp?.estado)}`;
+  return pxp?.estado === 'PENDIENTE' ? `${base} · pendiente ${formatoPesos(pxp.monto_pendiente)}` : base;
 }
 
 /** La PXP vigente del pedido (la que no esta CANCELADA) y la cancelada mas reciente, de `pedido.pxps` (por id). */
