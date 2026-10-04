@@ -441,3 +441,64 @@ def test_la_ruta_fase4_anula_la_pxp_antes_del_commit_del_pedido(app_client, db, 
     assert visto == [(0, "CANCELADO")]
     assert commits >= 1
     assert [p.estado for p in _pxps(db, ven.id)] == ["CANCELADA"]
+
+
+# ─── B6 (revision final): cancelar la PXP desde su PATCH suelta el vinculo del pedido ──────────────────────────
+
+def _patch_pxp(app_client, token, pxp_id, **body):
+    return app_client.patch(f"/api/v1/ventas/pxp/{pxp_id}", json=body, headers=auth(token))
+
+
+def test_cancelar_la_pxp_por_patch_limpia_el_vinculo_del_pedido_en_el_mismo_commit(app_client, db, admin_token,
+                                                                                    contador_sql):
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session
+    ven = _pven(db, "PVEN-PXP031")
+    assert _crear(app_client, admin_token, ven.id).status_code == 200
+    pxp = _pxps(db, ven.id)[0]
+    db.refresh(ven)
+    assert (ven.pxp_id, ven.pxp_numero) == (pxp.id, pxp.numero)
+    escrito_al_confirmar = []  # por cada commit: (UPDATE de la PXP, UPDATE del pedido) ya enviados hasta ese momento
+
+    with contador_sql.ventana() as v:
+        def _foto(_session):
+            escrito_al_confirmar.append((any(s.startswith("UPDATE payment_pendings") for s in v.sentencias),
+                                         any(s.startswith("UPDATE sale_orders") for s in v.sentencias)))
+        event.listen(Session, "after_commit", _foto)
+        try:
+            resp = _patch_pxp(app_client, admin_token, pxp.id, estado="CANCELADA", updated_by="t")
+        finally:
+            event.remove(Session, "after_commit", _foto)
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    db.refresh(ven)
+    assert (ven.pxp_id, ven.pxp_numero) == (None, None)
+    assert [p.estado for p in _pxps(db, ven.id)] == ["CANCELADA"]
+    # El primer commit de la peticion ya lleva la PXP cancelada Y el pedido suelto (no uno aparte despues).
+    assert escrito_al_confirmar[0] == (True, True), escrito_al_confirmar
+    # Ya se puede crear otra orden de pago.
+    assert _crear(app_client, admin_token, ven.id).status_code == 200
+
+
+def test_cancelar_una_pxp_a_la_que_el_pedido_no_apunta_no_toca_el_pedido(app_client, db, admin_token):
+    ven = _pven(db, "PVEN-PXP032")
+    vieja = _pxp_directa(db, ven, "PENDIENTE", "PXP-T032A")
+    actual = _pxp_directa(db, ven, "PENDIENTE", "PXP-T032B")
+    ven.pxp_id, ven.pxp_numero = actual.id, actual.numero
+    db.commit()
+    resp = _patch_pxp(app_client, admin_token, vieja.id, estado="CANCELADA")
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    db.refresh(ven)
+    assert (ven.pxp_id, ven.pxp_numero) == (actual.id, actual.numero)
+
+
+def test_otro_cambio_de_la_pxp_no_suelta_el_pedido(app_client, db, admin_token):
+    ven = _pven(db, "PVEN-PXP033")
+    assert _crear(app_client, admin_token, ven.id).status_code == 200
+    pxp = _pxps(db, ven.id)[0]
+    resp = _patch_pxp(app_client, admin_token, pxp.id, notas="Llamar el viernes")
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    db.refresh(ven)
+    assert (ven.pxp_id, ven.pxp_numero) == (pxp.id, pxp.numero)

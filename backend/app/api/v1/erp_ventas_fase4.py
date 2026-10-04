@@ -819,6 +819,12 @@ def register_sale_order_payment(
         if orig_p.tipo in ("DEVOLUCION", "REVERSION", "ANULADO"):
             raise HTTPException(422, f"No se puede revertir una transacción de tipo '{orig_p.tipo}'. Solo pagos positivos confirmados.")
 
+        # B12 (revision final, R6): el dinero de un traslado ya salio del pedido cancelado (sus pagos quedaron
+        # TRASLADADO); revertirlo aqui lo dejaria en ninguna parte. Se devuelve cancelando el pedido nuevo.
+        if orig_p.metodo_pago == METODO_PAGO_TRASLADO:
+            raise HTTPException(422, "Un traslado de saldo no se revierte; cancela el pedido nuevo para devolver el "
+                                     "saldo a favor")
+
         if orig_p.estado != "CONFIRMADO":
             raise HTTPException(status_code=409, detail=f"La transacción original ya se encuentra en estado '{orig_p.estado}'")
 

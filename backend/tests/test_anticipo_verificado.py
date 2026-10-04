@@ -645,3 +645,43 @@ def test_compras_no_puede_crear_el_pedido_ni_verificar_el_pago(app_client, db, c
     assert _pedidos(db, cot.id) == []
     db.refresh(cot)
     assert cot.gate2_confirmed_at is not None
+
+
+# --- B12 (revision final): un traslado de saldo no se revierte -----------------------------------------------
+
+def _revertir(app_client, token, so_id, pago, clave):
+    return app_client.post(f"/api/v1/ventas/pedidos/{so_id}/pagos", json={
+        "tipo": "REVERSION", "monto": float(pago.monto), "reversed_payment_id": pago.id, "idempotency_key": clave},
+        headers=auth(token))
+
+
+def test_revertir_un_traslado_de_saldo_se_rechaza(app_client, db, admin_token):
+    """Revertirlo dejaria el dinero en ninguna parte: el origen ya esta TRASLADADO. Se cancela el pedido nuevo."""
+    sc = _sc(db, "SC-B12001", MOD_60_40)
+    cot = _cot_confirmada(db, "COT-B12001", 1000000, 600000, sc)
+    assert _confirmar(app_client, admin_token, cot.id, _ver(600000)).status_code == 200
+    [pven1] = _pedidos(db, cot.id)
+    _cancelar_y_reconfirmar(app_client, db, admin_token, pven1, cot)
+    assert _convertir(app_client, admin_token, cot.id).status_code == 200
+    _, pven2 = _pedidos(db, cot.id)
+    [traslado] = _pagos(db, pven2.id)
+    assert traslado.metodo_pago == "TRASLADO"
+
+    resp = _revertir(app_client, admin_token, pven2.id, traslado, "rev-b12-001")
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == ("Un traslado de saldo no se revierte; cancela el pedido nuevo para devolver el "
+                                     "saldo a favor")
+    assert [(p.metodo_pago, p.estado) for p in _pagos(db, pven2.id)] == [("TRASLADO", "CONFIRMADO")]
+    db.refresh(pven2)
+    assert pven2.saldo_cop == Decimal("400000")
+
+
+def test_un_pago_verificado_si_se_puede_revertir(app_client, db, admin_token):
+    sc = _sc(db, "SC-B12002", MOD_60_40)
+    cot = _cot_confirmada(db, "COT-B12002", 1000000, 600000, sc)
+    assert _confirmar(app_client, admin_token, cot.id, _ver(600000)).status_code == 200
+    [pven] = _pedidos(db, cot.id)
+    [pago] = _pagos(db, pven.id)
+    resp = _revertir(app_client, admin_token, pven.id, pago, "rev-b12-002")
+    assert resp.status_code == 201, resp.text
+    assert [(p.tipo, p.estado) for p in _pagos(db, pven.id)] == [("ANTICIPO", "REVERTIDO"), ("REVERSION", "CONFIRMADO")]

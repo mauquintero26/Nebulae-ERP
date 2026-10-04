@@ -2497,6 +2497,16 @@ def update_pxp(pxp_id: int, body: dict, user: User = Depends(require_roles(*ROLE
         if k in body:
             setattr(p, k, body[k])
     p.updated_at = datetime.datetime.utcnow()
+    if p.estado == "CANCELADA" and old_estado != "CANCELADA" and p.ven_id:
+        # B6 (revision final, R12): el pedido deja de apuntar a la PXP cancelada en el mismo commit (como al cancelar
+        # el pedido): la lista y el detalle no se contradicen y se puede crear otra orden de pago.
+        so = db.query(SaleOrder).filter(SaleOrder.id == p.ven_id).with_for_update().first()
+        if so is not None and (so.pxp_id == p.id or so.pxp_numero == p.numero):
+            if so.pxp_id == p.id:
+                so.pxp_id = None
+            if so.pxp_numero == p.numero:
+                so.pxp_numero = None
+            so.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(p)
     if body.get("estado") and body["estado"] != old_estado:
