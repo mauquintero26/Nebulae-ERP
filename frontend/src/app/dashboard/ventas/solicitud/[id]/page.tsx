@@ -25,7 +25,10 @@ import {
 // no uno mejor (el propio hueco de COT en el canal Email/Otro, donde el link tampoco
 // llega a ningun lado, es un problema ya conocido y diferido por separado, simetrico
 // entre ambos gates -- no se corrige aqui).
-import { ChannelModal } from '../../cotizacion/cotizacion-client';
+import { ChannelModal, ESTADOS as ESTADOS_COT } from '../../cotizacion/cotizacion-client';
+import { waUrl } from '@/lib/whatsapp';
+import { cotizacionesVigentes, cotizacionesRechazadas, pasosParaCancelarSolicitud } from '@/lib/listas-ventas';
+import { infoEstadoPedido, humanizarCodigo } from '@/lib/estados-pedido';
 import { CambiosDeActividad } from '../../flujo';
 import { ProductosSolicitud } from './productos-solicitud';
 import {
@@ -89,6 +92,9 @@ function SolicitudDetalleContent() {
   // Enlace de confirmacion recien generado: el token crudo solo viaja en la respuesta del
   // envio, asi que se muestra (copiar/abrir) apenas llega.
   const [confirmLink, setConfirmLink] = useState<string | null>(null);
+  // H27+H39: resultado del correo de respaldo y canal elegido, para el aviso verde/ambar del modal del enlace.
+  const [confirmCorreo, setConfirmCorreo] = useState<any>(null);
+  const [confirmCanal, setConfirmCanal] = useState<string | null>(null);
   // Asignar asesor desde la propia pagina (BORRADOR -> ASIGNADA), sin tener que entrar a Editar.
   const [me, setMe] = useState<UsuarioActual>({ id: null, email: '', name: '', role: '' });
   const [assigning, setAssigning] = useState(false);
@@ -108,6 +114,7 @@ function SolicitudDetalleContent() {
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelRazon, setCancelRazon] = useState('');
   const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState('');
   const [editandoProductos, setEditandoProductos] = useState(false);
 
   useEffect(() => {
@@ -117,26 +124,33 @@ function SolicitudDetalleContent() {
     apiFetch('/auth/users').then((d: any) => setUsuarios(Array.isArray(d) ? d : (d?.data ?? []))).catch(() => {});
   }, []);
 
-  const loadSolicitud = useCallback(async () => {
-    if (!params.id) { setLoading(false); return; }
-    setLoading(true);
-    setLoadError('');
+  // H29: con { silencioso: true } (tras guardar productos) no se muestra el spinner de pagina, no se reescribe editForm
+  // (lo que el usuario este editando) y, si falla, se deja lo que ya esta en pantalla: solo se repinta la solicitud.
+  const loadSolicitud = useCallback(async (opts?: { silencioso?: boolean }) => {
+    const silencioso = opts?.silencioso === true;
+    if (!params.id) { if (!silencioso) setLoading(false); return; }
+    if (!silencioso) {
+      setLoading(true);
+      setLoadError('');
+    }
     try {
       const raw = await apiFetch(`/ventas/solicitudes/${params.id}`);
       const d = raw?.data ?? raw;
       setSolicitud(d);
-      setEditForm({
-        advisor_name: d.advisor_name || '',
-        advisor_user_id: d.advisor_user_id || '',
-        tipo_solicitud: d.tipo_solicitud || 'Cotizacion de Producto',
-        modalidad_pago: d.modalidad_pago || 'Contado',
-        notas: d.notas || '',
-        fecha_vencimiento: d.fecha_vencimiento ? d.fecha_vencimiento.split('T')[0] : '',
-      });
+      if (!silencioso) {
+        setEditForm({
+          advisor_name: d.advisor_name || '',
+          advisor_user_id: d.advisor_user_id || '',
+          tipo_solicitud: d.tipo_solicitud || 'Cotizacion de Producto',
+          modalidad_pago: d.modalidad_pago || 'Contado',
+          notas: d.notas || '',
+          fecha_vencimiento: d.fecha_vencimiento ? d.fecha_vencimiento.split('T')[0] : '',
+        });
+      }
     } catch (err: any) {
-      setLoadError(err.message || 'No se pudo cargar la solicitud');
+      if (!silencioso) setLoadError(err.message || 'No se pudo cargar la solicitud');
     }
-    setLoading(false);
+    if (!silencioso) setLoading(false);
   }, [params.id]);
 
   useEffect(() => { loadSolicitud(); }, [loadSolicitud]);
@@ -191,7 +205,8 @@ function SolicitudDetalleContent() {
 
   async function changeEstado(newEstado: string) {
     if (!solicitud) return;
-    if (newEstado === 'CANCELADA' && !window.confirm('Cancelar esta solicitud?')) return;
+    // N4: aqui solo se vuelve a Borrador (ESTADOS_SC_MANUALES); cancelar va por "Cancelar Solicitud" (motivo + revision de
+    // documentos). El servidor responde 409 con el motivo si hay una cotizacion o un pedido activos: se muestra tal cual.
     setSaving(true);
     try {
       await apiFetch(`/ventas/solicitudes/${solicitud.id}`, { method: 'PATCH', body: JSON.stringify({ estado: newEstado, updated_by: currentUser }) });
@@ -290,18 +305,23 @@ function SolicitudDetalleContent() {
     if (!selectedChannel) return;
     setSendingConfirmacion(true);
     try {
-      const d = await apiFetch(`/ventas/solicitudes/${solicitud.id}/enviar-confirmacion`, { method: 'POST', body: JSON.stringify({ user_name: currentUser }) });
+      // H27+H39: el canal viaja en el POST (la Actividad lo anota y el servidor siempre intenta el correo de respaldo;
+      // responde {canal, correo: {enviado, destino, motivo, mensaje}, link_confirmacion}). 'Email' sin correo del cliente
+      // da 400 (ChannelModal lo deshabilita).
+      const d = await apiFetch(`/ventas/solicitudes/${solicitud.id}/enviar-confirmacion`, { method: 'POST', body: JSON.stringify({ user_name: currentUser, canal: selectedChannel }) });
       const link = d?.link_confirmacion || '';
 
-      if (selectedChannel === 'WhatsApp' && solicitud?.customer_phone) {
-        const phoneNumber = solicitud.customer_phone.replace(/\D/g, '');
+      if (selectedChannel === 'WhatsApp') {
         const mensaje = link
-          ? `Hola, aqui esta tu solicitud ${solicitud.numero}. Confírmala aquí: ${link}`
-          : `Hola, aqui esta tu solicitud ${solicitud.numero}`;
-        window.open(`https://wa.me/57${phoneNumber}?text=${encodeURIComponent(mensaje)}`, '_blank');
+          ? `Hola, aquí está tu solicitud ${solicitud.numero}. Confírmala aquí: ${link}`
+          : `Hola, aquí está tu solicitud ${solicitud.numero}`;
+        const url = waUrl(solicitud?.customer_phone, mensaje);
+        if (url) window.open(url, '_blank');
       }
 
       await loadSolicitud();
+      setConfirmCorreo(d?.correo ?? null);
+      setConfirmCanal(selectedChannel);
       setShowChannelModal(false);
       setSelectedChannel(null);
       if (link) setConfirmLink(link);
@@ -316,16 +336,26 @@ function SolicitudDetalleContent() {
     setSelectedChannel(null);
   }
 
+  function abrirCancelacion() {
+    setCancelError('');
+    setCancelRazon('');
+    setShowCancelModal(true);
+  }
+
+  // N4: POST /cancelar pide el motivo (minimo 5 caracteres) y el servidor responde 409 con lo que falta (cancelar el pedido
+  // o rechazar la cotizacion activos): se muestra tal cual dentro de la ventana, que sigue abierta.
   async function cancelWithReason() {
-    if (!solicitud || !cancelRazon.trim()) { alert('La razón es obligatoria'); return; }
+    const razon = cancelRazon.trim();
+    if (!solicitud || razon.length < 5) { setCancelError('El motivo es obligatorio (mínimo 5 caracteres).'); return; }
     setCancelling(true);
+    setCancelError('');
     try {
-      await apiFetch(`/ventas/solicitudes/${solicitud.id}/cancelar`, { method: 'POST', body: JSON.stringify({ razon: cancelRazon, user_name: currentUser }) });
+      await apiFetch(`/ventas/solicitudes/${solicitud.id}/cancelar`, { method: 'POST', body: JSON.stringify({ razon, user_name: currentUser }) });
       setShowCancelModal(false);
       setCancelRazon('');
       await loadSolicitud();
     } catch (err: any) {
-      alert('Error al cancelar: ' + err.message);
+      setCancelError(err?.message || 'No se pudo cancelar la solicitud.');
     }
     setCancelling(false);
   }
@@ -355,25 +385,34 @@ function SolicitudDetalleContent() {
   const isSoporte = solicitud?.tipo_solicitud === 'Soporte Tecnico';
   // 'CANCELADO' (masculino) es el estado real de un Pedido de Venta cancelado.
   const pedidosVigentes = (solicitud?.pedidos_venta || []).filter((v: any) => v.estado !== 'CANCELADO');
+  // N7: una cotizacion RECHAZADA no cuenta: la solicitud sigue activa y se le puede crear otra. VENCIDA si cuenta (N4).
+  const cotizacionesActivas = cotizacionesVigentes(solicitud);
+  // La rechazada mas reciente: la que nombra el aviso "fue rechazada" (el detalle no garantiza el orden de la lista).
+  const ultimaRechazada: any = [...cotizacionesRechazadas(solicitud)].sort((a: any, b: any) => (a.id || 0) - (b.id || 0)).pop() || null;
+  // N4: lo que hay que hacer antes de poder cancelar la solicitud (el servidor responde 409 con lo mismo).
+  const pasosCancelar = pasosParaCancelarSolicitud(solicitud);
+  // N4: a mano solo se vuelve a Borrador; ya estando en Borrador no queda nada que ofrecer.
+  const estadosManuales = Object.entries(ESTADOS_SC_MANUALES).filter(([k]) => k !== solicitud?.estado);
   const pipelineStep = pedidosVigentes.length > 0 ? 3
-    : cotizaciones.some((c: any) => c.estado === 'CONFIRMADA') ? 2
-    : cotizaciones.length > 0 ? 1 : 0;
+    : cotizacionesActivas.some((c: any) => c.estado === 'CONFIRMADA') ? 2
+    : cotizacionesActivas.length > 0 ? 1 : 0;
   // Sin productos no hay nada que el cliente confirme ni que cotizar: el backend no deja
   // enviarla ni crear la cotizacion. Se editan aqui mientras la SC no tenga cotizacion.
   const productosSC = solicitud?.productos || [];
   const tieneProductos = productosSC.some((p: any) => String(p?.product_name || p?.nombre || p?.name || '').trim());
-  const puedeEditarProductos = !!solicitud && !isSoporte && solicitud.estado !== 'CANCELADA' && cotizaciones.length === 0;
+  const puedeEditarProductos = !!solicitud && !isSoporte && solicitud.estado !== 'CANCELADA' && cotizacionesActivas.length === 0;
 
   // Gate 1 (confirmacion por link): "Confirmar + Crear Cotizacion" (confirmarSC) ahora
   // solo es valido cuando el cliente ya confirmo via el link publico (estado ===
-  // CONFIRMADA) Y la SC todavia no tiene ninguna Cotizacion vinculada -- el backend
-  // (confirmar_solicitud en erp_ventas.py) exige exactamente ambas cosas: una venta
+  // CONFIRMADA) Y la SC no tiene ninguna Cotizacion activa ni Pedido de Venta vigente -- el backend
+  // (confirmar_solicitud en erp_ventas.py) exige exactamente eso: una venta
   // cerrada normal puede volver a dejar la SC en CONFIRMADA via la sincronizacion con
   // su Cotizacion, pero eso nunca debe reabrir la creacion de una Cotizacion duplicada.
-  // Reutilizado por el boton "Cotizar" del bloque Cotizaciones (panel izquierdo) y por
-  // el tab Acciones; en cualquier otro caso no se ofrece esa accion (ASIGNADA tiene su
-  // propia accion -- "Enviar para Confirmacion", ver abajo).
-  const canConfirmarSC = solicitud?.estado === 'CONFIRMADA' && cotizaciones.length === 0 && tieneProductos;
+  // N7: una Cotizacion RECHAZADA no cuenta (la SC sigue activa): con la confirmacion del cliente aun vigente se
+  // ofrece "Crear nueva cotizacion" con los productos ya confirmados. Reutilizado por el boton "Cotizar" del bloque
+  // Cotizaciones (panel izquierdo) y por el tab Acciones; en cualquier otro caso no se ofrece esa accion (ASIGNADA
+  // tiene su propia accion -- "Enviar para Confirmacion", ver abajo).
+  const canConfirmarSC = solicitud?.estado === 'CONFIRMADA' && cotizacionesActivas.length === 0 && pedidosVigentes.length === 0 && tieneProductos;
 
   const asesoresElegibles = usuarios.filter(u => esAsesorElegible(u.role));
   const yoPuedoSerAsesor = me.id !== null && asesoresElegibles.some(u => u.id === me.id);
@@ -421,12 +460,12 @@ function SolicitudDetalleContent() {
         </NextStepCard>
       );
     }
-    if (cotizaciones.length > 0) {
+    if (cotizacionesActivas.length > 0) {
       return (
         <NextStepCard
           tone="indigo"
           title="Continúa en la cotización"
-          actions={cotizaciones.map((c: any) => (
+          actions={cotizacionesActivas.map((c: any) => (
             <Link key={c.id} href={`/dashboard/ventas/cotizacion/${c.id}?return_to=${encodeURIComponent(currentPath)}`} className={`${LINK_ACCION} bg-indigo-600 hover:bg-indigo-700`}>
               Ver {c.numero} <ArrowRight size={14} />
             </Link>
@@ -450,6 +489,18 @@ function SolicitudDetalleContent() {
       );
     }
     if (canConfirmarSC) {
+      // N7: la cotizacion anterior fue rechazada pero la confirmacion del cliente sigue vigente: no hay que reenviar nada.
+      if (ultimaRechazada) {
+        return (
+          <NextStepCard
+            tone="emerald"
+            title={`La cotización ${ultimaRechazada.numero} fue rechazada`}
+            actions={<Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Crear nueva cotización</Button>}
+          >
+            La solicitud sigue activa: crea una nueva cotización con los productos que el cliente confirmó.
+          </NextStepCard>
+        );
+      }
       return (
         <NextStepCard
           tone="emerald"
@@ -480,6 +531,7 @@ function SolicitudDetalleContent() {
           actions={<Button color="indigo" size="lg" icon={Send} loading={sendingConfirmacion} onClick={handleEnviarParaConfirmacion}>Enviar para Confirmación</Button>}
         >
           El cliente confirma desde un enlace de un solo uso. Cuando lo haga, podrás crear la cotización.
+          {ultimaRechazada && ' La cotización anterior fue rechazada; para hacer otra, reenvía la solicitud al cliente para que la confirme.'}
         </NextStepCard>
       );
     }
@@ -565,7 +617,7 @@ function SolicitudDetalleContent() {
             </>
           )}
           {solicitud && solicitud.estado !== 'CANCELADA' && !isSoporte && (
-            <Button variant="danger" size="sm" icon={Trash2} onClick={() => setShowCancelModal(true)}>Cancelar Solicitud</Button>
+            <Button variant="danger" size="sm" icon={Trash2} onClick={abrirCancelacion}>Cancelar Solicitud</Button>
           )}
         </div>
       </div>
@@ -661,26 +713,43 @@ function SolicitudDetalleContent() {
                   scId={solicitud.id}
                   productos={productosSC}
                   editable={puedeEditarProductos}
-                  motivoBloqueo={cotizaciones.length > 0
-                    ? `Los productos ya pasaron a la cotización ${cotizaciones[0].numero}: ajústalos allí con "Re-Cotizar".`
+                  motivoBloqueo={cotizacionesActivas.length > 0
+                    ? `Los productos ya pasaron a la cotización ${cotizacionesActivas[0].numero}: ajústalos allí con "Re-Cotizar".`
                     : solicitud.estado === 'CANCELADA' ? 'La solicitud está cancelada.' : undefined}
                   anulaConfirmacion={['PENDIENTE_CONFIRMACION', 'CONFIRMADA'].includes(solicitud.estado)}
                   editando={editandoProductos}
                   setEditando={setEditandoProductos}
                   currentUser={currentUser}
-                  onGuardado={loadSolicitud}
+                  // H29: el PATCH ya devuelve la SC completa: se pinta de inmediato (sin esperar una recarga) y las
+                  // actividades, cotizaciones y pedidos se refrescan despues, sin spinner de pagina.
+                  onGuardado={(scNueva) => {
+                    if (scNueva) setSolicitud((prev: any) => ({ ...prev, ...scNueva }));
+                    void loadSolicitud({ silencioso: true });
+                  }}
                 />
               )}
               {solicitud?.notas && <div className="bg-amber-50 border border-amber-100 rounded-xl p-4"><p className="text-xs font-black text-amber-700 uppercase mb-1.5">Notas</p><p className="text-sm text-amber-900">{solicitud.notas}</p></div>}
               <div>
                 <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Cotizaciones</p>
                 {cotizaciones.length > 0 ? (
-                  cotizaciones.map((c: any) => (
-                    <Link key={c.id} href={`/dashboard/ventas/cotizacion/${c.id}?return_to=${encodeURIComponent(currentPath)}`} className="flex items-center justify-between p-3 bg-amber-50 border border-amber-200 rounded-xl mb-2 hover:bg-amber-100">
-                      <div><span className="font-bold text-amber-800">{c.numero}</span><p className="text-xs text-amber-600 mt-0.5">{c.estado}</p></div>
-                      <ChevronRight size={15} className="text-amber-500" />
-                    </Link>
-                  ))
+                  <>
+                    {cotizaciones.map((c: any) => {
+                      const rechazada = c.estado === 'RECHAZADA';
+                      return (
+                        <Link key={c.id} href={`/dashboard/ventas/cotizacion/${c.id}?return_to=${encodeURIComponent(currentPath)}`} className={`flex items-center justify-between p-3 border rounded-xl mb-2 ${rechazada ? 'bg-rose-50 border-rose-200 hover:bg-rose-100' : 'bg-amber-50 border-amber-200 hover:bg-amber-100'}`}>
+                          <div>
+                            <span className={`font-bold ${rechazada ? 'text-rose-800' : 'text-amber-800'}`}>{c.numero}</span>
+                            <p className={`text-xs mt-0.5 ${rechazada ? 'text-rose-600' : 'text-amber-600'}`}>{ESTADOS_COT[c.estado]?.label || humanizarCodigo(c.estado)}</p>
+                          </div>
+                          <ChevronRight size={15} className={rechazada ? 'text-rose-500' : 'text-amber-500'} />
+                        </Link>
+                      );
+                    })}
+                    {/* N7: con la cotizacion rechazada la solicitud sigue activa: si la confirmacion del cliente sigue vigente, se crea otra. */}
+                    {canConfirmarSC && (
+                      <Button color="emerald" size="sm" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Crear nueva cotización</Button>
+                    )}
+                  </>
                 ) : (
                   <div className="bg-slate-50 border border-dashed border-slate-300 rounded-xl p-4 text-center">
                     <p className="text-xs text-slate-400 italic mb-3">Aún no se ha realizado ninguna cotización.</p>
@@ -695,7 +764,7 @@ function SolicitudDetalleContent() {
                   <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Pedidos de Venta</p>
                   {pedidosVigentes.map((v: any) => (
                     <Link key={v.id} href={`/dashboard/ventas/venta/${v.id}?return_to=${encodeURIComponent(currentPath)}`} className="flex items-center justify-between p-3 bg-emerald-50 border border-emerald-200 rounded-xl mb-2 hover:bg-emerald-100">
-                      <div><span className="font-bold text-emerald-800">{v.numero}</span><p className="text-xs text-emerald-600 mt-0.5">{v.estado}{v.cot_numero ? ` · desde ${v.cot_numero}` : ''}</p></div>
+                      <div><span className="font-bold text-emerald-800">{v.numero}</span><p className="text-xs text-emerald-600 mt-0.5">{infoEstadoPedido(v.estado).label}{v.cot_numero ? ` · desde ${v.cot_numero}` : ''}</p></div>
                       <ChevronRight size={15} className="text-emerald-500" />
                     </Link>
                   ))}
@@ -718,11 +787,14 @@ function SolicitudDetalleContent() {
                   <option value="CERRADO">Cerrado</option>
                 </select>
               </>
-            ) : (
+            ) : solicitud?.estado === 'CANCELADA' ? (
+              // N4: una SC cancelada solo vuelve por "Restaurar" en la Papelera (el PATCH a Borrador responde 409).
+              <p className="text-xs text-slate-500">Esta solicitud está cancelada: para volver a trabajar en ella, restáurala desde la Papelera del listado de solicitudes.</p>
+            ) : estadosManuales.length > 0 && (
               <>
                 <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Cambiar Estado</p>
                 <div className="flex gap-2 flex-wrap">
-                  {Object.entries(ESTADOS_SC_MANUALES).filter(([k]) => k !== solicitud?.estado).map(([k, v]) => (
+                  {estadosManuales.map(([k, v]) => (
                     <button key={k} onClick={() => changeEstado(k)} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs font-bold border hover:opacity-80 disabled:opacity-40" style={{ backgroundColor: v.bg, color: v.color, borderColor: v.border }}>{v.label}</button>
                   ))}
                 </div>
@@ -834,27 +906,56 @@ function SolicitudDetalleContent() {
         </div>
       </div>
 
-      {/* MODAL: RAZÓN DE CANCELACIÓN */}
-      {showCancelModal && (
-        <Modal title="Cancelar Solicitud" subtitle="Esta acción pasará la SC a la papelera por 30 días antes de eliminarse." icon={Trash2} color="red" maxWidth="md"
+      {/* MODAL: CANCELAR LA SOLICITUD (N4) */}
+      {showCancelModal && pasosCancelar.length > 0 && (
+        // Con una cotizacion o un pedido activos no se puede cancelar: se dice que hacer primero, con enlaces a cada
+        // documento (el servidor responde 409 con lo mismo), en vez de pedir un motivo que no se podria usar.
+        <Modal title="Cancelar Solicitud" subtitle="Antes de cancelarla hay que dejar sin efecto sus documentos activos." icon={Trash2} color="red" maxWidth="md"
+          onClose={() => setShowCancelModal(false)}
+          footer={<Button variant="secondary" onClick={() => setShowCancelModal(false)}>Entendido</Button>}>
+          <div className="space-y-3">
+            <p className="text-sm text-slate-700">
+              No se puede cancelar la solicitud {solicitud?.numero}: tiene documentos activos. Primero:
+            </p>
+            <ol className="space-y-2">
+              {pasosCancelar.map((p, i) => (
+                <li key={`${p.tipo}-${p.id}`} className="flex items-center justify-between gap-3 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                  <span className="text-sm font-bold text-amber-900">{i + 1}. {p.texto}</span>
+                  <Link
+                    href={`/dashboard/ventas/${p.tipo === 'pedido' ? 'venta' : 'cotizacion'}/${p.id}?return_to=${encodeURIComponent(currentPath)}`}
+                    className="text-xs font-bold text-indigo-600 hover:underline whitespace-nowrap"
+                  >
+                    Abrir {p.numero}
+                  </Link>
+                </li>
+              ))}
+            </ol>
+            <p className="text-xs text-slate-500">Después podrás cancelar la solicitud.</p>
+          </div>
+        </Modal>
+      )}
+      {showCancelModal && pasosCancelar.length === 0 && (
+        <Modal title="Cancelar Solicitud" subtitle="La solicitud pasa a la Papelera. Podrás restaurarla desde allí." icon={Trash2} color="red" maxWidth="md"
           onClose={() => setShowCancelModal(false)}
           footer={(
             <>
-              <Button variant="secondary" onClick={() => setShowCancelModal(false)}>No, mantener</Button>
-              <Button variant="danger" icon={Trash2} loading={cancelling} disabled={!cancelRazon.trim()} onClick={cancelWithReason}>Cancelar SC</Button>
+              <Button variant="secondary" disabled={cancelling} onClick={() => setShowCancelModal(false)}>No, mantener</Button>
+              <Button variant="danger" icon={Trash2} loading={cancelling} disabled={cancelRazon.trim().length < 5} onClick={cancelWithReason}>Cancelar SC</Button>
             </>
           )}>
           <div>
-            <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Razón de Cancelación *</label>
+            <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Motivo de la cancelación *</label>
             <textarea
               value={cancelRazon}
               onChange={e => setCancelRazon(e.target.value)}
               rows={3}
+              maxLength={500}
               placeholder="Describe el motivo de la cancelación..."
               className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-red-200 outline-none"
               autoFocus
             />
-            {!cancelRazon.trim() && <p className="text-xs text-red-500 mt-1">La razón es obligatoria para continuar.</p>}
+            {cancelRazon.trim().length < 5 && <p className="text-xs text-red-500 mt-1">El motivo es obligatorio (mínimo 5 caracteres).</p>}
+            {cancelError && <p className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 mt-3">{cancelError}</p>}
           </div>
         </Modal>
       )}
@@ -867,13 +968,15 @@ function SolicitudDetalleContent() {
           onConfirm={enviarParaConfirmacion}
           onCancel={cancelarEnvioConfirmacion}
           saving={sendingConfirmacion}
-          customerHasPhone={!!solicitud?.customer_phone}
+          customerHasPhone={!!waUrl(solicitud?.customer_phone)}
+          customerEmail={solicitud?.customer_email ?? null}
           documentLabel="solicitud"
         />
       )}
 
       {confirmLink && (
-        <EnlaceConfirmacionModal documento={`la solicitud ${solicitud?.numero || ''}`} link={confirmLink} color="indigo" onClose={() => setConfirmLink(null)} />
+        <EnlaceConfirmacionModal documento={`la solicitud ${solicitud?.numero || ''}`} link={confirmLink} color="indigo"
+          correo={confirmCorreo} canal={confirmCanal} onClose={() => setConfirmLink(null)} />
       )}
     </div>
   );

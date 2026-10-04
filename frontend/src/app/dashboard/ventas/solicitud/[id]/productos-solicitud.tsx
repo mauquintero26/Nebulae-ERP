@@ -23,7 +23,8 @@ export function ProductosSolicitud({
   editando: boolean;
   setEditando: (v: boolean) => void;
   currentUser: string;
-  onGuardado: () => void | Promise<void>;
+  // H29: recibe la SC que devuelve el PATCH (`data`) para pintarla de inmediato; la pagina refresca el resto despues.
+  onGuardado: (sc?: any) => void;
 }) {
   const [borrador, setBorrador] = useState<Linea[]>([]);
   const [nombre, setNombre] = useState('');
@@ -56,12 +57,13 @@ export function ProductosSolicitud({
     try {
       // Lo que quedo escrito sin pulsar "Agregar" tambien se guarda (igual que al crear la SC).
       const lineas = nombre.trim() ? [...borrador, lineaEscrita()] : borrador;
-      await apiFetch(`/ventas/solicitudes/${scId}`, {
+      const r = await apiFetch(`/ventas/solicitudes/${scId}`, {
         method: 'PATCH',
         body: JSON.stringify({ productos: lineas, updated_by: currentUser }),
       });
+      // H29: el editor se cierra al terminar el PATCH (sin esperar la recarga de la pagina).
       setEditando(false);
-      await onGuardado();
+      onGuardado(r?.data);
     } catch (e: any) {
       setError(e?.message || 'No se pudieron guardar los productos.');
     }
