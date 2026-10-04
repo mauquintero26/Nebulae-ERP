@@ -4,8 +4,9 @@ Lo importan erp_ventas.py y erp_ventas_fase4.py sin import circular (fase4 no im
 de COT / PVEN / PXP se guarda y se muestra al peso: exacto, nunca a la centena ni al mil. El frontend tiene el
 espejo de redondeo y formato en frontend/src/lib/pesos.js (redondearPeso / formatoPesos).
 
-Sin FastAPI ni DB, salvo anticipo_cotizacion (y pct_anticipo_cotizacion) y saldos_a_favor_de_cotizacion, que
-leen con la sesion que reciben (los modelos se importan dentro de esas funciones para que el resto siga puro).
+Sin FastAPI ni DB, salvo anticipo_cotizacion (y pct_anticipo_cotizacion), saldos_a_favor_de_cotizacion y
+anular_pxps_de_pedido (H45), que usan la sesion que reciben (los modelos se importan dentro de esas funciones para
+que el resto siga puro).
 """
 import unicodedata
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
@@ -230,3 +231,49 @@ def saldos_a_favor_de_cotizacion(db, cot_id, bloquear=False) -> list:
         if monto > 0:
             saldos.append({"pedido": so, "pagos": propios, "monto": monto})
     return saldos
+
+
+# ─── Orden de pago (PXP) de un pedido cancelado (H45, R12) ────────────────────────────────────────────────────────
+
+def anular_pxps_de_pedido(db, so, autor, motivo=None) -> list:
+    """Cancela las ordenes de pago PENDIENTE del pedido `so` que se esta cancelando y devuelve las que cancelo.
+
+    Solo cambia la sesion (db.add y atributos), SIN commit: el llamador (PATCH /ventas/pedidos/{id} o POST
+    /ventas/pedidos/{id}/cancelar) la deja en el mismo commit que la cancelacion del pedido. Las PXP que no estan
+    PENDIENTE ni CANCELADA (una PAGADA) no se tocan: queda en la Actividad del pedido el aviso 'PXP_REVISAR' para
+    revisar la devolucion o el saldo a favor del cliente. R12: si so.pxp_id / so.pxp_numero apuntaban a una PXP
+    que se cancelo, quedan en None (la lista y el detalle no se contradicen)."""
+    import datetime
+    from app.models.erp_documents import ActivityLog, PaymentPending
+    ahora = datetime.datetime.utcnow()
+    canceladas = []
+    pxps = (db.query(PaymentPending).filter(PaymentPending.ven_id == so.id)
+            .order_by(PaymentPending.id.asc()).with_for_update().all())
+    for p in pxps:
+        if p.estado == "CANCELADA":
+            continue
+        if p.estado != "PENDIENTE":
+            db.add(ActivityLog(
+                entity_type="VEN", entity_id=so.id, entity_numero=so.numero, action="PXP_REVISAR",
+                description=f"La orden de pago {p.numero} está {p.estado}: revisar devolución o saldo a favor del "
+                            f"cliente",
+                user_name=autor))
+            continue
+        p.estado = "CANCELADA"
+        p.updated_at = ahora
+        nota = f"Cancelada por la cancelación del pedido {so.numero}" + (f": {motivo}" if motivo else "")
+        p.notas = f"{p.notas}\n{nota}" if p.notas else nota
+        db.add(ActivityLog(
+            entity_type="PXP", entity_id=p.id, entity_numero=p.numero, action="ESTADO_CHANGED",
+            description=f"Orden de pago cancelada por la cancelación del pedido {so.numero}",
+            old_estado="PENDIENTE", new_estado="CANCELADA", user_name=autor))
+        db.add(ActivityLog(
+            entity_type="VEN", entity_id=so.id, entity_numero=so.numero, action="PXP_CANCELADA",
+            description=f"Orden de pago {p.numero} cancelada (pendiente: {pesos(p.monto_pendiente)})",
+            user_name=autor))
+        canceladas.append(p)
+    if so.pxp_id in {p.id for p in canceladas}:
+        so.pxp_id = None
+    if so.pxp_numero in {p.numero for p in canceladas}:
+        so.pxp_numero = None
+    return canceladas

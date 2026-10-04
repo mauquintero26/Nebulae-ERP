@@ -28,6 +28,7 @@ from app.core import cambios_documento
 from app.core.ventas_dinero import (
     redondear_peso, pesos, formato_pct, anticipo_cotizacion, pct_anticipo_cotizacion, anticipo_requerido,
     anticipo_del_pedido, saldos_a_favor_de_cotizacion, PCT_ANTICIPO_POR_DEFECTO, ORIGEN_CONSERVADO,
+    anular_pxps_de_pedido,
 )
 from app.core.textos_actividad import etiqueta_estado, ETIQUETAS_ESTADO
 from app.core.estados_pedido import ESTADOS_VEN_DESTINOS, destinos_ven_permitidos
@@ -1939,7 +1940,7 @@ def get_pedido(ven_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     ).order_by(ActivityLog.created_at.asc()).all()
     d = _ven_dict(v)
     d["actividades"] = [_log_dict(l) for l in logs]
-    pxps = db.query(PaymentPending).filter(PaymentPending.ven_id == ven_id).all()
+    pxps = db.query(PaymentPending).filter(PaymentPending.ven_id == ven_id).order_by(PaymentPending.id.asc()).all()
     d["pxps"] = [_pxp_dict(p) for p in pxps]
     d["lista_compras_items"] = _lista_compras_items_de(db, ven_id)
     # N1 / R4 / R6: el libro de pagos del pedido (verificados, trasladados...) y cuanto anticipo falta, con la
@@ -2103,6 +2104,10 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
             InventoryOperation.source_document_id == v.id).first() is not None
         if not ya_despachado:
             _descontar_inventario_despacho(db, v, body.get("warehouse_id"), getattr(user, "email", None))
+    if cancela:
+        # H45 (R12): la orden de pago pendiente se cancela en el mismo commit que el pedido y el pedido deja de
+        # apuntar a ella. Va ANTES del commit; la cotizacion se reabre despues (tiene su propio commit/rollback).
+        anular_pxps_de_pedido(db, v, autor, body.get("cancellation_reason"))
     v.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(v)
@@ -2128,44 +2133,57 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
 
 
 @router.post("/pedidos/{ven_id}/crear-pxp")
-def crear_pxp(ven_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS)),
+def crear_pxp(ven_id: int, body: dict = Body(default_factory=dict),
+        user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_FINANZAS, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
-    v = db.query(SaleOrder).filter(SaleOrder.id == ven_id).first()
+    """H44+N6: la orden de pago sale de los montos del propio pedido (el body no manda: solo se lee `notas`).
+
+    pendiente = saldo del pedido; ya pagado = total - saldo; todo en pesos enteros. No se crea en un pedido
+    cancelado, sin saldo pendiente o con otra PXP que no este cancelada. El pedido se bloquea (FOR UPDATE): dos
+    clics simultaneos no crean dos PXP. La PXP, el vinculo del pedido y la Actividad van en un solo commit."""
+    v = db.query(SaleOrder).filter(SaleOrder.id == ven_id).with_for_update().first()
     if not v:
         raise HTTPException(404, "Pedido de venta no encontrado")
+    if v.estado == "CANCELADO":
+        raise HTTPException(409, "No se puede crear una orden de pago para un pedido cancelado.")
+    activa = (db.query(PaymentPending)
+              .filter(PaymentPending.ven_id == v.id, PaymentPending.estado != "CANCELADA")
+              .order_by(PaymentPending.id.asc()).first())
+    if activa:
+        raise HTTPException(409, f"El pedido ya tiene la orden de pago {activa.numero}.")
 
-    pxp_numero = _gen_numero(db, "PXP-", "seq_pxp")
-    total = float(v.total_cop or 0)
-    anticipo = float(body.get("monto_anticipo", v.anticipo_cop or 0))
-    pendiente = total - anticipo
+    total = redondear_peso(v.total_cop)
+    pendiente = redondear_peso(v.saldo_cop)
+    if pendiente <= 0:
+        raise HTTPException(409, "El pedido no tiene saldo pendiente; no hace falta una orden de pago.")
+    pagado = total - pendiente
+    autor = getattr(user, "email", None)
 
     pxp = PaymentPending(
-        numero=pxp_numero,
+        numero=_gen_numero(db, "PXP-", "seq_pxp"),
         ven_id=v.id,
         ven_numero=v.numero,
         customer_id=v.customer_id,
         customer_name=v.customer_name,
         monto_total=total,
-        monto_anticipo=anticipo,
+        monto_anticipo=pagado,
         monto_pendiente=pendiente,
         estado="PENDIENTE",
         notas=body.get("notas"),
     )
     db.add(pxp)
-    # Update VEN with pxp link
-    v.pxp_id = None  # set after commit
-    v.updated_at = datetime.datetime.utcnow()
-    db.commit()
-    db.refresh(pxp)
+    db.flush()
     v.pxp_id = pxp.id
     v.pxp_numero = pxp.numero
-    db.commit()
+    v.updated_at = datetime.datetime.utcnow()
     _log(db, "VEN", v.id, v.numero, "PXP_CREATED",
-         f"Orden de pago {pxp.numero} creada. Pendiente: ${pendiente:,.0f} COP",
-         user_name=body.get("user_name"))
+         f"Orden de pago {pxp.numero} creada. Pendiente: {pesos(pendiente)}",
+         user_name=autor, commit=False)
     _log(db, "PXP", pxp.id, pxp.numero, "CREATED",
-         f"PXP creada para {v.numero}",
-         new_estado="PENDIENTE", user_name=body.get("user_name"))
+         f"Orden de pago creada para el pedido {v.numero}",
+         new_estado="PENDIENTE", user_name=autor, commit=False)
+    db.commit()
+    db.refresh(pxp)
     return {"status": "success", "data": _pxp_dict(pxp)}
 
 

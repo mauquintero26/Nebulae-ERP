@@ -41,7 +41,7 @@ from app.models.users import User
 from app.core.ventas_dinero import (
     redondear_peso, pesos, formato_pct, anticipo_cotizacion, pct_snapshot_del_pedido, anticipo_del_pedido,
     saldos_a_favor_de_cotizacion, metodo_pago_anticipo, METODOS_PAGO_ANTICIPO, METODO_PAGO_TRASLADO,
-    METODO_PAGO_SALDO_A_FAVOR, ESTADO_PAGO_TRASLADADO,
+    METODO_PAGO_SALDO_A_FAVOR, ESTADO_PAGO_TRASLADADO, anular_pxps_de_pedido,
 )
 from app.api.dependencies import (
     require_roles, get_current_user,
@@ -1304,6 +1304,9 @@ def cancel_sale_order(
         user_name=user_name,
         extra_data={"saldo_a_favor_cliente": str(saldo_a_favor), "decision": body.purchased_goods_decision}
     )
+
+    # H45 (R12): igual que la cancelacion por PATCH, la orden de pago pendiente se cancela en el mismo commit.
+    anular_pxps_de_pedido(db, so, user_name, motivo)
 
     db.commit()
 
