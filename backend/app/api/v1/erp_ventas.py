@@ -1051,7 +1051,8 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
 
     sc.estado = "PENDIENTE_CONFIRMACION"
     sc.updated_at = datetime.datetime.utcnow()
-    # Se leen antes del commit para no abrir otra transaccion mientras el correo (SMTP sincrono) sale.
+    # Se leen antes del commit: despues el objeto queda expirado y leerlo abriria otra transaccion mientras el correo
+    # (SMTP sincrono) sale.
     numero, destino = sc.numero, sc.customer_email
     db.commit()
 
@@ -1890,7 +1891,7 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     if canal:
         cot.canal_envio = canal  # H27: en el mismo commit que el estado (ya no hay un PATCH previo del frontend)
     cot.updated_at = datetime.datetime.utcnow()
-    numero, destino = cot.numero, cot.customer_email  # antes del commit: el correo (SMTP sincrono) no debe abrir otra transaccion
+    numero, destino = cot.numero, cot.customer_email  # valores simples: se usan despues del commit sin recargar el objeto
     db.commit()
     db.refresh(cot)
     try:
@@ -1904,6 +1905,9 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
         db.rollback()
         logger.error(f"Error al sincronizar Solicitud/Lead tras enviar cotizacion {cot.id} para confirmacion: {exc}", exc_info=True)
     # H39: el correo de respaldo se intenta (y su resultado se conoce) antes de anotar el envio en la Actividad.
+    # El refresh y la sincronizacion de arriba pueden dejar abierta una transaccion de solo lectura: se cierra con un
+    # commit (inofensivo si no hay nada pendiente) para no retener la conexion de la base durante el SMTP sincrono.
+    db.commit()
     correo_res = _enviar_correo_confirmacion(
         destino, f"Confirma tu cotización {numero} - Nebulae",
         f'<p>Revisa y confirma tu cotización aquí: <a href="{link}">{link}</a></p>')

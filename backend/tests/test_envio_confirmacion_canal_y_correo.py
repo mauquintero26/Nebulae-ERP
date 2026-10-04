@@ -58,6 +58,14 @@ def _enviar_cot(app_client, token, cot, body):
     return app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/enviar-confirmacion", json=body, headers=auth(token))
 
 
+def _tokens_del_documento(db, tipo, doc_id):
+    from app.models.confirmation import DocumentConfirmationToken
+    db.expire_all()
+    return (db.query(DocumentConfirmationToken)
+            .filter(DocumentConfirmationToken.document_type == tipo, DocumentConfirmationToken.document_id == doc_id)
+            .order_by(DocumentConfirmationToken.id).all())
+
+
 def _actividades(db, tipo, doc_id, accion="ESTADO_CHANGED"):
     from app.models.erp_documents import ActivityLog
     db.expire_all()
@@ -179,6 +187,66 @@ def test_enviar_sc_con_canal_invalido_es_422(app_client, db, admin_token, user_a
     assert sc.estado == "ASIGNADA"
     assert db.query(DocumentConfirmationToken).filter(
         DocumentConfirmationToken.document_type == "SC", DocumentConfirmationToken.document_id == sc.id).count() == 0
+    assert llamadas == []
+
+
+def test_enviar_sc_con_canal_rechazado_no_revoca_el_enlace_que_ya_tiene_el_cliente(
+        app_client, db, admin_token, user_admin, monkeypatch):
+    """La validacion del canal va ANTES de revocar tokens: en un reenvio (SC en PENDIENTE_CONFIRMACION con un enlace
+    vivo) un canal malo no puede dejar al cliente con el enlace anterior revocado y sin uno nuevo."""
+    from app.core.confirmation_tokens import create_confirmation_token
+    llamadas = _correo_falso(monkeypatch)
+    sc_sin_correo = _sc(db, "SC-ENV010A", user_admin, estado="PENDIENTE_CONFIRMACION", customer_email=None)
+    sc_con_correo = _sc(db, "SC-ENV010B", user_admin, estado="PENDIENTE_CONFIRMACION", customer_email=CORREO)
+    casos = [(sc_sin_correo, "Email", 400), (sc_con_correo, "Fax", 422), (sc_con_correo, 123, 422)]
+    for sc in (sc_sin_correo, sc_con_correo):
+        create_confirmation_token(db, "SC", sc.id)
+
+    for sc, canal, esperado in casos:
+        resp = _enviar_sc(app_client, admin_token, sc, {"user_name": "asesor@test", "canal": canal})
+        assert resp.status_code == esperado, (canal, resp.text)
+        tokens = _tokens_del_documento(db, "SC", sc.id)
+        assert len(tokens) == 1 and tokens[0].used_at is None, canal  # el enlace sigue vivo y no se emitio otro
+        db.refresh(sc)
+        assert sc.estado == "PENDIENTE_CONFIRMACION"
+        assert _actividades(db, "SC", sc.id) == []
+    assert llamadas == []
+
+
+def test_enviar_cot_con_canal_rechazado_no_revoca_el_enlace_que_ya_tiene_el_cliente(
+        app_client, db, admin_token, user_admin, monkeypatch):
+    """Igual en la COT. Una COT en PENDIENTE_CONFIRMACION no se reenvia (400), asi que el token vivo se siembra en una
+    BORRADOR (revoke_pending_tokens revoca cualquier token sin usar del documento)."""
+    from app.core.confirmation_tokens import create_confirmation_token
+    llamadas = _correo_falso(monkeypatch)
+    cot_sin_correo = _cot(db, "COT-ENV010A", customer_email=None)
+    cot_con_correo = _cot(db, "COT-ENV010B", customer_email=CORREO)
+    casos = [(cot_sin_correo, "Email", 400), (cot_con_correo, "Fax", 422), (cot_con_correo, 123, 422)]
+    for cot in (cot_sin_correo, cot_con_correo):
+        create_confirmation_token(db, "COT", cot.id)
+
+    for cot, canal, esperado in casos:
+        resp = _enviar_cot(app_client, admin_token, cot, {"user_name": "asesor@test", "canal": canal})
+        assert resp.status_code == esperado, (canal, resp.text)
+        tokens = _tokens_del_documento(db, "COT", cot.id)
+        assert len(tokens) == 1 and tokens[0].used_at is None, canal
+        db.refresh(cot)
+        assert cot.estado == "BORRADOR" and cot.canal_envio is None
+        assert _actividades(db, "COT", cot.id) == []
+    assert llamadas == []
+
+
+def test_canal_que_no_es_texto_es_422(app_client, db, admin_token, user_admin, monkeypatch):
+    llamadas = _correo_falso(monkeypatch)
+    sc = _sc(db, "SC-ENV011", user_admin, customer_email=CORREO)
+    cot = _cot(db, "COT-ENV011", customer_email=CORREO)
+    for canal in (123, ["WhatsApp"], {"canal": "Otro"}, True):
+        resp = _enviar_sc(app_client, admin_token, sc, {"canal": canal})
+        assert resp.status_code == 422, (canal, resp.text)
+        assert resp.json()["detail"] == "Canal de envío no válido: usa WhatsApp, Email u Otro."
+        resp = _enviar_cot(app_client, admin_token, cot, {"canal": canal})
+        assert resp.status_code == 422, (canal, resp.text)
+    assert _tokens_del_documento(db, "SC", sc.id) == [] and _tokens_del_documento(db, "COT", cot.id) == []
     assert llamadas == []
 
 
