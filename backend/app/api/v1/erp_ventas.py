@@ -501,6 +501,10 @@ def _cot_dict(cot: SalesQuotation) -> dict:
         "anticipo_pct_manual": float(cot.anticipo_pct_manual) if cot.anticipo_pct_manual is not None else None,
         "anticipo_manual_nota": cot.anticipo_manual_nota,
         "estado": cot.estado,
+        # Confirmacion del cliente sin usar (gate2_confirmed_at): la pone el enlace en cada confirmacion y la consume
+        # la conversion a pedido. CONFIRMADA + True = se puede crear el pedido ya (tambien tras cancelar el anterior);
+        # CONFIRMADA + False con solo pedidos cancelados = dato antiguo que hay que reabrir.
+        "confirmacion_vigente": cot.gate2_confirmed_at is not None,
         "canal_envio": cot.canal_envio,
         "fecha_cotizacion": cot.fecha_cotizacion.isoformat() if cot.fecha_cotizacion else None,
         "fecha_entrega_estimada": cot.fecha_entrega_estimada.isoformat() if cot.fecha_entrega_estimada else None,
