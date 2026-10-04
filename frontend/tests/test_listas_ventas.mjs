@@ -5,12 +5,16 @@
  *  - COT-LISTA: una cotizacion confirmada cuyo pedido se cancelo vuelve a contar como activa.
  *  - H47: el resumen de pedidos no suma el dinero de los cancelados ni de los devueltos (igual que el servidor).
  *  - N10: el filtro de estado ofrece nombres claros y tambien los estados que traen los datos.
+ *  - H32 / N4 / N7 (Solicitudes): contadores reales (cotizaciones de verdad), dias de alerta con fechas UTC,
+ *    resumen de la cancelacion masiva, Papelera y pasos para poder cancelar una solicitud.
  */
 
 import assert from 'node:assert/strict';
 import {
   diasAlerta, pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, pestanaCotizacion, situacionPedidoCotizacion,
   ESTADOS_PEDIDO_SIN_DINERO, pedidoSumaDinero, resumenPedidos, kpisPedidos, hintTotalPedidos, opcionesFiltroEstado,
+  generoCotizacion, cotizacionesVigentes, cotizacionesRechazadas, esperaCotizacion, contadoresSolicitudes,
+  tasaConversionCotizacion, superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera, pasosParaCancelarSolicitud,
 } from '../src/lib/listas-ventas.js';
 
 console.log('--- N8 TEST 1: diasAlerta lee las tres formas de la configuracion ---');
@@ -196,6 +200,153 @@ console.log('--- H46 / N1 TEST 9: situacionPedidoCotizacion (crear pedido, reabr
   assert.equal(borrador.paso, null);
   assert.equal(borrador.avisoCancelado, true);
   assert.deepEqual(situacionPedidoCotizacion(null), { paso: null, vigente: null, cancelado: null, avisoCancelado: false });
+}
+
+console.log('--- H32 TEST 1: generoCotizacion y cotizacionesVigentes (una rechazada si se genero; Vencida sigue activa) ---');
+{
+  assert.equal(generoCotizacion({ cotizaciones: [{ estado: 'RECHAZADA' }] }), true);
+  assert.equal(generoCotizacion({ cotizaciones: [] }), false);
+  assert.equal(generoCotizacion({}), false);
+  assert.equal(generoCotizacion(null), false);
+  assert.equal(generoCotizacion({ cotizaciones: null }), false);
+
+  const sc = { cotizaciones: [{ estado: 'RECHAZADA', numero: 'COT-0' }, { estado: 'BORRADOR', numero: 'COT-1' }, { estado: 'VENCIDA', numero: 'COT-2' }, null] };
+  assert.deepEqual(cotizacionesVigentes(sc).map((c) => c.numero), ['COT-1', 'COT-2'], 'VENCIDA cuenta como activa (decision N4)');
+  assert.deepEqual(cotizacionesRechazadas(sc).map((c) => c.numero), ['COT-0']);
+  for (const nulo of [{}, null, undefined, { cotizaciones: null }]) {
+    assert.deepEqual(cotizacionesVigentes(nulo), []);
+    assert.deepEqual(cotizacionesRechazadas(nulo), []);
+  }
+}
+
+console.log('--- H32 TEST 2: esperaCotizacion (confirmada y sin cotizacion en juego) ---');
+{
+  assert.equal(esperaCotizacion({ estado: 'CONFIRMADA', cotizaciones: [] }), true);
+  assert.equal(esperaCotizacion({ estado: 'CONFIRMADA' }), true);
+  assert.equal(esperaCotizacion({ estado: 'CONFIRMADA', cotizaciones: [{ estado: 'RECHAZADA' }] }), true, 'solo tiene rechazadas: espera una nueva');
+  assert.equal(esperaCotizacion({ estado: 'CONFIRMADA', cotizaciones: [{ estado: 'BORRADOR' }] }), false);
+  assert.equal(esperaCotizacion({ estado: 'ASIGNADA', cotizaciones: [] }), false);
+  assert.equal(esperaCotizacion(null), false);
+}
+
+console.log('--- H32 TEST 3: contadoresSolicitudes (tarjetas Confirmadas y Total) ---');
+{
+  const lista = [
+    { estado: 'CONFIRMADA', cotizaciones: [] },                                  // espera cotizacion
+    { estado: 'COTIZADA', cotizaciones: [{ estado: 'BORRADOR' }] },               // genero
+    { estado: 'ASIGNADA', cotizaciones: [{ estado: 'RECHAZADA' }] },              // genero (rechazada)
+    { estado: 'CANCELADA' },
+  ];
+  const c = contadoresSolicitudes(lista, 4);
+  assert.equal(c.total, 4);
+  assert.equal(c.totalConf, 1);
+  assert.equal(c.conCot, 2);
+  assert.equal(c.esperanCot, 1);
+  assert.equal(c.hintConfirmadas, '1 esperan cotización');
+  assert.equal(c.hintTotal, '2 generaron cotización');
+
+  // El servidor tiene mas solicitudes que las cargadas (tope de 200): se dice cuantas se ven.
+  assert.equal(contadoresSolicitudes(lista, 350).hintTotal, '2 generaron cotización · se ven las 4 más recientes de 350');
+  assert.equal(contadoresSolicitudes(lista, null).hintTotal, '2 generaron cotización');
+
+  assert.equal(contadoresSolicitudes([{ estado: 'ASIGNADA' }], 1).hintConfirmadas, 'Sin confirmadas');
+  assert.equal(contadoresSolicitudes([{ estado: 'CONFIRMADA', cotizaciones: [{ estado: 'CONFIRMADA' }] }], 1).hintConfirmadas, 'Todas con cotización');
+  const vacio = contadoresSolicitudes(null, null);
+  assert.equal(vacio.total, 0);
+  assert.equal(vacio.hintConfirmadas, 'Sin confirmadas');
+}
+
+console.log('--- H32 TEST 4: tasa de conversion solo con solicitudes de cotizacion de producto (decision del usuario) ---');
+{
+  const lista = [
+    { tipo_solicitud: 'Cotizacion de Producto', cotizaciones: [{ estado: 'BORRADOR' }] },
+    { tipo_solicitud: 'Cotizacion de Producto', cotizaciones: [{ estado: 'RECHAZADA' }] },
+    { cotizaciones: [] },                                                           // sin tipo: cotizacion de producto
+    { tipo_solicitud: 'Cotizacion de Producto', cotizaciones: [] },
+    { tipo_solicitud: 'Soporte Tecnico' },                                          // nunca se cotiza: no cuenta
+    { tipo_solicitud: 'Devolucion de Producto' },
+  ];
+  const t = tasaConversionCotizacion(lista);
+  assert.equal(t.total, 4);
+  assert.equal(t.conCot, 2);
+  assert.equal(t.pct, 50);
+  assert.deepEqual(tasaConversionCotizacion([{ tipo_solicitud: 'Soporte Tecnico' }]), { total: 0, conCot: 0, pct: 0 });
+  assert.deepEqual(tasaConversionCotizacion(null), { total: 0, conCot: 0, pct: 0 });
+}
+
+console.log('--- N8 TEST 5: superaDiasAlerta lee las fechas del API como UTC ---');
+{
+  const ahora = Date.parse('2026-10-04T12:00:00Z');
+  // Sin zona (fecha_solicitud): se lee como UTC, no como hora local del navegador.
+  assert.equal(superaDiasAlerta('2026-10-01T11:00:00', 3, ahora), true, '3 dias y 1 hora > 3');
+  assert.equal(superaDiasAlerta('2026-10-01T13:00:00', 3, ahora), false, '2 dias y 23 horas no pasan de 3');
+  // Con 'Z' (updated_at): igual.
+  assert.equal(superaDiasAlerta('2026-10-01T11:00:00Z', 3, ahora), true);
+  assert.equal(superaDiasAlerta('2026-10-01T13:00:00Z', 3, ahora), false);
+  assert.equal(superaDiasAlerta('2026-10-03T12:00:00Z', 5, ahora), false);
+  for (const malo of [null, undefined, '', 'no es fecha']) assert.equal(superaDiasAlerta(malo, 2, ahora), false);
+}
+
+console.log('--- N4 TEST 6: resumenCancelacionSolicitudes (toast y detalle de la cancelacion de varias solicitudes) ---');
+{
+  const todas = resumenCancelacionSolicitudes([{ numero: 'SC-1', ok: true }, { numero: 'SC-2', ok: true }]);
+  assert.equal(todas.mensaje, '2 solicitudes canceladas');
+  assert.equal(todas.tipo, 'ok');
+  assert.deepEqual(todas.fallidas, []);
+  assert.equal(resumenCancelacionSolicitudes([{ numero: 'SC-1', ok: true }]).mensaje, '1 solicitud cancelada');
+
+  const msg409 = 'No se puede cancelar la solicitud SC-2: tiene documentos activos (cotización COT-9). Primero rechaza la cotización; después podrás cancelar la solicitud.';
+  const parcial = resumenCancelacionSolicitudes([{ numero: 'SC-1', ok: true }, { numero: 'SC-2', ok: false, error: msg409 }]);
+  assert.equal(parcial.tipo, 'err');
+  assert.equal(parcial.mensaje, '1 solicitud cancelada. No se pudo cancelar: SC-2');
+  assert.equal(parcial.fallidas.length, 1);
+  assert.equal(parcial.fallidas[0].numero, 'SC-2');
+  assert.equal(parcial.fallidas[0].texto, msg409, 'el detalle del servidor ya nombra la solicitud: no se repite');
+
+  const ninguna = resumenCancelacionSolicitudes([{ numero: 'SC-1', ok: false, error: 'La solicitud está bloqueada' }, { numero: 'SC-3', ok: false, error: '' }]);
+  assert.equal(ninguna.mensaje, 'No se pudieron cancelar: SC-1, SC-3');
+  assert.equal(ninguna.fallidas[0].texto, 'SC-1: La solicitud está bloqueada');
+  assert.ok(ninguna.fallidas[1].texto.startsWith('SC-3: '), 'ningun error queda en blanco');
+  assert.ok(ninguna.fallidas[1].texto.length > 'SC-3: '.length);
+
+  assert.equal(resumenCancelacionSolicitudes([]).mensaje, 'No se canceló ninguna solicitud');
+  assert.equal(resumenCancelacionSolicitudes(null).tipo, 'err');
+}
+
+console.log('--- N4 TEST 7: estadoEnPapelera (se conserva si tiene documentos; nunca "null dias") ---');
+{
+  const conservada = estadoEnPapelera({ dias_restantes: null, tiene_documentos: true });
+  assert.equal(conservada.conservada, true);
+  assert.equal(conservada.texto, 'Se conserva (tiene documentos vinculados)');
+  assert.equal(conservada.urgente, false, 'null <= 5 es true en JS: no se pinta como urgente');
+  assert.equal(conservada.puedeEliminar, false);
+
+  const normal = estadoEnPapelera({ dias_restantes: 20, tiene_documentos: false });
+  assert.equal(normal.conservada, false);
+  assert.equal(normal.texto, '20 días');
+  assert.equal(normal.nota, 'para eliminar');
+  assert.equal(normal.urgente, false);
+  assert.equal(normal.puedeEliminar, true);
+
+  assert.equal(estadoEnPapelera({ dias_restantes: 5, tiene_documentos: false }).urgente, true);
+  assert.equal(estadoEnPapelera({ dias_restantes: 1, tiene_documentos: false }).texto, '1 día');
+  assert.equal(estadoEnPapelera({ dias_restantes: 0, tiene_documentos: false }).texto, '0 días');
+  assert.equal(estadoEnPapelera({}).conservada, true, 'sin dias_restantes se conserva (no se promete una eliminacion)');
+  assert.equal(estadoEnPapelera({ dias_restantes: 10, tiene_documentos: true }).puedeEliminar, false);
+}
+
+console.log('--- N4 TEST 8: pasosParaCancelarSolicitud (primero el pedido, luego la cotizacion; Vencida cuenta) ---');
+{
+  const sc = {
+    cotizaciones: [{ id: 1, numero: 'COT-1', estado: 'RECHAZADA' }, { id: 2, numero: 'COT-2', estado: 'VENCIDA' }],
+    pedidos_venta: [{ id: 7, numero: 'PVEN-7', estado: 'CANCELADO' }, { id: 8, numero: 'PVEN-8', estado: 'PENDIENTE_COMPRA' }],
+  };
+  const pasos = pasosParaCancelarSolicitud(sc);
+  assert.deepEqual(pasos.map((p) => [p.tipo, p.id, p.numero]), [['pedido', 8, 'PVEN-8'], ['cotizacion', 2, 'COT-2']]);
+  assert.equal(pasos[0].texto, 'Cancela el pedido de venta PVEN-8');
+  assert.equal(pasos[1].texto, 'Rechaza la cotización COT-2');
+  assert.deepEqual(pasosParaCancelarSolicitud({ cotizaciones: [{ numero: 'COT-1', estado: 'RECHAZADA' }], pedidos_venta: [{ numero: 'PVEN-1', estado: 'CANCELADO' }] }), []);
+  for (const nulo of [{}, null, undefined, { cotizaciones: null, pedidos_venta: null }]) assert.deepEqual(pasosParaCancelarSolicitud(nulo), []);
 }
 
 console.log('OK test_listas_ventas.mjs');

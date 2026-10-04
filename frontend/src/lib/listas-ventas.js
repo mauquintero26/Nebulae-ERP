@@ -7,8 +7,11 @@
  *    ligero de la lista o completo del detalle). H46: ultimoPedidoCancelado.
  *  - H47: resumenPedidos / kpisPedidos de la lista de pedidos (el dinero no suma cancelados ni devueltos).
  *  - N10: opcionesFiltroEstado del filtro de estado de la lista de pedidos.
+ *  - H32 / N4 / N7 (Solicitudes): generoCotizacion / cotizacionesVigentes / contadoresSolicitudes / tasaConversionCotizacion
+ *    de la lista, superaDiasAlerta (N8), resumenCancelacionSolicitudes, estadoEnPapelera y pasosParaCancelarSolicitud.
  */
-import { ESTADOS_PEDIDO_CERRADOS, grupoPedido } from './estados-pedido.js';
+import { ESTADOS_PEDIDO_CERRADOS, grupoPedido, esCotizacionActiva, esPedidoVigente } from './estados-pedido.js';
+import { comoUTC } from './hub-ventas.js';
 import { redondearPeso } from './pesos.js';
 
 /**
@@ -170,4 +173,129 @@ export function opcionesFiltroEstado(pedidos) {
     if (e && !opciones.includes(e)) opciones.push(e);
   }
   return opciones;
+}
+
+// ─── H32 / N4 / N7: lista y detalle de Solicitudes ───────────────────────────────────────────────────
+
+/** Tipo de las solicitudes que se cotizan (las de soporte o devolucion nunca generan cotizacion). */
+const TIPO_SC_COTIZABLE = 'Cotizacion de Producto';
+
+const cotizacionesDe = (sc) => (Array.isArray(sc?.cotizaciones) ? sc.cotizaciones.filter(esObjeto) : []);
+
+/**
+ * H32: la solicitud generó cotización = tiene al menos una con su sc_id, en cualquier estado (una rechazada también se
+ * generó). La lista trae `cotizaciones: [{id, numero, estado}]` (versión ligera) y el detalle la completa.
+ */
+export function generoCotizacion(sc) {
+  return cotizacionesDe(sc).length > 0;
+}
+
+/** Las cotizaciones de la solicitud que están en juego: todas menos las RECHAZADA (VENCIDA cuenta, decisión N4). */
+export function cotizacionesVigentes(sc) {
+  return cotizacionesDe(sc).filter((c) => esCotizacionActiva(c.estado));
+}
+
+/** Las cotizaciones RECHAZADA de la solicitud (N7: la solicitud sigue activa y se puede crear otra). */
+export function cotizacionesRechazadas(sc) {
+  return cotizacionesDe(sc).filter((c) => !esCotizacionActiva(c.estado));
+}
+
+/** H32: espera cotización = está CONFIRMADA (el cliente ya confirmó) y no tiene ninguna cotización en juego. */
+export function esperaCotizacion(sc) {
+  return sc?.estado === 'CONFIRMADA' && cotizacionesVigentes(sc).length === 0;
+}
+
+/**
+ * H32: cifras de las tarjetas de la lista de Solicitudes. `totalServidor` es el total que informa el servidor (la lista
+ * trae como mucho 200): si es mayor que lo cargado, la tarjeta Total dice cuántas se ven.
+ * @param {any[] | null | undefined} solicitudes
+ * @param {number | null} [totalServidor]
+ * @returns {{total: number, totalConf: number, conCot: number, esperanCot: number, hintConfirmadas: string, hintTotal: string}}
+ */
+export function contadoresSolicitudes(solicitudes, totalServidor = null) {
+  const lista = (Array.isArray(solicitudes) ? solicitudes : []).filter(esObjeto);
+  const totalConf = lista.filter((s) => s.estado === 'CONFIRMADA').length;
+  const conCot = lista.filter(generoCotizacion).length;
+  const esperanCot = lista.filter(esperaCotizacion).length;
+  const hintConfirmadas = totalConf === 0 ? 'Sin confirmadas' : esperanCot > 0 ? `${esperanCot} esperan cotización` : 'Todas con cotización';
+  const hayMas = Number.isFinite(totalServidor) && totalServidor > lista.length;
+  const hintTotal = `${conCot} generaron cotización` + (hayMas ? ` · se ven las ${lista.length} más recientes de ${totalServidor}` : '');
+  return { total: lista.length, totalConf, conCot, esperanCot, hintConfirmadas, hintTotal };
+}
+
+/**
+ * H32 (decisión del usuario): la tasa de conversión se calcula solo con las solicitudes de tipo 'Cotizacion de Producto'
+ * (sin tipo cuenta como tal): las de soporte, devolución o seguimiento nunca se cotizan y bajarían la tasa sin motivo.
+ * @returns {{total: number, conCot: number, pct: number}} pct de 0 a 100 (sin redondear)
+ */
+export function tasaConversionCotizacion(solicitudes) {
+  const lista = (Array.isArray(solicitudes) ? solicitudes : []).filter(esObjeto)
+    .filter((s) => (s.tipo_solicitud || TIPO_SC_COTIZABLE) === TIPO_SC_COTIZABLE);
+  const conCot = lista.filter(generoCotizacion).length;
+  return { total: lista.length, conCot, pct: lista.length > 0 ? (conCot / lista.length) * 100 : 0 };
+}
+
+/**
+ * N8: la fecha del API (UTC, con o sin 'Z') quedó hace más de `dias` días. Una fecha vacía o inválida no supera nada.
+ * @param {string | null | undefined} iso
+ * @param {number} dias
+ * @param {number} [ahora]
+ */
+export function superaDiasAlerta(iso, dias, ahora = Date.now()) {
+  if (!iso) return false;
+  const t = new Date(comoUTC(iso)).getTime();
+  return !Number.isNaN(t) && (ahora - t) / 86400000 > dias;
+}
+
+/**
+ * N4: resultado de cancelar varias solicitudes con POST /cancelar, una por una. `resultados`: [{numero, ok, error}].
+ * Devuelve {exitosas, fallidas: [{numero, error, texto}], mensaje, tipo}: `mensaje` va al toast ('2 solicitudes
+ * canceladas'; con fallos 'No se pudieron cancelar: SC-1, SC-2') y `fallidas[].texto` es el detalle del servidor para
+ * mostrarlo completo (el 409 ya nombra la solicitud, sus documentos activos y qué hacer; ningún error queda en blanco).
+ * @returns {{exitosas: number, fallidas: {numero: string, error: string, texto: string}[], mensaje: string, tipo: 'ok' | 'err'}}
+ */
+export function resumenCancelacionSolicitudes(resultados) {
+  const lista = (Array.isArray(resultados) ? resultados : []).filter(esObjeto);
+  const exitosas = lista.filter((r) => r.ok).length;
+  const fallidas = lista.filter((r) => !r.ok).map((r) => {
+    const numero = String(r.numero || '').trim();
+    const error = String(r.error || '').trim() || 'el servidor no dio detalle del error';
+    return { numero, error, texto: numero && !error.includes(numero) ? `${numero}: ${error}` : error };
+  });
+  const canceladas = exitosas === 1 ? '1 solicitud cancelada' : `${exitosas} solicitudes canceladas`;
+  const numeros = fallidas.map((f) => f.numero).filter(Boolean).join(', ');
+  const noSePudo = fallidas.length === 1 ? 'No se pudo cancelar' : 'No se pudieron cancelar';
+  const fallo = `${noSePudo}${numeros ? `: ${numeros}` : ' la solicitud'}`;
+  let mensaje;
+  if (fallidas.length === 0) mensaje = exitosas > 0 ? canceladas : 'No se canceló ninguna solicitud';
+  else mensaje = exitosas > 0 ? `${canceladas}. ${fallo}` : fallo;
+  return { exitosas, fallidas, mensaje, tipo: fallidas.length === 0 && exitosas > 0 ? 'ok' : 'err' };
+}
+
+/**
+ * N4: cómo se ve una solicitud en la Papelera. El servidor manda `dias_restantes` (null si la solicitud se conserva
+ * porque tiene cotizaciones, pedidos o un lead vinculados) y `tiene_documentos`. Sin documentos hay cuenta regresiva
+ * ('20 días para eliminar', urgente desde 5); con documentos se conserva y no se puede eliminar definitivamente.
+ * @returns {{conservada: boolean, texto: string, nota: string, urgente: boolean, puedeEliminar: boolean}}
+ */
+export function estadoEnPapelera(sc) {
+  const dias = sc?.dias_restantes;
+  const puedeEliminar = !sc?.tiene_documentos;
+  if (dias === null || dias === undefined) {
+    return { conservada: true, texto: 'Se conserva (tiene documentos vinculados)', nota: '', urgente: false, puedeEliminar };
+  }
+  return { conservada: false, texto: `${dias} ${dias === 1 ? 'día' : 'días'}`, nota: 'para eliminar', urgente: dias <= 5, puedeEliminar };
+}
+
+/**
+ * N4: lo que hay que hacer antes de poder cancelar la solicitud (el servidor responde 409 con lo mismo): primero cancelar
+ * sus pedidos de venta vigentes y luego rechazar sus cotizaciones activas (VENCIDA cuenta). Vacío si ya se puede cancelar.
+ * @returns {{tipo: 'pedido' | 'cotizacion', id: number, numero: string, texto: string}[]}
+ */
+export function pasosParaCancelarSolicitud(sc) {
+  const pedidos = (Array.isArray(sc?.pedidos_venta) ? sc.pedidos_venta : []).filter((v) => esObjeto(v) && esPedidoVigente(v.estado));
+  return [
+    ...pedidos.map((v) => ({ tipo: 'pedido', id: v.id, numero: v.numero, texto: `Cancela el pedido de venta ${v.numero}` })),
+    ...cotizacionesVigentes(sc).map((c) => ({ tipo: 'cotizacion', id: c.id, numero: c.numero, texto: `Rechaza la cotización ${c.numero}` })),
+  ];
 }
