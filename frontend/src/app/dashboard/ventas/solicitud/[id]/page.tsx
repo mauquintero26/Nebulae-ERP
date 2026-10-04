@@ -27,6 +27,7 @@ import {
 // entre ambos gates -- no se corrige aqui).
 import { ChannelModal, ESTADOS as ESTADOS_COT } from '../../cotizacion/cotizacion-client';
 import { waUrl } from '@/lib/whatsapp';
+import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import { cotizacionesVigentes, cotizacionesRechazadas, pasosParaCancelarSolicitud } from '@/lib/listas-ventas';
 import { infoEstadoPedido, humanizarCodigo } from '@/lib/estados-pedido';
 import { CambiosDeActividad } from '../../flujo';
@@ -673,11 +674,11 @@ function SolicitudDetalleContent() {
           {editMode ? (
             <div className="space-y-3">
               <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Editar</p>
-              {[{ l: 'Tipo de Solicitud', k: 'tipo_solicitud', opts: TIPOS_SC }, { l: 'Modalidad de Pago', k: 'modalidad_pago', opts: MODALIDADES_PAGO }].map(f => (
+              {[{ l: 'Tipo de Solicitud', k: 'tipo_solicitud', opts: TIPOS_SC, etq: etiquetaTipoSolicitud }, { l: 'Modalidad de Pago', k: 'modalidad_pago', opts: MODALIDADES_PAGO, etq: etiquetaModalidad }].map(f => (
                 <div key={f.k}>
                   <label className="text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider block">{f.l}</label>
                   <select value={editForm[f.k]} onChange={e => setEditForm((ef: any) => ({ ...ef, [f.k]: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">
-                    {f.opts.map(o => <option key={o} value={o}>{o}</option>)}
+                    {f.opts.map(o => <option key={o} value={o}>{f.etq(o)}</option>)}
                   </select>
                 </div>
               ))}
@@ -704,7 +705,7 @@ function SolicitudDetalleContent() {
           ) : (
             <>
               <div className="grid grid-cols-2 gap-3">
-                {[{ l: 'Asesor', v: solicitud?.advisor_name || '-' }, { l: 'Modalidad Pago', v: solicitud?.modalidad_pago || '-' }, { l: 'Fecha Solicitud', v: fDate(solicitud?.fecha_solicitud) }, { l: 'Vencimiento', v: fDate(solicitud?.fecha_vencimiento) }].map(item => (
+                {[{ l: 'Asesor', v: solicitud?.advisor_name || '-' }, { l: 'Modalidad Pago', v: etiquetaModalidad(solicitud?.modalidad_pago) || '-' }, { l: 'Fecha Solicitud', v: fDate(solicitud?.fecha_solicitud) }, { l: 'Vencimiento', v: fDate(solicitud?.fecha_vencimiento) }].map(item => (
                   <div key={item.l} className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3"><p className="text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider">{item.l}</p><p className="font-bold text-sm text-slate-800">{item.v}</p></div>
                 ))}
               </div>
@@ -838,7 +839,7 @@ function SolicitudDetalleContent() {
                 <div>
                   <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Contactar Cliente</p>
                   <div className="grid grid-cols-3 gap-2">
-                    {solicitud?.customer_phone && <a href={`https://wa.me/57${solicitud.customer_phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer" className="flex flex-col items-center gap-1.5 py-3 bg-green-50 border border-green-200 text-green-700 rounded-xl font-bold text-xs hover:bg-green-100"><MessageCircle size={18} />WhatsApp</a>}
+                    {waUrl(solicitud?.customer_phone) && <a href={waUrl(solicitud?.customer_phone) ?? undefined} target="_blank" rel="noreferrer" className="flex flex-col items-center gap-1.5 py-3 bg-green-50 border border-green-200 text-green-700 rounded-xl font-bold text-xs hover:bg-green-100"><MessageCircle size={18} />WhatsApp</a>}
                     {solicitud?.customer_phone && <a href={`tel:${solicitud.customer_phone}`} className="flex flex-col items-center gap-1.5 py-3 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl font-bold text-xs hover:bg-blue-100"><Phone size={18} />Llamar</a>}
                     {solicitud?.customer_email && <a href={`mailto:${solicitud.customer_email}?subject=Solicitud ${solicitud.numero}`} className="flex flex-col items-center gap-1.5 py-3 bg-slate-50 border border-slate-200 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-100"><Mail size={18} />Email</a>}
                   </div>

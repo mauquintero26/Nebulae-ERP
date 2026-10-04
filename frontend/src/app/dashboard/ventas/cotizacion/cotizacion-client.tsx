@@ -16,16 +16,18 @@ import { computeMarginPrice, MARGIN_PCT_CAP } from '@/lib/pricing';
 import { formatoPesos } from '@/lib/pesos';
 import {
   METODOS_PAGO_ANTICIPO, formatoPct, porcentajeDePesos, hoyLocal, origenAnticipo, cuentaVerificacion,
-  evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo, resumenAnticipoCotizacion,
+  evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo, resumenAnticipoCotizacion, montoDesdeTexto,
 } from '@/lib/dinero-ventas';
-import { diasAlerta, pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, pestanaCotizacion } from '@/lib/listas-ventas';
+import {
+  diasAlerta, pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, pestanaCotizacion, situacionPedidoCotizacion,
+} from '@/lib/listas-ventas';
 import { SubNav, PageHeader, StatCard, Modal, Button, EmptyState } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
 
 export const ESTADOS: Record<string, { label: string; color: string; bg: string; border: string }> = {
   BORRADOR:              { label: 'Borrador',              color: '#64748b', bg: '#f1f5f9', border: '#e2e8f0' },
   ENVIADA:               { label: 'Enviada al cliente',    color: '#92400e', bg: '#fef3c7', border: '#fde68a' },
-  PENDIENTE_CONFIRMACION:{ label: 'Esp. confirmacion',     color: '#1d4ed8', bg: '#eff6ff', border: '#bfdbfe' },
+  PENDIENTE_CONFIRMACION:{ label: 'Esp. confirmación',     color: '#1d4ed8', bg: '#eff6ff', border: '#bfdbfe' },
   CONFIRMADA:            { label: 'Confirmada',            color: '#065f46', bg: '#f0fdf4', border: '#a7f3d0' },
   RECHAZADA:             { label: 'Rechazada',             color: '#991b1b', bg: '#fef2f2', border: '#fecaca' },
   VENCIDA:               { label: 'Vencida',               color: '#7c3aed', bg: '#f5f3ff', border: '#ddd6fe' },
@@ -554,7 +556,8 @@ export function VerificarAnticipoModal({ cot, verificador, saving, error, onConf
               monto quita la casilla del pago parcial (R4: se confirma la deuda de ESE monto). */}
           <input type="text" inputMode="decimal" value={form.monto} placeholder="Ej: 1.500.000"
             onChange={e => { const monto = e.target.value; setForm(f => ({ ...f, monto, confirmoParcial: false })); }} className={campo} />
-          {form.monto.trim() !== '' && (
+          {/* Solo se muestra si lo escrito se entiende como monto: con texto que no lo es, el error ya lo dice. */}
+          {form.monto.trim() !== '' && montoDesdeTexto(form.monto) !== null && (
             <p className="text-[11px] text-slate-500 mt-1">= {fCOP(ev.monto)} (máximo {fCOP(cuenta.maximo)})</p>
           )}
         </div>
@@ -862,7 +865,8 @@ export default function CotizacionClient() {
                         )}
                         {pedidoVigente(cot) ? (
                           <p className="text-[10px] font-bold text-emerald-600 mt-0.5">Pedido {pedidoVigente(cot)?.numero}</p>
-                        ) : soloPedidosCancelados(cot) && (
+                        ) : soloPedidosCancelados(cot) && situacionPedidoCotizacion(cot).avisoCancelado && (
+                          // Una COT que el cliente volvio a confirmar ya no lleva la marca (igual que en su detalle).
                           <p className="text-[10px] font-bold text-rose-500 mt-0.5">Pedido {ultimoPedidoCancelado(cot)?.numero} cancelado</p>
                         )}
                       </td>

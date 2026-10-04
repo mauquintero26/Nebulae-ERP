@@ -14,6 +14,7 @@ import { Button, Modal } from '@/components/ui';
 import { NewSupplierModal } from '../venta-client';
 import { CambiosDeActividad, getUsuarioActual, puedeCrearOrdenDePago } from '../../flujo';
 import { formatoPesos } from '@/lib/pesos';
+import { etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import {
   PASOS_PEDIDO as STEPS, ESTADOS_PEDIDO_MANUALES, ESTADOS_PEDIDO_CERRADOS, infoEstadoPedido, pasoPedido, transicionesPedido,
 } from '@/lib/estados-pedido';
@@ -799,7 +800,7 @@ function PedidoVentaDetalleContent() {
               </div>
 
               <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-white">
-                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-6">Linea Temporal</h4>
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-6">Línea Temporal</h4>
                 <div className="space-y-6 relative before:absolute before:inset-0 before:ml-4 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-200 before:to-transparent">
                   {[...actividades].reverse().map((a: any, i: number) => (
                     <div key={i} className="relative flex items-start gap-4 group animate-in fade-in slide-in-from-bottom-2">
@@ -820,7 +821,7 @@ function PedidoVentaDetalleContent() {
                     </div>
                   ))}
                 </div>
-                {actividades.length === 0 && <p className="text-xs text-slate-400 italic text-center py-8">Sin actividad registrada todavia.</p>}
+                {actividades.length === 0 && <p className="text-xs text-slate-400 italic text-center py-8">Sin actividad registrada todavía.</p>}
               </div>
             </>
           )}
@@ -879,7 +880,7 @@ function PedidoVentaDetalleContent() {
               <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Modalidad de Pago</label>
               <select value={pecForm.modalidad_pago} onChange={e => setPecForm(f => ({ ...f, modalidad_pago: e.target.value }))}
                 className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200">
-                {['Contado', 'Credito 30d', 'Credito 60d', 'Adelanto 50%', 'Contra entrega'].map(p => <option key={p}>{p}</option>)}
+                {['Contado', 'Credito 30d', 'Credito 60d', 'Adelanto 50%', 'Contra entrega'].map(p => <option key={p} value={p}>{etiquetaModalidad(p)}</option>)}
               </select>
             </div>
           </div>

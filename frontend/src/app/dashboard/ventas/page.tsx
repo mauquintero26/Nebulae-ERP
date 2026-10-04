@@ -25,9 +25,12 @@ import {
   diasDesde, textoAntiguedad, ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, esNoResuelto, esAccionTomada, accionSiguienteSC,
 } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
+import { formatoPesos } from '@/lib/pesos';
+import { etiquetaTipoSolicitud } from '@/lib/etiquetas-ventas';
 import { diasAlerta, pedidoVigente, pestanaCotizacion } from '@/lib/listas-ventas';
 
-const fCOP  = (v: any) => { const n = Number(v)||0; return n > 0 ? '$' + n.toLocaleString('es-CO') : '$' + 0; };
+// H42: pesos enteros con punto de miles ('$1.062.523'); lo que no es un monto (null, NaN) se ve '$0'.
+const fCOP  = (v: any) => formatoPesos(v);
 // Las fechas del API son UTC; si alguna llega sin zona, comoUTC la marca como UTC (no hora local corrida 5 h).
 const fDate = (iso: any) => iso ? new Date(comoUTC(iso)).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
 const fTime = (iso: any) => iso ? new Date(comoUTC(iso)).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}) : '';
@@ -1364,7 +1367,7 @@ export default function VentasHub() {
                   <div className="bg-indigo-50 rounded-2xl p-4 border border-indigo-100 space-y-2">
                     <p className="text-[10px] font-black text-indigo-400 uppercase tracking-wide">Qué se está pidiendo</p>
                     {quickDetailDoc.tipo_solicitud && (
-                      <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-black bg-white text-indigo-700 border border-indigo-200">{quickDetailDoc.tipo_solicitud}</span>
+                      <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-black bg-white text-indigo-700 border border-indigo-200">{etiquetaTipoSolicitud(quickDetailDoc.tipo_solicitud)}</span>
                     )}
                     {quickDetailDoc.notas && <p className="text-xs text-indigo-900 leading-relaxed">{quickDetailDoc.notas}</p>}
                   </div>

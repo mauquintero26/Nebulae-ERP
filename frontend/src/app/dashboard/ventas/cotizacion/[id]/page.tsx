@@ -13,7 +13,7 @@ import { apiFetch } from '@/lib/api';
 import { Button } from '@/components/ui';
 import {
   ChannelModal, CalculadorModal, DeleteConfirm, PropagarPvenConfirm, VerificarAnticipoModal, AjustarAnticipoModal,
-  ESTADOS as ESTADOS_COT, fCOP, fDate, fTime,
+  ESTADOS as ESTADOS_COT, EstadoBadge, fCOP, fDate, fTime,
 } from '../cotizacion-client';
 import { NextStepCard, EnlaceConfirmacionModal, CambiosDeActividad, returnToSeguro, getUsuarioActual } from '../../flujo';
 import { situacionPedidoCotizacion } from '@/lib/listas-ventas';
@@ -946,7 +946,7 @@ function CotizacionDetalleContent() {
 
           {/* Timeline / Bitacora */}
           <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-white">
-            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-6">Linea Temporal</h4>
+            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-6">Línea Temporal</h4>
 
             <div className="space-y-6 relative before:absolute before:inset-0 before:ml-4 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-200 before:to-transparent">
               {[...(cotizacion?.actividades || [])].reverse().map((a:any) => {
@@ -965,7 +965,9 @@ function CotizacionDetalleContent() {
                       </div>
                       <CambiosDeActividad extra={a.extra_data} />
                       {a.old_estado && a.new_estado && (
-                        <p className="text-sm text-slate-600 mb-3 leading-relaxed">{a.old_estado} / {a.new_estado}</p>
+                        <p className="flex items-center gap-1.5 mb-3 flex-wrap">
+                          <EstadoBadge estado={a.old_estado} /><ArrowRight size={10} className="text-slate-300" /><EstadoBadge estado={a.new_estado} />
+                        </p>
                       )}
                       <div className="flex items-center gap-2">
                         <div className="w-5 h-5 rounded-full bg-slate-200 flex items-center justify-center text-[8px] font-bold text-slate-600 border border-slate-300">
@@ -980,7 +982,7 @@ function CotizacionDetalleContent() {
             </div>
 
             {(!cotizacion?.actividades || cotizacion.actividades.length===0) && (
-              <p className="text-xs text-slate-400 italic text-center py-8">Sin actividad registrada todavia.</p>
+              <p className="text-xs text-slate-400 italic text-center py-8">Sin actividad registrada todavía.</p>
             )}
 
             {(cotizacion?.actividades || []).length > 0 && (

@@ -19,6 +19,7 @@ import { SubNav, PageHeader, StatCard, Badge as SharedBadge, Modal, Toast as Sha
 import { VEN_NAV } from '../ven-nav';
 import { esAsesorElegible, getUsuarioActual } from '../flujo';
 import { coincideProducto } from '@/lib/busqueda';
+import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import {
   diasAlerta, generoCotizacion, cotizacionesVigentes, contadoresSolicitudes, tasaConversionCotizacion,
   superaDiasAlerta, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera,
@@ -44,9 +45,9 @@ export const MODALIDADES_PAGO = [
 export const ESTADOS_SC: Record<string, {label:string; color:string; bg:string; border:string}> = {
   BORRADOR:               {label:'Borrador',           color:'#64748b',bg:'#f1f5f9',border:'#e2e8f0'},
   ASIGNADA:               {label:'Asignada',           color:'#0e7490',bg:'#ecfeff',border:'#a5f3fc'},
-  PENDIENTE_CONFIRMACION: {label:'Pend. confirmacion', color:'#b45309',bg:'#fffbeb',border:'#fde68a'},
+  PENDIENTE_CONFIRMACION: {label:'Pend. confirmación', color:'#b45309',bg:'#fffbeb',border:'#fde68a'},
   COTIZADA:               {label:'Cotizada',           color:'#1d4ed8',bg:'#eff6ff',border:'#bfdbfe'},
-  EN_ESPERA_CONFIRMACION: {label:'En espera confirmacion', color:'#c2410c',bg:'#fff7ed',border:'#fed7aa'},
+  EN_ESPERA_CONFIRMACION: {label:'En espera de confirmación', color:'#c2410c',bg:'#fff7ed',border:'#fed7aa'},
   CONFIRMADA:             {label:'Confirmada',         color:'#065f46',bg:'#f0fdf4',border:'#a7f3d0'},
   RECHAZADA:              {label:'Rechazada',          color:'#9f1239',bg:'#fff1f2',border:'#fecdd3'},
   VENCIDA:                {label:'Vencida',            color:'#854d0e',bg:'#fefce8',border:'#fef08a'},
@@ -99,7 +100,7 @@ export function TipoBadge({tipo}: {tipo:string}) {
     'Soporte Tecnico':       'bg-purple-100 text-purple-700 border-purple-200',
     'Nuevo Lead':            'bg-emerald-100 text-emerald-700 border-emerald-200',
   };
-  return <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border ${map[tipo]||'bg-slate-100 text-slate-600 border-slate-200'}`}>{tipo||'Sin tipo'}</span>;
+  return <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border ${map[tipo]||'bg-slate-100 text-slate-600 border-slate-200'}`}>{etiquetaTipoSolicitud(tipo)||'Sin tipo'}</span>;
 }
 
 export function ActionDot({action}: {action:string}) {
@@ -317,10 +318,10 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
       {/* Tipo + Modalidad (Modalidad solo para Cotizacion) */}
       <div className={`grid gap-4 ${isCotizacion ? 'grid-cols-2' : 'grid-cols-1'}`}>
         <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Tipo de Solicitud</label>
-          <select value={form.tipo_solicitud} onChange={e=>setForm(f=>({...f,tipo_solicitud:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">{TIPOS_SC.map(t=><option key={t} value={t}>{t}</option>)}</select></div>
+          <select value={form.tipo_solicitud} onChange={e=>setForm(f=>({...f,tipo_solicitud:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">{TIPOS_SC.map(t=><option key={t} value={t}>{etiquetaTipoSolicitud(t)}</option>)}</select></div>
         {isCotizacion&&(
           <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Modalidad de Pago</label>
-            <select value={form.modalidad_pago} onChange={e=>setForm(f=>({...f,modalidad_pago:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">{MODALIDADES_PAGO.map(m=><option key={m} value={m}>{m}</option>)}</select></div>
+            <select value={form.modalidad_pago} onChange={e=>setForm(f=>({...f,modalidad_pago:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">{MODALIDADES_PAGO.map(m=><option key={m} value={m}>{etiquetaModalidad(m)}</option>)}</select></div>
         )}
       </div>
 
@@ -603,8 +604,8 @@ export function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
               </div>
               <p className="text-xs font-bold text-slate-700 mb-1">SC: <span className="text-indigo-700">{sc.numero}</span></p>
               <p className="text-xs text-slate-600 mb-0.5">Cliente: <strong>{sc.customer_name}</strong></p>
-              <p className="text-xs text-slate-600 mb-0.5">Tipo: {sc.tipo_solicitud}</p>
-              {sc.modalidad_pago&&<p className="text-xs text-slate-600 mb-0.5">Modalidad: {sc.modalidad_pago}</p>}
+              <p className="text-xs text-slate-600 mb-0.5">Tipo: {etiquetaTipoSolicitud(sc.tipo_solicitud)}</p>
+              {sc.modalidad_pago&&<p className="text-xs text-slate-600 mb-0.5">Modalidad: {etiquetaModalidad(sc.modalidad_pago)}</p>}
               {(sc.productos||[]).length>0&&<div className="mt-2">{sc.productos.slice(0,3).map((p:any,i:number)=><p key={i} className="text-xs text-slate-700">- {p.product_name} x{p.qty}</p>)}</div>}
             </div>
             <div className="grid grid-cols-3 gap-2">
@@ -1375,7 +1376,7 @@ export default function SolicitudClient() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="font-black text-red-700 text-sm">{sc.numero}</span>
-                          <SharedBadge tone="danger">{sc.tipo_solicitud||'SC'}</SharedBadge>
+                          <SharedBadge tone="danger">{etiquetaTipoSolicitud(sc.tipo_solicitud)||'SC'}</SharedBadge>
                         </div>
                         <p className="text-xs text-slate-600 font-medium">{sc.customer_name||'-'} — {sc.advisor_name||'-'}</p>
                         {sc.razon_cancelacion&&<p className="text-xs text-slate-500 mt-1 italic">Razón: {sc.razon_cancelacion}</p>}
@@ -1742,7 +1743,7 @@ export default function SolicitudClient() {
                     return (
                       <div key={tipo} className="bg-slate-50 border border-slate-100 rounded-xl p-4 hover:border-indigo-200 transition-colors">
                         <div className="flex items-start justify-between mb-2">
-                          <p className="font-black text-xs text-slate-800 leading-tight">{tipo}</p>
+                          <p className="font-black text-xs text-slate-800 leading-tight">{etiquetaTipoSolicitud(tipo)}</p>
                           <span className="font-extrabold text-sm text-indigo-700 bg-white px-2 py-0.5 rounded-md border border-slate-100 shadow-xs">
                             {count}
                           </span>
