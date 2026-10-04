@@ -293,3 +293,17 @@ def test_recotizar_por_debajo_de_lo_pagado_deja_saldo_cero(app_client, db, admin
     assert resp.status_code == 200, resp.text
     db.refresh(ven)
     assert (ven.total_cop, ven.saldo_cop) == (Decimal("600000"), Decimal("0"))
+
+
+# --- B11 (revision final): POST /ventas/pedidos (pedido suelto, sin COT) solo para Administracion ---------------
+
+def test_crear_un_pedido_suelto_es_solo_de_administracion(app_client, db, admin_token, vendedor_token):
+    """Desde H47 ninguna pantalla lo llama (los pedidos nacen de una COT confirmada); un asesor no lo usa."""
+    from app.models.erp_documents import SaleOrder
+    body = {"customer_name": "Cliente Prueba", "total_cop": 1000, "productos": [], "created_by": "t"}
+    antes = db.query(SaleOrder).count()
+    resp = app_client.post("/api/v1/ventas/pedidos", json=body, headers=auth(vendedor_token))
+    assert resp.status_code == 403, resp.text
+    assert db.query(SaleOrder).count() == antes
+    resp = app_client.post("/api/v1/ventas/pedidos", json=body, headers=auth(admin_token))
+    assert resp.status_code == 201, resp.text

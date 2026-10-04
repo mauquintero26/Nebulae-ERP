@@ -197,3 +197,16 @@ def test_actividad_de_la_sc_desempata_por_id(app_client, db, admin_token, user_a
 
     actividades = app_client.get(f"/api/v1/ventas/solicitudes/{sc.id}", headers=auth(admin_token)).json()["data"]["actividades"]
     assert [x["description"] for x in actividades] == ["B (primero, reescrito)", "A (despues)"]
+
+
+def test_el_patch_de_la_sc_bloquea_la_fila_que_valida(app_client, db, admin_token, user_admin, contador_sql):
+    """B10 (revision final): la SC se lee con FOR UPDATE, como el PVEN en update_pedido: una cancelacion o una
+    confirmacion concurrentes esperan en vez de validar contra un estado viejo."""
+    sc = _sc(db, "SC-RAP005", user_admin, estado="ASIGNADA", productos=[LINEA])
+    with contador_sql.ventana() as v:
+        resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"notas": "Llamar el viernes",
+                                                                              "updated_by": "test"},
+                                headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    lectura = next(s for s in v.sentencias if "FROM customer_requests" in s and "customer_requests.id =" in s)
+    assert "FOR UPDATE" in lectura, lectura

@@ -798,7 +798,9 @@ def get_solicitud(sc_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)
 @router.patch("/solicitudes/{sc_id}")
 def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
-    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
+    # B10 (revision final): bloqueada, como el PVEN en update_pedido: una cancelacion o confirmacion concurrentes
+    # esperan en vez de validar contra un estado viejo.
+    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
     # Gate 1 (requisito de seguridad, no solo UX -- ver Global Constraint del plan):
@@ -2073,8 +2075,10 @@ def list_pedidos(
 
 
 @router.post("/pedidos", status_code=201)
-def create_pedido(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+def create_pedido(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)),
         db: Session = Depends(get_db)):
+    """Pedido suelto (sin COT). B11 (revision final): solo Administracion; desde H47 ninguna pantalla lo llama y los
+    pedidos de Ventas nacen de una COT confirmada (convertir_cotizacion_a_venta), con su anticipo verificado (N1)."""
     from sqlalchemy.exc import IntegrityError, SQLAlchemyError
     from fastapi import status as http_status
     # H42: montos en pesos enteros; el saldo se calcula con los ya redondeados para que cuadre sin centavos.
