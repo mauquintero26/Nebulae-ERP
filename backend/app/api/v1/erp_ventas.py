@@ -5,7 +5,7 @@ Pedidos de Venta (VEN), Ordenes Pendientes por Pagar (PXP)
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
-from sqlalchemy import text, func, select
+from sqlalchemy import text, func, select, case
 from sqlalchemy.exc import DBAPIError
 from typing import Optional, List
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -21,7 +21,7 @@ from app.models.inventory import InventoryLevel, InventoryOperation, InventoryMo
 from app.models.fase1b import InventoryOwnerBalance
 from app.api.dependencies import (
     require_roles, get_current_user,
-    ROLE_ADMIN, ROLE_ASESOR, ROLE_COMPRAS, ROLE_FINANZAS, ALL_ERP_ROLES
+    ROLE_ADMIN, ROLE_ASESOR, ROLE_COMPRAS, ROLE_FINANZAS, ALL_ERP_ROLES, normalize_role
 )
 from app.models.users import User
 from app.core.busqueda import productos_ilike
@@ -32,7 +32,7 @@ from app.core.ventas_dinero import (
     anular_pxps_de_pedido,
 )
 from app.core.textos_actividad import etiqueta_estado, ETIQUETAS_ESTADO
-from app.core.estados_pedido import ESTADOS_VEN_DESTINOS, destinos_ven_permitidos
+from app.core.estados_pedido import ESTADOS_VEN_DESTINOS, ESTADOS_VEN_SIN_DINERO, destinos_ven_permitidos
 from app.api.v1.schemas_compras import CancelarSolicitudBody
 from app.api.v1.crm import mover_lead_de_solicitud, reabrir_lead_de_solicitud
 import datetime
@@ -58,6 +58,12 @@ def _int_or_none(v):
     if v in (None, ""):
         return None
     return int(v)
+
+def _texto_o_none(v):
+    """El texto sin espacios de los bordes, o None si no es texto o queda vacio (una nota en blanco no cuenta)."""
+    if not isinstance(v, str):
+        return None
+    return v.strip() or None
 
 def _next_seq(db: Session, seq_name: str) -> int:
     r = db.execute(text(f"SELECT nextval(\'{seq_name}\')")).scalar()
@@ -339,6 +345,18 @@ def _leer_ajuste_anticipo_manual(db: Session, cot: SalesQuotation, body: dict):
                                  f"{vigente.numero} vigente.")
     return ajuste
 
+def _iso_utc(dt):
+    """created_at/updated_at/... se guardan en UTC sin zona (utcnow); con 'Z' el navegador las lee como UTC y las
+    muestra en hora local (sin ella las lee como hora local y todo sale corrido 5 h en Colombia). NO es para las fechas
+    de calendario o de negocio (fecha_solicitud, fecha_vencimiento, fecha_entrega_estimada, fecha_pago...)."""
+    if dt is None:
+        return None
+    if isinstance(dt, str):
+        return dt
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    return dt.isoformat() + "Z"
+
 def _pago_dict(p: SaleOrderPayment) -> dict:
     return {
         "id": p.id,
@@ -350,8 +368,7 @@ def _pago_dict(p: SaleOrderPayment) -> dict:
         "fecha": p.fecha.isoformat() if p.fecha else None,
         "estado": p.estado,
         "notes": p.notes,
-        # UTC sin zona en la base: con "Z" para que el navegador no lo lea como hora local.
-        "created_at": (p.created_at.isoformat() + "Z") if p.created_at else None,
+        "created_at": _iso_utc(p.created_at),
     }
 
 def _sc_dict(sc: CustomerRequest) -> dict:
@@ -374,11 +391,11 @@ def _sc_dict(sc: CustomerRequest) -> dict:
         "modalidad_entrega": sc.modalidad_entrega,
         "notas": sc.notas,
         "productos": sc.productos or [],
-        "created_at": sc.created_at.isoformat() if sc.created_at else None,
-        "updated_at": sc.updated_at.isoformat() if sc.updated_at else None,
+        "created_at": _iso_utc(sc.created_at),
+        "updated_at": _iso_utc(sc.updated_at),
         "created_by": sc.created_by,
         "razon_cancelacion": getattr(sc, "razon_cancelacion", None),
-        "eliminada_at": sc.eliminada_at.isoformat() if getattr(sc, "eliminada_at", None) else None,
+        "eliminada_at": _iso_utc(getattr(sc, "eliminada_at", None)),
         "tipo_problema": sc.tipo_problema,
         "descripcion_problema": sc.descripcion_problema,
         "urgencia": sc.urgencia,
@@ -416,8 +433,8 @@ def _cot_dict(cot: SalesQuotation) -> dict:
         "productos": cot.productos or [],
         "pec_id": cot.pec_id,
         "pec_numero": cot.pec_numero,
-        "created_at": cot.created_at.isoformat() if cot.created_at else None,
-        "updated_at": cot.updated_at.isoformat() if cot.updated_at else None,
+        "created_at": _iso_utc(cot.created_at),
+        "updated_at": _iso_utc(cot.updated_at),
         "created_by": cot.created_by,
     }
 
@@ -456,9 +473,9 @@ def _ven_dict(v: SaleOrder) -> dict:
         "canal_metadata": v.canal_metadata,
         "cancellation_reason": v.cancellation_reason,
         "cancellation_authorized_by": v.cancellation_authorized_by,
-        "cancelled_at": v.cancelled_at.isoformat() if v.cancelled_at else None,
-        "created_at": v.created_at.isoformat() if v.created_at else None,
-        "updated_at": v.updated_at.isoformat() if v.updated_at else None,
+        "cancelled_at": _iso_utc(v.cancelled_at),
+        "created_at": _iso_utc(v.created_at),
+        "updated_at": _iso_utc(v.updated_at),
         "created_by": v.created_by,
     }
 
@@ -477,8 +494,22 @@ def _pxp_dict(p: PaymentPending) -> dict:
         "fecha_creacion": p.fecha_creacion.isoformat() if p.fecha_creacion else None,
         "fecha_pago": p.fecha_pago.isoformat() if p.fecha_pago else None,
         "notas": p.notas,
-        "created_at": p.created_at.isoformat() if p.created_at else None,
+        "created_at": _iso_utc(p.created_at),
     }
+
+def _asesor_de_pedido(cotizador, asesor_de_la_sc):
+    """El PVEN no guarda asesor: es el cotizador de su COT o, si esta vacio o no hay COT, el asesor de su SC."""
+    return _texto_o_none(cotizador) or _texto_o_none(asesor_de_la_sc)
+
+def _asesores_de_pedidos(db: Session, pedidos) -> dict:
+    """{id del pedido: asesor o None} de una lista de pedidos, con 2 consultas en bloque (IN) y sin una por fila."""
+    cot_ids = {v.cot_id for v in pedidos if v.cot_id}
+    sc_ids = {v.sc_id for v in pedidos if v.sc_id}
+    cotizador = (dict(db.query(SalesQuotation.id, SalesQuotation.cotizador).filter(SalesQuotation.id.in_(cot_ids)).all())
+                 if cot_ids else {})
+    asesor_sc = (dict(db.query(CustomerRequest.id, CustomerRequest.advisor_name)
+                      .filter(CustomerRequest.id.in_(sc_ids)).all()) if sc_ids else {})
+    return {v.id: _asesor_de_pedido(cotizador.get(v.cot_id), asesor_sc.get(v.sc_id)) for v in pedidos}
 
 def _log_dict(l: ActivityLog) -> dict:
     return {
@@ -491,9 +522,7 @@ def _log_dict(l: ActivityLog) -> dict:
         "old_estado": l.old_estado,
         "new_estado": l.new_estado,
         "user_name": l.user_name,
-        # created_at es UTC sin zona (utcnow): sin la "Z" el navegador lo lee como hora local y la
-        # linea de tiempo de Actividad muestra la hora con 5 h de adelanto en Colombia.
-        "created_at": (l.created_at.isoformat() + "Z") if l.created_at else None,
+        "created_at": _iso_utc(l.created_at),
         "extra_data": l.extra_data,
     }
 
@@ -525,7 +554,17 @@ def list_solicitudes(
         )
     total = q.count()
     items = q.order_by(CustomerRequest.created_at.desc()).offset(offset).limit(limit).all()
-    return {"status": "success", "total": total, "data": [_sc_dict(s) for s in items]}
+    # H32: las cotizaciones de cada solicitud (version ligera: id, numero y estado), con una sola consulta para toda la
+    # pagina. Con eso la lista dice cuantas solicitudes generaron cotizacion de verdad (el detalle trae la completa).
+    ids = [s.id for s in items]
+    cots_por_sc = {}
+    if ids:
+        for c_id, c_num, c_est, c_sc in (db.query(SalesQuotation.id, SalesQuotation.numero, SalesQuotation.estado,
+                                                  SalesQuotation.sc_id)
+                                         .filter(SalesQuotation.sc_id.in_(ids)).order_by(SalesQuotation.id.asc())):
+            cots_por_sc.setdefault(c_sc, []).append({"id": c_id, "numero": c_num, "estado": c_est})
+    return {"status": "success", "total": total,
+            "data": [{**_sc_dict(s), "cotizaciones": cots_por_sc.get(s.id, [])} for s in items]}
 
 
 @router.post("/solicitudes", status_code=201)
@@ -1064,7 +1103,17 @@ def list_cotizaciones(
         )
     total = q.count()
     items = q.order_by(SalesQuotation.created_at.desc()).offset(offset).limit(limit).all()
-    return {"status": "success", "total": total, "data": [_cot_dict(c) for c in items]}
+    # COT-LISTA: los pedidos de cada cotizacion (version ligera: id, numero y estado, del mas viejo al mas nuevo), con
+    # una sola consulta para toda la pagina. Con eso la lista distingue una COT confirmada con pedido vigente de una
+    # cuyo pedido se cancelo (el detalle trae el pedido completo).
+    ids = [c.id for c in items]
+    pvs_por_cot = {}
+    if ids:
+        for v_id, v_num, v_est, v_cot in (db.query(SaleOrder.id, SaleOrder.numero, SaleOrder.estado, SaleOrder.cot_id)
+                                          .filter(SaleOrder.cot_id.in_(ids)).order_by(SaleOrder.id.asc())):
+            pvs_por_cot.setdefault(v_cot, []).append({"id": v_id, "numero": v_num, "estado": v_est})
+    return {"status": "success", "total": total,
+            "data": [{**_cot_dict(c), "pedidos_venta": pvs_por_cot.get(c.id, [])} for c in items]}
 
 
 @router.post("/cotizaciones", status_code=201)
@@ -1162,9 +1211,14 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
     # linked VEN (H46: en orden de creacion, para que el frontend tome el ultimo vigente o cancelado)
     vens = db.query(SaleOrder).filter(SaleOrder.cot_id == cot_id).order_by(SaleOrder.id.asc()).all()
     d["pedidos_venta"] = [_ven_dict(v) for v in vens]
+    # La SC vinculada se lee UNA vez: la necesitan el anticipo (su modalidad de pago) y la nota (H35+H48).
+    sc = db.query(CustomerRequest).filter(CustomerRequest.id == cot.sc_id).first() if cot.sc_id else None
+    # H35+H48: la nota ACTUAL de la solicitud, aparte de cot.notas (nunca se copia: asi cambia si la SC cambia y
+    # funciona sin backfill). Solo en el detalle (no en _cot_dict) para no hacer una consulta por fila en el listado.
+    d["sc_notas"] = _texto_o_none(sc.notas) if sc is not None else None
     # Anticipo (H36+H43, N1, R3, R6): lo mismo que exigira convertir_cotizacion_a_venta. Solo en el detalle (no en
     # _cot_dict) para no hacer una consulta por fila en el listado.
-    pct, modalidad, _, requerido = anticipo_cotizacion(cot, db)
+    pct, modalidad, _, requerido = anticipo_cotizacion(cot, db, sc=sc)
     total = redondear_peso(cot.total_cop)
     saldos = saldos_a_favor_de_cotizacion(db, cot.id)
     saldo_a_favor = sum((s["monto"] for s in saldos), Decimal("0"))
@@ -1877,8 +1931,20 @@ def list_pedidos(
             productos_ilike(SaleOrder.productos, like)
         )
     total = q.count()
+    # H47: el resumen cubre TODO lo que cumple el filtro (no solo la pagina). El dinero no suma los pedidos cancelados
+    # ni devueltos por completo (siguen guardando su saldo, simplemente no cuentan); por_estado los cuenta a todos.
+    vigente = SaleOrder.estado.notin_(ESTADOS_VEN_SIN_DINERO)
+    suma = lambda col: func.coalesce(func.sum(case((vigente, col), else_=0)), 0)
+    monto, saldo, anticipo = q.with_entities(suma(SaleOrder.total_cop), suma(SaleOrder.saldo_cop),
+                                             suma(SaleOrder.anticipo_cop)).one()
+    por_estado = dict(q.with_entities(SaleOrder.estado, func.count(SaleOrder.id)).group_by(SaleOrder.estado).all())
     items = q.order_by(SaleOrder.created_at.desc()).offset(offset).limit(limit).all()
-    return {"status": "success", "total": total, "data": [_ven_dict(v) for v in items]}
+    # H4: el asesor real de cada pedido (el de su COT o, si no, el de su SC), con 2 consultas en bloque.
+    asesores = _asesores_de_pedidos(db, items)
+    return {"status": "success", "total": total,
+            "resumen": {"monto_cop": float(monto), "saldo_cop": float(saldo), "anticipo_cop": float(anticipo),
+                        "por_estado": por_estado},
+            "data": [{**_ven_dict(v), "advisor_name": asesores.get(v.id)} for v in items]}
 
 
 @router.post("/pedidos", status_code=201)
@@ -1966,6 +2032,16 @@ def get_pedido(ven_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     requerido, pendiente = anticipo_del_pedido(v)
     d["anticipo_requerido"] = float(requerido)
     d["anticipo_pendiente"] = float(pendiente)
+    # H4 + H35+H48: la SC y la COT del pedido se leen UNA vez cada una (solo las columnas que hacen falta). El asesor
+    # sale del cotizador de la COT o, si no, del asesor de la SC; las notas son las ACTUALES de cada documento (nunca
+    # copiadas al pedido). Solo en el detalle (no en _ven_dict) para no hacer una consulta por fila en el listado.
+    sc = (db.query(CustomerRequest.notas, CustomerRequest.advisor_name).filter(CustomerRequest.id == v.sc_id).first()
+          if v.sc_id else None)
+    cot = (db.query(SalesQuotation.notas, SalesQuotation.cotizador).filter(SalesQuotation.id == v.cot_id).first()
+           if v.cot_id else None)
+    d["advisor_name"] = _asesor_de_pedido(cot.cotizador if cot else None, sc.advisor_name if sc else None)
+    d["sc_notas"] = _texto_o_none(sc.notas) if sc else None
+    d["cot_notas"] = _texto_o_none(cot.notas) if cot else None
     return {"status": "success", "data": d}
 
 
@@ -2254,8 +2330,9 @@ def ventas_stats(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *
     ven_total = db.query(func.count(SaleOrder.id)).scalar()
     pxp_pendiente = db.query(func.count(PaymentPending.id)).filter(
         PaymentPending.estado == "PENDIENTE").scalar()
+    # H47: ni cancelados ni devueltos por completo suman dinero (ven_total si los cuenta).
     ven_monto = db.query(func.sum(SaleOrder.total_cop)).filter(
-        SaleOrder.estado != "CANCELADO").scalar() or 0
+        SaleOrder.estado.notin_(ESTADOS_VEN_SIN_DINERO)).scalar() or 0
 
     sc_por_estado = db.execute(text(
         "SELECT estado, COUNT(*) as cnt FROM customer_requests GROUP BY estado"
@@ -2302,11 +2379,11 @@ def ventas_analytics(
         d_from = now - datetime.timedelta(days=days)
         d_to   = now + datetime.timedelta(days=1)
 
-    # Base VEN query in range (not cancelled)
+    # Base VEN query in range (ni cancelados ni devueltos por completo: su dinero no cuenta, H47)
     ven_q = db.query(SaleOrder).filter(
         SaleOrder.created_at >= d_from,
         SaleOrder.created_at <= d_to,
-        SaleOrder.estado != "CANCELADO"
+        SaleOrder.estado.notin_(ESTADOS_VEN_SIN_DINERO)
     )
     if product:
         ven_q = ven_q.filter(SaleOrder.productos.cast(text("text")).ilike(f"%{product}%"))
@@ -2518,12 +2595,22 @@ def get_alertas(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *R
 
 # ─── ADMIN CONFIG ─────────────────────────────────────────────────────────────
 
+# N8: lo unico de admin_config que leen los roles que no son ADMIN (los dias de alerta de las listas, y los
+# interruptores del panel de Configuracion). Una clave nueva queda solo para ADMIN mientras no se agregue aqui.
+_CONFIG_LECTURA_GENERAL = {"alerta_sc_dias", "alerta_cot_dias", "alerta_ven_dias",
+                           "alerta_soporte_alta_horas", "alerta_soporte_media_horas", "alerta_soporte_baja_horas",
+                           "auto_lead_crm", "auto_chatter_ia", "notif_whatsapp"}
+
+
 @router.get("/config")
-def get_config(user: User = Depends(require_roles(*ROLE_ADMIN)),
+def get_config(user: User = Depends(require_roles(*ALL_ERP_ROLES)),
         db: Session = Depends(get_db)):
     try:
         rows = db.execute(text("SELECT key, value, description FROM admin_config")).fetchall()
-        return {"status": "success", "data": {r[0]: {"value": r[1], "description": r[2]} for r in rows}}
+        data = {r[0]: {"value": r[1], "description": r[2]} for r in rows}
+        if normalize_role(user.role) != "ADMIN":
+            data = {k: v for k, v in data.items() if k in _CONFIG_LECTURA_GENERAL}
+        return {"status": "success", "data": data}
     except Exception:
         return {"status": "success", "data": {}}
 
