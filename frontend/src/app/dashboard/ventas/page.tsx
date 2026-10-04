@@ -13,37 +13,51 @@ import {
 import { useRouter } from 'next/navigation';
 import { apiFetch, API_URL } from '@/lib/api';
 import { coincideProducto } from '@/lib/busqueda';
-import { SubNav, PageHeader, Badge, Drawer, Toast } from '@/components/ui';
+import { SubNav, PageHeader, Badge, Drawer, Toast, Modal, Button } from '@/components/ui';
 import { VEN_NAV } from './ven-nav';
-import { CambiosDeActividad } from './flujo';
+import { CambiosDeActividad, EnlaceConfirmacionModal, getUsuarioActual } from './flujo';
+import { ChannelModal, ESTADOS as ESTADOS_COT } from './cotizacion/cotizacion-client';
+import { ESTADOS_SC } from './solicitud/solicitud-client';
+import { infoEstadoPedido, esCotizacionActiva } from '@/lib/estados-pedido';
+import {
+  ordenParaCancelar, motivoNoCancelable, resumenLote, ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN,
+  diasDesde, textoAntiguedad, ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, esNoResuelto, esAccionTomada, accionSiguienteSC,
+} from '@/lib/hub-ventas';
+import { waUrl } from '@/lib/whatsapp';
+import { diasAlerta, pedidoVigente, soloPedidosCancelados } from '@/lib/listas-ventas';
 
 const fCOP  = (v: any) => { const n = Number(v)||0; return n > 0 ? '$' + n.toLocaleString('es-CO') : '$' + 0; };
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
 const fTime = (iso: any) => iso ? new Date(iso).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}) : '';
-const daysDiff = (iso: any) => iso ? Math.floor((Date.now()-new Date(iso).getTime())/86400000) : 0;
+// H2: fechas del API en UTC (aunque vengan sin zona), nunca negativo.
+const daysDiff = (iso: any) => diasDesde(iso);
 
-// Estados de no resolución (requieren acción o están en espera de gestión)
-const ESTADOS_NO_RESOLUCION = [
-  'BORRADOR',
-  'PENDIENTE_CONFIRMACION',
-  'EN_GESTION',
-  'ENVIADA',
-  'PENDIENTE_COMPRA',
-  'PENDIENTE_PAGO',
-  'EN_PROCESO',
-  'EN_TRANSITO',
-];
+// N10: el estado siempre con su etiqueta (pedido: estados-pedido.js; COT y SC: sus tablas), nunca el código crudo.
+// Sin tipo (filtro de estados) se busca en las tres tablas; una clave desconocida sale humanizada.
+const etiquetaEstado = (tipo: string, e: string): string => {
+  if (tipo === 'VEN') return infoEstadoPedido(e).label;
+  const propia = tipo === 'COT' ? ESTADOS_COT[e]?.label : tipo === 'SC' ? ESTADOS_SC[e]?.label : undefined;
+  return propia || ESTADOS_SC[e]?.label || ESTADOS_COT[e]?.label || infoEstadoPedido(e).label;
+};
 
-// Estados resueltos o con acciones tomadas completadas
-const ESTADOS_ACCION_TOMADA = [
-  'CONFIRMADA',
-  'LISTO_ENTREGA',
-  'ENTREGADO',
-  'FACTURADO',
-  'CANCELADO',
-  'CANCELADA',
-  'RECHAZADA',
-];
+// H3: color del botón "Próxima acción" de una solicitud (tono de accionSiguienteSC).
+const TONO_ACCION: Record<string,string> = {
+  indigo:  'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200',
+  emerald: 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200',
+  amber:   'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200',
+  blue:    'bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200',
+  slate:   'bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200',
+};
+
+// N3: lo que pasa con cada tipo de documento al cancelarlo desde el Hub.
+const EFECTO_CANCELACION: Record<string,string> = {
+  SC: 'La solicitud se cancela y pasa a la papelera (30 días)',
+  COT: 'La cotización queda Rechazada',
+  VEN: 'El pedido queda Cancelado',
+};
+
+// Autor de los cambios hechos desde el Hub (Actividad); sin sesión, el servidor usa el correo del usuario.
+const autorActual = () => { const u = getUsuarioActual(); return u.name || u.email || undefined; };
 
 const getEstadoClass = (e: string) => ({
   BORRADOR: 'bg-slate-100 text-slate-700 border-slate-200',
@@ -148,10 +162,13 @@ function ActivitiesPanel({row,onClose}:{row:any,onClose:()=>void}) {
 
 /* ── Config Panel ── */
 function ConfigPanel({alertDias,onSave,onClose}:{alertDias:any,onSave:(cfg:any)=>void,onClose:()=>void}) {
+  // N8: todos leen los valores reales; solo un administrador los cambia (la seguridad real es el 403 del PATCH).
+  const soloLectura = getUsuarioActual().role.trim().toLowerCase() !== 'admin';
+  const [error, setError] = useState('');
   const [cfg, setCfg] = useState({
-    alerta_sc_dias:  String(alertDias?.alerta_sc_dias?.value  || alertDias?.alerta_sc_dias  || '2'),
-    alerta_cot_dias: String(alertDias?.alerta_cot_dias?.value || alertDias?.alerta_cot_dias || '2'),
-    alerta_ven_dias: String(alertDias?.alerta_ven_dias?.value || alertDias?.alerta_ven_dias || '2'),
+    alerta_sc_dias:  String(diasAlerta(alertDias, 'alerta_sc_dias')),
+    alerta_cot_dias: String(diasAlerta(alertDias, 'alerta_cot_dias')),
+    alerta_ven_dias: String(diasAlerta(alertDias, 'alerta_ven_dias')),
     auto_lead_crm:   String(alertDias?.auto_lead_crm?.value   || alertDias?.auto_lead_crm   || 'true'),
     auto_chatter_ia: String(alertDias?.auto_chatter_ia?.value || alertDias?.auto_chatter_ia || 'false'),
     notif_whatsapp:  String(alertDias?.notif_whatsapp?.value  || alertDias?.notif_whatsapp  || 'false'),
@@ -159,17 +176,17 @@ function ConfigPanel({alertDias,onSave,onClose}:{alertDias:any,onSave:(cfg:any)=
   const [saving,setSaving]=useState(false);
   const [saved,setSaved]=useState(false);
   async function save(){
-    setSaving(true);
+    setSaving(true); setError('');
     try{ await apiFetch('/ventas/config',{method:'PATCH',body:JSON.stringify(cfg)}); onSave(cfg); setSaved(true); setTimeout(()=>setSaved(false),2000); }
-    catch{}
+    catch(err:any){ setError(err?.message || 'No se pudo guardar la configuración.'); }
     setSaving(false);
   }
   const Toggle=({k,label,desc}:{k:string,label:string,desc:string})=>(
     <div className="bg-white rounded-xl p-4 border border-indigo-100">
       <div className="flex items-start justify-between gap-3">
         <div><p className="font-bold text-sm text-slate-800">{label}</p><p className="text-xs text-slate-500 mt-0.5">{desc}</p></div>
-        <button onClick={()=>setCfg(p=>({...p,[k]:p[k as keyof typeof p]==='true'?'false':'true'}))}
-          className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl border transition-colors shrink-0 ${(cfg as any)[k]==='true'?'bg-emerald-50 border-emerald-300 text-emerald-700':'bg-slate-50 border-slate-200 text-slate-500'}`}>
+        <button disabled={soloLectura} onClick={()=>setCfg(p=>({...p,[k]:p[k as keyof typeof p]==='true'?'false':'true'}))}
+          className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl border transition-colors shrink-0 disabled:cursor-not-allowed disabled:opacity-60 ${(cfg as any)[k]==='true'?'bg-emerald-50 border-emerald-300 text-emerald-700':'bg-slate-50 border-slate-200 text-slate-500'}`}>
           {(cfg as any)[k]==='true'?<ToggleRight size={16} className="text-emerald-600"/>:<ToggleLeft size={16}/>}
           {(cfg as any)[k]==='true'?'ON':'OFF'}
         </button>
@@ -182,12 +199,17 @@ function ConfigPanel({alertDias,onSave,onClose}:{alertDias:any,onSave:(cfg:any)=
         <div className="bg-indigo-600 text-white p-2.5 rounded-xl shadow-md"><Settings size={20}/></div>
         <div><h2 className="font-black text-slate-800 text-lg">Configuración de HUB Ventas</h2><p className="text-xs text-slate-500">Parámetros de resolución, alertas y automatizaciones</p></div>
       </div>
-    )} footer={(
-      <button onClick={save} disabled={saving}
-        className={`w-full py-3 rounded-xl font-black flex items-center justify-center gap-2 transition-colors ${saved?'bg-emerald-500 text-white':'bg-indigo-600 hover:bg-indigo-700 text-white'} disabled:opacity-50`}>
-        {saving?<RefreshCw size={16} className="animate-spin"/>:saved?<CheckCircle2 size={16}/>:<Save size={16}/>}
-        {saved?'¡Configuración Guardada!':'Guardar Configuración'}
-      </button>
+    )} footer={soloLectura ? (
+      <p className="text-xs text-slate-500 text-center">Solo un administrador puede cambiar estos valores.</p>
+    ) : (
+      <div className="space-y-2">
+        {error && <p className="text-xs font-semibold text-rose-600 text-center">{error}</p>}
+        <button onClick={save} disabled={saving}
+          className={`w-full py-3 rounded-xl font-black flex items-center justify-center gap-2 transition-colors ${saved?'bg-emerald-500 text-white':'bg-indigo-600 hover:bg-indigo-700 text-white'} disabled:opacity-50`}>
+          {saving?<RefreshCw size={16} className="animate-spin"/>:saved?<CheckCircle2 size={16}/>:<Save size={16}/>}
+          {saved?'¡Configuración Guardada!':'Guardar Configuración'}
+        </button>
+      </div>
     )}>
           <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5">
             <div className="flex items-center gap-2 mb-1"><Bell size={16} className="text-amber-600"/><h3 className="font-black text-amber-800 text-sm uppercase tracking-wide">Alertas de No Resolución</h3></div>
@@ -197,8 +219,8 @@ function ConfigPanel({alertDias,onSave,onClose}:{alertDias:any,onSave:(cfg:any)=
                 <div key={k} className="flex items-center justify-between bg-white rounded-xl p-3 border border-amber-100">
                   <span className="text-sm font-bold text-slate-700">{label}</span>
                   <div className="flex items-center gap-2">
-                    <input type="number" min="1" max="30" value={(cfg as any)[k]} onChange={e=>setCfg(p=>({...p,[k]:e.target.value}))}
-                      className="w-16 border border-slate-200 rounded-lg text-center text-sm font-bold py-1 focus:ring-2 focus:ring-amber-200 outline-none"/>
+                    <input type="number" min="1" max="30" value={(cfg as any)[k]} onChange={e=>setCfg(p=>({...p,[k]:e.target.value}))} disabled={soloLectura}
+                      className="w-16 border border-slate-200 rounded-lg text-center text-sm font-bold py-1 focus:ring-2 focus:ring-amber-200 outline-none disabled:bg-slate-50 disabled:text-slate-500"/>
                     <span className="text-xs text-slate-500 font-medium">días</span>
                   </div>
                 </div>
@@ -250,6 +272,17 @@ export default function VentasHub() {
   const [quickDetailDoc, setQuickDetailDoc] = useState<any>(null);
   const [showConfig, setShowConfig] = useState(false);
 
+  // N3: cancelación con motivo (modal) y resultado de un lote con fallos (banner; lo comparte N5).
+  const [cancelacion, setCancelacion]             = useState<{ids:string[]}|null>(null);
+  const [motivoCancelacion, setMotivoCancelacion] = useState('');
+  const [cancelando, setCancelando]               = useState(false);
+  const [resultadoLote, setResultadoLote]         = useState<{titulo:string, fallidos:{numero:string,error:string}[]}|null>(null);
+  // H27+H39: al arrastrar una SC o COT para enviarla se pregunta el canal y luego se muestra el enlace con el aviso del correo.
+  const [envioHub, setEnvioHub]       = useState<{tipo:'SC'|'COT', id:string, numero:string, telefono:string}|null>(null);
+  const [canalHub, setCanalHub]       = useState<'WhatsApp'|'Email'|'Otro'|null>(null);
+  const [enviandoHub, setEnviandoHub] = useState(false);
+  const [hubEnlace, setHubEnlace]     = useState<{documento:string, link:string, correo:any, canal:string|null, color:'blue'|'indigo'}|null>(null);
+
   const loadData = useCallback(async()=>{
     setLoading(true);
     try {
@@ -280,14 +313,38 @@ export default function VentasHub() {
     catch(err:any){setToast({msg:err.message||'Error al cargar analítica',type:'error'});}
   }
 
-  const scAlertDias  = Number(alertDias?.alerta_sc_dias?.value  || alertDias?.alerta_sc_dias  || 2);
-  const cotAlertDias = Number(alertDias?.alerta_cot_dias?.value || alertDias?.alerta_cot_dias || 2);
-  const venAlertDias = Number(alertDias?.alerta_ven_dias?.value || alertDias?.alerta_ven_dias || 2);
+  // N8: un solo camino de lectura de los días de alerta (respuesta del servidor o lo guardado en el panel).
+  const scAlertDias  = diasAlerta(alertDias, 'alerta_sc_dias');
+  const cotAlertDias = diasAlerta(alertDias, 'alerta_cot_dias');
+  const venAlertDias = diasAlerta(alertDias, 'alerta_ven_dias');
+
+  // H3: cotizaciones y pedidos de cada solicitud. La lista de SC trae sus cotizaciones (ligeras, todas); se completan
+  // con las de la lista de COT. Los pedidos salen de la lista de PVEN (sc_id).
+  const cotsPorSC = useMemo(() => {
+    const m = new Map<number, any[]>();
+    for (const s of solicitudes) if (Array.isArray(s.cotizaciones)) m.set(s.id, [...s.cotizaciones]);
+    for (const c of cotizaciones) {
+      if (!c.sc_id) continue;
+      const lista = m.get(c.sc_id) || [];
+      if (!lista.some((x: any) => x.id === c.id)) lista.push(c);
+      m.set(c.sc_id, lista);
+    }
+    return m;
+  }, [solicitudes, cotizaciones]);
+  const pedsPorSC = useMemo(() => {
+    const m = new Map<number, any[]>();
+    for (const v of pedidos) if (v.sc_id) m.set(v.sc_id, [...(m.get(v.sc_id) || []), v]);
+    return m;
+  }, [pedidos]);
+  // SC con una cotización activa (choque H3: esCotizacionActiva, VENCIDA cuenta como activa).
+  const scConCot = useMemo(() => new Set(
+    Array.from(cotsPorSC).filter(([, cots]) => cots.some((c: any) => esCotizacionActiva(c.estado))).map(([scId]) => scId)
+  ), [cotsPorSC]);
 
   // Clasificación de estados de no resolución vs resueltos
   const isDocNoResolucion = useCallback((item: any) => {
-    return ESTADOS_NO_RESOLUCION.includes(item.estado);
-  }, []);
+    return esNoResuelto(item, scConCot);
+  }, [scConCot]);
 
   const isDocAtrasado = useCallback((item: any) => {
     const dLimit = item.tipo === 'SC' ? scAlertDias : item.tipo === 'COT' ? cotAlertDias : venAlertDias;
@@ -296,7 +353,7 @@ export default function VentasHub() {
 
   const noResueltosList = useMemo(() => allData.filter(isDocNoResolucion), [allData, isDocNoResolucion]);
   const atrasadosList   = useMemo(() => allData.filter(isDocAtrasado), [allData, isDocAtrasado]);
-  const accionesTomadasList = useMemo(() => allData.filter(d => ESTADOS_ACCION_TOMADA.includes(d.estado)), [allData]);
+  const accionesTomadasList = useMemo(() => allData.filter(d => esAccionTomada(d, scConCot)), [allData, scConCot]);
 
   const scAtrasadas  = useMemo(() => solicitudes.filter(isDocAtrasado), [solicitudes, isDocAtrasado]);
   const cotAtrasadas = useMemo(() => cotizaciones.filter(isDocAtrasado), [cotizaciones, isDocAtrasado]);
@@ -317,41 +374,115 @@ export default function VentasHub() {
     // Quick filter adicional
     if(quickFilter === 'no_resueltos') base = base.filter(isDocNoResolucion);
     else if(quickFilter === 'atrasados') base = base.filter(isDocAtrasado);
-    else if(quickFilter === 'acciones_tomadas') base = base.filter(d => ESTADOS_ACCION_TOMADA.includes(d.estado));
+    else if(quickFilter === 'acciones_tomadas') base = base.filter(d => esAccionTomada(d, scConCot));
 
     if(search) {
       const q = search.toLowerCase();
-      base = base.filter(r => 
+      base = base.filter(r =>
         (r.numero || '').toLowerCase().includes(q) ||
         (r.customer_name || r.cliente?.nombre || '').toLowerCase().includes(q) ||
-        (r.advisor_name || r.asesor?.nombre || '').toLowerCase().includes(q) ||
+        (r.advisor_name || r.cotizador || r.asesor?.nombre || '').toLowerCase().includes(q) ||
         (r.estado || '').toLowerCase().includes(q) ||
+        etiquetaEstado(r.tipo, r.estado).toLowerCase().includes(q) ||
         coincideProducto(r, search)
       );
     }
     if(filterEstado) base = base.filter(r => r.estado === filterEstado);
     return base;
-  },[activeTab, quickFilter, allData, noResueltosList, solicitudes, cotizaciones, pedidos, accionesTomadasList, search, filterEstado, isDocNoResolucion, isDocAtrasado]);
+  },[activeTab, quickFilter, allData, noResueltosList, solicitudes, cotizaciones, pedidos, accionesTomadasList, search, filterEstado, isDocNoResolucion, isDocAtrasado, scConCot]);
 
-  async function handleBulkChangeEstado(newEstado:string){
-    if(!selectedIds.size) return;
-    for(const idStr of Array.from(selectedIds)){
-      const [tipo,id]=idStr.split('|');
-      const path=tipo==='SC'?`/ventas/solicitudes/${id}`:tipo==='COT'?`/ventas/cotizaciones/${id}`:`/ventas/pedidos/${id}`;
-      await apiFetch(path,{method:'PATCH',body:JSON.stringify({estado:newEstado})}).catch(()=>{});
+  const filaPorId = (idStr: string) => allData.find((d: any) => `${d.tipo}|${d.id}` === idStr);
+  const quitarDeSeleccion = (ids: Set<string>) =>
+    setSelectedIds(prev => { const n = new Set(prev); ids.forEach(i => n.delete(i)); return n; });
+
+  // N5: el cambio masivo de estado solo aplica a Pedidos de Venta; las SC y COT marcadas se omiten. Los fallos se
+  // muestran con el mensaje del servidor (que es la autoridad de las transiciones) y siguen marcados.
+  async function handleBulkChangeEstado(nuevo:string){
+    if(!nuevo) return;
+    const ids = Array.from(selectedIds);
+    const ven = ids.filter(i => i.startsWith('VEN|'));
+    const omitidos = ids.length - ven.length;
+    if(ven.length === 0){
+      setToast({msg:'Selecciona al menos un Pedido de Venta: las solicitudes y cotizaciones no cambian de estado desde aquí.',type:'error'});
+      return;
     }
-    setToast({msg:'Estados actualizados',type:'ok'}); setSelectedIds(new Set()); loadData();
+    const etiqueta = ETIQUETA_ESTADO_VEN[nuevo] || nuevo;
+    if(nuevo === 'FACTURADO' && !window.confirm(`¿Marcar ${ven.length === 1 ? '1 pedido' : `${ven.length} pedidos`} como Facturado? Este estado ya no se puede cambiar.`)) return;
+    setResultadoLote(null);
+    const resultados: {idStr:string, numero:string, ok:boolean, error?:string}[] = [];
+    for(const idStr of ven){
+      const id = idStr.split('|')[1];
+      const numero = filaPorId(idStr)?.numero || `Pedido ${id}`;
+      try{
+        await apiFetch(`/ventas/pedidos/${id}`,{method:'PATCH',body:JSON.stringify({estado:nuevo, updated_by:autorActual()})});
+        resultados.push({idStr, numero, ok:true});
+      }catch(err:any){ resultados.push({idStr, numero, ok:false, error:err?.message}); }
+    }
+    const r = resumenLote(resultados, 'actualizados');
+    if(r.fallidos.length === 0){
+      const nota = omitidos === 0 ? '' : omitidos === 1 ? ' · se omitió 1 solicitud/cotización' : ` · se omitieron ${omitidos} solicitudes/cotizaciones`;
+      setToast({msg:`${r.mensaje} a ${etiqueta}${nota}`,type:'ok'});
+    } else {
+      setResultadoLote({titulo:`${r.mensaje}:`, fallidos:r.fallidos});
+    }
+    quitarDeSeleccion(new Set(resultados.filter(x => x.ok).map(x => x.idStr)));
+    loadData();
   }
 
-  async function handleBulkDelete(){
-    if(!selectedIds.size||!confirm('¿Cancelar documentos seleccionados?')) return;
-    for(const idStr of Array.from(selectedIds)){
-      const [tipo,id]=idStr.split('|');
-      const path=tipo==='SC'?`/ventas/solicitudes/${id}`:tipo==='COT'?`/ventas/cotizaciones/${id}`:`/ventas/pedidos/${id}`;
-      const estado=tipo==='SC'?'CANCELADA':tipo==='COT'?'RECHAZADA':'CANCELADO';
-      await apiFetch(path,{method:'PATCH',body:JSON.stringify({estado})}).catch(()=>{});
+  // N3: cancelar abre un modal con lo que se va a cancelar y el motivo. La acción de fila nunca lee ni cambia la selección.
+  function abrirCancelacion(ids: string[]){
+    setCancelacion({ids});
+    setMotivoCancelacion('');
+  }
+
+  // Filas del modal de cancelación, en el orden en que se procesan (VEN, COT, SC) y con el motivo si se omiten.
+  const filasCancelacion = useMemo(() => (cancelacion ? ordenParaCancelar(cancelacion.ids) : []).map(idStr => {
+    const row = allData.find((d: any) => `${d.tipo}|${d.id}` === idStr);
+    return {idStr, row, motivo: row ? motivoNoCancelable(row) : 'ya no está en la lista del Hub'};
+  }), [cancelacion, allData]);
+  const porCancelar = filasCancelacion.filter(f => !f.motivo);
+
+  async function confirmarCancelacion(){
+    const motivo = motivoCancelacion.trim();
+    if(!cancelacion || motivo.length < 5 || porCancelar.length === 0) return;
+    setCancelando(true);
+    setResultadoLote(null);
+    const autor = autorActual();
+    const resultados: {idStr:string, numero:string, ok:boolean, error?:string}[] = [];
+    for(const {idStr, row} of porCancelar){
+      try{
+        if(row.tipo === 'SC'){
+          // La ruta real: guarda el motivo, manda a la papelera y revoca enlaces (bloquea si hay COT o PVEN activos).
+          await apiFetch(`/ventas/solicitudes/${row.id}/cancelar`,{method:'POST',body:JSON.stringify({razon:motivo, user_name:autor})});
+        } else if(row.tipo === 'COT'){
+          await apiFetch(`/ventas/cotizaciones/${row.id}`,{method:'PATCH',body:JSON.stringify({estado:'RECHAZADA', updated_by:autor})});
+          await apiFetch(`/ventas/cotizaciones/${row.id}/actividad`,{method:'POST',body:JSON.stringify({action:'NOTE_ADDED', description:`Motivo del rechazo (Hub): ${motivo}`, user_name:autor})})
+            .catch(()=>{}); // la nota es complementaria: el rechazo ya quedó hecho
+        } else {
+          await apiFetch(`/ventas/pedidos/${row.id}`,{method:'PATCH',body:JSON.stringify({estado:'CANCELADO', cancellation_reason:motivo, cancelled_at:new Date().toISOString(), updated_by:autor})});
+        }
+        resultados.push({idStr, numero:row.numero, ok:true});
+      }catch(err:any){ resultados.push({idStr, numero:row.numero, ok:false, error:err?.message}); }
     }
-    setToast({msg:'Documentos cancelados',type:'ok'}); setSelectedIds(new Set()); loadData();
+    const r = resumenLote(resultados);
+    if(r.fallidos.length === 0) setToast({msg:r.mensaje,type:'ok'});
+    else setResultadoLote({titulo:`${r.mensaje}:`, fallidos:r.fallidos});
+    const exitosos = new Set(resultados.filter(x => x.ok).map(x => x.idStr));
+    quitarDeSeleccion(exitosos);
+    setCancelacion(null);
+    setCancelando(false);
+    if(quickDetailDoc && exitosos.has(`${quickDetailDoc.tipo}|${quickDetailDoc.id}`)) openDocDetail(quickDetailDoc);
+    loadData();
+  }
+
+  // N2: cambio de estado del pedido desde el panel rápido (solo destinos que el servidor acepta).
+  async function cambiarEstadoPedido(doc:any, est:string){
+    try{
+      await apiFetch(`/ventas/pedidos/${doc.id}`,{method:'PATCH',body:JSON.stringify({estado:est, updated_by:autorActual()})});
+      openDocDetail(doc);
+      loadData();
+      setToast({msg:`Estado actualizado a ${ETIQUETA_ESTADO_VEN[est] || est}`,type:'ok'});
+    }catch(e:any){setToast({msg:e.message,type:'error'});}
   }
 
   async function handleAskAI(){
@@ -381,6 +512,7 @@ export default function VentasHub() {
   }
 
   const getKanbanCol=(item:any)=>{
+    if (item.tipo==='SC' && item.estado==='CONFIRMADA' && !scConCot.has(item.id)) return 'No Resuelto'; // H3: falta cotizarla
     const e=item.estado||'';
     if(['CANCELADO','CANCELADA','RECHAZADA'].includes(e)) return 'Cancelado';
     if(['ENTREGADO','FACTURADO','CONFIRMADA','LISTO_ENTREGA'].includes(e)) return 'Acción Tomada';
@@ -398,12 +530,14 @@ export default function VentasHub() {
     // "No Resuelto" (ver mas abajo), solo por soltarla donde ya estaba.
     const item = allData.find((d:any) => d.tipo === tipo && String(d.id) === id);
     if (item && getKanbanCol(item) === col) return;
+    // N3: soltar en "Cancelado" tampoco cancela sin motivo: abre el mismo modal que el menú de la fila.
+    if (col === 'Cancelado') { abrirCancelacion([idStr]); return; }
     const path=tipo==='SC'?`/ventas/solicitudes/${id}`:tipo==='COT'?`/ventas/cotizaciones/${id}`:`/ventas/pedidos/${id}`;
+    // H50: una COT en "En Gestión" se envía por el flujo de confirmación (ya no PATCH a ENVIADA, que da 400).
     const m:Record<string,Record<string,string>>={
       'No Resuelto':{SC:'BORRADOR',COT:'PENDIENTE_CONFIRMACION',VEN:'PENDIENTE_COMPRA'},
-      'En Gestión':{SC:'PENDIENTE_CONFIRMACION',COT:'ENVIADA',VEN:'EN_PROCESO'},
+      'En Gestión':{SC:'PENDIENTE_CONFIRMACION',COT:'PENDIENTE_CONFIRMACION',VEN:'EN_PROCESO'},
       'Acción Tomada':{SC:'CONFIRMADA',COT:'CONFIRMADA',VEN:'LISTO_ENTREGA'},
-      'Cancelado':{SC:'CANCELADA',COT:'RECHAZADA',VEN:'CANCELADO'},
     };
     // Gate 2 (Round 2, adversarial review): soltar una COT en "No Resuelto" mapeaba a
     // un PATCH directo {estado:'PENDIENTE_CONFIRMACION'} -- exactamente el bypass que
@@ -416,7 +550,8 @@ export default function VentasHub() {
     // Round 3: ademas, esto SI envia un correo real al cliente -- a diferencia de los
     // demas drops (que solo cambian un estado interno), se confirma explicitamente
     // antes de disparar el POST, para que un drag accidental no termine emailando a un
-    // cliente sin que nadie lo haya decidido a proposito.
+    // cliente sin que nadie lo haya decidido a proposito. H27+H39: esa confirmacion es
+    // ahora la ventana del canal (WhatsApp, Email u Otro), igual que en el detalle.
     if (tipo === 'COT' && (m[col] || {})[tipo] === 'PENDIENTE_CONFIRMACION') {
       // Re-review del fix final (Minor 5a): getKanbanCol no tiene un caso explicito para
       // PENDIENTE_CONFIRMACION, asi que una tarjeta ya pendiente cae en "No Resuelto" por
@@ -427,11 +562,7 @@ export default function VentasHub() {
         setToast({msg: 'Ya está pendiente de confirmación del cliente.', type: 'error'});
         return;
       }
-      if (!window.confirm(`¿Enviar "${item?.numero || id}" al cliente para confirmación? Esto genera y envía un link de confirmación real.`)) return;
-      await apiFetch(`/ventas/cotizaciones/${id}/enviar-confirmacion`, {method:'POST', body: JSON.stringify({})})
-        .then(() => setToast({msg: 'Enviada para confirmación del cliente', type: 'ok'}))
-        .catch((err: any) => setToast({msg: 'No se pudo enviar para confirmación: ' + (err?.message || 'la cotización necesita precios calculados primero.'), type: 'error'}));
-      loadData();
+      abrirEnvioHub('COT', id, item);
       return;
     }
     // Final whole-branch review (hallazgo #3): mismo bypass que el de COT arriba, pero
@@ -448,18 +579,47 @@ export default function VentasHub() {
         setToast({msg: 'Ya está pendiente de confirmación del cliente.', type: 'error'});
         return;
       }
-      if (!window.confirm(`¿Enviar "${item?.numero || id}" al cliente para confirmación? Esto genera y envía un link de confirmación real.`)) return;
-      await apiFetch(`/ventas/solicitudes/${id}/enviar-confirmacion`, {method:'POST', body: JSON.stringify({})})
-        .then(() => setToast({msg: 'Enviada para confirmación del cliente', type: 'ok'}))
-        .catch((err: any) => setToast({msg: 'No se pudo enviar para confirmación: ' + (err?.message || 'la solicitud necesita un asesor asignado primero.'), type: 'error'}));
-      loadData();
+      abrirEnvioHub('SC', id, item);
       return;
     }
+    // R10: devolver a Borrador una SC con COT o PVEN activos responde 409; el toast muestra el mensaje del servidor.
     await apiFetch(path,{method:'PATCH',body:JSON.stringify({estado:(m[col]||{})[tipo]||col})})
       .then(() => setToast({msg: 'Estado actualizado', type: 'ok'}))
       .catch((err: any) => setToast({msg: 'No se pudo mover: ' + (err?.message || 'intenta de nuevo.'), type: 'error'}));
     loadData();
   };
+
+  // H27+H39 (usuario: "Sí, preguntar el canal"): el envío desde el tablero pide el canal y luego muestra el enlace.
+  function abrirEnvioHub(tipo:'SC'|'COT', id:string, item:any){
+    setEnvioHub({tipo, id, numero:item?.numero || id, telefono:item?.customer_phone || ''});
+    setCanalHub(null);
+  }
+
+  async function confirmarEnvioHub(){
+    if(!envioHub || !canalHub) return;
+    const {tipo, id, numero, telefono} = envioHub;
+    const ruta = tipo === 'COT' ? 'cotizaciones' : 'solicitudes';
+    setEnviandoHub(true);
+    try{
+      const d = await apiFetch(`/ventas/${ruta}/${id}/enviar-confirmacion`, {method:'POST', body: JSON.stringify({canal:canalHub, user_name:autorActual()})});
+      const link = d?.link_confirmacion || '';
+      const documento = tipo === 'COT' ? `la cotización ${numero}` : `la solicitud ${numero}`;
+      if(canalHub === 'WhatsApp'){
+        const url = waUrl(telefono, link ? `Hola, aquí está ${documento}. Confírmala aquí: ${link}` : `Hola, aquí está ${documento}.`);
+        if(url) window.open(url, '_blank');
+      }
+      if(link) setHubEnlace({documento, link, correo:d?.correo ?? null, canal:canalHub, color: tipo === 'COT' ? 'blue' : 'indigo'});
+      setToast({msg: 'Enviada para confirmación del cliente', type: 'ok'});
+      setEnvioHub(null);
+      setCanalHub(null);
+      loadData();
+    }catch(err:any){
+      // La ventana del canal sigue abierta: se puede elegir otro canal o cancelar.
+      setToast({msg: 'No se pudo enviar para confirmación: ' + (err?.message || (tipo === 'COT'
+        ? 'la cotización necesita precios calculados primero.' : 'la solicitud necesita un asesor asignado primero.')), type: 'error'});
+    }
+    setEnviandoHub(false);
+  }
 
   // KPIs con contexto de Nebulae Kids
   const totalFacturadoCOP = useMemo(() => {
@@ -478,7 +638,8 @@ export default function VentasHub() {
     },
     {
       label: 'Cotizaciones Vigentes',
-      value: cotizaciones.filter(c => !['CONFIRMADA','RECHAZADA'].includes(c.estado)).length,
+      // COT-LISTA: una confirmada cuyos pedidos están todos cancelados vuelve a estar vigente (hay que ajustarla y reenviarla).
+      value: cotizaciones.filter(c => !['CONFIRMADA','RECHAZADA'].includes(c.estado) || (c.estado === 'CONFIRMADA' && soloPedidosCancelados(c))).length,
       color: 'amber',
       icon: <Package size={22}/>,
       sub: cotAtrasadas.length > 0 ? `${cotAtrasadas.length} sin respuesta (+${cotAlertDias}d)` : 'Flujo en tiempo',
@@ -674,7 +835,7 @@ export default function VentasHub() {
                     className="w-full border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none mb-3 focus:ring-2 focus:ring-indigo-200 bg-white">
                     <option value="">Todos los estados</option>
                     {[...new Set([...ESTADOS_NO_RESOLUCION, ...ESTADOS_ACCION_TOMADA])].map(s=>(
-                      <option key={s} value={s}>{s}</option>
+                      <option key={s} value={s}>{etiquetaEstado('', s)}</option>
                     ))}
                   </select>
                   <button onClick={()=>{setFilterEstado('');setShowFilters(false);}} className="text-xs text-rose-500 hover:text-rose-700 font-bold w-full text-center">Limpiar filtro</button>
@@ -685,6 +846,22 @@ export default function VentasHub() {
             <p className="text-xs text-slate-400 font-medium ml-auto">
               Mostrando <strong className="text-slate-700">{filteredData.length}</strong> documentos
             </p>
+          </div>
+        )}
+
+        {/* N3/N5: lo que no se pudo cancelar o actualizar, con el mensaje del servidor (no se traga ningún error) */}
+        {resultadoLote && (
+          <div className="bg-rose-50 border border-rose-200 rounded-2xl px-4 py-3 flex items-start gap-3">
+            <AlertTriangle size={16} className="text-rose-600 shrink-0 mt-0.5"/>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-black text-rose-800">{resultadoLote.titulo}</p>
+              <ul className="mt-1 space-y-0.5">
+                {resultadoLote.fallidos.map((f, i) => (
+                  <li key={i} className="text-xs text-rose-700"><span className="font-bold">{f.numero}:</span> {f.error}</li>
+                ))}
+              </ul>
+            </div>
+            <button onClick={()=>setResultadoLote(null)} className="p-1 text-rose-400 hover:text-rose-700 rounded-lg" title="Cerrar"><X size={14}/></button>
           </div>
         )}
 
@@ -899,7 +1076,12 @@ export default function VentasHub() {
                     const idStr = `${row.tipo}|${row.id}`;
                     const isNoRes = isDocNoResolucion(row);
                     const isAtras = isDocAtrasado(row);
+                    // El badge "No Resuelto (+Nd)" usa el mismo número que la alerta (días sin movimiento);
+                    // la columna Antigüedad, los días desde que se creó (R5).
                     const dDiff = daysDiff(row.updated_at || row.created_at);
+                    const dEdad = diasDesde(row.created_at);
+                    const urlWhatsApp = waUrl(row.customer_phone);
+                    const noCancelable = motivoNoCancelable(row);
 
                     return (
                       <tr key={idx}
@@ -937,15 +1119,15 @@ export default function VentasHub() {
                           <p className="font-bold text-slate-800 leading-tight">{row.customer_name || row.cliente?.nombre || 'Cliente General'}</p>
                           {row.customer_phone && <p className="text-[10px] text-slate-400 font-mono mt-0.5">{row.customer_phone}</p>}
                         </td>
-                        <td className="px-3 py-3 text-slate-500 text-[11px]">{row.advisor_name || row.cotizador || row.asesor?.nombre || 'Asignado'}</td>
+                        <td className="px-3 py-3 text-slate-500 text-[11px]">{row.advisor_name || row.cotizador || row.asesor?.nombre || <span className="italic text-slate-400">Sin asignar</span>}</td>
                         <td className="px-3 py-3 text-[11px]">
                           <span className={`font-medium ${isAtras ? 'text-rose-600 font-bold' : 'text-slate-500'}`}>
-                            hace {dDiff === 0 ? 'hoy' : `${dDiff}d`}
+                            {textoAntiguedad(dEdad)}
                           </span>
                         </td>
                         <td className="px-3 py-3">
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${getEstadoClass(row.estado)}`}>
-                            {row.estado}
+                            {etiquetaEstado(row.tipo, row.estado)}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-right font-black text-slate-900">
@@ -954,12 +1136,16 @@ export default function VentasHub() {
                         
                         {/* Accion sugerida segun el tipo y estado */}
                         <td className="px-3 py-3 text-center">
-                          {row.tipo === 'SC' && row.estado !== 'CONFIRMADA' && row.estado !== 'CANCELADA' ? (
-                            <button onClick={e=>{e.stopPropagation();router.push(`/dashboard/ventas/solicitud?id=${row.id}`);}}
-                              className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-[10px] rounded-lg border border-indigo-200 transition-colors">
-                              Cotizar →
-                            </button>
-                          ) : row.tipo === 'COT' && row.estado !== 'CONFIRMADA' && row.estado !== 'RECHAZADA' ? (
+                          {row.tipo === 'SC' ? (() => {
+                            // H3: el paso que de verdad toca, directo a la pantalla correcta.
+                            const acc = accionSiguienteSC(row, {cotizaciones: cotsPorSC.get(row.id) || [], pedidos: pedsPorSC.get(row.id) || []});
+                            return acc ? (
+                              <button onClick={e=>{e.stopPropagation();router.push(acc.href);}}
+                                className={`px-2.5 py-1 font-bold text-[10px] rounded-lg border transition-colors ${TONO_ACCION[acc.tono] || TONO_ACCION.slate}`}>
+                                {acc.label}
+                              </button>
+                            ) : <span className="text-[10px] text-slate-400 font-medium">—</span>;
+                          })() : row.tipo === 'COT' && row.estado !== 'CONFIRMADA' && row.estado !== 'RECHAZADA' ? (
                             <button onClick={e=>{e.stopPropagation();router.push(`/dashboard/ventas/cotizacion?id=${row.id}`);}}
                               className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-[10px] rounded-lg border border-amber-200 transition-colors">
                               Aprobar Venta →
@@ -992,18 +1178,22 @@ export default function VentasHub() {
                               onClick={e=>{e.stopPropagation();setActRow(row);}}>
                               <Activity size={12}/> Ver Historial & Chatter
                             </button>
-                            {row.customer_phone && (
-                              <a href={`https://wa.me/${row.customer_phone.replace(/[^0-9]/g,'')}`} target="_blank" rel="noreferrer"
+                            {urlWhatsApp && (
+                              <a href={urlWhatsApp} target="_blank" rel="noreferrer"
                                 className="w-full px-3 py-1.5 hover:bg-emerald-50 text-xs font-medium flex items-center gap-2 text-emerald-700"
                                 onClick={e=>e.stopPropagation()}>
                                 <MessageCircle size={12}/> Abrir WhatsApp
                               </a>
                             )}
-                            <div className="border-t border-slate-100 my-1"/>
-                            <button className="w-full px-3 py-1.5 hover:bg-rose-50 text-xs font-medium text-rose-600 flex items-center gap-2"
-                              onClick={e=>{e.stopPropagation();setSelectedIds(new Set([idStr]));handleBulkDelete();}}>
-                              <Trash2 size={12}/> Cancelar Documento
-                            </button>
+                            {!noCancelable && (
+                              <>
+                                <div className="border-t border-slate-100 my-1"/>
+                                <button className="w-full px-3 py-1.5 hover:bg-rose-50 text-xs font-medium text-rose-600 flex items-center gap-2"
+                                  onClick={e=>{e.stopPropagation();abrirCancelacion([idStr]);}}>
+                                  <Trash2 size={12}/> Cancelar documento
+                                </button>
+                              </>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1043,7 +1233,7 @@ export default function VentasHub() {
                 <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2.5 min-h-[300px]">
                   {filteredData.filter(d=>getKanbanCol(d)===col).map((row:any,i:number)=>{
                     const isAtras = isDocAtrasado(row);
-                    const dDiff = daysDiff(row.updated_at || row.created_at);
+                    const dEdad = diasDesde(row.created_at); // R5: días desde que se creó
 
                     return (
                       <div key={i} draggable onDragStart={e=>handleDragStart(e,`${row.tipo}|${row.id}`)} onClick={()=>openDocDetail(row)}
@@ -1056,7 +1246,7 @@ export default function VentasHub() {
                         <div className="flex items-center justify-between text-[10px] text-slate-400 mb-2">
                           <span>{fDate(row.created_at)}</span>
                           <span className={`font-semibold ${isAtras ? 'text-rose-600 font-bold' : ''}`}>
-                            hace {dDiff === 0 ? 'hoy' : `${dDiff}d`}
+                            {textoAntiguedad(dEdad)}
                           </span>
                         </div>
                         <div className="flex justify-between items-center pt-2 border-t border-slate-100">
@@ -1082,15 +1272,26 @@ export default function VentasHub() {
         {selectedIds.size>0&&(
           <div className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-6 py-3.5 rounded-2xl shadow-2xl flex items-center gap-4 z-40 border border-slate-700">
             <span className="font-bold text-xs bg-slate-800 px-3 py-1 rounded-full border border-slate-700">{selectedIds.size} seleccionados</span>
-            <select onChange={e=>handleBulkChangeEstado(e.target.value)} defaultValue=""
-              className="bg-slate-800 border border-slate-600 text-white text-xs rounded-xl px-3 py-1.5 outline-none">
-              <option value="" disabled>Cambiar Estado Múltiple...</option>
-              <option value="EN_PROCESO">En Proceso</option>
-              <option value="LISTO_ENTREGA">Listo Entrega</option>
-              <option value="ENTREGADO">Entregado</option>
-              <option value="FACTURADO">Facturado</option>
-            </select>
-            <button onClick={handleBulkDelete} className="bg-rose-500/20 text-rose-400 hover:bg-rose-500/40 p-2 rounded-xl transition-colors" title="Cancelar seleccionados">
+            {(() => {
+              // N5: solo pedidos. Se ofrecen los estados manuales a los que al menos uno de los pedidos marcados puede
+              // pasar (más Facturado si alguno está entregado); Entregado va por Entregas. El servidor decide cada uno.
+              const venMarcados = Array.from(selectedIds).filter(i => i.startsWith('VEN|'));
+              const destinos = new Set<string>();
+              venMarcados.forEach(idStr => {
+                const op = opcionesEstadoPVEN(filaPorId(idStr)?.estado);
+                op.mover.forEach(e => destinos.add(e));
+                if (op.facturar) destinos.add('FACTURADO');
+              });
+              const opciones = [...ESTADOS_VEN_MANUALES, 'FACTURADO'].filter(e => destinos.has(e));
+              return (
+                <select value="" onChange={e=>handleBulkChangeEstado(e.target.value)} disabled={venMarcados.length === 0 || opciones.length === 0}
+                  className="bg-slate-800 border border-slate-600 text-white text-xs rounded-xl px-3 py-1.5 outline-none disabled:opacity-50 disabled:cursor-not-allowed">
+                  <option value="" disabled>Cambiar estado de pedidos ({venMarcados.length})…</option>
+                  {opciones.map(est => <option key={est} value={est}>{ETIQUETA_ESTADO_VEN[est] || est}</option>)}
+                </select>
+              );
+            })()}
+            <button onClick={()=>abrirCancelacion(Array.from(selectedIds))} className="bg-rose-500/20 text-rose-400 hover:bg-rose-500/40 p-2 rounded-xl transition-colors" title="Cancelar seleccionados">
               <Trash2 size={15}/>
             </button>
             <button onClick={()=>setSelectedIds(new Set())} className="p-1.5 text-slate-400 hover:text-white"><X size={15}/></button>
@@ -1110,7 +1311,7 @@ export default function VentasHub() {
                   <div>
                     <h2 className="text-lg font-black text-slate-900">{quickDetailDoc.numero}</h2>
                     <span className={`px-2 py-0.5 rounded-md text-[10px] font-black border ${getEstadoClass(quickDetailDoc.estado)}`}>
-                      {quickDetailDoc.estado}
+                      {etiquetaEstado(quickDetailDoc.tipo, quickDetailDoc.estado)}
                     </span>
                   </div>
                 </div>
@@ -1121,7 +1322,7 @@ export default function VentasHub() {
                 {/* Progreso del Flujo -- linea temporal compacta SC -> COT -> PVEN */}
                 {(() => {
                   const pipelineStep = quickDetailDoc.tipo === 'VEN' ? 2
-                    : quickDetailDoc.tipo === 'COT' ? ((quickDetailDoc.pedidos_venta || []).length > 0 ? 2 : 1)
+                    : quickDetailDoc.tipo === 'COT' ? (pedidoVigente(quickDetailDoc) ? 2 : 1) // COT-LISTA: un pedido cancelado no cuenta
                     : ((quickDetailDoc.cotizaciones || []).some((c: any) => c.estado === 'CONFIRMADA') ? 2 : (quickDetailDoc.cotizaciones || []).length > 0 ? 1 : 0);
                   return (
                     <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs">
@@ -1209,27 +1410,56 @@ export default function VentasHub() {
                   </div>
                 )}
 
-                {/* State Changer for VEN */}
-                {quickDetailDoc.tipo === 'VEN' && (
-                  <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Cambiar Estado Operativo</p>
-                    <div className="flex flex-wrap gap-2">
-                      {['PENDIENTE_COMPRA','EN_PROCESO','EN_TRANSITO','LISTO_ENTREGA','ENTREGADO','FACTURADO','CANCELADO'].map(est=>(
-                        <button key={est} onClick={async()=>{
-                          try{
-                            await apiFetch(`/ventas/pedidos/${quickDetailDoc.id}`,{method:'PATCH',body:JSON.stringify({estado:est})});
-                            openDocDetail(quickDetailDoc);
-                            loadData();
-                            setToast({msg:`Estado actualizado a ${est}`,type:'ok'});
-                          }catch(e:any){setToast({msg:e.message,type:'error'});}
-                        }}
-                        className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors ${quickDetailDoc.estado===est?'bg-indigo-600 text-white border-indigo-600 shadow-xs':'bg-white text-slate-700 hover:bg-slate-100 border-slate-200'}`}>
-                          {est}
-                        </button>
-                      ))}
+                {/* State Changer for VEN -- N2: solo lo que el servidor acepta desde el estado actual; nunca un botón
+                    directo a Entregado (va por Entregas) ni a Cancelado sin motivo (modal de N3). */}
+                {quickDetailDoc.tipo === 'VEN' && (() => {
+                  const op = opcionesEstadoPVEN(quickDetailDoc.estado);
+                  const sinOpciones = op.mover.length === 0 && !op.despachar && !op.cancelar && !op.facturar;
+                  return (
+                    <div className="bg-slate-50 rounded-2xl p-4 border border-slate-200 space-y-2">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-wide">Cambiar Estado Operativo</p>
+                      {op.mover.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {op.mover.map(est => (
+                            <button key={est} onClick={() => cambiarEstadoPedido(quickDetailDoc, est)}
+                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-white text-slate-700 hover:bg-slate-100 border-slate-200">
+                              {ETIQUETA_ESTADO_VEN[est]}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {(op.despachar || op.facturar || op.cancelar) && (
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                          {op.despachar && (
+                            <Link href="/dashboard/inventario/entregas"
+                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-teal-50 text-teal-800 hover:bg-teal-100 border-teal-200">
+                              Despachar en Entregas →
+                            </Link>
+                          )}
+                          {op.facturar && (
+                            <button onClick={() => {
+                              if (window.confirm(`¿Marcar ${quickDetailDoc.numero} como Facturado? Este estado ya no se puede cambiar.`)) cambiarEstadoPedido(quickDetailDoc, 'FACTURADO');
+                            }}
+                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-green-50 text-green-800 hover:bg-green-100 border-green-200">
+                              Marcar como Facturado
+                            </button>
+                          )}
+                          {op.cancelar && (
+                            <button onClick={() => abrirCancelacion([`VEN|${quickDetailDoc.id}`])}
+                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-white text-rose-600 hover:bg-rose-50 border-rose-200">
+                              Cancelar pedido
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      {sinOpciones && (
+                        <p className="text-xs text-slate-500">
+                          Este pedido está {etiquetaEstado('VEN', quickDetailDoc.estado)}; su estado ya no se cambia desde aquí.
+                        </p>
+                      )}
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* Direct Action Link */}
                 <div className="pt-2">
@@ -1248,6 +1478,60 @@ export default function VentasHub() {
           </>
         )}
       </div>
+
+      {/* Ventanas que pueden abrirse desde el panel rápido (z-50): van después en el DOM para quedar encima. */}
+
+      {/* N3: cancelar documentos con motivo */}
+      {cancelacion && (
+        <Modal
+          title={filasCancelacion.length === 1 ? `Cancelar ${filasCancelacion[0].row?.numero || 'documento'}` : `Cancelar ${filasCancelacion.length} documentos`}
+          subtitle="Revisa qué se va a cancelar e indica el motivo"
+          icon={Trash2} color="rose" maxWidth="lg"
+          onClose={()=>{ if(!cancelando) setCancelacion(null); }}
+          footer={(
+            <>
+              <Button variant="secondary" disabled={cancelando} onClick={()=>setCancelacion(null)}>Volver</Button>
+              <Button variant="danger" loading={cancelando} disabled={motivoCancelacion.trim().length < 5 || porCancelar.length === 0} onClick={confirmarCancelacion}>
+                {porCancelar.length === 1 ? 'Cancelar documento' : 'Cancelar documentos'}
+              </Button>
+            </>
+          )}>
+          <ul className="space-y-2">
+            {filasCancelacion.map(({idStr, row, motivo}) => (
+              <li key={idStr} className={`rounded-xl border px-3 py-2 text-xs ${motivo ? 'bg-slate-50 border-slate-200 text-slate-400' : 'bg-white border-rose-100 text-slate-700'}`}>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold">{row?.numero || idStr}</span>
+                  <span className={motivo ? '' : 'text-slate-500'}>· {getTipoLabel(row?.tipo || idStr.split('|')[0])}</span>
+                </div>
+                <p className="mt-0.5">{motivo ? `Se omite: ${motivo}.` : EFECTO_CANCELACION[row.tipo]}</p>
+              </li>
+            ))}
+          </ul>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Motivo (mínimo 5 caracteres)</label>
+            <textarea value={motivoCancelacion} onChange={e=>setMotivoCancelacion(e.target.value)} rows={3} disabled={cancelando}
+              placeholder="Ej.: El cliente desistió de la compra"
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400"/>
+          </div>
+        </Modal>
+      )}
+
+      {/* H27+H39: canal del envío al arrastrar una SC o COT (misma ventana que en el detalle) */}
+      {envioHub && (
+        <ChannelModal
+          selectedChannel={canalHub}
+          onSelectChannel={setCanalHub}
+          onConfirm={confirmarEnvioHub}
+          onCancel={()=>{ if(!enviandoHub){ setEnvioHub(null); setCanalHub(null); } }}
+          saving={enviandoHub}
+          customerHasPhone={!!waUrl(envioHub.telefono)}
+          documentLabel={envioHub.tipo === 'COT' ? 'cotización' : 'solicitud'}
+        />
+      )}
+      {hubEnlace && (
+        <EnlaceConfirmacionModal documento={hubEnlace.documento} link={hubEnlace.link} color={hubEnlace.color}
+          correo={hubEnlace.correo} canal={hubEnlace.canal} onClose={()=>setHubEnlace(null)} />
+      )}
     </div>
   );
 }

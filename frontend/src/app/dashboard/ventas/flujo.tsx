@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Link2, Copy, Check, ExternalLink, ArrowRight } from 'lucide-react';
 import { Modal, Button } from '@/components/ui';
 import type { AccentColor } from '@/components/ui';
+import { avisoCorreo } from '@/lib/aviso-correo';
 
 // Piezas compartidas por las tres paginas de detalle del flujo SC -> COT -> PVEN, para
 // que cada estado le diga al usuario cual es su siguiente paso en vez de dejar una
@@ -79,13 +80,18 @@ export function NextStepCard({ tone, title, children, actions }: {
 // asi que este es el unico momento en que el asesor puede ver/copiar el enlace. Sin esto,
 // con el canal "Email"/"Otro" -- o sin SMTP configurado -- el enlace no llegaba a ningun
 // lado y el cliente nunca podia confirmar.
-export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', onClose }: {
+// H27+H39: `correo` es el resultado del correo de respaldo que devuelve el envio y `canal` el
+// canal elegido; el recuadro dice en verde si el correo salio o en ambar por que no y que hacer.
+export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', correo, canal, onClose }: {
   documento: string;
   link: string;
   color?: AccentColor;
+  correo?: { enviado: boolean; destino?: string | null; motivo?: string | null; mensaje?: string } | null;
+  canal?: string | null;
   onClose: () => void;
 }) {
   const [copiado, setCopiado] = useState(false);
+  const aviso = avisoCorreo(correo, canal);
 
   async function copiar() {
     try {
@@ -107,6 +113,13 @@ export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', onC
       onClose={onClose}
       footer={<Button variant="secondary" onClick={onClose}>Cerrar</Button>}
     >
+      {aviso && (
+        <div className={`rounded-xl border px-3 py-2.5 text-xs font-semibold ${aviso.tono === 'ok'
+          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+          : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+          {aviso.texto}
+        </div>
+      )}
       <p className="text-sm text-slate-600">
         Envíale este enlace al cliente por el canal que prefieras. Es de un solo uso y vence en 2 días;
         cuando el cliente lo abra y confirme, esta pantalla te mostrará el siguiente paso.

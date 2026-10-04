@@ -37,7 +37,7 @@ export const MODALIDADES_PAGO = [
   'Otro',
 ];
 
-const ESTADOS_SC: Record<string, {label:string; color:string; bg:string; border:string}> = {
+export const ESTADOS_SC: Record<string, {label:string; color:string; bg:string; border:string}> = {
   BORRADOR:               {label:'Borrador',           color:'#64748b',bg:'#f1f5f9',border:'#e2e8f0'},
   ASIGNADA:               {label:'Asignada',           color:'#0e7490',bg:'#ecfeff',border:'#a5f3fc'},
   PENDIENTE_CONFIRMACION: {label:'Pend. confirmacion', color:'#b45309',bg:'#fffbeb',border:'#fde68a'},
