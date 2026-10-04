@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Lock, LogOut } from 'lucide-react';
 import { getToken, login, pedirReautenticacion, registrarReautenticacion, renovarSesion } from '@/lib/api';
-import { estadoSesion, leerPayload } from '@/lib/session';
+import { estadoSesion, leerPayload, tokenSirveParaReintentar } from '@/lib/session';
 import { Button } from '@/components/ui/Button';
 
 // Uso real del usuario: solo clics, teclas, rueda y toques (las consultas automaticas no cuentan).
@@ -101,6 +101,11 @@ export function SessionKeeper() {
     };
   }, [abrirVentana, rechazarPendientes]);
 
+  // Al abrir la ventana el foco va al campo Contraseña.
+  useEffect(() => {
+    if (abierto) claveRef.current?.focus();
+  }, [abierto]);
+
   const revisar = useCallback(async () => {
     if (abiertoRef.current) return;
     const actividad = Math.max(ultimaActividad.current, leerActividadCompartida());
@@ -135,11 +140,7 @@ export function SessionKeeper() {
     // las peticiones pendientes se reintentan.
     const alCambiarAlmacen = (e: StorageEvent) => {
       if (e.key !== 'token' || !abiertoRef.current) return;
-      const estado = estadoSesion(leerPayload(e.newValue), Date.now(), 0);
-      if (estado === 'vencida' || estado === 'sin-token') return;
-      const sub = subDelToken(e.newValue);
-      if (subSesion.current !== null && sub !== subSesion.current) return;
-      cerrarYResolver();
+      if (tokenSirveParaReintentar(e.newValue, subSesion.current, Date.now())) cerrarYResolver();
     };
     const opciones: AddEventListenerOptions = { passive: true, capture: true };
     EVENTOS_DE_USO.forEach((evento) => window.addEventListener(evento, alUsar, opciones));
@@ -232,7 +233,6 @@ export function SessionKeeper() {
               ref={claveRef}
               type="password"
               required
-              autoFocus
               autoComplete="current-password"
               className="block w-full px-3 py-2.5 border border-slate-200 rounded-xl bg-white text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-purple-200 focus:border-purple-400"
             />

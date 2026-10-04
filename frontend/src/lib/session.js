@@ -43,3 +43,29 @@ export function estadoSesion(payload, ahoraMs, ultimaActividadMs) {
   const usoDespues = Number(ultimaActividadMs) > (emitidoMs ?? 0);
   return tocaRenovar && usoDespues ? 'renovar' : 'vigente';
 }
+
+/**
+ * Evento storage de SessionKeeper: el token que otra pestana guardo sirve para cerrar la ventana de re-ingreso y
+ * reintentar las peticiones pendientes solo si es un JWT no vencido de la MISMA cuenta (mismo sub). Con otra
+ * cuenta, un token vencido, borrado o basura, la ventana sigue abierta.
+ */
+export function tokenSirveParaReintentar(nuevoToken, subSesion, ahoraMs) {
+  if (subSesion === null || subSesion === undefined) return false;
+  const payload = leerPayload(nuevoToken);
+  const estado = estadoSesion(payload, ahoraMs, 0);
+  if (estado === 'vencida' || estado === 'sin-token') return false;
+  if (payload.sub === undefined || payload.sub === null) return false;
+  return String(payload.sub) === String(subSesion);
+}
+
+/**
+ * Usuario de la respuesta de GET /auth/me ({status, data: usuario} o el usuario plano), o null si no trae un usuario
+ * con id o email. No basta con status: apiFetch le agrega status 200 a cualquier JSON. AuthGuard trata el null como
+ * sesion vencida.
+ */
+export function usuarioDeMe(data) {
+  if (!data || typeof data !== 'object') return null;
+  const usuario = data.data !== undefined ? data.data : data;
+  if (!usuario || typeof usuario !== 'object') return null;
+  return usuario.id != null || usuario.email ? usuario : null;
+}

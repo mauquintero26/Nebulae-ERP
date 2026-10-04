@@ -62,8 +62,8 @@ let renovacionEnCurso: Promise<ResultadoRenovacion> | null = null;
 
 /**
  * Renueva la sesion con POST /auth/refresh (fetch directo, no apiFetch, para no entrar en recursion).
- * Una sola renovacion en curso. 'ok' guarda el token nuevo; 'no-autorizado' (401 o sin token) y 'error'
- * (red, 404 de un backend viejo, 500) no tocan nada: decide SessionKeeper.
+ * Una sola renovacion en curso. 'ok' guarda el token nuevo (o el token ya cambio por otro re-ingreso); 'no-autorizado'
+ * (401 o sin token) y 'error' (red, 404 de un backend viejo, 500) no tocan nada: decide SessionKeeper.
  */
 export function renovarSesion(): Promise<ResultadoRenovacion> {
   if (renovacionEnCurso) return renovacionEnCurso;
@@ -75,7 +75,11 @@ export function renovarSesion(): Promise<ResultadoRenovacion> {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` },
       });
-      if (res.status === 401) return 'no-autorizado';
+      if (res.status === 401) {
+        // Si mientras tanto otra peticion re-ingreso o renovo, el 401 era del token viejo: la sesion sigue.
+        const actual = getToken();
+        return actual && actual !== token ? 'ok' : 'no-autorizado';
+      }
       if (!res.ok) return 'error';
       const data = await res.json();
       if (!data || typeof data.access_token !== 'string' || !data.access_token) return 'error';
@@ -99,9 +103,10 @@ export function renovarSesion(): Promise<ResultadoRenovacion> {
  * All callers in the codebase use the result as JSON (e.g. d?.data, Array.isArray(d)).
  * Always uses the correct auth key `'token'` via getToken().
  *
- * Ante un 401 (H23): con SessionKeeper montado espera el re-ingreso y reintenta UNA vez con el token nuevo (el 401
- * garantiza que el servidor no ejecuto nada); un reintento que vuelve a dar 401 lanza SesionVencidaError sin
- * redirigir; fuera del dashboard (sin manejador) borra el token, guarda returnUrl y redirige una sola vez a /login.
+ * Ante un 401 (H23): si el token ya cambio mientras tanto, reintenta UNA vez con el nuevo; si no, con SessionKeeper
+ * montado espera el re-ingreso y reintenta UNA vez con el token nuevo (el 401 garantiza que el servidor no ejecuto
+ * nada); un reintento que vuelve a dar 401 lanza SesionVencidaError sin redirigir; fuera del dashboard (sin
+ * manejador) borra el token, guarda returnUrl y redirige una sola vez a /login.
  */
 export async function apiFetch(
   path: string,
@@ -118,6 +123,10 @@ export async function apiFetch(
   if (!res.ok) {
     if (res.status === 401) {
       if (_reintento) throw new SesionVencidaError();
+      // El token cambio mientras la peticion iba en camino (otra peticion re-ingreso o renovo): el 401 era del
+      // token viejo. Se reintenta una vez con el nuevo, sin pedir re-ingreso.
+      const tokenActual = getToken();
+      if (tokenActual && tokenActual !== token) return apiFetch(path, options, true);
       if (manejadorReautenticacion) {
         try {
           await pedirReautenticacion();

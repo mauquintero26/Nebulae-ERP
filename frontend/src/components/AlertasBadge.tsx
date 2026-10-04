@@ -21,7 +21,16 @@ export function AlertasBadge() {
     }
     load();
     const interval = setInterval(load, 5 * 60 * 1000);  // cada 5 minutos
-    return () => { mounted = false; clearInterval(interval); };
+    // Al volver a la pestana se actualiza enseguida (mientras estuvo oculta no se consulto).
+    const alCambiarVisibilidad = () => {
+      if (document.visibilityState === 'visible') load();
+    };
+    document.addEventListener('visibilitychange', alCambiarVisibilidad);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', alCambiarVisibilidad);
+    };
   }, []);
 
   if (count === 0) return null;

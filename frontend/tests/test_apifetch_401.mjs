@@ -8,7 +8,12 @@
  * (d) Sin manejador (fuera del dashboard): se conserva lo de antes (borra el token, guarda returnUrl, una sola
  *     redireccion a /login?reason=session-expired y el POST no se reintenta).
  * (e) Un reintento que vuelve a dar 401 no entra en bucle (2 llamadas a fetch en total).
- * (f) renovarSesion: POST /auth/refresh con fetch directo, una sola peticion en curso, guarda el token con 200.
+ * (f) Los errores que no son 401 no tocan la sesion (ni manejador, ni reintento, ni token).
+ * (g) renovarSesion: POST /auth/refresh con fetch directo, una sola peticion en curso, guarda el token con 200;
+ *     401, 404, red caida y falta de token no tocan nada.
+ * (h) Si el token cambio mientras la peticion estaba en camino (otra peticion re-ingreso o renovo), un 401 se
+ *     reintenta UNA vez con el token nuevo sin pedir re-ingreso (con y sin manejador); renovarSesion da 'ok'.
+ * (i) login(): el Error lleva el status HTTP (401 -> 401, 500 -> 500); si fetch falla no lleva status.
  * Cada caso importa una instancia nueva del modulo (?caso=...) para no compartir el estado interno.
  */
 
@@ -240,6 +245,93 @@ console.log('--- TEST g: renovarSesion usa POST /auth/refresh y guarda el token 
   reiniciar(null);
   assert.equal(await api.renovarSesion(), 'no-autorizado', 'sin token no hay nada que renovar');
   assert.equal(llamadas.length, 0);
+}
+
+// Simula que, mientras la peticion esta en camino, otra peticion re-ingreso o renovo: guarda 'nuevo' y responde 401.
+const r401TrasCambiarToken = (cuerpoOk) => (url, opciones) => {
+  if (opciones.headers.Authorization === 'Bearer viejo') {
+    localStorage.setItem('token', 'nuevo');
+    return respuesta(401, {});
+  }
+  return respuesta(200, cuerpoOk);
+};
+
+console.log('--- TEST h: un 401 con el token ya cambiado se reintenta una vez con el nuevo, sin re-ingreso ---');
+{
+  const api = await cargar('h');
+  reiniciar();
+  let vecesManejador = 0;
+  api.registrarReautenticacion(async () => { vecesManejador++; });
+  responder = r401TrasCambiarToken({ data: 'ok' });
+  const resultado = await api.apiFetch('/ventas/pedidos/12/notas', { method: 'POST', body: '{"t":1}' });
+  assert.equal(resultado.data, 'ok');
+  assert.equal(vecesManejador, 0, 'no se abre la ventana: ya hay un token nuevo');
+  assert.equal(llamadas.length, 2, 'un solo reintento');
+  assert.deepEqual(llamadas.map(autorizacion), ['Bearer viejo', 'Bearer nuevo']);
+  assert.equal(llamadas[1].opciones.body, '{"t":1}');
+  assert.deepEqual(redirecciones, []);
+  assert.equal(api.hayReautenticacionPendiente(), false);
+
+  // Sin manejador (fuera del dashboard) tambien se reintenta antes de redirigir.
+  api.registrarReautenticacion(null);
+  reiniciar();
+  responder = r401TrasCambiarToken({ data: 'ok' });
+  assert.equal((await api.apiFetch('/auth/me')).data, 'ok');
+  assert.equal(llamadas.length, 2);
+  assert.deepEqual(redirecciones, []);
+  assert.equal(localStorage.getItem('token'), 'nuevo', 'el token nuevo no se borra');
+
+  // Si el reintento con el token nuevo tambien da 401, no hay un segundo reintento (ni ventana ni bucle).
+  api.registrarReautenticacion(async () => { vecesManejador++; });
+  reiniciar();
+  responder = (url, opciones) => {
+    if (opciones.headers.Authorization === 'Bearer viejo') localStorage.setItem('token', 'nuevo');
+    return respuesta(401, {});
+  };
+  await assert.rejects(api.apiFetch('/auth/me'), (err) => err instanceof api.SesionVencidaError);
+  assert.equal(llamadas.length, 2);
+  assert.equal(vecesManejador, 0);
+
+  // Un token borrado (otra pestana salio) no cuenta como token nuevo: sigue el camino normal (ventana).
+  reiniciar();
+  responder = (url, opciones) => {
+    if (opciones.headers.Authorization === 'Bearer viejo') localStorage.removeItem('token');
+    return respuesta(401, {});
+  };
+  api.registrarReautenticacion(async () => { vecesManejador++; throw new Error('salir'); });
+  await assert.rejects(api.apiFetch('/auth/me'), (err) => err instanceof api.SesionVencidaError);
+  assert.equal(vecesManejador, 1, 'sin token nuevo se pide re-ingreso');
+  assert.equal(llamadas.length, 1);
+
+  // renovarSesion: 401 con el token ya cambiado (otra peticion re-ingreso) es 'ok'.
+  reiniciar();
+  responder = () => { localStorage.setItem('token', 'nuevo'); return respuesta(401, {}); };
+  assert.equal(await api.renovarSesion(), 'ok');
+  assert.equal(localStorage.getItem('token'), 'nuevo');
+}
+
+console.log('--- TEST i: login() deja el status HTTP en el error ---');
+{
+  const api = await cargar('i');
+  reiniciar(null);
+  responder = () => respuesta(401, { detail: 'Incorrect email or password' });
+  await assert.rejects(api.login('asesor@nebulae.test', 'x'), (err) => {
+    assert.equal(err.status, 401);
+    assert.equal(err.message, 'Incorrect email or password', 'el mensaje no cambia');
+    return true;
+  });
+  assert.ok(llamadas[0].url.endsWith('/auth/login'));
+  assert.equal(llamadas[0].opciones.method, 'POST');
+
+  responder = () => respuesta(500, { detail: 'Fallo interno' });
+  await assert.rejects(api.login('asesor@nebulae.test', 'x'), (err) => err.status === 500);
+
+  responder = () => { throw new TypeError('Failed to fetch'); };
+  await assert.rejects(api.login('asesor@nebulae.test', 'x'), (err) => {
+    assert.ok(err instanceof TypeError);
+    assert.equal(err.status, undefined, 'sin respuesta no hay status: la ventana dice que no hubo conexion');
+    return true;
+  });
 }
 
 console.log('✓ Todos los tests de frontend apiFetch pasaron exitosamente.');

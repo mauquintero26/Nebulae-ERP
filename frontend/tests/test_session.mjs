@@ -4,10 +4,21 @@
  * - leerPayload decodifica la parte central del JWT (base64url, con '-' y '_' y sin relleno) y devuelve null con basura.
  * - estadoSesion: 'sin-token' sin payload o sin exp; 'vencida' si exp ya paso; 'renovar' solo si el token tiene
  *   10 minutos o mas (o no trae iat) Y hubo uso real despues de emitirse; 'vigente' en otro caso.
+ * - tokenSirveParaReintentar: el token que otra pestana guardo sirve solo si es un JWT no vencido de la misma cuenta.
+ * - usuarioDeMe: el usuario de la respuesta de /auth/me, o null (AuthGuard lo trata como sesion vencida).
  */
 
 import assert from 'node:assert/strict';
-import { leerPayload, estadoSesion, RENOVAR_TRAS_MS } from '../src/lib/session.js';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import * as sesion from '../src/lib/session.js';
+
+const { leerPayload, estadoSesion, RENOVAR_TRAS_MS } = sesion;
+// Funciones de la ronda 1; si faltan, sus pruebas fallan con un mensaje claro (y no al importar).
+const faltante = (nombre) => () => { throw new Error(`session.js no exporta ${nombre}`); };
+const tokenSirveParaReintentar = sesion.tokenSirveParaReintentar ?? faltante('tokenSirveParaReintentar');
+const usuarioDeMe = sesion.usuarioDeMe ?? faltante('usuarioDeMe');
 
 const base64url = (texto) => Buffer.from(texto, 'utf8').toString('base64')
   .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -95,6 +106,42 @@ console.log("--- TEST 10: sin iat (tokens viejos de 30/60 min) y con actividad d
 {
   assert.equal(estadoSesion({ exp: seg(AHORA + 20 * MIN) }, AHORA, AHORA - 1000), 'renovar');
   assert.equal(estadoSesion({ exp: seg(AHORA + 20 * MIN) }, AHORA, 0), 'vigente', 'sin actividad no se renueva');
+}
+
+console.log('--- TEST 11: tokenSirveParaReintentar: solo un JWT no vencido de la misma cuenta (evento storage) ---');
+{
+  const vigente = (sub) => tokenCon({ sub, role: 'Vendedor', exp: seg(AHORA + 1440 * MIN), iat: seg(AHORA - MIN) });
+  assert.equal(tokenSirveParaReintentar(vigente('42'), '42', AHORA), true, 'misma cuenta y vigente');
+  assert.equal(tokenSirveParaReintentar(vigente(42), '42', AHORA), true, 'sub numerico de la misma cuenta');
+  assert.equal(tokenSirveParaReintentar(vigente('43'), '42', AHORA), false, 'otra cuenta');
+  const vencido = tokenCon({ sub: '42', exp: seg(AHORA - MIN), iat: seg(AHORA - 1441 * MIN) });
+  assert.equal(tokenSirveParaReintentar(vencido, '42', AHORA), false, 'vencido');
+  assert.equal(tokenSirveParaReintentar(null, '42', AHORA), false, 'token borrado (otra pestana salio)');
+  assert.equal(tokenSirveParaReintentar('basura', '42', AHORA), false, 'basura');
+  assert.equal(tokenSirveParaReintentar(tokenCon({ exp: seg(AHORA + MIN) }), '42', AHORA), false, 'sin sub');
+  assert.equal(tokenSirveParaReintentar(vigente('42'), null, AHORA), false, 'sin cuenta de referencia no se acepta');
+}
+
+console.log('--- TEST 12: usuarioDeMe: un 200 de /auth/me sin usuario no es una sesion valida ---');
+{
+  const usuario = { id: 7, email: 'asesor@nebulae.test', role: 'Vendedor' };
+  assert.deepEqual(usuarioDeMe({ status: 'success', data: usuario }), usuario);
+  assert.deepEqual(usuarioDeMe(usuario), usuario, 'forma plana (sin envoltura)');
+  assert.deepEqual(usuarioDeMe({ data: { email: 'x@y.z' } }), { email: 'x@y.z' });
+  assert.equal(usuarioDeMe({ status: 'success' }), null);
+  assert.equal(usuarioDeMe({ status: 200, ok: true }), null, 'apiFetch agrega status 200 a cualquier JSON: no cuenta');
+  assert.equal(usuarioDeMe({ status: 'success', data: null }), null);
+  assert.equal(usuarioDeMe({}), null);
+  assert.equal(usuarioDeMe(null), null);
+  assert.equal(usuarioDeMe('texto'), null);
+}
+
+console.log('--- TEST 13: AuthGuard trata el 200 sin usuario como sesion vencida (rama de /login) ---');
+{
+  const guard = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'components', 'AuthGuard.tsx'), 'utf8');
+  assert.ok(!guard.includes('new Error("Invalid session")'), 'ya no lanza un Error generico');
+  assert.match(guard, /usuarioDeMe\(data\)/, 'decide con usuarioDeMe');
+  assert.match(guard, /if \(!user\) throw new SesionVencidaError\(\);/, 'sin usuario lanza SesionVencidaError');
 }
 
 console.log('✓ Todas las pruebas de session.js pasaron.');

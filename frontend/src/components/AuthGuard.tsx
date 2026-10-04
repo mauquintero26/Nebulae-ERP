@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { Loader2, RefreshCw } from "lucide-react";
 import { apiFetch, getToken, SesionVencidaError } from "@/lib/api";
-import { estadoSesion, leerPayload } from "@/lib/session";
+import { estadoSesion, leerPayload, usuarioDeMe } from "@/lib/session";
 import { Button } from "@/components/ui/Button";
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -36,23 +36,21 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     apiFetch("/auth/me")
       .then((data) => {
         if (!isMounted) return;
-        const user = data?.data || data;
-        if (data && (data.status === "success" || data.status === 200 || user?.id || user?.email)) {
-          // Las paginas leen user_name / user_id para atribuir acciones (actividad,
-          // asesor por defecto). Antes nadie escribia estas claves, asi que toda la
-          // app registraba acciones sin responsable y dejaba el asesor vacio.
-          try {
-            localStorage.setItem("user_id", String(user?.id ?? ""));
-            localStorage.setItem("user_email", user?.email || "");
-            localStorage.setItem("user_name", user?.username || user?.email || "");
-            localStorage.setItem("user_role", user?.role || "");
-          } catch {}
-          autorizado.current = true;
-          setErrorVerificacion(false);
-          setAuthorized(true);
-        } else {
-          throw new Error("Invalid session");
-        }
+        // Un 200 sin usuario es una sesion que no sirve: sigue la rama de /login (si todavia no se autorizo).
+        const user = usuarioDeMe(data);
+        if (!user) throw new SesionVencidaError();
+        // Las paginas leen user_name / user_id para atribuir acciones (actividad,
+        // asesor por defecto). Antes nadie escribia estas claves, asi que toda la
+        // app registraba acciones sin responsable y dejaba el asesor vacio.
+        try {
+          localStorage.setItem("user_id", String(user?.id ?? ""));
+          localStorage.setItem("user_email", user?.email || "");
+          localStorage.setItem("user_name", user?.username || user?.email || "");
+          localStorage.setItem("user_role", user?.role || "");
+        } catch {}
+        autorizado.current = true;
+        setErrorVerificacion(false);
+        setAuthorized(true);
       })
       .catch((err) => {
         console.error("AuthGuard session check error:", err);
