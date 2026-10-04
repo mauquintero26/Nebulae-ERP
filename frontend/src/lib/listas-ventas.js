@@ -51,10 +51,11 @@ export function ultimoPedidoCancelado(cot) {
  * confirmacion del cliente sin usar (gate2_confirmed_at): la pone el enlace en cada confirmacion y la consume la
  * conversion; sin ella el servidor no convierte.
  *  - 'pedido_vigente': ya tiene un pedido que no esta cancelado.
- *  - 'crear_pedido': CONFIRMADA sin pedido vigente. Incluye la re-confirmada por el cliente tras cancelar el pedido
- *    (flujo normal de H46: el pedido nuevo recibe el saldo a favor, R6).
- *  - 'reabrir': CONFIRMADA sin confirmacion vigente y con su ultimo pedido cancelado: dato antiguo, de antes de que la
- *    cancelacion devolviera sola la COT a Borrador. Hay que reabrirla y reenviarla.
+ *  - 'crear_pedido': CONFIRMADA con la confirmacion del cliente vigente y sin pedido vigente. Incluye la re-confirmada
+ *    por el cliente tras cancelar el pedido (flujo normal de H46: el pedido nuevo recibe el saldo a favor, R6).
+ *  - 'reabrir': CONFIRMADA sin confirmacion vigente y sin pedido vigente: el servidor no la convierte (400). Con un
+ *    pedido cancelado es el dato antiguo de antes de que la cancelacion devolviera sola la COT a Borrador; sin pedidos,
+ *    una confirmacion anterior a Gate 2. Hay que reabrirla y enviarla de nuevo al cliente.
  *  - null: cualquier otro estado.
  * `cancelado` es el ultimo pedido cancelado cuando no hay vigente; `avisoCancelado` dice si mostrar el aviso "Pedido X
  * cancelado: ajusta y reenvia" (no tiene sentido si el cliente ya la confirmo otra vez).
@@ -66,14 +67,14 @@ export function situacionPedidoCotizacion(cot) {
   const confirmacion = !!cot?.confirmacion_vigente;
   let paso = null;
   if (vigente) paso = 'pedido_vigente';
-  else if (cot?.estado === 'CONFIRMADA') paso = !confirmacion && cancelado ? 'reabrir' : 'crear_pedido';
+  else if (cot?.estado === 'CONFIRMADA') paso = confirmacion ? 'crear_pedido' : 'reabrir';
   return { paso, vigente, cancelado, avisoCancelado: !!cancelado && !confirmacion };
 }
 
 /**
- * COT-LISTA: pestaña de la lista de Cotizaciones. Una CONFIRMADA que hay que reabrir (pedido cancelado y sin
- * confirmacion vigente) vuelve a 'Activas'; las demas confirmadas son 'Confirmadas': con pedido vigente o por
- * convertir (tambien la re-confirmada por el cliente tras cancelar su pedido).
+ * COT-LISTA: pestaña de la lista de Cotizaciones. Una CONFIRMADA que hay que reabrir (sin confirmacion vigente ni
+ * pedido vigente) vuelve a 'Activas'; las demas confirmadas son 'Confirmadas': con pedido vigente o por convertir
+ * (tambien la re-confirmada por el cliente tras cancelar su pedido).
  * @returns {'Activas' | 'Confirmadas' | 'Rechazadas'}
  */
 export function pestanaCotizacion(cot) {

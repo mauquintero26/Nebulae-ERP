@@ -25,7 +25,7 @@ import {
   diasDesde, textoAntiguedad, ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, esNoResuelto, esAccionTomada, accionSiguienteSC,
 } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
-import { diasAlerta, pedidoVigente, soloPedidosCancelados } from '@/lib/listas-ventas';
+import { diasAlerta, pedidoVigente, pestanaCotizacion } from '@/lib/listas-ventas';
 
 const fCOP  = (v: any) => { const n = Number(v)||0; return n > 0 ? '$' + n.toLocaleString('es-CO') : '$' + 0; };
 // Las fechas del API son UTC; si alguna llega sin zona, comoUTC la marca como UTC (no hora local corrida 5 h).
@@ -648,8 +648,9 @@ export default function VentasHub() {
     },
     {
       label: 'Cotizaciones Vigentes',
-      // COT-LISTA: una confirmada cuyos pedidos están todos cancelados vuelve a estar vigente (hay que ajustarla y reenviarla).
-      value: cotizaciones.filter(c => !['CONFIRMADA','RECHAZADA'].includes(c.estado) || (c.estado === 'CONFIRMADA' && soloPedidosCancelados(c))).length,
+      // COT-LISTA: la misma regla que la pestaña 'Activas' de Cotizaciones (una confirmada que hay que reabrir cuenta;
+      // una re-confirmada por el cliente tras cancelar su pedido no: esta por convertir).
+      value: cotizaciones.filter(c => pestanaCotizacion(c) === 'Activas').length,
       color: 'amber',
       icon: <Package size={22}/>,
       sub: cotAtrasadas.length > 0 ? `${cotAtrasadas.length} sin respuesta (+${cotAlertDias}d)` : 'Flujo en tiempo',

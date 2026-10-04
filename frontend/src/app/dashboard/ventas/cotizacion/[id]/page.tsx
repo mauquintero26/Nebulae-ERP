@@ -448,16 +448,18 @@ function CotizacionDetalleContent() {
         </NextStepCard>
       );
     }
-    if (situacion.paso === 'reabrir' && pvenCancelado) {
-      // H46 (dato antiguo): el pedido se cancelo antes de que la cancelacion devolviera sola la COT a Borrador y la
-      // confirmacion del cliente ya se uso. Una COT re-confirmada (confirmacion vigente) va a "Crear Pedido de Venta".
+    if (situacion.paso === 'reabrir') {
+      // CONFIRMADA sin confirmacion del cliente vigente: el servidor no la convierte (400). Con pedido cancelado es el
+      // dato antiguo de H46; sin pedidos, una confirmacion anterior a Gate 2. Una COT re-confirmada va a "Crear Pedido".
       return (
         <NextStepCard
           tone="rose"
-          title={`El pedido ${pvenCancelado.numero} se canceló`}
+          title={pvenCancelado ? `El pedido ${pvenCancelado.numero} se canceló` : 'Falta la confirmación del cliente'}
           actions={<Button color="rose" size="lg" icon={RotateCcw} onClick={() => changeEstado('BORRADOR')}>Reabrir cotización</Button>}
         >
-          Para crear otro pedido, reabre la cotización: podrás ajustarla y enviársela de nuevo al cliente.
+          {pvenCancelado
+            ? 'Para crear otro pedido, reabre la cotización: podrás ajustarla y enviársela de nuevo al cliente.'
+            : 'Esta cotización figura como confirmada, pero no tiene una confirmación del cliente vigente: reábrela y envíasela de nuevo para que la confirme.'}
         </NextStepCard>
       );
     }

@@ -62,7 +62,11 @@ console.log('--- COT-LISTA TEST 5: pestanaCotizacion (la confirmada con pedido c
   assert.equal(pestanaCotizacion({ estado: 'PENDIENTE_CONFIRMACION' }), 'Activas');
   assert.equal(pestanaCotizacion({ estado: 'VENCIDA' }), 'Activas');
   assert.equal(pestanaCotizacion({ estado: 'RECHAZADA', pedidos_venta: [{ estado: 'CANCELADO' }] }), 'Rechazadas');
-  assert.equal(pestanaCotizacion({ estado: 'CONFIRMADA' }), 'Confirmadas', 'confirmada sin pedido: por convertir');
+  assert.equal(pestanaCotizacion({ estado: 'CONFIRMADA', confirmacion_vigente: true }), 'Confirmadas',
+    'confirmada sin pedido y con la confirmacion del cliente vigente: por convertir');
+  assert.equal(pestanaCotizacion({ estado: 'CONFIRMADA', confirmacion_vigente: false }), 'Activas',
+    'fix 2: confirmada sin confirmacion vigente y sin pedidos: no se puede convertir, hay que reabrirla');
+  assert.equal(pestanaCotizacion({ estado: 'CONFIRMADA' }), 'Activas', 'sin el campo: igual que sin confirmacion vigente');
   assert.equal(pestanaCotizacion({ estado: 'CONFIRMADA', pedidos_venta: [{ estado: 'EN_PROCESO' }] }), 'Confirmadas');
   assert.equal(pestanaCotizacion({ estado: 'CONFIRMADA', pedidos_venta: [{ estado: 'CANCELADO' }] }), 'Activas',
     'dato antiguo: confirmada sin confirmacion vigente y con el pedido cancelado (hay que reabrirla)');
@@ -179,6 +183,13 @@ console.log('--- H46 / N1 TEST 9: situacionPedidoCotizacion (crear pedido, reabr
 
   // Confirmada sin pedidos: crear el pedido (la primera conversion).
   assert.equal(situacionPedidoCotizacion({ estado: 'CONFIRMADA', confirmacion_vigente: true }).paso, 'crear_pedido');
+  // Fix 2: confirmada SIN confirmacion vigente y sin pedidos (anterior a Gate 2): el servidor no la convierte (400),
+  // asi que tambien se reabre; no hay pedido cancelado del que avisar.
+  const sinMarca = situacionPedidoCotizacion({ estado: 'CONFIRMADA', confirmacion_vigente: false });
+  assert.equal(sinMarca.paso, 'reabrir');
+  assert.equal(sinMarca.cancelado, null);
+  assert.equal(sinMarca.avisoCancelado, false);
+  assert.equal(situacionPedidoCotizacion({ estado: 'CONFIRMADA', pedidos_venta: [] }).paso, 'reabrir', 'sin el campo');
   // Reabierta a Borrador por la cancelacion: sin paso de pedido, con el aviso del pedido cancelado.
   const borrador = situacionPedidoCotizacion({ estado: 'BORRADOR', confirmacion_vigente: false,
     pedidos_venta: [{ estado: 'CANCELADO', numero: 'PVEN-1' }] });
