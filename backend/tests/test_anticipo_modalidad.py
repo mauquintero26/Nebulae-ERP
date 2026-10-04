@@ -11,28 +11,16 @@
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_anticipo_modalidad
 """
 import datetime
-import uuid
 from decimal import Decimal
 
-import pytest
-
 from app.core.ventas_dinero import pct_anticipo_de_modalidad
+from tests.usuarios_de_prueba import compras_token  # noqa: F401  (fixture)
 
 MOD_60_40 = "60/40 (60% anticipo - 40% pendiente)"
 
 
 def auth(token):
     return {"Authorization": f"Bearer {token}"}
-
-
-@pytest.fixture
-def compras_token(db):
-    """Usuario COMPRAS (dentro de la transaccion revertida): no edita cotizaciones."""
-    from app.core.security import create_access_token
-    from app.models.users import User
-    u = User(email=f"compras-{uuid.uuid4().hex[:6]}@test.nebulae", password_hash="x", role="COMPRAS", is_active=True)
-    db.add(u); db.commit()
-    return create_access_token({"sub": str(u.id), "role": u.role})
 
 
 def _sc(db, numero, modalidad, **campos):
@@ -199,6 +187,22 @@ def test_cot_sin_sc_conserva_su_porcentaje(app_client, db, admin_token):
     assert resp.status_code == 200, resp.text
     db.refresh(cot)
     assert cot.anticipo_cop == Decimal("1200000")
+
+
+def test_recotizar_sin_cambiar_el_total_conserva_el_anticipo_heredado(app_client, db, admin_token):
+    """H36 (ronda 2): un % heredado raro (1.000.000 sobre 1.500.000) se conserva tal cual: re-cotizar sin cambiar
+    el total no lo reescribe, tampoco en una COT confirmada; con otro total se aplica el mismo % exacto."""
+    for i, estado in enumerate(("BORRADOR", "CONFIRMADA")):
+        cot = _cot(db, f"COT-ANT03{i}", estado=estado, total_cop=1500000, anticipo_cop=1000000,
+                   productos=_linea(1500000), gate2_confirmed_at=datetime.datetime.utcnow())
+        resp = _patch_cot(app_client, admin_token, cot.id, {"total_cop": 1500000, "recotizacion": True})
+        assert resp.status_code == 200, resp.text
+        db.refresh(cot)
+        assert cot.anticipo_cop == Decimal("1000000") and cot.estado == estado
+    resp = _patch_cot(app_client, admin_token, cot.id, {"total_cop": 3000000, "productos": _linea(3000000)})
+    assert resp.status_code == 200, resp.text
+    db.refresh(cot)
+    assert cot.anticipo_cop == Decimal("2000000")
 
 
 def test_cot_sin_sc_y_sin_total_arranca_en_60(app_client, db, admin_token):
@@ -478,6 +482,8 @@ def test_reenviar_el_mismo_anticipo_manual_no_bloquea_el_patch(app_client, db, a
     rechazada = _cot(db, "COT-MAN013", sc, estado="RECHAZADA", total_cop=1000000, anticipo_cop=500000,
                      anticipo_pct_manual=Decimal("50"), anticipo_manual_nota=nota)
     for body in ({"notas": "y", "anticipo_pct_manual": 50, "anticipo_manual_nota": nota},
+                 {"notas": "w", "anticipo_pct_manual": 50, "anticipo_manual_nota": None},
+                 {"notas": "v", "anticipo_pct_manual": 50, "anticipo_manual_nota": "  "},
                  {"notas": "z", "anticipo_pct_manual": "50.00"}):
         resp = _patch_cot(app_client, admin_token, rechazada.id, body)
         assert resp.status_code == 200, (body, resp.text)

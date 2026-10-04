@@ -14,11 +14,10 @@
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_anticipo_verificado
 """
 import datetime
-import uuid
 import zoneinfo
 from decimal import Decimal
 
-import pytest
+from tests.usuarios_de_prueba import compras_token  # noqa: F401  (fixture)
 
 MOD_60_40 = "60/40 (60% anticipo - 40% pendiente)"
 TIPOS_INGRESO = ("ANTICIPO", "ABONO", "PAGO_TOTAL", "PAGO_SALDO")
@@ -26,16 +25,6 @@ TIPOS_INGRESO = ("ANTICIPO", "ABONO", "PAGO_TOTAL", "PAGO_SALDO")
 
 def auth(token):
     return {"Authorization": f"Bearer {token}"}
-
-
-@pytest.fixture
-def compras_token(db):
-    """Usuario COMPRAS (dentro de la transaccion revertida): no crea pedidos ni verifica pagos."""
-    from app.core.security import create_access_token
-    from app.models.users import User
-    u = User(email=f"compras-{uuid.uuid4().hex[:6]}@test.nebulae", password_hash="x", role="COMPRAS", is_active=True)
-    db.add(u); db.commit()
-    return create_access_token({"sub": str(u.id), "role": u.role})
 
 
 def _hoy():
@@ -557,20 +546,43 @@ def test_anticipo_pagado_exacto_con_total_impar_no_queda_pendiente(app_client, d
     assert "parcial" not in renglon.description
 
 
-def test_porcentaje_heredado_no_exacto_exige_lo_mismo_en_la_cot_y_en_el_pedido(app_client, db, admin_token):
-    """Fix 3: COT sin SC con un dato viejo de 1.000.000 sobre 1.500.000 (66,666...%): el % sale a 2 decimales
-    (66,67%) en la COT, en la conversion y en el snapshot, asi que pagar lo pedido cubre el anticipo."""
+def test_porcentaje_heredado_no_exacto_se_conserva_y_pagarlo_no_deja_pendiente(app_client, db, admin_token):
+    """Fix 3 (ronda 2): COT sin SC con un dato viejo de 1.000.000 sobre 1.500.000 (66,666...%). H36: el % heredado
+    se conserva tal cual, asi que se exige exactamente $1.000.000; el snapshot del pedido se redondea hacia abajo
+    (66,66%), de modo que pagar lo que decia la cotizacion no deja anticipo pendiente."""
     from app.api.v1.erp_ventas_fase4 import recalculate_sale_order_state
     cot = _cot_confirmada(db, "COT-FIX003", 1500000, 1000000)
     d = app_client.get(f"/api/v1/ventas/cotizaciones/{cot.id}", headers=auth(admin_token)).json()["data"]
-    assert d["anticipo_pct"] == 66.67 and d["anticipo_requerido"] == 1000050
-    resp = _confirmar(app_client, admin_token, cot.id, _ver(1000050))
+    assert d["anticipo_requerido"] == 1000000 and d["anticipo_por_verificar"] == 1000000
+    assert d["anticipo_pct"] == 66.67   # solo para mostrar
+    resp = _confirmar(app_client, admin_token, cot.id)
+    assert resp.status_code == 422 and "anticipo de $1.000.000" in resp.json()["detail"], resp.text
+
+    resp = _confirmar(app_client, admin_token, cot.id, _ver(1000000))
     assert resp.status_code == 200, resp.text
     [so] = _pedidos(db, cot.id)
-    assert so.anticipo_pct_snapshot == Decimal("66.67")
+    assert so.anticipo_pct_snapshot == Decimal("66.66")
+    assert so.anticipo_cop == Decimal("1000000") and so.saldo_cop == Decimal("500000")
+    [renglon] = _logs(db, "VEN", so.id, "ANTICIPO_VERIFICADO")
+    assert "parcial" not in renglon.description
     d = app_client.get(f"/api/v1/ventas/pedidos/{so.id}", headers=auth(admin_token)).json()["data"]
-    assert d["anticipo_requerido"] == 1000050 and d["anticipo_pendiente"] == 0
+    assert d["anticipo_pendiente"] == 0
     assert recalculate_sale_order_state(so, db) == "CONFIRMADO"
+    db.refresh(cot)
+    assert cot.anticipo_cop == Decimal("1000000")
+
+
+def test_pedido_cancelado_no_tiene_anticipo_pendiente(app_client, db, admin_token):
+    """Minor (ronda 2): tras trasladar su dinero, el pedido cancelado no muestra el requerido como pendiente."""
+    sc = _sc(db, "SC-FIX008", MOD_60_40)
+    cot = _cot_confirmada(db, "COT-FIX008", 1000000, 600000, sc)
+    assert _confirmar(app_client, admin_token, cot.id, _ver(600000)).status_code == 200
+    [pven1] = _pedidos(db, cot.id)
+    _cancelar_y_reconfirmar(app_client, db, admin_token, pven1, cot)
+    assert _convertir(app_client, admin_token, cot.id).status_code == 200
+    d = app_client.get(f"/api/v1/ventas/pedidos/{pven1.id}", headers=auth(admin_token)).json()["data"]
+    assert d["estado"] == "CANCELADO" and d["anticipo_cop"] == 0
+    assert d["anticipo_requerido"] == 600000 and d["anticipo_pendiente"] == 0
 
 
 def test_pago_parcial_con_traslado_nombra_las_dos_cifras(app_client, db, admin_token):

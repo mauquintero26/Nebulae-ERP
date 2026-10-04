@@ -4,11 +4,12 @@ Lo importan erp_ventas.py y erp_ventas_fase4.py sin import circular (fase4 no im
 de COT / PVEN / PXP se guarda y se muestra al peso: exacto, nunca a la centena ni al mil. El frontend tiene el
 espejo de redondeo y formato en frontend/src/lib/pesos.js (redondearPeso / formatoPesos).
 
-Sin FastAPI ni DB, salvo pct_anticipo_cotizacion y saldos_a_favor_de_cotizacion, que leen con la sesion que
-reciben (los modelos se importan dentro de esas funciones para que el resto siga siendo puro).
+Sin FastAPI ni DB, salvo anticipo_cotizacion (y pct_anticipo_cotizacion) y saldos_a_favor_de_cotizacion, que
+leen con la sesion que reciben (los modelos se importan dentro de esas funciones para que el resto siga puro).
 """
 import unicodedata
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
+from typing import NamedTuple, Optional
 
 _UN_PESO = Decimal("1")
 _CIEN = Decimal("100")
@@ -108,36 +109,69 @@ def metodo_pago_anticipo(texto):
 
 
 def _pct_entre_0_y_100(pct) -> Decimal:
-    """Entre 0 y 100 y a 2 decimales (ROUND_HALF_UP): el mismo % que guarda el pedido en anticipo_pct_snapshot
-    (NUMERIC(5,2)), para que el requerido de la conversion y el del pedido salgan siempre iguales."""
-    return max(Decimal("0"), min(Decimal(str(pct)), _CIEN)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return max(Decimal("0"), min(Decimal(str(pct)), _CIEN))
 
 
-def pct_anticipo_cotizacion(cot, db, sc=None):
-    """(pct, modalidad) del anticipo que exige la cotizacion. pct entre 0 y 100 (min(pct, 100)), a 2 decimales.
+# De donde sale el % del anticipo de una cotizacion (ver anticipo_cotizacion).
+ORIGEN_MANUAL = "manual"          # R3: anticipo_pct_manual
+ORIGEN_MODALIDAD = "modalidad"    # la modalidad de pago de su SC (R2)
+ORIGEN_CONSERVADO = "conservado"  # sin SC: el % que ya tenia (anticipo_cop / total_cop)
+ORIGEN_DEFECTO = "defecto"        # sin SC y sin total: 60%
 
-    - R3: si tiene anticipo manual (anticipo_pct_manual no es None), ese.
-    - Si tiene SC: el % de su modalidad de pago (R2), o 60 si no se reconoce.
-    - Sin SC y con total > 0: el % que ya tenia (anticipo_cop * 100 / total_cop): la COT del Cotizador Rapido
-      conserva su 60% y las de prueba con anticipo 0 conservan el 0.
-    - Sin SC y sin total: 60.
-    El % sale a 2 decimales (lo que cabe en el snapshot del pedido): un dato viejo de 66,666...% exige el 66,67%,
-    y el pedido creado con ese % pide exactamente lo mismo que se verifico al crearlo.
-    modalidad es el texto de la modalidad de la SC (None sin SC), tambien cuando el % es el manual.
-    `sc` evita releer la SC cuando el llamador ya la tiene (update_solicitud)."""
+
+class AnticipoCotizacion(NamedTuple):
+    """Lo que exige hoy una cotizacion (anticipo_cotizacion)."""
+    pct: Decimal
+    modalidad: Optional[str]
+    origen: str
+    requerido: Decimal
+
+
+def anticipo_cotizacion(cot, db, sc=None) -> AnticipoCotizacion:
+    """Anticipo que exige HOY la cotizacion: el % (entre 0 y 100), la modalidad de la SC, de donde sale el % y el
+    requerido en pesos enteros. Es la cuenta del GET de la COT y de la conversion.
+
+    - R3: si tiene anticipo manual (anticipo_pct_manual no es None), ese % (ORIGEN_MANUAL).
+    - Si tiene SC: el % de su modalidad de pago (R2), o 60 si no se reconoce (ORIGEN_MODALIDAD).
+    - Sin SC y con total > 0 (ORIGEN_CONSERVADO): el % que ya tenia, anticipo_cop * 100 / total_cop SIN cuantizar
+      (H36: "un % raro heredado se conserva tal cual"), y el requerido es exactamente el anticipo guardado,
+      min(redondear_peso(anticipo_cop), total): la COT del Cotizador Rapido conserva su 60% y las de prueba con
+      anticipo 0 conservan el 0.
+    - Sin SC y sin total: 60 (ORIGEN_DEFECTO).
+    El requerido de los demas origenes es anticipo_requerido(total, pct). modalidad es el texto de la modalidad
+    de la SC (None sin SC), tambien cuando el % es el manual. `sc` evita releer la SC cuando el llamador ya la
+    tiene (update_solicitud, create_cotizacion)."""
     if sc is None and cot.sc_id:
         from app.models.erp_documents import CustomerRequest
         sc = db.query(CustomerRequest).filter(CustomerRequest.id == cot.sc_id).first()
     modalidad = sc.modalidad_pago if sc is not None else None
+    total = redondear_peso(cot.total_cop)
     if cot.anticipo_pct_manual is not None:
-        return _pct_entre_0_y_100(cot.anticipo_pct_manual), modalidad
-    if sc is not None:
-        pct = pct_anticipo_de_modalidad(modalidad)
-        return _pct_entre_0_y_100(PCT_ANTICIPO_POR_DEFECTO if pct is None else pct), modalidad
-    total = Decimal(str(cot.total_cop or 0))
-    if total > 0:
-        return _pct_entre_0_y_100(Decimal(str(cot.anticipo_cop or 0)) * _CIEN / total), None
-    return _pct_entre_0_y_100(PCT_ANTICIPO_POR_DEFECTO), None
+        pct, origen = _pct_entre_0_y_100(cot.anticipo_pct_manual), ORIGEN_MANUAL
+    elif sc is not None:
+        pct_modalidad = pct_anticipo_de_modalidad(modalidad)
+        pct = _pct_entre_0_y_100(PCT_ANTICIPO_POR_DEFECTO if pct_modalidad is None else pct_modalidad)
+        origen = ORIGEN_MODALIDAD
+    elif Decimal(str(cot.total_cop or 0)) > 0:
+        pct = _pct_entre_0_y_100(Decimal(str(cot.anticipo_cop or 0)) * _CIEN / Decimal(str(cot.total_cop)))
+        requerido = min(max(Decimal("0"), redondear_peso(cot.anticipo_cop)), total)
+        return AnticipoCotizacion(pct, None, ORIGEN_CONSERVADO, requerido)
+    else:
+        pct, origen = PCT_ANTICIPO_POR_DEFECTO, ORIGEN_DEFECTO
+    return AnticipoCotizacion(pct, modalidad, origen, anticipo_requerido(total, pct))
+
+
+def pct_anticipo_cotizacion(cot, db, sc=None):
+    """(pct, modalidad) de anticipo_cotizacion: el % que exige la cotizacion y el texto de la modalidad de su SC."""
+    a = anticipo_cotizacion(cot, db, sc=sc)
+    return a.pct, a.modalidad
+
+
+def pct_snapshot_del_pedido(pct) -> Decimal:
+    """El % que guarda el pedido (anticipo_pct_snapshot, NUMERIC(5,2)), redondeado HACIA ABAJO a 2 decimales: el
+    requerido del pedido nunca supera el que se verifico al convertir, asi que pagar lo que decia la cotizacion
+    nunca lo deja con anticipo pendiente (66,666...% -> 66,66%). La modalidad y el manual ya traen 2 decimales."""
+    return Decimal(str(pct)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
 
 
 def anticipo_requerido(total, pct) -> Decimal:
@@ -149,11 +183,13 @@ def anticipo_del_pedido(so):
     """(requerido, pendiente) del anticipo de un Pedido de Venta: la UNICA cuenta que usan
     recalculate_sale_order_state (PENDIENTE_ANTICIPO) y GET /pedidos/{id} (anticipo_pendiente).
 
-    requerido = anticipo_requerido(total, anticipo_pct_snapshot) (60 si el snapshot falta), igual que al convertir
-    la cotizacion; pagado = total - saldo redondeado al peso (los pedidos viejos con centavos no quedan debiendo
-    $0,15); pendiente = requerido - pagado, nunca negativo."""
+    requerido = anticipo_requerido(total, anticipo_pct_snapshot) (60 si el snapshot falta); pagado = total - saldo
+    redondeado al peso (los pedidos viejos con centavos no quedan debiendo $0,15); pendiente = requerido - pagado,
+    nunca negativo. Un pedido CANCELADO no debe nada: su pendiente es 0 (su dinero puede haberse trasladado)."""
     pct = so.anticipo_pct_snapshot if so.anticipo_pct_snapshot is not None else PCT_ANTICIPO_POR_DEFECTO
     requerido = anticipo_requerido(so.total_cop, pct)
+    if so.estado == "CANCELADO":
+        return requerido, Decimal("0")
     pagado = redondear_peso(Decimal(str(so.total_cop or 0)) - Decimal(str(so.saldo_cop or 0)))
     return requerido, max(Decimal("0"), requerido - pagado)
 

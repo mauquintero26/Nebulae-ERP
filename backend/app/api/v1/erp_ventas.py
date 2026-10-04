@@ -26,8 +26,8 @@ from app.models.users import User
 from app.core.busqueda import productos_ilike
 from app.core import cambios_documento
 from app.core.ventas_dinero import (
-    redondear_peso, pesos, formato_pct, pct_anticipo_cotizacion, anticipo_requerido, anticipo_del_pedido,
-    saldos_a_favor_de_cotizacion, PCT_ANTICIPO_POR_DEFECTO,
+    redondear_peso, pesos, formato_pct, anticipo_cotizacion, pct_anticipo_cotizacion, anticipo_requerido,
+    anticipo_del_pedido, saldos_a_favor_de_cotizacion, PCT_ANTICIPO_POR_DEFECTO, ORIGEN_CONSERVADO,
 )
 from app.core.textos_actividad import etiqueta_estado
 from app.api.v1.schemas_compras import CancelarSolicitudBody
@@ -210,9 +210,8 @@ def _recalcular_anticipo_por_modalidad(db: Session, sc: CustomerRequest, user_na
     for cot in cots:
         if _pven_vigente_de_cotizacion(db, cot.id) is not None:
             continue
-        pct, _ = pct_anticipo_cotizacion(cot, db, sc=sc)
+        pct, _, _, nuevo = anticipo_cotizacion(cot, db, sc=sc)
         viejo = Decimal(str(cot.anticipo_cop or 0))
-        nuevo = anticipo_requerido(cot.total_cop, pct)
         if nuevo == viejo:
             continue
         cot.anticipo_cop = nuevo
@@ -250,10 +249,10 @@ def _leer_ajuste_anticipo_manual(db: Session, cot: SalesQuotation, body: dict):
         except (InvalidOperation, ValueError):
             raise HTTPException(422, "El anticipo manual debe ser un porcentaje entre 0% y 100%.")
         pct = pct.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        nota_en_body = "anticipo_manual_nota" in body
         nota = body.get("anticipo_manual_nota")
         nota = nota.strip() if isinstance(nota, str) else ""
-        if pct == cot.anticipo_pct_manual and (not nota_en_body or nota == cot.anticipo_manual_nota):
+        # El mismo % sin nota (ausente, null o vacia) o con la misma nota no cambia nada.
+        if pct == cot.anticipo_pct_manual and (not nota or nota == cot.anticipo_manual_nota):
             return None
         if len(nota) < 5:
             raise HTTPException(422, "Escribe una nota de al menos 5 caracteres que explique el anticipo manual.")
@@ -1005,7 +1004,7 @@ def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN
     )
     if sc is not None:
         # H36+H43: con SC, el anticipo sale de su modalidad de pago (o 60%), nunca del body.
-        cot.anticipo_cop = anticipo_requerido(total_cop, pct_anticipo_cotizacion(cot, db, sc=sc)[0])
+        cot.anticipo_cop = anticipo_cotizacion(cot, db, sc=sc).requerido
     db.add(cot)
     db.commit()
     db.refresh(cot)
@@ -1034,11 +1033,11 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
     d["pedidos_venta"] = [_ven_dict(v) for v in vens]
     # Anticipo (H36+H43, N1, R3, R6): lo mismo que exigira convertir_cotizacion_a_venta. Solo en el detalle (no en
     # _cot_dict) para no hacer una consulta por fila en el listado.
-    pct, modalidad = pct_anticipo_cotizacion(cot, db)
+    pct, modalidad, _, requerido = anticipo_cotizacion(cot, db)
     total = redondear_peso(cot.total_cop)
-    requerido = anticipo_requerido(total, pct)
     saldos = saldos_a_favor_de_cotizacion(db, cot.id)
     saldo_a_favor = sum((s["monto"] for s in saldos), Decimal("0"))
+    # Para mostrar, a 2 decimales (el requerido usa el % exacto).
     d["anticipo_pct"] = float(pct.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
     d["sc_modalidad_pago"] = modalidad
     d["anticipo_requerido"] = float(requerido)
@@ -1215,13 +1214,20 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     recalcula_por_precio = bool(body.get("recotizacion")) or cambia_total
     pct_nuevo = pct_previo
     if recalcula_por_precio or cambia_manual:
-        if cot.anticipo_pct_manual is not None or cot.sc_id:
-            pct_nuevo, _ = pct_anticipo_cotizacion(cot, db)
-        elif manual_previo is not None:
-            # Se quito el manual de una COT sin SC: no hay modalidad que seguir, y el % "que ya tenia" seria el
-            # manual. R2: modalidad vacia -> 60%.
-            pct_nuevo = PCT_ANTICIPO_POR_DEFECTO
-        cot.anticipo_cop = anticipo_requerido(cot.total_cop, pct_nuevo)
+        # Con el estado de DESPUES del loop: SC, % manual y total nuevos.
+        pct_nuevo, _, origen, requerido = anticipo_cotizacion(cot, db)
+        if origen == ORIGEN_CONSERVADO:
+            # Sin SC ni % manual, el anticipo sigue al "% que ya tenia" (H36: un % heredado se conserva tal cual).
+            # Con el mismo total, anticipo_cotizacion ya deja el anticipo guardado (min con el total).
+            if manual_previo is not None:
+                # Se quito el manual: el % "que ya tenia" seria el manual. R2: modalidad vacia -> 60%.
+                pct_nuevo = PCT_ANTICIPO_POR_DEFECTO
+                requerido = anticipo_requerido(cot.total_cop, pct_nuevo)
+            elif cambia_total:
+                # Otro total: el mismo % de antes del PATCH (anticipo/total viejos, sin cuantizar).
+                pct_nuevo = pct_previo
+                requerido = anticipo_requerido(cot.total_cop, pct_previo)
+        cot.anticipo_cop = requerido
         if cambia_manual and not recalcula_por_precio:
             # El ajuste manual deja su propio renglon (abajo): que la edicion no repita el cambio del anticipo
             # como si fuera una re-cotizacion.

@@ -39,7 +39,7 @@ from app.models.fase4 import (
 )
 from app.models.users import User
 from app.core.ventas_dinero import (
-    redondear_peso, pesos, formato_pct, pct_anticipo_cotizacion, anticipo_requerido, anticipo_del_pedido,
+    redondear_peso, pesos, formato_pct, anticipo_cotizacion, pct_snapshot_del_pedido, anticipo_del_pedido,
     saldos_a_favor_de_cotizacion, metodo_pago_anticipo, METODOS_PAGO_ANTICIPO, METODO_PAGO_TRASLADO,
     METODO_PAGO_SALDO_A_FAVOR, ESTADO_PAGO_TRASLADADO,
 )
@@ -2852,12 +2852,12 @@ def convertir_cotizacion_a_venta(
         )
 
     # 2. Anticipo (H36+H43, N1, R3, R4, R6). El requerido se recalcula aqui con la modalidad de la SC (o el %
-    # manual) y el total de hoy: nunca se toma el anticipo guardado, que puede estar viejo. Todo se valida ANTES
-    # de gastar un numero o escribir nada: un 422 deja la COT CONFIRMADA y la marca de Gate 2 intacta para
-    # reintentar. H42: el pedido nace en pesos enteros aunque la COT (datos viejos) traiga centavos.
+    # manual) y el total de hoy: nunca se toma el anticipo guardado, que puede estar viejo (salvo en una COT sin
+    # SC, cuyo anticipo es justamente el "% que ya tenia"). Todo se valida ANTES de gastar un numero o escribir
+    # nada: un 422 deja la COT CONFIRMADA y la marca de Gate 2 intacta para reintentar. H42: el pedido nace en
+    # pesos enteros aunque la COT (datos viejos) traiga centavos.
     total_cop = redondear_peso(cot.total_cop)
-    pct, modalidad = pct_anticipo_cotizacion(cot, db)
-    requerido = anticipo_requerido(total_cop, pct)
+    pct, modalidad, _, requerido = anticipo_cotizacion(cot, db)
     origen_pct = (f"anticipo manual de {formato_pct(pct)}" if cot.anticipo_pct_manual is not None
                   else (modalidad or formato_pct(pct)))
     # R6: el dinero de pedidos CANCELADO de esta misma COT pasa al pedido nuevo como saldo a favor (hasta el
@@ -2918,8 +2918,8 @@ def convertir_cotizacion_a_venta(
     saldo_cop = total_cop - pagado_cop
     subtotal_cop = redondear_peso(cot.subtotal_cop or total_cop)
     descuento_pct = Decimal(str(cot.descuento_pct or 0))
-    # pct ya viene a 2 decimales (pct_anticipo_cotizacion): el snapshot reproduce el mismo requerido.
-    pct_snapshot = pct
+    # Hacia abajo: el requerido del pedido nunca supera el que se acaba de exigir (pct_snapshot_del_pedido).
+    pct_snapshot = pct_snapshot_del_pedido(pct)
 
     new_so = SaleOrder(
         numero=ven_numero,
