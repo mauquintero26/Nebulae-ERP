@@ -142,6 +142,65 @@ def _log(db: Session, entity_type: str, entity_id: int, entity_numero: str,
     if commit:
         db.commit()
 
+# H27+H39: canales por los que el asesor entrega el enlace de confirmacion al cliente -> como se lee en la Actividad.
+CANALES_ENVIO = {"WhatsApp": "por WhatsApp", "Email": "por correo", "Otro": "por otro canal"}
+
+def _canal_de_envio(body: dict, customer_email: Optional[str]) -> Optional[str]:
+    """Canal elegido para enviar la SC/COT al cliente, o None si el body no trae (el Hub no pregunta el canal en
+    todas las rutas). Se valida ANTES de revocar o crear tokens: un canal malo no cambia nada. Elegir 'Email' exige
+    que el cliente tenga correo; con WhatsApp u Otro el correo sale ademas como respaldo (_enviar_correo_confirmacion)."""
+    canal = body.get("canal")
+    if isinstance(canal, str):
+        canal = canal if canal.strip() else None
+    if canal is None:
+        return None
+    if not isinstance(canal, str) or canal not in CANALES_ENVIO:
+        raise HTTPException(422, "Canal de envío no válido: usa WhatsApp, Email u Otro.")
+    if canal == "Email" and not (customer_email or "").strip():
+        raise HTTPException(400, "El cliente no tiene correo registrado: elige WhatsApp u Otro, o agrega su correo "
+                                 "antes de enviar.")
+    return canal
+
+def _enviar_correo_confirmacion(destino: Optional[str], asunto: str, html: str) -> dict:
+    """Intenta el correo con el enlace de confirmacion y dice que paso: {enviado, destino, motivo, mensaje}.
+
+    motivo es None si salio; si no, SIN_CORREO_CLIENTE | CORREO_NO_CONFIGURADO | FALLO_ENVIO. Nunca lanza: el enlace ya
+    quedo guardado y el asesor puede entregarlo por otro medio, asi que un fallo del correo solo se informa.
+    app.core.email se usa por atributo (correo.smtp_configurado / correo.send_email) para poder parchearlo en pruebas."""
+    from app.core import email as correo
+    destino = (destino or "").strip()
+    if not destino:
+        return {"enviado": False, "destino": None, "motivo": "SIN_CORREO_CLIENTE",
+                "mensaje": "No se envió correo: el cliente no tiene correo registrado."}
+    if not correo.smtp_configurado():
+        return {"enviado": False, "destino": destino, "motivo": "CORREO_NO_CONFIGURADO",
+                "mensaje": "No se envió correo: el envío de correos no está configurado en el sistema."}
+    try:
+        salio = bool(correo.send_email(destino, asunto, html))
+    except Exception:
+        logger.exception("No se pudo enviar el correo de confirmación a %s", destino)
+        salio = False
+    if not salio:
+        return {"enviado": False, "destino": destino, "motivo": "FALLO_ENVIO",
+                "mensaje": f"No se pudo enviar el correo a {destino}: falló el servidor de correo."}
+    return {"enviado": True, "destino": destino, "motivo": None, "mensaje": f"Correo enviado a {destino}."}
+
+def _detalle_envio(canal: Optional[str], correo_res: dict) -> list:
+    """Renglones 'etiqueta -> despues' de la Actividad del envio (canal elegido y resultado del correo). Sin clave
+    'campo': CambiosDeActividad del frontend la usa para tachar el 'antes', y aqui no hay valor anterior."""
+    cambios = []
+    if canal:
+        cambios.append({"etiqueta": "Canal de envío", "despues": canal})
+    cambios.append({"etiqueta": "Correo" if canal == "Email" else "Correo de respaldo",
+                    "despues": correo_res["mensaje"]})
+    return cambios
+
+def _extra_data_de_envio(canal: Optional[str], correo_res: dict) -> dict:
+    """extra_data del renglon ESTADO_CHANGED de un envio al cliente (SC y COT comparten forma)."""
+    return {"canal": canal,
+            "correo": {k: correo_res[k] for k in ("enviado", "destino", "motivo")},
+            "cambios": _detalle_envio(canal, correo_res)}
+
 def _registrar_cambios(db: Session, entidad: str, doc, antes: dict, body: dict, user: User,
                        recotizacion: bool = False, commit: bool = True):
     """Deja en la Actividad un renglon con lo que cambio este PATCH (campo: antes -> despues).
@@ -970,8 +1029,10 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
         raise HTTPException(400, "Agrega al menos un producto a la solicitud antes de enviarla al cliente: "
                                  "sin productos no hay nada que confirmar ni que cotizar.")
 
+    # H27: el canal se valida antes de revocar o crear tokens: un canal malo no cambia nada.
+    canal = _canal_de_envio(body, sc.customer_email)
+
     from app.core.confirmation_tokens import create_confirmation_token, revoke_pending_tokens
-    from app.core.email import send_email
     import os
 
     old_estado = sc.estado
@@ -990,16 +1051,24 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
 
     sc.estado = "PENDIENTE_CONFIRMACION"
     sc.updated_at = datetime.datetime.utcnow()
+    # Se leen antes del commit para no abrir otra transaccion mientras el correo (SMTP sincrono) sale.
+    numero, destino = sc.numero, sc.customer_email
     db.commit()
-    _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
-         "Enlace de confirmación reenviado al cliente" if es_reenvio else "Enviada para confirmación del cliente",
-         old_estado=old_estado, new_estado="PENDIENTE_CONFIRMACION", user_name=body.get("user_name"))
 
-    if sc.customer_email:
-        send_email(sc.customer_email, f"Confirma tu solicitud {sc.numero} - Nebulae",
-                    f'<p>Por favor confirma tu solicitud haciendo clic aquí: <a href="{link}">{link}</a></p>')
+    # H39: el estado ya esta guardado; ahora se intenta el correo de respaldo (siempre, sea cual sea el canal) y,
+    # con su resultado a la mano, se anota el envio en la Actividad.
+    correo_res = _enviar_correo_confirmacion(
+        destino, f"Confirma tu solicitud {numero} - Nebulae",
+        f'<p>Por favor confirma tu solicitud haciendo clic aquí: <a href="{link}">{link}</a></p>')
+    descripcion = "Enlace de confirmación reenviado al cliente" if es_reenvio else "Enviada para confirmación del cliente"
+    if canal:
+        descripcion += f" {CANALES_ENVIO[canal]}"
+    _log(db, "SC", sc.id, numero, "ESTADO_CHANGED", descripcion,
+         old_estado=old_estado, new_estado="PENDIENTE_CONFIRMACION",
+         user_name=body.get("user_name") or getattr(user, "email", None),
+         extra_data=_extra_data_de_envio(canal, correo_res))
 
-    return {"status": "success", "data": _sc_dict(sc), "link_confirmacion": link}
+    return {"status": "success", "data": _sc_dict(sc), "link_confirmacion": link, "canal": canal, "correo": correo_res}
 
 
 @router.post("/solicitudes/{sc_id}/confirmar")
@@ -1795,8 +1864,10 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
         raise HTTPException(400, f"Esta cotización ya tiene el pedido de venta {pven.numero} activo; no tiene sentido "
                                  f"volver a pedir confirmación.")
 
+    # H27: el canal se valida despues de las guardas de estado (N4, H46) y antes de revocar o crear tokens.
+    canal = _canal_de_envio(body, cot.customer_email)
+
     from app.core.confirmation_tokens import create_confirmation_token, revoke_pending_tokens
-    from app.core.email import send_email
     import os
 
     old_estado = cot.estado
@@ -1816,7 +1887,10 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     # estado=="CONFIRMADA"), para que un reenvio nunca arrastre una marca vieja hacia el
     # ciclo nuevo.
     cot.gate2_confirmed_at = None
+    if canal:
+        cot.canal_envio = canal  # H27: en el mismo commit que el estado (ya no hay un PATCH previo del frontend)
     cot.updated_at = datetime.datetime.utcnow()
+    numero, destino = cot.numero, cot.customer_email  # antes del commit: el correo (SMTP sincrono) no debe abrir otra transaccion
     db.commit()
     db.refresh(cot)
     try:
@@ -1829,15 +1903,19 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     except Exception as exc:
         db.rollback()
         logger.error(f"Error al sincronizar Solicitud/Lead tras enviar cotizacion {cot.id} para confirmacion: {exc}", exc_info=True)
-    _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
-         "Enviada para confirmación del cliente",
-         old_estado=old_estado, new_estado="PENDIENTE_CONFIRMACION", user_name=body.get("user_name"))
+    # H39: el correo de respaldo se intenta (y su resultado se conoce) antes de anotar el envio en la Actividad.
+    correo_res = _enviar_correo_confirmacion(
+        destino, f"Confirma tu cotización {numero} - Nebulae",
+        f'<p>Revisa y confirma tu cotización aquí: <a href="{link}">{link}</a></p>')
+    descripcion = "Enviada para confirmación del cliente"
+    if canal:
+        descripcion += f" {CANALES_ENVIO[canal]}"
+    _log(db, "COT", cot.id, numero, "ESTADO_CHANGED", descripcion,
+         old_estado=old_estado, new_estado="PENDIENTE_CONFIRMACION",
+         user_name=body.get("user_name") or getattr(user, "email", None),
+         extra_data=_extra_data_de_envio(canal, correo_res))
 
-    if cot.customer_email:
-        send_email(cot.customer_email, f"Confirma tu cotización {cot.numero} - Nebulae",
-                    f'<p>Revisa y confirma tu cotización aquí: <a href="{link}">{link}</a></p>')
-
-    return {"status": "success", "data": _cot_dict(cot), "link_confirmacion": link}
+    return {"status": "success", "data": _cot_dict(cot), "link_confirmacion": link, "canal": canal, "correo": correo_res}
 
 
 @router.post("/cotizaciones/{cot_id}/confirmar")

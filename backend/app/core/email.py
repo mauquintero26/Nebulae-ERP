@@ -19,6 +19,13 @@ from email.mime.text import MIMEText
 logger = logging.getLogger(__name__)
 
 
+def smtp_configurado() -> bool:
+    """True si hay credenciales SMTP (SMTP_USER y SMTP_PASSWORD no vacios), o sea, si send_email puede intentar
+    un envio. Quien lo llama lo usa para distinguir 'el correo no esta configurado' de 'el servidor fallo'
+    antes de pedir el envio; send_email sigue comprobando lo mismo por su cuenta."""
+    return bool(os.environ.get("SMTP_USER", "").strip() and os.environ.get("SMTP_PASSWORD", "").strip())
+
+
 def send_email(to: str, subject: str, html_body: str) -> bool:
     """
     Envia un correo HTML a `to`. Devuelve True si el envio fue exitoso,
