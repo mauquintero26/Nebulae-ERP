@@ -208,6 +208,30 @@ console.log('--- N1 TEST 7b: montoDesdeTexto (puntos de miles, coma decimal, sim
   assert.equal(montoDesdeTexto('1.50.0'), null);
 }
 
+console.log('--- A1 TEST 7c: montoDesdeTexto con coma de miles, coma decimal y ambiguos ---');
+{
+  // Una coma o un punto seguidos de grupos de exactamente 3 cifras son de miles.
+  assert.equal(montoDesdeTexto('600,000'), 600000, "'600,000' no es $600");
+  assert.equal(montoDesdeTexto('1,500'), 1500, "'1,500' no es $2");
+  assert.equal(montoDesdeTexto('1,500,000'), 1500000);
+  assert.equal(montoDesdeTexto('$1,500,000'), 1500000);
+  assert.equal(montoDesdeTexto('1.500.000'), 1500000);
+  assert.equal(montoDesdeTexto('$ 600.000'), 600000);
+  // Una coma seguida de 1 o 2 cifras al final es decimal (al peso).
+  assert.equal(montoDesdeTexto('1.500.000,5'), 1500001);
+  assert.equal(montoDesdeTexto('600,50'), 601);
+  assert.equal(montoDesdeTexto('1,5'), 2);
+  // Ambiguo o mal formado.
+  assert.equal(montoDesdeTexto(''), null);
+  assert.equal(montoDesdeTexto('abc'), null);
+  assert.equal(montoDesdeTexto('1,5000'), null, 'coma con 4 cifras no es ni miles ni decimal');
+  assert.equal(montoDesdeTexto('1.500,000'), null, 'punto y coma mezclados como miles');
+  assert.equal(montoDesdeTexto('1,500.000'), null, 'coma y punto mezclados como miles');
+  assert.equal(montoDesdeTexto('1,500,000.50'), null, 'miles con coma y decimal con punto');
+  assert.equal(montoDesdeTexto('1,50,000'), null);
+  assert.equal(montoDesdeTexto('600,000,'), null);
+}
+
 console.log('--- N1 TEST 8: verificacionParaEnviar arma el payload del servidor ---');
 {
   assert.deepEqual(verificacionParaEnviar({ monto: '600000.4', metodo: 'Nequi', referencia: '  REF-1 ', fecha: '2026-10-04' }),

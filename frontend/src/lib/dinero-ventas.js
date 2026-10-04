@@ -136,21 +136,22 @@ export function cuentaVerificacion(cot) {
 }
 
 /**
- * Monto en pesos escrito a mano, como se escribe en Colombia: '1.500.000', '$1.500.000', '1 500 000' o con coma
- * decimal '1.500.000,50' (se redondea al peso). Un punto que no agrupa de a 3 cifras ('600000.4') se toma como decimal.
- * Un numero se devuelve redondeado. null si esta vacio o no es un monto.
+ * Monto en pesos escrito a mano: '1.500.000', '$1.500.000', '1 500 000', '600,000' o '1,500,000'. Una coma o un punto
+ * seguidos de grupos de exactamente 3 cifras son de miles (un solo tipo de separador). Una coma seguida de 1 o 2
+ * cifras al final es decimal ('1.500.000,5', '600,50'; se redondea al peso). Un punto que no agrupa de a 3 cifras
+ * ('600000.4') se toma como decimal. Un numero se devuelve redondeado. null si esta vacio, es ambiguo
+ * ('1,500.000', '1,500,000.50') o no es un monto.
  * @returns {number | null}
  */
 export function montoDesdeTexto(valor) {
   if (typeof valor === 'number') return Number.isFinite(valor) ? redondearPeso(valor) : null;
   let t = texto(valor).replace(/[$\s]/g, '');
   if (!t) return null;
-  if (t.includes(',')) {
-    const [entero, ...resto] = t.split(',');
-    if (resto.length !== 1 || !/^-?(\d+|\d{1,3}(\.\d{3})+)$/.test(entero)) return null;
-    t = `${entero.replace(/\./g, '')}.${resto[0]}`;
-  } else if (/^-?\d{1,3}(\.\d{3})+$/.test(t)) {
-    t = t.replace(/\./g, '');
+  if (/^-?\d{1,3}([.,])\d{3}(\1\d{3})*$/.test(t)) {
+    t = t.replace(/[.,]/g, '');
+  } else if (/^-?(\d+|\d{1,3}(\.\d{3})+),\d{1,2}$/.test(t)) {
+    const [entero, decimales] = t.split(',');
+    t = `${entero.replace(/\./g, '')}.${decimales}`;
   }
   if (!/^-?\d+(\.\d+)?$/.test(t)) return null;
   return redondearPeso(t);
