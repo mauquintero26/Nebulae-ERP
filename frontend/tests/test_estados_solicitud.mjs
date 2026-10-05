@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import {
   ESTADOS_SC, PASOS_SC, ESTADOS_SC_SIN_CONFIRMAR, MOTIVO_SIN_CONFIRMACION_MIN,
   infoEstadoSolicitud, pasoSolicitud, puedeReiniciar, puedeCotizarSinConfirmacion, resumenCancelacion,
-  motivoDeCancelacion, TEXTO_PAPELERA_SIN_FECHA,
+  motivoDeCancelacion, TEXTO_PAPELERA_SIN_FECHA, ESTADOS_SC_HEREDADOS,
 } from '../src/lib/estados-solicitud.js';
 
 const VIVOS = {
@@ -90,6 +90,15 @@ console.log('--- TEST 4: PASOS_SC: los 4 pasos en orden, con su ayuda ---');
 console.log('--- TEST 5: estados sin confirmar ---');
 {
   assert.deepEqual([...ESTADOS_SC_SIN_CONFIRMAR], ['BORRADOR', 'ASIGNADA', 'PENDIENTE_CONFIRMACION']);
+}
+
+console.log('--- TEST 5b (T7 ronda 1, C12): estados heredados (la dona los suma aparte) ---');
+{
+  assert.deepEqual([...ESTADOS_SC_HEREDADOS], Object.keys(HEREDADOS));
+  assert.ok(Object.isFrozen(ESTADOS_SC_HEREDADOS));
+  assert.throws(() => { ESTADOS_SC_HEREDADOS.push('BORRADOR'); }, TypeError);
+  // Son justamente los que pasoSolicitud pone en el último paso sin estar entre los pasos.
+  for (const e of ESTADOS_SC_HEREDADOS) assert.equal(pasoSolicitud(e), PASOS_SC.length - 1, e);
 }
 
 console.log('--- TEST 6: las tablas están congeladas en profundidad ---');

@@ -759,7 +759,7 @@ export default function AsistenteOmnicanal() {
                   que usa la pagina real de Solicitud de Cliente -- incluye Notas,
                   asi que la caja de Notas propia de este modal queda redundante
                   y se retira mas abajo. */}
-              <SolicitudTipoYDetalle ref={tipoDetalleRef} form={scFormData} setForm={setScFormData} />
+              <SolicitudTipoYDetalle ref={tipoDetalleRef} form={scFormData} setForm={setScFormData} className="space-y-3.5" />
 
               {/* Error de validación o del backend */}
               {scError && (

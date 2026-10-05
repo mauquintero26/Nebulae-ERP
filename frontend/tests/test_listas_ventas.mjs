@@ -16,7 +16,7 @@ import {
   ESTADOS_PEDIDO_SIN_DINERO, pedidoSumaDinero, resumenPedidos, kpisPedidos, hintTotalPedidos, opcionesFiltroEstado,
   generoCotizacion, cotizacionesVigentes, cotizacionesRechazadas, esperaCotizacion, contadoresSolicitudes,
   tasaConversionCotizacion, superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera, pasosParaCancelarSolicitud,
-  repartirCancelacionSolicitudes, cifrasVentasDashboard, rutaSinParametro,
+  repartirCancelacionSolicitudes, cifrasVentasDashboard, rutaSinParametro, esSolicitudActiva,
 } from '../src/lib/listas-ventas.js';
 import { TEXTO_PAPELERA_SIN_FECHA } from '../src/lib/estados-solicitud.js';
 
@@ -377,6 +377,23 @@ console.log('--- T7 TEST 7c (pendiente de T2B): sin eliminada_at y sin documento
   // La cuenta regresiva sigue igual sin documentos.
   assert.equal(estadoEnPapelera({ dias_restantes: 12, tiene_documentos: false }).puedeEliminar, true);
   assert.equal(estadoEnPapelera({ dias_restantes: 12, tiene_documentos: false }).texto, '12 días');
+}
+
+console.log('--- T7 TEST 7d (ronda 1, C12): esSolicitudActiva, un solo predicado para la pestaña, sus contadores y la IA ---');
+{
+  const sc = (estado, tipo = 'Cotizacion de Producto') => ({ estado, tipo_solicitud: tipo });
+  for (const e of ['BORRADOR', 'ASIGNADA', 'PENDIENTE_CONFIRMACION']) assert.equal(esSolicitudActiva(sc(e)), true, e);
+  // Los estados heredados siguen visibles en 'Activas' hasta que T12 los ajuste (esconderlos sería peor).
+  for (const e of ['COTIZADA', 'EN_ESPERA_CONFIRMACION', 'RECHAZADA', 'VENCIDA']) assert.equal(esSolicitudActiva(sc(e)), true, e);
+  assert.equal(esSolicitudActiva(sc('CONFIRMADA')), false);
+  assert.equal(esSolicitudActiva(sc('CANCELADA')), false);
+  // Soporte Técnico no cuenta (por tipo o por su estado propio).
+  assert.equal(esSolicitudActiva(sc('BORRADOR', 'Soporte Tecnico')), false);
+  assert.equal(esSolicitudActiva(sc('N/A_SOPORTE')), false);
+  for (const nada of [null, undefined, 'x', 3]) assert.equal(esSolicitudActiva(nada), false);
+  // La misma lista da un solo número (antes la pestaña contaba por exclusión y el diagnóstico solo los 3 sin confirmar).
+  const lista = [sc('BORRADOR'), sc('ASIGNADA'), sc('COTIZADA'), sc('CONFIRMADA'), sc('CANCELADA'), sc('BORRADOR', 'Soporte Tecnico')];
+  assert.equal(lista.filter(esSolicitudActiva).length, 3);
 }
 
 console.log('--- N4 TEST 7b (revision T11): repartirCancelacionSolicitudes omite las que ya estan en la Papelera y las de soporte ---');

@@ -66,6 +66,14 @@ export const PASOS_SC = congelar([
 const HEREDADOS = congelar(['COTIZADA', 'EN_ESPERA_CONFIRMACION', 'RECHAZADA', 'VENCIDA']);
 
 /**
+ * Estados heredados (ya no se asignan: solo historial y datos viejos hasta que T12 los ajuste). Los mismos de
+ * ESTADOS_SC_HEREDADOS del backend. La lista los muestra en 'Activas' y la dona los suma en 'Estados anteriores'.
+ * Inmutable.
+ * @type {ReadonlyArray<string>}
+ */
+export const ESTADOS_SC_HEREDADOS = HEREDADOS;
+
+/**
  * Estados en los que el cliente todavía no ha confirmado la solicitud. Inmutable.
  * @type {ReadonlyArray<string>}
  */

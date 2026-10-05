@@ -23,11 +23,13 @@ import { coincideProducto } from '@/lib/busqueda';
 import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import {
   diasAlerta, generoCotizacion, cotizacionesVigentes, contadoresSolicitudes, tasaConversionCotizacion,
-  superaDiasAlerta, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera,
+  superaDiasAlerta, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera, esSolicitudActiva,
 } from '@/lib/listas-ventas';
 import {
-  ESTADOS_SC as ESTADOS_SC_LIB, ESTADOS_SC_SIN_CONFIRMAR, infoEstadoSolicitud, puedeReiniciar, motivoDeCancelacion,
+  ESTADOS_SC as ESTADOS_SC_LIB, ESTADOS_SC_HEREDADOS, infoEstadoSolicitud, puedeReiniciar, motivoDeCancelacion,
 } from '@/lib/estados-solicitud';
+import { infoEstadoPedido, humanizarCodigo } from '@/lib/estados-pedido';
+import { ESTADOS as ESTADOS_COT } from '../cotizacion/cotizacion-client';
 import { TIPOS_SC, MODALIDADES_PAGO, pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
 import { lineaDesdeCatalogo, lineaTextoLibre, agregarLinea, lineasParaEnviar, nombreLinea } from '@/lib/lineas-solicitud';
 import { nombreCliente } from '@/lib/cliente-desde-busqueda';
@@ -107,6 +109,15 @@ export function ActionDot({action}: {action:string}) {
 // arriba para el Asistente Omnicanal. U7 (T7): ProductSearch vive en buscador-producto.tsx; se reexporta arriba para el
 // editor de productos del detalle.
 
+// C5 (T7 ronda 1): el estado de cada resultado de Seguimiento con su etiqueta según el documento (_tipo de onSegSearch:
+// 'SC', 'COT' o 'VEN'), nunca el código crudo. COT: la tabla ESTADOS de cotizacion-client (la del Hub y el detalle).
+function etiquetaEstadoSeguimiento(r: any): string {
+  if (r?._tipo === 'SC') return infoEstadoSolicitud(r.estado).label;
+  if (r?._tipo === 'COT') return ESTADOS_COT[r.estado]?.label || humanizarCodigo(r.estado) || String(r.estado ?? '');
+  if (r?._tipo === 'VEN' || r?._tipo === 'PVEN') return infoEstadoPedido(r.estado).label;
+  return humanizarCodigo(r?.estado) || String(r?.estado ?? '');
+}
+
 // Campos dependientes del Tipo de Solicitud + Asesor/Vencimiento. Bloque
 // reutilizable: Tipo/Modalidad, los 5 sub-formularios por tipo (Cotizacion,
 // Seguimiento, Programar Entrega, Devolucion de Producto, Soporte Tecnico) y
@@ -130,7 +141,9 @@ type SolicitudFormState = {
 export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
   form: SolicitudFormState;
   setForm: (updater: (f: SolicitudFormState) => SolicitudFormState) => void;
-}>(function SolicitudTipoYDetalle({ form, setForm }, ref) {
+  /** Espaciado de los bloques (el mismo del <form> que lo aloja): 'space-y-5' en la lista, 'space-y-3.5' en el Asistente. */
+  className?: string;
+}>(function SolicitudTipoYDetalle({ form, setForm, className = 'space-y-5' }, ref) {
   const [usuarios, setUsuarios] = useState<{id:number;email:string;role:string}[]>([]);
   // U7+U8+H12+H13: lo escrito en el buscador (prodName) y las líneas ya agregadas. Elegir o crear un producto lo agrega
   // de una vez (cantidad 1, editable en su tarjeta); el SKU viaja en la línea para que la Cotización lo herede vinculado.
@@ -252,8 +265,15 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
   const isDevolucion = form.tipo_solicitud === 'Devolucion de Producto';
   const isSoporte = form.tipo_solicitud === 'Soporte Tecnico';
 
+  // C10 (ronda 1): el Enter en un campo de texto de este bloque (Seguimiento, Envío, Devolución, vencimiento…) no crea
+  // la solicitud por el envío implícito del <form>. Sin stopPropagation: el buscador de productos y la cantidad siguen
+  // con su propio manejo. Los textarea y los botones no se tocan.
+  const evitarEnvioConEnter = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' && e.target instanceof HTMLInputElement) e.preventDefault();
+  };
+
   return (
-    <>
+    <div className={className} onKeyDown={evitarEnvioConEnter}>
       {/* Tipo + Modalidad (Modalidad solo para Cotizacion) */}
       <div className={`grid gap-4 ${isCotizacion ? 'grid-cols-2' : 'grid-cols-1'}`}>
         <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Tipo de Solicitud</label>
@@ -316,7 +336,7 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
                 {segResults.map((r:any,i:number)=>(
                   <button key={i} type="button" onClick={()=>{setSegSearch(`${r._tipo}: ${r.numero}`);setSegResults([]);setForm(f=>({...f,notas:`Seguimiento a ${r._tipo} ${r.numero} - ${r.customer_name||''}\n${f.notas}`}));}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm border-b border-slate-50 last:border-0">
                     <span className="font-bold">{r.numero}</span>
-                    <span className="ml-2 text-xs text-slate-400">{r._tipo} - {r.estado} - {r.customer_name}</span>
+                    <span className="ml-2 text-xs text-slate-400">{r._tipo} - {etiquetaEstadoSeguimiento(r)} - {r.customer_name}</span>
                   </button>
                 ))}
               </div>
@@ -431,7 +451,7 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
         <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Notas / Observaciones</label>
         <textarea value={form.notas} onChange={e=>setForm(f=>({...f,notas:e.target.value}))} rows={3} placeholder="Detalles de la solicitud…" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-200 outline-none"/>
       </div>
-    </>
+    </div>
   );
 });
 
@@ -721,8 +741,8 @@ export default function SolicitudClient() {
       // H32: "conversion" = solicitudes de cotizacion que de verdad generaron una cotizacion (no las que solo estan Confirmadas).
       const tasa = tasaConversionCotizacion(solicitudes);
       const conf = tasa.conCot;
-      // U15: activas = las que el cliente todavía no confirma (Nueva, Asignada y Pendiente por confirmación).
-      const act = solicitudes.filter(s => ESTADOS_SC_SIN_CONFIRMAR.includes(s.estado)).length;
+      // C12 (ronda 1): el mismo predicado que la pestaña 'Activas' (con los estados heredados, hasta T12).
+      const act = solicitudes.filter(esSolicitudActiva).length;
       const canc = solicitudes.filter(s => s.estado === 'CANCELADA').length;
       const convRate = tasa.pct.toFixed(1);
       const cancRate = ((canc / total) * 100).toFixed(1);
@@ -768,7 +788,7 @@ export default function SolicitudClient() {
           `• Consulta la tabla de **Top Clientes** interactiva abajo para filtrar entre Top 5, 10, 20 o 50 y ver su tasa de éxito particular.`;
       } else {
         aiReply = `🔍 **Análisis para "${q}":**\n\n` +
-          `• Con base en el análisis en tiempo real de las **${total} solicitudes**, ${act} todavía esperan la confirmación del cliente.\n` +
+          `• Con base en el análisis en tiempo real de las **${total} solicitudes**, ${act} siguen activas (sin confirmar ni cancelar).\n` +
           `• La conversión acumulada se sitúa en **${convRate}%** y el ${cancRate}% fue cancelado.\n` +
           `• El cliente líder es **${topCustName}** y el motivo principal de descarte reportado es *"${topReason}"*.\n\n` +
           `¿Deseas profundizar en algún segmento o tipo de solicitud específico?`;
@@ -1059,8 +1079,8 @@ export default function SolicitudClient() {
     else{setChecked(new Set(filtered.map((s:any)=>s.id)));setShowBulkBar(true);}
   }
 
-  // Stats
-  const totalActivas=solicitudes.filter(s=>s.tipo_solicitud!=='Soporte Tecnico'&&s.estado!=='CONFIRMADA'&&s.estado!=='CANCELADA').length;
+  // Stats. C12 (ronda 1): 'Activas' (pestaña, contador, vencidas y diagnóstico) sale de un solo predicado.
+  const totalActivas=solicitudes.filter(esSolicitudActiva).length;
   // H32: contadores reales: 'Confirmadas' es por estado (igual que la pestana) y avisa cuantas esperan su cotizacion;
   // 'generaron cotizacion' (conCot) cuenta las que tienen al menos una COT vinculada, en cualquier estado.
   const {totalConf,conCot,hintConfirmadas,hintTotal}=contadoresSolicitudes(solicitudes,totalServidor);
@@ -1069,14 +1089,14 @@ export default function SolicitudClient() {
   // N8: 'sin atender' = Borrador que lleva mas de los dias de alerta de Configuracion sin cambios (fechas del API en UTC).
   const sinAtender=solicitudes.filter(s=>s.estado==='BORRADOR'&&superaDiasAlerta(s.updated_at||s.fecha_solicitud,alertDias)).length;
   const vencidas=solicitudes.filter(s=>{
-    if(s.estado==='CANCELADA'||s.estado==='CONFIRMADA') return false;
+    if(!esSolicitudActiva(s)) return false;
     return s.fecha_vencimiento&&new Date(s.fecha_vencimiento)<new Date();
   }).length;
 
   const filtered=solicitudes.filter(sc=>{
     const ms=!search||(sc.numero||'').toLowerCase().includes(search.toLowerCase())||(sc.customer_name||'').toLowerCase().includes(search.toLowerCase())||(sc.advisor_name||'').toLowerCase().includes(search.toLowerCase())||coincideProducto(sc,search);
     if(!ms) return false;
-    if(activeTab==='Activas') return sc.tipo_solicitud!=='Soporte Tecnico'&&sc.estado!=='CONFIRMADA'&&sc.estado!=='CANCELADA';
+    if(activeTab==='Activas') return esSolicitudActiva(sc);
     if(activeTab==='Confirmadas') return sc.estado==='CONFIRMADA';
     if(activeTab==='Canceladas') return sc.estado==='CANCELADA';
     if(activeTab==='Soporte') return sc.tipo_solicitud==='Soporte Tecnico';
@@ -1093,9 +1113,9 @@ export default function SolicitudClient() {
         <div className="bg-rose-50 border-b border-rose-200 px-6 py-3 flex items-start gap-4">
           <ShieldAlert className="text-rose-600 shrink-0 mt-0.5" size={20}/>
           <div className="flex-1">
-            <h4 className="text-sm font-black text-rose-800">ATENCION REQUERIDA (Alerta de {alertDias} dias)</h4>
+            <h4 className="text-sm font-black text-rose-800">ATENCIÓN REQUERIDA (Alerta de {alertDias} días)</h4>
             <p className="text-xs font-bold text-rose-600 mt-1">
-              {sinAtender>0&&`* ${sinAtender} solicitud(es) sin atender mas de ${alertDias} dias `}
+              {sinAtender>0&&`* ${sinAtender} solicitud(es) sin atender más de ${alertDias} días `}
               {vencidas>0&&`* ${vencidas} solicitud(es) vencidas`}
             </p>
           </div>
@@ -1224,13 +1244,13 @@ export default function SolicitudClient() {
                   <div className="bg-white/5 rounded-xl p-3 border border-white/5">
                     <p className="font-black text-emerald-300 uppercase text-[10px] tracking-wider mb-1">2. Auto-conversión a COT</p>
                     <p className="text-slate-300 leading-relaxed">
-                      Al pulsar <strong>"Confirmar + Crear Cotización"</strong>, el sistema valida las líneas y genera la cotización vinculada con TRM en tiempo real.
+                      Cuando el cliente confirma, el botón <strong>Cotizar</strong> del detalle valida las líneas y genera la cotización vinculada con TRM en tiempo real. Para cotizar antes, <strong>Cotizar sin confirmación</strong> pide el motivo.
                     </p>
                   </div>
                   <div className="bg-white/5 rounded-xl p-3 border border-white/5">
                     <p className="font-black text-rose-300 uppercase text-[10px] tracking-wider mb-1">3. Cancelación & Papelera</p>
                     <p className="text-slate-300 leading-relaxed">
-                      Si una SC se cancela, se exige el <strong>motivo</strong> y se traslada a la <strong>Papelera</strong> con retención de 30 días antes de permitir su eliminación permanente.
+                      Si una SC se cancela, se exige el <strong>motivo</strong> y se traslada a la <strong>Papelera</strong>. Allí, una SC sin cotización ni pedido se puede eliminar; si tiene documentos vinculados, se conserva.
                     </p>
                   </div>
                 </div>
@@ -1588,6 +1608,9 @@ export default function SolicitudClient() {
                       colores.forEach(([estado, color]) => {
                         slices.push({ label: infoEstadoSolicitud(estado).label, count: solicitudes.filter(s=>s.estado===estado).length, color });
                       });
+                      // C12 (ronda 1): los estados heredados (hasta que T12 los ajuste) en un trozo aparte, solo si hay.
+                      const anteriores = solicitudes.filter(s=>ESTADOS_SC_HEREDADOS.includes(s.estado)).length;
+                      if (anteriores > 0) slices.push({ label: 'Estados anteriores', count: anteriores, color: '#a78bfa' });
                     } else {
                       const reasonCounts: Record<string, number> = {};
                       solicitudes.filter(s=>s.estado==='CANCELADA').forEach(s => {

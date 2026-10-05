@@ -11,7 +11,7 @@
  *    de la lista, superaDiasAlerta (N8), resumenCancelacionSolicitudes, estadoEnPapelera y pasosParaCancelarSolicitud.
  */
 import { ESTADOS_PEDIDO_CERRADOS, grupoPedido, esCotizacionActiva, esPedidoVigente } from './estados-pedido.js';
-import { comoUTC } from './hub-ventas.js';
+import { comoUTC, esSoporte } from './hub-ventas.js';
 import { redondearPeso } from './pesos.js';
 import { TEXTO_PAPELERA_SIN_FECHA } from './estados-solicitud.js';
 
@@ -281,6 +281,19 @@ export function superaDiasAlerta(iso, dias, ahora = Date.now()) {
   if (!iso) return false;
   const t = new Date(comoUTC(iso)).getTime();
   return !Number.isNaN(t) && (ahora - t) / 86400000 > dias;
+}
+
+/**
+ * T7 ronda 1 (C12): una solicitud "activa" de la lista: no es de Soporte Técnico (por tipo o por su estado propio) y
+ * su estado no es Confirmada ni Cancelada. Los estados heredados (Cotizada, En espera de confirmación, Rechazada,
+ * Vencida) siguen contando como activos hasta que T12 los ajuste (esconderlos sería peor). Un solo predicado para la
+ * pestaña 'Activas', su contador, las vencidas y el diagnóstico de la IA: la misma página no da dos números distintos.
+ * @param {any} sc
+ * @returns {boolean}
+ */
+export function esSolicitudActiva(sc) {
+  if (!esObjeto(sc) || esSoporte(sc)) return false;
+  return sc.estado !== 'CONFIRMADA' && sc.estado !== 'CANCELADA';
 }
 
 /**
