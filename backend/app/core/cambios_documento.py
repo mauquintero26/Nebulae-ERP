@@ -50,9 +50,16 @@ CAMPOS = {
         "pec_numero": "Pedido de compra", "pxp_numero": "Orden de pago",
         "cancellation_reason": "Motivo de cancelación",
     },
+    # H21: la ficha del cliente (customers). Su historial lo escriben PATCH /ventas/solicitudes/{id}/cliente y
+    # PUT /crm/customers/{id} (app/core/clientes.log_cliente) y lo muestra el perfil 360.
+    "CLIENTE": {
+        "first_name": "Nombre", "last_name": "Apellido", "document": "Documento", "phone": "Teléfono",
+        "email": "Correo", "address": "Dirección", "city": "Ciudad",
+    },
 }
 
-NOMBRE_ACCION = {"SC": "Solicitud actualizada", "COT": "Cotización actualizada", "VEN": "Pedido actualizado"}
+NOMBRE_ACCION = {"SC": "Solicitud actualizada", "COT": "Cotización actualizada", "VEN": "Pedido actualizado",
+                 "CLIENTE": "Ficha del cliente actualizada"}
 
 # H26: en una Solicitud el cliente pide productos; los precios aparecen en la Cotizacion. Las lineas de la SC llegan con
 # unit_price_cop 0 desde solicitud-client y productos-solicitud, asi que en su Actividad no se muestra ni se compara el
@@ -262,6 +269,15 @@ def comparar(entidad, antes, despues, usuarios=None):
         resto = len(cambios) - CAMBIOS_MAX
         cambios = cambios[:CAMBIOS_MAX] + [_cambio("mas", f"y {resto} cambios más", None, None)]
     return cambios
+
+
+def cambio_simple(campo, etiqueta, antes, despues):
+    """Un cambio de texto suelto, para un dato que no es columna del documento (H21: la ciudad del cliente en la
+    Actividad de la SC): el dict {campo, etiqueta, antes, despues} si los textos normalizados difieren, o None."""
+    a, d = _texto(antes), _texto(despues)
+    if a == d:
+        return None
+    return _cambio(campo, etiqueta, _mostrar(campo, a, None), _mostrar(campo, d, None))
 
 
 def afecta_precio(cambios):

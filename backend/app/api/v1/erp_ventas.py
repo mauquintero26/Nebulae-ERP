@@ -6,7 +6,7 @@ Pedidos de Venta (VEN), Ordenes Pendientes por Pagar (PXP)
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func, select, case, and_, or_
-from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.exc import DataError, DBAPIError, IntegrityError
 from typing import Optional, List
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import pydantic
@@ -26,7 +26,7 @@ from app.api.dependencies import (
 )
 from app.models.users import User
 from app.core.busqueda import productos_ilike
-from app.core import cambios_documento
+from app.core import cambios_documento, clientes
 from app.core.ventas_dinero import (
     redondear_peso, pesos, formato_pct, anticipo_cotizacion, pct_anticipo_cotizacion, anticipo_requerido,
     anticipo_del_pedido, saldos_a_favor_de_cotizacion, PCT_ANTICIPO_POR_DEFECTO, ORIGEN_CONSERVADO,
@@ -40,6 +40,7 @@ from app.api.v1.crm import mover_lead_de_solicitud, reabrir_lead_de_solicitud
 import datetime
 import hashlib
 import logging
+import re
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -507,6 +508,34 @@ def _confirmacion_vigente_sc(sc: CustomerRequest) -> bool:
     return sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is not None
 
 
+def _sc_tiene_cot_activa(db: Session, sc_id: int) -> bool:
+    """Gate 1 (B1-T4, N7): la SC tiene una cotizacion activa (cualquiera menos RECHAZADA). Una consulta: los llamadores
+    la evaluan solo cuando hace falta (update_solicitud cuenta sus consultas, test_solicitud_guardado_una_transaccion)."""
+    return db.query(SalesQuotation.id).filter(SalesQuotation.sc_id == sc_id,
+                                              SalesQuotation.estado != "RECHAZADA").first() is not None
+
+
+# Gate 1: por que la confirmacion del cliente deja de valer. El estado va en «Estado cambiado a {etiqueta}: {motivo}»
+# (renglon ESTADO_CHANGED) y el aviso es el renglon UPDATED cuando el estado no cambia (hay una cotizacion activa).
+# update_solicitud usa los del Bloque 1 (las pruebas buscan 'cambió el cliente'); PATCH /solicitudes/{id}/cliente (H21,
+# R18), que solo corrige el contacto del mismo cliente, los suyos.
+_MOTIVO_PRODUCTOS = ("se modificaron los productos, así que la confirmación del cliente ya no es válida y hay que "
+                     "reenviarle la solicitud")
+_MOTIVO_CAMBIO_DE_CLIENTE = ("cambió el cliente de la solicitud, así que la confirmación del cliente anterior ya no es "
+                             "válida y hay que enviarle la solicitud al cliente nuevo")
+_AVISO_CAMBIO_DE_CLIENTE = ("Cambió el cliente de la solicitud: la confirmación del cliente anterior ya no vale y su "
+                            "enlace quedó anulado. Para crear otra cotización, envíale la solicitud al cliente nuevo "
+                            "para que la confirme.")
+_MOTIVO_CAMBIO_DE_CONTACTO = ("cambió el correo o el teléfono del cliente, así que su confirmación ya no es válida y "
+                              "hay que enviarle la solicitud de nuevo")
+_AVISO_CAMBIO_DE_CONTACTO = ("Cambió el correo o el teléfono del cliente: su confirmación ya no vale y su enlace quedó "
+                             "anulado. Para crear otra cotización, envíale la solicitud de nuevo para que la confirme.")
+
+
+def _texto_estado_cambiado(etiqueta: str, motivo: str) -> str:
+    return f"Estado cambiado a {etiqueta}: {motivo}"
+
+
 def _sc_dict(sc: CustomerRequest) -> dict:
     return {
         "id": sc.id,
@@ -542,6 +571,141 @@ def _sc_dict(sc: CustomerRequest) -> dict:
         "asignado_a_user_id": sc.asignado_a_user_id,
         "estado_soporte": sc.estado_soporte,
     }
+
+def _ciudad_del_cliente(sc: CustomerRequest) -> Optional[str]:
+    """H21: la ciudad no es columna de la SC; sale de su ficha (None sin ficha). Solo en el detalle, no en el listado."""
+    return sc.customer.city if sc.customer is not None else None
+
+# ─── H21: corregir los datos de contacto del cliente desde la SC ────────────────────────────────────────────────────
+
+# Clave del body de PATCH /solicitudes/{id}/cliente -> (columna en SC/COT/VEN o None, columna en la ficha Customer).
+_CONTACTO_CLIENTE = {
+    "customer_phone": ("customer_phone", "phone"),
+    "customer_email": ("customer_email", "email"),
+    "customer_address": ("customer_address", "address"),
+    "customer_city": (None, "city"),
+}
+_ETIQUETAS_CONTACTO = {"customer_phone": "Teléfono", "customer_email": "Correo", "customer_address": "Dirección",
+                       "customer_city": "Ciudad"}
+# campo de un cambio (SC/COT/VEN, la ciudad de cambio_simple o la ficha) -> clave del body.
+_CLAVE_DE_CAMPO_CONTACTO = {**{k: k for k in _CONTACTO_CLIENTE},
+                            **{col_cli: k for k, (_, col_cli) in _CONTACTO_CLIENTE.items()}}
+# Limites: los de las columnas customer_email String(150) y customer_phone String(50) de SC/COT/VEN. La direccion, 255
+# y no los 300 de SC/COT/VEN: en la base customers.address es varchar(255) (el modelo no lo declara) y la correccion
+# tambien va a la ficha. La ciudad (solo en la ficha) hasta 100. T6A (validarContacto) copia estos textos.
+CORREO_MAX, TELEFONO_MAX, DIRECCION_MAX, CIUDAD_MAX = 150, 50, 255, 100
+TELEFONO_MIN_DIGITOS = 7
+_CORREO_VALIDO = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+# R6: pedidos que ya no se corrigen (cerrados). DEVUELTO_TOTAL ya paso por entregado y no tiene transiciones.
+_ESTADOS_VEN_CERRADOS_PARA_CONTACTO = ("CANCELADO", "ENTREGADO", "FACTURADO", "DEVUELTO_TOTAL")
+# R18 (ruling de T5): renglon de la Actividad de una COT propagada cuyo enlace pendiente se anulo. La COT no cambia de
+# estado y 'Enviar al cliente' solo acepta BORRADOR o ENVIADA: por eso se indica pasarla a Borrador.
+_ENLACE_COT_ANULADO = {"etiqueta": "Enlace de confirmación",
+                       "despues": "Se anuló el enlace enviado al dato anterior: pasa la cotización a Borrador y "
+                                  "envíala de nuevo"}
+
+
+def _normalizar_contacto(body: dict) -> dict:
+    """Solo las claves de _CONTACTO_CLIENTE que trae el body, normalizadas: sin espacios en los bordes, '' -> None
+    (borrar el dato), correo en minusculas. 422 con el texto para el usuario si un dato no sirve (las mismas reglas que
+    validarContacto del frontend). Otras claves (customer_name, updated_by...) se ignoran."""
+    nuevos = {}
+    for clave in _CONTACTO_CLIENTE:
+        if clave not in body:
+            continue
+        valor = body[clave]
+        if valor is not None and not isinstance(valor, str):
+            raise HTTPException(422, f"El dato «{_ETIQUETAS_CONTACTO[clave]}» debe ser un texto.")
+        valor = (valor or "").strip() or None
+        if valor is not None:
+            if clave == "customer_email":
+                if len(valor) > CORREO_MAX:
+                    raise HTTPException(422, f"El correo no puede tener más de {CORREO_MAX} caracteres.")
+                if not _CORREO_VALIDO.fullmatch(valor):
+                    raise HTTPException(422, f"El correo «{valor}» no es válido.")
+                valor = valor.lower()
+            elif clave == "customer_phone":
+                if len(valor) > TELEFONO_MAX:
+                    raise HTTPException(422, f"El teléfono no puede tener más de {TELEFONO_MAX} caracteres.")
+                if sum(ch in "0123456789" for ch in valor) < TELEFONO_MIN_DIGITOS:
+                    raise HTTPException(422, f"El teléfono debe tener al menos {TELEFONO_MIN_DIGITOS} dígitos.")
+            elif clave == "customer_address" and len(valor) > DIRECCION_MAX:
+                raise HTTPException(422, f"La dirección es muy larga (máximo {DIRECCION_MAX} caracteres).")
+            elif clave == "customer_city" and len(valor) > CIUDAD_MAX:
+                raise HTTPException(422, f"La ciudad es muy larga (máximo {CIUDAD_MAX} caracteres).")
+        nuevos[clave] = valor
+    return nuevos
+
+
+def _unir_es(partes) -> str:
+    """'a' | 'a y b' | 'a, b y c'."""
+    partes = [p for p in partes if p]
+    if len(partes) <= 1:
+        return "".join(partes)
+    return ", ".join(partes[:-1]) + " y " + partes[-1]
+
+
+def _titulo_contacto(*listas_de_cambios) -> str:
+    """'Teléfono, Correo': los datos de contacto que cambiaron en alguna de las listas, en el orden del formulario."""
+    claves = {_CLAVE_DE_CAMPO_CONTACTO.get(c.get("campo")) for cambios in listas_de_cambios for c in cambios}
+    return ", ".join(etiqueta for clave, etiqueta in _ETIQUETAS_CONTACTO.items() if clave in claves)
+
+
+def _docs_abiertos_para_contacto(db: Session, sc: CustomerRequest) -> list:
+    """R6 (respuesta del usuario): [(entidad, doc)] a los que tambien se propaga la correccion: las COT de la SC que no
+    estan RECHAZADAS y los PVEN abiertos (fuera de _ESTADOS_VEN_CERRADOS_PARA_CONTACTO) vinculados por sc_id o por el
+    cot_id de CUALQUIER COT de la SC (como get_solicitud: un PVEN cuya COT se rechazo o se desvinculo conserva el cot_id).
+    Por id ascendente, primero las COT."""
+    cots = db.query(SalesQuotation).filter(SalesQuotation.sc_id == sc.id).order_by(SalesQuotation.id.asc()).all()
+    filtro = SaleOrder.sc_id == sc.id
+    if cots:
+        filtro = filtro | SaleOrder.cot_id.in_([c.id for c in cots])
+    pvens = (db.query(SaleOrder).filter(filtro, SaleOrder.estado.notin_(_ESTADOS_VEN_CERRADOS_PARA_CONTACTO))
+             .order_by(SaleOrder.id.asc()).all())
+    return [("COT", c) for c in cots if c.estado != "RECHAZADA"] + [("VEN", v) for v in pvens]
+
+
+def _anular_confirmacion_por_cambio_de_cliente(db: Session, sc: CustomerRequest, old_estado: str,
+                                               autor: Optional[str], motivo: str = _MOTIVO_CAMBIO_DE_CONTACTO,
+                                               aviso: str = _AVISO_CAMBIO_DE_CONTACTO) -> dict:
+    """R18 (H21): la regla de Gate 1 de update_solicitud para un cambio de cliente (B1-T4, con la puerta A de la ronda 1
+    de T3), para PATCH /solicitudes/{id}/cliente. Se llama cuando cambio el correo o el telefono de la SC
+    (_cliente_de_la_solicitud), sin otro cambio de estado en la misma operacion (sc.estado == old_estado) y DESPUES del
+    renglon de la correccion:
+    - PENDIENTE_CONFIRMACION (con o sin COT: el cliente no ha confirmado nada) o CONFIRMADA sin COT activa: vuelve a
+      ASIGNADA (BORRADOR sin asesor) con el renglon ESTADO_CHANGED «Estado cambiado a …: {motivo}».
+    - Si no, con la marca gate1 (CONFIRMADA con una COT activa, o una marca heredada): el estado no cambia y queda el
+      renglon UPDATED {aviso}.
+    - En los dos casos se revoca el enlace de la SC y se limpia gate1. En ASIGNADA o BORRADOR sin marca no hay nada que
+      anular (tampoco en una CONFIRMADA sin marca con COT activa: la confirmo el cliente por la COT, T2A).
+    Es la misma condicion que update_solicitud (invalida_confirmacion / anula_por_cliente), que no lo usa: alli la
+    decision va junto con el cambio de productos y del asesor en el mismo PATCH (comparten _sc_tiene_cot_activa y la forma
+    de los textos). No es _confirmacion_vigente_sc: el Bloque 1 tambien anula una marca gate1 heredada fuera de
+    CONFIRMADA. Sin commit (_log y revoke_pending_tokens con commit=False).
+    Devuelve {confirmacion_anulada, estado_cambiado, enlace_anulado}; enlace_anulado = la SC esperaba al cliente
+    (PENDIENTE_CONFIRMACION), asi que el enlace que el tiene ya no sirve."""
+    estado_cambiado = (old_estado == "PENDIENTE_CONFIRMACION"
+                       or (old_estado == "CONFIRMADA" and not _sc_tiene_cot_activa(db, sc.id)))
+    if not estado_cambiado and sc.gate1_confirmed_at is None:
+        return {"confirmacion_anulada": False, "estado_cambiado": False, "enlace_anulado": False}
+    if estado_cambiado:
+        sc.estado = "ASIGNADA" if sc.advisor_user_id else "BORRADOR"
+        _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", _texto_estado_cambiado(etiqueta_estado("SC", sc.estado), motivo),
+             old_estado=old_estado, new_estado=sc.estado, user_name=autor, commit=False)
+    else:
+        _log(db, "SC", sc.id, sc.numero, "UPDATED", aviso, user_name=autor, commit=False)
+    from app.core.confirmation_tokens import revoke_pending_tokens
+    revoke_pending_tokens(db, "SC", sc.id, commit=False)
+    sc.gate1_confirmed_at = None
+    return {"confirmacion_anulada": True, "estado_cambiado": estado_cambiado,
+            "enlace_anulado": old_estado == "PENDIENTE_CONFIRMACION"}
+
+
+def _mensaje_correo_de_otro_cliente(correo: str, otro: Optional[Customer]) -> str:
+    """409 de PATCH /solicitudes/{id}/cliente: el correo ya es de otra ficha (con su nombre si se sabe cual)."""
+    quien = f" ({clientes.nombre_cliente(otro)})" if otro is not None else ""
+    return (f"El correo {correo} ya pertenece a otro cliente{quien}. Revisa si es el mismo cliente antes de "
+            f"cambiarlo.")
 
 def _cot_dict(cot: SalesQuotation) -> dict:
     return {
@@ -875,6 +1039,7 @@ def get_solicitud(sc_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)
         ActivityLog.entity_id == sc_id
     ).order_by(ActivityLog.created_at.asc(), ActivityLog.id.asc()).all()
     d = _sc_dict(sc)
+    d["customer_city"] = _ciudad_del_cliente(sc)  # H21: de la ficha; solo en el detalle (no suma consultas al listado)
     d["actividades"] = [_log_dict(l) for l in logs]
     # linked quotations
     cots = db.query(SalesQuotation).filter(SalesQuotation.sc_id == sc_id).all()
@@ -1006,9 +1171,7 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         (cambian_los_productos or cambia_el_cliente)
         and sc.estado == old_estado
         and (old_estado == "PENDIENTE_CONFIRMACION"
-             or (old_estado == "CONFIRMADA"
-                 and db.query(SalesQuotation.id).filter(SalesQuotation.sc_id == sc.id,
-                                                        SalesQuotation.estado != "RECHAZADA").first() is None))
+             or (old_estado == "CONFIRMADA" and not _sc_tiene_cot_activa(db, sc.id)))
     )
     if invalida_confirmacion:
         sc.estado = "ASIGNADA" if sc.advisor_user_id else "BORRADOR"
@@ -1069,16 +1232,12 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
              old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"), commit=False)
     if invalida_confirmacion:
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
-             (f"Estado cambiado a {etiqueta_estado('SC', sc.estado)}: se modificaron los productos, así que la confirmación del cliente "
-              f"ya no es válida y hay que reenviarle la solicitud") if cambian_los_productos else
-             (f"Estado cambiado a {etiqueta_estado('SC', sc.estado)}: cambió el cliente de la solicitud, así que la confirmación del "
-              f"cliente anterior ya no es válida y hay que enviarle la solicitud al cliente nuevo"),
+             _texto_estado_cambiado(etiqueta_estado('SC', sc.estado),
+                                    _MOTIVO_PRODUCTOS if cambian_los_productos else _MOTIVO_CAMBIO_DE_CLIENTE),
              old_estado=old_estado, new_estado=sc.estado,
              user_name=body.get("updated_by") or getattr(user, "email", None), commit=False)
     if anula_por_cliente:
-        _log(db, "SC", sc.id, sc.numero, "UPDATED",
-             "Cambió el cliente de la solicitud: la confirmación del cliente anterior ya no vale y su enlace quedó "
-             "anulado. Para crear otra cotización, envíale la solicitud al cliente nuevo para que la confirme.",
+        _log(db, "SC", sc.id, sc.numero, "UPDATED", _AVISO_CAMBIO_DE_CLIENTE,
              user_name=body.get("updated_by") or getattr(user, "email", None), commit=False)
     if fecha_vieja is not None and sc.fecha_entrega_estimada and sc.fecha_entrega_estimada.date() != fecha_vieja.date():
         # Final whole-branch review (hallazgo #2): .date() en ambos lados antes de
@@ -1115,6 +1274,141 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     resp = _sc_dict(sc)
     db.commit()
     return {"status": "success", "data": resp}
+
+
+@router.patch("/solicitudes/{sc_id}/cliente")
+def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
+        user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
+    """H21: corrige el telefono, el correo, la direccion y la ciudad del cliente desde la SC.
+
+    En una sola transaccion (un commit) se corrigen la SC, su ficha de cliente (si esta vinculada; la ciudad solo vive
+    alli) y, por R6, la COT y el PVEN abiertos de esa SC (_docs_abiertos_para_contacto), con un renglon en la Actividad
+    de cada uno y en el historial del cliente (perfil 360). Un correo de otra ficha -> 409 sin escribir nada (tambien si
+    otro cliente lo toma en una carrera: IntegrityError desde el flush). El autor es el usuario de la sesion (R9): se
+    ignoran body.updated_by y body.user_name. El nombre no se corrige aqui (se cambia en la ficha).
+    R18: si cambia el correo o el telefono de la SC, la misma regla de Gate 1 que update_solicitud para un cambio de
+    cliente (_anular_confirmacion_por_cambio_de_cliente), y una COT propagada en PENDIENTE_CONFIRMACION cuyo correo o
+    telefono cambio pierde su enlace (sin cambiar de estado; una CONFIRMADA recibe los datos y conserva su confirmacion).
+    Cambiar solo la direccion o la ciudad no anula nada.
+    Respuesta: {status, data (_sc_dict + customer_city), ficha_actualizada, documentos_actualizados [numeros],
+    confirmacion_anulada, estado_cambiado, enlaces_anulados [numeros de SC/COT], sin_cambios}."""
+    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
+    if not sc:
+        raise HTTPException(404, "Solicitud no encontrada")
+    if sc.estado == "CANCELADA":
+        raise HTTPException(409, f"La solicitud {sc.numero} está cancelada: si hace falta, corrige los datos desde la "
+                                 f"ficha del cliente.")
+    nuevos = _normalizar_contacto(body)
+    if not nuevos:
+        raise HTTPException(422, "No llegó ningún dato del cliente para corregir.")
+    cliente = None
+    if sc.customer_id:
+        cliente = db.query(Customer).filter(Customer.id == sc.customer_id).with_for_update().first()
+    if "customer_city" in nuevos and cliente is None:
+        raise HTTPException(422, "Esta solicitud no está vinculada a una ficha de cliente: la ciudad se guarda en la "
+                                 "ficha.")
+    correo = nuevos.get("customer_email")
+    if cliente is not None and correo:
+        otro = clientes.correo_de_otro_cliente(db, correo, cliente.id)
+        if otro is not None:
+            raise HTTPException(409, _mensaje_correo_de_otro_cliente(correo, otro))
+
+    autor = nombre_de_usuario(user)
+    old_estado = sc.estado
+    foto_sc = cambios_documento.tomar_foto(sc, "SC")
+    contacto_sc_antes = _cliente_de_la_solicitud(sc)
+    foto_cli = cambios_documento.tomar_foto(cliente, "CLIENTE") if cliente is not None else None
+    ciudad_antes = cliente.city if cliente is not None else None
+    docs = [(entidad, doc, cambios_documento.tomar_foto(doc, entidad), _cliente_de_la_solicitud(doc))
+            for entidad, doc in _docs_abiertos_para_contacto(db, sc)]
+    origen = {"tipo": "SC", "id": sc.id, "numero": sc.numero}
+    try:
+        # Desde aqui hasta el commit: el UPDATE de la ficha sale en el flush, donde salta el indice unico del correo.
+        for clave, valor in nuevos.items():
+            col_doc, col_cli = _CONTACTO_CLIENTE[clave]
+            if col_doc:
+                setattr(sc, col_doc, valor)
+                for _, doc, _, _ in docs:
+                    setattr(doc, col_doc, valor)
+            if cliente is not None:
+                setattr(cliente, col_cli, valor)
+        sc.updated_at = datetime.datetime.utcnow()
+        db.flush()
+
+        cambios_sc = cambios_documento.comparar("SC", foto_sc, cambios_documento.tomar_foto(sc, "SC"))
+        if cliente is not None:
+            ciudad = cambios_documento.cambio_simple("customer_city", "Ciudad", ciudad_antes, cliente.city)
+            if ciudad is not None:
+                cambios_sc.append(ciudad)
+        cambios_cli = (cambios_documento.comparar("CLIENTE", foto_cli, cambios_documento.tomar_foto(cliente, "CLIENTE"))
+                       if cliente is not None else [])
+        docs_cambiados = []
+        for entidad, doc, foto, contacto_antes in docs:
+            cambios = cambios_documento.comparar(entidad, foto, cambios_documento.tomar_foto(doc, entidad))
+            if cambios:
+                docs_cambiados.append((entidad, doc, cambios, contacto_antes))
+        if not (cambios_sc or cambios_cli or docs_cambiados):
+            db.rollback()  # nada que guardar: sin Actividad (el formulario puede reenviar lo mismo)
+            data = _sc_dict(sc)
+            data["customer_city"] = _ciudad_del_cliente(sc)
+            return {"status": "success", "data": data, "ficha_actualizada": False, "documentos_actualizados": [],
+                    "confirmacion_anulada": False, "estado_cambiado": False, "enlaces_anulados": [],
+                    "sin_cambios": True}
+
+        numeros_docs = [doc.numero for _, doc, _, _ in docs_cambiados]
+        lugares = (["la ficha del cliente"] if cambios_cli else []) + numeros_docs
+        titulo = _titulo_contacto(cambios_sc, cambios_cli, *(c for _, _, c, _ in docs_cambiados))
+        if cambios_sc:
+            descripcion = f"Datos del cliente corregidos: {titulo}"
+            if lugares:
+                descripcion += f". También se corrigieron en {_unir_es(lugares)}."
+        else:  # la SC ya tenia esos datos: se corrigieron la ficha o los documentos
+            descripcion = f"Datos del cliente corregidos en {_unir_es(lugares)}: {titulo}"
+        _log(db, "SC", sc.id, sc.numero, "UPDATED", descripcion, user_name=autor,
+             extra_data={"cambios": cambios_sc, "ficha_cliente_id": cliente.id if cliente is not None else None,
+                         "documentos": numeros_docs}, commit=False)
+
+        gate1 = {"confirmacion_anulada": False, "estado_cambiado": False, "enlace_anulado": False}
+        if _cliente_de_la_solicitud(sc) != contacto_sc_antes:
+            gate1 = _anular_confirmacion_por_cambio_de_cliente(db, sc, old_estado, autor)
+        enlaces_anulados = [sc.numero] if gate1["enlace_anulado"] else []
+
+        if cambios_cli:
+            clientes.log_cliente(db, cliente, f"Datos de contacto corregidos desde la solicitud {sc.numero}: "
+                                              f"{_titulo_contacto(cambios_cli)}", cambios_cli, origen, autor)
+        from app.core.confirmation_tokens import revoke_pending_tokens
+        for entidad, doc, cambios, contacto_antes in docs_cambiados:
+            titulo_doc = _titulo_contacto(cambios)
+            if (entidad == "COT" and doc.estado == "PENDIENTE_CONFIRMACION"
+                    and _cliente_de_la_solicitud(doc) != contacto_antes):
+                revoke_pending_tokens(db, "COT", doc.id, commit=False)
+                cambios = cambios + [dict(_ENLACE_COT_ANULADO)]
+                enlaces_anulados.append(doc.numero)
+            _log(db, entidad, doc.id, doc.numero, "UPDATED",
+                 f"Datos del cliente corregidos desde la solicitud {sc.numero}: {titulo_doc}", user_name=autor,
+                 extra_data={"cambios": cambios, "origen": origen}, commit=False)
+
+        # Se arma ANTES del commit: despues el objeto queda expirado y leerlo costaria otro viaje a la base.
+        data = _sc_dict(sc)
+        data["customer_city"] = _ciudad_del_cliente(sc)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if not (correo and clientes.es_correo_repetido(exc)):
+            raise
+        otro = clientes.correo_de_otro_cliente(db, correo, cliente.id if cliente is not None else None)
+        raise HTTPException(409, _mensaje_correo_de_otro_cliente(correo, otro))
+    except DataError as exc:
+        # Red de seguridad: un dato que paso _normalizar_contacto pero no cabe en una columna (p. ej. si la base de un
+        # ambiente tiene columnas mas cortas que las de erp_test). Sin esto seria un 500 sin explicacion. El log no
+        # lleva el SQL ni sus parametros: son datos de contacto del cliente.
+        db.rollback()
+        logger.warning("Dato de contacto que no cabe en la base al corregir la solicitud %s (%s)", sc_id,
+                       type(getattr(exc, "orig", exc)).__name__)
+        raise HTTPException(422, "Algún dato es demasiado largo para guardarlo: acórtalo e intenta de nuevo.")
+    return {"status": "success", "data": data, "ficha_actualizada": bool(cambios_cli),
+            "documentos_actualizados": numeros_docs, "confirmacion_anulada": gate1["confirmacion_anulada"],
+            "estado_cambiado": gate1["estado_cambiado"], "enlaces_anulados": enlaces_anulados, "sin_cambios": False}
 
 
 @router.post("/solicitudes/{sc_id}/enviar-confirmacion")

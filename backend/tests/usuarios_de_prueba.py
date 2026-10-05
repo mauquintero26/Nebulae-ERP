@@ -17,3 +17,13 @@ def compras_token(db):
     u = User(email=f"compras-{uuid.uuid4().hex[:6]}@test.nebulae", password_hash="x", role="COMPRAS", is_active=True)
     db.add(u); db.commit()
     return create_access_token({"sub": str(u.id), "role": u.role})
+
+
+@pytest.fixture
+def bodega_token(db):
+    """Token de un usuario BODEGA: el perfil 360 le oculta el contacto del cliente (y el antes/despues de sus cambios)."""
+    from app.core.security import create_access_token
+    from app.models.users import User
+    u = User(email=f"bodega-{uuid.uuid4().hex[:6]}@test.nebulae", password_hash="x", role="BODEGA", is_active=True)
+    db.add(u); db.commit()
+    return create_access_token({"sub": str(u.id), "role": u.role})

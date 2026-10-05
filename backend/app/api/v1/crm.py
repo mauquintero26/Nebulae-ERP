@@ -13,6 +13,9 @@ from app.api.dependencies import get_current_user, get_optional_current_user, no
 from app.api.v1.schemas_fase5 import AgendaActivityCreate, AgendaActivityResponse
 
 from app.schemas import crm as schemas
+from app.core import cambios_documento, clientes
+from app.core.textos_actividad import nombre_de_usuario
+from sqlalchemy.exc import IntegrityError
 import datetime, time, threading
 
 from sqlalchemy import Column as _Col, Integer as _Int, String as _Str, Text as _Txt
@@ -205,13 +208,37 @@ def create_customer(customer: CustomerCreate, user: User = Depends(require_roles
 
 @router.put("/customers/{customer_id}", response_model=dict)
 def update_customer(customer_id: int, customer: CustomerUpdate, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
-    db_customer = db.query(Customer).filter(Customer.id == customer_id).first()
+    """Edita la ficha (Agenda). H21: el correo se guarda sin espacios y en minusculas ('' -> None: dos fichas con ''
+    chocarian con el indice unico); si es de otra ficha -> 409 (antes un 500 por IntegrityError, tambien en una carrera).
+    Si algo cambio, queda en el historial del cliente (perfil 360) en el mismo commit, con el autor de la sesion."""
+    db_customer = db.query(Customer).filter(Customer.id == customer_id).with_for_update().first()
     if not db_customer:
         raise HTTPException(status_code=404, detail="Customer not found")
     update_data = customer.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(db_customer, key, value)
-    db.commit()
+    if "email" in update_data:
+        correo = (update_data["email"] or "").strip().lower() or None
+        if correo is not None and correo == (db_customer.email or "").strip().lower():
+            update_data.pop("email")  # el mismo correo con otras mayusculas o espacios no es un cambio
+        else:
+            update_data["email"] = correo
+            otro = clientes.correo_de_otro_cliente(db, correo, db_customer.id)
+            if otro is not None:
+                raise HTTPException(status_code=409,
+                                    detail=f"Ya existe otro cliente con ese correo ({clientes.nombre_cliente(otro)}).")
+    antes = cambios_documento.tomar_foto(db_customer, "CLIENTE")
+    try:
+        for key, value in update_data.items():
+            setattr(db_customer, key, value)
+        cambios = cambios_documento.comparar("CLIENTE", antes, cambios_documento.tomar_foto(db_customer, "CLIENTE"))
+        registro = cambios_documento.describir("CLIENTE", cambios, antes, None)
+        if registro is not None:
+            clientes.log_cliente(db, db_customer, registro[1], cambios, {"tipo": "FICHA"}, nombre_de_usuario(user))
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if not clientes.es_correo_repetido(exc):
+            raise
+        raise HTTPException(status_code=409, detail="Ya existe otro cliente con ese correo.")
     db.refresh(db_customer)
     return {"status": "success", "data": CustomerResponse.model_validate(db_customer).model_dump()}
 
@@ -773,6 +800,25 @@ def get_customer_360_profile(
     except Exception:
         db.rollback()
 
+    # H21: historial de la ficha (correcciones desde la SC y ediciones desde la Agenda; app/core/clientes.log_cliente).
+    # created_at con 'Z' (UTC). BODEGA y COMPRAS reciben cambios = [] (abajo): el antes/despues trae el contacto.
+    logs_cliente = (db.query(ActivityLog)
+                    .filter(ActivityLog.entity_type == "CLIENTE", ActivityLog.entity_id == customer_id)
+                    .order_by(ActivityLog.id.desc()).limit(100).all())
+    for lg in logs_cliente:
+        extra = lg.extra_data if isinstance(lg.extra_data, dict) else {}
+        all_orders_timeline.append({
+            "type": "customer_update",
+            "id": lg.id,
+            "status": "UPDATED",
+            "status_label": "Datos del cliente actualizados",
+            "color": "purple",
+            "created_at": lg.created_at.isoformat() + "Z" if lg.created_at else None,
+            "description": lg.description,
+            "user_name": lg.user_name,
+            "cambios": extra.get("cambios") or [],
+        })
+
     # Cliente creado event
     all_orders_timeline.append({
         "type": "created",
@@ -910,6 +956,14 @@ def get_customer_360_profile(
             p["saldo_cop"] = None
         for ao in profile["active_orders"]:
             ao["saldo"] = None
+
+    if user_role in ("BODEGA", "COMPRAS"):
+        # H21 (privacidad): el antes/despues de una correccion trae el telefono, el correo y la direccion que la
+        # proyeccion de arriba les oculta. Ven que hubo un cambio, de que datos (la descripcion solo nombra etiquetas)
+        # y quien lo hizo.
+        for item in profile["timeline"]:
+            if item.get("type") == "customer_update":
+                item["cambios"] = []
 
     return {"status": "success", "data": profile}
 
