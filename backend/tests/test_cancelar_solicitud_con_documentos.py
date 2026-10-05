@@ -1,10 +1,11 @@
-"""N4 (y R10): una Solicitud con cotizacion o pedido de venta activos no se cancela ni vuelve a Borrador.
+"""N4 (y R10): una Solicitud con cotizacion o pedido de venta activos no se cancela ni se reinicia (vuelve a Nueva).
 
 - POST /solicitudes/{id}/cancelar revisa los documentos: COT con estado != RECHAZADA (una VENCIDA cuenta) y PVEN con
   estado != CANCELADO (por sc_id o por cot_id de una COT de la SC) -> 409 que dice cuales y que hacer antes.
 - Toda cancelacion pasa por /cancelar: PATCH {estado:'CANCELADA'} -> 400; PATCH con un estado que no es 'BORRADOR'
-  -> 400. Al cancelar, el lead del CRM pasa a CANCELLED.
-- R10: PATCH {estado:'BORRADOR'} sobre una SC con documentos activos -> 409 con el mismo mensaje.
+  (reiniciar) -> 400. Al cancelar, el lead del CRM pasa a CANCELLED.
+- R10: reiniciar (PATCH {estado:'BORRADOR'}) una SC con documentos activos -> 409 con el mismo mensaje y la accion
+  'reiniciar' (U15/C5).
 - Una SC cancelada no revive por la sincronizacion COT->SC, y sus COT no se retoman, envian ni crean (409).
 - 'Enviar a la papelera' una SC ya CANCELADA (pastilla vieja) solo completa eliminada_at y el motivo.
 
@@ -135,7 +136,7 @@ def test_cancelar_solicitud_con_cotizacion_rechazada_y_pedido_cancelado_funciona
     assert len(_logs(db, "SC", sc.id, "CANCELLED")) == 1
 
 
-# --- PATCH generico: solo 'Borrador' ---------------------------------------------------------------------
+# --- PATCH generico: solo reiniciar (BORRADOR, 'Nueva') ------------------------------------------------------
 
 def test_patch_generico_no_cancela_solicitud(app_client, db, admin_token, user_admin):
     sc = _sc(db, "SC-CAN006", user_admin)
@@ -163,13 +164,13 @@ def test_patch_solicitud_rechaza_estados_no_manuales(app_client, db, admin_token
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": "PENDIENTE_CONFIRMACION"},
                             headers=auth(admin_token))
     assert resp.status_code == 400 and "flujo de confirmación" in resp.json()["detail"]
-    # 'Borrador' si se puede (sin documentos activos).
+    # Reiniciar (BORRADOR) si se puede (sin documentos activos).
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": "BORRADOR", "notas": "x"},
                             headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
 
 
-# --- R10: volver a Borrador con documentos activos ------------------------------------------------------
+# --- R10: reiniciar con documentos activos ---------------------------------------------------------------
 
 def test_volver_a_borrador_con_documentos_activos_se_bloquea(app_client, db, admin_token, user_admin):
     sc = _sc(db, "SC-CAN008", user_admin, estado="COTIZADA", gate1_confirmed_at=datetime.datetime.utcnow())
@@ -297,8 +298,8 @@ def _cliente_con_lead(app_client, db, token, sc):
 
 
 def test_una_solicitud_cancelada_no_revive_por_patch(app_client, db, admin_token, user_admin):
-    """La pastilla 'Borrador' o soltarla en el Hub ya no revive una SC cancelada a medias (con eliminada_at, motivo y
-    lead perdido): solo /restaurar."""
+    """Reiniciarla (la vieja pastilla 'Borrador') o soltarla en el Hub ya no revive una SC cancelada a medias (con
+    eliminada_at, motivo y lead perdido): solo /restaurar."""
     sc = _sc(db, "SC-CAN014", user_admin)
     assert _cancelar(app_client, admin_token, sc.id).status_code == 200
     mensaje = ("La solicitud SC-CAN014 está cancelada: para volver a trabajar en ella, restáurala desde la Papelera "

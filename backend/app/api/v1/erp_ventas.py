@@ -32,7 +32,7 @@ from app.core.ventas_dinero import (
     anticipo_del_pedido, saldos_a_favor_de_cotizacion, PCT_ANTICIPO_POR_DEFECTO, ORIGEN_CONSERVADO,
     anular_pxps_de_pedido,
 )
-from app.core.textos_actividad import etiqueta_estado, ETIQUETAS_ESTADO, ESTADOS_SC_HEREDADOS
+from app.core.textos_actividad import etiqueta_estado, ETIQUETAS_ESTADO, PASOS_SC
 from app.core.estados_pedido import ESTADOS_VEN_DESTINOS, ESTADOS_VEN_SIN_DINERO, destinos_ven_permitidos
 from app.api.v1.schemas_compras import CancelarSolicitudBody
 from app.api.v1.crm import mover_lead_de_solicitud, reabrir_lead_de_solicitud
@@ -286,15 +286,19 @@ def _documentos_activos_de_solicitud(db: Session, sc_id: int):
     pvens = db.query(SaleOrder).filter(filtro, SaleOrder.estado != "CANCELADO").order_by(SaleOrder.id.asc()).all()
     return [c for c in cots if c.estado != "RECHAZADA"], pvens
 
-def _describir_documentos(cots, pvens) -> str:
-    """'pedido de venta PVEN-…, cotización COT-…' (en plural si hay varios del mismo tipo)."""
+def _describir_documentos(cots, pvens, con_articulo: bool = False) -> str:
+    """'pedido de venta PVEN-…, cotización COT-…' (en plural si hay varios del mismo tipo). con_articulo=True da el texto
+    corrido 'el pedido de venta PVEN-… y la cotización COT-…' (lo usa scripts/ajustar_estados_solicitud.py)."""
     partes = []
     if pvens:
-        partes.append(("pedido de venta " if len(pvens) == 1 else "pedidos de venta ")
+        articulo = ("el " if len(pvens) == 1 else "los ") if con_articulo else ""
+        partes.append(articulo + ("pedido de venta " if len(pvens) == 1 else "pedidos de venta ")
                       + ", ".join(p.numero for p in pvens))
     if cots:
-        partes.append(("cotización " if len(cots) == 1 else "cotizaciones ") + ", ".join(c.numero for c in cots))
-    return ", ".join(partes)
+        articulo = ("la " if len(cots) == 1 else "las ") if con_articulo else ""
+        partes.append(articulo + ("cotización " if len(cots) == 1 else "cotizaciones ")
+                      + ", ".join(c.numero for c in cots))
+    return (" y " if con_articulo else ", ").join(partes)
 
 def _mensaje_documentos_activos(sc: CustomerRequest, cots, pvens, accion: str = "cancelar") -> str:
     """409 de N4 (accion 'cancelar'), de R10 (accion 'reiniciar', U15/C5) y de restaurar: que documentos lo impiden y
@@ -1367,8 +1371,9 @@ def _sincronizar_estado_solicitud_desde_cotizacion(cot: "SalesQuotation", db: Se
       confirmacion) o en un estado heredado pasa a CONFIRMADA SIN tocar gate1_confirmed_at (esa marca solo la pone el
       enlace de la SC, asi que confirmar_solicitud sigue sin poder crear otra COT) y se anula su enlace pendiente.
     - RECHAZADA (N7 adaptada, R21, R29): con otra COT activa o un pedido vigente no se toca. Una SC CONFIRMADA sin la
-      marca o en un estado heredado sale de ahi: CONFIRMADA si conserva la marca; si no, ASIGNADA (BORRADOR sin asesor),
-      con ESTADO_CHANGED y el texto de N7. En los demas casos el estado no cambia y la Actividad lo anota con
+      marca o en un estado que no es un paso de la SC (heredado, o ajeno como 'ENTREGADO' del Hub viejo) sale de ahi:
+      CONFIRMADA si conserva la marca; si no, ASIGNADA (BORRADOR sin asesor), con ESTADO_CHANGED, el texto de N7 y su
+      enlace pendiente anulado. En los demas casos el estado no cambia y la Actividad lo anota con
       COTIZACION_RECHAZADA (sin old/new) y un texto segun el estado de la SC.
 
     Cualquier otro estado de la COT (BORRADOR, ENVIADA, PENDIENTE_CONFIRMACION, VENCIDA) no toca la SC: crear, enviar,
@@ -1399,27 +1404,27 @@ def _sincronizar_estado_solicitud_desde_cotizacion(cot: "SalesQuotation", db: Se
         return
     rechazada = f"La cotización {cot.numero} fue rechazada."
     lista_para_otra = f"{rechazada} La solicitud sigue activa: ya puedes crearle una nueva cotización."
-    if sc.estado in ESTADOS_SC_HEREDADOS or (sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is None):
-        # R29 (y N7 para CONFIRMADA sin la marca): no se queda en un estado que ya no se asigna ni "confirmada" sin una
-        # confirmacion que valga para crear otra cotizacion.
+    if sc.estado not in PASOS_SC or (sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is None):
+        # R29 (y N7 para CONFIRMADA sin la marca): no se queda en un estado que ya no se asigna (heredado, o ajeno como
+        # 'ENTREGADO', que B1 tambien normalizaba: R28) ni "confirmada" sin una confirmacion que valga para crear otra
+        # cotizacion. CANCELADA y N/A_SOPORTE ya salieron arriba.
+        from app.core.confirmation_tokens import revoke_pending_tokens
         if sc.gate1_confirmed_at is not None:
             sc.estado, texto = "CONFIRMADA", lista_para_otra
         else:
             sc.estado = "ASIGNADA" if sc.advisor_user_id else "BORRADOR"
             texto = (f"{rechazada} La solicitud sigue activa; para crearle otra cotización, reenvíasela al cliente "
                      f"para que la confirme.")
+        revoke_pending_tokens(db, "SC", sc.id, commit=False)  # defensa, como el script de ajuste
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", texto, old_estado, sc.estado, user_name, commit=False)
     else:
+        reenviar = f"{rechazada} La solicitud sigue activa: envíasela al cliente para que la confirme o cotízala de nuevo."
         textos = {
-            "CONFIRMADA": lista_para_otra,  # con la confirmacion del cliente vigente
+            "BORRADOR": reenviar,  # R21: nunca se le envio al cliente
+            "ASIGNADA": reenviar,
             "PENDIENTE_CONFIRMACION": f"{rechazada} La solicitud sigue esperando la confirmación del cliente.",
-            # R21: nunca se le envio al cliente
-            "ASIGNADA": (f"{rechazada} La solicitud sigue activa: envíasela al cliente para que la confirme o "
-                         f"cotízala de nuevo."),
+            "CONFIRMADA": lista_para_otra,  # con la confirmacion del cliente vigente
         }
-        textos["BORRADOR"] = textos["ASIGNADA"]
-        if sc.estado not in textos:
-            return  # un codigo que no es de la SC (dato viejo de otro documento): no se toca
         _log(db, "SC", sc.id, sc.numero, "COTIZACION_RECHAZADA", textos[sc.estado], user_name=user_name,
              commit=False)
     sc.updated_at = datetime.datetime.utcnow()

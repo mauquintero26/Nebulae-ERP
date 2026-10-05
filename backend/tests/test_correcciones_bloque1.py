@@ -802,6 +802,11 @@ def test_n5_lista_a_b_c_y_aplica_la_correccion_solo_a_los_numeros_pedidos(db, us
     sc_asesor = _sc(db, f"SC-T14B{s}", estado="ENTREGADO", advisor_user_id=user_admin.id)   # sin COT -> ASIGNADA
     sc_libre = _sc(db, f"SC-T14C{s}", estado="EN_PROCESO")                                   # sin COT ni asesor -> BORRADOR
     sc_sin_pedir = _sc(db, f"SC-T14D{s}", estado="FACTURADO")                                 # no esta en --numeros
+    # U15: una COT rechazada no es documento activo; un pedido vigente por sc_id (sin COT) si lo es.
+    sc_rechazada = _sc(db, f"SC-T14H{s}", estado="ENTREGADO", advisor_user_id=user_admin.id)
+    _cot(db, f"COT-T14H{s}", sc_rechazada, estado="RECHAZADA")                                # -> ASIGNADA
+    sc_pedido = _sc(db, f"SC-T14I{s}", estado="FACTURADO")
+    _ven(db, f"PVEN-T14I{s}", sc=sc_pedido, estado="EN_PROCESO")                              # -> CONFIRMADA
     # (b) COT con un estado ajeno
     sc_v = _sc(db, f"SC-T14E{s}", estado="CONFIRMADA")
     cot_ajena_viva = _cot(db, f"COT-T14E{s}", sc_v, estado="ENTREGADO")
@@ -823,6 +828,7 @@ def test_n5_lista_a_b_c_y_aplica_la_correccion_solo_a_los_numeros_pedidos(db, us
     assert sugeridos[sc_cot.numero] == "CONFIRMADA" and sugeridos[sc_asesor.numero] == "ASIGNADA"
     assert sugeridos[sc_libre.numero] == "BORRADOR" and sugeridos[cot_ajena_viva.numero] == "CONFIRMADA"
     assert sugeridos[cot_ajena.numero] == "BORRADOR" and sugeridos[cot_rech.numero] == "CONFIRMADA"
+    assert sugeridos[sc_rechazada.numero] == "ASIGNADA" and sugeridos[sc_pedido.numero] == "CONFIRMADA"
     etiquetas = {f["numero"]: f["sugerido_txt"] for sec in ("a", "b", "c") for f in listado.seccion(sec).filas}
     assert etiquetas[sc_cot.numero] == "Confirmada" and etiquetas[sc_asesor.numero] == "Asignada"
     assert etiquetas[cot_ajena_viva.numero] == "Confirmada" and etiquetas[cot_ajena.numero] == "Borrador"

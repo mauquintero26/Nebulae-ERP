@@ -20,6 +20,8 @@ import hashlib
 import io
 import uuid
 
+import pytest
+
 LINEA = {"product_name": "Cuna Colecho", "qty": 1}
 LINEA_CON_PRECIO = {"product_name": "Cuna Colecho", "qty": 1, "unit_price_cop": 1000, "total_cop": 1000}
 CREDITO = "Crédito 30 días"  # anticipo 0: crear el pedido no pide verificacion (N1)
@@ -62,6 +64,17 @@ def _lead(db, sc, status="CANCELLED", pipeline_stage_id=None):
                       lead_description=f"SC creada: {sc.numero}", pipeline_stage_id=pipeline_stage_id)
     db.add(lead); db.commit(); db.refresh(lead)
     return lead
+
+
+def _cancelada_y_restaurada(db, sc):
+    """La Actividad de una SC que se cancelo (lo que deja cancelar_solicitud) y despues se restauro."""
+    from app.models.erp_documents import ActivityLog
+    db.add(ActivityLog(entity_type="SC", entity_id=sc.id, entity_numero=sc.numero, action="CANCELLED",
+                       description="Cancelada: prueba", old_estado="ASIGNADA", new_estado="CANCELADA", user_name="t"))
+    db.add(ActivityLog(entity_type="SC", entity_id=sc.id, entity_numero=sc.numero, action="RESTORED",
+                       description="Solicitud restaurada a Asignada", old_estado="CANCELADA", new_estado=sc.estado,
+                       user_name="t"))
+    db.commit()
 
 
 def _crear_cot(app_client, token, sc_id):
@@ -278,11 +291,14 @@ def test_rechazar_con_la_solicitud_sin_confirmar_no_cambia_su_estado(app_client,
 
 
 def test_rechazar_con_solicitud_heredada_la_saca_del_estado_heredado(app_client, db, admin_token, user_admin):
-    """R29: una SC vieja en un estado heredado no se queda atascada al rechazar su unica COT activa."""
+    """R29: una SC vieja en un estado heredado (o ajeno, como 'ENTREGADO' del Hub viejo: B1 tambien la normalizaba) no
+    se queda atascada al rechazar su unica COT activa. Su enlace pendiente se anula (defensa, como el script)."""
+    from app.core.confirmation_tokens import create_confirmation_token
     from app.core.textos_actividad import ESTADOS_SC_HEREDADOS
     reenviar = "La solicitud sigue activa; para crearle otra cotización, reenvíasela al cliente para que la confirme."
-    for i, heredado in enumerate(ESTADOS_SC_HEREDADOS):
+    for i, heredado in enumerate(ESTADOS_SC_HEREDADOS + ("ENTREGADO", "FACTURADO")):
         sc = _sc(db, f"SC-U15008{i}", user_admin, estado=heredado, gate1_confirmed_at=None)
+        enlace = create_confirmation_token(db, "SC", sc.id)
         cot = _cot(db, f"COT-U15008{i}", sc)
         assert _patch_cot(app_client, admin_token, cot.id, estado="RECHAZADA").status_code == 200
         db.refresh(sc)
@@ -290,6 +306,7 @@ def test_rechazar_con_solicitud_heredada_la_saca_del_estado_heredado(app_client,
         (cambio,) = _logs(db, "SC", sc.id, "ESTADO_CHANGED")
         assert (cambio.old_estado, cambio.new_estado) == (heredado, "ASIGNADA")
         assert cambio.description == f"La cotización {cot.numero} fue rechazada. {reenviar}"
+        assert _token_usado(db, enlace), heredado
     # Sin asesor: Nueva.
     sin_asesor = _sc(db, "SC-U15008N", user_admin, con_asesor=False, estado="COTIZADA", gate1_confirmed_at=None)
     cot = _cot(db, "COT-U15008N", sin_asesor)
@@ -353,6 +370,18 @@ def test_la_sincronizacion_confirma_todo_en_un_solo_commit(db, user_admin, conta
         db.refresh(sc)
         assert sc.estado == "ASIGNADA", estado
     assert _logs(db, "SC", sc.id) == []
+    # Una SC de Soporte no se toca: ni con la COT confirmada ni con la rechazada
+    soporte = _sc(db, "SC-U15009E", user_admin, estado="N/A_SOPORTE", gate1_confirmed_at=None)
+    cot = _cot(db, "COT-U15009E", soporte, estado="CONFIRMADA")
+    for estado in ("CONFIRMADA", "RECHAZADA"):
+        cot.estado = estado
+        db.commit()
+        with contador_sql.ventana() as v:
+            _sincronizar_estado_solicitud_desde_cotizacion(cot, db, "t")
+        assert v.commits == 0, estado
+        db.refresh(soporte)
+        assert soporte.estado == "N/A_SOPORTE", estado
+    assert _logs(db, "SC", soporte.id) == []
 
 
 # ─── confirmacion_vigente y textos de update_solicitud ────────────────────────────────────────────────────────
@@ -445,9 +474,10 @@ def test_script_ajuste_estados_reporta_aplica_y_es_idempotente(db, user_admin):
 
 
 def test_script_ajuste_estados_aplica_la_regla_de_la_confirmacion(db, user_admin):
-    """R29 en el script: heredada sin documentos y con la marca -> Confirmada; sin la marca -> Asignada / Nueva, con
-    la marca limpia (respaldada) y los enlaces de la SC anulados. Confirmada sin marca ni documentos -> Asignada /
-    Nueva. No son candidatas: Confirmada con marca, Confirmada sin marca con documentos activos ni Soporte Tecnico."""
+    """R29 en el script: heredada sin documentos y con la marca -> Confirmada (la marca se conserva); sin la marca ->
+    Asignada / Nueva, con los enlaces de la SC anulados. Confirmada sin marca ni documentos -> Asignada / Nueva. El
+    script nunca cambia gate1_confirmed_at. No son candidatas: Confirmada con marca, Confirmada sin marca con documentos
+    activos ni Soporte Tecnico; una SC sin tipo (NULL) SI lo es (por eso el IS DISTINCT FROM)."""
     from sqlalchemy import text
     from app.core.confirmation_tokens import create_confirmation_token
     from app.models.erp_documents import CustomerRequest
@@ -463,23 +493,29 @@ def test_script_ajuste_estados_aplica_la_regla_de_la_confirmacion(db, user_admin
     _cot(db, "COT-U15T05", con_docs)
     soporte = _sc(db, "SC-U15T06", user_admin, estado="COTIZADA", gate1_confirmed_at=None,
                   tipo_solicitud="Soporte Tecnico")
-    ids = [con_marca.id, rechazada.id, sin_marca.id, vigente.id, con_docs.id, soporte.id]
+    sin_tipo = _sc(db, "SC-U15T07", user_admin, estado="RECHAZADA", gate1_confirmed_at=None)
+    db.execute(text("UPDATE customer_requests SET tipo_solicitud = NULL WHERE id = :i"), {"i": sin_tipo.id})
+    db.commit()
+    db.refresh(sin_tipo)
+    assert sin_tipo.tipo_solicitud is None
+    ids = [con_marca.id, rechazada.id, sin_marca.id, vigente.id, con_docs.id, soporte.id, sin_tipo.id]
     try:
         res = ajustar(db, aplicar=False, ids=ids, tabla_respaldo=TABLA_ESTADOS_TEST)
         assert {e["numero"]: e["nuevo"] for e in res["ejemplos"]} == {
-            "SC-U15T01": "CONFIRMADA", "SC-U15T02": "ASIGNADA", "SC-U15T03": "BORRADOR"}
+            "SC-U15T01": "CONFIRMADA", "SC-U15T02": "ASIGNADA", "SC-U15T03": "BORRADOR", "SC-U15T07": "ASIGNADA"}
         res = ajustar(db, aplicar=True, ids=ids, tabla_respaldo=TABLA_ESTADOS_TEST)
-        assert res["ajustadas"] == 3
+        assert res["ajustadas"] == 4
         db.expire_all()
         filas = {i: db.get(CustomerRequest, i) for i in ids}
-        assert filas[con_marca.id].estado == "CONFIRMADA" and filas[con_marca.id].gate1_confirmed_at is not None
+        assert filas[con_marca.id].estado == "CONFIRMADA" and filas[con_marca.id].gate1_confirmed_at == marca
         assert filas[rechazada.id].estado == "ASIGNADA" and filas[rechazada.id].gate1_confirmed_at is None
         assert filas[sin_marca.id].estado == "BORRADOR" and _token_usado(db, enlace)
+        assert filas[sin_tipo.id].estado == "ASIGNADA"
         assert [filas[i].estado for i in (vigente.id, con_docs.id, soporte.id)] == ["CONFIRMADA", "CONFIRMADA",
                                                                                      "COTIZADA"]
         respaldo = {r[0]: r[1] for r in db.execute(text(f"SELECT id, gate1_original FROM {TABLA_ESTADOS_TEST}"))}
-        assert set(respaldo) == {con_marca.id, rechazada.id, sin_marca.id}
-        assert respaldo[con_marca.id] is not None and respaldo[sin_marca.id] is None
+        assert set(respaldo) == {con_marca.id, rechazada.id, sin_marca.id, sin_tipo.id}
+        assert respaldo[con_marca.id] is not None and respaldo[sin_marca.id] is None  # informativa
         (log,) = _logs(db, "SC", con_marca.id, "ESTADO_CHANGED")
         assert log.description == ("Estado ajustado a Confirmada: la solicitud ya no cambia con su cotización; la "
                                    "confirmación del cliente sigue vigente y ya puedes crearle una nueva cotización")
@@ -493,27 +529,36 @@ def test_script_ajuste_estados_aplica_la_regla_de_la_confirmacion(db, user_admin
 
 
 def test_ajustar_leads_reporta_y_aplica(db, user_admin):
-    """R26: un lead 'Perdido' cuya SC ya no esta cancelada vuelve a cotizacion (COT activa) o a nuevo lead (sin ella).
-    Se elige el lead por su id: otro lead de la misma SC no se toca."""
+    """R26: un lead 'Perdido' de una SC que se cancelo y ya no esta cancelada vuelve a cotizacion (COT activa) o a
+    nuevo lead (sin ella). Se elige el lead por su id: otro lead de la misma SC no se toca. Un lead que alguien paso a
+    'Perdido' a mano en el CRM, de una SC que nunca se cancelo, NO se revive."""
     from sqlalchemy import text
     from app.models.sales import SalesOrder
     from scripts.ajustar_estados_solicitud import ajustar_leads
     perdido = _etapa(db, "CANCELLED")
     sc_a = _sc(db, "SC-U15L01", user_admin, estado="ASIGNADA", gate1_confirmed_at=None)
+    _cancelada_y_restaurada(db, sc_a)
     lead_a = _lead(db, sc_a, pipeline_stage_id=perdido)                                    # -> DRAFT
     otro_a = _lead(db, sc_a, status="DRAFT")                                               # no es candidato
     sc_b = _sc(db, "SC-U15L02", user_admin, gate1_confirmed_at=AHORA())
+    _cancelada_y_restaurada(db, sc_b)
     _cot(db, "COT-U15L02", sc_b)
     lead_b = _lead(db, sc_b, pipeline_stage_id=perdido)                                    # -> QUOTATION
     sc_c = _sc(db, "SC-U15L03", user_admin, estado="CANCELADA")
+    _cancelada_y_restaurada(db, sc_c)
     lead_c = _lead(db, sc_c, pipeline_stage_id=perdido)                                    # SC cancelada: no
     sc_d = _sc(db, "SC-U15L04", user_admin, estado="ASIGNADA", tipo_solicitud="Soporte Tecnico")
+    _cancelada_y_restaurada(db, sc_d)
     lead_d = _lead(db, sc_d, pipeline_stage_id=perdido)                                    # Soporte: no
-    ids = [sc_a.id, sc_b.id, sc_c.id, sc_d.id]
+    sc_e = _sc(db, "SC-U15L05", user_admin, estado="ASIGNADA", gate1_confirmed_at=None)   # nunca se cancelo
+    lead_e = _lead(db, sc_e, pipeline_stage_id=perdido)                                    # perdido a mano: no
+    ids = [sc_a.id, sc_b.id, sc_c.id, sc_d.id, sc_e.id]
     try:
         res = ajustar_leads(db, aplicar=False, ids=ids, tabla_respaldo=TABLA_LEADS_TEST)
         assert res["candidatos"] == 2 and res["movidos"] == 0
         assert {e["lead_id"]: e["nuevo"] for e in res["ejemplos"]} == {lead_a.id: "DRAFT", lead_b.id: "QUOTATION"}
+        assert all(e["ultima_cancelacion"] is not None and e["ultima_restauracion"] is not None
+                   for e in res["ejemplos"])
         db.expire_all()
         assert db.get(SalesOrder, lead_a.id).status == "CANCELLED"
         assert not _existe_tabla(db, TABLA_LEADS_TEST)
@@ -525,7 +570,7 @@ def test_ajustar_leads_reporta_y_aplica(db, user_admin):
         assert (a.status, a.pipeline_stage_id) == ("DRAFT", _etapa(db, "DRAFT"))
         assert (b.status, b.pipeline_stage_id) == ("QUOTATION", _etapa(db, "QUOTATION"))
         assert db.get(SalesOrder, otro_a.id).status == "DRAFT"
-        assert [db.get(SalesOrder, l.id).status for l in (lead_c, lead_d)] == ["CANCELLED", "CANCELLED"]
+        assert [db.get(SalesOrder, l.id).status for l in (lead_c, lead_d, lead_e)] == ["CANCELLED"] * 3
         respaldo = {r[0]: (r[1], r[2], r[3]) for r in db.execute(text(
             f"SELECT id, status_original, pipeline_stage_id_original, status_nuevo FROM {TABLA_LEADS_TEST}"))}
         assert respaldo == {lead_a.id: ("CANCELLED", perdido, "DRAFT"), lead_b.id: ("CANCELLED", perdido, "QUOTATION")}
@@ -545,8 +590,9 @@ def test_scripts_excluyen_documentos_reales(db, user_admin, monkeypatch):
     por_numero = _sc(db, "SC-U15X01", user_admin, estado="COTIZADA", gate1_confirmed_at=None)
     por_cot = _sc(db, "SC-U15X02", user_admin, estado="RECHAZADA", gate1_confirmed_at=None)
     cot = _cot(db, "COT-U15X02", por_cot, estado="RECHAZADA")
-    _lead(db, por_numero)
-    _lead(db, por_cot)
+    for sc in (por_numero, por_cot):
+        _cancelada_y_restaurada(db, sc)
+        _lead(db, sc)
     ids = [por_numero.id, por_cot.id]
     # Sin agregarlos a la lista, las dos SC y sus leads son candidatos (la prueba si prueba algo).
     assert {e["numero"] for e in modulo.ajustar(db, aplicar=False, ids=ids)["ejemplos"]} == {"SC-U15X01", "SC-U15X02"}
@@ -564,6 +610,54 @@ def test_scripts_excluyen_documentos_reales(db, user_admin, monkeypatch):
         assert [db.get(CustomerRequest, i).estado for i in ids] == ["COTIZADA", "RECHAZADA"]
     finally:
         _borrar_tabla(db, TABLA_ESTADOS_TEST)
+
+
+def test_script_aplicar_revierte_todo_si_falla_a_mitad(db, user_admin):
+    """Una transaccion por parte: si algo falla a mitad de --aplicar / --aplicar-leads no queda nada escrito. La tabla de
+    respaldo de prueba se crea antes con un CHECK que rechaza la SEGUNDA fila: cuando la segunda falla, la primera ya
+    cambio su estado, guardo su respaldo y anulo su enlace (y su renglon de Actividad esta pendiente), y todo eso tiene
+    que deshacerse."""
+    from sqlalchemy import text
+    from app.core.confirmation_tokens import create_confirmation_token
+    from app.models.erp_documents import CustomerRequest
+    from app.models.sales import SalesOrder
+    from scripts.ajustar_estados_solicitud import ajustar, ajustar_leads
+    primera = _sc(db, "SC-U15F01", user_admin, estado="COTIZADA", gate1_confirmed_at=None)      # -> ASIGNADA
+    enlace = create_confirmation_token(db, "SC", primera.id)
+    segunda = _sc(db, "SC-U15F02", user_admin, con_asesor=False, estado="VENCIDA", gate1_confirmed_at=None)  # -> BORRADOR
+    perdido = _etapa(db, "CANCELLED")
+    sc_l1 = _sc(db, "SC-U15F03", user_admin, estado="ASIGNADA", gate1_confirmed_at=None)
+    sc_l2 = _sc(db, "SC-U15F04", user_admin, estado="ASIGNADA", gate1_confirmed_at=None)
+    _cot(db, "COT-U15F04", sc_l2)
+    for sc in (sc_l1, sc_l2):
+        _cancelada_y_restaurada(db, sc)
+    lead_1 = _lead(db, sc_l1, pipeline_stage_id=perdido)                                   # -> DRAFT
+    _lead(db, sc_l2, pipeline_stage_id=perdido)                                            # -> QUOTATION
+    db.execute(text(f"CREATE TABLE {TABLA_ESTADOS_TEST} (id INTEGER PRIMARY KEY, estado_original VARCHAR(50), "
+                    "estado_nuevo VARCHAR(50) CHECK (estado_nuevo <> 'BORRADOR'), gate1_original TIMESTAMP, "
+                    "ajustado_at TIMESTAMP DEFAULT now())"))
+    db.execute(text(f"CREATE TABLE {TABLA_LEADS_TEST} (id INTEGER PRIMARY KEY, status_original VARCHAR, "
+                    "pipeline_stage_id_original INTEGER, status_nuevo VARCHAR CHECK (status_nuevo <> 'QUOTATION'), "
+                    "ajustado_at TIMESTAMP DEFAULT now())"))
+    db.commit()
+    try:
+        with pytest.raises(Exception):
+            ajustar(db, aplicar=True, ids=[primera.id, segunda.id], tabla_respaldo=TABLA_ESTADOS_TEST)
+        db.expire_all()
+        assert [db.get(CustomerRequest, i).estado for i in (primera.id, segunda.id)] == ["COTIZADA", "VENCIDA"]
+        assert not _token_usado(db, enlace)
+        assert _logs(db, "SC", primera.id, "ESTADO_CHANGED") == [] and _logs(db, "SC", segunda.id) == []
+        assert db.execute(text(f"SELECT count(*) FROM {TABLA_ESTADOS_TEST}")).scalar() == 0
+
+        with pytest.raises(Exception):
+            ajustar_leads(db, aplicar=True, ids=[sc_l1.id, sc_l2.id], tabla_respaldo=TABLA_LEADS_TEST)
+        db.expire_all()
+        fila = db.get(SalesOrder, lead_1.id)
+        assert (fila.status, fila.pipeline_stage_id) == ("CANCELLED", perdido)
+        assert db.execute(text(f"SELECT count(*) FROM {TABLA_LEADS_TEST}")).scalar() == 0
+    finally:
+        _borrar_tabla(db, TABLA_ESTADOS_TEST)
+        _borrar_tabla(db, TABLA_LEADS_TEST)
 
 
 def test_script_rechaza_un_nombre_de_tabla_de_respaldo_peligroso(db):
@@ -616,6 +710,13 @@ def test_script_aplicar_sin_base_no_corre(monkeypatch):
         assert "exigen --base" in errores, flag
 
 
+def test_script_no_acepta_aplicar_y_aplicar_leads_juntos(monkeypatch):
+    """Cada parte con su propio OK y su propia corrida (un commit por corrida)."""
+    codigo, llamadas, _, errores = _correr_main(monkeypatch, ["--aplicar", "--aplicar-leads", "--base", "erp_test"])
+    assert codigo == 2 and llamadas == []
+    assert "not allowed with argument" in errores
+
+
 def test_script_aplicar_con_otra_base_aborta_sin_escribir(db, monkeypatch):
     from sqlalchemy import text
     actual = db.execute(text("SELECT current_database()")).scalar()
@@ -635,3 +736,29 @@ def test_script_aplicar_con_la_base_correcta_aplica_solo_lo_pedido(db, monkeypat
     codigo, llamadas, salida, _ = _correr_main(monkeypatch, ["--aplicar-leads", "--base", actual])
     assert codigo == 0 and llamadas == [("leads", True)]
     assert "Movidos: 0" in salida
+
+
+# ─── Al final del modulo: SET TRANSACTION READ ONLY dura lo que queda de la transaccion ──────────────────────────
+
+def test_el_reporte_del_script_no_escribe_nada(db, user_admin, contador_sql):
+    """El modo reporte, tal como lo corre main(): READ ONLY primero y despues solo lecturas, sin ningun commit. Se
+    cuentan las sentencias reales (el rollback final del reporte taparia cualquier escritura)."""
+    from scripts.ajustar_estados_solicitud import _solo_lectura, ajustar, ajustar_leads
+    heredada = _sc(db, "SC-U15Z01", user_admin, estado="COTIZADA", gate1_confirmed_at=None)   # candidata de ajustar
+    _cot(db, "COT-U15Z01", heredada)
+    restaurada = _sc(db, "SC-U15Z02", user_admin, estado="ASIGNADA", gate1_confirmed_at=None)
+    _cancelada_y_restaurada(db, restaurada)
+    _lead(db, restaurada)                                                                  # candidato de ajustar_leads
+    sin_documentos = _sc(db, "SC-U15Z03", user_admin, estado="RECHAZADA", gate1_confirmed_at=None)
+    ids = [heredada.id, restaurada.id, sin_documentos.id]
+    contador_sql.reset()
+    _solo_lectura(db)
+    res = ajustar(db, aplicar=False, ids=ids)
+    _solo_lectura(db)
+    res_leads = ajustar_leads(db, aplicar=False, ids=ids)
+    assert res["candidatas"] == 2 and res_leads["candidatos"] == 1  # recorrio los dos caminos completos
+    sentencias = [s.lstrip().upper() for s in contador_sql.sentencias]
+    assert sentencias[0].startswith("SET TRANSACTION READ ONLY"), sentencias[0]
+    escrituras = [s for s in sentencias if s.startswith(("INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER"))]
+    assert escrituras == []
+    assert contador_sql.commits == 0

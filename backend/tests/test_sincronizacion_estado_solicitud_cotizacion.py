@@ -96,9 +96,19 @@ class TestSincronizacionEstados:
         asi que la Solicitud se quedaba en EN_ESPERA_CONFIRMACION para siempre
         aunque la venta ya estuviera cerrada. Esta prueba ejercita exactamente
         esa secuencia real, no el atajo de PATCH usado en el test anterior.
+        U15: con la SC ya CONFIRMADA no habria nada que sincronizar, asi que se parte
+        de una SC vieja en un estado heredado (COTIZADA) con un enlace de Gate 1 vivo:
+        la COT confirmada la confirma, lo anota en su Actividad y anula ese enlace.
         """
+        from app.core.confirmation_tokens import create_confirmation_token
+        from app.models.confirmation import DocumentConfirmationToken
+        from app.models.erp_documents import ActivityLog
         sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token, db)
         _forzar_cot_confirmada(db, cot["id"])
+        sc_row = db.query(CustomerRequest).filter(CustomerRequest.id == sc["id"]).first()
+        sc_row.estado = "COTIZADA"  # dato heredado (antes de U15)
+        db.commit()
+        create_confirmation_token(db, "SC", sc["id"])  # un enlace de la SC que hubiera quedado vivo
         r = app_client.post(f"/api/v1/ventas/cotizaciones/{cot['id']}/confirmar", json={}, headers=_headers(admin_token))
         assert r.status_code == 200, r.text
         data = r.json()["data"]
@@ -107,10 +117,21 @@ class TestSincronizacionEstados:
 
         r_sc = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
         assert r_sc.json()["data"]["estado"] == "CONFIRMADA"
+        db.expire_all()
+        (cambio,) = db.query(ActivityLog).filter(ActivityLog.entity_type == "SC", ActivityLog.entity_id == sc["id"],
+                                                 ActivityLog.action == "ESTADO_CHANGED",
+                                                 ActivityLog.new_estado == "CONFIRMADA").all()
+        assert cambio.old_estado == "COTIZADA"
+        assert cambio.description == f"La solicitud queda confirmada: el cliente confirmó la cotización {cot['numero']}"
+        vivos = db.query(DocumentConfirmationToken).filter(DocumentConfirmationToken.document_type == "SC",
+                                                           DocumentConfirmationToken.document_id == sc["id"],
+                                                           DocumentConfirmationToken.used_at.is_(None)).count()
+        assert vivos == 0  # el enlace quedo usado (anulado)
 
     def test_rechazar_cotizacion_deja_solicitud_confirmada_para_otra(self, app_client, admin_token, db):
         """N7: rechazar la unica COT deja la SC activa. El helper pone la marca de Gate 1 (que ya no se consume al
-        crear la COT), asi que la SC vuelve a CONFIRMADA, lista para crearle otra cotizacion."""
+        crear la COT), asi que la SC se queda CONFIRMADA (U15: nunca dejo de estarlo), lista para crearle otra
+        cotizacion."""
         sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token, db)
         resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "RECHAZADA"},
                                 headers=_headers(admin_token))

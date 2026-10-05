@@ -12,10 +12,11 @@ Uso (desde backend/, con el python del venv):
 
 El reporte es lo unico que corre solo (en una transaccion de SOLO LECTURA). --aplicar y --aplicar-leads son ESCRITURAS
 en la base destino (la que imprime al empezar, con la contrasena enmascarada, y su SELECT current_database()) y cada una
-necesita su propia autorizacion explicita del usuario en cada entorno (T12; produccion con un OK aparte). Como
-correcciones_bloque1.py (B9), las dos exigen --base <nombre> igual a current_database(): sin --base es un error de
-argumentos y si no coincide aborta (codigo 2) sin escribir nada. Orden de T12 (R26): despues de
-limpiar_motivo_en_notas.py y antes de corregir_actividad_sc_sin_precio.py; reporte -> OK -> aplicar -> reporte en 0.
+necesita su propia autorizacion explicita del usuario en cada entorno (T12; produccion con un OK aparte): por eso no
+se aceptan juntas (una corrida, una parte, un commit). Como correcciones_bloque1.py (B9), las dos exigen --base
+<nombre> igual a current_database(): sin --base es un error de argumentos y si no coincide aborta (codigo 2) sin
+escribir nada. Orden de T12 (R26): despues de limpiar_motivo_en_notas.py y antes de corregir_actividad_sc_sin_precio.py;
+reporte -> OK -> aplicar -> reporte en 0.
 
 Reglas de ajustar (estados de la SC), las mismas de la sincronizacion de U15 (R29) y de C6:
   - SC en un estado heredado (COTIZADA, EN_ESPERA_CONFIRMACION, RECHAZADA, VENCIDA):
@@ -24,14 +25,19 @@ Reglas de ajustar (estados de la SC), las mismas de la sincronizacion de U15 (R2
       sin documentos activos y con la confirmacion del cliente (gate1_confirmed_at) -> CONFIRMADA;
       sin documentos activos ni confirmacion -> ASIGNADA con asesor o BORRADOR (Nueva) sin el.
   - SC CONFIRMADA sin gate1_confirmed_at y sin documentos activos -> ASIGNADA o BORRADOR.
-  Al pasar a ASIGNADA/BORRADOR: gate1_confirmed_at = NULL y se anulan los enlaces de confirmacion pendientes de la SC.
+  El script NUNCA cambia gate1_confirmed_at: solo pasa a ASIGNADA/BORRADOR SC que ya la tienen en NULL (con la marca
+  van a CONFIRMADA). Al pasar a ASIGNADA/BORRADOR se anulan los enlaces de confirmacion pendientes de la SC.
   Cada SC ajustada deja un renglon ESTADO_CHANGED en su Actividad, user_name 'Sistema (ajuste de estados)'. updated_at
-  NO se toca (para no esconder alertas).
+  NO se toca (para no esconder alertas). Los estados ajenos (de otro documento, p. ej. 'ENTREGADO') no son de este
+  script: los decide documento por documento el paso n5 de correcciones_bloque1.py.
 
 Reglas de ajustar_leads (R26, ruling T2A-4): leads (tabla sales_orders) con status 'CANCELLED' cuya solicitud
-(canonical_customer_request_id) no esta CANCELADA -> QUOTATION si la SC tiene una COT activa, DRAFT si no; la etapa del
-tablero es la de ese maps_to_status (la de menor posicion; NULL si el tablero no la tiene). Se elige cada lead por su
-id (no 'el primer lead de la SC') y nunca se crean etapas. No usa mover_lead_de_solicitud (hace commits propios).
+(canonical_customer_request_id) no esta CANCELADA hoy PERO lo estuvo alguna vez (un renglon de su Actividad con
+new_estado 'CANCELADA'; un lead que alguien paso a 'Perdido' a mano en el CRM, sin cancelar la SC, no se revive)
+-> QUOTATION si la SC tiene una COT activa, DRAFT si no; la etapa del tablero es la de ese maps_to_status (la de menor
+posicion; NULL si el tablero no la tiene). Se elige cada lead por su id (no 'el primer lead de la SC') y nunca se crean
+etapas. No usa mover_lead_de_solicitud (hace commits propios). El reporte muestra, por candidato, la fecha de la
+ultima cancelacion y de la ultima restauracion de la SC.
 
 Las dos partes:
   - excluyen SIEMPRE los documentos reales (DOCUMENTOS_REALES) y todo lo vinculado a ellos (calcular_excluidos de
@@ -44,10 +50,12 @@ Las dos partes:
     se pisa ni se respalda;
   - son idempotentes: una segunda corrida encuentra 0 candidatas.
 
-Para DESHACER ajustar (restaura el estado y la marca de Gate 1 de lo que cambio este script):
-    UPDATE customer_requests c SET estado = r.estado_original, gate1_confirmed_at = r.gate1_original
+Para DESHACER ajustar (restaura el estado de lo que cambio este script; la marca de Gate 1 no se toca: el script
+nunca la cambio, y reponerla borraria una confirmacion real que el cliente diera despues del ajuste):
+    UPDATE customer_requests c SET estado = r.estado_original
     FROM customer_requests_respaldo_estados r
     WHERE c.id = r.id AND c.estado = r.estado_nuevo;
+  La columna gate1_original del respaldo es solo informativa (la marca que tenia la SC al ajustarla).
   (opcional) los renglones de Actividad que dejo:
     DELETE FROM activity_logs WHERE entity_type = 'SC' AND user_name = 'Sistema (ajuste de estados)'
       AND entity_id IN (SELECT id FROM customer_requests_respaldo_estados);
@@ -105,27 +113,16 @@ def _excluidas_sc(db) -> set:
     return set(calcular_excluidos(db, DOCUMENTOS_REALES).sc)
 
 
-def _con_articulo(cots, pvens) -> str:
-    """'el pedido de venta PVEN-1 y la cotización COT-1' (en plural si hay varios del mismo tipo)."""
-    partes = []
-    if pvens:
-        partes.append(("el pedido de venta " if len(pvens) == 1 else "los pedidos de venta ")
-                      + ", ".join(p.numero for p in pvens))
-    if cots:
-        partes.append(("la cotización " if len(cots) == 1 else "las cotizaciones ") + ", ".join(c.numero for c in cots))
-    return " y ".join(partes)
-
-
 def _plan_de_estado(db, fila):
     """(nuevo, regla, texto de la Actividad) de una SC candidata, o None si se queda como esta."""
-    from app.api.v1.erp_ventas import _documentos_activos_de_solicitud
+    from app.api.v1.erp_ventas import _describir_documentos, _documentos_activos_de_solicitud
     from app.models.erp_documents import SalesQuotation
     cots, pvens = _documentos_activos_de_solicitud(db, fila["id"])
     confirmada = etiqueta_estado("SC", "CONFIRMADA")
     if fila["estado"] in ESTADOS_SC_HEREDADOS and (cots or pvens):
         return ("CONFIRMADA", "heredada_con_documentos",
                 f"Estado ajustado a {confirmada}: la solicitud ya no cambia con su cotización; el avance se ve en "
-                f"{_con_articulo(cots, pvens)}")
+                f"{_describir_documentos(cots, pvens, con_articulo=True)}")
     if cots or pvens:
         return None  # CONFIRMADA sin la marca pero con documentos activos: se queda (la confirmo su cotizacion)
     if fila["estado"] in ESTADOS_SC_HEREDADOS and fila["gate1_confirmed_at"] is not None:
@@ -197,16 +194,16 @@ def ajustar(db, aplicar=False, ids=None, tabla_respaldo=TABLA_RESPALDO_ESTADOS) 
             "id INTEGER PRIMARY KEY, "
             "estado_original VARCHAR(50) NOT NULL, "
             "estado_nuevo VARCHAR(50) NOT NULL, "
-            "gate1_original TIMESTAMP NULL, "
+            "gate1_original TIMESTAMP NULL, "  # solo informativa: el script nunca cambia gate1_confirmed_at
             "ajustado_at TIMESTAMP NOT NULL DEFAULT (now() at time zone 'utc'))"))
         ajustadas = 0
         for c in candidatas:
+            # Solo se reinicia (ASIGNADA/BORRADOR) una SC con gate1_confirmed_at NULL (_plan_de_estado): la marca no
+            # se toca. Sin tocar updated_at (no esconde alertas).
             reinicia = c["nuevo"] in ("ASIGNADA", "BORRADOR")
-            # Sin tocar updated_at (no esconde alertas). Al reiniciar, la marca de Gate 1 se limpia.
-            sql = ("UPDATE customer_requests SET estado = :nuevo"
-                   + (", gate1_confirmed_at = NULL" if reinicia else "")
-                   + " WHERE id = :id AND estado = :original")
-            cambio = db.execute(text(sql), {"nuevo": c["nuevo"], "id": c["id"], "original": c["estado"]})
+            cambio = db.execute(
+                text("UPDATE customer_requests SET estado = :nuevo WHERE id = :id AND estado = :original"),
+                {"nuevo": c["nuevo"], "id": c["id"], "original": c["estado"]})
             if cambio.rowcount != 1:
                 continue  # alguien la cambio despues de leerla: no se pisa y no queda respaldo de algo que no cambio
             db.execute(
@@ -237,19 +234,27 @@ def _etapa_de(db, status):
 def ajustar_leads(db, aplicar=False, ids=None, tabla_respaldo=TABLA_RESPALDO_LEADS) -> dict:
     """Calcula (y con aplicar=True escribe) el ajuste de los leads 'Perdido' de solicitudes que ya no estan canceladas.
 
+    Solo leads de una SC que estuvo cancelada alguna vez (renglon de su Actividad con new_estado 'CANCELADA'): un lead
+    que alguien paso a 'Perdido' a mano en el CRM, sin cancelar la SC, no se revive.
     ids: ids de SOLICITUD (customer_requests), no de lead. Devuelve {'candidatos', 'movidos', 'excluidos',
-    'ejemplos': [{lead_id, sc_id, sc_numero, sc_estado, status, nuevo, etapa_id, etapa}]}. Sin aplicar no escribe nada
-    (ni crea la tabla de respaldo ni etapas). Con aplicar es UNA transaccion: commit al final y rollback ante cualquier
-    error.
+    'ejemplos': [{lead_id, sc_id, sc_numero, sc_estado, status, nuevo, etapa_id, etapa, ultima_cancelacion,
+    ultima_restauracion}]}. Sin aplicar no escribe nada (ni crea la tabla de respaldo ni etapas). Con aplicar es UNA
+    transaccion: commit al final y rollback ante cualquier error.
     """
     _validar_tabla(tabla_respaldo)
     consulta = ("SELECT so.id AS lead_id, so.status, so.pipeline_stage_id, cr.id AS sc_id, cr.numero AS sc_numero, "
                 "cr.estado AS sc_estado, "
                 "EXISTS (SELECT 1 FROM sales_quotations q WHERE q.sc_id = cr.id AND q.estado <> 'RECHAZADA') "
-                "AS cot_activa "
+                "AS cot_activa, "
+                "(SELECT max(a.created_at) FROM activity_logs a WHERE a.entity_type = 'SC' AND a.entity_id = cr.id "
+                " AND (a.action = 'CANCELLED' OR a.new_estado = 'CANCELADA')) AS ultima_cancelacion, "
+                "(SELECT max(a.created_at) FROM activity_logs a WHERE a.entity_type = 'SC' AND a.entity_id = cr.id "
+                " AND a.action = 'RESTORED') AS ultima_restauracion "
                 "FROM sales_orders so JOIN customer_requests cr ON cr.id = so.canonical_customer_request_id "
                 "WHERE so.status = 'CANCELLED' AND cr.estado <> 'CANCELADA' "
-                "AND cr.tipo_solicitud IS DISTINCT FROM :soporte")
+                "AND cr.tipo_solicitud IS DISTINCT FROM :soporte "
+                "AND EXISTS (SELECT 1 FROM activity_logs a WHERE a.entity_type = 'SC' AND a.entity_id = cr.id "
+                "            AND a.new_estado = 'CANCELADA')")
     parametros = {"soporte": SOPORTE_TECNICO}
     if ids is not None:
         consulta += " AND cr.id = ANY(:ids)"
@@ -268,13 +273,15 @@ def ajustar_leads(db, aplicar=False, ids=None, tabla_respaldo=TABLA_RESPALDO_LEA
             candidatos.append({"lead_id": fila["lead_id"], "sc_id": fila["sc_id"], "sc_numero": fila["sc_numero"],
                                "sc_estado": fila["sc_estado"], "status": fila["status"],
                                "pipeline_stage_id": fila["pipeline_stage_id"], "nuevo": nuevo, "etapa_id": etapa_id,
-                               "etapa": etapa})
+                               "etapa": etapa, "ultima_cancelacion": fila["ultima_cancelacion"],
+                               "ultima_restauracion": fila["ultima_restauracion"]})
         resultado = {
             "candidatos": len(candidatos),
             "movidos": 0,
             "excluidos": excluidos,
             "ejemplos": [{k: c[k] for k in ("lead_id", "sc_id", "sc_numero", "sc_estado", "status", "nuevo",
-                                            "etapa_id", "etapa")} for c in candidatos[:MAX_EJEMPLOS]],
+                                            "etapa_id", "etapa", "ultima_cancelacion", "ultima_restauracion")}
+                         for c in candidatos[:MAX_EJEMPLOS]],
         }
         if not aplicar:
             db.rollback()
@@ -308,6 +315,11 @@ def ajustar_leads(db, aplicar=False, ids=None, tabla_respaldo=TABLA_RESPALDO_LEA
         raise
 
 
+def _fecha_utc(valor) -> str:
+    """Fecha de la Actividad (UTC sin zona) para el reporte, o 'nunca'."""
+    return valor.strftime("%Y-%m-%d %H:%M UTC") if valor else "nunca"
+
+
 def _solo_lectura(db):
     """El reporte corre en una transaccion de SOLO LECTURA (la siguiente sentencia abre la transaccion)."""
     db.execute(text("SET TRANSACTION READ ONLY"))
@@ -315,13 +327,15 @@ def _solo_lectura(db):
 
 def main(argv=None) -> int:
     """0 si termino; 2 si --base no coincide con current_database() (no escribe nada). Sin --base, --aplicar o
-    --aplicar-leads son un error de argumentos (argparse sale con 2)."""
+    --aplicar-leads son un error de argumentos, y tambien pasarlas juntas (argparse sale con 2)."""
     parser = argparse.ArgumentParser(
         description="Ajusta los estados heredados de las solicitudes y los leads perdidos de solicitudes vivas (U15).")
-    parser.add_argument("--aplicar", action="store_true",
-                        help="Escribe el ajuste de estados de las solicitudes (con respaldo).")
-    parser.add_argument("--aplicar-leads", action="store_true",
-                        help="Escribe el ajuste de los leads del CRM (con respaldo).")
+    # Cada parte se aplica con su propio OK y en su propia corrida (un commit por corrida): no van juntas.
+    aplicar = parser.add_mutually_exclusive_group()
+    aplicar.add_argument("--aplicar", action="store_true",
+                         help="Escribe el ajuste de estados de las solicitudes (con respaldo).")
+    aplicar.add_argument("--aplicar-leads", action="store_true",
+                         help="Escribe el ajuste de los leads del CRM (con respaldo).")
     parser.add_argument("--base", help="con --aplicar/--aplicar-leads: nombre de la base; debe ser igual a "
                                        "current_database()")
     args = parser.parse_args(argv)
@@ -333,8 +347,7 @@ def main(argv=None) -> int:
     from app.core.preflight import _mask_url
 
     if escribe:
-        partes = [p for p, si in (("estados", args.aplicar), ("leads", args.aplicar_leads)) if si]
-        modo = f"APLICAR {' y '.join(partes)} (escribe, con respaldo)"
+        modo = f"APLICAR {'estados' if args.aplicar else 'leads'} (escribe, con respaldo)"
     else:
         modo = "REPORTE (solo lectura, no escribe)"
     print(f"Conectando a -> {_mask_url(SQLALCHEMY_DATABASE_URL)}  [{modo}]")
@@ -379,7 +392,9 @@ def main(argv=None) -> int:
         for e in res_leads["ejemplos"]:
             etapa = f"etapa '{e['etapa']}'" if e["etapa"] else "sin etapa con ese estado en el tablero"
             print(f"  lead #{e['lead_id']} de {e['sc_numero']} ({etiqueta_estado('SC', e['sc_estado'])}): "
-                  f"{e['status']} -> {e['nuevo']}, {etapa}")
+                  f"{e['status']} -> {e['nuevo']}, {etapa}. SC cancelada por última vez: "
+                  f"{_fecha_utc(e['ultima_cancelacion'])}; restaurada por última vez: "
+                  f"{_fecha_utc(e['ultima_restauracion'])}")
         if args.aplicar_leads:
             print(f"Movidos: {res_leads['movidos']} (respaldo en {TABLA_RESPALDO_LEADS})")
     if not escribe:

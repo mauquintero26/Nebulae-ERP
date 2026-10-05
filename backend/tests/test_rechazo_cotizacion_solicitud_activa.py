@@ -101,8 +101,6 @@ def test_no_se_crea_otra_cotizacion_mientras_haya_una_activa(app_client, db, adm
     cot1 = _crear_cot(app_client, admin_token, sc.id)
     db.refresh(sc)
     assert sc.estado == "CONFIRMADA"  # U15: crear la COT ya no la lleva a COTIZADA
-    sc.estado = "CONFIRMADA"  # (U15: ya lo esta; tambien como la dejaria la COT confirmada por el cliente)
-    db.commit()
     resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/confirmar", json={"user_name": "t"},
                            headers=auth(admin_token))
     assert resp.status_code == 400, resp.text
@@ -338,7 +336,9 @@ def test_mover_la_cotizacion_a_otra_solicitud_tiene_reglas(app_client, db, admin
                                      "solicitud.")
 
 
-def test_vincular_la_cotizacion_a_otra_solicitud_resincroniza_las_dos(app_client, db, admin_token, user_admin):
+def test_vincular_la_cotizacion_a_otra_solicitud_solo_reinicia_la_de_origen(app_client, db, admin_token, user_admin):
+    """La SC de origen pierde su marca y vuelve a ASIGNADA (como un rechazo sin marca); la SC destino no cambia de estado
+    (U15: una COT en Borrador no mueve la solicitud)."""
     origen = _sc(db, "SC-RCH010A", user_admin)
     cot = _crear_cot(app_client, admin_token, origen.id)
     destino = _sc(db, "SC-RCH010B", user_admin, con_marca=False, estado="ASIGNADA")
