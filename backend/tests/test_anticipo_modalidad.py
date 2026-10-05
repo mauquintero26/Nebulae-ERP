@@ -157,7 +157,9 @@ def test_cambiar_el_total_de_una_cot_confirmada_si_invalida_la_confirmacion(app_
     sc = _sc(db, "SC-ANT016", MOD_60_40)
     cot = _cot(db, "COT-ANT016", sc, estado="CONFIRMADA", total_cop=1000, anticipo_cop=600,
                productos=_linea(1000), gate2_confirmed_at=datetime.datetime.utcnow())
-    resp = _patch_cot(app_client, admin_token, cot.id, {"total_cop": 2000, "productos": _linea(2000)})
+    resp = _patch_cot(app_client, admin_token, cot.id, {"total_cop": 2000, "productos": _linea(2000),
+                                                        "anular_confirmacion": True,  # H40 (B2-T4)
+                                                        "motivo_recotizacion": "Prueba de cambio"})
     assert resp.status_code == 200, resp.text
     db.refresh(cot)
     assert cot.estado == "BORRADOR"
@@ -199,7 +201,9 @@ def test_recotizar_sin_cambiar_el_total_conserva_el_anticipo_heredado(app_client
         assert resp.status_code == 200, resp.text
         db.refresh(cot)
         assert cot.anticipo_cop == Decimal("1000000") and cot.estado == estado
-    resp = _patch_cot(app_client, admin_token, cot.id, {"total_cop": 3000000, "productos": _linea(3000000)})
+    resp = _patch_cot(app_client, admin_token, cot.id, {"total_cop": 3000000, "productos": _linea(3000000),
+                                                        "anular_confirmacion": True,  # H40 (B2-T4)
+                                                        "motivo_recotizacion": "Prueba de cambio"})
     assert resp.status_code == 200, resp.text
     db.refresh(cot)
     assert cot.anticipo_cop == Decimal("2000000")

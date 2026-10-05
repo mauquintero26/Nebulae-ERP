@@ -204,7 +204,8 @@ def test_recotizar_una_cot_pendiente_de_confirmacion_registra_primero_la_recotiz
                productos=[_linea("Cuna", 1, 1000)])
     resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={
         "productos": [_linea("Cuna", 1, 2000)], "subtotal_cop": 2000, "total_cop": 2000,
-        "recotizacion": True, "updated_by": "asesor@test"}, headers=auth(admin_token))
+        "recotizacion": True, "updated_by": "asesor@test",
+        "anular_confirmacion": True, "motivo_recotizacion": "Prueba de cambio"}, headers=auth(admin_token))  # H40
     assert resp.status_code == 200, resp.text
     # El precio nuevo reinicia el ciclo de confirmacion a BORRADOR: causa primero, efecto despues.
     assert [a["action"] for a in _actividades(app_client, admin_token, "cotizaciones", cot.id)] == [

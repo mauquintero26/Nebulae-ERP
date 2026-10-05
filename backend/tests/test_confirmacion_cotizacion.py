@@ -438,6 +438,7 @@ def test_editar_precio_mientras_pendiente_confirmacion_reinicia_a_borrador(app_c
     resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={
         "total_cop": 2000, "productos": [{"product_name": "X", "qty": 1, "unit_price_cop": 2000}],
         "updated_by": "test",
+        "anular_confirmacion": True, "motivo_recotizacion": "Prueba de cambio",  # H40 (B2-T4)
     }, headers=auth(admin_token))
     assert resp.status_code == 200
     db.refresh(cot)
@@ -459,7 +460,10 @@ def test_editar_precio_mientras_confirmada_sin_pven_reinicia_y_limpia_marcador(a
     cot.gate2_confirmed_at = datetime.datetime.utcnow()
     db.commit()
 
-    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={"total_cop": 2000, "updated_by": "test"}, headers=auth(admin_token))
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={
+        "total_cop": 2000, "updated_by": "test",
+        "anular_confirmacion": True, "motivo_recotizacion": "Prueba de cambio",  # H40 (B2-T4)
+    }, headers=auth(admin_token))
     assert resp.status_code == 200
     db.refresh(cot)
     assert cot.estado == "BORRADOR"
@@ -608,6 +612,7 @@ def test_reenviar_misma_fecha_como_string_no_rompe_el_congelamiento(app_client, 
 
     resp2 = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={
         "fecha_entrega_estimada": "2026-11-25", "updated_by": "test",  # dia distinto
+        "anular_confirmacion": True, "motivo_recotizacion": "Prueba de cambio",  # H40 (B2-T4)
     }, headers=auth(admin_token))
     assert resp2.status_code == 200
     db.refresh(cot)

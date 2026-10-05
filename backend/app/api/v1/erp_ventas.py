@@ -1780,6 +1780,25 @@ def _soltar_cotizacion_de_la_solicitud(db: Session, sc: CustomerRequest, cot: Sa
     return anterior
 
 
+# H40: lo que el cliente vio y confirmo (PRICE_FREEZE_FIELDS de update_cotizacion) -> como se nombra en el aviso de
+# ANULA_CONFIRMACION y en la Actividad. Mismo orden que PRICE_FREEZE_FIELDS.
+_ETIQUETAS_CONGELADAS = {
+    "productos": "Productos, cantidades o precios", "total_cop": "Total", "subtotal_cop": "Total",
+    "descuento_pct": "Descuento", "trm_rate": "TRM", "fecha_entrega_estimada": "Fecha de entrega",
+    "sc_id": "Solicitud de origen",
+}
+
+
+def _mensaje_anula_confirmacion(estado: str, cambios: list) -> str:
+    """H40: el texto del 409 ANULA_CONFIRMACION segun el estado (CONFIRMADA o PENDIENTE_CONFIRMACION)."""
+    lista = ", ".join(cambios)
+    if estado == "CONFIRMADA":
+        return (f"El cliente ya confirmó esta cotización. Si guardas estos cambios ({lista}), su confirmación se anula: "
+                f"la cotización vuelve a Borrador y tendrás que enviársela de nuevo.")
+    return (f"Esta cotización está esperando la confirmación del cliente. Si guardas estos cambios ({lista}), el enlace "
+            f"que tiene el cliente deja de servir: la cotización vuelve a Borrador y tendrás que enviársela de nuevo.")
+
+
 @router.patch("/cotizaciones/{cot_id}")
 def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
@@ -1951,11 +1970,29 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     # pedidos cancelados) vuelve a estar en el ciclo vigente de Gate 2 y su precio se congela.
     ya_tiene_pven = _pven_vigente_de_cotizacion(db, cot.id) is not None
     precio_congelado = old_estado == "PENDIENTE_CONFIRMACION" or (old_estado == "CONFIRMADA" and not ya_tiene_pven)
-    hubo_cambio_de_precio = any(
-        _freeze_cmp(k, getattr(cot, k)) != _freeze_cmp(k, old_price_values[k])
-        for k in PRICE_FREEZE_FIELDS
-    )
+    campos_congelados_cambiados = [k for k in PRICE_FREEZE_FIELDS
+                                   if _freeze_cmp(k, getattr(cot, k)) != _freeze_cmp(k, old_price_values[k])]
+    hubo_cambio_de_precio = bool(campos_congelados_cambiados)
     rompe_congelamiento = precio_congelado and hubo_cambio_de_precio
+    # H40 (R7): anular la confirmacion del cliente (dada o pendiente) ya no pasa sin avisar. Sin anular_confirmacion
+    # responde 409 ANULA_CONFIRMACION con lo que cambio; con ella exige la razon (motivo_recotizacion, no 'motivo': esa
+    # llave reemplaza el titulo del renglon de re-cotizacion en _registrar_cambios), que queda en la Actividad. Un
+    # cambio de estado explicito no pregunta. db.rollback() descarta lo que este PATCH ya aplico en la sesion (nada se
+    # ha confirmado: el commit viene despues).
+    cambia_estado_explicito = bool(body.get("estado")) and body["estado"] != old_estado
+    cambios_congelados, motivo_recotizacion = [], None
+    if rompe_congelamiento and not cambia_estado_explicito:
+        cambios_congelados = list(dict.fromkeys(_ETIQUETAS_CONGELADAS[k] for k in campos_congelados_cambiados))
+        if body.get("anular_confirmacion") is not True:
+            db.rollback()
+            raise HTTPException(409, detail={
+                "codigo": "ANULA_CONFIRMACION", "estado": old_estado, "cambios": cambios_congelados,
+                "mensaje": _mensaje_anula_confirmacion(old_estado, cambios_congelados)})
+        motivo_recotizacion = str(body.get("motivo_recotizacion") or "").strip()
+        if len(motivo_recotizacion) < 5:
+            db.rollback()
+            raise HTTPException(422, "Escribe la razón del cambio (mínimo 5 caracteres): queda en la Actividad de la "
+                                     "cotización.")
     if rompe_congelamiento:
         cot.estado = "BORRADOR"
     # Gate 2 -- capturar AHORA, antes de cualquier commit/refresh, si ESTE PATCH saca a
@@ -2044,9 +2081,16 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         except Exception as exc:
             db.rollback()
             logger.error(f"Error al sincronizar Solicitud tras romper congelamiento de precio en cotizacion {cot.id}: {exc}", exc_info=True)
+        # H40: termina en la razon que escribio el asesor; extra_data sin la llave 'campo' (CambiosDeActividad no tacha).
+        razon = motivo_recotizacion if motivo_recotizacion.endswith((".", "!", "?")) else f"{motivo_recotizacion}."
         _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
-             "Estado cambiado a Borrador (la cotización fue editada tras la confirmación del cliente; esa confirmación ya no es válida)",
-             old_estado=old_estado, new_estado="BORRADOR", user_name=body.get("updated_by"))
+             "Estado cambiado a Borrador (la cotización fue editada tras la confirmación del cliente; esa confirmación "
+             f"ya no es válida). Razón: {razon}",
+             old_estado=old_estado, new_estado="BORRADOR",
+             user_name=body.get("updated_by") or getattr(user, "email", None),
+             extra_data={"motivo": motivo_recotizacion,
+                         "cambios": [{"etiqueta": "Cambió", "despues": ", ".join(cambios_congelados)},
+                                     {"etiqueta": "Razón", "despues": motivo_recotizacion}]})
     if fecha_vieja is not None and cot.fecha_entrega_estimada and cot.fecha_entrega_estimada.date() != fecha_vieja.date():
         # Final whole-branch review (hallazgo #2) -- ver el comentario equivalente en
         # update_solicitud para la explicacion completa (mismo patron, mismo bug, en
@@ -2065,7 +2109,8 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         revoke_pending_tokens(db, "COT", cot.id)
         cot.gate2_confirmed_at = None
         db.commit()
-    return {"status": "success", "data": _cot_dict(cot)}
+    # H40: en el nivel superior (no dentro de data): la pantalla avisa que hay que reenviarsela al cliente.
+    return {"status": "success", "data": _cot_dict(cot), "confirmacion_anulada": bool(rompe_congelamiento)}
 
 
 @router.post("/cotizaciones/{cot_id}/enviar-confirmacion")

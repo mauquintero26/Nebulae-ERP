@@ -183,8 +183,10 @@ def test_recotizar_confirmada_con_pedido_cancelado_rompe_congelamiento(app_clien
     sc = _sc(db, "SC-REA006", user_admin)
     cot = _cot_confirmada(db, "COT-REA006", sc)
     _ven(db, "PVEN-REA006", cot, estado="CANCELADO", cancellation_reason="Cliente cambió el pedido")
-    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={"total_cop": 2000, "updated_by": "t"},
-                            headers=auth(admin_token))
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={
+        "total_cop": 2000, "updated_by": "t",
+        "anular_confirmacion": True, "motivo_recotizacion": "Prueba de cambio"},  # H40 (B2-T4)
+        headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     db.refresh(cot)
     assert cot.estado == "BORRADOR" and cot.gate2_confirmed_at is None
