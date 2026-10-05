@@ -9,7 +9,7 @@
  * - pctAnticipoDeModalidad: espejo de backend/app/core/ventas_dinero.py pct_anticipo_de_modalidad (R2).
  */
 
-import { normalizarBusqueda } from './busqueda.js';
+import { claveModalidad, esModalidadCredito } from './etiquetas-ventas.js';
 
 export { etiquetaTipoSolicitud as etiquetaTipoSC, etiquetaModalidad } from './etiquetas-ventas.js';
 
@@ -40,16 +40,15 @@ export const MODALIDADES_PAGO = Object.freeze([
 
 /**
  * % de anticipo que pedirá la cotización según la modalidad (R2), o null si no la reconoce ('Otro', vacía...: la
- * pantalla usa 60, como el backend). Igual que el backend: sin tildes ni mayúsculas (NFKD), crédito (empieza por 'cr'
- * o dice 'credito') -> 0, '60/40' -> 60, 'contado' -> 100.
+ * pantalla usa 60, como el backend). Igual que el backend, comparando con claveModalidad (NFKD, sin tildes ni
+ * mayúsculas): crédito (esModalidadCredito, el predicado único) -> 0, '60/40' -> 60, 'contado' -> 100.
  * @param {any} modalidad
  * @returns {number | null}
  */
 export function pctAnticipoDeModalidad(modalidad) {
-  if (modalidad === null || modalidad === undefined) return null;
-  const t = normalizarBusqueda(String(modalidad).normalize('NFKD'));
+  const t = claveModalidad(modalidad);
   if (!t) return null;
-  if (t.startsWith('cr') || t.includes('credito')) return 0;
+  if (esModalidadCredito(modalidad)) return 0;
   if (t.includes('60/40')) return 60;
   if (t.includes('contado')) return 100;
   return null;

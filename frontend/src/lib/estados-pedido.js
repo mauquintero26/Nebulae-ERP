@@ -19,12 +19,13 @@
 /**
  * Congela el objeto y todo lo que cuelga de el: estas tablas son la fuente unica de los estados, y si una
  * pantalla las mutara por accidente se desalinearian todas. Mutarlas lanza TypeError (los modulos ESM son
- * estrictos); para ordenar o filtrar hay que copiar primero ([...lista].sort()).
+ * estrictos); para ordenar o filtrar hay que copiar primero ([...lista].sort()). Lo reutilizan las otras tablas de
+ * Ventas (estados-solicitud.js).
  * @template T
  * @param {T} valor
  * @returns {T}
  */
-function congelar(valor) {
+export function congelar(valor) {
   if (valor !== null && typeof valor === 'object' && !Object.isFrozen(valor)) {
     Object.values(valor).forEach(congelar);
     Object.freeze(valor);
@@ -116,7 +117,16 @@ export const TRANSICIONES_PEDIDO_PATCH = congelar({
   PARCIALMENTE_ENTREGADO: ['ENTREGADO'],
 });
 
-const tiene = (obj, clave) => Object.prototype.hasOwnProperty.call(obj, clave);
+/**
+ * true si `obj` tiene la clave PROPIA `clave` (nunca las del prototipo: 'constructor', 'toString'...); null o
+ * undefined -> false. El único chequeo de claves de las librerías de Ventas.
+ * @param {any} obj
+ * @param {any} clave
+ * @returns {boolean}
+ */
+export function tiene(obj, clave) {
+  return obj !== null && obj !== undefined && Object.prototype.hasOwnProperty.call(obj, clave);
+}
 
 /**
  * B2: codigos que no estan en ninguna tabla de documentos pero se muestran (EN_GESTION esta en el filtro del Hub,

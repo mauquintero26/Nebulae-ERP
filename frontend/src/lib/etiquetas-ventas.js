@@ -10,6 +10,7 @@
  */
 
 import { normalizarBusqueda } from './busqueda.js';
+import { tiene } from './estados-pedido.js';
 
 const TIPOS_SOLICITUD = Object.freeze({
   'Cotizacion de Producto': 'Cotización de producto',
@@ -28,30 +29,69 @@ const TIPOS_SOLICITUD = Object.freeze({
 export function etiquetaTipoSolicitud(tipo) {
   if (tipo === null || tipo === undefined) return '';
   const t = String(tipo);
-  return Object.prototype.hasOwnProperty.call(TIPOS_SOLICITUD, t) ? TIPOS_SOLICITUD[t] : t;
+  return tiene(TIPOS_SOLICITUD, t) ? TIPOS_SOLICITUD[t] : t;
 }
 
 /**
- * La modalidad de pago para mostrar. Se compara sin tildes ni mayúsculas y con la misma regla que el anticipo del
- * backend (R2): lo que empieza por 'cr' o dice 'credito' es 'Crédito N días' si trae un número ('Credito 30 dias',
- * 'Credito 30 Dias' de la agenda, 'Credito 30d' de compras) o 'Crédito' si no; lo que dice '60/40' es
- * '60/40 (60% de anticipo y 40% al entregar)'; 'contado' -> 'Contado'; 'otro' -> 'Otro'. Cualquier otro valor queda
- * igual ('Adelanto 50%', 'Contra entrega'). null -> ''.
+ * La modalidad de pago lista para comparar, igual que _sin_tildes del backend (ventas_dinero.py): NFKD (también los
+ * caracteres de ancho completo), sin tildes, en minúsculas y sin espacios en los bordes. null -> ''.
+ * @param {any} modalidad
+ * @returns {string}
+ */
+export function claveModalidad(modalidad) {
+  if (modalidad === null || modalidad === undefined) return '';
+  return normalizarBusqueda(String(modalidad).normalize('NFKD'));
+}
+
+/**
+ * El predicado ÚNICO de crédito (R2, el mismo de pct_anticipo_de_modalidad del backend): todo lo que empieza por 'cr'
+ * o dice 'credito'. Lo usan etiquetaModalidad y pctAnticipoDeModalidad (etiquetas-solicitud.js). Ojo: también es
+ * crédito para el backend 'Cruce de cuentas' (empieza por 'cr'), que cobra al 0%.
+ * @param {any} modalidad
+ * @returns {boolean}
+ */
+export function esModalidadCredito(modalidad) {
+  const t = claveModalidad(modalidad);
+  return t.startsWith('cr') || t.includes('credito');
+}
+
+/** Las formas conocidas de un plazo de crédito: 'credito 30 dias', 'credito 30d', 'cred 45', 'cr. 90 dias', 'credito'. */
+const PLAZO_DE_CREDITO = /^(?:credito|cred\.?|cr\.?)\s*(\d+)?\s*(?:d|dias?)?\.?$/;
+
+/** Dónde va la tilde en cada palabra (posición de la vocal) y la vocal con tilde en minúscula y mayúscula. */
+const VOCAL_CON_TILDE = Object.freeze({ credito: 2, dias: 1 });
+const CON_TILDE = Object.freeze({ e: 'é', E: 'É', i: 'í', I: 'Í' });
+
+/** Pone la tilde a las palabras completas 'credito' y 'dias', respetando sus mayúsculas ('CREDITO' -> 'CRÉDITO'). */
+function tildesPorPalabra(texto) {
+  return texto.replace(/\b(credito|dias)\b/gi, (palabra) => {
+    const i = VOCAL_CON_TILDE[palabra.toLowerCase()];
+    return palabra.slice(0, i) + CON_TILDE[palabra[i]] + palabra.slice(i + 1);
+  });
+}
+
+/**
+ * La modalidad de pago para mostrar (H10). Se compara con claveModalidad (sin tildes ni mayúsculas):
+ * - un crédito con la forma conocida de un plazo ('Credito 30 dias', 'Credito 30 Dias' de la agenda, 'Credito 30d' de
+ *   compras, 'cr. 90 dias', 'CRÉDITO') -> 'Crédito N días', o 'Crédito' sin número;
+ * - lo que dice '60/40' -> '60/40 (60% de anticipo y 40% al entregar)'; 'contado' -> 'Contado'; 'otro' -> 'Otro';
+ * - cualquier otro valor queda como está, con la tilde en las palabras completas 'credito' y 'dias' (respetando las
+ *   mayúsculas): no se inventa un plazo ('Credito 2 cuotas' -> 'Crédito 2 cuotas'), y 'Cruce de cuentas' no se llama
+ *   crédito aunque el backend lo cobre al 0%.
+ * null -> ''.
  * @param {any} modalidad
  * @returns {string}
  */
 export function etiquetaModalidad(modalidad) {
   if (modalidad === null || modalidad === undefined) return '';
   const original = String(modalidad);
-  const t = normalizarBusqueda(original);
-  if (t.startsWith('cr') || t.includes('credito')) {
-    const dias = t.match(/\d+/);
-    return dias ? `Crédito ${dias[0]} días` : 'Crédito';
-  }
+  const t = claveModalidad(original);
+  const plazo = esModalidadCredito(original) ? t.match(PLAZO_DE_CREDITO) : null;
+  if (plazo) return plazo[1] ? `Crédito ${Number(plazo[1])} días` : 'Crédito';
   if (t.includes('60/40')) return '60/40 (60% de anticipo y 40% al entregar)';
   if (t === 'contado') return 'Contado';
   if (t === 'otro') return 'Otro';
-  return original;
+  return tildesPorPalabra(original);
 }
 
 /**

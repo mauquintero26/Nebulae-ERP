@@ -7,6 +7,8 @@
  * va a rechazar.
  */
 
+import { tiene } from './estados-pedido.js';
+
 /**
  * Los campos, en el orden del formulario. `max` = largo máximo (sin los espacios de los bordes); `soloConFicha` = solo
  * se corrige si la solicitud está vinculada a una ficha de cliente (la ciudad no es columna de la SC). Inmutable.
@@ -32,7 +34,6 @@ const CORREO_VALIDO = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 const texto = (v) => (v === null || v === undefined ? '' : String(v).trim());
 const comparable = (clave, v) => (clave === 'customer_email' ? texto(v).toLowerCase() : texto(v));
-const tiene = (obj, clave) => obj !== null && typeof obj === 'object' && Object.prototype.hasOwnProperty.call(obj, clave);
 
 /**
  * Solo los datos de contacto que cambiaron, ya recortados (el correo en minúsculas, como lo guarda el servidor). ''

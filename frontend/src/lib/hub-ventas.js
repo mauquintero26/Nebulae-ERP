@@ -30,7 +30,12 @@ export function ordenParaCancelar(ids) {
   return (ids || []).map((idStr, i) => ({ idStr, i })).sort((a, b) => peso(a.idStr) - peso(b.idStr) || a.i - b.i).map((x) => x.idStr);
 }
 
-const esSoporte = (row) => row?.tipo_solicitud === 'Soporte Tecnico' || row?.estado === 'N/A_SOPORTE';
+/**
+ * Una solicitud de Soporte Técnico (por su tipo o por su estado). La usan el Hub y estados-solicitud.js.
+ * @param {any} row
+ * @returns {boolean}
+ */
+export const esSoporte = (row) => row?.tipo_solicitud === 'Soporte Tecnico' || row?.estado === 'N/A_SOPORTE';
 
 /**
  * Por que una fila del Hub no se puede cancelar desde ahi, o null si se puede. Las que tienen motivo no se envian al

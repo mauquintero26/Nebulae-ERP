@@ -151,7 +151,9 @@ _FRONTEND_LIB = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib"
 # Casos de pct_anticipo_de_modalidad: los de test_anticipo_modalidad.py mas variantes de la agenda y de compras.
 _MODALIDADES = ["60/40 (60% anticipo - 40% pendiente)", "Contado", "  CONTADO ", "Credito 30 dias", "Credito 60 dias",
                 "Crédito 60 Días", "Credito 30 Dias", "Credito 30d", "cr. 90 dias", "CRÉDITO", "Otro", "", "   ",
-                "Adelanto 50%", "Contra entrega", None]
+                "Adelanto 50%", "Contra entrega", None,
+                # R2 cobra como credito todo lo que empiece por 'cr' (tambien 'Cruce de cuentas'); ancho completo (NFKD)
+                "Cruce de cuentas", "Ｃｒｅｄｉｔｏ 30 dias", "Credito 2 cuotas", "Pago a credito"]
 
 
 def _node(archivo, cuerpo):
@@ -191,6 +193,28 @@ def test_paridad_pct_anticipo_de_modalidad_con_el_frontend():
     backend = [None if (p := pct_anticipo_de_modalidad(v)) is None else int(p) for v in _MODALIDADES]
     assert espejo == backend, list(zip(_MODALIDADES, backend, espejo))
     assert backend[:4] == [60, 100, 100, 0]  # la prueba compara valores reales, no dos listas de None
+    assert backend[-4:] == [0, 0, 0, 0]
+
+
+def test_paridad_reglas_de_estados_solicitud_con_el_frontend():
+    """Los demas espejos de estados-solicitud.js: que estados cuentan como heredados (en los pasos valen Confirmada),
+    cuales estan sin confirmar y el minimo del motivo de /cotizar-sin-confirmacion."""
+    from app.api.v1.erp_ventas import MOTIVO_SIN_CONFIRMACION_MIN
+    from app.core.textos_actividad import ETIQUETAS_ESTADO, ESTADOS_SC_HEREDADOS, PASOS_SC
+    espejo = _node("estados-solicitud.js", """{
+      pasoDe: Object.fromEntries(Object.keys(m.ESTADOS_SC).map(k => [k, m.pasoSolicitud(k)])),
+      sinConfirmar: m.ESTADOS_SC_SIN_CONFIRMAR,
+      motivoMin: m.MOTIVO_SIN_CONFIRMACION_MIN,
+    }""")
+    ultimo = len(PASOS_SC) - 1
+    # cada paso en su lugar; los heredados (y solo ellos, fuera de los pasos) en el ultimo; el resto sin pasos
+    assert {e: espejo["pasoDe"][e] for e in PASOS_SC} == {e: i for i, e in enumerate(PASOS_SC)}
+    assert {e for e, p in espejo["pasoDe"].items() if p == ultimo and e not in PASOS_SC} == set(ESTADOS_SC_HEREDADOS)
+    fuera = set(ETIQUETAS_ESTADO["SC"]) - set(PASOS_SC) - set(ESTADOS_SC_HEREDADOS)
+    assert fuera == {"CANCELADA", "N/A_SOPORTE"}
+    assert all(espejo["pasoDe"][e] == -1 for e in fuera)
+    assert espejo["sinConfirmar"] == list(PASOS_SC[:-1])
+    assert espejo["motivoMin"] == MOTIVO_SIN_CONFIRMACION_MIN
 
 
 # ─── 3-8) la SC no refleja a su COT ──────────────────────────────────────────────────────────────────────────

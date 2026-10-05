@@ -12,29 +12,14 @@
  * (Cotizada, En espera de confirmación, Rechazada, Vencida) ya no se asignan: solo aparecen en el historial.
  */
 
-import { humanizarCodigo } from './estados-pedido.js';
+// congelar: mutar estas tablas lanza TypeError, para que ninguna pantalla las desalinee por accidente.
+import { congelar, humanizarCodigo, tiene } from './estados-pedido.js';
+import { comoUTC, esSoporte } from './hub-ventas.js';
 
 /**
  * @typedef {{ label: string, color: string, bg: string, border: string }} InfoEstadoSolicitud
  * @typedef {{ clave: string, label: string, ayuda: string }} PasoSolicitud
  */
-
-/**
- * Congela el objeto y todo lo que cuelga de él (mismo patrón que estados-pedido.js): mutar estas tablas lanza
- * TypeError, para que ninguna pantalla las desalinee por accidente.
- * @template T
- * @param {T} valor
- * @returns {T}
- */
-function congelar(valor) {
-  if (valor !== null && typeof valor === 'object' && !Object.isFrozen(valor)) {
-    Object.values(valor).forEach(congelar);
-    Object.freeze(valor);
-  }
-  return valor;
-}
-
-const tiene = (obj, clave) => typeof clave === 'string' && Object.prototype.hasOwnProperty.call(obj, clave);
 
 /** Colores de un estado que no está en la tabla. */
 const GRIS = congelar({ color: '#64748b', bg: '#f1f5f9', border: '#e2e8f0' });
@@ -119,19 +104,17 @@ function contar(documentos) {
   return Number(documentos) || 0;
 }
 
-const esSoporte = (sc) => sc?.tipo_solicitud === 'Soporte Tecnico' || sc?.estado === 'N/A_SOPORTE';
-
 /**
  * U15: 'Reiniciar solicitud' (vuelve a Nueva, o a Asignada si tiene asesor) solo tiene sentido en Pendiente por
  * confirmación o en Confirmada, y sin cotización activa ni pedido vigente (con ellos el servidor responde 409, R10).
- * Nunca en Cancelada: se retoma restaurándola desde la Papelera.
+ * Nunca en Cancelada (se retoma restaurándola desde la Papelera) ni en un ticket de Soporte Técnico.
  * @param {any} sc
  * @param {{ cotizacionesActivas?: any[] | number, pedidosVigentes?: any[] | number }} [documentos]
  *   arreglos (detalle) o conteos (lista); ausente = 0.
  * @returns {boolean}
  */
 export function puedeReiniciar(sc, { cotizacionesActivas, pedidosVigentes } = {}) {
-  if (!sc || !['PENDIENTE_CONFIRMACION', 'CONFIRMADA'].includes(sc.estado)) return false;
+  if (!sc || esSoporte(sc) || !['PENDIENTE_CONFIRMACION', 'CONFIRMADA'].includes(sc.estado)) return false;
   return contar(cotizacionesActivas) === 0 && contar(pedidosVigentes) === 0;
 }
 
@@ -199,11 +182,19 @@ const FORMATO_FECHA_COLOMBIA = new Intl.DateTimeFormat('es-CO', {
   timeZone: 'America/Bogota', day: '2-digit', month: '2-digit', year: 'numeric',
 });
 
-/** 'dd/mm/aaaa' en hora de Colombia, como _texto_papelera del backend. Una fecha sin zona se lee como UTC. */
+/** Una fecha de calendario, sin hora ('2026-11-03'). */
+const FECHA_DE_CALENDARIO = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * 'dd/mm/aaaa' en hora de Colombia, como _texto_papelera del backend. Una fecha y hora sin zona se lee como UTC
+ * (comoUTC, la misma regla del Hub y de las listas). Una fecha de calendario es ese mismo día: comoUTC la deja igual y
+ * new Date() la leería como medianoche UTC, que en Bogotá es la víspera.
+ */
 function fechaColombia(iso) {
   if (typeof iso !== 'string' || !iso.trim()) return null;
-  const conZona = /([zZ]|[+-]\d\d:?\d\d)$/.test(iso.trim()) ? iso.trim() : `${iso.trim()}Z`;
-  const fecha = new Date(conZona);
+  const dia = iso.trim().match(FECHA_DE_CALENDARIO);
+  if (dia) return `${dia[3]}/${dia[2]}/${dia[1]}`;
+  const fecha = new Date(comoUTC(iso));
   if (Number.isNaN(fecha.getTime())) return null;
   const partes = Object.fromEntries(FORMATO_FECHA_COLOMBIA.formatToParts(fecha).map((p) => [p.type, p.value]));
   return `${partes.day}/${partes.month}/${partes.year}`;

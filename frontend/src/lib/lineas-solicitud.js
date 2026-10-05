@@ -17,6 +17,9 @@ const clave = (texto) => normalizarBusqueda(texto).replace(/\s+/g, ' ');
 
 const tieneSku = (linea) => linea?.sku_id !== null && linea?.sku_id !== undefined && linea?.sku_id !== '';
 
+/** Una línea en blanco: sin nombre y sin sku (no identifica ningún producto). Nunca se agrega ni se envía. */
+const enBlanco = (linea) => !tieneSku(linea) && nombreLinea(linea) === '';
+
 /**
  * El nombre de una línea o de un producto del buscador: product_name, nombre o name (el primero que no esté vacío),
  * sin espacios en los bordes. '' si no tiene.
@@ -71,13 +74,16 @@ function mismaLinea(a, b) {
 
 /**
  * Agrega `nueva` al final o, si ya está (mismo sku_id, o texto libre con el mismo nombre sin tildes ni mayúsculas),
- * suma su cantidad a esa línea. Una línea del catálogo y un texto libre con el mismo nombre no se fusionan.
+ * suma su cantidad a esa línea. Una línea del catálogo y un texto libre con el mismo nombre no se fusionan. Una línea en
+ * blanco (sin nombre y sin sku) no se agrega: indice -1 y una copia de la lista.
  * @param {ReadonlyArray<LineaProducto> | null | undefined} lineas
  * @param {LineaProducto} nueva
- * @returns {{ lineas: LineaProducto[], indice: number, fusionada: boolean }} indice = la línea agregada o sumada.
+ * @returns {{ lineas: LineaProducto[], indice: number, fusionada: boolean }} indice = la línea agregada o sumada
+ *   (-1 si no se agregó nada).
  */
 export function agregarLinea(lineas, nueva) {
   const lista = Array.isArray(lineas) ? lineas : [];
+  if (enBlanco(nueva)) return { lineas: [...lista], indice: -1, fusionada: false };
   const indice = lista.findIndex((l) => mismaLinea(l, nueva));
   if (indice < 0) return { lineas: [...lista, nueva], indice: lista.length, fusionada: false };
   const suma = { ...lista[indice], qty: cantidadValida(lista[indice].qty) + cantidadValida(nueva?.qty) };
@@ -121,15 +127,15 @@ export function resolverTextoEscrito(texto, resultados) {
 }
 
 /**
- * Lo que se manda al backend: cada línea sin las claves que empiezan por '_' y con su cantidad válida; y, si quedó
- * texto escrito sin agregar (textoPendiente), se suma como texto libre (con la misma regla de agregarLinea), aunque ya
- * haya otras líneas. Un pendiente de solo espacios se ignora.
+ * Lo que se manda al backend: cada línea sin las claves que empiezan por '_' y con su cantidad válida, sin las líneas
+ * en blanco (sin nombre y sin sku); y, si quedó texto escrito sin agregar (textoPendiente), se suma como texto libre
+ * (con la misma regla de agregarLinea), aunque ya haya otras líneas. Un pendiente de solo espacios se ignora.
  * @param {ReadonlyArray<LineaProducto> | null | undefined} lineas
  * @param {any} [textoPendiente]
  * @returns {LineaProducto[]}
  */
 export function lineasParaEnviar(lineas, textoPendiente) {
-  const limpias = (Array.isArray(lineas) ? lineas : []).map((l) => {
+  const limpias = (Array.isArray(lineas) ? lineas : []).filter((l) => !enBlanco(l)).map((l) => {
     const sinInternas = Object.fromEntries(Object.entries(l ?? {}).filter(([k]) => !k.startsWith('_')));
     return { ...sinInternas, qty: cantidadValida(sinInternas.qty) };
   });

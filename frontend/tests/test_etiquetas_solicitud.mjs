@@ -39,17 +39,23 @@ console.log('--- TEST 3: paridad de pctAnticipoDeModalidad con el backend (R2) -
     [null, null], ['Otro', null],
     ['  CONTADO ', 100], ['CRÉDITO', 0], ['Credito 30 Dias', 0], ['cr. 90 dias', 0], ['', null], ['   ', null],
     [undefined, null], ['Credito 30d', 0], ['Adelanto 50%', null],
+    // R2 del backend: todo lo que empiece por 'cr' es crédito (también 'Cruce de cuentas'); ancho completo vía NFKD.
+    ['Cruce de cuentas', 0], ['Ｃｒｅｄｉｔｏ 30 dias', 0], ['Credito 2 cuotas', 0],
   ];
   for (const [v, esperado] of casos) assert.equal(pctAnticipoDeModalidad(v), esperado, String(v));
 }
 
-console.log('--- TEST 4: la etiqueta dice Crédito exactamente cuando el anticipo es 0 ---');
+console.log('--- TEST 4: anticipo 0 exactamente cuando el predicado único dice crédito; la etiqueta nunca lo inventa ---');
 {
   const valores = [...MODALIDADES_PAGO, 'Credito 30 Dias', 'Credito 30d', 'Credito 60d', 'cr. 90 dias', 'Adelanto 50%',
-    'Contra entrega', 'Descreditos'];
+    'Contra entrega', 'Descreditos', 'Cruce de cuentas', 'Credito 2 cuotas', 'Ｃｒｅｄｉｔｏ 30 dias', 'Pago a credito'];
   for (const v of valores) {
-    assert.equal(etiquetaModalidad(v).startsWith('Crédito'), pctAnticipoDeModalidad(v) === 0, v);
+    assert.equal(pctAnticipoDeModalidad(v) === 0, etiquetasVentas.esModalidadCredito(v), v);
+    // Si la etiqueta dice 'Crédito', el backend la cobra como crédito (0%).
+    if (etiquetaModalidad(v).startsWith('Crédito')) assert.equal(pctAnticipoDeModalidad(v), 0, v);
   }
+  // 'Cruce de cuentas' se cobra como crédito (backend) pero su etiqueta no dice 'Crédito' (decisión documentada).
+  assert.equal(etiquetaModalidad('Cruce de cuentas'), 'Cruce de cuentas');
   // Todas las modalidades del formulario tienen su % salvo 'Otro' (la pantalla usa 60, R2).
   assert.deepEqual(MODALIDADES_PAGO.map(pctAnticipoDeModalidad), [100, 60, 0, 0, null]);
 }

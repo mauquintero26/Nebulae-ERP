@@ -122,6 +122,9 @@ console.log('--- TEST 7: puedeReiniciar ---');
   for (const e of ['CANCELADA', 'BORRADOR', 'ASIGNADA', 'COTIZADA', 'N/A_SOPORTE', 'ALGO']) {
     assert.equal(puedeReiniciar({ estado: e }, sin), false, e);
   }
+  // un ticket de Soporte Técnico no se reinicia, aunque su estado sea de los que sí
+  assert.equal(puedeReiniciar({ estado: 'PENDIENTE_CONFIRMACION', tipo_solicitud: 'Soporte Tecnico' }, sin), false);
+  assert.equal(puedeReiniciar({ estado: 'CONFIRMADA', tipo_solicitud: 'Soporte Tecnico' }, sin), false);
   assert.equal(puedeReiniciar(null, sin), false);
   assert.equal(puedeReiniciar(undefined), false);
 }
@@ -240,6 +243,14 @@ console.log('--- TEST 9: resumen de la cancelación (U18+H31) ---');
   // una fecha sin zona (formato viejo del API) se lee como UTC
   r = resumenCancelacion({ se_conserva_en_papelera: false, purga_programada: '2026-11-05T03:00:00' }, []);
   assert.equal(r.papelera, 'Se eliminará definitivamente el 04/11/2026 si no la restauras desde la Papelera');
+  r = resumenCancelacion({ se_conserva_en_papelera: false, purga_programada: '2026-11-05 03:00:00.123456' }, []);
+  assert.equal(r.papelera, 'Se eliminará definitivamente el 04/11/2026 si no la restauras desde la Papelera');
+  // una fecha de calendario (sin hora) es ese mismo día: no se corre a la víspera por la zona
+  r = resumenCancelacion({ se_conserva_en_papelera: false, purga_programada: '2026-11-03' }, []);
+  assert.equal(r.papelera, 'Se eliminará definitivamente el 03/11/2026 si no la restauras desde la Papelera');
+  // una fecha inválida no se muestra (cae al texto sin purga)
+  r = resumenCancelacion({ se_conserva_en_papelera: false, purga_programada: 'no es fecha' }, []);
+  assert.equal(r.papelera, 'No se elimina automáticamente: no tiene fecha de envío a la Papelera');
 
   // j) entradas vacías
   r = resumenCancelacion(null, null);

@@ -70,6 +70,17 @@ console.log('--- TEST 3: agregarLinea (fusión por sku y por texto libre normali
   // lista vacía o ausente
   r = agregarLinea(undefined, lineaTextoLibre('Algo'));
   assert.deepEqual([r.lineas.length, r.indice, r.fusionada], [1, 0, false]);
+
+  // una línea en blanco (sin nombre y sin sku) no se agrega: indice -1 y una copia de la lista
+  for (const blanca of [lineaTextoLibre('   '), { product_name: '', qty: 1, sku_id: null }, {}, null]) {
+    r = agregarLinea(base, blanca);
+    assert.deepEqual([r.lineas, r.indice, r.fusionada], [base, -1, false], JSON.stringify(blanca));
+    assert.notEqual(r.lineas, base, 'arreglo nuevo');
+  }
+  // con sku sí se agrega aunque no traiga nombre (el catálogo la identifica)
+  r = agregarLinea(base, { product_name: '', qty: 1, sku_id: 9 });
+  assert.deepEqual([r.lineas.length, r.indice, r.fusionada], [3, 2, false]);
+  assert.deepEqual(base, antes);
 }
 
 console.log('--- TEST 4: cantidadValida (entero >= 1) ---');
@@ -127,6 +138,10 @@ console.log('--- TEST 7: lineasParaEnviar ---');
   // un pendiente de solo espacios se ignora
   assert.equal(lineasParaEnviar(lineas, '   ').length, 2);
   assert.equal(lineasParaEnviar(lineas).length, 2);
+  // las líneas sin nombre y sin sku no viajan; una con sku sí
+  r = lineasParaEnviar([...lineas, { product_name: '  ', qty: 2, sku_id: null }, { _nuevo: true }, null,
+    { product_name: '', qty: '4', sku_id: 9 }], '');
+  assert.deepEqual(r.map((l) => [l.product_name, l.qty, l.sku_id]), [['Pintura', 1, 1], ['Brocha', 3, null], ['', 4, 9]]);
   // un pendiente igual a un texto libre que ya está se suma a esa línea (misma regla que agregarLinea)
   r = lineasParaEnviar(lineas, 'BROCHA');
   assert.deepEqual([r.length, r[1].qty], [2, 4]);
