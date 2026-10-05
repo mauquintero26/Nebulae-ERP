@@ -42,6 +42,13 @@ console.log('--- COT-LISTA TEST 3: pedidoVigente / soloPedidosCancelados ---');
   assert.equal(pedidoVigente(conVigente).numero, 'PVEN-2');
   assert.equal(soloPedidosCancelados(conVigente), false);
 
+  // B5: con dos vigentes (dato viejo) es el mas NUEVO, como _pven_vigente_de_cotizacion del servidor (el GET los trae
+  // por id, del mas viejo al mas nuevo).
+  const dosVigentes = { pedidos_venta: [{ estado: 'EN_PROCESO', numero: 'PVEN-1' }, null,
+    { estado: 'CANCELADO', numero: 'PVEN-2' }, { estado: 'PENDIENTE_COMPRA', numero: 'PVEN-3' },
+    { estado: 'CANCELADO', numero: 'PVEN-4' }] };
+  assert.equal(pedidoVigente(dosVigentes).numero, 'PVEN-3');
+
   const soloCancelados = { pedidos_venta: [{ estado: 'CANCELADO', numero: 'PVEN-1' }] };
   assert.equal(pedidoVigente(soloCancelados), null);
   assert.equal(soloPedidosCancelados(soloCancelados), true);

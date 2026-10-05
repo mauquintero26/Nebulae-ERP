@@ -118,8 +118,16 @@ export const TRANSICIONES_PEDIDO_PATCH = congelar({
 
 const tiene = (obj, clave) => Object.prototype.hasOwnProperty.call(obj, clave);
 
+/**
+ * B2: codigos que no estan en ninguna tabla de documentos pero se muestran (EN_GESTION esta en el filtro del Hub,
+ * ESTADOS_NO_RESOLUCION): su nombre con tilde, en vez del respaldo humanizado ('En gestion'). Inmutable.
+ * @type {Readonly<Record<string, string>>}
+ */
+const ETIQUETAS_SIN_TABLA = congelar({ EN_GESTION: 'En gestión' });
+
 /** 'PENDIENTE_ALGO' -> 'Pendiente algo' (igual que etiqueta_estado del backend); null/undefined/'' -> ''. */
 function humanizar(e) {
+  if (typeof e === 'string' && tiene(ETIQUETAS_SIN_TABLA, e)) return ETIQUETAS_SIN_TABLA[e];
   const texto = e === null || e === undefined ? '' : String(e).trim().replace(/_/g, ' ').toLowerCase();
   return texto.charAt(0).toUpperCase() + texto.slice(1);
 }

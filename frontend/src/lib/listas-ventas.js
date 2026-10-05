@@ -32,9 +32,13 @@ export function diasAlerta(cfg, clave, porDefecto = 2) {
 
 const pedidosDe = (cot) => (Array.isArray(cot?.pedidos_venta) ? cot.pedidos_venta.filter((v) => v && typeof v === 'object') : []);
 
-/** El primer pedido de la cotizacion que no esta CANCELADO, o null. */
+/**
+ * B5: el pedido vigente (no CANCELADO) mas NUEVO de la cotizacion, o null; el mismo que elige el servidor
+ * (_pven_vigente_de_cotizacion). El GET los trae por id, del mas viejo al mas nuevo.
+ */
 export function pedidoVigente(cot) {
-  return pedidosDe(cot).find((v) => v.estado !== 'CANCELADO') || null;
+  const vigentes = pedidosDe(cot).filter((v) => v.estado !== 'CANCELADO');
+  return vigentes.length > 0 ? vigentes[vigentes.length - 1] : null;
 }
 
 /** La cotizacion tuvo pedidos y todos estan CANCELADO (se puede ajustar y reenviar: cuenta como activa). */

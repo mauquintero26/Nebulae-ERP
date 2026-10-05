@@ -20,6 +20,7 @@ import {
   transicionesPedido,
   esPedidoVigente,
   esCotizacionActiva,
+  humanizarCodigo,
 } from '../src/lib/estados-pedido.js';
 
 // [estado, etiqueta, paso, backend que lo pone]. Lineas de la base de la Tarea 2: se desplazan con las tareas siguientes.
@@ -85,6 +86,10 @@ console.log('--- TEST 3: una clave desconocida se humaniza y sale en gris ---');
   // las claves del prototipo no son estados
   assert.equal(infoEstadoPedido('constructor').label, 'Constructor');
   assert.equal(infoEstadoPedido('toString').label, 'Tostring');
+  // B2: EN_GESTION (filtro del Hub) no esta en ninguna tabla de documentos: sale con tilde, no 'En gestion'.
+  assert.equal(infoEstadoPedido('EN_GESTION').label, 'En gestión');
+  assert.equal(humanizarCodigo('EN_GESTION'), 'En gestión');
+  assert.deepEqual(infoEstadoPedido('EN_GESTION').clases, { bg: 'bg-gray-100', text: 'text-gray-700', border: 'border-gray-200' });
 }
 
 console.log('--- TEST 4: pasoPedido ubica cada estado en uno de los 5 pasos (o -1 si esta cancelado/devuelto) ---');
