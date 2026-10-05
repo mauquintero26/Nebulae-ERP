@@ -30,7 +30,33 @@ export function diasAlerta(cfg, clave, porDefecto = 2) {
   return Number.isFinite(n) && n > 0 ? n : porDefecto;
 }
 
-const pedidosDe = (cot) => (Array.isArray(cot?.pedidos_venta) ? cot.pedidos_venta.filter((v) => v && typeof v === 'object') : []);
+/**
+ * H16: comparte una petición entre los que la piden casi a la vez. Devuelve una función que, mientras la última
+ * petición tenga menos de `vigenciaMs` (desde que se pidió), devuelve esa misma promesa en vez de pedir otra vez: un
+ * montaje doble de la pantalla o un 'Actualizar' seguido piden la configuración una sola vez. Un error no se guarda (el
+ * siguiente llamado vuelve a pedir) y el error tardío de una petición vieja no borra la nueva. Un error síncrono de
+ * `pedir` llega como promesa rechazada.
+ * @template T
+ * @param {() => Promise<T>} pedir
+ * @param {{ vigenciaMs?: number, reloj?: () => number }} [opciones]
+ * @returns {() => Promise<T>}
+ */
+export function compartirPeticion(pedir, { vigenciaMs = 60000, reloj = Date.now } = {}) {
+  /** @type {{ promesa: Promise<T>, desde: number } | null} */
+  let actual = null;
+  return () => {
+    const ahora = reloj();
+    if (actual && ahora - actual.desde < vigenciaMs) return actual.promesa;
+    const entrada = { promesa: Promise.resolve().then(pedir), desde: ahora };
+    actual = entrada;
+    entrada.promesa.catch(() => {
+      if (actual === entrada) actual = null;
+    });
+    return entrada.promesa;
+  };
+}
+
+const pedidosDe =(cot) => (Array.isArray(cot?.pedidos_venta) ? cot.pedidos_venta.filter((v) => v && typeof v === 'object') : []);
 
 /**
  * B5: el pedido vigente (no CANCELADO) mas NUEVO de la cotizacion, o null; el mismo que elige el servidor
@@ -337,18 +363,25 @@ export function resumenCancelacionSolicitudes(resultados, omitidas = []) {
 }
 
 /**
- * N4: cómo se ve una solicitud en la Papelera. El servidor manda `dias_restantes` (null si la solicitud se conserva
- * porque tiene cotizaciones, pedidos o un lead vinculados) y `tiene_documentos`. Sin documentos hay cuenta regresiva
- * ('20 días para eliminar', urgente desde 5); con documentos se conserva y no se puede eliminar definitivamente. Sin
- * `dias_restantes` (null o ausente) se conserva: 'Se conserva' y 'Eliminar permanentemente' nunca van juntos.
+ * N4: cómo se ve una solicitud en la Papelera. El servidor manda `tiene_documentos` y `dias_restantes`, que es null
+ * cuando la purga no la va a borrar: porque tiene cotizaciones, pedidos o un lead vinculados, o (desde T2B) porque no
+ * tiene `eliminada_at` (cancelada con la pastilla vieja). 'Eliminar permanentemente' sale de `tiene_documentos`, no de
+ * `dias_restantes`:
+ *  - con documentos se conserva y no se puede eliminar definitivamente;
+ *  - sin documentos y sin `dias_restantes` no se elimina sola, pero un administrador la puede eliminar;
+ *  - sin documentos y con `dias_restantes` hay cuenta regresiva ('20 días para eliminar', urgente desde 5).
+ * 'Se conserva' y 'Eliminar permanentemente' nunca van juntos (sin la fila, tampoco se ofrece eliminar).
  * @returns {{conservada: boolean, texto: string, nota: string, urgente: boolean, puedeEliminar: boolean}}
  */
 export function estadoEnPapelera(sc) {
-  const dias = sc?.dias_restantes;
-  if (dias === null || dias === undefined) {
+  if (!esObjeto(sc) || sc.tiene_documentos) {
     return { conservada: true, texto: 'Se conserva (tiene documentos vinculados)', nota: '', urgente: false, puedeEliminar: false };
   }
-  return { conservada: false, texto: `${dias} ${dias === 1 ? 'día' : 'días'}`, nota: 'para eliminar', urgente: dias <= 5, puedeEliminar: !sc?.tiene_documentos };
+  const dias = sc.dias_restantes;
+  if (dias === null || dias === undefined) {
+    return { conservada: false, texto: 'No se elimina automáticamente: no tiene fecha de envío a la Papelera', nota: '', urgente: false, puedeEliminar: true };
+  }
+  return { conservada: false, texto: `${dias} ${dias === 1 ? 'día' : 'días'}`, nota: 'para eliminar', urgente: dias <= 5, puedeEliminar: true };
 }
 
 /**
