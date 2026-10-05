@@ -7,6 +7,7 @@ rastro. Este modulo es puro (sin DB ni FastAPI) para poder probar la comparacion
 """
 import copy
 import datetime
+import re
 from decimal import Decimal, InvalidOperation
 
 # Columnas que se comparan por documento: nombre -> etiqueta que ve el usuario. Quedan
@@ -52,6 +53,11 @@ CAMPOS = {
 }
 
 NOMBRE_ACCION = {"SC": "Solicitud actualizada", "COT": "Cotización actualizada", "VEN": "Pedido actualizado"}
+
+# H26: en una Solicitud el cliente pide productos; los precios aparecen en la Cotizacion. Las lineas de la SC llegan con
+# unit_price_cop 0 desde solicitud-client y productos-solicitud, asi que en su Actividad no se muestra ni se compara el
+# precio ('Nivel laser ×1', no '... a $0'). Si algun dia la SC tiene precios propios, se quita de aqui.
+_SIN_PRECIO = {"SC"}
 
 _DINERO = {"subtotal_cop", "total_cop", "anticipo_cop", "saldo_cop"}
 _TASA = {"trm_rate"}
@@ -180,9 +186,9 @@ def _cambio(campo, etiqueta, antes, despues):
     return {"campo": campo, "etiqueta": etiqueta, "antes": antes, "despues": despues}
 
 
-def _resumen_linea(linea):
+def _resumen_linea(linea, con_precio=True):
     cantidad = f" ×{_qty(linea['qty'])}" if linea["qty"] is not None else ""
-    precio = f" a {_miles(linea['precio'])}" if linea["precio"] is not None else ""
+    precio = f" a {_miles(linea['precio'])}" if con_precio and linea["precio"] is not None else ""
     return f"{linea['nombre']}{cantidad}{precio}"
 
 
@@ -198,22 +204,24 @@ def _indexar(lineas):
     return indice
 
 
-def _cambios_productos(antes, despues):
+def _cambios_productos(antes, despues, con_precio=True):
+    """Cambios linea por linea. con_precio=False (SC, H26): sin ' a $X' en agregados y eliminados y sin comparar el
+    precio unitario ni el total de la linea; la cantidad y el vinculo al catalogo si."""
     ia, idx = _indexar(antes), _indexar(despues)
     cambios = []
     for clave, n in idx.items():
         a = ia.get(clave)
         if a is None:
-            cambios.append(_cambio("productos", "Producto agregado", None, _resumen_linea(n)))
+            cambios.append(_cambio("productos", "Producto agregado", None, _resumen_linea(n, con_precio)))
             continue
         nombre = n["nombre"]
         if a["qty"] != n["qty"]:
             cambios.append(_cambio("productos", f"{nombre} — cantidad", _qty(a["qty"]), _qty(n["qty"])))
-        if a["precio"] != n["precio"]:
+        if con_precio and a["precio"] != n["precio"]:
             cambios.append(_cambio("productos", f"{nombre} — precio unitario",
                                    _miles(a["precio"]) if a["precio"] is not None else None,
                                    _miles(n["precio"]) if n["precio"] is not None else None))
-        elif a["qty"] == n["qty"] and a["total"] != n["total"]:
+        elif con_precio and a["qty"] == n["qty"] and a["total"] != n["total"]:
             cambios.append(_cambio("productos", f"{nombre} — total",
                                    _miles(a["total"]) if a["total"] is not None else None,
                                    _miles(n["total"]) if n["total"] is not None else None))
@@ -226,7 +234,7 @@ def _cambios_productos(antes, despues):
             ))
     for clave, a in ia.items():
         if clave not in idx:
-            cambios.append(_cambio("productos", "Producto eliminado", _resumen_linea(a), None))
+            cambios.append(_cambio("productos", "Producto eliminado", _resumen_linea(a, con_precio), None))
     return cambios
 
 
@@ -247,7 +255,7 @@ def comparar(entidad, antes, despues, usuarios=None):
         if a == d:
             continue
         if campo == "productos":
-            cambios.extend(_cambios_productos(a, d))
+            cambios.extend(_cambios_productos(a, d, con_precio=entidad not in _SIN_PRECIO))
         else:
             cambios.append(_cambio(campo, etiqueta, _mostrar(campo, a, usuarios), _mostrar(campo, d, usuarios)))
     if len(cambios) > CAMBIOS_MAX:
@@ -264,6 +272,41 @@ def cambian_productos(antes, despues):
     """True si cambio algo de los productos que ve el cliente (linea agregada o quitada, nombre,
     cantidad o precio). Vincular una linea al catalogo (sku) no cuenta, ni reordenarlas."""
     return any(c["campo"] == "productos" for c in _cambios_productos(_lineas(antes), _lineas(despues)))
+
+
+# H26: renglones VIEJOS de la Actividad de una SC, de antes de _SIN_PRECIO. ' a $X' es el sufijo que dejaba
+# _resumen_linea (_miles: '$1.234.567', '-$5.000'; con decimales, ',5').
+_PRECIO_AL_FINAL = re.compile(r" a -?\$[\d.]+(?:,\d+)?$")
+_ETIQUETAS_CON_RESUMEN = ("Producto agregado", "Producto eliminado")
+_SUFIJOS_DE_PRECIO = (" — precio unitario", " — total")
+
+
+def _es_cambio_de_precio_de_linea(cambio) -> bool:
+    """Entrada '{producto} — precio unitario' o '{producto} — total' (las que la SC ya no registra)."""
+    return (isinstance(cambio, dict) and cambio.get("campo") == "productos"
+            and isinstance(cambio.get("etiqueta"), str) and cambio["etiqueta"].endswith(_SUFIJOS_DE_PRECIO))
+
+
+def limpiar_precios_sc(cambios):
+    """Los `cambios` de un renglon viejo de SC sin precios (sobre una copia), o None si no hay nada que quitar.
+
+    En 'Producto agregado' / 'Producto eliminado' quita el ' a $X' final de antes y despues, y quita las entradas
+    '— precio unitario' y '— total' de los productos. Lo demas (cantidad, vinculo al catalogo, notas...) no se toca."""
+    if not isinstance(cambios, list):
+        return None
+    nuevos, cambio_algo = [], False
+    for c in copy.deepcopy(cambios):
+        if _es_cambio_de_precio_de_linea(c):
+            cambio_algo = True
+            continue
+        if isinstance(c, dict) and c.get("campo") == "productos" and c.get("etiqueta") in _ETIQUETAS_CON_RESUMEN:
+            for lado in ("antes", "despues"):
+                if isinstance(c.get(lado), str):
+                    limpio = _PRECIO_AL_FINAL.sub("", c[lado])
+                    if limpio != c[lado]:
+                        c[lado], cambio_algo = limpio, True
+        nuevos.append(c)
+    return nuevos if cambio_algo else None
 
 
 def _titulo_edicion(entidad, cambios):
