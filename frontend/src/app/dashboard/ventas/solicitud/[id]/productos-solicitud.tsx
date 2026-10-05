@@ -71,9 +71,14 @@ export function ProductosSolicitud({
   }
 
   return (
-    <div id="productos-solicitud" className="scroll-mt-6">
-      <div className="flex items-center justify-between mb-2">
-        <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Productos a cotizar</p>
+    <div>
+      {/* U13: tarjeta propia, justo debajo del cliente. El editor y el aviso sin productos van dentro (el bloque no salta
+          de tamaño) y el motivo del bloqueo, debajo. El ancla la usa abrirEditorProductos de la página. */}
+      <div id="productos-solicitud" className="scroll-mt-6 bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+      <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-2">
+        <p className="text-sm font-black text-slate-800">
+          Productos a cotizar <span className="font-bold text-slate-400">({lista.length})</span>
+        </p>
         {editable && !editando && lista.length > 0 && (
           <button type="button" onClick={() => setEditando(true)} className="flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-800">
             <Edit2 size={12} /> Editar productos
@@ -82,7 +87,7 @@ export function ProductosSolicitud({
       </div>
 
       {editando ? (
-        <div className="border border-indigo-200 bg-indigo-50/40 rounded-xl p-3 space-y-3">
+        <div className="m-4 border border-indigo-200 bg-indigo-50/40 rounded-xl p-3 space-y-3">
           {borrador.length > 0 ? (
             <div className="space-y-1.5">
               {borrador.map((p, i) => (
@@ -142,26 +147,32 @@ export function ProductosSolicitud({
           </div>
         </div>
       ) : lista.length > 0 ? (
-        <div className="border border-slate-200 rounded-xl overflow-hidden">
-          <table className="w-full text-xs">
-            <thead className="bg-slate-50 text-slate-400 uppercase font-black">
-              <tr><th className="px-3 py-2 text-left">Producto</th><th className="px-3 py-2 text-right">Cant.</th></tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              {lista.map((p, i) => (
-                <tr key={i}>
-                  <td className="px-3 py-2 font-medium text-slate-700">
-                    {nombreDe(p)}
-                    {!p.sku_id && <span className="ml-1.5 text-[10px] font-bold text-slate-400 uppercase">texto libre</span>}
-                  </td>
-                  <td className="px-3 py-2 text-right text-slate-600">{p.qty ?? 1}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        // U13: nombre completo (nunca cortado), si es del catálogo o texto libre, y la cantidad en grande.
+        <table className="w-full table-fixed text-sm">
+          <thead className="bg-slate-50 text-[11px] text-slate-400 uppercase font-black">
+            <tr>
+              <th className="w-10 px-4 py-2 text-left">#</th>
+              <th className="px-3 py-2 text-left">Producto</th>
+              <th className="w-28 px-4 py-2 text-right">Cantidad</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {lista.map((p, i) => (
+              <tr key={i}>
+                <td className="px-4 py-3 align-top font-bold text-slate-400">{i + 1}</td>
+                <td className="px-3 py-3 align-top">
+                  <p className="text-[15px] font-semibold text-slate-800 break-words">{nombreDe(p)}</p>
+                  <span className={`inline-block mt-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold ${p.sku_id ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                    {p.sku_id ? 'Catálogo' : 'Texto libre'}
+                  </span>
+                </td>
+                <td className="px-4 py-3 align-top text-right text-lg font-black text-slate-800 tabular-nums">{p.qty ?? 1}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       ) : (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+        <div className="m-4 bg-amber-50 border border-amber-200 rounded-xl p-4">
           <p className="flex items-start gap-2 text-sm font-bold text-amber-800">
             <AlertTriangle size={16} className="shrink-0 mt-0.5" /> Esta solicitud no tiene productos
           </p>
@@ -175,6 +186,7 @@ export function ProductosSolicitud({
           )}
         </div>
       )}
+      </div>
 
       {!editable && motivoBloqueo && <p className="text-[11px] text-slate-400 mt-1.5">{motivoBloqueo}</p>}
     </div>

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import {
   ArrowLeft, ArrowRight, ChevronRight, Edit2, Save, Trash2, CheckCircle2,
   User, Phone, Mail, MapPin, MessageCircle, RefreshCw, AlertCircle,
-  FileText, Activity, XCircle, MessageSquare, RotateCcw, Filter, Send, Plus,
+  FileText, Activity, XCircle, MessageSquare, RotateCcw, Filter, Send, Plus, Sparkles,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
@@ -105,7 +105,8 @@ function SolicitudDetalleContent() {
   const [assigning, setAssigning] = useState(false);
   const [assignUserId, setAssignUserId] = useState<number | ''>('');
 
-  const [panelTab, setPanelTab] = useState<'acciones' | 'actividad' | 'chatter' | 'ia'>('acciones');
+  // U12: tres pestañas; Actividad (con el siguiente paso y el contacto arriba) se abre sola.
+  const [panelTab, setPanelTab] = useState<'actividad' | 'chatter' | 'ia'>('actividad');
   const [activityFilter, setActivityFilter] = useState<string>('all');
 
   // Usuarios para el selector de asesor en modo edicion (mismo endpoint y filtro de
@@ -433,6 +434,8 @@ function SolicitudDetalleContent() {
   const asesoresElegibles = usuarios.filter(u => esAsesorElegible(u.role));
   const yoPuedoSerAsesor = me.id !== null && asesoresElegibles.some(u => u.id === me.id);
   const LINK_ACCION = 'flex items-center justify-center gap-2 rounded-xl font-bold px-6 py-3 text-sm text-white shadow-md';
+  // H5/C19: el wa.me del cliente (null si el teléfono no sirve: entonces no se pinta el enlace).
+  const whatsappCliente = waUrl(solicitud?.customer_phone);
 
   function abrirEditorProductos() {
     setEditandoProductos(true);
@@ -676,6 +679,28 @@ function SolicitudDetalleContent() {
             </div>
           </div>
 
+          {/* U13: los productos van justo debajo del cliente y siguen a la vista en modo Editar (mismas props). */}
+          {!isSoporte && solicitud && (
+            <ProductosSolicitud
+              scId={solicitud.id}
+              productos={productosSC}
+              editable={puedeEditarProductos}
+              motivoBloqueo={cotizacionesActivas.length > 0
+                ? `Los productos ya pasaron a la cotización ${cotizacionesActivas[0].numero}: ajústalos allí con "Re-Cotizar".`
+                : solicitud.estado === 'CANCELADA' ? 'La solicitud está cancelada.' : undefined}
+              anulaConfirmacion={['PENDIENTE_CONFIRMACION', 'CONFIRMADA'].includes(solicitud.estado)}
+              editando={editandoProductos}
+              setEditando={setEditandoProductos}
+              currentUser={currentUser}
+              // H29: el PATCH ya devuelve la SC completa: se pinta de inmediato (sin esperar una recarga) y las
+              // actividades, cotizaciones y pedidos se refrescan despues, sin spinner de pagina.
+              onGuardado={(scNueva) => {
+                if (scNueva) setSolicitud((prev: any) => ({ ...prev, ...scNueva }));
+                void loadSolicitud({ silencioso: true });
+              }}
+            />
+          )}
+
           {/* Edit mode */}
           {editMode ? (
             <div className="space-y-3">
@@ -710,6 +735,13 @@ function SolicitudDetalleContent() {
             </div>
           ) : (
             <>
+              {/* U14: las notas con el fondo de las demás tarjetas (no parecen una advertencia) y con sus saltos de línea. */}
+              {solicitud?.notas && (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Notas</p>
+                  <p className="text-sm text-slate-700 whitespace-pre-wrap break-words">{solicitud.notas}</p>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 {[{ l: 'Asesor', v: solicitud?.advisor_name || '-' }, { l: 'Modalidad Pago', v: etiquetaModalidad(solicitud?.modalidad_pago) || '-' }, { l: 'Fecha Solicitud', v: fDate(solicitud?.fecha_solicitud) }, { l: 'Vencimiento', v: fDate(solicitud?.fecha_vencimiento) }].map(item => (
                   <div key={item.l} className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3"><p className="text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider">{item.l}</p><p className="font-bold text-sm text-slate-800">{item.v}</p></div>
@@ -724,27 +756,6 @@ function SolicitudDetalleContent() {
                   </div>
                 </div>
               )}
-              {!isSoporte && solicitud && (
-                <ProductosSolicitud
-                  scId={solicitud.id}
-                  productos={productosSC}
-                  editable={puedeEditarProductos}
-                  motivoBloqueo={cotizacionesActivas.length > 0
-                    ? `Los productos ya pasaron a la cotización ${cotizacionesActivas[0].numero}: ajústalos allí con "Re-Cotizar".`
-                    : solicitud.estado === 'CANCELADA' ? 'La solicitud está cancelada.' : undefined}
-                  anulaConfirmacion={['PENDIENTE_CONFIRMACION', 'CONFIRMADA'].includes(solicitud.estado)}
-                  editando={editandoProductos}
-                  setEditando={setEditandoProductos}
-                  currentUser={currentUser}
-                  // H29: el PATCH ya devuelve la SC completa: se pinta de inmediato (sin esperar una recarga) y las
-                  // actividades, cotizaciones y pedidos se refrescan despues, sin spinner de pagina.
-                  onGuardado={(scNueva) => {
-                    if (scNueva) setSolicitud((prev: any) => ({ ...prev, ...scNueva }));
-                    void loadSolicitud({ silencioso: true });
-                  }}
-                />
-              )}
-              {solicitud?.notas && <div className="bg-amber-50 border border-amber-100 rounded-xl p-4"><p className="text-xs font-black text-amber-700 uppercase mb-1.5">Notas</p><p className="text-sm text-amber-900">{solicitud.notas}</p></div>}
               <div>
                 <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Cotizaciones</p>
                 {cotizaciones.length > 0 ? (
@@ -826,35 +837,42 @@ function SolicitudDetalleContent() {
           title="Arrastrar para ajustar panel de actividades"
         />
 
-        {/* RIGHT: Acciones / Actividad / Chatter / IA */}
+        {/* RIGHT: Actividad (con el siguiente paso y contacto) / Chatter / IA */}
         <div style={{ width: rightWidth }} className="bg-slate-50/50 flex flex-col overflow-hidden shrink-0 shadow-[-10px_0_15px_-10px_rgba(0,0,0,0.05)]">
           {/* Tab bar */}
           <div className="border-b border-slate-200 px-4 pt-3 flex gap-1 bg-white flex-shrink-0">
-            {([['acciones', 'Acciones'], ['actividad', 'Actividad'], ['chatter', 'Chatter'], ['ia', '🤖 IA']] as const).map(([k, l]) => (
-              <button key={k} onClick={() => setPanelTab(k)} className={`px-4 py-2 rounded-t-lg text-sm font-bold border-b-2 transition-colors ${panelTab === k ? 'text-indigo-700 border-indigo-600 bg-indigo-50/50' : 'text-slate-500 border-transparent hover:text-slate-700'}`}>{l}</button>
+            {([['actividad', 'Actividad'], ['chatter', 'Chatter'], ['ia', 'IA']] as const).map(([k, l]) => (
+              <button key={k} type="button" onClick={() => setPanelTab(k)} className={`px-4 py-2 rounded-t-lg text-sm font-bold border-b-2 transition-colors ${panelTab === k ? 'text-indigo-700 border-indigo-600 bg-indigo-50/50' : 'text-slate-500 border-transparent hover:text-slate-700'}`}>
+                {k === 'ia' ? <span className="inline-flex items-center gap-1.5"><Sparkles size={14} />{l}</span> : l}
+              </button>
             ))}
           </div>
 
           <div className="flex-1 overflow-y-auto p-6 space-y-5">
-            {panelTab === 'acciones' && (
-              <>
-                <div>
-                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Acciones Principales</p>
-                  {renderSiguientePaso()}
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Contactar Cliente</p>
-                  <div className="grid grid-cols-3 gap-2">
-                    {waUrl(solicitud?.customer_phone) && <a href={waUrl(solicitud?.customer_phone) ?? undefined} target="_blank" rel="noreferrer" className="flex flex-col items-center gap-1.5 py-3 bg-green-50 border border-green-200 text-green-700 rounded-xl font-bold text-xs hover:bg-green-100"><MessageCircle size={18} />WhatsApp</a>}
-                    {solicitud?.customer_phone && <a href={`tel:${solicitud.customer_phone}`} className="flex flex-col items-center gap-1.5 py-3 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl font-bold text-xs hover:bg-blue-100"><Phone size={18} />Llamar</a>}
-                    {solicitud?.customer_email && <a href={`mailto:${solicitud.customer_email}?subject=Solicitud ${solicitud.numero}`} className="flex flex-col items-center gap-1.5 py-3 bg-slate-50 border border-slate-200 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-100"><Mail size={18} />Email</a>}
-                  </div>
-                </div>
-              </>
-            )}
-
             {panelTab === 'actividad' && (
-              <div>
+              <>
+                {/* U12: arriba el siguiente paso (NextStepCard ya trae la etiqueta 'Siguiente paso') y el contacto. */}
+                {renderSiguientePaso()}
+                {/* C19: enlaces directos (WhatsApp con waUrl); el registro de cada contacto se hace en el Chatter. */}
+                <div>
+                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Contactar cliente</p>
+                  {solicitud?.customer_phone || solicitud?.customer_email ? (
+                    <div className="grid grid-cols-3 gap-2">
+                      {whatsappCliente && <a href={whatsappCliente} target="_blank" rel="noreferrer" className="flex items-center justify-center gap-1.5 py-2 bg-green-50 border border-green-200 text-green-700 rounded-xl font-bold text-xs hover:bg-green-100"><MessageCircle size={16} />WhatsApp</a>}
+                      {solicitud?.customer_phone && <a href={`tel:${solicitud.customer_phone}`} className="flex items-center justify-center gap-1.5 py-2 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl font-bold text-xs hover:bg-blue-100"><Phone size={16} />Llamar</a>}
+                      {solicitud?.customer_email && <a href={`mailto:${solicitud.customer_email}?subject=Solicitud ${solicitud.numero}`} className="flex items-center justify-center gap-1.5 py-2 bg-slate-50 border border-slate-200 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-100"><Mail size={16} />Correo</a>}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500">
+                      {solicitud?.estado === 'CANCELADA'
+                        ? 'Sin teléfono ni correo registrados.'
+                        : 'Sin teléfono ni correo registrados: agrégalos con «Editar».'}
+                    </p>
+                  )}
+                </div>
+
+              {/* Ancla de 'Ver en la Actividad' (tarjeta de la solicitud cancelada, C11). */}
+              <div id="historial-actividad" className="scroll-mt-4 border-t border-slate-200 pt-5">
                 <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Historial de Actividad</p>
 
                 {/* Filtro por tipo -- "Todos" + los tipos reales presentes en esta SC */}
@@ -913,6 +931,7 @@ function SolicitudDetalleContent() {
                   </div>
                 )}
               </div>
+              </>
             )}
 
             {panelTab === 'chatter' && <ChatterTab sc={solicitud} currentUser={currentUser} />}
