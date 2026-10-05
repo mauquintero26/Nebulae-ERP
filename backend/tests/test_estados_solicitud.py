@@ -10,7 +10,8 @@
 - update_solicitud: textos de C5 (400, 409 con 'reiniciar' y 'Estado cambiado a Nueva (asesor retirado)').
 - scripts/ajustar_estados_solicitud.py: ajustar (estados heredados) y ajustar_leads (leads perdidos de solicitudes
   vivas), con la exclusion de los documentos reales (R32) y la CLI con --base (B9).
-La prueba 2 de U15 (paridad con el frontend) es de T6A.
+La prueba 2 de U15 (paridad con el frontend: frontend/src/lib/estados-solicitud.js) la agrego T6A (R16), junto con la
+paridad de pctAnticipoDeModalidad (frontend/src/lib/etiquetas-solicitud.js) con ventas_dinero (C16).
 
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_estados_solicitud
 """
@@ -18,7 +19,11 @@ import contextlib
 import datetime
 import hashlib
 import io
+import json
+import shutil
+import subprocess
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -137,6 +142,55 @@ def test_etiquetas_de_la_solicitud_son_las_del_usuario():
     assert [etiqueta_estado("SC", e) for e in ESTADOS_SC_HEREDADOS] == [
         "Cotizada", "En espera de confirmación", "Rechazada", "Vencida"]
     assert etiqueta_estado("COT", "BORRADOR") == "Borrador"
+
+
+# ─── 2) paridad con el espejo del frontend (R16, C5, C16) ───────────────────────────────────────────────────────────
+
+_FRONTEND_LIB = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib"
+
+# Casos de pct_anticipo_de_modalidad: los de test_anticipo_modalidad.py mas variantes de la agenda y de compras.
+_MODALIDADES = ["60/40 (60% anticipo - 40% pendiente)", "Contado", "  CONTADO ", "Credito 30 dias", "Credito 60 dias",
+                "Crédito 60 Días", "Credito 30 Dias", "Credito 30d", "cr. 90 dias", "CRÉDITO", "Otro", "", "   ",
+                "Adelanto 50%", "Contra entrega", None]
+
+
+def _node(archivo, cuerpo):
+    """Importa frontend/src/lib/<archivo> con node y devuelve el JSON que imprime `cuerpo` (m = el modulo)."""
+    node = shutil.which("node")
+    lib = _FRONTEND_LIB / archivo
+    if not node or not lib.exists():
+        pytest.skip(f"sin node o sin frontend/src/lib/{archivo}: no se puede comprobar la paridad")
+    script = "import(%s).then(m => { console.log(JSON.stringify(%s)); });" % (json.dumps(lib.as_uri()), cuerpo)
+    r = subprocess.run([node, "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", "--input-type=module", "-e", script],
+                       capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert r.returncode == 0, f"node fallo:\n{r.stderr}"
+    return json.loads(r.stdout)
+
+
+def test_paridad_etiquetas_solicitud_con_el_frontend():
+    from app.core.textos_actividad import ETIQUETAS_ESTADO, PASOS_SC, etiqueta_estado
+    espejo = _node("estados-solicitud.js", """{
+      labels: Object.fromEntries(Object.entries(m.ESTADOS_SC).map(([k, v]) => [k, v.label])),
+      pasos: m.PASOS_SC.map(p => p.clave),
+      desconocido: m.infoEstadoSolicitud('ALGO_NUEVO').label,
+    }""")
+    # Cada estado que el frontend etiqueta sale IGUAL del backend y por el mapa (no por el respaldo humanizado), y el
+    # backend no etiqueta estados que el frontend desconoce.
+    assert set(espejo["labels"]) == set(ETIQUETAS_ESTADO["SC"])
+    for codigo, etiqueta_front in espejo["labels"].items():
+        assert etiqueta_estado("SC", codigo) == etiqueta_front, \
+            f'{codigo}: backend {etiqueta_estado("SC", codigo)!r}, frontend {etiqueta_front!r}'
+    assert espejo["pasos"] == list(PASOS_SC)
+    # el respaldo de una clave desconocida es el mismo en los dos lados
+    assert espejo["desconocido"] == etiqueta_estado("SC", "ALGO_NUEVO")
+
+
+def test_paridad_pct_anticipo_de_modalidad_con_el_frontend():
+    from app.core.ventas_dinero import pct_anticipo_de_modalidad
+    espejo = _node("etiquetas-solicitud.js", "%s.map(v => m.pctAnticipoDeModalidad(v))" % json.dumps(_MODALIDADES))
+    backend = [None if (p := pct_anticipo_de_modalidad(v)) is None else int(p) for v in _MODALIDADES]
+    assert espejo == backend, list(zip(_MODALIDADES, backend, espejo))
+    assert backend[:4] == [60, 100, 100, 0]  # la prueba compara valores reales, no dos listas de None
 
 
 # ─── 3-8) la SC no refleja a su COT ──────────────────────────────────────────────────────────────────────────
