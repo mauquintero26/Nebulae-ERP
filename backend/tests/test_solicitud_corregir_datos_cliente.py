@@ -836,6 +836,84 @@ def test_un_interbloqueo_da_409_sin_guardar_nada(app_client, db, admin_token, us
     assert sc.customer_phone == "3000000000" and cli.phone == "3000000000" and _logs(db, "SC", sc.id) == []
 
 
+# --- Ronda 2 de T5: documentos leidos bloqueados y releidos; enlaces contados por el propio UPDATE ---------------
+
+def test_un_cambio_de_cliente_de_la_cot_entre_medio_no_mezcla_datos(app_client, db, admin_token, user_admin,
+                                                                    monkeypatch):
+    """Otra operacion pasa la COT a otra ficha justo antes de que la correccion la lea, con la COT ya cargada en la
+    sesion con el cliente viejo. Sin releerla (populate_existing) se la trataria como propia y quedaria con la ficha
+    nueva y el telefono corregido del cliente anterior: datos mezclados."""
+    import app.api.v1.erp_ventas as m_ventas
+    from sqlalchemy import text
+    from app.models.erp_documents import SalesQuotation
+    u = _u()
+    cli = _cliente(db, first_name="Alba", phone="3000000000", email=f"alba-{u}@test.com")
+    otro = _cliente(db, first_name="Beto", phone="3111111111", email=f"beto-{u}@test.com")
+    sc = _sc(db, "SC-CDC030", user_admin, cli)
+    cot = _cot(db, "COT-CDC030", sc)
+    original = m_ventas._docs_abiertos_para_contacto
+
+    def _con_carrera(db_api, sc_api):
+        vieja = db_api.get(SalesQuotation, cot.id)  # en la sesion del endpoint, todavia del cliente de la SC
+        assert vieja.customer_id == cli.id
+        db_api.execute(text("UPDATE sales_quotations SET customer_id = :otro, customer_phone = :tel WHERE id = :id"),
+                       {"otro": otro.id, "tel": otro.phone, "id": cot.id})
+        return original(db_api, sc_api)
+
+    monkeypatch.setattr(m_ventas, "_docs_abiertos_para_contacto", _con_carrera)
+    resp = _patch(app_client, admin_token, sc.id, customer_phone="3001112233")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["documentos_de_otro_cliente"] == [cot.numero]
+    assert resp.json()["documentos_actualizados"] == []
+    db.expire_all()
+    assert (cot.customer_id, cot.customer_phone) == (otro.id, otro.phone)  # sin mezclar
+    assert _logs(db, "COT", cot.id) == []
+
+
+def test_la_correccion_bloquea_la_sc_la_ficha_y_los_documentos_en_orden(app_client, db, admin_token, user_admin,
+                                                                       contador_sql):
+    cli = _cliente(db, phone="3000000000", email=f"ana-{_u()}@test.com")
+    sc = _sc(db, "SC-CDC031", user_admin, cli)
+    cot = _cot(db, "COT-CDC031", sc)
+    _pven(db, "PVEN-CDC031", "PENDIENTE_COMPRA", cot=cot)
+    with contador_sql.ventana() as v:
+        resp = _patch(app_client, admin_token, sc.id, customer_phone="3001112233")
+    assert resp.status_code == 200, resp.text
+    assert v.commits == 1
+    bloqueos = [s for s in v.sentencias if "FOR UPDATE" in s.upper()]
+    orden = []
+    for tabla in ("FROM customer_requests", "FROM customers", "FROM sales_quotations", "FROM sale_orders"):
+        posiciones = [i for i, s in enumerate(bloqueos) if tabla in s]
+        assert posiciones, f"no se bloqueo {tabla}:\n" + "\n---\n".join(bloqueos)
+        orden.append(posiciones[0])
+    assert orden == sorted(orden), "el orden debe ser SC -> ficha -> COT -> PVEN"
+
+
+def test_un_enlace_vencido_se_revoca_pero_no_se_informa(app_client, db, admin_token, user_admin):
+    """enlaces_anulados cuenta lo que el UPDATE de revocacion anulo sin vencer (RETURNING): un enlace vencido ya no
+    servia, asi que se marca como usado pero no se anuncia como anulado."""
+    from app.core.confirmation_tokens import create_confirmation_token
+    from app.models.confirmation import DocumentConfirmationToken
+    u = _u()
+    sc = _sc(db, "SC-CDC032", user_admin, estado="PENDIENTE_CONFIRMACION", customer_email=f"mal-{u}@test.com")
+    cot = _cot(db, "COT-CDC032", sc, estado="PENDIENTE_CONFIRMACION",
+               sin_confirmacion_sc_at=datetime.datetime.utcnow(), sin_confirmacion_sc_motivo="Cotización temprana")
+    token_sc = create_confirmation_token(db, "SC", sc.id)
+    token_cot = create_confirmation_token(db, "COT", cot.id)
+    for raw in (token_sc, token_cot):
+        fila = db.query(DocumentConfirmationToken).filter(
+            DocumentConfirmationToken.token_hash == hashlib.sha256(raw.encode()).hexdigest()).first()
+        fila.expires_at = datetime.datetime.utcnow() - datetime.timedelta(days=1)
+    db.commit()
+
+    resp = _patch(app_client, admin_token, sc.id, customer_email=f"bien-{u}@test.com")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["enlaces_anulados"] == []
+    assert resp.json()["estado_cambiado"] is True  # la regla de Gate 1 no depende de que el enlace siga vivo
+    assert _token_usado(db, token_sc) and _token_usado(db, token_cot)
+    assert ENLACE_COT_ANULADO not in _logs(db, "COT", cot.id, "UPDATED")[-1].extra_data["cambios"]
+
+
 # --- Ruling 1 (T5): fija el comportamiento del Bloque 1 en update_solicitud con productos y cliente a la vez -------
 
 def test_update_solicitud_con_productos_y_cliente_a_la_vez_deja_solo_el_texto_de_productos(

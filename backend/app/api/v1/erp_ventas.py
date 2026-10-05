@@ -664,15 +664,19 @@ def _docs_abiertos_para_contacto(db: Session, sc: CustomerRequest) -> list:
     abiertos (fuera de _ESTADOS_VEN_CERRADOS_PARA_CONTACTO) vinculados por sc_id o por el cot_id de CUALQUIER COT de la
     SC (como get_solicitud: un PVEN cuya COT se rechazo o se desvinculo conserva el cot_id). Por id ascendente, primero
     las COT. La correccion solo llega a los que no son de otro cliente (_es_documento_de_otro_cliente).
-    Sin FOR UPDATE (ronda 1 de T5, punto 3): update_cotizacion bloquea COT -> SC y aqui la SC ya esta bloqueada; el
-    UPDATE del flush toma la fila de todas formas, asi que las decisiones que dependen del estado de la COT no se fian de
-    esta lectura (los enlaces se cuentan y se revocan en la misma transaccion)."""
-    cots = db.query(SalesQuotation).filter(SalesQuotation.sc_id == sc.id).order_by(SalesQuotation.id.asc()).all()
+    Ronda 2 de T5: las COT y los PVEN se leen con populate_existing().with_for_update(), despues de bloquear la SC y la
+    ficha (orden SC -> ficha -> COT -> PVEN). Asi el customer_id, el estado y el contacto que se comparan son los que se
+    van a escribir: nadie los cambia entre esta lectura y el commit, y un objeto ya cargado en la sesion se relee. No es
+    un patron de bloqueo nuevo (el UPDATE del flush ya tomaba la fila de la COT en el mismo orden; solo se adelanta).
+    update_cotizacion bloquea COT -> SC al cambiar de SC o al retomar una RECHAZADA: si chocan, PostgreSQL aborta una
+    (40P01) y PATCH /cliente responde 409. Se llama dentro de su try por eso."""
+    cots = (db.query(SalesQuotation).filter(SalesQuotation.sc_id == sc.id).order_by(SalesQuotation.id.asc())
+            .populate_existing().with_for_update().all())
     filtro = SaleOrder.sc_id == sc.id
     if cots:
         filtro = filtro | SaleOrder.cot_id.in_([c.id for c in cots])
     pvens = (db.query(SaleOrder).filter(filtro, SaleOrder.estado.notin_(_ESTADOS_VEN_CERRADOS_PARA_CONTACTO))
-             .order_by(SaleOrder.id.asc()).all())
+             .order_by(SaleOrder.id.asc()).populate_existing().with_for_update().all())
     return [("COT", c) for c in cots if c.estado != "RECHAZADA"] + [("VEN", v) for v in pvens]
 
 
@@ -700,8 +704,8 @@ def _anular_confirmacion_por_cambio_de_cliente(db: Session, sc: CustomerRequest,
     anula_por_cliente), que no lo usa: alli la decision va junto con el cambio de productos y del asesor en el mismo
     PATCH. No es _confirmacion_vigente_sc: el Bloque 1 tambien anula una marca gate1 heredada fuera de CONFIRMADA. Sin
     commit (_log y revoke_pending_tokens con commit=False).
-    Devuelve {confirmacion_anulada, estado_cambiado, enlace_anulado}; enlace_anulado = habia un enlace de la SC que el
-    cliente todavia podia usar (contar_tokens_vigentes antes de revocar; ronda 1 de T5, punto 4)."""
+    Devuelve {confirmacion_anulada, estado_cambiado, enlace_anulado}; enlace_anulado = la revocacion anulo un enlace de
+    la SC que el cliente todavia podia usar (contado por el propio UPDATE con RETURNING; ronda 2 de T5)."""
     estado_cambiado = _gate1_reinicia_estado(db, sc, old_estado)
     if not estado_cambiado and sc.gate1_confirmed_at is None:
         return {"confirmacion_anulada": False, "estado_cambiado": False, "enlace_anulado": False}
@@ -711,9 +715,8 @@ def _anular_confirmacion_por_cambio_de_cliente(db: Session, sc: CustomerRequest,
              old_estado=old_estado, new_estado=sc.estado, user_name=autor, commit=False)
     else:
         _log(db, "SC", sc.id, sc.numero, "UPDATED", aviso, user_name=autor, commit=False)
-    from app.core.confirmation_tokens import contar_tokens_vigentes, revoke_pending_tokens
-    vigentes = contar_tokens_vigentes(db, "SC", sc.id)
-    revoke_pending_tokens(db, "SC", sc.id, commit=False)
+    from app.core.confirmation_tokens import revoke_pending_tokens
+    vigentes = revoke_pending_tokens(db, "SC", sc.id, commit=False, contar_vigentes=True)
     sc.gate1_confirmed_at = None
     return {"confirmacion_anulada": True, "estado_cambiado": estado_cambiado, "enlace_anulado": vigentes > 0}
 
@@ -1337,14 +1340,16 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
     contacto_sc_antes = _cliente_de_la_solicitud(sc)
     foto_cli = cambios_documento.tomar_foto(cliente, "CLIENTE") if cliente is not None else None
     ciudad_antes = cliente.city if cliente is not None else None
-    docs, docs_de_otro_cliente = [], []
-    for entidad, doc in _docs_abiertos_para_contacto(db, sc):
-        if _es_documento_de_otro_cliente(doc, sc):
-            docs_de_otro_cliente.append(doc.numero)
-        else:
-            docs.append((entidad, doc, cambios_documento.tomar_foto(doc, entidad), _cliente_de_la_solicitud(doc)))
     origen = {"tipo": "SC", "id": sc.id, "numero": sc.numero}
+    docs, docs_de_otro_cliente = [], []
     try:
+        # Los documentos se leen bloqueados (SC -> ficha -> COT -> PVEN) y dentro del try: un interbloqueo (40P01) al
+        # tomarlos tambien responde 409. La foto 'antes' y la decision de quien es de otro cliente salen de esta lectura.
+        for entidad, doc in _docs_abiertos_para_contacto(db, sc):
+            if _es_documento_de_otro_cliente(doc, sc):
+                docs_de_otro_cliente.append(doc.numero)
+            else:
+                docs.append((entidad, doc, cambios_documento.tomar_foto(doc, entidad), _cliente_de_la_solicitud(doc)))
         # Desde aqui hasta el commit: el UPDATE de la ficha sale en el flush, donde salta el indice unico del correo.
         for clave, valor in nuevos.items():
             col_doc, col_cli = _CONTACTO_CLIENTE[clave]
@@ -1398,16 +1403,15 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
         if cambios_cli:
             clientes.log_cliente(db, cliente, f"Datos de contacto corregidos desde la solicitud {sc.numero}: "
                                               f"{_titulo_contacto(cambios_cli)}", cambios_cli, origen, autor)
-        from app.core.confirmation_tokens import contar_tokens_vigentes, revoke_pending_tokens
+        from app.core.confirmation_tokens import revoke_pending_tokens
         for entidad, doc, cambios, contacto_antes in docs_cambiados:
             titulo_doc = _titulo_contacto(cambios)
-            # El estado de la COT se leyo sin bloqueo (ver _docs_abiertos_para_contacto): se revoca siempre que cambio su
-            # correo o telefono, salvo CONFIRMADA (R18: el cliente ya confirmo precios), y solo se informa un enlace que
-            # el cliente todavia podia usar (contado antes de revocar, punto 4 de la ronda 1).
+            # Se revoca siempre que cambio el correo o el telefono de la COT, salvo CONFIRMADA (R18: el cliente ya
+            # confirmo precios), y solo se informa un enlace que el cliente todavia podia usar: los que este mismo UPDATE
+            # revoco sin vencer (RETURNING, ronda 2).
             if (entidad == "COT" and doc.estado != "CONFIRMADA"
                     and _cliente_de_la_solicitud(doc) != contacto_antes):
-                vigentes = contar_tokens_vigentes(db, "COT", doc.id)
-                revoke_pending_tokens(db, "COT", doc.id, commit=False)
+                vigentes = revoke_pending_tokens(db, "COT", doc.id, commit=False, contar_vigentes=True)
                 if vigentes:
                     cambios = cambios + [dict(_ENLACE_COT_ANULADO)]
                     enlaces_anulados.append(doc.numero)

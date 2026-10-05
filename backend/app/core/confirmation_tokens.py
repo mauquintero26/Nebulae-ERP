@@ -54,7 +54,8 @@ def verify_and_consume_token(db: Session, token: str) -> tuple[str, int] | None:
     return (row[0], row[1])
 
 
-def revoke_pending_tokens(db: Session, document_type: str, document_id: int, commit: bool = True) -> None:
+def revoke_pending_tokens(db: Session, document_type: str, document_id: int, commit: bool = True,
+                          contar_vigentes: bool = False):
     """Invalida cualquier token sin usar de este documento -- se llama en cada punto
     donde una SC sale del ciclo vigente de Gate 1: cancelar_solicitud, cualquier
     transicion real de estado via update_solicitud (no solo el reset a BORRADOR),
@@ -66,18 +67,26 @@ def revoke_pending_tokens(db: Session, document_type: str, document_id: int, com
     revocado es, para todo efecto practico, identico a uno ya usado.
 
     commit=False deja el UPDATE en la transaccion del llamador, que lo confirma junto con el resto de su cambio
-    (update_solicitud, H29: la revocacion y el cambio de estado se confirman o se deshacen juntos)."""
+    (update_solicitud, H29: la revocacion y el cambio de estado se confirman o se deshacen juntos).
+
+    contar_vigentes=True (H21, ronda 2 de T5) devuelve cuantos de los tokens que ESTE UPDATE revoco el cliente todavia
+    podia usar (sin vencer), leidos con RETURNING: es lo que de verdad se anulo, sin una consulta aparte que otra
+    transaccion pueda adelantar. Por defecto devuelve None, como siempre."""
     now = datetime.utcnow()
-    db.execute(
-        text("""
+    sql = """
             UPDATE document_confirmation_tokens
             SET used_at = :now
             WHERE document_type = :document_type AND document_id = :document_id AND used_at IS NULL
-        """),
-        {"document_type": document_type, "document_id": document_id, "now": now},
-    )
+        """
+    if contar_vigentes:
+        sql += " RETURNING expires_at"
+    resultado = db.execute(text(sql), {"document_type": document_type, "document_id": document_id, "now": now})
+    vigentes = None
+    if contar_vigentes:
+        vigentes = sum(1 for (expira,) in resultado.fetchall() if expira is not None and expira > now)
     if commit:
         db.commit()
+    return vigentes
 
 
 def contar_tokens_vigentes(db: Session, document_type: str, document_id: int) -> int:
