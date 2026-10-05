@@ -27,7 +27,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Solo para desarrollo: bajar de version borra el registro de las COT hechas sin confirmacion (R13: en los ambientes
-    # compartidos nunca se baja de version).
+    # Se niega ANTES de tocar nada si alguna COT tiene la marca (como fa6_024): bajar de version borraria la auditoria
+    # de las cotizaciones hechas sin la confirmacion del cliente. R13: en los ambientes compartidos nunca se baja.
+    marcadas = op.get_bind().execute(sa.text(
+        "SELECT count(*) FROM sales_quotations "
+        "WHERE sin_confirmacion_sc_at IS NOT NULL OR sin_confirmacion_sc_motivo IS NOT NULL")).scalar()
+    if marcadas:
+        raise RuntimeError(
+            f"No se puede bajar de fa6_025: hay {marcadas} cotizaciones creadas sin la confirmacion del cliente "
+            "(sin_confirmacion_sc_at / sin_confirmacion_sc_motivo). Bajar de version borraria ese registro: "
+            "respaldarlo y resolverlo a mano antes de bajar de version.")
     op.drop_column("sales_quotations", "sin_confirmacion_sc_motivo")
     op.drop_column("sales_quotations", "sin_confirmacion_sc_at")

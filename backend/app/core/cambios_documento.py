@@ -37,6 +37,9 @@ CAMPOS = {
         **_PRECIOS,
         "canal_envio": "Canal de envío", "notas": "Notas", "productos": "Productos",
         "pec_numero": "Pedido de compra",
+        # U11: el motivo de una COT creada sin la confirmacion del cliente. Solo cambia cuando la COT cambia de solicitud
+        # (se limpia): el renglon UPDATED conserva el motivo que tenia.
+        "sin_confirmacion_sc_motivo": "Sin confirmación del cliente",
     },
     "VEN": {
         **_CLIENTE,

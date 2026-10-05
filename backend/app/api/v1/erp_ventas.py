@@ -61,6 +61,17 @@ def _int_or_none(v):
         return None
     return int(v)
 
+def _sc_id_del_body(valor) -> Optional[int]:
+    """sc_id que llega en el body de POST y PATCH /cotizaciones: None si viene vacio; 422 si no es el numero de una
+    solicitud. Un bool o un float no entero tampoco (Infinity, -Infinity o 1e400 llegan como float infinito y int()
+    lanzaria OverflowError -> 500; True seria la SC 1)."""
+    if isinstance(valor, bool) or (isinstance(valor, float) and not valor.is_integer()):
+        raise HTTPException(422, "El campo sc_id debe ser el número de una solicitud.")
+    try:
+        return _int_or_none(valor)
+    except (TypeError, ValueError, OverflowError):
+        raise HTTPException(422, "El campo sc_id debe ser el número de una solicitud.")
+
 def _texto_o_none(v):
     """El texto sin espacios de los bordes, o None si no es texto o queda vacio (una nota en blanco no cuenta)."""
     if not isinstance(v, str):
@@ -965,20 +976,24 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     # confirmacion ya no aplica: vuelve a ASIGNADA para reenviarla -- `transiciona` (abajo) revoca
     # el token y limpia gate1_confirmed_at. Mismo criterio que el congelamiento de precio de Gate 2
     # en update_cotizacion. Vincular una linea al catalogo no cuenta (cambian_productos).
+    # U11 (ronda 1 de T3, puerta A): con el enlace PENDIENTE la excepcion de la COT activa no aplica: el cliente no ha
+    # confirmado nada todavia (esa COT es la creada sin confirmacion, /cotizar-sin-confirmacion). La COT no cambia; la
+    # SC vuelve a ASIGNADA y su enlace se revoca, como sin cotizacion.
     cambian_los_productos = "productos" in body and cambios_documento.cambian_productos(
         antes_log.get("productos"), sc.productos)
     cambia_el_cliente = _cliente_de_la_solicitud(sc) != cliente_antes
     invalida_confirmacion = (
         (cambian_los_productos or cambia_el_cliente)
         and sc.estado == old_estado
-        and old_estado in ("PENDIENTE_CONFIRMACION", "CONFIRMADA")
-        and db.query(SalesQuotation.id).filter(SalesQuotation.sc_id == sc.id,
-                                               SalesQuotation.estado != "RECHAZADA").first() is None
+        and (old_estado == "PENDIENTE_CONFIRMACION"
+             or (old_estado == "CONFIRMADA"
+                 and db.query(SalesQuotation.id).filter(SalesQuotation.sc_id == sc.id,
+                                                        SalesQuotation.estado != "RECHAZADA").first() is None))
     )
     if invalida_confirmacion:
         sc.estado = "ASIGNADA" if sc.advisor_user_id else "BORRADOR"
-    # Con una COT activa el estado no cambia, pero si cambio el cliente la confirmacion (y el enlace) eran del cliente
-    # anterior: se anulan igual (abajo se revoca el enlace y queda en la Actividad).
+    # CONFIRMADA con una COT activa: el estado no cambia, pero si cambio el cliente la confirmacion (y el enlace) eran del
+    # cliente anterior: se anulan igual (abajo se revoca el enlace y queda en la Actividad).
     anula_por_cliente = (cambia_el_cliente and not invalida_confirmacion
                          and (sc.gate1_confirmed_at is not None or old_estado == "PENDIENTE_CONFIRMACION"))
     # N7: gate1_confirmed_at es la confirmacion VIGENTE del cliente sobre los productos actuales. Si cambian (o cambia
@@ -1166,6 +1181,14 @@ def _exigir_sin_documentos_activos(db: Session, sc: CustomerRequest) -> None:
                                  f"se puede crear otra cotización.")
 
 
+def _exigir_productos_para_cotizar(sc: CustomerRequest) -> None:
+    """400 si la SC no tiene productos: la cotizacion saldria vacia. Lo usan confirmar_solicitud y
+    /cotizar-sin-confirmacion (mismo texto)."""
+    if not _tiene_productos_para_cotizar(sc.productos):
+        raise HTTPException(400, "La solicitud no tiene productos para cotizar. Agrégalos en la solicitud "
+                                 "y vuelve a enviársela al cliente para que la confirme.")
+
+
 def _crear_cotizacion_desde_solicitud(db: Session, sc: CustomerRequest, cotizador: Optional[str],
                                       user_name: Optional[str]) -> SalesQuotation:
     """La COT en Borrador de una SC (R21: lo que hacia confirmar_solicitud): numero de la secuencia, datos del cliente y
@@ -1230,9 +1253,7 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
         raise HTTPException(400, "Esta solicitud no tiene una confirmación de cliente válida y sin usar; no se puede crear la Cotización.")
     # Una SC confirmada antes de que se exigieran productos para enviarla podria no tener
     # ninguno: la Cotizacion saldria vacia. Se agregan en la SC (lo que pide reconfirmar).
-    if not _tiene_productos_para_cotizar(sc.productos):
-        raise HTTPException(400, "La solicitud no tiene productos para cotizar. Agrégalos en la solicitud "
-                                 "y vuelve a enviársela al cliente para que la confirme.")
+    _exigir_productos_para_cotizar(sc)
 
     # U15: la solicitud se queda CONFIRMADA (ya no pasa a COTIZADA): el avance de la cotizacion se ve en la propia
     # cotizacion y en la barra Solicitud -> Cotizacion -> Pedido.
@@ -1266,6 +1287,8 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
 # U11: limites del motivo de /cotizar-sin-confirmacion (el frontend tiene su espejo MOTIVO_SIN_CONFIRMACION_MIN).
 MOTIVO_SIN_CONFIRMACION_MIN = 10
 MOTIVO_SIN_CONFIRMACION_MAX = 500
+# Largo de la columna sales_quotations.cotizador (String(150)): mas largo seria un 500 con un numero ya gastado.
+COTIZADOR_MAX = 150
 # U11: estados en que una SC sin la confirmacion vigente del cliente se puede cotizar con motivo (CONFIRMADA solo si
 # _confirmacion_vigente_sc es falso: confirmada por su cotizacion, sin la marca gate1).
 _ESTADOS_SC_COTIZABLES_SIN_CONFIRMACION = ("ASIGNADA", "PENDIENTE_CONFIRMACION", "CONFIRMADA")
@@ -1289,6 +1312,9 @@ def cotizar_sin_confirmacion(sc_id: int, body: CotizarSinConfirmacionBody,
         raise HTTPException(422, f"El motivo debe tener al menos {MOTIVO_SIN_CONFIRMACION_MIN} caracteres.")
     if len(motivo) > MOTIVO_SIN_CONFIRMACION_MAX:
         raise HTTPException(422, f"El motivo no puede tener más de {MOTIVO_SIN_CONFIRMACION_MAX} caracteres.")
+    cotizador = _texto_o_none(body.cotizador)
+    if cotizador is not None and len(cotizador) > COTIZADOR_MAX:
+        raise HTTPException(422, f"El cotizador no puede tener más de {COTIZADOR_MAX} caracteres.")
     # Bloqueada como en confirmar_solicitud: dos pedidos simultaneos (o este y la confirmacion del cliente) no crean
     # dos COT.
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
@@ -1305,13 +1331,11 @@ def cotizar_sin_confirmacion(sc_id: int, body: CotizarSinConfirmacionBody,
     if sc.estado not in _ESTADOS_SC_COTIZABLES_SIN_CONFIRMACION:
         raise HTTPException(400, f"No se puede cotizar sin confirmación una solicitud en estado "
                                  f"{etiqueta_estado('SC', sc.estado)}.")
-    if not _tiene_productos_para_cotizar(sc.productos):
-        raise HTTPException(400, "La solicitud no tiene productos para cotizar. Agrégalos en la solicitud "
-                                 "y vuelve a enviársela al cliente para que la confirme.")
+    _exigir_productos_para_cotizar(sc)
     _exigir_sin_documentos_activos(db, sc)
 
     autor = nombre_de_usuario(user)
-    cot = _crear_cotizacion_desde_solicitud(db, sc, _texto_o_none(body.cotizador) or sc.advisor_name, autor)
+    cot = _crear_cotizacion_desde_solicitud(db, sc, cotizador or sc.advisor_name, autor)
     cot.sin_confirmacion_sc_at = datetime.datetime.utcnow()
     cot.sin_confirmacion_sc_motivo = motivo
     estado_sc = etiqueta_estado("SC", sc.estado)
@@ -1402,10 +1426,7 @@ def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN
     if body.get("dias_entrega"):
         entrega_est = datetime.datetime.utcnow() + datetime.timedelta(days=body["dias_entrega"])
 
-    try:
-        sc_id = _int_or_none(body.get("sc_id"))
-    except (TypeError, ValueError):
-        raise HTTPException(422, "El campo sc_id debe ser el número de una solicitud.")
+    sc_id = _sc_id_del_body(body.get("sc_id"))
     sc = None
     sc_numero = body.get("sc_numero")
     customer_id = body.get("customer_id")
@@ -1626,7 +1647,8 @@ def _validar_cambio_de_estado_cotizacion(db: Session, cot: SalesQuotation, nuevo
     Solo se evalua si el body trae un estado distinto del actual (reenviar el mismo estado nunca falla). En orden:
     (1) 400 CONFIRMADA / PENDIENTE_CONFIRMACION; (2) H50: 400 ENVIADA o un estado que no es manual; (3) 409 con un
     pedido vigente; (4) N4: 409 si la SC esta cancelada (salvo para rechazarla); (5) N7: 409 al retomar una RECHAZADA
-    cuando la SC ya tiene otra COT activa."""
+    cuando la SC ya tiene otra COT activa; (6) U11: 409 al retomarla (a Borrador o a Vencida) si la SC no tiene la
+    confirmacion vigente del cliente, salvo que la COT se haya creado sin confirmacion en esa misma SC."""
     if not nuevo or nuevo == cot.estado:
         return
     # (1) Gate 2 (Task 5, mismo criterio que update_solicitud para Gate 1): CONFIRMADA y PENDIENTE_CONFIRMACION solo
@@ -1670,6 +1692,12 @@ def _validar_cambio_de_estado_cotizacion(db: Session, cot: SalesQuotation, nuevo
         if otra is not None:
             raise HTTPException(409, f"La solicitud {sc.numero} ya tiene la cotización {otra.numero} activa; no se "
                                      f"puede retomar esta. Trabaja sobre {otra.numero} o recházala primero.")
+        # (6) U11 (ronda 1 de T3, puerta B): retomarla la deja activa en la SC, como crear una COT. Sin la confirmacion
+        # vigente del cliente solo se permite si la COT se creo sin confirmacion (con su motivo) en ESTA SC: la marca se
+        # limpia cuando la COT cambia de solicitud (update_cotizacion), asi que si la tiene es de esta SC.
+        if not _confirmacion_vigente_sc(sc) and cot.sin_confirmacion_sc_at is None:
+            raise HTTPException(409, f"La solicitud {sc.numero} no tiene la confirmación del cliente vigente: "
+                                     f"envíasela para que la confirme, o usa «Cotizar» en la solicitud con el motivo.")
 
 
 # La COT solo cambia de solicitud fuera del ciclo de Gate 2 (sin enlace pendiente ni confirmacion del cliente).
@@ -1690,10 +1718,7 @@ def _leer_cambio_de_solicitud(db: Session, cot: SalesQuotation, body: dict):
     normalizado a int o None)."""
     if "sc_id" not in body:
         return None
-    try:
-        nuevo_id = _int_or_none(body.get("sc_id"))
-    except (TypeError, ValueError):
-        raise HTTPException(422, "El campo sc_id debe ser el número de una solicitud.")
+    nuevo_id = _sc_id_del_body(body.get("sc_id"))
     body["sc_id"] = nuevo_id
     if nuevo_id == cot.sc_id:
         return None
@@ -1802,6 +1827,11 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         # este mismo commit y la SC se re-sincroniza como en un rechazo.
         sc_anterior, sc_nueva = cambio_de_solicitud
         cot.sc_numero = sc_nueva.numero if sc_nueva is not None else None
+        # U11 (ronda 1 de T3, puerta C): la marca de "sin confirmacion" es de la SC donde se creo; no viaja con la COT
+        # (si no, retomarla en otra SC sin confirmar pasaria la guarda (6)). El motivo anterior queda en el renglon
+        # UPDATED de la COT (cambios_documento) y la auditoria completa sigue en la SC de origen y en el CREATED.
+        cot.sin_confirmacion_sc_at = None
+        cot.sin_confirmacion_sc_motivo = None
         if sc_anterior is not None:
             marca_anulada = sc_anterior.gate1_confirmed_at is not None
             estado_previo_sc_anterior = _soltar_cotizacion_de_la_solicitud(db, sc_anterior, cot)
