@@ -305,7 +305,7 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
         <div>
           <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Buscar SC / COT / Pedido de Venta</label>
           <div className="relative">
-            <input type="text" value={segSearch} onChange={e=>onSegSearch(e.target.value)} placeholder="Numero, cliente o producto..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-200 outline-none"/>
+            <input type="text" value={segSearch} onChange={e=>onSegSearch(e.target.value)} placeholder="Número, cliente o producto…" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-200 outline-none"/>
             {segResults.length>0&&(
               <div className="absolute top-full left-0 right-0 z-50 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-48 overflow-y-auto">
                 {segResults.map((r:any,i:number)=>(
@@ -323,22 +323,22 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
 
       {isProgramarEntrega&&(
         <div className="space-y-3 bg-teal-50 border border-teal-100 rounded-xl p-4">
-          <p className="text-xs font-black text-teal-700 uppercase">Datos de Envio</p>
+          <p className="text-xs font-black text-teal-700 uppercase">Datos de envío</p>
           <div className="grid grid-cols-2 gap-3">
-            {[{l:'Nombre Completo',k:'nombre_completo'},{l:'Cedula',k:'cedula'},{l:'Telefono',k:'telefono'},{l:'Ciudad',k:'ciudad'},{l:'Transportadora',k:'transportadora'}].map(f=>(
+            {[{l:'Nombre completo',k:'nombre_completo'},{l:'Cédula',k:'cedula'},{l:'Teléfono',k:'telefono'},{l:'Ciudad',k:'ciudad'},{l:'Transportadora',k:'transportadora'}].map(f=>(
               <div key={f.k}><label className="text-xs font-bold text-teal-600 mb-1 block">{f.l}</label><input type="text" value={(envio as any)[f.k]} onChange={e=>setEnvio(ev=>({...ev,[f.k]:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-200"/></div>
             ))}
-            <div><label className="text-xs font-bold text-teal-600 mb-1 block">Tipo Envio</label>
+            <div><label className="text-xs font-bold text-teal-600 mb-1 block">Tipo de envío</label>
               <select value={envio.tipo_envio} onChange={e=>setEnvio(ev=>({...ev,tipo_envio:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-200"><option>Contraentrega</option><option>Contado</option></select></div>
           </div>
-          <div><label className="text-xs font-bold text-teal-600 mb-1 block">Direccion</label><input type="text" value={envio.direccion} onChange={e=>setEnvio(ev=>({...ev,direccion:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-200"/></div>
-          <div><label className="text-xs font-bold text-teal-600 mb-1 block">Pedido(s) de Venta (PVEN#)</label><input type="text" value={envio.ven_ids} onChange={e=>setEnvio(ev=>({...ev,ven_ids:e.target.value}))} placeholder="PVEN-20260001, PVEN-20260002..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-200"/></div>
+          <div><label className="text-xs font-bold text-teal-600 mb-1 block">Dirección</label><input type="text" value={envio.direccion} onChange={e=>setEnvio(ev=>({...ev,direccion:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-200"/></div>
+          <div><label className="text-xs font-bold text-teal-600 mb-1 block">Pedido(s) de venta (PVEN)</label><input type="text" value={envio.ven_ids} onChange={e=>setEnvio(ev=>({...ev,ven_ids:e.target.value}))} placeholder="PVEN-20260001, PVEN-20260002…" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-teal-200"/></div>
           {envio.nombre_completo&&(
             <div className="mt-2">
-              <p className="text-xs font-black text-teal-700 mb-1">Enviar Resumen:</p>
+              <p className="text-xs font-black text-teal-700 mb-1">Enviar resumen:</p>
               <div className="flex gap-2">
-                <a href={`https://wa.me/57${envio.telefono.replace(/\D/g,'')}?text=${encodeURIComponent(`Hola ${envio.nombre_completo}, tu pedido ${envio.ven_ids} sera enviado por ${envio.transportadora} a ${envio.direccion}, ${envio.ciudad}. Tipo: ${envio.tipo_envio}`)}`} target="_blank" rel="noreferrer" className="flex-1 bg-green-500 text-white py-2 rounded-xl text-xs font-bold text-center flex items-center justify-center gap-1"><MessageCircle size={12}/>WhatsApp</a>
-                {form.modalidad_pago&&<a href={`mailto:?subject=Informacion de envio&body=${encodeURIComponent(`Destinatario: ${envio.nombre_completo}\nCedula: ${envio.cedula}\nDireccion: ${envio.direccion}, ${envio.ciudad}\nTransportadora: ${envio.transportadora}\nTipo: ${envio.tipo_envio}`)}`} className="flex-1 bg-blue-500 text-white py-2 rounded-xl text-xs font-bold text-center flex items-center justify-center gap-1"><Mail size={12}/>Email</a>}
+                <a href={`https://wa.me/57${envio.telefono.replace(/\D/g,'')}?text=${encodeURIComponent(`Hola ${envio.nombre_completo}, tu pedido ${envio.ven_ids} será enviado por ${envio.transportadora} a ${envio.direccion}, ${envio.ciudad}. Tipo: ${envio.tipo_envio}`)}`} target="_blank" rel="noreferrer" className="flex-1 bg-green-500 text-white py-2 rounded-xl text-xs font-bold text-center flex items-center justify-center gap-1"><MessageCircle size={12}/>WhatsApp</a>
+                {form.modalidad_pago&&<a href={`mailto:?subject=${encodeURIComponent('Información de envío')}&body=${encodeURIComponent(`Destinatario: ${envio.nombre_completo}\nCédula: ${envio.cedula}\nDirección: ${envio.direccion}, ${envio.ciudad}\nTransportadora: ${envio.transportadora}\nTipo: ${envio.tipo_envio}`)}`} className="flex-1 bg-blue-500 text-white py-2 rounded-xl text-xs font-bold text-center flex items-center justify-center gap-1"><Mail size={12}/>Correo</a>}
               </div>
             </div>
           )}
@@ -347,26 +347,28 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
 
       {isDevolucion&&(
         <div className="space-y-3 bg-orange-50 border border-orange-100 rounded-xl p-4">
-          <p className="text-xs font-black text-orange-700 uppercase">Datos de Devolucion</p>
+          <p className="text-xs font-black text-orange-700 uppercase">Datos de devolución</p>
           <div className="grid grid-cols-2 gap-3">
-            <div><label className="text-xs font-bold text-orange-600 mb-1 block">Pedido de Venta (PVEN)</label><input type="text" value={devVen} onChange={e=>setDevVen(e.target.value)} placeholder="PVEN-20260001" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"/></div>
-            <div><label className="text-xs font-bold text-orange-600 mb-1 block">Pedido de Compra (PEC)</label><input type="text" value={devPec} onChange={e=>setDevPec(e.target.value)} placeholder="PEC-20260001" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"/></div>
+            <div><label className="text-xs font-bold text-orange-600 mb-1 block">Pedido de venta (PVEN)</label><input type="text" value={devVen} onChange={e=>setDevVen(e.target.value)} placeholder="PVEN-20260001" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"/></div>
+            <div><label className="text-xs font-bold text-orange-600 mb-1 block">Pedido de compra (PEC)</label><input type="text" value={devPec} onChange={e=>setDevPec(e.target.value)} placeholder="PEC-20260001" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200"/></div>
           </div>
-          <div><label className="text-xs font-bold text-orange-600 mb-1 block">Motivo / Tipo de Devolucion</label>
+          <div><label className="text-xs font-bold text-orange-600 mb-1 block">Motivo de la devolución</label>
+            {/* H10: los textos con 'menor' y 'total' se conservan (los usan los includes de abajo). */}
             <select value={devMotivo} onChange={e=>setDevMotivo(e.target.value)} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-orange-200">
-              <option value="">Seleccionar...</option>
-              <option>Dano menor - Ajustar precio de venta</option>
-              <option>Dano total - Ajuste inventario negativo</option>
+              <option value="">Selecciona el motivo…</option>
+              <option>Daño menor: ajustar el precio de venta</option>
+              <option>Daño total: ajuste negativo de inventario</option>
               <option>Producto incorrecto</option>
-              <option>El cliente cambio de decision</option>
+              <option>El cliente cambió de decisión</option>
             </select>
           </div>
-          <div><label className="text-xs font-bold text-orange-600 mb-1 block">Pruebas (URLs de imagenes o descripcion)</label>
-            <textarea rows={2} placeholder="Enlace a foto o descripcion del estado del producto..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none outline-none focus:ring-2 focus:ring-orange-200" onChange={e=>setForm(f=>({...f,notas:`PRUEBAS: ${e.target.value}\n${f.notas}`}))}/></div>
-          {devMotivo&&<div className="bg-orange-100 rounded-xl p-3 text-xs text-orange-800 font-bold">
-            <p>Logica de backend:</p>
-            {devMotivo.includes('menor')&&<p>* Se afectara el margen en el Pedido de Venta {devVen}</p>}
-            {devMotivo.includes('total')&&<p>* Se ajustara el inventario en el PEC {devPec} (ajuste negativo)</p>}
+          <div><label className="text-xs font-bold text-orange-600 mb-1 block">Pruebas (enlaces a imágenes o descripción)</label>
+            <textarea rows={2} placeholder="Enlace a una foto o descripción del estado del producto…" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none outline-none focus:ring-2 focus:ring-orange-200" onChange={e=>setForm(f=>({...f,notas:`PRUEBAS: ${e.target.value}\n${f.notas}`}))}/></div>
+          {/* H10: texto honesto (ningún código del backend lee la nota DEVOLUCION: el ajuste se hace a mano). */}
+          {(devMotivo.includes('menor')||devMotivo.includes('total'))&&<div className="bg-orange-100 rounded-xl p-3 text-xs text-orange-800 font-bold space-y-1">
+            {devMotivo.includes('menor')&&<p>Queda anotado en la solicitud: ajustar el margen del pedido {devVen||'de venta'}.</p>}
+            {devMotivo.includes('total')&&<p>Queda anotado en la solicitud: ajuste negativo de inventario del pedido de compra {devPec||'(sin número)'}.</p>}
+            <p className="font-medium">El ajuste no se hace solo: hazlo desde el pedido o desde Compras.</p>
           </div>}
         </div>
       )}
@@ -375,19 +377,19 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
         <div className="bg-purple-50 border border-purple-200 rounded-2xl p-4 space-y-3">
           <select value={form.tipo_problema||''} onChange={e=>setForm(f=>({...f,tipo_problema:e.target.value}))}
             className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
-            <option value="">Tipo de problema...</option>
-            <option>Falla del producto</option><option>Garantia</option>
-            <option>Duda de uso</option><option>Problema con el pedido o envio</option><option>Otro</option>
+            <option value="">Tipo de problema…</option>
+            <option>Falla del producto</option><option>Garantía</option>
+            <option>Duda de uso</option><option>Problema con el pedido o el envío</option><option>Otro</option>
           </select>
-          <textarea placeholder="Descripcion del problema" value={form.descripcion_problema||''}
+          <textarea placeholder="Descripción del problema" value={form.descripcion_problema||''}
             onChange={e=>setForm(f=>({...f,descripcion_problema:e.target.value}))}
             className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" rows={3} />
           <select value={form.urgencia||''} onChange={e=>setForm(f=>({...f,urgencia:e.target.value}))}
             className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
-            <option value="">Urgencia...</option>
+            <option value="">Urgencia…</option>
             <option>Baja</option><option>Media</option><option>Alta</option>
           </select>
-          <textarea placeholder="Descripcion de la evidencia (fotos recibidas por fuera del sistema, etc.)"
+          <textarea placeholder="Descripción de la evidencia (fotos recibidas por fuera del sistema, etc.)…"
             value={form.evidencia_descripcion||''} onChange={e=>setForm(f=>({...f,evidencia_descripcion:e.target.value}))}
             className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm" rows={2} />
           <select value={form.asignado_a_user_id||''} onChange={e=>{
@@ -395,7 +397,7 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
             setForm(f=>({...f, asignado_a_user_id: uid as any}));
           }}
             className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm">
-            <option value="">Asignar a...</option>
+            <option value="">Asignar a…</option>
             {usuarios.filter(u=>esAsesorElegible(u.role)).map(u=>(
               <option key={u.id} value={u.id}>{u.email}</option>
             ))}
@@ -411,25 +413,25 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
           setForm(f=>({...f, advisor_user_id: uid, advisor_name: u?.email || f.advisor_name}));
         }}
         className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-indigo-400">
-        <option value="">Seleccionar asesor...</option>
+        <option value="">Selecciona un asesor…</option>
         {usuarios.filter(u=>esAsesorElegible(u.role)).map(u=>(
           <option key={u.id} value={u.id}>{u.email}</option>
         ))}
       </select></div>
-        <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Dias Vencimiento</label><input type="number" min="1" max="365" value={form.dias_vencimiento} onChange={e=>setForm(f=>({...f,dias_vencimiento:Number(e.target.value)}))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none"/></div>
+        <div><label className="text-xs font-black text-slate-500 uppercase mb-2 block">Días de vencimiento</label><input type="number" min="1" max="365" value={form.dias_vencimiento} onChange={e=>setForm(f=>({...f,dias_vencimiento:Number(e.target.value)}))} className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none"/></div>
       </div>
 
       {/* Notas */}
       <div>
         <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Notas / Observaciones</label>
-        <textarea value={form.notas} onChange={e=>setForm(f=>({...f,notas:e.target.value}))} rows={3} placeholder="Detalles de la solicitud..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-200 outline-none"/>
+        <textarea value={form.notas} onChange={e=>setForm(f=>({...f,notas:e.target.value}))} rows={3} placeholder="Detalles de la solicitud…" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-200 outline-none"/>
       </div>
     </>
   );
 });
 
 // â”€â”€ 3-dot Row Menu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-function RowMenu({sc,onView,onChangeEstado,onCancel,onSendToTrash}:{sc:any;onView:()=>void;onChangeEstado:(e:string)=>void;onCancel:()=>void;onSendToTrash:()=>void}) {
+function RowMenu({sc,onView,onReiniciar,onCancel,onSendToTrash}:{sc:any;onView:()=>void;onReiniciar:()=>void;onCancel:()=>void;onSendToTrash:()=>void}) {
   const [open,setOpen]=useState(false);
   const ref=useRef<any>(null);
   useEffect(()=>{
@@ -1968,7 +1970,7 @@ export default function SolicitudClient() {
 
       {/* CREATE MODAL */}
       {showCreate&&(
-        <Modal title="Nueva Solicitud de Cliente" subtitle="El numero SC se asignara automaticamente" icon={Plus} color="indigo" maxWidth="3xl"
+        <Modal title="Nueva Solicitud de Cliente" subtitle="El número de la solicitud se asigna al crearla." icon={Plus} color="indigo" maxWidth="3xl"
           onClose={()=>{setShowCreate(false);resetCreateForm();}}
           footer={(
             <>
