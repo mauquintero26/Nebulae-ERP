@@ -1,11 +1,14 @@
 'use client';
-import { useState } from 'react';
-import { Link2, Copy, Check, ExternalLink, ArrowRight, MessageCircle } from 'lucide-react';
+import { useRef, useState } from 'react';
+import Link from 'next/link';
+import { Link2, Copy, Check, ExternalLink, ArrowRight, ArrowLeft, MessageCircle } from 'lucide-react';
 import { Modal, Button } from '@/components/ui';
 import type { AccentColor } from '@/components/ui';
 import { avisoCorreo } from '@/lib/aviso-correo';
 import { whatsappParaReabrir } from '@/lib/whatsapp';
 import { etiquetaValorCambio } from '@/lib/etiquetas-ventas';
+import { copiarTexto } from '@/lib/copiar';
+import { returnToSeguro, etiquetaVolver } from '@/lib/detalle-layout';
 
 // Piezas compartidas por las tres paginas de detalle del flujo SC -> COT -> PVEN, para
 // que cada estado le diga al usuario cual es su siguiente paso en vez de dejar una
@@ -52,15 +55,27 @@ export function getUsuarioActual(): UsuarioActual {
 // "Volver al origen": solo se confia en return_to si es una ruta interna del dashboard
 // que no cambia de origen al resolverla. Un simple startsWith('/') no basta -- el
 // parser de URL trata "\" como "/" y recorta tab/CR/LF, asi que "/\evil.com" escapa
-// del origen aunque empiece con un solo "/".
-export function returnToSeguro(raw?: string | null): string {
-  if (typeof raw !== 'string' || !raw.startsWith('/dashboard/')) return '';
-  try {
-    if (new URL(raw, 'http://localhost').origin !== 'http://localhost') return '';
-  } catch {
-    return '';
-  }
-  return raw;
+// del origen aunque empiece con un solo "/". La regla vive en lib/detalle-layout.js
+// (T6B, con sus pruebas node); aqui se reexporta con el mismo nombre de siempre.
+export { returnToSeguro };
+
+// H37 (Bloque 2, T6B): el UNICO boton de volver de los detalles (SC, COT, PVEN), con su destino
+// escrito ('Volver a la solicitud', 'Volver a pedidos'...). `href` sale de destinoVolver(return_to,
+// lista del documento); por si acaso se vuelve a sanear aqui (si no pasa, va al Hub de Ventas).
+export function BotonVolver({ href }: { href: string }) {
+  const destino = returnToSeguro(href) || '/dashboard/ventas';
+  const etiqueta = etiquetaVolver(destino);
+  return (
+    <Link
+      href={destino}
+      title={etiqueta}
+      aria-label={etiqueta}
+      className="inline-flex items-center gap-1.5 rounded-lg px-2 py-2 text-sm font-bold text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors whitespace-nowrap"
+    >
+      <ArrowLeft size={16} className="shrink-0" />
+      <span>{etiqueta}</span>
+    </Link>
+  );
 }
 
 type Tone = 'amber' | 'indigo' | 'blue' | 'emerald' | 'slate' | 'rose';
@@ -110,17 +125,33 @@ export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', cor
   whatsappUrl?: string | null;
   onClose: () => void;
 }) {
-  const [copiado, setCopiado] = useState(false);
+  // H30: 'manual' = ni el portapapeles ni la copia de la seleccion funcionaron (p. ej. HTTP con IP, sin
+  // navigator.clipboard): el enlace queda seleccionado y sale el aviso ambar. Nunca falla en silencio.
+  const [estadoCopia, setEstadoCopia] = useState<'idle' | 'copiado' | 'manual'>('idle');
+  const inputRef = useRef<HTMLInputElement>(null);
   const aviso = avisoCorreo(correo, canal);
   const abrirWhatsApp = whatsappParaReabrir(canal, whatsappUrl);
 
+  function seleccionarEnlace(): HTMLInputElement | null {
+    const el = inputRef.current;
+    if (!el) return null;
+    el.focus();
+    el.select();
+    el.setSelectionRange(0, el.value.length);
+    return el;
+  }
+
   async function copiar() {
-    try {
-      await navigator.clipboard.writeText(link);
-      setCopiado(true);
-      setTimeout(() => setCopiado(false), 2000);
-    } catch {
-      // Sin permiso de portapapeles: el input de arriba ya queda seleccionable.
+    const r = await copiarTexto(link, {
+      portapapeles: typeof navigator !== 'undefined' ? navigator.clipboard : undefined,
+      copiarSeleccion: () => !!seleccionarEnlace() && document.execCommand('copy'),
+    });
+    if (r === 'copiado') {
+      setEstadoCopia('copiado');
+      setTimeout(() => setEstadoCopia((e) => (e === 'copiado' ? 'idle' : e)), 2000);
+    } else {
+      setEstadoCopia('manual');
+      seleccionarEnlace();
     }
   }
 
@@ -146,14 +177,22 @@ export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', cor
         cuando el cliente lo abra y confirme, esta pantalla te mostrará el siguiente paso.
       </p>
       <input
+        ref={inputRef}
         readOnly
         value={link}
         onFocus={e => e.currentTarget.select()}
-        className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-xs font-mono text-slate-700 outline-none"
+        className={`w-full border bg-slate-50 rounded-xl px-3 py-2.5 text-xs font-mono text-slate-700 outline-none ${estadoCopia === 'manual'
+          ? 'border-amber-400 ring-2 ring-amber-200'
+          : 'border-slate-200'}`}
       />
+      {estadoCopia === 'manual' && (
+        <p role="status" className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+          No se pudo copiar automáticamente. El enlace quedó seleccionado: cópialo con Ctrl+C (en el celular, mantén presionado y elige Copiar) y pégalo en el mensaje al cliente.
+        </p>
+      )}
       <div className="flex flex-wrap gap-2">
-        <Button color={color} icon={copiado ? Check : Copy} onClick={copiar}>
-          {copiado ? 'Copiado' : 'Copiar enlace'}
+        <Button color={color} icon={estadoCopia === 'copiado' ? Check : Copy} onClick={copiar}>
+          {estadoCopia === 'copiado' ? 'Copiado' : 'Copiar enlace'}
         </Button>
         <a
           href={link}
