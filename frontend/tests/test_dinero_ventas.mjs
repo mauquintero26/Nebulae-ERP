@@ -35,6 +35,7 @@ console.log('--- H42 TEST 2: formatoPct y porcentajeDePesos (exacto al peso, hal
   assert.equal(formatoPct('100.00'), '100%');
   assert.equal(formatoPct(12.5), '12,5%');
   assert.equal(formatoPct('66.666'), '66,67%');
+  assert.equal(formatoPct(33.333), '33,33%', 'U19+U21 (B2-T6B): redondea hacia abajo a 2 decimales');
   assert.equal(formatoPct(null), '0%');
   assert.equal(porcentajeDePesos(2786923, 60), 1672154, 'el recorrido: 1.672.153,8 sube a 1.672.154');
   assert.equal(porcentajeDePesos(2874000, 60), 1724400);
