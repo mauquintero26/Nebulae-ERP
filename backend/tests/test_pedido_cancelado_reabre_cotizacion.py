@@ -462,3 +462,17 @@ def test_la_lista_de_compras_no_muestra_items_de_pedidos_cancelados(app_client, 
     despues = app_client.get("/api/v1/compras/lista-compras/stats", headers=auth(admin_token)).json()["data"]
     assert (despues["total"] - antes["total"], despues["pendientes"] - antes["pendientes"],
             despues["en_pedido"] - antes["en_pedido"]) == (1, 1, 0)
+
+
+def test_la_red_de_la_lista_tolera_un_pven_id_que_no_es_numero(app_client, db, admin_token):
+    """POST /lista-compras guarda el pven_id tal como llega: uno de texto no debe romper la Lista (500)."""
+    from app.api.v1.erp_compras import _load_lista_compras, _save_lista_compras
+    items = _load_lista_compras(db)
+    base = max([it.get("id", 0) for it in items], default=0)
+    items += [{"id": base + 1, "pven_id": "abc", "pven_numero": "PVEN-X", "producto": "Raro REA017",
+               "estado": "PENDIENTE"},
+              {"id": base + 2, "pven_id": True, "producto": "Raro2 REA017", "estado": "PENDIENTE"}]
+    _save_lista_compras(db, items)
+    lista = app_client.get("/api/v1/compras/lista-compras?limit=200&search=REA017", headers=auth(admin_token))
+    assert lista.status_code == 200, lista.text
+    assert {it["producto"] for it in lista.json()["data"]} == {"Raro REA017", "Raro2 REA017"}

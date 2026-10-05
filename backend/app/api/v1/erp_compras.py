@@ -2888,7 +2888,9 @@ def descartar_items_lista_de_pedido(db: Session, so) -> int:
 def _sin_items_de_pedidos_cancelados(db: Session, items: list) -> list:
     """Red de A2: los items cuyo pedido de venta esta CANCELADO no se muestran ni se cuentan (datos de antes del
     arreglo, o los que ya estaban en un pedido de compra al cancelar). Solo filtra la lectura: el JSON no cambia."""
-    pven_ids = {it.get("pven_id") for it in items if it.get("pven_id")}
+    # Solo ids enteros: el JSON acepta lo que mande POST /lista-compras y un texto romperia la consulta.
+    pven_ids = {it.get("pven_id") for it in items
+                if isinstance(it.get("pven_id"), int) and not isinstance(it.get("pven_id"), bool)}
     if not pven_ids:
         return items
     cancelados = dict(db.query(SaleOrder.id, SaleOrder.numero)
