@@ -141,6 +141,14 @@ class CancelarSolicitudBody(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class CotizarSinConfirmacionBody(BaseModel):
+    """POST /ventas/solicitudes/{id}/cotizar-sin-confirmacion (U11). Sin min/max_length a proposito: el motivo (de 10 a
+    500 caracteres, sin los espacios de los bordes) lo valida el endpoint para responder 422 con un `detail` legible
+    (la validacion del body de FastAPI responde 400 en esta app). Sin user_name (R9): el autor sale de la sesion."""
+    motivo: Optional[str] = None
+    cotizador: Optional[str] = None
+
+
 class RegistrarPagoBody(BaseModel):
     monto: float = Field(gt=0)
     tipo: str = Field(description="ANTICIPO | ABONO | SALDO | DEVOLUCION | AJUSTE")

@@ -32,9 +32,9 @@ from app.core.ventas_dinero import (
     anticipo_del_pedido, saldos_a_favor_de_cotizacion, PCT_ANTICIPO_POR_DEFECTO, ORIGEN_CONSERVADO,
     anular_pxps_de_pedido,
 )
-from app.core.textos_actividad import etiqueta_estado, ETIQUETAS_ESTADO, PASOS_SC
+from app.core.textos_actividad import etiqueta_estado, ETIQUETAS_ESTADO, PASOS_SC, nombre_de_usuario
 from app.core.estados_pedido import ESTADOS_VEN_DESTINOS, ESTADOS_VEN_SIN_DINERO, destinos_ven_permitidos
-from app.api.v1.schemas_compras import CancelarSolicitudBody
+from app.api.v1.schemas_compras import CancelarSolicitudBody, CotizarSinConfirmacionBody
 from app.api.v1.crm import mover_lead_de_solicitud, reabrir_lead_de_solicitud
 import datetime
 import hashlib
@@ -566,6 +566,9 @@ def _cot_dict(cot: SalesQuotation) -> dict:
         "created_at": _iso_utc(cot.created_at),
         "updated_at": _iso_utc(cot.updated_at),
         "created_by": cot.created_by,
+        # U11: creada sin la confirmacion del cliente sobre la SC (None = camino normal) y el motivo.
+        "sin_confirmacion_sc_at": _iso_utc(cot.sin_confirmacion_sc_at),
+        "sin_confirmacion_sc_motivo": cot.sin_confirmacion_sc_motivo,
     }
 
 def _ven_dict(v: SaleOrder) -> dict:
@@ -1148,6 +1151,52 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
     return {"status": "success", "data": _sc_dict(sc), "link_confirmacion": link, "canal": canal, "correo": correo_res}
 
 
+def _exigir_sin_documentos_activos(db: Session, sc: CustomerRequest) -> None:
+    """N7: una SC no tiene dos cotizaciones activas (una RECHAZADA no cuenta; una VENCIDA si) ni otra cotizacion con un
+    pedido vigente: 400 con el documento que lo impide. Lo usan confirmar_solicitud, create_cotizacion (con sc_id) y
+    /cotizar-sin-confirmacion, siempre con la SC ya bloqueada (with_for_update): dos pedidos simultaneos no crean dos COT
+    ahora que la marca gate1 ya no se consume."""
+    cots_activas, pvens_activos = _documentos_activos_de_solicitud(db, sc.id)
+    if cots_activas:
+        raise HTTPException(400, f"Esta solicitud ya tiene la cotización {cots_activas[-1].numero} activa; no se "
+                                 f"puede crear otra. Si el cliente no la aceptó, márcala como Rechazada y vuelve a "
+                                 f"intentarlo.")
+    if pvens_activos:
+        raise HTTPException(400, f"Esta solicitud ya tiene el pedido de venta {pvens_activos[-1].numero} activo; no "
+                                 f"se puede crear otra cotización.")
+
+
+def _crear_cotizacion_desde_solicitud(db: Session, sc: CustomerRequest, cotizador: Optional[str],
+                                      user_name: Optional[str]) -> SalesQuotation:
+    """La COT en Borrador de una SC (R21: lo que hacia confirmar_solicitud): numero de la secuencia, datos del cliente y
+    productos de la SC, y la fecha de entrega segun su modalidad, que tambien queda en la SC. Sin commit: hace flush para
+    que la COT tenga id (los renglones de la Actividad lo necesitan) y el llamador confirma todo junto. Las guardas
+    (Gate 1 o la excepcion con motivo, documentos activos) son del llamador."""
+    ahora = datetime.datetime.utcnow()
+    dias = DIAS_ENTREGA_DEFAULT.get(sc.modalidad_entrega, DIAS_ENTREGA_DEFAULT["NORMAL"])
+    entrega_est = ahora + datetime.timedelta(days=dias)
+    sc.fecha_entrega_estimada = entrega_est
+    sc.updated_at = ahora
+    cot = SalesQuotation(
+        numero=_gen_numero(db, "COT-", "seq_cot"),
+        sc_id=sc.id,
+        sc_numero=sc.numero,
+        customer_id=sc.customer_id,
+        customer_name=sc.customer_name,
+        customer_phone=sc.customer_phone,
+        customer_email=sc.customer_email,
+        customer_address=sc.customer_address,
+        cotizador=cotizador,
+        estado="BORRADOR",
+        productos=sc.productos or [],
+        fecha_entrega_estimada=entrega_est,
+        created_by=user_name,
+    )
+    db.add(cot)
+    db.flush()
+    return cot
+
+
 @router.post("/solicitudes/{sc_id}/confirmar")
 def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
@@ -1168,15 +1217,8 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
     # unica COT activa la deja en CONFIRMADA para crearle otra. Por eso no se crea otra COT mientras
     # haya una activa (una RECHAZADA no cuenta; una VENCIDA si) o un pedido vigente. Junto con el
     # with_for_update de arriba, esto es lo que impide el duplicado ahora que la marca ya no se
-    # consume.
-    cots_activas, pvens_activos = _documentos_activos_de_solicitud(db, sc.id)
-    if cots_activas:
-        raise HTTPException(400, f"Esta solicitud ya tiene la cotización {cots_activas[-1].numero} activa; no se "
-                                 f"puede crear otra. Si el cliente no la aceptó, márcala como Rechazada y vuelve a "
-                                 f"intentarlo.")
-    if pvens_activos:
-        raise HTTPException(400, f"Esta solicitud ya tiene el pedido de venta {pvens_activos[-1].numero} activo; no "
-                                 f"se puede crear otra cotización.")
+    # consume. U11: tambien cubre la COT creada antes de la confirmacion (/cotizar-sin-confirmacion).
+    _exigir_sin_documentos_activos(db, sc)
     # Gate 1, capa real (Round 6): marca de procedencia en vez de inferir legitimidad de
     # otros campos mutables. gate1_confirmed_at SOLO la escribe confirmar_via_token
     # (confirmacion_publica.py) -- nunca ningun PATCH ni la sincronizacion COT->SC. N7: ya no
@@ -1194,37 +1236,15 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
 
     # U15: la solicitud se queda CONFIRMADA (ya no pasa a COTIZADA): el avance de la cotizacion se ve en la propia
     # cotizacion y en la barra Solicitud -> Cotizacion -> Pedido.
-    sc.updated_at = datetime.datetime.utcnow()
     # N7: si la COT nueva reemplaza a una rechazada, su Actividad lo dice (la ultima rechazada).
     rechazada = (db.query(SalesQuotation.numero)
                  .filter(SalesQuotation.sc_id == sc.id, SalesQuotation.estado == "RECHAZADA")
                  .order_by(SalesQuotation.id.desc()).first())
 
-    # Calculate delivery date based on modalidad_entrega
-    dias = DIAS_ENTREGA_DEFAULT.get(sc.modalidad_entrega, DIAS_ENTREGA_DEFAULT["NORMAL"])
-    entrega_est = datetime.datetime.utcnow() + datetime.timedelta(days=dias)
-    sc.fecha_entrega_estimada = entrega_est
-
     # Final whole-branch review (hallazgo #5): los cambios de la SC (fecha de entrega) se
     # consolidan en el MISMO commit que crea la COT (no son dos commits separados). Mismo
     # patron que convertir_cotizacion_a_venta (Gate 2).
-    cot_numero = _gen_numero(db, "COT-", "seq_cot")
-    cot = SalesQuotation(
-        numero=cot_numero,
-        sc_id=sc.id,
-        sc_numero=sc.numero,
-        customer_id=sc.customer_id,
-        customer_name=sc.customer_name,
-        customer_phone=sc.customer_phone,
-        customer_email=sc.customer_email,
-        customer_address=sc.customer_address,
-        cotizador=body.get("cotizador", sc.advisor_name),
-        estado="BORRADOR",
-        productos=sc.productos or [],
-        fecha_entrega_estimada=entrega_est,
-        created_by=body.get("user_name"),
-    )
-    db.add(cot)
+    cot = _crear_cotizacion_desde_solicitud(db, sc, body.get("cotizador", sc.advisor_name), body.get("user_name"))
     db.commit()
     db.refresh(cot)
     # Los dos _log de abajo van DESPUES del unico commit que de verdad importa (arriba)
@@ -1240,6 +1260,75 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
           if rechazada else f"Cotización {cot.numero} creada desde {sc.numero}"),
          new_estado="BORRADOR", user_name=body.get("user_name"))
 
+    return {"status": "success", "data": {"sc": _sc_dict(sc), "cotizacion": _cot_dict(cot)}}
+
+
+# U11: limites del motivo de /cotizar-sin-confirmacion (el frontend tiene su espejo MOTIVO_SIN_CONFIRMACION_MIN).
+MOTIVO_SIN_CONFIRMACION_MIN = 10
+MOTIVO_SIN_CONFIRMACION_MAX = 500
+# U11: estados en que una SC sin la confirmacion vigente del cliente se puede cotizar con motivo (CONFIRMADA solo si
+# _confirmacion_vigente_sc es falso: confirmada por su cotizacion, sin la marca gate1).
+_ESTADOS_SC_COTIZABLES_SIN_CONFIRMACION = ("ASIGNADA", "PENDIENTE_CONFIRMACION", "CONFIRMADA")
+
+
+@router.post("/solicitudes/{sc_id}/cotizar-sin-confirmacion")
+def cotizar_sin_confirmacion(sc_id: int, body: CotizarSinConfirmacionBody,
+        user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
+    """U11: la UNICA excepcion auditada a Gate 1. Crea la COT (Borrador) de una SC que el cliente todavia no confirma,
+    con motivo obligatorio. Queda registrada en la COT (sin_confirmacion_sc_at / _motivo) y en la Actividad de la SC
+    (COTIZADA_SIN_CONFIRMACION) y de la COT (CREATED), con el autor de la sesion (R9: nunca del body).
+
+    NO toca sc.estado ni gate1_confirmed_at y no revoca el enlace pendiente de la SC: el cliente puede confirmarla
+    despues (confirmar_via_token conserva esta COT) o confirmar la COT (la sincronizacion de U15 confirma la SC). El
+    pedido sigue exigiendo Gate 2 y el anticipo. Un solo commit (C8); el lead del CRM va en un savepoint."""
+    motivo = (body.motivo or "").strip()
+    if len(motivo) < MOTIVO_SIN_CONFIRMACION_MIN:
+        raise HTTPException(422, f"El motivo debe tener al menos {MOTIVO_SIN_CONFIRMACION_MIN} caracteres.")
+    if len(motivo) > MOTIVO_SIN_CONFIRMACION_MAX:
+        raise HTTPException(422, f"El motivo no puede tener más de {MOTIVO_SIN_CONFIRMACION_MAX} caracteres.")
+    # Bloqueada como en confirmar_solicitud: dos pedidos simultaneos (o este y la confirmacion del cliente) no crean
+    # dos COT.
+    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
+    if not sc:
+        raise HTTPException(404, "Solicitud no encontrada")
+    if sc.tipo_solicitud == "Soporte Tecnico" or sc.estado == "N/A_SOPORTE":
+        raise HTTPException(400, "Las solicitudes de Soporte Técnico no se cotizan.")
+    if sc.estado == "CANCELADA":
+        raise HTTPException(409, _mensaje_solicitud_cancelada(sc, "cotizarla"))
+    if _confirmacion_vigente_sc(sc):
+        raise HTTPException(409, "El cliente ya confirmó esta solicitud: usa «Crear Cotización».")
+    if sc.estado == "BORRADOR" or not sc.advisor_user_id:
+        raise HTTPException(400, "Asigna un asesor a la solicitud antes de cotizarla.")
+    if sc.estado not in _ESTADOS_SC_COTIZABLES_SIN_CONFIRMACION:
+        raise HTTPException(400, f"No se puede cotizar sin confirmación una solicitud en estado "
+                                 f"{etiqueta_estado('SC', sc.estado)}.")
+    if not _tiene_productos_para_cotizar(sc.productos):
+        raise HTTPException(400, "La solicitud no tiene productos para cotizar. Agrégalos en la solicitud "
+                                 "y vuelve a enviársela al cliente para que la confirme.")
+    _exigir_sin_documentos_activos(db, sc)
+
+    autor = nombre_de_usuario(user)
+    cot = _crear_cotizacion_desde_solicitud(db, sc, _texto_o_none(body.cotizador) or sc.advisor_name, autor)
+    cot.sin_confirmacion_sc_at = datetime.datetime.utcnow()
+    cot.sin_confirmacion_sc_motivo = motivo
+    estado_sc = etiqueta_estado("SC", sc.estado)
+    _log(db, "SC", sc.id, sc.numero, "COTIZADA_SIN_CONFIRMACION",
+         f"Se procedió con la cotización {cot.numero} sin confirmación del cliente. Motivo: {motivo}",
+         user_name=autor,
+         extra_data={"cot_id": cot.id, "cot_numero": cot.numero, "motivo": motivo, "estado_solicitud": sc.estado,
+                     "cambios": [{"etiqueta": "Motivo", "despues": motivo},
+                                 {"etiqueta": "Estado de la solicitud", "despues": estado_sc}]},
+         commit=False)
+    _log(db, "COT", cot.id, cot.numero, "CREATED",
+         f"Cotización {cot.numero} creada desde {sc.numero} sin confirmación del cliente",
+         new_estado="BORRADOR", user_name=autor,
+         extra_data={"sin_confirmacion": True, "cambios": [{"etiqueta": "Motivo", "despues": motivo}]},
+         commit=False)
+    # Como create_cotizacion: el lead pasa a QUOTATION. En un savepoint (patron de cancelar/restaurar): si falla, solo
+    # se deshace lo del lead y queda en el log; la COT y sus renglones se guardan igual.
+    _lead_en_savepoint(db, f"mover a cotización el lead de la solicitud {sc.numero}",
+                       lambda: mover_lead_de_solicitud(sc.id, "QUOTATION", db, commit=False))
+    db.commit()
     return {"status": "success", "data": {"sc": _sc_dict(sc), "cotizacion": _cot_dict(cot)}}
 
 
@@ -1398,6 +1487,10 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
     # H35+H48: la nota ACTUAL de la solicitud, aparte de cot.notas (nunca se copia: asi cambia si la SC cambia y
     # funciona sin backfill). Solo en el detalle (no en _cot_dict) para no hacer una consulta por fila en el listado.
     d["sc_notas"] = _texto_o_none(sc.notas) if sc is not None else None
+    # U11 (C9): estado de la SC y si el cliente la confirmo (Gate 1 vigente), con esa misma lectura. El aviso de una COT
+    # creada sin confirmacion se muestra mientras la SC no este confirmada. None si la COT no tiene SC.
+    d["sc_estado"] = sc.estado if sc is not None else None
+    d["sc_confirmacion_vigente"] = _confirmacion_vigente_sc(sc) if sc is not None else None
     # Anticipo (H36+H43, N1, R3, R6): lo mismo que exigira convertir_cotizacion_a_venta. Solo en el detalle (no en
     # _cot_dict) para no hacer una consulta por fila en el listado.
     pct, modalidad, _, requerido = anticipo_cotizacion(cot, db, sc=sc)

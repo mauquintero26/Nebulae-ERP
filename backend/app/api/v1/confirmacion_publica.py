@@ -109,7 +109,7 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
         raise HTTPException(400, GENERIC_ERROR)
     document_type, document_id = resolved
     if document_type == "SC":
-        from app.api.v1.erp_ventas import CustomerRequest, _log
+        from app.api.v1.erp_ventas import CustomerRequest, SalesQuotation, _log
         import datetime
         # Final whole-branch review (hallazgo #5): .populate_existing().with_for_update()
         # -- mismo endurecimiento que la rama COT de aqui abajo ya tiene desde Round 3,
@@ -134,9 +134,23 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
         # una COT deja la SC (update_cotizacion con otro sc_id).
         sc.gate1_confirmed_at = datetime.datetime.utcnow()
         sc.updated_at = datetime.datetime.utcnow()
+        # U11: si ya se cotizo sin esperar esta confirmacion (/cotizar-sin-confirmacion), la SC se queda con esa COT
+        # (la activa mas reciente; una RECHAZADA no cuenta) y no se crea otra: con ella activa, confirmar_solicitud
+        # responde 400. Se lee con la SC todavia bloqueada y todo va en un solo commit (C8).
+        temprana = (db.query(SalesQuotation)
+                    .filter(SalesQuotation.sc_id == sc.id, SalesQuotation.estado != "RECHAZADA")
+                    .order_by(SalesQuotation.id.desc()).first())
+        cliente = "Cliente (confirmación por link)"
+        descripcion = "Confirmada por el cliente vía enlace"
+        if temprana is not None:
+            descripcion += f". Se mantiene la cotización {temprana.numero}, creada antes de la confirmación."
+        _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", descripcion,
+             old_estado=old_estado, new_estado="CONFIRMADA", user_name=cliente, commit=False)
+        if temprana is not None:
+            _log(db, "COT", temprana.id, temprana.numero, "SC_CONFIRMADA",
+                 f"El cliente confirmó la solicitud {sc.numero}: se mantiene esta cotización (no se crea otra).",
+                 user_name=cliente, commit=False)
         db.commit()
-        _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Confirmada por el cliente vía enlace",
-             old_estado=old_estado, new_estado="CONFIRMADA", user_name="Cliente (confirmación por link)")
         return {"status": "success", "message": "Solicitud confirmada. Gracias."}
     elif document_type == "COT":
         from app.api.v1.erp_ventas import SalesQuotation, _log, _sincronizar_estado_solicitud_desde_cotizacion

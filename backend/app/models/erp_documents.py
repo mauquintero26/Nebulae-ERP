@@ -140,6 +140,10 @@ class SalesQuotation(Base):
     # sigue la modalidad de pago de la solicitud (ventas_dinero.pct_anticipo_cotizacion).
     anticipo_pct_manual   = Column(Numeric(5, 2), nullable=True)
     anticipo_manual_nota  = Column(Text, nullable=True)
+    # U11 (Ventas Bloque 2, fa6_025): COT creada por /solicitudes/{id}/cotizar-sin-confirmacion, antes de que el cliente
+    # confirmara la SC (excepcion auditada a Gate 1). Cuando (UTC sin zona) y el motivo obligatorio; NULL = camino normal.
+    sin_confirmacion_sc_at     = Column(DateTime, nullable=True)
+    sin_confirmacion_sc_motivo = Column(Text, nullable=True)
 
     customer_request = relationship("CustomerRequest", back_populates="quotations")
     customer         = relationship("Customer", foreign_keys=[customer_id])

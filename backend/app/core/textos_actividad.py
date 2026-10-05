@@ -97,6 +97,13 @@ def etiqueta_estado(entidad, estado) -> str:
     return codigo.replace("_", " ").lower().capitalize()
 
 
+def nombre_de_usuario(user) -> str:
+    """Autor de un renglon de la Actividad en los endpoints NUEVOS del Bloque 2 (R9/C13): sale de la sesion, nunca del
+    body. Es el mismo valor que AuthGuard guarda como 'user_name' (el username o, si no tiene, el correo); 'Sistema'
+    si no hay ninguno. app/core/chatter.py lo reexporta."""
+    return getattr(user, "username", None) or getattr(user, "email", None) or "Sistema"
+
+
 # --- Correccion de las actividades viejas (H7+H41; la usa scripts/corregir_textos_actividad.py) ---------------
 
 # Solo estos documentos y estas acciones: los textos que el SISTEMA genera. NOTE_ADDED, CHATTER y CANCELLED son
