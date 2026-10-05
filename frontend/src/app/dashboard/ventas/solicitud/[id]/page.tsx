@@ -91,6 +91,19 @@ const ACTIVITY_TYPE_ORDER = [
 // erp_ventas.MOTIVO_SIN_CONFIRMACION_MAX; el mínimo es MOTIVO_SIN_CONFIRMACION_MIN de la librería).
 const MOTIVO_SIN_CONFIRMACION_MAX = 500;
 
+// fecha_vencimiento llega en UTC sin zona (utcnow + días). El campo date de 'Editar' muestra el día en hora local
+// (Colombia), el mismo que la grilla y la lista (fDate(comoUTC(...))); con split('T') una SC creada entre las 7 pm y la
+// medianoche mostraba el día siguiente. saveEdit lo devuelve a mediodía local, así que la ida y vuelta da el mismo día.
+// Una fecha de calendario (sin hora) es ese mismo día.
+const FECHA_DE_CALENDARIO = /^\d{4}-\d{2}-\d{2}$/;
+function diaLocal(iso: any): string {
+  if (typeof iso !== 'string' || !iso.trim()) return '';
+  if (FECHA_DE_CALENDARIO.test(iso.trim())) return iso.trim();
+  const f = new Date(comoUTC(iso));
+  if (Number.isNaN(f.getTime())) return '';
+  return `${f.getFullYear()}-${String(f.getMonth() + 1).padStart(2, '0')}-${String(f.getDate()).padStart(2, '0')}`;
+}
+
 function SolicitudDetalleContent() {
   const params = useParams();
   const router = useRouter();
@@ -187,7 +200,7 @@ function SolicitudDetalleContent() {
             tipo_solicitud: d.tipo_solicitud || 'Cotizacion de Producto',
             modalidad_pago: d.modalidad_pago || 'Contado',
             notas: d.notas || '',
-            fecha_vencimiento: d.fecha_vencimiento ? d.fecha_vencimiento.split('T')[0] : '',
+            fecha_vencimiento: d.fecha_vencimiento ? diaLocal(d.fecha_vencimiento) : '',
           });
         }
       }
@@ -882,7 +895,7 @@ function SolicitudDetalleContent() {
                 </div>
               )}
               <div className="grid grid-cols-2 gap-3">
-                {[{ l: 'Asesor', v: solicitud?.advisor_name || '-' }, { l: 'Modalidad Pago', v: etiquetaModalidad(solicitud?.modalidad_pago) || '-' }, { l: 'Fecha Solicitud', v: fDate(solicitud?.fecha_solicitud) }, { l: 'Vencimiento', v: fDate(solicitud?.fecha_vencimiento) }].map(item => (
+                {[{ l: 'Asesor', v: solicitud?.advisor_name || '-' }, { l: 'Modalidad Pago', v: etiquetaModalidad(solicitud?.modalidad_pago) || '-' }, { l: 'Fecha Solicitud', v: fDate(solicitud?.fecha_solicitud) }, { l: 'Vencimiento', v: fDate(comoUTC(solicitud?.fecha_vencimiento)) }].map(item => (
                   <div key={item.l} className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3"><p className="text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider">{item.l}</p><p className="font-bold text-sm text-slate-800">{item.v}</p></div>
                 ))}
               </div>
@@ -1113,7 +1126,9 @@ function SolicitudDetalleContent() {
       )}
       {showCancelModal && pasosCancelar.length === 0 && (
         <Modal title="Cancelar Solicitud" subtitle="La solicitud pasa a la Papelera. Podrás restaurarla desde allí." icon={Trash2} color="red" maxWidth="md"
-          onClose={() => setShowCancelModal(false)}
+          // T1B: mientras cancela, la X queda deshabilitada y la ventana no se cierra.
+          onClose={() => { if (!cancelling) setShowCancelModal(false); }}
+          bloquearCierre={cancelling}
           footer={(
             <>
               <Button variant="secondary" disabled={cancelling} onClick={() => setShowCancelModal(false)}>No, mantener</Button>
@@ -1124,7 +1139,7 @@ function SolicitudDetalleContent() {
             <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Motivo de la cancelación *</label>
             <textarea
               value={cancelRazon}
-              onChange={e => setCancelRazon(e.target.value)}
+              onChange={e => { setCancelRazon(e.target.value); setCancelError(''); }}
               rows={3}
               maxLength={500}
               placeholder="Describe el motivo de la cancelación..."
