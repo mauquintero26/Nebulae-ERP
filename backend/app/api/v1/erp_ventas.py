@@ -816,10 +816,12 @@ def get_papelera(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         dias = float(d.get("dias_en_papelera") or 0)
         d["dias_en_papelera"] = int(dias)
         d["tiene_documentos"] = bool(d.get("tiene_documentos"))
-        if d["tiene_documentos"]:
+        # None = la purga no la va a borrar: se conserva (tiene documentos) o no tiene eliminada_at (cancelada con la
+        # pastilla vieja: la purga exige eliminada_at). Mismo criterio que _fecha_de_purga / purga_programada.
+        if d["tiene_documentos"] or not d.get("eliminada_at"):
             d["dias_restantes"] = None
         else:
-            d["dias_restantes"] = max(0, DIAS_EN_PAPELERA - int(dias)) if d.get("eliminada_at") else DIAS_EN_PAPELERA
+            d["dias_restantes"] = max(0, DIAS_EN_PAPELERA - int(dias))
         d["eliminada_at"] = str(d["eliminada_at"]) if d.get("eliminada_at") else None
         d["created_at"] = str(d["created_at"]) if d.get("created_at") else None
         data.append(d)
@@ -3201,17 +3203,19 @@ def restaurar_solicitud(sc_id: int, user: User = Depends(require_roles(*ROLE_ADM
     # de un ciclo anterior.
     revoke_pending_tokens(db, "SC", sc_id, commit=False)
     # N4: cancelar la SC deja el lead perdido; restaurarla lo devuelve a la etapa con la que nace un lead nuevo (None si
-    # no habia lead perdido). Si falla, la restauracion sigue y el renglon lo dice.
+    # no habia lead perdido). Si falla, la restauracion sigue y el renglon lo dice (solo si habia un lead que reabrir).
+    tenia_lead_perdido = db.query(LeadCRM.id).filter(LeadCRM.canonical_customer_request_id == sc.id,
+                                                     LeadCRM.status == "CANCELLED").first() is not None
     etapa_lead, lead_fallo = _lead_en_savepoint(db, f"reabrir el lead de la solicitud restaurada {sc.numero}",
                                                 lambda: reabrir_lead_de_solicitud(sc.id, db, commit=False))
-    cambios =[{"etiqueta": f"Queda {etiqueta}", "despues": motivo}]
+    cambios = [{"etiqueta": f"Queda {etiqueta}", "despues": motivo}]
     if sc.razon_cancelacion:
         cambios.append({"etiqueta": "Motivo de la cancelación", "despues": sc.razon_cancelacion})
     if habia_confirmacion or enlaces_vivos > 0:
         cambios.append({"etiqueta": "Confirmación del cliente", "despues": "Hay que volver a enviársela al cliente"})
     if etapa_lead:
         cambios.append({"etiqueta": "Cliente en el CRM", "despues": f"Vuelve a {etapa_lead}"})
-    elif lead_fallo:
+    elif lead_fallo and tenia_lead_perdido:
         cambios.append({"etiqueta": "Cliente en el CRM", "despues": "No se pudo reabrir"})
     _log(db, "SC", sc_id, sc.numero, "RESTORED", f"Solicitud restaurada a {etiqueta}", old_estado, estado_final,
          getattr(user, 'email', ''), extra_data={"cambios": cambios}, commit=False)

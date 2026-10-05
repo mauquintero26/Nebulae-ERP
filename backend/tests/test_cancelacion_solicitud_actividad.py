@@ -127,6 +127,14 @@ def _token_usado(db, raw):
         DocumentConfirmationToken.token_hash == hashlib.sha256(raw.encode()).hexdigest()).first().used_at is not None
 
 
+def _capturar_logger_error(monkeypatch):
+    """Los mensajes de logger.error de erp_ventas (el fallo forzado del lead): se afirman y no ensucian la salida."""
+    import app.api.v1.erp_ventas as m
+    registro = []
+    monkeypatch.setattr(m.logger, "error", lambda mensaje, *a, **k: registro.append(mensaje))
+    return registro
+
+
 def _commits_del_api(db, monkeypatch):
     """Lista que recibe un elemento por cada Session.commit() de las sesiones del API (no la de la prueba). La salida
     de un `with db.begin_nested()` no es un Session.commit(): no se cuenta."""
@@ -274,6 +282,7 @@ def test_cancelar_si_falla_el_lead_la_solicitud_igual_queda_cancelada(app_client
         raise RuntimeError("fallo simulado del CRM")
 
     monkeypatch.setattr(m, "mover_lead_de_solicitud", mover_que_falla)
+    errores = _capturar_logger_error(monkeypatch)
     resp = _cancelar(app_client, admin_token, sc.id)
     assert resp.status_code == 200, resp.text
     db.refresh(sc)
@@ -283,10 +292,53 @@ def test_cancelar_si_falla_el_lead_la_solicitud_igual_queda_cancelada(app_client
     (log,) = _logs(db, sc.id, "CANCELLED")
     assert ("Cliente en el CRM", "No se pudo marcar como perdido") in _cambios(log)
     assert log.extra_data["lead_perdido"] is False
+    assert len(errores) == 1 and "SC-T2B006" in errores[0]
+
+
+def test_cancelar_con_un_error_real_de_la_base_en_el_lead(app_client, db, admin_token, user_admin, monkeypatch,
+                                                          contador_sql):
+    """Ronda 1 (11): el fallo del lead es un flush que PostgreSQL rechaza (NOT NULL), no un RuntimeError de Python. El
+    savepoint deshace lo del lead, incluida la etapa estándar que _asegurar_etapas_estandar creó dentro de él; la SC
+    queda cancelada con un solo commit."""
+    from sqlalchemy import text
+    import app.api.v1.crm as crm
+    from app.models.sales import SalesOrder
+    sc = _sc(db, "SC-T2B006B", user_admin)
+    lead = _lead(db, sc, status="DRAFT")
+    cliente_original = lead.customer_id
+    # Falta una etapa estándar: _asegurar_etapas_estandar la creará (y el savepoint tiene que deshacerla).
+    db.execute(text("UPDATE pipeline_stages SET name = name || ' T2B', maps_to_status = 'X_T2B_' || id "
+                    "WHERE maps_to_status = 'EN_NEGOCIACION' OR name = 'En Negociación'"))
+    db.commit()
+    etapas_antes = db.execute(text("SELECT count(*) FROM pipeline_stages")).scalar()
+
+    def mover_con_error_de_base(order, maps_to_status, sesion, commit=True):
+        order.customer_id = None  # sales_orders.customer_id es NOT NULL
+        sesion.flush()
+
+    monkeypatch.setattr(crm, "_mover_lead_a_status", mover_con_error_de_base)
+    errores = _capturar_logger_error(monkeypatch)
+    commits = _commits_del_api(db, monkeypatch)
+    with contador_sql.ventana() as v:
+        resp = _cancelar(app_client, admin_token, sc.id)
+    assert resp.status_code == 200, resp.text
+    assert len(commits) == 1
+    assert any(s.lstrip().upper().startswith("INSERT INTO PIPELINE_STAGES") for s in v.sentencias)
+    db.refresh(sc)
+    assert sc.estado == "CANCELADA" and sc.eliminada_at is not None
+    db.expire_all()
+    fila = db.get(SalesOrder, lead.id)
+    assert (fila.status, fila.customer_id) == ("DRAFT", cliente_original)
+    assert db.execute(text("SELECT count(*) FROM pipeline_stages")).scalar() == etapas_antes
+    (log,) = _logs(db, sc.id, "CANCELLED")
+    assert ("Cliente en el CRM", "No se pudo marcar como perdido") in _cambios(log)
+    assert len(errores) == 1 and "SC-T2B006B" in errores[0]
 
 
 def test_enviar_a_papelera_una_sc_ya_cancelada_registra_la_papelera(app_client, db, admin_token, user_admin):
-    """Rama SENT_TO_TRASH de N4 (SC cancelada con la pastilla vieja): el mismo renglón 'Papelera'."""
+    """Rama SENT_TO_TRASH de N4 (SC cancelada con la pastilla vieja): el mismo renglón 'Papelera'; con lead, también
+    'Cliente en el CRM' (ronda 1, 10)."""
+    from app.models.sales import SalesOrder
     sc = _sc(db, "SC-T2B007", user_admin, estado="CANCELADA", notas="Nota")
     assert _cancelar(app_client, admin_token, sc.id, "Pastilla vieja").status_code == 200
     db.refresh(sc)
@@ -295,7 +347,18 @@ def test_enviar_a_papelera_una_sc_ya_cancelada_registra_la_papelera(app_client, 
     assert log.description == "Solicitud enviada a la papelera"
     assert _cambios(log) == [("Papelera", f"Se elimina definitivamente el {_fecha_purga(sc.eliminada_at)} "
                                           "si no se restaura")]
+    assert log.extra_data["lead_perdido"] is False
     assert _logs(db, sc.id, "CANCELLED") == []
+
+    con_lead = _sc(db, "SC-T2B007B", user_admin, estado="CANCELADA")
+    lead = _lead(db, con_lead, status="DRAFT")
+    assert _cancelar(app_client, admin_token, con_lead.id, "Pastilla vieja").status_code == 200
+    (log,) = _logs(db, con_lead.id, "SENT_TO_TRASH")
+    assert _cambios(log) == [("Cliente en el CRM", "Marcado como perdido"),
+                             ("Papelera", "Se conserva como historial (tiene lead del CRM)")]
+    assert log.extra_data["lead_perdido"] is True
+    db.expire_all()
+    assert db.get(SalesOrder, lead.id).status == "CANCELLED"
 
 
 def test_cancelar_restaurar_y_eliminar_hacen_un_solo_commit(app_client, db, admin_token, user_admin, monkeypatch):
@@ -349,6 +412,14 @@ def test_papelera_dice_si_se_conserva_y_el_detalle_lo_expone(app_client, db, adm
     d = _detalle(app_client, admin_token, vieja.id)
     assert d["se_conserva_en_papelera"] is False and d["purga_programada"] is None
 
+    # La lista de la Papelera dice lo mismo (ronda 1, 2): dias_restantes None si se conserva o si no tiene eliminada_at.
+    resp = app_client.get("/api/v1/ventas/solicitudes/papelera", headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    papelera = {f["numero"]: f for f in resp.json()["data"]}
+    assert papelera["SC-T2B009A"]["dias_restantes"] is None
+    assert papelera["SC-T2B009B"]["dias_restantes"] == 30
+    assert papelera["SC-T2B009C"]["dias_restantes"] is None and papelera["SC-T2B009C"]["tiene_documentos"] is False
+
 
 def test_referencias_de_solicitud_y_texto_de_papelera(db, user_admin):
     """Un único helper, con los tres criterios de la Papelera (sin filtrar por estado), en orden COT, PVEN, lead y en
@@ -370,6 +441,10 @@ def test_referencias_de_solicitud_y_texto_de_papelera(db, user_admin):
     assert refs == ["cotizaciones COT-T2B010A, COT-T2B010B", "pedido de venta PVEN-T2B010", "leads del CRM"]
     assert _texto_papelera(db, sc) == ("Se conserva como historial (tiene cotizaciones COT-T2B010A, COT-T2B010B, "
                                        "pedido de venta PVEN-T2B010, leads del CRM)")
+    # Sin referencias y sin eliminada_at (pastilla vieja): la purga no la toca (ronda 1, 3; texto oficial para T8A).
+    vieja = _sc(db, "SC-T2B010B", user_admin, estado="CANCELADA")
+    assert vieja.eliminada_at is None
+    assert _texto_papelera(db, vieja) == "No se elimina automáticamente: no tiene fecha de envío a la Papelera"
 
 
 def test_patch_de_estado_sobre_sc_cancelada_se_rechaza(app_client, db, admin_token, user_admin):
@@ -435,6 +510,24 @@ def test_restaurar_sin_asesor_queda_nueva(app_client, db, admin_token, user_admi
     assert _cambios(log) == [(f"Queda {nueva}", "no tiene asesor asignado")]
 
 
+def test_restaurar_pide_reenviar_si_habia_un_enlace_vivo_aunque_no_hubiera_confirmacion(app_client, db, admin_token,
+                                                                                       user_admin):
+    """Ronda 1 (10): SC cancelada sin gate1 con un enlace creado estando cancelada -> 'Confirmación del cliente' y el
+    enlace queda usado. Sin gate1 ni enlace -> ese renglón no aparece."""
+    from app.core.confirmation_tokens import create_confirmation_token
+    sc = _sc(db, "SC-T2B013B", user_admin, estado="CANCELADA", eliminada_at=AHORA())
+    enlace = create_confirmation_token(db, "SC", sc.id)
+    assert _restaurar(app_client, admin_token, sc.id).status_code == 200
+    assert _token_usado(db, enlace)
+    (log,) = _logs(db, sc.id, "RESTORED")
+    assert ("Confirmación del cliente", "Hay que volver a enviársela al cliente") in _cambios(log)
+
+    sin_nada = _sc(db, "SC-T2B013C", user_admin, estado="CANCELADA", eliminada_at=AHORA())
+    assert _restaurar(app_client, admin_token, sin_nada.id).status_code == 200
+    (log,) = _logs(db, sin_nada.id, "RESTORED")
+    assert "Confirmación del cliente" not in dict(_cambios(log))
+
+
 def test_restaurar_una_solicitud_que_no_esta_cancelada_da_409(app_client, db, admin_token, user_admin):
     """H33-5 con el texto exacto del Bloque 1 (R34; verde desde el principio)."""
     sc = _sc(db, "SC-T2B014", user_admin)
@@ -463,17 +556,18 @@ def test_restaurar_con_cotizacion_activa_da_el_409_del_bloque_1(app_client, db, 
 def test_restaurar_devuelve_el_lead_a_la_etapa_inicial(app_client, db, admin_token, user_admin):
     """H33-7 con R34: el lead perdido vuelve a la etapa con que nace un lead nuevo; uno que no estaba perdido no se toca
     y no hay renglón del CRM."""
-    from app.api.v1.crm import _etapa_inicial_del_pipeline
+    from app.api.v1 import crm
     from app.models.sales import SalesOrder
     sc = _sc(db, "SC-T2B016", user_admin, estado="CANCELADA", eliminada_at=AHORA())
     lead = _lead(db, sc, status="CANCELLED")
-    stage, status = _etapa_inicial_del_pipeline(db)
+    stage, status = crm._etapa_inicial_del_pipeline(db)
     assert _restaurar(app_client, admin_token, sc.id).status_code == 200
     db.expire_all()
     fila = db.get(SalesOrder, lead.id)
     assert (fila.status, fila.pipeline_stage_id) == (status, stage.id if stage else None)
     (log,) = _logs(db, sc.id, "RESTORED")
-    assert ("Cliente en el CRM", f"Vuelve a {stage.name}") in _cambios(log)
+    etapa = stage.name if stage else crm._ETAPAS_ESTANDAR[0][0]
+    assert ("Cliente en el CRM", f"Vuelve a {etapa}") in _cambios(log)
 
     vivo = _sc(db, "SC-T2B016B", user_admin, estado="CANCELADA", eliminada_at=AHORA())
     lead_vivo = _lead(db, vivo, status="QUOTATION")
@@ -496,6 +590,7 @@ def test_restaurar_si_falla_el_lead_la_solicitud_igual_queda_restaurada(app_clie
         raise RuntimeError("fallo simulado del CRM")
 
     monkeypatch.setattr(m, "reabrir_lead_de_solicitud", reabrir_que_falla)
+    errores = _capturar_logger_error(monkeypatch)
     resp = _restaurar(app_client, admin_token, sc.id)
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["estado"] == "ASIGNADA"
@@ -505,6 +600,16 @@ def test_restaurar_si_falla_el_lead_la_solicitud_igual_queda_restaurada(app_clie
     assert db.get(SalesOrder, lead.id).status == "CANCELLED"
     (log,) = _logs(db, sc.id, "RESTORED")
     assert ("Cliente en el CRM", "No se pudo reabrir") in _cambios(log)
+    assert len(errores) == 1 and "SC-T2B017" in errores[0]
+
+    # Ronda 1 (1): sin un lead perdido que reabrir, un fallo no deja el renglón 'No se pudo reabrir'.
+    sin_lead = _sc(db, "SC-T2B017B", user_admin, estado="CANCELADA", eliminada_at=AHORA())
+    _lead(db, sin_lead, status="DRAFT")
+    errores.clear()
+    assert _restaurar(app_client, admin_token, sin_lead.id).status_code == 200
+    (log,) = _logs(db, sin_lead.id, "RESTORED")
+    assert "Cliente en el CRM" not in dict(_cambios(log))
+    assert len(errores) == 1 and "SC-T2B017B" in errores[0]
 
 
 def test_mover_y_reabrir_el_lead_sin_commit(db, user_admin, contador_sql):
@@ -639,10 +744,12 @@ def test_script_limpiar_motivo_en_notas_reporta_aplica_y_es_idempotente(db, user
         res = limpiar(db, aplicar=False, ids=ids, tabla_respaldo=TABLA_NOTAS_TEST)
         assert res["candidatas"] == 2 and res["limpiadas"] == 0
         assert res["marcas_conservadas"] == 2 and res["excluidas"] == 0
-        por_numero = {e["numero"]: e for e in res["ejemplos"]}
+        assert res["no_reconocidas"] == [] and res["soporte_con_marca"] == []
+        por_numero = {e["numero"]: e for e in res["detalle"]}
         assert set(por_numero) == {"SC-T2BN01", "SC-T2BN03"}
         assert por_numero["SC-T2BN01"]["despues"] == "Entrega en obra"
         assert por_numero["SC-T2BN01"]["quitadas"] == ["Ya no lo necesita"]
+        assert por_numero["SC-T2BN01"]["lineas_quitadas"] == [f"{MARCA}Ya no lo necesita"]
         assert por_numero["SC-T2BN03"]["despues"] is None
         assert _notas(db, ids) == originales
         assert not _existe_tabla(db, TABLA_NOTAS_TEST)  # el reporte ni siquiera crea la tabla de respaldo
@@ -706,16 +813,88 @@ def test_limpiar_excluye_documentos_reales(db, user_admin, monkeypatch):
     db.execute(text("UPDATE customer_requests SET tipo_solicitud = NULL WHERE id = :i"), {"i": sin_tipo.id})
     db.commit()
     ids = [por_numero.id, por_cot.id, soporte.id, sin_tipo.id]
-    # Sin agregarlos a la lista, las dos primeras son candidatas (la prueba si prueba algo); Soporte nunca.
-    assert {e["numero"] for e in modulo.limpiar(db, aplicar=False, ids=ids)["ejemplos"]} == {
-        "SC-T2BX01", "SC-T2BX02", "SC-T2BX04"}
+    # Sin agregarlos a la lista, las dos primeras son candidatas (la prueba si prueba algo); Soporte nunca, pero se
+    # cuenta aparte en el reporte (ronda 1, 5).
+    res = modulo.limpiar(db, aplicar=False, ids=ids)
+    assert {e["numero"] for e in res["detalle"]} == {"SC-T2BX01", "SC-T2BX02", "SC-T2BX04"}
+    assert res["soporte_con_marca"] == ["SC-T2BX03"]
     monkeypatch.setattr(modulo, "DOCUMENTOS_REALES", modulo.DOCUMENTOS_REALES + (por_numero.numero, cot.numero))
     try:
         res = modulo.limpiar(db, aplicar=False, ids=ids)
-        assert {e["numero"] for e in res["ejemplos"]} == {"SC-T2BX04"} and res["excluidas"] == 2
+        assert {e["numero"] for e in res["detalle"]} == {"SC-T2BX04"} and res["excluidas"] == 2
         res = modulo.limpiar(db, aplicar=True, ids=ids, tabla_respaldo=TABLA_NOTAS_TEST)
         assert res["limpiadas"] == 1
         assert _notas(db, ids) == [f"N\n{MARCA}Motivo X", f"N\n{MARCA}Motivo Y", f"N\n{MARCA}Motivo S", "N"]
+    finally:
+        _borrar_tabla(db, TABLA_NOTAS_TEST)
+
+
+def test_limpiar_respeta_los_saltos_de_linea(db, user_admin):
+    """Ronda 1 (7): '\\r\\n' se conserva; una marca en medio de la nota sale sin tocar lo de alrededor; si quitarla deja
+    dos líneas en blanco seguidas, queda una (las que ya estaban en otra parte no se tocan)."""
+    from scripts.limpiar_motivo_en_notas import limpiar
+    crlf = _sc(db, "SC-T2BL01", user_admin, estado="CANCELADA", razon_cancelacion="X",
+               notas=f"Entrega\r\n{MARCA}X\r\nB")
+    medio = _sc(db, "SC-T2BL02", user_admin, estado="CANCELADA", razon_cancelacion="Motivo M",
+                notas=f"Antes\n{MARCA}Motivo M\nDespués")
+    blancos = _sc(db, "SC-T2BL03", user_admin, estado="CANCELADA", razon_cancelacion="Motivo B",
+                  notas=f"Arriba\n\n{MARCA}Motivo B\n\nAbajo\n\n\nFin")
+    ids = [crlf.id, medio.id, blancos.id]
+    try:
+        res = limpiar(db, aplicar=True, ids=ids, tabla_respaldo=TABLA_NOTAS_TEST)
+        assert res["limpiadas"] == 3
+        assert _notas(db, ids) == ["Entrega\r\nB", "Antes\nDespués", "Arriba\n\nAbajo\n\n\nFin"]
+    finally:
+        _borrar_tabla(db, TABLA_NOTAS_TEST)
+
+
+def test_limpiar_reporta_aparte_las_marcas_no_reconocidas(db, user_admin):
+    """Ronda 1 (5): una marca con sangría o con texto antes en la misma línea no se reconoce ni se toca: la SC sale en
+    'no_reconocidas' para revisarla a mano (también si además tiene una marca reconocida)."""
+    from scripts.limpiar_motivo_en_notas import limpiar
+    sangria = _sc(db, "SC-T2BR01", user_admin, estado="CANCELADA", razon_cancelacion="Motivo R",
+                  notas=f"Nota\n  {MARCA}Motivo R")
+    texto_antes = _sc(db, "SC-T2BR02", user_admin, estado="CANCELADA", razon_cancelacion="Motivo R",
+                      notas=f"Nota {MARCA}Motivo R")
+    mixta = _sc(db, "SC-T2BR03", user_admin, estado="CANCELADA", razon_cancelacion="Motivo R",
+                notas=f"Nota\n{MARCA}Motivo R\n\t{MARCA}Motivo R")
+    bien = _sc(db, "SC-T2BR04", user_admin, estado="CANCELADA", razon_cancelacion="Motivo R",
+               notas=f"Nota\n{MARCA}Motivo R")
+    ids = [sangria.id, texto_antes.id, mixta.id, bien.id]
+    originales = _notas(db, ids)
+    res = limpiar(db, aplicar=False, ids=ids)
+    assert res["no_reconocidas"] == ["SC-T2BR01", "SC-T2BR02", "SC-T2BR03"]
+    assert {e["numero"] for e in res["detalle"]} == {"SC-T2BR03", "SC-T2BR04"}
+    assert {e["numero"]: e["despues"] for e in res["detalle"]}["SC-T2BR03"] == f"Nota\n\t{MARCA}Motivo R"
+    assert _notas(db, ids) == originales
+
+
+def test_limpiar_dos_corridas_y_el_sql_de_deshacer_del_docstring(db, user_admin):
+    """Ronda 1 (6): con dos corridas sobre la misma SC, el respaldo conserva notas_original de la PRIMERA y notas_nueva
+    de la ÚLTIMA (ON CONFLICT DO UPDATE), así el SQL de deshacer del docstring (ejecutado aquí tal cual, solo con la
+    tabla de prueba) devuelve las notas originales."""
+    import re
+    from sqlalchemy import text
+    from scripts import limpiar_motivo_en_notas as modulo
+    sc = _sc(db, "SC-T2BD01", user_admin, estado="CANCELADA", razon_cancelacion="Primero",
+             notas=f"Obra\n{MARCA}Primero\n{MARCA}Segundo")
+    original = _notas(db, [sc.id])[0]
+    try:
+        assert modulo.limpiar(db, aplicar=True, ids=[sc.id], tabla_respaldo=TABLA_NOTAS_TEST)["limpiadas"] == 1
+        assert _notas(db, [sc.id]) == [f"Obra\n{MARCA}Segundo"]
+        _cancelled_viejo(db, sc, "Segundo")  # despues aparece otro motivo de la SC: la segunda corrida lo quita
+        assert modulo.limpiar(db, aplicar=True, ids=[sc.id], tabla_respaldo=TABLA_NOTAS_TEST)["limpiadas"] == 1
+        assert _notas(db, [sc.id]) == ["Obra"]
+        fila = db.execute(text(f"SELECT notas_original, notas_nueva FROM {TABLA_NOTAS_TEST} WHERE id = :i"),
+                          {"i": sc.id}).one()
+        assert tuple(fila) == (original, "Obra")
+        deshacer = re.search(r"UPDATE customer_requests c SET notas = r\.notas_original.*?;", modulo.__doc__, re.S)
+        assert deshacer, "el docstring debe traer el SQL de deshacer"
+        sql = deshacer.group(0).replace(f"FROM {modulo.TABLA_RESPALDO} r", f"FROM {TABLA_NOTAS_TEST} r")
+        assert TABLA_NOTAS_TEST in sql
+        db.execute(text(sql))
+        db.commit()
+        assert _notas(db, [sc.id]) == [original]
     finally:
         _borrar_tabla(db, TABLA_NOTAS_TEST)
 
@@ -749,14 +928,22 @@ def test_limpiar_rechaza_un_nombre_de_tabla_de_respaldo_peligroso(db):
             limpiar(db, aplicar=False, ids=[1], tabla_respaldo=nombre)
 
 
-def _correr_main(monkeypatch, argv):
-    """main() con limpiar reemplazada por una función que solo anota la llamada."""
+def _resultado_vacio(**cambios):
+    resultado = {"candidatas": 0, "limpiadas": 0, "excluidas": 0, "marcas_conservadas": 0, "no_reconocidas": [],
+                 "soporte_con_marca": [], "detalle": []}
+    resultado.update(cambios)
+    return resultado
+
+
+def _correr_main(monkeypatch, argv, resultado=None):
+    """main() con limpiar reemplazada por una función que anota la llamada y si la transacción es de solo lectura."""
+    from sqlalchemy import text
     from scripts import limpiar_motivo_en_notas as modulo
     llamadas = []
 
     def _limpiar(db, aplicar=False, **kwargs):
-        llamadas.append(aplicar)
-        return {"candidatas": 0, "limpiadas": 0, "excluidas": 0, "marcas_conservadas": 0, "ejemplos": []}
+        llamadas.append((aplicar, db.execute(text("SHOW transaction_read_only")).scalar()))
+        return resultado or _resultado_vacio()
 
     monkeypatch.setattr(modulo, "limpiar", _limpiar)
     salida, errores = io.StringIO(), io.StringIO()
@@ -769,9 +956,10 @@ def _correr_main(monkeypatch, argv):
 
 
 def test_limpiar_cli_reporta_por_defecto_y_aplicar_exige_la_base(db, monkeypatch):
+    """El reporte corre en una transacción READ ONLY y --aplicar no (ronda 1, 8)."""
     from sqlalchemy import text
     codigo, llamadas, salida, _ = _correr_main(monkeypatch, [])
-    assert codigo == 0 and llamadas == [False]
+    assert codigo == 0 and llamadas == [(False, "on")]
     assert "REPORTE" in salida and "--aplicar --base <nombre de la base>" in salida
     codigo, llamadas, _, errores = _correr_main(monkeypatch, ["--aplicar"])
     assert codigo == 2 and llamadas == [] and "exige --base" in errores
@@ -781,7 +969,28 @@ def test_limpiar_cli_reporta_por_defecto_y_aplicar_exige_la_base(db, monkeypatch
     assert f"SELECT current_database() -> {actual}" in salida
     assert "ABORTADO" in errores and "no se escribió nada" in errores
     codigo, llamadas, salida, _ = _correr_main(monkeypatch, ["--aplicar", "--base", actual])
-    assert codigo == 0 and llamadas == [True] and "Limpiadas: 0" in salida
+    assert codigo == 0 and llamadas == [(True, "off")] and "Limpiadas: 0" in salida
+
+
+def test_el_reporte_del_script_lista_todas_las_candidatas_y_el_final_de_las_notas(monkeypatch):
+    """Ronda 1 (4): sin tope; por SC, las líneas que se quitan completas y el FINAL de las notas después del cambio
+    (los últimos 160 caracteres, o todo si es corto); y las secciones 'revisar a mano' y Soporte."""
+    largo = "x" * 300 + "FIN-DE-LAS-NOTAS"
+    detalle = [{"id": i, "numero": f"SC-T2BP{i:03d}", "estado": "CANCELADA", "quitadas": [f"Motivo {i}"],
+                "lineas_quitadas": [f"{MARCA}Motivo {i}"], "conservadas": [], "antes": "-",
+                "despues": largo if i == 0 else (None if i == 1 else f"Nota {i}")} for i in range(60)]
+    resultado = _resultado_vacio(candidatas=60, detalle=detalle, no_reconocidas=["SC-T2BPX1"],
+                                 soporte_con_marca=["SC-T2BPS1", "SC-T2BPS2"])
+    codigo, _, salida, _ = _correr_main(monkeypatch, [], resultado)
+    assert codigo == 0
+    for i in range(60):
+        assert f"SC-T2BP{i:03d}" in salida, i
+        assert repr(f"{MARCA}Motivo {i}") in salida, i
+    assert "Nota 59" in salida
+    assert "FIN-DE-LAS-NOTAS" in salida and "x" * 200 not in salida  # el final, no el principio ni todo
+    assert "NULL (quedan vacías)" in salida
+    assert "Revisar a mano" in salida and "SC-T2BPX1" in salida
+    assert "Soporte Técnico con la marca (no se tocan): 2 -> SC-T2BPS1, SC-T2BPS2" in salida
 
 
 def test_el_reporte_de_limpiar_no_escribe_nada(db, user_admin, contador_sql):

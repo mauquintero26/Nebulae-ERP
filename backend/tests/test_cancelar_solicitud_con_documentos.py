@@ -425,7 +425,8 @@ def test_papelera_cuenta_los_dias_restantes_de_las_que_no_tienen_historial(app_c
     assert papelera["SC-PAP003A"]["tiene_documentos"] is False
     assert papelera["SC-PAP003A"]["dias_restantes"] == 25
     assert papelera["SC-PAP003B"]["tiene_documentos"] is False
-    assert papelera["SC-PAP003B"]["dias_restantes"] == 30
+    # T2B (ronda 1): sin eliminada_at la purga nunca la borra -> None, como purga_programada (antes decia 30).
+    assert papelera["SC-PAP003B"]["dias_restantes"] is None
     assert _existe(db, "SC-PAP003A") and _existe(db, "SC-PAP003B")
 
 
