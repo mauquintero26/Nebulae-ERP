@@ -35,10 +35,12 @@ export function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClo
     setSaving(false);
   }
   return (
-    <Modal title="Nuevo Proveedor" subtitle="Agregar a la agenda de proveedores" icon={UserPlus} color="purple" onClose={onClose}
+    <Modal title="Nuevo Proveedor" subtitle="Agregar a la agenda de proveedores" icon={UserPlus} color="purple"
+      // Mientras guarda no se cierra (ni la X ni 'Cancelar'): el resultado siempre llega a una ventana abierta.
+      onClose={()=>{ if (!saving) onClose(); }} bloquearCierre={saving}
       footer={(
         <>
-          <Button variant="secondary" onClick={onClose}>Cancelar</Button>
+          <Button variant="secondary" disabled={saving} onClick={onClose}>Cancelar</Button>
           <Button type="submit" form="new-supplier-form" color="purple" icon={UserPlus} loading={saving}>Agregar Proveedor</Button>
         </>
       )}>
@@ -75,8 +77,10 @@ export default function VentaClient() {
   const [resumenServidor, setResumenServidor] = useState<Record<string, unknown> | null>(null);
   const [creandoPxp, setCreandoPxp]     = useState<number|null>(null);
 
+  // Los de error pasan por textoDeError (sin conexión, '[object Object]', 'Error: ' repetido).
   const showToast = (msg:string, type:'ok'|'error'='ok') => {
-    avisar(msg, {tono: type});
+    if (type === 'error') avisar(textoDeError(msg), {tono: 'error'});
+    else avisar(msg, {tono: type});
   };
 
   const fetchPedidos = async () => {

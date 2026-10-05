@@ -7,8 +7,15 @@
  * - Los comentarios /* … *\/ (también los {/* … *\/} de JSX) se cambian por la misma cantidad de saltos de línea, para
  *   que la línea reportada sea la real. Un // se quita solo si no va precedido de ':' y no está dentro de comillas o
  *   backticks (recorrido simple que lleva el estado de la cadena).
- * - Autoprueba del patrón: detecta window.confirm( y " alert(" (también después de un `https://…`), y no detecta
- *   confirmar(, setAlertDias(, chatPrompt( ni handleConfirmarVenta(.
+ * - Detecta la llamada suelta y con window. / window?. / globalThis. / self. delante, y también window['alert'](.
+ * - Autoprueba del patrón: detecta window.confirm( y " alert(" (también después de un `https://…`), window.prompt(,
+ *   window?.confirm( y globalThis.alert(, y no detecta confirmar(, setAlertDias(, chatPrompt( ni handleConfirmarVenta(.
+ * - Limitaciones conocidas (aceptadas: el recorrido es simple a propósito):
+ *   · un // dentro del texto de JSX (p. ej. <p>a // b</p>) se toma como comentario hasta el fin de la línea, así que
+ *     una llamada escrita después de él en esa misma línea no se vería;
+ *   · un apóstrofo o una comilla suelta en texto de JSX abre una "cadena" hasta el fin de la línea: lo que sigue se
+ *     sigue revisando (no esconde llamadas), solo que un // en ese resto de línea ya no se quita;
+ *   · no sigue alias (const f = window.alert; f()).
  */
 
 import assert from 'node:assert/strict';
@@ -19,9 +26,11 @@ import { fileURLToPath } from 'node:url';
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..');
 const VENTAS = join(RAIZ, 'src', 'app', 'dashboard', 'ventas');
 
-// alert( / confirm( / prompt(, con o sin window., que no sean parte de otro nombre (confirmar(, setAlertDias(,
-// chatPrompt() ni un método de otro objeto (x.confirm().
-const PATRON = /(^|[^\w.$])((?:window\.)?(?:alert|confirm|prompt)\s*\()/g;
+// alert( / confirm( / prompt(, sueltos o con window. / window?. / globalThis. / self. delante, que no sean parte de
+// otro nombre (confirmar(, setAlertDias(, chatPrompt() ni un método de otro objeto (x.confirm(); y la forma con
+// corchetes window['alert']( (también window?.['alert'](). El grupo 2 es la llamada (para el mensaje).
+const PATRON =
+  /(^|[^\w.$])((?:(?:window|globalThis|self)\??\.)?(?:alert|confirm|prompt)\s*\(|(?:window|globalThis|self)(?:\?\.)?\[\s*(['"`])(?:alert|confirm|prompt)\3\s*\]\s*\()/g;
 
 // Después de estos caracteres, un '/' abre una expresión regular (/…/) y no es una división. Sin '<' ni '>': en JSX
 // son el '</' de una etiqueta de cierre o el texto que sigue a una etiqueta.
@@ -155,9 +164,16 @@ console.log('--- TEST 1: autoprueba del patrón ---');
     "const s = 'a//b'; alert(1)",
     'const t = `x ${a ? `//y` : "b"} z`; window.alert(1)',
     'onClick={() => alert(1)}',
+    'window.prompt("x")',
+    'window?.confirm("x")',
+    'globalThis.alert(1)',
+    'self.confirm("x")',
+    "window['alert'](1)",
+    'window?.["confirm"]("x")',
   ]) {
     assert.ok(detecta(texto), `debía detectar: ${texto}`);
   }
+  assert.deepEqual(llamadasNativas('x;\nwindow?.confirm ("x")'), [{ linea: 2, codigo: 'window?.confirm(' }]);
   for (const texto of [
     'if (!(await confirmar({ titulo: "x" }))) return;',
     'setAlertDias(3)',
@@ -170,6 +186,11 @@ console.log('--- TEST 1: autoprueba del patrón ---');
     '{/* window.alert(\n  "x") */}',
     "const re = /['\"]/g; // alert(1)",
     'const confirmarVenta = () => {};',
+    'x?.confirm(1)',
+    'miwindow.confirm(1)',
+    'window2.alert(1)',
+    "ventana['alert'](1)",
+    'window.confirmar(1)',
   ]) {
     assert.ok(!detecta(texto), `no debía detectar: ${texto}`);
   }

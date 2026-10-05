@@ -14,6 +14,7 @@ import { useRouter } from 'next/navigation';
 import { apiFetch, API_URL } from '@/lib/api';
 import { coincideProducto } from '@/lib/busqueda';
 import { SubNav, PageHeader, Badge, Drawer, Modal, Button, useAvisos } from '@/components/ui';
+import { textoDeError } from '@/lib/avisos';
 import { VEN_NAV } from './ven-nav';
 import { CambiosDeActividad, EnlaceConfirmacionModal, getUsuarioActual } from './flujo';
 import { ChannelModal, ESTADOS as ESTADOS_COT } from './cotizacion/cotizacion-client';
@@ -254,8 +255,13 @@ export default function VentasHub() {
   const [viewMode, setViewMode]         = useState<'lista'|'kanban'>('lista');
   const [loading, setLoading]           = useState(true);
   // H49 (T1B): avisos y confirmaciones del sistema; setToast queda como adaptador ({msg, type}) de las llamadas de siempre.
+  // Los de error pasan por textoDeError (sin conexión, '[object Object]', 'Error: ' repetido).
   const { avisar, confirmar } = useAvisos();
-  const setToast = useCallback((t: {msg:string,type:'ok'|'error'}|null) => { if (t) avisar(t.msg, {tono: t.type}); }, [avisar]);
+  const setToast = useCallback((t: {msg:string,type:'ok'|'error'}|null) => {
+    if (!t) return;
+    if (t.type === 'error') avisar(textoDeError(t.msg), {tono: 'error'});
+    else avisar(t.msg, {tono: t.type});
+  }, [avisar]);
   const [search, setSearch]             = useState('');
   const [filterEstado, setFilterEstado] = useState('');
   const [showFilters, setShowFilters]   = useState(false);

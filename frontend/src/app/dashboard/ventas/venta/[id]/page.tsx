@@ -202,7 +202,7 @@ function PedidoVentaDetalleContent() {
   }
 
   function onSupplierSearch(q: string) {
-    setSupplierSearch(q); setSelectedSupplier(null);
+    setSupplierSearch(q); setSelectedSupplier(null); setPecError('');
     if (supplierTimer.current) clearTimeout(supplierTimer.current);
     if (!q.trim()) { setSuppliers([]); return; }
     supplierTimer.current = setTimeout(async () => {
@@ -859,10 +859,11 @@ function PedidoVentaDetalleContent() {
       {showPecModal && pedido && (
         <Modal title="Crear Pedido de Compra" icon={ShoppingCart} color="purple"
           subtitle={`Vinculado a ${pedido.numero} — ${pedido.customer_name}`}
-          onClose={() => setShowPecModal(false)}
+          // Mientras se crea el PEC no se cierra (ni la X ni 'Cancelar'): el resultado siempre llega a una ventana abierta.
+          onClose={() => { if (!pecSaving) setShowPecModal(false); }} bloquearCierre={pecSaving}
           footer={(
             <>
-              <Button variant="secondary" onClick={() => setShowPecModal(false)}>Cancelar</Button>
+              <Button variant="secondary" disabled={pecSaving} onClick={() => setShowPecModal(false)}>Cancelar</Button>
               <Button color="purple" icon={ShoppingCart} loading={pecSaving} disabled={!selectedSupplier} onClick={handleCrearPEC}>Crear PEC</Button>
             </>
           )}>
@@ -886,7 +887,7 @@ function PedidoVentaDetalleContent() {
             {suppliers.length > 0 && (
               <div className="border border-slate-200 rounded-xl shadow-lg mt-1 max-h-36 overflow-y-auto z-10">
                 {suppliers.map((s: any) => (
-                  <button key={s.id} onClick={() => { setSelectedSupplier(s); setSupplierSearch(s.name); setSuppliers([]); }}
+                  <button key={s.id} onClick={() => { setSelectedSupplier(s); setSupplierSearch(s.name); setSuppliers([]); setPecError(''); }}
                     className="w-full text-left px-4 py-2.5 hover:bg-purple-50 text-sm font-medium border-b last:border-0">
                     {s.name} {s.city && <span className="text-slate-400">· {s.city}</span>}
                   </button>
@@ -904,12 +905,12 @@ function PedidoVentaDetalleContent() {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Días Entrega Estimada</label>
-              <input type="number" min="1" value={pecForm.dias_entrega} onChange={e => setPecForm(f => ({ ...f, dias_entrega: Number(e.target.value) }))}
+              <input type="number" min="1" value={pecForm.dias_entrega} onChange={e => { setPecError(''); setPecForm(f => ({ ...f, dias_entrega: Number(e.target.value) })); }}
                 className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200" />
             </div>
             <div>
               <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Modalidad de Pago</label>
-              <select value={pecForm.modalidad_pago} onChange={e => setPecForm(f => ({ ...f, modalidad_pago: e.target.value }))}
+              <select value={pecForm.modalidad_pago} onChange={e => { setPecError(''); setPecForm(f => ({ ...f, modalidad_pago: e.target.value })); }}
                 className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200">
                 {['Contado', 'Credito 30d', 'Credito 60d', 'Adelanto 50%', 'Contra entrega'].map(p => <option key={p} value={p}>{etiquetaModalidad(p)}</option>)}
               </select>
@@ -917,7 +918,7 @@ function PedidoVentaDetalleContent() {
           </div>
           <div>
             <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Notas</label>
-            <textarea value={pecForm.notas} onChange={e => setPecForm(f => ({ ...f, notas: e.target.value }))}
+            <textarea value={pecForm.notas} onChange={e => { setPecError(''); setPecForm(f => ({ ...f, notas: e.target.value })); }}
               rows={2} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none outline-none focus:ring-2 focus:ring-purple-200" />
           </div>
           {pecError && <p role="alert" className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">{pecError}</p>}
@@ -925,16 +926,17 @@ function PedidoVentaDetalleContent() {
       )}
       {showNewSupplier && (
         <NewSupplierModal
-          onSave={(s) => { setSelectedSupplier(s); setSupplierSearch(s.name); setSuppliers([]); setShowNewSupplier(false); }}
+          onSave={(s) => { setSelectedSupplier(s); setSupplierSearch(s.name); setSuppliers([]); setPecError(''); setShowNewSupplier(false); }}
           onClose={() => setShowNewSupplier(false)}
         />
       )}
       {showCancelModal && (
         <Modal title="Cancelar Pedido de Venta" icon={AlertCircle} color="red" maxWidth="md"
-          onClose={() => setShowCancelModal(false)}
+          // Mientras se cancela no se cierra (ni la X ni 'Volver'): el resultado siempre llega a una ventana abierta.
+          onClose={() => { if (!cancelling) setShowCancelModal(false); }} bloquearCierre={cancelling}
           footer={(
             <>
-              <Button variant="secondary" onClick={() => setShowCancelModal(false)}>Volver</Button>
+              <Button variant="secondary" disabled={cancelling} onClick={() => setShowCancelModal(false)}>Volver</Button>
               <Button variant="danger" icon={X} loading={cancelling} disabled={cancelRazon.trim().length < 5} onClick={handleCancelarPedido}>Confirmar Cancelación</Button>
             </>
           )}>
@@ -958,7 +960,7 @@ function PedidoVentaDetalleContent() {
                 : `La orden de pago ${pxpVigente.numero} está ${etiquetaEstadoPxp(pxpVigente.estado).toLowerCase()}: no se cancela y queda un aviso para revisar la devolución o el saldo a favor del cliente.`}
             </p>
           )}
-          <textarea value={cancelRazon} onChange={e => setCancelRazon(e.target.value)} rows={3} autoFocus
+          <textarea value={cancelRazon} onChange={e => { setCancelError(''); setCancelRazon(e.target.value); }} rows={3} autoFocus
             placeholder="Ej: Cliente desistió de la compra, error en el pedido, etc."
             className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-red-200 resize-none" />
           {cancelRazon.trim().length < 5 && <p className="text-xs text-red-500 -mt-2">El motivo es obligatorio. Mínimo 5 caracteres (llevas {cancelRazon.trim().length}).</p>}

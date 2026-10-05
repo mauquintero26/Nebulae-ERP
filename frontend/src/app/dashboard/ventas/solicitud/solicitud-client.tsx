@@ -128,10 +128,12 @@ export function NewClientModal({onSave, onClose}: {onSave:(c:any)=>void; onClose
     setSaving(false);
   }
   return (
-    <Modal title="Nuevo Cliente" subtitle="El cliente no esta en la base de datos. Completar para continuar." icon={UserPlus} color="indigo" onClose={onClose}
+    <Modal title="Nuevo Cliente" subtitle="El cliente no esta en la base de datos. Completar para continuar." icon={UserPlus} color="indigo"
+      // Mientras guarda no se cierra (ni la X ni 'Cancelar'): el resultado siempre llega a una ventana abierta.
+      onClose={()=>{ if (!saving) onClose(); }} bloquearCierre={saving}
       footer={(
         <>
-          <Button variant="secondary" onClick={onClose}>Cancelar</Button>
+          <Button variant="secondary" disabled={saving} onClick={onClose}>Cancelar</Button>
           <Button type="submit" form="sc-new-client-form" color="indigo" icon={UserPlus} loading={saving}>Guardar Cliente</Button>
         </>
       )}>
@@ -874,7 +876,11 @@ export default function SolicitudClient() {
   const custTimer=useRef<any>(null);
   const custReqId=useRef(0);
 
-  const showToast=(msg:string,type:'ok'|'err'='ok')=>avisar(msg,{tono:type==='err'?'error':'ok'});
+  // Los de error pasan por textoDeError (sin conexión, '[object Object]', 'Error: ' repetido).
+  const showToast=(msg:string,type:'ok'|'err'='ok')=>{
+    if(type==='err') avisar(textoDeError(msg),{tono:'error'});
+    else avisar(msg,{tono:'ok'});
+  };
 
   useEffect(()=>{
     const u=localStorage.getItem('user_name')||localStorage.getItem('username')||'';
