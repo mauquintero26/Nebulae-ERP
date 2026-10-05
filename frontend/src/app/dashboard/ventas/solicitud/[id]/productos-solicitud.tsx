@@ -171,7 +171,7 @@ export function ProductosSolicitud({
             ))}
           </tbody>
         </table>
-      ) : (
+      ) : editable ? (
         <div className="m-4 bg-amber-50 border border-amber-200 rounded-xl p-4">
           <p className="flex items-start gap-2 text-sm font-bold text-amber-800">
             <AlertTriangle size={16} className="shrink-0 mt-0.5" /> Esta solicitud no tiene productos
@@ -179,12 +179,14 @@ export function ProductosSolicitud({
           <p className="text-xs text-amber-700 mt-1 leading-relaxed">
             Sin productos no hay nada que el cliente pueda confirmar ni que cotizar. Agrégalos para poder enviarla al cliente y crear la cotización.
           </p>
-          {editable && (
-            <div className="mt-3">
-              <Button color="amber" size="sm" icon={Plus} onClick={() => setEditando(true)}>Agregar productos</Button>
-            </div>
-          )}
+          <div className="mt-3">
+            <Button color="amber" size="sm" icon={Plus} onClick={() => setEditando(true)}>Agregar productos</Button>
+          </div>
         </div>
+      ) : (
+        // U18+H31: si no se puede editar (cancelada o con cotización activa) no se pide agregarlos: texto neutro y, debajo
+        // de la tarjeta, el motivo del bloqueo.
+        <p className="px-4 py-3 text-sm text-slate-400">Sin productos.</p>
       )}
       </div>
 

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import {
-  ArrowLeft, ArrowRight, ChevronRight, Edit2, Save, Trash2, CheckCircle2,
+  ArrowRight, ChevronRight, Edit2, Save, Trash2, CheckCircle2,
   User, Phone, Mail, MapPin, MessageCircle, RefreshCw, AlertCircle,
   FileText, Activity, XCircle, MessageSquare, RotateCcw, Filter, Send, Plus, Sparkles, AlertTriangle,
 } from 'lucide-react';
@@ -18,7 +18,11 @@ import {
 } from '../solicitud-client';
 import {
   infoEstadoSolicitud, puedeReiniciar, puedeCotizarSinConfirmacion, MOTIVO_SIN_CONFIRMACION_MIN, ESTADOS_SC_SIN_CONFIRMAR,
+  resumenCancelacion,
 } from '@/lib/estados-solicitud';
+import { pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
+import { destinoVolver } from '@/lib/detalle-layout';
+import { comoUTC } from '@/lib/hub-ventas';
 import { EstadoSolicitudPasos } from './estado-solicitud';
 // Final whole-branch review (hallazgo #1, el mas severo): Gate 1 no tenia NINGUNA via
 // de UI para entregarle el link de confirmacion al cliente -- enviarParaConfirmacion
@@ -39,13 +43,14 @@ import { CambiosDeActividad } from '../../flujo';
 import { ProductosSolicitud } from './productos-solicitud';
 import {
   NextStepCard, EnlaceConfirmacionModal, esAsesorElegible, getUsuarioActual, type UsuarioActual,
+  BotonVolver, returnToSeguro,
 } from '../../flujo';
 
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
 // (mismo patron que cotizacion/[id]/page.tsx; valores reales emitidos por el backend para
 // Solicitudes -- ver erp_ventas.py: CREATED, ESTADO_CHANGED, NOTE_ADDED, CHATTER, CANCELLED,
 // RESTORED; U15: COTIZACION_CREADA y COTIZACION_RECHAZADA (la SC ya no cambia de estado con su
-// cotizacion); U11: COTIZADA_SIN_CONFIRMACION).
+// cotizacion); U11: COTIZADA_SIN_CONFIRMACION; N4/U18: SENT_TO_TRASH, enviar a la Papelera una SC ya cancelada).
 const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
   CREATED:        {icon: FileText,      color: 'text-indigo-500 bg-indigo-50'},
   COTIZACION_CREADA:         {icon: FileText,      color: 'text-indigo-500 bg-indigo-50'},
@@ -55,6 +60,7 @@ const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
   NOTE_ADDED:     {icon: MessageSquare, color: 'text-blue-500 bg-blue-50'},
   CHATTER:        {icon: MessageSquare, color: 'text-cyan-600 bg-cyan-50'},
   CANCELLED:      {icon: XCircle,       color: 'text-rose-500 bg-rose-50'},
+  SENT_TO_TRASH:  {icon: Trash2,        color: 'text-rose-500 bg-rose-50'},
   RESTORED:       {icon: RotateCcw,     color: 'text-emerald-500 bg-emerald-50'},
   UPDATED:        {icon: FileText,      color: 'text-purple-500 bg-purple-50'},
 };
@@ -71,13 +77,14 @@ const ACTIVITY_TYPE_LABELS: Record<string, string> = {
   COTIZACION_RECHAZADA: 'Cotización rechazada',
   CHATTER: 'Chatter',
   CANCELLED: 'Cancelación',
+  SENT_TO_TRASH: 'Papelera',
   RESTORED: 'Restauración',
   UPDATED: 'Ediciones',
   FECHA_ENTREGA_MODIFICADA: 'Fecha de entrega',
 };
 const ACTIVITY_TYPE_ORDER = [
   'ESTADO_CHANGED', 'UPDATED', 'FECHA_ENTREGA_MODIFICADA', 'NOTE_ADDED', 'CREATED',
-  'COTIZACION_CREADA', 'COTIZADA_SIN_CONFIRMACION', 'COTIZACION_RECHAZADA', 'CHATTER', 'CANCELLED', 'RESTORED',
+  'COTIZACION_CREADA', 'COTIZADA_SIN_CONFIRMACION', 'COTIZACION_RECHAZADA', 'CHATTER', 'CANCELLED', 'SENT_TO_TRASH', 'RESTORED',
 ];
 
 // U11: tope del motivo de 'Cotizar sin esperar confirmación' (el servidor exige lo mismo:
@@ -88,11 +95,10 @@ function SolicitudDetalleContent() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const rawReturnTo = searchParams?.get('return_to') || '';
-  // Convencion "volver al origen" (aplicada aqui primero, se formalizara luego en mas
-  // pantallas): solo se confia en return_to si es una ruta interna relativa -- nunca un
-  // esquema http(s) ni "//" (protocol-relative), que redirigirian fuera del dominio.
-  const safeReturnTo = rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//') ? rawReturnTo : '';
+  // "Volver al origen" (R22, H5 del preflight): solo se confia en return_to si es una ruta interna del dashboard
+  // (returnToSeguro, la misma regla de cotizacion/[id]). El chequeo debil de antes (startsWith('/') && !startsWith('//'))
+  // dejaba pasar '/\evil.com', que el navegador resuelve como //evil.com (open redirect).
+  const safeReturnTo = returnToSeguro(searchParams?.get('return_to'));
   const currentPath = `/dashboard/ventas/solicitud/${String(params.id || '')}`;
   // H49 (T1B): avisos del sistema en lugar de window.alert; R30: 'Reiniciar solicitud' se confirma con confirmar().
   const { avisar, avisarError, confirmar } = useAvisos();
@@ -436,6 +442,8 @@ function SolicitudDetalleContent() {
       await apiFetch(`/ventas/solicitudes/${solicitud.id}/cancelar`, { method: 'POST', body: JSON.stringify({ razon, user_name: currentUser }) });
       setShowCancelModal(false);
       setCancelRazon('');
+      // U18: la cancelada ya no se edita (sin 'Editar'): si se canceló con el formulario abierto, se cierra.
+      setEditMode(false);
       await loadSolicitud();
     } catch (err: any) {
       setCancelError(err?.message || 'No se pudo cancelar la solicitud.');
@@ -513,10 +521,19 @@ function SolicitudDetalleContent() {
   const LINK_ACCION = 'flex items-center justify-center gap-2 rounded-xl font-bold px-6 py-3 text-sm text-white shadow-md';
   // H5/C19: el wa.me del cliente (null si el teléfono no sirve: entonces no se pinta el enlace).
   const whatsappCliente = waUrl(solicitud?.customer_phone);
+  // R22: % de anticipo de la modalidad (crédito 0, 60/40 60, contado 100; la que no se reconoce, 60 como el backend).
+  const pctAnticipo = pctAnticipoDeModalidad(solicitud?.modalidad_pago) ?? 60;
 
   function abrirEditorProductos() {
     setEditandoProductos(true);
     setTimeout(() => document.getElementById('productos-solicitud')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+  }
+
+  // U18+H31 (C11): 'Ver en la Actividad' de la tarjeta de la cancelada. La tarjeta ya vive en la pestaña Actividad: se
+  // quita un filtro que esconda la cancelación y se baja al historial (ancla historial-actividad).
+  function verCancelacionEnActividad() {
+    setActivityFilter('all');
+    setTimeout(() => document.getElementById('historial-actividad')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
   }
 
   // Cada estado le dice al usuario cual es su siguiente paso -- antes solo ASIGNADA y
@@ -535,9 +552,22 @@ function SolicitudDetalleContent() {
       );
     }
     if (estado === 'CANCELADA') {
+      // U18+H31: el resumen de la cancelación (motivo, quién y cuándo, y qué pasa en la Papelera) en lugar de avisos que
+      // ya no aplican. El detalle completo está en el renglón de la Actividad, justo debajo (C11: scroll, sin cambiar de
+      // pestaña).
+      const r = resumenCancelacion(solicitud, actividades);
+      const cuando = r.fecha ? comoUTC(r.fecha) : null;
       return (
-        <NextStepCard tone="rose" title="Solicitud cancelada">
-          Esta solicitud está cancelada y no puede avanzar. Puedes restaurarla desde la Papelera del listado de solicitudes.
+        <NextStepCard
+          tone="rose"
+          title="Solicitud cancelada"
+          actions={<Button variant="secondary" icon={Activity} onClick={verCancelacionEnActividad}>Ver en la Actividad</Button>}
+        >
+          <span className="block"><span className="font-bold">Motivo:</span> {r.motivo}</span>
+          {(r.por || cuando) && (
+            <span className="block">Cancelada{r.por ? ` por ${r.por}` : ''}{cuando ? ` el ${fDate(cuando)} ${fTime(cuando)}` : ''}</span>
+          )}
+          {r.papelera && <span className="block">{r.papelera}</span>}
         </NextStepCard>
       );
     }
@@ -723,16 +753,8 @@ function SolicitudDetalleContent() {
       {/* Top Action Bar */}
       <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between z-20 shadow-sm shrink-0">
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <Link href="/dashboard/ventas/solicitud" className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 transition-colors">
-              <ArrowLeft size={20} />
-            </Link>
-            {safeReturnTo && (
-              <Link href={safeReturnTo} className="text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:underline whitespace-nowrap">
-                ← Volver
-              </Link>
-            )}
-          </div>
+          {/* R22: un solo botón de volver, al origen (return_to seguro) o a la lista de solicitudes, con su destino escrito. */}
+          <BotonVolver href={destinoVolver(safeReturnTo, '/dashboard/ventas/solicitud')} />
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-black text-slate-800">{solicitud?.numero || String(params.id || '').toUpperCase()}</h1>
             {solicitud && <EstadoBadge estado={solicitud.estado} />}
@@ -741,8 +763,11 @@ function SolicitudDetalleContent() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* U18: una solicitud cancelada no se edita: se restaura desde la Papelera. */}
           {!editMode ? (
-            <Button variant="secondary" size="sm" icon={Edit2} onClick={() => setEditMode(true)}>Editar</Button>
+            solicitud?.estado !== 'CANCELADA' && (
+              <Button variant="secondary" size="sm" icon={Edit2} onClick={() => setEditMode(true)}>Editar</Button>
+            )
           ) : (
             <>
               <Button variant="secondary" size="sm" onClick={() => setEditMode(false)}>Cancelar</Button>
@@ -861,12 +886,14 @@ function SolicitudDetalleContent() {
                   <div key={item.l} className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3"><p className="text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider">{item.l}</p><p className="font-bold text-sm text-slate-800">{item.v}</p></div>
                 ))}
               </div>
-              {solicitud?.modalidad_pago?.includes('60/40') && (
+              {/* R22: el anticipo que pedirá la cotización, para toda modalidad (R2: el mismo % que calcula el backend; una
+                  modalidad que no reconoce, 'Otro' o vacía, 60%), igual que el formulario de H10. */}
+              {!isSoporte && solicitud && (
                 <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3">
-                  <p className="text-xs font-black text-indigo-700 uppercase mb-2">Modalidad 60/40</p>
+                  <p className="text-xs font-black text-indigo-700 mb-2">{etiquetaModalidad(solicitud.modalidad_pago) || 'Modalidad de pago'}</p>
                   <div className="flex gap-4">
-                    <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Anticipo</p><p className="font-black text-indigo-700">60%</p></div>
-                    <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Pendiente</p><p className="font-black text-slate-700">40%</p></div>
+                    <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Anticipo</p><p className="font-black text-indigo-700">{pctAnticipo}%</p></div>
+                    <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Saldo</p><p className="font-black text-slate-700">{100 - pctAnticipo}%</p></div>
                   </div>
                 </div>
               )}
