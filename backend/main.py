@@ -113,9 +113,22 @@ def _error_de_validacion_legible(error: dict) -> dict:
     return {
         "type": str(error.get("type", "")),
         "loc": [parte if isinstance(parte, (str, int)) else str(parte) for parte in error.get("loc", ())],
-        "msg": str(error.get("msg", "")),
+        "msg": _msg_sin_valor_enviado(str(error.get("msg", "")), error.get("input")),
         "ctx": ctx,
     }
+
+
+def _msg_sin_valor_enviado(msg: str, entrada) -> str:
+    """Un validador propio puede interpolar lo que mando el usuario en su ValueError ("estado 'X' no existe"): el
+    valor se reemplaza por '…'. Entre comillas siempre; suelto solo si tiene 3 caracteres o mas (uno o dos
+    caracteres sueltos borrarian letras del texto)."""
+    if not isinstance(entrada, str) or not entrada:
+        return msg
+    for comillas in ("'", '"'):
+        msg = msg.replace(f"{comillas}{entrada}{comillas}", f"{comillas}…{comillas}")
+    if len(entrada) >= 3:
+        msg = msg.replace(entrada, "…")
+    return msg
 
 
 @app.exception_handler(RequestValidationError)

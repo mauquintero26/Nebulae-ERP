@@ -94,8 +94,10 @@ class SaleOrderPaymentCreate(BaseModel):
     @classmethod
     def validate_tipo(cls, v: str) -> str:
         val = v.strip().upper()
-        if val not in ("ANTICIPO", "ABONO", "PAGO_TOTAL", "PAGO_SALDO", "DEVOLUCION", "REVERSION", "AJUSTE_AUTORIZADO"):
-            raise ValueError(f"Tipo de pago '{v}' no válido")
+        permitidos = ("ANTICIPO", "ABONO", "PAGO_TOTAL", "PAGO_SALDO", "DEVOLUCION", "REVERSION", "AJUSTE_AUTORIZADO")
+        if val not in permitidos:
+            # Sin el valor enviado: el mensaje viaja al navegador en la respuesta 400 (main.py).
+            raise ValueError(f"Tipo de pago no válido. Opciones: {', '.join(permitidos)}")
         return val
 
 
