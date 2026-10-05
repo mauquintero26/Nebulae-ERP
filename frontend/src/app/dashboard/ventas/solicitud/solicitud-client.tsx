@@ -203,11 +203,12 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
 
   // U7+U8: agrega (o suma a la línea igual) lo elegido, creado o escrito; limpia el buscador, le devuelve el foco y
   // explica en un aviso verde (6 s) lo que pasó. Una línea en blanco no se agrega (agregarLinea da indice -1).
-  function agregar(linea: any, origen: 'catalogo' | 'creado' | 'existente' | 'texto') {
+  // C8 (ronda 1): `textoUsado` es lo que había en el buscador al pedirlo; si ya dice otra cosa, no se borra.
+  function agregar(linea: any, origen: 'catalogo' | 'creado' | 'existente' | 'texto' | 'texto-sin-comprobar', textoUsado?: string) {
     const r = agregarLinea(productosRef.current, linea);
     if (r.indice < 0) return;
     cambiarProductos(r.lineas);
-    setProdName('');
+    setProdName(actual => (textoUsado === undefined || actual.trim() === textoUsado ? '' : actual));
     prodInputRef.current?.focus();
     const nombre = nombreLinea(r.lineas[r.indice]);
     let texto = '';
@@ -215,6 +216,8 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
     else if (origen === 'creado') texto = `Se creó «${nombre}» en el catálogo y se agregó a la solicitud. Queda marcado para completar marca, categoría y precio después.`;
     else if (origen === 'existente') texto = `«${nombre}» ya estaba en el catálogo: se agregó.`;
     else if (origen === 'texto') texto = `Se agregó «${nombre}» como texto libre (no está en el catálogo).`;
+    // A4 (ronda 1): la búsqueda para comprobarlo falló: no se afirma que no esté en el catálogo.
+    else if (origen === 'texto-sin-comprobar') texto = `Se agregó «${nombre}» como texto libre (no se pudo comprobar el catálogo).`;
     if (avisoTimer.current) clearTimeout(avisoTimer.current);
     setAviso({ texto, indice: r.indice });
     avisoTimer.current = setTimeout(() => { avisoTimer.current = null; setAviso(null); }, 6000);
@@ -286,8 +289,9 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
         <div>
           <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Productos a cotizar <span className="text-slate-300 font-medium normal-case">(puedes agregarlos después)</span></label>
           <ProductSearch value={prodName} onChange={setProdName} inputRef={prodInputRef}
-            onSelect={(p, info) => agregar(lineaDesdeCatalogo(p, info), info ? (info.creado ? 'creado' : 'existente') : 'catalogo')}
-            onAgregarTexto={(t, c) => agregar(c ? lineaDesdeCatalogo(c) : lineaTextoLibre(t), c ? 'catalogo' : 'texto')}/>
+            onSelect={(p, info) => agregar(lineaDesdeCatalogo(p, info), info ? (info.creado ? 'creado' : 'existente') : 'catalogo', info?.texto)}
+            onAgregarTexto={(t, c, info) => agregar(c ? lineaDesdeCatalogo(c) : lineaTextoLibre(t),
+              c ? 'catalogo' : info?.sinComprobar ? 'texto-sin-comprobar' : 'texto', t)}/>
           <div role="status" aria-live="polite">
             {aviso?.texto&&<p className="mt-2 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 break-words">{aviso.texto}</p>}
           </div>

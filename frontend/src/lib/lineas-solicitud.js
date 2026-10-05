@@ -127,6 +127,39 @@ export function resolverTextoEscrito(texto, resultados) {
 }
 
 /**
+ * T7 ronda 1 (A4): los resultados que tiene el buscador sirven para resolver lo escrito solo si se pidieron para ESE
+ * texto (recortado) y no hay un temporizador ni una petición en curso. Si no, hay que buscar en el acto antes de agregar:
+ * si no, un producto que sí existe entraría como texto libre solo por pulsar Enter antes de que vuelva la búsqueda.
+ * @param {any} texto lo escrito
+ * @param {any} resultadosDe el texto para el que se pidieron los resultados que se tienen
+ * @param {boolean} pendiente hay un temporizador o una petición de búsqueda en curso
+ * @returns {boolean}
+ */
+export function resultadosSirven(texto, resultadosDe, pendiente) {
+  const t = String(texto ?? '').trim();
+  return !pendiente && t !== '' && String(resultadosDe ?? '').trim() === t;
+}
+
+/**
+ * T7 ronda 1 (A4): busca en el acto lo escrito (recortado) con `buscar` y lo resuelve contra ESA respuesta (arreglo o
+ * {data: [...]}). Si la búsqueda falla, {coincidencia: null, comprobado: false}: la línea entra como texto libre y el
+ * aviso dice que no se pudo comprobar el catálogo (no afirma que el producto no esté).
+ * @param {any} texto
+ * @param {(texto: string) => any} buscar
+ * @returns {Promise<{ coincidencia: any | null, comprobado: boolean }>}
+ */
+export async function resolverConBusqueda(texto, buscar) {
+  const t = String(texto ?? '').trim();
+  try {
+    const d = await buscar(t);
+    const lista = Array.isArray(d) ? d : Array.isArray(d?.data) ? d.data : [];
+    return { coincidencia: resolverTextoEscrito(t, lista), comprobado: true };
+  } catch {
+    return { coincidencia: null, comprobado: false };
+  }
+}
+
+/**
  * Lo que se manda al backend: cada línea sin las claves que empiezan por '_' y con su cantidad válida, sin las líneas
  * en blanco (sin nombre y sin sku); y, si quedó texto escrito sin agregar (textoPendiente), se suma como texto libre
  * (con la misma regla de agregarLinea), aunque ya haya otras líneas. Un pendiente de solo espacios se ignora.

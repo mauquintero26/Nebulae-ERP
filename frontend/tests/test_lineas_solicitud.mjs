@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import {
   lineaDesdeCatalogo, lineaTextoLibre, agregarLinea, resolverTextoEscrito, lineasParaEnviar, nombreLinea,
-  quitarLinea, cantidadValida, cambiarCantidad,
+  quitarLinea, cantidadValida, cambiarCantidad, resultadosSirven, resolverConBusqueda,
 } from '../src/lib/lineas-solicitud.js';
 
 const copiaProfunda = (v) => JSON.parse(JSON.stringify(v));
@@ -172,6 +172,45 @@ console.log('--- TEST 9: nombreLinea ---');
   assert.equal(nombreLinea({ product_name: '  ', name: 'Brocha' }), 'Brocha');
   assert.equal(nombreLinea({}), '');
   assert.equal(nombreLinea(null), '');
+}
+
+console.log('--- TEST 10 (T7 ronda 1, A4): resultadosSirven — Enter antes de que vuelva la búsqueda ---');
+{
+  // Sirven solo si son del MISMO texto (recortado) y no hay temporizador ni petición en curso.
+  assert.equal(resultadosSirven('Rodillo 9in', 'Rodillo 9in', false), true);
+  assert.equal(resultadosSirven('  Rodillo 9in ', 'Rodillo 9in', false), true);
+  // Se escribió de corrido y se pulsó Enter: los resultados son de un texto anterior (o no hay).
+  assert.equal(resultadosSirven('Rodillo 9in', 'Rodi', false), false);
+  assert.equal(resultadosSirven('Rodillo 9in', '', false), false);
+  assert.equal(resultadosSirven('Rodillo 9in', null, false), false);
+  // El temporizador todavía no dispara (o la petición no ha vuelto): hay que buscar en el acto.
+  assert.equal(resultadosSirven('Rodillo 9in', 'Rodillo 9in', true), false);
+  // Sin texto no hay nada que resolver.
+  assert.equal(resultadosSirven('   ', '   ', false), false);
+}
+
+console.log('--- TEST 11 (T7 ronda 1, A4): resolverConBusqueda — busca en el acto y resuelve contra esa respuesta ---');
+{
+  const catalogo = [{ id: 3, product_name: 'Rodillo antigoteo 9in' }, { id: 4, product_name: 'Rodillo antigoteo 9in azul' }];
+  const pedidas = [];
+  const buscar = async (q) => { pedidas.push(q); return { status: 'success', data: catalogo }; };
+  // Coincidencia exacta (sin tildes, mayúsculas ni espacios de más): se vincula al catálogo.
+  let r = await resolverConBusqueda('  rodillo ANTIGOTEO 9in ', buscar);
+  assert.deepEqual(r, { coincidencia: catalogo[0], comprobado: true });
+  assert.deepEqual(pedidas, ['rodillo ANTIGOTEO 9in'], 'busca el texto recortado');
+  // Sin coincidencia exacta: texto libre, pero comprobado (el aviso de siempre: «no está en el catálogo»).
+  r = await resolverConBusqueda('Rodillo', buscar);
+  assert.deepEqual(r, { coincidencia: null, comprobado: true });
+  // La respuesta también puede venir como arreglo; una respuesta rara no rompe.
+  r = await resolverConBusqueda('Rodillo antigoteo 9in azul', async () => catalogo);
+  assert.deepEqual(r, { coincidencia: catalogo[1], comprobado: true });
+  r = await resolverConBusqueda('Rodillo', async () => ({ data: null }));
+  assert.deepEqual(r, { coincidencia: null, comprobado: true });
+  // La búsqueda falla (red caída, 500): texto libre SIN comprobar (el aviso lo dice; no afirma que no esté).
+  r = await resolverConBusqueda('Rodillo antigoteo 9in', async () => { throw new Error('Failed to fetch'); });
+  assert.deepEqual(r, { coincidencia: null, comprobado: false });
+  r = await resolverConBusqueda('Rodillo antigoteo 9in', () => { throw new Error('síncrono'); });
+  assert.deepEqual(r, { coincidencia: null, comprobado: false });
 }
 
 console.log('OK test_lineas_solicitud');

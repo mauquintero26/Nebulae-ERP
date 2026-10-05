@@ -9,64 +9,95 @@ import { Plus } from 'lucide-react';
 
 import { apiFetch } from '@/lib/api';
 import { textoDeError } from '@/lib/avisos';
-import { nombreLinea, resolverTextoEscrito } from '@/lib/lineas-solicitud';
+import { nombreLinea, resolverTextoEscrito, resultadosSirven, resolverConBusqueda } from '@/lib/lineas-solicitud';
+
+const buscarEnCatalogo = (q: string) => apiFetch(`/crm/products/search?q=${encodeURIComponent(q)}&limit=8`);
 
 export function ProductSearch({ value, onChange, onSelect, onAgregarTexto, inputRef }: {
   value: string;
   onChange: (v: string) => void;
-  /** Producto elegido del catálogo (sin info) o creado con quick-create (info.creado false = ya existía con ese nombre). */
-  onSelect: (p: any, info?: { creado: boolean }) => void;
-  /** Si viene: botón '+ Agregar' y Enter agregan lo escrito (con el producto del catálogo que coincide exacto, o null). */
-  onAgregarTexto?: (texto: string, coincidencia: any | null) => void;
+  /** Producto elegido del catálogo (sin info) o creado con quick-create (info.creado false = ya existía con ese nombre;
+   * info.texto = lo que se envió a crear: el formulario limpia el buscador solo si todavía dice eso). */
+  onSelect: (p: any, info?: { creado: boolean; texto?: string }) => void;
+  /** Si viene: botón '+ Agregar' y Enter agregan lo escrito (con el producto del catálogo que coincide exacto, o null).
+   * info.sinComprobar: la búsqueda para comprobarlo falló y entra como texto libre sin saber si está en el catálogo. */
+  onAgregarTexto?: (texto: string, coincidencia: any | null, info?: { sinComprobar?: boolean }) => void;
   /** Para devolver el foco al buscador después de agregar. */
   inputRef?: React.Ref<HTMLInputElement>;
 }) {
   const [results, setResults] = useState<any[]>([]);
+  // A4: el texto (recortado) para el que se pidieron los resultados que se tienen.
+  const [resultsDe, setResultsDe] = useState('');
   const [open, setOpen] = useState(false);
   const [searched, setSearched] = useState(false);
   const [creating, setCreating] = useState(false);
   const [errorCrear, setErrorCrear] = useState('');
+  // C6: un error al buscar se dice (no se disfraza de «no está en el catálogo») y entonces no se ofrece crear.
+  const [errorBusqueda, setErrorBusqueda] = useState('');
+  // C6: hay un temporizador o una petición de búsqueda en curso («Buscando…»).
+  const [buscando, setBuscando] = useState(false);
+  // A4: búsqueda en el acto tras Enter o '+ Agregar'; el ref evita agregar dos veces con dos Enter seguidos.
+  const [comprobando, setComprobando] = useState(false);
+  const comprobandoRef = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Contador de peticiones: la respuesta de una búsqueda anterior ya no pinta resultados.
   const reqId = useRef(0);
+  const contenedor = useRef<HTMLDivElement>(null);
 
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
+  // C9: la lista se cierra al hacer clic fuera (mousedown fuera del buscador, como el menú de fila).
+  useEffect(() => {
+    if (!open) return;
+    const alPulsar = (e: MouseEvent) => {
+      if (contenedor.current && !contenedor.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', alPulsar);
+    return () => document.removeEventListener('mousedown', alPulsar);
+  }, [open]);
+
   // Si el texto queda vacío (p. ej. el formulario lo limpia al agregar), no reaparece una lista vieja.
+  // Va en un efecto porque el padre limpia `value` sin pasar por handle().
   useEffect(() => {
     if (value) return;
-    if (timer.current) clearTimeout(timer.current);
+    if (timer.current) { clearTimeout(timer.current); timer.current = null; }
     reqId.current += 1;
-    setResults([]); setOpen(false); setSearched(false); setErrorCrear('');
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- el padre limpia `value` sin pasar por handle()
+    setResults([]); setResultsDe(''); setOpen(false); setSearched(false); setErrorCrear(''); setErrorBusqueda(''); setBuscando(false);
   }, [value]);
 
   function handle(v: string) {
-    onChange(v); setOpen(false); setSearched(false); setErrorCrear('');
-    if (timer.current) clearTimeout(timer.current);
+    onChange(v); setOpen(false); setSearched(false); setErrorCrear(''); setErrorBusqueda('');
+    if (timer.current) { clearTimeout(timer.current); timer.current = null; }
     const id = ++reqId.current;
-    if (!v.trim()) { setResults([]); return; }
+    const q = v.trim();
+    if (!q) { setResults([]); setResultsDe(''); setBuscando(false); return; }
+    setBuscando(true);
     timer.current = setTimeout(async () => {
+      timer.current = null;
       let list: any[] = [];
+      let error = '';
       try {
-        const d = await apiFetch(`/crm/products/search?q=${encodeURIComponent(v)}&limit=8`);
+        const d = await buscarEnCatalogo(q);
         list = Array.isArray(d) ? d : (d?.data ?? []);
-      } catch { list = []; }
+      } catch (err) { error = textoDeError(err, 'No se pudo buscar'); }
       if (id !== reqId.current) return;
-      setResults(list);
-      setOpen(true); setSearched(true);
+      setResults(list); setResultsDe(error ? '' : q); setErrorBusqueda(error); setBuscando(false);
+      setOpen(!error); setSearched(!error);
     }, 300);
   }
 
   async function crearNuevo() {
     const nombre = value.trim();
-    if (!nombre || creating) return;
+    if (!nombre || creating || comprobandoRef.current) return;
     setCreating(true);
     setErrorCrear('');
     try {
       const r = await apiFetch('/crm/products/quick-create', { method: 'POST', body: JSON.stringify({ name: nombre, sale_price: 0 }) });
       const p = r?.data ?? r;
       setOpen(false); setSearched(false);
-      onSelect(p, { creado: p?.creado !== false });
+      // C8: `texto` = lo que se envió: si el buscador ya dice otra cosa, el formulario no lo borra.
+      onSelect(p, { creado: p?.creado !== false, texto: nombre });
     } catch (err) {
       // T5: el servidor ya responde en español (422 precio o código, 409 repetido, 400 genérico): su texto tal cual.
       const msg = textoDeError(err);
@@ -75,38 +106,59 @@ export function ProductSearch({ value, onChange, onSelect, onAgregarTexto, input
     setCreating(false);
   }
 
-  function agregarTexto() {
+  async function agregarTexto() {
     const texto = value.trim();
-    if (!onAgregarTexto || !texto || creating) return;
-    onAgregarTexto(texto, resolverTextoEscrito(texto, results));
+    if (!onAgregarTexto || !texto || creating || comprobandoRef.current) return;
+    if (resultadosSirven(texto, resultsDe, timer.current !== null || buscando)) {
+      onAgregarTexto(texto, resolverTextoEscrito(texto, results));
+      return;
+    }
+    // A4: los resultados son de otro texto o la búsqueda no ha vuelto (se escribió de corrido y se pulsó Enter): se busca
+    // en el acto y se resuelve contra esa respuesta; si no, un producto que existe entraría como texto libre.
+    if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+    const id = ++reqId.current;
+    comprobandoRef.current = true;
+    setComprobando(true); setOpen(false); setBuscando(false);
+    const r = await resolverConBusqueda(texto, buscarEnCatalogo);
+    comprobandoRef.current = false;
+    setComprobando(false);
+    if (id !== reqId.current) return;
+    onAgregarTexto(texto, r.coincidencia, r.comprobado ? undefined : { sinComprobar: true });
   }
 
   const escrito = value.trim();
   const sinCoincidenciaExacta = escrito !== '' && !resolverTextoEscrito(escrito, results);
+  const listaAbierta = open && results.length > 0;
 
   return (
-    <div className="relative">
+    <div className="relative" ref={contenedor}>
       <div className="flex items-center gap-2">
         <input
           ref={inputRef}
           type="text"
           value={value}
           onChange={e => handle(e.target.value)}
+          // C8 / A4: mientras se crea el producto o se comprueba lo escrito, el texto no cambia.
+          readOnly={creating || comprobando}
           // El buscador vive dentro del <form> de la solicitud: el Enter nunca la envía (envío implícito). Con
-          // onAgregarTexto agrega lo escrito, igual que '+ Agregar'.
-          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); agregarTexto(); } }}
+          // onAgregarTexto agrega lo escrito, igual que '+ Agregar'. Escape cierra la lista abierta.
+          onKeyDown={e => {
+            if (e.key === 'Enter') { e.preventDefault(); void agregarTexto(); }
+            else if (e.key === 'Escape' && open) { e.preventDefault(); e.stopPropagation(); setOpen(false); }
+          }}
           placeholder="Buscar producto en el catálogo…"
           aria-label="Buscar producto en el catálogo"
-          className="flex-1 min-w-0 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-200 outline-none"
+          aria-expanded={listaAbierta}
+          className="flex-1 min-w-0 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-200 outline-none read-only:bg-slate-50"
         />
         {onAgregarTexto && (
-          <button type="button" onClick={agregarTexto} disabled={!escrito || creating}
+          <button type="button" onClick={() => { void agregarTexto(); }} disabled={!escrito || creating || comprobando}
             className="shrink-0 bg-indigo-100 text-indigo-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1">
             <Plus size={12} />Agregar
           </button>
         )}
       </div>
-      {open && results.length > 0 && (
+      {listaAbierta && (
         <div className="absolute top-full left-0 right-0 z-50 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-56 overflow-y-auto">
           {results.map((p: any) => (
             <button key={p.id ?? nombreLinea(p)} type="button" onClick={() => { setOpen(false); onSelect(p); }}
@@ -123,7 +175,13 @@ export function ProductSearch({ value, onChange, onSelect, onAgregarTexto, input
           )}
         </div>
       )}
-      {open && searched && results.length === 0 && escrito.length > 2 && (
+      {(buscando || comprobando) && (
+        <p role="status" className="mt-1.5 text-xs text-slate-500">{comprobando ? 'Buscando en el catálogo…' : 'Buscando…'}</p>
+      )}
+      {errorBusqueda && (
+        <p role="alert" className="mt-1.5 text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 break-words">{errorBusqueda}</p>
+      )}
+      {open && searched && !errorBusqueda && results.length === 0 && escrito.length > 2 && (
         <div className="mt-1.5 bg-amber-50 border border-amber-200 rounded-xl p-2.5 flex flex-wrap items-center gap-2">
           <span className="text-xs text-amber-700 flex-1 min-w-[10rem] break-words">Este producto no está en el catálogo.</span>
           <button type="button" onClick={crearNuevo} disabled={creating}
