@@ -148,6 +148,9 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
   const [devVen, setDevVen] = useState('');
   const [devPec, setDevPec] = useState('');
   const [devMotivo, setDevMotivo] = useState('');
+  // T7 ronda 1 (A2): las pruebas de la devolución en su propio estado (antes cada tecla anteponía 'PRUEBAS: …' a las
+  // notas, que acumulaban 'PRUEBAS: f', 'PRUEBAS: fo'… y viajaban a la COT y al PVEN).
+  const [devPruebas, setDevPruebas] = useState('');
 
   useEffect(() => {
     apiFetch('/auth/users').then((d: any) => setUsuarios(Array.isArray(d) ? d : (d?.data ?? []))).catch(() => {});
@@ -226,7 +229,9 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
       if (form.tipo_solicitud === 'Programar Entrega' && envio.nombre_completo) {
         notasConExtras = `ENVIO: ${JSON.stringify(envio)}\n${form.notas}`;
       } else if (form.tipo_solicitud === 'Devolucion de Producto') {
-        notasConExtras = `DEVOLUCION VEN:${devVen} PEC:${devPec} MOTIVO:${devMotivo}\n${form.notas}`;
+        // Las pruebas entran una sola vez, en la misma línea DEVOLUCION y solo si se escribió algo.
+        const pruebas = devPruebas.trim().replace(/\s+/g, ' ');
+        notasConExtras = `DEVOLUCION VEN:${devVen} PEC:${devPec} MOTIVO:${devMotivo}${pruebas ? ` PRUEBAS:${pruebas}` : ''}\n${form.notas}`;
       }
       return { productos: prodsToSend, notasConExtras };
     },
@@ -234,7 +239,7 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
       cambiarProductos([]); setProdName(''); quitarAviso();
       setSegSearch(''); setSegResults([]);
       setEnvio({nombre_completo:'',cedula:'',direccion:'',ciudad:'',telefono:'',transportadora:'',tipo_envio:'Contraentrega',ven_ids:''});
-      setDevVen(''); setDevPec(''); setDevMotivo('');
+      setDevVen(''); setDevPec(''); setDevMotivo(''); setDevPruebas('');
     },
   }));
 
@@ -359,7 +364,7 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
             </select>
           </div>
           <div><label className="text-xs font-bold text-orange-600 mb-1 block">Pruebas (enlaces a imágenes o descripción)</label>
-            <textarea rows={2} placeholder="Enlace a una foto o descripción del estado del producto…" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none outline-none focus:ring-2 focus:ring-orange-200" onChange={e=>setForm(f=>({...f,notas:`PRUEBAS: ${e.target.value}\n${f.notas}`}))}/></div>
+            <textarea rows={2} placeholder="Enlace a una foto o descripción del estado del producto…" className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none outline-none focus:ring-2 focus:ring-orange-200" value={devPruebas} onChange={e=>setDevPruebas(e.target.value)}/></div>
           {/* H10: texto honesto (ningún código del backend lee la nota DEVOLUCION: el ajuste se hace a mano). */}
           {(devMotivo.includes('menor')||devMotivo.includes('total'))&&<div className="bg-orange-100 rounded-xl p-3 text-xs text-orange-800 font-bold space-y-1">
             {devMotivo.includes('menor')&&<p>Queda anotado en la solicitud: ajustar el margen del pedido {devVen||'de venta'}.</p>}
