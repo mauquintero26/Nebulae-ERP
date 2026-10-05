@@ -1,8 +1,8 @@
 """H46+U25: al cancelar un Pedido de Venta su cotizacion vuelve a Borrador y se puede reusar.
 
 - Cancelar el PVEN (PATCH de la pantalla o POST /pedidos/{id}/cancelar) devuelve su COT de CONFIRMADA a BORRADOR,
-  salvo que la COT tenga otro pedido vigente: revoca el enlace, limpia gate2, la SC pasa a COTIZADA y el lead a
-  QUOTATION. Log de la COT con el numero del pedido cancelado.
+  salvo que la COT tenga otro pedido vigente: revoca el enlace, limpia gate2, la SC no cambia de estado (U15: sigue
+  CONFIRMADA) y el lead pasa a QUOTATION. Log de la COT con el numero del pedido cancelado.
 - Un pedido CANCELADO no cuenta como "ya tiene pedido": no congela el precio, no bloquea 'Enviar al Cliente', no es
   un replay al convertir y no apaga la alerta de "COT confirmada sin pedido".
 - Una COT con un pedido vigente no cambia de estado por PATCH (409).
@@ -95,7 +95,7 @@ def test_cancelar_pven_reabre_la_cotizacion_y_permite_otro_pedido(app_client, db
 
     db.refresh(cot); db.refresh(sc)
     assert cot.estado == "BORRADOR" and cot.gate2_confirmed_at is None
-    assert sc.estado == "COTIZADA"
+    assert sc.estado == "CONFIRMADA"  # U15: reabrir la COT no cambia la solicitud
     assert _used_at(db, viejo) is not None
     ultimo = _logs(db, "COT", cot.id, "ESTADO_CHANGED")[-1]
     assert ultimo.description == (f"El pedido {pven1_numero} se canceló: la cotización vuelve a Borrador para "
@@ -160,7 +160,7 @@ def test_cancelacion_canonica_tambien_reabre_la_cotizacion(app_client, db, admin
     assert resp.status_code == 200, resp.text
     db.refresh(cot); db.refresh(sc)
     assert cot.estado == "BORRADOR" and cot.gate2_confirmed_at is None
-    assert sc.estado == "COTIZADA"
+    assert sc.estado == "CONFIRMADA"  # U15: reabrir la COT no cambia la solicitud
     ultimo = _logs(db, "COT", cot.id, "ESTADO_CHANGED")[-1]
     assert "PVEN-REA004" in ultimo.description and ultimo.user_name == user_admin.email
 

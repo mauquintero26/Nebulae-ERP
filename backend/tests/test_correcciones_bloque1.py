@@ -532,7 +532,8 @@ def test_h46_reabre_las_cotizaciones_con_todos_sus_pedidos_cancelados(db):
             (lead.id, "DRAFT", None)]                                        # el lead, tal como estaba
         assert [(f["id"], f["used_at"]) for f in t["document_confirmation_tokens"]] == [(token.id, None)]
     _refrescar(db, cot, sc, cot_viva, cot_real, sc_r, lead, token)
-    assert cot.estado == "BORRADOR" and cot.gate2_confirmed_at is None and sc.estado == "COTIZADA"
+    # U15 (Bloque 2): reabrir la COT ya no cambia la solicitud (sigue CONFIRMADA).
+    assert cot.estado == "BORRADOR" and cot.gate2_confirmed_at is None and sc.estado == "CONFIRMADA"
     assert lead.status == "QUOTATION" and token.used_at is not None                  # lo que el respaldo permite deshacer
     assert cot_viva.estado == "CONFIRMADA" and cot_real.estado == "CONFIRMADA" and sc_r.estado == "CONFIRMADA"
     log = _logs(db, "COT", cot.id, "ESTADO_CHANGED")
@@ -797,7 +798,7 @@ def test_n5_lista_a_b_c_y_aplica_la_correccion_solo_a_los_numeros_pedidos(db, us
     s = _sfx()
     # (a) SC con un estado de pedido
     sc_cot = _sc(db, f"SC-T14A{s}", estado="FACTURADO")
-    cot_env = _cot(db, f"COT-T14A{s}", sc_cot, estado="ENVIADA")             # -> EN_ESPERA_CONFIRMACION
+    cot_env = _cot(db, f"COT-T14A{s}", sc_cot, estado="ENVIADA")             # documento activo -> CONFIRMADA (U15)
     sc_asesor = _sc(db, f"SC-T14B{s}", estado="ENTREGADO", advisor_user_id=user_admin.id)   # sin COT -> ASIGNADA
     sc_libre = _sc(db, f"SC-T14C{s}", estado="EN_PROCESO")                                   # sin COT ni asesor -> BORRADOR
     sc_sin_pedir = _sc(db, f"SC-T14D{s}", estado="FACTURADO")                                 # no esta en --numeros
@@ -819,11 +820,11 @@ def test_n5_lista_a_b_c_y_aplica_la_correccion_solo_a_los_numeros_pedidos(db, us
     assert {cot_ajena_viva.numero, cot_ajena.numero} <= set(b)
     assert cot_rech.numero in c
     sugeridos = {f["numero"]: f["sugerido"] for sec in ("a", "b", "c") for f in listado.seccion(sec).filas}
-    assert sugeridos[sc_cot.numero] == "EN_ESPERA_CONFIRMACION" and sugeridos[sc_asesor.numero] == "ASIGNADA"
+    assert sugeridos[sc_cot.numero] == "CONFIRMADA" and sugeridos[sc_asesor.numero] == "ASIGNADA"
     assert sugeridos[sc_libre.numero] == "BORRADOR" and sugeridos[cot_ajena_viva.numero] == "CONFIRMADA"
     assert sugeridos[cot_ajena.numero] == "BORRADOR" and sugeridos[cot_rech.numero] == "CONFIRMADA"
     etiquetas = {f["numero"]: f["sugerido_txt"] for sec in ("a", "b", "c") for f in listado.seccion(sec).filas}
-    assert etiquetas[sc_cot.numero] == "En espera de confirmación" and etiquetas[sc_asesor.numero] == "Asignada"
+    assert etiquetas[sc_cot.numero] == "Confirmada" and etiquetas[sc_asesor.numero] == "Asignada"
     assert etiquetas[cot_ajena_viva.numero] == "Confirmada" and etiquetas[cot_ajena.numero] == "Borrador"
     with _carpeta() as carpeta:
         # sin --numeros no aplica nada: n5 se decide documento por documento
@@ -848,11 +849,11 @@ def test_n5_lista_a_b_c_y_aplica_la_correccion_solo_a_los_numeros_pedidos(db, us
             cot_ajena_viva.id, cot_ajena.id, cot_rech.id}
         assert set(guardado["tablas"]["sales_quotations"][0]) == {"id", "estado", "updated_at"}
     _refrescar(db, sc_cot, sc_asesor, sc_libre, sc_sin_pedir, sc_real, cot_ajena_viva, cot_ajena, cot_rech)
-    assert (sc_cot.estado, sc_asesor.estado, sc_libre.estado) == ("EN_ESPERA_CONFIRMACION", "ASIGNADA", "BORRADOR")
+    assert (sc_cot.estado, sc_asesor.estado, sc_libre.estado) == ("CONFIRMADA", "ASIGNADA", "BORRADOR")
     assert (cot_ajena_viva.estado, cot_ajena.estado, cot_rech.estado) == ("CONFIRMADA", "BORRADOR", "CONFIRMADA")
     assert sc_sin_pedir.estado == "FACTURADO" and sc_real.estado == "FACTURADO"
     log = _logs(db, "SC", sc_cot.id, "ESTADO_CHANGED")
-    assert len(log) == 1 and (log[0].old_estado, log[0].new_estado) == ("FACTURADO", "EN_ESPERA_CONFIRMACION")
+    assert len(log) == 1 and (log[0].old_estado, log[0].new_estado) == ("FACTURADO", "CONFIRMADA")
 
 
 # ─── n10: logs de mercancia disponible ────────────────────────────────────────────────────────────────────────

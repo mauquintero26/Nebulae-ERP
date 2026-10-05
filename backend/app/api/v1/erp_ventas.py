@@ -32,7 +32,7 @@ from app.core.ventas_dinero import (
     anticipo_del_pedido, saldos_a_favor_de_cotizacion, PCT_ANTICIPO_POR_DEFECTO, ORIGEN_CONSERVADO,
     anular_pxps_de_pedido,
 )
-from app.core.textos_actividad import etiqueta_estado, ETIQUETAS_ESTADO
+from app.core.textos_actividad import etiqueta_estado, ETIQUETAS_ESTADO, ESTADOS_SC_HEREDADOS
 from app.core.estados_pedido import ESTADOS_VEN_DESTINOS, ESTADOS_VEN_SIN_DINERO, destinos_ven_permitidos
 from app.api.v1.schemas_compras import CancelarSolicitudBody
 from app.api.v1.crm import mover_lead_de_solicitud, reabrir_lead_de_solicitud
@@ -297,8 +297,8 @@ def _describir_documentos(cots, pvens) -> str:
     return ", ".join(partes)
 
 def _mensaje_documentos_activos(sc: CustomerRequest, cots, pvens, accion: str = "cancelar") -> str:
-    """409 de N4 (accion 'cancelar') y de R10 (accion 'devolver a Borrador'): que documentos lo impiden y en que
-    orden resolverlos (primero el pedido: al cancelarlo su cotizacion vuelve a Borrador y despues se rechaza)."""
+    """409 de N4 (accion 'cancelar'), de R10 (accion 'reiniciar', U15/C5) y de restaurar: que documentos lo impiden y
+    en que orden resolverlos (primero el pedido: al cancelarlo su cotizacion vuelve a Borrador y despues se rechaza)."""
     pasos = []
     if pvens:
         pasos.append("cancela el pedido de venta" if len(pvens) == 1 else "cancela los pedidos de venta")
@@ -446,6 +446,13 @@ def _pago_dict(p: SaleOrderPayment) -> dict:
         "created_at": _iso_utc(p.created_at),
     }
 
+def _confirmacion_vigente_sc(sc: CustomerRequest) -> bool:
+    """U15: el cliente confirmo la solicitud por el enlace (Gate 1) y esa confirmacion sigue valiendo para sus
+    productos actuales: solo asi confirmar_solicitud crea una cotizacion. Una SC CONFIRMADA por su cotizacion (sin la
+    marca) o una heredada que conserva la marca no cuentan. Helper unico: lo reutilizan T3 y T5."""
+    return sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is not None
+
+
 def _sc_dict(sc: CustomerRequest) -> dict:
     return {
         "id": sc.id,
@@ -460,6 +467,9 @@ def _sc_dict(sc: CustomerRequest) -> dict:
         "tipo_solicitud": sc.tipo_solicitud or "Cotizacion de Producto",
         "modalidad_pago": sc.modalidad_pago,
         "estado": sc.estado,
+        # Gate 1 de la SC (solo el booleano, nunca la fecha). OJO: la 'confirmacion_vigente' de _cot_dict es otra cosa
+        # (gate2 de la cotizacion): el detalle de la SC lee esta, nunca la de solicitud.cotizaciones[i].
+        "confirmacion_vigente": _confirmacion_vigente_sc(sc),
         "fecha_solicitud": sc.fecha_solicitud.isoformat() if sc.fecha_solicitud else None,
         "fecha_vencimiento": sc.fecha_vencimiento.isoformat() if sc.fecha_vencimiento else None,
         "fecha_entrega_estimada": sc.fecha_entrega_estimada.isoformat() if sc.fecha_entrega_estimada else None,
@@ -827,11 +837,12 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     if body.get("estado") in ("ASIGNADA", "PENDIENTE_CONFIRMACION"):
         raise HTTPException(400, "Este estado solo se alcanza automáticamente (asignar un asesor) o por el flujo de confirmación del cliente (no se puede forzar manualmente con este PATCH).")
     # N4: cancelar es POST /cancelar (motivo, eliminada_at, lead perdido y revision de documentos activos), nunca
-    # este PATCH. Fuera de eso, a mano solo se vuelve a 'Borrador' (esto tambien cierra los estados de pedido que el
-    # cambio masivo del Hub mandaba a una SC). Reenviar el estado que ya tiene no es un cambio.
+    # este PATCH. Fuera de eso, a mano solo se reinicia (BORRADOR: vuelve a Nueva, o a Asignada si tiene asesor; U15/C5).
+    # Esto tambien cierra los estados de pedido que el cambio masivo del Hub mandaba a una SC. Reenviar el estado que
+    # ya tiene no es un cambio.
     nuevo_estado = body.get("estado")
     # Una SC cancelada (en la Papelera) solo vuelve por /restaurar, que limpia eliminada_at, revisa sus documentos y
-    # devuelve el lead: la pastilla 'Borrador' o soltarla en el Hub no la reviven a medias.
+    # devuelve el lead: reiniciarla o soltarla en el Hub no la reviven a medias.
     if sc.estado == "CANCELADA" and nuevo_estado and nuevo_estado != "CANCELADA":
         raise HTTPException(409, f"La solicitud {sc.numero} está cancelada: para volver a trabajar en ella, "
                                  f"restáurala desde la Papelera (botón «Restaurar»).")
@@ -840,14 +851,14 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
                                  "revisa que no tenga cotizaciones ni pedidos activos.")
     if nuevo_estado and nuevo_estado != sc.estado and nuevo_estado not in ESTADOS_SC_MANUALES:
         raise HTTPException(400, f"El estado «{_nombre_de_estado('SC', nuevo_estado)}» no se puede asignar a mano "
-                                 f"a una solicitud; solo «Borrador».")
-    # R10: volver a Borrador reinicia el ciclo de Gate 1 (revoca el enlace y limpia la confirmacion): no con una
-    # cotizacion o un pedido vivos colgando de la SC.
+                                 f"a una solicitud: solo se puede reiniciar (vuelve a {etiqueta_estado('SC', 'BORRADOR')}"
+                                 f", o a {etiqueta_estado('SC', 'ASIGNADA')} si tiene asesor).")
+    # R10: reiniciar reinicia el ciclo de Gate 1 (revoca el enlace y limpia la confirmacion): no con una cotizacion o un
+    # pedido vivos colgando de la SC.
     if nuevo_estado == "BORRADOR" and sc.estado != "BORRADOR":
         cots_activas, pvens_activos = _documentos_activos_de_solicitud(db, sc.id)
         if cots_activas or pvens_activos:
-            raise HTTPException(409, _mensaje_documentos_activos(sc, cots_activas, pvens_activos,
-                                                                 "devolver a Borrador"))
+            raise HTTPException(409, _mensaje_documentos_activos(sc, cots_activas, pvens_activos, "reiniciar"))
     old_estado = sc.estado
     fecha_vieja = sc.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
     antes_log = cambios_documento.tomar_foto(sc, "SC")
@@ -952,12 +963,14 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         # advisor_user_id), asi que sin este bloque la transicion a ASIGNADA quedaria
         # invisible en el Chatter/Actividad. El guard evita un doble log en el caso raro
         # de que el mismo PATCH mande advisor_user_id Y un estado explicito distinto.
-        _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Estado cambiado a Asignada (asesor asignado)",
+        _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
+             f"Estado cambiado a {etiqueta_estado('SC', 'ASIGNADA')} (asesor asignado)",
              old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"), commit=False)
     if desasigna_a_borrador and not (body.get("estado") and body["estado"] != old_estado):
         # Mismo motivo que el bloque anterior: esta transicion ocurre sin que el body
         # mande "estado" (solo limpia advisor_user_id), asi que necesita su propio log.
-        _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", "Estado cambiado a Borrador (asesor retirado)",
+        _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
+             f"Estado cambiado a {etiqueta_estado('SC', 'BORRADOR')} (asesor retirado)",
              old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"), commit=False)
     if invalida_confirmacion:
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
@@ -1081,7 +1094,8 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
 @router.post("/solicitudes/{sc_id}/confirmar")
 def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
-    """Confirm SC -> creates COT automatically"""
+    """Crea la Cotizacion de una SC confirmada por el cliente (Gate 1). U15: la SC se queda en CONFIRMADA (cuenta solo
+    su propia historia; el avance se ve en la cotizacion) y su Actividad registra COTIZACION_CREADA."""
     # Final whole-branch review (hallazgo #5): .with_for_update() -- sin esto, dos
     # requests concurrentes podian pasar ambos el chequeo del marcador (lectura sin
     # bloqueo) y crear dos Cotizaciones distintas desde UNA sola confirmacion del
@@ -1092,12 +1106,12 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
         raise HTTPException(404, "Solicitud no encontrada")
     if sc.estado != "CONFIRMADA":
         raise HTTPException(400, f"No se puede confirmar en estado {etiqueta_estado('SC', sc.estado)}")
-    # Gate 1, segunda capa (Round 4; N7): _sincronizar_estado_solicitud_desde_cotizacion tambien
-    # escribe SC.estado = "CONFIRMADA" cuando su Cotizacion vinculada se confirma, y rechazar la
-    # unica COT activa deja la SC en CONFIRMADA para crearle otra (N7). Por eso no se crea otra COT
-    # mientras haya una activa (una RECHAZADA no cuenta; una VENCIDA si) o un pedido vigente.
-    # Junto con el with_for_update de arriba, esto es lo que impide el duplicado ahora que la marca
-    # ya no se consume.
+    # Gate 1, segunda capa (Round 4; N7; U15): la SC se queda CONFIRMADA al crear la COT, la
+    # sincronizacion la pone en CONFIRMADA cuando el cliente confirma su Cotizacion, y rechazar la
+    # unica COT activa la deja en CONFIRMADA para crearle otra. Por eso no se crea otra COT mientras
+    # haya una activa (una RECHAZADA no cuenta; una VENCIDA si) o un pedido vigente. Junto con el
+    # with_for_update de arriba, esto es lo que impide el duplicado ahora que la marca ya no se
+    # consume.
     cots_activas, pvens_activos = _documentos_activos_de_solicitud(db, sc.id)
     if cots_activas:
         raise HTTPException(400, f"Esta solicitud ya tiene la cotización {cots_activas[-1].numero} activa; no se "
@@ -1121,10 +1135,8 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
         raise HTTPException(400, "La solicitud no tiene productos para cotizar. Agrégalos en la solicitud "
                                  "y vuelve a enviársela al cliente para que la confirme.")
 
-    # Al crear el borrador de cotizacion, la solicitud pasa a COTIZADA (no CONFIRMADA:
-    # eso solo ocurre cuando el cliente realmente confirma la cotizacion).
-    old_estado = sc.estado
-    sc.estado = "COTIZADA"
+    # U15: la solicitud se queda CONFIRMADA (ya no pasa a COTIZADA): el avance de la cotizacion se ve en la propia
+    # cotizacion y en la barra Solicitud -> Cotizacion -> Pedido.
     sc.updated_at = datetime.datetime.utcnow()
     # N7: si la COT nueva reemplaza a una rechazada, su Actividad lo dice (la ultima rechazada).
     rechazada = (db.query(SalesQuotation.numero)
@@ -1136,11 +1148,9 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
     entrega_est = datetime.datetime.utcnow() + datetime.timedelta(days=dias)
     sc.fecha_entrega_estimada = entrega_est
 
-    # Final whole-branch review (hallazgo #5): el avance a COTIZADA se consolida en el
-    # MISMO commit que crea la COT (no son dos commits separados) -- antes, una falla
-    # entre ambos podia dejar la SC COTIZADA pero SIN ninguna Cotizacion creada -- un
-    # estado sin salida, porque el chequeo de estado=="CONFIRMADA" no permite reintentar
-    # desde ahi. Mismo patron que convertir_cotizacion_a_venta (Gate 2).
+    # Final whole-branch review (hallazgo #5): los cambios de la SC (fecha de entrega) se
+    # consolidan en el MISMO commit que crea la COT (no son dos commits separados). Mismo
+    # patron que convertir_cotizacion_a_venta (Gate 2).
     cot_numero = _gen_numero(db, "COT-", "seq_cot")
     cot = SalesQuotation(
         numero=cot_numero,
@@ -1163,9 +1173,10 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
     # Los dos _log de abajo van DESPUES del unico commit que de verdad importa (arriba)
     # -- cada _log hace su propio commit interno, solo para la fila de ActivityLog, asi
     # que su orden relativo entre si no afecta la atomicidad de lo que ya se escribio.
-    _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
-         "Solicitud cotizada - Cotización creada",
-         old_estado=old_estado, new_estado="COTIZADA",
+    # U15: la SC no cambia de estado; su Actividad lo cuenta con un renglon propio, sin old/new.
+    reemplaza = f" (reemplaza a la cotización rechazada {rechazada.numero})" if rechazada else ""
+    _log(db, "SC", sc.id, sc.numero, "COTIZACION_CREADA",
+         f"Cotización {cot.numero} creada desde esta solicitud{reemplaza}",
          user_name=body.get("user_name"))
     _log(db, "COT", cot.id, cot.numero, "CREATED",
          (f"Cotización {cot.numero} creada desde {sc.numero} (reemplaza a la cotización rechazada {rechazada.numero})"
@@ -1347,62 +1358,80 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
     return {"status": "success", "data": d}
 
 
-# RECHAZADA no esta: rechazar una COT deja la SC activa (N7, ver _sincronizar_estado_solicitud_desde_cotizacion).
-_MAPA_ESTADO_COTIZACION_A_SOLICITUD = {
-    "BORRADOR": "COTIZADA",
-    "ENVIADA": "EN_ESPERA_CONFIRMACION",
-    "PENDIENTE_CONFIRMACION": "EN_ESPERA_CONFIRMACION",
-    "CONFIRMADA": "CONFIRMADA",
-    "VENCIDA": "VENCIDA",
-}
-
-
 def _sincronizar_estado_solicitud_desde_cotizacion(cot: "SalesQuotation", db: Session,
                                                    user_name: Optional[str] = None) -> None:
-    """Mantiene CustomerRequest.estado como reflejo fiel del estado real de su Cotizacion.
+    """U15: la SC cuenta solo su propia historia y ya NO refleja el estado de su cotizacion. Solo dos estados de la COT
+    la tocan:
 
-    N4: una SC CANCELADA nunca se revive. N7: rechazar una COT no rechaza la SC: si la SC no tiene otra COT activa ni
-    un pedido vigente, vuelve a CONFIRMADA cuando la confirmacion del cliente sigue vigente (gate1_confirmed_at: se le
-    puede crear otra COT) o a ASIGNADA / BORRADOR (sin asesor) para reenviarsela; con otra COT activa o un pedido
-    vigente no se toca."""
-    if not cot.sc_id:
+    - CONFIRMADA (el cliente confirmo la cotizacion): una SC sin confirmar (Nueva, Asignada, Pendiente por
+      confirmacion) o en un estado heredado pasa a CONFIRMADA SIN tocar gate1_confirmed_at (esa marca solo la pone el
+      enlace de la SC, asi que confirmar_solicitud sigue sin poder crear otra COT) y se anula su enlace pendiente.
+    - RECHAZADA (N7 adaptada, R21, R29): con otra COT activa o un pedido vigente no se toca. Una SC CONFIRMADA sin la
+      marca o en un estado heredado sale de ahi: CONFIRMADA si conserva la marca; si no, ASIGNADA (BORRADOR sin asesor),
+      con ESTADO_CHANGED y el texto de N7. En los demas casos el estado no cambia y la Actividad lo anota con
+      COTIZACION_RECHAZADA (sin old/new) y un texto segun el estado de la SC.
+
+    Cualquier otro estado de la COT (BORRADOR, ENVIADA, PENDIENTE_CONFIRMACION, VENCIDA) no toca la SC: crear, enviar,
+    re-cotizar, reabrir por un pedido cancelado (H46) o vincular una COT en Borrador no cambian la solicitud.
+    N4: una SC CANCELADA nunca se revive; una de Soporte tampoco se toca.
+    C8: un solo commit, y solo si algo cambio (_log y revoke_pending_tokens con commit=False)."""
+    if not cot.sc_id or cot.estado not in ("CONFIRMADA", "RECHAZADA"):
         return
-    sc = db.query(CustomerRequest).filter(CustomerRequest.id == cot.sc_id).first()
-    if not sc or sc.estado == "CANCELADA":
+    sc = (db.query(CustomerRequest).filter(CustomerRequest.id == cot.sc_id)
+          .populate_existing().with_for_update().first())
+    if sc is None or sc.estado in ("CANCELADA", "N/A_SOPORTE"):
         return
-    if cot.estado == "RECHAZADA":
-        cots_activas, pvens_activos = _documentos_activos_de_solicitud(db, sc.id)
-        if any(c.id != cot.id for c in cots_activas) or pvens_activos:
+    old_estado = sc.estado
+    if cot.estado == "CONFIRMADA":
+        if sc.estado == "CONFIRMADA":
             return
-        old_estado = sc.estado
+        from app.core.confirmation_tokens import revoke_pending_tokens
+        sc.estado = "CONFIRMADA"
+        sc.updated_at = datetime.datetime.utcnow()
+        revoke_pending_tokens(db, "SC", sc.id, commit=False)
+        _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
+             f"La solicitud queda confirmada: el cliente confirmó la cotización {cot.numero}",
+             old_estado, "CONFIRMADA", user_name or "Cliente (confirmación por link)", commit=False)
+        db.commit()
+        return
+    cots_activas, pvens_activos = _documentos_activos_de_solicitud(db, sc.id)
+    if any(c.id != cot.id for c in cots_activas) or pvens_activos:
+        return
+    rechazada = f"La cotización {cot.numero} fue rechazada."
+    lista_para_otra = f"{rechazada} La solicitud sigue activa: ya puedes crearle una nueva cotización."
+    if sc.estado in ESTADOS_SC_HEREDADOS or (sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is None):
+        # R29 (y N7 para CONFIRMADA sin la marca): no se queda en un estado que ya no se asigna ni "confirmada" sin una
+        # confirmacion que valga para crear otra cotizacion.
         if sc.gate1_confirmed_at is not None:
-            sc.estado = "CONFIRMADA"
-            texto = (f"La cotización {cot.numero} fue rechazada. La solicitud sigue activa: ya puedes crearle una "
-                     f"nueva cotización.")
+            sc.estado, texto = "CONFIRMADA", lista_para_otra
         else:
             sc.estado = "ASIGNADA" if sc.advisor_user_id else "BORRADOR"
-            texto = (f"La cotización {cot.numero} fue rechazada. La solicitud sigue activa; para crearle otra "
-                     f"cotización, reenvíasela al cliente para que la confirme.")
-        sc.updated_at = datetime.datetime.utcnow()
-        db.commit()
-        if sc.estado != old_estado:
-            _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", texto, old_estado, sc.estado, user_name)
-        else:  # p.ej. ya estaba CONFIRMADA (por la COT confirmada): el aviso queda, sin un "Confirmada -> Confirmada"
-            _log(db, "SC", sc.id, sc.numero, "UPDATED", texto, user_name=user_name)
-        return
-    nuevo_estado = _MAPA_ESTADO_COTIZACION_A_SOLICITUD.get(cot.estado)
-    if nuevo_estado and sc.estado != nuevo_estado:
-        sc.estado = nuevo_estado
-        sc.updated_at = datetime.datetime.utcnow()
-        db.commit()
+            texto = (f"{rechazada} La solicitud sigue activa; para crearle otra cotización, reenvíasela al cliente "
+                     f"para que la confirme.")
+        _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", texto, old_estado, sc.estado, user_name, commit=False)
+    else:
+        textos = {
+            "CONFIRMADA": lista_para_otra,  # con la confirmacion del cliente vigente
+            "PENDIENTE_CONFIRMACION": f"{rechazada} La solicitud sigue esperando la confirmación del cliente.",
+            # R21: nunca se le envio al cliente
+            "ASIGNADA": (f"{rechazada} La solicitud sigue activa: envíasela al cliente para que la confirme o "
+                         f"cotízala de nuevo."),
+        }
+        textos["BORRADOR"] = textos["ASIGNADA"]
+        if sc.estado not in textos:
+            return  # un codigo que no es de la SC (dato viejo de otro documento): no se toca
+        _log(db, "SC", sc.id, sc.numero, "COTIZACION_RECHAZADA", textos[sc.estado], user_name=user_name,
+             commit=False)
+    sc.updated_at = datetime.datetime.utcnow()
+    db.commit()
 
 
 def _reabrir_cotizacion_por_pven_cancelado(db: Session, so: SaleOrder, user_name: Optional[str]) -> None:
     """H46+U25: al cancelar un Pedido de Venta (PATCH de la pantalla o POST /pedidos/{id}/cancelar), su COT vuelve de
     CONFIRMADA a BORRADOR para ajustarla, reenviarsela al cliente y crear otro pedido -- salvo que la COT tenga otro
-    pedido vigente. Revoca el enlace pendiente y limpia gate2 (la confirmacion era para el pedido cancelado); la SC
-    pasa a COTIZADA y el lead a QUOTATION. Se llama DESPUES del commit de la cancelacion y nunca la hace fallar: un
-    error aqui se registra y se revierte solo lo suyo."""
+    pedido vigente. Revoca el enlace pendiente y limpia gate2 (la confirmacion era para el pedido cancelado); la SC no
+    cambia de estado (U15: la sincronizacion no la toca por una COT en Borrador) y el lead pasa a QUOTATION. Se llama
+    DESPUES del commit de la cancelacion y nunca la hace fallar: un error aqui se registra y se revierte solo lo suyo."""
     if not so.cot_id:
         return
     try:
@@ -1773,8 +1802,9 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
             _log(db, "SC", sc_nueva.id, sc_nueva.numero, "UPDATED",
                  f"La cotización {cot.numero} se vinculó a esta solicitud.", user_name=autor, extra_data=datos_cot)
             if cot.estado != "RECHAZADA":
-                # Una COT activa lleva a la SC nueva a su estado (BORRADOR -> COTIZADA). Una RECHAZADA no es activa:
-                # aplicarle la regla del rechazo reiniciaria el flujo de la SC nueva por algo que no le paso a ella.
+                # U15: la SC nueva no cambia de estado por una COT en Borrador (la llamada se conserva: no hace
+                # dano). Una RECHAZADA no es activa: aplicarle la regla del rechazo reiniciaria el flujo de la SC
+                # nueva por algo que no le paso a ella.
                 try:
                     _sincronizar_estado_solicitud_desde_cotizacion(cot, db, autor)
                 except Exception as exc:

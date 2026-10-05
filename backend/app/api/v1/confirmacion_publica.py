@@ -171,9 +171,9 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
         cot.updated_at = datetime.datetime.utcnow()
         db.commit()
         db.refresh(cot)
-        # Mantiene la SC vinculada en sync -- mismo mecanismo preexistente y protegido
-        # que ya usan update_cotizacion/confirmar_cotizacion para este mismo efecto
-        # (_MAPA_ESTADO_COTIZACION_A_SOLICITUD mapea CONFIRMADA->CONFIRMADA). NO se
+        # U15: la SC ya no refleja a su COT; la sincronizacion solo la confirma si estaba
+        # sin confirmar (o en un estado heredado), sin poner gate1_confirmed_at (esa marca
+        # la pone solo la rama SC de arriba), y anula su enlace pendiente. NO se
         # llama mover_lead_de_solicitud aqui: el movimiento del Lead a "Ganado"/INVOICED
         # ocurre al crear el Pedido de Venta (confirmar_cotizacion en erp_ventas.py,
         # despues de que convertir_cotizacion_a_venta devuelve un sale_order_id real),

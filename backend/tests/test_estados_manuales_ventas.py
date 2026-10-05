@@ -42,7 +42,8 @@ def test_patch_solicitud_rechaza_un_estado_de_pedido(app_client, db, admin_token
     sc = _sc(db, "SC-EST001")
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": "FACTURADO"}, headers=auth(admin_token))
     assert resp.status_code == 400, resp.text
-    assert resp.json()["detail"] == "El estado «Facturado» no se puede asignar a mano a una solicitud; solo «Borrador»."
+    assert resp.json()["detail"] == ("El estado «Facturado» no se puede asignar a mano a una solicitud: solo se puede "
+                                     "reiniciar (vuelve a Nueva, o a Asignada si tiene asesor).")  # U15/C5
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": "COTIZADA"}, headers=auth(admin_token))
     assert resp.status_code == 400, resp.text
     db.refresh(sc)

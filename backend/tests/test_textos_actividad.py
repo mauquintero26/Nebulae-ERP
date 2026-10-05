@@ -27,10 +27,11 @@ def test_etiqueta_estado_vacio_o_en_blanco_da_cadena_vacia():
 
 
 def test_etiquetas_de_sc():
+    # U15 (Bloque 2, C5): 'Nueva' y 'Pendiente por confirmación' son las palabras del usuario.
     assert ETIQUETAS_ESTADO['SC'] == {
-        'BORRADOR': 'Borrador',
+        'BORRADOR': 'Nueva',
         'ASIGNADA': 'Asignada',
-        'PENDIENTE_CONFIRMACION': 'Pendiente de confirmación',
+        'PENDIENTE_CONFIRMACION': 'Pendiente por confirmación',
         'COTIZADA': 'Cotizada',
         'EN_ESPERA_CONFIRMACION': 'En espera de confirmación',
         'CONFIRMADA': 'Confirmada',
@@ -128,7 +129,7 @@ CASOS_HISTORICOS = [
     ('COT', 'CONVERTIDA_A_VENTA', 'Cotizacion COT-1 convertida al pedido PVEN-1. Lineas: 2.',
      'Cotización COT-1 convertida al pedido PVEN-1. Líneas: 2.'),
     ('SC', 'ESTADO_CHANGED', 'Estado cambiado a ASIGNADA (asesor asignado)', 'Estado cambiado a Asignada (asesor asignado)'),
-    ('SC', 'ESTADO_CHANGED', 'Estado cambiado a BORRADOR (asesor retirado)', 'Estado cambiado a Borrador (asesor retirado)'),
+    ('SC', 'ESTADO_CHANGED', 'Estado cambiado a BORRADOR (asesor retirado)', 'Estado cambiado a Nueva (asesor retirado)'),
     ('SC', 'ESTADO_CHANGED', 'Estado cambiado a ASIGNADA: se modificaron los productos, asi que hay que reenviarla',
      'Estado cambiado a Asignada: se modificaron los productos, asi que hay que reenviarla'),
     ('COT', 'ESTADO_CHANGED', 'Estado cambiado a PENDIENTE_CONFIRMACION', 'Estado cambiado a Esperando confirmación del cliente'),
@@ -216,8 +217,12 @@ def test_crear_la_cotizacion_desde_la_sc_registra_textos_con_tilde(app_client, d
                            headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     cot = resp.json()["data"]["cotizacion"]
-    estado = [a for a in _actividades(app_client, admin_token, "solicitudes", sc.id) if a["action"] == "ESTADO_CHANGED"]
-    assert [a["description"] for a in estado] == ["Solicitud cotizada - Cotización creada"]
+    # U15: la SC ya no cambia de estado (sin ESTADO_CHANGED); su Actividad lo cuenta con COTIZACION_CREADA, sin old/new.
+    actividades_sc = _actividades(app_client, admin_token, "solicitudes", sc.id)
+    assert [a for a in actividades_sc if a["action"] == "ESTADO_CHANGED"] == []
+    (creada_sc,) = [a for a in actividades_sc if a["action"] == "COTIZACION_CREADA"]
+    assert creada_sc["description"] == f"Cotización {cot['numero']} creada desde esta solicitud"
+    assert (creada_sc["old_estado"], creada_sc["new_estado"]) == (None, None)
     creada = [a for a in _actividades(app_client, admin_token, "cotizaciones", cot["id"]) if a["action"] == "CREATED"]
     assert [a["description"] for a in creada] == [f"Cotización {cot['numero']} creada desde SC-TXT001"]
 
@@ -280,7 +285,7 @@ def test_retirar_el_asesor_describe_el_estado_legible(app_client, db, admin_toke
     assert resp.status_code == 200, resp.text
     (cambio,) = [a for a in _actividades(app_client, admin_token, "solicitudes", sc.id)
                  if a["action"] == "ESTADO_CHANGED"]
-    assert cambio["description"] == "Estado cambiado a Borrador (asesor retirado)"
+    assert cambio["description"] == "Estado cambiado a Nueva (asesor retirado)"  # U15/C5: BORRADOR se llama 'Nueva'
 
 
 def test_enviar_la_cot_en_otro_estado_nombra_el_estado_actual_con_su_etiqueta(app_client, db, admin_token):

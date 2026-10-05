@@ -164,7 +164,7 @@ def test_confirmar_solicitud_rechaza_si_ya_tiene_cotizacion(app_client, db, admi
     assert resp.status_code == 400
 
     db.refresh(sc)
-    assert sc.estado == "CONFIRMADA"  # sin escritura parcial (no debio pasar a COTIZADA)
+    assert sc.estado == "CONFIRMADA"  # sin escritura parcial
 
 
 def test_link_no_confirma_sc_cancelada(app_client, db, admin_token, user_admin):
@@ -478,7 +478,7 @@ def test_confirmar_solicitud_conserva_gate1_confirmed_at_y_no_crea_otra_cotizaci
     crear_cot_resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/confirmar", json={"user_name": "test"}, headers=auth(admin_token))
     assert crear_cot_resp.status_code == 200
     db.refresh(sc)
-    assert sc.estado == "COTIZADA"
+    assert sc.estado == "CONFIRMADA"  # U15: la SC se queda Confirmada al crear la cotizacion
     assert sc.gate1_confirmed_at is not None  # N7: sigue vigente (no se consume)
 
     otra = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/confirmar", json={"user_name": "test"}, headers=auth(admin_token))

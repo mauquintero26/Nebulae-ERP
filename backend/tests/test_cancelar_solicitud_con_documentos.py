@@ -155,8 +155,8 @@ def test_patch_solicitud_rechaza_estados_no_manuales(app_client, db, admin_token
         resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": estado, "updated_by": "t"},
                                 headers=auth(admin_token))
         assert resp.status_code == 400, (estado, resp.text)
-        assert resp.json()["detail"] == (f"El estado «{etiqueta}» no se puede asignar a mano a una solicitud; "
-                                         "solo «Borrador».")
+        assert resp.json()["detail"] == (f"El estado «{etiqueta}» no se puede asignar a mano a una solicitud: "
+                                         "solo se puede reiniciar (vuelve a Nueva, o a Asignada si tiene asesor).")
     db.refresh(sc)
     assert sc.estado == "ASIGNADA"
     # Los 400 de Gate 1 (CONFIRMADA, ASIGNADA, PENDIENTE_CONFIRMACION) siguen con su propio mensaje.
@@ -177,9 +177,9 @@ def test_volver_a_borrador_con_documentos_activos_se_bloquea(app_client, db, adm
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": "BORRADOR", "updated_by": "t"},
                             headers=auth(admin_token))
     assert resp.status_code == 409, resp.text
-    assert resp.json()["detail"] == (
-        f"No se puede devolver a Borrador la solicitud SC-CAN008: tiene documentos activos (cotización {cot.numero}). "
-        "Primero rechaza la cotización; después podrás devolver a Borrador la solicitud.")
+    assert resp.json()["detail"] == (  # U15/C5: la accion se llama 'reiniciar'
+        f"No se puede reiniciar la solicitud SC-CAN008: tiene documentos activos (cotización {cot.numero}). "
+        "Primero rechaza la cotización; después podrás reiniciar la solicitud.")
     db.refresh(sc)
     assert sc.estado == "COTIZADA" and sc.gate1_confirmed_at is not None  # nada se reinicio
     assert _logs(db, "SC", sc.id) == []

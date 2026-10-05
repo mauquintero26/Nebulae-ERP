@@ -1,8 +1,9 @@
 """N7: rechazar una cotizacion deja la solicitud activa (y el arreglo de seguridad de Gate 1).
 
-- Rechazar la unica COT activa: la SC vuelve a CONFIRMADA si la confirmacion del cliente sigue vigente
-  (gate1_confirmed_at), y se le puede crear otra COT sin reconfirmar; si no, a ASIGNADA (BORRADOR sin asesor). El lead
-  no se mueve (pasa a perdido solo al cancelar la SC).
+- Rechazar la unica COT activa: la SC se queda en CONFIRMADA si la confirmacion del cliente sigue vigente
+  (gate1_confirmed_at; U15: la Actividad lo anota con COTIZACION_RECHAZADA), y se le puede crear otra COT sin
+  reconfirmar; si no, vuelve a ASIGNADA (BORRADOR sin asesor). El lead no se mueve (pasa a perdido solo al cancelar la
+  SC). U15 (Bloque 2): crear la COT ya no lleva la SC a COTIZADA.
 - gate1_confirmed_at ya no se consume al crear la COT: significa "confirmacion vigente sobre los productos actuales".
   Se invalida al cambiar los productos (aunque haya COT activa), al reiniciar la SC por PATCH, al cancelar, al
   restaurar y -- arreglo de seguridad (choque N7 vs Ronda 6) -- cuando la COT cambia de solicitud: PATCH de la COT
@@ -55,22 +56,23 @@ def test_rechazar_unica_cotizacion_deja_la_solicitud_lista_para_otra(app_client,
     sc = _sc(db, "SC-RCH001", user_admin)
     cot1 = _crear_cot(app_client, admin_token, sc.id)
     db.refresh(sc)
-    assert sc.estado == "COTIZADA" and sc.gate1_confirmed_at is not None  # la marca ya no se consume
+    assert sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is not None  # U15; la marca ya no se consume
 
     resp = _patch_cot(app_client, admin_token, cot1["id"], estado="RECHAZADA")
     assert resp.status_code == 200, resp.text
     db.refresh(sc)
     assert sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is not None
-    (cambio,) = [l for l in _logs(db, "SC", sc.id, "ESTADO_CHANGED") if l.new_estado == "CONFIRMADA"]
+    # U15: la SC no cambia de estado; el rechazo queda en su Actividad con COTIZACION_RECHAZADA (sin old/new).
+    (cambio,) = _logs(db, "SC", sc.id, "COTIZACION_RECHAZADA")
     assert cambio.description == (f"La cotización {cot1['numero']} fue rechazada. La solicitud sigue activa: ya puedes "
                                   "crearle una nueva cotización.")
-    assert (cambio.old_estado, cambio.user_name) == ("COTIZADA", "t")
+    assert (cambio.old_estado, cambio.new_estado, cambio.user_name) == (None, None, "t")
 
     cot2 = _crear_cot(app_client, admin_token, sc.id)
     assert cot2["id"] != cot1["id"] and cot2["estado"] == "BORRADOR"
     assert cot2["productos"] == [LINEA]
     db.refresh(sc)
-    assert sc.estado == "COTIZADA"
+    assert sc.estado == "CONFIRMADA"
     (creada,) = _logs(db, "COT", cot2["id"], "CREATED")
     assert creada.description == (f"Cotización {cot2['numero']} creada desde SC-RCH001 (reemplaza a la cotización "
                                   f"rechazada {cot1['numero']})")
@@ -90,7 +92,7 @@ def test_rechazar_una_cotizacion_confirmada_sin_pedido_deja_el_aviso_sin_cambiar
     db.refresh(sc)
     assert sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is not None
     assert _logs(db, "SC", sc.id, "ESTADO_CHANGED") == []
-    (aviso,) = _logs(db, "SC", sc.id, "UPDATED")
+    (aviso,) = _logs(db, "SC", sc.id, "COTIZACION_RECHAZADA")  # U15: renglon propio del rechazo
     assert "COT-RCH012 fue rechazada" in aviso.description and aviso.old_estado is None
 
 
@@ -98,8 +100,8 @@ def test_no_se_crea_otra_cotizacion_mientras_haya_una_activa(app_client, db, adm
     sc = _sc(db, "SC-RCH002", user_admin)
     cot1 = _crear_cot(app_client, admin_token, sc.id)
     db.refresh(sc)
-    assert sc.estado == "COTIZADA"
-    sc.estado = "CONFIRMADA"  # como la dejaria la sincronizacion si el cliente confirmara la COT
+    assert sc.estado == "CONFIRMADA"  # U15: crear la COT ya no la lleva a COTIZADA
+    sc.estado = "CONFIRMADA"  # (U15: ya lo esta; tambien como la dejaria la COT confirmada por el cliente)
     db.commit()
     resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/confirmar", json={"user_name": "t"},
                            headers=auth(admin_token))
@@ -173,7 +175,7 @@ def test_cambiar_productos_con_cotizacion_activa_anula_la_confirmacion_sin_cambi
         "productos": [{"product_name": "Otra cosa", "qty": 1}], "updated_by": "t"}, headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     db.refresh(sc)
-    assert sc.estado == "COTIZADA" and sc.gate1_confirmed_at is None
+    assert sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is None  # U15: crear la COT no la mueve
     assert _patch_cot(app_client, admin_token, cot1["id"], estado="RECHAZADA").status_code == 200
     db.refresh(sc)
     assert sc.estado == "ASIGNADA"
@@ -192,19 +194,20 @@ def test_retomar_cotizacion_rechazada_con_otra_activa_se_bloquea(app_client, db,
     db.expire_all()
     assert db.get(SalesQuotation, cot1["id"]).estado == "RECHAZADA"
 
-    # Sin otra activa, retomarla si se puede: vuelve a Borrador y la SC a COTIZADA.
+    # Sin otra activa, retomarla si se puede: vuelve a Borrador y la SC se queda CONFIRMADA (U15: una COT en Borrador
+    # no cambia la solicitud).
     assert _patch_cot(app_client, admin_token, cot2["id"], estado="RECHAZADA").status_code == 200
     resp = _patch_cot(app_client, admin_token, cot1["id"], estado="BORRADOR")
     assert resp.status_code == 200, resp.text
     db.refresh(sc)
-    assert sc.estado == "COTIZADA"
+    assert sc.estado == "CONFIRMADA"
 
 
 # --- Arreglo de seguridad: la COT ya no cambia de solicitud libremente -----------------------------------
 
 def _cot_confirmada_por_el_cliente(app_client, db, token, sc):
-    """Flujo real: COT creada desde la SC, con precio, enviada y confirmada por el enlace (la SC pasa a CONFIRMADA
-    por la sincronizacion, con su marca todavia puesta)."""
+    """Flujo real: COT creada desde la SC, con precio, enviada y confirmada por el enlace (U15: la SC sigue
+    CONFIRMADA todo el tiempo, con su marca todavia puesta)."""
     from app.models.erp_documents import SalesQuotation
     cot = _crear_cot(app_client, token, sc.id)
     fila = db.get(SalesQuotation, cot["id"])
@@ -259,7 +262,7 @@ def test_desvincular_una_cotizacion_en_borrador_anula_la_confirmacion_de_la_soli
     sc = _sc(db, "SC-RCH008B", user_admin)
     cot = _crear_cot(app_client, admin_token, sc.id)
     db.refresh(sc)
-    assert sc.estado == "COTIZADA" and sc.gate1_confirmed_at is not None
+    assert sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is not None  # U15
 
     resp = _patch_cot(app_client, admin_token, cot["id"], sc_id=None)
     assert resp.status_code == 200, resp.text
@@ -267,7 +270,7 @@ def test_desvincular_una_cotizacion_en_borrador_anula_la_confirmacion_de_la_soli
     db.refresh(sc)
     assert sc.gate1_confirmed_at is None and sc.estado == "ASIGNADA"
     cambio = _logs(db, "SC", sc.id, "ESTADO_CHANGED")[-1]
-    assert (cambio.old_estado, cambio.new_estado) == ("COTIZADA", "ASIGNADA")
+    assert (cambio.old_estado, cambio.new_estado) == ("CONFIRMADA", "ASIGNADA")
     assert cambio.description == (f"La cotización {cot['numero']} se desvinculó de esta solicitud. La solicitud sigue "
                                   "activa; para crearle otra cotización, reenvíasela al cliente para que la confirme.")
 
@@ -344,7 +347,7 @@ def test_vincular_la_cotizacion_a_otra_solicitud_resincroniza_las_dos(app_client
     assert resp.json()["data"]["sc_id"] == destino.id and resp.json()["data"]["sc_numero"] == "SC-RCH010B"
     db.refresh(origen); db.refresh(destino)
     assert origen.gate1_confirmed_at is None and origen.estado == "ASIGNADA"  # como un rechazo sin marca
-    assert destino.estado == "COTIZADA"  # la COT en Borrador lleva a la SC nueva a Cotizada
+    assert destino.estado == "ASIGNADA"  # U15: la COT en Borrador ya no cambia la SC nueva
     assert any(cot["numero"] in l.description and "se vinculó" in l.description
                for l in _logs(db, "SC", destino.id, "UPDATED"))
 
@@ -354,7 +357,7 @@ def test_vincular_la_cotizacion_a_otra_solicitud_resincroniza_las_dos(app_client
     resp = _patch_cot(app_client, admin_token, cot["id"], sc_id=destino.id, notas="x")
     assert resp.status_code == 200, resp.text
     db.refresh(destino)
-    assert destino.gate1_confirmed_at is not None and destino.estado == "COTIZADA"
+    assert destino.gate1_confirmed_at is not None and destino.estado == "ASIGNADA"
 
 
 def test_una_cotizacion_rechazada_cambia_de_solicitud_sin_reiniciar_la_nueva(app_client, db, admin_token, user_admin):
@@ -436,7 +439,7 @@ def test_cambiar_el_cliente_con_una_cotizacion_activa_anula_la_confirmacion(app_
         "customer_phone": "3109998877", "updated_by": "t"}, headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     db.refresh(sc)
-    assert sc.estado == "COTIZADA" and sc.gate1_confirmed_at is None
+    assert sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is None  # U15: crear la COT no la mueve
     assert _token_usado(db, viejo)
     aviso = _logs(db, "SC", sc.id, "UPDATED")[-1]
     assert aviso.description.startswith("Cambió el cliente de la solicitud: la confirmación del cliente anterior ya "

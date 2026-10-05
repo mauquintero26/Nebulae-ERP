@@ -50,14 +50,16 @@ def _forzar_cot_confirmada(db, cot_id):
 
 class TestSincronizacionEstados:
 
-    def test_crear_cotizacion_deja_solicitud_en_cotizada_no_confirmada(self, app_client, admin_token, db):
+    def test_crear_cotizacion_deja_solicitud_confirmada(self, app_client, admin_token, db):
+        """U15 (Bloque 2): la SC ya no pasa a COTIZADA al crear la cotizacion: se queda CONFIRMADA."""
         sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token, db)
         r = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
-        assert r.json()["data"]["estado"] == "COTIZADA"
+        assert r.json()["data"]["estado"] == "CONFIRMADA"
 
-    def test_enviar_cotizacion_deja_solicitud_en_espera_confirmacion(self, app_client, admin_token, db):
+    def test_enviar_cotizacion_deja_solicitud_confirmada(self, app_client, admin_token, db):
         """H50: el PATCH a ENVIADA ya no existe; se envia con 'Enviar al Cliente' (POST /enviar-confirmacion), que
-        exige precio: se pone por DB, igual que el resto de este archivo simula lo que no es el foco."""
+        exige precio: se pone por DB, igual que el resto de este archivo simula lo que no es el foco. U15: enviar la
+        cotizacion ya no lleva la SC a EN_ESPERA_CONFIRMACION: se queda CONFIRMADA."""
         sc, cot = _crear_solicitud_y_confirmar(app_client, admin_token, db)
         cot_row = db.query(SalesQuotation).filter(SalesQuotation.id == cot["id"]).first()
         cot_row.productos = [{"product_name": "Producto Prueba", "qty": 1, "unit_price_cop": 1000}]
@@ -67,7 +69,7 @@ class TestSincronizacionEstados:
                                headers=_headers(admin_token))
         assert resp.status_code == 200, resp.text
         r = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
-        assert r.json()["data"]["estado"] == "EN_ESPERA_CONFIRMACION"
+        assert r.json()["data"]["estado"] == "CONFIRMADA"
 
     def test_patch_directo_a_confirmada_ya_no_es_posible_ni_sincroniza(self, app_client, admin_token, db):
         """Task 5 (Gate 2): este PATCH directo a CONFIRMADA, que esta prueba antes
@@ -81,7 +83,7 @@ class TestSincronizacionEstados:
         resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"estado": "CONFIRMADA"}, headers=_headers(admin_token))
         assert resp.status_code == 400
         r = app_client.get(f"/api/v1/ventas/solicitudes/{sc['id']}", headers=_headers(admin_token))
-        assert r.json()["data"]["estado"] == "COTIZADA"  # sin sincronizar -- el PATCH nunca se aplico
+        assert r.json()["data"]["estado"] == "CONFIRMADA"  # sin cambios -- el PATCH nunca se aplico (U15)
 
     def test_confirmar_cotizacion_por_endpoint_real_deja_solicitud_confirmada(self, app_client, admin_token, db):
         """
@@ -137,7 +139,8 @@ class TestSincronizacionEstados:
         assert cot.estado == "BORRADOR"
 
     def test_sincronizacion_noop_con_estado_no_reconocido(self, db: Session):
-        """Verifica que _sincronizar no crashea con un estado no mapeado (no en el mapping dict)"""
+        """Verifica que _sincronizar no crashea con un estado de la COT que no reconoce (U15: solo CONFIRMADA y
+        RECHAZADA tocan la SC)"""
         from app.api.v1.erp_ventas import _sincronizar_estado_solicitud_desde_cotizacion
 
         # Crear una solicitud primero
@@ -158,7 +161,7 @@ class TestSincronizacionEstados:
         cot = SalesQuotation(
             numero="COT-TEST-UNMAPPED",
             sc_id=sc.id,
-            estado="ESTADO_INEXISTENTE",  # Valor no en el mapping dict
+            estado="ESTADO_INEXISTENTE",  # Valor que la sincronizacion no reconoce
             customer_name="Test Customer",
         )
         db.add(cot)
@@ -167,6 +170,6 @@ class TestSincronizacionEstados:
         # No debe crashear
         _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
 
-        # Verificar que la solicitud NO cambio (porque el estado no esta en el mapping)
+        # Verificar que la solicitud NO cambio (la sincronizacion no reconoce ese estado)
         db.refresh(sc)
         assert sc.estado == estado_sc_inicial

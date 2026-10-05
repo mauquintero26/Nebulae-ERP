@@ -44,7 +44,7 @@ Respaldos (carpeta backend/scripts/respaldos/, ignorada por git):
     (RESPALDO_COLUMNAS), nunca la fila completa: no se copian nombres, correos ni telefonos de clientes.
   - Si el paso falla despues de escribir el JSON (o termina sin cambiar nada) y NADA llego a escribirse, el archivo se
     RENOMBRA a <paso>-<base>-<fecha>-NO-APLICADO.json para que no parezca el respaldo de algo aplicado.
-  - h46 es la excepcion: su helper hace commits propios por partes (tokens y COT, luego la SC, luego el lead). Si el
+  - h46 es la excepcion: su helper hace commits propios por partes (tokens y COT, luego el lead). Si el
     paso falla despues de que el helper corrio al menos una vez, el respaldo se renombra a
     <paso>-<base>-<fecha>-PARCIAL.json (parte SI se escribio: sirve para deshacer esa parte) y el mensaje nombra las COT
     ya reabiertas. NO-APLICADO queda solo para cuando nada llego a escribirse.
@@ -150,9 +150,10 @@ REQUISITOS = {
 #   h45    anular_pxps_de_pedido: p.estado, p.updated_at, p.notas; so.pxp_id, so.pxp_numero (y, por el onupdate de
 #          SaleOrder, so.updated_at)
 #   h46    _reabrir_cotizacion_por_pven_cancelado: cot.estado, gate2_confirmed_at, updated_at; tokens.used_at
-#          (revoke_pending_tokens); sc.estado, updated_at (_sincronizar_estado_solicitud_desde_cotizacion); lead
-#          pipeline_stage_id, status, updated_at (_mover_lead_a_status). Puede INSERTAR etapas estandar faltantes
-#          del pipeline (_asegurar_etapas_estandar) y un renglon de Actividad: filas nuevas, no se restauran.
+#          (revoke_pending_tokens); lead pipeline_stage_id, status, updated_at (_mover_lead_a_status). La SC ya no
+#          cambia (U15: _sincronizar_estado_solicitud_desde_cotizacion no la toca por una COT en Borrador); su estado
+#          se respalda igual. Puede INSERTAR etapas estandar faltantes del pipeline (_asegurar_etapas_estandar) y un
+#          renglon de Actividad: filas nuevas, no se restauran.
 #   h7     corregir(): activity_logs.description
 # Ninguna lleva columnas customer_* (nombre, correo, telefono, direccion del cliente).
 RESPALDO_COLUMNAS = {
@@ -215,7 +216,8 @@ INFO = {
                "otro pedido hasta reabrirlas.",
         que_haria="Por cada COT aprobada llama a _reabrir_cotizacion_por_pven_cancelado (la misma regla de cancelar "
                   "el pedido): la COT vuelve a Borrador, se limpia la confirmación (gate 2) y se revoca el enlace "
-                  "pendiente, la solicitud pasa a Cotizada y el lead a la etapa de cotización; deja el renglón en la "
+                  "pendiente; la solicitud no cambia de estado y el lead pasa a la etapa de cotización; deja el "
+                  "renglón en la "
                   "Actividad de la COT. Antes respalda en el JSON la COT, la SC, el lead y los enlaces pendientes. "
                   + AVISO_H46,
         decision="Aprobar la lista o indicar cuáles reabrir."),
@@ -253,8 +255,10 @@ INFO = {
         titulo="Solicitudes y cotizaciones con un estado que no les corresponde",
         que_es="(a) SC con un estado ajeno (p. ej. de pedido); (b) COT con un estado ajeno; (c) COT que no están "
                "Confirmada pero tienen un pedido vigente.",
-        que_haria="Con --numeros aplica SOLO a esos documentos la corrección sugerida: (a) el estado derivado de "
-                  "su COT con _MAPA_ESTADO_COTIZACION_A_SOLICITUD, o ASIGNADA/BORRADOR si no tiene COT; (b) y (c) "
+        que_haria="Con --numeros aplica SOLO a esos documentos la corrección sugerida: (a) Confirmada si la "
+                  "solicitud tiene documentos activos (una COT no rechazada o un pedido vigente); si no, Asignada (con "
+                  "asesor) o Nueva (sin asesor); nunca un estado heredado (U15: la solicitud ya no refleja a su "
+                  "cotización); (b) y (c) "
                   "COT en CONFIRMADA si tiene un pedido vigente o BORRADOR si no. Deja un renglón de estado en la "
                   "Actividad. No toca la SC ni el lead de una COT corregida.",
         decision="Por documento: aceptar la corrección sugerida (poner su número en --numeros) o dejarlo."),
@@ -1071,7 +1075,7 @@ def _aplicar_h46(ctx) -> ResultadoAplicar:
     res.detalle.append(AVISO_H46)
     for f in elegidas:
         so = db.query(SaleOrder).filter(SaleOrder.cot_id == f["id"]).order_by(SaleOrder.id.desc()).first()
-        # El helper hace commits propios por partes (tokens y COT, luego la SC, luego el lead) y traga sus errores: desde
+        # El helper hace commits propios por partes (tokens y COT, luego el lead) y traga sus errores: desde
         # esta llamada ya puede haber algo escrito, asi que el respaldo ya no puede quedar como NO-APLICADO.
         ctx.helper_corrio = True
         _reabrir_cotizacion_por_pven_cancelado(db, so, AUTOR)
@@ -1310,32 +1314,21 @@ def _aplicar_n2(ctx) -> ResultadoAplicar:
 
 # ═══ n5 ═══════════════════════════════════════════════════════════════════════════════════════════════════════
 
-def _mapa_estado_cot_a_sc():
-    from app.api.v1.erp_ventas import _MAPA_ESTADO_COTIZACION_A_SOLICITUD
-    return _MAPA_ESTADO_COTIZACION_A_SOLICITUD
-
-
-def _estado_sugerido_cot(db, cot_id, estado) -> str:
-    """Un estado valido se queda; uno ajeno pasa a CONFIRMADA si la COT tiene un pedido vigente, o a BORRADOR si no."""
-    if estado in ESTADOS_COT:
-        return estado
-    return "CONFIRMADA" if _pven_vigente(db, cot_id) is not None else "BORRADOR"
-
-
 def _sel_n5(db, excl):
-    mapa = _mapa_estado_cot_a_sc()
+    # (a) con la regla de U15 (Bloque 2): la SC ya no refleja a su COT. CONFIRMADA si tiene documentos activos (el
+    # mismo filtro que _documentos_activos_de_solicitud); si no, ASIGNADA con asesor o BORRADOR sin el. Nunca un
+    # estado heredado (COTIZADA, EN_ESPERA_CONFIRMACION, RECHAZADA, VENCIDA).
+    from app.api.v1.erp_ventas import _describir_documentos, _documentos_activos_de_solicitud
     a_filas = _filas(db, "SELECT id, numero, estado, advisor_user_id FROM customer_requests "
                          "WHERE estado <> ALL(:ok) ORDER BY id", ok=list(ESTADOS_SC))
     for f in a_filas:
-        cot = _filas(db, "SELECT id, numero, estado FROM sales_quotations WHERE sc_id = :s AND estado <> 'RECHAZADA' "
-                         "ORDER BY id DESC LIMIT 1", s=f["id"])
-        if cot:
-            efectivo = _estado_sugerido_cot(db, cot[0]["id"], cot[0]["estado"])
-            f["sugerido"] = mapa.get(efectivo)
-            f["motivo"] = f"su COT {cot[0]['numero']} está {efectivo}"
+        cots, pvens = _documentos_activos_de_solicitud(db, f["id"])
+        if cots or pvens:
+            f["sugerido"] = "CONFIRMADA"
+            f["motivo"] = f"tiene documentos activos ({_describir_documentos(cots, pvens)})"
         else:
             f["sugerido"] = "ASIGNADA" if f["advisor_user_id"] else "BORRADOR"
-            f["motivo"] = "sin COT activa" + (" (tiene asesor)" if f["advisor_user_id"] else " (sin asesor)")
+            f["motivo"] = "sin documentos activos" + (" (tiene asesor)" if f["advisor_user_id"] else " (sin asesor)")
         f["tipo"] = "SC"
     b_filas = _filas(db, "SELECT id, numero, estado FROM sales_quotations WHERE estado <> ALL(:ok) ORDER BY id",
                      ok=list(ESTADOS_COT))

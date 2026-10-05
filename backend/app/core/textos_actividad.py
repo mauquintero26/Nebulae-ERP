@@ -15,11 +15,12 @@ de la Actividad (sin tildes, con el codigo del estado) con el mismo texto que ho
 import re
 
 ETIQUETAS_ESTADO = {
-    # Solicitud de Cotizacion
+    # Solicitud de Cotizacion (U15: cuenta solo su propia historia; 'Nueva' y 'Pendiente por confirmación' son las
+    # palabras del usuario). Los estados de ESTADOS_SC_HEREDADOS conservan su etiqueta para el historial.
     "SC": {
-        "BORRADOR": "Borrador",
+        "BORRADOR": "Nueva",
         "ASIGNADA": "Asignada",
-        "PENDIENTE_CONFIRMACION": "Pendiente de confirmación",
+        "PENDIENTE_CONFIRMACION": "Pendiente por confirmación",
         "COTIZADA": "Cotizada",
         "EN_ESPERA_CONFIRMACION": "En espera de confirmación",
         "CONFIRMADA": "Confirmada",
@@ -64,6 +65,13 @@ ETIQUETAS_ESTADO = {
         "DEVUELTO_TOTAL": "Devuelto",
     },
 }
+
+# U15: los pasos de la solicitud, en orden (Cancelada va aparte). Avanzan solos: asignar asesor, enviarla al cliente y
+# que el cliente la confirme por el enlace.
+PASOS_SC = ("BORRADOR", "ASIGNADA", "PENDIENTE_CONFIRMACION", "CONFIRMADA")
+# U15: ya no se asignan (la SC dejo de reflejar el estado de su cotizacion); solo historial y datos viejos
+# (scripts/ajustar_estados_solicitud.py los saca de ahi).
+ESTADOS_SC_HEREDADOS = ("COTIZADA", "EN_ESPERA_CONFIRMACION", "RECHAZADA", "VENCIDA")
 
 # fase4 registra la Actividad del pedido con entity_type 'PVEN'; el resto de Ventas usa 'VEN'.
 _ALIAS_ENTIDAD = {"PVEN": "VEN"}
