@@ -37,3 +37,14 @@ export function avisoCorreo(correo, canal) {
   const mensaje = (correo.mensaje || (porMotivo ? porMotivo(correo.destino) : 'No se envió el correo de respaldo.')).trim();
   return { tono: 'alerta', texto: `${mensaje} ${SIGUIENTE_PASO[canal] || SIGUIENTE_PASO_POR_DEFECTO}` };
 }
+
+/**
+ * B3: el `customerEmail` del ChannelModal para una fila de SC o COT (el Hub, como cotizacion/[id]): su customer_email
+ * (null o '' = sin correo: el modal no ofrece Email). Si la fila no trae el campo devuelve undefined, que el modal
+ * toma como "no se sabe" (no lo da por vacio).
+ * @returns {string | null | undefined}
+ */
+export function correoDelCliente(fila) {
+  if (!fila || typeof fila !== 'object' || !('customer_email' in fila)) return undefined;
+  return fila.customer_email ?? null;
+}

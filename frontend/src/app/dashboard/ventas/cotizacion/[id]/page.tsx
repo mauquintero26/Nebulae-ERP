@@ -60,6 +60,8 @@ function CotizacionDetalleContent() {
   // H27+H39: resultado del correo de respaldo y canal del envio, para el aviso del modal del enlace.
   const [confirmCorreo, setConfirmCorreo] = useState<any>(null);
   const [confirmCanal, setConfirmCanal] = useState<string | null>(null);
+  // B13: el wa.me que se intento abrir, para "Abrir WhatsApp" en el modal si el navegador bloqueo la ventana.
+  const [confirmWhatsapp, setConfirmWhatsapp] = useState<string | null>(null);
   // Gate 2: numero del PVEN recien creado, para el mensaje de exito con fade (4s) tras
   // "Crear Pedido de Venta". H46: ya no hay banner permanente; despues queda la tarjeta
   // "Pedido de Venta generado" mientras el pedido siga vigente.
@@ -191,6 +193,7 @@ function CotizacionDetalleContent() {
         body: JSON.stringify({user_name: currentUser, canal: selectedChannel}),
       });
       const link = d?.link_confirmacion || '';
+      let whatsapp: string | null = null;
 
       if (selectedChannel === 'WhatsApp') {
         // Hallazgo #3 (spec): el mensaje de WhatsApp debe incluir el link -- sin esto,
@@ -199,13 +202,14 @@ function CotizacionDetalleContent() {
         const mensaje = link
           ? `Hola, aquí está tu cotización ${cotizacion.numero}. Confírmala aquí: ${link}`
           : `Hola, aquí está tu cotización ${cotizacion.numero}`;
-        const url = waUrl(cotizacion?.customer_phone, mensaje);
-        if (url) window.open(url, '_blank');
+        whatsapp = waUrl(cotizacion?.customer_phone, mensaje);
+        if (whatsapp) window.open(whatsapp, '_blank');
       }
 
       await loadCotizacion();
       setConfirmCorreo(d?.correo ?? null);
       setConfirmCanal(selectedChannel);
+      setConfirmWhatsapp(whatsapp);
       setShowChannelModal(false);
       setSelectedChannel(null);
       if (link) setConfirmLink(link);
@@ -1041,7 +1045,7 @@ function CotizacionDetalleContent() {
       )}
       {confirmLink && (
         <EnlaceConfirmacionModal documento={`la cotización ${cotizacion?.numero || ''}`} link={confirmLink} color="blue"
-          correo={confirmCorreo} canal={confirmCanal} onClose={() => setConfirmLink(null)} />
+          correo={confirmCorreo} canal={confirmCanal} whatsappUrl={confirmWhatsapp} onClose={() => setConfirmLink(null)} />
       )}
     </div>
   );

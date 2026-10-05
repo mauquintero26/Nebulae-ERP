@@ -5,7 +5,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { avisoCorreo } from '../src/lib/aviso-correo.js';
+import { avisoCorreo, correoDelCliente } from '../src/lib/aviso-correo.js';
 
 console.log('--- TEST a: sin resultado de correo no hay aviso ---');
 {
@@ -53,6 +53,18 @@ console.log('--- TEST d: cliente sin correo por WhatsApp -> alerta, revisar el m
   assert.equal(otro.tono, 'alerta');
   assert.ok(otro.texto.includes('a@b.co'), otro.texto);
   assert.ok(otro.texto.includes('Copia el enlace'), otro.texto);
+}
+
+console.log('--- TEST B3: el correo del cliente para el ChannelModal del Hub ---');
+{
+  // La fila de la lista trae customer_email: se pasa tal cual (null = sin correo, el modal no ofrece Email).
+  assert.equal(correoDelCliente({ numero: 'COT-1', customer_email: 'a@b.co' }), 'a@b.co');
+  assert.equal(correoDelCliente({ numero: 'COT-1', customer_email: null }), null);
+  assert.equal(correoDelCliente({ numero: 'COT-1', customer_email: '' }), '');
+  // Sin el campo no se sabe: undefined (el modal no lo da por vacio).
+  assert.equal(correoDelCliente({ numero: 'COT-1' }), undefined);
+  assert.equal(correoDelCliente(null), undefined);
+  assert.equal(correoDelCliente(undefined), undefined);
 }
 
 console.log('OK test_aviso_correo.mjs');

@@ -20,3 +20,12 @@ export function waUrl(telefono, texto) {
   if (!n) return null;
   return `https://wa.me/${n}` + (texto ? `?text=${encodeURIComponent(texto)}` : '');
 }
+
+/**
+ * B13: el enlace del boton "Abrir WhatsApp" del modal del enlace de confirmacion: el mismo wa.me (waUrl) que se intento
+ * abrir al enviar, por si el navegador bloqueo esa ventana. Solo si el canal fue WhatsApp y es un enlace wa.me; si no,
+ * null (sin boton).
+ */
+export function whatsappParaReabrir(canal, url) {
+  return canal === 'WhatsApp' && typeof url === 'string' && url.startsWith('https://wa.me/') ? url : null;
+}

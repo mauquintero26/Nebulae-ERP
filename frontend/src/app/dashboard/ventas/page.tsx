@@ -25,6 +25,7 @@ import {
   diasDesde, textoAntiguedad, ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, esNoResuelto, esAccionTomada, accionSiguienteSC,
 } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
+import { correoDelCliente } from '@/lib/aviso-correo';
 import { formatoPesos } from '@/lib/pesos';
 import { etiquetaTipoSolicitud } from '@/lib/etiquetas-ventas';
 import { diasAlerta, pedidoVigente, pestanaCotizacion } from '@/lib/listas-ventas';
@@ -283,10 +284,10 @@ export default function VentasHub() {
   const [cancelando, setCancelando]               = useState(false);
   const [resultadoLote, setResultadoLote]         = useState<{titulo:string, lineas:{numero:string,error:string}[]}|null>(null);
   // H27+H39: al arrastrar una SC o COT para enviarla se pregunta el canal y luego se muestra el enlace con el aviso del correo.
-  const [envioHub, setEnvioHub]       = useState<{tipo:'SC'|'COT', id:string, numero:string, telefono:string}|null>(null);
+  const [envioHub, setEnvioHub]       = useState<{tipo:'SC'|'COT', id:string, numero:string, telefono:string, correo?:string|null}|null>(null);
   const [canalHub, setCanalHub]       = useState<'WhatsApp'|'Email'|'Otro'|null>(null);
   const [enviandoHub, setEnviandoHub] = useState(false);
-  const [hubEnlace, setHubEnlace]     = useState<{documento:string, link:string, correo:any, canal:string|null, color:'blue'|'indigo'}|null>(null);
+  const [hubEnlace, setHubEnlace]     = useState<{documento:string, link:string, correo:any, canal:string|null, color:'blue'|'indigo', whatsapp?:string|null}|null>(null);
 
   const loadData = useCallback(async()=>{
     setLoading(true);
@@ -604,7 +605,8 @@ export default function VentasHub() {
 
   // H27+H39 (usuario: "Sí, preguntar el canal"): el envío desde el tablero pide el canal y luego muestra el enlace.
   function abrirEnvioHub(tipo:'SC'|'COT', id:string, item:any){
-    setEnvioHub({tipo, id, numero:item?.numero || id, telefono:item?.customer_phone || ''});
+    // B3: el correo del cliente, como en cotizacion/[id] (sin correo, ChannelModal no ofrece Email).
+    setEnvioHub({tipo, id, numero:item?.numero || id, telefono:item?.customer_phone || '', correo:correoDelCliente(item)});
     setCanalHub(null);
   }
 
@@ -617,11 +619,13 @@ export default function VentasHub() {
       const d = await apiFetch(`/ventas/${ruta}/${id}/enviar-confirmacion`, {method:'POST', body: JSON.stringify({canal:canalHub, user_name:autorActual()})});
       const link = d?.link_confirmacion || '';
       const documento = tipo === 'COT' ? `la cotización ${numero}` : `la solicitud ${numero}`;
+      let whatsapp: string | null = null;
       if(canalHub === 'WhatsApp'){
-        const url = waUrl(telefono, link ? `Hola, aquí está ${documento}. Confírmala aquí: ${link}` : `Hola, aquí está ${documento}.`);
-        if(url) window.open(url, '_blank');
+        whatsapp = waUrl(telefono, link ? `Hola, aquí está ${documento}. Confírmala aquí: ${link}` : `Hola, aquí está ${documento}.`);
+        if(whatsapp) window.open(whatsapp, '_blank');
       }
-      if(link) setHubEnlace({documento, link, correo:d?.correo ?? null, canal:canalHub, color: tipo === 'COT' ? 'blue' : 'indigo'});
+      // B13: el modal ofrece "Abrir WhatsApp" con el mismo enlace por si el navegador bloqueó la ventana.
+      if(link) setHubEnlace({documento, link, correo:d?.correo ?? null, canal:canalHub, color: tipo === 'COT' ? 'blue' : 'indigo', whatsapp});
       setToast({msg: 'Enviada para confirmación del cliente', type: 'ok'});
       setEnvioHub(null);
       setCanalHub(null);
@@ -1541,11 +1545,12 @@ export default function VentasHub() {
           saving={enviandoHub}
           customerHasPhone={!!waUrl(envioHub.telefono)}
           documentLabel={envioHub.tipo === 'COT' ? 'cotización' : 'solicitud'}
+          customerEmail={envioHub.correo}
         />
       )}
       {hubEnlace && (
         <EnlaceConfirmacionModal documento={hubEnlace.documento} link={hubEnlace.link} color={hubEnlace.color}
-          correo={hubEnlace.correo} canal={hubEnlace.canal} onClose={()=>setHubEnlace(null)} />
+          correo={hubEnlace.correo} canal={hubEnlace.canal} whatsappUrl={hubEnlace.whatsapp} onClose={()=>setHubEnlace(null)} />
       )}
     </div>
   );

@@ -96,6 +96,8 @@ function SolicitudDetalleContent() {
   // H27+H39: resultado del correo de respaldo y canal elegido, para el aviso verde/ambar del modal del enlace.
   const [confirmCorreo, setConfirmCorreo] = useState<any>(null);
   const [confirmCanal, setConfirmCanal] = useState<string | null>(null);
+  // B13: el wa.me que se intento abrir, para "Abrir WhatsApp" en el modal si el navegador bloqueo la ventana.
+  const [confirmWhatsapp, setConfirmWhatsapp] = useState<string | null>(null);
   // Asignar asesor desde la propia pagina (BORRADOR -> ASIGNADA), sin tener que entrar a Editar.
   const [me, setMe] = useState<UsuarioActual>({ id: null, email: '', name: '', role: '' });
   const [assigning, setAssigning] = useState(false);
@@ -320,18 +322,20 @@ function SolicitudDetalleContent() {
       // da 400 (ChannelModal lo deshabilita).
       const d = await apiFetch(`/ventas/solicitudes/${solicitud.id}/enviar-confirmacion`, { method: 'POST', body: JSON.stringify({ user_name: currentUser, canal: selectedChannel }) });
       const link = d?.link_confirmacion || '';
+      let whatsapp: string | null = null;
 
       if (selectedChannel === 'WhatsApp') {
         const mensaje = link
           ? `Hola, aquí está tu solicitud ${solicitud.numero}. Confírmala aquí: ${link}`
           : `Hola, aquí está tu solicitud ${solicitud.numero}`;
-        const url = waUrl(solicitud?.customer_phone, mensaje);
-        if (url) window.open(url, '_blank');
+        whatsapp = waUrl(solicitud?.customer_phone, mensaje);
+        if (whatsapp) window.open(whatsapp, '_blank');
       }
 
       await loadSolicitud();
       setConfirmCorreo(d?.correo ?? null);
       setConfirmCanal(selectedChannel);
+      setConfirmWhatsapp(whatsapp);
       setShowChannelModal(false);
       setSelectedChannel(null);
       if (link) setConfirmLink(link);
@@ -986,7 +990,7 @@ function SolicitudDetalleContent() {
 
       {confirmLink && (
         <EnlaceConfirmacionModal documento={`la solicitud ${solicitud?.numero || ''}`} link={confirmLink} color="indigo"
-          correo={confirmCorreo} canal={confirmCanal} onClose={() => setConfirmLink(null)} />
+          correo={confirmCorreo} canal={confirmCanal} whatsappUrl={confirmWhatsapp} onClose={() => setConfirmLink(null)} />
       )}
     </div>
   );

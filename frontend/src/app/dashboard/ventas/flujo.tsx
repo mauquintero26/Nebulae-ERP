@@ -1,9 +1,10 @@
 'use client';
 import { useState } from 'react';
-import { Link2, Copy, Check, ExternalLink, ArrowRight } from 'lucide-react';
+import { Link2, Copy, Check, ExternalLink, ArrowRight, MessageCircle } from 'lucide-react';
 import { Modal, Button } from '@/components/ui';
 import type { AccentColor } from '@/components/ui';
 import { avisoCorreo } from '@/lib/aviso-correo';
+import { whatsappParaReabrir } from '@/lib/whatsapp';
 import { etiquetaValorCambio } from '@/lib/etiquetas-ventas';
 
 // Piezas compartidas por las tres paginas de detalle del flujo SC -> COT -> PVEN, para
@@ -91,16 +92,20 @@ export function NextStepCard({ tone, title, children, actions }: {
 // lado y el cliente nunca podia confirmar.
 // H27+H39: `correo` es el resultado del correo de respaldo que devuelve el envio y `canal` el
 // canal elegido; el recuadro dice en verde si el correo salio o en ambar por que no y que hacer.
-export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', correo, canal, onClose }: {
+// B13: `whatsappUrl` es el wa.me que se intento abrir al enviar; con canal WhatsApp el modal ofrece
+// "Abrir WhatsApp" por si el navegador bloqueo esa ventana.
+export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', correo, canal, whatsappUrl, onClose }: {
   documento: string;
   link: string;
   color?: AccentColor;
   correo?: { enviado: boolean; destino?: string | null; motivo?: string | null; mensaje?: string } | null;
   canal?: string | null;
+  whatsappUrl?: string | null;
   onClose: () => void;
 }) {
   const [copiado, setCopiado] = useState(false);
   const aviso = avisoCorreo(correo, canal);
+  const abrirWhatsApp = whatsappParaReabrir(canal, whatsappUrl);
 
   async function copiar() {
     try {
@@ -151,6 +156,16 @@ export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', cor
         >
           <ExternalLink size={14} /> Abrir como cliente
         </a>
+        {abrirWhatsApp && (
+          <a
+            href={abrirWhatsApp}
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-xl font-bold flex items-center justify-center gap-2 px-5 py-2.5 text-sm border border-green-200 text-green-700 hover:bg-green-50 bg-white"
+          >
+            <MessageCircle size={14} /> Abrir WhatsApp
+          </a>
+        )}
       </div>
       <p className="text-[11px] text-slate-400">
         Solo el cliente debería confirmar: si abres el enlace y confirmas tú, queda registrado como la confirmación del cliente.
