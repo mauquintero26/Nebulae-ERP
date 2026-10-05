@@ -1,3 +1,6 @@
+import math
+from decimal import Decimal
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.exceptions import RequestValidationError
@@ -87,11 +90,46 @@ async def global_exception_handler(request: Request, exc: Exception):
         response.headers["Access-Control-Allow-Credentials"] = "true"
     return response
 
+MENSAJE_DATOS_INVALIDOS = "Los datos enviados no son válidos. Revisa el formulario e intenta de nuevo."
+_CLAVES_CTX_NUMERICAS = ("min_length", "max_length", "gt", "ge", "lt", "le")
+
+
+def _error_de_validacion_legible(error: dict) -> dict:
+    """Un error de pydantic sin datos del usuario ni del servidor: {type, loc, msg, ctx}.
+
+    Nunca lleva `input` (lo que mando el usuario) ni `url`; ctx conserva solo los limites numericos que el frontend
+    usa para la frase ('debe tener al menos 5 caracteres'). Lo demas de ctx (p. ej. la excepcion de un validador)
+    se descarta: no es serializable y no aporta al mensaje."""
+    ctx_pydantic = error.get("ctx") or {}
+    ctx = {}
+    for clave in _CLAVES_CTX_NUMERICAS:
+        valor = ctx_pydantic.get(clave)
+        if isinstance(valor, bool):
+            continue
+        if isinstance(valor, int) or (isinstance(valor, float) and math.isfinite(valor)):
+            ctx[clave] = valor
+        elif isinstance(valor, Decimal) and valor.is_finite():
+            ctx[clave] = int(valor) if valor == valor.to_integral_value() else float(valor)
+    return {
+        "type": str(error.get("type", "")),
+        "loc": [parte if isinstance(parte, (str, int)) else str(parte) for parte in error.get("loc", ())],
+        "msg": str(error.get("msg", "")),
+        "ctx": ctx,
+    }
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    # Se conserva el 400 y la forma {status, message}: muchas pantallas leen data.detail || data.message. Antes
+    # message era str(exc), con rutas de archivo del servidor y el valor enviado; ahora es una frase fija y el
+    # detalle va en `errores` (el frontend lo traduce con lib/avisos.js).
     return JSONResponse(
         status_code=400,
-        content={"status": "error", "message": str(exc)},
+        content={
+            "status": "error",
+            "message": MENSAJE_DATOS_INVALIDOS,
+            "errores": [_error_de_validacion_legible(error) for error in exc.errors()],
+        },
     )
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Auth"])
