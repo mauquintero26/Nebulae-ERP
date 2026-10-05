@@ -8,7 +8,7 @@ import {
   Mail, ExternalLink, RefreshCw, ArrowLeft,
   Activity, ChevronRight, MoreVertical, DollarSign, MessageCircle,
   Edit2, Send, AlertCircle, ChevronDown, Truck,
-  Trash2, RotateCcw, UserPlus, LayoutGrid, List, ShieldAlert,
+  Trash2, RotateCcw, LayoutGrid, List, ShieldAlert,
   MessageSquare, Paperclip, Camera, TrendingUp, BarChart3, PieChart,
   Sparkles, HelpCircle, Info, ChevronUp, Check, Bot, CornerDownLeft,
   Eye, Archive, XCircle, ArrowUpRight, Award, Flame, Zap
@@ -23,38 +23,32 @@ import { coincideProducto } from '@/lib/busqueda';
 import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import {
   diasAlerta, generoCotizacion, cotizacionesVigentes, contadoresSolicitudes, tasaConversionCotizacion,
-  superaDiasAlerta, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera,
+  superaDiasAlerta, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera, compartirPeticion,
 } from '@/lib/listas-ventas';
+import {
+  ESTADOS_SC as ESTADOS_SC_LIB, ESTADOS_SC_SIN_CONFIRMAR, infoEstadoSolicitud, puedeReiniciar,
+} from '@/lib/estados-solicitud';
+import { TIPOS_SC, MODALIDADES_PAGO, pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
+import { lineaDesdeCatalogo, lineaTextoLibre, agregarLinea, lineasParaEnviar, nombreLinea } from '@/lib/lineas-solicitud';
+import { nombreCliente } from '@/lib/cliente-desde-busqueda';
+import { ProductSearch } from './buscador-producto';
+import { SelectorClienteSC } from './selector-cliente';
+import { LineasProducto } from './lineas-producto';
 
-export const TIPOS_SC = [
-  'Cotizacion de Producto',
-  'Seguimiento',
-  'Programar Entrega',
-  'Devolucion de Producto',
-  'Soporte Tecnico',
-  'Nuevo Lead',
-];
+// T7: las tablas viven en las librerías (H10/C16 y U15/C5: una sola fuente). Se reexportan desde aquí para no romper los
+// imports del detalle (solicitud/[id]), del Hub y del Asistente Omnicanal. ProductSearch (buscador-producto.tsx) y
+// NewClientModal (selector-cliente.tsx) también se mudaron a sus archivos.
+export { TIPOS_SC, MODALIDADES_PAGO };
+export { ProductSearch } from './buscador-producto';
+export { NewClientModal } from './selector-cliente';
 
-export const MODALIDADES_PAGO = [
-  'Contado',
-  '60/40 (60% anticipo - 40% pendiente)',
-  'Credito 30 dias',
-  'Credito 60 dias',
-  'Otro',
-];
+// El contrato público no cambia: {label, color, bg, border} por estado (lo leen el Hub, EstadoBadge y el detalle). En
+// código nuevo, la etiqueta sale de infoEstadoSolicitud(e).label.
+export const ESTADOS_SC: Record<string, {label:string; color:string; bg:string; border:string}> = ESTADOS_SC_LIB;
 
-export const ESTADOS_SC: Record<string, {label:string; color:string; bg:string; border:string}> = {
-  BORRADOR:               {label:'Borrador',           color:'#64748b',bg:'#f1f5f9',border:'#e2e8f0'},
-  ASIGNADA:               {label:'Asignada',           color:'#0e7490',bg:'#ecfeff',border:'#a5f3fc'},
-  PENDIENTE_CONFIRMACION: {label:'Pend. confirmación', color:'#b45309',bg:'#fffbeb',border:'#fde68a'},
-  COTIZADA:               {label:'Cotizada',           color:'#1d4ed8',bg:'#eff6ff',border:'#bfdbfe'},
-  EN_ESPERA_CONFIRMACION: {label:'En espera de confirmación', color:'#c2410c',bg:'#fff7ed',border:'#fed7aa'},
-  CONFIRMADA:             {label:'Confirmada',         color:'#065f46',bg:'#f0fdf4',border:'#a7f3d0'},
-  RECHAZADA:              {label:'Rechazada',          color:'#9f1239',bg:'#fff1f2',border:'#fecdd3'},
-  VENCIDA:                {label:'Vencida',            color:'#854d0e',bg:'#fefce8',border:'#fef08a'},
-  CANCELADA:              {label:'Cancelada',          color:'#991b1b',bg:'#fef2f2',border:'#fecaca'},
-  'N/A_SOPORTE':          {label:'Soporte',            color:'#7e22ce',bg:'#faf5ff',border:'#e9d5ff'},
-};
+// H16: la configuración (días de alerta) se pide una sola vez aunque la lista se monte dos veces seguidas o se pulse
+// 'Actualizar' enseguida; vale 60 s (un cambio en el Hub se ve al volver después).
+const leerConfigVentas = compartirPeticion(() => apiFetch('/ventas/config'), { vigenciaMs: 60000 });
 
 // Subconjunto de ESTADOS_SC seguro para menus de "forzar estado manualmente"
 // (3-dot menu, bulk-action bar, panel de detalle). ESTADOS_SC completo sirve
@@ -66,6 +60,8 @@ export const ESTADOS_SC: Record<string, {label:string; color:string; bg:string; 
 // estos menus nunca pudieron hacer antes de que ESTADOS_SC creciera.
 // N4: a mano solo se vuelve a Borrador (igual que el PATCH del servidor). Cancelar NO va aqui: se hace con
 // POST /ventas/solicitudes/{id}/cancelar (pide el motivo y revisa que no tenga cotizaciones ni pedidos activos).
+// T7: la lista ya no lo usa (menú de fila con 'Reiniciar', barra masiva sin estados); queda solo para el detalle
+// (solicitud/[id]) hasta que T8A lo quite.
 export const ESTADOS_SC_MANUALES: Record<string, {label:string; color:string; bg:string; border:string}> = Object.fromEntries(
   Object.entries(ESTADOS_SC).filter(([k]) => ['BORRADOR'].includes(k))
 );
@@ -79,7 +75,8 @@ export const fCOP  = (v: any)   => { const n=Number(v)||0; return n>0?'$'+n.toLo
 // forma de la pastilla ahora coincide con la de Badge (rounded-full, border,
 // text-xs font-bold, px-2.5 py-1).
 export function EstadoBadge({estado}: {estado:string}) {
-  const cfg = ESTADOS_SC[estado] || {label:estado,color:'#4338ca',bg:'#eef2ff',border:'#c7d2fe'};
+  // U15: etiqueta de la librería (un estado desconocido sale humanizado y en gris, nunca el código crudo).
+  const cfg = infoEstadoSolicitud(estado);
   return (
     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border"
       style={{backgroundColor:cfg.bg,color:cfg.color,borderColor:cfg.border}}>
@@ -109,116 +106,10 @@ export function ActionDot({action}: {action:string}) {
   return <div className="absolute left-0 top-2 w-4 h-4 rounded-full border-2 border-white" style={{backgroundColor:colors[action]||'#94a3b8'}}/>;
 }
 
-// â”€â”€ New Client Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-export function NewClientModal({onSave, onClose}: {onSave:(c:any)=>void; onClose:()=>void}) {
-  const [form, setForm] = useState({first_name:'',last_name:'',phone:'',email:'',address:'',city:''});
-  const [saving, setSaving] = useState(false);
-  // H49 (T1B): el error se muestra dentro de la ventana, sin cerrarla ni borrar lo escrito; se borra al editar.
-  const [error, setError] = useState('');
-  async function save(e: React.FormEvent) {
-    e.preventDefault();
-    if (!form.first_name) return;
-    setSaving(true);
-    setError('');
-    try {
-      const d = await apiFetch('/crm/customers', {method:'POST', body:JSON.stringify(form)});
-      const custObj = d?.data ?? d;
-      onSave(custObj);
-    } catch(err:any) { setError(textoDeError(err, 'No se pudo crear el cliente')); }
-    setSaving(false);
-  }
-  return (
-    <Modal title="Nuevo Cliente" subtitle="El cliente no esta en la base de datos. Completar para continuar." icon={UserPlus} color="indigo"
-      // Mientras guarda no se cierra (ni la X ni 'Cancelar'): el resultado siempre llega a una ventana abierta.
-      onClose={()=>{ if (!saving) onClose(); }} bloquearCierre={saving}
-      footer={(
-        <>
-          <Button variant="secondary" disabled={saving} onClick={onClose}>Cancelar</Button>
-          <Button type="submit" form="sc-new-client-form" color="indigo" icon={UserPlus} loading={saving}>Guardar Cliente</Button>
-        </>
-      )}>
-      <form id="sc-new-client-form" onSubmit={save} onChange={()=>{ if (error) setError(''); }} className="space-y-3">
-        {error && <p role="alert" className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">{error}</p>}
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="text-xs font-bold text-slate-500 mb-1 block">Nombre *</label>
-            <input required value={form.first_name} onChange={e=>setForm(f=>({...f,first_name:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-          <div><label className="text-xs font-bold text-slate-500 mb-1 block">Apellido</label>
-            <input value={form.last_name} onChange={e=>setForm(f=>({...f,last_name:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className="text-xs font-bold text-slate-500 mb-1 block">Telefono</label>
-            <input value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-          <div><label className="text-xs font-bold text-slate-500 mb-1 block">Email</label>
-            <input type="email" value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-        </div>
-        <div><label className="text-xs font-bold text-slate-500 mb-1 block">Direccion</label>
-          <input value={form.address} onChange={e=>setForm(f=>({...f,address:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-        <div><label className="text-xs font-bold text-slate-500 mb-1 block">Ciudad</label>
-          <input value={form.city} onChange={e=>setForm(f=>({...f,city:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
-      </form>
-    </Modal>
-  );
-}
-
-// â”€â”€ Product Not Found Modal â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// ── Product Search ──────────────────────────────────────────────────────────
-export function ProductSearch({value,onChange,onSelect}:{value:string;onChange:(v:string)=>void;onSelect:(p:any)=>void}) {
-  const [results,setResults]=useState<any[]>([]);
-  const [open,setOpen]=useState(false);
-  const [searched,setSearched]=useState(false);
-  const [creating,setCreating]=useState(false);
-  const timer=useRef<any>(null);
-  function handle(v:string) {
-    onChange(v); setOpen(false); setSearched(false);
-    if(timer.current) clearTimeout(timer.current);
-    if(!v.trim()){setResults([]);return;}
-    timer.current=setTimeout(async()=>{
-      try{
-        const d=await apiFetch(`/crm/products/search?q=${encodeURIComponent(v)}&limit=8`);
-        const list=Array.isArray(d)?d:(d?.data??[]);
-        setResults(list);
-      }catch{setResults([]);}
-      setOpen(true); setSearched(true);
-    },300);
-  }
-  async function crearNuevo() {
-    if(!value.trim()||creating) return;
-    setCreating(true);
-    try{
-      const p=await apiFetch('/crm/products/quick-create',{method:'POST',body:JSON.stringify({name:value.trim(),sale_price:0})});
-      onSelect(p?.data||p);
-      setOpen(false); setSearched(false);
-    }catch{
-      // Si falla la creacion, se deja el texto tecleado tal cual (queda como
-      // producto libre, igual que si el usuario nunca hubiera hecho clic).
-    }
-    setCreating(false);
-  }
-  return (
-    <div className="relative">
-      <input type="text" value={value} onChange={e=>handle(e.target.value)} placeholder="Buscar producto en catalogo..." className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-200 outline-none"/>
-      {open&&results.length>0&&(
-        <div className="absolute top-full left-0 right-0 z-50 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-48 overflow-y-auto">
-          {results.map((p:any)=>(
-            <button key={p.id||p.name} type="button" onClick={()=>{onSelect(p);setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-indigo-50 text-sm border-b border-slate-50 last:border-0">
-              <span className="font-bold text-slate-800">{p.name||p.product_name}</span>
-              {p.sku&&<span className="ml-2 text-xs text-slate-400">SKU:{p.sku}</span>}
-            </button>
-          ))}
-        </div>
-      )}
-      {open&&searched&&results.length===0&&value.trim().length>2&&(
-        <div className="mt-1.5 bg-amber-50 border border-amber-200 rounded-xl p-2.5 flex items-center justify-between gap-2">
-          <span className="text-xs text-amber-700">Producto no encontrado en el catalogo.</span>
-          <button type="button" onClick={crearNuevo} disabled={creating}
-            className="shrink-0 bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-50">
-            {creating?'Creando...':'+ Crear producto nuevo'}
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
+// ── Cliente nuevo y buscador de productos ─────────────────────────────────────
+// H11 (T7): NewClientModal vive ahora en selector-cliente.tsx (alta encima de la solicitud, en un portal); se reexporta
+// arriba para el Asistente Omnicanal. U7 (T7): ProductSearch vive en buscador-producto.tsx; se reexporta arriba para el
+// editor de productos del detalle.
 
 // Campos dependientes del Tipo de Solicitud + Asesor/Vencimiento. Bloque
 // reutilizable: Tipo/Modalidad, los 5 sub-formularios por tipo (Cotizacion,
@@ -245,12 +136,15 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
   setForm: (updater: (f: SolicitudFormState) => SolicitudFormState) => void;
 }>(function SolicitudTipoYDetalle({ form, setForm }, ref) {
   const [usuarios, setUsuarios] = useState<{id:number;email:string;role:string}[]>([]);
+  // U7+U8+H12+H13: lo escrito en el buscador (prodName) y las líneas ya agregadas. Elegir o crear un producto lo agrega
+  // de una vez (cantidad 1, editable en su tarjeta); el SKU viaja en la línea para que la Cotización lo herede vinculado.
   const [prodName, setProdName] = useState('');
-  const [prodQty, setProdQty] = useState(1);
-  // SKU del producto elegido en el catalogo: viaja en la linea para que la Cotizacion (y el
-  // Pedido) lo hereden vinculado, en vez de como texto libre. Se borra si se edita el texto.
-  const [prodSku, setProdSku] = useState<number | null>(null);
   const [productos, setProductos] = useState<any[]>([]);
+  // Copia síncrona de las líneas: el alta rápida responde después de un await y no debe sumar sobre una lista vieja.
+  const productosRef = useRef<any[]>([]);
+  const prodInputRef = useRef<HTMLInputElement>(null);
+  const [aviso, setAviso] = useState<{ texto: string; indice: number } | null>(null);
+  const avisoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [segSearch, setSegSearch] = useState('');
   const [segResults, setSegResults] = useState<any[]>([]);
   const segTimer = useRef<any>(null);
@@ -295,9 +189,43 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
     }, 300);
   }
 
+  useEffect(() => () => { if (avisoTimer.current) clearTimeout(avisoTimer.current); }, []);
+
+  function cambiarProductos(lineas: any[]) {
+    productosRef.current = lineas;
+    setProductos(lineas);
+  }
+
+  function quitarAviso() {
+    if (avisoTimer.current) clearTimeout(avisoTimer.current);
+    avisoTimer.current = null;
+    setAviso(null);
+  }
+
+  // U7+U8: agrega (o suma a la línea igual) lo elegido, creado o escrito; limpia el buscador, le devuelve el foco y
+  // explica en un aviso verde (6 s) lo que pasó. Una línea en blanco no se agrega (agregarLinea da indice -1).
+  function agregar(linea: any, origen: 'catalogo' | 'creado' | 'existente' | 'texto') {
+    const r = agregarLinea(productosRef.current, linea);
+    if (r.indice < 0) return;
+    cambiarProductos(r.lineas);
+    setProdName('');
+    prodInputRef.current?.focus();
+    const nombre = nombreLinea(r.lineas[r.indice]);
+    let texto = '';
+    if (r.fusionada) texto = `«${nombre}» ya estaba en la lista: ahora son ${r.lineas[r.indice].qty}.`;
+    else if (origen === 'creado') texto = `Se creó «${nombre}» en el catálogo y se agregó a la solicitud. Queda marcado para completar marca, categoría y precio después.`;
+    else if (origen === 'existente') texto = `«${nombre}» ya estaba en el catálogo: se agregó.`;
+    else if (origen === 'texto') texto = `Se agregó «${nombre}» como texto libre (no está en el catálogo).`;
+    if (avisoTimer.current) clearTimeout(avisoTimer.current);
+    setAviso({ texto, indice: r.indice });
+    avisoTimer.current = setTimeout(() => { avisoTimer.current = null; setAviso(null); }, 6000);
+  }
+
   useImperativeHandle(ref, () => ({
     getExtras: () => {
-      const prodsToSend = productos.length > 0 ? productos : (prodName ? [{ product_name: prodName, qty: prodQty, unit_price_cop: 0, sku_id: prodSku }] : []);
+      // H12: lo escrito sin agregar también se guarda, aunque ya haya otras líneas (igual que el editor del detalle);
+      // al backend llega la forma de siempre {product_name, qty, unit_price_cop, sku_id}, sin claves internas.
+      const prodsToSend = lineasParaEnviar(productosRef.current, prodName);
       let notasConExtras = form.notas;
       if (form.tipo_solicitud === 'Programar Entrega' && envio.nombre_completo) {
         notasConExtras = `ENVIO: ${JSON.stringify(envio)}\n${form.notas}`;
@@ -307,7 +235,7 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
       return { productos: prodsToSend, notasConExtras };
     },
     reset: () => {
-      setProductos([]); setProdName(''); setProdQty(1); setProdSku(null);
+      cambiarProductos([]); setProdName(''); quitarAviso();
       setSegSearch(''); setSegResults([]);
       setEnvio({nombre_completo:'',cedula:'',direccion:'',ciudad:'',telefono:'',transportadora:'',tipo_envio:'Contraentrega',ven_ids:''});
       setDevVen(''); setDevPec(''); setDevMotivo('');
@@ -332,34 +260,44 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
         )}
       </div>
 
-      {isCotizacion&&form.modalidad_pago.includes('60/40')&&(
-        <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 flex gap-4">
-          <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Anticipo</p><p className="font-black text-indigo-700 text-lg">60%</p></div>
-          <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Saldo al entregar</p><p className="font-black text-slate-700 text-lg">40%</p></div>
-        </div>
-      )}
+      {/* H10: el anticipo que pedirá la cotización, para toda modalidad (R2: el mismo % que calcula el backend; 'Otro' o
+          vacía, 60%). */}
+      {isCotizacion&&(()=>{
+        const pctReconocido = pctAnticipoDeModalidad(form.modalidad_pago);
+        const pct = pctReconocido ?? 60;
+        const frase = pctReconocido === null ? 'Se pedirá un anticipo del 60%.'
+          : pct === 100 ? 'El cliente paga todo antes de crear el pedido de venta.'
+          : pct === 0 ? 'Sin anticipo: el cliente paga según el plazo.'
+          : `El ${100 - pct}% restante se paga al entregar.`;
+        return (
+          <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 space-y-2">
+            <div className="flex gap-4">
+              <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-500">Anticipo antes del pedido</p><p className="font-black text-indigo-700 text-lg">{pct}%</p></div>
+              <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-500">Saldo</p><p className="font-black text-slate-700 text-lg">{100 - pct}%</p></div>
+            </div>
+            <p className="text-xs text-indigo-800">{frase} En la cotización se puede ajustar a mano con una nota.</p>
+          </div>
+        );
+      })()}
 
       {/* TYPE-SPECIFIC FIELDS */}
       {isCotizacion&&(
         <div>
-          <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Productos a Cotizar <span className="text-slate-300 font-medium">(puedes agregarlos después)</span></label>
-          <ProductSearch value={prodName} onChange={v=>{setProdName(v);setProdSku(null);}} onSelect={p=>{setProdName(p.name||p.product_name);setProdSku(p.id??null);}}/>
-          {prodName&&(
-            <div className="mt-2 flex items-center gap-2">
-              <label className="text-xs text-slate-500">Cantidad:</label>
-              <input type="number" min="1" value={prodQty} onChange={e=>setProdQty(Number(e.target.value))} className="w-20 border border-slate-200 rounded-lg px-2 py-1 text-sm text-center font-bold outline-none focus:ring-1 focus:ring-indigo-200"/>
-              <button type="button" onClick={()=>{if(prodName){setProductos(p=>[...p,{product_name:prodName,qty:prodQty,unit_price_cop:0,sku_id:prodSku}]);setProdName('');setProdQty(1);setProdSku(null);}}} className="bg-indigo-100 text-indigo-700 px-3 py-1 rounded-lg text-xs font-bold hover:bg-indigo-200">+ Agregar</button>
+          <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Productos a cotizar <span className="text-slate-300 font-medium normal-case">(puedes agregarlos después)</span></label>
+          <ProductSearch value={prodName} onChange={setProdName} inputRef={prodInputRef}
+            onSelect={(p, info) => agregar(lineaDesdeCatalogo(p, info), info ? (info.creado ? 'creado' : 'existente') : 'catalogo')}
+            onAgregarTexto={(t, c) => agregar(c ? lineaDesdeCatalogo(c) : lineaTextoLibre(t), c ? 'catalogo' : 'texto')}/>
+          <div role="status" aria-live="polite">
+            {aviso?.texto&&<p className="mt-2 text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 break-words">{aviso.texto}</p>}
+          </div>
+          {productos.length>0&&(
+            <div className="mt-2">
+              <LineasProducto tono="morado" lineas={productos} resaltada={aviso?.indice ?? null}
+                // Al quitar una línea el índice resaltado ya no sería el mismo producto: se quita el aviso.
+                onChange={l=>{ if(l.length!==productosRef.current.length) quitarAviso(); cambiarProductos(l); }}/>
             </div>
           )}
-          {productos.length>0&&(
-            <div className="mt-2 space-y-1">{productos.map((p,i)=>(
-              <div key={i} className="flex items-center justify-between bg-slate-50 rounded-lg px-3 py-1.5">
-                <span className="text-sm font-bold text-slate-700">{p.product_name} x{p.qty}{!p.sku_id&&<span className="ml-1.5 text-[10px] font-bold text-slate-400 uppercase">texto libre</span>}</span>
-                <button type="button" onClick={()=>setProductos(prev=>prev.filter((_,idx)=>idx!==i))} className="text-red-400 hover:text-red-600"><X size={13}/></button>
-              </div>
-            ))}</div>
-          )}
-          <p className="text-xs text-slate-400 mt-2">Busca en el catálogo o escribe el nombre: si no existe, se agrega como texto libre. Sin productos la solicitud no se puede enviar al cliente ni cotizar.</p>
+          <p className="text-xs text-slate-500 mt-2">Elige del catálogo, créalo si no existe o agrégalo como texto libre. Sin productos la solicitud no se puede enviar al cliente ni cotizar.</p>
         </div>
       )}
 
@@ -501,10 +439,14 @@ function RowMenu({sc,onView,onChangeEstado,onCancel,onSendToTrash}:{sc:any;onVie
   },[]);
   const isCancelled = sc.estado === 'CANCELADA';
   const isSoporte = sc.tipo_solicitud === 'Soporte Tecnico';
-  // N4: una SC cancelada solo vuelve por "Restaurar" en la Papelera (el PATCH a Borrador responde 409) y una que ya
-  // tiene eliminada_at ya esta en la Papelera: no se ofrece mandarla otra vez.
-  const estadosManuales = isCancelled ? [] : Object.entries(ESTADOS_SC_MANUALES).filter(([k]) => k !== sc.estado);
-  const mostrarAcciones = estadosManuales.length > 0 || !isCancelled || !sc.eliminada_at;
+  // N4: una SC cancelada solo vuelve por "Restaurar" en la Papelera (el PATCH responde 409) y una que ya tiene
+  // eliminada_at ya esta en la Papelera: no se ofrece mandarla otra vez.
+  // U15 (R30): ningún estado se pone a mano; 'Reiniciar' solo en Pendiente por confirmación o Confirmada sin documentos
+  // activos (nunca en Cancelada ni en Soporte). La lista no trae los pedidos de venta: un PVEN vigente siempre cuelga de
+  // una COT activa, y si no, el 409 de R10 del servidor lo explica.
+  const reiniciable = puedeReiniciar(sc, {cotizacionesActivas: cotizacionesVigentes(sc), pedidosVigentes: []});
+  const destinoReinicio = infoEstadoSolicitud(sc.advisor_user_id ? 'ASIGNADA' : 'BORRADOR').label;
+  const mostrarAcciones = !isCancelled || !sc.eliminada_at;
   return (
     <div className="relative" ref={ref}>
       <button onClick={e=>{e.stopPropagation();setOpen(o=>!o);}} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg"><MoreVertical size={15}/></button>
@@ -520,12 +462,14 @@ function RowMenu({sc,onView,onChangeEstado,onCancel,onSendToTrash}:{sc:any;onVie
           {!isSoporte && mostrarAcciones && (
             <>
               <div className="border-t border-slate-100 my-1"/>
-              {estadosManuales.map(([k,v])=>(
-                <button key={k} onClick={()=>{onChangeEstado(k);setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-xs font-bold" style={{color:v.color}}>
-                  Estado: {v.label}
-                </button>
-              ))}
-              {estadosManuales.length>0&&<div className="border-t border-slate-100 my-1"/>}
+              {reiniciable&&(
+                <>
+                  <button onClick={()=>{onReiniciar();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm font-medium flex items-center gap-2 text-slate-700">
+                    <RotateCcw size={14} className="text-cyan-600"/>Reiniciar (volver a {destinoReinicio})
+                  </button>
+                  <div className="border-t border-slate-100 my-1"/>
+                </>
+              )}
               {isCancelled ? (
                 <button onClick={()=>{onSendToTrash();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-rose-50 text-sm font-medium flex items-center gap-2 text-rose-600">
                   <Trash2 size={14}/>Enviar a la papelera
@@ -696,19 +640,20 @@ export function ChatterTab({sc,currentUser}:{sc:any;currentUser:string}) {
 
 // â”€â”€ Main â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+// U18+H31 (C1 h): el motivo de una cancelación, o '' si no se registró (quien lo muestra pone 'Sin motivo registrado'):
+// nunca se inventa uno. Primero razon_cancelacion; de respaldo, hasta la limpieza de T12, la última marca
+// '[CANCELADA] Razón: X' de las notas viejas (solo esa marca: un 'Motivo:' de una nota de devolución no es el motivo de
+// la cancelación).
+const SIN_MOTIVO_REGISTRADO = 'Sin motivo registrado';
 const getRazonCancelacion = (sc: any): string => {
   if (sc.razon_cancelacion && typeof sc.razon_cancelacion === 'string' && sc.razon_cancelacion.trim()) {
     return sc.razon_cancelacion.trim();
   }
   if (sc.notas && typeof sc.notas === 'string') {
-    const match = sc.notas.match(/\[CANCELADA\]\s*Razón:\s*(.*)/i);
-    if (match && match[1]) return match[1].trim();
-    const match2 = sc.notas.match(/Razón:\s*(.*)/i);
-    if (match2 && match2[1]) return match2[1].trim();
-    const match3 = sc.notas.match(/Motivo:\s*(.*)/i);
-    if (match3 && match3[1]) return match3[1].trim();
+    const marcas = [...sc.notas.matchAll(/\[CANCELADA\]\s*Razón:[ \t]*([^\r\n]*)/gi)].map(m => m[1].trim()).filter(Boolean);
+    if (marcas.length > 0) return marcas[marcas.length - 1];
   }
-  return 'Cancelada por cliente / Desistimiento comercial';
+  return '';
 };
 
 export default function SolicitudClient() {
@@ -750,11 +695,12 @@ export default function SolicitudClient() {
       peligro: true,
     }))) return;
     try {
-      const razonToSend = (existing && getRazonCancelacion(existing)) || 'Enviada a papelera por asesor';
+      // C1 h: sin motivo registrado no se inventa uno: se dice que no lo hay.
+      const razonToSend = (existing && getRazonCancelacion(existing)) || '';
       await apiFetch(`/ventas/solicitudes/${id}/cancelar`, {
         method: 'POST',
         body: JSON.stringify({
-          razon: razonToSend.length >= 5 ? razonToSend : 'Enviada a papelera por asesor',
+          razon: razonToSend.length >= 5 ? razonToSend : 'Enviada a la papelera (sin motivo registrado)',
           user_name: currentUser || 'asesor'
         })
       });
@@ -779,7 +725,8 @@ export default function SolicitudClient() {
       // H32: "conversion" = solicitudes de cotizacion que de verdad generaron una cotizacion (no las que solo estan Confirmadas).
       const tasa = tasaConversionCotizacion(solicitudes);
       const conf = tasa.conCot;
-      const act = solicitudes.filter(s => s.estado === 'BORRADOR' || s.estado === 'PENDIENTE_CONFIRMACION').length;
+      // U15: activas = las que el cliente todavía no confirma (Nueva, Asignada y Pendiente por confirmación).
+      const act = solicitudes.filter(s => ESTADOS_SC_SIN_CONFIRMAR.includes(s.estado)).length;
       const canc = solicitudes.filter(s => s.estado === 'CANCELADA').length;
       const convRate = tasa.pct.toFixed(1);
       const cancRate = ((canc / total) * 100).toFixed(1);
@@ -797,10 +744,10 @@ export default function SolicitudClient() {
       // Cancellation reasons
       const cancelRazones: Record<string, number> = {};
       solicitudes.filter(s => s.estado === 'CANCELADA').forEach(s => {
-        const r = getRazonCancelacion(s);
+        const r = getRazonCancelacion(s) || SIN_MOTIVO_REGISTRADO;
         cancelRazones[r] = (cancelRazones[r] || 0) + 1;
       });
-      const topReason = Object.entries(cancelRazones).sort((a,b)=>b[1]-a[1])[0]?.[0] || 'Desistimiento de compra';
+      const topReason = Object.entries(cancelRazones).sort((a,b)=>b[1]-a[1])[0]?.[0] || SIN_MOTIVO_REGISTRADO;
 
       let aiReply = '';
       const qLower = q.toLowerCase();
@@ -825,7 +772,7 @@ export default function SolicitudClient() {
           `• Consulta la tabla de **Top Clientes** interactiva abajo para filtrar entre Top 5, 10, 20 o 50 y ver su tasa de éxito particular.`;
       } else {
         aiReply = `🔍 **Análisis para "${q}":**\n\n` +
-          `• Con base en el análisis en tiempo real de las **${total} solicitudes**, ${act} se encuentran activas en borrador o pendientes de confirmación.\n` +
+          `• Con base en el análisis en tiempo real de las **${total} solicitudes**, ${act} todavía esperan la confirmación del cliente.\n` +
           `• La conversión acumulada se sitúa en **${convRate}%** y el ${cancRate}% fue cancelado.\n` +
           `• El cliente líder es **${topCustName}** y el motivo principal de descarte reportado es *"${topReason}"*.\n\n` +
           `¿Deseas profundizar en algún segmento o tipo de solicitud específico?`;
@@ -867,14 +814,8 @@ export default function SolicitudClient() {
   // montado via este ref mas abajo (ver createSolicitud/resetCreateForm).
   const tipoDetalleRef = useRef<SolicitudTipoYDetalleHandle>(null);
 
-  // Customer autocomplete
-  const [custSearch,setCustSearch]=useState('');
-  const [custResults,setCustResults]=useState<any[]>([]);
+  // H11: el cliente elegido; la búsqueda y el alta viven en <SelectorClienteSC> (selector-cliente.tsx).
   const [selectedCust,setSelectedCust]=useState<any|null>(null);
-  const [showNewClient,setShowNewClient]=useState(false);
-  const [custSearchDone,setCustSearchDone]=useState(false);
-  const custTimer=useRef<any>(null);
-  const custReqId=useRef(0);
 
   // Los de error pasan por textoDeError (sin conexión, '[object Object]', 'Error: ' repetido).
   const showToast=(msg:string,type:'ok'|'err'='ok')=>{
@@ -893,7 +834,8 @@ export default function SolicitudClient() {
     try{
       const [sc,cfg]=await Promise.all([
         apiFetch('/ventas/solicitudes?limit=200').catch(()=>[]),
-        apiFetch('/ventas/config').catch(()=>({})),
+        // H16: compartida (ver leerConfigVentas arriba): un montaje doble no la pide dos veces.
+        leerConfigVentas().catch(()=>({})),
       ]);
       const lista=Array.isArray(sc)?sc:(sc?.data??[]);
       setSolicitudes(lista);
@@ -962,7 +904,8 @@ export default function SolicitudClient() {
         resultados.push({numero,ok:true});
         canceladas.push(id);
       }catch(err:any){
-        resultados.push({numero,ok:false,error:err?.message});
+        // Por fila y legible (sin conexión, 409 del servidor tal cual): el resumen del aviso no pasa por textoDeError.
+        resultados.push({numero,ok:false,error:textoDeError(err)});
         fallidas.push(id);
       }
     }
@@ -994,44 +937,39 @@ export default function SolicitudClient() {
     }catch(err:any){avisarError(err,`No se pudo eliminar ${sc.numero}`);}
   }
 
+  // U18+H33: el servidor responde {id, numero, estado, estado_label, mensaje} ('… restaurada: queda Asignada porque …')
+  // y el aviso trae 'Ver solicitud'. Un 409 (no está cancelada, o tiene documentos activos: R34) sale con su mensaje y la
+  // lista no cambia.
   async function restaurarSC(id:number) {
     try{
-      await apiFetch(`/ventas/solicitudes/${id}/restaurar`,{method:'POST'});
-      showToast('Solicitud restaurada a Borrador','ok');
+      const d=await apiFetch(`/ventas/solicitudes/${id}/restaurar`,{method:'POST'});
+      const r=d?.data??d;
+      avisar(r?.mensaje||`Solicitud restaurada: queda ${infoEstadoSolicitud(r?.estado).label}`,
+        {tono:'ok',accion:{texto:'Ver solicitud',href:`/dashboard/ventas/solicitud/${id}`}});
       await loadPapelera();
       await load();
-    }catch(err:any){showToast('Error: '+err.message,'err');}
+    }catch(err:any){avisarError(err,'No se pudo restaurar la solicitud');}
   }
 
-  function onCustSearch(q:string) {
-    setCustSearch(q);setSelectedCust(null);setCustSearchDone(false);
-    if(custTimer.current) clearTimeout(custTimer.current);
-    if(!q.trim()){setCustResults([]);return;}
-    const reqId=++custReqId.current;
-    custTimer.current=setTimeout(async()=>{
-      const d=await apiFetch(`/crm/customers/search?q=${encodeURIComponent(q)}`).catch(()=>[]);
-      if(reqId!==custReqId.current) return; // respuesta de una busqueda anterior ya obsoleta
-      const list=Array.isArray(d)?d:(d?.data??[]);
-      setCustResults(list);
-      setCustSearchDone(true);
-    },300);
-  }
-
-  // N4: solo se llega aqui para volver a Borrador (ESTADOS_SC_MANUALES); cancelar va por cancelWithReason. El servidor
-  // responde 409 (con el motivo) si la SC tiene cotizacion o pedido activos o esta cancelada: se muestra tal cual.
-  async function patchEstado(scId:number,newEstado:string):Promise<string|null> {
-    try{
-      const r=await apiFetch(`/ventas/solicitudes/${scId}`,{method:'PATCH',body:JSON.stringify({estado:newEstado,updated_by:currentUser})});
-      // Con asesor, Borrador pasa a Asignada: se pinta lo que devolvio el servidor, no lo que se pidio.
-      setSolicitudes(prev=>prev.map(s=>s.id===scId?{...s,...(r?.data||{estado:newEstado})}:s));
-      return null;
-    }catch(err:any){return err?.message||'el servidor no dio detalle del error';}
-  }
-
-  async function changeEstado(scId:number,newEstado:string) {
+  // U15 (R30): 'Reiniciar' es el único cambio de estado a mano (PATCH {estado:'BORRADOR'}: vuelve a Nueva, o a Asignada
+  // si tiene asesor). Se confirma antes; cancelar va por cancelWithReason. El 409 de R10 (cotización o pedido activos)
+  // sale con su mensaje.
+  async function reiniciarSC(sc:any) {
+    const destino=infoEstadoSolicitud(sc.advisor_user_id?'ASIGNADA':'BORRADOR').label;
+    if(!(await confirmar({
+      titulo:'Reiniciar solicitud',
+      mensaje:`La solicitud vuelve a ${destino}: se anula el enlace que se le envió al cliente y su confirmación, y habrá que enviársela de nuevo.`,
+      textoConfirmar:'Reiniciar solicitud',
+      peligro:true,
+    }))) return;
     setSaving(true);
-    const error=await patchEstado(scId,newEstado);
-    showToast(error?'Error: '+error:'Estado cambiado',error?'err':'ok');
+    try{
+      const r=await apiFetch(`/ventas/solicitudes/${sc.id}`,{method:'PATCH',body:JSON.stringify({estado:'BORRADOR',updated_by:currentUser})});
+      // Se pinta lo que devolvió el servidor (con asesor queda Asignada), no lo que se pidió.
+      const nueva=r?.data;
+      setSolicitudes(prev=>prev.map(s=>s.id===sc.id?{...s,...(nueva||{})}:s));
+      avisar(`${sc.numero} reiniciada: queda ${infoEstadoSolicitud(nueva?.estado??(sc.advisor_user_id?'ASIGNADA':'BORRADOR')).label}`);
+    }catch(err:any){avisarError(err,`No se pudo reiniciar ${sc.numero}`);}
     setSaving(false);
   }
 
@@ -1039,48 +977,26 @@ export default function SolicitudClient() {
     setCancelTarget([scId]);setCancelRazon('');setCancelErrores([]);setCancelOmitidas([]);setShowCancelModal(true);
   }
 
-  async function bulkAction(action:'delete'|'estado',estado?:string) {
-    if(action==='delete'){
-      // N4: ya no hace PATCH: abre el modal del motivo y las cancela con POST /cancelar. Las que ya estan canceladas (ya
-      // estan en la Papelera) y las de Soporte Tecnico (su ciclo es estado_soporte: cancelarlas las mandaria a purga en
-      // 30 dias y se perderia el ticket) no se envian al servidor: se informan como omitidas.
-      const {cancelables,omitidas}=repartirCancelacionSolicitudes(Array.from(checked).map(id=>solicitudes.find(s=>s.id===id)||{id}));
-      if(cancelables.length===0){
-        showToast(resumenCancelacionSolicitudes([],omitidas).mensaje,'err');
-        setChecked(new Set());setShowBulkBar(false);
-        return;
-      }
-      setCancelTarget(cancelables.map(s=>s.id));setCancelOmitidas(omitidas);setCancelRazon('');setCancelErrores([]);setShowCancelModal(true);
+  // U15: la barra masiva ya no cambia estados (ninguno se pone a mano): solo cancela las marcadas.
+  function bulkCancelar() {
+    // N4: ya no hace PATCH: abre el modal del motivo y las cancela con POST /cancelar. Las que ya estan canceladas (ya
+    // estan en la Papelera) y las de Soporte Tecnico (su ciclo es estado_soporte: cancelarlas las mandaria a purga en
+    // 30 dias y se perderia el ticket) no se envian al servidor: se informan como omitidas.
+    const {cancelables,omitidas}=repartirCancelacionSolicitudes(Array.from(checked).map(id=>solicitudes.find(s=>s.id===id)||{id}));
+    if(cancelables.length===0){
+      showToast(resumenCancelacionSolicitudes([],omitidas).mensaje,'err');
+      setChecked(new Set());setShowBulkBar(false);
       return;
     }
-    // Soporte Tecnico usa su propio flujo (estado_soporte) y su propio ciclo
-    // de vida: ni el cambio masivo de estado de Cotizacion ni la cancelacion
-    // masiva deben tocarlo (cancelar aqui lo mandaria a purga en 30 dias,
-    // perdiendo el ticket de soporte real)
-    const ids=Array.from(checked).filter(id=>solicitudes.find(s=>s.id===id)?.tipo_solicitud!=='Soporte Tecnico');
-    if(ids.length===0){showToast('Las solicitudes de Soporte Técnico no se cancelan ni cambian de estado desde aquí','err');return;}
-    if(!estado) return;
-    setSaving(true);
-    let cambiadas=0;
-    const rechazos:string[]=[];
-    for(const id of ids){
-      const error=await patchEstado(id,estado);
-      if(error) rechazos.push(`${solicitudes.find(s=>s.id===id)?.numero||`#${id}`}: ${error}`);
-      else cambiadas++;
-    }
-    setSaving(false);
-    setChecked(new Set());setShowBulkBar(false);
-    if(rechazos.length===0) showToast(`${cambiadas} solicitud${cambiadas===1?'':'es'} actualizada${cambiadas===1?'':'s'}`);
-    else showToast(`${cambiadas} de ${ids.length} solicitudes actualizadas. No se pudo cambiar: ${rechazos.join(' · ')}`,'err');
+    setCancelTarget(cancelables.map(s=>s.id));setCancelOmitidas(omitidas);setCancelRazon('');setCancelErrores([]);setShowCancelModal(true);
   }
 
   async function createSolicitud(e:React.FormEvent) {
     e.preventDefault();
+    // H11: sin cliente solo se avisa (antes se abría el alta DETRÁS de esta ventana y no se veía nada); el selector sigue
+    // ofreciendo 'Agregar cliente'.
     if(!selectedCust){
-      if(custSearchDone&&custResults.length===0){
-        setShowNewClient(true);return;
-      }
-      showToast('Selecciona un cliente existente o crea uno nuevo — no se puede continuar sin un cliente real','err');
+      avisar('Elige un cliente o agrega uno nuevo: no se puede crear la solicitud sin cliente.',{tono:'error'});
       return;
     }
     setSaving(true);
@@ -1089,7 +1005,7 @@ export default function SolicitudClient() {
       const scData = await apiFetch('/ventas/solicitudes',{method:'POST',body:JSON.stringify({
         ...form,notas:extraNotas,
         customer_id:selectedCust?.id||null,
-        customer_name:selectedCust?`${selectedCust.first_name} ${selectedCust.last_name}`.trim():custSearch,
+        customer_name:nombreCliente(selectedCust),
         customer_phone:selectedCust?.phone||'',customer_email:selectedCust?.email||'',customer_address:selectedCust?.address||'',
         productos:prodsToSend,created_by:currentUser,
         // advisor_user_id / asignado_a_user_id son Integer/nullable en el backend: nunca enviar '' (rompe el INSERT)
@@ -1125,7 +1041,8 @@ export default function SolicitudClient() {
   }
 
   function resetCreateForm() {
-    setSelectedCust(null);setCustSearch('');setCustResults([]);setCustSearchDone(false);
+    // El buscador del selector se reinicia solo: se desmonta al cerrar la ventana.
+    setSelectedCust(null);
     tipoDetalleRef.current?.reset();
     setForm({advisor_name:currentUser,advisor_user_id:'',tipo_solicitud:'Cotizacion de Producto',modalidad_pago:'Contado',notas:'',dias_vencimiento:5,tipo_problema:'',descripcion_problema:'',urgencia:'',evidencia_descripcion:'',asignado_a_user_id:''});
   }
@@ -1169,8 +1086,6 @@ export default function SolicitudClient() {
 
   return (
     <div className="w-full bg-slate-50 min-h-full">
-      {showNewClient&&<NewClientModal onSave={c=>{const cust=c?.data??c; setSelectedCust(cust);setCustSearch(`${cust.first_name||''} ${cust.last_name||''}`.trim());setCustResults([]);setShowNewClient(false);setShowCreate(true);showToast('Cliente creado exitosamente');}} onClose={()=>setShowNewClient(false)}/>}
-
       {/* Sub-module nav */}
       <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas/solicitud" color="indigo" hub={{ href: '/dashboard/ventas' }} />
 
@@ -1194,10 +1109,8 @@ export default function SolicitudClient() {
         <div className="bg-indigo-600 text-white px-6 py-3 flex items-center gap-4 shadow-lg">
           <span className="font-bold text-sm">{checked.size} seleccionada(s)</span>
           <div className="flex gap-2">
-            {Object.entries(ESTADOS_SC_MANUALES).map(([k,v])=>(
-              <button key={k} onClick={()=>bulkAction('estado',k)} className="bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg text-xs font-bold border border-white/30">{v.label}</button>
-            ))}
-            <button onClick={()=>bulkAction('delete')} className="bg-rose-600 hover:bg-rose-700 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1"><XCircle size={12}/>Cancelar seleccionadas</button>
+            {/* U15: sin botones 'Estado: …' (ningún estado se pone a mano). */}
+            <button onClick={bulkCancelar} className="bg-rose-600 hover:bg-rose-700 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1"><XCircle size={12}/>Cancelar seleccionadas</button>
             <button onClick={()=>{setChecked(new Set());setShowBulkBar(false);}} className="bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1"><X size={12}/>Limpiar</button>
           </div>
         </div>
@@ -1306,7 +1219,7 @@ export default function SolicitudClient() {
                   <div className="bg-white/5 rounded-xl p-3 border border-white/5">
                     <p className="font-black text-indigo-300 uppercase text-[10px] tracking-wider mb-1">1. Registro de SC</p>
                     <p className="text-slate-300 leading-relaxed">
-                      Captura los datos del cliente, productos y modalidad de pago (Contado, 60/40 o Crédito). Permanece en estado <strong>Borrador</strong> o <strong>Pendiente de confirmación</strong>.
+                      Captura los datos del cliente, productos y modalidad de pago (Contado, 60/40 o Crédito). Avanza sola: <strong>{infoEstadoSolicitud('BORRADOR').label}</strong>, <strong>{infoEstadoSolicitud('ASIGNADA').label}</strong> y <strong>{infoEstadoSolicitud('PENDIENTE_CONFIRMACION').label}</strong> hasta que el cliente la confirma.
                     </p>
                   </div>
                   <div className="bg-white/5 rounded-xl p-3 border border-white/5">
@@ -1470,8 +1383,8 @@ export default function SolicitudClient() {
                         <td className="px-4 py-4 min-w-[240px]" onClick={e=>e.stopPropagation()}>
                           <div className="bg-rose-50 border border-rose-200 text-rose-800 px-3 py-1.5 rounded-xl text-xs font-semibold flex items-start gap-2 shadow-sm">
                             <AlertCircle size={14} className="text-rose-500 shrink-0 mt-0.5" />
-                            <span className="line-clamp-2 leading-relaxed" title={getRazonCancelacion(sc)}>
-                              {getRazonCancelacion(sc)}
+                            <span className="line-clamp-2 leading-relaxed" title={getRazonCancelacion(sc)||SIN_MOTIVO_REGISTRADO}>
+                              {getRazonCancelacion(sc)||SIN_MOTIVO_REGISTRADO}
                             </span>
                           </div>
                         </td>
@@ -1498,7 +1411,7 @@ export default function SolicitudClient() {
                               </button>
                             )
                           )}
-                          <RowMenu sc={sc} onView={()=>router.push(`/dashboard/ventas/solicitud/${sc.id}`)} onChangeEstado={e=>changeEstado(sc.id,e)} onCancel={()=>deleteItem(sc.id)} onSendToTrash={()=>enviarAPapelera(sc.id)}/>
+                          <RowMenu sc={sc} onView={()=>router.push(`/dashboard/ventas/solicitud/${sc.id}`)} onReiniciar={()=>reiniciarSC(sc)} onCancel={()=>deleteItem(sc.id)} onSendToTrash={()=>enviarAPapelera(sc.id)}/>
                         </div>
                       </td>
                     </tr>
@@ -1670,14 +1583,15 @@ export default function SolicitudClient() {
                   {(() => {
                     const slices: { label: string; count: number; color: string }[] = [];
                     if (donutMode === 'estados') {
-                      slices.push({ label: 'Borrador', count: solicitudes.filter(s=>s.estado==='BORRADOR').length, color: '#94a3b8' });
-                      slices.push({ label: 'Pendiente', count: solicitudes.filter(s=>s.estado==='PENDIENTE_CONFIRMACION').length, color: '#f59e0b' });
-                      slices.push({ label: 'Confirmada', count: solicitudes.filter(s=>s.estado==='CONFIRMADA').length, color: '#10b981' });
-                      slices.push({ label: 'Cancelada', count: solicitudes.filter(s=>s.estado==='CANCELADA').length, color: '#ef4444' });
+                      // U15: los pasos de la solicitud (con Asignada, que faltaba) y Cancelada; etiquetas de la librería.
+                      const colores: [string, string][] = [['BORRADOR', '#94a3b8'], ['ASIGNADA', '#06b6d4'], ['PENDIENTE_CONFIRMACION', '#f59e0b'], ['CONFIRMADA', '#10b981'], ['CANCELADA', '#ef4444']];
+                      colores.forEach(([estado, color]) => {
+                        slices.push({ label: infoEstadoSolicitud(estado).label, count: solicitudes.filter(s=>s.estado===estado).length, color });
+                      });
                     } else {
                       const reasonCounts: Record<string, number> = {};
                       solicitudes.filter(s=>s.estado==='CANCELADA').forEach(s => {
-                        const r = getRazonCancelacion(s);
+                        const r = getRazonCancelacion(s) || SIN_MOTIVO_REGISTRADO;
                         reasonCounts[r] = (reasonCounts[r] || 0) + 1;
                       });
                       const pal = ['#ef4444', '#f97316', '#ec4899', '#8b5cf6', '#64748b'];
@@ -2014,8 +1928,8 @@ export default function SolicitudClient() {
       {showCancelModal&&(
         <Modal title={cancelTarget.length>1?`Cancelar ${cancelTarget.length} solicitudes`:'Cancelar Solicitud'} subtitle="La solicitud pasa a la Papelera. No se puede cancelar si tiene una cotización o un pedido de venta activos." icon={Trash2} color="red" maxWidth="md"
           // Mientras se cancela, la X y el fondo no cierran la ventana (igual que "No, mantener"): las fallidas y el
-          // detalle del servidor siempre llegan a una ventana abierta.
-          onClose={()=>{if(!cancelling) cerrarCancelacion();}}
+          // detalle del servidor siempre llegan a una ventana abierta; bloquearCierre deja la X deshabilitada a la vista.
+          onClose={()=>{if(!cancelling) cerrarCancelacion();}} bloquearCierre={cancelling}
           footer={(
             <>
               <Button variant="secondary" disabled={cancelling} onClick={cerrarCancelacion}>No, mantener</Button>
@@ -2066,31 +1980,11 @@ export default function SolicitudClient() {
                 {/* Cliente */}
                 <div>
                   <label className="text-xs font-black text-slate-500 uppercase mb-2 block">Cliente *</label>
-                  <div className="relative">
-                    <input type="text" value={custSearch} onChange={e=>onCustSearch(e.target.value)} placeholder="Buscar por nombre, telefono, email..." className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none"/>
-                    {custResults.length>0&&!selectedCust&&(
-                      <div className="absolute top-full left-0 right-0 z-50 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-48 overflow-y-auto">
-                        {custResults.map((c:any)=>(
-                          <button key={c.id} type="button" onClick={()=>{setSelectedCust(c);setCustSearch(`${c.first_name} ${c.last_name}`.trim());setCustResults([]);}} className="w-full text-left px-3 py-2.5 hover:bg-indigo-50 text-sm border-b border-slate-50 last:border-0">
-                            <span className="font-bold text-slate-800">{c.first_name} {c.last_name}</span>
-                            <span className="ml-2 text-xs text-slate-400">{c.phone||c.email}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  {custSearchDone&&custResults.length===0&&!selectedCust&&custSearch&&(
-                    <div className="mt-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 flex items-center justify-between">
-                      <p className="text-xs font-bold text-amber-700">Cliente no encontrado en la BD.</p>
-                      <button type="button" onClick={()=>{setShowCreate(false);setShowNewClient(true);}} className="bg-amber-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1"><UserPlus size={12}/>Agregar Cliente</button>
-                    </div>
-                  )}
-                  {selectedCust&&(
-                    <div className="mt-2 bg-indigo-50 border border-indigo-200 rounded-xl px-3 py-2 flex items-center justify-between">
-                      <span className="text-sm font-bold text-indigo-700">{selectedCust.first_name} {selectedCust.last_name}</span>
-                      <button type="button" onClick={()=>{setSelectedCust(null);setCustSearch('');setCustSearchDone(false);}} className="text-indigo-400 hover:text-indigo-700"><X size={14}/></button>
-                    </div>
-                  )}
+                  {/* H11: buscar o dar de alta (encima de esta ventana, sin perder lo escrito); con cliente, solo su tarjeta. */}
+                  <SelectorClienteSC cliente={selectedCust} onCliente={(c, info)=>{
+                    setSelectedCust(c);
+                    if(info?.nuevo) avisar('Cliente creado y seleccionado',{tono:'ok'});
+                  }}/>
                 </div>
 
                 <SolicitudTipoYDetalle ref={tipoDetalleRef} form={form} setForm={setForm} />

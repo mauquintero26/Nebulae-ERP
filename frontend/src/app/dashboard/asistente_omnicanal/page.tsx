@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   ExternalLink, RefreshCw, MessageSquare, Maximize2, Minimize2,
-  User, Package, CheckCircle2, Clock, PlusCircle, UserPlus,
+  User, Package, CheckCircle2, Clock, PlusCircle,
   Sparkles, Copy, Check, Search, X, FileText, Phone, MapPin, Layers
 } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
@@ -13,7 +13,11 @@ import { apiFetch } from '@/lib/api';
 // EXACTAMENTE el mismo formulario, no una reimplementacion paralela que
 // termina divergiendo (ya paso una vez: tipos/modalidades hardcodeados aqui
 // no coincidian con los reales).
-import { NewClientModal, SolicitudTipoYDetalle, type SolicitudTipoYDetalleHandle } from '../ventas/solicitud/solicitud-client';
+import { SolicitudTipoYDetalle, type SolicitudTipoYDetalleHandle } from '../ventas/solicitud/solicitud-client';
+// H11 (Bloque 2, T7): el mismo selector de cliente de la Solicitud: busca y, si hace falta, da de alta el cliente ENCIMA
+// de esta ventana con lo escrito, sin cerrarla ni perder lo que ya tenía.
+import { SelectorClienteSC } from '../ventas/solicitud/selector-cliente';
+import { nombreCliente } from '@/lib/cliente-desde-busqueda';
 
 const CHATWOOT_URL = 'https://chatbot-crn-chatwoot.ionwxk.easypanel.host/app/accounts/1/conversations';
 
@@ -73,16 +77,9 @@ export default function AsistenteOmnicanal() {
   // Cliente de la SC en creacion. Se inicializa con el activeCustomer ya
   // resuelto por el buscador superior / sincronizacion con Chatwoot al abrir
   // el modal (se salta el paso de busqueda), pero el asesor puede buscar
-  // (GET /crm/customers/search) o crear uno nuevo (NewClientModal real) si no
-  // hay match o quiere vincular a alguien distinto -- igual que en la pagina
-  // real de Solicitud de Cliente.
+  // o crear uno nuevo con <SelectorClienteSC> (el mismo de la pagina real de
+  // Solicitud de Cliente) si no hay match o quiere vincular a alguien distinto.
   const [scCustomer, setScCustomer] = useState<any | null>(null);
-  const [scCustQuery, setScCustQuery] = useState('');
-  const [scCustResults, setScCustResults] = useState<any[]>([]);
-  const [scCustSearchDone, setScCustSearchDone] = useState(false);
-  const [scShowNewClient, setScShowNewClient] = useState(false);
-  const scCustTimer = useRef<any>(null);
-  const scCustReqId = useRef(0);
 
   // Copiloto de IA
   const [aiSuggestions, setAiSuggestions] = useState<any[]>([]);
@@ -213,30 +210,6 @@ export default function AsistenteOmnicanal() {
     setTimeout(() => setCopiedIndex(null), 2000);
   };
 
-  // Buscar cliente dentro del modal de SC (igual que onCustSearch en
-  // solicitud-client.tsx) -- separado del buscador de la cabecera para no
-  // interferir con el cliente activo del contexto ERP mientras se busca uno
-  // distinto para esta SC puntual.
-  const onScCustSearch = (q: string) => {
-    setScCustQuery(q);
-    setScCustomer(null);
-    setScCustSearchDone(false);
-    if (scCustTimer.current) clearTimeout(scCustTimer.current);
-    if (!q.trim()) { setScCustResults([]); return; }
-    const reqId = ++scCustReqId.current;
-    scCustTimer.current = setTimeout(async () => {
-      try {
-        const d = await apiFetch(`/crm/customers/search?q=${encodeURIComponent(q.trim())}`);
-        if (reqId !== scCustReqId.current) return; // respuesta obsoleta de una busqueda anterior
-        const list = Array.isArray(d) ? d : (d?.data ?? []);
-        setScCustResults(list);
-      } catch {
-        setScCustResults([]);
-      }
-      setScCustSearchDone(true);
-    }, 300);
-  };
-
   const resetScForm = () => {
     setScFormData(f => ({
       advisor_name: f.advisor_name, advisor_user_id: '',
@@ -246,7 +219,7 @@ export default function AsistenteOmnicanal() {
       asignado_a_user_id: '',
     }));
     tipoDetalleRef.current?.reset();
-    setScCustomer(null); setScCustQuery(''); setScCustResults([]); setScCustSearchDone(false);
+    setScCustomer(null);
     setScError('');
   };
 
@@ -263,13 +236,9 @@ export default function AsistenteOmnicanal() {
     e.preventDefault();
     setScError('');
 
+    // H11: sin cliente solo se explica, sin cerrar esta ventana (el selector sigue ofreciendo 'Agregar cliente').
     if (!scCustomer) {
-      if (scCustSearchDone && scCustResults.length === 0) {
-        setIsModalOpen(false);
-        setScShowNewClient(true);
-        return;
-      }
-      setScError('Selecciona un cliente existente o crea uno nuevo — no se puede continuar sin un cliente real.');
+      setScError('Elige un cliente o agrega uno nuevo: no se puede crear la solicitud sin cliente.');
       return;
     }
 
@@ -277,8 +246,7 @@ export default function AsistenteOmnicanal() {
     try {
       const {productos: prodsToSend, notasConExtras} = tipoDetalleRef.current?.getExtras() ?? {productos: [], notasConExtras: scFormData.notas};
 
-      const customerName = scCustomer.name
-        || `${scCustomer.first_name || ''} ${scCustomer.last_name || ''}`.trim();
+      const customerName = nombreCliente(scCustomer);
 
       const scData = await apiFetch('/ventas/solicitudes', {
         method: 'POST',
@@ -777,66 +745,11 @@ export default function AsistenteOmnicanal() {
 
             <form onSubmit={handleCreateSc} className="p-5 space-y-3.5">
               {/* Cliente -- pre-resuelto desde el contexto ERP si ya hay uno
-                  activo, pero buscable/reemplazable (GET /crm/customers/search)
-                  o creable (NewClientModal real) si no hay match o el asesor
-                  quiere vincular a otra persona. */}
+                  activo, pero buscable/reemplazable o creable (alta encima de
+                  esta ventana) con el mismo selector de la Solicitud de Cliente. */}
               <div>
-                <label className="block text-[11px] font-bold text-slate-600 mb-1">Cliente Vinculado *</label>
-                {scCustomer ? (
-                  <div className="p-2 bg-indigo-50 border border-indigo-200 rounded-xl text-xs font-bold text-indigo-800 flex items-center justify-between">
-                    <span>{scCustomer.name || `${scCustomer.first_name || ''} ${scCustomer.last_name || ''}`.trim()}</span>
-                    <div className="flex items-center gap-2">
-                      {scCustomer.phone && (
-                        <span className="text-[11px] font-normal text-indigo-500">{scCustomer.phone}</span>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => { setScCustomer(null); setScCustQuery(''); setScCustResults([]); setScCustSearchDone(false); }}
-                        className="text-indigo-400 hover:text-indigo-700 cursor-pointer"
-                        title="Cambiar cliente"
-                      >
-                        <X size={14} />
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="relative">
-                    <input
-                      type="text"
-                      value={scCustQuery}
-                      onChange={e => onScCustSearch(e.target.value)}
-                      placeholder="Buscar por nombre, teléfono o email..."
-                      className="w-full p-2 text-xs bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 font-medium"
-                    />
-                    {scCustResults.length > 0 && (
-                      <div className="absolute top-full left-0 right-0 z-50 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-48 overflow-y-auto">
-                        {scCustResults.map((c: any) => (
-                          <button
-                            key={c.id}
-                            type="button"
-                            onClick={() => { setScCustomer(c); setScCustQuery(''); setScCustResults([]); }}
-                            className="w-full text-left px-3 py-2 hover:bg-indigo-50 text-xs border-b border-slate-50 last:border-0 cursor-pointer"
-                          >
-                            <span className="font-bold text-slate-800">{c.first_name} {c.last_name}</span>
-                            <span className="ml-2 text-slate-400">{c.phone || c.email}</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    {scCustSearchDone && scCustResults.length === 0 && scCustQuery && (
-                      <div className="mt-1.5 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-bold text-amber-700">Cliente no encontrado.</span>
-                        <button
-                          type="button"
-                          onClick={() => { setIsModalOpen(false); setScShowNewClient(true); }}
-                          className="shrink-0 bg-amber-500 hover:bg-amber-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
-                        >
-                          <UserPlus size={12} /> Crear Cliente
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
+                <label className="block text-[11px] font-bold text-slate-600 mb-1">Cliente vinculado *</label>
+                <SelectorClienteSC cliente={scCustomer} onCliente={(c) => { setScCustomer(c); if (c) setScError(''); }} />
               </div>
 
               {/* Mismo bloque de Tipo/Modalidad/campos-por-tipo/Asesor/Vencimiento
@@ -884,22 +797,7 @@ export default function AsistenteOmnicanal() {
         </div>
       )}
 
-      {/* MODAL: CLIENTE NUEVO -- mismo componente real (POST /crm/customers)
-          que usa /dashboard/ventas/solicitud. Mutuamente excluyente con el
-          modal de SC (igual patrón que solicitud-client.tsx): se oculta la SC
-          mientras se crea el cliente y se reabre ya con el cliente nuevo. */}
-      {scShowNewClient && (
-        <NewClientModal
-          onSave={c => {
-            const cust = c?.data ?? c;
-            setScCustomer(cust);
-            setScCustQuery(''); setScCustResults([]); setScCustSearchDone(false);
-            setScShowNewClient(false);
-            setIsModalOpen(true);
-          }}
-          onClose={() => { setScShowNewClient(false); setIsModalOpen(true); }}
-        />
-      )}
+      {/* H11: el alta de cliente ya no cierra esta ventana: la abre <SelectorClienteSC> encima (portal, capa 'encima'). */}
 
     </div>
   );
