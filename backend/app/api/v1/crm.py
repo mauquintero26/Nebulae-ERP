@@ -16,8 +16,11 @@ from app.schemas import crm as schemas
 from app.core import cambios_documento, clientes
 from app.core.textos_actividad import nombre_de_usuario
 from sqlalchemy import func
-from sqlalchemy.exc import IntegrityError
-import datetime, time, threading
+from sqlalchemy.exc import DataError, IntegrityError
+import datetime, logging, time, threading
+from decimal import InvalidOperation
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import Column as _Col, Integer as _Int, String as _Str, Text as _Txt
 from sqlalchemy import DateTime as _DT, ForeignKey as _FK
@@ -211,11 +214,18 @@ def create_customer(customer: CustomerCreate, user: User = Depends(require_roles
 def update_customer(customer_id: int, customer: CustomerUpdate, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
     """Edita la ficha (Agenda). H21: el correo se guarda sin espacios y en minusculas ('' -> None: dos fichas con ''
     chocarian con el indice unico); si es de otra ficha -> 409 (antes un 500 por IntegrityError, tambien en una carrera).
+    Correo, telefono, direccion y ciudad tienen los mismos limites que PATCH /ventas/solicitudes/{id}/cliente
+    (clientes.texto_de_limite) y un dato que aun asi no cabe en la base da 422, no 500.
     Si algo cambio, queda en el historial del cliente (perfil 360) en el mismo commit, con el autor de la sesion."""
     db_customer = db.query(Customer).filter(Customer.id == customer_id).with_for_update().first()
     if not db_customer:
         raise HTTPException(status_code=404, detail="Customer not found")
     update_data = customer.model_dump(exclude_unset=True)
+    for campo in ("email", "phone", "address", "city"):
+        valor = update_data.get(campo)
+        excede = clientes.texto_de_limite(campo, valor.strip() if campo == "email" and isinstance(valor, str) else valor)
+        if excede:
+            raise HTTPException(status_code=422, detail=excede)
     if "email" in update_data:
         correo = (update_data["email"] or "").strip().lower() or None
         if correo is not None and correo == (db_customer.email or "").strip().lower():
@@ -240,6 +250,13 @@ def update_customer(customer_id: int, customer: CustomerUpdate, user: User = Dep
         if not clientes.es_correo_repetido(exc):
             raise
         raise HTTPException(status_code=409, detail="Ya existe otro cliente con ese correo.")
+    except DataError as exc:
+        # Un dato que no cabe en su columna (p. ej. documento > 255): sin el SQL ni los datos en el log ni en la respuesta.
+        db.rollback()
+        logger.warning("Dato de la ficha %s que no cabe en la base (%s)", customer_id,
+                       type(getattr(exc, "orig", exc)).__name__)
+        raise HTTPException(status_code=422, detail="Algún dato de la ficha es demasiado largo para guardarlo: acórtalo "
+                                                    "e intenta de nuevo.")
     db.refresh(db_customer)
     return {"status": "success", "data": CustomerResponse.model_validate(db_customer).model_dump()}
 
@@ -1678,6 +1695,27 @@ def _get_or_create_placeholder_brand_category(db: Session):
 
 
 _CODIGO_QUICK_CREATE_MAX = 20  # el codigo automatico es el nombre recortado a 20 caracteres (ix_product_skus_sku es UNICO)
+# Ronda 1 de T5 (punto 2): un 'sku' explicito es texto de hasta 50 caracteres (product_skus.sku no tiene largo en la
+# base ni en el modelo: el tope es nuestro). Los precios caben en Numeric(10, 2): de 0 a 99.999.999.
+_CODIGO_EXPLICITO_MAX = 50
+_PRECIO_MAX = Decimal("99999999")
+_TEXTO_PRECIO_INVALIDO = "El precio debe ser un número entre 0 y 99.999.999."
+
+
+def _precio_quick_create(valor) -> Decimal:
+    """sale_price / cost_price de quick-create: ausente, null o '' -> 0; si no es un numero finito entre 0 y
+    99.999.999 -> 422 (antes llegaba a la base y el 400 devolvia el SQL)."""
+    if valor is None or (isinstance(valor, str) and not valor.strip()):
+        return Decimal(0)
+    if isinstance(valor, bool) or not isinstance(valor, (int, float, str)):
+        raise HTTPException(status_code=422, detail=_TEXTO_PRECIO_INVALIDO)
+    try:
+        precio = Decimal(str(valor).strip())
+    except InvalidOperation:
+        raise HTTPException(status_code=422, detail=_TEXTO_PRECIO_INVALIDO)
+    if not precio.is_finite() or precio < 0 or precio > _PRECIO_MAX:
+        raise HTTPException(status_code=422, detail=_TEXTO_PRECIO_INVALIDO)
+    return precio
 
 
 def _sku_existe(db: Session, codigo: str) -> bool:
@@ -1706,23 +1744,33 @@ def quick_create_product(body: dict, user: User = Depends(require_roles(*ROLE_AD
     U7+U8+H12+H13: si ya hay un producto ACTIVO con ese nombre (sin importar mayusculas ni espacios) devuelve ese (su
     primer SKU, o uno nuevo si no tiene) con creado=False, en vez de duplicarlo. El codigo automatico no choca (BASE,
     BASE-2…); un 'sku' explicito que ya existe -> 409. Responde id (= id del SKU), product_id, product_name, sku,
-    sale_price, display, creado y necesita_revision."""
+    sale_price, display, creado y necesita_revision.
+    Ronda 1 de T5 (punto 2, desviacion del texto del diseño por seguridad): precios y codigo se validan antes (422) y
+    cualquier otro error responde un 400 generico, sin el texto de la excepcion (llevaba el SQL y sus parametros)."""
     nombre = " ".join(str(body.get("name") or "").split())
     if not nombre:
         raise HTTPException(status_code=400, detail="Escribe el nombre del producto.")
-    sku_explicito = str(body.get("sku") or "").strip()
+    sale_price = _precio_quick_create(body.get("sale_price"))
+    cost_price = _precio_quick_create(body.get("cost_price"))
+    sku_explicito = body.get("sku")
+    if sku_explicito is None:
+        sku_explicito = ""
+    if not isinstance(sku_explicito, str) or len(sku_explicito.strip()) > _CODIGO_EXPLICITO_MAX:
+        raise HTTPException(status_code=422, detail=f"El código del producto debe ser un texto de máximo "
+                                                    f"{_CODIGO_EXPLICITO_MAX} caracteres.")
+    sku_explicito = sku_explicito.strip()
     try:
         existente = (db.query(Product)
                      .filter(Product.is_active == True,  # noqa: E712 (columna SQL)
                              func.lower(func.trim(func.regexp_replace(Product.name, r"\s+", " ", "g")))
-                             == nombre.lower())
+                             == func.lower(nombre))
                      .order_by(Product.id.asc()).first())
         base = sku_explicito or nombre[:_CODIGO_QUICK_CREATE_MAX].upper().replace(" ", "-")
         if existente is not None:
             sku = db.query(ProductSKU).filter(ProductSKU.product_id == existente.id).order_by(ProductSKU.id.asc()).first()
             if sku is None:
                 sku = ProductSKU(product_id=existente.id, sku=_codigo_libre(db, base),
-                                 sale_price=body.get("sale_price", 0), cost_price=body.get("cost_price", 0))
+                                 sale_price=sale_price, cost_price=cost_price)
                 db.add(sku); db.commit()
                 db.refresh(existente); db.refresh(sku)
             return {"status": "success", "data": _quick_create_dict(existente, sku, creado=False)}
@@ -1737,8 +1785,7 @@ def quick_create_product(body: dict, user: User = Depends(require_roles(*ROLE_AD
                           base_currency="COP", uom="unidad", type="Fisico",
                           brand_id=brand.id, category_id=category.id, necesita_revision=True)
         db.add(product); db.flush()
-        sku = ProductSKU(product_id=product.id, sku=codigo, sale_price=body.get("sale_price", 0),
-                         cost_price=body.get("cost_price", 0))
+        sku = ProductSKU(product_id=product.id, sku=codigo, sale_price=sale_price, cost_price=cost_price)
         db.add(sku); db.commit()
         db.refresh(product); db.refresh(sku)
         return {"status": "success", "data": _quick_create_dict(product, sku, creado=True)}
@@ -1750,7 +1797,9 @@ def quick_create_product(body: dict, user: User = Depends(require_roles(*ROLE_AD
                                                     "Intenta de nuevo.")
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail=f"No se pudo crear el producto: {e}")
+        # Solo el tipo: el texto de un error de la base trae la sentencia SQL y sus parametros.
+        logger.warning("No se pudo crear el producto por quick-create (%s)", type(e).__name__)
+        raise HTTPException(status_code=400, detail="No se pudo crear el producto. Revisa los datos e intenta de nuevo.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -6,7 +6,7 @@ Pedidos de Venta (VEN), Ordenes Pendientes por Pagar (PXP)
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func, select, case, and_, or_
-from sqlalchemy.exc import DataError, DBAPIError, IntegrityError
+from sqlalchemy.exc import DataError, DBAPIError, IntegrityError, OperationalError
 from typing import Optional, List
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import pydantic
@@ -515,6 +515,20 @@ def _sc_tiene_cot_activa(db: Session, sc_id: int) -> bool:
                                               SalesQuotation.estado != "RECHAZADA").first() is not None
 
 
+def _gate1_reinicia_estado(db: Session, sc: CustomerRequest, old_estado: str) -> bool:
+    """Gate 1 (B1-T4; puerta A de la ronda 1 de T3): si cambian los productos o el cliente de una SC que no cambio de
+    estado por otra via en la misma operacion, vuelve a empezar (Asignada o Nueva) cuando esperaba al cliente
+    (PENDIENTE_CONFIRMACION, aunque tenga una COT creada sin confirmacion) o estaba CONFIRMADA sin COT activa. Predicado
+    unico de update_solicitud y de PATCH /cliente. La consulta de la COT activa solo corre con old_estado CONFIRMADA."""
+    return old_estado == "PENDIENTE_CONFIRMACION" or (old_estado == "CONFIRMADA"
+                                                      and not _sc_tiene_cot_activa(db, sc.id))
+
+
+def _estado_tras_reinicio(sc: CustomerRequest) -> str:
+    """Estado al que vuelve la SC cuando Gate 1 se reinicia: ASIGNADA con asesor, BORRADOR (Nueva) sin el."""
+    return "ASIGNADA" if sc.advisor_user_id else "BORRADOR"
+
+
 # Gate 1: por que la confirmacion del cliente deja de valer. El estado va en «Estado cambiado a {etiqueta}: {motivo}»
 # (renglon ESTADO_CHANGED) y el aviso es el renglon UPDATED cuando el estado no cambia (hay una cotizacion activa).
 # update_solicitud usa los del Bloque 1 (las pruebas buscan 'cambió el cliente'); PATCH /solicitudes/{id}/cliente (H21,
@@ -528,8 +542,10 @@ _AVISO_CAMBIO_DE_CLIENTE = ("Cambió el cliente de la solicitud: la confirmació
                             "para que la confirme.")
 _MOTIVO_CAMBIO_DE_CONTACTO = ("cambió el correo o el teléfono del cliente, así que su confirmación ya no es válida y "
                               "hay que enviarle la solicitud de nuevo")
-_AVISO_CAMBIO_DE_CONTACTO = ("Cambió el correo o el teléfono del cliente: su confirmación ya no vale y su enlace quedó "
-                             "anulado. Para crear otra cotización, envíale la solicitud de nuevo para que la confirme.")
+# Ronda 1 de T5 (punto 6): con la COT activa la SC ya estaba CONFIRMADA y no tenia un enlace vivo que anular.
+_AVISO_CAMBIO_DE_CONTACTO = ("Cambió el correo o el teléfono del cliente: la confirmación de la solicitud ya no vale. "
+                             "La cotización activa sigue igual; si necesitas otra cotización, envíale la solicitud de "
+                             "nuevo para que la confirme.")
 
 
 def _texto_estado_cambiado(etiqueta: str, motivo: str) -> str:
@@ -590,12 +606,10 @@ _ETIQUETAS_CONTACTO = {"customer_phone": "Teléfono", "customer_email": "Correo"
 # campo de un cambio (SC/COT/VEN, la ciudad de cambio_simple o la ficha) -> clave del body.
 _CLAVE_DE_CAMPO_CONTACTO = {**{k: k for k in _CONTACTO_CLIENTE},
                             **{col_cli: k for k, (_, col_cli) in _CONTACTO_CLIENTE.items()}}
-# Limites: los de las columnas customer_email String(150) y customer_phone String(50) de SC/COT/VEN. La direccion, 255
-# y no los 300 de SC/COT/VEN: en la base customers.address es varchar(255) (el modelo no lo declara) y la correccion
-# tambien va a la ficha. La ciudad (solo en la ficha) hasta 100. T6A (validarContacto) copia estos textos.
-CORREO_MAX, TELEFONO_MAX, DIRECCION_MAX, CIUDAD_MAX = 150, 50, 255, 100
-TELEFONO_MIN_DIGITOS = 7
+# Los limites de largo (correo 150, telefono 50, direccion 255, ciudad 100) viven en app/core/clientes.py: los comparte
+# PUT /crm/customers/{id}.
 _CORREO_VALIDO = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+_INTERBLOQUEO = "40P01"  # deadlock_detected de PostgreSQL
 # R6: pedidos que ya no se corrigen (cerrados). DEVUELTO_TOTAL ya paso por entregado y no tiene transiciones.
 _ESTADOS_VEN_CERRADOS_PARA_CONTACTO = ("CANCELADO", "ENTREGADO", "FACTURADO", "DEVUELTO_TOTAL")
 # R18 (ruling de T5): renglon de la Actividad de una COT propagada cuyo enlace pendiente se anulo. La COT no cambia de
@@ -618,21 +632,15 @@ def _normalizar_contacto(body: dict) -> dict:
             raise HTTPException(422, f"El dato «{_ETIQUETAS_CONTACTO[clave]}» debe ser un texto.")
         valor = (valor or "").strip() or None
         if valor is not None:
+            excede = clientes.texto_de_limite(_CONTACTO_CLIENTE[clave][1], valor)  # primero el largo, despues el formato
+            if excede:
+                raise HTTPException(422, excede)
             if clave == "customer_email":
-                if len(valor) > CORREO_MAX:
-                    raise HTTPException(422, f"El correo no puede tener más de {CORREO_MAX} caracteres.")
                 if not _CORREO_VALIDO.fullmatch(valor):
                     raise HTTPException(422, f"El correo «{valor}» no es válido.")
                 valor = valor.lower()
-            elif clave == "customer_phone":
-                if len(valor) > TELEFONO_MAX:
-                    raise HTTPException(422, f"El teléfono no puede tener más de {TELEFONO_MAX} caracteres.")
-                if sum(ch in "0123456789" for ch in valor) < TELEFONO_MIN_DIGITOS:
-                    raise HTTPException(422, f"El teléfono debe tener al menos {TELEFONO_MIN_DIGITOS} dígitos.")
-            elif clave == "customer_address" and len(valor) > DIRECCION_MAX:
-                raise HTTPException(422, f"La dirección es muy larga (máximo {DIRECCION_MAX} caracteres).")
-            elif clave == "customer_city" and len(valor) > CIUDAD_MAX:
-                raise HTTPException(422, f"La ciudad es muy larga (máximo {CIUDAD_MAX} caracteres).")
+            elif clave == "customer_phone" and sum(ch in "0123456789" for ch in valor) < clientes.TELEFONO_MIN_DIGITOS:
+                raise HTTPException(422, f"El teléfono debe tener al menos {clientes.TELEFONO_MIN_DIGITOS} dígitos.")
         nuevos[clave] = valor
     return nuevos
 
@@ -652,10 +660,13 @@ def _titulo_contacto(*listas_de_cambios) -> str:
 
 
 def _docs_abiertos_para_contacto(db: Session, sc: CustomerRequest) -> list:
-    """R6 (respuesta del usuario): [(entidad, doc)] a los que tambien se propaga la correccion: las COT de la SC que no
-    estan RECHAZADAS y los PVEN abiertos (fuera de _ESTADOS_VEN_CERRADOS_PARA_CONTACTO) vinculados por sc_id o por el
-    cot_id de CUALQUIER COT de la SC (como get_solicitud: un PVEN cuya COT se rechazo o se desvinculo conserva el cot_id).
-    Por id ascendente, primero las COT."""
+    """R6 (respuesta del usuario): [(entidad, doc)] abiertos de la SC: las COT que no estan RECHAZADAS y los PVEN
+    abiertos (fuera de _ESTADOS_VEN_CERRADOS_PARA_CONTACTO) vinculados por sc_id o por el cot_id de CUALQUIER COT de la
+    SC (como get_solicitud: un PVEN cuya COT se rechazo o se desvinculo conserva el cot_id). Por id ascendente, primero
+    las COT. La correccion solo llega a los que no son de otro cliente (_es_documento_de_otro_cliente).
+    Sin FOR UPDATE (ronda 1 de T5, punto 3): update_cotizacion bloquea COT -> SC y aqui la SC ya esta bloqueada; el
+    UPDATE del flush toma la fila de todas formas, asi que las decisiones que dependen del estado de la COT no se fian de
+    esta lectura (los enlaces se cuentan y se revocan en la misma transaccion)."""
     cots = db.query(SalesQuotation).filter(SalesQuotation.sc_id == sc.id).order_by(SalesQuotation.id.asc()).all()
     filtro = SaleOrder.sc_id == sc.id
     if cots:
@@ -663,6 +674,13 @@ def _docs_abiertos_para_contacto(db: Session, sc: CustomerRequest) -> list:
     pvens = (db.query(SaleOrder).filter(filtro, SaleOrder.estado.notin_(_ESTADOS_VEN_CERRADOS_PARA_CONTACTO))
              .order_by(SaleOrder.id.asc()).all())
     return [("COT", c) for c in cots if c.estado != "RECHAZADA"] + [("VEN", v) for v in pvens]
+
+
+def _es_documento_de_otro_cliente(doc, sc: CustomerRequest) -> bool:
+    """Ronda 1 de T5 (punto 1, precisa R6): una COT o un PVEN con otra ficha (customer_id distinto del de la SC) cuelga
+    de la SC porque el cliente de la SC o de la COT cambio despues; corregir el contacto de la SC no lo toca. Un
+    documento sin ficha (customer_id None) no es de otro cliente."""
+    return doc.customer_id is not None and doc.customer_id != sc.customer_id
 
 
 def _anular_confirmacion_por_cambio_de_cliente(db: Session, sc: CustomerRequest, old_estado: str,
@@ -678,27 +696,26 @@ def _anular_confirmacion_por_cambio_de_cliente(db: Session, sc: CustomerRequest,
       renglon UPDATED {aviso}.
     - En los dos casos se revoca el enlace de la SC y se limpia gate1. En ASIGNADA o BORRADOR sin marca no hay nada que
       anular (tampoco en una CONFIRMADA sin marca con COT activa: la confirmo el cliente por la COT, T2A).
-    Es la misma condicion que update_solicitud (invalida_confirmacion / anula_por_cliente), que no lo usa: alli la
-    decision va junto con el cambio de productos y del asesor en el mismo PATCH (comparten _sc_tiene_cot_activa y la forma
-    de los textos). No es _confirmacion_vigente_sc: el Bloque 1 tambien anula una marca gate1 heredada fuera de
-    CONFIRMADA. Sin commit (_log y revoke_pending_tokens con commit=False).
-    Devuelve {confirmacion_anulada, estado_cambiado, enlace_anulado}; enlace_anulado = la SC esperaba al cliente
-    (PENDIENTE_CONFIRMACION), asi que el enlace que el tiene ya no sirve."""
-    estado_cambiado = (old_estado == "PENDIENTE_CONFIRMACION"
-                       or (old_estado == "CONFIRMADA" and not _sc_tiene_cot_activa(db, sc.id)))
+    Es el mismo predicado que update_solicitud (_gate1_reinicia_estado y _estado_tras_reinicio, mas la condicion de
+    anula_por_cliente), que no lo usa: alli la decision va junto con el cambio de productos y del asesor en el mismo
+    PATCH. No es _confirmacion_vigente_sc: el Bloque 1 tambien anula una marca gate1 heredada fuera de CONFIRMADA. Sin
+    commit (_log y revoke_pending_tokens con commit=False).
+    Devuelve {confirmacion_anulada, estado_cambiado, enlace_anulado}; enlace_anulado = habia un enlace de la SC que el
+    cliente todavia podia usar (contar_tokens_vigentes antes de revocar; ronda 1 de T5, punto 4)."""
+    estado_cambiado = _gate1_reinicia_estado(db, sc, old_estado)
     if not estado_cambiado and sc.gate1_confirmed_at is None:
         return {"confirmacion_anulada": False, "estado_cambiado": False, "enlace_anulado": False}
     if estado_cambiado:
-        sc.estado = "ASIGNADA" if sc.advisor_user_id else "BORRADOR"
+        sc.estado = _estado_tras_reinicio(sc)
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED", _texto_estado_cambiado(etiqueta_estado("SC", sc.estado), motivo),
              old_estado=old_estado, new_estado=sc.estado, user_name=autor, commit=False)
     else:
         _log(db, "SC", sc.id, sc.numero, "UPDATED", aviso, user_name=autor, commit=False)
-    from app.core.confirmation_tokens import revoke_pending_tokens
+    from app.core.confirmation_tokens import contar_tokens_vigentes, revoke_pending_tokens
+    vigentes = contar_tokens_vigentes(db, "SC", sc.id)
     revoke_pending_tokens(db, "SC", sc.id, commit=False)
     sc.gate1_confirmed_at = None
-    return {"confirmacion_anulada": True, "estado_cambiado": estado_cambiado,
-            "enlace_anulado": old_estado == "PENDIENTE_CONFIRMACION"}
+    return {"confirmacion_anulada": True, "estado_cambiado": estado_cambiado, "enlace_anulado": vigentes > 0}
 
 
 def _mensaje_correo_de_otro_cliente(correo: str, otro: Optional[Customer]) -> str:
@@ -1170,11 +1187,10 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     invalida_confirmacion = (
         (cambian_los_productos or cambia_el_cliente)
         and sc.estado == old_estado
-        and (old_estado == "PENDIENTE_CONFIRMACION"
-             or (old_estado == "CONFIRMADA" and not _sc_tiene_cot_activa(db, sc.id)))
+        and _gate1_reinicia_estado(db, sc, old_estado)
     )
     if invalida_confirmacion:
-        sc.estado = "ASIGNADA" if sc.advisor_user_id else "BORRADOR"
+        sc.estado = _estado_tras_reinicio(sc)
     # CONFIRMADA con una COT activa: el estado no cambia, pero si cambio el cliente la confirmacion (y el enlace) eran del
     # cliente anterior: se anulan igual (abajo se revoca el enlace y queda en la Actividad).
     anula_por_cliente = (cambia_el_cliente and not invalida_confirmacion
@@ -1282,16 +1298,18 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
     """H21: corrige el telefono, el correo, la direccion y la ciudad del cliente desde la SC.
 
     En una sola transaccion (un commit) se corrigen la SC, su ficha de cliente (si esta vinculada; la ciudad solo vive
-    alli) y, por R6, la COT y el PVEN abiertos de esa SC (_docs_abiertos_para_contacto), con un renglon en la Actividad
-    de cada uno y en el historial del cliente (perfil 360). Un correo de otra ficha -> 409 sin escribir nada (tambien si
-    otro cliente lo toma en una carrera: IntegrityError desde el flush). El autor es el usuario de la sesion (R9): se
-    ignoran body.updated_by y body.user_name. El nombre no se corrige aqui (se cambia en la ficha).
+    alli) y, por R6, la COT y el PVEN abiertos de esa SC (_docs_abiertos_para_contacto) que no son de otro cliente
+    (_es_documento_de_otro_cliente: esos no se tocan y se informan), con un renglon en la Actividad de cada uno y en el
+    historial del cliente (perfil 360). Un correo de otra ficha -> 409 sin escribir nada (tambien si otro cliente lo
+    toma en una carrera: IntegrityError desde el flush). El autor es el usuario de la sesion (R9): se ignoran
+    body.updated_by y body.user_name. El nombre no se corrige aqui (se cambia en la ficha).
     R18: si cambia el correo o el telefono de la SC, la misma regla de Gate 1 que update_solicitud para un cambio de
-    cliente (_anular_confirmacion_por_cambio_de_cliente), y una COT propagada en PENDIENTE_CONFIRMACION cuyo correo o
-    telefono cambio pierde su enlace (sin cambiar de estado; una CONFIRMADA recibe los datos y conserva su confirmacion).
-    Cambiar solo la direccion o la ciudad no anula nada.
+    cliente (_anular_confirmacion_por_cambio_de_cliente). En cada COT propagada cuyo correo o telefono cambio (menos una
+    CONFIRMADA, que recibe los datos y conserva su confirmacion) se revocan los enlaces sin cambiar su estado; si alguno
+    seguia vivo, queda en enlaces_anulados y en su Actividad. Cambiar solo la direccion o la ciudad no anula nada.
     Respuesta: {status, data (_sc_dict + customer_city), ficha_actualizada, documentos_actualizados [numeros],
-    confirmacion_anulada, estado_cambiado, enlaces_anulados [numeros de SC/COT], sin_cambios}."""
+    documentos_de_otro_cliente [numeros], confirmacion_anulada, estado_cambiado, enlaces_anulados [numeros de SC/COT],
+    sin_cambios}."""
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
@@ -1319,8 +1337,12 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
     contacto_sc_antes = _cliente_de_la_solicitud(sc)
     foto_cli = cambios_documento.tomar_foto(cliente, "CLIENTE") if cliente is not None else None
     ciudad_antes = cliente.city if cliente is not None else None
-    docs = [(entidad, doc, cambios_documento.tomar_foto(doc, entidad), _cliente_de_la_solicitud(doc))
-            for entidad, doc in _docs_abiertos_para_contacto(db, sc)]
+    docs, docs_de_otro_cliente = [], []
+    for entidad, doc in _docs_abiertos_para_contacto(db, sc):
+        if _es_documento_de_otro_cliente(doc, sc):
+            docs_de_otro_cliente.append(doc.numero)
+        else:
+            docs.append((entidad, doc, cambios_documento.tomar_foto(doc, entidad), _cliente_de_la_solicitud(doc)))
     origen = {"tipo": "SC", "id": sc.id, "numero": sc.numero}
     try:
         # Desde aqui hasta el commit: el UPDATE de la ficha sale en el flush, donde salta el indice unico del correo.
@@ -1352,8 +1374,8 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
             data = _sc_dict(sc)
             data["customer_city"] = _ciudad_del_cliente(sc)
             return {"status": "success", "data": data, "ficha_actualizada": False, "documentos_actualizados": [],
-                    "confirmacion_anulada": False, "estado_cambiado": False, "enlaces_anulados": [],
-                    "sin_cambios": True}
+                    "documentos_de_otro_cliente": docs_de_otro_cliente, "confirmacion_anulada": False,
+                    "estado_cambiado": False, "enlaces_anulados": [], "sin_cambios": True}
 
         numeros_docs = [doc.numero for _, doc, _, _ in docs_cambiados]
         lugares = (["la ficha del cliente"] if cambios_cli else []) + numeros_docs
@@ -1376,14 +1398,19 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
         if cambios_cli:
             clientes.log_cliente(db, cliente, f"Datos de contacto corregidos desde la solicitud {sc.numero}: "
                                               f"{_titulo_contacto(cambios_cli)}", cambios_cli, origen, autor)
-        from app.core.confirmation_tokens import revoke_pending_tokens
+        from app.core.confirmation_tokens import contar_tokens_vigentes, revoke_pending_tokens
         for entidad, doc, cambios, contacto_antes in docs_cambiados:
             titulo_doc = _titulo_contacto(cambios)
-            if (entidad == "COT" and doc.estado == "PENDIENTE_CONFIRMACION"
+            # El estado de la COT se leyo sin bloqueo (ver _docs_abiertos_para_contacto): se revoca siempre que cambio su
+            # correo o telefono, salvo CONFIRMADA (R18: el cliente ya confirmo precios), y solo se informa un enlace que
+            # el cliente todavia podia usar (contado antes de revocar, punto 4 de la ronda 1).
+            if (entidad == "COT" and doc.estado != "CONFIRMADA"
                     and _cliente_de_la_solicitud(doc) != contacto_antes):
+                vigentes = contar_tokens_vigentes(db, "COT", doc.id)
                 revoke_pending_tokens(db, "COT", doc.id, commit=False)
-                cambios = cambios + [dict(_ENLACE_COT_ANULADO)]
-                enlaces_anulados.append(doc.numero)
+                if vigentes:
+                    cambios = cambios + [dict(_ENLACE_COT_ANULADO)]
+                    enlaces_anulados.append(doc.numero)
             _log(db, entidad, doc.id, doc.numero, "UPDATED",
                  f"Datos del cliente corregidos desde la solicitud {sc.numero}: {titulo_doc}", user_name=autor,
                  extra_data={"cambios": cambios, "origen": origen}, commit=False)
@@ -1406,9 +1433,19 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
         logger.warning("Dato de contacto que no cabe en la base al corregir la solicitud %s (%s)", sc_id,
                        type(getattr(exc, "orig", exc)).__name__)
         raise HTTPException(422, "Algún dato es demasiado largo para guardarlo: acórtalo e intenta de nuevo.")
+    except OperationalError as exc:
+        # La SC se bloquea antes que sus documentos y update_cotizacion bloquea la COT antes que la SC: si chocan,
+        # PostgreSQL aborta una de las dos (40P01). Aqui se revierte todo y se pide repetir en vez de un 500.
+        db.rollback()
+        if getattr(getattr(exc, "orig", None), "pgcode", None) != _INTERBLOQUEO:
+            raise
+        logger.warning("Interbloqueo al corregir los datos del cliente de la solicitud %s", sc_id)
+        raise HTTPException(409, "Otra operación estaba cambiando esta solicitud o su cotización al mismo tiempo. "
+                                 "Intenta de nuevo.")
     return {"status": "success", "data": data, "ficha_actualizada": bool(cambios_cli),
-            "documentos_actualizados": numeros_docs, "confirmacion_anulada": gate1["confirmacion_anulada"],
-            "estado_cambiado": gate1["estado_cambiado"], "enlaces_anulados": enlaces_anulados, "sin_cambios": False}
+            "documentos_actualizados": numeros_docs, "documentos_de_otro_cliente": docs_de_otro_cliente,
+            "confirmacion_anulada": gate1["confirmacion_anulada"], "estado_cambiado": gate1["estado_cambiado"],
+            "enlaces_anulados": enlaces_anulados, "sin_cambios": False}
 
 
 @router.post("/solicitudes/{sc_id}/enviar-confirmacion")

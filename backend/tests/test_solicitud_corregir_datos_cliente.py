@@ -1,11 +1,13 @@
 """H21 (Bloque 2, T5): corregir los datos de contacto del cliente desde la solicitud.
 
 PATCH /api/v1/ventas/solicitudes/{id}/cliente corrige telefono, correo, direccion y ciudad en la SC, en la ficha del
-cliente (si la SC esta vinculada) y en la COT y el PVEN abiertos de esa SC (R6), con un renglon en la Actividad de cada
-uno y en el historial del cliente (perfil 360). Un correo de otro cliente -> 409 sin tocar nada. El autor sale de la
-sesion (R9). R18: si cambia el correo o el telefono de la SC se aplica la misma regla de Gate 1 que update_solicitud
-(cambio de cliente), y el enlace de una COT propagada en PENDIENTE_CONFIRMACION se anula. Todo en un solo commit.
-Tambien: PUT /crm/customers/{id} (409 por correo repetido, historial) y lo que ve cada rol del historial en el 360.
+cliente (si la SC esta vinculada) y en la COT y el PVEN abiertos de esa SC (R6) que no son de otro cliente (ronda 1:
+esos no se tocan y se informan), con un renglon en la Actividad de cada uno y en el historial del cliente (perfil 360).
+Un correo de otro cliente -> 409 sin tocar nada. El autor sale de la sesion (R9). R18: si cambia el correo o el
+telefono de la SC se aplica la misma regla de Gate 1 que update_solicitud (cambio de cliente), y el enlace vivo de una
+COT propagada se anula (enlaces_anulados solo cuenta los que el cliente todavia podia usar). Todo en un solo commit.
+Tambien: PUT /crm/customers/{id} (409 por correo repetido, limites, historial) y lo que ve cada rol del historial en el
+360.
 
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_solicitud_corregir_datos_cliente
 """
@@ -21,8 +23,11 @@ MOTIVO_CONTACTO = ("cambió el correo o el teléfono del cliente, así que su co
 ENLACE_COT_ANULADO = {"etiqueta": "Enlace de confirmación",
                       "despues": "Se anuló el enlace enviado al dato anterior: pasa la cotización a Borrador y envíala "
                                  "de nuevo"}
-CLAVES_RESPUESTA = {"status", "data", "ficha_actualizada", "documentos_actualizados", "confirmacion_anulada",
-                    "estado_cambiado", "enlaces_anulados", "sin_cambios"}
+CLAVES_RESPUESTA = {"status", "data", "ficha_actualizada", "documentos_actualizados", "documentos_de_otro_cliente",
+                    "confirmacion_anulada", "estado_cambiado", "enlaces_anulados", "sin_cambios"}
+AVISO_CONTACTO_CON_COT = ("Cambió el correo o el teléfono del cliente: la confirmación de la solicitud ya no vale. La "
+                          "cotización activa sigue igual; si necesitas otra cotización, envíale la solicitud de nuevo "
+                          "para que la confirme.")
 
 
 def auth(token):
@@ -47,13 +52,14 @@ def _sc(db, numero, user_admin, cliente=None, **campos):
     from app.models.erp_documents import CustomerRequest
     campos.setdefault("estado", "ASIGNADA")
     campos.setdefault("productos", [LINEA])
+    campos.setdefault("advisor_user_id", user_admin.id)
+    campos.setdefault("advisor_name", user_admin.email if campos["advisor_user_id"] else None)
     if cliente is not None:
         campos.setdefault("customer_id", cliente.id)
         campos.setdefault("customer_phone", cliente.phone)
         campos.setdefault("customer_email", cliente.email)
         campos.setdefault("customer_address", cliente.address)
-    sc = CustomerRequest(numero=numero, customer_name="Ana Prueba", advisor_user_id=user_admin.id,
-                         advisor_name=user_admin.email, **campos)
+    sc = CustomerRequest(numero=numero, customer_name="Ana Prueba", **campos)
     db.add(sc); db.commit(); db.refresh(sc)
     return sc
 
@@ -227,12 +233,16 @@ def test_correo_y_telefono_invalidos_dan_422(app_client, db, admin_token, user_a
         resp = _patch(app_client, admin_token, sc.id, **body)
         assert resp.status_code == 422, (body, resp.text)
         assert resp.json()["detail"] == texto, body
-    # En el limite exacto si se acepta, y borrar un dato ('') es valido.
+    # En el limite exacto si se acepta, y borrar un dato ('') es valido. El correo lleva uuid (customers.email es unico
+    # y erp_test no se trunca).
+    u = _u()
+    correo_150 = u + "b" * (139 - len(u)) + "@prueba.com"
+    assert len(correo_150) == 150
     resp = _patch(app_client, admin_token, sc.id, customer_address="x" * 255, customer_city="y" * 100,
-                  customer_phone="3" * 50, customer_email="b" * 139 + "@prueba.com")
+                  customer_phone="3" * 50, customer_email=correo_150)
     assert resp.status_code == 200, resp.text
     db.expire_all()
-    assert len(cli.address) == 255 and len(sc.customer_email) == 150
+    assert len(cli.address) == 255 and sc.customer_email == correo_150 and cli.email == correo_150
     resp = _patch(app_client, admin_token, sc.id, customer_address="  ")
     assert resp.status_code == 200, resp.text
     db.expire_all()
@@ -315,16 +325,14 @@ def test_corregir_el_telefono_de_una_sc_confirmada_con_cot_activa_anula_gate1_si
     sc = _sc(db, "SC-CDC013", user_admin, estado="CONFIRMADA", customer_phone="3000000000",
              gate1_confirmed_at=datetime.datetime.utcnow())
     cot = _cot(db, "COT-CDC013", sc)
-    viejo = create_confirmation_token(db, "SC", sc.id)  # un enlace que hubiera quedado vivo
 
     resp = _patch(app_client, admin_token, sc.id, customer_phone="3109998877")
     assert resp.status_code == 200, resp.text
     cuerpo = resp.json()
     assert cuerpo["confirmacion_anulada"] is True and cuerpo["estado_cambiado"] is False
-    assert cuerpo["enlaces_anulados"] == []  # la SC no estaba esperando al cliente
+    assert cuerpo["enlaces_anulados"] == []  # caso tipico: la SC ya confirmada no tenia un enlace vivo
     assert cuerpo["data"]["estado"] == "CONFIRMADA" and cuerpo["data"]["confirmacion_vigente"] is False
     assert cuerpo["documentos_actualizados"] == [cot.numero]
-    assert _token_usado(db, viejo)
     db.expire_all()
     assert sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is None
     assert cot.estado == "BORRADOR" and cot.customer_phone == "3109998877"
@@ -332,9 +340,17 @@ def test_corregir_el_telefono_de_una_sc_confirmada_con_cot_activa_anula_gate1_si
     assert [l.action for l in logs] == ["UPDATED", "UPDATED"]
     assert logs[0].description.startswith("Datos del cliente corregidos: Teléfono. También se corrigieron en "
                                           f"{cot.numero}.")
-    assert logs[1].description == ("Cambió el correo o el teléfono del cliente: su confirmación ya no vale y su "
-                                   "enlace quedó anulado. Para crear otra cotización, envíale la solicitud de nuevo "
-                                   "para que la confirme.")
+    assert logs[1].description == AVISO_CONTACTO_CON_COT
+
+    # Si quedaba un enlace vivo de la SC, se revoca y si se informa (punto 4 de la ronda 1: enlaces_anulados exacto).
+    sc2 = _sc(db, "SC-CDC132", user_admin, estado="CONFIRMADA", customer_phone="3000000000",
+              gate1_confirmed_at=datetime.datetime.utcnow())
+    _cot(db, "COT-CDC132", sc2)
+    viejo = create_confirmation_token(db, "SC", sc2.id)
+    resp = _patch(app_client, admin_token, sc2.id, customer_phone="3109998877")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["enlaces_anulados"] == [sc2.numero] and resp.json()["estado_cambiado"] is False
+    assert _token_usado(db, viejo)
 
 
 def test_corregir_el_telefono_de_una_sc_confirmada_por_su_cotizacion_no_anula_nada(
@@ -520,16 +536,24 @@ def test_el_historial_del_cliente_muestra_la_correccion(app_client, db, admin_to
 
 def test_bodega_y_compras_ven_la_correccion_sin_los_datos(app_client, db, admin_token, user_admin, bodega_token,
                                                           compras_token):
-    cli = _cliente(db, phone="3000000000", email=f"ana-{_u()}@test.com", address="Calle 1")
+    u = _u()
+    cli = _cliente(db, phone="3000000000", email=f"ana.vieja-{u}@test.com", address="Calle 1")
     sc = _sc(db, "SC-CDC111", user_admin, cli)
-    assert _patch(app_client, admin_token, sc.id, customer_phone="3001112233",
-                  customer_address="Calle 2").status_code == 200
+    assert _patch(app_client, admin_token, sc.id, customer_phone="3001112233", customer_address="Calle 2",
+                  customer_email=f"ana.nueva-{u}@test.com").status_code == 200
+    # Y una edicion de la ficha desde la Agenda (PUT /crm/customers), tambien con el antes y el despues.
+    assert app_client.put(f"/api/v1/crm/customers/{cli.id}", json={"phone": "3004445566", "address": "Calle 3"},
+                          headers=auth(admin_token)).status_code == 200
+    datos = ("3000000000", "3001112233", "3004445566", "Calle 1", "Calle 2", "Calle 3", f"ana.vieja-{u}",
+             f"ana.nueva-{u}")
     for token in (bodega_token, compras_token):
         perfil, items = _items_customer_update(app_client, token, cli.id)
         assert perfil["phone"] is None and perfil["email"] is None  # la proyeccion por rol de siempre
-        assert len(items) == 1 and items[0]["cambios"] == []
-        assert sc.numero in items[0]["description"] and items[0]["user_name"]
-        assert "3001112233" not in str(perfil["timeline"]) and "3000000000" not in str(perfil["timeline"])
+        assert len(items) == 2 and all(i["cambios"] == [] and i["user_name"] for i in items)
+        assert any(sc.numero in i["description"] for i in items)
+        assert any(i["description"] == "Ficha del cliente actualizada: Teléfono, Dirección" for i in items)
+        timeline = str(perfil["timeline"])
+        assert not [d for d in datos if d in timeline]
 
 
 def test_editar_la_ficha_con_correo_repetido_da_409_y_registra_actividad(app_client, db, admin_token, user_admin):
@@ -596,10 +620,11 @@ def test_el_correo_tomado_en_una_carrera_da_409_sin_guardar_nada(app_client, db,
 
 def test_un_dato_que_no_cabe_en_la_base_da_422_sin_guardar_nada(app_client, db, admin_token, user_admin,
                                                                 monkeypatch):
-    """Red de seguridad (DataError): con el limite de 300 de la SC, la ficha (varchar(255)) no lo aguanta. El aviso del
-    servidor no lleva los datos del cliente."""
+    """Red de seguridad (DataError): si el limite del telefono pasara el largo de la columna (customer_phone String(50)),
+    la base no lo aguanta. El aviso del servidor no lleva los datos del cliente."""
     import logging
     import app.api.v1.erp_ventas as m_ventas
+    from app.core import clientes
 
     class _Captura(logging.Handler):
         def __init__(self):
@@ -612,20 +637,203 @@ def test_un_dato_que_no_cabe_en_la_base_da_422_sin_guardar_nada(app_client, db, 
     captura = _Captura()
     m_ventas.logger.addHandler(captura)
     monkeypatch.setattr(m_ventas.logger, "propagate", False)
-    monkeypatch.setattr(m_ventas, "DIRECCION_MAX", 300)
+    monkeypatch.setattr(clientes, "TELEFONO_MAX", 60)
     cli = _cliente(db, phone="3000000000", email=f"ana-{_u()}@test.com", address="Calle 1")
     sc = _sc(db, "SC-CDC021", user_admin, cli)
+    telefono = "3001112233" + "4" * 45  # 55 caracteres
     try:
-        resp = _patch(app_client, admin_token, sc.id, customer_address="x" * 300, customer_phone="3001112233")
+        resp = _patch(app_client, admin_token, sc.id, customer_address="Calle 2", customer_phone=telefono)
     finally:
         m_ventas.logger.removeHandler(captura)
     assert resp.status_code == 422, resp.text
     assert resp.json()["detail"] == "Algún dato es demasiado largo para guardarlo: acórtalo e intenta de nuevo."
     assert len(captura.mensajes) == 1 and "StringDataRightTruncation" in captura.mensajes[0]
-    assert "xxxx" not in captura.mensajes[0] and "3001112233" not in captura.mensajes[0]
+    assert "3001112233" not in captura.mensajes[0] and "Calle 2" not in captura.mensajes[0]
     db.expire_all()
-    assert (sc.customer_address, sc.customer_phone, cli.address) == ("Calle 1", "3000000000", "Calle 1")
+    assert (sc.customer_address, sc.customer_phone, cli.address, cli.phone) == ("Calle 1", "3000000000", "Calle 1",
+                                                                                "3000000000")
     assert _logs(db, "SC", sc.id) == []
+
+
+# --- Ronda 1 de T5: documentos de otro cliente, enlaces exactos, rama R18 sin COT, bordes, limites de la ficha ----
+
+def test_los_documentos_de_otro_cliente_no_se_tocan(app_client, db, admin_token, user_admin):
+    """El cliente de la SC cambio de A a B (Bloque 1 lo permite con una COT activa): la COT de A sigue colgando de la SC
+    con los datos de A. Corregir el contacto de B no le llega ni le anula el enlace; se informa."""
+    from app.core.confirmation_tokens import create_confirmation_token
+    u = _u()
+    cli_a = _cliente(db, first_name="Alba", phone="3000000000", email=f"alba-{u}@test.com")
+    cli_b = _cliente(db, first_name="Beto", phone="3111111111", email=f"beto-{u}@test.com")
+    sc = _sc(db, "SC-CDC022", user_admin, cli_b, estado="CONFIRMADA")
+    cot_a = _cot(db, "COT-CDC022", sc, customer_id=cli_a.id, customer_phone=cli_a.phone,
+                 customer_email=cli_a.email, estado="PENDIENTE_CONFIRMACION")
+    token_a = create_confirmation_token(db, "COT", cot_a.id)
+    pven_a = _pven(db, "PVEN-CDC022", "PENDIENTE_COMPRA", sc=sc, telefono=cli_a.phone)
+    pven_a.customer_id = cli_a.id
+    db.commit()
+
+    resp = _patch(app_client, admin_token, sc.id, customer_phone="3112223344", customer_email=f"beto2-{u}@test.com")
+    assert resp.status_code == 200, resp.text
+    cuerpo = resp.json()
+    assert set(cuerpo) == CLAVES_RESPUESTA
+    assert cuerpo["documentos_de_otro_cliente"] == [cot_a.numero, pven_a.numero]
+    assert cuerpo["documentos_actualizados"] == [] and cuerpo["enlaces_anulados"] == []
+    assert not _token_usado(db, token_a)
+    db.expire_all()
+    assert (cot_a.customer_phone, cot_a.customer_email, cot_a.estado) == (cli_a.phone, cli_a.email,
+                                                                          "PENDIENTE_CONFIRMACION")
+    assert pven_a.customer_phone == cli_a.phone
+    assert _logs(db, "COT", cot_a.id) == [] and _logs(db, "VEN", pven_a.id) == []
+    assert (sc.customer_phone, cli_b.phone, cli_a.phone) == ("3112223344", "3112223344", "3000000000")
+    log = _logs(db, "SC", sc.id, "UPDATED")[-1]
+    assert log.description == ("Datos del cliente corregidos: Teléfono, Correo. También se corrigieron en la ficha del "
+                               "cliente.")
+    # Tambien en la respuesta sin cambios.
+    resp = _patch(app_client, admin_token, sc.id, customer_phone="3112223344")
+    assert resp.json()["sin_cambios"] is True
+    assert resp.json()["documentos_de_otro_cliente"] == [cot_a.numero, pven_a.numero]
+
+
+def test_dos_correcciones_seguidas_no_repiten_el_enlace_anulado(app_client, db, admin_token, user_admin):
+    from app.core.confirmation_tokens import create_confirmation_token
+    u = _u()
+    sc = _sc(db, "SC-CDC023", user_admin, estado="CONFIRMADA", customer_email=f"mal-{u}@test.com",
+             customer_phone="3000000000")
+    cot = _cot(db, "COT-CDC023", sc, estado="PENDIENTE_CONFIRMACION")
+    token = create_confirmation_token(db, "COT", cot.id)
+
+    primera = _patch(app_client, admin_token, sc.id, customer_email=f"bien-{u}@test.com")
+    assert primera.status_code == 200, primera.text
+    assert primera.json()["enlaces_anulados"] == [cot.numero] and _token_usado(db, token)
+    segunda = _patch(app_client, admin_token, sc.id, customer_phone="3001112233")
+    assert segunda.status_code == 200, segunda.text
+    assert segunda.json()["enlaces_anulados"] == []  # ya no habia un enlace vivo
+    assert segunda.json()["documentos_actualizados"] == [cot.numero]
+    renglones = _logs(db, "COT", cot.id, "UPDATED")
+    assert len(renglones) == 2
+    assert [ENLACE_COT_ANULADO in r.extra_data["cambios"] for r in renglones] == [True, False]
+
+
+def test_sc_confirmada_sin_cotizacion_activa_vuelve_a_asignada_o_a_nueva(app_client, db, admin_token, user_admin):
+    """Rama R18 de update_solicitud: CONFIRMADA con la marca y sin COT activa (una RECHAZADA no cuenta) vuelve a
+    empezar: ASIGNADA con asesor, BORRADOR (Nueva) sin el."""
+    from app.core.confirmation_tokens import create_confirmation_token
+    from app.core.textos_actividad import etiqueta_estado
+    sc = _sc(db, "SC-CDC024", user_admin, estado="CONFIRMADA", customer_phone="3000000000",
+             gate1_confirmed_at=datetime.datetime.utcnow())
+    _cot(db, "COT-CDC024", sc, estado="RECHAZADA")
+    token = create_confirmation_token(db, "SC", sc.id)
+    resp = _patch(app_client, admin_token, sc.id, customer_phone="3001112233")
+    assert resp.status_code == 200, resp.text
+    cuerpo = resp.json()
+    assert (cuerpo["confirmacion_anulada"], cuerpo["estado_cambiado"], cuerpo["enlaces_anulados"]) == (
+        True, True, [sc.numero])
+    assert _token_usado(db, token)
+    db.expire_all()
+    assert sc.estado == "ASIGNADA" and sc.gate1_confirmed_at is None
+    cambio = _logs(db, "SC", sc.id, "ESTADO_CHANGED")[-1]
+    assert (cambio.old_estado, cambio.new_estado) == ("CONFIRMADA", "ASIGNADA")
+    assert cambio.description == f"Estado cambiado a {etiqueta_estado('SC', 'ASIGNADA')}: {MOTIVO_CONTACTO}"
+
+    sin_asesor = _sc(db, "SC-CDC025", user_admin, estado="CONFIRMADA", customer_phone="3000000000",
+                     advisor_user_id=None, gate1_confirmed_at=datetime.datetime.utcnow())
+    resp = _patch(app_client, admin_token, sin_asesor.id, customer_phone="3001112233")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["estado_cambiado"] is True and resp.json()["enlaces_anulados"] == []
+    db.expire_all()
+    assert sin_asesor.estado == "BORRADOR" and sin_asesor.gate1_confirmed_at is None
+    assert _logs(db, "SC", sin_asesor.id, "ESTADO_CHANGED")[-1].description == (
+        f"Estado cambiado a {etiqueta_estado('SC', 'BORRADOR')}: {MOTIVO_CONTACTO}")
+
+
+def test_la_cotizacion_pendiente_que_ya_tenia_el_dato_conserva_su_enlace(app_client, db, admin_token, user_admin):
+    from app.core.confirmation_tokens import create_confirmation_token
+    u = _u()
+    sc = _sc(db, "SC-CDC026", user_admin, customer_email=f"mal-{u}@test.com")
+    cot = _cot(db, "COT-CDC026", sc, customer_email=f"bien-{u}@test.com", estado="PENDIENTE_CONFIRMACION")
+    token = create_confirmation_token(db, "COT", cot.id)
+    resp = _patch(app_client, admin_token, sc.id, customer_email=f"bien-{u}@test.com")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["documentos_actualizados"] == [] and resp.json()["enlaces_anulados"] == []
+    assert not _token_usado(db, token)
+    assert _logs(db, "COT", cot.id) == []
+
+
+def test_cambiar_solo_mayusculas_o_espacios_del_correo_no_anula_la_confirmacion(app_client, db, admin_token,
+                                                                                user_admin):
+    from app.core.confirmation_tokens import create_confirmation_token
+    u = _u()
+    sc = _sc(db, "SC-CDC027", user_admin, estado="PENDIENTE_CONFIRMACION", customer_email=f"Ana.{u}@Test.com")
+    token = create_confirmation_token(db, "SC", sc.id)
+    resp = _patch(app_client, admin_token, sc.id, customer_email=f"  ana.{u}@test.com ")
+    assert resp.status_code == 200, resp.text
+    cuerpo = resp.json()
+    assert cuerpo["sin_cambios"] is False  # se guardo en minusculas (y queda en la Actividad)
+    assert (cuerpo["confirmacion_anulada"], cuerpo["estado_cambiado"], cuerpo["enlaces_anulados"]) == (
+        False, False, [])
+    assert not _token_usado(db, token)
+    db.expire_all()
+    assert sc.estado == "PENDIENTE_CONFIRMACION" and sc.customer_email == f"ana.{u}@test.com"
+    assert [l.action for l in _logs(db, "SC", sc.id)] == ["UPDATED"]
+
+
+def test_borrar_el_correo_con_el_enlace_pendiente_lo_anula(app_client, db, admin_token, user_admin):
+    from app.core.confirmation_tokens import create_confirmation_token
+    sc = _sc(db, "SC-CDC028", user_admin, estado="PENDIENTE_CONFIRMACION", customer_email=f"ana-{_u()}@test.com",
+             customer_phone="3000000000")
+    token = create_confirmation_token(db, "SC", sc.id)
+    resp = _patch(app_client, admin_token, sc.id, customer_email="")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["estado_cambiado"] is True and resp.json()["enlaces_anulados"] == [sc.numero]
+    assert _token_usado(db, token)
+    db.expire_all()
+    assert sc.estado == "ASIGNADA" and sc.customer_email is None
+
+
+def test_editar_la_ficha_respeta_los_limites_y_no_devuelve_500(app_client, db, admin_token, user_admin, monkeypatch):
+    import app.api.v1.crm as m_crm
+    monkeypatch.setattr(m_crm.logger, "disabled", True)
+    cli = _cliente(db, phone="3000000000", email=f"ana-{_u()}@test.com")
+    casos = [
+        ({"phone": "3" * 51}, "El teléfono no puede tener más de 50 caracteres."),
+        ({"email": "a" * 140 + "@prueba.com"}, "El correo no puede tener más de 150 caracteres."),
+        ({"address": "x" * 256}, "La dirección es muy larga (máximo 255 caracteres)."),
+        ({"city": "x" * 101}, "La ciudad es muy larga (máximo 100 caracteres)."),
+        # customers.document es varchar(255) en la base: el DataError responde 422 sin el SQL.
+        ({"document": "9" * 300}, "Algún dato de la ficha es demasiado largo para guardarlo: acórtalo e intenta de "
+                                  "nuevo."),
+    ]
+    for body, texto in casos:
+        resp = app_client.put(f"/api/v1/crm/customers/{cli.id}", json=body, headers=auth(admin_token))
+        assert resp.status_code == 422, (body, resp.text)
+        assert resp.json()["detail"] == texto, body
+    db.expire_all()
+    assert cli.phone == "3000000000" and cli.document is None and _logs(db, "CLIENTE", cli.id) == []
+
+
+def test_un_interbloqueo_da_409_sin_guardar_nada(app_client, db, admin_token, user_admin, monkeypatch):
+    """La SC se bloquea antes que sus documentos y update_cotizacion bloquea la COT antes que la SC: si PostgreSQL
+    aborta esta transaccion por un interbloqueo (40P01), se revierte todo y se responde 409, no 500."""
+    import app.api.v1.erp_ventas as m_ventas
+    from sqlalchemy.exc import OperationalError
+    from app.core import clientes
+
+    class _Interbloqueo(Exception):
+        pgcode = "40P01"
+
+    def _falla(*args, **kwargs):
+        raise OperationalError("UPDATE sales_quotations SET ...", {}, _Interbloqueo("deadlock detected"))
+
+    monkeypatch.setattr(m_ventas.logger, "disabled", True)
+    monkeypatch.setattr(clientes, "log_cliente", _falla)
+    cli = _cliente(db, phone="3000000000", email=f"ana-{_u()}@test.com")
+    sc = _sc(db, "SC-CDC029", user_admin, cli)
+    resp = _patch(app_client, admin_token, sc.id, customer_phone="3001112233")
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == ("Otra operación estaba cambiando esta solicitud o su cotización al mismo tiempo. "
+                                     "Intenta de nuevo.")
+    db.expire_all()
+    assert sc.customer_phone == "3000000000" and cli.phone == "3000000000" and _logs(db, "SC", sc.id) == []
 
 
 # --- Ruling 1 (T5): fija el comportamiento del Bloque 1 en update_solicitud con productos y cliente a la vez -------

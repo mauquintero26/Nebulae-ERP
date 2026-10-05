@@ -103,3 +103,77 @@ class TestProductsQuickCreate:
             r = app_client.post("/api/v1/crm/products/quick-create", json=body, headers=_headers(admin_token))
             assert r.status_code == 400, (body, r.text)
             assert r.json()["detail"] == "Escribe el nombre del producto.", body
+
+    # --- Ronda 1 de T5 (punto 2): sin SQL en la respuesta; precios y codigo validados antes -------------------------
+
+    def test_quick_create_valida_precios_y_codigo_antes_de_tocar_la_base(self, app_client, admin_token, db):
+        from app.models.catalog import Product
+        u = uuid.uuid4().hex[:6]
+        casos = [
+            ({"sale_price": "abc"}, "El precio debe ser un número entre 0 y 99.999.999."),
+            ({"sale_price": 10 ** 10}, "El precio debe ser un número entre 0 y 99.999.999."),
+            ({"sale_price": -1}, "El precio debe ser un número entre 0 y 99.999.999."),
+            ({"cost_price": "x"}, "El precio debe ser un número entre 0 y 99.999.999."),
+            ({"sale_price": True}, "El precio debe ser un número entre 0 y 99.999.999."),
+            ({"sku": "Q" * 51}, "El código del producto debe ser un texto de máximo 50 caracteres."),
+            ({"sku": 123}, "El código del producto debe ser un texto de máximo 50 caracteres."),
+        ]
+        for extra, texto in casos:
+            r = app_client.post("/api/v1/crm/products/quick-create", json={"name": f"Producto Precio {u}", **extra},
+                                headers=_headers(admin_token))
+            assert r.status_code == 422, (extra, r.text)
+            assert r.json()["detail"] == texto, extra
+        assert db.query(Product).filter(Product.name == f"Producto Precio {u}").count() == 0
+        # En el limite si se acepta (el codigo lleva uuid: ix_product_skus_sku es unico y erp_test no se trunca).
+        codigo_50 = u + "Q" * (50 - len(u))
+        r = app_client.post("/api/v1/crm/products/quick-create",
+                            json={"name": f"Producto Precio {u}", "sale_price": 99999999, "cost_price": "0",
+                                  "sku": f" {codigo_50} "}, headers=_headers(admin_token))
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["sale_price"] == 99999999 and r.json()["data"]["sku"] == codigo_50
+
+    def test_quick_create_un_error_inesperado_no_devuelve_el_sql(self, app_client, admin_token, monkeypatch):
+        import app.api.v1.crm as m_crm
+        from sqlalchemy.exc import DataError
+
+        def _falla(db):
+            raise DataError("INSERT INTO products (name) VALUES (%(name)s)", {"name": "secreto"},
+                            Exception("psycopg2.errors.NumericValueOutOfRange: SQL secreto"))
+
+        monkeypatch.setattr(m_crm.logger, "disabled", True)
+        monkeypatch.setattr(m_crm, "_get_or_create_placeholder_brand_category", _falla)
+        r = app_client.post("/api/v1/crm/products/quick-create", json={"name": f"Producto Falla {uuid.uuid4().hex[:6]}"},
+                            headers=_headers(admin_token))
+        assert r.status_code == 400, r.text
+        assert r.json()["detail"] == "No se pudo crear el producto. Revisa los datos e intenta de nuevo."
+        for prohibido in ("INSERT", "SQL", "psycopg2", "secreto"):
+            assert prohibido not in r.text
+
+    def test_quick_create_una_carrera_por_el_codigo_responde_409(self, app_client, admin_token, monkeypatch):
+        import app.api.v1.crm as m_crm
+        from sqlalchemy.exc import IntegrityError
+
+        def _carrera(db):
+            raise IntegrityError("INSERT INTO product_skus ...", {}, Exception("duplicate key ix_product_skus_sku"))
+
+        monkeypatch.setattr(m_crm, "_get_or_create_placeholder_brand_category", _carrera)
+        r = app_client.post("/api/v1/crm/products/quick-create", json={"name": f"Producto Carrera {uuid.uuid4().hex[:6]}"},
+                            headers=_headers(admin_token))
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"] == "Otro producto con el mismo código se creó al mismo tiempo. Intenta de nuevo."
+        assert "INSERT" not in r.text
+
+    def test_quick_create_un_producto_existente_sin_sku_recibe_uno(self, app_client, admin_token, db, brand, category):
+        from app.models.catalog import Product, ProductSKU
+        u = uuid.uuid4().hex[:6]
+        p = Product(brand_id=brand.id, category_id=category.id, name=f"Sin Codigo {u}", type="Fisico",
+                    base_currency="COP", uom="unidad", is_active=True)
+        db.add(p); db.commit(); db.refresh(p)
+        r = app_client.post("/api/v1/crm/products/quick-create", json={"name": f"sin  codigo {u}"},
+                            headers=_headers(admin_token))
+        assert r.status_code == 200, r.text
+        d = r.json()["data"]
+        assert d["product_id"] == p.id and d["creado"] is False and d["necesita_revision"] is False
+        assert d["sku"].startswith(f"SIN-CODIGO-{u.upper()}"[:20])
+        skus = db.query(ProductSKU).filter(ProductSKU.product_id == p.id).all()
+        assert [s.id for s in skus] == [d["id"]]
