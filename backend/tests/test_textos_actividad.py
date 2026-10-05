@@ -445,6 +445,59 @@ def test_script_rechaza_un_nombre_de_tabla_de_respaldo_peligroso(db):
         raise AssertionError(f"debio rechazar {nombre!r}")
 
 
+# --- B9 (revision final): --aplicar exige --base igual a current_database(), como correcciones_bloque1 -----------
+
+def _correr_main(monkeypatch, argv):
+    """Corre main() del script con `corregir` reemplazado por uno que solo anota la llamada (no lee ni escribe
+    activity_logs). Devuelve (codigo, llamadas, salida, errores)."""
+    import contextlib
+    import io
+    from scripts import corregir_textos_actividad as modulo
+    llamadas = []
+
+    def _anota(db, aplicar=False, **kwargs):
+        llamadas.append(aplicar)
+        return {"candidatas": 0, "corregidas": 0, "ejemplos": [], "por_tipo": {}}
+
+    monkeypatch.setattr(modulo, "corregir", _anota)
+    salida, errores = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(salida), contextlib.redirect_stderr(errores):
+        try:
+            codigo = modulo.main(argv)
+        except SystemExit as exc:  # argparse
+            codigo = exc.code
+    return codigo, llamadas, salida.getvalue(), errores.getvalue()
+
+
+def test_script_aplicar_sin_base_no_corre(monkeypatch):
+    codigo, llamadas, _, errores = _correr_main(monkeypatch, ["--aplicar"])
+    assert codigo == 2 and llamadas == []
+    assert "--aplicar exige --base" in errores
+
+
+def test_script_aplicar_con_otra_base_aborta_sin_escribir(db, monkeypatch):
+    from sqlalchemy import text
+    actual = db.execute(text("SELECT current_database()")).scalar()
+    codigo, llamadas, salida, errores = _correr_main(monkeypatch, ["--aplicar", "--base", actual + "_otra"])
+    assert codigo == 2 and llamadas == []
+    assert f"SELECT current_database() -> {actual}" in salida
+    assert "ABORTADO" in errores and "no se escribió nada" in errores
+
+
+def test_script_aplicar_con_la_base_correcta_corrige(db, monkeypatch):
+    from sqlalchemy import text
+    actual = db.execute(text("SELECT current_database()")).scalar()
+    codigo, llamadas, salida, _ = _correr_main(monkeypatch, ["--aplicar", "--base", actual])
+    assert codigo == 0 and llamadas == [True]
+    assert "Corregidas: 0" in salida
+
+
+def test_script_dry_run_no_pide_base(monkeypatch):
+    codigo, llamadas, salida, _ = _correr_main(monkeypatch, [])
+    assert codigo == 0 and llamadas == [False]
+    assert "--aplicar --base <nombre de la base>" in salida
+
+
 # --- Otros mensajes: PXP, restaurar, soporte, pedido ---------------------------------------------------------
 
 def _ven(db, numero, **campos):

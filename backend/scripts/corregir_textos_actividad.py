@@ -5,11 +5,15 @@ nombre legible ('Asignada'), igual que los generan ahora los endpoints. Los reng
 repara los que quedaron guardados antes.
 
 Uso (desde backend/, con el python del venv):
-    python scripts/corregir_textos_actividad.py             DRY-RUN (por defecto): solo cuenta y muestra ejemplos
-    python scripts/corregir_textos_actividad.py --aplicar   escribe, con respaldo de cada fila antes de cambiarla
+    python scripts/corregir_textos_actividad.py                            DRY-RUN (por defecto): solo cuenta y
+                                                                           muestra ejemplos
+    python scripts/corregir_textos_actividad.py --aplicar --base erp_test  escribe, con respaldo de cada fila antes
+                                                                           de cambiarla
 
 El dry-run es lo unico que corre solo. --aplicar es una ESCRITURA en la base destino (la que imprime al empezar,
-con la contrasena enmascarada) y necesita autorizacion explicita del usuario en cada entorno.
+con la contrasena enmascarada, y su SELECT current_database()) y necesita autorizacion explicita del usuario en cada
+entorno. Como correcciones_bloque1.py, --aplicar exige --base <nombre> igual a current_database(): sin --base es un
+error de argumentos y si no coincide aborta (codigo 2) sin escribir nada.
 
 Alcance / reglas de seguridad:
   - Candidatas: activity_logs con entity_type en (SC, COT, VEN, PXP), una accion del SISTEMA (CREATED,
@@ -128,12 +132,17 @@ def corregir(db, aplicar=False, ids=None, tabla_respaldo=TABLA_RESPALDO) -> dict
         raise
 
 
-def main():
+def main(argv=None) -> int:
+    """0 si termino; 2 si --base no coincide con current_database() (no escribe nada). Sin --base, --aplicar es un
+    error de argumentos (argparse sale con 2)."""
     parser = argparse.ArgumentParser(
         description="Corrige los textos viejos de la Actividad de Ventas (tildes y estados legibles).")
     parser.add_argument("--aplicar", action="store_true",
                         help="Escribe los cambios (con respaldo). Sin esta opcion solo reporta (dry-run).")
-    args = parser.parse_args()
+    parser.add_argument("--base", help="con --aplicar: nombre de la base; debe ser igual a current_database()")
+    args = parser.parse_args(argv)
+    if args.aplicar and not args.base:
+        parser.error("--aplicar exige --base <nombre de la base>, igual a current_database()")
 
     from app.db.database import SessionLocal, SQLALCHEMY_DATABASE_URL
     from app.core.preflight import _mask_url
@@ -142,6 +151,13 @@ def main():
     print(f"Conectando a -> {_mask_url(SQLALCHEMY_DATABASE_URL)}  [{modo}]")
     db = SessionLocal()
     try:
+        base = db.execute(text("SELECT current_database()")).scalar()
+        print(f"SELECT current_database() -> {base}")
+        if args.aplicar and args.base != base:
+            db.rollback()
+            print(f"ABORTADO: --base {args.base!r} no coincide con la base a la que está conectado el script "
+                  f"({base!r}): no se escribió nada.", file=sys.stderr)
+            return 2
         res = corregir(db, aplicar=args.aplicar)
     finally:
         db.close()
@@ -155,8 +171,10 @@ def main():
     if args.aplicar:
         print(f"Corregidas: {res['corregidas']} (respaldo en {TABLA_RESPALDO})")
     else:
-        print("DRY-RUN: no se escribió nada. Para aplicar: python scripts/corregir_textos_actividad.py --aplicar")
+        print("DRY-RUN: no se escribió nada. Para aplicar: python scripts/corregir_textos_actividad.py --aplicar "
+              "--base <nombre de la base>")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

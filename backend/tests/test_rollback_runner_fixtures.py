@@ -200,3 +200,33 @@ def test_correo_real_esta_bloqueado_bajo_el_runner():
     for clase in (smtplib.SMTP, smtplib.SMTP_SSL):
         with pytest.raises(RuntimeError, match="SMTP real bloqueado en pruebas"):
             clase("localhost", 25, timeout=1)
+
+
+def test_conftest_tambien_bloquea_smtplib():
+    """B8 (revision final): conftest.py (pytest) hace lo mismo que el runner: ademas de quitar las credenciales,
+    smtplib.SMTP / SMTP_SSL lanzan. Se prueba la funcion de conftest.py sin importar el modulo (sus lineas de nivel
+    de modulo abren el motor de erp_test): se compila solo esa funcion y se corre sobre un smtplib de mentira."""
+    import ast
+    import smtplib
+    from pathlib import Path
+
+    arbol = ast.parse((Path(__file__).parent / "conftest.py").read_text(encoding="utf-8"))
+    funcion = next(n for n in arbol.body if isinstance(n, ast.FunctionDef) and n.name == "_sin_credenciales_smtp")
+    espacio = {"os": os}
+    exec(compile(ast.Module(body=[funcion], type_ignores=[]), "conftest.py", "exec"), espacio)
+
+    class _Real:  # hace de smtplib.SMTP sin bloquear (el runner ya bloqueo el de verdad)
+        def __init__(self, *args, **kwargs):
+            pass
+
+    guardados = (smtplib.SMTP, smtplib.SMTP_SSL)
+    try:
+        smtplib.SMTP = smtplib.SMTP_SSL = _Real
+        espacio["_sin_credenciales_smtp"]()
+        assert "SMTP_USER" not in os.environ and "SMTP_PASSWORD" not in os.environ
+        for clase in (smtplib.SMTP, smtplib.SMTP_SSL):
+            assert clase is not _Real
+            with pytest.raises(RuntimeError, match="SMTP real bloqueado en pruebas"):
+                clase("localhost", 25, timeout=1)
+    finally:
+        smtplib.SMTP, smtplib.SMTP_SSL = guardados

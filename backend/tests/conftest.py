@@ -23,9 +23,18 @@ load_dotenv(_BACKEND / ".env")
 def _sin_credenciales_smtp():
     """Ninguna prueba manda correo real aunque el .env compartido tenga SMTP: se quitan las credenciales del entorno
     (sin leerlas ni mostrarlas). app/db/database.py vuelve a cargar el .env al importarse, asi que tambien se llama
-    despues de importar la app."""
+    despues de importar la app. Red de seguridad (B8, igual que _bloquear_correo_real del runner de ROLLBACK):
+    smtplib.SMTP y smtplib.SMTP_SSL pasan a ser una clase que lanza RuntimeError."""
+    import smtplib
     os.environ.pop("SMTP_USER", None)
     os.environ.pop("SMTP_PASSWORD", None)
+
+    class _SMTPBloqueado:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("SMTP real bloqueado en pruebas")
+
+    smtplib.SMTP = _SMTPBloqueado
+    smtplib.SMTP_SSL = _SMTPBloqueado
 
 
 _sin_credenciales_smtp()
