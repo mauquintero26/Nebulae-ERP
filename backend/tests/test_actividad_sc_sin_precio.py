@@ -209,8 +209,29 @@ def test_script_en_modo_reporte_no_escribe(db, user_admin):
     assert ejemplo["id"] == log.id and ejemplo["numero"] == "SC-T4H26B"
     assert ejemplo["antes"] == original["cambios"]
     assert ejemplo["despues"][0]["despues"] == "Nivel laser DEMO ×1"
+    assert ejemplo["descripcion"] == "Solicitud actualizada: Productos" and ejemplo["sin_detalle"] is False
     assert _extra(db, log.id) == original
     assert not _existe_tabla(db, TABLA_TEST)  # el reporte ni siquiera crea la tabla de respaldo
+
+
+def test_script_marca_los_renglones_que_quedan_sin_detalle(db, user_admin):
+    """Ronda 1 (6): si a la candidata no le queda ninguna entrada, o su descripcion sigue nombrando 'Productos' sin
+    entradas de productos, sale con sin_detalle=True. La seleccion no cambia (siguen siendo candidatas)."""
+    from scripts.corregir_actividad_sc_sin_precio import corregir
+    sc = _sc(db, "SC-T4H26S")
+    precio = {"campo": "productos", "etiqueta": "Nivel — precio unitario", "antes": "$0", "despues": "$5.000"}
+    notas = {"campo": "notas", "etiqueta": "Notas", "antes": None, "despues": "Urgente"}
+    vacio = _log(db, "SC", sc, [precio])
+    solo_notas = _log(db, "SC", sc, [precio, notas])
+    con_vinculo = _log(db, "SC", sc, [precio, {"campo": "productos_sku", "etiqueta": "Nivel", "antes": "Texto libre",
+                                               "despues": "SKU 7"}])
+    normal = _log(db, "SC", sc, _cambio_viejo())
+    res = corregir(db, aplicar=False, ids=[vacio.id, solo_notas.id, con_vinculo.id, normal.id])
+    assert res["candidatas"] == 4
+    marcas = {e["id"]: (e["despues"], e["sin_detalle"]) for e in res["ejemplos"]}
+    assert marcas[vacio.id] == ([], True)
+    assert marcas[solo_notas.id] == ([notas], True)
+    assert marcas[con_vinculo.id][1] is False and marcas[normal.id][1] is False
 
 
 def test_script_solo_toca_productos_de_renglones_de_sc(db, user_admin):
@@ -262,9 +283,19 @@ def test_script_excluye_documentos_reales_y_soporte(db, user_admin, monkeypatch)
         _borrar_tabla(db, TABLA_TEST)
 
 
+def _deshacer_como_el_docstring(db, modulo):
+    """Ejecuta tal cual el SQL de deshacer del docstring, solo con la tabla de prueba."""
+    from sqlalchemy import text
+    deshacer = re.search(r"UPDATE activity_logs a SET extra_data = r\.extra_data_original.*?;", modulo.__doc__, re.S)
+    assert deshacer, "el docstring debe traer el SQL de deshacer"
+    sql = deshacer.group(0).replace(f"FROM {modulo.TABLA_RESPALDO} r", f"FROM {TABLA_TEST} r")
+    assert TABLA_TEST in sql
+    db.execute(text(sql))
+    db.commit()
+
+
 def test_script_sql_de_deshacer_del_docstring(db, user_admin):
     """El SQL de deshacer del docstring (ejecutado tal cual, solo con la tabla de prueba) devuelve el original."""
-    from sqlalchemy import text
     from scripts import corregir_actividad_sc_sin_precio as modulo
     sc = _sc(db, "SC-T4H26D")
     log = _log(db, "SC", sc, _cambio_viejo())
@@ -272,13 +303,36 @@ def test_script_sql_de_deshacer_del_docstring(db, user_admin):
     try:
         assert modulo.corregir(db, aplicar=True, ids=[log.id], tabla_respaldo=TABLA_TEST)["corregidas"] == 1
         assert _extra(db, log.id) != original
-        deshacer = re.search(r"UPDATE activity_logs a SET extra_data = r\.extra_data_original.*?;", modulo.__doc__,
-                             re.S)
-        assert deshacer, "el docstring debe traer el SQL de deshacer"
-        sql = deshacer.group(0).replace(f"FROM {modulo.TABLA_RESPALDO} r", f"FROM {TABLA_TEST} r")
-        assert TABLA_TEST in sql
-        db.execute(text(sql))
+        _deshacer_como_el_docstring(db, modulo)
+        assert _extra(db, log.id) == original
+    finally:
+        _borrar_tabla(db, TABLA_TEST)
+
+
+def test_script_dos_corridas_conservan_el_primer_original_y_la_ultima_nueva(db, user_admin):
+    """Ronda 1 (7), rama ON CONFLICT DO UPDATE: corregir, deshacer, el renglon cambia otra vez (otra llave de
+    extra_data) y se corrige de nuevo. El respaldo queda con (original de la 1.a corrida, nueva actual) y un segundo
+    deshacer devuelve el original de la 1.a corrida (con DO NOTHING la nueva seria la vieja y no deshacia nada)."""
+    from sqlalchemy import text
+    from scripts import corregir_actividad_sc_sin_precio as modulo
+    sc = _sc(db, "SC-T4H26U")
+    log = _log(db, "SC", sc, _cambio_viejo())
+    original = _extra(db, log.id)
+    try:
+        assert modulo.corregir(db, aplicar=True, ids=[log.id], tabla_respaldo=TABLA_TEST)["corregidas"] == 1
+        nueva_1 = _extra(db, log.id)
+        _deshacer_como_el_docstring(db, modulo)
+        assert _extra(db, log.id) == original
+        db.execute(text("UPDATE activity_logs SET extra_data = CAST(:e AS jsonb) WHERE id = :i"),
+                   {"e": json.dumps({**original, "otra": 1}, ensure_ascii=False), "i": log.id})
         db.commit()
+        assert modulo.corregir(db, aplicar=True, ids=[log.id], tabla_respaldo=TABLA_TEST)["corregidas"] == 1
+        nueva_2 = _extra(db, log.id)
+        assert nueva_2 == {**nueva_1, "otra": 1} != nueva_1
+        fila = db.execute(text(f"SELECT extra_data_original, extra_data_nueva FROM {TABLA_TEST} WHERE id = :i"),
+                          {"i": log.id}).one()
+        assert tuple(fila) == (original, nueva_2)
+        _deshacer_como_el_docstring(db, modulo)
         assert _extra(db, log.id) == original
     finally:
         _borrar_tabla(db, TABLA_TEST)
@@ -375,12 +429,15 @@ def test_cli_reporta_por_defecto_y_aplicar_exige_la_base(db, monkeypatch):
 def test_el_reporte_lista_todas_las_candidatas_sin_tope(monkeypatch):
     """Sin tope silencioso: cada candidata con su numero y cada entrada 'antes -> despues' (o la que se quita)."""
     ejemplos = [{"id": i, "numero": f"SC-T4H26R{i:02d}", "created_at": None,
+                 "descripcion": "Solicitud actualizada: Productos",
                  "antes": [{"campo": "productos", "etiqueta": "Producto agregado", "antes": None,
                             "despues": f"Producto {i} ×1 a $0"},
                            {"campo": "productos", "etiqueta": f"Producto {i} — precio unitario", "antes": "$0",
                             "despues": "$9"}],
                  "despues": [{"campo": "productos", "etiqueta": "Producto agregado", "antes": None,
-                              "despues": f"Producto {i} ×1"}]} for i in range(60)]
+                              "despues": f"Producto {i} ×1"}],
+                 "sin_detalle": False} for i in range(60)]
+    ejemplos[7]["sin_detalle"] = True  # Ronda 1 (6): se marca, no se quita
     codigo, _, salida, _ = _correr_main(monkeypatch, [], _resultado_vacio(candidatas=60, excluidas=3,
                                                                           ejemplos=ejemplos))
     assert codigo == 0
@@ -390,3 +447,7 @@ def test_el_reporte_lista_todas_las_candidatas_sin_tope(monkeypatch):
         assert f"{json.dumps(f'Producto {i} ×1 a $0', ensure_ascii=False)} -> " \
                f"{json.dumps(f'Producto {i} ×1', ensure_ascii=False)}" in salida, i
         assert f"se quita «Producto {i} — precio unitario»" in salida, i
+    assert salida.count("quedará sin detalle de productos: revisar") == 1
+    bloque_7 = salida.split("SC-T4H26R07")[1].split("SC-T4H26R08")[0]
+    assert "ATENCIÓN: quedará sin detalle de productos: revisar" in bloque_7
+    assert "Candidatas que quedarán sin detalle de productos (revisar; no se borran): 1" in salida

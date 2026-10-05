@@ -15,6 +15,7 @@ Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_rec
 import datetime
 
 RAZON_CORTA = "Escribe la razón del cambio (mínimo 5 caracteres): queda en la Actividad de la cotización."
+RAZON_LARGA = "La razón es muy larga (máximo 500 caracteres)."
 
 
 def auth(token):
@@ -130,7 +131,9 @@ def test_aceptar_con_razon_anula_y_registra_la_razon(app_client, db, admin_token
     estado = logs[1]
     assert estado.description.endswith("Razón: Proveedor subió el precio.")
     assert estado.description.startswith("Estado cambiado a Borrador")
-    assert (estado.old_estado, estado.new_estado, estado.user_name) == ("CONFIRMADA", "BORRADOR", user_admin.email)
+    # Ronda 1 (4): sin updated_by el autor es nombre_de_usuario(usuario de la sesion), como en el Chatter.
+    assert (estado.old_estado, estado.new_estado, estado.user_name) == (
+        "CONFIRMADA", "BORRADOR", user_admin.username or user_admin.email)
     assert estado.extra_data == {
         "motivo": "Proveedor subió el precio",
         "cambios": [{"etiqueta": "Cambió", "despues": "Productos, cantidades o precios, Total"},
@@ -154,17 +157,43 @@ def test_aceptar_pendiente_con_razon_revoca_el_enlace(app_client, db, admin_toke
 
 def test_aceptar_sin_razon_responde_422(app_client, db, admin_token):
     cot = _cot(db, "COT-T4H40E", "CONFIRMADA")
-    for motivo in ("x", "    ", "abcd", None):
+    # Ronda 1 (1): una razon que no es texto cuenta como sin razon; mas de 500 caracteres tambien es 422.
+    casos = [("x", RAZON_CORTA), ("    ", RAZON_CORTA), ("abcd", RAZON_CORTA), (None, RAZON_CORTA),
+             (12345, RAZON_CORTA), (["Proveedor subió el precio"], RAZON_CORTA), (True, RAZON_CORTA),
+             ("r" * 501, RAZON_LARGA), ("  " + "r" * 501 + "  ", RAZON_LARGA)]
+    for motivo, mensaje in casos:
         body = _precio(1200, anular_confirmacion=True)
         if motivo is not None:
             body["motivo_recotizacion"] = motivo
         resp = _patch(app_client, admin_token, cot.id, body)
         assert resp.status_code == 422, (motivo, resp.text)
-        assert resp.json()["detail"] == RAZON_CORTA
+        assert resp.json()["detail"] == mensaje, motivo
     db.expire_all()
     db.refresh(cot)
     assert cot.estado == "CONFIRMADA" and cot.total_cop == 1000 and cot.gate2_confirmed_at is not None
     assert _logs(db, cot.id) == []
+    # 500 caracteres (tras recortar) si se aceptan.
+    resp = _patch(app_client, admin_token, cot.id,
+                  _precio(1200, anular_confirmacion=True, motivo_recotizacion=" " + "r" * 500 + " "))
+    assert resp.status_code == 200, resp.text
+    assert _logs(db, cot.id, "ESTADO_CHANGED")[-1].extra_data["motivo"] == "r" * 500
+
+
+def test_la_bandera_tiene_que_ser_el_booleano_true(app_client, db, admin_token):
+    """Ronda 1 (9): 'true', 1 o 'false' no cuentan como anular_confirmacion: 409."""
+    for i, bandera in enumerate(("true", 1, "false")):
+        cot = _cot(db, f"COT-T4H40B{i}", "CONFIRMADA")
+        resp = _patch(app_client, admin_token, cot.id,
+                      _precio(1200, anular_confirmacion=bandera, motivo_recotizacion="Proveedor subió el precio"))
+        assert resp.status_code == 409, (bandera, resp.text)
+        assert resp.json()["detail"]["codigo"] == "ANULA_CONFIRMACION", bandera
+
+
+def test_todos_los_campos_congelados_tienen_etiqueta():
+    """Ronda 1 (2): agregar un campo congelado sin su etiqueta haria un 500; la prueba lo exige."""
+    from app.api.v1.erp_ventas import PRICE_FREEZE_FIELDS, _ETIQUETAS_CONGELADAS
+    assert set(PRICE_FREEZE_FIELDS) <= set(_ETIQUETAS_CONGELADAS)
+    assert list(_ETIQUETAS_CONGELADAS) == PRICE_FREEZE_FIELDS  # mismo orden: el de los cambios del 409
 
 
 def test_cambiar_solo_notas_no_pregunta(app_client, db, admin_token):
@@ -206,6 +235,23 @@ def test_con_pedido_vigente_no_pregunta(app_client, db, admin_token):
     assert cot.estado == "CONFIRMADA" and cot.total_cop == 1200
 
 
+def test_con_pedido_vigente_la_bandera_no_anula_nada(app_client, db, admin_token):
+    """Ronda 1 (10): con pedido vigente, mandar anular_confirmacion y la razon no cambia nada del ciclo de Gate 2."""
+    from app.models.erp_documents import SaleOrder
+    cot = _cot(db, "COT-T4H40L", "CONFIRMADA")
+    gate2 = cot.gate2_confirmed_at
+    db.add(SaleOrder(numero="PVEN-T4H40L", cot_id=cot.id, customer_name="Cliente Prueba", estado="PENDIENTE_COMPRA"))
+    db.commit()
+    resp = _patch(app_client, admin_token, cot.id,
+                  _precio(1200, anular_confirmacion=True, motivo_recotizacion="Proveedor subió el precio"))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["confirmacion_anulada"] is False
+    db.expire_all()
+    db.refresh(cot)
+    assert cot.estado == "CONFIRMADA" and cot.gate2_confirmed_at == gate2
+    assert _logs(db, cot.id, "ESTADO_CHANGED") == []
+
+
 def test_borrador_no_pregunta(app_client, db, admin_token):
     for i, estado in enumerate(("BORRADOR", "RECHAZADA", "VENCIDA", "ENVIADA")):
         cot = _cot(db, f"COT-T4H40I{i}", estado)
@@ -229,6 +275,11 @@ def test_cambio_de_estado_explicito_no_pregunta(app_client, db, admin_token):
     cot = _cot(db, "COT-T4H40K", "CONFIRMADA")
     resp = _patch(app_client, admin_token, cot.id, {"estado": "BORRADOR", "total_cop": 1500, "updated_by": "t"})
     assert resp.status_code == 200, resp.text
+    # Ronda 1 (8): el contrato documentado: con un cambio congelado la confirmacion SI se anula (true), y el renglon
+    # es el generico del cambio de estado, sin razon.
+    assert resp.json()["confirmacion_anulada"] is True
     db.expire_all()
     db.refresh(cot)
     assert cot.estado == "BORRADOR" and cot.total_cop == 1500 and cot.gate2_confirmed_at is None
+    ultimo = _logs(db, cot.id, "ESTADO_CHANGED")[-1]
+    assert "Razón:" not in ultimo.description and ultimo.description == "Estado cambiado a Borrador"

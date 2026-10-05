@@ -62,6 +62,15 @@ def test_repartir_cero_y_vacios():
         assert isinstance(valor, Decimal) and valor == valor.to_integral_value()
 
 
+def test_repartir_un_objetivo_mayor_que_la_suma_igual_cuadra():
+    """Ronda 1 (12): datos que no cuadran (C10 con un pedido de otro total): la suma da exacta aunque una linea
+    reciba mas que su valor (lo documenta el docstring)."""
+    from app.core.ventas_dinero import repartir_anticipo_por_linea
+    assert repartir_anticipo_por_linea(_d([100, 100]), Decimal("300")) == _d([150, 150])
+    partes = repartir_anticipo_por_linea(_d([100, 200, 0]), Decimal("1000"))
+    assert sum(partes) == 1000 and partes[2] == 0
+
+
 def test_repartir_invariantes():
     from app.core.ventas_dinero import anticipo_requerido, repartir_anticipo_por_linea
     casos = [
@@ -165,6 +174,17 @@ def test_get_cotizacion_sin_precios_da_ceros(app_client, db, admin_token):
     assert _detalle(app_client, admin_token, cot.id)["anticipo_por_linea"] == [0.0, 0.0]
 
 
+def test_get_cotizacion_con_total_y_lineas_sin_valor_da_ceros(app_client, db, admin_token):
+    """Ronda 1 (12): una COT con total > 0 cuyas lineas no traen valor (sin total_cop ni precio x cantidad) no tiene
+    con que repartir: todas las lineas en 0, aunque anticipo_requerido sea > 0 (comportamiento fijado)."""
+    sc = _sc(db, "SC-T4U19J", MOD_60_40)
+    cot = _cot(db, "COT-T4U19J", sc, montos=[1000], total_cop=1000, subtotal_cop=1000,
+               productos=[{"product_name": "Cuna", "qty": 1}, {"product_name": "Silla"}])
+    d = _detalle(app_client, admin_token, cot.id)
+    assert d["anticipo_requerido"] == 600
+    assert d["anticipo_por_linea"] == [0.0, 0.0]
+
+
 def test_get_cotizacion_con_anticipo_manual(app_client, db, admin_token):
     sc = _sc(db, "SC-T4U19D", MOD_60_40)
     cot = _cot(db, "COT-T4U19D", sc)
@@ -199,14 +219,18 @@ def test_anticipo_por_linea_es_paralela_a_productos(app_client, db, admin_token)
     assert d["anticipo_por_linea"] == [1000.0, 0.0, 3000.0]
 
 
-def test_get_cotizacion_con_pedido_vigente_reparte_el_requerido_del_pedido(app_client, db, admin_token):
+def test_get_cotizacion_con_pedido_vigente_reparte_el_requerido_del_pedido(app_client, db, admin_token,
+                                                                          contador_sql):
     """C10: con un pedido vigente se reparte anticipo_del_pedido(pven)[0] (aqui el 100% del snapshot), no el 60% que
-    pide hoy la modalidad. Un pedido CANCELADO mas nuevo no cuenta."""
+    pide hoy la modalidad. Un pedido CANCELADO mas nuevo no cuenta. El pedido vigente sale de la lista que el GET ya
+    carga: exactamente 2 consultas a sale_orders (los pedidos de la COT y los cancelados del saldo a favor)."""
     from app.core.ventas_dinero import anticipo_del_pedido
     sc = _sc(db, "SC-T4U19G", MOD_60_40)
     cot = _cot(db, "COT-T4U19G", sc, estado="CONFIRMADA")
     pven = _ven(db, "PVEN-T4U19G", cot, total_cop=1840614, saldo_cop=1840614, anticipo_pct_snapshot=100)
-    d = _detalle(app_client, admin_token, cot.id)
+    with contador_sql.ventana() as v:
+        d = _detalle(app_client, admin_token, cot.id)
+    assert len([s for s in v.sentencias if "FROM sale_orders" in s]) == 2, v.sentencias
     assert anticipo_del_pedido(pven)[0] == Decimal("1840614")
     assert sum(d["anticipo_por_linea"]) == 1840614
     assert sum(d["anticipo_por_linea"]) != d["anticipo_requerido"]

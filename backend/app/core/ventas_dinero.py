@@ -202,7 +202,10 @@ def repartir_anticipo_por_linea(montos, anticipo) -> list:
     decimal (en empate, la que va primero). La suma da exactamente el anticipo y cada linea queda a menos de $1 de su
     parte exacta; una linea en 0 recibe 0. Lista de Decimal del mismo largo; ceros si el anticipo o la suma de los
     montos no son positivos; [] sin lineas. Con descuento global se reparte sobre el valor antes del descuento: la
-    proporcion es la misma. Se hace con enteros para no perder precision."""
+    proporcion es la misma. Se hace con enteros para no perder precision.
+    Si el anticipo es MAYOR que la suma de los montos (datos que no cuadran: p. ej. C10 con un pedido vigente cuyo
+    total no es el de las lineas de la COT), igual se reparte todo en proporcion y la suma cuadra, pero una linea puede
+    recibir mas que su propio valor ([100, 100] con 300 -> [150, 150])."""
     pesos_linea = [max(0, int(redondear_peso(m))) for m in montos]
     objetivo = int(redondear_peso(anticipo))
     total = sum(pesos_linea)

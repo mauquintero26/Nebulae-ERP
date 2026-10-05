@@ -1796,13 +1796,20 @@ def _soltar_cotizacion_de_la_solicitud(db: Session, sc: CustomerRequest, cot: Sa
     return anterior
 
 
-# H40: lo que el cliente vio y confirmo (PRICE_FREEZE_FIELDS de update_cotizacion) -> como se nombra en el aviso de
-# ANULA_CONFIRMACION y en la Actividad. Mismo orden que PRICE_FREEZE_FIELDS.
+# Gate 2 (Round 2, hallazgo #5): lo que el cliente vio y confirmo (o esta por confirmar) en una COT. Si un PATCH cambia
+# alguno en el ciclo vigente de Gate 2, la confirmacion ya no aplica (ver update_cotizacion). El anticipo NO esta
+# (H36+H43: el cliente no lo ve).
+PRICE_FREEZE_FIELDS = ["productos", "total_cop", "subtotal_cop", "descuento_pct",
+                       "trm_rate", "fecha_entrega_estimada", "sc_id"]
+# H40: cada campo de PRICE_FREEZE_FIELDS -> como se nombra en el aviso de ANULA_CONFIRMACION y en la Actividad. Mismo
+# orden que PRICE_FREEZE_FIELDS (una prueba exige que cubra todos; si falta uno, se muestra el nombre del campo).
 _ETIQUETAS_CONGELADAS = {
     "productos": "Productos, cantidades o precios", "total_cop": "Total", "subtotal_cop": "Total",
     "descuento_pct": "Descuento", "trm_rate": "TRM", "fecha_entrega_estimada": "Fecha de entrega",
     "sc_id": "Solicitud de origen",
 }
+# H40: largo de la razon de anular la confirmacion (motivo_recotizacion). T9A pone el mismo maxLength en el textarea.
+MIN_RAZON_RECOTIZACION, MAX_RAZON_RECOTIZACION = 5, 500
 
 
 def _mensaje_anula_confirmacion(estado: str, cambios: list) -> str:
@@ -1846,8 +1853,7 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     # ya usa cualquier otra salida del ciclo, sin duplicar esa logica aqui).
     # H36+H43: el anticipo NO congela el precio. El cliente nunca lo ve (confirmacion_publica solo expone total y
     # productos), asi que recalcularlo no regresa a BORRADOR una COT pendiente de confirmacion o confirmada.
-    PRICE_FREEZE_FIELDS = ["productos", "total_cop", "subtotal_cop", "descuento_pct",
-                           "trm_rate", "fecha_entrega_estimada", "sc_id"]
+    # Los campos congelados son PRICE_FREEZE_FIELDS (nivel del modulo).
     old_price_values = {k: getattr(cot, k) for k in PRICE_FREEZE_FIELDS}
     # H36+H43: % de anticipo con los valores de ANTES del PATCH: el de una COT sin SC sale del anticipo/total
     # anteriores (y es el "antes" del renglon del anticipo manual).
@@ -1998,17 +2004,21 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     cambia_estado_explicito = bool(body.get("estado")) and body["estado"] != old_estado
     cambios_congelados, motivo_recotizacion = [], None
     if rompe_congelamiento and not cambia_estado_explicito:
-        cambios_congelados = list(dict.fromkeys(_ETIQUETAS_CONGELADAS[k] for k in campos_congelados_cambiados))
+        cambios_congelados = list(dict.fromkeys(_ETIQUETAS_CONGELADAS.get(k, k) for k in campos_congelados_cambiados))
         if body.get("anular_confirmacion") is not True:
             db.rollback()
             raise HTTPException(409, detail={
                 "codigo": "ANULA_CONFIRMACION", "estado": old_estado, "cambios": cambios_congelados,
                 "mensaje": _mensaje_anula_confirmacion(old_estado, cambios_congelados)})
-        motivo_recotizacion = str(body.get("motivo_recotizacion") or "").strip()
-        if len(motivo_recotizacion) < 5:
+        motivo = body.get("motivo_recotizacion")
+        motivo_recotizacion = motivo.strip() if isinstance(motivo, str) else ""  # no texto = sin razon
+        if len(motivo_recotizacion) < MIN_RAZON_RECOTIZACION:
             db.rollback()
-            raise HTTPException(422, "Escribe la razón del cambio (mínimo 5 caracteres): queda en la Actividad de la "
-                                     "cotización.")
+            raise HTTPException(422, f"Escribe la razón del cambio (mínimo {MIN_RAZON_RECOTIZACION} caracteres): queda "
+                                     f"en la Actividad de la cotización.")
+        if len(motivo_recotizacion) > MAX_RAZON_RECOTIZACION:
+            db.rollback()
+            raise HTTPException(422, f"La razón es muy larga (máximo {MAX_RAZON_RECOTIZACION} caracteres).")
     if rompe_congelamiento:
         cot.estado = "BORRADOR"
     # Gate 2 -- capturar AHORA, antes de cualquier commit/refresh, si ESTE PATCH saca a
@@ -2073,7 +2083,7 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
                     db.rollback()
                     logger.error(f"Error al sincronizar la solicitud {sc_nueva.numero} al vincularle la cotizacion "
                                  f"{cot.id}: {exc}", exc_info=True)
-    if body.get("estado") and body["estado"] != old_estado:
+    if cambia_estado_explicito:
         try:
             # N7: rechazar ya no lleva el lead a perdido (eso pasa al cancelar la SC, N4). H50: ENVIADA ya no llega
             # por aqui; el lead pasa a QUOTATION en enviar_cotizacion_para_confirmacion.
@@ -2103,7 +2113,7 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
              "Estado cambiado a Borrador (la cotización fue editada tras la confirmación del cliente; esa confirmación "
              f"ya no es válida). Razón: {razon}",
              old_estado=old_estado, new_estado="BORRADOR",
-             user_name=body.get("updated_by") or getattr(user, "email", None),
+             user_name=body.get("updated_by") or nombre_de_usuario(user),
              extra_data={"motivo": motivo_recotizacion,
                          "cambios": [{"etiqueta": "Cambió", "despues": ", ".join(cambios_congelados)},
                                      {"etiqueta": "Razón", "despues": motivo_recotizacion}]})

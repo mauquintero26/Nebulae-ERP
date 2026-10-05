@@ -13,6 +13,7 @@ Los simbolos nuevos de T4 se importan DENTRO de cada prueba (el runner importa e
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_chatter_notas
 """
 import datetime
+import uuid
 
 import pytest
 
@@ -21,6 +22,17 @@ AHORA = datetime.datetime.utcnow
 
 def auth(token):
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def finanzas_token(db):
+    """Token de un usuario FINANZAS (sin permiso para el Chatter), creado dentro de la transaccion de la prueba."""
+    from app.core.security import create_access_token
+    from app.models.users import User
+    u = User(email=f"finanzas-{uuid.uuid4().hex[:6]}@test.nebulae", password_hash="x", role="FINANZAS",
+             is_active=True)
+    db.add(u); db.commit()
+    return create_access_token({"sub": str(u.id), "role": u.role})
 
 
 def _sc(db, numero, **campos):
@@ -81,6 +93,11 @@ def test_validar_nota_pura():
         ({"action": "CHATTER"}, "Escribe la nota antes de guardarla."),
         ({"action": "CHATTER", "description": "x" * 2001}, "La nota es muy larga (máximo 2000 caracteres)."),
         ({"action": "CHATTER", "description": "x", "tipo": "FAX"}, "Tipo de nota no válido."),
+        # Ronda 1 (5): un description que no es texto cuenta como vacio (nunca se guarda su str()).
+        ({"action": "CHATTER", "description": 123}, "Escribe la nota antes de guardarla."),
+        ({"action": "CHATTER", "description": ["Hola"]}, "Escribe la nota antes de guardarla."),
+        ({"action": "CHATTER", "description": {"texto": "Hola"}}, "Escribe la nota antes de guardarla."),
+        ({"action": "CHATTER", "description": True}, "Escribe la nota antes de guardarla."),
     ]
     for body, mensaje in errores:
         with pytest.raises(ValueError) as exc:
@@ -105,6 +122,10 @@ def test_validar_nota_externa_con_medio():
         "tipo": "NOTA"}
     assert validar_nota({"action": "CHATTER", "description": "x", "tipo": "LLAMADA", "medio": "m" * 61})[2] == {
         "tipo": "LLAMADA"}
+    # Ronda 1 (5): un medio que no es texto cuenta como vacio (no se guarda su str()).
+    for medio in (123, ["Visita"], {"m": "Visita"}, True):
+        assert validar_nota({"action": "CHATTER", "description": "x", "tipo": "EXTERNA", "medio": medio})[2] == {
+            "tipo": "EXTERNA"}, medio
 
 
 def test_constantes_y_reinicio_del_atraso():
@@ -142,10 +163,18 @@ def test_nota_de_la_sc_se_guarda_con_el_usuario_de_la_sesion(app_client, db, adm
 def test_nota_vacia_no_se_guarda(app_client, db, admin_token):
     cot = _cot(db, "COT-T4CH02")
     antes = len(_logs(db, "COT", cot.id))
-    resp = _nota(app_client, admin_token, "COT", cot.id, {"action": "CHATTER", "description": "   "})
-    assert resp.status_code == 422, resp.text
-    assert resp.json()["detail"] == "Escribe la nota antes de guardarla."
+    for descripcion in ("   ", 123, ["Hola"]):
+        resp = _nota(app_client, admin_token, "COT", cot.id, {"action": "CHATTER", "description": descripcion})
+        assert resp.status_code == 422, (descripcion, resp.text)
+        assert resp.json()["detail"] == "Escribe la nota antes de guardarla."
     assert len(_logs(db, "COT", cot.id)) == antes
+
+
+def test_un_rol_sin_permiso_no_puede_dejar_notas(app_client, db, finanzas_token):
+    sc = _sc(db, "SC-T4CH21")
+    resp = _nota(app_client, finanzas_token, "SC", sc.id, {"action": "CHATTER", "description": "x"})
+    assert resp.status_code == 403, resp.text
+    assert _logs(db, "SC", sc.id) == []
 
 
 def test_nota_muy_larga_da_422(app_client, db, admin_token):

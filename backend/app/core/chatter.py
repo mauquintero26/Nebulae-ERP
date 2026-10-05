@@ -35,14 +35,16 @@ def validar_nota(body) -> tuple:
     """(action, texto, extra) de una nota del Chatter, o ValueError con el mensaje para el usuario.
 
     action: la del body en mayusculas (NOTE_ADDED si no viene), con LEGADO aplicado; solo CHATTER o NOTE_ADDED.
-    texto: description sin espacios en los bordes; ni vacia ni de mas de MAX_TEXTO caracteres.
+    texto: description sin espacios en los bordes; ni vacia ni de mas de MAX_TEXTO caracteres. Si no es texto (un
+    numero, una lista...) cuenta como vacia: nunca se guarda su str().
     extra: {'tipo': TIPO} (NOTA si no viene); con EXTERNA y un medio no vacio, tambien {'medio': medio} (recortado,
-    maximo MAX_MEDIO). Con los demas tipos 'medio' se ignora."""
+    maximo MAX_MEDIO; si no es texto cuenta como vacio y no se guarda). Con los demas tipos 'medio' se ignora."""
     action = str(body.get("action") or "NOTE_ADDED").strip().upper()
     action = LEGADO.get(action, action)
     if action not in ACCIONES_PERMITIDAS:
         raise ValueError("Ese tipo de registro no se puede agregar a mano.")
-    texto = str(body.get("description") or "").strip()
+    descripcion = body.get("description")
+    texto = descripcion.strip() if isinstance(descripcion, str) else ""
     if not texto:
         raise ValueError("Escribe la nota antes de guardarla.")
     if len(texto) > MAX_TEXTO:
@@ -52,7 +54,8 @@ def validar_nota(body) -> tuple:
         raise ValueError("Tipo de nota no válido.")
     extra = {"tipo": tipo}
     if tipo == "EXTERNA":
-        medio = str(body.get("medio") or "").strip()
+        medio = body.get("medio")
+        medio = medio.strip() if isinstance(medio, str) else ""
         if len(medio) > MAX_MEDIO:
             raise ValueError(f"El medio es muy largo (máximo {MAX_MEDIO} caracteres).")
         if medio:

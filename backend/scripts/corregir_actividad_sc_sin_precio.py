@@ -33,6 +33,10 @@ Reglas:
   - El UPDATE exige que extra_data siga como se leyo (WHERE extra_data = original): si cambio en medio, no se pisa ni se
     respalda. No deja renglones en la Actividad: el rastro es la tabla de respaldo.
   - Es idempotente: una segunda corrida encuentra 0 candidatas.
+  - Renglones que quedan sin detalle: si a una candidata no le queda ninguna entrada (p. ej. solo registraba un cambio de
+    precio) o su descripcion sigue nombrando 'Productos' sin ninguna entrada de productos, el reporte la marca «quedará
+    sin detalle de productos: revisar» (sin_detalle=True). La seleccion no cambia y ningun renglon se borra: el usuario
+    decide en T12.
 
 Para DESHACER (devuelve el extra_data original de lo que cambio este script):
     UPDATE activity_logs a SET extra_data = r.extra_data_original
@@ -80,19 +84,29 @@ def _json(valor) -> str:
     return json.dumps(valor, ensure_ascii=False)
 
 
+def _queda_sin_detalle(descripcion, nuevos) -> bool:
+    """True si el renglon corregido no tendra detalle: 'cambios' vacio, o una descripcion que sigue nombrando
+    'Productos' sin ninguna entrada de productos (campo 'productos' o 'productos_sku')."""
+    if not nuevos:
+        return True
+    con_productos = any(isinstance(c, dict) and c.get("campo") in ("productos", "productos_sku") for c in nuevos)
+    return "Productos" in (descripcion or "") and not con_productos
+
+
 def corregir(db, aplicar=False, ids=None, tabla_respaldo=TABLA_RESPALDO) -> dict:
     """Calcula (y con aplicar=True escribe) la correccion de los renglones viejos de SC (reglas en el docstring).
 
     ids: si se pasa, solo esas filas de activity_logs (las pruebas filtran siempre por sus propios ids).
     Devuelve {'candidatas', 'corregidas', 'excluidas', 'ejemplos'}:
-      - 'ejemplos': TODAS las candidatas (sin tope), [{id, numero, created_at, antes, despues}] con la lista 'cambios'
-        de antes y la de despues;
+      - 'ejemplos': TODAS las candidatas (sin tope), [{id, numero, created_at, descripcion, antes, despues,
+        sin_detalle}] con la lista 'cambios' de antes y la de despues; sin_detalle (_queda_sin_detalle) solo informa;
       - 'excluidas': las que serian candidatas pero son documentos reales o estan vinculadas a uno.
     Sin aplicar no escribe nada (ni crea la tabla de respaldo). Con aplicar es UNA transaccion: commit al final y
     rollback ante cualquier error.
     """
     _validar_tabla(tabla_respaldo)
-    consulta = ("SELECT a.id, a.entity_id, a.entity_numero, a.created_at, a.extra_data FROM activity_logs a "
+    consulta = ("SELECT a.id, a.entity_id, a.entity_numero, a.created_at, a.description, a.extra_data "
+                "FROM activity_logs a "
                 "LEFT JOIN customer_requests cr ON cr.id = a.entity_id "
                 "WHERE a.entity_type = 'SC' AND jsonb_typeof(a.extra_data -> 'cambios') = 'array' "
                 "AND cr.tipo_solicitud IS DISTINCT FROM :soporte")
@@ -113,13 +127,15 @@ def corregir(db, aplicar=False, ids=None, tabla_respaldo=TABLA_RESPALDO) -> dict
                 excluidas += 1
                 continue
             candidatas.append({"id": f["id"], "numero": f["entity_numero"], "created_at": f["created_at"],
-                               "antes": f["extra_data"]["cambios"], "despues": nuevos,
+                               "descripcion": f["description"], "antes": f["extra_data"]["cambios"],
+                               "despues": nuevos, "sin_detalle": _queda_sin_detalle(f["description"], nuevos),
                                "original": f["extra_data"], "nueva": {**f["extra_data"], "cambios": nuevos}})
         resultado = {
             "candidatas": len(candidatas),
             "corregidas": 0,
             "excluidas": excluidas,
-            "ejemplos": [{k: c[k] for k in ("id", "numero", "created_at", "antes", "despues")} for c in candidatas],
+            "ejemplos": [{k: c[k] for k in ("id", "numero", "created_at", "descripcion", "antes", "despues",
+                                            "sin_detalle")} for c in candidatas],
         }
         if not aplicar:
             db.rollback()
@@ -220,6 +236,11 @@ def main(argv=None) -> int:
         print(f"  {e['numero']} (renglón #{e['id']}, {_fecha_utc(e['created_at'])}):")
         for linea in _diferencias(e["antes"]):
             print(f"      {linea}")
+        if e.get("sin_detalle"):
+            print(f"      ATENCIÓN: quedará sin detalle de productos: revisar (descripción: {e.get('descripcion')!r})")
+    sin_detalle = sum(1 for e in res["ejemplos"] if e.get("sin_detalle"))
+    if sin_detalle:
+        print(f"Candidatas que quedarán sin detalle de productos (revisar; no se borran): {sin_detalle}")
     if args.aplicar:
         print(f"Corregidas: {res['corregidas']} (respaldo en {TABLA_RESPALDO})")
     else:
