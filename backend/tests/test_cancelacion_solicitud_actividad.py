@@ -590,3 +590,212 @@ def test_purga_automatica_deja_rastro(app_client, db, admin_token, user_admin):
     assert log.extra_data == {"cliente": "Cliente Prueba", "motivo_cancelacion": "Vieja"}
     assert db.get(CustomerRequest, con_historial.id) is not None
     assert _logs(db, con_historial.id, "PURGED") == []
+
+
+# ─── scripts/limpiar_motivo_en_notas.py ───────────────────────────────────────────────────────────────────────
+
+def _borrar_tabla(db, tabla):
+    from sqlalchemy import text
+    db.rollback()
+    db.execute(text(f"DROP TABLE IF EXISTS {tabla}"))
+    db.commit()
+
+
+def _existe_tabla(db, tabla):
+    from sqlalchemy import text
+    return db.execute(text("SELECT to_regclass(:t)"), {"t": tabla}).scalar() is not None
+
+
+def _notas(db, ids):
+    from app.models.erp_documents import CustomerRequest
+    db.expire_all()
+    return [db.get(CustomerRequest, i).notas for i in ids]
+
+
+def _cancelled_viejo(db, sc, motivo):
+    """Renglón CANCELLED como lo dejaba cancelar_solicitud antes de T2B: 'Cancelada: {motivo}', sin extra_data."""
+    from app.models.erp_documents import ActivityLog
+    db.add(ActivityLog(entity_type="SC", entity_id=sc.id, entity_numero=sc.numero, action="CANCELLED",
+                       description=f"Cancelada: {motivo}", old_estado="ASIGNADA", new_estado="CANCELADA",
+                       user_name="t"))
+    db.commit()
+
+
+def test_script_limpiar_motivo_en_notas_reporta_aplica_y_es_idempotente(db, user_admin):
+    """H31-6 + H33-10: reporte sin escribir; aplicar con respaldo; segunda corrida en 0; nunca toca una marca cuyo
+    motivo no es de esa SC."""
+    from sqlalchemy import text
+    from scripts.limpiar_motivo_en_notas import limpiar
+    a = _sc(db, "SC-T2BN01", user_admin, estado="CANCELADA", razon_cancelacion="Ya no lo necesita",
+            notas=f"Entrega en obra\n{MARCA}Ya no lo necesita")
+    b = _sc(db, "SC-T2BN02", user_admin, estado="CANCELADA", razon_cancelacion="Motivo distinto",
+            notas=f"Otra nota\n{MARCA}Otro motivo")
+    c = _sc(db, "SC-T2BN03", user_admin, estado="CANCELADA", razon_cancelacion="Solo esto",
+            notas=f"{MARCA}Solo esto")
+    d = _sc(db, "SC-T2BN04", user_admin, notas=f"X\n{MARCA}Ya no")                # sin motivo registrado
+    ids = [a.id, b.id, c.id, d.id]
+    originales = _notas(db, ids)
+    try:
+        res = limpiar(db, aplicar=False, ids=ids, tabla_respaldo=TABLA_NOTAS_TEST)
+        assert res["candidatas"] == 2 and res["limpiadas"] == 0
+        assert res["marcas_conservadas"] == 2 and res["excluidas"] == 0
+        por_numero = {e["numero"]: e for e in res["ejemplos"]}
+        assert set(por_numero) == {"SC-T2BN01", "SC-T2BN03"}
+        assert por_numero["SC-T2BN01"]["despues"] == "Entrega en obra"
+        assert por_numero["SC-T2BN01"]["quitadas"] == ["Ya no lo necesita"]
+        assert por_numero["SC-T2BN03"]["despues"] is None
+        assert _notas(db, ids) == originales
+        assert not _existe_tabla(db, TABLA_NOTAS_TEST)  # el reporte ni siquiera crea la tabla de respaldo
+
+        res = limpiar(db, aplicar=True, ids=ids, tabla_respaldo=TABLA_NOTAS_TEST)
+        assert res["candidatas"] == 2 and res["limpiadas"] == 2
+        assert _notas(db, ids) == ["Entrega en obra", originales[1], None, originales[3]]
+        respaldo = {r[0]: (r[1], r[2]) for r in db.execute(
+            text(f"SELECT id, notas_original, notas_nueva FROM {TABLA_NOTAS_TEST}")).all()}
+        assert respaldo == {a.id: (originales[0], "Entrega en obra"), c.id: (originales[2], None)}
+
+        res2 = limpiar(db, aplicar=True, ids=ids, tabla_respaldo=TABLA_NOTAS_TEST)
+        assert res2["candidatas"] == 0 and res2["limpiadas"] == 0
+        assert db.execute(text(f"SELECT count(*) FROM {TABLA_NOTAS_TEST}")).scalar() == 2
+    finally:
+        _borrar_tabla(db, TABLA_NOTAS_TEST)
+
+
+def test_limpiar_quita_el_motivo_de_un_cancelled_anterior(db, user_admin):
+    """C1 f + ruling T2B-5: cancelada, restaurada y vuelta a cancelar. La marca del primer motivo (que solo está en un
+    CANCELLED viejo, 'Cancelada: X' sin extra_data) también se quita; la que no coincide con ningún motivo de ESA SC se
+    conserva (aunque coincida con el de otra SC). Un CANCELLED nuevo aporta su extra_data['motivo']."""
+    from app.models.erp_documents import ActivityLog
+    from scripts.limpiar_motivo_en_notas import limpiar
+    sc = _sc(db, "SC-T2BN05", user_admin, estado="CANCELADA", razon_cancelacion="Segundo motivo",
+             notas=(f"Entregar en obra\n{MARCA}Primer motivo\n{MARCA}Segundo motivo\n{MARCA}Escrito a mano"))
+    _cancelled_viejo(db, sc, "Primer motivo")
+    _cancelled_viejo(db, sc, "Segundo motivo")
+    otra = _sc(db, "SC-T2BN06", user_admin, estado="CANCELADA", razon_cancelacion="Escrito a mano")
+    _cancelled_viejo(db, otra, "Escrito a mano")
+    nueva = _sc(db, "SC-T2BN07", user_admin, notas=f"Nota\n{MARCA}Motivo nuevo")   # restaurada: sin razon
+    db.add(ActivityLog(entity_type="SC", entity_id=nueva.id, entity_numero=nueva.numero, action="CANCELLED",
+                       description="Solicitud cancelada (texto de otra versión)", old_estado="ASIGNADA",
+                       new_estado="CANCELADA", user_name="t", extra_data={"motivo": "Motivo nuevo"}))
+    db.commit()
+    ids = [sc.id, otra.id, nueva.id]
+    try:
+        res = limpiar(db, aplicar=True, ids=ids, tabla_respaldo=TABLA_NOTAS_TEST)
+        assert res["limpiadas"] == 2
+        assert _notas(db, [sc.id, nueva.id]) == [f"Entregar en obra\n{MARCA}Escrito a mano", "Nota"]
+        assert res["marcas_conservadas"] == 1
+    finally:
+        _borrar_tabla(db, TABLA_NOTAS_TEST)
+
+
+def test_limpiar_excluye_documentos_reales(db, user_admin, monkeypatch):
+    """R32: DOCUMENTOS_REALES trae exactamente los cuatro números reales; lo que se le agregue (y lo vinculado: aquí una
+    SC por el número de su COT) no sale en las candidatas. Las de Soporte Técnico tampoco; una sin tipo (NULL) sí."""
+    from sqlalchemy import text
+    from scripts import limpiar_motivo_en_notas as modulo
+    assert modulo.DOCUMENTOS_REALES == ("SC-20260731", "COT-20260449", "PVEN-20262799", "SC-20260746")
+    por_numero = _sc(db, "SC-T2BX01", user_admin, estado="CANCELADA", razon_cancelacion="Motivo X",
+                     notas=f"N\n{MARCA}Motivo X")
+    por_cot = _sc(db, "SC-T2BX02", user_admin, estado="CANCELADA", razon_cancelacion="Motivo Y",
+                  notas=f"N\n{MARCA}Motivo Y")
+    cot = _cot(db, "COT-T2BX02", por_cot, estado="RECHAZADA")
+    soporte = _sc(db, "SC-T2BX03", user_admin, estado="CANCELADA", razon_cancelacion="Motivo S",
+                  notas=f"N\n{MARCA}Motivo S", tipo_solicitud="Soporte Tecnico")
+    sin_tipo = _sc(db, "SC-T2BX04", user_admin, estado="CANCELADA", razon_cancelacion="Motivo T",
+                   notas=f"N\n{MARCA}Motivo T")
+    db.execute(text("UPDATE customer_requests SET tipo_solicitud = NULL WHERE id = :i"), {"i": sin_tipo.id})
+    db.commit()
+    ids = [por_numero.id, por_cot.id, soporte.id, sin_tipo.id]
+    # Sin agregarlos a la lista, las dos primeras son candidatas (la prueba si prueba algo); Soporte nunca.
+    assert {e["numero"] for e in modulo.limpiar(db, aplicar=False, ids=ids)["ejemplos"]} == {
+        "SC-T2BX01", "SC-T2BX02", "SC-T2BX04"}
+    monkeypatch.setattr(modulo, "DOCUMENTOS_REALES", modulo.DOCUMENTOS_REALES + (por_numero.numero, cot.numero))
+    try:
+        res = modulo.limpiar(db, aplicar=False, ids=ids)
+        assert {e["numero"] for e in res["ejemplos"]} == {"SC-T2BX04"} and res["excluidas"] == 2
+        res = modulo.limpiar(db, aplicar=True, ids=ids, tabla_respaldo=TABLA_NOTAS_TEST)
+        assert res["limpiadas"] == 1
+        assert _notas(db, ids) == [f"N\n{MARCA}Motivo X", f"N\n{MARCA}Motivo Y", f"N\n{MARCA}Motivo S", "N"]
+    finally:
+        _borrar_tabla(db, TABLA_NOTAS_TEST)
+
+
+def test_limpiar_revierte_todo_si_falla_a_mitad(db, user_admin):
+    """Una transacción: la tabla de respaldo de prueba rechaza la SEGUNDA fila (notas que quedan vacías)."""
+    from sqlalchemy import text
+    from scripts.limpiar_motivo_en_notas import limpiar
+    primera = _sc(db, "SC-T2BF01", user_admin, estado="CANCELADA", razon_cancelacion="Motivo A",
+                  notas=f"A\n{MARCA}Motivo A")
+    segunda = _sc(db, "SC-T2BF02", user_admin, estado="CANCELADA", razon_cancelacion="Motivo B",
+                  notas=f"{MARCA}Motivo B")
+    ids = [primera.id, segunda.id]
+    originales = _notas(db, ids)
+    db.execute(text(f"CREATE TABLE {TABLA_NOTAS_TEST} (id INTEGER PRIMARY KEY, notas_original TEXT, "
+                    "notas_nueva TEXT CHECK (notas_nueva IS NOT NULL), corregido_at TIMESTAMP DEFAULT now())"))
+    db.commit()
+    try:
+        with pytest.raises(Exception):
+            limpiar(db, aplicar=True, ids=ids, tabla_respaldo=TABLA_NOTAS_TEST)
+        assert _notas(db, ids) == originales
+        assert db.execute(text(f"SELECT count(*) FROM {TABLA_NOTAS_TEST}")).scalar() == 0
+    finally:
+        _borrar_tabla(db, TABLA_NOTAS_TEST)
+
+
+def test_limpiar_rechaza_un_nombre_de_tabla_de_respaldo_peligroso(db):
+    from scripts.limpiar_motivo_en_notas import limpiar
+    for nombre in ("x; DROP TABLE users", "Tabla-Con-Guion", "1abc", "", "a b", "abc\n", "abc\r\n"):
+        with pytest.raises(ValueError):
+            limpiar(db, aplicar=False, ids=[1], tabla_respaldo=nombre)
+
+
+def _correr_main(monkeypatch, argv):
+    """main() con limpiar reemplazada por una función que solo anota la llamada."""
+    from scripts import limpiar_motivo_en_notas as modulo
+    llamadas = []
+
+    def _limpiar(db, aplicar=False, **kwargs):
+        llamadas.append(aplicar)
+        return {"candidatas": 0, "limpiadas": 0, "excluidas": 0, "marcas_conservadas": 0, "ejemplos": []}
+
+    monkeypatch.setattr(modulo, "limpiar", _limpiar)
+    salida, errores = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(salida), contextlib.redirect_stderr(errores):
+        try:
+            codigo = modulo.main(argv)
+        except SystemExit as exc:  # argparse
+            codigo = exc.code
+    return codigo, llamadas, salida.getvalue(), errores.getvalue()
+
+
+def test_limpiar_cli_reporta_por_defecto_y_aplicar_exige_la_base(db, monkeypatch):
+    from sqlalchemy import text
+    codigo, llamadas, salida, _ = _correr_main(monkeypatch, [])
+    assert codigo == 0 and llamadas == [False]
+    assert "REPORTE" in salida and "--aplicar --base <nombre de la base>" in salida
+    codigo, llamadas, _, errores = _correr_main(monkeypatch, ["--aplicar"])
+    assert codigo == 2 and llamadas == [] and "exige --base" in errores
+    actual = db.execute(text("SELECT current_database()")).scalar()
+    codigo, llamadas, salida, errores = _correr_main(monkeypatch, ["--aplicar", "--base", actual + "_otra"])
+    assert codigo == 2 and llamadas == []
+    assert f"SELECT current_database() -> {actual}" in salida
+    assert "ABORTADO" in errores and "no se escribió nada" in errores
+    codigo, llamadas, salida, _ = _correr_main(monkeypatch, ["--aplicar", "--base", actual])
+    assert codigo == 0 and llamadas == [True] and "Limpiadas: 0" in salida
+
+
+def test_el_reporte_de_limpiar_no_escribe_nada(db, user_admin, contador_sql):
+    """El modo reporte tal como lo corre main(): READ ONLY primero y después solo lecturas, sin ningún commit."""
+    from scripts.limpiar_motivo_en_notas import _solo_lectura, limpiar
+    sc = _sc(db, "SC-T2BZ01", user_admin, estado="CANCELADA", razon_cancelacion="Motivo Z",
+             notas=f"Z\n{MARCA}Motivo Z")
+    _cancelled_viejo(db, sc, "Motivo Z")
+    contador_sql.reset()
+    _solo_lectura(db)
+    res = limpiar(db, aplicar=False, ids=[sc.id])
+    assert res["candidatas"] == 1
+    sentencias = [s.lstrip().upper() for s in contador_sql.sentencias]
+    assert sentencias[0].startswith("SET TRANSACTION READ ONLY"), sentencias[0]
+    escrituras = [s for s in sentencias if s.startswith(("INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER"))]
+    assert escrituras == []
+    assert contador_sql.commits == 0
