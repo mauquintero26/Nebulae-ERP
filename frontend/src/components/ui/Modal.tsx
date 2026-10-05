@@ -11,7 +11,7 @@ import { ACCENTS, AccentColor } from './colors';
  * las confirmaciones de useAvisos; el modal de sesion vencida (z-[100]) sigue encima. */
 export function Modal({
   title, subtitle, icon: Icon, color = 'amber', onClose, children, footer,
-  maxWidth = 'lg', capa = 'base', role = 'dialog',
+  maxWidth = 'lg', capa = 'base', role = 'dialog', describedBy,
 }: {
   title: string;
   subtitle?: string;
@@ -23,6 +23,8 @@ export function Modal({
   maxWidth?: 'md' | 'lg' | 'xl' | '3xl';
   capa?: 'base' | 'encima';
   role?: 'dialog' | 'alertdialog';
+  /** id del texto que describe la ventana (aria-describedby), p. ej. el mensaje de una confirmación. */
+  describedBy?: string;
 }) {
   const accent = ACCENTS[color];
   const widthCls = { md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl', '3xl': 'max-w-3xl' }[maxWidth];
@@ -34,6 +36,7 @@ export function Modal({
         role={role}
         aria-modal="true"
         aria-labelledby={tituloId}
+        aria-describedby={describedBy}
         className={`bg-white rounded-3xl shadow-2xl w-full ${widthCls} max-h-[90vh] overflow-hidden flex flex-col`}
       >
         <div className={`px-6 py-5 border-b flex justify-between items-center bg-gradient-to-r ${accent.modalGradient}`}>

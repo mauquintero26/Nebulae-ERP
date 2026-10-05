@@ -53,35 +53,70 @@ function traducirTexto(texto, status) {
 const mayuscula = (texto) => texto.charAt(0).toUpperCase() + texto.slice(1);
 const conCampo = (campo, texto) => (campo ? `${campo}: ${texto}` : mayuscula(texto));
 
+// Raices de `loc` de FastAPI: cuando son el unico texto de loc (p. ej. ['body'] = falta todo el cuerpo) no son un campo.
+const RAICES_LOC = new Set(['body', 'query', 'path', 'header', 'cookie']);
+
+/** Nombre crudo del campo (ultimo texto de loc, '' si solo hay una raiz) y su etiqueta visible. */
+function campoDeLoc(loc) {
+  const textos = (Array.isArray(loc) ? loc : []).filter((parte) => typeof parte === 'string');
+  const crudo = textos.length ? textos[textos.length - 1] : '';
+  if (textos.length === 1 && RAICES_LOC.has(crudo)) return { crudo: '', campo: '' };
+  // Object.hasOwn y no ETIQUETAS_CAMPO[crudo] ?? crudo: 'constructor' o 'toString' devolverian la funcion del prototipo.
+  return { crudo, campo: Object.hasOwn(ETIQUETAS_CAMPO, crudo) ? ETIQUETAS_CAMPO[crudo] : crudo };
+}
+
+/** Frase de un limite de ctx, solo si es un numero (si no, se usa msg). */
+const conLimite = (campo, valor, frase) => (typeof valor === 'number' ? conCampo(campo, frase(valor)) : null);
+
 /** Un error de validacion ({type, loc, msg, ctx}) en una frase. */
 function textoDeErrorDeValidacion(error) {
   if (typeof error === 'string') return error.trim();
   if (!error || typeof error !== 'object') return '';
-  const loc = Array.isArray(error.loc) ? error.loc : [];
-  const ultimo = [...loc].reverse().find((parte) => typeof parte === 'string') ?? '';
-  const campo = ETIQUETAS_CAMPO[ultimo] ?? ultimo;
+  const { crudo, campo } = campoDeLoc(error.loc);
   const ctx = error.ctx && typeof error.ctx === 'object' ? error.ctx : {};
   const msg = typeof error.msg === 'string' ? error.msg.replace(/^Value error,\s*/, '').trim() : '';
+  let frase = null;
   switch (error.type) {
-    case 'string_too_short':
-      if (ctx.min_length != null) return conCampo(campo, `debe tener al menos ${ctx.min_length} caracteres.`);
-      break;
-    case 'string_too_long':
-      if (ctx.max_length != null) return conCampo(campo, `máximo ${ctx.max_length} caracteres.`);
-      break;
+    case 'json_invalid':
+      return MENSAJE_DATOS_INVALIDOS;
     case 'missing':
       return campo ? `Falta el dato «${campo}».` : 'Falta un dato obligatorio.';
-    case 'greater_than':
-    case 'greater_than_equal': {
-      const limite = ctx.gt ?? ctx.ge;
-      if (limite != null) return conCampo(campo, `debe ser mayor que ${limite}.`);
+    case 'string_too_short':
+      frase = conLimite(campo, ctx.min_length, (n) => `debe tener al menos ${n} caracteres.`);
       break;
-    }
+    case 'string_too_long':
+      frase = conLimite(campo, ctx.max_length, (n) => `máximo ${n} caracteres.`);
+      break;
+    case 'greater_than':
+      frase = conLimite(campo, ctx.gt, (n) => `debe ser mayor que ${n}.`);
+      break;
+    case 'greater_than_equal':
+      frase = conLimite(campo, ctx.ge, (n) => `debe ser mayor o igual a ${n}.`);
+      break;
+    case 'less_than':
+      frase = conLimite(campo, ctx.lt, (n) => `debe ser menor que ${n}.`);
+      break;
+    case 'less_than_equal':
+      frase = conLimite(campo, ctx.le, (n) => `debe ser menor o igual a ${n}.`);
+      break;
+    case 'int_parsing':
+    case 'float_parsing':
+      frase = conCampo(campo, 'debe ser un número.');
+      break;
+    case 'literal_error':
+    case 'enum':
+      frase = conCampo(campo, 'valor no permitido.');
+      break;
     default:
       break;
   }
+  if (frase) return frase;
   if (!msg) return campo ? `${campo}: dato no válido.` : '';
-  return campo ? `${campo}: ${msg}` : msg;
+  if (!campo) return msg; // C3/R10: una lista sin loc da los msg tal cual ([{msg:'a'},{msg:'b'}] -> 'a b').
+  // Sin repetir el campo cuando el texto ya empieza por el ('tipo debe ser uno de: …' -> 'Tipo debe ser uno de: …').
+  const minusculas = msg.toLowerCase();
+  if ([crudo, campo].some((nombre) => nombre && minusculas.startsWith(nombre.toLowerCase()))) return mayuscula(msg);
+  return `${campo}: ${msg}`;
 }
 
 /**
@@ -139,6 +174,20 @@ export function textoDeError(err, prefijo) {
   else msg = traducirTexto(msg, typeof err?.status === 'number' ? err.status : undefined);
   if (!prefijo || msg.startsWith(prefijo)) return msg;
   return `${prefijo}: ${msg}`;
+}
+
+/**
+ * Tono de un aviso: 'ok' | 'error' | 'info'. Sin tono, 'ok'. 'err' (el tipo de los toasts viejos de
+ * solicitud-client) es 'error'. Uno desconocido cae en 'info' (no en el verde de éxito) y deja un console.warn.
+ * @param {unknown} tono
+ * @returns {'ok' | 'error' | 'info'}
+ */
+export function normalizarTono(tono) {
+  if (tono === undefined || tono === null) return 'ok';
+  if (tono === 'ok' || tono === 'error' || tono === 'info') return tono;
+  if (tono === 'err') return 'error';
+  console.warn(`Aviso con tono desconocido: ${JSON.stringify(tono)}; se muestra como 'info'.`);
+  return 'info';
 }
 
 /** Milisegundos que se ve un aviso: 4 s los de exito e informacion; los de error, de 7 a 15 s segun el largo. */

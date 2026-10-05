@@ -1,11 +1,12 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Toaster } from 'react-hot-toast';
 import { AlertCircle, AlertTriangle, CheckCircle2, HelpCircle, Info, X } from 'lucide-react';
-import { agregarAviso, duracionAviso, textoDeError } from '@/lib/avisos';
+import { agregarAviso, duracionAviso, normalizarTono, textoDeError } from '@/lib/avisos';
+import { hayReautenticacionPendiente } from '@/lib/api';
 import type { AccentColor } from './colors';
 import { Modal } from './Modal';
 import { Button } from './Button';
@@ -40,12 +41,20 @@ export type OpcionesConfirmar = {
 export type ContextoAvisos = {
   avisar: (texto: string, opciones?: OpcionesAviso) => void;
   avisarError: (err: unknown, prefijo?: string) => void;
-  /** Resuelve true solo con el botón de confirmar; Escape, la X, 'Volver' o cambiar de pantalla dan false. */
+  /**
+   * Resuelve true solo con el botón de confirmar; Escape, la X o 'Volver' dan false. Cada confirmación recuerda la
+   * ruta en la que se pidió: al cambiar de pantalla, las pedidas en otra ruta se responden false y se descartan. Una
+   * pedida por la pantalla nueva al montar (o justo después de navegar) ya lleva la ruta nueva y sigue en pie.
+   */
   confirmar: (opciones: OpcionesConfirmar) => Promise<boolean>;
 };
 
 type Aviso = { id: number; texto: string; tono: TonoAviso; accion?: AccionAviso };
-type Confirmacion = { id: number; opciones: OpcionesConfirmar; resolver: (valor: boolean) => void };
+type Confirmacion = { id: number; opciones: OpcionesConfirmar; resolver: (valor: boolean) => void; ruta: string };
+
+// Lo que puede tener foco dentro de la ventana de confirmación (para el ciclo de Tab).
+const ENFOCABLES =
+  'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 const ESTILO_TONO: Record<TonoAviso, string> = {
   ok: 'bg-emerald-600',
@@ -83,6 +92,15 @@ export function AvisosProvider({ children }: { children: React.ReactNode }) {
   // Copia síncrona de la cola: responder() resuelve fuera del setState y una respuesta repetida no hace nada.
   const colaRef = useRef<Confirmacion[]>([]);
   const siguienteId = useRef(0);
+  // Elemento que tenía el foco cuando se abrió la primera confirmación; lo recupera al cerrarse la última.
+  const focoPrevio = useRef<HTMLElement | null>(null);
+
+  // Ruta vigente, actualizada en un efecto de layout: corre antes de los efectos (pasivos) de la página nueva, así que
+  // un confirmar() que esa página pida al montar ya queda con la ruta nueva (ver el efecto de pathname más abajo).
+  const rutaRef = useRef(pathname);
+  useLayoutEffect(() => {
+    rutaRef.current = pathname;
+  }, [pathname]);
 
   const cambiarCola = useCallback((nueva: Confirmacion[]) => {
     colaRef.current = nueva;
@@ -90,8 +108,8 @@ export function AvisosProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const avisar = useCallback((texto: string, opciones?: OpcionesAviso) => {
-    // Un tono desconocido (llamador JS) cae en 'ok' en vez de romper el render de todo el dashboard.
-    const tono: TonoAviso = opciones?.tono === 'error' || opciones?.tono === 'info' ? opciones.tono : 'ok';
+    // 'err' -> 'error'; un tono desconocido cae en 'info' con un console.warn (no rompe el render del dashboard).
+    const tono: TonoAviso = normalizarTono(opciones?.tono);
     const aviso: Aviso = { id: ++siguienteId.current, texto, tono, accion: opciones?.accion };
     setAvisos((lista) => agregarAviso(lista, aviso));
   }, []);
@@ -111,7 +129,12 @@ export function AvisosProvider({ children }: { children: React.ReactNode }) {
   const confirmar = useCallback(
     (opciones: OpcionesConfirmar) =>
       new Promise<boolean>((resolver) => {
-        cambiarCola([...colaRef.current, { id: ++siguienteId.current, opciones, resolver }]);
+        if (!colaRef.current.length && typeof document !== 'undefined') {
+          const activo = document.activeElement;
+          focoPrevio.current = activo instanceof HTMLElement && activo !== document.body ? activo : null;
+        }
+        const confirmacion = { id: ++siguienteId.current, opciones, resolver, ruta: rutaRef.current };
+        cambiarCola([...colaRef.current, confirmacion]);
       }),
     [cambiarCola],
   );
@@ -126,12 +149,13 @@ export function AvisosProvider({ children }: { children: React.ReactNode }) {
     [cambiarCola],
   );
 
-  // Al cambiar de pantalla las confirmaciones pendientes se responden 'no' y se descartan; los avisos se quedan.
+  // Al cambiar de pantalla, las confirmaciones pedidas en otra ruta se responden 'no' y se descartan (las de la ruta
+  // nueva siguen); los avisos se quedan.
   useEffect(() => {
-    const pendientes = colaRef.current;
-    if (!pendientes.length) return;
-    cambiarCola([]);
-    pendientes.forEach((c) => c.resolver(false));
+    const deOtraRuta = colaRef.current.filter((c) => c.ruta !== pathname);
+    if (!deOtraRuta.length) return;
+    cambiarCola(colaRef.current.filter((c) => c.ruta === pathname));
+    deOtraRuta.forEach((c) => c.resolver(false));
   }, [pathname, cambiarCola]);
 
   // Si el proveedor se desmonta (salir del dashboard), ninguna promesa queda colgada.
@@ -145,20 +169,15 @@ export function AvisosProvider({ children }: { children: React.ReactNode }) {
   );
 
   const actual = cola[0];
+  const hayConfirmacion = cola.length > 0;
 
-  // Escape responde 'no' a la confirmación visible (solo mientras hay una). En captura y sin propagar: Escape
-  // contesta solo la ventana de arriba, no cierra además una ventana de la página que esté debajo.
+  // Al cerrarse la última confirmación, el foco vuelve a donde estaba (si ese elemento sigue en la página).
   useEffect(() => {
-    if (!actual) return;
-    const alTeclear = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
-      responder(actual.id, false);
-    };
-    window.addEventListener('keydown', alTeclear, true);
-    return () => window.removeEventListener('keydown', alTeclear, true);
-  }, [actual, responder]);
+    if (hayConfirmacion) return;
+    const foco = focoPrevio.current;
+    focoPrevio.current = null;
+    if (foco?.isConnected) foco.focus();
+  }, [hayConfirmacion]);
 
   const valor = useMemo<ContextoAvisos>(() => ({ avisar, avisarError, confirmar }), [avisar, avisarError, confirmar]);
 
@@ -236,11 +255,47 @@ function VentanaConfirmacion({
 }) {
   const { id, opciones } = confirmacion;
   const { titulo, mensaje, efectos, textoConfirmar = 'Confirmar', textoCancelar = 'Volver', peligro = false, color } = opciones;
+  const mensajeId = useId();
   const no = () => onResponder(id, false);
+
+  // Teclado mientras esta ventana está visible, en fase de captura:
+  // - Escape responde 'no' y no se propaga (no cierra además una ventana de la página que esté debajo).
+  // - Tab / Shift+Tab dan la vuelta dentro de la ventana (el foco no se va a la página de atrás).
+  // Con la ventana de sesión vencida abierta (z-[100], encima) el teclado es de ella: no se toca.
+  useEffect(() => {
+    const alTeclear = (e: KeyboardEvent) => {
+      if (hayReautenticacionPendiente()) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onResponder(id, false);
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const panel = document.getElementById(mensajeId)?.closest<HTMLElement>('[aria-modal="true"]');
+      const enfocables = panel ? Array.from(panel.querySelectorAll<HTMLElement>(ENFOCABLES)) : [];
+      if (!panel || !enfocables.length) return;
+      const primero = enfocables[0];
+      const ultimo = enfocables[enfocables.length - 1];
+      const activo = document.activeElement;
+      const dentro = activo instanceof Node && panel.contains(activo);
+      const destino = e.shiftKey
+        ? !dentro || activo === primero ? ultimo : null
+        : !dentro || activo === ultimo ? primero : null;
+      if (destino) {
+        e.preventDefault();
+        destino.focus();
+      }
+    };
+    window.addEventListener('keydown', alTeclear, true);
+    return () => window.removeEventListener('keydown', alTeclear, true);
+  }, [id, mensajeId, onResponder]);
+
   return (
     <Modal
       capa="encima"
       role="alertdialog"
+      describedBy={mensajeId}
       maxWidth="md"
       color={peligro ? 'red' : color || 'indigo'}
       icon={peligro ? AlertTriangle : HelpCircle}
@@ -262,7 +317,9 @@ function VentanaConfirmacion({
         </>
       }
     >
-      <p className="text-sm text-slate-700 whitespace-pre-line">{mensaje}</p>
+      <p id={mensajeId} className="text-sm text-slate-700 whitespace-pre-line">
+        {mensaje}
+      </p>
       {efectos && efectos.length > 0 && (
         <ul className="text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1 list-disc list-inside">
           {efectos.map((efecto, i) => (

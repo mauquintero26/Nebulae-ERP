@@ -7,13 +7,13 @@
  * - errorDeRespuesta(status, body): Error con message legible, .status y .detail (el 409 ANULA_CONFIRMACION de la
  *   calculadora se detecta con err.status y err.detail.codigo). Usa body.errores (el 400 de validacion de main.py).
  * - textoDeError: sin conexion, '[object Object]', 'Error: ' repetido, prefijo sin repetir.
- * - duracionAviso y agregarAviso (maximo 3, sin duplicados).
+ * - duracionAviso, agregarAviso (maximo 3, sin duplicados) y normalizarTono ('err' -> error, desconocido -> info).
  */
 
 import assert from 'node:assert/strict';
 import {
   MENSAJE_SIN_CONEXION, MENSAJE_GENERICO, ETIQUETAS_CAMPO,
-  textoDeDetalle, textoDeError, duracionAviso, agregarAviso, errorDeRespuesta,
+  textoDeDetalle, textoDeError, duracionAviso, agregarAviso, errorDeRespuesta, normalizarTono,
 } from '../src/lib/avisos.js';
 
 const DATOS_INVALIDOS = 'Los datos enviados no son válidos. Revisa el formulario e intenta de nuevo.';
@@ -54,20 +54,79 @@ console.log('--- TEST 3: textoDeDetalle con la lista de errores de validacion --
   assert.equal(
     textoDeDetalle([{ type: 'greater_than', loc: ['body', 'monto'], msg: 'x', ctx: { gt: 0 } }], 400),
     'Monto: debe ser mayor que 0.');
+  // Ruling de la ronda 1: 'mayor o igual a' (el 'mayor que' literal de H49 era falso con ge).
   assert.equal(
     textoDeDetalle([{ type: 'greater_than_equal', loc: ['body', 'productos', 0, 'cantidad'], msg: 'x', ctx: { ge: 1 } }], 400),
-    'cantidad: debe ser mayor que 1.', 'sin etiqueta usa el ultimo string de loc');
+    'cantidad: debe ser mayor o igual a 1.', 'sin etiqueta usa el ultimo string de loc');
+  assert.equal(
+    textoDeDetalle([{ type: 'less_than', loc: ['body', 'monto'], msg: 'x', ctx: { lt: 100 } }], 400),
+    'Monto: debe ser menor que 100.');
+  assert.equal(
+    textoDeDetalle([{ type: 'less_than_equal', loc: ['body', 'monto'], msg: 'x', ctx: { le: 365 } }], 400),
+    'Monto: debe ser menor o igual a 365.');
   assert.equal(
     textoDeDetalle([corto('razon'), { type: 'missing', loc: ['body', 'monto'], msg: 'Field required' }], 400),
     'Motivo: debe tener al menos 5 caracteres. Falta el dato «Monto».', 'dos errores se unen con un espacio');
   assert.equal(
-    textoDeDetalle([{ type: 'int_parsing', loc: ['body', 'email'], msg: 'Input should be a valid integer' }], 400),
-    'Correo: Input should be a valid integer', 'un type desconocido usa msg');
+    textoDeDetalle([{ type: 'int_parsing', loc: ['body', 'monto'], msg: 'Input should be a valid integer' }], 400),
+    'Monto: debe ser un número.');
+  assert.equal(
+    textoDeDetalle([{ type: 'float_parsing', loc: ['body', 'monto'], msg: 'Input should be a valid number' }], 400),
+    'Monto: debe ser un número.');
+  assert.equal(
+    textoDeDetalle([{ type: 'literal_error', loc: ['body', 'metodo_pago'], msg: "Input should be 'A' or 'B'" }], 400),
+    'Método de pago: valor no permitido.');
+  assert.equal(
+    textoDeDetalle([{ type: 'enum', loc: ['query', 'estado'], msg: "Input should be 'X'" }], 400),
+    'estado: valor no permitido.');
+  assert.equal(
+    textoDeDetalle([{ type: 'string_type', loc: ['body', 'email'], msg: 'Input should be a valid string' }], 400),
+    'Correo: Input should be a valid string', 'un type desconocido usa msg');
   assert.equal(
     textoDeDetalle([{ type: 'value_error', loc: ['body', 'tipo'], msg: 'Value error, tipo debe ser uno de: ANTICIPO' }], 400),
-    'tipo: tipo debe ser uno de: ANTICIPO', "el 'Value error, ' de pydantic no se muestra");
+    'Tipo debe ser uno de: ANTICIPO', "sin 'Value error, ' y sin repetir el campo cuando msg ya empieza por el");
+  assert.equal(
+    textoDeDetalle([{ type: 'value_error', loc: ['body', 'motivo'], msg: 'Value error, motivo vacío' }], 400),
+    'Motivo vacío', 'tampoco se repite cuando msg empieza por el nombre crudo de un campo con etiqueta');
+  // Raices de loc: solas no son un campo.
+  assert.equal(textoDeDetalle([{ type: 'missing', loc: ['body'], msg: 'Field required' }], 400), 'Falta un dato obligatorio.');
+  assert.equal(
+    textoDeDetalle([{ type: 'json_invalid', loc: ['body', 7], msg: 'JSON decode error', ctx: { error: 'Expecting value' } }], 400),
+    DATOS_INVALIDOS, 'JSON malformado -> la frase generica');
+  // Un nombre de campo que coincide con una propiedad de Object.prototype no toma la funcion del prototipo.
+  assert.equal(textoDeDetalle([{ type: 'missing', loc: ['body', 'constructor'], msg: 'Field required' }], 400),
+    'Falta el dato «constructor».');
+  assert.equal(textoDeDetalle([{ type: 'missing', loc: ['body', 'toString'], msg: 'Field required' }], 400),
+    'Falta el dato «toString».');
+  // ctx que no es numero: no se arma la frase con el limite, se usa msg.
+  assert.equal(
+    textoDeDetalle([{ type: 'string_too_short', loc: ['body', 'razon'], msg: 'muy corto', ctx: { min_length: '5' } }], 400),
+    'Motivo: muy corto');
+  assert.equal(
+    textoDeDetalle([{ type: 'greater_than', loc: ['body', 'monto'], msg: 'Input should be greater than 0', ctx: {} }], 400),
+    'Monto: Input should be greater than 0');
   // C3/R10: lista sin loc -> los msg unidos con un espacio.
   assert.equal(textoDeDetalle([{ msg: 'a' }, { msg: 'b' }], 400), 'a b');
+}
+
+console.log('--- TEST 3b: normalizarTono ---');
+{
+  const avisos = [];
+  const warnOriginal = console.warn;
+  console.warn = (...args) => { avisos.push(args.join(' ')); };
+  try {
+    assert.equal(normalizarTono(undefined), 'ok', 'sin tono: ok');
+    assert.equal(normalizarTono('ok'), 'ok');
+    assert.equal(normalizarTono('error'), 'error');
+    assert.equal(normalizarTono('info'), 'info');
+    assert.equal(normalizarTono('err'), 'error', "'err' (adaptador de solicitud-client) es error");
+    assert.equal(avisos.length, 0, 'los tonos conocidos no avisan');
+    assert.equal(normalizarTono('exito'), 'info', 'uno desconocido cae en info, no en el verde de exito');
+    assert.equal(avisos.length, 1);
+    assert.ok(avisos[0].includes('exito'), 'el console.warn dice el valor recibido');
+  } finally {
+    console.warn = warnOriginal;
+  }
 }
 
 console.log('--- TEST 4: textoDeDetalle sin detalle y textos tecnicos del servidor ---');
