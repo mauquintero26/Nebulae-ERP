@@ -207,7 +207,10 @@ def test_crear_el_pedido_redondea_los_montos_y_el_saldo_cuadra(app_client, db, a
 
 
 def test_guardar_el_pedido_redondea_total_subtotal_saldo_y_anticipo(app_client, db, admin_token):
-    """R11: la re-cotizacion propaga total, subtotal y saldo con decimales al PVEN por update_pedido."""
+    """R11: la re-cotizacion propaga total y subtotal con decimales al PVEN por update_pedido y quedan en pesos enteros.
+    A3 (revision final, a proposito): con un total en el body, el saldo y el anticipo del body se ignoran y salen del
+    libro de pagos (este pedido no tiene pagos: anticipo 0 y saldo = total). Un saldo suelto (Registrar cobro de
+    Entregas) se sigue guardando redondeado."""
     ven = _ven(db, "PVEN-PESOS001", total_cop=1000, subtotal_cop=1000, anticipo_cop=0, saldo_cop=1000,
                productos=[_linea("Cuna", 1, 1000)])
     resp = app_client.patch(f"/api/v1/ventas/pedidos/{ven.id}", json={
@@ -217,9 +220,15 @@ def test_guardar_el_pedido_redondea_total_subtotal_saldo_y_anticipo(app_client, 
     db.refresh(ven)
     assert ven.total_cop == Decimal('2786923')
     assert ven.subtotal_cop == Decimal('2786923')
+    assert ven.saldo_cop == Decimal('2786923')
+    assert ven.anticipo_cop == Decimal('0')
+    assert resp.json()["data"]["saldo_cop"] == 2786923
+
+    resp = app_client.patch(f"/api/v1/ventas/pedidos/{ven.id}", json={"saldo_cop": 1114769.28, "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    db.refresh(ven)
     assert ven.saldo_cop == Decimal('1114769')
-    assert ven.anticipo_cop == Decimal('1672154')
-    assert resp.json()["data"]["saldo_cop"] == 1114769
 
 
 def test_guardar_el_pedido_sin_mandar_montos_no_los_toca(app_client, db, admin_token):
