@@ -180,6 +180,42 @@ def anticipo_requerido(total, pct) -> Decimal:
     return redondear_peso(redondear_peso(total) * Decimal(str(pct)) / _CIEN)
 
 
+def monto_linea(producto) -> Decimal:
+    """U19: valor de una linea de la cotizacion en pesos enteros, nunca negativo: su total_cop o, si no lo trae,
+    unit_price_cop x qty. 0 si la linea no es un dict o trae un dato que no es un monto (dato viejo)."""
+    if not isinstance(producto, dict):
+        return Decimal("0")
+    try:
+        if producto.get("total_cop") is not None:
+            monto = redondear_peso(producto["total_cop"])
+        else:
+            monto = redondear_peso(Decimal(str(producto.get("unit_price_cop") or 0))
+                                   * Decimal(str(producto.get("qty") or 0)))
+    except (ValueError, InvalidOperation):
+        return Decimal("0")
+    return max(Decimal("0"), monto)
+
+
+def repartir_anticipo_por_linea(montos, anticipo) -> list:
+    """U19: reparte `anticipo` (pesos enteros) entre las lineas en proporcion a sus `montos`, por el metodo del mayor
+    residuo: cada linea recibe el piso de su parte exacta y los pesos que faltan van, de a uno, a las de mayor parte
+    decimal (en empate, la que va primero). La suma da exactamente el anticipo y cada linea queda a menos de $1 de su
+    parte exacta; una linea en 0 recibe 0. Lista de Decimal del mismo largo; ceros si el anticipo o la suma de los
+    montos no son positivos; [] sin lineas. Con descuento global se reparte sobre el valor antes del descuento: la
+    proporcion es la misma. Se hace con enteros para no perder precision."""
+    pesos_linea = [max(0, int(redondear_peso(m))) for m in montos]
+    objetivo = int(redondear_peso(anticipo))
+    total = sum(pesos_linea)
+    if objetivo <= 0 or total <= 0:
+        return [Decimal("0") for _ in pesos_linea]
+    partes = [objetivo * p // total for p in pesos_linea]
+    restos = [objetivo * p % total for p in pesos_linea]
+    faltan = objetivo - sum(partes)
+    for i in sorted(range(len(partes)), key=lambda i: (-restos[i], i))[:faltan]:
+        partes[i] += 1
+    return [Decimal(p) for p in partes]
+
+
 def anticipo_del_pedido(so):
     """(requerido, pendiente) del anticipo de un Pedido de Venta: la UNICA cuenta que usan
     recalculate_sale_order_state (PENDIENTE_ANTICIPO) y GET /pedidos/{id} (anticipo_pendiente).

@@ -30,7 +30,7 @@ from app.core import cambios_documento
 from app.core.ventas_dinero import (
     redondear_peso, pesos, formato_pct, anticipo_cotizacion, pct_anticipo_cotizacion, anticipo_requerido,
     anticipo_del_pedido, saldos_a_favor_de_cotizacion, PCT_ANTICIPO_POR_DEFECTO, ORIGEN_CONSERVADO,
-    anular_pxps_de_pedido,
+    anular_pxps_de_pedido, monto_linea, repartir_anticipo_por_linea,
 )
 from app.core.textos_actividad import etiqueta_estado, ETIQUETAS_ESTADO, PASOS_SC, nombre_de_usuario
 from app.core.estados_pedido import ESTADOS_VEN_DESTINOS, ESTADOS_VEN_SIN_DINERO, destinos_ven_permitidos
@@ -1540,6 +1540,14 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
     d["saldo_a_favor_detalle"] = [{"pven_id": s["pedido"].id, "pven_numero": s["pedido"].numero,
                                    "monto": float(s["monto"])} for s in saldos]
     d["anticipo_por_verificar"] = float(max(Decimal("0"), requerido - min(saldo_a_favor, total)))
+    # U19+U21 (C10): el anticipo de cada producto, lista paralela a d['productos'] (mismo orden). Reparte el mismo numero
+    # que muestra TOTALES: con un pedido vigente (el mas nuevo no cancelado, el criterio de _pven_vigente_de_cotizacion
+    # sobre `vens`, sin otra consulta) el requerido de ESE pedido; si no, el de la cotizacion. No va dentro de cada
+    # producto (el PATCH de la calculadora reenvia productos y quedaria guardado, viejo) ni en _cot_dict (el listado).
+    pven = next((v for v in reversed(vens) if v.estado != "CANCELADO"), None)
+    objetivo = anticipo_del_pedido(pven)[0] if pven is not None else requerido
+    d["anticipo_por_linea"] = [float(a) for a in repartir_anticipo_por_linea(
+        [monto_linea(p) for p in (cot.productos or [])], objetivo)]
     return {"status": "success", "data": d}
 
 
