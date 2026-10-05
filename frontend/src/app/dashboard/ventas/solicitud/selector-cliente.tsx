@@ -194,7 +194,6 @@ export function SelectorClienteSC({ cliente, onCliente }: {
         <div className="relative" ref={contenedor}>
           <input type="text" ref={buscadorRef} value={texto} onChange={e => buscar(e.target.value)} placeholder="Buscar por nombre, teléfono o correo…"
             aria-label="Buscar cliente"
-            aria-expanded={listaAbierta}
             // Vive dentro del <form> de la solicitud: el Enter no la envía (todavía no hay cliente elegido). Escape cierra
             // la lista abierta; al volver al buscador, la lista reaparece.
             onKeyDown={e => {

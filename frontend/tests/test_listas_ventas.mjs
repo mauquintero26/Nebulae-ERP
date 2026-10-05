@@ -16,9 +16,9 @@ import {
   ESTADOS_PEDIDO_SIN_DINERO, pedidoSumaDinero, resumenPedidos, kpisPedidos, hintTotalPedidos, opcionesFiltroEstado,
   generoCotizacion, cotizacionesVigentes, cotizacionesRechazadas, esperaCotizacion, contadoresSolicitudes,
   tasaConversionCotizacion, superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera, pasosParaCancelarSolicitud,
-  repartirCancelacionSolicitudes, cifrasVentasDashboard, rutaSinParametro, esSolicitudActiva,
+  repartirCancelacionSolicitudes, cifrasVentasDashboard, rutaSinParametro, esSolicitudActiva, pestanaDeSolicitud,
 } from '../src/lib/listas-ventas.js';
-import { TEXTO_PAPELERA_SIN_FECHA } from '../src/lib/estados-solicitud.js';
+import { TEXTO_PAPELERA_SIN_FECHA, ESTADOS_SC } from '../src/lib/estados-solicitud.js';
 
 console.log('--- N8 TEST 1: diasAlerta lee las tres formas de la configuracion ---');
 {
@@ -394,6 +394,48 @@ console.log('--- T7 TEST 7d (ronda 1, C12): esSolicitudActiva, un solo predicado
   // La misma lista da un solo número (antes la pestaña contaba por exclusión y el diagnóstico solo los 3 sin confirmar).
   const lista = [sc('BORRADOR'), sc('ASIGNADA'), sc('COTIZADA'), sc('CONFIRMADA'), sc('CANCELADA'), sc('BORRADOR', 'Soporte Tecnico')];
   assert.equal(lista.filter(esSolicitudActiva).length, 3);
+}
+
+console.log('--- T7 TEST 7e (ronda 2): pestanaDeSolicitud — cada SC cae en exactamente una pestaña ---');
+{
+  const PESTANAS = ['Activas', 'Confirmadas', 'Canceladas', 'Soporte'];
+  const sc = (estado, tipo = 'Cotizacion de Producto') => ({ estado, tipo_solicitud: tipo });
+  // Orden: Soporte (por tipo o por su estado propio) -> Confirmadas -> Canceladas -> Activas.
+  const esperado = {
+    BORRADOR: 'Activas', ASIGNADA: 'Activas', PENDIENTE_CONFIRMACION: 'Activas', CONFIRMADA: 'Confirmadas',
+    CANCELADA: 'Canceladas', 'N/A_SOPORTE': 'Soporte',
+    COTIZADA: 'Activas', EN_ESPERA_CONFIRMACION: 'Activas', RECHAZADA: 'Activas', VENCIDA: 'Activas',
+  };
+  assert.deepEqual(Object.keys(esperado).sort(), Object.keys(ESTADOS_SC).sort(), 'cubre todos los estados de ESTADOS_SC');
+  for (const [estado, pestana] of Object.entries(esperado)) {
+    assert.equal(pestanaDeSolicitud(sc(estado)), pestana, estado);
+    // Un ticket de Soporte va a 'Soporte' tenga el estado que tenga (también Cancelada: antes salía en dos pestañas).
+    assert.equal(pestanaDeSolicitud(sc(estado, 'Soporte Tecnico')), 'Soporte', `Soporte en ${estado}`);
+  }
+  // Un ticket al que se le corrigió el tipo en el detalle conserva N/A_SOPORTE: antes no salía en ninguna pestaña.
+  assert.equal(pestanaDeSolicitud(sc('N/A_SOPORTE', 'Seguimiento')), 'Soporte');
+  // Sin estado no está confirmada ni cancelada: sale en 'Activas' (no se pierde).
+  assert.equal(pestanaDeSolicitud({ tipo_solicitud: 'Cotizacion de Producto' }), 'Activas');
+  assert.equal(pestanaDeSolicitud({}), 'Activas');
+  for (const nada of [null, undefined, 'x', 3]) {
+    assert.equal(pestanaDeSolicitud(nada), null);
+    assert.equal(esSolicitudActiva(nada), false);
+  }
+  // esSolicitudActiva es exactamente "su pestaña es Activas".
+  for (const estado of Object.keys(esperado)) {
+    for (const tipo of ['Cotizacion de Producto', 'Soporte Tecnico', 'Seguimiento']) {
+      assert.equal(esSolicitudActiva(sc(estado, tipo)), pestanaDeSolicitud(sc(estado, tipo)) === 'Activas');
+    }
+  }
+  // Con el filtro de la página (una pestaña = las filas cuya pestanaDeSolicitud es esa), los 4 contadores suman el total:
+  // ninguna fila falta ni se repite.
+  const filas = [
+    ...Object.keys(esperado).map((e) => sc(e)), ...Object.keys(esperado).map((e) => sc(e, 'Soporte Tecnico')),
+    sc('N/A_SOPORTE', 'Seguimiento'), { tipo_solicitud: 'Nuevo Lead' }, {},
+  ];
+  const conteos = PESTANAS.map((t) => filas.filter((s) => pestanaDeSolicitud(s) === t).length);
+  assert.equal(conteos.reduce((a, b) => a + b, 0), filas.length);
+  assert.deepEqual(conteos, [9, 1, 1, 12]);
 }
 
 console.log('--- N4 TEST 7b (revision T11): repartirCancelacionSolicitudes omite las que ya estan en la Papelera y las de soporte ---');

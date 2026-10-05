@@ -24,7 +24,9 @@ import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas
 import {
   diasAlerta, generoCotizacion, cotizacionesVigentes, contadoresSolicitudes, tasaConversionCotizacion,
   superaDiasAlerta, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera, esSolicitudActiva,
+  pestanaDeSolicitud,
 } from '@/lib/listas-ventas';
+import { comoUTC } from '@/lib/hub-ventas';
 import {
   ESTADOS_SC as ESTADOS_SC_LIB, ESTADOS_SC_HEREDADOS, infoEstadoSolicitud, puedeReiniciar, motivoDeCancelacion,
 } from '@/lib/estados-solicitud';
@@ -1088,18 +1090,18 @@ export default function SolicitudClient() {
   const tasaConv=tasaConversionCotizacion(solicitudes);
   // N8: 'sin atender' = Borrador que lleva mas de los dias de alerta de Configuracion sin cambios (fechas del API en UTC).
   const sinAtender=solicitudes.filter(s=>s.estado==='BORRADOR'&&superaDiasAlerta(s.updated_at||s.fecha_solicitud,alertDias)).length;
+  // Ronda 2: fecha_vencimiento llega en UTC sin zona (utcnow + días): comoUTC, para no vencer 5 h tarde en Colombia.
   const vencidas=solicitudes.filter(s=>{
     if(!esSolicitudActiva(s)) return false;
-    return s.fecha_vencimiento&&new Date(s.fecha_vencimiento)<new Date();
+    return s.fecha_vencimiento&&new Date(comoUTC(s.fecha_vencimiento))<new Date();
   }).length;
 
+  // Ronda 2: cada SC cae en exactamente una pestaña (pestanaDeSolicitud); la misma regla da los contadores.
+  const PESTANAS_SC=['Activas','Confirmadas','Canceladas','Soporte'];
   const filtered=solicitudes.filter(sc=>{
     const ms=!search||(sc.numero||'').toLowerCase().includes(search.toLowerCase())||(sc.customer_name||'').toLowerCase().includes(search.toLowerCase())||(sc.advisor_name||'').toLowerCase().includes(search.toLowerCase())||coincideProducto(sc,search);
     if(!ms) return false;
-    if(activeTab==='Activas') return esSolicitudActiva(sc);
-    if(activeTab==='Confirmadas') return sc.estado==='CONFIRMADA';
-    if(activeTab==='Canceladas') return sc.estado==='CANCELADA';
-    if(activeTab==='Soporte') return sc.tipo_solicitud==='Soporte Tecnico';
+    if(PESTANAS_SC.includes(activeTab)) return pestanaDeSolicitud(sc)===activeTab;
     return true;
   });
 
@@ -1276,7 +1278,7 @@ export default function SolicitudClient() {
                     className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${activeTab===tab?'bg-indigo-600 text-white shadow-sm':'text-gray-600 hover:text-indigo-700 hover:bg-indigo-50'}`}>
                     {tab==='Papelera'?'🗑️ Papelera':tab}
                     {tab!=='Analisis'&&tab!=='Papelera'&&<span className={`ml-1.5 text-xs font-black ${activeTab===tab?'text-indigo-200':'text-gray-400'}`}>
-                      {tab==='Activas'?totalActivas:tab==='Confirmadas'?solicitudes.filter(s=>s.estado==='CONFIRMADA').length:tab==='Soporte'?solicitudes.filter(s=>s.tipo_solicitud==='Soporte Tecnico').length:solicitudes.filter(s=>s.estado==='CANCELADA').length}
+                      {solicitudes.filter(s=>pestanaDeSolicitud(s)===tab).length}
                     </span>}
                   </button>
                 ))}
@@ -1381,7 +1383,7 @@ export default function SolicitudClient() {
                 ):filtered.length===0?(
                   <tr><td colSpan={9}><EmptyState icon={FileText} message="No hay registros." hint="Ajusta la búsqueda o el filtro, o crea una nueva solicitud."/></td></tr>
                 ):filtered.slice((currentPage-1)*pageSize, currentPage*pageSize).map(sc=>{
-                  const isOverdue=sc.fecha_vencimiento&&new Date(sc.fecha_vencimiento)<new Date();
+                  const isOverdue=sc.fecha_vencimiento&&new Date(comoUTC(sc.fecha_vencimiento))<new Date();
                   const isStale=superaDiasAlerta(sc.updated_at||sc.fecha_solicitud,alertDias);
                   return (
                     <tr key={sc.id} onClick={()=>router.push(`/dashboard/ventas/solicitud/${sc.id}`)} className={`hover:bg-slate-50/80 transition-colors group cursor-pointer ${isStale&&sc.estado==='BORRADOR'?'bg-rose-50/30':''}`}>
@@ -1409,7 +1411,7 @@ export default function SolicitudClient() {
                           </div>
                         </td>
                       ) : (
-                        <td className="px-4 py-4"><span className={`font-medium text-xs ${isOverdue?'text-red-600 font-bold':''}`}>{isOverdue&&<AlertTriangle size={10} className="inline mr-1"/>}{fDate(sc.fecha_vencimiento)}</span></td>
+                        <td className="px-4 py-4"><span className={`font-medium text-xs ${isOverdue?'text-red-600 font-bold':''}`}>{isOverdue&&<AlertTriangle size={10} className="inline mr-1"/>}{fDate(comoUTC(sc.fecha_vencimiento))}</span></td>
                       )}
                       <td className="px-4 py-4"><EstadoBadge estado={sc.estado}/></td>
                       <td className="px-4 py-4" onClick={e=>e.stopPropagation()}>

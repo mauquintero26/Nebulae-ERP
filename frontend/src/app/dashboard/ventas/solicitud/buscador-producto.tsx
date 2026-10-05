@@ -44,7 +44,11 @@ export function ProductSearch({ value, onChange, onSelect, onAgregarTexto, input
   const reqId = useRef(0);
   const contenedor = useRef<HTMLDivElement>(null);
 
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  // Al desmontar: sin temporizador, y una comprobación en vuelo ya no llama onAgregarTexto (ronda 2: sube reqId).
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+    reqId.current += 1;
+  }, []);
 
   // C9: la lista se cierra al hacer clic fuera (mousedown fuera del buscador, como el menú de fila).
   useEffect(() => {
@@ -118,7 +122,9 @@ export function ProductSearch({ value, onChange, onSelect, onAgregarTexto, input
     if (timer.current) { clearTimeout(timer.current); timer.current = null; }
     const id = ++reqId.current;
     comprobandoRef.current = true;
-    setComprobando(true); setOpen(false); setBuscando(false);
+    // Ronda 2: sin resultsDe, un Enter que llegue antes de que el formulario limpie el buscador no toma el camino
+    // síncrono de arriba (no se agrega la línea dos veces).
+    setComprobando(true); setOpen(false); setBuscando(false); setResultsDe('');
     const r = await resolverConBusqueda(texto, buscarEnCatalogo);
     comprobandoRef.current = false;
     setComprobando(false);
@@ -148,7 +154,6 @@ export function ProductSearch({ value, onChange, onSelect, onAgregarTexto, input
           }}
           placeholder="Buscar producto en el catálogo…"
           aria-label="Buscar producto en el catálogo"
-          aria-expanded={listaAbierta}
           className="flex-1 min-w-0 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-200 outline-none read-only:bg-slate-50"
         />
         {onAgregarTexto && (

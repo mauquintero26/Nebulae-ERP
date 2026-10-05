@@ -284,16 +284,31 @@ export function superaDiasAlerta(iso, dias, ahora = Date.now()) {
 }
 
 /**
- * T7 ronda 1 (C12): una solicitud "activa" de la lista: no es de Soporte Técnico (por tipo o por su estado propio) y
- * su estado no es Confirmada ni Cancelada. Los estados heredados (Cotizada, En espera de confirmación, Rechazada,
- * Vencida) siguen contando como activos hasta que T12 los ajuste (esconderlos sería peor). Un solo predicado para la
- * pestaña 'Activas', su contador, las vencidas y el diagnóstico de la IA: la misma página no da dos números distintos.
+ * T7 ronda 2: la pestaña de la lista de solicitudes en la que cae una fila. Cada solicitud cae en exactamente una, en
+ * este orden: Soporte Técnico (por tipo o por su estado propio N/A_SOPORTE, también si se le corrigió el tipo en el
+ * detalle) -> 'Soporte'; CONFIRMADA -> 'Confirmadas'; CANCELADA -> 'Canceladas'; lo demás (incluidos los estados
+ * heredados, hasta que T12 los ajuste, y una fila sin estado) -> 'Activas'. null si no es una fila. Lo usan el filtro de
+ * las 4 pestañas y sus contadores.
+ * @param {any} sc
+ * @returns {'Soporte' | 'Confirmadas' | 'Canceladas' | 'Activas' | null}
+ */
+export function pestanaDeSolicitud(sc) {
+  if (!esObjeto(sc)) return null;
+  if (esSoporte(sc)) return 'Soporte';
+  if (sc.estado === 'CONFIRMADA') return 'Confirmadas';
+  if (sc.estado === 'CANCELADA') return 'Canceladas';
+  return 'Activas';
+}
+
+/**
+ * T7 ronda 1 (C12): una solicitud "activa" de la lista = su pestaña es 'Activas' (no es Soporte ni está Confirmada o
+ * Cancelada; los heredados cuentan). Un solo predicado para la pestaña, su contador, las vencidas y el diagnóstico de la
+ * IA: la misma página no da dos números distintos. null -> false.
  * @param {any} sc
  * @returns {boolean}
  */
 export function esSolicitudActiva(sc) {
-  if (!esObjeto(sc) || esSoporte(sc)) return false;
-  return sc.estado !== 'CONFIRMADA' && sc.estado !== 'CANCELADA';
+  return pestanaDeSolicitud(sc) === 'Activas';
 }
 
 /**
