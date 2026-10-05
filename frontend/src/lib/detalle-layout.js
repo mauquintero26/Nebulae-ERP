@@ -26,7 +26,7 @@ function tieneControl(texto) {
  * - Debe empezar por '/dashboard/' (nunca '//' ni '/\', ni un esquema como 'https:' o 'javascript:').
  * - Sin '\' ni caracteres de control: el parser de URL trata '\' como '/' y borra tab/CR/LF en silencio.
  * - Resuelta con new URL, debe quedar en el mismo origen y seguir dentro de /dashboard/ (sin '..' ni '%2e%2e' que la
- *   saquen).
+ *   saquen), y su ruta no puede tener '//' (ningun destino legitimo lo trae).
  * Devuelve la ruta ya resuelta (ruta + query + hash): lo que se valido es exactamente lo que se usa.
  * @param {unknown} raw
  * @returns {string}
@@ -41,6 +41,7 @@ export function returnToSeguro(raw) {
     return '';
   }
   if (url.origin !== ORIGEN_PRUEBA || !url.pathname.startsWith(PREFIJO_DASHBOARD)) return '';
+  if (url.pathname.includes('//')) return '';
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
@@ -75,8 +76,12 @@ const ETIQUETAS_VOLVER = Object.freeze([
  */
 export function etiquetaVolver(href) {
   if (typeof href !== 'string') return 'Volver';
-  const ruta = href.split(/[?#]/)[0].replace(/(.)\/+$/, '$1');
-  const fila = ETIQUETAS_VOLVER.find(([patron]) => patron.test(ruta));
+  const ruta = href.split(/[?#]/)[0];
+  // Sin las barras finales (salvo la raiz), con un bucle: la regex /(.)\/+$/ era cuadratica con muchas barras.
+  let fin = ruta.length;
+  while (fin > 1 && ruta[fin - 1] === '/') fin -= 1;
+  const limpia = ruta.slice(0, fin);
+  const fila = ETIQUETAS_VOLVER.find(([patron]) => patron.test(limpia));
   return fila ? fila[1] : 'Volver';
 }
 

@@ -13,21 +13,37 @@
  * @typedef {{ writeText?: (texto: string) => Promise<void> }} PortapapelesLike
  */
 
+/** Cuanto se espera a writeText antes de pasar a la seleccion (un permiso que nunca responde no cuelga el boton). */
+const ESPERA_PORTAPAPELES_MS = 1500;
+
+const ignorar = () => undefined;
+
 /**
- * Copia `texto`: primero con `portapapeles.writeText` (si es una funcion) y, si falla o no existe, con
- * `copiarSeleccion()` (que debe devolver true si copio). 'copiado' si alguno funciono; 'manual' si ninguno.
- * Nunca lanza.
+ * Copia `texto`: primero con `portapapeles.writeText` (si es una funcion), que compite con un temporizador de
+ * `esperaMs` (1500 ms); si falla, vence o no existe, con `copiarSeleccion()` (que debe devolver true si copio).
+ * 'copiado' si alguno funciono; 'manual' si ninguno. Nunca lanza.
  * @param {string} texto
- * @param {{ portapapeles?: PortapapelesLike | null, copiarSeleccion?: (() => boolean) | null }} [opciones]
+ * @param {{ portapapeles?: PortapapelesLike | null, copiarSeleccion?: (() => boolean) | null, esperaMs?: number }}
+ *   [opciones]
  * @returns {Promise<'copiado' | 'manual'>}
  */
-export async function copiarTexto(texto, { portapapeles, copiarSeleccion } = {}) {
+export async function copiarTexto(texto, { portapapeles, copiarSeleccion, esperaMs = ESPERA_PORTAPAPELES_MS } = {}) {
   if (typeof portapapeles?.writeText === 'function') {
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let temporizador;
     try {
-      await portapapeles.writeText(texto);
+      const escritura = Promise.resolve(portapapeles.writeText(texto));
+      // Si pierde la carrera y despues falla, que no quede una promesa rechazada sin manejar.
+      escritura.catch(ignorar);
+      const vence = new Promise((_, rechazar) => {
+        temporizador = setTimeout(() => rechazar(new Error('El portapapeles no respondió')), esperaMs);
+      });
+      await Promise.race([escritura, vence]);
       return 'copiado';
     } catch {
-      // Sin permiso o sin foco: se intenta con la seleccion.
+      // Sin permiso, sin foco o sin respuesta a tiempo: se intenta con la seleccion.
+    } finally {
+      clearTimeout(temporizador);
     }
   }
   try {

@@ -1,5 +1,5 @@
 'use client';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Link2, Copy, Check, ExternalLink, ArrowRight, ArrowLeft, MessageCircle } from 'lucide-react';
 import { Modal, Button } from '@/components/ui';
@@ -129,8 +129,14 @@ export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', cor
   // navigator.clipboard): el enlace queda seleccionado y sale el aviso ambar. Nunca falla en silencio.
   const [estadoCopia, setEstadoCopia] = useState<'idle' | 'copiado' | 'manual'>('idle');
   const inputRef = useRef<HTMLInputElement>(null);
+  // Un solo temporizador de 'Copiado': se reprograma en cada copia y se cancela al cerrar el modal.
+  const temporizadorCopia = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aviso = avisoCorreo(correo, canal);
   const abrirWhatsApp = whatsappParaReabrir(canal, whatsappUrl);
+
+  useEffect(() => () => {
+    if (temporizadorCopia.current) clearTimeout(temporizadorCopia.current);
+  }, []);
 
   function seleccionarEnlace(): HTMLInputElement | null {
     const el = inputRef.current;
@@ -146,9 +152,11 @@ export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', cor
       portapapeles: typeof navigator !== 'undefined' ? navigator.clipboard : undefined,
       copiarSeleccion: () => !!seleccionarEnlace() && document.execCommand('copy'),
     });
+    if (temporizadorCopia.current) clearTimeout(temporizadorCopia.current);
+    temporizadorCopia.current = null;
     if (r === 'copiado') {
       setEstadoCopia('copiado');
-      setTimeout(() => setEstadoCopia((e) => (e === 'copiado' ? 'idle' : e)), 2000);
+      temporizadorCopia.current = setTimeout(() => setEstadoCopia((e) => (e === 'copiado' ? 'idle' : e)), 2000);
     } else {
       setEstadoCopia('manual');
       seleccionarEnlace();

@@ -9,8 +9,8 @@ import assert from 'node:assert/strict';
 import {
   TIPOS_CHATTER, MAX_TEXTO_CHATTER, MAX_MEDIO_CHATTER, UMBRAL_CONTADOR_CHATTER, MEDIOS_SUGERIDOS,
   esEntradaChatter, tipoChatter, tituloEntradaChatter, rutaNotas, validarTextoChatter, validarNotaChatter,
-  cuerpoNota, largoTexto, entradasChatter, agregarActividad, claveBorrador, parsearBorrador, asuntoDocumento,
-  mailtoUrl, telUrl, motivoTipoDeshabilitado, mensajeNoGuardado,
+  cuerpoNota, largoTexto, entradasChatter, agregarActividad, claveBorrador, claveBorradorVieja, parsearBorrador,
+  asuntoDocumento, mailtoUrl, telUrl, motivoTelefono, motivoTipoDeshabilitado, mensajeNoGuardado,
 } from '../src/lib/chatter.js';
 
 const VACIA = 'Escribe la nota antes de guardarla.';
@@ -140,8 +140,15 @@ console.log('--- TEST 7: cuerpoNota (R1: el medio va al backend solo con la Nota
   assert.deepEqual(cuerpoNota('NOTA', 'Hola', 'Visita'), { action: 'CHATTER', tipo: 'NOTA', description: 'Hola' });
   assert.deepEqual(cuerpoNota('LLAMADA', 'Llamé', 'a'.repeat(61)),
     { action: 'CHATTER', tipo: 'LLAMADA', description: 'Llamé' });
-  assert.deepEqual(cuerpoNota(undefined, 'Hola'), { action: 'CHATTER', tipo: 'NOTA', description: 'Hola' },
-    'sin tipo: Nota interna');
+  // Paridad con str(body.get('tipo') or 'NOTA').strip().upper() del backend (ronda 1, punto 6): solo un valor "falso"
+  // (ausente, null, '', 0, false) es Nota interna; '   ', 7 o true son un tipo no válido.
+  for (const sinTipo of [undefined, null, '', 0, false]) {
+    assert.deepEqual(cuerpoNota(sinTipo, 'Hola'), { action: 'CHATTER', tipo: 'NOTA', description: 'Hola' },
+      `sin tipo (${String(sinTipo)}): Nota interna`);
+  }
+  for (const malo of ['   ', 7, true, 'NOTA X']) {
+    assert.throws(() => cuerpoNota(malo, 'Hola'), { message: TIPO_MALO }, `tipo ${JSON.stringify(malo)}`);
+  }
   // Mismo orden de validacion que el backend: el texto antes que el tipo y el medio.
   assert.throws(() => cuerpoNota('NOTA', '   '), { message: VACIA });
   assert.throws(() => cuerpoNota('FAX', '   '), { message: VACIA });
@@ -195,12 +202,29 @@ console.log('--- TEST 9: agregarActividad (sin mutar, al final y sin duplicar po
   assert.equal(agregarActividad(undefined, log), null);
   assert.deepEqual(agregarActividad({ id: 3 }, log).actividades, [log], 'sin actividades previas');
   assert.equal(agregarActividad(doc, null), doc, 'sin renglón no cambia nada');
+  // Ronda 1, punto 3: un renglón de OTRO documento no se agrega (el composer cambió de documento durante el POST).
+  assert.equal(agregarActividad(doc, { id: 9, action: 'CHATTER', entity_type: 'SC', entity_id: 8 }, 'SC'), doc);
+  assert.equal(agregarActividad(doc, { id: 9, action: 'CHATTER', entity_id: '8' }), doc, 'id distinto aunque sea texto');
+  assert.equal(agregarActividad(doc, { id: 9, action: 'CHATTER', entity_type: 'COT', entity_id: 7 }, 'SC'), doc,
+    'misma id pero otro tipo de documento');
+  assert.deepEqual(
+    agregarActividad(doc, { id: 9, action: 'CHATTER', entity_type: 'SC', entity_id: '7' }, 'SC').actividades.map((a) => a.id),
+    [1, 9], 'el mismo documento (id como texto)');
+  assert.deepEqual(
+    agregarActividad(doc, { id: 9, action: 'CHATTER', entity_type: 'COT', entity_id: 7 }).actividades.map((a) => a.id),
+    [1, 9], 'sin tipoDoc no se compara el tipo');
 }
 
 console.log('--- TEST 10: borrador (clave y lectura tolerante) ---');
 {
-  assert.equal(claveBorrador('SC', 7), 'chatter-borrador:SC:7');
-  assert.equal(claveBorrador('VEN', '30'), 'chatter-borrador:VEN:30');
+  // Ronda 1, punto 9: el borrador es de cada usuario (sessionStorage sobrevive a cerrar sesión en la misma pestaña).
+  assert.equal(claveBorrador('SC', 7, 12), 'chatter-borrador:12:SC:7');
+  assert.equal(claveBorrador('VEN', '30', 'ana@x.co'), 'chatter-borrador:ana@x.co:VEN:30');
+  assert.equal(claveBorrador('COT', 4), 'chatter-borrador:anonimo:COT:4', 'sin usuario conocido');
+  assert.equal(claveBorrador('COT', 4, ''), 'chatter-borrador:anonimo:COT:4');
+  assert.notEqual(claveBorrador('SC', 7, 12), claveBorrador('SC', 7, 13));
+  // La clave sin usuario (formato de la primera versión) solo se borra, nunca se lee.
+  assert.equal(claveBorradorVieja('SC', 7), 'chatter-borrador:SC:7');
   assert.deepEqual(parsearBorrador(JSON.stringify({ texto: 'Hola', tipo: 'EXTERNA', medio: 'Visita' })),
     { texto: 'Hola', tipo: 'EXTERNA', medio: 'Visita' });
   assert.deepEqual(parsearBorrador(null), { texto: '', tipo: 'NOTA', medio: '' });
@@ -222,12 +246,17 @@ console.log('--- TEST 11: asunto, mailto y tel ---');
   assert.equal(mailtoUrl('', 'a', 'b'), null);
   assert.equal(mailtoUrl(null, 'a', 'b'), null);
   assert.equal(mailtoUrl('sin-arroba', 'a', 'b'), null);
-  // Un correo con '?' o '&' no puede agregar destinatarios ni cambiar el asunto.
-  assert.equal(mailtoUrl('a@b.co?bcc=otro@x.co', 'a', 'b'), 'mailto:a@b.co%3Fbcc%3Dotro@x.co?subject=a&body=b');
+  assert.equal(mailtoUrl('ana@sin-punto', 'a', 'b'), null, 'la misma regla de correo que el backend (T5)');
+  // Un correo con dos '@' no se usa; uno con '?' o '&' se codifica: no agrega destinatarios ni cambia el asunto.
+  assert.equal(mailtoUrl('a@b.co?bcc=otro@x.co', 'a', 'b'), null);
+  assert.equal(mailtoUrl('a?bcc=x&y@b.co', 'a', 'b'), 'mailto:a%3Fbcc%3Dx%26y@b.co?subject=a&body=b');
   assert.equal(telUrl('300 123 4567'), 'tel:+573001234567');
   assert.equal(telUrl('+57 300 123 4567'), 'tel:+573001234567');
+  assert.equal(telUrl('+1 202 555 0143'), 'tel:+12025550143');
   assert.equal(telUrl(''), null);
   assert.equal(telUrl(null), null);
+  // Ronda 1, punto 7: un teléfono incompleto no da enlace (mínimo 10 dígitos ya normalizado).
+  for (const parcial of ['+57', '0', '123', '300 123 45']) assert.equal(telUrl(parcial), null, parcial);
 }
 
 console.log('--- TEST 12: tipos deshabilitados según los datos del cliente ---');
@@ -237,8 +266,18 @@ console.log('--- TEST 12: tipos deshabilitados según los datos del cliente ---'
   assert.equal(motivoTipoDeshabilitado('WHATSAPP', { customer_phone: '' }), 'El cliente no tiene teléfono registrado');
   assert.equal(motivoTipoDeshabilitado('WHATSAPP', { customer_phone: 'sin número' }),
     'El cliente no tiene teléfono registrado');
+  for (const parcial of ['+57', '0', '123']) {
+    assert.equal(motivoTipoDeshabilitado('WHATSAPP', { customer_phone: parcial }), 'El teléfono del cliente está incompleto',
+      parcial);
+    assert.equal(motivoTelefono(parcial), 'El teléfono del cliente está incompleto');
+  }
+  assert.equal(motivoTelefono(null), 'El cliente no tiene teléfono registrado');
+  assert.equal(motivoTelefono('3001234567'), null);
   assert.equal(motivoTipoDeshabilitado('CORREO', { customer_email: '  ' }), 'El cliente no tiene correo registrado');
   assert.equal(motivoTipoDeshabilitado('CORREO', null), 'El cliente no tiene correo registrado');
+  // Ronda 1, punto 8: un correo mal escrito no es lo mismo que no tener correo.
+  assert.equal(motivoTipoDeshabilitado('CORREO', { customer_email: 'sin-arroba' }), 'El correo del cliente no es válido');
+  assert.equal(motivoTipoDeshabilitado('CORREO', { customer_email: 'ana@sin-punto' }), 'El correo del cliente no es válido');
   // Una llamada o una nota externa se pueden registrar aunque falte el telefono (p. ej. desde otro numero).
   assert.equal(motivoTipoDeshabilitado('LLAMADA', {}), null);
   assert.equal(motivoTipoDeshabilitado('EXTERNA', {}), null);
@@ -249,10 +288,20 @@ console.log('--- TEST 13: mensaje en línea cuando la nota no se guardó ---');
 {
   assert.equal(mensajeNoGuardado(new Error('La nota es muy larga (máximo 2000 caracteres).')),
     'No se guardó: La nota es muy larga (máximo 2000 caracteres). Tu texto sigue aquí; intenta de nuevo.');
+  // Ronda 1, punto 5: sin repetir «intenta de nuevo» cuando el mensaje ya lo dice.
   assert.equal(mensajeNoGuardado(new TypeError('Failed to fetch')),
-    'No se guardó: No se pudo conectar con el servidor. Revisa tu conexión e intenta de nuevo. Tu texto sigue aquí; intenta de nuevo.');
+    'No se guardó: No se pudo conectar con el servidor. Revisa tu conexión e intenta de nuevo. Tu texto sigue aquí.');
   assert.equal(mensajeNoGuardado({}),
-    'No se guardó: Ocurrió un error inesperado. Intenta de nuevo. Tu texto sigue aquí; intenta de nuevo.');
+    'No se guardó: Ocurrió un error inesperado. Intenta de nuevo. Tu texto sigue aquí.');
+  const conStatus = (status, mensaje) => Object.assign(new Error(mensaje), { status });
+  assert.equal(mensajeNoGuardado(conStatus(403, 'Not enough permissions')),
+    'No tienes permiso para dejar notas en este documento. Tu texto sigue aquí.');
+  assert.equal(mensajeNoGuardado(conStatus(404, 'Solicitud no encontrada')), 'El documento ya no existe.');
+  assert.equal(mensajeNoGuardado(conStatus(422, 'Escribe la nota antes de guardarla.')),
+    'No se guardó: Escribe la nota antes de guardarla. Tu texto sigue aquí; intenta de nuevo.');
+  for (const err of [new Error('x'), conStatus(500, 'y'), {}, new TypeError('Failed to fetch')]) {
+    assert.ok((mensajeNoGuardado(err).match(/intenta de nuevo/gi) || []).length <= 1, String(err?.message));
+  }
 }
 
 console.log('OK test_chatter.mjs');

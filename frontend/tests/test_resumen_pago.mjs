@@ -64,15 +64,35 @@ console.log('--- CASO 5: pagado completo ---');
   assert.equal(r.caso, 'completo');
 }
 
-console.log('--- CASO 6: total 0 o campos ausentes: todo 0, sin NaN, y el % por defecto es 60 ---');
+console.log('--- CASO 6: total 0 con saldo 0: todo 0, sin NaN, y el % por defecto es 60 ---');
 {
-  for (const p of [{}, null, undefined, { total_cop: 0, saldo_cop: 0 }, { total_cop: 'x', saldo_cop: NaN }]) {
+  for (const p of [{ total_cop: 0, saldo_cop: 0 }, { total_cop: 'x', saldo_cop: 0 }]) {
     const r = resumenPagoPedido(p);
     assert.deepEqual(r, {
       total: 0, pagado: 0, saldo: 0, saldoAFavor: 0, requerido: 0, anticipoPct: 60, anticipoPendiente: 0,
       pctPagado: 0, caso: 'completo',
     }, JSON.stringify(p));
   }
+}
+
+console.log('--- CASO 6b (ronda 1, punto 16): sin saldo no se supone pagado: caso desconocido, sin porcentajes ---');
+{
+  for (const p of [{}, null, undefined, { total_cop: 'x', saldo_cop: NaN }, { total_cop: 500000 },
+    { total_cop: 500000, saldo_cop: null }, { total_cop: 500000, saldo_cop: '' }, { total_cop: 500000, saldo_cop: 'abc' }]) {
+    const r = resumenPagoPedido(p);
+    assert.equal(r.caso, 'desconocido', JSON.stringify(p));
+    assert.equal(r.pagado, null);
+    assert.equal(r.saldo, null);
+    assert.equal(r.saldoAFavor, null);
+    assert.equal(r.pctPagado, null, 'no se pinta porcentaje');
+    assert.equal(r.anticipoPendiente, null, 'sin pagado no se calcula lo que falta');
+    assert.equal(r.anticipoPct, 60);
+    assert.ok(!Object.values(r).some((v) => Number.isNaN(v)), 'sin NaN');
+  }
+  const conTotal = resumenPagoPedido({ total_cop: 500000, saldo_cop: null, anticipo_pct: 60, anticipo_pendiente: 300000 });
+  assert.equal(conTotal.total, 500000);
+  assert.equal(conTotal.requerido, 300000);
+  assert.equal(conTotal.anticipoPendiente, 300000, 'si el servidor manda lo pendiente, se usa');
 }
 
 console.log('--- CASO 7: sin anticipo_pct (pedido sin snapshot) -> 60 (ruling T6B-4) ---');
@@ -105,6 +125,32 @@ console.log('--- CASO 9: un saldo mayor que el total (dato inconsistente) no mue
   assert.equal(r.pctPagado, 0);
   assert.equal(r.saldo, 150000);
   assert.equal(r.anticipoPendiente, 60000);
+}
+
+console.log('--- CASO 10 (ronda 1, punto 16): pagado = max(0, redondearPeso(total − saldo)) ---');
+{
+  // Se redondea la diferencia (como resumenAnticipoCotizacion), no cada parte: 1.000.000,5 − 0,4 = 1.000.000,1 ->
+  // 1.000.000 (redondeando cada parte daría 1.000.001 − 0 = 1.000.001).
+  const r = resumenPagoPedido({ total_cop: 1000000.5, saldo_cop: 0.4, anticipo_requerido: 600000, anticipo_pct: 60 });
+  assert.equal(r.pagado, 1000000);
+  assert.equal(r.saldo, 0);
+}
+
+console.log('--- CASO 11 (ronda 1, punto 17): con saldo nunca 100%; con un pago real nunca 0% ---');
+{
+  const base = { total_cop: 1000000, anticipo_requerido: 600000, anticipo_pct: 60 };
+  assert.equal(resumenPagoPedido({ ...base, saldo_cop: 1 }).pctPagado, 99, '999.999 de 1.000.000 (Math.round daría 100)');
+  assert.equal(resumenPagoPedido({ ...base, saldo_cop: 3000 }).pctPagado, 99);
+  assert.equal(resumenPagoPedido({ ...base, saldo_cop: 999999 }).pctPagado, 1, '1 peso pagado (Math.round daría 0)');
+  assert.equal(resumenPagoPedido({ ...base, saldo_cop: 1000000 }).pctPagado, 0, 'nada pagado');
+  assert.equal(resumenPagoPedido({ ...base, saldo_cop: 0 }).pctPagado, 100);
+  assert.equal(resumenPagoPedido({ ...base, saldo_cop: 400000 }).pctPagado, 60);
+  // Total 0 con saldo a favor: lo pagado supera el total.
+  const sinTotal = resumenPagoPedido({ total_cop: 0, saldo_cop: -5000, anticipo_requerido: 0, anticipo_pct: 0 });
+  assert.equal(sinTotal.pagado, 5000);
+  assert.equal(sinTotal.saldoAFavor, 5000);
+  assert.equal(sinTotal.pctPagado, 100);
+  assert.equal(sinTotal.caso, 'a_favor');
 }
 
 console.log('OK test_resumen_pago.mjs');

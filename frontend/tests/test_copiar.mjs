@@ -77,4 +77,30 @@ console.log('--- CASO 6: sin opciones -> manual ---');
   assert.equal(await copiarTexto(LINK, {}), 'manual');
 }
 
+console.log('--- CASO 7 (ronda 1): writeText que no responde compite con un temporizador ---');
+{
+  const colgado = { writeText: () => new Promise(() => {}) };
+  let inicio = Date.now();
+  assert.equal(await copiarTexto(LINK, { portapapeles: colgado, copiarSeleccion: seleccion(true), esperaMs: 30 }),
+    'copiado', 'vence la espera y copia por la selección');
+  assert.ok(Date.now() - inicio < 1000, 'no espera indefinidamente');
+  assert.equal(await copiarTexto(LINK, { portapapeles: colgado, copiarSeleccion: seleccion(false), esperaMs: 30 }),
+    'manual');
+  // Espera por defecto (~1500 ms): sin esperaMs tambien termina.
+  inicio = Date.now();
+  assert.equal(await copiarTexto(LINK, { portapapeles: colgado, copiarSeleccion: seleccion(true) }), 'copiado');
+  const espera = Date.now() - inicio;
+  assert.ok(espera >= 1400 && espera < 3000, `espera por defecto de ${espera} ms`);
+  // Un writeText que pierde la carrera y despues falla no deja una promesa rechazada sin manejar (node la haria fatal).
+  const tardio = { writeText: () => new Promise((_, rechazar) => setTimeout(() => rechazar(new Error('tarde')), 60)) };
+  assert.equal(await copiarTexto(LINK, { portapapeles: tardio, copiarSeleccion: seleccion(false), esperaMs: 10 }),
+    'manual');
+  await new Promise((r) => setTimeout(r, 120));
+  // Uno que responde a tiempo gana sin tocar la seleccion.
+  const rapido = { writeText: () => new Promise((r) => setTimeout(r, 5)) };
+  const s = seleccion(true);
+  assert.equal(await copiarTexto(LINK, { portapapeles: rapido, copiarSeleccion: s, esperaMs: 500 }), 'copiado');
+  assert.equal(s.veces, 0);
+}
+
 console.log('OK test_copiar.mjs');

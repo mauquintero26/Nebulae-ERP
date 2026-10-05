@@ -11,8 +11,9 @@
  */
 import { congelar, tiene } from './estados-pedido.js';
 import { comoUTC } from './hub-ventas.js';
-import { numeroWhatsApp, waUrl } from './whatsapp.js';
+import { numeroWhatsApp } from './whatsapp.js';
 import { textoDeError } from './avisos.js';
+import { esCorreoValido } from './datos-cliente.js';
 
 /**
  * Tipos de entrada del Chatter, en el orden de los chips. EXTERNA (R1) = 'Nota externa': un contacto con el cliente
@@ -145,9 +146,10 @@ export function cuerpoNota(tipo, texto, medio) {
   const description = recortado(texto);
   if (!description) throw new Error(MENSAJE_VACIA);
   if (largoTexto(description) > MAX_TEXTO_CHATTER) throw new Error(MENSAJE_LARGA);
-  const vacio = recortado(tipo) === '';
-  const clave = vacio ? TIPO_POR_DEFECTO : claveTipo(tipo);
-  if (!clave) throw new Error(MENSAJE_TIPO);
+  // Igual que str(body.get('tipo') or 'NOTA').strip().upper(): solo un valor "falso" (ausente, null, '', 0, false) es
+  // NOTA; '   ', 7 o true se convierten a texto y no son un tipo conocido.
+  const clave = String(tipo || TIPO_POR_DEFECTO).trim().toUpperCase();
+  if (!tiene(TIPOS_CHATTER, clave)) throw new Error(MENSAJE_TIPO);
   /** @type {{action: 'CHATTER', tipo: string, description: string, medio?: string}} */
   const cuerpo = { action: 'CHATTER', tipo: clave, description };
   if (clave === 'EXTERNA') {
@@ -206,28 +208,48 @@ export function entradasChatter(actividades) {
 
 /**
  * Copia nueva del documento con el renglon recien creado al final de `actividades` (asi la nota sale enseguida en la
- * Actividad, sin recargar). Si ya estaba (mismo id) o no hay renglon, devuelve el documento tal cual. null si no hay
- * documento.
+ * Actividad, sin recargar). Devuelve el documento tal cual si no hay renglon, si ya estaba (mismo id) o si el renglon
+ * es de OTRO documento: su `entity_id` no es el id del documento o, si se pasa `tipoDoc`, su `entity_type` no es ese
+ * (p. ej. la pagina cambio de documento mientras se guardaba). null si no hay documento.
  * @template T
  * @param {T} doc
  * @param {any} log
+ * @param {string} [tipoDoc] 'SC' | 'COT' | 'VEN': si se pasa, el entity_type del renglon debe coincidir
  * @returns {T | null}
  */
-export function agregarActividad(doc, log) {
+export function agregarActividad(doc, log, tipoDoc) {
   if (doc === null || doc === undefined) return null;
   if (log === null || typeof log !== 'object') return doc;
-  const previas = Array.isArray(/** @type {any} */ (doc).actividades) ? /** @type {any} */ (doc).actividades : [];
-  if (log.id !== undefined && log.id !== null && previas.some((a) => a?.id === log.id)) return doc;
+  const d = /** @type {any} */ (doc);
+  const presente = (v) => v !== null && v !== undefined && v !== '';
+  if (presente(log.entity_id) && presente(d.id) && String(log.entity_id) !== String(d.id)) return doc;
+  if (tipoDoc && presente(log.entity_type) && log.entity_type !== tipoDoc) return doc;
+  const previas = Array.isArray(d.actividades) ? d.actividades : [];
+  if (presente(log.id) && previas.some((a) => a?.id === log.id)) return doc;
   return { ...doc, actividades: [...previas, log] };
 }
 
 /**
- * Clave del borrador en sessionStorage: 'chatter-borrador:{tipoDoc}:{id}'.
+ * Clave del borrador en sessionStorage: 'chatter-borrador:{usuario}:{tipoDoc}:{id}'. Va por usuario porque
+ * sessionStorage sobrevive a cerrar sesion y entrar con otra cuenta en la misma pestaña. Sin usuario: 'anonimo'.
+ * @param {any} tipoDoc
+ * @param {any} id
+ * @param {any} [usuario] id (o correo) del usuario de la sesion
+ * @returns {string}
+ */
+export function claveBorrador(tipoDoc, id, usuario) {
+  const quien = usuario === null || usuario === undefined || String(usuario).trim() === '' ? 'anonimo' : String(usuario).trim();
+  return `chatter-borrador:${quien}:${tipoDoc}:${id}`;
+}
+
+/**
+ * Clave del borrador de la primera version (sin usuario). No se lee: no se sabe de quien era, y migrarla podria
+ * mostrarle a una cuenta el borrador de otra. El composer solo la borra al montar.
  * @param {any} tipoDoc
  * @param {any} id
  * @returns {string}
  */
-export function claveBorrador(tipoDoc, id) {
+export function claveBorradorVieja(tipoDoc, id) {
   return `chatter-borrador:${tipoDoc}:${id}`;
 }
 
@@ -267,52 +289,88 @@ export function asuntoDocumento(tipoDoc, numero) {
 }
 
 /**
- * 'mailto:' con el asunto y el cuerpo codificados, o null si no hay correo. La direccion tambien se codifica (salvo
- * la @): un correo con '?' o '&' no puede agregar destinatarios ni cambiar el asunto.
+ * 'mailto:' con el asunto y el cuerpo codificados, o null si no hay un correo valido (la misma regla del backend:
+ * esCorreoValido de datos-cliente.js). La direccion tambien se codifica (salvo la @): un correo con '?' o '&' no
+ * puede agregar destinatarios ni cambiar el asunto.
  * @param {any} email
  * @param {any} asunto
  * @param {any} cuerpo
  * @returns {string | null}
  */
 export function mailtoUrl(email, asunto, cuerpo) {
-  const e = recortado(email);
-  if (!e || !e.includes('@')) return null;
-  const direccion = encodeURIComponent(e).replace(/%40/g, '@');
+  if (!esCorreoValido(email)) return null;
+  const direccion = encodeURIComponent(recortado(email)).replace(/%40/g, '@');
   return `mailto:${direccion}?subject=${encodeURIComponent(recortado(asunto))}&body=${encodeURIComponent(
     typeof cuerpo === 'string' ? cuerpo : '')}`;
 }
 
+/** Digitos minimos de un telefono ya normalizado (numeroWhatsApp: un celular colombiano de 10 queda con 57 + 10). */
+const MIN_DIGITOS_TELEFONO = 10;
+
 /**
- * Enlace 'Llamar ahora' (tel:+57…), con el mismo numero que WhatsApp (whatsapp.js), o null si no hay telefono.
+ * Por que no se puede llamar ni escribir por WhatsApp al cliente, o null si el telefono sirve: sin digitos, 'El
+ * cliente no tiene teléfono registrado'; con menos de 10 digitos ya normalizado ('+57', '0', '123'), 'El teléfono del
+ * cliente está incompleto'.
+ * @param {any} telefono
+ * @returns {string | null}
+ */
+export function motivoTelefono(telefono) {
+  const n = numeroWhatsApp(telefono);
+  if (!n) return 'El cliente no tiene teléfono registrado';
+  if (n.length < MIN_DIGITOS_TELEFONO) return 'El teléfono del cliente está incompleto';
+  return null;
+}
+
+/**
+ * Enlace 'Llamar ahora' (tel:+57…), con el mismo numero que WhatsApp (whatsapp.js), o null si el telefono no sirve
+ * (motivoTelefono).
  * @param {any} telefono
  * @returns {string | null}
  */
 export function telUrl(telefono) {
-  const n = numeroWhatsApp(telefono);
-  return n ? `tel:+${n}` : null;
+  return motivoTelefono(telefono) ? null : `tel:+${numeroWhatsApp(telefono)}`;
 }
 
 /**
  * Por que un chip de tipo esta deshabilitado para este documento, o null si se puede usar: WhatsApp necesita un
- * telefono con digitos (waUrl) y Correo un correo. Llamada y Nota externa se pueden registrar siempre (el contacto
- * pudo ser desde otro numero o en persona).
+ * telefono completo (motivoTelefono) y Correo un correo valido ('El cliente no tiene correo registrado' / 'El correo
+ * del cliente no es válido'). Llamada y Nota externa se pueden registrar siempre (el contacto pudo ser desde otro
+ * numero o en persona).
  * @param {any} tipo
  * @param {any} doc
  * @returns {string | null}
  */
 export function motivoTipoDeshabilitado(tipo, doc) {
-  if (tipo === 'WHATSAPP' && !waUrl(doc?.customer_phone)) return 'El cliente no tiene teléfono registrado';
-  if (tipo === 'CORREO' && !mailtoUrl(doc?.customer_email, '', '')) return 'El cliente no tiene correo registrado';
+  if (tipo === 'WHATSAPP') return motivoTelefono(doc?.customer_phone);
+  if (tipo === 'CORREO') {
+    if (!recortado(doc?.customer_email)) return 'El cliente no tiene correo registrado';
+    if (!esCorreoValido(doc.customer_email)) return 'El correo del cliente no es válido';
+  }
   return null;
 }
 
+const REPITE_INTENTA = /intenta de nuevo/i;
+
+/** El texto sin puntos ni espacios al final (con un bucle: una regex /[.\s]+$/ es cuadratica con muchos puntos). */
+function sinPuntoFinal(texto) {
+  let fin = texto.length;
+  while (fin > 0 && (texto[fin - 1] === '.' || /\s/.test(texto[fin - 1]))) fin -= 1;
+  return texto.slice(0, fin);
+}
+
 /**
- * Error en linea cuando el POST falla: 'No se guardó: {mensaje}. Tu texto sigue aquí; intenta de nuevo.' (mensaje
- * legible de textoDeError, sin el punto final para no repetirlo).
+ * Error en linea cuando el POST falla. 403: 'No tienes permiso para dejar notas en este documento. Tu texto sigue
+ * aquí.'; 404: 'El documento ya no existe.'; si no, 'No se guardó: {mensaje}. Tu texto sigue aquí; intenta de nuevo.'
+ * con el mensaje legible de textoDeError (sin su punto final) y sin repetir «intenta de nuevo» si el mensaje ya lo dice.
  * @param {unknown} err
  * @returns {string}
  */
 export function mensajeNoGuardado(err) {
-  const mensaje = textoDeError(err).replace(/[.\s]+$/, '');
-  return `No se guardó: ${mensaje}. Tu texto sigue aquí; intenta de nuevo.`;
+  const status = /** @type {any} */ (err)?.status;
+  if (status === 403) return 'No tienes permiso para dejar notas en este documento. Tu texto sigue aquí.';
+  if (status === 404) return 'El documento ya no existe.';
+  const mensaje = sinPuntoFinal(textoDeError(err));
+  return REPITE_INTENTA.test(mensaje)
+    ? `No se guardó: ${mensaje}. Tu texto sigue aquí.`
+    : `No se guardó: ${mensaje}. Tu texto sigue aquí; intenta de nuevo.`;
 }

@@ -33,6 +33,17 @@ const TELEFONO_MIN_DIGITOS = 7;
 const CORREO_VALIDO = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 const texto = (v) => (v === null || v === undefined ? '' : String(v).trim());
+
+/**
+ * El correo tiene la forma que exige el backend (_normalizar_contacto): algo@dominio.ext, sin espacios, una sola '@'.
+ * Se mide sin los espacios de los bordes. Lo reutiliza el Chatter (lib/chatter.js) para el chip Correo.
+ * @param {any} v
+ * @returns {boolean}
+ */
+export function esCorreoValido(v) {
+  return typeof v === 'string' && CORREO_VALIDO.test(v.trim());
+}
+
 const comparable = (clave, v) => (clave === 'customer_email' ? texto(v).toLowerCase() : texto(v));
 
 /**
@@ -70,7 +81,7 @@ export function validarContacto(cambios) {
     const t = texto(v);
     if (!t) continue;
     if ([...t].length > max) return TEXTO_LIMITE[clave](max);
-    if (clave === 'customer_email' && !CORREO_VALIDO.test(t)) return `El correo «${t}» no es válido.`;
+    if (clave === 'customer_email' && !esCorreoValido(t)) return `El correo «${t}» no es válido.`;
     if (clave === 'customer_phone' && (t.match(/[0-9]/g) ?? []).length < TELEFONO_MIN_DIGITOS) {
       return `El teléfono debe tener al menos ${TELEFONO_MIN_DIGITOS} dígitos.`;
     }

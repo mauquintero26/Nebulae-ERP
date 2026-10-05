@@ -47,9 +47,44 @@ console.log('--- TEST 2: returnToSeguro rechaza lo que sale del origen o del das
     undefined,
     42,
     {},
+    // Ronda 1, punto 15.
+    '\\\\evil.com',
+    'http:/evil.com',
+    'JaVaScRiPt:alert(1)',
+    'data:text/html,x',
+    ' /dashboard/x',
+    '/dashboard/x\r',
+    '/dashboard/\0x',
+    // Ronda 1, punto 12: una ruta con '//' no se acepta (ni al principio ni en medio).
+    '/dashboard//evil.com',
+    '/dashboard/ventas//solicitud/5',
   ]) {
     assert.equal(returnToSeguro(malo), '', `debía rechazar ${JSON.stringify(malo)}`);
   }
+}
+
+console.log('--- TEST 2b: propiedad de lo aceptado (ronda 1, punto 15) ---');
+{
+  const entradas = [
+    '/dashboard/', '/dashboard/ventas', '/dashboard/ventas/', '/dashboard/ventas/solicitud/5',
+    '/dashboard/ventas/cotizacion/3?return_to=%2Fdashboard%2Fventas&tab=chatter#notas',
+    '/dashboard/ventas/../ventas/venta/9', '/dashboard/ventas/./venta/9', '/dashboard/ventas/solicitud/5?q=a b',
+    '/dashboard/%2F%2Fevil.com', '/dashboard/x?y=//evil.com', '/dashboard/x#//evil.com', '/dashboard/ventas/á',
+    // y las rechazadas, que no deben producir nada:
+    '/\\evil.com', '//evil.com', '/dashboard/../login', '/dashboard//x', 'javascript:alert(1)',
+  ];
+  let aceptadas = 0;
+  for (const x of entradas) {
+    const r = returnToSeguro(x);
+    if (!r) continue;
+    aceptadas += 1;
+    assert.ok(r.startsWith('/dashboard/'), `${x} -> ${r}`);
+    const u = new URL(r, 'https://erp.example');
+    assert.equal(u.origin, 'https://erp.example', `${x} -> ${r} cambia de origen`);
+    assert.ok(u.pathname.startsWith('/dashboard/'), `${x} -> ${r} sale del dashboard`);
+    assert.equal(returnToSeguro(r), r, `${x}: idempotente`);
+  }
+  assert.ok(aceptadas >= 10, `se aceptaron ${aceptadas}`);
 }
 
 console.log('--- TEST 3: destinoVolver aplica returnToSeguro y si no, el valor por defecto ---');
@@ -82,6 +117,13 @@ console.log('--- TEST 4: etiquetaVolver (8 casos de H37) ---');
   assert.equal(etiquetaVolver('/dashboard/ventas/venta/9/otra'), 'Volver');
   assert.equal(etiquetaVolver(''), 'Volver');
   assert.equal(etiquetaVolver(null), 'Volver');
+  assert.equal(etiquetaVolver('/dashboard/ventas/venta///'), 'Volver a pedidos', 'varias barras finales');
+  assert.equal(etiquetaVolver('/'), 'Volver');
+  // Ronda 1, punto 12: tiempo lineal con muchas barras (la regex /(.)\/+$/ era cuadrática: ~2,4 s con 60.000).
+  const inicio = Date.now();
+  assert.equal(etiquetaVolver(`/dashboard/ventas${'/'.repeat(60000)}x`), 'Volver');
+  assert.equal(etiquetaVolver(`/dashboard/ventas${'/'.repeat(60000)}`), 'Volver al Hub de Ventas');
+  assert.ok(Date.now() - inicio < 500, `tardó ${Date.now() - inicio} ms`);
 }
 
 console.log('--- TEST 5: anchoInicialPanel = min(400, max(300, 0,3 × ancho)) ---');

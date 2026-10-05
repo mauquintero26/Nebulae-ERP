@@ -15,38 +15,62 @@ const PCT_ANTICIPO_POR_DEFECTO = 60;
 
 /**
  * @typedef {{
- *   total: number, pagado: number, saldo: number, saldoAFavor: number, requerido: number, anticipoPct: number,
- *   anticipoPendiente: number, pctPagado: number, caso: 'pendiente' | 'completo' | 'a_favor'
+ *   total: number, pagado: number | null, saldo: number | null, saldoAFavor: number | null, requerido: number,
+ *   anticipoPct: number, anticipoPendiente: number | null, pctPagado: number | null,
+ *   caso: 'pendiente' | 'completo' | 'a_favor' | 'desconocido'
  * }} ResumenPagoPedido
  */
 
+/** Numero finito, o null si falta (null, undefined, '') o no es un numero. */
+function numeroONull(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 /**
  * Cuentas del Resumen Financiero de un pedido:
- * - total y saldo al peso; pagado = total − saldo (lo mismo que get_pedido), nunca negativo.
- * - saldo pendiente = max(0, saldo); saldoAFavor = lo que el saldo quede por debajo de 0 (credito por re-cotizar a la
- *   baja con el anticipo ya pagado).
- * - anticipoPct = anticipo_pct ?? 60 (pedido sin snapshot, como anticipo_del_pedido del servidor); requerido =
- *   anticipo_requerido del GET (si falta, round(total × pct / 100) al peso, la cuenta del servidor).
+ * - total al peso; anticipoPct = anticipo_pct ?? 60 (pedido sin snapshot, como anticipo_del_pedido del servidor);
+ *   requerido = anticipo_requerido del GET (si falta, round(total × pct / 100) al peso, la cuenta del servidor).
+ * - Sin saldo_cop (null, ausente o no numerico) no se supone nada pagado ni pendiente: caso 'desconocido' y pagado,
+ *   saldo, saldoAFavor y pctPagado en null (la pantalla no pinta porcentajes); anticipoPendiente solo si el servidor
+ *   lo manda.
+ * - Con saldo: pagado = max(0, redondearPeso(total − saldo)) (la diferencia redondeada, como resumenAnticipoCotizacion
+ *   y get_pedido); saldo pendiente = max(0, saldo); saldoAFavor = lo que el saldo quede por debajo de 0 (credito por
+ *   re-cotizar a la baja con el anticipo ya pagado).
  * - anticipoPendiente = anticipo_pendiente del GET, o requerido − pagado si no viene; nunca negativo (R4).
- * - pctPagado: 0..100, entero (0 si el total es 0).
- * - caso: el tercer recuadro: 'pendiente' (saldo > 0), 'a_favor' (saldo a favor > 0) o 'completo'.
- * Datos ausentes o no numericos valen 0: nunca NaN.
+ * - pctPagado: entero 0..100 (Math.round), con dos topes que se apartan de U24 a proposito: con saldo pendiente como
+ *   maximo 99 (no se ve 100% si todavia se debe algo) y con algo pagado como minimo 1 (no se ve 0% con un pago real).
+ *   Total 0: 100 si hay algo pagado, si no 0.
+ * - caso: el tercer recuadro: 'pendiente' (saldo > 0), 'a_favor' (saldo a favor > 0), 'completo' o 'desconocido'.
+ * Nunca NaN.
  * @param {any} p
  * @returns {ResumenPagoPedido}
  */
 export function resumenPagoPedido(p) {
   const total = redondearPeso(p?.total_cop);
-  const saldoBruto = redondearPeso(p?.saldo_cop);
-  const pagado = Math.max(0, total - saldoBruto);
-  const saldo = Math.max(0, saldoBruto);
-  const saldoAFavor = saldoBruto < 0 ? -saldoBruto : 0;
   const pct = Number(p?.anticipo_pct ?? PCT_ANTICIPO_POR_DEFECTO);
   const anticipoPct = Number.isFinite(pct) ? pct : PCT_ANTICIPO_POR_DEFECTO;
   const requerido = p?.anticipo_requerido !== null && p?.anticipo_requerido !== undefined
     ? redondearPeso(p.anticipo_requerido)
     : porcentajeDePesos(total, anticipoPct);
-  const anticipoPendiente = Math.max(0, redondearPeso(p?.anticipo_pendiente ?? (requerido - pagado)));
-  const pctPagado = total > 0 ? Math.min(100, Math.max(0, Math.round((pagado * 100) / total))) : 0;
+  const pendienteServidor = numeroONull(p?.anticipo_pendiente);
+  const saldoCrudo = numeroONull(p?.saldo_cop);
+  if (saldoCrudo === null) {
+    return {
+      total, pagado: null, saldo: null, saldoAFavor: null, requerido, anticipoPct,
+      anticipoPendiente: pendienteServidor === null ? null : Math.max(0, redondearPeso(pendienteServidor)),
+      pctPagado: null, caso: 'desconocido',
+    };
+  }
+  const saldoBruto = redondearPeso(saldoCrudo);
+  const pagado = Math.max(0, redondearPeso((numeroONull(p?.total_cop) ?? 0) - saldoCrudo));
+  const saldo = Math.max(0, saldoBruto);
+  const saldoAFavor = saldoBruto < 0 ? -saldoBruto : 0;
+  const anticipoPendiente = Math.max(0, redondearPeso(pendienteServidor ?? (requerido - pagado)));
+  let pctPagado = total > 0 ? Math.min(100, Math.max(0, Math.round((pagado * 100) / total))) : pagado > 0 ? 100 : 0;
+  if (saldo > 0) pctPagado = Math.min(pctPagado, 99);
+  if (pagado > 0) pctPagado = Math.max(pctPagado, 1);
   const caso = saldo > 0 ? 'pendiente' : saldoAFavor > 0 ? 'a_favor' : 'completo';
   return { total, pagado, saldo, saldoAFavor, requerido, anticipoPct, anticipoPendiente, pctPagado, caso };
 }
