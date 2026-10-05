@@ -7,7 +7,7 @@ import {
   Activity, FileText, X, Edit2, Save,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useParams, useSearchParams } from 'next/navigation';
+import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
 import { Button, Modal } from '@/components/ui';
@@ -18,7 +18,10 @@ import { etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import {
   PASOS_PEDIDO as STEPS, ESTADOS_PEDIDO_MANUALES, ESTADOS_PEDIDO_CERRADOS, infoEstadoPedido, pasoPedido, transicionesPedido,
 } from '@/lib/estados-pedido';
-import { formatoPct, describirPago, etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp, textoChipPxp } from '@/lib/dinero-ventas';
+import {
+  formatoPct, describirPago, etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp, textoChipPxp, saldoAFavorAlCancelar,
+} from '@/lib/dinero-ventas';
+import { rutaSinParametro } from '@/lib/listas-ventas';
 
 const fCOP = formatoPesos;
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
@@ -31,6 +34,8 @@ const ACTIVITY_STYLE: Record<string, string> = {
 function PedidoVentaDetalleContent() {
   const params = useParams();
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   // "Volver al origen" -- mismo patron que solicitud/[id]/page.tsx y
   // cotizacion/[id]/page.tsx (Gate 2): solo se confia en return_to si es una ruta
   // interna relativa, nunca un esquema http(s) ni "//" (protocol-relative).
@@ -87,6 +92,13 @@ function PedidoVentaDetalleContent() {
   }, [params.id]);
 
   useEffect(() => { loadPedido(); }, [loadPedido]);
+
+  // B1 (R8): ?accion=cancelar se usa una sola vez. Tras la primera carga se quita de la URL (sin recargar el pedido)
+  // para que el modal no se vuelva a abrir al refrescar ni al volver con el navegador.
+  useEffect(() => {
+    if (!pedido || searchParams?.get('accion') !== 'cancelar') return;
+    router.replace(rutaSinParametro(pathname, searchParams, 'accion'), { scroll: false });
+  }, [pedido, searchParams, pathname, router]);
 
   // Resizable Right Pane Logic (mismo patron que cotizacion/[id]/page.tsx)
   const [rightWidth, setRightWidth] = useState(400);
@@ -910,6 +922,12 @@ function PedidoVentaDetalleContent() {
           {pedido?.cot_numero && (
             <p className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-xl p-3">
               La cotización {pedido.cot_numero} volverá a Borrador para que puedas ajustarla, reenviarla al cliente y crear otro pedido.
+            </p>
+          )}
+          {/* B7 (R6): lo pagado no se pierde: queda como saldo a favor de la cotización (sin COT no hay a dónde pasarlo). */}
+          {pedido?.cot_numero && saldoAFavorAlCancelar(pedido) > 0 && (
+            <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+              El dinero ya pagado queda como saldo a favor de la cotización y pasa al pedido nuevo si la vuelves a convertir.
             </p>
           )}
           {/* H45: el servidor cancela solo las PXP PENDIENTE; una pagada no se toca y deja un aviso de revision. */}

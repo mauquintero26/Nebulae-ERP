@@ -15,7 +15,7 @@ import {
   ESTADOS_PEDIDO_SIN_DINERO, pedidoSumaDinero, resumenPedidos, kpisPedidos, hintTotalPedidos, opcionesFiltroEstado,
   generoCotizacion, cotizacionesVigentes, cotizacionesRechazadas, esperaCotizacion, contadoresSolicitudes,
   tasaConversionCotizacion, superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera, pasosParaCancelarSolicitud,
-  repartirCancelacionSolicitudes, cifrasVentasDashboard,
+  repartirCancelacionSolicitudes, cifrasVentasDashboard, rutaSinParametro,
 } from '../src/lib/listas-ventas.js';
 
 console.log('--- N8 TEST 1: diasAlerta lee las tres formas de la configuracion ---');
@@ -405,6 +405,16 @@ console.log('--- N4 TEST 8: pasosParaCancelarSolicitud (primero el pedido, luego
   assert.equal(pasos[1].texto, 'Rechaza la cotización COT-2');
   assert.deepEqual(pasosParaCancelarSolicitud({ cotizaciones: [{ numero: 'COT-1', estado: 'RECHAZADA' }], pedidos_venta: [{ numero: 'PVEN-1', estado: 'CANCELADO' }] }), []);
   for (const nulo of [{}, null, undefined, { cotizaciones: null, pedidos_venta: null }]) assert.deepEqual(pasosParaCancelarSolicitud(nulo), []);
+}
+
+console.log('--- B1 / R8 TEST: tras abrir la cancelacion, la URL queda sin ?accion=cancelar (y conserva lo demas) ---');
+{
+  const ruta = '/dashboard/ventas/venta/5';
+  assert.equal(rutaSinParametro(ruta, 'accion=cancelar', 'accion'), ruta);
+  assert.equal(rutaSinParametro(ruta, new URLSearchParams('accion=cancelar&return_to=%2Fdashboard%2Fventas'), 'accion'),
+    `${ruta}?return_to=%2Fdashboard%2Fventas`);
+  assert.equal(rutaSinParametro(ruta, 'return_to=%2Fx', 'accion'), `${ruta}?return_to=%2Fx`);
+  for (const vacio of [null, undefined, '']) assert.equal(rutaSinParametro(ruta, vacio, 'accion'), ruta);
 }
 
 console.log('--- A4 / H47 TEST: cifras de ventas del Dashboard General sin cancelados ni devueltos ---');

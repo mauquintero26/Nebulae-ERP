@@ -17,7 +17,7 @@ import {
 } from '../cotizacion-client';
 import { NextStepCard, EnlaceConfirmacionModal, CambiosDeActividad, returnToSeguro, getUsuarioActual } from '../../flujo';
 import { situacionPedidoCotizacion } from '@/lib/listas-ventas';
-import { resumenAnticipoCotizacion, formatoPct, propagacionRecotizacion } from '@/lib/dinero-ventas';
+import { resumenAnticipoCotizacion, formatoPct, propagacionRecotizacion, puedeGestionarCotizacion } from '@/lib/dinero-ventas';
 import { comoUTC } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
 
@@ -169,7 +169,9 @@ function CotizacionDetalleContent() {
   const pvenVigente = situacion.vigente;
   const pvenCancelado = situacion.cancelado;
   const anticipo = resumenAnticipoCotizacion(cotizacion);
-  const puedeAjustarAnticipo = !pvenVigente && !['RECHAZADA', 'CANCELADA'].includes(estadoActual);
+  // B4: solo los roles que el servidor acepta en PATCH /cotizaciones/{id} y POST /confirmar (Administración y asesor).
+  const rolGestiona = puedeGestionarCotizacion(getUsuarioActual().role);
+  const puedeAjustarAnticipo = rolGestiona && !pvenVigente && !['RECHAZADA', 'CANCELADA'].includes(estadoActual);
 
   function handleEnviarCotizacion() {
     if (!cotizacion?.id) return;
@@ -460,9 +462,13 @@ function CotizacionDetalleContent() {
         <NextStepCard
           tone="emerald"
           title="El cliente confirmó la cotización"
-          actions={<Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} onClick={handleConfirmarVenta}>Crear Pedido de Venta</Button>}
+          actions={rolGestiona
+            ? <Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} onClick={handleConfirmarVenta}>Crear Pedido de Venta</Button>
+            : undefined}
         >
-          Crea el Pedido de Venta para pasar a compra y entrega.
+          {rolGestiona
+            ? 'Crea el Pedido de Venta para pasar a compra y entrega.'
+            : 'El asesor o Administración crea el Pedido de Venta para pasar a compra y entrega.'}
           {pvenCancelado && Number(cotizacion.saldo_a_favor) > 0
             && ` El saldo a favor del pedido cancelado ${pvenCancelado.numero} (${fCOP(cotizacion.saldo_a_favor)}) pasa al pedido nuevo.`}
         </NextStepCard>

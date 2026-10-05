@@ -224,6 +224,15 @@ export function propagacionRecotizacion(data, pedido, cotNumero, usuario) {
   };
 }
 
+/**
+ * B4: 'Ajustar anticipo' (PATCH /ventas/cotizaciones/{id}) y 'Crear Pedido de Venta' (POST
+ * /ventas/cotizaciones/{id}/confirmar) solo para los roles que el servidor acepta: ADMIN y ASESOR, tambien con los
+ * nombres legacy Admin y Vendedor (normalize_role de backend/app/api/dependencies.py).
+ */
+export function puedeGestionarCotizacion(role) {
+  return ['admin', 'asesor', 'vendedor'].includes(texto(role).toLowerCase());
+}
+
 /** El `verificacion_anticipo` que espera POST /cotizaciones/{id}/confirmar (sin fecha, el servidor pone hoy). */
 export function verificacionParaEnviar(form) {
   const v = { monto: montoDesdeTexto(form?.monto) ?? 0, metodo_pago: texto(form?.metodo), referencia: texto(form?.referencia) };
@@ -284,6 +293,24 @@ export function describirPago(p) {
     estado: p?.estado && p.estado !== 'CONFIRMADO' ? etiquetaEstadoPago(p.estado) : null,
     sinVerificar: metodo === METODO_SIN_VERIFICAR,
   };
+}
+
+const TIPOS_PAGO_INGRESO = Object.freeze(['ANTICIPO', 'ABONO', 'PAGO_TOTAL', 'PAGO_SALDO']);
+
+/**
+ * B7 / R6: el dinero del pedido que, si se cancela, queda como saldo a favor de su cotizacion (y pasa al pedido nuevo
+ * al volver a convertirla). La misma cuenta que saldos_a_favor_de_cotizacion del servidor: pagos CONFIRMADO de
+ * ingreso menos devoluciones CONFIRMADO, sin el pago automatico 'CONVERSION_COTIZACION' (nadie lo verifico); en
+ * pesos enteros, nunca negativo. `pedido.pagos` es la lista del GET del pedido.
+ */
+export function saldoAFavorAlCancelar(pedido) {
+  let neto = 0;
+  for (const p of Array.isArray(pedido?.pagos) ? pedido.pagos : []) {
+    if (!esObjeto(p) || p.estado !== 'CONFIRMADO' || texto(p.metodo_pago) === METODO_SIN_VERIFICAR) continue;
+    if (TIPOS_PAGO_INGRESO.includes(p.tipo)) neto += Number(p.monto) || 0;
+    else if (p.tipo === 'DEVOLUCION') neto -= Number(p.monto) || 0;
+  }
+  return Math.max(0, redondearPeso(neto));
 }
 
 // ─── Orden de pago del pedido (H44+N6, H45) ─────────────────────────────────────────────────────────

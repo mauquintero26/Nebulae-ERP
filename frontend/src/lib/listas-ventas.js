@@ -161,6 +161,18 @@ export function hintTotalPedidos(k) {
 }
 
 /**
+ * B1 (R8): la misma ruta sin el parametro `nombre` y con los demas intactos (p. ej. quitar ?accion=cancelar tras abrir
+ * el modal de cancelacion, conservando return_to). `query` es lo que da useSearchParams() o su texto.
+ * @returns {string}
+ */
+export function rutaSinParametro(ruta, query, nombre) {
+  const q = new URLSearchParams(query ? query.toString() : '');
+  q.delete(nombre);
+  const resto = q.toString();
+  return resto ? `${ruta}?${resto}` : ruta;
+}
+
+/**
  * A4 (H47): ventas, cartera pendiente y ticket promedio del Dashboard General con la regla de la lista de pedidos
  * (kpisPedidos): el resumen de GET /ventas/pedidos (todos los pedidos, no solo la pagina) o, si no vino,
  * resumenPedidos sobre los cargados. Ni las ventas ni la cartera suman pedidos cancelados o devueltos por completo; la

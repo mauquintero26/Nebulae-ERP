@@ -16,6 +16,7 @@ import {
   cuentaVerificacion, evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo, montoDesdeTexto,
   etiquetaTipoPago, etiquetaMetodoPago, etiquetaEstadoPago, describirPago,
   etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp, textoChipPxp, propagacionRecotizacion, creditoPorRecotizacion,
+  saldoAFavorAlCancelar, puedeGestionarCotizacion,
 } from '../src/lib/dinero-ventas.js';
 
 console.log('--- N1 TEST 1: los 8 medios de pago son los mismos que acepta el servidor ---');
@@ -351,6 +352,44 @@ console.log('--- A3 TEST 12: la re-cotizacion manda precios al pedido, nunca sal
   assert.deepEqual(creditoPorRecotizacion(pedido, 600000), { pagado: 700000, credito: 100000 });
   assert.deepEqual(creditoPorRecotizacion(pedido, 1500000), { pagado: 700000, credito: 0 });
   assert.deepEqual(creditoPorRecotizacion(null, 1000), { pagado: 0, credito: 0 });
+}
+
+console.log('--- B7 / R6 TEST 13: dinero del pedido que queda como saldo a favor si se cancela ---');
+{
+  // La misma cuenta que saldos_a_favor_de_cotizacion: ingresos CONFIRMADO - devoluciones CONFIRMADO, sin el pago
+  // automatico viejo 'CONVERSION_COTIZACION' (nadie lo verifico).
+  const pagos = [
+    { tipo: 'ANTICIPO', monto: 600000, metodo_pago: 'Nequi', estado: 'CONFIRMADO' },
+    { tipo: 'ABONO', monto: 100000.4, metodo_pago: 'PSE', estado: 'CONFIRMADO' },
+    { tipo: 'DEVOLUCION', monto: 50000, metodo_pago: 'PSE', estado: 'CONFIRMADO' },
+    { tipo: 'ABONO', monto: 70000, metodo_pago: 'PSE', estado: 'REVERTIDO' },
+    { tipo: 'REVERSION', monto: 70000, metodo_pago: 'PSE', estado: 'CONFIRMADO' },
+    { tipo: 'ANTICIPO', monto: 999, metodo_pago: 'CONVERSION_COTIZACION', estado: 'CONFIRMADO' },
+    { tipo: 'ANTICIPO', monto: 300000, metodo_pago: 'TRASLADO', estado: 'CONFIRMADO' },
+  ];
+  assert.equal(saldoAFavorAlCancelar({ pagos }), 950000);
+  assert.equal(saldoAFavorAlCancelar({ pagos: [pagos[5]] }), 0, 'el pago automatico no es saldo a favor');
+  assert.equal(saldoAFavorAlCancelar({ pagos: [pagos[0], { tipo: 'DEVOLUCION', monto: 700000, estado: 'CONFIRMADO' }] }), 0);
+  for (const nulo of [null, undefined, {}, { pagos: null }, { pagos: [null, 'x'] }]) {
+    assert.equal(saldoAFavorAlCancelar(nulo), 0);
+  }
+}
+
+console.log('--- B4 TEST 14: Ajustar anticipo y Crear Pedido de Venta solo para los roles que acepta el servidor ---');
+{
+  // El servidor: PATCH /ventas/cotizaciones/{id} y POST /ventas/cotizaciones/{id}/confirmar con
+  // require_roles(*ROLE_ADMIN, *ROLE_ASESOR) (normalize_role: Admin -> ADMIN, Vendedor -> ASESOR).
+  const py = readFileSync(new URL('../../backend/app/api/v1/erp_ventas.py', import.meta.url), 'utf8');
+  for (const ruta of ['def update_cotizacion(', 'def confirmar_cotizacion(']) {
+    const firma = py.slice(py.indexOf(ruta), py.indexOf(ruta) + 200);
+    assert.ok(firma.includes('require_roles(*ROLE_ADMIN, *ROLE_ASESOR)'), `${ruta} cambio de roles: ${firma}`);
+  }
+  for (const rol of ['ADMIN', 'Admin', 'admin', 'ASESOR', 'Asesor', 'Vendedor', ' vendedor ']) {
+    assert.equal(puedeGestionarCotizacion(rol), true, rol);
+  }
+  for (const rol of ['COMPRAS', 'ERP', 'FINANZAS', 'Finanzas', 'BODEGA', 'CONSULTA', 'Mercadeo', '', null, undefined]) {
+    assert.equal(puedeGestionarCotizacion(rol), false, String(rol));
+  }
 }
 
 console.log('OK test_dinero_ventas.mjs');
