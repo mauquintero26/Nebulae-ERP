@@ -33,6 +33,7 @@ from app.core.ventas_dinero import (
     anular_pxps_de_pedido, monto_linea, repartir_anticipo_por_linea,
 )
 from app.core.textos_actividad import etiqueta_estado, ETIQUETAS_ESTADO, PASOS_SC, nombre_de_usuario
+from app.core.chatter import validar_nota, reinicia_atraso
 from app.core.estados_pedido import ESTADOS_VEN_DESTINOS, ESTADOS_VEN_SIN_DINERO, destinos_ven_permitidos
 from app.api.v1.schemas_compras import CancelarSolicitudBody, CotizarSinConfirmacionBody
 from app.api.v1.crm import mover_lead_de_solicitud, reabrir_lead_de_solicitud
@@ -137,8 +138,8 @@ def _log(db: Session, entity_type: str, entity_id: int, entity_numero: str,
          action: str, description: str = None, old_estado: str = None,
          new_estado: str = None, user_name: str = None, extra_data: dict = None,
          commit: bool = True):
-    """Agrega un renglon de Actividad. commit=False lo deja en la sesion para que lo confirme el commit del
-    llamador (una sola transaccion: choque H36/H29 en update_solicitud)."""
+    """Agrega un renglon de Actividad y lo devuelve (U6+H22: _agregar_nota responde con el). commit=False lo deja en
+    la sesion para que lo confirme el commit del llamador (una sola transaccion: choque H36/H29 en update_solicitud)."""
     log = ActivityLog(
         entity_type=entity_type,
         entity_id=entity_id,
@@ -153,6 +154,7 @@ def _log(db: Session, entity_type: str, entity_id: int, entity_numero: str,
     db.add(log)
     if commit:
         db.commit()
+    return log
 
 # H27+H39: canales por los que el asesor entrega el enlace de confirmacion al cliente -> como se lee en la Actividad.
 CANALES_ENVIO = {"WhatsApp": "por WhatsApp", "Email": "por correo", "Otro": "por otro canal"}
@@ -669,6 +671,24 @@ def _log_dict(l: ActivityLog) -> dict:
         "created_at": _iso_utc(l.created_at),
         "extra_data": l.extra_data,
     }
+
+def _agregar_nota(db: Session, entidad: str, doc, body: dict, user: User) -> dict:
+    """U6+H22: una nota del Chatter en la Actividad de `doc` (SC, COT o VEN), validada por chatter.validar_nota (422
+    con el mensaje si no sirve). El autor es el usuario de la sesion (R9/C13), nunca body.user_name. R1: un contacto con
+    el cliente (llamada, WhatsApp, correo, nota externa) reinicia el atraso del documento (updated_at); la nota interna
+    no. Una sola transaccion; devuelve el renglon creado (_log_dict: con id y created_at en 'Z')."""
+    try:
+        action, texto, extra = validar_nota(body)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    log = _log(db, entidad, doc.id, doc.numero, action, texto, user_name=nombre_de_usuario(user), extra_data=extra,
+               commit=False)
+    if reinicia_atraso(extra["tipo"]):
+        doc.updated_at = datetime.datetime.utcnow()
+    db.flush()
+    d = _log_dict(log)
+    db.commit()
+    return {"status": "success", "data": d}
 
 # ─── SOLICITUDES (SC) ────────────────────────────────────────────────────────
 
@@ -1365,11 +1385,7 @@ def add_sc_activity(sc_id: int, body: dict, user: User = Depends(require_roles(*
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
-    _log(db, "SC", sc.id, sc.numero,
-         body.get("action", "NOTE_ADDED"),
-         body.get("description"),
-         user_name=body.get("user_name"))
-    return {"status": "success"}
+    return _agregar_nota(db, "SC", sc, body, user)
 
 
 # ─── COTIZACIONES (COT) ──────────────────────────────────────────────────────
@@ -2290,11 +2306,7 @@ def add_cot_activity(cot_id: int, body: dict, user: User = Depends(require_roles
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
     if not cot:
         raise HTTPException(404, "Cotización no encontrada")
-    _log(db, "COT", cot.id, cot.numero,
-         body.get("action", "NOTE_ADDED"),
-         body.get("description"),
-         user_name=body.get("user_name"))
-    return {"status": "success"}
+    return _agregar_nota(db, "COT", cot, body, user)
 
 
 @router.post("/pedidos/{ven_id}/actividad")
@@ -2303,11 +2315,7 @@ def add_ven_activity(ven_id: int, body: dict, user: User = Depends(require_roles
     v = db.query(SaleOrder).filter(SaleOrder.id == ven_id).first()
     if not v:
         raise HTTPException(404, "Pedido no encontrado")
-    _log(db, "VEN", v.id, v.numero,
-         body.get("action", "NOTE_ADDED"),
-         body.get("description"),
-         user_name=body.get("user_name"))
-    return {"status": "success"}
+    return _agregar_nota(db, "VEN", v, body, user)
 
 
 
