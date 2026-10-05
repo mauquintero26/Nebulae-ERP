@@ -28,6 +28,13 @@ export function puedeCrearOrdenDePago(role?: string | null): boolean {
   return ['admin', 'finanzas', 'asesor', 'vendedor'].includes(r);
 }
 
+// H34 (Bloque 2, T1B): solo un administrador puede 'Eliminar permanentemente' una SC de la Papelera
+// (DELETE /ventas/solicitudes/{id}/permanente exige ROLE_ADMIN). 'Admin' legacy o 'ADMIN' canonico,
+// igual que normalize_role.
+export function esAdministrador(role?: string | null): boolean {
+  return (role || '').toLowerCase().trim() === 'admin';
+}
+
 export type UsuarioActual = { id: number | null; email: string; name: string; role: string };
 
 // Lo escribe AuthGuard tras validar la sesion (/auth/me).

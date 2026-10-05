@@ -10,7 +10,7 @@ import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
-import { Button } from '@/components/ui';
+import { Button, useAvisos } from '@/components/ui';
 import {
   ChannelModal, CalculadorModal, DeleteConfirm, PropagarPvenConfirm, VerificarAnticipoModal, AjustarAnticipoModal,
   ESTADOS as ESTADOS_COT, EstadoBadge, fCOP, fDate, fTime,
@@ -44,6 +44,8 @@ function CotizacionDetalleContent() {
   // construye ?return_to= al enlazar a esta cotizacion, pero esta pagina lo ignoraba.
   const safeReturnTo = returnToSeguro(searchParams?.get('return_to'));
   const currentPath = `/dashboard/ventas/cotizacion/${String(params.id || '')}`;
+  // H49 (T1B): avisos y confirmaciones del sistema en lugar de window.alert / window.confirm.
+  const { avisar, avisarError, confirmar } = useAvisos();
 
   const [cotizacion, setCotizacion] = useState<any>(null);
   const [loading, setLoading] = useState(!isNew);
@@ -214,7 +216,7 @@ function CotizacionDetalleContent() {
       setSelectedChannel(null);
       if (link) setConfirmLink(link);
     } catch (err: any) {
-      alert('Error al enviar la cotizacion: ' + err.message);
+      avisarError(err, 'No se pudo enviar la cotización');
     }
     setSending(false);
   }
@@ -229,11 +231,15 @@ function CotizacionDetalleContent() {
     const hasProds = productos.length > 0;
     const hasNotes = (cotizacion.notas || '').trim().length > 0;
     if (!hasProds && !hasNotes) {
-      alert('No hay productos ni notas. Cotiza primero o agrega información antes de confirmar.');
+      avisar('No hay productos ni notas. Cotiza primero o agrega información antes de confirmar.', { tono: 'error' });
       return;
     }
     if (!hasProds && hasNotes) {
-      const ok = window.confirm('No hay productos especificados. Las notas mencionan el producto. ¿Confirmar de todas formas?');
+      const ok = await confirmar({
+        titulo: 'Crear el pedido sin productos',
+        mensaje: 'La cotización no tiene productos; solo las notas los mencionan.',
+        textoConfirmar: 'Crear pedido de todas formas',
+      });
       if (!ok) return;
     }
     // N1: con anticipo por verificar (lo que pide la modalidad o el % manual, menos el saldo a favor de un
@@ -263,7 +269,7 @@ function CotizacionDetalleContent() {
     } catch (err: any) {
       // El 422 de la verificacion (pago, metodo, fecha...) se muestra dentro del modal.
       if (verificacion) setVerificarError(err.message);
-      else alert('Error al confirmar la venta: ' + err.message);
+      else avisarError(err, 'No se pudo crear el pedido');
     }
     setConfirming(false);
   }
@@ -318,7 +324,7 @@ function CotizacionDetalleContent() {
       setPendingCalcData(null);
       await loadCotizacion();
     } catch (err: any) {
-      alert('Error al guardar la cotización: ' + err.message);
+      avisarError(err, 'No se pudo guardar la cotización');
     }
     setSavingCalc(false);
   }
@@ -332,7 +338,7 @@ function CotizacionDetalleContent() {
       });
       await loadCotizacion();
     } catch (err: any) {
-      alert('Error: ' + err.message);
+      avisarError(err, 'No se pudo cambiar el estado');
     }
   }
 
@@ -348,7 +354,7 @@ function CotizacionDetalleContent() {
       // N7: la solicitud sigue activa; desde ella se crea la nueva cotizacion.
       router.push(cotizacion.sc_id ? `/dashboard/ventas/solicitud/${cotizacion.sc_id}` : '/dashboard/ventas/cotizacion');
     } catch (err: any) {
-      alert('Error: ' + err.message);
+      avisarError(err, 'No se pudo eliminar la cotización');
     }
   }
 
@@ -369,7 +375,7 @@ function CotizacionDetalleContent() {
       });
       await loadCotizacion();
     } catch (err: any) {
-      alert('Error al crear el producto: ' + err.message);
+      avisarError(err, 'No se pudo crear el producto');
     }
     setCreatingProductIdx(null);
   }
@@ -393,7 +399,7 @@ function CotizacionDetalleContent() {
       setChatterInput('');
       await loadCotizacion();
     } catch (err: any) {
-      alert('Error al registrar el mensaje: ' + err.message);
+      avisarError(err, 'No se pudo registrar el mensaje');
     }
     setChatterSending(false);
   }
@@ -842,12 +848,18 @@ function CotizacionDetalleContent() {
                           mismo patron que venta/[id]/page.tsx. */}
                       <select
                         value=""
-                        onChange={e => {
+                        onChange={async e => {
                           const k = e.target.value;
                           if (!k) return;
-                          if (k === 'RECHAZADA' && !window.confirm(cotizacion.sc_id
-                            ? `¿Marcar como Rechazada? La solicitud ${cotizacion.sc_numero || ''} seguirá activa y podrás crearle otra cotización.`
-                            : '¿Marcar como Rechazada?')) return;
+                          // value="" se conserva: mientras la confirmación está abierta no queda elegida ninguna opción.
+                          if (k === 'RECHAZADA' && !(await confirmar({
+                            titulo: `Marcar ${cotizacion.numero} como Rechazada`,
+                            mensaje: cotizacion.sc_id
+                              ? `La solicitud ${cotizacion.sc_numero || 'de origen'} seguirá activa y podrás crearle otra cotización.`
+                              : 'La cotización queda como Rechazada.',
+                            textoConfirmar: 'Marcar como Rechazada',
+                            peligro: true,
+                          }))) return;
                           changeEstado(k);
                         }}
                         className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-600 outline-none focus:ring-2 focus:ring-amber-200 mb-3">

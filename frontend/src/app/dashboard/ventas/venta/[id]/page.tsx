@@ -10,7 +10,8 @@ import Link from 'next/link';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
-import { Button, Modal } from '@/components/ui';
+import { Button, Modal, useAvisos } from '@/components/ui';
+import { textoDeError } from '@/lib/avisos';
 import { NewSupplierModal } from '../venta-client';
 import { CambiosDeActividad, getUsuarioActual, puedeCrearOrdenDePago } from '../../flujo';
 import { formatoPesos } from '@/lib/pesos';
@@ -41,6 +42,8 @@ function PedidoVentaDetalleContent() {
   // interna relativa, nunca un esquema http(s) ni "//" (protocol-relative).
   const rawReturnTo = searchParams?.get('return_to') || '';
   const safeReturnTo = rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//') ? rawReturnTo : '';
+  // H49 (T1B): avisos del sistema en lugar de window.alert; los errores de las ventanas (PEC, cancelar) van dentro.
+  const { avisar, avisarError } = useAvisos();
 
   const [pedido, setPedido] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -51,6 +54,7 @@ function PedidoVentaDetalleContent() {
   const [sendingNota, setSendingNota] = useState(false);
   const [showPecModal, setShowPecModal] = useState(false);
   const [pecSaving, setPecSaving] = useState(false);
+  const [pecError, setPecError] = useState('');
   const [pecForm, setPecForm] = useState({ dias_entrega: 15, modalidad_pago: 'Contado', notas: '' });
   const [supplierSearch, setSupplierSearch] = useState('');
   const [suppliers, setSuppliers] = useState<any[]>([]);
@@ -60,6 +64,7 @@ function PedidoVentaDetalleContent() {
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [cancelRazon, setCancelRazon] = useState('');
   const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState('');
   const [isEditMode, setIsEditMode] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
   const editEntryEstado = useRef('');
@@ -150,13 +155,15 @@ function PedidoVentaDetalleContent() {
     setCreatingPxp(true);
     try {
       // H44+N6: los montos salen del pedido en el servidor; el body ya no manda montos.
-      await apiFetch(`/ventas/pedidos/${pedido.id}/crear-pxp`, {
+      const d = await apiFetch(`/ventas/pedidos/${pedido.id}/crear-pxp`, {
         method: 'POST',
         body: JSON.stringify({}),
       });
       await loadPedido();
+      const numeroPxp = (d?.data ?? d)?.numero;
+      avisar(numeroPxp ? `Orden de pago ${numeroPxp} creada` : 'Orden de pago creada');
     } catch (err: any) {
-      alert('Error al crear PXP: ' + err.message);
+      avisarError(err, 'No se pudo crear la orden de pago');
     }
     setCreatingPxp(false);
   }
@@ -172,7 +179,7 @@ function PedidoVentaDetalleContent() {
       setNota('');
       await loadPedido();
     } catch (err: any) {
-      alert('Error al registrar nota: ' + err.message);
+      avisarError(err, 'No se pudo registrar la nota');
     }
     setSendingNota(false);
   }
@@ -190,7 +197,7 @@ function PedidoVentaDetalleContent() {
       setNota('');
       await loadPedido();
     } catch (err: any) {
-      alert('Error al registrar el mensaje: ' + err.message);
+      avisarError(err, 'No se pudo registrar el mensaje');
     }
   }
 
@@ -208,8 +215,10 @@ function PedidoVentaDetalleContent() {
 
   async function handleCrearPEC() {
     if (!pedido) return;
-    if (!selectedSupplier) { alert('Selecciona un proveedor (o crea uno nuevo) antes de crear el PEC'); return; }
+    // El botón 'Crear PEC' está deshabilitado sin proveedor; esto es solo una defensa.
+    if (!selectedSupplier) { setPecError('Selecciona un proveedor o crea uno nuevo.'); return; }
     setPecSaving(true);
+    setPecError('');
     try {
       const productosPec = (pedido.productos || []).map((p: any) => {
         const qty = Number(p.qty || p.cantidad || 1);
@@ -240,9 +249,13 @@ function PedidoVentaDetalleContent() {
       const pecObj = pec?.data ?? pec;
       setShowPecModal(false);
       await loadPedido();
-      alert(`PEC ${pecObj.numero || ''} creado y vinculado al pedido`);
+      avisar(
+        pecObj?.numero ? `PEC ${pecObj.numero} creado y vinculado al pedido` : 'PEC creado y vinculado al pedido',
+        pecObj?.id ? { accion: { texto: 'Ver PEC', href: `/dashboard/compras/pedidos/${pecObj.id}` } } : undefined,
+      );
     } catch (err: any) {
-      alert('Error al crear PEC: ' + err.message);
+      // El error se muestra dentro de la ventana, que sigue abierta con lo escrito.
+      setPecError(textoDeError(err, 'No se pudo crear el PEC'));
     }
     setPecSaving(false);
   }
@@ -265,16 +278,19 @@ function PedidoVentaDetalleContent() {
         }),
       });
       await loadPedido();
+      avisar('Productos agregados a la lista de compras');
     } catch (err: any) {
-      alert('Error al agregar a la lista de compras: ' + err.message);
+      avisarError(err, 'No se pudieron agregar los productos a la lista de compras');
     }
     setListaSaving(false);
   }
 
   async function handleCancelarPedido() {
     if (!pedido) return;
-    if (cancelRazon.trim().length < 5) { alert('La razón de cancelación debe tener al menos 5 caracteres'); return; }
+    // El botón está deshabilitado con menos de 5 caracteres; esto es solo una defensa.
+    if (cancelRazon.trim().length < 5) { setCancelError('El motivo es obligatorio (mínimo 5 caracteres).'); return; }
     setCancelling(true);
+    setCancelError('');
     try {
       await apiFetch(`/ventas/pedidos/${pedido.id}`, {
         method: 'PATCH',
@@ -290,7 +306,8 @@ function PedidoVentaDetalleContent() {
       setCancelRazon('');
       await loadPedido();
     } catch (err: any) {
-      alert('Error al cancelar: ' + err.message);
+      // El error se muestra dentro de la ventana, que sigue abierta con el motivo escrito.
+      setCancelError(textoDeError(err, 'No se pudo cancelar el pedido'));
     }
     setCancelling(false);
   }
@@ -313,7 +330,7 @@ function PedidoVentaDetalleContent() {
       setIsEditMode(false);
       await loadPedido();
     } catch (err: any) {
-      alert('Error al guardar: ' + err.message);
+      avisarError(err, 'No se pudieron guardar los cambios');
     }
   }
 
@@ -405,7 +422,7 @@ function PedidoVentaDetalleContent() {
             <Edit2 size={18} />
           </button>
           {puedeCancelar && (
-            <Button variant="danger" icon={X} onClick={() => setShowCancelModal(true)}>Cancelar Pedido</Button>
+            <Button variant="danger" icon={X} onClick={() => { setCancelError(''); setShowCancelModal(true); }}>Cancelar Pedido</Button>
           )}
         </div>
       </div>
@@ -716,7 +733,7 @@ function PedidoVentaDetalleContent() {
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     onClick={() => {
-                      setSupplierSearch(''); setSelectedSupplier(null); setSuppliers([]);
+                      setSupplierSearch(''); setSelectedSupplier(null); setSuppliers([]); setPecError('');
                       setPecForm({ dias_entrega: 15, modalidad_pago: 'Contado', notas: `Pedido de compra para PVEN ${pedido.numero} — ${pedido.customer_name || ''}` });
                       setShowPecModal(true);
                     }}
@@ -846,7 +863,7 @@ function PedidoVentaDetalleContent() {
           footer={(
             <>
               <Button variant="secondary" onClick={() => setShowPecModal(false)}>Cancelar</Button>
-              <Button color="purple" icon={ShoppingCart} loading={pecSaving} onClick={handleCrearPEC}>Crear PEC</Button>
+              <Button color="purple" icon={ShoppingCart} loading={pecSaving} disabled={!selectedSupplier} onClick={handleCrearPEC}>Crear PEC</Button>
             </>
           )}>
           {(pedido.productos || []).length > 0 && (
@@ -876,10 +893,12 @@ function PedidoVentaDetalleContent() {
                 ))}
               </div>
             )}
-            {selectedSupplier && (
+            {selectedSupplier ? (
               <p className="text-xs text-purple-700 font-bold mt-1 flex items-center gap-1">
                 <CheckCircle2 size={12} /> {selectedSupplier.name} seleccionado
               </p>
+            ) : (
+              <p className="text-xs text-slate-400 mt-1">Selecciona un proveedor o crea uno nuevo.</p>
             )}
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -901,6 +920,7 @@ function PedidoVentaDetalleContent() {
             <textarea value={pecForm.notas} onChange={e => setPecForm(f => ({ ...f, notas: e.target.value }))}
               rows={2} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none outline-none focus:ring-2 focus:ring-purple-200" />
           </div>
+          {pecError && <p role="alert" className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">{pecError}</p>}
         </Modal>
       )}
       {showNewSupplier && (
@@ -915,7 +935,7 @@ function PedidoVentaDetalleContent() {
           footer={(
             <>
               <Button variant="secondary" onClick={() => setShowCancelModal(false)}>Volver</Button>
-              <Button variant="danger" icon={X} loading={cancelling} onClick={handleCancelarPedido}>Confirmar Cancelación</Button>
+              <Button variant="danger" icon={X} loading={cancelling} disabled={cancelRazon.trim().length < 5} onClick={handleCancelarPedido}>Confirmar Cancelación</Button>
             </>
           )}>
           <p className="text-sm text-slate-500">Esta acción marca el pedido como <strong>Cancelado</strong>. Indica el motivo (mínimo 5 caracteres).</p>
@@ -941,6 +961,8 @@ function PedidoVentaDetalleContent() {
           <textarea value={cancelRazon} onChange={e => setCancelRazon(e.target.value)} rows={3} autoFocus
             placeholder="Ej: Cliente desistió de la compra, error en el pedido, etc."
             className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-red-200 resize-none" />
+          {cancelRazon.trim().length < 5 && <p className="text-xs text-red-500 -mt-2">El motivo es obligatorio. Mínimo 5 caracteres (llevas {cancelRazon.trim().length}).</p>}
+          {cancelError && <p role="alert" className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">{cancelError}</p>}
         </Modal>
       )}
     </div>

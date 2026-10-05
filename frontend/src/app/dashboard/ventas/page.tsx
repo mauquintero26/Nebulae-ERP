@@ -13,7 +13,7 @@ import {
 import { useRouter } from 'next/navigation';
 import { apiFetch, API_URL } from '@/lib/api';
 import { coincideProducto } from '@/lib/busqueda';
-import { SubNav, PageHeader, Badge, Drawer, Toast, Modal, Button } from '@/components/ui';
+import { SubNav, PageHeader, Badge, Drawer, Modal, Button, useAvisos } from '@/components/ui';
 import { VEN_NAV } from './ven-nav';
 import { CambiosDeActividad, EnlaceConfirmacionModal, getUsuarioActual } from './flujo';
 import { ChannelModal, ESTADOS as ESTADOS_COT } from './cotizacion/cotizacion-client';
@@ -253,7 +253,9 @@ export default function VentasHub() {
   const [activeTab, setActiveTab]       = useState('Todos');
   const [viewMode, setViewMode]         = useState<'lista'|'kanban'>('lista');
   const [loading, setLoading]           = useState(true);
-  const [toast, setToast]               = useState<{msg:string,type:'ok'|'error'}|null>(null);
+  // H49 (T1B): avisos y confirmaciones del sistema; setToast queda como adaptador ({msg, type}) de las llamadas de siempre.
+  const { avisar, confirmar } = useAvisos();
+  const setToast = useCallback((t: {msg:string,type:'ok'|'error'}|null) => { if (t) avisar(t.msg, {tono: t.type}); }, [avisar]);
   const [search, setSearch]             = useState('');
   const [filterEstado, setFilterEstado] = useState('');
   const [showFilters, setShowFilters]   = useState(false);
@@ -419,7 +421,11 @@ export default function VentasHub() {
       return {idStr, numero: fila?.numero || `Pedido ${idStr.split('|')[1]}`, estado: fila?.estado};
     }), nuevo);
     if(nuevo === 'FACTURADO' && aplican.length > 0
-      && !window.confirm(`¿Marcar ${aplican.length === 1 ? '1 pedido' : `${aplican.length} pedidos`} como Facturado? Este estado ya no se puede cambiar.`)) return;
+      && !(await confirmar({
+        titulo: `Marcar ${aplican.length === 1 ? '1 pedido' : `${aplican.length} pedidos`} como Facturado`,
+        mensaje: `Después de esto el estado ${aplican.length === 1 ? 'del pedido' : 'de los pedidos'} ya no se puede cambiar.`,
+        textoConfirmar: 'Marcar como Facturado',
+      }))) return;
     setResultadoLote(null);
     const resultados: {idStr:string, numero:string, ok:boolean, error?:string}[] = [];
     for(const {idStr, numero} of aplican){
@@ -694,7 +700,6 @@ export default function VentasHub() {
   /* ════════════════ RENDER ════════════════ */
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
-      <Toast toast={toast} onClose={()=>setToast(null)}/>
       {actRow && <ActivitiesPanel row={actRow} onClose={()=>setActRow(null)}/>}
       {showConfig && <ConfigPanel alertDias={alertDias} onSave={cfg=>{setAlertDias(cfg);setShowConfig(false);loadData();}} onClose={()=>setShowConfig(false)}/>}
 
@@ -1456,8 +1461,13 @@ export default function VentasHub() {
                             </Link>
                           )}
                           {op.facturar && (
-                            <button onClick={() => {
-                              if (window.confirm(`¿Marcar ${quickDetailDoc.numero} como Facturado? Este estado ya no se puede cambiar.`)) cambiarEstadoPedido(quickDetailDoc, 'FACTURADO');
+                            <button onClick={async () => {
+                              const doc = quickDetailDoc;
+                              if (await confirmar({
+                                titulo: `Marcar ${doc.numero} como Facturado`,
+                                mensaje: 'Después de esto el estado del pedido ya no se puede cambiar.',
+                                textoConfirmar: 'Marcar como Facturado',
+                              })) cambiarEstadoPedido(doc, 'FACTURADO');
                             }}
                               className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-colors bg-green-50 text-green-800 hover:bg-green-100 border-green-200">
                               Marcar como Facturado

@@ -2,11 +2,12 @@
 
 import { useState } from 'react';
 import { Upload, FileText, CheckCircle2, AlertCircle, ArrowRight, Table2, CloudDownload, Calendar, History, FolderOpen, X } from 'lucide-react';
-import { SubNav, PageHeader, Button, EmptyState } from '@/components/ui';
+import { SubNav, PageHeader, Button, EmptyState, useAvisos } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
 import { apiFetch } from '@/lib/api';
 
 export default function ExportarRangoPage() {
+  const { avisar } = useAvisos();
   const [file, setFile] = useState<File | null>(null);
   const [fechaIni, setFechaIni] = useState('');
   const [fechaFin, setFechaFin] = useState('');
@@ -70,7 +71,7 @@ export default function ExportarRangoPage() {
   };
 
   const handleExportOdoo = () => {
-    alert(`Exportación de ${salesData.length} ventas generada (Simulación). El formato Excel se descargará automáticamente cuando proveas la estructura final de Odoo.`);
+    avisar(`Exportación de ${salesData.length} ventas generada (Simulación). El formato Excel se descargará automáticamente cuando proveas la estructura final de Odoo.`, { tono: 'info' });
   };
 
   return (

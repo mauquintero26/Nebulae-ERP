@@ -14,20 +14,24 @@ import { formatoPesos } from '@/lib/pesos';
 import { ESTADOS_PEDIDO, infoEstadoPedido, grupoPedido, transicionesPedido } from '@/lib/estados-pedido';
 import { kpisPedidos, hintTotalPedidos, opcionesFiltroEstado, pedidoSumaDinero } from '@/lib/listas-ventas';
 import { pedidoAdmitePxp } from '@/lib/dinero-ventas';
-import { SubNav, PageHeader, StatCard, Button, EmptyState, Toast, Modal } from '@/components/ui';
+import { SubNav, PageHeader, StatCard, Button, EmptyState, Modal, useAvisos } from '@/components/ui';
+import { textoDeError } from '@/lib/avisos';
 import { VEN_NAV } from '../ven-nav';
 import { getUsuarioActual, puedeCrearOrdenDePago } from '../flujo';
 
 export function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClose:()=>void}) {
   const [form, setForm] = useState({name:'',reference:'',contact_name:'',phone:'',email:'',address:'',city:'',country:'Colombia',payment_terms:'',notes:''});
   const [saving, setSaving] = useState(false);
-  const set = (k:string,v:string) => setForm(f=>({...f,[k]:v}));
+  // H49 (T1B): el error se muestra dentro de la ventana, sin cerrarla ni borrar lo escrito; se borra al editar.
+  const [error, setError] = useState('');
+  const set = (k:string,v:string) => { setError(''); setForm(f=>({...f,[k]:v})); };
   async function save(e:React.FormEvent) {
     e.preventDefault();
     if (!form.name.trim()) return;
     setSaving(true);
+    setError('');
     try { const raw = await apiFetch('/compras/proveedores',{method:'POST',body:JSON.stringify(form)}); onSave(raw?.data ?? raw); }
-    catch(err:any) { alert('Error: '+err.message); }
+    catch(err:any) { setError(textoDeError(err, 'No se pudo crear el proveedor')); }
     setSaving(false);
   }
   return (
@@ -39,6 +43,7 @@ export function NewSupplierModal({onSave, onClose}: {onSave:(s:any)=>void; onClo
         </>
       )}>
       <form id="new-supplier-form" onSubmit={save} className="grid grid-cols-2 gap-4">
+        {error && <p role="alert" className="col-span-2 text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">{error}</p>}
         <div className="col-span-2"><label className="block text-xs font-black text-gray-500 uppercase mb-1">Nombre *</label><input required value={form.name} onChange={e=>set('name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
         <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Referencia / NIT</label><input value={form.reference} onChange={e=>set('reference',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
         <div><label className="block text-xs font-black text-gray-500 uppercase mb-1">Contacto</label><input value={form.contact_name} onChange={e=>set('contact_name',e.target.value)} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-purple-200"/></div>
@@ -63,14 +68,15 @@ export default function VentaClient() {
   const [currentPage, setCurrentPage]   = useState(1);
   const [pageSize, setPageSize]         = useState(25);
   const [selectedIds, setSelectedIds]   = useState<Set<number>>(new Set());
-  const [toast, setToast]               = useState<{msg:string,type:'ok'|'error'}|null>(null);
+  // H49 (T1B): avisos del sistema; showToast (más abajo) es el adaptador de las llamadas de siempre.
+  const { avisar } = useAvisos();
   const [openMenu, setOpenMenu]         = useState<number|null>(null);
   // H47: resumen del servidor sobre TODOS los pedidos (sin el tope de 200); sin el, se calcula en el navegador.
   const [resumenServidor, setResumenServidor] = useState<Record<string, unknown> | null>(null);
   const [creandoPxp, setCreandoPxp]     = useState<number|null>(null);
 
   const showToast = (msg:string, type:'ok'|'error'='ok') => {
-    setToast({msg,type});
+    avisar(msg, {tono: type});
   };
 
   const fetchPedidos = async () => {
@@ -135,8 +141,6 @@ export default function VentaClient() {
 
   return (
     <div className="flex flex-col min-h-screen bg-gray-50 font-sans text-gray-900">
-      <Toast toast={toast} onClose={()=>setToast(null)} />
-
       <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas/venta" color="indigo" hub={{ href: '/dashboard/ventas' }} />
 
       {/* HEADER */}

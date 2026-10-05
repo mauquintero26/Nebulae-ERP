@@ -14,13 +14,14 @@ import {
   Filler,
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
-import { SubNav, PageHeader, Button } from '@/components/ui';
+import { SubNav, PageHeader, Button, useAvisos } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
 import { apiFetch } from '@/lib/api';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
 export default function ProyeccionesPage() {
+  const { avisar } = useAvisos();
   const [rawData, setRawData] = useState<any[]>([]);
   const [forecastData, setForecastData] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -132,7 +133,7 @@ export default function ProyeccionesPage() {
   };
 
   const executeInvestmentPlan = () => {
-    alert(`Enviando prompt al IA:\n\n${chatPrompt}\n\nNota: La integración completa del Chat IA en esta vista se realizará al unificar el módulo del Asistente IA.`);
+    avisar(`Enviando prompt al IA:\n\n${chatPrompt}\n\nNota: La integración completa del Chat IA en esta vista se realizará al unificar el módulo del Asistente IA.`, { tono: 'info' });
   };
 
   return (

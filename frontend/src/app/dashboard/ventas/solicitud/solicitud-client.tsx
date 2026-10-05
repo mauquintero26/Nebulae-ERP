@@ -15,9 +15,10 @@ import {
 } from 'lucide-react';
 
 import { apiFetch, API_URL, getToken } from '@/lib/api';
-import { SubNav, PageHeader, StatCard, Badge as SharedBadge, Modal, Toast as SharedToast, Button, EmptyState } from '@/components/ui';
+import { SubNav, PageHeader, StatCard, Badge as SharedBadge, Modal, Button, EmptyState, useAvisos } from '@/components/ui';
+import { textoDeError } from '@/lib/avisos';
 import { VEN_NAV } from '../ven-nav';
-import { esAsesorElegible, getUsuarioActual } from '../flujo';
+import { esAdministrador, esAsesorElegible, getUsuarioActual } from '../flujo';
 import { coincideProducto } from '@/lib/busqueda';
 import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import {
@@ -112,15 +113,18 @@ export function ActionDot({action}: {action:string}) {
 export function NewClientModal({onSave, onClose}: {onSave:(c:any)=>void; onClose:()=>void}) {
   const [form, setForm] = useState({first_name:'',last_name:'',phone:'',email:'',address:'',city:''});
   const [saving, setSaving] = useState(false);
+  // H49 (T1B): el error se muestra dentro de la ventana, sin cerrarla ni borrar lo escrito; se borra al editar.
+  const [error, setError] = useState('');
   async function save(e: React.FormEvent) {
     e.preventDefault();
     if (!form.first_name) return;
     setSaving(true);
+    setError('');
     try {
       const d = await apiFetch('/crm/customers', {method:'POST', body:JSON.stringify(form)});
       const custObj = d?.data ?? d;
       onSave(custObj);
-    } catch(err:any) { alert('Error: '+err.message); }
+    } catch(err:any) { setError(textoDeError(err, 'No se pudo crear el cliente')); }
     setSaving(false);
   }
   return (
@@ -131,7 +135,8 @@ export function NewClientModal({onSave, onClose}: {onSave:(c:any)=>void; onClose
           <Button type="submit" form="sc-new-client-form" color="indigo" icon={UserPlus} loading={saving}>Guardar Cliente</Button>
         </>
       )}>
-      <form id="sc-new-client-form" onSubmit={save} className="space-y-3">
+      <form id="sc-new-client-form" onSubmit={save} onChange={()=>{ if (error) setError(''); }} className="space-y-3">
+        {error && <p role="alert" className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">{error}</p>}
         <div className="grid grid-cols-2 gap-3">
           <div><label className="text-xs font-bold text-slate-500 mb-1 block">Nombre *</label>
             <input required value={form.first_name} onChange={e=>setForm(f=>({...f,first_name:e.target.value}))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-200"/></div>
@@ -711,7 +716,8 @@ export default function SolicitudClient() {
   const [activeTab,setActiveTab]=useState('Activas');
   const [showCreate,setShowCreate]=useState(false);
   const [saving,setSaving]=useState(false);
-  const [toast,setToast]=useState<{msg:string;type:'ok'|'err'}|null>(null);
+  // H49 (T1B): avisos y confirmaciones del sistema (showToast, más abajo, es el adaptador de las llamadas de siempre).
+  const { avisar, avisarError, confirmar } = useAvisos();
   const [currentUser,setCurrentUser]=useState('');
   const [alertDias,setAlertDias]=useState(2);
   // H32: total de solicitudes que informa el servidor (la lista trae como mucho 200).
@@ -734,9 +740,14 @@ export default function SolicitudClient() {
   ]);
 
   async function enviarAPapelera(id:number) {
-    if(!confirm('¿Enviar esta solicitud a la papelera? Podrás restaurarla o eliminarla definitivamente allí.')) return;
+    const existing = solicitudes.find(s => s.id === id);
+    if(!(await confirmar({
+      titulo: `Enviar ${existing?.numero || 'la solicitud'} a la papelera`,
+      mensaje: 'La solicitud ya está cancelada. Desde la papelera se puede restaurar.',
+      textoConfirmar: 'Enviar a la papelera',
+      peligro: true,
+    }))) return;
     try {
-      const existing = solicitudes.find(s => s.id === id);
       const razonToSend = (existing && getRazonCancelacion(existing)) || 'Enviada a papelera por asesor';
       await apiFetch(`/ventas/solicitudes/${id}/cancelar`, {
         method: 'POST',
@@ -863,7 +874,7 @@ export default function SolicitudClient() {
   const custTimer=useRef<any>(null);
   const custReqId=useRef(0);
 
-  const showToast=(msg:string,type:'ok'|'err'='ok')=>setToast({msg,type});
+  const showToast=(msg:string,type:'ok'|'err'='ok')=>avisar(msg,{tono:type==='err'?'error':'ok'});
 
   useEffect(()=>{
     const u=localStorage.getItem('user_name')||localStorage.getItem('username')||'';
@@ -960,13 +971,21 @@ export default function SolicitudClient() {
     setCancelling(false);
   }
 
-  async function eliminarPermanente(id:number) {
-    if(!confirm('¿Eliminar permanentemente? Esta acción no se puede deshacer.')) return;
+  // H34: recibe la fila para mostrar número, cliente y motivo en la confirmación; el 409 del servidor (tiene
+  // documentos vinculados) sale en el aviso de error.
+  async function eliminarPermanente(sc:any) {
+    if(!(await confirmar({
+      titulo: `Eliminar ${sc.numero} definitivamente`,
+      mensaje: 'La solicitud se borra para siempre y no se puede recuperar.',
+      efectos: [`Cliente: ${sc.customer_name||'—'}`, `Motivo de la cancelación: ${sc.razon_cancelacion||'—'}`],
+      textoConfirmar: 'Eliminar definitivamente',
+      peligro: true,
+    }))) return;
     try{
-      await apiFetch(`/ventas/solicitudes/${id}/permanente`,{method:'DELETE'});
-      showToast('Eliminado permanentemente','ok');
+      await apiFetch(`/ventas/solicitudes/${sc.id}/permanente`,{method:'DELETE'});
+      avisar(`${sc.numero} eliminada definitivamente`);
       await loadPapelera();
-    }catch(err:any){showToast('Error: '+err.message,'err');}
+    }catch(err:any){avisarError(err,`No se pudo eliminar ${sc.numero}`);}
   }
 
   async function restaurarSC(id:number) {
@@ -1144,7 +1163,6 @@ export default function SolicitudClient() {
 
   return (
     <div className="w-full bg-slate-50 min-h-full">
-      {toast&&<SharedToast toast={{msg:toast.msg,type:toast.type==='ok'?'ok':'error'}} onClose={()=>setToast(null)}/>}
       {showNewClient&&<NewClientModal onSave={c=>{const cust=c?.data??c; setSelectedCust(cust);setCustSearch(`${cust.first_name||''} ${cust.last_name||''}`.trim());setCustResults([]);setShowNewClient(false);setShowCreate(true);showToast('Cliente creado exitosamente');}} onClose={()=>setShowNewClient(false)}/>}
 
       {/* Sub-module nav */}
@@ -1387,7 +1405,8 @@ export default function SolicitudClient() {
                           {enPapelera.nota&&<p className="text-[10px] text-slate-400">{enPapelera.nota}</p>}
                         </div>
                         <button onClick={()=>restaurarSC(sc.id)} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg text-xs font-bold border border-emerald-200 flex items-center gap-1"><RotateCcw size={11}/>Restaurar</button>
-                        {enPapelera.puedeEliminar&&<button onClick={()=>eliminarPermanente(sc.id)} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1"><Trash2 size={11}/>Eliminar permanentemente</button>}
+                        {/* H34: solo un administrador (único que puede hacerlo) ve 'Eliminar permanentemente'. */}
+                        {esAdministrador(getUsuarioActual().role)&&enPapelera.puedeEliminar&&<button onClick={()=>eliminarPermanente(sc)} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1"><Trash2 size={11}/>Eliminar permanentemente</button>}
                       </div>
                     </div>
                     );
@@ -2014,7 +2033,7 @@ export default function SolicitudClient() {
               className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-red-200 outline-none"
               autoFocus
             />
-            {cancelRazon.trim().length<5&&<p className="text-xs text-red-500 mt-1">El motivo es obligatorio (mínimo 5 caracteres).</p>}
+            {cancelRazon.trim().length<5&&<p className="text-xs text-red-500 mt-1">El motivo es obligatorio. Mínimo 5 caracteres (llevas {cancelRazon.trim().length}).</p>}
             {cancelErrores.length>0&&(
               <div className="mt-3 bg-rose-50 border border-rose-200 rounded-xl p-3 space-y-1.5">
                 <p className="text-xs font-black text-rose-700">No se pudo cancelar:</p>

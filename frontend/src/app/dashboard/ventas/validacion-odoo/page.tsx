@@ -2,10 +2,11 @@
 
 import { useState } from 'react';
 import { Cloud, FileSpreadsheet, ShieldAlert } from 'lucide-react';
-import { SubNav, PageHeader, Button } from '@/components/ui';
+import { SubNav, PageHeader, Button, useAvisos } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
 
 export default function ValidacionOdooPage() {
+  const { avisar } = useAvisos();
   const [file, setFile] = useState<File | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -16,7 +17,7 @@ export default function ValidacionOdooPage() {
 
   const handleValidate = () => {
     if (!file) return;
-    alert('Función de validación estructural de columnas Odoo en construcción. La interfaz está lista para conectarse al validador Python.');
+    avisar('Función de validación estructural de columnas Odoo en construcción. La interfaz está lista para conectarse al validador Python.', { tono: 'info' });
   };
 
   return (

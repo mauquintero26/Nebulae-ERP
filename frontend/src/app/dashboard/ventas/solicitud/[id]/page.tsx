@@ -10,7 +10,7 @@ import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
-import { Button, Modal } from '@/components/ui';
+import { Button, Modal, useAvisos } from '@/components/ui';
 import {
   EstadoBadge, TipoBadge, ChatterTab, IAPanelSC,
   ESTADOS_SC_MANUALES, TIPOS_SC, MODALIDADES_PAGO, fDate, fTime,
@@ -75,6 +75,8 @@ function SolicitudDetalleContent() {
   // esquema http(s) ni "//" (protocol-relative), que redirigirian fuera del dominio.
   const safeReturnTo = rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//') ? rawReturnTo : '';
   const currentPath = `/dashboard/ventas/solicitud/${String(params.id || '')}`;
+  // H49 (T1B): avisos del sistema en lugar de window.alert.
+  const { avisar, avisarError } = useAvisos();
 
   const [solicitud, setSolicitud] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -210,7 +212,7 @@ function SolicitudDetalleContent() {
       setEditMode(false);
       await loadSolicitud();
     } catch (err: any) {
-      alert('Error al guardar: ' + err.message);
+      avisarError(err, 'No se pudieron guardar los cambios');
     }
     setSavingEdit(false);
   }
@@ -224,7 +226,7 @@ function SolicitudDetalleContent() {
       await apiFetch(`/ventas/solicitudes/${solicitud.id}`, { method: 'PATCH', body: JSON.stringify({ estado: newEstado, updated_by: currentUser }) });
       await loadSolicitud();
     } catch (err: any) {
-      alert('Error: ' + err.message);
+      avisarError(err, 'No se pudo cambiar el estado');
     }
     setSaving(false);
   }
@@ -236,7 +238,7 @@ function SolicitudDetalleContent() {
       await apiFetch(`/ventas/solicitudes/${solicitud.id}`, { method: 'PATCH', body: JSON.stringify({ estado_soporte: newEstado, updated_by: currentUser }) });
       await loadSolicitud();
     } catch (err: any) {
-      alert('Error: ' + err.message);
+      avisarError(err, 'No se pudo cambiar el estado de soporte');
     }
     setSaving(false);
   }
@@ -274,9 +276,9 @@ function SolicitudDetalleContent() {
         return;
       }
       await loadSolicitud();
-      alert(`Cotización ${cotNum} creada`);
+      avisar(`Cotización ${cotNum} creada`);
     } catch (err: any) {
-      alert('Error: ' + err.message);
+      avisarError(err, 'No se pudo crear la cotización');
     }
     setConfirming(false);
   }
@@ -299,7 +301,7 @@ function SolicitudDetalleContent() {
       setAssignUserId('');
       await loadSolicitud();
     } catch (err: any) {
-      alert('Error al asignar el asesor: ' + err.message);
+      avisarError(err, 'No se pudo asignar el asesor');
     }
     setAssigning(false);
   }
@@ -340,7 +342,7 @@ function SolicitudDetalleContent() {
       setSelectedChannel(null);
       if (link) setConfirmLink(link);
     } catch (err: any) {
-      alert('Error: ' + err.message);
+      avisarError(err, 'No se pudo enviar la solicitud al cliente');
     }
     setSendingConfirmacion(false);
   }
@@ -968,7 +970,7 @@ function SolicitudDetalleContent() {
               className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-red-200 outline-none"
               autoFocus
             />
-            {cancelRazon.trim().length < 5 && <p className="text-xs text-red-500 mt-1">El motivo es obligatorio (mínimo 5 caracteres).</p>}
+            {cancelRazon.trim().length < 5 && <p className="text-xs text-red-500 mt-1">El motivo es obligatorio. Mínimo 5 caracteres (llevas {cancelRazon.trim().length}).</p>}
             {cancelError && <p className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 mt-3">{cancelError}</p>}
           </div>
         </Modal>
