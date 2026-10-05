@@ -729,8 +729,10 @@ export default function AsistenteOmnicanal() {
       {/* MODAL: CREAR SOLICITUD DE CLIENTE (SC) */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
-          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+          {/* T7 ronda 1 (A3): alto máximo y campos con scroll propio (como el Modal compartido de la lista): con el panel
+              de anticipo y las tarjetas de producto el formulario ya no cabe en 768 px y los botones quedaban fuera. */}
+          <div className="bg-white w-full max-w-lg max-h-[90vh] flex flex-col rounded-2xl shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="shrink-0 px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
               <div className="flex items-center gap-2">
                 <FileText size={16} className="text-indigo-600" />
                 <h3 className="text-sm font-black text-slate-800">Nueva Solicitud de Cliente (SC)</h3>
@@ -743,7 +745,8 @@ export default function AsistenteOmnicanal() {
               </button>
             </div>
 
-            <form onSubmit={handleCreateSc} className="p-5 space-y-3.5">
+            <form onSubmit={handleCreateSc} className="flex-1 min-h-0 flex flex-col">
+             <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-3.5">
               {/* Cliente -- pre-resuelto desde el contexto ERP si ya hay uno
                   activo, pero buscable/reemplazable o creable (alta encima de
                   esta ventana) con el mismo selector de la Solicitud de Cliente. */}
@@ -764,9 +767,10 @@ export default function AsistenteOmnicanal() {
                   <span className="text-[11px] font-bold text-rose-700">{scError}</span>
                 </div>
               )}
+             </div>
 
-              {/* Botones de acción */}
-              <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-100">
+              {/* Botones de acción: fuera del área con scroll, siempre visibles. */}
+              <div className="shrink-0 px-5 py-3 flex items-center justify-end gap-2 border-t border-slate-100 bg-white">
                 <button
                   type="button"
                   onClick={closeScModal}
