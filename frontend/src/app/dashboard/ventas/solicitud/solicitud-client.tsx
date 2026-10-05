@@ -23,7 +23,7 @@ import { coincideProducto } from '@/lib/busqueda';
 import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import {
   diasAlerta, generoCotizacion, cotizacionesVigentes, contadoresSolicitudes, tasaConversionCotizacion,
-  superaDiasAlerta, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera, compartirPeticion,
+  superaDiasAlerta, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera,
 } from '@/lib/listas-ventas';
 import {
   ESTADOS_SC as ESTADOS_SC_LIB, ESTADOS_SC_SIN_CONFIRMAR, infoEstadoSolicitud, puedeReiniciar,
@@ -45,10 +45,6 @@ export { NewClientModal } from './selector-cliente';
 // El contrato público no cambia: {label, color, bg, border} por estado (lo leen el Hub, EstadoBadge y el detalle). En
 // código nuevo, la etiqueta sale de infoEstadoSolicitud(e).label.
 export const ESTADOS_SC: Record<string, {label:string; color:string; bg:string; border:string}> = ESTADOS_SC_LIB;
-
-// H16: la configuración (días de alerta) se pide una sola vez aunque la lista se monte dos veces seguidas o se pulse
-// 'Actualizar' enseguida; vale 60 s (un cambio en el Hub se ve al volver después).
-const leerConfigVentas = compartirPeticion(() => apiFetch('/ventas/config'), { vigenciaMs: 60000 });
 
 // Subconjunto de ESTADOS_SC seguro para menus de "forzar estado manualmente"
 // (3-dot menu, bulk-action bar, panel de detalle). ESTADOS_SC completo sirve
@@ -836,8 +832,7 @@ export default function SolicitudClient() {
     try{
       const [sc,cfg]=await Promise.all([
         apiFetch('/ventas/solicitudes?limit=200').catch(()=>[]),
-        // H16: compartida (ver leerConfigVentas arriba): un montaje doble no la pide dos veces.
-        leerConfigVentas().catch(()=>({})),
+        apiFetch('/ventas/config').catch(()=>({})),
       ]);
       const lista=Array.isArray(sc)?sc:(sc?.data??[]);
       setSolicitudes(lista);

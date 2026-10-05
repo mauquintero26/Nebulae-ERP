@@ -7,7 +7,7 @@
  *  - N10: el filtro de estado ofrece nombres claros y tambien los estados que traen los datos.
  *  - H32 / N4 / N7 (Solicitudes): contadores reales (cotizaciones de verdad), dias de alerta con fechas UTC,
  *    resumen de la cancelacion masiva, Papelera y pasos para poder cancelar una solicitud.
- *  - T7: Papelera sin eliminada_at (pendiente de T2B) y H16 (compartirPeticion: la configuracion se pide una vez).
+ *  - T7: Papelera sin eliminada_at (pendiente de T2B).
  */
 
 import assert from 'node:assert/strict';
@@ -16,7 +16,7 @@ import {
   ESTADOS_PEDIDO_SIN_DINERO, pedidoSumaDinero, resumenPedidos, kpisPedidos, hintTotalPedidos, opcionesFiltroEstado,
   generoCotizacion, cotizacionesVigentes, cotizacionesRechazadas, esperaCotizacion, contadoresSolicitudes,
   tasaConversionCotizacion, superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera, pasosParaCancelarSolicitud,
-  repartirCancelacionSolicitudes, cifrasVentasDashboard, rutaSinParametro, compartirPeticion,
+  repartirCancelacionSolicitudes, cifrasVentasDashboard, rutaSinParametro,
 } from '../src/lib/listas-ventas.js';
 
 console.log('--- N8 TEST 1: diasAlerta lee las tres formas de la configuracion ---');
@@ -374,56 +374,6 @@ console.log('--- T7 TEST 7c (pendiente de T2B): sin eliminada_at y sin documento
   // La cuenta regresiva sigue igual sin documentos.
   assert.equal(estadoEnPapelera({ dias_restantes: 12, tiene_documentos: false }).puedeEliminar, true);
   assert.equal(estadoEnPapelera({ dias_restantes: 12, tiene_documentos: false }).texto, '12 días');
-}
-
-console.log('--- T7 TEST H16: compartirPeticion pide una sola vez lo que se pide casi a la vez ---');
-{
-  let llamadas = 0;
-  let ahora = 1000;
-  const pedir = () => { llamadas += 1; return Promise.resolve({ n: llamadas }); };
-  const leer = compartirPeticion(pedir, { vigenciaMs: 60000, reloj: () => ahora });
-  const [a, b] = [leer(), leer()];
-  assert.equal(a, b, 'dos montajes seguidos comparten la misma promesa');
-  assert.deepEqual(await a, { n: 1 });
-  assert.equal(llamadas, 1);
-  ahora += 59999;
-  assert.deepEqual(await leer(), { n: 1 }, 'dentro de la vigencia no se vuelve a pedir');
-  assert.equal(llamadas, 1);
-  ahora += 1;
-  assert.deepEqual(await leer(), { n: 2 }, 'vencida la vigencia se pide de nuevo');
-  assert.equal(llamadas, 2);
-
-  // Un error no se guarda: el siguiente llamado vuelve a pedir (aunque no haya vencido la vigencia).
-  let fallar = true;
-  let pedidas = 0;
-  const leerConError = compartirPeticion(() => { pedidas += 1; return fallar ? Promise.reject(new Error('caido')) : Promise.resolve('ok'); },
-    { vigenciaMs: 60000, reloj: () => 5 });
-  await assert.rejects(leerConError(), /caido/);
-  fallar = false;
-  assert.equal(await leerConError(), 'ok');
-  assert.equal(pedidas, 2);
-
-  // El error tardío de una petición vieja no borra la nueva.
-  let t = 0;
-  const pendientes = [];
-  const leerTardio = compartirPeticion(() => new Promise((res, rej) => pendientes.push({ res, rej })), { vigenciaMs: 10, reloj: () => t });
-  const vieja = leerTardio();
-  await Promise.resolve();
-  t = 20;
-  const nueva = leerTardio();
-  await Promise.resolve();
-  assert.notEqual(vieja, nueva);
-  pendientes[0].rej(new Error('vieja'));
-  await assert.rejects(vieja, /vieja/);
-  t = 25;
-  assert.equal(leerTardio(), nueva, 'la nueva sigue compartida aunque la vieja haya fallado después');
-  pendientes[1].res('nueva');
-  assert.equal(await nueva, 'nueva');
-  assert.equal(pendientes.length, 2);
-
-  // Un error síncrono de quien pide también llega como promesa rechazada (no rompe el efecto que la llama).
-  const leerQueLanza = compartirPeticion(() => { throw new Error('sincrono'); });
-  await assert.rejects(leerQueLanza(), /sincrono/);
 }
 
 console.log('--- N4 TEST 7b (revision T11): repartirCancelacionSolicitudes omite las que ya estan en la Papelera y las de soporte ---');

@@ -30,33 +30,7 @@ export function diasAlerta(cfg, clave, porDefecto = 2) {
   return Number.isFinite(n) && n > 0 ? n : porDefecto;
 }
 
-/**
- * H16: comparte una petición entre los que la piden casi a la vez. Devuelve una función que, mientras la última
- * petición tenga menos de `vigenciaMs` (desde que se pidió), devuelve esa misma promesa en vez de pedir otra vez: un
- * montaje doble de la pantalla o un 'Actualizar' seguido piden la configuración una sola vez. Un error no se guarda (el
- * siguiente llamado vuelve a pedir) y el error tardío de una petición vieja no borra la nueva. Un error síncrono de
- * `pedir` llega como promesa rechazada.
- * @template T
- * @param {() => Promise<T>} pedir
- * @param {{ vigenciaMs?: number, reloj?: () => number }} [opciones]
- * @returns {() => Promise<T>}
- */
-export function compartirPeticion(pedir, { vigenciaMs = 60000, reloj = Date.now } = {}) {
-  /** @type {{ promesa: Promise<T>, desde: number } | null} */
-  let actual = null;
-  return () => {
-    const ahora = reloj();
-    if (actual && ahora - actual.desde < vigenciaMs) return actual.promesa;
-    const entrada = { promesa: Promise.resolve().then(pedir), desde: ahora };
-    actual = entrada;
-    entrada.promesa.catch(() => {
-      if (actual === entrada) actual = null;
-    });
-    return entrada.promesa;
-  };
-}
-
-const pedidosDe =(cot) => (Array.isArray(cot?.pedidos_venta) ? cot.pedidos_venta.filter((v) => v && typeof v === 'object') : []);
+const pedidosDe = (cot) => (Array.isArray(cot?.pedidos_venta) ? cot.pedidos_venta.filter((v) => v && typeof v === 'object') : []);
 
 /**
  * B5: el pedido vigente (no CANCELADO) mas NUEVO de la cotizacion, o null; el mismo que elige el servidor
