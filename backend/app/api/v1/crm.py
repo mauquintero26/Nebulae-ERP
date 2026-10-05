@@ -15,6 +15,7 @@ from app.api.v1.schemas_fase5 import AgendaActivityCreate, AgendaActivityRespons
 from app.schemas import crm as schemas
 from app.core import cambios_documento, clientes
 from app.core.textos_actividad import nombre_de_usuario
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 import datetime, time, threading
 
@@ -1676,30 +1677,80 @@ def _get_or_create_placeholder_brand_category(db: Session):
     return brand, category
 
 
+_CODIGO_QUICK_CREATE_MAX = 20  # el codigo automatico es el nombre recortado a 20 caracteres (ix_product_skus_sku es UNICO)
+
+
+def _sku_existe(db: Session, codigo: str) -> bool:
+    return db.query(ProductSKU.id).filter(ProductSKU.sku == codigo).first() is not None
+
+
+def _codigo_libre(db: Session, base: str) -> str:
+    """base si nadie lo usa; si no, base-2, base-3… (U7: dos nombres con los mismos 20 primeros caracteres chocaban)."""
+    codigo, n = base, 2
+    while _sku_existe(db, codigo):
+        codigo, n = f"{base}-{n}", n + 1
+    return codigo
+
+
+def _quick_create_dict(product: Product, sku: ProductSKU, creado: bool) -> dict:
+    return {"id": sku.id, "product_id": product.id, "product_name": product.name, "sku": sku.sku,
+            "sale_price": float(sku.sale_price or 0), "display": product.name, "creado": creado,
+            "necesita_revision": bool(product.necesita_revision)}
+
+
 @router.post("/products/quick-create", response_model=dict)
 def quick_create_product(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)), db: Session = Depends(get_db)):
-    """Quick-create a product from within the lead modal."""
-    name = body.get("name", "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Product name is required")
-    price = body.get("sale_price", 0)
+    """Crea un producto con solo el nombre (buscador de la SC, la COT y el modal de Leads del CRM), con la marca y la
+    categoria placeholder y necesita_revision=True.
+
+    U7+U8+H12+H13: si ya hay un producto ACTIVO con ese nombre (sin importar mayusculas ni espacios) devuelve ese (su
+    primer SKU, o uno nuevo si no tiene) con creado=False, en vez de duplicarlo. El codigo automatico no choca (BASE,
+    BASE-2…); un 'sku' explicito que ya existe -> 409. Responde id (= id del SKU), product_id, product_name, sku,
+    sale_price, display, creado y necesita_revision."""
+    nombre = " ".join(str(body.get("name") or "").split())
+    if not nombre:
+        raise HTTPException(status_code=400, detail="Escribe el nombre del producto.")
+    sku_explicito = str(body.get("sku") or "").strip()
     try:
+        existente = (db.query(Product)
+                     .filter(Product.is_active == True,  # noqa: E712 (columna SQL)
+                             func.lower(func.trim(func.regexp_replace(Product.name, r"\s+", " ", "g")))
+                             == nombre.lower())
+                     .order_by(Product.id.asc()).first())
+        base = sku_explicito or nombre[:_CODIGO_QUICK_CREATE_MAX].upper().replace(" ", "-")
+        if existente is not None:
+            sku = db.query(ProductSKU).filter(ProductSKU.product_id == existente.id).order_by(ProductSKU.id.asc()).first()
+            if sku is None:
+                sku = ProductSKU(product_id=existente.id, sku=_codigo_libre(db, base),
+                                 sale_price=body.get("sale_price", 0), cost_price=body.get("cost_price", 0))
+                db.add(sku); db.commit()
+                db.refresh(existente); db.refresh(sku)
+            return {"status": "success", "data": _quick_create_dict(existente, sku, creado=False)}
+        if sku_explicito:
+            if _sku_existe(db, sku_explicito):
+                raise HTTPException(status_code=409, detail=f"Ya existe un producto con el código {sku_explicito}.")
+            codigo = sku_explicito
+        else:
+            codigo = _codigo_libre(db, base)
         brand, category = _get_or_create_placeholder_brand_category(db)
-        product = Product(name=name, description=body.get("description", ""), is_active=True,
+        product = Product(name=nombre, description=body.get("description", ""), is_active=True,
                           base_currency="COP", uom="unidad", type="Fisico",
                           brand_id=brand.id, category_id=category.id, necesita_revision=True)
         db.add(product); db.flush()
-        sku = ProductSKU(product_id=product.id, sku=body.get("sku", name[:20].upper().replace(" ", "-")),
-                         sale_price=price, cost_price=body.get("cost_price", 0))
+        sku = ProductSKU(product_id=product.id, sku=codigo, sale_price=body.get("sale_price", 0),
+                         cost_price=body.get("cost_price", 0))
         db.add(sku); db.commit()
         db.refresh(product); db.refresh(sku)
-        return {"status": "success", "data": {
-            "id": sku.id, "product_id": product.id, "product_name": product.name,
-            "sku": sku.sku, "sale_price": float(sku.sale_price or 0), "display": product.name
-        }}
+        return {"status": "success", "data": _quick_create_dict(product, sku, creado=True)}
+    except HTTPException:
+        raise
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Otro producto con el mismo código se creó al mismo tiempo. "
+                                                    "Intenta de nuevo.")
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=f"No se pudo crear el producto: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
