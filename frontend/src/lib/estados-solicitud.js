@@ -170,6 +170,18 @@ function motivoDeLasNotas(notas) {
   return motivo;
 }
 
+/**
+ * U18+H31 (C1 h): el motivo guardado de una cancelación, o '' si no hay (quien lo muestra pone 'Sin motivo
+ * registrado'): razon_cancelacion recortada -> la última marca no vacía '[CANCELADA] Razón: X' de las notas viejas (hasta
+ * la limpieza de T12; solo esa marca: un 'MOTIVO:' de una nota de devolución no es el motivo) -> ''. Nunca se inventa
+ * uno. Lo usan la lista de solicitudes (Canceladas, análisis, Papelera) y resumenCancelacion.
+ * @param {any} sc
+ * @returns {string}
+ */
+export function motivoDeCancelacion(sc) {
+  return textoNoVacio(sc?.razon_cancelacion) ?? motivoDeLasNotas(sc?.notas) ?? '';
+}
+
 function motivoDelRenglon(renglon) {
   if (!renglon) return null;
   const delExtra = textoNoVacio(renglon.extra_data?.motivo);
@@ -200,11 +212,18 @@ function fechaColombia(iso) {
   return `${partes.day}/${partes.month}/${partes.year}`;
 }
 
+/**
+ * Texto oficial de una solicitud cancelada sin documentos que la purga no va a borrar (no tiene eliminada_at). Uno solo:
+ * lo usan la tarjeta de la cancelación (aquí) y la Papelera (listas-ventas.js, estadoEnPapelera).
+ * @type {string}
+ */
+export const TEXTO_PAPELERA_SIN_FECHA = 'No se elimina automáticamente: no tiene fecha de envío a la Papelera';
+
 function textoPapelera(seConserva, purga) {
   if (seConserva === true) return 'Se conserva en la Papelera como historial (tiene documentos vinculados)';
   const dia = fechaColombia(purga);
   if (dia) return `Se eliminará definitivamente el ${dia} si no la restauras desde la Papelera`;
-  if (seConserva === false) return 'No se elimina automáticamente: no tiene fecha de envío a la Papelera';
+  if (seConserva === false) return TEXTO_PAPELERA_SIN_FECHA;
   return null;
 }
 
@@ -225,7 +244,9 @@ function textoPapelera(seConserva, purga) {
  */
 export function resumenCancelacion(sc, actividades) {
   const renglon = renglonDeCancelacion(actividades);
-  const motivo = textoNoVacio(sc?.razon_cancelacion) ?? motivoDelRenglon(renglon) ?? motivoDeLasNotas(sc?.notas) ?? SIN_MOTIVO;
+  // Orden: razon_cancelacion -> el renglón CANCELLED -> las notas viejas. motivoDeCancelacion cubre la primera y la
+  // última; sin razón, aquí solo aporta la marca de las notas.
+  const motivo = textoNoVacio(sc?.razon_cancelacion) ?? motivoDelRenglon(renglon) ?? (motivoDeCancelacion(sc) || SIN_MOTIVO);
   const seConserva = typeof sc?.se_conserva_en_papelera === 'boolean' ? sc.se_conserva_en_papelera : null;
   const purga = textoNoVacio(sc?.purga_programada);
   return {

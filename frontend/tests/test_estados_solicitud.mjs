@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import {
   ESTADOS_SC, PASOS_SC, ESTADOS_SC_SIN_CONFIRMAR, MOTIVO_SIN_CONFIRMACION_MIN,
   infoEstadoSolicitud, pasoSolicitud, puedeReiniciar, puedeCotizarSinConfirmacion, resumenCancelacion,
+  motivoDeCancelacion, TEXTO_PAPELERA_SIN_FECHA,
 } from '../src/lib/estados-solicitud.js';
 
 const VIVOS = {
@@ -255,6 +256,40 @@ console.log('--- TEST 9: resumen de la cancelación (U18+H31) ---');
   // j) entradas vacías
   r = resumenCancelacion(null, null);
   assert.deepEqual(r, { motivo: 'No se registró el motivo', por: null, fecha: null, seConserva: null, purga: null, papelera: null });
+}
+
+console.log('--- TEST 10 (T7 ronda 1): motivoDeCancelacion, el único lector del motivo para la lista y la Papelera ---');
+{
+  // Sin motivo: '' (quien lo muestra pone 'Sin motivo registrado'); nunca se inventa uno.
+  for (const vacio of [{}, null, undefined, { razon_cancelacion: '', notas: '' }, { razon_cancelacion: null, notas: null }]) {
+    assert.equal(motivoDeCancelacion(vacio), '', `vacío: ${JSON.stringify(vacio)}`);
+  }
+  // razon_cancelacion recortada, y gana sobre las notas.
+  assert.equal(motivoDeCancelacion({ razon_cancelacion: '  Ya no lo necesita  ' }), 'Ya no lo necesita');
+  assert.equal(motivoDeCancelacion({ razon_cancelacion: 'Compró en otro lado', notas: '[CANCELADA] Razón: Otra' }), 'Compró en otro lado');
+  // razon en blanco: la marca de las notas viejas (hasta la limpieza de T12).
+  assert.equal(motivoDeCancelacion({ razon_cancelacion: '   ', notas: 'Entrega en obra\n[CANCELADA] Razón: Ya no lo necesita' }), 'Ya no lo necesita');
+  // Varias marcas (cancelada, restaurada y vuelta a cancelar): la última.
+  assert.equal(motivoDeCancelacion({ notas: '[CANCELADA] Razón: Primera\nnota\n[CANCELADA] Razón: Segunda' }), 'Segunda');
+  // La última marca vacía no borra la anterior.
+  assert.equal(motivoDeCancelacion({ notas: '[CANCELADA] Razón: Primera\n[CANCELADA] Razón:   ' }), 'Primera');
+  assert.equal(motivoDeCancelacion({ notas: '[CANCELADA] Razón:' }), '');
+  // Notas null o que no son texto, y una razón que no es texto: no rompen y no inventan.
+  assert.equal(motivoDeCancelacion({ razon_cancelacion: 'Motivo', notas: null }), 'Motivo');
+  assert.equal(motivoDeCancelacion({ notas: 123 }), '');
+  assert.equal(motivoDeCancelacion({ razon_cancelacion: 42, notas: '[CANCELADA] Razón: De las notas' }), 'De las notas');
+  assert.equal(motivoDeCancelacion({ razon_cancelacion: { texto: 'x' } }), '');
+  // Un 'Motivo:' cualquiera (p. ej. la nota de una devolución) no es el motivo de la cancelación.
+  assert.equal(motivoDeCancelacion({ notas: 'DEVOLUCION VEN:PVEN-1 PEC: MOTIVO:Producto incorrecto' }), '');
+  // resumenCancelacion sigue igual: razón -> renglón CANCELLED -> notas -> 'No se registró el motivo'.
+  const renglon = [{ id: 1, action: 'CANCELLED', old_estado: 'ASIGNADA', description: 'Cancelada: Del renglón', user_name: 'a@b' }];
+  assert.equal(resumenCancelacion({ notas: '[CANCELADA] Razón: De las notas' }, renglon).motivo, 'Del renglón');
+  assert.equal(resumenCancelacion({ notas: '[CANCELADA] Razón: De las notas' }, []).motivo, 'De las notas');
+  assert.equal(resumenCancelacion({ razon_cancelacion: ' La razón ', notas: '[CANCELADA] Razón: De las notas' }, renglon).motivo, 'La razón');
+  assert.equal(resumenCancelacion({}, []).motivo, 'No se registró el motivo');
+  // El texto oficial de una SC sin fecha de envío a la Papelera es uno solo (lo importa listas-ventas.js).
+  assert.equal(TEXTO_PAPELERA_SIN_FECHA, 'No se elimina automáticamente: no tiene fecha de envío a la Papelera');
+  assert.equal(resumenCancelacion({ se_conserva_en_papelera: false, purga_programada: null }, []).papelera, TEXTO_PAPELERA_SIN_FECHA);
 }
 
 console.log('OK test_estados_solicitud');

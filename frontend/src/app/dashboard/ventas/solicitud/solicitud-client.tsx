@@ -26,7 +26,7 @@ import {
   superaDiasAlerta, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera,
 } from '@/lib/listas-ventas';
 import {
-  ESTADOS_SC as ESTADOS_SC_LIB, ESTADOS_SC_SIN_CONFIRMAR, infoEstadoSolicitud, puedeReiniciar,
+  ESTADOS_SC as ESTADOS_SC_LIB, ESTADOS_SC_SIN_CONFIRMAR, infoEstadoSolicitud, puedeReiniciar, motivoDeCancelacion,
 } from '@/lib/estados-solicitud';
 import { TIPOS_SC, MODALIDADES_PAGO, pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
 import { lineaDesdeCatalogo, lineaTextoLibre, agregarLinea, lineasParaEnviar, nombreLinea } from '@/lib/lineas-solicitud';
@@ -639,20 +639,9 @@ export function ChatterTab({sc,currentUser}:{sc:any;currentUser:string}) {
 // â”€â”€ Main â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // U18+H31 (C1 h): el motivo de una cancelación, o '' si no se registró (quien lo muestra pone 'Sin motivo registrado'):
-// nunca se inventa uno. Primero razon_cancelacion; de respaldo, hasta la limpieza de T12, la última marca
-// '[CANCELADA] Razón: X' de las notas viejas (solo esa marca: un 'Motivo:' de una nota de devolución no es el motivo de
-// la cancelación).
+// nunca se inventa uno. La regla vive en la librería (motivoDeCancelacion, la misma de resumenCancelacion).
 const SIN_MOTIVO_REGISTRADO = 'Sin motivo registrado';
-const getRazonCancelacion = (sc: any): string => {
-  if (sc.razon_cancelacion && typeof sc.razon_cancelacion === 'string' && sc.razon_cancelacion.trim()) {
-    return sc.razon_cancelacion.trim();
-  }
-  if (sc.notas && typeof sc.notas === 'string') {
-    const marcas = [...sc.notas.matchAll(/\[CANCELADA\]\s*Razón:[ \t]*([^\r\n]*)/gi)].map(m => m[1].trim()).filter(Boolean);
-    if (marcas.length > 0) return marcas[marcas.length - 1];
-  }
-  return '';
-};
+const getRazonCancelacion = (sc: any): string => motivoDeCancelacion(sc);
 
 export default function SolicitudClient() {
   const [solicitudes,setSolicitudes]=useState<any[]>([]);
@@ -917,13 +906,17 @@ export default function SolicitudClient() {
     setCancelling(false);
   }
 
+  // T7 ronda 1: el motivo de una fila de la Papelera con la misma regla que Canceladas. GET /papelera no trae las notas:
+  // si la SC está en la lista cargada, sus notas viejas sirven de respaldo (la fila de la Papelera manda en lo demás).
+  const motivoEnPapelera=(sc:any)=>getRazonCancelacion({...solicitudes.find(s=>s.id===sc.id),...sc});
+
   // H34: recibe la fila para mostrar número, cliente y motivo en la confirmación; el 409 del servidor (tiene
   // documentos vinculados) sale en el aviso de error.
   async function eliminarPermanente(sc:any) {
     if(!(await confirmar({
       titulo: `Eliminar ${sc.numero} definitivamente`,
       mensaje: 'La solicitud se borra para siempre y no se puede recuperar.',
-      efectos: [`Cliente: ${sc.customer_name||'—'}`, `Motivo de la cancelación: ${sc.razon_cancelacion||'—'}`],
+      efectos: [`Cliente: ${sc.customer_name||'—'}`, `Motivo de la cancelación: ${motivoEnPapelera(sc)||'—'}`],
       textoConfirmar: 'Eliminar definitivamente',
       peligro: true,
     }))) return;
@@ -1305,6 +1298,7 @@ export default function SolicitudClient() {
                 <div className="space-y-2">
                   {papelera.map((sc:any)=>{
                     const enPapelera=estadoEnPapelera(sc);
+                    const motivo=motivoEnPapelera(sc);
                     return (
                     <div key={sc.id} className="bg-white border border-red-100 rounded-xl p-4 flex items-center justify-between hover:border-red-300 transition-colors">
                       <div className="flex-1 min-w-0">
@@ -1313,7 +1307,7 @@ export default function SolicitudClient() {
                           <SharedBadge tone="danger">{etiquetaTipoSolicitud(sc.tipo_solicitud)||'SC'}</SharedBadge>
                         </div>
                         <p className="text-xs text-slate-600 font-medium">{sc.customer_name||'-'} — {sc.advisor_name||'-'}</p>
-                        {sc.razon_cancelacion&&<p className="text-xs text-slate-500 mt-1 italic">Razón: {sc.razon_cancelacion}</p>}
+                        {motivo&&<p className="text-xs text-slate-500 mt-1 italic">Razón: {motivo}</p>}
                       </div>
                       <div className="flex items-center gap-3 flex-shrink-0 ml-4">
                         <div className="text-right max-w-[220px]">

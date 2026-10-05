@@ -13,6 +13,7 @@
 import { ESTADOS_PEDIDO_CERRADOS, grupoPedido, esCotizacionActiva, esPedidoVigente } from './estados-pedido.js';
 import { comoUTC } from './hub-ventas.js';
 import { redondearPeso } from './pesos.js';
+import { TEXTO_PAPELERA_SIN_FECHA } from './estados-solicitud.js';
 
 /**
  * Dias de alerta de `clave` (alerta_sc_dias, alerta_cot_dias, alerta_ven_dias) en la configuracion. Acepta la
@@ -353,7 +354,7 @@ export function estadoEnPapelera(sc) {
   }
   const dias = sc.dias_restantes;
   if (dias === null || dias === undefined) {
-    return { conservada: false, texto: 'No se elimina automáticamente: no tiene fecha de envío a la Papelera', nota: '', urgente: false, puedeEliminar: true };
+    return { conservada: false, texto: TEXTO_PAPELERA_SIN_FECHA, nota: '', urgente: false, puedeEliminar: true };
   }
   return { conservada: false, texto: `${dias} ${dias === 1 ? 'día' : 'días'}`, nota: 'para eliminar', urgente: dias <= 5, puedeEliminar: true };
 }

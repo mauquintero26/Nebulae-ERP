@@ -18,6 +18,7 @@ import {
   tasaConversionCotizacion, superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera, pasosParaCancelarSolicitud,
   repartirCancelacionSolicitudes, cifrasVentasDashboard, rutaSinParametro,
 } from '../src/lib/listas-ventas.js';
+import { TEXTO_PAPELERA_SIN_FECHA } from '../src/lib/estados-solicitud.js';
 
 console.log('--- N8 TEST 1: diasAlerta lee las tres formas de la configuracion ---');
 {
@@ -366,6 +367,8 @@ console.log('--- T7 TEST 7c (pendiente de T2B): sin eliminada_at y sin documento
     conservada: false, texto: 'No se elimina automáticamente: no tiene fecha de envío a la Papelera', nota: '',
     urgente: false, puedeEliminar: true,
   });
+  // T7 ronda 1 (C13): es el mismo texto oficial de la tarjeta de la cancelación (una sola constante).
+  assert.equal(sinFecha.texto, TEXTO_PAPELERA_SIN_FECHA);
   // Con documentos se conserva el texto de siempre (y no se elimina), tenga o no dias_restantes.
   const conDocumentos = estadoEnPapelera({ dias_restantes: null, tiene_documentos: true });
   assert.equal(conDocumentos.texto, 'Se conserva (tiene documentos vinculados)');
