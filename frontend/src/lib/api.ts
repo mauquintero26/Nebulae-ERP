@@ -1,3 +1,6 @@
+// Ruta relativa (no '@/'): tests/test_apifetch_401.mjs importa este archivo con node, que no resuelve el alias.
+import { errorDeRespuesta } from './avisos.js';
+
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1';
 
 /** Returns the JWT stored by login/page.tsx under key 'token'. */
@@ -151,7 +154,8 @@ export async function apiFetch(
     }
 
     const errBody = await res.json().catch(() => ({}));
-    throw new Error(errBody.detail || errBody.message || `HTTP ${res.status}`);
+    // C3/R10: mensaje legible en español (validacion, 404, 500, sin '[object Object]') con .status y .detail.
+    throw errorDeRespuesta(res.status, errBody);
   }
   const parsed = await res.json().catch(() => ({}));
   if (parsed && typeof parsed === 'object') {

@@ -8,7 +8,8 @@ const BASE = 'rounded-xl font-bold flex items-center justify-center gap-2 transi
 const SIZES = { sm: 'px-4 py-2 text-xs', md: 'px-5 py-2.5 text-sm', lg: 'px-6 py-3 text-sm' };
 
 export function Button({
-  variant = 'primary', color = 'amber', size = 'md', icon: Icon, loading, disabled, onClick, type = 'button', form, children,
+  variant = 'primary', color = 'amber', size = 'md', icon: Icon, loading, disabled, onClick, type = 'button', form, autoFocus,
+  children,
 }: {
   variant?: Variant;
   color?: AccentColor;
@@ -20,6 +21,8 @@ export function Button({
   onClick?: () => void;
   type?: 'button' | 'submit';
   form?: string;
+  /** Foco inicial al montar (p. ej. 'Volver' en una confirmación peligrosa). */
+  autoFocus?: boolean;
   children: React.ReactNode;
 }) {
   const accent = ACCENTS[color];
@@ -29,7 +32,7 @@ export function Button({
     'border border-slate-200 text-slate-600 hover:bg-slate-50 bg-white';
   const iconSize = size === 'sm' ? 12 : 14;
   return (
-    <button type={type} form={form} onClick={onClick} disabled={disabled || loading} className={`${BASE} ${SIZES[size]} ${variantCls}`}>
+    <button type={type} form={form} onClick={onClick} disabled={disabled || loading} autoFocus={autoFocus} className={`${BASE} ${SIZES[size]} ${variantCls}`}>
       {loading ? <RefreshCw size={iconSize} className="animate-spin" /> : Icon ? <Icon size={iconSize} /> : null}
       {children}
     </button>

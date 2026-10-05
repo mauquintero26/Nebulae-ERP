@@ -208,7 +208,13 @@ console.log('--- TEST f: los errores que no son 401 no tocan la sesion ---');
   let vecesManejador = 0;
   api.registrarReautenticacion(async () => { vecesManejador++; });
   responder = () => respuesta(500, { detail: 'Fallo interno' });
-  await assert.rejects(api.apiFetch('/ventas/pedidos'), (err) => err.message === 'Fallo interno');
+  await assert.rejects(api.apiFetch('/ventas/pedidos'), (err) => {
+    assert.equal(err.message, 'Fallo interno');
+    // C3/R10 (Bloque 2, T1A): el error lleva el status HTTP y el detail del cuerpo (errorDeRespuesta de avisos.js).
+    assert.equal(err.status, 500);
+    assert.equal(err.detail, 'Fallo interno');
+    return true;
+  });
   assert.equal(vecesManejador, 0);
   assert.equal(llamadas.length, 1);
   assert.equal(localStorage.getItem('token'), 'viejo');
