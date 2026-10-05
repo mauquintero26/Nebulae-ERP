@@ -34,8 +34,8 @@ def verify_and_consume_token(db: Session, token: str) -> tuple[str, int] | None:
     de un UPDATE separado) para que dos POST concurrentes con el mismo token nunca
     puedan pasar ambos la validacion -- el segundo UPDATE, al re-evaluar su propio
     WHERE despues de que el primero ya committeo used_at, simplemente no afecta
-    ninguna fila. Mismo patron de UPDATE parametrizado que ya usa restaurar_solicitud
-    en erp_ventas.py (db.execute(text(...), {...}), nunca interpolacion de string)."""
+    ninguna fila. Mismo patron de UPDATE parametrizado que revoke_pending_tokens
+    (db.execute(text(...), {...}), nunca interpolacion de string)."""
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     now = datetime.utcnow()
     result = db.execute(
@@ -78,6 +78,17 @@ def revoke_pending_tokens(db: Session, document_type: str, document_id: int, com
     )
     if commit:
         db.commit()
+
+
+def contar_tokens_vigentes(db: Session, document_type: str, document_id: int) -> int:
+    """Enlaces de confirmacion de este documento que el cliente todavia puede usar: sin usar ni revocar (used_at
+    NULL) y sin vencer. Se cuenta ANTES de revoke_pending_tokens para que la Actividad diga si se anulo uno vivo."""
+    return db.query(DocumentConfirmationToken).filter(
+        DocumentConfirmationToken.document_type == document_type,
+        DocumentConfirmationToken.document_id == document_id,
+        DocumentConfirmationToken.used_at.is_(None),
+        DocumentConfirmationToken.expires_at > datetime.utcnow(),
+    ).count()
 
 
 def peek_token(db: Session, token: str) -> tuple[str, int] | None:

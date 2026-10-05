@@ -1221,13 +1221,23 @@ def get_leads(
     return {"status": "success", "data": leads, "total": total}
 
 
-def _mover_lead_a_status(order: SalesOrder, maps_to_status: str, db: Session) -> None:
+def _confirmar_o_enviar(db: Session, commit: bool) -> None:
+    """commit=True confirma aqui (lo de siempre); commit=False solo hace flush y lo confirma el commit del llamador
+    (una sola transaccion: cancelar y restaurar la SC, choque C8). autoflush esta apagado: sin el flush el cambio no
+    saldria a la base dentro del savepoint del llamador."""
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+
+
+def _mover_lead_a_status(order: SalesOrder, maps_to_status: str, db: Session, commit: bool = True) -> None:
     stage = db.query(PipelineStage).filter(PipelineStage.maps_to_status == maps_to_status).first()
     if stage:
         order.pipeline_stage_id = stage.id
     order.status = maps_to_status
     order.updated_at = datetime.datetime.utcnow()
-    db.commit()
+    _confirmar_o_enviar(db, commit)
 
 
 _ETAPAS_ESTANDAR = [
@@ -1239,7 +1249,7 @@ _ETAPAS_ESTANDAR = [
 ]
 
 
-def _asegurar_etapas_estandar(db: Session) -> None:
+def _asegurar_etapas_estandar(db: Session, commit: bool = True) -> None:
     existentes = {s.maps_to_status for s in db.query(PipelineStage.maps_to_status).all()}
     existentes_nombres = {s.name for s in db.query(PipelineStage.name).all()}
     max_pos = db.execute(text("SELECT COALESCE(MAX(position),0) FROM pipeline_stages")).scalar() or 0
@@ -1250,17 +1260,18 @@ def _asegurar_etapas_estandar(db: Session) -> None:
             db.add(PipelineStage(name=nombre, color=color, bg_color=bg, position=max_pos, maps_to_status=status))
             creo_alguna = True
     if creo_alguna:
-        db.commit()
+        _confirmar_o_enviar(db, commit)
 
 
-def mover_lead_de_solicitud(sc_id: int, maps_to_status: str, db: Session) -> None:
-    """Mueve el Lead vinculado a una Solicitud (si existe) a la etapa dada. No falla si no hay Lead."""
+def mover_lead_de_solicitud(sc_id: int, maps_to_status: str, db: Session, commit: bool = True) -> None:
+    """Mueve el Lead vinculado a una Solicitud (si existe) a la etapa dada. No falla si no hay Lead.
+    commit=False: solo flush, lo confirma el llamador (cancelar_solicitud lo llama asi dentro de un savepoint)."""
     if not sc_id:
         return
-    _asegurar_etapas_estandar(db)
+    _asegurar_etapas_estandar(db, commit)
     order = db.query(SalesOrder).filter(SalesOrder.canonical_customer_request_id == sc_id).first()
     if order:
-        _mover_lead_a_status(order, maps_to_status, db)
+        _mover_lead_a_status(order, maps_to_status, db, commit)
 
 
 def _etapa_inicial_del_pipeline(db: Session):
@@ -1270,19 +1281,24 @@ def _etapa_inicial_del_pipeline(db: Session):
     return stage, ((stage.maps_to_status or "DRAFT") if stage else "DRAFT")
 
 
-def reabrir_lead_de_solicitud(sc_id: int, db: Session) -> None:
+def reabrir_lead_de_solicitud(sc_id: int, db: Session, commit: bool = True) -> Optional[str]:
     """Restaurar una Solicitud cancelada (N4: cancelarla deja su lead en CANCELLED): el lead vuelve a la etapa con que
-    nace un lead nuevo (la misma de create_lead_v2). No hace nada si no hay lead o si no estaba perdido."""
+    nace un lead nuevo (la misma de create_lead_v2). No hace nada si no hay lead o si no estaba perdido.
+
+    Devuelve el nombre de la etapa a la que volvio el lead (el de la primera etapa estandar si el tablero no tiene
+    ninguna), o None si no habia lead perdido. commit=False: solo flush, lo confirma el llamador (restaurar_solicitud
+    lo llama asi dentro de un savepoint)."""
     if not sc_id:
-        return
+        return None
     order = db.query(SalesOrder).filter(SalesOrder.canonical_customer_request_id == sc_id).first()
     if order is None or order.status != "CANCELLED":
-        return
+        return None
     stage, status = _etapa_inicial_del_pipeline(db)
     order.pipeline_stage_id = stage.id if stage else None
     order.status = status
     order.updated_at = datetime.datetime.utcnow()
-    db.commit()
+    _confirmar_o_enviar(db, commit)
+    return stage.name if stage else _ETAPAS_ESTANDAR[0][0]
 
 
 @router.patch("/leads/{lead_id}/stage", response_model=dict)

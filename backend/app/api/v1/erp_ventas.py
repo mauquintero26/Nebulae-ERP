@@ -39,6 +39,7 @@ from app.api.v1.crm import mover_lead_de_solicitud, reabrir_lead_de_solicitud
 import datetime
 import hashlib
 import logging
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -316,10 +317,17 @@ def _mensaje_solicitud_cancelada(sc: CustomerRequest, para: str = "retomar o env
     """409 de N4: una SC cancelada no puede tener cotizaciones vivas."""
     return f"La solicitud {sc.numero} está cancelada: restáurala desde la Papelera antes de {para}."
 
-def _mensaje_solicitud_con_historial(sc: CustomerRequest, cots, pvens, leads: int) -> str:
-    """409 de 'Eliminar permanentemente' (N4, Papelera): la SC tiene documentos vinculados y se conserva como historial.
-    cots y pvens son listas de numeros y leads la cantidad de leads del CRM; sin ninguno (el FK salto en el borrado)
-    el mensaje no los nombra."""
+def _referencias_de_solicitud(db: Session, sc_id: int) -> list:
+    """Lo que hace de una SC historial en la Papelera (N4; U18, C1 b): sus cotizaciones (sales_quotations.sc_id), sus
+    pedidos de venta (sale_orders.sc_id) y sus leads del CRM (sales_orders.canonical_customer_request_id), en
+    cualquier estado: los mismos tres criterios de _SQL_SC_CON_DOCUMENTOS. Devuelve las partes ya redactadas, en ese
+    orden y en plural si hay varios ('cotización COT-…', 'pedidos de venta PVEN-…, PVEN-…', 'lead del CRM'); lista
+    vacia = no se conserva."""
+    cots = [r.numero for r in db.query(SalesQuotation.numero).filter(SalesQuotation.sc_id == sc_id)
+            .order_by(SalesQuotation.id.asc()).all()]
+    pvens = [r.numero for r in db.query(SaleOrder.numero).filter(SaleOrder.sc_id == sc_id)
+             .order_by(SaleOrder.id.asc()).all()]
+    leads = db.query(LeadCRM.id).filter(LeadCRM.canonical_customer_request_id == sc_id).count()
     partes = []
     if cots:
         partes.append(("cotización " if len(cots) == 1 else "cotizaciones ") + ", ".join(cots))
@@ -327,9 +335,38 @@ def _mensaje_solicitud_con_historial(sc: CustomerRequest, cots, pvens, leads: in
         partes.append(("pedido de venta " if len(pvens) == 1 else "pedidos de venta ") + ", ".join(pvens))
     if leads:
         partes.append("lead del CRM" if leads == 1 else "leads del CRM")
-    vinculados = f" ({', '.join(partes)})" if partes else ""
+    return partes
+
+def _mensaje_solicitud_con_historial(sc: CustomerRequest, referencias) -> str:
+    """409 de 'Eliminar permanentemente' (N4, Papelera): la SC tiene documentos vinculados y se conserva como historial.
+    referencias es la lista de _referencias_de_solicitud; vacia (el FK salto en el borrado) el mensaje no los nombra."""
+    vinculados = f" ({', '.join(referencias)})" if referencias else ""
     return (f"No se puede eliminar definitivamente la solicitud {sc.numero}: tiene documentos vinculados{vinculados}. "
             f"Se conserva en la Papelera como historial.")
+
+# Dias que una SC sin historial pasa en la Papelera antes de que get_papelera la purgue.
+DIAS_EN_PAPELERA = 30
+_ZONA_COLOMBIA = ZoneInfo("America/Bogota")
+
+def _fecha_de_purga(sc: CustomerRequest, referencias):
+    """Cuando la purga borra la SC (eliminada_at + 30 dias, UTC sin zona), o None si no la va a borrar: se conserva
+    (tiene referencias) o no tiene eliminada_at (cancelada con la pastilla vieja: la purga exige eliminada_at)."""
+    if referencias or sc.eliminada_at is None:
+        return None
+    return sc.eliminada_at + datetime.timedelta(days=DIAS_EN_PAPELERA)
+
+def _texto_papelera(db: Session, sc: CustomerRequest, referencias=None) -> str:
+    """Renglon 'Papelera' de la Actividad al cancelar (U18, C1): se conserva como historial (y por que) o la fecha, en
+    hora de Colombia, en que la purga la elimina. referencias evita repetir la consulta si el llamador ya la hizo."""
+    if referencias is None:
+        referencias = _referencias_de_solicitud(db, sc.id)
+    if referencias:
+        return f"Se conserva como historial (tiene {', '.join(referencias)})"
+    purga = _fecha_de_purga(sc, referencias)
+    if purga is None:
+        return "No se elimina automáticamente: no tiene fecha de envío a la Papelera"
+    fecha = purga.replace(tzinfo=datetime.timezone.utc).astimezone(_ZONA_COLOMBIA).strftime("%d/%m/%Y")
+    return f"Se elimina definitivamente el {fecha} si no se restaura"
 
 def _cliente_de_la_solicitud(sc: CustomerRequest) -> tuple:
     """Quien confirma la SC por el enlace de Gate 1: su id, correo y telefono, normalizados (un formulario que reenvia
@@ -740,12 +777,20 @@ def get_papelera(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
     # La purga va aparte: un fallo suyo ya no tumba el listado (antes el except lo devolvia vacio para todos).
     try:
         # Auto-purge SCs older than 30 days in papelera, solo las que nadie referencia.
-        db.execute(text(f"""
+        purgadas = db.execute(text(f"""
             DELETE FROM customer_requests cr
             WHERE cr.estado='CANCELADA' AND cr.eliminada_at IS NOT NULL
-            AND cr.eliminada_at < NOW() - INTERVAL '30 days'
+            AND cr.eliminada_at < NOW() - INTERVAL '{DIAS_EN_PAPELERA} days'
             AND NOT {_SQL_SC_CON_DOCUMENTOS}
-        """))
+            RETURNING cr.id, cr.numero, cr.customer_name, cr.razon_cancelacion
+        """)).mappings().all()
+        # H33: rastro de auditoria de cada SC purgada, en el MISMO commit del borrado (la SC ya no existe: ninguna
+        # pantalla lo muestra).
+        for f in purgadas:
+            _log(db, "SC", f["id"], f["numero"], "PURGED",
+                 f"Solicitud eliminada automáticamente: llevaba más de {DIAS_EN_PAPELERA} días en la Papelera",
+                 old_estado="CANCELADA", user_name="Sistema",
+                 extra_data={"cliente": f["customer_name"], "motivo_cancelacion": f["razon_cancelacion"]}, commit=False)
         db.commit()
     except Exception:
         db.rollback()
@@ -774,7 +819,7 @@ def get_papelera(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         if d["tiene_documentos"]:
             d["dias_restantes"] = None
         else:
-            d["dias_restantes"] = max(0, 30 - int(dias)) if d.get("eliminada_at") else 30
+            d["dias_restantes"] = max(0, DIAS_EN_PAPELERA - int(dias)) if d.get("eliminada_at") else DIAS_EN_PAPELERA
         d["eliminada_at"] = str(d["eliminada_at"]) if d.get("eliminada_at") else None
         d["created_at"] = str(d["created_at"]) if d.get("created_at") else None
         data.append(d)
@@ -806,6 +851,12 @@ def get_solicitud(sc_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)
         ven_filter = ven_filter | SaleOrder.cot_id.in_([c.id for c in cots])
     vens = db.query(SaleOrder).filter(ven_filter).order_by(SaleOrder.id.asc()).all()
     d["pedidos_venta"] = [_ven_dict(v) for v in vens]
+    # U18: que pasara con la cancelada en la Papelera. purga_programada es None si se conserva o si no tiene
+    # eliminada_at (cancelada con la pastilla vieja: la purga no la toca).
+    if sc.estado == "CANCELADA":
+        referencias = _referencias_de_solicitud(db, sc.id)
+        d["se_conserva_en_papelera"] = bool(referencias)
+        d["purga_programada"] = _iso_utc(_fecha_de_purga(sc, referencias))
     return {"status": "success", "data": d}
 
 
@@ -2989,40 +3040,90 @@ def cancelar_solicitud(sc_id: int, body: CancelarSolicitudBody,
     cots_activas, pvens_activos = _documentos_activos_de_solicitud(db, sc.id)
     if cots_activas or pvens_activos:
         raise HTTPException(409, _mensaje_documentos_activos(sc, cots_activas, pvens_activos))
+    from app.core.confirmation_tokens import contar_tokens_vigentes, revoke_pending_tokens
     user_name = getattr(body, "user_name", None) or getattr(user, "username", None) or getattr(user, "email", "")
     ahora = datetime.datetime.utcnow()
+    tenia_lead = db.query(LeadCRM.id).filter(LeadCRM.canonical_customer_request_id == sc.id).first() is not None
+    # U18 (H31+H33, C1/C8): todo en UNA transaccion con un solo commit al final. El motivo vive en razon_cancelacion y en
+    # la Actividad, ya NO en las notas (R3: las notas viajan a la COT y al PVEN).
     if sc.estado == "CANCELADA":
         # 'Enviar a la papelera' una SC que se cancelo con la pastilla vieja (sin motivo ni eliminada_at): no se
-        # cancela otra vez (ni otro '[CANCELADA] Razón' en las notas, ni otro CANCELLED); solo se completa lo que falta.
+        # cancela otra vez (ni otro CANCELLED); solo se completa lo que falta.
         if sc.eliminada_at is None:
             sc.eliminada_at = ahora
         if not sc.razon_cancelacion:
             sc.razon_cancelacion = razon
         sc.updated_at = ahora
-        db.commit()
-        _log(db, "SC", sc_id, sc.numero, "SENT_TO_TRASH", "Solicitud enviada a la papelera", user_name=user_name)
+        lead_ok = _marcar_lead_perdido(db, sc)
+        referencias = _referencias_de_solicitud(db, sc.id)
+        cambios = [_renglon_lead_perdido(lead_ok)] if tenia_lead else []
+        cambios.append({"etiqueta": "Papelera", "despues": _texto_papelera(db, sc, referencias)})
+        _log(db, "SC", sc_id, sc.numero, "SENT_TO_TRASH", "Solicitud enviada a la papelera", user_name=user_name,
+             extra_data={"lead_perdido": tenia_lead and lead_ok, "se_conserva": bool(referencias),
+                         "purga_programada": _iso_utc(_fecha_de_purga(sc, referencias)), "cambios": cambios},
+             commit=False)
     else:
+        # Lo que se anula se mide ANTES de tocarlo: la marca de Gate 1 y los enlaces vivos (antes de revocarlos).
         old_estado = sc.estado
+        tenia_confirmacion = sc.gate1_confirmed_at is not None
+        enlaces_vivos = contar_tokens_vigentes(db, "SC", sc.id)
         sc.estado = "CANCELADA"
         sc.razon_cancelacion = razon
         sc.eliminada_at = ahora
-        sc.notas = f"{sc.notas or ''}\n[CANCELADA] Razón: {razon}".strip()
         sc.gate1_confirmed_at = None  # Round 6: cancelar invalida cualquier confirmacion previa sin consumir
         sc.updated_at = ahora
-        db.commit()
-        db.refresh(sc)
-        _log(db, "SC", sc_id, sc.numero, "CANCELLED", f"Cancelada: {razon}", old_estado, "CANCELADA", user_name)
         # Gate 1: un link de confirmacion ya enviado no debe poder revivir una SC que
         # el asesor acaba de cancelar -- revoca cualquier token pendiente de esta SC.
-        from app.core.confirmation_tokens import revoke_pending_tokens
-        revoke_pending_tokens(db, "SC", sc_id)
-    # N4: el cliente pasa a perdido en el CRM al cancelar la SC (ya no al rechazar una COT, N7).
+        revoke_pending_tokens(db, "SC", sc_id, commit=False)
+        lead_ok = _marcar_lead_perdido(db, sc)
+        referencias = _referencias_de_solicitud(db, sc.id)
+        cambios = [{"etiqueta": "Motivo", "despues": razon},
+                   {"etiqueta": "Estado anterior", "despues": etiqueta_estado("SC", old_estado)}]
+        if enlaces_vivos > 0:
+            cambios.append({"etiqueta": "Enlace de confirmación",
+                            "despues": "Anulado: el cliente ya no puede confirmar con el enlace que recibió"})
+        if tenia_confirmacion:
+            cambios.append({"etiqueta": "Confirmación del cliente", "despues": "Anulada"})
+        if tenia_lead:
+            cambios.append(_renglon_lead_perdido(lead_ok))
+        cambios.append({"etiqueta": "Papelera", "despues": _texto_papelera(db, sc, referencias)})
+        # La descripcion 'Cancelada: {motivo}' no cambia (H7; las filas viejas dicen lo mismo).
+        _log(db, "SC", sc_id, sc.numero, "CANCELLED", f"Cancelada: {razon}", old_estado, "CANCELADA", user_name,
+             extra_data={"motivo": razon, "estado_anterior": old_estado, "enlace_anulado": enlaces_vivos > 0,
+                         "confirmacion_anulada": tenia_confirmacion, "lead_perdido": tenia_lead and lead_ok,
+                         "se_conserva": bool(referencias),
+                         "purga_programada": _iso_utc(_fecha_de_purga(sc, referencias)), "cambios": cambios},
+             commit=False)
+    # La respuesta se arma ANTES del commit: despues el objeto queda expirado y leerlo costaria otro viaje a la base.
+    resp = {"status": "success", "data": {"id": sc_id, "estado": "CANCELADA", "razon": sc.razon_cancelacion}}
+    db.commit()
+    return resp
+
+
+def _lead_en_savepoint(db: Session, que: str, operacion):
+    """(resultado, fallo) de mover el lead del CRM (operacion, con commit=False) dentro de un savepoint: cancelar y
+    restaurar la SC son UNA transaccion con un solo commit (C8). Si falla, el savepoint deshace solo lo del lead (sin
+    db.rollback(), que tiraria tambien lo de la SC), queda en el log y el renglon de la Actividad lo dice. Lo pendiente
+    de la SC se envia antes (flush) para que un error suyo no se confunda con uno del lead."""
+    db.flush()
     try:
-        mover_lead_de_solicitud(sc.id, "CANCELLED", db)
+        with db.begin_nested():
+            return operacion(), False
     except Exception as exc:
-        db.rollback()
-        logger.error(f"Error al mover el lead de la solicitud cancelada {sc.numero}: {exc}", exc_info=True)
-    return {"status": "success", "data": {"id": sc_id, "estado": "CANCELADA", "razon": sc.razon_cancelacion}}
+        logger.error(f"Error al {que}: {exc}", exc_info=True)
+        return None, True
+
+
+def _marcar_lead_perdido(db: Session, sc: CustomerRequest) -> bool:
+    """N4: el cliente pasa a perdido en el CRM al cancelar la SC (ya no al rechazar una COT, N7). False si fallo."""
+    _, fallo = _lead_en_savepoint(db, f"mover el lead de la solicitud cancelada {sc.numero}",
+                                  lambda: mover_lead_de_solicitud(sc.id, "CANCELLED", db, commit=False))
+    return not fallo
+
+
+def _renglon_lead_perdido(lead_ok: bool) -> dict:
+    return {"etiqueta": "Cliente en el CRM",
+            "despues": "Marcado como perdido" if lead_ok else "No se pudo marcar como perdido"}
 
 
 # ─── PAPELERA (SCs canceladas, purga 30 días) ────────────────────────────────
@@ -3042,13 +3143,14 @@ def eliminar_permanente(sc_id: int, user: User = Depends(require_roles(*ROLE_ADM
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
     if not sc or sc.estado != "CANCELADA":
         raise HTTPException(400, "Solo se pueden eliminar permanentemente SCs canceladas")
-    cots = [r.numero for r in db.query(SalesQuotation.numero).filter(SalesQuotation.sc_id == sc.id)
-            .order_by(SalesQuotation.id.asc()).all()]
-    pvens = [r.numero for r in db.query(SaleOrder.numero).filter(SaleOrder.sc_id == sc.id)
-             .order_by(SaleOrder.id.asc()).all()]
-    leads = db.query(LeadCRM.id).filter(LeadCRM.canonical_customer_request_id == sc.id).count()
-    if cots or pvens or leads:
-        raise HTTPException(409, _mensaje_solicitud_con_historial(sc, cots, pvens, leads))
+    referencias = _referencias_de_solicitud(db, sc.id)
+    if referencias:
+        raise HTTPException(409, _mensaje_solicitud_con_historial(sc, referencias))
+    # H33: rastro de auditoria en el MISMO commit del borrado (commit=False): si el borrado falla, no queda un rastro
+    # falso. La SC ya no existira: ninguna pantalla lo muestra.
+    _log(db, "SC", sc.id, sc.numero, "DELETED", f"Solicitud {sc.numero} eliminada definitivamente de la Papelera",
+         old_estado="CANCELADA", user_name=getattr(user, "email", None),
+         extra_data={"cliente": sc.customer_name, "motivo_cancelacion": sc.razon_cancelacion}, commit=False)
     try:
         db.delete(sc)
         db.commit()
@@ -3056,15 +3158,17 @@ def eliminar_permanente(sc_id: int, user: User = Depends(require_roles(*ROLE_ADM
         # Red de seguridad para una referencia que la revision de arriba no cubre (otra FK a customer_requests): 409 en
         # vez de 500. Las COT, los pedidos y los leads vinculados no llegan aqui: ya los frenaron la revision y el bloqueo.
         db.rollback()
-        raise HTTPException(409, _mensaje_solicitud_con_historial(sc, [], [], 0))
+        raise HTTPException(409, _mensaje_solicitud_con_historial(sc, []))
     return {"status": "success", "data": {"deleted": sc_id}}
 
 
 @router.post("/solicitudes/{sc_id}/restaurar")
 def restaurar_solicitud(sc_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
-    """Restaura una SC de la papelera (estado CANCELADA) a BORRADOR -- o a ASIGNADA si
-    todavia tiene un asesor puesto (ver Gate 1 mas abajo). Su lead sale de 'perdido'."""
+    """Restaura una SC de la papelera (estado CANCELADA) a ASIGNADA si todavia tiene un asesor puesto, o a BORRADOR
+    (Nueva) sin el. Su lead sale de 'perdido'. Una sola escritura y un solo commit (H33, C8); la Actividad explica en
+    que estado quedo y por que, y la respuesta trae el 'mensaje' para el aviso."""
+    from app.core.confirmation_tokens import contar_tokens_vigentes, revoke_pending_tokens
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
     if not sc:
         raise HTTPException(404, "SC no encontrada")
@@ -3072,48 +3176,51 @@ def restaurar_solicitud(sc_id: int, user: User = Depends(require_roles(*ROLE_ADM
     if sc.estado != "CANCELADA":
         raise HTTPException(409, f"La solicitud {sc.numero} no está cancelada: no hay nada que restaurar.")
     # R10: restaurar reinicia el ciclo de Gate 1 igual que volver a Borrador; no con documentos activos colgando
-    # (datos viejos: SC cancelada con la pastilla vieja sin revisar sus documentos).
+    # (datos viejos: SC cancelada con la pastilla vieja sin revisar sus documentos). R34: gana sobre la primera rama de C6.
     cots_activas, pvens_activos = _documentos_activos_de_solicitud(db, sc.id)
     if cots_activas or pvens_activos:
         raise HTTPException(409, _mensaje_documentos_activos(sc, cots_activas, pvens_activos, "restaurar"))
     old_estado = sc.estado
-    sc.estado = "BORRADOR"
-    try:
-        db.execute(text("UPDATE customer_requests SET eliminada_at=NULL, estado='BORRADOR', updated_at=NOW() WHERE id=:id"), {"id": sc_id})
-        db.commit()
-    except Exception:
-        db.rollback()
-        sc.estado = "BORRADOR"
-        db.commit()
-    db.refresh(sc)
-    # Gate 1 (Round 6): mismo invariante que update_solicitud/promueve_asignada -- una
-    # SC nunca debe quedar en BORRADOR con un asesor ya asignado. Este endpoint no pasa
-    # por update_solicitud (hace su propio UPDATE crudo arriba), asi que sin este check
-    # una SC cancelada que todavia tuviera advisor_user_id (cancelar_solicitud no lo
-    # limpia) aterrizaria en un BORRADOR-con-asesor del que nada la volveria a
-    # promover -- exactamente el callejon sin salida que este Round cierra en todas
-    # las rutas que pueden producirlo, no solo en el PATCH generico.
-    estado_final = "BORRADOR"
+    # Gate 1 (Round 6): mismo invariante que update_solicitud/promueve_asignada -- una SC nunca queda en BORRADOR con un
+    # asesor ya asignado (cancelar_solicitud no lo limpia). El estado final se decide ANTES de escribir: la SC ya no pasa
+    # un instante por BORRADOR.
     if sc.advisor_user_id is not None:
-        sc.estado = "ASIGNADA"
-        estado_final = "ASIGNADA"
-    # Gate 1 (Round 7): mismo revoke+clear que cancelar_solicitud y update_solicitud ya
-    # tienen -- defensa en profundidad para que una SC restaurada desde la papelera
-    # nunca pueda cargar un token o una marca de confirmacion de un ciclo anterior
-    # (cancelar_solicitud ya los limpia al cancelar, pero esto no depende de esa ruta
-    # especifica para seguir siendo correcto).
-    from app.core.confirmation_tokens import revoke_pending_tokens
-    revoke_pending_tokens(db, "SC", sc_id)
+        estado_final, motivo = "ASIGNADA", f"tiene asesor asignado ({sc.advisor_name or 'asesor'})"
+    else:
+        estado_final, motivo = "BORRADOR", "no tiene asesor asignado"
+    etiqueta = etiqueta_estado("SC", estado_final)
+    # Lo que se anula se mide antes de tocarlo (la marca de Gate 1 y los enlaces vivos, antes de revocarlos).
+    habia_confirmacion = sc.gate1_confirmed_at is not None
+    enlaces_vivos = contar_tokens_vigentes(db, "SC", sc.id)
+    sc.estado = estado_final
+    sc.eliminada_at = None
     sc.gate1_confirmed_at = None
+    sc.updated_at = datetime.datetime.utcnow()
+    # Gate 1 (Round 7): mismo revoke+clear que cancelar_solicitud y update_solicitud ya tienen -- defensa en
+    # profundidad para que una SC restaurada desde la papelera nunca pueda cargar un token o una marca de confirmacion
+    # de un ciclo anterior.
+    revoke_pending_tokens(db, "SC", sc_id, commit=False)
+    # N4: cancelar la SC deja el lead perdido; restaurarla lo devuelve a la etapa con la que nace un lead nuevo (None si
+    # no habia lead perdido). Si falla, la restauracion sigue y el renglon lo dice.
+    etapa_lead, lead_fallo = _lead_en_savepoint(db, f"reabrir el lead de la solicitud restaurada {sc.numero}",
+                                                lambda: reabrir_lead_de_solicitud(sc.id, db, commit=False))
+    cambios =[{"etiqueta": f"Queda {etiqueta}", "despues": motivo}]
+    if sc.razon_cancelacion:
+        cambios.append({"etiqueta": "Motivo de la cancelación", "despues": sc.razon_cancelacion})
+    if habia_confirmacion or enlaces_vivos > 0:
+        cambios.append({"etiqueta": "Confirmación del cliente", "despues": "Hay que volver a enviársela al cliente"})
+    if etapa_lead:
+        cambios.append({"etiqueta": "Cliente en el CRM", "despues": f"Vuelve a {etapa_lead}"})
+    elif lead_fallo:
+        cambios.append({"etiqueta": "Cliente en el CRM", "despues": "No se pudo reabrir"})
+    _log(db, "SC", sc_id, sc.numero, "RESTORED", f"Solicitud restaurada a {etiqueta}", old_estado, estado_final,
+         getattr(user, 'email', ''), extra_data={"cambios": cambios}, commit=False)
+    # La respuesta se arma ANTES del commit: despues el objeto queda expirado y leerlo costaria otro viaje a la base.
+    resp = {"status": "success", "data": {
+        "id": sc_id, "numero": sc.numero, "estado": estado_final, "estado_label": etiqueta,
+        "mensaje": f"{sc.numero} restaurada: queda {etiqueta} porque {motivo}."}}
     db.commit()
-    _log(db, "SC", sc_id, sc.numero, "RESTORED", f"Solicitud restaurada a {etiqueta_estado('SC', estado_final)}", old_estado, estado_final, getattr(user, 'email', ''))
-    # N4: cancelar la SC deja el lead perdido; restaurarla lo devuelve a la etapa con la que nace un lead nuevo.
-    try:
-        reabrir_lead_de_solicitud(sc.id, db)
-    except Exception as exc:
-        db.rollback()
-        logger.error(f"Error al reabrir el lead de la solicitud restaurada {sc.numero}: {exc}", exc_info=True)
-    return {"status": "success", "data": {"id": sc_id, "estado": estado_final}}
+    return resp
 
 
 # ─── FORMATO CONFIRMACIÓN ────────────────────────────────────────────────────
