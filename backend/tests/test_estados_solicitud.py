@@ -395,3 +395,243 @@ def test_los_textos_de_la_solicitud_usan_las_etiquetas_nuevas(app_client, db, ad
     assert cambio.description == "Estado cambiado a Nueva (asesor retirado)"
     assert (cambio.old_estado, cambio.new_estado) == ("ASIGNADA", "BORRADOR")
 
+
+# ─── 9) scripts/ajustar_estados_solicitud.py ──────────────────────────────────────────────────────────────────
+
+def test_script_ajuste_estados_reporta_aplica_y_es_idempotente(db, user_admin):
+    from sqlalchemy import text
+    from app.models.erp_documents import CustomerRequest
+    from scripts.ajustar_estados_solicitud import ajustar
+    sc_a = _sc(db, "SC-U15S01", user_admin, estado="COTIZADA", gate1_confirmed_at=None)
+    cot_a = _cot(db, "COT-U15S01", sc_a)                                          # COT activa -> Confirmada
+    sc_b = _sc(db, "SC-U15S02", user_admin, estado="RECHAZADA", gate1_confirmed_at=None)   # sin docs -> Asignada
+    sc_c = _sc(db, "SC-U15S03", user_admin, estado="EN_ESPERA_CONFIRMACION", gate1_confirmed_at=None)
+    _cot(db, "COT-U15S03", sc_c, estado="PENDIENTE_CONFIRMACION")                 # COT activa -> Confirmada
+    ids = [sc_a.id, sc_b.id, sc_c.id]
+    try:
+        res = ajustar(db, aplicar=False, ids=ids, tabla_respaldo=TABLA_ESTADOS_TEST)
+        assert res["candidatas"] == 3 and res["ajustadas"] == 0
+        nuevos = {e["numero"]: e["nuevo"] for e in res["ejemplos"]}
+        assert nuevos == {"SC-U15S01": "CONFIRMADA", "SC-U15S02": "ASIGNADA", "SC-U15S03": "CONFIRMADA"}
+        db.expire_all()
+        assert [db.get(CustomerRequest, i).estado for i in ids] == ["COTIZADA", "RECHAZADA", "EN_ESPERA_CONFIRMACION"]
+        assert not _existe_tabla(db, TABLA_ESTADOS_TEST)  # el reporte ni siquiera crea la tabla de respaldo
+        assert all(_logs(db, "SC", i) == [] for i in ids)
+
+        res = ajustar(db, aplicar=True, ids=ids, tabla_respaldo=TABLA_ESTADOS_TEST)
+        assert res["candidatas"] == 3 and res["ajustadas"] == 3
+        db.expire_all()
+        assert [db.get(CustomerRequest, i).estado for i in ids] == ["CONFIRMADA", "ASIGNADA", "CONFIRMADA"]
+        respaldo = {r[0]: (r[1], r[2]) for r in db.execute(
+            text(f"SELECT id, estado_original, estado_nuevo FROM {TABLA_ESTADOS_TEST}")).all()}
+        assert respaldo == {sc_a.id: ("COTIZADA", "CONFIRMADA"), sc_b.id: ("RECHAZADA", "ASIGNADA"),
+                            sc_c.id: ("EN_ESPERA_CONFIRMACION", "CONFIRMADA")}
+        for i in ids:
+            (log,) = _logs(db, "SC", i, "ESTADO_CHANGED")
+            assert log.user_name == AUTOR_AJUSTE
+        (log_a,) = _logs(db, "SC", sc_a.id, "ESTADO_CHANGED")
+        assert (log_a.old_estado, log_a.new_estado) == ("COTIZADA", "CONFIRMADA")
+        assert log_a.description == ("Estado ajustado a Confirmada: la solicitud ya no cambia con su cotización; el "
+                                     f"avance se ve en la cotización {cot_a.numero}")
+        (log_b,) = _logs(db, "SC", sc_b.id, "ESTADO_CHANGED")
+        assert log_b.description == ("Estado ajustado a Asignada: no tiene cotizaciones activas; para cotizarla, "
+                                     "envíasela al cliente para que la confirme")
+
+        res2 = ajustar(db, aplicar=True, ids=ids, tabla_respaldo=TABLA_ESTADOS_TEST)
+        assert res2["candidatas"] == 0 and res2["ajustadas"] == 0
+        assert db.execute(text(f"SELECT count(*) FROM {TABLA_ESTADOS_TEST}")).scalar() == 3
+    finally:
+        _borrar_tabla(db, TABLA_ESTADOS_TEST)
+
+
+def test_script_ajuste_estados_aplica_la_regla_de_la_confirmacion(db, user_admin):
+    """R29 en el script: heredada sin documentos y con la marca -> Confirmada; sin la marca -> Asignada / Nueva, con
+    la marca limpia (respaldada) y los enlaces de la SC anulados. Confirmada sin marca ni documentos -> Asignada /
+    Nueva. No son candidatas: Confirmada con marca, Confirmada sin marca con documentos activos ni Soporte Tecnico."""
+    from sqlalchemy import text
+    from app.core.confirmation_tokens import create_confirmation_token
+    from app.models.erp_documents import CustomerRequest
+    from scripts.ajustar_estados_solicitud import ajustar
+    marca = AHORA()
+    con_marca = _sc(db, "SC-U15T01", user_admin, estado="VENCIDA", gate1_confirmed_at=marca)
+    rechazada = _sc(db, "SC-U15T02", user_admin, estado="COTIZADA", gate1_confirmed_at=None)
+    _cot(db, "COT-U15T02", rechazada, estado="RECHAZADA")
+    sin_marca = _sc(db, "SC-U15T03", user_admin, con_asesor=False, estado="CONFIRMADA", gate1_confirmed_at=None)
+    enlace = create_confirmation_token(db, "SC", sin_marca.id)
+    vigente = _sc(db, "SC-U15T04", user_admin, estado="CONFIRMADA", gate1_confirmed_at=AHORA())
+    con_docs = _sc(db, "SC-U15T05", user_admin, estado="CONFIRMADA", gate1_confirmed_at=None)
+    _cot(db, "COT-U15T05", con_docs)
+    soporte = _sc(db, "SC-U15T06", user_admin, estado="COTIZADA", gate1_confirmed_at=None,
+                  tipo_solicitud="Soporte Tecnico")
+    ids = [con_marca.id, rechazada.id, sin_marca.id, vigente.id, con_docs.id, soporte.id]
+    try:
+        res = ajustar(db, aplicar=False, ids=ids, tabla_respaldo=TABLA_ESTADOS_TEST)
+        assert {e["numero"]: e["nuevo"] for e in res["ejemplos"]} == {
+            "SC-U15T01": "CONFIRMADA", "SC-U15T02": "ASIGNADA", "SC-U15T03": "BORRADOR"}
+        res = ajustar(db, aplicar=True, ids=ids, tabla_respaldo=TABLA_ESTADOS_TEST)
+        assert res["ajustadas"] == 3
+        db.expire_all()
+        filas = {i: db.get(CustomerRequest, i) for i in ids}
+        assert filas[con_marca.id].estado == "CONFIRMADA" and filas[con_marca.id].gate1_confirmed_at is not None
+        assert filas[rechazada.id].estado == "ASIGNADA" and filas[rechazada.id].gate1_confirmed_at is None
+        assert filas[sin_marca.id].estado == "BORRADOR" and _token_usado(db, enlace)
+        assert [filas[i].estado for i in (vigente.id, con_docs.id, soporte.id)] == ["CONFIRMADA", "CONFIRMADA",
+                                                                                     "COTIZADA"]
+        respaldo = {r[0]: r[1] for r in db.execute(text(f"SELECT id, gate1_original FROM {TABLA_ESTADOS_TEST}"))}
+        assert set(respaldo) == {con_marca.id, rechazada.id, sin_marca.id}
+        assert respaldo[con_marca.id] is not None and respaldo[sin_marca.id] is None
+        (log,) = _logs(db, "SC", con_marca.id, "ESTADO_CHANGED")
+        assert log.description == ("Estado ajustado a Confirmada: la solicitud ya no cambia con su cotización; la "
+                                   "confirmación del cliente sigue vigente y ya puedes crearle una nueva cotización")
+        (log,) = _logs(db, "SC", rechazada.id, "ESTADO_CHANGED")
+        assert log.description == ("Estado ajustado a Asignada: su cotización fue rechazada; para cotizar de nuevo, "
+                                   "reenvíasela al cliente para que la confirme")
+        (log,) = _logs(db, "SC", sin_marca.id, "ESTADO_CHANGED")
+        assert log.description.startswith("Estado ajustado a Nueva: ")
+    finally:
+        _borrar_tabla(db, TABLA_ESTADOS_TEST)
+
+
+def test_ajustar_leads_reporta_y_aplica(db, user_admin):
+    """R26: un lead 'Perdido' cuya SC ya no esta cancelada vuelve a cotizacion (COT activa) o a nuevo lead (sin ella).
+    Se elige el lead por su id: otro lead de la misma SC no se toca."""
+    from sqlalchemy import text
+    from app.models.sales import SalesOrder
+    from scripts.ajustar_estados_solicitud import ajustar_leads
+    perdido = _etapa(db, "CANCELLED")
+    sc_a = _sc(db, "SC-U15L01", user_admin, estado="ASIGNADA", gate1_confirmed_at=None)
+    lead_a = _lead(db, sc_a, pipeline_stage_id=perdido)                                    # -> DRAFT
+    otro_a = _lead(db, sc_a, status="DRAFT")                                               # no es candidato
+    sc_b = _sc(db, "SC-U15L02", user_admin, gate1_confirmed_at=AHORA())
+    _cot(db, "COT-U15L02", sc_b)
+    lead_b = _lead(db, sc_b, pipeline_stage_id=perdido)                                    # -> QUOTATION
+    sc_c = _sc(db, "SC-U15L03", user_admin, estado="CANCELADA")
+    lead_c = _lead(db, sc_c, pipeline_stage_id=perdido)                                    # SC cancelada: no
+    sc_d = _sc(db, "SC-U15L04", user_admin, estado="ASIGNADA", tipo_solicitud="Soporte Tecnico")
+    lead_d = _lead(db, sc_d, pipeline_stage_id=perdido)                                    # Soporte: no
+    ids = [sc_a.id, sc_b.id, sc_c.id, sc_d.id]
+    try:
+        res = ajustar_leads(db, aplicar=False, ids=ids, tabla_respaldo=TABLA_LEADS_TEST)
+        assert res["candidatos"] == 2 and res["movidos"] == 0
+        assert {e["lead_id"]: e["nuevo"] for e in res["ejemplos"]} == {lead_a.id: "DRAFT", lead_b.id: "QUOTATION"}
+        db.expire_all()
+        assert db.get(SalesOrder, lead_a.id).status == "CANCELLED"
+        assert not _existe_tabla(db, TABLA_LEADS_TEST)
+
+        res = ajustar_leads(db, aplicar=True, ids=ids, tabla_respaldo=TABLA_LEADS_TEST)
+        assert res["candidatos"] == 2 and res["movidos"] == 2
+        db.expire_all()
+        a, b = db.get(SalesOrder, lead_a.id), db.get(SalesOrder, lead_b.id)
+        assert (a.status, a.pipeline_stage_id) == ("DRAFT", _etapa(db, "DRAFT"))
+        assert (b.status, b.pipeline_stage_id) == ("QUOTATION", _etapa(db, "QUOTATION"))
+        assert db.get(SalesOrder, otro_a.id).status == "DRAFT"
+        assert [db.get(SalesOrder, l.id).status for l in (lead_c, lead_d)] == ["CANCELLED", "CANCELLED"]
+        respaldo = {r[0]: (r[1], r[2], r[3]) for r in db.execute(text(
+            f"SELECT id, status_original, pipeline_stage_id_original, status_nuevo FROM {TABLA_LEADS_TEST}"))}
+        assert respaldo == {lead_a.id: ("CANCELLED", perdido, "DRAFT"), lead_b.id: ("CANCELLED", perdido, "QUOTATION")}
+
+        res2 = ajustar_leads(db, aplicar=True, ids=ids, tabla_respaldo=TABLA_LEADS_TEST)
+        assert res2["candidatos"] == 0 and res2["movidos"] == 0
+    finally:
+        _borrar_tabla(db, TABLA_LEADS_TEST)
+
+
+def test_scripts_excluyen_documentos_reales(db, user_admin, monkeypatch):
+    """R32: DOCUMENTOS_REALES trae exactamente los cuatro numeros reales, y lo que se le agregue (y todo lo vinculado:
+    aqui una SC por el numero de su COT) no sale en las candidatas de ajustar ni de ajustar_leads."""
+    from app.models.erp_documents import CustomerRequest
+    from scripts import ajustar_estados_solicitud as modulo
+    assert modulo.DOCUMENTOS_REALES == ("SC-20260731", "COT-20260449", "PVEN-20262799", "SC-20260746")
+    por_numero = _sc(db, "SC-U15X01", user_admin, estado="COTIZADA", gate1_confirmed_at=None)
+    por_cot = _sc(db, "SC-U15X02", user_admin, estado="RECHAZADA", gate1_confirmed_at=None)
+    cot = _cot(db, "COT-U15X02", por_cot, estado="RECHAZADA")
+    _lead(db, por_numero)
+    _lead(db, por_cot)
+    ids = [por_numero.id, por_cot.id]
+    # Sin agregarlos a la lista, las dos SC y sus leads son candidatos (la prueba si prueba algo).
+    assert {e["numero"] for e in modulo.ajustar(db, aplicar=False, ids=ids)["ejemplos"]} == {"SC-U15X01", "SC-U15X02"}
+    assert modulo.ajustar_leads(db, aplicar=False, ids=ids)["candidatos"] == 2
+    monkeypatch.setattr(modulo, "DOCUMENTOS_REALES", modulo.DOCUMENTOS_REALES + (por_numero.numero, cot.numero))
+    try:
+        res = modulo.ajustar(db, aplicar=False, ids=ids)
+        assert res["candidatas"] == 0 and res["ejemplos"] == []
+        assert res["excluidas"] == 2
+        res_leads = modulo.ajustar_leads(db, aplicar=False, ids=ids)
+        assert res_leads["candidatos"] == 0 and res_leads["ejemplos"] == []
+        res = modulo.ajustar(db, aplicar=True, ids=ids, tabla_respaldo=TABLA_ESTADOS_TEST)
+        assert res["ajustadas"] == 0
+        db.expire_all()
+        assert [db.get(CustomerRequest, i).estado for i in ids] == ["COTIZADA", "RECHAZADA"]
+    finally:
+        _borrar_tabla(db, TABLA_ESTADOS_TEST)
+
+
+def test_script_rechaza_un_nombre_de_tabla_de_respaldo_peligroso(db):
+    from scripts.ajustar_estados_solicitud import ajustar, ajustar_leads
+    for funcion in (ajustar, ajustar_leads):
+        for nombre in ("x; DROP TABLE users", "Tabla-Con-Guion", "1abc", "", "a b", "abc\n", "abc\r\n"):
+            try:
+                funcion(db, aplicar=False, ids=[1], tabla_respaldo=nombre)
+            except ValueError:
+                continue
+            raise AssertionError(f"{funcion.__name__} debio rechazar {nombre!r}")
+
+
+# ─── CLI del script (B9): --aplicar / --aplicar-leads exigen --base igual a current_database() ──────────────────
+
+def _correr_main(monkeypatch, argv):
+    """main() con ajustar y ajustar_leads reemplazados por funciones que solo anotan la llamada."""
+    from scripts import ajustar_estados_solicitud as modulo
+    llamadas = []
+
+    def _ajustar(db, aplicar=False, **kwargs):
+        llamadas.append(("ajustar", aplicar))
+        return {"candidatas": 0, "ajustadas": 0, "excluidas": 0, "ejemplos": [], "por_regla": {}}
+
+    def _ajustar_leads(db, aplicar=False, **kwargs):
+        llamadas.append(("leads", aplicar))
+        return {"candidatos": 0, "movidos": 0, "excluidos": 0, "ejemplos": []}
+
+    monkeypatch.setattr(modulo, "ajustar", _ajustar)
+    monkeypatch.setattr(modulo, "ajustar_leads", _ajustar_leads)
+    salida, errores = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(salida), contextlib.redirect_stderr(errores):
+        try:
+            codigo = modulo.main(argv)
+        except SystemExit as exc:  # argparse
+            codigo = exc.code
+    return codigo, llamadas, salida.getvalue(), errores.getvalue()
+
+
+def test_script_sin_flags_reporta_estados_y_leads_sin_escribir(monkeypatch):
+    codigo, llamadas, salida, _ = _correr_main(monkeypatch, [])
+    assert codigo == 0 and llamadas == [("ajustar", False), ("leads", False)]
+    assert "--aplicar --base <nombre de la base>" in salida and "--aplicar-leads --base <nombre de la base>" in salida
+
+
+def test_script_aplicar_sin_base_no_corre(monkeypatch):
+    for flag in ("--aplicar", "--aplicar-leads"):
+        codigo, llamadas, _, errores = _correr_main(monkeypatch, [flag])
+        assert codigo == 2 and llamadas == [], flag
+        assert "exigen --base" in errores, flag
+
+
+def test_script_aplicar_con_otra_base_aborta_sin_escribir(db, monkeypatch):
+    from sqlalchemy import text
+    actual = db.execute(text("SELECT current_database()")).scalar()
+    for flag in ("--aplicar", "--aplicar-leads"):
+        codigo, llamadas, salida, errores = _correr_main(monkeypatch, [flag, "--base", actual + "_otra"])
+        assert codigo == 2 and llamadas == [], flag
+        assert f"SELECT current_database() -> {actual}" in salida
+        assert "ABORTADO" in errores and "no se escribió nada" in errores
+
+
+def test_script_aplicar_con_la_base_correcta_aplica_solo_lo_pedido(db, monkeypatch):
+    from sqlalchemy import text
+    actual = db.execute(text("SELECT current_database()")).scalar()
+    codigo, llamadas, salida, _ = _correr_main(monkeypatch, ["--aplicar", "--base", actual])
+    assert codigo == 0 and llamadas == [("ajustar", True)]
+    assert "Ajustadas: 0" in salida
+    codigo, llamadas, salida, _ = _correr_main(monkeypatch, ["--aplicar-leads", "--base", actual])
+    assert codigo == 0 and llamadas == [("leads", True)]
+    assert "Movidos: 0" in salida
