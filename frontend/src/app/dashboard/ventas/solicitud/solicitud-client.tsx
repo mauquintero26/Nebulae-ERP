@@ -49,22 +49,8 @@ export { NewClientModal } from './selector-cliente';
 // El contrato público no cambia: {label, color, bg, border} por estado (lo leen el Hub, EstadoBadge y el detalle). En
 // código nuevo, la etiqueta sale de infoEstadoSolicitud(e).label.
 export const ESTADOS_SC: Record<string, {label:string; color:string; bg:string; border:string}> = ESTADOS_SC_LIB;
-
-// Subconjunto de ESTADOS_SC seguro para menus de "forzar estado manualmente"
-// (3-dot menu, bulk-action bar, panel de detalle). ESTADOS_SC completo sirve
-// para badges/tabs/labels (incluye estados que solo deben alcanzarse via los
-// flujos reales de backend: confirmar_solicitud, sincronizacion con la
-// Cotizacion). Si estos 5 estados nuevos se agregaran aqui tambien, cualquier
-// Solicitud podria forzarse a, por ejemplo, "Cotizada" o "Soporte" con un
-// click, sin Cotizacion vinculada ni backend involucrado -- exactamente lo que
-// estos menus nunca pudieron hacer antes de que ESTADOS_SC creciera.
-// N4: a mano solo se vuelve a Borrador (igual que el PATCH del servidor). Cancelar NO va aqui: se hace con
-// POST /ventas/solicitudes/{id}/cancelar (pide el motivo y revisa que no tenga cotizaciones ni pedidos activos).
-// T7: la lista ya no lo usa (menú de fila con 'Reiniciar', barra masiva sin estados); queda solo para el detalle
-// (solicitud/[id]) hasta que T8A lo quite.
-export const ESTADOS_SC_MANUALES: Record<string, {label:string; color:string; bg:string; border:string}> = Object.fromEntries(
-  Object.entries(ESTADOS_SC).filter(([k]) => ['BORRADOR'].includes(k))
-);
+// U15 (T8A): ya no hay estados que se pongan a mano. El único es 'Reiniciar solicitud' (PATCH {estado:'BORRADOR'}),
+// en el menú de fila de la lista y en el detalle (EstadoSolicitudPasos); cancelar va por POST /cancelar.
 
 export const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO',{day:'2-digit',month:'short',year:'numeric'}) : '-';
 export const fTime = (iso: any) => iso ? new Date(iso).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}) : '';

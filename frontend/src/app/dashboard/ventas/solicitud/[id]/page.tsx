@@ -4,17 +4,22 @@ import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import {
   ArrowLeft, ArrowRight, ChevronRight, Edit2, Save, Trash2, CheckCircle2,
   User, Phone, Mail, MapPin, MessageCircle, RefreshCw, AlertCircle,
-  FileText, Activity, XCircle, MessageSquare, RotateCcw, Filter, Send, Plus, Sparkles,
+  FileText, Activity, XCircle, MessageSquare, RotateCcw, Filter, Send, Plus, Sparkles, AlertTriangle,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
+import { textoDeError } from '@/lib/avisos';
 import { Button, Modal, useAvisos } from '@/components/ui';
 import {
   EstadoBadge, TipoBadge, ChatterTab, IAPanelSC,
-  ESTADOS_SC_MANUALES, TIPOS_SC, MODALIDADES_PAGO, fDate, fTime,
+  TIPOS_SC, MODALIDADES_PAGO, fDate, fTime,
 } from '../solicitud-client';
+import {
+  infoEstadoSolicitud, puedeReiniciar, puedeCotizarSinConfirmacion, MOTIVO_SIN_CONFIRMACION_MIN, ESTADOS_SC_SIN_CONFIRMAR,
+} from '@/lib/estados-solicitud';
+import { EstadoSolicitudPasos } from './estado-solicitud';
 // Final whole-branch review (hallazgo #1, el mas severo): Gate 1 no tenia NINGUNA via
 // de UI para entregarle el link de confirmacion al cliente -- enviarParaConfirmacion
 // llamaba al endpoint y tiraba la respuesta entera, sin selector de canal ni manejo
@@ -39,9 +44,13 @@ import {
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
 // (mismo patron que cotizacion/[id]/page.tsx; valores reales emitidos por el backend para
 // Solicitudes -- ver erp_ventas.py: CREATED, ESTADO_CHANGED, NOTE_ADDED, CHATTER, CANCELLED,
-// RESTORED).
+// RESTORED; U15: COTIZACION_CREADA y COTIZACION_RECHAZADA (la SC ya no cambia de estado con su
+// cotizacion); U11: COTIZADA_SIN_CONFIRMACION).
 const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
   CREATED:        {icon: FileText,      color: 'text-indigo-500 bg-indigo-50'},
+  COTIZACION_CREADA:         {icon: FileText,      color: 'text-indigo-500 bg-indigo-50'},
+  COTIZACION_RECHAZADA:      {icon: XCircle,       color: 'text-rose-500 bg-rose-50'},
+  COTIZADA_SIN_CONFIRMACION: {icon: AlertTriangle, color: 'text-amber-600 bg-amber-50'},
   ESTADO_CHANGED: {icon: Activity,      color: 'text-amber-500 bg-amber-50'},
   NOTE_ADDED:     {icon: MessageSquare, color: 'text-blue-500 bg-blue-50'},
   CHATTER:        {icon: MessageSquare, color: 'text-cyan-600 bg-cyan-50'},
@@ -57,13 +66,23 @@ const ACTIVITY_TYPE_LABELS: Record<string, string> = {
   ESTADO_CHANGED: 'Cambios de Estado',
   NOTE_ADDED: 'Notas',
   CREATED: 'Creación',
+  COTIZACION_CREADA: 'Cotización creada',
+  COTIZADA_SIN_CONFIRMACION: 'Cotización sin confirmación',
+  COTIZACION_RECHAZADA: 'Cotización rechazada',
   CHATTER: 'Chatter',
   CANCELLED: 'Cancelación',
   RESTORED: 'Restauración',
   UPDATED: 'Ediciones',
   FECHA_ENTREGA_MODIFICADA: 'Fecha de entrega',
 };
-const ACTIVITY_TYPE_ORDER = ['ESTADO_CHANGED', 'UPDATED', 'FECHA_ENTREGA_MODIFICADA', 'NOTE_ADDED', 'CREATED', 'CHATTER', 'CANCELLED', 'RESTORED'];
+const ACTIVITY_TYPE_ORDER = [
+  'ESTADO_CHANGED', 'UPDATED', 'FECHA_ENTREGA_MODIFICADA', 'NOTE_ADDED', 'CREATED',
+  'COTIZACION_CREADA', 'COTIZADA_SIN_CONFIRMACION', 'COTIZACION_RECHAZADA', 'CHATTER', 'CANCELLED', 'RESTORED',
+];
+
+// U11: tope del motivo de 'Cotizar sin esperar confirmación' (el servidor exige lo mismo:
+// erp_ventas.MOTIVO_SIN_CONFIRMACION_MAX; el mínimo es MOTIVO_SIN_CONFIRMACION_MIN de la librería).
+const MOTIVO_SIN_CONFIRMACION_MAX = 500;
 
 function SolicitudDetalleContent() {
   const params = useParams();
@@ -75,8 +94,8 @@ function SolicitudDetalleContent() {
   // esquema http(s) ni "//" (protocol-relative), que redirigirian fuera del dominio.
   const safeReturnTo = rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//') ? rawReturnTo : '';
   const currentPath = `/dashboard/ventas/solicitud/${String(params.id || '')}`;
-  // H49 (T1B): avisos del sistema en lugar de window.alert.
-  const { avisar, avisarError } = useAvisos();
+  // H49 (T1B): avisos del sistema en lugar de window.alert; R30: 'Reiniciar solicitud' se confirma con confirmar().
+  const { avisar, avisarError, confirmar } = useAvisos();
 
   const [solicitud, setSolicitud] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -122,6 +141,11 @@ function SolicitudDetalleContent() {
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState('');
   const [editandoProductos, setEditandoProductos] = useState(false);
+  // U11: cotizar sin esperar la confirmación del cliente (motivo obligatorio; el error del servidor va dentro de la ventana).
+  const [showCotizarSinConf, setShowCotizarSinConf] = useState(false);
+  const [motivoSinConf, setMotivoSinConf] = useState('');
+  const [cotizandoSinConf, setCotizandoSinConf] = useState(false);
+  const [errorSinConf, setErrorSinConf] = useState('');
 
   useEffect(() => {
     const u = localStorage.getItem('user_name') || localStorage.getItem('username') || '';
@@ -218,16 +242,24 @@ function SolicitudDetalleContent() {
     setSavingEdit(false);
   }
 
-  async function changeEstado(newEstado: string) {
+  // U15 (R30): 'Reiniciar solicitud' es el único cambio de estado a mano (PATCH {estado:'BORRADOR'}: vuelve a Nueva, o a
+  // Asignada si tiene asesor; anula el enlace y la confirmación del cliente). Se confirma antes; cancelar va por "Cancelar
+  // Solicitud". El 409 de R10 (cotización o pedido activos) sale con su mensaje en un aviso.
+  async function reiniciarSolicitud() {
     if (!solicitud) return;
-    // N4: aqui solo se vuelve a Borrador (ESTADOS_SC_MANUALES); cancelar va por "Cancelar Solicitud" (motivo + revision de
-    // documentos). El servidor responde 409 con el motivo si hay una cotizacion o un pedido activos: se muestra tal cual.
+    const destino = infoEstadoSolicitud(solicitud.advisor_user_id ? 'ASIGNADA' : 'BORRADOR').label;
+    if (!(await confirmar({
+      titulo: 'Reiniciar solicitud',
+      mensaje: `La solicitud vuelve a ${destino}: se anula el enlace que se le envió al cliente y su confirmación, y habrá que enviársela de nuevo.`,
+      textoConfirmar: 'Reiniciar solicitud',
+      peligro: true,
+    }))) return;
     setSaving(true);
     try {
-      await apiFetch(`/ventas/solicitudes/${solicitud.id}`, { method: 'PATCH', body: JSON.stringify({ estado: newEstado, updated_by: currentUser }) });
+      await apiFetch(`/ventas/solicitudes/${solicitud.id}`, { method: 'PATCH', body: JSON.stringify({ estado: 'BORRADOR', updated_by: currentUser }) });
       await loadSolicitud();
     } catch (err: any) {
-      avisarError(err, 'No se pudo cambiar el estado');
+      avisarError(err, 'No se pudo reiniciar la solicitud');
     }
     setSaving(false);
   }
@@ -282,6 +314,40 @@ function SolicitudDetalleContent() {
       avisarError(err, 'No se pudo crear la cotización');
     }
     setConfirming(false);
+  }
+
+  // U11: la única excepción auditada a Gate 1. Crea la cotización (Borrador) de una SC que el cliente todavía no
+  // confirma: la SC no cambia de estado y su enlace sigue sirviendo. R9: el body es solo {motivo}; el autor lo pone el
+  // servidor con la sesión. Si sale bien se va a la cotización, como confirmarSC.
+  function abrirCotizarSinConfirmacion() {
+    setMotivoSinConf('');
+    setErrorSinConf('');
+    setShowCotizarSinConf(true);
+  }
+
+  async function cotizarSinConfirmacion() {
+    if (!solicitud) return;
+    const motivo = motivoSinConf.trim();
+    if (motivo.length < MOTIVO_SIN_CONFIRMACION_MIN) {
+      setErrorSinConf(`El motivo debe tener al menos ${MOTIVO_SIN_CONFIRMACION_MIN} caracteres.`);
+      return;
+    }
+    setCotizandoSinConf(true);
+    setErrorSinConf('');
+    try {
+      const d = await apiFetch(`/ventas/solicitudes/${solicitud.id}/cotizar-sin-confirmacion`, { method: 'POST', body: JSON.stringify({ motivo }) });
+      const cotId = (d?.data ?? d)?.cotizacion?.id;
+      if (cotId) {
+        router.push(`/dashboard/ventas/cotizacion/${cotId}?return_to=${encodeURIComponent(currentPath)}`);
+        return;
+      }
+      setShowCotizarSinConf(false);
+      await loadSolicitud();
+    } catch (err: any) {
+      // 422 del motivo, 409 (ya confirmada o cancelada) o 400 (sin asesor, sin productos, con una cotización activa).
+      setErrorSinConf(textoDeError(err));
+    }
+    setCotizandoSinConf(false);
   }
 
   // BORRADOR -> ASIGNADA: update_solicitud promueve el estado solo cuando se le manda un
@@ -408,8 +474,9 @@ function SolicitudDetalleContent() {
   const ultimaRechazada: any = [...cotizacionesRechazadas(solicitud)].sort((a: any, b: any) => (a.id || 0) - (b.id || 0)).pop() || null;
   // N4: lo que hay que hacer antes de poder cancelar la solicitud (el servidor responde 409 con lo mismo).
   const pasosCancelar = pasosParaCancelarSolicitud(solicitud);
-  // N4: a mano solo se vuelve a Borrador; ya estando en Borrador no queda nada que ofrecer.
-  const estadosManuales = Object.entries(ESTADOS_SC_MANUALES).filter(([k]) => k !== solicitud?.estado);
+  // U15: 'Reiniciar solicitud' (el único estado a mano) solo en Pendiente por confirmación o Confirmada, sin cotización
+  // activa ni pedido vigente (con ellos el servidor responde 409, R10); nunca en Cancelada ni en Soporte.
+  const puedeReiniciarSC = puedeReiniciar(solicitud, { cotizacionesActivas, pedidosVigentes });
   const pipelineStep = pedidosVigentes.length > 0 ? 3
     : cotizacionesActivas.some((c: any) => c.estado === 'CONFIRMADA') ? 2
     : cotizacionesActivas.length > 0 ? 1 : 0;
@@ -427,9 +494,19 @@ function SolicitudDetalleContent() {
   // su Cotizacion, pero eso nunca debe reabrir la creacion de una Cotizacion duplicada.
   // N7: una Cotizacion RECHAZADA no cuenta (la SC sigue activa): con la confirmacion del cliente aun vigente se
   // ofrece "Crear nueva cotizacion" con los productos ya confirmados. Reutilizado por el boton "Cotizar" del bloque
-  // Cotizaciones (panel izquierdo) y por el tab Acciones; en cualquier otro caso no se ofrece esa accion (ASIGNADA
-  // tiene su propia accion -- "Enviar para Confirmacion", ver abajo).
-  const canConfirmarSC = solicitud?.estado === 'CONFIRMADA' && cotizacionesActivas.length === 0 && pedidosVigentes.length === 0 && tieneProductos;
+  // Cotizaciones (panel izquierdo) y por el siguiente paso de la pestaña Actividad; en cualquier otro caso no se ofrece
+  // esa accion (ASIGNADA tiene su propia accion -- "Enviar para Confirmacion", ver abajo).
+  // U15: ademas la confirmacion del cliente debe seguir vigente (confirmacion_vigente: gate1 de la SC, nunca el de
+  // solicitud.cotizaciones[i], que es gate2). Una SC Confirmada por su cotizacion no la tiene: el servidor la rechazaria.
+  const canConfirmarSC = solicitud?.estado === 'CONFIRMADA' && solicitud?.confirmacion_vigente === true
+    && cotizacionesActivas.length === 0 && pedidosVigentes.length === 0 && tieneProductos;
+  // U11: 'Cotizar sin esperar confirmación' (mismas condiciones que el servidor: asesor, productos, sin cotización
+  // activa ni pedido vigente, en Asignada, Pendiente por confirmación o Confirmada sin la confirmación vigente).
+  const puedeCotizarSinConf = puedeCotizarSinConfirmacion(solicitud, { cotizacionesActivas, pedidosVigentes, tieneProductos });
+  // El cliente todavía no confirma la solicitud (Nueva, Asignada o Pendiente por confirmación).
+  const scSinConfirmar = ESTADOS_SC_SIN_CONFIRMAR.includes(solicitud?.estado);
+  // Lo que cuenta el servidor para el mínimo del motivo (lo recorta antes de medirlo).
+  const largoMotivoSinConf = motivoSinConf.trim().length;
 
   const asesoresElegibles = usuarios.filter(u => esAsesorElegible(u.role));
   const yoPuedoSerAsesor = me.id !== null && asesoresElegibles.some(u => u.id === me.id);
@@ -480,18 +557,36 @@ function SolicitudDetalleContent() {
       );
     }
     if (cotizacionesActivas.length > 0) {
+      // U11: la SC sigue sin confirmar con una cotización activa (creada con 'Cotizar sin esperar confirmación'): se dice
+      // con su motivo y se ofrece enviarle (o reenviarle) el enlace de la solicitud al cliente.
+      const cotSinConf: any = scSinConfirmar ? cotizacionesActivas.find((c: any) => c.sin_confirmacion_sc_at) : null;
+      const avisoSinConfirmar = !scSinConfirmar ? null
+        : !cotSinConf ? 'El cliente todavía no confirma esta solicitud.'
+        : `El cliente todavía no confirma esta solicitud; se cotizó sin su confirmación.${
+          cotSinConf.sin_confirmacion_sc_motivo ? ` Motivo: ${cotSinConf.sin_confirmacion_sc_motivo}` : ''}`;
+      const puedeEnviarEnlace = scSinConfirmar && (estado === 'ASIGNADA' || estado === 'PENDIENTE_CONFIRMACION');
       return (
         <NextStepCard
           tone="indigo"
           title="Continúa en la cotización"
-          actions={cotizacionesActivas.map((c: any) => (
-            <Link key={c.id} href={`/dashboard/ventas/cotizacion/${c.id}?return_to=${encodeURIComponent(currentPath)}`} className={`${LINK_ACCION} bg-indigo-600 hover:bg-indigo-700`}>
-              Ver {c.numero} <ArrowRight size={14} />
-            </Link>
-          ))}
+          actions={(
+            <>
+              {cotizacionesActivas.map((c: any) => (
+                <Link key={c.id} href={`/dashboard/ventas/cotizacion/${c.id}?return_to=${encodeURIComponent(currentPath)}`} className={`${LINK_ACCION} bg-indigo-600 hover:bg-indigo-700`}>
+                  Ver {c.numero} <ArrowRight size={14} />
+                </Link>
+              ))}
+              {puedeEnviarEnlace && (
+                <Button variant="secondary" icon={Send} loading={sendingConfirmacion} onClick={handleEnviarParaConfirmacion}>
+                  {estado === 'PENDIENTE_CONFIRMACION' ? 'Reenviar enlace de confirmación' : 'Enviar para Confirmación'}
+                </Button>
+              )}
+            </>
+          )}
         >
           La cotización ya fue creada desde esta solicitud: calcula los precios, envíala al cliente y, cuando confirme,
           crea el Pedido de Venta desde ahí.
+          {avisoSinConfirmar && <span className="block mt-1.5 font-semibold">{avisoSinConfirmar}</span>}
         </NextStepCard>
       );
     }
@@ -530,12 +625,21 @@ function SolicitudDetalleContent() {
         </NextStepCard>
       );
     }
+    // U11: además del botón principal, cotizar sin esperar al cliente (abre la ventana del motivo).
+    const botonCotizarSinConf = puedeCotizarSinConf ? (
+      <Button variant="secondary" icon={FileText} onClick={abrirCotizarSinConfirmacion}>Cotizar sin esperar confirmación</Button>
+    ) : null;
     if (estado === 'PENDIENTE_CONFIRMACION') {
       return (
         <NextStepCard
           tone="blue"
           title="Esperando confirmación del cliente"
-          actions={<Button color="blue" icon={Send} loading={sendingConfirmacion} onClick={handleEnviarParaConfirmacion}>Reenviar enlace de confirmación</Button>}
+          actions={(
+            <>
+              <Button color="blue" icon={Send} loading={sendingConfirmacion} onClick={handleEnviarParaConfirmacion}>Reenviar enlace de confirmación</Button>
+              {botonCotizarSinConf}
+            </>
+          )}
         >
           Ya se envió el enlace. Cuando el cliente confirme, aquí aparecerá &ldquo;Crear Cotización&rdquo;.
           Si el enlace venció (dura 2 días) o no le llegó, genera uno nuevo.
@@ -547,7 +651,12 @@ function SolicitudDetalleContent() {
         <NextStepCard
           tone="indigo"
           title="Envía la solicitud al cliente para que la confirme"
-          actions={<Button color="indigo" size="lg" icon={Send} loading={sendingConfirmacion} onClick={handleEnviarParaConfirmacion}>Enviar para Confirmación</Button>}
+          actions={(
+            <>
+              <Button color="indigo" size="lg" icon={Send} loading={sendingConfirmacion} onClick={handleEnviarParaConfirmacion}>Enviar para Confirmación</Button>
+              {botonCotizarSinConf}
+            </>
+          )}
         >
           El cliente confirma desde un enlace de un solo uso. Cuando lo haga, podrás crear la cotización.
           {ultimaRechazada && ' La cotización anterior fue rechazada; para hacer otra, reenvía la solicitud al cliente para que la confirme.'}
@@ -587,9 +696,14 @@ function SolicitudDetalleContent() {
         </NextStepCard>
       );
     }
+    // Sin siguiente paso automático: una Confirmada cuya confirmación ya no vale (U15: sin cotización activa; se retoma
+    // reiniciándola o se cotiza sin esperar al cliente, U11) o un estado heredado (se ajusta en la revisión de datos).
     return (
-      <NextStepCard tone="slate" title={`Solicitud ${String(estado || '').toLowerCase().replace(/_/g, ' ')}`}>
-        Esta solicitud no tiene un siguiente paso automático. Si quieres retomarla, pásala a Borrador desde &ldquo;Cambiar Estado&rdquo;.
+      <NextStepCard tone="slate" title={`Solicitud ${infoEstadoSolicitud(estado).label.toLowerCase()}`} actions={botonCotizarSinConf ?? undefined}>
+        {estado === 'CONFIRMADA'
+          ? 'La confirmación del cliente ya no vale para crear la cotización.'
+          : 'Esta solicitud no tiene un siguiente paso automático.'}
+        {puedeReiniciarSC && ' Para retomarla, usa «Reiniciar solicitud» en «Estado de la solicitud» y envíasela de nuevo al cliente.'}
       </NextStepCard>
     );
   }
@@ -767,6 +881,10 @@ function SolicitudDetalleContent() {
                           <div>
                             <span className={`font-bold ${rechazada ? 'text-rose-800' : 'text-amber-800'}`}>{c.numero}</span>
                             <p className={`text-xs mt-0.5 ${rechazada ? 'text-rose-600' : 'text-amber-600'}`}>{ESTADOS_COT[c.estado]?.label || humanizarCodigo(c.estado)}</p>
+                            {/* U11: creada con 'Cotizar sin esperar confirmación' y el cliente todavía no confirma la solicitud. */}
+                            {c.sin_confirmacion_sc_at && scSinConfirmar && (
+                              <span className="inline-block mt-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">Sin confirmación del cliente</span>
+                            )}
                           </div>
                           <ChevronRight size={15} className={rechazada ? 'text-rose-500' : 'text-amber-500'} />
                         </Link>
@@ -780,8 +898,11 @@ function SolicitudDetalleContent() {
                 ) : (
                   <div className="bg-slate-50 border border-dashed border-slate-300 rounded-xl p-4 text-center">
                     <p className="text-xs text-slate-400 italic mb-3">Aún no se ha realizado ninguna cotización.</p>
-                    {canConfirmarSC && (
-                      <Button color="emerald" size="sm" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Crear Cotización</Button>
+                    {/* U11: 'Cotizar' crea la cotización si el cliente ya confirmó; si no (y se puede), pide el motivo. */}
+                    {canConfirmarSC ? (
+                      <Button color="emerald" size="sm" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Cotizar</Button>
+                    ) : puedeCotizarSinConf && (
+                      <Button color="amber" size="sm" icon={FileText} onClick={abrirCotizarSinConfirmacion}>Cotizar</Button>
                     )}
                   </div>
                 )}
@@ -800,7 +921,8 @@ function SolicitudDetalleContent() {
             </>
           )}
 
-          {/* Estado change */}
+          {/* Estado: el ticket de Soporte tiene su select; la cancelada se restaura desde la Papelera (N4); las demás
+              muestran sus pasos (U15), que avanzan solos, con 'Reiniciar solicitud' cuando aplica. */}
           <div>
             {isSoporte ? (
               <>
@@ -817,15 +939,8 @@ function SolicitudDetalleContent() {
             ) : solicitud?.estado === 'CANCELADA' ? (
               // N4: una SC cancelada solo vuelve por "Restaurar" en la Papelera (el PATCH a Borrador responde 409).
               <p className="text-xs text-slate-500">Esta solicitud está cancelada: para volver a trabajar en ella, restáurala desde la Papelera del listado de solicitudes.</p>
-            ) : estadosManuales.length > 0 && (
-              <>
-                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Cambiar Estado</p>
-                <div className="flex gap-2 flex-wrap">
-                  {estadosManuales.map(([k, v]) => (
-                    <button key={k} onClick={() => changeEstado(k)} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs font-bold border hover:opacity-80 disabled:opacity-40" style={{ backgroundColor: v.bg, color: v.color, borderColor: v.border }}>{v.label}</button>
-                  ))}
-                </div>
-              </>
+            ) : solicitud && (
+              <EstadoSolicitudPasos solicitud={solicitud} puedeReiniciar={puedeReiniciarSC} onReiniciar={reiniciarSolicitud} reiniciando={saving} />
             )}
           </div>
         </div>
@@ -991,6 +1106,50 @@ function SolicitudDetalleContent() {
             />
             {cancelRazon.trim().length < 5 && <p className="text-xs text-red-500 mt-1">El motivo es obligatorio. Mínimo 5 caracteres (llevas {cancelRazon.trim().length}).</p>}
             {cancelError && <p className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 mt-3">{cancelError}</p>}
+          </div>
+        </Modal>
+      )}
+
+      {/* U11: cotizar sin esperar la confirmación del cliente. El motivo es obligatorio y queda en la Actividad de la
+          solicitud y de la cotización con el autor de la sesión; el error del servidor se muestra aquí dentro. */}
+      {showCotizarSinConf && (
+        <Modal title="Cotizar sin confirmación del cliente" icon={AlertTriangle} color="amber" maxWidth="md"
+          onClose={() => { if (!cotizandoSinConf) setShowCotizarSinConf(false); }}
+          bloquearCierre={cotizandoSinConf}
+          footer={(
+            <>
+              <Button variant="secondary" disabled={cotizandoSinConf} onClick={() => setShowCotizarSinConf(false)}>Esperar la confirmación</Button>
+              <Button color="amber" icon={FileText} loading={cotizandoSinConf} disabled={largoMotivoSinConf < MOTIVO_SIN_CONFIRMACION_MIN} onClick={cotizarSinConfirmacion}>Crear cotización</Button>
+            </>
+          )}>
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+            <p className="text-sm font-bold text-amber-900">Esta solicitud no ha sido confirmada por el cliente.</p>
+            <p className="text-xs text-amber-800 mt-1 leading-relaxed">
+              Puedes crear la cotización igual: quedará registrado en la Actividad con tu nombre y este motivo. Cuando el cliente confirme, la solicitud pasará a Confirmada y se mantendrá esta cotización.
+            </p>
+          </div>
+          <div>
+            <label htmlFor="motivo-sin-confirmacion" className="text-xs font-black text-slate-500 uppercase mb-2 block">Motivo (nota interna) *</label>
+            <textarea
+              id="motivo-sin-confirmacion"
+              value={motivoSinConf}
+              onChange={e => { setMotivoSinConf(e.target.value); setErrorSinConf(''); }}
+              readOnly={cotizandoSinConf}
+              rows={3}
+              maxLength={MOTIVO_SIN_CONFIRMACION_MAX}
+              placeholder="¿Por qué se cotiza sin esperar al cliente?"
+              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-amber-200 outline-none"
+              autoFocus
+            />
+            <div className="flex items-start justify-between gap-3 mt-1 text-xs">
+              <span className={largoMotivoSinConf < MOTIVO_SIN_CONFIRMACION_MIN ? 'text-amber-700' : 'text-slate-500'}>
+                {largoMotivoSinConf < MOTIVO_SIN_CONFIRMACION_MIN
+                  ? `Mínimo ${MOTIVO_SIN_CONFIRMACION_MIN} caracteres (llevas ${largoMotivoSinConf}).`
+                  : 'Lo ve tu equipo en la Actividad; el cliente no lo recibe.'}
+              </span>
+              <span className="text-slate-400 tabular-nums shrink-0">{motivoSinConf.length}/{MOTIVO_SIN_CONFIRMACION_MAX}</span>
+            </div>
+            {errorSinConf && <p role="alert" className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 mt-3">{errorSinConf}</p>}
           </div>
         </Modal>
       )}
