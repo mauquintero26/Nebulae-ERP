@@ -1269,6 +1269,9 @@ MOTIVO_SIN_CONFIRMACION_MAX = 500
 # U11: estados en que una SC sin la confirmacion vigente del cliente se puede cotizar con motivo (CONFIRMADA solo si
 # _confirmacion_vigente_sc es falso: confirmada por su cotizacion, sin la marca gate1).
 _ESTADOS_SC_COTIZABLES_SIN_CONFIRMACION = ("ASIGNADA", "PENDIENTE_CONFIRMACION", "CONFIRMADA")
+# C7/R11 y el ruling T3-3: lo que responden las otras puertas (POST /cotizaciones, PATCH sc_id) a una SC sin confirmar.
+_SC_SIN_CONFIRMAR = ("no ha sido confirmada por el cliente: usa «Cotizar» en la solicitud para crear la cotización con "
+                     "el motivo.")
 
 
 @router.post("/solicitudes/{sc_id}/cotizar-sin-confirmacion")
@@ -1399,7 +1402,10 @@ def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN
     if body.get("dias_entrega"):
         entrega_est = datetime.datetime.utcnow() + datetime.timedelta(days=body["dias_entrega"])
 
-    sc_id = body.get("sc_id")
+    try:
+        sc_id = _int_or_none(body.get("sc_id"))
+    except (TypeError, ValueError):
+        raise HTTPException(422, "El campo sc_id debe ser el número de una solicitud.")
     sc = None
     sc_numero = body.get("sc_numero")
     customer_id = body.get("customer_id")
@@ -1407,7 +1413,7 @@ def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN
     customer_phone = body.get("customer_phone")
     customer_email = body.get("customer_email")
     customer_address = body.get("customer_address")
-    if sc_id:
+    if sc_id is not None:
         # La Solicitud de Cliente es la fuente autoritativa de estos datos.
         # No confiar en lo que mande el body para ellos: si el llamador (ej.
         # Cotizador Rapido en /dashboard/cotiza) manda sc_id pero omite
@@ -1415,19 +1421,27 @@ def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN
         # chip "Origen" terminaba mostrando el id crudo (SC-8) en vez del
         # numero real (SC-20260317). Ver confirmar_solicitud() arriba, que
         # ya hacia esto bien por tener el objeto SC en memoria.
-        sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
-        if sc:
-            sc_numero = sc.numero
-            customer_id = sc.customer_id
-            customer_name = sc.customer_name
-            customer_phone = sc.customer_phone
-            customer_email = sc.customer_email
-            customer_address = sc.customer_address
-        # Si no existe (caso raro), se mantiene el comportamiento anterior:
-        # usar lo que vino en el body tal cual.
-        if sc is not None and sc.estado == "CANCELADA":
-            # N4: una SC cancelada no tiene cotizaciones vivas (antes de gastar un numero de la secuencia).
+        # C7/R11: bloqueada (dos POST simultaneos no crean dos COT) y todas las guardas ANTES de _gen_numero (un
+        # rechazo no gasta un numero de la secuencia).
+        sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
+        if sc is None:
+            # Antes seguia con los datos del body y fallaba en el FK con el numero ya gastado (500).
+            raise HTTPException(422, "La solicitud indicada no existe.")
+        sc_numero = sc.numero
+        customer_id = sc.customer_id
+        customer_name = sc.customer_name
+        customer_phone = sc.customer_phone
+        customer_email = sc.customer_email
+        customer_address = sc.customer_address
+        if sc.estado == "CANCELADA":
+            # N4: una SC cancelada no tiene cotizaciones vivas.
             raise HTTPException(409, _mensaje_solicitud_cancelada(sc, "crearle una cotización"))
+        # N7 (nuevo en este endpoint): ni una segunda COT activa ni otra COT con un pedido vigente.
+        _exigir_sin_documentos_activos(db, sc)
+        # C7: Gate 1. Sin la confirmacion vigente del cliente la unica puerta es /cotizar-sin-confirmacion, con su motivo
+        # y su registro (aqui no se acepta motivo_sin_confirmacion: si llega, se ignora).
+        if not _confirmacion_vigente_sc(sc):
+            raise HTTPException(409, f"Esta solicitud {_SC_SIN_CONFIRMAR}")
 
     numero = _gen_numero(db, "COT-", "seq_cot")
     cot = SalesQuotation(
@@ -1669,9 +1683,11 @@ def _leer_cambio_de_solicitud(db: Session, cot: SalesQuotation, body: dict):
     dejaria la SC CONFIRMADA, con la marca y sin COT activa: POST /solicitudes/{id}/confirmar crearia otra COT sin
     que el cliente reconfirme. Por eso, si el body cambia sc_id: 422 si no es un id o la SC no existe; 409 si la COT
     no esta en Borrador o Rechazada (fuera del ciclo de Gate 2), si tiene un pedido vigente, si la SC nueva esta
-    cancelada o ya tiene una COT activa o un pedido vigente. Las dos SC se bloquean en orden de id (dos traslados
-    cruzados no se bloquean mutuamente). Si se acepta, devuelve (sc_anterior, sc_nueva) para limpiar la marca de la
-    anterior y re-sincronizar las dos; None si sc_id no cambia (deja body['sc_id'] normalizado a int o None)."""
+    cancelada, ya tiene una COT activa o un pedido vigente, o (U11) no tiene la confirmacion vigente del cliente
+    (_confirmacion_vigente_sc: para esa la unica puerta es /cotizar-sin-confirmacion). Las dos SC se bloquean en
+    orden de id (dos traslados cruzados no se bloquean mutuamente). Si se acepta, devuelve (sc_anterior, sc_nueva)
+    para limpiar la marca de la anterior y re-sincronizar las dos; None si sc_id no cambia (deja body['sc_id']
+    normalizado a int o None)."""
     if "sc_id" not in body:
         return None
     try:
@@ -1705,6 +1721,10 @@ def _leer_cambio_de_solicitud(db: Session, cot: SalesQuotation, body: dict):
         if pvens_activos:
             raise HTTPException(409, f"La solicitud {sc_nueva.numero} ya tiene el pedido de venta "
                                      f"{pvens_activos[-1].numero} activo; no se le puede vincular otra cotización.")
+        # U11 (ruling T3-3, segunda puerta de C7): vincular una COT a una SC sin la confirmacion vigente del cliente la
+        # cotizaria sin motivo ni registro. Tambien una RECHAZADA: retomarla despues la dejaria activa en esa SC.
+        if not _confirmacion_vigente_sc(sc_nueva):
+            raise HTTPException(409, f"La solicitud {sc_nueva.numero} {_SC_SIN_CONFIRMAR}")
     return bloqueadas.get(cot.sc_id) if cot.sc_id else None, sc_nueva
 
 
@@ -2854,6 +2874,25 @@ def _get_alert_hours_soporte(db: Session, urgencia: str) -> int:
         return default_map.get(urgencia, 48)
 
 
+def _sc_sin_documentos_activos():
+    """R20 (U11): filtro SQL de las SC SIN documentos activos, el mismo criterio que _documentos_activos_de_solicitud
+    pero en la consulta (NOT EXISTS, sin una consulta por fila): ninguna COT con estado != RECHAZADA y ningun pedido de
+    venta != CANCELADO vinculado por sc_id o por el cot_id de cualquier COT de la SC. Una SC con documentos activos (p.ej.
+    la cotizada sin confirmacion) no cuenta como atrasada: la alerta la lleva su cotizacion o su pedido."""
+    cot_activa = (select(SalesQuotation.id)
+                  .where(SalesQuotation.sc_id == CustomerRequest.id, SalesQuotation.estado != "RECHAZADA")
+                  .exists())
+    # correlate explicito: este SELECT va dos niveles adentro y, sin el, SQLAlchemy le pone su propio customer_requests
+    # (contaria las COT de TODAS las SC).
+    cots_de_la_sc = (select(SalesQuotation.id).where(SalesQuotation.sc_id == CustomerRequest.id)
+                     .correlate(CustomerRequest))
+    pven_vigente = (select(SaleOrder.id)
+                    .where(SaleOrder.estado != "CANCELADO",
+                           or_(SaleOrder.sc_id == CustomerRequest.id, SaleOrder.cot_id.in_(cots_de_la_sc)))
+                    .exists())
+    return and_(~cot_activa, ~pven_vigente)
+
+
 @router.get("/alertas/resumen")
 def alertas_resumen(user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Session = Depends(get_db)):
     """Endpoint that returns a count of late documents (SC, COT, VEN) for global alert badge.
@@ -2878,6 +2917,7 @@ def alertas_resumen(user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Ses
     sc_atrasadas = db.query(CustomerRequest).filter(
         CustomerRequest.estado.in_(no_resolucion),
         CustomerRequest.updated_at < ahora - datetime.timedelta(days=sc_dias),
+        _sc_sin_documentos_activos(),  # R20: la alerta la lleva su COT o su pedido (no se cuenta dos veces)
     ).count()
 
     cot_atrasadas = db.query(SalesQuotation).filter(
@@ -2942,6 +2982,7 @@ def get_alertas(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *R
         CustomerRequest.updated_at <= cutoff,
         CustomerRequest.estado.notin_(["CONFIRMADA", "CANCELADA"]),
         CustomerRequest.tipo_solicitud != "Soporte Tecnico",
+        _sc_sin_documentos_activos(),  # R20: la alerta la lleva su COT o su pedido
     ).all()
 
     # COT activas sin cambio de estado en N dias

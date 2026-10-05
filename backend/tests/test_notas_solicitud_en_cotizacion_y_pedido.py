@@ -96,7 +96,9 @@ def test_cotizacion_sin_solicitud_no_trae_nota_de_solicitud(app_client, db, admi
 
 
 def test_cotizacion_creada_por_post_con_sc_id_tambien_muestra_la_nota(app_client, db, admin_token, user_admin):
-    sc = _sc(db, "SC-NOTA006", user_admin, notas="Nota por POST")
+    # C7/R11 (Bloque 2, T3): POST /cotizaciones con sc_id exige la confirmacion vigente del cliente.
+    sc = _sc(db, "SC-NOTA006", user_admin, notas="Nota por POST", estado="CONFIRMADA",
+             gate1_confirmed_at=datetime.datetime.utcnow())
     resp = app_client.post("/api/v1/ventas/cotizaciones",
                            json={"sc_id": sc.id, "total_cop": 1000,
                                  "productos": [{"product_name": "Cuna", "qty": 1, "unit_price_cop": 1000}]},

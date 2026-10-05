@@ -338,42 +338,44 @@ def test_mover_la_cotizacion_a_otra_solicitud_tiene_reglas(app_client, db, admin
 
 def test_vincular_la_cotizacion_a_otra_solicitud_solo_reinicia_la_de_origen(app_client, db, admin_token, user_admin):
     """La SC de origen pierde su marca y vuelve a ASIGNADA (como un rechazo sin marca); la SC destino no cambia de estado
-    (U15: una COT en Borrador no mueve la solicitud)."""
+    (U15: una COT en Borrador no mueve la solicitud). U11 (Bloque 2, T3): el destino tiene que tener la confirmacion
+    vigente del cliente; hacia una SC sin confirmar responde 409 (test_cotizar_sin_confirmacion)."""
     origen = _sc(db, "SC-RCH010A", user_admin)
     cot = _crear_cot(app_client, admin_token, origen.id)
-    destino = _sc(db, "SC-RCH010B", user_admin, con_marca=False, estado="ASIGNADA")
+    destino = _sc(db, "SC-RCH010B", user_admin)  # CONFIRMADA con la marca
     resp = _patch_cot(app_client, admin_token, cot["id"], sc_id=str(destino.id))  # el id puede llegar como texto
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["sc_id"] == destino.id and resp.json()["data"]["sc_numero"] == "SC-RCH010B"
     db.refresh(origen); db.refresh(destino)
     assert origen.gate1_confirmed_at is None and origen.estado == "ASIGNADA"  # como un rechazo sin marca
-    assert destino.estado == "ASIGNADA"  # U15: la COT en Borrador ya no cambia la SC nueva
+    # U15: la COT en Borrador ya no cambia la SC nueva (ni le quita la marca).
+    assert destino.estado == "CONFIRMADA" and destino.gate1_confirmed_at is not None
     assert any(cot["numero"] in l.description and "se vinculó" in l.description
                for l in _logs(db, "SC", destino.id, "UPDATED"))
 
     # Reenviar el mismo sc_id (un formulario que manda todo) no es un cambio.
-    destino.gate1_confirmed_at = datetime.datetime.utcnow()
-    db.commit()
     resp = _patch_cot(app_client, admin_token, cot["id"], sc_id=destino.id, notas="x")
     assert resp.status_code == 200, resp.text
     db.refresh(destino)
-    assert destino.gate1_confirmed_at is not None and destino.estado == "ASIGNADA"
+    assert destino.gate1_confirmed_at is not None and destino.estado == "CONFIRMADA"
 
 
 def test_una_cotizacion_rechazada_cambia_de_solicitud_sin_reiniciar_la_nueva(app_client, db, admin_token, user_admin):
-    """Una COT RECHAZADA si se puede mover; no es activa, asi que no cambia el estado de la SC nueva. La anterior pierde
-    su marca y, sin otra COT activa, vuelve a ASIGNADA."""
+    """Una COT RECHAZADA si se puede mover; no es activa, asi que no le aplica a la SC nueva la regla del rechazo. La
+    anterior pierde su marca y, sin otra COT activa, vuelve a ASIGNADA. U11 (Bloque 2, T3): el destino tiene que tener la
+    confirmacion vigente del cliente (retomar despues la RECHAZADA la dejaria activa en una SC sin confirmar)."""
     from app.models.erp_documents import SalesQuotation
     origen = _sc(db, "SC-RCH013A", user_admin)
     cot = SalesQuotation(numero="COT-RCH013", sc_id=origen.id, sc_numero=origen.numero, customer_name="Cliente Prueba",
                          estado="RECHAZADA")
     db.add(cot); db.commit()
-    destino = _sc(db, "SC-RCH013B", user_admin, estado="PENDIENTE_CONFIRMACION", con_marca=False)
+    destino = _sc(db, "SC-RCH013B", user_admin)  # CONFIRMADA con la marca
     resp = _patch_cot(app_client, admin_token, cot.id, sc_id=destino.id)
     assert resp.status_code == 200, resp.text
     db.refresh(origen); db.refresh(destino)
     assert origen.estado == "ASIGNADA" and origen.gate1_confirmed_at is None
-    assert destino.estado == "PENDIENTE_CONFIRMACION"
+    assert destino.estado == "CONFIRMADA" and destino.gate1_confirmed_at is not None
+    assert _logs(db, "SC", destino.id, "COTIZACION_RECHAZADA") == []
 
 
 def test_la_alerta_de_solicitud_confirmada_sin_cotizacion_cuenta_las_que_solo_tienen_rechazadas(

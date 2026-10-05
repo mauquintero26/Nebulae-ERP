@@ -227,7 +227,8 @@ def test_cot_sin_sc_con_anticipo_mayor_que_el_total_se_limita_al_100(app_client,
 
 def test_crear_la_cot_desde_una_sc_toma_el_porcentaje_de_la_modalidad(app_client, db, admin_token):
     from app.models.erp_documents import SalesQuotation
-    sc = _sc(db, "SC-ANT018", MOD_60_40)
+    # C7/R11 (Bloque 2, T3): POST /cotizaciones con sc_id exige la confirmacion vigente del cliente.
+    sc = _sc(db, "SC-ANT018", MOD_60_40, estado="CONFIRMADA", gate1_confirmed_at=datetime.datetime.utcnow())
     resp = app_client.post("/api/v1/ventas/cotizaciones", json={
         "sc_id": sc.id, "total_cop": 1000000, "subtotal_cop": 1000000, "anticipo_cop": 1,
         "productos": _linea(1000000), "created_by": "t"}, headers=auth(admin_token))

@@ -7,7 +7,9 @@
   CREATED de la COT. No toca el estado de la SC, ni gate1, ni su enlace pendiente.
 - El cliente confirma la SC por su enlace: queda CONFIRMADA y se mantiene esa misma cotizacion (SC_CONFIRMADA en la COT).
 - Opcion A (R5): el cliente confirma la COT y la SC tambien queda confirmada (sincronizacion de U15).
-- R21: rechazar la COT temprana no cambia la SC.
+- POST /cotizaciones con sc_id de una SC sin confirmacion vigente -> 409 (C7/R11), antes de gastar un numero; el 400
+  de documentos activos (N7) ahora tambien aplica ahi. PATCH sc_id hacia una SC sin confirmar -> 409 (ruling T3-3).
+- R21: rechazar la COT temprana no cambia la SC. R20: una SC con documentos activos no cuenta como atrasada.
 
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_cotizar_sin_confirmacion
 """
@@ -18,7 +20,8 @@ from tests.usuarios_de_prueba import compras_token  # noqa: F401  (fixture)
 
 LINEA = {"product_name": "Cuna Colecho", "qty": 1}
 MOTIVO = "Cliente pidió precio urgente por teléfono"
-
+NO_CONFIRMADA = ("Esta solicitud no ha sido confirmada por el cliente: usa «Cotizar» en la solicitud para crear la "
+                 "cotización con el motivo.")
 
 
 def auth(token):
@@ -343,6 +346,64 @@ def test_confirmar_la_cotizacion_confirma_la_solicitud(app_client, db, admin_tok
     assert any("confirmó la cotización" in (l.description or "") for l in _logs(db, "SC", sc.id, "ESTADO_CHANGED"))
 
 
+# --- 7. POST /cotizaciones con sc_id (C7/R11) -------------------------------------------------------------------------
+
+def test_post_cotizaciones_con_sc_sin_confirmar_responde_409(app_client, db, admin_token, user_admin, monkeypatch):
+    import app.api.v1.erp_ventas as erp_ventas
+    from app.models.erp_documents import SaleOrder
+    numeros = []
+    original = erp_ventas._gen_numero
+    monkeypatch.setattr(erp_ventas, "_gen_numero", lambda db_, p, s: numeros.append(p) or original(db_, p, s))
+
+    def _post(sc_id, **extra):
+        body = {"sc_id": sc_id, "total_cop": 1000, "created_by": "t",
+                "productos": [{"product_name": "Cuna", "qty": 1, "unit_price_cop": 1000}], **extra}
+        return app_client.post("/api/v1/ventas/cotizaciones", json=body, headers=auth(admin_token))
+
+    asignada = _sc(db, "SC-CSC017", user_admin)
+    pendiente = _sc(db, "SC-CSC018", user_admin, estado="PENDIENTE_CONFIRMACION")
+    sin_marca = _sc(db, "SC-CSC019", user_admin, estado="CONFIRMADA")  # confirmada por su COT, sin la marca
+    for sc in (asignada, pendiente, sin_marca):
+        for extra in ({}, {"motivo_sin_confirmacion": MOTIVO}):  # el motivo no abre esta puerta: se ignora
+            resp = _post(sc.id, **extra)
+            assert resp.status_code == 409, (sc.numero, extra, resp.text)
+            assert resp.json()["detail"] == NO_CONFIRMADA
+        assert _cots_de(db, sc.id) == []
+
+    resp = _post(999999999)
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == "La solicitud indicada no existe."
+    resp = _post("abc")
+    assert resp.status_code == 422, resp.text
+    assert numeros == []  # ninguno gasto un numero de la secuencia
+
+    confirmada = _sc(db, "SC-CSC020", user_admin, estado="CONFIRMADA", gate1_confirmed_at=datetime.datetime.utcnow())
+    resp = _post(confirmada.id)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["data"]["sin_confirmacion_sc_at"] is None
+    assert numeros == ["COT-"]
+    # Con esa COT activa no se crea otra (N7, ahora tambien en este endpoint), sin gastar otro numero.
+    resp = _post(confirmada.id)
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["detail"].startswith("Esta solicitud ya tiene la cotización ")
+    con_pedido = _sc(db, "SC-CSC021", user_admin, estado="CONFIRMADA", gate1_confirmed_at=datetime.datetime.utcnow())
+    db.add(SaleOrder(numero="PVEN-CSC021", sc_id=con_pedido.id, customer_name="Cliente Prueba",
+                     estado="PENDIENTE_COMPRA"))
+    db.commit()
+    resp = _post(con_pedido.id)
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["detail"] == ("Esta solicitud ya tiene el pedido de venta PVEN-CSC021 activo; no se puede crear "
+                                     "otra cotización.")
+    assert numeros == ["COT-"]
+    assert len(_cots_de(db, confirmada.id)) == 1
+
+    # Sin sc_id (Cotizador Rapido) no cambia nada.
+    resp = app_client.post("/api/v1/ventas/cotizaciones", json={
+        "customer_name": "Cliente Prueba", "total_cop": 1000, "created_by": "t",
+        "productos": [{"product_name": "Cuna", "qty": 1, "unit_price_cop": 1000}]}, headers=auth(admin_token))
+    assert resp.status_code == 201, resp.text
+
+
 # --- 8. Asesor o administrador (R5) -----------------------------------------------------------------------------------
 
 def test_el_asesor_puede_cotizar_sin_confirmacion(app_client, db, vendedor_token, user_vendedor, user_admin,
@@ -357,6 +418,35 @@ def test_el_asesor_puede_cotizar_sin_confirmacion(app_client, db, vendedor_token
     assert cot["cotizador"] == "Otra Asesora"
     [renglon] = _logs(db, "SC", sc.id, "COTIZADA_SIN_CONFIRMACION")
     assert renglon.user_name == nombre_de_usuario(user_vendedor) == user_vendedor.email
+
+
+# --- Segunda puerta: PATCH /cotizaciones/{id} con sc_id (ruling T3-3) ------------------------------------------------
+
+def test_vincular_una_cotizacion_a_una_solicitud_sin_confirmar_responde_409(app_client, db, admin_token, user_admin):
+    from app.models.erp_documents import SalesQuotation
+    destinos = [_sc(db, "SC-CSC023", user_admin),
+                _sc(db, "SC-CSC024", user_admin, estado="PENDIENTE_CONFIRMACION"),
+                _sc(db, "SC-CSC025", user_admin, estado="CONFIRMADA")]  # sin la marca
+    suelta = _cot(db, "COT-CSC023")
+    rechazada = _cot(db, "COT-CSC024", estado="RECHAZADA")  # retomarla despues la dejaria activa sin motivo
+    for cot in (suelta, rechazada):
+        for destino in destinos:
+            resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}",
+                                    json={"sc_id": destino.id, "updated_by": "t"}, headers=auth(admin_token))
+            assert resp.status_code == 409, (cot.numero, destino.numero, resp.text)
+            assert resp.json()["detail"] == (f"La solicitud {destino.numero} no ha sido confirmada por el cliente: usa "
+                                             f"«Cotizar» en la solicitud para crear la cotización con el motivo.")
+    db.expire_all()
+    assert db.get(SalesQuotation, suelta.id).sc_id is None and db.get(SalesQuotation, rechazada.id).sc_id is None
+    for destino in destinos:
+        db.refresh(destino)
+        assert _logs(db, "SC", destino.id) == []
+    # Hacia una SC con la confirmacion vigente del cliente si se puede.
+    confirmada = _sc(db, "SC-CSC026", user_admin, estado="CONFIRMADA", gate1_confirmed_at=datetime.datetime.utcnow())
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{suelta.id}", json={"sc_id": confirmada.id, "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["sc_id"] == confirmada.id
 
 
 # --- R21: rechazar la cotizacion temprana no cambia la solicitud -------------------------------------------------------
@@ -378,6 +468,43 @@ def test_rechazar_la_cotizacion_temprana_no_cambia_la_solicitud(app_client, db, 
     # Sin documentos activos se puede volver a cotizar.
     resp = _cotizar(app_client, admin_token, sc.id, motivo="Segundo intento con otro precio")
     assert resp.status_code == 200, resp.text
+
+
+# --- R20: la alerta la lleva la cotizacion, no la solicitud ------------------------------------------------------------
+
+def test_sc_con_cotizacion_temprana_no_cuenta_como_atrasada(app_client, db, admin_token, user_admin):
+    viejo = datetime.datetime.utcnow() - datetime.timedelta(days=10)
+
+    def _resumen():
+        resp = app_client.get("/api/v1/ventas/alertas/resumen", headers=auth(admin_token))
+        assert resp.status_code == 200, resp.text
+        return resp.json()["data"]["atrasados"]
+
+    def _sin_atender():
+        resp = app_client.get("/api/v1/ventas/alertas", headers=auth(admin_token))
+        assert resp.status_code == 200, resp.text
+        return {s["id"] for s in resp.json()["data"]["sc_sin_atender"]}
+
+    sc = _sc(db, "SC-CSC028", user_admin)
+    control = _sc(db, "SC-CSC029", user_admin)  # control negativo: solo tiene una COT rechazada
+    _cot(db, "COT-CSC029", control, estado="RECHAZADA", updated_at=datetime.datetime.utcnow())
+    for s in (sc, control):
+        s.updated_at = viejo
+    db.commit()
+    antes = _resumen()
+    ids = _sin_atender()
+    assert sc.id in ids and control.id in ids
+
+    resp = _cotizar(app_client, admin_token, sc.id, motivo=MOTIVO)
+    assert resp.status_code == 200, resp.text
+    # Se vuelve a envejecer: sin esto la SC saldria de la cuenta solo por su updated_at nuevo, no por la regla.
+    db.expire_all()
+    sc = db.get(type(sc), sc.id)
+    sc.updated_at = viejo
+    db.commit()
+    assert antes - _resumen() == 1  # la COT nueva es de hoy: no suma
+    ids = _sin_atender()
+    assert sc.id not in ids and control.id in ids
 
 
 # --- get_cotizacion: estado de la SC con la misma lectura -------------------------------------------------------------
