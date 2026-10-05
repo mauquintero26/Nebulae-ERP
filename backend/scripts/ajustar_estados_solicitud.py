@@ -32,12 +32,15 @@ Reglas de ajustar (estados de la SC), las mismas de la sincronizacion de U15 (R2
   script: los decide documento por documento el paso n5 de correcciones_bloque1.py.
 
 Reglas de ajustar_leads (R26, ruling T2A-4): leads (tabla sales_orders) con status 'CANCELLED' cuya solicitud
-(canonical_customer_request_id) no esta CANCELADA hoy PERO lo estuvo alguna vez (un renglon de su Actividad con
-new_estado 'CANCELADA'; un lead que alguien paso a 'Perdido' a mano en el CRM, sin cancelar la SC, no se revive)
+(canonical_customer_request_id) no esta CANCELADA hoy PERO lo estuvo alguna vez (un renglon de su Actividad CANCELLED
+o con new_estado 'CANCELADA'; un lead que alguien paso a 'Perdido' a mano en el CRM, sin cancelar la SC, no se revive)
 -> QUOTATION si la SC tiene una COT activa, DRAFT si no; la etapa del tablero es la de ese maps_to_status (la de menor
 posicion; NULL si el tablero no la tiene). Se elige cada lead por su id (no 'el primer lead de la SC') y nunca se crean
-etapas. No usa mover_lead_de_solicitud (hace commits propios). El reporte muestra, por candidato, la fecha de la
-ultima cancelacion y de la ultima restauracion de la SC.
+etapas. No usa mover_lead_de_solicitud (hace commits propios). Para que el OK del usuario sea informado, el reporte
+muestra por candidato la ultima cancelacion de la SC (mismo filtro que la seleccion), su ultima salida de CANCELADA
+(RESTORED, o un renglon viejo con old_estado 'CANCELADA': el PATCH o el Hub de antes) y el updated_at del lead; si el
+lead cambio despues de esa salida lo marca «posible pérdida manual después de restaurar: revisar» (restaurar ya reabre
+el lead, asi que un lead perdido despues casi seguro se perdio a mano). La marca solo informa: no cambia la seleccion.
 
 Las dos partes:
   - excluyen SIEMPRE los documentos reales (DOCUMENTOS_REALES) y todo lo vinculado a ellos (calcular_excluidos de
@@ -92,6 +95,15 @@ SOPORTE_TECNICO = "Soporte Tecnico"  # asi esta guardado (sin tilde)
 # Se valida con fullmatch y sin '$': '$' tambien acepta un salto de linea al final (un nombre como 'abc' + LF).
 _NOMBRE_DE_TABLA = re.compile(r"[a-z_][a-z0-9_]*")
 MAX_EJEMPLOS = 50
+
+# Renglones de la Actividad de la SC (alias 'a', SC 'cr') que usa ajustar_leads. Una cancelacion es el renglon CANCELLED
+# de cancelar_solicitud o cualquiera que la dejo en CANCELADA (la pastilla vieja); una salida de CANCELADA es RESTORED o
+# cualquiera que la saco de ahi (el PATCH o el Hub de antes); no cuenta un renglon CANCELADA -> CANCELADA (el CANCELLED
+# de 'enviar a la papelera' una SC que ya estaba cancelada). Texto fijo: no lleva datos del usuario.
+_LOG_DE_LA_SC = "a.entity_type = 'SC' AND a.entity_id = cr.id"
+_ES_CANCELACION = "(a.action = 'CANCELLED' OR a.new_estado = 'CANCELADA')"
+_ES_SALIDA_DE_CANCELADA = ("(a.action = 'RESTORED' OR "
+                           "(a.old_estado = 'CANCELADA' AND a.new_estado IS DISTINCT FROM 'CANCELADA'))")
 
 # Reglas de ajustar (clave del conteo por regla -> como se lee en el reporte)
 REGLAS = {
@@ -234,27 +246,28 @@ def _etapa_de(db, status):
 def ajustar_leads(db, aplicar=False, ids=None, tabla_respaldo=TABLA_RESPALDO_LEADS) -> dict:
     """Calcula (y con aplicar=True escribe) el ajuste de los leads 'Perdido' de solicitudes que ya no estan canceladas.
 
-    Solo leads de una SC que estuvo cancelada alguna vez (renglon de su Actividad con new_estado 'CANCELADA'): un lead
-    que alguien paso a 'Perdido' a mano en el CRM, sin cancelar la SC, no se revive.
+    Solo leads de una SC que estuvo cancelada alguna vez (renglon de su Actividad CANCELLED o con new_estado
+    'CANCELADA'): un lead que alguien paso a 'Perdido' a mano en el CRM, sin cancelar la SC, no se revive.
     ids: ids de SOLICITUD (customer_requests), no de lead. Devuelve {'candidatos', 'movidos', 'excluidos',
     'ejemplos': [{lead_id, sc_id, sc_numero, sc_estado, status, nuevo, etapa_id, etapa, ultima_cancelacion,
-    ultima_restauracion}]}. Sin aplicar no escribe nada (ni crea la tabla de respaldo ni etapas). Con aplicar es UNA
-    transaccion: commit al final y rollback ante cualquier error.
+    ultima_restauracion, lead_updated_at, revisar}]}. revisar=True si el lead cambio despues de la ultima salida de
+    CANCELADA de la SC (posible perdida manual): solo informa, no cambia la seleccion. Sin aplicar no escribe nada (ni
+    crea la tabla de respaldo ni etapas). Con aplicar es UNA transaccion: commit al final y rollback ante cualquier
+    error.
     """
     _validar_tabla(tabla_respaldo)
-    consulta = ("SELECT so.id AS lead_id, so.status, so.pipeline_stage_id, cr.id AS sc_id, cr.numero AS sc_numero, "
-                "cr.estado AS sc_estado, "
+    consulta = ("SELECT so.id AS lead_id, so.status, so.pipeline_stage_id, so.updated_at AS lead_updated_at, "
+                "cr.id AS sc_id, cr.numero AS sc_numero, cr.estado AS sc_estado, "
                 "EXISTS (SELECT 1 FROM sales_quotations q WHERE q.sc_id = cr.id AND q.estado <> 'RECHAZADA') "
                 "AS cot_activa, "
-                "(SELECT max(a.created_at) FROM activity_logs a WHERE a.entity_type = 'SC' AND a.entity_id = cr.id "
-                " AND (a.action = 'CANCELLED' OR a.new_estado = 'CANCELADA')) AS ultima_cancelacion, "
-                "(SELECT max(a.created_at) FROM activity_logs a WHERE a.entity_type = 'SC' AND a.entity_id = cr.id "
-                " AND a.action = 'RESTORED') AS ultima_restauracion "
+                f"(SELECT max(a.created_at) FROM activity_logs a WHERE {_LOG_DE_LA_SC} AND {_ES_CANCELACION}) "
+                "AS ultima_cancelacion, "
+                f"(SELECT max(a.created_at) FROM activity_logs a WHERE {_LOG_DE_LA_SC} AND {_ES_SALIDA_DE_CANCELADA}) "
+                "AS ultima_restauracion "
                 "FROM sales_orders so JOIN customer_requests cr ON cr.id = so.canonical_customer_request_id "
                 "WHERE so.status = 'CANCELLED' AND cr.estado <> 'CANCELADA' "
                 "AND cr.tipo_solicitud IS DISTINCT FROM :soporte "
-                "AND EXISTS (SELECT 1 FROM activity_logs a WHERE a.entity_type = 'SC' AND a.entity_id = cr.id "
-                "            AND a.new_estado = 'CANCELADA')")
+                f"AND EXISTS (SELECT 1 FROM activity_logs a WHERE {_LOG_DE_LA_SC} AND {_ES_CANCELACION})")
     parametros = {"soporte": SOPORTE_TECNICO}
     if ids is not None:
         consulta += " AND cr.id = ANY(:ids)"
@@ -270,17 +283,23 @@ def ajustar_leads(db, aplicar=False, ids=None, tabla_respaldo=TABLA_RESPALDO_LEA
                 continue
             nuevo = "QUOTATION" if fila["cot_activa"] else "DRAFT"
             etapa_id, etapa = etapas[nuevo]
+            # restaurar_solicitud ya reabre el lead: si el lead cambio despues de la ultima salida de CANCELADA, lo mas
+            # probable es que alguien lo perdio a mano. Solo se informa (la seleccion no cambia).
+            revisar = (fila["lead_updated_at"] is not None and fila["ultima_restauracion"] is not None
+                       and fila["lead_updated_at"] > fila["ultima_restauracion"])
             candidatos.append({"lead_id": fila["lead_id"], "sc_id": fila["sc_id"], "sc_numero": fila["sc_numero"],
                                "sc_estado": fila["sc_estado"], "status": fila["status"],
                                "pipeline_stage_id": fila["pipeline_stage_id"], "nuevo": nuevo, "etapa_id": etapa_id,
                                "etapa": etapa, "ultima_cancelacion": fila["ultima_cancelacion"],
-                               "ultima_restauracion": fila["ultima_restauracion"]})
+                               "ultima_restauracion": fila["ultima_restauracion"],
+                               "lead_updated_at": fila["lead_updated_at"], "revisar": revisar})
         resultado = {
             "candidatos": len(candidatos),
             "movidos": 0,
             "excluidos": excluidos,
             "ejemplos": [{k: c[k] for k in ("lead_id", "sc_id", "sc_numero", "sc_estado", "status", "nuevo",
-                                            "etapa_id", "etapa", "ultima_cancelacion", "ultima_restauracion")}
+                                            "etapa_id", "etapa", "ultima_cancelacion", "ultima_restauracion",
+                                            "lead_updated_at", "revisar")}
                          for c in candidatos[:MAX_EJEMPLOS]],
         }
         if not aplicar:
@@ -394,7 +413,8 @@ def main(argv=None) -> int:
             print(f"  lead #{e['lead_id']} de {e['sc_numero']} ({etiqueta_estado('SC', e['sc_estado'])}): "
                   f"{e['status']} -> {e['nuevo']}, {etapa}. SC cancelada por última vez: "
                   f"{_fecha_utc(e['ultima_cancelacion'])}; restaurada por última vez: "
-                  f"{_fecha_utc(e['ultima_restauracion'])}")
+                  f"{_fecha_utc(e['ultima_restauracion'])}; lead actualizado: {_fecha_utc(e['lead_updated_at'])}"
+                  + (". ATENCIÓN: posible pérdida manual después de restaurar: revisar" if e["revisar"] else ""))
         if args.aplicar_leads:
             print(f"Movidos: {res_leads['movidos']} (respaldo en {TABLA_RESPALDO_LEADS})")
     if not escribe:

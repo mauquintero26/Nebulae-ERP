@@ -55,13 +55,13 @@ def _cot(db, numero, sc, **campos):
     return cot
 
 
-def _lead(db, sc, status="CANCELLED", pipeline_stage_id=None):
+def _lead(db, sc, status="CANCELLED", pipeline_stage_id=None, **campos):
     from app.models.customers import Customer
     from app.models.sales import SalesOrder
     cliente = Customer(first_name="Cliente", last_name="U15", email=f"u15-{uuid.uuid4().hex[:8]}@test.nebulae")
     db.add(cliente); db.commit()
     lead = SalesOrder(customer_id=cliente.id, status=status, canonical_customer_request_id=sc.id, lead_source="SC",
-                      lead_description=f"SC creada: {sc.numero}", pipeline_stage_id=pipeline_stage_id)
+                      lead_description=f"SC creada: {sc.numero}", pipeline_stage_id=pipeline_stage_id, **campos)
     db.add(lead); db.commit(); db.refresh(lead)
     return lead
 
@@ -579,6 +579,64 @@ def test_ajustar_leads_reporta_y_aplica(db, user_admin):
         assert res2["candidatos"] == 0 and res2["movidos"] == 0
     finally:
         _borrar_tabla(db, TABLA_LEADS_TEST)
+
+
+def test_ajustar_leads_informa_salidas_viejas_de_cancelada_y_perdidas_manuales(db, user_admin, monkeypatch):
+    """Ronda 2: el reporte de ajustar_leads informa al usuario (la seleccion no cambia por esto).
+    - Una SC cuya unica evidencia de cancelacion es un ESTADO_CHANGED viejo -> CANCELADA (pastilla vieja) es candidata,
+      y su salida por el PATCH viejo (old_estado CANCELADA) cuenta como ultima restauracion.
+    - Una SC con solo el renglon CANCELLED (sin new_estado) tambien es candidata (mismo filtro en la seleccion y en la
+      fecha de la ultima cancelacion).
+    - Si el lead cambio despues de la ultima restauracion se marca 'revisar' (restaurar ya reabre el lead).
+    - Un CANCELLED CANCELADA -> CANCELADA ('enviar a la papelera' otra vez) no es una salida de CANCELADA."""
+    from app.models.erp_documents import ActivityLog
+    from scripts import ajustar_estados_solicitud as modulo
+    t0 = (datetime.datetime.utcnow() - datetime.timedelta(days=10)).replace(microsecond=0)
+    dia = datetime.timedelta(days=1)
+
+    def _renglon(sc, accion, viejo, nuevo, cuando):
+        db.add(ActivityLog(entity_type="SC", entity_id=sc.id, entity_numero=sc.numero, action=accion,
+                           description="renglon de prueba", old_estado=viejo, new_estado=nuevo, user_name="t",
+                           created_at=cuando))
+        db.commit()
+
+    vieja = _sc(db, "SC-U15V01", user_admin, estado="ASIGNADA", gate1_confirmed_at=None)
+    _renglon(vieja, "ESTADO_CHANGED", "ASIGNADA", "CANCELADA", t0)            # pastilla vieja
+    _renglon(vieja, "ESTADO_CHANGED", "CANCELADA", "BORRADOR", t0 + dia)      # salida por el PATCH viejo
+    lead_vieja = _lead(db, vieja, updated_at=t0 + dia / 2)                    # perdido antes de salir: sin marca
+    manual = _sc(db, "SC-U15V02", user_admin, estado="ASIGNADA", gate1_confirmed_at=None)
+    _renglon(manual, "CANCELLED", "ASIGNADA", None, t0)                       # CANCELLED sin new_estado
+    _renglon(manual, "RESTORED", "CANCELADA", "ASIGNADA", t0 + dia)
+    lead_manual = _lead(db, manual, updated_at=t0 + 2 * dia)                  # cambio despues de restaurar: revisar
+    revivida = _sc(db, "SC-U15V03", user_admin, estado="COTIZADA", gate1_confirmed_at=None)
+    _renglon(revivida, "CANCELLED", "ASIGNADA", "CANCELADA", t0)
+    _renglon(revivida, "CANCELLED", "CANCELADA", "CANCELADA", t0 + dia)       # papelera otra vez: no es salida
+    lead_revivida = _lead(db, revivida, updated_at=t0 + 2 * dia)             # la sincronizacion vieja la revivio
+    ids = [vieja.id, manual.id, revivida.id]
+
+    res = modulo.ajustar_leads(db, aplicar=False, ids=ids)
+    por_lead = {e["lead_id"]: e for e in res["ejemplos"]}
+    assert set(por_lead) == {lead_vieja.id, lead_manual.id, lead_revivida.id}
+    resumen = {lead: (e["ultima_cancelacion"], e["ultima_restauracion"], e["lead_updated_at"], e["revisar"])
+               for lead, e in por_lead.items()}
+    assert resumen[lead_vieja.id] == (t0, t0 + dia, t0 + dia / 2, False)
+    assert resumen[lead_manual.id] == (t0, t0 + dia, t0 + 2 * dia, True)
+    assert resumen[lead_revivida.id] == (t0 + dia, None, t0 + 2 * dia, False)
+
+    # El reporte imprime la fecha del lead y la marca, solo en el candidato que la lleva.
+    monkeypatch.setattr(modulo, "ajustar", lambda db, aplicar=False, **kw: {
+        "candidatas": 0, "ajustadas": 0, "excluidas": 0, "ejemplos": [], "por_regla": {}})
+    monkeypatch.setattr(modulo, "ajustar_leads", lambda db, aplicar=False, **kw: res)
+    salida = io.StringIO()
+    with contextlib.redirect_stdout(salida):
+        assert modulo.main([]) == 0
+    lineas = {linea.split(" de ")[0].strip(): linea for linea in salida.getvalue().splitlines()
+              if linea.strip().startswith("lead #")}
+    marca = "posible pérdida manual después de restaurar: revisar"
+    assert marca in lineas[f"lead #{lead_manual.id}"]
+    assert marca not in lineas[f"lead #{lead_vieja.id}"] and marca not in lineas[f"lead #{lead_revivida.id}"]
+    assert "lead actualizado: " in lineas[f"lead #{lead_vieja.id}"]
+    assert "restaurada por última vez: nunca" in lineas[f"lead #{lead_revivida.id}"]
 
 
 def test_scripts_excluyen_documentos_reales(db, user_admin, monkeypatch):
