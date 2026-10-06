@@ -11,6 +11,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   ordenParaCancelar, motivoNoCancelable, resumenLote,
   ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN, repartirCambioEstadoPVEN,
@@ -209,17 +210,18 @@ console.log('--- H3 TEST 11: accionSiguienteSC ---');
   // R19 (T9B): se cotiza solo con la confirmación del cliente vigente (confirmacion_vigente de _sc_dict, T2A)
   assert.equal(accionSiguienteSC(sc('CONFIRMADA', { confirmacion_vigente: true }), vacio).label, 'Cotizar →');
   assert.equal(accionSiguienteSC(sc('CONFIRMADA', { confirmacion_vigente: true }), vacio).href, '/dashboard/ventas/solicitud/5');
-  // R19: sin la confirmación vigente (false, sin la llave o cualquier otro valor) es la acción de una Asignada, que abre
-  // la solicitud
+  // R19 (enmienda del controlador, T9B r1): sin la confirmación vigente (false, sin la llave o cualquier otro valor) no
+  // se cotiza ni se envía (el servidor solo envía una Asignada): el detalle ofrece «Reiniciar solicitud» o «Cotizar sin
+  // esperar confirmación», y el Hub abre la solicitud con 'Reiniciar o cotizar'
+  const retomar = { label: 'Reiniciar o cotizar', href: '/dashboard/ventas/solicitud/5', tono: 'slate' };
   for (const extra of [{ confirmacion_vigente: false }, {}, { confirmacion_vigente: null }, { confirmacion_vigente: 'true' }, { confirmacion_vigente: 1 }]) {
-    assert.deepEqual(accionSiguienteSC(sc('CONFIRMADA', extra), vacio), accionSiguienteSC(sc('ASIGNADA'), vacio), JSON.stringify(extra));
+    assert.deepEqual(accionSiguienteSC(sc('CONFIRMADA', extra), vacio), retomar, JSON.stringify(extra));
   }
-  assert.equal(accionSiguienteSC(sc('CONFIRMADA', { confirmacion_vigente: false }), vacio).label, 'Enviar para confirmación');
-  assert.equal(accionSiguienteSC(sc('CONFIRMADA'), vacio).label, 'Enviar para confirmación');
-  assert.equal(accionSiguienteSC(sc('CONFIRMADA'), vacio).href, '/dashboard/ventas/solicitud/5');
-  assert.equal(accionSiguienteSC(sc('CONFIRMADA', { confirmacion_vigente: false }), {
+  assert.deepEqual(accionSiguienteSC(sc('CONFIRMADA', { confirmacion_vigente: false }), {
     cotizaciones: [{ id: 4, estado: 'RECHAZADA' }], pedidos: [],
-  }).label, 'Enviar para confirmación');
+  }), retomar);
+  // 'Enviar para confirmación' queda solo para la Asignada
+  assert.notEqual(accionSiguienteSC(sc('CONFIRMADA'), vacio).label, 'Enviar para confirmación');
   // lo que va antes no cambia: el documento activo y 'Agregar productos'
   assert.equal(accionSiguienteSC(sc('CONFIRMADA', { confirmacion_vigente: false }), {
     cotizaciones: [{ id: 9, estado: 'BORRADOR' }], pedidos: [],
@@ -502,6 +504,16 @@ console.log('--- T9B TEST 20: notaReiniciaAtraso (R1: un contacto con el cliente
   assert.equal(notaReiniciaAtraso({ action: 'NOTE_ADDED', extra_data: { tipo: 'NOTA' } }), false); // 'Motivo del rechazo (Hub)'
   // sin renglón no rompe
   for (const v of [null, undefined, 'CHATTER', 5]) assert.equal(notaReiniciaAtraso(v), false, String(v));
+}
+
+console.log('--- T9B r1 TEST 21: TIPOS_NOTA_REINICIAN_ATRASO es el _REINICIAN_ATRASO del backend (core/chatter.py) ---');
+{
+  const py = readFileSync(new URL('../../backend/app/core/chatter.py', import.meta.url), 'utf8');
+  const conjunto = py.match(/^_REINICIAN_ATRASO\s*=\s*\{([^}]*)\}/m);
+  assert.ok(conjunto, 'core/chatter.py define _REINICIAN_ATRASO = {...}');
+  const delServidor = [...conjunto[1].matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
+  assert.equal(delServidor.length, 4, 'se leyeron los 4 tipos del conjunto');
+  assert.deepEqual([...TIPOS_NOTA_REINICIAN_ATRASO].sort(), [...delServidor].sort());
 }
 
 console.log('OK test_hub_ventas.mjs');

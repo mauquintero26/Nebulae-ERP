@@ -348,6 +348,9 @@ const masReciente = (lista) => [...lista].sort((a, b) => Number(b?.id || 0) - Nu
  * Proxima accion de una solicitud en el Hub: {label, href, tono} o null (cancelada). Replica renderSiguientePaso de
  * solicitud/[id]/page.tsx en el mismo orden; el primer caso que aplica gana. El Hub no envia nada por su cuenta: el
  * envio (canal y correo de respaldo) vive en el detalle de la SC, asi que casi todo lleva a la solicitud.
+ * R19: una Confirmada solo se cotiza con la confirmacion del cliente vigente (confirmacion_vigente de _sc_dict); sin
+ * ella, 'Reiniciar o cotizar' (el servidor solo envia una Asignada; el detalle ofrece 'Reiniciar solicitud' o 'Cotizar
+ * sin esperar confirmacion'), y 'Enviar para confirmacion' queda para la Asignada.
  * `tono` es uno de los de NextStepCard (flujo.tsx): slate, emerald, indigo, amber o blue.
  * @param {{cotizaciones?: any[], pedidos?: any[]}} [ctx] cotizaciones y pedidos de esa solicitud
  * @returns {{label: string, href: string, tono: string} | null}
@@ -369,9 +372,11 @@ export function accionSiguienteSC(row, ctx = {}) {
   }
   // R19 (U15): solo se cotiza con la confirmación del cliente vigente (confirmacion_vigente de _sc_dict: gate1 de la SC).
   if (estado === 'CONFIRMADA' && row?.confirmacion_vigente === true) return { label: 'Cotizar →', href: enSolicitud, tono: 'emerald' };
+  // R19 (enmienda T9B r1): una Confirmada cuya confirmación ya no vale no se envía (el servidor solo envía una Asignada):
+  // en el detalle se reinicia o se cotiza sin esperar confirmación.
+  if (estado === 'CONFIRMADA') return { label: 'Reiniciar o cotizar', href: enSolicitud, tono: 'slate' };
   if (estado === 'PENDIENTE_CONFIRMACION') return { label: 'Esperando cliente', href: enSolicitud, tono: 'blue' };
-  // Una Confirmada cuya confirmación ya no vale lleva la acción de una Asignada (R19).
-  if (estado === 'ASIGNADA' || estado === 'CONFIRMADA') return { label: 'Enviar para confirmación', href: enSolicitud, tono: 'indigo' };
+  if (estado === 'ASIGNADA') return { label: 'Enviar para confirmación', href: enSolicitud, tono: 'indigo' };
   if (estado === 'BORRADOR') return { label: 'Asignar asesor', href: enSolicitud, tono: 'amber' };
   return { label: 'Ver solicitud', href: enSolicitud, tono: 'slate' };
 }

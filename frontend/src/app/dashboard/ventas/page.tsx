@@ -104,8 +104,8 @@ const getTipoLabel = (t: string) => ({
 /* ── Activities floating panel ── */
 // U6+H22 (T9B): notas rápidas con el mismo Chatter de la SC, la COT y el PVEN (ComposerChatter compacto, con la Nota
 // externa, R1) arriba del historial completo, donde cada nota lleva su etiqueta. Si el GET falla, se dice y se reintenta.
-// onNotaGuardada: una nota que reinicia el atraso del documento (un contacto con el cliente) recarga el Hub para que su
-// alerta roja desaparezca; el panel sigue abierto con su borrador (se dibuja fuera del bloque que muestra «Cargando»).
+// onNotaGuardada: una nota que reinicia el atraso del documento (un contacto con el cliente) recarga el Hub en silencio
+// (sin el spinner de página) para que su alerta roja desaparezca; el panel sigue abierto con su borrador.
 function ActivitiesPanel({row,onClose,onNotaGuardada}:{row:any,onClose:()=>void,onNotaGuardada:()=>void}) {
   const [detail, setDetail] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -136,8 +136,9 @@ function ActivitiesPanel({row,onClose,onNotaGuardada}:{row:any,onClose:()=>void,
   },[row.id,row.tipo,intento]);
   function reintentar(){ setLoading(true); setErrorCarga(null); setIntento(i=>({n: i.n+1, silencioso: false})); }
   function notaRegistrada(log:any){
-    // Sin el renglón en la respuesta: se relee el documento y, como no se sabe si la nota reinició el atraso, el Hub.
-    if(!log){ setIntento(i=>({n: i.n+1, silencioso: true})); onNotaGuardada(); return; }
+    // Sin el renglón en la respuesta: solo se relee el documento del panel (el Hub se recarga solo con una nota que
+    // reinicia el atraso, ruling 3).
+    if(!log){ setIntento(i=>({n: i.n+1, silencioso: true})); return; }
     setDetail((p:any)=>agregarActividad(p, log, row.tipo));
     if(notaReiniciaAtraso(log)) onNotaGuardada();
   }
@@ -325,8 +326,11 @@ export default function VentasHub() {
   const [enviandoHub, setEnviandoHub] = useState(false);
   const [hubEnlace, setHubEnlace]     = useState<{documento:string, link:string, correo:any, canal:string|null, color:'blue'|'indigo', whatsapp?:string|null}|null>(null);
 
-  const loadData = useCallback(async()=>{
-    setLoading(true);
+  // T9B r1: silencioso (tras una nota del panel de actividad) recarga sin el spinner de página: la tabla o el Kanban no
+  // se reemplazan detrás del panel y no se pierde el scroll. «Actualizar» la llama con su evento de clic: con spinner.
+  const loadData = useCallback(async(opciones?: {silencioso?: boolean} | React.MouseEvent)=>{
+    const silencioso = !!opciones && 'silencioso' in opciones && opciones.silencioso === true;
+    if(!silencioso) setLoading(true);
     try {
       const [sc,cot,ven,cfg] = await Promise.all([
         apiFetch('/ventas/solicitudes?limit=200').catch(()=>[]),
@@ -735,7 +739,7 @@ export default function VentasHub() {
   /* ════════════════ RENDER ════════════════ */
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
-      {actRow && <ActivitiesPanel key={`${actRow.tipo}|${actRow.id}`} row={actRow} onClose={()=>setActRow(null)} onNotaGuardada={loadData}/>}
+      {actRow && <ActivitiesPanel key={`${actRow.tipo}|${actRow.id}`} row={actRow} onClose={()=>setActRow(null)} onNotaGuardada={()=>loadData({silencioso: true})}/>}
       {showConfig && <ConfigPanel alertDias={alertDias} onSave={cfg=>{setAlertDias(cfg);setShowConfig(false);loadData();}} onClose={()=>setShowConfig(false)}/>}
 
       <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas" color="indigo" />
@@ -1531,8 +1535,9 @@ export default function VentasHub() {
                 <div className="pt-2">
                   <button onClick={()=>{
                     const q = quickDetailDoc;
-                    if(q.tipo==='SC')  router.push(`/dashboard/ventas/solicitud?id=${q.id}`);
-                    // H37: con return_to del Hub, el único botón de volver del detalle dice «Volver al Hub de Ventas».
+                    // H37: con return_to del Hub, el único botón de volver del detalle dice «Volver al Hub de Ventas». La SC
+                    // va directo a su detalle (/solicitud?id= montaba la lista entera solo para redirigir).
+                    if(q.tipo==='SC')  router.push(`/dashboard/ventas/solicitud/${q.id}?return_to=%2Fdashboard%2Fventas`);
                     if(q.tipo==='COT') router.push(`/dashboard/ventas/cotizacion/${q.id}?return_to=%2Fdashboard%2Fventas`);
                     if(q.tipo==='VEN') router.push(`/dashboard/ventas/venta/${q.id}?return_to=%2Fdashboard%2Fventas`);
                   }}
