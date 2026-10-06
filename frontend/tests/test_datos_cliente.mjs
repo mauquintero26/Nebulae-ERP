@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import {
   CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto, formularioDeEdicion, camposEditadosDeSolicitud,
-  itemDeTimelineCliente,
+  itemDeTimelineCliente, TITULOS_DE_RESPALDO,
 } from '../src/lib/datos-cliente.js';
 
 console.log('--- TEST 1: CAMPOS_CONTACTO (orden del formulario, límites del backend) ---');
@@ -228,7 +228,7 @@ console.log('--- TEST 10 (T10, H21 punto 7): itemDeTimelineCliente — el Timeli
   const SOLICITUD = {
     type: 'customer_request', id: 12, numero: 'SC-20260800', status: 'CONFIRMADA', status_label: 'Solicitud SC-20260800',
     estado_label: 'CONFIRMADA', color: 'indigo', created_at: '2026-10-04T14:03:11.123456',
-    description: 'Solicitud de cliente SC-20260800 (CONFIRMADA)',
+    description: 'Solicitud de cliente SC-20260800 (Confirmada)',
   };
   const CORRECCION = {
     type: 'customer_update', id: 41, status: 'UPDATED', status_label: 'Datos del cliente actualizados', color: 'purple',
@@ -241,7 +241,7 @@ console.log('--- TEST 10 (T10, H21 punto 7): itemDeTimelineCliente — el Timeli
     ],
   };
   const CREADO = {
-    type: 'created', id: 3, status: 'CREATED', status_label: 'Cliente Creado', color: 'purple', created_at: null,
+    type: 'created', id: 3, status: 'CREATED', status_label: 'Cliente creado', color: 'purple', created_at: null,
     total: 0, lines_count: 0, description: 'Ficha del cliente registrada en el sistema.',
   };
 
@@ -272,9 +272,9 @@ console.log('--- TEST 10 (T10, H21 punto 7): itemDeTimelineCliente — el Timeli
     assert.deepEqual(itemDeTimelineCliente({ ...CORRECCION, cambios: raro }).cambios, []);
   }
 
-  // H14: «Cliente Creado» no tiene fecha; no se inventa una (antes salía «Hoy»).
+  // H14: «Cliente creado» no tiene fecha; no se inventa una (antes salía «Hoy»).
   const creado = itemDeTimelineCliente(CREADO);
-  assert.equal(creado.titulo, 'Cliente Creado');
+  assert.equal(creado.titulo, 'Cliente creado');
   assert.equal(creado.fecha, null);
   for (const vacio of ['', '   ', undefined]) {
     assert.equal(itemDeTimelineCliente({ ...CREADO, created_at: vacio }).fecha, null);
@@ -290,17 +290,33 @@ console.log('--- TEST 10 (T10, H21 punto 7): itemDeTimelineCliente — el Timeli
   assert.deepEqual([viejo.tipo, viejo.titulo, viejo.fecha], ['calendar_event', 'Reunión de seguimiento', '2026-10-03T09:30:00Z']);
   // …pero los del backend ganan cuando vienen los dos.
   const ambos = itemDeTimelineCliente({
-    type: 'payment', event_type: 'otro', status_label: 'Pago ANTICIPO', title: 'viejo',
+    type: 'payment', event_type: 'otro', status_label: 'Anticipo', title: 'viejo',
     created_at: '2026-10-04T10:00:00', date: '2026-01-01T00:00:00',
   });
-  assert.deepEqual([ambos.tipo, ambos.titulo, ambos.fecha], ['payment', 'Pago ANTICIPO', '2026-10-04T10:00:00Z']);
+  assert.deepEqual([ambos.tipo, ambos.titulo, ambos.fecha], ['payment', 'Anticipo', '2026-10-04T10:00:00Z']);
   // Un texto vacío o solo espacios cuenta como ausente: pasa al siguiente nombre.
   assert.equal(itemDeTimelineCliente({ type: 'quotation', status_label: '  ', title: 'Cotización COT-1' }).titulo, 'Cotización COT-1');
   assert.equal(itemDeTimelineCliente({ type: 'quotation', status_label: 'Cotización COT-2', user_name: '   ' }).autor, null);
 
-  // Sin título de ningún tipo: el tipo humanizado (nunca el código crudo ni un título vacío); sin tipo, «Evento».
-  assert.equal(itemDeTimelineCliente({ type: 'calendar_event', status_label: null }).titulo, 'Calendar event');
-  assert.equal(itemDeTimelineCliente({ type: 'delivery' }).titulo, 'Delivery');
+  // Sin título de ningún tipo: el título de respaldo en español de cada uno de los 11 tipos que arma el 360 (nunca el
+  // código crudo ni un título vacío)…
+  const RESPALDO = {
+    customer_request: 'Solicitud', quotation: 'Cotización', sale_order: 'Pedido', sale_order_legacy: 'Pedido anterior',
+    payment: 'Pago', delivery: 'Entrega', return: 'Devolución', agenda_activity: 'Actividad de agenda',
+    calendar_event: 'Evento de calendario', customer_update: 'Datos del cliente actualizados', created: 'Cliente creado',
+  };
+  assert.deepEqual(TITULOS_DE_RESPALDO, RESPALDO);
+  assert.ok(Object.isFrozen(TITULOS_DE_RESPALDO), 'el mapa es inmutable');
+  for (const [tipo, titulo] of Object.entries(RESPALDO)) {
+    assert.equal(itemDeTimelineCliente({ type: tipo }).titulo, titulo);
+    assert.equal(itemDeTimelineCliente({ type: tipo, status_label: null, title: '  ' }).titulo, titulo);
+    assert.equal(itemDeTimelineCliente({ event_type: tipo }).titulo, titulo, 'también con el nombre viejo del tipo');
+    assert.equal(itemDeTimelineCliente({ type: tipo, status_label: 'Del servidor' }).titulo, 'Del servidor',
+      'el título del servidor gana sobre el de respaldo');
+  }
+  // …y solo un tipo desconocido se humaniza; sin tipo, «Evento». Una clave del prototipo no es un tipo conocido.
+  assert.equal(itemDeTimelineCliente({ type: 'tipo_nuevo' }).titulo, 'Tipo nuevo');
+  assert.equal(itemDeTimelineCliente({ type: 'constructor' }).titulo, 'Constructor');
   assert.equal(itemDeTimelineCliente({ description: 'algo' }).titulo, 'Evento');
   assert.equal(itemDeTimelineCliente({}).titulo, 'Evento');
   // Una entrada que no es un objeto no rompe la pantalla.

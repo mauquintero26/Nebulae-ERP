@@ -213,15 +213,37 @@ function primerTexto(...valores) {
 }
 
 /**
+ * T10 ronda 1: el título de respaldo, en español, de cada tipo de renglón que arma el perfil 360 (el campo `type` de
+ * crm.get_customer_360_profile), para cuando el servidor no manda título. Un tipo que no está aquí se humaniza
+ * (humanizarCodigo). Inmutable. backend/tests/test_solicitud_corregir_datos_cliente.py compara estas claves con los tipos
+ * que el 360 arma de verdad.
+ * @type {Readonly<Record<string, string>>}
+ */
+export const TITULOS_DE_RESPALDO = Object.freeze({
+  customer_request: 'Solicitud',
+  quotation: 'Cotización',
+  sale_order: 'Pedido',
+  sale_order_legacy: 'Pedido anterior',
+  payment: 'Pago',
+  delivery: 'Entrega',
+  return: 'Devolución',
+  agenda_activity: 'Actividad de agenda',
+  calendar_event: 'Evento de calendario',
+  customer_update: 'Datos del cliente actualizados',
+  created: 'Cliente creado',
+});
+
+/**
  * T10 (H21, punto 7): lo que pinta la pestaña «Timeline Unificado» de la Agenda por cada renglón de `timeline` del perfil
  * 360 (GET /crm/customers/{id}/profile-360, crm.get_customer_360_profile). El servidor manda `type`, `status_label` y
  * `created_at`; la pantalla leía `event_type`, `title` y `date` (nombres que el servidor no manda), así que todas las
  * tarjetas salían sin título ni fecha. Se leen los nombres del servidor y, de respaldo, los viejos; un texto vacío cuenta
  * como ausente.
  * - tipo: type ?? event_type ('' si no hay); pinta el punto de color.
- * - titulo: status_label ?? title; sin ninguno, el tipo humanizado (nunca vacío ni el código crudo) y, sin tipo, 'Evento'.
+ * - titulo: status_label ?? title; sin ninguno, el título de respaldo de su tipo (TITULOS_DE_RESPALDO), el tipo humanizado
+ *   si no lo conoce (nunca vacío ni el código crudo) y, sin tipo, 'Evento'.
  * - fecha: created_at ?? date leída como UTC (comoUTC: el API manda UTC sin zona; el renglón de la corrección ya trae 'Z').
- *   null si no hay o no es una fecha: «Cliente Creado» no tiene fecha y la pantalla no inventa un «Hoy».
+ *   null si no hay o no es una fecha: «Cliente creado» no tiene fecha y la pantalla no inventa un «Hoy».
  * - autor: user_name; solo lo traen las correcciones del cliente (customer_update).
  * - cambios: el antes → después de la corrección ({campo, etiqueta, antes, despues}, lo que pinta CambiosDeActividad). Es
  *   [] si no hay: BODEGA y COMPRAS reciben la lista vacía (el antes → después trae el contacto), así que no se pinta
@@ -235,7 +257,8 @@ export function itemDeTimelineCliente(t) {
   const fecha = crudo === null ? null : comoUTC(crudo);
   return {
     tipo,
-    titulo: primerTexto(t?.status_label, t?.title) ?? (humanizarCodigo(tipo) || 'Evento'),
+    titulo: primerTexto(t?.status_label, t?.title)
+      ?? (tiene(TITULOS_DE_RESPALDO, tipo) ? TITULOS_DE_RESPALDO[tipo] : (humanizarCodigo(tipo) || 'Evento')),
     fecha: fecha !== null && !Number.isNaN(Date.parse(fecha)) ? fecha : null,
     autor: primerTexto(t?.user_name),
     cambios: Array.isArray(t?.cambios) ? t.cambios : [],
