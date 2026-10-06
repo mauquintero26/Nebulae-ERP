@@ -23,7 +23,7 @@ import {
 import { largoTexto, telUrl, mailtoUrl, asuntoDocumento } from '@/lib/chatter';
 import { formatoPct } from '@/lib/dinero-ventas';
 import { pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
-import { destinoVolver } from '@/lib/detalle-layout';
+import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
 import { comoUTC, diaLocalDeFecha, fechaEditadaParaGuardar } from '@/lib/hub-ventas';
 import { EstadoSolicitudPasos } from './estado-solicitud';
 // Final whole-branch review (hallazgo #1, el mas severo): Gate 1 no tenia NINGUNA via
@@ -98,9 +98,9 @@ function recargarTrasError(err: unknown): boolean {
 
 const textoCotizacionCreada = (numero: unknown) => (numero ? `Cotización ${numero} creada` : 'Cotización creada');
 
-// U11 (T8A ronda 1): con el editor de productos abierto no se cotiza sin confirmación: el servidor cotiza los productos
-// GUARDADOS, no los que se están editando.
-const GUARDA_PRODUCTOS_ANTES = 'Guarda los productos antes de cotizar';
+// U11 (T8A ronda 1) y T8B: con el editor de productos abierto no se cotiza (ni con confirmación ni sin ella): el servidor
+// cotiza los productos GUARDADOS, no los que se están editando. El mismo porqué en todos los botones de cotizar.
+const GUARDA_PRODUCTOS_ANTES = 'Guarda o cancela la edición de productos antes de cotizar';
 
 function SolicitudDetalleContent() {
   const params = useParams();
@@ -223,6 +223,11 @@ function SolicitudDetalleContent() {
 
   // Resizable Right Pane Logic (mismo patron que cotizacion/[id]/page.tsx y venta/[id]/page.tsx)
   const [rightWidth, setRightWidth] = useState(400);
+  // H25/C12: el ancho inicial según la ventana (300-400 px: a 1024 px el panel izquierdo gana espacio). En un efecto al
+  // montar y no en el useState, para no romper la hidratación; después se sigue arrastrando (300-800).
+  useEffect(() => {
+    setRightWidth(anchoInicialPanel(window.innerWidth));
+  }, []);
   const isDragging = useRef(false);
   const startX = useRef(0);
   const startWidth = useRef(0);
@@ -706,12 +711,17 @@ function SolicitudDetalleContent() {
     }
     if (canConfirmarSC) {
       // N7: la cotizacion anterior fue rechazada pero la confirmacion del cliente sigue vigente: no hay que reenviar nada.
+      // T8B: con el editor de productos abierto no se cotiza (el span lleva el porqué del botón deshabilitado).
       if (ultimaRechazada) {
         return (
           <NextStepCard
             tone="emerald"
             title={`La cotización ${ultimaRechazada.numero} fue rechazada`}
-            actions={<Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Crear nueva cotización</Button>}
+            actions={(
+              <span className="block" title={editandoProductos ? GUARDA_PRODUCTOS_ANTES : undefined}>
+                <Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} disabled={editandoProductos} onClick={confirmarSC}>Crear nueva cotización</Button>
+              </span>
+            )}
           >
             La solicitud sigue activa: crea una nueva cotización con los productos que el cliente confirmó.
           </NextStepCard>
@@ -721,7 +731,11 @@ function SolicitudDetalleContent() {
         <NextStepCard
           tone="emerald"
           title="El cliente confirmó la solicitud"
-          actions={<Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Crear Cotización</Button>}
+          actions={(
+            <span className="block" title={editandoProductos ? GUARDA_PRODUCTOS_ANTES : undefined}>
+              <Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} disabled={editandoProductos} onClick={confirmarSC}>Crear Cotización</Button>
+            </span>
+          )}
         >
           Crea la cotización para calcular los precios y enviársela al cliente.
         </NextStepCard>
@@ -1001,7 +1015,9 @@ function SolicitudDetalleContent() {
                     })}
                     {/* N7: con la cotizacion rechazada la solicitud sigue activa: si la confirmacion del cliente sigue vigente, se crea otra. */}
                     {canConfirmarSC && (
-                      <Button color="emerald" size="sm" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Crear nueva cotización</Button>
+                      <span className="block" title={editandoProductos ? GUARDA_PRODUCTOS_ANTES : undefined}>
+                        <Button color="emerald" size="sm" icon={CheckCircle2} loading={confirming} disabled={editandoProductos} onClick={confirmarSC}>Crear nueva cotización</Button>
+                      </span>
                     )}
                   </>
                 ) : (
@@ -1009,7 +1025,9 @@ function SolicitudDetalleContent() {
                     <p className="text-xs text-slate-400 italic mb-3">Aún no se ha realizado ninguna cotización.</p>
                     {/* U11: 'Cotizar' crea la cotización si el cliente ya confirmó; si no (y se puede), pide el motivo. */}
                     {canConfirmarSC ? (
-                      <Button color="emerald" size="sm" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Cotizar</Button>
+                      <span className="block" title={editandoProductos ? GUARDA_PRODUCTOS_ANTES : undefined}>
+                        <Button color="emerald" size="sm" icon={CheckCircle2} loading={confirming} disabled={editandoProductos} onClick={confirmarSC}>Cotizar</Button>
+                      </span>
                     ) : puedeCotizarSinConf && (
                       <span className="block" title={editandoProductos ? GUARDA_PRODUCTOS_ANTES : undefined}>
                         <Button color="amber" size="sm" icon={FileText} disabled={editandoProductos} onClick={abrirCotizarSinConfirmacion}>Cotizar</Button>

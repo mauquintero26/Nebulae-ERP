@@ -33,7 +33,7 @@ import {
 import { infoEstadoPedido, humanizarCodigo } from '@/lib/estados-pedido';
 import { ESTADOS as ESTADOS_COT } from '../cotizacion/cotizacion-client';
 import { TIPOS_SC, MODALIDADES_PAGO, pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
-import { lineaDesdeCatalogo, lineaTextoLibre, agregarLinea, lineasParaEnviar, nombreLinea } from '@/lib/lineas-solicitud';
+import { lineaDesdeCatalogo, lineaTextoLibre, agregarLinea, lineasParaEnviar, textoAvisoLinea } from '@/lib/lineas-solicitud';
 import { nombreCliente } from '@/lib/cliente-desde-busqueda';
 import { ProductSearch } from './buscador-producto';
 import { SelectorClienteSC } from './selector-cliente';
@@ -211,14 +211,8 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
     cambiarProductos(r.lineas);
     setProdName(actual => (textoUsado === undefined || actual.trim() === textoUsado ? '' : actual));
     prodInputRef.current?.focus();
-    const nombre = nombreLinea(r.lineas[r.indice]);
-    let texto = '';
-    if (r.fusionada) texto = `«${nombre}» ya estaba en la lista: ahora son ${r.lineas[r.indice].qty}.`;
-    else if (origen === 'creado') texto = `Se creó «${nombre}» en el catálogo y se agregó a la solicitud. Queda marcado para completar marca, categoría y precio después.`;
-    else if (origen === 'existente') texto = `«${nombre}» ya estaba en el catálogo: se agregó.`;
-    else if (origen === 'texto') texto = `Se agregó «${nombre}» como texto libre (no está en el catálogo).`;
-    // A4 (ronda 1): la búsqueda para comprobarlo falló: no se afirma que no esté en el catálogo.
-    else if (origen === 'texto-sin-comprobar') texto = `Se agregó «${nombre}» como texto libre (no se pudo comprobar el catálogo).`;
+    // T8B: el texto sale de la librería, el mismo que muestra el editor de productos del detalle.
+    const texto = textoAvisoLinea(r, origen);
     if (avisoTimer.current) clearTimeout(avisoTimer.current);
     setAviso({ texto, indice: r.indice });
     avisoTimer.current = setTimeout(() => { avisoTimer.current = null; setAviso(null); }, 6000);

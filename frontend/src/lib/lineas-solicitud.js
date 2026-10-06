@@ -175,3 +175,28 @@ export function lineasParaEnviar(lineas, textoPendiente) {
   const pendiente = String(textoPendiente ?? '').trim();
   return pendiente ? agregarLinea(limpias, lineaTextoLibre(pendiente)).lineas : limpias;
 }
+
+/**
+ * T8B (H25 con U7+U8): el aviso verde que explica qué pasó al agregar una línea. Es el mismo en el formulario de nueva
+ * solicitud y en el editor de productos del detalle. '' si no hay nada que explicar: una línea elegida del catálogo que
+ * no se sumó a otra solo se resalta; tampoco hay texto para una línea en blanco (indice -1) ni para un origen desconocido.
+ * @param {{ lineas: ReadonlyArray<LineaProducto>, indice: number, fusionada: boolean } | null | undefined} r
+ *   el resultado de agregarLinea
+ * @param {'catalogo' | 'creado' | 'existente' | 'texto' | 'texto-sin-comprobar'} origen de dónde vino la línea: elegida
+ *   del catálogo, creada con el alta rápida (o que ya existía con ese nombre) o escrita (comprobada o no en el catálogo)
+ * @returns {string}
+ */
+export function textoAvisoLinea(r, origen) {
+  const linea = r && r.indice >= 0 && Array.isArray(r.lineas) ? r.lineas[r.indice] : null;
+  if (!linea) return '';
+  const nombre = nombreLinea(linea);
+  if (r.fusionada) return `«${nombre}» ya estaba en la lista: ahora son ${linea.qty}.`;
+  if (origen === 'creado') {
+    return `Se creó «${nombre}» en el catálogo y se agregó a la solicitud. Queda marcado para completar marca, categoría y precio después.`;
+  }
+  if (origen === 'existente') return `«${nombre}» ya estaba en el catálogo: se agregó.`;
+  if (origen === 'texto') return `Se agregó «${nombre}» como texto libre (no está en el catálogo).`;
+  // A4 (T7 ronda 1): la búsqueda para comprobarlo falló: no se afirma que no esté en el catálogo.
+  if (origen === 'texto-sin-comprobar') return `Se agregó «${nombre}» como texto libre (no se pudo comprobar el catálogo).`;
+  return '';
+}

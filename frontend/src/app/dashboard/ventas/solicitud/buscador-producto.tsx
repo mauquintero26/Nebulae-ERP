@@ -13,7 +13,7 @@ import { nombreLinea, resolverTextoEscrito, resultadosSirven, resolverConBusqued
 
 const buscarEnCatalogo = (q: string) => apiFetch(`/crm/products/search?q=${encodeURIComponent(q)}&limit=8`);
 
-export function ProductSearch({ value, onChange, onSelect, onAgregarTexto, inputRef }: {
+export function ProductSearch({ value, onChange, onSelect, onAgregarTexto, inputRef, agregarRef }: {
   value: string;
   onChange: (v: string) => void;
   /** Producto elegido del catálogo (sin info) o creado con quick-create (info.creado false = ya existía con ese nombre;
@@ -24,6 +24,10 @@ export function ProductSearch({ value, onChange, onSelect, onAgregarTexto, input
   onAgregarTexto?: (texto: string, coincidencia: any | null, info?: { sinComprobar?: boolean }) => void;
   /** Para devolver el foco al buscador después de agregar. */
   inputRef?: React.Ref<HTMLInputElement>;
+  /** T8B (H25): el padre pone su propio botón «Agregar» (el editor del detalle, debajo y junto a la cantidad) y lo
+   * conecta aquí: agregarRef.current() hace lo mismo que Enter (comprueba lo escrito en el catálogo y llama
+   * onAgregarTexto). Con agregarRef no se pinta el '+ Agregar' de al lado del buscador. */
+  agregarRef?: React.RefObject<(() => void) | null>;
 }) {
   const [results, setResults] = useState<any[]>([]);
   // A4: el texto (recortado) para el que se pidieron los resultados que se tienen.
@@ -59,6 +63,13 @@ export function ProductSearch({ value, onChange, onSelect, onAgregarTexto, input
     document.addEventListener('mousedown', alPulsar);
     return () => document.removeEventListener('mousedown', alPulsar);
   }, [open]);
+
+  // T8B: el «Agregar» del padre (agregarRef) usa siempre la versión vigente de agregarTexto, la misma de Enter.
+  useEffect(() => {
+    if (!agregarRef) return;
+    agregarRef.current = () => { void agregarTexto(); };
+    return () => { agregarRef.current = null; };
+  });
 
   // Si el texto queda vacío (p. ej. el formulario lo limpia al agregar), no reaparece una lista vieja.
   // Va en un efecto porque el padre limpia `value` sin pasar por handle().
@@ -105,7 +116,7 @@ export function ProductSearch({ value, onChange, onSelect, onAgregarTexto, input
     } catch (err) {
       // T5: el servidor ya responde en español (422 precio o código, 409 repetido, 400 genérico): su texto tal cual.
       const msg = textoDeError(err);
-      setErrorCrear(`${/[.!?]$/.test(msg) ? msg : `${msg}.`} Puedes agregarlo como texto libre con «${onAgregarTexto ? '+ Agregar' : 'Agregar'}».`);
+      setErrorCrear(`${/[.!?]$/.test(msg) ? msg : `${msg}.`} Puedes agregarlo como texto libre con «${onAgregarTexto && !agregarRef ? '+ Agregar' : 'Agregar'}».`);
     }
     setCreating(false);
   }
@@ -156,7 +167,7 @@ export function ProductSearch({ value, onChange, onSelect, onAgregarTexto, input
           aria-label="Buscar producto en el catálogo"
           className="flex-1 min-w-0 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-200 outline-none read-only:bg-slate-50"
         />
-        {onAgregarTexto && (
+        {onAgregarTexto && !agregarRef && (
           <button type="button" onClick={() => { void agregarTexto(); }} disabled={!escrito || creating || comprobando}
             className="shrink-0 bg-indigo-100 text-indigo-700 px-3 py-2 rounded-xl text-xs font-bold hover:bg-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1">
             <Plus size={12} />Agregar

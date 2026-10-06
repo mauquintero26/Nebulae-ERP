@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import {
   lineaDesdeCatalogo, lineaTextoLibre, agregarLinea, resolverTextoEscrito, lineasParaEnviar, nombreLinea,
-  quitarLinea, cantidadValida, cambiarCantidad, resultadosSirven, resolverConBusqueda,
+  quitarLinea, cantidadValida, cambiarCantidad, resultadosSirven, resolverConBusqueda, textoAvisoLinea,
 } from '../src/lib/lineas-solicitud.js';
 
 const copiaProfunda = (v) => JSON.parse(JSON.stringify(v));
@@ -211,6 +211,47 @@ console.log('--- TEST 11 (T7 ronda 1, A4): resolverConBusqueda — busca en el a
   assert.deepEqual(r, { coincidencia: null, comprobado: false });
   r = await resolverConBusqueda('Rodillo antigoteo 9in', () => { throw new Error('síncrono'); });
   assert.deepEqual(r, { coincidencia: null, comprobado: false });
+}
+
+console.log('--- TEST 12 (T8B, H25): textoAvisoLinea — el mismo aviso en el formulario de nueva SC y en el editor del detalle ---');
+{
+  // Los textos son los de T7 (formulario de nueva solicitud), tal cual: el editor del detalle muestra los mismos.
+  const nueva = (linea) => agregarLinea([], linea);
+  assert.equal(textoAvisoLinea(nueva(lineaDesdeCatalogo({ id: 8, name: 'Rodillo 9in' }, { creado: true })), 'creado'),
+    'Se creó «Rodillo 9in» en el catálogo y se agregó a la solicitud. Queda marcado para completar marca, categoría y precio después.');
+  assert.equal(textoAvisoLinea(nueva(lineaDesdeCatalogo({ id: 8, name: 'Rodillo 9in' })), 'existente'),
+    '«Rodillo 9in» ya estaba en el catálogo: se agregó.');
+  assert.equal(textoAvisoLinea(nueva(lineaTextoLibre('Cinta DEMO')), 'texto'),
+    'Se agregó «Cinta DEMO» como texto libre (no está en el catálogo).');
+  assert.equal(textoAvisoLinea(nueva(lineaTextoLibre('Cinta DEMO')), 'texto-sin-comprobar'),
+    'Se agregó «Cinta DEMO» como texto libre (no se pudo comprobar el catálogo).');
+  // Elegido del catálogo sin sumarse a otra línea: sin texto (solo se resalta la línea).
+  assert.equal(textoAvisoLinea(nueva(lineaDesdeCatalogo({ id: 8, name: 'Rodillo 9in' })), 'catalogo'), '');
+  // Sumado a una línea que ya estaba: lo dice con la cantidad nueva, venga de donde venga.
+  const base = [{ product_name: 'Brocha 2"', qty: 2, sku_id: 7 }];
+  for (const origen of ['catalogo', 'creado', 'existente', 'texto']) {
+    const r = agregarLinea(base, { ...lineaDesdeCatalogo({ id: 7, name: 'Brocha 2"' }), qty: 3 });
+    assert.equal(textoAvisoLinea(r, origen), '«Brocha 2"» ya estaba en la lista: ahora son 5.', origen);
+  }
+  // Nada que decir: una línea en blanco (indice -1), sin resultado o un origen desconocido.
+  assert.equal(textoAvisoLinea(agregarLinea(base, lineaTextoLibre('   ')), 'texto'), '');
+  assert.equal(textoAvisoLinea(null, 'texto'), '');
+  assert.equal(textoAvisoLinea(nueva(lineaTextoLibre('X')), 'otro'), '');
+}
+
+console.log('--- TEST 13 (T8B, ruling 1): el editor del detalle guarda la línea pendiente con su SKU y su cantidad ---');
+{
+  // guardar() del editor: lineasParaEnviar(nombre ? [...borrador, lineaEscrita()] : borrador, '') — la línea pendiente la
+  // arma el editor (elegida del catálogo con la cantidad escrita) y lineasParaEnviar solo quita las claves '_' y normaliza.
+  const borrador = [{ product_name: 'Brocha 2"', qty: '', sku_id: 7, unit_price_cop: 0, _nuevo: false }];
+  const pendiente = { product_name: 'Rodillo 9in', qty: cantidadValida('3'), sku_id: 12, unit_price_cop: 0, _nuevo: true };
+  assert.deepEqual(lineasParaEnviar([...borrador, pendiente], ''), [
+    { product_name: 'Brocha 2"', qty: 1, sku_id: 7, unit_price_cop: 0 },
+    { product_name: 'Rodillo 9in', qty: 3, sku_id: 12, unit_price_cop: 0 },
+  ]);
+  // Como texto pendiente (lineasParaEnviar(borrador, nombre)) perdería el SKU y la cantidad: por eso no se usa así.
+  assert.deepEqual(lineasParaEnviar(borrador, 'Rodillo 9in').at(-1),
+    { product_name: 'Rodillo 9in', qty: 1, unit_price_cop: 0, sku_id: null });
 }
 
 console.log('OK test_lineas_solicitud');
