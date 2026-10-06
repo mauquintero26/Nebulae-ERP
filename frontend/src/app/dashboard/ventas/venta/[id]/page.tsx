@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import {
-  ArrowLeft, DollarSign, MessageCircle, Phone, Mail, CheckCircle2, Circle,
+  DollarSign, MessageCircle, Phone, Mail, CheckCircle2, Circle,
   ShoppingCart, RefreshCw, AlertCircle, ListChecks, ExternalLink, Send,
   Activity, FileText, X, Edit2, Save,
 } from 'lucide-react';
@@ -13,7 +13,7 @@ import { apiFetch } from '@/lib/api';
 import { Button, Modal, useAvisos } from '@/components/ui';
 import { textoDeError } from '@/lib/avisos';
 import { NewSupplierModal } from '../venta-client';
-import { CambiosDeActividad, getUsuarioActual, puedeCrearOrdenDePago } from '../../flujo';
+import { CambiosDeActividad, getUsuarioActual, puedeCrearOrdenDePago, returnToSeguro, BotonVolver } from '../../flujo';
 import { formatoPesos } from '@/lib/pesos';
 import { etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import {
@@ -23,6 +23,7 @@ import {
   formatoPct, describirPago, etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp, textoChipPxp, saldoAFavorAlCancelar,
 } from '@/lib/dinero-ventas';
 import { rutaSinParametro } from '@/lib/listas-ventas';
+import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
 
 const fCOP = formatoPesos;
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
@@ -37,11 +38,10 @@ function PedidoVentaDetalleContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
-  // "Volver al origen" -- mismo patron que solicitud/[id]/page.tsx y
-  // cotizacion/[id]/page.tsx (Gate 2): solo se confia en return_to si es una ruta
-  // interna relativa, nunca un esquema http(s) ni "//" (protocol-relative).
-  const rawReturnTo = searchParams?.get('return_to') || '';
-  const safeReturnTo = rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//') ? rawReturnTo : '';
+  // "Volver al origen" (ruling T9A-7, H6 del preflight): solo se confia en return_to si es una ruta interna del
+  // dashboard (returnToSeguro, la misma regla de solicitud/[id] y cotizacion/[id]). El chequeo debil de antes
+  // (startsWith('/') && !startsWith('//')) dejaba pasar '/\evil.com', que el navegador resuelve como //evil.com.
+  const safeReturnTo = returnToSeguro(searchParams?.get('return_to'));
   // H49 (T1B): avisos del sistema en lugar de window.alert; los errores de las ventanas (PEC, cancelar) van dentro.
   const { avisar, avisarError } = useAvisos();
 
@@ -107,6 +107,12 @@ function PedidoVentaDetalleContent() {
 
   // Resizable Right Pane Logic (mismo patron que cotizacion/[id]/page.tsx)
   const [rightWidth, setRightWidth] = useState(400);
+  // H37/C12: el ancho inicial según la ventana (300-400 px: a 1024 px el contenido de la izquierda gana espacio). En un
+  // efecto al montar y no en el useState, para no romper la hidratación; después se sigue arrastrando (300-800).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- C12: ancho inicial tras montar, sin romper la hidratación
+    setRightWidth(anchoInicialPanel(window.innerWidth));
+  }, []);
   const isDragging = useRef(false);
   const startX = useRef(0);
   const startWidth = useRef(0);
@@ -371,16 +377,9 @@ function PedidoVentaDetalleContent() {
       {/* Top Action Bar */}
       <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between z-20 shadow-sm shrink-0">
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <Link href={pedido?.cot_id ? `/dashboard/ventas/cotizacion/${pedido.cot_id}` : '/dashboard/ventas/venta'} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 transition-colors">
-              <ArrowLeft size={20} />
-            </Link>
-            {safeReturnTo && (
-              <Link href={safeReturnTo} className="text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:underline whitespace-nowrap">
-                ← Volver
-              </Link>
-            )}
-          </div>
+          {/* H37: un solo botón de volver, con su destino escrito: el return_to saneado o la lista de pedidos (ya no la
+              cotización, que sigue a un clic en «Origen»). */}
+          <BotonVolver href={destinoVolver(safeReturnTo, '/dashboard/ventas/venta')} />
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-black text-slate-800">{pedido?.numero || String(params.id || '').toUpperCase()}</h1>
@@ -482,13 +481,15 @@ function PedidoVentaDetalleContent() {
             </div>
           )}
 
-          <div className="max-w-5xl mx-auto space-y-8">
+          {/* H37: @container -- lo de adentro se reacomoda según el ancho REAL de esta columna (también al arrastrar el
+              panel de Actividad), no según la ventana. */}
+          <div className="max-w-5xl mx-auto space-y-8 @container">
 
             {/* Cliente + Origen + Entrega */}
-            <div className="grid grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 @2xl:grid-cols-3 gap-6">
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Cliente</label>
-                <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800">
+                <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 break-words">
                   {pedido?.customer_name || 'Sin cliente asignado'}
                 </div>
               </div>
@@ -527,7 +528,7 @@ function PedidoVentaDetalleContent() {
             </div>
 
             {isEditMode && (
-              <div className="grid grid-cols-2 gap-6 mb-10">
+              <div className="grid grid-cols-1 @lg:grid-cols-2 gap-6 mb-10">
                 <div>
                   <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Estado</label>
                   {estadoSoloLectura ? (
@@ -573,12 +574,12 @@ function PedidoVentaDetalleContent() {
                       className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-200" />
                   )}
                 </div>
-                <div className="col-span-2">
+                <div className="@lg:col-span-2">
                   <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Notas</label>
                   <textarea value={editForm.notas} onChange={e => setEditForm((f: any) => ({ ...f, notas: e.target.value }))} rows={3}
                     className="w-full border border-slate-200 rounded-xl px-4 py-3 text-sm resize-none outline-none focus:ring-2 focus:ring-indigo-200" />
                 </div>
-                <div className="col-span-2 flex justify-end">
+                <div className="@lg:col-span-2 flex justify-end">
                   <Button color="indigo" icon={Save} onClick={handleSaveEdit}>Guardar Cambios</Button>
                 </div>
               </div>
@@ -637,7 +638,8 @@ function PedidoVentaDetalleContent() {
               <h3 className="text-lg font-black text-slate-800 mb-4 flex items-center gap-2">
                 <FileText className="text-indigo-600" size={20} /> Productos
               </h3>
-              <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+              {/* H37: si la columna queda angosta, la tabla se desplaza dentro de su tarjeta (sin scroll de la página). */}
+              <div className="bg-white border border-slate-200 rounded-2xl overflow-x-auto shadow-sm">
                 <table className="w-full text-left">
                   <thead className="bg-slate-50 border-b border-slate-200">
                     <tr>
@@ -653,7 +655,7 @@ function PedidoVentaDetalleContent() {
                     )}
                     {productos.map((p: any, idx: number) => (
                       <tr key={idx} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 font-bold text-slate-800 text-sm">{p.product_name || p.descripcion || p.producto_nombre || 'Producto sin nombre'}</td>
+                        <td className="px-4 py-3 font-bold text-slate-800 text-sm break-words min-w-40">{p.product_name || p.descripcion || p.producto_nombre || 'Producto sin nombre'}</td>
                         <td className="px-4 py-3 text-center text-sm font-bold text-slate-700">{p.qty ?? p.cantidad ?? 0}</td>
                         <td className="px-4 py-3 text-sm font-bold text-slate-700">{fCOP(p.unit_price_cop ?? p.precio_unitario)}</td>
                         <td className="px-4 py-3 font-black text-slate-800 text-right">{fCOP(p.total_cop ?? p.subtotal)}</td>
@@ -665,22 +667,22 @@ function PedidoVentaDetalleContent() {
             </div>
 
             {(notaSolicitud || notaCotizacion || mostrarNotaPedido || pedido?.direccion_entrega) && !isEditMode && (
-              <div className="grid grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 @lg:grid-cols-2 gap-6">
                 {pedido?.direccion_entrega && (
                   <div>
                     <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Dirección de Entrega</label>
-                    <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700">
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 break-words">
                       {pedido.direccion_entrega}
                     </div>
                   </div>
                 )}
                 {(notaSolicitud || notaCotizacion || mostrarNotaPedido) && (
-                  <div className={`space-y-3 ${pedido?.direccion_entrega ? '' : 'col-span-2'}`}>
+                  <div className={`space-y-3 ${pedido?.direccion_entrega ? '' : '@lg:col-span-2'}`}>
                     {([['Nota de la solicitud', notaSolicitud], ['Nota de la cotización', notaCotizacion],
                       ['Notas del pedido', mostrarNotaPedido ? notaPedido : '']] as const).filter(([, t]) => t).map(([titulo, t]) => (
                       <div key={titulo}>
                         <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">{titulo}</label>
-                        <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 whitespace-pre-wrap">
+                        <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 whitespace-pre-wrap break-words">
                           {t}
                         </div>
                       </div>

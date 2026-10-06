@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import {
-  ArrowLeft, ArrowRight, Send, Mail, FileText, CheckCircle2, Circle,
+  ArrowRight, Send, Mail, FileText, CheckCircle2, Circle,
   MessageSquare, Calculator, Search, RefreshCw, Package, Trash2, RotateCcw,
   AlertCircle, XCircle, Activity, MessageCircle, Phone, Sparkles
 } from 'lucide-react';
@@ -15,11 +15,12 @@ import {
   ChannelModal, CalculadorModal, DeleteConfirm, PropagarPvenConfirm, VerificarAnticipoModal, AjustarAnticipoModal,
   ESTADOS as ESTADOS_COT, EstadoBadge, fCOP, fDate, fTime,
 } from '../cotizacion-client';
-import { NextStepCard, EnlaceConfirmacionModal, CambiosDeActividad, returnToSeguro, getUsuarioActual } from '../../flujo';
+import { NextStepCard, EnlaceConfirmacionModal, CambiosDeActividad, returnToSeguro, getUsuarioActual, BotonVolver } from '../../flujo';
 import { situacionPedidoCotizacion } from '@/lib/listas-ventas';
 import { resumenAnticipoCotizacion, formatoPct, propagacionRecotizacion, puedeGestionarCotizacion } from '@/lib/dinero-ventas';
 import { comoUTC } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
+import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
 
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
 const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
@@ -120,6 +121,12 @@ function CotizacionDetalleContent() {
 
   // Resizable Right Pane Logic
   const [rightWidth, setRightWidth] = useState(400);
+  // H37/C12: el ancho inicial según la ventana (300-400 px: a 1024 px el contenido de la izquierda gana espacio). En un
+  // efecto al montar y no en el useState, para no romper la hidratación; después se sigue arrastrando (300-800).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- C12: ancho inicial tras montar, sin romper la hidratación
+    setRightWidth(anchoInicialPanel(window.innerWidth));
+  }, []);
   const isDragging = useRef(false);
   const startX = useRef(0);
   const startWidth = useRef(0);
@@ -542,16 +549,10 @@ function CotizacionDetalleContent() {
 
       {/* Top Action Bar */}
       <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between z-20 shadow-sm shrink-0">
-        <div className="flex items-center gap-4">
-          <Link href="/dashboard/ventas/cotizacion" className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 transition-colors">
-            <ArrowLeft size={20} />
-          </Link>
-          {safeReturnTo && (
-            <Link href={safeReturnTo} className="text-xs font-bold text-blue-600 hover:text-blue-800 hover:underline whitespace-nowrap">
-              ← Volver
-            </Link>
-          )}
-          <div>
+        <div className="flex items-center gap-4 min-w-0">
+          {/* H37: un solo botón de volver, con su destino escrito: el return_to saneado o la lista de cotizaciones. */}
+          <BotonVolver href={destinoVolver(safeReturnTo, '/dashboard/ventas/cotizacion')} />
+          <div className="min-w-0">
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-black text-slate-800">
                 {isNew ? 'Nueva Cotizacion' : (cotizacion?.numero || String(params.id || '').toUpperCase())}
@@ -616,8 +617,9 @@ function CotizacionDetalleContent() {
             </div>
           )}
 
-          {/* Area de Formulario Abierta */}
-          <div className="max-w-5xl mx-auto">
+          {/* Area de Formulario Abierta. H37: @container -- lo de adentro se reacomoda según el ancho REAL de esta
+              columna (también al arrastrar el panel de Actividad), no según la ventana. */}
+          <div className="max-w-5xl mx-auto @container">
             <h2 className="text-xl font-black text-slate-800 mb-8 flex items-center gap-2">
               <FileText className="text-blue-600" size={24} /> Datos de la Cotizacion
             </h2>
@@ -631,10 +633,10 @@ function CotizacionDetalleContent() {
               </div>
             )}
 
-            <div className="grid grid-cols-3 gap-6 mb-10">
+            <div className="grid grid-cols-1 @2xl:grid-cols-3 gap-6 mb-10">
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">Cliente</label>
-                <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800">
+                <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-800 break-words">
                   {cotizacion?.customer_name || 'Sin cliente asignado'}
                 </div>
               </div>
@@ -664,13 +666,13 @@ function CotizacionDetalleContent() {
                 {cotizacion?.sc_notas && (
                   <div className="bg-amber-50 border border-amber-100 rounded-xl p-4">
                     <p className="text-xs font-black text-amber-700 uppercase mb-1.5">Nota de la solicitud</p>
-                    <p className="text-sm text-amber-900 whitespace-pre-wrap">{cotizacion.sc_notas}</p>
+                    <p className="text-sm text-amber-900 whitespace-pre-wrap break-words">{cotizacion.sc_notas}</p>
                   </div>
                 )}
                 {cotizacion?.notas && (
                   <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
                     <p className="text-xs font-black text-blue-600 uppercase mb-1.5">Nota de la cotización</p>
-                    <p className="text-sm text-blue-900 whitespace-pre-wrap">{cotizacion.notas}</p>
+                    <p className="text-sm text-blue-900 whitespace-pre-wrap break-words">{cotizacion.notas}</p>
                   </div>
                 )}
               </div>
@@ -690,8 +692,10 @@ function CotizacionDetalleContent() {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {productos.map((item: any, idx: number) => (
-                    <div key={idx} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center gap-4 hover:border-blue-200 transition-colors">
+                  {productos.map((item: any, idx: number) => {
+                    const nombre = item.product_name || item.name || 'Producto sin nombre';
+                    return (
+                    <div key={idx} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-wrap items-center gap-x-4 gap-y-2 hover:border-blue-200 transition-colors">
                       <div className="w-14 h-14 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 shrink-0 overflow-hidden">
                         {item.image_url ? (
                           <img src={item.image_url} alt="" className="w-full h-full object-cover"/>
@@ -699,14 +703,15 @@ function CotizacionDetalleContent() {
                           <Package size={26}/>
                         )}
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-black text-slate-900 text-base truncate">{item.product_name || item.name || 'Producto sin nombre'}</p>
+                      {/* H37: el nombre completo (sin truncate); si no cabe junto al precio, el precio baja a la línea siguiente. */}
+                      <div className="grow basis-48 min-w-0">
+                        <p className="font-black text-slate-900 text-base break-words" title={nombre}>{nombre}</p>
                         <div className="flex items-center gap-2 mt-1 flex-wrap">
                           {item.sku_id ? (
-                            <span className="text-[10px] font-black text-emerald-600 uppercase tracking-wide bg-emerald-50 px-1.5 py-0.5 rounded">Vinculado a catálogo</span>
+                            <span className="text-[10px] font-black text-emerald-600 uppercase tracking-wide bg-emerald-50 px-1.5 py-0.5 rounded whitespace-nowrap">Vinculado a catálogo</span>
                           ) : (
                             <>
-                              <span className="text-[10px] font-black text-amber-600 uppercase tracking-wide bg-amber-50 px-1.5 py-0.5 rounded">Texto libre</span>
+                              <span className="text-[10px] font-black text-amber-600 uppercase tracking-wide bg-amber-50 px-1.5 py-0.5 rounded whitespace-nowrap">Texto libre</span>
                               <button onClick={() => handleQuickCreateProduct(idx)} disabled={creatingProductIdx === idx}
                                 className="text-[10px] font-black text-blue-600 hover:text-blue-800 underline disabled:opacity-50">
                                 {creatingProductIdx === idx ? 'Creando...' : '+ Ingresar como producto'}
@@ -715,18 +720,19 @@ function CotizacionDetalleContent() {
                           )}
                         </div>
                       </div>
-                      <div className="text-right shrink-0">
+                      <div className="ml-auto text-right shrink-0">
                         <p className="text-xs text-slate-400">Cant. {item.qty ?? 0} &times; {fCOP(item.unit_price_cop)}</p>
                         <p className="font-black text-slate-900 text-lg">{fCOP(item.total_cop != null ? item.total_cop : (Number(item.unit_price_cop) || 0) * (Number(item.qty) || 0))}</p>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
               {/* TOTALES */}
               <div className="flex justify-end mt-6">
-                <div className="w-80 bg-slate-50 p-5 rounded-2xl border border-slate-200">
+                <div className="w-full @md:w-80 bg-slate-50 p-5 rounded-2xl border border-slate-200">
                   <div className="flex justify-between items-center mb-3">
                     <span className="text-sm font-bold text-slate-500">Subtotal</span>
                     <span className="font-bold text-slate-800">{fCOP(cotizacion?.subtotal_cop)}</span>
@@ -820,7 +826,7 @@ function CotizacionDetalleContent() {
 
                   {renderSiguientePaso()}
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-4 border-t border-slate-100">
+                  <div className="grid grid-cols-1 @lg:grid-cols-2 gap-3 pt-4 border-t border-slate-100">
                     {!cardOfreceCalculo && (
                       <Button color={Number(cotizacion?.total_cop) > 0 ? 'orange' : 'blue'}
                         icon={Number(cotizacion?.total_cop) > 0 ? RotateCcw : Calculator}
