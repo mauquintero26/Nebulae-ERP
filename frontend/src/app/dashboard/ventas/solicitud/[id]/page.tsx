@@ -91,6 +91,10 @@ const ACTIVITY_TYPE_ORDER = [
 // erp_ventas.MOTIVO_SIN_CONFIRMACION_MAX; el mínimo es MOTIVO_SIN_CONFIRMACION_MIN de la librería).
 const MOTIVO_SIN_CONFIRMACION_MAX = 500;
 
+// U11 (T8A ronda 1): con el editor de productos abierto no se cotiza sin confirmación: el servidor cotiza los productos
+// GUARDADOS, no los que se están editando.
+const GUARDA_PRODUCTOS_ANTES = 'Guarda los productos antes de cotizar';
+
 function SolicitudDetalleContent() {
   const params = useParams();
   const router = useRouter();
@@ -449,8 +453,10 @@ function SolicitudDetalleContent() {
       await apiFetch(`/ventas/solicitudes/${solicitud.id}/cancelar`, { method: 'POST', body: JSON.stringify({ razon, user_name: currentUser }) });
       setShowCancelModal(false);
       setCancelRazon('');
-      // U18: la cancelada ya no se edita (sin 'Editar'): si se canceló con el formulario abierto, se cierra.
+      // U18: la cancelada ya no se edita (sin 'Editar'): si se canceló con el formulario o el editor de productos
+      // abiertos, se cierran.
       setEditMode(false);
+      setEditandoProductos(false);
       await loadSolicitud();
     } catch (err: any) {
       setCancelError(err?.message || 'No se pudo cancelar la solicitud.');
@@ -662,9 +668,12 @@ function SolicitudDetalleContent() {
         </NextStepCard>
       );
     }
-    // U11: además del botón principal, cotizar sin esperar al cliente (abre la ventana del motivo).
+    // U11: además del botón principal, cotizar sin esperar al cliente (abre la ventana del motivo). Con el editor de
+    // productos abierto queda deshabilitado (el servidor cotiza los productos guardados); el span lleva el porqué.
     const botonCotizarSinConf = puedeCotizarSinConf ? (
-      <Button variant="secondary" icon={FileText} onClick={abrirCotizarSinConfirmacion}>Cotizar sin esperar confirmación</Button>
+      <span className="block" title={editandoProductos ? GUARDA_PRODUCTOS_ANTES : undefined}>
+        <Button variant="secondary" icon={FileText} disabled={editandoProductos} onClick={abrirCotizarSinConfirmacion}>Cotizar sin esperar confirmación</Button>
+      </span>
     ) : null;
     if (estado === 'PENDIENTE_CONFIRMACION') {
       return (
@@ -936,7 +945,9 @@ function SolicitudDetalleContent() {
                     {canConfirmarSC ? (
                       <Button color="emerald" size="sm" icon={CheckCircle2} loading={confirming} onClick={confirmarSC}>Cotizar</Button>
                     ) : puedeCotizarSinConf && (
-                      <Button color="amber" size="sm" icon={FileText} onClick={abrirCotizarSinConfirmacion}>Cotizar</Button>
+                      <span className="block" title={editandoProductos ? GUARDA_PRODUCTOS_ANTES : undefined}>
+                        <Button color="amber" size="sm" icon={FileText} disabled={editandoProductos} onClick={abrirCotizarSinConfirmacion}>Cotizar</Button>
+                      </span>
                     )}
                   </div>
                 )}

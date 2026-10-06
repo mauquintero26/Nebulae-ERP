@@ -73,8 +73,9 @@ export function ProductosSolicitud({
   return (
     <div>
       {/* U13: tarjeta propia, justo debajo del cliente. El editor y el aviso sin productos van dentro (el bloque no salta
-          de tamaño) y el motivo del bloqueo, debajo. El ancla la usa abrirEditorProductos de la página. */}
-      <div id="productos-solicitud" className="scroll-mt-6 bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+          de tamaño) y el motivo del bloqueo, debajo. El ancla la usa abrirEditorProductos de la página. Sin
+          overflow-hidden (T8A ronda 1): recortaba el desplegable del buscador del editor. */}
+      <div id="productos-solicitud" className="scroll-mt-6 bg-white border border-slate-200 rounded-2xl shadow-sm">
       <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between gap-2">
         <p className="text-sm font-black text-slate-800">
           Productos a cotizar <span className="font-bold text-slate-400">({lista.length})</span>
@@ -86,7 +87,9 @@ export function ProductosSolicitud({
         )}
       </div>
 
-      {editando ? (
+      {/* El editor solo mientras se puede editar: si la SC se cancela o recibe una cotización con el editor abierto, se ve
+          la lista guardada (T8A ronda 1). */}
+      {editando && editable ? (
         <div className="m-4 border border-indigo-200 bg-indigo-50/40 rounded-xl p-3 space-y-3">
           {borrador.length > 0 ? (
             <div className="space-y-1.5">
