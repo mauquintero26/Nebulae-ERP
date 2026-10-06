@@ -18,6 +18,11 @@ from app.models.erp_documents import ActivityLog
 CORREO_MAX, TELEFONO_MAX, DIRECCION_MAX, CIUDAD_MAX = 150, 50, 255, 100
 TELEFONO_MIN_DIGITOS = 7
 
+# S2/S3 (T11): los roles (ya normalizados con normalize_role) que ven el antes y el despues del contacto del cliente: el
+# historial customer_update del perfil 360 y los renglones de la Actividad de SC, COT y PVEN. Lista blanca: cualquier
+# otro rol, tambien uno desconocido, los recibe sin valores.
+ROLES_VEN_CONTACTO_ANTERIOR = frozenset({"ADMIN", "ASESOR"})
+
 # customers.email es unico por el indice ix_customers_email (sensible a mayusculas), verificado en pg_indexes de
 # erp_test. Una violacion de unicidad (23505) con ese nombre es una carrera por el correo.
 _VIOLACION_DE_UNICIDAD = "23505"

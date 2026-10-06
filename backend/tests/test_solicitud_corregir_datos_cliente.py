@@ -558,6 +558,81 @@ def test_bodega_y_compras_ven_la_correccion_sin_los_datos(app_client, db, admin_
         assert not [d for d in datos if d in timeline]
 
 
+def _token_con_rol(db, rol):
+    """Token de un usuario con ese rol, creado dentro de la transaccion de la prueba."""
+    from app.core.security import create_access_token
+    from app.models.users import User
+    u = User(email=f"{rol.lower()}-{_u()}@test.nebulae", password_hash="x", role=rol, is_active=True)
+    db.add(u); db.commit()
+    return create_access_token({"sub": str(u.id), "role": u.role})
+
+
+def test_s2_el_360_pide_un_rol_del_erp_y_solo_admin_y_asesor_ven_el_antes_y_despues(
+        app_client, db, admin_token, user_admin, vendedor_token, bodega_token, compras_token):
+    """S2 (T11): las tres rutas del 360 pedian solo una sesion: un rol que no es del ERP (p. ej. uno inventado) leia el
+    contacto y el historial. Ahora piden un rol del ERP (403 si no). El `cambios` del historial customer_update lleva el
+    antes y el despues SOLO para ADMIN y ASESOR (lista blanca): CONSULTA, FINANZAS, BODEGA y COMPRAS reciben []. El
+    resto de la proyeccion no cambia (decision del usuario)."""
+    cli = _cliente(db, phone="3000000000", email=f"ana-{_u()}@test.com")
+    sc = _sc(db, "SC-CDC040", user_admin, cli)
+    assert _patch(app_client, admin_token, sc.id, customer_phone="3001112233").status_code == 200
+    otro = _token_con_rol(db, "OTRO")
+    for ruta in (f"/api/v1/crm/customer/{cli.id}/360", f"/api/v1/crm/customers/{cli.id}/360",
+                 f"/api/v1/crm/customers/{cli.id}/profile-360"):
+        resp = app_client.get(ruta, headers=auth(otro))
+        assert resp.status_code == 403, (ruta, resp.text)
+        assert "3000000000" not in resp.text and "3001112233" not in resp.text
+    con_valores = [{"campo": "phone", "etiqueta": "Teléfono", "antes": "3000000000", "despues": "3001112233"}]
+    for token in (admin_token, vendedor_token):
+        _, items = _items_customer_update(app_client, token, cli.id)
+        assert [i["cambios"] for i in items] == [con_valores]
+    for rol, token in (("CONSULTA", _token_con_rol(db, "CONSULTA")), ("FINANZAS", _token_con_rol(db, "FINANZAS")),
+                       ("BODEGA", bodega_token), ("COMPRAS", compras_token)):
+        perfil, items = _items_customer_update(app_client, token, cli.id)
+        assert [i["cambios"] for i in items] == [[]], rol
+        assert items[0]["description"].startswith("Datos de contacto corregidos desde la solicitud SC-CDC040"), rol
+        assert "3000000000" not in str(perfil["timeline"]), rol  # el telefono anterior no sale por ningun lado
+
+
+def test_s3_la_actividad_de_los_documentos_no_muestra_el_contacto_corregido_a_otros_roles(
+        app_client, db, admin_token, user_admin, vendedor_token, bodega_token, compras_token):
+    """S3 (T11): los renglones de la correccion en la Actividad de la SC, la COT y el PVEN guardan el antes y el despues
+    del telefono, el correo, la direccion y la ciudad. En el detalle de esos documentos solo ADMIN y ASESOR los ven con
+    valores (el criterio de S2); para los demas el campo sigue nombrado ('Teléfono: cambiado') y sin valores."""
+    u = _u()
+    cli = _cliente(db, phone="3000000000", email=f"ana.vieja-{u}@test.com", address="Calle 1", city="Cali")
+    sc = _sc(db, "SC-CDC042", user_admin, cli)
+    cot = _cot(db, "COT-CDC042", sc)
+    pven = _pven(db, "PVEN-CDC042", "PENDIENTE_COMPRA", cot=cot)
+    resp = _patch(app_client, admin_token, sc.id, customer_phone="3001112233", customer_email=f"ana.nueva-{u}@test.com",
+                  customer_address="Calle 2", customer_city="Bogotá")
+    assert resp.status_code == 200, resp.text
+    anteriores = ("3000000000", f"ana.vieja-{u}", "Calle 1", "Cali")
+    contacto = {"Teléfono", "Correo", "Dirección del cliente", "Ciudad"}
+
+    def _renglon(ruta, doc_id, token):
+        resp = app_client.get(f"/api/v1/ventas/{ruta}/{doc_id}", headers=auth(token))
+        assert resp.status_code == 200, resp.text
+        actividades = resp.json()["data"]["actividades"]
+        [renglon] = [a for a in actividades if a["action"] == "UPDATED" and "corregidos" in a["description"]]
+        return actividades, renglon["extra_data"]["cambios"]
+
+    for ruta, doc in (("solicitudes", sc), ("cotizaciones", cot), ("pedidos", pven)):
+        for token in (bodega_token, compras_token):
+            actividades, cambios = _renglon(ruta, doc.id, token)
+            de_contacto = [c for c in cambios if c.get("etiqueta") in contacto]
+            assert de_contacto and all(c == {"etiqueta": c["etiqueta"], "despues": "cambiado"} for c in de_contacto), \
+                (ruta, cambios)
+            assert not [v for v in anteriores if v in str(actividades)], ruta
+        for token in (admin_token, vendedor_token):
+            _, cambios = _renglon(ruta, doc.id, token)
+            telefono = next(c for c in cambios if c.get("campo") == "customer_phone")
+            assert (telefono["antes"], telefono["despues"]) == ("3000000000", "3001112233"), ruta
+    # La ciudad (solo en la SC) tambien queda nombrada y sin valores.
+    _, cambios = _renglon("solicitudes", sc.id, bodega_token)
+    assert {"etiqueta": "Ciudad", "despues": "cambiado"} in cambios
+
+
 def test_editar_la_ficha_con_correo_repetido_da_409_y_registra_actividad(app_client, db, admin_token, user_admin):
     from app.core.textos_actividad import nombre_de_usuario
     u = _u()
@@ -838,6 +913,75 @@ def test_un_interbloqueo_da_409_sin_guardar_nada(app_client, db, admin_token, us
     assert sc.customer_phone == "3000000000" and cli.phone == "3000000000" and _logs(db, "SC", sc.id) == []
 
 
+def test_s8_un_interbloqueo_o_un_tiempo_agotado_al_bloquear_la_ficha_da_409(app_client, db, admin_token, user_admin,
+                                                                            monkeypatch):
+    """S8 (T11): la carga bloqueada de la ficha (FOR UPDATE), el 422 de la ciudad y el 409 del correo estaban fuera del
+    try de PATCH /cliente: si PostgreSQL abortaba ese bloqueo por un interbloqueo (40P01) o por el statement_timeout
+    (57014), salia un 500. Ahora es el 409 de siempre y no se guarda nada."""
+    import app.api.v1.erp_ventas as m_ventas
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Query
+    from app.models.customers import Customer
+    bloquear_real = Query.with_for_update
+    monkeypatch.setattr(m_ventas.logger, "disabled", True)
+    for i, pgcode in enumerate(("40P01", "57014")):
+        error_de_la_base = type("ErrorDeBloqueo", (Exception,), {"pgcode": pgcode})
+
+        def _falla_al_bloquear_la_ficha(self, *args, **kwargs):
+            if self.column_descriptions and self.column_descriptions[0].get("entity") is Customer:
+                raise OperationalError("SELECT customers.id ... FOR UPDATE", {}, error_de_la_base("bloqueo abortado"))
+            return bloquear_real(self, *args, **kwargs)
+
+        cli = _cliente(db, phone="3000000000", email=f"ana-{_u()}@test.com")
+        sc = _sc(db, f"SC-CDC04{4 + i}", user_admin, cli)
+        monkeypatch.setattr(Query, "with_for_update", _falla_al_bloquear_la_ficha)
+        resp = _patch(app_client, admin_token, sc.id, customer_phone="3001112233")
+        monkeypatch.setattr(Query, "with_for_update", bloquear_real)
+        assert resp.status_code == 409, (pgcode, resp.text)
+        assert resp.json()["detail"] == ("Otra operación estaba cambiando esta solicitud o su cotización al mismo "
+                                         "tiempo. Intenta de nuevo.")
+        db.expire_all()
+        assert (sc.customer_phone, cli.phone) == ("3000000000", "3000000000"), pgcode
+        assert _logs(db, "SC", sc.id) == [] and _logs(db, "CLIENTE", cli.id) == [], pgcode
+
+
+CONTACTO_POR_CLIENTE = ("El teléfono, el correo y la dirección del cliente se corrigen con «Corregir datos del "
+                        "cliente» (PATCH /ventas/solicitudes/{id}/cliente): así también quedan corregidos en su ficha y "
+                        "en la cotización y el pedido abiertos.")
+
+
+def test_s9_el_patch_de_la_solicitud_no_cambia_el_contacto_del_cliente(app_client, db, admin_token, user_admin):
+    """S9 (T11): PATCH /solicitudes/{id} con customer_phone, customer_email o customer_address aplicaba la regla de
+    Gate 1 a la SC pero no corregia la COT temprana ni anulaba su enlace: si el contacto anterior confirmaba esa COT, la
+    SC quedaba Confirmada con el contacto nuevo. Ahora responde 422, remite a «Corregir datos del cliente» y no guarda
+    nada (tampoco los otros campos del mismo PATCH). Ninguna pantalla manda esas claves por este PATCH."""
+    from app.core.confirmation_tokens import create_confirmation_token
+    u = _u()
+    sc = _sc(db, "SC-CDC046", user_admin, estado="PENDIENTE_CONFIRMACION", customer_email=f"a-{u}@test.com",
+             customer_phone="3000000000", customer_address="Calle 1")
+    cot = _cot(db, "COT-CDC046", sc, estado="PENDIENTE_CONFIRMACION",
+               sin_confirmacion_sc_at=datetime.datetime.utcnow(), sin_confirmacion_sc_motivo="Cotización temprana")
+    token_sc = create_confirmation_token(db, "SC", sc.id)
+    token_cot = create_confirmation_token(db, "COT", cot.id)
+    for body in ({"customer_email": f"b-{u}@test.com"}, {"customer_phone": "3109998877"},
+                 {"customer_address": "Calle 9"}, {"customer_email": f"a-{u}@test.com", "notas": "Llamar en la tarde"},
+                 {"customer_phone": None}):
+        resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={**body, "updated_by": "t"},
+                                headers=auth(admin_token))
+        assert resp.status_code == 422, (body, resp.text)
+        assert resp.json()["detail"] == CONTACTO_POR_CLIENTE.replace("{id}", str(sc.id)), body
+    db.expire_all()
+    assert (sc.estado, sc.customer_email, sc.customer_phone, sc.customer_address, sc.notas) == (
+        "PENDIENTE_CONFIRMACION", f"a-{u}@test.com", "3000000000", "Calle 1", None)
+    assert not _token_usado(db, token_sc) and not _token_usado(db, token_cot)
+    assert _logs(db, "SC", sc.id) == [] and _logs(db, "COT", cot.id) == []
+    # Los demas campos se siguen guardando por este PATCH.
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"notas": "Llamar en la tarde",
+                                                                          "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["notas"] == "Llamar en la tarde"
+
+
 # --- Ronda 2 de T5: documentos leidos bloqueados y releidos; enlaces contados por el propio UPDATE ---------------
 
 def test_un_cambio_de_cliente_de_la_cot_entre_medio_no_mezcla_datos(app_client, db, admin_token, user_admin,
@@ -921,11 +1065,13 @@ def test_un_enlace_vencido_se_revoca_pero_no_se_informa(app_client, db, admin_to
 def test_update_solicitud_con_productos_y_cliente_a_la_vez_deja_solo_el_texto_de_productos(
         app_client, db, admin_token, user_admin):
     from app.core.confirmation_tokens import create_confirmation_token
-    sc = _sc(db, "SC-CDC016", user_admin, estado="CONFIRMADA", customer_phone="3000000000",
-             gate1_confirmed_at=datetime.datetime.utcnow())
+    cli = _cliente(db, phone="3000000000", email=f"ana-{_u()}@test.com")
+    otro = _cliente(db, first_name="Beto", phone="3109998877", email=f"beto-{_u()}@test.com")
+    sc = _sc(db, "SC-CDC016", user_admin, cli, estado="CONFIRMADA", gate1_confirmed_at=datetime.datetime.utcnow())
     token = create_confirmation_token(db, "SC", sc.id)
+    # S9 (T11): el cliente cambia por customer_id (el telefono ya no cambia por este PATCH: va por /cliente).
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={
-        "productos": [{"product_name": "Cuna Colecho", "qty": 2}], "customer_phone": "3109998877",
+        "productos": [{"product_name": "Cuna Colecho", "qty": 2}], "customer_id": otro.id,
         "updated_by": "t"}, headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["estado"] == "ASIGNADA"

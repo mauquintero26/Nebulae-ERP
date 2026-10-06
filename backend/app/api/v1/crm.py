@@ -549,7 +549,8 @@ def _sync_operational_agenda_deterministic(db: Session, target_customer_id: Opti
 @router.get("/customers/{customer_id}/profile-360")
 def get_customer_360_profile(
     customer_id: int,
-    user: User = Depends(get_current_user),
+    # S2 (T11): un rol del ERP, como las demas lecturas de clientes (antes bastaba una sesion de cualquier rol).
+    user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     db: Session = Depends(get_db)
 ):
     customer = db.query(Customer).filter(Customer.id == customer_id).first()
@@ -873,7 +874,8 @@ def get_customer_360_profile(
         db.rollback()
 
     # H21: historial de la ficha (correcciones desde la SC y ediciones desde la Agenda; app/core/clientes.log_cliente).
-    # created_at con 'Z' (UTC). BODEGA y COMPRAS reciben cambios = [] (abajo): el antes/despues trae el contacto.
+    # created_at con 'Z' (UTC). S2 (T11): solo ADMIN y ASESOR reciben `cambios` con valores (abajo): el antes/despues
+    # trae el contacto y el documento.
     logs_cliente = (db.query(ActivityLog)
                     .filter(ActivityLog.entity_type == "CLIENTE", ActivityLog.entity_id == customer_id)
                     .order_by(ActivityLog.id.desc()).limit(100).all())
@@ -1029,10 +1031,11 @@ def get_customer_360_profile(
         for ao in profile["active_orders"]:
             ao["saldo"] = None
 
-    if user_role in ("BODEGA", "COMPRAS"):
-        # H21 (privacidad): el antes/despues de una correccion trae el telefono, el correo y la direccion que la
-        # proyeccion de arriba les oculta. Ven que hubo un cambio, de que datos (la descripcion solo nombra etiquetas)
-        # y quien lo hizo.
+    if user_role not in clientes.ROLES_VEN_CONTACTO_ANTERIOR:
+        # H21 + S2 (T11), privacidad por lista blanca: el antes/despues de una correccion trae el telefono, el correo, la
+        # direccion y el documento, tambien los anteriores. Solo ADMIN y ASESOR los ven; CONSULTA, FINANZAS, BODEGA,
+        # COMPRAS (y cualquier otro rol) ven que hubo un cambio, de que datos (la descripcion solo nombra etiquetas) y
+        # quien lo hizo.
         for item in profile["timeline"]:
             if item.get("type") == "customer_update":
                 item["cambios"] = []

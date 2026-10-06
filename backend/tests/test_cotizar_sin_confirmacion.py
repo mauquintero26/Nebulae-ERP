@@ -609,12 +609,17 @@ def test_a_cambiar_los_productos_con_la_cot_temprana_y_el_enlace_pendiente_lo_an
     assert (fila.estado, fila.sc_id, fila.sin_confirmacion_sc_motivo) == ("BORRADOR", sc.id, MOTIVO)
     assert [p["product_name"] for p in fila.productos] == ["Cuna Colecho"]  # la COT no cambia
 
-    # Lo mismo si cambia el cliente con el enlace pendiente y la COT temprana.
+    # Lo mismo si cambia el cliente con el enlace pendiente y la COT temprana. S9 (T11): el correo y el telefono ya no
+    # cambian por este PATCH (van por /cliente, probado en test_solicitud_corregir_datos_cliente); cambiar de ficha si.
+    import uuid
+    from app.models.customers import Customer
+    otra = Customer(first_name="Otra", last_name="Ficha", email=f"otra-{uuid.uuid4().hex[:6]}@test.nebulae")
+    db.add(otra); db.commit()
     sc2 = _sc(db, "SC-CSC037", user_admin, customer_email="uno@test.nebulae")
     raw2 = _enviar_sc(app_client, admin_token, sc2.id)
     assert _cotizar(app_client, admin_token, sc2.id, motivo=MOTIVO).status_code == 200
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc2.id}", json={
-        "customer_email": "otra@test.nebulae", "updated_by": "t"}, headers=auth(admin_token))
+        "customer_id": otra.id, "updated_by": "t"}, headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["estado"] == "ASIGNADA" and _token_usado(db, raw2)
 

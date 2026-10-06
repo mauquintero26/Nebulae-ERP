@@ -407,21 +407,32 @@ def _token_usado(db, raw):
         DocumentConfirmationToken.token_hash == hashlib.sha256(raw.encode()).hexdigest()).first().used_at is not None
 
 
+def _ficha(db, nombre):
+    """Una ficha de cliente (S9, T11: el cliente de la SC cambia por customer_id; el contacto, por /cliente)."""
+    import uuid
+    from app.models.customers import Customer
+    c = Customer(first_name=nombre, last_name="Prueba", email=f"{nombre.lower()}-{uuid.uuid4().hex[:6]}@test.nebulae")
+    db.add(c); db.commit(); db.refresh(c)
+    return c
+
+
 def test_cambiar_el_cliente_con_el_enlace_pendiente_lo_anula(app_client, db, admin_token, user_admin):
+    """S9 (T11): el correo y el telefono ya no cambian por PATCH /solicitudes/{id} (422; van por /cliente, con su propia
+    regla de Gate 1 en test_solicitud_corregir_datos_cliente). Cambiar de ficha (customer_id) sigue aqui."""
     from app.core.confirmation_tokens import create_confirmation_token
+    uno, otra = _ficha(db, "Uno"), _ficha(db, "Otra")
     sc = _sc(db, "SC-RCH014", user_admin, con_marca=False, estado="PENDIENTE_CONFIRMACION",
-             customer_email="cliente@uno.com", customer_phone="3001112233")
+             customer_id=uno.id, customer_email=uno.email, customer_phone="3001112233")
     token = create_confirmation_token(db, "SC", sc.id)
 
-    # Reenviar el mismo cliente (otro formato) no es un cambio.
+    # Reenviar el mismo cliente no es un cambio.
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={
-        "customer_email": "  Cliente@Uno.com ", "customer_phone": "3001112233", "updated_by": "t"},
-        headers=auth(admin_token))
+        "customer_id": uno.id, "updated_by": "t"}, headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["estado"] == "PENDIENTE_CONFIRMACION" and not _token_usado(db, token)
 
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={
-        "customer_email": "otra@persona.com", "updated_by": "t"}, headers=auth(admin_token))
+        "customer_id": otra.id, "updated_by": "t"}, headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["estado"] == "ASIGNADA"
     assert _token_usado(db, token)  # el enlace era del cliente anterior
@@ -434,11 +445,13 @@ def test_cambiar_el_cliente_con_una_cotizacion_activa_anula_la_confirmacion(app_
     """Con COT activa el estado no cambia, pero la marca (que ya no se consume) era del cliente anterior: si esa COT
     se rechaza, la SC no puede crear otra para el cliente nuevo sin que el confirme."""
     from app.core.confirmation_tokens import create_confirmation_token
-    sc = _sc(db, "SC-RCH015", user_admin, customer_phone="3001112233")
+    uno, otra = _ficha(db, "Uno"), _ficha(db, "Otra")
+    sc = _sc(db, "SC-RCH015", user_admin, customer_id=uno.id, customer_phone="3001112233")
     cot = _crear_cot(app_client, admin_token, sc.id)
     viejo = create_confirmation_token(db, "SC", sc.id)  # un enlace que hubiera quedado vivo
+    # S9 (T11): el cliente cambia por customer_id (el telefono ya no cambia por este PATCH).
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={
-        "customer_phone": "3109998877", "updated_by": "t"}, headers=auth(admin_token))
+        "customer_id": otra.id, "updated_by": "t"}, headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     db.refresh(sc)
     assert sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is None  # U15: crear la COT no la mueve

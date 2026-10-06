@@ -632,7 +632,11 @@ _CLAVE_DE_CAMPO_CONTACTO = {**{k: k for k in _CONTACTO_CLIENTE},
 # Los limites de largo (correo 150, telefono 50, direccion 255, ciudad 100) viven en app/core/clientes.py: los comparte
 # PUT /crm/customers/{id}.
 _CORREO_VALIDO = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+# S9 (T11): claves del contacto que PATCH /solicitudes/{id} ya no acepta (se corrigen con /cliente). La ciudad no es
+# columna de la SC; customer_id y customer_name (cambiar de cliente) siguen por update_solicitud.
+_CONTACTO_POR_CORRECCION = ("customer_phone", "customer_email", "customer_address")
 _INTERBLOQUEO = "40P01"  # deadlock_detected de PostgreSQL
+_TIEMPO_AGOTADO = "57014"  # query_canceled: el statement_timeout de 15 s (app/db/database.py) esperando un bloqueo
 # R6: pedidos que ya no se corrigen (cerrados). DEVUELTO_TOTAL ya paso por entregado y no tiene transiciones.
 _ESTADOS_VEN_CERRADOS_PARA_CONTACTO = ("CANCELADO", "ENTREGADO", "FACTURADO", "DEVUELTO_TOTAL")
 # R18 (ruling de T5): renglon de la Actividad de una COT propagada cuyo enlace pendiente se anulo. La COT no cambia de
@@ -864,7 +868,30 @@ def _asesores_de_pedidos(db: Session, pedidos) -> dict:
                       .filter(CustomerRequest.id.in_(sc_ids)).all()) if sc_ids else {})
     return {v.id: _asesor_de_pedido(cotizador.get(v.cot_id), asesor_sc.get(v.sc_id)) for v in pedidos}
 
-def _log_dict(l: ActivityLog) -> dict:
+# S3 (T11): campos de contacto del cliente que un renglon de la Actividad de SC, COT o PVEN guarda con su antes y su
+# despues (la correccion de datos del cliente y las ediciones de los PATCH).
+_CAMPOS_DE_CONTACTO = frozenset({"customer_phone", "customer_email", "customer_address", "customer_city"})
+
+
+def _sin_valores_de_contacto(extra):
+    """S3 (T11): extra_data de un renglon con el antes y el despues del contacto vaciados: el campo sigue nombrado y la
+    pantalla lo pinta 'Teléfono: cambiado' (sin la llave 'campo', CambiosDeActividad no pone '—' ni tacha). Devuelve una
+    copia: el renglon de la sesion no cambia."""
+    if not isinstance(extra, dict) or not isinstance(extra.get("cambios"), list):
+        return extra
+    cambios = [{"etiqueta": c.get("etiqueta"), "despues": "cambiado"}
+               if isinstance(c, dict) and c.get("campo") in _CAMPOS_DE_CONTACTO else c
+               for c in extra["cambios"]]
+    return {**extra, "cambios": cambios}
+
+
+def _log_dict(l: ActivityLog, rol: str) -> dict:
+    """Un renglon de la Actividad para la respuesta. S3 (T11): `rol` es el del usuario (normalize_role); fuera de
+    clientes.ROLES_VEN_CONTACTO_ANTERIOR (ADMIN y ASESOR, lista blanca: el mismo criterio del perfil 360) el antes y el
+    despues del telefono, el correo, la direccion y la ciudad salen sin valores."""
+    extra = l.extra_data
+    if rol not in clientes.ROLES_VEN_CONTACTO_ANTERIOR:
+        extra = _sin_valores_de_contacto(extra)
     return {
         "id": l.id,
         "entity_type": l.entity_type,
@@ -876,7 +903,7 @@ def _log_dict(l: ActivityLog) -> dict:
         "new_estado": l.new_estado,
         "user_name": l.user_name,
         "created_at": _iso_utc(l.created_at),
-        "extra_data": l.extra_data,
+        "extra_data": extra,
     }
 
 def _agregar_nota(db: Session, entidad: str, doc, body: dict, user: User) -> dict:
@@ -893,7 +920,7 @@ def _agregar_nota(db: Session, entidad: str, doc, body: dict, user: User) -> dic
     if reinicia_atraso(extra["tipo"]):
         doc.updated_at = datetime.datetime.utcnow()
     db.flush()
-    d = _log_dict(log)
+    d = _log_dict(log, normalize_role(user.role))
     db.commit()
     return {"status": "success", "data": d}
 
@@ -1083,7 +1110,8 @@ def get_solicitud(sc_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)
     ).order_by(ActivityLog.created_at.asc(), ActivityLog.id.asc()).all()
     d = _sc_dict(sc)
     d["customer_city"] = _ciudad_del_cliente(sc)  # H21: de la ficha; solo en el detalle (no suma consultas al listado)
-    d["actividades"] = [_log_dict(l) for l in logs]
+    rol = normalize_role(user.role)
+    d["actividades"] = [_log_dict(l, rol) for l in logs]
     # linked quotations
     cots = db.query(SalesQuotation).filter(SalesQuotation.sc_id == sc_id).all()
     d["cotizaciones"] = [_cot_dict(c) for c in cots]
@@ -1108,6 +1136,14 @@ def get_solicitud(sc_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)
 def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
     _exigir_estado_valido(body)  # S1 (T11): antes de leer nada
+    # S9 (T11): el contacto del cliente se corrige SOLO con PATCH /solicitudes/{id}/cliente, que tambien corrige la ficha
+    # y la COT y el PVEN abiertos y anula sus enlaces (R18). Por aqui la COT temprana conservaba el contacto anterior y
+    # su enlace: si ese contacto la confirmaba, la SC quedaba Confirmada con el nuevo. Ninguna pantalla manda estas
+    # claves en este PATCH (el formulario de Editar ya usa /cliente).
+    if any(clave in body for clave in _CONTACTO_POR_CORRECCION):
+        raise HTTPException(422, f"El teléfono, el correo y la dirección del cliente se corrigen con «Corregir datos del "
+                                 f"cliente» (PATCH /ventas/solicitudes/{sc_id}/cliente): así también quedan corregidos "
+                                 f"en su ficha y en la cotización y el pedido abiertos.")
     # B10 (revision final): bloqueada, como el PVEN en update_pedido: una cancelacion o confirmacion concurrentes
     # esperan en vez de validar contra un estado viejo.
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
@@ -1163,9 +1199,9 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     fecha_vieja = sc.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
     antes_log = cambios_documento.tomar_foto(sc, "SC")
     cliente_antes = _cliente_de_la_solicitud(sc)
-    allowed = ["customer_id","customer_name","customer_phone","customer_email",
-               "customer_address","advisor_name","advisor_user_id","tipo_solicitud","modalidad_pago","estado",
-               "fecha_vencimiento","fecha_entrega_estimada","notas","productos",
+    # S9 (T11): sin customer_phone, customer_email ni customer_address (van por /cliente; arriba dan 422).
+    allowed = ["customer_id","customer_name","advisor_name","advisor_user_id","tipo_solicitud","modalidad_pago",
+               "estado","fecha_vencimiento","fecha_entrega_estimada","notas","productos",
                "tipo_problema","descripcion_problema","urgencia","evidencia_descripcion",
                "asignado_a_user_id","estado_soporte"]
     for k in allowed:
@@ -1346,27 +1382,28 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
     nuevos = _normalizar_contacto(body)
     if not nuevos:
         raise HTTPException(422, "No llegó ningún dato del cliente para corregir.")
-    cliente = None
-    if sc.customer_id:
-        cliente = db.query(Customer).filter(Customer.id == sc.customer_id).with_for_update().first()
-    if "customer_city" in nuevos and cliente is None:
-        raise HTTPException(422, "Esta solicitud no está vinculada a una ficha de cliente: la ciudad se guarda en la "
-                                 "ficha.")
     correo = nuevos.get("customer_email")
-    if cliente is not None and correo:
-        otro = clientes.correo_de_otro_cliente(db, correo, cliente.id)
-        if otro is not None:
-            raise HTTPException(409, _mensaje_correo_de_otro_cliente(correo, otro))
-
     autor = nombre_de_usuario(user)
     old_estado = sc.estado
     foto_sc = cambios_documento.tomar_foto(sc, "SC")
     contacto_sc_antes = _cliente_de_la_solicitud(sc)
-    foto_cli = cambios_documento.tomar_foto(cliente, "CLIENTE") if cliente is not None else None
-    ciudad_antes = cliente.city if cliente is not None else None
     origen = {"tipo": "SC", "id": sc.id, "numero": sc.numero}
-    docs, docs_de_otro_cliente = [], []
+    cliente, docs, docs_de_otro_cliente = None, [], []
     try:
+        # S8 (T11): la ficha se bloquea dentro del try, como la COT y el PVEN: si PostgreSQL aborta ese bloqueo por un
+        # interbloqueo (40P01) o por el statement_timeout (57014), es el 409 de abajo y no un 500. El 422 de la ciudad
+        # y el 409 del correo de otra ficha salen de esa lectura; son HTTPException y siguen de largo.
+        if sc.customer_id:
+            cliente = db.query(Customer).filter(Customer.id == sc.customer_id).with_for_update().first()
+        if "customer_city" in nuevos and cliente is None:
+            raise HTTPException(422, "Esta solicitud no está vinculada a una ficha de cliente: la ciudad se guarda en "
+                                     "la ficha.")
+        if cliente is not None and correo:
+            otro = clientes.correo_de_otro_cliente(db, correo, cliente.id)
+            if otro is not None:
+                raise HTTPException(409, _mensaje_correo_de_otro_cliente(correo, otro))
+        foto_cli = cambios_documento.tomar_foto(cliente, "CLIENTE") if cliente is not None else None
+        ciudad_antes = cliente.city if cliente is not None else None
         # Los documentos se leen bloqueados (SC -> ficha -> COT -> PVEN) y dentro del try: un interbloqueo (40P01) al
         # tomarlos tambien responde 409. La foto 'antes' y la decision de quien es de otro cliente salen de esta lectura.
         for entidad, doc in _docs_abiertos_para_contacto(db, sc):
@@ -1463,11 +1500,13 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
         raise HTTPException(422, "Algún dato es demasiado largo para guardarlo: acórtalo e intenta de nuevo.")
     except OperationalError as exc:
         # La SC se bloquea antes que sus documentos y update_cotizacion bloquea la COT antes que la SC: si chocan,
-        # PostgreSQL aborta una de las dos (40P01). Aqui se revierte todo y se pide repetir en vez de un 500.
+        # PostgreSQL aborta una de las dos (40P01). S8 (T11): lo mismo si un bloqueo espera mas que el statement_timeout
+        # (57014). Aqui se revierte todo y se pide repetir en vez de un 500.
         db.rollback()
-        if getattr(getattr(exc, "orig", None), "pgcode", None) != _INTERBLOQUEO:
+        pgcode = getattr(getattr(exc, "orig", None), "pgcode", None)
+        if pgcode not in (_INTERBLOQUEO, _TIEMPO_AGOTADO):
             raise
-        logger.warning("Interbloqueo al corregir los datos del cliente de la solicitud %s", sc_id)
+        logger.warning("Bloqueo abortado (%s) al corregir los datos del cliente de la solicitud %s", pgcode, sc_id)
         raise HTTPException(409, "Otra operación estaba cambiando esta solicitud o su cotización al mismo tiempo. "
                                  "Intenta de nuevo.")
     return {"status": "success", "data": data, "ficha_actualizada": bool(cambios_cli),
@@ -1934,7 +1973,8 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
         ActivityLog.entity_id == cot_id
     ).order_by(ActivityLog.created_at.asc(), ActivityLog.id.asc()).all()
     d = _cot_dict(cot)
-    d["actividades"] = [_log_dict(l) for l in logs]
+    rol = normalize_role(user.role)
+    d["actividades"] = [_log_dict(l, rol) for l in logs]
     # linked VEN (H46: en orden de creacion, para que el frontend tome el ultimo vigente o cancelado)
     vens = db.query(SaleOrder).filter(SaleOrder.cot_id == cot_id).order_by(SaleOrder.id.asc()).all()
     d["pedidos_venta"] = [_ven_dict(v) for v in vens]
@@ -2890,7 +2930,8 @@ def get_pedido(ven_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
              ActivityLog.entity_numero == v.numero),
     )).order_by(ActivityLog.created_at.asc(), ActivityLog.id.asc()).all()
     d = _ven_dict(v)
-    d["actividades"] = [_log_dict(l) for l in logs]
+    rol = normalize_role(user.role)
+    d["actividades"] = [_log_dict(l, rol) for l in logs]
     pxps = db.query(PaymentPending).filter(PaymentPending.ven_id == ven_id).order_by(PaymentPending.id.asc()).all()
     d["pxps"] = [_pxp_dict(p) for p in pxps]
     d["lista_compras_items"] = _lista_compras_items_de(db, ven_id)
