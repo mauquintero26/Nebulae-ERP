@@ -827,8 +827,8 @@ def test_s5_el_motivo_no_se_llena_con_caracteres_invisibles_ni_con_relleno(app_c
     limpio y exige al menos 5 letras o digitos. Se guarda limpio."""
     corto = "El motivo debe tener al menos 10 caracteres."
     sc = _sc(db, "SC-CSC046", user_admin)
-    for motivo in ("​" * 10, "­" * 12, "﻿⁠" * 6, "  " * 6, "ㅤ" * 10,
-                   "ﾠ" * 10, "..........", "-- !! ?? ..", "abcd......", " ​ a​b​c​d ​ "):
+    for motivo in ("\u200b" * 10, "\u00ad" * 12, "\ufeff\u2060" * 6, "\u2028\u2029" * 6, "\u3164" * 10,
+                   "\uffa0" * 10, "..........", "-- !! ?? ..", "abcd......", " \u200b a\u200bb\u200bc\u200bd \u200b "):
         resp = _cotizar(app_client, admin_token, sc.id, motivo=motivo)
         assert resp.status_code == 422, (motivo, resp.text)
         assert resp.json()["detail"] == corto, motivo
@@ -837,19 +837,19 @@ def test_s5_el_motivo_no_se_llena_con_caracteres_invisibles_ni_con_relleno(app_c
 
     # Un motivo normal pasa y se guarda limpio: sin los invisibles, con los espacios y los saltos de linea en uno solo.
     resp = _cotizar(app_client, admin_token, sc.id,
-                    motivo="  Cliente​ pidió  precio\n\nurgente   por teléfono­ \t")
+                    motivo="  Cliente\u200b pidió\u00a0\u00a0precio\n\nurgente   por teléfono\u00ad \t")
     assert resp.status_code == 200, resp.text
     limpio = "Cliente pidió precio urgente por teléfono"
     assert resp.json()["data"]["cotizacion"]["sin_confirmacion_sc_motivo"] == limpio
     [renglon] = _logs(db, "SC", sc.id, "COTIZADA_SIN_CONFIRMACION")
     assert renglon.extra_data["motivo"] == limpio and renglon.description.endswith(f"Motivo: {limpio}")
     # Cinco letras o digitos alcanzan; el largo se mide sin los invisibles (500 visibles y 20 invisibles pasan).
-    for i, motivo in enumerate(("abcde.....", "x" * 500 + "​" * 20)):
+    for i, motivo in enumerate(("abcde.....", "x" * 500 + "\u200b" * 20)):
         otra = _sc(db, f"SC-CSC04{7 + i}", user_admin)
         resp = _cotizar(app_client, admin_token, otra.id, motivo=motivo)
         assert resp.status_code == 200, (motivo[:12], resp.text)
-        assert resp.json()["data"]["cotizacion"]["sin_confirmacion_sc_motivo"] == motivo.replace("​", "")
-    resp = _cotizar(app_client, admin_token, _sc(db, "SC-CSC049", user_admin).id, motivo="y" * 501 + "​")
+        assert resp.json()["data"]["cotizacion"]["sin_confirmacion_sc_motivo"] == motivo.replace("\u200b", "")
+    resp = _cotizar(app_client, admin_token, _sc(db, "SC-CSC049", user_admin).id, motivo="y" * 501 + "\u200b")
     assert resp.status_code == 422, resp.text
     assert resp.json()["detail"] == "El motivo no puede tener más de 500 caracteres."
 

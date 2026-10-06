@@ -9,7 +9,7 @@ from app.models.fase1b import CustomerRequestLine, SalesQuotationLine, SaleOrder
 from app.models.fase4 import SaleOrderPayment, SalePackingSession, SalePackingItem, SaleOrderDelivery, SaleOrderDeliveryLine, SaleOrderReturn, SaleOrderReturnLine
 from app.models.fase5 import CustomerAgendaActivity, CustomerContactPreference
 from app.models.users import User
-from app.api.dependencies import get_current_user, get_optional_current_user, normalize_role, require_roles, ROLE_ADMIN, ROLE_FINANZAS, ROLE_ASESOR, ROLE_BODEGA, ROLE_COMPRAS, ALL_ERP_ROLES
+from app.api.dependencies import get_optional_current_user, normalize_role, require_roles, ROLE_ADMIN, ROLE_FINANZAS, ROLE_ASESOR, ROLE_BODEGA, ROLE_COMPRAS, ALL_ERP_ROLES
 from app.api.v1.schemas_fase5 import AgendaActivityCreate, AgendaActivityResponse
 
 from app.schemas import crm as schemas

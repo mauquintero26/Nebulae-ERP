@@ -1716,7 +1716,7 @@ MOTIVO_SIN_CONFIRMACION_MAX = 500
 # frontend todavia no lo espeja: el 422 llega con el texto del minimo.
 MOTIVO_SIN_CONFIRMACION_MIN_LETRAS = 5
 # S5: rellenos Hangul (U+115F, U+1160, U+3164 y U+FFA0). Unicode los clasifica como letras, pero no se ven.
-_RELLENOS_INVISIBLES = frozenset("ᅟᅠㅤﾠ")
+_RELLENOS_INVISIBLES = frozenset("\u115f\u1160\u3164\uffa0")
 # Largo de la columna sales_quotations.cotizador (String(150)): mas largo seria un 500 con un numero ya gastado.
 COTIZADOR_MAX = 150
 # U11: estados en que una SC sin la confirmacion vigente del cliente se puede cotizar con motivo (CONFIRMADA solo si
