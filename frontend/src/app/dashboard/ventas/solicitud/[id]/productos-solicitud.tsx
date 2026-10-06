@@ -49,6 +49,8 @@ export function ProductosSolicitud({
   const buscadorRef = useRef<HTMLInputElement>(null);
   // El «Agregar» de abajo hace lo mismo que Enter en el buscador: ProductSearch conecta aquí su acción.
   const agregarRef = useRef<(() => void) | null>(null);
+  // Ronda 1 (punto 12): el buscador está creando el producto o comprobándolo en el catálogo: «Agregar» espera.
+  const [ocupado, setOcupado] = useState(false);
   const cantidadId = useId();
 
   const lista = (productos || []).filter(p => nombreLinea(p));
@@ -62,6 +64,13 @@ export function ProductosSolicitud({
     if (avisoTimer.current) clearTimeout(avisoTimer.current);
     avisoTimer.current = null;
     setAviso(null);
+  }
+
+  // El aviso verde (role=status) por 6 s; `indice` es la línea que se resalta (-1: ninguna).
+  function mostrarAviso(texto: string, indice: number) {
+    if (avisoTimer.current) clearTimeout(avisoTimer.current);
+    setAviso({ texto, indice });
+    avisoTimer.current = setTimeout(() => { avisoTimer.current = null; setAviso(null); }, 6000);
   }
   useEffect(() => () => { if (avisoTimer.current) clearTimeout(avisoTimer.current); }, []);
 
@@ -91,9 +100,7 @@ export function ProductosSolicitud({
     setNombre(actual => (actual.trim() === textoUsado ? '' : actual));
     setSkuId(null); setCreado(null); setQty(1);
     buscadorRef.current?.focus();
-    if (avisoTimer.current) clearTimeout(avisoTimer.current);
-    setAviso({ texto: textoAvisoLinea(r, origen), indice: r.indice });
-    avisoTimer.current = setTimeout(() => { avisoTimer.current = null; setAviso(null); }, 6000);
+    mostrarAviso(textoAvisoLinea(r, origen), r.indice);
   }
 
   // Enter en el buscador (o «Agregar» con algo escrito): ProductSearch ya lo comprobó en el catálogo (U7: si coincide
@@ -119,9 +126,10 @@ export function ProductosSolicitud({
     setError('');
     try {
       // Lo que quedo escrito sin pulsar "Agregar" tambien se guarda (igual que al crear la SC), con su SKU si se eligio
-      // del catalogo y la cantidad escrita (ruling 1 de T8B: lineaEscrita); lineasParaEnviar solo quita las claves '_'
-      // y normaliza las cantidades.
-      const lineas = lineasParaEnviar(nombre.trim() ? [...borradorRef.current, lineaEscrita()] : borradorRef.current, '');
+      // del catalogo y la cantidad escrita (ruling 1 de T8B: lineaEscrita). Si es igual a una linea que ya esta, se suma
+      // a ella (ronda 1, punto 3: agregarLinea); lineasParaEnviar solo quita las claves '_' y normaliza las cantidades.
+      const base = nombre.trim() ? agregarLinea(borradorRef.current, lineaEscrita()).lineas : borradorRef.current;
+      const lineas = lineasParaEnviar(base, '');
       const r = await apiFetch(`/ventas/solicitudes/${scId}`, {
         method: 'PATCH',
         body: JSON.stringify({ productos: lineas, updated_by: currentUser }),
@@ -168,10 +176,15 @@ export function ProductosSolicitud({
             <ProductSearch
               value={nombre}
               onChange={v => { setNombre(v); setSkuId(null); setCreado(null); }}
-              onSelect={(p, info) => { setNombre(nombreLinea(p)); setSkuId(p?.id ?? null); setCreado(info ? info.creado : null); }}
+              onSelect={(p, info) => {
+                setNombre(nombreLinea(p)); setSkuId(p?.id ?? null); setCreado(info ? info.creado : null);
+                // Ronda 1 (punto 9): el alta rápida crea el producto pero todavía no lo agrega: se dice qué falta.
+                if (info?.creado) mostrarAviso(`Se creó «${nombreLinea(p)}» en el catálogo: elige la cantidad y pulsa «Agregar».`, -1);
+              }}
               onAgregarTexto={agregarEscrito}
               inputRef={buscadorRef}
               agregarRef={agregarRef}
+              onOcupado={setOcupado}
             />
             <div className="flex items-center gap-2">
               <label htmlFor={cantidadId} className="text-xs font-bold text-slate-500">Cantidad</label>
@@ -181,7 +194,7 @@ export function ProductosSolicitud({
                 onBlur={() => setQty(q => cantidadValida(q))}
                 className="w-20 border border-slate-200 rounded-xl px-2 py-2 text-sm text-center font-bold outline-none focus:ring-2 focus:ring-indigo-200"
               />
-              <Button variant="secondary" size="sm" icon={Plus} disabled={!nombre.trim()} onClick={agregar}>Agregar</Button>
+              <Button variant="secondary" size="sm" icon={Plus} disabled={!nombre.trim() || ocupado} onClick={agregar}>Agregar</Button>
             </div>
             <div role="status" aria-live="polite">
               {aviso?.texto && <p className="text-xs font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 break-words">{aviso.texto}</p>}
@@ -194,10 +207,10 @@ export function ProductosSolicitud({
               Si cambias los productos, la confirmación del cliente deja de valer y tendrás que reenviarle la solicitud.
             </p>
           )}
-          {error && <p className="text-xs font-bold text-rose-600">{error}</p>}
+          {error && <p role="alert" className="text-xs font-bold text-rose-600">{error}</p>}
 
           <div className="flex justify-end gap-2">
-            <Button variant="secondary" size="sm" onClick={() => setEditando(false)}>Cancelar</Button>
+            <Button variant="secondary" size="sm" disabled={guardando} onClick={() => setEditando(false)}>Cancelar</Button>
             <Button
               color="indigo" size="sm" icon={Save} loading={guardando}
               disabled={borrador.length === 0 && !nombre.trim() && lista.length === 0}

@@ -200,3 +200,24 @@ export function textoAvisoLinea(r, origen) {
   if (origen === 'texto-sin-comprobar') return `Se agregó «${nombre}» como texto libre (no se pudo comprobar el catálogo).`;
   return '';
 }
+
+/** Estados de la solicitud en los que el cliente ya tiene (o tenía) el enlace o la confirmación de sus productos. */
+const ESTADOS_CON_CONFIRMACION = ['PENDIENTE_CONFIRMACION', 'CONFIRMADA'];
+
+/**
+ * T8B ronda 1 (punto 8): el aviso después de «Guardar productos» en el detalle. Si la solicitud estaba en Pendiente por
+ * confirmación o Confirmada y el guardado le cambió el estado (cambiaron los productos: vuelve a Asignada o a Nueva), la
+ * confirmación del cliente quedó anulada y hay que enviársela de nuevo. Si no (o sin el estado nuevo), el de guardado.
+ * @param {any} estadoAntes el estado de la solicitud antes de guardar
+ * @param {any} estadoDespues el estado que devuelve el PATCH (undefined si no trajo la solicitud)
+ * @returns {{ texto: string, tono: 'ok' | 'info' }}
+ */
+export function avisoProductosGuardados(estadoAntes, estadoDespues) {
+  if (ESTADOS_CON_CONFIRMACION.includes(estadoAntes) && estadoDespues && estadoDespues !== estadoAntes) {
+    return {
+      texto: 'Productos guardados. Como cambiaron, la confirmación del cliente quedó anulada: envíale la solicitud de nuevo.',
+      tono: 'info',
+    };
+  }
+  return { texto: 'Productos guardados.', tono: 'ok' };
+}

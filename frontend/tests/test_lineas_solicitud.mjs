@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import {
   lineaDesdeCatalogo, lineaTextoLibre, agregarLinea, resolverTextoEscrito, lineasParaEnviar, nombreLinea,
   quitarLinea, cantidadValida, cambiarCantidad, resultadosSirven, resolverConBusqueda, textoAvisoLinea,
+  avisoProductosGuardados,
 } from '../src/lib/lineas-solicitud.js';
 
 const copiaProfunda = (v) => JSON.parse(JSON.stringify(v));
@@ -241,17 +242,48 @@ console.log('--- TEST 12 (T8B, H25): textoAvisoLinea — el mismo aviso en el fo
 
 console.log('--- TEST 13 (T8B, ruling 1): el editor del detalle guarda la línea pendiente con su SKU y su cantidad ---');
 {
-  // guardar() del editor: lineasParaEnviar(nombre ? [...borrador, lineaEscrita()] : borrador, '') — la línea pendiente la
-  // arma el editor (elegida del catálogo con la cantidad escrita) y lineasParaEnviar solo quita las claves '_' y normaliza.
+  // guardar() del editor: lineasParaEnviar(nombre ? agregarLinea(borrador, lineaEscrita()).lineas : borrador, '') — la
+  // línea pendiente la arma el editor (elegida del catálogo con la cantidad escrita), agregarLinea la suma a una igual
+  // (ronda 1, punto 3) y lineasParaEnviar solo quita las claves '_' y normaliza.
   const borrador = [{ product_name: 'Brocha 2"', qty: '', sku_id: 7, unit_price_cop: 0, _nuevo: false }];
   const pendiente = { product_name: 'Rodillo 9in', qty: cantidadValida('3'), sku_id: 12, unit_price_cop: 0, _nuevo: true };
-  assert.deepEqual(lineasParaEnviar([...borrador, pendiente], ''), [
+  assert.deepEqual(lineasParaEnviar(agregarLinea(borrador, pendiente).lineas, ''), [
     { product_name: 'Brocha 2"', qty: 1, sku_id: 7, unit_price_cop: 0 },
     { product_name: 'Rodillo 9in', qty: 3, sku_id: 12, unit_price_cop: 0 },
   ]);
   // Como texto pendiente (lineasParaEnviar(borrador, nombre)) perdería el SKU y la cantidad: por eso no se usa así.
   assert.deepEqual(lineasParaEnviar(borrador, 'Rodillo 9in').at(-1),
     { product_name: 'Rodillo 9in', qty: 1, unit_price_cop: 0, sku_id: null });
+  // Ronda 1 (punto 3): la línea pendiente igual a una que ya está (×2 + ×3) queda en una sola línea ×5, con su SKU.
+  const conRodillo = [...borrador, { product_name: 'Rodillo 9in', qty: 2, sku_id: 12, unit_price_cop: 0 }];
+  assert.deepEqual(lineasParaEnviar(agregarLinea(conRodillo, { ...pendiente, _nuevo: false }).lineas, ''), [
+    { product_name: 'Brocha 2"', qty: 1, sku_id: 7, unit_price_cop: 0 },
+    { product_name: 'Rodillo 9in', qty: 5, sku_id: 12, unit_price_cop: 0 },
+  ]);
+  // Agregada al final, como antes, habrían viajado dos líneas del mismo producto.
+  assert.equal(lineasParaEnviar([...conRodillo, pendiente], '').length, 3);
+  // Lo mismo con un texto libre igual a otro (sin tildes ni mayúsculas).
+  assert.deepEqual(lineasParaEnviar(agregarLinea([lineaTextoLibre('Cinta DEMO')], { ...lineaTextoLibre('cinta demo'), qty: 2 }).lineas, ''),
+    [{ product_name: 'Cinta DEMO', qty: 3, unit_price_cop: 0, sku_id: null }]);
+}
+
+console.log('--- TEST 14 (T8B r1, punto 8): avisoProductosGuardados — el aviso después de «Guardar productos» ---');
+{
+  const ANULADA = 'Productos guardados. Como cambiaron, la confirmación del cliente quedó anulada: envíale la solicitud de nuevo.';
+  // Desde Pendiente por confirmación o Confirmada, si el estado cambió: la confirmación quedó anulada.
+  for (const antes of ['PENDIENTE_CONFIRMACION', 'CONFIRMADA']) {
+    for (const despues of ['ASIGNADA', 'BORRADOR']) {
+      assert.deepEqual(avisoProductosGuardados(antes, despues), { texto: ANULADA, tono: 'info' }, `${antes} -> ${despues}`);
+    }
+    // Los mismos productos (o solo vinculados al catálogo): el estado no cambia.
+    assert.deepEqual(avisoProductosGuardados(antes, antes), { texto: 'Productos guardados.', tono: 'ok' });
+  }
+  // En otros estados no había confirmación que anular.
+  assert.deepEqual(avisoProductosGuardados('ASIGNADA', 'ASIGNADA'), { texto: 'Productos guardados.', tono: 'ok' });
+  assert.deepEqual(avisoProductosGuardados('BORRADOR', 'ASIGNADA'), { texto: 'Productos guardados.', tono: 'ok' });
+  // Sin el estado nuevo (la respuesta no trajo la solicitud): no se afirma que se anuló.
+  assert.deepEqual(avisoProductosGuardados('CONFIRMADA', undefined), { texto: 'Productos guardados.', tono: 'ok' });
+  assert.deepEqual(avisoProductosGuardados(null, null), { texto: 'Productos guardados.', tono: 'ok' });
 }
 
 console.log('OK test_lineas_solicitud');

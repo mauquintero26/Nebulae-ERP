@@ -13,7 +13,7 @@ import { nombreLinea, resolverTextoEscrito, resultadosSirven, resolverConBusqued
 
 const buscarEnCatalogo = (q: string) => apiFetch(`/crm/products/search?q=${encodeURIComponent(q)}&limit=8`);
 
-export function ProductSearch({ value, onChange, onSelect, onAgregarTexto, inputRef, agregarRef }: {
+export function ProductSearch({ value, onChange, onSelect, onAgregarTexto, inputRef, agregarRef, onOcupado }: {
   value: string;
   onChange: (v: string) => void;
   /** Producto elegido del catálogo (sin info) o creado con quick-create (info.creado false = ya existía con ese nombre;
@@ -28,6 +28,9 @@ export function ProductSearch({ value, onChange, onSelect, onAgregarTexto, input
    * conecta aquí: agregarRef.current() hace lo mismo que Enter (comprueba lo escrito en el catálogo y llama
    * onAgregarTexto). Con agregarRef no se pinta el '+ Agregar' de al lado del buscador. */
   agregarRef?: React.RefObject<(() => void) | null>;
+  /** T8B ronda 1: avisa si el buscador está ocupado (creando el producto o comprobando lo escrito en el catálogo), para
+   * que el «Agregar» del padre espere. Pasar una función estable (un setState). */
+  onOcupado?: (ocupado: boolean) => void;
 }) {
   const [results, setResults] = useState<any[]>([]);
   // A4: el texto (recortado) para el que se pidieron los resultados que se tienen.
@@ -70,6 +73,11 @@ export function ProductSearch({ value, onChange, onSelect, onAgregarTexto, input
     agregarRef.current = () => { void agregarTexto(); };
     return () => { agregarRef.current = null; };
   });
+
+  // T8B ronda 1: el padre sabe cuándo el buscador está ocupado (también al montar: arranca libre).
+  useEffect(() => {
+    onOcupado?.(creating || comprobando);
+  }, [creating, comprobando, onOcupado]);
 
   // Si el texto queda vacío (p. ej. el formulario lo limpia al agregar), no reaparece una lista vieja.
   // Va en un efecto porque el padre limpia `value` sin pasar por handle().

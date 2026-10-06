@@ -21,12 +21,13 @@ import {
   infoEstadoSolicitud, puedeReiniciar, puedeCotizarSinConfirmacion, MOTIVO_SIN_CONFIRMACION_MIN, ESTADOS_SC_SIN_CONFIRMAR,
   resumenCancelacion, MOTIVO_SIN_CONFIRMACION_MAX, pasoSolicitud, PASOS_SC,
 } from '@/lib/estados-solicitud';
-import { largoTexto, telUrl, mailtoUrl, asuntoDocumento, agregarActividad, esEntradaChatter } from '@/lib/chatter';
+import { largoTexto, telUrl, mailtoUrl, asuntoDocumento, agregarActividad, esEntradaChatter, motivoTelefono } from '@/lib/chatter';
 import { formatoPct } from '@/lib/dinero-ventas';
 import { pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
 import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
 import { comoUTC, diaLocalDeFecha, fechaEditadaParaGuardar } from '@/lib/hub-ventas';
 import { CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto } from '@/lib/datos-cliente';
+import { avisoProductosGuardados } from '@/lib/lineas-solicitud';
 import { EstadoSolicitudPasos } from './estado-solicitud';
 // Final whole-branch review (hallazgo #1, el mas severo): Gate 1 no tenia NINGUNA via
 // de UI para entregarle el link de confirmacion al cliente -- enviarParaConfirmacion
@@ -103,6 +104,8 @@ const textoCotizacionCreada = (numero: unknown) => (numero ? `Cotización ${nume
 // U11 (T8A ronda 1) y T8B: con el editor de productos abierto no se cotiza (ni con confirmación ni sin ella): el servidor
 // cotiza los productos GUARDADOS, no los que se están editando. El mismo porqué en todos los botones de cotizar.
 const GUARDA_PRODUCTOS_ANTES = 'Guarda o cancela la edición de productos antes de cotizar';
+// T8B ronda 1: tampoco se envía al cliente: confirmaría los productos guardados, no los que se están editando.
+const GUARDA_PRODUCTOS_ANTES_DE_ENVIAR = 'Guarda o cancela la edición de productos antes de enviarla al cliente';
 
 type SolicitudEditable = {
   advisor_name?: string | null; advisor_user_id?: number | string | null; tipo_solicitud?: string | null;
@@ -158,6 +161,10 @@ function SolicitudDetalleContent() {
   // H21: el error de «Guardar» (un dato de contacto que no sirve, el 409 del correo de otro cliente…), en rojo bajo la
   // barra de Guardar, sin cerrar el formulario.
   const [editError, setEditError] = useState('');
+  // T8B ronda 1 (punto 4): la solicitud tal como estaba al abrir «Editar». Los cambios se miden contra ella y no contra la
+  // solicitud viva: un dato que otro cambió y llegó con una recarga silenciosa no se revierte con lo que muestra el
+  // formulario.
+  const baseEdicion = useRef<SolicitudEditable | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -228,7 +235,10 @@ function SolicitudDetalleContent() {
       const d = raw?.data ?? raw;
       if (esLaUltima()) {
         setSolicitud(d);
-        if (!silencioso) setEditForm(formularioDeEdicion(d));
+        if (!silencioso) {
+          setEditForm(formularioDeEdicion(d));
+          baseEdicion.current = d;
+        }
       }
     } catch (err: any) {
       if (!silencioso && esLaUltima()) setLoadError(err.message || 'No se pudo cargar la solicitud');
@@ -252,6 +262,7 @@ function SolicitudDetalleContent() {
   // H25/C12: el ancho inicial según la ventana (300-400 px: a 1024 px el panel izquierdo gana espacio). En un efecto al
   // montar y no en el useState, para no romper la hidratación; después se sigue arrastrando (300-800).
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- C12: ancho inicial tras montar, sin romper la hidratación
     setRightWidth(anchoInicialPanel(window.innerWidth));
   }, []);
   const isDragging = useRef(false);
@@ -289,6 +300,7 @@ function SolicitudDetalleContent() {
   // contacto del cliente; cancelar lo deja como estaba y limpia el error.
   function abrirEdicion() {
     if (!solicitud) return;
+    baseEdicion.current = solicitud;
     setEditForm(formularioDeEdicion(solicitud));
     setEditError('');
     setEditMode(true);
@@ -297,7 +309,10 @@ function SolicitudDetalleContent() {
   function cancelarEdicion() {
     setEditMode(false);
     setEditError('');
-    if (solicitud) setEditForm(formularioDeEdicion(solicitud));
+    if (solicitud) {
+      baseEdicion.current = solicitud;
+      setEditForm(formularioDeEdicion(solicitud));
+    }
   }
 
   // H21: «Guardar» en dos pasos.
@@ -308,11 +323,13 @@ function SolicitudDetalleContent() {
   async function saveEdit() {
     if (!solicitud) return;
     setEditError('');
-    const cambios = cambiosDeContacto(solicitud, editForm, { tieneFicha: !!solicitud.customer_id });
+    // Ronda 1 (punto 4): contra lo que había al abrir «Editar», no contra la solicitud viva.
+    const base: SolicitudEditable = baseEdicion.current ?? solicitud;
+    const cambios = cambiosDeContacto(base, editForm, { tieneFicha: !!solicitud.customer_id });
     const errorContacto = validarContacto(cambios);
     if (errorContacto) { setEditError(errorContacto); return; }
     setSavingEdit(true);
-    let correccion: { data?: object; sin_cambios?: boolean } | null = null;
+    let correccion: { data?: SolicitudEditable; sin_cambios?: boolean } | null = null;
     if (Object.keys(cambios).length > 0) {
       try {
         // R9: sin updated_by: el autor lo pone el servidor con la sesión.
@@ -320,11 +337,18 @@ function SolicitudDetalleContent() {
       } catch (err) {
         setEditError(textoDeError(err));
         setSavingEdit(false);
+        // Ronda 1 (punto 5): con un 400 o un 409 (la solicitud cambió en otra parte) o sin respuesta, recarga silenciosa:
+        // el formulario sigue abierto y editForm no se toca.
+        if (recargarTrasError(err)) void loadSolicitud({ silencioso: true });
         return;
       }
-      // Lo corregido se ve de una vez (y si el paso 2 falla, reintentar ya no lo reenvía).
+      // Lo corregido se ve de una vez, y la base pasa a lo ya guardado: si el paso 2 falla, reintentar no reenvía el
+      // contacto.
       const datos = correccion?.data;
-      if (datos) setSolicitud((prev: Record<string, unknown>) => ({ ...prev, ...datos }));
+      if (datos) {
+        setSolicitud((prev: Record<string, unknown>) => ({ ...prev, ...datos }));
+        baseEdicion.current = { ...base, ...datos };
+      }
     }
     const contactoGuardado = !!correccion && correccion.sin_cambios !== true;
     const body: Record<string, unknown> = {
@@ -338,7 +362,7 @@ function SolicitudDetalleContent() {
     // T8A ronda 1: el vencimiento solo viaja si el día cambió (mediodía local de ese día). Sin tocarlo no se mueve la
     // hora guardada ni la Actividad anota «11/10/2026 → 10/10/2026» (cambios_documento compara el día UTC), y nunca
     // se manda ''.
-    const vencimiento = fechaEditadaParaGuardar(editForm.fecha_vencimiento, solicitud.fecha_vencimiento);
+    const vencimiento = fechaEditadaParaGuardar(editForm.fecha_vencimiento, base.fecha_vencimiento);
     if (vencimiento) body.fecha_vencimiento = vencimiento;
     let guardado = true;
     try {
@@ -354,7 +378,7 @@ function SolicitudDetalleContent() {
     // paso 2 falló, el editor de productos) y llega la Actividad de la corrección.
     if (guardado || contactoGuardado) await loadSolicitud({ silencioso: true });
     // R18: si la corrección anuló la confirmación del cliente o un enlace, se dice qué hacer; si no, el aviso de guardado.
-    const aviso = correccion ? avisoCorreccionContacto(correccion, solicitud.numero) : null;
+    const aviso = correccion ? avisoCorreccionContacto(correccion) : null;
     if (aviso) avisar(aviso.texto, { tono: aviso.tono });
     setSavingEdit(false);
   }
@@ -504,7 +528,8 @@ function SolicitudDetalleContent() {
         }),
       });
       setAssignUserId('');
-      await loadSolicitud();
+      // T8B ronda 1: recarga silenciosa (sin el spinner no se desmontan el formulario ni el editor abiertos).
+      await loadSolicitud({ silencioso: true });
     } catch (err: any) {
       avisarError(err, 'No se pudo asignar el asesor');
     }
@@ -535,11 +560,12 @@ function SolicitudDetalleContent() {
         const mensaje = link
           ? `Hola, aquí está tu solicitud ${solicitud.numero}. Confírmala aquí: ${link}`
           : `Hola, aquí está tu solicitud ${solicitud.numero}`;
-        whatsapp = waUrl(solicitud?.customer_phone, mensaje);
+        // T8B ronda 1: el mismo criterio que «Llamar» (telUrl): con un teléfono incompleto no se abre un wa.me muerto.
+        whatsapp = telUrl(solicitud?.customer_phone) ? waUrl(solicitud?.customer_phone, mensaje) : null;
         if (whatsapp) window.open(whatsapp, '_blank');
       }
 
-      await loadSolicitud();
+      await loadSolicitud({ silencioso: true });
       setConfirmCorreo(d?.correo ?? null);
       setConfirmCanal(selectedChannel);
       setConfirmWhatsapp(whatsapp);
@@ -682,6 +708,15 @@ function SolicitudDetalleContent() {
       ? 'La confirmación del cliente ya no vale: reinicia la solicitud o cotízala con motivo.'
       : undefined;
 
+  // T8B ronda 1 (punto 16): un botón deshabilitado no recibe foco y su title no basta: mientras el editor de productos
+  // está abierto, el porqué también va escrito bajo las acciones de enviar o cotizar que quedaron deshabilitadas.
+  function motivoEditorAbierto(enviar: boolean, cotizar: boolean) {
+    if (!editandoProductos || (!enviar && !cotizar)) return null;
+    const texto = enviar && cotizar ? `${GUARDA_PRODUCTOS_ANTES_DE_ENVIAR} o de cotizar`
+      : enviar ? GUARDA_PRODUCTOS_ANTES_DE_ENVIAR : GUARDA_PRODUCTOS_ANTES;
+    return <p className="text-xs text-slate-600">{texto}.</p>;
+  }
+
   function abrirEditorProductos() {
     setEditandoProductos(true);
     setTimeout(() => document.getElementById('productos-solicitud')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
@@ -799,9 +834,12 @@ function SolicitudDetalleContent() {
             tone="emerald"
             title={`La cotización ${ultimaRechazada.numero} fue rechazada`}
             actions={(
-              <span className="block" title={editandoProductos ? GUARDA_PRODUCTOS_ANTES : undefined}>
-                <Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} disabled={editandoProductos} onClick={confirmarSC}>Crear nueva cotización</Button>
-              </span>
+              <>
+                <span className="block [&>button]:w-full" title={editandoProductos ? GUARDA_PRODUCTOS_ANTES : undefined}>
+                  <Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} disabled={editandoProductos} onClick={confirmarSC}>Crear nueva cotización</Button>
+                </span>
+                {motivoEditorAbierto(false, true)}
+              </>
             )}
           >
             La solicitud sigue activa: crea una nueva cotización con los productos que el cliente confirmó.
@@ -813,9 +851,12 @@ function SolicitudDetalleContent() {
           tone="emerald"
           title="El cliente confirmó la solicitud"
           actions={(
-            <span className="block" title={editandoProductos ? GUARDA_PRODUCTOS_ANTES : undefined}>
-              <Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} disabled={editandoProductos} onClick={confirmarSC}>Crear Cotización</Button>
-            </span>
+            <>
+              <span className="block [&>button]:w-full" title={editandoProductos ? GUARDA_PRODUCTOS_ANTES : undefined}>
+                <Button color="emerald" size="lg" icon={CheckCircle2} loading={confirming} disabled={editandoProductos} onClick={confirmarSC}>Crear Cotización</Button>
+              </span>
+              {motivoEditorAbierto(false, true)}
+            </>
           )}
         >
           Crea la cotización para calcular los precios y enviársela al cliente.
@@ -825,10 +866,13 @@ function SolicitudDetalleContent() {
     // U11: además del botón principal, cotizar sin esperar al cliente (abre la ventana del motivo). Con el editor de
     // productos abierto queda deshabilitado (el servidor cotiza los productos guardados); el span lleva el porqué.
     const botonCotizarSinConf = puedeCotizarSinConf ? (
-      <span className="block" title={editandoProductos ? GUARDA_PRODUCTOS_ANTES : undefined}>
+      <span className="block [&>button]:w-full" title={editandoProductos ? GUARDA_PRODUCTOS_ANTES : undefined}>
         <Button variant="secondary" icon={FileText} disabled={editandoProductos} onClick={abrirCotizarSinConfirmacion}>Cotizar sin esperar confirmación</Button>
       </span>
     ) : null;
+    // T8B ronda 1 (punto 15): con el editor de productos abierto tampoco se envía al cliente (confirmaría los productos
+    // guardados, no los que se están editando).
+    const tituloEnviar = editandoProductos ? GUARDA_PRODUCTOS_ANTES_DE_ENVIAR : undefined;
     if (estado === 'PENDIENTE_CONFIRMACION') {
       return (
         <NextStepCard
@@ -836,8 +880,11 @@ function SolicitudDetalleContent() {
           title="Esperando confirmación del cliente"
           actions={(
             <>
-              <Button color="blue" icon={Send} loading={sendingConfirmacion} onClick={handleEnviarParaConfirmacion}>Reenviar enlace de confirmación</Button>
+              <span className="block [&>button]:w-full" title={tituloEnviar}>
+                <Button color="blue" icon={Send} loading={sendingConfirmacion} disabled={editandoProductos} onClick={handleEnviarParaConfirmacion}>Reenviar enlace de confirmación</Button>
+              </span>
               {botonCotizarSinConf}
+              {motivoEditorAbierto(true, !!botonCotizarSinConf)}
             </>
           )}
         >
@@ -853,8 +900,11 @@ function SolicitudDetalleContent() {
           title="Envía la solicitud al cliente para que la confirme"
           actions={(
             <>
-              <Button color="indigo" size="lg" icon={Send} loading={sendingConfirmacion} onClick={handleEnviarParaConfirmacion}>Enviar para Confirmación</Button>
+              <span className="block [&>button]:w-full" title={tituloEnviar}>
+                <Button color="indigo" size="lg" icon={Send} loading={sendingConfirmacion} disabled={editandoProductos} onClick={handleEnviarParaConfirmacion}>Enviar para Confirmación</Button>
+              </span>
               {botonCotizarSinConf}
+              {motivoEditorAbierto(true, !!botonCotizarSinConf)}
             </>
           )}
         >
@@ -899,7 +949,8 @@ function SolicitudDetalleContent() {
     // Sin siguiente paso automático: una Confirmada cuya confirmación ya no vale (U15: sin cotización activa; se retoma
     // reiniciándola o se cotiza sin esperar al cliente, U11) o un estado heredado (se ajusta en la revisión de datos).
     return (
-      <NextStepCard tone="slate" title={`Solicitud ${infoEstadoSolicitud(estado).label.toLowerCase()}`} actions={botonCotizarSinConf ?? undefined}>
+      <NextStepCard tone="slate" title={`Solicitud ${infoEstadoSolicitud(estado).label.toLowerCase()}`}
+        actions={botonCotizarSinConf ? <>{botonCotizarSinConf}{motivoEditorAbierto(false, true)}</> : undefined}>
         {estado === 'CONFIRMADA'
           ? 'La confirmación del cliente ya no vale para crear la cotización.'
           : 'Esta solicitud no tiene un siguiente paso automático.'}
@@ -991,7 +1042,12 @@ function SolicitudDetalleContent() {
                 <div className="w-9 h-9 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 flex-shrink-0"><User size={15} /></div>
                 <div>
                   <p className="font-bold text-slate-900">{solicitud?.customer_name}</p>
-                  {editMode && <p className="text-xs text-slate-500">El nombre se cambia en la ficha del cliente</p>}
+                  {editMode && (
+                    <p className="text-xs text-slate-500">
+                      {solicitud?.customer_id ? 'El nombre se cambia en la ficha del cliente'
+                        : 'El nombre no se corrige desde aquí: esta solicitud no tiene ficha de cliente.'}
+                    </p>
+                  )}
                 </div>
               </div>
               {editMode ? (
@@ -1000,11 +1056,16 @@ function SolicitudDetalleContent() {
                   {CAMPOS_CONTACTO.filter(c => !c.soloConFicha || !!solicitud?.customer_id).map(c => (
                     <div key={c.clave}>
                       <label htmlFor={`contacto-${c.clave}`} className="text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider block">{c.etiqueta}</label>
+                      {/* Sin maxLength (ronda 1): un texto pegado no se corta en silencio; validarContacto dice el límite. */}
                       <input
-                        id={`contacto-${c.clave}`} type={TIPO_CAMPO_CONTACTO[c.clave] || 'text'} value={editForm[c.clave] ?? ''} maxLength={c.max}
+                        id={`contacto-${c.clave}`} type={TIPO_CAMPO_CONTACTO[c.clave] || 'text'} value={editForm[c.clave] ?? ''}
                         onChange={e => { const v = e.target.value; setEditForm((ef: Record<string, unknown>) => ({ ...ef, [c.clave]: v })); setEditError(''); }}
                         className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none"
                       />
+                      {/* Ronda 1 (punto 10): un teléfono incompleto se puede guardar, pero se avisa lo que no va a funcionar. */}
+                      {c.clave === 'customer_phone' && String(editForm.customer_phone ?? '').trim() !== '' && motivoTelefono(editForm.customer_phone) && (
+                        <p className="text-xs text-amber-700 mt-1">Con menos de 10 dígitos (con el indicativo) no se podrá llamar ni escribir por WhatsApp desde aquí.</p>
+                      )}
                     </div>
                   ))}
                   <p className="text-xs text-slate-500 leading-relaxed">
@@ -1013,8 +1074,14 @@ function SolicitudDetalleContent() {
                 </div>
               ) : (
                 <>
-                  {solicitud?.customer_phone && <a href={`tel:${solicitud.customer_phone}`} className="flex items-center gap-2 text-sm text-slate-600 hover:text-emerald-600 pl-1"><Phone size={13} className="text-slate-400" />{solicitud.customer_phone}</a>}
-                  {solicitud?.customer_email && <a href={`mailto:${solicitud.customer_email}`} className="flex items-center gap-2 text-sm text-slate-600 hover:text-indigo-600 pl-1"><Mail size={13} className="text-slate-400" />{solicitud.customer_email}</a>}
+                  {/* Ronda 1 (punto 1): los mismos enlaces normalizados de «Contactar cliente» (tel:+57…; el correo y el asunto
+                      codificados: un correo como «a@b.co?bcc=…» no agrega destinatarios). Si el dato no sirve, solo el texto. */}
+                  {solicitud?.customer_phone && (llamarCliente
+                    ? <a href={llamarCliente} className="flex items-center gap-2 text-sm text-slate-600 hover:text-emerald-600 pl-1"><Phone size={13} className="text-slate-400" />{solicitud.customer_phone}</a>
+                    : <p className="flex items-center gap-2 text-sm text-slate-600 pl-1"><Phone size={13} className="text-slate-400" />{solicitud.customer_phone}</p>)}
+                  {solicitud?.customer_email && (correoCliente
+                    ? <a href={correoCliente} className="flex items-center gap-2 text-sm text-slate-600 hover:text-indigo-600 pl-1"><Mail size={13} className="text-slate-400" />{solicitud.customer_email}</a>
+                    : <p className="flex items-center gap-2 text-sm text-slate-600 pl-1"><Mail size={13} className="text-slate-400" />{solicitud.customer_email}</p>)}
                   {/* «{dirección} · {ciudad}», o solo la ciudad si no hay dirección. */}
                   {(solicitud?.customer_address || solicitud?.customer_city) && (
                     <p className="flex items-start gap-2 text-sm text-slate-600 pl-1"><MapPin size={13} className="text-slate-400 mt-0.5 flex-shrink-0" />{[solicitud.customer_address, solicitud.customer_city].filter(Boolean).join(' · ')}</p>
@@ -1042,6 +1109,10 @@ function SolicitudDetalleContent() {
               onGuardado={(scNueva) => {
                 if (scNueva) setSolicitud((prev: any) => ({ ...prev, ...scNueva }));
                 void loadSolicitud({ silencioso: true });
+                // T8B ronda 1 (punto 8): si el guardado anuló la confirmación (cambió el estado desde Pendiente o
+                // Confirmada), se dice que hay que enviársela de nuevo; si no, el aviso de guardado.
+                const aviso = avisoProductosGuardados(solicitud?.estado, scNueva?.estado);
+                avisar(aviso.texto, { tono: aviso.tono });
               }}
             />
           )}
@@ -1136,6 +1207,7 @@ function SolicitudDetalleContent() {
                         <Button color="emerald" size="sm" icon={CheckCircle2} loading={confirming} disabled={editandoProductos} onClick={confirmarSC}>Crear nueva cotización</Button>
                       </span>
                     )}
+                    {canConfirmarSC && motivoEditorAbierto(false, true)}
                   </>
                 ) : (
                   <div className="bg-slate-50 border border-dashed border-slate-300 rounded-xl p-4 text-center">
@@ -1150,6 +1222,7 @@ function SolicitudDetalleContent() {
                         <Button color="amber" size="sm" icon={FileText} disabled={editandoProductos} onClick={abrirCotizarSinConfirmacion}>Cotizar</Button>
                       </span>
                     )}
+                    {(canConfirmarSC || puedeCotizarSinConf) && motivoEditorAbierto(false, true)}
                   </div>
                 )}
               </div>
@@ -1418,7 +1491,8 @@ function SolicitudDetalleContent() {
           onConfirm={enviarParaConfirmacion}
           onCancel={cancelarEnvioConfirmacion}
           saving={sendingConfirmacion}
-          customerHasPhone={!!waUrl(solicitud?.customer_phone)}
+          // T8B ronda 1: WhatsApp solo con un teléfono que sirva para llamar (el mismo criterio de «Contactar cliente»).
+          customerHasPhone={!!llamarCliente}
           customerEmail={solicitud?.customer_email ?? null}
           documentLabel="solicitud"
         />
