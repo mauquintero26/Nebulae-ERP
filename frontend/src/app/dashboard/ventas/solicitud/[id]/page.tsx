@@ -96,7 +96,7 @@ const MOTIVO_SIN_CONFIRMACION_MAX = 500;
 // medianoche mostraba el día siguiente. saveEdit lo devuelve a mediodía local, así que la ida y vuelta da el mismo día.
 // Una fecha de calendario (sin hora) es ese mismo día.
 const FECHA_DE_CALENDARIO = /^\d{4}-\d{2}-\d{2}$/;
-function diaLocal(iso: any): string {
+function diaLocal(iso: unknown): string {
   if (typeof iso !== 'string' || !iso.trim()) return '';
   if (FECHA_DE_CALENDARIO.test(iso.trim())) return iso.trim();
   const f = new Date(comoUTC(iso));
@@ -602,7 +602,7 @@ function SolicitudDetalleContent() {
     if (cotizacionesActivas.length > 0) {
       // U11: la SC sigue sin confirmar con una cotización activa (creada con 'Cotizar sin esperar confirmación'): se dice
       // con su motivo y se ofrece enviarle (o reenviarle) el enlace de la solicitud al cliente.
-      const cotSinConf: any = scSinConfirmar ? cotizacionesActivas.find((c: any) => c.sin_confirmacion_sc_at) : null;
+      const cotSinConf = scSinConfirmar ? cotizacionesActivas.find((c: any) => c.sin_confirmacion_sc_at) : null;
       const avisoSinConfirmar = !scSinConfirmar ? null
         : !cotSinConf ? 'El cliente todavía no confirma esta solicitud.'
         : `El cliente todavía no confirma esta solicitud; se cotizó sin su confirmación.${

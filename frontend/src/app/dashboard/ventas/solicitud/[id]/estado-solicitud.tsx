@@ -8,7 +8,7 @@ import { PASOS_SC, pasoSolicitud, infoEstadoSolicitud } from '@/lib/estados-soli
 // 'Reiniciar solicitud' solo sale si `puedeReiniciar`; la página confirma con confirmar() y hace el PATCH (R30).
 // La página no lo usa en Soporte Técnico (tiene su select) ni en Cancelada (se restaura desde la Papelera).
 export function EstadoSolicitudPasos({ solicitud, puedeReiniciar, onReiniciar, reiniciando = false }: {
-  solicitud: any;
+  solicitud: { estado?: string | null };
   puedeReiniciar: boolean;
   onReiniciar: () => void;
   /** true mientras la página guarda el reinicio: el botón queda deshabilitado (sin doble clic). */
