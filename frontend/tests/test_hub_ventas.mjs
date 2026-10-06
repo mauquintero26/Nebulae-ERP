@@ -6,6 +6,8 @@
  *  - N5: el resumen del cambio masivo de estado de pedidos.
  *  - H2 (R5): dias desde la creacion, nunca negativos ni "hace hoy"; fechas sin zona = UTC.
  *  - H3: la proxima accion de una solicitud y el semaforo (no resuelto / accion tomada).
+ *  - T9B (Bloque 2): R19 (Cotizar solo con la confirmacion del cliente vigente), R20 (una SC sin confirmar con
+ *    cotizacion activa no es No resuelto; tambien en el Kanban) y R1 (que nota del Chatter reinicia el atraso).
  */
 
 import assert from 'node:assert/strict';
@@ -14,8 +16,11 @@ import {
   ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN, repartirCambioEstadoPVEN,
   comoUTC, diasDesde, textoAntiguedad, diaLocalDeFecha, fechaEditadaParaGuardar,
   ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, tieneProductos, esNoResuelto, esAccionTomada, accionSiguienteSC,
+  esSCConCotizacionTemprana, TIPOS_NOTA_REINICIAN_ATRASO, notaReiniciaAtraso,
 } from '../src/lib/hub-ventas.js';
 import { ESTADOS_PEDIDO } from '../src/lib/estados-pedido.js';
+import { ESTADOS_SC, ESTADOS_SC_SIN_CONFIRMAR } from '../src/lib/estados-solicitud.js';
+import { TIPOS_CHATTER, esEntradaChatter, tipoChatter } from '../src/lib/chatter.js';
 
 console.log('--- N3 TEST 1: ordenParaCancelar procesa VEN, luego COT, luego SC (orden estable) ---');
 {
@@ -201,8 +206,25 @@ console.log('--- H3 TEST 11: accionSiguienteSC ---');
   assert.equal(accionSiguienteSC(sc('ASIGNADA', { productos: [] }), vacio).href, '/dashboard/ventas/solicitud/5');
   assert.equal(accionSiguienteSC(sc('BORRADOR'), vacio).label, 'Asignar asesor');
   assert.equal(accionSiguienteSC(sc('PENDIENTE_CONFIRMACION'), vacio).label, 'Esperando cliente');
-  assert.equal(accionSiguienteSC(sc('CONFIRMADA'), vacio).label, 'Cotizar →');
+  // R19 (T9B): se cotiza solo con la confirmación del cliente vigente (confirmacion_vigente de _sc_dict, T2A)
+  assert.equal(accionSiguienteSC(sc('CONFIRMADA', { confirmacion_vigente: true }), vacio).label, 'Cotizar →');
+  assert.equal(accionSiguienteSC(sc('CONFIRMADA', { confirmacion_vigente: true }), vacio).href, '/dashboard/ventas/solicitud/5');
+  // R19: sin la confirmación vigente (false, sin la llave o cualquier otro valor) es la acción de una Asignada, que abre
+  // la solicitud
+  for (const extra of [{ confirmacion_vigente: false }, {}, { confirmacion_vigente: null }, { confirmacion_vigente: 'true' }, { confirmacion_vigente: 1 }]) {
+    assert.deepEqual(accionSiguienteSC(sc('CONFIRMADA', extra), vacio), accionSiguienteSC(sc('ASIGNADA'), vacio), JSON.stringify(extra));
+  }
+  assert.equal(accionSiguienteSC(sc('CONFIRMADA', { confirmacion_vigente: false }), vacio).label, 'Enviar para confirmación');
+  assert.equal(accionSiguienteSC(sc('CONFIRMADA'), vacio).label, 'Enviar para confirmación');
   assert.equal(accionSiguienteSC(sc('CONFIRMADA'), vacio).href, '/dashboard/ventas/solicitud/5');
+  assert.equal(accionSiguienteSC(sc('CONFIRMADA', { confirmacion_vigente: false }), {
+    cotizaciones: [{ id: 4, estado: 'RECHAZADA' }], pedidos: [],
+  }).label, 'Enviar para confirmación');
+  // lo que va antes no cambia: el documento activo y 'Agregar productos'
+  assert.equal(accionSiguienteSC(sc('CONFIRMADA', { confirmacion_vigente: false }), {
+    cotizaciones: [{ id: 9, estado: 'BORRADOR' }], pedidos: [],
+  }).label, 'Ver cotización');
+  assert.equal(accionSiguienteSC(sc('CONFIRMADA', { productos: [] }), vacio).label, 'Agregar productos');
 
   const verCot = accionSiguienteSC(sc('CONFIRMADA'), { cotizaciones: [{ id: 9, estado: 'CONFIRMADA' }], pedidos: [] });
   assert.equal(verCot.label, 'Ver cotización');
@@ -214,8 +236,8 @@ console.log('--- H3 TEST 11: accionSiguienteSC ---');
   }).href, '/dashboard/ventas/cotizacion/7');
   // choque H3/N4: una COT VENCIDA cuenta como activa (esCotizacionActiva)
   assert.equal(accionSiguienteSC(sc('CONFIRMADA'), { cotizaciones: [{ id: 4, estado: 'VENCIDA' }], pedidos: [] }).label, 'Ver cotización');
-  // solo rechazadas: se puede cotizar otra vez
-  assert.equal(accionSiguienteSC(sc('CONFIRMADA'), { cotizaciones: [{ id: 4, estado: 'RECHAZADA' }], pedidos: [] }).label, 'Cotizar →');
+  // solo rechazadas: se puede cotizar otra vez (con la confirmación del cliente vigente, R19)
+  assert.equal(accionSiguienteSC(sc('CONFIRMADA', { confirmacion_vigente: true }), { cotizaciones: [{ id: 4, estado: 'RECHAZADA' }], pedidos: [] }).label, 'Cotizar →');
 
   const verPed = accionSiguienteSC(sc('CONFIRMADA'), { cotizaciones: [{ id: 9, estado: 'CONFIRMADA' }], pedidos: [{ id: 4, estado: 'EN_PROCESO' }] });
   assert.equal(verPed.label, 'Ver pedido');
@@ -249,6 +271,33 @@ console.log('--- H3 TEST 12: esNoResuelto / esAccionTomada ---');
   assert.equal(esAccionTomada({ tipo: 'SC', id: 1, estado: 'CONFIRMADA' }, new Set()), false);
   assert.equal(esAccionTomada({ tipo: 'SC', id: 1, estado: 'CONFIRMADA' }, new Set([1])), true);
   assert.equal(esNoResuelto({ tipo: 'VEN', estado: 'EN_PROCESO' }, new Set()), true);
+
+  // R20 (T9B): una SC sin confirmar con una cotización activa (U11, cotizada sin esperar al cliente) no es No resuelto
+  // ni cuenta como atrasada: la alerta la lleva su cotización. Pasa a Acción tomada.
+  assert.equal(esNoResuelto({ tipo: 'SC', id: 1, estado: 'ASIGNADA' }, new Set([1])), false);
+  assert.equal(esAccionTomada({ tipo: 'SC', id: 1, estado: 'ASIGNADA' }, new Set([1])), true);
+  for (const estado of ESTADOS_SC_SIN_CONFIRMAR) {
+    assert.equal(esNoResuelto({ tipo: 'SC', id: 1, estado }, new Set([1])), false, estado);
+    assert.equal(esAccionTomada({ tipo: 'SC', id: 1, estado }, new Set([1])), true, estado);
+    // sin cotización activa, como antes
+    assert.equal(esNoResuelto({ tipo: 'SC', id: 1, estado }, new Set()), true, estado);
+    assert.equal(esAccionTomada({ tipo: 'SC', id: 1, estado }, new Set()), false, estado);
+  }
+  // mira el tipo antes que scConCot: los ids de SC, COT y PVEN pueden coincidir
+  assert.equal(esNoResuelto({ tipo: 'COT', id: 1, estado: 'BORRADOR' }, new Set([1])), true);
+  assert.equal(esAccionTomada({ tipo: 'COT', id: 1, estado: 'BORRADOR' }, new Set([1])), false);
+  assert.equal(esNoResuelto({ tipo: 'VEN', id: 1, estado: 'PENDIENTE_COMPRA' }, new Set([1])), true);
+  assert.equal(esNoResuelto({ id: 1, estado: 'ASIGNADA' }, new Set([1])), true);
+  // ninguna SC queda a la vez en No resuelto y en Acción tomada, con o sin cotización
+  for (const estado of Object.keys(ESTADOS_SC)) {
+    for (const scConCot of [new Set([1]), new Set()]) {
+      const fila = { tipo: 'SC', id: 1, estado };
+      assert.ok(!(esNoResuelto(fila, scConCot) && esAccionTomada(fila, scConCot)), `${estado} (${scConCot.size})`);
+    }
+  }
+  // sin scConCot no rompe
+  assert.equal(esNoResuelto({ tipo: 'SC', id: 1, estado: 'ASIGNADA' }), true);
+  assert.equal(esAccionTomada({ tipo: 'SC', id: 1, estado: 'ASIGNADA' }), false);
 }
 
 console.log('--- FIX1 TEST 13: un aviso (nota del rechazo que no quedo) no cuenta como fallo pero sale en el banner ---');
@@ -410,6 +459,49 @@ console.log('--- FIX1 TEST 16: comoUTC (fechas del API sin zona = UTC) ---');
     if (tzPrevia === undefined) delete process.env.TZ;
     else process.env.TZ = tzPrevia;
   }
+}
+
+console.log('--- T9B TEST 19: esSCConCotizacionTemprana (R20; la usa también la columna del Kanban) ---');
+{
+  const conCot = new Set([5]);
+  // exactamente los estados sin confirmar de la SC (ESTADOS_SC_SIN_CONFIRMAR de estados-solicitud.js), con cotización
+  for (const estado of Object.keys(ESTADOS_SC)) {
+    assert.equal(esSCConCotizacionTemprana({ tipo: 'SC', id: 5, estado }, conCot), ESTADOS_SC_SIN_CONFIRMAR.includes(estado), estado);
+    assert.equal(esSCConCotizacionTemprana({ tipo: 'SC', id: 5, estado }, new Set()), false, `${estado} sin cotización`);
+  }
+  // otro documento con el mismo id no cuenta
+  assert.equal(esSCConCotizacionTemprana({ tipo: 'COT', id: 5, estado: 'BORRADOR' }, conCot), false);
+  assert.equal(esSCConCotizacionTemprana({ tipo: 'VEN', id: 5, estado: 'PENDIENTE_COMPRA' }, conCot), false);
+  // datos raros no rompen
+  assert.equal(esSCConCotizacionTemprana({ tipo: 'SC', id: 5, estado: 'ASIGNADA' }), false);
+  assert.equal(esSCConCotizacionTemprana(null, conCot), false);
+  assert.equal(esSCConCotizacionTemprana(undefined, undefined), false);
+}
+
+console.log('--- T9B TEST 20: notaReiniciaAtraso (R1: un contacto con el cliente reinicia el atraso; la nota interna no) ---');
+{
+  assert.deepEqual([...TIPOS_NOTA_REINICIAN_ATRASO], ['LLAMADA', 'WHATSAPP', 'CORREO', 'EXTERNA'], '_REINICIAN_ATRASO del backend (T4)');
+  assert.ok(Object.isFrozen(TIPOS_NOTA_REINICIAN_ATRASO));
+  // con cada tipo del Chatter: todos los contactos con el cliente reinician; la Nota interna no
+  for (const tipo of Object.keys(TIPOS_CHATTER)) {
+    assert.equal(notaReiniciaAtraso({ action: 'CHATTER', extra_data: { tipo } }), tipo !== 'NOTA', tipo);
+  }
+  // misma lectura que chatter.js: solo las notas (esEntradaChatter) y el tipo de tipoChatter (sin importar mayúsculas
+  // ni espacios; sin tipo o desconocido = Nota interna)
+  const renglones = [];
+  for (const action of ['CHATTER', 'NOTE_ADDED', 'UPDATED', 'ESTADO_CHANGED', undefined]) {
+    for (const extra_data of [{ tipo: 'LLAMADA' }, { tipo: ' llamada ' }, { tipo: 'externa', medio: 'Visita' }, { tipo: 'NOTA' },
+      { tipo: 'FAX' }, { tipo: 5 }, {}, null, undefined]) {
+      renglones.push({ action, extra_data });
+    }
+  }
+  for (const r of renglones) {
+    assert.equal(notaReiniciaAtraso(r), esEntradaChatter(r) && tipoChatter(r) !== 'NOTA', JSON.stringify(r));
+  }
+  assert.equal(notaReiniciaAtraso({ action: 'CHATTER', extra_data: { tipo: ' llamada ' } }), true);
+  assert.equal(notaReiniciaAtraso({ action: 'NOTE_ADDED', extra_data: { tipo: 'NOTA' } }), false); // 'Motivo del rechazo (Hub)'
+  // sin renglón no rompe
+  for (const v of [null, undefined, 'CHATTER', 5]) assert.equal(notaReiniciaAtraso(v), false, String(v));
 }
 
 console.log('OK test_hub_ventas.mjs');

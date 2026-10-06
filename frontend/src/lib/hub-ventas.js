@@ -8,6 +8,8 @@
  *  - N5: el mismo resumen para el cambio masivo de estado de pedidos.
  *  - H2 (R5): dias desde una fecha del API (UTC aunque venga sin zona), nunca negativos.
  *  - H3: la proxima accion de una solicitud (replica renderSiguientePaso de solicitud/[id]/page.tsx) y el semaforo.
+ *  - T9B (Bloque 2): R19 (Cotizar solo con la confirmacion del cliente vigente), R20 (una SC sin confirmar con
+ *    cotizacion activa ya tiene la accion tomada) y R1 (la nota del Chatter que reinicia el atraso).
  */
 
 import {
@@ -307,18 +309,36 @@ export function tieneProductos(productos) {
 const esSCConfirmada = (row) => row?.tipo === 'SC' && row?.estado === 'CONFIRMADA';
 
 /**
+ * R20 (U11): una SC sin confirmar (las de la SC en ESTADOS_NO_RESOLUCION: Nueva, Asignada y Pendiente por
+ * confirmacion, las de ESTADOS_SC_SIN_CONFIRMAR) que ya tiene una cotizacion activa (cotizada sin esperar al cliente).
+ * Su alerta la lleva la cotizacion, igual que en alertas_resumen del backend. Mira el tipo antes que scConCot: los ids de
+ * SC, COT y PVEN pueden coincidir.
+ * @param {any} row
+ * @param {Set<number>} [scConCot] ids de SC con una COT activa
+ * @returns {boolean}
+ */
+export function esSCConCotizacionTemprana(row, scConCot) {
+  return row?.tipo === 'SC' && ESTADOS_NO_RESOLUCION.includes(row?.estado) && !!scConCot?.has(row.id);
+}
+
+/**
  * No resuelto: una SC CONFIRMADA sin cotizacion activa (scConCot = ids de SC con una COT activa) todavia necesita que
- * la cotizen; el resto segun ESTADOS_NO_RESOLUCION.
+ * la cotizen; una SC sin confirmar con cotizacion activa ya no (R20); el resto segun ESTADOS_NO_RESOLUCION.
  * @param {Set<number>} scConCot
  */
 export function esNoResuelto(row, scConCot) {
   if (esSCConfirmada(row)) return !scConCot?.has(row.id);
+  if (esSCConCotizacionTemprana(row, scConCot)) return false;
   return ESTADOS_NO_RESOLUCION.includes(row?.estado);
 }
 
-/** Accion tomada: una SC CONFIRMADA solo cuando ya tiene cotizacion activa; el resto segun ESTADOS_ACCION_TOMADA. */
+/**
+ * Accion tomada: una SC CONFIRMADA solo cuando ya tiene cotizacion activa; una SC sin confirmar con cotizacion activa
+ * tambien (R20); el resto segun ESTADOS_ACCION_TOMADA.
+ */
 export function esAccionTomada(row, scConCot) {
   if (esSCConfirmada(row)) return !!scConCot?.has(row.id);
+  if (esSCConCotizacionTemprana(row, scConCot)) return true;
   return ESTADOS_ACCION_TOMADA.includes(row?.estado);
 }
 
@@ -347,9 +367,35 @@ export function accionSiguienteSC(row, ctx = {}) {
   if (!tieneProductos(row?.productos) && ['ASIGNADA', 'PENDIENTE_CONFIRMACION', 'CONFIRMADA'].includes(estado)) {
     return { label: 'Agregar productos', href: enSolicitud, tono: 'amber' };
   }
-  if (estado === 'CONFIRMADA') return { label: 'Cotizar →', href: enSolicitud, tono: 'emerald' };
+  // R19 (U15): solo se cotiza con la confirmación del cliente vigente (confirmacion_vigente de _sc_dict: gate1 de la SC).
+  if (estado === 'CONFIRMADA' && row?.confirmacion_vigente === true) return { label: 'Cotizar →', href: enSolicitud, tono: 'emerald' };
   if (estado === 'PENDIENTE_CONFIRMACION') return { label: 'Esperando cliente', href: enSolicitud, tono: 'blue' };
-  if (estado === 'ASIGNADA') return { label: 'Enviar para confirmación', href: enSolicitud, tono: 'indigo' };
+  // Una Confirmada cuya confirmación ya no vale lleva la acción de una Asignada (R19).
+  if (estado === 'ASIGNADA' || estado === 'CONFIRMADA') return { label: 'Enviar para confirmación', href: enSolicitud, tono: 'indigo' };
   if (estado === 'BORRADOR') return { label: 'Asignar asesor', href: enSolicitud, tono: 'amber' };
   return { label: 'Ver solicitud', href: enSolicitud, tono: 'slate' };
+}
+
+// ─── T9B (R1): la nota del Chatter que reinicia el atraso ───────────────────────
+
+/**
+ * Tipos de nota del Chatter que reinician el conteo de atraso del documento: los contactos con el cliente (R1; espejo
+ * de _REINICIAN_ATRASO en backend/app/core/chatter.py). La Nota interna no. Inmutable.
+ * @type {ReadonlyArray<string>}
+ */
+export const TIPOS_NOTA_REINICIAN_ATRASO = Object.freeze(['LLAMADA', 'WHATSAPP', 'CORREO', 'EXTERNA']);
+
+/**
+ * true si el renglon que devolvio el POST del Chatter reinicio el atraso del documento en el servidor (su updated_at
+ * paso a ahora): una nota (CHATTER o NOTE_ADDED, como esEntradaChatter) de un contacto con el cliente, con el tipo leido
+ * como tipoChatter (sin importar mayusculas ni espacios). El panel de actividad del Hub recarga entonces las listas para
+ * que la alerta roja y el '+Nd' de No resuelto desaparezcan sin pulsar 'Actualizar'. No importa lib/chatter.js: ese
+ * modulo ya importa este (test_hub_ventas.mjs comprueba que las dos lecturas coinciden).
+ * @param {any} log
+ * @returns {boolean}
+ */
+export function notaReiniciaAtraso(log) {
+  if (log?.action !== 'CHATTER' && log?.action !== 'NOTE_ADDED') return false;
+  const tipo = log?.extra_data?.tipo;
+  return typeof tipo === 'string' && TIPOS_NOTA_REINICIAN_ATRASO.includes(tipo.trim().toUpperCase());
 }

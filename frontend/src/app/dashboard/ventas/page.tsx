@@ -19,11 +19,14 @@ import { VEN_NAV } from './ven-nav';
 import { CambiosDeActividad, EnlaceConfirmacionModal, getUsuarioActual } from './flujo';
 import { ChannelModal, ESTADOS as ESTADOS_COT } from './cotizacion/cotizacion-client';
 import { ESTADOS_SC } from './solicitud/solicitud-client';
+import { ComposerChatter, EtiquetaChatter } from './chatter';
+import { agregarActividad, esEntradaChatter, motivoTelefono } from '@/lib/chatter';
 import { infoEstadoPedido, esCotizacionActiva } from '@/lib/estados-pedido';
 import {
   ordenParaCancelar, motivoNoCancelable, resumenLote, ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN,
   repartirCambioEstadoPVEN, comoUTC,
   diasDesde, textoAntiguedad, ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, esNoResuelto, esAccionTomada, accionSiguienteSC,
+  esSCConCotizacionTemprana, notaReiniciaAtraso,
 } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
 import { correoDelCliente } from '@/lib/aviso-correo';
@@ -40,9 +43,11 @@ const fTime = (iso: any) => iso ? new Date(comoUTC(iso)).toLocaleTimeString('es-
 const daysDiff = (iso: any) => diasDesde(iso);
 
 // N10: el estado siempre con su etiqueta (pedido: estados-pedido.js; COT y SC: sus tablas), nunca el código crudo.
-// Sin tipo (filtro de estados) se busca en las tres tablas; una clave desconocida sale humanizada.
+// Sin tipo (filtro de estados) se busca en las tres tablas; una clave desconocida sale humanizada. Sin tipo, BORRADOR
+// filtra la SC «Nueva» y la COT y el pedido en «Borrador» (C5): lleva una etiqueta neutra.
 const etiquetaEstado = (tipo: string, e: string): string => {
   if (tipo === 'VEN') return infoEstadoPedido(e).label;
+  if (!tipo && e === 'BORRADOR') return 'Nueva / Borrador';
   const propia = tipo === 'COT' ? ESTADOS_COT[e]?.label : tipo === 'SC' ? ESTADOS_SC[e]?.label : undefined;
   return propia || ESTADOS_SC[e]?.label || ESTADOS_COT[e]?.label || infoEstadoPedido(e).label;
 };
@@ -97,25 +102,46 @@ const getTipoLabel = (t: string) => ({
 } as Record<string,string>)[t] || t;
 
 /* ── Activities floating panel ── */
-function ActivitiesPanel({row,onClose}:{row:any,onClose:()=>void}) {
+// U6+H22 (T9B): notas rápidas con el mismo Chatter de la SC, la COT y el PVEN (ComposerChatter compacto, con la Nota
+// externa, R1) arriba del historial completo, donde cada nota lleva su etiqueta. Si el GET falla, se dice y se reintenta.
+// onNotaGuardada: una nota que reinicia el atraso del documento (un contacto con el cliente) recarga el Hub para que su
+// alerta roja desaparezca; el panel sigue abierto con su borrador (se dibuja fuera del bloque que muestra «Cargando»).
+function ActivitiesPanel({row,onClose,onNotaGuardada}:{row:any,onClose:()=>void,onNotaGuardada:()=>void}) {
   const [detail, setDetail] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [errorCarga, setErrorCarga] = useState<string|null>(null);
+  // Cada intento vuelve a leer el documento: el primero al abrir (una key por documento: arranca con loading en true),
+  // «Reintentar» (con spinner) y la relectura silenciosa tras una nota sin renglón (sin spinner: el composer no se
+  // desmonta; si falla, se queda lo que se ve).
+  const [intento, setIntento] = useState({n: 0, silencioso: false});
   useEffect(()=>{
+    let vigente = true; // la respuesta de un intento anterior (o con el panel cerrado) no se pinta
     (async()=>{
-      setLoading(true);
       try {
         let d:any=null;
         if(row.tipo==='SC')  d=await apiFetch(`/ventas/solicitudes/${row.id}`);
         if(row.tipo==='COT') d=await apiFetch(`/ventas/cotizaciones/${row.id}`);
         if(row.tipo==='VEN') d=await apiFetch(`/ventas/pedidos/${row.id}`);
+        if(!vigente) return;
         setDetail(d?.data || d);
-      } catch{}
-      setLoading(false);
+        setErrorCarga(null);
+      } catch(err) {
+        console.error(err);
+        if(vigente && !intento.silencioso) setErrorCarga(textoDeError(err));
+      } finally {
+        if(vigente) setLoading(false);
+      }
     })();
-  },[row.id,row.tipo]);
+    return ()=>{ vigente = false; };
+  },[row.id,row.tipo,intento]);
+  function reintentar(){ setLoading(true); setErrorCarga(null); setIntento(i=>({n: i.n+1, silencioso: false})); }
+  function notaRegistrada(log:any){
+    // Sin el renglón en la respuesta: se relee el documento y, como no se sabe si la nota reinició el atraso, el Hub.
+    if(!log){ setIntento(i=>({n: i.n+1, silencioso: true})); onNotaGuardada(); return; }
+    setDetail((p:any)=>agregarActividad(p, log, row.tipo));
+    if(notaReiniciaAtraso(log)) onNotaGuardada();
+  }
   const acts = detail?.actividades||[];
-  const chatter=acts.filter((a:any)=>a.action==='CHATTER');
-  const hist=acts.filter((a:any)=>a.action!=='CHATTER');
   return (
     <Drawer onClose={onClose} header={(
       <div>
@@ -128,31 +154,33 @@ function ActivitiesPanel({row,onClose}:{row:any,onClose:()=>void}) {
     )}>
       {loading?(
         <div className="flex items-center justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"/></div>
+      ):errorCarga!==null?(
+        <div role="alert" className="text-center space-y-3 py-8">
+          <AlertTriangle size={28} className="mx-auto text-rose-400"/>
+          <p className="text-sm font-bold text-slate-700">No se pudo cargar la actividad.</p>
+          {errorCarga&&<p className="text-xs text-slate-500">{errorCarga}</p>}
+          <Button variant="secondary" size="sm" icon={RefreshCw} onClick={reintentar}>Reintentar</Button>
+        </div>
       ):(
         <>
-          {chatter.length>0&&(
-            <div>
-              <p className="text-xs font-black text-slate-400 uppercase mb-3 flex items-center gap-1"><MessageCircle size={12}/> Chatter con Cliente</p>
-              <div className="space-y-2">
-                {chatter.map((a:any,i:number)=>(
-                  <div key={i} className="bg-green-50 border border-green-100 rounded-xl p-3">
-                    <p className="text-sm text-green-900">{a.description}</p>
-                    <p className="text-xs text-green-600 mt-1">{a.user_name || 'Asesor'} - {fDate(a.created_at)}</p>
-                  </div>
-                ))}
-              </div>
+          {detail?.id&&(
+            <div className="pb-5 border-b border-slate-100">
+              <ComposerChatter compacto tipoDoc={row.tipo} doc={detail} onRegistrado={notaRegistrada}/>
             </div>
           )}
-          <div>
+          {/* pb-20: la burbuja fija del asistente (bottom-6 right-6) no tapa el último renglón. */}
+          <div className="pb-20">
             <p className="text-xs font-black text-slate-400 uppercase mb-3 flex items-center gap-1"><Activity size={12}/> Historial de Acciones Tomadas</p>
-            {hist.length===0?<p className="text-xs text-slate-400 italic">Sin actividad registrada</p>:(
+            {acts.length===0?<p className="text-xs text-slate-400 italic">Sin actividad registrada</p>:(
               <div className="space-y-3 relative before:absolute before:left-2 before:top-0 before:bottom-0 before:w-0.5 before:bg-slate-100">
-                {[...hist].reverse().map((a:any,i:number)=>(
-                  <div key={i} className="flex gap-3 pl-7 relative">
+                {[...acts].reverse().map((a:any,i:number)=>(
+                  <div key={a.id ?? `act-${i}`} className="flex gap-3 pl-7 relative">
                     <div className="absolute left-0 top-2 w-4 h-4 rounded-full border-2 border-white"
-                      style={{backgroundColor:({CREATED:'#6366f1',ESTADO_CHANGED:'#f59e0b',SENT:'#10b981',CONFIRMED:'#059669',REJECTED:'#ef4444',UPDATED:'#3b82f6',RECOTIZADA:'#f97316'}as any)[a.action]||'#94a3b8'}}/>
-                    <div className="flex-1 bg-white border border-slate-100 rounded-xl p-3 shadow-xs">
-                      <p className="text-sm font-medium text-slate-700">{a.description}</p>
+                      style={{backgroundColor:({CREATED:'#6366f1',ESTADO_CHANGED:'#f59e0b',SENT:'#10b981',CONFIRMED:'#059669',REJECTED:'#ef4444',UPDATED:'#3b82f6',RECOTIZADA:'#f97316',CHATTER:'#0891b2',NOTE_ADDED:'#3b82f6'}as any)[a.action]||'#94a3b8'}}/>
+                    <div className="flex-1 min-w-0 bg-white border border-slate-100 rounded-xl p-3 shadow-xs">
+                      {/* U6+H22: una nota del Chatter lleva su tipo encima (Nota interna, Llamada…, «Nota externa · medio»). */}
+                      {esEntradaChatter(a)&&<div className="mb-1.5"><EtiquetaChatter actividad={a}/></div>}
+                      <p className="text-sm font-medium text-slate-700 whitespace-pre-wrap break-words">{a.description}</p>
                       <div className="mt-1.5"><CambiosDeActividad extra={a.extra_data}/></div>
                       <p className="text-xs text-slate-400 mt-1">{fDate(a.created_at)} {fTime(a.created_at)}{a.user_name&&<span className="ml-2 font-medium">- {a.user_name}</span>}</p>
                     </div>
@@ -539,6 +567,7 @@ export default function VentasHub() {
 
   const getKanbanCol=(item:any)=>{
     if (item.tipo==='SC' && item.estado==='CONFIRMADA' && !scConCot.has(item.id)) return 'No Resuelto'; // H3: falta cotizarla
+    if (esSCConCotizacionTemprana(item, scConCot)) return 'Acción Tomada'; // R20: la alerta la lleva su cotización
     const e=item.estado||'';
     if(['CANCELADO','CANCELADA','RECHAZADA'].includes(e)) return 'Cancelado';
     if(['ENTREGADO','FACTURADO','CONFIRMADA','LISTO_ENTREGA'].includes(e)) return 'Acción Tomada';
@@ -706,7 +735,7 @@ export default function VentasHub() {
   /* ════════════════ RENDER ════════════════ */
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
-      {actRow && <ActivitiesPanel row={actRow} onClose={()=>setActRow(null)}/>}
+      {actRow && <ActivitiesPanel key={`${actRow.tipo}|${actRow.id}`} row={actRow} onClose={()=>setActRow(null)} onNotaGuardada={loadData}/>}
       {showConfig && <ConfigPanel alertDias={alertDias} onSave={cfg=>{setAlertDias(cfg);setShowConfig(false);loadData();}} onClose={()=>setShowConfig(false)}/>}
 
       <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas" color="indigo" />
@@ -1192,7 +1221,7 @@ export default function VentasHub() {
 
                         <td className="px-3 py-3 text-center">
                           <button onClick={e=>{e.stopPropagation();setActRow(row);}}
-                            className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors" title="Ver Chatter & Actividad">
+                            className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors" title="Notas y actividad">
                             <Activity size={14}/>
                           </button>
                         </td>
@@ -1501,8 +1530,9 @@ export default function VentasHub() {
                   <button onClick={()=>{
                     const q = quickDetailDoc;
                     if(q.tipo==='SC')  router.push(`/dashboard/ventas/solicitud?id=${q.id}`);
-                    if(q.tipo==='COT') router.push(`/dashboard/ventas/cotizacion/${q.id}`);
-                    if(q.tipo==='VEN') router.push(`/dashboard/ventas/venta/${q.id}`);
+                    // H37: con return_to del Hub, el único botón de volver del detalle dice «Volver al Hub de Ventas».
+                    if(q.tipo==='COT') router.push(`/dashboard/ventas/cotizacion/${q.id}?return_to=%2Fdashboard%2Fventas`);
+                    if(q.tipo==='VEN') router.push(`/dashboard/ventas/venta/${q.id}?return_to=%2Fdashboard%2Fventas`);
                   }}
                   className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-xs transition-colors">
                     Abrir en Módulo Detallado <ArrowRight size={14}/>
@@ -1522,7 +1552,7 @@ export default function VentasHub() {
           title={filasCancelacion.length === 1 ? `Cancelar ${filasCancelacion[0].row?.numero || 'documento'}` : `Cancelar ${filasCancelacion.length} documentos`}
           subtitle="Revisa qué se va a cancelar e indica el motivo"
           icon={Trash2} color="rose" maxWidth="lg"
-          onClose={()=>{ if(!cancelando) setCancelacion(null); }}
+          onClose={()=>{ if(!cancelando) setCancelacion(null); }} bloquearCierre={cancelando}
           footer={(
             <>
               <Button variant="secondary" disabled={cancelando} onClick={()=>setCancelacion(null)}>Volver</Button>
@@ -1559,7 +1589,9 @@ export default function VentasHub() {
           onConfirm={confirmarEnvioHub}
           onCancel={()=>{ if(!enviandoHub){ setEnvioHub(null); setCanalHub(null); } }}
           saving={enviandoHub}
-          customerHasPhone={!!waUrl(envioHub.telefono)}
+          // T9A: WhatsApp solo con un teléfono que sirve (motivoTelefono, como la COT); si no, dice por qué.
+          customerHasPhone={!motivoTelefono(envioHub.telefono)}
+          textoSinTelefono={waUrl(envioHub.telefono) ? 'teléfono incompleto' : 'sin teléfono'}
           documentLabel={envioHub.tipo === 'COT' ? 'cotización' : 'solicitud'}
           customerEmail={envioHub.correo}
         />
