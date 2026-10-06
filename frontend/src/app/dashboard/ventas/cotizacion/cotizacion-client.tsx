@@ -12,7 +12,9 @@ import {
 } from 'lucide-react';
 
 import { apiFetch, API_URL } from '@/lib/api';
-import { computeMarginPrice, MARGIN_PCT_CAP } from '@/lib/pricing';
+import {
+  MARGIN_PCT_CAP, filaDeCalculadora, calcularCotizacion, cuerpoCompletoCalculadora, cuerpoDeGuardado,
+} from '@/lib/pricing';
 import { formatoPesos } from '@/lib/pesos';
 import { humanizarCodigo } from '@/lib/estados-pedido';
 import { largoTexto } from '@/lib/chatter';
@@ -209,7 +211,8 @@ export function CalculadorModal({
   const [trm, setTrm] = useState(cot.trm_rate || 4200);
   const [productos, setProductos] = useState<any[]>(
     (cot.productos || []).length > 0
-      ? cot.productos.map((p: any) => ({ ...p, cost_usd: p.cost_usd || 0, margen_pct: p.margen_pct || 30, flete_usd: p.flete_usd || 0, es_libre: !!p.es_libre, _rowId: crypto.randomUUID() }))
+      // Ronda 1 (punto 3): filaDeCalculadora respeta un margen 0 (antes `|| 30` lo subía al 30%).
+      ? cot.productos.map((p: any) => ({ ...filaDeCalculadora(p), _rowId: crypto.randomUUID() }))
       : [{ product_name: '', qty: 1, cost_usd: 0, margen_pct: 30, flete_usd: 0, es_libre: false, _rowId: crypto.randomUUID() }]
   );
   const [descuento, setDescuento] = useState(cot.descuento_pct || 0);
@@ -223,18 +226,10 @@ export function CalculadorModal({
     setProductos(p => p.map((item, idx) => idx === i ? { ...item, ...patch } : item));
   const updateProd = (i: number, k: string, v: any) => setProdFields(i, { [k]: v });
 
-  const computedProd = productos.map(p => {
-    const costo_cop = (Number(p.cost_usd) || 0) * Number(trm);
-    const flete_cop = (Number(p.flete_usd) || 0) * Number(trm);
-    const costo_total = (costo_cop + flete_cop) * (Number(p.qty) || 1);
-    const { totalCop, unitPriceCop, margenPct } = computeMarginPrice(costo_total, p.margen_pct, Number(p.qty) || 1);
-    return { ...p, margen_pct: margenPct, price_cop_unit: unitPriceCop, total_cop: totalCop };
-  });
-
-  // H42: lineas en pesos enteros; el descuento se redondea al peso y el total cuadra exacto.
-  const subtotal = computedProd.reduce((s, p) => s + p.total_cop, 0);
-  const descTotal = Math.round(subtotal * (Number(descuento) || 0) / 100);
-  const total = subtotal - descTotal;
+  // H42: lineas en pesos enteros; el descuento se redondea al peso y el total cuadra exacto (ronda 1: la cuenta vive en
+  // @/lib/pricing, probada con node).
+  const calculo = calcularCotizacion(productos, trm, descuento);
+  const { filas: computedProd, subtotal, descTotal, total } = calculo;
   // H36+H43 / R3: el anticipo ya no se edita aqui; lo calcula el servidor con la modalidad de la SC o el % manual.
   // Ya convertida: el % y lo pagado DEL PEDIDO (el GET recalcula con la modalidad de hoy, que ya no es el trato).
   const resumenAnticipo = resumenAnticipoCotizacion(cot);
@@ -242,40 +237,32 @@ export function CalculadorModal({
   const anticipo_cop = porcentajeDePesos(total, anticipoPct);
   const saldo = total - (resumenAnticipo.convertida ? Number(resumenAnticipo.pagado) || 0 : anticipo_cop);
 
-  // H40: el cuerpo de PATCH /ventas/cotizaciones/{id} con lo que hay en pantalla.
-  const armarPayload = () => ({
-    productos: computedProd.map(p => ({
-      product_name: p.product_name,
-      sku_id: p.sku_id || null,
-      qty: Number(p.qty),
-      cost_usd: Number(p.cost_usd),
-      flete_usd: Number(p.flete_usd),
-      margen_pct: Number(p.margen_pct),
-      unit_price_cop: p.price_cop_unit,
-      total_cop: p.total_cop,
-      es_libre: !!p.es_libre,
-    })),
-    trm_rate: Number(trm),
-    subtotal_cop: subtotal, descuento_pct: Number(descuento),
-    total_cop: total,
-    notas: notas || cot.notas,
-    fecha_entrega_estimada: fechaEntrega || cot.fecha_entrega_estimada,
-  });
+  // H40: el cuerpo COMPLETO de PATCH /ventas/cotizaciones/{id} con lo que hay en pantalla (ruling 1).
+  const armarPayload = () => cuerpoCompletoCalculadora(calculo, { trm, descuento, notas, fechaEntrega }, cot);
+  // Ronda 1 (punto 2): el cálculo con que se abrió la calculadora (ref perezosa: se arma una sola vez). Al guardar, los
+  // precios solo viajan si cambiaron frente a él (cuerpoDeGuardado): guardar solo las notas de una cotización calculada
+  // antes de H42 ya no reenvía sus precios recalculados ni anula la confirmación del cliente.
+  const inicial = useRef<ReturnType<typeof cuerpoCompletoCalculadora> | null>(null);
+  if (inicial.current === null) inicial.current = armarPayload();
 
   // H40 (ruling T9A-1): `extra` es solo lo de la anulación. El botón normal la llama con una flecha
   // (onClick={() => handleSave()}): si React le pasara el evento del clic como `extra`, JSON.stringify fallaría por la
-  // estructura circular. El panel rosa reenvía el payload ACTUAL con anular_confirmacion y la razón.
+  // estructura circular. Con el panel rosa la calculadora queda inerte: se reenvía lo mismo que describió el 409.
   const handleSave = (extra: ExtraGuardado = {}) => {
-    if (computedProd.length === 0 || computedProd.some(p => !p.total_cop || p.total_cop <= 0)) {
-      setError('Cada producto necesita un costo mayor a $0 antes de guardar la cotización.');
-      return;
-    }
-    if (total <= 0) {
-      setError('El total de la cotización debe ser mayor a $0.');
-      return;
+    const cuerpo = cuerpoDeGuardado(armarPayload(), inicial.current);
+    // Los precios se validan solo si viajan: un guardado de solo notas o fecha no depende de ellos (ronda 1).
+    if (Array.isArray(cuerpo.productos)) {
+      if (computedProd.length === 0 || computedProd.some(p => !p.total_cop || p.total_cop <= 0)) {
+        setError('Cada producto necesita un costo mayor a $0 antes de guardar la cotización.');
+        return;
+      }
+      if (total <= 0) {
+        setError('El total de la cotización debe ser mayor a $0.');
+        return;
+      }
     }
     setError('');
-    onSave({ ...armarPayload(), ...extra });
+    onSave({ ...cuerpo, ...extra });
   };
 
   const errorCalculadora = error && (
@@ -290,7 +277,11 @@ export function CalculadorModal({
         <div className="w-full rounded-2xl border border-rose-200 bg-rose-50 p-4 space-y-3">
           <div role="alert" className="space-y-1">
             <p className="text-sm font-black text-rose-800 flex items-center gap-1.5">
-              <AlertTriangle size={16} className="shrink-0" /> Vas a anular la confirmación del cliente
+              <AlertTriangle size={16} className="shrink-0" />
+              {/* Ronda 1 (punto 5): figura confirmada sin la confirmación del cliente vigente ('reabrir'). */}
+              {estadoConfirmacion === 'CONFIRMADA' && sinConfirmacionVigente
+                ? 'Vas a devolver la cotización a Borrador'
+                : 'Vas a anular la confirmación del cliente'}
             </p>
             {anulacion.mensaje && <p className="text-xs text-rose-700">{anulacion.mensaje}</p>}
             {cambiosAnulacion.length > 0 && (
@@ -329,7 +320,9 @@ export function CalculadorModal({
           </div>
         </div>
       )}>
-        <div className="space-y-5">
+        {/* Ronda 1 (punto 4): con el panel rosa (o mientras guarda) la calculadora queda inerte: lo que se reenvía es lo
+            que describió el 409, y solo «Seguir editando» vuelve a habilitar la edición. */}
+        <fieldset disabled={!!anulacion || saving} className="min-w-0 space-y-5">
           {/* H40: avisa desde que se abre qué anula la confirmación del cliente (el 409 del servidor es la red). */}
           {avisoConfirmacion && (
             <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs font-semibold text-amber-800">
@@ -462,7 +455,7 @@ export function CalculadorModal({
             <textarea value={notas} onChange={e => setNotas(e.target.value)} rows={3}
               className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400 outline-none" />
           </div>
-        </div>
+        </fieldset>
     </Modal>
   );
 }
@@ -524,7 +517,9 @@ export function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm
 
 // H27+H39: `customerEmail` es opcional para no cambiar a quien no lo pasa (Hub, SC). Si se pasa y esta
 // vacio, Email queda deshabilitado ('Email (sin correo)'); en ambos casos se avisa del correo de respaldo.
-export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, saving, customerHasPhone, documentLabel = 'cotización', customerEmail }: { selectedChannel: 'WhatsApp'|'Email'|'Otro'|null; onSelectChannel: (ch: 'WhatsApp'|'Email'|'Otro') => void; onConfirm: () => void; onCancel: () => void; saving: boolean; customerHasPhone: boolean; documentLabel?: string; customerEmail?: string | null }) {
+// B2-T9A ronda 1: `textoSinTelefono` (opcional) dice por qué no se ofrece WhatsApp: 'sin teléfono' (por defecto) o
+// 'teléfono incompleto'.
+export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, saving, customerHasPhone, documentLabel = 'cotización', customerEmail, textoSinTelefono = 'sin teléfono' }: { selectedChannel: 'WhatsApp'|'Email'|'Otro'|null; onSelectChannel: (ch: 'WhatsApp'|'Email'|'Otro') => void; onConfirm: () => void; onCancel: () => void; saving: boolean; customerHasPhone: boolean; documentLabel?: string; customerEmail?: string | null; textoSinTelefono?: string }) {
   const conoceCorreo = customerEmail !== undefined;
   const correo = (customerEmail || '').trim();
   const sinCorreo = conoceCorreo && !correo;
@@ -549,7 +544,7 @@ export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCa
               : 'border-slate-200 bg-slate-50 text-slate-400 cursor-not-allowed'
           }`}>
           <Phone size={18}/>
-          <span>WhatsApp{!customerHasPhone ? ' (sin telefono)' : ''}</span>
+          <span>WhatsApp{!customerHasPhone ? ` (${textoSinTelefono})` : ''}</span>
         </button>
         <button
           onClick={() => onSelectChannel('Email')}

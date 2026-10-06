@@ -10,6 +10,7 @@ import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
+import { recargarTrasError } from '@/lib/avisos';
 import { Button, useAvisos } from '@/components/ui';
 import {
   ChannelModal, CalculadorModal, DeleteConfirm, PropagarPvenConfirm, VerificarAnticipoModal, AjustarAnticipoModal,
@@ -27,6 +28,7 @@ import { waUrl } from '@/lib/whatsapp';
 import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
 import { agregarActividad, esEntradaChatter, telUrl } from '@/lib/chatter';
 import { ESTADOS_SC_SIN_CONFIRMAR } from '@/lib/estados-solicitud';
+import { humanizarCodigo } from '@/lib/estados-pedido';
 
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
 const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
@@ -44,13 +46,8 @@ const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
 };
 const DEFAULT_ACTIVITY_STYLE = {icon: Activity, color: 'text-slate-500 bg-slate-50'};
 
-// T9A (patrón de T8A en solicitud/[id]): tras un 400 o un 409 (la cotización cambió en otra pantalla: se confirmó, se
-// rechazó, ya tiene pedido…) o un error sin respuesta del servidor (la red se cortó y la operación pudo hacerse igual),
-// la página se recarga en silencio, sin pisar el error que se muestra ni las ventanas abiertas.
-function recargarTrasError(err: unknown): boolean {
-  const status = (err as { status?: unknown } | null | undefined)?.status;
-  return status === 400 || status === 409 || status === undefined || status === null;
-}
+// H40: el aviso que queda en Acciones después de anular la confirmación del cliente al re-cotizar.
+const AVISO_CONFIRMACION_ANULADA = 'Se anuló la confirmación del cliente porque cambiaste la cotización. Envíasela de nuevo para que la confirme.';
 
 function CotizacionDetalleContent() {
   const params = useParams();
@@ -115,13 +112,15 @@ function CotizacionDetalleContent() {
 
   // T9A (patrón H29 de solicitud/[id]): con { silencioso: true } no se muestra el spinner de página (no se desmontan la
   // calculadora ni las ventanas abiertas) y, si falla, queda lo que ya está en pantalla. Cada carga toma un número y
-  // solo la ÚLTIMA pinta la cotización: una recarga vieja no pisa datos más nuevos.
+  // solo la ÚLTIMA pinta la cotización: una recarga vieja no pisa datos más nuevos. Devuelve la cotización que pintó (o
+  // null), para decidir después de un error de la calculadora (ronda 1, puntos 4 y 6).
   const cargaRef = useRef(0);
   const loadCotizacion = useCallback(async (opts?: { silencioso?: boolean }) => {
     const silencioso = opts?.silencioso === true;
-    if (isNew || !params.id) { if (!silencioso) setLoading(false); return; }
+    if (isNew || !params.id) { if (!silencioso) setLoading(false); return null; }
     const miCarga = ++cargaRef.current;
     const esLaUltima = () => miCarga === cargaRef.current;
+    let pintada: { estado?: string } | null = null;
     if (!silencioso) {
       setLoading(true);
       setLoadError('');
@@ -129,11 +128,15 @@ function CotizacionDetalleContent() {
     try {
       const raw = await apiFetch(`/ventas/cotizaciones/${params.id}`);
       const d = raw?.data ?? raw;
-      if (esLaUltima()) setCotizacion(d);
+      if (esLaUltima()) {
+        setCotizacion(d);
+        pintada = d;
+      }
     } catch (err: any) {
       if (!silencioso && esLaUltima()) setLoadError(err.message || 'No se pudo cargar la cotización');
     }
     if (!silencioso) setLoading(false);
+    return pintada;
   }, [params.id, isNew]);
 
   useEffect(() => { loadCotizacion(); }, [loadCotizacion]);
@@ -347,27 +350,33 @@ function CotizacionDetalleContent() {
   }
 
   function onCalcSave(data: any) {
-    // H46: solo un pedido VIGENTE recibe los precios nuevos; uno cancelado nunca se reescribe.
-    if (pvenVigente) {
+    // H46: solo un pedido VIGENTE recibe los precios nuevos; uno cancelado nunca se reescribe. Ronda 1 (punto 2): sin
+    // precios en el cuerpo (solo notas o fecha) no hay nada que pasar al pedido: se guarda directo.
+    if (pvenVigente && Array.isArray(data?.productos)) {
       setShowCalc(false);
+      setCalcAnulacion(null);
       setPendingCalcData(data);
       return;
     }
     commitCalcSave(data, false, true);
   }
 
-  // H40: `desdeCalculadora` = la calculadora sigue abierta (sin pedido vigente). Ahí el 409 ANULA_CONFIRMACION (el
-  // cliente ya confirmó la cotización o tiene el enlace) no guarda nada: la calculadora muestra qué cambió y pide la
-  // razón, y con ella reenvía el mismo payload con anular_confirmacion y motivo_recotizacion (R7). Desde 'Actualizar
-  // Pedido de Venta' (pedido vigente) no se puede pedir la razón: el 409 sale como aviso de error.
+  // H40: `desdeCalculadora` = la calculadora sigue abierta. Ahí el 409 ANULA_CONFIRMACION (el cliente ya confirmó la
+  // cotización o tiene el enlace) no guarda nada: la calculadora queda inerte (ronda 1: fieldset deshabilitado), muestra
+  // qué cambió y pide la razón, y con ella reenvía exactamente lo que describió el 409, con anular_confirmacion y
+  // motivo_recotizacion (R7); solo «Seguir editando» vuelve a habilitar la edición. Desde 'Actualizar Pedido de Venta'
+  // (pedido vigente) no se puede pedir la razón: el 409 sale como aviso de error.
   async function commitCalcSave(data: any, propagarAPven: boolean, desdeCalculadora = false) {
     if (!cotizacion?.id) return;
+    // Ronda 1 (punto 2): la calculadora manda los precios solo si cambiaron (cuerpoDeGuardado). Sin precios el guardado
+    // no es una re-cotización: no lleva `recotizacion` ni deja un renglón RECOTIZADA.
+    const conPrecios = Array.isArray(data?.productos);
     setSavingCalc(true);
     try {
       const r = await apiFetch(`/ventas/cotizaciones/${cotizacion.id}`, {
         method: 'PATCH',
         // recotizacion: el backend lo deja en la Actividad como RECOTIZADA aunque los precios queden igual.
-        body: JSON.stringify({ ...data, recotizacion: true, updated_by: currentUser }),
+        body: JSON.stringify({ ...data, ...(conPrecios ? { recotizacion: true } : {}), updated_by: currentUser }),
       });
       if (propagarAPven && pvenVigente) {
         // A3: solo productos y precios; el servidor recalcula saldo y anticipo desde los pagos del pedido.
@@ -382,22 +391,54 @@ function CotizacionDetalleContent() {
       setPendingCalcData(null);
       setCalcAnulacion(null);
       // H40: confirmacion_anulada va en el nivel superior de la respuesta (T4); por si acaso también se mira en data.
-      if (r?.confirmacion_anulada ?? r?.data?.confirmacion_anulada) {
-        setAvisoAnulada('Se anuló la confirmación del cliente porque cambiaste la cotización. Envíasela de nuevo para que la confirme.');
-      }
+      if (r?.confirmacion_anulada ?? r?.data?.confirmacion_anulada) setAvisoAnulada(AVISO_CONFIRMACION_ANULADA);
       await loadCotizacion();
     } catch (err: any) {
-      // R10: apiFetch deja el status y el detail del servidor en el error.
-      const anula = err?.status === 409 && err?.detail?.codigo === 'ANULA_CONFIRMACION';
-      if (anula && desdeCalculadora) {
-        setCalcAnulacion(err.detail);
-      } else {
-        if (anula) setPendingCalcData(null);
-        avisarError(err, 'No se pudo guardar la cotización');
-      }
-      if (recargarTrasError(err)) void loadCotizacion({ silencioso: true });
+      await errorAlGuardarCalculo(err, data, desdeCalculadora);
     }
     setSavingCalc(false);
+  }
+
+  // H40 y ronda 1 (puntos 4 y 6): un guardado de la calculadora que falló.
+  async function errorAlGuardarCalculo(
+    err: { status?: number | null; detail?: AnulacionConfirmacion } | null | undefined,
+    data: { anular_confirmacion?: boolean } | null | undefined,
+    desdeCalculadora: boolean,
+  ) {
+    // R10: apiFetch deja el status y el detail del servidor en el error.
+    const anula = err?.status === 409 && err?.detail?.codigo === 'ANULA_CONFIRMACION';
+    // Punto 6: «Guardar y anular la confirmación» sin respuesta del servidor (la red se cortó): pudo guardarse. Se
+    // cierra el panel rosa y la recarga dice qué pasó antes de avisar nada (mientras, la calculadora sigue ocupada).
+    const anulandoSinRespuesta = data?.anular_confirmacion === true && (err?.status === undefined || err?.status === null);
+    // Punto 4: el estado que describe el panel rosa: el del 409 que lo abre o, si ya estaba abierto, el suyo.
+    const estadoDelPanel = anula && desdeCalculadora ? err?.detail?.estado : calcAnulacion?.estado;
+    if (anula && desdeCalculadora) {
+      setCalcAnulacion(err?.detail ?? null);
+    } else if (anulandoSinRespuesta) {
+      setCalcAnulacion(null);
+    } else {
+      if (anula) setPendingCalcData(null);
+      avisarError(err, 'No se pudo guardar la cotización');
+    }
+    if (!recargarTrasError(err)) return;
+    if (!anulandoSinRespuesta) setSavingCalc(false);
+    const fresca = await loadCotizacion({ silencioso: true });
+    // Punto 4: la cotización ya no está en el estado que describe el panel rosa (el cliente confirmó, se rechazó…): el
+    // panel ya no aplica y la calculadora vuelve a editarse.
+    if (estadoDelPanel && fresca && fresca.estado !== estadoDelPanel) setCalcAnulacion(null);
+    if (!anulandoSinRespuesta) return;
+    if (fresca?.estado === 'BORRADOR') {
+      // El servidor sí lo guardó: la confirmación quedó anulada.
+      if (vivo.current) {
+        setShowCalc(false);
+        setAvisoAnulada(AVISO_CONFIRMACION_ANULADA);
+      } else {
+        avisar(`${cotizacion?.numero || 'Cotización'}: ${AVISO_CONFIRMACION_ANULADA}`,
+          { tono: 'info', accion: { texto: 'Ver cotización', href: currentPath } });
+      }
+    } else {
+      avisarError(err, 'No se pudo guardar la cotización');
+    }
   }
 
   async function changeEstado(newEstado: string) {
@@ -943,9 +984,15 @@ function CotizacionDetalleContent() {
                           onClick={() => setShowCalc(true)}>
                           {Number(cotizacion?.total_cop) > 0 ? 'Re-Cotizar — Actualizar Precios' : 'Cotizar — Calcular Precios'}
                         </Button>
-                        {/* H40: lo dice antes de abrir la calculadora (que lo repite y pide la razón si hace falta). */}
+                        {/* H40: lo dice antes de abrir la calculadora (que lo repite y pide la razón si hace falta), según
+                            el caso (ronda 1, punto 5). */}
                         {estadoConfirmacionCalc && (
-                          <p className="text-[11px] text-amber-700">Cambiar precios anula la confirmación del cliente.</p>
+                          <p className="text-[11px] text-amber-700">
+                            {situacion.paso === 'reabrir' ? 'Cambiar precios la devuelve a Borrador.'
+                              : estadoConfirmacionCalc === 'PENDIENTE_CONFIRMACION'
+                                ? 'Cambiar precios deja sin efecto el enlace que tiene el cliente.'
+                                : 'Cambiar precios anula la confirmación del cliente.'}
+                          </p>
                         )}
                       </div>
                     )}
@@ -1079,7 +1126,7 @@ function CotizacionDetalleContent() {
                       {/* U6+H22: una nota del Chatter lleva su tipo encima (Nota interna, Llamada…, «Nota externa · medio»). */}
                       {esEntradaChatter(a) && <div className="mb-1.5"><EtiquetaChatter actividad={a} /></div>}
                       <div className="flex items-center justify-between mb-2">
-                        <span className="font-bold text-slate-800 text-sm">{a.description || a.action}</span>
+                        <span className="font-bold text-slate-800 text-sm">{a.description || humanizarCodigo(a.action)}</span>
                         <span className="text-[10px] font-bold text-slate-400">{fDate(a.created_at)} {fTime(a.created_at)}</span>
                       </div>
                       <CambiosDeActividad extra={a.extra_data} />
@@ -1135,6 +1182,8 @@ function CotizacionDetalleContent() {
           onCancel={cancelarEnvio}
           saving={sending}
           customerHasPhone={!!telUrl(cotizacion?.customer_phone)}
+          // Ronda 1 (punto 11): con dígitos pero sin alcanzar (motivoTelefono) es un teléfono incompleto.
+          textoSinTelefono={waUrl(cotizacion?.customer_phone) ? 'teléfono incompleto' : 'sin teléfono'}
           customerEmail={cotizacion?.customer_email ?? null}
         />
       )}
