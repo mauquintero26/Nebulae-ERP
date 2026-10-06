@@ -41,6 +41,7 @@ import datetime
 import hashlib
 import logging
 import re
+import unicodedata
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -1547,12 +1548,15 @@ def _exigir_sin_documentos_activos(db: Session, sc: CustomerRequest) -> None:
                                  f"se puede crear otra cotización.")
 
 
+_SIN_PRODUCTOS_PARA_COTIZAR = ("La solicitud no tiene productos para cotizar. Agrégalos en la solicitud y vuelve a "
+                               "enviársela al cliente para que la confirme.")
+
+
 def _exigir_productos_para_cotizar(sc: CustomerRequest) -> None:
     """400 si la SC no tiene productos: la cotizacion saldria vacia. Lo usan confirmar_solicitud y
     /cotizar-sin-confirmacion (mismo texto)."""
     if not _tiene_productos_para_cotizar(sc.productos):
-        raise HTTPException(400, "La solicitud no tiene productos para cotizar. Agrégalos en la solicitud "
-                                 "y vuelve a enviársela al cliente para que la confirme.")
+        raise HTTPException(400, _SIN_PRODUCTOS_PARA_COTIZAR)
 
 
 def _crear_cotizacion_desde_solicitud(db: Session, sc: CustomerRequest, cotizador: Optional[str],
@@ -1653,6 +1657,11 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
 # U11: limites del motivo de /cotizar-sin-confirmacion (el frontend tiene su espejo MOTIVO_SIN_CONFIRMACION_MIN).
 MOTIVO_SIN_CONFIRMACION_MIN = 10
 MOTIVO_SIN_CONFIRMACION_MAX = 500
+# S5 (T11): ademas, al menos estas letras o digitos: diez puntos o diez caracteres invisibles no explican nada. El
+# frontend todavia no lo espeja: el 422 llega con el texto del minimo.
+MOTIVO_SIN_CONFIRMACION_MIN_LETRAS = 5
+# S5: rellenos Hangul (U+115F, U+1160, U+3164 y U+FFA0). Unicode los clasifica como letras, pero no se ven.
+_RELLENOS_INVISIBLES = frozenset("ᅟᅠㅤﾠ")
 # Largo de la columna sales_quotations.cotizador (String(150)): mas largo seria un 500 con un numero ya gastado.
 COTIZADOR_MAX = 150
 # U11: estados en que una SC sin la confirmacion vigente del cliente se puede cotizar con motivo (CONFIRMADA solo si
@@ -1661,6 +1670,40 @@ _ESTADOS_SC_COTIZABLES_SIN_CONFIRMACION = ("ASIGNADA", "PENDIENTE_CONFIRMACION",
 # C7/R11 y el ruling T3-3: lo que responden las otras puertas (POST /cotizaciones, PATCH sc_id) a una SC sin confirmar.
 _SC_SIN_CONFIRMAR = ("no ha sido confirmada por el cliente: usa «Cotizar» en la solicitud para crear la cotización con "
                      "el motivo.")
+
+
+def _motivo_limpio(texto: str) -> str:
+    """S5 (T11): el motivo de la excepcion a Gate 1 tal como se mide y se guarda. NFKC; sin caracteres de formato (Cf:
+    U+200B, U+00AD, U+FEFF...) ni de control (Cc) ni rellenos Hangul; cualquier espacio o salto de linea (Zs, Zl, Zp,
+    tabuladores) cuenta como un espacio, los seguidos quedan en uno y se quitan los de los bordes. Un salto de linea no
+    pega las palabras vecinas: se vuelve un espacio en vez de desaparecer."""
+    partes = []
+    for ch in unicodedata.normalize("NFKC", texto):
+        if ch.isspace():
+            partes.append(" ")
+        elif unicodedata.category(ch) not in ("Cf", "Cc", "Zl", "Zp") and ch not in _RELLENOS_INVISIBLES:
+            partes.append(ch)
+    return re.sub(" {2,}", " ", "".join(partes)).strip()
+
+
+def _es_soporte(sc: CustomerRequest) -> bool:
+    return sc.tipo_solicitud == "Soporte Tecnico" or sc.estado == "N/A_SOPORTE"
+
+
+def _impedimento_para_cotizar_sin_confirmacion(sc: CustomerRequest) -> Optional[str]:
+    """Lo que hoy impide cotizar la SC sin la confirmacion del cliente (U11), sin contar la Papelera, la confirmacion
+    vigente ni los documentos activos (cada llamador los revisa a su modo): Soporte, sin asesor, un estado que no se
+    cotiza asi o sin productos. Devuelve el texto del 400 de /cotizar-sin-confirmacion, o None si se puede. Lo usan ese
+    endpoint y, S4 (T11), la excepcion de la puerta B al retomar una COT temprana rechazada."""
+    if _es_soporte(sc):
+        return "Las solicitudes de Soporte Técnico no se cotizan."
+    if sc.estado == "BORRADOR" or not sc.advisor_user_id:
+        return "Asigna un asesor a la solicitud antes de cotizarla."
+    if sc.estado not in _ESTADOS_SC_COTIZABLES_SIN_CONFIRMACION:
+        return f"No se puede cotizar sin confirmación una solicitud en estado {etiqueta_estado('SC', sc.estado)}."
+    if not _tiene_productos_para_cotizar(sc.productos):
+        return _SIN_PRODUCTOS_PARA_COTIZAR
+    return None
 
 
 @router.post("/solicitudes/{sc_id}/cotizar-sin-confirmacion")
@@ -1672,12 +1715,16 @@ def cotizar_sin_confirmacion(sc_id: int, body: CotizarSinConfirmacionBody,
 
     NO toca sc.estado ni gate1_confirmed_at y no revoca el enlace pendiente de la SC: el cliente puede confirmarla
     despues (confirmar_via_token conserva esta COT) o confirmar la COT (la sincronizacion de U15 confirma la SC). El
-    pedido sigue exigiendo Gate 2 y el anticipo. Un solo commit (C8); el lead del CRM va en un savepoint."""
-    motivo = (body.motivo or "").strip()
+    pedido sigue exigiendo Gate 2 y el anticipo. Un solo commit (C8); el lead del CRM va en un savepoint.
+    S5 (T11): el motivo se mide y se guarda limpio (_motivo_limpio) y necesita al menos 5 letras o digitos."""
+    motivo = _motivo_limpio(body.motivo or "")
+    corto = f"El motivo debe tener al menos {MOTIVO_SIN_CONFIRMACION_MIN} caracteres."
     if len(motivo) < MOTIVO_SIN_CONFIRMACION_MIN:
-        raise HTTPException(422, f"El motivo debe tener al menos {MOTIVO_SIN_CONFIRMACION_MIN} caracteres.")
+        raise HTTPException(422, corto)
     if len(motivo) > MOTIVO_SIN_CONFIRMACION_MAX:
         raise HTTPException(422, f"El motivo no puede tener más de {MOTIVO_SIN_CONFIRMACION_MAX} caracteres.")
+    if sum(ch.isalnum() for ch in motivo) < MOTIVO_SIN_CONFIRMACION_MIN_LETRAS:
+        raise HTTPException(422, corto)
     cotizador = _texto_o_none(body.cotizador)
     if cotizador is not None and len(cotizador) > COTIZADOR_MAX:
         raise HTTPException(422, f"El cotizador no puede tener más de {COTIZADOR_MAX} caracteres.")
@@ -1686,18 +1733,16 @@ def cotizar_sin_confirmacion(sc_id: int, body: CotizarSinConfirmacionBody,
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
-    if sc.tipo_solicitud == "Soporte Tecnico" or sc.estado == "N/A_SOPORTE":
-        raise HTTPException(400, "Las solicitudes de Soporte Técnico no se cotizan.")
+    # Mismo orden de siempre: Soporte, Papelera, confirmacion vigente, y despues asesor, estado y productos.
+    impedimento = _impedimento_para_cotizar_sin_confirmacion(sc)
+    if _es_soporte(sc):
+        raise HTTPException(400, impedimento)
     if sc.estado == "CANCELADA":
         raise HTTPException(409, _mensaje_solicitud_cancelada(sc, "cotizarla"))
     if _confirmacion_vigente_sc(sc):
         raise HTTPException(409, "El cliente ya confirmó esta solicitud: usa «Crear Cotización».")
-    if sc.estado == "BORRADOR" or not sc.advisor_user_id:
-        raise HTTPException(400, "Asigna un asesor a la solicitud antes de cotizarla.")
-    if sc.estado not in _ESTADOS_SC_COTIZABLES_SIN_CONFIRMACION:
-        raise HTTPException(400, f"No se puede cotizar sin confirmación una solicitud en estado "
-                                 f"{etiqueta_estado('SC', sc.estado)}.")
-    _exigir_productos_para_cotizar(sc)
+    if impedimento is not None:
+        raise HTTPException(400, impedimento)
     _exigir_sin_documentos_activos(db, sc)
 
     autor = nombre_de_usuario(user)
@@ -2012,17 +2057,20 @@ def _reabrir_cotizacion_por_pven_cancelado(db: Session, so: SaleOrder, user_name
         logger.error(f"No se pudo reabrir la cotizacion del pedido cancelado {so.numero}: {exc}", exc_info=True)
 
 
-def _validar_cambio_de_estado_cotizacion(db: Session, cot: SalesQuotation, nuevo) -> None:
+def _validar_cambio_de_estado_cotizacion(db: Session, cot: SalesQuotation, nuevo) -> bool:
     """Bloque UNICO de guardas del cambio de estado por PATCH (choque N5/H46/N4/N7/H50, R12), ANTES de tocar nada.
     Solo se evalua si el body trae un estado distinto del actual (reenviar el mismo estado nunca falla). En orden:
     (1) 400 CONFIRMADA / PENDIENTE_CONFIRMACION; (2) H50: 400 ENVIADA o un estado que no es manual; (3) 409 con un
     pedido vigente; (4) N4: 409 si la SC esta cancelada (salvo para rechazarla); (5) N7: 409 al retomar una RECHAZADA
     cuando la SC ya tiene otra COT activa; (6) U11: 409 al retomarla (a Borrador o a Vencida) si la SC no tiene la
-    confirmacion vigente del cliente, salvo que la COT se haya creado sin confirmacion en esa misma SC.
+    confirmacion vigente del cliente, salvo que la COT se haya creado sin confirmacion en esa misma SC y (S4, T11) la SC
+    se pueda cotizar hoy sin confirmacion (_impedimento_para_cotizar_sin_confirmacion: no es Soporte, tiene asesor, un
+    estado que se cotiza asi y productos).
+    Devuelve True si el cambio se acepta por esa excepcion (S4: el renglon del cambio lleva el autor de la sesion).
     S1 (T11): update_cotizacion ya rechazo con 422 un estado vacio o que no es texto (_exigir_estado_valido); None aqui
     es que el body no trae estado."""
     if nuevo is None or nuevo == cot.estado:
-        return
+        return False
     # (1) Gate 2 (Task 5, mismo criterio que update_solicitud para Gate 1): CONFIRMADA y PENDIENTE_CONFIRMACION solo
     # se alcanzan por rutas dedicadas (el enlace publico y enviar_cotizacion_para_confirmacion), nunca por este PATCH
     # generico. Round 2 (adversarial review): el drag-and-drop del Kanban del Hub mandaba PENDIENTE_CONFIRMACION por
@@ -2045,13 +2093,13 @@ def _validar_cambio_de_estado_cotizacion(db: Session, cot: SalesQuotation, nuevo
         raise HTTPException(409, f"La cotización tiene el pedido {pven.numero} activo. Para cambiar su estado, "
                                  f"primero cancela ese pedido.")
     if not cot.sc_id:
-        return
+        return False
     retoma = cot.estado == "RECHAZADA"
     consulta = db.query(CustomerRequest).filter(CustomerRequest.id == cot.sc_id)
     # Retomar una RECHAZADA bloquea la SC, igual que confirmar_solicitud: los dos no pueden dejar dos COT activas.
     sc = (consulta.with_for_update() if retoma else consulta).first()
     if sc is None:
-        return
+        return False
     # (4) N4: una SC cancelada no tiene COT vivas (rechazarla si se puede: es lo que se pide para cancelar la SC).
     if sc.estado == "CANCELADA" and nuevo != "RECHAZADA":
         raise HTTPException(409, _mensaje_solicitud_cancelada(sc))
@@ -2067,9 +2115,20 @@ def _validar_cambio_de_estado_cotizacion(db: Session, cot: SalesQuotation, nuevo
         # (6) U11 (ronda 1 de T3, puerta B): retomarla la deja activa en la SC, como crear una COT. Sin la confirmacion
         # vigente del cliente solo se permite si la COT se creo sin confirmacion (con su motivo) en ESTA SC: la marca se
         # limpia cuando la COT cambia de solicitud (update_cotizacion), asi que si la tiene es de esta SC.
-        if not _confirmacion_vigente_sc(sc) and cot.sin_confirmacion_sc_at is None:
-            raise HTTPException(409, f"La solicitud {sc.numero} no tiene la confirmación del cliente vigente: "
-                                     f"envíasela para que la confirme, o usa «Cotizar» en la solicitud con el motivo.")
+        if not _confirmacion_vigente_sc(sc):
+            if cot.sin_confirmacion_sc_at is None:
+                raise HTTPException(409, f"La solicitud {sc.numero} no tiene la confirmación del cliente vigente: "
+                                         f"envíasela para que la confirme, o usa «Cotizar» en la solicitud con el "
+                                         f"motivo.")
+            # S4 (T11): la marca sola no basta. La SC tiene que poder cotizarse HOY sin confirmacion (como en
+            # /cotizar-sin-confirmacion): una SC sin asesor, de Soporte, sin productos o en un estado heredado no.
+            impedimento = _impedimento_para_cotizar_sin_confirmacion(sc)
+            if impedimento is not None:
+                raise HTTPException(409, f"No se puede retomar la cotización {cot.numero}: la solicitud {sc.numero} no "
+                                         f"tiene la confirmación del cliente vigente y hoy no se podría cotizar sin "
+                                         f"ella. {impedimento}")
+            return True
+    return False
 
 
 # La COT solo cambia de solicitud fuera del ciclo de Gate 2 (sin enlace pendiente ni confirmacion del cliente).
@@ -2181,7 +2240,7 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         raise HTTPException(404, "Cotización no encontrada")
     # Primero el cambio de solicitud: bloquea las dos SC en orden de id antes de que la guarda 5 bloquee la actual.
     cambio_de_solicitud = _leer_cambio_de_solicitud(db, cot, body)
-    _validar_cambio_de_estado_cotizacion(db, cot, body.get("estado"))
+    retoma_sin_confirmacion = _validar_cambio_de_estado_cotizacion(db, cot, body.get("estado"))
     if "productos" in body:
         _validar_precios_productos(body.get("productos") or [])
     # R3: anticipo manual con nota obligatoria. Se valida aqui, antes de tocar nada (409/422).
@@ -2440,10 +2499,11 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         except Exception as exc:
             db.rollback()
             logger.error(f"Error al sincronizar Solicitud/Lead tras actualizar cotizacion {cot.id}: {exc}", exc_info=True)
+        # S4 (T11): retomar la COT temprana por la excepcion de la puerta B queda a nombre del usuario de la sesion.
         _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {etiqueta_estado('COT', cot.estado)}",
              old_estado=old_estado, new_estado=cot.estado,
-             user_name=body.get("updated_by"))
+             user_name=nombre_de_usuario(user) if retoma_sin_confirmacion else body.get("updated_by"))
     elif rompe_congelamiento:
         # El check de arriba solo loguea cuando el REQUEST manda "estado" explicitamente
         # Y distinto del original. rompe_congelamiento cambia cot.estado sin que el body

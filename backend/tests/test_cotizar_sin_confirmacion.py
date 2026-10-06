@@ -741,6 +741,114 @@ def test_s1_un_estado_vacio_o_falso_no_revive_una_cotizacion_rechazada(app_clien
     assert _logs(db, "COT", cot.id) == [] and _logs(db, "SC", sc.id) == []
 
 
+# --- T11 (S4): la excepcion de la puerta B exige que hoy se pueda cotizar sin confirmacion -----------------------------
+
+SIN_PRODUCTOS = ("La solicitud no tiene productos para cotizar. Agrégalos en la solicitud y vuelve a enviársela al "
+                 "cliente para que la confirme.")
+
+
+def _no_se_puede_retomar(cot_numero, sc_numero, impedimento):
+    return (f"No se puede retomar la cotización {cot_numero}: la solicitud {sc_numero} no tiene la confirmación del "
+            f"cliente vigente y hoy no se podría cotizar sin ella. {impedimento}")
+
+
+def test_s4_retomar_la_cotizacion_temprana_exige_que_la_solicitud_se_pueda_cotizar_sin_confirmacion(
+        app_client, db, admin_token, user_admin):
+    """S4 (T11): la marca sin_confirmacion_sc_at sola no basta para retomar una COT temprana RECHAZADA. La SC tiene que
+    cumplir HOY lo que pide /cotizar-sin-confirmacion: no es Soporte, esta Asignada, Pendiente o Confirmada (sin la
+    confirmacion vigente), tiene asesor y tiene productos. Si no, 409 y la COT sigue RECHAZADA. Cuando se puede, el
+    renglon del cambio de estado lleva el autor de la sesion, no el updated_by del body."""
+    from app.core.textos_actividad import nombre_de_usuario
+    from app.models.erp_documents import CustomerRequest, SalesQuotation
+    sc = _sc(db, "SC-CSC045", user_admin)
+    cot = _cotizar(app_client, admin_token, sc.id, motivo=MOTIVO).json()["data"]["cotizacion"]   # 1. COT temprana
+    _rechazar(app_client, admin_token, cot["id"])                                                # 2. rechazada
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"advisor_user_id": None, "updated_by": "t"},
+                            headers=auth(admin_token))                                           # 3. sin asesor
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["estado"] == "BORRADOR"
+
+    def _retomar():
+        return app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}",
+                                json={"estado": "BORRADOR", "updated_by": "otra persona"}, headers=auth(admin_token))
+
+    resp = _retomar()                                                                            # 4. -> 409
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == _no_se_puede_retomar(cot["numero"], "SC-CSC045",
+                                                         "Asigna un asesor a la solicitud antes de cotizarla.")
+    db.expire_all()
+    assert db.get(SalesQuotation, cot["id"]).estado == "RECHAZADA"
+    resp = _cotizar(app_client, admin_token, sc.id, motivo=MOTIVO)                               # 5. control
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["detail"] == "Asigna un asesor a la solicitud antes de cotizarla."
+
+    # Las demas precondiciones de /cotizar-sin-confirmacion, una por una (la SC vuelve a estar Asignada con asesor).
+    asignada = {"estado": "ASIGNADA", "advisor_user_id": user_admin.id, "advisor_name": user_admin.email,
+                "productos": [LINEA], "tipo_solicitud": "Cotizacion de Producto"}
+    casos = [
+        ({"advisor_user_id": None}, "Asigna un asesor a la solicitud antes de cotizarla."),  # Asignada sin asesor
+        ({"productos": [{"product_name": "  ", "qty": 1}]}, SIN_PRODUCTOS),
+        ({"tipo_solicitud": "Soporte Tecnico"}, "Las solicitudes de Soporte Técnico no se cotizan."),
+        ({"estado": "COTIZADA"}, "No se puede cotizar sin confirmación una solicitud en estado Cotizada."),
+    ]
+    for cambio, impedimento in casos:
+        db.query(CustomerRequest).filter(CustomerRequest.id == sc.id).update({**asignada, **cambio},
+                                                                              synchronize_session=False)
+        db.commit()
+        resp = _retomar()
+        assert resp.status_code == 409, (cambio, resp.text)
+        assert resp.json()["detail"] == _no_se_puede_retomar(cot["numero"], "SC-CSC045", impedimento), cambio
+        db.expire_all()
+        assert db.get(SalesQuotation, cot["id"]).estado == "RECHAZADA", cambio
+    assert _logs(db, "COT", cot["id"], "ESTADO_CHANGED")[-1].new_estado == "RECHAZADA"  # ninguno la retomo
+
+    # Con la SC Asignada, con asesor y productos, si se retoma; el renglon es del usuario de la sesion.
+    db.query(CustomerRequest).filter(CustomerRequest.id == sc.id).update(asignada, synchronize_session=False)
+    db.commit()
+    resp = _retomar()
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["estado"] == "BORRADOR"
+    retomada = _logs(db, "COT", cot["id"], "ESTADO_CHANGED")[-1]
+    assert (retomada.old_estado, retomada.new_estado) == ("RECHAZADA", "BORRADOR")
+    assert retomada.user_name == nombre_de_usuario(user_admin)
+
+
+# --- T11 (S5): el motivo de la excepcion no se llena con caracteres invisibles ------------------------------------------
+
+def test_s5_el_motivo_no_se_llena_con_caracteres_invisibles_ni_con_relleno(app_client, db, admin_token, user_admin):
+    """S5 (T11): strip() no quita U+200B, U+00AD ni el relleno Hangul (U+3164): diez de esos, o '..........', pasaban el
+    minimo de 10 y la auditoria de la excepcion quedaba en blanco. El motivo se normaliza (NFKC, sin caracteres de
+    formato ni de control, los espacios de cualquier tipo y los saltos de linea como un espacio, sin bordes), se mide
+    limpio y exige al menos 5 letras o digitos. Se guarda limpio."""
+    corto = "El motivo debe tener al menos 10 caracteres."
+    sc = _sc(db, "SC-CSC046", user_admin)
+    for motivo in ("​" * 10, "­" * 12, "﻿⁠" * 6, "  " * 6, "ㅤ" * 10,
+                   "ﾠ" * 10, "..........", "-- !! ?? ..", "abcd......", " ​ a​b​c​d ​ "):
+        resp = _cotizar(app_client, admin_token, sc.id, motivo=motivo)
+        assert resp.status_code == 422, (motivo, resp.text)
+        assert resp.json()["detail"] == corto, motivo
+    assert _cots_de(db, sc.id) == []
+    assert _logs(db, "SC", sc.id) == []
+
+    # Un motivo normal pasa y se guarda limpio: sin los invisibles, con los espacios y los saltos de linea en uno solo.
+    resp = _cotizar(app_client, admin_token, sc.id,
+                    motivo="  Cliente​ pidió  precio\n\nurgente   por teléfono­ \t")
+    assert resp.status_code == 200, resp.text
+    limpio = "Cliente pidió precio urgente por teléfono"
+    assert resp.json()["data"]["cotizacion"]["sin_confirmacion_sc_motivo"] == limpio
+    [renglon] = _logs(db, "SC", sc.id, "COTIZADA_SIN_CONFIRMACION")
+    assert renglon.extra_data["motivo"] == limpio and renglon.description.endswith(f"Motivo: {limpio}")
+    # Cinco letras o digitos alcanzan; el largo se mide sin los invisibles (500 visibles y 20 invisibles pasan).
+    for i, motivo in enumerate(("abcde.....", "x" * 500 + "​" * 20)):
+        otra = _sc(db, f"SC-CSC04{7 + i}", user_admin)
+        resp = _cotizar(app_client, admin_token, otra.id, motivo=motivo)
+        assert resp.status_code == 200, (motivo[:12], resp.text)
+        assert resp.json()["data"]["cotizacion"]["sin_confirmacion_sc_motivo"] == motivo.replace("​", "")
+    resp = _cotizar(app_client, admin_token, _sc(db, "SC-CSC049", user_admin).id, motivo="y" * 501 + "​")
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == "El motivo no puede tener más de 500 caracteres."
+
+
 # --- get_cotizacion: estado de la SC con la misma lectura -------------------------------------------------------------
 
 def test_el_detalle_de_la_cotizacion_trae_el_estado_de_la_solicitud_sin_otra_consulta(
