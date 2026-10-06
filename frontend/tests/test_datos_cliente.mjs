@@ -5,7 +5,9 @@
  */
 
 import assert from 'node:assert/strict';
-import { CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto } from '../src/lib/datos-cliente.js';
+import {
+  CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto, formularioDeEdicion, camposEditadosDeSolicitud,
+} from '../src/lib/datos-cliente.js';
 
 console.log('--- TEST 1: CAMPOS_CONTACTO (orden del formulario, límites del backend) ---');
 {
@@ -169,6 +171,53 @@ console.log('--- TEST 8 (T8B, R18 y rulings 2 y 5): avisoCorreccionContacto — 
   // Sin respuesta.
   assert.equal(avisoCorreccionContacto(null, SC), null);
   assert.equal(avisoCorreccionContacto(undefined, SC), null);
+}
+
+console.log('--- TEST 9 (T8B r2, punto 1): formularioDeEdicion y camposEditadosDeSolicitud — solo viaja lo que se editó ---');
+{
+  // La SC tal como estaba al abrir «Editar» (baseEdicion): sin asesor, tipo y modalidad sin valor guardado.
+  const base = {
+    advisor_name: null, advisor_user_id: null, tipo_solicitud: null, modalidad_pago: null, notas: 'Llamar antes',
+    fecha_vencimiento: '2026-11-03', customer_phone: '3000000000', customer_email: null, customer_address: 'Calle 1',
+    customer_city: 'Cali',
+  };
+  // Lo que muestra el formulario, con los valores por defecto de siempre.
+  assert.deepEqual(formularioDeEdicion(base), {
+    advisor_name: '', advisor_user_id: '', tipo_solicitud: 'Cotizacion de Producto', modalidad_pago: 'Contado',
+    notas: 'Llamar antes', fecha_vencimiento: '2026-11-03', customer_phone: '3000000000', customer_email: '',
+    customer_address: 'Calle 1', customer_city: 'Cali',
+  });
+  const form = formularioDeEdicion(base);
+
+  // Nada cambió → {} (tampoco los valores por defecto que el formulario puso donde no había nada).
+  assert.deepEqual(camposEditadosDeSolicitud(base, form), {});
+  // Solo las notas.
+  assert.deepEqual(camposEditadosDeSolicitud(base, { ...form, notas: 'Llamar después de las 3' }), { notas: 'Llamar después de las 3' });
+  assert.deepEqual(camposEditadosDeSolicitud(base, { ...form, notas: '' }), { notas: '' }, 'borrar las notas también es un cambio');
+  // Asesor asignado afuera («Asignarme» con el formulario abierto): la base y el formulario siguen sin asesor → no viaja,
+  // así «Guardar» no deshace la asignación que llegó con la recarga silenciosa.
+  assert.deepEqual(camposEditadosDeSolicitud(base, form), {});
+  // Asesor cambiado en el formulario: viajan los dos campos.
+  assert.deepEqual(camposEditadosDeSolicitud(base, { ...form, advisor_user_id: 7, advisor_name: 'ana@nebulae.co' }),
+    { advisor_user_id: 7, advisor_name: 'ana@nebulae.co' });
+  const conAsesor = { ...base, advisor_user_id: 7, advisor_name: 'ana@nebulae.co' };
+  assert.deepEqual(camposEditadosDeSolicitud(conAsesor, formularioDeEdicion(conAsesor)), {});
+  assert.deepEqual(camposEditadosDeSolicitud(conAsesor, { ...formularioDeEdicion(conAsesor), advisor_user_id: 9, advisor_name: 'luis@nebulae.co' }),
+    { advisor_user_id: 9, advisor_name: 'luis@nebulae.co' });
+  // Quitar el asesor ('' en el select) también viaja: '' frente a null es lo mismo solo cuando no cambió.
+  assert.deepEqual(camposEditadosDeSolicitud(conAsesor, { ...formularioDeEdicion(conAsesor), advisor_user_id: '' }),
+    { advisor_user_id: '', advisor_name: 'ana@nebulae.co' });
+  // El mismo asesor como texto (el valor de un select) no es un cambio.
+  assert.deepEqual(camposEditadosDeSolicitud(conAsesor, { ...formularioDeEdicion(conAsesor), advisor_user_id: '7' }), {});
+  // Tipo y modalidad.
+  assert.deepEqual(camposEditadosDeSolicitud(base, { ...form, tipo_solicitud: 'Seguimiento', modalidad_pago: 'Credito 30 dias' }),
+    { tipo_solicitud: 'Seguimiento', modalidad_pago: 'Credito 30 dias' });
+  // Los datos de contacto y la fecha no son de esta función (van por PATCH /cliente y fechaEditadaParaGuardar).
+  assert.deepEqual(camposEditadosDeSolicitud(base, { ...form, customer_phone: '3001112233', fecha_vencimiento: '2026-12-01' }), {});
+  // Una clave que no está en el formulario no se toca; sin base ni formulario, nada.
+  const { notas: _sinNotas, ...formSinNotas } = form;
+  assert.deepEqual(camposEditadosDeSolicitud(base, formSinNotas), {});
+  assert.deepEqual(camposEditadosDeSolicitud(null, null), {});
 }
 
 console.log('OK test_datos_cliente');

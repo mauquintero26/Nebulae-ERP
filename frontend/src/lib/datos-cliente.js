@@ -5,9 +5,13 @@
  * Las reglas y los textos son los del backend (erp_ventas._normalizar_contacto y los límites de app/core/clientes.py,
  * T5): si cambias uno, cambia el otro. El servidor vuelve a validar todo; esto solo evita el viaje con un dato que
  * va a rechazar.
+ *
+ * T8B ronda 2: también el formulario «Editar» del detalle de la SC (formularioDeEdicion) y qué campos de la SC cambió
+ * (camposEditadosDeSolicitud), para que solo esos viajen en el PATCH.
  */
 
 import { tiene } from './estados-pedido.js';
+import { diaLocalDeFecha } from './hub-ventas.js';
 
 /**
  * Los campos, en el orden del formulario. `max` = largo máximo (sin los espacios de los bordes); `soloConFicha` = solo
@@ -143,4 +147,57 @@ export function avisoCorreccionContacto(respuesta) {
   if (otros) tono = 'info';
   const texto = [principal, otros].filter(Boolean).join(' ');
   return texto ? { texto, tono } : null;
+}
+
+/**
+ * Lo que muestra «Editar» en el detalle de la SC: sus datos y, H21, el contacto del cliente (la ciudad viene de su
+ * ficha), con los valores por defecto de siempre. fecha_vencimiento llega en UTC sin zona (utcnow + días): el campo
+ * muestra el día en hora de Colombia, el mismo que la grilla y la lista.
+ * @param {any} d la solicitud (GET /ventas/solicitudes/{id})
+ * @returns {{ advisor_name: string, advisor_user_id: any, tipo_solicitud: string, modalidad_pago: string, notas: string,
+ *   fecha_vencimiento: string, customer_phone: string, customer_email: string, customer_address: string,
+ *   customer_city: string }}
+ */
+export function formularioDeEdicion(d) {
+  return {
+    advisor_name: d?.advisor_name || '',
+    advisor_user_id: d?.advisor_user_id || '',
+    tipo_solicitud: d?.tipo_solicitud || 'Cotizacion de Producto',
+    modalidad_pago: d?.modalidad_pago || 'Contado',
+    notas: d?.notas || '',
+    fecha_vencimiento: diaLocalDeFecha(d?.fecha_vencimiento),
+    customer_phone: d?.customer_phone || '',
+    customer_email: d?.customer_email || '',
+    customer_address: d?.customer_address || '',
+    customer_city: d?.customer_city || '',
+  };
+}
+
+/** Los campos de la SC que se editan en «Editar» (el contacto va por PATCH /cliente y la fecha, aparte). */
+const CAMPOS_SOLICITUD_EDITABLES = ['tipo_solicitud', 'modalidad_pago', 'notas'];
+
+/**
+ * T8B ronda 2 (punto 1): los campos de la SC que el formulario de «Editar» cambió respecto de lo que mostraba al
+ * abrirse (formularioDeEdicion(base), con los mismos valores por defecto): solo esos viajan en el PATCH de la SC. Así una
+ * asignación de asesor (u otro cambio) que llegó con una recarga silenciosa mientras el formulario seguía abierto no se
+ * deshace al guardar. El asesor viaja con su nombre; '' y null son lo mismo, y el id se compara como texto (el valor de
+ * un select). Una clave que no está en el formulario no se toca. No incluye el contacto ni la fecha de vencimiento.
+ * @param {any} base la solicitud tal como estaba al abrir «Editar»
+ * @param {any} form lo que hay en el formulario
+ * @returns {Record<string, any>}
+ */
+export function camposEditadosDeSolicitud(base, form) {
+  /** @type {Record<string, any>} */
+  const cambios = {};
+  if (!form || typeof form !== 'object') return cambios;
+  const inicial = formularioDeEdicion(base);
+  const igual = (a, b) => String(a ?? '') === String(b ?? '');
+  if (tiene(form, 'advisor_user_id') && !igual(inicial.advisor_user_id, form.advisor_user_id)) {
+    cambios.advisor_user_id = form.advisor_user_id;
+    cambios.advisor_name = form.advisor_name;
+  }
+  for (const clave of CAMPOS_SOLICITUD_EDITABLES) {
+    if (tiene(form, clave) && !igual(inicial[clave], form[clave])) cambios[clave] = form[clave];
+  }
+  return cambios;
 }

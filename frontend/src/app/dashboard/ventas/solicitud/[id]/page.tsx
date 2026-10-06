@@ -25,8 +25,10 @@ import { largoTexto, telUrl, mailtoUrl, asuntoDocumento, agregarActividad, esEnt
 import { formatoPct } from '@/lib/dinero-ventas';
 import { pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
 import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
-import { comoUTC, diaLocalDeFecha, fechaEditadaParaGuardar } from '@/lib/hub-ventas';
-import { CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto } from '@/lib/datos-cliente';
+import { comoUTC, fechaEditadaParaGuardar } from '@/lib/hub-ventas';
+import {
+  CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto, formularioDeEdicion, camposEditadosDeSolicitud,
+} from '@/lib/datos-cliente';
 import { avisoProductosGuardados } from '@/lib/lineas-solicitud';
 import { EstadoSolicitudPasos } from './estado-solicitud';
 // Final whole-branch review (hallazgo #1, el mas severo): Gate 1 no tenia NINGUNA via
@@ -107,29 +109,12 @@ const GUARDA_PRODUCTOS_ANTES = 'Guarda o cancela la edición de productos antes 
 // T8B ronda 1: tampoco se envía al cliente: confirmaría los productos guardados, no los que se están editando.
 const GUARDA_PRODUCTOS_ANTES_DE_ENVIAR = 'Guarda o cancela la edición de productos antes de enviarla al cliente';
 
+// La solicitud que se edita en «Editar» (los campos que lee formularioDeEdicion, de @/lib/datos-cliente).
 type SolicitudEditable = {
   advisor_name?: string | null; advisor_user_id?: number | string | null; tipo_solicitud?: string | null;
   modalidad_pago?: string | null; notas?: string | null; fecha_vencimiento?: string | null;
   customer_phone?: string | null; customer_email?: string | null; customer_address?: string | null; customer_city?: string | null;
 };
-
-// Lo que muestra «Editar»: los datos de la solicitud y, H21, el contacto del cliente (la ciudad viene de su ficha).
-// fecha_vencimiento llega en UTC sin zona (utcnow + días): el campo muestra el día en hora de Colombia, el mismo que la
-// grilla y la lista (con split('T') una SC creada de 7 pm a medianoche salía al día siguiente).
-function formularioDeEdicion(d: SolicitudEditable) {
-  return {
-    advisor_name: d.advisor_name || '',
-    advisor_user_id: d.advisor_user_id || '',
-    tipo_solicitud: d.tipo_solicitud || 'Cotizacion de Producto',
-    modalidad_pago: d.modalidad_pago || 'Contado',
-    notas: d.notas || '',
-    fecha_vencimiento: diaLocalDeFecha(d.fecha_vencimiento),
-    customer_phone: d.customer_phone || '',
-    customer_email: d.customer_email || '',
-    customer_address: d.customer_address || '',
-    customer_city: d.customer_city || '',
-  };
-}
 
 // H21: el tipo de cada campo de contacto en «Editar» (los demás, texto).
 const TIPO_CAMPO_CONTACTO: Record<string, string> = { customer_phone: 'tel', customer_email: 'email' };
@@ -319,7 +304,9 @@ function SolicitudDetalleContent() {
   // (1) Si cambió el contacto del cliente: PATCH /cliente con solo lo que cambió, validado antes aquí con las reglas del
   //     servidor. Corrige también la ficha y la cotización y el pedido abiertos, con la regla de Gate 1 de R18. Si falla
   //     (409 del correo de otro cliente, 422), no se guarda nada y se sigue editando.
-  // (2) El resto con un cuerpo EXPLÍCITO, sin customer_*: los datos del cliente no viajan dos veces ni dejan otro renglón.
+  // (2) De la SC, solo los campos que el formulario cambió respecto de lo que mostraba al abrirse (ronda 2:
+  //     camposEditadosDeSolicitud), sin customer_*: un cambio que llegó después con una recarga silenciosa (una
+  //     asignación hecha con el formulario abierto) no se deshace. Si no cambió ninguno, no hay PATCH de la SC.
   async function saveEdit() {
     if (!solicitud) return;
     setEditError('');
@@ -342,41 +329,42 @@ function SolicitudDetalleContent() {
         if (recargarTrasError(err)) void loadSolicitud({ silencioso: true });
         return;
       }
-      // Lo corregido se ve de una vez, y la base pasa a lo ya guardado: si el paso 2 falla, reintentar no reenvía el
-      // contacto.
+      // Lo corregido se ve de una vez, y el contacto de la base pasa a lo ya guardado: si el paso 2 falla, reintentar no
+      // lo reenvía. Solo el contacto (ronda 2): los campos de la SC de la base siguen siendo los de al abrir «Editar».
       const datos = correccion?.data;
       if (datos) {
         setSolicitud((prev: Record<string, unknown>) => ({ ...prev, ...datos }));
-        baseEdicion.current = { ...base, ...datos };
+        baseEdicion.current = {
+          ...base, customer_phone: datos.customer_phone, customer_email: datos.customer_email,
+          customer_address: datos.customer_address, customer_city: datos.customer_city,
+        };
       }
     }
     const contactoGuardado = !!correccion && correccion.sin_cambios !== true;
-    const body: Record<string, unknown> = {
-      advisor_name: editForm.advisor_name,
-      advisor_user_id: editForm.advisor_user_id,
-      tipo_solicitud: editForm.tipo_solicitud,
-      modalidad_pago: editForm.modalidad_pago,
-      notas: editForm.notas,
-      updated_by: currentUser,
-    };
+    const campos = camposEditadosDeSolicitud(base, editForm);
     // T8A ronda 1: el vencimiento solo viaja si el día cambió (mediodía local de ese día). Sin tocarlo no se mueve la
     // hora guardada ni la Actividad anota «11/10/2026 → 10/10/2026» (cambios_documento compara el día UTC), y nunca
     // se manda ''.
     const vencimiento = fechaEditadaParaGuardar(editForm.fecha_vencimiento, base.fecha_vencimiento);
-    if (vencimiento) body.fecha_vencimiento = vencimiento;
+    if (vencimiento) campos.fecha_vencimiento = vencimiento;
+    const hayCamposSC = Object.keys(campos).length > 0;
     let guardado = true;
-    try {
-      await apiFetch(`/ventas/solicitudes/${solicitud.id}`, { method: 'PATCH', body: JSON.stringify(body) });
-    } catch (err) {
-      guardado = false;
-      setEditError(contactoGuardado
-        ? `Los datos del cliente se guardaron, pero no el resto: ${textoDeError(err)}`
-        : textoDeError(err, 'No se pudieron guardar los cambios'));
+    if (hayCamposSC) {
+      try {
+        await apiFetch(`/ventas/solicitudes/${solicitud.id}`, {
+          method: 'PATCH', body: JSON.stringify({ ...campos, updated_by: currentUser }),
+        });
+      } catch (err) {
+        guardado = false;
+        setEditError(contactoGuardado
+          ? `Los datos del cliente se guardaron, pero no el resto: ${textoDeError(err)}`
+          : textoDeError(err, 'No se pudieron guardar los cambios'));
+      }
     }
     if (guardado) setEditMode(false);
-    // Recarga silenciosa (ruling de T8B): sin el spinner de página no se desmonta lo que siga abierto (el formulario si el
-    // paso 2 falló, el editor de productos) y llega la Actividad de la corrección.
-    if (guardado || contactoGuardado) await loadSolicitud({ silencioso: true });
+    // Recarga silenciosa (ruling de T8B), solo si algo se guardó: sin el spinner de página no se desmonta lo que siga
+    // abierto (el formulario si el paso 2 falló, el editor de productos) y llega la Actividad de la corrección.
+    if ((guardado && hayCamposSC) || contactoGuardado) await loadSolicitud({ silencioso: true });
     // R18: si la corrección anuló la confirmación del cliente o un enlace, se dice qué hacer; si no, el aviso de guardado.
     const aviso = correccion ? avisoCorreccionContacto(correccion) : null;
     if (aviso) avisar(aviso.texto, { tono: aviso.tono });
