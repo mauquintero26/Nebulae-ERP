@@ -39,8 +39,9 @@ const ACTIVITY_STYLE: Record<string, string> = {
 };
 
 // U24: el tercer recuadro del Resumen Financiero según resumenPagoPedido(...).caso (clases literales para Tailwind).
+// Las ayudas son hechos que valen en cualquier estado, también en un pedido CANCELADO (que ya no debe nada).
 const TERCER_RECUADRO: Record<string, { titulo: string; caja: string; texto: string; valor: string; ayuda: string }> = {
-  pendiente: { titulo: 'Saldo pendiente', caja: 'border-red-200 bg-red-50', texto: 'text-red-700', valor: 'text-red-800', ayuda: 'Lo que falta por cobrar' },
+  pendiente: { titulo: 'Saldo pendiente', caja: 'border-red-200 bg-red-50', texto: 'text-red-700', valor: 'text-red-800', ayuda: 'Total menos lo pagado' },
   completo: { titulo: 'Pagado completo', caja: 'border-emerald-200 bg-emerald-50', texto: 'text-emerald-700', valor: 'text-emerald-800', ayuda: 'Sin saldo pendiente' },
   a_favor: { titulo: 'Saldo a favor del cliente', caja: 'border-amber-200 bg-amber-50', texto: 'text-amber-800', valor: 'text-amber-900', ayuda: 'Pagó más que el total del pedido' },
   desconocido: { titulo: 'Saldo pendiente', caja: 'border-slate-200 bg-slate-50', texto: 'text-slate-600', valor: 'text-slate-500', ayuda: 'Saldo sin datos' },
@@ -609,11 +610,8 @@ function PedidoVentaDetalleContent() {
                   <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4">
                     <p className="text-xs font-bold uppercase tracking-wider text-indigo-700">Anticipo requerido · {formatoPct(resumenPago.anticipoPct)}</p>
                     <p className="text-2xl font-black text-indigo-900">{fCOP(resumenPago.requerido)}</p>
-                    <p className="text-sm text-indigo-700">
-                      {resumenPago.requerido === 0 ? 'No pide anticipo'
-                        : resumenPago.anticipoPendiente === null ? 'Del total del pedido'
-                        : resumenPago.anticipoPendiente > 0 ? 'Falta una parte' : 'Anticipo cubierto'}
-                    </p>
+                    {/* Lo que falta del anticipo lo dice el aviso de abajo (R4); en un pedido cancelado el servidor manda 0. */}
+                    <p className="text-sm text-indigo-700">{resumenPago.requerido === 0 ? 'No pide anticipo' : 'Del total del pedido'}</p>
                   </div>
                   <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
                     <p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Pagado (verificado)</p>
