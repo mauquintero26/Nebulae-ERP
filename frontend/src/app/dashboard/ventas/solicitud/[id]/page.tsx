@@ -25,6 +25,7 @@ import { formatoPct } from '@/lib/dinero-ventas';
 import { pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
 import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
 import { comoUTC, diaLocalDeFecha, fechaEditadaParaGuardar } from '@/lib/hub-ventas';
+import { CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto } from '@/lib/datos-cliente';
 import { EstadoSolicitudPasos } from './estado-solicitud';
 // Final whole-branch review (hallazgo #1, el mas severo): Gate 1 no tenia NINGUNA via
 // de UI para entregarle el link de confirmacion al cliente -- enviarParaConfirmacion
@@ -102,6 +103,32 @@ const textoCotizacionCreada = (numero: unknown) => (numero ? `Cotización ${nume
 // cotiza los productos GUARDADOS, no los que se están editando. El mismo porqué en todos los botones de cotizar.
 const GUARDA_PRODUCTOS_ANTES = 'Guarda o cancela la edición de productos antes de cotizar';
 
+// Lo que muestra «Editar»: los datos de la solicitud y, H21, el contacto del cliente (la ciudad viene de su ficha).
+// fecha_vencimiento llega en UTC sin zona (utcnow + días): el campo muestra el día en hora de Colombia, el mismo que la
+// grilla y la lista (con split('T') una SC creada de 7 pm a medianoche salía al día siguiente).
+function formularioDeEdicion(d: any) {
+  return {
+    advisor_name: d.advisor_name || '',
+    advisor_user_id: d.advisor_user_id || '',
+    tipo_solicitud: d.tipo_solicitud || 'Cotizacion de Producto',
+    modalidad_pago: d.modalidad_pago || 'Contado',
+    notas: d.notas || '',
+    fecha_vencimiento: diaLocalDeFecha(d.fecha_vencimiento),
+    customer_phone: d.customer_phone || '',
+    customer_email: d.customer_email || '',
+    customer_address: d.customer_address || '',
+    customer_city: d.customer_city || '',
+  };
+}
+
+// H21: el tipo de cada campo de contacto en «Editar» (los demás, texto).
+const TIPO_CAMPO_CONTACTO: Record<string, string> = { customer_phone: 'tel', customer_email: 'email' };
+// H21 con R6 y R18: el texto gris bajo los campos de contacto. Sin ficha la corrección también llega a la cotización y al
+// pedido abiertos de la solicitud (los que no son de otro cliente), así que no se dice que «solo queda en la solicitud».
+const TEXTO_CONTACTO_CON_FICHA = 'Lo que corrijas aquí también se guarda en la ficha del cliente y en la cotización y el pedido abiertos de esta solicitud, y queda en la Actividad.';
+const TEXTO_CONTACTO_SIN_FICHA = 'Esta solicitud no está vinculada a una ficha de cliente: lo que corrijas aquí se guarda en la solicitud y en la cotización y el pedido abiertos de esta solicitud, y queda en la Actividad.';
+const TEXTO_CONTACTO_ANULA = 'Si cambias el correo o el teléfono, la confirmación del cliente se anula y hay que enviársela de nuevo.';
+
 function SolicitudDetalleContent() {
   const params = useParams();
   const router = useRouter();
@@ -121,6 +148,9 @@ function SolicitudDetalleContent() {
 
   const [editMode, setEditMode] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
+  // H21: el error de «Guardar» (un dato de contacto que no sirve, el 409 del correo de otro cliente…), en rojo bajo la
+  // barra de Guardar, sin cerrar el formulario.
+  const [editError, setEditError] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
   const [saving, setSaving] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -191,18 +221,7 @@ function SolicitudDetalleContent() {
       const d = raw?.data ?? raw;
       if (esLaUltima()) {
         setSolicitud(d);
-        if (!silencioso) {
-          setEditForm({
-            advisor_name: d.advisor_name || '',
-            advisor_user_id: d.advisor_user_id || '',
-            tipo_solicitud: d.tipo_solicitud || 'Cotizacion de Producto',
-            modalidad_pago: d.modalidad_pago || 'Contado',
-            notas: d.notas || '',
-            // fecha_vencimiento llega en UTC sin zona (utcnow + días): el campo muestra el día en hora de Colombia, el
-            // mismo que la grilla y la lista (con split('T') una SC creada de 7 pm a medianoche salía al día siguiente).
-            fecha_vencimiento: diaLocalDeFecha(d.fecha_vencimiento),
-          });
-        }
+        if (!silencioso) setEditForm(formularioDeEdicion(d));
       }
     } catch (err: any) {
       if (!silencioso && esLaUltima()) setLoadError(err.message || 'No se pudo cargar la solicitud');
@@ -259,23 +278,76 @@ function SolicitudDetalleContent() {
     document.removeEventListener('mouseup', handleMouseUp);
   }, []);
 
+  // H21: 'Editar' parte siempre de la solicitud que está en pantalla (las recargas silenciosas no tocan editForm), con el
+  // contacto del cliente; cancelar lo deja como estaba y limpia el error.
+  function abrirEdicion() {
+    if (!solicitud) return;
+    setEditForm(formularioDeEdicion(solicitud));
+    setEditError('');
+    setEditMode(true);
+  }
+
+  function cancelarEdicion() {
+    setEditMode(false);
+    setEditError('');
+    if (solicitud) setEditForm(formularioDeEdicion(solicitud));
+  }
+
+  // H21: «Guardar» en dos pasos.
+  // (1) Si cambió el contacto del cliente: PATCH /cliente con solo lo que cambió, validado antes aquí con las reglas del
+  //     servidor. Corrige también la ficha y la cotización y el pedido abiertos, con la regla de Gate 1 de R18. Si falla
+  //     (409 del correo de otro cliente, 422), no se guarda nada y se sigue editando.
+  // (2) El resto con un cuerpo EXPLÍCITO, sin customer_*: los datos del cliente no viajan dos veces ni dejan otro renglón.
   async function saveEdit() {
     if (!solicitud) return;
+    setEditError('');
+    const cambios = cambiosDeContacto(solicitud, editForm, { tieneFicha: !!solicitud.customer_id });
+    const errorContacto = validarContacto(cambios);
+    if (errorContacto) { setEditError(errorContacto); return; }
     setSavingEdit(true);
-    try {
-      const body: any = { ...editForm, updated_by: currentUser };
-      // T8A ronda 1: el vencimiento solo viaja si el día cambió (mediodía local de ese día). Sin tocarlo no se mueve la
-      // hora guardada ni la Actividad anota «11/10/2026 → 10/10/2026» (cambios_documento compara el día UTC), y nunca
-      // se manda ''.
-      const vencimiento = fechaEditadaParaGuardar(editForm.fecha_vencimiento, solicitud.fecha_vencimiento);
-      if (vencimiento) body.fecha_vencimiento = vencimiento;
-      else delete body.fecha_vencimiento;
-      await apiFetch(`/ventas/solicitudes/${solicitud.id}`, { method: 'PATCH', body: JSON.stringify(body) });
-      setEditMode(false);
-      await loadSolicitud();
-    } catch (err: any) {
-      avisarError(err, 'No se pudieron guardar los cambios');
+    let correccion: any = null;
+    if (Object.keys(cambios).length > 0) {
+      try {
+        // R9: sin updated_by: el autor lo pone el servidor con la sesión.
+        correccion = await apiFetch(`/ventas/solicitudes/${solicitud.id}/cliente`, { method: 'PATCH', body: JSON.stringify(cambios) });
+      } catch (err) {
+        setEditError(textoDeError(err));
+        setSavingEdit(false);
+        return;
+      }
+      // Lo corregido se ve de una vez (y si el paso 2 falla, reintentar ya no lo reenvía).
+      if (correccion?.data) setSolicitud((prev: any) => ({ ...prev, ...correccion.data }));
     }
+    const contactoGuardado = !!correccion && correccion.sin_cambios !== true;
+    const body: Record<string, unknown> = {
+      advisor_name: editForm.advisor_name,
+      advisor_user_id: editForm.advisor_user_id,
+      tipo_solicitud: editForm.tipo_solicitud,
+      modalidad_pago: editForm.modalidad_pago,
+      notas: editForm.notas,
+      updated_by: currentUser,
+    };
+    // T8A ronda 1: el vencimiento solo viaja si el día cambió (mediodía local de ese día). Sin tocarlo no se mueve la
+    // hora guardada ni la Actividad anota «11/10/2026 → 10/10/2026» (cambios_documento compara el día UTC), y nunca
+    // se manda ''.
+    const vencimiento = fechaEditadaParaGuardar(editForm.fecha_vencimiento, solicitud.fecha_vencimiento);
+    if (vencimiento) body.fecha_vencimiento = vencimiento;
+    let guardado = true;
+    try {
+      await apiFetch(`/ventas/solicitudes/${solicitud.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+    } catch (err) {
+      guardado = false;
+      setEditError(contactoGuardado
+        ? `Los datos del cliente se guardaron, pero no el resto: ${textoDeError(err)}`
+        : textoDeError(err, 'No se pudieron guardar los cambios'));
+    }
+    if (guardado) setEditMode(false);
+    // Recarga silenciosa (ruling de T8B): sin el spinner de página no se desmonta lo que siga abierto (el formulario si el
+    // paso 2 falló, el editor de productos) y llega la Actividad de la corrección.
+    if (guardado || contactoGuardado) await loadSolicitud({ silencioso: true });
+    // R18: si la corrección anuló la confirmación del cliente o un enlace, se dice qué hacer; si no, el aviso de guardado.
+    const aviso = correccion ? avisoCorreccionContacto(correccion, solicitud.numero) : null;
+    if (aviso) avisar(aviso.texto, { tono: aviso.tono });
     setSavingEdit(false);
   }
 
@@ -573,12 +645,13 @@ function SolicitudDetalleContent() {
   const asesoresElegibles = usuarios.filter(u => esAsesorElegible(u.role));
   const yoPuedoSerAsesor = me.id !== null && asesoresElegibles.some(u => u.id === me.id);
   const LINK_ACCION = 'flex items-center justify-center gap-2 rounded-xl font-bold px-6 py-3 text-sm text-white shadow-md';
-  // H5/C19: el wa.me del cliente (null si el teléfono no sirve: entonces no se pinta el enlace).
-  const whatsappCliente = waUrl(solicitud?.customer_phone);
   // T8A ronda 1: Llamar y Correo con la librería del Chatter: el número normalizado (tel:+57…) y el correo y el asunto
   // codificados (un dato del cliente no agrega destinatarios ni encabezados al mailto). Un dato incompleto o inválido no
   // pinta su enlace.
   const llamarCliente = telUrl(solicitud?.customer_phone);
+  // H5/C19 con el mismo criterio que Llamar (re-revisión de T8A): el wa.me del cliente solo si el teléfono sirve (con
+  // '123', waUrl daba un enlace muerto wa.me/123).
+  const whatsappCliente = llamarCliente ? waUrl(solicitud?.customer_phone) : null;
   const correoCliente = mailtoUrl(solicitud?.customer_email, asuntoDocumento('SC', solicitud?.numero), '');
   // Sin ningún enlace de contacto: no hay datos, o los que hay no sirven (teléfono incompleto, correo inválido).
   const sinDatosDeContacto = !solicitud?.customer_phone && !solicitud?.customer_email;
@@ -855,11 +928,11 @@ function SolicitudDetalleContent() {
           {/* U18: una solicitud cancelada no se edita: se restaura desde la Papelera. */}
           {!editMode ? (
             solicitud?.estado !== 'CANCELADA' && (
-              <Button variant="secondary" size="sm" icon={Edit2} onClick={() => setEditMode(true)}>Editar</Button>
+              <Button variant="secondary" size="sm" icon={Edit2} onClick={abrirEdicion}>Editar</Button>
             )
           ) : (
             <>
-              <Button variant="secondary" size="sm" onClick={() => setEditMode(false)}>Cancelar</Button>
+              <Button variant="secondary" size="sm" disabled={savingEdit} onClick={cancelarEdicion}>Cancelar</Button>
               <Button color="indigo" size="sm" icon={Save} loading={savingEdit} onClick={saveEdit}>Guardar</Button>
             </>
           )}
@@ -868,6 +941,10 @@ function SolicitudDetalleContent() {
           )}
         </div>
       </div>
+      {/* H21: el error de «Guardar» en rojo, justo bajo la barra (en lugar de alert()); el formulario sigue abierto. */}
+      {editMode && editError && (
+        <p role="alert" className="px-6 py-2 bg-rose-50 border-b border-rose-200 text-xs font-bold text-rose-700 break-words shrink-0">{editError}</p>
+      )}
 
       {/* Progreso del Flujo -- SC -> COT -> PVEN (no aplica a Soporte Tecnico, que tiene su propio ciclo) */}
       {!isSoporte && (
@@ -893,17 +970,49 @@ function SolicitudDetalleContent() {
 
         {/* LEFT: Informacion de la Solicitud (Cliente, datos, estado) */}
         <div className="flex-1 border-r border-slate-100 overflow-y-auto p-6 space-y-5">
-          {/* Cliente */}
+          {/* Cliente. H21: con la ciudad (de la ficha) y «Ver ficha» (Agenda); en «Editar», el contacto se corrige aquí. */}
           <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Cliente</p>
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Cliente</p>
+              {!editMode && solicitud?.customer_id && (
+                <Link href={`/dashboard/agenda?customer_id=${solicitud.customer_id}`} className="text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:underline">Ver ficha</Link>
+              )}
+            </div>
             <div className="space-y-2">
               <div className="flex items-center gap-3">
                 <div className="w-9 h-9 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 flex-shrink-0"><User size={15} /></div>
-                <div><p className="font-bold text-slate-900">{solicitud?.customer_name}</p></div>
+                <div>
+                  <p className="font-bold text-slate-900">{solicitud?.customer_name}</p>
+                  {editMode && <p className="text-xs text-slate-500">El nombre se cambia en la ficha del cliente</p>}
+                </div>
               </div>
-              {solicitud?.customer_phone && <a href={`tel:${solicitud.customer_phone}`} className="flex items-center gap-2 text-sm text-slate-600 hover:text-emerald-600 pl-1"><Phone size={13} className="text-slate-400" />{solicitud.customer_phone}</a>}
-              {solicitud?.customer_email && <a href={`mailto:${solicitud.customer_email}`} className="flex items-center gap-2 text-sm text-slate-600 hover:text-indigo-600 pl-1"><Mail size={13} className="text-slate-400" />{solicitud.customer_email}</a>}
-              {solicitud?.customer_address && <p className="flex items-start gap-2 text-sm text-slate-600 pl-1"><MapPin size={13} className="text-slate-400 mt-0.5 flex-shrink-0" />{solicitud.customer_address}</p>}
+              {editMode ? (
+                <div className="space-y-3 pt-1">
+                  {/* Teléfono, Correo y Dirección; la Ciudad solo con ficha (no es columna de la solicitud). */}
+                  {CAMPOS_CONTACTO.filter(c => !c.soloConFicha || !!solicitud?.customer_id).map(c => (
+                    <div key={c.clave}>
+                      <label htmlFor={`contacto-${c.clave}`} className="text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider block">{c.etiqueta}</label>
+                      <input
+                        id={`contacto-${c.clave}`} type={TIPO_CAMPO_CONTACTO[c.clave] || 'text'} value={editForm[c.clave] ?? ''} maxLength={c.max}
+                        onChange={e => { const v = e.target.value; setEditForm((ef: any) => ({ ...ef, [c.clave]: v })); setEditError(''); }}
+                        className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none"
+                      />
+                    </div>
+                  ))}
+                  <p className="text-xs text-slate-500 leading-relaxed">
+                    {solicitud?.customer_id ? TEXTO_CONTACTO_CON_FICHA : TEXTO_CONTACTO_SIN_FICHA} {TEXTO_CONTACTO_ANULA}
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {solicitud?.customer_phone && <a href={`tel:${solicitud.customer_phone}`} className="flex items-center gap-2 text-sm text-slate-600 hover:text-emerald-600 pl-1"><Phone size={13} className="text-slate-400" />{solicitud.customer_phone}</a>}
+                  {solicitud?.customer_email && <a href={`mailto:${solicitud.customer_email}`} className="flex items-center gap-2 text-sm text-slate-600 hover:text-indigo-600 pl-1"><Mail size={13} className="text-slate-400" />{solicitud.customer_email}</a>}
+                  {/* «{dirección} · {ciudad}», o solo la ciudad si no hay dirección. */}
+                  {(solicitud?.customer_address || solicitud?.customer_city) && (
+                    <p className="flex items-start gap-2 text-sm text-slate-600 pl-1"><MapPin size={13} className="text-slate-400 mt-0.5 flex-shrink-0" />{[solicitud.customer_address, solicitud.customer_city].filter(Boolean).join(' · ')}</p>
+                  )}
+                </>
+              )}
             </div>
           </div>
 

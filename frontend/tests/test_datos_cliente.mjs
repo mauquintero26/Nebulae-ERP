@@ -5,7 +5,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { CAMPOS_CONTACTO, cambiosDeContacto, validarContacto } from '../src/lib/datos-cliente.js';
+import { CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto } from '../src/lib/datos-cliente.js';
 
 console.log('--- TEST 1: CAMPOS_CONTACTO (orden del formulario, límites del backend) ---');
 {
@@ -93,6 +93,62 @@ console.log('--- TEST 7: validarContacto con los textos del backend ---');
   assert.equal(validarContacto({ customer_email: 'mal', customer_phone: '12' }), 'El teléfono debe tener al menos 7 dígitos.');
   // otras claves se ignoran
   assert.equal(validarContacto({ customer_name: '', updated_by: 'x' }), null);
+}
+
+console.log('--- TEST 8 (T8B, R18 y rulings 2 y 5): avisoCorreccionContacto — el aviso después de PATCH /cliente ---');
+{
+  const SC = 'SC-20260800';
+  // Las claves exactas de la respuesta de T5 (Fix report de la ronda 2).
+  const base = {
+    status: 'success', data: { numero: SC }, ficha_actualizada: true, documentos_actualizados: [],
+    documentos_de_otro_cliente: [], confirmacion_anulada: false, estado_cambiado: false, enlaces_anulados: [],
+    sin_cambios: false,
+  };
+  const A = 'Datos corregidos. Como cambió el correo o el teléfono del cliente, su confirmación quedó anulada: envíale la solicitud de nuevo.';
+  const COT = 'Datos corregidos. Se anuló el enlace de la cotización COT-20260486 enviado al dato anterior: pásala a Borrador y envíala de nuevo.';
+  const B = 'Datos corregidos. Se anuló el enlace que se había enviado al dato anterior: usa «Reenviar enlace de confirmación».';
+  const CONFIRMACION = 'Datos corregidos. La confirmación anterior del cliente ya no vale; la cotización activa sigue igual.';
+  const NORMAL = 'Datos del cliente corregidos.';
+
+  // 1. La solicitud cambió de estado (volvió a Asignada o a Nueva): gana sobre los enlaces anulados.
+  assert.deepEqual(avisoCorreccionContacto({ ...base, confirmacion_anulada: true, estado_cambiado: true, enlaces_anulados: [SC] }, SC),
+    { texto: A, tono: 'info' });
+  assert.deepEqual(avisoCorreccionContacto({ ...base, confirmacion_anulada: true, estado_cambiado: true,
+    enlaces_anulados: [SC, 'COT-20260486'] }, SC), { texto: A, tono: 'info' });
+  // 2. Se anuló el enlace de una cotización: gana sobre el de la solicitud.
+  assert.deepEqual(avisoCorreccionContacto({ ...base, enlaces_anulados: ['COT-20260486'] }, SC), { texto: COT, tono: 'info' });
+  assert.deepEqual(avisoCorreccionContacto({ ...base, confirmacion_anulada: true, enlaces_anulados: [SC, 'COT-20260486'] }, SC),
+    { texto: COT, tono: 'info' });
+  // Varias cotizaciones (raro): en plural.
+  assert.deepEqual(avisoCorreccionContacto({ ...base, enlaces_anulados: ['COT-1', 'COT-2'] }, SC), {
+    texto: 'Datos corregidos. Se anularon los enlaces de las cotizaciones COT-1 y COT-2 enviados al dato anterior: pásalas a Borrador y envíalas de nuevo.',
+    tono: 'info',
+  });
+  // 3. Se anuló el enlace de la solicitud (sin cambio de estado).
+  assert.deepEqual(avisoCorreccionContacto({ ...base, confirmacion_anulada: true, enlaces_anulados: [SC] }, SC), { texto: B, tono: 'info' });
+  // Sin el número de la solicitud como argumento, sale de respuesta.data.
+  assert.deepEqual(avisoCorreccionContacto({ ...base, confirmacion_anulada: true, enlaces_anulados: [SC] }), { texto: B, tono: 'info' });
+  // 4. La confirmación anterior ya no vale (Confirmada con una cotización activa: el estado no cambia).
+  assert.deepEqual(avisoCorreccionContacto({ ...base, confirmacion_anulada: true }, SC), { texto: CONFIRMACION, tono: 'info' });
+  // 5. Lo normal (solo la dirección o la ciudad, o una solicitud Asignada).
+  assert.deepEqual(avisoCorreccionContacto(base, SC), { texto: NORMAL, tono: 'ok' });
+  assert.deepEqual(avisoCorreccionContacto({ status: 'success', data: { numero: SC } }, SC), { texto: NORMAL, tono: 'ok' },
+    'sin las claves nuevas: el aviso normal');
+
+  // Ruling 5: los documentos de otro cliente que no se tocaron se dicen al final (uno o varios).
+  assert.deepEqual(avisoCorreccionContacto({ ...base, documentos_de_otro_cliente: ['COT-5'] }, SC),
+    { texto: `${NORMAL} No se cambió COT-5 porque es de otro cliente.`, tono: 'info' });
+  assert.deepEqual(avisoCorreccionContacto({ ...base, confirmacion_anulada: true, estado_cambiado: true,
+    documentos_de_otro_cliente: ['COT-5', 'PVEN-7'] }, SC),
+  { texto: `${A} No se cambiaron COT-5 y PVEN-7 porque son de otro cliente.`, tono: 'info' });
+
+  // Sin cambios: nada que avisar, salvo los documentos de otro cliente.
+  assert.equal(avisoCorreccionContacto({ ...base, sin_cambios: true }, SC), null);
+  assert.deepEqual(avisoCorreccionContacto({ ...base, sin_cambios: true, documentos_de_otro_cliente: ['COT-5', 'COT-6', 'PVEN-7'] }, SC),
+    { texto: 'No se cambiaron COT-5, COT-6 y PVEN-7 porque son de otro cliente.', tono: 'info' });
+  // Sin respuesta.
+  assert.equal(avisoCorreccionContacto(null, SC), null);
+  assert.equal(avisoCorreccionContacto(undefined, SC), null);
 }
 
 console.log('OK test_datos_cliente');

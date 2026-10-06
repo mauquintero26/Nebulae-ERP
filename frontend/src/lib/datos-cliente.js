@@ -88,3 +88,54 @@ export function validarContacto(cambios) {
   }
   return null;
 }
+
+/** Los números de documento de una lista de la respuesta (lo que no es texto se ignora). */
+const numeros = (v) => (Array.isArray(v) ? v.filter((n) => typeof n === 'string' && n.trim()).map((n) => n.trim()) : []);
+
+/** 'a' | 'a y b' | 'a, b y c' (como _unir_es del backend). */
+const unirConY = (partes) => (partes.length <= 1 ? partes.join('') : `${partes.slice(0, -1).join(', ')} y ${partes[partes.length - 1]}`);
+
+/**
+ * H21 con R18 (rulings 2 y 5 de T8B): el aviso que se muestra después de corregir el contacto del cliente con
+ * PATCH /ventas/solicitudes/{id}/cliente, según las claves de su respuesta (T5). Uno solo, en este orden:
+ * 1. la solicitud cambió de estado (estado_cambiado): su confirmación quedó anulada y hay que enviársela de nuevo;
+ * 2. se anuló el enlace de una cotización (un número de enlaces_anulados que no es el de la solicitud);
+ * 3. se anuló el enlace de la solicitud;
+ * 4. la confirmación anterior ya no vale (confirmacion_anulada: Confirmada con una cotización activa);
+ * 5. si no, el aviso normal de guardado.
+ * Al final, los documentos de otro cliente que no se corrigieron (documentos_de_otro_cliente). null si no hay nada que
+ * decir (sin_cambios y sin documentos de otro cliente, o sin respuesta). Tono 'ok' solo en el guardado normal.
+ * @param {any} respuesta la respuesta del PATCH
+ * @param {any} [numeroSC] el número de la solicitud (si no viene, el de respuesta.data)
+ * @returns {{ texto: string, tono: 'ok' | 'info' } | null}
+ */
+export function avisoCorreccionContacto(respuesta, numeroSC) {
+  if (!respuesta || typeof respuesta !== 'object') return null;
+  const sc = String(numeroSC ?? respuesta.data?.numero ?? '').trim();
+  const enlaces = numeros(respuesta.enlaces_anulados);
+  const cotizaciones = enlaces.filter((n) => n !== sc);
+  const deOtroCliente = numeros(respuesta.documentos_de_otro_cliente);
+  let principal = '';
+  let tono = 'info';
+  if (respuesta.sin_cambios === true) principal = '';
+  else if (respuesta.estado_cambiado === true) {
+    principal = 'Datos corregidos. Como cambió el correo o el teléfono del cliente, su confirmación quedó anulada: envíale la solicitud de nuevo.';
+  } else if (cotizaciones.length === 1) {
+    principal = `Datos corregidos. Se anuló el enlace de la cotización ${cotizaciones[0]} enviado al dato anterior: pásala a Borrador y envíala de nuevo.`;
+  } else if (cotizaciones.length > 1) {
+    principal = `Datos corregidos. Se anularon los enlaces de las cotizaciones ${unirConY(cotizaciones)} enviados al dato anterior: pásalas a Borrador y envíalas de nuevo.`;
+  } else if (enlaces.length > 0) {
+    principal = 'Datos corregidos. Se anuló el enlace que se había enviado al dato anterior: usa «Reenviar enlace de confirmación».';
+  } else if (respuesta.confirmacion_anulada === true) {
+    principal = 'Datos corregidos. La confirmación anterior del cliente ya no vale; la cotización activa sigue igual.';
+  } else {
+    principal = 'Datos del cliente corregidos.';
+    tono = 'ok';
+  }
+  let otros = '';
+  if (deOtroCliente.length === 1) otros = `No se cambió ${deOtroCliente[0]} porque es de otro cliente.`;
+  else if (deOtroCliente.length > 1) otros = `No se cambiaron ${unirConY(deOtroCliente)} porque son de otro cliente.`;
+  if (otros) tono = 'info';
+  const texto = [principal, otros].filter(Boolean).join(' ');
+  return texto ? { texto, tono } : null;
+}
