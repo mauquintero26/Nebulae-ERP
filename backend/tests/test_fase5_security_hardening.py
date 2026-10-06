@@ -1,7 +1,7 @@
 """
 test_fase5_security_hardening.py
 
-Suite de Pruebas de Hardening de Seguridad y Consistencia de Fase 5 (24 tests):
+Suite de Pruebas de Hardening de Seguridad y Consistencia de Fase 5 (26 tests; 25 y 26 son de T11, S10):
 1. RBAC Financiero - 401 sin token en las 6 rutas financieras.
 2. RBAC Financiero - 403 para roles no autorizados (ASESOR, BODEGA, COMPRAS) en las 6 rutas.
 3. RBAC Financiero - 200 para roles autorizados (ADMIN y FINANZAS) en las 6 rutas.
@@ -26,6 +26,8 @@ Suite de Pruebas de Hardening de Seguridad y Consistencia de Fase 5 (24 tests):
 22. Marketing Habeas Data - Defaults de consentimiento estrictamente en False (Ley 1581).
 23. Marketing Preferencias - Prevención anti-IDOR y auditoría de revocación.
 24. Marketing Segmentación - Restricción RBAC (solo ADMIN y ASESOR, 401 sin token, 403 BODEGA).
+25. Errores de la base - El motor de la app oculta los parámetros (hide_parameters=True).
+26. Errores del CRM - Mensaje genérico en español, sin str(e) (SQL ni parámetros) en la respuesta.
 """
 import pytest
 import datetime
@@ -673,6 +675,49 @@ class TestFase5SecurityHardening:
         assert pref.is_revoked is True
         assert pref.revocation_date is not None
         assert "WhatsApp" in pref.revocation_reason
+
+    def test_25_el_motor_de_la_app_oculta_los_parametros_en_los_errores(self, db: Session):
+        """25. T11 (S10): create_engine(..., hide_parameters=True). Un error de la base ya no lleva en su texto (ni en los
+        tracebacks del servidor) los parametros de la consulta: correos, telefonos y documentos de clientes."""
+        from sqlalchemy.exc import DBAPIError
+        from app.db.database import engine
+        assert engine.hide_parameters is True
+        dato = f"pii-{os.urandom(3).hex()}@cliente.test"
+        with pytest.raises(DBAPIError) as exc:
+            db.execute(text("SELECT CAST(:dato AS text) AS dato, 1 / 0 AS division"), {"dato": dato})
+        db.rollback()
+        assert dato not in str(exc.value)
+        assert "hidden due to hide_parameters" in str(exc.value)
+
+    def test_26_los_errores_del_crm_no_devuelven_el_texto_de_la_excepcion(self, app_client: TestClient,
+                                                                          base_customer_catalog: dict,
+                                                                          auth_tokens: dict, monkeypatch):
+        """26. T11 (S10): los 400 de crm.py (crear la solicitud de un cliente, crear un evento, crear o borrar un lead,
+        borrar un cliente) devolvian str(e): el SQL de la base y sus parametros. Ahora el cliente recibe un mensaje
+        generico en español y el detalle queda solo en el log del servidor."""
+        import sys
+        import app.api.v1.crm as m_crm
+        registrados = []
+        monkeypatch.setattr(m_crm.logger, "exception",
+                            lambda msg, *args, **kwargs: registrados.append((msg % args, sys.exc_info()[1])))
+        cust = base_customer_catalog["customer"]
+        hdrs = auth_tokens["admin"]["headers"]
+        casos = [
+            (f"/api/v1/crm/customers/{cust.id}/solicitudes", {"valor": "abc-secreto"},
+             "No se pudo crear la solicitud del cliente. Revisa los datos e intenta de nuevo."),
+            ("/api/v1/crm/events", {"start_datetime": "2026-10-10T10:00:00", "customer_id": "abc-secreto",
+                                    "customer_name": "Cliente Prueba"},
+             "No se pudo crear el evento. Revisa los datos e intenta de nuevo."),
+        ]
+        for ruta, body, mensaje in casos:
+            registrados.clear()
+            res = app_client.post(ruta, json=body, headers=hdrs)
+            assert res.status_code == 400, (ruta, res.text)
+            assert res.json()["detail"] == mensaje, (ruta, res.text[:400])
+            for fuga in ("abc-secreto", "SQL", "INSERT", "parameters", "psycopg2"):
+                assert fuga not in res.text, (ruta, fuga)
+            # El detalle si queda en el log del servidor, con la excepcion en curso.
+            assert len(registrados) == 1 and "abc-secreto" in str(registrados[0][1]), (ruta, registrados)
 
     def test_24_marketing_segmentacion_rbac(self, app_client: TestClient, auth_tokens: dict):
         """24. Segmentación requiere ADMIN o ASESOR (401 sin token, 403 BODEGA, 200 ASESOR)."""

@@ -49,6 +49,16 @@ class CalendarEvent(_Base):
 
 router = APIRouter()
 
+
+def _error_generico(mensaje: str, registro: str, *args) -> HTTPException:
+    """S10 (T11): el 400 de un error inesperado al guardar. El cliente recibe `mensaje` (en español y sin str(e): ni el
+    SQL ni sus parametros); el detalle queda solo en el log del servidor. Se llama dentro del `except`
+    (logger.exception lee la excepcion en curso). Con hide_parameters=True (app/db/database.py) el log tampoco lleva
+    los parametros de la consulta."""
+    logger.exception(registro, *args)
+    return HTTPException(status_code=400, detail=mensaje)
+
+
 # ── In-memory TTL cache for rarely-changing data ──────────────────────────────
 _cache_lock = threading.Lock()
 _stages_cache = {"data": None, "expires": 0}   # Invalidated on stage write
@@ -305,9 +315,10 @@ def delete_customer(customer_id: int, user: User = Depends(require_roles(*ROLE_A
         # 5. Delete customer
         db.delete(db_customer)
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=400, detail=f"No se pudo eliminar el cliente: {str(e)}")
+        raise _error_generico("No se pudo eliminar el cliente. Intenta de nuevo; si sigue pasando, avisa al "
+                              "administrador.", "No se pudo eliminar el cliente %s", customer_id)
     return {"status": "success", "data": {"message": "Cliente eliminado correctamente."}}
 
 
@@ -1194,9 +1205,10 @@ def create_customer_solicitud(customer_id: int, body: dict, user: User = Depends
     try:
         db.commit()
         db.refresh(new_order)
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _error_generico("No se pudo crear la solicitud del cliente. Revisa los datos e intenta de nuevo.",
+                              "No se pudo crear la solicitud del CRM del cliente %s", customer_id)
 
     return {
         "status": "success",
@@ -1489,9 +1501,10 @@ def delete_lead(lead_id: int, user: User = Depends(require_roles(*ROLE_ADMIN)), 
         for line in order.lines:
             db.delete(line)
         db.delete(order); db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _error_generico("No se pudo eliminar el lead. Intenta de nuevo; si sigue pasando, avisa al "
+                              "administrador.", "No se pudo eliminar el lead %s", lead_id)
     return {"status": "success", "data": {"message": "Lead eliminado."}}
 
 @router.get("/leads/{lead_id}", response_model=dict)
@@ -1607,9 +1620,10 @@ def create_event(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *RO
     try:
         db.commit()
         db.refresh(event)
-    except Exception as ex:
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(ex))
+        raise _error_generico("No se pudo crear el evento. Revisa los datos e intenta de nuevo.",
+                              "No se pudo crear el evento del calendario")
     return {"status": "success", "data": _event_to_dict(event)}
 
 # ── PUT update event ──────────────────────────────────────────────────────────
@@ -1985,9 +1999,10 @@ def create_lead_v2(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *
     db.add(new_order)
     try:
         db.commit(); db.refresh(new_order)
-    except Exception as e:
+    except Exception:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _error_generico("No se pudo crear el lead. Revisa los datos e intenta de nuevo.",
+                              "No se pudo crear el lead del cliente %s", customer_id)
     return {"status": "success", "data": _lead_to_dict_v2(new_order, customer, stage, db)}
 
 
