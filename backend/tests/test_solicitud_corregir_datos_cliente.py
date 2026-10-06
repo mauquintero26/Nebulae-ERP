@@ -7,12 +7,14 @@ Un correo de otro cliente -> 409 sin tocar nada. El autor sale de la sesion (R9)
 telefono de la SC se aplica la misma regla de Gate 1 que update_solicitud (cambio de cliente), y el enlace vivo de una
 COT propagada se anula (enlaces_anulados solo cuenta los que el cliente todavia podia usar). Todo en un solo commit.
 Tambien: PUT /crm/customers/{id} (409 por correo repetido, limites, historial) y lo que ve cada rol del historial en el
-360.
+360. Ronda 1 de T10: los textos que el 360 le da al Timeline Unificado de la Agenda y los que escribe la agenda
+operativa salen con etiquetas, tildes y pesos es-CO, sin codigos crudos de la base ni miles con coma.
 
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_solicitud_corregir_datos_cliente
 """
 import datetime
 import hashlib
+import re
 import uuid
 
 from tests.usuarios_de_prueba import bodega_token, compras_token  # noqa: F401  (fixtures)
@@ -933,3 +935,238 @@ def test_update_solicitud_con_productos_y_cliente_a_la_vez_deja_solo_el_texto_de
     assert cambios[0].description == ("Estado cambiado a Asignada: se modificaron los productos, así que la "
                                       "confirmación del cliente ya no es válida y hay que reenviarle la solicitud")
     assert not any("Cambió el cliente" in (l.description or "") for l in _logs(db, "SC", sc.id))
+
+
+# --- Ronda 1 de T10: el perfil 360 y la agenda operativa sin codigos crudos ni miles con coma ----------------------
+
+# Los 11 tipos de renglon que arma get_customer_360_profile. El frontend (itemDeTimelineCliente, datos-cliente.js) tiene un
+# titulo de respaldo para cada uno, y la prueba de paridad de abajo compara las dos listas.
+TIPOS_DEL_360 = {"customer_request", "quotation", "sale_order", "sale_order_legacy", "payment", "delivery", "return",
+                 "agenda_activity", "calendar_event", "customer_update", "created"}
+# Las 7 actividades que la agenda operativa escribe para esos documentos, con la etiqueta que lleva su renglon del 360.
+ETIQUETAS_AGENDA_DEL_360 = ["Anticipo pendiente", "Saldo pendiente", "Mercancía lista", "Empaque pendiente",
+                            "Despacho programado", "Entrega pendiente", "Garantía o devolución"]
+
+
+def _documentos_del_360(db, user_admin):
+    """Un cliente con un documento de CADA tipo que pinta el Timeline del 360, dentro de la transaccion de la prueba:
+    SC y COT confirmadas, dos pedidos (uno por anticipar y otro listo para entrega), pagos de los 7 tipos y de los 4
+    estados, dos entregas, dos devoluciones, un empaque en proceso, un evento de calendario, dos pedidos del CRM viejo
+    (uno con un estado que no esta en STATUS_LABELS) y una correccion del cliente. `numeros` son los numeros de
+    documento: la prueba los quita del texto antes de buscar codigos."""
+    import types
+    from decimal import Decimal
+    from app.api.v1.crm import CalendarEvent
+    from app.core import clientes
+    from app.models.fase4 import SaleOrderDelivery, SaleOrderPayment, SaleOrderReturn, SalePackingSession
+    from app.models.inventory import Warehouse
+    from app.models.sales import SalesOrder
+
+    u = _u()
+    cli = _cliente(db, phone="3000000000", email=f"t10-{u}@test.com")
+    sc = _sc(db, f"SC-T10{u}", user_admin, cli, estado="CONFIRMADA")
+    cot = _cot(db, f"COT-T10{u}", sc, estado="CONFIRMADA")
+    cot.total_cop = Decimal("1250000")
+
+    def pedido(numero, estado):
+        v = _pven(db, numero, estado, sc, cot)
+        v.customer_id = cli.id
+        v.total_cop, v.anticipo_cop, v.saldo_cop = Decimal("1250000"), Decimal("600000"), Decimal("650000")
+        return v
+
+    v1 = pedido(f"PVEN-T10{u}", "PENDIENTE_COMPRA")
+    v2 = pedido(f"PVEN-T10B{u}", "LISTO_ENTREGA")
+    for tipo, estado in (("ANTICIPO", "CONFIRMADO"), ("ABONO", "CONFIRMADO"), ("PAGO_TOTAL", "CONFIRMADO"),
+                         ("PAGO_SALDO", "REVERTIDO"), ("DEVOLUCION", "CONFIRMADO"), ("REVERSION", "ANULADO"),
+                         ("AJUSTE_AUTORIZADO", "TRASLADADO")):
+        db.add(SaleOrderPayment(sale_order_id=v1.id, customer_id=cli.id, tipo=tipo, monto=Decimal("600000"),
+                                fecha=datetime.date.today(), estado=estado))
+    bodega = db.query(Warehouse).first()
+    if bodega is None:
+        bodega = Warehouse(name=f"Bodega T10 {u}", location_type="Central")
+        db.add(bodega)
+        db.flush()
+    e1, e2, r1, r2, emp = (f"ENT-T10{u}", f"ENT-T10B{u}", f"DEV-T10{u}", f"DEV-T10B{u}", f"EMP-T10{u}")
+    db.add(SaleOrderDelivery(numero=e1, customer_id=cli.id, delivery_method="ENVIO_NACIONAL", carrier="Coordinadora",
+                             tracking_number=f"g{u}", status="EN_TRANSITO", warehouse_id=bodega.id))
+    db.add(SaleOrderDelivery(numero=e2, customer_id=cli.id, delivery_method="ENTREGA_LOCAL", status="BORRADOR",
+                             warehouse_id=bodega.id))
+    db.add(SaleOrderReturn(numero=r1, sale_order_id=v1.id, customer_id=cli.id,
+                           financial_resolution="SIN_DEVOLUCION_DINERO", status="REGISTRADA"))
+    db.add(SaleOrderReturn(numero=r2, sale_order_id=v1.id, customer_id=cli.id,
+                           financial_resolution="DEVOLUCION_DINERO", status="PROCESADA", refund_amount=Decimal("50000")))
+    db.add(SalePackingSession(numero=emp, customer_id=cli.id, warehouse_id=bodega.id, status="EN_PROCESO"))
+    db.add(CalendarEvent(title=f"Visita {u}", start_datetime=datetime.datetime.utcnow(), customer_id=cli.id))
+    db.add(SalesOrder(customer_id=cli.id, status="QUOTING"))
+    db.add(SalesOrder(customer_id=cli.id, status="ESTADO_RARO"))
+    clientes.log_cliente(db, cli, f"Datos de contacto corregidos desde la solicitud {sc.numero}: Teléfono",
+                         [{"campo": "phone", "etiqueta": "Teléfono", "antes": "3000000000", "despues": "3001112233"}],
+                         {"tipo": "SC", "id": sc.id, "numero": sc.numero}, "asesor@test")
+    db.commit()
+    return types.SimpleNamespace(cli=cli, u=u, sc=sc, cot=cot, v1=v1.numero, v2=v2.numero, e1=e1, e2=e2, r1=r1, r2=r2,
+                                 emp=emp, numeros=[sc.numero, cot.numero, v1.numero, v2.numero, e1, e2, r1, r2, emp])
+
+
+def test_el_timeline_del_360_no_trae_codigos_crudos_ni_miles_con_coma(app_client, db, admin_token, user_admin):
+    d = _documentos_del_360(db, user_admin)
+    assert app_client.post(f"/api/v1/crm/agenda/sync?customer_id={d.cli.id}",
+                           headers=auth(admin_token)).status_code == 200
+    resp = app_client.get(f"/api/v1/crm/customers/{d.cli.id}/profile-360", headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    timeline = resp.json()["data"]["timeline"]
+    assert {t["type"] for t in timeline} == TIPOS_DEL_360
+
+    # Ningun titulo ni descripcion lleva un codigo de la base (tres mayusculas seguidas o un guion bajo: PAGO_TOTAL,
+    # CONFIRMADA, ANTICIPO, COP...) ni un monto con los miles separados por coma. Los numeros de documento se quitan antes.
+    for t in timeline:
+        for texto in (t["status_label"], t["description"]):
+            limpio = texto
+            for numero in d.numeros:
+                limpio = limpio.replace(numero, "")
+            assert not re.search(r"[A-Z]{3,}|_", limpio), f"{t['type']}: codigo crudo en {texto!r}"
+            assert not re.search(r"\d,\d{3}", limpio), f"{t['type']}: miles con coma en {texto!r}"
+
+    def textos(tipo, clave):
+        return sorted(t[clave] for t in timeline if t["type"] == tipo)
+
+    # Pagos: el titulo es el tipo con su etiqueta y la descripcion lleva el monto en es-CO y el estado con etiqueta.
+    assert textos("payment", "status_label") == sorted(["Anticipo", "Abono", "Pago total", "Pago del saldo",
+                                                        "Devolución", "Reversión", "Ajuste autorizado"])
+    assert textos("payment", "description") == sorted([
+        "Anticipo de $600.000 (Confirmado)", "Abono de $600.000 (Confirmado)", "Pago total de $600.000 (Confirmado)",
+        "Pago del saldo de $600.000 (Revertido)", "Devolución de $600.000 (Confirmado)",
+        "Reversión de $600.000 (Anulado)", "Ajuste autorizado de $600.000 (Trasladado a otro pedido)"])
+    assert textos("customer_request", "description") == [f"Solicitud de cliente {d.sc.numero} (Confirmada)"]
+    assert textos("quotation", "description") == [f"Cotización {d.cot.numero} (Confirmada) - Total: $1.250.000"]
+    assert textos("sale_order", "description") == sorted([
+        f"Pedido {d.v1} en estado Pendiente de compra - Total: $1.250.000",
+        f"Pedido {d.v2} en estado Listo para entrega - Total: $1.250.000"])
+    assert textos("delivery", "description") == sorted([
+        f"Entrega {d.e1} (En tránsito) - Guía: g{d.u}", f"Entrega {d.e2} (Borrador) - Guía: Sin guía"])
+    assert textos("return", "description") == sorted([
+        f"Devolución {d.r1} (Registrada) - Resolución: Sin devolución de dinero",
+        f"Devolución {d.r2} (Procesada) - Resolución: Devolución de dinero"])
+    # El CRM viejo: «Estado: …» con tilde y, si el estado no esta en STATUS_LABELS, humanizado (no el codigo).
+    assert textos("sale_order_legacy", "description") == ["Estado: En cotización", "Estado: Estado raro"]
+    assert textos("created", "status_label") == ["Cliente creado"]
+    assert textos("calendar_event", "description") == [f"Visita {d.u}"]
+    # La actividad de agenda abre con la etiqueta de su tipo, no con el codigo (ANTICIPO_PENDIENTE...).
+    assert sorted(t["description"].split(":")[0] for t in timeline if t["type"] == "agenda_activity") == \
+        sorted(ETIQUETAS_AGENDA_DEL_360)
+
+
+def test_la_agenda_operativa_escribe_los_textos_nuevos_con_tildes_pesos_y_etiquetas(app_client, db, admin_token,
+                                                                                  user_admin):
+    d = _documentos_del_360(db, user_admin)
+    resp = app_client.post(f"/api/v1/crm/agenda/sync?customer_id={d.cli.id}", headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["synced_count"] == 7
+    filas = app_client.get(f"/api/v1/crm/agenda?customer_id={d.cli.id}", headers=auth(admin_token)).json()["data"]
+    assert {f["activity_type"]: (f["title"], f["description"]) for f in filas} == {
+        "ANTICIPO_PENDIENTE": (f"Anticipo pendiente para pedido {d.v1}",
+                               f"Pedido {d.v1} tiene saldo pendiente de anticipo ($1.250.000)."),
+        "SALDO_PENDIENTE": (f"Cobro de saldo para entrega del pedido {d.v2}",
+                            f"Pedido {d.v2} está listo para entregar pero tiene saldo de $650.000."),
+        "MERCANCIA_LISTA": (f"Mercancía lista para entrega: {d.v2}",
+                            f"Todos los artículos del pedido {d.v2} se encuentran disponibles en bodega."),
+        "EMPAQUE_PENDIENTE": (f"Empaque en curso {d.emp}",
+                              f"Sesión de empaque {d.emp} pendiente de verificación y cierre."),
+        "DESPACHO_PROGRAMADO": (f"Despacho programado: {d.e2}",
+                                f"Entrega {d.e2} (Borrador) - Transportadora: Local, Guía: Pendiente"),
+        "ENTREGA_PENDIENTE": (f"Entrega pendiente: {d.e1}",
+                              f"Entrega {d.e1} (En tránsito) - Transportadora: Coordinadora, Guía: g{d.u}"),
+        "GARANTIA_DEVOLUCION": (f"Gestión de devolución {d.r1}",
+                                f"Devolución {d.r1} en evaluación. Resolución financiera: Sin devolución de dinero."),
+    }
+    # Sincronizar otra vez no repite ni reescribe nada (las claves deterministas).
+    assert app_client.post(f"/api/v1/crm/agenda/sync?customer_id={d.cli.id}",
+                           headers=auth(admin_token)).json()["data"]["synced_count"] == 0
+
+
+def _valores_check(modelo, nombre):
+    """Los valores que acepta la base en el CHECK '<columna> IN (...)' del modelo (la fuente de verdad de los codigos)."""
+    for c in modelo.__table__.constraints:
+        if getattr(c, "name", None) == nombre:
+            return re.findall(r"'([A-Z_]+)'", str(c.sqltext))
+    raise AssertionError(f"el modelo {modelo.__name__} no tiene el CHECK {nombre}")
+
+
+def test_las_etiquetas_de_pago_del_360_espejan_al_frontend_y_cubren_lo_que_acepta_la_base():
+    import json
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    import pytest
+    from app.api.v1 import crm
+    from app.models.fase4 import SaleOrderPayment
+
+    tipos = _valores_check(SaleOrderPayment, "chk_sop_tipo")
+    estados = _valores_check(SaleOrderPayment, "chk_sop_estado")
+    # Las etiquetas quedan fijas aqui: son el espejo de TIPOS_PAGO y ESTADOS_PAGO de frontend/src/lib/dinero-ventas.js.
+    assert crm._TIPOS_PAGO == {
+        "ANTICIPO": "Anticipo", "ABONO": "Abono", "PAGO_TOTAL": "Pago total", "PAGO_SALDO": "Pago del saldo",
+        "DEVOLUCION": "Devolución", "REVERSION": "Reversión", "AJUSTE_AUTORIZADO": "Ajuste autorizado"}
+    assert crm._ESTADOS_PAGO == {
+        "CONFIRMADO": "Confirmado", "REVERTIDO": "Revertido", "ANULADO": "Anulado",
+        "TRASLADADO": "Trasladado a otro pedido"}
+    # Y cubren todos los codigos que la base deja guardar: ninguno pasa por el respaldo.
+    assert set(crm._TIPOS_PAGO) == set(tipos) and set(crm._ESTADOS_PAGO) == set(estados)
+
+    lib = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib"
+    node = shutil.which("node")
+    if not node or not (lib / "dinero-ventas.js").exists() or not (lib / "datos-cliente.js").exists():
+        pytest.skip("sin node o sin frontend/src/lib: no se puede comprobar la paridad")
+    script = ("Promise.all([import(%s), import(%s)]).then(([pago, cliente]) => console.log(JSON.stringify({"
+              "tipos: Object.fromEntries(%s.map(t => [t, pago.etiquetaTipoPago(t)])),"
+              "estados: Object.fromEntries(%s.map(e => [e, pago.etiquetaEstadoPago(e)])),"
+              "tipoNuevo: pago.etiquetaTipoPago('TIPO_NUEVO'), estadoNuevo: pago.etiquetaEstadoPago('ESTADO_NUEVO'),"
+              "titulos: cliente.TITULOS_DE_RESPALDO})));"
+              % (json.dumps((lib / "dinero-ventas.js").as_uri()), json.dumps((lib / "datos-cliente.js").as_uri()),
+                 json.dumps(tipos), json.dumps(estados)))
+    r = subprocess.run([node, "--input-type=module", "-e", script], capture_output=True, text=True, encoding="utf-8",
+                       timeout=60)
+    assert r.returncode == 0, f"node fallo:\n{r.stderr}"
+    espejo = json.loads(r.stdout)
+    assert espejo["tipos"] == {c: crm._TIPOS_PAGO[c] for c in tipos}
+    assert espejo["estados"] == {c: crm._ESTADOS_PAGO[c] for c in estados}
+    # Un codigo que nadie puso en el mapa sale humanizado igual en los dos lados (nunca el codigo crudo).
+    assert crm._etiqueta_360("PAGO_TIPO", "TIPO_NUEVO") == espejo["tipoNuevo"] == "Tipo nuevo"
+    assert crm._etiqueta_360("PAGO_ESTADO", "ESTADO_NUEVO") == espejo["estadoNuevo"] == "Estado nuevo"
+    # Los 11 tipos de renglon del 360 son los que tienen titulo de respaldo en el Timeline del frontend.
+    assert set(espejo["titulos"]) == TIPOS_DEL_360
+
+
+def test_el_respaldo_de_las_etiquetas_del_360_nunca_deja_el_codigo_ni_pierde_las_tildes():
+    from app.api.v1 import crm
+    from app.models.fase4 import SaleOrderDelivery, SaleOrderReturn
+
+    # Lo que el respaldo humanizado de etiqueta_estado no puede escribir (tildes y 'de') esta en el mapa del 360.
+    assert crm._etiqueta_360("ENTREGA", "EN_TRANSITO") == "En tránsito"
+    assert [crm._etiqueta_360("RESOLUCION", c) for c in ("DEVOLUCION_DINERO", "SALDO_A_FAVOR", "SIN_DEVOLUCION_DINERO")] \
+        == ["Devolución de dinero", "Saldo a favor", "Sin devolución de dinero"]
+    # Cada estado y cada resolucion que acepta la base sale con etiqueta: sin guion bajo ni mayusculas seguidas.
+    for modelo, check, entidad in ((SaleOrderDelivery, "chk_deliv_status", "ENTREGA"),
+                                   (SaleOrderReturn, "chk_ret_status", "DEVOLUCION"),
+                                   (SaleOrderReturn, "chk_ret_fin_res", "RESOLUCION")):
+        for codigo in _valores_check(modelo, check):
+            etiqueta = crm._etiqueta_360(entidad, codigo)
+            assert etiqueta and not re.search(r"[A-Z]{2,}|_", etiqueta), (entidad, codigo, etiqueta)
+    # Un codigo nuevo que nadie puso en el mapa sale humanizado; vacio o en blanco -> ''.
+    assert crm._etiqueta_360("ENTREGA", "EN_REPARTO") == "En reparto"
+    assert crm._etiqueta_360("ENTREGA", None) == crm._etiqueta_360("ENTREGA", "  ") == ""
+    # Tipos de actividad de agenda: los 12 documentados en el modelo, con su etiqueta.
+    assert {c: crm._etiqueta_actividad(c) for c in (
+        "ANTICIPO_PENDIENTE", "CONFIRMACION_PROVEEDOR", "TRACKING_PENDIENTE", "RECEPCION_ESTIMADA",
+        "LLEGADA_BARRANQUILLA", "SALDO_PENDIENTE", "MERCANCIA_LISTA", "EMPAQUE_PENDIENTE", "DESPACHO_PROGRAMADO",
+        "ENTREGA_PENDIENTE", "INCIDENCIA", "GARANTIA_DEVOLUCION")} == {
+        "ANTICIPO_PENDIENTE": "Anticipo pendiente", "CONFIRMACION_PROVEEDOR": "Confirmación del proveedor",
+        "TRACKING_PENDIENTE": "Tracking pendiente", "RECEPCION_ESTIMADA": "Recepción estimada",
+        "LLEGADA_BARRANQUILLA": "Llegada a Barranquilla", "SALDO_PENDIENTE": "Saldo pendiente",
+        "MERCANCIA_LISTA": "Mercancía lista", "EMPAQUE_PENDIENTE": "Empaque pendiente",
+        "DESPACHO_PROGRAMADO": "Despacho programado", "ENTREGA_PENDIENTE": "Entrega pendiente",
+        "INCIDENCIA": "Incidencia", "GARANTIA_DEVOLUCION": "Garantía o devolución"}
+    # Una actividad manual puede traer cualquier texto: un codigo nuevo se humaniza y un texto libre queda tal cual.
+    assert crm._etiqueta_actividad("OTRA_COSA") == "Otra cosa"
+    assert crm._etiqueta_actividad("Llamar a Nebulae") == "Llamar a Nebulae"
+    assert crm._etiqueta_actividad("") == crm._etiqueta_actividad(None) == ""

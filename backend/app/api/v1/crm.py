@@ -14,7 +14,8 @@ from app.api.v1.schemas_fase5 import AgendaActivityCreate, AgendaActivityRespons
 
 from app.schemas import crm as schemas
 from app.core import cambios_documento, clientes
-from app.core.textos_actividad import nombre_de_usuario
+from app.core.textos_actividad import etiqueta_estado, nombre_de_usuario
+from app.core.ventas_dinero import pesos
 from sqlalchemy import func
 from sqlalchemy.exc import DataError, IntegrityError
 import datetime, logging, time, threading
@@ -342,6 +343,55 @@ STATUS_COLORS = {
     "PAID": "emerald",
 }
 
+# T10 (ronda 1): los textos que este modulo le da a la pantalla (el Timeline Unificado de la Agenda y la agenda operativa)
+# llevan la etiqueta de cada codigo, nunca el codigo de la base, y los montos en pesos es-CO ('$1.250.000', con pesos()).
+# SC, COT y VEN salen de textos_actividad.etiqueta_estado (fuente unica; para otra entidad humaniza el codigo). Lo que ese
+# respaldo no puede escribir (tildes, 'de') o que no es un estado de esos documentos esta en _ETIQUETAS_360.
+# Tipos y estados de pago: ESPEJO de TIPOS_PAGO y ESTADOS_PAGO de frontend/src/lib/dinero-ventas.js; la prueba
+# test_las_etiquetas_de_pago_del_360_espejan_al_frontend... (test_solicitud_corregir_datos_cliente.py) las compara con esa
+# libreria y con los CHECK de la base.
+_TIPOS_PAGO = {
+    "ANTICIPO": "Anticipo", "ABONO": "Abono", "PAGO_TOTAL": "Pago total", "PAGO_SALDO": "Pago del saldo",
+    "DEVOLUCION": "Devolución", "REVERSION": "Reversión", "AJUSTE_AUTORIZADO": "Ajuste autorizado",
+}
+_ESTADOS_PAGO = {
+    "CONFIRMADO": "Confirmado", "REVERTIDO": "Revertido", "ANULADO": "Anulado",
+    "TRASLADADO": "Trasladado a otro pedido",
+}
+_ETIQUETAS_360 = {
+    "PAGO_TIPO": _TIPOS_PAGO,
+    "PAGO_ESTADO": _ESTADOS_PAGO,
+    "ENTREGA": {"EN_TRANSITO": "En tránsito"},  # estado de SaleOrderDelivery: el resto lo humaniza el respaldo
+    "RESOLUCION": {  # financial_resolution de SaleOrderReturn
+        "DEVOLUCION_DINERO": "Devolución de dinero", "SALDO_A_FAVOR": "Saldo a favor",
+        "SIN_DEVOLUCION_DINERO": "Sin devolución de dinero",
+    },
+    "AGENDA": {  # activity_type de CustomerAgendaActivity (los 12 que documenta app/models/fase5.py)
+        "ANTICIPO_PENDIENTE": "Anticipo pendiente", "CONFIRMACION_PROVEEDOR": "Confirmación del proveedor",
+        "TRACKING_PENDIENTE": "Tracking pendiente", "RECEPCION_ESTIMADA": "Recepción estimada",
+        "LLEGADA_BARRANQUILLA": "Llegada a Barranquilla", "SALDO_PENDIENTE": "Saldo pendiente",
+        "MERCANCIA_LISTA": "Mercancía lista", "EMPAQUE_PENDIENTE": "Empaque pendiente",
+        "DESPACHO_PROGRAMADO": "Despacho programado", "ENTREGA_PENDIENTE": "Entrega pendiente",
+        "INCIDENCIA": "Incidencia", "GARANTIA_DEVOLUCION": "Garantía o devolución",
+    },
+}
+
+
+def _etiqueta_360(entidad, codigo) -> str:
+    """Etiqueta de un codigo en un texto del 360 o de la agenda operativa: la de _ETIQUETAS_360 y, si no esta, el
+    respaldo de etiqueta_estado (humaniza el codigo: 'EN_REPARTO' -> 'En reparto'). Vacio o None -> ''."""
+    texto = str(codigo).strip() if codigo is not None else ""
+    return _ETIQUETAS_360.get(entidad, {}).get(texto) or etiqueta_estado(entidad, texto)
+
+
+def _etiqueta_actividad(tipo) -> str:
+    """Etiqueta del activity_type de una actividad de agenda. Las manuales (POST /crm/agenda) pueden traer cualquier
+    texto: un codigo (MAYUSCULAS_Y_GUIONES) se etiqueta y un texto libre ('Llamar a Nebulae') queda como se escribio."""
+    texto = str(tipo).strip() if tipo is not None else ""
+    if texto and (texto != texto.upper() or not texto.replace("_", "").isalnum()):
+        return texto
+    return _etiqueta_360("AGENDA", texto)
+
 
 def _sync_operational_agenda_deterministic(db: Session, target_customer_id: Optional[int] = None) -> int:
     """Genera y actualiza de manera determinista las actividades de agenda y calendario del cliente."""
@@ -372,7 +422,7 @@ def _sync_operational_agenda_deterministic(db: Session, target_customer_id: Opti
                     entity_id=so.id,
                     activity_type="ANTICIPO_PENDIENTE",
                     title=f"Anticipo pendiente para pedido {so.numero}",
-                    description=f"Pedido {so.numero} tiene saldo pendiente de anticipo (${float(so.total_cop or 0):,.0f} COP).",
+                    description=f"Pedido {so.numero} tiene saldo pendiente de anticipo ({pesos(so.total_cop)}).",
                     scheduled_date=so.created_at,
                     due_date=so.fecha_entrega_estimada or (so.created_at + datetime.timedelta(days=3) if so.created_at else now),
                     status="PENDIENTE",
@@ -391,7 +441,7 @@ def _sync_operational_agenda_deterministic(db: Session, target_customer_id: Opti
                     entity_id=so.id,
                     activity_type="SALDO_PENDIENTE",
                     title=f"Cobro de saldo para entrega del pedido {so.numero}",
-                    description=f"Pedido {so.numero} esta listo para entregar pero tiene saldo de ${float(so.saldo_cop or 0):,.0f} COP.",
+                    description=f"Pedido {so.numero} está listo para entregar pero tiene saldo de {pesos(so.saldo_cop)}.",
                     scheduled_date=now,
                     due_date=now + datetime.timedelta(days=2),
                     status="PENDIENTE",
@@ -409,8 +459,8 @@ def _sync_operational_agenda_deterministic(db: Session, target_customer_id: Opti
                     entity_type="SALE_ORDER",
                     entity_id=so.id,
                     activity_type="MERCANCIA_LISTA",
-                    title=f"Mercancia lista para entrega: {so.numero}",
-                    description=f"Todos los articulos del pedido {so.numero} se encuentran disponibles en bodega.",
+                    title=f"Mercancía lista para entrega: {so.numero}",
+                    description=f"Todos los artículos del pedido {so.numero} se encuentran disponibles en bodega.",
                     scheduled_date=now,
                     due_date=now + datetime.timedelta(days=3),
                     status="PENDIENTE",
@@ -434,7 +484,7 @@ def _sync_operational_agenda_deterministic(db: Session, target_customer_id: Opti
                 entity_id=p.id,
                 activity_type="EMPAQUE_PENDIENTE",
                 title=f"Empaque en curso {p.numero}",
-                description=f"Sesion de empaque {p.numero} pendiente de verificacion y cierre.",
+                description=f"Sesión de empaque {p.numero} pendiente de verificación y cierre.",
                 scheduled_date=p.created_at,
                 due_date=now + datetime.timedelta(days=1),
                 status="PENDIENTE",
@@ -458,8 +508,8 @@ def _sync_operational_agenda_deterministic(db: Session, target_customer_id: Opti
                 entity_type="DELIVERY",
                 entity_id=d.id,
                 activity_type=act_type,
-                title=f"{act_type.replace('_', ' ').capitalize()}: {d.numero}",
-                description=f"Entrega {d.numero} ({d.status}) - Transportadora: {d.carrier or 'Local'}, Guia: {d.tracking_number or 'Pendiente'}",
+                title=f"{_etiqueta_actividad(act_type)}: {d.numero}",
+                description=f"Entrega {d.numero} ({_etiqueta_360('ENTREGA', d.status)}) - Transportadora: {d.carrier or 'Local'}, Guía: {d.tracking_number or 'Pendiente'}",
                 scheduled_date=d.scheduled_date or d.dispatch_date or d.created_at,
                 due_date=d.scheduled_date or now + datetime.timedelta(days=3),
                 status="PENDIENTE",
@@ -482,8 +532,8 @@ def _sync_operational_agenda_deterministic(db: Session, target_customer_id: Opti
                 entity_type="RETURN",
                 entity_id=r.id,
                 activity_type="GARANTIA_DEVOLUCION",
-                title=f"Gestion de devolucion {r.numero}",
-                description=f"Devolucion {r.numero} en evaluacion. Resolucion financiera: {r.financial_resolution}.",
+                title=f"Gestión de devolución {r.numero}",
+                description=f"Devolución {r.numero} en evaluación. Resolución financiera: {_etiqueta_360('RESOLUCION', r.financial_resolution)}.",
                 scheduled_date=r.created_at,
                 due_date=now + datetime.timedelta(days=2),
                 status="PENDIENTE",
@@ -547,7 +597,8 @@ def get_customer_360_profile(
     for order in customer.sales_orders:
         order_total = sum((line.unit_price * line.quantity) for line in order.lines)
         tipo_display = getattr(order, "solicitud_tipo", None) or "Solicitud"
-        estado_display = STATUS_LABELS.get(order.status, order.status)
+        # Un estado del CRM viejo que STATUS_LABELS no tiene sale humanizado, no con el codigo crudo.
+        estado_display = STATUS_LABELS.get(order.status) or etiqueta_estado("LEGACY", order.status)
         if order.status != "CANCELLED":
             active_orders.append({
                 "id": order.id,
@@ -569,7 +620,7 @@ def get_customer_360_profile(
             "created_at": order.created_at.isoformat() if order.created_at else None,
             "total": round(float(order_total), 2),
             "lines_count": len(order.lines),
-            "description": f"ESTADO: {estado_display}",
+            "description": f"Estado: {estado_display}",
         })
 
     # Process canonical SaleOrders
@@ -614,7 +665,7 @@ def get_customer_360_profile(
             "color": "emerald" if so.estado in ("ENTREGADO", "FACTURADO") else "blue",
             "created_at": so.created_at.isoformat() if so.created_at else None,
             "total": round(float(t_cop), 2),
-            "description": f"Pedido {so.numero} en estado {so.estado} - Total: ${float(t_cop):,.0f} COP",
+            "description": f"Pedido {so.numero} en estado {etiqueta_estado('VEN', so.estado)} - Total: {pesos(t_cop)}",
         })
 
     # Line costs for rentabilidad
@@ -640,16 +691,17 @@ def get_customer_360_profile(
             "metodo_pago": p.metodo_pago,
             "referencia": p.referencia_bancaria,
         })
+        tipo_pago = _etiqueta_360("PAGO_TIPO", p.tipo) or "Pago"
         all_orders_timeline.append({
             "type": "payment",
             "id": p.id,
             "status": p.estado,
-            "status_label": f"Pago {p.tipo}",
+            "status_label": tipo_pago,
             "estado_label": p.estado,
             "color": "emerald" if p.estado == "CONFIRMADO" else "amber",
             "created_at": p.created_at.isoformat() if p.created_at else None,
             "total": float(p_monto),
-            "description": f"{p.tipo} de ${float(p_monto):,.0f} COP ({p.estado})",
+            "description": f"{tipo_pago} de {pesos(p_monto)} ({_etiqueta_360('PAGO_ESTADO', p.estado)})",
         })
 
     # Solicitudes (SC)
@@ -670,7 +722,7 @@ def get_customer_360_profile(
             "estado_label": sc.estado,
             "color": "indigo",
             "created_at": sc.created_at.isoformat() if sc.created_at else None,
-            "description": f"Solicitud de cliente {sc.numero} ({sc.estado})",
+            "description": f"Solicitud de cliente {sc.numero} ({etiqueta_estado('SC', sc.estado)})",
         })
 
     # Cotizaciones (COT)
@@ -693,7 +745,7 @@ def get_customer_360_profile(
             "color": "amber",
             "created_at": cot.created_at.isoformat() if cot.created_at else None,
             "total": float(cot.total_cop or 0),
-            "description": f"Cotización {cot.numero} ({cot.estado}) - Total: ${float(cot.total_cop or 0):,.0f} COP",
+            "description": f"Cotización {cot.numero} ({etiqueta_estado('COT', cot.estado)}) - Total: {pesos(cot.total_cop)}",
         })
 
     # Empaques
@@ -728,7 +780,7 @@ def get_customer_360_profile(
             "estado_label": deliv.status,
             "color": "cyan",
             "created_at": deliv.created_at.isoformat() if deliv.created_at else None,
-            "description": f"Entrega {deliv.numero} ({deliv.status}) - Guía: {deliv.tracking_number or 'Sin guía'}",
+            "description": f"Entrega {deliv.numero} ({_etiqueta_360('ENTREGA', deliv.status)}) - Guía: {deliv.tracking_number or 'Sin guía'}",
         })
 
     # Devoluciones
@@ -753,7 +805,7 @@ def get_customer_360_profile(
             "estado_label": ret.status,
             "color": "red",
             "created_at": ret.created_at.isoformat() if ret.created_at else None,
-            "description": f"Devolución {ret.numero} ({ret.status}) - Resolución: {ret.financial_resolution}",
+            "description": f"Devolución {ret.numero} ({_etiqueta_360('DEVOLUCION', ret.status)}) - Resolución: {_etiqueta_360('RESOLUCION', ret.financial_resolution)}",
         })
 
     # Reservas activas
@@ -786,6 +838,8 @@ def get_customer_360_profile(
     } for ag in agenda_items]
 
     for ag in agenda_items:
+        detalle = ag.description or ag.title
+        tipo_actividad = _etiqueta_actividad(ag.activity_type)
         all_orders_timeline.append({
             "type": "agenda_activity",
             "id": ag.id,
@@ -794,7 +848,7 @@ def get_customer_360_profile(
             "estado_label": ag.status,
             "color": "blue",
             "created_at": ag.created_at.isoformat() if ag.created_at else None,
-            "description": f"{ag.activity_type}: {ag.description or ag.title}",
+            "description": f"{tipo_actividad}: {detalle}" if tipo_actividad else detalle,
         })
 
     # Calendar events legacy (opcional si existe la tabla)
@@ -842,7 +896,7 @@ def get_customer_360_profile(
         "type": "created",
         "id": customer.id,
         "status": "CREATED",
-        "status_label": "Cliente Creado",
+        "status_label": "Cliente creado",
         "color": "purple",
         "created_at": None,
         "total": 0,
