@@ -40,13 +40,14 @@ const ACTIVITY_STYLE: Record<string, string> = {
 };
 
 // U24: el tercer recuadro del Resumen Financiero según resumenPagoPedido(...).caso (clases literales para Tailwind).
-// Las ayudas son hechos que valen en cualquier estado, también en un pedido CANCELADO (que ya no debe nada).
+// Las ayudas son hechos del saldo. Un pedido CANCELADO no usa este mapa: ya no se cobra y lleva RECUADRO_CANCELADO.
 const TERCER_RECUADRO: Record<string, { titulo: string; caja: string; texto: string; valor: string; ayuda: string }> = {
   pendiente: { titulo: 'Saldo pendiente', caja: 'border-red-200 bg-red-50', texto: 'text-red-700', valor: 'text-red-800', ayuda: 'Total menos lo pagado' },
   completo: { titulo: 'Pagado completo', caja: 'border-emerald-200 bg-emerald-50', texto: 'text-emerald-700', valor: 'text-emerald-800', ayuda: 'Sin saldo pendiente' },
   a_favor: { titulo: 'Saldo a favor del cliente', caja: 'border-amber-200 bg-amber-50', texto: 'text-amber-800', valor: 'text-amber-900', ayuda: 'Pagó más que el total del pedido' },
   desconocido: { titulo: 'Saldo pendiente', caja: 'border-slate-200 bg-slate-50', texto: 'text-slate-600', valor: 'text-slate-500', ayuda: 'Saldo sin datos' },
 };
+
 // Ronda 1 (punto 8): un pedido cancelado ya no se cobra: el tercer recuadro, neutro, dice eso (y no 'Saldo pendiente').
 const RECUADRO_CANCELADO = { ...TERCER_RECUADRO.desconocido, titulo: 'Sin cobrar (pedido cancelado)', ayuda: 'El pedido se canceló: no se cobra.' };
 

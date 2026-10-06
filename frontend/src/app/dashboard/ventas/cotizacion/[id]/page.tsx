@@ -10,7 +10,7 @@ import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
-import { recargarTrasError } from '@/lib/avisos';
+import { recargarTrasError, textoDeError } from '@/lib/avisos';
 import { Button, useAvisos } from '@/components/ui';
 import {
   ChannelModal, CalculadorModal, DeleteConfirm, PropagarPvenConfirm, VerificarAnticipoModal, AjustarAnticipoModal,
@@ -100,6 +100,8 @@ function CotizacionDetalleContent() {
   // aviso que queda en Acciones después de anular la confirmación del cliente.
   const [calcAnulacion, setCalcAnulacion] = useState<AnulacionConfirmacion | null>(null);
   const [avisoAnulada, setAvisoAnulada] = useState<string | null>(null);
+  // Ronda 2 (punto 1): el número del último guardado de la calculadora (commitCalcSave). Solo ese apaga savingCalc.
+  const guardadoCalcRef = useRef(0);
 
   // U6+H22 (C11): Actividad | Chatter | IA, el mismo orden de la solicitud. Las notas se escriben en el Chatter.
   const [cotPanelTab, setCotPanelTab] = useState<'actividad' | 'chatter' | 'ia'>('actividad');
@@ -366,8 +368,21 @@ function CotizacionDetalleContent() {
   // qué cambió y pide la razón, y con ella reenvía exactamente lo que describió el 409, con anular_confirmacion y
   // motivo_recotizacion (R7); solo «Seguir editando» vuelve a habilitar la edición. Desde 'Actualizar Pedido de Venta'
   // (pedido vigente) no se puede pedir la razón: el 409 sale como aviso de error.
+  // Ronda 2 (punto 1): cada guardado toma un número y apaga savingCalc una sola vez, y solo si sigue siendo el último. Así
+  // la recarga tardía de un guardado viejo ya no apaga el de otro con su PATCH en curso (doble envío o la ventana
+  // cerrada a mitad).
   async function commitCalcSave(data: any, propagarAPven: boolean, desdeCalculadora = false) {
     if (!cotizacion?.id) return;
+    const miGuardado = ++guardadoCalcRef.current;
+    let terminado = false;
+    const guardado = {
+      vigente: () => guardadoCalcRef.current === miGuardado,
+      terminar: () => {
+        if (terminado) return;
+        terminado = true;
+        if (guardadoCalcRef.current === miGuardado) setSavingCalc(false);
+      },
+    };
     // Ronda 1 (punto 2): la calculadora manda los precios solo si cambiaron (cuerpoDeGuardado). Sin precios el guardado
     // no es una re-cotización: no lleva `recotizacion` ni deja un renglón RECOTIZADA.
     const conPrecios = Array.isArray(data?.productos);
@@ -394,16 +409,17 @@ function CotizacionDetalleContent() {
       if (r?.confirmacion_anulada ?? r?.data?.confirmacion_anulada) setAvisoAnulada(AVISO_CONFIRMACION_ANULADA);
       await loadCotizacion();
     } catch (err: any) {
-      await errorAlGuardarCalculo(err, data, desdeCalculadora);
+      await errorAlGuardarCalculo(err, data, desdeCalculadora, guardado);
     }
-    setSavingCalc(false);
+    guardado.terminar();
   }
 
-  // H40 y ronda 1 (puntos 4 y 6): un guardado de la calculadora que falló.
+  // H40 y ronda 1 (puntos 4 y 6): un guardado de la calculadora que falló. `guardado` es el de commitCalcSave (ronda 2).
   async function errorAlGuardarCalculo(
     err: { status?: number | null; detail?: AnulacionConfirmacion } | null | undefined,
     data: { anular_confirmacion?: boolean } | null | undefined,
     desdeCalculadora: boolean,
+    guardado: { vigente: () => boolean; terminar: () => void },
   ) {
     // R10: apiFetch deja el status y el detail del servidor en el error.
     const anula = err?.status === 409 && err?.detail?.codigo === 'ANULA_CONFIRMACION';
@@ -421,8 +437,11 @@ function CotizacionDetalleContent() {
       avisarError(err, 'No se pudo guardar la cotización');
     }
     if (!recargarTrasError(err)) return;
-    if (!anulandoSinRespuesta) setSavingCalc(false);
+    // El panel rosa (o «Actualizar Pedido de Venta») responde sin esperar la recarga; anulando sin respuesta, no.
+    if (!anulandoSinRespuesta) guardado.terminar();
     const fresca = await loadCotizacion({ silencioso: true });
+    // Ronda 2 (punto 1): si mientras recargaba empezó otro guardado, lo que traiga la recarga ya no decide nada aquí.
+    if (!guardado.vigente()) return;
     // Punto 4: la cotización ya no está en el estado que describe el panel rosa (el cliente confirmó, se rechazó…): el
     // panel ya no aplica y la calculadora vuelve a editarse.
     if (estadoDelPanel && fresca && fresca.estado !== estadoDelPanel) setCalcAnulacion(null);
@@ -436,8 +455,14 @@ function CotizacionDetalleContent() {
         avisar(`${cotizacion?.numero || 'Cotización'}: ${AVISO_CONFIRMACION_ANULADA}`,
           { tono: 'info', accion: { texto: 'Ver cotización', href: currentPath } });
       }
-    } else {
+    } else if (vivo.current) {
       avisarError(err, 'No se pudo guardar la cotización');
+    } else {
+      // Ronda 2 (punto 4): ya no está en la página: el error también lleva el enlace (avisarError no acepta una acción;
+      // esto es lo mismo que hace, con la acción).
+      console.error(err);
+      avisar(textoDeError(err, `No se pudo guardar la cotización ${cotizacion?.numero || ''}`.trim()),
+        { tono: 'error', accion: { texto: 'Ver cotización', href: currentPath } });
     }
   }
 
