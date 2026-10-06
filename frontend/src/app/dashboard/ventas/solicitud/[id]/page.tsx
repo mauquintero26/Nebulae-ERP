@@ -582,14 +582,14 @@ function SolicitudDetalleContent() {
   // R22: % de anticipo de la modalidad (crédito 0, 60/40 60, contado 100; la que no se reconoce, 60 como el backend).
   const pctAnticipo = pctAnticipoDeModalidad(solicitud?.modalidad_pago) ?? 60;
   // T8A ronda 1: la cotización activa que ajustó el anticipo a mano (R3), si hay; la más reciente.
-  const cotAnticipoManual: any = [...cotizacionesActivas]
-    .filter((c: any) => c.anticipo_pct_manual !== null && c.anticipo_pct_manual !== undefined)
-    .sort((a: any, b: any) => (a.id || 0) - (b.id || 0)).pop() || null;
+  const cotAnticipoManual = [...cotizacionesActivas]
+    .filter((c) => c.anticipo_pct_manual !== null && c.anticipo_pct_manual !== undefined)
+    .sort((a, b) => (a.id || 0) - (b.id || 0)).pop() || null;
   // U15 (T8A ronda 1): la ayuda del último paso según el contexto. En Confirmada (y en los heredados, que cuentan como
   // ese paso) la de PASOS_SC dice que sigue la cotización aunque ya exista o la confirmación ya no valga. El documento
   // donde sigue el avance: el pedido vigente más reciente o, sin pedido, la cotización activa más reciente.
-  const ultimoDocumento: any = [...(pedidosVigentes.length > 0 ? pedidosVigentes : cotizacionesActivas)]
-    .sort((a: any, b: any) => (a.id || 0) - (b.id || 0)).pop() || null;
+  const ultimoDocumento = [...(pedidosVigentes.length > 0 ? pedidosVigentes : cotizacionesActivas)]
+    .sort((a, b) => (a.id || 0) - (b.id || 0)).pop() || null;
   const ayudaPasos = pasoSolicitud(solicitud?.estado) !== PASOS_SC.length - 1 ? undefined
     : ultimoDocumento ? `El cliente confirmó. El avance sigue en ${ultimoDocumento.numero}.`
     : solicitud?.estado === 'CONFIRMADA' && solicitud?.confirmacion_vigente === false
