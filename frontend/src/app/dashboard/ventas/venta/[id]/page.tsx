@@ -11,7 +11,7 @@ import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigat
 
 import { apiFetch } from '@/lib/api';
 import { Button, Modal, useAvisos } from '@/components/ui';
-import { textoDeError } from '@/lib/avisos';
+import { textoDeError, recargarTrasError } from '@/lib/avisos';
 import { NewSupplierModal } from '../venta-client';
 import { CambiosDeActividad, getUsuarioActual, puedeCrearOrdenDePago, returnToSeguro, BotonVolver } from '../../flujo';
 import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
@@ -19,6 +19,7 @@ import { formatoPesos } from '@/lib/pesos';
 import { etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import {
   PASOS_PEDIDO as STEPS, ESTADOS_PEDIDO_MANUALES, ESTADOS_PEDIDO_CERRADOS, infoEstadoPedido, pasoPedido, transicionesPedido,
+  humanizarCodigo,
 } from '@/lib/estados-pedido';
 import {
   formatoPct, describirPago, etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp, textoChipPxp, saldoAFavorAlCancelar,
@@ -46,14 +47,8 @@ const TERCER_RECUADRO: Record<string, { titulo: string; caja: string; texto: str
   a_favor: { titulo: 'Saldo a favor del cliente', caja: 'border-amber-200 bg-amber-50', texto: 'text-amber-800', valor: 'text-amber-900', ayuda: 'Pagó más que el total del pedido' },
   desconocido: { titulo: 'Saldo pendiente', caja: 'border-slate-200 bg-slate-50', texto: 'text-slate-600', valor: 'text-slate-500', ayuda: 'Saldo sin datos' },
 };
-
-// T9A (patrón de T8A en solicitud/[id]): tras un 400 o un 409 (el pedido cambió en otra pantalla) o un error sin
-// respuesta del servidor (la red se cortó y la operación pudo hacerse igual), la página se recarga en silencio, sin
-// pisar el error que se muestra ni el formulario o la ventana abiertos.
-function recargarTrasError(err: unknown): boolean {
-  const status = (err as { status?: unknown } | null | undefined)?.status;
-  return status === 400 || status === 409 || status === undefined || status === null;
-}
+// Ronda 1 (punto 8): un pedido cancelado ya no se cobra: el tercer recuadro, neutro, dice eso (y no 'Saldo pendiente').
+const RECUADRO_CANCELADO = { ...TERCER_RECUADRO.desconocido, titulo: 'Sin cobrar (pedido cancelado)', ayuda: 'El pedido se canceló: no se cobra.' };
 
 function PedidoVentaDetalleContent() {
   const params = useParams();
@@ -203,9 +198,6 @@ function PedidoVentaDetalleContent() {
     }
     setCreatingPxp(false);
   }
-
-  // U6+H22: las notas y los contactos con el cliente se registran en la pestaña Chatter (ChatterDocumento, T6B). El
-  // botón viejo guardaba la nota como 'UPDATED' (salía como «Ediciones»); el servidor convierte esas como CHATTER.
 
   function onSupplierSearch(q: string) {
     setSupplierSearch(q); setSelectedSupplier(null); setPecError('');
@@ -375,20 +367,22 @@ function PedidoVentaDetalleContent() {
   // U24: las cuentas del Resumen Financiero (total, anticipo requerido, pagado verificado, saldo y lo que falta del
   // anticipo), en pesos enteros. Sin saldo_cop el caso es 'desconocido' (pagado y saldo en null: sin barra ni %).
   const resumenPago = resumenPagoPedido(pedido);
-  const tercerRecuadro = TERCER_RECUADRO[resumenPago.caso] || TERCER_RECUADRO.desconocido;
+  const cancelado = estadoActual === 'CANCELADO';
+  const tercerRecuadro = cancelado ? RECUADRO_CANCELADO : (TERCER_RECUADRO[resumenPago.caso] || TERCER_RECUADRO.desconocido);
   const pagos = Array.isArray(pedido?.pagos) ? pedido.pagos : [];
 
   return (
     <div className="w-full h-full bg-white flex flex-col overflow-hidden">
 
       {/* Top Action Bar */}
-      <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between z-20 shadow-sm shrink-0">
-        <div className="flex items-center gap-4">
+      {/* Ronda 1 (punto 7): a 1024 px las acciones bajan de línea en vez de desbordar (PXP pendiente, «Cancelar Pedido»). */}
+      <div className="bg-white px-6 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-x-4 gap-y-3 z-20 shadow-sm shrink-0">
+        <div className="flex items-center gap-4 min-w-0">
           {/* H37: un solo botón de volver, con su destino escrito: el return_to saneado o la lista de pedidos (ya no la
               cotización, que sigue a un clic en «Origen»). */}
           <BotonVolver href={destinoVolver(safeReturnTo, '/dashboard/ventas/venta')} />
-          <div>
-            <div className="flex items-center gap-3">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-2xl font-black text-slate-800">{pedido?.numero || String(params.id || '').toUpperCase()}</h1>
               <span className={`px-2.5 py-1 rounded-full text-xs font-bold border ${estadoCfg.clases.bg} ${estadoCfg.clases.text} ${estadoCfg.clases.border}`}>
                 {estadoCfg.label}
@@ -398,7 +392,7 @@ function PedidoVentaDetalleContent() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3 ml-auto">
           {puedePxp && (
             <Button color="emerald" icon={DollarSign} loading={creatingPxp} onClick={handleCrearPxp}>Crear PXP</Button>
           )}
@@ -621,15 +615,17 @@ function PedidoVentaDetalleContent() {
                   <div className={`rounded-xl border p-4 ${tercerRecuadro.caja}`}>
                     <p className={`text-xs font-bold uppercase tracking-wider ${tercerRecuadro.texto}`}>{tercerRecuadro.titulo}</p>
                     <p className={`text-2xl font-black ${tercerRecuadro.valor}`}>
-                      {resumenPago.caso === 'pendiente' ? fCOP(resumenPago.saldo)
+                      {cancelado ? (resumenPago.saldo === null ? '—' : fCOP(resumenPago.saldo))
+                        : resumenPago.caso === 'pendiente' ? fCOP(resumenPago.saldo)
                         : resumenPago.caso === 'a_favor' ? fCOP(resumenPago.saldoAFavor)
                         : resumenPago.caso === 'completo' ? fCOP(0) : '—'}
                     </p>
                     <p className={`text-sm ${tercerRecuadro.texto}`}>{tercerRecuadro.ayuda}</p>
                   </div>
                 </div>
-                {/* Sin saldo conocido (caso 'desconocido') no se pinta la barra ni el % (T6B). */}
-                {resumenPago.pagado !== null && resumenPago.pctPagado !== null && (
+                {/* Sin saldo conocido (caso 'desconocido') no se pinta la barra ni el % (T6B); en un pedido cancelado
+                    tampoco (ronda 1, punto 8): ya no se cobra. */}
+                {!cancelado && resumenPago.pagado !== null && resumenPago.pctPagado !== null && (
                   <div>
                     <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden">
                       <div className="bg-emerald-500 h-3 rounded-full transition-all" style={{ width: `${resumenPago.pctPagado}%` }} />
@@ -859,7 +855,7 @@ function PedidoVentaDetalleContent() {
                         {/* U6+H22: una nota del Chatter lleva su tipo encima (Nota interna, Llamada…, «Nota externa · medio»). */}
                         {esEntradaChatter(a) && <div className="mb-1.5"><EtiquetaChatter actividad={a} /></div>}
                         <div className="flex items-center justify-between mb-2">
-                          <span className="font-bold text-slate-800 text-sm">{a.description || a.action}</span>
+                          <span className="font-bold text-slate-800 text-sm">{a.description || humanizarCodigo(a.action)}</span>
                           <span className="text-[10px] font-bold text-slate-400">
                             {fDate(a.created_at)}{a.created_at ? ` ${new Date(a.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}` : ''}
                           </span>
