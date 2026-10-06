@@ -47,6 +47,29 @@ def test_un_pedido_cancelado_no_se_puede_reabrir_por_patch(app_client, db, admin
     assert ven.estado == "CANCELADO"
 
 
+def test_s1_un_estado_vacio_o_falso_no_reabre_un_pedido_cancelado(app_client, db, admin_token):
+    """S1 (T11): PATCH {estado:''} reabria un PVEN CANCELADO (destinos_ven_permitidos trata un estado desconocido como
+    operativo) y despues {estado:'EN_PROCESO'} lo dejaba vigente otra vez. Ahora '', 0, false y null son 422 sin
+    escribir nada."""
+    ven = _ven(db, "PVEN-TRA016", estado="CANCELADO", cancellation_reason="El cliente desistió")
+    for estado in ("", "   ", 0, False, None, [], {}):
+        resp = _patch(app_client, admin_token, ven.id, estado=estado, notas="x")
+        assert resp.status_code == 422, (estado, resp.text)
+        assert resp.json()["detail"] == "Estado no válido.", estado
+        db.expire_all()
+        db.refresh(ven)
+        assert (ven.estado, ven.notas) == ("CANCELADO", None), estado
+    # La secuencia del ataque: '' y despues EN_PROCESO -> 422 y el 422 de 'cancelado'.
+    assert _patch(app_client, admin_token, ven.id, estado="").status_code == 422
+    resp = _patch(app_client, admin_token, ven.id, estado="EN_PROCESO")
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"].startswith("El pedido PVEN-TRA016 está cancelado y no se puede reabrir.")
+    db.expire_all()
+    db.refresh(ven)
+    assert ven.estado == "CANCELADO"
+    assert _logs(db, ven.id, "ESTADO_CHANGED") == [] and _logs(db, ven.id, "UPDATED") == []
+
+
 def test_un_pedido_entregado_solo_puede_pasar_a_facturado(app_client, db, admin_token):
     ven = _ven(db, "PVEN-TRA002", estado="ENTREGADO")
     resp = _patch(app_client, admin_token, ven.id, estado="PENDIENTE_COMPRA")

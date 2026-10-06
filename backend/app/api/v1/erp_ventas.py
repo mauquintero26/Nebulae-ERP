@@ -389,6 +389,16 @@ def _cliente_de_la_solicitud(sc: CustomerRequest) -> tuple:
         return str(v).strip() if v not in (None, "") else ""
     return _texto(sc.customer_id), _texto(sc.customer_email).lower(), _texto(sc.customer_phone)
 
+def _exigir_estado_valido(body: dict) -> None:
+    """S1 (T11): el 'estado' que llega en el PATCH de una SC, una COT o un PVEN tiene que ser un texto con algo. '' (o
+    solo espacios), 0, false, null, una lista... -> 422 sin escribir nada. Antes las guardas lo tomaban como «sin
+    cambio» (`if not nuevo`) pero el bucle de campos permitidos lo escribia igual: '' revivia una COT rechazada sin pasar
+    por la puerta B, sacaba una SC de la Papelera sin /restaurar y reabria un PVEN cancelado. Sin la clave no hay cambio
+    de estado. Se llama al principio de los tres PATCH: despues, el bucle solo escribe un estado que ya paso sus guardas."""
+    if "estado" in body and not (isinstance(body["estado"], str) and body["estado"].strip()):
+        raise HTTPException(422, "Estado no válido.")
+
+
 def _nombre_de_estado(entidad: str, estado) -> str:
     """Etiqueta de un estado que llega en un PATCH, que puede ser de otro documento (el cambio masivo del Hub manda
     estados de pedido a SC y COT): primero el mapa de la entidad, despues los demas; si no esta, el respaldo."""
@@ -1084,6 +1094,7 @@ def get_solicitud(sc_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)
 @router.patch("/solicitudes/{sc_id}")
 def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
+    _exigir_estado_valido(body)  # S1 (T11): antes de leer nada
     # B10 (revision final): bloqueada, como el PVEN en update_pedido: una cancelacion o confirmacion concurrentes
     # esperan en vez de validar contra un estado viejo.
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
@@ -1115,17 +1126,17 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     # N4: cancelar es POST /cancelar (motivo, eliminada_at, lead perdido y revision de documentos activos), nunca
     # este PATCH. Fuera de eso, a mano solo se reinicia (BORRADOR: vuelve a Nueva, o a Asignada si tiene asesor; U15/C5).
     # Esto tambien cierra los estados de pedido que el cambio masivo del Hub mandaba a una SC. Reenviar el estado que
-    # ya tiene no es un cambio.
+    # ya tiene no es un cambio. S1 (T11): None = la clave no vino (un estado vacio o que no es texto ya dio 422).
     nuevo_estado = body.get("estado")
     # Una SC cancelada (en la Papelera) solo vuelve por /restaurar, que limpia eliminada_at, revisa sus documentos y
     # devuelve el lead: reiniciarla o soltarla en el Hub no la reviven a medias.
-    if sc.estado == "CANCELADA" and nuevo_estado and nuevo_estado != "CANCELADA":
+    if sc.estado == "CANCELADA" and nuevo_estado is not None and nuevo_estado != "CANCELADA":
         raise HTTPException(409, f"La solicitud {sc.numero} está cancelada: para volver a trabajar en ella, "
                                  f"restáurala desde la Papelera (botón «Restaurar»).")
     if nuevo_estado == "CANCELADA" and sc.estado != "CANCELADA":
         raise HTTPException(400, "Para cancelar una solicitud usa el botón «Cancelar Solicitud»: pide el motivo y "
                                  "revisa que no tenga cotizaciones ni pedidos activos.")
-    if nuevo_estado and nuevo_estado != sc.estado and nuevo_estado not in ESTADOS_SC_MANUALES:
+    if nuevo_estado is not None and nuevo_estado != sc.estado and nuevo_estado not in ESTADOS_SC_MANUALES:
         raise HTTPException(400, f"El estado «{_nombre_de_estado('SC', nuevo_estado)}» no se puede asignar a mano "
                                  f"a una solicitud: solo se puede reiniciar (vuelve a {etiqueta_estado('SC', 'BORRADOR')}"
                                  f", o a {etiqueta_estado('SC', 'ASIGNADA')} si tiene asesor).")
@@ -2007,8 +2018,10 @@ def _validar_cambio_de_estado_cotizacion(db: Session, cot: SalesQuotation, nuevo
     (1) 400 CONFIRMADA / PENDIENTE_CONFIRMACION; (2) H50: 400 ENVIADA o un estado que no es manual; (3) 409 con un
     pedido vigente; (4) N4: 409 si la SC esta cancelada (salvo para rechazarla); (5) N7: 409 al retomar una RECHAZADA
     cuando la SC ya tiene otra COT activa; (6) U11: 409 al retomarla (a Borrador o a Vencida) si la SC no tiene la
-    confirmacion vigente del cliente, salvo que la COT se haya creado sin confirmacion en esa misma SC."""
-    if not nuevo or nuevo == cot.estado:
+    confirmacion vigente del cliente, salvo que la COT se haya creado sin confirmacion en esa misma SC.
+    S1 (T11): update_cotizacion ya rechazo con 422 un estado vacio o que no es texto (_exigir_estado_valido); None aqui
+    es que el body no trae estado."""
+    if nuevo is None or nuevo == cot.estado:
         return
     # (1) Gate 2 (Task 5, mismo criterio que update_solicitud para Gate 1): CONFIRMADA y PENDIENTE_CONFIRMACION solo
     # se alcanzan por rutas dedicadas (el enlace publico y enviar_cotizacion_para_confirmacion), nunca por este PATCH
@@ -2160,6 +2173,7 @@ def _mensaje_anula_confirmacion(estado: str, cambios: list) -> str:
 @router.patch("/cotizaciones/{cot_id}")
 def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
+    _exigir_estado_valido(body)  # S1 (T11): antes de leer nada
     # Bloqueada: las guardas de abajo (pedido vigente, SC cancelada, otra COT activa) se validan sobre la fila que se
     # va a escribir, sin que una conversion o una confirmacion concurrente la cambie en medio.
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).with_for_update().first()
@@ -2899,8 +2913,10 @@ def _descontar_inventario_despacho(db: Session, v: SaleOrder, warehouse_id, user
 
 def _validar_transicion_pedido(v: SaleOrder, nuevo) -> None:
     """N2: el estado de un Pedido de Venta por PATCH sigue estados_pedido (el backend es la autoridad). Reenviar el
-    mismo estado no hace nada; un estado que no se puede poner por PATCH, o una transicion no permitida -> 422."""
-    if not nuevo or nuevo == v.estado:
+    mismo estado no hace nada; un estado que no se puede poner por PATCH, o una transicion no permitida -> 422.
+    S1 (T11): update_pedido ya rechazo con 422 un estado vacio o que no es texto (_exigir_estado_valido); None aqui es
+    que el body no trae estado."""
+    if nuevo is None or nuevo == v.estado:
         return
     if not isinstance(nuevo, str) or nuevo not in ESTADOS_VEN_DESTINOS:
         raise HTTPException(422, f"«{_nombre_de_estado('VEN', nuevo)}» no es un estado válido para un Pedido de "
@@ -2969,6 +2985,7 @@ def _liberar_lo_apartado_del_pedido(db: Session, v: SaleOrder, autor: Optional[s
 @router.patch("/pedidos/{ven_id}")
 def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
+    _exigir_estado_valido(body)  # S1 (T11): antes de leer nada
     # Bloqueado: la transicion (N2) se valida sobre la fila que se va a escribir (una recepcion, un pago o una
     # cancelacion de fase4 concurrentes esperan).
     v = db.query(SaleOrder).filter(SaleOrder.id == ven_id).with_for_update().first()

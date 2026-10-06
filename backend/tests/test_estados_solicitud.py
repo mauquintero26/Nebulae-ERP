@@ -480,6 +480,40 @@ def test_confirmacion_vigente_de_la_solicitud(app_client, db, admin_token, user_
         assert "gate1_confirmed_at" not in datos  # solo el booleano, nunca la fecha
 
 
+def test_s1_un_estado_vacio_o_falso_no_saca_una_solicitud_de_la_papelera(app_client, db, admin_token, user_admin):
+    """S1 (T11): PATCH {estado:''} sacaba una SC de CANCELADA sin pasar por /restaurar, y {estado:'BORRADOR'} la dejaba
+    despues en Asignada con eliminada_at puesto y sin renglon RESTORED. Ahora '', 0, false y null son 422 y no escriben
+    nada (tampoco los otros campos del mismo PATCH)."""
+    eliminada = AHORA() - datetime.timedelta(days=1)
+    sc = _sc(db, "SC-T11S1A", user_admin, estado="CANCELADA", eliminada_at=eliminada,
+             razon_cancelacion="El cliente desistió")
+
+    def _patch_estado(sc_id, estado, **extra):
+        return app_client.patch(f"/api/v1/ventas/solicitudes/{sc_id}", json={"estado": estado, "updated_by": "t", **extra},
+                                headers=auth(admin_token))
+
+    for estado in ("", "   ", 0, False, None, [], {}):
+        resp = _patch_estado(sc.id, estado)
+        assert resp.status_code == 422, (estado, resp.text)
+        assert resp.json()["detail"] == "Estado no válido.", estado
+        db.expire_all()
+        db.refresh(sc)
+        assert (sc.estado, sc.eliminada_at) == ("CANCELADA", eliminada), estado
+    # La secuencia del ataque: '' y despues BORRADOR -> 422 y el 409 de la Papelera.
+    assert _patch_estado(sc.id, "").status_code == 422
+    resp = _patch_estado(sc.id, "BORRADOR")
+    assert resp.status_code == 409, resp.text
+    assert "restáurala desde la Papelera" in resp.json()["detail"]
+    assert _logs(db, "SC", sc.id) == []
+    # En una SC activa tampoco se borra el estado, y el resto del PATCH no se guarda.
+    activa = _sc(db, "SC-T11S1B", user_admin, estado="ASIGNADA", notas="Original")
+    resp = _patch_estado(activa.id, "", notas="Cambiada")
+    assert resp.status_code == 422, resp.text
+    db.expire_all()
+    db.refresh(activa)
+    assert (activa.estado, activa.notas) == ("ASIGNADA", "Original")
+
+
 def test_los_textos_de_la_solicitud_usan_las_etiquetas_nuevas(app_client, db, admin_token, user_admin):
     sc = _sc(db, "SC-U15011A", user_admin, estado="ASIGNADA", gate1_confirmed_at=None)
     for estado, etiqueta in (("COTIZADA", "Cotizada"), ("FACTURADO", "Facturado")):
