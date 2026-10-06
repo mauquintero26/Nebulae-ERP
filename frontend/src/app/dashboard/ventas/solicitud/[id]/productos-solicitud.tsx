@@ -5,7 +5,7 @@ import { apiFetch } from '@/lib/api';
 import { textoDeError } from '@/lib/avisos';
 import { Button } from '@/components/ui';
 import {
-  agregarLinea, cantidadValida, lineaDesdeCatalogo, lineaTextoLibre, lineasParaEnviar, nombreLinea, textoAvisoLinea,
+  agregarLinea, cantidadValida, lineaDesdeCatalogo, lineaTextoLibre, lineasAlGuardar, nombreLinea, textoAvisoLinea,
 } from '@/lib/lineas-solicitud';
 import { ProductSearch } from '../solicitud-client';
 import { LineasProducto } from '../lineas-producto';
@@ -126,10 +126,8 @@ export function ProductosSolicitud({
     setError('');
     try {
       // Lo que quedo escrito sin pulsar "Agregar" tambien se guarda (igual que al crear la SC), con su SKU si se eligio
-      // del catalogo y la cantidad escrita (ruling 1 de T8B: lineaEscrita). Si es igual a una linea que ya esta, se suma
-      // a ella (ronda 1, punto 3: agregarLinea); lineasParaEnviar solo quita las claves '_' y normaliza las cantidades.
-      const base = nombre.trim() ? agregarLinea(borradorRef.current, lineaEscrita()).lineas : borradorRef.current;
-      const lineas = lineasParaEnviar(base, '');
+      // del catalogo y la cantidad escrita (ruling 1 de T8B: lineaEscrita), sumado a una linea igual (lineasAlGuardar).
+      const lineas = lineasAlGuardar(borradorRef.current, nombre.trim() ? lineaEscrita() : null);
       const r = await apiFetch(`/ventas/solicitudes/${scId}`, {
         method: 'PATCH',
         body: JSON.stringify({ productos: lineas, updated_by: currentUser }),
@@ -213,7 +211,8 @@ export function ProductosSolicitud({
             <Button variant="secondary" size="sm" disabled={guardando} onClick={() => setEditando(false)}>Cancelar</Button>
             <Button
               color="indigo" size="sm" icon={Save} loading={guardando}
-              disabled={borrador.length === 0 && !nombre.trim() && lista.length === 0}
+              // Ronda 2: espera a que termine el alta rápida o la comprobación (si no, lo escrito iría como texto libre).
+              disabled={(borrador.length === 0 && !nombre.trim() && lista.length === 0) || ocupado}
               onClick={guardar}
             >
               Guardar productos

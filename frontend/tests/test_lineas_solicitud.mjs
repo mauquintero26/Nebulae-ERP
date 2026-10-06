@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import {
   lineaDesdeCatalogo, lineaTextoLibre, agregarLinea, resolverTextoEscrito, lineasParaEnviar, nombreLinea,
   quitarLinea, cantidadValida, cambiarCantidad, resultadosSirven, resolverConBusqueda, textoAvisoLinea,
-  avisoProductosGuardados,
+  avisoProductosGuardados, lineasAlGuardar, ESTADOS_CON_CONFIRMACION,
 } from '../src/lib/lineas-solicitud.js';
 
 const copiaProfunda = (v) => JSON.parse(JSON.stringify(v));
@@ -240,31 +240,45 @@ console.log('--- TEST 12 (T8B, H25): textoAvisoLinea — el mismo aviso en el fo
   assert.equal(textoAvisoLinea(nueva(lineaTextoLibre('X')), 'otro'), '');
 }
 
-console.log('--- TEST 13 (T8B, ruling 1): el editor del detalle guarda la línea pendiente con su SKU y su cantidad ---');
+console.log('--- TEST 13 (T8B, ruling 1; r2, punto 2): lineasAlGuardar — lo que manda «Guardar productos» del editor ---');
 {
-  // guardar() del editor: lineasParaEnviar(nombre ? agregarLinea(borrador, lineaEscrita()).lineas : borrador, '') — la
-  // línea pendiente la arma el editor (elegida del catálogo con la cantidad escrita), agregarLinea la suma a una igual
-  // (ronda 1, punto 3) y lineasParaEnviar solo quita las claves '_' y normaliza.
+  // guardar() del editor usa lineasAlGuardar(borrador, nombre ? lineaEscrita() : null): la línea pendiente la arma el
+  // editor (elegida del catálogo con la cantidad escrita); la función la suma a una igual (agregarLinea, ronda 1) y
+  // aplica lineasParaEnviar (sin claves '_', cantidades válidas).
   const borrador = [{ product_name: 'Brocha 2"', qty: '', sku_id: 7, unit_price_cop: 0, _nuevo: false }];
+  const antes = copiaProfunda(borrador);
   const pendiente = { product_name: 'Rodillo 9in', qty: cantidadValida('3'), sku_id: 12, unit_price_cop: 0, _nuevo: true };
-  assert.deepEqual(lineasParaEnviar(agregarLinea(borrador, pendiente).lineas, ''), [
+  assert.deepEqual(lineasAlGuardar(borrador, pendiente), [
     { product_name: 'Brocha 2"', qty: 1, sku_id: 7, unit_price_cop: 0 },
     { product_name: 'Rodillo 9in', qty: 3, sku_id: 12, unit_price_cop: 0 },
   ]);
+  assert.deepEqual(borrador, antes, 'no muta el borrador');
+  // Sin línea pendiente: solo el borrador, normalizado.
+  assert.deepEqual(lineasAlGuardar(borrador, null), [{ product_name: 'Brocha 2"', qty: 1, sku_id: 7, unit_price_cop: 0 }]);
+  assert.deepEqual(lineasAlGuardar(borrador), [{ product_name: 'Brocha 2"', qty: 1, sku_id: 7, unit_price_cop: 0 }]);
   // Como texto pendiente (lineasParaEnviar(borrador, nombre)) perdería el SKU y la cantidad: por eso no se usa así.
   assert.deepEqual(lineasParaEnviar(borrador, 'Rodillo 9in').at(-1),
     { product_name: 'Rodillo 9in', qty: 1, unit_price_cop: 0, sku_id: null });
   // Ronda 1 (punto 3): la línea pendiente igual a una que ya está (×2 + ×3) queda en una sola línea ×5, con su SKU.
   const conRodillo = [...borrador, { product_name: 'Rodillo 9in', qty: 2, sku_id: 12, unit_price_cop: 0 }];
-  assert.deepEqual(lineasParaEnviar(agregarLinea(conRodillo, { ...pendiente, _nuevo: false }).lineas, ''), [
+  assert.deepEqual(lineasAlGuardar(conRodillo, { ...pendiente, _nuevo: false }), [
     { product_name: 'Brocha 2"', qty: 1, sku_id: 7, unit_price_cop: 0 },
     { product_name: 'Rodillo 9in', qty: 5, sku_id: 12, unit_price_cop: 0 },
   ]);
-  // Agregada al final, como antes, habrían viajado dos líneas del mismo producto.
-  assert.equal(lineasParaEnviar([...conRodillo, pendiente], '').length, 3);
   // Lo mismo con un texto libre igual a otro (sin tildes ni mayúsculas).
-  assert.deepEqual(lineasParaEnviar(agregarLinea([lineaTextoLibre('Cinta DEMO')], { ...lineaTextoLibre('cinta demo'), qty: 2 }).lineas, ''),
+  assert.deepEqual(lineasAlGuardar([lineaTextoLibre('Cinta DEMO')], { ...lineaTextoLibre('cinta demo'), qty: 2 }),
     [{ product_name: 'Cinta DEMO', qty: 3, unit_price_cop: 0, sku_id: null }]);
+  // Sin borrador (lista vacía o ausente) y una línea pendiente en blanco.
+  assert.deepEqual(lineasAlGuardar(undefined, { ...lineaTextoLibre('Lija'), qty: '' }),
+    [{ product_name: 'Lija', qty: 1, unit_price_cop: 0, sku_id: null }]);
+  assert.deepEqual(lineasAlGuardar(borrador, lineaTextoLibre('   ')), [{ product_name: 'Brocha 2"', qty: 1, sku_id: 7, unit_price_cop: 0 }]);
+}
+
+console.log('--- TEST 13b (T8B r2, punto 4): ESTADOS_CON_CONFIRMACION — una sola fuente ---');
+{
+  // Los estados en que cambiar los productos anula la confirmación del cliente (el aviso del editor y el de guardar).
+  assert.deepEqual([...ESTADOS_CON_CONFIRMACION], ['PENDIENTE_CONFIRMACION', 'CONFIRMADA']);
+  assert.ok(Object.isFrozen(ESTADOS_CON_CONFIRMACION));
 }
 
 console.log('--- TEST 14 (T8B r1, punto 8): avisoProductosGuardados — el aviso después de «Guardar productos» ---');

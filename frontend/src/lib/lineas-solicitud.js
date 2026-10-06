@@ -177,6 +177,20 @@ export function lineasParaEnviar(lineas, textoPendiente) {
 }
 
 /**
+ * T8B (ruling 1 y rondas 1 y 2): lo que manda «Guardar productos» del editor del detalle. La línea pendiente (lo que
+ * quedó en el buscador sin «Agregar», ya armada por el editor: elegida del catálogo con su SKU y la cantidad escrita, o
+ * texto libre) se suma a una igual con agregarLinea en vez de repetirse; después lineasParaEnviar quita las claves '_' y
+ * normaliza las cantidades. Sin pendiente (null), solo el borrador. No muta lo que recibe.
+ * @param {ReadonlyArray<LineaProducto> | null | undefined} borrador
+ * @param {LineaProducto | null} [pendiente]
+ * @returns {LineaProducto[]}
+ */
+export function lineasAlGuardar(borrador, pendiente = null) {
+  const lineas = pendiente ? agregarLinea(borrador, pendiente).lineas : borrador;
+  return lineasParaEnviar(lineas, '');
+}
+
+/**
  * T8B (H25 con U7+U8): el aviso verde que explica qué pasó al agregar una línea. Es el mismo en el formulario de nueva
  * solicitud y en el editor de productos del detalle. '' si no hay nada que explicar: una línea elegida del catálogo que
  * no se sumó a otra solo se resalta; tampoco hay texto para una línea en blanco (indice -1) ni para un origen desconocido.
@@ -201,8 +215,13 @@ export function textoAvisoLinea(r, origen) {
   return '';
 }
 
-/** Estados de la solicitud en los que el cliente ya tiene (o tenía) el enlace o la confirmación de sus productos. */
-const ESTADOS_CON_CONFIRMACION = ['PENDIENTE_CONFIRMACION', 'CONFIRMADA'];
+/**
+ * Estados de la solicitud en los que el cliente ya tiene (o tenía) el enlace o la confirmación de sus productos: cambiar
+ * los productos anula esa confirmación. Una sola fuente para el aviso del editor del detalle y el de después de guardar
+ * (ronda 2 de T8B). Inmutable.
+ * @type {ReadonlyArray<string>}
+ */
+export const ESTADOS_CON_CONFIRMACION = Object.freeze(['PENDIENTE_CONFIRMACION', 'CONFIRMADA']);
 
 /**
  * T8B ronda 1 (punto 8): el aviso después de «Guardar productos» en el detalle. Si la solicitud estaba en Pendiente por

@@ -29,7 +29,7 @@ import { comoUTC, fechaEditadaParaGuardar } from '@/lib/hub-ventas';
 import {
   CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto, formularioDeEdicion, camposEditadosDeSolicitud,
 } from '@/lib/datos-cliente';
-import { avisoProductosGuardados } from '@/lib/lineas-solicitud';
+import { avisoProductosGuardados, ESTADOS_CON_CONFIRMACION } from '@/lib/lineas-solicitud';
 import { EstadoSolicitudPasos } from './estado-solicitud';
 // Final whole-branch review (hallazgo #1, el mas severo): Gate 1 no tenia NINGUNA via
 // de UI para entregarle el link de confirmacion al cliente -- enviarParaConfirmacion
@@ -1088,7 +1088,7 @@ function SolicitudDetalleContent() {
               motivoBloqueo={cotizacionesActivas.length > 0
                 ? `Los productos ya pasaron a la cotización ${cotizacionesActivas[0].numero}: ajústalos allí con "Re-Cotizar".`
                 : solicitud.estado === 'CANCELADA' ? 'La solicitud está cancelada.' : undefined}
-              anulaConfirmacion={['PENDIENTE_CONFIRMACION', 'CONFIRMADA'].includes(solicitud.estado)}
+              anulaConfirmacion={ESTADOS_CON_CONFIRMACION.includes(solicitud.estado)}
               editando={editandoProductos}
               setEditando={setEditandoProductos}
               currentUser={currentUser}

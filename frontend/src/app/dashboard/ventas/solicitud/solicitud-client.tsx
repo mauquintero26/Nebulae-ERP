@@ -27,6 +27,8 @@ import {
   pestanaDeSolicitud,
 } from '@/lib/listas-ventas';
 import { comoUTC } from '@/lib/hub-ventas';
+import { mailtoUrl, telUrl } from '@/lib/chatter';
+import { waUrl } from '@/lib/whatsapp';
 import {
   ESTADOS_SC as ESTADOS_SC_LIB, ESTADOS_SC_HEREDADOS, infoEstadoSolicitud, puedeReiniciar, motivoDeCancelacion,
 } from '@/lib/estados-solicitud';
@@ -526,6 +528,12 @@ export function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
     setChatHistory(h=>[...h,{role:'ia',text:`Con base en ${sc.numero} (${etiquetaTipoSolicitud(tipo)}):${(analisis||'Sin analisis previo.').slice(0,150)}... Puedo profundizar en cualquier aspecto.`}]);
     setSending(false);
   }
+  // T8B ronda 2: los enlaces del «Formato de Confirmación» con el criterio del detalle: WhatsApp solo con un teléfono que
+  // sirva para llamar (telUrl; waUrl no repite el 57) y el correo y el asunto codificados (mailtoUrl: un correo con
+  // «?bcc=» no agrega destinatarios). Si es null, no se pinta el enlace. El texto del mensaje no cambia.
+  const whatsappConfirmacion = telUrl(sc?.customer_phone)
+    ? waUrl(sc?.customer_phone, 'Hola '+sc?.customer_name+', confirma tu solicitud '+sc?.numero+'. Responde SI para confirmar.') : null;
+  const correoConfirmacion = mailtoUrl(sc?.customer_email, `Confirma ${sc?.numero}`, '');
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -569,8 +577,8 @@ export function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
               {(sc.productos||[]).length>0&&<div className="mt-2">{sc.productos.slice(0,3).map((p:any,i:number)=><p key={i} className="text-xs text-slate-700">- {p.product_name} x{p.qty}</p>)}</div>}
             </div>
             <div className="grid grid-cols-3 gap-2">
-              {sc.customer_phone&&<a href={`https://wa.me/57${sc.customer_phone.replace(/\D/g,'')}?text=${encodeURIComponent('Hola '+sc.customer_name+', confirma tu solicitud '+sc.numero+'. Responde SI para confirmar.')}`} target="_blank" rel="noreferrer" className="bg-green-500 text-white py-2 rounded-xl text-[10px] font-black text-center hover:bg-green-600">WhatsApp</a>}
-              {sc.customer_email&&<a href={`mailto:${sc.customer_email}?subject=Confirma ${sc.numero}`} className="bg-blue-500 text-white py-2 rounded-xl text-[10px] font-black text-center hover:bg-blue-600">Email</a>}
+              {whatsappConfirmacion&&<a href={whatsappConfirmacion} target="_blank" rel="noreferrer" className="bg-green-500 text-white py-2 rounded-xl text-[10px] font-black text-center hover:bg-green-600">WhatsApp</a>}
+              {correoConfirmacion&&<a href={correoConfirmacion} className="bg-blue-500 text-white py-2 rounded-xl text-[10px] font-black text-center hover:bg-blue-600">Email</a>}
               <button onClick={()=>window.print()} className="bg-slate-100 text-slate-700 py-2 rounded-xl text-[10px] font-black hover:bg-slate-200">PDF</button>
             </div>
           </div>
