@@ -22,7 +22,7 @@ import {
 } from '@/lib/estados-solicitud';
 import { pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
 import { destinoVolver } from '@/lib/detalle-layout';
-import { comoUTC } from '@/lib/hub-ventas';
+import { comoUTC, diaLocalDeFecha, fechaEditadaParaGuardar } from '@/lib/hub-ventas';
 import { EstadoSolicitudPasos } from './estado-solicitud';
 // Final whole-branch review (hallazgo #1, el mas severo): Gate 1 no tenia NINGUNA via
 // de UI para entregarle el link de confirmacion al cliente -- enviarParaConfirmacion
@@ -90,19 +90,6 @@ const ACTIVITY_TYPE_ORDER = [
 // U11: tope del motivo de 'Cotizar sin esperar confirmación' (el servidor exige lo mismo:
 // erp_ventas.MOTIVO_SIN_CONFIRMACION_MAX; el mínimo es MOTIVO_SIN_CONFIRMACION_MIN de la librería).
 const MOTIVO_SIN_CONFIRMACION_MAX = 500;
-
-// fecha_vencimiento llega en UTC sin zona (utcnow + días). El campo date de 'Editar' muestra el día en hora local
-// (Colombia), el mismo que la grilla y la lista (fDate(comoUTC(...))); con split('T') una SC creada entre las 7 pm y la
-// medianoche mostraba el día siguiente. saveEdit lo devuelve a mediodía local, así que la ida y vuelta da el mismo día.
-// Una fecha de calendario (sin hora) es ese mismo día.
-const FECHA_DE_CALENDARIO = /^\d{4}-\d{2}-\d{2}$/;
-function diaLocal(iso: unknown): string {
-  if (typeof iso !== 'string' || !iso.trim()) return '';
-  if (FECHA_DE_CALENDARIO.test(iso.trim())) return iso.trim();
-  const f = new Date(comoUTC(iso));
-  if (Number.isNaN(f.getTime())) return '';
-  return `${f.getFullYear()}-${String(f.getMonth() + 1).padStart(2, '0')}-${String(f.getDate()).padStart(2, '0')}`;
-}
 
 function SolicitudDetalleContent() {
   const params = useParams();
@@ -200,7 +187,9 @@ function SolicitudDetalleContent() {
             tipo_solicitud: d.tipo_solicitud || 'Cotizacion de Producto',
             modalidad_pago: d.modalidad_pago || 'Contado',
             notas: d.notas || '',
-            fecha_vencimiento: d.fecha_vencimiento ? diaLocal(d.fecha_vencimiento) : '',
+            // fecha_vencimiento llega en UTC sin zona (utcnow + días): el campo muestra el día en hora de Colombia, el
+            // mismo que la grilla y la lista (con split('T') una SC creada de 7 pm a medianoche salía al día siguiente).
+            fecha_vencimiento: diaLocalDeFecha(d.fecha_vencimiento),
           });
         }
       }
@@ -251,7 +240,12 @@ function SolicitudDetalleContent() {
     setSavingEdit(true);
     try {
       const body: any = { ...editForm, updated_by: currentUser };
-      if (editForm.fecha_vencimiento) body.fecha_vencimiento = new Date(editForm.fecha_vencimiento + 'T12:00:00').toISOString();
+      // T8A ronda 1: el vencimiento solo viaja si el día cambió (mediodía local de ese día). Sin tocarlo no se mueve la
+      // hora guardada ni la Actividad anota «11/10/2026 → 10/10/2026» (cambios_documento compara el día UTC), y nunca
+      // se manda ''.
+      const vencimiento = fechaEditadaParaGuardar(editForm.fecha_vencimiento, solicitud.fecha_vencimiento);
+      if (vencimiento) body.fecha_vencimiento = vencimiento;
+      else delete body.fecha_vencimiento;
       await apiFetch(`/ventas/solicitudes/${solicitud.id}`, { method: 'PATCH', body: JSON.stringify(body) });
       setEditMode(false);
       await loadSolicitud();
@@ -895,7 +889,7 @@ function SolicitudDetalleContent() {
                 </div>
               )}
               <div className="grid grid-cols-2 gap-3">
-                {[{ l: 'Asesor', v: solicitud?.advisor_name || '-' }, { l: 'Modalidad Pago', v: etiquetaModalidad(solicitud?.modalidad_pago) || '-' }, { l: 'Fecha Solicitud', v: fDate(solicitud?.fecha_solicitud) }, { l: 'Vencimiento', v: fDate(comoUTC(solicitud?.fecha_vencimiento)) }].map(item => (
+                {[{ l: 'Asesor', v: solicitud?.advisor_name || '-' }, { l: 'Modalidad Pago', v: etiquetaModalidad(solicitud?.modalidad_pago) || '-' }, { l: 'Fecha Solicitud', v: fDate(comoUTC(solicitud?.fecha_solicitud)) }, { l: 'Vencimiento', v: fDate(comoUTC(solicitud?.fecha_vencimiento)) }].map(item => (
                   <div key={item.l} className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3"><p className="text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider">{item.l}</p><p className="font-bold text-sm text-slate-800">{item.v}</p></div>
                 ))}
               </div>

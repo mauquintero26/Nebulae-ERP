@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import {
   ordenParaCancelar, motivoNoCancelable, resumenLote,
   ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN, repartirCambioEstadoPVEN,
-  comoUTC, diasDesde, textoAntiguedad,
+  comoUTC, diasDesde, textoAntiguedad, diaLocalDeFecha, fechaEditadaParaGuardar,
   ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, tieneProductos, esNoResuelto, esAccionTomada, accionSiguienteSC,
 } from '../src/lib/hub-ventas.js';
 import { ESTADOS_PEDIDO } from '../src/lib/estados-pedido.js';
@@ -358,6 +358,58 @@ console.log('--- FIX1 TEST 16: comoUTC (fechas del API sin zona = UTC) ---');
   assert.equal(comoUTC(undefined), undefined);
   // la hora mostrada no depende de la zona del navegador
   assert.equal(new Date(comoUTC('2026-10-04T03:00:00')).getTime(), Date.UTC(2026, 9, 4, 3, 0, 0));
+}
+
+// T8A ronda 1: el día de una fecha de negocio en hora LOCAL depende de la zona del proceso. Estas dos pruebas la fijan
+// en America/Bogota (Node aplica process.env.TZ en caliente) y la devuelven al terminar: dan lo mismo en cualquier
+// máquina (por ejemplo con TZ=Asia/Tokyo en el entorno).
+{
+  const tzPrevia = process.env.TZ;
+  process.env.TZ = 'America/Bogota';
+  try {
+    assert.equal(new Date('2026-10-10T12:00:00Z').getTimezoneOffset(), 300, 'la prueba corre en hora de Colombia');
+
+    console.log('--- T8A r1 TEST 17: diaLocalDeFecha (día de una fecha del API en hora de Colombia) ---');
+    // sin zona = UTC (comoUTC): fecha_vencimiento = utcnow + días de una SC creada de noche en Colombia
+    assert.equal(diaLocalDeFecha('2026-10-11T04:59:59.999999'), '2026-10-10'); // 11:59 pm del 10
+    assert.equal(diaLocalDeFecha('2026-10-11T05:00:00'), '2026-10-11');        // medianoche de Colombia
+    assert.equal(diaLocalDeFecha('2026-10-11T00:00:00'), '2026-10-10');        // 7 pm del 10
+    assert.equal(diaLocalDeFecha('2026-10-11T01:00:00'), '2026-10-10');        // 8 pm del 10
+    assert.equal(diaLocalDeFecha('2026-10-11 01:00:00.123456'), '2026-10-10');
+    assert.equal(diaLocalDeFecha('2026-10-10T17:00:00'), '2026-10-10');        // lo que guarda 'Editar' (mediodía)
+    // con zona se respeta la zona que trae
+    assert.equal(diaLocalDeFecha('2026-10-11T03:00:00Z'), '2026-10-10');
+    assert.equal(diaLocalDeFecha('2026-10-11T03:00:00-05:00'), '2026-10-11');
+    // fecha sin hora: ese mismo día (new Date() la leería como medianoche UTC, que en Colombia es la víspera)
+    assert.equal(diaLocalDeFecha('2026-10-10'), '2026-10-10');
+    assert.equal(diaLocalDeFecha(' 2026-10-10 '), '2026-10-10');
+    for (const v of [null, undefined, '', '   ', 'no es fecha', '2026-02-30', '2026-13-45T25:00:00', 20261010, {}]) {
+      assert.equal(diaLocalDeFecha(v), '', `basura: ${JSON.stringify(v)}`);
+    }
+
+    console.log('--- T8A r1 TEST 18: fechaEditadaParaGuardar (el vencimiento solo viaja si el día cambió) ---');
+    // sin tocar la fecha de una SC creada a las 8 pm: el campo muestra el 10 y no se manda nada (antes se mandaba el
+    // mediodía del 10 y la Actividad anotaba «11/10/2026 → 10/10/2026»)
+    assert.equal(fechaEditadaParaGuardar(diaLocalDeFecha('2026-10-11T01:00:00'), '2026-10-11T01:00:00'), null);
+    assert.equal(fechaEditadaParaGuardar('2026-10-10', '2026-10-10T17:00:00'), null);
+    assert.equal(fechaEditadaParaGuardar(' 2026-10-10 ', '2026-10-10T17:00:00'), null);
+    // el día cambió: el mediodía local de ese día (17:00 UTC en Colombia), el mismo día en UTC y en hora local
+    assert.equal(fechaEditadaParaGuardar('2026-10-12', '2026-10-11T01:00:00'), '2026-10-12T17:00:00.000Z');
+    assert.equal(fechaEditadaParaGuardar('2026-10-12', null), '2026-10-12T17:00:00.000Z'); // sin fecha guardada
+    // campo vacío o inválido: nunca se manda '' ni una fecha imposible
+    for (const v of ['', null, undefined, '   ', '12/10/2026', '2026-02-30', 'abc', 20261012]) {
+      assert.equal(fechaEditadaParaGuardar(v, '2026-10-11T01:00:00'), null, `campo: ${JSON.stringify(v)}`);
+    }
+    // ida y vuelta: lo que se guarda (sin zona en la base) vuelve al campo como el mismo día, y ya no se manda
+    for (const dia of ['2026-10-10', '2026-12-31', '2027-01-01']) {
+      const guardado = fechaEditadaParaGuardar(dia, null).replace(/\.\d+Z$/, '');
+      assert.equal(diaLocalDeFecha(guardado), dia, `ida y vuelta de ${dia}`);
+      assert.equal(fechaEditadaParaGuardar(dia, guardado), null);
+    }
+  } finally {
+    if (tzPrevia === undefined) delete process.env.TZ;
+    else process.env.TZ = tzPrevia;
+  }
 }
 
 console.log('OK test_hub_ventas.mjs');

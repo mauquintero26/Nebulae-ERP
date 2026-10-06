@@ -215,6 +215,54 @@ export function textoAntiguedad(d) {
   return d <= 0 ? 'hoy' : d === 1 ? 'hace 1 día' : `hace ${d} días`;
 }
 
+// ─── T8A ronda 1: el día de una fecha de negocio (vencimiento de la SC) ──────────
+
+/** Una fecha de calendario, sin hora ('2026-10-10'). */
+const FECHA_DE_CALENDARIO = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** true si el texto es 'aaaa-mm-dd' y ese día existe (no '2026-02-30'). */
+function esDiaValido(texto) {
+  const m = FECHA_DE_CALENDARIO.exec(texto);
+  if (!m) return false;
+  const [anio, mes, dia] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const f = new Date(Date.UTC(anio, mes - 1, dia));
+  return f.getUTCFullYear() === anio && f.getUTCMonth() === mes - 1 && f.getUTCDate() === dia;
+}
+
+/**
+ * El día ('aaaa-mm-dd') de una fecha del API en hora LOCAL del navegador (Colombia para el usuario): el mismo que
+ * muestra fDate(comoUTC(iso)) en la lista y en el detalle. Una fecha y hora sin zona se lee como UTC (comoUTC): el
+ * vencimiento de una SC creada a las 8 pm de Colombia llega como la 1 am del día siguiente y es el día anterior. Una fecha
+ * de calendario es ese mismo día. null, '', algo que no es texto o una fecha imposible -> ''. Es el valor del campo date
+ * de 'Editar' en el detalle de la SC.
+ * @param {unknown} iso
+ * @returns {string}
+ */
+export function diaLocalDeFecha(iso) {
+  if (typeof iso !== 'string' || !iso.trim()) return '';
+  const texto = iso.trim();
+  if (FECHA_DE_CALENDARIO.test(texto)) return esDiaValido(texto) ? texto : '';
+  const f = new Date(comoUTC(texto));
+  if (Number.isNaN(f.getTime())) return '';
+  return `${f.getFullYear()}-${String(f.getMonth() + 1).padStart(2, '0')}-${String(f.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Lo que se manda al guardar un campo date que se editó como día local (diaLocalDeFecha), o null si no hay que mandarlo:
+ * vacío o inválido (nunca '' ni una fecha imposible) o el mismo día que ya está guardado (así no se mueve la hora guardada
+ * ni la Actividad anota un cambio que nadie hizo). Si el día cambió, el mediodía local de ese día en ISO (en Colombia,
+ * 17:00 UTC: el mismo día en UTC y en hora local).
+ * @param {unknown} dia  valor del input type="date" ('aaaa-mm-dd' o '')
+ * @param {unknown} guardada  la fecha que trae el API
+ * @returns {string | null}
+ */
+export function fechaEditadaParaGuardar(dia, guardada) {
+  if (typeof dia !== 'string' || !esDiaValido(dia.trim())) return null;
+  const valor = dia.trim();
+  if (valor === diaLocalDeFecha(guardada)) return null;
+  return new Date(`${valor}T12:00:00`).toISOString();
+}
+
 // ─── H3: semaforo y proxima accion de la solicitud ──────────────────────────────
 
 /**

@@ -1386,7 +1386,7 @@ export default function SolicitudClient() {
                       <td className="px-4 py-4"><TipoBadge tipo={sc.tipo_solicitud||'Cotizacion de Producto'}/></td>
                       <td className="px-4 py-4"><span className="font-bold text-slate-800">{sc.customer_name||'-'}</span>{sc.customer_phone&&<p className="text-[11px] text-slate-400">{sc.customer_phone}</p>}</td>
                       <td className="px-4 py-4 text-slate-600 font-medium text-sm">{sc.advisor_name||'-'}</td>
-                      <td className="px-4 py-4 text-slate-500 font-medium text-xs">{fDate(sc.fecha_solicitud)}</td>
+                      <td className="px-4 py-4 text-slate-500 font-medium text-xs">{fDate(comoUTC(sc.fecha_solicitud))}</td>
                       {activeTab === 'Canceladas' ? (
                         <td className="px-4 py-4 min-w-[240px]" onClick={e=>e.stopPropagation()}>
                           <div className="bg-rose-50 border border-rose-200 text-rose-800 px-3 py-1.5 rounded-xl text-xs font-semibold flex items-start gap-2 shadow-sm">
