@@ -10,7 +10,7 @@ import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 
 import { apiFetch } from '@/lib/api';
-import { textoDeError } from '@/lib/avisos';
+import { textoDeError, recargarTrasError } from '@/lib/avisos';
 import { Button, Modal, useAvisos } from '@/components/ui';
 import {
   EstadoBadge, TipoBadge, IAPanelSC,
@@ -93,13 +93,6 @@ const ACTIVITY_TYPE_ORDER = [
   'ESTADO_CHANGED', 'UPDATED', 'FECHA_ENTREGA_MODIFICADA', 'NOTE_ADDED', 'CREATED',
   'COTIZACION_CREADA', 'COTIZADA_SIN_CONFIRMACION', 'COTIZACION_RECHAZADA', 'CHATTER', 'CANCELLED', 'SENT_TO_TRASH', 'RESTORED',
 ];
-
-// T8A ronda 1: tras un 400 o un 409 (la solicitud cambió en otra pantalla: ya tiene cotización, se canceló…) o un error
-// sin respuesta del servidor (la red se cortó y la operación pudo hacerse igual), la pantalla se recarga en silencio.
-function recargarTrasError(err: unknown): boolean {
-  const status = (err as { status?: unknown } | null | undefined)?.status;
-  return status === 400 || status === 409 || status === undefined || status === null;
-}
 
 const textoCotizacionCreada = (numero: unknown) => (numero ? `Cotización ${numero} creada` : 'Cotización creada');
 

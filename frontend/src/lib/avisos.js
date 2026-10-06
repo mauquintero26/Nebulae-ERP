@@ -160,6 +160,20 @@ export function errorDeRespuesta(status, body) {
 }
 
 /**
+ * Despues de una accion que fallo (guardar, re-cotizar, cambiar estado, enviar…): true si conviene recargar el
+ * documento en silencio. Un 400 o un 409 (cambio en otra pantalla: ya tiene cotizacion, se confirmo, se cancelo…) o un
+ * error sin status (la red se corto y la operacion pudo hacerse igual; tambien null o undefined). Un 401
+ * (SesionVencidaError), 403, 404, 422 o 500 no recargan. La usan los detalles de la SC, la COT y el PVEN (B2-T8A, una
+ * sola regla desde B2-T9A ronda 1).
+ * @param {unknown} err
+ * @returns {boolean}
+ */
+export function recargarTrasError(err) {
+  const status = /** @type {{ status?: unknown } | null | undefined} */ (err)?.status;
+  return status === 400 || status === 409 || status === undefined || status === null;
+}
+
+/**
  * Texto de un aviso para un error atrapado (Error, string u otra cosa).
  * Sin conexion -> MENSAJE_SIN_CONEXION; vacio o '[object Object]' -> MENSAJE_GENERICO. Con prefijo:
  * 'No se pudo X: <texto>' (sin repetir el prefijo si el texto ya empieza por el).

@@ -13,7 +13,7 @@
 import assert from 'node:assert/strict';
 import {
   MENSAJE_SIN_CONEXION, MENSAJE_GENERICO, ETIQUETAS_CAMPO,
-  textoDeDetalle, textoDeError, duracionAviso, agregarAviso, errorDeRespuesta, normalizarTono,
+  textoDeDetalle, textoDeError, duracionAviso, agregarAviso, errorDeRespuesta, normalizarTono, recargarTrasError,
 } from '../src/lib/avisos.js';
 
 const DATOS_INVALIDOS = 'Los datos enviados no son válidos. Revisa el formulario e intenta de nuevo.';
@@ -234,6 +234,25 @@ console.log('--- TEST 8: agregarAviso ---');
   lista = agregarAviso(lista, { id: 6, texto: 'aviso 3', tono: 'error' });
   assert.deepEqual(lista.map((a) => a.id), [4, 5, 6], 'mismo texto con otro tono es otro aviso');
   assert.equal(agregarAviso([{ id: 1, texto: 'a', tono: 'ok' }], { id: 2, texto: 'b', tono: 'ok' }, 1).length, 1);
+}
+
+console.log('--- TEST 9: recargarTrasError (B2-T9A ronda 1: una sola regla para SC, COT y PVEN) ---');
+{
+  // 400 / 409: el documento cambio en otra pantalla; sin status: la red se corto y la operacion pudo hacerse igual.
+  for (const status of [400, 409]) {
+    assert.equal(recargarTrasError(errorDeRespuesta(status, { detail: 'Cambió en otra pantalla' })), true, String(status));
+  }
+  assert.equal(recargarTrasError(errorDeRespuesta(409, { detail: { codigo: 'ANULA_CONFIRMACION', estado: 'CONFIRMADA' } })), true);
+  assert.equal(recargarTrasError(new TypeError('Failed to fetch')), true, 'error de red sin status');
+  assert.equal(recargarTrasError(null), true);
+  assert.equal(recargarTrasError(undefined), true);
+  // 401 (SesionVencidaError de api.ts: status 401), 403, 404, 422 y 500 no recargan.
+  const sesionVencida = Object.assign(new Error('Tu sesión venció. Inicia sesión nuevamente para continuar.'),
+    { name: 'SesionVencidaError', status: 401 });
+  assert.equal(recargarTrasError(sesionVencida), false, 'SesionVencidaError');
+  for (const status of [401, 403, 404, 422, 500]) {
+    assert.equal(recargarTrasError(errorDeRespuesta(status, {})), false, String(status));
+  }
 }
 
 console.log('✓ Todas las pruebas de avisos pasaron.');
