@@ -120,3 +120,16 @@ export function cuerpoDeGuardado(actual, inicial) {
   }
   return cuerpo;
 }
+
+/**
+ * B2-T9A ronda 1: si el guardado de la calculadora exige precios validos (cada linea y el total mayores que $0). Si
+ * viajan los precios (cuerpoDeGuardado), si. Si no viajan (solo notas o fecha), solo cuando la cotizacion todavia no
+ * tiene total: guardar sin precios no la cotiza, y se sigue pidiendo el costo como antes. Asi una linea con costo 0 ya
+ * no impide guardar solo la nota de una cotizacion calculada.
+ * @param {Record<string, any>} cuerpo  cuerpoDeGuardado(...)
+ * @param {Record<string, any> | null | undefined} cot
+ * @returns {boolean}
+ */
+export function validaPreciosAlGuardar(cuerpo, cot) {
+  return Array.isArray(cuerpo?.productos) || !(Number(cot?.total_cop) > 0);
+}

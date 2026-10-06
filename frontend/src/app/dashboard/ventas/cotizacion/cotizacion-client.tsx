@@ -14,6 +14,7 @@ import {
 import { apiFetch, API_URL } from '@/lib/api';
 import {
   MARGIN_PCT_CAP, filaDeCalculadora, calcularCotizacion, cuerpoCompletoCalculadora, cuerpoDeGuardado,
+  validaPreciosAlGuardar,
 } from '@/lib/pricing';
 import { formatoPesos } from '@/lib/pesos';
 import { humanizarCodigo } from '@/lib/estados-pedido';
@@ -250,8 +251,9 @@ export function CalculadorModal({
   // estructura circular. Con el panel rosa la calculadora queda inerte: se reenvía lo mismo que describió el 409.
   const handleSave = (extra: ExtraGuardado = {}) => {
     const cuerpo = cuerpoDeGuardado(armarPayload(), inicial.current);
-    // Los precios se validan solo si viajan: un guardado de solo notas o fecha no depende de ellos (ronda 1).
-    if (Array.isArray(cuerpo.productos)) {
+    // Los precios se validan si viajan o si la cotización aún no tiene total (validaPreciosAlGuardar, ronda 1): guardar
+    // solo las notas o la fecha de una cotización ya calculada no depende de ellos.
+    if (validaPreciosAlGuardar(cuerpo, cot)) {
       if (computedProd.length === 0 || computedProd.some(p => !p.total_cop || p.total_cop <= 0)) {
         setError('Cada producto necesita un costo mayor a $0 antes de guardar la cotización.');
         return;

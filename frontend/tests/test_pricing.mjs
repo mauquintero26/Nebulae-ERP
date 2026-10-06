@@ -9,6 +9,7 @@
 import assert from 'node:assert/strict';
 import {
   computeMarginPrice, MARGIN_PCT_CAP, filaDeCalculadora, calcularCotizacion, cuerpoCompletoCalculadora, cuerpoDeGuardado,
+  validaPreciosAlGuardar,
 } from '../src/lib/pricing.js';
 
 console.log('--- TEST 1: unitario * qty == total, siempre (caso real reportado) ---');
@@ -167,6 +168,23 @@ console.log('--- B2-T9A r1 TEST 10: cuerpoDeGuardado manda los precios solo si c
   const copia = JSON.parse(JSON.stringify(inicial));
   cuerpoDeGuardado(otroMargen, inicial);
   assert.deepEqual(inicial, copia);
+}
+
+console.log('--- B2-T9A r1 TEST 11: validaPreciosAlGuardar (costos en $0: solo si viajan precios o al cotizar por primera vez) ---');
+{
+  const f = formularioInicial(COT_20260486);
+  const inicial = cuerpoDe(f, COT_20260486);
+  const soloNotas = cuerpoDeGuardado(cuerpoDe(f, COT_20260486), inicial);
+  const conPrecios = cuerpoDeGuardado(cuerpoDe({ ...f, descuento: 5 }, COT_20260486), inicial);
+  // Cotizacion ya calculada: guardar solo las notas no depende de los precios (una linea con costo 0 ya no lo impide);
+  // con los precios en el cuerpo, se validan.
+  assert.equal(validaPreciosAlGuardar(soloNotas, { total_cop: 1840615.38 }), false);
+  assert.equal(validaPreciosAlGuardar(conPrecios, { total_cop: 1840615.38 }), true);
+  // Sin total (cotizar por primera vez): se validan siempre, como antes ('Cada producto necesita un costo mayor a $0').
+  for (const total of [0, '0.00', null, undefined]) {
+    assert.equal(validaPreciosAlGuardar(soloNotas, { total_cop: total }), true, String(total));
+  }
+  assert.equal(validaPreciosAlGuardar(soloNotas, null), true);
 }
 
 console.log('✓ Todos los tests de pricing pasaron exitosamente.');
