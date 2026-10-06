@@ -140,7 +140,8 @@ def test_aceptar_con_razon_anula_y_registra_la_razon(app_client, db, admin_token
                     {"etiqueta": "Razón", "despues": "Proveedor subió el precio"}]}
 
 
-def test_aceptar_pendiente_con_razon_revoca_el_enlace(app_client, db, admin_token):
+def test_aceptar_pendiente_con_razon_revoca_el_enlace(app_client, db, admin_token, user_admin):
+    from app.core.textos_actividad import nombre_de_usuario
     cot = _cot(db, "COT-T4H40D", "BORRADOR")
     resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/enviar-confirmacion", json={"user_name": "t"},
                            headers=auth(admin_token))
@@ -152,7 +153,67 @@ def test_aceptar_pendiente_con_razon_revoca_el_enlace(app_client, db, admin_toke
     assert app_client.post("/api/v1/confirmar/ver", json={"token": token}).status_code == 400
     ultimo = _logs(db, cot.id, "ESTADO_CHANGED")[-1]
     assert ultimo.description.endswith("Razón: Cambió la referencia.")  # sin doble punto
-    assert ultimo.user_name == "t"
+    # S6 (T11): el renglon de la razon es del usuario de la sesion; el updated_by del body ('t') ya no cuenta.
+    assert ultimo.user_name == nombre_de_usuario(user_admin)
+
+
+def test_s6_anular_la_confirmacion_va_en_un_commit_con_el_autor_de_la_sesion(app_client, db, admin_token, user_admin,
+                                                                             monkeypatch):
+    """S6 (T11): con un updated_by de 151 caracteres o que no es texto, el renglon de la razon tumbaba la peticion (500)
+    DESPUES de dejar la COT en Borrador: sin razon en la Actividad, con gate2 puesto y el enlace vivo. Ahora la COT en
+    Borrador, el renglon de los cambios, el de la razon (autor de la sesion), la revocacion del enlace y gate2 en None
+    van en UN commit (patron C8), y _log no acepta un autor que no sea texto ni uno mas largo que la columna."""
+    from sqlalchemy.orm import Session
+    from app.core.confirmation_tokens import create_confirmation_token
+    from app.core.textos_actividad import nombre_de_usuario
+    from app.models.confirmation import DocumentConfirmationToken
+    autor = nombre_de_usuario(user_admin)
+    casos = [("CONFIRMADA", "x" * 151, "x" * 150), ("PENDIENTE_CONFIRMACION", ["Otra Asesora"], autor),
+             ("CONFIRMADA", {"nombre": "Otra"}, autor), ("PENDIENTE_CONFIRMACION", "Otra Asesora", "Otra Asesora")]
+    commit_real = Session.commit
+    for i, (estado, updated_by, autor_cambios) in enumerate(casos):
+        cot = _cot(db, f"COT-T4H40S{i}", estado)
+        create_confirmation_token(db, "COT", cot.id)  # el enlace pendiente (o uno que hubiera quedado vivo)
+        commits = []
+
+        def contar(self):
+            if self is not db:
+                commits.append(1)
+            return commit_real(self)
+
+        monkeypatch.setattr(Session, "commit", contar)
+        resp = _patch(app_client, admin_token, cot.id,
+                      _precio(1300, anular_confirmacion=True, motivo_recotizacion="Cambio de proveedor",
+                              updated_by=updated_by))
+        monkeypatch.setattr(Session, "commit", commit_real)
+        assert resp.status_code == 200, (estado, updated_by, resp.text)
+        assert resp.json()["confirmacion_anulada"] is True
+        assert len(commits) == 1, (estado, updated_by, len(commits))
+        db.expire_all()
+        db.refresh(cot)
+        assert (cot.estado, cot.gate2_confirmed_at, cot.total_cop) == ("BORRADOR", None, 1300), estado
+        token = db.query(DocumentConfirmationToken).filter(DocumentConfirmationToken.document_type == "COT",
+                                                           DocumentConfirmationToken.document_id == cot.id).one()
+        assert token.used_at is not None, estado  # revocado
+        logs = _logs(db, cot.id)
+        assert [l.action for l in logs] == ["RECOTIZADA", "ESTADO_CHANGED"], estado
+        assert logs[1].description.endswith("Razón: Cambio de proveedor.")
+        assert (logs[1].old_estado, logs[1].new_estado, logs[1].user_name) == (estado, "BORRADOR", autor)
+        # El renglon de los cambios sigue tomando el updated_by del body (contrato viejo), ya saneado.
+        assert logs[0].user_name == autor_cambios, updated_by
+
+
+def test_s6_log_no_acepta_un_autor_que_no_es_texto_ni_mas_largo_que_la_columna(db, user_admin):
+    from app.api.v1 import erp_ventas
+    from app.core.textos_actividad import nombre_de_usuario
+    casos = [("Ana", None, "Ana"), ("x" * 200, None, "x" * 150), (["Ana"], None, "Sistema"), (12, None, "Sistema"),
+             ({"a": 1}, user_admin, nombre_de_usuario(user_admin)), (None, user_admin, None)]
+    for user_name, usuario, esperado in casos:
+        renglon = erp_ventas._log(db, "COT", 999999999, "COT-T4H40X", "UPDATED", "x", user_name=user_name,
+                                  usuario=usuario, commit=False)
+        db.flush()
+        assert renglon.user_name == esperado, user_name
+    db.rollback()
 
 
 def test_aceptar_sin_razon_responde_422(app_client, db, admin_token):

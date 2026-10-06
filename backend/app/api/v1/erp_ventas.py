@@ -136,12 +136,24 @@ def _gen_numero(db: Session, prefix: str, seq: str) -> str:
     n = _next_seq(db, seq)
     return f"{prefix}{year}{n:04d}"
 
+# activity_logs.user_name es String(150).
+_USER_NAME_MAX = 150
+
+
 def _log(db: Session, entity_type: str, entity_id: int, entity_numero: str,
          action: str, description: str = None, old_estado: str = None,
          new_estado: str = None, user_name: str = None, extra_data: dict = None,
-         commit: bool = True):
+         commit: bool = True, usuario: Optional[User] = None):
     """Agrega un renglon de Actividad y lo devuelve (U6+H22: _agregar_nota responde con el). commit=False lo deja en
-    la sesion para que lo confirme el commit del llamador (una sola transaccion: choque H36/H29 en update_solicitud)."""
+    la sesion para que lo confirme el commit del llamador (una sola transaccion: choque H36/H29 en update_solicitud).
+    S6 (T11), defensa general del autor: un user_name que no es texto (una lista, un objeto o un numero que llego en
+    el body) se cambia por nombre_de_usuario(usuario) ('Sistema' sin usuario) y un texto mas largo que la columna se
+    recorta a 150. Asi un updated_by malo ya no tumba la peticion con un 500 a mitad de camino. None sigue siendo
+    «sin autor»."""
+    if user_name is not None:
+        if not isinstance(user_name, str):
+            user_name = nombre_de_usuario(usuario)
+        user_name = user_name[:_USER_NAME_MAX]
     log = ActivityLog(
         entity_type=entity_type,
         entity_id=entity_id,
@@ -246,7 +258,7 @@ def _registrar_cambios(db: Session, entidad: str, doc, antes: dict, body: dict, 
             descripcion = motivo.strip()[:300]
         _log(db, entidad, doc.id, doc.numero, accion, descripcion,
              user_name=body.get("updated_by") or getattr(user, "email", None),
-             extra_data={"cambios": cambios}, commit=commit)
+             extra_data={"cambios": cambios}, commit=commit, usuario=user)
     except Exception as exc:
         if commit:
             db.rollback()
@@ -1915,10 +1927,12 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
     if not cot:
         raise HTTPException(404, "Cotización no encontrada")
+    # Los renglones de un mismo commit (S6: re-cotizar y anular la confirmacion) pueden compartir created_at: el id
+    # conserva el orden causal, como en get_solicitud y get_pedido.
     logs = db.query(ActivityLog).filter(
         ActivityLog.entity_type == "COT",
         ActivityLog.entity_id == cot_id
-    ).order_by(ActivityLog.created_at.asc()).all()
+    ).order_by(ActivityLog.created_at.asc(), ActivityLog.id.asc()).all()
     d = _cot_dict(cot)
     d["actividades"] = [_log_dict(l) for l in logs]
     # linked VEN (H46: en orden de creacion, para que el frontend tome el ultimo vigente o cancelado)
@@ -2442,12 +2456,36 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     # tiempo por otra conexion.
     sale_de_gate2 = old_estado in ("PENDIENTE_CONFIRMACION", "CONFIRMADA") and cot.estado != old_estado
     cot.updated_at = datetime.datetime.utcnow()
+    # H40 + S6 (T11): anular la confirmacion del cliente por re-cotizar va en UN commit (patron C8): la COT en Borrador,
+    # el renglon de los cambios, el de la razon (con el autor de la sesion, nunca body.updated_by), la revocacion del
+    # enlace y gate2 en None. Antes el renglon de la razon salia en otro commit, DESPUES del de la COT, y un updated_by
+    # invalido lo tumbaba con un 500 que dejaba la COT en Borrador sin razon, con gate2 puesto y el enlace vivo.
+    anula_por_recotizacion = rompe_congelamiento and not cambia_estado_explicito
+    recotizacion = bool(body.get("recotizacion"))
+    if anula_por_recotizacion:
+        # flush + refresh: la foto 'despues' de _registrar_cambios con los valores ya tipados (como update_solicitud).
+        db.flush()
+        db.refresh(cot)
+        # "Re-Cotizar" va antes del cambio de estado que provoca, para que la linea de tiempo se lea en orden causal.
+        _registrar_cambios(db, "COT", cot, antes_log, body, user, recotizacion=recotizacion, commit=False)
+        # La razon que escribio el asesor; extra_data sin la llave 'campo' (CambiosDeActividad no tacha).
+        razon = motivo_recotizacion if motivo_recotizacion.endswith((".", "!", "?")) else f"{motivo_recotizacion}."
+        _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
+             "Estado cambiado a Borrador (la cotización fue editada tras la confirmación del cliente; esa confirmación "
+             f"ya no es válida). Razón: {razon}",
+             old_estado=old_estado, new_estado="BORRADOR", user_name=nombre_de_usuario(user),
+             extra_data={"motivo": motivo_recotizacion,
+                         "cambios": [{"etiqueta": "Cambió", "despues": ", ".join(cambios_congelados)},
+                                     {"etiqueta": "Razón", "despues": motivo_recotizacion}]},
+             commit=False)
+        from app.core.confirmation_tokens import revoke_pending_tokens
+        revoke_pending_tokens(db, "COT", cot.id, commit=False)
+        cot.gate2_confirmed_at = None
     db.commit()
     db.refresh(cot)
-    # "Re-Cotizar" (la Calculadora) manda recotizacion=true: queda registrado aunque los
-    # precios no hayan cambiado. Va antes del cambio de estado que pueda provocar
-    # (rompe_congelamiento) para que la linea de tiempo se lea en orden causal.
-    _registrar_cambios(db, "COT", cot, antes_log, body, user, recotizacion=bool(body.get("recotizacion")))
+    if not anula_por_recotizacion:
+        # "Re-Cotizar" (la Calculadora) manda recotizacion=true: queda registrado aunque los precios no hayan cambiado.
+        _registrar_cambios(db, "COT", cot, antes_log, body, user, recotizacion=recotizacion)
     if cambia_manual:
         extra_manual = {"pct_antes": str(pct_previo), "pct_despues": str(pct_nuevo),
                         "anticipo_despues": str(cot.anticipo_cop), "nota": cot.anticipo_manual_nota}
@@ -2504,28 +2542,15 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
              f"Estado cambiado a {etiqueta_estado('COT', cot.estado)}",
              old_estado=old_estado, new_estado=cot.estado,
              user_name=nombre_de_usuario(user) if retoma_sin_confirmacion else body.get("updated_by"))
-    elif rompe_congelamiento:
-        # El check de arriba solo loguea cuando el REQUEST manda "estado" explicitamente
-        # Y distinto del original. rompe_congelamiento cambia cot.estado sin que el body
-        # lo pida (el caso tipico: solo manda productos/total_cop desde la Calculadora),
-        # asi que sin este bloque la transicion a BORRADOR quedaria invisible en el
-        # Chatter/Actividad -- mismo motivo que ya tienen los bloques equivalentes de
-        # promueve_asignada/desasigna_a_borrador en update_solicitud.
+    elif anula_por_recotizacion:
+        # El paso a BORRADOR (rompe_congelamiento sin un estado explicito en el body: el caso tipico es la Calculadora
+        # mandando productos/total_cop) ya quedo en la Actividad, con su razon, en el commit de arriba. Aqui solo la
+        # sincronizacion de la SC, que no hace nada con una COT en Borrador (U15).
         try:
             _sincronizar_estado_solicitud_desde_cotizacion(cot, db, body.get("updated_by"))
         except Exception as exc:
             db.rollback()
             logger.error(f"Error al sincronizar Solicitud tras romper congelamiento de precio en cotizacion {cot.id}: {exc}", exc_info=True)
-        # H40: termina en la razon que escribio el asesor; extra_data sin la llave 'campo' (CambiosDeActividad no tacha).
-        razon = motivo_recotizacion if motivo_recotizacion.endswith((".", "!", "?")) else f"{motivo_recotizacion}."
-        _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
-             "Estado cambiado a Borrador (la cotización fue editada tras la confirmación del cliente; esa confirmación "
-             f"ya no es válida). Razón: {razon}",
-             old_estado=old_estado, new_estado="BORRADOR",
-             user_name=body.get("updated_by") or nombre_de_usuario(user),
-             extra_data={"motivo": motivo_recotizacion,
-                         "cambios": [{"etiqueta": "Cambió", "despues": ", ".join(cambios_congelados)},
-                                     {"etiqueta": "Razón", "despues": motivo_recotizacion}]})
     if fecha_vieja is not None and cot.fecha_entrega_estimada and cot.fecha_entrega_estimada.date() != fecha_vieja.date():
         # Final whole-branch review (hallazgo #2) -- ver el comentario equivalente en
         # update_solicitud para la explicacion completa (mismo patron, mismo bug, en
@@ -2536,10 +2561,10 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
              f"Fecha de entrega modificada: {fecha_vieja.strftime('%d/%m/%Y')} -> "
              f"{cot.fecha_entrega_estimada.strftime('%d/%m/%Y')} ({signo}{diff_dias} día{'s' if abs(diff_dias)!=1 else ''})",
              user_name=body.get("updated_by"))
-    if sale_de_gate2:
+    if sale_de_gate2 and not anula_por_recotizacion:
         # Ver el comentario junto a sale_de_gate2 arriba -- revoca cualquier token
         # pendiente y limpia la marca de procedencia, para que ninguno de los dos
-        # quede vivo y reutilizable fuera de este ciclo.
+        # quede vivo y reutilizable fuera de este ciclo. (Al anular por re-cotizar ya se hizo en el commit del estado.)
         from app.core.confirmation_tokens import revoke_pending_tokens
         revoke_pending_tokens(db, "COT", cot.id)
         cot.gate2_confirmed_at = None
