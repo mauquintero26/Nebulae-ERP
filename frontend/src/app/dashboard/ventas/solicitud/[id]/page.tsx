@@ -18,8 +18,9 @@ import {
 } from '../solicitud-client';
 import {
   infoEstadoSolicitud, puedeReiniciar, puedeCotizarSinConfirmacion, MOTIVO_SIN_CONFIRMACION_MIN, ESTADOS_SC_SIN_CONFIRMAR,
-  resumenCancelacion,
+  resumenCancelacion, MOTIVO_SIN_CONFIRMACION_MAX,
 } from '@/lib/estados-solicitud';
+import { largoTexto } from '@/lib/chatter';
 import { pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
 import { destinoVolver } from '@/lib/detalle-layout';
 import { comoUTC, diaLocalDeFecha, fechaEditadaParaGuardar } from '@/lib/hub-ventas';
@@ -87,9 +88,14 @@ const ACTIVITY_TYPE_ORDER = [
   'COTIZACION_CREADA', 'COTIZADA_SIN_CONFIRMACION', 'COTIZACION_RECHAZADA', 'CHATTER', 'CANCELLED', 'SENT_TO_TRASH', 'RESTORED',
 ];
 
-// U11: tope del motivo de 'Cotizar sin esperar confirmación' (el servidor exige lo mismo:
-// erp_ventas.MOTIVO_SIN_CONFIRMACION_MAX; el mínimo es MOTIVO_SIN_CONFIRMACION_MIN de la librería).
-const MOTIVO_SIN_CONFIRMACION_MAX = 500;
+// T8A ronda 1: tras un 400 o un 409 (la solicitud cambió en otra pantalla: ya tiene cotización, se canceló…) o un error
+// sin respuesta del servidor (la red se cortó y la operación pudo hacerse igual), la pantalla se recarga en silencio.
+function recargarTrasError(err: unknown): boolean {
+  const status = (err as { status?: unknown } | null | undefined)?.status;
+  return status === 400 || status === 409 || status === undefined || status === null;
+}
+
+const textoCotizacionCreada = (numero: unknown) => (numero ? `Cotización ${numero} creada` : 'Cotización creada');
 
 // U11 (T8A ronda 1): con el editor de productos abierto no se cotiza sin confirmación: el servidor cotiza los productos
 // GUARDADOS, no los que se están editando.
@@ -206,6 +212,14 @@ function SolicitudDetalleContent() {
 
   useEffect(() => { loadSolicitud(); }, [loadSolicitud]);
 
+  // T8A ronda 1: false cuando la pantalla se desmonta (el usuario salió de la solicitud). Un POST que vuelve después ya
+  // no lo lleva a otra pantalla: le avisa con un enlace.
+  const vivo = useRef(true);
+  useEffect(() => {
+    vivo.current = true;
+    return () => { vivo.current = false; };
+  }, []);
+
   // Resizable Right Pane Logic (mismo patron que cotizacion/[id]/page.tsx y venta/[id]/page.tsx)
   const [rightWidth, setRightWidth] = useState(400);
   const isDragging = useRef(false);
@@ -274,9 +288,11 @@ function SolicitudDetalleContent() {
     setSaving(true);
     try {
       await apiFetch(`/ventas/solicitudes/${solicitud.id}`, { method: 'PATCH', body: JSON.stringify({ estado: 'BORRADOR', updated_by: currentUser }) });
-      await loadSolicitud();
+      // T8A ronda 1: recarga silenciosa: sin el spinner de página no se desmontan el formulario ni el editor abiertos.
+      await loadSolicitud({ silencioso: true });
     } catch (err: any) {
       avisarError(err, 'No se pudo reiniciar la solicitud');
+      if (recargarTrasError(err)) void loadSolicitud({ silencioso: true });
     }
     setSaving(false);
   }
@@ -319,14 +335,20 @@ function SolicitudDetalleContent() {
         } catch {}
       }
       const cotId = dataObj?.cotizacion?.id || d?.cotizacion?.id;
-      if (cotId) {
+      const hrefCot = cotId ? `/dashboard/ventas/cotizacion/${cotId}?return_to=${encodeURIComponent(currentPath)}` : '';
+      if (!vivo.current) {
+        // T8A ronda 1: el usuario ya salió de la solicitud: no se lo lleva a la cotización; se le avisa con el enlace.
+        avisar(textoCotizacionCreada(cotNum), hrefCot ? { accion: { texto: 'Ver cotización', href: hrefCot } } : undefined);
+        return;
+      }
+      if (hrefCot) {
         // El siguiente paso es calcular precios y enviar la cotizacion al cliente: se
         // lleva al usuario directo a ella, con "Volver" hacia esta solicitud.
-        router.push(`/dashboard/ventas/cotizacion/${cotId}?return_to=${encodeURIComponent(currentPath)}`);
+        router.push(hrefCot);
         return;
       }
       await loadSolicitud();
-      avisar(`Cotización ${cotNum} creada`);
+      avisar(textoCotizacionCreada(cotNum));
     } catch (err: any) {
       avisarError(err, 'No se pudo crear la cotización');
     }
@@ -345,7 +367,8 @@ function SolicitudDetalleContent() {
   async function cotizarSinConfirmacion() {
     if (!solicitud) return;
     const motivo = motivoSinConf.trim();
-    if (motivo.length < MOTIVO_SIN_CONFIRMACION_MIN) {
+    // En puntos de código, como len() de Python en el servidor (T8A ronda 1).
+    if (largoTexto(motivo) < MOTIVO_SIN_CONFIRMACION_MIN) {
       setErrorSinConf(`El motivo debe tener al menos ${MOTIVO_SIN_CONFIRMACION_MIN} caracteres.`);
       return;
     }
@@ -353,16 +376,28 @@ function SolicitudDetalleContent() {
     setErrorSinConf('');
     try {
       const d = await apiFetch(`/ventas/solicitudes/${solicitud.id}/cotizar-sin-confirmacion`, { method: 'POST', body: JSON.stringify({ motivo }) });
-      const cotId = (d?.data ?? d)?.cotizacion?.id;
-      if (cotId) {
-        router.push(`/dashboard/ventas/cotizacion/${cotId}?return_to=${encodeURIComponent(currentPath)}`);
+      const cot = (d?.data ?? d)?.cotizacion;
+      const hrefCot = cot?.id ? `/dashboard/ventas/cotizacion/${cot.id}?return_to=${encodeURIComponent(currentPath)}` : '';
+      if (!vivo.current) {
+        // T8A ronda 1: el usuario ya salió de la solicitud: no se lo lleva a la cotización; se le avisa con el enlace.
+        avisar(textoCotizacionCreada(cot?.numero), hrefCot ? { accion: { texto: 'Ver cotización', href: hrefCot } } : undefined);
+        return;
+      }
+      if (hrefCot) {
+        router.push(hrefCot);
         return;
       }
       setShowCotizarSinConf(false);
       await loadSolicitud();
     } catch (err: any) {
+      if (!vivo.current) {
+        avisarError(err, 'No se pudo crear la cotización');
+        return;
+      }
       // 422 del motivo, 409 (ya confirmada o cancelada) o 400 (sin asesor, sin productos, con una cotización activa).
       setErrorSinConf(textoDeError(err));
+      // T8A ronda 1: con un 400/409 la solicitud cambió en otra parte y sin respuesta la cotización pudo crearse igual.
+      if (recargarTrasError(err)) void loadSolicitud({ silencioso: true });
     }
     setCotizandoSinConf(false);
   }
@@ -526,8 +561,8 @@ function SolicitudDetalleContent() {
   const puedeCotizarSinConf = puedeCotizarSinConfirmacion(solicitud, { cotizacionesActivas, pedidosVigentes, tieneProductos });
   // El cliente todavía no confirma la solicitud (Nueva, Asignada o Pendiente por confirmación).
   const scSinConfirmar = ESTADOS_SC_SIN_CONFIRMAR.includes(solicitud?.estado);
-  // Lo que cuenta el servidor para el mínimo del motivo (lo recorta antes de medirlo).
-  const largoMotivoSinConf = motivoSinConf.trim().length;
+  // Lo que cuenta el servidor para los límites del motivo: sin los espacios de los bordes y en puntos de código (len()).
+  const largoMotivoSinConf = largoTexto(motivoSinConf.trim());
 
   const asesoresElegibles = usuarios.filter(u => esAsesorElegible(u.role));
   const yoPuedoSerAsesor = me.id !== null && asesoresElegibles.some(u => u.id === me.id);
@@ -1194,7 +1229,7 @@ function SolicitudDetalleContent() {
                   ? `Mínimo ${MOTIVO_SIN_CONFIRMACION_MIN} caracteres (llevas ${largoMotivoSinConf}).`
                   : 'Lo ve tu equipo en la Actividad; el cliente no lo recibe.'}
               </span>
-              <span className="text-slate-400 tabular-nums shrink-0">{motivoSinConf.length}/{MOTIVO_SIN_CONFIRMACION_MAX}</span>
+              <span className="text-slate-400 tabular-nums shrink-0">{largoMotivoSinConf}/{MOTIVO_SIN_CONFIRMACION_MAX}</span>
             </div>
             {errorSinConf && <p role="alert" className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 mt-3">{errorSinConf}</p>}
           </div>

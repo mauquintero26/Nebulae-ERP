@@ -198,13 +198,15 @@ def test_paridad_pct_anticipo_de_modalidad_con_el_frontend():
 
 def test_paridad_reglas_de_estados_solicitud_con_el_frontend():
     """Los demas espejos de estados-solicitud.js: que estados cuentan como heredados (en los pasos valen Confirmada),
-    cuales estan sin confirmar y el minimo del motivo de /cotizar-sin-confirmacion."""
-    from app.api.v1.erp_ventas import MOTIVO_SIN_CONFIRMACION_MIN
+    cuales estan sin confirmar y el minimo y el maximo del motivo de /cotizar-sin-confirmacion (T8A ronda 1: el tope
+    que usa la ventana del detalle de la SC sale de la libreria, una sola fuente)."""
+    from app.api.v1.erp_ventas import MOTIVO_SIN_CONFIRMACION_MAX, MOTIVO_SIN_CONFIRMACION_MIN
     from app.core.textos_actividad import ETIQUETAS_ESTADO, ESTADOS_SC_HEREDADOS, PASOS_SC
     espejo = _node("estados-solicitud.js", """{
       pasoDe: Object.fromEntries(Object.keys(m.ESTADOS_SC).map(k => [k, m.pasoSolicitud(k)])),
       sinConfirmar: m.ESTADOS_SC_SIN_CONFIRMAR,
       motivoMin: m.MOTIVO_SIN_CONFIRMACION_MIN,
+      motivoMax: m.MOTIVO_SIN_CONFIRMACION_MAX ?? null,
     }""")
     ultimo = len(PASOS_SC) - 1
     # cada paso en su lugar; los heredados (y solo ellos, fuera de los pasos) en el ultimo; el resto sin pasos
@@ -215,6 +217,7 @@ def test_paridad_reglas_de_estados_solicitud_con_el_frontend():
     assert all(espejo["pasoDe"][e] == -1 for e in fuera)
     assert espejo["sinConfirmar"] == list(PASOS_SC[:-1])
     assert espejo["motivoMin"] == MOTIVO_SIN_CONFIRMACION_MIN
+    assert espejo["motivoMax"] == MOTIVO_SIN_CONFIRMACION_MAX
 
 
 # ─── 3-8) la SC no refleja a su COT ──────────────────────────────────────────────────────────────────────────

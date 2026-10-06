@@ -83,6 +83,12 @@ export const ESTADOS_SC_SIN_CONFIRMAR = congelar(['BORRADOR', 'ASIGNADA', 'PENDI
 export const MOTIVO_SIN_CONFIRMACION_MIN = 10;
 
 /**
+ * U11: máximo de caracteres del motivo (erp_ventas.MOTIVO_SIN_CONFIRMACION_MAX; backend/tests/test_estados_solicitud.py
+ * compara los dos). Los dos límites se miden sin los espacios de los bordes y en puntos de código, como len() de Python.
+ */
+export const MOTIVO_SIN_CONFIRMACION_MAX = 500;
+
+/**
  * Etiqueta y colores de un estado de solicitud. Una clave desconocida sale humanizada ('ALGO_NUEVO' -> 'Algo nuevo',
  * igual que etiqueta_estado del backend) y en gris: nunca el código crudo.
  * @param {any} e

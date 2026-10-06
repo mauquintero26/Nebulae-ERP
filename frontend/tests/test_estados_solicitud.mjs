@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict';
 import {
-  ESTADOS_SC, PASOS_SC, ESTADOS_SC_SIN_CONFIRMAR, MOTIVO_SIN_CONFIRMACION_MIN,
+  ESTADOS_SC, PASOS_SC, ESTADOS_SC_SIN_CONFIRMAR, MOTIVO_SIN_CONFIRMACION_MIN, MOTIVO_SIN_CONFIRMACION_MAX,
   infoEstadoSolicitud, pasoSolicitud, puedeReiniciar, puedeCotizarSinConfirmacion, resumenCancelacion,
   motivoDeCancelacion, TEXTO_PAPELERA_SIN_FECHA, ESTADOS_SC_HEREDADOS,
 } from '../src/lib/estados-solicitud.js';
@@ -142,6 +142,8 @@ console.log('--- TEST 7: puedeReiniciar ---');
 console.log('--- TEST 8: cotizar sin confirmación (U11) ---');
 {
   assert.equal(MOTIVO_SIN_CONFIRMACION_MIN, 10);
+  // T8A ronda 1: el tope del motivo sale de aquí (una sola fuente; paridad con erp_ventas en test_estados_solicitud.py)
+  assert.equal(MOTIVO_SIN_CONFIRMACION_MAX, 500);
   const base = { estado: 'ASIGNADA', advisor_user_id: 5, advisor_name: 'asesor@test',
     tipo_solicitud: 'Cotizacion de Producto', confirmacion_vigente: false };
   const ok = { cotizacionesActivas: [], pedidosVigentes: [], tieneProductos: true };
