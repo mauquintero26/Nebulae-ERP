@@ -18,9 +18,10 @@ import {
 } from '../solicitud-client';
 import {
   infoEstadoSolicitud, puedeReiniciar, puedeCotizarSinConfirmacion, MOTIVO_SIN_CONFIRMACION_MIN, ESTADOS_SC_SIN_CONFIRMAR,
-  resumenCancelacion, MOTIVO_SIN_CONFIRMACION_MAX,
+  resumenCancelacion, MOTIVO_SIN_CONFIRMACION_MAX, pasoSolicitud, PASOS_SC,
 } from '@/lib/estados-solicitud';
-import { largoTexto } from '@/lib/chatter';
+import { largoTexto, telUrl, mailtoUrl, asuntoDocumento } from '@/lib/chatter';
+import { formatoPct } from '@/lib/dinero-ventas';
 import { pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
 import { destinoVolver } from '@/lib/detalle-layout';
 import { comoUTC, diaLocalDeFecha, fechaEditadaParaGuardar } from '@/lib/hub-ventas';
@@ -68,7 +69,7 @@ const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
 const DEFAULT_ACTIVITY_STYLE = {icon: Activity, color: 'text-slate-500 bg-slate-50'};
 
 // Etiquetas legibles para el filtro por tipo del tab Actividad. Un tipo de accion
-// que no este listado aqui (futuro) igual se muestra, usando el valor crudo como label.
+// que no este listado aqui (futuro) igual se muestra, con el codigo humanizado como label (nunca el codigo crudo).
 const ACTIVITY_TYPE_LABELS: Record<string, string> = {
   ESTADO_CHANGED: 'Cambios de Estado',
   NOTE_ADDED: 'Notas',
@@ -569,8 +570,31 @@ function SolicitudDetalleContent() {
   const LINK_ACCION = 'flex items-center justify-center gap-2 rounded-xl font-bold px-6 py-3 text-sm text-white shadow-md';
   // H5/C19: el wa.me del cliente (null si el teléfono no sirve: entonces no se pinta el enlace).
   const whatsappCliente = waUrl(solicitud?.customer_phone);
+  // T8A ronda 1: Llamar y Correo con la librería del Chatter: el número normalizado (tel:+57…) y el correo y el asunto
+  // codificados (un dato del cliente no agrega destinatarios ni encabezados al mailto). Un dato incompleto o inválido no
+  // pinta su enlace.
+  const llamarCliente = telUrl(solicitud?.customer_phone);
+  const correoCliente = mailtoUrl(solicitud?.customer_email, asuntoDocumento('SC', solicitud?.numero), '');
+  // Sin ningún enlace de contacto: no hay datos, o los que hay no sirven (teléfono incompleto, correo inválido).
+  const sinDatosDeContacto = !solicitud?.customer_phone && !solicitud?.customer_email;
+  const textoSinContacto = sinDatosDeContacto
+    ? 'Sin teléfono ni correo registrados' : 'El teléfono o el correo registrados no son válidos';
   // R22: % de anticipo de la modalidad (crédito 0, 60/40 60, contado 100; la que no se reconoce, 60 como el backend).
   const pctAnticipo = pctAnticipoDeModalidad(solicitud?.modalidad_pago) ?? 60;
+  // T8A ronda 1: la cotización activa que ajustó el anticipo a mano (R3), si hay; la más reciente.
+  const cotAnticipoManual: any = [...cotizacionesActivas]
+    .filter((c: any) => c.anticipo_pct_manual !== null && c.anticipo_pct_manual !== undefined)
+    .sort((a: any, b: any) => (a.id || 0) - (b.id || 0)).pop() || null;
+  // U15 (T8A ronda 1): la ayuda del último paso según el contexto. En Confirmada (y en los heredados, que cuentan como
+  // ese paso) la de PASOS_SC dice que sigue la cotización aunque ya exista o la confirmación ya no valga. El documento
+  // donde sigue el avance: el pedido vigente más reciente o, sin pedido, la cotización activa más reciente.
+  const ultimoDocumento: any = [...(pedidosVigentes.length > 0 ? pedidosVigentes : cotizacionesActivas)]
+    .sort((a: any, b: any) => (a.id || 0) - (b.id || 0)).pop() || null;
+  const ayudaPasos = pasoSolicitud(solicitud?.estado) !== PASOS_SC.length - 1 ? undefined
+    : ultimoDocumento ? `El cliente confirmó. El avance sigue en ${ultimoDocumento.numero}.`
+    : solicitud?.estado === 'CONFIRMADA' && solicitud?.confirmacion_vigente === false
+      ? 'La confirmación del cliente ya no vale: reinicia la solicitud o cotízala con motivo.'
+      : undefined;
 
   function abrirEditorProductos() {
     setEditandoProductos(true);
@@ -794,7 +818,7 @@ function SolicitudDetalleContent() {
   const activityFilterOptions = [
     { key: 'all', label: 'Todos' },
     ...ACTIVITY_TYPE_ORDER.filter(t => actividades.some((a: any) => a.action === t)).map(t => ({ key: t, label: ACTIVITY_TYPE_LABELS[t] || t })),
-    ...Array.from(new Set(actividades.map((a: any) => a.action).filter((t: string) => t && !ACTIVITY_TYPE_ORDER.includes(t)))).map((t: any) => ({ key: t, label: t })),
+    ...Array.from(new Set(actividades.map((a: any) => a.action).filter((t: string) => t && !ACTIVITY_TYPE_ORDER.includes(t)))).map((t: any) => ({ key: t, label: humanizarCodigo(t) })),
   ];
   const actividadesFiltradas = [...actividades].reverse().filter((a: any) => activityFilter === 'all' || a.action === activityFilter);
 
@@ -946,6 +970,13 @@ function SolicitudDetalleContent() {
                     <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Anticipo</p><p className="font-black text-indigo-700">{pctAnticipo}%</p></div>
                     <div className="flex-1 bg-white rounded-lg p-2 text-center"><p className="text-xs text-slate-400">Saldo</p><p className="font-black text-slate-700">{100 - pctAnticipo}%</p></div>
                   </div>
+                  {/* T8A ronda 1: el remate de R3 (como el formulario de H10) y, si la cotización activa lo ajustó, a cuánto. */}
+                  <p className="text-xs text-indigo-800 mt-2">En la cotización se puede ajustar a mano con una nota.</p>
+                  {cotAnticipoManual && (
+                    <p className="text-xs font-bold text-indigo-800 mt-1">
+                      La cotización {cotAnticipoManual.numero} lo ajustó a {formatoPct(cotAnticipoManual.anticipo_pct_manual)}.
+                    </p>
+                  )}
                 </div>
               )}
               <div>
@@ -1020,7 +1051,7 @@ function SolicitudDetalleContent() {
               // N4: una SC cancelada solo vuelve por "Restaurar" en la Papelera (el PATCH a Borrador responde 409).
               <p className="text-xs text-slate-500">Esta solicitud está cancelada: para volver a trabajar en ella, restáurala desde la Papelera del listado de solicitudes.</p>
             ) : solicitud && (
-              <EstadoSolicitudPasos solicitud={solicitud} puedeReiniciar={puedeReiniciarSC} onReiniciar={reiniciarSolicitud} reiniciando={saving} />
+              <EstadoSolicitudPasos solicitud={solicitud} puedeReiniciar={puedeReiniciarSC} onReiniciar={reiniciarSolicitud} reiniciando={saving} ayuda={ayudaPasos} />
             )}
           </div>
         </div>
@@ -1051,17 +1082,17 @@ function SolicitudDetalleContent() {
                 {/* C19: enlaces directos (WhatsApp con waUrl); el registro de cada contacto se hace en el Chatter. */}
                 <div>
                   <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Contactar cliente</p>
-                  {solicitud?.customer_phone || solicitud?.customer_email ? (
+                  {whatsappCliente || llamarCliente || correoCliente ? (
                     <div className="grid grid-cols-3 gap-2">
                       {whatsappCliente && <a href={whatsappCliente} target="_blank" rel="noreferrer" className="flex items-center justify-center gap-1.5 py-2 bg-green-50 border border-green-200 text-green-700 rounded-xl font-bold text-xs hover:bg-green-100"><MessageCircle size={16} />WhatsApp</a>}
-                      {solicitud?.customer_phone && <a href={`tel:${solicitud.customer_phone}`} className="flex items-center justify-center gap-1.5 py-2 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl font-bold text-xs hover:bg-blue-100"><Phone size={16} />Llamar</a>}
-                      {solicitud?.customer_email && <a href={`mailto:${solicitud.customer_email}?subject=Solicitud ${solicitud.numero}`} className="flex items-center justify-center gap-1.5 py-2 bg-slate-50 border border-slate-200 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-100"><Mail size={16} />Correo</a>}
+                      {llamarCliente && <a href={llamarCliente} className="flex items-center justify-center gap-1.5 py-2 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl font-bold text-xs hover:bg-blue-100"><Phone size={16} />Llamar</a>}
+                      {correoCliente && <a href={correoCliente} className="flex items-center justify-center gap-1.5 py-2 bg-slate-50 border border-slate-200 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-100"><Mail size={16} />Correo</a>}
                     </div>
                   ) : (
                     <p className="text-xs text-slate-500">
                       {solicitud?.estado === 'CANCELADA'
-                        ? 'Sin teléfono ni correo registrados.'
-                        : 'Sin teléfono ni correo registrados: agrégalos con «Editar».'}
+                        ? `${textoSinContacto}.`
+                        : `${textoSinContacto}: ${sinDatosDeContacto ? 'agrégalos' : 'corrígelos'} con «Editar».`}
                     </p>
                   )}
                 </div>
@@ -1104,7 +1135,7 @@ function SolicitudDetalleContent() {
                           </div>
                           <div className="flex-1 bg-white border border-slate-200 rounded-xl p-3 shadow-sm min-w-0">
                             <div className="flex items-start justify-between gap-2 mb-1.5">
-                              <span className="font-bold text-slate-800 text-sm">{a.description || a.action}</span>
+                              <span className="font-bold text-slate-800 text-sm">{a.description || humanizarCodigo(a.action)}</span>
                               <span className="text-[10px] font-bold text-slate-400 whitespace-nowrap shrink-0">{fDate(a.created_at)} {fTime(a.created_at)}</span>
                             </div>
                             <CambiosDeActividad extra={a.extra_data} />

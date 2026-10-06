@@ -7,12 +7,17 @@ import { PASOS_SC, pasoSolicitud, infoEstadoSolicitud } from '@/lib/estados-soli
 // va resaltado y debajo se explica qué falta para avanzar (PASOS_SC de la librería: una sola fuente de nombres).
 // 'Reiniciar solicitud' solo sale si `puedeReiniciar`; la página confirma con confirmar() y hace el PATCH (R30).
 // La página no lo usa en Soporte Técnico (tiene su select) ni en Cancelada (se restaura desde la Papelera).
-export function EstadoSolicitudPasos({ solicitud, puedeReiniciar, onReiniciar, reiniciando = false }: {
+export function EstadoSolicitudPasos({ solicitud, puedeReiniciar, onReiniciar, reiniciando = false, ayuda }: {
   solicitud: { estado?: string | null };
   puedeReiniciar: boolean;
   onReiniciar: () => void;
   /** true mientras la página guarda el reinicio: el botón queda deshabilitado (sin doble clic). */
   reiniciando?: boolean;
+  /**
+   * T8A ronda 1: la ayuda del paso actual según el contexto (gana sobre la de PASOS_SC). La página la pasa en el último
+   * paso cuando el avance ya sigue en una cotización o un pedido, o cuando la confirmación del cliente ya no vale.
+   */
+  ayuda?: string;
 }) {
   // -1: un estado fuera de los pasos (ajeno): se muestra su etiqueta, sin marcar un paso falso.
   const paso = pasoSolicitud(solicitud?.estado);
@@ -49,7 +54,7 @@ export function EstadoSolicitudPasos({ solicitud, puedeReiniciar, onReiniciar, r
               })}
             </ol>
             <p className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
-              {PASOS_SC[paso].ayuda}
+              {ayuda || PASOS_SC[paso].ayuda}
             </p>
           </>
         ) : (
