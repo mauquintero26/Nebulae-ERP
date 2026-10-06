@@ -589,64 +589,6 @@ export function IAPanelSC({sc,apiBase}:{sc:any;apiBase:string}) {
   );
 }
 
-// â”€â”€ Chatter Tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-export function ChatterTab({sc,currentUser}:{sc:any;currentUser:string}) {
-  const [messages,setMessages]=useState<any[]>([]);
-  const [input,setInput]=useState('');
-  const [sending,setSending]=useState(false);
-  const phone=sc?.customer_phone||'';
-  async function send() {
-    if(!input.trim()||!sc) return;
-    setSending(true);
-    const msg={text:input,from:'asesor',time:new Date().toISOString()};
-    setMessages(prev=>[...prev,msg]);
-    try{
-      await apiFetch(`/ventas/solicitudes/${sc.id}/actividad`,{method:'POST',body:JSON.stringify({action:'CHATTER',description:input,user_name:currentUser})});
-    }catch{}
-    setInput('');setSending(false);
-  }
-  function openWA() {
-    if(!phone) return;
-    const text=encodeURIComponent(input||`Hola, te contactamos sobre tu solicitud ${sc?.numero}`);
-    window.open(`https://wa.me/57${phone.replace(/\D/g,'')}?text=${text}`,'_blank');
-    if(input){send();}
-  }
-  return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {sc?.actividades?.filter((a:any)=>a.action==='CHATTER').map((a:any)=>(
-          <div key={a.id} className="bg-slate-100 rounded-xl p-3 max-w-[85%]">
-            <p className="text-sm text-slate-800">{a.description}</p>
-            <p className="text-xs text-slate-400 mt-1">{a.user_name} - {fDate(a.created_at)} {fTime(a.created_at)}</p>
-          </div>
-        ))}
-        {messages.filter(m=>m.from==='asesor').map((m:any,i:number)=>(
-          <div key={`local-${i}`} className="bg-indigo-100 rounded-xl p-3 max-w-[85%] ml-auto">
-            <p className="text-sm text-indigo-900">{m.text}</p>
-            <p className="text-xs text-indigo-400 mt-1">{fTime(m.time)}</p>
-          </div>
-        ))}
-        {!sc?.actividades?.some((a:any)=>a.action==='CHATTER')&&messages.length===0&&(
-          <p className="text-xs text-slate-400 italic text-center py-8">Sin mensajes. Usa el campo de abajo para chatear con el cliente.</p>
-        )}
-      </div>
-      <div className="border-t border-slate-100 p-3">
-        <div className="flex gap-2 mb-2">
-          <textarea value={input} onChange={e=>setInput(e.target.value)} rows={2} placeholder="Escribe un mensaje..." className="flex-1 border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-200 outline-none"/>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={openWA} className="flex-1 bg-green-500 hover:bg-green-600 text-white py-2 rounded-xl font-bold text-xs flex items-center justify-center gap-1 disabled:opacity-50" disabled={!phone}>
-            <MessageCircle size={13}/>WhatsApp
-          </button>
-          <button onClick={send} disabled={!input.trim()||sending} className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-xl font-bold text-xs flex items-center justify-center gap-1 disabled:opacity-50">
-            {sending?<RefreshCw size={12} className="animate-spin"/>:<Send size={12}/>}Registrar
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // â”€â”€ Main â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // U18+H31 (C1 h): el motivo de una cancelación, o '' si no se registró (quien lo muestra pone 'Sin motivo registrado'):

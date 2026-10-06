@@ -13,14 +13,15 @@ import { apiFetch } from '@/lib/api';
 import { textoDeError } from '@/lib/avisos';
 import { Button, Modal, useAvisos } from '@/components/ui';
 import {
-  EstadoBadge, TipoBadge, ChatterTab, IAPanelSC,
+  EstadoBadge, TipoBadge, IAPanelSC,
   TIPOS_SC, MODALIDADES_PAGO, fDate, fTime,
 } from '../solicitud-client';
+import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
 import {
   infoEstadoSolicitud, puedeReiniciar, puedeCotizarSinConfirmacion, MOTIVO_SIN_CONFIRMACION_MIN, ESTADOS_SC_SIN_CONFIRMAR,
   resumenCancelacion, MOTIVO_SIN_CONFIRMACION_MAX, pasoSolicitud, PASOS_SC,
 } from '@/lib/estados-solicitud';
-import { largoTexto, telUrl, mailtoUrl, asuntoDocumento } from '@/lib/chatter';
+import { largoTexto, telUrl, mailtoUrl, asuntoDocumento, agregarActividad, esEntradaChatter } from '@/lib/chatter';
 import { formatoPct } from '@/lib/dinero-ventas';
 import { pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
 import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
@@ -1268,6 +1269,8 @@ function SolicitudDetalleContent() {
                             <Icon size={14} />
                           </div>
                           <div className="flex-1 bg-white border border-slate-200 rounded-xl p-3 shadow-sm min-w-0">
+                            {/* U6+H22: una nota del Chatter lleva su tipo encima (Nota interna, Llamada…, «Nota externa · medio»). */}
+                            {esEntradaChatter(a) && <div className="mb-1.5"><EtiquetaChatter actividad={a} /></div>}
                             <div className="flex items-start justify-between gap-2 mb-1.5">
                               <span className="font-bold text-slate-800 text-sm">{a.description || humanizarCodigo(a.action)}</span>
                               <span className="text-[10px] font-bold text-slate-400 whitespace-nowrap shrink-0">{fDate(a.created_at)} {fTime(a.created_at)}</span>
@@ -1294,7 +1297,13 @@ function SolicitudDetalleContent() {
               </>
             )}
 
-            {panelTab === 'chatter' && <ChatterTab sc={solicitud} currentUser={currentUser} />}
+            {/* U6+H22 (R1): el Chatter compartido (nota interna, llamada, WhatsApp, correo y Nota externa con su medio). La
+                nota guardada entra de una vez aquí y en la Actividad, sin recargar la página; si el servidor no devuelve
+                el renglón, recarga silenciosa. */}
+            {panelTab === 'chatter' && (
+              <ChatterDocumento tipoDoc="SC" doc={solicitud}
+                onRegistrado={(log) => log ? setSolicitud((p: Record<string, unknown>) => agregarActividad(p, log, 'SC')) : void loadSolicitud({ silencioso: true })} />
+            )}
 
             {panelTab === 'ia' && <IAPanelSC sc={solicitud} apiBase={process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1'} />}
           </div>
