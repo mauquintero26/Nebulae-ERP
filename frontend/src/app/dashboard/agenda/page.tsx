@@ -15,6 +15,8 @@ import {
   MessageCircle, Clock, AlertTriangle, ChevronRight, FileText,
   Truck, Building2, Globe, Edit2, ShieldAlert
 } from 'lucide-react';
+import { CambiosDeActividad } from '@/app/dashboard/ventas/flujo';
+import { itemDeTimelineCliente } from '@/lib/datos-cliente';
 
 function timeAgo(isoString: string) {
   if (!isoString) return 'Hoy';
@@ -55,6 +57,7 @@ const TIMELINE_DOT_COLOR: Record<string, string> = {
   payment: 'bg-emerald-500',
   delivery: 'bg-teal-500',
   calendar_event: 'bg-purple-500',
+  customer_update: 'bg-purple-500',
   created: 'bg-slate-400',
 };
 
@@ -1544,18 +1547,26 @@ export default function AgendaPage() {
               {(customer360?.timeline || []).length === 0 ? (
                 <div className="py-8 text-center text-xs text-slate-400">Sin eventos cronológicos aún</div>
               ) : (
-                (customer360?.timeline || []).map((t: any, idx: number) => (
-                  <div key={idx} className="relative">
-                    <span className={`absolute -left-[31px] top-1 w-3.5 h-3.5 rounded-full border-2 border-white shadow-sm ${TIMELINE_DOT_COLOR[t.event_type] || 'bg-slate-400'}`} />
-                    <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 hover:bg-white transition-colors">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs font-bold text-slate-800">{t.title}</span>
-                        <span className="text-[10px] text-slate-400">{timeAgo(t.date)}</span>
+                (customer360?.timeline || []).map((t: any, idx: number) => {
+                  // T10: el perfil 360 manda type, status_label y created_at (UTC); itemDeTimelineCliente lee esos nombres.
+                  const it = itemDeTimelineCliente(t);
+                  return (
+                    <div key={idx} className="relative">
+                      <span className={`absolute -left-[31px] top-1 w-3.5 h-3.5 rounded-full border-2 border-white shadow-sm ${TIMELINE_DOT_COLOR[it.tipo] || 'bg-slate-400'}`} />
+                      <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 hover:bg-white transition-colors">
+                        <div className="flex items-center justify-between gap-3 mb-1">
+                          <span className="text-xs font-bold text-slate-800">{it.titulo}</span>
+                          {it.fecha && <span className="text-[10px] text-slate-400 shrink-0">{timeAgo(it.fecha)}</span>}
+                        </div>
+                        <p className="text-xs text-slate-600">{t.description}</p>
+                        {it.cambios.length > 0 && (
+                          <div className="mt-2"><CambiosDeActividad extra={{ cambios: it.cambios }} /></div>
+                        )}
+                        {it.autor && <p className="text-[11px] text-slate-400 mt-1">por {it.autor}</p>}
                       </div>
-                      <p className="text-xs text-slate-600">{t.description}</p>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>

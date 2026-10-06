@@ -8,10 +8,12 @@
  *
  * T8B ronda 2: también el formulario «Editar» del detalle de la SC (formularioDeEdicion) y qué campos de la SC cambió
  * (camposEditadosDeSolicitud), para que solo esos viajen en el PATCH.
+ *
+ * T10: también el renglón del «Timeline Unificado» de la Agenda, donde se ve la corrección del cliente (itemDeTimelineCliente).
  */
 
-import { tiene } from './estados-pedido.js';
-import { diaLocalDeFecha } from './hub-ventas.js';
+import { tiene, humanizarCodigo } from './estados-pedido.js';
+import { diaLocalDeFecha, comoUTC } from './hub-ventas.js';
 
 /**
  * Los campos, en el orden del formulario. `max` = largo máximo (sin los espacios de los bordes); `soloConFicha` = solo
@@ -200,4 +202,42 @@ export function camposEditadosDeSolicitud(base, form) {
     if (tiene(form, clave) && !igual(inicial[clave], form[clave])) cambios[clave] = form[clave];
   }
   return cambios;
+}
+
+/** El primer valor que es un texto con algo más que espacios (recortado); null si ninguno lo es. */
+function primerTexto(...valores) {
+  for (const v of valores) {
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return null;
+}
+
+/**
+ * T10 (H21, punto 7): lo que pinta la pestaña «Timeline Unificado» de la Agenda por cada renglón de `timeline` del perfil
+ * 360 (GET /crm/customers/{id}/profile-360, crm.get_customer_360_profile). El servidor manda `type`, `status_label` y
+ * `created_at`; la pantalla leía `event_type`, `title` y `date` (nombres que el servidor no manda), así que todas las
+ * tarjetas salían sin título ni fecha. Se leen los nombres del servidor y, de respaldo, los viejos; un texto vacío cuenta
+ * como ausente.
+ * - tipo: type ?? event_type ('' si no hay); pinta el punto de color.
+ * - titulo: status_label ?? title; sin ninguno, el tipo humanizado (nunca vacío ni el código crudo) y, sin tipo, 'Evento'.
+ * - fecha: created_at ?? date leída como UTC (comoUTC: el API manda UTC sin zona; el renglón de la corrección ya trae 'Z').
+ *   null si no hay o no es una fecha: «Cliente Creado» no tiene fecha y la pantalla no inventa un «Hoy».
+ * - autor: user_name; solo lo traen las correcciones del cliente (customer_update).
+ * - cambios: el antes → después de la corrección ({campo, etiqueta, antes, despues}, lo que pinta CambiosDeActividad). Es
+ *   [] si no hay: BODEGA y COMPRAS reciben la lista vacía (el antes → después trae el contacto), así que no se pinta
+ *   ningún dato de contacto.
+ * @param {any} t un renglón de customer360.timeline
+ * @returns {{ tipo: string, titulo: string, fecha: string | null, autor: string | null, cambios: any[] }}
+ */
+export function itemDeTimelineCliente(t) {
+  const tipo = primerTexto(t?.type, t?.event_type) ?? '';
+  const crudo = primerTexto(t?.created_at, t?.date);
+  const fecha = crudo === null ? null : comoUTC(crudo);
+  return {
+    tipo,
+    titulo: primerTexto(t?.status_label, t?.title) ?? (humanizarCodigo(tipo) || 'Evento'),
+    fecha: fecha !== null && !Number.isNaN(Date.parse(fecha)) ? fecha : null,
+    autor: primerTexto(t?.user_name),
+    cambios: Array.isArray(t?.cambios) ? t.cambios : [],
+  };
 }

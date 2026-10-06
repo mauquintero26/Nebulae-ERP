@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import {
   CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto, formularioDeEdicion, camposEditadosDeSolicitud,
+  itemDeTimelineCliente,
 } from '../src/lib/datos-cliente.js';
 
 console.log('--- TEST 1: CAMPOS_CONTACTO (orden del formulario, límites del backend) ---');
@@ -218,6 +219,94 @@ console.log('--- TEST 9 (T8B r2, punto 1): formularioDeEdicion y camposEditadosD
   const { notas: _sinNotas, ...formSinNotas } = form;
   assert.deepEqual(camposEditadosDeSolicitud(base, formSinNotas), {});
   assert.deepEqual(camposEditadosDeSolicitud(null, null), {});
+}
+
+console.log('--- TEST 10 (T10, H21 punto 7): itemDeTimelineCliente — el Timeline Unificado de la Agenda con los nombres reales del 360 ---');
+{
+  // Renglones tal como los arma get_customer_360_profile (crm.py): type, status_label y created_at. Los de siempre llevan
+  // created_at sin 'Z' (UTC sin zona); el de la corrección (customer_update, T5) ya lleva 'Z'.
+  const SOLICITUD = {
+    type: 'customer_request', id: 12, numero: 'SC-20260800', status: 'CONFIRMADA', status_label: 'Solicitud SC-20260800',
+    estado_label: 'CONFIRMADA', color: 'indigo', created_at: '2026-10-04T14:03:11.123456',
+    description: 'Solicitud de cliente SC-20260800 (CONFIRMADA)',
+  };
+  const CORRECCION = {
+    type: 'customer_update', id: 41, status: 'UPDATED', status_label: 'Datos del cliente actualizados', color: 'purple',
+    created_at: '2026-10-04T14:05:00.654321Z',
+    description: 'Datos de contacto corregidos desde la solicitud SC-20260800: Teléfono, Correo',
+    user_name: 'asesor@nebulae.co',
+    cambios: [
+      { campo: 'phone', etiqueta: 'Teléfono', antes: '3000000000', despues: '3001112233' },
+      { campo: 'email', etiqueta: 'Correo', antes: 'ana.vieja@test.com', despues: 'ana.nueva@test.com' },
+    ],
+  };
+  const CREADO = {
+    type: 'created', id: 3, status: 'CREATED', status_label: 'Cliente Creado', color: 'purple', created_at: null,
+    total: 0, lines_count: 0, description: 'Ficha del cliente registrada en el sistema.',
+  };
+
+  // Lee type, status_label y created_at (antes la pantalla leía event_type, title y date, que ya no llegan).
+  const s = itemDeTimelineCliente(SOLICITUD);
+  assert.equal(s.tipo, 'customer_request');
+  assert.equal(s.titulo, 'Solicitud SC-20260800');
+  assert.deepEqual([s.autor, s.cambios], [null, []], 'un renglón normal no trae autor ni cambios');
+  // La fecha sin zona se lee como UTC (comoUTC), no como hora local corrida 5 h en Colombia.
+  assert.equal(s.fecha, '2026-10-04T14:03:11.123456Z');
+  assert.equal(new Date(s.fecha).toISOString(), '2026-10-04T14:03:11.123Z');
+
+  // La corrección del cliente: título del backend, fecha con 'Z' intacta, autor y el detalle antes → después.
+  const c = itemDeTimelineCliente(CORRECCION);
+  assert.equal(c.tipo, 'customer_update');
+  assert.equal(c.titulo, 'Datos del cliente actualizados');
+  assert.equal(c.fecha, '2026-10-04T14:05:00.654321Z');
+  assert.equal(c.autor, 'asesor@nebulae.co');
+  assert.deepEqual(c.cambios, CORRECCION.cambios);
+
+  // BODEGA y COMPRAS reciben cambios = [] (el antes → después trae el contacto): no hay nada de contacto que pintar;
+  // el autor y la descripción (solo etiquetas y número de la SC) siguen ahí.
+  const sinContacto = itemDeTimelineCliente({ ...CORRECCION, cambios: [] });
+  assert.deepEqual(sinContacto.cambios, []);
+  assert.equal(sinContacto.autor, 'asesor@nebulae.co');
+  // cambios ausente o que no es una lista → [] (nunca rompe el renglón).
+  for (const raro of [undefined, null, 'x', 5, { campo: 'phone' }]) {
+    assert.deepEqual(itemDeTimelineCliente({ ...CORRECCION, cambios: raro }).cambios, []);
+  }
+
+  // H14: «Cliente Creado» no tiene fecha; no se inventa una (antes salía «Hoy»).
+  const creado = itemDeTimelineCliente(CREADO);
+  assert.equal(creado.titulo, 'Cliente Creado');
+  assert.equal(creado.fecha, null);
+  for (const vacio of ['', '   ', undefined]) {
+    assert.equal(itemDeTimelineCliente({ ...CREADO, created_at: vacio }).fecha, null);
+  }
+  // Un texto que no es una fecha tampoco sale como «Invalid Date».
+  assert.equal(itemDeTimelineCliente({ ...SOLICITUD, created_at: 'no es fecha' }).fecha, null);
+  // Una fecha de calendario (sin hora) o con zona se deja igual.
+  assert.equal(itemDeTimelineCliente({ ...SOLICITUD, created_at: '2026-10-04' }).fecha, '2026-10-04');
+  assert.equal(itemDeTimelineCliente({ ...SOLICITUD, created_at: '2026-10-04T09:00:00-05:00' }).fecha, '2026-10-04T09:00:00-05:00');
+
+  // Los nombres viejos siguen valiendo de respaldo (event_type, title, date)…
+  const viejo = itemDeTimelineCliente({ event_type: 'calendar_event', title: 'Reunión de seguimiento', date: '2026-10-03 09:30:00' });
+  assert.deepEqual([viejo.tipo, viejo.titulo, viejo.fecha], ['calendar_event', 'Reunión de seguimiento', '2026-10-03T09:30:00Z']);
+  // …pero los del backend ganan cuando vienen los dos.
+  const ambos = itemDeTimelineCliente({
+    type: 'payment', event_type: 'otro', status_label: 'Pago ANTICIPO', title: 'viejo',
+    created_at: '2026-10-04T10:00:00', date: '2026-01-01T00:00:00',
+  });
+  assert.deepEqual([ambos.tipo, ambos.titulo, ambos.fecha], ['payment', 'Pago ANTICIPO', '2026-10-04T10:00:00Z']);
+  // Un texto vacío o solo espacios cuenta como ausente: pasa al siguiente nombre.
+  assert.equal(itemDeTimelineCliente({ type: 'quotation', status_label: '  ', title: 'Cotización COT-1' }).titulo, 'Cotización COT-1');
+  assert.equal(itemDeTimelineCliente({ type: 'quotation', status_label: 'Cotización COT-2', user_name: '   ' }).autor, null);
+
+  // Sin título de ningún tipo: el tipo humanizado (nunca el código crudo ni un título vacío); sin tipo, «Evento».
+  assert.equal(itemDeTimelineCliente({ type: 'calendar_event', status_label: null }).titulo, 'Calendar event');
+  assert.equal(itemDeTimelineCliente({ type: 'delivery' }).titulo, 'Delivery');
+  assert.equal(itemDeTimelineCliente({ description: 'algo' }).titulo, 'Evento');
+  assert.equal(itemDeTimelineCliente({}).titulo, 'Evento');
+  // Una entrada que no es un objeto no rompe la pantalla.
+  for (const nada of [null, undefined, 'texto', 7]) {
+    assert.deepEqual(itemDeTimelineCliente(nada), { tipo: '', titulo: 'Evento', fecha: null, autor: null, cambios: [] });
+  }
 }
 
 console.log('OK test_datos_cliente');
