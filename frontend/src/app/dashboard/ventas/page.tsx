@@ -13,7 +13,7 @@ import {
 import { useRouter } from 'next/navigation';
 import { apiFetch, API_URL } from '@/lib/api';
 import { coincideProducto } from '@/lib/busqueda';
-import { SubNav, PageHeader, Badge, Drawer, Modal, Button, useAvisos } from '@/components/ui';
+import { SubNav, PageHeader, Badge, Drawer, Modal, Button, useAvisos, ContenidoEnlace } from '@/components/ui';
 import { textoDeError } from '@/lib/avisos';
 import { VEN_NAV } from './ven-nav';
 import { CambiosDeActividad, EnlaceConfirmacionModal, getUsuarioActual } from './flujo';
@@ -794,9 +794,11 @@ export default function VentasHub() {
           subtitle="Control Unificado del Ciclo Comercial: Solicitud (SC) → Cotización (COT) → Pedido (PVEN) → Facturación y Despacho"
           actions={(
             <div className="flex items-center gap-2.5">
-              <Link href="/dashboard/ventas/solicitud/nueva"
+              {/* H9: directo a la lista con ?new=1 (abre el formulario y limpia la URL, U9), sin pasar por
+                  /solicitud/nueva; «Abriendo…» apenas se hace clic. */}
+              <Link href="/dashboard/ventas/solicitud?new=1" aria-label="Nueva solicitud"
                 className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all">
-                <Plus size={15}/> Nueva Solicitud
+                <ContenidoEnlace icon={Plus}>Nueva Solicitud</ContenidoEnlace>
               </Link>
               <button onClick={loadData}
                 className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-semibold text-xs shadow-xs transition-colors">

@@ -1,9 +1,10 @@
 ﻿import { Suspense } from 'react';
 import SolicitudClient from './solicitud-client';
+import { CargandoSolicitudes } from './CargandoSolicitudes';
 
 export default function Page() {
   return (
-    <Suspense fallback={<div className="flex items-center justify-center h-screen text-slate-500">Cargando...</div>}>
+    <Suspense fallback={<CargandoSolicitudes />}>
       <SolicitudClient />
     </Suspense>
   );

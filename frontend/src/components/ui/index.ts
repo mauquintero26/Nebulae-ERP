@@ -9,3 +9,4 @@ export * from './Button';
 export * from './EmptyState';
 export * from './Toast';
 export * from './Avisos';
+export * from './ContenidoEnlace';
