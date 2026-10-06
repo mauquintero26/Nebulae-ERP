@@ -103,10 +103,16 @@ const textoCotizacionCreada = (numero: unknown) => (numero ? `Cotización ${nume
 // cotiza los productos GUARDADOS, no los que se están editando. El mismo porqué en todos los botones de cotizar.
 const GUARDA_PRODUCTOS_ANTES = 'Guarda o cancela la edición de productos antes de cotizar';
 
+type SolicitudEditable = {
+  advisor_name?: string | null; advisor_user_id?: number | string | null; tipo_solicitud?: string | null;
+  modalidad_pago?: string | null; notas?: string | null; fecha_vencimiento?: string | null;
+  customer_phone?: string | null; customer_email?: string | null; customer_address?: string | null; customer_city?: string | null;
+};
+
 // Lo que muestra «Editar»: los datos de la solicitud y, H21, el contacto del cliente (la ciudad viene de su ficha).
 // fecha_vencimiento llega en UTC sin zona (utcnow + días): el campo muestra el día en hora de Colombia, el mismo que la
 // grilla y la lista (con split('T') una SC creada de 7 pm a medianoche salía al día siguiente).
-function formularioDeEdicion(d: any) {
+function formularioDeEdicion(d: SolicitudEditable) {
   return {
     advisor_name: d.advisor_name || '',
     advisor_user_id: d.advisor_user_id || '',
@@ -305,7 +311,7 @@ function SolicitudDetalleContent() {
     const errorContacto = validarContacto(cambios);
     if (errorContacto) { setEditError(errorContacto); return; }
     setSavingEdit(true);
-    let correccion: any = null;
+    let correccion: { data?: object; sin_cambios?: boolean } | null = null;
     if (Object.keys(cambios).length > 0) {
       try {
         // R9: sin updated_by: el autor lo pone el servidor con la sesión.
@@ -316,7 +322,8 @@ function SolicitudDetalleContent() {
         return;
       }
       // Lo corregido se ve de una vez (y si el paso 2 falla, reintentar ya no lo reenvía).
-      if (correccion?.data) setSolicitud((prev: any) => ({ ...prev, ...correccion.data }));
+      const datos = correccion?.data;
+      if (datos) setSolicitud((prev: Record<string, unknown>) => ({ ...prev, ...datos }));
     }
     const contactoGuardado = !!correccion && correccion.sin_cambios !== true;
     const body: Record<string, unknown> = {
@@ -994,7 +1001,7 @@ function SolicitudDetalleContent() {
                       <label htmlFor={`contacto-${c.clave}`} className="text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider block">{c.etiqueta}</label>
                       <input
                         id={`contacto-${c.clave}`} type={TIPO_CAMPO_CONTACTO[c.clave] || 'text'} value={editForm[c.clave] ?? ''} maxLength={c.max}
-                        onChange={e => { const v = e.target.value; setEditForm((ef: any) => ({ ...ef, [c.clave]: v })); setEditError(''); }}
+                        onChange={e => { const v = e.target.value; setEditForm((ef: Record<string, unknown>) => ({ ...ef, [c.clave]: v })); setEditError(''); }}
                         className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none"
                       />
                     </div>
