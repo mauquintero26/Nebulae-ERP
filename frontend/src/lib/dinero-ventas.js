@@ -98,6 +98,34 @@ export function resumenAnticipoCotizacion(cot) {
   };
 }
 
+const NOTA_LINEAS_SUMAN = 'El anticipo de cada producto suma el anticipo total.';
+const NOTA_LINEAS_SIN_PRECIO = 'Los productos no tienen precio por línea: el anticipo se calcula sobre el total.';
+const NOTA_LINEAS_NO_CUADRAN = 'El anticipo de los productos no suma el anticipo total: vale el anticipo total.';
+
+/**
+ * U19+U21 (C10; ruling B2-T9A-2): la nota de TOTALES sobre el anticipo de cada producto (`anticipo_por_linea` del GET,
+ * lista paralela a `productos`). null si el GET no trae la lista o viene vacia (no se muestra nada).
+ * - {cuadra: true}: las lineas (al peso) suman exactamente el anticipo de TOTALES (`anticipo.requerido`): 'El anticipo
+ *   de cada producto suma el anticipo total.'
+ * - {cuadra: false}, un aviso en su lugar:
+ *   · ya convertida y el pedido vigente tiene OTRO total (se re-cotizo sin pasar los precios al pedido): las lineas
+ *     reparten el anticipo DEL PEDIDO (C10) y su % ya no es el de cada producto, aunque la suma cuadre;
+ *   · las lineas suman 0 con un anticipo (lineas sin valor: el servidor les da ceros);
+ *   · no suman por otra causa.
+ * `anticipo` es el resumenAnticipoCotizacion(cot) que ya pinta TOTALES; si no se pasa, se calcula.
+ * @returns {{cuadra: boolean, texto: string} | null}
+ */
+export function notaAnticipoPorLinea(cot, anticipo = resumenAnticipoCotizacion(cot)) {
+  const lineas = cot?.anticipo_por_linea;
+  if (!Array.isArray(lineas) || lineas.length === 0) return null;
+  if (anticipo.convertida && redondearPeso(anticipo.pedido?.total_cop) !== redondearPeso(cot?.total_cop)) {
+    return { cuadra: false, texto: `El pedido ${anticipo.pedido?.numero || ''} tiene otro total: el anticipo es el del pedido.` };
+  }
+  const suma = lineas.reduce((s, a) => s + redondearPeso(a), 0);
+  if (suma === anticipo.requerido) return { cuadra: true, texto: NOTA_LINEAS_SUMAN };
+  return { cuadra: false, texto: suma === 0 ? NOTA_LINEAS_SIN_PRECIO : NOTA_LINEAS_NO_CUADRAN };
+}
+
 const MENSAJE_PCT_MANUAL = 'El anticipo manual debe ser un porcentaje entre 0% y 100%.';
 const MENSAJE_NOTA_MANUAL = 'Escribe una nota de al menos 5 caracteres que explique el anticipo manual.';
 

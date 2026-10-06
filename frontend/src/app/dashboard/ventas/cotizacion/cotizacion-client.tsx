@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useId } from 'react';
 import Link from 'next/link';
 import { useSearchParams, useRouter } from 'next/navigation';
 import {
   FileText, CheckCircle2, DollarSign, Activity,
-  Search, X, RefreshCw, AlertCircle, MoreVertical, Plus,
+  Search, X, RefreshCw, AlertCircle, AlertTriangle, MoreVertical, Plus,
   Phone, Mail, ShieldAlert,
   Calculator, Send, Trash2, Save, ArrowRight,
   MessageCircle, RotateCcw
@@ -15,6 +15,7 @@ import { apiFetch, API_URL } from '@/lib/api';
 import { computeMarginPrice, MARGIN_PCT_CAP } from '@/lib/pricing';
 import { formatoPesos } from '@/lib/pesos';
 import { humanizarCodigo } from '@/lib/estados-pedido';
+import { largoTexto } from '@/lib/chatter';
 import {
   METODOS_PAGO_ANTICIPO, formatoPct, porcentajeDePesos, hoyLocal, origenAnticipo, cuentaVerificacion,
   evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo, resumenAnticipoCotizacion, montoDesdeTexto,
@@ -167,9 +168,44 @@ function ProductoAutocomplete({
   );
 }
 
+// H40: lo que trae el 409 ANULA_CONFIRMACION de PATCH /ventas/cotizaciones/{id} (T4) en err.detail.
+export type AnulacionConfirmacion = { codigo?: string; estado?: string; cambios?: string[]; mensaje?: string };
+// H40 (R7): lo que la calculadora agrega al payload para guardar anulando la confirmación del cliente. La razón va de 5
+// a 500 caracteres (medidos como len() de Python, en puntos de código) y queda en la Actividad de la cotización.
+type ExtraGuardado = { anular_confirmacion?: boolean; motivo_recotizacion?: string };
+const RAZON_RECOTIZAR_MIN = 5;
+const RAZON_RECOTIZAR_MAX = 500;
+
+// H40: el aviso ámbar con que abre la calculadora de una cotización que el cliente ya confirmó o que espera su
+// confirmación. 'figura confirmada' (ruling T9A-6): CONFIRMADA sin la confirmación del cliente vigente ('reabrir').
+const AVISO_CALC_CONFIRMADA = 'El cliente ya confirmó esta cotización. Cambiar productos, cantidades, precios, descuento, TRM o la fecha de entrega anula su confirmación y habrá que enviársela de nuevo. Cambiar solo las notas no la anula.';
+const AVISO_CALC_PENDIENTE = 'Esta cotización está esperando la confirmación del cliente. Cambiar productos, cantidades, precios, descuento, TRM o la fecha de entrega hace que el enlace que tiene el cliente deje de servir y habrá que enviársela de nuevo. Cambiar solo las notas no lo afecta.';
+const AVISO_CALC_FIGURA_CONFIRMADA = 'Esta cotización figura como confirmada: cambiar precios, productos, cantidades, descuento, TRM o la fecha de entrega la devuelve a Borrador y habrá que enviársela de nuevo al cliente. Cambiar solo las notas no la cambia.';
+
 export function CalculadorModal({
-  cot, onSave, onClose
-}: { cot: any; onSave: (data: any) => void; onClose: () => void }) {
+  cot, onSave, onClose, estadoConfirmacion = null, sinConfirmacionVigente = false, anulacion = null,
+  onDescartarAnulacion, saving = false,
+}: {
+  cot: any; onSave: (data: any) => void; onClose: () => void;
+  /** H40: la cotización CONFIRMADA (sin pedido vigente) o PENDIENTE_CONFIRMACION: aviso ámbar al abrir. */
+  estadoConfirmacion?: 'CONFIRMADA' | 'PENDIENTE_CONFIRMACION' | null;
+  /** H40 (ruling T9A-6): CONFIRMADA pero sin la confirmación del cliente vigente (situacion.paso 'reabrir'). */
+  sinConfirmacionVigente?: boolean;
+  /** H40: el 409 ANULA_CONFIRMACION recibido: el pie cambia por el panel rosa que pide la razón. */
+  anulacion?: AnulacionConfirmacion | null;
+  onDescartarAnulacion?: () => void;
+  /** Guardando: botones deshabilitados y la ventana no se cierra. */
+  saving?: boolean;
+}) {
+  const avisoConfirmacion = estadoConfirmacion === 'PENDIENTE_CONFIRMACION' ? AVISO_CALC_PENDIENTE
+    : estadoConfirmacion === 'CONFIRMADA' ? (sinConfirmacionVigente ? AVISO_CALC_FIGURA_CONFIRMADA : AVISO_CALC_CONFIRMADA)
+    : null;
+  const [razon, setRazon] = useState('');
+  const razonId = useId();
+  // Como el servidor: sin los espacios de los bordes y en puntos de código (largoTexto, lección de T7/T8A).
+  const largoRazon = largoTexto(razon.trim());
+  const razonValida = largoRazon >= RAZON_RECOTIZAR_MIN && largoRazon <= RAZON_RECOTIZAR_MAX;
+  const cambiosAnulacion = Array.isArray(anulacion?.cambios) ? anulacion.cambios : [];
   const [trm, setTrm] = useState(cot.trm_rate || 4200);
   const [productos, setProductos] = useState<any[]>(
     (cot.productos || []).length > 0
@@ -206,17 +242,9 @@ export function CalculadorModal({
   const anticipo_cop = porcentajeDePesos(total, anticipoPct);
   const saldo = total - (resumenAnticipo.convertida ? Number(resumenAnticipo.pagado) || 0 : anticipo_cop);
 
-  const handleSave = () => {
-    if (computedProd.length === 0 || computedProd.some(p => !p.total_cop || p.total_cop <= 0)) {
-      setError('Cada producto necesita un costo mayor a $0 antes de guardar la cotizacion.');
-      return;
-    }
-    if (total <= 0) {
-      setError('El total de la cotizacion debe ser mayor a $0.');
-      return;
-    }
-    setError('');
-    const prods = computedProd.map(p => ({
+  // H40: el cuerpo de PATCH /ventas/cotizaciones/{id} con lo que hay en pantalla.
+  const armarPayload = () => ({
+    productos: computedProd.map(p => ({
       product_name: p.product_name,
       sku_id: p.sku_id || null,
       qty: Number(p.qty),
@@ -226,31 +254,89 @@ export function CalculadorModal({
       unit_price_cop: p.price_cop_unit,
       total_cop: p.total_cop,
       es_libre: !!p.es_libre,
-    }));
-    onSave({
-      productos: prods, trm_rate: Number(trm),
-      subtotal_cop: subtotal, descuento_pct: Number(descuento),
-      total_cop: total,
-      notas: notas || cot.notas,
-      fecha_entrega_estimada: fechaEntrega || cot.fecha_entrega_estimada,
-    });
+    })),
+    trm_rate: Number(trm),
+    subtotal_cop: subtotal, descuento_pct: Number(descuento),
+    total_cop: total,
+    notas: notas || cot.notas,
+    fecha_entrega_estimada: fechaEntrega || cot.fecha_entrega_estimada,
+  });
+
+  // H40 (ruling T9A-1): `extra` es solo lo de la anulación. El botón normal la llama con una flecha
+  // (onClick={() => handleSave()}): si React le pasara el evento del clic como `extra`, JSON.stringify fallaría por la
+  // estructura circular. El panel rosa reenvía el payload ACTUAL con anular_confirmacion y la razón.
+  const handleSave = (extra: ExtraGuardado = {}) => {
+    if (computedProd.length === 0 || computedProd.some(p => !p.total_cop || p.total_cop <= 0)) {
+      setError('Cada producto necesita un costo mayor a $0 antes de guardar la cotizacion.');
+      return;
+    }
+    if (total <= 0) {
+      setError('El total de la cotizacion debe ser mayor a $0.');
+      return;
+    }
+    setError('');
+    onSave({ ...armarPayload(), ...extra });
   };
+
+  const errorCalculadora = error && (
+    <p className="text-xs text-red-600 font-bold mb-3 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>
+  );
 
   return (
     <Modal title="Calculadora de Cotización" subtitle={`${cot.numero} — ${cot.customer_name}`}
-      icon={Calculator} color="amber" maxWidth="3xl" onClose={onClose}
-      footer={(
+      icon={Calculator} color="amber" maxWidth="3xl" onClose={onClose} bloquearCierre={saving}
+      footer={anulacion ? (
+        // H40 (R7): el servidor no guardó (409 ANULA_CONFIRMACION): qué cambió y la razón obligatoria antes de anular.
+        <div className="w-full rounded-2xl border border-rose-200 bg-rose-50 p-4 space-y-3">
+          <div role="alert" className="space-y-1">
+            <p className="text-sm font-black text-rose-800 flex items-center gap-1.5">
+              <AlertTriangle size={16} className="shrink-0" /> Vas a anular la confirmación del cliente
+            </p>
+            {anulacion.mensaje && <p className="text-xs text-rose-700">{anulacion.mensaje}</p>}
+            {cambiosAnulacion.length > 0 && (
+              <p className="text-xs font-bold text-rose-800">Cambia: {cambiosAnulacion.join(', ')}</p>
+            )}
+          </div>
+          <div>
+            <label htmlFor={razonId} className="text-xs font-black text-rose-800 mb-1 block">Razón del cambio (queda en la Actividad)</label>
+            <textarea id={razonId} value={razon} onChange={e => setRazon(e.target.value)} rows={2}
+              maxLength={RAZON_RECOTIZAR_MAX} readOnly={saving} placeholder="Ej: el proveedor subió el precio"
+              className="w-full border border-rose-200 bg-white rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400 outline-none" />
+            <div className="flex justify-between gap-2 text-[11px] mt-1">
+              <span className={largoRazon < RAZON_RECOTIZAR_MIN ? 'font-bold text-rose-700' : 'text-slate-500'}>
+                {largoRazon < RAZON_RECOTIZAR_MIN
+                  ? `Mínimo ${RAZON_RECOTIZAR_MIN} caracteres (llevas ${largoRazon}).`
+                  : 'Queda en la Actividad de la cotización con tu nombre.'}
+              </span>
+              <span className="text-slate-500 shrink-0">{largoRazon}/{RAZON_RECOTIZAR_MAX}</span>
+            </div>
+          </div>
+          {errorCalculadora}
+          <div className="flex flex-wrap justify-end gap-3">
+            <Button variant="secondary" disabled={saving} onClick={onDescartarAnulacion}>Seguir editando</Button>
+            <Button color="rose" icon={AlertTriangle} loading={saving} disabled={!razonValida}
+              onClick={() => handleSave({ anular_confirmacion: true, motivo_recotizacion: razon.trim() })}>
+              Guardar y anular la confirmación
+            </Button>
+          </div>
+        </div>
+      ) : (
         <div className="w-full">
-          {error && (
-            <p className="text-xs text-red-600 font-bold mb-3 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>
-          )}
+          {errorCalculadora}
           <div className="flex justify-end gap-3">
-            <Button variant="secondary" onClick={onClose}>Cancelar</Button>
-            <Button color="amber" icon={Save} onClick={handleSave}>Guardar Cotización</Button>
+            <Button variant="secondary" disabled={saving} onClick={onClose}>Cancelar</Button>
+            <Button color="amber" icon={Save} loading={saving} onClick={() => handleSave()}>Guardar Cotización</Button>
           </div>
         </div>
       )}>
         <div className="space-y-5">
+          {/* H40: avisa desde que se abre qué anula la confirmación del cliente (el 409 del servidor es la red). */}
+          {avisoConfirmacion && (
+            <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs font-semibold text-amber-800">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              <p>{avisoConfirmacion}</p>
+            </div>
+          )}
           {/* TRM */}
           <div className="grid grid-cols-3 gap-4">
             <div>

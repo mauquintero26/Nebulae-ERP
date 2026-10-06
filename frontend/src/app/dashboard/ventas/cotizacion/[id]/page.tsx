@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import {
   ArrowRight, Send, Mail, FileText, CheckCircle2, Circle,
   MessageSquare, Calculator, Search, RefreshCw, Package, Trash2, RotateCcw,
-  AlertCircle, XCircle, Activity, MessageCircle, Phone, Sparkles
+  AlertCircle, AlertTriangle, XCircle, X, Activity, MessageCircle, Phone, Sparkles
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
@@ -15,12 +15,17 @@ import {
   ChannelModal, CalculadorModal, DeleteConfirm, PropagarPvenConfirm, VerificarAnticipoModal, AjustarAnticipoModal,
   ESTADOS as ESTADOS_COT, EstadoBadge, fCOP, fDate, fTime,
 } from '../cotizacion-client';
+import type { AnulacionConfirmacion } from '../cotizacion-client';
 import { NextStepCard, EnlaceConfirmacionModal, CambiosDeActividad, returnToSeguro, getUsuarioActual, BotonVolver } from '../../flujo';
 import { situacionPedidoCotizacion } from '@/lib/listas-ventas';
-import { resumenAnticipoCotizacion, formatoPct, propagacionRecotizacion, puedeGestionarCotizacion } from '@/lib/dinero-ventas';
+import {
+  resumenAnticipoCotizacion, formatoPct, propagacionRecotizacion, puedeGestionarCotizacion, notaAnticipoPorLinea,
+} from '@/lib/dinero-ventas';
 import { comoUTC } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
 import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
+import { telUrl } from '@/lib/chatter';
+import { ESTADOS_SC_SIN_CONFIRMAR } from '@/lib/estados-solicitud';
 
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
 const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
@@ -33,8 +38,18 @@ const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
   RECOTIZADA:     {icon: RotateCcw,     color: 'text-orange-500 bg-orange-50'},
   CHATTER:        {icon: MessageSquare, color: 'text-cyan-600 bg-cyan-50'},
   NOTE_ADDED:     {icon: MessageSquare, color: 'text-blue-500 bg-blue-50'},
+  // U11: el cliente confirmó la solicitud por su enlace y se mantiene esta cotización (creada antes).
+  SC_CONFIRMADA:  {icon: CheckCircle2,  color: 'text-emerald-500 bg-emerald-50'},
 };
 const DEFAULT_ACTIVITY_STYLE = {icon: Activity, color: 'text-slate-500 bg-slate-50'};
+
+// T9A (patrón de T8A en solicitud/[id]): tras un 400 o un 409 (la cotización cambió en otra pantalla: se confirmó, se
+// rechazó, ya tiene pedido…) o un error sin respuesta del servidor (la red se cortó y la operación pudo hacerse igual),
+// la página se recarga en silencio, sin pisar el error que se muestra ni las ventanas abiertas.
+function recargarTrasError(err: unknown): boolean {
+  const status = (err as { status?: unknown } | null | undefined)?.status;
+  return status === 400 || status === 409 || status === undefined || status === null;
+}
 
 function CotizacionDetalleContent() {
   const params = useParams();
@@ -83,6 +98,10 @@ function CotizacionDetalleContent() {
   const [pendingCalcData, setPendingCalcData] = useState<any | null>(null);
   const [savingCalc, setSavingCalc] = useState(false);
   const [creatingProductIdx, setCreatingProductIdx] = useState<number | null>(null);
+  // H40: el 409 ANULA_CONFIRMACION (qué cambió y el mensaje del servidor) mientras la calculadora pide la razón, y el
+  // aviso que queda en Acciones después de anular la confirmación del cliente.
+  const [calcAnulacion, setCalcAnulacion] = useState<AnulacionConfirmacion | null>(null);
+  const [avisoAnulada, setAvisoAnulada] = useState<string | null>(null);
 
   // Chatter (compose real, reemplaza el placeholder sin funcionalidad)
   const [chatterInput, setChatterInput] = useState('');
@@ -97,20 +116,38 @@ function CotizacionDetalleContent() {
     setCurrentUser(u);
   }, []);
 
-  const loadCotizacion = useCallback(async () => {
-    if (isNew || !params.id) { setLoading(false); return; }
-    setLoading(true);
-    setLoadError('');
+  // T9A (patrón H29 de solicitud/[id]): con { silencioso: true } no se muestra el spinner de página (no se desmontan la
+  // calculadora ni las ventanas abiertas) y, si falla, queda lo que ya está en pantalla. Cada carga toma un número y
+  // solo la ÚLTIMA pinta la cotización: una recarga vieja no pisa datos más nuevos.
+  const cargaRef = useRef(0);
+  const loadCotizacion = useCallback(async (opts?: { silencioso?: boolean }) => {
+    const silencioso = opts?.silencioso === true;
+    if (isNew || !params.id) { if (!silencioso) setLoading(false); return; }
+    const miCarga = ++cargaRef.current;
+    const esLaUltima = () => miCarga === cargaRef.current;
+    if (!silencioso) {
+      setLoading(true);
+      setLoadError('');
+    }
     try {
       const raw = await apiFetch(`/ventas/cotizaciones/${params.id}`);
-      setCotizacion(raw?.data ?? raw);
+      const d = raw?.data ?? raw;
+      if (esLaUltima()) setCotizacion(d);
     } catch (err: any) {
-      setLoadError(err.message || 'No se pudo cargar la cotizacion');
+      if (!silencioso && esLaUltima()) setLoadError(err.message || 'No se pudo cargar la cotizacion');
     }
-    setLoading(false);
+    if (!silencioso) setLoading(false);
   }, [params.id, isNew]);
 
   useEffect(() => { loadCotizacion(); }, [loadCotizacion]);
+
+  // T9A (patrón de T8A): false cuando la pantalla se desmonta. Una acción que vuelve después ya no lleva al usuario a
+  // otra pantalla: le avisa con un enlace.
+  const vivo = useRef(true);
+  useEffect(() => {
+    vivo.current = true;
+    return () => { vivo.current = false; };
+  }, []);
 
   useEffect(() => {
     if (pvenCreadoNumero) {
@@ -180,6 +217,13 @@ function CotizacionDetalleContent() {
   const pvenVigente = situacion.vigente;
   const pvenCancelado = situacion.cancelado;
   const anticipo = resumenAnticipoCotizacion(cotizacion);
+  // U19+U21 (C10, ruling T9A-2): la nota bajo TOTALES sobre el anticipo de cada producto (null sin anticipo_por_linea).
+  const notaLineas = notaAnticipoPorLinea(cotizacion, anticipo);
+  // H40: la calculadora avisa desde que se abre que guardar precios anula la confirmación del cliente (CONFIRMADA) o el
+  // enlace que tiene (PENDIENTE_CONFIRMACION). Con pedido vigente no: sigue 'Actualizar Pedido de Venta'. Refleja al
+  // servidor: una CONFIRMADA sin confirmación vigente ('reabrir') también responde 409 (ruling T9A-6).
+  const estadoConfirmacionCalc: 'CONFIRMADA' | 'PENDIENTE_CONFIRMACION' | null =
+    (estadoActual === 'CONFIRMADA' || estadoActual === 'PENDIENTE_CONFIRMACION') && !pvenVigente ? estadoActual : null;
   // B4: solo los roles que el servidor acepta en PATCH /cotizaciones/{id} y POST /confirmar (Administración y asesor).
   const rolGestiona = puedeGestionarCotizacion(getUsuarioActual().role);
   const puedeAjustarAnticipo = rolGestiona && !pvenVigente && !['RECHAZADA', 'CANCELADA'].includes(estadoActual);
@@ -211,7 +255,8 @@ function CotizacionDetalleContent() {
         const mensaje = link
           ? `Hola, aquí está tu cotización ${cotizacion.numero}. Confírmala aquí: ${link}`
           : `Hola, aquí está tu cotización ${cotizacion.numero}`;
-        whatsapp = waUrl(cotizacion?.customer_phone, mensaje);
+        // T9A (lección de T8A): el wa.me solo con un teléfono que sirve (el mismo criterio de dígitos de telUrl).
+        whatsapp = telUrl(cotizacion?.customer_phone) ? waUrl(cotizacion?.customer_phone, mensaje) : null;
         if (whatsapp) window.open(whatsapp, '_blank');
       }
 
@@ -221,9 +266,12 @@ function CotizacionDetalleContent() {
       setConfirmWhatsapp(whatsapp);
       setShowChannelModal(false);
       setSelectedChannel(null);
+      // H40: ya se le envió de nuevo; el aviso 'Envíasela de nuevo' sobra.
+      setAvisoAnulada(null);
       if (link) setConfirmLink(link);
     } catch (err: any) {
       avisarError(err, 'No se pudo enviar la cotización');
+      if (recargarTrasError(err)) void loadCotizacion({ silencioso: true });
     }
     setSending(false);
   }
@@ -277,6 +325,7 @@ function CotizacionDetalleContent() {
       // El 422 de la verificacion (pago, metodo, fecha...) se muestra dentro del modal.
       if (verificacion) setVerificarError(err.message);
       else avisarError(err, 'No se pudo crear el pedido');
+      if (recargarTrasError(err)) void loadCotizacion({ silencioso: true });
     }
     setConfirming(false);
   }
@@ -295,6 +344,7 @@ function CotizacionDetalleContent() {
       await loadCotizacion();
     } catch (err: any) {
       setAjusteError(err.message);
+      if (recargarTrasError(err)) void loadCotizacion({ silencioso: true });
     }
     setAjusteSaving(false);
   }
@@ -306,14 +356,18 @@ function CotizacionDetalleContent() {
       setPendingCalcData(data);
       return;
     }
-    commitCalcSave(data, false);
+    commitCalcSave(data, false, true);
   }
 
-  async function commitCalcSave(data: any, propagarAPven: boolean) {
+  // H40: `desdeCalculadora` = la calculadora sigue abierta (sin pedido vigente). Ahí el 409 ANULA_CONFIRMACION (el
+  // cliente ya confirmó la cotización o tiene el enlace) no guarda nada: la calculadora muestra qué cambió y pide la
+  // razón, y con ella reenvía el mismo payload con anular_confirmacion y motivo_recotizacion (R7). Desde 'Actualizar
+  // Pedido de Venta' (pedido vigente) no se puede pedir la razón: el 409 sale como aviso de error.
+  async function commitCalcSave(data: any, propagarAPven: boolean, desdeCalculadora = false) {
     if (!cotizacion?.id) return;
     setSavingCalc(true);
     try {
-      await apiFetch(`/ventas/cotizaciones/${cotizacion.id}`, {
+      const r = await apiFetch(`/ventas/cotizaciones/${cotizacion.id}`, {
         method: 'PATCH',
         // recotizacion: el backend lo deja en la Actividad como RECOTIZADA aunque los precios queden igual.
         body: JSON.stringify({ ...data, recotizacion: true, updated_by: currentUser }),
@@ -329,9 +383,22 @@ function CotizacionDetalleContent() {
       }
       setShowCalc(false);
       setPendingCalcData(null);
+      setCalcAnulacion(null);
+      // H40: confirmacion_anulada va en el nivel superior de la respuesta (T4); por si acaso también se mira en data.
+      if (r?.confirmacion_anulada ?? r?.data?.confirmacion_anulada) {
+        setAvisoAnulada('Se anuló la confirmación del cliente porque cambiaste la cotización. Envíasela de nuevo para que la confirme.');
+      }
       await loadCotizacion();
     } catch (err: any) {
-      avisarError(err, 'No se pudo guardar la cotización');
+      // R10: apiFetch deja el status y el detail del servidor en el error.
+      const anula = err?.status === 409 && err?.detail?.codigo === 'ANULA_CONFIRMACION';
+      if (anula && desdeCalculadora) {
+        setCalcAnulacion(err.detail);
+      } else {
+        if (anula) setPendingCalcData(null);
+        avisarError(err, 'No se pudo guardar la cotización');
+      }
+      if (recargarTrasError(err)) void loadCotizacion({ silencioso: true });
     }
     setSavingCalc(false);
   }
@@ -346,6 +413,7 @@ function CotizacionDetalleContent() {
       await loadCotizacion();
     } catch (err: any) {
       avisarError(err, 'No se pudo cambiar el estado');
+      if (recargarTrasError(err)) void loadCotizacion({ silencioso: true });
     }
   }
 
@@ -359,9 +427,17 @@ function CotizacionDetalleContent() {
       });
       setShowDelete(false);
       // N7: la solicitud sigue activa; desde ella se crea la nueva cotizacion.
-      router.push(cotizacion.sc_id ? `/dashboard/ventas/solicitud/${cotizacion.sc_id}` : '/dashboard/ventas/cotizacion');
+      const destino = cotizacion.sc_id ? `/dashboard/ventas/solicitud/${cotizacion.sc_id}` : '/dashboard/ventas/cotizacion';
+      if (!vivo.current) {
+        // T9A (patrón de T8A): el usuario ya salió de la cotización: no se lo lleva a otra pantalla; se le avisa.
+        avisar(`Cotización ${cotizacion.numero || ''} eliminada (quedó como Rechazada)`,
+          cotizacion.sc_id ? { accion: { texto: 'Ver solicitud', href: destino } } : undefined);
+        return;
+      }
+      router.push(destino);
     } catch (err: any) {
       avisarError(err, 'No se pudo eliminar la cotización');
+      if (recargarTrasError(err)) void loadCotizacion({ silencioso: true });
     }
   }
 
@@ -383,6 +459,7 @@ function CotizacionDetalleContent() {
       await loadCotizacion();
     } catch (err: any) {
       avisarError(err, 'No se pudo crear el producto');
+      if (recargarTrasError(err)) void loadCotizacion({ silencioso: true });
     }
     setCreatingProductIdx(null);
   }
@@ -564,6 +641,13 @@ function CotizacionDetalleContent() {
                 </span>
               )}
             </div>
+            {/* U11 (ruling T9A-6): una cotización temprana cuya solicitud ya confirmó el cliente: línea gris discreta. */}
+            {cotizacion?.sin_confirmacion_sc_at && cotizacion?.sc_estado === 'CONFIRMADA' && (
+              <p className="text-xs text-slate-500 mt-0.5 line-clamp-2 break-words" title={cotizacion.sin_confirmacion_sc_motivo || undefined}>
+                Creada antes de la confirmación del cliente
+                {cotizacion.sin_confirmacion_sc_motivo ? ` — Motivo: ${cotizacion.sin_confirmacion_sc_motivo}` : ''}
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -660,13 +744,15 @@ function CotizacionDetalleContent() {
               </div>
             </div>
 
-            {/* H35+H48: la nota ACTUAL de la solicitud (se lee en vivo, nunca se copia) aparte de la de la cotizacion. */}
+            {/* H35+H48: la nota ACTUAL de la solicitud (se lee en vivo, nunca se copia) aparte de la de la cotizacion.
+                U14 (C17): la de la solicitud con el estilo neutro de la SC (no parece una advertencia); la de la
+                cotización sigue azul. */}
             {(cotizacion?.sc_notas || cotizacion?.notas) && (
               <div className="space-y-3 mb-10">
                 {cotizacion?.sc_notas && (
-                  <div className="bg-amber-50 border border-amber-100 rounded-xl p-4">
-                    <p className="text-xs font-black text-amber-700 uppercase mb-1.5">Nota de la solicitud</p>
-                    <p className="text-sm text-amber-900 whitespace-pre-wrap break-words">{cotizacion.sc_notas}</p>
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                    <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Nota de la solicitud</p>
+                    <p className="text-sm text-slate-700 whitespace-pre-wrap break-words">{cotizacion.sc_notas}</p>
                   </div>
                 )}
                 {cotizacion?.notas && (
@@ -694,6 +780,8 @@ function CotizacionDetalleContent() {
                 <div className="space-y-3">
                   {productos.map((item: any, idx: number) => {
                     const nombre = item.product_name || item.name || 'Producto sin nombre';
+                    // U19+U21 (C10): el anticipo de esta línea, del GET (lista paralela a productos).
+                    const anticipoLinea = Number(cotizacion?.anticipo_por_linea?.[idx] ?? 0) || 0;
                     return (
                     <div key={idx} className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-wrap items-center gap-x-4 gap-y-2 hover:border-blue-200 transition-colors">
                       <div className="w-14 h-14 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 shrink-0 overflow-hidden">
@@ -723,6 +811,12 @@ function CotizacionDetalleContent() {
                       <div className="ml-auto text-right shrink-0">
                         <p className="text-xs text-slate-400">Cant. {item.qty ?? 0} &times; {fCOP(item.unit_price_cop)}</p>
                         <p className="font-black text-slate-900 text-lg">{fCOP(item.total_cop != null ? item.total_cop : (Number(item.unit_price_cop) || 0) * (Number(item.qty) || 0))}</p>
+                        {/* U19+U21: el % es el de TOTALES (resumenAnticipoCotizacion; con pedido, el del pedido: ruling T9A-2). */}
+                        {Array.isArray(cotizacion?.anticipo_por_linea) && (
+                          <p className={`text-sm font-bold ${anticipoLinea > 0 ? 'text-emerald-700' : 'text-slate-500'}`}>
+                            {`Anticipo ${formatoPct(anticipo.pct)}: ${fCOP(cotizacion.anticipo_por_linea?.[idx] ?? 0)}`}
+                          </p>
+                        )}
                       </div>
                     </div>
                     );
@@ -752,9 +846,10 @@ function CotizacionDetalleContent() {
                       modalidad de hoy, que ya no es el trato). */}
                   {Number(cotizacion?.total_cop) > 0 && (
                     <div className="mt-4 pt-3 border-t border-slate-200 space-y-1.5 text-sm">
-                      <div className="flex justify-between gap-2">
-                        <span className="font-bold text-slate-500">{anticipo.convertida ? 'Anticipo del pedido' : 'Anticipo requerido'} ({anticipo.etiqueta})</span>
-                        <span className="font-bold text-slate-800 shrink-0">{fCOP(anticipo.requerido)}</span>
+                      {/* U19+U21: el renglón del anticipo grande (el mismo número que reparten las líneas, C10). */}
+                      <div className="flex justify-between items-baseline gap-2 text-sm font-bold text-emerald-700">
+                        <span>{anticipo.convertida ? 'Anticipo del pedido' : 'Anticipo requerido'} ({anticipo.etiqueta})</span>
+                        <span className="text-base font-black shrink-0">{fCOP(anticipo.requerido)}</span>
                       </div>
                       {anticipo.convertida && (
                         <div className="flex justify-between gap-2">
@@ -766,6 +861,10 @@ function CotizacionDetalleContent() {
                         <span className="font-bold text-slate-500">Saldo</span>
                         <span className="font-bold text-slate-800 shrink-0">{fCOP(anticipo.saldo)}</span>
                       </div>
+                      {/* U19+U21 (ruling T9A-2): la suma de las líneas da este anticipo; si no cuadra, un aviso discreto. */}
+                      {notaLineas && (
+                        <p className={`text-[11px] ${notaLineas.cuadra ? 'text-slate-400' : 'font-semibold text-amber-700'}`}>{notaLineas.texto}</p>
+                      )}
                       {anticipo.convertida && Number(anticipo.pendiente) > 0 && (
                         <p className="text-xs font-bold text-amber-700">Anticipo pendiente: {fCOP(anticipo.pendiente)}</p>
                       )}
@@ -824,15 +923,49 @@ function CotizacionDetalleContent() {
                     </div>
                   )}
 
+                  {/* U11 (R5, opción A): cotización creada sin la confirmación del cliente y la solicitud sigue sin
+                      confirmar. Cuando el cliente confirma, queda la línea gris de la cabecera. */}
+                  {cotizacion.sin_confirmacion_sc_at && ESTADOS_SC_SIN_CONFIRMAR.includes(cotizacion.sc_estado) && (
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 space-y-1">
+                      <p className="text-sm font-black text-amber-800 flex items-start gap-1.5">
+                        <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+                        La solicitud {cotizacion.sc_numero || 'de origen'} no ha sido confirmada por el cliente
+                      </p>
+                      <p className="text-xs text-amber-800 whitespace-pre-wrap break-words">
+                        Esta cotización se creó sin su confirmación.
+                        {cotizacion.sin_confirmacion_sc_motivo ? ` Motivo: ${cotizacion.sin_confirmacion_sc_motivo}` : ''}
+                      </p>
+                      <p className="text-xs text-amber-700">Si el cliente confirma esta cotización, la solicitud también quedará confirmada.</p>
+                    </div>
+                  )}
+
+                  {/* H40: después de anular la confirmación del cliente al re-cotizar. */}
+                  {avisoAnulada && (
+                    <div role="status" className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                      <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                      <p className="flex-1 text-sm font-bold text-amber-800">{avisoAnulada}</p>
+                      <button type="button" onClick={() => setAvisoAnulada(null)} aria-label="Cerrar aviso" title="Cerrar aviso"
+                        className="p-1 rounded-lg text-amber-700 hover:bg-amber-100 shrink-0">
+                        <X size={14} />
+                      </button>
+                    </div>
+                  )}
+
                   {renderSiguientePaso()}
 
                   <div className="grid grid-cols-1 @lg:grid-cols-2 gap-3 pt-4 border-t border-slate-100">
                     {!cardOfreceCalculo && (
-                      <Button color={Number(cotizacion?.total_cop) > 0 ? 'orange' : 'blue'}
-                        icon={Number(cotizacion?.total_cop) > 0 ? RotateCcw : Calculator}
-                        onClick={() => setShowCalc(true)}>
-                        {Number(cotizacion?.total_cop) > 0 ? 'Re-Cotizar — Actualizar Precios' : 'Cotizar — Calcular Precios'}
-                      </Button>
+                      <div className="space-y-1.5">
+                        <Button color={Number(cotizacion?.total_cop) > 0 ? 'orange' : 'blue'}
+                          icon={Number(cotizacion?.total_cop) > 0 ? RotateCcw : Calculator}
+                          onClick={() => setShowCalc(true)}>
+                          {Number(cotizacion?.total_cop) > 0 ? 'Re-Cotizar — Actualizar Precios' : 'Cotizar — Calcular Precios'}
+                        </Button>
+                        {/* H40: lo dice antes de abrir la calculadora (que lo repite y pide la razón si hace falta). */}
+                        {estadoConfirmacionCalc && (
+                          <p className="text-[11px] text-amber-700">Cambiar precios anula la confirmación del cliente.</p>
+                        )}
+                      </div>
                     )}
                     {!pvenVigente && estadoActual !== 'CONFIRMADA' && (
                       <div className="flex items-center justify-center px-4 py-2.5 rounded-xl border border-dashed border-slate-200 text-slate-400 text-xs font-bold text-center">
@@ -1025,7 +1158,7 @@ function CotizacionDetalleContent() {
           onConfirm={confirmarEnvio}
           onCancel={cancelarEnvio}
           saving={sending}
-          customerHasPhone={!!waUrl(cotizacion?.customer_phone)}
+          customerHasPhone={!!telUrl(cotizacion?.customer_phone)}
           customerEmail={cotizacion?.customer_email ?? null}
         />
       )}
@@ -1049,7 +1182,14 @@ function CotizacionDetalleContent() {
           onCancel={() => { if (!ajusteSaving) setShowAjuste(false); }}
         />
       )}
-      {showCalc && cotizacion && <CalculadorModal cot={cotizacion} onSave={onCalcSave} onClose={() => setShowCalc(false)} />}
+      {showCalc && cotizacion && (
+        // H40: avisa desde que se abre (estadoConfirmacion) y, con el 409 ANULA_CONFIRMACION (anulacion), pide la razón.
+        // No se cierra mientras guarda: el resultado siempre llega a una ventana abierta.
+        <CalculadorModal cot={cotizacion} onSave={onCalcSave}
+          onClose={() => { if (!savingCalc) { setShowCalc(false); setCalcAnulacion(null); } }}
+          estadoConfirmacion={estadoConfirmacionCalc} sinConfirmacionVigente={situacion.paso === 'reabrir'}
+          anulacion={calcAnulacion} onDescartarAnulacion={() => setCalcAnulacion(null)} saving={savingCalc} />
+      )}
       {showDelete && cotizacion && <DeleteConfirm cot={cotizacion} onConfirm={deleteCot} onCancel={() => setShowDelete(false)} />}
       {pendingCalcData && (
         <PropagarPvenConfirm
@@ -1057,8 +1197,8 @@ function CotizacionDetalleContent() {
           totalAnterior={Number(cotizacion?.total_cop || 0)}
           totalNuevo={Number(pendingCalcData.total_cop || 0)}
           saving={savingCalc}
-          onConfirm={() => commitCalcSave(pendingCalcData, true)}
-          onCancel={() => commitCalcSave(pendingCalcData, false)}
+          onConfirm={() => commitCalcSave(pendingCalcData, true, false)}
+          onCancel={() => commitCalcSave(pendingCalcData, false, false)}
         />
       )}
       {confirmLink && (

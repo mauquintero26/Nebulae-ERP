@@ -16,7 +16,7 @@ import {
   cuentaVerificacion, evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo, montoDesdeTexto,
   etiquetaTipoPago, etiquetaMetodoPago, etiquetaEstadoPago, describirPago,
   etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp, textoChipPxp, propagacionRecotizacion, creditoPorRecotizacion,
-  saldoAFavorAlCancelar, puedeGestionarCotizacion,
+  saldoAFavorAlCancelar, puedeGestionarCotizacion, notaAnticipoPorLinea,
 } from '../src/lib/dinero-ventas.js';
 
 console.log('--- N1 TEST 1: los 8 medios de pago son los mismos que acepta el servidor ---');
@@ -391,6 +391,54 @@ console.log('--- B4 TEST 14: Ajustar anticipo y Crear Pedido de Venta solo para 
   for (const rol of ['COMPRAS', 'ERP', 'FINANZAS', 'Finanzas', 'BODEGA', 'CONSULTA', 'Mercadeo', '', null, undefined]) {
     assert.equal(puedeGestionarCotizacion(rol), false, String(rol));
   }
+}
+
+console.log('--- U19+U21 / C10 (B2-T9A, ruling 2) TEST 16: nota del anticipo por producto en TOTALES ---');
+{
+  const SUMA = 'El anticipo de cada producto suma el anticipo total.';
+  const SIN_PRECIO = 'Los productos no tienen precio por línea: el anticipo se calcula sobre el total.';
+  const NO_CUADRA = 'El anticipo de los productos no suma el anticipo total: vale el anticipo total.';
+  // El recorrido: 60/40 sobre 1.840.614 -> 1.104.368 = 744.368 + 280.800 + 79.200 (anticipo_por_linea del GET).
+  const cot = { sc_id: 7, anticipo_pct: 60, sc_modalidad_pago: '60/40 (60% anticipo - 40% pendiente)', total_cop: 1840614,
+    anticipo_requerido: 1104368, productos: [{}, {}, {}], anticipo_por_linea: [744368, 280800, 79200] };
+  assert.deepEqual(notaAnticipoPorLinea(cot), { cuadra: true, texto: SUMA });
+  // Con el resumen que ya pinto TOTALES (el mismo objeto).
+  assert.deepEqual(notaAnticipoPorLinea(cot, resumenAnticipoCotizacion(cot)), { cuadra: true, texto: SUMA });
+  // Sin la lista (GET viejo) o sin lineas: no hay nota.
+  for (const sin of [undefined, null, [], 'x']) {
+    assert.equal(notaAnticipoPorLinea({ ...cot, anticipo_por_linea: sin }), null, String(sin));
+  }
+  assert.equal(notaAnticipoPorLinea(null), null);
+  // A credito (o sin precios): todas las lineas en 0 y el anticipo en 0 -> cuadra.
+  assert.deepEqual(notaAnticipoPorLinea({ ...cot, anticipo_pct: 0, anticipo_requerido: 0, anticipo_por_linea: [0, 0, 0] }),
+    { cuadra: true, texto: SUMA });
+  // Lineas sin valor y un total (dato viejo): el servidor reparte ceros y no suman el anticipo.
+  assert.deepEqual(notaAnticipoPorLinea({ ...cot, total_cop: 1000, anticipo_requerido: 600, anticipo_por_linea: [0, 0] }),
+    { cuadra: false, texto: SIN_PRECIO });
+  // No suman por otra causa: texto general.
+  assert.deepEqual(notaAnticipoPorLinea({ ...cot, anticipo_por_linea: [744368, 280800] }), { cuadra: false, texto: NO_CUADRA });
+  // Decimales viejos se comparan al peso; un texto numerico cuenta, lo que no es numero vale 0.
+  assert.deepEqual(notaAnticipoPorLinea({ ...cot, anticipo_por_linea: [744368.0, '280800', 79200.4] }),
+    { cuadra: true, texto: SUMA });
+  assert.deepEqual(notaAnticipoPorLinea({ ...cot, anticipo_por_linea: [744368, 280800, 79200, null, 'x'] }),
+    { cuadra: true, texto: SUMA });
+
+  // C10: con pedido vigente del MISMO total las lineas reparten el anticipo del pedido (su %), el de TOTALES. La
+  // modalidad de la SC cambio despues de convertir (el GET recalcula 100%): no cuenta.
+  const pven = { id: 2, numero: 'PVEN-2', estado: 'PENDIENTE_COMPRA', total_cop: 1840614, saldo_cop: 736246, anticipo_pct: 60 };
+  assert.deepEqual(notaAnticipoPorLinea({ ...cot, anticipo_pct: 100, anticipo_requerido: 1840614, pedidos_venta: [pven] }),
+    { cuadra: true, texto: SUMA });
+  // Pedido vigente de OTRO total (se re-cotizo sin pasar los precios al pedido): las lineas reparten el anticipo del
+  // pedido (60% de 2.000.000 = 1.200.000) y su % ya no es el de cada producto: aviso del pedido aunque la suma cuadre.
+  const otro = { ...pven, total_cop: 2000000, saldo_cop: 800000 };
+  assert.deepEqual(notaAnticipoPorLinea({ ...cot, pedidos_venta: [otro], anticipo_por_linea: [808826, 305116, 86058] }),
+    { cuadra: false, texto: 'El pedido PVEN-2 tiene otro total: el anticipo es el del pedido.' });
+  // Un pedido CANCELADO no es vigente: se reparte el requerido de la cotizacion (C10).
+  assert.deepEqual(notaAnticipoPorLinea({ ...cot, pedidos_venta: [{ ...otro, estado: 'CANCELADO' }] }),
+    { cuadra: true, texto: SUMA });
+  // Totales con decimales viejos se comparan al peso.
+  assert.deepEqual(notaAnticipoPorLinea({ ...cot, total_cop: '1840614.00', pedidos_venta: [{ ...pven, total_cop: 1840613.6 }] }),
+    { cuadra: true, texto: SUMA });
 }
 
 console.log('OK test_dinero_ventas.mjs');
