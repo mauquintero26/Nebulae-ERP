@@ -14,7 +14,7 @@ import {
 import { apiFetch, API_URL } from '@/lib/api';
 import {
   MARGIN_PCT_CAP, filaDeCalculadora, calcularCotizacion, cuerpoCompletoCalculadora, cuerpoDeGuardado,
-  validaPreciosAlGuardar,
+  validaPreciosAlGuardar, inicialParaComparar,
 } from '@/lib/pricing';
 import { formatoPesos } from '@/lib/pesos';
 import { humanizarCodigo } from '@/lib/estados-pedido';
@@ -250,10 +250,12 @@ export function CalculadorModal({
   // (onClick={() => handleSave()}): si React le pasara el evento del clic como `extra`, JSON.stringify fallaría por la
   // estructura circular. Con el panel rosa la calculadora queda inerte: se reenvía lo mismo que describió el 409.
   const handleSave = (extra: ExtraGuardado = {}) => {
-    const cuerpo = cuerpoDeGuardado(armarPayload(), inicial.current);
-    // Los precios se validan si viajan o si la cotización aún no tiene total (validaPreciosAlGuardar, ronda 1): guardar
-    // solo las notas o la fecha de una cotización ya calculada no depende de ellos.
-    if (validaPreciosAlGuardar(cuerpo, cot)) {
+    // Ronda 2 (punto 2): una cotización sin total todavía no está cotizada: no se compara y va el cuerpo completo
+    // (inicialParaComparar da null).
+    const cuerpo = cuerpoDeGuardado(armarPayload(), inicialParaComparar(cot, inicial.current));
+    // Los precios se validan solo si viajan (validaPreciosAlGuardar): guardar solo las notas o la fecha de una
+    // cotización ya calculada no depende de ellos.
+    if (validaPreciosAlGuardar(cuerpo)) {
       if (computedProd.length === 0 || computedProd.some(p => !p.total_cop || p.total_cop <= 0)) {
         setError('Cada producto necesita un costo mayor a $0 antes de guardar la cotización.');
         return;
@@ -280,10 +282,13 @@ export function CalculadorModal({
           <div role="alert" className="space-y-1">
             <p className="text-sm font-black text-rose-800 flex items-center gap-1.5">
               <AlertTriangle size={16} className="shrink-0" />
-              {/* Ronda 1 (punto 5): figura confirmada sin la confirmación del cliente vigente ('reabrir'). */}
-              {estadoConfirmacion === 'CONFIRMADA' && sinConfirmacionVigente
-                ? 'Vas a devolver la cotización a Borrador'
-                : 'Vas a anular la confirmación del cliente'}
+              {/* Según el caso: pendiente (ronda 2, punto 3; el estado del 409, como el mensaje de abajo), figura
+                  confirmada sin la confirmación del cliente vigente ('reabrir', ronda 1) o confirmada. */}
+              {(anulacion.estado || estadoConfirmacion) === 'PENDIENTE_CONFIRMACION'
+                ? 'Vas a dejar sin efecto el enlace que tiene el cliente'
+                : estadoConfirmacion === 'CONFIRMADA' && sinConfirmacionVigente
+                  ? 'Vas a devolver la cotización a Borrador'
+                  : 'Vas a anular la confirmación del cliente'}
             </p>
             {anulacion.mensaje && <p className="text-xs text-rose-700">{anulacion.mensaje}</p>}
             {cambiosAnulacion.length > 0 && (

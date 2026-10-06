@@ -122,14 +122,24 @@ export function cuerpoDeGuardado(actual, inicial) {
 }
 
 /**
- * B2-T9A ronda 1: si el guardado de la calculadora exige precios validos (cada linea y el total mayores que $0). Si
- * viajan los precios (cuerpoDeGuardado), si. Si no viajan (solo notas o fecha), solo cuando la cotizacion todavia no
- * tiene total: guardar sin precios no la cotiza, y se sigue pidiendo el costo como antes. Asi una linea con costo 0 ya
- * no impide guardar solo la nota de una cotizacion calculada.
- * @param {Record<string, any>} cuerpo  cuerpoDeGuardado(...)
+ * B2-T9A ronda 2: el calculo inicial contra el que compara cuerpoDeGuardado. Una cotizacion sin total (> 0) todavia no
+ * esta cotizada: null, y se manda el cuerpo completo aunque nada haya cambiado (con los costos ya puestos, «Guardar»
+ * mandaba solo las notas y cerraba sin cotizarla).
  * @param {Record<string, any> | null | undefined} cot
+ * @param {Record<string, any> | null | undefined} inicial  cuerpoCompletoCalculadora al abrir la calculadora
+ * @returns {Record<string, any> | null}
+ */
+export function inicialParaComparar(cot, inicial) {
+  return Number(cot?.total_cop) > 0 ? (inicial ?? null) : null;
+}
+
+/**
+ * B2-T9A rondas 1 y 2: si el guardado de la calculadora exige precios validos (cada linea y el total mayores que $0):
+ * solo si viajan los precios. Asi una linea con costo 0 ya no impide guardar solo la nota de una cotizacion calculada;
+ * una sin total siempre los manda (inicialParaComparar), asi que se siguen pidiendo los costos al cotizarla.
+ * @param {Record<string, any>} cuerpo  cuerpoDeGuardado(...)
  * @returns {boolean}
  */
-export function validaPreciosAlGuardar(cuerpo, cot) {
-  return Array.isArray(cuerpo?.productos) || !(Number(cot?.total_cop) > 0);
+export function validaPreciosAlGuardar(cuerpo) {
+  return Array.isArray(cuerpo?.productos);
 }
