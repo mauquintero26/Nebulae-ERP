@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import {
-  DollarSign, MessageCircle, Phone, Mail, CheckCircle2, Circle,
-  ShoppingCart, RefreshCw, AlertCircle, ListChecks, ExternalLink, Send,
-  Activity, FileText, X, Edit2, Save,
+  DollarSign, CheckCircle2, Circle,
+  ShoppingCart, RefreshCw, AlertCircle, ListChecks, ExternalLink,
+  Activity, FileText, X, Edit2, Save, Sparkles, MessageSquare,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
@@ -14,6 +14,7 @@ import { Button, Modal, useAvisos } from '@/components/ui';
 import { textoDeError } from '@/lib/avisos';
 import { NewSupplierModal } from '../venta-client';
 import { CambiosDeActividad, getUsuarioActual, puedeCrearOrdenDePago, returnToSeguro, BotonVolver } from '../../flujo';
+import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
 import { formatoPesos } from '@/lib/pesos';
 import { etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import {
@@ -24,6 +25,8 @@ import {
 } from '@/lib/dinero-ventas';
 import { rutaSinParametro } from '@/lib/listas-ventas';
 import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
+import { agregarActividad, esEntradaChatter } from '@/lib/chatter';
+import { resumenPagoPedido } from '@/lib/resumen-pago';
 
 const fCOP = formatoPesos;
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
@@ -31,7 +34,25 @@ const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO', { da
 const ACTIVITY_STYLE: Record<string, string> = {
   CREATED: '#6366f1', UPDATED: '#3b82f6', ESTADO_CHANGED: '#f59e0b',
   SENT: '#10b981', CONFIRMED: '#059669', REJECTED: '#ef4444',
+  // U6+H22: las notas del Chatter (y la 'Motivo del rechazo (Hub)' de N3).
+  CHATTER: '#0891b2', NOTE_ADDED: '#3b82f6',
 };
+
+// U24: el tercer recuadro del Resumen Financiero según resumenPagoPedido(...).caso (clases literales para Tailwind).
+const TERCER_RECUADRO: Record<string, { titulo: string; caja: string; texto: string; valor: string; ayuda: string }> = {
+  pendiente: { titulo: 'Saldo pendiente', caja: 'border-red-200 bg-red-50', texto: 'text-red-700', valor: 'text-red-800', ayuda: 'Lo que falta por cobrar' },
+  completo: { titulo: 'Pagado completo', caja: 'border-emerald-200 bg-emerald-50', texto: 'text-emerald-700', valor: 'text-emerald-800', ayuda: 'Sin saldo pendiente' },
+  a_favor: { titulo: 'Saldo a favor del cliente', caja: 'border-amber-200 bg-amber-50', texto: 'text-amber-800', valor: 'text-amber-900', ayuda: 'Pagó más que el total del pedido' },
+  desconocido: { titulo: 'Saldo pendiente', caja: 'border-slate-200 bg-slate-50', texto: 'text-slate-600', valor: 'text-slate-500', ayuda: 'Saldo sin datos' },
+};
+
+// T9A (patrón de T8A en solicitud/[id]): tras un 400 o un 409 (el pedido cambió en otra pantalla) o un error sin
+// respuesta del servidor (la red se cortó y la operación pudo hacerse igual), la página se recarga en silencio, sin
+// pisar el error que se muestra ni el formulario o la ventana abiertos.
+function recargarTrasError(err: unknown): boolean {
+  const status = (err as { status?: unknown } | null | undefined)?.status;
+  return status === 400 || status === 409 || status === undefined || status === null;
+}
 
 function PedidoVentaDetalleContent() {
   const params = useParams();
@@ -50,8 +71,6 @@ function PedidoVentaDetalleContent() {
   const [loadError, setLoadError] = useState('');
   const [currentUser, setCurrentUser] = useState('');
   const [creatingPxp, setCreatingPxp] = useState(false);
-  const [nota, setNota] = useState('');
-  const [sendingNota, setSendingNota] = useState(false);
   const [showPecModal, setShowPecModal] = useState(false);
   const [pecSaving, setPecSaving] = useState(false);
   const [pecError, setPecError] = useState('');
@@ -68,7 +87,8 @@ function PedidoVentaDetalleContent() {
   const [isEditMode, setIsEditMode] = useState(false);
   const [editForm, setEditForm] = useState<any>({});
   const editEntryEstado = useRef('');
-  const [panelTab, setPanelTab] = useState<'actividad' | 'ia'>('actividad');
+  // U6+H22 (C11): Actividad | Chatter | IA, el mismo orden de la solicitud. Las notas se escriben en el Chatter.
+  const [panelTab, setPanelTab] = useState<'actividad' | 'chatter' | 'ia'>('actividad');
   const [iaAnalisis, setIaAnalisis] = useState('');
   const supplierTimer = useRef<any>(null);
   // R8: el menu de la lista ("Cancelar Pedido") llega con ?accion=cancelar: tras la primera carga se abre el
@@ -80,20 +100,28 @@ function PedidoVentaDetalleContent() {
     setCurrentUser(u);
   }, []);
 
-  const loadPedido = useCallback(async () => {
-    if (!params.id) { setLoading(false); return; }
-    setLoading(true);
-    setLoadError('');
+  // T9A (patrón H29 de solicitud/[id]): con { silencioso: true } no se muestra el spinner de página (no se desmontan el
+  // formulario de edición ni las ventanas abiertas) y, si falla, queda lo que ya está en pantalla. Cada carga toma un
+  // número y solo la ÚLTIMA pinta el pedido: una recarga vieja no pisa datos más nuevos.
+  const cargaRef = useRef(0);
+  const loadPedido = useCallback(async (opts?: { silencioso?: boolean }) => {
+    const silencioso = opts?.silencioso === true;
+    if (!params.id) { if (!silencioso) setLoading(false); return; }
+    const miCarga = ++cargaRef.current;
+    if (!silencioso) {
+      setLoading(true);
+      setLoadError('');
+    }
     try {
       const raw = await apiFetch(`/ventas/pedidos/${params.id}`);
       const d = raw?.data ?? raw;
-      setPedido(d);
+      if (miCarga === cargaRef.current) setPedido(d);
       if (abrirCancelacion.current && transicionesPedido(d?.estado).includes('CANCELADO')) setShowCancelModal(true);
       abrirCancelacion.current = false;
     } catch (err: any) {
-      setLoadError(err.message || 'No se pudo cargar el pedido de venta');
+      if (!silencioso && miCarga === cargaRef.current) setLoadError(err.message || 'No se pudo cargar el pedido de venta');
     }
-    setLoading(false);
+    if (!silencioso) setLoading(false);
   }, [params.id]);
 
   useEffect(() => { loadPedido(); }, [loadPedido]);
@@ -170,42 +198,13 @@ function PedidoVentaDetalleContent() {
       avisar(numeroPxp ? `Orden de pago ${numeroPxp} creada` : 'Orden de pago creada');
     } catch (err: any) {
       avisarError(err, 'No se pudo crear la orden de pago');
+      if (recargarTrasError(err)) void loadPedido({ silencioso: true });
     }
     setCreatingPxp(false);
   }
 
-  async function handleRegistrarNota() {
-    if (!pedido?.id || !nota.trim()) return;
-    setSendingNota(true);
-    try {
-      await apiFetch(`/ventas/pedidos/${pedido.id}/actividad`, {
-        method: 'POST',
-        body: JSON.stringify({ action: 'UPDATED', description: nota, user_name: currentUser }),
-      });
-      setNota('');
-      await loadPedido();
-    } catch (err: any) {
-      avisarError(err, 'No se pudo registrar la nota');
-    }
-    setSendingNota(false);
-  }
-
-  async function handleEnviarWhatsApp() {
-    if (!pedido?.customer_phone) return;
-    const text = encodeURIComponent(nota || `Hola, somos Nebulae. Su pedido ${pedido.numero}...`);
-    window.open(`https://wa.me/57${pedido.customer_phone.replace(/\D/g, '')}?text=${text}`, '_blank');
-    if (!nota.trim()) return;
-    try {
-      await apiFetch(`/ventas/pedidos/${pedido.id}/actividad`, {
-        method: 'POST',
-        body: JSON.stringify({ action: 'CHATTER', description: nota, user_name: currentUser }),
-      });
-      setNota('');
-      await loadPedido();
-    } catch (err: any) {
-      avisarError(err, 'No se pudo registrar el mensaje');
-    }
-  }
+  // U6+H22: las notas y los contactos con el cliente se registran en la pestaña Chatter (ChatterDocumento, T6B). El
+  // botón viejo guardaba la nota como 'UPDATED' (salía como «Ediciones»); el servidor convierte esas como CHATTER.
 
   function onSupplierSearch(q: string) {
     setSupplierSearch(q); setSelectedSupplier(null); setPecError('');
@@ -262,6 +261,7 @@ function PedidoVentaDetalleContent() {
     } catch (err: any) {
       // El error se muestra dentro de la ventana, que sigue abierta con lo escrito.
       setPecError(textoDeError(err, 'No se pudo crear el PEC'));
+      if (recargarTrasError(err)) void loadPedido({ silencioso: true });
     }
     setPecSaving(false);
   }
@@ -287,6 +287,7 @@ function PedidoVentaDetalleContent() {
       avisar('Productos agregados a la lista de compras');
     } catch (err: any) {
       avisarError(err, 'No se pudieron agregar los productos a la lista de compras');
+      if (recargarTrasError(err)) void loadPedido({ silencioso: true });
     }
     setListaSaving(false);
   }
@@ -314,6 +315,7 @@ function PedidoVentaDetalleContent() {
     } catch (err: any) {
       // El error se muestra dentro de la ventana, que sigue abierta con el motivo escrito.
       setCancelError(textoDeError(err, 'No se pudo cancelar el pedido'));
+      if (recargarTrasError(err)) void loadPedido({ silencioso: true });
     }
     setCancelling(false);
   }
@@ -337,6 +339,7 @@ function PedidoVentaDetalleContent() {
       await loadPedido();
     } catch (err: any) {
       avisarError(err, 'No se pudieron guardar los cambios');
+      if (recargarTrasError(err)) void loadPedido({ silencioso: true });
     }
   }
 
@@ -368,7 +371,10 @@ function PedidoVentaDetalleContent() {
   const notaCotizacion = (pedido?.cot_notas || '').trim();
   const notaPedido = (pedido?.notas || '').trim();
   const mostrarNotaPedido = !!notaPedido && notaPedido !== notaCotizacion;
-  const pagadoCop = (Number(pedido?.total_cop) || 0) - (Number(pedido?.saldo_cop) || 0);
+  // U24: las cuentas del Resumen Financiero (total, anticipo requerido, pagado verificado, saldo y lo que falta del
+  // anticipo), en pesos enteros. Sin saldo_cop el caso es 'desconocido' (pagado y saldo en null: sin barra ni %).
+  const resumenPago = resumenPagoPedido(pedido);
+  const tercerRecuadro = TERCER_RECUADRO[resumenPago.caso] || TERCER_RECUADRO.desconocido;
   const pagos = Array.isArray(pedido?.pagos) ? pedido.pagos : [];
 
   return (
@@ -511,7 +517,7 @@ function PedidoVentaDetalleContent() {
                     )}
                   </div>
                 ) : (
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-400">Sin cotizacion ni solicitud de origen</div>
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-400">Sin cotización ni solicitud de origen</div>
                 )}
               </div>
               <div>
@@ -590,36 +596,62 @@ function PedidoVentaDetalleContent() {
               <h3 className="text-lg font-black text-slate-800 mb-4 flex items-center gap-2">
                 <DollarSign className="text-emerald-600" size={20} /> Resumen Financiero
               </h3>
-              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-                <div className="flex justify-between items-end mb-4">
+              {/* U24: el total y tres recuadros grandes (anticipo requerido, pagado verificado y saldo), la barra de lo
+                  pagado y el aviso del anticipo pendiente (R4). N1: lo pagado sale del libro de pagos (total - saldo); el
+                  requerido, del % guardado en el pedido (60 sin snapshot). @container: los recuadros se apilan cuando la
+                  tarjeta mide menos de 448 px. */}
+              <div className="@container bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Total del pedido</p>
+                  <p className="text-3xl font-black text-slate-900">{fCOP(resumenPago.total)}</p>
+                </div>
+                <div className="grid grid-cols-1 @md:grid-cols-3 gap-3">
+                  <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4">
+                    <p className="text-xs font-bold uppercase tracking-wider text-indigo-700">Anticipo requerido · {formatoPct(resumenPago.anticipoPct)}</p>
+                    <p className="text-2xl font-black text-indigo-900">{fCOP(resumenPago.requerido)}</p>
+                    <p className="text-sm text-indigo-700">
+                      {resumenPago.requerido === 0 ? 'No pide anticipo'
+                        : resumenPago.anticipoPendiente === null ? 'Del total del pedido'
+                        : resumenPago.anticipoPendiente > 0 ? 'Falta una parte' : 'Anticipo cubierto'}
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                    <p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Pagado (verificado)</p>
+                    <p className="text-2xl font-black text-emerald-800">{resumenPago.pagado === null ? '—' : fCOP(resumenPago.pagado)}</p>
+                    <p className="text-sm text-emerald-700">{resumenPago.pctPagado === null ? 'Saldo sin datos' : `${resumenPago.pctPagado}% del total`}</p>
+                  </div>
+                  <div className={`rounded-xl border p-4 ${tercerRecuadro.caja}`}>
+                    <p className={`text-xs font-bold uppercase tracking-wider ${tercerRecuadro.texto}`}>{tercerRecuadro.titulo}</p>
+                    <p className={`text-2xl font-black ${tercerRecuadro.valor}`}>
+                      {resumenPago.caso === 'pendiente' ? fCOP(resumenPago.saldo)
+                        : resumenPago.caso === 'a_favor' ? fCOP(resumenPago.saldoAFavor)
+                        : resumenPago.caso === 'completo' ? fCOP(0) : '—'}
+                    </p>
+                    <p className={`text-sm ${tercerRecuadro.texto}`}>{tercerRecuadro.ayuda}</p>
+                  </div>
+                </div>
+                {/* Sin saldo conocido (caso 'desconocido') no se pinta la barra ni el % (T6B). */}
+                {resumenPago.pagado !== null && resumenPago.pctPagado !== null && (
                   <div>
-                    <p className="text-slate-400 text-xs mb-1">Total a Pagar</p>
-                    <p className="text-3xl font-black text-slate-900">{fCOP(pedido?.total_cop)}</p>
+                    <div className="w-full bg-slate-200 rounded-full h-3 overflow-hidden">
+                      <div className="bg-emerald-500 h-3 rounded-full transition-all" style={{ width: `${resumenPago.pctPagado}%` }} />
+                    </div>
+                    <p className="mt-2 text-sm font-bold text-slate-600">
+                      Pagado {fCOP(resumenPago.pagado)} de {fCOP(resumenPago.total)} ({resumenPago.pctPagado}%)
+                    </p>
                   </div>
-                  <div className="text-right">
-                    <p className="text-slate-400 text-xs mb-1">Saldo Pendiente</p>
-                    <p className="text-xl font-black text-red-600">{fCOP(pedido?.saldo_cop)}</p>
-                  </div>
-                </div>
-                <div className="w-full bg-slate-200 rounded-full h-2.5 mb-2 overflow-hidden">
-                  <div className="bg-emerald-500 h-2.5 rounded-full transition-all" style={{ width: `${Math.max(0, Math.min(100, (pagadoCop / (Number(pedido?.total_cop) || 1)) * 100))}%` }} />
-                </div>
-                {/* N1: lo pagado sale del libro de pagos (total - saldo); el requerido, del % guardado en el pedido. */}
-                <div className="flex justify-between text-xs text-slate-400">
-                  <span>Anticipo requerido {pedido?.anticipo_pct != null ? formatoPct(pedido.anticipo_pct) : ''}: <span className="font-bold text-slate-600">{fCOP(pedido?.anticipo_requerido)}</span></span>
-                  <span>Pagado (verificado): <span className="text-emerald-600 font-bold">{fCOP(pagadoCop)}</span></span>
-                </div>
-                {Number(pedido?.anticipo_pendiente) > 0 && (
-                  <p className="mt-2 text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
-                    Anticipo pendiente: {fCOP(pedido.anticipo_pendiente)}
+                )}
+                {Number(resumenPago.anticipoPendiente) > 0 && (
+                  <p className="text-sm font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                    Anticipo pendiente: {fCOP(resumenPago.anticipoPendiente)}. El cliente todavía debe esta parte del anticipo.
                   </p>
                 )}
                 {pagos.length > 0 && (
-                  <ul className="mt-4 pt-3 border-t border-slate-100 space-y-1.5">
+                  <ul className="pt-3 border-t border-slate-100 space-y-1.5">
                     {pagos.map((p: any) => {
                       const d = describirPago(p);
                       return (
-                        <li key={p.id} className="text-xs text-slate-600 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                        <li key={p.id} className="text-sm text-slate-600 flex flex-wrap items-center gap-x-1.5 gap-y-1">
                           <span className="font-bold text-slate-800">{d.titulo}</span>
                           {d.partes.map((parte, i) => <span key={i}>· {parte}</span>)}
                           {p.fecha && <span>· {fDate(`${p.fecha}T00:00:00`)}</span>}
@@ -776,9 +808,14 @@ function PedidoVentaDetalleContent() {
             </h3>
           </div>
 
+          {/* U6+H22 (C11): Actividad | Chatter | IA, el orden de la solicitud; 'IA' con Sparkles, sin emoji. */}
           <div className="flex border-b border-slate-200 bg-slate-50/50 shrink-0">
-            <button onClick={() => setPanelTab('actividad')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${panelTab === 'actividad' ? 'text-indigo-700 border-indigo-600 bg-white' : 'text-slate-500 border-transparent hover:text-slate-700'}`}>Actividad</button>
-            <button onClick={() => setPanelTab('ia')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${panelTab === 'ia' ? 'text-indigo-700 border-indigo-600 bg-white' : 'text-slate-500 border-transparent hover:text-slate-700'}`}>IA</button>
+            {([['actividad', 'Actividad'], ['chatter', 'Chatter'], ['ia', 'IA']] as const).map(([k, l]) => (
+              <button key={k} type="button" onClick={() => setPanelTab(k)}
+                className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${panelTab === k ? 'text-indigo-700 border-indigo-600 bg-white' : 'text-slate-500 border-transparent hover:text-slate-700'}`}>
+                {k === 'ia' ? <span className="inline-flex items-center gap-1.5"><Sparkles size={14} />{l}</span> : l}
+              </button>
+            ))}
           </div>
 
           {panelTab === 'ia' && (
@@ -803,35 +840,16 @@ function PedidoVentaDetalleContent() {
 
           {panelTab === 'actividad' && (
             <>
-              <div className="p-5 border-b border-slate-200 bg-slate-50 z-10 shrink-0 space-y-3">
-                <div className="grid grid-cols-3 gap-2">
-                  <button onClick={handleEnviarWhatsApp}
-                    disabled={!pedido?.customer_phone}
-                    className="flex items-center justify-center gap-1.5 py-2.5 bg-[#25D366] text-white rounded-xl text-xs font-bold hover:bg-[#1ebe5d] transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed">
-                    <MessageCircle size={14} /> WhatsApp
-                  </button>
-                  <a href={pedido?.customer_phone ? `tel:${pedido.customer_phone}` : undefined}
-                    className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold shadow-sm transition-colors ${pedido?.customer_phone ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-slate-50 text-slate-300 pointer-events-none'}`}>
-                    <Phone size={14} /> Llamar
-                  </a>
-                  <a href={pedido?.customer_email ? `mailto:${pedido.customer_email}` : undefined}
-                    className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold shadow-sm transition-colors ${pedido?.customer_email ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-slate-50 text-slate-300 pointer-events-none'}`}>
-                    <Mail size={14} /> Email
-                  </a>
-                </div>
-                <div className="relative">
-                  <textarea rows={3} value={nota} onChange={e => setNota(e.target.value)}
-                    placeholder="Escribe un mensaje o registra una nota interna..."
-                    className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none resize-none transition-colors shadow-sm" />
-                  <button onClick={handleRegistrarNota} disabled={sendingNota || !nota.trim()}
-                    className="absolute bottom-3 right-3 bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg shadow-sm transition-colors disabled:opacity-50">
-                    {sendingNota ? <RefreshCw size={16} className="animate-spin" /> : <Send size={16} />}
-                  </button>
-                </div>
-              </div>
-
+              {/* U6+H22: la caja de notas y los botones de contacto se mudaron a la pestaña Chatter (ChatterDocumento:
+                  nota interna, llamada, WhatsApp, correo y Nota externa). Aquí queda el enlace 'Escribir nota'. */}
               <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-white">
-                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-6">Línea Temporal</h4>
+                <div className="flex items-center justify-between gap-2 mb-6">
+                  <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Línea Temporal</h4>
+                  <button type="button" onClick={() => setPanelTab('chatter')}
+                    className="inline-flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:underline">
+                    <MessageSquare size={12} /> Escribir nota
+                  </button>
+                </div>
                 <div className="space-y-6 relative before:absolute before:inset-0 before:ml-4 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-200 before:to-transparent">
                   {[...actividades].reverse().map((a: any, i: number) => (
                     <div key={i} className="relative flex items-start gap-4 group animate-in fade-in slide-in-from-bottom-2">
@@ -840,6 +858,8 @@ function PedidoVentaDetalleContent() {
                         <Activity size={14} />
                       </div>
                       <div className="flex-1 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                        {/* U6+H22: una nota del Chatter lleva su tipo encima (Nota interna, Llamada…, «Nota externa · medio»). */}
+                        {esEntradaChatter(a) && <div className="mb-1.5"><EtiquetaChatter actividad={a} /></div>}
                         <div className="flex items-center justify-between mb-2">
                           <span className="font-bold text-slate-800 text-sm">{a.description || a.action}</span>
                           <span className="text-[10px] font-bold text-slate-400">
@@ -855,6 +875,16 @@ function PedidoVentaDetalleContent() {
                 {actividades.length === 0 && <p className="text-xs text-slate-400 italic text-center py-8">Sin actividad registrada todavía.</p>}
               </div>
             </>
+          )}
+
+          {/* U6+H22 (R1): el Chatter compartido (nota interna, llamada, WhatsApp, correo y Nota externa con su medio). La
+              nota guardada entra de una vez aquí y en la Actividad, sin el spinner de página; si el servidor no devuelve
+              el renglón, recarga silenciosa. */}
+          {panelTab === 'chatter' && (
+            <div className="flex-1 overflow-y-auto p-5 custom-scrollbar bg-white">
+              <ChatterDocumento tipoDoc="VEN" doc={pedido}
+                onRegistrado={(log) => log ? setPedido((p: any) => agregarActividad(p, log, 'VEN')) : void loadPedido({ silencioso: true })} />
+            </div>
           )}
         </div>
       </div>

@@ -10,6 +10,7 @@
 import { redondearPeso, formatoPesos } from './pesos.js';
 import { pedidoVigente } from './listas-ventas.js';
 import { humanizarCodigo } from './estados-pedido.js';
+import { etiquetaModalidad } from './etiquetas-ventas.js';
 
 const esObjeto = (v) => v !== null && typeof v === 'object';
 const texto = (v) => (typeof v === 'string' ? v.trim() : v === null || v === undefined ? '' : String(v).trim());
@@ -54,21 +55,28 @@ export function hoyLocal(d = new Date()) {
 
 const esManual = (cot) => cot?.anticipo_pct_manual !== null && cot?.anticipo_pct_manual !== undefined;
 
-/** '60% · 60/40 (…)', '50% · manual', '60% · sin solicitud' o '60% · solicitud sin modalidad'. */
+/**
+ * '60% · 60/40 (60% de anticipo y 40% al entregar)', '0% · Crédito 30 días', '50% · manual', '60% · sin solicitud' o
+ * '60% · solicitud sin modalidad'. R23 (B2-T9A): la modalidad guardada ('Credito 30 dias') se muestra con
+ * etiquetaModalidad (etiquetas-ventas.js); el valor de la SC no cambia.
+ */
 export function etiquetaAnticipoCotizacion(cot) {
   const pct = formatoPct(cot?.anticipo_pct ?? 60);
   if (esManual(cot)) return `${pct} · manual`;
   if (!cot?.sc_id) return `${pct} · sin solicitud`;
   const modalidad = texto(cot.sc_modalidad_pago);
-  return `${pct} · ${modalidad || 'solicitud sin modalidad'}`;
+  return `${pct} · ${modalidad ? etiquetaModalidad(modalidad) : 'solicitud sin modalidad'}`;
 }
 
-/** De donde sale el anticipo, para una frase: 'Modalidad Contado', 'Anticipo manual de 50%', 'Cotización sin solicitud'. */
+/**
+ * De donde sale el anticipo, para una frase: 'Modalidad Contado', 'Modalidad Crédito 30 días' (con etiquetaModalidad,
+ * R23), 'Anticipo manual de 50%', 'Cotización sin solicitud'.
+ */
 export function origenAnticipo(cot) {
   if (esManual(cot)) return `Anticipo manual de ${formatoPct(cot.anticipo_pct_manual)}`;
   if (!cot?.sc_id) return 'Cotización sin solicitud';
   const modalidad = texto(cot.sc_modalidad_pago);
-  return modalidad ? `Modalidad ${modalidad}` : 'Solicitud sin modalidad de pago';
+  return modalidad ? `Modalidad ${etiquetaModalidad(modalidad)}` : 'Solicitud sin modalidad de pago';
 }
 
 /**

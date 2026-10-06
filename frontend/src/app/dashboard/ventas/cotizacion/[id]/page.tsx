@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import {
-  ArrowRight, Send, Mail, FileText, CheckCircle2, Circle,
+  ArrowRight, Send, FileText, CheckCircle2, Circle,
   MessageSquare, Calculator, Search, RefreshCw, Package, Trash2, RotateCcw,
-  AlertCircle, AlertTriangle, XCircle, X, Activity, MessageCircle, Phone, Sparkles
+  AlertCircle, AlertTriangle, XCircle, X, Activity, Sparkles
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
@@ -17,6 +17,7 @@ import {
 } from '../cotizacion-client';
 import type { AnulacionConfirmacion } from '../cotizacion-client';
 import { NextStepCard, EnlaceConfirmacionModal, CambiosDeActividad, returnToSeguro, getUsuarioActual, BotonVolver } from '../../flujo';
+import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
 import { situacionPedidoCotizacion } from '@/lib/listas-ventas';
 import {
   resumenAnticipoCotizacion, formatoPct, propagacionRecotizacion, puedeGestionarCotizacion, notaAnticipoPorLinea,
@@ -24,7 +25,7 @@ import {
 import { comoUTC } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
 import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
-import { telUrl } from '@/lib/chatter';
+import { agregarActividad, esEntradaChatter, telUrl } from '@/lib/chatter';
 import { ESTADOS_SC_SIN_CONFIRMAR } from '@/lib/estados-solicitud';
 
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
@@ -103,12 +104,8 @@ function CotizacionDetalleContent() {
   const [calcAnulacion, setCalcAnulacion] = useState<AnulacionConfirmacion | null>(null);
   const [avisoAnulada, setAvisoAnulada] = useState<string | null>(null);
 
-  // Chatter (compose real, reemplaza el placeholder sin funcionalidad)
-  const [chatterInput, setChatterInput] = useState('');
-  const [chatterSending, setChatterSending] = useState(false);
-
-  // Right panel tabs
-  const [cotPanelTab, setCotPanelTab] = useState<'actividad'|'ia'>('actividad');
+  // U6+H22 (C11): Actividad | Chatter | IA, el mismo orden de la solicitud. Las notas se escriben en el Chatter.
+  const [cotPanelTab, setCotPanelTab] = useState<'actividad' | 'chatter' | 'ia'>('actividad');
   const [cotAnalisis, setCotAnalisis] = useState('');
 
   useEffect(() => {
@@ -134,7 +131,7 @@ function CotizacionDetalleContent() {
       const d = raw?.data ?? raw;
       if (esLaUltima()) setCotizacion(d);
     } catch (err: any) {
-      if (!silencioso && esLaUltima()) setLoadError(err.message || 'No se pudo cargar la cotizacion');
+      if (!silencioso && esLaUltima()) setLoadError(err.message || 'No se pudo cargar la cotización');
     }
     if (!silencioso) setLoading(false);
   }, [params.id, isNew]);
@@ -464,28 +461,13 @@ function CotizacionDetalleContent() {
     setCreatingProductIdx(null);
   }
 
-  async function enviarChatter(viaWhatsApp: boolean) {
-    if (!cotizacion?.id) return;
-    if (viaWhatsApp) {
-      if (!cotizacion?.customer_phone) return;
-      const text = encodeURIComponent(chatterInput || `Hola, aqui esta tu cotizacion ${cotizacion.numero}`);
-      window.open(`https://wa.me/57${cotizacion.customer_phone.replace(/\D/g, '')}?text=${text}`, '_blank');
-      if (!chatterInput.trim()) return;
-    } else if (!chatterInput.trim()) {
-      return;
-    }
-    setChatterSending(true);
-    try {
-      await apiFetch(`/ventas/cotizaciones/${cotizacion.id}/actividad`, {
-        method: 'POST',
-        body: JSON.stringify({ action: 'CHATTER', description: chatterInput, user_name: currentUser }),
-      });
-      setChatterInput('');
-      await loadCotizacion();
-    } catch (err: any) {
-      avisarError(err, 'No se pudo registrar el mensaje');
-    }
-    setChatterSending(false);
+  // U6+H22: las notas y los contactos con el cliente se registran en la pestaña Chatter (ChatterDocumento, T6B). La nota
+  // guardada entra de una vez en la cotización (sin recargar ni spinner); si el servidor no devuelve el renglón, recarga
+  // silenciosa. Función con nombre (y no una flecha en el JSX) para que el React Compiler conserve el useCallback de
+  // loadCotizacion (eslint react-hooks/preserve-manual-memoization).
+  function notaRegistrada(log: Record<string, unknown> | null) {
+    if (log) setCotizacion((p: Record<string, unknown>) => agregarActividad(p, log, 'COT'));
+    else void loadCotizacion({ silencioso: true });
   }
 
   if (loading) {
@@ -632,7 +614,7 @@ function CotizacionDetalleContent() {
           <div className="min-w-0">
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-black text-slate-800">
-                {isNew ? 'Nueva Cotizacion' : (cotizacion?.numero || String(params.id || '').toUpperCase())}
+                {isNew ? 'Nueva Cotización' : (cotizacion?.numero || String(params.id || '').toUpperCase())}
               </h1>
               {!isNew && cotizacion && (
                 <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold border"
@@ -705,7 +687,7 @@ function CotizacionDetalleContent() {
               columna (también al arrastrar el panel de Actividad), no según la ventana. */}
           <div className="max-w-5xl mx-auto @container">
             <h2 className="text-xl font-black text-slate-800 mb-8 flex items-center gap-2">
-              <FileText className="text-blue-600" size={24} /> Datos de la Cotizacion
+              <FileText className="text-blue-600" size={24} /> Datos de la Cotización
             </h2>
 
             {!isNew && cotizacion && !cotizacion.customer_name && (
@@ -1035,10 +1017,16 @@ function CotizacionDetalleContent() {
             </h3>
           </div>
 
-          {/* Tab Bar */}
+          {/* Tab Bar -- U6+H22 (C11): Actividad | Chatter | IA, el orden de la solicitud; 'IA' con Sparkles, sin emoji. */}
           <div className="flex border-b border-slate-200 bg-slate-50/50 shrink-0">
-            <button onClick={()=>setCotPanelTab('actividad')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${cotPanelTab==='actividad'?'text-blue-700 border-blue-600 bg-white':'text-slate-500 border-transparent hover:text-slate-700'}`}>Actividad</button>
-            <button onClick={()=>setCotPanelTab('ia')} className={`px-5 py-3 text-sm font-bold border-b-2 transition-colors ${cotPanelTab==='ia'?'text-indigo-700 border-indigo-600 bg-white':'text-slate-500 border-transparent hover:text-slate-700'}`}>IA</button>
+            {([['actividad', 'Actividad'], ['chatter', 'Chatter'], ['ia', 'IA']] as const).map(([k, l]) => (
+              <button key={k} type="button" onClick={() => setCotPanelTab(k)}
+                className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${cotPanelTab === k
+                  ? (k === 'ia' ? 'text-indigo-700 border-indigo-600 bg-white' : 'text-blue-700 border-blue-600 bg-white')
+                  : 'text-slate-500 border-transparent hover:text-slate-700'}`}>
+                {k === 'ia' ? <span className="inline-flex items-center gap-1.5"><Sparkles size={14} />{l}</span> : l}
+              </button>
+            ))}
           </div>
 
           {/* IA Tab Content */}
@@ -1064,41 +1052,18 @@ function CotizacionDetalleContent() {
           )}
 
           {cotPanelTab==='actividad'&&(
-          <>{/* Contactar + Chatter Input Area -- reemplaza el placeholder anterior sin funcionalidad */}
-          <div className="p-5 border-b border-slate-200 bg-slate-50 z-10 shrink-0 space-y-3">
-            <div className="grid grid-cols-3 gap-2">
-              <button onClick={() => enviarChatter(true)} disabled={!cotizacion?.customer_phone}
-                className="flex items-center justify-center gap-1.5 py-2.5 bg-[#25D366] text-white rounded-xl text-xs font-bold hover:bg-[#1ebe5d] transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed">
-                <MessageCircle size={14} /> WhatsApp
-              </button>
-              <a href={cotizacion?.customer_phone ? `tel:${cotizacion.customer_phone}` : undefined}
-                className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold shadow-sm transition-colors ${cotizacion?.customer_phone ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-slate-50 text-slate-300 pointer-events-none'}`}>
-                <Phone size={14} /> Llamar
-              </a>
-              <a href={cotizacion?.customer_email ? `mailto:${cotizacion.customer_email}?subject=Cotización ${cotizacion.numero}` : undefined}
-                className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold shadow-sm transition-colors ${cotizacion?.customer_email ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-slate-50 text-slate-300 pointer-events-none'}`}>
-                <Mail size={14} /> Email
-              </a>
-            </div>
-
-            <div className="relative">
-              <textarea
-                rows={3}
-                value={chatterInput}
-                onChange={e => setChatterInput(e.target.value)}
-                placeholder="Escribe un mensaje o registra una nota interna..."
-                className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none resize-none transition-colors shadow-sm"
-              />
-              <button onClick={() => enviarChatter(false)} disabled={chatterSending || !chatterInput.trim()}
-                className="absolute bottom-3 right-3 bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-lg shadow-sm transition-colors disabled:opacity-40">
-                {chatterSending ? <RefreshCw size={16} className="animate-spin" /> : <Send size={16} />}
-              </button>
-            </div>
-          </div>
+          <>{/* U6+H22: la caja de notas y los botones de contacto se mudaron a la pestaña Chatter (ChatterDocumento:
+              nota interna, llamada, WhatsApp, correo y Nota externa). Aquí queda el enlace 'Escribir nota'. */}
 
           {/* Timeline / Bitacora */}
           <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-white">
-            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-6">Línea Temporal</h4>
+            <div className="flex items-center justify-between gap-2 mb-6">
+              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Línea Temporal</h4>
+              <button type="button" onClick={() => setCotPanelTab('chatter')}
+                className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 hover:text-blue-800 hover:underline">
+                <MessageSquare size={12} /> Escribir nota
+              </button>
+            </div>
 
             <div className="space-y-6 relative before:absolute before:inset-0 before:ml-4 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-200 before:to-transparent">
               {[...(cotizacion?.actividades || [])].reverse().map((a:any) => {
@@ -1111,6 +1076,8 @@ function CotizacionDetalleContent() {
                     </div>
 
                     <div className="flex-1 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                      {/* U6+H22: una nota del Chatter lleva su tipo encima (Nota interna, Llamada…, «Nota externa · medio»). */}
+                      {esEntradaChatter(a) && <div className="mb-1.5"><EtiquetaChatter actividad={a} /></div>}
                       <div className="flex items-center justify-between mb-2">
                         <span className="font-bold text-slate-800 text-sm">{a.description || a.action}</span>
                         <span className="text-[10px] font-bold text-slate-400">{fDate(a.created_at)} {fTime(a.created_at)}</span>
@@ -1146,6 +1113,15 @@ function CotizacionDetalleContent() {
             )}
           </div>
           </> /* end actividad */
+          )}
+
+          {/* U6+H22 (R1): el Chatter compartido (nota interna, llamada, WhatsApp, correo y Nota externa con su medio). La
+              nota guardada entra de una vez aquí y en la Actividad, sin el spinner de página; si el servidor no devuelve
+              el renglón, recarga silenciosa. */}
+          {cotPanelTab === 'chatter' && (
+            <div className="flex-1 overflow-y-auto p-5 custom-scrollbar bg-white">
+              <ChatterDocumento tipoDoc="COT" doc={cotizacion} onRegistrado={notaRegistrada} />
+            </div>
           )}
 
         </div>

@@ -53,8 +53,10 @@ const cotSc = { sc_id: 7, sc_numero: 'SC-1', anticipo_pct: 60, sc_modalidad_pago
 
 console.log('--- H36+H43 / R3 TEST 3: de donde sale el anticipo ---');
 {
-  assert.equal(etiquetaAnticipoCotizacion(cotSc), '60% · 60/40 (60% anticipo - 40% pendiente)');
-  assert.equal(origenAnticipo(cotSc), 'Modalidad 60/40 (60% anticipo - 40% pendiente)');
+  // R23 (B2-T9A, ruling 4): la modalidad se muestra con etiquetaModalidad (el texto de H10 que dejo B2-T6A); el valor
+  // guardado de la SC no cambia.
+  assert.equal(etiquetaAnticipoCotizacion(cotSc), '60% · 60/40 (60% de anticipo y 40% al entregar)');
+  assert.equal(origenAnticipo(cotSc), 'Modalidad 60/40 (60% de anticipo y 40% al entregar)');
   const manual = { ...cotSc, anticipo_pct: 50, anticipo_pct_manual: 50, anticipo_manual_nota: 'Negociado' };
   assert.equal(etiquetaAnticipoCotizacion(manual), '50% · manual');
   assert.equal(origenAnticipo(manual), 'Anticipo manual de 50%');
@@ -73,7 +75,7 @@ console.log('--- H36+H43 TEST 4: resumen del anticipo de una COT sin pedido (usa
   assert.equal(r.pedido, null);
   assert.equal(r.requerido, 1672154, 'el requerido del GET, no el anticipo_cop viejo');
   assert.equal(r.saldo, 2786923 - 1672154);
-  assert.equal(r.etiqueta, '60% · 60/40 (60% anticipo - 40% pendiente)');
+  assert.equal(r.etiqueta, '60% · 60/40 (60% de anticipo y 40% al entregar)');
   assert.equal(r.manual, null);
   const manual = resumenAnticipoCotizacion({ ...cotSc, anticipo_pct: 50, anticipo_pct_manual: 50,
     anticipo_manual_nota: '  Negociado con el cliente ', anticipo_requerido: 1393462 });
@@ -391,6 +393,21 @@ console.log('--- B4 TEST 14: Ajustar anticipo y Crear Pedido de Venta solo para 
   for (const rol of ['COMPRAS', 'ERP', 'FINANZAS', 'Finanzas', 'BODEGA', 'CONSULTA', 'Mercadeo', '', null, undefined]) {
     assert.equal(puedeGestionarCotizacion(rol), false, String(rol));
   }
+}
+
+console.log('--- R23 (B2-T9A) TEST 15: la modalidad de la solicitud sale con tilde (etiquetaModalidad de etiquetas-ventas) ---');
+{
+  const credito = { sc_id: 9, sc_numero: 'SC-9', anticipo_pct: 0, sc_modalidad_pago: 'Credito 30 dias', anticipo_pct_manual: null };
+  assert.equal(etiquetaAnticipoCotizacion(credito), '0% · Crédito 30 días');
+  assert.equal(origenAnticipo(credito), 'Modalidad Crédito 30 días');
+  assert.equal(resumenAnticipoCotizacion({ ...credito, total_cop: 1000, anticipo_requerido: 0 }).etiqueta,
+    '0% · Crédito 30 días');
+  // Los textos que etiquetaModalidad no reescribe quedan igual; los espacios de los bordes no cuentan.
+  assert.equal(origenAnticipo({ sc_id: 9, sc_modalidad_pago: '  Contra entrega ' }), 'Modalidad Contra entrega');
+  assert.equal(etiquetaAnticipoCotizacion({ sc_id: 9, anticipo_pct: 100, sc_modalidad_pago: 'Contado' }), '100% · Contado');
+  // El manual y la COT sin solicitud no muestran modalidad; el valor guardado no cambia.
+  assert.equal(etiquetaAnticipoCotizacion({ ...credito, anticipo_pct: 50, anticipo_pct_manual: 50 }), '50% · manual');
+  assert.equal(credito.sc_modalidad_pago, 'Credito 30 dias');
 }
 
 console.log('--- U19+U21 / C10 (B2-T9A, ruling 2) TEST 16: nota del anticipo por producto en TOTALES ---');

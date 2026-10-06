@@ -81,10 +81,10 @@ function ProductoNoEncontradoAviso({
   return (
     <div className="absolute top-full left-0 right-0 z-50 bg-amber-50 border border-amber-200 rounded-xl shadow-xl mt-1 p-3 min-w-[260px]">
       <p className="text-xs font-bold text-amber-800 flex items-center gap-1.5 mb-1">
-        <AlertCircle size={12}/> Producto no encontrado en el catalogo
+        <AlertCircle size={12}/> Producto no encontrado en el catálogo
       </p>
       <p className="text-xs text-amber-700 mb-2">
-        "{nombre}" no existe en el catalogo. Puedes agregarlo como texto libre sin bloquear la cotizacion.
+        "{nombre}" no existe en el catálogo. Puedes agregarlo como texto libre sin bloquear la cotización.
       </p>
       <div className="flex gap-2">
         <button type="button" onClick={onCancelar}
@@ -137,13 +137,13 @@ function ProductoAutocomplete({
   return (
     <div className="relative">
       <input type="text" value={value} onChange={e => handle(e.target.value)}
-        placeholder="Buscar producto en catalogo..."
+        placeholder="Buscar producto en el catálogo..."
         className="w-full border-0 bg-transparent outline-none font-medium text-slate-700 placeholder-slate-300" />
       {esLibre && value && (
         <p className="text-[9px] font-black text-amber-600 uppercase tracking-wide mt-0.5">Texto libre</p>
       )}
       {!esLibre && skuId && (
-        <p className="text-[9px] font-black text-emerald-600 uppercase tracking-wide mt-0.5">Vinculado a catalogo</p>
+        <p className="text-[9px] font-black text-emerald-600 uppercase tracking-wide mt-0.5">Vinculado a catálogo</p>
       )}
       {open && results.length > 0 && (
         <div className="absolute top-full left-0 right-0 z-50 bg-white border border-slate-200 rounded-xl shadow-xl mt-1 max-h-48 overflow-y-auto min-w-[240px]">
@@ -267,11 +267,11 @@ export function CalculadorModal({
   // estructura circular. El panel rosa reenvía el payload ACTUAL con anular_confirmacion y la razón.
   const handleSave = (extra: ExtraGuardado = {}) => {
     if (computedProd.length === 0 || computedProd.some(p => !p.total_cop || p.total_cop <= 0)) {
-      setError('Cada producto necesita un costo mayor a $0 antes de guardar la cotizacion.');
+      setError('Cada producto necesita un costo mayor a $0 antes de guardar la cotización.');
       return;
     }
     if (total <= 0) {
-      setError('El total de la cotizacion debe ser mayor a $0.');
+      setError('El total de la cotización debe ser mayor a $0.');
       return;
     }
     setError('');
@@ -809,9 +809,9 @@ export default function CotizacionClient() {
           <div className="flex-1">
             <h4 className="text-sm font-black text-amber-800">ATENCIÓN — Cotizaciones requieren acción (Alerta {alertDias} días)</h4>
             <p className="text-xs font-bold text-amber-700 mt-1">
-              {sinAtender > 0 && `* ${sinAtender} cotizacion(es) sin atender mas de ${alertDias} dias `}
+              {sinAtender > 0 && `* ${sinAtender} cotización(es) sin atender más de ${alertDias} días `}
               {sinCalc > 0 && `* ${sinCalc} sin calcular / sin precio `}
-              {vencenPronto > 0 && `* ${vencenPronto} vence(n) en los proximos 7 dias `}
+              {vencenPronto > 0 && `* ${vencenPronto} vence(n) en los próximos 7 días `}
             </p>
           </div>
           <button onClick={load} className="bg-amber-600 text-white px-4 py-2 rounded-lg text-xs font-bold hover:bg-amber-700 shrink-0">Actualizar</button>
@@ -871,7 +871,7 @@ export default function CotizacionClient() {
               {(['Activas','Confirmadas','Rechazadas','Analisis'] as const).map(tab=>(
                 <button key={tab} onClick={()=>setActiveTab(tab as any)}
                   className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${activeTab===tab?'bg-indigo-600 text-white shadow-sm':'text-gray-600 hover:text-indigo-700 hover:bg-indigo-50'}`}>
-                  {tab}
+                  {tab === 'Analisis' ? 'Análisis' : tab}
                   {tab!=='Analisis'&&<span className={`ml-1.5 text-xs font-black ${activeTab===tab?'text-indigo-200':'text-gray-400'}`}>
                     {tab==='Activas'?activas.length:tab==='Confirmadas'?confirmadas.length:rechazadas.length}
                   </span>}
