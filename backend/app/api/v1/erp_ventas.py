@@ -33,7 +33,7 @@ from app.core.ventas_dinero import (
     anular_pxps_de_pedido, monto_linea, repartir_anticipo_por_linea,
 )
 from app.core.textos_actividad import etiqueta_estado, ETIQUETAS_ESTADO, PASOS_SC, nombre_de_usuario
-from app.core.chatter import validar_nota, reinicia_atraso
+from app.core.chatter import validar_nota, reinicia_atraso, puede_registrar, CONTACTO_SOLO_ASESOR
 from app.core.estados_pedido import ESTADOS_VEN_DESTINOS, ESTADOS_VEN_SIN_DINERO, destinos_ven_permitidos
 from app.api.v1.schemas_compras import CancelarSolicitudBody, CotizarSinConfirmacionBody
 from app.api.v1.crm import mover_lead_de_solicitud, reabrir_lead_de_solicitud
@@ -910,17 +910,21 @@ def _agregar_nota(db: Session, entidad: str, doc, body: dict, user: User) -> dic
     """U6+H22: una nota del Chatter en la Actividad de `doc` (SC, COT o VEN), validada por chatter.validar_nota (422
     con el mensaje si no sirve). El autor es el usuario de la sesion (R9/C13), nunca body.user_name. R1: un contacto con
     el cliente (llamada, WhatsApp, correo, nota externa) reinicia el atraso del documento (updated_at); la nota interna
-    no. Una sola transaccion; devuelve el renglon creado (_log_dict: con id y created_at en 'Z')."""
+    no. Una sola transaccion; devuelve el renglon creado (_log_dict: con id y created_at en 'Z').
+    S7 (T11): esos contactos con el cliente son solo de ADMIN y ASESOR; COMPRAS solo deja notas internas (403)."""
     try:
         action, texto, extra = validar_nota(body)
     except ValueError as e:
         raise HTTPException(422, str(e))
+    rol = normalize_role(user.role)
+    if not puede_registrar(extra["tipo"], rol):
+        raise HTTPException(403, CONTACTO_SOLO_ASESOR)
     log = _log(db, entidad, doc.id, doc.numero, action, texto, user_name=nombre_de_usuario(user), extra_data=extra,
                commit=False)
     if reinicia_atraso(extra["tipo"]):
         doc.updated_at = datetime.datetime.utcnow()
     db.flush()
-    d = _log_dict(log, normalize_role(user.role))
+    d = _log_dict(log, rol)
     db.commit()
     return {"status": "success", "data": d}
 

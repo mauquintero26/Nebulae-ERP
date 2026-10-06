@@ -8,6 +8,7 @@ POST /ventas/{solicitudes|cotizaciones|pedidos}/{id}/actividad con body {action:
 - 422 con el mensaje en espanol; 404 si el documento no existe.
 - Una sola transaccion; la respuesta trae el renglon creado (id y created_at con 'Z').
 - R1: llamada, WhatsApp, correo y nota externa reinician el atraso (updated_at del documento); la nota interna no.
+- S7 (T11): esos contactos con el cliente son solo de ADMIN y ASESOR; COMPRAS solo deja notas internas (403 legible).
 
 Los simbolos nuevos de T4 se importan DENTRO de cada prueba (el runner importa el modulo fuera de un try).
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_chatter_notas
@@ -16,6 +17,8 @@ import datetime
 import uuid
 
 import pytest
+
+from tests.usuarios_de_prueba import compras_token  # noqa: F401  (fixture)
 
 AHORA = datetime.datetime.utcnow
 
@@ -264,6 +267,39 @@ def test_contacto_con_el_cliente_reinicia_el_atraso(app_client, db, admin_token)
         db.expire_all()
         db.refresh(doc)
         assert abs((AHORA() - doc.updated_at).total_seconds()) < 120, entidad
+
+
+CONTACTO_SOLO_ASESOR = ("Solo un asesor o un administrador puede registrar un contacto con el cliente (llamada, "
+                        "WhatsApp, correo o nota externa): deja una nota interna.")
+
+
+def test_s7_compras_solo_deja_notas_internas(app_client, db, compras_token):
+    """S7 (T11): llamada, WhatsApp, correo y nota externa (los contactos con el cliente, que reinician el atraso) son solo
+    de ADMIN y ASESOR. COMPRAS deja notas internas; con otro tipo recibe un 403 legible, sin renglon y sin tocar el
+    atraso del documento. FINANZAS sigue sin poder dejar notas (test_un_rol_sin_permiso_no_puede_dejar_notas)."""
+    hace_10_dias = AHORA() - datetime.timedelta(days=10)
+    documentos = (("SC", _sc(db, "SC-T11CH01", updated_at=hace_10_dias)),
+                  ("COT", _cot(db, "COT-T11CH01", updated_at=hace_10_dias)),
+                  ("VEN", _ven(db, "PVEN-T11CH01", updated_at=hace_10_dias)))
+    for entidad, doc in documentos:
+        for tipo in ("LLAMADA", "WHATSAPP", "CORREO", "EXTERNA", "llamada"):
+            resp = _nota(app_client, compras_token, entidad, doc.id, {"action": "CHATTER", "tipo": tipo,
+                                                                      "description": "Hablé con el cliente"})
+            assert resp.status_code == 403, (entidad, tipo, resp.text)
+            assert resp.json()["detail"] == CONTACTO_SOLO_ASESOR, (entidad, tipo)
+        assert _logs(db, entidad, doc.id) == [], entidad
+        db.expire_all()
+        db.refresh(doc)
+        assert doc.updated_at == hace_10_dias, entidad
+        # La nota interna si, con tipo NOTA o sin tipo (y no reinicia el atraso).
+        for body in ({"action": "CHATTER", "tipo": "NOTA", "description": "Pedí el flete"},
+                     {"action": "CHATTER", "description": "Confirmar bodega"}):
+            resp = _nota(app_client, compras_token, entidad, doc.id, body)
+            assert resp.status_code == 200, (entidad, resp.text)
+            assert resp.json()["data"]["extra_data"] == {"tipo": "NOTA"}
+        db.expire_all()
+        db.refresh(doc)
+        assert doc.updated_at == hace_10_dias, entidad
 
 
 def test_guardar_una_nota_es_un_solo_commit(app_client, db, admin_token, contador_sql):

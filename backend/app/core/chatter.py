@@ -8,7 +8,8 @@ sale del body: es nombre_de_usuario(usuario de la sesion) (R9/C13), que vive en 
 from app.core.textos_actividad import nombre_de_usuario
 
 __all__ = ["TIPOS_CHATTER", "ACCIONES_PERMITIDAS", "LEGADO", "MAX_TEXTO", "MAX_MEDIO", "validar_nota",
-           "reinicia_atraso", "nombre_de_usuario"]
+           "reinicia_atraso", "puede_registrar", "ROLES_CONTACTO_CON_EL_CLIENTE", "CONTACTO_SOLO_ASESOR",
+           "nombre_de_usuario"]
 
 # Tipo de entrada -> como se lee. EXTERNA (R1) = 'Nota externa': un contacto con el cliente por cualquier otro medio
 # (visita, reunion, llamada desde otro telefono...), con el medio opcional. Ninguna se le envia al cliente.
@@ -66,3 +67,17 @@ def validar_nota(body) -> tuple:
 def reinicia_atraso(tipo) -> bool:
     """R1: True si la entrada es un contacto con el cliente (llamada, WhatsApp, correo o nota externa)."""
     return tipo in _REINICIAN_ATRASO
+
+
+# S7 (T11): un contacto con el cliente (los tipos que reinician el atraso) lo registra solo quien atiende al cliente.
+# COMPRAS, que tambien puede dejar notas, solo deja notas internas: si no, sacaria un documento de las alertas de
+# atrasados con un contacto que no hizo. Roles ya normalizados (normalize_role).
+ROLES_CONTACTO_CON_EL_CLIENTE = frozenset({"ADMIN", "ASESOR"})
+CONTACTO_SOLO_ASESOR = ("Solo un asesor o un administrador puede registrar un contacto con el cliente (llamada, "
+                        "WhatsApp, correo o nota externa): deja una nota interna.")
+
+
+def puede_registrar(tipo, rol) -> bool:
+    """S7 (T11): False si `rol` no puede dejar una entrada de ese tipo (un contacto con el cliente fuera de ADMIN y
+    ASESOR). La nota interna la puede dejar cualquier rol que tenga acceso al Chatter."""
+    return not reinicia_atraso(tipo) or rol in ROLES_CONTACTO_CON_EL_CLIENTE
