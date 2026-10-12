@@ -314,19 +314,23 @@ console.log('--- T11 calidad E6: textoSinTelefono, el mismo texto en las tres ve
   for (const tel of ['+57', '0', '123', '300 123 45']) assert.equal(textoSinTelefono(tel), 'teléfono incompleto', tel);
   // Con un teléfono que sirve no hay texto (la opción WhatsApp está habilitada).
   for (const tel of ['3001234567', '+57 300 123 4567', '+1 202 555 0143']) assert.equal(textoSinTelefono(tel), null, tel);
-  // Los detalles de la SC (que no pasaba ninguno) y de la COT lo usan, sin el texto armado a mano.
+  // Los tres montajes (detalle de la SC, que no pasaba ninguno; detalle de la COT; y el Hub, ronda 1 punto 8) lo usan,
+  // sin el texto armado a mano.
   const leer = (ruta) => readFileSync(new URL(`../src/app/dashboard/ventas/${ruta}`, import.meta.url), 'utf8');
-  for (const ruta of ['cotizacion/[id]/page.tsx', 'solicitud/[id]/page.tsx']) {
+  for (const ruta of ['cotizacion/[id]/page.tsx', 'solicitud/[id]/page.tsx', 'page.tsx']) {
     const fuente = leer(ruta);
     assert.ok(/<ChannelModal[\s\S]*?textoSinTelefono=\{textoSinTelefono\(/.test(fuente), `${ruta}: ChannelModal con textoSinTelefono(...)`);
     assert.ok(!fuente.includes("'teléfono incompleto' : 'sin teléfono'"), `${ruta}: sin el texto armado a mano`);
   }
-  // El Hub (máxima protección en esta ronda: no se toca su montaje) arma el mismo texto en todos los casos en que
-  // WhatsApp queda deshabilitado (motivoTelefono).
+  // Es el mismo texto que armaban a mano antes, en todos los casos en que WhatsApp queda deshabilitado.
   for (const tel of [null, '', 'sin número', '+57', '0', '123', '300 123 45']) {
     assert.ok(motivoTelefono(tel), String(tel));
     assert.equal(waUrl(tel) ? 'teléfono incompleto' : 'sin teléfono', textoSinTelefono(tel), String(tel));
   }
+  // Ronda 1 (9): el resumen de envío de la lista de solicitudes, sin un teléfono que sirva, dice por qué en vez del botón.
+  const lista = leer('solicitud/solicitud-client.tsx');
+  assert.ok(/waEnvio\s*\?[\s\S]*?:\s*<span[^>]*>\{motivoTelefono\(envio\.telefono\)\}/.test(lista),
+    'sin waEnvio se muestra motivoTelefono(envio.telefono)');
 }
 
 console.log('--- T11 calidad F1: los contactos con el cliente solo los registran ADMIN y ASESOR (S7 en el frontend) ---');

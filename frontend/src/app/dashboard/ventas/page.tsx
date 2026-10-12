@@ -20,13 +20,13 @@ import { CambiosDeActividad, EnlaceConfirmacionModal, getUsuarioActual } from '.
 import { ChannelModal, ESTADOS as ESTADOS_COT } from './cotizacion/cotizacion-client';
 import { ESTADOS_SC } from './solicitud/solicitud-client';
 import { ComposerChatter, EtiquetaChatter } from './chatter';
-import { agregarActividad, esEntradaChatter, motivoTelefono } from '@/lib/chatter';
+import { agregarActividad, esEntradaChatter, motivoTelefono, textoSinTelefono } from '@/lib/chatter';
 import { infoEstadoPedido, esCotizacionActiva } from '@/lib/estados-pedido';
 import {
   ordenParaCancelar, motivoNoCancelable, resumenLote, ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN,
   repartirCambioEstadoPVEN, comoUTC,
   diasDesde, textoAntiguedad, ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, esNoResuelto, esAccionTomada, accionSiguienteSC,
-  esSCConCotizacionTemprana, notaReiniciaAtraso, desdeElHub,
+  esSCConCotizacionTemprana, notaReiniciaAtraso, desdeElHub, fusionarCargaHub,
 } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
 import { correoDelCliente } from '@/lib/aviso-correo';
@@ -285,7 +285,7 @@ export default function VentasHub() {
   const [loading, setLoading]           = useState(true);
   // H49 (T1B): avisos y confirmaciones del sistema; setToast queda como adaptador ({msg, type}) de las llamadas de siempre.
   // Los de error pasan por textoDeError (sin conexión, '[object Object]', 'Error: ' repetido).
-  const { avisar, avisarError, confirmar } = useAvisos();
+  const { avisar, confirmar } = useAvisos();
   const setToast = useCallback((t: {msg:string,type:'ok'|'error'}|null) => {
     if (!t) return;
     if (t.type === 'error') avisar(textoDeError(t.msg), {tono: 'error'});
@@ -328,34 +328,27 @@ export default function VentasHub() {
 
   // T9B r1: silencioso (tras una nota del panel de actividad) recarga sin el spinner de página: la tabla o el Kanban no
   // se reemplazan detrás del panel y no se pierde el scroll. «Actualizar» la llama sin opciones: con spinner.
-  // T11 calidad (E4): un GET que falla ya no vacía su lista: se conservan los datos que había en pantalla (también la
-  // configuración de alertas) y se avisa UNA vez, aunque fallen varios.
+  // T11 calidad (E4, ronda 1): un GET que falla ya no vacía su lista: fusionarCargaHub (lib/hub-ventas.js, con su prueba)
+  // conserva lo de la carga anterior (también la configuración de alertas) y da UN aviso, aunque fallen varios.
+  const ultimaCarga = React.useRef<{sc:any[];cot:any[];ven:any[]}|null>(null);
   const loadData = useCallback(async(opciones?: {silencioso?: boolean})=>{
     const silencioso = opciones?.silencioso === true;
     if(!silencioso) setLoading(true);
     try {
-      const fallos: unknown[] = [];
-      const pedir = (ruta: string) => apiFetch(ruta).catch((err: unknown) => { fallos.push(err); return null; });
+      const pedir = (ruta: string) => apiFetch(ruta).catch((err: unknown) => { console.error(err); return null; });
       const [sc,cot,ven,cfg] = await Promise.all([
         pedir('/ventas/solicitudes?limit=200'), pedir('/ventas/cotizaciones?limit=200'),
         pedir('/ventas/pedidos?limit=200'), pedir('/ventas/config'),
       ]);
-      const lista = (r: any, tipo: string): any[] | null =>
-        r === null ? null : (Array.isArray(r) ? r : (r?.data || r?.items || [])).map((x:any)=>({...x,tipo}));
-      const scL = lista(sc,'SC'), cotL = lista(cot,'COT'), venL = lista(ven,'VEN');
-      if(scL) setSolicitudes(scL);
-      if(cotL) setCotizaciones(cotL);
-      if(venL) setPedidos(venL);
-      setAllData(prev => {
-        const previas = (tipo: string) => prev.filter(x => x.tipo === tipo);
-        return [...(scL ?? previas('SC')),...(cotL ?? previas('COT')),...(venL ?? previas('VEN'))]
-          .sort((a,b)=>new Date(b.created_at||0).getTime()-new Date(a.created_at||0).getTime());
-      });
-      if(cfg && typeof cfg === 'object') setAlertDias(cfg?.data || cfg);
-      if(fallos.length) avisarError(fallos[0], 'No se pudieron actualizar las listas (se muestran las últimas cargadas)');
+      const carga = fusionarCargaHub(ultimaCarga.current, {sc, cot, ven, cfg});
+      ultimaCarga.current = carga.listas;
+      setSolicitudes(carga.listas.sc); setCotizaciones(carga.listas.cot); setPedidos(carga.listas.ven);
+      setAllData(carga.todas);
+      if(carga.cfg) setAlertDias(carga.cfg);
+      if(carga.aviso) avisar(carga.aviso, {tono: 'error'});
     } catch(err:any){setToast({msg:err.message,type:'error'});}
     finally{setLoading(false);}
-  },[avisarError]);
+  },[avisar]);
 
   useEffect(()=>{loadData();},[loadData]);
   useEffect(()=>{if(activeTab==='Analisis')loadAnalytics();},[activeTab,analyticsRange,analyticsTopN]);
@@ -1607,7 +1600,7 @@ export default function VentasHub() {
           saving={enviandoHub}
           // T9A: WhatsApp solo con un teléfono que sirve (motivoTelefono, como la COT); si no, dice por qué.
           customerHasPhone={!motivoTelefono(envioHub.telefono)}
-          textoSinTelefono={waUrl(envioHub.telefono) ? 'teléfono incompleto' : 'sin teléfono'}
+          textoSinTelefono={textoSinTelefono(envioHub.telefono) ?? undefined}
           documentLabel={envioHub.tipo === 'COT' ? 'cotización' : 'solicitud'}
           customerEmail={envioHub.correo}
         />

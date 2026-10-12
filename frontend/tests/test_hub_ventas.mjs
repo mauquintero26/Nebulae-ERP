@@ -17,7 +17,7 @@ import {
   ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN, repartirCambioEstadoPVEN,
   comoUTC, diasDesde, textoAntiguedad, diaLocalDeFecha, fechaEditadaParaGuardar,
   ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, tieneProductos, esNoResuelto, esAccionTomada, accionSiguienteSC,
-  esSCConCotizacionTemprana, TIPOS_NOTA_REINICIAN_ATRASO, notaReiniciaAtraso, desdeElHub,
+  esSCConCotizacionTemprana, TIPOS_NOTA_REINICIAN_ATRASO, notaReiniciaAtraso, desdeElHub, fusionarCargaHub,
 } from '../src/lib/hub-ventas.js';
 import { destinoVolver, etiquetaVolver } from '../src/lib/detalle-layout.js';
 import { ESTADOS_PEDIDO } from '../src/lib/estados-pedido.js';
@@ -283,6 +283,56 @@ console.log('--- T11 calidad E2+E3: los destinos del Hub llevan return_to del Hu
   const lista = readFileSync(new URL('../src/app/dashboard/ventas/solicitud/solicitud-client.tsx', import.meta.url), 'utf8');
   assert.ok(!lista.includes('wa.me/57'), 'sin wa.me/57 armado a mano (duplicaba el 57)');
   assert.ok(!lista.includes('new Date(s.fecha_solicitud)'), 'la fecha de la SC pasa por comoUTC');
+}
+
+console.log('--- T11 calidad, ronda 1 (7): fusionarCargaHub, la recarga del Hub sin perder lo que había ---');
+{
+  const SIN_PREVIOS = 'No se pudieron cargar las listas. Pulsa Actualizar para intentarlo de nuevo.';
+  const CON_PREVIOS = 'No se pudieron actualizar las listas; se muestran los datos anteriores.';
+  const SIN_CONFIG = 'No se pudo cargar la configuración de alertas.';
+  const sc1 = { id: 1, created_at: '2026-10-01T10:00:00' };
+  const cot1 = { id: 2, created_at: '2026-10-03T10:00:00' };
+  const ven1 = { id: 3, created_at: '2026-10-02T10:00:00' };
+  const cfg = { data: { alerta_sc_dias: '3' } };
+
+  // Todo bien: las listas nuevas (con su tipo), todas juntas de la más nueva a la más vieja, la config y sin aviso.
+  const ok = fusionarCargaHub(null, { sc: { data: [sc1] }, cot: [cot1], ven: { items: [ven1] }, cfg });
+  assert.deepEqual(ok.listas, { sc: [{ ...sc1, tipo: 'SC' }], cot: [{ ...cot1, tipo: 'COT' }], ven: [{ ...ven1, tipo: 'VEN' }] });
+  assert.deepEqual(ok.todas.map((x) => x.tipo), ['COT', 'VEN', 'SC']);
+  assert.deepEqual(ok.cfg, { alerta_sc_dias: '3' });
+  assert.equal(ok.aviso, null);
+
+  // Primera carga y falla una lista (null = GET fallido): esa queda vacía y el aviso pide reintentar.
+  const primera = fusionarCargaHub(null, { sc: null, cot: [cot1], ven: [ven1], cfg });
+  assert.deepEqual(primera.listas.sc, []);
+  assert.equal(primera.aviso, SIN_PREVIOS);
+
+  // Con datos previos: la lista que falla conserva la anterior, la que llega la reemplaza, y un solo aviso aunque
+  // fallen varias (y la config).
+  const previas = ok.listas;
+  const cot2 = { id: 9, created_at: '2026-10-05T10:00:00' };
+  const varias = fusionarCargaHub(previas, { sc: null, cot: [cot2], ven: null, cfg: null });
+  assert.deepEqual(varias.listas, { sc: previas.sc, cot: [{ ...cot2, tipo: 'COT' }], ven: previas.ven });
+  assert.deepEqual(varias.todas.map((x) => x.id), [9, 3, 1]);
+  assert.equal(varias.cfg, null);  // config nula: se conserva la que hay en pantalla
+  assert.equal(varias.aviso, CON_PREVIOS);
+
+  // Solo falla la config.
+  const soloCfg = fusionarCargaHub(previas, { sc: [sc1], cot: [cot1], ven: [ven1], cfg: null });
+  assert.equal(soloCfg.cfg, null);
+  assert.equal(soloCfg.aviso, SIN_CONFIG);
+
+  // Datos previos vacíos (la carga anterior no trajo nada): sigue siendo «no se pudieron cargar».
+  assert.equal(fusionarCargaHub({ sc: [], cot: [], ven: [] }, { sc: null, cot: null, ven: null, cfg }).aviso, SIN_PREVIOS);
+  // Una config que no es un objeto no reemplaza la de pantalla (y no es un fallo).
+  assert.equal(fusionarCargaHub(previas, { sc: [], cot: [], ven: [], cfg: 'x' }).cfg, null);
+  // No muta lo que recibe.
+  assert.deepEqual(previas.sc, [{ ...sc1, tipo: 'SC' }]);
+
+  // En el Hub queda solo la llamada (con el aviso de la función, sin armar el texto allí).
+  const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8');
+  assert.ok(hub.includes('fusionarCargaHub('), 'loadData usa fusionarCargaHub');
+  assert.ok(!hub.includes('No se pudieron actualizar las listas (se muestran'), 'sin el texto viejo en el Hub');
 }
 
 console.log('--- H3 TEST 12: esNoResuelto / esAccionTomada ---');

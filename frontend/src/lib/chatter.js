@@ -324,7 +324,8 @@ export function motivoTelefono(telefono) {
 /**
  * T11 calidad (E6): lo que dice la opcion WhatsApp de la ventana de envio (ChannelModal) cuando el telefono no sirve
  * (motivoTelefono): 'sin teléfono' si no tiene digitos y 'teléfono incompleto' si tiene pero no alcanzan. null si el
- * telefono sirve (la opcion esta habilitada). Un solo texto para las ventanas de envio de la SC, la COT y el Hub.
+ * telefono sirve (la opcion esta habilitada). Lo usan los tres montajes de ChannelModal: el detalle de la SC, el de la
+ * COT y el Hub (ventas/page.tsx, desde la ronda 1 de T11 calidad).
  * @param {any} telefono
  * @returns {string | null}
  */

@@ -111,7 +111,8 @@ const LETRA_O_DIGITO = /^[\p{L}\p{N}]$/u;
  * T11 calidad (D1): el motivo tal como lo mide y lo guarda el servidor (_motivo_limpio de /cotizar-sin-confirmacion):
  * NFKC; sin caracteres de formato (Cf: U+200B, U+00AD, U+FEFF…) ni de control (Cc) ni RELLENOS_INVISIBLES; cualquier
  * espacio o salto de línea cuenta como un espacio, los seguidos quedan en uno y se quitan los de los bordes. Lo que no
- * es texto da ''.
+ * es texto da ''. La paridad con el servidor depende de la versión de Unicode de cada lado (node/ICU y Python): un
+ * carácter nuevo puede clasificarse distinto; el servidor sigue siendo la autoridad y responde el 422 legible.
  * @param {any} texto
  * @returns {string}
  */

@@ -1207,8 +1207,8 @@ function CotizacionDetalleContent() {
           onCancel={cancelarEnvio}
           saving={sending}
           customerHasPhone={!!telUrl(cotizacion?.customer_phone)}
-          // Ronda 1 (punto 11): con dígitos pero sin alcanzar (motivoTelefono) es un teléfono incompleto. T11 calidad (E6):
-          // el mismo texto de la SC y del Hub (textoSinTelefono).
+          // Ronda 1 (punto 11): con dígitos pero sin alcanzar (motivoTelefono) es un teléfono incompleto. T11 calidad (E6 y
+          // ronda 1): las tres ventanas de envío (SC, COT y Hub) usan textoSinTelefono.
           textoSinTelefono={textoSinTelefono(cotizacion?.customer_phone) ?? undefined}
           customerEmail={cotizacion?.customer_email ?? null}
         />

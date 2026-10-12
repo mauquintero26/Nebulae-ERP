@@ -27,7 +27,7 @@ import {
   pestanaDeSolicitud,
 } from '@/lib/listas-ventas';
 import { comoUTC } from '@/lib/hub-ventas';
-import { mailtoUrl, telUrl } from '@/lib/chatter';
+import { mailtoUrl, telUrl, motivoTelefono } from '@/lib/chatter';
 import { waUrl } from '@/lib/whatsapp';
 import {
   ESTADOS_SC as ESTADOS_SC_LIB, ESTADOS_SC_HEREDADOS, infoEstadoSolicitud, puedeReiniciar, motivoDeCancelacion,
@@ -350,7 +350,9 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
             <div className="mt-2">
               <p className="text-xs font-black text-teal-700 mb-1">Enviar resumen:</p>
               <div className="flex gap-2">
-                {waEnvio&&<a href={waEnvio} target="_blank" rel="noreferrer" className="flex-1 bg-green-500 text-white py-2 rounded-xl text-xs font-bold text-center flex items-center justify-center gap-1"><MessageCircle size={12}/>WhatsApp</a>}
+                {/* T11 calidad, ronda 1 (9): sin un teléfono que sirva, en vez del botón se dice por qué. */}
+                {waEnvio ? <a href={waEnvio} target="_blank" rel="noreferrer" className="flex-1 bg-green-500 text-white py-2 rounded-xl text-xs font-bold text-center flex items-center justify-center gap-1"><MessageCircle size={12}/>WhatsApp</a>
+                  : <span className="flex-1 self-center text-xs text-slate-500">{motivoTelefono(envio.telefono)}</span>}
                 {form.modalidad_pago&&<a href={`mailto:?subject=${encodeURIComponent('Información de envío')}&body=${encodeURIComponent(`Destinatario: ${envio.nombre_completo}\nCédula: ${envio.cedula}\nDirección: ${envio.direccion}, ${envio.ciudad}\nTransportadora: ${envio.transportadora}\nTipo: ${envio.tipo_envio}`)}`} className="flex-1 bg-blue-500 text-white py-2 rounded-xl text-xs font-bold text-center flex items-center justify-center gap-1"><Mail size={12}/>Correo</a>}
               </div>
             </div>

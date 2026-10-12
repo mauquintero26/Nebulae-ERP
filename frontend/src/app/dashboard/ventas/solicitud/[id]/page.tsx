@@ -345,7 +345,8 @@ function SolicitudDetalleContent() {
     const contactoGuardado = !!correccion && correccion.sin_cambios !== true;
     const campos = camposEditadosDeSolicitud(base, editForm);
     // T8A ronda 1: el vencimiento solo viaja si el día cambió (mediodía local de ese día). Sin tocarlo no se mueve la
-    // hora guardada ni la Actividad anota «11/10/2026 → 10/10/2026» (cambios_documento compara el día UTC), y nunca
+    // hora guardada ni la Actividad anota «11/10/2026 → 10/10/2026» (cambios_documento compara el día de Colombia,
+    // America/Bogota, desde T11 calidad B4), y nunca
     // se manda ''.
     const vencimiento = fechaEditadaParaGuardar(editForm.fecha_vencimiento, base.fecha_vencimiento);
     if (vencimiento) campos.fecha_vencimiento = vencimiento;
