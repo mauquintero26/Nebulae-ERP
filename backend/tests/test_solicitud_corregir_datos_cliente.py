@@ -1316,3 +1316,19 @@ def test_el_respaldo_de_las_etiquetas_del_360_nunca_deja_el_codigo_ni_pierde_las
     assert crm._etiqueta_actividad("OTRA_COSA") == "Otra cosa"
     assert crm._etiqueta_actividad("Llamar a Nebulae") == "Llamar a Nebulae"
     assert crm._etiqueta_actividad("") == crm._etiqueta_actividad(None) == ""
+
+
+def test_t11_b3_el_titulo_del_pedido_del_crm_viejo_lleva_el_tipo_con_tilde(app_client, db, admin_token):
+    """T11 calidad (B3): el titulo (status_label) de sale_order_legacy en el 360 era solicitud_tipo tal cual se guardo
+    ('Cotizacion de Producto'); ahora sale con su etiqueta (textos_actividad.TIPOS_SOLICITUD, espejo de
+    etiquetas-ventas.js). Un texto libre queda igual y sin tipo sigue 'Solicitud'."""
+    from app.models.sales import SalesOrder
+    cli = _cliente(db, phone="3000000000", email=f"t11b3-{_u()}@test.com")
+    for tipo in ("Cotizacion de Producto", "Soporte Tecnico", "Devolucion de Producto", "Un tipo libre", None):
+        db.add(SalesOrder(customer_id=cli.id, status="QUOTING", solicitud_tipo=tipo))
+    db.commit()
+    resp = app_client.get(f"/api/v1/crm/customers/{cli.id}/profile-360", headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    titulos = sorted(t["status_label"] for t in resp.json()["data"]["timeline"] if t["type"] == "sale_order_legacy")
+    assert titulos == sorted(["Cotización de producto", "Soporte técnico", "Devolución de producto", "Un tipo libre",
+                              "Solicitud"])

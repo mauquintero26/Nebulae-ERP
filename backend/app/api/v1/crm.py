@@ -14,7 +14,7 @@ from app.api.v1.schemas_fase5 import AgendaActivityCreate, AgendaActivityRespons
 
 from app.schemas import crm as schemas
 from app.core import cambios_documento, clientes
-from app.core.textos_actividad import etiqueta_estado, nombre_de_usuario
+from app.core.textos_actividad import ETIQUETAS_ESTADO, etiqueta_estado, etiqueta_tipo_solicitud, nombre_de_usuario
 from app.core.ventas_dinero import pesos
 from sqlalchemy import func
 from sqlalchemy.exc import DataError, IntegrityError
@@ -365,14 +365,12 @@ _TIPOS_PAGO = {
     "ANTICIPO": "Anticipo", "ABONO": "Abono", "PAGO_TOTAL": "Pago total", "PAGO_SALDO": "Pago del saldo",
     "DEVOLUCION": "Devolución", "REVERSION": "Reversión", "AJUSTE_AUTORIZADO": "Ajuste autorizado",
 }
-_ESTADOS_PAGO = {
-    "CONFIRMADO": "Confirmado", "REVERTIDO": "Revertido", "ANULADO": "Anulado",
-    "TRASLADADO": "Trasladado a otro pedido",
-}
+# T11 calidad (B2): los estados de pago y de entrega viven en la fuente unica (textos_actividad.ETIQUETAS_ESTADO).
+_ESTADOS_PAGO = ETIQUETAS_ESTADO["PAGO"]
 _ETIQUETAS_360 = {
     "PAGO_TIPO": _TIPOS_PAGO,
     "PAGO_ESTADO": _ESTADOS_PAGO,
-    "ENTREGA": {"EN_TRANSITO": "En tránsito"},  # estado de SaleOrderDelivery: el resto lo humaniza el respaldo
+    "ENTREGA": ETIQUETAS_ESTADO["ENTREGA"],  # estado de SaleOrderDelivery: el resto lo humaniza el respaldo
     "RESOLUCION": {  # financial_resolution de SaleOrderReturn
         "DEVOLUCION_DINERO": "Devolución de dinero", "SALDO_A_FAVOR": "Saldo a favor",
         "SIN_DEVOLUCION_DINERO": "Sin devolución de dinero",
@@ -626,7 +624,9 @@ def get_customer_360_profile(
             "type": "sale_order_legacy",
             "id": order.id,
             "status": order.status,
-            "status_label": tipo_display,
+            # T11 calidad (B3): el tipo guardado sin tilde sale con su etiqueta ('Cotización de producto'); un texto
+            # libre queda tal cual.
+            "status_label": etiqueta_tipo_solicitud(tipo_display),
             "estado_label": estado_display,
             "color": STATUS_COLORS.get(order.status, "slate"),
             "created_at": order.created_at.isoformat() if order.created_at else None,

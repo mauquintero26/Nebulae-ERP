@@ -344,12 +344,70 @@ def test_el_dinero_de_la_actividad_del_pedido_usa_el_punto_de_miles(app_client, 
     from app.models.erp_documents import ActivityLog
     textos = [f.description for f in db.query(ActivityLog).filter(
         ActivityLog.entity_type == "PVEN", ActivityLog.entity_id == so_id).order_by(ActivityLog.id).all()]
-    pago = [t for t in textos if t.startswith("Pago ANTICIPO registrado")]
+    # T11 calidad (B1): sin « COP» despues de los pesos (ya llevan «$») y el tipo del pago con su etiqueta, no el codigo.
+    pago = [t for t in textos if t.startswith("Pago anticipo registrado")]
     assert pago, textos
-    assert pago[0] == "Pago ANTICIPO registrado por $750.000 COP. Neto pagado: $750.000 COP. Saldo: $500.000 COP", pago[0]
+    assert pago[0] == "Pago anticipo registrado por $750.000. Neto pagado: $750.000. Saldo: $500.000", pago[0]
     assert not any("$1,250,000" in t or "$750,000" in t for t in textos), textos
+    assert not any(" COP" in t or "ANTICIPO" in t for t in textos), textos
     creado = [t for t in textos if t.startswith("Pedido canónico")]
-    assert creado and "Total: $1.250.000 COP" in creado[0], textos
+    assert creado and creado[0].endswith("Total: $1.250.000"), textos
+
+
+def test_t11_b1_etiqueta_del_tipo_de_pago_en_la_actividad():
+    """T11 calidad (B1): «Pago {tipo} registrado…» con la etiqueta del tipo (fuente unica en textos_actividad); un tipo
+    que no esta en el mapa sale humanizado, nunca el codigo crudo."""
+    from app.core.textos_actividad import etiqueta_tipo_pago
+    esperado = {"ANTICIPO": "anticipo", "SALDO": "saldo", "ABONO": "abono", "PAGO_TOTAL": "total",
+                "PAGO_SALDO": "del saldo", "DEVOLUCION": "devolución", "REVERSION": "reversión",
+                "AJUSTE_AUTORIZADO": "ajuste autorizado", "AJUSTE": "ajuste"}
+    for codigo, etiqueta in esperado.items():
+        assert etiqueta_tipo_pago(codigo) == etiqueta, codigo
+    assert etiqueta_tipo_pago(" anticipo ") == "anticipo"
+    assert etiqueta_tipo_pago("ALGO_NUEVO") == "algo nuevo"
+    assert etiqueta_tipo_pago(None) == "" and etiqueta_tipo_pago("  ") == ""
+
+
+def test_t11_b1_los_textos_de_fase4_no_llevan_cop_despues_de_los_pesos():
+    """T11 calidad (B1): los pesos ya llevan «$»; ningun texto de la Actividad ni el 409 del despacho dice « COP»."""
+    import inspect
+    from app.api.v1 import erp_ventas_fase4
+    fuente = inspect.getsource(erp_ventas_fase4)
+    assert not re.search(r"pesos\([^)]*\)\} COP", fuente), "queda un {pesos(...)} COP"
+
+
+def test_t11_b2_los_estados_de_pago_y_de_entrega_del_360_salen_de_la_fuente_unica():
+    """T11 calidad (B2): el perfil 360 (crm.py) ya no tiene sus propios mapas de estado de pago y de entrega: los importa
+    de textos_actividad.ETIQUETAS_ESTADO. Mismos textos de salida."""
+    from app.api.v1 import crm
+    assert ETIQUETAS_ESTADO["PAGO"] == {"CONFIRMADO": "Confirmado", "REVERTIDO": "Revertido", "ANULADO": "Anulado",
+                                        "TRASLADADO": "Trasladado a otro pedido"}
+    assert ETIQUETAS_ESTADO["ENTREGA"] == {"EN_TRANSITO": "En tránsito"}
+    assert crm._ESTADOS_PAGO is ETIQUETAS_ESTADO["PAGO"]
+    assert crm._ETIQUETAS_360["PAGO_ESTADO"] is ETIQUETAS_ESTADO["PAGO"]
+    assert crm._ETIQUETAS_360["ENTREGA"] is ETIQUETAS_ESTADO["ENTREGA"]
+    assert etiqueta_estado("PAGO", "TRASLADADO") == crm._etiqueta_360("PAGO_ESTADO", "TRASLADADO")
+    assert etiqueta_estado("ENTREGA", "EN_TRANSITO") == crm._etiqueta_360("ENTREGA", "EN_TRANSITO") == "En tránsito"
+
+
+def test_t11_b3_tipos_de_solicitud_espejo_de_etiquetas_ventas_js():
+    """T11 calidad (B3): los tipos de solicitud guardados (sin tilde) y como se muestran, en el backend
+    (textos_actividad.TIPOS_SOLICITUD), iguales al mapa de frontend/src/lib/etiquetas-ventas.js. Un tipo que no esta en
+    el mapa queda tal cual."""
+    from pathlib import Path
+    import pytest
+    from app.core.textos_actividad import TIPOS_SOLICITUD, etiqueta_tipo_solicitud
+    js = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "etiquetas-ventas.js"
+    if not js.exists():
+        pytest.skip("sin frontend/src/lib/etiquetas-ventas.js: no se puede comprobar la paridad")
+    bloque = re.search(r"const TIPOS_SOLICITUD = Object\.freeze\(\{(.*?)\}\);", js.read_text(encoding="utf-8"), re.S)
+    assert bloque, "etiquetas-ventas.js define const TIPOS_SOLICITUD = Object.freeze({...});"
+    espejo = dict(re.findall(r"'([^']+)':\s*'([^']+)'", bloque.group(1)))
+    assert len(espejo) == 6 and espejo == TIPOS_SOLICITUD
+    assert etiqueta_tipo_solicitud("Cotizacion de Producto") == "Cotización de producto"
+    assert etiqueta_tipo_solicitud("Soporte Tecnico") == "Soporte técnico"
+    assert etiqueta_tipo_solicitud("Un tipo libre") == "Un tipo libre"
+    assert etiqueta_tipo_solicitud(None) == ""
 
 
 # --- Script de correccion de actividades viejas (T12; se corre en T14) -------------------------------------

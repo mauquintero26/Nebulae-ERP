@@ -9,6 +9,7 @@ import copy
 import datetime
 import re
 from decimal import Decimal, InvalidOperation
+from zoneinfo import ZoneInfo
 
 # Columnas que se comparan por documento: nombre -> etiqueta que ve el usuario. Quedan
 # fuera a proposito el estado y la fecha de entrega (ya tienen su propio registro:
@@ -79,6 +80,8 @@ _CANTIDADES = ("qty", "cantidad")
 _PRECIOS_LINEA = ("unit_price_cop", "precio_unitario", "precio_cop")
 
 TEXTO_MAX = 120
+# B4 (T11 calidad): el dia de una fecha de negocio es el de Colombia.
+_ZONA_COLOMBIA = ZoneInfo("America/Bogota")
 CAMBIOS_MAX = 30
 ETIQUETAS_EN_TITULO = 4
 
@@ -104,10 +107,25 @@ def _texto(v):
 
 
 def _fecha(v):
+    """El dia de calendario de una fecha de negocio, en hora de Colombia (T11 calidad, B4; America/Bogota, como el resto
+    del bloque). Las fechas con hora se guardan en UTC sin zona (utcnow + dias; el frontend manda el mediodia de Colombia,
+    17:00 UTC): las 02:00 UTC del 21 son el 20 en Bogota. Un texto ISO con hora se lee igual (sin zona = UTC); una fecha
+    sin hora (date o 'aaaa-mm-dd') es ese mismo dia."""
     if v is None or v == "":
         return None
+    if isinstance(v, str):
+        texto = v.strip()
+        try:
+            if len(texto) > 10:
+                v = datetime.datetime.fromisoformat(texto)
+            else:
+                return datetime.date.fromisoformat(texto).isoformat()
+        except ValueError:
+            return texto[:10]
     if isinstance(v, datetime.datetime):
-        return v.date().isoformat()
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=datetime.timezone.utc)
+        return v.astimezone(_ZONA_COLOMBIA).date().isoformat()
     if isinstance(v, datetime.date):
         return v.isoformat()
     return str(v)[:10]

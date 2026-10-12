@@ -64,6 +64,43 @@ ETIQUETAS_ESTADO = {
         "PARCIALMENTE_ENTREGADO": "Entregado parcialmente",
         "DEVUELTO_TOTAL": "Devuelto",
     },
+    # T11 calidad (B2): el estado de un pago del pedido (SaleOrderPayment.estado, chk_sop_estado) y el de una entrega
+    # (SaleOrderDelivery.status: solo lo que el respaldo no escribe, la tilde). Los usa el perfil 360 (crm.py); el de pago
+    # es el espejo de ESTADOS_PAGO de frontend/src/lib/dinero-ventas.js.
+    "PAGO": {
+        "CONFIRMADO": "Confirmado",
+        "REVERTIDO": "Revertido",
+        "ANULADO": "Anulado",
+        "TRASLADADO": "Trasladado a otro pedido",
+    },
+    "ENTREGA": {
+        "EN_TRANSITO": "En tránsito",
+    },
+}
+
+# T11 calidad (B1): como se lee el tipo de un pago en la Actividad del pedido, despues de «Pago» ('Pago anticipo
+# registrado por $750.000', 'Pago total registrado…'). Un tipo que no esta aqui sale humanizado (etiqueta_tipo_pago).
+TIPOS_PAGO_EN_ACTIVIDAD = {
+    "ANTICIPO": "anticipo",
+    "SALDO": "saldo",
+    "ABONO": "abono",
+    "PAGO_TOTAL": "total",
+    "PAGO_SALDO": "del saldo",
+    "DEVOLUCION": "devolución",
+    "REVERSION": "reversión",
+    "AJUSTE_AUTORIZADO": "ajuste autorizado",
+    "AJUSTE": "ajuste",
+}
+
+# T11 calidad (B3): los tipos de solicitud GUARDADOS (sin tilde: son la clave que se compara) y como se muestran. Espejo
+# de TIPOS_SOLICITUD de frontend/src/lib/etiquetas-ventas.js (test_textos_actividad compara los dos).
+TIPOS_SOLICITUD = {
+    "Cotizacion de Producto": "Cotización de producto",
+    "Seguimiento": "Seguimiento",
+    "Programar Entrega": "Programar entrega",
+    "Devolucion de Producto": "Devolución de producto",
+    "Soporte Tecnico": "Soporte técnico",
+    "Nuevo Lead": "Nuevo lead",
 }
 
 # U15: los pasos de la solicitud, en orden (Cancelada va aparte). Avanzan solos: asignar asesor, enviarla al cliente y
@@ -95,6 +132,24 @@ def etiqueta_estado(entidad, estado) -> str:
     if etiqueta is not None:
         return etiqueta
     return codigo.replace("_", " ").lower().capitalize()
+
+
+def etiqueta_tipo_pago(tipo) -> str:
+    """T11 calidad (B1): el tipo de un pago tal como se lee en la Actividad, despues de «Pago» (TIPOS_PAGO_EN_ACTIVIDAD;
+    sin importar mayusculas ni espacios). Si no esta, humanizado en minusculas ('ALGO_NUEVO' -> 'algo nuevo'), nunca el
+    codigo crudo. Vacio o None -> ''."""
+    codigo = str(tipo).strip().upper() if tipo is not None else ""
+    if not codigo:
+        return ""
+    return TIPOS_PAGO_EN_ACTIVIDAD.get(codigo) or codigo.replace("_", " ").lower()
+
+
+def etiqueta_tipo_solicitud(tipo) -> str:
+    """T11 calidad (B3): el tipo de solicitud para mostrar ('Cotizacion de Producto' -> 'Cotización de producto'), como
+    etiquetaTipoSolicitud del frontend. Un texto que no esta en TIPOS_SOLICITUD queda tal cual; None -> ''."""
+    if tipo is None:
+        return ""
+    return TIPOS_SOLICITUD.get(str(tipo), str(tipo))
 
 
 def nombre_de_usuario(user) -> str:

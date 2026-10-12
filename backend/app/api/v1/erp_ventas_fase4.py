@@ -43,7 +43,7 @@ from app.core.ventas_dinero import (
     saldos_a_favor_de_cotizacion, metodo_pago_anticipo, METODOS_PAGO_ANTICIPO, METODO_PAGO_TRASLADO,
     METODO_PAGO_SALDO_A_FAVOR, ESTADO_PAGO_TRASLADADO, anular_pxps_de_pedido,
 )
-from app.core.textos_actividad import etiqueta_estado
+from app.core.textos_actividad import etiqueta_estado, etiqueta_tipo_pago
 from app.api.dependencies import (
     require_roles, get_current_user,
     ROLE_ADMIN, ROLE_ASESOR, ROLE_BODEGA, ROLE_COMPRAS, ROLE_FINANZAS, ALL_ERP_ROLES
@@ -473,7 +473,7 @@ def create_sale_order_canonical(
         entity_id=so.id,
         entity_numero=so.numero,
         action="VENTA_CREADA",
-        description=f"Pedido canónico {so.numero} creado con {len(created_lines)} líneas. Total: {pesos(total_so)} COP",
+        description=f"Pedido canónico {so.numero} creado con {len(created_lines)} líneas. Total: {pesos(total_so)}",
         new_estado=so.estado,
         user_name=user_name,
         extra_data={"lines_count": len(created_lines), "total_cop": str(total_so)}
@@ -878,7 +878,7 @@ def register_sale_order_payment(
         entity_id=so.id,
         entity_numero=so.numero,
         action="REVERSION_PAGO" if tipo == "REVERSION" else ("ANTICIPO_RECIBIDO" if tipo == "ANTICIPO" else "PAGO_REGISTRADO"),
-        description=f"Pago {tipo} registrado por {pesos(monto)} COP. Neto pagado: {pesos(net_pagado)} COP. Saldo: {pesos(so.saldo_cop)} COP",
+        description=f"Pago {etiqueta_tipo_pago(tipo)} registrado por {pesos(monto)}. Neto pagado: {pesos(net_pagado)}. Saldo: {pesos(so.saldo_cop)}",
         old_estado=old_estado,
         new_estado=so.estado,
         user_name=user_name,
@@ -1325,7 +1325,7 @@ def cancel_sale_order(
         entity_id=so.id,
         entity_numero=so.numero,
         action="VENTA_CANCELADA",
-        description=f"Pedido {so.numero} cancelado. Motivo: {motivo}. Saldo a favor cliente: {pesos(saldo_a_favor)} COP",
+        description=f"Pedido {so.numero} cancelado. Motivo: {motivo}. Saldo a favor cliente: {pesos(saldo_a_favor)}",
         old_estado=old_estado,
         new_estado="CANCELADO",
         user_name=user_name,
@@ -1487,7 +1487,7 @@ def cancel_sale_order_line(
         entity_id=so.id,
         entity_numero=so.numero,
         action="LINEA_CANCELADA",
-        description=f"Línea {line.id} canceló {qty_to_cancel} unidades. Motivo: {body.motivo}. Nuevo total pedido: {pesos(new_total)} COP",
+        description=f"Línea {line.id} canceló {qty_to_cancel} unidades. Motivo: {body.motivo}. Nuevo total pedido: {pesos(new_total)}",
         old_estado=old_so_state,
         new_estado=so.estado,
         user_name=user_name,
@@ -2031,7 +2031,7 @@ def dispatch_delivery(
             if not has_exception:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Despacho rechazado: Pedido {so.numero} tiene saldo pendiente de {pesos(so.saldo_cop)} COP sin excepción autorizada"
+                    detail=f"Despacho rechazado: Pedido {so.numero} tiene saldo pendiente de {pesos(so.saldo_cop)} sin excepción autorizada"
                 )
 
     # Crear operación de inventario de entrega
@@ -2622,7 +2622,7 @@ def create_sale_order_return(
         entity_id=ret.id,
         entity_numero=ret.numero,
         action="DEVOLUCION_PROCESADA",
-        description=f"Devolución {ret.numero} procesada con resolución {body.financial_resolution}. Reembolso: {pesos(refund_amt)} COP",
+        description=f"Devolución {ret.numero} procesada con resolución {body.financial_resolution}. Reembolso: {pesos(refund_amt)}",
         user_name=user_name
     )
 

@@ -40,6 +40,24 @@ def test_comparar_fecha_de_vencimiento_a_nivel_de_dia_en_sc():
                         "antes": "10/01/2026", "despues": "15/01/2026"}]
 
 
+def test_t11_b4_la_fecha_de_vencimiento_se_compara_y_se_muestra_en_el_dia_de_colombia():
+    """T11 calidad (B4): la fecha de negocio se guarda en UTC sin zona; su dia es el de Colombia (America/Bogota), como
+    en el resto del bloque. Las 02:00 UTC del 21 son el 20 a las 9 pm en Bogota: antes se mostraba y comparaba el 21."""
+    antes = {"fecha_vencimiento": datetime(2026, 10, 21, 2, 0)}
+    # El mediodia de Colombia del 20 (lo que manda fechaEditadaParaGuardar: 17:00 UTC) es el mismo dia: no es un cambio.
+    assert cd.comparar("SC", antes, {"fecha_vencimiento": datetime(2026, 10, 20, 17, 0)}) == []
+    cambios = cd.comparar("SC", antes, {"fecha_vencimiento": datetime(2026, 10, 22, 2, 0)})
+    assert cambios == [{"campo": "fecha_vencimiento", "etiqueta": "Fecha de vencimiento",
+                        "antes": "20/10/2026", "despues": "21/10/2026"}]
+    # Con zona, igual; un texto ISO con hora se lee como UTC ('Z' o sin zona); una fecha sin hora es ese mismo dia.
+    assert cd.comparar("SC", antes, {"fecha_vencimiento": datetime(2026, 10, 21, 2, 0, tzinfo=timezone.utc)}) == []
+    assert cd.comparar("SC", antes, {"fecha_vencimiento": "2026-10-21T01:30:00.000Z"}) == []
+    assert cd.comparar("SC", antes, {"fecha_vencimiento": "2026-10-21T01:30:00"}) == []
+    assert cd.comparar("SC", antes, {"fecha_vencimiento": "2026-10-20"}) == []
+    cambios = cd.comparar("SC", {"fecha_vencimiento": None}, {"fecha_vencimiento": datetime(2026, 1, 1, 3, 0)})
+    assert [(c["antes"], c["despues"]) for c in cambios] == [(None, "31/12/2025")]
+
+
 def test_comparar_muestra_el_dinero_con_formato_colombiano():
     cambios = cd.comparar("COT", {"total_cop": Decimal("1000000.00")}, {"total_cop": 1250000})
     assert cambios == [{"campo": "total_cop", "etiqueta": "Total", "antes": "$1.000.000", "despues": "$1.250.000"}]
@@ -274,25 +292,35 @@ def _sc(db, numero, **campos):
 
 
 def test_el_formulario_de_edicion_de_la_sc_sin_cambios_no_registra_nada_y_con_cambios_si(app_client, db, admin_token):
+    """T11 calidad (B4): el body es el que manda HOY saveEdit (solicitud/[id]/page.tsx): solo los campos que el
+    formulario cambio (camposEditadosDeSolicitud), el vencimiento solo si cambio el dia (fechaEditadaParaGuardar: el
+    mediodia de Colombia de ese dia, 17:00 UTC) y updated_by. Sin cambios la pantalla ya no llama al servidor (E8); un
+    PATCH con solo updated_by tampoco registra nada."""
     sc = _sc(db, "SC-ACT001", advisor_name="ana@nebulae.co", tipo_solicitud="Cotizacion de Producto",
-             modalidad_pago="Contado", notas="Urgente", fecha_vencimiento=datetime(2026, 10, 20, 0, 0))
-    formulario = {  # lo que manda saveEdit(): todos los campos, tambien los que no se tocaron
-        "advisor_name": "ana@nebulae.co", "advisor_user_id": "", "tipo_solicitud": "Cotizacion de Producto",
-        "modalidad_pago": "Contado", "notas": "Urgente", "fecha_vencimiento": "2026-10-20T17:00:00.000Z",
-        "updated_by": "asesor@test",
-    }
-    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json=formulario, headers=auth(admin_token))
+             modalidad_pago="Contado", notas="Urgente", fecha_vencimiento=datetime(2026, 10, 20, 17, 0))
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"updated_by": "asesor@test"},
+                            headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     assert _actividades(app_client, admin_token, "solicitudes", sc.id) == []
 
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}",
-                            json={**formulario, "notas": "Urgente: entregar antes del viernes", "modalidad_pago": "Credito"},
+                            json={"notas": "Urgente: entregar antes del viernes", "modalidad_pago": "Credito",
+                                  "updated_by": "asesor@test"},
                             headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     (actividad,) = _actividades(app_client, admin_token, "solicitudes", sc.id)
     assert (actividad["action"], actividad["description"]) == ("UPDATED", "Solicitud actualizada: Modalidad de pago, Notas")
     cambios = {c["etiqueta"]: c for c in actividad["extra_data"]["cambios"]}
     assert cambios["Modalidad de pago"]["antes"] == "Contado" and cambios["Modalidad de pago"]["despues"] == "Credito"
+
+    # Otro dia de vencimiento: el mediodia de Colombia del 22 (17:00 UTC), y el renglon dice los dias de Colombia.
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}",
+                            json={"fecha_vencimiento": "2026-10-22T17:00:00.000Z", "updated_by": "asesor@test"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    _, fecha = _actividades(app_client, admin_token, "solicitudes", sc.id)
+    assert fecha["description"] == "Solicitud actualizada: Fecha de vencimiento"
+    assert [(c["antes"], c["despues"]) for c in fecha["extra_data"]["cambios"]] == [("20/10/2026", "22/10/2026")]
 
 
 def test_asignar_asesor_registra_primero_el_cambio_y_luego_el_estado(app_client, db, admin_token):
