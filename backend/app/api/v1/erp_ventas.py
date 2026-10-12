@@ -149,11 +149,17 @@ def _log(db: Session, entity_type: str, entity_id: int, entity_numero: str,
     S6 (T11), defensa general del autor: un user_name que no es texto (una lista, un objeto o un numero que llego en
     el body) se cambia por nombre_de_usuario(usuario) ('Sistema' sin usuario) y un texto mas largo que la columna se
     recorta a 150. Asi un updated_by malo ya no tumba la peticion con un 500 a mitad de camino. None sigue siendo
-    «sin autor»."""
+    «sin autor».
+    T11 calidad (F4): antes de recortar se quitan los caracteres de control (Cc): con U+0000 psycopg2 lanzaba
+    ValueError en el flush y, en los cambios de estado explicitos de la COT y del PVEN, el estado ya confirmado se
+    quedaba sin su renglon (500). Si no queda nada, nombre_de_usuario(usuario) ('Sistema' sin usuario)."""
     if user_name is not None:
         if not isinstance(user_name, str):
             user_name = nombre_de_usuario(usuario)
-        user_name = user_name[:_USER_NAME_MAX]
+        sin_control = "".join(ch for ch in user_name if unicodedata.category(ch) != "Cc")
+        if sin_control != user_name and not sin_control:
+            sin_control = nombre_de_usuario(usuario)
+        user_name = sin_control[:_USER_NAME_MAX]
     log = ActivityLog(
         entity_type=entity_type,
         entity_id=entity_id,
@@ -748,6 +754,32 @@ def _anular_confirmacion_por_cambio_de_cliente(db: Session, sc: CustomerRequest,
     return {"confirmacion_anulada": True, "estado_cambiado": estado_cambiado, "enlace_anulado": vigentes > 0}
 
 
+def _anular_enlaces_de_cotizaciones_por_cambio_de_cliente(db: Session, sc: CustomerRequest,
+                                                          autor: Optional[str]) -> list:
+    """T11 calidad (F2, residual de S9): la regla R18 de PATCH /cliente para las COT cuando update_solicitud cambia el
+    cliente de la SC (_cliente_de_la_solicitud: aqui, por customer_id o null; el correo y el telefono solo cambian por
+    /cliente, S9). Revocar solo el enlace de la SC dejaba vivo el de una COT temprana (Borrador o Pendiente, sin la
+    confirmacion de la SC): si el cliente ANTERIOR la confirmaba, la sincronizacion
+    confirmaba la SC para el nuevo. En cada COT abierta de la SC que no esta CONFIRMADA (el cliente ya confirmo los
+    precios) se revocan los enlaces sin cambiar su estado y, si alguno seguia vivo, su Actividad lo dice con el renglon
+    de _ENLACE_COT_ANULADO. Sin commit: va en el commit unico de update_solicitud. Devuelve los numeros anulados."""
+    from app.core.confirmation_tokens import revoke_pending_tokens
+    cots = (db.query(SalesQuotation)
+            .filter(SalesQuotation.sc_id == sc.id, SalesQuotation.estado.notin_(("RECHAZADA", "CONFIRMADA")))
+            .order_by(SalesQuotation.id.asc()).all())
+    anulados = []
+    for cot in cots:
+        if revoke_pending_tokens(db, "COT", cot.id, commit=False, contar_vigentes=True):
+            _log(db, "COT", cot.id, cot.numero, "UPDATED",
+                 f"Cambió el cliente de la solicitud {sc.numero}: se anuló el enlace de confirmación de esta "
+                 f"cotización", user_name=autor,
+                 extra_data={"cambios": [dict(_ENLACE_COT_ANULADO)],
+                             "origen": {"tipo": "SC", "id": sc.id, "numero": sc.numero}},
+                 commit=False)
+            anulados.append(cot.numero)
+    return anulados
+
+
 def _mensaje_correo_de_otro_cliente(correo: str, otro: Optional[Customer]) -> str:
     """409 de PATCH /solicitudes/{id}/cliente: el correo ya es de otra ficha (con su nombre si se sabe cual)."""
     quien = f" ({clientes.nombre_cliente(otro)})" if otro is not None else ""
@@ -873,16 +905,36 @@ def _asesores_de_pedidos(db: Session, pedidos) -> dict:
 _CAMPOS_DE_CONTACTO = frozenset({"customer_phone", "customer_email", "customer_address", "customer_city"})
 
 
+# T11 calidad (F5): etiquetas del resultado del correo en los renglones de un envio al cliente (_detalle_envio).
+_ETIQUETAS_CORREO_DE_ENVIO = ("Correo", "Correo de respaldo")
+
+
 def _sin_valores_de_contacto(extra):
     """S3 (T11): extra_data de un renglon con el antes y el despues del contacto vaciados: el campo sigue nombrado y la
     pantalla lo pinta 'Teléfono: cambiado' (sin la llave 'campo', CambiosDeActividad no pone '—' ni tacha). Devuelve una
-    copia: el renglon de la sesion no cambia."""
-    if not isinstance(extra, dict) or not isinstance(extra.get("cambios"), list):
+    copia: el renglon de la sesion no cambia.
+    T11 calidad (F5): un renglon de envio al cliente (_extra_data_de_envio: trae 'correo') pierde correo.destino y su
+    cambio 'Correo' / 'Correo de respaldo' (que lleva la direccion: 'Correo enviado a …') pasa a «Correo enviado» o
+    «No se pudo enviar» segun correo.enviado. La descripcion de esos renglones no lleva la direccion."""
+    if not isinstance(extra, dict):
         return extra
-    cambios = [{"etiqueta": c.get("etiqueta"), "despues": "cambiado"}
-               if isinstance(c, dict) and c.get("campo") in _CAMPOS_DE_CONTACTO else c
-               for c in extra["cambios"]]
-    return {**extra, "cambios": cambios}
+    correo = extra.get("correo")
+    de_envio = isinstance(correo, dict)
+    nuevo = dict(extra)
+    if de_envio:
+        nuevo["correo"] = {k: v for k, v in correo.items() if k != "destino"}
+    if isinstance(extra.get("cambios"), list):
+        resultado = "Correo enviado" if de_envio and correo.get("enviado") is True else "No se pudo enviar"
+        cambios = []
+        for c in extra["cambios"]:
+            if isinstance(c, dict) and c.get("campo") in _CAMPOS_DE_CONTACTO:
+                c = {"etiqueta": c.get("etiqueta"), "despues": "cambiado"}
+            elif (de_envio and isinstance(c, dict) and "campo" not in c
+                  and c.get("etiqueta") in _ETIQUETAS_CORREO_DE_ENVIO):
+                c = {**c, "despues": resultado}
+            cambios.append(c)
+        nuevo["cambios"] = cambios
+    return nuevo
 
 
 def _log_dict(l: ActivityLog, rol: str) -> dict:
@@ -1358,6 +1410,9 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         from app.core.confirmation_tokens import revoke_pending_tokens
         revoke_pending_tokens(db, "SC", sc.id, commit=False)
         sc.gate1_confirmed_at = None
+    if cambia_el_cliente:
+        # T11 calidad (F2, residual de S9): los enlaces de sus COT tempranas tambien eran del cliente anterior.
+        _anular_enlaces_de_cotizaciones_por_cambio_de_cliente(db, sc, nombre_de_usuario(user))
     # El dict se arma ANTES del commit: tras el commit el objeto queda expirado y leerlo costaria otro viaje a la base.
     resp = _sc_dict(sc)
     db.commit()
@@ -1382,23 +1437,27 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
     Respuesta: {status, data (_sc_dict + customer_city), ficha_actualizada, documentos_actualizados [numeros],
     documentos_de_otro_cliente [numeros], confirmacion_anulada, estado_cambiado, enlaces_anulados [numeros de SC/COT],
     sin_cambios}."""
-    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
-    if not sc:
-        raise HTTPException(404, "Solicitud no encontrada")
-    if sc.estado == "CANCELADA":
-        raise HTTPException(409, f"La solicitud {sc.numero} está cancelada: si hace falta, corrige los datos desde la "
-                                 f"ficha del cliente.")
-    nuevos = _normalizar_contacto(body)
-    if not nuevos:
-        raise HTTPException(422, "No llegó ningún dato del cliente para corregir.")
-    correo = nuevos.get("customer_email")
-    autor = nombre_de_usuario(user)
-    old_estado = sc.estado
-    foto_sc = cambios_documento.tomar_foto(sc, "SC")
-    contacto_sc_antes = _cliente_de_la_solicitud(sc)
-    origen = {"tipo": "SC", "id": sc.id, "numero": sc.numero}
+    correo = None
     cliente, docs, docs_de_otro_cliente = None, [], []
     try:
+        # T11 calidad (F6, residual de S8): la propia SC tambien se bloquea dentro del try: si PostgreSQL aborta esa
+        # espera por el statement_timeout (57014) o por un interbloqueo (40P01), es el 409 de abajo y no un 500. El 404,
+        # el 409 de la cancelada y los 422 del contacto son HTTPException y siguen de largo.
+        sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
+        if not sc:
+            raise HTTPException(404, "Solicitud no encontrada")
+        if sc.estado == "CANCELADA":
+            raise HTTPException(409, f"La solicitud {sc.numero} está cancelada: si hace falta, corrige los datos desde "
+                                     f"la ficha del cliente.")
+        nuevos = _normalizar_contacto(body)
+        if not nuevos:
+            raise HTTPException(422, "No llegó ningún dato del cliente para corregir.")
+        correo = nuevos.get("customer_email")
+        autor = nombre_de_usuario(user)
+        old_estado = sc.estado
+        foto_sc = cambios_documento.tomar_foto(sc, "SC")
+        contacto_sc_antes = _cliente_de_la_solicitud(sc)
+        origen = {"tipo": "SC", "id": sc.id, "numero": sc.numero}
         # S8 (T11): la ficha se bloquea dentro del try, como la COT y el PVEN: si PostgreSQL aborta ese bloqueo por un
         # interbloqueo (40P01) o por el statement_timeout (57014), es el 409 de abajo y no un 500. El 422 de la ciudad
         # y el 409 del correo de otra ficha salen de esa lectura; son HTTPException y siguen de largo.
@@ -1723,8 +1782,10 @@ MOTIVO_SIN_CONFIRMACION_MAX = 500
 # calidad (D1): el frontend lo espeja (motivoLimpio y errorMotivoSinConfirmacion de estados-solicitud.js;
 # test_estados_solicitud compara los dos con node).
 MOTIVO_SIN_CONFIRMACION_MIN_LETRAS = 5
-# S5: rellenos Hangul (U+115F, U+1160, U+3164 y U+FFA0). Unicode los clasifica como letras, pero no se ven.
-_RELLENOS_INVISIBLES = frozenset("\u115f\u1160\u3164\uffa0")
+# S5: rellenos Hangul (U+115F, U+1160, U+3164 y U+FFA0) y, T11 calidad (F3), los jeroglificos egipcios en blanco
+# (U+13441 FULL BLANK y U+13442 HALF BLANK). Unicode los clasifica como letras (isalnum), pero no se ven. El frontend
+# usa la misma lista (RELLENOS_INVISIBLES de estados-solicitud.js, que la prueba lee de aqui).
+_RELLENOS_INVISIBLES = frozenset("\u115f\u1160\u3164\uffa0\U00013441\U00013442")
 # Largo de la columna sales_quotations.cotizador (String(150)): mas largo seria un 500 con un numero ya gastado.
 COTIZADOR_MAX = 150
 
@@ -1771,6 +1832,10 @@ def _error_del_motivo(motivo: str) -> Optional[str]:
     return None
 
 
+# T11 calidad (F8): el 400 de una SC de Soporte en /cotizar-sin-confirmacion (y el primer impedimento de la puerta B).
+_SOPORTE_NO_SE_COTIZA = "Las solicitudes de Soporte Técnico no se cotizan."
+
+
 def _es_soporte(sc: CustomerRequest) -> bool:
     return sc.tipo_solicitud == "Soporte Tecnico" or sc.estado == "N/A_SOPORTE"
 
@@ -1781,7 +1846,7 @@ def _impedimento_para_cotizar_sin_confirmacion(sc: CustomerRequest) -> Optional[
     cotiza asi o sin productos. Devuelve el texto del 400 de /cotizar-sin-confirmacion, o None si se puede. Lo usan ese
     endpoint y, S4 (T11), la excepcion de la puerta B al retomar una COT temprana rechazada."""
     if _es_soporte(sc):
-        return "Las solicitudes de Soporte Técnico no se cotizan."
+        return _SOPORTE_NO_SE_COTIZA
     if sc.estado == "BORRADOR" or not sc.advisor_user_id:
         return "Asigna un asesor a la solicitud antes de cotizarla."
     if sc.estado not in _ESTADOS_SC_COTIZABLES_SIN_CONFIRMACION:
@@ -1816,7 +1881,7 @@ def cotizar_sin_confirmacion(sc_id: int, body: CotizarSinConfirmacionBody,
     # Mismo orden de siempre: Soporte, Papelera, confirmacion vigente, y despues asesor, estado y productos.
     impedimento = _impedimento_para_cotizar_sin_confirmacion(sc)
     if _es_soporte(sc):
-        raise HTTPException(400, impedimento)
+        raise HTTPException(400, _SOPORTE_NO_SE_COTIZA)
     if sc.estado == "CANCELADA":
         raise HTTPException(409, _mensaje_solicitud_cancelada(sc, "cotizarla"))
     if _confirmacion_vigente_sc(sc):
@@ -2313,6 +2378,15 @@ def _mensaje_anula_confirmacion(estado: str, cambios: list) -> str:
             f"que tiene el cliente deja de servir: la cotización vuelve a Borrador y tendrás que enviársela de nuevo.")
 
 
+def _salir_de_gate2(db: Session, cot: SalesQuotation) -> None:
+    """T11 calidad (F8): la COT sale del ciclo de Gate 2: se revocan sus enlaces pendientes y se limpia
+    gate2_confirmed_at, para que ninguno de los dos quede vivo y reutilizable fuera de este ciclo. Sin commit: lo
+    confirma el llamador (update_cotizacion, junto con lo demas)."""
+    from app.core.confirmation_tokens import revoke_pending_tokens
+    revoke_pending_tokens(db, "COT", cot.id, commit=False)
+    cot.gate2_confirmed_at = None
+
+
 @router.patch("/cotizaciones/{cot_id}")
 def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
@@ -2548,9 +2622,7 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
                          "cambios": [{"etiqueta": "Cambió", "despues": ", ".join(cambios_congelados)},
                                      {"etiqueta": "Razón", "despues": motivo_recotizacion}]},
              commit=False)
-        from app.core.confirmation_tokens import revoke_pending_tokens
-        revoke_pending_tokens(db, "COT", cot.id, commit=False)
-        cot.gate2_confirmed_at = None
+        _salir_de_gate2(db, cot)
     db.commit()
     db.refresh(cot)
     if not anula_por_recotizacion:
@@ -2635,9 +2707,7 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         # Ver el comentario junto a sale_de_gate2 arriba -- revoca cualquier token
         # pendiente y limpia la marca de procedencia, para que ninguno de los dos
         # quede vivo y reutilizable fuera de este ciclo. (Al anular por re-cotizar ya se hizo en el commit del estado.)
-        from app.core.confirmation_tokens import revoke_pending_tokens
-        revoke_pending_tokens(db, "COT", cot.id)
-        cot.gate2_confirmed_at = None
+        _salir_de_gate2(db, cot)
         db.commit()
     # H40: en el nivel superior (no dentro de data): la pantalla avisa que hay que reenviarsela al cliente.
     return {"status": "success", "data": _cot_dict(cot), "confirmacion_anulada": bool(rompe_congelamiento)}

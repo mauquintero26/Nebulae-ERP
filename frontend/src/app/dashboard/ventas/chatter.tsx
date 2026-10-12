@@ -103,6 +103,9 @@ export function ComposerChatter({ tipoDoc, doc, onRegistrado, compacto = false }
   const { avisarError } = useAvisos();
   const id = doc?.id;
   const usuario = getUsuarioActual();
+  // T11 calidad (F1): con el rol de la sesión, las chips de contacto con el cliente salen deshabilitadas para quien no
+  // es ADMIN ni ASESOR (motivoTipoDeshabilitado); sin rol conocido todavía ('') no se deshabilita nada por rol.
+  const rol = usuario.role;
   const clave = claveBorrador(tipoDoc, id, usuario.id ?? usuario.email);
   const [texto, setTexto] = useState('');
   const [tipo, setTipo] = useState(TIPO_POR_DEFECTO);
@@ -161,7 +164,7 @@ export function ComposerChatter({ tipoDoc, doc, onRegistrado, compacto = false }
   }, [guardado]);
 
   // Un tipo que el documento no admite (WhatsApp sin telefono, Correo sin correo valido) se trata como Nota interna.
-  const tipoActivo = motivoTipoDeshabilitado(tipo, doc) ? TIPO_POR_DEFECTO : tipo;
+  const tipoActivo = motivoTipoDeshabilitado(tipo, doc, rol) ? TIPO_POR_DEFECTO : tipo;
 
   if (!id) return null;
 
@@ -253,7 +256,7 @@ export function ComposerChatter({ tipoDoc, doc, onRegistrado, compacto = false }
   }
 
   // Flechas, Inicio y Fin mueven la seleccion entre los chips habilitados (patron radiogroup).
-  const habilitados = TIPOS.filter((t) => !motivoTipoDeshabilitado(t, doc));
+  const habilitados = TIPOS.filter((t) => !motivoTipoDeshabilitado(t, doc, rol));
   function teclaChip(e: React.KeyboardEvent<HTMLButtonElement>, t: string) {
     if (!habilitados.length) return;
     const paso = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
@@ -271,7 +274,7 @@ export function ComposerChatter({ tipoDoc, doc, onRegistrado, compacto = false }
 
   const info = TIPOS_CHATTER[tipoActivo];
   const largo = largoTexto(texto);
-  const motivos = TIPOS.map((t) => [t, motivoTipoDeshabilitado(t, doc)] as const).filter(([, m]) => !!m);
+  const motivos = TIPOS.map((t) => [t, motivoTipoDeshabilitado(t, doc, rol)] as const).filter(([, m]) => !!m);
   const llamar = tipoActivo === 'LLAMADA' ? telUrl(doc?.customer_phone) : null;
   const sinLlamar = tipoActivo === 'LLAMADA' && !llamar ? motivoTelefono(doc?.customer_phone) : null;
   const ayudaApp = tipoActivo === 'WHATSAPP'
@@ -290,7 +293,7 @@ export function ComposerChatter({ tipoDoc, doc, onRegistrado, compacto = false }
       <div role="radiogroup" aria-label="Tipo de nota" className="flex flex-wrap gap-1.5">
         {TIPOS.map((t) => {
           const IconoTipo = ICONOS[t];
-          const motivo = motivoTipoDeshabilitado(t, doc);
+          const motivo = motivoTipoDeshabilitado(t, doc, rol);
           const activo = t === tipoActivo;
           return (
             <button

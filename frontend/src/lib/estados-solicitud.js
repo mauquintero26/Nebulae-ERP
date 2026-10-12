@@ -94,10 +94,11 @@ export const MOTIVO_SIN_CONFIRMACION_MIN_LETRAS = 5;
 
 /**
  * Caracteres que Unicode cuenta como letras pero no se ven (erp_ventas._RELLENOS_INVISIBLES; tests/
- * test_estados_solicitud.mjs los lee del .py): los rellenos Hangul U+115F, U+1160, U+3164 y U+FFA0. Inmutable.
+ * test_estados_solicitud.mjs los lee del .py): los rellenos Hangul U+115F, U+1160, U+3164 y U+FFA0 y, T11 calidad
+ * (F3), los jeroglíficos egipcios en blanco U+13441 y U+13442. Inmutable.
  * @type {ReadonlyArray<string>}
  */
-export const RELLENOS_INVISIBLES = congelar(['\u115f', '\u1160', '\u3164', '\uffa0']);
+export const RELLENOS_INVISIBLES = congelar(['\u115f', '\u1160', '\u3164', '\uffa0', '\u{13441}', '\u{13442}']);
 
 // Lo que str.isspace() de Python cuenta como espacio (Zs y los saltos de línea y tabuladores de Cc, Zl y Zp). El \s de JS
 // no sirve: incluye U+FEFF (formato) y deja fuera U+001C–U+001F y U+0085.

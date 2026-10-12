@@ -207,13 +207,28 @@ def test_s6_log_no_acepta_un_autor_que_no_es_texto_ni_mas_largo_que_la_columna(d
     from app.api.v1 import erp_ventas
     from app.core.textos_actividad import nombre_de_usuario
     casos = [("Ana", None, "Ana"), ("x" * 200, None, "x" * 150), (["Ana"], None, "Sistema"), (12, None, "Sistema"),
-             ({"a": 1}, user_admin, nombre_de_usuario(user_admin)), (None, user_admin, None)]
+             ({"a": 1}, user_admin, nombre_de_usuario(user_admin)), (None, user_admin, None),
+             # T11 calidad (F4): sin caracteres de control (U+0000 hacia que psycopg2 lanzara ValueError en el flush) y
+             # quitados ANTES de recortar; si no queda nada, el autor de la sesion o 'Sistema'.
+             ("Ana\x00", None, "Ana"), ("A\x00n\x1fa\x7f", None, "Ana"), ("\x00" * 10 + "x" * 150, None, "x" * 150),
+             ("\x00\x01", user_admin, nombre_de_usuario(user_admin)), ("\x00", None, "Sistema")]
     for user_name, usuario, esperado in casos:
         renglon = erp_ventas._log(db, "COT", 999999999, "COT-T4H40X", "UPDATED", "x", user_name=user_name,
                                   usuario=usuario, commit=False)
         db.flush()
         assert renglon.user_name == esperado, user_name
     db.rollback()
+
+
+def test_t11_f4_un_autor_con_u0000_no_tumba_el_cambio_de_estado_explicito(app_client, db, admin_token):
+    """T11 calidad (F4, residual de S6): en los cambios de estado explicitos de la COT el estado ya quedaba confirmado
+    cuando el renglon ESTADO_CHANGED fallaba por un updated_by con U+0000 (ValueError de psycopg2): 500 y sin renglon.
+    Ahora el autor se limpia y el cambio queda registrado."""
+    cot = _cot(db, "COT-T11F4A", "BORRADOR")
+    resp = _patch(app_client, admin_token, cot.id, {"estado": "RECHAZADA", "updated_by": "Ana\x00"})
+    assert resp.status_code == 200, resp.text
+    [renglon] = _logs(db, cot.id, "ESTADO_CHANGED")
+    assert (renglon.old_estado, renglon.new_estado, renglon.user_name) == ("BORRADOR", "RECHAZADA", "Ana")
 
 
 def test_aceptar_sin_razon_responde_422(app_client, db, admin_token):

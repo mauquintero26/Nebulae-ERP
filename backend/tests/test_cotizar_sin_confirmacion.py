@@ -896,6 +896,27 @@ def test_s5_el_motivo_no_se_llena_con_caracteres_invisibles_ni_con_relleno(app_c
     assert resp.json()["detail"] == "El motivo no puede tener más de 500 caracteres."
 
 
+def test_t11_f3_los_jeroglificos_en_blanco_no_llenan_el_motivo(app_client, db, admin_token, user_admin):
+    """T11 calidad (F3, residual de S5): U+13441 y U+13442 (EGYPTIAN HIEROGLYPH FULL/HALF BLANK) son Lo e isalnum() los
+    cuenta: diez de ellos pasaban el minimo. Ahora estan en _RELLENOS_INVISIBLES y se quitan como los rellenos Hangul."""
+    from app.api.v1.erp_ventas import _RELLENOS_INVISIBLES
+    corto = "El motivo debe tener al menos 10 caracteres."
+    sc = _sc(db, "SC-CSC051", user_admin)
+    for cp in (0x13441, 0x13442):
+        blanco = chr(cp)
+        assert blanco in _RELLENOS_INVISIBLES and blanco.isalnum()
+        for motivo, detalle in ((blanco * 10, corto), ("ab" + blanco * 10, corto),
+                                ("abcd " + blanco * 10 + " .....", "El motivo debe tener al menos 5 letras o números.")):
+            resp = _cotizar(app_client, admin_token, sc.id, motivo=motivo)
+            assert resp.status_code == 422, (hex(cp), resp.text)
+            assert resp.json()["detail"] == detalle, hex(cp)
+    assert _cots_de(db, sc.id) == []
+    # Con texto de verdad pasa y se guarda sin los blancos.
+    resp = _cotizar(app_client, admin_token, sc.id, motivo="Cliente " + chr(0x13441) * 3 + "pidió precio urgente")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["cotizacion"]["sin_confirmacion_sc_motivo"] == "Cliente pidió precio urgente"
+
+
 # --- get_cotizacion: estado de la SC con la misma lectura -------------------------------------------------------------
 
 def test_el_detalle_de_la_cotizacion_trae_el_estado_de_la_solicitud_sin_otra_consulta(

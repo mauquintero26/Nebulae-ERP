@@ -425,11 +425,13 @@ def test_cambiar_el_cliente_con_el_enlace_pendiente_lo_anula(app_client, db, adm
              customer_id=uno.id, customer_email=uno.email, customer_phone="3001112233")
     token = create_confirmation_token(db, "SC", sc.id)
 
-    # Reenviar el mismo cliente no es un cambio.
-    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={
-        "customer_id": uno.id, "updated_by": "t"}, headers=auth(admin_token))
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["data"]["estado"] == "PENDIENTE_CONFIRMACION" and not _token_usado(db, token)
+    # Reenviar el mismo cliente no es un cambio, tampoco en otro formato (T11 calidad, F7: el id como texto con espacios,
+    # como lo podria mandar un formulario).
+    for mismo in (uno.id, f" {uno.id} "):
+        resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={
+            "customer_id": mismo, "updated_by": "t"}, headers=auth(admin_token))
+        assert resp.status_code == 200, (mismo, resp.text)
+        assert resp.json()["data"]["estado"] == "PENDIENTE_CONFIRMACION" and not _token_usado(db, token), mismo
 
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={
         "customer_id": otra.id, "updated_by": "t"}, headers=auth(admin_token))
@@ -463,3 +465,46 @@ def test_cambiar_el_cliente_con_una_cotizacion_activa_anula_la_confirmacion(app_
     assert _patch_cot(app_client, admin_token, cot["id"], estado="RECHAZADA").status_code == 200
     db.refresh(sc)
     assert sc.estado == "ASIGNADA"
+
+
+def test_t11_f2_cambiar_el_cliente_anula_el_enlace_de_la_cotizacion_temprana(app_client, db, admin_token, user_admin,
+                                                                             contador_sql):
+    """T11 calidad (F2, residual de S9): cambiar el cliente de la SC por customer_id solo revocaba el enlace de la SC.
+    Una COT temprana (no Confirmada) conservaba el suyo y, si el cliente ANTERIOR la confirmaba, la SC quedaba Confirmada
+    para el nuevo. Ahora, con la regla R18 de PATCH /cliente: en el MISMO commit se revoca el enlace de cada COT abierta
+    que no esta Confirmada y su Actividad lo dice (el renglon _ENLACE_COT_ANULADO). Una COT Confirmada conserva el suyo."""
+    from app.api.v1.erp_ventas import _ENLACE_COT_ANULADO
+    from app.core.confirmation_tokens import create_confirmation_token
+    from app.models.erp_documents import SalesQuotation
+
+    def _cot(sc, numero, estado, cliente):
+        cot = SalesQuotation(numero=numero, sc_id=sc.id, sc_numero=sc.numero, customer_id=cliente.id,
+                             customer_name="Cliente Prueba", estado=estado)
+        db.add(cot); db.commit(); db.refresh(cot)
+        return cot, create_confirmation_token(db, "COT", cot.id)
+
+    def _renglones_del_enlace(cot):
+        return [l for l in _logs(db, "COT", cot.id)
+                if _ENLACE_COT_ANULADO in ((l.extra_data or {}).get("cambios") or [])]
+
+    uno, otra = _ficha(db, "Uno"), _ficha(db, "Otra")
+    sc = _sc(db, "SC-RCH016", user_admin, con_marca=False, estado="ASIGNADA", customer_id=uno.id)
+    temprana, enlace = _cot(sc, "COT-RCH016", "PENDIENTE_CONFIRMACION", uno)
+    with contador_sql.ventana() as v:
+        resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={
+            "customer_id": otra.id, "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert v.commits == 1
+    assert _token_usado(db, enlace)  # el cliente anterior ya no puede confirmarla
+    [renglon] = _renglones_del_enlace(temprana)
+    assert renglon.action == "UPDATED" and "SC-RCH016" in renglon.description, renglon.description
+    db.refresh(temprana)
+    assert temprana.estado == "PENDIENTE_CONFIRMACION"  # la COT no cambia de estado (R18)
+
+    # Una COT Confirmada (el cliente ya confirmo los precios, R18) conserva su enlace y no lleva renglon.
+    otra_sc = _sc(db, "SC-RCH017", user_admin, con_marca=False, estado="CONFIRMADA", customer_id=uno.id)
+    confirmada, enlace_confirmada = _cot(otra_sc, "COT-RCH017", "CONFIRMADA", uno)
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{otra_sc.id}", json={
+        "customer_id": otra.id, "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert not _token_usado(db, enlace_confirmada) and _renglones_del_enlace(confirmada) == []

@@ -10,7 +10,7 @@
  * servidor con el usuario de la sesion: el body nunca lleva user_name.
  */
 import { congelar, tiene } from './estados-pedido.js';
-import { comoUTC } from './hub-ventas.js';
+import { comoUTC, TIPOS_NOTA_REINICIAN_ATRASO } from './hub-ventas.js';
 import { numeroWhatsApp } from './whatsapp.js';
 import { textoDeError } from './avisos.js';
 import { esCorreoValido } from './datos-cliente.js';
@@ -344,15 +344,60 @@ export function telUrl(telefono) {
 }
 
 /**
- * Por que un chip de tipo esta deshabilitado para este documento, o null si se puede usar: WhatsApp necesita un
- * telefono completo (motivoTelefono) y Correo un correo valido ('El cliente no tiene correo registrado' / 'El correo
- * del cliente no es válido'). Llamada y Nota externa se pueden registrar siempre (el contacto pudo ser desde otro
- * numero o en persona).
+ * T11 calidad (F1): quien registra un contacto con el cliente (Llamada, WhatsApp, Correo o Nota externa, los tipos que
+ * reinician el atraso). Espejo de ROLES_CONTACTO_CON_EL_CLIENTE de backend/app/core/chatter.py (S7); tests/
+ * test_chatter.mjs lo lee del .py. Roles ya normalizados (normalizarRol). Inmutable.
+ * @type {ReadonlyArray<string>}
+ */
+export const ROLES_CONTACTO_CON_EL_CLIENTE = congelar(['ADMIN', 'ASESOR']);
+
+// Espejo de _ROLE_LEGACY_MAP de backend/app/api/dependencies.py: el nombre viejo (sin importar mayúsculas) -> canónico.
+const ROLES_LEGADO = congelar({
+  admin: 'ADMIN', vendedor: 'ASESOR', erp: 'COMPRAS', finanzas: 'FINANZAS', mercadeo: 'CONSULTA',
+  asesor: 'ASESOR', compras: 'COMPRAS', bodega: 'BODEGA', consulta: 'CONSULTA',
+});
+
+const MOTIVO_SOLO_ASESOR = 'Solo un asesor o un administrador registra contactos con el cliente.';
+
+/**
+ * T11 calidad (F1): el rol canónico, como normalize_role del backend: el nombre viejo ('Vendedor', 'ERP'…) por su
+ * canónico y cualquier otro en mayúsculas y sin espacios en los bordes. Vacío o lo que no es texto -> ''.
+ * @param {any} rol
+ * @returns {string}
+ */
+export function normalizarRol(rol) {
+  if (typeof rol !== 'string') return '';
+  const clave = rol.trim().toLowerCase();
+  return tiene(ROLES_LEGADO, clave) ? ROLES_LEGADO[clave] : rol.trim().toUpperCase();
+}
+
+/**
+ * T11 calidad (F1): espejo de chatter.puede_registrar del backend (S7): false si `rol` no puede dejar una entrada de ese
+ * tipo. La Nota interna la deja cualquier rol con acceso al Chatter; un contacto con el cliente (TIPOS_NOTA_REINICIAN_
+ * ATRASO), solo ADMIN y ASESOR. Un rol desconocido o vacío no registra contactos (como en el servidor).
+ * @param {any} tipo
+ * @param {any} rol
+ * @returns {boolean}
+ */
+export function puedeRegistrar(tipo, rol) {
+  const clave = String(tipo || TIPO_POR_DEFECTO).trim().toUpperCase();
+  return !TIPOS_NOTA_REINICIAN_ATRASO.includes(clave) || ROLES_CONTACTO_CON_EL_CLIENTE.includes(normalizarRol(rol));
+}
+
+/**
+ * Por que un chip de tipo esta deshabilitado para este documento, o null si se puede usar. T11 calidad (F1): primero el
+ * rol (`rol`, el de la sesión): fuera de ADMIN y ASESOR, Llamada, WhatsApp, Correo y Nota externa no se registran
+ * (puedeRegistrar); si el rol todavía no se conoce ('' o null) no se deshabilita nada por rol (el servidor sigue siendo
+ * la guarda). Después, los datos: WhatsApp necesita un telefono completo (motivoTelefono) y Correo un correo valido ('El
+ * cliente no tiene correo registrado' / 'El correo del cliente no es válido'). Llamada y Nota externa se pueden
+ * registrar siempre (el contacto pudo ser desde otro numero o en persona).
  * @param {any} tipo
  * @param {any} doc
+ * @param {any} [rol]
  * @returns {string | null}
  */
-export function motivoTipoDeshabilitado(tipo, doc) {
+export function motivoTipoDeshabilitado(tipo, doc, rol) {
+  if (normalizarRol(rol) && !puedeRegistrar(tipo, rol)) return MOTIVO_SOLO_ASESOR;
   if (tipo === 'WHATSAPP') return motivoTelefono(doc?.customer_phone);
   if (tipo === 'CORREO') {
     if (!recortado(doc?.customer_email)) return 'El cliente no tiene correo registrado';
@@ -370,16 +415,33 @@ function sinPuntoFinal(texto) {
   return texto.slice(0, fin);
 }
 
+// El 403 de require_roles ("Rol 'X' (normalizado: 'Y') no autorizado…") y los de FastAPI en inglés no son un texto
+// para el usuario: con ellos queda el mensaje genérico.
+const DETALLE_403_TECNICO = /^(?:Rol '[^']*' \(normalizado:|Not authenticated|Not enough permissions|Forbidden)/i;
+
+/** T11 calidad (F1): el detail que el servidor escribió para el usuario en un 403 (p. ej. CONTACTO_SOLO_ASESOR), o null. */
+function detalle403Legible(err) {
+  const detalle = /** @type {any} */ (err)?.detail;
+  const texto = typeof detalle === 'string' ? detalle.trim() : '';
+  return texto && !DETALLE_403_TECNICO.test(texto) ? texto : null;
+}
+
 /**
- * Error en linea cuando el POST falla. 403: 'No tienes permiso para dejar notas en este documento. Tu texto sigue
- * aquí.'; 404: 'El documento ya no existe.'; si no, 'No se guardó: {mensaje}. Tu texto sigue aquí; intenta de nuevo.'
- * con el mensaje legible de textoDeError (sin su punto final) y sin repetir «intenta de nuevo» si el mensaje ya lo dice.
+ * Error en linea cuando el POST falla. 403: el detail legible del servidor ('No se guardó: {detail}. Tu texto sigue
+ * aquí.'; T11 calidad, F1) o, sin él, 'No tienes permiso para dejar notas en este documento. Tu texto sigue aquí.';
+ * 404: 'El documento ya no existe.'; si no, 'No se guardó: {mensaje}. Tu texto sigue aquí; intenta de nuevo.' con el
+ * mensaje legible de textoDeError (sin su punto final) y sin repetir «intenta de nuevo» si el mensaje ya lo dice.
  * @param {unknown} err
  * @returns {string}
  */
 export function mensajeNoGuardado(err) {
   const status = /** @type {any} */ (err)?.status;
-  if (status === 403) return 'No tienes permiso para dejar notas en este documento. Tu texto sigue aquí.';
+  if (status === 403) {
+    const detalle = detalle403Legible(err);
+    return detalle
+      ? `No se guardó: ${sinPuntoFinal(detalle)}. Tu texto sigue aquí.`
+      : 'No tienes permiso para dejar notas en este documento. Tu texto sigue aquí.';
+  }
   if (status === 404) return 'El documento ya no existe.';
   const mensaje = sinPuntoFinal(textoDeError(err));
   return REPITE_INTENTA.test(mensaje)

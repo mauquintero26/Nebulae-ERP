@@ -347,6 +347,14 @@ console.log('--- T11 calidad D1: el motivo de «Cotizar sin confirmación» se l
   }
   assert.equal(motivoLimpio(null), '');
   assert.equal(errorMotivoSinConfirmacion(undefined), corto);
+  // F3: los jeroglíficos egipcios en blanco (U+13441 y U+13442) son letras para Unicode pero no se ven: no cuentan.
+  for (const cp of [0x13441, 0x13442]) {
+    const blanco = String.fromCodePoint(cp);
+    assert.ok(RELLENOS_INVISIBLES.includes(blanco), cp.toString(16));
+    assert.equal(motivoLimpio(blanco.repeat(10)), '', cp.toString(16));
+    assert.equal(errorMotivoSinConfirmacion(blanco.repeat(10)), corto, cp.toString(16));
+    assert.equal(errorMotivoSinConfirmacion(`abcd ${blanco.repeat(10)} .....`), pocasLetras, cp.toString(16));
+  }
 
   // D2: la ventana del detalle de la SC no limita con maxLength (UTF-16 crudo) y bloquea «Crear cotización» con el error
   // del motivo limpio (también el máximo).

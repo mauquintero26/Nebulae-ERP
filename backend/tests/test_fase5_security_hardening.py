@@ -676,16 +676,18 @@ class TestFase5SecurityHardening:
         assert pref.revocation_date is not None
         assert "WhatsApp" in pref.revocation_reason
 
-    def test_25_el_motor_de_la_app_oculta_los_parametros_en_los_errores(self, db: Session):
+    def test_25_el_motor_de_la_app_oculta_los_parametros_en_los_errores(self):
         """25. T11 (S10): create_engine(..., hide_parameters=True). Un error de la base ya no lleva en su texto (ni en los
-        tracebacks del servidor) los parametros de la consulta: correos, telefonos y documentos de clientes."""
+        tracebacks del servidor) los parametros de la consulta: correos, telefonos y documentos de clientes.
+        T11 calidad (F7): la consulta que falla corre en una conexion del MOTOR REAL de la app (app.db.database.engine),
+        no en la sesion del runner: asi la prueba mide ese motor y no la configuracion de la sesion de prueba."""
         from sqlalchemy.exc import DBAPIError
         from app.db.database import engine
         assert engine.hide_parameters is True
         dato = f"pii-{os.urandom(3).hex()}@cliente.test"
         with pytest.raises(DBAPIError) as exc:
-            db.execute(text("SELECT CAST(:dato AS text) AS dato, 1 / 0 AS division"), {"dato": dato})
-        db.rollback()
+            with engine.connect() as conexion:  # solo lectura: falla en el 1 / 0 y no escribe nada
+                conexion.execute(text("SELECT CAST(:dato AS text) AS dato, 1 / 0 AS division"), {"dato": dato})
         assert dato not in str(exc.value)
         assert "hidden due to hide_parameters" in str(exc.value)
 

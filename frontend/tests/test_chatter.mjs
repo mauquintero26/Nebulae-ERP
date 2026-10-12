@@ -13,6 +13,7 @@ import {
   esEntradaChatter, tipoChatter, tituloEntradaChatter, rutaNotas, validarTextoChatter, validarNotaChatter,
   cuerpoNota, largoTexto, entradasChatter, agregarActividad, claveBorrador, claveBorradorVieja, parsearBorrador,
   asuntoDocumento, mailtoUrl, telUrl, motivoTelefono, motivoTipoDeshabilitado, mensajeNoGuardado, textoSinTelefono,
+  ROLES_CONTACTO_CON_EL_CLIENTE, normalizarRol, puedeRegistrar,
 } from '../src/lib/chatter.js';
 
 const VACIA = 'Escribe la nota antes de guardarla.';
@@ -326,6 +327,74 @@ console.log('--- T11 calidad E6: textoSinTelefono, el mismo texto en las tres ve
     assert.ok(motivoTelefono(tel), String(tel));
     assert.equal(waUrl(tel) ? 'teléfono incompleto' : 'sin teléfono', textoSinTelefono(tel), String(tel));
   }
+}
+
+console.log('--- T11 calidad F1: los contactos con el cliente solo los registran ADMIN y ASESOR (S7 en el frontend) ---');
+{
+  // Paridad con backend/app/core/chatter.py (ROLES_CONTACTO_CON_EL_CLIENTE y _REINICIAN_ATRASO) y con la normalización de
+  // roles de backend/app/api/dependencies.py (_ROLE_LEGACY_MAP), leídas de los .py.
+  const chatterPy = readFileSync(new URL('../../backend/app/core/chatter.py', import.meta.url), 'utf8');
+  const roles = chatterPy.match(/^ROLES_CONTACTO_CON_EL_CLIENTE\s*=\s*frozenset\(\{([^}]*)\}\)/m);
+  assert.ok(roles, 'core/chatter.py define ROLES_CONTACTO_CON_EL_CLIENTE = frozenset({...})');
+  const rolesDelServidor = [...roles[1].matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
+  assert.deepEqual([...ROLES_CONTACTO_CON_EL_CLIENTE].sort(), [...rolesDelServidor].sort());
+  const reinician = chatterPy.match(/^_REINICIAN_ATRASO\s*=\s*\{([^}]*)\}/m);
+  const contactos = [...reinician[1].matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
+  assert.equal(contactos.length, 4);
+  const dependencias = readFileSync(new URL('../../backend/app/api/dependencies.py', import.meta.url), 'utf8');
+  const mapa = dependencias.match(/^_ROLE_LEGACY_MAP[^=]*=\s*\{([\s\S]*?)^\}/m);
+  assert.ok(mapa, 'dependencies.py define _ROLE_LEGACY_MAP');
+  const legado = [...mapa[1].matchAll(/["']([^"']+)["']\s*:\s*["']([^"']+)["']/g)].map((m) => [m[1], m[2]]);
+  assert.ok(legado.length >= 9, 'se leyó el mapa de roles');
+  for (const [crudo, canonico] of legado) {
+    for (const variante of [crudo, crudo.toUpperCase(), `  ${crudo} `]) {
+      assert.equal(normalizarRol(variante), canonico, variante);
+    }
+  }
+  assert.equal(normalizarRol('Otro_Rol'), 'OTRO_ROL');  // fuera del mapa: en mayúsculas, como normalize_role
+  assert.equal(normalizarRol(null), '');
+
+  // puedeRegistrar: la Nota interna cualquiera; los contactos solo ADMIN y ASESOR (también los nombres viejos).
+  for (const rol of ['ADMIN', 'Admin', 'asesor', 'Vendedor', ' ASESOR ']) {
+    for (const tipo of Object.keys(TIPOS_CHATTER)) assert.equal(puedeRegistrar(tipo, rol), true, `${tipo} ${rol}`);
+  }
+  for (const rol of ['COMPRAS', 'ERP', 'FINANZAS', 'BODEGA', 'CONSULTA', 'Mercadeo', 'OTRO', '']) {
+    assert.equal(puedeRegistrar('NOTA', rol), true, rol);
+    for (const tipo of contactos) assert.equal(puedeRegistrar(tipo, rol), false, `${tipo} ${rol}`);
+  }
+  assert.equal(puedeRegistrar('llamada', 'COMPRAS'), false);  // sin importar mayúsculas, como tipoChatter
+
+  // motivoTipoDeshabilitado con el rol: COMPRAS ve las cuatro chips de contacto deshabilitadas con su motivo (antes que
+  // el del teléfono); sin rol conocido no se deshabilita nada por rol (el servidor sigue siendo la guarda).
+  const conTodo = { customer_phone: '3001234567', customer_email: 'ana@x.co' };
+  const SOLO_ASESOR = 'Solo un asesor o un administrador registra contactos con el cliente.';
+  for (const tipo of contactos) {
+    assert.equal(motivoTipoDeshabilitado(tipo, conTodo, 'COMPRAS'), SOLO_ASESOR, tipo);
+    assert.equal(motivoTipoDeshabilitado(tipo, {}, 'ERP'), SOLO_ASESOR, tipo);
+    assert.equal(motivoTipoDeshabilitado(tipo, conTodo, 'ASESOR'), null, tipo);
+    for (const desconocido of ['', null, undefined]) assert.equal(motivoTipoDeshabilitado(tipo, conTodo, desconocido), null, tipo);
+  }
+  assert.equal(motivoTipoDeshabilitado('NOTA', conTodo, 'COMPRAS'), null);
+  assert.equal(motivoTipoDeshabilitado('WHATSAPP', { customer_phone: '' }, 'ADMIN'), 'El cliente no tiene teléfono registrado');
+
+  // mensajeNoGuardado: un 403 con un detail legible del servidor lo muestra; sin detail (o con el texto técnico de
+  // require_roles) queda el genérico.
+  const conDetalle = (status, detail) => Object.assign(new Error(typeof detail === 'string' ? detail : 'x'), { status, detail });
+  const DEL_SERVIDOR = 'Solo un asesor o un administrador puede registrar un contacto con el cliente (llamada, WhatsApp, '
+    + 'correo o nota externa): deja una nota interna.';
+  assert.equal(mensajeNoGuardado(conDetalle(403, DEL_SERVIDOR)), `No se guardó: ${DEL_SERVIDOR} Tu texto sigue aquí.`);
+  const GENERICO = 'No tienes permiso para dejar notas en este documento. Tu texto sigue aquí.';
+  assert.equal(mensajeNoGuardado(conDetalle(403, null)), GENERICO);
+  assert.equal(mensajeNoGuardado(conDetalle(403, '   ')), GENERICO);
+  assert.equal(mensajeNoGuardado(conDetalle(403, { codigo: 'X' })), GENERICO);
+  assert.equal(mensajeNoGuardado(conDetalle(403, "Rol 'Finanzas' (normalizado: 'FINANZAS') no autorizado para esta "
+    + 'operación. Roles requeridos: ADMIN, ASESOR, COMPRAS')), GENERICO);
+  assert.equal(mensajeNoGuardado(conDetalle(403, 'Not authenticated')), GENERICO);
+
+  // El composer pasa el rol de la sesión (getUsuarioActual) a motivoTipoDeshabilitado en todos sus usos.
+  const composer = readFileSync(new URL('../src/app/dashboard/ventas/chatter.tsx', import.meta.url), 'utf8');
+  const usos = composer.match(/motivoTipoDeshabilitado\([^)]*\)/g) ?? [];
+  assert.ok(usos.length >= 4 && usos.every((u) => /,\s*rol\)$/.test(u)), usos.join(' | '));
 }
 
 console.log('OK test_chatter.mjs');

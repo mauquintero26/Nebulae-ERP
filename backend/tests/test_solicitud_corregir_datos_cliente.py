@@ -633,6 +633,44 @@ def test_s3_la_actividad_de_los_documentos_no_muestra_el_contacto_corregido_a_ot
     assert {"etiqueta": "Ciudad", "despues": "cambiado"} in cambios
 
 
+def test_t11_f5_los_envios_al_cliente_no_muestran_su_correo_a_otros_roles(app_client, db, admin_token, user_admin,
+                                                                           bodega_token, monkeypatch):
+    """T11 calidad (F5, residual de S3): los renglones de «Enviada para confirmación» guardan el correo de destino en
+    extra_data.correo.destino y en el cambio 'Correo' / 'Correo de respaldo' ('Correo enviado a …'). Fuera de ADMIN y
+    ASESOR, el detalle de la SC y de la COT los muestra sin la direccion: sin correo.destino y con «Correo enviado» o
+    «No se pudo enviar». ADMIN los sigue viendo completos. El renglon guardado no cambia."""
+    from app.core import email as correo
+    u = _u()
+    cli = _cliente(db, phone="3000000000", email=f"envio-{u}@test.com")
+    sc = _sc(db, "SC-CDC201", user_admin, cli)
+    cot = _cot(db, "COT-CDC202", _sc(db, "SC-CDC202", user_admin, cli))
+    monkeypatch.setattr(correo, "smtp_configurado", lambda: True)
+    monkeypatch.setattr(correo, "send_email", lambda *args, **kwargs: True)
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/enviar-confirmacion", json={"canal": "Email"},
+                           headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    monkeypatch.setattr(correo, "send_email", lambda *args, **kwargs: False)  # el respaldo de la COT falla
+    resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/enviar-confirmacion", json={"canal": "WhatsApp"},
+                           headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+
+    def _envio(ruta, doc_id, token):
+        resp = app_client.get(f"/api/v1/ventas/{ruta}/{doc_id}", headers=auth(token))
+        assert resp.status_code == 200, resp.text
+        [renglon] = [a for a in resp.json()["data"]["actividades"] if (a.get("extra_data") or {}).get("correo")]
+        return renglon
+
+    for ruta, doc, etiqueta, texto in (("solicitudes", sc, "Correo", "Correo enviado"),
+                                       ("cotizaciones", cot, "Correo de respaldo", "No se pudo enviar")):
+        renglon = _envio(ruta, doc.id, bodega_token)
+        assert cli.email not in str(renglon), (ruta, renglon)  # ni en la descripcion ni en extra_data
+        assert "destino" not in renglon["extra_data"]["correo"], ruta
+        assert {"etiqueta": etiqueta, "despues": texto} in renglon["extra_data"]["cambios"], (ruta, renglon)
+        renglon = _envio(ruta, doc.id, admin_token)
+        assert renglon["extra_data"]["correo"]["destino"] == cli.email, ruta
+        assert cli.email in next(c["despues"] for c in renglon["extra_data"]["cambios"] if c["etiqueta"] == etiqueta)
+
+
 def test_editar_la_ficha_con_correo_repetido_da_409_y_registra_actividad(app_client, db, admin_token, user_admin):
     from app.core.textos_actividad import nombre_de_usuario
     u = _u()
@@ -935,6 +973,39 @@ def test_s8_un_interbloqueo_o_un_tiempo_agotado_al_bloquear_la_ficha_da_409(app_
         cli = _cliente(db, phone="3000000000", email=f"ana-{_u()}@test.com")
         sc = _sc(db, f"SC-CDC04{4 + i}", user_admin, cli)
         monkeypatch.setattr(Query, "with_for_update", _falla_al_bloquear_la_ficha)
+        resp = _patch(app_client, admin_token, sc.id, customer_phone="3001112233")
+        monkeypatch.setattr(Query, "with_for_update", bloquear_real)
+        assert resp.status_code == 409, (pgcode, resp.text)
+        assert resp.json()["detail"] == ("Otra operación estaba cambiando esta solicitud o su cotización al mismo "
+                                         "tiempo. Intenta de nuevo.")
+        db.expire_all()
+        assert (sc.customer_phone, cli.phone) == ("3000000000", "3000000000"), pgcode
+        assert _logs(db, "SC", sc.id) == [] and _logs(db, "CLIENTE", cli.id) == [], pgcode
+
+
+def test_t11_f6_un_bloqueo_abortado_al_tomar_la_propia_solicitud_da_409(app_client, db, admin_token, user_admin,
+                                                                        monkeypatch):
+    """T11 calidad (F6, residual de S8): el FOR UPDATE de la propia SC seguia fuera del try de PATCH /cliente: si
+    PostgreSQL abortaba esa espera por el statement_timeout (57014) o por un interbloqueo (40P01), salia un 500. Ahora es
+    el mismo 409 «Intenta de nuevo» y no se guarda nada."""
+    import app.api.v1.erp_ventas as m_ventas
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Query
+    from app.models.erp_documents import CustomerRequest
+    bloquear_real = Query.with_for_update
+    monkeypatch.setattr(m_ventas.logger, "disabled", True)
+    for i, pgcode in enumerate(("57014", "40P01")):
+        error_de_la_base = type("ErrorDeBloqueo", (Exception,), {"pgcode": pgcode})
+
+        def _falla_al_bloquear_la_solicitud(self, *args, **kwargs):
+            if self.column_descriptions and self.column_descriptions[0].get("entity") is CustomerRequest:
+                raise OperationalError("SELECT customer_requests.id ... FOR UPDATE", {},
+                                       error_de_la_base("bloqueo abortado"))
+            return bloquear_real(self, *args, **kwargs)
+
+        cli = _cliente(db, phone="3000000000", email=f"ana-{_u()}@test.com")
+        sc = _sc(db, f"SC-CDC20{3 + i}", user_admin, cli)
+        monkeypatch.setattr(Query, "with_for_update", _falla_al_bloquear_la_solicitud)
         resp = _patch(app_client, admin_token, sc.id, customer_phone="3001112233")
         monkeypatch.setattr(Query, "with_for_update", bloquear_real)
         assert resp.status_code == 409, (pgcode, resp.text)
