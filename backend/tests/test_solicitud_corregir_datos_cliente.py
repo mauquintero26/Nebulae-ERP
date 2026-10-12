@@ -670,6 +670,19 @@ def test_t11_f5_los_envios_al_cliente_no_muestran_su_correo_a_otros_roles(app_cl
         assert renglon["extra_data"]["correo"]["destino"] == cli.email, ruta
         assert cli.email in next(c["despues"] for c in renglon["extra_data"]["cambios"] if c["etiqueta"] == etiqueta)
 
+    # Ronda 1 (5): sin correo registrado o con el correo sin configurar, el texto no lleva la direccion: se conserva.
+    monkeypatch.setattr(correo, "smtp_configurado", lambda: False)
+    sin_configurar = _sc(db, "SC-CDC205", user_admin, cli)
+    sin_correo = _sc(db, "SC-CDC206", user_admin)
+    for sc_envio, texto in ((sin_configurar, "No se envió correo: el envío de correos no está configurado en el sistema."),
+                            (sin_correo, "No se envió correo: el cliente no tiene correo registrado.")):
+        resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc_envio.id}/enviar-confirmacion",
+                               json={"canal": "WhatsApp"}, headers=auth(admin_token))
+        assert resp.status_code == 200, resp.text
+        renglon = _envio("solicitudes", sc_envio.id, bodega_token)
+        assert cli.email not in str(renglon) and "destino" not in renglon["extra_data"]["correo"], renglon
+        assert {"etiqueta": "Correo de respaldo", "despues": texto} in renglon["extra_data"]["cambios"], renglon
+
 
 def test_editar_la_ficha_con_correo_repetido_da_409_y_registra_actividad(app_client, db, admin_token, user_admin):
     from app.core.textos_actividad import nombre_de_usuario

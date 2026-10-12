@@ -579,6 +579,30 @@ def test_t11_a2_una_solicitud_cancelada_no_se_edita_por_el_patch(app_client, db,
     assert resp.json()["data"]["notas"] == "Cambiada"
 
 
+def test_t11_r1_los_cambios_de_estado_sin_autor_tras_limpiar_quedan_a_nombre_de_la_sesion(app_client, db,
+                                                                                          admin_token, user_admin):
+    """T11 calidad, ronda 1 (2): un updated_by que queda vacio al quitarle los caracteres de control (solo U+0000) ya no
+    deja los renglones de cambio de estado de update_solicitud a nombre de 'Sistema': quedan con el autor de la sesion
+    (reiniciar, asignar asesor y retirar asesor)."""
+    from app.core.textos_actividad import nombre_de_usuario
+    sesion = nombre_de_usuario(user_admin)
+
+    def _patch(sc_id, **body):
+        resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc_id}", json={**body, "updated_by": "\x00"},
+                                headers=auth(admin_token))
+        assert resp.status_code == 200, resp.text
+
+    reinicio = _sc(db, "SC-T11R1A", user_admin, estado="CONFIRMADA", gate1_confirmed_at=AHORA())
+    _patch(reinicio.id, estado="BORRADOR")                                  # explicito: vuelve a Asignada
+    nueva = _sc(db, "SC-T11R1B", user_admin, con_asesor=False, estado="BORRADOR")
+    _patch(nueva.id, advisor_user_id=user_admin.id, advisor_name=user_admin.email)   # asesor asignado
+    asignada = _sc(db, "SC-T11R1C", user_admin, estado="ASIGNADA")
+    _patch(asignada.id, advisor_user_id=None, advisor_name=None)          # asesor retirado
+    for sc in (reinicio, nueva, asignada):
+        cambios = _logs(db, "SC", sc.id, "ESTADO_CHANGED")
+        assert cambios and all(c.user_name == sesion for c in cambios), (sc.numero, [c.user_name for c in cambios])
+
+
 def test_los_textos_de_la_solicitud_usan_las_etiquetas_nuevas(app_client, db, admin_token, user_admin):
     sc = _sc(db, "SC-U15011A", user_admin, estado="ASIGNADA", gate1_confirmed_at=None)
     for estado, etiqueta in (("COTIZADA", "Cotizada"), ("FACTURADO", "Facturado")):

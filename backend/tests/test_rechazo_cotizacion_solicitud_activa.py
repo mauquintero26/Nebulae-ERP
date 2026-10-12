@@ -508,3 +508,20 @@ def test_t11_f2_cambiar_el_cliente_anula_el_enlace_de_la_cotizacion_temprana(app
         "customer_id": otra.id, "updated_by": "t"}, headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     assert not _token_usado(db, enlace_confirmada) and _renglones_del_enlace(confirmada) == []
+
+    # Ronda 1 (4): el mismo cliente escrito de otra forma ('05', ' 5 ') no es un cambio: no revoca nada.
+    mismo = _sc(db, "SC-RCH018", user_admin, con_marca=False, estado="ASIGNADA", customer_id=uno.id)
+    cot_mismo, enlace_mismo = _cot(mismo, "COT-RCH018", "PENDIENTE_CONFIRMACION", uno)
+    for igual in (f"0{uno.id}", f" {uno.id} "):
+        resp = app_client.patch(f"/api/v1/ventas/solicitudes/{mismo.id}", json={
+            "customer_id": igual, "updated_by": "t"}, headers=auth(admin_token))
+        assert resp.status_code == 200, (igual, resp.text)
+        assert resp.json()["data"]["customer_id"] == uno.id, igual
+        assert not _token_usado(db, enlace_mismo) and _renglones_del_enlace(cot_mismo) == [], igual
+    # Quitar el cliente (null) si es un cambio: el enlace de la COT temprana se anula y queda el renglon.
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{mismo.id}", json={
+        "customer_id": None, "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert _token_usado(db, enlace_mismo)
+    [renglon] = _renglones_del_enlace(cot_mismo)
+    assert "SC-RCH018" in renglon.description

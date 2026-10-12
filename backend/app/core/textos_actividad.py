@@ -78,18 +78,17 @@ ETIQUETAS_ESTADO = {
     },
 }
 
-# T11 calidad (B1): como se lee el tipo de un pago en la Actividad del pedido, despues de «Pago» ('Pago anticipo
-# registrado por $750.000', 'Pago total registrado…'). Un tipo que no esta aqui sale humanizado (etiqueta_tipo_pago).
-TIPOS_PAGO_EN_ACTIVIDAD = {
-    "ANTICIPO": "anticipo",
-    "SALDO": "saldo",
-    "ABONO": "abono",
-    "PAGO_TOTAL": "total",
-    "PAGO_SALDO": "del saldo",
-    "DEVOLUCION": "devolución",
-    "REVERSION": "reversión",
-    "AJUSTE_AUTORIZADO": "ajuste autorizado",
-    "AJUSTE": "ajuste",
+# T11 calidad (B1, ronda 1): como empieza el renglon de un pago en la Actividad del pedido, con el genero de su
+# sustantivo: «{frase} registrado/registrada por $X…» (pago_registrado). Los codigos son los que acepta POST
+# /ventas/pedidos/{id}/pagos (SaleOrderPaymentCreate). Un tipo que no esta sale humanizado con «Pago» delante.
+PAGOS_EN_ACTIVIDAD = {
+    "ANTICIPO": ("Pago de anticipo", False),
+    "ABONO": ("Abono", False),
+    "PAGO_TOTAL": ("Pago total", False),
+    "PAGO_SALDO": ("Pago del saldo", False),
+    "DEVOLUCION": ("Devolución", True),
+    "REVERSION": ("Reversión de pago", True),
+    "AJUSTE_AUTORIZADO": ("Ajuste autorizado", False),
 }
 
 # T11 calidad (B3): los tipos de solicitud GUARDADOS (sin tilde: son la clave que se compara) y como se muestran. Espejo
@@ -134,14 +133,15 @@ def etiqueta_estado(entidad, estado) -> str:
     return codigo.replace("_", " ").lower().capitalize()
 
 
-def etiqueta_tipo_pago(tipo) -> str:
-    """T11 calidad (B1): el tipo de un pago tal como se lee en la Actividad, despues de «Pago» (TIPOS_PAGO_EN_ACTIVIDAD;
-    sin importar mayusculas ni espacios). Si no esta, humanizado en minusculas ('ALGO_NUEVO' -> 'algo nuevo'), nunca el
-    codigo crudo. Vacio o None -> ''."""
+def pago_registrado(tipo) -> str:
+    """T11 calidad (B1, ronda 1): el comienzo del renglon de un pago en la Actividad, antes de «por $X»: 'Pago de
+    anticipo registrado', 'Devolución registrada' (PAGOS_EN_ACTIVIDAD, sin importar mayusculas ni espacios). Un tipo
+    que no esta: 'Pago algo nuevo registrado' (humanizado, nunca el codigo crudo); vacio o None: 'Pago registrado'."""
     codigo = str(tipo).strip().upper() if tipo is not None else ""
     if not codigo:
-        return ""
-    return TIPOS_PAGO_EN_ACTIVIDAD.get(codigo) or codigo.replace("_", " ").lower()
+        return "Pago registrado"
+    frase, femenino = PAGOS_EN_ACTIVIDAD.get(codigo, (f"Pago {codigo.replace('_', ' ').lower()}", False))
+    return f"{frase} {'registrada' if femenino else 'registrado'}"
 
 
 def etiqueta_tipo_solicitud(tipo) -> str:

@@ -130,6 +130,17 @@ def test_los_estados_operativos_se_mueven_libremente(app_client, db, admin_token
     assert resp.json()["detail"] == "Solo un pedido entregado se puede marcar como Facturado."
 
 
+def test_t11_r1_un_autor_vacio_tras_limpiar_queda_a_nombre_de_la_sesion(app_client, db, admin_token, user_admin):
+    """T11 calidad, ronda 1 (2): un updated_by que queda vacio al quitarle los caracteres de control (solo U+0000) ya no
+    deja el cambio de estado del pedido a nombre de 'Sistema': queda con el autor de la sesion."""
+    from app.core.textos_actividad import nombre_de_usuario
+    ven = _ven(db, "PVEN-TRA031")
+    resp = _patch(app_client, admin_token, ven.id, estado="EN_PROCESO", updated_by="\x00")
+    assert resp.status_code == 200, resp.text
+    [cambio] = _logs(db, ven.id, "ESTADO_CHANGED")
+    assert cambio.user_name == nombre_de_usuario(user_admin)
+
+
 def test_un_estado_que_no_es_de_pedido_se_rechaza(app_client, db, admin_token):
     ven = _ven(db, "PVEN-TRA005")
     for estado, etiqueta in (("CONFIRMADA", "Confirmada"), ("DEVUELTO_TOTAL", "Devuelto"), ("PAGADO", "Pagado")):

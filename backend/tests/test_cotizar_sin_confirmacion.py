@@ -495,6 +495,48 @@ def test_t11_a1_el_cotizador_largo_da_422_en_las_otras_dos_puertas_sin_gastar_nu
     assert numeros == ["COT-", "COT-"]
 
 
+def test_t11_r1_el_cotizador_que_no_es_texto_o_trae_u0000_da_422_tambien_en_el_patch(app_client, db, admin_token,
+                                                                                    user_admin, monkeypatch):
+    """T11 calidad, ronda 1 (3): el cotizador tambien da 422 «El cotizador no es válido.» si no es texto (123) o trae
+    U+0000 o un surrogate suelto (psycopg2 no los guarda: 500), siempre ANTES de pedir el numero de seq_cot. Y PATCH
+    /cotizaciones/{id} valida el cotizador que trae (151 caracteres daba 500); null lo sigue borrando."""
+    import app.api.v1.erp_ventas as erp_ventas
+    numeros = []
+    original = erp_ventas._gen_numero
+    monkeypatch.setattr(erp_ventas, "_gen_numero", lambda db_, p, s: numeros.append(p) or original(db_, p, s))
+    invalido = "El cotizador no es válido."
+    linea = [{"product_name": "Cuna", "qty": 1, "unit_price_cop": 1000}]
+    confirmada = _sc(db, "SC-CSC052", user_admin, estado="CONFIRMADA", gate1_confirmed_at=datetime.datetime.utcnow())
+    import json
+    cuerpo = json.dumps({"customer_name": "Cliente Prueba", "total_cop": 1000, "created_by": "t", "productos": linea})
+    # El valor del cotizador escrito tal cual en el JSON: un surrogate suelto solo viaja como escape.
+    for crudo in ("123", '["Ana"]', '"a' + chr(92) + 'u0000b"', '"Ana' + chr(92) + 'ud800"'):
+        resp = app_client.post("/api/v1/ventas/cotizaciones", content=cuerpo[:-1] + ', "cotizador": ' + crudo + "}",
+                               headers={**auth(admin_token), "Content-Type": "application/json"})
+        assert resp.status_code == 422, (crudo, resp.text)
+        assert resp.json()["detail"] == invalido, crudo
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{confirmada.id}/confirmar",
+                           json={"cotizador": 123, "user_name": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == invalido
+    assert numeros == [] and _cots_de(db, confirmada.id) == []
+
+    cot = _cot(db, "COT-CSC052", cotizador="Ana")
+    for cotizador, detalle in (("x" * 151, "El cotizador no puede tener más de 150 caracteres."), ("a\x00b", invalido),
+                               (123, invalido)):
+        resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={"cotizador": cotizador, "updated_by": "t"},
+                                headers=auth(admin_token))
+        assert resp.status_code == 422, (repr(cotizador)[:20], resp.text)
+        assert resp.json()["detail"] == detalle
+    db.expire_all()
+    db.refresh(cot)
+    assert cot.cotizador == "Ana"
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={"cotizador": None, "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["cotizador"] is None
+
+
 # --- Segunda puerta: PATCH /cotizaciones/{id} con sc_id (ruling T3-3) ------------------------------------------------
 
 def test_vincular_una_cotizacion_a_una_solicitud_sin_confirmar_responde_409(app_client, db, admin_token, user_admin):

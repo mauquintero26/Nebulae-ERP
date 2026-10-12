@@ -344,28 +344,36 @@ def test_el_dinero_de_la_actividad_del_pedido_usa_el_punto_de_miles(app_client, 
     from app.models.erp_documents import ActivityLog
     textos = [f.description for f in db.query(ActivityLog).filter(
         ActivityLog.entity_type == "PVEN", ActivityLog.entity_id == so_id).order_by(ActivityLog.id).all()]
-    # T11 calidad (B1): sin « COP» despues de los pesos (ya llevan «$») y el tipo del pago con su etiqueta, no el codigo.
-    pago = [t for t in textos if t.startswith("Pago anticipo registrado")]
+    # T11 calidad (B1 y ronda 1, 6): sin « COP» despues de los pesos (ya llevan «$») y el pago con su frase, no el codigo.
+    pago = [t for t in textos if t.startswith("Pago de anticipo registrado")]
     assert pago, textos
-    assert pago[0] == "Pago anticipo registrado por $750.000. Neto pagado: $750.000. Saldo: $500.000", pago[0]
+    assert pago[0] == "Pago de anticipo registrado por $750.000. Neto pagado: $750.000. Saldo: $500.000", pago[0]
     assert not any("$1,250,000" in t or "$750,000" in t for t in textos), textos
     assert not any(" COP" in t or "ANTICIPO" in t for t in textos), textos
     creado = [t for t in textos if t.startswith("Pedido canónico")]
     assert creado and creado[0].endswith("Total: $1.250.000"), textos
 
 
-def test_t11_b1_etiqueta_del_tipo_de_pago_en_la_actividad():
-    """T11 calidad (B1): «Pago {tipo} registrado…» con la etiqueta del tipo (fuente unica en textos_actividad); un tipo
-    que no esta en el mapa sale humanizado, nunca el codigo crudo."""
-    from app.core.textos_actividad import etiqueta_tipo_pago
-    esperado = {"ANTICIPO": "anticipo", "SALDO": "saldo", "ABONO": "abono", "PAGO_TOTAL": "total",
-                "PAGO_SALDO": "del saldo", "DEVOLUCION": "devolución", "REVERSION": "reversión",
-                "AJUSTE_AUTORIZADO": "ajuste autorizado", "AJUSTE": "ajuste"}
-    for codigo, etiqueta in esperado.items():
-        assert etiqueta_tipo_pago(codigo) == etiqueta, codigo
-    assert etiqueta_tipo_pago(" anticipo ") == "anticipo"
-    assert etiqueta_tipo_pago("ALGO_NUEVO") == "algo nuevo"
-    assert etiqueta_tipo_pago(None) == "" and etiqueta_tipo_pago("  ") == ""
+def test_t11_b1_frase_del_pago_registrado_en_la_actividad():
+    """T11 calidad (B1, ronda 1, 6): «{frase} registrado/registrada por $X…» con la frase entera del tipo (fuente unica en
+    textos_actividad.PAGOS_EN_ACTIVIDAD), con el genero de su sustantivo. Los codigos son los que acepta POST
+    /ventas/pedidos/{id}/pagos (SaleOrderPaymentCreate). Un tipo que no esta sale humanizado con «Pago» delante."""
+    import datetime
+    from decimal import Decimal
+    from app.api.v1.schemas_fase4 import SaleOrderPaymentCreate
+    from app.core.textos_actividad import PAGOS_EN_ACTIVIDAD, pago_registrado
+    esperado = {"ANTICIPO": "Pago de anticipo registrado", "ABONO": "Abono registrado",
+                "PAGO_TOTAL": "Pago total registrado", "PAGO_SALDO": "Pago del saldo registrado",
+                "DEVOLUCION": "Devolución registrada", "REVERSION": "Reversión de pago registrada",
+                "AJUSTE_AUTORIZADO": "Ajuste autorizado registrado"}
+    assert set(PAGOS_EN_ACTIVIDAD) == set(esperado)
+    for codigo, frase in esperado.items():
+        assert pago_registrado(codigo) == frase, codigo
+        # cada codigo del mapa es uno que el endpoint acepta de verdad
+        SaleOrderPaymentCreate(tipo=codigo, monto=Decimal("1"), idempotency_key="abc", fecha=datetime.date.today())
+    assert pago_registrado(" anticipo ") == "Pago de anticipo registrado"
+    assert pago_registrado("ALGO_NUEVO") == "Pago algo nuevo registrado"
+    assert pago_registrado(None) == "Pago registrado" and pago_registrado("  ") == "Pago registrado"
 
 
 def test_t11_b1_los_textos_de_fase4_no_llevan_cop_despues_de_los_pesos():

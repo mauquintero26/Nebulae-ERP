@@ -211,7 +211,9 @@ def test_s6_log_no_acepta_un_autor_que_no_es_texto_ni_mas_largo_que_la_columna(d
              # T11 calidad (F4): sin caracteres de control (U+0000 hacia que psycopg2 lanzara ValueError en el flush) y
              # quitados ANTES de recortar; si no queda nada, el autor de la sesion o 'Sistema'.
              ("Ana\x00", None, "Ana"), ("A\x00n\x1fa\x7f", None, "Ana"), ("\x00" * 10 + "x" * 150, None, "x" * 150),
-             ("\x00\x01", user_admin, nombre_de_usuario(user_admin)), ("\x00", None, "Sistema")]
+             ("\x00\x01", user_admin, nombre_de_usuario(user_admin)), ("\x00", None, "Sistema"),
+             # Ronda 1 (1): tampoco surrogates sueltos (Cs): psycopg2 lanzaba UnicodeEncodeError.
+             ("Ana" + chr(0xD800), None, "Ana"), (chr(0xDFFF), user_admin, nombre_de_usuario(user_admin))]
     for user_name, usuario, esperado in casos:
         renglon = erp_ventas._log(db, "COT", 999999999, "COT-T4H40X", "UPDATED", "x", user_name=user_name,
                                   usuario=usuario, commit=False)
@@ -229,6 +231,26 @@ def test_t11_f4_un_autor_con_u0000_no_tumba_el_cambio_de_estado_explicito(app_cl
     assert resp.status_code == 200, resp.text
     [renglon] = _logs(db, cot.id, "ESTADO_CHANGED")
     assert (renglon.old_estado, renglon.new_estado, renglon.user_name) == ("BORRADOR", "RECHAZADA", "Ana")
+
+
+def test_t11_r1_un_autor_con_surrogate_o_vacio_tras_limpiar_queda_a_nombre_de_la_sesion(app_client, db, admin_token,
+                                                                                       user_admin):
+    """T11 calidad, ronda 1 (1 y 2): un updated_by con un surrogate suelto (U+D800, mandado como escape JSON) daba 500
+    DESPUES del commit del estado (UnicodeEncodeError al guardar el renglon); y uno que queda vacio al limpiarlo (solo
+    U+0000) quedaba a nombre de 'Sistema'. Ahora el renglon se guarda y, si no queda autor, es el de la sesion."""
+    from app.core.textos_actividad import nombre_de_usuario
+    cot = _cot(db, "COT-T11R1A", "BORRADOR")
+    contenido = '{"estado": "RECHAZADA", "updated_by": "Ana' + chr(92) + 'ud800"}'
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", content=contenido,
+                            headers={**auth(admin_token), "Content-Type": "application/json"})
+    assert resp.status_code == 200, resp.text
+    [renglon] = _logs(db, cot.id, "ESTADO_CHANGED")
+    assert renglon.user_name == "Ana"
+    otra = _cot(db, "COT-T11R1B", "BORRADOR")
+    resp = _patch(app_client, admin_token, otra.id, {"estado": "RECHAZADA", "updated_by": "\x00"})
+    assert resp.status_code == 200, resp.text
+    [renglon] = _logs(db, otra.id, "ESTADO_CHANGED")
+    assert renglon.user_name == nombre_de_usuario(user_admin)
 
 
 def test_aceptar_sin_razon_responde_422(app_client, db, admin_token):

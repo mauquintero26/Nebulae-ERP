@@ -152,11 +152,12 @@ def _log(db: Session, entity_type: str, entity_id: int, entity_numero: str,
     «sin autor».
     T11 calidad (F4): antes de recortar se quitan los caracteres de control (Cc): con U+0000 psycopg2 lanzaba
     ValueError en el flush y, en los cambios de estado explicitos de la COT y del PVEN, el estado ya confirmado se
-    quedaba sin su renglon (500). Si no queda nada, nombre_de_usuario(usuario) ('Sistema' sin usuario)."""
+    quedaba sin su renglon (500). Si no queda nada, nombre_de_usuario(usuario) ('Sistema' sin usuario). Ronda 1:
+    tambien los surrogates sueltos (Cs, p. ej. U+D800 llegado como escape JSON): psycopg2 lanzaba UnicodeEncodeError."""
     if user_name is not None:
         if not isinstance(user_name, str):
             user_name = nombre_de_usuario(usuario)
-        sin_control = "".join(ch for ch in user_name if unicodedata.category(ch) != "Cc")
+        sin_control = "".join(ch for ch in user_name if unicodedata.category(ch) not in ("Cc", "Cs"))
         if sin_control != user_name and not sin_control:
             sin_control = nombre_de_usuario(usuario)
         user_name = sin_control[:_USER_NAME_MAX]
@@ -913,9 +914,11 @@ def _sin_valores_de_contacto(extra):
     """S3 (T11): extra_data de un renglon con el antes y el despues del contacto vaciados: el campo sigue nombrado y la
     pantalla lo pinta 'Teléfono: cambiado' (sin la llave 'campo', CambiosDeActividad no pone '—' ni tacha). Devuelve una
     copia: el renglon de la sesion no cambia.
-    T11 calidad (F5): un renglon de envio al cliente (_extra_data_de_envio: trae 'correo') pierde correo.destino y su
-    cambio 'Correo' / 'Correo de respaldo' (que lleva la direccion: 'Correo enviado a …') pasa a «Correo enviado» o
-    «No se pudo enviar» segun correo.enviado. La descripcion de esos renglones no lleva la direccion."""
+    T11 calidad (F5 y ronda 1): un renglon de envio al cliente (_extra_data_de_envio: trae 'correo') pierde
+    correo.destino y su cambio 'Correo' / 'Correo de respaldo', SOLO si lleva la direccion ('Correo enviado a …', 'No se
+    pudo enviar el correo a …'), pasa a «Correo enviado» o «No se pudo enviar» segun correo.enviado. Sin correo
+    registrado o con el correo sin configurar el texto no lleva la direccion y se conserva. La descripcion de esos
+    renglones no lleva la direccion."""
     if not isinstance(extra, dict):
         return extra
     correo = extra.get("correo")
@@ -925,12 +928,14 @@ def _sin_valores_de_contacto(extra):
         nuevo["correo"] = {k: v for k, v in correo.items() if k != "destino"}
     if isinstance(extra.get("cambios"), list):
         resultado = "Correo enviado" if de_envio and correo.get("enviado") is True else "No se pudo enviar"
+        destino = correo.get("destino") if de_envio else None
         cambios = []
         for c in extra["cambios"]:
             if isinstance(c, dict) and c.get("campo") in _CAMPOS_DE_CONTACTO:
                 c = {"etiqueta": c.get("etiqueta"), "despues": "cambiado"}
             elif (de_envio and isinstance(c, dict) and "campo" not in c
-                  and c.get("etiqueta") in _ETIQUETAS_CORREO_DE_ENVIO):
+                  and c.get("etiqueta") in _ETIQUETAS_CORREO_DE_ENVIO and isinstance(c.get("despues"), str)
+                  and ("@" in c["despues"] or (isinstance(destino, str) and destino and destino in c["despues"]))):
                 c = {**c, "despues": resultado}
             cambios.append(c)
         nuevo["cambios"] = cambios
@@ -1268,7 +1273,8 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     for k in allowed:
         if k in body:
             v = body[k]
-            if k in ("advisor_user_id", "asignado_a_user_id"):
+            # T11 calidad, ronda 1: customer_id tambien ('05' o ' 5 ' es la misma ficha y no anula ningun enlace).
+            if k in ("advisor_user_id", "asignado_a_user_id", "customer_id"):
                 v = _int_or_none(v)
             setattr(sc, k, v)
     # Gate 1 -- invariante (Round 6, generaliza la version de la implementacion original
@@ -1354,7 +1360,7 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {etiqueta_estado('SC', sc.estado)}",
              old_estado=old_estado, new_estado=sc.estado,
-             user_name=body.get("updated_by"), commit=False)
+             user_name=body.get("updated_by"), commit=False, usuario=user)
     if promueve_asignada and not (body.get("estado") and body["estado"] != old_estado):
         # El check de arriba solo loguea cuando el REQUEST manda "estado" explicitamente.
         # promueve_asignada puede cambiar sc.estado sin que el body lo pida (solo manda
@@ -1363,22 +1369,24 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         # de que el mismo PATCH mande advisor_user_id Y un estado explicito distinto.
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {etiqueta_estado('SC', 'ASIGNADA')} (asesor asignado)",
-             old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"), commit=False)
+             old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"), commit=False,
+             usuario=user)
     if desasigna_a_borrador and not (body.get("estado") and body["estado"] != old_estado):
         # Mismo motivo que el bloque anterior: esta transicion ocurre sin que el body
         # mande "estado" (solo limpia advisor_user_id), asi que necesita su propio log.
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {etiqueta_estado('SC', 'BORRADOR')} (asesor retirado)",
-             old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"), commit=False)
+             old_estado=old_estado, new_estado=sc.estado, user_name=body.get("updated_by"), commit=False,
+             usuario=user)
     if invalida_confirmacion:
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
              _texto_estado_cambiado(etiqueta_estado('SC', sc.estado),
                                     _MOTIVO_PRODUCTOS if cambian_los_productos else _MOTIVO_CAMBIO_DE_CLIENTE),
              old_estado=old_estado, new_estado=sc.estado,
-             user_name=body.get("updated_by") or getattr(user, "email", None), commit=False)
+             user_name=body.get("updated_by") or getattr(user, "email", None), commit=False, usuario=user)
     if anula_por_cliente:
         _log(db, "SC", sc.id, sc.numero, "UPDATED", _AVISO_CAMBIO_DE_CLIENTE,
-             user_name=body.get("updated_by") or getattr(user, "email", None), commit=False)
+             user_name=body.get("updated_by") or getattr(user, "email", None), commit=False, usuario=user)
     if fecha_vieja is not None and sc.fecha_entrega_estimada and sc.fecha_entrega_estimada.date() != fecha_vieja.date():
         # Final whole-branch review (hallazgo #2): .date() en ambos lados antes de
         # restar -- las fechas se calculan como utcnow() + timedelta(...) (Task 1), asi
@@ -1791,9 +1799,15 @@ COTIZADOR_MAX = 150
 
 
 def _exigir_cotizador_que_quepa(cotizador) -> None:
-    """422 si el cotizador es un texto mas largo que su columna. Las tres puertas que crean una COT (confirmar_solicitud,
-    /cotizar-sin-confirmacion y POST /cotizaciones) lo llaman ANTES de pedir el numero de seq_cot (T11 calidad, A1)."""
-    if isinstance(cotizador, str) and len(cotizador) > COTIZADOR_MAX:
+    """422 si el cotizador no se puede guardar: un valor que no es None ni texto, un texto con U+0000 o un surrogate
+    suelto (psycopg2 no los guarda: 500) -> «El cotizador no es válido.»; o mas largo que su columna. Las tres puertas
+    que crean una COT (confirmar_solicitud, /cotizar-sin-confirmacion y POST /cotizaciones) lo llaman ANTES de pedir
+    el numero de seq_cot (T11 calidad, A1 y ronda 1), y PATCH /cotizaciones cuando el body trae el cotizador."""
+    if cotizador is None:
+        return
+    if not isinstance(cotizador, str) or any(ch == "\x00" or unicodedata.category(ch) == "Cs" for ch in cotizador):
+        raise HTTPException(422, "El cotizador no es válido.")
+    if len(cotizador) > COTIZADOR_MAX:
         raise HTTPException(422, f"El cotizador no puede tener más de {COTIZADOR_MAX} caracteres.")
 
 # U11: estados en que una SC sin la confirmacion vigente del cliente se puede cotizar con motivo (CONFIRMADA solo si
@@ -2391,6 +2405,8 @@ def _salir_de_gate2(db: Session, cot: SalesQuotation) -> None:
 def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
     _exigir_estado_valido(body)  # S1 (T11): antes de leer nada
+    if "cotizador" in body:  # T11 calidad, ronda 1 (A1): 151 caracteres o U+0000 daban 500
+        _exigir_cotizador_que_quepa(body["cotizador"])
     # Bloqueada: las guardas de abajo (pedido vigente, SC cancelada, otra COT activa) se validan sobre la fila que se
     # va a escribir, sin que una conversion o una confirmacion concurrente la cambie en medio.
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).with_for_update().first()
@@ -2683,7 +2699,8 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {etiqueta_estado('COT', cot.estado)}",
              old_estado=old_estado, new_estado=cot.estado,
-             user_name=nombre_de_usuario(user) if retoma_sin_confirmacion else body.get("updated_by"))
+             user_name=nombre_de_usuario(user) if retoma_sin_confirmacion else body.get("updated_by"),
+             usuario=user)  # T11 calidad, ronda 1: un autor que queda vacio al limpiarlo es el de la sesion
     elif anula_por_recotizacion:
         # El paso a BORRADOR (rompe_congelamiento sin un estado explicito en el body: el caso tipico es la Calculadora
         # mandando productos/total_cop) ya quedo en la Actividad, con su razon, en el commit de arriba. Aqui solo la
@@ -3278,7 +3295,7 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
         _log(db, "VEN", v.id, v.numero, "ESTADO_CHANGED",
              ("Estado cambiado a Entregado (el inventario ya se había descontado en un despacho anterior; no se "
               "descuenta otra vez)") if ya_despachado else f"Estado cambiado a {etiqueta_estado('VEN', v.estado)}",
-             old_estado=old_estado, new_estado=v.estado, user_name=autor)
+             old_estado=old_estado, new_estado=v.estado, user_name=autor, usuario=user)
     if cancela:
         # H46+U25: la cotizacion del pedido vuelve a Borrador para reusarla (no hace fallar la cancelacion).
         _reabrir_cotizacion_por_pven_cancelado(db, v, autor)
