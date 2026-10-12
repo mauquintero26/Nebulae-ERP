@@ -84,9 +84,66 @@ export const MOTIVO_SIN_CONFIRMACION_MIN = 10;
 
 /**
  * U11: máximo de caracteres del motivo (erp_ventas.MOTIVO_SIN_CONFIRMACION_MAX; backend/tests/test_estados_solicitud.py
- * compara los dos). Los dos límites se miden sin los espacios de los bordes y en puntos de código, como len() de Python.
+ * compara los dos). Los dos límites se miden sobre el motivo limpio (motivoLimpio) y en puntos de código, como len() de
+ * Python.
  */
 export const MOTIVO_SIN_CONFIRMACION_MAX = 500;
+
+/** S5 (T11) + T11 calidad (D1): letras o dígitos mínimos del motivo (erp_ventas.MOTIVO_SIN_CONFIRMACION_MIN_LETRAS). */
+export const MOTIVO_SIN_CONFIRMACION_MIN_LETRAS = 5;
+
+/**
+ * Caracteres que Unicode cuenta como letras pero no se ven (erp_ventas._RELLENOS_INVISIBLES; tests/
+ * test_estados_solicitud.mjs los lee del .py): los rellenos Hangul U+115F, U+1160, U+3164 y U+FFA0. Inmutable.
+ * @type {ReadonlyArray<string>}
+ */
+export const RELLENOS_INVISIBLES = congelar(['\u115f', '\u1160', '\u3164', '\uffa0']);
+
+// Lo que str.isspace() de Python cuenta como espacio (Zs y los saltos de línea y tabuladores de Cc, Zl y Zp). El \s de JS
+// no sirve: incluye U+FEFF (formato) y deja fuera U+001C–U+001F y U+0085.
+const ESPACIO = /^[\t\n\v\f\r\x1c-\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]$/u;
+const FORMATO_O_CONTROL = /^[\p{Cf}\p{Cc}\p{Zl}\p{Zp}]$/u;
+// str.isalnum() de Python, un carácter: categorías L* y N*.
+const LETRA_O_DIGITO = /^[\p{L}\p{N}]$/u;
+
+/**
+ * T11 calidad (D1): el motivo tal como lo mide y lo guarda el servidor (_motivo_limpio de /cotizar-sin-confirmacion):
+ * NFKC; sin caracteres de formato (Cf: U+200B, U+00AD, U+FEFF…) ni de control (Cc) ni RELLENOS_INVISIBLES; cualquier
+ * espacio o salto de línea cuenta como un espacio, los seguidos quedan en uno y se quitan los de los bordes. Lo que no
+ * es texto da ''.
+ * @param {any} texto
+ * @returns {string}
+ */
+export function motivoLimpio(texto) {
+  if (typeof texto !== 'string') return '';
+  let limpio = '';
+  for (const ch of texto.normalize('NFKC')) {
+    if (ESPACIO.test(ch)) limpio += ' ';
+    else if (!FORMATO_O_CONTROL.test(ch) && !RELLENOS_INVISIBLES.includes(ch)) limpio += ch;
+  }
+  return limpio.replace(/ {2,}/g, ' ').trim();
+}
+
+/**
+ * T11 calidad (D1): por qué no se puede enviar el motivo, con las mismas reglas, el mismo orden y los mismos textos
+ * que el 422 de /cotizar-sin-confirmacion (_error_del_motivo), o null si se puede. Se mide el motivo limpio: menos de
+ * MIN caracteres, más de MAX o menos de MIN_LETRAS letras o dígitos.
+ * @param {any} texto
+ * @returns {string | null}
+ */
+export function errorMotivoSinConfirmacion(texto) {
+  const caracteres = [...motivoLimpio(texto)];
+  if (caracteres.length < MOTIVO_SIN_CONFIRMACION_MIN) {
+    return `El motivo debe tener al menos ${MOTIVO_SIN_CONFIRMACION_MIN} caracteres.`;
+  }
+  if (caracteres.length > MOTIVO_SIN_CONFIRMACION_MAX) {
+    return `El motivo no puede tener más de ${MOTIVO_SIN_CONFIRMACION_MAX} caracteres.`;
+  }
+  if (caracteres.filter((ch) => LETRA_O_DIGITO.test(ch)).length < MOTIVO_SIN_CONFIRMACION_MIN_LETRAS) {
+    return `El motivo debe tener al menos ${MOTIVO_SIN_CONFIRMACION_MIN_LETRAS} letras o números.`;
+  }
+  return null;
+}
 
 /**
  * Etiqueta y colores de un estado de solicitud. Una clave desconocida sale humanizada ('ALGO_NUEVO' -> 'Algo nuevo',

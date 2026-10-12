@@ -863,14 +863,17 @@ def test_s5_el_motivo_no_se_llena_con_caracteres_invisibles_ni_con_relleno(app_c
     """S5 (T11): strip() no quita U+200B, U+00AD ni el relleno Hangul (U+3164): diez de esos, o '..........', pasaban el
     minimo de 10 y la auditoria de la excepcion quedaba en blanco. El motivo se normaliza (NFKC, sin caracteres de
     formato ni de control, los espacios de cualquier tipo y los saltos de linea como un espacio, sin bordes), se mide
-    limpio y exige al menos 5 letras o digitos. Se guarda limpio."""
+    limpio y exige al menos 5 letras o digitos. Se guarda limpio.
+    T11 calidad (D1): con 10 caracteres o mas pero menos de 5 letras o digitos el 422 dice eso, no «10 caracteres»."""
     corto = "El motivo debe tener al menos 10 caracteres."
+    pocas_letras = {"..........", "-- !! ?? ..", "abcd......"}  # 10 o mas caracteres limpios, menos de 5 letras
     sc = _sc(db, "SC-CSC046", user_admin)
     for motivo in ("\u200b" * 10, "\u00ad" * 12, "\ufeff\u2060" * 6, "\u2028\u2029" * 6, "\u3164" * 10,
                    "\uffa0" * 10, "..........", "-- !! ?? ..", "abcd......", " \u200b a\u200bb\u200bc\u200bd \u200b "):
         resp = _cotizar(app_client, admin_token, sc.id, motivo=motivo)
         assert resp.status_code == 422, (motivo, resp.text)
-        assert resp.json()["detail"] == corto, motivo
+        esperado = "El motivo debe tener al menos 5 letras o números." if motivo in pocas_letras else corto
+        assert resp.json()["detail"] == esperado, motivo
     assert _cots_de(db, sc.id) == []
     assert _logs(db, "SC", sc.id) == []
 

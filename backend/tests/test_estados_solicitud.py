@@ -220,6 +220,33 @@ def test_paridad_reglas_de_estados_solicitud_con_el_frontend():
     assert espejo["motivoMax"] == MOTIVO_SIN_CONFIRMACION_MAX
 
 
+def test_t11_d1_paridad_del_motivo_limpio_con_el_frontend():
+    """T11 calidad (D1): motivoLimpio y errorMotivoSinConfirmacion (estados-solicitud.js) dan lo mismo que _motivo_limpio y
+    _error_del_motivo de /cotizar-sin-confirmacion: el mismo texto limpio y el mismo 422 (o ninguno). Los casos de S5
+    mas espacios de todo tipo, controles, ancho completo y los limites. Los caracteres se escriben con chr()."""
+    from app.api.v1.erp_ventas import (MOTIVO_SIN_CONFIRMACION_MIN_LETRAS, _RELLENOS_INVISIBLES, _error_del_motivo,
+                                       _motivo_limpio)
+    z = chr
+    casos = [z(0x200B) * 10, z(0xAD) * 12, (z(0xFEFF) + z(0x2060)) * 6, (z(0x2028) + z(0x2029)) * 6,
+             *(r * 10 for r in sorted(_RELLENOS_INVISIBLES)), "..........", "-- !! ?? ..", "abcd......", "abcde.....",
+             " " + z(0x200B) + " a" + z(0x200B) + "b" + z(0x200B) + "c" + z(0x200B) + "d " + z(0x200B) + " ",
+             "precio\nurgente", "precio\r\n\turgente ahora", z(0x1C) + "abcdefghij" + z(0x85) + z(0x1F),
+             "  Cliente" + z(0x200B) + " pidió" + z(0xA0) * 2 + "precio\n\nurgente   por teléfono" + z(0xAD) + " \t",
+             "12345 " + z(0x3000) + z(0x205F) + " listo", "x" * 500 + z(0x200B) * 20, "y" * 501, "y" * 501 + z(0x200B),
+             "Ｃｌｉｅｎｔｅ urgente", "ñandú 2026", "", "   ", "a" * 9, "١٢٣٤٥ números"]
+    espejo = _node("estados-solicitud.js", """{
+      minLetras: m.MOTIVO_SIN_CONFIRMACION_MIN_LETRAS,
+      casos: %s.map(t => [m.motivoLimpio(t), m.errorMotivoSinConfirmacion(t)]),
+    }""" % json.dumps(casos))
+    assert espejo["minLetras"] == MOTIVO_SIN_CONFIRMACION_MIN_LETRAS
+    backend = [[_motivo_limpio(t), _error_del_motivo(_motivo_limpio(t))] for t in casos]
+    assert espejo["casos"] == backend, [(ascii(t)[:30], b, f) for t, b, f in zip(casos, backend, espejo["casos"]) if b != f]
+    # La prueba compara mensajes reales de las tres reglas, no solo None.
+    assert {b[1] for b in backend} == {None, "El motivo debe tener al menos 10 caracteres.",
+                                      "El motivo debe tener al menos 5 letras o números.",
+                                      "El motivo no puede tener más de 500 caracteres."}
+
+
 # ─── 3-8) la SC no refleja a su COT ──────────────────────────────────────────────────────────────────────────
 
 def test_crear_la_cotizacion_deja_la_solicitud_confirmada(app_client, db, admin_token, user_admin):

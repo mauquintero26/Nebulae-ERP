@@ -7,10 +7,12 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   ESTADOS_SC, PASOS_SC, ESTADOS_SC_SIN_CONFIRMAR, MOTIVO_SIN_CONFIRMACION_MIN, MOTIVO_SIN_CONFIRMACION_MAX,
   infoEstadoSolicitud, pasoSolicitud, puedeReiniciar, puedeCotizarSinConfirmacion, resumenCancelacion,
   motivoDeCancelacion, TEXTO_PAPELERA_SIN_FECHA, ESTADOS_SC_HEREDADOS,
+  MOTIVO_SIN_CONFIRMACION_MIN_LETRAS, RELLENOS_INVISIBLES, motivoLimpio, errorMotivoSinConfirmacion,
 } from '../src/lib/estados-solicitud.js';
 
 const VIVOS = {
@@ -301,6 +303,56 @@ console.log('--- TEST 10 (T7 ronda 1): motivoDeCancelacion, el único lector del
   // El texto oficial de una SC sin fecha de envío a la Papelera es uno solo (lo importa listas-ventas.js).
   assert.equal(TEXTO_PAPELERA_SIN_FECHA, 'No se elimina automáticamente: no tiene fecha de envío a la Papelera');
   assert.equal(resumenCancelacion({ se_conserva_en_papelera: false, purga_programada: null }, []).papelera, TEXTO_PAPELERA_SIN_FECHA);
+}
+
+console.log('--- T11 calidad D1: el motivo de «Cotizar sin confirmación» se limpia y se mide como en el servidor (S5) ---');
+{
+  // Paridad con backend/app/api/v1/erp_ventas.py: el mínimo de letras o dígitos y los rellenos invisibles se leen del .py.
+  const py = readFileSync(new URL('../../backend/app/api/v1/erp_ventas.py', import.meta.url), 'utf8');
+  const minLetras = py.match(/^MOTIVO_SIN_CONFIRMACION_MIN_LETRAS\s*=\s*(\d+)/m);
+  assert.ok(minLetras, 'erp_ventas.py define MOTIVO_SIN_CONFIRMACION_MIN_LETRAS');
+  assert.equal(MOTIVO_SIN_CONFIRMACION_MIN_LETRAS, Number(minLetras[1]));
+  const rellenos = py.match(/^_RELLENOS_INVISIBLES\s*=\s*frozenset\("([^"]*)"\)/m);
+  assert.ok(rellenos, 'erp_ventas.py define _RELLENOS_INVISIBLES = frozenset("...")');
+  const delServidor = [...rellenos[1].matchAll(/\\u([0-9a-fA-F]{4})|\\U([0-9a-fA-F]{8})/g)]
+    .map((m) => String.fromCodePoint(parseInt(m[1] ?? m[2], 16)));
+  assert.ok(delServidor.length >= 4, 'se leyeron los rellenos del servidor');
+  assert.deepEqual([...RELLENOS_INVISIBLES].sort(), [...delServidor].sort());
+
+  const corto = 'El motivo debe tener al menos 10 caracteres.';
+  const pocasLetras = 'El motivo debe tener al menos 5 letras o números.';
+  const largo = 'El motivo no puede tener más de 500 caracteres.';
+  // Los casos de la prueba S5 del backend (test_cotizar_sin_confirmacion), con el mensaje de cada uno.
+  const casos = [
+    ['\u200b'.repeat(10), '', corto],
+    ['\u00ad'.repeat(12), '', corto],
+    ['\ufeff\u2060'.repeat(6), '', corto],
+    ['\u2028\u2029'.repeat(6), '', corto],
+    ['\u3164'.repeat(10), '', corto],
+    ['\uffa0'.repeat(10), '', corto],
+    [' \u200b a\u200bb\u200bc\u200bd \u200b ', 'abcd', corto],
+    ['..........', '..........', pocasLetras],
+    ['-- !! ?? ..', '-- !! ?? ..', pocasLetras],
+    ['abcd......', 'abcd......', pocasLetras],
+    ['abcde.....', 'abcde.....', null],
+    ['  Cliente\u200b pidió\u00a0\u00a0precio\n\nurgente   por teléfono\u00ad \t', 'Cliente pidió precio urgente por teléfono', null],
+    ['precio\nurgente', 'precio urgente', null],  // un salto de línea entre palabras es un espacio, no las pega
+    ['x'.repeat(500) + '\u200b'.repeat(20), 'x'.repeat(500), null],
+    ['y'.repeat(501) + '\u200b', 'y'.repeat(501), largo],
+    ['Ｃｌｉｅｎｔｅ urgente', 'Cliente urgente', null],  // NFKC: ancho completo
+  ];
+  for (const [crudo, limpio, error] of casos) {
+    assert.equal(motivoLimpio(crudo), limpio, JSON.stringify(crudo).slice(0, 40));
+    assert.equal(errorMotivoSinConfirmacion(crudo), error, JSON.stringify(crudo).slice(0, 40));
+  }
+  assert.equal(motivoLimpio(null), '');
+  assert.equal(errorMotivoSinConfirmacion(undefined), corto);
+
+  // D2: la ventana del detalle de la SC no limita con maxLength (UTF-16 crudo) y bloquea «Crear cotización» con el error
+  // del motivo limpio (también el máximo).
+  const detalle = readFileSync(new URL('../src/app/dashboard/ventas/solicitud/[id]/page.tsx', import.meta.url), 'utf8');
+  assert.ok(!detalle.includes('maxLength={MOTIVO_SIN_CONFIRMACION_MAX}'), 'sin maxLength en el motivo');
+  assert.ok(detalle.includes('disabled={!!errorMotivoSinConf}'), '«Crear cotización» usa errorMotivoSinConfirmacion');
 }
 
 console.log('OK test_estados_solicitud');

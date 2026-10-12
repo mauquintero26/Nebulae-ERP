@@ -19,7 +19,7 @@ import {
 import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
 import {
   infoEstadoSolicitud, puedeReiniciar, puedeCotizarSinConfirmacion, MOTIVO_SIN_CONFIRMACION_MIN, ESTADOS_SC_SIN_CONFIRMAR,
-  resumenCancelacion, MOTIVO_SIN_CONFIRMACION_MAX, pasoSolicitud, PASOS_SC,
+  resumenCancelacion, MOTIVO_SIN_CONFIRMACION_MAX, pasoSolicitud, PASOS_SC, motivoLimpio, errorMotivoSinConfirmacion,
 } from '@/lib/estados-solicitud';
 import {
   largoTexto, telUrl, mailtoUrl, asuntoDocumento, agregarActividad, esEntradaChatter, motivoTelefono, textoSinTelefono,
@@ -467,9 +467,10 @@ function SolicitudDetalleContent() {
   async function cotizarSinConfirmacion() {
     if (!solicitud) return;
     const motivo = motivoSinConf.trim();
-    // En puntos de código, como len() de Python en el servidor (T8A ronda 1).
-    if (largoTexto(motivo) < MOTIVO_SIN_CONFIRMACION_MIN) {
-      setErrorSinConf(`El motivo debe tener al menos ${MOTIVO_SIN_CONFIRMACION_MIN} caracteres.`);
+    // T11 calidad (D1): el mismo criterio y el mismo texto que el 422 del servidor (motivo limpio, en puntos de código).
+    const errorMotivo = errorMotivoSinConfirmacion(motivo);
+    if (errorMotivo) {
+      setErrorSinConf(errorMotivo);
       return;
     }
     setCotizandoSinConf(true);
@@ -663,8 +664,10 @@ function SolicitudDetalleContent() {
   const puedeCotizarSinConf = puedeCotizarSinConfirmacion(solicitud, { cotizacionesActivas, pedidosVigentes, tieneProductos });
   // El cliente todavía no confirma la solicitud (Nueva, Asignada o Pendiente por confirmación).
   const scSinConfirmar = ESTADOS_SC_SIN_CONFIRMAR.includes(solicitud?.estado);
-  // Lo que cuenta el servidor para los límites del motivo: sin los espacios de los bordes y en puntos de código (len()).
-  const largoMotivoSinConf = largoTexto(motivoSinConf.trim());
+  // Lo que cuenta el servidor para los límites del motivo (T11 calidad, D1): el motivo limpio (sin invisibles, espacios
+  // en uno, sin bordes) en puntos de código (len()); errorMotivoSinConf es su 422 (largo y letras o dígitos).
+  const largoMotivoSinConf = largoTexto(motivoLimpio(motivoSinConf));
+  const errorMotivoSinConf = errorMotivoSinConfirmacion(motivoSinConf);
 
   const asesoresElegibles = usuarios.filter(u => esAsesorElegible(u.role));
   const yoPuedoSerAsesor = me.id !== null && asesoresElegibles.some(u => u.id === me.id);
@@ -1439,7 +1442,7 @@ function SolicitudDetalleContent() {
           footer={(
             <>
               <Button variant="secondary" disabled={cotizandoSinConf} onClick={() => setShowCotizarSinConf(false)}>Esperar la confirmación</Button>
-              <Button color="amber" icon={FileText} loading={cotizandoSinConf} disabled={largoMotivoSinConf < MOTIVO_SIN_CONFIRMACION_MIN} onClick={cotizarSinConfirmacion}>Crear cotización</Button>
+              <Button color="amber" icon={FileText} loading={cotizandoSinConf} disabled={!!errorMotivoSinConf} onClick={cotizarSinConfirmacion}>Crear cotización</Button>
             </>
           )}>
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
@@ -1456,18 +1459,19 @@ function SolicitudDetalleContent() {
               onChange={e => { setMotivoSinConf(e.target.value); setErrorSinConf(''); }}
               readOnly={cotizandoSinConf}
               rows={3}
-              maxLength={MOTIVO_SIN_CONFIRMACION_MAX}
+              // T11 calidad (D2): sin maxLength (cuenta UTF-16 crudo, con los invisibles): el botón se bloquea con el
+              // largo limpio por encima del máximo.
               placeholder="¿Por qué se cotiza sin esperar al cliente?"
               className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-amber-200 outline-none"
               autoFocus
             />
             <div className="flex items-start justify-between gap-3 mt-1 text-xs">
-              <span className={largoMotivoSinConf < MOTIVO_SIN_CONFIRMACION_MIN ? 'text-amber-700' : 'text-slate-500'}>
+              <span className={errorMotivoSinConf ? 'text-amber-700' : 'text-slate-500'}>
                 {largoMotivoSinConf < MOTIVO_SIN_CONFIRMACION_MIN
                   ? `Mínimo ${MOTIVO_SIN_CONFIRMACION_MIN} caracteres (llevas ${largoMotivoSinConf}).`
-                  : 'Lo ve tu equipo en la Actividad; el cliente no lo recibe.'}
+                  : errorMotivoSinConf ?? 'Lo ve tu equipo en la Actividad; el cliente no lo recibe.'}
               </span>
-              <span className="text-slate-400 tabular-nums shrink-0">{largoMotivoSinConf}/{MOTIVO_SIN_CONFIRMACION_MAX}</span>
+              <span className={`tabular-nums shrink-0 ${largoMotivoSinConf > MOTIVO_SIN_CONFIRMACION_MAX ? 'text-rose-700 font-bold' : 'text-slate-400'}`}>{largoMotivoSinConf}/{MOTIVO_SIN_CONFIRMACION_MAX}</span>
             </div>
             {errorSinConf && <p role="alert" className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 mt-3">{errorSinConf}</p>}
           </div>

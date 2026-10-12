@@ -1719,8 +1719,9 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
 # MOTIVO_SIN_CONFIRMACION_MAX de frontend/src/lib/estados-solicitud.js; test_estados_solicitud compara los valores).
 MOTIVO_SIN_CONFIRMACION_MIN = 10
 MOTIVO_SIN_CONFIRMACION_MAX = 500
-# S5 (T11): ademas, al menos estas letras o digitos: diez puntos o diez caracteres invisibles no explican nada. El
-# frontend todavia no lo espeja: el 422 llega con el texto del minimo.
+# S5 (T11): ademas, al menos estas letras o digitos: diez puntos o diez caracteres invisibles no explican nada. T11
+# calidad (D1): el frontend lo espeja (motivoLimpio y errorMotivoSinConfirmacion de estados-solicitud.js;
+# test_estados_solicitud compara los dos con node).
 MOTIVO_SIN_CONFIRMACION_MIN_LETRAS = 5
 # S5: rellenos Hangul (U+115F, U+1160, U+3164 y U+FFA0). Unicode los clasifica como letras, pero no se ven.
 _RELLENOS_INVISIBLES = frozenset("\u115f\u1160\u3164\uffa0")
@@ -1756,6 +1757,20 @@ def _motivo_limpio(texto: str) -> str:
     return re.sub(" {2,}", " ", "".join(partes)).strip()
 
 
+def _error_del_motivo(motivo: str) -> Optional[str]:
+    """El 422 del motivo de /cotizar-sin-confirmacion ya limpio (_motivo_limpio), o None si sirve: menos de
+    MOTIVO_SIN_CONFIRMACION_MIN caracteres, mas de MOTIVO_SIN_CONFIRMACION_MAX o, con el largo bien, menos de
+    MOTIVO_SIN_CONFIRMACION_MIN_LETRAS letras o digitos (T11 calidad, D1: ese caso dice lo que falta, no el minimo de
+    caracteres). El frontend lo espeja con los mismos textos (errorMotivoSinConfirmacion de estados-solicitud.js)."""
+    if len(motivo) < MOTIVO_SIN_CONFIRMACION_MIN:
+        return f"El motivo debe tener al menos {MOTIVO_SIN_CONFIRMACION_MIN} caracteres."
+    if len(motivo) > MOTIVO_SIN_CONFIRMACION_MAX:
+        return f"El motivo no puede tener más de {MOTIVO_SIN_CONFIRMACION_MAX} caracteres."
+    if sum(ch.isalnum() for ch in motivo) < MOTIVO_SIN_CONFIRMACION_MIN_LETRAS:
+        return f"El motivo debe tener al menos {MOTIVO_SIN_CONFIRMACION_MIN_LETRAS} letras o números."
+    return None
+
+
 def _es_soporte(sc: CustomerRequest) -> bool:
     return sc.tipo_solicitud == "Soporte Tecnico" or sc.estado == "N/A_SOPORTE"
 
@@ -1788,13 +1803,9 @@ def cotizar_sin_confirmacion(sc_id: int, body: CotizarSinConfirmacionBody,
     pedido sigue exigiendo Gate 2 y el anticipo. Un solo commit (C8); el lead del CRM va en un savepoint.
     S5 (T11): el motivo se mide y se guarda limpio (_motivo_limpio) y necesita al menos 5 letras o digitos."""
     motivo = _motivo_limpio(body.motivo or "")
-    corto = f"El motivo debe tener al menos {MOTIVO_SIN_CONFIRMACION_MIN} caracteres."
-    if len(motivo) < MOTIVO_SIN_CONFIRMACION_MIN:
-        raise HTTPException(422, corto)
-    if len(motivo) > MOTIVO_SIN_CONFIRMACION_MAX:
-        raise HTTPException(422, f"El motivo no puede tener más de {MOTIVO_SIN_CONFIRMACION_MAX} caracteres.")
-    if sum(ch.isalnum() for ch in motivo) < MOTIVO_SIN_CONFIRMACION_MIN_LETRAS:
-        raise HTTPException(422, corto)
+    error_del_motivo = _error_del_motivo(motivo)
+    if error_del_motivo:
+        raise HTTPException(422, error_del_motivo)
     cotizador = _texto_o_none(body.cotizador)
     _exigir_cotizador_que_quepa(cotizador)
     # Bloqueada como en confirmar_solicitud: dos pedidos simultaneos (o este y la confirmacion del cliente) no crean
