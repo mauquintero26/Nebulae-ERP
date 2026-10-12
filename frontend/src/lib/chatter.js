@@ -322,6 +322,18 @@ export function motivoTelefono(telefono) {
 }
 
 /**
+ * T11 calidad (E6): lo que dice la opcion WhatsApp de la ventana de envio (ChannelModal) cuando el telefono no sirve
+ * (motivoTelefono): 'sin teléfono' si no tiene digitos y 'teléfono incompleto' si tiene pero no alcanzan. null si el
+ * telefono sirve (la opcion esta habilitada). Un solo texto para las ventanas de envio de la SC, la COT y el Hub.
+ * @param {any} telefono
+ * @returns {string | null}
+ */
+export function textoSinTelefono(telefono) {
+  if (!motivoTelefono(telefono)) return null;
+  return numeroWhatsApp(telefono) ? 'teléfono incompleto' : 'sin teléfono';
+}
+
+/**
  * Enlace 'Llamar ahora' (tel:+57…), con el mismo numero que WhatsApp (whatsapp.js), o null si el telefono no sirve
  * (motivoTelefono).
  * @param {any} telefono

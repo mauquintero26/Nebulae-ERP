@@ -13,7 +13,7 @@
  */
 
 import { tiene, humanizarCodigo } from './estados-pedido.js';
-import { diaLocalDeFecha, comoUTC } from './hub-ventas.js';
+import { diaLocalDeFecha, comoUTC, fechaEditadaParaGuardar } from './hub-ventas.js';
 
 /**
  * Los campos, en el orden del formulario. `max` = largo máximo (sin los espacios de los bordes); `soloConFicha` = solo
@@ -183,7 +183,9 @@ const CAMPOS_SOLICITUD_EDITABLES = ['tipo_solicitud', 'modalidad_pago', 'notas']
  * abrirse (formularioDeEdicion(base), con los mismos valores por defecto): solo esos viajan en el PATCH de la SC. Así una
  * asignación de asesor (u otro cambio) que llegó con una recarga silenciosa mientras el formulario seguía abierto no se
  * deshace al guardar. El asesor viaja con su nombre; '' y null son lo mismo, y el id se compara como texto (el valor de
- * un select). Una clave que no está en el formulario no se toca. No incluye el contacto ni la fecha de vencimiento.
+ * un select). Quitar el asesor manda los dos en null (T11 calidad, E7: con el nombre viejo, la SC volvía a Nueva con
+ * «Asesor: <correo viejo>»). Una clave que no está en el formulario no se toca. No incluye el contacto ni la fecha de
+ * vencimiento.
  * @param {any} base la solicitud tal como estaba al abrir «Editar»
  * @param {any} form lo que hay en el formulario
  * @returns {Record<string, any>}
@@ -195,13 +197,32 @@ export function camposEditadosDeSolicitud(base, form) {
   const inicial = formularioDeEdicion(base);
   const igual = (a, b) => String(a ?? '') === String(b ?? '');
   if (tiene(form, 'advisor_user_id') && !igual(inicial.advisor_user_id, form.advisor_user_id)) {
-    cambios.advisor_user_id = form.advisor_user_id;
-    cambios.advisor_name = form.advisor_name;
+    const sinAsesor = String(form.advisor_user_id ?? '') === '';
+    cambios.advisor_user_id = sinAsesor ? null : form.advisor_user_id;
+    cambios.advisor_name = sinAsesor ? null : form.advisor_name;
   }
   for (const clave of CAMPOS_SOLICITUD_EDITABLES) {
     if (tiene(form, clave) && !igual(inicial[clave], form[clave])) cambios[clave] = form[clave];
   }
   return cambios;
+}
+
+/** T11 calidad (E8): el aviso informativo de «Guardar» cuando no hay nada que guardar. */
+export const SIN_CAMBIOS_PARA_GUARDAR = 'No hay cambios para guardar.';
+
+/**
+ * T11 calidad (E8): true si «Guardar» del formulario «Editar» de la SC tiene algo que mandar: un dato de contacto
+ * (cambiosDeContacto, con la misma regla de la ficha), un campo de la SC (camposEditadosDeSolicitud) o el vencimiento en
+ * otro día (fechaEditadaParaGuardar). Si es false, la pantalla no llama al servidor y avisa SIN_CAMBIOS_PARA_GUARDAR.
+ * @param {any} base la solicitud tal como estaba al abrir «Editar»
+ * @param {any} form lo que hay en el formulario
+ * @param {{ tieneFicha?: boolean }} [opciones]
+ * @returns {boolean}
+ */
+export function hayCambiosEnEdicion(base, form, opciones = {}) {
+  if (Object.keys(cambiosDeContacto(base, form, opciones)).length > 0) return true;
+  if (Object.keys(camposEditadosDeSolicitud(base, form)).length > 0) return true;
+  return fechaEditadaParaGuardar(form?.fecha_vencimiento, base?.fecha_vencimiento) !== null;
 }
 
 /** El primer valor que es un texto con algo más que espacios (recortado); null si ninguno lo es. */

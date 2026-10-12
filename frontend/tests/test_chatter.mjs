@@ -6,11 +6,13 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { waUrl } from '../src/lib/whatsapp.js';
 import {
   TIPOS_CHATTER, MAX_TEXTO_CHATTER, MAX_MEDIO_CHATTER, UMBRAL_CONTADOR_CHATTER, MEDIOS_SUGERIDOS,
   esEntradaChatter, tipoChatter, tituloEntradaChatter, rutaNotas, validarTextoChatter, validarNotaChatter,
   cuerpoNota, largoTexto, entradasChatter, agregarActividad, claveBorrador, claveBorradorVieja, parsearBorrador,
-  asuntoDocumento, mailtoUrl, telUrl, motivoTelefono, motivoTipoDeshabilitado, mensajeNoGuardado,
+  asuntoDocumento, mailtoUrl, telUrl, motivoTelefono, motivoTipoDeshabilitado, mensajeNoGuardado, textoSinTelefono,
 } from '../src/lib/chatter.js';
 
 const VACIA = 'Escribe la nota antes de guardarla.';
@@ -301,6 +303,28 @@ console.log('--- TEST 13: mensaje en línea cuando la nota no se guardó ---');
     'No se guardó: Escribe la nota antes de guardarla. Tu texto sigue aquí; intenta de nuevo.');
   for (const err of [new Error('x'), conStatus(500, 'y'), {}, new TypeError('Failed to fetch')]) {
     assert.ok((mensajeNoGuardado(err).match(/intenta de nuevo/gi) || []).length <= 1, String(err?.message));
+  }
+}
+
+console.log('--- T11 calidad E6: textoSinTelefono, el mismo texto en las tres ventanas de envío (ChannelModal) ---');
+{
+  // Sin dígitos: 'sin teléfono'; con dígitos que no alcanzan (motivoTelefono): 'teléfono incompleto'.
+  for (const tel of [null, undefined, '', '   ', 'sin número']) assert.equal(textoSinTelefono(tel), 'sin teléfono', String(tel));
+  for (const tel of ['+57', '0', '123', '300 123 45']) assert.equal(textoSinTelefono(tel), 'teléfono incompleto', tel);
+  // Con un teléfono que sirve no hay texto (la opción WhatsApp está habilitada).
+  for (const tel of ['3001234567', '+57 300 123 4567', '+1 202 555 0143']) assert.equal(textoSinTelefono(tel), null, tel);
+  // Los detalles de la SC (que no pasaba ninguno) y de la COT lo usan, sin el texto armado a mano.
+  const leer = (ruta) => readFileSync(new URL(`../src/app/dashboard/ventas/${ruta}`, import.meta.url), 'utf8');
+  for (const ruta of ['cotizacion/[id]/page.tsx', 'solicitud/[id]/page.tsx']) {
+    const fuente = leer(ruta);
+    assert.ok(/<ChannelModal[\s\S]*?textoSinTelefono=\{textoSinTelefono\(/.test(fuente), `${ruta}: ChannelModal con textoSinTelefono(...)`);
+    assert.ok(!fuente.includes("'teléfono incompleto' : 'sin teléfono'"), `${ruta}: sin el texto armado a mano`);
+  }
+  // El Hub (máxima protección en esta ronda: no se toca su montaje) arma el mismo texto en todos los casos en que
+  // WhatsApp queda deshabilitado (motivoTelefono).
+  for (const tel of [null, '', 'sin número', '+57', '0', '123', '300 123 45']) {
+    assert.ok(motivoTelefono(tel), String(tel));
+    assert.equal(waUrl(tel) ? 'teléfono incompleto' : 'sin teléfono', textoSinTelefono(tel), String(tel));
   }
 }
 

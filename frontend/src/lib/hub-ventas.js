@@ -344,13 +344,28 @@ export function esAccionTomada(row, scConCot) {
 
 const masReciente = (lista) => [...lista].sort((a, b) => Number(b?.id || 0) - Number(a?.id || 0))[0];
 
+/** La ruta del Hub de Ventas: a donde vuelve un detalle abierto desde aqui. */
+export const RUTA_HUB_VENTAS = '/dashboard/ventas';
+
+/**
+ * T11 calidad (E2+E3): la ruta de un detalle abierto desde el Hub con ?return_to= del Hub, como el panel rapido: su
+ * unico boton de volver dice «Volver al Hub de Ventas» (H37; el detalle lo valida con returnToSeguro).
+ * @param {string} ruta  p. ej. '/dashboard/ventas/cotizacion/12'
+ * @returns {string}
+ */
+export function desdeElHub(ruta) {
+  return `${ruta}?return_to=${encodeURIComponent(RUTA_HUB_VENTAS)}`;
+}
+
 /**
  * Proxima accion de una solicitud en el Hub: {label, href, tono} o null (cancelada). Replica renderSiguientePaso de
  * solicitud/[id]/page.tsx en el mismo orden; el primer caso que aplica gana. El Hub no envia nada por su cuenta: el
  * envio (canal y correo de respaldo) vive en el detalle de la SC, asi que casi todo lleva a la solicitud.
  * R19: una Confirmada solo se cotiza con la confirmacion del cliente vigente (confirmacion_vigente de _sc_dict); sin
- * ella, 'Reiniciar o cotizar' (el servidor solo envia una Asignada; el detalle ofrece 'Reiniciar solicitud' o 'Cotizar
- * sin esperar confirmacion'), y 'Enviar para confirmacion' queda para la Asignada.
+ * ella, 'Reiniciar o cotizar' (el servidor solo envia una Asignada o reenvia una Pendiente por confirmacion, nunca una
+ * Confirmada; el detalle ofrece 'Reiniciar solicitud' o 'Cotizar sin esperar confirmacion'), y 'Enviar para
+ * confirmacion' queda para la Asignada.
+ * Cada href lleva ?return_to= del Hub (desdeElHub).
  * `tono` es uno de los de NextStepCard (flujo.tsx): slate, emerald, indigo, amber o blue.
  * @param {{cotizaciones?: any[], pedidos?: any[]}} [ctx] cotizaciones y pedidos de esa solicitud
  * @returns {{label: string, href: string, tono: string} | null}
@@ -358,22 +373,22 @@ const masReciente = (lista) => [...lista].sort((a, b) => Number(b?.id || 0) - Nu
 export function accionSiguienteSC(row, ctx = {}) {
   const cotizaciones = ctx.cotizaciones || [];
   const pedidos = ctx.pedidos || [];
-  const enSolicitud = `/dashboard/ventas/solicitud/${row?.id}`;
+  const enSolicitud = desdeElHub(`/dashboard/ventas/solicitud/${row?.id}`);
   const estado = row?.estado;
   if (esSoporte(row)) return { label: 'Ver ticket', href: enSolicitud, tono: 'slate' };
   if (estado === 'CANCELADA') return null;
   const pedido = masReciente(pedidos.filter((v) => v && esPedidoVigente(v.estado)));
-  if (pedido) return { label: 'Ver pedido', href: `/dashboard/ventas/venta/${pedido.id}`, tono: 'emerald' };
+  if (pedido) return { label: 'Ver pedido', href: desdeElHub(`/dashboard/ventas/venta/${pedido.id}`), tono: 'emerald' };
   // choque H3/N4: una COT VENCIDA cuenta como activa (esCotizacionActiva), igual que en el backend.
   const cot = masReciente(cotizaciones.filter((c) => c && esCotizacionActiva(c.estado)));
-  if (cot) return { label: 'Ver cotización', href: `/dashboard/ventas/cotizacion/${cot.id}`, tono: 'indigo' };
+  if (cot) return { label: 'Ver cotización', href: desdeElHub(`/dashboard/ventas/cotizacion/${cot.id}`), tono: 'indigo' };
   if (!tieneProductos(row?.productos) && ['ASIGNADA', 'PENDIENTE_CONFIRMACION', 'CONFIRMADA'].includes(estado)) {
     return { label: 'Agregar productos', href: enSolicitud, tono: 'amber' };
   }
   // R19 (U15): solo se cotiza con la confirmación del cliente vigente (confirmacion_vigente de _sc_dict: gate1 de la SC).
   if (estado === 'CONFIRMADA' && row?.confirmacion_vigente === true) return { label: 'Cotizar →', href: enSolicitud, tono: 'emerald' };
-  // R19 (enmienda T9B r1): una Confirmada cuya confirmación ya no vale no se envía (el servidor solo envía una Asignada):
-  // en el detalle se reinicia o se cotiza sin esperar confirmación.
+  // R19 (enmienda T9B r1): una Confirmada cuya confirmación ya no vale no se envía (el servidor solo envía una Asignada
+  // o reenvía una Pendiente por confirmación): en el detalle se reinicia o se cotiza sin esperar confirmación.
   if (estado === 'CONFIRMADA') return { label: 'Reiniciar o cotizar', href: enSolicitud, tono: 'slate' };
   if (estado === 'PENDIENTE_CONFIRMACION') return { label: 'Esperando cliente', href: enSolicitud, tono: 'blue' };
   if (estado === 'ASIGNADA') return { label: 'Enviar para confirmación', href: enSolicitud, tono: 'indigo' };

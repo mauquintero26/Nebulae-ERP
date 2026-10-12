@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import {
   CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto, formularioDeEdicion, camposEditadosDeSolicitud,
-  itemDeTimelineCliente, TITULOS_DE_RESPALDO,
+  itemDeTimelineCliente, TITULOS_DE_RESPALDO, hayCambiosEnEdicion, SIN_CAMBIOS_PARA_GUARDAR,
 } from '../src/lib/datos-cliente.js';
 
 console.log('--- TEST 1: CAMPOS_CONTACTO (orden del formulario, límites del backend) ---');
@@ -205,9 +205,13 @@ console.log('--- TEST 9 (T8B r2, punto 1): formularioDeEdicion y camposEditadosD
   assert.deepEqual(camposEditadosDeSolicitud(conAsesor, formularioDeEdicion(conAsesor)), {});
   assert.deepEqual(camposEditadosDeSolicitud(conAsesor, { ...formularioDeEdicion(conAsesor), advisor_user_id: 9, advisor_name: 'luis@nebulae.co' }),
     { advisor_user_id: 9, advisor_name: 'luis@nebulae.co' });
-  // Quitar el asesor ('' en el select) también viaja: '' frente a null es lo mismo solo cuando no cambió.
+  // Quitar el asesor ('' en el select) también viaja: '' frente a null es lo mismo solo cuando no cambió. T11 calidad
+  // (E7): viaja como null en los dos campos; antes llevaba el nombre viejo y la SC quedaba en Nueva con «Asesor: <correo
+  // viejo>» (el onChange del select conservaba advisor_name).
   assert.deepEqual(camposEditadosDeSolicitud(conAsesor, { ...formularioDeEdicion(conAsesor), advisor_user_id: '' }),
-    { advisor_user_id: '', advisor_name: 'ana@nebulae.co' });
+    { advisor_user_id: null, advisor_name: null });
+  assert.deepEqual(camposEditadosDeSolicitud(conAsesor, { ...formularioDeEdicion(conAsesor), advisor_user_id: null, advisor_name: '' }),
+    { advisor_user_id: null, advisor_name: null });
   // El mismo asesor como texto (el valor de un select) no es un cambio.
   assert.deepEqual(camposEditadosDeSolicitud(conAsesor, { ...formularioDeEdicion(conAsesor), advisor_user_id: '7' }), {});
   // Tipo y modalidad.
@@ -219,6 +223,30 @@ console.log('--- TEST 9 (T8B r2, punto 1): formularioDeEdicion y camposEditadosD
   const { notas: _sinNotas, ...formSinNotas } = form;
   assert.deepEqual(camposEditadosDeSolicitud(base, formSinNotas), {});
   assert.deepEqual(camposEditadosDeSolicitud(null, null), {});
+}
+
+console.log('--- T11 calidad E8: hayCambiosEnEdicion — «Guardar» sin cambios no llama al servidor y lo dice ---');
+{
+  const base = {
+    advisor_name: 'ana@nebulae.co', advisor_user_id: 7, tipo_solicitud: 'Seguimiento', modalidad_pago: 'Contado',
+    notas: 'Llamar antes', fecha_vencimiento: '2026-11-03T17:00:00', customer_id: 4, customer_phone: '3000000000',
+    customer_email: null, customer_address: 'Calle 1', customer_city: 'Cali',
+  };
+  const form = formularioDeEdicion(base);
+  assert.equal(SIN_CAMBIOS_PARA_GUARDAR, 'No hay cambios para guardar.');
+  // Tal como se abrió (con los valores por defecto del formulario) no hay nada que guardar.
+  assert.equal(hayCambiosEnEdicion(base, form, { tieneFicha: true }), false);
+  assert.equal(hayCambiosEnEdicion({ ...base, tipo_solicitud: null, modalidad_pago: null }, formularioDeEdicion({ ...base, tipo_solicitud: null, modalidad_pago: null }), { tieneFicha: true }), false);
+  // Escribir y volver a dejar lo mismo, o el mismo asesor como texto, tampoco.
+  assert.equal(hayCambiosEnEdicion(base, { ...form, notas: 'Llamar antes', advisor_user_id: '7' }, { tieneFicha: true }), false);
+  // Cualquier campo de la SC, la fecha (otro día) o el contacto sí.
+  assert.equal(hayCambiosEnEdicion(base, { ...form, notas: 'Otra' }, { tieneFicha: true }), true);
+  assert.equal(hayCambiosEnEdicion(base, { ...form, advisor_user_id: '' }, { tieneFicha: true }), true);
+  assert.equal(hayCambiosEnEdicion(base, { ...form, fecha_vencimiento: '2026-12-01' }, { tieneFicha: true }), true);
+  assert.equal(hayCambiosEnEdicion(base, { ...form, customer_phone: '3001112233' }, { tieneFicha: true }), true);
+  assert.equal(hayCambiosEnEdicion(base, { ...form, customer_city: 'Bogotá' }, { tieneFicha: true }), true);
+  // Sin ficha la ciudad no viaja (cambiosDeContacto): cambiarla sola no es algo que guardar.
+  assert.equal(hayCambiosEnEdicion(base, { ...form, customer_city: 'Bogotá' }, { tieneFicha: false }), false);
 }
 
 console.log('--- TEST 10 (T10, H21 punto 7): itemDeTimelineCliente — el Timeline Unificado de la Agenda con los nombres reales del 360 ---');

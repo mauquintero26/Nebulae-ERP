@@ -26,7 +26,7 @@ import {
 import { comoUTC } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
 import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
-import { agregarActividad, esEntradaChatter, telUrl } from '@/lib/chatter';
+import { agregarActividad, esEntradaChatter, telUrl, textoSinTelefono } from '@/lib/chatter';
 import { ESTADOS_SC_SIN_CONFIRMAR } from '@/lib/estados-solicitud';
 import { humanizarCodigo } from '@/lib/estados-pedido';
 
@@ -1207,8 +1207,9 @@ function CotizacionDetalleContent() {
           onCancel={cancelarEnvio}
           saving={sending}
           customerHasPhone={!!telUrl(cotizacion?.customer_phone)}
-          // Ronda 1 (punto 11): con dígitos pero sin alcanzar (motivoTelefono) es un teléfono incompleto.
-          textoSinTelefono={waUrl(cotizacion?.customer_phone) ? 'teléfono incompleto' : 'sin teléfono'}
+          // Ronda 1 (punto 11): con dígitos pero sin alcanzar (motivoTelefono) es un teléfono incompleto. T11 calidad (E6):
+          // el mismo texto de la SC y del Hub (textoSinTelefono).
+          textoSinTelefono={textoSinTelefono(cotizacion?.customer_phone) ?? undefined}
           customerEmail={cotizacion?.customer_email ?? null}
         />
       )}

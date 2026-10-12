@@ -21,13 +21,16 @@ import {
   infoEstadoSolicitud, puedeReiniciar, puedeCotizarSinConfirmacion, MOTIVO_SIN_CONFIRMACION_MIN, ESTADOS_SC_SIN_CONFIRMAR,
   resumenCancelacion, MOTIVO_SIN_CONFIRMACION_MAX, pasoSolicitud, PASOS_SC,
 } from '@/lib/estados-solicitud';
-import { largoTexto, telUrl, mailtoUrl, asuntoDocumento, agregarActividad, esEntradaChatter, motivoTelefono } from '@/lib/chatter';
+import {
+  largoTexto, telUrl, mailtoUrl, asuntoDocumento, agregarActividad, esEntradaChatter, motivoTelefono, textoSinTelefono,
+} from '@/lib/chatter';
 import { formatoPct } from '@/lib/dinero-ventas';
 import { pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
 import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
 import { comoUTC, fechaEditadaParaGuardar } from '@/lib/hub-ventas';
 import {
   CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto, formularioDeEdicion, camposEditadosDeSolicitud,
+  hayCambiosEnEdicion, SIN_CAMBIOS_PARA_GUARDAR,
 } from '@/lib/datos-cliente';
 import { avisoProductosGuardados, ESTADOS_CON_CONFIRMACION } from '@/lib/lineas-solicitud';
 import { EstadoSolicitudPasos } from './estado-solicitud';
@@ -308,6 +311,12 @@ function SolicitudDetalleContent() {
     const cambios = cambiosDeContacto(base, editForm, { tieneFicha: !!solicitud.customer_id });
     const errorContacto = validarContacto(cambios);
     if (errorContacto) { setEditError(errorContacto); return; }
+    // T11 calidad (E8): sin nada que guardar (o solo campos que quedaron igual) no se llama al servidor, y se dice.
+    if (!hayCambiosEnEdicion(base, editForm, { tieneFicha: !!solicitud.customer_id })) {
+      setEditMode(false);
+      avisar(SIN_CAMBIOS_PARA_GUARDAR, { tono: 'info' });
+      return;
+    }
     setSavingEdit(true);
     let correccion: { data?: SolicitudEditable; sin_cambios?: boolean } | null = null;
     if (Object.keys(cambios).length > 0) {
@@ -1119,7 +1128,8 @@ function SolicitudDetalleContent() {
                 <select value={editForm.advisor_user_id || ''} onChange={e => {
                   const uid = e.target.value ? Number(e.target.value) : '';
                   const u = usuarios.find(x => x.id === uid);
-                  setEditForm((ef: any) => ({ ...ef, advisor_user_id: uid, advisor_name: u?.email || ef.advisor_name }));
+                  // T11 calidad (E7): sin asesor tampoco queda su nombre (camposEditadosDeSolicitud manda los dos en null).
+                  setEditForm((ef: any) => ({ ...ef, advisor_user_id: uid, advisor_name: uid === '' ? '' : (u?.email || ef.advisor_name) }));
                 }} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none">
                   <option value="">Seleccionar asesor...</option>
                   {asesoresElegibles.map(u => (
@@ -1474,6 +1484,8 @@ function SolicitudDetalleContent() {
           saving={sendingConfirmacion}
           // T8B ronda 1: WhatsApp solo con un teléfono que sirva para llamar (el mismo criterio de «Contactar cliente»).
           customerHasPhone={!!llamarCliente}
+          // T11 calidad (E6): por qué no se ofrece WhatsApp, con el mismo texto de la COT y del Hub.
+          textoSinTelefono={textoSinTelefono(solicitud?.customer_phone) ?? undefined}
           customerEmail={solicitud?.customer_email ?? null}
           documentLabel="solicitud"
         />

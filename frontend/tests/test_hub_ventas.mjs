@@ -17,8 +17,9 @@ import {
   ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN, repartirCambioEstadoPVEN,
   comoUTC, diasDesde, textoAntiguedad, diaLocalDeFecha, fechaEditadaParaGuardar,
   ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, tieneProductos, esNoResuelto, esAccionTomada, accionSiguienteSC,
-  esSCConCotizacionTemprana, TIPOS_NOTA_REINICIAN_ATRASO, notaReiniciaAtraso,
+  esSCConCotizacionTemprana, TIPOS_NOTA_REINICIAN_ATRASO, notaReiniciaAtraso, desdeElHub,
 } from '../src/lib/hub-ventas.js';
+import { destinoVolver, etiquetaVolver } from '../src/lib/detalle-layout.js';
 import { ESTADOS_PEDIDO } from '../src/lib/estados-pedido.js';
 import { ESTADOS_SC, ESTADOS_SC_SIN_CONFIRMAR } from '../src/lib/estados-solicitud.js';
 import { TIPOS_CHATTER, esEntradaChatter, tipoChatter } from '../src/lib/chatter.js';
@@ -196,24 +197,26 @@ console.log('--- H3 TEST 11: accionSiguienteSC ---');
 {
   const sc = (estado, extra = {}) => ({ tipo: 'SC', id: 5, estado, productos: [{ product_name: 'Cuna' }], ...extra });
   const vacio = { cotizaciones: [], pedidos: [] };
+  // T11 calidad (E3): cada destino lleva ?return_to= del Hub (su botón de volver dice «Volver al Hub de Ventas»).
+  const DEL_HUB = '?return_to=%2Fdashboard%2Fventas';
 
   const enviar = accionSiguienteSC(sc('ASIGNADA'), vacio);
   assert.equal(enviar.label, 'Enviar para confirmación');
-  assert.equal(enviar.href, '/dashboard/ventas/solicitud/5');
+  assert.equal(enviar.href, '/dashboard/ventas/solicitud/5' + DEL_HUB);
   assert.equal(typeof enviar.tono, 'string');
 
   assert.equal(accionSiguienteSC(sc('ASIGNADA', { productos: [] }), vacio).label, 'Agregar productos');
   assert.equal(accionSiguienteSC(sc('ASIGNADA', { productos: [{ product_name: '  ' }] }), vacio).label, 'Agregar productos');
-  assert.equal(accionSiguienteSC(sc('ASIGNADA', { productos: [] }), vacio).href, '/dashboard/ventas/solicitud/5');
+  assert.equal(accionSiguienteSC(sc('ASIGNADA', { productos: [] }), vacio).href, '/dashboard/ventas/solicitud/5' + DEL_HUB);
   assert.equal(accionSiguienteSC(sc('BORRADOR'), vacio).label, 'Asignar asesor');
   assert.equal(accionSiguienteSC(sc('PENDIENTE_CONFIRMACION'), vacio).label, 'Esperando cliente');
   // R19 (T9B): se cotiza solo con la confirmación del cliente vigente (confirmacion_vigente de _sc_dict, T2A)
   assert.equal(accionSiguienteSC(sc('CONFIRMADA', { confirmacion_vigente: true }), vacio).label, 'Cotizar →');
-  assert.equal(accionSiguienteSC(sc('CONFIRMADA', { confirmacion_vigente: true }), vacio).href, '/dashboard/ventas/solicitud/5');
+  assert.equal(accionSiguienteSC(sc('CONFIRMADA', { confirmacion_vigente: true }), vacio).href, '/dashboard/ventas/solicitud/5' + DEL_HUB);
   // R19 (enmienda del controlador, T9B r1): sin la confirmación vigente (false, sin la llave o cualquier otro valor) no
-  // se cotiza ni se envía (el servidor solo envía una Asignada): el detalle ofrece «Reiniciar solicitud» o «Cotizar sin
+  // se cotiza ni se envía (el servidor solo envía una Asignada o reenvía una Pendiente por confirmación): el detalle ofrece «Reiniciar solicitud» o «Cotizar sin
   // esperar confirmación», y el Hub abre la solicitud con 'Reiniciar o cotizar'
-  const retomar = { label: 'Reiniciar o cotizar', href: '/dashboard/ventas/solicitud/5', tono: 'slate' };
+  const retomar = { label: 'Reiniciar o cotizar', href: '/dashboard/ventas/solicitud/5' + DEL_HUB, tono: 'slate' };
   for (const extra of [{ confirmacion_vigente: false }, {}, { confirmacion_vigente: null }, { confirmacion_vigente: 'true' }, { confirmacion_vigente: 1 }]) {
     assert.deepEqual(accionSiguienteSC(sc('CONFIRMADA', extra), vacio), retomar, JSON.stringify(extra));
   }
@@ -230,12 +233,12 @@ console.log('--- H3 TEST 11: accionSiguienteSC ---');
 
   const verCot = accionSiguienteSC(sc('CONFIRMADA'), { cotizaciones: [{ id: 9, estado: 'CONFIRMADA' }], pedidos: [] });
   assert.equal(verCot.label, 'Ver cotización');
-  assert.equal(verCot.href, '/dashboard/ventas/cotizacion/9');
+  assert.equal(verCot.href, '/dashboard/ventas/cotizacion/9' + DEL_HUB);
   assert.equal(accionSiguienteSC(sc('COTIZADA'), { cotizaciones: [{ id: 3, estado: 'BORRADOR' }], pedidos: [] }).label, 'Ver cotización');
   // la mas reciente de las vigentes; una rechazada no cuenta
   assert.equal(accionSiguienteSC(sc('COTIZADA'), {
     cotizaciones: [{ id: 3, estado: 'BORRADOR' }, { id: 7, estado: 'ENVIADA' }, { id: 8, estado: 'RECHAZADA' }], pedidos: [],
-  }).href, '/dashboard/ventas/cotizacion/7');
+  }).href, '/dashboard/ventas/cotizacion/7' + DEL_HUB);
   // choque H3/N4: una COT VENCIDA cuenta como activa (esCotizacionActiva)
   assert.equal(accionSiguienteSC(sc('CONFIRMADA'), { cotizaciones: [{ id: 4, estado: 'VENCIDA' }], pedidos: [] }).label, 'Ver cotización');
   // solo rechazadas: se puede cotizar otra vez (con la confirmación del cliente vigente, R19)
@@ -243,7 +246,7 @@ console.log('--- H3 TEST 11: accionSiguienteSC ---');
 
   const verPed = accionSiguienteSC(sc('CONFIRMADA'), { cotizaciones: [{ id: 9, estado: 'CONFIRMADA' }], pedidos: [{ id: 4, estado: 'EN_PROCESO' }] });
   assert.equal(verPed.label, 'Ver pedido');
-  assert.equal(verPed.href, '/dashboard/ventas/venta/4');
+  assert.equal(verPed.href, '/dashboard/ventas/venta/4' + DEL_HUB);
   assert.equal(accionSiguienteSC(sc('COTIZADA'), {
     cotizaciones: [{ id: 9, estado: 'BORRADOR' }], pedidos: [{ id: 4, estado: 'CANCELADO' }],
   }).label, 'Ver cotización');
@@ -251,7 +254,7 @@ console.log('--- H3 TEST 11: accionSiguienteSC ---');
   assert.equal(accionSiguienteSC(sc('CANCELADA'), vacio), null);
   const ticket = accionSiguienteSC(sc('ASIGNADA', { tipo_solicitud: 'Soporte Tecnico' }), vacio);
   assert.equal(ticket.label, 'Ver ticket');
-  assert.equal(ticket.href, '/dashboard/ventas/solicitud/5');
+  assert.equal(ticket.href, '/dashboard/ventas/solicitud/5' + DEL_HUB);
   assert.equal(accionSiguienteSC(sc('N/A_SOPORTE'), vacio).label, 'Ver ticket');
   assert.equal(accionSiguienteSC(sc('RECHAZADA'), vacio).label, 'Ver solicitud');
   // sin contexto no rompe
@@ -260,6 +263,26 @@ console.log('--- H3 TEST 11: accionSiguienteSC ---');
   for (const e of ['BORRADOR', 'ASIGNADA', 'PENDIENTE_CONFIRMACION', 'CONFIRMADA', 'RECHAZADA']) {
     assert.ok(!accionSiguienteSC(sc(e), vacio).href.includes('?id='), e);
   }
+}
+
+console.log('--- T11 calidad E2+E3: los destinos del Hub llevan return_to del Hub (desdeElHub) ---');
+{
+  assert.equal(desdeElHub('/dashboard/ventas/cotizacion/12'), '/dashboard/ventas/cotizacion/12?return_to=%2Fdashboard%2Fventas');
+  // El detalle lo acepta (returnToSeguro) y su botón dice «Volver al Hub de Ventas».
+  const ret = new URLSearchParams(desdeElHub('/dashboard/ventas/venta/3').split('?')[1]).get('return_to');
+  assert.equal(destinoVolver(ret, '/dashboard/ventas/venta'), '/dashboard/ventas');
+  assert.equal(etiquetaVolver(destinoVolver(ret, '/dashboard/ventas/venta')), 'Volver al Hub de Ventas');
+  // E2: la «Próxima Acción» de la COT en el Hub ya no usa la ruta vieja /cotizacion?id= (redirige y pierde el volver).
+  const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8');
+  assert.ok(!hub.includes('/dashboard/ventas/cotizacion?id='), 'el Hub no enlaza /dashboard/ventas/cotizacion?id=');
+  assert.ok(hub.includes('desdeElHub(`/dashboard/ventas/cotizacion/${row.id}`)'), 'Aprobar Venta usa desdeElHub');
+  // E4: «Actualizar» no pasa su evento a loadData y un GET fallido ya no se convierte en una lista vacía.
+  assert.ok(!hub.includes('onClick={loadData}'), 'Actualizar llama loadData() sin el evento');
+  assert.ok(!/\.catch\(\(\)\s*=>\s*\[\]\)/.test(hub), 'loadData no cambia un GET fallido por []');
+  // E1 y E5 (lista de solicitudes): el WhatsApp del envío con waUrl y el Análisis agrupado por el día UTC -> local.
+  const lista = readFileSync(new URL('../src/app/dashboard/ventas/solicitud/solicitud-client.tsx', import.meta.url), 'utf8');
+  assert.ok(!lista.includes('wa.me/57'), 'sin wa.me/57 armado a mano (duplicaba el 57)');
+  assert.ok(!lista.includes('new Date(s.fecha_solicitud)'), 'la fecha de la SC pasa por comoUTC');
 }
 
 console.log('--- H3 TEST 12: esNoResuelto / esAccionTomada ---');

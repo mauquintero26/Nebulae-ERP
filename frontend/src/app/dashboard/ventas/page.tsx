@@ -26,7 +26,7 @@ import {
   ordenParaCancelar, motivoNoCancelable, resumenLote, ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN,
   repartirCambioEstadoPVEN, comoUTC,
   diasDesde, textoAntiguedad, ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, esNoResuelto, esAccionTomada, accionSiguienteSC,
-  esSCConCotizacionTemprana, notaReiniciaAtraso,
+  esSCConCotizacionTemprana, notaReiniciaAtraso, desdeElHub,
 } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
 import { correoDelCliente } from '@/lib/aviso-correo';
@@ -285,7 +285,7 @@ export default function VentasHub() {
   const [loading, setLoading]           = useState(true);
   // H49 (T1B): avisos y confirmaciones del sistema; setToast queda como adaptador ({msg, type}) de las llamadas de siempre.
   // Los de error pasan por textoDeError (sin conexión, '[object Object]', 'Error: ' repetido).
-  const { avisar, confirmar } = useAvisos();
+  const { avisar, avisarError, confirmar } = useAvisos();
   const setToast = useCallback((t: {msg:string,type:'ok'|'error'}|null) => {
     if (!t) return;
     if (t.type === 'error') avisar(textoDeError(t.msg), {tono: 'error'});
@@ -327,26 +327,35 @@ export default function VentasHub() {
   const [hubEnlace, setHubEnlace]     = useState<{documento:string, link:string, correo:any, canal:string|null, color:'blue'|'indigo', whatsapp?:string|null}|null>(null);
 
   // T9B r1: silencioso (tras una nota del panel de actividad) recarga sin el spinner de página: la tabla o el Kanban no
-  // se reemplazan detrás del panel y no se pierde el scroll. «Actualizar» la llama con su evento de clic: con spinner.
-  const loadData = useCallback(async(opciones?: {silencioso?: boolean} | React.MouseEvent)=>{
-    const silencioso = !!opciones && 'silencioso' in opciones && opciones.silencioso === true;
+  // se reemplazan detrás del panel y no se pierde el scroll. «Actualizar» la llama sin opciones: con spinner.
+  // T11 calidad (E4): un GET que falla ya no vacía su lista: se conservan los datos que había en pantalla (también la
+  // configuración de alertas) y se avisa UNA vez, aunque fallen varios.
+  const loadData = useCallback(async(opciones?: {silencioso?: boolean})=>{
+    const silencioso = opciones?.silencioso === true;
     if(!silencioso) setLoading(true);
     try {
+      const fallos: unknown[] = [];
+      const pedir = (ruta: string) => apiFetch(ruta).catch((err: unknown) => { fallos.push(err); return null; });
       const [sc,cot,ven,cfg] = await Promise.all([
-        apiFetch('/ventas/solicitudes?limit=200').catch(()=>[]),
-        apiFetch('/ventas/cotizaciones?limit=200').catch(()=>[]),
-        apiFetch('/ventas/pedidos?limit=200').catch(()=>[]),
-        apiFetch('/ventas/config').catch(()=>({})),
+        pedir('/ventas/solicitudes?limit=200'), pedir('/ventas/cotizaciones?limit=200'),
+        pedir('/ventas/pedidos?limit=200'), pedir('/ventas/config'),
       ]);
-      const scL  = (Array.isArray(sc) ? sc : (sc?.data || sc?.items || [])).map((x:any)=>({...x,tipo:'SC'}));
-      const cotL = (Array.isArray(cot) ? cot : (cot?.data || cot?.items || [])).map((x:any)=>({...x,tipo:'COT'}));
-      const venL = (Array.isArray(ven) ? ven : (ven?.data || ven?.items || [])).map((x:any)=>({...x,tipo:'VEN'}));
-      setSolicitudes(scL); setCotizaciones(cotL); setPedidos(venL);
-      setAllData([...scL,...cotL,...venL].sort((a,b)=>new Date(b.created_at||0).getTime()-new Date(a.created_at||0).getTime()));
+      const lista = (r: any, tipo: string): any[] | null =>
+        r === null ? null : (Array.isArray(r) ? r : (r?.data || r?.items || [])).map((x:any)=>({...x,tipo}));
+      const scL = lista(sc,'SC'), cotL = lista(cot,'COT'), venL = lista(ven,'VEN');
+      if(scL) setSolicitudes(scL);
+      if(cotL) setCotizaciones(cotL);
+      if(venL) setPedidos(venL);
+      setAllData(prev => {
+        const previas = (tipo: string) => prev.filter(x => x.tipo === tipo);
+        return [...(scL ?? previas('SC')),...(cotL ?? previas('COT')),...(venL ?? previas('VEN'))]
+          .sort((a,b)=>new Date(b.created_at||0).getTime()-new Date(a.created_at||0).getTime());
+      });
       if(cfg && typeof cfg === 'object') setAlertDias(cfg?.data || cfg);
+      if(fallos.length) avisarError(fallos[0], 'No se pudieron actualizar las listas (se muestran las últimas cargadas)');
     } catch(err:any){setToast({msg:err.message,type:'error'});}
     finally{setLoading(false);}
-  },[]);
+  },[avisarError]);
 
   useEffect(()=>{loadData();},[loadData]);
   useEffect(()=>{if(activeTab==='Analisis')loadAnalytics();},[activeTab,analyticsRange,analyticsTopN]);
@@ -804,7 +813,7 @@ export default function VentasHub() {
                 className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-sm transition-all">
                 <ContenidoEnlace icon={Plus}>Nueva Solicitud</ContenidoEnlace>
               </Link>
-              <button onClick={loadData}
+              <button onClick={() => loadData()}
                 className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-semibold text-xs shadow-xs transition-colors">
                 <RefreshCw size={13} className={loading?'animate-spin':''}/> Actualizar
               </button>
@@ -1211,7 +1220,7 @@ export default function VentasHub() {
                               </button>
                             ) : <span className="text-[10px] text-slate-400 font-medium">—</span>;
                           })() : row.tipo === 'COT' && row.estado !== 'CONFIRMADA' && row.estado !== 'RECHAZADA' ? (
-                            <button onClick={e=>{e.stopPropagation();router.push(`/dashboard/ventas/cotizacion?id=${row.id}`);}}
+                            <button onClick={e=>{e.stopPropagation();router.push(desdeElHub(`/dashboard/ventas/cotizacion/${row.id}`));}}
                               className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-[10px] rounded-lg border border-amber-200 transition-colors">
                               Aprobar Venta →
                             </button>

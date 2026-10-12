@@ -248,6 +248,10 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
   const isProgramarEntrega = form.tipo_solicitud === 'Programar Entrega';
   const isDevolucion = form.tipo_solicitud === 'Devolucion de Producto';
   const isSoporte = form.tipo_solicitud === 'Soporte Tecnico';
+  // T11 calidad (E1): el WhatsApp del resumen de envío con waUrl (no repite el 57) y solo con un teléfono que sirva
+  // (telUrl, el mismo criterio que «Contactar cliente»); sin él no se pinta el enlace.
+  const waEnvio = telUrl(envio.telefono) ? waUrl(envio.telefono, `Hola ${envio.nombre_completo}, tu pedido `
+    + `${envio.ven_ids} será enviado por ${envio.transportadora} a ${envio.direccion}, ${envio.ciudad}. Tipo: ${envio.tipo_envio}`) : null;
 
   // C10 (ronda 1): el Enter en un campo de texto de este bloque (Seguimiento, Envío, Devolución, vencimiento…) no crea
   // la solicitud por el envío implícito del <form>. Sin stopPropagation: el buscador de productos y la cantidad siguen
@@ -346,7 +350,7 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
             <div className="mt-2">
               <p className="text-xs font-black text-teal-700 mb-1">Enviar resumen:</p>
               <div className="flex gap-2">
-                <a href={`https://wa.me/57${envio.telefono.replace(/\D/g,'')}?text=${encodeURIComponent(`Hola ${envio.nombre_completo}, tu pedido ${envio.ven_ids} será enviado por ${envio.transportadora} a ${envio.direccion}, ${envio.ciudad}. Tipo: ${envio.tipo_envio}`)}`} target="_blank" rel="noreferrer" className="flex-1 bg-green-500 text-white py-2 rounded-xl text-xs font-bold text-center flex items-center justify-center gap-1"><MessageCircle size={12}/>WhatsApp</a>
+                {waEnvio&&<a href={waEnvio} target="_blank" rel="noreferrer" className="flex-1 bg-green-500 text-white py-2 rounded-xl text-xs font-bold text-center flex items-center justify-center gap-1"><MessageCircle size={12}/>WhatsApp</a>}
                 {form.modalidad_pago&&<a href={`mailto:?subject=${encodeURIComponent('Información de envío')}&body=${encodeURIComponent(`Destinatario: ${envio.nombre_completo}\nCédula: ${envio.cedula}\nDirección: ${envio.direccion}, ${envio.ciudad}\nTransportadora: ${envio.transportadora}\nTipo: ${envio.tipo_envio}`)}`} className="flex-1 bg-blue-500 text-white py-2 rounded-xl text-xs font-bold text-center flex items-center justify-center gap-1"><Mail size={12}/>Correo</a>}
               </div>
             </div>
@@ -1442,10 +1446,11 @@ export default function SolicitudClient() {
 
                   {/* Dynamic SVG Line Chart */}
                   {(() => {
-                    // Group solicitudes by date
+                    // Group solicitudes by date. T11 calidad (E5): la fecha llega en UTC sin zona (comoUTC, como la
+                    // columna Fecha de la lista): sin eso, las SC de 7 pm a medianoche contaban en el día siguiente.
                     const dateMap: Record<string, number> = {};
                     solicitudes.forEach(s => {
-                      const d = s.fecha_solicitud ? new Date(s.fecha_solicitud).toLocaleDateString('es-CO', {month:'short', day:'numeric'}) : 'Reciente';
+                      const d = s.fecha_solicitud ? new Date(comoUTC(s.fecha_solicitud)).toLocaleDateString('es-CO', {month:'short', day:'numeric'}) : 'Reciente';
                       dateMap[d] = (dateMap[d] || 0) + 1;
                     });
                     const entries = Object.entries(dateMap).slice(-8);
