@@ -311,10 +311,12 @@ def test_una_solicitud_cancelada_no_revive_por_patch(app_client, db, admin_token
         assert resp.json()["detail"] == mensaje
     db.refresh(sc)
     assert sc.estado == "CANCELADA" and sc.eliminada_at is not None
-    # Reenviar su propio estado (un formulario que manda todo) no es un cambio.
+    # Reenviar su propio estado no es un cambio de estado, pero T11 calidad (A2): nada mas de una cancelada se edita por
+    # este PATCH (aqui, las notas).
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": "CANCELADA", "notas": "x"},
                             headers=auth(admin_token))
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == "La solicitud está cancelada. Restáurala desde la Papelera para editarla."
 
 
 def test_restaurar_exige_una_solicitud_cancelada_y_sin_documentos_activos(app_client, db, admin_token, user_admin):

@@ -514,6 +514,44 @@ def test_s1_un_estado_vacio_o_falso_no_saca_una_solicitud_de_la_papelera(app_cli
     assert (activa.estado, activa.notas) == ("ASIGNADA", "Original")
 
 
+def test_t11_a2_una_solicitud_cancelada_no_se_edita_por_el_patch(app_client, db, admin_token, user_admin):
+    """T11 calidad (A2): el PATCH solo protegia el estado de una SC CANCELADA; sus productos, notas, asesor o cliente
+    se podian cambiar en la Papelera. Ahora cualquier PATCH sobre una cancelada es 409 (como PATCH /cliente) y no
+    escribe nada; pedir otro estado conserva su 409 propio, que nombra la SC."""
+    from app.models.users import User
+    otro_asesor = User(email=f"asesor-{uuid.uuid4().hex[:6]}@test.nebulae", password_hash="x", role="ASESOR",
+                       is_active=True)
+    db.add(otro_asesor); db.commit(); db.refresh(otro_asesor)
+    eliminada = AHORA() - datetime.timedelta(days=1)
+    sc = _sc(db, "SC-T11A2A", user_admin, estado="CANCELADA", eliminada_at=eliminada, notas="Original",
+             modalidad_pago=CREDITO)
+    mensaje = "La solicitud está cancelada. Restáurala desde la Papelera para editarla."
+    for body in ({"productos": [{"product_name": "Mecedora", "qty": 2}]}, {"notas": "Cambiada"},
+                 {"advisor_user_id": None, "advisor_name": None}, {"advisor_user_id": otro_asesor.id},
+                 {"customer_name": "Otro Cliente"}, {"modalidad_pago": "Contado"}, {"tipo_solicitud": "Otro"},
+                 {"estado": "CANCELADA", "notas": "x"}):
+        resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={**body, "updated_by": "t"},
+                                headers=auth(admin_token))
+        assert resp.status_code == 409, (body, resp.text)
+        assert resp.json()["detail"] == mensaje, body
+    db.expire_all()
+    db.refresh(sc)
+    assert (sc.estado, sc.eliminada_at, sc.notas, sc.productos) == ("CANCELADA", eliminada, "Original", [LINEA])
+    assert (sc.advisor_user_id, sc.customer_name, sc.modalidad_pago) == (user_admin.id, "Cliente Prueba", CREDITO)
+    # Pedir otro estado sigue con su propio 409 (H31-5 / C14, que nombra la SC y el boton «Restaurar»).
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"estado": "BORRADOR", "notas": "y"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"].startswith("La solicitud SC-T11A2A está cancelada: para volver a trabajar en ella")
+    assert _logs(db, "SC", sc.id) == []
+    # Una SC activa se sigue editando.
+    activa = _sc(db, "SC-T11A2B", user_admin, estado="ASIGNADA", notas="Original")
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{activa.id}", json={"notas": "Cambiada", "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["notas"] == "Cambiada"
+
+
 def test_los_textos_de_la_solicitud_usan_las_etiquetas_nuevas(app_client, db, admin_token, user_admin):
     sc = _sc(db, "SC-U15011A", user_admin, estado="ASIGNADA", gate1_confirmed_at=None)
     for estado, etiqueta in (("COTIZADA", "Cotizada"), ("FACTURADO", "Facturado")):

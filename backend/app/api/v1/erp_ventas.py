@@ -1044,8 +1044,10 @@ _SQL_SC_CON_DOCUMENTOS = """(EXISTS(SELECT 1 FROM sales_quotations q WHERE q.sc_
 @router.get("/solicitudes/papelera")
 def get_papelera(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
-    """Lista SCs canceladas con días restantes antes de eliminación permanente (None si se conservan: tienen
-    documentos vinculados y por eso no se purgan)."""
+    """Lista SCs canceladas con días restantes antes de eliminación permanente. dias_restantes es None (la fecha de
+    purga no existe) si se conservan, porque tienen documentos vinculados, o sin eliminada_at (cancelada con la pastilla
+    vieja: la purga exige eliminada_at). Cada fila trae sus notas (T11 calidad, A3): el motivo de una cancelada vieja
+    vive en ellas ('[CANCELADA] Razón: X', motivoDeCancelacion del frontend) aunque la SC no este en la lista cargada."""
     # La purga va aparte: un fallo suyo ya no tumba el listado (antes el except lo devolvia vacio para todos).
     try:
         # Auto-purge SCs older than 30 days in papelera, solo las que nadie referencia.
@@ -1070,7 +1072,7 @@ def get_papelera(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
     try:
         rows = db.execute(text(f"""
             SELECT cr.id, cr.numero, cr.customer_name, cr.advisor_name, cr.tipo_solicitud,
-                   cr.razon_cancelacion, cr.eliminada_at, cr.created_at, cr.updated_at,
+                   cr.razon_cancelacion, cr.notas, cr.eliminada_at, cr.created_at, cr.updated_at,
                    EXTRACT(DAY FROM NOW() - cr.eliminada_at) as dias_en_papelera,
                    {_SQL_SC_CON_DOCUMENTOS} AS tiene_documentos
             FROM customer_requests cr
@@ -1186,6 +1188,9 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     if sc.estado == "CANCELADA" and nuevo_estado is not None and nuevo_estado != "CANCELADA":
         raise HTTPException(409, f"La solicitud {sc.numero} está cancelada: para volver a trabajar en ella, "
                                  f"restáurala desde la Papelera (botón «Restaurar»).")
+    # T11 calidad (A2): y nada mas de ella cambia (productos, notas, asesor, cliente...), como en PATCH /cliente.
+    if sc.estado == "CANCELADA":
+        raise HTTPException(409, "La solicitud está cancelada. Restáurala desde la Papelera para editarla.")
     if nuevo_estado == "CANCELADA" and sc.estado != "CANCELADA":
         raise HTTPException(400, "Para cancelar una solicitud usa el botón «Cancelar Solicitud»: pide el motivo y "
                                  "revisa que no tenga cotizaciones ni pedidos activos.")
@@ -1655,6 +1660,7 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
     # bloqueo) y crear dos Cotizaciones distintas desde UNA sola confirmacion del
     # cliente. Mismo patron que convertir_cotizacion_a_venta (Gate 2) ya usa desde el
     # principio -- Gate 1 nunca tuvo este endurecimiento.
+    _exigir_cotizador_que_quepa(body.get("cotizador"))  # T11 calidad (A1): antes de leer nada y de gastar un numero
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
@@ -1709,7 +1715,8 @@ def confirmar_solicitud(sc_id: int, body: dict, user: User = Depends(require_rol
     return {"status": "success", "data": {"sc": _sc_dict(sc), "cotizacion": _cot_dict(cot)}}
 
 
-# U11: limites del motivo de /cotizar-sin-confirmacion (el frontend tiene su espejo MOTIVO_SIN_CONFIRMACION_MIN).
+# U11: limites del motivo de /cotizar-sin-confirmacion. El frontend espeja los dos (MOTIVO_SIN_CONFIRMACION_MIN y
+# MOTIVO_SIN_CONFIRMACION_MAX de frontend/src/lib/estados-solicitud.js; test_estados_solicitud compara los valores).
 MOTIVO_SIN_CONFIRMACION_MIN = 10
 MOTIVO_SIN_CONFIRMACION_MAX = 500
 # S5 (T11): ademas, al menos estas letras o digitos: diez puntos o diez caracteres invisibles no explican nada. El
@@ -1719,6 +1726,14 @@ MOTIVO_SIN_CONFIRMACION_MIN_LETRAS = 5
 _RELLENOS_INVISIBLES = frozenset("\u115f\u1160\u3164\uffa0")
 # Largo de la columna sales_quotations.cotizador (String(150)): mas largo seria un 500 con un numero ya gastado.
 COTIZADOR_MAX = 150
+
+
+def _exigir_cotizador_que_quepa(cotizador) -> None:
+    """422 si el cotizador es un texto mas largo que su columna. Las tres puertas que crean una COT (confirmar_solicitud,
+    /cotizar-sin-confirmacion y POST /cotizaciones) lo llaman ANTES de pedir el numero de seq_cot (T11 calidad, A1)."""
+    if isinstance(cotizador, str) and len(cotizador) > COTIZADOR_MAX:
+        raise HTTPException(422, f"El cotizador no puede tener más de {COTIZADOR_MAX} caracteres.")
+
 # U11: estados en que una SC sin la confirmacion vigente del cliente se puede cotizar con motivo (CONFIRMADA solo si
 # _confirmacion_vigente_sc es falso: confirmada por su cotizacion, sin la marca gate1).
 _ESTADOS_SC_COTIZABLES_SIN_CONFIRMACION = ("ASIGNADA", "PENDIENTE_CONFIRMACION", "CONFIRMADA")
@@ -1781,8 +1796,7 @@ def cotizar_sin_confirmacion(sc_id: int, body: CotizarSinConfirmacionBody,
     if sum(ch.isalnum() for ch in motivo) < MOTIVO_SIN_CONFIRMACION_MIN_LETRAS:
         raise HTTPException(422, corto)
     cotizador = _texto_o_none(body.cotizador)
-    if cotizador is not None and len(cotizador) > COTIZADOR_MAX:
-        raise HTTPException(422, f"El cotizador no puede tener más de {COTIZADOR_MAX} caracteres.")
+    _exigir_cotizador_que_quepa(cotizador)
     # Bloqueada como en confirmar_solicitud: dos pedidos simultaneos (o este y la confirmacion del cliente) no crean
     # dos COT.
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
@@ -1880,6 +1894,7 @@ def list_cotizaciones(
 def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
     _validar_precios_productos(body.get("productos") or [])
+    _exigir_cotizador_que_quepa(body.get("cotizador"))  # T11 calidad (A1)
     # H42: la cabecera se guarda en pesos enteros (antes de gastar un numero de la secuencia).
     subtotal_cop = _monto_en_pesos(body.get("subtotal_cop"), "subtotal_cop")
     total_cop = _monto_en_pesos(body.get("total_cop"), "total_cop")

@@ -456,6 +456,45 @@ def test_el_cotizador_no_puede_pasar_de_150_caracteres(app_client, db, admin_tok
     assert resp.json()["data"]["cotizacion"]["cotizador"] == "y" * 150
 
 
+def test_t11_a1_el_cotizador_largo_da_422_en_las_otras_dos_puertas_sin_gastar_numero(app_client, db, admin_token,
+                                                                                       user_admin, monkeypatch):
+    """T11 calidad (A1): en /confirmar y en POST /cotizaciones un cotizador de 151 caracteres daba 500 con un numero de
+    seq_cot ya gastado. Ahora es el mismo 422 de /cotizar-sin-confirmacion, ANTES de pedir el numero."""
+    from sqlalchemy import text
+    import app.api.v1.erp_ventas as erp_ventas
+    numeros = []
+    original = erp_ventas._gen_numero
+    monkeypatch.setattr(erp_ventas, "_gen_numero", lambda db_, p, s: numeros.append(p) or original(db_, p, s))
+    ultimo_numero = lambda: db.execute(text("SELECT last_value FROM seq_cot")).scalar()  # noqa: E731
+    detalle = "El cotizador no puede tener más de 150 caracteres."
+    linea = [{"product_name": "Cuna", "qty": 1, "unit_price_cop": 1000}]
+    confirmada = _sc(db, "SC-CSC050", user_admin, estado="CONFIRMADA", gate1_confirmed_at=datetime.datetime.utcnow())
+    antes = ultimo_numero()
+
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{confirmada.id}/confirmar",
+                           json={"cotizador": "x" * 151, "user_name": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == detalle
+    for extra in ({"sc_id": confirmada.id}, {"customer_name": "Cliente Prueba"}):  # con SC y Cotizador Rapido
+        resp = app_client.post("/api/v1/ventas/cotizaciones", headers=auth(admin_token), json={
+            "total_cop": 1000, "created_by": "t", "productos": linea, "cotizador": "x" * 151, **extra})
+        assert resp.status_code == 422, (extra, resp.text)
+        assert resp.json()["detail"] == detalle, extra
+    assert numeros == [] and ultimo_numero() == antes
+    assert _cots_de(db, confirmada.id) == []
+
+    # 150 caracteres caben (la columna es String(150)).
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{confirmada.id}/confirmar",
+                           json={"cotizador": "y" * 150, "user_name": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["cotizacion"]["cotizador"] == "y" * 150
+    resp = app_client.post("/api/v1/ventas/cotizaciones", headers=auth(admin_token), json={
+        "customer_name": "Cliente Prueba", "total_cop": 1000, "created_by": "t", "productos": linea,
+        "cotizador": "z" * 150})
+    assert resp.status_code == 201, resp.text
+    assert numeros == ["COT-", "COT-"]
+
+
 # --- Segunda puerta: PATCH /cotizaciones/{id} con sc_id (ruling T3-3) ------------------------------------------------
 
 def test_vincular_una_cotizacion_a_una_solicitud_sin_confirmar_responde_409(app_client, db, admin_token, user_admin):

@@ -421,6 +421,25 @@ def test_papelera_dice_si_se_conserva_y_el_detalle_lo_expone(app_client, db, adm
     assert papelera["SC-T2B009C"]["dias_restantes"] is None and papelera["SC-T2B009C"]["tiene_documentos"] is False
 
 
+def test_t11_a3_la_papelera_trae_las_notas_para_el_motivo_viejo(app_client, db, admin_token, user_admin):
+    """T11 calidad (A3): el motivo de una SC cancelada con la pastilla vieja vive en sus notas ('[CANCELADA] Razón: X')
+    y la Papelera lo buscaba en la lista de solicitudes cargada (las 200 ultimas): fuera de ellas salia 'Sin motivo'.
+    GET /papelera trae las notas de cada fila (motivoDeCancelacion del frontend las lee). Su docstring dice que
+    dias_restantes es None sin eliminada_at."""
+    from app.api.v1.erp_ventas import get_papelera
+    notas = f"Llamar en la tarde\n{MARCA}El cliente compró en otra tienda"
+    vieja = _sc(db, "SC-T11A3A", user_admin, estado="CANCELADA", notas=notas)  # sin razon_cancelacion
+    nueva = _sc(db, "SC-T11A3B", user_admin)
+    assert _cancelar(app_client, admin_token, nueva.id, razon="Ya no la necesita").status_code == 200
+    resp = app_client.get("/api/v1/ventas/solicitudes/papelera", headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    papelera = {f["numero"]: f for f in resp.json()["data"]}
+    assert papelera["SC-T11A3A"]["notas"] == notas and papelera["SC-T11A3A"]["razon_cancelacion"] is None
+    assert papelera["SC-T11A3B"]["razon_cancelacion"] == "Ya no la necesita"
+    assert "notas" in papelera["SC-T11A3B"]
+    assert "sin eliminada_at" in " ".join(get_papelera.__doc__.split())
+
+
 def test_referencias_de_solicitud_y_texto_de_papelera(db, user_admin):
     """Un único helper, con los tres criterios de la Papelera (sin filtrar por estado), en orden COT, PVEN, lead y en
     plural; el mismo texto del 409 de 'Eliminar definitivamente'."""
