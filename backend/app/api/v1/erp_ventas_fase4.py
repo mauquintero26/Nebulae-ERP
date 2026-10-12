@@ -227,7 +227,7 @@ def _validate_transition(current: str, target: str, allowed_map: Dict[str, set],
     allowed = allowed_map.get(current, set())
     if target not in allowed:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Transición ilegal para {entity_name}: no se permite pasar de '{current}' a '{target}'. Permitidas: {sorted(list(allowed))}"
         )
 
@@ -927,29 +927,29 @@ def _apply_purchased_goods_decision(
     if decision == "REASIGNAR_CLIENTE":
         if not target_customer_id or not target_sale_order_line_id:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="REASIGNAR_CLIENTE requiere 'target_customer_id' y 'target_sale_order_line_id'"
             )
         target_cust = db.query(Customer).filter(Customer.id == target_customer_id).first()
         if not target_cust:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Cliente destino {target_customer_id} no encontrado")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"Cliente destino {target_customer_id} no encontrado")
         target_line = db.query(SaleOrderLineErp).filter(SaleOrderLineErp.id == target_sale_order_line_id).with_for_update().first()
         if not target_line:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Línea destino {target_sale_order_line_id} no encontrada")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"Línea destino {target_sale_order_line_id} no encontrada")
         target_so = db.query(SaleOrder).filter(SaleOrder.id == target_line.so_id).with_for_update().first()
         if not target_so or (target_line.customer_id != target_customer_id and target_so.customer_id != target_customer_id):
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"La línea destino {target_line.id} no pertenece al cliente destino {target_customer_id}")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"La línea destino {target_line.id} no pertenece al cliente destino {target_customer_id}")
         if target_line.id == line.id:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La línea destino no puede ser la misma línea de origen")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="La línea destino no puede ser la misma línea de origen")
         if target_line.sku_id != line.sku_id:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"SKU incompatible: origen={line.sku_id}, destino={target_line.sku_id}")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"SKU incompatible: origen={line.sku_id}, destino={target_line.sku_id}")
         if target_line.owner != line.owner:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Propietario incompatible: origen={line.owner}, destino={target_line.owner}")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"Propietario incompatible: origen={line.owner}, destino={target_line.owner}")
         if target_line.estado in ("CANCELADA", "ENTREGADA", "DEVUELTA_TOTAL"):
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Línea destino en estado '{target_line.estado}' no es válida para reasignación")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"Línea destino en estado '{target_line.estado}' no es válida para reasignación")
         target_pending_need = (target_line.quantity - target_line.quantity_delivered - target_line.quantity_cancelled) - target_line.quantity_reserved
         if qty_affected > target_pending_need:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Cantidad reasignada ({qty_affected}) supera la necesidad pendiente ({target_pending_need}) de la línea destino {target_line.id}")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"Cantidad reasignada ({qty_affected}) supera la necesidad pendiente ({target_pending_need}) de la línea destino {target_line.id}")
 
     # 2. Manejar reservas de inventario activas para exactamente qty_affected
     res_active = db.query(InventoryReservation).filter(
@@ -1550,7 +1550,7 @@ def create_packing_session(
             raise HTTPException(404, f"Pedido {it.sale_order_id} no encontrado")
         if so.customer_id != body.customer_id:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"No se permite agrupar pedidos de clientes diferentes: el pedido {it.sale_order_id} pertenece al cliente {so.customer_id}, no al cliente {body.customer_id} de la sesión"
             )
 
@@ -1601,7 +1601,7 @@ def create_packing_session(
 
         if active_res_qty <= Decimal("0.00"):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"La línea {line.id} no tiene reserva física activa en la bodega {body.warehouse_id}. No se puede empacar mercancía sin reserva previa."
             )
 
@@ -1616,7 +1616,7 @@ def create_packing_session(
         pending_to_pack = active_res_qty - already_packed
         if it.quantity > pending_to_pack:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Cantidad a empacar ({it.quantity}) supera la reserva activa disponible ({pending_to_pack}) en bodega {body.warehouse_id} para la línea {line.id}"
             )
 
@@ -1803,7 +1803,7 @@ def validate_dispatch_operational_policy(
         if day_w not in (0, 2, 4):
             if not authorized_by or not exception_reason or len(exception_reason.strip()) < 5:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=f"Despachos nacionales solo están permitidos Lunes, Miércoles y Viernes. Programado para día {day_w}. Requiere policy_authorized_by y policy_exception_reason (mínimo 5 caracteres)."
                 )
             return "EXCEPCION_DIA_NACIONAL"
@@ -1817,7 +1817,7 @@ def validate_dispatch_operational_policy(
         if created_at_bogota > cutoff:
             if not authorized_by or not exception_reason or len(exception_reason.strip()) < 5:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail="Entregas de fin de semana deben programarse máximo el viernes a las 17:30:00 (hora Bogotá). Requiere policy_authorized_by y policy_exception_reason (mínimo 5 caracteres)."
                 )
             return "EXCEPCION_FIN_DE_SEMANA"
@@ -2030,7 +2030,7 @@ def dispatch_delivery(
             )
             if not has_exception:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                     detail=f"Despacho rechazado: Pedido {so.numero} tiene saldo pendiente de {pesos(so.saldo_cop)} sin excepción autorizada"
                 )
 
@@ -2920,7 +2920,7 @@ def convertir_cotizacion_a_venta(
         else:
             exige = f"Esta cotización exige un anticipo de {pesos(requerido)} ({origen_pct}). "
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=exige + "Verifica el pago del cliente (monto, método y referencia) antes de crear el pedido.",
         )
     if ver is not None:
@@ -2929,16 +2929,16 @@ def convertir_cotizacion_a_venta(
         try:
             verificado = redondear_peso(ver.monto)
         except ValueError:  # p. ej. 1e28: no cabe en la precision; seria un 500
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                                 detail="El monto verificado no es un monto válido.")
         metodo_verificado = metodo_pago_anticipo(ver.metodo_pago)
         if metodo_verificado is None:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"Método de pago no válido: '{ver.metodo_pago}'. Usa uno de: {', '.join(METODOS_PAGO_ANTICIPO)}.",
             )
         if verificado <= 0:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                                 detail="El monto verificado debe ser mayor que $0.")
         if verificado + traslado > total_cop:
             if traslado > 0:
@@ -2946,9 +2946,9 @@ def convertir_cotizacion_a_venta(
                            f"({pesos(traslado)}) supera el total del pedido ({pesos(total_cop)}).")
             else:
                 detalle = f"El pago verificado ({pesos(verificado)}) supera el total del pedido ({pesos(total_cop)})."
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detalle)
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detalle)
         if ver.fecha_pago and ver.fecha_pago > _now_bogota().date():
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                                 detail="La fecha del pago no puede ser posterior a hoy.")
     pagado_cop = traslado + verificado
     # Quien verifica es el usuario autenticado que crea el pedido (asesor o administracion), no el user_name del

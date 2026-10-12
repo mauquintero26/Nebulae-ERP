@@ -2884,7 +2884,7 @@ def create_pedido(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)),
         numero = _gen_numero(db, "PVEN-", "seq_ven")
     except Exception as exc:
         raise HTTPException(
-            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"No se pudo generar el número de pedido: {type(exc).__name__}",
         )
     saldo = total_cop - anticipo_cop
@@ -2918,13 +2918,13 @@ def create_pedido(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)),
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(
-            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Error de integridad al crear el pedido: {str(exc.orig) if hasattr(exc, 'orig') else str(exc)}",
         )
     except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(
-            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=http_status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Error de base de datos al crear el pedido: {type(exc).__name__}",
         )
     _log(db, "VEN", ven.id, ven.numero, "CREATED",
