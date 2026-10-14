@@ -458,8 +458,9 @@ export function ListaChatter({ actividades }: { actividades: any }) {
 }
 
 /**
- * Contenido de la pestaña Chatter de la SC, la COT y el PVEN: la caja ARRIBA (sticky, asi la burbuja del asistente no
- * tapa el boton de guardar) y la lista debajo.
+ * Contenido de la pestaña Chatter de la SC, la COT y el PVEN: la caja ARRIBA (asi la burbuja del asistente, abajo a la
+ * derecha, no tapa el boton de guardar) y la lista debajo. T11 (V4): la caja va en el flujo normal, ya no sticky: al
+ * desplazar el panel quedaba encima de la lista y el boton «Guardar nota» tapaba el texto de abajo (a 1024 px).
  */
 export function ChatterDocumento({ tipoDoc, doc, onRegistrado }: {
   tipoDoc: TipoDocChatter;
@@ -468,7 +469,7 @@ export function ChatterDocumento({ tipoDoc, doc, onRegistrado }: {
 }) {
   return (
     <div className="flex flex-col">
-      <div className="sticky top-0 z-10 bg-white border-b border-slate-100 pb-3 mb-3">
+      <div className="bg-white border-b border-slate-100 pb-3 mb-3">
         <ComposerChatter tipoDoc={tipoDoc} doc={doc} onRegistrado={onRegistrado} />
       </div>
       <ListaChatter actividades={doc?.actividades} />

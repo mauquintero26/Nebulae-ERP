@@ -127,7 +127,7 @@ def test_aceptar_con_razon_anula_y_registra_la_razon(app_client, db, admin_token
     logs = _logs(db, cot.id)
     assert [l.action for l in logs] == ["RECOTIZADA", "ESTADO_CHANGED"]
     # motivo_recotizacion no es 'motivo': no reemplaza el titulo de la re-cotizacion.
-    assert logs[0].description.startswith("Re-cotización: total $1.000 -> $1.200")
+    assert logs[0].description.startswith("Re-cotización: total $1.000 → $1.200")
     estado = logs[1]
     assert estado.description.endswith("Razón: Proveedor subió el precio.")
     assert estado.description.startswith("Estado cambiado a Borrador")

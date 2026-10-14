@@ -10,6 +10,7 @@
 import assert from 'node:assert/strict';
 import {
   etiquetaTipoSolicitud, etiquetaModalidad, etiquetaValorCambio, claveModalidad, esModalidadCredito,
+  etiquetaModalidadCorta,
 } from '../src/lib/etiquetas-ventas.js';
 
 console.log('--- TEST 1: los tipos de solicitud se muestran con tilde (H10: minúscula después de la primera palabra) ---');
@@ -113,6 +114,19 @@ console.log('--- TEST 6: el detalle de la Actividad (extra_data.cambios) muestra
   // Un valor vacio sigue vacio (la pantalla pone '—' en los campos sueltos).
   assert.equal(etiquetaValorCambio('tipo_solicitud', null), null);
   assert.equal(etiquetaValorCambio('modalidad_pago', undefined), undefined);
+}
+
+console.log('--- T11 (V9): etiquetaModalidadCorta, la modalidad sin la explicación entre paréntesis ---');
+{
+  // Para textos que ya van entre paréntesis ('Anticipo requerido (60% · 60/40)'): sin paréntesis dentro de paréntesis.
+  assert.equal(etiquetaModalidadCorta('60/40 (60% anticipo - 40% pendiente)'), '60/40');
+  assert.equal(etiquetaModalidadCorta('60/40 (60% de anticipo y 40% al entregar)'), '60/40');
+  // Las demás son iguales a etiquetaModalidad (ya son cortas).
+  for (const v of ['Contado', 'Credito 30 dias', 'Credito 60d', 'Otro', 'Contra entrega', 'Cruce de cuentas', '']) {
+    assert.equal(etiquetaModalidadCorta(v), etiquetaModalidad(v), v);
+  }
+  assert.equal(etiquetaModalidadCorta(null), '');
+  assert.equal(etiquetaModalidadCorta(undefined), '');
 }
 
 console.log('OK test_etiquetas_ventas');

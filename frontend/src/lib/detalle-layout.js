@@ -1,7 +1,8 @@
 /**
  * Piezas del layout de los detalles de Ventas (H37 + C12, Bloque 2): el destino y el texto del unico boton de volver
  * (BotonVolver en app/dashboard/ventas/flujo.tsx) y el ancho inicial del panel derecho de la SC, la COT y el PVEN.
- * JS plano para probarlo con node (frontend/tests/test_detalle_layout.mjs).
+ * JS plano para probarlo con node (frontend/tests/test_detalle_layout.mjs). T11 (V8): inicialesAutor, el avatar del
+ * autor en la Actividad (probado en frontend/tests/test_ajustes_visuales_b2.mjs).
  *
  * returnToSeguro vive aqui (ruling T6B-2) y flujo.tsx lo reexporta con el mismo nombre: es la UNICA regla para
  * confiar en un ?return_to=. El chequeo debil startsWith('/') && !startsWith('//') dejaba pasar '/\evil.com', que el
@@ -95,4 +96,27 @@ export function etiquetaVolver(href) {
 export function anchoInicialPanel(anchoVentana) {
   if (typeof anchoVentana !== 'number' || !Number.isFinite(anchoVentana)) return 400;
   return Math.min(400, Math.max(300, Math.round(anchoVentana * 0.3)));
+}
+
+/** Primera letra o dígito de una palabra (cualquier alfabeto: 'Ángela' -> 'Á'). */
+const LETRA_O_DIGITO = /[\p{L}\p{N}]/u;
+
+/**
+ * T11 (V8): las iniciales del avatar del autor de un renglón de la Actividad (SC y COT): la primera letra o dígito de
+ * cada palabra, dos como máximo, en mayúscula. Lo que no es letra ni dígito no cuenta ('Cliente (confirmación por
+ * link)' -> 'CC', no 'C('; 'admin_qa' -> 'A'; un correo -> su primera letra). Sin autor: 'S' (al lado se lee
+ * 'Sistema'); un nombre sin ninguna letra ni dígito: '?'.
+ * @param {unknown} nombre
+ * @returns {string}
+ */
+export function inicialesAutor(nombre) {
+  const texto = typeof nombre === 'string' ? nombre.trim() : '';
+  if (!texto) return 'S';
+  const iniciales = texto
+    .split(/\s+/)
+    .map((palabra) => palabra.match(LETRA_O_DIGITO)?.[0] ?? '')
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('');
+  return iniciales ? iniciales.toUpperCase() : '?';
 }

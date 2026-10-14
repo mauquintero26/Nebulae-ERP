@@ -17,6 +17,7 @@ import {
   generoCotizacion, cotizacionesVigentes, cotizacionesRechazadas, esperaCotizacion, contadoresSolicitudes,
   tasaConversionCotizacion, superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera, pasosParaCancelarSolicitud,
   repartirCancelacionSolicitudes, cifrasVentasDashboard, rutaSinParametro, esSolicitudActiva, pestanaDeSolicitud,
+  pistaActivasSolicitudes,
 } from '../src/lib/listas-ventas.js';
 import { TEXTO_PAPELERA_SIN_FECHA, ESTADOS_SC } from '../src/lib/estados-solicitud.js';
 
@@ -527,6 +528,21 @@ console.log('--- A4 / H47 TEST: cifras de ventas del Dashboard General sin cance
   for (const nulo of [null, undefined, {}, []]) {
     assert.deepEqual(cifrasVentasDashboard(nulo), { ventas: 0, cartera: 0, ticket: 0 });
   }
+}
+
+console.log('--- T11 (V7): la tarjeta ACTIVAS no contradice al banner de vencidas ---');
+{
+  // 'Sin atender' (Borrador sin cambios más de los días de alerta) y 'vencidas' (activas con la fecha de vencimiento
+  // pasada) miden cosas distintas: la tarjeta dice las dos, con los mismos números que el banner.
+  assert.equal(pistaActivasSolicitudes(0, 0), 'Todas atendidas');
+  assert.equal(pistaActivasSolicitudes(0, 1), '1 vencida', 'no dice «Todas atendidas» si el banner avisa vencidas');
+  assert.equal(pistaActivasSolicitudes(0, 3), '3 vencidas');
+  assert.equal(pistaActivasSolicitudes(2, 0), '2 sin atender');
+  assert.equal(pistaActivasSolicitudes(1, 1), '1 sin atender · 1 vencida');
+  assert.equal(pistaActivasSolicitudes(4, 2), '4 sin atender · 2 vencidas');
+  // Valores raros cuentan como 0.
+  assert.equal(pistaActivasSolicitudes(undefined, null), 'Todas atendidas');
+  assert.equal(pistaActivasSolicitudes(-1, NaN), 'Todas atendidas');
 }
 
 console.log('OK test_listas_ventas.mjs');

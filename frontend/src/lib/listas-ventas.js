@@ -9,6 +9,7 @@
  *  - N10: opcionesFiltroEstado del filtro de estado de la lista de pedidos.
  *  - H32 / N4 / N7 (Solicitudes): generoCotizacion / cotizacionesVigentes / contadoresSolicitudes / tasaConversionCotizacion
  *    de la lista, superaDiasAlerta (N8), resumenCancelacionSolicitudes, estadoEnPapelera y pasosParaCancelarSolicitud.
+ *  - T11 (ronda visual): pistaActivasSolicitudes (tarjeta ACTIVAS, V7) y posicionMenuFila (menú «⋮» de la fila, V2).
  */
 import { ESTADOS_PEDIDO_CERRADOS, grupoPedido, esCotizacionActiva, esPedidoVigente } from './estados-pedido.js';
 import { comoUTC, esSoporte } from './hub-ventas.js';
@@ -309,6 +310,54 @@ export function pestanaDeSolicitud(sc) {
  */
 export function esSolicitudActiva(sc) {
   return pestanaDeSolicitud(sc) === 'Activas';
+}
+
+/** Un conteo valido (entero >= 0) o 0. */
+const conteo = (n) => (Number.isFinite(n) && n > 0 ? Math.floor(n) : 0);
+
+/**
+ * T11 (V7): la pista de la tarjeta ACTIVAS de la lista de solicitudes. 'Sin atender' (Borrador sin cambios más de los
+ * días de alerta, N8) y 'vencidas' (activas con la fecha de vencimiento pasada) miden cosas distintas a propósito; la
+ * tarjeta dice las dos, con los mismos números del banner «ATENCIÓN REQUERIDA», para no decir «Todas atendidas»
+ * mientras el banner avisa vencidas: '2 sin atender · 1 vencida', '1 vencida', 'Todas atendidas'.
+ * @param {number} sinAtender
+ * @param {number} vencidas
+ * @returns {string}
+ */
+export function pistaActivasSolicitudes(sinAtender, vencidas) {
+  const s = conteo(sinAtender);
+  const v = conteo(vencidas);
+  const partes = [];
+  if (s > 0) partes.push(`${s} sin atender`);
+  if (v > 0) partes.push(`${v} ${v === 1 ? 'vencida' : 'vencidas'}`);
+  return partes.length > 0 ? partes.join(' · ') : 'Todas atendidas';
+}
+
+const SEPARACION_MENU_FILA = 4; // px entre el botón «⋮» y su menú
+const MARGEN_MENU_FILA = 8; // px que el menú deja libres contra los bordes de la ventana
+
+/**
+ * T11 (V2): dónde abrir el menú «⋮» de una fila con position: fixed, para que el contenedor con overflow de la tabla no
+ * lo corte. Se alinea al borde derecho del botón y se abre hacia abajo; si abajo no cabe y arriba hay más lugar, hacia
+ * arriba. Nunca se sale de la ventana (margen de 8 px). Coordenadas de la ventana (getBoundingClientRect), en px
+ * enteros.
+ * @param {{top: number, bottom: number, right: number}} boton  el rectángulo del botón «⋮»
+ * @param {{ancho: number, alto: number}} menu  el tamaño del menú
+ * @param {{ancho: number, alto: number}} ventana  window.innerWidth / innerHeight
+ * @returns {{top: number, left: number}}
+ */
+export function posicionMenuFila(boton, menu, ventana) {
+  const abajo = boton.bottom + SEPARACION_MENU_FILA;
+  const espacioAbajo = ventana.alto - MARGEN_MENU_FILA - abajo;
+  const espacioArriba = boton.top - SEPARACION_MENU_FILA - MARGEN_MENU_FILA;
+  const deseado = menu.alto <= espacioAbajo || espacioAbajo >= espacioArriba
+    ? abajo
+    : boton.top - SEPARACION_MENU_FILA - menu.alto;
+  const dentro = (valor, maximo) => Math.min(Math.max(valor, MARGEN_MENU_FILA), Math.max(MARGEN_MENU_FILA, maximo));
+  return {
+    top: Math.round(dentro(deseado, ventana.alto - MARGEN_MENU_FILA - menu.alto)),
+    left: Math.round(dentro(boton.right - menu.ancho, ventana.ancho - MARGEN_MENU_FILA - menu.ancho)),
+  };
 }
 
 /**

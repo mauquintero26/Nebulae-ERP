@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -24,7 +24,7 @@ import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas
 import {
   diasAlerta, generoCotizacion, cotizacionesVigentes, contadoresSolicitudes, tasaConversionCotizacion,
   superaDiasAlerta, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera, esSolicitudActiva,
-  pestanaDeSolicitud,
+  pestanaDeSolicitud, pistaActivasSolicitudes, posicionMenuFila,
 } from '@/lib/listas-ventas';
 import { comoUTC } from '@/lib/hub-ventas';
 import { mailtoUrl, telUrl, motivoTelefono } from '@/lib/chatter';
@@ -449,11 +449,31 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
 function RowMenu({sc,onView,onReiniciar,onCancel,onSendToTrash}:{sc:any;onView:()=>void;onReiniciar:()=>void;onCancel:()=>void;onSendToTrash:()=>void}) {
   const [open,setOpen]=useState(false);
   const ref=useRef<any>(null);
+  const botonRef=useRef<HTMLButtonElement>(null);
+  const menuRef=useRef<HTMLDivElement>(null);
+  const [posicion,setPosicion]=useState<{top:number;left:number}|null>(null);
   useEffect(()=>{
     function close(e:MouseEvent){if(ref.current&&!ref.current.contains(e.target))setOpen(false);}
     document.addEventListener('mousedown',close);
     return()=>document.removeEventListener('mousedown',close);
   },[]);
+  // T11 (V2): el menú va con position: fixed calculado desde el botón (posicionMenuFila): el overflow del contenedor de
+  // la tabla ya no lo corta, y si no cabe abajo se abre hacia arriba. Se mide antes de pintar (useLayoutEffect) y se
+  // recalcula al desplazar o cambiar el tamaño de la ventana, para que siga pegado al botón. Sigue dentro de `ref`: el
+  // clic afuera lo cierra igual que antes.
+  useLayoutEffect(()=>{
+    if(!open) return;
+    function ubicar(){
+      const boton=botonRef.current?.getBoundingClientRect();
+      const menu=menuRef.current;
+      if(!boton||!menu) return;
+      setPosicion(posicionMenuFila(boton,{ancho:menu.offsetWidth,alto:menu.offsetHeight},{ancho:window.innerWidth,alto:window.innerHeight}));
+    }
+    ubicar();
+    window.addEventListener('scroll',ubicar,true);
+    window.addEventListener('resize',ubicar);
+    return()=>{window.removeEventListener('scroll',ubicar,true);window.removeEventListener('resize',ubicar);};
+  },[open]);
   const isCancelled = sc.estado === 'CANCELADA';
   const isSoporte = sc.tipo_solicitud === 'Soporte Tecnico';
   // N4: una SC cancelada solo vuelve por "Restaurar" en la Papelera (el PATCH responde 409) y una que ya tiene
@@ -466,9 +486,10 @@ function RowMenu({sc,onView,onReiniciar,onCancel,onSendToTrash}:{sc:any;onView:(
   const mostrarAcciones = !isCancelled || !sc.eliminada_at;
   return (
     <div className="relative" ref={ref}>
-      <button onClick={e=>{e.stopPropagation();setOpen(o=>!o);}} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg"><MoreVertical size={15}/></button>
+      <button ref={botonRef} onClick={e=>{e.stopPropagation();setOpen(o=>!o);}} className="p-1.5 text-slate-400 hover:bg-slate-100 rounded-lg"><MoreVertical size={15}/></button>
       {open&&(
-        <div className="absolute right-0 top-8 z-50 bg-white border border-slate-200 rounded-xl shadow-xl w-56 py-1">
+        <div ref={menuRef} style={posicion?{top:posicion.top,left:posicion.left}:{top:0,left:0,visibility:'hidden'}}
+          className="fixed z-50 bg-white border border-slate-200 rounded-xl shadow-xl w-56 py-1">
           <button onClick={()=>{onView();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm font-medium flex items-center gap-2"><FileText size={14} className="text-indigo-500"/>Ver Detalle</button>
           <button onClick={()=>{onView();setOpen(false);}} className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm font-medium flex items-center gap-2"><Edit2 size={14} className="text-amber-500"/>Editar</button>
           {/* Soporte Tecnico no participa del estado ligado a Cotizacion (siempre
@@ -1197,7 +1218,8 @@ export default function SolicitudClient() {
 
         {/* KPI Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          <StatCard icon={FileText} label="Activas" value={totalActivas} hint={sinAtender>0?`${sinAtender} sin atender`:'Todas atendidas'} color="amber"/>
+          {/* T11 (V7): la pista dice también las vencidas del banner, para no decir «Todas atendidas» mientras avisa. */}
+          <StatCard icon={FileText} label="Activas" value={totalActivas} hint={pistaActivasSolicitudes(sinAtender,vencidas)} color="amber"/>
           <StatCard icon={CheckCircle2} label="Confirmadas" value={totalConf} hint={hintConfirmadas} color="emerald"/>
           <StatCard icon={X} label="Canceladas" value={solicitudes.filter(s=>s.estado==='CANCELADA').length} hint="Fuera del pipeline" color="red"/>
           <StatCard icon={Activity} label="Total" value={solicitudes.length} hint={hintTotal} color="indigo"/>
@@ -1212,7 +1234,8 @@ export default function SolicitudClient() {
                 {(['Activas','Confirmadas','Canceladas','Soporte','Papelera','Analisis'] as const).map(tab=>(
                   <button key={tab} onClick={()=>{setActiveTab(tab as any);setCurrentPage(1);if(tab==='Papelera')loadPapelera();}}
                     className={`px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap transition-all ${activeTab===tab?'bg-indigo-600 text-white shadow-sm':'text-gray-600 hover:text-indigo-700 hover:bg-indigo-50'}`}>
-                    {tab==='Papelera'?'🗑️ Papelera':tab}
+                    {/* T11 (V6): la clave sigue 'Analisis'; el texto visible lleva tilde. */}
+                    {tab==='Papelera'?'🗑️ Papelera':tab==='Analisis'?'Análisis':tab}
                     {tab!=='Analisis'&&tab!=='Papelera'&&<span className={`ml-1.5 text-xs font-black ${activeTab===tab?'text-indigo-200':'text-gray-400'}`}>
                       {solicitudes.filter(s=>pestanaDeSolicitud(s)===tab).length}
                     </span>}

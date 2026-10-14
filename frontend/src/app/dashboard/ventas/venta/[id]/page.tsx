@@ -13,7 +13,7 @@ import { apiFetch } from '@/lib/api';
 import { Button, Modal, useAvisos } from '@/components/ui';
 import { textoDeError, recargarTrasError } from '@/lib/avisos';
 import { NewSupplierModal } from '../venta-client';
-import { CambiosDeActividad, getUsuarioActual, puedeCrearOrdenDePago, returnToSeguro, BotonVolver } from '../../flujo';
+import { CambiosDeActividad, CabeceraActividad, getUsuarioActual, puedeCrearOrdenDePago, returnToSeguro, BotonVolver } from '../../flujo';
 import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
 import { formatoPesos } from '@/lib/pesos';
 import { etiquetaModalidad } from '@/lib/etiquetas-ventas';
@@ -173,6 +173,9 @@ function PedidoVentaDetalleContent() {
   // N10: nombre claro de cualquier estado y su lugar en los 5 pasos (-1: cancelado o devuelto, sin stepper).
   const estadoCfg = infoEstadoPedido(estadoActual);
   const stepIndex = pasoPedido(estadoActual);
+  // T11 (V5): la línea de la barra de pasos va del centro del primer círculo al del último: p-6 (1.5rem) + media
+  // columna, con las columnas del mismo ancho ((100% - 3rem) / pasos).
+  const bordeLineaPasos = `calc(1.5rem + (100% - 3rem) / ${2 * STEPS.length})`;
   // N2: solo se ofrece lo que el servidor acepta por PATCH desde el estado actual.
   const puedeCancelar = transicionesPedido(estadoActual).includes('CANCELADO');
   const opcionesEstado = ESTADOS_PEDIDO_MANUALES.filter(k => transicionesPedido(estadoActual).includes(k));
@@ -435,14 +438,17 @@ function PedidoVentaDetalleContent() {
         <div className="flex-1 overflow-y-auto px-8 py-8 custom-scrollbar bg-white relative">
 
           {/* Status Tracker -- N10: los 5 pasos; cada estado cae en el mas cercano y el exacto se lee abajo.
-              Se oculta solo en Cancelado y Devuelto (paso -1). */}
+              Se oculta solo en Cancelado y Devuelto (paso -1).
+              T11 (V5): cinco columnas del mismo ancho, cada etiqueta centrada bajo su paso, separada (px-1) y con salto
+              de línea permitido (a 1024 px salían pegadas). La línea queda a la altura del centro de los círculos
+              (top-10 = p-6 + medio círculo) aunque una etiqueta ocupe dos líneas. */}
           {stepIndex >= 0 && (
-            <div className="bg-white p-6 border-b border-slate-100 mb-8 flex justify-between relative">
-              <div className="absolute top-1/2 left-10 right-10 h-1 bg-slate-100 -translate-y-1/2 z-0" />
-              <div className="absolute top-1/2 left-10 h-1 bg-emerald-500 transition-all duration-500 z-0"
-                style={{ right: `${Math.max(0, 100 - (stepIndex / (STEPS.length - 1)) * 100)}%`, minWidth: stepIndex > 0 ? undefined : 0 }} />
+            <div className="bg-white p-6 border-b border-slate-100 mb-8 flex relative">
+              <div className="absolute top-10 h-1 bg-slate-100 -translate-y-1/2 z-0" style={{ left: bordeLineaPasos, right: bordeLineaPasos }} />
+              <div className="absolute top-10 h-1 bg-emerald-500 -translate-y-1/2 transition-all duration-500 z-0"
+                style={{ left: bordeLineaPasos, width: `calc((100% - 3rem) * ${stepIndex} / ${STEPS.length})` }} />
               {STEPS.map((s, i) => (
-                <div key={s.key} className="relative z-10 flex flex-col items-center gap-2">
+                <div key={s.key} className="relative z-10 flex flex-1 basis-0 min-w-0 flex-col items-center gap-2 px-1">
                   <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold shadow-md transition-colors ${
                     i < stepIndex ? 'bg-emerald-500 text-white shadow-emerald-200'
                     : i === stepIndex ? 'bg-indigo-600 text-white shadow-indigo-200'
@@ -450,7 +456,7 @@ function PedidoVentaDetalleContent() {
                   }`}>
                     {i < stepIndex ? <CheckCircle2 size={16} /> : <Circle size={16} fill={i === stepIndex ? 'currentColor' : 'transparent'} />}
                   </div>
-                  <span className={`text-xs font-bold ${i <= stepIndex ? 'text-slate-800' : 'text-slate-400'}`}>{s.label}</span>
+                  <span className={`text-center text-xs font-bold leading-tight break-words ${i <= stepIndex ? 'text-slate-800' : 'text-slate-400'}`}>{s.label}</span>
                 </div>
               ))}
             </div>
@@ -852,15 +858,12 @@ function PedidoVentaDetalleContent() {
                         style={{ color: ACTIVITY_STYLE[a.action] || '#94a3b8' }}>
                         <Activity size={14} />
                       </div>
-                      <div className="flex-1 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                      <div className="flex-1 min-w-0 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
                         {/* U6+H22: una nota del Chatter lleva su tipo encima (Nota interna, Llamada…, «Nota externa · medio»). */}
                         {esEntradaChatter(a) && <div className="mb-1.5"><EtiquetaChatter actividad={a} /></div>}
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="font-bold text-slate-800 text-sm">{a.description || humanizarCodigo(a.action)}</span>
-                          <span className="text-[10px] font-bold text-slate-400">
-                            {fDate(a.created_at)}{a.created_at ? ` ${new Date(a.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}` : ''}
-                          </span>
-                        </div>
+                        {/* T11 (V3): la misma cabecera que la SC y la COT (a 1024 px la fecha pasa debajo). */}
+                        <CabeceraActividad className="mb-2" titulo={a.description || humanizarCodigo(a.action)}
+                          fecha={`${fDate(a.created_at)}${a.created_at ? ` ${new Date(a.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}` : ''}`} />
                         <CambiosDeActividad extra={a.extra_data} />
                         <p className="text-xs font-medium text-slate-500">{a.user_name || 'Sistema'}</p>
                       </div>

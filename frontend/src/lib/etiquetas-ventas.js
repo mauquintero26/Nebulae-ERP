@@ -70,6 +70,9 @@ function tildesPorPalabra(texto) {
   });
 }
 
+/** El texto de H10 para la modalidad 60/40; etiquetaModalidadCorta lo acorta a '60/40'. */
+const ETIQUETA_60_40 = '60/40 (60% de anticipo y 40% al entregar)';
+
 /**
  * La modalidad de pago para mostrar (H10). Se compara con claveModalidad (sin tildes ni mayúsculas):
  * - un crédito con la forma conocida de un plazo ('Credito 30 dias', 'Credito 30 Dias' de la agenda, 'Credito 30d' de
@@ -88,10 +91,21 @@ export function etiquetaModalidad(modalidad) {
   const t = claveModalidad(original);
   const plazo = esModalidadCredito(original) ? t.match(PLAZO_DE_CREDITO) : null;
   if (plazo) return plazo[1] ? `Crédito ${Number(plazo[1])} días` : 'Crédito';
-  if (t.includes('60/40')) return '60/40 (60% de anticipo y 40% al entregar)';
+  if (t.includes('60/40')) return ETIQUETA_60_40;
   if (t === 'contado') return 'Contado';
   if (t === 'otro') return 'Otro';
   return tildesPorPalabra(original);
+}
+
+/**
+ * T11 (V9): la modalidad para un texto que ya va entre paréntesis ('Anticipo requerido (60% · 60/40)'): la de
+ * etiquetaModalidad sin la explicación entre paréntesis de la 60/40 ('60/40'); las demás ya son cortas y quedan iguales.
+ * @param {any} modalidad
+ * @returns {string}
+ */
+export function etiquetaModalidadCorta(modalidad) {
+  const etiqueta = etiquetaModalidad(modalidad);
+  return etiqueta === ETIQUETA_60_40 ? '60/40' : etiqueta;
 }
 
 /**

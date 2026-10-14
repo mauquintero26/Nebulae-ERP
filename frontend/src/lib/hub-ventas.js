@@ -348,6 +348,18 @@ const masReciente = (lista) => [...lista].sort((a, b) => Number(b?.id || 0) - Nu
 export const RUTA_HUB_VENTAS = '/dashboard/ventas';
 
 /**
+ * T11 (V1): el texto del aviso de atrasados del menu lateral (AlertasBadge), con el `atrasados` de
+ * GET /ventas/alertas/resumen: '1 atrasado', '5 atrasados'. Sin un numero positivo: '' (el aviso no se muestra).
+ * @param {any} n
+ * @returns {string}
+ */
+export function textoAtrasados(n) {
+  const cuantos = typeof n === 'number' || (typeof n === 'string' && n.trim() !== '') ? Number(n) : NaN;
+  if (!Number.isFinite(cuantos) || cuantos <= 0) return '';
+  return `${cuantos} ${cuantos === 1 ? 'atrasado' : 'atrasados'}`;
+}
+
+/**
  * T11 calidad (E2+E3): la ruta de un detalle abierto desde el Hub con ?return_to= del Hub, como el panel rapido: su
  * unico boton de volver dice «Volver al Hub de Ventas» (H37; el detalle lo valida con returnToSeguro).
  * @param {string} ruta  p. ej. '/dashboard/ventas/cotizacion/12'

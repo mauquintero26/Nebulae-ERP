@@ -26,7 +26,7 @@ import {
 } from '@/lib/chatter';
 import { formatoPct } from '@/lib/dinero-ventas';
 import { pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
-import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
+import { destinoVolver, anchoInicialPanel, inicialesAutor } from '@/lib/detalle-layout';
 import { comoUTC, fechaEditadaParaGuardar } from '@/lib/hub-ventas';
 import {
   CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto, formularioDeEdicion, camposEditadosDeSolicitud,
@@ -49,7 +49,7 @@ import { waUrl } from '@/lib/whatsapp';
 import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import { cotizacionesVigentes, cotizacionesRechazadas, pasosParaCancelarSolicitud } from '@/lib/listas-ventas';
 import { infoEstadoPedido, humanizarCodigo } from '@/lib/estados-pedido';
-import { CambiosDeActividad } from '../../flujo';
+import { CambiosDeActividad, CabeceraActividad } from '../../flujo';
 import { ProductosSolicitud } from './productos-solicitud';
 import {
   NextStepCard, EnlaceConfirmacionModal, esAsesorElegible, getUsuarioActual, type UsuarioActual,
@@ -1339,10 +1339,8 @@ function SolicitudDetalleContent() {
                           <div className="flex-1 bg-white border border-slate-200 rounded-xl p-3 shadow-sm min-w-0">
                             {/* U6+H22: una nota del Chatter lleva su tipo encima (Nota interna, Llamada…, «Nota externa · medio»). */}
                             {esEntradaChatter(a) && <div className="mb-1.5"><EtiquetaChatter actividad={a} /></div>}
-                            <div className="flex items-start justify-between gap-2 mb-1.5">
-                              <span className="font-bold text-slate-800 text-sm">{a.description || humanizarCodigo(a.action)}</span>
-                              <span className="text-[10px] font-bold text-slate-400 whitespace-nowrap shrink-0">{fDate(a.created_at)} {fTime(a.created_at)}</span>
-                            </div>
+                            {/* T11 (V3): la misma cabecera que la COT y el PVEN (a 1024 px la fecha pasa debajo). */}
+                            <CabeceraActividad titulo={a.description || humanizarCodigo(a.action)} fecha={`${fDate(a.created_at)} ${fTime(a.created_at)}`} />
                             <CambiosDeActividad extra={a.extra_data} />
                             {a.old_estado && a.new_estado && (
                               <p className="flex items-center gap-1.5 mb-2 flex-wrap">
@@ -1350,8 +1348,8 @@ function SolicitudDetalleContent() {
                               </p>
                             )}
                             <div className="flex items-center gap-2">
-                              <div className="w-5 h-5 rounded-full bg-slate-200 flex items-center justify-center text-[8px] font-bold text-slate-600 border border-slate-300">
-                                {(a.user_name || 'S').split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase()}
+                              <div className="w-5 h-5 shrink-0 rounded-full bg-slate-200 flex items-center justify-center text-[8px] font-bold text-slate-600 border border-slate-300">
+                                {inicialesAutor(a.user_name)}
                               </div>
                               <span className="text-xs font-medium text-slate-500">{a.user_name || 'Sistema'}</span>
                             </div>

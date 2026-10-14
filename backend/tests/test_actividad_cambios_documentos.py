@@ -101,10 +101,10 @@ def test_describir_recotizacion_con_total_distinto():
     antes, despues = {"total_cop": Decimal("1000000.00")}, {"total_cop": Decimal("1250000.00")}
     cambios = cd.comparar("COT", antes, despues)
     assert cd.describir("COT", cambios, antes, despues) == (
-        "RECOTIZADA", "Re-cotización: total $1.000.000 -> $1.250.000 (+$250.000)")
+        "RECOTIZADA", "Re-cotización: total $1.000.000 → $1.250.000 (+$250.000)")
     # Bajar el total tambien se lee bien.
     cambios = cd.comparar("COT", despues, antes)
-    assert cd.describir("COT", cambios, despues, antes)[1] == "Re-cotización: total $1.250.000 -> $1.000.000 (-$250.000)"
+    assert cd.describir("COT", cambios, despues, antes)[1] == "Re-cotización: total $1.250.000 → $1.000.000 (-$250.000)"
 
 
 def test_describir_primer_precio_y_guardado_sin_cambios():
@@ -164,7 +164,7 @@ def test_recotizar_cot_registra_la_recotizacion_con_el_detalle(app_client, db, a
     actividades = _actividades(app_client, admin_token, "cotizaciones", cot.id)
     assert [a["action"] for a in actividades] == ["RECOTIZADA"]
     a = actividades[0]
-    assert a["description"] == "Re-cotización: total $1.000 -> $2.000 (+$1.000)"
+    assert a["description"] == "Re-cotización: total $1.000 → $2.000 (+$1.000)"
     assert a["user_name"] == "asesor@test"
     cambios = {c["etiqueta"]: c for c in a["extra_data"]["cambios"]}
     assert cambios["Total"]["antes"] == "$1.000" and cambios["Total"]["despues"] == "$2.000"

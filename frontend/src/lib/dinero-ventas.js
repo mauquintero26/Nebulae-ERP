@@ -10,7 +10,7 @@
 import { redondearPeso, formatoPesos } from './pesos.js';
 import { pedidoVigente } from './listas-ventas.js';
 import { humanizarCodigo } from './estados-pedido.js';
-import { etiquetaModalidad } from './etiquetas-ventas.js';
+import { etiquetaModalidad, etiquetaModalidadCorta } from './etiquetas-ventas.js';
 
 const esObjeto = (v) => v !== null && typeof v === 'object';
 const texto = (v) => (typeof v === 'string' ? v.trim() : v === null || v === undefined ? '' : String(v).trim());
@@ -56,16 +56,17 @@ export function hoyLocal(d = new Date()) {
 const esManual = (cot) => cot?.anticipo_pct_manual !== null && cot?.anticipo_pct_manual !== undefined;
 
 /**
- * '60% · 60/40 (60% de anticipo y 40% al entregar)', '0% · Crédito 30 días', '50% · manual', '60% · sin solicitud' o
- * '60% · solicitud sin modalidad'. R23 (B2-T9A): la modalidad guardada ('Credito 30 dias') se muestra con
- * etiquetaModalidad (etiquetas-ventas.js); el valor de la SC no cambia.
+ * '60% · 60/40', '0% · Crédito 30 días', '50% · manual', '60% · sin solicitud' o '60% · solicitud sin modalidad'.
+ * R23 (B2-T9A): la modalidad guardada ('Credito 30 dias') se muestra con su etiqueta (etiquetas-ventas.js); el valor
+ * de la SC no cambia. T11 (V9): va entre paréntesis en los totales ('Anticipo requerido (60% · 60/40)'), así que usa
+ * etiquetaModalidadCorta: sin paréntesis dentro de paréntesis.
  */
 export function etiquetaAnticipoCotizacion(cot) {
   const pct = formatoPct(cot?.anticipo_pct ?? 60);
   if (esManual(cot)) return `${pct} · manual`;
   if (!cot?.sc_id) return `${pct} · sin solicitud`;
   const modalidad = texto(cot.sc_modalidad_pago);
-  return `${pct} · ${modalidad ? etiquetaModalidad(modalidad) : 'solicitud sin modalidad'}`;
+  return `${pct} · ${modalidad ? etiquetaModalidadCorta(modalidad) : 'solicitud sin modalidad'}`;
 }
 
 /**
@@ -357,10 +358,13 @@ export function etiquetaEstadoPxp(e) {
   return ESTADOS_PXP[e] || humanizarCodigo(e);
 }
 
-/** Chip de la PXP vigente: 'PXP: X · Pendiente · pendiente $Y'; lo pendiente solo mientras esta PENDIENTE. */
+/**
+ * Chip de la PXP vigente: 'PXP-X · Pendiente · $Y'; lo pendiente solo mientras esta PENDIENTE. T11 (V9): sin repetir
+ * palabras (el numero ya dice PXP y el estado ya dice Pendiente); sin numero, la sigla sola.
+ */
 export function textoChipPxp(pxp) {
-  const base = `PXP: ${pxp?.numero || ''} · ${etiquetaEstadoPxp(pxp?.estado)}`;
-  return pxp?.estado === 'PENDIENTE' ? `${base} · pendiente ${formatoPesos(pxp.monto_pendiente)}` : base;
+  const base = `${pxp?.numero || 'PXP'} · ${etiquetaEstadoPxp(pxp?.estado)}`;
+  return pxp?.estado === 'PENDIENTE' ? `${base} · ${formatoPesos(pxp.monto_pendiente)}` : base;
 }
 
 /** La PXP vigente del pedido (la que no esta CANCELADA) y la cancelada mas reciente, de `pedido.pxps` (por id). */

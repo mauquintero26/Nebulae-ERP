@@ -9,6 +9,7 @@ import {
   Globe, Megaphone, Puzzle, Sparkles, Tag, ChevronDown, ChevronRight,
   PanelLeftClose, PanelLeftOpen, LogOut, SlidersHorizontal, Settings, UserCircle2
 } from 'lucide-react';
+import { AlertasBadge } from '@/components/AlertasBadge';
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -153,6 +154,9 @@ export function Sidebar() {
           {isCollapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
         </button>
       </div>
+
+      {/* T11 (V1): el aviso de documentos atrasados de Ventas, arriba del menú (ya no flota sobre las cabeceras). */}
+      <AlertasBadge colapsado={isCollapsed} />
 
       {/* Navigation */}
       <div className="flex-1 overflow-y-auto py-6 px-3 space-y-8 scrollbar-hide">

@@ -368,7 +368,7 @@ def describir(entidad, cambios, antes, despues, recotizacion=False):
         if antes_total is not None and despues_total is not None and antes_total != despues_total:
             diferencia = despues_total - antes_total
             signo = "+" if diferencia > 0 else "-"
-            return "RECOTIZADA", (f"Re-cotización: total {_miles(antes_total)} -> {_miles(despues_total)} "
+            return "RECOTIZADA", (f"Re-cotización: total {_miles(antes_total)} → {_miles(despues_total)} "
                                   f"({signo}{_miles(abs(diferencia))})")
         if cambios:
             return "RECOTIZADA", "Re-cotización: se actualizaron los precios (el total no cambió)"

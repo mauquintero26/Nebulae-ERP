@@ -17,7 +17,7 @@ import {
   ESTADOS as ESTADOS_COT, EstadoBadge, fCOP, fDate, fTime,
 } from '../cotizacion-client';
 import type { AnulacionConfirmacion } from '../cotizacion-client';
-import { NextStepCard, EnlaceConfirmacionModal, CambiosDeActividad, returnToSeguro, getUsuarioActual, BotonVolver } from '../../flujo';
+import { NextStepCard, EnlaceConfirmacionModal, CambiosDeActividad, CabeceraActividad, returnToSeguro, getUsuarioActual, BotonVolver } from '../../flujo';
 import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
 import { situacionPedidoCotizacion } from '@/lib/listas-ventas';
 import {
@@ -25,7 +25,7 @@ import {
 } from '@/lib/dinero-ventas';
 import { comoUTC } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
-import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
+import { destinoVolver, anchoInicialPanel, inicialesAutor } from '@/lib/detalle-layout';
 import { agregarActividad, esEntradaChatter, telUrl, textoSinTelefono } from '@/lib/chatter';
 import { ESTADOS_SC_SIN_CONFIRMAR } from '@/lib/estados-solicitud';
 import { humanizarCodigo } from '@/lib/estados-pedido';
@@ -1147,13 +1147,11 @@ function CotizacionDetalleContent() {
                       <Icon size={14} />
                     </div>
 
-                    <div className="flex-1 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
+                    <div className="flex-1 min-w-0 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
                       {/* U6+H22: una nota del Chatter lleva su tipo encima (Nota interna, Llamada…, «Nota externa · medio»). */}
                       {esEntradaChatter(a) && <div className="mb-1.5"><EtiquetaChatter actividad={a} /></div>}
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="font-bold text-slate-800 text-sm">{a.description || humanizarCodigo(a.action)}</span>
-                        <span className="text-[10px] font-bold text-slate-400">{fDate(a.created_at)} {fTime(a.created_at)}</span>
-                      </div>
+                      {/* T11 (V3): la misma cabecera que la SC y el PVEN (a 1024 px la fecha pasa debajo). */}
+                      <CabeceraActividad className="mb-2" titulo={a.description || humanizarCodigo(a.action)} fecha={`${fDate(a.created_at)} ${fTime(a.created_at)}`} />
                       <CambiosDeActividad extra={a.extra_data} />
                       {a.old_estado && a.new_estado && (
                         <p className="flex items-center gap-1.5 mb-3 flex-wrap">
@@ -1161,8 +1159,8 @@ function CotizacionDetalleContent() {
                         </p>
                       )}
                       <div className="flex items-center gap-2">
-                        <div className="w-5 h-5 rounded-full bg-slate-200 flex items-center justify-center text-[8px] font-bold text-slate-600 border border-slate-300">
-                          {(a.user_name||'S').split(' ').map((n:string)=>n[0]).join('').slice(0,2).toUpperCase()}
+                        <div className="w-5 h-5 shrink-0 rounded-full bg-slate-200 flex items-center justify-center text-[8px] font-bold text-slate-600 border border-slate-300">
+                          {inicialesAutor(a.user_name)}
                         </div>
                         <span className="text-xs font-medium text-slate-500">{a.user_name || 'Sistema'}</span>
                       </div>
