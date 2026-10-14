@@ -406,7 +406,8 @@ function PedidoVentaDetalleContent() {
             </span>
           ) : pxpCancelada && (
             <span className="flex items-center gap-1.5 px-4 py-2 bg-slate-100 text-slate-500 border border-slate-200 rounded-xl font-bold text-sm">
-              PXP {pxpCancelada.numero} cancelada
+              {/* T11 ronda 1: el mismo texto que la PXP vigente («PXP-X · Cancelada»), sin repetir la sigla. */}
+              {textoChipPxp(pxpCancelada)}
             </span>
           )}
           <button onClick={() => {

@@ -315,6 +315,8 @@ console.log('--- H44+N6 / H45 TEST 11: PXP vigente o cancelada y cuando se puede
     'PXP-2 · Pendiente · $1.062.523');
   assert.equal(textoChipPxp({ numero: 'PXP-2', estado: 'PAGADA', monto_pendiente: 1062523 }), 'PXP-2 · Pagada');
   assert.equal(textoChipPxp({ estado: 'PAGADA' }), 'PXP · Pagada', 'sin numero, la sigla sola');
+  // T11 ronda 1 (3): el chip de la PXP cancelada usa la misma funcion ('PXP PXP-1 cancelada' repetia la sigla), sin monto.
+  assert.equal(textoChipPxp({ numero: 'PXP-1', estado: 'CANCELADA', monto_pendiente: 5000 }), 'PXP-1 · Cancelada');
 
   const ambas = pxpsDelPedido({ pxps: [{ numero: 'PXP-1', estado: 'CANCELADA' }, { numero: 'PXP-2', estado: 'PENDIENTE' }] });
   assert.equal(ambas.vigente.numero, 'PXP-2');

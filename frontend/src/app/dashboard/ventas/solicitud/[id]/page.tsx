@@ -966,18 +966,20 @@ function SolicitudDetalleContent() {
     <div className="w-full h-full bg-white flex flex-col overflow-hidden">
 
       {/* Top Action Bar */}
-      <div className="bg-white px-6 py-4 border-b border-slate-200 flex items-center justify-between z-20 shadow-sm shrink-0">
-        <div className="flex items-center gap-4">
+      {/* T11 ronda 1: el mismo patrón que la cabecera del PVEN. A 1024 px (sobre todo en edición) los botones bajan de
+          línea en vez de salirse por la derecha, las etiquetas pasan debajo del número y el número no se parte. */}
+      <div className="bg-white px-6 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-x-4 gap-y-3 z-20 shadow-sm shrink-0">
+        <div className="flex items-center gap-4 min-w-0">
           {/* R22: un solo botón de volver, al origen (return_to seguro) o a la lista de solicitudes, con su destino escrito. */}
           <BotonVolver href={destinoVolver(safeReturnTo, '/dashboard/ventas/solicitud')} />
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-black text-slate-800">{solicitud?.numero || String(params.id || '').toUpperCase()}</h1>
+          <div className="flex flex-wrap items-center gap-3 min-w-0">
+            <h1 className="text-2xl font-black text-slate-800 whitespace-nowrap">{solicitud?.numero || String(params.id || '').toUpperCase()}</h1>
             {solicitud && <EstadoBadge estado={solicitud.estado} />}
             {solicitud && <TipoBadge tipo={solicitud.tipo_solicitud || 'Cotizacion de Producto'} />}
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 ml-auto">
           {/* U18: una solicitud cancelada no se edita: se restaura desde la Papelera. */}
           {!editMode ? (
             solicitud?.estado !== 'CANCELADA' && (

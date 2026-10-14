@@ -13,13 +13,17 @@
  * - V6: la pestaña «Análisis» de la lista de solicitudes, con tilde (solo el texto visible).
  * - V7: la tarjeta ACTIVAS no dice «Todas atendidas» cuando el banner avisa vencidas (pistaActivasSolicitudes).
  * - V8: inicialesAutor (detalle-layout.js) ignora lo que no es letra o dígito: «Cliente (confirmación por link)» -> CC.
- * - V10: la pila de avisos va arriba a la derecha (no tapa el botón principal de una ventana).
+ * - V10: la pila de avisos va arriba al centro (ronda 1; no tapa el botón principal de una ventana ni los de la
+ *   derecha de las cabeceras).
+ * - Ronda 1: la cabecera de la SC baja de línea a 1024 (patrón del PVEN); el chip de la PXP cancelada con textoChipPxp;
+ *   la tarjeta de Activas de la pestaña Análisis con pistaActivasSolicitudes; el menú de fila se cierra si su botón sale
+ *   de la vista (botonALaVista); las guardias de clases comprueban clases sueltas (conClases).
  */
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { textoAtrasados, RUTA_HUB_VENTAS } from '../src/lib/hub-ventas.js';
-import { posicionMenuFila } from '../src/lib/listas-ventas.js';
+import { posicionMenuFila, botonALaVista } from '../src/lib/listas-ventas.js';
 import { inicialesAutor } from '../src/lib/detalle-layout.js';
 
 // Con los saltos de línea normalizados (el checkout de Windows deja CRLF en algunos archivos).
@@ -33,6 +37,18 @@ function cuerpo(fuente, marca) {
   const fin = fuente.indexOf('\n}\n', inicio);
   assert.ok(fin > inicio, `no se encontró el final de ${marca}`);
   return fuente.slice(inicio, fin);
+}
+/**
+ * Ronda 1: las guardias de clases comprueban clases SUELTAS (en cualquier orden), no la cadena exacta. `className` es el
+ * texto de un className="…" o de la parte fija de un className={`…`}.
+ */
+function conClases(className, requeridas, prohibidas = [], que = className) {
+  const clases = new Set(String(className).split(/\s+/).filter(Boolean));
+  for (const c of requeridas) assert.ok(clases.has(c), `${que}: falta la clase ${c} en «${className}»`);
+  for (const p of prohibidas) {
+    const hallada = [...clases].find((c) => (p instanceof RegExp ? p.test(c) : c === p));
+    assert.ok(!hallada, `${que}: no debía tener ${hallada} en «${className}»`);
+  }
 }
 
 console.log('--- V1 TEST 1: textoAtrasados ---');
@@ -149,9 +165,14 @@ console.log('--- V5 TEST: barra de pasos del pedido con las etiquetas separadas 
   const inicio = venta.indexOf('{STEPS.map((s, i) => (');
   assert.ok(inicio > 0, 'barra de pasos encontrada');
   const pasos = venta.slice(inicio, venta.indexOf('))}', inicio));
-  assert.ok(/className="relative z-10 flex flex-1 basis-0 min-w-0 flex-col items-center gap-2 px-1"/.test(pasos),
+  // Ronda 1 (6): clases sueltas, no la cadena exacta.
+  const columna = pasos.match(/<div key=\{s\.key\} className="([^"]*)"/);
+  assert.ok(columna, 'columna de cada paso encontrada');
+  conClases(columna[1], ['flex', 'flex-1', 'basis-0', 'min-w-0', 'flex-col', 'items-center', 'px-1'], [],
     'cada paso es una columna del mismo ancho, con su espacio a los lados');
-  assert.ok(/<span className=\{`text-center text-xs font-bold leading-tight break-words /.test(pasos),
+  const etiqueta = pasos.match(/<span className=\{`([^`$]*)/);
+  assert.ok(etiqueta, 'etiqueta de cada paso encontrada');
+  conClases(etiqueta[1], ['text-center', 'leading-tight', 'break-words'], ['whitespace-nowrap'],
     'la etiqueta va centrada bajo su paso y puede partirse en dos líneas');
 }
 
@@ -188,14 +209,77 @@ console.log('--- V8 TEST 2: los avatares de la Actividad de la SC y la COT usan 
   }
 }
 
-console.log('--- V10 TEST: la pila de avisos va arriba a la derecha ---');
+console.log('--- V10 TEST (ronda 1): la pila de avisos va arriba al centro ---');
 {
   const avisos = sinComentarios(leer('components/ui/Avisos.tsx'));
-  const pila = avisos.match(/<div className="fixed [^"]*z-\[90\][^"]*">/);
+  const pila = avisos.match(/<div className="([^"]*\bz-\[90\][^"]*)">/);
   assert.ok(pila, 'la pila de avisos (z-[90]) encontrada');
-  assert.ok(/\btop-4 right-6\b/.test(pila[0]), `arriba a la derecha: ${pila[0]}`);
-  assert.ok(!/\bbottom-/.test(pila[0]), 'ya no va abajo (tapaba el botón principal de las ventanas)');
-  assert.ok(/flex flex-col items-end gap-2 max-w-sm pointer-events-none/.test(pila[0]), 'mismo orden y comportamiento');
+  // Arriba al centro (decisión del controlador, ronda 1): a la derecha tapaba «Editar» y «Cancelar Solicitud» de las
+  // cabeceras, y abajo el botón principal de las ventanas. Mismo z-index, orden (flex-col) y pointer-events.
+  conClases(pila[1], ['fixed', 'top-4', 'left-1/2', '-translate-x-1/2', 'z-[90]', 'flex', 'flex-col', 'items-center',
+    'pointer-events-none'], [/^right-/, /^bottom-/, 'items-end'], 'pila de avisos');
+  // Cada tarjeta sigue recibiendo el puntero (pausa del tiempo y botón de cerrar).
+  assert.ok(/className=\{`pointer-events-auto /.test(avisos), 'cada tarjeta con pointer-events-auto');
+  assert.ok(/onPointerEnter=\{\(\) => setPausado\(true\)\}/.test(avisos), 'la pausa con el puntero sigue');
+}
+
+console.log('--- R1 (2) TEST: la cabecera de la SC baja de línea a 1024 en vez de salirse ---');
+{
+  const sc = sinComentarios(leer('app/dashboard/ventas/solicitud/[id]/page.tsx'));
+  const inicio = sc.indexOf('<BotonVolver href={destinoVolver(safeReturnTo');
+  assert.ok(inicio > 0, 'cabecera de la SC encontrada');
+  // Los className de la barra, en orden: la barra y el bloque izquierdo (antes de BotonVolver); después, el grupo del
+  // número, el h1 y los botones.
+  const barra = [...sc.slice(0, inicio).matchAll(/className="([^"]*)"/g)].slice(-2);
+  assert.equal(barra.length, 2);
+  conClases(barra[0][1], ['flex', 'flex-wrap', 'items-center', 'justify-between', 'gap-x-4', 'gap-y-3'], [], 'barra de la SC');
+  conClases(barra[1][1], ['flex', 'items-center', 'gap-4', 'min-w-0'], [], 'bloque izquierdo de la SC');
+  const despues = sc.slice(inicio, sc.indexOf('Cancelar Solicitud</Button>', inicio));
+  const resto = [...despues.matchAll(/className="([^"]*)"/g)].map((m) => m[1]);
+  assert.ok(resto.length >= 3, `className de la cabecera: ${resto.length}`);
+  conClases(resto[0], ['flex', 'flex-wrap', 'items-center', 'gap-3'], [], 'grupo del número de la SC');
+  assert.ok(/<h1 className="[^"]*\bwhitespace-nowrap\b[^"]*">\{solicitud\?\.numero/.test(despues), 'el número no se parte');
+  conClases(resto[2], ['flex', 'flex-wrap', 'items-center', 'gap-2', 'ml-auto'], [], 'botones de la SC');
+}
+
+console.log('--- R1 (3) TEST: el chip de la PXP cancelada usa textoChipPxp ---');
+{
+  const venta = sinComentarios(leer('app/dashboard/ventas/venta/[id]/page.tsx'));
+  assert.ok(venta.includes('{textoChipPxp(pxpCancelada)}'), 'chip de la PXP cancelada con textoChipPxp');
+  assert.ok(!/PXP \{pxpCancelada\.numero\} cancelada/.test(venta), 'sin el texto armado a mano («PXP PXP-… cancelada»)');
+}
+
+console.log('--- R1 (4) TEST: la tarjeta de Activas de la pestaña Análisis no contradice al banner ---');
+{
+  const lista = sinComentarios(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx'));
+  assert.ok(!lista.includes('Todas en seguimiento regular'), 'sin el texto que ignoraba las vencidas');
+  const usos = lista.match(/hint=\{pistaActivasSolicitudes\(sinAtender,\s*vencidas\)\}/g) ?? [];
+  assert.equal(usos.length, 2, 'la tarjeta de la lista y la de Análisis usan la misma pista');
+}
+
+console.log('--- R1 (5) TEST 1: botonALaVista (el centro del botón dentro de la ventana y de sus contenedores) ---');
+{
+  const ventana = { top: 0, left: 0, right: 1440, bottom: 900 };
+  const boton = { top: 100, bottom: 127, left: 880, right: 907 };
+  assert.equal(botonALaVista(boton, [ventana]), true);
+  assert.equal(botonALaVista(boton, [ventana, { top: 50, left: 300, right: 1400, bottom: 800 }]), true);
+  // Fuera de la ventana (desplazado hacia arriba) o fuera del contenedor con overflow (la tabla desplazada).
+  assert.equal(botonALaVista({ top: -40, bottom: -13, left: 880, right: 907 }, [ventana]), false);
+  assert.equal(botonALaVista(boton, [ventana, { top: 130, left: 300, right: 1400, bottom: 800 }]), false, 'tapado arriba');
+  assert.equal(botonALaVista(boton, [ventana, { top: 50, left: 300, right: 890, bottom: 800 }]), false, 'tapado a la derecha');
+  // Medio botón a la vista: el centro decide (113,5 dentro de [110, 800] sí; dentro de [115, 800] no).
+  assert.equal(botonALaVista(boton, [ventana, { top: 110, left: 300, right: 1400, bottom: 800 }]), true);
+  assert.equal(botonALaVista(boton, [ventana, { top: 115, left: 300, right: 1400, bottom: 800 }]), false);
+  // Sin rectángulo (el botón ya no está): no está a la vista. Sin recortes: a la vista.
+  assert.equal(botonALaVista(null, [ventana]), false);
+  assert.equal(botonALaVista(boton, []), true);
+}
+
+console.log('--- R1 (5) TEST 2: RowMenu se cierra si su botón sale de la vista ---');
+{
+  const rowMenu = cuerpo(sinComentarios(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx')), 'function RowMenu(');
+  assert.ok(/if\s*\(\s*!botonALaVista\([^)]*\)\s*\)\s*\{\s*setOpen\(false\)/.test(rowMenu), 'fuera de la vista: setOpen(false)');
+  assert.ok(/recortesDe\(/.test(rowMenu), 'con los contenedores que recortan (overflow) además de la ventana');
 }
 
 console.log('OK test_ajustes_visuales_b2.mjs');

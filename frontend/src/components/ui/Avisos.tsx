@@ -186,10 +186,11 @@ export function AvisosProvider({ children }: { children: React.ReactNode }) {
       {children}
       {/* R24: los toast() de react-hot-toast (CRM, Agenda, Cotizador, Calendario, Finanzas) no tenían dónde verse. */}
       <Toaster position="top-center" containerStyle={{ zIndex: 95 }} />
-      {/* T11 (V10): arriba a la derecha (el lugar que dejó libre el aviso de atrasados, que pasó al menú lateral): abajo
-          tapaba el botón principal de las ventanas (p. ej. «Crear Solicitud») y queda lejos del botón del Chat IA
-          (bottom-6 right-6). Mismo orden, z-index y comportamiento. */}
-      <div className="fixed top-4 right-6 z-[90] flex flex-col items-end gap-2 max-w-sm pointer-events-none">
+      {/* T11 (V10, ronda 1): arriba al centro. Abajo tapaba el botón principal de las ventanas (p. ej. «Crear Solicitud»)
+          y arriba a la derecha tapaba «Editar» y «Cancelar Solicitud» de las cabeceras (y la pausa con el puntero lo
+          dejaba quieto justo al ir al botón). Ancho de hasta 24rem sin salirse de la ventana. Mismo orden, z-index y
+          comportamiento; el modal de sesión (z-[100]) sigue encima. */}
+      <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[90] flex flex-col items-center gap-2 w-[min(24rem,calc(100vw_-_2rem))] pointer-events-none">
         {avisos.map((aviso) => (
           <TarjetaAviso key={aviso.id} aviso={aviso} onCerrar={cerrarAviso} />
         ))}

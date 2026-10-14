@@ -24,7 +24,7 @@ import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas
 import {
   diasAlerta, generoCotizacion, cotizacionesVigentes, contadoresSolicitudes, tasaConversionCotizacion,
   superaDiasAlerta, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera, esSolicitudActiva,
-  pestanaDeSolicitud, pistaActivasSolicitudes, posicionMenuFila,
+  pestanaDeSolicitud, pistaActivasSolicitudes, posicionMenuFila, botonALaVista,
 } from '@/lib/listas-ventas';
 import { comoUTC } from '@/lib/hub-ventas';
 import { mailtoUrl, telUrl, motivoTelefono } from '@/lib/chatter';
@@ -446,6 +446,16 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
 });
 
 // â”€â”€ 3-dot Row Menu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// T11 ronda 1 (5): lo que recorta al botón «⋮»: la ventana y cada ancestro con overflow distinto de visible (el
+// overflow-x-auto de la tabla, la tarjeta con overflow-hidden, el <main> que se desplaza), en coordenadas de la ventana.
+function recortesDe(el:HTMLElement|null){
+  const recortes:{top:number;left:number;right:number;bottom:number}[]=[{top:0,left:0,right:window.innerWidth,bottom:window.innerHeight}];
+  for(let p=el?.parentElement;p&&p!==document.body;p=p.parentElement){
+    const {overflowX,overflowY}=getComputedStyle(p);
+    if(overflowX!=='visible'||overflowY!=='visible') recortes.push(p.getBoundingClientRect());
+  }
+  return recortes;
+}
 function RowMenu({sc,onView,onReiniciar,onCancel,onSendToTrash}:{sc:any;onView:()=>void;onReiniciar:()=>void;onCancel:()=>void;onSendToTrash:()=>void}) {
   const [open,setOpen]=useState(false);
   const ref=useRef<any>(null);
@@ -460,13 +470,16 @@ function RowMenu({sc,onView,onReiniciar,onCancel,onSendToTrash}:{sc:any;onView:(
   // T11 (V2): el menú va con position: fixed calculado desde el botón (posicionMenuFila): el overflow del contenedor de
   // la tabla ya no lo corta, y si no cabe abajo se abre hacia arriba. Se mide antes de pintar (useLayoutEffect) y se
   // recalcula al desplazar o cambiar el tamaño de la ventana, para que siga pegado al botón. Sigue dentro de `ref`: el
-  // clic afuera lo cierra igual que antes.
+  // clic afuera lo cierra igual que antes. Ronda 1 (5): si al desplazar el botón sale de la vista (de la ventana o de un
+  // contenedor que lo recorta), el menú se cierra en vez de quedar flotando pegado al borde.
   useLayoutEffect(()=>{
     if(!open) return;
     function ubicar(){
       const boton=botonRef.current?.getBoundingClientRect();
       const menu=menuRef.current;
       if(!boton||!menu) return;
+      const recortes=recortesDe(botonRef.current);
+      if(!botonALaVista(boton,recortes)){setOpen(false);return;}
       setPosicion(posicionMenuFila(boton,{ancho:menu.offsetWidth,alto:menu.offsetHeight},{ancho:window.innerWidth,alto:window.innerHeight}));
     }
     ubicar();
@@ -1439,10 +1452,11 @@ export default function SolicitudClient() {
                   label="Tasa de Conversión"
                   value={`${tasaConv.pct.toFixed(1)}%`}
                   hint={`${tasaConv.conCot} de ${tasaConv.total} solicitudes de cotización generaron cotización`}/>
+                {/* T11 ronda 1: la misma pista que la tarjeta ACTIVAS de la lista (V7): cuenta también las vencidas. */}
                 <StatCard icon={Clock} color="amber"
                   label="Solicitudes Activas"
                   value={totalActivas}
-                  hint={sinAtender > 0 ? `${sinAtender} requieren atención urgente` : 'Todas en seguimiento regular'}/>
+                  hint={pistaActivasSolicitudes(sinAtender, vencidas)}/>
                 <StatCard icon={AlertTriangle} color="rose"
                   label="Cancelaciones"
                   value={solicitudes.filter(s=>s.estado==='CANCELADA').length}

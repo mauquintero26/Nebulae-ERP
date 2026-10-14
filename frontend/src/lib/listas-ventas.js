@@ -9,7 +9,8 @@
  *  - N10: opcionesFiltroEstado del filtro de estado de la lista de pedidos.
  *  - H32 / N4 / N7 (Solicitudes): generoCotizacion / cotizacionesVigentes / contadoresSolicitudes / tasaConversionCotizacion
  *    de la lista, superaDiasAlerta (N8), resumenCancelacionSolicitudes, estadoEnPapelera y pasosParaCancelarSolicitud.
- *  - T11 (ronda visual): pistaActivasSolicitudes (tarjeta ACTIVAS, V7) y posicionMenuFila (menú «⋮» de la fila, V2).
+ *  - T11 (ronda visual): pistaActivasSolicitudes (tarjeta ACTIVAS, V7), posicionMenuFila (menú «⋮» de la fila, V2) y
+ *    botonALaVista (ronda 1: el menú se cierra si su botón sale de la vista).
  */
 import { ESTADOS_PEDIDO_CERRADOS, grupoPedido, esCotizacionActiva, esPedidoVigente } from './estados-pedido.js';
 import { comoUTC, esSoporte } from './hub-ventas.js';
@@ -358,6 +359,21 @@ export function posicionMenuFila(boton, menu, ventana) {
     top: Math.round(dentro(deseado, ventana.alto - MARGEN_MENU_FILA - menu.alto)),
     left: Math.round(dentro(boton.right - menu.ancho, ventana.ancho - MARGEN_MENU_FILA - menu.ancho)),
   };
+}
+
+/**
+ * T11 ronda 1 (5): si el botón «⋮» sigue a la vista: el centro de su rectángulo está dentro de cada recorte (la ventana y
+ * los contenedores con overflow que lo contienen, todos en coordenadas de la ventana). Si al desplazar sale de la vista,
+ * su menú (fixed) se cierra en vez de quedar flotando pegado al borde. Sin rectángulo: false; sin recortes: true.
+ * @param {{top: number, bottom: number, left: number, right: number} | null | undefined} boton
+ * @param {{top: number, bottom: number, left: number, right: number}[]} recortes
+ * @returns {boolean}
+ */
+export function botonALaVista(boton, recortes) {
+  if (!boton) return false;
+  const x = (boton.left + boton.right) / 2;
+  const y = (boton.top + boton.bottom) / 2;
+  return (recortes || []).every((r) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
 }
 
 /**
