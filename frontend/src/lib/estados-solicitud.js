@@ -112,14 +112,16 @@ export const RELLENOS_INVISIBLES = congelar(['\u115f', '\u1160', '\u3164', '\uff
 // Lo que str.isspace() de Python cuenta como espacio (Zs y los saltos de línea y tabuladores de Cc, Zl y Zp). El \s de JS
 // no sirve: incluye U+FEFF (formato) y deja fuera U+001C–U+001F y U+0085.
 const ESPACIO = /^[\t\n\v\f\r\x1c-\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]$/u;
-const FORMATO_O_CONTROL = /^[\p{Cf}\p{Cc}\p{Zl}\p{Zp}]$/u;
+// B2.1 T2 r1: también los surrogates sueltos (Cs), como _motivo_limpio del servidor (psycopg2 no los guarda).
+const FORMATO_O_CONTROL = /^[\p{Cf}\p{Cc}\p{Cs}\p{Zl}\p{Zp}]$/u;
 // str.isalnum() de Python, un carácter: categorías L* y N*.
 const LETRA_O_DIGITO = /^[\p{L}\p{N}]$/u;
 
 /**
  * T11 calidad (D1): el motivo tal como lo mide y lo guarda el servidor (_motivo_limpio de /cotizar-sin-confirmacion):
- * NFKC; sin caracteres de formato (Cf: U+200B, U+00AD, U+FEFF…) ni de control (Cc) ni RELLENOS_INVISIBLES; cualquier
- * espacio o salto de línea cuenta como un espacio, los seguidos quedan en uno y se quitan los de los bordes. Lo que no
+ * NFKC; sin caracteres de formato (Cf: U+200B, U+00AD, U+FEFF…) ni de control (Cc) ni surrogates sueltos (Cs, B2.1 T2
+ * r1) ni RELLENOS_INVISIBLES; cualquier espacio o salto de línea cuenta como un espacio, los seguidos quedan en uno y se
+ * quitan los de los bordes. Lo que no
  * es texto da ''. La paridad con el servidor depende de la versión de Unicode de cada lado (node/ICU y Python): un
  * carácter nuevo puede clasificarse distinto; el servidor sigue siendo la autoridad y responde el 422 legible.
  * @param {any} texto

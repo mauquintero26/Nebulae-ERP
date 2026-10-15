@@ -340,6 +340,10 @@ console.log('--- T11 calidad D1: el motivo de «Cotizar sin confirmación» se l
     ['x'.repeat(500) + '\u200b'.repeat(20), 'x'.repeat(500), null],
     ['y'.repeat(501) + '\u200b', 'y'.repeat(501), largo],
     ['Ｃｌｉｅｎｔｅ urgente', 'Cliente urgente', null],  // NFKC: ancho completo
+    // B2.1 T2 r1: los surrogates sueltos (Cs, U+D800–U+DFFF) se quitan; un par válido (emoji) se queda.
+    ['\ud800'.repeat(12), '', corto],
+    ['\ud800Cliente pidió precio\udfff urgente\udc00', 'Cliente pidió precio urgente', null],
+    ['Cliente pidió precio 😀', 'Cliente pidió precio 😀', null],
   ];
   for (const [crudo, limpio, error] of casos) {
     assert.equal(motivoLimpio(crudo), limpio, JSON.stringify(crudo).slice(0, 40));

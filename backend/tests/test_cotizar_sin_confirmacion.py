@@ -1093,6 +1093,52 @@ def test_d6_sin_restauracion_posterior_retomar_no_pide_motivo_y_el_que_sobra_se_
     assert (fila.sin_confirmacion_sc_at, fila.sin_confirmacion_sc_motivo) == (marca, MOTIVO)
 
 
+def test_b21_r1_un_surrogate_suelto_en_el_motivo_no_da_500(app_client, db, admin_token, user_admin):
+    """B2.1 T2 r1: un surrogate suelto (Cs, U+D800-U+DFFF; llega con un JSON escrito a mano, "\\ud800") pasaba
+    _motivo_limpio y psycopg2 no lo puede guardar: 500. Ahora _motivo_limpio lo quita, en /cotizar-sin-confirmacion y al
+    retomar con un motivo nuevo (D6): con texto de verdad se guarda limpio (200) y solo surrogates es el 422 de S5."""
+    import json
+    from app.models.erp_documents import SalesQuotation
+    corto = "El motivo debe tener al menos 10 caracteres."
+    con_surrogates = "\ud800Cliente pidió precio\udfff urgente\udc00"
+    limpio = "Cliente pidió precio urgente"
+
+    def _json_crudo(metodo, ruta, body):
+        # json.dumps escapa el surrogate como \ud800 (json= de httpx no puede codificarlo en UTF-8).
+        return getattr(app_client, metodo)(ruta, content=json.dumps(body),
+                                           headers={**auth(admin_token), "Content-Type": "application/json"})
+
+    sc = _sc(db, "SC-CSC062", user_admin)
+    resp = _json_crudo("post", f"/api/v1/ventas/solicitudes/{sc.id}/cotizar-sin-confirmacion",
+                       {"motivo": "\ud800" * 12})
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == corto
+    assert _cots_de(db, sc.id) == []
+    resp = _json_crudo("post", f"/api/v1/ventas/solicitudes/{sc.id}/cotizar-sin-confirmacion",
+                       {"motivo": con_surrogates})
+    assert resp.status_code == 200, resp.text
+    cot = resp.json()["data"]["cotizacion"]
+    assert cot["sin_confirmacion_sc_motivo"] == limpio
+    [renglon] = _logs(db, "SC", sc.id, "COTIZADA_SIN_CONFIRMACION")
+    assert renglon.description.endswith(f"Motivo: {limpio}")
+
+    # D6: el mismo motivo al retomar tras cancelar y restaurar la SC.
+    _rechazar(app_client, admin_token, cot["id"])
+    _cancelar_y_restaurar(app_client, admin_token, sc.id)
+    ruta = f"/api/v1/ventas/cotizaciones/{cot['id']}"
+    resp = _json_crudo("patch", ruta, {"estado": "BORRADOR", "updated_by": "t", "motivo_sin_confirmacion": "\udc00" * 12})
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == corto
+    nuevo = "\ud800Cliente volvió a pedir\udfff la cotización"
+    resp = _json_crudo("patch", ruta, {"estado": "BORRADOR", "updated_by": "t", "motivo_sin_confirmacion": nuevo})
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    fila = db.get(SalesQuotation, cot["id"])
+    assert fila.estado == "BORRADOR" and fila.sin_confirmacion_sc_motivo == "Cliente volvió a pedir la cotización"
+    assert _logs(db, "COT", cot["id"], "ESTADO_CHANGED")[-1].description == (
+        "Estado cambiado a Borrador. Motivo nuevo: Cliente volvió a pedir la cotización")
+
+
 # --- get_cotizacion: estado de la SC con la misma lectura -------------------------------------------------------------
 
 def test_el_detalle_de_la_cotizacion_trae_el_estado_de_la_solicitud_sin_otra_consulta(

@@ -34,13 +34,14 @@ export function etiquetaTipoSolicitud(tipo) {
 
 /**
  * La modalidad de pago lista para comparar, igual que _sin_tildes del backend (ventas_dinero.py): NFKD (también los
- * caracteres de ancho completo), sin tildes, en minúsculas y sin espacios en los bordes. null -> ''.
+ * caracteres de ancho completo), sin tildes, sin caracteres de formato (Cf: BOM, U+200B, guion blando; B2.1 T2 r1), en
+ * minúsculas y sin espacios en los bordes. null -> ''.
  * @param {any} modalidad
  * @returns {string}
  */
 export function claveModalidad(modalidad) {
   if (modalidad === null || modalidad === undefined) return '';
-  return normalizarBusqueda(String(modalidad).normalize('NFKD'));
+  return normalizarBusqueda(String(modalidad).normalize('NFKD').replace(/\p{Cf}/gu, ''));
 }
 
 /**

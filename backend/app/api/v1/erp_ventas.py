@@ -1877,12 +1877,13 @@ def _motivo_limpio(texto: str) -> str:
     """S5 (T11): el motivo de la excepcion a Gate 1 tal como se mide y se guarda. NFKC; sin caracteres de formato (Cf:
     U+200B, U+00AD, U+FEFF...) ni de control (Cc) ni rellenos Hangul; cualquier espacio o salto de linea (Zs, Zl, Zp,
     tabuladores) cuenta como un espacio, los seguidos quedan en uno y se quitan los de los bordes. Un salto de linea no
-    pega las palabras vecinas: se vuelve un espacio en vez de desaparecer."""
+    pega las palabras vecinas: se vuelve un espacio en vez de desaparecer. B2.1 T2 r1: tampoco surrogates sueltos (Cs,
+    U+D800-U+DFFF, de un JSON escrito a mano): psycopg2 no los puede guardar y el POST o el PATCH daban 500."""
     partes = []
     for ch in unicodedata.normalize("NFKC", texto):
         if ch.isspace():
             partes.append(" ")
-        elif unicodedata.category(ch) not in ("Cf", "Cc", "Zl", "Zp") and ch not in _RELLENOS_INVISIBLES:
+        elif unicodedata.category(ch) not in ("Cf", "Cc", "Cs", "Zl", "Zp") and ch not in _RELLENOS_INVISIBLES:
             partes.append(ch)
     return re.sub(" {2,}", " ", "".join(partes)).strip()
 

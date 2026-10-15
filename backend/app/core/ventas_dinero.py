@@ -82,8 +82,12 @@ def formato_pct(pct) -> str:
 # ─── Anticipo de la cotizacion (H36+H43, R2, R3) ─────────────────────────────────────────────────────
 
 def _sin_tildes(texto) -> str:
+    """NFKD, sin tildes (marcas combinantes) ni caracteres de formato (Cf: BOM U+FEFF, U+200B, guion blando...), en
+    minusculas y sin espacios en los bordes. B2.1 T2 r1: sin Cf, como claveModalidad del frontend (su trim() ya quitaba
+    el BOM): '\\ufeffCredito 30 dias' es credito en los dos lados."""
     descompuesto = unicodedata.normalize("NFKD", str(texto))
-    return "".join(c for c in descompuesto if not unicodedata.combining(c)).lower().strip()
+    return "".join(c for c in descompuesto
+                   if not unicodedata.combining(c) and unicodedata.category(c) != "Cf").lower().strip()
 
 
 def pct_anticipo_de_modalidad(modalidad):

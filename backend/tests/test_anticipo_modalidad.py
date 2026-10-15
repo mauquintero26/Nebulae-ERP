@@ -88,8 +88,10 @@ def test_d7_solo_la_lista_exacta_de_modalidades_a_credito_cobra_0():
     from app.core.ventas_dinero import MODALIDADES_CREDITO
     assert MODALIDADES_CREDITO == frozenset({"credito", "credito 30 dias", "credito 60 dias"})
     for modalidad in ("Credito 30 dias", "Crédito 60 días", "CREDITO 30 DIAS", "credito", "  Crédito 30 Días  ",
-                      "Ｃｒｅｄｉｔｏ 60 dias"):
-        assert pct_anticipo_de_modalidad(modalidad) == Decimal("0"), modalidad
+                      "Ｃｒｅｄｉｔｏ 60 dias",
+                      # r1: los caracteres de formato (Cf) no cuentan, como en claveModalidad del frontend
+                      "﻿Credito 30 dias", "Cre­dito 60 dias​"):
+        assert pct_anticipo_de_modalidad(modalidad) == Decimal("0"), ascii(modalidad)
     for modalidad in ("Cruce de cuentas", "Pago a credito", "Credito 2 cuotas", "cr. 90 dias", "Credito 30d",
                       "Credito 90 dias", "Credito  30 dias", "Descreditos"):
         assert pct_anticipo_de_modalidad(modalidad) is None, modalidad

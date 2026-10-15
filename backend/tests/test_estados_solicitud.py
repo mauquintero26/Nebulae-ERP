@@ -152,6 +152,8 @@ _FRONTEND_LIB = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib"
 _MODALIDADES = ["60/40 (60% anticipo - 40% pendiente)", "Contado", "  CONTADO ", "Credito 30 dias", "Credito 60 dias",
                 "Crédito 60 Días", "Credito 30 Dias", "Credito 30d", "cr. 90 dias", "CRÉDITO", "Otro", "", "   ",
                 "Adelanto 50%", "Contra entrega", None,
+                # B2.1 T2 r1: los caracteres de formato (Cf: BOM U+FEFF, guion blando U+00AD) no cuentan en ningun lado
+                "﻿Credito 30 dias", "Cre­dito 60 dias",
                 # B2.1 (D7): solo la lista exacta es credito (con ancho completo via NFKD); lo que empieza por 'cr' o
                 # dice 'credito' fuera de ella cae en None, en los dos lados.
                 "CREDITO 30 DIAS", "credito", "  Crédito 60 días ", "Ｃｒｅｄｉｔｏ 30 dias",
@@ -198,6 +200,7 @@ def test_paridad_pct_anticipo_de_modalidad_con_el_frontend():
     assert backend[-8:] == [0, 0, 0, 0, None, None, None, None]  # D7: la lista exacta, y lo que no esta en ella
     por_modalidad = dict(zip(_MODALIDADES, backend))
     assert por_modalidad["cr. 90 dias"] is None and por_modalidad["Credito 30d"] is None
+    assert por_modalidad["﻿Credito 30 dias"] == 0 and por_modalidad["Cre­dito 60 dias"] == 0  # r1: sin Cf
 
 
 def test_paridad_lista_de_modalidades_a_credito_con_el_frontend():
@@ -246,7 +249,10 @@ def test_t11_d1_paridad_del_motivo_limpio_con_el_frontend():
              "precio\nurgente", "precio\r\n\turgente ahora", z(0x1C) + "abcdefghij" + z(0x85) + z(0x1F),
              "  Cliente" + z(0x200B) + " pidió" + z(0xA0) * 2 + "precio\n\nurgente   por teléfono" + z(0xAD) + " \t",
              "12345 " + z(0x3000) + z(0x205F) + " listo", "x" * 500 + z(0x200B) * 20, "y" * 501, "y" * 501 + z(0x200B),
-             "Ｃｌｉｅｎｔｅ urgente", "ñandú 2026", "", "   ", "a" * 9, "١٢٣٤٥ números"]
+             "Ｃｌｉｅｎｔｅ urgente", "ñandú 2026", "", "   ", "a" * 9, "١٢٣٤٥ números",
+             # B2.1 T2 r1: surrogates sueltos (Cs) solos, entre palabras y en los bordes; un par valido (emoji) se queda
+             z(0xD800) * 12, z(0xD800) + "Cliente pidió precio" + z(0xDFFF) + " urgente" + z(0xDC00),
+             "Cliente pidió precio " + z(0x1F600)]
     espejo = _node("estados-solicitud.js", """{
       minLetras: m.MOTIVO_SIN_CONFIRMACION_MIN_LETRAS,
       casos: %s.map(t => [m.motivoLimpio(t), m.errorMotivoSinConfirmacion(t)]),
@@ -258,6 +264,12 @@ def test_t11_d1_paridad_del_motivo_limpio_con_el_frontend():
     assert {b[1] for b in backend} == {None, "El motivo debe tener al menos 10 caracteres.",
                                       "El motivo debe tener al menos 5 letras o números.",
                                       "El motivo no puede tener más de 500 caracteres."}
+    # B2.1 T2 r1: un surrogate suelto no se puede guardar (psycopg2 -> 500): el motivo limpio ya no lo trae.
+    por_caso = dict(zip(casos, backend))
+    assert por_caso[z(0xD800) * 12] == ["", "El motivo debe tener al menos 10 caracteres."]
+    assert por_caso[z(0xD800) + "Cliente pidió precio" + z(0xDFFF) + " urgente" + z(0xDC00)] == [
+        "Cliente pidió precio urgente", None]
+    assert por_caso["Cliente pidió precio " + z(0x1F600)] == ["Cliente pidió precio " + z(0x1F600), None]
 
 
 # ─── 3-8) la SC no refleja a su COT ──────────────────────────────────────────────────────────────────────────

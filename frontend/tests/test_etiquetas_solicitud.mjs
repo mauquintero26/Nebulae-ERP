@@ -42,6 +42,8 @@ console.log('--- TEST 3: paridad de pctAnticipoDeModalidad con el backend (R2) -
     [undefined, null], ['Adelanto 50%', null],
     // B2.1 (D7): solo la lista exacta es crédito (sin tildes ni mayúsculas; ancho completo vía NFKD).
     ['CREDITO 30 DIAS', 0], ['credito', 0], ['  Crédito 60 días ', 0], ['Ｃｒｅｄｉｔｏ 30 dias', 0],
+    // B2.1 T2 r1: los caracteres de formato (Cf: BOM, guion blando, U+200B) no cuentan, como en el backend.
+    ['﻿Credito 30 dias', 0], ['Cre­dito 60 dias​', 0],
     // Lo que empieza por 'cr' o dice 'credito' fuera de la lista cae en null (60 por defecto), como en el backend.
     ['Cruce de cuentas', null], ['Pago a credito', null], ['Credito 2 cuotas', null], ['cr. 90 dias', null],
     ['Credito 30d', null], ['Credito 90 dias', null], ['Credito  30 dias', null],
