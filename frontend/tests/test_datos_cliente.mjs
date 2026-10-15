@@ -353,4 +353,38 @@ console.log('--- TEST 10 (T10, H21 punto 7): itemDeTimelineCliente — el Timeli
   }
 }
 
+console.log('--- Revisión final (F8): textoContactoAnula, solo cuando hay algo que anular ---');
+{
+  const { textoContactoAnula } = await import('../src/lib/datos-cliente.js');
+  const { readFileSync } = await import('node:fs');
+  const ANULA = 'Si cambias el correo o el teléfono, la confirmación del cliente se anula y hay que enviársela de nuevo.';
+  const NO_VALE = 'Si cambias el correo o el teléfono, la confirmación anterior del cliente ya no vale; la cotización activa '
+    + 'sigue igual.';
+  // Sin confirmación ni enlace que anular (Nueva, Asignada, Cancelada, Soporte, heredados): nada.
+  for (const estado of ['BORRADOR', 'ASIGNADA', 'CANCELADA', 'N/A_SOPORTE', 'COTIZADA', '', null, undefined]) {
+    for (const cotizacionActiva of [false, true]) {
+      assert.equal(textoContactoAnula({ estado, confirmacion_vigente: true }, { cotizacionActiva }), '', `${estado} ${cotizacionActiva}`);
+    }
+  }
+  assert.equal(textoContactoAnula(null), '');
+  assert.equal(textoContactoAnula(undefined, { cotizacionActiva: true }), '');
+  // Pendiente por confirmación (con o sin la cotización temprana) o Confirmada sin cotización activa: vuelve a
+  // Asignada (R18) y hay que reenviarla.
+  assert.equal(textoContactoAnula({ estado: 'PENDIENTE_CONFIRMACION' }), ANULA);
+  assert.equal(textoContactoAnula({ estado: 'PENDIENTE_CONFIRMACION' }, { cotizacionActiva: true }), ANULA);
+  assert.equal(textoContactoAnula({ estado: 'CONFIRMADA', confirmacion_vigente: true }, { cotizacionActiva: false }), ANULA);
+  // Confirmada con una cotización activa: el estado no cambia; la confirmación anterior deja de valer (el texto del
+  // aviso 4)… si el cliente la confirmó por el enlace. Confirmada por su cotización (sin la marca): nada que anular.
+  assert.equal(textoContactoAnula({ estado: 'CONFIRMADA', confirmacion_vigente: true }, { cotizacionActiva: true }), NO_VALE);
+  assert.equal(textoContactoAnula({ estado: 'CONFIRMADA' }, { cotizacionActiva: true }), NO_VALE, 'sin el dato: se avisa');
+  assert.equal(textoContactoAnula({ estado: 'CONFIRMADA', confirmacion_vigente: false }, { cotizacionActiva: true }), '');
+  // El final de la frase es el del aviso 4 de avisoCorreccionContacto (una sola redacción).
+  const aviso4 = avisoCorreccionContacto({ confirmacion_anulada: true, estado_cambiado: false, enlaces_anulados: [] }).texto;
+  assert.ok(aviso4.endsWith(NO_VALE.slice(NO_VALE.indexOf('confirmación anterior'))), aviso4);
+  // El detalle de la SC usa la función (ya no el texto fijo).
+  const detalle = readFileSync(new URL('../src/app/dashboard/ventas/solicitud/[id]/page.tsx', import.meta.url), 'utf8');
+  assert.ok(!detalle.includes('TEXTO_CONTACTO_ANULA'), 'sin el texto fijo');
+  assert.ok(detalle.includes('textoContactoAnula(solicitud, { cotizacionActiva: cotizacionesActivas.length > 0 })'));
+}
+
 console.log('OK test_datos_cliente');

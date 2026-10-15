@@ -363,4 +363,60 @@ console.log('--- T11 calidad D1: el motivo de «Cotizar sin confirmación» se l
   assert.ok(detalle.includes('disabled={!!errorMotivoSinConf}'), '«Crear cotización» usa errorMotivoSinConfirmacion');
 }
 
+/** El cuerpo de una función de la página: desde `marca` hasta `siguiente` (la siguiente función del mismo nivel). */
+function funcionDe(fuente, marca, siguiente) {
+  const inicio = fuente.indexOf(marca);
+  assert.ok(inicio >= 0, `no se encontró ${marca}`);
+  const fin = fuente.indexOf(siguiente, inicio + marca.length);
+  assert.ok(fin > inicio, `no se encontró el final de ${marca}`);
+  return fuente.slice(inicio, fin);
+}
+
+console.log('--- Revisión final (F10): un solo conjunto de estados con confirmación ---');
+{
+  const { ESTADOS_SC_CON_CONFIRMACION } = await import('../src/lib/estados-solicitud.js');
+  assert.deepEqual([...ESTADOS_SC_CON_CONFIRMACION], ['PENDIENTE_CONFIRMACION', 'CONFIRMADA']);
+  assert.ok(Object.isFrozen(ESTADOS_SC_CON_CONFIRMACION));
+  // puedeReiniciar lo usa (sin su propia lista) y la página del detalle lo toma de aquí.
+  const lib = readFileSync(new URL('../src/lib/estados-solicitud.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const reiniciar = funcionDe(lib, 'export function puedeReiniciar(', '\n}\n');
+  assert.ok(reiniciar.includes('ESTADOS_SC_CON_CONFIRMACION.includes(sc.estado)'), 'puedeReiniciar usa el conjunto');
+  assert.ok(!reiniciar.includes("'PENDIENTE_CONFIRMACION'"), 'sin la lista escrita a mano');
+  const detalle = readFileSync(new URL('../src/app/dashboard/ventas/solicitud/[id]/page.tsx', import.meta.url), 'utf8');
+  assert.ok(detalle.includes('anulaConfirmacion={ESTADOS_SC_CON_CONFIRMACION.includes(solicitud.estado)}'));
+  assert.ok(!detalle.includes('ESTADOS_CON_CONFIRMACION'), 'la página ya no lo toma de lineas-solicitud');
+}
+
+console.log('--- Revisión final (F7): cambiar el estado de soporte no borra lo escrito en «Editar» ---');
+{
+  const detalle = readFileSync(new URL('../src/app/dashboard/ventas/solicitud/[id]/page.tsx', import.meta.url), 'utf8')
+    .replace(/\r\n/g, '\n');
+  const soporte = funcionDe(detalle, 'async function changeEstadoSoporte(', '\n  async function ');
+  assert.ok(soporte.includes('await loadSolicitud({ silencioso: true });'), 'recarga silenciosa');
+  assert.ok(!soporte.includes('await loadSolicitud();'), 'sin la recarga completa (rehacía editForm)');
+  // Las dos ramas de respaldo de cotizar (sin el id de la COT) llevan el mismo cambio.
+  for (const [marca, siguiente] of [['async function confirmarSC(', '\n  // U11'], ['async function cotizarSinConfirmacion(', '\n  async function ']]) {
+    const cuerpoFn = funcionDe(detalle, marca, siguiente);
+    assert.ok(!cuerpoFn.includes('await loadSolicitud();'), marca);
+  }
+  // La única recarga completa que queda tras una acción es la de cancelar (la cancelada cierra «Editar»).
+  assert.equal((detalle.match(/await loadSolicitud\(\);/g) ?? []).length, 1);
+  assert.ok(funcionDe(detalle, 'async function cancelWithReason(', '\n  }\n').includes('await loadSolicitud();'));
+}
+
+console.log('--- Revisión final (F9): crear la solicitud no arrastra al usuario si ya se fue de la lista ---');
+{
+  const lista = readFileSync(new URL('../src/app/dashboard/ventas/solicitud/solicitud-client.tsx', import.meta.url), 'utf8')
+    .replace(/\r\n/g, '\n');
+  const crear = funcionDe(lista, 'async function createSolicitud(', '\n  function resetCreateForm(');
+  const guarda = crear.search(/if\s*\(\s*!vivo\.current\s*\)\s*\{/);
+  const ir = crear.indexOf('router.push(');
+  assert.ok(guarda > 0 && guarda < ir, 'comprueba vivo antes del router.push');
+  assert.ok(/avisar\(nueva\.numero\s*\?\s*`Solicitud \$\{nueva\.numero\} creada`\s*:\s*'Solicitud creada',\s*\{\s*accion:\s*\{\s*texto:\s*'Ver solicitud',\s*href\s*\}\s*\}\)/.test(crear),
+    'si ya se fue: avisar con «Ver solicitud»');
+  // El mismo patrón del detalle (confirmarSC): true al montar y false al desmontar.
+  assert.ok(/const vivo = useRef\(true\);/.test(lista));
+  assert.ok(/vivo\.current = true;\s*return \(\) => \{ vivo\.current = false; \};/.test(lista));
+}
+
 console.log('OK test_estados_solicitud');

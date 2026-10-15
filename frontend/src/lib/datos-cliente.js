@@ -10,10 +10,18 @@
  * (camposEditadosDeSolicitud), para que solo esos viajen en el PATCH.
  *
  * T10: también el renglón del «Timeline Unificado» de la Agenda, donde se ve la corrección del cliente (itemDeTimelineCliente).
+ *
+ * Revisión final: el texto de «Editar» sobre lo que anula cambiar el contacto, solo si hay algo que anular
+ * (textoContactoAnula).
  */
 
 import { tiene, humanizarCodigo } from './estados-pedido.js';
 import { diaLocalDeFecha, comoUTC, fechaEditadaParaGuardar } from './hub-ventas.js';
+import { ESTADOS_SC_CON_CONFIRMACION } from './estados-solicitud.js';
+
+// Revisión final (F8): el final del aviso 4 de avisoCorreccionContacto y del texto de «Editar» en Confirmada con una
+// cotización activa (una sola redacción).
+const CONFIRMACION_ANTERIOR_NO_VALE = 'confirmación anterior del cliente ya no vale; la cotización activa sigue igual.';
 
 /**
  * Los campos, en el orden del formulario. `max` = largo máximo (sin los espacios de los bordes); `soloConFicha` = solo
@@ -138,7 +146,7 @@ export function avisoCorreccionContacto(respuesta) {
   } else if (enlaces.length > 0) {
     principal = 'Datos corregidos. Se anuló el enlace que se había enviado al dato anterior: usa «Reenviar enlace de confirmación».';
   } else if (respuesta.confirmacion_anulada === true) {
-    principal = 'Datos corregidos. La confirmación anterior del cliente ya no vale; la cotización activa sigue igual.';
+    principal = `Datos corregidos. La ${CONFIRMACION_ANTERIOR_NO_VALE}`;
   } else {
     principal = 'Datos del cliente corregidos.';
     tono = 'ok';
@@ -149,6 +157,27 @@ export function avisoCorreccionContacto(respuesta) {
   if (otros) tono = 'info';
   const texto = [principal, otros].filter(Boolean).join(' ');
   return texto ? { texto, tono } : null;
+}
+
+/**
+ * Revisión final (F8): el texto gris de «Editar» sobre lo que anula cambiar el correo o el teléfono, solo cuando hay algo
+ * que anular (la regla R18 de _anular_confirmacion_por_cambio_de_cliente del backend):
+ * - fuera de ESTADOS_SC_CON_CONFIRMACION (Nueva, Asignada, Cancelada, Soporte…): '' (no hay confirmación ni enlace);
+ * - Pendiente por confirmación (con o sin la cotización temprana) o Confirmada sin cotización activa: la solicitud vuelve
+ *   a Asignada y hay que reenviársela;
+ * - Confirmada con una cotización activa: el estado no cambia y la confirmación anterior deja de valer (el texto del aviso
+ *   4 de avisoCorreccionContacto); '' si el cliente la confirmó por su cotización (confirmacion_vigente === false: sin la
+ *   marca de Gate 1 no hay nada que anular).
+ * @param {any} sc la solicitud (estado, confirmacion_vigente)
+ * @param {{ cotizacionActiva?: boolean }} [opciones] si la solicitud tiene una cotización activa
+ * @returns {string}
+ */
+export function textoContactoAnula(sc, { cotizacionActiva = false } = {}) {
+  if (!sc || !ESTADOS_SC_CON_CONFIRMACION.includes(sc.estado)) return '';
+  if (sc.estado === 'CONFIRMADA' && cotizacionActiva) {
+    return sc.confirmacion_vigente === false ? '' : `Si cambias el correo o el teléfono, la ${CONFIRMACION_ANTERIOR_NO_VALE}`;
+  }
+  return 'Si cambias el correo o el teléfono, la confirmación del cliente se anula y hay que enviársela de nuevo.';
 }
 
 /**

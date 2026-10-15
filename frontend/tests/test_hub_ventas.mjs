@@ -335,6 +335,29 @@ console.log('--- T11 calidad, ronda 1 (7): fusionarCargaHub, la recarga del Hub 
   assert.ok(!hub.includes('No se pudieron actualizar las listas (se muestran'), 'sin el texto viejo en el Hub');
 }
 
+console.log('--- Revisión final (F4): en el Hub, la última carga gana ---');
+{
+  // La recarga silenciosa de una nota del panel y la de «Actualizar» se pueden cruzar: la más lenta ya no pinta ni
+  // deja ultimaCarga (la base de fusionarCargaHub) con datos viejos. Mismo contador cargaRef de la COT y el PVEN.
+  const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const inicio = hub.indexOf('const loadData = useCallback(');
+  assert.ok(inicio > 0, 'loadData encontrado');
+  const bloque = hub.slice(inicio, hub.indexOf('},[avisar]);', inicio));
+  // El contador va dentro del bloque de E4, junto a ultimaCarga (R14: solo se toca ese bloque del Hub).
+  const antes = hub.slice(hub.indexOf('const ultimaCarga = React.useRef'), inicio);
+  assert.ok(/const cargaRef = React\.useRef\(0\);/.test(antes), 'cargaRef junto a ultimaCarga');
+  const toma = bloque.indexOf('const miCarga = ++cargaRef.current;');
+  const pide = bloque.indexOf('await Promise.all(');
+  const guarda = bloque.search(/if\s*\(\s*miCarga\s*!==\s*cargaRef\.current\s*\)\s*return;/);
+  const fusiona = bloque.indexOf('fusionarCargaHub(');
+  assert.ok(toma > 0 && toma < pide, 'toma su número antes de pedir');
+  assert.ok(guarda > pide && guarda < fusiona, 'una carga vieja sale antes de fusionar, pintar o tocar ultimaCarga');
+  assert.ok(/finally\s*\{\s*if\s*\(\s*miCarga\s*===\s*cargaRef\.current\s*\)\s*setLoading\(false\);\s*\}/.test(bloque),
+    'solo la última apaga el spinner');
+  assert.ok(/catch\s*\(err:any\)\s*\{\s*if\s*\(\s*miCarga\s*===\s*cargaRef\.current\s*\)\s*setToast\(/.test(bloque),
+    'el error de una carga vieja tampoco se muestra');
+}
+
 console.log('--- H3 TEST 12: esNoResuelto / esAccionTomada ---');
 {
   assert.equal(esNoResuelto({ tipo: 'SC', estado: 'ASIGNADA' }, new Set()), true);

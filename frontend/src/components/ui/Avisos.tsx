@@ -184,8 +184,10 @@ export function AvisosProvider({ children }: { children: React.ReactNode }) {
   return (
     <AvisosContext.Provider value={valor}>
       {children}
-      {/* R24: los toast() de react-hot-toast (CRM, Agenda, Cotizador, Calendario, Finanzas) no tenían dónde verse. */}
-      <Toaster position="top-center" containerStyle={{ zIndex: 95 }} />
+      {/* R24: los toast() de react-hot-toast (CRM, Agenda, Cotizador, Calendario, Finanzas) no tenían dónde verse.
+          Revisión final (F1): abajo al centro. Arriba al centro (z-95) tapaba la pila de avisos, que vive ahí y
+          sobrevive al cambio de ruta (un error de Ventas podía quedar oculto justo después de navegar). */}
+      <Toaster position="bottom-center" containerStyle={{ zIndex: 95 }} />
       {/* T11 (V10, ronda 1): arriba al centro. Abajo tapaba el botón principal de las ventanas (p. ej. «Crear Solicitud»)
           y arriba a la derecha tapaba «Editar» y «Cancelar Solicitud» de las cabeceras (y la pausa con el puntero lo
           dejaba quieto justo al ir al botón). Ancho de hasta 24rem sin salirse de la ventana. Mismo orden, z-index y

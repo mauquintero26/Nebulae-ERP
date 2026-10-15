@@ -229,18 +229,18 @@ export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', cor
 }
 
 // T11 (V3): la cabecera (titulo + fecha) de una tarjeta de las lineas de tiempo de Actividad de la SC, la COT y el PVEN:
-// la misma en las tres. El titulo usa el ancho que haya (min-w-0, break-words) y la fecha no se encoge ni se parte
-// (shrink-0, whitespace-nowrap). Si no caben en una linea (el panel a 1024 px), la fecha pasa debajo del titulo
-// (flex-wrap; basis-28 es lo minimo que el titulo pide al lado de la fecha, y a 1440 px los dos siguen en una linea).
+// la misma en las tres. Revision final (F12): SIEMPRE apilada, en los dos anchos. Con la fecha al lado (justify-between y
+// basis-28), a 1440 px el titulo quedaba en una columna angosta de 6 a 8 lineas. Ahora el titulo usa todo el ancho
+// (break-words parte una palabra larga) y la fecha va debajo, en su propia linea, chica, gris y sin partirse.
 export function CabeceraActividad({ titulo, fecha, className = 'mb-1.5' }: {
   titulo: React.ReactNode;
   fecha: React.ReactNode;
   className?: string;
 }) {
   return (
-    <div className={`flex flex-wrap items-start justify-between gap-x-2 gap-y-0.5 ${className}`}>
-      <span className="min-w-0 flex-1 basis-28 break-words font-bold text-slate-800 text-sm">{titulo}</span>
-      <span className="shrink-0 whitespace-nowrap text-[10px] font-bold text-slate-400">{fecha}</span>
+    <div className={`flex flex-col gap-0.5 ${className}`}>
+      <span className="min-w-0 break-words font-bold text-slate-800 text-sm">{titulo}</span>
+      <span className="whitespace-nowrap text-[10px] font-bold text-slate-400">{fecha}</span>
     </div>
   );
 }

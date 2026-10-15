@@ -24,7 +24,7 @@ import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas
 import {
   diasAlerta, generoCotizacion, cotizacionesVigentes, contadoresSolicitudes, tasaConversionCotizacion,
   superaDiasAlerta, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera, esSolicitudActiva,
-  pestanaDeSolicitud, pistaActivasSolicitudes, posicionMenuFila, botonALaVista,
+  pestanaDeSolicitud, pistaActivasSolicitudes, posicionMenuFila, botonALaVista, recortesDeAncestros,
 } from '@/lib/listas-ventas';
 import { comoUTC } from '@/lib/hub-ventas';
 import { mailtoUrl, telUrl, motivoTelefono } from '@/lib/chatter';
@@ -448,13 +448,15 @@ export const SolicitudTipoYDetalle = forwardRef<SolicitudTipoYDetalleHandle, {
 // â”€â”€ 3-dot Row Menu â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // T11 ronda 1 (5): lo que recorta al botón «⋮»: la ventana y cada ancestro con overflow distinto de visible (el
 // overflow-x-auto de la tabla, la tarjeta con overflow-hidden, el <main> que se desplaza), en coordenadas de la ventana.
+// Revisión final (F11, M2): aquí solo se leen los ancestros del DOM; la decisión es recortesDeAncestros (listas-ventas.js,
+// probada con node).
 function recortesDe(el:HTMLElement|null){
-  const recortes:{top:number;left:number;right:number;bottom:number}[]=[{top:0,left:0,right:window.innerWidth,bottom:window.innerHeight}];
+  const ancestros:{overflowX:string;overflowY:string;rect:DOMRect}[]=[];
   for(let p=el?.parentElement;p&&p!==document.body;p=p.parentElement){
     const {overflowX,overflowY}=getComputedStyle(p);
-    if(overflowX!=='visible'||overflowY!=='visible') recortes.push(p.getBoundingClientRect());
+    ancestros.push({overflowX,overflowY,rect:p.getBoundingClientRect()});
   }
-  return recortes;
+  return recortesDeAncestros({ancho:window.innerWidth,alto:window.innerHeight},ancestros);
 }
 function RowMenu({sc,onView,onReiniciar,onCancel,onSendToTrash}:{sc:any;onView:()=>void;onReiniciar:()=>void;onCancel:()=>void;onSendToTrash:()=>void}) {
   const [open,setOpen]=useState(false);
@@ -472,20 +474,25 @@ function RowMenu({sc,onView,onReiniciar,onCancel,onSendToTrash}:{sc:any;onView:(
   // recalcula al desplazar o cambiar el tamaño de la ventana, para que siga pegado al botón. Sigue dentro de `ref`: el
   // clic afuera lo cierra igual que antes. Ronda 1 (5): si al desplazar el botón sale de la vista (de la ventana o de un
   // contenedor que lo recorta), el menú se cierra en vez de quedar flotando pegado al borde.
+  // Revisión final (F11, M3): solo al desplazar o redimensionar (alMover). La primera medición, la del clic que lo abre,
+  // nunca lo cierra: un «⋮» con el centro apenas fuera de la vista ya no hace que el menú se abra y se cierre solo.
   useLayoutEffect(()=>{
     if(!open) return;
-    function ubicar(){
+    function ubicar(alMover:boolean){
       const boton=botonRef.current?.getBoundingClientRect();
       const menu=menuRef.current;
       if(!boton||!menu) return;
-      const recortes=recortesDe(botonRef.current);
-      if(!botonALaVista(boton,recortes)){setOpen(false);return;}
+      if(alMover){
+        const recortes=recortesDe(botonRef.current);
+        if(!botonALaVista(boton,recortes)){setOpen(false);return;}
+      }
       setPosicion(posicionMenuFila(boton,{ancho:menu.offsetWidth,alto:menu.offsetHeight},{ancho:window.innerWidth,alto:window.innerHeight}));
     }
-    ubicar();
-    window.addEventListener('scroll',ubicar,true);
-    window.addEventListener('resize',ubicar);
-    return()=>{window.removeEventListener('scroll',ubicar,true);window.removeEventListener('resize',ubicar);};
+    const alDesplazar = () => ubicar(true);
+    ubicar(false);
+    window.addEventListener('scroll', alDesplazar, true);
+    window.addEventListener('resize', alDesplazar);
+    return()=>{window.removeEventListener('scroll', alDesplazar, true);window.removeEventListener('resize', alDesplazar);};
   },[open]);
   const isCancelled = sc.estado === 'CANCELADA';
   const isSoporte = sc.tipo_solicitud === 'Soporte Tecnico';
@@ -653,6 +660,13 @@ export default function SolicitudClient() {
   const [saving,setSaving]=useState(false);
   // H49 (T1B): avisos y confirmaciones del sistema (showToast, más abajo, es el adaptador de las llamadas de siempre).
   const { avisar, avisarError, confirmar } = useAvisos();
+  // Revisión final (F9, patrón de confirmarSC en solicitud/[id]): false cuando la lista se desmonta (el usuario se fue a
+  // otra pantalla). Una solicitud que se termina de crear después ya no lo arrastra a ella: se le avisa con un enlace.
+  const vivo = useRef(true);
+  useEffect(() => {
+    vivo.current = true;
+    return () => { vivo.current = false; };
+  }, []);
   const [currentUser,setCurrentUser]=useState('');
   const [alertDias,setAlertDias]=useState(2);
   // H32: total de solicitudes que informa el servidor (la lista trae como mucho 200).
@@ -1023,7 +1037,16 @@ export default function SolicitudClient() {
       // U9: crear la SC lleva directo a ella. El return salta setSaving(false) a proposito: el boton "Crear" queda
       // bloqueado hasta que cambia la pagina y no se puede crear dos veces. Al volver a la lista, se recarga al montar
       // y la SC aparece arriba (orden created_at desc). El lead de arriba sigue en segundo plano (sin await).
-      if(nueva?.id){ router.push(`/dashboard/ventas/solicitud/${nueva.id}`); return; }
+      if(nueva?.id){
+        const href=`/dashboard/ventas/solicitud/${nueva.id}`;
+        // Revisión final (F9): si el usuario ya salió de la lista mientras se guardaba, no se lo lleva a la SC nueva.
+        if(!vivo.current){
+          avisar(nueva.numero?`Solicitud ${nueva.numero} creada`:'Solicitud creada',{accion:{texto:'Ver solicitud',href}});
+          return;
+        }
+        router.push(href);
+        return;
+      }
       // Respaldo si la respuesta no trae id: se queda en la lista como antes.
       showToast('Solicitud creada');
       setShowCreate(false);resetCreateForm();load();

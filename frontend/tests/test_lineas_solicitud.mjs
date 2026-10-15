@@ -279,6 +279,9 @@ console.log('--- TEST 13b (T8B r2, punto 4): ESTADOS_CON_CONFIRMACION — una so
   // Los estados en que cambiar los productos anula la confirmación del cliente (el aviso del editor y el de guardar).
   assert.deepEqual([...ESTADOS_CON_CONFIRMACION], ['PENDIENTE_CONFIRMACION', 'CONFIRMADA']);
   assert.ok(Object.isFrozen(ESTADOS_CON_CONFIRMACION));
+  // Revisión final (F10): es un concepto de estado: vive en estados-solicitud.js y aquí se importa (el MISMO objeto).
+  const { ESTADOS_SC_CON_CONFIRMACION } = await import('../src/lib/estados-solicitud.js');
+  assert.equal(ESTADOS_CON_CONFIRMACION, ESTADOS_SC_CON_CONFIRMACION);
 }
 
 console.log('--- TEST 14 (T8B r1, punto 8): avisoProductosGuardados — el aviso después de «Guardar productos» ---');

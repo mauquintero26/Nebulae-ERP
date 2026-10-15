@@ -28,6 +28,7 @@ import { rutaSinParametro } from '@/lib/listas-ventas';
 import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
 import { agregarActividad, esEntradaChatter } from '@/lib/chatter';
 import { resumenPagoPedido } from '@/lib/resumen-pago';
+import { comoUTC } from '@/lib/hub-ventas';
 
 const fCOP = formatoPesos;
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
@@ -862,9 +863,11 @@ function PedidoVentaDetalleContent() {
                       <div className="flex-1 min-w-0 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
                         {/* U6+H22: una nota del Chatter lleva su tipo encima (Nota interna, Llamada…, «Nota externa · medio»). */}
                         {esEntradaChatter(a) && <div className="mb-1.5"><EtiquetaChatter actividad={a} /></div>}
-                        {/* T11 (V3): la misma cabecera que la SC y la COT (a 1024 px la fecha pasa debajo). */}
+                        {/* T11 (V3): la misma cabecera que la SC y la COT (F12: el título arriba y la fecha debajo).
+                            Revisión final (F3): la fecha y la hora del renglón pasan por comoUTC (solo aquí, no en fDate:
+                            una fecha de negocio a las 00:00 se correría un día). */}
                         <CabeceraActividad className="mb-2" titulo={a.description || humanizarCodigo(a.action)}
-                          fecha={`${fDate(a.created_at)}${a.created_at ? ` ${new Date(a.created_at).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}` : ''}`} />
+                          fecha={`${fDate(comoUTC(a.created_at))}${a.created_at ? ` ${new Date(comoUTC(a.created_at)).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}` : ''}`} />
                         <CambiosDeActividad extra={a.extra_data} />
                         <p className="text-xs font-medium text-slate-500">{a.user_name || 'Sistema'}</p>
                       </div>

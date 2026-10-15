@@ -394,6 +394,11 @@ console.log('--- T11 calidad F1: los contactos con el cliente solo los registran
   assert.equal(mensajeNoGuardado(conDetalle(403, "Rol 'Finanzas' (normalizado: 'FINANZAS') no autorizado para esta "
     + 'operación. Roles requeridos: ADMIN, ASESOR, COMPRAS')), GENERICO);
   assert.equal(mensajeNoGuardado(conDetalle(403, 'Not authenticated')), GENERICO);
+  // Revisión final (F2): el patrón del 403 técnico vive en avisos.js (esDetalle403Tecnico); chatter.js ya no tiene
+  // su copia.
+  const libChatter = readFileSync(new URL('../src/lib/chatter.js', import.meta.url), 'utf8');
+  assert.ok(!/DETALLE_403_TECNICO\s*=/.test(libChatter), 'sin la copia del patrón en chatter.js');
+  assert.ok(/import \{[^}]*\besDetalle403Tecnico\b[^}]*\} from '\.\/avisos\.js';/.test(libChatter), 'usa la de avisos.js');
 
   // El composer pasa el rol de la sesión (getUsuarioActual) a motivoTipoDeshabilitado en todos sus usos.
   const composer = readFileSync(new URL('../src/app/dashboard/ventas/chatter.tsx', import.meta.url), 'utf8');

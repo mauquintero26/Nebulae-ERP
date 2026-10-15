@@ -10,7 +10,8 @@
  *  - H32 / N4 / N7 (Solicitudes): generoCotizacion / cotizacionesVigentes / contadoresSolicitudes / tasaConversionCotizacion
  *    de la lista, superaDiasAlerta (N8), resumenCancelacionSolicitudes, estadoEnPapelera y pasosParaCancelarSolicitud.
  *  - T11 (ronda visual): pistaActivasSolicitudes (tarjeta ACTIVAS, V7), posicionMenuFila (menú «⋮» de la fila, V2) y
- *    botonALaVista (ronda 1: el menú se cierra si su botón sale de la vista).
+ *    botonALaVista (ronda 1: el menú se cierra si su botón sale de la vista); recortesDeAncestros (revisión final: la
+ *    parte pura de recortesDe de solicitud-client.tsx).
  */
 import { ESTADOS_PEDIDO_CERRADOS, grupoPedido, esCotizacionActiva, esPedidoVigente } from './estados-pedido.js';
 import { comoUTC, esSoporte } from './hub-ventas.js';
@@ -374,6 +375,27 @@ export function botonALaVista(boton, recortes) {
   const x = (boton.left + boton.right) / 2;
   const y = (boton.top + boton.bottom) / 2;
   return (recortes || []).every((r) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
+}
+
+/**
+ * Revisión final (F11, M2): lo que recorta al botón «⋮» (la parte pura de recortesDe de solicitud-client.tsx): la ventana
+ * ({top: 0, left: 0, right: ancho, bottom: alto}) y el rectángulo de cada ancestro cuyo overflow, en algún eje, no es
+ * 'visible' (auto, hidden, scroll o clip: la tabla con overflow-x-auto, la tarjeta con overflow-hidden, el <main> que se
+ * desplaza). Cada ancestro llega como {overflowX, overflowY, rect} (getComputedStyle y getBoundingClientRect); de rect
+ * solo se toman top, left, right y bottom, y una entrada sin rect se ignora.
+ * @param {{ancho: number, alto: number}} ventana
+ * @param {({overflowX?: string, overflowY?: string, rect?: {top: number, left: number, right: number, bottom: number}} | null)[] | null | undefined} ancestros
+ * @returns {{top: number, left: number, right: number, bottom: number}[]}
+ */
+export function recortesDeAncestros(ventana, ancestros) {
+  const recortes = [{ top: 0, left: 0, right: ventana.ancho, bottom: ventana.alto }];
+  for (const a of Array.isArray(ancestros) ? ancestros : []) {
+    if (!a || !a.rect) continue;
+    if (a.overflowX === 'visible' && a.overflowY === 'visible') continue;
+    const { top, left, right, bottom } = a.rect;
+    recortes.push({ top, left, right, bottom });
+  }
+  return recortes;
 }
 
 /**

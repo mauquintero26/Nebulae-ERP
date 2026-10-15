@@ -9,6 +9,7 @@
  */
 
 import { normalizarBusqueda } from './busqueda.js';
+import { ESTADOS_SC_CON_CONFIRMACION } from './estados-solicitud.js';
 
 /** @typedef {Record<string, any>} LineaProducto */
 
@@ -217,11 +218,12 @@ export function textoAvisoLinea(r, origen) {
 
 /**
  * Estados de la solicitud en los que el cliente ya tiene (o tenía) el enlace o la confirmación de sus productos: cambiar
- * los productos anula esa confirmación. Una sola fuente para el aviso del editor del detalle y el de después de guardar
- * (ronda 2 de T8B). Inmutable.
+ * los productos anula esa confirmación (el aviso de después de guardar, ronda 2 de T8B). Revisión final (F10): es un
+ * concepto de estado y vive en estados-solicitud.js (ESTADOS_SC_CON_CONFIRMACION); aquí es el MISMO objeto, con el nombre
+ * de siempre. Inmutable.
  * @type {ReadonlyArray<string>}
  */
-export const ESTADOS_CON_CONFIRMACION = Object.freeze(['PENDIENTE_CONFIRMACION', 'CONFIRMADA']);
+export const ESTADOS_CON_CONFIRMACION = ESTADOS_SC_CON_CONFIRMACION;
 
 /**
  * T8B ronda 1 (punto 8): el aviso después de «Guardar productos» en el detalle. Si la solicitud estaba en Pendiente por

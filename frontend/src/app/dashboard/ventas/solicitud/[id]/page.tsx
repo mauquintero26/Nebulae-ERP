@@ -20,6 +20,7 @@ import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
 import {
   infoEstadoSolicitud, puedeReiniciar, puedeCotizarSinConfirmacion, MOTIVO_SIN_CONFIRMACION_MIN, ESTADOS_SC_SIN_CONFIRMAR,
   resumenCancelacion, MOTIVO_SIN_CONFIRMACION_MAX, pasoSolicitud, PASOS_SC, motivoLimpio, errorMotivoSinConfirmacion,
+  ESTADOS_SC_CON_CONFIRMACION,
 } from '@/lib/estados-solicitud';
 import {
   largoTexto, telUrl, mailtoUrl, asuntoDocumento, agregarActividad, esEntradaChatter, motivoTelefono, textoSinTelefono,
@@ -30,9 +31,9 @@ import { destinoVolver, anchoInicialPanel, inicialesAutor } from '@/lib/detalle-
 import { comoUTC, fechaEditadaParaGuardar } from '@/lib/hub-ventas';
 import {
   CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto, formularioDeEdicion, camposEditadosDeSolicitud,
-  hayCambiosEnEdicion, SIN_CAMBIOS_PARA_GUARDAR,
+  hayCambiosEnEdicion, SIN_CAMBIOS_PARA_GUARDAR, textoContactoAnula,
 } from '@/lib/datos-cliente';
-import { avisoProductosGuardados, ESTADOS_CON_CONFIRMACION } from '@/lib/lineas-solicitud';
+import { avisoProductosGuardados } from '@/lib/lineas-solicitud';
 import { EstadoSolicitudPasos } from './estado-solicitud';
 // Final whole-branch review (hallazgo #1, el mas severo): Gate 1 no tenia NINGUNA via
 // de UI para entregarle el link de confirmacion al cliente -- enviarParaConfirmacion
@@ -118,7 +119,8 @@ const TIPO_CAMPO_CONTACTO: Record<string, string> = { customer_phone: 'tel', cus
 // pedido abiertos de la solicitud (los que no son de otro cliente), así que no se dice que «solo queda en la solicitud».
 const TEXTO_CONTACTO_CON_FICHA = 'Lo que corrijas aquí también se guarda en la ficha del cliente y en la cotización y el pedido abiertos de esta solicitud, y queda en la Actividad.';
 const TEXTO_CONTACTO_SIN_FICHA = 'Esta solicitud no está vinculada a una ficha de cliente: lo que corrijas aquí se guarda en la solicitud y en la cotización y el pedido abiertos de esta solicitud, y queda en la Actividad.';
-const TEXTO_CONTACTO_ANULA = 'Si cambias el correo o el teléfono, la confirmación del cliente se anula y hay que enviársela de nuevo.';
+// Revisión final (F8): lo que anula cambiar el correo o el teléfono ya no es un texto fijo: textoContactoAnula
+// (@/lib/datos-cliente) solo lo dice cuando hay algo que anular.
 
 function SolicitudDetalleContent() {
   const params = useParams();
@@ -403,7 +405,9 @@ function SolicitudDetalleContent() {
     setSaving(true);
     try {
       await apiFetch(`/ventas/solicitudes/${solicitud.id}`, { method: 'PATCH', body: JSON.stringify({ estado_soporte: newEstado, updated_by: currentUser }) });
-      await loadSolicitud();
+      // Revisión final (F7): silenciosa, como reiniciar, asignar y guardar: el select del ticket sigue a la vista con
+      // «Editar» abierto, y una recarga completa rehacía editForm (se perdía lo escrito sin aviso).
+      await loadSolicitud({ silencioso: true });
     } catch (err: any) {
       avisarError(err, 'No se pudo cambiar el estado de soporte');
     }
@@ -448,7 +452,7 @@ function SolicitudDetalleContent() {
         router.push(hrefCot);
         return;
       }
-      await loadSolicitud();
+      await loadSolicitud({ silencioso: true });  // F7: la rama de respaldo tampoco borra lo escrito en «Editar»
       avisar(textoCotizacionCreada(cotNum));
     } catch (err: any) {
       avisarError(err, 'No se pudo crear la cotización');
@@ -490,7 +494,7 @@ function SolicitudDetalleContent() {
         return;
       }
       setShowCotizarSinConf(false);
-      await loadSolicitud();
+      await loadSolicitud({ silencioso: true });  // F7: la rama de respaldo tampoco borra lo escrito en «Editar»
     } catch (err: any) {
       if (!vivo.current) {
         avisarError(err, 'No se pudo crear la cotización');
@@ -1065,7 +1069,7 @@ function SolicitudDetalleContent() {
                     </div>
                   ))}
                   <p className="text-xs text-slate-500 leading-relaxed">
-                    {solicitud?.customer_id ? TEXTO_CONTACTO_CON_FICHA : TEXTO_CONTACTO_SIN_FICHA} {TEXTO_CONTACTO_ANULA}
+                    {solicitud?.customer_id ? TEXTO_CONTACTO_CON_FICHA : TEXTO_CONTACTO_SIN_FICHA} {textoContactoAnula(solicitud, { cotizacionActiva: cotizacionesActivas.length > 0 })}
                   </p>
                 </div>
               ) : (
@@ -1096,7 +1100,7 @@ function SolicitudDetalleContent() {
               motivoBloqueo={cotizacionesActivas.length > 0
                 ? `Los productos ya pasaron a la cotización ${cotizacionesActivas[0].numero}: ajústalos allí con "Re-Cotizar".`
                 : solicitud.estado === 'CANCELADA' ? 'La solicitud está cancelada.' : undefined}
-              anulaConfirmacion={ESTADOS_CON_CONFIRMACION.includes(solicitud.estado)}
+              anulaConfirmacion={ESTADOS_SC_CON_CONFIRMACION.includes(solicitud.estado)}
               editando={editandoProductos}
               setEditando={setEditandoProductos}
               currentUser={currentUser}

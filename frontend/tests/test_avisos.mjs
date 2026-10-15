@@ -255,4 +255,41 @@ console.log('--- TEST 9: recargarTrasError (B2-T9A ronda 1: una sola regla para 
   }
 }
 
+console.log('--- TEST 10 (revisión final, F2): el 403 técnico de require_roles se traduce ---');
+{
+  const { MENSAJE_SIN_PERMISO, esDetalle403Tecnico } = await import('../src/lib/avisos.js');
+  assert.equal(MENSAJE_SIN_PERMISO, 'No tienes permiso para esta acción.');
+  const ROL = "Rol 'Finanzas' (normalizado: 'FINANZAS') no autorizado para esta operación. Roles requeridos: ADMIN, ASESOR";
+  assert.equal(textoDeDetalle(ROL, 403), MENSAJE_SIN_PERMISO);
+  const err = errorDeRespuesta(403, { detail: ROL });
+  assert.equal(err.message, MENSAJE_SIN_PERMISO);
+  assert.equal(err.detail, ROL, 'el detail crudo se conserva (el Chatter decide con él)');
+  assert.equal(textoDeError(err, 'No se pudo guardar'), `No se pudo guardar: ${MENSAJE_SIN_PERMISO}`);
+  // Los 403 en inglés de FastAPI son el mismo caso técnico.
+  for (const texto of ['Not authenticated', 'Not enough permissions', 'Forbidden']) {
+    assert.equal(textoDeDetalle(texto, 403), MENSAJE_SIN_PERMISO, texto);
+  }
+  // Solo ese patrón: un 403 con otro texto legible se queda como está.
+  const LEGIBLE = 'Solo un asesor o un administrador puede registrar un contacto con el cliente: deja una nota interna.';
+  assert.equal(textoDeDetalle(LEGIBLE, 403), LEGIBLE);
+  assert.equal(errorDeRespuesta(403, { detail: LEGIBLE }).message, LEGIBLE);
+  // Y solo con el 403: con otro status el texto no se adivina.
+  assert.equal(textoDeDetalle(ROL, 400), ROL);
+  assert.equal(esDetalle403Tecnico(ROL), true);
+  assert.equal(esDetalle403Tecnico(`  ${ROL}`), true, 'con espacios delante');
+  for (const v of [LEGIBLE, '', null, undefined, 403, { detail: ROL }]) assert.equal(esDetalle403Tecnico(v), false, String(v));
+}
+
+console.log('--- TEST 11 (revisión final, B10): el 500 de /crm/products/search se ve en línea, sin «no está en el catálogo» ---');
+{
+  const { readFileSync } = await import('node:fs');
+  const err = errorDeRespuesta(500, { detail: 'No se pudo buscar en el catálogo. Intenta de nuevo.' });
+  assert.equal(textoDeError(err, 'No se pudo buscar'), 'No se pudo buscar en el catálogo. Intenta de nuevo.');
+  const buscador = readFileSync(new URL('../src/app/dashboard/ventas/solicitud/buscador-producto.tsx', import.meta.url), 'utf8');
+  // El error de la búsqueda va a errorBusqueda (role="alert") y el aviso «no está en el catálogo» exige que no lo haya.
+  assert.ok(buscador.includes("catch (err) { error = textoDeError(err, 'No se pudo buscar'); }"), 'el catch arma el error');
+  assert.ok(buscador.includes('setErrorBusqueda(error)') && buscador.includes('setOpen(!error); setSearched(!error);'));
+  assert.ok(buscador.includes('{open && searched && !errorBusqueda && results.length === 0 && escrito.length > 2 && ('));
+}
+
 console.log('✓ Todas las pruebas de avisos pasaron.');

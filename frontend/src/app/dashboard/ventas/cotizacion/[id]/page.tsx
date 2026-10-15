@@ -1150,8 +1150,9 @@ function CotizacionDetalleContent() {
                     <div className="flex-1 min-w-0 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
                       {/* U6+H22: una nota del Chatter lleva su tipo encima (Nota interna, Llamada…, «Nota externa · medio»). */}
                       {esEntradaChatter(a) && <div className="mb-1.5"><EtiquetaChatter actividad={a} /></div>}
-                      {/* T11 (V3): la misma cabecera que la SC y el PVEN (a 1024 px la fecha pasa debajo). */}
-                      <CabeceraActividad className="mb-2" titulo={a.description || humanizarCodigo(a.action)} fecha={`${fDate(a.created_at)} ${fTime(a.created_at)}`} />
+                      {/* T11 (V3): la misma cabecera que la SC y el PVEN (F12: el título arriba y la fecha debajo).
+                          Revisión final (F3): la fecha y la hora del renglón pasan por comoUTC (solo aquí, no en fDate). */}
+                      <CabeceraActividad className="mb-2" titulo={a.description || humanizarCodigo(a.action)} fecha={`${fDate(comoUTC(a.created_at))} ${fTime(comoUTC(a.created_at))}`} />
                       <CambiosDeActividad extra={a.extra_data} />
                       {a.old_estado && a.new_estado && (
                         <p className="flex items-center gap-1.5 mb-3 flex-wrap">

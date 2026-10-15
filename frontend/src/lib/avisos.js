@@ -14,6 +14,8 @@ export const MENSAJE_SIN_CONEXION = 'No se pudo conectar con el servidor. Revisa
 export const MENSAJE_GENERICO = 'Ocurrió un error inesperado. Intenta de nuevo.';
 /** El mismo texto que pone backend/main.py (validation_exception_handler) en `message`. */
 export const MENSAJE_DATOS_INVALIDOS = 'Los datos enviados no son válidos. Revisa el formulario e intenta de nuevo.';
+/** Revisión final (F2): lo que se muestra en lugar del 403 técnico de require_roles. */
+export const MENSAJE_SIN_PERMISO = 'No tienes permiso para esta acción.';
 
 /** Nombre visible de los campos que llegan en `loc` de un error de validacion. */
 export const ETIQUETAS_CAMPO = {
@@ -35,6 +37,19 @@ export const ETIQUETAS_CAMPO = {
 // mandaba main.py antes de T1A. Trae rutas del servidor y lo que escribio el usuario: nunca se muestra.
 const FORMATO_VALIDACION_VIEJO = /^\d+ validation errors?:/;
 const SIN_CONEXION = /Failed to fetch|NetworkError|Load failed/i;
+// El 403 de require_roles ("Rol 'X' (normalizado: 'Y') no autorizado…", backend/app/api/dependencies.py) y los 403 en
+// inglés de FastAPI no son un texto para el usuario. Revisión final (F2): una sola copia del patrón (el Chatter la usa).
+const DETALLE_403_TECNICO = /^(?:Rol '[^']*' \(normalizado:|Not authenticated|Not enough permissions|Forbidden)/i;
+
+/**
+ * Revisión final (F2): true si el texto es el 403 técnico de require_roles (o uno de FastAPI en inglés); false con
+ * cualquier otro texto o con algo que no es texto.
+ * @param {unknown} texto
+ * @returns {boolean}
+ */
+export function esDetalle403Tecnico(texto) {
+  return typeof texto === 'string' && DETALLE_403_TECNICO.test(texto.trim());
+}
 
 const textoServidor = (status) =>
   typeof status === 'number' && status > 0
@@ -45,6 +60,8 @@ const textoServidor = (status) =>
 function traducirTexto(texto, status) {
   const limpio = texto.trim();
   if (FORMATO_VALIDACION_VIEJO.test(limpio)) return MENSAJE_DATOS_INVALIDOS;
+  // Revisión final (F2): solo ese patrón y solo en un 403; un 403 con otro texto legible se queda como está.
+  if (status === 403 && esDetalle403Tecnico(limpio)) return MENSAJE_SIN_PERMISO;
   if (limpio === 'Internal Server Error') return textoServidor(typeof status === 'number' ? status : 500);
   if (limpio === 'Not Found') return `No se encontró el registro (${typeof status === 'number' ? status : 404}).`;
   return texto;
@@ -121,8 +138,8 @@ function textoDeErrorDeValidacion(error) {
 
 /**
  * Frase para el `detail` (o `message`) de una respuesta de error.
- * - Un texto no vacio se devuelve tal cual (salvo los tecnicos: 'Not Found', 'Internal Server Error' y el formato
- *   viejo de validacion).
+ * - Un texto no vacio se devuelve tal cual (salvo los tecnicos: 'Not Found', 'Internal Server Error', el formato
+ *   viejo de validacion y, en un 403, el de require_roles -> MENSAJE_SIN_PERMISO).
  * - Una lista de errores de validacion se traduce error por error y las frases se unen con un espacio.
  * - Un objeto con mensaje, message o detail devuelve ese texto.
  * - Si no hay nada: 'El servidor respondió con un error (status). Intenta de nuevo.'

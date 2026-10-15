@@ -4,9 +4,10 @@ import { VEN_NAV } from '../ven-nav';
 
 /**
  * H9: esqueleto liviano, sin datos, de la lista de solicitudes: la barra de submódulos (la real), la barra del título,
- * dos filas grises y el spinner «Cargando…». Lo muestran loading.tsx (apenas empieza la navegación), el fallback del
- * Suspense de solicitud/page.tsx y /solicitud/nueva (enlaces viejos). El detalle /solicitud/[id] tiene su propia carga.
- * Sin hooks ni 'use client': sirve en el servidor (loading.tsx, page.tsx) y en el cliente (nueva/page.tsx).
+ * dos filas grises y el spinner «Cargando…». Lo muestran el fallback del Suspense de solicitud/page.tsx y
+ * /solicitud/nueva (enlaces viejos). Revisión final (F6): ya no solicitud/loading.tsx, que también envuelve al detalle
+ * /solicitud/[id] y por eso es una carga neutra.
+ * Sin hooks ni 'use client': sirve en el servidor (page.tsx) y en el cliente (nueva/page.tsx).
  * T9B r1: la misma geometría de la lista (SubNav, contenedor p-8 y PageHeader), así al llegar la página no salta nada.
  */
 export function CargandoSolicitudes() {

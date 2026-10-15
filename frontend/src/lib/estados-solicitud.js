@@ -79,6 +79,15 @@ export const ESTADOS_SC_HEREDADOS = HEREDADOS;
  */
 export const ESTADOS_SC_SIN_CONFIRMAR = congelar(['BORRADOR', 'ASIGNADA', 'PENDIENTE_CONFIRMACION']);
 
+/**
+ * Estados en los que el cliente ya tiene (o tenía) el enlace o la confirmación de la solicitud: Pendiente por
+ * confirmación y Confirmada. Solo en ellos se reinicia la solicitud (puedeReiniciar), cambiar los productos anula esa
+ * confirmación (el aviso del editor y avisoProductosGuardados de lineas-solicitud.js, que lo importa) y cambiar el
+ * correo o el teléfono la anula (textoContactoAnula de datos-cliente.js). Revisión final (F10): la única copia. Inmutable.
+ * @type {ReadonlyArray<string>}
+ */
+export const ESTADOS_SC_CON_CONFIRMACION = congelar(['PENDIENTE_CONFIRMACION', 'CONFIRMADA']);
+
 /** U11: mínimo de caracteres del motivo para cotizar sin la confirmación del cliente (el servidor exige lo mismo). */
 export const MOTIVO_SIN_CONFIRMACION_MIN = 10;
 
@@ -187,7 +196,7 @@ function contar(documentos) {
  * @returns {boolean}
  */
 export function puedeReiniciar(sc, { cotizacionesActivas, pedidosVigentes } = {}) {
-  if (!sc || esSoporte(sc) || !['PENDIENTE_CONFIRMACION', 'CONFIRMADA'].includes(sc.estado)) return false;
+  if (!sc || esSoporte(sc) || !ESTADOS_SC_CON_CONFIRMACION.includes(sc.estado)) return false;
   return contar(cotizacionesActivas) === 0 && contar(pedidosVigentes) === 0;
 }
 

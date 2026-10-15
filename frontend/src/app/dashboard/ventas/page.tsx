@@ -330,9 +330,14 @@ export default function VentasHub() {
   // se reemplazan detrás del panel y no se pierde el scroll. «Actualizar» la llama sin opciones: con spinner.
   // T11 calidad (E4, ronda 1): un GET que falla ya no vacía su lista: fusionarCargaHub (lib/hub-ventas.js, con su prueba)
   // conserva lo de la carga anterior (también la configuración de alertas) y da UN aviso, aunque fallen varios.
+  // Revisión final (F4): la última carga gana (patrón cargaRef de la COT y el PVEN). La recarga silenciosa de una nota
+  // del panel y la de «Actualizar» se pueden cruzar: la más vieja ya no pinta, no deja ultimaCarga desfasada ni apaga
+  // el spinner de la más nueva.
   const ultimaCarga = React.useRef<{sc:any[];cot:any[];ven:any[]}|null>(null);
+  const cargaRef = React.useRef(0);
   const loadData = useCallback(async(opciones?: {silencioso?: boolean})=>{
     const silencioso = opciones?.silencioso === true;
+    const miCarga = ++cargaRef.current;
     if(!silencioso) setLoading(true);
     try {
       const pedir = (ruta: string) => apiFetch(ruta).catch((err: unknown) => { console.error(err); return null; });
@@ -340,14 +345,15 @@ export default function VentasHub() {
         pedir('/ventas/solicitudes?limit=200'), pedir('/ventas/cotizaciones?limit=200'),
         pedir('/ventas/pedidos?limit=200'), pedir('/ventas/config'),
       ]);
+      if (miCarga !== cargaRef.current) return;
       const carga = fusionarCargaHub(ultimaCarga.current, {sc, cot, ven, cfg});
       ultimaCarga.current = carga.listas;
       setSolicitudes(carga.listas.sc); setCotizaciones(carga.listas.cot); setPedidos(carga.listas.ven);
       setAllData(carga.todas);
       if(carga.cfg) setAlertDias(carga.cfg);
       if(carga.aviso) avisar(carga.aviso, {tono: 'error'});
-    } catch(err:any){setToast({msg:err.message,type:'error'});}
-    finally{setLoading(false);}
+    } catch(err:any){if (miCarga === cargaRef.current) setToast({msg:err.message,type:'error'});}
+    finally{if (miCarga === cargaRef.current) setLoading(false);}
   },[avisar]);
 
   useEffect(()=>{loadData();},[loadData]);

@@ -12,7 +12,7 @@
 import { congelar, tiene } from './estados-pedido.js';
 import { comoUTC, TIPOS_NOTA_REINICIAN_ATRASO } from './hub-ventas.js';
 import { numeroWhatsApp } from './whatsapp.js';
-import { textoDeError } from './avisos.js';
+import { textoDeError, esDetalle403Tecnico } from './avisos.js';
 import { esCorreoValido } from './datos-cliente.js';
 
 /**
@@ -416,15 +416,15 @@ function sinPuntoFinal(texto) {
   return texto.slice(0, fin);
 }
 
-// El 403 de require_roles ("Rol 'X' (normalizado: 'Y') no autorizado…") y los de FastAPI en inglés no son un texto
-// para el usuario: con ellos queda el mensaje genérico.
-const DETALLE_403_TECNICO = /^(?:Rol '[^']*' \(normalizado:|Not authenticated|Not enough permissions|Forbidden)/i;
-
-/** T11 calidad (F1): el detail que el servidor escribió para el usuario en un 403 (p. ej. CONTACTO_SOLO_ASESOR), o null. */
+/**
+ * T11 calidad (F1): el detail que el servidor escribió para el usuario en un 403 (p. ej. CONTACTO_SOLO_ASESOR), o null.
+ * El 403 de require_roles ("Rol 'X' (normalizado: 'Y') no autorizado…") y los de FastAPI en inglés no son un texto para
+ * el usuario: con ellos queda el mensaje genérico. Revisión final (F2): el patrón vive en avisos.js (esDetalle403Tecnico).
+ */
 function detalle403Legible(err) {
   const detalle = /** @type {any} */ (err)?.detail;
   const texto = typeof detalle === 'string' ? detalle.trim() : '';
-  return texto && !DETALLE_403_TECNICO.test(texto) ? texto : null;
+  return texto && !esDetalle403Tecnico(texto) ? texto : null;
 }
 
 /**

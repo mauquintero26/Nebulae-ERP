@@ -18,12 +18,16 @@
  * - Ronda 1: la cabecera de la SC baja de línea a 1024 (patrón del PVEN); el chip de la PXP cancelada con textoChipPxp;
  *   la tarjeta de Activas de la pestaña Análisis con pistaActivasSolicitudes; el menú de fila se cierra si su botón sale
  *   de la vista (botonALaVista); las guardias de clases comprueban clases sueltas (conClases).
+ * - Revisión final: el Toaster abajo al centro (F1); la fecha de la Actividad de la COT y del PVEN con comoUTC (F3);
+ *   tildes de «Nuevo Proveedor» (F5); la carga neutra de /solicitud (F6); el ancho de la pila, botonALaVista por abajo
+ *   y por la izquierda, recortesDeAncestros y el menú que solo se cierra al desplazar (F11); la cabecera de la
+ *   Actividad apilada (F12).
  */
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { textoAtrasados, RUTA_HUB_VENTAS } from '../src/lib/hub-ventas.js';
-import { posicionMenuFila, botonALaVista } from '../src/lib/listas-ventas.js';
+import { posicionMenuFila, botonALaVista, recortesDeAncestros } from '../src/lib/listas-ventas.js';
 import { inicialesAutor } from '../src/lib/detalle-layout.js';
 
 // Con los saltos de línea normalizados (el checkout de Windows deja CRLF en algunos archivos).
@@ -132,12 +136,20 @@ console.log('--- V2 TEST 4: el menú de fila de la lista de solicitudes usa la p
   assert.ok(rowMenu.includes("document.addEventListener('mousedown',close)"), 'sigue cerrando con un clic afuera');
 }
 
-console.log('--- V3 TEST 1: CabeceraActividad (título + fecha) en flujo.tsx ---');
+console.log('--- V3 TEST 1 (revisión final, F12): CabeceraActividad apila el título y la fecha ---');
 {
+  // F12: con la fecha al lado (justify-between y basis-28 en el título), a 1440 px el título quedaba en una columna
+  // angosta de 6 a 8 líneas. Ahora va SIEMPRE apilada: el título a todo el ancho y la fecha debajo, en su línea.
   const comp = cuerpo(sinComentarios(leer('app/dashboard/ventas/flujo.tsx')), 'export function CabeceraActividad(');
-  assert.ok(/flex flex-wrap/.test(comp), 'si no caben en una línea, la fecha pasa debajo (flex-wrap)');
-  assert.ok(/min-w-0/.test(comp) && /break-words/.test(comp), 'el título usa el ancho disponible (min-w-0, break-words)');
-  assert.ok(/shrink-0 whitespace-nowrap/.test(comp), 'la fecha no se encoge ni se parte (shrink-0, whitespace-nowrap)');
+  const clases = [...comp.matchAll(/className=\{?[`"]([^`"$]*)/g)].map((m) => m[1]);
+  assert.equal(clases.length, 3, `contenedor, título y fecha: ${clases.join(' | ')}`);
+  const [contenedor, titulo, fecha] = clases;
+  conClases(contenedor, ['flex', 'flex-col'], ['justify-between', 'flex-wrap', 'flex-row', /^basis-/], 'cabecera apilada');
+  conClases(titulo, ['min-w-0', 'break-words', 'font-bold', 'text-sm'], [/^basis-/, 'flex-1', 'shrink-0'],
+    'el título usa todo el ancho y parte las palabras largas');
+  conClases(fecha, ['whitespace-nowrap', 'text-[10px]', 'text-slate-400'], [/^basis-/],
+    'la fecha va debajo, chica y gris, sin partirse');
+  assert.ok(comp.indexOf('{titulo}') < comp.indexOf('{fecha}'), 'primero el título y debajo la fecha');
 }
 
 console.log('--- V3 TEST 2: la SC, la COT y el PVEN usan la misma cabecera ---');
@@ -216,8 +228,15 @@ console.log('--- V10 TEST (ronda 1): la pila de avisos va arriba al centro ---')
   assert.ok(pila, 'la pila de avisos (z-[90]) encontrada');
   // Arriba al centro (decisión del controlador, ronda 1): a la derecha tapaba «Editar» y «Cancelar Solicitud» de las
   // cabeceras, y abajo el botón principal de las ventanas. Mismo z-index, orden (flex-col) y pointer-events.
+  // Revisión final (F11, M1 de la ronda visual r1): también el ancho (hasta 24rem sin salirse de la ventana).
   conClases(pila[1], ['fixed', 'top-4', 'left-1/2', '-translate-x-1/2', 'z-[90]', 'flex', 'flex-col', 'items-center',
-    'pointer-events-none'], [/^right-/, /^bottom-/, 'items-end'], 'pila de avisos');
+    'pointer-events-none', 'w-[min(24rem,calc(100vw_-_2rem))]'], [/^right-/, /^bottom-/, 'items-end'], 'pila de avisos');
+  // Revisión final (F1): el Toaster de react-hot-toast (CRM, Agenda, Cotiza…) va abajo al centro: arriba al centro
+  // pintaba sus toasts (z-95) justo encima de la pila de avisos.
+  const toaster = avisos.match(/<Toaster\b[^>]*\/>/);
+  assert.ok(toaster, 'el <Toaster> sigue montado');
+  assert.ok(/position="bottom-center"/.test(toaster[0]), `Toaster abajo al centro: ${toaster[0]}`);
+  assert.ok(/zIndex:\s*95/.test(toaster[0]), 'mismo z-index (95)');
   // Cada tarjeta sigue recibiendo el puntero (pausa del tiempo y botón de cerrar).
   assert.ok(/className=\{`pointer-events-auto /.test(avisos), 'cada tarjeta con pointer-events-auto');
   assert.ok(/onPointerEnter=\{\(\) => setPausado\(true\)\}/.test(avisos), 'la pausa con el puntero sigue');
@@ -273,13 +292,93 @@ console.log('--- R1 (5) TEST 1: botonALaVista (el centro del botón dentro de la
   // Sin rectángulo (el botón ya no está): no está a la vista. Sin recortes: a la vista.
   assert.equal(botonALaVista(null, [ventana]), false);
   assert.equal(botonALaVista(boton, []), true);
+  // Revisión final (F11, M2): también por abajo y por la izquierda (centro del botón: x 893,5; y 113,5).
+  assert.equal(botonALaVista({ top: 890, bottom: 917, left: 880, right: 907 }, [ventana]), false, 'fuera por abajo');
+  assert.equal(botonALaVista({ top: 100, bottom: 127, left: -30, right: -3 }, [ventana]), false, 'fuera por la izquierda');
+  assert.equal(botonALaVista(boton, [ventana, { top: 50, left: 300, right: 1400, bottom: 110 }]), false, 'tapado abajo');
+  assert.equal(botonALaVista(boton, [ventana, { top: 50, left: 900, right: 1400, bottom: 800 }]), false, 'tapado a la izquierda');
+  // El borde exacto cuenta como a la vista.
+  assert.equal(botonALaVista(boton, [ventana, { top: 50, left: 893.5, right: 1400, bottom: 113.5 }]), true, 'en el borde');
 }
 
-console.log('--- R1 (5) TEST 2: RowMenu se cierra si su botón sale de la vista ---');
+console.log('--- R1 (5) TEST 1b (revisión final, F11 M2): recortesDeAncestros, la lógica de recortesDe ---');
+{
+  const ventana = { ancho: 1440, alto: 900 };
+  const caja = (top, left, right, bottom) => ({ top, left, right, bottom });
+  // Sin ancestros: solo la ventana.
+  assert.deepEqual(recortesDeAncestros(ventana, []), [caja(0, 0, 1440, 900)]);
+  // Solo recorta un ancestro con overflow distinto de visible en algún eje (auto, hidden, scroll, clip).
+  const ancestros = [
+    { overflowX: 'visible', overflowY: 'visible', rect: caja(1, 1, 2, 2) },
+    { overflowX: 'auto', overflowY: 'visible', rect: caja(10, 20, 1000, 800) },
+    { overflowX: 'visible', overflowY: 'hidden', rect: caja(30, 40, 900, 700) },
+    { overflowX: 'scroll', overflowY: 'scroll', rect: caja(50, 60, 800, 600) },
+    { overflowX: 'clip', overflowY: 'visible', rect: caja(70, 80, 700, 500) },
+  ];
+  assert.deepEqual(recortesDeAncestros(ventana, ancestros),
+    [caja(0, 0, 1440, 900), caja(10, 20, 1000, 800), caja(30, 40, 900, 700), caja(50, 60, 800, 600), caja(70, 80, 700, 500)]);
+  // Solo top/left/right/bottom (un DOMRect trae más claves); entradas rotas se ignoran.
+  const domRect = { ...caja(5, 6, 7, 8), x: 6, y: 5, width: 1, height: 3 };
+  assert.deepEqual(recortesDeAncestros(ventana, [{ overflowX: 'hidden', overflowY: 'hidden', rect: domRect }, null, {}]),
+    [caja(0, 0, 1440, 900), caja(5, 6, 7, 8)]);
+  assert.deepEqual(recortesDeAncestros(ventana, undefined), [caja(0, 0, 1440, 900)]);
+  // Con botonALaVista: el botón dentro de la ventana pero fuera de la tabla desplazada no está a la vista.
+  const boton = { top: 100, bottom: 127, left: 880, right: 907 };
+  assert.equal(botonALaVista(boton, recortesDeAncestros(ventana, [{ overflowX: 'auto', overflowY: 'visible', rect: caja(0, 0, 850, 900) }])), false);
+  // recortesDe (solicitud-client.tsx) solo junta los ancestros del DOM y llama a la función pura.
+  const lista = sinComentarios(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx'));
+  const recortes = lista.slice(lista.indexOf('function recortesDe('), lista.indexOf('function RowMenu('));
+  assert.ok(/recortesDeAncestros\(/.test(recortes), 'recortesDe usa recortesDeAncestros');
+  assert.ok(/getComputedStyle\(/.test(recortes) && /getBoundingClientRect\(\)/.test(recortes), 'lee el DOM y nada más');
+}
+
+console.log('--- R1 (5) TEST 2: RowMenu se cierra si su botón sale de la vista (solo al desplazar o redimensionar) ---');
 {
   const rowMenu = cuerpo(sinComentarios(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx')), 'function RowMenu(');
-  assert.ok(/if\s*\(\s*!botonALaVista\([^)]*\)\s*\)\s*\{\s*setOpen\(false\)/.test(rowMenu), 'fuera de la vista: setOpen(false)');
+  assert.ok(/if\s*\(\s*alMover\s*\)\s*\{[^}]*if\s*\(\s*!botonALaVista\([^)]*\)\s*\)\s*\{\s*setOpen\(false\)/.test(rowMenu),
+    'fuera de la vista al desplazar o redimensionar: setOpen(false)');
   assert.ok(/recortesDe\(/.test(rowMenu), 'con los contenedores que recortan (overflow) además de la ventana');
+  // Revisión final (F11, M3): la primera medición, la del clic que lo abre, nunca lo cierra (aunque el centro del «⋮»
+  // esté apenas fuera); solo un scroll o un resize posterior.
+  assert.ok(/ubicar\(false\);/.test(rowMenu), 'la primera medición no cierra');
+  assert.ok(/const alDesplazar\s*=\s*\(\)\s*=>\s*ubicar\(true\);/.test(rowMenu), 'el scroll y el resize sí');
+  assert.ok(/addEventListener\('scroll',\s*alDesplazar,\s*true\)/.test(rowMenu) && /addEventListener\('resize',\s*alDesplazar\)/.test(rowMenu));
+  assert.ok(/removeEventListener\('scroll',\s*alDesplazar,\s*true\)/.test(rowMenu) && /removeEventListener\('resize',\s*alDesplazar\)/.test(rowMenu));
+}
+
+console.log('--- Revisión final (F3): la fecha y la hora de la Actividad de la COT y del PVEN pasan por comoUTC ---');
+{
+  const cot = sinComentarios(leer('app/dashboard/ventas/cotizacion/[id]/page.tsx'));
+  assert.ok(cot.includes('fecha={`${fDate(comoUTC(a.created_at))} ${fTime(comoUTC(a.created_at))}`}'), 'COT');
+  const ven = sinComentarios(leer('app/dashboard/ventas/venta/[id]/page.tsx'));
+  assert.ok(/fecha=\{`\$\{fDate\(comoUTC\(a\.created_at\)\)\}\$\{a\.created_at \? ` \$\{new Date\(comoUTC\(a\.created_at\)\)\.toLocaleTimeString\(/.test(ven), 'PVEN');
+  assert.ok(/import \{[^}]*\bcomoUTC\b[^}]*\} from '@\/lib\/hub-ventas';/.test(ven), 'el PVEN importa comoUTC');
+  // Solo ahí: fDate general sigue sin comoUTC (una fecha de negocio a las 00:00 se correría un día).
+  assert.ok(ven.includes("const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString("), 'fDate del PVEN igual');
+  const cliente = sinComentarios(leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx'));
+  assert.ok(cliente.includes('iso ? new Date(iso).toLocaleDateString('), 'fDate de la COT igual');
+}
+
+console.log('--- Revisión final (F5): tildes de la ventana «Nuevo Proveedor» ---');
+{
+  const modal = cuerpo(sinComentarios(leer('app/dashboard/ventas/venta/venta-client.tsx')), 'export function NewSupplierModal(');
+  for (const texto of ['>Teléfono<', '>Términos de Pago<']) assert.ok(modal.includes(texto), texto);
+  for (const texto of ['>Telefono<', '>Terminos de Pago<']) assert.ok(!modal.includes(texto), texto);
+}
+
+console.log('--- Revisión final (F6): la carga de /solicitud es neutra; el esqueleto de la lista, solo en la lista ---');
+{
+  const carga = sinComentarios(leer('app/dashboard/ventas/solicitud/loading.tsx'));
+  assert.ok(!/CargandoSolicitudes/.test(carga), 'solicitud/loading.tsx no importa ni pinta el esqueleto de la lista');
+  assert.ok(/import \{ LOADING \} from '@\/lib\/design-system';/.test(carga), 'con los tokens del design-system');
+  assert.ok(/LOADING\.wrapper/.test(carga) && /LOADING\.spinner/.test(carga) && carga.includes('Cargando…'), 'spinner y «Cargando…»');
+  assert.ok(/role="status"/.test(carga), 'región viva');
+  // La página protegida conserva su fallback (solo aplica dentro de la lista) y no se movió a un grupo de rutas.
+  const pagina = leer('app/dashboard/ventas/solicitud/page.tsx');
+  assert.ok(pagina.includes('<Suspense fallback={<CargandoSolicitudes />}>'), 'el fallback del Suspense sigue igual');
+  // El comentario de [id]/loading.tsx dice lo que de verdad hace: no evita la carga de solicitud/loading.tsx.
+  const detalle = leer('app/dashboard/ventas/solicitud/[id]/loading.tsx');
+  assert.ok(!detalle.includes('Sin este archivo, solicitud/loading.tsx mostraba el esqueleto de la LISTA'), 'sin la afirmación equivocada');
 }
 
 console.log('OK test_ajustes_visuales_b2.mjs');
