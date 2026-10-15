@@ -10,6 +10,8 @@
 - POST /cotizaciones con sc_id de una SC sin confirmacion vigente -> 409 (C7/R11), antes de gastar un numero; el 400
   de documentos activos (N7) ahora tambien aplica ahi. PATCH sc_id hacia una SC sin confirmar -> 409 (ruling T3-3).
 - R21: rechazar la COT temprana no cambia la SC. R20: una SC con documentos activos no cuenta como atrasada.
+- B2.1 (D6): si la SC se cancelo y se restauro despues de la COT temprana, retomarla exige un motivo nuevo
+  (motivo_sin_confirmacion en el PATCH; 409 MOTIVO_NUEVO sin el).
 
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_cotizar_sin_confirmacion
 """
@@ -957,6 +959,138 @@ def test_t11_f3_los_jeroglificos_en_blanco_no_llenan_el_motivo(app_client, db, a
     resp = _cotizar(app_client, admin_token, sc.id, motivo="Cliente " + chr(0x13441) * 3 + "pidió precio urgente")
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["cotizacion"]["sin_confirmacion_sc_motivo"] == "Cliente pidió precio urgente"
+
+
+# --- B2.1 (D6): retomar la COT temprana despues de cancelar y restaurar la SC pide un motivo nuevo ---------------------
+
+MOTIVO_NUEVO = ("La solicitud se canceló y se restauró después de esta cotización: escribe un motivo nuevo para "
+                "retomarla sin la confirmación del cliente.")
+
+
+def _cancelar_y_restaurar(app_client, token, sc_id):
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc_id}/cancelar", json={"razon": "El cliente lo va a pensar"},
+                           headers=auth(token))
+    assert resp.status_code == 200, resp.text
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc_id}/restaurar", headers=auth(token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["estado"] == "ASIGNADA"  # con asesor: hoy se puede cotizar sin confirmacion
+
+
+def test_d6_retomar_tras_cancelar_y_restaurar_la_solicitud_exige_un_motivo_nuevo(app_client, db, admin_token,
+                                                                                  user_admin, monkeypatch):
+    """B2.1 (D6, decision del usuario): si la SC tiene un renglon RESTORED posterior a sin_confirmacion_sc_at, la marca
+    es de un ciclo anterior. Retomar la COT temprana RECHAZADA por la puerta B exige entonces motivo_sin_confirmacion:
+    sin el, 409 MOTIVO_NUEVO; si no cumple S5, 422 con el texto de S5; si es valido, la marca (ahora) y el motivo
+    nuevos y el renglon del cambio de estado que lo nombra van en el mismo commit del PATCH."""
+    from sqlalchemy.orm import Session
+    from app.core.textos_actividad import nombre_de_usuario
+    from app.models.erp_documents import SalesQuotation
+    sc = _sc(db, "SC-CSC060", user_admin)
+    cot = _cotizar(app_client, admin_token, sc.id, motivo=MOTIVO).json()["data"]["cotizacion"]   # 1. COT temprana
+    _rechazar(app_client, admin_token, cot["id"])                                                # 2. rechazada
+    _cancelar_y_restaurar(app_client, admin_token, sc.id)                                       # 3 y 4.
+    db.expire_all()
+    marca_vieja = db.get(SalesQuotation, cot["id"]).sin_confirmacion_sc_at
+    [restaurada] = _logs(db, "SC", sc.id, "RESTORED")
+    assert restaurada.created_at > marca_vieja
+
+    def _retomar(estado="BORRADOR", **extra):
+        return app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}",
+                                json={"estado": estado, "updated_by": "otra persona", **extra}, headers=auth(admin_token))
+
+    def _sigue_rechazada():
+        db.expire_all()
+        fila = db.get(SalesQuotation, cot["id"])
+        assert fila.estado == "RECHAZADA"
+        assert (fila.sin_confirmacion_sc_at, fila.sin_confirmacion_sc_motivo) == (marca_vieja, MOTIVO)
+
+    # 5. Sin motivo (o con null) -> 409 MOTIVO_NUEVO, tambien a Vencida; no se escribe nada.
+    for estado, extra in (("BORRADOR", {}), ("BORRADOR", {"motivo_sin_confirmacion": None}), ("VENCIDA", {})):
+        resp = _retomar(estado, **extra)
+        assert resp.status_code == 409, (estado, extra, resp.text)
+        assert resp.json()["detail"] == {"codigo": "MOTIVO_NUEVO", "mensaje": MOTIVO_NUEVO}
+        _sigue_rechazada()
+
+    # 6. Un motivo que no cumple S5 -> 422 con el texto de /cotizar-sin-confirmacion (un valor que no es texto cuenta
+    # como vacio).
+    corto = "El motivo debe tener al menos 10 caracteres."
+    for motivo, detalle in (("abc", corto), ("", corto), ("​" * 12, corto), (12345678901, corto),
+                            ("..........", "El motivo debe tener al menos 5 letras o números."),
+                            ("x" * 501, "El motivo no puede tener más de 500 caracteres.")):
+        resp = _retomar(motivo_sin_confirmacion=motivo)
+        assert resp.status_code == 422, (motivo, resp.text)
+        assert resp.json()["detail"] == detalle, motivo
+        _sigue_rechazada()
+    assert _logs(db, "COT", cot["id"], "ESTADO_CHANGED")[-1].new_estado == "RECHAZADA"  # ninguno la retomo
+
+    # 7. Con un motivo valido -> 200, en UN commit: la marca y el motivo nuevos (limpio, S5) y el renglon que lo nombra.
+    commit_real = Session.commit
+    commits = []
+
+    def contar(self):
+        if self is not db:
+            commits.append(1)
+        return commit_real(self)
+
+    monkeypatch.setattr(Session, "commit", contar)
+    resp = _retomar(motivo_sin_confirmacion="  Cliente​ volvió a pedir\n\nla cotización ")
+    monkeypatch.setattr(Session, "commit", commit_real)
+    assert resp.status_code == 200, resp.text
+    assert len(commits) == 1, len(commits)
+    nuevo = "Cliente volvió a pedir la cotización"
+    data = resp.json()["data"]
+    assert data["estado"] == "BORRADOR" and data["sin_confirmacion_sc_motivo"] == nuevo
+    db.expire_all()
+    fila = db.get(SalesQuotation, cot["id"])
+    assert fila.sin_confirmacion_sc_motivo == nuevo and fila.sin_confirmacion_sc_at > restaurada.created_at
+    retomada = _logs(db, "COT", cot["id"], "ESTADO_CHANGED")[-1]
+    assert (retomada.old_estado, retomada.new_estado) == ("RECHAZADA", "BORRADOR")
+    assert retomada.description == f"Estado cambiado a Borrador. Motivo nuevo: {nuevo}"
+    assert retomada.user_name == nombre_de_usuario(user_admin)  # S4: el autor de la sesion, no el updated_by
+    assert retomada.extra_data == {"motivo": nuevo,
+                                   "cambios": [{"etiqueta": "Motivo", "antes": MOTIVO, "despues": nuevo}]}
+    assert _logs(db, "COT", cot["id"], "UPDATED") == []  # el cambio del motivo no se repite en otro renglon
+    assert _logs(db, "SC", sc.id, "RESTORED") == [restaurada]  # no se toca la SC
+
+    # 8. La marca nueva es posterior a la restauracion: rechazarla y retomarla otra vez ya no pide motivo.
+    _rechazar(app_client, admin_token, cot["id"])
+    resp = _retomar()
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    fila = db.get(SalesQuotation, cot["id"])
+    assert fila.estado == "BORRADOR" and fila.sin_confirmacion_sc_motivo == nuevo
+
+
+def test_d6_sin_restauracion_posterior_retomar_no_pide_motivo_y_el_que_sobra_se_ignora(app_client, db, admin_token,
+                                                                                      user_admin):
+    """B2.1 (D6): sin un RESTORED posterior a la marca (tampoco si la SC se cancelo y restauro ANTES de crear la COT
+    temprana), retomar sigue como en S4, sin motivo. Un motivo_sin_confirmacion que no hace falta se ignora: no cambia
+    la marca ni el motivo y no da 422 aunque sea corto. Un PATCH sin cambio de estado tampoco lo usa."""
+    from app.models.erp_documents import SalesQuotation
+    sc = _sc(db, "SC-CSC061", user_admin)
+    _cancelar_y_restaurar(app_client, admin_token, sc.id)  # antes de la COT temprana: no cuenta
+    cot = _cotizar(app_client, admin_token, sc.id, motivo=MOTIVO).json()["data"]["cotizacion"]
+    db.expire_all()
+    marca = db.get(SalesQuotation, cot["id"]).sin_confirmacion_sc_at
+
+    def _patch(**body):
+        return app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}", json={"updated_by": "t", **body},
+                                headers=auth(admin_token))
+
+    for extra in ({}, {"motivo_sin_confirmacion": "abc"}, {"motivo_sin_confirmacion": "Otro motivo que nadie pidió"}):
+        _rechazar(app_client, admin_token, cot["id"])
+        resp = _patch(estado="BORRADOR", **extra)
+        assert resp.status_code == 200, (extra, resp.text)
+        db.expire_all()
+        fila = db.get(SalesQuotation, cot["id"])
+        assert fila.estado == "BORRADOR"
+        assert (fila.sin_confirmacion_sc_at, fila.sin_confirmacion_sc_motivo) == (marca, MOTIVO), extra
+        assert _logs(db, "COT", cot["id"], "ESTADO_CHANGED")[-1].description == "Estado cambiado a Borrador", extra
+    resp = _patch(notas="Nota cualquiera", motivo_sin_confirmacion="Motivo que no se usa aquí")
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    fila = db.get(SalesQuotation, cot["id"])
+    assert (fila.sin_confirmacion_sc_at, fila.sin_confirmacion_sc_motivo) == (marca, MOTIVO)
 
 
 # --- get_cotizacion: estado de la SC con la misma lectura -------------------------------------------------------------

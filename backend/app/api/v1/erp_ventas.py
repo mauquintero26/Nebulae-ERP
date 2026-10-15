@@ -383,7 +383,8 @@ DIAS_EN_PAPELERA = 30
 
 def _ahora_utc() -> datetime.datetime:
     """El reloj de la Papelera (B2.1 T1 r1): UTC sin zona, como eliminada_at. Lo usan los dias_restantes del GET y la
-    purga del administrador, para que digan lo mismo; nunca NOW() de la base, cuya zona la app no fija."""
+    purga del administrador, para que digan lo mismo; nunca NOW() de la base, cuya zona la app no fija. Tambien la marca
+    nueva de la COT temprana al retomarla con un motivo nuevo (B2.1, D6)."""
     return datetime.datetime.utcnow()
 
 def _fecha_de_purga(sc: CustomerRequest, referencias):
@@ -2292,7 +2293,9 @@ def _validar_cambio_de_estado_cotizacion(db: Session, cot: SalesQuotation, nuevo
     confirmacion vigente del cliente, salvo que la COT se haya creado sin confirmacion en esa misma SC y (S4, T11) la SC
     se pueda cotizar hoy sin confirmacion (_impedimento_para_cotizar_sin_confirmacion: no es Soporte, tiene asesor, un
     estado que se cotiza asi y productos).
-    Devuelve True si el cambio se acepta por esa excepcion (S4: el renglon del cambio lleva el autor de la sesion).
+    Devuelve True si el cambio se acepta por esa excepcion (S4: el renglon del cambio lleva el autor de la sesion). Con
+    True, update_cotizacion revisa enseguida, antes de tocar nada, si la marca es de un ciclo anterior (B2.1, D6:
+    _motivo_nuevo_para_retomar).
     S1 (T11): update_cotizacion ya rechazo con 422 un estado vacio o que no es texto (_exigir_estado_valido); None aqui
     es que el body no trae estado."""
     if nuevo is None or nuevo == cot.estado:
@@ -2355,6 +2358,35 @@ def _validar_cambio_de_estado_cotizacion(db: Session, cot: SalesQuotation, nuevo
                                          f"ella. {impedimento}")
             return True
     return False
+
+
+# B2.1 (D6): el 409 de retomar una COT temprana cuya marca es de un ciclo anterior. El detalle de la COT abre con el la
+# ventana del motivo de «Cotizar sin confirmación» y reintenta el PATCH con motivo_sin_confirmacion.
+_MOTIVO_NUEVO = {"codigo": "MOTIVO_NUEVO",
+                 "mensaje": "La solicitud se canceló y se restauró después de esta cotización: escribe un motivo nuevo "
+                            "para retomarla sin la confirmación del cliente."}
+
+
+def _motivo_nuevo_para_retomar(db: Session, cot: SalesQuotation, valor) -> Optional[str]:
+    """B2.1 (D6, decision del usuario): al retomar la COT temprana por la excepcion de la puerta B, su marca
+    (sin_confirmacion_sc_at) es de un ciclo anterior si la SC tiene un renglon RESTORED posterior: se cancelo y se
+    restauro despues, y el motivo viejo ya no explica el ciclo nuevo. En ese caso exige el motivo nuevo del body
+    (`valor`, motivo_sin_confirmacion): sin el (o null), 409 MOTIVO_NUEVO; con las reglas de S5 (_motivo_limpio y
+    _error_del_motivo, un valor que no es texto cuenta como vacio), 422 legible. Devuelve el motivo limpio, o None si la
+    marca es de este ciclo (entonces el motivo del body sobra y se ignora). Los dos relojes son UTC sin zona (_now del
+    modelo y utcnow/_ahora_utc)."""
+    restaurada_despues = db.query(ActivityLog.id).filter(
+        ActivityLog.entity_type == "SC", ActivityLog.entity_id == cot.sc_id, ActivityLog.action == "RESTORED",
+        ActivityLog.created_at > cot.sin_confirmacion_sc_at).first() is not None
+    if not restaurada_despues:
+        return None
+    if valor is None:
+        raise HTTPException(409, detail=_MOTIVO_NUEVO)
+    motivo = _motivo_limpio(valor if isinstance(valor, str) else "")
+    error_del_motivo = _error_del_motivo(motivo)
+    if error_del_motivo:
+        raise HTTPException(422, error_del_motivo)
+    return motivo
 
 
 # La COT solo cambia de solicitud fuera del ciclo de Gate 2 (sin enlace pendiente ni confirmacion del cliente).
@@ -2478,6 +2510,10 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     # Primero el cambio de solicitud: bloquea las dos SC en orden de id antes de que la guarda 5 bloquee la actual.
     cambio_de_solicitud = _leer_cambio_de_solicitud(db, cot, body)
     retoma_sin_confirmacion = _validar_cambio_de_estado_cotizacion(db, cot, body.get("estado"))
+    # B2.1 (D6): la marca de un ciclo anterior pide un motivo nuevo. No si la COT cambia de solicitud en este mismo PATCH:
+    # la marca se limpia (puerta C) y la SC nueva ya tiene la confirmacion vigente (_leer_cambio_de_solicitud).
+    motivo_nuevo = (_motivo_nuevo_para_retomar(db, cot, body.get("motivo_sin_confirmacion"))
+                    if retoma_sin_confirmacion and cambio_de_solicitud is None else None)
     if "productos" in body:
         _validar_precios_productos(body.get("productos") or [])
     # R3: anticipo manual con nota obligatoria. Se valida aqui, antes de tocar nada (409/422).
@@ -2514,6 +2550,13 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     for k in allowed:
         if k in body:
             setattr(cot, k, body[k])
+    if motivo_nuevo is not None:
+        # B2.1 (D6): la marca y el motivo del ciclo nuevo van en el commit de abajo, con el estado y su renglon. El
+        # renglon ya cuenta el cambio del motivo (antes -> despues): que la edicion no lo repita en un UPDATED.
+        motivo_anterior = cot.sin_confirmacion_sc_motivo
+        cot.sin_confirmacion_sc_at = _ahora_utc()
+        cot.sin_confirmacion_sc_motivo = motivo_nuevo
+        antes_log["sin_confirmacion_sc_motivo"] = motivo_nuevo
     marca_anulada = False
     estado_previo_sc_anterior = None
     if cambio_de_solicitud is not None:
@@ -2702,6 +2745,15 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
                                      {"etiqueta": "Razón", "despues": motivo_recotizacion}]},
              commit=False)
         _salir_de_gate2(db, cot)
+    if motivo_nuevo is not None:
+        # B2.1 (D6): el renglon del cambio de estado nombra el motivo nuevo y va en el MISMO commit que la marca, el
+        # motivo y el estado (S4: el autor es la sesion). El de abajo (cambia_estado_explicito) ya no se escribe.
+        _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
+             f"Estado cambiado a {etiqueta_estado('COT', cot.estado)}. Motivo nuevo: {motivo_nuevo}",
+             old_estado=old_estado, new_estado=cot.estado, user_name=nombre_de_usuario(user),
+             extra_data={"motivo": motivo_nuevo,
+                         "cambios": [{"etiqueta": "Motivo", "antes": motivo_anterior, "despues": motivo_nuevo}]},
+             commit=False, usuario=user)
     db.commit()
     db.refresh(cot)
     if not anula_por_recotizacion:
@@ -2753,11 +2805,13 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
             db.rollback()
             logger.error(f"Error al sincronizar Solicitud/Lead tras actualizar cotizacion {cot.id}: {exc}", exc_info=True)
         # S4 (T11): retomar la COT temprana por la excepcion de la puerta B queda a nombre del usuario de la sesion.
-        _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
-             f"Estado cambiado a {etiqueta_estado('COT', cot.estado)}",
-             old_estado=old_estado, new_estado=cot.estado,
-             user_name=nombre_de_usuario(user) if retoma_sin_confirmacion else body.get("updated_by"),
-             usuario=user)  # T11 calidad, ronda 1: un autor que queda vacio al limpiarlo es el de la sesion
+        # B2.1 (D6): con un motivo nuevo el renglon ya salio en el commit de arriba.
+        if motivo_nuevo is None:
+            _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
+                 f"Estado cambiado a {etiqueta_estado('COT', cot.estado)}",
+                 old_estado=old_estado, new_estado=cot.estado,
+                 user_name=nombre_de_usuario(user) if retoma_sin_confirmacion else body.get("updated_by"),
+                 usuario=user)  # T11 calidad, ronda 1: un autor que queda vacio al limpiarlo es el de la sesion
     elif anula_por_recotizacion:
         # El paso a BORRADOR (rompe_congelamiento sin un estado explicito en el body: el caso tipico es la Calculadora
         # mandando productos/total_cop) ya quedo en la Actividad, con su razon, en el commit de arriba. Aqui solo la
