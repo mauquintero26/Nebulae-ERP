@@ -448,6 +448,36 @@ def test_el_get_de_la_papelera_no_borra_ni_hace_commit(app_client, db, admin_tok
     assert "SC-PAP006" in _papelera(app_client, admin_token)  # abrirla otra vez tampoco la borra
 
 
+def test_el_get_y_la_purga_usan_el_mismo_reloj(app_client, db, admin_token, user_admin, monkeypatch):
+    """B2.1 T1 r1 (Minor 3): dias_restantes del GET y el corte de la purga salen del mismo `ahora` de Python
+    (erp_ventas._ahora_utc, UTC sin zona como eliminada_at), nunca de NOW() de la base. Con un `ahora` fijo en 2030
+    (fechas que para NOW() estan en el futuro): la de 30 dias exactos se ve con 30 dias y 0 restantes en el GET, y la
+    purga de ese mismo instante la conserva (borra las de MAS de 30 dias); un minuto despues la purga si la borra."""
+    import app.api.v1.erp_ventas as m
+    ahora = {"valor": datetime.datetime(2030, 1, 31, 12, 0, 0)}
+    monkeypatch.setattr(m, "_ahora_utc", lambda: ahora["valor"], raising=False)
+    base = ahora["valor"]
+    _sc(db, "SC-PAP007A", user_admin, estado="CANCELADA", eliminada_at=base - datetime.timedelta(days=30))
+    _sc(db, "SC-PAP007B", user_admin, estado="CANCELADA", eliminada_at=base - datetime.timedelta(days=30, minutes=1))
+    _sc(db, "SC-PAP007C", user_admin, estado="CANCELADA", eliminada_at=base - datetime.timedelta(days=29, hours=23))
+
+    papelera = _papelera(app_client, admin_token)
+    dias = {n: (papelera[n]["dias_en_papelera"], papelera[n]["dias_restantes"])
+            for n in ("SC-PAP007A", "SC-PAP007B", "SC-PAP007C")}
+    assert dias == {"SC-PAP007A": (30, 0), "SC-PAP007B": (30, 0), "SC-PAP007C": (29, 1)}
+
+    resp = _purgar(app_client, admin_token)
+    assert resp.status_code == 200, resp.text
+    numeros = resp.json()["data"]["numeros"]
+    assert "SC-PAP007B" in numeros and "SC-PAP007A" not in numeros and "SC-PAP007C" not in numeros
+
+    ahora["valor"] = base + datetime.timedelta(minutes=1)
+    resp = _purgar(app_client, admin_token)
+    assert resp.status_code == 200, resp.text
+    assert "SC-PAP007A" in resp.json()["data"]["numeros"]
+    assert not _existe(db, "SC-PAP007A") and _existe(db, "SC-PAP007C")
+
+
 def test_papelera_cuenta_los_dias_restantes_de_las_que_no_tienen_historial(app_client, db, admin_token, user_admin):
     _sc(db, "SC-PAP003A", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(5.5))
     _sc(db, "SC-PAP003B", user_admin, estado="CANCELADA")  # cancelada con la pastilla vieja: sin eliminada_at

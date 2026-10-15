@@ -72,6 +72,24 @@ def test_register_admin_con_rol_vacio_responde_422(app_client, db, admin_token):
     assert db.query(User).filter(User.email == correo).first() is None
 
 
+def test_register_escrituras_raras_de_admin_no_crean_cuenta(app_client, db, admin_token):
+    """B2.1 T1 r1 (Minor 4): fija lo que hoy da normalize_role con escrituras raras de ADMIN. Con espacios o con la i sin
+    punto se normaliza a ADMIN (403); con ancho completo o con tilde no es ningun rol (422). Ninguna crea la cuenta."""
+    esperado = {" admin ": 403, "ＡＤＭＩＮ": 422, "ÁDMIN": 422, "admın": 403}
+    for rol, codigo in esperado.items():
+        resp, correo = _registrar(app_client, rol, admin_token)
+        assert resp.status_code == codigo, (rol, resp.text)
+        assert db.query(User).filter(User.email == correo).first() is None, rol
+
+
+def test_register_guarda_el_rol_recortado(app_client, db, admin_token):
+    """B2.1 T1 r1 (Minor 5): el rol se guarda sin espacios en los bordes y con la forma que manda Empleados."""
+    resp, correo = _registrar(app_client, " asesor ", admin_token)
+    assert resp.status_code == 201, resp.text
+    db.expire_all()
+    assert db.query(User).filter(User.email == correo).first().role == "asesor"
+
+
 def test_update_role_email_backdoor_removed(app_client, db):
     u = User(
         email=f"jmquintero-nonadmin-{uuid.uuid4().hex[:6]}@test.nebulae",

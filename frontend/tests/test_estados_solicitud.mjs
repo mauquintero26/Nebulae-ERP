@@ -198,7 +198,7 @@ console.log('--- TEST 9: resumen de la cancelación (U18+H31) ---');
   assert.equal(r.fecha, '2026-10-04T15:30:00Z');
   assert.equal(r.seConserva, false);
   assert.equal(r.purga, '2026-11-03T15:30:01Z');
-  assert.equal(r.papelera, 'Se eliminará definitivamente el 03/11/2026 si no la restauras desde la Papelera');
+  assert.equal(r.papelera, 'Se puede eliminar definitivamente desde el 03/11/2026 si no se restaura.');
 
   // b) sin razón: extra_data.motivo del último CANCELLED (T2B)
   r = resumenCancelacion({ razon_cancelacion: null }, [cancelacion(60, { extra_data: { motivo: 'Precio alto' } })]);
@@ -253,15 +253,15 @@ console.log('--- TEST 9: resumen de la cancelación (U18+H31) ---');
   assert.equal(r.papelera, 'No se elimina automáticamente: no tiene fecha de envío a la Papelera');
   // la fecha de purga se muestra en hora de Colombia (03:00 UTC del 5 = 22:00 del 4 en Bogotá)
   r = resumenCancelacion({ se_conserva_en_papelera: false, purga_programada: '2026-11-05T03:00:00Z' }, []);
-  assert.equal(r.papelera, 'Se eliminará definitivamente el 04/11/2026 si no la restauras desde la Papelera');
+  assert.equal(r.papelera, 'Se puede eliminar definitivamente desde el 04/11/2026 si no se restaura.');
   // una fecha sin zona (formato viejo del API) se lee como UTC
   r = resumenCancelacion({ se_conserva_en_papelera: false, purga_programada: '2026-11-05T03:00:00' }, []);
-  assert.equal(r.papelera, 'Se eliminará definitivamente el 04/11/2026 si no la restauras desde la Papelera');
+  assert.equal(r.papelera, 'Se puede eliminar definitivamente desde el 04/11/2026 si no se restaura.');
   r = resumenCancelacion({ se_conserva_en_papelera: false, purga_programada: '2026-11-05 03:00:00.123456' }, []);
-  assert.equal(r.papelera, 'Se eliminará definitivamente el 04/11/2026 si no la restauras desde la Papelera');
+  assert.equal(r.papelera, 'Se puede eliminar definitivamente desde el 04/11/2026 si no se restaura.');
   // una fecha de calendario (sin hora) es ese mismo día: no se corre a la víspera por la zona
   r = resumenCancelacion({ se_conserva_en_papelera: false, purga_programada: '2026-11-03' }, []);
-  assert.equal(r.papelera, 'Se eliminará definitivamente el 03/11/2026 si no la restauras desde la Papelera');
+  assert.equal(r.papelera, 'Se puede eliminar definitivamente desde el 03/11/2026 si no se restaura.');
   // una fecha inválida no se muestra (cae al texto sin purga)
   r = resumenCancelacion({ se_conserva_en_papelera: false, purga_programada: 'no es fecha' }, []);
   assert.equal(r.papelera, 'No se elimina automáticamente: no tiene fecha de envío a la Papelera');

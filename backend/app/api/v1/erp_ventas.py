@@ -381,16 +381,23 @@ def _mensaje_solicitud_con_historial(sc: CustomerRequest, referencias) -> str:
 # Dias que una SC sin historial pasa en la Papelera antes de que la purga del administrador (purgar_papelera) la borre.
 DIAS_EN_PAPELERA = 30
 
+def _ahora_utc() -> datetime.datetime:
+    """El reloj de la Papelera (B2.1 T1 r1): UTC sin zona, como eliminada_at. Lo usan los dias_restantes del GET y la
+    purga del administrador, para que digan lo mismo; nunca NOW() de la base, cuya zona la app no fija."""
+    return datetime.datetime.utcnow()
+
 def _fecha_de_purga(sc: CustomerRequest, referencias):
-    """Cuando la purga borra la SC (eliminada_at + 30 dias, UTC sin zona), o None si no la va a borrar: se conserva
-    (tiene referencias) o no tiene eliminada_at (cancelada con la pastilla vieja: la purga exige eliminada_at)."""
+    """Desde cuando la purga puede borrar la SC (eliminada_at + 30 dias, UTC sin zona), o None si nunca la va a
+    borrar: se conserva (tiene referencias) o no tiene eliminada_at (cancelada con la pastilla vieja: la purga exige
+    eliminada_at)."""
     if referencias or sc.eliminada_at is None:
         return None
     return sc.eliminada_at + datetime.timedelta(days=DIAS_EN_PAPELERA)
 
 def _texto_papelera(db: Session, sc: CustomerRequest, referencias=None) -> str:
     """Renglon 'Papelera' de la Actividad al cancelar (U18, C1): se conserva como historial (y por que) o la fecha, en
-    hora de Colombia, en que la purga la elimina. referencias evita repetir la consulta si el llamador ya la hizo."""
+    hora de Colombia, desde la que se puede eliminar (B2.1 D2: la borra un administrador al vaciar la Papelera, no se
+    borra sola ese dia). referencias evita repetir la consulta si el llamador ya la hizo."""
     if referencias is None:
         referencias = _referencias_de_solicitud(db, sc.id)
     if referencias:
@@ -399,7 +406,7 @@ def _texto_papelera(db: Session, sc: CustomerRequest, referencias=None) -> str:
     if purga is None:
         return "No se elimina automáticamente: no tiene fecha de envío a la Papelera"
     fecha = purga.replace(tzinfo=datetime.timezone.utc).astimezone(ZONA_COLOMBIA).strftime("%d/%m/%Y")
-    return f"Se elimina definitivamente el {fecha} si no se restaura"
+    return f"Se puede eliminar definitivamente desde el {fecha} si no se restaura."
 
 def _cliente_de_la_solicitud(sc: CustomerRequest) -> tuple:
     """Quien confirma la SC por el enlace de Gate 1: su id, correo y telefono, normalizados (un formulario que reenvia
@@ -1112,7 +1119,7 @@ def purgar_papelera_vencida(db: Session, ahora: datetime.datetime, autor: str) -
     """), {"corte": corte}).mappings().all()
     for f in purgadas:
         _log(db, "SC", f["id"], f["numero"], "PURGED",
-             f"Solicitud eliminada automáticamente: llevaba más de {DIAS_EN_PAPELERA} días en la Papelera",
+             f"Solicitud eliminada definitivamente: llevaba más de {DIAS_EN_PAPELERA} días en la Papelera",
              old_estado="CANCELADA", user_name=autor,
              extra_data={"cliente": f["customer_name"], "motivo_cancelacion": f["razon_cancelacion"]}, commit=False)
     numeros = [f["numero"] for f in purgadas]
@@ -1125,7 +1132,7 @@ def purgar_papelera(user: User = Depends(require_roles(*ROLE_ADMIN)), db: Sessio
     canceladas hace mas de DIAS_EN_PAPELERA dias y sin documentos) con el autor de la sesion, en un solo commit. Si
     algo falla, rollback y 500: no borra nada a medias."""
     try:
-        resultado = purgar_papelera_vencida(db, datetime.datetime.utcnow(), nombre_de_usuario(user))
+        resultado = purgar_papelera_vencida(db, _ahora_utc(), nombre_de_usuario(user))
         db.commit()
     except Exception:
         db.rollback()
@@ -1142,18 +1149,19 @@ def get_papelera(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
     conservan, porque tienen documentos vinculados, o sin eliminada_at (cancelada con la pastilla vieja: la purga exige
     eliminada_at); 0 si ya vencio y espera a que un administrador vacie la Papelera. Cada fila trae sus notas (T11
     calidad, A3): el motivo de una cancelada vieja vive en ellas ('[CANCELADA] Razón: X', motivoDeCancelacion del
-    frontend) aunque la SC no este en la lista cargada."""
+    frontend) aunque la SC no este en la lista cargada. Los dias salen de _ahora_utc(), el mismo reloj de la purga
+    (B2.1 T1 r1), no de NOW() de la base."""
     try:
         rows = db.execute(text(f"""
             SELECT cr.id, cr.numero, cr.customer_name, cr.advisor_name, cr.tipo_solicitud,
                    cr.razon_cancelacion, cr.notas, cr.eliminada_at, cr.created_at, cr.updated_at,
-                   EXTRACT(DAY FROM NOW() - cr.eliminada_at) as dias_en_papelera,
+                   EXTRACT(DAY FROM CAST(:ahora AS timestamp) - cr.eliminada_at) as dias_en_papelera,
                    {_SQL_SC_CON_DOCUMENTOS} AS tiene_documentos
             FROM customer_requests cr
             WHERE cr.estado='CANCELADA'
             ORDER BY COALESCE(cr.eliminada_at, cr.updated_at) DESC
             LIMIT 200
-        """)).mappings().all()
+        """), {"ahora": _ahora_utc()}).mappings().all()
     except Exception:
         db.rollback()
         logger.exception("No se pudo cargar la papelera de solicitudes")

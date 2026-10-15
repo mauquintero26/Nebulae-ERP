@@ -35,12 +35,23 @@ def _now():
     return datetime.datetime.utcnow()
 
 def _correo_de_la_tienda(valor, obligatorio: bool = False) -> Optional[str]:
-    """B2.1 D5: el correo del cliente que manda la tienda web, sin espacios en los bordes. Sin correo (None o vacio)
-    devuelve None, salvo `obligatorio`. Con un formato que no sirve (clientes.correo_valido, el mismo de la SC y del
-    frontend) responde 422 «El correo «x» no es válido.», con x recortado: se llama antes de escribir nada."""
-    correo = "" if valor is None else str(valor).strip()
-    if not correo and not obligatorio:
+    """B2.1 D5: el correo del cliente que manda la tienda web, sin espacios en los bordes. Se llama antes de escribir
+    nada y responde 422 si no sirve:
+    - algo que no es texto ni None (lista, numero, dict, bool): «El correo no es válido.». Nunca se convierte a texto:
+      "['a@b.co']" cumpliria el patron;
+    - vacio: None (sin correo), o «El correo es obligatorio.» si `obligatorio`;
+    - mas largo que clientes.CORREO_MAX: el texto de clientes.texto_de_limite (primero el largo, como la SC);
+    - formato que no cumple clientes.correo_valido (el mismo de la SC y del frontend): «El correo «x» no es válido.»."""
+    if valor is not None and not isinstance(valor, str):
+        raise HTTPException(status_code=422, detail="El correo no es válido.")
+    correo = (valor or "").strip()
+    if not correo:
+        if obligatorio:
+            raise HTTPException(status_code=422, detail="El correo es obligatorio.")
         return None
+    excede = clientes.texto_de_limite("email", correo)
+    if excede:
+        raise HTTPException(status_code=422, detail=excede)
     if not clientes.correo_valido(correo):
         raise HTTPException(status_code=422, detail=f"El correo «{correo}» no es válido.")
     return correo

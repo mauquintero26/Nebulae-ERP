@@ -304,7 +304,8 @@ export const TEXTO_PAPELERA_SIN_FECHA = 'No se elimina automáticamente: no tien
 function textoPapelera(seConserva, purga) {
   if (seConserva === true) return 'Se conserva en la Papelera como historial (tiene documentos vinculados)';
   const dia = fechaColombia(purga);
-  if (dia) return `Se eliminará definitivamente el ${dia} si no la restauras desde la Papelera`;
+  // B2.1 D2: desde esa fecha se PUEDE eliminar (la borra un administrador al vaciar la Papelera), no se borra sola.
+  if (dia) return `Se puede eliminar definitivamente desde el ${dia} si no se restaura.`;
   if (seConserva === false) return TEXTO_PAPELERA_SIN_FECHA;
   return null;
 }

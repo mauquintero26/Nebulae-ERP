@@ -38,7 +38,7 @@ def register_user(
 ):
     """Crea una cuenta del ERP. B2.1 D1: solo un administrador crea cuentas (la pantalla de Empleados); sin sesion
     responde 401 y con otro rol, 403. El rol pedido, normalizado, debe ser uno de ALL_ERP_ROLES (si no, 422) y
-    nunca ADMIN (403)."""
+    nunca ADMIN (403). Se guarda como llega, sin espacios en los bordes (la forma de los ids de Empleados)."""
     rol = normalize_role(user.role)
     if rol == "ADMIN":
         raise HTTPException(
@@ -60,7 +60,7 @@ def register_user(
     new_user = User(
         email=user.email,
         password_hash=hashed_password,
-        role=user.role
+        role=user.role.strip()
     )
     db.add(new_user)
     db.commit()

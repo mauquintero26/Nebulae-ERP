@@ -115,6 +115,12 @@ def _fecha_purga(eliminada_at):
     return fecha.astimezone(ZoneInfo("America/Bogota")).strftime("%d/%m/%Y")
 
 
+def _texto_purga(eliminada_at):
+    """B2.1 T1 r1: el renglon 'Papelera' de una SC sin documentos. Desde esa fecha se PUEDE eliminar (la borra el
+    administrador o, en el B3, la revision automatica), no se borra sola ese dia."""
+    return f"Se puede eliminar definitivamente desde el {_fecha_purga(eliminada_at)} si no se restaura."
+
+
 def _purga_iso(eliminada_at):
     return (eliminada_at + datetime.timedelta(days=30)).isoformat() + "Z"
 
@@ -204,7 +210,7 @@ def test_cancelar_registra_motivo_estado_enlace_y_papelera(app_client, db, admin
         ("Motivo", "El cliente ya no la necesita"),
         ("Estado anterior", _etiqueta("PENDIENTE_CONFIRMACION")),
         ("Enlace de confirmación", "Anulado: el cliente ya no puede confirmar con el enlace que recibió"),
-        ("Papelera", f"Se elimina definitivamente el {_fecha_purga(sc.eliminada_at)} si no se restaura"),
+        ("Papelera", _texto_purga(sc.eliminada_at)),
     ]
     extra = {k: v for k, v in log.extra_data.items() if k != "cambios"}
     assert extra == {"motivo": "El cliente ya no la necesita", "estado_anterior": "PENDIENTE_CONFIRMACION",
@@ -348,8 +354,7 @@ def test_enviar_a_papelera_una_sc_ya_cancelada_registra_la_papelera(app_client, 
     assert sc.notas == "Nota"
     (log,) = _logs(db, sc.id, "SENT_TO_TRASH")
     assert log.description == "Solicitud enviada a la papelera"
-    assert _cambios(log) == [("Papelera", f"Se elimina definitivamente el {_fecha_purga(sc.eliminada_at)} "
-                                          "si no se restaura")]
+    assert _cambios(log) == [("Papelera", _texto_purga(sc.eliminada_at))]
     assert log.extra_data["lead_perdido"] is False
     assert _logs(db, sc.id, "CANCELLED") == []
 
@@ -405,7 +410,7 @@ def test_papelera_dice_si_se_conserva_y_el_detalle_lo_expone(app_client, db, adm
     assert _cancelar(app_client, admin_token, sin_docs.id).status_code == 200
     db.refresh(sin_docs)
     (log,) = _logs(db, sin_docs.id, "CANCELLED")
-    assert dict(_cambios(log))["Papelera"].startswith("Se elimina definitivamente el ")
+    assert dict(_cambios(log))["Papelera"] == _texto_purga(sin_docs.eliminada_at)
     d = _detalle(app_client, admin_token, sin_docs.id)
     assert d["se_conserva_en_papelera"] is False
     assert d["purga_programada"] == _purga_iso(sin_docs.eliminada_at)
@@ -450,7 +455,7 @@ def test_referencias_de_solicitud_y_texto_de_papelera(db, user_admin):
                                        _texto_papelera)
     sc = _sc(db, "SC-T2B010", user_admin, estado="CANCELADA", eliminada_at=AHORA())
     assert _referencias_de_solicitud(db, sc.id) == []
-    assert _texto_papelera(db, sc) == f"Se elimina definitivamente el {_fecha_purga(sc.eliminada_at)} si no se restaura"
+    assert _texto_papelera(db, sc) == _texto_purga(sc.eliminada_at)
     assert _mensaje_solicitud_con_historial(sc, []) == (
         "No se puede eliminar definitivamente la solicitud SC-T2B010: tiene documentos vinculados. "
         "Se conserva en la Papelera como historial.")
@@ -731,7 +736,7 @@ def test_purga_automatica_deja_rastro(app_client, db, admin_token, user_admin, m
     db.expire_all()
     assert db.get(CustomerRequest, vieja_id) is None
     (log,) = _logs(db, vieja_id, "PURGED")
-    assert log.description == "Solicitud eliminada automáticamente: llevaba más de 30 días en la Papelera"
+    assert log.description == "Solicitud eliminada definitivamente: llevaba más de 30 días en la Papelera"
     assert (log.entity_numero, log.old_estado, log.user_name) == (
         "SC-T2B021", "CANCELADA", nombre_de_usuario(user_admin))
     assert log.extra_data == {"cliente": "Cliente Prueba", "motivo_cancelacion": "Vieja"}
