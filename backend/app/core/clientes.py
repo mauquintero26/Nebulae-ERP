@@ -2,8 +2,10 @@
 cambios (H21, Bloque 2).
 
 Sin FastAPI. Lo usan erp_ventas (PATCH /solicitudes/{id}/cliente) y crm (PUT /crm/customers/{id} y el perfil 360): crm
-no puede importar erp_ventas, porque erp_ventas ya importa de crm. Nada de aqui hace commit: lo confirma el llamador.
+no puede importar erp_ventas, porque erp_ventas ya importa de crm. La tienda web (ecommerce y store) usa correo_valido
+(B2.1 D5). Nada de aqui hace commit: lo confirma el llamador.
 """
+import re
 from typing import Optional
 
 from sqlalchemy import func
@@ -17,6 +19,9 @@ from app.models.erp_documents import ActivityLog
 # 100. T6A (validarContacto) copia estos textos. Se leen al llamar (las pruebas los pueden cambiar).
 CORREO_MAX, TELEFONO_MAX, DIRECCION_MAX, CIUDAD_MAX = 150, 50, 255, 100
 TELEFONO_MIN_DIGITOS = 7
+# Formato del correo (se usa con fullmatch): algo@algo.algo, sin espacios ni una segunda @. Es el mismo CORREO_VALIDO de
+# frontend/src/lib/datos-cliente.js (esCorreoValido). Lo usan la SC (erp_ventas._normalizar_contacto) y la tienda web.
+CORREO_VALIDO = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 
 # S2/S3 (T11): los roles (ya normalizados con normalize_role) que ven el antes y el despues del contacto del cliente: el
 # historial customer_update del perfil 360 y los renglones de la Actividad de SC, COT y PVEN. Lista blanca: cualquier
@@ -53,6 +58,12 @@ def texto_de_limite(campo: str, valor) -> Optional[str]:
     if campo == "city" and largo > CIUDAD_MAX:
         return f"La ciudad es muy larga (máximo {CIUDAD_MAX} caracteres)."
     return None
+
+
+def correo_valido(texto) -> bool:
+    """True si `texto` es un texto que, sin espacios en los bordes, tiene el formato de CORREO_VALIDO (como
+    esCorreoValido del frontend). None, un texto vacio o algo que no es texto: False."""
+    return isinstance(texto, str) and CORREO_VALIDO.fullmatch(texto.strip()) is not None
 
 
 def correo_de_otro_cliente(db, correo, excluir_id=None):

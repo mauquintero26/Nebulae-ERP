@@ -15,6 +15,7 @@ from app.models.erp_documents import SaleOrder
 from app.models.fase1b import InventoryOwnerBalance, InventoryReservation, SaleOrderLineErp
 from app.schemas import store as schemas
 from app.api.v1.ecommerce import (
+    _correo_de_la_tienda,
     _get_authorized_ecommerce_warehouses,
     _get_real_sellable_stock,
     _gen_pweb_numero
@@ -83,6 +84,7 @@ def checkout(
     - Bloqueo pesimista concurrrente en reservas de inventario.
     - Estado inicial PENDIENTE_PAGO (CERO pagos confirmados creados).
     - Persistencia atomica en SaleOrder canonica y SalesOrder legacy vinculada.
+    - B2.1 D5: correo del cliente obligatorio y con formato valido (422 si no), recortado.
     """
     if not request.cart:
         raise HTTPException(status_code=400, detail="Cart is empty")
@@ -93,6 +95,10 @@ def checkout(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="El header 'Idempotency-Key' es obligatorio para el checkout."
         )
+
+    # B2.1 D5: el correo es obligatorio aqui y debe tener formato valido (422 si no), antes de escribir nada. El resto
+    # de la funcion (huella, cliente y pedido) lee request.customer.email: ya va recortado.
+    request.customer.email = _correo_de_la_tienda(request.customer.email, obligatorio=True)
 
     # 2. Calcular huella (fingerprint) del pedido
     sorted_items = sorted([{"sku_id": c.sku_id, "quantity": c.quantity} for c in request.cart], key=lambda x: x["sku_id"])

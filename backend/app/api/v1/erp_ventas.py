@@ -636,8 +636,7 @@ _ETIQUETAS_CONTACTO = {"customer_phone": "Teléfono", "customer_email": "Correo"
 _CLAVE_DE_CAMPO_CONTACTO = {**{k: k for k in _CONTACTO_CLIENTE},
                             **{col_cli: k for k, (_, col_cli) in _CONTACTO_CLIENTE.items()}}
 # Los limites de largo (correo 150, telefono 50, direccion 255, ciudad 100) viven en app/core/clientes.py: los comparte
-# PUT /crm/customers/{id}.
-_CORREO_VALIDO = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+# PUT /crm/customers/{id}. El formato del correo (clientes.correo_valido) tambien: lo comparte la tienda web (B2.1 D5).
 # S9 (T11): claves del contacto que PATCH /solicitudes/{id} ya no acepta (se corrigen con /cliente). La ciudad no es
 # columna de la SC; customer_id y customer_name (cambiar de cliente) siguen por update_solicitud.
 _CONTACTO_POR_CORRECCION = ("customer_phone", "customer_email", "customer_address")
@@ -669,7 +668,7 @@ def _normalizar_contacto(body: dict) -> dict:
             if excede:
                 raise HTTPException(422, excede)
             if clave == "customer_email":
-                if not _CORREO_VALIDO.fullmatch(valor):
+                if not clientes.correo_valido(valor):
                     raise HTTPException(422, f"El correo «{valor}» no es válido.")
                 valor = valor.lower()
             elif clave == "customer_phone" and sum(ch in "0123456789" for ch in valor) < clientes.TELEFONO_MIN_DIGITOS:

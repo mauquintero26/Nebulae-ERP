@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from typing import Optional
 from app.db.database import get_db
+from app.core import clientes
 from app.core.busqueda import productos_ilike
 from app.models.erp_documents import SaleOrder, ActivityLog
 from app.models.customers import Customer
@@ -32,6 +33,17 @@ router = APIRouter()
 
 def _now():
     return datetime.datetime.utcnow()
+
+def _correo_de_la_tienda(valor, obligatorio: bool = False) -> Optional[str]:
+    """B2.1 D5: el correo del cliente que manda la tienda web, sin espacios en los bordes. Sin correo (None o vacio)
+    devuelve None, salvo `obligatorio`. Con un formato que no sirve (clientes.correo_valido, el mismo de la SC y del
+    frontend) responde 422 «El correo «x» no es válido.», con x recortado: se llama antes de escribir nada."""
+    correo = "" if valor is None else str(valor).strip()
+    if not correo and not obligatorio:
+        return None
+    if not clientes.correo_valido(correo):
+        raise HTTPException(status_code=422, detail=f"El correo «{correo}» no es válido.")
+    return correo
 
 def _next_seq_pweb(db: Session) -> int:
     try:
@@ -612,7 +624,10 @@ def create_web_order(body: dict, db: Session = Depends(get_db)):
     - Estado inicial PENDIENTE_PAGO (CERO creacion de SaleOrderPayment en el checkout).
     - Secuencias seguras PostgreSQL (seq_pweb y seq_ven).
     - Idempotencia con huella canonica: replay 200 vs conflicto divergente 409.
+    - B2.1 D5: correo del cliente con formato valido (422 si no), antes de escribir nada, y recortado.
     """
+    # B2.1 D5: el resto de la funcion lee body["customer_email"] (huella, cliente y pedido): ya va recortado.
+    body["customer_email"] = _correo_de_la_tienda(body.get("customer_email"))
     _ensure_ecommerce_tables(db)
 
     # 1. Validar clave de idempotencia
@@ -988,14 +1003,15 @@ def list_carritos(estado: str = "ABANDONADO", user: User = Depends(require_roles
 
 @router.post("/carritos")
 def save_cart(body: dict, db: Session = Depends(get_db)):
+    correo = _correo_de_la_tienda(body.get("customer_email"))  # B2.1 D5: si trae correo, valido (422) y recortado
     _ensure_ecommerce_tables(db)
     session_id = body.get("session_id", str(uuid.uuid4()))
     existing = db.execute(text("SELECT id FROM web_carts WHERE session_id=:s"), {"s": session_id}).fetchone()
     pj = json_mod.dumps(body.get("productos", []))
     if existing:
-        db.execute(text("UPDATE web_carts SET customer_email=:e, customer_name=:n, productos=CAST(:p AS jsonb), total_cop=:t, estado=:s, updated_at=NOW() WHERE session_id=:sid"), {"e": body.get("customer_email"), "n": body.get("customer_name"), "p": pj, "t": body.get("total_cop", 0), "s": body.get("estado", "ACTIVO"), "sid": session_id})
+        db.execute(text("UPDATE web_carts SET customer_email=:e, customer_name=:n, productos=CAST(:p AS jsonb), total_cop=:t, estado=:s, updated_at=NOW() WHERE session_id=:sid"), {"e": correo, "n": body.get("customer_name"), "p": pj, "t": body.get("total_cop", 0), "s": body.get("estado", "ACTIVO"), "sid": session_id})
     else:
-        db.execute(text("INSERT INTO web_carts (session_id, customer_email, customer_name, productos, total_cop, estado, ip_address) VALUES (:sid, :e, :n, CAST(:p AS jsonb), :t, :s, :ip)"), {"sid": session_id, "e": body.get("customer_email"), "n": body.get("customer_name"), "p": pj, "t": body.get("total_cop", 0), "s": body.get("estado", "ACTIVO"), "ip": body.get("ip_address")})
+        db.execute(text("INSERT INTO web_carts (session_id, customer_email, customer_name, productos, total_cop, estado, ip_address) VALUES (:sid, :e, :n, CAST(:p AS jsonb), :t, :s, :ip)"), {"sid": session_id, "e": correo, "n": body.get("customer_name"), "p": pj, "t": body.get("total_cop", 0), "s": body.get("estado", "ACTIVO"), "ip": body.get("ip_address")})
     db.commit()
     return {"status": "success", "session_id": session_id}
 
