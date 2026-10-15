@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import {
   etiquetaTipoSolicitud, etiquetaModalidad, etiquetaValorCambio, claveModalidad, esModalidadCredito,
-  etiquetaModalidadCorta,
+  etiquetaModalidadCorta, MODALIDADES_PAGO_A_CREDITO,
 } from '../src/lib/etiquetas-ventas.js';
 
 console.log('--- TEST 1: los tipos de solicitud se muestran con tilde (H10: minúscula después de la primera palabra) ---');
@@ -57,25 +57,33 @@ console.log('--- TEST 3b: un crédito con otra forma no inventa un plazo: solo s
   assert.equal(etiquetaModalidad('Credito 30-60-90 dias'), 'Crédito 30-60-90 días');
   assert.equal(etiquetaModalidad('Pago a credito, 30 dias'), 'Pago a crédito, 30 días');
   assert.equal(etiquetaModalidad('CREDITO 2 CUOTAS'), 'CRÉDITO 2 CUOTAS', 'respeta las mayúsculas');
-  // 'Cruce de cuentas' empieza por 'cr': el backend lo cobra al 0% (R2, esModalidadCredito), pero la etiqueta no
-  // lo llama crédito (no tiene la forma de un plazo).
+  // 'Cruce de cuentas' empieza por 'cr' pero no es crédito (B2.1, D7: no está en la lista) ni tiene la forma de un plazo.
   assert.equal(etiquetaModalidad('Cruce de cuentas'), 'Cruce de cuentas');
   // Las palabras que solo contienen 'credito' o 'dias' no se tocan (palabra completa, como en el Bloque 1).
   assert.equal(etiquetaModalidad('Descreditos'), 'Descreditos');
   assert.equal(etiquetaModalidad('Medias'), 'Medias');
 }
 
-console.log('--- TEST 3c: claveModalidad y esModalidadCredito (el predicado único de crédito, R2) ---');
+console.log('--- TEST 3c: claveModalidad y esModalidadCredito (el predicado único de crédito: la lista exacta, D7) ---');
 {
   assert.equal(claveModalidad('  Ｃｒéｄｉｔｏ 30 Días '), 'credito 30 dias');
   assert.equal(claveModalidad(null), '');
   assert.equal(claveModalidad(undefined), '');
-  for (const v of ['Credito 30 dias', 'CRÉDITO', 'cr. 90 dias', 'Ｃｒｅｄｉｔｏ', 'Cruce de cuentas', 'Pago a credito']) {
+  // B2.1 (D7): las modalidades a crédito del formulario (los valores guardados), más 'credito' a secas.
+  assert.deepEqual([...MODALIDADES_PAGO_A_CREDITO], ['Credito 30 dias', 'Credito 60 dias']);
+  assert.ok(Object.isFrozen(MODALIDADES_PAGO_A_CREDITO));
+  for (const v of ['Credito 30 dias', 'Crédito 60 días', 'CREDITO 30 DIAS', 'credito', 'CRÉDITO', 'Ｃｒｅｄｉｔｏ',
+    '  Credito 60 Dias  ']) {
     assert.equal(esModalidadCredito(v), true, v);
   }
-  for (const v of ['Contado', '60/40 (60% anticipo - 40% pendiente)', 'Otro', '', '   ', null, undefined, 'Medias']) {
+  // Lo que empieza por 'cr' o dice 'credito' fuera de la lista ya no es crédito.
+  for (const v of ['Contado', '60/40 (60% anticipo - 40% pendiente)', 'Otro', '', '   ', null, undefined, 'Medias',
+    'Cruce de cuentas', 'Pago a credito', 'Credito 2 cuotas', 'cr. 90 dias', 'Credito 30d', 'Credito 90 dias']) {
     assert.equal(esModalidadCredito(v), false, String(v));
   }
+  // La etiqueta conserva las formas conocidas del plazo aunque no decidan el anticipo.
+  assert.equal(etiquetaModalidad('cr. 90 dias'), 'Crédito 90 días');
+  assert.equal(etiquetaModalidad('Credito 30d'), 'Crédito 30 días');
 }
 
 console.log('--- TEST 4: 60/40, contado y otro; lo desconocido queda como está ---');

@@ -18,6 +18,7 @@ import {
   etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp, textoChipPxp, propagacionRecotizacion, creditoPorRecotizacion,
   saldoAFavorAlCancelar, puedeGestionarCotizacion, notaAnticipoPorLinea,
 } from '../src/lib/dinero-ventas.js';
+import { pctAnticipoDeModalidad } from '../src/lib/etiquetas-solicitud.js';
 
 console.log('--- N1 TEST 1: los 8 medios de pago son los mismos que acepta el servidor ---');
 {
@@ -414,6 +415,19 @@ console.log('--- R23 (B2-T9A) TEST 15: la modalidad de la solicitud sale con til
   // El manual y la COT sin solicitud no muestran modalidad; el valor guardado no cambia.
   assert.equal(etiquetaAnticipoCotizacion({ ...credito, anticipo_pct: 50, anticipo_pct_manual: 50 }), '50% · manual');
   assert.equal(credito.sc_modalidad_pago, 'Credito 30 dias');
+}
+
+console.log('--- B2.1 (D7) TEST 15b: solo la lista exacta de crédito va sin anticipo; lo demás pide el 60 por defecto ---');
+{
+  // El % que muestra el formulario antes de cotizar (pctAnticipoDeModalidad ?? 60, como solicitud-client y el detalle
+  // de la SC) coincide con el que exige el servidor: 'Cruce de cuentas' y 'Pago a credito' ya no son crédito.
+  const pantalla = (modalidad) => pctAnticipoDeModalidad(modalidad) ?? 60;
+  for (const m of ['Cruce de cuentas', 'Pago a credito', 'Credito 2 cuotas', 'cr. 90 dias']) assert.equal(pantalla(m), 60, m);
+  for (const m of ['Credito 30 dias', 'Crédito 60 días', 'CREDITO 30 DIAS', 'credito']) assert.equal(pantalla(m), 0, m);
+  // La COT muestra el % del servidor con el texto de la modalidad tal cual.
+  const cruce = { sc_id: 9, anticipo_pct: 60, sc_modalidad_pago: 'Cruce de cuentas', anticipo_pct_manual: null };
+  assert.equal(etiquetaAnticipoCotizacion(cruce), '60% · Cruce de cuentas');
+  assert.equal(origenAnticipo(cruce), 'Modalidad Cruce de cuentas');
 }
 
 console.log('--- U19+U21 / C10 (B2-T9A, ruling 2) TEST 16: nota del anticipo por producto en TOTALES ---');

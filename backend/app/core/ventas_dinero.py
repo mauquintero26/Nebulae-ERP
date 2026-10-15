@@ -18,6 +18,13 @@ _CIEN = Decimal("100")
 # R2: "Otro", vacia o no reconocida -> 60%.
 PCT_ANTICIPO_POR_DEFECTO = Decimal("60")
 
+# B2.1 (D7, decision del usuario): las UNICAS modalidades a credito (0% de anticipo), ya normalizadas como las deja
+# _sin_tildes: las dos de MODALIDADES_PAGO del formulario de la SC ('Credito 30 dias' y 'Credito 60 dias') y 'credito'
+# a secas, por si alguien la escribe asi. Lo que solo empieza por "cr" o dice "credito" ('Cruce de cuentas', 'Pago a
+# credito', 'Credito 2 cuotas', 'cr. 90 dias') ya no es credito. El frontend tiene la misma lista
+# (CLAVES_MODALIDAD_CREDITO de frontend/src/lib/etiquetas-ventas.js; test_estados_solicitud compara las dos).
+MODALIDADES_CREDITO = frozenset({"credito", "credito 30 dias", "credito 60 dias"})
+
 # N1 (decision del usuario): medios con que se verifica el anticipo; la referencia es obligatoria (en efectivo,
 # el numero de recibo). 'TRASLADO' no esta: solo lo pone el servidor (R6).
 METODOS_PAGO_ANTICIPO = ("Transferencia bancaria", "Consignación", "Efectivo", "Tarjeta", "Nequi", "Daviplata",
@@ -82,14 +89,14 @@ def _sin_tildes(texto) -> str:
 def pct_anticipo_de_modalidad(modalidad):
     """% de anticipo que pide una modalidad de pago (R2), o None si no la reconoce ("Otro", vacia...).
 
-    Sin tildes ni mayusculas: Credito (todo lo que empiece por "Cr", o diga "credito") -> 0; '60/40' -> 60;
+    Sin tildes ni mayusculas (ni espacios en los bordes): una de MODALIDADES_CREDITO, exacta (D7) -> 0; '60/40' -> 60;
     'Contado' -> 100. Cubre los textos del formulario de la SC, de la agenda ('Credito 30 Dias') y del chat."""
     if modalidad is None:
         return None
     texto = _sin_tildes(modalidad)
     if not texto:
         return None
-    if texto.startswith("cr") or "credito" in texto:
+    if texto in MODALIDADES_CREDITO:
         return Decimal("0")
     if "60/40" in texto:
         return Decimal("60")

@@ -44,18 +44,37 @@ export function claveModalidad(modalidad) {
 }
 
 /**
- * El predicado ÚNICO de crédito (R2, el mismo de pct_anticipo_de_modalidad del backend): todo lo que empieza por 'cr'
- * o dice 'credito'. Lo usan etiquetaModalidad y pctAnticipoDeModalidad (etiquetas-solicitud.js). Ojo: también es
- * crédito para el backend 'Cruce de cuentas' (empieza por 'cr'), que cobra al 0%.
+ * B2.1 (D7): las modalidades a crédito del formulario de la SC, con el valor que se guarda. Inmutable. Son parte de
+ * MODALIDADES_PAGO (etiquetas-solicitud.js la arma con ellas): viven aquí para que esModalidadCredito las use sin que
+ * los dos módulos se importen entre sí.
+ * @type {ReadonlyArray<string>}
+ */
+export const MODALIDADES_PAGO_A_CREDITO = Object.freeze(['Credito 30 dias', 'Credito 60 dias']);
+
+/**
+ * B2.1 (D7): la ÚNICA lista de crédito del frontend, con claveModalidad: las modalidades a crédito de MODALIDADES_PAGO
+ * más 'credito' a secas. Es la misma MODALIDADES_CREDITO de backend/app/core/ventas_dinero.py
+ * (backend/tests/test_estados_solicitud.py compara las dos).
+ * @type {ReadonlyArray<string>}
+ */
+export const CLAVES_MODALIDAD_CREDITO = Object.freeze([...MODALIDADES_PAGO_A_CREDITO, 'Credito'].map(claveModalidad));
+
+/**
+ * El predicado ÚNICO de crédito (0 % de anticipo; el mismo de pct_anticipo_de_modalidad del backend). B2.1 (D7): solo
+ * la lista exacta CLAVES_MODALIDAD_CREDITO, sin tildes, mayúsculas ni espacios en los bordes; 'Cruce de cuentas',
+ * 'Pago a credito', 'Credito 2 cuotas' o 'cr. 90 dias' ya no son crédito. Lo usa pctAnticipoDeModalidad
+ * (etiquetas-solicitud.js); la etiqueta (etiquetaModalidad) no depende de él.
  * @param {any} modalidad
  * @returns {boolean}
  */
 export function esModalidadCredito(modalidad) {
-  const t = claveModalidad(modalidad);
-  return t.startsWith('cr') || t.includes('credito');
+  return CLAVES_MODALIDAD_CREDITO.includes(claveModalidad(modalidad));
 }
 
-/** Las formas conocidas de un plazo de crédito: 'credito 30 dias', 'credito 30d', 'cred 45', 'cr. 90 dias', 'credito'. */
+/**
+ * Las formas conocidas de un plazo de crédito: 'credito 30 dias', 'credito 30d', 'cred 45', 'cr. 90 dias', 'credito'.
+ * Solo dan el texto 'Crédito N días' de etiquetaModalidad: no deciden el anticipo (D7: eso es esModalidadCredito).
+ */
 const PLAZO_DE_CREDITO = /^(?:credito|cred\.?|cr\.?)\s*(\d+)?\s*(?:d|dias?)?\.?$/;
 
 /** Dónde va la tilde en cada palabra (posición de la vocal) y la vocal con tilde en minúscula y mayúscula. */
@@ -75,12 +94,14 @@ const ETIQUETA_60_40 = '60/40 (60% de anticipo y 40% al entregar)';
 
 /**
  * La modalidad de pago para mostrar (H10). Se compara con claveModalidad (sin tildes ni mayúsculas):
- * - un crédito con la forma conocida de un plazo ('Credito 30 dias', 'Credito 30 Dias' de la agenda, 'Credito 30d' de
- *   compras, 'cr. 90 dias', 'CRÉDITO') -> 'Crédito N días', o 'Crédito' sin número;
+ * - la forma conocida de un plazo de crédito ('Credito 30 dias', 'Credito 30 Dias' de la agenda, 'Credito 30d' de
+ *   compras, 'cr. 90 dias', 'CRÉDITO') -> 'Crédito N días', o 'Crédito' sin número. Es solo el texto: B2.1 (D7) cobra
+ *   sin anticipo solo la lista exacta (esModalidadCredito), así que 'cr. 90 dias' se lee 'Crédito 90 días' y pide el
+ *   anticipo por defecto;
  * - lo que dice '60/40' -> '60/40 (60% de anticipo y 40% al entregar)'; 'contado' -> 'Contado'; 'otro' -> 'Otro';
  * - cualquier otro valor queda como está, con la tilde en las palabras completas 'credito' y 'dias' (respetando las
  *   mayúsculas): no se inventa un plazo ('Credito 2 cuotas' -> 'Crédito 2 cuotas'), y 'Cruce de cuentas' no se llama
- *   crédito aunque el backend lo cobre al 0%.
+ *   crédito.
  * null -> ''.
  * @param {any} modalidad
  * @returns {string}
@@ -89,7 +110,7 @@ export function etiquetaModalidad(modalidad) {
   if (modalidad === null || modalidad === undefined) return '';
   const original = String(modalidad);
   const t = claveModalidad(original);
-  const plazo = esModalidadCredito(original) ? t.match(PLAZO_DE_CREDITO) : null;
+  const plazo = t.match(PLAZO_DE_CREDITO);
   if (plazo) return plazo[1] ? `Crédito ${Number(plazo[1])} días` : 'Crédito';
   if (t.includes('60/40')) return ETIQUETA_60_40;
   if (t === 'contado') return 'Contado';

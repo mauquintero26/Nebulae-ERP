@@ -152,8 +152,10 @@ _FRONTEND_LIB = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib"
 _MODALIDADES = ["60/40 (60% anticipo - 40% pendiente)", "Contado", "  CONTADO ", "Credito 30 dias", "Credito 60 dias",
                 "Crédito 60 Días", "Credito 30 Dias", "Credito 30d", "cr. 90 dias", "CRÉDITO", "Otro", "", "   ",
                 "Adelanto 50%", "Contra entrega", None,
-                # R2 cobra como credito todo lo que empiece por 'cr' (tambien 'Cruce de cuentas'); ancho completo (NFKD)
-                "Cruce de cuentas", "Ｃｒｅｄｉｔｏ 30 dias", "Credito 2 cuotas", "Pago a credito"]
+                # B2.1 (D7): solo la lista exacta es credito (con ancho completo via NFKD); lo que empieza por 'cr' o
+                # dice 'credito' fuera de ella cae en None, en los dos lados.
+                "CREDITO 30 DIAS", "credito", "  Crédito 60 días ", "Ｃｒｅｄｉｔｏ 30 dias",
+                "Cruce de cuentas", "Credito 2 cuotas", "Pago a credito", "Credito 90 dias"]
 
 
 def _node(archivo, cuerpo):
@@ -193,7 +195,18 @@ def test_paridad_pct_anticipo_de_modalidad_con_el_frontend():
     backend = [None if (p := pct_anticipo_de_modalidad(v)) is None else int(p) for v in _MODALIDADES]
     assert espejo == backend, list(zip(_MODALIDADES, backend, espejo))
     assert backend[:4] == [60, 100, 100, 0]  # la prueba compara valores reales, no dos listas de None
-    assert backend[-4:] == [0, 0, 0, 0]
+    assert backend[-8:] == [0, 0, 0, 0, None, None, None, None]  # D7: la lista exacta, y lo que no esta en ella
+    por_modalidad = dict(zip(_MODALIDADES, backend))
+    assert por_modalidad["cr. 90 dias"] is None and por_modalidad["Credito 30d"] is None
+
+
+def test_paridad_lista_de_modalidades_a_credito_con_el_frontend():
+    """B2.1 (D7): una sola lista por capa y las dos iguales. La del frontend (CLAVES_MODALIDAD_CREDITO de
+    etiquetas-ventas.js, armada con las modalidades a credito de MODALIDADES_PAGO mas 'credito') tiene las mismas claves
+    que MODALIDADES_CREDITO del backend: ni una de mas ni una de menos en ningun lado."""
+    from app.core.ventas_dinero import MODALIDADES_CREDITO
+    espejo = _node("etiquetas-ventas.js", "[...m.CLAVES_MODALIDAD_CREDITO]")
+    assert sorted(espejo) == sorted(MODALIDADES_CREDITO) == ["credito", "credito 30 dias", "credito 60 dias"]
 
 
 def test_paridad_reglas_de_estados_solicitud_con_el_frontend():

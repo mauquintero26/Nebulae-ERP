@@ -1,7 +1,8 @@
 """H36+H43 (y reglas R2/R3): el anticipo de la cotizacion sale de la modalidad de pago de la solicitud.
 
-- R2: Contado -> 100%, 60/40 -> 60%, Credito (empieza por "Cr", sin tildes ni mayusculas) -> 0%, "Otro" o
-  vacia -> 60%. Siempre min(pct, 100).
+- R2: Contado -> 100%, 60/40 -> 60%, Credito -> 0%, "Otro" o vacia -> 60%. Siempre min(pct, 100). B2.1 (D7): credito
+  es SOLO la lista exacta MODALIDADES_CREDITO ('credito', 'credito 30 dias', 'credito 60 dias', sin tildes ni
+  mayusculas); 'Cruce de cuentas', 'Pago a credito', 'Credito 2 cuotas' o 'cr. 90 dias' caen en el 60% por defecto.
 - Lo calcula el servidor: al re-cotizar (recotizacion=true) o cuando cambia el total. Cualquier anticipo_cop
   del body se ignora. Recalcular el anticipo no invalida la confirmacion del cliente.
 - Si cambia la modalidad de la SC se recalculan sus COT abiertas sin pedido vigente (sin commit intermedio).
@@ -75,9 +76,25 @@ def test_pct_anticipo_de_modalidad_sin_tildes_ni_mayusculas():
     assert pct_anticipo_de_modalidad("  CONTADO ") == Decimal("100")
     assert pct_anticipo_de_modalidad("CRÉDITO") == Decimal("0")
     assert pct_anticipo_de_modalidad("Credito 30 Dias") == Decimal("0")   # texto de la agenda
-    assert pct_anticipo_de_modalidad("cr. 90 dias") == Decimal("0")       # R2: todo lo que empiece por "Cr"
+    assert pct_anticipo_de_modalidad("cr. 90 dias") is None               # D7: no esta en la lista exacta
     assert pct_anticipo_de_modalidad("") is None
     assert pct_anticipo_de_modalidad("   ") is None
+
+
+def test_d7_solo_la_lista_exacta_de_modalidades_a_credito_cobra_0():
+    """B2.1 (D7, decision del usuario): ya no es credito todo lo que empiece por «cr» o diga «credito», sino solo la
+    lista exacta (las dos modalidades a credito del formulario de la SC, mas 'credito' a secas), comparada sin tildes,
+    sin mayusculas y sin los espacios de los bordes. Lo demas da None: el 60% por defecto de anticipo_cotizacion."""
+    from app.core.ventas_dinero import MODALIDADES_CREDITO
+    assert MODALIDADES_CREDITO == frozenset({"credito", "credito 30 dias", "credito 60 dias"})
+    for modalidad in ("Credito 30 dias", "Crédito 60 días", "CREDITO 30 DIAS", "credito", "  Crédito 30 Días  ",
+                      "Ｃｒｅｄｉｔｏ 60 dias"):
+        assert pct_anticipo_de_modalidad(modalidad) == Decimal("0"), modalidad
+    for modalidad in ("Cruce de cuentas", "Pago a credito", "Credito 2 cuotas", "cr. 90 dias", "Credito 30d",
+                      "Credito 90 dias", "Credito  30 dias", "Descreditos"):
+        assert pct_anticipo_de_modalidad(modalidad) is None, modalidad
+    assert pct_anticipo_de_modalidad("Contado") == Decimal("100")
+    assert pct_anticipo_de_modalidad(MOD_60_40) == Decimal("60")
 
 
 # --- Re-cotizar y guardar la cotizacion ----------------------------------------------------------
@@ -129,6 +146,19 @@ def test_modalidad_otro_o_vacia_pide_60(app_client, db, admin_token):
         assert resp.status_code == 200, resp.text
         db.refresh(cot)
         assert cot.anticipo_cop == Decimal("600000"), modalidad
+
+
+def test_d7_una_modalidad_fuera_de_la_lista_pide_60_y_una_de_la_lista_0(app_client, db, admin_token):
+    """B2.1 (D7): el anticipo que exige la COT. 'Cruce de cuentas' (empieza por «cr») y 'Pago a credito' (dice
+    «credito») ya no se cobran sin anticipo: piden el 60% por defecto. 'CREDITO 30 DIAS' sigue en 0."""
+    for i, (modalidad, anticipo) in enumerate((("Cruce de cuentas", "600000"), ("Pago a credito", "600000"),
+                                               ("CREDITO 30 DIAS", "0"))):
+        sc = _sc(db, f"SC-ANT06{i}", modalidad)
+        cot = _cot(db, f"COT-ANT06{i}", sc, total_cop=0, anticipo_cop=0)
+        resp = _patch_cot(app_client, admin_token, cot.id, {"total_cop": 1000000, "subtotal_cop": 1000000})
+        assert resp.status_code == 200, resp.text
+        db.refresh(cot)
+        assert cot.anticipo_cop == Decimal(anticipo), modalidad
 
 
 def test_patch_sin_total_no_toca_el_anticipo(app_client, db, admin_token):
