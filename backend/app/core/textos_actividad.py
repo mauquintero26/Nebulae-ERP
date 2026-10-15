@@ -91,6 +91,28 @@ PAGOS_EN_ACTIVIDAD = {
     "AJUSTE_AUTORIZADO": ("Ajuste autorizado", False),
 }
 
+# Revision final (B4): el nombre de cada tipo de pago, con los mismos codigos que PAGOS_EN_ACTIVIDAD (la frase de la
+# Actividad). ESPEJO de TIPOS_PAGO de frontend/src/lib/dinero-ventas.js: lo usa el perfil 360 (crm._ETIQUETAS_360) y la
+# prueba test_las_etiquetas_de_pago_del_360_espejan_al_frontend... (test_solicitud_corregir_datos_cliente.py) lo compara
+# con esa libreria y con el CHECK chk_sop_tipo de la base.
+TIPOS_PAGO = {
+    "ANTICIPO": "Anticipo",
+    "ABONO": "Abono",
+    "PAGO_TOTAL": "Pago total",
+    "PAGO_SALDO": "Pago del saldo",
+    "DEVOLUCION": "Devolución",
+    "REVERSION": "Reversión",
+    "AJUSTE_AUTORIZADO": "Ajuste autorizado",
+}
+
+# Revision final (B9): la resolucion financiera de una devolucion (SaleOrderReturn.financial_resolution). La usan el
+# perfil 360 (crm._ETIQUETAS_360) y el renglon DEVOLUCION_PROCESADA de erp_ventas_fase4 (antes con el codigo crudo).
+RESOLUCIONES_DEVOLUCION = {
+    "DEVOLUCION_DINERO": "Devolución de dinero",
+    "SALDO_A_FAVOR": "Saldo a favor",
+    "SIN_DEVOLUCION_DINERO": "Sin devolución de dinero",
+}
+
 # T11 calidad (B3): los tipos de solicitud GUARDADOS (sin tilde: son la clave que se compara) y como se muestran. Espejo
 # de TIPOS_SOLICITUD de frontend/src/lib/etiquetas-ventas.js (test_textos_actividad compara los dos).
 TIPOS_SOLICITUD = {

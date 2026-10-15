@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Response
+from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.models.crm import Alert
@@ -14,9 +14,11 @@ from app.api.v1.schemas_fase5 import AgendaActivityCreate, AgendaActivityRespons
 
 from app.schemas import crm as schemas
 from app.core import cambios_documento, clientes
-from app.core.textos_actividad import ETIQUETAS_ESTADO, etiqueta_estado, etiqueta_tipo_solicitud, nombre_de_usuario
+from app.core.textos_actividad import (
+    ETIQUETAS_ESTADO, RESOLUCIONES_DEVOLUCION, TIPOS_PAGO, etiqueta_estado, etiqueta_tipo_solicitud, nombre_de_usuario,
+)
 from app.core.ventas_dinero import pesos
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.exc import DataError, IntegrityError
 import datetime, logging, time, threading
 from decimal import InvalidOperation
@@ -360,21 +362,16 @@ STATUS_COLORS = {
 # respaldo no puede escribir (tildes, 'de') o que no es un estado de esos documentos esta en _ETIQUETAS_360.
 # Tipos y estados de pago: ESPEJO de TIPOS_PAGO y ESTADOS_PAGO de frontend/src/lib/dinero-ventas.js; la prueba
 # test_las_etiquetas_de_pago_del_360_espejan_al_frontend... (test_solicitud_corregir_datos_cliente.py) las compara con esa
-# libreria y con los CHECK de la base.
-_TIPOS_PAGO = {
-    "ANTICIPO": "Anticipo", "ABONO": "Abono", "PAGO_TOTAL": "Pago total", "PAGO_SALDO": "Pago del saldo",
-    "DEVOLUCION": "Devolución", "REVERSION": "Reversión", "AJUSTE_AUTORIZADO": "Ajuste autorizado",
-}
+# libreria y con los CHECK de la base. Revision final (B4): los tipos viven en la fuente unica (textos_actividad.TIPOS_PAGO,
+# junto a PAGOS_EN_ACTIVIDAD).
+_TIPOS_PAGO = TIPOS_PAGO
 # T11 calidad (B2): los estados de pago y de entrega viven en la fuente unica (textos_actividad.ETIQUETAS_ESTADO).
 _ESTADOS_PAGO = ETIQUETAS_ESTADO["PAGO"]
 _ETIQUETAS_360 = {
     "PAGO_TIPO": _TIPOS_PAGO,
     "PAGO_ESTADO": _ESTADOS_PAGO,
     "ENTREGA": ETIQUETAS_ESTADO["ENTREGA"],  # estado de SaleOrderDelivery: el resto lo humaniza el respaldo
-    "RESOLUCION": {  # financial_resolution de SaleOrderReturn
-        "DEVOLUCION_DINERO": "Devolución de dinero", "SALDO_A_FAVOR": "Saldo a favor",
-        "SIN_DEVOLUCION_DINERO": "Sin devolución de dinero",
-    },
+    "RESOLUCION": RESOLUCIONES_DEVOLUCION,  # financial_resolution de SaleOrderReturn (revision final, B9: fuente unica)
     "AGENDA": {  # activity_type de CustomerAgendaActivity (los 12 que documenta app/models/fase5.py)
         "ANTICIPO_PENDIENTE": "Anticipo pendiente", "CONFIRMACION_PROVEEDOR": "Confirmación del proveedor",
         "TRACKING_PENDIENTE": "Tracking pendiente", "RECEPCION_ESTIMADA": "Recepción estimada",
@@ -1712,35 +1709,43 @@ def search_customers(q: str = "", user: User = Depends(require_roles(*ALL_ERP_RO
 
 from app.models.catalog import Product, ProductSKU, Brand, Category
 
-@router.get("/products/search", response_model=dict)
-def search_products(q: str = "", user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Session = Depends(get_db)):
-    """Search products by name for autocomplete in lead quotation field."""
-    try:
-        if not q or len(q) < 1:
-            products = db.query(Product).filter(Product.is_active == True).limit(10).all()
-        else:
-            q_lower = f"%{q.lower()}%"
-            products = db.query(Product).filter(
-                Product.is_active == True,
-                (Product.name.ilike(q_lower)) | (Product.description.ilike(q_lower))
-            ).limit(15).all()
+# B10 (revision final): lo que responde /products/search si la busqueda falla (sin str(e): ni el SQL ni sus parametros).
+_BUSQUEDA_FALLO = "No se pudo buscar en el catálogo. Intenta de nuevo."
 
-        result = []
-        for p in products:
-            skus = db.query(ProductSKU).filter(ProductSKU.product_id == p.id).all()
-            for sku in skus:
-                result.append({
-                    "id": sku.id,
-                    "product_id": p.id,
-                    "product_name": p.name,
-                    "sku": sku.sku or "",
-                    "sale_price": float(sku.sale_price or 0),
-                    "cost_price": float(sku.cost_price or 0),
-                    "display": f"{p.name}" + (f" — {sku.sku}" if sku.sku else ""),
-                })
-        return {"status": "success", "data": result}
-    except Exception as e:
-        return {"status": "success", "data": [], "warning": str(e)}
+
+@router.get("/products/search", response_model=dict)
+def search_products(q: str = "", limit: int = Query(15, ge=1, le=50),
+                    user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Session = Depends(get_db)):
+    """Busca productos activos por nombre o descripcion para los autocompletar (CRM, la SC y la COT de Ventas, Compras e
+    Inventario). Cada renglon es un SKU (id = sku.id).
+
+    B10 (revision final): respeta `limit` (renglones; antes se ignoraba y salian hasta 15 productos con todos sus SKU),
+    ordena primero la coincidencia exacta del nombre y despues por nombre (con mas coincidencias que el limite, la exacta
+    no se pierde: el buscador de la SC la vincula, A4), y si la busqueda falla responde 500 con un mensaje generico en
+    espanol; el detalle queda solo en el log del servidor (antes: 200 con data [] y warning: str(e), y el buscador decia
+    «no está en el catálogo»)."""
+    texto = q.strip()
+    try:
+        consulta = (db.query(Product, ProductSKU).join(ProductSKU, ProductSKU.product_id == Product.id)
+                    .filter(Product.is_active == True))
+        orden = [Product.name, ProductSKU.id]
+        if texto:
+            parecido = f"%{texto.lower()}%"
+            consulta = consulta.filter(Product.name.ilike(parecido) | Product.description.ilike(parecido))
+            orden.insert(0, case((func.lower(Product.name) == texto.lower(), 0), else_=1))
+        filas = consulta.order_by(*orden).limit(limit).all()
+    except Exception:
+        logger.exception("No se pudo buscar en el catálogo (q=%r)", q)
+        raise HTTPException(status_code=500, detail=_BUSQUEDA_FALLO)
+    return {"status": "success", "data": [{
+        "id": sku.id,
+        "product_id": p.id,
+        "product_name": p.name,
+        "sku": sku.sku or "",
+        "sale_price": float(sku.sale_price or 0),
+        "cost_price": float(sku.cost_price or 0),
+        "display": f"{p.name}" + (f" — {sku.sku}" if sku.sku else ""),
+    } for p, sku in filas]}
 
 
 _PLACEHOLDER_BRAND_CATEGORY_NAME = "Sin clasificar"

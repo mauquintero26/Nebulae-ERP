@@ -71,7 +71,8 @@ def revoke_pending_tokens(db: Session, document_type: str, document_id: int, com
 
     contar_vigentes=True (H21, ronda 2 de T5) devuelve cuantos de los tokens que ESTE UPDATE revoco el cliente todavia
     podia usar (sin vencer), leidos con RETURNING: es lo que de verdad se anulo, sin una consulta aparte que otra
-    transaccion pueda adelantar. Por defecto devuelve None, como siempre."""
+    transaccion pueda adelantar. Por defecto devuelve None, como siempre. Revision final (B5): es la unica manera de
+    contarlos; cancelar y restaurar la SC tambien la usan (el conteo previo, contar_tokens_vigentes, ya no existe)."""
     now = datetime.utcnow()
     sql = """
             UPDATE document_confirmation_tokens
@@ -87,17 +88,6 @@ def revoke_pending_tokens(db: Session, document_type: str, document_id: int, com
     if commit:
         db.commit()
     return vigentes
-
-
-def contar_tokens_vigentes(db: Session, document_type: str, document_id: int) -> int:
-    """Enlaces de confirmacion de este documento que el cliente todavia puede usar: sin usar ni revocar (used_at
-    NULL) y sin vencer. Se cuenta ANTES de revoke_pending_tokens para que la Actividad diga si se anulo uno vivo."""
-    return db.query(DocumentConfirmationToken).filter(
-        DocumentConfirmationToken.document_type == document_type,
-        DocumentConfirmationToken.document_id == document_id,
-        DocumentConfirmationToken.used_at.is_(None),
-        DocumentConfirmationToken.expires_at > datetime.utcnow(),
-    ).count()
 
 
 def peek_token(db: Session, token: str) -> tuple[str, int] | None:

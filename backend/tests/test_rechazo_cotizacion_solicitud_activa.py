@@ -525,3 +525,92 @@ def test_t11_f2_cambiar_el_cliente_anula_el_enlace_de_la_cotizacion_temprana(app
     assert _token_usado(db, enlace_mismo)
     [renglon] = _renglones_del_enlace(cot_mismo)
     assert "SC-RCH018" in renglon.description
+
+
+# --- Revisión final del Bloque 2 (B7: el cambio de cliente de una SC y Gate 1) ---------------------------------
+
+def _ficha_con_contacto(db, nombre, phone=None, address=None):
+    import uuid
+    from app.models.customers import Customer
+    c = Customer(first_name=nombre, last_name="Prueba", email=f"{nombre.lower()}-{uuid.uuid4().hex[:6]}@test.nebulae",
+                 phone=phone, address=address)
+    db.add(c); db.commit(); db.refresh(c)
+    return c
+
+
+def _confirmar_cot_por_enlace(app_client, db, cot):
+    """El cliente confirma la COT por su enlace (la COT se reenvió: Pendiente por confirmación con un enlace nuevo)."""
+    import uuid
+    from app.core.confirmation_tokens import create_confirmation_token
+    cot.estado = "PENDIENTE_CONFIRMACION"
+    db.commit()
+    raw = create_confirmation_token(db, "COT", cot.id)
+    resp = app_client.post("/api/v1/confirmar/confirmar", json={"token": raw},
+                           headers={"Idempotency-Key": f"rfb7-{uuid.uuid4().hex}"})
+    assert resp.status_code == 200, resp.text
+
+
+def test_revision_final_b7_la_cotizacion_del_cliente_anterior_no_confirma_la_solicitud(app_client, db, admin_token,
+                                                                                       user_admin):
+    """B7 (a), residual F2: una COT temprana conserva el cliente anterior (A). Si la SC pasa al cliente B y A confirma
+    esa COT (reenviada a su contacto), la sincronización NO deja CONFIRMADA la SC de B: la confirmación es de otro
+    cliente (_es_documento_de_otro_cliente). Control: con la COT del mismo cliente, U15 sí la confirma."""
+    from app.models.erp_documents import SalesQuotation
+    uno, otra = _ficha(db, "Uno"), _ficha(db, "Otra")
+    sc = _sc(db, "SC-RFB7001", user_admin, con_marca=False, estado="ASIGNADA", customer_id=uno.id)
+    temprana = SalesQuotation(numero="COT-RFB7001", sc_id=sc.id, sc_numero=sc.numero, customer_id=uno.id,
+                              customer_name="Uno Prueba", estado="BORRADOR", productos=[LINEA])
+    db.add(temprana); db.commit(); db.refresh(temprana)
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={
+        "customer_id": otra.id, "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+
+    _confirmar_cot_por_enlace(app_client, db, temprana)
+    db.expire_all()
+    assert db.get(SalesQuotation, temprana.id).estado == "CONFIRMADA"
+    db.refresh(sc)
+    assert sc.estado == "ASIGNADA" and sc.gate1_confirmed_at is None
+    assert _logs(db, "SC", sc.id, "ESTADO_CHANGED") == []
+
+    # Control: la COT del mismo cliente de la SC sí la confirma (U15).
+    misma = _sc(db, "SC-RFB7002", user_admin, con_marca=False, estado="ASIGNADA", customer_id=otra.id)
+    suya = SalesQuotation(numero="COT-RFB7002", sc_id=misma.id, sc_numero=misma.numero, customer_id=otra.id,
+                          customer_name="Otra Prueba", estado="BORRADOR", productos=[LINEA])
+    db.add(suya); db.commit(); db.refresh(suya)
+    _confirmar_cot_por_enlace(app_client, db, suya)
+    db.refresh(misma)
+    assert misma.estado == "CONFIRMADA"
+
+
+def test_revision_final_b7_cambiar_el_cliente_copia_el_contacto_de_la_ficha_nueva(app_client, db, admin_token,
+                                                                                  user_admin, contador_sql):
+    """B7 (b): PATCH /solicitudes/{id} que cambia customer_id copia el teléfono, el correo y la dirección de la ficha
+    nueva en el mismo commit; un dato que la ficha nueva no tiene queda vacío (no el del cliente anterior). El enlace
+    pendiente de la SC era del cliente anterior: se revoca (aquí en Asignada, donde ni el reinicio ni la anulación por
+    cliente lo hacían). Un customer_id que no existe es 422 sin escribir nada."""
+    from app.core.confirmation_tokens import create_confirmation_token
+    uno = _ficha_con_contacto(db, "Uno", phone="3001112233", address="Calle 1 # 2-3")
+    otra = _ficha_con_contacto(db, "Otra", phone="3109998877", address=None)
+    sc = _sc(db, "SC-RFB7003", user_admin, con_marca=False, estado="ASIGNADA", customer_id=uno.id,
+             customer_email=uno.email, customer_phone=uno.phone, customer_address=uno.address)
+    enlace = create_confirmation_token(db, "SC", sc.id)  # un enlace al contacto anterior que hubiera quedado vivo
+
+    with contador_sql.ventana() as v:
+        resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={
+            "customer_id": otra.id, "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert v.commits == 1
+    data = resp.json()["data"]
+    assert (data["customer_phone"], data["customer_email"], data["customer_address"]) == \
+        ("3109998877", otra.email, None)
+    db.refresh(sc)
+    assert (sc.customer_id, sc.customer_phone, sc.customer_email, sc.customer_address) == \
+        (otra.id, "3109998877", otra.email, None)
+    assert _token_usado(db, enlace)
+
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={
+        "customer_id": 2147480000, "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == "El cliente indicado no existe."
+    db.refresh(sc)
+    assert sc.customer_id == otra.id

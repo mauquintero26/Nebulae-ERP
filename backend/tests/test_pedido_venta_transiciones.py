@@ -341,3 +341,49 @@ def test_crear_un_pedido_suelto_es_solo_de_administracion(app_client, db, admin_
     assert db.query(SaleOrder).count() == antes
     resp = app_client.post("/api/v1/ventas/pedidos", json=body, headers=auth(admin_token))
     assert resp.status_code == 201, resp.text
+
+
+def test_revision_final_b9_el_422_de_una_transicion_de_fase4_nombra_los_estados(app_client, db, admin_token):
+    """B9 (revisión final): el 422 de _validate_transition (erp_ventas_fase4) nombra los estados con su etiqueta
+    (etiqueta_estado), nunca con el código crudo ni con la lista de Python."""
+    entregado = _ven(db, "PVEN-RFB9001", estado="ENTREGADO")
+    resp = app_client.post(f"/api/v1/ventas/pedidos/{entregado.id}/cancelar", json={"motivo": "El cliente desistió"},
+                           headers=auth(admin_token))
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == ("Transición no permitida para Pedido de Venta: no se puede pasar de «Entregado» a "
+                                     "«Cancelado». Desde «Entregado» solo se puede pasar a «Devuelto».")
+    db.refresh(entregado)
+    assert entregado.estado == "ENTREGADO"
+
+    devuelto = _ven(db, "PVEN-RFB9002", estado="DEVUELTO_TOTAL")
+    resp = app_client.post(f"/api/v1/ventas/pedidos/{devuelto.id}/cancelar", json={"motivo": "El cliente desistió"},
+                           headers=auth(admin_token))
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == ("Transición no permitida para Pedido de Venta: no se puede pasar de «Devuelto» a "
+                                     "«Cancelado». Desde «Devuelto» ya no cambia de estado.")
+
+
+def test_revision_final_b9_varias_transiciones_permitidas_se_unen_con_o():
+    """B9: con varias salidas permitidas se nombran todas, separadas por comas y «o» (etiquetas, nunca códigos)."""
+    import pytest
+    from fastapi import HTTPException
+    from app.api.v1.erp_ventas_fase4 import ALLOWED_TRANSITIONS_SALE_ORDER, _validate_transition
+    with pytest.raises(HTTPException) as exc:
+        _validate_transition("PARCIALMENTE_ENTREGADO", "BORRADOR", ALLOWED_TRANSITIONS_SALE_ORDER, "Pedido de Venta",
+                             "VEN")
+    assert exc.value.status_code == 422
+    assert exc.value.detail == ("Transición no permitida para Pedido de Venta: no se puede pasar de «Entregado "
+                                "parcialmente» a «Borrador». Desde «Entregado parcialmente» solo se puede pasar a "
+                                "«Cancelado», «Devuelto» o «Entregado».")
+
+
+def test_revision_final_b9_crear_un_pedido_suelto_que_falla_en_la_base_responde_generico(app_client, db, admin_token):
+    """B9: si la base rechaza el pedido suelto (aquí, un cliente que no existe: el FK), create_pedido responde un 422
+    genérico en español; el error crudo de la base (str(exc.orig)) ya no sale en la respuesta."""
+    resp = app_client.post("/api/v1/ventas/pedidos", json={
+        "customer_id": 2147480000, "customer_name": "Cliente Prueba", "total_cop": 1000, "subtotal_cop": 1000,
+        "productos": []}, headers=auth(admin_token))
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == ("No se pudo crear el pedido: revisa los datos (cliente, solicitud y cotización) e "
+                                     "intenta de nuevo.")
+    assert "foreign key" not in resp.text.lower() and "customer" not in resp.text.lower()

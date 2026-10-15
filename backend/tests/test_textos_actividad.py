@@ -632,3 +632,29 @@ def test_el_campo_pxp_numero_del_pedido_se_llama_orden_de_pago():
     # La Actividad del pedido habla de 'Orden de pago' (no 'Pago por procesar'), como la pantalla y los avisos.
     from app.core import cambios_documento as cd
     assert cd.CAMPOS["VEN"]["pxp_numero"] == "Orden de pago"
+
+
+def test_revision_final_b4_los_tipos_de_pago_viven_en_textos_actividad():
+    """B4 (revisión final): el nombre de cada tipo de pago (TIPOS_PAGO, espejo de dinero-ventas.js) vive en la fuente
+    única junto a PAGOS_EN_ACTIVIDAD (la frase de la Actividad), con los mismos códigos; crm.py lo importa."""
+    from app.api.v1 import crm
+    from app.core.textos_actividad import PAGOS_EN_ACTIVIDAD, TIPOS_PAGO
+    assert crm._TIPOS_PAGO is TIPOS_PAGO
+    assert set(TIPOS_PAGO) == set(PAGOS_EN_ACTIVIDAD)
+
+
+def test_revision_final_b6_una_sola_zona_horaria_de_colombia():
+    """B6 (revisión final): una sola constante de la zona horaria de Colombia (app/core/fechas.py). La usan
+    cambios_documento.py y erp_ventas.py (y, con un cambio de una línea, fase4 y logística): ninguno arma su propio
+    ZoneInfo("America/Bogota")."""
+    import inspect
+    import app.api.v1.erp_logistica as logistica
+    import app.api.v1.erp_ventas as erp_ventas
+    import app.api.v1.erp_ventas_fase4 as fase4
+    from app.core import cambios_documento, fechas
+    assert fechas.ZONA_COLOMBIA.key == "America/Bogota"
+    for modulo in (erp_ventas, cambios_documento, fase4, logistica):
+        fuente = inspect.getsource(modulo)
+        assert "ZoneInfo(" not in fuente, modulo.__name__
+        assert "from app.core.fechas import ZONA_COLOMBIA" in fuente, modulo.__name__
+    assert fase4.BOGOTA_TZ is fechas.ZONA_COLOMBIA and logistica.BOGOTA_TZ is fechas.ZONA_COLOMBIA

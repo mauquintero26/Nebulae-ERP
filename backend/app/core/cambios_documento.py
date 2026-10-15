@@ -9,7 +9,8 @@ import copy
 import datetime
 import re
 from decimal import Decimal, InvalidOperation
-from zoneinfo import ZoneInfo
+
+from app.core.fechas import ZONA_COLOMBIA
 
 # Columnas que se comparan por documento: nombre -> etiqueta que ve el usuario. Quedan
 # fuera a proposito el estado y la fecha de entrega (ya tienen su propio registro:
@@ -80,8 +81,6 @@ _CANTIDADES = ("qty", "cantidad")
 _PRECIOS_LINEA = ("unit_price_cop", "precio_unitario", "precio_cop")
 
 TEXTO_MAX = 120
-# B4 (T11 calidad): el dia de una fecha de negocio es el de Colombia.
-_ZONA_COLOMBIA = ZoneInfo("America/Bogota")
 CAMBIOS_MAX = 30
 ETIQUETAS_EN_TITULO = 4
 
@@ -125,7 +124,7 @@ def _fecha(v):
     if isinstance(v, datetime.datetime):
         if v.tzinfo is None:
             v = v.replace(tzinfo=datetime.timezone.utc)
-        return v.astimezone(_ZONA_COLOMBIA).date().isoformat()
+        return v.astimezone(ZONA_COLOMBIA).date().isoformat()
     if isinstance(v, datetime.date):
         return v.isoformat()
     return str(v)[:10]

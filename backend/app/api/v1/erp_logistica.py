@@ -14,7 +14,7 @@ import hashlib
 import struct
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from typing import Optional, List, Dict, Any, Tuple
-from zoneinfo import ZoneInfo
+from app.core.fechas import ZONA_COLOMBIA
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -57,7 +57,7 @@ from app.api.v1.schemas_fase2 import (
 
 router = APIRouter()
 
-BOGOTA_TZ = ZoneInfo("America/Bogota")
+BOGOTA_TZ = ZONA_COLOMBIA  # B6 (revision final): la constante unica de app/core/fechas.py
 
 
 def _now():

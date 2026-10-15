@@ -11,7 +11,7 @@ from decimal import Decimal
 import datetime
 import hashlib
 import json
-import zoneinfo
+from app.core.fechas import ZONA_COLOMBIA
 import uuid
 
 from app.db.database import get_db, SessionLocal
@@ -43,7 +43,7 @@ from app.core.ventas_dinero import (
     saldos_a_favor_de_cotizacion, metodo_pago_anticipo, METODOS_PAGO_ANTICIPO, METODO_PAGO_TRASLADO,
     METODO_PAGO_SALDO_A_FAVOR, ESTADO_PAGO_TRASLADADO, anular_pxps_de_pedido,
 )
-from app.core.textos_actividad import etiqueta_estado, pago_registrado
+from app.core.textos_actividad import RESOLUCIONES_DEVOLUCION, etiqueta_estado, pago_registrado
 from app.api.dependencies import (
     require_roles, get_current_user,
     ROLE_ADMIN, ROLE_ASESOR, ROLE_BODEGA, ROLE_COMPRAS, ROLE_FINANZAS, ALL_ERP_ROLES
@@ -65,7 +65,7 @@ from app.api.v1.schemas_fase4 import (
 
 router = APIRouter()
 
-BOGOTA_TZ = zoneinfo.ZoneInfo("America/Bogota")
+BOGOTA_TZ = ZONA_COLOMBIA  # B6 (revision final): la constante unica de app/core/fechas.py
 
 def _compute_return_fingerprint(
     so_id: int,
@@ -221,14 +221,29 @@ ALLOWED_TRANSITIONS_RETURN = {
 }
 
 
-def _validate_transition(current: str, target: str, allowed_map: Dict[str, set], entity_name: str):
+def _validate_transition(current: str, target: str, allowed_map: Dict[str, set], entity_name: str,
+                         entidad: Optional[str] = None):
+    """422 si `allowed_map` no deja pasar de `current` a `target`. B9 (revision final): el texto nombra los estados con
+    su etiqueta (textos_actividad.etiqueta_estado de `entidad`: 'VEN' para el pedido, 'ENTREGA' para la entrega; sin
+    mapa, el codigo humanizado), nunca con el codigo crudo ni con la lista de Python."""
     if current == target:
         return
     allowed = allowed_map.get(current, set())
     if target not in allowed:
+        def nombre(codigo):
+            return f"«{etiqueta_estado(entidad, codigo)}»"
+        permitidas = [nombre(c) for c in sorted(allowed)]
+        if not permitidas:
+            salida = f"Desde {nombre(current)} ya no cambia de estado."
+        elif len(permitidas) == 1:
+            salida = f"Desde {nombre(current)} solo se puede pasar a {permitidas[0]}."
+        else:
+            salida = (f"Desde {nombre(current)} solo se puede pasar a {', '.join(permitidas[:-1])} o "
+                      f"{permitidas[-1]}.")
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Transición ilegal para {entity_name}: no se permite pasar de '{current}' a '{target}'. Permitidas: {sorted(list(allowed))}"
+            detail=(f"Transición no permitida para {entity_name}: no se puede pasar de {nombre(current)} a "
+                    f"{nombre(target)}. {salida}"),
         )
 
 
@@ -681,7 +696,7 @@ def confirm_immediate_sale_line(
     )
 
     line.quantity_reserved = Decimal(str(line.quantity_reserved or 0)) + qty_to_reserve
-    _validate_transition(line.estado, "RESERVADA", ALLOWED_TRANSITIONS_SALE_LINE, f"Línea {line.id}")
+    _validate_transition(line.estado, "RESERVADA", ALLOWED_TRANSITIONS_SALE_LINE, f"Línea {line.id}", "LINEA")
     line.estado = "RESERVADA"
     line.updated_at = now
 
@@ -1273,7 +1288,7 @@ def cancel_sale_order(
     if so.estado == "CANCELADO":
         raise HTTPException(status_code=409, detail="El pedido ya se encuentra CANCELADO")
 
-    _validate_transition(so.estado, "CANCELADO", ALLOWED_TRANSITIONS_SALE_ORDER, "Pedido de Venta")
+    _validate_transition(so.estado, "CANCELADO", ALLOWED_TRANSITIONS_SALE_ORDER, "Pedido de Venta", "VEN")
 
     lines = db.query(SaleOrderLineErp).filter(SaleOrderLineErp.so_id == so.id).with_for_update().all()
     has_procurement = db.query(ProcurementAllocation).filter(
@@ -2013,7 +2028,7 @@ def dispatch_delivery(
                 detail="La entrega ya fue despachada previamente con otra clave de idempotencia"
             )
 
-    _validate_transition(delivery.status, "DESPACHADO", ALLOWED_TRANSITIONS_DELIVERY, "Entrega")
+    _validate_transition(delivery.status, "DESPACHADO", ALLOWED_TRANSITIONS_DELIVERY, "Entrega", "ENTREGA")
 
     d_lines = db.query(SaleOrderDeliveryLine).filter(SaleOrderDeliveryLine.delivery_id == delivery.id).all()
     if not d_lines:
@@ -2209,7 +2224,7 @@ def set_delivery_in_transit(
     if not delivery:
         raise HTTPException(404, f"Entrega {delivery_id} no encontrada")
 
-    _validate_transition(delivery.status, "EN_TRANSITO", ALLOWED_TRANSITIONS_DELIVERY, "Entrega")
+    _validate_transition(delivery.status, "EN_TRANSITO", ALLOWED_TRANSITIONS_DELIVERY, "Entrega", "ENTREGA")
     delivery.status = "EN_TRANSITO"
     if body.carrier:
         delivery.carrier = body.carrier
@@ -2235,7 +2250,7 @@ def confirm_delivery_received(
     if not delivery:
         raise HTTPException(404, f"Entrega {delivery_id} no encontrada")
 
-    _validate_transition(delivery.status, "ENTREGADO", ALLOWED_TRANSITIONS_DELIVERY, "Entrega")
+    _validate_transition(delivery.status, "ENTREGADO", ALLOWED_TRANSITIONS_DELIVERY, "Entrega", "ENTREGA")
     delivery.status = "ENTREGADO"
     delivery.delivery_date = body.delivery_date or now
     if body.evidence_url:
@@ -2616,13 +2631,16 @@ def create_sale_order_return(
         so.estado = "DEVUELTO_TOTAL"
     so.updated_at = now
 
+    # B9 (revision final): la resolucion con su etiqueta (textos_actividad.RESOLUCIONES_DEVOLUCION), no el codigo crudo.
+    resolucion = (RESOLUCIONES_DEVOLUCION.get(body.financial_resolution)
+                  or etiqueta_estado(None, body.financial_resolution))
     _log_event(
         db=db,
         entity_type="DEVOLUCION",
         entity_id=ret.id,
         entity_numero=ret.numero,
         action="DEVOLUCION_PROCESADA",
-        description=f"Devolución {ret.numero} procesada con resolución {body.financial_resolution}. Reembolso: {pesos(refund_amt)}",
+        description=f"Devolución {ret.numero} procesada con resolución «{resolucion}». Reembolso: {pesos(refund_amt)}",
         user_name=user_name
     )
 

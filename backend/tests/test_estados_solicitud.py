@@ -261,7 +261,9 @@ def test_crear_la_cotizacion_deja_la_solicitud_confirmada(app_client, db, admin_
     ultimo = _logs(db, "SC", sc.id)[-1]
     assert ultimo.action == "COTIZACION_CREADA"
     assert ultimo.description == f"Cotización {cot['numero']} creada desde esta solicitud"
-    assert (ultimo.old_estado, ultimo.new_estado, ultimo.user_name) == (None, None, "t")
+    # Revisión final (B2): el autor sale de la sesión (nombre_de_usuario), ya no del user_name del body ("t").
+    from app.core.textos_actividad import nombre_de_usuario
+    assert (ultimo.old_estado, ultimo.new_estado, ultimo.user_name) == (None, None, nombre_de_usuario(user_admin))
     assert _logs(db, "SC", sc.id, "ESTADO_CHANGED") == []
     (creada,) = _logs(db, "COT", cot["id"], "CREATED")  # el CREATED de la COT no cambia
     assert creada.description == f"Cotización {cot['numero']} creada desde SC-U15001"
@@ -1024,3 +1026,58 @@ def test_el_reporte_del_script_no_escribe_nada(db, user_admin, contador_sql):
     escrituras = [s for s in sentencias if s.startswith(("INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER"))]
     assert escrituras == []
     assert contador_sql.commits == 0
+
+
+# ─── Revisión final del Bloque 2 ─────────────────────────────────────────────────────────────────────────────
+
+def test_revision_final_b1_la_regla_del_reinicio_vive_solo_en_estado_tras_reinicio():
+    """B1 (revisión final): la regla «Asignada con asesor, Nueva sin él» sale de _estado_tras_reinicio(sc) en la
+    sincronización de R29, en _soltar_cotizacion_de_la_solicitud y en restaurar_solicitud: la expresión queda escrita
+    una sola vez (si la regla cambia, no se desalinea). Sin cambio de comportamiento: las pruebas de esos caminos siguen
+    iguales."""
+    import inspect
+    import re
+    import app.api.v1.erp_ventas as m
+    copias = re.findall(r'"ASIGNADA"\s+if\s+sc\.advisor_user_id', inspect.getsource(m))
+    assert len(copias) == 1, copias
+    assert '"ASIGNADA" if sc.advisor_user_id else "BORRADOR"' in inspect.getsource(m._estado_tras_reinicio)
+    for funcion in (m._sincronizar_estado_solicitud_desde_cotizacion, m._soltar_cotizacion_de_la_solicitud,
+                    m.restaurar_solicitud):
+        assert "_estado_tras_reinicio(sc)" in inspect.getsource(funcion), funcion.__name__
+
+
+def test_revision_final_b3_post_cotizaciones_con_sc_deja_el_renglon_en_la_solicitud(app_client, db, admin_token,
+                                                                                    user_admin, monkeypatch):
+    """B3 (revisión final): POST /cotizaciones con sc_id (Gate 1 vigente) crea la COT de la SC y, como
+    confirmar_solicitud, deja en la Actividad de la SC el renglón COTIZACION_CREADA (sin old/new, autor de la sesión),
+    DENTRO del commit de la COT: si ese renglón falla, la COT tampoco se crea."""
+    import app.api.v1.erp_ventas as erp_ventas
+    from app.core.textos_actividad import nombre_de_usuario
+    from app.models.erp_documents import SalesQuotation
+
+    def _post(sc):
+        return app_client.post("/api/v1/ventas/cotizaciones", json={
+            "sc_id": sc.id, "productos": [LINEA_CON_PRECIO], "subtotal_cop": 1000, "total_cop": 1000,
+            "created_by": "t"}, headers=auth(admin_token))
+
+    sc = _sc(db, "SC-RFB3001", user_admin, gate1_confirmed_at=AHORA())
+    resp = _post(sc)
+    assert resp.status_code == 201, resp.text
+    cot = resp.json()["data"]
+    (creada,) = _logs(db, "SC", sc.id, "COTIZACION_CREADA")
+    assert creada.description == f"Cotización {cot['numero']} creada desde esta solicitud"
+    assert (creada.old_estado, creada.new_estado, creada.user_name) == (None, None, nombre_de_usuario(user_admin))
+
+    # Dentro del commit de la COT: si el renglón de la SC falla, no queda una COT sin su rastro en la SC.
+    log_real = erp_ventas._log
+
+    def _log_que_falla(db_, entidad, entity_id, numero, accion, *a, **k):
+        if entidad == "SC" and accion == "COTIZACION_CREADA":
+            raise RuntimeError("falla forzada del renglón de la solicitud")
+        return log_real(db_, entidad, entity_id, numero, accion, *a, **k)
+
+    monkeypatch.setattr(erp_ventas, "_log", _log_que_falla)
+    sc2 = _sc(db, "SC-RFB3002", user_admin, gate1_confirmed_at=AHORA())
+    assert _post(sc2).status_code == 500
+    db.expire_all()
+    assert db.query(SalesQuotation).filter(SalesQuotation.sc_id == sc2.id).count() == 0

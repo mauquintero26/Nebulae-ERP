@@ -177,3 +177,47 @@ class TestProductsQuickCreate:
         assert d["sku"].startswith(f"SIN-CODIGO-{u.upper()}"[:20])
         skus = db.query(ProductSKU).filter(ProductSKU.product_id == p.id).all()
         assert [s.id for s in skus] == [d["id"]]
+
+
+# --- Revisión final del Bloque 2 (B10): /crm/products/search ---------------------------------------------------
+
+def _producto_con_sku(db, brand, category, nombre):
+    from app.models.catalog import Product, ProductSKU
+    p = Product(brand_id=brand.id, category_id=category.id, name=nombre, type="Fisico", base_currency="USD", uom="Ud")
+    db.add(p); db.commit(); db.refresh(p)
+    s = ProductSKU(product_id=p.id, sku=f"RFB10-{uuid.uuid4().hex[:8]}", cost_price=10, sale_price=20)
+    db.add(s); db.commit()
+    return p
+
+
+def test_revision_final_b10_la_busqueda_respeta_limit_y_pone_primero_la_coincidencia_exacta(app_client, admin_token,
+                                                                                            db, brand, category):
+    """B10: `limit` ya no se ignora (cada renglón es un SKU) y los resultados van ordenados: primero la coincidencia
+    exacta del nombre y después por nombre. Así, con más coincidencias que el límite, la exacta no se pierde (A4)."""
+    marca = f"Rfb10{uuid.uuid4().hex[:6]}"
+    for nombre in (f"{marca} Zeta", f"{marca} Beta", f"{marca} Alfa", marca):
+        _producto_con_sku(db, brand, category, nombre)
+    r = app_client.get(f"/api/v1/crm/products/search?q={marca}&limit=3", headers=_headers(admin_token))
+    assert r.status_code == 200, r.text
+    assert [x["product_name"] for x in r.json()["data"]] == [marca, f"{marca} Alfa", f"{marca} Beta"]
+    r = app_client.get(f"/api/v1/crm/products/search?q={marca.lower()}", headers=_headers(admin_token))
+    assert [x["product_name"] for x in r.json()["data"]] == [marca, f"{marca} Alfa", f"{marca} Beta", f"{marca} Zeta"]
+
+
+def test_revision_final_b10_si_la_busqueda_falla_responde_500_generico(app_client, admin_token, monkeypatch):
+    """B10: si la búsqueda falla, 500 con un mensaje genérico en español (antes: 200 con data [] y warning: str(e), y
+    el buscador decía «no está en el catálogo»). El detalle queda solo en el log del servidor."""
+    from app.api.v1 import crm
+
+    class _ProductoRoto:
+        def __getattr__(self, nombre):
+            raise RuntimeError("detalle interno de la base que no debe salir")
+
+    registro = []
+    monkeypatch.setattr(crm, "Product", _ProductoRoto())
+    monkeypatch.setattr(crm.logger, "exception", lambda mensaje, *a, **k: registro.append(mensaje % a if a else mensaje))
+    r = app_client.get("/api/v1/crm/products/search?q=cuna&limit=8", headers=_headers(admin_token))
+    assert r.status_code == 500, r.text
+    assert r.json()["detail"] == "No se pudo buscar en el catálogo. Intenta de nuevo."
+    assert "detalle interno" not in r.text and "warning" not in r.json()
+    assert registro and "cuna" in registro[0]

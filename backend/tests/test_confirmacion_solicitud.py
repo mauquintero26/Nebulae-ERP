@@ -485,3 +485,78 @@ def test_confirmar_solicitud_conserva_gate1_confirmed_at_y_no_crea_otra_cotizaci
     assert otra.status_code == 400
     from app.models.erp_documents import SalesQuotation
     assert db.query(SalesQuotation).filter(SalesQuotation.sc_id == sc.id).count() == 1
+
+
+# ─── Revisión final del Bloque 2 (B2) ─────────────────────────────────────────────────────────────────────────
+
+def _sc_confirmada(db, numero, user_admin):
+    import datetime
+    from app.models.erp_documents import CustomerRequest
+    sc = CustomerRequest(productos=PRODUCTOS, numero=numero, customer_name="Cliente Prueba", estado="CONFIRMADA",
+                         advisor_user_id=user_admin.id, advisor_name=user_admin.email,
+                         gate1_confirmed_at=datetime.datetime.utcnow())
+    db.add(sc); db.commit(); db.refresh(sc)
+    return sc
+
+
+def test_revision_final_b2_confirmar_usa_el_autor_de_la_sesion_y_un_solo_commit(app_client, db, admin_token,
+                                                                                user_admin, monkeypatch,
+                                                                                contador_sql):
+    """B2 (revisión final): confirmar_solicitud crea la COT y sus dos renglones (COTIZACION_CREADA de la SC y CREATED
+    de la COT) en UN commit, con el autor de la sesión (nombre_de_usuario) en los renglones y en created_by, como
+    /cotizar-sin-confirmacion. Un user_name del cuerpo que no es texto (una lista) ya no da 500 con un número de
+    seq_cot gastado: se ignora, y el único número que se pide es el de la COT creada."""
+    import app.api.v1.erp_ventas as erp_ventas
+    from app.core.textos_actividad import nombre_de_usuario
+    from app.models.erp_documents import ActivityLog
+    numeros = []
+    original = erp_ventas._gen_numero
+
+    def _anotar(db_, prefijo, secuencia):
+        numero = original(db_, prefijo, secuencia)
+        numeros.append(numero)
+        return numero
+
+    monkeypatch.setattr(erp_ventas, "_gen_numero", _anotar)
+    sc = _sc_confirmada(db, "SC-RFB2001", user_admin)
+    with contador_sql.ventana() as v:
+        resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/confirmar",
+                               json={"user_name": ["no", "es", "texto"]}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    cot = resp.json()["data"]["cotizacion"]
+    assert numeros == [cot["numero"]]
+    assert v.commits == 1
+    autor = nombre_de_usuario(user_admin)
+    assert cot["created_by"] == autor
+    db.expire_all()
+    (en_sc,) = db.query(ActivityLog).filter(ActivityLog.entity_type == "SC", ActivityLog.entity_id == sc.id,
+                                            ActivityLog.action == "COTIZACION_CREADA").all()
+    (en_cot,) = db.query(ActivityLog).filter(ActivityLog.entity_type == "COT", ActivityLog.entity_id == cot["id"],
+                                             ActivityLog.action == "CREATED").all()
+    assert en_sc.user_name == autor and en_cot.user_name == autor
+    assert en_sc.description == f"Cotización {cot['numero']} creada desde esta solicitud"
+    assert en_cot.description == f"Cotización {cot['numero']} creada desde SC-RFB2001"
+
+
+def test_revision_final_b2_la_cotizacion_y_sus_renglones_existen_juntos(app_client, db, admin_token, user_admin,
+                                                                        monkeypatch):
+    """B2 (revisión final): si el renglón CREATED de la COT falla, no queda la COT sin su rastro (ni el renglón de la
+    SC): la COT y los dos renglones van en el mismo commit."""
+    import app.api.v1.erp_ventas as erp_ventas
+    from app.models.erp_documents import ActivityLog, SalesQuotation
+    log_real = erp_ventas._log
+
+    def _log_que_falla(db_, entidad, entity_id, numero, accion, *a, **k):
+        if entidad == "COT" and accion == "CREATED":
+            raise RuntimeError("falla forzada del renglón de la cotización")
+        return log_real(db_, entidad, entity_id, numero, accion, *a, **k)
+
+    monkeypatch.setattr(erp_ventas, "_log", _log_que_falla)
+    sc = _sc_confirmada(db, "SC-RFB2002", user_admin)
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/confirmar", json={"user_name": "test"},
+                           headers=auth(admin_token))
+    assert resp.status_code == 500
+    db.expire_all()
+    assert db.query(SalesQuotation).filter(SalesQuotation.sc_id == sc.id).count() == 0
+    assert db.query(ActivityLog).filter(ActivityLog.entity_type == "SC", ActivityLog.entity_id == sc.id,
+                                        ActivityLog.action == "COTIZACION_CREADA").count() == 0

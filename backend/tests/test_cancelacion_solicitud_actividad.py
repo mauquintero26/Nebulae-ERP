@@ -151,28 +151,31 @@ def _commits_del_api(db, monkeypatch):
     return llamadas
 
 
-# ─── confirmation_tokens.contar_tokens_vigentes ───────────────────────────────────────────────────────────────
+# ─── confirmation_tokens.revoke_pending_tokens(contar_vigentes=True) ─────────────────────────────────────────
 
-def test_contar_tokens_vigentes_cuenta_solo_los_que_el_cliente_puede_usar(db, user_admin):
-    from app.core.confirmation_tokens import contar_tokens_vigentes, create_confirmation_token
+def test_revocar_cuenta_solo_los_enlaces_que_el_cliente_podia_usar(db, user_admin):
+    """Revisión final (B5): cancelar y restaurar cuentan los enlaces anulados con el RETURNING de la propia revocación;
+    el conteo previo (contar_tokens_vigentes, que esta prueba cubría) ya no existe. Solo cuentan los de ESE documento
+    que el cliente todavía podía usar: sin usar ni revocar y sin vencer."""
+    from app.core import confirmation_tokens as ct
     from app.models.confirmation import DocumentConfirmationToken
+    assert not hasattr(ct, "contar_tokens_vigentes")
     sc = _sc(db, "SC-T2B001", user_admin)
-    assert contar_tokens_vigentes(db, "SC", sc.id) == 0
-    create_confirmation_token(db, "SC", sc.id)                       # vigente
-    create_confirmation_token(db, "SC", sc.id)                       # vigente
-    create_confirmation_token(db, "COT", sc.id)                      # de otro tipo de documento
+    assert ct.revoke_pending_tokens(db, "SC", sc.id, commit=False, contar_vigentes=True) == 0
+    ct.create_confirmation_token(db, "SC", sc.id)                    # usado (o revocado): no cuenta
+    ct.create_confirmation_token(db, "SC", sc.id)                    # vigente
+    ct.create_confirmation_token(db, "SC", sc.id)                    # vigente
+    ct.create_confirmation_token(db, "SC", sc.id)                    # vencido: se revoca pero no cuenta
+    otro = ct.create_confirmation_token(db, "COT", sc.id)            # de otro tipo de documento: no se toca
     filas = (db.query(DocumentConfirmationToken)
              .filter(DocumentConfirmationToken.document_type == "SC", DocumentConfirmationToken.document_id == sc.id)
              .order_by(DocumentConfirmationToken.id.asc()).all())
-    assert contar_tokens_vigentes(db, "SC", sc.id) == 2
-    filas[0].used_at = AHORA()                                       # usado (o revocado)
-    create_confirmation_token(db, "SC", sc.id)
-    vencido = (db.query(DocumentConfirmationToken)
-               .filter(DocumentConfirmationToken.document_type == "SC", DocumentConfirmationToken.document_id == sc.id)
-               .order_by(DocumentConfirmationToken.id.desc()).first())
-    vencido.expires_at = AHORA() - datetime.timedelta(minutes=1)      # vencido
+    filas[0].used_at = AHORA()
+    filas[-1].expires_at = AHORA() - datetime.timedelta(minutes=1)
     db.commit()
-    assert contar_tokens_vigentes(db, "SC", sc.id) == 1
+    assert ct.revoke_pending_tokens(db, "SC", sc.id, commit=False, contar_vigentes=True) == 2
+    assert ct.revoke_pending_tokens(db, "SC", sc.id, commit=False, contar_vigentes=True) == 0
+    assert _token_usado(db, otro) is False
 
 
 # ─── cancelar_solicitud: todo en la Actividad ─────────────────────────────────────────────────────────────────
@@ -1027,3 +1030,49 @@ def test_el_reporte_de_limpiar_no_escribe_nada(db, user_admin, contador_sql):
     escrituras = [s for s in sentencias if s.startswith(("INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER"))]
     assert escrituras == []
     assert contador_sql.commits == 0
+
+
+# ─── Revisión final (B5): el enlace anulado lo cuenta la propia revocación ────────────────────────────────────
+
+def _enlace_que_aparece_al_revocar(monkeypatch, sc_id):
+    """El enlace que se crea entre un conteo previo y la revocación (enviar_solicitud_para_confirmacion no bloquea la
+    SC): justo antes de revocar los enlaces de esa SC aparece uno vivo, en la misma sesión del API y sin commit."""
+    import secrets
+    from app.core import confirmation_tokens as ct
+    from app.models.confirmation import DocumentConfirmationToken
+    revocar_real = ct.revoke_pending_tokens
+
+    def revocar(db_, document_type, document_id, *a, **k):
+        if (document_type, document_id) == ("SC", sc_id):
+            ahora = AHORA()
+            db_.add(DocumentConfirmationToken(document_type="SC", document_id=sc_id,
+                                              token_hash=secrets.token_hex(32), created_at=ahora,
+                                              expires_at=ahora + datetime.timedelta(days=2)))
+            db_.flush()
+        return revocar_real(db_, document_type, document_id, *a, **k)
+
+    monkeypatch.setattr(ct, "revoke_pending_tokens", revocar)
+
+
+def test_revision_final_b5_cancelar_nombra_el_enlace_que_anulo_la_revocacion(app_client, db, admin_token, user_admin,
+                                                                            monkeypatch):
+    """B5 (revisión final): cancelar cuenta los enlaces anulados con el RETURNING de la revocación
+    (revoke_pending_tokens(contar_vigentes=True)), no con un conteo previo: un enlace que aparece entre los dos también
+    queda en la Actividad."""
+    sc = _sc(db, "SC-RFB5001", user_admin)
+    _enlace_que_aparece_al_revocar(monkeypatch, sc.id)
+    assert _cancelar(app_client, admin_token, sc.id).status_code == 200
+    (log,) = _logs(db, sc.id, "CANCELLED")
+    assert ("Enlace de confirmación", "Anulado: el cliente ya no puede confirmar con el enlace que recibió") \
+        in _cambios(log)
+    assert log.extra_data["enlace_anulado"] is True
+
+
+def test_revision_final_b5_restaurar_nombra_el_enlace_que_anulo_la_revocacion(app_client, db, admin_token, user_admin,
+                                                                             monkeypatch):
+    """B5 (revisión final): restaurar cuenta los enlaces anulados con el RETURNING de la revocación."""
+    sc = _sc(db, "SC-RFB5002", user_admin, estado="CANCELADA", eliminada_at=AHORA())
+    _enlace_que_aparece_al_revocar(monkeypatch, sc.id)
+    assert _restaurar(app_client, admin_token, sc.id).status_code == 200
+    (log,) = _logs(db, sc.id, "RESTORED")
+    assert ("Confirmación del cliente", "Hay que volver a enviársela al cliente") in _cambios(log)
