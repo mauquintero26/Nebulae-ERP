@@ -699,24 +699,122 @@ def test_si_el_borrado_falla_no_queda_rastro_falso(app_client, db, admin_token, 
     assert [l.action for l in _logs(db, sc.id)] == []
 
 
-def test_purga_automatica_deja_rastro(app_client, db, admin_token, user_admin):
-    """H33-9: borra DE VERDAD dentro de la transacción (solo con el runner de ROLLBACK)."""
+def _purgar(app_client, token):
+    return app_client.post("/api/v1/ventas/papelera/purgar", headers=auth(token))
+
+
+def test_purga_automatica_deja_rastro(app_client, db, admin_token, user_admin, monkeypatch):
+    """H33-9 + B2.1 D2: la purga es el boton del administrador (POST /papelera/purgar), no el GET. Borra DE VERDAD
+    dentro de la transacción (solo con el runner de ROLLBACK): PURGED con el autor de la sesion, en un solo commit."""
+    from app.core.textos_actividad import nombre_de_usuario
     from app.models.erp_documents import CustomerRequest
     hace_40 = AHORA() - datetime.timedelta(days=40)
     vieja = _sc(db, "SC-T2B021", user_admin, estado="CANCELADA", eliminada_at=hace_40, razon_cancelacion="Vieja")
     vieja_id = vieja.id
     con_historial = _sc(db, "SC-T2B021B", user_admin, estado="CANCELADA", eliminada_at=hace_40)
     _cot(db, "COT-T2B021B", con_historial, estado="RECHAZADA")
+    reciente = _sc(db, "SC-T2B021C", user_admin, estado="CANCELADA", eliminada_at=AHORA() - datetime.timedelta(days=29))
+
     resp = app_client.get("/api/v1/ventas/solicitudes/papelera", headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
+    db.expire_all()
+    assert db.get(CustomerRequest, vieja_id) is not None  # abrir la Papelera ya no borra
+    assert _logs(db, vieja_id, "PURGED") == []
+
+    commits = _commits_del_api(db, monkeypatch)
+    resp = _purgar(app_client, admin_token)
+    assert resp.status_code == 200, resp.text
+    assert len(commits) == 1
+    data = resp.json()["data"]
+    assert "SC-T2B021" in data["numeros"] and data["purgadas"] == len(data["numeros"])
+    assert "SC-T2B021B" not in data["numeros"] and "SC-T2B021C" not in data["numeros"]
     db.expire_all()
     assert db.get(CustomerRequest, vieja_id) is None
     (log,) = _logs(db, vieja_id, "PURGED")
     assert log.description == "Solicitud eliminada automáticamente: llevaba más de 30 días en la Papelera"
-    assert (log.entity_numero, log.old_estado, log.user_name) == ("SC-T2B021", "CANCELADA", "Sistema")
+    assert (log.entity_numero, log.old_estado, log.user_name) == (
+        "SC-T2B021", "CANCELADA", nombre_de_usuario(user_admin))
     assert log.extra_data == {"cliente": "Cliente Prueba", "motivo_cancelacion": "Vieja"}
     assert db.get(CustomerRequest, con_historial.id) is not None
     assert _logs(db, con_historial.id, "PURGED") == []
+    assert db.get(CustomerRequest, reciente.id) is not None
+
+
+def test_purgar_papelera_vencida_corta_con_el_ahora_que_recibe(db, user_admin, contador_sql):
+    """B2.1 D2 (precision del controlador): purgar_papelera_vencida(db, ahora, autor) -> {'purgadas', 'numeros'} es la
+    que reutiliza el Bloque 3. El corte es `ahora` - 30 dias (no NOW() de SQL): con un `ahora` de 2030, SC canceladas
+    en el futuro de hoy ya vencen. Deja PURGED con `autor` y no hace commit (lo hace el llamador)."""
+    from app.api.v1.erp_ventas import purgar_papelera_vencida
+    from app.models.erp_documents import CustomerRequest
+    ahora = datetime.datetime(2030, 1, 31, 12, 0, 0)
+    dias = datetime.timedelta
+    vencida = _sc(db, "SC-T2B024A", user_admin, estado="CANCELADA", eliminada_at=ahora - dias(days=30, minutes=1),
+                  razon_cancelacion="Vencida")
+    en_el_corte = _sc(db, "SC-T2B024B", user_admin, estado="CANCELADA", eliminada_at=ahora - dias(days=30))
+    reciente = _sc(db, "SC-T2B024C", user_admin, estado="CANCELADA", eliminada_at=ahora - dias(days=29, hours=23))
+    con_historial = _sc(db, "SC-T2B024D", user_admin, estado="CANCELADA", eliminada_at=ahora - dias(days=40))
+    _cot(db, "COT-T2B024D", con_historial, estado="RECHAZADA")
+    vencida_id = vencida.id
+    conservadas = {sc.numero: sc.id for sc in (en_el_corte, reciente, con_historial)}
+
+    with contador_sql.ventana() as v:
+        resultado = purgar_papelera_vencida(db, ahora, "Revisión automática")
+    assert v.commits == 0
+    assert set(resultado) == {"purgadas", "numeros"}
+    assert resultado["purgadas"] == len(resultado["numeros"])
+    assert "SC-T2B024A" in resultado["numeros"]
+    for numero in conservadas:
+        assert numero not in resultado["numeros"], numero
+    db.flush()
+    db.expire_all()
+    assert db.get(CustomerRequest, vencida_id) is None
+    for numero, sc_id in conservadas.items():
+        assert db.get(CustomerRequest, sc_id) is not None, numero
+    (log,) = _logs(db, vencida_id, "PURGED")
+    assert (log.entity_numero, log.old_estado, log.user_name) == ("SC-T2B024A", "CANCELADA", "Revisión automática")
+    assert log.extra_data == {"cliente": "Cliente Prueba", "motivo_cancelacion": "Vencida"}
+
+
+def test_vaciar_la_papelera_es_solo_del_administrador(app_client, db, user_admin, vendedor_token):
+    """B2.1 D2: el ASESOR ve la Papelera pero no la vacia (403, sin borrar nada)."""
+    from app.models.erp_documents import CustomerRequest
+    vieja = _sc(db, "SC-T2B022", user_admin, estado="CANCELADA", eliminada_at=AHORA() - datetime.timedelta(days=40))
+    assert app_client.get("/api/v1/ventas/solicitudes/papelera", headers=auth(vendedor_token)).status_code == 200
+    resp = _purgar(app_client, vendedor_token)
+    assert resp.status_code == 403, resp.text
+    db.expire_all()
+    assert db.get(CustomerRequest, vieja.id) is not None
+    assert _logs(db, vieja.id, "PURGED") == []
+    assert app_client.post("/api/v1/ventas/papelera/purgar").status_code == 401
+
+
+def test_si_la_purga_falla_no_borra_nada_ni_deja_rastro(app_client, db, admin_token, user_admin, monkeypatch):
+    """B2.1 D2: el borrado y sus PURGED van en un solo commit; si ese commit falla, rollback y 500 legible: la SC
+    sigue en la base y no queda ningun renglon PURGED a medias."""
+    import app.api.v1.erp_ventas as m
+    from sqlalchemy.orm import Session
+    from app.models.erp_documents import CustomerRequest
+    vieja = _sc(db, "SC-T2B023", user_admin, estado="CANCELADA", eliminada_at=AHORA() - datetime.timedelta(days=40))
+    commit_real = Session.commit
+    armado = {"si": False}
+
+    def commit_que_falla(self):
+        if armado["si"] and self is not db:
+            raise RuntimeError("fallo simulado del commit de la purga")
+        return commit_real(self)
+
+    registro = []
+    monkeypatch.setattr(m.logger, "exception", lambda mensaje, *a, **k: registro.append(mensaje))
+    monkeypatch.setattr(Session, "commit", commit_que_falla)
+    armado["si"] = True
+    resp = _purgar(app_client, admin_token)
+    armado["si"] = False
+    assert resp.status_code == 500, resp.text
+    assert resp.json()["detail"] == "No se pudo vaciar la Papelera: no se borró ninguna solicitud."
+    assert registro == ["No se pudo purgar la papelera de solicitudes"]
+    db.expire_all()
+    assert db.get(CustomerRequest, vieja.id) is not None
+    assert _logs(db, vieja.id, "PURGED") == []
 
 
 # ─── scripts/limpiar_motivo_en_notas.py ───────────────────────────────────────────────────────────────────────

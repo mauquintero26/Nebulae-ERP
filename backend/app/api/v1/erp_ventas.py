@@ -378,7 +378,7 @@ def _mensaje_solicitud_con_historial(sc: CustomerRequest, referencias) -> str:
     return (f"No se puede eliminar definitivamente la solicitud {sc.numero}: tiene documentos vinculados{vinculados}. "
             f"Se conserva en la Papelera como historial.")
 
-# Dias que una SC sin historial pasa en la Papelera antes de que get_papelera la purgue.
+# Dias que una SC sin historial pasa en la Papelera antes de que la purga del administrador (purgar_papelera) la borre.
 DIAS_EN_PAPELERA = 30
 
 def _fecha_de_purga(sc: CustomerRequest, referencias):
@@ -1097,34 +1097,53 @@ _SQL_SC_CON_DOCUMENTOS = """(EXISTS(SELECT 1 FROM sales_quotations q WHERE q.sc_
                 OR EXISTS(SELECT 1 FROM sales_orders l WHERE l.canonical_customer_request_id = cr.id))"""
 
 
-@router.get("/solicitudes/papelera")
-def get_papelera(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
-        db: Session = Depends(get_db)):
-    """Lista SCs canceladas con días restantes antes de eliminación permanente. dias_restantes es None (la fecha de
-    purga no existe) si se conservan, porque tienen documentos vinculados, o sin eliminada_at (cancelada con la pastilla
-    vieja: la purga exige eliminada_at). Cada fila trae sus notas (T11 calidad, A3): el motivo de una cancelada vieja
-    vive en ellas ('[CANCELADA] Razón: X', motivoDeCancelacion del frontend) aunque la SC no este en la lista cargada."""
-    # La purga va aparte: un fallo suyo ya no tumba el listado (antes el except lo devolvia vacio para todos).
+def purgar_papelera_vencida(db: Session, ahora: datetime.datetime, autor: str) -> dict:
+    """Borra las SC CANCELADA con eliminada_at anterior a `ahora` - DIAS_EN_PAPELERA dias que nadie referencia y deja
+    un renglon PURGED por cada una, con `autor`. `ahora` es UTC sin zona, como eliminada_at. NO hace commit: el llamador
+    confirma el borrado y sus renglones en un solo commit (H33: la SC ya no existe, ninguna pantalla muestra el
+    renglon). La usan POST /papelera/purgar y, en el Bloque 3, la revision automatica. Devuelve
+    {'purgadas': n, 'numeros': [...]}."""
+    corte = ahora - datetime.timedelta(days=DIAS_EN_PAPELERA)
+    purgadas = db.execute(text(f"""
+        DELETE FROM customer_requests cr
+        WHERE cr.estado='CANCELADA' AND cr.eliminada_at IS NOT NULL
+        AND cr.eliminada_at < :corte
+        AND NOT {_SQL_SC_CON_DOCUMENTOS}
+        RETURNING cr.id, cr.numero, cr.customer_name, cr.razon_cancelacion
+    """), {"corte": corte}).mappings().all()
+    for f in purgadas:
+        _log(db, "SC", f["id"], f["numero"], "PURGED",
+             f"Solicitud eliminada automáticamente: llevaba más de {DIAS_EN_PAPELERA} días en la Papelera",
+             old_estado="CANCELADA", user_name=autor,
+             extra_data={"cliente": f["customer_name"], "motivo_cancelacion": f["razon_cancelacion"]}, commit=False)
+    numeros = [f["numero"] for f in purgadas]
+    return {"purgadas": len(numeros), "numeros": numeros}
+
+
+@router.post("/papelera/purgar")
+def purgar_papelera(user: User = Depends(require_roles(*ROLE_ADMIN)), db: Session = Depends(get_db)):
+    """B2.1 D2: 'Vaciar las vencidas' del administrador. Hace la purga que antes hacia el GET de la Papelera (SC
+    canceladas hace mas de DIAS_EN_PAPELERA dias y sin documentos) con el autor de la sesion, en un solo commit. Si
+    algo falla, rollback y 500: no borra nada a medias."""
     try:
-        # Auto-purge SCs older than 30 days in papelera, solo las que nadie referencia.
-        purgadas = db.execute(text(f"""
-            DELETE FROM customer_requests cr
-            WHERE cr.estado='CANCELADA' AND cr.eliminada_at IS NOT NULL
-            AND cr.eliminada_at < NOW() - INTERVAL '{DIAS_EN_PAPELERA} days'
-            AND NOT {_SQL_SC_CON_DOCUMENTOS}
-            RETURNING cr.id, cr.numero, cr.customer_name, cr.razon_cancelacion
-        """)).mappings().all()
-        # H33: rastro de auditoria de cada SC purgada, en el MISMO commit del borrado (la SC ya no existe: ninguna
-        # pantalla lo muestra).
-        for f in purgadas:
-            _log(db, "SC", f["id"], f["numero"], "PURGED",
-                 f"Solicitud eliminada automáticamente: llevaba más de {DIAS_EN_PAPELERA} días en la Papelera",
-                 old_estado="CANCELADA", user_name="Sistema",
-                 extra_data={"cliente": f["customer_name"], "motivo_cancelacion": f["razon_cancelacion"]}, commit=False)
+        resultado = purgar_papelera_vencida(db, datetime.datetime.utcnow(), nombre_de_usuario(user))
         db.commit()
     except Exception:
         db.rollback()
         logger.exception("No se pudo purgar la papelera de solicitudes")
+        raise HTTPException(500, "No se pudo vaciar la Papelera: no se borró ninguna solicitud.")
+    return {"status": "success", "data": resultado}
+
+
+@router.get("/solicitudes/papelera")
+def get_papelera(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+        db: Session = Depends(get_db)):
+    """Lista SCs canceladas con días restantes antes de eliminación permanente. Solo lista: nunca borra (B2.1 D2; la
+    purga es POST /papelera/purgar, del administrador). dias_restantes es None (la fecha de purga no existe) si se
+    conservan, porque tienen documentos vinculados, o sin eliminada_at (cancelada con la pastilla vieja: la purga exige
+    eliminada_at); 0 si ya vencio y espera a que un administrador vacie la Papelera. Cada fila trae sus notas (T11
+    calidad, A3): el motivo de una cancelada vieja vive en ellas ('[CANCELADA] Razón: X', motivoDeCancelacion del
+    frontend) aunque la SC no este en la lista cargada."""
     try:
         rows = db.execute(text(f"""
             SELECT cr.id, cr.numero, cr.customer_name, cr.advisor_name, cr.tipo_solicitud,

@@ -394,16 +394,28 @@ def _papelera(app_client, token):
     return {d["numero"]: d for d in resp.json()["data"]}
 
 
+def _purgar(app_client, token):
+    """B2.1 D2: el boton del administrador 'Vaciar las vencidas' (POST /ventas/papelera/purgar)."""
+    return app_client.post("/api/v1/ventas/papelera/purgar", headers=auth(token))
+
+
 def test_papelera_no_falla_con_solicitud_referenciada(app_client, db, admin_token, user_admin):
     """Antes, una SC con COT/PVEN/lead rompia el DELETE de la purga y el except dejaba la Papelera vacia para todos.
-    Esta prueba borra DE VERDAD (SC canceladas hace mas de 30 dias sin referencias): solo con el runner de ROLLBACK."""
+    B2.1 D2: la purga es el POST del administrador, no el GET. Esta prueba borra DE VERDAD (SC canceladas hace mas de
+    30 dias sin referencias): solo con el runner de ROLLBACK."""
     sc_a = _sc(db, "SC-PAP001A", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(40))
     _cot(db, "COT-PAP001A", sc_a, estado="RECHAZADA")
     _sc(db, "SC-PAP001B", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(40))
     papelera = _papelera(app_client, admin_token)
     assert papelera["SC-PAP001A"]["tiene_documentos"] is True
     assert papelera["SC-PAP001A"]["dias_restantes"] is None
-    assert "SC-PAP001B" not in papelera
+    assert papelera["SC-PAP001B"]["dias_restantes"] == 0  # vencida, pero el GET ya no la borra
+    resp = _purgar(app_client, admin_token)
+    assert resp.status_code == 200, resp.text
+    assert "SC-PAP001B" in resp.json()["data"]["numeros"]
+    assert "SC-PAP001A" not in resp.json()["data"]["numeros"]
+    papelera = _papelera(app_client, admin_token)
+    assert "SC-PAP001A" in papelera and "SC-PAP001B" not in papelera
     assert _existe(db, "SC-PAP001A")
     assert not _existe(db, "SC-PAP001B")  # la purga si borra la que no tiene nada colgando
 
@@ -413,11 +425,27 @@ def test_papelera_conserva_la_solicitud_con_pedido_o_con_lead(app_client, db, ad
     _ven(db, "PVEN-PAP002A", con_pedido, None, estado="CANCELADO")
     con_lead = _sc(db, "SC-PAP002B", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(45))
     _lead_de(db, con_lead)
+    resp = _purgar(app_client, admin_token)
+    assert resp.status_code == 200, resp.text
     papelera = _papelera(app_client, admin_token)
     for numero in ("SC-PAP002A", "SC-PAP002B"):
+        assert numero not in resp.json()["data"]["numeros"], numero
         assert papelera[numero]["tiene_documentos"] is True, numero
         assert papelera[numero]["dias_restantes"] is None, numero
         assert _existe(db, numero), numero
+
+
+def test_el_get_de_la_papelera_no_borra_ni_hace_commit(app_client, db, admin_token, user_admin, contador_sql):
+    """B2.1 D2: abrir la Papelera solo lista. Una SC cancelada hace 31 dias y sin documentos sigue en la base y en el
+    listado (vencida: dias_restantes 0) hasta que un administrador la vacie."""
+    _sc(db, "SC-PAP006", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(31))
+    contador_sql.reset()
+    papelera = _papelera(app_client, admin_token)
+    assert contador_sql.commits == 0
+    assert not any(s.lstrip().upper().startswith("DELETE") for s in contador_sql.sentencias)
+    assert papelera["SC-PAP006"]["dias_restantes"] == 0 and papelera["SC-PAP006"]["tiene_documentos"] is False
+    assert _existe(db, "SC-PAP006")
+    assert "SC-PAP006" in _papelera(app_client, admin_token)  # abrirla otra vez tampoco la borra
 
 
 def test_papelera_cuenta_los_dias_restantes_de_las_que_no_tienen_historial(app_client, db, admin_token, user_admin):
@@ -433,9 +461,11 @@ def test_papelera_cuenta_los_dias_restantes_de_las_que_no_tienen_historial(app_c
 
 
 def test_un_fallo_al_purgar_no_vacia_la_papelera(app_client, db, admin_token, user_admin, monkeypatch):
-    """La purga va en su propio try/except: si falla (aqui, el DELETE), el listado sigue saliendo completo."""
+    """B2.1 D2: si la purga falla (aqui, el DELETE), el POST responde 500 legible, no borra nada y el listado sigue
+    saliendo completo. El fallo queda en el log (no se traga)."""
     import app.api.v1.erp_ventas as m
     _sc(db, "SC-PAP004", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(2.5))
+    _sc(db, "SC-PAP004B", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(40))
     texto_real = m.text
 
     def texto_que_falla_en_la_purga(sql, *a, **k):
@@ -446,9 +476,13 @@ def test_un_fallo_al_purgar_no_vacia_la_papelera(app_client, db, admin_token, us
     registro = []
     monkeypatch.setattr(m, "text", texto_que_falla_en_la_purga)
     monkeypatch.setattr(m.logger, "exception", lambda mensaje, *a, **k: registro.append(mensaje))
+    resp = _purgar(app_client, admin_token)
+    assert resp.status_code == 500, resp.text
+    assert resp.json()["detail"] == "No se pudo vaciar la Papelera: no se borró ninguna solicitud."
+    assert registro == ["No se pudo purgar la papelera de solicitudes"]
     papelera = _papelera(app_client, admin_token)
     assert "SC-PAP004" in papelera and papelera["SC-PAP004"]["dias_restantes"] == 28
-    assert registro == ["No se pudo purgar la papelera de solicitudes"]  # el fallo queda en el log, no se traga
+    assert "SC-PAP004B" in papelera and _existe(db, "SC-PAP004B")
 
 
 def test_un_fallo_al_listar_la_papelera_responde_500_con_mensaje_y_no_una_lista_vacia(app_client, db, admin_token,
