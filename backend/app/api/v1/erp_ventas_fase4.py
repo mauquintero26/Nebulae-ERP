@@ -344,14 +344,73 @@ def authorize_order_financial_exception(
 # 1. PEDIDO DE VENTA CANÓNICO
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _exigir_cotizacion_convertible(cot: SalesQuotation) -> None:
+    """409 si la COT está RECHAZADA o CANCELADA: no se convierte en pedido. La comparten convertir_cotizacion_a_venta y
+    el pedido directo (B2.1, D3), con el mismo texto."""
+    if cot.estado in ("RECHAZADA", "CANCELADA"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cotización en estado {etiqueta_estado('COT', cot.estado)} no puede ser convertida a pedido de venta."
+        )
+
+
+def _exigir_confirmacion_gate2(cot: SalesQuotation) -> None:
+    """Gate 2: 400 si la COT no está CONFIRMADA o no tiene la marca de confirmación del cliente sin usar
+    (gate2_confirmed_at). La comparten convertir_cotizacion_a_venta (que explica por qué se exigen las dos) y el pedido
+    directo (B2.1, D3), con los mismos textos."""
+    if cot.estado != "CONFIRMADA":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cotización en estado {etiqueta_estado('COT', cot.estado)} no tiene una confirmación de cliente vigente; no se puede crear el Pedido de Venta."
+        )
+    if cot.gate2_confirmed_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Esta cotización no tiene una confirmación de cliente válida y sin usar; no se puede crear el Pedido de Venta."
+        )
+
+
 @router.post("/pedidos/canonico", status_code=status.HTTP_201_CREATED)
 def create_sale_order_canonical(
     body: SaleOrderCreate,
-    user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+    user: User = Depends(require_roles(*ROLE_ADMIN)),
     db: Session = Depends(get_db)
 ):
+    """Pedido directo (B2.1, D3): solo ADMIN y desde una COT confirmada por el cliente, como el camino de las pantallas
+    (convertir_cotizacion_a_venta). Guardas, en este orden y antes de escribir nada: cot_id (422), la COT existe (404),
+    no está RECHAZADA ni CANCELADA (409), no tiene un pedido vigente (409), está CONFIRMADA y con la marca de Gate 2 sin
+    usar (400), y customer_id y sc_id (si viene) son los de la COT (422). La marca se consume en el mismo commit que crea
+    el pedido. Residual documentado: las líneas y los precios salen del cuerpo, sin compararlos con la COT (la ruta es
+    solo de ADMIN, como el «pedido suelto» de create_pedido)."""
+    # Import local, como el de _reabrir_cotizacion_por_pven_cancelado: sin ciclo de imports entre los dos modulos.
+    from app.api.v1.erp_ventas import _pven_vigente_de_cotizacion
+
     now = _now()
     user_name = getattr(user, "email", str(getattr(user, "id", "system")))
+
+    if body.cot_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Falta la cotización (cot_id): el pedido de venta solo se crea desde una cotización confirmada por el cliente."
+        )
+    # FOR UPDATE, como convertir_cotizacion_a_venta: dos pedidos a la vez de la misma COT no pasan los dos la guarda del
+    # pedido vigente ni usan dos veces la marca.
+    cot = (db.query(SalesQuotation).filter(SalesQuotation.id == body.cot_id)
+           .populate_existing().with_for_update().first())
+    if not cot:
+        raise HTTPException(status_code=404, detail=f"Cotización {body.cot_id} no encontrada.")
+    _exigir_cotizacion_convertible(cot)
+    pven_vigente = _pven_vigente_de_cotizacion(db, cot.id)  # H46: uno CANCELADO no cuenta
+    if pven_vigente is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cotización {cot.numero} ya fue convertida al pedido {pven_vigente.numero}."
+        )
+    _exigir_confirmacion_gate2(cot)
+    if body.customer_id != cot.customer_id:
+        raise HTTPException(status_code=422, detail=f"El cliente {body.customer_id} no es el de la cotización {cot.numero}.")
+    if body.sc_id is not None and body.sc_id != cot.sc_id:
+        raise HTTPException(status_code=422, detail=f"La solicitud {body.sc_id} no es la de la cotización {cot.numero}.")
 
     customer = db.query(Customer).filter(Customer.id == body.customer_id).first()
     if not customer:
@@ -493,6 +552,11 @@ def create_sale_order_canonical(
         user_name=user_name,
         extra_data={"lines_count": len(created_lines), "total_cop": str(total_so)}
     )
+
+    # Gate 2: la marca es de un solo uso y se consume en el mismo commit que crea el pedido, como en
+    # convertir_cotizacion_a_venta (un error antes de este punto la deja intacta para reintentar).
+    cot.gate2_confirmed_at = None
+    cot.updated_at = now
 
     db.commit()
 
@@ -2847,11 +2911,7 @@ def convertir_cotizacion_a_venta(
         raise HTTPException(status_code=404, detail=f"Cotización {cot_id} no encontrada.")
 
     # Estados no convertibles
-    if cot.estado in ("RECHAZADA", "CANCELADA"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Cotización en estado {etiqueta_estado('COT', cot.estado)} no puede ser convertida a pedido de venta."
-        )
+    _exigir_cotizacion_convertible(cot)
 
     # 1. Verificar si ya existe un Pedido de Venta VIGENTE vinculado a esta cotizacion. Uno CANCELADO no es un
     # replay (H46+U25): la cotizacion se puede convertir otra vez y su dinero pasa como saldo a favor (R6).
@@ -2902,17 +2962,8 @@ def convertir_cotizacion_a_venta(
     # correctamente ese estado) cierra esa ventana: dentro de ella, cot.estado ya es
     # "BORRADOR" (se escribe en el PRIMER commit del congelamiento, antes que nada mas),
     # asi que este check la rechaza sin importar en que momento exacto de la limpieza del
-    # marcador caiga la conversion.
-    if cot.estado != "CONFIRMADA":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cotización en estado {etiqueta_estado('COT', cot.estado)} no tiene una confirmación de cliente vigente; no se puede crear el Pedido de Venta."
-        )
-    if cot.gate2_confirmed_at is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Esta cotización no tiene una confirmación de cliente válida y sin usar; no se puede crear el Pedido de Venta."
-        )
+    # marcador caiga la conversion. (B2.1, D3: el pedido directo usa la misma guarda.)
+    _exigir_confirmacion_gate2(cot)
 
     # 2. Anticipo (H36+H43, N1, R3, R4, R6). El requerido se recalcula aqui con la modalidad de la SC (o el %
     # manual) y el total de hoy: nunca se toma el anticipo guardado, que puede estar viejo (salvo en una COT sin

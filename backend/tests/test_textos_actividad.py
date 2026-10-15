@@ -327,11 +327,12 @@ def test_confirmar_una_sc_en_otro_estado_nombra_el_estado_con_su_etiqueta(app_cl
 
 def test_el_dinero_de_la_actividad_del_pedido_usa_el_punto_de_miles(app_client, db, admin_token, sku):
     from app.models.customers import Customer
+    from tests._cot_confirmada import cot_confirmada_para_canonico
     import uuid
     c = Customer(first_name="Cliente", last_name=f"Texto-{uuid.uuid4().hex[:4]}", email=f"txt_{uuid.uuid4().hex[:6]}@test.com")
     db.add(c); db.commit()
     resp = app_client.post("/api/v1/ventas/pedidos/canonico", json={
-        "customer_id": c.id, "anticipo_pct": 60.0, "saldo_pct": 40.0,
+        "customer_id": c.id, "cot_id": cot_confirmada_para_canonico(db, c.id), "anticipo_pct": 60.0, "saldo_pct": 40.0,
         "lines": [{"sku_id": sku.id, "quantity": 1.0, "unit_price_cop": 1250000.0,
                    "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]}, headers=auth(admin_token))
     assert resp.status_code == 201, resp.text

@@ -31,6 +31,7 @@ from app.models.erp_documents import SaleOrder
 from app.models.fase1b import SaleOrderLineErp, InventoryOwnerBalance
 from app.models.fase3 import InventoryQuarantine
 from app.models.fase4 import SaleOrderReturn, SaleOrderPayment
+from tests._cot_confirmada import cot_confirmada_para_canonico
 
 
 def _auth(token: str) -> dict:
@@ -81,6 +82,7 @@ class TestFase4DevolucionesCosteo:
         # 1. Crear venta entregada
         resp_so = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c.id,
+            "cot_id": cot_confirmada_para_canonico(db, c.id),
             "anticipo_pct": 100.0,
             "lines": [{"sku_id": sku_mau.id, "quantity": 2.0, "unit_price_cop": 70000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "MAU", "cost_unit_cop_snapshot": 30000.0}]
         }, headers=_auth(admin_token))
@@ -154,7 +156,7 @@ class TestFase4DevolucionesCosteo:
 
         # Venta de 2 unidades
         r_so = app_client.post("/api/v1/ventas/pedidos/canonico", json={
-            "customer_id": c.id, "anticipo_pct": 100.0,
+            "customer_id": c.id, "cot_id": cot_confirmada_para_canonico(db, c.id), "anticipo_pct": 100.0,
             "lines": [{"sku_id": sku_neb.id, "quantity": 2.0, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE", "cost_unit_cop_snapshot": 40000.0}]
         }, headers=_auth(admin_token))
         so_id = r_so.json()["data"]["id"]
@@ -218,6 +220,7 @@ class TestFase4DevolucionesCosteo:
         # Total venta = $270k, Total costo = $110k, Margen total = $160k (59.26%)
         resp_so = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c.id,
+            "cot_id": cot_confirmada_para_canonico(db, c.id),
             "lines": [
                 {"sku_id": sku_neb.id, "quantity": 2.0, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE", "cost_unit_cop_snapshot": 40000.0},
                 {"sku_id": sku_mau.id, "quantity": 1.0, "unit_price_cop": 70000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "MAU", "cost_unit_cop_snapshot": 30000.0},

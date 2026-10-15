@@ -44,6 +44,7 @@ from app.models.fase4 import (
 from app.models.users import User
 from app.api.dependencies import ROLE_ADMIN, ROLE_ASESOR, ROLE_BODEGA, ROLE_FINANZAS
 from app.db.database import SessionLocal
+from tests._cot_confirmada import cot_confirmada_para_canonico
 
 BOGOTA_TZ = zoneinfo.ZoneInfo("America/Bogota")
 
@@ -128,6 +129,7 @@ class TestFase4Hardening:
         # Crear pedido de 100.000
         so_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "anticipo_pct": 60.0,
             "saldo_pct": 40.0,
             "lines": [
@@ -207,6 +209,7 @@ class TestFase4Hardening:
         b = _setup_base(db)
         so_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "lines": [{"sku_id": b["sku"].id, "quantity": 1, "unit_price_cop": 80000.0, "modalidad": "POR_PEDIDO"}]
         }
         r_so = app_client.post("/api/v1/ventas/pedidos/canonico", json=so_payload, headers=_auth(admin_token))
@@ -250,6 +253,7 @@ class TestFase4Hardening:
         b = _setup_base(db)
         so_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "lines": [{"sku_id": b["sku"].id, "quantity": 1, "unit_price_cop": 50000.0, "modalidad": "POR_PEDIDO"}]
         }
         r_so = app_client.post("/api/v1/ventas/pedidos/canonico", json=so_payload, headers=_auth(admin_token))
@@ -299,6 +303,7 @@ class TestFase4Hardening:
         b = _setup_base(db)
         so_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "lines": [{"sku_id": b["sku"].id, "quantity": 1, "unit_price_cop": 70000.0, "modalidad": "POR_PEDIDO"}]
         }
         r_so = app_client.post("/api/v1/ventas/pedidos/canonico", json=so_payload, headers=_auth(admin_token))
@@ -330,6 +335,7 @@ class TestFase4Hardening:
         b = _setup_base(db)
         so_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "lines": [{"sku_id": b["sku"].id, "quantity": 2, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
         }
         r_so = app_client.post("/api/v1/ventas/pedidos/canonico", json=so_payload, headers=_auth(admin_token))
@@ -373,6 +379,7 @@ class TestFase4Hardening:
         # Crear venta inmediata y confirmar reserva
         so_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "lines": [{"sku_id": b["sku"].id, "quantity": 4, "unit_price_cop": 50000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
         }
         r_so = app_client.post("/api/v1/ventas/pedidos/canonico", json=so_payload, headers=_auth(admin_token))
@@ -462,6 +469,7 @@ class TestFase4Hardening:
         # Venta de 5 unidades, pagada completa
         so_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "anticipo_pct": 100.0,
             "saldo_pct": 0.0,
             "lines": [{"sku_id": b["sku"].id, "quantity": 5, "unit_price_cop": 20000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
@@ -574,6 +582,7 @@ class TestFase4Hardening:
         b = _setup_base(db)
         so_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "anticipo_pct": 100.0,
             "saldo_pct": 0.0,
             "lines": [{"sku_id": b["sku"].id, "quantity": 3, "unit_price_cop": 30000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "MAU"}]
@@ -668,6 +677,7 @@ class TestFase4Hardening:
         b = _setup_base(db)
         so_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "anticipo_pct": 60.0,
             "saldo_pct": 40.0,
             "lines": [{"sku_id": b["sku"].id, "quantity": 10, "unit_price_cop": 10000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
@@ -703,6 +713,7 @@ class TestFase4Hardening:
         b = _setup_base(db)
         so_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "lines": [{"sku_id": b["sku"].id, "quantity": 2, "unit_price_cop": 20000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
         }
         r_so = app_client.post("/api/v1/ventas/pedidos/canonico", json=so_payload, headers=_auth(admin_token))
@@ -748,6 +759,7 @@ class TestFase4Hardening:
             "/api/v1/ventas/pedidos/canonico",
             json={
                 "customer_id": b["customer"].id,
+                "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
                 "anticipo_pct": 70.0,
                 "saldo_pct": 40.0,  # Suma 110%
                 "lines": [{"sku_id": b["sku"].id, "quantity": 1, "unit_price_cop": 100000.0, "modalidad": "POR_PEDIDO"}]
@@ -764,6 +776,7 @@ class TestFase4Hardening:
             "/api/v1/ventas/pedidos/canonico",
             json={
                 "customer_id": b["customer"].id,
+                "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
                 "anticipo_pct": 60.0,
                 "saldo_pct": 40.0,
                 "lines": [{

@@ -63,7 +63,7 @@ def _cambiar_cot(db, cot_id, **campos):
     cot = db.get(SalesQuotation, cot_id)
     for campo, valor in campos.items():
         setattr(cot, campo, valor)
-    db.flush()
+    db.commit()
     return cot
 
 
@@ -71,7 +71,7 @@ def _pedido_de_la_cot(db, cot_id, cliente_id, estado):
     so = SaleOrder(numero=f"PVEN-PDT-{uuid.uuid4().hex[:8].upper()}", cot_id=cot_id, customer_id=cliente_id,
                    customer_name="Cliente Prueba", estado=estado)
     db.add(so)
-    db.flush()
+    db.commit()
     return so
 
 
@@ -124,7 +124,7 @@ def test_una_cotizacion_con_pedido_vigente_responde_409_y_uno_cancelado_no_cuent
 
     # H46: un pedido CANCELADO no es vigente; la COT reconfirmada crea otro pedido.
     db.get(SaleOrder, vigente.id).estado = "CANCELADO"
-    db.flush()
+    db.commit()
     resp = app_client.post(RUTA, json=_cuerpo(cliente.id, sku.id, cot_id=cot_id), headers=_auth(admin_token))
     assert resp.status_code == 201, resp.text
     assert _pedidos_del_cliente(db, cliente.id) == 2

@@ -29,6 +29,7 @@ from app.models.inventory import Warehouse, InventoryLevel
 from app.models.erp_documents import SaleOrder
 from app.models.fase1b import SaleOrderLineErp, InventoryOwnerBalance, InventoryReservation
 from app.models.fase4 import SaleOrderPayment
+from tests._cot_confirmada import cot_confirmada_para_canonico
 
 
 def _auth(token: str) -> dict:
@@ -68,6 +69,7 @@ class TestFase4PagosPoliticas:
         # Pedido de $200,000 COP (2 unidades a $100,000)
         resp_so = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c.id,
+            "cot_id": cot_confirmada_para_canonico(db, c.id),
             "anticipo_pct": 60.0,
             "saldo_pct": 40.0,
             "lines": [{"sku_id": sku.id, "quantity": 2.0, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
@@ -117,6 +119,7 @@ class TestFase4PagosPoliticas:
 
         resp_so = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c.id,
+            "cot_id": cot_confirmada_para_canonico(db, c.id),
             "anticipo_pct": 100.0,
             "saldo_pct": 0.0,
             "lines": [{"sku_id": sku.id, "quantity": 1.0, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
@@ -147,6 +150,7 @@ class TestFase4PagosPoliticas:
 
         resp_so = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c.id,
+            "cot_id": cot_confirmada_para_canonico(db, c.id),
             "lines": [{"sku_id": sku.id, "quantity": 1.0, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         so_id = resp_so.json()["data"]["id"]
@@ -181,6 +185,7 @@ class TestFase4PagosPoliticas:
 
         resp_so = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c.id,
+            "cot_id": cot_confirmada_para_canonico(db, c.id),
             "anticipo_pct": 60.0,
             "saldo_pct": 40.0,
             "lines": [{"sku_id": sku.id, "quantity": 1.0, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]

@@ -41,6 +41,7 @@ from app.models.fase4 import (
     SaleOrderReturn,
     SaleOrderReturnLine,
 )
+from tests._cot_confirmada import cot_confirmada_para_canonico
 
 
 def _auth(token: str) -> dict:
@@ -135,6 +136,7 @@ class TestFase4CierreTecnicoFinal:
             "/api/v1/ventas/pedidos/canonico",
             json={
                 "customer_id": s["customer_a"].id,
+                "cot_id": cot_confirmada_para_canonico(db, s["customer_a"].id),
                 "anticipo_pct": 100.0,
                 "saldo_pct": 0.0,
                 "lines": [{"sku_id": s["sku"].id, "quantity": 5, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "MAU"}]
@@ -159,6 +161,7 @@ class TestFase4CierreTecnicoFinal:
             "/api/v1/ventas/pedidos/canonico",
             json={
                 "customer_id": s["customer_b"].id,
+                "cot_id": cot_confirmada_para_canonico(db, s["customer_b"].id),
                 "anticipo_pct": 100.0,
                 "saldo_pct": 0.0,
                 "lines": [{"sku_id": s["sku"].id, "quantity": 1, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "MAU"}]
@@ -205,6 +208,7 @@ class TestFase4CierreTecnicoFinal:
             "/api/v1/ventas/pedidos/canonico",
             json={
                 "customer_id": s["customer_a"].id,
+                "cot_id": cot_confirmada_para_canonico(db, s["customer_a"].id),
                 "anticipo_pct": 100.0,
                 "saldo_pct": 0.0,
                 "lines": [{"sku_id": s["sku"].id, "quantity": 5, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "MAU"}]
@@ -221,6 +225,7 @@ class TestFase4CierreTecnicoFinal:
             "/api/v1/ventas/pedidos/canonico",
             json={
                 "customer_id": s["customer_b"].id,
+                "cot_id": cot_confirmada_para_canonico(db, s["customer_b"].id),
                 "anticipo_pct": 100.0,
                 "saldo_pct": 0.0,
                 "lines": [{"sku_id": s["sku"].id, "quantity": 1, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "MAU"}]
@@ -258,6 +263,7 @@ class TestFase4CierreTecnicoFinal:
             "/api/v1/ventas/pedidos/canonico",
             json={
                 "customer_id": s["customer_a"].id,
+                "cot_id": cot_confirmada_para_canonico(db, s["customer_a"].id),
                 "anticipo_pct": 100.0,
                 "saldo_pct": 0.0,
                 "lines": [{"sku_id": s["sku"].id, "quantity": 1, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "MAU"}]
@@ -273,6 +279,7 @@ class TestFase4CierreTecnicoFinal:
             "/api/v1/ventas/pedidos/canonico",
             json={
                 "customer_id": s["customer_b"].id,
+                "cot_id": cot_confirmada_para_canonico(db, s["customer_b"].id),
                 "anticipo_pct": 100.0,
                 "saldo_pct": 0.0,
                 "lines": [{"sku_id": s["sku"].id, "quantity": 1, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "MAU"}]
@@ -322,6 +329,7 @@ class TestFase4CierreTecnicoFinal:
             "/api/v1/ventas/pedidos/canonico",
             json={
                 "customer_id": s["customer_a"].id,
+                "cot_id": cot_confirmada_para_canonico(db, s["customer_a"].id),
                 "anticipo_pct": 100.0,
                 "saldo_pct": 0.0,
                 "lines": [{"sku_id": s["sku"].id, "quantity": 1, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "MAU"}]
@@ -344,6 +352,7 @@ class TestFase4CierreTecnicoFinal:
             "/api/v1/ventas/pedidos/canonico",
             json={
                 "customer_id": s["customer_a"].id,
+                "cot_id": cot_confirmada_para_canonico(db, s["customer_a"].id),
                 "anticipo_pct": 100.0,
                 "saldo_pct": 0.0,
                 "lines": [{"sku_id": s["sku"].id, "quantity": 1, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
@@ -380,6 +389,7 @@ class TestFase4CierreTecnicoFinal:
             "/api/v1/ventas/pedidos/canonico",
             json={
                 "customer_id": cust_id,
+                "cot_id": cot_confirmada_para_canonico(db, cust_id),
                 "anticipo_pct": 100.0,
                 "saldo_pct": 0.0,
                 "lines": [{"sku_id": s["sku"].id, "quantity": 5, "unit_price_cop": 50000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
@@ -404,6 +414,7 @@ class TestFase4CierreTecnicoFinal:
             "/api/v1/ventas/pedidos/canonico",
             json={
                 "customer_id": cust_id,
+                "cot_id": cot_confirmada_para_canonico(db, cust_id),
                 "anticipo_pct": 100.0,
                 "saldo_pct": 0.0,
                 "lines": [{"sku_id": s["sku"].id, "quantity": 5, "unit_price_cop": 50000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
@@ -459,6 +470,7 @@ class TestFase4CierreTecnicoFinal:
             "/api/v1/ventas/pedidos/canonico",
             json={
                 "customer_id": cust_id,
+                "cot_id": cot_confirmada_para_canonico(db, cust_id),
                 "anticipo_pct": 100.0,
                 "saldo_pct": 0.0,
                 "lines": [{"sku_id": s["sku"].id, "quantity": 10, "unit_price_cop": 40000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
@@ -526,6 +538,7 @@ class TestFase4CierreTecnicoFinal:
             "/api/v1/ventas/pedidos/canonico",
             json={
                 "customer_id": cust_id,
+                "cot_id": cot_confirmada_para_canonico(db, cust_id),
                 "anticipo_pct": 100.0,
                 "saldo_pct": 0.0,
                 "lines": [{"sku_id": s["sku"].id, "quantity": 10, "unit_price_cop": 30000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
@@ -615,6 +628,7 @@ class TestFase4CierreTecnicoFinal:
             "/api/v1/ventas/pedidos/canonico",
             json={
                 "customer_id": cust_id,
+                "cot_id": cot_confirmada_para_canonico(db, cust_id),
                 "anticipo_pct": 100.0,
                 "saldo_pct": 0.0,
                 "lines": [{"sku_id": s["sku"].id, "quantity": 5, "unit_price_cop": 50000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
@@ -687,6 +701,7 @@ class TestFase4CierreTecnicoFinal:
             "/api/v1/ventas/pedidos/canonico",
             json={
                 "customer_id": cust_id,
+                "cot_id": cot_confirmada_para_canonico(db, cust_id),
                 "anticipo_pct": 100.0,
                 "saldo_pct": 0.0,
                 "lines": [{"sku_id": s["sku"].id, "quantity": 5, "unit_price_cop": 50000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]

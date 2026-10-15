@@ -26,6 +26,7 @@ from app.models.catalog import Product, ProductSKU, Brand, Category
 from app.models.inventory import Warehouse, InventoryLevel
 from app.models.erp_documents import SaleOrder
 from app.models.fase1b import SaleOrderLineErp, InventoryOwnerBalance, InventoryReservation
+from tests._cot_confirmada import cot_confirmada_para_canonico
 
 
 def _auth(token: str) -> dict:
@@ -85,6 +86,7 @@ class TestFase4VentasLineasEstados:
 
         payload = {
             "customer_id": c1.id,
+            "cot_id": cot_confirmada_para_canonico(db, c1.id),
             "canal_venta": "CRM",
             "anticipo_pct": 60.0,
             "saldo_pct": 40.0,
@@ -196,6 +198,7 @@ class TestFase4VentasLineasEstados:
         # Crear pedido para Cliente A
         resp_a = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c_a.id,
+            "cot_id": cot_confirmada_para_canonico(db, c_a.id),
             "lines": [{"sku_id": sku.id, "quantity": 1.0, "unit_price_cop": 60000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         assert resp_a.status_code == 201
@@ -205,6 +208,7 @@ class TestFase4VentasLineasEstados:
         # Crear pedido para Cliente B
         resp_b = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c_b.id,
+            "cot_id": cot_confirmada_para_canonico(db, c_b.id),
             "lines": [{"sku_id": sku.id, "quantity": 1.0, "unit_price_cop": 60000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         assert resp_b.status_code == 201
@@ -260,6 +264,7 @@ class TestFase4VentasLineasEstados:
         # Pedido con modalidad POR_PEDIDO
         resp = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c1.id,
+            "cot_id": cot_confirmada_para_canonico(db, c1.id),
             "lines": [{"sku_id": sku_ped.id, "quantity": 1.0, "unit_price_cop": 150000.0, "modalidad": "POR_PEDIDO", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         assert resp.status_code == 201

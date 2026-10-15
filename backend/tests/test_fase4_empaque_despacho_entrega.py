@@ -34,6 +34,7 @@ from app.models.fase4 import (
     SalePackingSession, SalePackingItem,
     SaleOrderDelivery, SaleOrderDeliveryLine
 )
+from tests._cot_confirmada import cot_confirmada_para_canonico
 
 
 def _auth(token: str) -> dict:
@@ -86,6 +87,7 @@ class TestFase4EmpaqueDespachoEntrega:
         # Pedido 1 del Cliente 1
         r_so1 = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c1.id,
+            "cot_id": cot_confirmada_para_canonico(db, c1.id),
             "lines": [{"sku_id": sku1.id, "quantity": 2.0, "unit_price_cop": 80000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         so1_id = r_so1.json()["data"]["id"]
@@ -94,6 +96,7 @@ class TestFase4EmpaqueDespachoEntrega:
         # Pedido 2 del Cliente 1
         r_so2 = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c1.id,
+            "cot_id": cot_confirmada_para_canonico(db, c1.id),
             "lines": [{"sku_id": sku2.id, "quantity": 1.0, "unit_price_cop": 60000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "MAU"}]
         }, headers=_auth(admin_token))
         so2_id = r_so2.json()["data"]["id"]
@@ -127,6 +130,7 @@ class TestFase4EmpaqueDespachoEntrega:
         # Pedido Cliente 1
         r_so1 = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c1.id,
+            "cot_id": cot_confirmada_para_canonico(db, c1.id),
             "lines": [{"sku_id": sku1.id, "quantity": 1.0, "unit_price_cop": 80000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         so1_id = r_so1.json()["data"]["id"]
@@ -135,6 +139,7 @@ class TestFase4EmpaqueDespachoEntrega:
         # Pedido Cliente 2
         r_so2 = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c2.id,
+            "cot_id": cot_confirmada_para_canonico(db, c2.id),
             "lines": [{"sku_id": sku1.id, "quantity": 1.0, "unit_price_cop": 80000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         so2_id = r_so2.json()["data"]["id"]
@@ -162,6 +167,7 @@ class TestFase4EmpaqueDespachoEntrega:
 
         r_so = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c1.id,
+            "cot_id": cot_confirmada_para_canonico(db, c1.id),
             "lines": [{"sku_id": sku1.id, "quantity": 1.0, "unit_price_cop": 80000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         so_id = r_so.json()["data"]["id"]
@@ -208,6 +214,7 @@ class TestFase4EmpaqueDespachoEntrega:
         # 1. Crear venta por 3 unidades con propietario MAU
         r_so = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c1.id,
+            "cot_id": cot_confirmada_para_canonico(db, c1.id),
             "anticipo_pct": 100.0,
             "lines": [{"sku_id": sku2.id, "quantity": 3.0, "unit_price_cop": 60000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "MAU"}]
         }, headers=_auth(admin_token))

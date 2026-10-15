@@ -74,6 +74,7 @@ from app.models.fase4 import (
 from app.models.users import User
 from app.api.dependencies import ROLE_ADMIN, ROLE_ASESOR, ROLE_BODEGA, ROLE_FINANZAS
 from app.db.database import SessionLocal
+from tests._cot_confirmada import cot_confirmada_para_canonico
 
 BOGOTA_TZ = zoneinfo.ZoneInfo("America/Bogota")
 
@@ -157,6 +158,7 @@ class TestFase4FinalHardening:
         b = _setup_base(db)
         so_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "anticipo_pct": 100.0,
             "saldo_pct": 0.0,
             "lines": [{"sku_id": b["sku"].id, "quantity": 10, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
@@ -235,6 +237,7 @@ class TestFase4FinalHardening:
         # Concurrencia Pesimista: 2 creaciones simultáneas de 6 sobre un saldo disponible de 6
         so2_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "anticipo_pct": 100.0,
             "saldo_pct": 0.0,
             "lines": [{"sku_id": b["sku"].id, "quantity": 10, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
@@ -299,6 +302,7 @@ class TestFase4FinalHardening:
         def _create_order_10(owner="NEBULAE"):
             so_payload = {
                 "customer_id": b["customer"].id,
+                "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
                 "anticipo_pct": 100.0,
                 "saldo_pct": 0.0,
                 "lines": [{"sku_id": b["sku"].id, "quantity": 10, "unit_price_cop": 50000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": owner}]
@@ -349,6 +353,7 @@ class TestFase4FinalHardening:
         db.commit()
         so_tgt_payload = {
             "customer_id": cust_target.id,
+            "cot_id": cot_confirmada_para_canonico(db, cust_target.id),
             "anticipo_pct": 100.0,
             "saldo_pct": 0.0,
             "lines": [{"sku_id": b["sku"].id, "quantity": 4, "unit_price_cop": 50000.0, "modalidad": "POR_PEDIDO", "owner": "NEBULAE"}]
@@ -430,6 +435,7 @@ class TestFase4FinalHardening:
         b = _setup_base(db)
         so_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "anticipo_pct": 100.0,
             "saldo_pct": 0.0,
             "lines": [{"sku_id": b["sku"].id, "quantity": 5, "unit_price_cop": 50000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
@@ -476,7 +482,7 @@ class TestFase4FinalHardening:
         db.commit()
         so_tgt2 = app_client.post(
             "/api/v1/ventas/pedidos/canonico",
-            json={"customer_id": c2.id, "lines": [{"sku_id": sku_diff.id, "quantity": 3, "unit_price_cop": 20000.0, "modalidad": "POR_PEDIDO", "owner": "NEBULAE"}]},
+            json={"customer_id": c2.id, "cot_id": cot_confirmada_para_canonico(db, c2.id), "lines": [{"sku_id": sku_diff.id, "quantity": 3, "unit_price_cop": 20000.0, "modalidad": "POR_PEDIDO", "owner": "NEBULAE"}]},
             headers=_auth(admin_token)
         )
         line_diff_id = so_tgt2.json()["data"]["lines"][0]["id"]
@@ -491,7 +497,7 @@ class TestFase4FinalHardening:
         # 5. Línea destino con diferente owner (MAU vs NEBULAE)
         so_tgt3 = app_client.post(
             "/api/v1/ventas/pedidos/canonico",
-            json={"customer_id": c2.id, "lines": [{"sku_id": b["sku"].id, "quantity": 3, "unit_price_cop": 50000.0, "modalidad": "POR_PEDIDO", "owner": "MAU"}]},
+            json={"customer_id": c2.id, "cot_id": cot_confirmada_para_canonico(db, c2.id), "lines": [{"sku_id": b["sku"].id, "quantity": 3, "unit_price_cop": 50000.0, "modalidad": "POR_PEDIDO", "owner": "MAU"}]},
             headers=_auth(admin_token)
         )
         line_diff_owner_id = so_tgt3.json()["data"]["lines"][0]["id"]
@@ -506,7 +512,7 @@ class TestFase4FinalHardening:
         # 6. Cantidad supera la necesidad pendiente destino
         so_tgt4 = app_client.post(
             "/api/v1/ventas/pedidos/canonico",
-            json={"customer_id": c2.id, "lines": [{"sku_id": b["sku"].id, "quantity": 1, "unit_price_cop": 50000.0, "modalidad": "POR_PEDIDO", "owner": "NEBULAE"}]},
+            json={"customer_id": c2.id, "cot_id": cot_confirmada_para_canonico(db, c2.id), "lines": [{"sku_id": b["sku"].id, "quantity": 1, "unit_price_cop": 50000.0, "modalidad": "POR_PEDIDO", "owner": "NEBULAE"}]},
             headers=_auth(admin_token)
         )
         line_tgt4_id = so_tgt4.json()["data"]["lines"][0]["id"]
@@ -531,6 +537,7 @@ class TestFase4FinalHardening:
         # Línea POR_PEDIDO sin reserva
         so_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "lines": [{"sku_id": b["sku"].id, "quantity": 5, "unit_price_cop": 80000.0, "modalidad": "POR_PEDIDO", "owner": "NEBULAE"}]
         }
         r_so = app_client.post("/api/v1/ventas/pedidos/canonico", json=so_payload, headers=_auth(admin_token))
@@ -564,6 +571,7 @@ class TestFase4FinalHardening:
         b = _setup_base(db)
         so_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "anticipo_pct": 100.0,
             "saldo_pct": 0.0,
             "lines": [{"sku_id": b["sku"].id, "quantity": 10, "unit_price_cop": 60000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
@@ -671,6 +679,7 @@ class TestFase4FinalHardening:
         b = _setup_base(db)
         so_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "anticipo_pct": 100.0,
             "saldo_pct": 0.0,
             "lines": [{"sku_id": b["sku"].id, "quantity": 4, "unit_price_cop": 50000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "MAU"}]
@@ -788,6 +797,7 @@ class TestFase4FinalHardening:
         b = _setup_base(db)
         so_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "anticipo_pct": 100.0,
             "saldo_pct": 0.0,
             "lines": [{"sku_id": b["sku"].id, "quantity": 3, "unit_price_cop": 40000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
@@ -862,6 +872,7 @@ class TestFase4FinalHardening:
         # Pedido 60/40 de $100.000 COP
         so_payload = {
             "customer_id": b["customer"].id,
+            "cot_id": cot_confirmada_para_canonico(db, b["customer"].id),
             "anticipo_pct": 60.0,
             "saldo_pct": 40.0,
             "lines": [{"sku_id": b["sku"].id, "quantity": 1, "unit_price_cop": 100000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]

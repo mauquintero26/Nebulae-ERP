@@ -35,6 +35,7 @@ from app.models.fase1b import (
     InventoryReservation,
 )
 from app.models.fase3 import InventoryQuarantine
+from tests._cot_confirmada import cot_confirmada_para_canonico
 
 
 def _auth(token: str) -> dict:
@@ -79,6 +80,7 @@ class TestFase4AsignacionComprasRecepcion:
         # 1. Crear pedido de venta canónico con línea POR_PEDIDO
         resp_so = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c1.id,
+            "cot_id": cot_confirmada_para_canonico(db, c1.id),
             "lines": [{"sku_id": sku.id, "quantity": 5.0, "unit_price_cop": 80000.0, "modalidad": "POR_PEDIDO", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         assert resp_so.status_code == 201
@@ -198,6 +200,7 @@ class TestFase4AsignacionComprasRecepcion:
 
         resp_so = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c1.id,
+            "cot_id": cot_confirmada_para_canonico(db, c1.id),
             "lines": [{"sku_id": sku.id, "quantity": 5.0, "unit_price_cop": 80000.0, "modalidad": "POR_PEDIDO", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         assert resp_so.status_code == 201
@@ -253,6 +256,7 @@ class TestFase4AsignacionComprasRecepcion:
 
         resp_so = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c1.id,
+            "cot_id": cot_confirmada_para_canonico(db, c1.id),
             "lines": [{"sku_id": sku.id, "quantity": 4.0, "unit_price_cop": 80000.0, "modalidad": "POR_PEDIDO", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         assert resp_so.status_code == 201
@@ -331,6 +335,7 @@ class TestFase4AsignacionComprasRecepcion:
 
         resp_so = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c1.id,
+            "cot_id": cot_confirmada_para_canonico(db, c1.id),
             "lines": [{"sku_id": sku.id, "quantity": 2.0, "unit_price_cop": 80000.0, "modalidad": "POR_PEDIDO", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         line_id = resp_so.json()["data"]["lines"][0]["id"]
@@ -382,13 +387,13 @@ class TestFase4AsignacionComprasRecepcion:
 
         # Pedido 1: 3 unidades
         r_so1 = app_client.post("/api/v1/ventas/pedidos/canonico", json={
-            "customer_id": c1.id, "lines": [{"sku_id": sku.id, "quantity": 3.0, "unit_price_cop": 80000.0, "modalidad": "POR_PEDIDO", "owner": "NEBULAE"}]
+            "customer_id": c1.id, "cot_id": cot_confirmada_para_canonico(db, c1.id), "lines": [{"sku_id": sku.id, "quantity": 3.0, "unit_price_cop": 80000.0, "modalidad": "POR_PEDIDO", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         line1_id = r_so1.json()["data"]["lines"][0]["id"]
 
         # Pedido 2: 2 unidades
         r_so2 = app_client.post("/api/v1/ventas/pedidos/canonico", json={
-            "customer_id": c2.id, "lines": [{"sku_id": sku.id, "quantity": 2.0, "unit_price_cop": 80000.0, "modalidad": "POR_PEDIDO", "owner": "NEBULAE"}]
+            "customer_id": c2.id, "cot_id": cot_confirmada_para_canonico(db, c2.id), "lines": [{"sku_id": sku.id, "quantity": 2.0, "unit_price_cop": 80000.0, "modalidad": "POR_PEDIDO", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         line2_id = r_so2.json()["data"]["lines"][0]["id"]
 

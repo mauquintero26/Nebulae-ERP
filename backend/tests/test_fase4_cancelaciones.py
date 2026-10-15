@@ -26,6 +26,7 @@ from app.models.inventory import Warehouse, InventoryLevel
 from app.models.erp_documents import SaleOrder
 from app.models.fase1b import SaleOrderLineErp, InventoryOwnerBalance, InventoryReservation
 from app.models.fase4 import SaleOrderPayment
+from tests._cot_confirmada import cot_confirmada_para_canonico
 
 
 def _auth(token: str) -> dict:
@@ -72,6 +73,7 @@ class TestFase4Cancelaciones:
         # 1. Crear venta inmediata por 3 unidades
         resp_so = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c.id,
+            "cot_id": cot_confirmada_para_canonico(db, c.id),
             "lines": [{"sku_id": sku.id, "quantity": 3.0, "unit_price_cop": 120000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         so_id = resp_so.json()["data"]["id"]
@@ -119,6 +121,7 @@ class TestFase4Cancelaciones:
 
         resp_so = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c.id,
+            "cot_id": cot_confirmada_para_canonico(db, c.id),
             "lines": [{"sku_id": sku.id, "quantity": 2.0, "unit_price_cop": 120000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         so_id = resp_so.json()["data"]["id"]
@@ -146,6 +149,7 @@ class TestFase4Cancelaciones:
         # Venta total: $240,000 COP
         resp_so = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c.id,
+            "cot_id": cot_confirmada_para_canonico(db, c.id),
             "lines": [{"sku_id": sku.id, "quantity": 2.0, "unit_price_cop": 120000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         so_id = resp_so.json()["data"]["id"]
@@ -170,6 +174,7 @@ class TestFase4Cancelaciones:
 
         resp_so = app_client.post("/api/v1/ventas/pedidos/canonico", json={
             "customer_id": c.id,
+            "cot_id": cot_confirmada_para_canonico(db, c.id),
             "lines": [{"sku_id": sku.id, "quantity": 1.0, "unit_price_cop": 120000.0, "modalidad": "ENTREGA_INMEDIATA", "owner": "NEBULAE"}]
         }, headers=_auth(admin_token))
         so_id = resp_so.json()["data"]["id"]
