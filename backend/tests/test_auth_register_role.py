@@ -5,40 +5,71 @@ from app.core.security import create_access_token
 from app.models.users import User
 
 
-def test_register_rejects_admin_role(app_client):
+def _registrar(app_client, rol, token=None, prefijo="nuevo"):
+    """POST /auth/register con un correo nuevo; con `token`, como esa sesion."""
+    correo = f"{prefijo}-{uuid.uuid4().hex[:6]}@test.nebulae"
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     resp = app_client.post(
         "/api/v1/auth/register",
-        json={
-            "email": f"hacker-{uuid.uuid4().hex[:6]}@test.nebulae",
-            "password": "Test123!",
-            "role": "admin",
-        },
+        json={"email": correo, "password": "Test123!", "role": rol},
+        headers=headers,
     )
+    return resp, correo
+
+
+def test_register_rejects_admin_role(app_client, admin_token):
+    # B2.1 D1: el registro exige sesion de ADMIN, y ni asi se crea otra cuenta de Administrador.
+    resp, _ = _registrar(app_client, "admin", admin_token, "hacker")
     assert resp.status_code == 403
 
 
-def test_register_rejects_admin_role_case_insensitive(app_client):
-    resp = app_client.post(
-        "/api/v1/auth/register",
-        json={
-            "email": f"hacker2-{uuid.uuid4().hex[:6]}@test.nebulae",
-            "password": "Test123!",
-            "role": "Admin",
-        },
-    )
+def test_register_rejects_admin_role_case_insensitive(app_client, admin_token):
+    resp, _ = _registrar(app_client, "Admin", admin_token, "hacker2")
     assert resp.status_code == 403
 
 
-def test_register_allows_non_admin_role(app_client):
-    resp = app_client.post(
-        "/api/v1/auth/register",
-        json={
-            "email": f"newuser-{uuid.uuid4().hex[:6]}@test.nebulae",
-            "password": "Test123!",
-            "role": "Vendedor",
-        },
-    )
+def test_register_allows_non_admin_role(app_client, admin_token):
+    # B2.1 D1: antes pasaba sin sesion; ahora la manda el administrador (como la pantalla de Empleados).
+    resp, _ = _registrar(app_client, "Vendedor", admin_token, "newuser")
     assert resp.status_code == 201
+
+
+# ── B2.1 D1: solo un administrador crea cuentas ────────────────────────────────────────────────────────
+
+
+def test_register_sin_sesion_responde_401_y_no_crea_la_cuenta(app_client, db):
+    resp, correo = _registrar(app_client, "Asesor")
+    assert resp.status_code == 401, resp.text
+    assert db.query(User).filter(User.email == correo).first() is None
+
+
+def test_register_con_sesion_de_asesor_responde_403_y_no_crea_la_cuenta(app_client, db, vendedor_token):
+    resp, correo = _registrar(app_client, "Asesor", vendedor_token)
+    assert resp.status_code == 403, resp.text
+    assert db.query(User).filter(User.email == correo).first() is None
+
+
+def test_register_admin_con_rol_asesor_crea_la_cuenta(app_client, db, admin_token):
+    resp, correo = _registrar(app_client, "Asesor", admin_token)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["data"]["email"] == correo
+    creado = db.query(User).filter(User.email == correo).first()
+    assert creado is not None and creado.role == "Asesor"
+
+
+def test_register_admin_con_rol_inventado_responde_422_legible(app_client, db, admin_token):
+    resp, correo = _registrar(app_client, "Inventado", admin_token)
+    assert resp.status_code == 422, resp.text
+    detalle = resp.json()["detail"]
+    assert isinstance(detalle, str) and "Inventado" in detalle, detalle
+    assert db.query(User).filter(User.email == correo).first() is None
+
+
+def test_register_admin_con_rol_vacio_responde_422(app_client, db, admin_token):
+    resp, correo = _registrar(app_client, "   ", admin_token)
+    assert resp.status_code == 422, resp.text
+    assert isinstance(resp.json()["detail"], str)
+    assert db.query(User).filter(User.email == correo).first() is None
 
 
 def test_update_role_email_backdoor_removed(app_client, db):

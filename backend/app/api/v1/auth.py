@@ -15,7 +15,7 @@ from app.schemas.users import (
 )
 from app.core.security import get_password_hash, verify_password, create_access_token, SESSION_IDLE_TIMEOUT_MINUTES
 from app.core.email import send_email
-from app.api.dependencies import get_current_user, require_roles, ROLE_ADMIN, normalize_role
+from app.api.dependencies import get_current_user, require_roles, ROLE_ADMIN, ALL_ERP_ROLES, normalize_role
 
 router = APIRouter()
 
@@ -31,16 +31,30 @@ GENERIC_RESET_PASSWORD_ERROR = "El enlace no es válido o ya expiró."
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{3,32}$")
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
-def register_user(user: UserCreate, db: Session = Depends(get_db)):
+def register_user(
+    user: UserCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*ROLE_ADMIN)),
+):
+    """Crea una cuenta del ERP. B2.1 D1: solo un administrador crea cuentas (la pantalla de Empleados); sin sesion
+    responde 401 y con otro rol, 403. El rol pedido, normalizado, debe ser uno de ALL_ERP_ROLES (si no, 422) y
+    nunca ADMIN (403)."""
+    rol = normalize_role(user.role)
+    if rol == "ADMIN":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No se pueden crear cuentas con el rol de Administrador.",
+        )
+    if rol not in ALL_ERP_ROLES:
+        validos = ", ".join(r for r in ALL_ERP_ROLES if r != "ADMIN")
+        raise HTTPException(
+            status_code=422,
+            detail=f"El rol «{user.role.strip()}» no existe. Usa uno de estos: {validos}.",
+        )
+
     db_user = db.query(User).filter(User.email == user.email).first()
     if db_user:
         raise HTTPException(status_code=400, detail="Email already registered")
-
-    if normalize_role(user.role) == "ADMIN":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="No se puede autoasignar el rol de Administrador en el registro público",
-        )
 
     hashed_password = get_password_hash(user.password)
     new_user = User(
