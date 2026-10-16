@@ -3,6 +3,24 @@ import { errorDeRespuesta } from './avisos.js';
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1';
 
+/**
+ * B2.1 D4 (decisión del usuario: el asistente usa el servidor configurado, el de pruebas en pruebas): la URL del
+ * WebSocket `ruta` (p. ej. '/ws/chat/global') en el mismo servidor que `base` (API_URL por defecto). El backend monta
+ * el API en /api/v1 y los WebSocket en /ws, los dos en la raíz: se quita /api/v1 del final y http pasa a ws (https a
+ * wss). Sin /api/v1 al final, la ruta cuelga de lo que haya (la raíz o el prefijo de un proxy). Una base relativa se
+ * resuelve contra la página; la query y el fragmento de la base no se copian.
+ */
+export function urlWebSocket(ruta: string, base: string = API_URL): string {
+  const pagina = typeof window !== 'undefined' && window.location?.href ? window.location.href : 'http://localhost/';
+  const url = new URL(base.trim(), pagina);
+  url.protocol = url.protocol === 'https:' || url.protocol === 'wss:' ? 'wss:' : 'ws:';
+  const prefijo = url.pathname.replace(/\/+$/, '').replace(/\/api\/v1$/i, '');
+  url.pathname = `${prefijo}/${ruta.replace(/^\/+/, '')}`;
+  url.search = '';
+  url.hash = '';
+  return url.toString();
+}
+
 /** Returns the JWT stored by login/page.tsx under key 'token'. */
 export const getToken = (): string | null =>
   typeof window !== 'undefined' ? localStorage.getItem('token') : null;

@@ -9,7 +9,7 @@ import {
 import Link from 'next/link';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 
-import { apiFetch } from '@/lib/api';
+import { apiFetch, API_URL } from '@/lib/api';
 import { textoDeError, recargarTrasError } from '@/lib/avisos';
 import { Button, Modal, useAvisos } from '@/components/ui';
 import {
@@ -1377,7 +1377,8 @@ function SolicitudDetalleContent() {
                 onRegistrado={(log) => log ? setSolicitud((p: Record<string, unknown>) => agregarActividad(p, log, 'SC')) : void loadSolicitud({ silencioso: true })} />
             )}
 
-            {panelTab === 'ia' && <IAPanelSC sc={solicitud} apiBase={process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaekids.com/api/v1'} />}
+            {/* B2.1 D4: el servidor configurado (API_URL), sin la URL de producción escrita a mano. */}
+            {panelTab === 'ia' && <IAPanelSC sc={solicitud} apiBase={API_URL} />}
           </div>
         </div>
       </div>

@@ -3,7 +3,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import { Sparkles, X, Send, Bot, Minimize2, Maximize2, Paperclip } from 'lucide-react';
-import { getToken } from '@/lib/api';
+// B2.1 D4: el servidor configurado (API_URL y su WebSocket), el de pruebas en pruebas; nunca una URL escrita a mano.
+import { getToken, API_URL, urlWebSocket } from '@/lib/api';
 
 
 export function GlobalAIChat() {
@@ -11,7 +12,7 @@ export function GlobalAIChat() {
   const [isOpen, setIsOpen] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [messages, setMessages] = useState<{role: 'ai'|'user', text: string}[]>([
-    { role: 'ai', text: '¡Hola! Soy Nebulae AI, tu agente MCP. Conectado al servidor de producción. ¿En qué te puedo asistir hoy?' }
+    { role: 'ai', text: '¡Hola! Soy Nebulae AI, tu agente MCP. Conectado al servidor del ERP. ¿En qué te puedo asistir hoy?' }
   ]);
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -39,7 +40,7 @@ export function GlobalAIChat() {
   useEffect(() => {
     let socket: WebSocket;
     try {
-      socket = new WebSocket('wss://api.nebulaekids.com/ws/chat/global');
+      socket = new WebSocket(urlWebSocket('/ws/chat/global'));
 
       socket.onopen = () => {
         // Connected successfully
@@ -84,8 +85,7 @@ export function GlobalAIChat() {
     // REST fallback — try backend chat endpoint
     try {
       const token = getToken();
-      const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
-      const res = await fetch(`${API_BASE}/chat/message`, {
+      const res = await fetch(`${API_URL}/chat/message`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
