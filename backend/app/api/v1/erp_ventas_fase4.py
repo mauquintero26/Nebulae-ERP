@@ -379,9 +379,13 @@ def create_sale_order_canonical(
     """Pedido directo (B2.1, D3): solo ADMIN y desde una COT confirmada por el cliente, como el camino de las pantallas
     (convertir_cotizacion_a_venta). Guardas, en este orden y antes de escribir nada: cot_id (422), la COT existe (404),
     no está RECHAZADA ni CANCELADA (409), no tiene un pedido vigente (409), está CONFIRMADA y con la marca de Gate 2 sin
-    usar (400), y customer_id y sc_id (si viene) son los de la COT (422). La marca se consume en el mismo commit que crea
-    el pedido. Residual documentado: las líneas y los precios salen del cuerpo, sin compararlos con la COT (la ruta es
-    solo de ADMIN, como el «pedido suelto» de create_pedido)."""
+    usar (400), y customer_id y sc_id (si viene) son los de la COT (422). El pedido toma de la COT cot_id, cot_numero,
+    sc_id y sc_numero; la marca se consume y la COT recibe su renglón CONVERTIDA_A_VENTA en el mismo commit que crea el
+    pedido.
+    Residuales documentados frente a convertir_cotizacion_a_venta (la ruta es solo de ADMIN, como el «pedido suelto» de
+    create_pedido): las líneas y los precios salen del cuerpo, sin compararlos con la COT; no verifica el anticipo (N1);
+    y no traslada el saldo a favor de un pedido CANCELADO de la misma COT (R6): ese dinero queda en el pedido
+    cancelado, sin aplicar."""
     # Import local, como el de _reabrir_cotizacion_por_pven_cancelado: sin ciclo de imports entre los dos modulos.
     from app.api.v1.erp_ventas import _pven_vigente_de_cotizacion
 
@@ -479,8 +483,11 @@ def create_sale_order_canonical(
 
     so = SaleOrder(
         numero=so_num,
-        cot_id=body.cot_id,
-        sc_id=body.sc_id,
+        # Como convertir: el pedido nace de la COT (la guarda de arriba ya exigio que un sc_id del cuerpo sea el suyo).
+        cot_id=cot.id,
+        cot_numero=cot.numero,
+        sc_id=cot.sc_id,
+        sc_numero=cot.sc_numero,
         customer_id=customer.id,
         customer_name=_customer_full_name(customer),
         customer_phone=customer.phone,
@@ -551,6 +558,16 @@ def create_sale_order_canonical(
         new_estado=so.estado,
         user_name=user_name,
         extra_data={"lines_count": len(created_lines), "total_cop": str(total_so)}
+    )
+    # La COT tambien cuenta su pedido (el renglon que escribe convertir_cotizacion_a_venta), con el autor de la sesion.
+    _log_event(
+        db=db,
+        entity_type="COT",
+        entity_id=cot.id,
+        entity_numero=cot.numero,
+        action="CONVERTIDA_A_VENTA",
+        description=f"Cotización {cot.numero} convertida al pedido {so.numero} (pedido directo). Líneas: {len(created_lines)}.",
+        user_name=user_name,
     )
 
     # Gate 2: la marca es de un solo uso y se consume en el mismo commit que crea el pedido, como en

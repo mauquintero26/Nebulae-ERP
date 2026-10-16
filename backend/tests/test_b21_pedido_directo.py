@@ -5,9 +5,11 @@
   pedido vigente (409, _pven_vigente_de_cotizacion: uno CANCELADO no cuenta) -> está CONFIRMADA (400) -> tiene la
   marca de Gate 2 (400) -> customer_id y sc_id (si viene) son los de la COT (422). Los textos de los 400 y del 409 por
   estado son los de convertir_cotizacion_a_venta.
-- Con todo correcto: 201, el pedido queda con su cot_id y la marca se consume (gate2_confirmed_at None) en el MISMO
-  commit que crea el pedido. Un rechazo no toca la COT: la marca sigue puesta para reintentar.
-- Residual documentado (D3): las líneas y los precios salen del cuerpo, sin compararlos con la COT.
+- Con todo correcto: 201, el pedido toma de la COT cot_id, cot_numero, sc_id y sc_numero, la marca se consume
+  (gate2_confirmed_at None) y la COT recibe el renglón CONVERTIDA_A_VENTA, todo en el MISMO commit que crea el pedido.
+  Un rechazo no toca la COT: la marca sigue puesta para reintentar.
+- Residuales documentados (D3): las líneas y los precios salen del cuerpo, sin compararlos con la COT; no se verifica
+  el anticipo (N1) ni se traslada el saldo a favor de un pedido CANCELADO de la misma COT (R6).
 
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_b21_pedido_directo
 """
@@ -16,7 +18,7 @@ import uuid
 import pytest
 
 from app.models.customers import Customer
-from app.models.erp_documents import SaleOrder, SalesQuotation
+from app.models.erp_documents import ActivityLog, SaleOrder, SalesQuotation
 from tests._cot_confirmada import cot_confirmada_para_canonico
 
 RUTA = "/api/v1/ventas/pedidos/canonico"
@@ -122,7 +124,7 @@ def test_una_cotizacion_con_pedido_vigente_responde_409_y_uno_cancelado_no_cuent
     assert _cot(db, cot_id).gate2_confirmed_at is not None
     assert _pedidos_del_cliente(db, cliente.id) == 1
 
-    # H46: un pedido CANCELADO no es vigente; la COT reconfirmada crea otro pedido.
+    # H46: un pedido CANCELADO no es vigente: con la marca todavía puesta, la COT crea otro pedido.
     db.get(SaleOrder, vigente.id).estado = "CANCELADO"
     db.commit()
     resp = app_client.post(RUTA, json=_cuerpo(cliente.id, sku.id, cot_id=cot_id), headers=_auth(admin_token))
@@ -175,18 +177,26 @@ def test_el_cliente_o_la_solicitud_que_no_son_los_de_la_cotizacion_responden_422
     assert resp.status_code == 201, resp.text
 
 
-def test_con_todo_correcto_crea_el_pedido_y_consume_la_marca_en_un_solo_commit(app_client, db, admin_token, cliente,
-                                                                                 sku, contador_sql):
+def test_con_todo_correcto_crea_el_pedido_y_consume_la_marca_en_un_solo_commit(app_client, db, admin_token, user_admin,
+                                                                                 cliente, sku, contador_sql):
     cot_id = cot_confirmada_para_canonico(db, cliente.id)
     with contador_sql.ventana() as v:
         resp = app_client.post(RUTA, json=_cuerpo(cliente.id, sku.id, cot_id=cot_id), headers=_auth(admin_token))
     assert resp.status_code == 201, resp.text
-    assert v.commits == 1, v.commits
+    assert v.commits == 1, v.commits  # el pedido, la marca consumida y el renglón de la COT van juntos
     pedido = db.get(SaleOrder, resp.json()["data"]["id"])
     cot = _cot(db, cot_id)
     assert pedido.cot_id == cot_id and pedido.customer_id == cliente.id
+    # r1: el pedido toma de la COT su número y su solicitud (sin sc_id en el cuerpo), como convertir.
+    assert pedido.sc_id is not None
+    assert (pedido.cot_numero, pedido.sc_id, pedido.sc_numero) == (cot.numero, cot.sc_id, cot.sc_numero)
     assert cot.gate2_confirmed_at is None
     assert cot.estado == "CONFIRMADA"
+    # r1: la Actividad de la COT nombra el pedido directo, con el autor de la sesión.
+    renglones = db.query(ActivityLog).filter(ActivityLog.entity_type == "COT", ActivityLog.entity_id == cot_id,
+                                             ActivityLog.action == "CONVERTIDA_A_VENTA").all()
+    assert [(r.description, r.user_name) for r in renglones] == [
+        (f"Cotización {cot.numero} convertida al pedido {pedido.numero} (pedido directo). Líneas: 1.", user_admin.email)]
 
     # La marca ya se usó: la misma COT no da un segundo pedido.
     resp = app_client.post(RUTA, json=_cuerpo(cliente.id, sku.id, cot_id=cot_id), headers=_auth(admin_token))
