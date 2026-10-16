@@ -347,3 +347,30 @@ def test_si_el_correo_no_se_puede_armar_no_queda_un_envio_a_medias(app_client, d
         assert [t.id for t in actuales] == ids, (tipo, "token nuevo")
         assert all(t.used_at is None and t.resultado is None for t in actuales), (tipo, "se revocó el enlace vigente")
     assert llamadas == []
+
+
+def test_frontend_url_sin_esquema_no_lleva_el_enlace_al_registro(app_client, db, admin_token, user_admin, monkeypatch):
+    """Revisión r2 (controlador): con un FRONTEND_URL sin http(s), el correo_documento real rechaza el enlace y el envío
+    se revierte con el 500 claro. Lo que queda en el registro de erp_ventas no lleva el enlace ni el token: enlace_publico
+    promete que el token crudo nunca va al registro, y _armar_correo_o_revertir escribe el texto del ValueError."""
+    from app.models.erp_documents import CustomerRequest
+    _limpiar_empresa(db)
+    llamadas = _correo_falso(monkeypatch)
+    monkeypatch.setenv("FRONTEND_URL", "erp.ejemplo.invalid")
+    registro = []
+    monkeypatch.setattr(logging.getLogger("app.api.v1.erp_ventas"), "error",
+                        lambda msg, *args, **kwargs: registro.append(msg % args if args else msg))
+    sc = CustomerRequest(numero=f"SC-B3T2{_sufijo()}", customer_name="Cliente Prueba", estado="ASIGNADA",
+                         advisor_user_id=user_admin.id, advisor_name=user_admin.email,
+                         customer_email="cliente@example.com", productos=[{"product_name": "Cuna", "qty": 1}])
+    db.add(sc); db.commit(); db.refresh(sc)
+
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/enviar-confirmacion", json={"canal": "Email"},
+                           headers=auth(admin_token))
+    assert resp.status_code == 500, resp.text
+    assert resp.json()["detail"] == "No se pudo armar el correo al cliente: revisa la dirección pública del ERP (FRONTEND_URL)."
+    db.expire_all()
+    assert db.get(CustomerRequest, sc.id).estado == "ASIGNADA"
+    assert len(registro) == 1, registro
+    assert "/confirmar/" not in registro[0] and "erp.ejemplo.invalid" not in registro[0], registro[0]
+    assert llamadas == []

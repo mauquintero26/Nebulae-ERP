@@ -498,7 +498,8 @@ def test_cada_guardado_hace_un_solo_commit_con_su_actividad(db, contador_sql):
     assert empresa.quitar_logo(db, "Prueba") is False  # ya no hay logo
     assert contador_sql.commits == 0 and renglones() == inicial + 3
 
-    # r2: un logo sin su versión (escrito a mano) también se quita: una sola regla de «hay logo» con leer_logo.
+    # r2: un logo sin su versión (escrito a mano), que leer_logo sigue sirviendo, también se quita: quitar_logo limpia
+    # cualquiera de las dos claves. (leer_perfil arma logo_url solo con la versión: en ese caso no la ofrece.)
     db.execute(text("INSERT INTO admin_config (key, value, updated_at) VALUES (:k, :v, NOW())"),
                {"k": empresa.CLAVE_LOGO, "v": _data_url("image/png", PNG_1X1)})
     db.commit()
