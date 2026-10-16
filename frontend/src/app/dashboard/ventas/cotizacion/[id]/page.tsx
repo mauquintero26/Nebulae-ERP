@@ -530,7 +530,7 @@ function CotizacionDetalleContent() {
       setGuardandoMotivoNuevo(false);
       await loadCotizacion();
       return;
-    } catch (err: any) {
+    } catch (err) {
       if (!vivo.current) {
         console.error(err);
         avisar(textoDeError(err, `No se pudo retomar ${nombre}`), { tono: 'error', accion: { texto: 'Ver cotización', href: currentPath } });

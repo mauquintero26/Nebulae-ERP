@@ -958,7 +958,7 @@ export default function SolicitudClient() {
       const purgadas=(d?.data??d)?.purgadas;
       avisar(textoPapeleraVaciada(purgadas),{tono:purgadas>0?'ok':'info'});
       await loadPapelera();
-    }catch(err:any){
+    }catch(err){
       avisarError(err,'No se pudo vaciar la Papelera');
       // Sin respuesta del servidor (la red se cortó) pudo vaciarse igual: la lista recargada dice qué quedó.
       if(recargarTrasError(err)) await loadPapelera();
