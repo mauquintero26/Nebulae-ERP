@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Union
 from decimal import Decimal
 
 # Brand
@@ -82,10 +82,11 @@ class ProductBase(BaseModel):
     uom: Optional[str] = None
     is_active: bool = True
     necesita_revision: bool = False
-    # IVA-PRODUCTO: '19' | '5' | 'EXENTO' | 'EXCLUIDO' | None (sin definir). Sin validador a proposito (C8/R12): el
-    # handler global volveria 400 en ingles cualquier error de Pydantic; create_product/update_product la normalizan con
-    # core/iva.normalizar_tarifa_iva y responden 422 en espanol.
-    tarifa_iva: Optional[str] = None
+    # IVA-PRODUCTO: '19' | '5' | 'EXENTO' | 'EXCLUIDO' | None (sin definir). Solo tipos, sin validador a proposito
+    # (C8/R12): el handler global volveria 400 en ingles cualquier error de Pydantic. Acepta texto o numero (19, como
+    # quick-create y /ventas/config; r1) y create_product/update_product deciden con core/iva.normalizar_tarifa_iva
+    # (422 en espanol).
+    tarifa_iva: Optional[Union[str, int, float]] = None
 
 class ProductCreate(ProductBase):
     pass
@@ -95,6 +96,7 @@ class ProductResponse(ProductBase):
     brand: BrandResponse
     category: CategoryResponse
     skus: List[SKUResponse] = []
+    tarifa_iva: Optional[str] = None  # en la respuesta siempre el codigo guardado
     model_config = {"from_attributes": True}
 
 class ProductUpdate(BaseModel):
@@ -107,7 +109,7 @@ class ProductUpdate(BaseModel):
     uom: Optional[str] = None
     is_active: Optional[bool] = None
     necesita_revision: Optional[bool] = None
-    tarifa_iva: Optional[str] = None  # null = sin definir; sin la clave no se toca (exclude_unset). Sin validador (C8)
+    tarifa_iva: Optional[Union[str, int, float]] = None  # null = sin definir; sin la clave no se toca. Sin validador
 
 # Bulk SKU creation (para el asistente de variantes)
 class SKUAttributePair(BaseModel):

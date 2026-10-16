@@ -101,6 +101,8 @@ def test_constantes_porcentaje_y_etiqueta_de_cada_tarifa():
     assert iva.TARIFAS_IVA == {"19": Decimal("19"), "5": Decimal("5"), "EXENTO": Decimal("0"), "EXCLUIDO": Decimal("0")}
     assert iva.ETIQUETAS_TARIFA_IVA == {"19": "IVA 19%", "5": "IVA 5%", "EXENTO": "Exento", "EXCLUIDO": "Excluido"}
     assert iva.MENSAJE_TARIFA_INVALIDA == INVALIDA
+    # Una sola fuente de los códigos (r1): el orden y las etiquetas cubren exactamente los de TARIFAS_IVA.
+    assert set(iva.ORDEN_TARIFAS) == set(iva.TARIFAS_IVA) == set(iva.ETIQUETAS_TARIFA_IVA)
     for codigo, pct in (("19", Decimal("19")), ("5", Decimal("5")), ("EXENTO", Decimal("0")),
                         ("EXCLUIDO", Decimal("0")), ("exento", Decimal("0")), (None, Decimal("0"))):
         assert iva.pct_tarifa_iva(codigo) == pct, codigo
@@ -108,20 +110,33 @@ def test_constantes_porcentaje_y_etiqueta_de_cada_tarifa():
     for codigo, etiqueta in (("19", "IVA 19%"), ("5", "IVA 5%"), ("EXENTO", "Exento"), ("EXCLUIDO", "Excluido"),
                              (None, "IVA no discriminado"), ("", "IVA no discriminado")):
         assert iva.etiqueta_tarifa_iva(codigo) == etiqueta, codigo
-    for funcion in (iva.pct_tarifa_iva, iva.etiqueta_tarifa_iva):
-        try:
-            funcion("16")
-        except ValueError as e:
-            assert str(e) == INVALIDA
-        else:
-            raise AssertionError(f"{funcion.__name__}('16') debía lanzar ValueError")
+    # Ruling r1 (como lib/iva.js): un código que normalizar_tarifa_iva rechaza vale lo mismo que None, sin lanzar
+    # (un JSON viejo con un código raro no tumba el documento). normalizar_tarifa_iva sí sigue lanzando.
+    for raro in ("16", "abc", True, "0", 19.5, ["19"]):
+        assert iva.pct_tarifa_iva(raro) == Decimal("0"), raro
+        assert isinstance(iva.pct_tarifa_iva(raro), Decimal)
+        assert iva.etiqueta_tarifa_iva(raro) == "IVA no discriminado", raro
+
+
+def test_el_check_de_la_base_trae_exactamente_los_codigos_de_tarifas_iva(db):
+    """La migración fa6_027 congela su literal: esta prueba avisa si TARIFAS_IVA y el CHECK se separan."""
+    import re
+    from app.core import iva
+    definicion = db.execute(text(
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+        "WHERE conname = 'ck_products_tarifa_iva' AND conrelid = 'products'::regclass")).scalar()
+    assert definicion is not None, "falta el CHECK ck_products_tarifa_iva"
+    assert "tarifa_iva IS NULL" in definicion, definicion
+    assert set(re.findall(r"'([^']*)'", definicion)) == set(iva.TARIFAS_IVA), definicion
 
 
 # --- 2 a 4. Catálogo: POST y PATCH /products ------------------------------------------------------------------------
 
 def test_crear_producto_con_tarifa(app_client, admin_token, db):
     from app.models.catalog import Product
-    for enviada, guardada in (("5", "5"), ("exento", "EXENTO"), ("IVA 19%", "19"), (None, None), ("", None)):
+    # r1: un número JSON (19, 5.0) también se acepta: el esquema solo declara tipos y normalizar_tarifa_iva decide.
+    for enviada, guardada in (("5", "5"), ("exento", "EXENTO"), ("IVA 19%", "19"), (None, None), ("", None),
+                              (19, "19"), (5.0, "5")):
         nombre = f"Producto Tarifa {_suf()}"
         r = app_client.post("/api/v1/products", json={"name": nombre, "type": "Fisico", "base_currency": "COP",
                                                       "tarifa_iva": enviada}, headers=auth(admin_token))
@@ -137,11 +152,12 @@ def test_crear_producto_con_tarifa(app_client, admin_token, db):
 
 def test_tarifa_invalida_es_422_y_no_crea(app_client, admin_token, db, product):
     from app.models.catalog import Product
-    for invalida in ("16", "0", "abc"):
+    for invalida in ("16", "0", "abc", 16, 0, 19.5, True):
         nombre = f"Producto Invalido {_suf()}"
         r = app_client.post("/api/v1/products", json={"name": nombre, "type": "Fisico", "base_currency": "COP",
                                                       "tarifa_iva": invalida}, headers=auth(admin_token))
-        assert r.status_code == 422, r.text
+        # true (bool JSON): Pydantic lo convierte a int 1 dentro del Union y normalizar_tarifa_iva lo rechaza -> 422.
+        assert r.status_code == 422, (invalida, r.text)
         assert r.json()["detail"] == INVALIDA
         assert db.query(Product).filter(Product.name == nombre).count() == 0
     # La base tampoco la acepta (CHECK ck_products_tarifa_iva de fa6_027).
@@ -172,6 +188,14 @@ def test_actualizar_y_quitar_la_tarifa(app_client, admin_token, db, product):
     r = patch({"tarifa_iva": None})
     assert r.status_code == 200, r.text
     assert r.json()["data"]["tarifa_iva"] is None and guardada() is None
+    r = patch({"tarifa_iva": 19})  # r1: número JSON
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["tarifa_iva"] == "19" and guardada() == "19"
+    for invalida in (16, True):
+        r = patch({"tarifa_iva": invalida})
+        assert r.status_code == 422, (invalida, r.text)
+        assert r.json()["detail"] == INVALIDA
+        assert guardada() == "19"
     r = patch({"tarifa_iva": "Excluido"})
     assert r.json()["data"]["tarifa_iva"] == "EXCLUIDO" and guardada() == "EXCLUIDO"
     # Un PATCH sin la clave no la toca.
@@ -272,6 +296,32 @@ def test_tarifa_por_defecto_sale_de_configuracion(db, monkeypatch):
         _restaurar_config(db, CLAVE, previo)
 
 
+def test_un_error_real_de_la_base_al_leer_la_tarifa_no_tumba_la_sesion(app_client, db, admin_token, monkeypatch):
+    """r1: la lectura va en un SAVEPOINT. Un error REAL de SQL se revierte solo hasta ahí: da '19', la sesión sigue
+    sirviendo y el detalle de la cotización responde 200 (antes la consulta siguiente caía con
+    InFailedSqlTransaction)."""
+    from app.core import iva
+    from app.models.erp_documents import SalesQuotation
+    cot = SalesQuotation(numero=f"COT-IVA-{_suf()}", estado="BORRADOR", customer_name="Cliente IVA",
+                         productos=[{"product_name": "Texto libre", "qty": 1, "unit_price_cop": 1000}])
+    db.add(cot); db.commit(); db.refresh(cot)
+    cot_id = cot.id
+    registro = []
+
+    def lee_una_tabla_que_no_existe(sesion, claves):
+        return dict(sesion.execute(text("SELECT key, value FROM b3t3_tabla_que_no_existe")).fetchall())
+
+    monkeypatch.setattr(iva, "leer_config", lee_una_tabla_que_no_existe)
+    monkeypatch.setattr(iva.logger, "exception", lambda mensaje, *a, **k: registro.append(mensaje % a))
+    assert iva.tarifa_iva_defecto(db) == "19"
+    assert registro == [f"No se pudo leer {CLAVE} de admin_config"]
+    assert db.execute(text("SELECT 1")).scalar() == 1  # la sesión sigue utilizable
+    r = app_client.get(f"/api/v1/ventas/cotizaciones/{cot_id}", headers=auth(admin_token))
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["iva_tarifa_defecto"] == "19"
+    assert r.json()["data"]["tarifas_producto"] == [None]
+
+
 def test_config_valida_la_tarifa_y_el_asesor_la_lee(app_client, db, admin_token, vendedor_token):
     previo = _valor_de_config(db, CLAVE)
     previo_alerta = _valor_de_config(db, "alerta_sc_dias")
@@ -321,10 +371,15 @@ def test_get_cotizacion_expone_tarifas(app_client, db, admin_token, brand, categ
         _borrar_config(db, CLAVE)
         _, sku_5 = _producto(db, brand, category, tarifa_iva="5")
         _, sku_sin = _producto(db, brand, category, tarifa_iva=None)
+        from app.models.catalog import ProductSKU
+        from sqlalchemy import func
+        inexistente = db.query(func.max(ProductSKU.id)).scalar() + 100000  # un SKU borrado
+        # r1: la línea libre va primero y el 5% en medio, para que solo una lista paralela dé el resultado.
         productos = [
-            {"sku_id": sku_5.id, "product_name": "Con tarifa", "qty": 1, "unit_price_cop": 1000},
-            {"sku_id": str(sku_sin.id), "product_name": "Sin tarifa", "qty": 1, "unit_price_cop": 1000},
             {"product_name": "Texto libre", "qty": 1, "unit_price_cop": 1000, "es_libre": True},
+            {"sku_id": str(sku_sin.id), "product_name": "Sin tarifa", "qty": 1, "unit_price_cop": 1000},
+            {"sku_id": sku_5.id, "product_name": "Con tarifa", "qty": 1, "unit_price_cop": 1000},
+            {"sku_id": inexistente, "product_name": "SKU borrado", "qty": 1, "unit_price_cop": 1000},
         ]
         cot = SalesQuotation(numero=f"COT-IVA-{_suf()}", estado="BORRADOR", customer_name="Cliente IVA",
                              productos=productos)
@@ -333,7 +388,7 @@ def test_get_cotizacion_expone_tarifas(app_client, db, admin_token, brand, categ
         r = app_client.get(f"/api/v1/ventas/cotizaciones/{cot.id}", headers=auth(admin_token))
         assert r.status_code == 200, r.text
         d = r.json()["data"]
-        assert d["tarifas_producto"] == ["5", None, None]
+        assert d["tarifas_producto"] == [None, None, "5", None]
         assert d["iva_tarifa_defecto"] == "19"
         assert len(d["tarifas_producto"]) == len(d["productos"])
 
@@ -355,6 +410,15 @@ def test_get_cotizacion_expone_tarifas(app_client, db, admin_token, brand, categ
         assert contador_sql.consultas == 1, contador_sql.sentencias
         contador_sql.reset()
         assert iva.tarifas_de_producto(db, []) == {}
+        assert contador_sql.consultas == 0
+        # r1: ids raros del JSON. Un bool, None o un texto no numérico se ignoran (un True NO consulta el SKU 1) y
+        # un texto numérico vale como entero. Sigue siendo una sola consulta, y ninguna si no queda ningún id.
+        contador_sql.reset()
+        raros = [True, False, None, "abc", "", 12.5, f" {id_5} ", str(id_sin), id_5]
+        assert iva.tarifas_de_producto(db, raros) == {id_5: "5", id_sin: None}
+        assert contador_sql.consultas == 1, contador_sql.sentencias
+        contador_sql.reset()
+        assert iva.tarifas_de_producto(db, [True, None, "abc"]) == {}  # sin consulta: el True no se lee como SKU 1
         assert contador_sql.consultas == 0
     finally:
         _restaurar_config(db, CLAVE, previo)

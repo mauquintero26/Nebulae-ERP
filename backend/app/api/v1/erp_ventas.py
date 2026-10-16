@@ -31,7 +31,8 @@ from app.core.admin_config import guardar_config
 from app.core.correo_documento import correo_documento
 from app.core.empresa import PREFIJOS_RESERVADOS, perfil_publico
 from app.core.iva import (
-    CLAVE_TARIFA_DEFECTO, MENSAJE_TARIFA_INVALIDA, normalizar_tarifa_iva, tarifa_iva_defecto, tarifas_de_producto,
+    CLAVE_TARIFA_DEFECTO, MENSAJE_TARIFA_INVALIDA, normalizar_tarifa_iva, sku_id_entero, tarifa_iva_defecto,
+    tarifas_de_producto,
 )
 from app.core.ventas_dinero import (
     redondear_peso, pesos, formato_pct, anticipo_cotizacion, pct_anticipo_cotizacion, anticipo_requerido,
@@ -2219,16 +2220,8 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
 
 def _sku_id_de_linea(p) -> Optional[int]:
     """El sku_id (entero) de una linea del JSON productos, o None si es texto libre o no es un id valido (las lineas
-    viejas lo guardan como numero o como texto)."""
-    if not isinstance(p, dict):
-        return None
-    valor = p.get("sku_id")
-    if valor is None or isinstance(valor, bool):
-        return None
-    try:
-        return int(str(valor).strip())
-    except (TypeError, ValueError):
-        return None
+    viejas lo guardan como numero o como texto; la regla es iva.sku_id_entero)."""
+    return sku_id_entero(p.get("sku_id")) if isinstance(p, dict) else None
 
 
 def _sincronizar_estado_solicitud_desde_cotizacion(cot: "SalesQuotation", db: Session,
