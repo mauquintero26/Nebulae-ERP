@@ -310,10 +310,11 @@ function fechaColombia(iso) {
 
 /**
  * Texto oficial de una solicitud cancelada sin documentos que la purga no va a borrar (no tiene eliminada_at). Uno solo:
- * lo usan la tarjeta de la cancelación (aquí) y la Papelera (listas-ventas.js, estadoEnPapelera).
+ * lo usan la tarjeta de la cancelación (aquí) y la Papelera (listas-ventas.js, estadoEnPapelera). B2.1 T4 r1: sin
+ * «automáticamente» (ninguna se borra sola: un administrador vacía las vencidas); esta nunca vence.
  * @type {string}
  */
-export const TEXTO_PAPELERA_SIN_FECHA = 'No se elimina automáticamente: no tiene fecha de envío a la Papelera';
+export const TEXTO_PAPELERA_SIN_FECHA = 'No vence: no tiene fecha de envío a la Papelera';
 
 function textoPapelera(seConserva, purga) {
   if (seConserva === true) return 'Se conserva en la Papelera como historial (tiene documentos vinculados)';

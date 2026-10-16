@@ -335,7 +335,7 @@ console.log('--- N4 TEST 7: estadoEnPapelera (se conserva si tiene documentos; n
   const normal = estadoEnPapelera({ dias_restantes: 20, tiene_documentos: false });
   assert.equal(normal.conservada, false);
   assert.equal(normal.texto, '20 días');
-  assert.equal(normal.nota, 'para eliminar');
+  assert.equal(normal.nota, 'para poder eliminarla');
   assert.equal(normal.urgente, false);
   assert.equal(normal.puedeEliminar, true);
 
@@ -345,7 +345,7 @@ console.log('--- N4 TEST 7: estadoEnPapelera (se conserva si tiene documentos; n
   assert.equal(estadoEnPapelera({ dias_restantes: 0, tiene_documentos: false }).texto,
     'Vencida: se borra cuando un administrador vacíe la Papelera');
   // T7 (pendiente de T2B): sin dias_restantes ya no se dice que se conserva, pero tampoco se promete una eliminación.
-  assert.equal(estadoEnPapelera({}).texto, 'No se elimina automáticamente: no tiene fecha de envío a la Papelera');
+  assert.equal(estadoEnPapelera({}).texto, 'No vence: no tiene fecha de envío a la Papelera');
   assert.equal(estadoEnPapelera({}).nota, '', 'sin dias_restantes no hay cuenta regresiva');
   assert.equal(estadoEnPapelera({ dias_restantes: 10, tiene_documentos: true }).puedeEliminar, false);
 
@@ -367,7 +367,7 @@ console.log('--- T7 TEST 7c (pendiente de T2B): sin eliminada_at y sin documento
   // tiene_documentos, no de dias_restantes.
   const sinFecha = estadoEnPapelera({ dias_restantes: null, tiene_documentos: false });
   assert.deepEqual(sinFecha, {
-    conservada: false, texto: 'No se elimina automáticamente: no tiene fecha de envío a la Papelera', nota: '',
+    conservada: false, texto: 'No vence: no tiene fecha de envío a la Papelera', nota: '',
     urgente: false, puedeEliminar: true,
   });
   // T7 ronda 1 (C13): es el mismo texto oficial de la tarjeta de la cancelación (una sola constante).

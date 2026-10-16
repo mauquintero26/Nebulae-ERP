@@ -18,6 +18,7 @@ import { apiFetch, API_URL, getToken } from '@/lib/api';
 import { SubNav, PageHeader, StatCard, Badge as SharedBadge, Modal, Button, EmptyState, useAvisos } from '@/components/ui';
 import { textoDeError, recargarTrasError } from '@/lib/avisos';
 import { VEN_NAV } from '../ven-nav';
+import { PAGE_HEADER } from '@/lib/design-system';
 import { esAdministrador, esAsesorElegible, getUsuarioActual } from '../flujo';
 import { coincideProducto } from '@/lib/busqueda';
 import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas';
@@ -1335,8 +1336,12 @@ export default function SolicitudClient() {
           {activeTab==='Papelera'&&(
             <div className="p-4">
               {/* B2.1 D2: la Papelera ya no se borra sola; un administrador vacía las vencidas (solo él ve el botón). */}
-              <div className="flex items-center justify-between gap-3 mb-3">
-                <p className="text-xs font-black text-slate-500 uppercase">Solicitudes en Papelera — Se pueden eliminar definitivamente después de 30 días si no se restauran, salvo las que tienen documentos vinculados; un administrador vacía las vencidas</p>
+              {/* B2.1 T4 r1: el título solo; la regla va debajo, sin mayúsculas, con el subtítulo del design-system. */}
+              <div className="flex items-start justify-between gap-3 mb-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-black text-slate-500 uppercase">Solicitudes en Papelera</p>
+                  <p className={PAGE_HEADER.subtitle}>Las solicitudes canceladas se pueden eliminar definitivamente después de 30 días si no se restauran, salvo las que tienen documentos vinculados; un administrador vacía las vencidas.</p>
+                </div>
                 <div className="flex items-center gap-3 shrink-0">
                   {esAdministrador(getUsuarioActual().role)&&<button onClick={vaciarVencidas} disabled={vaciandoPapelera} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"><Trash2 size={11} className={vaciandoPapelera?'animate-pulse':''}/>Vaciar las vencidas</button>}
                   <button onClick={loadPapelera} className="text-xs text-slate-400 hover:text-slate-600 font-bold flex items-center gap-1"><RefreshCw size={11} className={loadingPapelera?'animate-spin':''}/> Actualizar</button>

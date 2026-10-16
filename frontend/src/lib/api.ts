@@ -8,15 +8,19 @@ export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.nebulaeki
  * WebSocket `ruta` (p. ej. '/ws/chat/global') en el mismo servidor que `base` (API_URL por defecto). El backend monta
  * el API en /api/v1 y los WebSocket en /ws, los dos en la raíz: se quita /api/v1 del final y http pasa a ws (https a
  * wss). Sin /api/v1 al final, la ruta cuelga de lo que haya (la raíz o el prefijo de un proxy). Una base relativa se
- * resuelve contra la página; la query y el fragmento de la base no se copian.
+ * resuelve contra la página; la query y el fragmento de la base no se copian. La query de `ruta` (p. ej.
+ * '/ws/chat/global?token=abc') se separa antes de asignar el pathname y se conserva tal cual (B2.1 T4 r1: si no, el
+ * «?» quedaba codificado como %3F dentro de la ruta).
  */
 export function urlWebSocket(ruta: string, base: string = API_URL): string {
   const pagina = typeof window !== 'undefined' && window.location?.href ? window.location.href : 'http://localhost/';
   const url = new URL(base.trim(), pagina);
   url.protocol = url.protocol === 'https:' || url.protocol === 'wss:' ? 'wss:' : 'ws:';
   const prefijo = url.pathname.replace(/\/+$/, '').replace(/\/api\/v1$/i, '');
-  url.pathname = `${prefijo}/${ruta.replace(/^\/+/, '')}`;
-  url.search = '';
+  const corte = ruta.indexOf('?');
+  const camino = corte >= 0 ? ruta.slice(0, corte) : ruta;
+  url.pathname = `${prefijo}/${camino.replace(/^\/+/, '')}`;
+  url.search = corte >= 0 ? ruta.slice(corte) : '';
   url.hash = '';
   return url.toString();
 }

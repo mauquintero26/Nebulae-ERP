@@ -459,7 +459,8 @@ export function resumenCancelacionSolicitudes(resultados, omitidas = []) {
  * `dias_restantes`:
  *  - con documentos se conserva y no se puede eliminar definitivamente;
  *  - sin documentos y sin `dias_restantes` no se elimina sola, pero un administrador la puede eliminar;
- *  - sin documentos y con `dias_restantes` hay cuenta regresiva ('20 días para eliminar', urgente desde 5);
+ *  - sin documentos y con `dias_restantes` hay cuenta regresiva ('20 días para poder eliminarla', urgente desde 5; B2.1
+ *    T4 r1: no se borra sola al llegar a 0, se puede eliminar desde ese día);
  *  - B2.1 D2: con `dias_restantes` <= 0 ya venció (esVencidaEnPapelera) y no se borra sola: TEXTO_PAPELERA_VENCIDA.
  * 'Se conserva' y 'Eliminar permanentemente' nunca van juntos (sin la fila, tampoco se ofrece eliminar).
  * @returns {{conservada: boolean, texto: string, nota: string, urgente: boolean, puedeEliminar: boolean}}
@@ -475,7 +476,7 @@ export function estadoEnPapelera(sc) {
   if (esVencidaEnPapelera(sc)) {
     return { conservada: false, texto: TEXTO_PAPELERA_VENCIDA, nota: '', urgente: true, puedeEliminar: true };
   }
-  return { conservada: false, texto: `${dias} ${dias === 1 ? 'día' : 'días'}`, nota: 'para eliminar', urgente: dias <= 5, puedeEliminar: true };
+  return { conservada: false, texto: `${dias} ${dias === 1 ? 'día' : 'días'}`, nota: 'para poder eliminarla', urgente: dias <= 5, puedeEliminar: true };
 }
 
 /**

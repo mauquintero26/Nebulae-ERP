@@ -56,6 +56,11 @@ console.log('--- D4 TEST 1: urlWebSocket deriva el WebSocket de la URL del API -
   assert.equal(urlWebSocket('/ws/chat/global', 'https://erp.x.com/backend/api/v1'), 'wss://erp.x.com/backend/ws/chat/global');
   // Sin query ni fragmento de la base.
   assert.equal(urlWebSocket('/ws/chat/global', 'https://api.x.com/api/v1?x=1#y'), 'wss://api.x.com/ws/chat/global');
+  // B2.1 T4 r1: la query de la ruta se conserva tal cual (antes el «?» quedaba como %3F dentro del pathname); la de la
+  // base no.
+  assert.equal(urlWebSocket('/ws/chat/global?token=abc', 'https://api.x.com/api/v1'), 'wss://api.x.com/ws/chat/global?token=abc');
+  assert.equal(urlWebSocket('/ws/chat/global?token=abc', 'https://api.x.com/api/v1?x=1#y'), 'wss://api.x.com/ws/chat/global?token=abc');
+  assert.equal(urlWebSocket('ws/chat/global?a=1&b=2', 'http://localhost:8020/api/v1/'), 'ws://localhost:8020/ws/chat/global?a=1&b=2');
   // Una base relativa (un proxy en el mismo dominio) se resuelve contra la página: https -> wss.
   definirVentana('https://erp.x.com/dashboard/ventas');
   assert.equal(urlWebSocket('/ws/chat/global', '/api/v1'), 'wss://erp.x.com/ws/chat/global');
@@ -128,7 +133,7 @@ console.log('--- D2 TEST 1: la fila vencida de la Papelera (dias_restantes <= 0)
   // Lo demás no cambia: con documentos se conserva, la cuenta regresiva sigue y sin fecha no hay cuenta.
   assert.equal(estadoEnPapelera({ dias_restantes: 0, tiene_documentos: true }).texto, 'Se conserva (tiene documentos vinculados)');
   assert.equal(estadoEnPapelera({ dias_restantes: 1, tiene_documentos: false }).texto, '1 día');
-  assert.equal(estadoEnPapelera({ dias_restantes: 1, tiene_documentos: false }).nota, 'para eliminar');
+  assert.equal(estadoEnPapelera({ dias_restantes: 1, tiene_documentos: false }).nota, 'para poder eliminarla');
   assert.equal(estadoEnPapelera({ dias_restantes: null, tiene_documentos: false }).urgente, false);
 }
 
@@ -207,6 +212,25 @@ console.log('--- D2 TEST 5: los textos ya no dicen que la Papelera se borra sola
   const hub = leer('app/dashboard/ventas/page.tsx');
   assert.ok(!hub.includes("'La solicitud se cancela y pasa a la papelera (30 días)'"), 'el Hub sin «(30 días)»');
   assert.ok(hub.includes("SC: 'La solicitud se cancela y pasa a la Papelera: se puede eliminar definitivamente después de 30 días si no se restaura',"));
+  // Ninguna fila promete un borrado automático (B2.1 T4 r1): la cuenta regresiva es para poder eliminarla y la que no
+  // tiene fecha «no vence».
+  assert.equal(estadoEnPapelera({ dias_restantes: 20, tiene_documentos: false }).nota, 'para poder eliminarla');
+  assert.ok(!/autom[aá]tic/i.test(estadoEnPapelera({ dias_restantes: null, tiene_documentos: false }).texto));
+}
+
+console.log('--- D2 TEST 6 (r1): la cabecera de la Papelera es el título y la regla va en una línea de ayuda ---');
+{
+  const lista = sinComentarios(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx'));
+  assert.match(lista, /<p className="[^"]*\buppercase\b[^"]*">Solicitudes en Papelera<\/p>/, 'el título, solo');
+  const ayuda = lista.match(/<p className=\{PAGE_HEADER\.subtitle\}>([^<]*)<\/p>/);
+  assert.ok(ayuda, 'la línea de ayuda debajo, con el token PAGE_HEADER.subtitle del design-system');
+  assert.ok(ayuda[1].includes('se pueden eliminar definitivamente después de 30 días si no se restauran'), ayuda[1]);
+  assert.ok(ayuda[1].includes('un administrador vacía las vencidas'), ayuda[1]);
+  assert.ok(lista.indexOf('>Solicitudes en Papelera</p>') < lista.indexOf('<p className={PAGE_HEADER.subtitle}>'), 'debajo del título');
+  assert.match(lista, /import \{[^}]*\bPAGE_HEADER\b[^}]*\} from '@\/lib\/design-system';/);
+  // El token no pone mayúsculas.
+  const token = leer('lib/design-system.ts').match(/subtitle:\s*'([^']*)'/);
+  assert.ok(token && !/\buppercase\b/.test(token[1]), 'PAGE_HEADER.subtitle sin uppercase');
 }
 
 console.log('--- D6 TEST 1: pideMotivoNuevo reconoce el 409 MOTIVO_NUEVO ---');

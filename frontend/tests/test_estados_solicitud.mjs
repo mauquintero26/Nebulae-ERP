@@ -250,7 +250,7 @@ console.log('--- TEST 9: resumen de la cancelación (U18+H31) ---');
   assert.deepEqual([r.seConserva, r.purga], [true, null]);
   assert.equal(r.papelera, 'Se conserva en la Papelera como historial (tiene documentos vinculados)');
   r = resumenCancelacion({ se_conserva_en_papelera: false, purga_programada: null }, []);
-  assert.equal(r.papelera, 'No se elimina automáticamente: no tiene fecha de envío a la Papelera');
+  assert.equal(r.papelera, 'No vence: no tiene fecha de envío a la Papelera');
   // la fecha de purga se muestra en hora de Colombia (03:00 UTC del 5 = 22:00 del 4 en Bogotá)
   r = resumenCancelacion({ se_conserva_en_papelera: false, purga_programada: '2026-11-05T03:00:00Z' }, []);
   assert.equal(r.papelera, 'Se puede eliminar definitivamente desde el 04/11/2026 si no se restaura.');
@@ -264,7 +264,7 @@ console.log('--- TEST 9: resumen de la cancelación (U18+H31) ---');
   assert.equal(r.papelera, 'Se puede eliminar definitivamente desde el 03/11/2026 si no se restaura.');
   // una fecha inválida no se muestra (cae al texto sin purga)
   r = resumenCancelacion({ se_conserva_en_papelera: false, purga_programada: 'no es fecha' }, []);
-  assert.equal(r.papelera, 'No se elimina automáticamente: no tiene fecha de envío a la Papelera');
+  assert.equal(r.papelera, 'No vence: no tiene fecha de envío a la Papelera');
 
   // j) entradas vacías
   r = resumenCancelacion(null, null);
@@ -301,7 +301,7 @@ console.log('--- TEST 10 (T7 ronda 1): motivoDeCancelacion, el único lector del
   assert.equal(resumenCancelacion({ razon_cancelacion: ' La razón ', notas: '[CANCELADA] Razón: De las notas' }, renglon).motivo, 'La razón');
   assert.equal(resumenCancelacion({}, []).motivo, 'No se registró el motivo');
   // El texto oficial de una SC sin fecha de envío a la Papelera es uno solo (lo importa listas-ventas.js).
-  assert.equal(TEXTO_PAPELERA_SIN_FECHA, 'No se elimina automáticamente: no tiene fecha de envío a la Papelera');
+  assert.equal(TEXTO_PAPELERA_SIN_FECHA, 'No vence: no tiene fecha de envío a la Papelera');
   assert.equal(resumenCancelacion({ se_conserva_en_papelera: false, purga_programada: null }, []).papelera, TEXTO_PAPELERA_SIN_FECHA);
 }
 
