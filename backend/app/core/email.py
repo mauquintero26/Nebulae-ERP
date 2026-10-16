@@ -34,10 +34,12 @@ def send_email(to: str, subject: str, html_body: str, remitente_nombre: str | No
     inalcanzable, etc.).
 
     remitente_nombre (Bloque 3, PLANTILLA): con un nombre, el From es
-    formataddr((nombre, SMTP_FROM)) -- 'DEMO Ferreteria <ventas@...>' -- y el
-    cliente ve el nombre de la empresa; sin nombre, solo la direccion, como
-    antes. El sobre SMTP sigue siendo la direccion sola. Los saltos de linea
-    del nombre se quitan (no se puede inyectar otro encabezado).
+    formataddr((nombre, direccion de SMTP_FROM)) -- 'DEMO Ferreteria <ventas@...>' --
+    y el cliente ve el nombre de la empresa; si SMTP_FROM ya trae un nombre
+    ('Nebulae <ventas@...>'), se usa solo su direccion. Sin nombre, el From es
+    SMTP_FROM tal cual, como antes. El sobre SMTP (sendmail) lleva siempre la
+    direccion sola. Los saltos de linea del nombre se quitan (no se puede
+    inyectar otro encabezado).
 
     Nunca lanza excepciones -- cualquier error se loguea (logging, nunca
     print) y se traduce en un simple `return False`. Esto es intencional:
@@ -67,7 +69,7 @@ def send_email(to: str, subject: str, html_body: str, remitente_nombre: str | No
     message = MIMEMultipart("alternative")
     message["Subject"] = subject
     nombre = " ".join(str(remitente_nombre).split()) if remitente_nombre else ""
-    # Con nombre, solo la direccion de SMTP_FROM: si ya trae uno ('Nebulae <x@y>') no se anidan los <> (r1, Q1).
+    # La direccion sola de SMTP_FROM: con nombre comercial no se anidan los <> (r1, Q1) y es el remitente del sobre (r2).
     direccion = parseaddr(smtp_from)[1] or smtp_from
     message["From"] = formataddr((nombre, direccion)) if nombre else smtp_from
     message["To"] = to
@@ -77,7 +79,7 @@ def send_email(to: str, subject: str, html_body: str, remitente_nombre: str | No
         with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as server:
             server.starttls()
             server.login(smtp_user, smtp_password)
-            server.sendmail(smtp_from, [to], message.as_string())
+            server.sendmail(direccion, [to], message.as_string())
         return True
     except Exception:
         logger.exception("send_email: fallo el envio de correo a %s", to)

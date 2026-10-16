@@ -6,6 +6,7 @@ T8 envio_whatsapp_*, T10 tareas_*, T11 seguimiento_*):
 
 - leer_config(db, claves) -> {clave: valor}: UN SELECT parametrizado (key = ANY(:claves)); las claves que no existen no
   aparecen (quien llama pone su valor por defecto).
+- claves_existentes(db, claves) -> set: cuales existen, SIN traer sus valores (el logo de la empresa pesa ~400 KB).
 - config_entero(db, clave, defecto, minimo, maximo) -> int: R13. Un valor que no es entero usa el defecto; uno fuera de
   rango, el limite. entero_acotado es la misma regla sin base de datos.
 - guardar_config(db, cambios): el upsert ON CONFLICT de update_config, parametrizado; un valor None BORRA la clave (vuelve
@@ -29,6 +30,15 @@ def leer_config(db: Session, claves) -> dict:
     filas = db.execute(text("SELECT key, value FROM admin_config WHERE key = ANY(:claves)"),
                        {"claves": claves}).fetchall()
     return {clave: valor for clave, valor in filas}
+
+
+def claves_existentes(db: Session, claves) -> set:
+    """Las `claves` que existen en admin_config, con un solo SELECT de key (no lee los valores). Sin claves, set()."""
+    claves = list(claves)
+    if not claves:
+        return set()
+    filas = db.execute(text("SELECT key FROM admin_config WHERE key = ANY(:claves)"), {"claves": claves}).fetchall()
+    return {fila[0] for fila in filas}
 
 
 def entero_acotado(valor, defecto: int, minimo: int, maximo: int) -> int:

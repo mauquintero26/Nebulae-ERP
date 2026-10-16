@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
-from app.core.admin_config import guardar_config, leer_config
+from app.core.admin_config import claves_existentes, guardar_config, leer_config
 from app.core import clientes
 from app.core.telefonos import e164_whatsapp
 from app.models.erp_documents import ActivityLog
@@ -53,7 +53,8 @@ MENSAJE_CAMPO_DESCONOCIDO = "Campo desconocido: {campo}."
 MENSAJE_MAXIMO = "{etiqueta}: máximo {n} caracteres."
 MENSAJE_NO_ES_TEXTO = "{etiqueta}: debe ser un texto."
 MENSAJE_NIT = "NIT no válido: usa solo números, puntos y guion (por ejemplo 900.123.456-7)."
-MENSAJE_TELEFONO = "Teléfono no válido: escribe entre 7 y 15 dígitos."
+# r2: se arma al lanzar, con clientes.TELEFONO_MIN_DIGITOS y TELEFONO_MAX_DIGITOS (hoy: «entre 7 y 15 dígitos»).
+MENSAJE_TELEFONO = "Teléfono no válido: escribe entre {minimo} y {maximo} dígitos."
 MENSAJE_WHATSAPP = ("WhatsApp no válido: escribe el celular de 10 dígitos o el número completo con su indicativo "
                     "(por ejemplo +57 300 123 4567).")
 MENSAJE_CORREO = "Correo de la empresa no válido."
@@ -86,10 +87,11 @@ def _validar_nit(valor: str) -> str:
     return valor
 
 
-def _validar_telefono(valor: str, mensaje: str = MENSAJE_TELEFONO) -> str:
+def _validar_telefono(valor: str) -> str:
+    minimo = clientes.TELEFONO_MIN_DIGITOS
     digitos = len(_NO_DIGITO.sub("", valor))
-    if not _TELEFONO.fullmatch(valor) or not clientes.TELEFONO_MIN_DIGITOS <= digitos <= TELEFONO_MAX_DIGITOS:
-        raise ValueError(mensaje)
+    if not _TELEFONO.fullmatch(valor) or not minimo <= digitos <= TELEFONO_MAX_DIGITOS:
+        raise ValueError(MENSAJE_TELEFONO.format(minimo=minimo, maximo=TELEFONO_MAX_DIGITOS))
     return valor
 
 
@@ -120,7 +122,10 @@ def _validar_url(valor: str) -> str:
         valor = "https://" + valor
     if any(ch.isspace() for ch in valor):
         raise ValueError(MENSAJE_URL)
-    partes = urlparse(valor)
+    try:
+        partes = urlparse(valor)
+    except ValueError:  # r2: 'https://[abc' o 'example.com]' (IPv6 mal escrita): el mismo mensaje, en espanol
+        raise ValueError(MENSAJE_URL) from None
     if partes.scheme.lower() not in ("http", "https") or not partes.netloc:
         raise ValueError(MENSAJE_URL)
     return valor
@@ -382,10 +387,16 @@ def guardar_logo(db: Session, data_url, user_name) -> str:
 
 def quitar_logo(db: Session, user_name) -> bool:
     """Borra el logo y su version con su renglon 'Logo quitado' y UN commit, y devuelve True. Sin logo no escribe ni
-    confirma nada y devuelve False."""
-    version = leer_config(db, [CLAVE_LOGO_VERSION]).get(CLAVE_LOGO_VERSION)
-    if not version:
+    confirma nada y devuelve False.
+
+    «Hay logo» si existe CUALQUIERA de las dos claves (r2): un CLAVE_LOGO sin version, escrito a mano, lo sigue sirviendo
+    leer_logo, asi que tambien se tiene que poder quitar. Se pregunta con claves_existentes: no carga el data URL."""
+    existentes = claves_existentes(db, [CLAVE_LOGO, CLAVE_LOGO_VERSION])
+    if not existentes:
         return False
+    version = None
+    if CLAVE_LOGO_VERSION in existentes:
+        version = leer_config(db, [CLAVE_LOGO_VERSION]).get(CLAVE_LOGO_VERSION)
     guardar_config(db, {CLAVE_LOGO: None, CLAVE_LOGO_VERSION: None})
     _registrar(db, "Logo quitado", user_name, {"version": version})
     db.commit()

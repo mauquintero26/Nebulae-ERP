@@ -225,6 +225,23 @@ def _enviar_correo_confirmacion(destino: Optional[str], asunto: str, html: str,
                 "mensaje": f"No se pudo enviar el correo a {destino}: falló el servidor de correo."}
     return {"enviado": True, "destino": destino, "motivo": None, "mensaje": f"Correo enviado a {destino}."}
 
+_MENSAJE_CORREO_SIN_ARMAR = ("No se pudo armar el correo al cliente: revisa la dirección pública del ERP "
+                             "(FRONTEND_URL).")
+
+
+def _armar_correo_o_revertir(db: Session, perfil: dict, tipo: str, numero, cliente, link) -> tuple:
+    """(asunto, html) de correo_documento, ANTES del unico commit del envio. Si no se puede armar (ValueError: hoy, un
+    FRONTEND_URL sin http(s) que deja el enlace fuera de la regla de correo_documento), se revierte TODO lo del envio
+    (revocacion, token nuevo, estado) y el asesor recibe un 500 con un mensaje claro. El detalle no lleva el enlace ni
+    el token; al ser una HTTPException la respuesta conserva los encabezados CORS (B3 T2, r2)."""
+    try:
+        return correo_documento(perfil, tipo, numero, cliente, link)
+    except ValueError as e:
+        db.rollback()
+        logger.error("No se pudo armar el correo de %s %s: %s", tipo, numero, e)
+        raise HTTPException(status_code=500, detail=_MENSAJE_CORREO_SIN_ARMAR)
+
+
 def _detalle_envio(canal: Optional[str], correo_res: dict) -> list:
     """Renglones 'etiqueta -> despues' de la Actividad del envio (canal elegido y resultado del correo). Sin clave
     'campo': CambiosDeActividad del frontend la usa para tachar el 'antes', y aqui no hay valor anterior."""
@@ -1677,9 +1694,11 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
     # restaurar, reenviar) cuyo token previo nunca se revoco por esa ruta. Revocar
     # incondicionalmente aqui es mas simple Y estrictamente mas seguro que tratar de
     # enumerar cada combinacion de donde pudo quedar un token vivo.
-    revoke_pending_tokens(db, "SC", sc.id)
+    # r2 (parte de RP16 sin bloqueo): la revocacion y el token nuevo van en el commit del estado y no por su cuenta: si
+    # algo falla antes, el enlace que el cliente ya tenia sigue vigente y no queda un token huerfano.
+    revoke_pending_tokens(db, "SC", sc.id, commit=False)
 
-    raw_token = create_confirmation_token(db, "SC", sc.id)
+    raw_token = create_confirmation_token(db, "SC", sc.id, commit=False)
     link = enlace_publico(raw_token, "SC")
 
     sc.estado = "PENDIENTE_CONFIRMACION"
@@ -1689,9 +1708,8 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
     numero, destino, cliente = sc.numero, sc.customer_email, sc.customer_name
     perfil = perfil_publico(db)
     # B3 PLANTILLA (C17, C21): el asunto y el html salen de correo_documento con la marca de la empresa, y el remitente
-    # lleva su nombre comercial. Se arman ANTES del commit (r1, Q3): si no se pueden armar, no queda el estado cambiado
-    # sin su renglon de Actividad.
-    asunto, html = correo_documento(perfil, "SC", numero, cliente, link)
+    # lleva su nombre comercial. Se arman ANTES del commit (r1, Q3): si no se pueden armar, se revierte todo.
+    asunto, html = _armar_correo_o_revertir(db, perfil, "SC", numero, cliente, link)
     db.commit()
 
     # H39: el estado ya esta guardado; ahora se intenta el correo de respaldo (siempre, sea cual sea el canal) y,
@@ -2901,9 +2919,10 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     old_estado = cot.estado
     # Mismo criterio que enviar_solicitud_para_confirmacion: revocar incondicionalmente
     # antes de emitir, por si quedo un token vivo de un ciclo anterior sin terminar.
-    revoke_pending_tokens(db, "COT", cot.id)
+    # r2 (parte de RP16 sin bloqueo): la revocacion y el token nuevo van en el commit del estado, como en la SC.
+    revoke_pending_tokens(db, "COT", cot.id, commit=False)
 
-    raw_token = create_confirmation_token(db, "COT", cot.id)
+    raw_token = create_confirmation_token(db, "COT", cot.id, commit=False)
     link = enlace_publico(raw_token, "COT")
 
     cot.estado = "PENDIENTE_CONFIRMACION"
@@ -2922,8 +2941,8 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     numero, destino, cliente = cot.numero, cot.customer_email, cot.customer_name
     perfil = perfil_publico(db)
     # B3 PLANTILLA (C17, C21): el correo sale de correo_documento con la marca de la empresa y su nombre de remitente.
-    # Se arma ANTES del commit (r1, Q3): si no se puede armar, el estado no cambia sin su renglon de Actividad.
-    asunto, html = correo_documento(perfil, "COT", numero, cliente, link)
+    # Se arma ANTES del commit (r1, Q3): si no se puede armar, se revierte todo.
+    asunto, html = _armar_correo_o_revertir(db, perfil, "COT", numero, cliente, link)
     db.commit()
     db.refresh(cot)
     try:

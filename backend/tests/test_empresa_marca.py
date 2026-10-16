@@ -340,6 +340,8 @@ def test_validar_cambios_reglas_y_mensajes():
         ({"sitio_web": "ftp://example.com"}, "La página web debe empezar por http:// o https://."),
         ({"sitio_web": "https://exa mple.com"}, "La página web debe empezar por http:// o https://."),
         ({"sitio_web": "https://"}, "La página web debe empezar por http:// o https://."),
+        ({"sitio_web": "https://[abc"}, "La página web debe empezar por http:// o https://."),  # r2: urlparse lanza
+        ({"sitio_web": "example.com]"}, "La página web debe empezar por http:// o https://."),
         ({"color_acento": "red;"}, "Color no válido: usa el formato #RRGGBB."),
         ({"color_acento": "#12345"}, "Color no válido: usa el formato #RRGGBB."),
         ({"color_acento": "rgb(10, 20, 30)"}, "Color no válido: usa el formato #RRGGBB."),  # la regla antes que el máximo
@@ -496,6 +498,16 @@ def test_cada_guardado_hace_un_solo_commit_con_su_actividad(db, contador_sql):
     assert empresa.quitar_logo(db, "Prueba") is False  # ya no hay logo
     assert contador_sql.commits == 0 and renglones() == inicial + 3
 
+    # r2: un logo sin su versión (escrito a mano) también se quita: una sola regla de «hay logo» con leer_logo.
+    db.execute(text("INSERT INTO admin_config (key, value, updated_at) VALUES (:k, :v, NOW())"),
+               {"k": empresa.CLAVE_LOGO, "v": _data_url("image/png", PNG_1X1)})
+    db.commit()
+    assert empresa.leer_logo(db) is not None
+    contador_sql.reset()
+    assert empresa.quitar_logo(db, "Prueba") is True
+    assert contador_sql.commits == 1 and renglones() == inicial + 4
+    assert empresa.leer_logo(db) is None and _claves_guardadas(db) == {"empresa_nombre_comercial": "DEMO"}
+
 
 def test_sitio_web_guardado_se_valida_al_leer(app_client, db):
     """r1 (S2): como los colores, un sitio_web guardado que no es http(s) (escrito a mano en la base) no llega a un href:
@@ -524,14 +536,27 @@ def test_una_sola_fuente_para_color_y_telefono(monkeypatch):
     monkeypatch.setattr(clientes, "TELEFONO_MIN_DIGITOS", 8)
     try:
         empresa.validar_cambios({"telefono": "601 234 5"})
-    except ValueError:
-        pass
+    except ValueError as e:
+        # r2: el mensaje se arma con las constantes al lanzar (hoy, sin parche, sigue «entre 7 y 15 dígitos»).
+        assert str(e) == "Teléfono no válido: escribe entre 8 y 15 dígitos.", str(e)
     else:
         raise AssertionError("empresa no usa clientes.TELEFONO_MIN_DIGITOS")
-    # Solo cuentan 0-9 (como telefonos, [^0-9]): unos dígitos de otro sistema no suman.
-    try:
-        empresa.validar_cambios({"telefono": "601 234 ٥٦٧٨"})
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("contó dígitos que no son 0-9")
+    # r2: el conteo usa [^0-9] como telefonos (no \D): un dígito de otro sistema no cuenta. Se prueba sobre el
+    # patrón porque, por la API, _TELEFONO ya rechaza esos caracteres antes de contar.
+    assert empresa._NO_DIGITO.sub("", "٥6") == "6"
+
+
+def test_quitar_un_logo_sin_version(app_client, db, admin_token):
+    """r2: un CLAVE_LOGO guardado sin su versión (upsert directo) se sirve en /publico/empresa/logo; DELETE /empresa/logo
+    lo borra y después ya no se sirve."""
+    from app.core import empresa
+    _limpiar_empresa(db)
+    db.execute(text("INSERT INTO admin_config (key, value, updated_at) VALUES (:k, :v, NOW())"),
+               {"k": empresa.CLAVE_LOGO, "v": _data_url("image/png", PNG_1X1)})
+    db.commit()
+    assert app_client.get("/api/v1/publico/empresa/logo").status_code == 200
+    resp = app_client.delete("/api/v1/empresa/logo", headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    logo = app_client.get("/api/v1/publico/empresa/logo")
+    assert logo.status_code == 404 and logo.json()["detail"] == "La empresa no tiene logo."
+    assert _claves_guardadas(db) == {}

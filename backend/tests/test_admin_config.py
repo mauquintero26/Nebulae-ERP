@@ -73,3 +73,15 @@ def test_guardar_config_hace_upsert_borra_con_none_y_no_confirma(db, contador_sq
     guardar_config(db, {CLAVE_A: 15})  # un valor que no es texto se guarda como texto, igual que update_config
     assert leer_config(db, [CLAVE_A]) == {CLAVE_A: "15"}
     guardar_config(db, {})  # sin cambios no hace nada
+
+
+def test_claves_existentes_no_lee_los_valores(db, contador_sql):
+    """r2: claves_existentes dice qué claves hay sin traer sus valores (el logo pesa hasta ~400 KB): un SELECT de key."""
+    from app.core.admin_config import claves_existentes
+    db.execute(text("DELETE FROM admin_config WHERE key IN (:a, :b)"), {"a": CLAVE_A, "b": CLAVE_B})
+    _poner(db, CLAVE_A, "x" * 1000)
+    contador_sql.reset()
+    assert claves_existentes(db, [CLAVE_A, CLAVE_B]) == {CLAVE_A}
+    assert contador_sql.consultas == 1 and contador_sql.commits == 0
+    assert "value" not in contador_sql.sentencias[0]
+    assert claves_existentes(db, []) == set()
