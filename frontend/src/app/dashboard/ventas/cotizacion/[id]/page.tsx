@@ -27,8 +27,9 @@ import { comoUTC } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
 import { destinoVolver, anchoInicialPanel, inicialesAutor } from '@/lib/detalle-layout';
 import { agregarActividad, esEntradaChatter, telUrl, textoSinTelefono } from '@/lib/chatter';
-import { ESTADOS_SC_SIN_CONFIRMAR } from '@/lib/estados-solicitud';
+import { ESTADOS_SC_SIN_CONFIRMAR, pideMotivoNuevo, errorMotivoSinConfirmacion } from '@/lib/estados-solicitud';
 import { humanizarCodigo } from '@/lib/estados-pedido';
+import { VentanaMotivoSinConfirmacion } from '../../motivo-sin-confirmacion';
 
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
 const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
@@ -89,6 +90,12 @@ function CotizacionDetalleContent() {
   const [showAjuste, setShowAjuste] = useState(false);
   const [ajusteSaving, setAjusteSaving] = useState(false);
   const [ajusteError, setAjusteError] = useState('');
+  // B2.1 D6: el 409 MOTIVO_NUEVO de retomar la cotización (la solicitud se canceló y se restauró después de crearla sin
+  // confirmación): el cuerpo del PATCH que se reintenta con el motivo, el mensaje del servidor y la ventana del motivo.
+  const [motivoNuevoPendiente, setMotivoNuevoPendiente] = useState<{ cuerpo: { estado: string; [campo: string]: unknown }; mensaje: string } | null>(null);
+  const [motivoNuevo, setMotivoNuevo] = useState('');
+  const [motivoNuevoError, setMotivoNuevoError] = useState('');
+  const [guardandoMotivoNuevo, setGuardandoMotivoNuevo] = useState(false);
 
   // Acciones (Calculadora / Eliminar / Propagar a Pedido de Venta)
   const [showCalc, setShowCalc] = useState(false);
@@ -468,16 +475,71 @@ function CotizacionDetalleContent() {
 
   async function changeEstado(newEstado: string) {
     if (!cotizacion?.id) return;
+    // B2.1 D6: el cuerpo se guarda para reintentarlo con el motivo nuevo si el servidor lo pide.
+    const cuerpo = { estado: newEstado, updated_by: currentUser };
     try {
       await apiFetch(`/ventas/cotizaciones/${cotizacion.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ estado: newEstado, updated_by: currentUser }),
+        body: JSON.stringify(cuerpo),
       });
       await loadCotizacion();
     } catch (err: any) {
+      // B2.1 D6: retomarla después de cancelar y restaurar la solicitud pide un motivo nuevo (409 MOTIVO_NUEVO; no cambió
+      // nada): se abre la ventana del motivo con este cuerpo, sin aviso de error. Si el usuario ya salió de la
+      // cotización, el aviso de error lleva el mensaje del servidor.
+      if (pideMotivoNuevo(err) && vivo.current) {
+        abrirMotivoNuevo(cuerpo, err);
+        return;
+      }
       avisarError(err, 'No se pudo cambiar el estado');
       if (recargarTrasError(err)) void loadCotizacion({ silencioso: true });
     }
+  }
+
+  function abrirMotivoNuevo(cuerpo: { estado: string; [campo: string]: unknown }, err: { detail?: { mensaje?: unknown } } | null) {
+    const delServidor = err?.detail?.mensaje;
+    const mensaje = typeof delServidor === 'string' && delServidor.trim() ? delServidor : textoDeError(err);
+    setMotivoNuevo('');
+    setMotivoNuevoError('');
+    setMotivoNuevoPendiente({ cuerpo, mensaje });
+  }
+
+  // B2.1 D6: el reintento del PATCH que pidió el motivo nuevo: el mismo cuerpo más motivo_sin_confirmacion (el servidor
+  // lo limpia y lo valida con las reglas de S5; su 422 o un 409 se ven en la ventana). Mientras guarda, la ventana no se
+  // cierra. Si el usuario ya salió de la cotización, se le avisa con un enlace (patrón T9A).
+  async function retomarConMotivoNuevo() {
+    if (!cotizacion?.id || !motivoNuevoPendiente) return;
+    const errorMotivo = errorMotivoSinConfirmacion(motivoNuevo);
+    if (errorMotivo) {
+      setMotivoNuevoError(errorMotivo);
+      return;
+    }
+    setGuardandoMotivoNuevo(true);
+    setMotivoNuevoError('');
+    const nombre = cotizacion.numero ? `la cotización ${cotizacion.numero}` : 'la cotización';
+    try {
+      await apiFetch(`/ventas/cotizaciones/${cotizacion.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ ...motivoNuevoPendiente.cuerpo, motivo_sin_confirmacion: motivoNuevo.trim() }),
+      });
+      if (!vivo.current) {
+        avisar(`Se retomó ${nombre} con el motivo nuevo`, { accion: { texto: 'Ver cotización', href: currentPath } });
+        return;
+      }
+      setMotivoNuevoPendiente(null);
+      setGuardandoMotivoNuevo(false);
+      await loadCotizacion();
+      return;
+    } catch (err: any) {
+      if (!vivo.current) {
+        console.error(err);
+        avisar(textoDeError(err, `No se pudo retomar ${nombre}`), { tono: 'error', accion: { texto: 'Ver cotización', href: currentPath } });
+        return;
+      }
+      setMotivoNuevoError(textoDeError(err));
+      if (recargarTrasError(err)) void loadCotizacion({ silencioso: true });
+    }
+    setGuardandoMotivoNuevo(false);
   }
 
   async function deleteCot() {
@@ -1241,6 +1303,25 @@ function CotizacionDetalleContent() {
           anulacion={calcAnulacion} onDescartarAnulacion={() => setCalcAnulacion(null)} saving={savingCalc} />
       )}
       {showDelete && cotizacion && <DeleteConfirm cot={cotizacion} onConfirm={deleteCot} onCancel={() => setShowDelete(false)} />}
+      {/* B2.1 D6: retomarla después de cancelar y restaurar la solicitud pide un motivo nuevo (409 MOTIVO_NUEVO): la
+          misma ventana de «Cotizar sin confirmación» de la solicitud; reintenta el PATCH con el motivo. */}
+      {motivoNuevoPendiente && (
+        <VentanaMotivoSinConfirmacion
+          titulo="Retomar sin confirmación del cliente"
+          aviso={motivoNuevoPendiente.mensaje}
+          detalle={`La cotización pasará a ${ESTADOS_COT[motivoNuevoPendiente.cuerpo.estado]?.label ?? humanizarCodigo(motivoNuevoPendiente.cuerpo.estado)}. El motivo con el que se creó era del ciclo anterior de la solicitud: el nuevo quedará registrado en la Actividad con tu nombre.`}
+          motivo={motivoNuevo}
+          onMotivo={(valor) => { setMotivoNuevo(valor); setMotivoNuevoError(''); }}
+          error={motivoNuevoError}
+          guardando={guardandoMotivoNuevo}
+          textoCancelar="Volver"
+          textoConfirmar="Retomar cotización"
+          placeholder="¿Por qué se retoma sin esperar la confirmación del cliente?"
+          idCampo="motivo-nuevo-retomar"
+          onCerrar={() => setMotivoNuevoPendiente(null)}
+          onConfirmar={retomarConMotivoNuevo}
+        />
+      )}
       {pendingCalcData && (
         <PropagarPvenConfirm
           pven={pvenVigente}

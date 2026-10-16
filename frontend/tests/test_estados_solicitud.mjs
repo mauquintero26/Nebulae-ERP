@@ -361,10 +361,15 @@ console.log('--- T11 calidad D1: el motivo de «Cotizar sin confirmación» se l
   }
 
   // D2: la ventana del detalle de la SC no limita con maxLength (UTF-16 crudo) y bloquea «Crear cotización» con el error
-  // del motivo limpio (también el máximo).
+  // del motivo limpio (también el máximo). B2.1 D6: la ventana pasó a VentanaMotivoSinConfirmacion (compartida con el
+  // detalle de la COT): las guardias miran ese archivo y que la SC la use.
+  const ventana = readFileSync(new URL('../src/app/dashboard/ventas/motivo-sin-confirmacion.tsx', import.meta.url), 'utf8');
+  assert.ok(!ventana.includes('maxLength={MOTIVO_SIN_CONFIRMACION_MAX}'), 'sin maxLength en el motivo');
+  assert.ok(ventana.includes('const errorMotivo = errorMotivoSinConfirmacion(motivo);'), 'el error del motivo limpio');
+  assert.ok(ventana.includes('disabled={!!errorMotivo}'), '«Crear cotización» usa errorMotivoSinConfirmacion');
   const detalle = readFileSync(new URL('../src/app/dashboard/ventas/solicitud/[id]/page.tsx', import.meta.url), 'utf8');
   assert.ok(!detalle.includes('maxLength={MOTIVO_SIN_CONFIRMACION_MAX}'), 'sin maxLength en el motivo');
-  assert.ok(detalle.includes('disabled={!!errorMotivoSinConf}'), '«Crear cotización» usa errorMotivoSinConfirmacion');
+  assert.ok(detalle.includes('<VentanaMotivoSinConfirmacion'), 'la SC usa la ventana compartida');
 }
 
 /** El cuerpo de una función de la página: desde `marca` hasta `siguiente` (la siguiente función del mismo nivel). */

@@ -159,6 +159,18 @@ export function errorMotivoSinConfirmacion(texto) {
 }
 
 /**
+ * B2.1 D6 (decisión del usuario): el error del PATCH de la cotización que pide un motivo nuevo para retomarla (la
+ * solicitud se canceló y se restauró después de crearla sin confirmación). El servidor responde 409 con
+ * detail {codigo: 'MOTIVO_NUEVO', mensaje}; apiFetch deja status y detail en el error. El detalle de la cotización abre
+ * con él la ventana del motivo y reintenta el mismo PATCH con motivo_sin_confirmacion.
+ * @param {any} err
+ * @returns {boolean}
+ */
+export function pideMotivoNuevo(err) {
+  return err?.status === 409 && err?.detail?.codigo === 'MOTIVO_NUEVO';
+}
+
+/**
  * Etiqueta y colores de un estado de solicitud. Una clave desconocida sale humanizada ('ALGO_NUEVO' -> 'Algo nuevo',
  * igual que etiqueta_estado del backend) y en gris: nunca el código crudo.
  * @param {any} e

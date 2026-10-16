@@ -18,13 +18,14 @@ import {
 } from '../solicitud-client';
 import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
 import {
-  infoEstadoSolicitud, puedeReiniciar, puedeCotizarSinConfirmacion, MOTIVO_SIN_CONFIRMACION_MIN, ESTADOS_SC_SIN_CONFIRMAR,
-  resumenCancelacion, MOTIVO_SIN_CONFIRMACION_MAX, pasoSolicitud, PASOS_SC, motivoLimpio, errorMotivoSinConfirmacion,
+  infoEstadoSolicitud, puedeReiniciar, puedeCotizarSinConfirmacion, ESTADOS_SC_SIN_CONFIRMAR,
+  resumenCancelacion, pasoSolicitud, PASOS_SC, errorMotivoSinConfirmacion,
   ESTADOS_SC_CON_CONFIRMACION,
 } from '@/lib/estados-solicitud';
 import {
-  largoTexto, telUrl, mailtoUrl, asuntoDocumento, agregarActividad, esEntradaChatter, motivoTelefono, textoSinTelefono,
+  telUrl, mailtoUrl, asuntoDocumento, agregarActividad, esEntradaChatter, motivoTelefono, textoSinTelefono,
 } from '@/lib/chatter';
+import { VentanaMotivoSinConfirmacion } from '../../motivo-sin-confirmacion';
 import { formatoPct } from '@/lib/dinero-ventas';
 import { pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
 import { destinoVolver, anchoInicialPanel, inicialesAutor } from '@/lib/detalle-layout';
@@ -669,10 +670,6 @@ function SolicitudDetalleContent() {
   const puedeCotizarSinConf = puedeCotizarSinConfirmacion(solicitud, { cotizacionesActivas, pedidosVigentes, tieneProductos });
   // El cliente todavía no confirma la solicitud (Nueva, Asignada o Pendiente por confirmación).
   const scSinConfirmar = ESTADOS_SC_SIN_CONFIRMAR.includes(solicitud?.estado);
-  // Lo que cuenta el servidor para los límites del motivo (T11 calidad, D1): el motivo limpio (sin invisibles, espacios
-  // en uno, sin bordes) en puntos de código (len()); errorMotivoSinConf es su 422 (largo y letras o dígitos).
-  const largoMotivoSinConf = largoTexto(motivoLimpio(motivoSinConf));
-  const errorMotivoSinConf = errorMotivoSinConfirmacion(motivoSinConf);
 
   const asesoresElegibles = usuarios.filter(u => esAsesorElegible(u.role));
   const yoPuedoSerAsesor = me.id !== null && asesoresElegibles.some(u => u.id === me.id);
@@ -1440,48 +1437,24 @@ function SolicitudDetalleContent() {
       )}
 
       {/* U11: cotizar sin esperar la confirmación del cliente. El motivo es obligatorio y queda en la Actividad de la
-          solicitud y de la cotización con el autor de la sesión; el error del servidor se muestra aquí dentro. */}
+          solicitud y de la cotización con el autor de la sesión; el error del servidor se muestra aquí dentro. B2.1 D6: la
+          ventana es la compartida con el detalle de la COT (VentanaMotivoSinConfirmacion). */}
       {showCotizarSinConf && (
-        <Modal title="Cotizar sin confirmación del cliente" icon={AlertTriangle} color="amber" maxWidth="md"
-          onClose={() => { if (!cotizandoSinConf) setShowCotizarSinConf(false); }}
-          bloquearCierre={cotizandoSinConf}
-          footer={(
-            <>
-              <Button variant="secondary" disabled={cotizandoSinConf} onClick={() => setShowCotizarSinConf(false)}>Esperar la confirmación</Button>
-              <Button color="amber" icon={FileText} loading={cotizandoSinConf} disabled={!!errorMotivoSinConf} onClick={cotizarSinConfirmacion}>Crear cotización</Button>
-            </>
-          )}>
-          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-            <p className="text-sm font-bold text-amber-900">Esta solicitud no ha sido confirmada por el cliente.</p>
-            <p className="text-xs text-amber-800 mt-1 leading-relaxed">
-              Puedes crear la cotización igual: quedará registrado en la Actividad con tu nombre y este motivo. Cuando el cliente confirme, la solicitud pasará a Confirmada y se mantendrá esta cotización.
-            </p>
-          </div>
-          <div>
-            <label htmlFor="motivo-sin-confirmacion" className="text-xs font-black text-slate-500 uppercase mb-2 block">Motivo (nota interna) *</label>
-            <textarea
-              id="motivo-sin-confirmacion"
-              value={motivoSinConf}
-              onChange={e => { setMotivoSinConf(e.target.value); setErrorSinConf(''); }}
-              readOnly={cotizandoSinConf}
-              rows={3}
-              // T11 calidad (D2): sin maxLength (cuenta UTF-16 crudo, con los invisibles): el botón se bloquea con el
-              // largo limpio por encima del máximo.
-              placeholder="¿Por qué se cotiza sin esperar al cliente?"
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-amber-200 outline-none"
-              autoFocus
-            />
-            <div className="flex items-start justify-between gap-3 mt-1 text-xs">
-              <span className={errorMotivoSinConf ? 'text-amber-700' : 'text-slate-500'}>
-                {largoMotivoSinConf < MOTIVO_SIN_CONFIRMACION_MIN
-                  ? `Mínimo ${MOTIVO_SIN_CONFIRMACION_MIN} caracteres (llevas ${largoMotivoSinConf}).`
-                  : errorMotivoSinConf ?? 'Lo ve tu equipo en la Actividad; el cliente no lo recibe.'}
-              </span>
-              <span className={`tabular-nums shrink-0 ${largoMotivoSinConf > MOTIVO_SIN_CONFIRMACION_MAX ? 'text-rose-700 font-bold' : 'text-slate-400'}`}>{largoMotivoSinConf}/{MOTIVO_SIN_CONFIRMACION_MAX}</span>
-            </div>
-            {errorSinConf && <p role="alert" className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 mt-3">{errorSinConf}</p>}
-          </div>
-        </Modal>
+        <VentanaMotivoSinConfirmacion
+          titulo="Cotizar sin confirmación del cliente"
+          aviso="Esta solicitud no ha sido confirmada por el cliente."
+          detalle="Puedes crear la cotización igual: quedará registrado en la Actividad con tu nombre y este motivo. Cuando el cliente confirme, la solicitud pasará a Confirmada y se mantendrá esta cotización."
+          motivo={motivoSinConf}
+          onMotivo={(valor) => { setMotivoSinConf(valor); setErrorSinConf(''); }}
+          error={errorSinConf}
+          guardando={cotizandoSinConf}
+          textoCancelar="Esperar la confirmación"
+          textoConfirmar="Crear cotización"
+          placeholder="¿Por qué se cotiza sin esperar al cliente?"
+          idCampo="motivo-sin-confirmacion"
+          onCerrar={() => setShowCotizarSinConf(false)}
+          onConfirmar={cotizarSinConfirmacion}
+        />
       )}
 
       {/* Hallazgo #1: mismo ChannelModal generico que usa cotizacion/[id]/page.tsx */}
