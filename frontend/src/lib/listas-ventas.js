@@ -459,7 +459,8 @@ export function resumenCancelacionSolicitudes(resultados, omitidas = []) {
  * `dias_restantes`:
  *  - con documentos se conserva y no se puede eliminar definitivamente;
  *  - sin documentos y sin `dias_restantes` no se elimina sola, pero un administrador la puede eliminar;
- *  - sin documentos y con `dias_restantes` hay cuenta regresiva ('20 días para eliminar', urgente desde 5).
+ *  - sin documentos y con `dias_restantes` hay cuenta regresiva ('20 días para eliminar', urgente desde 5);
+ *  - B2.1 D2: con `dias_restantes` <= 0 ya venció (esVencidaEnPapelera) y no se borra sola: TEXTO_PAPELERA_VENCIDA.
  * 'Se conserva' y 'Eliminar permanentemente' nunca van juntos (sin la fila, tampoco se ofrece eliminar).
  * @returns {{conservada: boolean, texto: string, nota: string, urgente: boolean, puedeEliminar: boolean}}
  */
@@ -471,7 +472,60 @@ export function estadoEnPapelera(sc) {
   if (dias === null || dias === undefined) {
     return { conservada: false, texto: TEXTO_PAPELERA_SIN_FECHA, nota: '', urgente: false, puedeEliminar: true };
   }
+  if (esVencidaEnPapelera(sc)) {
+    return { conservada: false, texto: TEXTO_PAPELERA_VENCIDA, nota: '', urgente: true, puedeEliminar: true };
+  }
   return { conservada: false, texto: `${dias} ${dias === 1 ? 'día' : 'días'}`, nota: 'para eliminar', urgente: dias <= 5, puedeEliminar: true };
+}
+
+/**
+ * B2.1 D2 (decisión del usuario): la Papelera ya no se borra sola al abrirla; la vacía un administrador con «Vaciar las
+ * vencidas» (POST /ventas/papelera/purgar). Lo que dice una fila vencida.
+ * @type {string}
+ */
+export const TEXTO_PAPELERA_VENCIDA = 'Vencida: se borra cuando un administrador vacíe la Papelera';
+
+/**
+ * B2.1 D2: una fila de la Papelera que ya venció: sin documentos y con `dias_restantes` (número) en 0 o menos. Sin fecha
+ * (null: `null <= 0` es true en JS) o con documentos nunca es vencida: la purga no la toca.
+ * @returns {boolean}
+ */
+export function esVencidaEnPapelera(sc) {
+  return esObjeto(sc) && !sc.tiene_documentos && typeof sc.dias_restantes === 'number' && sc.dias_restantes <= 0;
+}
+
+/**
+ * B2.1 D2: cuántas filas vencidas trae la lista de la Papelera (la confirmación de «Vaciar las vencidas» lo dice).
+ * @returns {number}
+ */
+export function contarVencidasEnPapelera(lista) {
+  return Array.isArray(lista) ? lista.filter(esVencidaEnPapelera).length : 0;
+}
+
+const solicitudesVencidas = (n) => (n === 1 ? '1 solicitud vencida' : `${n} solicitudes vencidas`);
+
+/**
+ * B2.1 D2: la confirmación de «Vaciar las vencidas» con las vencidas contadas en la lista. Sin ninguna en la lista se
+ * puede vaciar igual: la lista trae como mucho 200 filas, de la más reciente a la más vieja, y el servidor decide.
+ * @param {number} n  contarVencidasEnPapelera(lista)
+ * @returns {{titulo: string, mensaje: string, textoConfirmar: string, peligro: boolean}}
+ */
+export function confirmacionVaciarVencidas(n) {
+  const regla = '(más de 30 días en la Papelera y sin documentos vinculados)';
+  const mensaje = n > 0
+    ? `En la lista hay ${solicitudesVencidas(n)} ${regla}. Se borrarán para siempre y no se pueden recuperar.`
+    : `En la lista no hay solicitudes vencidas ${regla}. Si el servidor encuentra alguna, se borrará para siempre.`;
+  return { titulo: 'Vaciar las vencidas', mensaje, textoConfirmar: 'Vaciar las vencidas', peligro: true };
+}
+
+/**
+ * B2.1 D2: el aviso después de vaciar, con `purgadas` de la respuesta de POST /ventas/papelera/purgar.
+ * @returns {string}
+ */
+export function textoPapeleraVaciada(purgadas) {
+  const n = typeof purgadas === 'number' && Number.isFinite(purgadas) ? Math.trunc(purgadas) : 0;
+  if (n <= 0) return 'No había solicitudes vencidas para borrar.';
+  return n === 1 ? 'Se borró 1 solicitud vencida.' : `Se borraron ${solicitudesVencidas(n)}.`;
 }
 
 /**

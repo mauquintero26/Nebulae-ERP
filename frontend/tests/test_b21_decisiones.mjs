@@ -203,7 +203,7 @@ console.log('--- D2 TEST 5: los textos ya no dicen que la Papelera se borra sola
   assert.ok(!/se eliminan a los 30 días/i.test(lista), 'cabecera y estado vacío sin «se eliminan a los 30 días»');
   assert.ok(!lista.includes('antes de su eliminación permanente'), 'el análisis sin el borrado automático');
   assert.ok(!lista.includes('almacenan automáticamente'), 'el análisis sin el borrado automático');
-  assert.ok(veces(lista, 'un administrador vacía las vencidas') >= 3, 'cabecera, estado vacío y análisis');
+  assert.ok((lista.match(/un administrador vacía las vencidas/gi) ?? []).length >= 3, 'cabecera, estado vacío y análisis');
   const hub = leer('app/dashboard/ventas/page.tsx');
   assert.ok(!hub.includes("'La solicitud se cancela y pasa a la papelera (30 días)'"), 'el Hub sin «(30 días)»');
   assert.ok(hub.includes("SC: 'La solicitud se cancela y pasa a la Papelera: se puede eliminar definitivamente después de 30 días si no se restaura',"));

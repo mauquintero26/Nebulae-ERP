@@ -63,7 +63,7 @@ const TONO_ACCION: Record<string,string> = {
 
 // N3: lo que pasa con cada tipo de documento al cancelarlo desde el Hub.
 const EFECTO_CANCELACION: Record<string,string> = {
-  SC: 'La solicitud se cancela y pasa a la papelera (30 días)',
+  SC: 'La solicitud se cancela y pasa a la Papelera: se puede eliminar definitivamente después de 30 días si no se restaura',
   COT: 'La cotización queda Rechazada',
   VEN: 'El pedido queda Cancelado',
 };

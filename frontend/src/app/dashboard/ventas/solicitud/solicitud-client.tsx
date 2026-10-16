@@ -16,7 +16,7 @@ import {
 
 import { apiFetch, API_URL, getToken } from '@/lib/api';
 import { SubNav, PageHeader, StatCard, Badge as SharedBadge, Modal, Button, EmptyState, useAvisos } from '@/components/ui';
-import { textoDeError } from '@/lib/avisos';
+import { textoDeError, recargarTrasError } from '@/lib/avisos';
 import { VEN_NAV } from '../ven-nav';
 import { esAdministrador, esAsesorElegible, getUsuarioActual } from '../flujo';
 import { coincideProducto } from '@/lib/busqueda';
@@ -25,6 +25,7 @@ import {
   diasAlerta, generoCotizacion, cotizacionesVigentes, contadoresSolicitudes, tasaConversionCotizacion,
   superaDiasAlerta, resumenCancelacionSolicitudes, repartirCancelacionSolicitudes, estadoEnPapelera, esSolicitudActiva,
   pestanaDeSolicitud, pistaActivasSolicitudes, posicionMenuFila, botonALaVista, recortesDeAncestros,
+  contarVencidasEnPapelera, confirmacionVaciarVencidas, textoPapeleraVaciada,
 } from '@/lib/listas-ventas';
 import { comoUTC } from '@/lib/hub-ventas';
 import { mailtoUrl, telUrl, motivoTelefono } from '@/lib/chatter';
@@ -765,7 +766,7 @@ export default function SolicitudClient() {
         aiReply = `🚫 **Análisis de Cancelaciones:**\n\n` +
           `• Actualmente hay **${canc} solicitudes canceladas** (${cancRate}% del total).\n` +
           `• **Motivo más recurrente registrado:** *"${topReason}"*.\n` +
-          `• Las solicitudes canceladas se almacenan automáticamente en la **Papelera** por 30 días con trazabilidad antes de su eliminación permanente.\n\n` +
+          `• Las solicitudes canceladas pasan a la **Papelera** con trazabilidad: se pueden eliminar definitivamente después de 30 días si no se restauran; un administrador vacía las vencidas.\n\n` +
           `💡 **Acción sugerida:** Implementar seguimiento preventivo vía WhatsApp antes de los 3 días de inactividad para recuperar leads dubitativos antes de que desistan.`;
       } else if (qLower.includes('cliente') || qLower.includes('top') || qLower.includes('volumen')) {
         aiReply = `👑 **Comportamiento de Clientes:**\n\n` +
@@ -802,6 +803,8 @@ export default function SolicitudClient() {
   const [papelera,setPapelera]=useState<any[]>([]);
   const [loadingPapelera,setLoadingPapelera]=useState(false);
   const [papeleraError,setPapeleraError]=useState('');
+  // B2.1 D2: «Vaciar las vencidas» en curso (el botón no se puede pulsar dos veces).
+  const [vaciandoPapelera,setVaciandoPapelera]=useState(false);
 
   // Formato confirmación
   const [showConfirmFormat,setShowConfirmFormat]=useState(false);
@@ -940,6 +943,27 @@ export default function SolicitudClient() {
       avisar(`${sc.numero} eliminada definitivamente`);
       await loadPapelera();
     }catch(err:any){avisarError(err,`No se pudo eliminar ${sc.numero}`);}
+  }
+
+  // B2.1 D2 (decisión del usuario): abrir la Papelera ya no borra nada; el administrador la vacía con este botón. POST
+  // /ventas/papelera/purgar borra las canceladas hace más de 30 días y sin documentos (con su renglón PURGED y la sesión
+  // como autor) y responde {purgadas, numeros}. La confirmación dice cuántas vencidas hay en la lista (el servidor
+  // decide: la lista trae como mucho 200). Un error (403, o 500 sin borrar nada) sale como aviso.
+  async function vaciarVencidas() {
+    if(vaciandoPapelera) return;
+    if(!(await confirmar(confirmacionVaciarVencidas(contarVencidasEnPapelera(papelera))))) return;
+    setVaciandoPapelera(true);
+    try{
+      const d=await apiFetch('/ventas/papelera/purgar',{method:'POST'});
+      const purgadas=(d?.data??d)?.purgadas;
+      avisar(textoPapeleraVaciada(purgadas),{tono:purgadas>0?'ok':'info'});
+      await loadPapelera();
+    }catch(err:any){
+      avisarError(err,'No se pudo vaciar la Papelera');
+      // Sin respuesta del servidor (la red se cortó) pudo vaciarse igual: la lista recargada dice qué quedó.
+      if(recargarTrasError(err)) await loadPapelera();
+    }
+    setVaciandoPapelera(false);
   }
 
   // U18+H33: el servidor responde {id, numero, estado, estado_label, mensaje} ('… restaurada: queda Asignada porque …')
@@ -1310,9 +1334,13 @@ export default function SolicitudClient() {
           {/* PAPELERA TABLE */}
           {activeTab==='Papelera'&&(
             <div className="p-4">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-black text-slate-500 uppercase">Solicitudes en Papelera — Se eliminan a los 30 días, salvo las que tienen documentos vinculados</p>
-                <button onClick={loadPapelera} className="text-xs text-slate-400 hover:text-slate-600 font-bold flex items-center gap-1"><RefreshCw size={11} className={loadingPapelera?'animate-spin':''}/> Actualizar</button>
+              {/* B2.1 D2: la Papelera ya no se borra sola; un administrador vacía las vencidas (solo él ve el botón). */}
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <p className="text-xs font-black text-slate-500 uppercase">Solicitudes en Papelera — Se pueden eliminar definitivamente después de 30 días si no se restauran, salvo las que tienen documentos vinculados; un administrador vacía las vencidas</p>
+                <div className="flex items-center gap-3 shrink-0">
+                  {esAdministrador(getUsuarioActual().role)&&<button onClick={vaciarVencidas} disabled={vaciandoPapelera} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"><Trash2 size={11} className={vaciandoPapelera?'animate-pulse':''}/>Vaciar las vencidas</button>}
+                  <button onClick={loadPapelera} className="text-xs text-slate-400 hover:text-slate-600 font-bold flex items-center gap-1"><RefreshCw size={11} className={loadingPapelera?'animate-spin':''}/> Actualizar</button>
+                </div>
               </div>
               {papeleraError&&(
                 <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl px-4 py-3 mb-3 text-xs font-bold flex items-start gap-2">
@@ -1320,7 +1348,7 @@ export default function SolicitudClient() {
                   <span>No se pudo cargar la papelera: {papeleraError}{papelera.length>0?' (se muestra la última lista cargada).':'.'}</span>
                 </div>
               )}
-              {loadingPapelera?<div className="flex justify-center py-8"><RefreshCw size={20} className="animate-spin text-slate-400"/></div>:papelera.length===0?(papeleraError?null:<EmptyState icon={Trash2} message="La papelera está vacía." hint="Las solicitudes canceladas aparecen aquí; se eliminan a los 30 días salvo las que tienen cotizaciones, pedidos o leads vinculados."/>):(
+              {loadingPapelera?<div className="flex justify-center py-8"><RefreshCw size={20} className="animate-spin text-slate-400"/></div>:papelera.length===0?(papeleraError?null:<EmptyState icon={Trash2} message="La papelera está vacía." hint="Las solicitudes canceladas aparecen aquí; se pueden eliminar definitivamente después de 30 días si no se restauran, salvo las que tienen cotizaciones, pedidos o leads vinculados. Un administrador vacía las vencidas."/>):(
                 <div className="space-y-2">
                   {papelera.map((sc:any)=>{
                     const enPapelera=estadoEnPapelera(sc);
