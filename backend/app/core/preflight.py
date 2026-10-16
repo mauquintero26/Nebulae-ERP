@@ -67,6 +67,35 @@ def _get_env() -> str:
     ).strip().lower()
 
 
+_HOSTS_LOCALES = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+
+
+def aviso_frontend_url(env: str, valor: Optional[str]) -> Optional[str]:
+    """Bloque 3, T1 (hueco 1): en produccion, el motivo por el que FRONTEND_URL no sirve para los enlaces que se envian a
+    los clientes (falta, apunta a localhost o no es una direccion http/https completa); None si sirve o si no es
+    produccion. Pura: la usan este preflight (advierte al arrancar, sin abortar) y enlace_publico de
+    app/core/confirmation_tokens.py (registra el error en cada enlace)."""
+    if (env or "").strip().lower() != "production":
+        return None
+    texto = (valor or "").strip()
+    if not texto:
+        return ("FRONTEND_URL no esta definida: los enlaces que se envian a los clientes apuntarian a "
+                "http://localhost:5100. Definela con la direccion publica del ERP (https://...).")
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(texto)
+        host = (parsed.hostname or "").lower()
+        esquema = parsed.scheme.lower()
+    except ValueError:
+        host, esquema = "", ""
+    if esquema not in ("http", "https") or not host:
+        return f"FRONTEND_URL='{texto}' no es una direccion completa (https://...): los enlaces a los clientes no abririan."
+    if host in _HOSTS_LOCALES or host.endswith(".localhost"):
+        return (f"FRONTEND_URL apunta a {host}: los enlaces que se envian a los clientes no abririan fuera de este "
+                "servidor. Definela con la direccion publica del ERP (https://...).")
+    return None
+
+
 def _abort(message: str, exit_code: int = 2) -> None:
     """Registra el error y termina el proceso con codigo != 0."""
     logger.critical("PREFLIGHT ABORT [exit=%d]: %s", exit_code, message)
@@ -149,6 +178,14 @@ def run_preflight_or_abort(
                 exit_code=2,
             )
         logger.info("PREFLIGHT: CORS_ALLOWED_ORIGINS presente. OK")
+
+        # 5. FRONTEND_URL (Bloque 3, hueco 1): solo advierte, no aborta -- sin ella el ERP funciona, pero los enlaces
+        #    que se envian a los clientes (WhatsApp, correo) llevarian una direccion que no abre.
+        _aviso_frontend = aviso_frontend_url(env, os.environ.get("FRONTEND_URL"))
+        if _aviso_frontend:
+            logger.warning("PREFLIGHT ADVERTENCIA: %s", _aviso_frontend)
+        else:
+            logger.info("PREFLIGHT: FRONTEND_URL presente. OK")
 
     if not url:
         _abort(

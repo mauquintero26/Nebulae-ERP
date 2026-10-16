@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Depends, Header
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.db.database import get_db
-from app.core.confirmation_tokens import peek_token, verify_and_consume_token
+from app.core.confirmation_tokens import hash_token, peek_token, revoke_pending_tokens, verify_and_consume_token
 import logging
 
 logger = logging.getLogger(__name__)
@@ -150,6 +150,8 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
             _log(db, "COT", temprana.id, temprana.numero, "SC_CONFIRMADA",
                  f"El cliente confirmó la solicitud {sc.numero}: se mantiene esta cotización (no se crea otra).",
                  user_name=cliente, commit=False)
+        # B3 T1 (C12/R19): los demás enlaces pendientes de esta SC quedan revocados en el MISMO commit que la confirma.
+        revoke_pending_tokens(db, "SC", sc.id, commit=False, excepto_hash=hash_token(body.token))
         db.commit()
         return {"status": "success", "message": "Solicitud confirmada. Gracias."}
     elif document_type == "COT":
@@ -183,6 +185,8 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
         # futuro y no relacionado sobre la misma COT.
         cot.gate2_confirmed_at = datetime.datetime.utcnow()
         cot.updated_at = datetime.datetime.utcnow()
+        # B3 T1 (C12/R19): los demás enlaces pendientes de esta COT quedan revocados en el MISMO commit que la confirma.
+        revoke_pending_tokens(db, "COT", cot.id, commit=False, excepto_hash=hash_token(body.token))
         db.commit()
         db.refresh(cot)
         # U15: la SC ya no refleja a su COT; la sincronizacion solo la confirma si estaba
