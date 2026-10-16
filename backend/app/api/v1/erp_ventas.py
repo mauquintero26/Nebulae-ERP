@@ -1688,12 +1688,14 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
     # (SMTP sincrono) sale. La marca de la empresa (B3 PLANTILLA) tambien: un SELECT dentro de esta misma transaccion.
     numero, destino, cliente = sc.numero, sc.customer_email, sc.customer_name
     perfil = perfil_publico(db)
+    # B3 PLANTILLA (C17, C21): el asunto y el html salen de correo_documento con la marca de la empresa, y el remitente
+    # lleva su nombre comercial. Se arman ANTES del commit (r1, Q3): si no se pueden armar, no queda el estado cambiado
+    # sin su renglon de Actividad.
+    asunto, html = correo_documento(perfil, "SC", numero, cliente, link)
     db.commit()
 
     # H39: el estado ya esta guardado; ahora se intenta el correo de respaldo (siempre, sea cual sea el canal) y,
-    # con su resultado a la mano, se anota el envio en la Actividad. B3 PLANTILLA (C17, C21): el asunto y el html salen
-    # de correo_documento con la marca de la empresa, y el remitente lleva su nombre comercial.
-    asunto, html = correo_documento(perfil, "SC", numero, cliente, link)
+    # con su resultado a la mano, se anota el envio en la Actividad.
     correo_res = _enviar_correo_confirmacion(destino, asunto, html,
                                              remitente_nombre=perfil["nombre_comercial"] or None)
     descripcion = "Enlace de confirmación reenviado al cliente" if es_reenvio else "Enviada para confirmación del cliente"
@@ -2919,6 +2921,9 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     # en esta misma transaccion, no despues (no se abre otra mientras sale el SMTP).
     numero, destino, cliente = cot.numero, cot.customer_email, cot.customer_name
     perfil = perfil_publico(db)
+    # B3 PLANTILLA (C17, C21): el correo sale de correo_documento con la marca de la empresa y su nombre de remitente.
+    # Se arma ANTES del commit (r1, Q3): si no se puede armar, el estado no cambia sin su renglon de Actividad.
+    asunto, html = correo_documento(perfil, "COT", numero, cliente, link)
     db.commit()
     db.refresh(cot)
     try:
@@ -2935,8 +2940,6 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     # El refresh y la sincronizacion de arriba pueden dejar abierta una transaccion de solo lectura: se cierra con un
     # commit (inofensivo si no hay nada pendiente) para no retener la conexion de la base durante el SMTP sincrono.
     db.commit()
-    # B3 PLANTILLA (C17, C21): el correo sale de correo_documento con la marca de la empresa y su nombre de remitente.
-    asunto, html = correo_documento(perfil, "COT", numero, cliente, link)
     correo_res = _enviar_correo_confirmacion(destino, asunto, html,
                                              remitente_nombre=perfil["nombre_comercial"] or None)
     descripcion = "Enviada para confirmación del cliente"

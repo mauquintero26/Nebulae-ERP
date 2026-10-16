@@ -82,6 +82,18 @@ def test_correo_documento_escapa_y_limpia():
     asunto, _ = correo_documento(_perfil(nombre_comercial="   "), "SC", "SC-1", "Ana", LINK)
     assert asunto == "Tu solicitud SC-1"
 
+    # r1 (S3): el único constructor de correos al cliente solo acepta enlaces http(s) (sin distinguir mayúsculas).
+    for malo in ("javascript:alert(1)", "JavaScript:alert(1)", "data:text/html,x", "//evil.example.com/x",
+                 "ftp://example.com/x", "app.example.com/confirmar/x", "", None, 123):
+        try:
+            correo_documento(PERFIL, "COT", "COT-1", "Ana", malo)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"correo_documento aceptó el enlace {malo!r}")
+    _, html = correo_documento(PERFIL, "COT", "COT-1", "Ana", "HTTPS://APP.EXAMPLE.COM/confirmar/x")
+    assert "HTTPS://APP.EXAMPLE.COM/confirmar/x" in html
+
 
 def test_correo_documento_lleva_marca_boton_y_contacto():
     from app.core.correo_documento import correo_documento
@@ -89,7 +101,7 @@ def test_correo_documento_lleva_marca_boton_y_contacto():
     assert asunto == "Solicitud SC-20260001 de DEMO Ferretería"
     assert "Hola Ana Pérez" in html
     assert f'href="{LINK}"' in html and html.count(LINK) >= 2  # botón y enlace escrito debajo
-    assert "Ver solicitud" in html
+    assert ">Ver solicitud</a>" in html  # r1 (L1): «Ver {título}» en minúsculas, como el asunto
     assert "#7C3AED" in html  # la SC usa el color principal en la franja
     for dato in ("601 234 5678", "300 123 4567", "ventas@example.com", "Calle 1 # 2-3", "900.123.456-7"):
         assert dato in html, dato
@@ -97,7 +109,7 @@ def test_correo_documento_lleva_marca_boton_y_contacto():
     assert "width=\"600\"" in html or "max-width:600px" in html
 
     _, html = correo_documento(PERFIL, "COT", "COT-1", "", LINK)
-    assert "Hola," in html and "Ver cotización" in html and "#C2410C" in html
+    assert "Hola," in html and ">Ver cotización</a>" in html and "#C2410C" in html
 
 
 def test_color_texto_sobre_es_la_regla_wcag_del_frontend():
@@ -123,7 +135,7 @@ def test_propositos_del_correo():
     asunto, html = correo_documento(PERFIL, "PVEN", "PVEN-1", "Ana", link_pedido, resumen=resumen,
                                     proposito="CONSULTA", vence="2026-11-15")
     assert asunto == "Confirmación de tu pedido PVEN-1 de DEMO Ferretería"
-    for texto in ("Total", "$1.000.000", "Pagado", "$600.000", "Saldo", "$400.000", "Ver pedido",
+    for texto in ("Total", "$1.000.000", "Pagado", "$600.000", "Saldo", "$400.000", ">Ver pedido de venta</a>",
                   "lo que has pagado y lo que te falta"):
         assert texto in html, texto
     assert "15 de noviembre de 2026" in html and "disponible hasta el" in html
@@ -144,7 +156,10 @@ def test_propositos_del_correo():
     _, html = correo_documento(PERFIL, "COT", "COT-1", "Ana", LINK)
     assert "hasta el" not in html  # sin vence no hay renglón
 
-    for malo in ({"proposito": "OTRO"}, {"tipo": "PXP"}):
+    # r1 (Q8d): también las dos combinaciones que no aplican: CONSULTA solo es del pedido y el pedido no tiene
+    # recordatorio.
+    for malo in ({"proposito": "OTRO"}, {"tipo": "PXP"}, {"tipo": "SC", "proposito": "CONSULTA"},
+                 {"tipo": "COT", "proposito": "CONSULTA"}, {"tipo": "PVEN", "proposito": "SEGUIMIENTO"}):
         args = {"tipo": "COT", "proposito": "CONFIRMACION", **malo}
         try:
             correo_documento(PERFIL, args["tipo"], "X-1", "Ana", LINK, proposito=args["proposito"])
@@ -251,8 +266,58 @@ def test_send_email_remitente_con_nombre(monkeypatch):
     assert correo.send_email("cliente@example.com", "Asunto", "<p>Hola</p>")  # sin nombre: igual que antes
     assert email.message_from_string(capturas[-1]["mensaje"])["From"] == "ventas@example.com"
 
+    # r1 (Q1): un SMTP_FROM que ya trae nombre no anida los <>: el From usa solo su dirección.
+    monkeypatch.setenv("SMTP_FROM", "Nebulae <ventas@example.com>")
+    assert correo.send_email("cliente@example.com", "Asunto", "<p>Hola</p>", remitente_nombre="DEMO Ferretería")
+    msg = email.message_from_string(capturas[-1]["mensaje"])
+    assert parseaddr(str(make_header(decode_header(msg["From"])))) == ("DEMO Ferretería", "ventas@example.com")
+    assert correo.send_email("cliente@example.com", "Asunto", "<p>Hola</p>")  # sin nombre comercial: como antes
+    assert email.message_from_string(capturas[-1]["mensaje"])["From"] == "Nebulae <ventas@example.com>"
+    monkeypatch.setenv("SMTP_FROM", "ventas@example.com")
+
     # Un nombre con salto de línea no inyecta encabezados.
     assert correo.send_email("cliente@example.com", "Asunto", "<p>Hola</p>", remitente_nombre="Malo\r\nBcc: x@y.z")
     msg = email.message_from_string(capturas[-1]["mensaje"])
     assert msg["Bcc"] is None
     assert parseaddr(str(make_header(decode_header(msg["From"]))))[1] == "ventas@example.com"
+
+
+# ─── r1 (Q3): el correo se arma antes de confirmar el envío ─────────────────────────────────────────────────
+
+def test_si_el_correo_no_se_puede_armar_no_queda_un_envio_a_medias(app_client, db, admin_token, user_admin,
+                                                                   monkeypatch):
+    """r1 (Q3): (asunto, html) se calcula ANTES del commit que pone PENDIENTE_CONFIRMACION. Si correo_documento lanza,
+    el request falla y el documento sigue como estaba: sin cambio de estado, sin renglón de Actividad y sin correo.
+    (La revocación del enlace anterior y el token nuevo todavía confirman por su cuenta: los junta en un solo commit
+    T6, RP16; por eso esta prueba no afirma nada sobre los tokens.)"""
+    from app.models.erp_documents import ActivityLog, CustomerRequest, SalesQuotation
+    _limpiar_empresa(db)
+    llamadas = _correo_falso(monkeypatch)
+
+    def no_se_puede(*args, **kwargs):
+        raise ValueError("correo de prueba que no se puede armar")
+
+    monkeypatch.setattr("app.api.v1.erp_ventas.correo_documento", no_se_puede)
+    sc = CustomerRequest(numero=f"SC-B3T2{_sufijo()}", customer_name="Cliente Prueba", estado="ASIGNADA",
+                         advisor_user_id=user_admin.id, advisor_name=user_admin.email,
+                         customer_email="cliente@example.com", productos=[{"product_name": "Cuna", "qty": 1}])
+    cot = SalesQuotation(numero=f"COT-B3T2{_sufijo()}", customer_name="Cliente Prueba", estado="BORRADOR",
+                         customer_email="cliente@example.com", total_cop=1000, canal_envio=None,
+                         productos=[{"product_name": "Cuna", "qty": 1}])
+    db.add_all([sc, cot]); db.commit(); db.refresh(sc); db.refresh(cot)
+
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/enviar-confirmacion", json={"canal": "Email"},
+                           headers=auth(admin_token))
+    assert resp.status_code == 500
+    resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/enviar-confirmacion", json={"canal": "Email"},
+                           headers=auth(admin_token))
+    assert resp.status_code == 500
+
+    db.expire_all()
+    assert db.get(CustomerRequest, sc.id).estado == "ASIGNADA"
+    cot_despues = db.get(SalesQuotation, cot.id)
+    assert cot_despues.estado == "BORRADOR" and cot_despues.canal_envio is None
+    assert db.query(ActivityLog).filter(ActivityLog.entity_id.in_([sc.id, cot.id]),
+                                        ActivityLog.entity_type.in_(["SC", "COT"]),
+                                        ActivityLog.action == "ESTADO_CHANGED").count() == 0
+    assert llamadas == []

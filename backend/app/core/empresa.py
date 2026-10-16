@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 from sqlalchemy.orm import Session
 
 from app.core.admin_config import guardar_config, leer_config
-from app.core.clientes import correo_valido
+from app.core import clientes
 from app.core.telefonos import e164_whatsapp
 from app.models.erp_documents import ActivityLog
 
@@ -66,10 +66,18 @@ MENSAJE_LOGO_INVALIDO = "El archivo no es una imagen válida."
 # ─── Validadores: reciben el texto ya sin espacios de los bordes y no vacio; devuelven el valor a guardar ─────────
 _NIT = re.compile(r"[0-9][0-9.\- ]{4,29}")
 _TELEFONO = re.compile(r"[0-9+() \-]+")
-TELEFONO_MIN_DIGITOS, TELEFONO_MAX_DIGITOS = 7, 15
+# El minimo de digitos es el de clientes (TELEFONO_MIN_DIGITOS, leido al llamar); el maximo es el de E.164.
+TELEFONO_MAX_DIGITOS = 15
+_NO_DIGITO = re.compile(r"[^0-9]")  # como telefonos._NO_DIGITO: solo 0-9 cuentan como digitos
+# El patron de color de todo el backend (el correo lo usa con es_color_hex).
 _HEX = re.compile(r"#[0-9A-Fa-f]{6}")
 # Un esquema al inicio ('javascript:', 'data:', 'ftp:'...). 'example.com:8080' no lo es: despues de ':' viene un puerto.
 _ESQUEMA = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*:(?!\d)")
+
+
+def es_color_hex(valor) -> bool:
+    """True si `valor` es un texto '#RRGGBB' (la unica regla de color: la usan los documentos y los correos)."""
+    return isinstance(valor, str) and _HEX.fullmatch(valor) is not None
 
 
 def _validar_nit(valor: str) -> str:
@@ -79,23 +87,26 @@ def _validar_nit(valor: str) -> str:
 
 
 def _validar_telefono(valor: str, mensaje: str = MENSAJE_TELEFONO) -> str:
-    digitos = sum(1 for ch in valor if "0" <= ch <= "9")
-    if not _TELEFONO.fullmatch(valor) or not TELEFONO_MIN_DIGITOS <= digitos <= TELEFONO_MAX_DIGITOS:
+    digitos = len(_NO_DIGITO.sub("", valor))
+    if not _TELEFONO.fullmatch(valor) or not clientes.TELEFONO_MIN_DIGITOS <= digitos <= TELEFONO_MAX_DIGITOS:
         raise ValueError(mensaje)
     return valor
 
 
 def _validar_whatsapp(valor: str) -> str:
     """RP19: una sola regla de WhatsApp en el backend, telefonos.e164_whatsapp (11 a 15 digitos despues de normalizar;
-    un celular colombiano de 10 digitos recibe el 57). Se guarda como lo escribio el administrador."""
-    if e164_whatsapp(valor) is None:
+    un celular colombiano de 10 digitos recibe el 57). Primero se exigen los mismos caracteres que en el telefono fijo
+    (digitos, + ( ) - y espacios), porque e164_whatsapp descarta todo lo demas y '300 123 4567 ext 12' saldria como
+    +300123456712 (r1, L2).
+    Se guarda como lo escribio el administrador."""
+    if not _TELEFONO.fullmatch(valor) or e164_whatsapp(valor) is None:
         raise ValueError(MENSAJE_WHATSAPP)
     return valor
 
 
 def _validar_correo(valor: str) -> str:
     """RP4: la misma regla de correo de todo el servidor (clientes.correo_valido, B2.1-D5)."""
-    if not correo_valido(valor):
+    if not clientes.correo_valido(valor):
         raise ValueError(MENSAJE_CORREO)
     return valor
 
@@ -117,7 +128,7 @@ def _validar_url(valor: str) -> str:
 
 def _validar_hex(valor: str) -> str:
     """#RRGGBB (evita inyeccion en un style); se guarda en mayusculas."""
-    if not _HEX.fullmatch(valor):
+    if not es_color_hex(valor):
         raise ValueError(MENSAJE_COLOR)
     return valor.upper()
 
@@ -149,6 +160,9 @@ CAMPOS = {
 CAMPOS_IDENTIDAD = ("nombre_comercial", "razon_social", "nit", "direccion", "ciudad", "telefono", "whatsapp", "correo",
                     "sitio_web")
 CAMPOS_COLORES = {"color_principal": "principal", "color_secundario": "secundario", "color_acento": "acento"}
+# Los unicos campos de varias lineas (conservan \n y \t). Los demas son de una sola linea: pasan por limpiar_linea, porque
+# van a asuntos, encabezados y parametros de plantillas de WhatsApp (Meta rechaza saltos y tabuladores; r1, Q2/S4).
+CAMPOS_TEXTO_LARGO = ("terminos_cotizacion", "terminos_pedido", "instrucciones_pago", "mensaje_pie")
 # Lo que ve cualquiera sin sesion (/publico/empresa): identidad y colores. Nunca terminos ni datos para pagar (R8).
 CAMPOS_PUBLICOS = CAMPOS_IDENTIDAD + tuple(CAMPOS_COLORES)
 # Textos de cada documento: la SC no lleva terminos ni datos para pagar (solo los ve quien tiene el enlace de la COT o
@@ -176,13 +190,19 @@ def _url_logo(version):
 
 
 def _valor_guardado(campo: str, guardado) -> str:
-    """El valor de `campo` como lo ve el resto del sistema: el guardado, o su valor por defecto. Un color guardado que no
-    es #RRGGBB (dato viejo escrito a mano) se ignora: nunca llega a un style."""
+    """El valor de `campo` como lo ve el resto del sistema: el guardado, o su valor por defecto. Defensa al leer, por si
+    hay un dato viejo escrito a mano en la base: un color que no es #RRGGBB vuelve al de la referencia (nunca llega a
+    un style) y una pagina web que no es http(s) se lee como '' (nunca llega a un href; r1, S2)."""
     _, _, _, validador, defecto = CAMPOS[campo]
     if not guardado:
         return defecto
-    if validador is _validar_hex and not _HEX.fullmatch(guardado):
+    if validador is _validar_hex and not es_color_hex(guardado):
         return defecto
+    if validador is _validar_url:
+        try:
+            return _validar_url(guardado)
+        except ValueError:
+            return ""
     return guardado
 
 
@@ -242,7 +262,13 @@ def _normalizar_texto(valor) -> str:
 def validar_cambios(body: dict) -> dict:
     """{campo: valor normalizado} de `body`, validado TODO antes de escribir nada. '' o None borran el campo (vuelve a su
     valor por defecto). Un campo desconocido (tambien 'logo', que va por PUT /empresa/logo) o un valor invalido lanzan
-    ValueError con el mensaje exacto. Pura: sin base de datos."""
+    ValueError con el mensaje exacto. Pura: sin base de datos.
+
+    Orden (T12 lo copia en validarCampoEmpresa, RP21): 1) que sea texto; 2) normalizar: los de una sola linea con
+    limpiar_linea (cada tramo de \\n, \\t, \\r u otro caracter de control pasa a UN espacio y se quitan los espacios de
+    los bordes; los demas espacios no se tocan) y los de CAMPOS_TEXTO_LARGO con _normalizar_texto (\\r\\n -> \\n,
+    conservan \\n y \\t, se quitan los demas caracteres de control y los espacios de los bordes); 3) la regla del campo;
+    4) el maximo sobre el valor que se guardaria."""
     cambios = {}
     for campo, valor in body.items():
         if campo not in CAMPOS:
@@ -252,7 +278,7 @@ def validar_cambios(body: dict) -> dict:
             valor = ""
         if not isinstance(valor, str):
             raise ValueError(MENSAJE_NO_ES_TEXTO.format(etiqueta=etiqueta))
-        valor = _normalizar_texto(valor)
+        valor = _normalizar_texto(valor) if campo in CAMPOS_TEXTO_LARGO else limpiar_linea(valor)
         # Primero la regla del campo (su mensaje es el mas util: 'Color no valido...' y no 'maximo 7 caracteres') y
         # despues el maximo sobre el valor que se guardaria (sitio_web gana 'https://').
         if valor and validador is not None:
@@ -355,13 +381,15 @@ def guardar_logo(db: Session, data_url, user_name) -> str:
 
 
 def quitar_logo(db: Session, user_name) -> bool:
-    """Borra el logo y su version. True si habia uno (con su renglon 'Logo quitado'); False si no habia nada."""
+    """Borra el logo y su version con su renglon 'Logo quitado' y UN commit, y devuelve True. Sin logo no escribe ni
+    confirma nada y devuelve False."""
     version = leer_config(db, [CLAVE_LOGO_VERSION]).get(CLAVE_LOGO_VERSION)
+    if not version:
+        return False
     guardar_config(db, {CLAVE_LOGO: None, CLAVE_LOGO_VERSION: None})
-    if version:
-        _registrar(db, "Logo quitado", user_name, {"version": version})
+    _registrar(db, "Logo quitado", user_name, {"version": version})
     db.commit()
-    return bool(version)
+    return True
 
 
 def leer_logo(db: Session):

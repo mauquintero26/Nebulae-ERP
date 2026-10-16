@@ -22,6 +22,14 @@ PNG_1X1 = base64.b64decode(
 CLAVES_PUBLICAS = {"nombre_comercial", "razon_social", "nit", "direccion", "ciudad", "telefono", "whatsapp", "correo",
                    "sitio_web", "colores", "logo_url", "configurada"}
 MENSAJE_RESERVADAS = "Los datos de la empresa y de los documentos se cambian en Configuración General."
+# r1 (L3): el texto exacto del 422 del WhatsApp de la empresa (RP19; T12 lo copia en validarCampoEmpresa, RP21).
+MENSAJE_WHATSAPP = ("WhatsApp no válido: escribe el celular de 10 dígitos o el número completo con su indicativo "
+                    "(por ejemplo +57 300 123 4567).")
+# r1 (Q8c): JPEG y WebP mínimos (1x1) para ejercitar las otras dos firmas aceptadas.
+JPEG_1X1 = base64.b64decode(
+    "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////"
+    "////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=")
+WEBP_1X1 = base64.b64decode("UklGRhoAAABXRUJQVlA4TA0AAAAvAAAAEAcQERGIiP4HAA==")
 
 
 def auth(token):
@@ -127,6 +135,8 @@ def test_validaciones_no_guardan_nada(app_client, db, admin_token):
         ({"color_principal": "red;"}, "Color no válido: usa el formato #RRGGBB."),
         ({"correo": "x"}, "Correo de la empresa no válido."),
         ({"smtp_password": "x"}, "Campo desconocido: smtp_password."),
+        ({"whatsapp": "Cel: 300 123 4567"}, MENSAJE_WHATSAPP),  # r1 (L2): letras no, aunque los dígitos sirvan
+        ({"whatsapp": "300123456"}, MENSAJE_WHATSAPP),  # 9 dígitos (RP19)
     ]
     for malo, mensaje in casos:
         resp = _put(app_client, admin_token, {"nombre_comercial": "Nuevo", **malo})
@@ -135,6 +145,12 @@ def test_validaciones_no_guardan_nada(app_client, db, admin_token):
         d = _get(app_client, admin_token).json()["data"]
         assert {k: d[k] for k in antes} == {**antes, "color_principal": "#111111"}, malo  # nada cambió
     assert "empresa_smtp_password" not in _claves_guardadas(db)
+
+    # r1 (L4), C1 de punta a punta: sin esquema se guarda con https:// y así se lee.
+    resp = _put(app_client, admin_token, {"sitio_web": "example.com"})
+    assert resp.status_code == 200, resp.text
+    assert _get(app_client, admin_token).json()["data"]["sitio_web"] == "https://example.com"
+    assert _claves_guardadas(db)["empresa_sitio_web"] == "https://example.com"
 
 
 def test_logo_png_se_sirve_con_cache_y_nosniff(app_client, db, admin_token):
@@ -163,6 +179,14 @@ def test_logo_png_se_sirve_con_cache_y_nosniff(app_client, db, admin_token):
     assert viejo.status_code == 200
     assert "immutable" not in viejo.headers["cache-control"] and "max-age=60" in viejo.headers["cache-control"]
 
+    # r1 (Q8c): las otras dos firmas aceptadas (JPEG ÿØÿ; WebP RIFF....WEBP) se guardan y se sirven.
+    for mime, contenido in (("image/jpeg", JPEG_1X1), ("image/webp", WEBP_1X1)):
+        resp = app_client.put("/api/v1/empresa/logo", json={"logo": _data_url(mime, contenido)},
+                              headers=auth(admin_token))
+        assert resp.status_code == 200, (mime, resp.text)
+        logo = app_client.get("/api/v1" + resp.json()["data"]["logo_url"])
+        assert logo.status_code == 200 and logo.headers["content-type"] == mime and logo.content == contenido
+
 
 def test_logo_rechaza_svg_firma_falsa_y_tamano(app_client, db, admin_token):
     _limpiar_empresa(db)
@@ -180,7 +204,7 @@ def test_logo_rechaza_svg_firma_falsa_y_tamano(app_client, db, admin_token):
         resp = app_client.put("/api/v1/empresa/logo", json={"logo": logo}, headers=auth(admin_token))
         assert resp.status_code == 422, (mensaje, resp.text)
         assert resp.json()["detail"] == mensaje
-    assert "máximo es 300 KB" in mensaje
+    assert "máximo es 300 KB" in resp.json()["detail"]  # el último caso: el de 301 KB
     assert _get(app_client, admin_token).json()["data"]["logo_url"] is None
     assert _claves_guardadas(db) == {}
 
@@ -280,6 +304,16 @@ def test_validar_cambios_reglas_y_mensajes():
         ({"sitio_web": "HTTP://example.com"}, {"sitio_web": "HTTP://example.com"}),
         ({"color_principal": "#abcdef"}, {"color_principal": "#ABCDEF"}),
         ({"terminos_cotizacion": "Línea 1\nLínea 2"}, {"terminos_cotizacion": "Línea 1\nLínea 2"}),
+        # r1 (Q2/S4): los de texto largo conservan \n y \t (\r\n -> \n; los demás de control se quitan).
+        ({"instrucciones_pago": "Banco:\tX\r\nCuenta\x00 123"}, {"instrucciones_pago": "Banco:\tX\nCuenta 123"}),
+        ({"mensaje_pie": "Gracias\npor tu compra"}, {"mensaje_pie": "Gracias\npor tu compra"}),
+        # r1 (Q2/S4): los de una sola línea pasan por limpiar_linea: cada tramo de \n, \t, \r u otro carácter de
+        # control se vuelve UN espacio y se quitan los espacios de los bordes (los demás espacios no se tocan).
+        ({"nombre_comercial": "DEMO\tFerretería\r\nCentro"}, {"nombre_comercial": "DEMO Ferretería Centro"}),
+        ({"razon_social": "Demo\n\nS.A.S.\t"}, {"razon_social": "Demo S.A.S."}),
+        ({"direccion": "Calle 1\n# 2-3"}, {"direccion": "Calle 1 # 2-3"}),
+        ({"ciudad": "Bogotá\x00 D.C."}, {"ciudad": "Bogotá  D.C."}),
+        ({"whatsapp": "300 123\n4567"}, {"whatsapp": "300 123 4567"}),
     ]
     for body, esperado in validos:
         assert validar_cambios(body) == esperado, body
@@ -294,8 +328,10 @@ def test_validar_cambios_reglas_y_mensajes():
         ({"telefono": "12345"}, "Teléfono no válido: escribe entre 7 y 15 dígitos."),
         ({"telefono": "300-ABC-1234"}, "Teléfono no válido: escribe entre 7 y 15 dígitos."),
         ({"telefono": "1234567890123456"}, "Teléfono no válido: escribe entre 7 y 15 dígitos."),
-        ({"whatsapp": "300123456"}, None),  # 9 dígitos: e164_whatsapp lo rechaza (RP19)
-        ({"whatsapp": "+57 300 123 4567 8"}, None),  # con 57 deben ser 12 dígitos (aquí 13)
+        ({"whatsapp": "300123456"}, MENSAJE_WHATSAPP),  # 9 dígitos: e164_whatsapp lo rechaza (RP19)
+        ({"whatsapp": "+57 300 123 4567 8"}, MENSAJE_WHATSAPP),  # con 57 deben ser 12 dígitos (aquí 13)
+        ({"whatsapp": "Cel: 300 123 4567"}, MENSAJE_WHATSAPP),  # r1 (L2): solo dígitos, + ( ) - y espacios
+        ({"whatsapp": "300 123 4567 ext 12"}, MENSAJE_WHATSAPP),  # r1 (L2): saldría +300123456712
         ({"correo": "x"}, "Correo de la empresa no válido."),
         ({"correo": "a@b"}, "Correo de la empresa no válido."),
         ({"sitio_web": "javascript:alert(1)"}, "La página web debe empezar por http:// o https://."),
@@ -314,10 +350,7 @@ def test_validar_cambios_reglas_y_mensajes():
         try:
             validar_cambios(body)
         except ValueError as e:
-            if mensaje is None:
-                assert str(e).startswith("WhatsApp no válido: "), (body, str(e))
-            else:
-                assert str(e) == mensaje, (body, str(e))
+            assert str(e) == mensaje, (body, str(e))
         else:
             raise AssertionError(f"validar_cambios aceptó {body}")
 
@@ -386,6 +419,7 @@ def test_textos_y_mensajes_de_la_empresa(db):
 def test_leer_perfil_no_lee_el_logo(db, contador_sql):
     """leer_perfil y perfil_publico hacen UNA consulta y nunca piden la clave del logo (pesa hasta ~400 KB)."""
     from app.core import empresa
+    assert empresa.CLAVE_LOGO not in empresa._CLAVES_PERFIL  # r1 (Q8a): lo que piden esas consultas
     _limpiar_empresa(db)
     empresa.guardar_logo(db, _data_url("image/png", PNG_1X1), "Prueba")
     contador_sql.reset()
@@ -396,3 +430,108 @@ def test_leer_perfil_no_lee_el_logo(db, contador_sql):
     mime, contenido, version = empresa.leer_logo(db)
     assert (mime, contenido, version) == ("image/png", PNG_1X1, perfil["logo_version"])
     assert empresa.limpiar_linea("Hola\r\nmundo\n") == "Hola mundo"
+
+
+# ─── Ronda r1 de la revisión ────────────────────────────────────────────────────────────────────────────────
+
+def test_validadores_de_config_todo_o_nada(app_client, db, admin_token, monkeypatch):
+    """r1 (Q6): la rama de _VALIDADORES_CONFIG de /ventas/config (la usan T3, T7 y T11): un ValueError da 422 con su
+    mensaje y no se escribe ninguna clave; un validador que normaliza guarda su resultado."""
+    import app.api.v1.erp_ventas as ev
+
+    def rechaza(valor):
+        raise ValueError("El valor de prueba no sirve.")
+
+    monkeypatch.setitem(ev._VALIDADORES_CONFIG, "b3t2_x", rechaza)
+    monkeypatch.setitem(ev._VALIDADORES_CONFIG, "b3t2_y", lambda valor: str(valor).strip().upper())
+    db.execute(text("INSERT INTO admin_config (key, value, updated_at) VALUES ('alerta_sc_dias', '3', NOW()) "
+                    "ON CONFLICT (key) DO UPDATE SET value = '3', updated_at = NOW()"))
+    db.execute(text("DELETE FROM admin_config WHERE key IN ('b3t2_x', 'b3t2_y')"))
+    db.commit()
+
+    resp = app_client.patch("/api/v1/ventas/config", json={"alerta_sc_dias": "9", "b3t2_x": "malo"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "El valor de prueba no sirve."
+    assert db.execute(text("SELECT value FROM admin_config WHERE key = 'alerta_sc_dias'")).scalar() == "3"
+    assert db.execute(text("SELECT count(*) FROM admin_config WHERE key = 'b3t2_x'")).scalar() == 0
+
+    resp = app_client.patch("/api/v1/ventas/config", json={"b3t2_y": "  abc  ", "alerta_sc_dias": "4"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert db.execute(text("SELECT value FROM admin_config WHERE key = 'b3t2_y'")).scalar() == "ABC"
+    assert db.execute(text("SELECT value FROM admin_config WHERE key = 'alerta_sc_dias'")).scalar() == "4"
+
+
+def test_cada_guardado_hace_un_solo_commit_con_su_actividad(db, contador_sql):
+    """r1 (Q7): guardar_cambios, guardar_logo y quitar_logo confirman el cambio y su renglón EMPRESA en UN commit; sin
+    cambios no confirman nada."""
+    from app.core import empresa
+    from app.models.erp_documents import ActivityLog
+    _limpiar_empresa(db)
+
+    def renglones():
+        db.expire_all()
+        return db.query(ActivityLog).filter(ActivityLog.entity_type == "EMPRESA").count()
+
+    inicial = renglones()
+    contador_sql.reset()
+    empresa.guardar_cambios(db, empresa.validar_cambios({"nombre_comercial": "DEMO"}), "Prueba")
+    assert contador_sql.commits == 1 and renglones() == inicial + 1
+    contador_sql.reset()
+    assert empresa.guardar_cambios(db, empresa.validar_cambios({"nombre_comercial": "DEMO"}), "Prueba") == []
+    assert contador_sql.commits == 0 and renglones() == inicial + 1
+
+    contador_sql.reset()
+    empresa.guardar_logo(db, _data_url("image/png", PNG_1X1), "Prueba")
+    assert contador_sql.commits == 1 and renglones() == inicial + 2
+    contador_sql.reset()
+    empresa.guardar_logo(db, _data_url("image/png", PNG_1X1), "Prueba")  # el mismo logo
+    assert contador_sql.commits == 0 and renglones() == inicial + 2
+
+    contador_sql.reset()
+    assert empresa.quitar_logo(db, "Prueba") is True
+    assert contador_sql.commits == 1 and renglones() == inicial + 3
+    contador_sql.reset()
+    assert empresa.quitar_logo(db, "Prueba") is False  # ya no hay logo
+    assert contador_sql.commits == 0 and renglones() == inicial + 3
+
+
+def test_sitio_web_guardado_se_valida_al_leer(app_client, db):
+    """r1 (S2): como los colores, un sitio_web guardado que no es http(s) (escrito a mano en la base) no llega a un href:
+    se lee como ''."""
+    _limpiar_empresa(db)
+    for malo in ("javascript:alert(1)", "data:text/html,x", "https://exa mple.com"):
+        db.execute(text("INSERT INTO admin_config (key, value, updated_at) VALUES ('empresa_sitio_web', :v, NOW()) "
+                        "ON CONFLICT (key) DO UPDATE SET value = :v, updated_at = NOW()"), {"v": malo})
+        db.commit()
+        resp = app_client.get("/api/v1/publico/empresa")
+        assert resp.status_code == 200
+        assert resp.json()["data"]["sitio_web"] == "", malo
+        assert malo not in resp.text
+
+
+def test_una_sola_fuente_para_color_y_telefono(monkeypatch):
+    """r1 (Q4): el patrón #RRGGBB vive solo en empresa (es_color_hex, que usa también el correo) y el mínimo de dígitos
+    del teléfono es el de clientes (se lee al llamar)."""
+    from app.core import clientes, correo_documento, empresa
+    assert empresa.es_color_hex("#abcDEF") and empresa.es_color_hex("#000000")
+    for malo in ("#abcde", "abcdef", "#ABCDEG", "#ABCDEF ", "red;", None, 123):
+        assert not empresa.es_color_hex(malo), malo
+    assert not hasattr(correo_documento, "_HEX")
+    assert "TELEFONO_MIN_DIGITOS" not in vars(empresa)
+    assert empresa.validar_cambios({"telefono": "601 234 5"}) == {"telefono": "601 234 5"}  # 7 dígitos
+    monkeypatch.setattr(clientes, "TELEFONO_MIN_DIGITOS", 8)
+    try:
+        empresa.validar_cambios({"telefono": "601 234 5"})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("empresa no usa clientes.TELEFONO_MIN_DIGITOS")
+    # Solo cuentan 0-9 (como telefonos, [^0-9]): unos dígitos de otro sistema no suman.
+    try:
+        empresa.validar_cambios({"telefono": "601 234 ٥٦٧٨"})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("contó dígitos que no son 0-9")

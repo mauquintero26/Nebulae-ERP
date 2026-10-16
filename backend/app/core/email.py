@@ -15,7 +15,7 @@ import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.utils import formataddr
+from email.utils import formataddr, parseaddr
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,9 @@ def send_email(to: str, subject: str, html_body: str, remitente_nombre: str | No
     message = MIMEMultipart("alternative")
     message["Subject"] = subject
     nombre = " ".join(str(remitente_nombre).split()) if remitente_nombre else ""
-    message["From"] = formataddr((nombre, smtp_from)) if nombre else smtp_from
+    # Con nombre, solo la direccion de SMTP_FROM: si ya trae uno ('Nebulae <x@y>') no se anidan los <> (r1, Q1).
+    direccion = parseaddr(smtp_from)[1] or smtp_from
+    message["From"] = formataddr((nombre, direccion)) if nombre else smtp_from
     message["To"] = to
     message.attach(MIMEText(html_body, "html"))
 

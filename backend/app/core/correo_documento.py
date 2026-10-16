@@ -4,6 +4,7 @@ correo_documento(perfil, tipo, numero, cliente, link, resumen=None, proposito='C
 constructor de correos al cliente (C17); T7, T8, T9 y T11 solo lo llaman. Devuelve (asunto, html).
 
 - perfil: el de empresa.perfil_publico(db) ({nombre_comercial, ..., colores: {principal, secundario, acento}}).
+- link: el enlace del cliente (enlace_publico); solo http:// o https:// (si no, ValueError).
 - Propósitos y asuntos (RP28):
   · CONFIRMACION (SC, COT, PVEN): '{Título} {numero} de {empresa}'; sin nombre, 'Tu {título} {numero}'.
   · CONSULTA (solo PVEN, el enlace de consulta de U23): 'Confirmación de tu pedido {numero}' (+ ' de {empresa}').
@@ -19,10 +20,9 @@ escrito, y el contacto de la empresa al pie. TODO valor pasa por html.escape(quo
 vuelve al de la referencia. Sin <img> del logo: los correos bloquean imágenes y el backend no conoce su URL pública.
 """
 import html
-import re
 
 from app.core.documento_cliente import TITULOS
-from app.core.empresa import COLORES_POR_DEFECTO, limpiar_linea
+from app.core.empresa import COLORES_POR_DEFECTO, es_color_hex, limpiar_linea
 from app.core.fechas import fecha_larga
 from app.core.ventas_dinero import pesos
 
@@ -34,7 +34,6 @@ _FILAS_RESUMEN = (("total", "Total"), ("anticipo", "Anticipo"), ("pagado", "Paga
 
 TEXTO_CLARO = "#FFFFFF"
 TEXTO_OSCURO = "#111827"
-_HEX = re.compile(r"#[0-9A-Fa-f]{6}")
 _GRIS_TEXTO = "#374151"
 _GRIS_SUAVE = "#6B7280"
 
@@ -58,7 +57,7 @@ def color_texto_sobre(*colores) -> str:
     """'#FFFFFF' o '#111827': el que tiene el MAYOR contraste mínimo frente a todos los colores dados (un degradado se
     lee bien de punta a punta). Misma regla que colorTextoSobre del frontend; en empate, blanco. Los valores que no son
     #RRGGBB se ignoran; sin ninguno válido, blanco."""
-    validos = [c for c in colores if isinstance(c, str) and _HEX.fullmatch(c)]
+    validos = [c for c in colores if es_color_hex(c)]
     if not validos:
         return TEXTO_CLARO
     minimo_claro = min(_contraste(TEXTO_CLARO, c) for c in validos)
@@ -73,7 +72,7 @@ def _e(valor) -> str:
 def _color(perfil: dict, nombre: str) -> str:
     colores = perfil.get("colores") if isinstance(perfil.get("colores"), dict) else {}
     valor = colores.get(nombre)
-    return valor.upper() if isinstance(valor, str) and _HEX.fullmatch(valor) else COLORES_POR_DEFECTO[nombre]
+    return valor.upper() if es_color_hex(valor) else COLORES_POR_DEFECTO[nombre]
 
 
 def _asunto(nombre_empresa: str, tipo: str, numero: str, proposito: str) -> str:
@@ -171,6 +170,8 @@ def correo_documento(perfil, tipo, numero, cliente, link, resumen=None, proposit
         raise ValueError(f"Propósito de correo desconocido: {proposito!r}")
     if tipo not in _TIPOS_POR_PROPOSITO[proposito]:
         raise ValueError(f"El correo {proposito} no aplica a {tipo}.")
+    if not isinstance(link, str) or not link.lower().startswith(("http://", "https://")):
+        raise ValueError("El enlace del correo debe empezar por http:// o https://.")  # r1 (S3)
     perfil = perfil if isinstance(perfil, dict) else {}
     nombre_empresa = limpiar_linea(perfil.get("nombre_comercial"))
     numero = limpiar_linea(numero)
@@ -201,7 +202,7 @@ def correo_documento(perfil, tipo, numero, cliente, link, resumen=None, proposit
 </td></tr>
 <tr><td style="padding:8px 32px 24px;">
 <table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="background:{franja};border-radius:6px;">
-<a href="{enlace}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:12px 24px;color:{texto_franja};font-size:15px;font-weight:bold;text-decoration:none;">Ver {_e(NOMBRES[tipo])}</a>
+<a href="{enlace}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:12px 24px;color:{texto_franja};font-size:15px;font-weight:bold;text-decoration:none;">Ver {_e(TITULOS[tipo].lower())}</a>
 </td></tr></table>
 <p style="margin:16px 0 0;font-size:12px;line-height:18px;color:{_GRIS_SUAVE};">Si el botón no funciona, copia este enlace en tu navegador:<br><a href="{enlace}" style="color:{_GRIS_TEXTO};word-break:break-all;">{enlace}</a></p>
 </td></tr>
