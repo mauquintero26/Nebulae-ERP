@@ -255,18 +255,6 @@ export async function updateUsername(username: string) {
   return handleResponse(res);
 }
 
-export async function register(email: string, password: string, fullName: string = '') {
-  const res = await fetch(`${API_URL}/auth/register`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ email, password, role: 'admin', full_name: fullName }),
-  });
-
-  return handleResponse(res);
-}
-
 export async function calculateQuotation(cost_usd: number, discount: number, weight_lb: number, trm: number) {
   const res = await fetch(`${API_URL}/quotations/calculate`, {
     method: 'POST',

@@ -104,7 +104,7 @@ console.log('--- D1 TEST 1: /register sin formulario y el login sin enlace a /re
   assert.ok(!/\bregister\(/.test(registro), '/register no llama a register()');
   assert.ok(!registro.includes("from '@/lib/api'"), '/register no importa nada del API');
   assert.ok(registro.includes('Las cuentas las crea un administrador del ERP'), 'el texto de D1');
-  assert.match(registro, /<Link href="\/login"[^>]*>[\s\S]*?Iniciar sesión[\s\S]*?<\/Link>/, 'enlace a «Iniciar sesión»');
+  assert.match(registro, /<Link\s+href="\/login"[^>]*>[\s\S]*?Iniciar sesión[\s\S]*?<\/Link>/, 'enlace a «Iniciar sesión»');
 
   const login = sinComentarios(leer('app/login/page.tsx'));
   assert.ok(!login.includes('/register'), 'el login no enlaza a /register');

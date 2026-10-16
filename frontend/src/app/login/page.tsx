@@ -152,12 +152,10 @@ function LoginForm() {
               </div>
             </form>
 
+            {/* B2.1 D1: el registro ya no es público; las cuentas las crea un administrador (sin enlace a /register). */}
             <div className="mt-8 text-center">
               <p className="text-sm text-slate-500">
-                ¿No tienes una cuenta?{' '}
-                <Link href="/register" className="font-bold text-slate-900 hover:text-purple-600 transition-colors">
-                  Regístrate aquí
-                </Link>
+                ¿No tienes una cuenta? Pídesela a un administrador del ERP.
               </p>
             </div>
 
