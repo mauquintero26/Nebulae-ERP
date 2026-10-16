@@ -30,6 +30,9 @@ from app.core import cambios_documento, clientes
 from app.core.admin_config import guardar_config
 from app.core.correo_documento import correo_documento
 from app.core.empresa import PREFIJOS_RESERVADOS, perfil_publico
+from app.core.iva import (
+    CLAVE_TARIFA_DEFECTO, MENSAJE_TARIFA_INVALIDA, normalizar_tarifa_iva, tarifa_iva_defecto, tarifas_de_producto,
+)
 from app.core.ventas_dinero import (
     redondear_peso, pesos, formato_pct, anticipo_cotizacion, pct_anticipo_cotizacion, anticipo_requerido,
     anticipo_del_pedido, saldos_a_favor_de_cotizacion, PCT_ANTICIPO_POR_DEFECTO, ORIGEN_CONSERVADO,
@@ -2204,7 +2207,28 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
     objetivo = anticipo_del_pedido(pven)[0] if pven is not None else requerido
     d["anticipo_por_linea"] = [float(a) for a in repartir_anticipo_por_linea(
         [monto_linea(p) for p in (cot.productos or [])], objetivo)]
+    # IVA-PRODUCTO (B3 T3): la tarifa por defecto de Configuracion y la tarifa ACTUAL del producto de cada linea, lista
+    # paralela a d['productos'] (None = producto sin definir o linea de texto libre). Solo en el detalle, no en
+    # _cot_dict: el listado no consulta por fila. Una sola consulta para todos los SKU.
+    d["iva_tarifa_defecto"] = tarifa_iva_defecto(db)
+    sku_ids = [_sku_id_de_linea(p) for p in (cot.productos or [])]
+    tarifas = tarifas_de_producto(db, [s for s in sku_ids if s is not None])
+    d["tarifas_producto"] = [tarifas.get(s) if s is not None else None for s in sku_ids]
     return {"status": "success", "data": d}
+
+
+def _sku_id_de_linea(p) -> Optional[int]:
+    """El sku_id (entero) de una linea del JSON productos, o None si es texto libre o no es un id valido (las lineas
+    viejas lo guardan como numero o como texto)."""
+    if not isinstance(p, dict):
+        return None
+    valor = p.get("sku_id")
+    if valor is None or isinstance(valor, bool):
+        return None
+    try:
+        return int(str(valor).strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def _sincronizar_estado_solicitud_desde_cotizacion(cot: "SalesQuotation", db: Session,
@@ -3858,7 +3882,8 @@ def get_alertas(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *R
 # interruptores del panel de Configuracion). Una clave nueva queda solo para ADMIN mientras no se agregue aqui.
 _CONFIG_LECTURA_GENERAL = {"alerta_sc_dias", "alerta_cot_dias", "alerta_ven_dias",
                            "alerta_soporte_alta_horas", "alerta_soporte_media_horas", "alerta_soporte_baja_horas",
-                           "auto_lead_crm", "auto_chatter_ia", "notif_whatsapp"}
+                           "auto_lead_crm", "auto_chatter_ia", "notif_whatsapp",
+                           CLAVE_TARIFA_DEFECTO}  # B3 T3: los asesores y Cotiza la leen (solo ADMIN la cambia)
 
 
 # C23/R13 (B3 T2): claves que /config no muestra ni acepta, prefijo -> mensaje del 422 (RP18). Van por su propio
@@ -3867,9 +3892,21 @@ _CONFIG_LECTURA_GENERAL = {"alerta_sc_dias", "alerta_cot_dias", "alerta_ven_dias
 _MENSAJE_CLAVES_DE_EMPRESA = "Los datos de la empresa y de los documentos se cambian en Configuración General."
 _PREFIJOS_RESERVADOS_CONFIG = {prefijo: _MENSAJE_CLAVES_DE_EMPRESA for prefijo in PREFIJOS_RESERVADOS}
 
+
+def _validar_tarifa_defecto(valor) -> str:
+    """B3 T3 (IVA-PRODUCTO): la tarifa por defecto se guarda como codigo normalizado ('Exento' -> 'EXENTO'). Vacia o
+    null tambien es 422: la tarifa por defecto siempre es una de las cuatro (si falta, tarifa_iva_defecto usa '19')."""
+    tarifa = normalizar_tarifa_iva(valor)
+    if tarifa is None:
+        raise ValueError(MENSAJE_TARIFA_INVALIDA)
+    return tarifa
+
+
 # C23/R13: validador por clave de /config. Recibe el valor del body y devuelve el texto a guardar, o lanza ValueError con
 # el mensaje en espanol del 422. T3 agrega iva_tarifa_defecto, T7 dias_validez_cotizacion y T11 las seguimiento_*.
-_VALIDADORES_CONFIG = {}
+_VALIDADORES_CONFIG = {
+    CLAVE_TARIFA_DEFECTO: _validar_tarifa_defecto,
+}
 
 
 def _patrones_reservados() -> list:

@@ -39,6 +39,9 @@ class Product(Base):
     is_active = Column(Boolean, default=True)
     legacy_ecommerce_product_id = Column(Integer, unique=True, nullable=True, index=True)
     necesita_revision = Column(Boolean, nullable=False, default=False)
+    # IVA-PRODUCTO (fa6_027, CHECK ck_products_tarifa_iva): codigo de app/core/iva.py. La columna vieja tax_rate de
+    # migrate_erp_v2.py no esta en el modelo y no se usa.
+    tarifa_iva = Column(String(10), nullable=True)  # '19' | '5' | 'EXENTO' | 'EXCLUIDO' | None = sin definir
 
     brand = relationship("Brand", back_populates="products")
     category = relationship("Category", back_populates="products")

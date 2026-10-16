@@ -18,6 +18,7 @@ from app.core.textos_actividad import (
     ETIQUETAS_ESTADO, RESOLUCIONES_DEVOLUCION, TIPOS_PAGO, etiqueta_estado, etiqueta_tipo_solicitud, nombre_de_usuario,
 )
 from app.core.ventas_dinero import pesos
+from app.core.iva import normalizar_tarifa_iva
 from sqlalchemy import case, func
 from sqlalchemy.exc import DataError, IntegrityError
 import datetime, logging, time, threading
@@ -1745,6 +1746,7 @@ def search_products(q: str = "", limit: int = Query(15, ge=1, le=50),
         "sale_price": float(sku.sale_price or 0),
         "cost_price": float(sku.cost_price or 0),
         "display": f"{p.name}" + (f" — {sku.sku}" if sku.sku else ""),
+        "tarifa_iva": p.tarifa_iva,  # IVA-PRODUCTO: None = sin definir (la linea usa la tarifa por defecto)
     } for p, sku in filas]}
 
 
@@ -1809,7 +1811,7 @@ def _codigo_libre(db: Session, base: str) -> str:
 def _quick_create_dict(product: Product, sku: ProductSKU, creado: bool) -> dict:
     return {"id": sku.id, "product_id": product.id, "product_name": product.name, "sku": sku.sku,
             "sale_price": float(sku.sale_price or 0), "display": product.name, "creado": creado,
-            "necesita_revision": bool(product.necesita_revision)}
+            "necesita_revision": bool(product.necesita_revision), "tarifa_iva": product.tarifa_iva}
 
 
 @router.post("/products/quick-create", response_model=dict)
@@ -1820,14 +1822,21 @@ def quick_create_product(body: dict, user: User = Depends(require_roles(*ROLE_AD
     U7+U8+H12+H13: si ya hay un producto ACTIVO con ese nombre (sin importar mayusculas ni espacios) devuelve ese (su
     primer SKU, o uno nuevo si no tiene) con creado=False, en vez de duplicarlo. El codigo automatico no choca (BASE,
     BASE-2…); un 'sku' explicito que ya existe -> 409. Responde id (= id del SKU), product_id, product_name, sku,
-    sale_price, display, creado y necesita_revision.
+    sale_price, display, creado, necesita_revision y tarifa_iva.
     Ronda 1 de T5 (punto 2, desviacion del texto del diseño por seguridad): precios y codigo se validan antes (422) y
-    cualquier otro error responde un 400 generico, sin el texto de la excepcion (llevaba el SQL y sus parametros)."""
+    cualquier otro error responde un 400 generico, sin el texto de la excepcion (llevaba el SQL y sus parametros).
+    IVA-PRODUCTO (B3 T3): 'iva_tarifa' (la tarifa de la linea, «+ Ingresar como producto») se normaliza antes de
+    buscar (422 en espanol si no es valida, C8) y se guarda en el producto NUEVO; sin ella queda sin definir. Un
+    producto que se reutiliza por nombre conserva su tarifa del catalogo (la respuesta trae esa)."""
     nombre = " ".join(str(body.get("name") or "").split())
     if not nombre:
         raise HTTPException(status_code=400, detail="Escribe el nombre del producto.")
     sale_price = _precio_quick_create(body.get("sale_price"))
     cost_price = _precio_quick_create(body.get("cost_price"))
+    try:
+        tarifa_iva = normalizar_tarifa_iva(body.get("iva_tarifa"))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     sku_explicito = body.get("sku")
     if sku_explicito is None:
         sku_explicito = ""
@@ -1859,7 +1868,7 @@ def quick_create_product(body: dict, user: User = Depends(require_roles(*ROLE_AD
         brand, category = _get_or_create_placeholder_brand_category(db)
         product = Product(name=nombre, description=body.get("description", ""), is_active=True,
                           base_currency="COP", uom="unidad", type="Fisico",
-                          brand_id=brand.id, category_id=category.id, necesita_revision=True)
+                          brand_id=brand.id, category_id=category.id, necesita_revision=True, tarifa_iva=tarifa_iva)
         db.add(product); db.flush()
         sku = ProductSKU(product_id=product.id, sku=codigo, sale_price=sale_price, cost_price=cost_price)
         db.add(sku); db.commit()

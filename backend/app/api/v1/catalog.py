@@ -7,8 +7,18 @@ from app.models.catalog import Brand, Category, Product, ProductSKU, Attribute, 
 from app.models.inventory import Warehouse, InventoryLevel
 from app.schemas import catalog as schemas
 from app.api.dependencies import require_roles, ALL_ERP_ROLES
+from app.core.iva import normalizar_tarifa_iva
 
 router = APIRouter()
+
+
+def _tarifa_iva_del_body(valor):
+    """IVA-PRODUCTO (C8/R12): la tarifa normalizada, o 422 con el mensaje en espanol (el esquema no la valida)."""
+    try:
+        return normalizar_tarifa_iva(valor)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
 
 # --- BRANDS ---
 @router.post("/brands", status_code=status.HTTP_201_CREATED)
@@ -169,6 +179,7 @@ def _get_or_create_placeholder_brand_category(db: Session):
 @router.post("/products", status_code=status.HTTP_201_CREATED)
 def create_product(product: schemas.ProductCreate, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
     data = product.model_dump()
+    data["tarifa_iva"] = _tarifa_iva_del_body(data.get("tarifa_iva"))  # antes de crear nada (la marca placeholder)
     needs_review = False
     if not data.get("brand_id") or not data.get("category_id"):
         brand, category = _get_or_create_placeholder_brand_category(db)
@@ -210,6 +221,8 @@ def update_product(product_id: int, body: schemas.ProductUpdate, db: Session = D
         raise HTTPException(status_code=404, detail="Product not found")
 
     body_dict = body.model_dump(exclude_unset=True)
+    if "tarifa_iva" in body_dict:  # antes de tocar el producto: con 422 no cambia nada
+        body_dict["tarifa_iva"] = _tarifa_iva_del_body(body_dict["tarifa_iva"])
 
     if "brand_id" in body_dict and body.brand_id is not None:
         if not db.query(Brand).filter(Brand.id == body.brand_id).first():
@@ -221,7 +234,8 @@ def update_product(product_id: int, body: schemas.ProductUpdate, db: Session = D
             raise HTTPException(status_code=400, detail="La categoria indicada no existe")
         db_product.category_id = body.category_id
 
-    for field in ("name", "description", "type", "base_currency", "uom", "is_active", "necesita_revision"):
+    for field in ("name", "description", "type", "base_currency", "uom", "is_active", "necesita_revision",
+                  "tarifa_iva"):
         if field in body_dict:
             setattr(db_product, field, body_dict[field])
 

@@ -82,6 +82,10 @@ class ProductBase(BaseModel):
     uom: Optional[str] = None
     is_active: bool = True
     necesita_revision: bool = False
+    # IVA-PRODUCTO: '19' | '5' | 'EXENTO' | 'EXCLUIDO' | None (sin definir). Sin validador a proposito (C8/R12): el
+    # handler global volveria 400 en ingles cualquier error de Pydantic; create_product/update_product la normalizan con
+    # core/iva.normalizar_tarifa_iva y responden 422 en espanol.
+    tarifa_iva: Optional[str] = None
 
 class ProductCreate(ProductBase):
     pass
@@ -103,6 +107,7 @@ class ProductUpdate(BaseModel):
     uom: Optional[str] = None
     is_active: Optional[bool] = None
     necesita_revision: Optional[bool] = None
+    tarifa_iva: Optional[str] = None  # null = sin definir; sin la clave no se toca (exclude_unset). Sin validador (C8)
 
 # Bulk SKU creation (para el asistente de variantes)
 class SKUAttributePair(BaseModel):
