@@ -47,7 +47,9 @@ def vence_al_final_del_dia(fecha: date) -> datetime:
     Colombia (las 22:00 del 8 alla son las 03:00 UTC del 9). Quien tenga un instante usa hoy_colombia o a_colombia."""
     if isinstance(fecha, datetime):
         raise TypeError("vence_al_final_del_dia espera una fecha (date), no un instante")
-    fin = datetime.combine(fecha + timedelta(days=1), time(0, 0), tzinfo=ZONA_COLOMBIA)
+    if not isinstance(fecha, date):
+        raise TypeError(f"vence_al_final_del_dia espera una fecha (date), no {type(fecha).__name__}")
+    fin =datetime.combine(fecha + timedelta(days=1), time(0, 0), tzinfo=ZONA_COLOMBIA)
     return fin.astimezone(timezone.utc).replace(tzinfo=None)
 
 

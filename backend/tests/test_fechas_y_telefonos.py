@@ -38,6 +38,9 @@ def test_vence_al_final_del_dia():
         assert str(e) == "vence_al_final_del_dia espera una fecha (date), no un instante"
     else:
         raise AssertionError("vence_al_final_del_dia aceptó un datetime")
+    # r2: lo que no es una fecha (None, un texto) también da un TypeError que dice qué llegó.
+    assert _lanza_type_error(vence_al_final_del_dia, None) == "vence_al_final_del_dia espera una fecha (date), no NoneType"
+    assert _lanza_type_error(vence_al_final_del_dia, "2026-10-08") == "vence_al_final_del_dia espera una fecha (date), no str"
 
 
 def _lanza_type_error(fn, valor):

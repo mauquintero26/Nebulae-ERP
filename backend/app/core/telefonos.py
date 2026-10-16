@@ -9,8 +9,8 @@ Modulo puro: sin base de datos ni FastAPI, y sin efectos al importarlo (T13 lo c
   envio, el seguimiento y los dicts (telefono_whatsapp).
 - telefono_legible(e164): '+57 300 123 4567' para mostrarlo; otros indicativos quedan tal cual.
 - telefono_del_documento(doc): el telefono crudo de una SC, COT o PVEN: el del documento o, si esta vacio (sin
-  digitos), el del cliente por la relacion `customer` que ya existe (RP20: no recibe db). Quien lo necesite en e164
-  aplica e164_whatsapp.
+  digitos), el del cliente por la relacion `customer` que ya existe (RP20: no recibe db). Si tampoco el del cliente
+  tiene digitos, None (nunca devuelve 'N/A' como telefono). Quien lo necesite en e164 aplica e164_whatsapp.
 """
 import re
 
@@ -58,7 +58,7 @@ def telefono_del_documento(doc) -> str | None:
     """El telefono del documento (customer_phone) o, si esta vacio, el del cliente (doc.customer.phone). Crudo.
 
     «Vacio» es sin digitos: None, '', '   ' o datos viejos como 'N/A' o '-' (numero_whatsapp da None). Uno con digitos se
-    queda aunque sea corto: lo escribio el asesor (ruling r1)."""
+    queda aunque sea corto: lo escribio el asesor (ruling r1). Si tampoco el del cliente tiene digitos, None."""
     propio = getattr(doc, "customer_phone", None)
     if numero_whatsapp(propio) is not None:
         return propio
