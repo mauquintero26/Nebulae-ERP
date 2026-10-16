@@ -22,6 +22,9 @@ from unittest import mock
 from sqlalchemy import text
 
 PRODUCTOS = [{"product_name": "Cuna Colecho", "qty": 1}]
+# r1: commits de la rama COT de /confirmar/confirmar: reclamar el token, el que pone CONFIRMADA (con la revocación),
+# _sincronizar_estado_solicitud_desde_cotizacion y el renglón de Actividad. Si T5 reescribe la rama, se vuelve a medir.
+COMMITS_RAMA_COT = 4
 
 
 def _ahora():
@@ -108,6 +111,29 @@ def test_token_de_pedido_no_se_gasta_en_confirmar(app_client, db):
     assert _fila(db, raw)["used_at"] is None
     # Con su tipo sí.
     assert ct.peek_token(db, raw, tipos=ct.TIPOS_CONSULTA) == ("PVEN", ven.id)
+    # r1: un solo tipo escrito como texto ('PVEN') se toma como ('PVEN',), no como ['P','V','E','N'].
+    assert ct.consultar_token(db, raw, tipos="PVEN")["document_type"] == "PVEN"
+    assert ct.peek_token(db, raw, tipos="PVEN") == ("PVEN", ven.id)
+    assert ct.reclamar_token(db, raw, tipos="PVEN")["document_type"] == "PVEN"
+
+
+def test_enlace_de_confirmacion_no_abre_la_consulta_del_pedido(db):
+    """r1 (C11, el otro sentido): un enlace SC o COT no da nada con tipos=TIPOS_CONSULTA (la vista del pedido de T5)."""
+    from app.core import confirmation_tokens as ct
+    sc = _sc(db)
+    cot = _cot(db, sc)
+    raw_sc = ct.create_confirmation_token(db, "SC", sc.id)
+    raw_cot = ct.create_confirmation_token(db, "COT", cot.id)
+    assert ct.consultar_token(db, raw_sc, tipos=ct.TIPOS_CONSULTA) is None
+    assert ct.consultar_token(db, raw_cot, tipos=ct.TIPOS_CONSULTA) is None
+    assert ct.peek_token(db, raw_sc, tipos=ct.TIPOS_CONSULTA) is None
+    assert ct.peek_token(db, raw_cot, tipos=ct.TIPOS_CONSULTA) is None
+    assert ct.reclamar_token(db, raw_cot, tipos=ct.TIPOS_CONSULTA) is None
+    assert ct.verify_and_consume_token(db, raw_sc, tipos=ct.TIPOS_CONSULTA) is None
+    assert _fila(db, raw_sc)["used_at"] is None and _fila(db, raw_cot)["used_at"] is None
+    # Con sus tipos por defecto sí.
+    assert ct.peek_token(db, raw_sc) == ("SC", sc.id)
+    assert ct.peek_token(db, raw_cot) == ("COT", cot.id)
 
 
 # ─── consultar / reclamar / marcar ──────────────────────────────────────────────────────────────────────────
@@ -173,7 +199,7 @@ def test_marcar_resultado_no_hace_commit(db, contador_sql):
     raw = ct.create_confirmation_token(db, "SC", sc.id)
     info = ct.reclamar_token(db, raw)
     with contador_sql.ventana() as v:
-        ct.marcar_resultado(db, info["id"], ct.RESULTADO_CONFIRMADO)
+        assert ct.marcar_resultado(db, info["id"], ct.RESULTADO_CONFIRMADO) is True
     assert v.commits == 0
     assert _fila(db, raw)["resultado"] == "CONFIRMADO"
     # Un resultado que no es de los tres no se escribe.
@@ -184,6 +210,17 @@ def test_marcar_resultado_no_hace_commit(db, contador_sql):
     else:
         raise AssertionError("marcar_resultado aceptó un resultado desconocido")
     assert _fila(db, raw)["resultado"] == "CONFIRMADO"
+    # r1: solo escribe sobre un enlace usado y todavía sin resultado.
+    assert ct.marcar_resultado(db, info["id"], ct.RESULTADO_CAMBIOS) is False          # ya tenía resultado
+    assert _fila(db, raw)["resultado"] == "CONFIRMADO"
+    revocado = ct.create_confirmation_token(db, "SC", sc.id)
+    ct.revocar_token(db, revocado)
+    id_revocado = _fila(db, revocado)["id"]
+    assert ct.marcar_resultado(db, id_revocado, ct.RESULTADO_CONFIRMADO) is False      # un REVOCADO no cambia
+    assert _fila(db, revocado)["resultado"] == "REVOCADO"
+    sin_usar = ct.create_confirmation_token(db, "SC", sc.id)
+    assert ct.marcar_resultado(db, _fila(db, sin_usar)["id"], ct.RESULTADO_CONFIRMADO) is False   # nadie lo usó
+    assert _fila(db, sin_usar)["resultado"] is None
 
 
 # ─── revocar ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -327,22 +364,39 @@ def test_enlace_publico_arma_confirmar_y_pedido(monkeypatch):
     errores = _errores(monkeypatch)
     monkeypatch.setenv("NEBULAE_ENV", "staging")
     monkeypatch.setenv("FRONTEND_URL", "https://erp.ejemplo.invalid/")
+    raw = "Abc_123-" * 3                                              # 24 caracteres del alfabeto de token_urlsafe
     assert ct.frontend_url() == "https://erp.ejemplo.invalid"
-    assert ct.enlace_publico("abc123", "SC") == "https://erp.ejemplo.invalid/confirmar/abc123"
-    assert ct.enlace_publico("abc123", "COT") == "https://erp.ejemplo.invalid/confirmar/abc123"
-    assert ct.enlace_publico("abc123", "PVEN") == "https://erp.ejemplo.invalid/pedido/abc123"
-    try:
-        ct.enlace_publico("abc123", "OTRO")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("enlace_publico aceptó un tipo desconocido")
+    assert ct.enlace_publico(raw, "SC") == f"https://erp.ejemplo.invalid/confirmar/{raw}"
+    assert ct.enlace_publico(raw, "COT") == f"https://erp.ejemplo.invalid/confirmar/{raw}"
+    assert ct.enlace_publico(raw, "PVEN") == f"https://erp.ejemplo.invalid/pedido/{raw}"
+    import secrets
+    real = secrets.token_urlsafe(32)                                  # como lo crea create_confirmation_token
+    assert ct.enlace_publico(real, "SC").endswith(f"/confirmar/{real}")
+    # Tipo desconocido, o un token que no es de token_urlsafe (armaría otra ruta): ValueError.
+    for token, tipo in ((raw, "OTRO"), ("a/../b", "SC"), (raw[:19], "SC"), (raw + "?x=1", "SC"), (raw + "#x", "PVEN"),
+                        (raw + "/../pedido", "COT"), ("", "SC")):
+        try:
+            ct.enlace_publico(token, tipo)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"enlace_publico aceptó {token!r} / {tipo!r}")
     # Fuera de producción, localhost es lo normal: sin error.
     monkeypatch.setenv("FRONTEND_URL", "http://localhost:5100")
-    assert ct.enlace_publico("abc123", "SC") == "http://localhost:5100/confirmar/abc123"
+    assert ct.enlace_publico(raw, "SC") == f"http://localhost:5100/confirmar/{raw}"
     monkeypatch.delenv("FRONTEND_URL", raising=False)
-    assert ct.enlace_publico("abc123", "SC") == "http://localhost:5100/confirmar/abc123"
+    assert ct.enlace_publico(raw, "SC") == f"{ct.FRONTEND_URL_POR_DEFECTO}/confirmar/{raw}"
     assert errores == []
+
+
+def test_frontend_url_por_defecto_es_una_sola_constante():
+    """r1: el valor por defecto vive en preflight.py; confirmation_tokens lo importa y el aviso lo usa (sin literal)."""
+    import inspect
+    from app.core import confirmation_tokens as ct, preflight as pf
+    assert ct.FRONTEND_URL_POR_DEFECTO is pf.FRONTEND_URL_POR_DEFECTO
+    assert pf.FRONTEND_URL_POR_DEFECTO in pf.aviso_frontend_url("production", None)
+    assert inspect.getsource(pf).count("localhost:5100") == 1
+    assert "localhost:5100" not in inspect.getsource(ct)
 
 
 def test_enlace_publico_registra_error_en_produccion_con_localhost(monkeypatch):
@@ -446,14 +500,28 @@ def test_confirmar_sc_que_ya_no_esta_pendiente_no_revoca_los_demas(app_client, d
     assert (_fila(db, primero)["used_at"], _fila(db, primero)["resultado"]) == (None, None)
 
 
-def test_confirmar_cot_revoca_los_demas_enlaces(app_client, db):
+def test_confirmar_cot_revoca_los_demas_enlaces(app_client, db, monkeypatch, contador_sql):
+    """r1: además del 'REVOCADO', la revocación va en el MISMO commit que pone CONFIRMADA: un espía sobre
+    revoke_pending_tokens de confirmacion_publica afirma commit=False, el excepto_hash del enlace usado y que hasta ese
+    momento solo hubo el commit de reclamar el token (el siguiente es el que pone CONFIRMADA)."""
+    import app.api.v1.confirmacion_publica as cp
     from app.core import confirmation_tokens as ct
     sc = _sc(db, estado="COTIZADA")
     cot = _cot(db, sc)
     primero = ct.create_confirmation_token(db, "COT", cot.id)
     segundo = ct.create_confirmation_token(db, "COT", cot.id)
-    resp = _confirmar(app_client, segundo)
+    llamadas = []
+    revocar_real = cp.revoke_pending_tokens
+    with contador_sql.ventana() as v:
+        def espia(*args, **kwargs):
+            llamadas.append((args[1:], kwargs, v.commits))
+            return revocar_real(*args, **kwargs)
+        monkeypatch.setattr(cp, "revoke_pending_tokens", espia)
+        resp = _confirmar(app_client, segundo)
     assert resp.status_code == 200, resp.text
+    assert llamadas == [(("COT", cot.id), {"commit": False, "excepto_hash": ct.hash_token(segundo)}, 1)]
+    # Reclamar + CONFIRMADA + los dos de la rama COT después (sincronizar la SC y el renglón de Actividad).
+    assert v.commits == COMMITS_RAMA_COT, v.commits
     db.refresh(cot)
     assert cot.estado == "CONFIRMADA"
     fila = _fila(db, primero)

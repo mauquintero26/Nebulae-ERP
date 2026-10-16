@@ -42,7 +42,11 @@ def hoy_colombia(ahora: datetime | None = None) -> date:
 def vence_al_final_del_dia(fecha: date) -> datetime:
     """El instante en que termina `fecha` en Colombia (las 00:00 del dia siguiente alla), en UTC sin zona.
 
-    Es el expires_at de un enlace que sirve "hasta el 8 de octubre": date(2026, 10, 8) -> datetime(2026, 10, 9, 5, 0)."""
+    Es el expires_at de un enlace que sirve "hasta el 8 de octubre": date(2026, 10, 8) -> datetime(2026, 10, 9, 5, 0).
+    Solo recibe una fecha de calendario: un datetime (instante en UTC) se rechaza, porque su dia UTC puede no ser el de
+    Colombia (las 22:00 del 8 alla son las 03:00 UTC del 9). Quien tenga un instante usa hoy_colombia o a_colombia."""
+    if isinstance(fecha, datetime):
+        raise TypeError("vence_al_final_del_dia espera una fecha (date), no un instante")
     fin = datetime.combine(fecha + timedelta(days=1), time(0, 0), tzinfo=ZONA_COLOMBIA)
     return fin.astimezone(timezone.utc).replace(tzinfo=None)
 
@@ -50,20 +54,27 @@ def vence_al_final_del_dia(fecha: date) -> datetime:
 def _a_fecha_o_instante(valor):
     """date (fecha de calendario, no se corre de dia) | datetime (instante; sin zona = UTC) | None.
 
-    Un texto 'AAAA-MM-DD' es una fecha; un texto ISO con hora (con o sin 'Z') es un instante."""
-    if valor is None or valor == "":
-        return None
+    Un texto 'AAAA-MM-DD' es una fecha; un texto ISO con hora (con o sin 'Z') es un instante; None o un texto en blanco,
+    None."""
     if isinstance(valor, str):
-        texto = valor.strip()
-        if len(texto) <= 10:
-            return date.fromisoformat(texto)
-        return datetime.fromisoformat(texto.replace("Z", "+00:00"))
+        valor = valor.strip()
+        if not valor:
+            return None
+        if len(valor) <= 10:
+            return date.fromisoformat(valor)
+        return datetime.fromisoformat(valor.replace("Z", "+00:00"))
     return valor
+
+
+def _exigir_instante(valor, funcion: str) -> None:
+    """Un date que no es datetime no tiene hora: TypeError claro en vez del AttributeError de .tzinfo."""
+    if isinstance(valor, date) and not isinstance(valor, datetime):
+        raise TypeError(f"{funcion} espera un instante (datetime en UTC), no una fecha sin hora ({valor.isoformat()})")
 
 
 def fecha_larga(valor) -> str | None:
     """'8 de octubre de 2026'. Una fecha sin hora (date o 'AAAA-MM-DD') es ese mismo dia; un instante (datetime en UTC o
-    texto ISO con hora) se pasa al dia de Colombia. None o '' -> None."""
+    texto ISO con hora) se pasa al dia de Colombia. None o texto en blanco -> None."""
     v = _a_fecha_o_instante(valor)
     if v is None:
         return None
@@ -73,10 +84,12 @@ def fecha_larga(valor) -> str | None:
 
 
 def fecha_hora_co(dt_utc) -> str | None:
-    """'03/10/2026 a las 3:15 p. m.': el instante (UTC sin zona o texto ISO) en hora de Colombia. None -> None."""
+    """'03/10/2026 a las 3:15 p. m.': el instante (UTC sin zona o texto ISO con hora) en hora de Colombia. None o texto
+    en blanco -> None; una fecha sin hora (date o 'AAAA-MM-DD') -> TypeError."""
     v = _a_fecha_o_instante(dt_utc)
     if v is None:
         return None
+    _exigir_instante(v, "fecha_hora_co")
     co = a_colombia(v)
     hora = co.hour % 12 or 12
     sufijo = "a. m." if co.hour < 12 else "p. m."
@@ -85,9 +98,13 @@ def fecha_hora_co(dt_utc) -> str | None:
 
 def iso_z(dt) -> str | None:
     """isoformat() + 'Z' de un instante en UTC (el navegador lo lee como UTC y no lo corre 5 h). Uno con zona se pasa a
-    UTC primero; None -> None. Es la regla de _iso_utc de erp_ventas.py, para los modulos nuevos."""
+    UTC primero; None -> None; un texto se devuelve tal cual. Es la regla de _iso_utc de erp_ventas.py, para los modulos
+    nuevos. Una fecha sin hora (date) -> TypeError: no es un instante."""
     if dt is None:
         return None
+    if isinstance(dt, str):
+        return dt
+    _exigir_instante(dt, "iso_z")
     if dt.tzinfo is not None:
         dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt.isoformat() + "Z"

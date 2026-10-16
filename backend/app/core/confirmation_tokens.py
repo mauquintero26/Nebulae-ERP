@@ -21,12 +21,12 @@ solo consumen su API.
   30 dias, con expires_at = fechas.vence_al_final_del_dia(...) que pasa quien lo crea.
 - enlace_publico(raw, tipo) arma /confirmar/{raw} o /pedido/{raw} con FRONTEND_URL.
 """
-import secrets, hashlib, logging, os
+import secrets, hashlib, logging, os, re
 from datetime import datetime, timedelta
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.core.fechas import ahora_utc
-from app.core.preflight import aviso_frontend_url
+from app.core.preflight import FRONTEND_URL_POR_DEFECTO, aviso_frontend_url
 from app.models.confirmation import DocumentConfirmationToken
 
 logger = logging.getLogger(__name__)
@@ -41,14 +41,21 @@ RESULTADO_CAMBIOS = "CAMBIOS"
 RESULTADO_REVOCADO = "REVOCADO"
 RESULTADOS = (RESULTADO_CONFIRMADO, RESULTADO_CAMBIOS, RESULTADO_REVOCADO)
 
-FRONTEND_URL_POR_DEFECTO = "http://localhost:5100"
 # La pagina publica de cada tipo: SC y COT se confirman en /confirmar/{raw}; el pedido se consulta en /pedido/{raw}.
 RUTA_PUBLICA = {"SC": "confirmar", "COT": "confirmar", "PVEN": "pedido"}
+# Un token crudo como los de secrets.token_urlsafe(32) (43 caracteres de [A-Za-z0-9_-]): enlace_publico no arma una URL
+# con otra cosa ('/', '?', '#' o '..' cambiarian la ruta).
+_TOKEN_CRUDO = re.compile(r"[A-Za-z0-9_-]{20,}")
 
 
 def hash_token(raw: str) -> str:
     """El sha256 que se guarda en token_hash (el token crudo nunca se guarda)."""
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _como_tupla(tipos) -> tuple:
+    """Un solo tipo escrito como texto ('PVEN') es ('PVEN',), no ['P','V','E','N'] (que no encontraria nada en silencio)."""
+    return (tipos,) if isinstance(tipos, str) else tuple(tipos)
 
 
 def create_confirmation_token(db: Session, document_type: str, document_id: int,
@@ -76,14 +83,18 @@ def create_confirmation_token(db: Session, document_type: str, document_id: int,
 def consultar_token(db: Session, token: str, tipos=TIPOS_CONFIRMACION) -> dict | None:
     """Lee el enlace SIN efectos (un SELECT, sin commit) para decidir que mostrarle al cliente: {id, document_type,
     document_id, created_at, expires_at, used_at, resultado, vigente, vencido}, o None si no existe o no es de `tipos`.
-    vigente = sin usar y expires_at > ahora; vencido = sin usar y expires_at <= ahora (usado o revocado: ninguno)."""
+    vigente = sin usar y expires_at > ahora; vencido = sin usar y expires_at <= ahora (usado o revocado: ninguno).
+    `tipos` acepta una tupla o un solo tipo como texto ('PVEN').
+
+    Uso interno: nunca devolver este dict al cliente (trae el id del enlace, document_id y otros datos internos);
+    proyectar campo por campo, como _sc_confirmacion_dict de confirmacion_publica.py."""
     fila = db.execute(
         text("""
             SELECT id, document_type, document_id, created_at, expires_at, used_at, resultado
             FROM document_confirmation_tokens
             WHERE token_hash = :token_hash AND document_type = ANY(:tipos)
         """),
-        {"token_hash": hash_token(token), "tipos": list(tipos)},
+        {"token_hash": hash_token(token), "tipos": list(_como_tupla(tipos))},
     ).mappings().first()
     if fila is None:
         return None
@@ -103,8 +114,8 @@ def reclamar_token(db: Session, token: str, tipos=TIPOS_CONFIRMACION) -> dict | 
     ninguna fila. Mismo patron de UPDATE parametrizado que revoke_pending_tokens
     (db.execute(text(...), {...}), nunca interpolacion de string).
 
-    Solo reclama enlaces de `tipos` (C11). Devuelve {id, document_type, document_id} o None; hace su propio commit,
-    como siempre (el enlace queda gastado aunque lo que sigue falle)."""
+    Solo reclama enlaces de `tipos` (C11; una tupla o un solo tipo como texto). Devuelve {id, document_type,
+    document_id} o None; hace su propio commit, como siempre (el enlace queda gastado aunque lo que sigue falle)."""
     now = ahora_utc()
     row = db.execute(
         text("""
@@ -114,7 +125,7 @@ def reclamar_token(db: Session, token: str, tipos=TIPOS_CONFIRMACION) -> dict | 
               AND document_type = ANY(:tipos)
             RETURNING id, document_type, document_id
         """),
-        {"token_hash": hash_token(token), "now": now, "tipos": list(tipos)},
+        {"token_hash": hash_token(token), "now": now, "tipos": list(_como_tupla(tipos))},
     ).first()
     db.commit()
     if not row:
@@ -138,15 +149,23 @@ def peek_token(db: Session, token: str, tipos=TIPOS_CONFIRMACION) -> tuple[str, 
     return (info["document_type"], info["document_id"])
 
 
-def marcar_resultado(db: Session, token_id: int, resultado: str) -> None:
+def marcar_resultado(db: Session, token_id: int, resultado: str) -> bool:
     """Anota que hizo el cliente con el enlace (RESULTADO_CONFIRMADO o RESULTADO_CAMBIOS). SIN commit: va en el commit
-    que cambia el documento, para que el enlace y el documento se confirmen o se deshagan juntos."""
+    que cambia el documento, para que el enlace y el documento se confirmen o se deshagan juntos.
+
+    Solo escribe sobre un enlace ya usado (reclamado) y todavia sin resultado: nunca convierte un 'REVOCADO' (ni otro
+    resultado) en otra cosa, ni marca un enlace que nadie uso. True si lo anoto; False si no (id equivocado, enlace sin
+    usar o con resultado)."""
     if resultado not in RESULTADOS:
         raise ValueError(f"Resultado de enlace desconocido: {resultado!r}")
-    db.execute(
-        text("UPDATE document_confirmation_tokens SET resultado = :resultado WHERE id = :id"),
+    filas = db.execute(
+        text("""
+            UPDATE document_confirmation_tokens SET resultado = :resultado
+            WHERE id = :id AND used_at IS NOT NULL AND resultado IS NULL
+        """),
         {"resultado": resultado, "id": token_id},
     )
+    return filas.rowcount == 1
 
 
 def revoke_pending_tokens(db: Session, document_type: str, document_id: int, commit: bool = True,
@@ -247,10 +266,15 @@ def enlace_publico(raw: str, tipo: str) -> str:
     """El enlace que recibe el cliente: {FRONTEND_URL}/confirmar/{raw} (SC, COT) o {FRONTEND_URL}/pedido/{raw} (PVEN).
 
     Hueco 1: con NEBULAE_ENV=production y FRONTEND_URL ausente o en localhost registra un error (el enlace saldria a una
-    direccion que el cliente no puede abrir). El token crudo nunca va al registro."""
+    direccion que el cliente no puede abrir). El token crudo nunca va al registro.
+
+    `raw` debe ser un token como los de create_confirmation_token (20 o mas caracteres de [A-Za-z0-9_-]); con otra cosa
+    ('/', '?', '#', '..') se armaria otra ruta, asi que da ValueError (sin repetir el valor en el mensaje)."""
     ruta = RUTA_PUBLICA.get(tipo)
     if ruta is None:
         raise ValueError(f"Tipo de enlace desconocido: {tipo!r}")
+    if not isinstance(raw, str) or not _TOKEN_CRUDO.fullmatch(raw):
+        raise ValueError("El token del enlace no es válido: debe ser el que devuelve create_confirmation_token.")
     aviso = aviso_frontend_url(os.environ.get("NEBULAE_ENV", ""), os.environ.get("FRONTEND_URL"))
     if aviso:
         logger.error("Enlace %s al cliente con una direccion que no sirve: %s", tipo, aviso)

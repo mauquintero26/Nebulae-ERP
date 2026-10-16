@@ -68,6 +68,9 @@ def _get_env() -> str:
 
 
 _HOSTS_LOCALES = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
+# La direccion del frontend cuando FRONTEND_URL no esta definida (desarrollo). Unica definicion: la importa
+# app/core/confirmation_tokens.py (frontend_url / enlace_publico) y la nombra el aviso de abajo.
+FRONTEND_URL_POR_DEFECTO = "http://localhost:5100"
 
 
 def aviso_frontend_url(env: str, valor: Optional[str]) -> Optional[str]:
@@ -80,7 +83,7 @@ def aviso_frontend_url(env: str, valor: Optional[str]) -> Optional[str]:
     texto = (valor or "").strip()
     if not texto:
         return ("FRONTEND_URL no esta definida: los enlaces que se envian a los clientes apuntarian a "
-                "http://localhost:5100. Definela con la direccion publica del ERP (https://...).")
+                f"{FRONTEND_URL_POR_DEFECTO}. Definela con la direccion publica del ERP (https://...).")
     try:
         from urllib.parse import urlparse
         parsed = urlparse(texto)

@@ -31,6 +31,21 @@ def test_vence_al_final_del_dia():
     assert vence_al_final_del_dia(date(2026, 10, 8)) == datetime(2026, 10, 9, 5, 0)
     assert vence_al_final_del_dia(date(2026, 12, 31)) == datetime(2027, 1, 1, 5, 0)
     assert vence_al_final_del_dia(date(2026, 10, 8)).tzinfo is None
+    # r1: un instante (datetime) no es una fecha: su día UTC puede no ser el de Colombia (22:00 del 8 = 03:00 UTC del 9).
+    try:
+        vence_al_final_del_dia(datetime(2026, 10, 9, 3, 0))
+    except TypeError as e:
+        assert str(e) == "vence_al_final_del_dia espera una fecha (date), no un instante"
+    else:
+        raise AssertionError("vence_al_final_del_dia aceptó un datetime")
+
+
+def _lanza_type_error(fn, valor):
+    try:
+        fn(valor)
+    except TypeError as e:
+        return str(e)
+    raise AssertionError(f"{fn.__name__}({valor!r}) no lanzó TypeError")
 
 
 def test_hoy_colombia_y_a_colombia():
@@ -70,6 +85,9 @@ def test_fecha_larga():
         assert fecha_larga(valor) == esperado, (valor, fecha_larga(valor))
     assert fecha_larga(None) is None
     assert fecha_larga("") is None
+    # r1: un texto en blanco también es «vacío»; con espacios alrededor se lee igual.
+    assert fecha_larga("   ") is None
+    assert fecha_larga(" 2026-10-08 ") == "8 de octubre de 2026"
 
 
 def test_fecha_hora_co():
@@ -87,14 +105,24 @@ def test_fecha_hora_co():
     for valor, esperado in casos:
         assert fecha_hora_co(valor) == esperado, (valor, fecha_hora_co(valor))
     assert fecha_hora_co(None) is None
+    # r1: texto en blanco → None; una fecha sin hora (date o 'AAAA-MM-DD') no tiene hora que mostrar → TypeError en
+    # español (antes daba un AttributeError difícil de leer).
+    assert fecha_hora_co("   ") is None
+    for valor in (date(2026, 10, 3), "2026-10-03"):
+        mensaje = _lanza_type_error(fecha_hora_co, valor)
+        assert "fecha_hora_co" in mensaje and "instante" in mensaje, mensaje
 
 
 def test_iso_z():
-    """UTC sin zona + 'Z' para el navegador (como _iso_utc de erp_ventas); None queda None."""
+    """UTC sin zona + 'Z' para el navegador (la regla de _iso_utc de erp_ventas); None queda None."""
     from app.core.fechas import iso_z
     assert iso_z(datetime(2026, 10, 3, 20, 15)) == "2026-10-03T20:15:00Z"
     assert iso_z(datetime(2026, 10, 3, 15, 15, tzinfo=timezone(timedelta(hours=-5)))) == "2026-10-03T20:15:00Z"
     assert iso_z(None) is None
+    # r1: igual que _iso_utc, un texto se devuelve tal cual; una fecha sin hora → TypeError en español.
+    assert iso_z("2026-10-03T20:15:00Z") == "2026-10-03T20:15:00Z"
+    mensaje = _lanza_type_error(iso_z, date(2026, 10, 3))
+    assert "iso_z" in mensaje and "instante" in mensaje, mensaje
 
 
 # ─── core/telefonos.py ───────────────────────────────────────────────────────────────────────────────────────
@@ -108,6 +136,17 @@ def test_telefonos_de_whatsapp():
         assert numero_whatsapp(t) == "573001234567", t
     for t in ("", None, "abc", "300123456", "+", "1234567890123456"):
         assert e164_whatsapp(t) is None, t
+    # r1, bordes: 7 dígitos (fijo local) no; 15 exactos sí (el máximo E.164); ningún indicativo empieza en 0; con
+    # indicativo 57 deben ser exactamente 12 dígitos (57 + 10), así que un '(0)' de más no pasa.
+    for t in ("1234567", "03001234567", "+57 (0) 300 123 4567", "57300123456", "5730012345678"):
+        assert e164_whatsapp(t) is None, t
+    assert e164_whatsapp("123456789012345") == "+123456789012345"
+    assert e164_whatsapp("+57 300 123 4567") == "+573001234567"
+    # Ruling r1: una extensión pegada a un celular colombiano ('300 123 4567 ext 12', 12 dígitos que no empiezan en 57)
+    # SIGUE pasando como número internacional (+30… es Grecia): con solo los dígitos no se distingue de un número
+    # extranjero real, y rechazar textos con letras rompería datos viejos como «Cel. 300 123 4567».
+    assert e164_whatsapp("300 123 4567 ext 12") == "+300123456712"
+    assert e164_whatsapp("Cel. 300 123 4567") == "+573001234567"
     # numero_whatsapp solo normaliza, igual que numeroWhatsApp del frontend: no rechaza 9 dígitos.
     assert numero_whatsapp("300123456") == "300123456"
     assert numero_whatsapp("") is None and numero_whatsapp(None) is None and numero_whatsapp("abc") is None
@@ -148,9 +187,19 @@ def test_telefono_del_documento_usa_el_del_cliente_si_el_documento_no_tiene(db):
     db.commit(); db.refresh(sc)
     assert telefono_del_documento(sc) == "300 123 4567"
 
+    # r1: un teléfono sin dígitos (datos viejos como 'N/A' o '-') cuenta como vacío y cae al del cliente.
+    for sin_digitos in ("N/A", "-", "(sin teléfono)"):
+        sc.customer_phone = sin_digitos
+        db.commit(); db.refresh(sc)
+        assert telefono_del_documento(sc) == "300 123 4567", sin_digitos
+
     sc.customer_phone = "311 222 3344"
     db.commit(); db.refresh(sc)
     assert telefono_del_documento(sc) == "311 222 3344"
+    # Ruling r1: uno con dígitos se queda aunque sea corto (lo escribió el asesor; RP20 dice «si está vacío»).
+    sc.customer_phone = "1234567"
+    db.commit(); db.refresh(sc)
+    assert telefono_del_documento(sc) == "1234567"
 
     # Lo mismo para la cotización y el pedido (los tres tienen customer_phone y la relación customer).
     cot = SalesQuotation(numero=f"COT-B3T1{sufijo}", sc_id=sc.id, customer_name="Cliente B3T1",
@@ -164,4 +213,12 @@ def test_telefono_del_documento_usa_el_del_cliente_si_el_documento_no_tiene(db):
     # Sin teléfono propio y sin cliente: None.
     sin = CustomerRequest(numero=f"SC-B3T1X{sufijo}", customer_name="Sin teléfono", estado="ASIGNADA", productos=[])
     db.add(sin); db.commit(); db.refresh(sin)
+    assert telefono_del_documento(sin) is None
+    # Ni el documento ni el cliente con dígitos: None (no se devuelve 'N/A' como si fuera un teléfono).
+    sin_tel = Customer(first_name="Cliente", last_name="B3T1", phone="N/A",
+                       email=f"b3t1-{uuid.uuid4().hex[:8]}@test.nebulae")
+    db.add(sin_tel); db.commit()
+    sin.customer_id = sin_tel.id
+    sin.customer_phone = "-"
+    db.commit(); db.refresh(sin)
     assert telefono_del_documento(sin) is None
