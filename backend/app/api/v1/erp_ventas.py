@@ -27,6 +27,9 @@ from app.api.dependencies import (
 from app.models.users import User
 from app.core.busqueda import productos_ilike
 from app.core import cambios_documento, clientes
+from app.core.admin_config import guardar_config
+from app.core.correo_documento import correo_documento
+from app.core.empresa import PREFIJOS_RESERVADOS, perfil_publico
 from app.core.ventas_dinero import (
     redondear_peso, pesos, formato_pct, anticipo_cotizacion, pct_anticipo_cotizacion, anticipo_requerido,
     anticipo_del_pedido, saldos_a_favor_de_cotizacion, PCT_ANTICIPO_POR_DEFECTO, ORIGEN_CONSERVADO,
@@ -196,12 +199,14 @@ def _canal_de_envio(body: dict, customer_email: Optional[str]) -> Optional[str]:
                                  "antes de enviar.")
     return canal
 
-def _enviar_correo_confirmacion(destino: Optional[str], asunto: str, html: str) -> dict:
+def _enviar_correo_confirmacion(destino: Optional[str], asunto: str, html: str,
+                                remitente_nombre: Optional[str] = None) -> dict:
     """Intenta el correo con el enlace de confirmacion y dice que paso: {enviado, destino, motivo, mensaje}.
 
     motivo es None si salio; si no, SIN_CORREO_CLIENTE | CORREO_NO_CONFIGURADO | FALLO_ENVIO. Nunca lanza: el enlace ya
     quedo guardado y el asesor puede entregarlo por otro medio, asi que un fallo del correo solo se informa.
-    app.core.email se usa por atributo (correo.smtp_configurado / correo.send_email) para poder parchearlo en pruebas."""
+    app.core.email se usa por atributo (correo.smtp_configurado / correo.send_email) para poder parchearlo en pruebas.
+    remitente_nombre (B3 PLANTILLA, C17): el nombre comercial de la empresa en el From; None deja solo la direccion."""
     from app.core import email as correo
     destino = (destino or "").strip()
     if not destino:
@@ -211,7 +216,7 @@ def _enviar_correo_confirmacion(destino: Optional[str], asunto: str, html: str) 
         return {"enviado": False, "destino": destino, "motivo": "CORREO_NO_CONFIGURADO",
                 "mensaje": "No se envió correo: el envío de correos no está configurado en el sistema."}
     try:
-        salio = bool(correo.send_email(destino, asunto, html))
+        salio = bool(correo.send_email(destino, asunto, html, remitente_nombre=remitente_nombre))
     except Exception:
         logger.exception("No se pudo enviar el correo de confirmación a %s", destino)
         salio = False
@@ -1662,8 +1667,7 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
     # H27: el canal se valida antes de revocar o crear tokens: un canal malo no cambia nada.
     canal = _canal_de_envio(body, sc.customer_email)
 
-    from app.core.confirmation_tokens import create_confirmation_token, revoke_pending_tokens
-    import os
+    from app.core.confirmation_tokens import create_confirmation_token, enlace_publico, revoke_pending_tokens
 
     old_estado = sc.estado
     es_reenvio = old_estado == "PENDIENTE_CONFIRMACION"
@@ -1676,21 +1680,22 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
     revoke_pending_tokens(db, "SC", sc.id)
 
     raw_token = create_confirmation_token(db, "SC", sc.id)
-    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5100").rstrip("/")
-    link = f"{frontend_url}/confirmar/{raw_token}"
+    link = enlace_publico(raw_token, "SC")
 
     sc.estado = "PENDIENTE_CONFIRMACION"
     sc.updated_at = datetime.datetime.utcnow()
     # Se leen antes del commit: despues el objeto queda expirado y leerlo abriria otra transaccion mientras el correo
-    # (SMTP sincrono) sale.
-    numero, destino = sc.numero, sc.customer_email
+    # (SMTP sincrono) sale. La marca de la empresa (B3 PLANTILLA) tambien: un SELECT dentro de esta misma transaccion.
+    numero, destino, cliente = sc.numero, sc.customer_email, sc.customer_name
+    perfil = perfil_publico(db)
     db.commit()
 
     # H39: el estado ya esta guardado; ahora se intenta el correo de respaldo (siempre, sea cual sea el canal) y,
-    # con su resultado a la mano, se anota el envio en la Actividad.
-    correo_res = _enviar_correo_confirmacion(
-        destino, f"Confirma tu solicitud {numero} - Nebulae",
-        f'<p>Por favor confirma tu solicitud haciendo clic aquí: <a href="{link}">{link}</a></p>')
+    # con su resultado a la mano, se anota el envio en la Actividad. B3 PLANTILLA (C17, C21): el asunto y el html salen
+    # de correo_documento con la marca de la empresa, y el remitente lleva su nombre comercial.
+    asunto, html = correo_documento(perfil, "SC", numero, cliente, link)
+    correo_res = _enviar_correo_confirmacion(destino, asunto, html,
+                                             remitente_nombre=perfil["nombre_comercial"] or None)
     descripcion = "Enlace de confirmación reenviado al cliente" if es_reenvio else "Enviada para confirmación del cliente"
     if canal:
         descripcion += f" {CANALES_ENVIO[canal]}"
@@ -2889,8 +2894,7 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     # H27: el canal se valida despues de las guardas de estado (N4, H46) y antes de revocar o crear tokens.
     canal = _canal_de_envio(body, cot.customer_email)
 
-    from app.core.confirmation_tokens import create_confirmation_token, revoke_pending_tokens
-    import os
+    from app.core.confirmation_tokens import create_confirmation_token, enlace_publico, revoke_pending_tokens
 
     old_estado = cot.estado
     # Mismo criterio que enviar_solicitud_para_confirmacion: revocar incondicionalmente
@@ -2898,8 +2902,7 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     revoke_pending_tokens(db, "COT", cot.id)
 
     raw_token = create_confirmation_token(db, "COT", cot.id)
-    frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:5100").rstrip("/")
-    link = f"{frontend_url}/confirmar/{raw_token}"
+    link = enlace_publico(raw_token, "COT")
 
     cot.estado = "PENDIENTE_CONFIRMACION"
     # Round 3 (adversarial review, hallazgo #2): limpia cualquier marca que pudiera haber
@@ -2912,7 +2915,10 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     if canal:
         cot.canal_envio = canal  # H27: en el mismo commit que el estado (ya no hay un PATCH previo del frontend)
     cot.updated_at = datetime.datetime.utcnow()
-    numero, destino = cot.numero, cot.customer_email  # valores simples: se usan despues del commit sin recargar el objeto
+    # Valores simples: se usan despues del commit sin recargar el objeto. La marca de la empresa (B3 PLANTILLA) se lee
+    # en esta misma transaccion, no despues (no se abre otra mientras sale el SMTP).
+    numero, destino, cliente = cot.numero, cot.customer_email, cot.customer_name
+    perfil = perfil_publico(db)
     db.commit()
     db.refresh(cot)
     try:
@@ -2929,9 +2935,10 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     # El refresh y la sincronizacion de arriba pueden dejar abierta una transaccion de solo lectura: se cierra con un
     # commit (inofensivo si no hay nada pendiente) para no retener la conexion de la base durante el SMTP sincrono.
     db.commit()
-    correo_res = _enviar_correo_confirmacion(
-        destino, f"Confirma tu cotización {numero} - Nebulae",
-        f'<p>Revisa y confirma tu cotización aquí: <a href="{link}">{link}</a></p>')
+    # B3 PLANTILLA (C17, C21): el correo sale de correo_documento con la marca de la empresa y su nombre de remitente.
+    asunto, html = correo_documento(perfil, "COT", numero, cliente, link)
+    correo_res = _enviar_correo_confirmacion(destino, asunto, html,
+                                             remitente_nombre=perfil["nombre_comercial"] or None)
     descripcion = "Enviada para confirmación del cliente"
     if canal:
         descripcion += f" {CANALES_ENVIO[canal]}"
@@ -3832,11 +3839,56 @@ _CONFIG_LECTURA_GENERAL = {"alerta_sc_dias", "alerta_cot_dias", "alerta_ven_dias
                            "auto_lead_crm", "auto_chatter_ia", "notif_whatsapp"}
 
 
+# C23/R13 (B3 T2): claves que /config no muestra ni acepta, prefijo -> mensaje del 422 (RP18). Van por su propio
+# endpoint, que las valida: empresa_ y documentos_ por PUT /empresa (Configuracion General). T8 agrega envio_whatsapp_ y
+# T10 tareas_, cada una con su mensaje.
+_MENSAJE_CLAVES_DE_EMPRESA = "Los datos de la empresa y de los documentos se cambian en Configuración General."
+_PREFIJOS_RESERVADOS_CONFIG = {prefijo: _MENSAJE_CLAVES_DE_EMPRESA for prefijo in PREFIJOS_RESERVADOS}
+
+# C23/R13: validador por clave de /config. Recibe el valor del body y devuelve el texto a guardar, o lanza ValueError con
+# el mensaje en espanol del 422. T3 agrega iva_tarifa_defecto, T7 dias_validez_cotizacion y T11 las seguimiento_*.
+_VALIDADORES_CONFIG = {}
+
+
+def _patrones_reservados() -> list:
+    """Los prefijos reservados como patrones LIKE ('empresa\\_%'): el '_' escapado es literal."""
+    return [prefijo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            for prefijo in _PREFIJOS_RESERVADOS_CONFIG]
+
+
+def _validar_config(body: dict) -> dict:
+    """C23/R13: valida TODO el body de PATCH /config antes de escribir y devuelve {clave: texto a guardar}.
+
+    Una clave con prefijo reservado -> 422 con el mensaje de ese prefijo (RP18); un valor que su validador rechaza -> 422
+    con su mensaje. Todo o nada: con un solo error no se escribe ninguna clave. Las claves sin validador se guardan como
+    hasta ahora (str(valor))."""
+    for clave in body:
+        for prefijo, mensaje in _PREFIJOS_RESERVADOS_CONFIG.items():
+            if clave.startswith(prefijo):
+                raise HTTPException(422, mensaje)
+    limpio = {}
+    for clave, valor in body.items():
+        validador = _VALIDADORES_CONFIG.get(clave)
+        if validador is None:
+            limpio[clave] = str(valor)
+            continue
+        try:
+            limpio[clave] = validador(valor)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+    return limpio
+
+
 @router.get("/config")
 def get_config(user: User = Depends(require_roles(*ALL_ERP_ROLES)),
         db: Session = Depends(get_db)):
+    """Configuracion del Hub. N8: los roles que no son ADMIN solo ven _CONFIG_LECTURA_GENERAL. C23 (B3 T2): las claves
+    reservadas (_PREFIJOS_RESERVADOS_CONFIG) no salen para NINGUN rol, y se filtran en la consulta: el logo de la
+    empresa pesa hasta ~400 KB y el Hub pide /config varias veces."""
     try:
-        rows = db.execute(text("SELECT key, value, description FROM admin_config")).fetchall()
+        rows = db.execute(text("SELECT key, value, description FROM admin_config "
+                               "WHERE NOT (key LIKE ANY(:reservadas))"),
+                          {"reservadas": _patrones_reservados()}).fetchall()
         data = {r[0]: {"value": r[1], "description": r[2]} for r in rows}
         if normalize_role(user.role) != "ADMIN":
             data = {k: v for k, v in data.items() if k in _CONFIG_LECTURA_GENERAL}
@@ -3850,14 +3902,9 @@ def get_config(user: User = Depends(require_roles(*ALL_ERP_ROLES)),
 @router.patch("/config")
 def update_config(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)),
         db: Session = Depends(get_db)):
-    for k, v in body.items():
-        db.execute(
-            text(
-                "INSERT INTO admin_config (key, value, updated_at) VALUES (:k, :v, NOW()) "
-                "ON CONFLICT (key) DO UPDATE SET value = :v, updated_at = NOW()"
-            ),
-            {"k": k, "v": str(v)},
-        )
+    """C23/R13: _validar_config ANTES de escribir (todo o nada, 422 en espanol); luego el upsert parametrizado de
+    admin_config.guardar_config (RP17) y un commit."""
+    guardar_config(db, _validar_config(body))
     db.commit()
     return {"status": "success"}
 

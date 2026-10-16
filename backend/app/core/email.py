@@ -4,7 +4,7 @@ Envio de correo minimal, implementado con smtplib/email.mime (libreria
 estandar, sin dependencias nuevas).
 
 Disenado para que cambiar de proveedor de correo en el futuro sea trivial:
-el resto del backend solo conoce send_email(to, subject, html_body) -> bool.
+el resto del backend solo conoce send_email(to, subject, html_body, remitente_nombre=None) -> bool.
 Hoy la implementacion habla SMTP generico (pensado para Gmail de prueba);
 cambiar a un proveedor transaccional (SendGrid, SES, Postmark, etc.) en el
 futuro solo requiere reescribir el cuerpo de esta funcion -- nadie que la
@@ -15,6 +15,7 @@ import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formataddr
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +27,17 @@ def smtp_configurado() -> bool:
     return bool(os.environ.get("SMTP_USER", "").strip() and os.environ.get("SMTP_PASSWORD", "").strip())
 
 
-def send_email(to: str, subject: str, html_body: str) -> bool:
+def send_email(to: str, subject: str, html_body: str, remitente_nombre: str | None = None) -> bool:
     """
     Envia un correo HTML a `to`. Devuelve True si el envio fue exitoso,
     False si fallo por cualquier razon (credenciales ausentes, host SMTP
     inalcanzable, etc.).
+
+    remitente_nombre (Bloque 3, PLANTILLA): con un nombre, el From es
+    formataddr((nombre, SMTP_FROM)) -- 'DEMO Ferreteria <ventas@...>' -- y el
+    cliente ve el nombre de la empresa; sin nombre, solo la direccion, como
+    antes. El sobre SMTP sigue siendo la direccion sola. Los saltos de linea
+    del nombre se quitan (no se puede inyectar otro encabezado).
 
     Nunca lanza excepciones -- cualquier error se loguea (logging, nunca
     print) y se traduce en un simple `return False`. Esto es intencional:
@@ -59,7 +66,8 @@ def send_email(to: str, subject: str, html_body: str) -> bool:
 
     message = MIMEMultipart("alternative")
     message["Subject"] = subject
-    message["From"] = smtp_from
+    nombre = " ".join(str(remitente_nombre).split()) if remitente_nombre else ""
+    message["From"] = formataddr((nombre, smtp_from)) if nombre else smtp_from
     message["To"] = to
     message.attach(MIMEText(html_body, "html"))
 

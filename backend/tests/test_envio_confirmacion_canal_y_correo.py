@@ -41,8 +41,10 @@ def _correo_falso(monkeypatch, *, configurado=True, resultado=True):
     """Parchea el modulo de correo: devuelve la lista donde el fake anota cada llamada a send_email."""
     llamadas = []
 
-    def fake_send_email(to, subject, html_body):
-        llamadas.append({"to": to, "subject": subject, "html_body": html_body})
+    # RP12 (B3 T2): **kwargs porque _enviar_correo_confirmacion ahora manda remitente_nombre (y T9 mandara adjuntos);
+    # con una firma fija el TypeError se volveria FALLO_ENVIO sin un error visible.
+    def fake_send_email(to, subject, html_body, **kwargs):
+        llamadas.append({"to": to, "subject": subject, "html_body": html_body, **kwargs})
         return resultado
 
     monkeypatch.setattr("app.core.email.send_email", fake_send_email)
@@ -103,7 +105,8 @@ def test_enviar_sc_sin_smtp_avisa_que_el_correo_no_esta_configurado(
         app_client, db, admin_token, user_admin, monkeypatch):
     # No se parchea smtp_configurado: se prueba el chequeo real contra el entorno (sin credenciales).
     llamadas = []
-    monkeypatch.setattr("app.core.email.send_email", lambda to, subject, html_body: llamadas.append(to) or True)
+    monkeypatch.setattr("app.core.email.send_email",
+                        lambda to, subject, html_body, **kwargs: llamadas.append(to) or True)  # RP12
     monkeypatch.delenv("SMTP_USER", raising=False)
     monkeypatch.delenv("SMTP_PASSWORD", raising=False)
     sc = _sc(db, "SC-ENV002", user_admin, customer_email=CORREO)
@@ -390,7 +393,7 @@ def test_fallo_de_smtp_se_reporta_como_fallo_envio(app_client, db, admin_token, 
 def test_una_excepcion_del_envio_se_reporta_como_fallo_y_no_tumba_el_request(
         app_client, db, admin_token, user_admin, monkeypatch):
     """send_email promete no lanzar, pero si algun dia lo hace el enlace ya esta guardado: se informa FALLO_ENVIO."""
-    def explota(to, subject, html_body):
+    def explota(to, subject, html_body, **kwargs):  # RP12: que falle por el RuntimeError, no por un TypeError
         raise RuntimeError("servidor caido")
     monkeypatch.setattr("app.core.email.send_email", explota)
     monkeypatch.setattr("app.core.email.smtp_configurado", lambda: True)

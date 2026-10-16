@@ -7,6 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from app.api.v1 import auth, catalog, quotations, inventory, finance, store, crm, sales, purchases, webhooks, marketing, chat, legacy_observability
 from app.api.v1 import erp_ventas, erp_ventas_fase4, erp_compras, erp_compras_asignaciones, ecommerce, erp_logistica, erp_inventario
 from app.api.v1 import confirmacion_publica  # Gate 1/2 — confirmacion publica de SC/COT por link, sin autenticacion
+from app.api.v1 import empresa  # Bloque 3 (MARCA) — datos de la empresa; su router_publico va sin autenticacion
 from app.api.v1 import whatsapp_webhook  # BLOQUE 5 — Modo Sombra WhatsApp
 from app.api.v1 import debug_db  # Hardening — endpoint de verificacion de DB (solo ADMIN)
 from app.api import ws
@@ -169,6 +170,8 @@ app.include_router(legacy_observability.router, prefix="/api/v1/legacy", tags=["
 app.include_router(whatsapp_webhook.router, prefix="/api/v1/whatsapp", tags=["WhatsApp Webhook"])  # BLOQUE 5
 app.include_router(debug_db.router, prefix="/api/v1/debug", tags=["Debug / Verificacion"])  # Hardening
 app.include_router(confirmacion_publica.router, prefix="/api/v1", tags=["confirmacion-publica"])  # Sin autenticacion -- publico por diseno
+app.include_router(empresa.router, prefix="/api/v1/empresa", tags=["Empresa"])
+app.include_router(empresa.router_publico, prefix="/api/v1/publico", tags=["publico"])  # Sin autenticacion -- publico por diseno
 
 @app.get("/")
 def read_root(request: Request):
