@@ -405,7 +405,7 @@ def _texto_papelera(db: Session, sc: CustomerRequest, referencias=None) -> str:
         return f"Se conserva como historial (tiene {', '.join(referencias)})"
     purga = _fecha_de_purga(sc, referencias)
     if purga is None:
-        return "No se elimina automáticamente: no tiene fecha de envío a la Papelera"
+        return "No vence: no tiene fecha de envío a la Papelera"  # = TEXTO_PAPELERA_SIN_FECHA del frontend
     fecha = purga.replace(tzinfo=datetime.timezone.utc).astimezone(ZONA_COLOMBIA).strftime("%d/%m/%Y")
     return f"Se puede eliminar definitivamente desde el {fecha} si no se restaura."
 
@@ -1104,12 +1104,13 @@ _SQL_SC_CON_DOCUMENTOS = """(EXISTS(SELECT 1 FROM sales_quotations q WHERE q.sc_
                 OR EXISTS(SELECT 1 FROM sales_orders l WHERE l.canonical_customer_request_id = cr.id))"""
 
 
-def purgar_papelera_vencida(db: Session, ahora: datetime.datetime, autor: str) -> dict:
+def purgar_papelera_vencida(db: Session, ahora: datetime.datetime, autor: str = "Sistema") -> dict:
     """Borra las SC CANCELADA con eliminada_at anterior a `ahora` - DIAS_EN_PAPELERA dias que nadie referencia y deja
-    un renglon PURGED por cada una, con `autor`. `ahora` es UTC sin zona, como eliminada_at. NO hace commit: el llamador
-    confirma el borrado y sus renglones en un solo commit (H33: la SC ya no existe, ninguna pantalla muestra el
-    renglon). La usan POST /papelera/purgar y, en el Bloque 3, la revision automatica. Devuelve
-    {'purgadas': n, 'numeros': [...]}."""
+    un renglon PURGED por cada una, con `autor` («Sistema» si no se indica). `ahora` es UTC sin zona, como eliminada_at.
+    No hace commit: quien la llame confirma. Si se usa en un ciclo automático, confirma después de cada tarea, o aísla
+    la tarea, para que un fallo posterior no deshaga la purga. El borrado y sus renglones van juntos en ese commit (H33:
+    la SC ya no existe, ninguna pantalla muestra el renglon). La usan POST /papelera/purgar y, en el Bloque 3, la
+    revision automatica, que la llama fn(db, ahora). Devuelve {'purgadas': n, 'numeros': [...]}."""
     corte = ahora - datetime.timedelta(days=DIAS_EN_PAPELERA)
     purgadas = db.execute(text(f"""
         DELETE FROM customer_requests cr
@@ -2512,7 +2513,8 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     cambio_de_solicitud = _leer_cambio_de_solicitud(db, cot, body)
     retoma_sin_confirmacion = _validar_cambio_de_estado_cotizacion(db, cot, body.get("estado"))
     # B2.1 (D6): la marca de un ciclo anterior pide un motivo nuevo. No si la COT cambia de solicitud en este mismo PATCH:
-    # la marca se limpia (puerta C) y la SC nueva ya tiene la confirmacion vigente (_leer_cambio_de_solicitud).
+    # la marca se limpia (puerta C). Si pasa a otra SC, esa ya tiene la confirmacion vigente (_leer_cambio_de_solicitud);
+    # si se desvincula (sc_id: null), queda sin SC, y volver a vincularla exige esa confirmacion.
     motivo_nuevo = (_motivo_nuevo_para_retomar(db, cot, body.get("motivo_sin_confirmacion"))
                     if retoma_sin_confirmacion and cambio_de_solicitud is None else None)
     if "productos" in body:
@@ -3973,7 +3975,8 @@ def cancelar_solicitud(sc_id: int, body: CancelarSolicitudBody,
         raise HTTPException(404, "SC no encontrada")
     if sc.tipo_solicitud == "Soporte Tecnico":
         # Soporte Tecnico no usa el flujo de cancelacion ligado a Cotizacion:
-        # este endpoint marca eliminada_at (purga en 30 dias via papelera), lo
+        # este endpoint marca eliminada_at (pasados 30 dias en la Papelera, la
+        # borra un administrador al vaciar las vencidas: B2.1 D2), lo
         # que perderia un ticket de soporte real. Su ciclo de vida se maneja
         # exclusivamente con estado_soporte (PATCH /solicitudes/{id}).
         raise HTTPException(400, "Soporte Técnico no usa este flujo de cancelación; cambia su estado de soporte en su lugar")

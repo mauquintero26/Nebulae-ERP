@@ -198,6 +198,9 @@ console.log('--- D2 TEST 4: el botón «Vaciar las vencidas» (solo ADMIN) en la
   assert.ok(post > pide, 'POST /ventas/papelera/purgar después de confirmar');
   assert.ok(/avisar\(textoPapeleraVaciada\(/.test(vaciar), 'avisa cuántas borró');
   assert.ok(vaciar.indexOf('await loadPapelera()') > post, 'recarga la Papelera');
+  // B2.1 (revisión final, Minor 2): y la lista, para que «Canceladas» y los contadores de las pestañas no sigan
+  // mostrando las purgadas (como restaurarSC).
+  assert.ok(vaciar.indexOf('await load();') > vaciar.indexOf('await loadPapelera()'), 'recarga también la lista');
   assert.ok(/avisarError\(err,'No se pudo vaciar la Papelera'\)/.test(vaciar), 'el error sale como aviso');
   assert.ok(!/\b(?:alert|confirm|prompt)\(/.test(vaciar), 'sin diálogos nativos');
 }

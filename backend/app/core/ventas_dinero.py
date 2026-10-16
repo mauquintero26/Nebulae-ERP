@@ -94,7 +94,7 @@ def pct_anticipo_de_modalidad(modalidad):
     """% de anticipo que pide una modalidad de pago (R2), o None si no la reconoce ("Otro", vacia...).
 
     Sin tildes ni mayusculas (ni espacios en los bordes): una de MODALIDADES_CREDITO, exacta (D7) -> 0; '60/40' -> 60;
-    'Contado' -> 100. Cubre los textos del formulario de la SC, de la agenda ('Credito 30 Dias') y del chat."""
+    'Contado' -> 100. Cubre los textos del formulario de la SC ('Credito 30 dias') y del chat."""
     if modalidad is None:
         return None
     texto = _sin_tildes(modalidad)

@@ -68,8 +68,8 @@ console.log('--- TEST 3c: claveModalidad y esModalidadCredito (el predicado úni
 {
   assert.equal(claveModalidad('  Ｃｒéｄｉｔｏ 30 Días '), 'credito 30 dias');
   // B2.1 T2 r1: sin caracteres de formato (Cf), como _sin_tildes del backend.
-  assert.equal(claveModalidad('﻿Cre­dito 30​ Días'), 'credito 30 dias');
-  assert.equal(esModalidadCredito('﻿Credito 30 dias'), true);
+  assert.equal(claveModalidad('\ufeffCre\u00addito 30\u200b Días'), 'credito 30 dias');
+  assert.equal(esModalidadCredito('\ufeffCredito 30 dias'), true);
   assert.equal(claveModalidad(null), '');
   assert.equal(claveModalidad(undefined), '');
   // B2.1 (D7): las modalidades a crédito del formulario (los valores guardados), más 'credito' a secas.

@@ -90,6 +90,21 @@ def test_register_guarda_el_rol_recortado(app_client, db, admin_token):
     assert db.query(User).filter(User.email == correo).first().role == "asesor"
 
 
+def test_register_con_un_correo_ya_registrado_responde_400_en_espanol(app_client, db, admin_token):
+    """B2.1 (revision final, Minor 3): el administrador ve este aviso en Empleados; antes decia «Email already
+    registered». No crea una segunda cuenta con ese correo."""
+    resp, correo = _registrar(app_client, "Asesor", admin_token)
+    assert resp.status_code == 201, resp.text
+    resp = app_client.post(
+        "/api/v1/auth/register",
+        json={"email": correo, "password": "Test123!", "role": "Asesor"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["detail"] == "Ese correo ya está registrado."
+    assert db.query(User).filter(User.email == correo).count() == 1
+
+
 def test_update_role_email_backdoor_removed(app_client, db):
     u = User(
         email=f"jmquintero-nonadmin-{uuid.uuid4().hex[:6]}@test.nebulae",

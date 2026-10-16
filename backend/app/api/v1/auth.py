@@ -54,7 +54,7 @@ def register_user(
 
     db_user = db.query(User).filter(User.email == user.email).first()
     if db_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
+        raise HTTPException(status_code=400, detail="Ese correo ya está registrado.")
 
     hashed_password = get_password_hash(user.password)
     new_user = User(

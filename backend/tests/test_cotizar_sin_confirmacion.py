@@ -1014,7 +1014,7 @@ def test_d6_retomar_tras_cancelar_y_restaurar_la_solicitud_exige_un_motivo_nuevo
     # 6. Un motivo que no cumple S5 -> 422 con el texto de /cotizar-sin-confirmacion (un valor que no es texto cuenta
     # como vacio).
     corto = "El motivo debe tener al menos 10 caracteres."
-    for motivo, detalle in (("abc", corto), ("", corto), ("​" * 12, corto), (12345678901, corto),
+    for motivo, detalle in (("abc", corto), ("", corto), ("\u200b" * 12, corto), (12345678901, corto),
                             ("..........", "El motivo debe tener al menos 5 letras o números."),
                             ("x" * 501, "El motivo no puede tener más de 500 caracteres.")):
         resp = _retomar(motivo_sin_confirmacion=motivo)
@@ -1033,7 +1033,7 @@ def test_d6_retomar_tras_cancelar_y_restaurar_la_solicitud_exige_un_motivo_nuevo
         return commit_real(self)
 
     monkeypatch.setattr(Session, "commit", contar)
-    resp = _retomar(motivo_sin_confirmacion="  Cliente​ volvió a pedir\n\nla cotización ")
+    resp = _retomar(motivo_sin_confirmacion="  Cliente\u200b volvió a pedir\n\nla cotización ")
     monkeypatch.setattr(Session, "commit", commit_real)
     assert resp.status_code == 200, resp.text
     assert len(commits) == 1, len(commits)
@@ -1091,6 +1091,69 @@ def test_d6_sin_restauracion_posterior_retomar_no_pide_motivo_y_el_que_sobra_se_
     db.expire_all()
     fila = db.get(SalesQuotation, cot["id"])
     assert (fila.sin_confirmacion_sc_at, fila.sin_confirmacion_sc_motivo) == (marca, MOTIVO)
+
+
+def test_d6_retomar_y_cambiar_de_solicitud_en_el_mismo_patch_no_pide_motivo(app_client, db, admin_token, user_admin):
+    """B2.1 (D6, revision final Minor 7): la COT temprana de un ciclo viejo (SC cancelada y restaurada despues de la
+    marca) se retoma y cambia de solicitud en el mismo PATCH. No se pide el motivo nuevo: la puerta C limpia la marca.
+    - A otra SC con la confirmacion vigente del cliente: 200 sin motivo; la COT queda en Borrador en la SC nueva, sin
+      marca, y el renglon del cambio de estado no habla de un motivo.
+    - Desvinculandola (sc_id: null): 200 aunque el motivo del body sea corto (se ignora); queda en Borrador, sin SC y
+      sin marca. Volver a vincularla a una SC sin confirmar sigue dando el 409 de la puerta C (no hay atajo)."""
+    from app.core.textos_actividad import nombre_de_usuario
+    from app.api.v1.erp_ventas import _SC_SIN_CONFIRMAR
+    from app.models.erp_documents import SalesQuotation
+
+    def _temprana_de_un_ciclo_viejo(numero_sc):
+        sc = _sc(db, numero_sc, user_admin)
+        cot = _cotizar(app_client, admin_token, sc.id, motivo=MOTIVO).json()["data"]["cotizacion"]
+        _rechazar(app_client, admin_token, cot["id"])
+        _cancelar_y_restaurar(app_client, admin_token, sc.id)
+        db.expire_all()
+        [restaurada] = _logs(db, "SC", sc.id, "RESTORED")
+        assert restaurada.created_at > db.get(SalesQuotation, cot["id"]).sin_confirmacion_sc_at
+        return sc, cot
+
+    # 1. A una SC confirmada por el cliente.
+    origen, cot = _temprana_de_un_ciclo_viejo("SC-CSC062")
+    destino = _sc(db, "SC-CSC063", user_admin, estado="CONFIRMADA", gate1_confirmed_at=datetime.datetime.utcnow())
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot['id']}",
+                            json={"estado": "BORRADOR", "sc_id": destino.id, "updated_by": "otra persona"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    fila = db.get(SalesQuotation, cot["id"])
+    assert (fila.estado, fila.sc_id, fila.sc_numero) == ("BORRADOR", destino.id, "SC-CSC063")
+    assert (fila.sin_confirmacion_sc_at, fila.sin_confirmacion_sc_motivo) == (None, None)
+    retomada = _logs(db, "COT", cot["id"], "ESTADO_CHANGED")[-1]
+    assert (retomada.old_estado, retomada.new_estado) == ("RECHAZADA", "BORRADOR")
+    assert retomada.description == "Estado cambiado a Borrador"  # sin «Motivo nuevo»
+    assert retomada.user_name == nombre_de_usuario(user_admin)  # S4: la retoma por la puerta B es de la sesion
+    assert _logs(db, "SC", destino.id, "UPDATED")[-1].description == (
+        f"La cotización {cot['numero']} se vinculó a esta solicitud.")
+    assert _logs(db, "SC", origen.id, "UPDATED")[-1].description == (
+        f"La cotización {cot['numero']} se desvinculó de esta solicitud.")
+    db.refresh(destino)
+    assert destino.estado == "CONFIRMADA" and destino.gate1_confirmed_at is not None
+
+    # 2. Desvinculandola: el motivo corto del body no da 422, se ignora.
+    origen2, cot2 = _temprana_de_un_ciclo_viejo("SC-CSC064")
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot2['id']}",
+                            json={"estado": "BORRADOR", "sc_id": None, "motivo_sin_confirmacion": "abc",
+                                  "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    fila = db.get(SalesQuotation, cot2["id"])
+    assert (fila.estado, fila.sc_id, fila.sc_numero) == ("BORRADOR", None, None)
+    assert (fila.sin_confirmacion_sc_at, fila.sin_confirmacion_sc_motivo) == (None, None)
+    assert _logs(db, "COT", cot2["id"], "ESTADO_CHANGED")[-1].description == "Estado cambiado a Borrador"
+    # Volver a vincularla a su SC (restaurada, sin la confirmacion del cliente) exige esa confirmacion.
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot2['id']}", json={"sc_id": origen2.id, "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == f"La solicitud SC-CSC064 {_SC_SIN_CONFIRMAR}"
+    db.expire_all()
+    assert db.get(SalesQuotation, cot2["id"]).sc_id is None
 
 
 def test_b21_r1_un_surrogate_suelto_en_el_motivo_no_da_500(app_client, db, admin_token, user_admin):

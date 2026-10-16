@@ -471,7 +471,7 @@ def test_referencias_de_solicitud_y_texto_de_papelera(db, user_admin):
     # Sin referencias y sin eliminada_at (pastilla vieja): la purga no la toca (ronda 1, 3; texto oficial para T8A).
     vieja = _sc(db, "SC-T2B010B", user_admin, estado="CANCELADA")
     assert vieja.eliminada_at is None
-    assert _texto_papelera(db, vieja) == "No se elimina automáticamente: no tiene fecha de envío a la Papelera"
+    assert _texto_papelera(db, vieja) == "No vence: no tiene fecha de envío a la Papelera"  # = TEXTO_PAPELERA_SIN_FECHA
 
 
 def test_patch_de_estado_sobre_sc_cancelada_se_rechaza(app_client, db, admin_token, user_admin):
@@ -778,6 +778,27 @@ def test_purgar_papelera_vencida_corta_con_el_ahora_que_recibe(db, user_admin, c
     (log,) = _logs(db, vencida_id, "PURGED")
     assert (log.entity_numero, log.old_estado, log.user_name) == ("SC-T2B024A", "CANCELADA", "Revisión automática")
     assert log.extra_data == {"cliente": "Cliente Prueba", "motivo_cancelacion": "Vencida"}
+
+
+def test_purgar_papelera_vencida_con_dos_argumentos_firma_como_sistema(db, user_admin, contador_sql):
+    """B2.1 (revision final, Important 1): el Bloque 3 la registra en TAREAS y la llama fn(db, ahora). Sin autor, el
+    renglon PURGED queda a nombre de «Sistema». Sigue sin hacer commit, y el docstring lo advierte para el ciclo
+    automatico (confirmar despues de cada tarea o aislarla)."""
+    from app.api.v1.erp_ventas import purgar_papelera_vencida
+    ahora = datetime.datetime(2030, 1, 31, 12, 0, 0)
+    vencida = _sc(db, "SC-T2B025", user_admin, estado="CANCELADA", eliminada_at=ahora - datetime.timedelta(days=31),
+                  razon_cancelacion="Vencida")
+    vencida_id = vencida.id
+    with contador_sql.ventana() as v:
+        resultado = purgar_papelera_vencida(db, ahora)
+    assert v.commits == 0
+    assert "SC-T2B025" in resultado["numeros"] and resultado["purgadas"] == len(resultado["numeros"])
+    db.flush()
+    (log,) = _logs(db, vencida_id, "PURGED")
+    assert (log.entity_numero, log.user_name) == ("SC-T2B025", "Sistema")
+    doc = " ".join(purgar_papelera_vencida.__doc__.split())
+    assert ("No hace commit: quien la llame confirma. Si se usa en un ciclo automático, confirma después de cada "
+            "tarea, o aísla la tarea, para que un fallo posterior no deshaga la purga") in doc
 
 
 def test_vaciar_la_papelera_es_solo_del_administrador(app_client, db, user_admin, vendedor_token):
