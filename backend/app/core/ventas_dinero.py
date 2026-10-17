@@ -192,12 +192,16 @@ def anticipo_requerido(total, pct) -> Decimal:
 
 
 def monto_linea(producto) -> Decimal:
-    """U19: valor de una linea de la cotizacion en pesos enteros, nunca negativo: su total_cop o, si no lo trae,
-    unit_price_cop x qty. 0 si la linea no es un dict o trae un dato que no es un monto (dato viejo)."""
+    """U19: valor de una linea de la cotizacion en pesos enteros, nunca negativo, para REPARTIR EL ANTICIPO: su
+    total_con_iva_cop si lo trae (IVA, B3 T4: el anticipo es sobre el total con IVA); si no, su total_cop o, si
+    tampoco, unit_price_cop x qty. 0 si la linea no es un dict o trae un dato que no es un monto (dato viejo).
+    C4: el total de la linea del documento del cliente NO sale de aqui (es total_cop, sin IVA)."""
     if not isinstance(producto, dict):
         return Decimal("0")
     try:
-        if producto.get("total_cop") is not None:
+        if producto.get("total_con_iva_cop") is not None:
+            monto = redondear_peso(producto["total_con_iva_cop"])
+        elif producto.get("total_cop") is not None:
             monto = redondear_peso(producto["total_cop"])
         else:
             monto = redondear_peso(Decimal(str(producto.get("unit_price_cop") or 0))
@@ -207,27 +211,40 @@ def monto_linea(producto) -> Decimal:
     return max(Decimal("0"), monto)
 
 
-def repartir_anticipo_por_linea(montos, anticipo) -> list:
-    """U19: reparte `anticipo` (pesos enteros) entre las lineas en proporcion a sus `montos`, por el metodo del mayor
-    residuo: cada linea recibe el piso de su parte exacta y los pesos que faltan van, de a uno, a las de mayor parte
-    decimal (en empate, la que va primero). La suma da exactamente el anticipo y cada linea queda a menos de $1 de su
-    parte exacta; una linea en 0 recibe 0. Lista de Decimal del mismo largo; ceros si el anticipo o la suma de los
-    montos no son positivos; [] sin lineas. Con descuento global se reparte sobre el valor antes del descuento: la
-    proporcion es la misma. Se hace con enteros para no perder precision.
-    Si el anticipo es MAYOR que la suma de los montos (datos que no cuadran: p. ej. C10 con un pedido vigente cuyo
+def repartir_proporcional(montos, objetivo) -> list:
+    """Reparte `objetivo` (pesos enteros) entre las lineas en proporcion a sus `montos`, por el metodo del mayor
+    residuo y SOLO con enteros (IVA, B3 T4; extraida de U19): (q_i, r_i) = divmod(objetivo x m_i, suma de m); cada
+    linea recibe q_i y los pesos que faltan van, de a uno, a las de mayor r_i (en empate, la que va primero). La suma da
+    exactamente el objetivo y cada linea queda a menos de $1 de su parte exacta; una linea en 0 recibe 0.
+
+    Los montos y el objetivo pasan por redondear_peso; un monto negativo cuenta como 0. Lista de int del mismo largo;
+    ceros si el objetivo o la suma de los montos no son positivos; [] sin lineas. La usan el descuento global de la
+    cotizacion (iva.calcular_totales_cotizacion) y el anticipo por linea (repartir_anticipo_por_linea). En JS
+    (lib/iva.js) se hace con BigInt: objetivo x m puede pasar de 2^53.
+    Si el objetivo es MAYOR que la suma de los montos (datos que no cuadran: p. ej. C10 con un pedido vigente cuyo
     total no es el de las lineas de la COT), igual se reparte todo en proporcion y la suma cuadra, pero una linea puede
     recibir mas que su propio valor ([100, 100] con 300 -> [150, 150])."""
     pesos_linea = [max(0, int(redondear_peso(m))) for m in montos]
-    objetivo = int(redondear_peso(anticipo))
+    objetivo = int(redondear_peso(objetivo))
     total = sum(pesos_linea)
     if objetivo <= 0 or total <= 0:
-        return [Decimal("0") for _ in pesos_linea]
-    partes = [objetivo * p // total for p in pesos_linea]
-    restos = [objetivo * p % total for p in pesos_linea]
+        return [0 for _ in pesos_linea]
+    partes, restos = [], []
+    for p in pesos_linea:
+        parte, resto = divmod(objetivo * p, total)
+        partes.append(parte)
+        restos.append(resto)
     faltan = objetivo - sum(partes)
     for i in sorted(range(len(partes)), key=lambda i: (-restos[i], i))[:faltan]:
         partes[i] += 1
-    return [Decimal(p) for p in partes]
+    return partes
+
+
+def repartir_anticipo_por_linea(montos, anticipo) -> list:
+    """U19: el anticipo de cada linea, en proporcion a sus `montos` (monto_linea: con IVA si la linea lo trae). Es la
+    envoltura de repartir_proporcional en Decimal: misma regla (mayor residuo; la suma da exactamente el anticipo),
+    lista de Decimal del mismo largo, ceros si el anticipo o la suma de los montos no son positivos, [] sin lineas."""
+    return [Decimal(p) for p in repartir_proporcional(montos, anticipo)]
 
 
 def anticipo_del_pedido(so):

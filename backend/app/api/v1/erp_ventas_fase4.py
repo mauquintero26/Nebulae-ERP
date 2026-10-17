@@ -43,6 +43,7 @@ from app.core.ventas_dinero import (
     saldos_a_favor_de_cotizacion, metodo_pago_anticipo, METODOS_PAGO_ANTICIPO, METODO_PAGO_TRASLADO,
     METODO_PAGO_SALDO_A_FAVOR, ESTADO_PAGO_TRASLADADO, anular_pxps_de_pedido,
 )
+from app.core.iva import pct_tarifa_iva
 from app.core.textos_actividad import RESOLUCIONES_DEVOLUCION, etiqueta_estado, pago_registrado
 from app.api.dependencies import (
     require_roles, get_current_user,
@@ -1535,23 +1536,27 @@ def cancel_sale_order_line(
         line.estado = "CANCELADA"
     line.updated_at = now
 
-    # Recalcular totales del pedido
+    # Recalcular totales del pedido, en pesos enteros (IVA, B3 T4): base, descuento e IVA de cada linea al peso. Tras
+    # una cancelacion puede haber 1 o 2 pesos de diferencia frente al reparto original de la COT (mayor residuo).
     lines = db.query(SaleOrderLineErp).filter(SaleOrderLineErp.so_id == so.id).all()
-    new_subtotal = Decimal("0.00")
-    new_tax = Decimal("0.00")
-    new_total = Decimal("0.00")
+    suma_base = Decimal("0")
+    new_subtotal = Decimal("0")
+    new_tax = Decimal("0")
+    new_total = Decimal("0")
     for l in lines:
         vendible_qty = l.quantity - l.quantity_cancelled
         if vendible_qty > Decimal("0.00"):
-            l_base = (vendible_qty * l.unit_price_cop).quantize(Decimal("0.01"))
-            l_disc = (l_base * (l.descuento_pct / Decimal("100.00"))).quantize(Decimal("0.01"))
+            l_base = redondear_peso(vendible_qty * (l.unit_price_cop or Decimal("0")))
+            l_disc = redondear_peso(l_base * (l.descuento_pct or Decimal("0")) / Decimal("100"))
             l_sub = l_base - l_disc
-            l_tx = (l_sub * (l.tax_pct / Decimal("100.00"))).quantize(Decimal("0.01"))
+            l_tx = redondear_peso(l_sub * (l.tax_pct or Decimal("0")) / Decimal("100"))
+            suma_base += l_base
             new_subtotal += l_sub
             new_tax += l_tx
             new_total += (l_sub + l_tx)
 
-    so.subtotal_cop = new_subtotal
+    # Con COT el subtotal es antes del descuento (como en la cotizacion); sin COT, despues (el pedido canonico de hoy).
+    so.subtotal_cop = suma_base if so.cot_id else new_subtotal
     so.tax_cop = new_tax
     so.total_cop = new_total
 
@@ -2900,6 +2905,26 @@ def _trasladar_saldos_a_favor(db: Session, saldos: list, monto_a_trasladar: Deci
     return renglones_del_nuevo
 
 
+def _tax_pct_de_linea(p) -> Decimal:
+    """IVA (B3 T4): el % de IVA de una linea del JSON productos de la COT, para SaleOrderLineErp.tax_pct. Si la linea
+    trae iva_tarifa, el % de esa tarifa (el mismo iva_pct que guarda iva.calcular_totales_cotizacion, sacado de la
+    tarifa: una sola fuente); sin tarifa (IVA no discriminado), sin linea o con un codigo raro, 0."""
+    if not isinstance(p, dict) or not p.get("iva_tarifa"):
+        return Decimal("0")
+    return pct_tarifa_iva(p.get("iva_tarifa"))
+
+
+def _descuento_pct_de_linea(p, descuento_global: Decimal) -> Decimal:
+    """IVA (B3 T4): el % de descuento de una linea del pedido: el propio de la linea (descuento_pct) si viene y es > 0;
+    si no, el descuento global de la COT. Asi la cancelacion de lineas y la rentabilidad ya no pierden el descuento
+    global. Un descuento propio que no es un numero cuenta como que no viene."""
+    try:
+        propio = Decimal(str(p.get("descuento_pct") or 0)) if isinstance(p, dict) else Decimal("0")
+    except ArithmeticError:
+        propio = Decimal("0")
+    return propio if propio.is_finite() and propio > 0 else descuento_global
+
+
 @router.post("/cotizaciones/{cot_id}/convertir-a-venta", status_code=status.HTTP_200_OK)
 def convertir_cotizacion_a_venta(
     cot_id: int,
@@ -3069,6 +3094,8 @@ def convertir_cotizacion_a_venta(
         trm_rate=cot.trm_rate,
         subtotal_cop=subtotal_cop,
         descuento_pct=descuento_pct,
+        # IVA (B3 T4): el pedido hereda el IVA total de la COT (total_cop ya lo incluye).
+        tax_cop=redondear_peso(cot.tax_cop),
         total_cop=total_cop,
         anticipo_cop=anticipo_cop,
         saldo_cop=saldo_cop,
@@ -3152,11 +3179,17 @@ def convertir_cotizacion_a_venta(
         for ql in quotation_lines:
             sku = db.query(ProductSKU).filter(ProductSKU.id == ql.sku_id).first() if ql.sku_id else None
             modalidad = getattr(ql, "modalidad", None)
-            if not modalidad and cot.productos and isinstance(cot.productos, list):
+            # La linea del JSON productos que corresponde a esta (mismo criterio de siempre): de ahi salen la
+            # modalidad (si la linea normalizada no la trae) y, con IVA (B3 T4), el % de IVA. Sin pareja: 0%.
+            pareja = None
+            if cot.productos and isinstance(cot.productos, list):
                 for cp in cot.productos:
-                    if cp.get("sku_id") == ql.sku_id or cp.get("sku") == getattr(sku, "sku", None) or cp.get("description") == ql.description:
-                        modalidad = cp.get("modalidad")
+                    if isinstance(cp, dict) and (cp.get("sku_id") == ql.sku_id or cp.get("sku") == getattr(sku, "sku", None)
+                                                 or cp.get("description") == ql.description):
+                        pareja = cp
                         break
+            if not modalidad and pareja is not None:
+                modalidad = pareja.get("modalidad")
             if not modalidad:
                 desc_lower = (ql.description or "").lower()
                 if "inmediat" in desc_lower:
@@ -3184,7 +3217,7 @@ def convertir_cotizacion_a_venta(
                 unit_price_cop=unit_price,
                 descuento_pct=Decimal(str(ql.descuento_pct or 0)),
                 customer_id=cot.customer_id,
-                tax_pct=Decimal("0"),
+                tax_pct=_tax_pct_de_linea(pareja),
                 modalidad=modalidad,
                 owner=owner,
                 quantity_reserved=Decimal("0"),
@@ -3242,10 +3275,12 @@ def convertir_cotizacion_a_venta(
                 sku_id=sku_id,
                 description=p.get("description") or p.get("product_name") or "Producto",
                 quantity=qty,
+                # IVA (B3 T4): el unitario SIN IVA (finanzas cuenta los ingresos sin IVA), el % de IVA de la linea y
+                # el descuento global de la COT en cada linea (antes la rentabilidad y la cancelacion lo perdian).
                 unit_price_cop=unit_price,
-                descuento_pct=Decimal(str(p.get("descuento_pct") or 0)),
+                descuento_pct=_descuento_pct_de_linea(p, descuento_pct),
                 customer_id=cot.customer_id,
-                tax_pct=Decimal("0"),
+                tax_pct=_tax_pct_de_linea(p),
                 modalidad=modalidad,
                 owner=owner,
                 quantity_reserved=Decimal("0"),

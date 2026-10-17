@@ -246,3 +246,22 @@ def test_con_solo_pedidos_cancelados_reparte_el_requerido_de_la_cotizacion(app_c
     _ven(db, "PVEN-T4U19I", cot, estado="CANCELADO", total_cop=1840614, saldo_cop=1840614,
          anticipo_pct_snapshot=100, cancellation_reason="Pedido duplicado")
     assert _detalle(app_client, admin_token, cot.id)["anticipo_por_linea"] == [744368.0, 280800.0, 79200.0]
+
+
+def test_reparto_usa_total_con_iva(app_client, db, admin_token):
+    """IVA (B3 T4, C4): con IVA discriminado, monto_linea toma el total con IVA de cada linea (solo para repartir el
+    anticipo). Las lineas del punto 13 del diseno: 60% de $2.171.851 = $1.303.111."""
+    sc = _sc(db, "SC-T4IVAPL", MOD_60_40)
+    productos = [
+        {"product_name": "Rodillo", "qty": 6, "unit_price_cop": 206769, "total_cop": 1240614, "iva_tarifa": "19",
+         "iva_pct": 19, "descuento_cop": 0, "base_iva_cop": 1240614, "iva_cop": 235717, "total_con_iva_cop": 1476331},
+        {"product_name": "Pintura", "qty": 4, "unit_price_cop": 117000, "total_cop": 468000, "iva_tarifa": "19",
+         "iva_pct": 19, "descuento_cop": 0, "base_iva_cop": 468000, "iva_cop": 88920, "total_con_iva_cop": 556920},
+        {"product_name": "Cinta", "qty": 10, "unit_price_cop": 13200, "total_cop": 132000, "iva_tarifa": "5",
+         "iva_pct": 5, "descuento_cop": 0, "base_iva_cop": 132000, "iva_cop": 6600, "total_con_iva_cop": 138600},
+    ]
+    cot = _cot(db, "COT-T4IVAPL", sc, productos=productos, subtotal_cop=1840614, total_cop=2171851, tax_cop=331237)
+    d = _detalle(app_client, admin_token, cot.id)
+    assert d["anticipo_requerido"] == 1303111
+    assert d["anticipo_por_linea"] == [885799.0, 334152.0, 83160.0]
+    assert sum(d["anticipo_por_linea"]) == d["anticipo_requerido"]

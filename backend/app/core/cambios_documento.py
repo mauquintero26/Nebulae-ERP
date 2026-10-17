@@ -11,6 +11,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from app.core.fechas import ZONA_COLOMBIA
+from app.core.iva import etiqueta_tarifa_iva
 
 # Columnas que se comparan por documento: nombre -> etiqueta que ve el usuario. Quedan
 # fuera a proposito el estado y la fecha de entrega (ya tienen su propio registro:
@@ -22,6 +23,8 @@ _CLIENTE = {
 }
 _PRECIOS = {
     "trm_rate": "TRM", "subtotal_cop": "Subtotal", "descuento_pct": "Descuento",
+    # IVA (B3 T4): el IVA total de la COT (fa6_028) y del pedido (sale_orders.tax_cop).
+    "tax_cop": "IVA",
     "total_cop": "Total", "anticipo_cop": "Anticipo",
 }
 CAMPOS = {
@@ -69,13 +72,13 @@ NOMBRE_ACCION = {"SC": "Solicitud actualizada", "COT": "Cotización actualizada"
 # precio ('Nivel laser ×1', no '... a $0'). Si algun dia la SC tiene precios propios, se quita de aqui.
 _SIN_PRECIO = {"SC"}
 
-_DINERO = {"subtotal_cop", "total_cop", "anticipo_cop", "saldo_cop"}
+_DINERO = {"subtotal_cop", "tax_cop", "total_cop", "anticipo_cop", "saldo_cop"}
 _TASA = {"trm_rate"}
 _PORCENTAJE = {"descuento_pct"}
 _FECHAS = {"fecha_vencimiento"}
 _ENTEROS = {"asignado_a_user_id"}
 # Si cambia alguno de estos, lo que paga el cliente cambio: eso es re-cotizar.
-_AFECTA_PRECIO = {"subtotal_cop", "total_cop", "descuento_pct", "anticipo_cop", "trm_rate", "productos"}
+_AFECTA_PRECIO = {"subtotal_cop", "tax_cop", "total_cop", "descuento_pct", "anticipo_cop", "trm_rate", "productos"}
 
 _NOMBRES_LINEA = ("product_name", "nombre", "name", "producto", "descripcion")
 _CANTIDADES = ("qty", "cantidad")
@@ -151,7 +154,8 @@ def _lineas(v):
     lineas = []
     for i, p in enumerate(v):
         if not isinstance(p, dict):
-            lineas.append({"nombre": _texto(p) or f"Línea {i + 1}", "qty": None, "precio": None, "total": None, "sku": None})
+            lineas.append({"nombre": _texto(p) or f"Línea {i + 1}", "qty": None, "precio": None, "total": None, "sku": None,
+                           "iva": None})
             continue
         lineas.append({
             "nombre": _texto(_primero(p, _NOMBRES_LINEA)) or f"Línea {i + 1}",
@@ -159,6 +163,8 @@ def _lineas(v):
             "precio": _num(_primero(p, _PRECIOS_LINEA)),
             "total": _num(p.get("total_cop")),
             "sku": _texto(p.get("sku_id")),
+            # IVA (B3 T4): la tarifa de la linea (el cliente ve el IVA de cada producto).
+            "iva": _texto(p.get("iva_tarifa")),
         })
     return lineas
 
@@ -250,6 +256,10 @@ def _cambios_productos(antes, despues, con_precio=True):
             cambios.append(_cambio("productos", f"{nombre} — total",
                                    _miles(a["total"]) if a["total"] is not None else None,
                                    _miles(n["total"]) if n["total"] is not None else None))
+        if con_precio and a["iva"] != n["iva"]:
+            # IVA (B3 T4): cambiar la tarifa cambia lo que paga el cliente ('IVA 19%' -> 'IVA 5%').
+            cambios.append(_cambio("productos", f"{nombre} — IVA", etiqueta_tarifa_iva(a["iva"]),
+                                   etiqueta_tarifa_iva(n["iva"])))
         if a["sku"] != n["sku"]:
             # Vincular una linea libre al catalogo no cambia lo que paga el cliente: campo aparte.
             cambios.append(_cambio(
@@ -363,13 +373,16 @@ def describir(entidad, cambios, antes, despues, recotizacion=False):
     if entidad == "COT" and (recotizacion or afecta_precio(cambios)):
         antes_total = _num(antes.get("total_cop"))
         despues_total = _num(despues.get("total_cop"))
+        # IVA (B3 T4): con IVA discriminado el total ya lo incluye y el renglon lo dice; con IVA 0, como antes.
+        iva = _num(despues.get("tax_cop"))
+        con_iva = f" (IVA incluido: {_miles(iva)})" if iva is not None and iva > 0 else ""
         if despues_total is not None and despues_total > 0 and not antes_total:
-            return "RECOTIZADA", f"Cotización calculada: total {_miles(despues_total)}"
+            return "RECOTIZADA", f"Cotización calculada: total {_miles(despues_total)}{con_iva}"
         if antes_total is not None and despues_total is not None and antes_total != despues_total:
             diferencia = despues_total - antes_total
             signo = "+" if diferencia > 0 else "-"
             return "RECOTIZADA", (f"Re-cotización: total {_miles(antes_total)} → {_miles(despues_total)} "
-                                  f"({signo}{_miles(abs(diferencia))})")
+                                  f"({signo}{_miles(abs(diferencia))}){con_iva}")
         if cambios:
             return "RECOTIZADA", "Re-cotización: se actualizaron los precios (el total no cambió)"
         return "RECOTIZADA", "Re-cotización guardada sin cambios en los precios"

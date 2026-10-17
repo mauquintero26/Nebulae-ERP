@@ -32,7 +32,7 @@ from app.core.correo_documento import correo_documento
 from app.core.empresa import PREFIJOS_RESERVADOS, perfil_publico
 from app.core.iva import (
     CLAVE_TARIFA_DEFECTO, MENSAJE_TARIFA_INVALIDA, normalizar_tarifa_iva, sku_id_entero, tarifa_iva_defecto,
-    tarifas_de_producto,
+    tarifas_de_producto, calcular_totales_cotizacion, desglose_documento, lineas_con_tarifa, nombre_de_linea,
 )
 from app.core.ventas_dinero import (
     redondear_peso, pesos, formato_pct, anticipo_cotizacion, pct_anticipo_cotizacion, anticipo_requerido,
@@ -112,6 +112,72 @@ def _validar_precios_productos(productos: list) -> None:
                 422,
                 f"El producto '{nombre_prod}' no tiene precio definido. Ingresa un costo/precio antes de guardar la cotización.",
             )
+
+# IVA (B3 T4): llaves del body de una COT que piden recalcular el IVA (con tarifa en todas las lineas). Un PATCH de solo
+# notas, estado o cliente no recalcula nada.
+_CAMPOS_QUE_RECALCULAN_IVA = ("productos", "descuento_pct", "subtotal_cop", "total_cop", "recotizacion")
+
+
+def _validar_iva_del_body(body: dict, cot: Optional["SalesQuotation"] = None) -> None:
+    """IVA (B3 T4, C8/R12): 422 en espanol, ANTES de tocar nada, si el IVA de lo que se va a guardar no se puede
+    calcular. Las lineas son las del body o, si no trae productos, las que ya tiene `cot` (un PATCH de solo
+    descuento_pct recalcula sobre ellas).
+    - body['productos'] con tarifa en unas lineas y en otras no: 'Indica la tarifa de IVA de todas las líneas (falta en
+      '<nombre>').'
+    - Todas con tarifa (y el body pide recalcular): calcular_totales_cotizacion en seco con el descuento del body (o el
+      de la COT); su ValueError (tarifa no valida, cantidad <= 0, descuento fuera de 0..100...) pasa como 422.
+    Sin tarifas (documentos viejos y llamadores antiguos) no valida nada: se guarda como hoy (H42)."""
+    if "productos" in body:
+        productos = body.get("productos")
+    else:
+        productos = cot.productos if cot is not None else None
+    modo = lineas_con_tarifa(productos)
+    if modo == "mezcla" and "productos" in body:
+        # La primera linea sin tarifa (lineas_con_tarifa de una sola linea es 'todas' solo si la trae).
+        i, sin_tarifa = next((i, p) for i, p in enumerate(productos) if lineas_con_tarifa([p]) != "todas")
+        raise HTTPException(422, f"Indica la tarifa de IVA de todas las líneas (falta en "
+                                 f"'{nombre_de_linea(sin_tarifa, i)}').")
+    if modo != "todas" or not any(k in body for k in _CAMPOS_QUE_RECALCULAN_IVA):
+        return
+    descuento = body.get("descuento_pct") if "descuento_pct" in body else (cot.descuento_pct if cot is not None else 0)
+    try:
+        calcular_totales_cotizacion(productos, descuento)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+def _aplicar_iva(cot: "SalesQuotation", body: dict) -> bool:
+    """IVA (B3 T4): el servidor calcula el IVA de la COT con las lineas YA APLICADAS (despues del loop del PATCH o del
+    constructor del POST). Devuelve True si lo calculo.
+    - Todas las lineas con tarifa y el body pide recalcular (_CAMPOS_QUE_RECALCULAN_IVA): calcular_totales_cotizacion
+      con cot.descuento_pct. cot.productos se asigna como una LISTA NUEVA de dicts nuevos (el bug de dirty-check del
+      JSON) y subtotal_cop, tax_cop y total_cop salen del calculo: los totales del body se ignoran (si el total del
+      body era otro, queda un aviso en el log del servidor).
+    - Sin tarifas (modo anterior) no calcula: los totales del body se guardan como hoy (H42). Si el body trae
+      productos sin tarifa y la COT tenia IVA, el IVA vuelve a 0: ya no esta discriminado y el total del body no lo
+      incluye.
+    _validar_iva_del_body ya rechazo antes lo que no se puede calcular."""
+    if not any(k in body for k in _CAMPOS_QUE_RECALCULAN_IVA):
+        return False
+    if lineas_con_tarifa(cot.productos) != "todas":
+        if "productos" in body and cot.tax_cop:
+            cot.tax_cop = Decimal("0")
+        return False
+    r = calcular_totales_cotizacion(cot.productos, cot.descuento_pct)
+    total_body = body.get("total_cop")  # los llamadores ya lo validaron (H42); aqui solo se compara para el aviso
+    try:
+        otro_total = total_body is not None and redondear_peso(total_body) != r["total_cop"]
+    except ValueError:
+        otro_total = True
+    if otro_total:
+        logger.warning("COT %s: el total del body (%s) no es el calculado con IVA (%s); se guarda el calculado",
+                       getattr(cot, "numero", "?"), total_body, r["total_cop"])
+    cot.productos = list(r["lineas"])
+    cot.subtotal_cop = Decimal(r["subtotal_cop"])
+    cot.tax_cop = Decimal(r["iva_cop"])
+    cot.total_cop = Decimal(r["total_cop"])
+    return True
+
 
 def _monto_en_pesos(valor, campo: str) -> Decimal:
     """H42: un monto que llega del cliente se guarda en pesos enteros (redondear_peso). Si no es un monto
@@ -836,6 +902,8 @@ def _cot_dict(cot: SalesQuotation) -> dict:
         "subtotal_cop": float(cot.subtotal_cop) if cot.subtotal_cop else 0,
         "descuento_pct": float(cot.descuento_pct) if cot.descuento_pct else 0,
         "total_cop": float(cot.total_cop) if cot.total_cop else 0,
+        # IVA (B3 T4): iva_cop (tax_cop), iva_discriminado, descuento_cop e iva_por_tarifa. Puro: no consulta la base.
+        **desglose_documento(cot),
         "anticipo_cop": float(cot.anticipo_cop) if cot.anticipo_cop else 0,
         # R3: anticipo puesto a mano (None = sigue la modalidad de la SC) y su nota.
         "anticipo_pct_manual": float(cot.anticipo_pct_manual) if cot.anticipo_pct_manual is not None else None,
@@ -880,6 +948,8 @@ def _ven_dict(v: SaleOrder) -> dict:
         "subtotal_cop": float(v.subtotal_cop) if v.subtotal_cop else 0,
         "descuento_pct": float(v.descuento_pct) if v.descuento_pct else 0,
         "total_cop": float(v.total_cop) if v.total_cop else 0,
+        # IVA (B3 T4): el mismo desglose que la cotizacion (iva_cop = tax_cop del pedido). Puro: no consulta la base.
+        **desglose_documento(v),
         "anticipo_cop": float(v.anticipo_cop) if v.anticipo_cop else 0,
         "saldo_cop": float(v.saldo_cop) if v.saldo_cop else 0,
         "anticipo_pct": float(v.anticipo_pct_snapshot) if v.anticipo_pct_snapshot is not None else None,
@@ -2070,6 +2140,7 @@ def list_cotizaciones(
 def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
         db: Session = Depends(get_db)):
     _validar_precios_productos(body.get("productos") or [])
+    _validar_iva_del_body(body)  # IVA (B3 T4): 422 antes de gastar un numero de la secuencia
     _exigir_cotizador_que_quepa(body.get("cotizador"))  # T11 calidad (A1)
     # H42: la cabecera se guarda en pesos enteros (antes de gastar un numero de la secuencia).
     subtotal_cop = _monto_en_pesos(body.get("subtotal_cop"), "subtotal_cop")
@@ -2141,9 +2212,15 @@ def create_cotizacion(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN
         productos=body.get("productos", []),
         created_by=body.get("created_by"),
     )
+    # IVA (B3 T4, C18): con tarifa en todas las lineas el servidor calcula subtotal, IVA y total (los del body se
+    # ignoran) ANTES del anticipo, que sale del total con IVA.
+    con_iva = _aplicar_iva(cot, body)
     if sc is not None:
         # H36+H43: con SC, el anticipo sale de su modalidad de pago (o 60%), nunca del body.
         cot.anticipo_cop = anticipo_cotizacion(cot, db, sc=sc).requerido
+    elif con_iva:
+        # Sin SC se respeta el anticipo del body, pero nunca mas que el total con IVA.
+        cot.anticipo_cop = min(anticipo_cop, cot.total_cop)
     db.add(cot)
     if sc is not None:
         # B3 (revision final): la Actividad de la SC cuenta esta COT con el mismo renglon de confirmar_solicitud
@@ -2507,15 +2584,16 @@ def _soltar_cotizacion_de_la_solicitud(db: Session, sc: CustomerRequest, cot: Sa
 
 # Gate 2 (Round 2, hallazgo #5): lo que el cliente vio y confirmo (o esta por confirmar) en una COT. Si un PATCH cambia
 # alguno en el ciclo vigente de Gate 2, la confirmacion ya no aplica (ver update_cotizacion). El anticipo NO esta
-# (H36+H43: el cliente no lo ve).
+# (H36+H43: el cliente no lo ve). IVA (B3 T4, C18): el IVA total (tax_cop) si; la tarifa de cada linea va en la
+# proyeccion de productos (_freeze_producto_proyectado).
 PRICE_FREEZE_FIELDS = ["productos", "total_cop", "subtotal_cop", "descuento_pct",
-                       "trm_rate", "fecha_entrega_estimada", "sc_id"]
+                       "trm_rate", "fecha_entrega_estimada", "sc_id", "tax_cop"]
 # H40: cada campo de PRICE_FREEZE_FIELDS -> como se nombra en el aviso de ANULA_CONFIRMACION y en la Actividad. Mismo
 # orden que PRICE_FREEZE_FIELDS (una prueba exige que cubra todos; si falta uno, se muestra el nombre del campo).
 _ETIQUETAS_CONGELADAS = {
     "productos": "Productos, cantidades o precios", "total_cop": "Total", "subtotal_cop": "Total",
     "descuento_pct": "Descuento", "trm_rate": "TRM", "fecha_entrega_estimada": "Fecha de entrega",
-    "sc_id": "Solicitud de origen",
+    "sc_id": "Solicitud de origen", "tax_cop": "IVA",
 }
 # H40: largo de la razon de anular la confirmacion (motivo_recotizacion). T9A pone el mismo maxLength en el textarea.
 MIN_RAZON_RECOTIZACION, MAX_RAZON_RECOTIZACION = 5, 500
@@ -2561,6 +2639,8 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
                     if retoma_sin_confirmacion and cambio_de_solicitud is None else None)
     if "productos" in body:
         _validar_precios_productos(body.get("productos") or [])
+    # IVA (B3 T4): tarifas mezcladas o que no se pueden calcular -> 422 antes de tocar nada.
+    _validar_iva_del_body(body, cot)
     # R3: anticipo manual con nota obligatoria. Se valida aqui, antes de tocar nada (409/422).
     ajuste_manual = _leer_ajuste_anticipo_manual(db, cot, body)
     old_estado = cot.estado
@@ -2622,8 +2702,11 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         pct_manual, nota_manual = ajuste_manual
         cambia_manual = (pct_manual != cot.anticipo_pct_manual) or (nota_manual != cot.anticipo_manual_nota)
         cot.anticipo_pct_manual, cot.anticipo_manual_nota = pct_manual, nota_manual
+    # IVA (B3 T4, C18): despues del loop y del anticipo manual, ANTES de cambia_total: el anticipo de H36/R3 de abajo se
+    # recalcula con el total que ya incluye el IVA.
+    _aplicar_iva(cot, body)
 
-    _PRICE_DECIMAL_FIELDS = ("total_cop", "subtotal_cop", "descuento_pct", "trm_rate")
+    _PRICE_DECIMAL_FIELDS = ("total_cop", "subtotal_cop", "descuento_pct", "trm_rate", "tax_cop")
 
     def _quantize_cop(v):
         if v is None:
@@ -2646,10 +2729,13 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         antes de este fix comparar el JSON crudo completo hacia que esa accion, por si
         sola, rompiera el congelamiento -- justo el tipo de edicion que un asesor hace
         normalmente poco antes de crear el Pedido de Venta, cuando la COT ya esta
-        CONFIRMADA con mas frecuencia."""
+        CONFIRMADA con mas frecuencia.
+        IVA (B3 T4): tambien la tarifa de la linea (iva_tarifa; '' cuenta como sin tarifa), porque el cliente ve el IVA
+        de cada producto. Vincular al catalogo sigue sin romper la confirmacion."""
         if not isinstance(p, dict):
             return p
-        return (p.get("product_name"), p.get("qty"), _quantize_cop(p.get("unit_price_cop")), _quantize_cop(p.get("total_cop")))
+        return (p.get("product_name"), p.get("qty"), _quantize_cop(p.get("unit_price_cop")),
+                _quantize_cop(p.get("total_cop")), p.get("iva_tarifa") or None)
 
     def _freeze_cmp(field, v):
         """Normaliza para comparar. Problemas distintos de tipo/precision/bookkeeping,
@@ -3421,9 +3507,13 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
     # R11 (H42): la re-cotizacion propaga total y subtotal con decimales al PVEN: el servidor los deja en pesos
     # enteros.
     _redondear_montos_del_body(body, ("subtotal_cop", "total_cop", "saldo_cop", "anticipo_cop"))
+    # IVA (B3 T4): la propagacion de la re-cotizacion manda el IVA total como iva_cop (en el pedido, tax_cop), al peso.
+    iva_nuevo = _monto_en_pesos(body["iva_cop"], "iva_cop") if body.get("iva_cop") is not None else None
     for k in allowed:
         if k in body:
             setattr(v, k, body[k])
+    if iva_nuevo is not None:
+        v.tax_cop = iva_nuevo
     if recalcula_desde_el_libro:
         from app.api.v1.erp_ventas_fase4 import _cabecera_desde_el_libro_de_pagos
         _cabecera_desde_el_libro_de_pagos(v, db)

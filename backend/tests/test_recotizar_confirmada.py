@@ -89,6 +89,28 @@ def test_el_409_nombra_lo_que_cambio(app_client, db, admin_token):
         assert resp.json()["detail"]["cambios"] == cambios, body
 
 
+def test_el_409_nombra_el_iva(app_client, db, admin_token):
+    """IVA (B3 T4, C18): con las tarifas en las lineas, cambiar una tarifa o el descuento cambia el IVA, y la lista del
+    409 lo nombra ('IVA', al final: el orden de PRICE_FREEZE_FIELDS). Sin tarifas (las pruebas de arriba) el IVA no
+    cambia y la lista sigue igual."""
+    from app.core.iva import calcular_totales_cotizacion
+    lineas = [{"product_name": "Rodillo", "qty": 6, "unit_price_cop": 206769, "iva_tarifa": "19"},
+              {"product_name": "Cinta", "qty": 10, "unit_price_cop": 13200, "iva_tarifa": "5"}]
+    r = calcular_totales_cotizacion(lineas, 0)
+    con_tarifa_5 = [dict(p) for p in r["lineas"]]
+    con_tarifa_5[0] = {**con_tarifa_5[0], "iva_tarifa": "5"}
+    casos = [({"productos": con_tarifa_5}, ["Productos, cantidades o precios", "Total", "IVA"]),
+             ({"descuento_pct": 10}, ["Total", "Descuento", "IVA"])]
+    for i, (body, cambios) in enumerate(casos):
+        cot = _cot(db, f"COT-T4IVA409{i}", "CONFIRMADA", total=r["total_cop"], productos=r["lineas"],
+                   tax_cop=r["iva_cop"])
+        cot.subtotal_cop = r["subtotal_cop"]
+        db.commit()
+        resp = _patch(app_client, admin_token, cot.id, {**body, "recotizacion": True, "updated_by": "t"})
+        assert resp.status_code == 409, (body, resp.text)
+        assert resp.json()["detail"]["cambios"] == cambios, body
+
+
 def test_recotizar_pendiente_sin_aceptar_deja_vivo_el_enlace(app_client, db, admin_token):
     cot = _cot(db, "COT-T4H40B", "BORRADOR")
     resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/enviar-confirmacion", json={"user_name": "t"},

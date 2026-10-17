@@ -113,6 +113,9 @@ class SalesQuotation(Base):
     subtotal_cop          = Column(Numeric(14, 2), default=0)
     descuento_pct         = Column(Numeric(5, 2), default=0)
     total_cop             = Column(Numeric(14, 2), default=0)
+    # IVA (Bloque 3, fa6_028): IVA total (en el API: iva_cop). Lo calcula el servidor cuando todas las lineas traen su
+    # tarifa (iva.calcular_totales_cotizacion); total_cop ya lo incluye. 0 = IVA no discriminado (documentos viejos).
+    tax_cop               = Column(Numeric(14, 2), nullable=False, server_default='0', default=0)
     anticipo_cop          = Column(Numeric(14, 2), default=0)
     estado                = Column(String(50), nullable=False, default="BORRADOR")
     canal_envio           = Column(String(20), nullable=True)
