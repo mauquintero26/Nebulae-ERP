@@ -11,7 +11,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from app.core.fechas import ZONA_COLOMBIA
-from app.core.iva import etiqueta_tarifa_iva
+from app.core.iva import etiqueta_tarifa_iva, nombre_de_linea
 
 # Columnas que se comparan por documento: nombre -> etiqueta que ve el usuario. Quedan
 # fuera a proposito el estado y la fecha de entrega (ya tienen su propio registro:
@@ -80,7 +80,6 @@ _ENTEROS = {"asignado_a_user_id"}
 # Si cambia alguno de estos, lo que paga el cliente cambio: eso es re-cotizar.
 _AFECTA_PRECIO = {"subtotal_cop", "tax_cop", "total_cop", "descuento_pct", "anticipo_cop", "trm_rate", "productos"}
 
-_NOMBRES_LINEA = ("product_name", "nombre", "name", "producto", "descripcion")
 _CANTIDADES = ("qty", "cantidad")
 _PRECIOS_LINEA = ("unit_price_cop", "precio_unitario", "precio_cop")
 
@@ -153,12 +152,13 @@ def _lineas(v):
         return []
     lineas = []
     for i, p in enumerate(v):
+        # El nombre sale de iva.nombre_de_linea (ronda r1 de T4): la misma regla y el mismo 'Línea N' que el 422 de IVA.
         if not isinstance(p, dict):
-            lineas.append({"nombre": _texto(p) or f"Línea {i + 1}", "qty": None, "precio": None, "total": None, "sku": None,
+            lineas.append({"nombre": nombre_de_linea(p, i), "qty": None, "precio": None, "total": None, "sku": None,
                            "iva": None})
             continue
         lineas.append({
-            "nombre": _texto(_primero(p, _NOMBRES_LINEA)) or f"Línea {i + 1}",
+            "nombre": nombre_de_linea(p, i),
             "qty": _num(_primero(p, _CANTIDADES)),
             "precio": _num(_primero(p, _PRECIOS_LINEA)),
             "total": _num(p.get("total_cop")),

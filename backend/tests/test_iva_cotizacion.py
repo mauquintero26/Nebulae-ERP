@@ -67,9 +67,8 @@ def _patch(app_client, token, cot_id, body):
 
 
 def _recotizar(app_client, token, cot_id, productos, **extra):
-    """Lo que manda la Calculadora: productos con su tarifa, totales (que el servidor ignora) y recotizacion."""
-    resp = _patch(app_client, token, cot_id, {"productos": productos, "subtotal_cop": 1, "total_cop": 1,
-                                              "recotizacion": True, **extra})
+    """Productos con su tarifa y recotizacion, sin totales: los calcula el servidor (la prueba 7 manda uno falso)."""
+    resp = _patch(app_client, token, cot_id, {"productos": productos, "recotizacion": True, **extra})
     assert resp.status_code == 200, resp.text
     return resp.json()["data"]
 
@@ -155,10 +154,19 @@ def test_invariantes_en_casos_fijos():
           _linea("D", 1, 100001, "EXCLUIDO")], 7.5, 392204),
         ([_linea("Cuna", 2, 342462, "19")], 0, 815060),
         ([_linea("A", 3, 99999, "19"), _linea("B", 7, 1, "5"), _linea("C", 1, 55555, "19")], 33.33, 282090),
+        # Ronda r1 (bordes): descuento del 100% (todo en 0), una linea de precio 0 junto a otra (solo en la funcion
+        # pura: la API la rechaza), 40 lineas con residuos y una cantidad de 2,5.
+        (_ejemplo(), 100, 0),
+        ([_linea("Regalo", 1, 0, "19"), _linea("Cuna", 2, 342462, "19")], 10, 733554),
+        ([_linea(f"P{i}", (i % 3) + 1, 997 + 131 * i, ("19", "5", "EXENTO", "EXCLUIDO")[i % 4]) for i in range(40)],
+         33.33, 198069),
+        ([_linea("Tela", 2.5, 12345, "19"), _linea("Botón", 3, 999, "5")], 7.5, 36883),
     ]
     for productos, descuento, total in casos:
         r = calcular_totales_cotizacion(productos, descuento)
         assert r["total_cop"] == total, (productos, descuento)
+        if descuento == 100:
+            assert r["iva_cop"] == 0 and _campo(r, "base_iva_cop") == [0, 0, 0] and r["descuento_cop"] == 1840614
         assert sum(_campo(r, "total_cop")) == r["subtotal_cop"], descuento
         assert sum(_campo(r, "descuento_cop")) == r["descuento_cop"], descuento
         assert sum(_campo(r, "iva_cop")) == r["iva_cop"] == sum(f["iva_cop"] for f in r["iva_por_tarifa"])
@@ -213,11 +221,23 @@ def test_lineas_con_tarifa_y_errores_legibles():
         (_ejemplo(), -1, "El descuento debe estar entre 0 y 100%."),
         (_ejemplo(), "diez", "El descuento debe estar entre 0 y 100%."),
         ([_linea("Rodillo", 1, 5, None)], 0, "Indica la tarifa de IVA de 'Rodillo'."),
+        ([_linea("Rodillo", 1, 5, "19"), "Texto viejo"], 0, "La línea 2 no es un producto válido."),
     ]
     for productos, descuento, mensaje in casos:
         with pytest.raises(ValueError) as error:
             calcular_totales_cotizacion(productos, descuento)
         assert str(error.value).startswith(mensaje), (mensaje, str(error.value))
+
+
+def test_nombre_de_linea_es_el_mismo_en_el_422_y_en_la_actividad():
+    """Ronda r1 (calidad 7): una sola regla para nombrar una linea (iva.nombre_de_linea), con el mismo respaldo
+    'Línea N' en los mensajes de IVA y en la Actividad (cambios_documento)."""
+    from app.core import cambios_documento
+    from app.core.iva import nombre_de_linea
+    lineas = [{"qty": 1}, "Texto viejo", {"name": 7}, {"nombre": " Silla ", "product_name": None}, {"product_name": " "}]
+    esperados = ["Línea 1", "Texto viejo", "7", "Silla", "Línea 5"]
+    assert [nombre_de_linea(p, i) for i, p in enumerate(lineas)] == esperados
+    assert [l["nombre"] for l in cambios_documento._lineas(lineas)] == esperados
 
 
 def test_calcular_no_toca_las_lineas_que_recibe():
@@ -244,13 +264,63 @@ def test_desglose_documento():
     # Sin lineas no esta discriminado; el descuento nunca es negativo.
     assert desglose_documento({"productos": [], "subtotal_cop": 100, "total_cop": 150})["descuento_cop"] == 0
     assert desglose_documento({"productos": []})["iva_discriminado"] is False
+    # Ronda r1: un resumen por tarifa que no cuadra con la cabecera no se muestra (IVA no discriminado): ni el IVA
+    # (las lineas con la Cinta frente a una cabecera sin ella), ni las bases (un peso de mas en el total).
+    sin_cinta = {**doc, "subtotal_cop": 1708614, "tax_cop": 292173, "total_cop": 1829926}
+    assert desglose_documento(sin_cinta) == {"iva_discriminado": False, "iva_cop": 292173, "descuento_cop": 170861,
+                                             "iva_por_tarifa": []}
+    un_peso = {**doc, "total_cop": 1954667}
+    assert desglose_documento(un_peso)["iva_discriminado"] is False
+    assert desglose_documento(un_peso)["iva_por_tarifa"] == []
+
+
+def test_cancelar_cantidad():
+    """Ronda r1 (dinero 6 y 7): la cancelacion de un pedido con tarifas. Las lineas que no se tocan conservan sus
+    valores; la cancelada en parte se reescala desde los suyos (con la regla del IVA sobre su base nueva); la
+    cancelada del todo sale. Lista nueva de dicts nuevos y totales que cuadran con el resumen."""
+    import pytest
+    from app.core.iva import calcular_totales_cotizacion, cancelar_cantidad
+    r = calcular_totales_cotizacion(_ejemplo(), 10)
+    originales = [dict(p) for p in r["lineas"]]
+    lineas, totales = cancelar_cantidad(r["lineas"], 0, 2)
+    assert r["lineas"] == originales  # la entrada no se toca
+    assert all(nueva is not vieja for nueva, vieja in zip(lineas, r["lineas"]))
+    assert lineas[0] == {**originales[0], "qty": 4, "total_cop": 827076, "descuento_cop": 82707,
+                         "base_iva_cop": 744369, "iva_cop": 141430, "total_con_iva_cop": 885799}
+    assert lineas[1:] == originales[1:]
+    assert totales == {"subtotal_cop": 1427076, "descuento_cop": 142707, "iva_cop": 227398, "total_cop": 1511767,
+                       "iva_por_tarifa": [{"tarifa": "19", "etiqueta": "IVA 19%", "base_cop": 1165569,
+                                           "iva_cop": 221458},
+                                          {"tarifa": "5", "etiqueta": "IVA 5%", "base_cop": 118800, "iva_cop": 5940}]}
+    # Encadenada: se reescala desde lo guardado (4 -> 3).
+    lineas, totales = cancelar_cantidad(lineas, 0, 1)
+    assert lineas[0] == {**originales[0], "qty": 3, "total_cop": 620307, "descuento_cop": 62030,
+                         "base_iva_cop": 558277, "iva_cop": 106073, "total_con_iva_cop": 664350}
+    assert (totales["subtotal_cop"], totales["iva_cop"], totales["total_cop"]) == (1220307, 192041, 1290318)
+    # Del todo: la linea sale y el resumen pierde su tarifa.
+    lineas, totales = cancelar_cantidad(r["lineas"], 2, Decimal("10"))
+    assert lineas == originales[:2]
+    assert (totales["subtotal_cop"], totales["descuento_cop"], totales["iva_cop"], totales["total_cop"]) == (
+        1708614, 170861, 292173, 1829926)
+    assert [f["tarifa"] for f in totales["iva_por_tarifa"]] == ["19"]
+    for indice, cantidad in ((3, 1), (-1, 1), (0, 0), (0, 7), (0, "x")):
+        with pytest.raises(ValueError):
+            cancelar_cantidad(r["lineas"], indice, cantidad)
+    with pytest.raises(ValueError):
+        cancelar_cantidad(_ejemplo(tarifas=(None, None, None)), 0, 1)
 
 
 # ─── 7 a 12: PATCH /cotizaciones ─────────────────────────────────────────────────────
 
-def test_patch_con_tarifas_lo_calcula_el_servidor(app_client, db, admin_token):
+def test_patch_con_tarifas_lo_calcula_el_servidor(app_client, db, admin_token, monkeypatch):
+    from app.api.v1 import erp_ventas
+    avisos = []
+    monkeypatch.setattr(erp_ventas.logger, "warning", lambda *args, **kwargs: avisos.append(args))
     cot = _cot(db, "COT-T4IVA07")
-    d = _recotizar(app_client, admin_token, cot.id, _ejemplo())
+    # Totales falsos en el body: el servidor los ignora y lo deja en su log (aviso con el total del body y el calculado).
+    d = _recotizar(app_client, admin_token, cot.id, _ejemplo(), subtotal_cop=1, total_cop=1)
+    assert len(avisos) == 1, avisos
+    assert avisos[0][1:] == ("COT-T4IVA07", Decimal("1"), 2171851), avisos
     db.expire_all()
     db.refresh(cot)
     assert cot.total_cop == 2171851 and cot.tax_cop == 331237 and cot.subtotal_cop == 1840614
@@ -283,11 +353,45 @@ def test_patch_sin_tarifas_sigue_como_hoy(app_client, db, admin_token):
     assert "IVA incluido" not in renglon.description
 
 
+def test_cotizacion_en_cero_queda_calculada_con_iva(app_client, db, admin_token):
+    """Ronda r1 (cumplimiento 2): la primera re-cotizacion de una COT en $0 dice 'Cotización calculada' con el IVA."""
+    cot = _cot(db, "COT-T4IVA07B", subtotal_cop=0, total_cop=0)
+    _recotizar(app_client, admin_token, cot.id, _ejemplo())
+    [renglon] = _logs(db, "COT", cot.id, "RECOTIZADA")
+    assert renglon.description == "Cotización calculada: total $2.171.851 (IVA incluido: $331.237)"
+
+
+def test_descuento_invalido_sin_productos_es_422_sin_cambios(app_client, db, admin_token):
+    """Ronda r1 (duda 3): un PATCH sin productos sobre una COT con tarifas se valida contra sus lineas guardadas,
+    antes de tocar nada (sin `cot` en _validar_iva_del_body seria un 500 dentro de _aplicar_iva)."""
+    cot = _cot(db, "COT-T4IVA09B")
+    _recotizar(app_client, admin_token, cot.id, _ejemplo())
+    db.expire_all()
+    db.refresh(cot)
+    productos, renglones = [dict(p) for p in cot.productos], len(_logs(db, "COT", cot.id))
+    resp = _patch(app_client, admin_token, cot.id, {"descuento_pct": 150, "recotizacion": True})
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == "El descuento debe estar entre 0 y 100%."
+    db.expire_all()
+    db.refresh(cot)
+    assert (cot.tax_cop, cot.total_cop, cot.descuento_pct) == (331237, 2171851, 0)
+    assert cot.productos == productos and len(_logs(db, "COT", cot.id)) == renglones
+
+
 def test_lineas_sin_tarifa_quitan_el_iva_viejo(app_client, db, admin_token):
-    """Un llamador antiguo que manda productos sin tarifa a una COT que ya tenia IVA: modo anterior (los totales del
-    body), y el IVA vuelve a 0 (ya no esta discriminado y el total del body no lo incluye)."""
+    """Un llamador antiguo que manda productos sin tarifa a una COT que ya tenia IVA: modo anterior.
+    - Sin totales en el body (ronda r1, calidad 3): el total guardado sigue incluyendo el IVA, asi que el IVA se
+      conserva y el desglose cuadra (no discriminado, descuento 0).
+    - Con total_cop en el body: ese total no lo incluye, y el IVA vuelve a 0."""
     cot = _cot(db, "COT-T4IVA08B")
     _recotizar(app_client, admin_token, cot.id, _ejemplo())
+    resp = _patch(app_client, admin_token, cot.id, {"productos": _ejemplo(tarifas=(None, None, None))})
+    assert resp.status_code == 200, resp.text
+    d = resp.json()["data"]
+    db.expire_all()
+    db.refresh(cot)
+    assert (cot.tax_cop, cot.total_cop) == (331237, 2171851)
+    assert d["iva_discriminado"] is False and d["iva_cop"] == 331237 and d["descuento_cop"] == 0
     resp = _patch(app_client, admin_token, cot.id, {"productos": _ejemplo(tarifas=(None, None, None)),
                                                     "subtotal_cop": 1840614, "total_cop": 1840614})
     assert resp.status_code == 200, resp.text
@@ -307,6 +411,11 @@ def test_tarifa_invalida_o_mezclada_es_422_sin_cambios(app_client, db, admin_tok
          "Indica la tarifa de IVA de todas las líneas (falta en 'Cinta')."),
         ([_linea("Rodillo", 0, 206769, "19")], {}, "La cantidad de 'Rodillo' debe ser mayor que 0."),
         (_ejemplo(), {"descuento_pct": 150}, "El descuento debe estar entre 0 y 100%."),
+        # Ronda r1 (dinero 2): con tarifa, el servidor cobra unit_price_cop x qty; sin precio unitario (aunque traiga
+        # total_cop, que _validar_precios_productos acepta) la linea se cobraria a $0.
+        ([{"product_name": "Rodillo", "qty": 2, "total_cop": 413538, "iva_tarifa": "19"}, _linea("Cinta", 10, 13200, "5")],
+         {}, "El precio unitario de 'Rodillo' no es válido."),
+        ([_linea("Rodillo", 2, 0, "19", total_cop=413538)], {}, "El precio unitario de 'Rodillo' no es válido."),
     ]
     for productos, extra, mensaje in casos:
         resp = _patch(app_client, admin_token, cot.id, {"productos": productos, "total_cop": 5, "subtotal_cop": 5,
@@ -414,8 +523,8 @@ def test_crear_cotizacion_con_tarifas_lo_calcula_el_servidor(app_client, db, adm
     casos = [(5000000, 2171851), (1000, 1000)]
     for anticipo, esperado in casos:
         resp = app_client.post("/api/v1/ventas/cotizaciones", json={
-            "customer_name": "Cliente Prueba", "productos": _ejemplo(), "subtotal_cop": 1, "total_cop": 1,
-            "anticipo_cop": anticipo, "created_by": "t"}, headers=auth(admin_token))
+            "customer_name": "Cliente Prueba", "productos": _ejemplo(), "anticipo_cop": anticipo, "created_by": "t"},
+            headers=auth(admin_token))
         assert resp.status_code == 201, resp.text
         d = resp.json()["data"]
         assert d["total_cop"] == 2171851 and d["iva_cop"] == 331237 and d["iva_discriminado"] is True
@@ -439,8 +548,7 @@ def test_crear_cotizacion_con_sc_cobra_el_anticipo_sobre_el_total_con_iva(app_cl
                          estado="CONFIRMADA", gate1_confirmed_at=datetime.datetime.utcnow())
     db.add(sc); db.commit(); db.refresh(sc)
     resp = app_client.post("/api/v1/ventas/cotizaciones", json={
-        "sc_id": sc.id, "productos": _ejemplo(), "subtotal_cop": 1, "total_cop": 1, "anticipo_cop": 1,
-        "created_by": "t"}, headers=auth(admin_token))
+        "sc_id": sc.id, "productos": _ejemplo(), "anticipo_cop": 1, "created_by": "t"}, headers=auth(admin_token))
     assert resp.status_code == 201, resp.text
     cot = db.query(SalesQuotation).filter(SalesQuotation.id == resp.json()["data"]["id"]).one()
     assert (cot.total_cop, cot.tax_cop, cot.anticipo_cop) == (2171851, 331237, 1303111)
@@ -448,13 +556,13 @@ def test_crear_cotizacion_con_sc_cobra_el_anticipo_sobre_el_total_con_iva(app_cl
 
 # ─── 15 a 18: pedido, orden de pago y cancelacion de lineas ─────────────────────────
 
-def _pedido_del_ejemplo(app_client, db, token, numero):
-    """COT del ejemplo con 10% de descuento, CONFIRMADA con Gate 2 y SC a credito (sin anticipo que verificar),
-    convertida con POST /confirmar. Devuelve (cot, pedido)."""
+def _pedido_del_ejemplo(app_client, db, token, numero, productos=None, descuento=10):
+    """COT (el ejemplo con 10% de descuento, u otras lineas), CONFIRMADA con Gate 2 y SC a credito (sin anticipo que
+    verificar), convertida con POST /confirmar. Devuelve (cot, pedido)."""
     from app.models.erp_documents import SaleOrder
     sc = _sc(db, f"SC-{numero}", "Credito 30 dias")
     cot = _cot(db, f"COT-{numero}", sc=sc)
-    _recotizar(app_client, token, cot.id, _ejemplo(), descuento_pct=10)
+    _recotizar(app_client, token, cot.id, productos if productos is not None else _ejemplo(), descuento_pct=descuento)
     db.expire_all()
     db.refresh(cot)
     cot.estado = "CONFIRMADA"
@@ -498,26 +606,165 @@ def test_pxp_cobra_total_con_iva(app_client, db, admin_token):
     assert (pxp.monto_total, pxp.monto_pendiente, pxp.monto_anticipo) == (1954666, 1954666, 0)
 
 
+def _cancelar(app_client, token, so_id, linea_id, cantidad=None):
+    body = {"motivo": "El cliente ya no la necesita"}
+    if cantidad is not None:
+        body["quantity"] = cantidad
+    resp = app_client.post(f"/api/v1/ventas/pedidos/{so_id}/lineas/{linea_id}/cancelar", json=body,
+                           headers=auth(token))
+    assert resp.status_code == 200, resp.text
+    return resp.json()["data"]
+
+
+def _detalle_pedido(app_client, token, so_id):
+    resp = app_client.get(f"/api/v1/ventas/pedidos/{so_id}", headers=auth(token))
+    assert resp.status_code == 200, resp.text
+    return resp.json()["data"]
+
+
+def _filas_pedido(d):
+    return [(f["tarifa"], f["base_cop"], f["iva_cop"]) for f in d["iva_por_tarifa"]]
+
+
 def test_cancelar_linea_mantiene_pesos_y_descuento(app_client, db, admin_token):
     _, so = _pedido_del_ejemplo(app_client, db, admin_token, "T4IVA17")
+    antes = [dict(p) for p in so.productos]
     cinta = _lineas_del_pedido(db, so)[2]
     assert cinta.description == "Cinta"
-    resp = app_client.post(f"/api/v1/ventas/pedidos/{so.id}/lineas/{cinta.id}/cancelar",
-                           json={"motivo": "El cliente ya no la necesita"}, headers=auth(admin_token))
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["data"]["sale_order_total_cop"] == 1829926
+    assert _cancelar(app_client, admin_token, so.id, cinta.id)["sale_order_total_cop"] == 1829926
     db.expire_all()
     db.refresh(so)
     assert (so.total_cop, so.tax_cop, so.subtotal_cop) == (1829926, 292173, 1708614)
     for monto in (so.total_cop, so.tax_cop, so.subtotal_cop, so.saldo_cop):
         assert monto == monto.to_integral_value(), monto
     assert so.saldo_cop == so.total_cop
+    # Ronda r1 (dinero 6): el desglose del pedido cuadra. La Cinta ya no aparece (ni su tarifa del 5%) y las lineas
+    # que no se tocaron tienen exactamente los mismos valores.
+    d = _detalle_pedido(app_client, admin_token, so.id)
+    assert d["productos"] == antes[:2]
+    assert _filas_pedido(d) == [("19", 1537753, 292173)]
+    assert sum(f["iva_cop"] for f in d["iva_por_tarifa"]) == d["iva_cop"] == 292173
+    assert d["iva_discriminado"] is True and d["descuento_cop"] == 170861
+
+
+def test_cancelar_con_muchas_lineas_no_toca_las_demas(app_client, db, admin_token):
+    """Ronda r1 (dinero 7): 10 lineas de $20 EXENTO y una de $1.000 al 19%, con 2,5% de descuento. El reparto de la
+    COT les dio [1,1,1,1,1,0,0,0,0,0] de descuento (total 195). Al cancelar la de $1.000 conservan esos valores
+    (recalcularlas linea por linea les quitaba $5)."""
+    productos = [_linea(f"P{i}", 1, 20, "EXENTO") for i in range(10)] + [_linea("Grande", 1, 1000, "19")]
+    _, so = _pedido_del_ejemplo(app_client, db, admin_token, "T4IVAML", productos=productos, descuento=2.5)
+    assert (so.subtotal_cop, so.tax_cop, so.total_cop) == (1200, 185, 1355)
+    antes = [dict(p) for p in so.productos]
+    assert [p["descuento_cop"] for p in antes[:10]] == [1, 1, 1, 1, 1, 0, 0, 0, 0, 0]
+    grande = _lineas_del_pedido(db, so)[10]
+    assert grande.description == "Grande"
+    _cancelar(app_client, admin_token, so.id, grande.id)
+    db.expire_all()
+    db.refresh(so)
+    assert (so.subtotal_cop, so.tax_cop, so.total_cop, so.saldo_cop) == (200, 0, 195, 195)
+    d = _detalle_pedido(app_client, admin_token, so.id)
+    assert d["productos"] == antes[:10]
+    assert _filas_pedido(d) == [("EXENTO", 195, 0)] and d["descuento_cop"] == 5 and d["iva_cop"] == 0
+
+
+def test_cancelacion_parcial_reescala_solo_esa_linea(app_client, db, admin_token):
+    """Ronda r1: cancelar 2 de 6 Rodillos y despues 1 mas. Solo cambia el Rodillo, reescalado desde lo guardado; la
+    cabecera es la suma de las lineas y el resumen por tarifa cuadra."""
+    _, so = _pedido_del_ejemplo(app_client, db, admin_token, "T4IVAPC")
+    antes = [dict(p) for p in so.productos]
+    rodillo = _lineas_del_pedido(db, so)[0]
+    assert _cancelar(app_client, admin_token, so.id, rodillo.id, 2)["sale_order_total_cop"] == 1511767
+    d = _detalle_pedido(app_client, admin_token, so.id)
+    assert d["productos"][0] == {**antes[0], "qty": 4, "total_cop": 827076, "descuento_cop": 82707,
+                                 "base_iva_cop": 744369, "iva_cop": 141430, "total_con_iva_cop": 885799}
+    assert d["productos"][1:] == antes[1:]
+    assert (d["subtotal_cop"], d["iva_cop"], d["total_cop"], d["descuento_cop"]) == (1427076, 227398, 1511767, 142707)
+    assert _filas_pedido(d) == [("19", 1165569, 221458), ("5", 118800, 5940)]
+    _cancelar(app_client, admin_token, so.id, rodillo.id, 1)
+    d = _detalle_pedido(app_client, admin_token, so.id)
+    assert d["productos"][0] == {**antes[0], "qty": 3, "total_cop": 620307, "descuento_cop": 62030,
+                                 "base_iva_cop": 558277, "iva_cop": 106073, "total_con_iva_cop": 664350}
+    assert d["productos"][1:] == antes[1:]
+    assert (d["subtotal_cop"], d["iva_cop"], d["total_cop"]) == (1220307, 192041, 1290318)
+    assert sum(f["iva_cop"] for f in d["iva_por_tarifa"]) == d["iva_cop"]
+
+
+def test_cancelar_sin_emparejar_el_json_no_muestra_un_resumen_que_no_cuadra(app_client, db, admin_token):
+    """Ronda r1: si las lineas del pedido ya no coinciden con su JSON (aqui la propagacion de una re-cotizacion dejo
+    el Rodillo en 5 unidades y la linea del pedido sigue en 6), no se puede saber que linea del JSON cancelar: la
+    cabecera sale de las lineas del pedido, el JSON no se toca y el desglose cae a 'IVA no discriminado'."""
+    from app.core.iva import calcular_totales_cotizacion
+    _, so = _pedido_del_ejemplo(app_client, db, admin_token, "T4IVASE")
+    r = calcular_totales_cotizacion([_linea("Rodillo", 5, 206769, "19")] + _ejemplo()[1:], 10)
+    resp = app_client.patch(f"/api/v1/ventas/pedidos/{so.id}", json={
+        "productos": r["lineas"], "subtotal_cop": r["subtotal_cop"], "total_cop": r["total_cop"],
+        "iva_cop": r["iva_cop"], "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["iva_discriminado"] is True  # antes de cancelar, cuadra
+    cinta = _lineas_del_pedido(db, so)[2]
+    _cancelar(app_client, admin_token, so.id, cinta.id)
+    d = _detalle_pedido(app_client, admin_token, so.id)
+    assert d["productos"] == r["lineas"]
+    assert (d["iva_cop"], d["total_cop"]) == (292173, 1829926)
+    assert d["iva_discriminado"] is False and d["iva_por_tarifa"] == []
+
+
+def test_cancelar_linea_de_pedido_canonico_con_descuento_por_linea(app_client, db, admin_token, sku):
+    """Ronda r1 (duda 1, ruling: semantica de la COT). El pedido canonico (B2.1-D3) tiene cot_id y productos=[]: sin
+    tarifas en el JSON sigue la cuenta por linea. Con cot_id el subtotal queda ANTES del descuento tras cancelar:
+    A 1 x 100.000 con 10% y 19%, B 1 x 50.000 con 19%. Al crearlo: 140.000 / 26.600 / 166.600. Al cancelar B:
+    subtotal 100.000, IVA 17.100, total 107.100 y el desglose muestra el descuento de 10.000."""
+    import uuid
+    from _cot_confirmada import cot_confirmada_para_canonico
+    from app.models.customers import Customer
+    from app.models.erp_documents import SaleOrder
+    cliente = Customer(first_name="Cliente", last_name=f"IVA-{uuid.uuid4().hex[:4]}",
+                       email=f"iva_{uuid.uuid4().hex[:8]}@test.com")
+    db.add(cliente); db.commit()
+    linea = {"sku_id": sku.id, "quantity": 1, "tax_pct": 19, "modalidad": "POR_PEDIDO", "owner": "NEBULAE"}
+    resp = app_client.post("/api/v1/ventas/pedidos/canonico", json={
+        "customer_id": cliente.id, "cot_id": cot_confirmada_para_canonico(db, cliente.id),
+        "lines": [{**linea, "unit_price_cop": 100000, "descuento_pct": 10}, {**linea, "unit_price_cop": 50000}]},
+        headers=auth(admin_token))
+    assert resp.status_code == 201, resp.text
+    datos = resp.json()["data"]
+    assert (datos["subtotal_cop"], datos["tax_cop"], datos["total_cop"]) == (140000, 26600, 166600)
+    _cancelar(app_client, admin_token, datos["id"], datos["lines"][1]["id"])
+    so = db.query(SaleOrder).filter(SaleOrder.id == datos["id"]).one()
+    db.refresh(so)
+    assert (so.subtotal_cop, so.tax_cop, so.total_cop, so.productos) == (100000, 17100, 107100, [])
+    d = _detalle_pedido(app_client, admin_token, so.id)
+    assert d["descuento_cop"] == 10000 and d["iva_cop"] == 17100 and d["iva_discriminado"] is False
+
+
+def test_convertir_con_lineas_normalizadas_empareja_sin_confundir_none(app_client, db, admin_token, sku):
+    """Ronda r1 (dinero 3): en la rama SalesQuotationLine de la conversion, una linea sin SKU ya no se empareja con
+    la primera linea JSON por None == None (la Cinta tomaba el 19% del Rodillo), y el descuento global llega a
+    las lineas como en la rama JSON."""
+    from app.core.iva import calcular_totales_cotizacion
+    from app.models.erp_documents import SaleOrder
+    from app.models.fase1b import SalesQuotationLine
+    r = calcular_totales_cotizacion([_linea("Rodillo", 6, 206769, "19", sku_id=sku.id),
+                                     _linea("Cinta", 10, 13200, "5")], 10)
+    cot = _cot(db, "COT-T4IVAQL", productos=r["lineas"], subtotal_cop=r["subtotal_cop"], total_cop=r["total_cop"],
+               tax_cop=r["iva_cop"], descuento_pct=10, estado="CONFIRMADA",
+               gate2_confirmed_at=datetime.datetime.utcnow())
+    db.add(SalesQuotationLine(sq_id=cot.id, sku_id=None, description="Cinta", quantity=10, unit_price_cop=13200))
+    db.add(SalesQuotationLine(sq_id=cot.id, sku_id=sku.id, description="Rodillo", quantity=6,
+                              unit_price_cop=206769))
+    db.commit()
+    resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/convertir-a-venta", json={"user_name": "t"},
+                           headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    so = db.query(SaleOrder).filter(SaleOrder.cot_id == cot.id).one()
+    lineas = {l.description: (l.tax_pct, l.descuento_pct) for l in _lineas_del_pedido(db, so)}
+    assert lineas == {"Cinta": (5, 10), "Rodillo": (19, 10)}
 
 
 def test_update_pedido_acepta_iva_cop(app_client, db, admin_token):
     from app.models.erp_documents import SaleOrder
     so = SaleOrder(numero="PVEN-T4IVA18", customer_name="Cliente Prueba", estado="PENDIENTE_COMPRA",
-                   total_cop=1000, subtotal_cop=1000, saldo_cop=1000, tax_cop=0)
+                   total_cop=10000, subtotal_cop=10000, saldo_cop=10000, tax_cop=0)
     db.add(so); db.commit(); db.refresh(so)
     resp = app_client.patch(f"/api/v1/ventas/pedidos/{so.id}", json={"iva_cop": 1234.6, "updated_by": "t"},
                             headers=auth(admin_token))
@@ -532,9 +779,15 @@ def test_update_pedido_acepta_iva_cop(app_client, db, admin_token):
     resp = app_client.patch(f"/api/v1/ventas/pedidos/{so.id}", json={"iva_cop": "mucho", "updated_by": "t"},
                             headers=auth(admin_token))
     assert resp.status_code == 422 and "iva_cop" in resp.json()["detail"], resp.text
+    # Ronda r1 (dinero 5): un IVA negativo o mayor que el total del pedido (el del body si lo trae) no se guarda.
+    for body in ({"iva_cop": -5}, {"iva_cop": 10001}, {"iva_cop": 3000, "total_cop": 2000}):
+        resp = app_client.patch(f"/api/v1/ventas/pedidos/{so.id}", json={**body, "updated_by": "t"},
+                                headers=auth(admin_token))
+        assert resp.status_code == 422, (body, resp.text)
+        assert resp.json()["detail"] == "El IVA debe estar entre $0 y el total del pedido.", body
     db.expire_all()
     db.refresh(so)
-    assert so.tax_cop == Decimal("1235")
+    assert so.tax_cop == Decimal("1235") and so.total_cop == 10000
 
 
 # ─── 20: documentos viejos ───────────────────────────────────────────────────────────

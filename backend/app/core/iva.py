@@ -11,7 +11,10 @@ frontend/src/lib/iva.js corriendo los dos lados), salvo las dos funciones que re
   dentro, para que importar este modulo no cargue la base).
 
 Parte 2 (T4, tambien pura): lineas_con_tarifa, calcular_totales_cotizacion, resumen_iva_por_tarifa y
-desglose_documento, con la REGLA DE CALCULO en pesos enteros que esta antes de ellas (T13 las compara con lib/iva.js).
+desglose_documento, con la REGLA DE CALCULO en pesos enteros que esta antes de ellas (T13 las compara con lib/iva.js);
+y para el pedido (ronda r1): iva_de_base (la regla del IVA de una linea), cancelar_cantidad (cancelacion de lineas con
+IVA discriminado) y totales_lineas_pedido (la cabecera desde las lineas normalizadas). nombre_de_linea es la regla
+unica para nombrar una linea (tambien en cambios_documento).
 
 Contrato (ronda r1 de T3): normalizar_tarifa_iva es la validacion AL ESCRIBIR y lanza ValueError con un valor no valido;
 pct_tarifa_iva y etiqueta_tarifa_iva son de PRESENTACION y, como lib/iva.js, tratan un codigo no valido igual que None
@@ -163,13 +166,21 @@ MENSAJE_DESCUENTO_INVALIDO = "El descuento debe estar entre 0 y 100%."
 
 
 def nombre_de_linea(p, indice: int) -> str:
-    """El nombre que ve el asesor en un mensaje: product_name (o nombre, name...) o 'línea N' (N desde 1)."""
+    """El nombre de una linea en los mensajes de IVA y en la Actividad (cambios_documento usa esta misma regla, ronda
+    r1): el primer valor no vacio (ni None ni '') de _NOMBRES_LINEA, como texto y sin espacios en los bordes; una
+    linea que no es un dict (dato viejo) se nombra con su propio texto. Si no queda nada, 'Línea N' (N desde 1)."""
     if isinstance(p, dict):
-        for clave in _NOMBRES_LINEA:
-            valor = p.get(clave)
-            if isinstance(valor, str) and valor.strip():
-                return valor.strip()
-    return f"línea {indice + 1}"
+        valor = next((p[k] for k in _NOMBRES_LINEA if p.get(k) not in (None, "")), None)
+    else:
+        valor = p
+    texto = str(valor).strip() if valor is not None else ""
+    return texto or f"Línea {indice + 1}"
+
+
+def iva_de_base(base, pct) -> int:
+    """Paso 6 de la REGLA DE CALCULO: el IVA de una linea, redondear_peso(base x pct / 100), en pesos enteros. La usan
+    calcular_totales_cotizacion, cancelar_cantidad y totales_lineas_pedido (una sola regla del IVA)."""
+    return int(redondear_peso(Decimal(str(base)) * Decimal(str(pct or 0)) / _CIEN))
 
 
 def _tiene_tarifa(p) -> bool:
@@ -261,9 +272,9 @@ def calcular_totales_cotizacion(productos, descuento_pct) -> dict:
     pb = _puntos_basicos(descuento_pct)
     lineas, brutos = [], []
     for i, p in enumerate(productos if isinstance(productos, list) else []):
-        nombre = nombre_de_linea(p, i)
         if not isinstance(p, dict):
-            raise ValueError(f"La {nombre} no es un producto válido.")
+            raise ValueError(f"La línea {i + 1} no es un producto válido.")
+        nombre = nombre_de_linea(p, i)
         if not _tiene_tarifa(p):
             raise ValueError(f"Indica la tarifa de IVA de '{nombre}'.")
         try:
@@ -285,11 +296,84 @@ def calcular_totales_cotizacion(productos, descuento_pct) -> dict:
     descuento = int(redondear_peso(Decimal(subtotal) * pb / Decimal(10000)))
     for linea, bruto, d in zip(lineas, brutos, repartir_proporcional(brutos, descuento)):
         base = bruto - d
-        iva = int(redondear_peso(Decimal(base) * TARIFAS_IVA[linea["iva_tarifa"]] / _CIEN))
+        iva = iva_de_base(base, TARIFAS_IVA[linea["iva_tarifa"]])
         linea.update(descuento_cop=d, base_iva_cop=base, iva_cop=iva, total_con_iva_cop=base + iva)
-    return {"lineas": lineas, "subtotal_cop": subtotal, "descuento_cop": descuento,
-            "iva_cop": sum(l["iva_cop"] for l in lineas), "total_cop": sum(l["total_con_iva_cop"] for l in lineas),
-            "iva_por_tarifa": resumen_iva_por_tarifa(lineas)}
+    return {"lineas": lineas, **_totales_de_lineas(lineas)}
+
+
+def _totales_de_lineas(lineas) -> dict:
+    """La cabecera que suman las lineas YA CALCULADAS: subtotal_cop (suma de total_cop, antes del descuento),
+    descuento_cop, iva_cop, total_cop (suma de total_con_iva_cop) e iva_por_tarifa. Asi subtotal - descuento + IVA =
+    total y el resumen por tarifa suma el IVA."""
+    def suma(clave):
+        return sum(_peso_entero(l.get(clave)) for l in lineas)
+    return {"subtotal_cop": suma("total_cop"), "descuento_cop": suma("descuento_cop"), "iva_cop": suma("iva_cop"),
+            "total_cop": suma("total_con_iva_cop"), "iva_por_tarifa": resumen_iva_por_tarifa(lineas)}
+
+
+def _numero_json(valor: Decimal):
+    """Una cantidad para el JSON productos: int si es entera (4), float si no (1.5; tienen 2 decimales)."""
+    return int(valor) if valor == valor.to_integral_value() else float(valor)
+
+
+def cancelar_cantidad(productos, indice: int, cantidad) -> tuple:
+    """Ronda r1 (dinero 6 y 7): cancela `cantidad` unidades de la linea `indice` del JSON productos de un pedido con
+    IVA discriminado (todas las lineas con tarifa y ya calculadas). Devuelve (productos_nuevos, totales):
+    - productos_nuevos: LISTA NUEVA de dicts nuevos. Las lineas que no se tocan CONSERVAN sus valores guardados (no se
+      recalculan). La cancelada en parte se reescala desde SUS valores guardados segun la cantidad que queda
+      (r = qty - cantidad): total_cop' = redondear_peso(total_cop x r / qty) y descuento_cop' igual (su base nunca queda
+      negativa: el redondeo es monotono); base_iva_cop' = total_cop' - descuento_cop'; iva_cop' = iva_de_base(base',
+      tarifa) (la regla del IVA); total_con_iva_cop' = base' + iva'; qty' = r. La diferencia de redondeo queda solo en
+      esa linea. Una linea cancelada del todo sale de la lista (y del resumen por tarifa).
+    - totales: _totales_de_lineas de la lista nueva (subtotal_cop, descuento_cop, iva_cop, total_cop, iva_por_tarifa).
+    ValueError si las lineas no traen todas su tarifa, el indice no existe, la linea no es un producto o la cantidad
+    no es un numero mayor que 0 y no mayor que su qty. Pura: la llama cancel_sale_order_line."""
+    if lineas_con_tarifa(productos) != "todas":
+        raise ValueError("El pedido no tiene el IVA discriminado en todas sus líneas.")
+    if isinstance(indice, bool) or not isinstance(indice, int) or not 0 <= indice < len(productos):
+        raise ValueError(f"El pedido no tiene la línea {indice}.")
+    linea = productos[indice]
+    nombre = nombre_de_linea(linea, indice)
+    qty = _cantidad(linea, nombre)
+    try:
+        cancelar = Decimal(str(cantidad).strip()) if not isinstance(cantidad, bool) else Decimal("NaN")
+    except ArithmeticError:
+        cancelar = Decimal("NaN")
+    if not cancelar.is_finite() or cancelar <= 0 or cancelar > qty:
+        raise ValueError(f"La cantidad a cancelar de '{nombre}' no es válida.")
+    queda = qty - cancelar
+    nuevas = [dict(p) for p in productos]
+    if queda == 0:
+        del nuevas[indice]
+    else:
+        tarifa = normalizar_tarifa_iva(linea.get("iva_tarifa"))
+        bruto = int(redondear_peso(Decimal(_peso_entero(linea.get("total_cop"))) * queda / qty))
+        descuento = int(redondear_peso(Decimal(_peso_entero(linea.get("descuento_cop"))) * queda / qty))
+        base = bruto - descuento
+        iva = iva_de_base(base, TARIFAS_IVA[tarifa])
+        nuevas[indice].update(qty=_numero_json(queda), total_cop=bruto, descuento_cop=descuento, base_iva_cop=base,
+                              iva_cop=iva, total_con_iva_cop=base + iva)
+    return nuevas, _totales_de_lineas(nuevas)
+
+
+def totales_lineas_pedido(lineas) -> dict:
+    """La cabecera de un pedido SIN IVA discriminado en su JSON (los viejos y el pedido canonico), desde sus lineas
+    normalizadas: cada una es un dict {cantidad, precio_unitario_cop, descuento_pct, iva_pct}. Por linea, en pesos
+    enteros: base = redondear_peso(cantidad x precio), descuento = redondear_peso(base x descuento_pct / 100),
+    neto = base - descuento, IVA = iva_de_base(neto, iva_pct). Devuelve {base_cop, neto_cop, iva_cop, total_cop}
+    (int; las lineas con cantidad <= 0 no cuentan). La usa cancel_sale_order_line cuando no puede emparejar las lineas
+    con el JSON."""
+    base_total = neto_total = iva_total = 0
+    for l in lineas:
+        cantidad = Decimal(str(l.get("cantidad") or 0))
+        if cantidad <= 0:
+            continue
+        base = int(redondear_peso(cantidad * Decimal(str(l.get("precio_unitario_cop") or 0))))
+        neto = base - int(redondear_peso(Decimal(base) * Decimal(str(l.get("descuento_pct") or 0)) / _CIEN))
+        base_total += base
+        neto_total += neto
+        iva_total += iva_de_base(neto, l.get("iva_pct"))
+    return {"base_cop": base_total, "neto_cop": neto_total, "iva_cop": iva_total, "total_cop": neto_total + iva_total}
 
 
 def _campo(doc, nombre):
@@ -300,14 +384,20 @@ def desglose_documento(doc) -> dict:
     """{iva_discriminado, iva_cop, descuento_cop, iva_por_tarifa} de una cotizacion o un pedido (el objeto del ORM o un
     dict con productos, subtotal_cop, tax_cop y total_cop), en pesos enteros y sin recalcular nada (C2: el documento
     del cliente lo mapea tal cual):
-    - iva_discriminado: hay lineas y todas traen iva_tarifa.
+    - iva_discriminado: hay lineas, todas traen iva_tarifa y su resumen CUADRA con la cabecera.
     - iva_cop: redondear_peso(tax_cop) (0 si falta).
     - descuento_cop: max(0, subtotal + IVA - total), cada uno al peso.
-    - iva_por_tarifa: resumen_iva_por_tarifa de las lineas, o [] si no esta discriminado."""
+    - iva_por_tarifa: resumen_iva_por_tarifa de las lineas, o [] si no esta discriminado.
+    Ronda r1: un resumen que no cuadra nunca se muestra. Si la suma del IVA por tarifa no es iva_cop, o la de las bases
+    no es total - IVA (p. ej. lineas del pedido que ya no corresponden a su JSON), el documento cae a IVA no
+    discriminado: iva_discriminado False e iva_por_tarifa []; iva_cop y descuento_cop siguen saliendo de la cabecera."""
     productos = _campo(doc, "productos")
-    discriminado = lineas_con_tarifa(productos) == "todas"
     subtotal = _peso_entero(_campo(doc, "subtotal_cop"))
     iva = _peso_entero(_campo(doc, "tax_cop"))
     total = _peso_entero(_campo(doc, "total_cop"))
-    return {"iva_discriminado": discriminado, "iva_cop": iva, "descuento_cop": max(0, subtotal + iva - total),
-            "iva_por_tarifa": resumen_iva_por_tarifa(productos) if discriminado else []}
+    resumen = resumen_iva_por_tarifa(productos) if lineas_con_tarifa(productos) == "todas" else []
+    cuadra = (sum(f["iva_cop"] for f in resumen) == iva and sum(f["base_cop"] for f in resumen) == total - iva)
+    if not (resumen and cuadra):
+        resumen = []
+    return {"iva_discriminado": bool(resumen), "iva_cop": iva, "descuento_cop": max(0, subtotal + iva - total),
+            "iva_por_tarifa": resumen}

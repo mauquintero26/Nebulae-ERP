@@ -139,6 +139,16 @@ def _validar_iva_del_body(body: dict, cot: Optional["SalesQuotation"] = None) ->
                                  f"'{nombre_de_linea(sin_tarifa, i)}').")
     if modo != "todas" or not any(k in body for k in _CAMPOS_QUE_RECALCULAN_IVA):
         return
+    # Ronda r1 (dinero 2): con tarifa el servidor cobra unit_price_cop x qty, asi que una linea sin precio unitario (o
+    # en $0) se cobraria a $0 aunque traiga total_cop (que _validar_precios_productos acepta). La funcion pura no cambia
+    # (acepta un precio 0: paridad de RP21); la guarda es de la API.
+    for i, p in enumerate(productos):
+        try:
+            unitario = redondear_peso(p.get("unit_price_cop"))
+        except ValueError:
+            unitario = Decimal("0")
+        if unitario <= 0:
+            raise HTTPException(422, f"El precio unitario de '{nombre_de_linea(p, i)}' no es válido.")
     descuento = body.get("descuento_pct") if "descuento_pct" in body else (cot.descuento_pct if cot is not None else 0)
     try:
         calcular_totales_cotizacion(productos, descuento)
@@ -153,14 +163,14 @@ def _aplicar_iva(cot: "SalesQuotation", body: dict) -> bool:
       con cot.descuento_pct. cot.productos se asigna como una LISTA NUEVA de dicts nuevos (el bug de dirty-check del
       JSON) y subtotal_cop, tax_cop y total_cop salen del calculo: los totales del body se ignoran (si el total del
       body era otro, queda un aviso en el log del servidor).
-    - Sin tarifas (modo anterior) no calcula: los totales del body se guardan como hoy (H42). Si el body trae
-      productos sin tarifa y la COT tenia IVA, el IVA vuelve a 0: ya no esta discriminado y el total del body no lo
-      incluye.
+    - Sin tarifas (modo anterior) no calcula: los totales del body se guardan como hoy (H42). Si la COT tenia IVA y
+      el body trae total_cop, el IVA vuelve a 0: ese total no lo incluye. Sin total_cop en el body (ronda r1) el total
+      guardado sigue incluyendo el IVA, asi que tax_cop se conserva y el desglose cuadra (no discriminado).
     _validar_iva_del_body ya rechazo antes lo que no se puede calcular."""
     if not any(k in body for k in _CAMPOS_QUE_RECALCULAN_IVA):
         return False
     if lineas_con_tarifa(cot.productos) != "todas":
-        if "productos" in body and cot.tax_cop:
+        if body.get("total_cop") is not None and cot.tax_cop:
             cot.tax_cop = Decimal("0")
         return False
     r = calcular_totales_cotizacion(cot.productos, cot.descuento_pct)
@@ -3509,6 +3519,12 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
     _redondear_montos_del_body(body, ("subtotal_cop", "total_cop", "saldo_cop", "anticipo_cop"))
     # IVA (B3 T4): la propagacion de la re-cotizacion manda el IVA total como iva_cop (en el pedido, tax_cop), al peso.
     iva_nuevo = _monto_en_pesos(body["iva_cop"], "iva_cop") if body.get("iva_cop") is not None else None
+    if iva_nuevo is not None:
+        # Ronda r1 (dinero 5): entre $0 y el total del pedido (el del body si lo trae, ya en pesos enteros), antes de
+        # tocar nada.
+        total_ref = body["total_cop"] if body.get("total_cop") is not None else redondear_peso(v.total_cop)
+        if iva_nuevo < 0 or iva_nuevo > total_ref:
+            raise HTTPException(422, "El IVA debe estar entre $0 y el total del pedido.")
     for k in allowed:
         if k in body:
             setattr(v, k, body[k])

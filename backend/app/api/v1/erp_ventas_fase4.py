@@ -43,7 +43,9 @@ from app.core.ventas_dinero import (
     saldos_a_favor_de_cotizacion, metodo_pago_anticipo, METODOS_PAGO_ANTICIPO, METODO_PAGO_TRASLADO,
     METODO_PAGO_SALDO_A_FAVOR, ESTADO_PAGO_TRASLADADO, anular_pxps_de_pedido,
 )
-from app.core.iva import pct_tarifa_iva
+from app.core.iva import (
+    cancelar_cantidad, lineas_con_tarifa, pct_tarifa_iva, sku_id_entero, totales_lineas_pedido,
+)
 from app.core.textos_actividad import RESOLUCIONES_DEVOLUCION, etiqueta_estado, pago_registrado
 from app.api.dependencies import (
     require_roles, get_current_user,
@@ -1457,6 +1459,41 @@ def cancel_sale_order(
     }
 
 
+def _linea_coincide_con_json(l: SaleOrderLineErp, p) -> bool:
+    """La linea normalizada `l` es la del JSON `p`, con las cantidades de antes de cancelar: la misma descripcion que le
+    puso la conversion, la cantidad que queda (quantity - quantity_cancelled) igual a la qty del JSON, el mismo
+    unitario (en pesos) y el mismo SKU."""
+    if not isinstance(p, dict):
+        return False
+    try:
+        qty = Decimal(str(p.get("qty")))
+        unitario = redondear_peso(p.get("unit_price_cop"))
+    except (ArithmeticError, ValueError):
+        return False
+    return (l.description == (p.get("description") or p.get("product_name") or "Producto")
+            and qty.is_finite() and qty == l.quantity - l.quantity_cancelled
+            and unitario == redondear_peso(l.unit_price_cop)
+            and sku_id_entero(p.get("sku_id")) == l.sku_id)
+
+
+def _indice_en_productos(so: SaleOrder, lineas: list, linea: SaleOrderLineErp) -> Optional[int]:
+    """IVA (B3 T4, ronda r1): la posicion de `linea` en el JSON productos del pedido, o None si no se puede saber con
+    seguridad. Se usa la informacion que ya existe: la conversion (rama JSON) crea una linea por cada producto del JSON,
+    en el mismo orden, y cancelar_cantidad saca del JSON las lineas canceladas del todo. Por eso las lineas con unidades
+    sin cancelar, en orden de id, deben corresponder una a una con el JSON. Se exige que todo coincida
+    (_linea_coincide_con_json) en TODAS las parejas; si algo no cuadra (otra cantidad de lineas, una re-cotizacion
+    propagada que cambio el JSON, la rama SalesQuotationLine), None. Solo pedidos con IVA discriminado en el JSON."""
+    productos = so.productos
+    if lineas_con_tarifa(productos) != "todas":
+        return None
+    vivas = [l for l in lineas if l.quantity - l.quantity_cancelled > 0]
+    if len(vivas) != len(productos):
+        return None
+    if not all(_linea_coincide_con_json(l, p) for l, p in zip(vivas, productos)):
+        return None
+    return next((i for i, l in enumerate(vivas) if l.id == linea.id), None)
+
+
 @router.post("/pedidos/{so_id}/lineas/{line_id}/cancelar")
 def cancel_sale_order_line(
     so_id: int,
@@ -1485,6 +1522,18 @@ def cancel_sale_order_line(
     qty_to_cancel = body.quantity if body.quantity is not None else max_cancelable
     if qty_to_cancel > max_cancelable:
         raise HTTPException(422, f"Cantidad a cancelar ({qty_to_cancel}) supera la cantidad cancelable ({max_cancelable})")
+
+    # IVA (B3 T4, ronda r1): con las cantidades de ANTES de cancelar, la posicion de esta linea en el JSON productos
+    # del pedido y, si se puede emparejar con seguridad, el JSON y la cabecera nuevos (iva.cancelar_cantidad, pura).
+    lines = (db.query(SaleOrderLineErp).filter(SaleOrderLineErp.so_id == so.id)
+             .order_by(SaleOrderLineErp.id.asc()).all())
+    plan_json = None
+    indice_json = _indice_en_productos(so, lines, line)
+    if indice_json is not None:
+        try:
+            plan_json = cancelar_cantidad(so.productos, indice_json, qty_to_cancel)
+        except ValueError:
+            plan_json = None
 
     decision = body.purchased_goods_decision or getattr(body, "decision", None)
     # Verificar compras asociadas
@@ -1536,29 +1585,28 @@ def cancel_sale_order_line(
         line.estado = "CANCELADA"
     line.updated_at = now
 
-    # Recalcular totales del pedido, en pesos enteros (IVA, B3 T4): base, descuento e IVA de cada linea al peso. Tras
-    # una cancelacion puede haber 1 o 2 pesos de diferencia frente al reparto original de la COT (mayor residuo).
-    lines = db.query(SaleOrderLineErp).filter(SaleOrderLineErp.so_id == so.id).all()
-    suma_base = Decimal("0")
-    new_subtotal = Decimal("0")
-    new_tax = Decimal("0")
-    new_total = Decimal("0")
-    for l in lines:
-        vendible_qty = l.quantity - l.quantity_cancelled
-        if vendible_qty > Decimal("0.00"):
-            l_base = redondear_peso(vendible_qty * (l.unit_price_cop or Decimal("0")))
-            l_disc = redondear_peso(l_base * (l.descuento_pct or Decimal("0")) / Decimal("100"))
-            l_sub = l_base - l_disc
-            l_tx = redondear_peso(l_sub * (l.tax_pct or Decimal("0")) / Decimal("100"))
-            suma_base += l_base
-            new_subtotal += l_sub
-            new_tax += l_tx
-            new_total += (l_sub + l_tx)
-
-    # Con COT el subtotal es antes del descuento (como en la cotizacion); sin COT, despues (el pedido canonico de hoy).
-    so.subtotal_cop = suma_base if so.cot_id else new_subtotal
-    so.tax_cop = new_tax
-    so.total_cop = new_total
+    # Recalcular la cabecera del pedido en pesos enteros (IVA, B3 T4, ronda r1). Ninguna regla de dinero se escribe aqui:
+    # - JSON con IVA discriminado y emparejado: el JSON y la cabecera de iva.cancelar_cantidad. Las lineas que no se
+    #   tocan conservan sus valores; la diferencia de redondeo queda solo en la cancelada (y el desglose cuadra).
+    # - Si no (pedidos viejos, el canonico con productos=[], o un JSON que ya no corresponde a las lineas): la cabecera
+    #   sale de las lineas normalizadas con iva.totales_lineas_pedido y el JSON no se toca (si tenia tarifas, el
+    #   desglose cae a IVA no discriminado porque ya no cuadra).
+    if plan_json is not None:
+        productos_nuevos, totales = plan_json
+        so.productos = productos_nuevos  # lista nueva de dicts nuevos (dirty-check del JSON)
+        so.subtotal_cop = Decimal(totales["subtotal_cop"])
+        so.tax_cop = Decimal(totales["iva_cop"])
+        so.total_cop = Decimal(totales["total_cop"])
+    else:
+        totales = totales_lineas_pedido(
+            {"cantidad": l.quantity - l.quantity_cancelled, "precio_unitario_cop": l.unit_price_cop,
+             "descuento_pct": l.descuento_pct, "iva_pct": l.tax_pct} for l in lines)
+        # Con COT (los convertidos y, desde B2.1-D3, tambien el pedido canonico) el subtotal es ANTES del descuento,
+        # como en la cotizacion (ruling de la ronda r1 de T4); solo los pedidos antiguos sin COT lo dejan despues.
+        so.subtotal_cop = Decimal(totales["base_cop"] if so.cot_id else totales["neto_cop"])
+        so.tax_cop = Decimal(totales["iva_cop"])
+        so.total_cop = Decimal(totales["total_cop"])
+    new_total = so.total_cop
 
     # Pagos netos
     pagos_positivos = db.query(
@@ -2914,15 +2962,35 @@ def _tax_pct_de_linea(p) -> Decimal:
     return pct_tarifa_iva(p.get("iva_tarifa"))
 
 
-def _descuento_pct_de_linea(p, descuento_global: Decimal) -> Decimal:
-    """IVA (B3 T4): el % de descuento de una linea del pedido: el propio de la linea (descuento_pct) si viene y es > 0;
-    si no, el descuento global de la COT. Asi la cancelacion de lineas y la rentabilidad ya no pierden el descuento
-    global. Un descuento propio que no es un numero cuenta como que no viene."""
+def _descuento_pct_de_linea(propio, descuento_global: Decimal) -> Decimal:
+    """IVA (B3 T4): el % de descuento de una linea del pedido: el propio de la linea (`propio`: el descuento_pct de la
+    linea JSON o de la SalesQuotationLine) si viene y es > 0; si no, el descuento global de la COT. Asi la cancelacion
+    de lineas y la rentabilidad ya no pierden el descuento global. Un descuento propio que no es un numero cuenta como
+    que no viene."""
     try:
-        propio = Decimal(str(p.get("descuento_pct") or 0)) if isinstance(p, dict) else Decimal("0")
+        valor = Decimal(str(propio or 0))
     except ArithmeticError:
-        propio = Decimal("0")
-    return propio if propio.is_finite() and propio > 0 else descuento_global
+        valor = Decimal("0")
+    return valor if valor.is_finite() and valor > 0 else descuento_global
+
+
+def _pareja_json(productos, ql: SalesQuotationLine, sku: Optional[ProductSKU]):
+    """La linea del JSON productos de la COT que corresponde a la linea normalizada `ql` (rama SalesQuotationLine de
+    convertir_cotizacion_a_venta), o None. Mismo criterio de antes (sku_id, sku o descripcion), pero cada comparacion
+    exige que el valor de `ql` exista: un None ya no se empareja con la primera linea JSON que tampoco lo trae (ronda r1
+    de T4: desde el IVA la pareja decide el tax_pct). La descripcion se compara con description o product_name."""
+    if not isinstance(productos, list):
+        return None
+    for cp in productos:
+        if not isinstance(cp, dict):
+            continue
+        if ql.sku_id is not None and sku_id_entero(cp.get("sku_id")) == ql.sku_id:
+            return cp
+        if sku is not None and sku.sku and cp.get("sku") == sku.sku:
+            return cp
+        if ql.description and ql.description in (cp.get("description"), cp.get("product_name")):
+            return cp
+    return None
 
 
 @router.post("/cotizaciones/{cot_id}/convertir-a-venta", status_code=status.HTTP_200_OK)
@@ -3179,15 +3247,9 @@ def convertir_cotizacion_a_venta(
         for ql in quotation_lines:
             sku = db.query(ProductSKU).filter(ProductSKU.id == ql.sku_id).first() if ql.sku_id else None
             modalidad = getattr(ql, "modalidad", None)
-            # La linea del JSON productos que corresponde a esta (mismo criterio de siempre): de ahi salen la
-            # modalidad (si la linea normalizada no la trae) y, con IVA (B3 T4), el % de IVA. Sin pareja: 0%.
-            pareja = None
-            if cot.productos and isinstance(cot.productos, list):
-                for cp in cot.productos:
-                    if isinstance(cp, dict) and (cp.get("sku_id") == ql.sku_id or cp.get("sku") == getattr(sku, "sku", None)
-                                                 or cp.get("description") == ql.description):
-                        pareja = cp
-                        break
+            # La linea del JSON productos que corresponde a esta: de ahi salen la modalidad (si la linea normalizada no
+            # la trae) y, con IVA (B3 T4), el % de IVA. Sin pareja: 0%.
+            pareja = _pareja_json(cot.productos, ql, sku)
             if not modalidad and pareja is not None:
                 modalidad = pareja.get("modalidad")
             if not modalidad:
@@ -3215,7 +3277,8 @@ def convertir_cotizacion_a_venta(
                 description=ql.description or (sku.sku if sku else "Producto"),
                 quantity=qty,
                 unit_price_cop=unit_price,
-                descuento_pct=Decimal(str(ql.descuento_pct or 0)),
+                # Ronda r1 (dinero 3): el descuento global de la COT tambien en esta rama (el propio si es > 0).
+                descuento_pct=_descuento_pct_de_linea(ql.descuento_pct, descuento_pct),
                 customer_id=cot.customer_id,
                 tax_pct=_tax_pct_de_linea(pareja),
                 modalidad=modalidad,
@@ -3278,7 +3341,7 @@ def convertir_cotizacion_a_venta(
                 # IVA (B3 T4): el unitario SIN IVA (finanzas cuenta los ingresos sin IVA), el % de IVA de la linea y
                 # el descuento global de la COT en cada linea (antes la rentabilidad y la cancelacion lo perdian).
                 unit_price_cop=unit_price,
-                descuento_pct=_descuento_pct_de_linea(p, descuento_pct),
+                descuento_pct=_descuento_pct_de_linea(p.get("descuento_pct"), descuento_pct),
                 customer_id=cot.customer_id,
                 tax_pct=_tax_pct_de_linea(p),
                 modalidad=modalidad,
