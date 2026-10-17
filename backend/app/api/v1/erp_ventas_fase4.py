@@ -41,7 +41,7 @@ from app.models.users import User
 from app.core.ventas_dinero import (
     redondear_peso, pesos, formato_pct, anticipo_cotizacion, pct_snapshot_del_pedido, anticipo_del_pedido,
     saldos_a_favor_de_cotizacion, metodo_pago_anticipo, METODOS_PAGO_ANTICIPO, METODO_PAGO_TRASLADO,
-    METODO_PAGO_SALDO_A_FAVOR, ESTADO_PAGO_TRASLADADO, anular_pxps_de_pedido,
+    METODO_PAGO_SALDO_A_FAVOR, ESTADO_PAGO_TRASLADADO, anular_pxps_de_pedido, unidades,
 )
 from app.core.iva import (
     cancelar_cantidad, lineas_con_tarifa, pct_tarifa_iva, sku_id_entero, totales_lineas_pedido,
@@ -1520,6 +1520,10 @@ def cancel_sale_order_line(
         raise HTTPException(422, "La línea no tiene unidades cancelables")
 
     qty_to_cancel = body.quantity if body.quantity is not None else max_cancelable
+    if qty_to_cancel != qty_to_cancel.quantize(Decimal("0.01")):
+        # Ronda r2 de T4: la linea guarda la cantidad con 2 decimales (Numeric(10, 2)); con mas, el JSON productos, la
+        # linea y la cabecera quedarian con numeros distintos. Antes de calcular nada.
+        raise HTTPException(422, "La cantidad a cancelar admite hasta 2 decimales.")
     if qty_to_cancel > max_cancelable:
         raise HTTPException(422, f"Cantidad a cancelar ({qty_to_cancel}) supera la cantidad cancelable ({max_cancelable})")
 
@@ -1591,6 +1595,15 @@ def cancel_sale_order_line(
     # - Si no (pedidos viejos, el canonico con productos=[], o un JSON que ya no corresponde a las lineas): la cabecera
     #   sale de las lineas normalizadas con iva.totales_lineas_pedido y el JSON no se toca (si tenia tarifas, el
     #   desglose cae a IVA no discriminado porque ya no cuadra).
+    # Ronda r2: lo que la Actividad guarda del producto: la linea del JSON que sale del todo, o la cantidad que queda
+    # vigente (quantity - quantity_cancelled; las entregadas siguen vendidas).
+    producto = line.description or "Producto"
+    restante = line.quantity - line.quantity_cancelled
+    extra_linea = {"producto": producto}
+    if plan_json is not None and restante == 0:
+        extra_linea["linea_retirada"] = dict(so.productos[indice_json])
+    else:
+        extra_linea["cantidad_restante"] = format(restante.normalize(), "f")
     if plan_json is not None:
         productos_nuevos, totales = plan_json
         so.productos = productos_nuevos  # lista nueva de dicts nuevos (dirty-check del JSON)
@@ -1636,11 +1649,14 @@ def cancel_sale_order_line(
         entity_id=so.id,
         entity_numero=so.numero,
         action="LINEA_CANCELADA",
-        description=f"Línea {line.id} canceló {qty_to_cancel} unidades. Motivo: {body.motivo}. Nuevo total pedido: {pesos(new_total)}",
+        # Ronda r2 de T4: nombra el producto (una linea cancelada del todo ya no aparece en el pedido) y la cantidad sin
+        # ceros de mas, en singular con 1 unidad.
+        description=(f"{'Se canceló' if qty_to_cancel == 1 else 'Se cancelaron'} {unidades(qty_to_cancel)} de "
+                     f"{producto}. Motivo: {body.motivo}. Nuevo total del pedido: {pesos(new_total)}"),
         old_estado=old_so_state,
         new_estado=so.estado,
         user_name=user_name,
-        extra_data={"line_id": line.id, "quantity_cancelled": str(qty_to_cancel)}
+        extra_data={"line_id": line.id, "quantity_cancelled": format(qty_to_cancel.normalize(), "f"), **extra_linea}
     )
 
     db.commit()

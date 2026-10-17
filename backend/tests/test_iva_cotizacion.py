@@ -645,6 +645,83 @@ def test_cancelar_linea_mantiene_pesos_y_descuento(app_client, db, admin_token):
     assert _filas_pedido(d) == [("19", 1537753, 292173)]
     assert sum(f["iva_cop"] for f in d["iva_por_tarifa"]) == d["iva_cop"] == 292173
     assert d["iva_discriminado"] is True and d["descuento_cop"] == 170861
+    # Ronda r2: la Cinta ya no esta en el pedido; la Actividad la nombra y guarda la linea del JSON que salio.
+    [renglon] = _logs(db, "PVEN", so.id, "LINEA_CANCELADA")
+    assert renglon.description == ("Se cancelaron 10 unidades de Cinta. Motivo: El cliente ya no la necesita. "
+                                   "Nuevo total del pedido: $1.829.926")
+    assert renglon.extra_data == {"line_id": cinta.id, "quantity_cancelled": "10", "producto": "Cinta",
+                                  "linea_retirada": antes[2]}
+
+
+def test_unidades_sin_ceros_de_mas():
+    """Ronda r2: una sola forma de escribir cantidades en la Actividad (ventas_dinero.unidades), con coma decimal."""
+    from app.core.ventas_dinero import unidades
+    casos = [(1, "1 unidad"), (Decimal("1.00"), "1 unidad"), (Decimal("10.00"), "10 unidades"),
+             (Decimal("2.50"), "2,5 unidades"), (Decimal("0.33"), "0,33 unidades"), (2, "2 unidades")]
+    assert [unidades(c) for c, _ in casos] == [t for _, t in casos]
+
+
+def test_cancelar_la_linea_del_medio_y_despues_otra(app_client, db, admin_token):
+    """Ronda r2 (lente 1): la Pintura (la del medio) sale del JSON del todo; despues se cancelan 5 Cintas, que ya no
+    estan en la misma posicion. El emparejamiento sigue funcionando sobre las lineas con unidades vivas. Variante con
+    3 Cintas ya entregadas antes de cancelar (las entregadas siguen vendidas: cuentan en la cantidad vigente)."""
+    from app.models.fase1b import SaleOrderLineErp
+    for i, entregadas in enumerate((0, 3)):
+        _, so = _pedido_del_ejemplo(app_client, db, admin_token, f"T4IVAMD{i}")
+        antes = [dict(p) for p in so.productos]
+        rodillo, pintura, cinta = _lineas_del_pedido(db, so)
+        if entregadas:
+            db.get(SaleOrderLineErp, cinta.id).quantity_delivered = Decimal(entregadas)
+            db.commit()
+        _cancelar(app_client, admin_token, so.id, pintura.id)
+        _cancelar(app_client, admin_token, so.id, cinta.id, 5)
+        d = _detalle_pedido(app_client, admin_token, so.id)
+        assert d["productos"] == [antes[0], {**antes[2], "qty": 5, "total_cop": 66000, "descuento_cop": 6600,
+                                             "base_iva_cop": 59400, "iva_cop": 2970, "total_con_iva_cop": 62370}]
+        assert (d["subtotal_cop"], d["descuento_cop"], d["iva_cop"], d["total_cop"]) == (1306614, 130661, 215115,
+                                                                                         1391068), entregadas
+        assert _filas_pedido(d) == [("19", 1116553, 212145), ("5", 59400, 2970)]
+        assert d["iva_discriminado"] is True
+        renglones = _logs(db, "PVEN", so.id, "LINEA_CANCELADA")
+        assert [r.description.split(". Motivo")[0] for r in renglones] == [
+            "Se cancelaron 4 unidades de Pintura", "Se cancelaron 5 unidades de Cinta"]
+        assert renglones[1].extra_data["cantidad_restante"] == "5" and "linea_retirada" not in renglones[1].extra_data
+        if entregadas:
+            # Las 2 Cintas que quedaban por cancelar: la linea queda CANCELADA (canceladas + entregadas = 10) pero con
+            # 3 unidades vigentes (las entregadas), asi que sigue en el JSON con qty 3 y el emparejamiento la cuenta
+            # (por estado se perderia y la siguiente cancelacion caeria a 'IVA no discriminado').
+            _cancelar(app_client, admin_token, so.id, cinta.id, 2)
+            _cancelar(app_client, admin_token, so.id, rodillo.id, 1)
+            d = _detalle_pedido(app_client, admin_token, so.id)
+            assert [p["qty"] for p in d["productos"]] == [5, 3] and d["iva_discriminado"] is True
+            assert sum(f["iva_cop"] for f in d["iva_por_tarifa"]) == d["iva_cop"]
+            assert _lineas_del_pedido(db, so)[2].estado == "CANCELADA"
+
+
+def test_cancelar_mas_de_dos_decimales_es_422(app_client, db, admin_token):
+    """Ronda r2 (lente 2): la linea guarda la cantidad con 2 decimales (Numeric(10,2)); con 0,333 el JSON y la linea
+    quedaban distintos y el emparejamiento fallaba para siempre. 422 antes de calcular nada; con 0,33 todo sigue
+    emparejado y el pedido sigue con el IVA discriminado al cancelar otra linea."""
+    _, so = _pedido_del_ejemplo(app_client, db, admin_token, "T4IVADC")
+    antes = [dict(p) for p in so.productos]
+    rodillo, _, cinta = _lineas_del_pedido(db, so)
+    resp = app_client.post(f"/api/v1/ventas/pedidos/{so.id}/lineas/{rodillo.id}/cancelar",
+                           json={"motivo": "El cliente ya no la necesita", "quantity": 0.333}, headers=auth(admin_token))
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == "La cantidad a cancelar admite hasta 2 decimales."
+    db.expire_all()
+    db.refresh(so)
+    assert so.productos == antes and so.total_cop == 1954666
+    assert _lineas_del_pedido(db, so)[0].quantity_cancelled == 0
+    assert _logs(db, "PVEN", so.id, "LINEA_CANCELADA") == []
+    _cancelar(app_client, admin_token, so.id, rodillo.id, 0.33)
+    _cancelar(app_client, admin_token, so.id, cinta.id)
+    d = _detalle_pedido(app_client, admin_token, so.id)
+    assert d["iva_discriminado"] is True and [p["qty"] for p in d["productos"]] == [5.67, 4]
+    assert sum(f["iva_cop"] for f in d["iva_por_tarifa"]) == d["iva_cop"]
+    [primero, _] = _logs(db, "PVEN", so.id, "LINEA_CANCELADA")
+    assert primero.description.startswith("Se cancelaron 0,33 unidades de Rodillo. Motivo:")
+    assert primero.extra_data["cantidad_restante"] == "5.67"
 
 
 def test_cancelar_con_muchas_lineas_no_toca_las_demas(app_client, db, admin_token):
@@ -687,6 +764,14 @@ def test_cancelacion_parcial_reescala_solo_esa_linea(app_client, db, admin_token
     assert d["productos"][1:] == antes[1:]
     assert (d["subtotal_cop"], d["iva_cop"], d["total_cop"]) == (1220307, 192041, 1290318)
     assert sum(f["iva_cop"] for f in d["iva_por_tarifa"]) == d["iva_cop"]
+    # Ronda r2: la Actividad nombra el producto, en singular con 1 unidad, y guarda la cantidad que quedo.
+    renglones = _logs(db, "PVEN", so.id, "LINEA_CANCELADA")
+    assert [r.description for r in renglones] == [
+        "Se cancelaron 2 unidades de Rodillo. Motivo: El cliente ya no la necesita. Nuevo total del pedido: $1.511.767",
+        "Se canceló 1 unidad de Rodillo. Motivo: El cliente ya no la necesita. Nuevo total del pedido: $1.290.318"]
+    assert [r.extra_data for r in renglones] == [
+        {"line_id": rodillo.id, "quantity_cancelled": "2", "producto": "Rodillo", "cantidad_restante": "4"},
+        {"line_id": rodillo.id, "quantity_cancelled": "1", "producto": "Rodillo", "cantidad_restante": "3"}]
 
 
 def test_cancelar_sin_emparejar_el_json_no_muestra_un_resumen_que_no_cuadra(app_client, db, admin_token):
@@ -707,6 +792,11 @@ def test_cancelar_sin_emparejar_el_json_no_muestra_un_resumen_que_no_cuadra(app_
     assert d["productos"] == r["lineas"]
     assert (d["iva_cop"], d["total_cop"]) == (292173, 1829926)
     assert d["iva_discriminado"] is False and d["iva_por_tarifa"] == []
+    # Ronda r2: la linea no salio del JSON (no se pudo emparejar): la Actividad la nombra y guarda lo que quedo (0).
+    [renglon] = _logs(db, "PVEN", so.id, "LINEA_CANCELADA")
+    assert renglon.description.startswith("Se cancelaron 10 unidades de Cinta. Motivo:")
+    assert renglon.extra_data == {"line_id": cinta.id, "quantity_cancelled": "10", "producto": "Cinta",
+                                  "cantidad_restante": "0"}
 
 
 def test_cancelar_linea_de_pedido_canonico_con_descuento_por_linea(app_client, db, admin_token, sku):

@@ -72,6 +72,15 @@ def pesos(valor) -> str:
     return f"{signo}${abs(n):,.0f}".replace(",", ".")
 
 
+def unidades(cantidad) -> str:
+    """Una cantidad en los textos de la Actividad, sin los ceros de Numeric(10, 2) y con coma decimal es-CO:
+    '1 unidad', '10 unidades', '2,5 unidades', '0,33 unidades' (B3 T4, ronda r2: la unica forma; erp_ventas._unidades
+    la usa)."""
+    q = Decimal(str(cantidad)).normalize()
+    texto = format(q, "f").replace(".", ",")
+    return f"{texto} unidad" if q == 1 else f"{texto} unidades"
+
+
 def formato_pct(pct) -> str:
     """'60%', '100%', '0%', '12,5%' (coma decimal es-CO, maximo 2 decimales)."""
     q = Decimal(str(pct)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)

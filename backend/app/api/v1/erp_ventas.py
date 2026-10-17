@@ -37,7 +37,7 @@ from app.core.iva import (
 from app.core.ventas_dinero import (
     redondear_peso, pesos, formato_pct, anticipo_cotizacion, pct_anticipo_cotizacion, anticipo_requerido,
     anticipo_del_pedido, saldos_a_favor_de_cotizacion, PCT_ANTICIPO_POR_DEFECTO, ORIGEN_CONSERVADO,
-    anular_pxps_de_pedido, monto_linea, repartir_anticipo_por_linea,
+    anular_pxps_de_pedido, monto_linea, repartir_anticipo_por_linea, unidades,
 )
 from app.core.textos_actividad import etiqueta_estado, ETIQUETAS_ESTADO, PASOS_SC, nombre_de_usuario
 from app.core.chatter import validar_nota, reinicia_atraso, puede_registrar, CONTACTO_SOLO_ASESOR
@@ -3434,12 +3434,6 @@ def _validar_transicion_pedido(v: SaleOrder, nuevo) -> None:
     raise HTTPException(422, f"Un pedido {_nombre_de_estado('VEN', v.estado).lower()} solo puede pasar a {destinos}.")
 
 
-def _unidades(cantidad) -> str:
-    """'1 unidad', '2 unidades', '2.5 unidades' (sin los ceros de Numeric(10, 2))."""
-    q = Decimal(str(cantidad)).normalize()
-    return f"{q:f} unidad" if q == 1 else f"{q:f} unidades"
-
-
 def _liberar_lo_apartado_del_pedido(db: Session, v: SaleOrder, autor: Optional[str]) -> None:
     """A2 (revision final): lo que hace la cancelacion por PATCH /ventas/pedidos/{id} con lo que el pedido tenia
     apartado. Sin commit: va en el mismo commit que la cancelacion.
@@ -3468,7 +3462,7 @@ def _liberar_lo_apartado_del_pedido(db: Session, v: SaleOrder, autor: Optional[s
                    .group_by(PurchaseOrderFull.numero).order_by(PurchaseOrderFull.numero).all())
     _cancelar_lineas_del_pedido(db, lineas, datetime.datetime.utcnow(), autor)
     if compras:
-        detalle = "; ".join(f"{numero or 'compra sin número'}: {_unidades(cantidad)}" for numero, cantidad in compras)
+        detalle = "; ".join(f"{numero or 'compra sin número'}: {unidades(cantidad)}" for numero, cantidad in compras)
         db.add(ActivityLog(
             entity_type="VEN", entity_id=v.id, entity_numero=v.numero, action="COMPRA_REVISAR",
             description=(f"El pedido tenía compras asignadas ({detalle}): revisar en Compras qué hacer con esa "
