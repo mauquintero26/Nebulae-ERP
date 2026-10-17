@@ -709,6 +709,12 @@ def test_cancelar_mas_de_dos_decimales_es_422(app_client, db, admin_token):
                            json={"motivo": "El cliente ya no la necesita", "quantity": 0.333}, headers=auth(admin_token))
     assert resp.status_code == 422, resp.text
     assert resp.json()["detail"] == "La cantidad a cancelar admite hasta 2 decimales."
+    # Re-revisión r2: una cantidad absurda (más de 28 dígitos) no puede tumbar la revisión de decimales con un 500.
+    for absurda in (1e30, "1e30"):
+        resp = app_client.post(f"/api/v1/ventas/pedidos/{so.id}/lineas/{rodillo.id}/cancelar",
+                               json={"motivo": "El cliente ya no la necesita", "quantity": absurda},
+                               headers=auth(admin_token))
+        assert resp.status_code == 422, (absurda, resp.text)
     db.expire_all()
     db.refresh(so)
     assert so.productos == antes and so.total_cop == 1954666

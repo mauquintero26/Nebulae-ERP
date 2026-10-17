@@ -1520,9 +1520,11 @@ def cancel_sale_order_line(
         raise HTTPException(422, "La línea no tiene unidades cancelables")
 
     qty_to_cancel = body.quantity if body.quantity is not None else max_cancelable
-    if qty_to_cancel != qty_to_cancel.quantize(Decimal("0.01")):
+    exponente = qty_to_cancel.normalize().as_tuple().exponent
+    if not isinstance(exponente, int) or exponente < -2:
         # Ronda r2 de T4: la linea guarda la cantidad con 2 decimales (Numeric(10, 2)); con mas, el JSON productos, la
-        # linea y la cabecera quedarian con numeros distintos. Antes de calcular nada.
+        # linea y la cabecera quedarian con numeros distintos. Antes de calcular nada. Se mira el exponente y no
+        # quantize, que lanza InvalidOperation (500) con cantidades de mas de 28 digitos; esas siguen al tope de abajo.
         raise HTTPException(422, "La cantidad a cancelar admite hasta 2 decimales.")
     if qty_to_cancel > max_cancelable:
         raise HTTPException(422, f"Cantidad a cancelar ({qty_to_cancel}) supera la cantidad cancelable ({max_cancelable})")

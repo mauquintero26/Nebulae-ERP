@@ -74,8 +74,8 @@ def pesos(valor) -> str:
 
 def unidades(cantidad) -> str:
     """Una cantidad en los textos de la Actividad, sin los ceros de Numeric(10, 2) y con coma decimal es-CO:
-    '1 unidad', '10 unidades', '2,5 unidades', '0,33 unidades' (B3 T4, ronda r2: la unica forma; erp_ventas._unidades
-    la usa)."""
+    '1 unidad', '10 unidades', '2,5 unidades', '0,33 unidades' (B3 T4, ronda r2). La usan COMPRA_REVISAR (erp_ventas) y
+    LINEA_CANCELADA (erp_ventas_fase4). cambios_documento._qty todavia escribe las cantidades con punto ('×2.5')."""
     q = Decimal(str(cantidad)).normalize()
     texto = format(q, "f").replace(".", ",")
     return f"{texto} unidad" if q == 1 else f"{texto} unidades"
