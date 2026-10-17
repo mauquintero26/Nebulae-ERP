@@ -95,8 +95,10 @@ def tarifa_iva_defecto(db) -> str:
     valida o la lectura falla (queda en el log), TARIFA_IVA_POR_DEFECTO.
 
     La lectura va en un SAVEPOINT (r1): un error de la base se revierte solo hasta ahi y la sesion sigue sirviendo para
-    las consultas siguientes del mismo request (sin el, PostgreSQL deja la transaccion abortada). Como todo
-    begin_nested, hace flush de lo pendiente en la sesion antes de abrir el SAVEPOINT."""
+    las consultas siguientes del mismo request (sin el, PostgreSQL deja la transaccion abortada). Lo pendiente en la
+    sesion se manda (flush) ANTES del try: si es invalido, su propio error sale tal cual y no se confunde con la lectura
+    de la Configuracion (begin_nested haria ese mismo flush dentro del try)."""
+    db.flush()
     try:
         with db.begin_nested():
             guardada = leer_config(db, [CLAVE_TARIFA_DEFECTO]).get(CLAVE_TARIFA_DEFECTO)

@@ -296,14 +296,19 @@ def test_tarifa_por_defecto_sale_de_configuracion(db, monkeypatch):
         _restaurar_config(db, CLAVE, previo)
 
 
-def test_un_error_real_de_la_base_al_leer_la_tarifa_no_tumba_la_sesion(app_client, db, admin_token, monkeypatch):
+def test_un_error_real_de_la_base_al_leer_la_tarifa_no_tumba_la_sesion(app_client, db, admin_token, brand, category,
+                                                                       monkeypatch):
     """r1: la lectura va en un SAVEPOINT. Un error REAL de SQL se revierte solo hasta ahí: da '19', la sesión sigue
     sirviendo y el detalle de la cotización responde 200 (antes la consulta siguiente caía con
-    InFailedSqlTransaction)."""
+    InFailedSqlTransaction). La COT lleva una línea con SKU para que tarifas_de_producto haga una consulta real
+    DESPUÉS de la lectura fallida (re-revisión r1: con solo texto libre no consultaba nada)."""
     from app.core import iva
     from app.models.erp_documents import SalesQuotation
+    _, sku_5 = _producto(db, brand, category, tarifa_iva="5")
     cot = SalesQuotation(numero=f"COT-IVA-{_suf()}", estado="BORRADOR", customer_name="Cliente IVA",
-                         productos=[{"product_name": "Texto libre", "qty": 1, "unit_price_cop": 1000}])
+                         productos=[{"product_name": "Texto libre", "qty": 1, "unit_price_cop": 1000},
+                                    {"sku_id": sku_5.id, "product_name": "Con tarifa", "qty": 1,
+                                     "unit_price_cop": 1000}])
     db.add(cot); db.commit(); db.refresh(cot)
     cot_id = cot.id
     registro = []
@@ -319,7 +324,28 @@ def test_un_error_real_de_la_base_al_leer_la_tarifa_no_tumba_la_sesion(app_clien
     r = app_client.get(f"/api/v1/ventas/cotizaciones/{cot_id}", headers=auth(admin_token))
     assert r.status_code == 200, r.text
     assert r.json()["data"]["iva_tarifa_defecto"] == "19"
-    assert r.json()["data"]["tarifas_producto"] == [None]
+    assert r.json()["data"]["tarifas_producto"] == [None, "5"]
+
+
+def test_un_error_de_lo_pendiente_no_se_disfraza_de_lectura_de_la_tarifa(db, brand, category, monkeypatch):
+    """Re-revisión r1: lo pendiente de la sesión se manda (flush) ANTES del try. Si es inválido, su propio error sale tal
+    cual; no se registra como «No se pudo leer iva_tarifa_defecto» ni se devuelve '19' con la sesión rota."""
+    from app.core import iva
+    from app.models.catalog import Product
+    from sqlalchemy.exc import IntegrityError
+    registro = []
+    monkeypatch.setattr(iva.logger, "exception", lambda mensaje, *a, **k: registro.append(mensaje % a))
+    db.add(Product(brand_id=brand.id, category_id=category.id, name=None, type="Fisico", base_currency="COP",
+                   uom="Ud"))  # name es NOT NULL
+    try:
+        iva.tarifa_iva_defecto(db)
+    except IntegrityError:
+        pass
+    else:
+        raise AssertionError("tarifa_iva_defecto escondió el error de lo pendiente")
+    finally:
+        db.rollback()
+    assert registro == []
 
 
 def test_config_valida_la_tarifa_y_el_asesor_la_lee(app_client, db, admin_token, vendedor_token):
