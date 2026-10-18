@@ -14,19 +14,24 @@ Bloque 3, T5 (U17+H28, U22+H38, U23; C2, C10, C11, C26, R24, RP26, RP27):
 - data conserva numero, estado, total_cop (COT) y productos de siempre y agrega documento (la forma unica de C2).
 - POST /pedido-cliente/ver: el enlace de CONSULTA del pedido (TIPOS_CONSULTA, C11), que no se gasta.
 - Nunca se devuelve el dict interno de consultar_token (ids, document_id...): se proyecta campo por campo.
+
+Bloque 3, T6 (H28-cambios, U22-cambios; C9, C17, C20, C26, R12, RP21): POST /confirmar/pedir-cambios, un solo endpoint
+para la SC y la COT (ver pedir_cambios_via_token).
 """
 import logging
+import unicodedata
 
 from fastapi import APIRouter, HTTPException, Depends, Header
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.core.confirmation_tokens import (RESULTADO_CONFIRMADO, TIPOS_CONSULTA, consultar_token, hash_token,
-                                          marcar_resultado, reclamar_token, revoke_pending_tokens)
+from app.core.confirmation_tokens import (RESULTADO_CAMBIOS, RESULTADO_CONFIRMADO, TIPOS_CONSULTA, consultar_token,
+                                          hash_token, marcar_resultado, reclamar_token, revoke_pending_tokens)
 from app.core.documento_cliente import (MENSAJE_GRACIAS, documento_cot, documento_pven, documento_sc, estado_enlace,
                                         forma_de_pago, productos_publicos_sc, siguiente_paso_sc)
 from app.core.empresa import perfil_publico
 from app.core.fechas import ahora_utc, iso_z
+from app.core.textos_actividad import etiqueta_estado
 from app.db.database import get_db
 from app.models.erp_documents import CustomerRequest, SaleOrder, SalesQuotation
 
@@ -336,3 +341,237 @@ def ver_pedido_cliente(body: TokenBody, db: Session = Depends(get_db)):
         raise HTTPException(400, detail=_detalle(db, "invalido", GENERIC_ERROR))
     return {"status": "success", "empresa": perfil_publico(db), "data": documento_pven(db, so),
             "cot_numero": so.cot_numero}
+
+
+# ─── T6: «Pedir cambios» desde el enlace (H28-cambios, U22-cambios; C9, C17, C20, C26, R12, RP21) ──────────────────
+
+# RP21: los límites del comentario con nombre; la paridad de T13 los compara con puedeEnviarCambios (frontend).
+MIN_COMENTARIO_CAMBIOS = 10
+MAX_COMENTARIO_CAMBIOS = 1000
+TIPO_CAMBIOS = "CAMBIOS"
+TIPO_NO_LA_NECESITA = "NO_LA_NECESITA"  # R8: solo en la SC (vuelve al asesor marcada «Ya no la necesita»)
+TIPOS_PEDIR_CAMBIOS = (TIPO_CAMBIOS, TIPO_NO_LA_NECESITA)
+USUARIO_DEL_ENLACE = "Cliente (por el enlace)"
+MENSAJE_COMENTARIO_CORTO = f"Cuéntanos qué quieres cambiar (al menos {MIN_COMENTARIO_CAMBIOS} caracteres)."
+MENSAJE_COMENTARIO_LARGO = f"Tu mensaje puede tener hasta {MAX_COMENTARIO_CAMBIOS} caracteres."
+MENSAJE_TIPO_INVALIDO = "Elige «Pedir cambios» o «Ya no la necesito»."
+MENSAJE_SOLO_SOLICITUD = "La opción «Ya no la necesito» solo existe para la solicitud."
+# C20: el renglón de la COT temprana que vuelve a Borrador cuando el cliente pide cambios en su SC.
+TEXTO_COT_TEMPRANA_A_BORRADOR = "El cliente pidió cambios en la solicitud: ajusta y reenvía la cotización"
+_ENLACE_ANULADO = "Anulado: el cliente ya no puede confirmar con el enlace que recibió"
+_NOMBRE_DOCUMENTO = {"SC": "solicitud", "COT": "cotización"}
+
+
+class PedirCambiosBody(BaseModel):
+    """R12/C8: solo declara tipos. Las reglas de negocio (tipo, 10 a 1000 caracteres) se validan a mano dentro del
+    endpoint con un 422 en español, ANTES de tocar el enlace."""
+    token: str
+    tipo: str = TIPO_CAMBIOS
+    comentario: str = ""
+
+
+def _limpiar_comentario(texto: str) -> str:
+    """El comentario sin los caracteres de control (salvo el salto de línea y el tabulador) ni surrogates sueltos, con
+    los saltos de línea normalizados y sin espacios en los bordes. Un NUL o un surrogate harían fallar la escritura en
+    la base DESPUÉS de gastar el enlace (500 con el enlace perdido): se quitan al validar."""
+    texto = texto.replace("\r\n", "\n").replace("\r", "\n")
+    return "".join(ch for ch in texto if ch in "\n\t" or unicodedata.category(ch) not in ("Cc", "Cs")).strip()
+
+
+def _validar_pedido_de_cambios(body: PedirCambiosBody) -> tuple:
+    """(tipo, comentario o None) o HTTPException(422, mensaje en español) (R12). No toca el enlace."""
+    if body.tipo not in TIPOS_PEDIR_CAMBIOS:
+        raise HTTPException(422, MENSAJE_TIPO_INVALIDO)
+    comentario = _limpiar_comentario(body.comentario)
+    if len(comentario) > MAX_COMENTARIO_CAMBIOS:
+        raise HTTPException(422, MENSAJE_COMENTARIO_LARGO)
+    if body.tipo == TIPO_CAMBIOS and len(comentario) < MIN_COMENTARIO_CAMBIOS:
+        raise HTTPException(422, MENSAJE_COMENTARIO_CORTO)
+    return body.tipo, comentario or None
+
+
+def _anotar_cambios(db: Session, reclamado: dict, numero) -> None:
+    """marcar_resultado 'CAMBIOS' del enlace recién reclamado, en el commit del cambio. Si no lo anota (no debería: se
+    acaba de reclamar), el cambio vale igual, pero queda el error en el registro en vez de perderse en silencio."""
+    if not marcar_resultado(db, reclamado["id"], RESULTADO_CAMBIOS):
+        logger.error("El enlace %s de %s %s no quedo marcado CAMBIOS (no estaba reclamado o ya tenia resultado)",
+                     reclamado["id"], reclamado["document_type"], numero)
+
+
+def _extra_de_cambios(tipo: str, comentario, estado_etiqueta: str, estado: str) -> dict:
+    """extra_data del renglón CAMBIOS_CLIENTE: {tipo, comentario, cambios} con los renglones 'etiqueta -> despues' (sin
+    'campo', el formato de C1/H27: no hay un 'antes' que tachar)."""
+    return {"tipo": tipo, "comentario": comentario,
+            "cambios": [{"etiqueta": "Comentario del cliente", "despues": comentario or "—"},
+                        {"etiqueta": estado_etiqueta, "despues": estado}]}
+
+
+def _cambios_en_cotizacion_temprana(db: Session, sc, cot, tipo: str, comentario, ahora) -> None:
+    """C20 (U11): una COT activa de la SC donde el cliente pidió cambios, en el MISMO commit. Si estaba en Pendiente por
+    confirmación vuelve a Borrador con gate2 None y sus enlaces revocados (así el cliente no aprueba la COT vieja
+    después de pedir cambios en la SC); en otro estado (Borrador) solo recibe el renglón SC_CAMBIOS_CLIENTE. La marca
+    cambios_cliente_* es de la SC: la COT no la lleva (no cuenta dos veces en las alertas).
+    Solo se bloquea (FOR UPDATE, después de la SC, el mismo orden que PATCH /solicitudes/{id}/cliente) la COT que va a
+    cambiar de estado: una en Borrador solo recibe un renglón, y bloquearla podría cruzarse con update_cotizacion, que
+    bloquea la COT antes que su SC al cambiarle la solicitud."""
+    from app.api.v1.erp_ventas import _log
+    if cot.estado == "PENDIENTE_CONFIRMACION":
+        db.refresh(cot, with_for_update=True)  # releída bloqueada: el cliente pudo confirmarla en otra pestaña
+    if cot.estado == "RECHAZADA":  # la rechazaron entre la consulta y el bloqueo: ya no es activa
+        return
+    renglones = [{"etiqueta": "Comentario del cliente", "despues": comentario or "—"}]
+    old_estado = new_estado = None
+    if cot.estado == "PENDIENTE_CONFIRMACION":
+        old_estado, new_estado = cot.estado, "BORRADOR"
+        cot.estado = new_estado
+        cot.gate2_confirmed_at = None
+        cot.updated_at = ahora
+        vigentes = revoke_pending_tokens(db, "COT", cot.id, commit=False, contar_vigentes=True)
+        renglones.append({"etiqueta": "Estado de la cotización", "despues": etiqueta_estado("COT", new_estado)})
+        if vigentes:
+            renglones.append({"etiqueta": "Enlace de confirmación", "despues": _ENLACE_ANULADO})
+        if tipo == TIPO_CAMBIOS:
+            descripcion = TEXTO_COT_TEMPRANA_A_BORRADOR
+        else:
+            descripcion = ("El cliente dice que ya no necesita la solicitud: la cotización vuelve a Borrador; decide "
+                           "si la rechazas o la ajustas.")
+    elif tipo == TIPO_CAMBIOS:
+        descripcion = (f"El cliente pidió cambios en la solicitud {sc.numero}: «{comentario}». Revisa esta cotización "
+                       f"antes de enviarla.")
+    else:
+        cita = f": «{comentario}»" if comentario else ""
+        descripcion = (f"El cliente dice que ya no necesita la solicitud {sc.numero}{cita}. Revisa esta cotización "
+                       f"antes de enviarla.")
+    _log(db, "COT", cot.id, cot.numero, "SC_CAMBIOS_CLIENTE", descripcion, old_estado=old_estado,
+         new_estado=new_estado, user_name=USUARIO_DEL_ENLACE,
+         extra_data={"tipo": tipo, "comentario": comentario, "sc_numero": sc.numero, "cambios": renglones},
+         commit=False)
+
+
+def _cambios_en_solicitud(db: Session, sc, reclamado: dict, tipo: str, comentario, ahora) -> None:
+    """Rama SC (H28-cambios): vuelve a Asignada (Nueva sin asesor, la regla única de Gate 1) sin la confirmación del
+    cliente y con la marca cambios_cliente_*; revoca sus otros enlaces, anota CAMBIOS en el usado, deja el renglón
+    CAMBIOS_CLIENTE y aplica C20 a sus COT activas. Sin commit: lo hace el endpoint (uno solo)."""
+    from app.api.v1.erp_ventas import _documentos_activos_de_solicitud, _estado_tras_reinicio, _log
+    old_estado = sc.estado
+    sc.estado = _estado_tras_reinicio(sc)
+    sc.gate1_confirmed_at = None
+    sc.cambios_cliente_at = ahora
+    sc.cambios_cliente_tipo = tipo
+    sc.cambios_cliente_comentario = comentario
+    sc.updated_at = ahora
+    revoke_pending_tokens(db, "SC", sc.id, commit=False)  # el enlace usado ya tiene used_at: no se toca
+    _anotar_cambios(db, reclamado, sc.numero)
+    etiqueta = etiqueta_estado("SC", sc.estado)
+    if tipo == TIPO_CAMBIOS:
+        descripcion = (f"El cliente pidió cambios desde el enlace: «{comentario}». La solicitud vuelve a {etiqueta} "
+                       f"para que la ajustes y se la reenvíes.")
+    else:
+        cita = f": «{comentario}»" if comentario else ""
+        descripcion = (f"El cliente dice que ya no necesita esta solicitud{cita}. Vuelve a {etiqueta}: decide si la "
+                       f"cancelas o la ajustas.")
+    _log(db, "SC", sc.id, sc.numero, "CAMBIOS_CLIENTE", descripcion, old_estado=old_estado, new_estado=sc.estado,
+         user_name=USUARIO_DEL_ENLACE,
+         extra_data=_extra_de_cambios(tipo, comentario, "Estado de la solicitud", etiqueta), commit=False)
+    cots_activas, _ = _documentos_activos_de_solicitud(db, sc.id)
+    for cot in cots_activas:
+        _cambios_en_cotizacion_temprana(db, sc, cot, tipo, comentario, ahora)
+
+
+def _cambios_en_cotizacion(db: Session, cot, reclamado: dict, comentario, ahora) -> None:
+    """Rama COT (U22-cambios con C9): vuelve a Borrador con gate2 None y la marca cambios_cliente_*; revoca sus otros
+    enlaces, anota CAMBIOS en el usado y deja el renglón CAMBIOS_CLIENTE. No toca la SC (U15) ni el lead. Sin commit."""
+    from app.api.v1.erp_ventas import _log
+    old_estado = cot.estado
+    cot.estado = "BORRADOR"
+    cot.gate2_confirmed_at = None
+    cot.cambios_cliente_at = ahora
+    cot.cambios_cliente_tipo = TIPO_CAMBIOS
+    cot.cambios_cliente_comentario = comentario
+    cot.updated_at = ahora
+    revoke_pending_tokens(db, "COT", cot.id, commit=False)
+    _anotar_cambios(db, reclamado, cot.numero)
+    etiqueta = etiqueta_estado("COT", cot.estado)
+    descripcion = (f"El cliente pidió cambios desde el enlace: «{comentario}». La cotización vuelve a {etiqueta} para "
+                   f"que la ajustes y se la reenvíes.")
+    _log(db, "COT", cot.id, cot.numero, "CAMBIOS_CLIENTE", descripcion, old_estado=old_estado, new_estado=cot.estado,
+         user_name=USUARIO_DEL_ENLACE,
+         extra_data=_extra_de_cambios(TIPO_CAMBIOS, comentario, "Estado de la cotización", etiqueta), commit=False)
+
+
+def _respuesta_cambios(db: Session, documento: str, doc, info: dict, tipo: str, comentario, asesor: str) -> dict:
+    """El 200 de /confirmar/pedir-cambios (H28 j, C26), armado DESPUÉS del commit: {status, estado_enlace
+    'cambios_enviados', mensaje, detalle, comentario, empresa, data}. data es el resumen público del documento (la
+    misma proyección de /confirmar/ver, nunca _sc_dict/_cot_dict ni el dict de consultar_token). Si armarlo falla (un
+    dato viejo malformado), el cambio ya quedó guardado: data None y el error en el registro, nunca un 500."""
+    nombre = _NOMBRE_DOCUMENTO[documento]
+    if tipo == TIPO_CAMBIOS:
+        mensaje = "¡Listo! Recibimos tus cambios."
+        detalle = f"{asesor} ajustará tu {nombre} y te enviará un enlace nuevo."
+    else:
+        mensaje = "Recibimos tu respuesta."
+        detalle = f"{asesor} revisará tu respuesta y se pondrá en contacto contigo."
+    base = {"status": "success", "estado_enlace": "cambios_enviados", "mensaje": mensaje, "detalle": detalle,
+            "comentario": comentario}
+    try:
+        data = _sc_confirmacion_dict(db, doc) if documento == "SC" else _cot_confirmacion_dict(db, doc, info)
+        return {**base, "empresa": perfil_publico(db), "data": data}
+    except Exception:
+        logger.error("Los cambios del cliente en %s quedaron guardados, pero no se pudo armar la respuesta", documento,
+                     exc_info=True)
+        db.rollback()
+    try:
+        empresa = perfil_publico(db)
+    except Exception:
+        logger.error("Tampoco se pudo leer la empresa para la respuesta de pedir cambios", exc_info=True)
+        db.rollback()
+        empresa = None
+    return {**base, "empresa": empresa, "data": None}
+
+
+@router.post("/confirmar/pedir-cambios")
+def pedir_cambios_via_token(body: PedirCambiosBody, idempotency_key: str = Header(..., alias="Idempotency-Key"),
+                            db: Session = Depends(get_db)):
+    """C9: un solo endpoint para la SC y la COT, con Idempotency-Key obligatorio como /confirmar/confirmar.
+    1) valida el cuerpo a mano (R12): 422 en español SIN tocar el enlace;
+    2) consultar_token (sin efectos; solo SC y COT, C11: un enlace del pedido responde 'invalido' y no se gasta): si el
+       enlace no está pendiente (vencido, usado, reemplazado, documento que ya no espera al cliente...), 400 con el
+       detail de _detalle_enlace (C10, C26) sin gastar nada. NO_LA_NECESITA en una COT es 422, también sin gastarlo;
+    3) reclamar_token, atómico y con su propio commit: lo que llegue primero (confirmar o pedir cambios) gana;
+    4) rama por tipo con el documento bloqueado (FOR UPDATE) y UN solo commit (_cambios_en_solicitud,
+       _cambios_en_cotizacion);
+    5) después del commit, el aviso al asesor (erp_ventas._avisar_asesor_por_correo, C17), en try/except: si falla, el
+       cliente igual recibe su 200 y el error queda en el registro.
+    El comentario del cliente es dato: se guarda como texto, va escapado en el correo y React lo muestra como texto."""
+    tipo, comentario = _validar_pedido_de_cambios(body)
+    info = consultar_token(db, body.token)
+    estado, detalle, _ = _resolver_enlace(db, info)
+    if estado != "pendiente":
+        raise HTTPException(400, detail=detalle)
+    documento = info["document_type"]
+    if tipo == TIPO_NO_LA_NECESITA and documento != "SC":
+        raise HTTPException(422, MENSAJE_SOLO_SOLICITUD)
+    reclamado = reclamar_token(db, body.token)
+    if reclamado is None:  # doble clic u otra pestaña: la página muestra en qué quedó el enlace
+        raise HTTPException(400, detail=_detalle_al_confirmar(db, body.token))
+    doc = _documento_del_enlace(db, reclamado, bloquear=True)
+    if doc is None or doc.estado != "PENDIENTE_CONFIRMACION":
+        # El enlace ya quedó gastado (como en confirmar): el documento cambió entre la consulta y el bloqueo.
+        raise HTTPException(400, detail=_detalle_al_confirmar(db, body.token))
+    from app.core.documento_cliente import _asesor_del_documento
+    asesor = _asesor_del_documento(db, doc, documento)  # antes del commit: después el objeto queda expirado
+    ahora = ahora_utc()
+    if documento == "SC":
+        _cambios_en_solicitud(db, doc, reclamado, tipo, comentario, ahora)
+    else:
+        _cambios_en_cotizacion(db, doc, reclamado, comentario, ahora)
+    db.commit()
+
+    try:
+        from app.api.v1.erp_ventas import _avisar_asesor_por_correo
+        _avisar_asesor_por_correo(db, doc, documento)
+    except Exception:
+        logger.error("Los cambios del cliente en %s quedaron guardados, pero no se pudo avisar al asesor", documento,
+                     exc_info=True)
+        db.rollback()
+    return _respuesta_cambios(db, documento, doc, info, tipo, comentario, asesor)

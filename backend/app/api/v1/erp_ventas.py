@@ -339,6 +339,92 @@ def _extra_data_de_envio(canal: Optional[str], correo_res: dict) -> dict:
             "correo": {k: correo_res[k] for k in ("enviado", "destino", "motivo")},
             "cambios": _detalle_envio(canal, correo_res)}
 
+
+# ─── B3 T6 (H28-cambios, C17): aviso al asesor cuando el cliente pide cambios desde su enlace ─────────────────────
+
+_NOMBRE_DOCUMENTO_AVISO = {"SC": "solicitud", "COT": "cotización"}
+_RUTA_DOCUMENTO_AVISO = {"SC": "solicitud", "COT": "cotizacion"}  # /dashboard/ventas/{ruta}/{id}
+# Lo que dice el renglon AVISO_ASESOR cuando el correo no salio (textos para el asesor, no los del correo al cliente).
+_AVISO_NO_SALIO = {
+    "SIN_ASESOR": "la {documento} no tiene asesor asignado",
+    "SIN_CORREO_ASESOR": "el asesor no tiene correo registrado",
+    "CORREO_NO_CONFIGURADO": "el envío de correos no está configurado en el sistema",
+    "FALLO_ENVIO": "falló el servidor de correo al enviar a {destino}",
+}
+
+
+def _una_linea(texto) -> str:
+    """El texto en una sola linea (sin saltos ni espacios de mas): va en el asunto del correo."""
+    return " ".join(str(texto or "").split())
+
+
+def _correo_del_aviso(tipo: str, numero: str, cliente: str, tipo_cambio: Optional[str], comentario: Optional[str],
+                      estado: str, link: str) -> tuple:
+    """(asunto, html) del aviso al asesor. Todo lo que viene del cliente (su nombre, su comentario) va escapado con
+    html.escape: es dato, nunca HTML ni instrucciones."""
+    from html import escape
+    documento = _NOMBRE_DOCUMENTO_AVISO[tipo]
+    if tipo_cambio == "NO_LA_NECESITA":
+        asunto = f"{cliente} dice que ya no necesita la {documento} {numero}"
+        que_hizo, siguiente = f"dice que ya no necesita la {documento}", "decide si la cancelas o la ajustas."
+    else:
+        asunto = f"{cliente} pidió cambios en la {documento} {numero}"
+        que_hizo, siguiente = f"pidió cambios en la {documento}", "ajústala y reenvíasela al cliente."
+    if comentario:
+        cita = escape(comentario).replace("\n", "<br>")
+        cuerpo_comentario = (f'<blockquote style="margin:12px 0;padding:8px 12px;border-left:3px solid #f59e0b;'
+                             f'background:#fffbeb">{cita}</blockquote>')
+    else:
+        cuerpo_comentario = "<p><em>Sin comentario.</em></p>"
+    html = (f"<p>{escape(cliente)} {que_hizo} <strong>{escape(numero)}</strong> desde su enlace:</p>"
+            f"{cuerpo_comentario}"
+            f"<p>La {documento} quedó en {escape(etiqueta_estado(tipo, estado))}: {siguiente}</p>"
+            f'<p><a href="{escape(link, quote=True)}">Abrir la {documento} {escape(numero)}</a></p>')
+    return _una_linea(asunto), html
+
+
+def _avisar_asesor_por_correo(db: Session, doc, tipo: str) -> dict:
+    """C17: avisa al asesor (el de la SC; en la COT, el de su SC) que el cliente pidio cambios desde su enlace, con su
+    propio correo (_correo_del_aviso, textos para el asesor) por _enviar_correo_confirmacion, y deja el renglon
+    AVISO_ASESOR con lo que paso. Devuelve el resultado del correo {enviado, destino, motivo, mensaje}.
+
+    Se llama DESPUES del commit que guardo el cambio (confirmacion_publica.pedir_cambios_via_token): lee el documento,
+    el asesor y la marca de la empresa, y antes del SMTP (sincrono, hasta 10 s) termina esa lectura con un rollback
+    (no hay nada pendiente) para no retener una conexion de la base. El renglon va en su propio commit. Quien lo llama
+    lo envuelve en try/except: si falla, el cliente igual recibe su 200. El aviso no reinicia el conteo de atraso (C22):
+    solo agrega un renglon, no toca el documento."""
+    from app.core.confirmation_tokens import frontend_url
+    doc_id, numero, estado = doc.id, doc.numero, doc.estado
+    cliente = _una_linea(doc.customer_name) or "El cliente"
+    tipo_cambio, comentario = doc.cambios_cliente_tipo, doc.cambios_cliente_comentario
+    sc = doc if tipo == "SC" else (db.query(CustomerRequest).filter(CustomerRequest.id == doc.sc_id).first()
+                                   if doc.sc_id else None)
+    asesor = (db.query(User).filter(User.id == sc.advisor_user_id).first()
+              if sc is not None and sc.advisor_user_id else None)
+    destino = (asesor.email or "").strip() if asesor is not None else ""
+    remitente = perfil_publico(db)["nombre_comercial"] or None
+    link = f"{frontend_url()}/dashboard/ventas/{_RUTA_DOCUMENTO_AVISO[tipo]}/{doc_id}"
+    asunto, html = _correo_del_aviso(tipo, numero, cliente, tipo_cambio, comentario, estado, link)
+    db.rollback()  # fin de la lectura: el SMTP no retiene una conexion (nada pendiente: el cambio ya se confirmo)
+
+    if asesor is None:
+        res = {"enviado": False, "destino": None, "motivo": "SIN_ASESOR"}
+    elif not destino:
+        res = {"enviado": False, "destino": None, "motivo": "SIN_CORREO_ASESOR"}
+    else:
+        res = _enviar_correo_confirmacion(destino, asunto, html, remitente_nombre=remitente)
+    if res["enviado"]:
+        texto = f"Aviso por correo a {res['destino']}: enviado."
+    else:
+        motivo = _AVISO_NO_SALIO.get(res["motivo"], "no se pudo enviar el correo")
+        texto = ("No se pudo avisar por correo al asesor: "
+                 + motivo.format(documento=_NOMBRE_DOCUMENTO_AVISO[tipo], destino=res["destino"]) + ".")
+    res["mensaje"] = texto
+    _log(db, tipo, doc_id, numero, "AVISO_ASESOR", texto, user_name="Sistema",
+         extra_data={"correo": {k: res[k] for k in ("enviado", "destino", "motivo")}})
+    return res
+
+
 def _registrar_cambios(db: Session, entidad: str, doc, antes: dict, body: dict, user: User,
                        recotizacion: bool = False, commit: bool = True):
     """Deja en la Actividad un renglon con lo que cambio este PATCH (campo: antes -> despues).
@@ -741,6 +827,24 @@ def _texto_estado_cambiado(etiqueta: str, motivo: str) -> str:
     return f"Estado cambiado a {etiqueta}: {motivo}"
 
 
+def _cambios_cliente_dict(doc) -> Optional[dict]:
+    """B3 T6 (H28-cambios, C9): los cambios que pidio el cliente desde su enlace (columnas cambios_cliente_* de la SC o
+    la COT, fa6_029): {'at' (UTC con 'Z'), 'tipo' ('CAMBIOS' | 'NO_LA_NECESITA'), 'comentario' (texto o None)}, o None
+    si no hay una marca vigente (reenviar el documento la limpia)."""
+    if doc.cambios_cliente_at is None:
+        return None
+    return {"at": _iso_utc(doc.cambios_cliente_at), "tipo": doc.cambios_cliente_tipo,
+            "comentario": doc.cambios_cliente_comentario}
+
+
+def _limpiar_cambios_cliente(doc) -> None:
+    """B3 T6 (H28, C21): al enviar o reenviar el documento el asesor ya respondio a lo que pidio el cliente; la marca se
+    borra en el MISMO commit del envio (RP16). La Actividad conserva el comentario."""
+    doc.cambios_cliente_at = None
+    doc.cambios_cliente_tipo = None
+    doc.cambios_cliente_comentario = None
+
+
 def _sc_dict(sc: CustomerRequest) -> dict:
     return {
         "id": sc.id,
@@ -765,6 +869,8 @@ def _sc_dict(sc: CustomerRequest) -> dict:
         "notas": sc.notas,
         # R3 (B3 T5): la «Nota para el cliente» (la ve el cliente en la SC, la COT y el PVEN); `notas` es interna.
         "nota_cliente": sc.nota_cliente,
+        # B3 T6 (H28-cambios): lo que pidio el cliente desde su enlace (la marca de la lista y el recuadro del detalle).
+        "cambios_cliente": _cambios_cliente_dict(sc),
         "productos": sc.productos or [],
         "created_at": _iso_utc(sc.created_at),
         "updated_at": _iso_utc(sc.updated_at),
@@ -1843,8 +1949,12 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
     este segundo caso es un reenvio (Round 6: cierra el callejon sin salida de un
     link vencido, TTL de 2 dias, sin ninguna forma de pedir uno nuevo). La SC
     queda/permanece en PENDIENTE_CONFIRMACION hasta que el cliente confirme via el
-    link (ver confirmacion_publica.py)."""
-    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
+    link (ver confirmacion_publica.py).
+
+    B3 T6 (H28, RP16): la SC se lee FOR UPDATE y todo lo del envio (revocacion, token nuevo, estado y la limpieza de
+    cambios_cliente_*) va en UN solo commit antes del correo: un «Pedir cambios» del cliente que llega al mismo tiempo
+    espera a este commit (o este espera al suyo) y nunca queda borrado a medias."""
+    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
     if sc.estado not in ("ASIGNADA", "PENDIENTE_CONFIRMACION"):
@@ -1881,6 +1991,8 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
 
     sc.estado = "PENDIENTE_CONFIRMACION"
     sc.updated_at = datetime.datetime.utcnow()
+    # B3 T6 (H28, C21): el asesor ya respondio a lo que pidio el cliente; la marca se borra en este mismo commit.
+    _limpiar_cambios_cliente(sc)
     # Se leen antes del commit: despues el objeto queda expirado y leerlo abriria otra transaccion mientras el correo
     # (SMTP sincrono) sale. La marca de la empresa (B3 PLANTILLA) tambien: un SELECT dentro de esta misma transaccion.
     numero, destino, cliente = sc.numero, sc.customer_email, sc.customer_name
@@ -2367,6 +2479,8 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
     # creada sin confirmacion se muestra mientras la SC no este confirmada. None si la COT no tiene SC.
     d["sc_estado"] = sc.estado if sc is not None else None
     d["sc_confirmacion_vigente"] = _confirmacion_vigente_sc(sc) if sc is not None else None
+    # B3 T6 (U22-cambios con C9): lo que pidio el cliente desde el enlace de la COT, de sus columnas (no de los logs).
+    d["cambios_cliente"] = _cambios_cliente_dict(cot)
     # Anticipo (H36+H43, N1, R3, R6): lo mismo que exigira convertir_cotizacion_a_venta. Solo en el detalle (no en
     # _cot_dict) para no hacer una consulta por fila en el listado. B3 T5 (r1): la misma cuenta que ve el cliente en
     # su cotizacion (resumen_anticipo_cotizacion: % a 2 decimales, saldo a favor y lo que falta).
@@ -3108,8 +3222,13 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     para SC, porque update_cotizacion siempre puede reiniciar el ciclo a BORRADOR
     primero (vía cualquier edicion de precio, o la pastilla generica) y desde ahi
     volver a pedir un envio nuevo.
+
+    B3 T6 (H28, U22-cambios, RP16): la COT se lee FOR UPDATE y la revocacion, el token nuevo, el estado, el canal y la
+    limpieza de cambios_cliente_* van en UN solo commit antes del correo. El lead del CRM pasa a QUOTATION despues del
+    correo, en el commit del renglon del envio: si falla, se deshace solo lo del lead y el envio queda (el aislamiento
+    de siempre, sin otro commit antes del correo).
     """
-    cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
+    cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).with_for_update().first()
     if not cot:
         raise HTTPException(404, "Cotización no encontrada")
     if cot.estado not in ("BORRADOR", "ENVIADA"):
@@ -3154,35 +3273,36 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     if canal:
         cot.canal_envio = canal  # H27: en el mismo commit que el estado (ya no hay un PATCH previo del frontend)
     cot.updated_at = datetime.datetime.utcnow()
+    # B3 T6 (H28, C21): el asesor ya respondio a lo que pidio el cliente; la marca se borra en este mismo commit.
+    _limpiar_cambios_cliente(cot)
     # Valores simples: se usan despues del commit sin recargar el objeto. La marca de la empresa (B3 PLANTILLA) se lee
     # en esta misma transaccion, no despues (no se abre otra mientras sale el SMTP).
-    numero, destino, cliente = cot.numero, cot.customer_email, cot.customer_name
+    numero, destino, cliente, sc_id = cot.numero, cot.customer_email, cot.customer_name, cot.sc_id
     perfil = perfil_publico(db)
     # B3 PLANTILLA (C17, C21): el correo sale de correo_documento con la marca de la empresa y su nombre de remitente.
     # Se arma ANTES del commit (r1, Q3): si no se puede armar, se revierte todo.
     asunto, html = _armar_correo_o_revertir(db, perfil, "COT", numero, cliente, link)
+    # RP16: el UNICO commit antes del correo. Ya no se llama _sincronizar_estado_solicitud_desde_cotizacion: con U15 una
+    # COT en PENDIENTE_CONFIRMACION no toca la SC (salia sin hacer nada), y sin refresh ni sincronizacion no queda
+    # abierta una transaccion de lectura mientras sale el SMTP sincrono.
     db.commit()
-    db.refresh(cot)
-    try:
-        _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
-        # Restaura el movimiento de Lead a "QUOTATION" que el flujo viejo (PATCH directo
-        # a ENVIADA) disparaba al enviar una cotizacion -- el endpoint dedicado de este
-        # Round es ahora el unico lugar real donde "se envia la cotizacion", asi que el
-        # efecto tiene que vivir aqui.
-        mover_lead_de_solicitud(cot.sc_id, "QUOTATION", db)
-    except Exception as exc:
-        db.rollback()
-        logger.error(f"Error al sincronizar Solicitud/Lead tras enviar cotizacion {cot.id} para confirmacion: {exc}", exc_info=True)
     # H39: el correo de respaldo se intenta (y su resultado se conoce) antes de anotar el envio en la Actividad.
-    # El refresh y la sincronizacion de arriba pueden dejar abierta una transaccion de solo lectura: se cierra con un
-    # commit (inofensivo si no hay nada pendiente) para no retener la conexion de la base durante el SMTP sincrono.
-    db.commit()
     correo_res = _enviar_correo_confirmacion(destino, asunto, html,
                                              remitente_nombre=perfil["nombre_comercial"] or None)
+    # El lead pasa a "Cotización enviada" (el efecto que el PATCH viejo a ENVIADA disparaba; este endpoint es el unico
+    # lugar donde "se envia la cotizacion"). B3 T6 (RP16): despues del correo y sin commit propio (commit=False solo
+    # hace flush); lo confirma el commit del renglon de abajo. Si falla, el rollback deshace solo lo del lead: el envio
+    # ya quedo confirmado arriba.
+    try:
+        mover_lead_de_solicitud(sc_id, "QUOTATION", db, commit=False)
+    except Exception as exc:
+        db.rollback()
+        logger.error(f"Error al mover el lead tras enviar la cotizacion {cot_id} para confirmacion: {exc}",
+                     exc_info=True)
     descripcion = "Enviada para confirmación del cliente"
     if canal:
         descripcion += f" {CANALES_ENVIO[canal]}"
-    _log(db, "COT", cot.id, numero, "ESTADO_CHANGED", descripcion,
+    _log(db, "COT", cot_id, numero, "ESTADO_CHANGED", descripcion,
          old_estado=old_estado, new_estado="PENDIENTE_CONFIRMACION",
          user_name=body.get("user_name") or getattr(user, "email", None),
          extra_data=_extra_data_de_envio(canal, correo_res))
@@ -4036,9 +4156,26 @@ def alertas_resumen(user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Ses
         "status": "success",
         "data": {
             "atrasados": sc_atrasadas + cot_atrasadas + ven_atrasados
-                         + sc_confirmadas_sin_accion + cot_confirmadas_sin_accion
+                         + sc_confirmadas_sin_accion + cot_confirmadas_sin_accion,
+            "cambios_cliente": _contar_cambios_cliente(db, user),
         }
     }
+
+
+def _contar_cambios_cliente(db: Session, user: User) -> int:
+    """B3 T6 (H28-cambios, C9, C22): cuantos documentos tienen cambios pedidos por el cliente sin responder: SC con la
+    marca en Asignada o Nueva y COT con la marca en Borrador (reenviar la limpia). Es una cuenta APARTE que no suma a
+    'atrasados'. Un asesor ve solo las suyas (la SC con su advisor_user_id; la COT por el asesor de su SC); los demas
+    roles, todas."""
+    solicitudes = db.query(CustomerRequest.id).filter(CustomerRequest.cambios_cliente_at.isnot(None),
+                                                      CustomerRequest.estado.in_(("ASIGNADA", "BORRADOR")))
+    cotizaciones = db.query(SalesQuotation.id).filter(SalesQuotation.cambios_cliente_at.isnot(None),
+                                                      SalesQuotation.estado == "BORRADOR")
+    if normalize_role(user.role) == "ASESOR":
+        solicitudes = solicitudes.filter(CustomerRequest.advisor_user_id == user.id)
+        cotizaciones = (cotizaciones.join(CustomerRequest, SalesQuotation.sc_id == CustomerRequest.id)
+                        .filter(CustomerRequest.advisor_user_id == user.id))
+    return solicitudes.count() + cotizaciones.count()
 
 
 @router.get("/alertas")
