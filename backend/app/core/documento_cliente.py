@@ -611,6 +611,15 @@ def _asesor_del_documento(db: Session, doc, tipo: str) -> str:
     return _texto(getattr(doc, "advisor_name", None)) or "Tu asesor"
 
 
+def _hay_enlace_posterior(db: Session, tipo: str, doc_id: int, despues_de) -> bool:
+    """T6 r1 (regla g): el documento tiene algún enlace creado después de `despues_de` (el created_at del enlace que se
+    abrió), en cualquier estado: vigente, usado o revocado. Cada envío o reenvío crea uno y limpia la marca de cambios,
+    así que si existe, la marca vigente (y su comentario) la dejó otro enlace, no este."""
+    from app.models.confirmation import DocumentConfirmationToken as Enlace
+    return db.query(Enlace.id).filter(Enlace.document_type == tipo, Enlace.document_id == doc_id,
+                                      Enlace.created_at > despues_de).first() is not None
+
+
 def _confirmada(db: Session, info: dict, doc, tipo: str, nombre: str) -> dict:
     """Regla d. confirmada_el = cuando se usó ESTE enlace si con él se confirmó; si no, el último renglón CONFIRMADA de
     la Actividad. La COT solo lleva su número (C10: sin líneas ni precios). La SC lleva '¿Qué sigue?' y, durante
@@ -641,7 +650,9 @@ def estado_enlace(db: Session, info, doc, tipo) -> tuple:
       d) documento CONFIRMADA (la SC también en un estado heredado de U15) -> 'confirmada' (ver _confirmada);
       e) vencido sin usar -> 'vencido', con documento = {numero};
       f) hay un enlace más reciente vigente -> 'reemplazado';
-      g) resultado CAMBIOS (lo escribe T6) -> 'cambios_enviados', con el comentario mientras cambios_cliente_at siga;
+      g) resultado CAMBIOS (lo escribe T6) -> 'cambios_enviados', con el comentario mientras cambios_cliente_at siga y
+         solo si ESTE enlace dejó la marca (T6 r1: _hay_enlace_posterior; un enlace viejo nunca ve el comentario que
+         dejó otro enlace después);
       h) resultado CONFIRMADO y el documento volvió a un estado anterior -> 'actualizada';
       i) lo demás (revocado o usado sin resultado) -> 'no_disponible'.
     info es el dict INTERNO de consultar_token (nunca se devuelve tal cual) y doc el documento (o None). extra =
@@ -666,7 +677,9 @@ def estado_enlace(db: Session, info, doc, tipo) -> tuple:
     if info["resultado"] == RESULTADO_CAMBIOS:
         mensaje = MENSAJES_ENLACE["cambios_enviados"].format(
             fecha=fecha_larga(info["used_at"]), asesor=_asesor_del_documento(db, doc, tipo), documento=nombre)
-        comentario = doc.cambios_cliente_comentario if doc.cambios_cliente_at is not None else None
+        comentario = None
+        if doc.cambios_cliente_at is not None and not _hay_enlace_posterior(db, tipo, doc.id, info["created_at"]):
+            comentario = doc.cambios_cliente_comentario
         return "cambios_enviados", dict(extra, mensaje=mensaje, comentario=comentario or None)
     if info["resultado"] == RESULTADO_CONFIRMADO and doc.estado in _ESTADOS_ANTES_DE_CONFIRMAR[tipo]:
         return "actualizada", dict(extra, mensaje=MENSAJES_ENLACE["actualizada"].format(documento=nombre))

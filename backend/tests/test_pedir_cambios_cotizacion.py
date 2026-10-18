@@ -203,12 +203,14 @@ def test_comentario_corto_es_422_y_no_gasta_el_enlace(app_client, db, admin_toke
 
 
 def test_comentario_de_1001_caracteres_es_422(app_client, db, admin_token, user_admin, monkeypatch):
+    from app.api.v1.confirmacion_publica import MENSAJE_COMENTARIO_LARGO
     _correo_falso(monkeypatch)
     sc = _sc(db, user_admin)
     cot = _cot(db, sc)
     raw = _token(db, cot)
     resp = _pedir(app_client, raw, comentario="g" * 1001)
     assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == MENSAJE_COMENTARIO_LARGO == "Tu mensaje puede tener hasta 1000 caracteres."
     assert _fila(db, raw)["used_at"] is None
     assert _pedir(app_client, raw, comentario="g" * 1000).status_code == 200
 
@@ -226,6 +228,25 @@ def test_enlace_usado_es_400_con_su_estado(app_client, db, admin_token, user_adm
     db.refresh(cot)
     assert cot.estado == "BORRADOR" and cot.gate2_confirmed_at is None
     assert len(_logs(db, "COT", cot.id, "CAMBIOS_CLIENTE")) == 1
+
+
+def test_el_enlace_viejo_no_ve_el_comentario_del_nuevo(app_client, db, admin_token, user_admin, monkeypatch):
+    """r1 (seguridad 6, regla g): en la COT tampoco; el comentario solo lo ve el enlace que dejó la marca vigente."""
+    _correo_falso(monkeypatch)
+    cot = _cot(db, _sc(db, user_admin))
+    primero = _token(db, cot)
+    assert _pedir(app_client, primero, comentario="Comentario de la clienta A").status_code == 200
+    resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/enviar-confirmacion", json={},
+                           headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    segundo = resp.json()["link_confirmacion"].rsplit("/", 1)[-1]
+    privado = "Dato privado del cliente B: calle 5 #10"
+    assert _pedir(app_client, segundo, comentario=privado).status_code == 200
+
+    resp = _ver(app_client, primero)
+    assert _detalle(resp, "cambios_enviados")["comentario"] is None
+    assert privado not in resp.text
+    assert _detalle(_ver(app_client, segundo), "cambios_enviados")["comentario"] == privado
 
 
 # ─── 5 a 8 de U22-cambios ────────────────────────────────────────────────────────────────────────────────────
@@ -331,9 +352,11 @@ def test_no_la_necesita_no_existe_en_la_cotizacion(app_client, db, admin_token, 
     sc = _sc(db, user_admin)
     cot = _cot(db, sc)
     raw = _token(db, cot)
+    from app.api.v1.confirmacion_publica import MENSAJE_SOLO_SOLICITUD
     resp = _pedir(app_client, raw, comentario="", tipo="NO_LA_NECESITA")
     assert resp.status_code == 422, resp.text
-    assert isinstance(resp.json()["detail"], str)
+    assert resp.json()["detail"] == MENSAJE_SOLO_SOLICITUD == (
+        "La opción «Ya no la necesito» solo existe para la solicitud.")
     assert _fila(db, raw)["used_at"] is None
     db.refresh(cot)
     assert cot.estado == "PENDIENTE_CONFIRMACION"
@@ -354,10 +377,12 @@ def test_alertas_cuentan_la_cotizacion_con_cambios(app_client, db, admin_token, 
     assert _pedir(app_client, _token(db, propia)).status_code == 200
     assert _alertas(app_client, vendedor_token)["cambios_cliente"] == 1
 
-    # Una COT con la marca que ya no está en Borrador (p. ej. rechazada) deja de contar.
+    # Una COT con la marca que ya no está en Borrador (p. ej. rechazada) deja de contar y, con la misma regla (r1,
+    # calidad 1), el detalle ya no la muestra.
     propia.estado = "RECHAZADA"
     db.commit()
     assert _alertas(app_client, vendedor_token)["cambios_cliente"] == 0
+    assert _get_cot(app_client, admin_token, propia)["cambios_cliente"] is None
 
 
 # ─── RP16: el envío de la COT ────────────────────────────────────────────────────────────────────────────────
@@ -382,6 +407,11 @@ def test_reenvio_de_la_cot_hace_un_solo_commit_antes_del_correo(app_client, db, 
     assert commits_al_enviar == [1], commits_al_enviar
     assert [s for s in contador_sql.sentencias if "FROM sales_quotations" in s and "FOR UPDATE" in s.upper()], \
         "la COT debe leerse con FOR UPDATE"
+    # r1 (seguridad 2): y su SC también, DESPUÉS de la COT (el orden COT→SC de update_cotizacion): un «Pedir cambios» en
+    # la SC que corre al mismo tiempo termina antes o espera a este envío; nunca quedan los dos a medias.
+    orden = [("COT" if "FROM sales_quotations" in s else "SC") for s in contador_sql.sentencias
+             if "FOR UPDATE" in s.upper() and ("FROM sales_quotations" in s or "FROM customer_requests" in s)]
+    assert orden[:2] == ["COT", "SC"], orden
     assert contador_sql.commits == 2, contador_sql.commits  # el del envío y, después del correo, el del renglón
     db.refresh(cot)
     assert cot.estado == "PENDIENTE_CONFIRMACION" and cot.canal_envio == "Email" and cot.cambios_cliente_at is None
@@ -418,3 +448,22 @@ def test_si_falla_el_lead_el_envio_de_la_cot_queda(app_client, db, admin_token, 
     assert db.get(SalesOrder, lead.id).status == "DRAFT"  # lo del lead se deshizo
     link = resp.json()["link_confirmacion"].rsplit("/", 1)[-1]
     assert _ver(app_client, link).status_code == 200
+
+
+def test_el_lead_llega_a_quotation_aunque_el_correo_no_salga(app_client, db, admin_token, user_admin, monkeypatch):
+    """Ruling r1 (duda 1): el lead se mueve después del correo; si el correo falla (FALLO_ENVIO) o no está configurado,
+    el lead llega igual a QUOTATION."""
+    import app.core.email as correo
+    from app.models.sales import SalesOrder
+    for configurado, motivo in ((True, "FALLO_ENVIO"), (False, "CORREO_NO_CONFIGURADO")):
+        _correo_falso(monkeypatch, configurado=configurado)
+        monkeypatch.setattr(correo, "send_email", lambda *a, **k: False)
+        sc = _sc(db, user_admin)
+        lead = _lead(db, sc, status="DRAFT")
+        cot = _cot(db, sc, estado="BORRADOR", customer_email="ana@cliente.com")
+        resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/enviar-confirmacion", json={},
+                               headers=auth(admin_token))
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["correo"]["motivo"] == motivo
+        db.expire_all()
+        assert db.get(SalesOrder, lead.id).status == "QUOTATION", motivo

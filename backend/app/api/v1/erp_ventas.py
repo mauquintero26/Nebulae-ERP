@@ -342,11 +342,15 @@ def _extra_data_de_envio(canal: Optional[str], correo_res: dict) -> dict:
 
 # ─── B3 T6 (H28-cambios, C17): aviso al asesor cuando el cliente pide cambios desde su enlace ─────────────────────
 
-_NOMBRE_DOCUMENTO_AVISO = {"SC": "solicitud", "COT": "cotización"}
+# El nombre del documento en los textos de «Pedir cambios» (aviso al asesor, respuesta al cliente; confirmacion_publica
+# los importa de aqui) y el renglon de un enlace anulado (cancelar la SC, la COT temprana de C20). Una sola fuente.
+_NOMBRE_DOCUMENTO = {"SC": "solicitud", "COT": "cotización"}
+_ENLACE_ANULADO = "Anulado: el cliente ya no puede confirmar con el enlace que recibió"
 _RUTA_DOCUMENTO_AVISO = {"SC": "solicitud", "COT": "cotizacion"}  # /dashboard/ventas/{ruta}/{id}
 # Lo que dice el renglon AVISO_ASESOR cuando el correo no salio (textos para el asesor, no los del correo al cliente).
 _AVISO_NO_SALIO = {
     "SIN_ASESOR": "la {documento} no tiene asesor asignado",
+    "ASESOR_INACTIVO": "el asesor asignado está inactivo",
     "SIN_CORREO_ASESOR": "el asesor no tiene correo registrado",
     "CORREO_NO_CONFIGURADO": "el envío de correos no está configurado en el sistema",
     "FALLO_ENVIO": "falló el servidor de correo al enviar a {destino}",
@@ -363,8 +367,9 @@ def _correo_del_aviso(tipo: str, numero: str, cliente: str, tipo_cambio: Optiona
     """(asunto, html) del aviso al asesor. Todo lo que viene del cliente (su nombre, su comentario) va escapado con
     html.escape: es dato, nunca HTML ni instrucciones."""
     from html import escape
-    documento = _NOMBRE_DOCUMENTO_AVISO[tipo]
-    if tipo_cambio == "NO_LA_NECESITA":
+    from app.api.v1.confirmacion_publica import TIPO_NO_LA_NECESITA
+    documento = _NOMBRE_DOCUMENTO[tipo]
+    if tipo_cambio == TIPO_NO_LA_NECESITA:
         asunto = f"{cliente} dice que ya no necesita la {documento} {numero}"
         que_hizo, siguiente = f"dice que ya no necesita la {documento}", "decide si la cancelas o la ajustas."
     else:
@@ -392,7 +397,9 @@ def _avisar_asesor_por_correo(db: Session, doc, tipo: str) -> dict:
     el asesor y la marca de la empresa, y antes del SMTP (sincrono, hasta 10 s) termina esa lectura con un rollback
     (no hay nada pendiente) para no retener una conexion de la base. El renglon va en su propio commit. Quien lo llama
     lo envuelve en try/except: si falla, el cliente igual recibe su 200. El aviso no reinicia el conteo de atraso (C22):
-    solo agrega un renglon, no toca el documento."""
+    solo agrega un renglon, no toca el documento.
+    r1 (seguridad 5): un asesor desactivado (is_active False, p. ej. ya salio de la empresa) no recibe los datos del
+    cliente: no se manda el correo y el renglon dice que esta inactivo."""
     from app.core.confirmation_tokens import frontend_url
     doc_id, numero, estado = doc.id, doc.numero, doc.estado
     cliente = _una_linea(doc.customer_name) or "El cliente"
@@ -401,6 +408,7 @@ def _avisar_asesor_por_correo(db: Session, doc, tipo: str) -> dict:
                                    if doc.sc_id else None)
     asesor = (db.query(User).filter(User.id == sc.advisor_user_id).first()
               if sc is not None and sc.advisor_user_id else None)
+    activo = asesor is not None and asesor.is_active is not False
     destino = (asesor.email or "").strip() if asesor is not None else ""
     remitente = perfil_publico(db)["nombre_comercial"] or None
     link = f"{frontend_url()}/dashboard/ventas/{_RUTA_DOCUMENTO_AVISO[tipo]}/{doc_id}"
@@ -409,6 +417,8 @@ def _avisar_asesor_por_correo(db: Session, doc, tipo: str) -> dict:
 
     if asesor is None:
         res = {"enviado": False, "destino": None, "motivo": "SIN_ASESOR"}
+    elif not activo:
+        res = {"enviado": False, "destino": None, "motivo": "ASESOR_INACTIVO"}
     elif not destino:
         res = {"enviado": False, "destino": None, "motivo": "SIN_CORREO_ASESOR"}
     else:
@@ -418,7 +428,7 @@ def _avisar_asesor_por_correo(db: Session, doc, tipo: str) -> dict:
     else:
         motivo = _AVISO_NO_SALIO.get(res["motivo"], "no se pudo enviar el correo")
         texto = ("No se pudo avisar por correo al asesor: "
-                 + motivo.format(documento=_NOMBRE_DOCUMENTO_AVISO[tipo], destino=res["destino"]) + ".")
+                 + motivo.format(documento=_NOMBRE_DOCUMENTO[tipo], destino=res["destino"]) + ".")
     res["mensaje"] = texto
     _log(db, tipo, doc_id, numero, "AVISO_ASESOR", texto, user_name="Sistema",
          extra_data={"correo": {k: res[k] for k in ("enviado", "destino", "motivo")}})
@@ -827,11 +837,27 @@ def _texto_estado_cambiado(etiqueta: str, motivo: str) -> str:
     return f"Estado cambiado a {etiqueta}: {motivo}"
 
 
-def _cambios_cliente_dict(doc) -> Optional[dict]:
+# B3 T6 (r1, calidad 1): LA regla de «marca de cambios vigente». La marca (cambios_cliente_*) cuenta y se muestra solo
+# mientras el documento sigue en manos del asesor: la SC en Asignada o Nueva y la COT en Borrador. Fuera de esos
+# estados (cancelada, rechazada, reenviada...) ya no es un pendiente: ni las alertas ni el detalle ni la lista la ven.
+_ESTADOS_CON_CAMBIOS_VIGENTES = {"SC": ("ASIGNADA", "BORRADOR"), "COT": ("BORRADOR",)}
+
+
+def _cambios_cliente_vigentes(doc, entidad: str) -> bool:
+    """La marca de cambios del cliente de `doc` ('SC' o 'COT') sigue vigente (_ESTADOS_CON_CAMBIOS_VIGENTES)."""
+    return doc.cambios_cliente_at is not None and doc.estado in _ESTADOS_CON_CAMBIOS_VIGENTES[entidad]
+
+
+def _filtro_cambios_cliente_vigentes(modelo, entidad: str):
+    """La misma regla que _cambios_cliente_vigentes, como filtro SQL (CustomerRequest/'SC' o SalesQuotation/'COT')."""
+    return and_(modelo.cambios_cliente_at.isnot(None), modelo.estado.in_(_ESTADOS_CON_CAMBIOS_VIGENTES[entidad]))
+
+
+def _cambios_cliente_dict(doc, entidad: str) -> Optional[dict]:
     """B3 T6 (H28-cambios, C9): los cambios que pidio el cliente desde su enlace (columnas cambios_cliente_* de la SC o
     la COT, fa6_029): {'at' (UTC con 'Z'), 'tipo' ('CAMBIOS' | 'NO_LA_NECESITA'), 'comentario' (texto o None)}, o None
-    si no hay una marca vigente (reenviar el documento la limpia)."""
-    if doc.cambios_cliente_at is None:
+    si la marca no esta vigente (_cambios_cliente_vigentes; reenviar el documento la limpia)."""
+    if not _cambios_cliente_vigentes(doc, entidad):
         return None
     return {"at": _iso_utc(doc.cambios_cliente_at), "tipo": doc.cambios_cliente_tipo,
             "comentario": doc.cambios_cliente_comentario}
@@ -870,7 +896,7 @@ def _sc_dict(sc: CustomerRequest) -> dict:
         # R3 (B3 T5): la «Nota para el cliente» (la ve el cliente en la SC, la COT y el PVEN); `notas` es interna.
         "nota_cliente": sc.nota_cliente,
         # B3 T6 (H28-cambios): lo que pidio el cliente desde su enlace (la marca de la lista y el recuadro del detalle).
-        "cambios_cliente": _cambios_cliente_dict(sc),
+        "cambios_cliente": _cambios_cliente_dict(sc, "SC"),
         "productos": sc.productos or [],
         "created_at": _iso_utc(sc.created_at),
         "updated_at": _iso_utc(sc.updated_at),
@@ -2480,7 +2506,7 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
     d["sc_estado"] = sc.estado if sc is not None else None
     d["sc_confirmacion_vigente"] = _confirmacion_vigente_sc(sc) if sc is not None else None
     # B3 T6 (U22-cambios con C9): lo que pidio el cliente desde el enlace de la COT, de sus columnas (no de los logs).
-    d["cambios_cliente"] = _cambios_cliente_dict(cot)
+    d["cambios_cliente"] = _cambios_cliente_dict(cot, "COT")
     # Anticipo (H36+H43, N1, R3, R6): lo mismo que exigira convertir_cotizacion_a_venta. Solo en el detalle (no en
     # _cot_dict) para no hacer una consulta por fila en el listado. B3 T5 (r1): la misma cuenta que ve el cliente en
     # su cotizacion (resumen_anticipo_cotizacion: % a 2 decimales, saldo a favor y lo que falta).
@@ -3235,7 +3261,14 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
         raise HTTPException(400, f"La cotización debe estar en Borrador o Enviada antes de enviar para confirmación (estado actual: {etiqueta_estado('COT', cot.estado)}).")
     # N4: una SC cancelada no tiene cotizaciones vivas.
     if cot.sc_id:
-        sc = db.query(CustomerRequest).filter(CustomerRequest.id == cot.sc_id).first()
+        # B3 T6 (r1, seguridad 2): la SC tambien se bloquea, DESPUES de la COT (el orden COT -> SC de
+        # update_cotizacion). Un «Pedir cambios» del cliente en esa SC (que la bloquea y despues, si esta en Pendiente
+        # por confirmacion, a esta COT) termina antes o espera a este envio: C20 nunca queda a medias con la COT
+        # temprana enviada en el mismo instante. No hay ciclo: pedir cambios solo bloquea una COT en
+        # PENDIENTE_CONFIRMACION y este envio solo sigue con una COT en Borrador o Enviada. PATCH
+        # /solicitudes/{id}/cliente bloquea SC -> COT: si llegan a cruzarse, PostgreSQL aborta una de las dos (40P01)
+        # y nada queda a medias.
+        sc = db.query(CustomerRequest).filter(CustomerRequest.id == cot.sc_id).with_for_update().first()
         if sc is not None and sc.estado == "CANCELADA":
             raise HTTPException(409, _mensaje_solicitud_cancelada(sc))
     # Una cotizacion sin productos ni precio calculado no tiene nada que el cliente
@@ -4167,10 +4200,8 @@ def _contar_cambios_cliente(db: Session, user: User) -> int:
     marca en Asignada o Nueva y COT con la marca en Borrador (reenviar la limpia). Es una cuenta APARTE que no suma a
     'atrasados'. Un asesor ve solo las suyas (la SC con su advisor_user_id; la COT por el asesor de su SC); los demas
     roles, todas."""
-    solicitudes = db.query(CustomerRequest.id).filter(CustomerRequest.cambios_cliente_at.isnot(None),
-                                                      CustomerRequest.estado.in_(("ASIGNADA", "BORRADOR")))
-    cotizaciones = db.query(SalesQuotation.id).filter(SalesQuotation.cambios_cliente_at.isnot(None),
-                                                      SalesQuotation.estado == "BORRADOR")
+    solicitudes = db.query(CustomerRequest.id).filter(_filtro_cambios_cliente_vigentes(CustomerRequest, "SC"))
+    cotizaciones = db.query(SalesQuotation.id).filter(_filtro_cambios_cliente_vigentes(SalesQuotation, "COT"))
     if normalize_role(user.role) == "ASESOR":
         solicitudes = solicitudes.filter(CustomerRequest.advisor_user_id == user.id)
         cotizaciones = (cotizaciones.join(CustomerRequest, SalesQuotation.sc_id == CustomerRequest.id)
@@ -4470,16 +4501,16 @@ def cancelar_solicitud(sc_id: int, body: CancelarSolicitudBody,
         sc.updated_at = ahora
         # Gate 1: un link de confirmacion ya enviado no debe poder revivir una SC que
         # el asesor acaba de cancelar -- revoca cualquier token pendiente de esta SC. B5 (revision final): los enlaces
-        # vivos que anula los cuenta la propia revocacion (RETURNING), no un conteo previo que un enlace creado en medio
-        # (enviar_solicitud_para_confirmacion no bloquea la SC) dejaria corto.
+        # vivos que anula los cuenta la propia revocacion (RETURNING), no un conteo previo. B3 T6: el envio
+        # (enviar_solicitud_para_confirmacion) ahora tambien bloquea la SC, asi que ya no crea un enlace en medio de
+        # esta cancelacion; el conteo por RETURNING sigue siendo la defensa (cuenta lo que de verdad se anulo).
         enlaces_vivos = revoke_pending_tokens(db, "SC", sc_id, commit=False, contar_vigentes=True)
         lead_ok = _marcar_lead_perdido(db, sc)
         referencias = _referencias_de_solicitud(db, sc.id)
         cambios = [{"etiqueta": "Motivo", "despues": razon},
                    {"etiqueta": "Estado anterior", "despues": etiqueta_estado("SC", old_estado)}]
         if enlaces_vivos > 0:
-            cambios.append({"etiqueta": "Enlace de confirmación",
-                            "despues": "Anulado: el cliente ya no puede confirmar con el enlace que recibió"})
+            cambios.append({"etiqueta": "Enlace de confirmación", "despues": _ENLACE_ANULADO})
         if tenia_confirmacion:
             cambios.append({"etiqueta": "Confirmación del cliente", "despues": "Anulada"})
         if tenia_lead:

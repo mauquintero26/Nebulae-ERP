@@ -224,20 +224,32 @@ def test_si_ya_confirmo_no_puede_pedir_cambios(app_client, db, admin_token, user
 # ─── 4 y 5: validación a mano (R12) antes de tocar el enlace ───────────────────────────────────────────────
 
 def test_comentario_corto_es_422_y_no_gasta_el_enlace(app_client, db, admin_token, user_admin, monkeypatch):
-    from app.api.v1.confirmacion_publica import MAX_COMENTARIO_CAMBIOS, MIN_COMENTARIO_CAMBIOS
+    import app.api.v1.confirmacion_publica as cp
+    from app.api.v1.confirmacion_publica import (MAX_COMENTARIO_CAMBIOS, MENSAJE_COMENTARIO_CORTO,
+                                                 MENSAJE_COMENTARIO_LARGO, MENSAJE_TIPO_INVALIDO,
+                                                 MIN_COMENTARIO_CAMBIOS)
     assert (MIN_COMENTARIO_CAMBIOS, MAX_COMENTARIO_CAMBIOS) == (10, 1000)  # RP21: los importa la paridad de T13
+    assert MENSAJE_COMENTARIO_CORTO == "Cuéntanos qué quieres cambiar (al menos 10 caracteres)."
     _correo_falso(monkeypatch)
     sc = _sc(db, user_admin)
     raw = _enviar(app_client, admin_token, sc)
 
-    casos = [("no", None), ("   123456789   ", None), ("x" * 1001, None), (COMENTARIO, "OTRO"), (COMENTARIO, "cambios"),
-             ("x" * 1001, "NO_LA_NECESITA")]
-    for comentario, tipo in casos:
+    casos = [("no", None, MENSAJE_COMENTARIO_CORTO), ("   123456789   ", None, MENSAJE_COMENTARIO_CORTO),
+             ("​" * 10, None, MENSAJE_COMENTARIO_CORTO),  # r1: diez espacios de ancho cero no son 10 caracteres
+             ("x" * 1001, None, MENSAJE_COMENTARIO_LARGO), (COMENTARIO, "OTRO", MENSAJE_TIPO_INVALIDO),
+             (COMENTARIO, "cambios", MENSAJE_TIPO_INVALIDO), ("x" * 1001, "NO_LA_NECESITA", MENSAJE_COMENTARIO_LARGO)]
+    for comentario, tipo, mensaje in casos:
         resp = _pedir(app_client, raw, comentario=comentario, tipo=tipo)
         assert resp.status_code == 422, (comentario[:12], tipo, resp.text)
-        assert isinstance(resp.json()["detail"], str) and resp.json()["detail"], resp.text  # español, legible
-    assert _pedir(app_client, raw, comentario="no").json()["detail"] == (
-        "Cuéntanos qué quieres cambiar (al menos 10 caracteres).")
+        assert resp.json()["detail"] == mensaje, (comentario[:12], tipo, resp.text)
+
+    # r1 (seguridad 3): un comentario enorme se rechaza por su largo ANTES de recorrerlo para limpiarlo.
+    def limpiar_prohibido(texto):
+        raise AssertionError("no debía limpiar un comentario de más de 4000 caracteres")
+
+    monkeypatch.setattr(cp, "_limpiar_comentario", limpiar_prohibido)
+    resp = _pedir(app_client, raw, comentario="y" * (4 * MAX_COMENTARIO_CAMBIOS + 1))
+    assert resp.status_code == 422 and resp.json()["detail"] == MENSAJE_COMENTARIO_LARGO, resp.text
 
     assert _fila(db, raw)["used_at"] is None
     assert _ver(app_client, raw).status_code == 200
@@ -266,6 +278,8 @@ def test_ya_no_la_necesita_acepta_comentario_vacio(app_client, db, admin_token, 
     assert resp.status_code == 200, resp.text
     j = resp.json()
     assert j["estado_enlace"] == "cambios_enviados" and j["mensaje"] == "Recibimos tu respuesta."
+    # Ratificado en la r1 (R1, R8): el asesor decide si la cancela; no se le promete un enlace nuevo.
+    assert j["detalle"] == f"{ASESORA} revisará tu respuesta y se pondrá en contacto contigo."
     assert j["comentario"] is None
     db.refresh(sc)
     assert sc.estado == "ASIGNADA" and sc.gate1_confirmed_at is None
@@ -278,12 +292,13 @@ def test_ya_no_la_necesita_acepta_comentario_vacio(app_client, db, admin_token, 
 
 def test_el_comentario_pierde_los_caracteres_de_control(app_client, db, admin_token, user_admin, monkeypatch):
     """Un NUL (o un surrogate suelto) haría fallar la escritura DESPUÉS de gastar el enlace: se quitan al validar. El
-    salto de línea se conserva."""
+    salto de línea se conserva. r1 (seguridad 4): también los de formato (Cf): el ancho cero y los controles
+    bidireccionales (U+202E invertiría la cita en el correo y en la Actividad)."""
     _correo_falso(monkeypatch)
     sc = _sc(db, user_admin)
     raw = _enviar(app_client, admin_token, sc)
     # El cuerpo va armado a mano (json.dumps con ensure_ascii): el surrogate suelto llega como escape JSON (\ud800).
-    cuerpo = json.dumps({"token": raw, "comentario": "Son 8\x00 rodillos\r\nno 6\ud800"})
+    cuerpo = json.dumps({"token": raw, "comentario": "Son 8\x00 rodi​llos\r\n‮no 6\ud800"})
     resp = app_client.post("/api/v1/confirmar/pedir-cambios", content=cuerpo,
                            headers={"Idempotency-Key": "t6-control", "Content-Type": "application/json"})
     assert resp.status_code == 200, resp.text
@@ -423,6 +438,45 @@ def test_si_el_aviso_falla_el_cliente_igual_recibe_200(app_client, db, admin_tok
     assert _fila(db, raw)["resultado"] == "CAMBIOS"
 
 
+def _aviso_de(app_client, db, admin_token, asesor):
+    """Pide cambios en una SC de `asesor` y devuelve su renglón AVISO_ASESOR."""
+    sc = _sc(db, asesor)
+    resp = _pedir(app_client, _enviar(app_client, admin_token, sc))
+    assert resp.status_code == 200, resp.text
+    [aviso] = _logs(db, "SC", sc.id, "AVISO_ASESOR")
+    return aviso
+
+
+def test_asesor_inactivo_no_recibe_el_aviso(app_client, db, admin_token, user_vendedor, monkeypatch):
+    """r1 (seguridad 5): un asesor desactivado (ya salió de la empresa) no recibe los datos del cliente."""
+    llamadas = _correo_falso(monkeypatch, configurado=True)
+    user_vendedor.is_active = False
+    db.commit()
+    aviso = _aviso_de(app_client, db, admin_token, user_vendedor)
+    assert llamadas == []
+    assert aviso.description == "No se pudo avisar por correo al asesor: el asesor asignado está inactivo."
+    assert aviso.extra_data["correo"] == {"enviado": False, "destino": None, "motivo": "ASESOR_INACTIVO"}
+
+
+def test_asesor_sin_correo_queda_anotado(app_client, db, admin_token, user_vendedor, monkeypatch):
+    llamadas = _correo_falso(monkeypatch, configurado=True)
+    user_vendedor.email = "  \t  "
+    db.commit()
+    aviso = _aviso_de(app_client, db, admin_token, user_vendedor)
+    assert llamadas == []
+    assert aviso.description == "No se pudo avisar por correo al asesor: el asesor no tiene correo registrado."
+
+
+def test_si_el_servidor_de_correo_falla_el_aviso_lo_dice(app_client, db, admin_token, user_vendedor, monkeypatch):
+    import app.core.email as correo
+    _correo_falso(monkeypatch, configurado=True)
+    monkeypatch.setattr(correo, "send_email", lambda *a, **k: False)
+    aviso = _aviso_de(app_client, db, admin_token, user_vendedor)
+    assert aviso.description == (f"No se pudo avisar por correo al asesor: falló el servidor de correo al enviar a "
+                                 f"{user_vendedor.email}.")
+    assert aviso.extra_data["correo"]["motivo"] == "FALLO_ENVIO"
+
+
 # ─── 10, 11 y 13: reenviar, las alertas y el enlace viejo ────────────────────────────────────────────────────
 
 def test_reenviar_borra_la_marca_de_cambios(app_client, db, admin_token, user_admin, monkeypatch):
@@ -509,6 +563,40 @@ def test_reabrir_tras_pedir_cambios_y_reenviar_dice_reemplazado(app_client, db, 
     assert _ver(app_client, nuevo).status_code == 200
 
 
+def test_el_enlace_viejo_no_ve_el_comentario_del_nuevo(app_client, db, admin_token, user_admin, monkeypatch):
+    """r1 (seguridad 6, regla g): el comentario solo lo ve el enlace que dejó la marca vigente. Un enlace más viejo con
+    resultado CAMBIOS dice 'cambios_enviados' sin el comentario que escribió otro enlace después."""
+    _correo_falso(monkeypatch)
+    sc = _sc(db, user_admin)
+    primero = _enviar(app_client, admin_token, sc)
+    assert _pedir(app_client, primero, comentario="Comentario de la clienta A").status_code == 200
+    segundo = _enviar(app_client, admin_token, sc)
+    privado = "Dato privado del cliente B: calle 5 #10"
+    assert _pedir(app_client, segundo, comentario=privado).status_code == 200
+
+    resp = _ver(app_client, primero)
+    assert _detalle(resp, "cambios_enviados")["comentario"] is None
+    assert privado not in resp.text
+    assert _detalle(_ver(app_client, segundo), "cambios_enviados")["comentario"] == privado
+
+
+def test_la_marca_no_se_muestra_fuera_de_asignada_o_nueva(app_client, db, admin_token, user_admin, monkeypatch):
+    """r1 (calidad 1): una sola regla de «marca vigente» (SC en Asignada o Nueva) para el detalle, la lista y las
+    alertas. El camino de R8: «Ya no la necesito» y el asesor la cancela."""
+    _correo_falso(monkeypatch)
+    sc = _sc(db, user_admin)
+    assert _pedir(app_client, _enviar(app_client, admin_token, sc), comentario="", tipo="NO_LA_NECESITA").status_code \
+        == 200
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/cancelar",
+                           json={"razon": "El cliente ya no la necesita", "user_name": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    data = app_client.get(f"/api/v1/ventas/solicitudes/{sc.id}", headers=auth(admin_token)).json()["data"]
+    assert data["estado"] == "CANCELADA" and data["cambios_cliente"] is None
+    lista = app_client.get("/api/v1/ventas/solicitudes", params={"search": sc.numero}, headers=auth(admin_token))
+    [fila] = [s for s in lista.json()["data"] if s["id"] == sc.id]
+    assert fila["cambios_cliente"] is None
+
+
 # ─── 12 y C20: la cotización temprana (U11) ──────────────────────────────────────────────────────────────────
 
 def test_cotizacion_temprana_recibe_el_renglon(app_client, db, admin_token, user_admin, monkeypatch):
@@ -521,11 +609,32 @@ def test_cotizacion_temprana_recibe_el_renglon(app_client, db, admin_token, user
     db.refresh(cot)
     assert cot.estado == "BORRADOR"
     [renglon] = _logs(db, "COT", cot.id, "SC_CAMBIOS_CLIENTE")
-    assert sc.numero in renglon.description and COMENTARIO in renglon.description
+    assert renglon.description == (f"El cliente pidió cambios en la solicitud {sc.numero}: «{COMENTARIO}». Revisa "
+                                   f"esta cotización antes de enviarla.")  # H28 g
     assert (renglon.old_estado, renglon.new_estado) == (None, None)
     assert renglon.user_name == CLIENTE_ENLACE
     assert renglon.extra_data["comentario"] == COMENTARIO
+    assert renglon.extra_data["cambios"] == [{"etiqueta": "Comentario del cliente", "despues": COMENTARIO}]
     assert cot.cambios_cliente_at is None  # la marca es de la SC: la COT no cuenta dos veces en las alertas
+
+
+def test_cotizacion_activa_que_no_esta_en_borrador_recibe_un_texto_neutro(app_client, db, admin_token, user_admin,
+                                                                         monkeypatch):
+    """r1 (cumplimiento 2, calidad 3): una COT activa VENCIDA o CONFIRMADA (p. ej. de otro cliente, B7) no cambia y su
+    renglón no le pide al asesor «enviarla»: nombra su estado."""
+    from app.core.textos_actividad import etiqueta_estado
+    _correo_falso(monkeypatch)
+    for estado in ("VENCIDA", "CONFIRMADA"):
+        sc = _sc(db, user_admin)
+        raw = _enviar(app_client, admin_token, sc)
+        cot = _cot_temprana(db, sc, estado)
+        assert _pedir(app_client, raw).status_code == 200
+        db.refresh(cot)
+        assert cot.estado == estado
+        [renglon] = _logs(db, "COT", cot.id, "SC_CAMBIOS_CLIENTE")
+        assert renglon.description == (f"El cliente pidió cambios en la solicitud {sc.numero}: «{COMENTARIO}». Revisa "
+                                       f"esta cotización ({etiqueta_estado('COT', estado)}).")
+        assert (renglon.old_estado, renglon.new_estado) == (None, None)
 
 
 def test_cotizacion_temprana_pendiente_vuelve_a_borrador_en_el_mismo_commit(app_client, db, admin_token, user_admin,

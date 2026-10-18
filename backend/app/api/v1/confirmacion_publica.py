@@ -27,8 +27,9 @@ from sqlalchemy.orm import Session
 
 from app.core.confirmation_tokens import (RESULTADO_CAMBIOS, RESULTADO_CONFIRMADO, TIPOS_CONSULTA, consultar_token,
                                           hash_token, marcar_resultado, reclamar_token, revoke_pending_tokens)
-from app.core.documento_cliente import (MENSAJE_GRACIAS, documento_cot, documento_pven, documento_sc, estado_enlace,
-                                        forma_de_pago, productos_publicos_sc, siguiente_paso_sc)
+from app.core.documento_cliente import (MENSAJE_GRACIAS, _asesor_del_documento, documento_cot, documento_pven,
+                                        documento_sc, estado_enlace, forma_de_pago, productos_publicos_sc,
+                                        siguiente_paso_sc)
 from app.core.empresa import perfil_publico
 from app.core.fechas import ahora_utc, iso_z
 from app.core.textos_actividad import etiqueta_estado
@@ -358,8 +359,12 @@ MENSAJE_TIPO_INVALIDO = "Elige «Pedir cambios» o «Ya no la necesito»."
 MENSAJE_SOLO_SOLICITUD = "La opción «Ya no la necesito» solo existe para la solicitud."
 # C20: el renglón de la COT temprana que vuelve a Borrador cuando el cliente pide cambios en su SC.
 TEXTO_COT_TEMPRANA_A_BORRADOR = "El cliente pidió cambios en la solicitud: ajusta y reenvía la cotización"
-_ENLACE_ANULADO = "Anulado: el cliente ya no puede confirmar con el enlace que recibió"
-_NOMBRE_DOCUMENTO = {"SC": "solicitud", "COT": "cotización"}
+# r1 (seguridad 3): un comentario más largo que esto ni se recorre para limpiarlo (endpoint público sin límite de
+# tamaño del cuerpo): responde el mismo 422 del máximo.
+_TOPE_SIN_LIMPIAR = 4 * MAX_COMENTARIO_CAMBIOS
+# r1 (seguridad 4): lo que se quita del comentario: los controles (salvo el salto de línea y el tabulador), los
+# surrogates sueltos y los caracteres de formato (Cf: ancho cero, controles bidireccionales como U+202E).
+_CATEGORIAS_QUITADAS = ("Cc", "Cs", "Cf")
 
 
 class PedirCambiosBody(BaseModel):
@@ -371,17 +376,26 @@ class PedirCambiosBody(BaseModel):
 
 
 def _limpiar_comentario(texto: str) -> str:
-    """El comentario sin los caracteres de control (salvo el salto de línea y el tabulador) ni surrogates sueltos, con
-    los saltos de línea normalizados y sin espacios en los bordes. Un NUL o un surrogate harían fallar la escritura en
-    la base DESPUÉS de gastar el enlace (500 con el enlace perdido): se quitan al validar."""
+    """El comentario sin caracteres de control (salvo el salto de línea y el tabulador), sin surrogates sueltos y sin
+    caracteres de formato (_CATEGORIAS_QUITADAS), con los saltos de línea normalizados y sin espacios en los bordes.
+    - Un NUL o un surrogate harían fallar la escritura en la base DESPUÉS de gastar el enlace (500 con el enlace
+      perdido).
+    - r1: el texto invisible (diez U+200B) no cuenta para el mínimo, y un control bidireccional (U+202E) no invierte la
+      cita en el correo del asesor ni en la Actividad.
+    Los límites se cuentan sobre lo que queda (en code points). Regla para la paridad de T13 con puedeEnviarCambios:
+    quitar \\p{Cc} (salvo \\n y \\t), los surrogates sueltos y \\p{Cf}, normalizar \\r\\n y \\r a \\n, recortar los
+    bordes y contar code points ([...texto].length en JS, no .length)."""
     texto = texto.replace("\r\n", "\n").replace("\r", "\n")
-    return "".join(ch for ch in texto if ch in "\n\t" or unicodedata.category(ch) not in ("Cc", "Cs")).strip()
+    return "".join(ch for ch in texto
+                   if ch in "\n\t" or unicodedata.category(ch) not in _CATEGORIAS_QUITADAS).strip()
 
 
 def _validar_pedido_de_cambios(body: PedirCambiosBody) -> tuple:
     """(tipo, comentario o None) o HTTPException(422, mensaje en español) (R12). No toca el enlace."""
     if body.tipo not in TIPOS_PEDIR_CAMBIOS:
         raise HTTPException(422, MENSAJE_TIPO_INVALIDO)
+    if len(body.comentario) > _TOPE_SIN_LIMPIAR:  # r1: ni se recorre (ver _TOPE_SIN_LIMPIAR)
+        raise HTTPException(422, MENSAJE_COMENTARIO_LARGO)
     comentario = _limpiar_comentario(body.comentario)
     if len(comentario) > MAX_COMENTARIO_CAMBIOS:
         raise HTTPException(422, MENSAJE_COMENTARIO_LARGO)
@@ -398,29 +412,41 @@ def _anotar_cambios(db: Session, reclamado: dict, numero) -> None:
                      reclamado["id"], reclamado["document_type"], numero)
 
 
+def _renglon_comentario(comentario) -> dict:
+    """El renglón 'Comentario del cliente' de la Actividad (CAMBIOS_CLIENTE y SC_CAMBIOS_CLIENTE): sin 'campo', el
+    formato de C1/H27 (no hay un 'antes' que tachar); '—' si el cliente no escribió nada."""
+    return {"etiqueta": "Comentario del cliente", "despues": comentario or "—"}
+
+
 def _extra_de_cambios(tipo: str, comentario, estado_etiqueta: str, estado: str) -> dict:
-    """extra_data del renglón CAMBIOS_CLIENTE: {tipo, comentario, cambios} con los renglones 'etiqueta -> despues' (sin
-    'campo', el formato de C1/H27: no hay un 'antes' que tachar)."""
+    """extra_data del renglón CAMBIOS_CLIENTE: {tipo, comentario, cambios} con los renglones 'etiqueta -> despues'."""
     return {"tipo": tipo, "comentario": comentario,
-            "cambios": [{"etiqueta": "Comentario del cliente", "despues": comentario or "—"},
-                        {"etiqueta": estado_etiqueta, "despues": estado}]}
+            "cambios": [_renglon_comentario(comentario), {"etiqueta": estado_etiqueta, "despues": estado}]}
 
 
 def _cambios_en_cotizacion_temprana(db: Session, sc, cot, tipo: str, comentario, ahora) -> None:
     """C20 (U11): una COT activa de la SC donde el cliente pidió cambios, en el MISMO commit. Si estaba en Pendiente por
     confirmación vuelve a Borrador con gate2 None y sus enlaces revocados (así el cliente no aprueba la COT vieja
-    después de pedir cambios en la SC); en otro estado (Borrador) solo recibe el renglón SC_CAMBIOS_CLIENTE. La marca
-    cambios_cliente_* es de la SC: la COT no la lleva (no cuenta dos veces en las alertas).
+    después de pedir cambios en la SC); en otro estado solo recibe el renglón SC_CAMBIOS_CLIENTE: en Borrador, el de
+    H28 g («Revisa esta cotización antes de enviarla»); en cualquier otro (Confirmada, Vencida, Enviada...), r1: un
+    texto neutro que nombra su estado, sin pedir que se envíe. La marca cambios_cliente_* es de la SC: la COT no la
+    lleva (no cuenta dos veces en las alertas).
     Solo se bloquea (FOR UPDATE, después de la SC, el mismo orden que PATCH /solicitudes/{id}/cliente) la COT que va a
     cambiar de estado: una en Borrador solo recibe un renglón, y bloquearla podría cruzarse con update_cotizacion, que
-    bloquea la COT antes que su SC al cambiarle la solicitud."""
-    from app.api.v1.erp_ventas import _log
+    bloquea la COT antes que su SC al cambiarle la solicitud. El envío de la COT bloquea su SC (r1), así que no corre
+    en medio de este cambio."""
+    from app.api.v1.erp_ventas import _ENLACE_ANULADO, _log
     if cot.estado == "PENDIENTE_CONFIRMACION":
         db.refresh(cot, with_for_update=True)  # releída bloqueada: el cliente pudo confirmarla en otra pestaña
     if cot.estado == "RECHAZADA":  # la rechazaron entre la consulta y el bloqueo: ya no es activa
         return
-    renglones = [{"etiqueta": "Comentario del cliente", "despues": comentario or "—"}]
+    renglones = [_renglon_comentario(comentario)]
     old_estado = new_estado = None
+    cita = f": «{comentario}»" if comentario else ""
+    if tipo == TIPO_CAMBIOS:
+        sobre_la_sc = f"El cliente pidió cambios en la solicitud {sc.numero}: «{comentario}»"
+    else:
+        sobre_la_sc = f"El cliente dice que ya no necesita la solicitud {sc.numero}{cita}"
     if cot.estado == "PENDIENTE_CONFIRMACION":
         old_estado, new_estado = cot.estado, "BORRADOR"
         cot.estado = new_estado
@@ -435,13 +461,10 @@ def _cambios_en_cotizacion_temprana(db: Session, sc, cot, tipo: str, comentario,
         else:
             descripcion = ("El cliente dice que ya no necesita la solicitud: la cotización vuelve a Borrador; decide "
                            "si la rechazas o la ajustas.")
-    elif tipo == TIPO_CAMBIOS:
-        descripcion = (f"El cliente pidió cambios en la solicitud {sc.numero}: «{comentario}». Revisa esta cotización "
-                       f"antes de enviarla.")
+    elif cot.estado == "BORRADOR":
+        descripcion = f"{sobre_la_sc}. Revisa esta cotización antes de enviarla."  # H28 g
     else:
-        cita = f": «{comentario}»" if comentario else ""
-        descripcion = (f"El cliente dice que ya no necesita la solicitud {sc.numero}{cita}. Revisa esta cotización "
-                       f"antes de enviarla.")
+        descripcion = f"{sobre_la_sc}. Revisa esta cotización ({etiqueta_estado('COT', cot.estado)})."
     _log(db, "COT", cot.id, cot.numero, "SC_CAMBIOS_CLIENTE", descripcion, old_estado=old_estado,
          new_estado=new_estado, user_name=USUARIO_DEL_ENLACE,
          extra_data={"tipo": tipo, "comentario": comentario, "sc_numero": sc.numero, "cambios": renglones},
@@ -504,6 +527,7 @@ def _respuesta_cambios(db: Session, documento: str, doc, info: dict, tipo: str, 
     'cambios_enviados', mensaje, detalle, comentario, empresa, data}. data es el resumen público del documento (la
     misma proyección de /confirmar/ver, nunca _sc_dict/_cot_dict ni el dict de consultar_token). Si armarlo falla (un
     dato viejo malformado), el cambio ya quedó guardado: data None y el error en el registro, nunca un 500."""
+    from app.api.v1.erp_ventas import _NOMBRE_DOCUMENTO
     nombre = _NOMBRE_DOCUMENTO[documento]
     if tipo == TIPO_CAMBIOS:
         mensaje = "¡Listo! Recibimos tus cambios."
@@ -546,6 +570,12 @@ def pedir_cambios_via_token(body: PedirCambiosBody, idempotency_key: str = Heade
     tipo, comentario = _validar_pedido_de_cambios(body)
     info = consultar_token(db, body.token)
     estado, detalle, _ = _resolver_enlace(db, info)
+    if estado == "no_disponible":
+        # r1 (seguridad 1): doble clic u otra pestaña. Si el otro POST ya reclamó el enlace pero todavía no guarda su
+        # resultado (used_at puesto, resultado None: regla i), esta lectura sin bloqueo diría 'no_disponible'.
+        # _detalle_al_confirmar bloquea el documento, espera ese commit y relee el enlace: 'cambios_enviados' o
+        # 'confirmada'. Bloquear un documento que ya no está pendiente no cuesta nada.
+        raise HTTPException(400, detail=_detalle_al_confirmar(db, body.token))
     if estado != "pendiente":
         raise HTTPException(400, detail=detalle)
     documento = info["document_type"]
@@ -558,7 +588,6 @@ def pedir_cambios_via_token(body: PedirCambiosBody, idempotency_key: str = Heade
     if doc is None or doc.estado != "PENDIENTE_CONFIRMACION":
         # El enlace ya quedó gastado (como en confirmar): el documento cambió entre la consulta y el bloqueo.
         raise HTTPException(400, detail=_detalle_al_confirmar(db, body.token))
-    from app.core.documento_cliente import _asesor_del_documento
     asesor = _asesor_del_documento(db, doc, documento)  # antes del commit: después el objeto queda expirado
     ahora = ahora_utc()
     if documento == "SC":
