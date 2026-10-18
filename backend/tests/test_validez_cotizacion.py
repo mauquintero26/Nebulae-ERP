@@ -279,3 +279,21 @@ def test_los_asesores_leen_los_dias_de_validez(app_client, db, admin_token, vend
     resp = app_client.get("/api/v1/ventas/config", headers=auth(vendedor_token))
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"]["dias_validez_cotizacion"]["value"] == "8"
+
+
+def test_la_validez_sale_del_dia_de_colombia_aunque_en_utc_ya_sea_otro_dia(app_client, db, admin_token, monkeypatch):
+    """r1 (dinero 2): a las 03:30 UTC del 9 de octubre en Colombia todavía es el 8 (22:30). Con 5 días la COT vale hasta
+    el 13 y su enlace vence a las 00:00 del 14 en Colombia (05:00 UTC). Con la fecha UTC saldría un día más."""
+    import app.core.fechas as fechas
+    _correo_falso(monkeypatch)
+    db.execute(text("DELETE FROM admin_config WHERE key = 'dias_validez_cotizacion'"))  # el defecto, 5
+    db.commit()
+    monkeypatch.setattr(fechas, "ahora_utc", lambda: datetime.datetime(2026, 10, 9, 3, 30))
+    cot = _cot(db)
+    resp = _enviar(app_client, admin_token, cot)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["vence"] == "2026-10-13"
+    db.refresh(cot)
+    assert cot.valida_hasta == datetime.date(2026, 10, 13)
+    [token] = _tokens(db, cot.id)
+    assert token.expires_at == datetime.datetime(2026, 10, 14, 5, 0)

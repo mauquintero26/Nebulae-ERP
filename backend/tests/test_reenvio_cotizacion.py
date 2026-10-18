@@ -103,6 +103,17 @@ def _tokens(db, cot_id):
             .order_by(DocumentConfirmationToken.id.asc()).all())
 
 
+def _poner_dias(db, valor):
+    """dias_validez_cotizacion dentro de la transacción de la prueba (None la borra: vuelve al defecto, 5)."""
+    if valor is None:
+        db.execute(text("DELETE FROM admin_config WHERE key = 'dias_validez_cotizacion'"))
+    else:
+        db.execute(text("INSERT INTO admin_config (key, value, updated_at) "
+                        "VALUES ('dias_validez_cotizacion', :v, NOW()) "
+                        "ON CONFLICT (key) DO UPDATE SET value = :v, updated_at = NOW()"), {"v": valor})
+    db.commit()
+
+
 def _logs(db, cot_id, accion=None):
     from app.models.erp_documents import ActivityLog
     db.expire_all()
@@ -117,6 +128,7 @@ def test_reenviar_cotizacion_pendiente_revoca_el_enlace_anterior(app_client, db,
     commits_al_enviar = []
     _correo_falso(monkeypatch, al_enviar=lambda: commits_al_enviar.append(contador_sql.commits))
     mover = _contar_mover_lead(monkeypatch)
+    _poner_dias(db, None)
     sc = _sc(db)
     cot = _cot(db, sc)
 
@@ -156,6 +168,12 @@ def test_reenviar_cotizacion_pendiente_revoca_el_enlace_anterior(app_client, db,
     assert (envios[1].old_estado, envios[1].new_estado) == ("PENDIENTE_CONFIRMACION", "PENDIENTE_CONFIRMACION")
     assert [c["etiqueta"] for c in envios[1].extra_data["cambios"]] == [
         "Canal de envío", "Correo de respaldo", "Enlace vigente hasta"]
+    # r1 (calidad 5): la validez renovada, en el renglón y en la respuesta (el mismo día: el primer envío fue hoy).
+    from app.core.fechas import hoy_colombia
+    vence = hoy_colombia() + datetime.timedelta(days=5)
+    assert envios[1].extra_data["cambios"][-1] == {"etiqueta": "Enlace vigente hasta",
+                                                   "despues": vence.strftime("%d/%m/%Y")}
+    assert segundo.json()["vence"] == vence.isoformat()
     # El lead se movió en el primer envío y no otra vez; la SC no se toca en el reenvío.
     assert mover == [sc.id]
     db.expire_all()
@@ -173,7 +191,9 @@ def test_reenviar_cotizacion_con_pven_sigue_en_400(app_client, db, admin_token, 
     db.commit()
     resp = _enviar(app_client, admin_token, cot, {"canal": "Email"})
     assert resp.status_code == 400, resp.text
-    assert "pedido de venta" in resp.json()["detail"]
+    pven = db.query(SaleOrder).filter(SaleOrder.cot_id == cot.id).one()
+    assert resp.json()["detail"] == (f"Esta cotización ya tiene el pedido de venta {pven.numero} activo; no tiene "
+                                     f"sentido volver a pedir confirmación.")
     assert llamadas == []
     tokens = _tokens(db, cot.id)
     assert len(tokens) == 1 and tokens[0].used_at is None  # el enlace que tenía no se tocó
@@ -218,3 +238,63 @@ def test_reenviar_renueva_valida_hasta(app_client, db, admin_token, monkeypatch)
     assert viejo.used_at is not None
     assert nuevo.used_at is None and nuevo.expires_at == vence_al_final_del_dia(nueva)
     assert _ver(app_client, _raw(resp)).status_code == 200
+
+
+RECARGA = ("La cotización cambió mientras la reenviabas (el cliente pidió cambios o la editaron). Recarga la "
+           "página.")
+
+
+def test_reenvio_con_una_pagina_vieja_da_409(app_client, db, admin_token, monkeypatch):
+    """r1 (calidad 1): el botón «Reenviar» manda reenvio=true. Si la COT ya no espera al cliente (pidió cambios y volvió
+    a Borrador, o la editaron), 409 sin tocar enlaces, estado ni la marca de cambios; sin la bandera, el envío de
+    siempre."""
+    from app.core.confirmation_tokens import create_confirmation_token
+    llamadas = _correo_falso(monkeypatch)
+    marca = datetime.datetime(2026, 10, 9, 15, 0)
+    cot = _cot(db, estado="BORRADOR", cambios_cliente_at=marca, cambios_cliente_tipo="CAMBIOS",
+               cambios_cliente_comentario="Quiero 6 en vez de 4")
+    create_confirmation_token(db, "COT", cot.id)  # un enlace que hubiera quedado vivo tampoco se toca
+    for bandera_y_estado in ((True, "BORRADOR"), (True, "RECHAZADA")):
+        cot.estado = bandera_y_estado[1]
+        db.commit()
+        resp = _enviar(app_client, admin_token, cot, {"canal": "Email", "reenvio": bandera_y_estado[0]})
+        assert resp.status_code == 409, (bandera_y_estado, resp.text)
+        assert resp.json()["detail"] == RECARGA
+        [token] = _tokens(db, cot.id)
+        assert token.used_at is None
+        db.refresh(cot)
+        assert cot.estado == bandera_y_estado[1] and cot.valida_hasta is None
+        assert (cot.cambios_cliente_at, cot.cambios_cliente_tipo, cot.cambios_cliente_comentario) == (
+            marca, "CAMBIOS", "Quiero 6 en vez de 4")
+        assert _logs(db, cot.id) == []
+    assert llamadas == []
+    # Con la COT pendiente, reenvio=true es el reenvío; sin la bandera, una COT en Borrador se envía como siempre.
+    cot.estado = "BORRADOR"
+    db.commit()
+    assert _enviar(app_client, admin_token, cot, {"canal": "Email"}).status_code == 200
+    resp = _enviar(app_client, admin_token, cot, {"canal": "Email", "reenvio": True})
+    assert resp.status_code == 200, resp.text
+    assert (_logs(db, cot.id, "ESTADO_CHANGED")[-1].description
+            == "Enlace de confirmación reenviado al cliente por correo")
+
+
+def test_renovar_la_validez_nunca_la_acorta(app_client, db, admin_token, monkeypatch):
+    """r1 (dinero 4): si el administrador bajó los días después del primer envío, «Reenviar» no recorta la fecha que ya
+    se le dijo al cliente: valida_hasta = max(la que tenía, hoy + N)."""
+    from app.core.fechas import hoy_colombia, vence_al_final_del_dia
+    _correo_falso(monkeypatch)
+    _poner_dias(db, "10")
+    cot = _cot(db)
+    assert _enviar(app_client, admin_token, cot).status_code == 200
+    diez = hoy_colombia() + datetime.timedelta(days=10)
+    _poner_dias(db, "2")
+    resp = _enviar(app_client, admin_token, cot, {"reenvio": True})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["vence"] == diez.isoformat()
+    db.refresh(cot)
+    assert cot.valida_hasta == diez
+    viejo, nuevo = _tokens(db, cot.id)
+    assert viejo.used_at is not None and nuevo.used_at is None
+    assert nuevo.expires_at == vence_al_final_del_dia(diez)
+    envio = _logs(db, cot.id, "ESTADO_CHANGED")[-1]
+    assert envio.extra_data["cambios"][-1] == {"etiqueta": "Enlace vigente hasta", "despues": diez.strftime("%d/%m/%Y")}

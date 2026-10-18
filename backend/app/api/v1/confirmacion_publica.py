@@ -433,8 +433,13 @@ def _cambios_en_cotizacion_temprana(db: Session, sc, cot, tipo: str, comentario,
     lleva (no cuenta dos veces en las alertas).
     Solo se bloquea (FOR UPDATE, después de la SC, el mismo orden que PATCH /solicitudes/{id}/cliente) la COT que va a
     cambiar de estado: una en Borrador solo recibe un renglón, y bloquearla podría cruzarse con update_cotizacion, que
-    bloquea la COT antes que su SC al cambiarle la solicitud. El envío de la COT bloquea su SC (r1), así que no corre
-    en medio de este cambio."""
+    bloquea la COT antes que su SC al cambiarle la solicitud.
+    Con el envío de la COT: el PRIMER envío (Borrador o Enviada) bloquea la COT y después su SC (T6 r1), así que no
+    corre en medio de este cambio. El REENVÍO de una COT ya pendiente (B3 T7, C13) NO bloquea la SC (evita el ciclo
+    COT -> SC frente a este SC -> COT): a los dos los ordena el bloqueo de la COT. Si el reenvío llega primero, este
+    refresh espera su commit y la revocación de abajo, que corre después del refresh con una foto nueva, también anula
+    el enlace que el reenvío acaba de crear; si este llega primero, el reenvío espera y relee la COT en Borrador: con
+    reenvio=true (el botón «Reenviar») responde 409 sin tocar nada (T7 r1)."""
     from app.api.v1.erp_ventas import _ENLACE_ANULADO, _log
     if cot.estado == "PENDIENTE_CONFIRMACION":
         db.refresh(cot, with_for_update=True)  # releída bloqueada: el cliente pudo confirmarla en otra pestaña

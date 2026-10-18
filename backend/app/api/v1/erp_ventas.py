@@ -50,7 +50,7 @@ import hashlib
 import logging
 import re
 import unicodedata
-from app.core.fechas import ZONA_COLOMBIA, hoy_colombia, iso_z, vence_al_final_del_dia
+from app.core.fechas import ZONA_COLOMBIA, a_colombia, hoy_colombia, iso_z, vence_al_final_del_dia
 
 logger = logging.getLogger(__name__)
 
@@ -316,6 +316,11 @@ def _enviar_correo_confirmacion(destino: Optional[str], asunto: str, html: str,
 
 _MENSAJE_CORREO_SIN_ARMAR = ("No se pudo armar el correo al cliente: revisa la dirección pública del ERP "
                              "(FRONTEND_URL).")
+# B3 T7 (r1): el 409 de «Reenviar» con una pagina vieja (la COT ya no espera al cliente) y el del bloqueo abortado del
+# pedido (como el de la COT, T6 r2).
+_COT_CAMBIO_AL_REENVIAR = ("La cotización cambió mientras la reenviabas (el cliente pidió cambios o la editaron). "
+                           "Recarga la página.")
+_PEDIDO_BLOQUEADO = "Otra operación estaba cambiando este pedido al mismo tiempo. Intenta de nuevo."
 
 
 def _armar_correo_o_revertir(db: Session, perfil: dict, tipo: str, numero, cliente, link, resumen=None,
@@ -731,11 +736,15 @@ def _cotizaciones_con_anticipo_abierto(db: Session, sc_id: int) -> list:
     return [cot for cot in cots if _pven_vigente_de_cotizacion(db, cot.id) is None]
 
 
-def _recalcular_anticipo_por_modalidad(db: Session, sc: CustomerRequest, user_name: Optional[str]) -> None:
+def _recalcular_anticipo_por_modalidad(db: Session, sc: CustomerRequest, cots: list, user_name: Optional[str]) -> None:
     """H36+H43: cambio la modalidad de pago de la SC -> recalcula el anticipo de sus COT abiertas sin pedido
     vigente (el % manual, si lo hay, se respeta: R3) y deja un renglon UPDATED en la Actividad de cada COT que
-    cambia. Sin commit: lo confirma el commit de update_solicitud (choque H36/H29, una sola transaccion)."""
-    for cot in _cotizaciones_con_anticipo_abierto(db, sc.id):
+    cambia. Sin commit: lo confirma el commit de update_solicitud (choque H36/H29, una sola transaccion).
+    B3 T7 (r1, calidad 7): `cots` es la lista que update_solicitud ya leyo con _cotizaciones_con_anticipo_abierto (una
+    sola lectura); una COT que, releida con bloqueo al anular, ya no esta abierta se salta."""
+    for cot in cots:
+        if cot.estado not in _ESTADOS_COT_ANTICIPO_ABIERTO:
+            continue
         pct, _, _, nuevo = anticipo_cotizacion(cot, db, sc=sc)
         viejo = Decimal(str(cot.anticipo_cop or 0))
         if nuevo == viejo:
@@ -765,6 +774,14 @@ def _anticipos_requeridos(db: Session, sc: CustomerRequest) -> list:
     de aplicar el PATCH de update_solicitud."""
     return [(cot, anticipo_cotizacion(cot, db, sc=sc).requerido)
             for cot in _cotizaciones_con_anticipo_abierto(db, sc.id)]
+
+
+def _releer_con_bloqueo(db: Session, cots: list) -> None:
+    """r1 (calidad 2): relee FOR UPDATE las COT dadas (populate_existing: los mismos objetos de la sesion quedan con lo
+    que hay en la base), por id. Se llama con la SC ya bloqueada: el orden SC -> COT de PATCH /cliente y de C20."""
+    if cots:
+        (db.query(SalesQuotation).filter(SalesQuotation.id.in_([cot.id for cot in cots]))
+         .order_by(SalesQuotation.id.asc()).populate_existing().with_for_update().all())
 
 
 def _anticipos_congelados_que_cambian(db: Session, sc: CustomerRequest, previos: list) -> list:
@@ -827,11 +844,14 @@ def _anular_confirmacion_por_modalidad(db: Session, sc: CustomerRequest, congela
                                        user: User) -> None:
     """U22-anticipo aceptado: cada COT de `congeladas` vuelve a Borrador, sale del ciclo de Gate 2 (enlaces revocados y
     gate2 en None) y deja su renglon ESTADO_CHANGED a nombre de la sesion. Sin commit: va en el commit unico de
-    update_solicitud (H29). La SC no se toca (U15)."""
+    update_solicitud (H29). La SC no se toca (U15).
+    r1 (calidad 2): la fila de la COT se escribe (flush) ANTES de revocar: la revocacion es SQL de texto y no hace
+    autoflush, asi que sin el flush tomaria su foto de los enlaces antes de que la COT quedara escrita."""
     for cot, antes, despues in congeladas:
         old_estado = cot.estado
         cot.estado = "BORRADOR"
         cot.updated_at = datetime.datetime.utcnow()
+        db.flush()
         _salir_de_gate2(db, cot)
         _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {etiqueta_estado('COT', 'BORRADOR')}: el anticipo cambió por la modalidad de pago de "
@@ -1758,6 +1778,11 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         anticipos_congelados = _anticipos_congelados_que_cambian(db, sc, anticipos_previos)
         if anticipos_congelados:
             razon_anulacion = _exigir_anulacion_por_modalidad(db, body, anticipos_congelados)
+            # r1 (calidad 2): la decision se tomo con una foto SIN bloqueo de las COT. Antes de anular se releen
+            # bloqueadas (SC -> COT) y las congeladas se recalculan con el estado releido: una COT que mientras tanto
+            # paso a Borrador (el cliente pidio cambios) no se anula ni deja un renglon con un estado viejo.
+            _releer_con_bloqueo(db, [cot for cot, _ in anticipos_previos])
+            anticipos_congelados = _anticipos_congelados_que_cambian(db, sc, anticipos_previos)
     # B3 T5 (r2, privacidad 2): cambio de cliente (identidad o contacto) comparando los datos, sin describir.
     cambia_la_identidad = _identidad_del_cliente(sc) != identidad_antes
     # Gate 1 -- invariante (Round 6, generaliza la version de la implementacion original
@@ -1816,7 +1841,8 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     # H36+H43: si cambio la modalidad de pago, el anticipo de sus COT abiertas sin pedido vigente se recalcula
     # aqui, ANTES del commit de abajo y con _log(commit=False): sin commits intermedios (choque H36/H29).
     if "modalidad_pago" in body and antes_log.get("modalidad_pago") != sc.modalidad_pago:
-        _recalcular_anticipo_por_modalidad(db, sc, body.get("updated_by") or getattr(user, "email", None))
+        _recalcular_anticipo_por_modalidad(db, sc, [cot for cot, _ in anticipos_previos],
+                                           body.get("updated_by") or getattr(user, "email", None))
         # U22-anticipo: despues del recalculo, para que la linea de tiempo de la COT se lea en orden causal.
         if anticipos_congelados:
             _anular_confirmacion_por_modalidad(db, sc, anticipos_congelados, razon_anulacion, user)
@@ -3180,7 +3206,6 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     cambia_total = _quantize_cop(cot.total_cop) != _quantize_cop(old_price_values["total_cop"])
     recalcula_por_precio = bool(body.get("recotizacion")) or cambia_total
     pct_nuevo = pct_previo
-    requerido_nuevo = a_previo.requerido  # U22-anticipo: sin recalculo, el requerido no cambia
     if recalcula_por_precio or cambia_manual:
         # Con el estado de DESPUES del loop: SC, % manual y total nuevos.
         pct_nuevo, _, origen, requerido = anticipo_cotizacion(cot, db)
@@ -3196,11 +3221,14 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
                 pct_nuevo = pct_previo
                 requerido = anticipo_requerido(cot.total_cop, pct_previo)
         cot.anticipo_cop = requerido
-        requerido_nuevo = requerido
         if cambia_manual and not recalcula_por_precio:
             # El ajuste manual deja su propio renglon (abajo): que la edicion no repita el cambio del anticipo
             # como si fuera una re-cotizacion.
             antes_log["anticipo_cop"] = cot.anticipo_cop
+    # U22-anticipo (r1, dinero 1): el requerido VIVO despues del PATCH (la SC, el % manual, el total y el anticipo_cop
+    # que dejo), haya habido recalculo o no; anticipo_cop solo se escribe arriba, dentro del recalculo. Con un recalculo
+    # es el mismo valor que se acaba de guardar.
+    requerido_nuevo = anticipo_cotizacion(cot, db).requerido
 
     # H46: un pedido CANCELADO no cuenta -- la COT reabierta (o un dato viejo que quedo CONFIRMADA con todos sus
     # pedidos cancelados) vuelve a estar en el ciclo vigente de Gate 2 y su precio se congela.
@@ -3405,6 +3433,11 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
         cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).with_for_update().first()
         if not cot:
             raise HTTPException(404, "Cotización no encontrada")
+        # B3 T7 (r1, calidad 1): el boton «Reenviar» manda reenvio=true (T17). Si la COT ya no espera al cliente (pidio
+        # cambios y volvio a Borrador, o la editaron) la pagina estaba vieja: 409 sin tocar enlaces, estado ni la marca
+        # de cambios (sin esto, un primer envio completo borraria cambios_cliente_* sin que el asesor respondiera).
+        if body.get("reenvio") is True and cot.estado != "PENDIENTE_CONFIRMACION":
+            raise HTTPException(409, _COT_CAMBIO_AL_REENVIAR)
         if cot.estado not in ("BORRADOR", "ENVIADA", "PENDIENTE_CONFIRMACION"):
             raise HTTPException(400, f"La cotización debe estar en Borrador, Enviada o Pendiente por confirmación para "
                                      f"enviarla al cliente (estado actual: {etiqueta_estado('COT', cot.estado)}).")
@@ -3456,10 +3489,14 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     old_estado = cot.estado
     # U22-validez (B3 T7, C14, RP17): la cotizacion vale hasta hoy en Colombia + dias_validez_cotizacion (acotado a
     # 1..60 al leerlo) y su enlace hasta el final de ese dia. El envio y el reenvio manual la renuevan (el recordatorio
-    # automatico de T11 no).
+    # automatico de T11 no). r1 (dinero 4): renovar nunca acorta: en el reenvio gana la fecha que ya tenia si es
+    # posterior (el administrador pudo bajar los dias despues del primer envio); si ya vencio, gana hoy + N.
     dias = config_entero(db, CLAVE_DIAS_VALIDEZ_COT, DIAS_VALIDEZ_COT_DEFECTO, DIAS_VALIDEZ_COT_MIN,
                          DIAS_VALIDEZ_COT_MAX)
-    valida_hasta = hoy_colombia() + datetime.timedelta(days=dias)
+    hoy = hoy_colombia()
+    valida_hasta = hoy + datetime.timedelta(days=dias)
+    if es_reenvio:
+        valida_hasta = max(cot.valida_hasta or hoy, valida_hasta)
     # Mismo criterio que enviar_solicitud_para_confirmacion: revocar incondicionalmente
     # antes de emitir, por si quedo un token vivo de un ciclo anterior sin terminar (y en el reenvio, el enlace anterior).
     # r2 (parte de RP16 sin bloqueo): la revocacion y el token nuevo van en el commit del estado, como en la SC.
@@ -3777,16 +3814,21 @@ def _ultimo_envio_al_cliente(db: Session, so_id: int) -> Optional[ActivityLog]:
 
 
 def _enlace_cliente_del_pedido(db: Session, so_id: int) -> dict:
-    """U23 (punto 3): {vigente, enviado_at, vence_at} del enlace de consulta del pedido (instantes UTC con 'Z'). Con un
-    enlace vigente, el mas nuevo (ultimo_enlace_vigente): cuando se envio y cuando vence. Sin enlace vigente (vencido,
-    revocado al reenviar o al cancelar, o nunca enviado): vigente False, vence_at None y enviado_at la fecha del ultimo
-    envio en la Actividad, o None. NUNCA el token ni su hash."""
+    """U23 (punto 3): {vigente, enviado_at, vence_at, vence} del enlace de consulta del pedido. Con un enlace vigente,
+    el mas nuevo (ultimo_enlace_vigente): enviado_at y vence_at son instantes UTC con 'Z' (vence_at = expires_at, el
+    instante EXCLUSIVO en que deja de servir: las 00:00 en Colombia del dia siguiente) y vence es el ultimo dia en que
+    sirve, en Colombia ('AAAA-MM-DD', inclusivo: el mismo de la respuesta del envio, del correo y de la Actividad; r1,
+    dinero 3). Sin enlace vigente (vencido, revocado al reenviar o al cancelar, o nunca enviado): vigente False,
+    vence_at y vence None y enviado_at la fecha del ultimo envio en la Actividad, o None. NUNCA el token ni su hash."""
     from app.core.confirmation_tokens import ultimo_enlace_vigente
     enlace = ultimo_enlace_vigente(db, "PVEN", so_id)
     if enlace is not None:
-        return {"vigente": True, "enviado_at": iso_z(enlace.created_at), "vence_at": iso_z(enlace.expires_at)}
+        ultimo_dia = a_colombia(enlace.expires_at - datetime.timedelta(microseconds=1)).date()
+        return {"vigente": True, "enviado_at": iso_z(enlace.created_at), "vence_at": iso_z(enlace.expires_at),
+                "vence": ultimo_dia.isoformat()}
     ultimo = _ultimo_envio_al_cliente(db, so_id)
-    return {"vigente": False, "enviado_at": iso_z(ultimo.created_at) if ultimo is not None else None, "vence_at": None}
+    return {"vigente": False, "enviado_at": iso_z(ultimo.created_at) if ultimo is not None else None, "vence_at": None,
+            "vence": None}
 
 
 @router.post("/pedidos/{ven_id}/enviar-al-cliente")
@@ -3795,7 +3837,8 @@ def enviar_pedido_al_cliente(ven_id: int, body: dict = Body(default_factory=dict
     """U23 (B3 T7; R6, C16, C21, RP15, RP16, RP31): le manda al cliente un enlace de CONSULTA de su pedido (solo lectura;
     verlo no lo gasta) y deja el envio en la Actividad. El estado del pedido no cambia.
 
-    - 404 si el pedido no existe; 409 si esta CANCELADO; 400 si no tiene productos o su total es <= 0.
+    - 404 si el pedido no existe; 409 si esta CANCELADO; 400 si no tiene productos o su total es <= 0; 409 tambien si
+      el bloqueo del pedido se aborta (40P01) o tarda mas que el statement_timeout (57014), sin escribir nada (r1).
     - El canal se valida (H27: 422 si no es WhatsApp, Email u Otro; 400 si es Email y no hay correo) ANTES de tocar
       enlaces: un canal malo no anula el enlace que el cliente ya tenia.
     - RP16: el pedido se lee FOR UPDATE y la revocacion del enlace anterior, el enlace nuevo (vence al final del dia de hoy
@@ -3806,7 +3849,18 @@ def enviar_pedido_al_cliente(ven_id: int, body: dict = Body(default_factory=dict
     - El autor es el usuario de la sesion (nombre_de_usuario, RP15): el user_name del body no cuenta.
     - Respuesta: {status, link, canal, correo, vence ('AAAA-MM-DD'), whatsapp}. whatsapp es None hasta T8 (sin envio
       automatico, el frontend abre WhatsApp con el mensaje, como en la cotizacion)."""
-    so = db.query(SaleOrder).filter(SaleOrder.id == ven_id).with_for_update().first()
+    try:
+        so = db.query(SaleOrder).filter(SaleOrder.id == ven_id).with_for_update().first()
+    except OperationalError as exc:
+        # r1 (calidad 4), como el envio de la COT (T6 r2): si el bloqueo se aborta (40P01) o espera mas que el
+        # statement_timeout (57014) detras de otro que tiene el pedido, todavia no se escribio nada: se revierte y se
+        # pide repetir, en vez de un 500.
+        db.rollback()
+        pgcode = getattr(getattr(exc, "orig", None), "pgcode", None)
+        if pgcode not in (_INTERBLOQUEO, _TIEMPO_AGOTADO):
+            raise
+        logger.warning("Bloqueo abortado (%s) al enviar el pedido %s al cliente", pgcode, ven_id)
+        raise HTTPException(409, _PEDIDO_BLOQUEADO)
     if not so:
         raise HTTPException(404, "Pedido de venta no encontrado")
     if so.estado == "CANCELADO":

@@ -106,7 +106,9 @@ def test_ajustar_anticipo_de_cot_pendiente_pide_anular(app_client, db, admin_tok
     assert detail["codigo"] == "ANULA_CONFIRMACION" and detail["estado"] == "PENDIENTE_CONFIRMACION"
     assert detail["cambios"] == ["Anticipo"]
     assert detail["anticipo"] == {"antes": "$600.000", "despues": "$500.000"}
-    assert "(Anticipo)" in detail["mensaje"]
+    assert detail["mensaje"] == (
+        "Esta cotización está esperando la confirmación del cliente. Si guardas estos cambios (Anticipo), el enlace "
+        "que tiene el cliente deja de servir: la cotización vuelve a Borrador y tendrás que enviársela de nuevo.")
     db.expire_all()
     db.refresh(cot)
     assert cot.anticipo_pct_manual is None and cot.anticipo_manual_nota is None
@@ -218,6 +220,15 @@ def test_cambiar_modalidad_con_anular_confirmacion(app_client, db, admin_token, 
                                                        "motivo_recotizacion": f"  {MOTIVO}  "})
     assert resp.status_code == 200, resp.text
     assert v.commits == 1, f"el PATCH debe confirmar una sola vez (H29), confirmó {v.commits} veces"
+    # r1 (calidad 2): al anular, la COT se relee FOR UPDATE (después de la SC: el orden SC -> COT) y su fila se escribe
+    # (y queda bloqueada) ANTES de revocar sus enlaces.
+    sentencias = v.sentencias
+    relecturas = [s for s in sentencias if "FROM sales_quotations" in s and "FOR UPDATE" in s.upper()]
+    assert relecturas, "al anular, la COT debe releerse con FOR UPDATE"
+    escribe_cot = next(i for i, s in enumerate(sentencias) if s.lstrip().upper().startswith("UPDATE SALES_QUOTATIONS"))
+    revoca = next(i for i, s in enumerate(sentencias)
+                  if s.lstrip().upper().startswith("UPDATE DOCUMENT_CONFIRMATION_TOKENS"))
+    assert escribe_cot < revoca, "la fila de la COT se escribe antes de revocar sus enlaces"
     db.expire_all()
     db.refresh(sc)
     db.refresh(cot)
@@ -318,3 +329,47 @@ def test_dos_cotizaciones_congeladas_van_en_el_mismo_aviso(app_client, db, admin
         f"Cambiar la modalidad de pago cambia el anticipo de {una.numero} ($600.000 → $1.000.000) y {otra.numero} "
         f"($1.200.000 → $2.000.000), que el cliente ya vio o confirmó. Si sigues, esas confirmaciones se anulan y "
         f"tendrás que enviarle las cotizaciones de nuevo.")
+
+
+def test_al_anular_cuenta_el_estado_releido_con_bloqueo(app_client, db, admin_token, monkeypatch):
+    """r1 (calidad 2): la decisión de anular se toma con una lectura SIN bloqueo; si al releer la COT bloqueada ya no
+    espera al cliente (aquí: la primera lectura la vio Pendiente y la base dice Borrador), no se anula nada ni queda un
+    renglón con un estado viejo."""
+    import app.api.v1.erp_ventas as ventas
+    sc = _sc(db)
+    cot = _cot(db, sc, estado="BORRADOR")
+    leer_real = ventas._anticipos_requeridos
+
+    def lectura_vieja(db_, sc_):
+        previos = leer_real(db_, sc_)
+        for c, _ in previos:
+            c.estado = "PENDIENTE_CONFIRMACION"  # lo que vio la foto sin bloqueo, en memoria
+        return previos
+
+    monkeypatch.setattr(ventas, "_anticipos_requeridos", lectura_vieja)
+    resp = _patch_sc(app_client, admin_token, sc, {"modalidad_pago": "Contado", "anular_confirmacion": True,
+                                                   "motivo_recotizacion": MOTIVO})
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    db.refresh(cot)
+    assert cot.estado == "BORRADOR" and cot.anticipo_cop == Decimal("1000000")
+    assert _logs(db, "COT", cot.id, "ESTADO_CHANGED") == []
+
+
+def test_una_cot_pendiente_no_cambia_de_solicitud(app_client, db, admin_token):
+    """r1 (dinero 1): requerido_nuevo es siempre el vivo (anticipo_cotizacion con la SC y el total que deja el PATCH).
+    El caso que lo pide (mover una COT pendiente a una SC con otra modalidad) hoy no llega al congelamiento: N7 solo
+    deja cambiar la solicitud de una COT en Borrador o Rechazada, y responde 409 sin tocar nada."""
+    sc = _sc(db)
+    otra = _sc(db, modalidad="Contado", estado="CONFIRMADA", gate1_confirmed_at=datetime.datetime.utcnow())
+    cot = _cot(db, sc)
+    raw = _token(db, cot)
+    resp = _patch_cot(app_client, admin_token, cot, {"sc_id": otra.id, "anular_confirmacion": True,
+                                                     "motivo_recotizacion": MOTIVO})
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == ("Solo se puede cambiar la solicitud de una cotización en Borrador o Rechazada "
+                                     "(estado actual: Esperando confirmación del cliente).")
+    db.expire_all()
+    db.refresh(cot)
+    assert cot.sc_id == sc.id and cot.estado == "PENDIENTE_CONFIRMACION"
+    assert _fila_token(db, raw).used_at is None

@@ -31,6 +31,8 @@ PRODUCTOS = [{"product_name": "Sofá", "qty": 2, "unit_price_cop": 400000, "tota
 CLAVES_RESPUESTA = {"status", "link", "canal", "correo", "vence", "whatsapp"}
 CANCELADO = "El pedido está cancelado: no se puede enviar al cliente."
 SIN_NADA = "El pedido no tiene productos ni total; no hay nada que enviar."
+SIN_CORREO = ("El cliente no tiene correo registrado: elige WhatsApp u Otro, o agrega su correo antes de enviar.")
+CANAL_INVALIDO = "Canal de envío no válido: usa WhatsApp, Email u Otro."
 
 
 def auth(token):
@@ -229,7 +231,7 @@ def test_email_sin_correo_es_400_y_no_crea_enlace(app_client, db, admin_token, m
     raw = create_confirmation_token(db, "PVEN", so.id, expires_at=vence_al_final_del_dia(_vence()))
     resp = _enviar(app_client, admin_token, so, {"canal": "Email"})
     assert resp.status_code == 400, resp.text
-    assert "no tiene correo" in resp.json()["detail"]
+    assert resp.json()["detail"] == SIN_CORREO
     [token] = _tokens(db, so.id)
     assert token.used_at is None
     assert _ver(app_client, raw).status_code == 200
@@ -242,6 +244,7 @@ def test_canal_invalido_es_422(app_client, db, admin_token, monkeypatch):
     for canal in ("Fax", 7, ["WhatsApp"]):
         resp = _enviar(app_client, admin_token, so, {"canal": canal})
         assert resp.status_code == 422, (canal, resp.text)
+        assert resp.json()["detail"] == CANAL_INVALIDO, canal
     assert _tokens(db, so.id) == [] and _envios(db, so.id) == [] and llamadas == []
 
 
@@ -257,20 +260,24 @@ def test_get_pedido_expone_estado_del_enlace_sin_token(app_client, db, admin_tok
         return r, r.json()["data"]["enlace_cliente"]
 
     _, antes = enlace()
-    assert antes == {"vigente": False, "enviado_at": None, "vence_at": None}
+    assert antes == {"vigente": False, "enviado_at": None, "vence_at": None, "vence": None}
     resp = _enviar(app_client, admin_token, so, {"canal": "WhatsApp"})
     assert resp.status_code == 200, resp.text
     raw = _raw(resp)
     r, vigente = enlace()
     [token] = _tokens(db, so.id)
-    assert vigente == {"vigente": True, "enviado_at": iso_z(token.created_at), "vence_at": iso_z(token.expires_at)}
+    # r1 (dinero 3): vence_at es el instante en que deja de servir (exclusivo); vence, el último día en Colombia
+    # (inclusivo, 'AAAA-MM-DD'), el mismo de la respuesta del envío, del correo y de la Actividad.
+    assert vigente == {"vigente": True, "enviado_at": iso_z(token.created_at), "vence_at": iso_z(token.expires_at),
+                       "vence": resp.json()["vence"]}
+    assert vigente["vence"] == _vence().isoformat()
     assert vigente["enviado_at"].endswith("Z") and vigente["vence_at"].endswith("Z")
     assert raw not in r.text and hashlib.sha256(raw.encode()).hexdigest() not in r.text
     # Sin enlace vigente (revocado), la fecha del último envío de la Actividad.
     revoke_pending_tokens(db, "PVEN", so.id)
     _, sin_enlace = enlace()
     [envio] = _envios(db, so.id)
-    assert sin_enlace == {"vigente": False, "enviado_at": iso_z(envio.created_at), "vence_at": None}
+    assert sin_enlace == {"vigente": False, "enviado_at": iso_z(envio.created_at), "vence_at": None, "vence": None}
 
 
 def test_solo_administracion_o_el_asesor(app_client, db, compras_token, monkeypatch):
@@ -298,10 +305,61 @@ def test_si_el_correo_no_se_puede_armar_no_queda_nada(app_client, db, admin_toke
     so = _pedido(db)
     raw = create_confirmation_token(db, "PVEN", so.id, expires_at=vence_al_final_del_dia(_vence()))
     monkeypatch.setenv("FRONTEND_URL", "erp.ejemplo.com")
-    resp = _enviar(app_client, admin_token, so, {"canal": "Email"})
+    import app.api.v1.erp_ventas as ventas
+    from _registro_capturado import registro_capturado
+    with registro_capturado(ventas.logger.name) as registros:  # r1 (calidad 6): la salida queda limpia
+        resp = _enviar(app_client, admin_token, so, {"canal": "Email"})
     assert resp.status_code == 500, resp.text
+    assert [r.levelname for r in registros] == ["ERROR"]
+    assert "PVEN" in registros[0].getMessage() and so.numero in registros[0].getMessage()
     assert "FRONTEND_URL" in resp.json()["detail"] and "erp.ejemplo.com" not in resp.text
     [token] = _tokens(db, so.id)
     assert token.used_at is None
     assert _ver(app_client, raw).status_code == 200
     assert _envios(db, so.id) == [] and llamadas == []
+
+
+def test_el_enlace_sale_del_dia_de_colombia_aunque_en_utc_ya_sea_otro_dia(app_client, db, admin_token, monkeypatch):
+    """r1 (dinero 2): a las 03:30 UTC del 9 de octubre en Colombia todavía es el 8. El enlace sirve hasta el 7 de
+    noviembre (8 + 30) y vence a las 00:00 del 8 de noviembre en Colombia (05:00 UTC)."""
+    import app.core.fechas as fechas
+    _correo_falso(monkeypatch)
+    monkeypatch.setattr(fechas, "ahora_utc", lambda: datetime.datetime(2026, 10, 9, 3, 30))
+    so = _pedido(db)
+    resp = _enviar(app_client, admin_token, so, {"canal": "Email"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["vence"] == "2026-11-07"
+    [token] = _tokens(db, so.id)
+    assert token.expires_at == datetime.datetime(2026, 11, 8, 5, 0)
+    [envio] = _envios(db, so.id)
+    assert envio.extra_data["cambios"][-1] == {"etiqueta": "Enlace vigente hasta", "despues": "07/11/2026"}
+
+
+def test_un_interbloqueo_o_un_tiempo_agotado_al_bloquear_el_pedido_da_409(app_client, db, admin_token, monkeypatch):
+    """r1 (calidad 4): como el envío de la COT (T6 r2), si el bloqueo del pedido se aborta (40P01) o espera más que el
+    statement_timeout (57014), 409 claro sin dejar nada a medias y con un aviso en el registro."""
+    import app.api.v1.erp_ventas as ventas
+    from _registro_capturado import registro_capturado
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Query
+    from app.models.erp_documents import SaleOrder
+    llamadas = _correo_falso(monkeypatch)
+    bloquear_real = Query.with_for_update
+    for pgcode in ("40P01", "57014"):
+        error_de_la_base = type("ErrorDeBloqueo", (Exception,), {"pgcode": pgcode})
+
+        def _falla_al_bloquear_el_pedido(self, *args, **kwargs):
+            if self.column_descriptions and self.column_descriptions[0].get("entity") is SaleOrder:
+                raise OperationalError("SELECT sale_orders.id ... FOR UPDATE", {}, error_de_la_base("bloqueo abortado"))
+            return bloquear_real(self, *args, **kwargs)
+
+        so = _pedido(db)
+        monkeypatch.setattr(Query, "with_for_update", _falla_al_bloquear_el_pedido)
+        with registro_capturado(ventas.logger.name) as registros:
+            resp = _enviar(app_client, admin_token, so, {"canal": "Email"})
+        monkeypatch.setattr(Query, "with_for_update", bloquear_real)
+        assert resp.status_code == 409, (pgcode, resp.text)
+        assert resp.json()["detail"] == "Otra operación estaba cambiando este pedido al mismo tiempo. Intenta de nuevo."
+        assert [r.levelname for r in registros] == ["WARNING"], pgcode
+        assert _tokens(db, so.id) == [] and _envios(db, so.id) == [], pgcode
+    assert llamadas == []
