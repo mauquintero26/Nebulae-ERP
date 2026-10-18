@@ -22,9 +22,10 @@ from tests.usuarios_de_prueba import bodega_token, compras_token  # noqa: F401  
 LINEA = {"product_name": "Cuna Colecho", "qty": 1}
 MOTIVO_CONTACTO = ("cambió el correo o el teléfono del cliente, así que su confirmación ya no es válida y hay que "
                    "enviarle la solicitud de nuevo")
+# B3 T7 (RP13, prueba que se rompe [7]): con el reenvío desde Pendiente por confirmación (C13) ya no hay que pasarla a
+# Borrador.
 ENLACE_COT_ANULADO = {"etiqueta": "Enlace de confirmación",
-                      "despues": "Se anuló el enlace enviado al dato anterior: pasa la cotización a Borrador y envíala "
-                                 "de nuevo"}
+                      "despues": "Se anuló el enlace enviado al dato anterior: reenvía la cotización al cliente"}
 # B3 T5 (r4): enlaces_pedido_anulados, los pedidos cuyo enlace de consulta se anulo (enlaces_anulados sigue con SC y
 # COT).
 CLAVES_RESPUESTA = {"status", "data", "ficha_actualizada", "documentos_actualizados", "documentos_de_otro_cliente",

@@ -4,7 +4,8 @@
   es SOLO la lista exacta MODALIDADES_CREDITO ('credito', 'credito 30 dias', 'credito 60 dias', sin tildes ni
   mayusculas); 'Cruce de cuentas', 'Pago a credito', 'Credito 2 cuotas' o 'cr. 90 dias' caen en el 60% por defecto.
 - Lo calcula el servidor: al re-cotizar (recotizacion=true) o cuando cambia el total. Cualquier anticipo_cop
-  del body se ignora. Recalcular el anticipo no invalida la confirmacion del cliente.
+  del body se ignora. Recalcular el anticipo sin que cambie el requerido no invalida la confirmacion del cliente; B3 T7
+  (U22-anticipo): si el requerido de una COT pendiente o confirmada cambia, 409 ANULA_CONFIRMACION (test_anticipo_congelado).
 - Si cambia la modalidad de la SC se recalculan sus COT abiertas sin pedido vigente (sin commit intermedio).
 - R3: anticipo manual con nota obligatoria (PATCH anticipo_pct_manual / anticipo_manual_nota); todo recalculo
   lo respeta y null vuelve a la modalidad.
@@ -307,13 +308,23 @@ def test_cambiar_la_modalidad_no_toca_cot_cerradas_ni_con_pedido_vigente(app_cli
     db.add(SaleOrder(numero="PVEN-ANT013", cot_id=con_pedido_cancelado.id, customer_name="Cliente Prueba",
                      estado="CANCELADO", total_cop=1000000))
     db.commit()
+    # B3 T7 (U22-anticipo, C18): la COT confirmada cuyo unico pedido esta cancelado sigue en el ciclo de Gate 2 (H46), y
+    # el cliente ya vio su anticipo: cambiarlo pide anular su confirmacion (409, solo ella; nada cambia).
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"modalidad_pago": "Credito 30 dias"},
                             headers=auth(admin_token))
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["documentos"] == ["COT-ANT013"]
+    db.refresh(con_pedido_cancelado)
+    assert con_pedido_cancelado.anticipo_cop == Decimal("600000") and con_pedido_cancelado.estado == "CONFIRMADA"
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={
+        "modalidad_pago": "Credito 30 dias", "anular_confirmacion": True, "motivo_recotizacion": "Pasa a crédito"},
+        headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     db.refresh(rechazada); db.refresh(con_pedido); db.refresh(con_pedido_cancelado)
     assert rechazada.anticipo_cop == Decimal("600000")
-    assert con_pedido.anticipo_cop == Decimal("600000")
+    assert con_pedido.anticipo_cop == Decimal("600000") and con_pedido.estado == "CONFIRMADA"
     assert con_pedido_cancelado.anticipo_cop == Decimal("0")   # su pedido esta cancelado: cuenta como abierta
+    assert con_pedido_cancelado.estado == "BORRADOR"
 
 
 def test_cambiar_la_modalidad_no_agrega_commits_por_cotizacion(app_client, db, admin_token, contador_sql):
@@ -427,14 +438,27 @@ def test_anticipo_manual_no_se_ajusta_en_cot_cerrada_o_con_pedido_vigente(app_cl
     assert "PVEN-MAN053" in resp.json()["detail"]
 
 
-def test_anticipo_manual_no_invalida_la_confirmacion(app_client, db, admin_token):
+def test_anticipo_manual_pide_anular_la_confirmacion(app_client, db, admin_token):
+    """B3 T7 (U22-anticipo, prueba que se rompe [1]; antes test_anticipo_manual_no_invalida_la_confirmacion): el cliente
+    ya ve el anticipo (U22+H38), asi que cambiarlo en una COT confirmada responde 409 ANULA_CONFIRMACION sin guardar
+    nada; con anular_confirmacion y la razon se guarda y la COT vuelve a Borrador."""
     sc = _sc(db, "SC-MAN006", MOD_60_40)
     cot = _cot(db, "COT-MAN006", sc, estado="CONFIRMADA", total_cop=1000000, anticipo_cop=600000,
                productos=_linea(1000000), gate2_confirmed_at=datetime.datetime.utcnow())
-    resp = _patch_cot(app_client, admin_token, cot.id, {"anticipo_pct_manual": 50, "anticipo_manual_nota": "Negociado con gerencia"})
-    assert resp.status_code == 200, resp.text
+    ajuste = {"anticipo_pct_manual": 50, "anticipo_manual_nota": "Negociado con gerencia"}
+    resp = _patch_cot(app_client, admin_token, cot.id, dict(ajuste))
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["codigo"] == "ANULA_CONFIRMACION"
+    assert resp.json()["detail"]["cambios"] == ["Anticipo"]
     db.refresh(cot)
     assert cot.estado == "CONFIRMADA" and cot.gate2_confirmed_at is not None
+    assert cot.anticipo_cop == Decimal("600000") and cot.anticipo_pct_manual is None
+    resp = _patch_cot(app_client, admin_token, cot.id, dict(ajuste, anular_confirmacion=True,
+                                                            motivo_recotizacion="Negociado con gerencia"))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["confirmacion_anulada"] is True
+    db.refresh(cot)
+    assert cot.estado == "BORRADOR" and cot.gate2_confirmed_at is None
     assert cot.anticipo_cop == Decimal("500000")
 
 

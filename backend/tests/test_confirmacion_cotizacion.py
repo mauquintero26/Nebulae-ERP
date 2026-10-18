@@ -51,7 +51,9 @@ def test_enviar_confirmacion_requiere_borrador_o_enviada(app_client, db, admin_t
     from app.models.erp_documents import SalesQuotation
     # numero es String(20) -- se usa un indice corto en vez del nombre del estado
     # completo (p.ej. "PENDIENTE_CONFIRMACION" por si solo ya excede el limite).
-    for i, estado_invalido in enumerate(("RECHAZADA", "CONFIRMADA", "PENDIENTE_CONFIRMACION", "VENCIDA")):
+    # B3 T7 (C13, prueba que se rompe [0]): PENDIENTE_CONFIRMACION ya no esta aqui: es el reenvio (200), probado en
+    # test_reenvio_cotizacion.py.
+    for i, estado_invalido in enumerate(("RECHAZADA", "CONFIRMADA", "VENCIDA")):
         cot = SalesQuotation(numero=f"COT-TC1-{i}", customer_name="Cliente Prueba",
                               estado=estado_invalido, total_cop=1000,
                               productos=[{"product_name": "X", "qty": 1, "unit_price_cop": 1000}])

@@ -316,7 +316,10 @@ def test_enviar_cot_guarda_canal_envio_y_un_solo_renglon_de_actividad(
     assert [(a.action, a.description) for a in filas] == [
         ("ESTADO_CHANGED", "Enviada para confirmación del cliente por WhatsApp")]  # sin UPDATED
     assert filas[0].extra_data["canal"] == "WhatsApp"
-    assert [c["etiqueta"] for c in filas[0].extra_data["cambios"]] == ["Canal de envío", "Correo de respaldo"]
+    # B3 T7 (C16, decisión del controlador sobre RP11): el envío de la COT agrega «Enlace vigente hasta» (valida_hasta)
+    # después del correo. La cadena de dueños de esta lista es T2 -> T7 -> T8 -> T11.
+    assert [c["etiqueta"] for c in filas[0].extra_data["cambios"]] == ["Canal de envío", "Correo de respaldo",
+                                                                        "Enlace vigente hasta"]
 
 
 def test_enviar_cot_sin_canal_deja_el_canal_envio_que_ya_tenia(app_client, db, admin_token, user_admin, monkeypatch):

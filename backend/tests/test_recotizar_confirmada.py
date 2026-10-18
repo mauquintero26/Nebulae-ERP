@@ -7,8 +7,9 @@ confirmar y escribir la razon.
 - Con anular_confirmacion=True y motivo_recotizacion (minimo 5 caracteres) -> se guarda, vuelve a Borrador, el
   renglon de paso a Borrador termina en 'Razon: ...' y la respuesta trae confirmacion_anulada=True (nivel superior).
 - Razon corta -> 422 sin cambios.
-- No pregunta: solo notas, anticipo manual, vincular al catalogo, COT con pedido vigente, estados fuera del ciclo de
-  Gate 2 y un cambio de estado explicito.
+- No pregunta: solo notas, vincular al catalogo, COT con pedido vigente, estados fuera del ciclo de Gate 2 y un cambio
+  de estado explicito. B3 T7 (U22-anticipo, C18): un cambio del anticipo REQUERIDO (el manual, o el que sigue al total)
+  si pregunta: 'Anticipo' va al final de la lista unica de cambios; un % manual que deja el mismo requerido no.
 
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_recotizar_confirmada
 """
@@ -331,15 +332,48 @@ def test_cambiar_solo_notas_no_pregunta(app_client, db, admin_token):
     assert cot.estado == "CONFIRMADA" and cot.gate2_confirmed_at is not None
 
 
-def test_ajustar_el_anticipo_a_mano_no_pregunta(app_client, db, admin_token):
+def test_ajustar_el_anticipo_a_mano_pregunta_si_cambia_el_requerido(app_client, db, admin_token):
+    """B3 T7 (U22-anticipo, prueba que se rompe [3]; antes test_ajustar_el_anticipo_a_mano_no_pregunta): el cliente ya
+    ve el anticipo, asi que un % manual que cambia el requerido pregunta (409 con 'Anticipo'); uno que lo deja igual
+    no."""
     cot = _cot(db, "COT-T4H40G", "CONFIRMADA")
     resp = _patch(app_client, admin_token, cot.id, {"anticipo_pct_manual": 50, "anticipo_manual_nota": "Cliente VIP",
+                                                    "updated_by": "t"})
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert detail["cambios"] == ["Anticipo"] and detail["anticipo"] == {"antes": "$0", "despues": "$500"}
+    # El mismo requerido (0 % a mano sobre un anticipo de $0) no pregunta.
+    resp = _patch(app_client, admin_token, cot.id, {"anticipo_pct_manual": 0, "anticipo_manual_nota": "Cliente VIP",
                                                     "updated_by": "t"})
     assert resp.status_code == 200, resp.text
     assert resp.json()["confirmacion_anulada"] is False
     db.expire_all()
     db.refresh(cot)
     assert cot.estado == "CONFIRMADA"
+
+
+def test_el_409_nombra_el_anticipo(app_client, db, admin_token):
+    """B3 T7 (U22-anticipo, C18; prueba que se rompe [3]): con un anticipo guardado (60 % conservado, sin SC) re-cotizar
+    a otro total cambia el requerido: 'Anticipo' va al final de la lista unica, despues de 'IVA'."""
+    from app.core.iva import calcular_totales_cotizacion
+    cot = _cot(db, "COT-T7ANT1", "CONFIRMADA")
+    cot.anticipo_cop = 600
+    db.commit()
+    resp = _patch(app_client, admin_token, cot.id, _precio(1200))
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert detail["cambios"] == ["Productos, cantidades o precios", "Total", "Anticipo"]
+    assert detail["anticipo"] == {"antes": "$600", "despues": "$720"}
+    lineas = [{"product_name": "Rodillo", "qty": 6, "unit_price_cop": 206769, "iva_tarifa": "19"},
+              {"product_name": "Cinta", "qty": 10, "unit_price_cop": 13200, "iva_tarifa": "5"}]
+    r = calcular_totales_cotizacion(lineas, 0)
+    con_iva = _cot(db, "COT-T7ANT2", "CONFIRMADA", total=r["total_cop"], productos=r["lineas"], tax_cop=r["iva_cop"])
+    con_iva.subtotal_cop = r["subtotal_cop"]
+    con_iva.anticipo_cop = r["total_cop"] * 6 // 10
+    db.commit()
+    resp = _patch(app_client, admin_token, con_iva.id, {"descuento_pct": 10, "recotizacion": True, "updated_by": "t"})
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["cambios"] == ["Total", "Descuento", "IVA", "Anticipo"]
 
 
 def test_con_pedido_vigente_no_pregunta(app_client, db, admin_token):

@@ -411,7 +411,8 @@ def _avisos_de_enlace_anulado(db, cot_id):
 def test_cambio_de_cliente_en_cot_pendiente_revoca_el_enlace(app_client, db, admin_token, monkeypatch):
     """r1 (P1): si la COT pendiente cambia de cliente (ficha, nombre, correo o teléfono), su enlace deja de servir en el
     mismo commit: quien tenga el anterior no ve los datos del cliente nuevo. r2 (P3): con un renglón que le dice al
-    asesor que pase la cotización a Borrador y la envíe de nuevo («Enviar al cliente» no acepta una pendiente)."""
+    asesor qué hacer. B3 T7 (RP13, C13): «Enviar al cliente» ya reenvía una pendiente, así que el renglón dice que la
+    reenvíe (antes: pasarla a Borrador y enviarla de nuevo)."""
     sc = _sc(db)
     cot = _cot(db, sc)
     raw = _token(db, "COT", cot.id)
@@ -425,7 +426,7 @@ def test_cambio_de_cliente_en_cot_pendiente_revoca_el_enlace(app_client, db, adm
     assert fila["used_at"] is not None and fila["resultado"] == "REVOCADO"
     assert revocaciones == [False]  # en el commit del PATCH
     [aviso] = _avisos_de_enlace_anulado(db, cot.id)
-    assert "Borrador" in aviso.extra_data["cambios"][0]["despues"]
+    assert "reenvía la cotización al cliente" in aviso.extra_data["cambios"][0]["despues"]
     resp = _ver(app_client, raw)
     assert _detalle(resp, "no_disponible")["documento"] is None
     assert "Gamma" not in resp.text
