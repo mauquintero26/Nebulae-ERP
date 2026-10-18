@@ -409,9 +409,9 @@ def _avisos_de_enlace_anulado(db, cot_id):
 
 
 def test_cambio_de_cliente_en_cot_pendiente_revoca_el_enlace(app_client, db, admin_token, monkeypatch):
-    """r1 (P1): si la COT pendiente cambia de cliente (nombre, contacto o dirección), su enlace deja de servir en el mismo
-    commit: quien tenga el anterior no ve los datos del cliente nuevo. r2 (P3): con un renglón que le dice al asesor que
-    pase la cotización a Borrador y la envíe de nuevo («Enviar al cliente» no acepta una pendiente)."""
+    """r1 (P1): si la COT pendiente cambia de cliente (ficha, nombre, correo o teléfono), su enlace deja de servir en el
+    mismo commit: quien tenga el anterior no ve los datos del cliente nuevo. r2 (P3): con un renglón que le dice al
+    asesor que pase la cotización a Borrador y la envíe de nuevo («Enviar al cliente» no acepta una pendiente)."""
     sc = _sc(db)
     cot = _cot(db, sc)
     raw = _token(db, "COT", cot.id)
@@ -430,12 +430,14 @@ def test_cambio_de_cliente_en_cot_pendiente_revoca_el_enlace(app_client, db, adm
     assert _detalle(resp, "no_disponible")["documento"] is None
     assert "Gamma" not in resp.text
 
-    # Un PATCH que no toca al cliente (solo la nota) no revoca el enlace nuevo ni deja otro aviso.
+    # Un PATCH que no cambia a quién le llega el enlace no lo revoca ni deja otro aviso: solo la nota, o (r3, R18 del
+    # Bloque 2) solo la dirección de entrega de la misma persona.
     nuevo = _token(db, "COT", cot.id)
-    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={"notas": "Precios en COP", "updated_by": "t"},
-                            headers=auth(admin_token))
-    assert resp.status_code == 200, resp.text
-    assert _fila(db, nuevo)["used_at"] is None
+    for cambio in ({"notas": "Precios en COP"}, {"direccion_entrega": "Oficina 302"}):
+        resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={**cambio, "updated_by": "t"},
+                                headers=auth(admin_token))
+        assert resp.status_code == 200, resp.text
+        assert _fila(db, nuevo)["used_at"] is None, cambio
     assert revocaciones == [False] and len(_avisos_de_enlace_anulado(db, cot.id)) == 1
 
 

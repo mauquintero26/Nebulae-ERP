@@ -283,15 +283,17 @@ def test_cancelar_el_pedido_por_fase4_revoca_su_enlace(app_client, db, admin_tok
 
 
 def test_cambio_de_cliente_del_pedido_revoca_su_enlace(app_client, db, admin_token, monkeypatch):
-    """r1 (P1): si el pedido cambia de cliente (nombre, dirección o contacto), su enlace de consulta deja de abrir en el
-    mismo commit: quien tenga el anterior nunca ve los datos del cliente nuevo. Un PATCH que no toca al cliente no lo
-    revoca."""
+    """r1 (P1): si el pedido cambia de cliente (ficha, nombre, correo o teléfono), su enlace de consulta deja de abrir
+    en el mismo commit: quien tenga el anterior nunca ve los datos del cliente nuevo. Un PATCH que no toca al cliente
+    no lo revoca."""
     so, _, raw = _pedido(db)
     revocaciones = _espiar_revocaciones_pven(monkeypatch)
-    resp = app_client.patch(f"/api/v1/ventas/pedidos/{so.id}", json={"notas": "Llamar antes", "updated_by": "t"},
-                            headers=auth(admin_token))
-    assert resp.status_code == 200, resp.text
-    assert _fila(db, raw)["used_at"] is None and revocaciones == []
+    # r3 (R18 del Bloque 2): ni la nota ni solo la dirección de la misma persona cambian a quién le llega el enlace.
+    for cambio in ({"notas": "Llamar antes"}, {"direccion_entrega": "Oficina 302", "customer_address": "Calle 9 # 1-2"}):
+        resp = app_client.patch(f"/api/v1/ventas/pedidos/{so.id}", json={**cambio, "updated_by": "t"},
+                                headers=auth(admin_token))
+        assert resp.status_code == 200, resp.text
+        assert _fila(db, raw)["used_at"] is None and revocaciones == [], cambio
 
     resp = app_client.patch(f"/api/v1/ventas/pedidos/{so.id}",
                             json={"customer_name": "Cliente Delta Privado", "direccion_entrega": "Calle Delta 4",
@@ -468,6 +470,19 @@ def test_corregir_la_sc_de_otra_persona_no_lleva_sus_datos_al_pedido(app_client,
     assert so.customer_address is None and so.customer_name == "Ana Pérez"
     resp = _ver(app_client, raw)
     assert DIRECCION_B not in resp.text and NOMBRE_B not in resp.text
+
+
+def test_corregir_solo_la_direccion_no_revoca_el_enlace_del_pedido(app_client, db, admin_token):
+    """r3 (R18 del Bloque 2): corregir solo la dirección de la misma persona no es un cambio de cliente: el pedido recibe
+    la dirección y su enlace de consulta sigue vigente (lo ve la misma persona)."""
+    so, _, raw = _pedido(db, direccion_entrega=None)
+    cuerpo = _corregir(app_client, admin_token, so.sc_id, customer_address="Calle 9 # 1-2")
+    assert so.numero in cuerpo["documentos_actualizados"] and cuerpo["enlaces_anulados"] == []
+    assert _fila(db, raw)["used_at"] is None
+    assert _renglones_de_enlace_anulado(db, so.id) == []
+    resp = _ver(app_client, raw)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["cliente"]["direccion_entrega"] == "Calle 9 # 1-2"
 
 
 def test_corregir_el_correo_revoca_el_enlace_del_pedido(app_client, db, admin_token):

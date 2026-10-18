@@ -535,13 +535,12 @@ def _cliente_de_la_solicitud(sc: CustomerRequest) -> tuple:
 
 
 def _identidad_del_cliente(doc) -> tuple:
-    """B3 T5 (r1, P1): a quien le habla el enlace publico de una SC, una COT o un PVEN: _cliente_de_la_solicitud (ficha,
-    correo y telefono) mas el nombre y las direcciones, normalizados igual. Si cambia, el enlace pendiente de una COT o
-    un PVEN se revoca (quien tenga el anterior no debe ver los datos del cliente nuevo) y la SC deja el marcador de
-    cambio de cliente (r2)."""
-    return _cliente_de_la_solicitud(doc) + (_texto_del_cliente(doc.customer_name),
-                                            _texto_del_cliente(doc.customer_address),
-                                            _texto_del_cliente(getattr(doc, "direccion_entrega", None)))
+    """B3 T5 (r1, P1; r3): a quien le llega el enlace publico de una SC, una COT o un PVEN: _cliente_de_la_solicitud
+    (ficha, correo y telefono) mas el nombre, normalizados igual. Es la UNICA regla de cambio de cliente para los
+    enlaces: si cambia, el enlace pendiente de una COT o un PVEN se revoca (update_cotizacion, update_pedido y PATCH
+    /solicitudes/{id}/cliente) y la SC deja el marcador de cambio de cliente (r2). La direccion no cuenta (R18 del
+    Bloque 2): corregir la direccion de la misma persona no cambia a quien le llega el enlace."""
+    return _cliente_de_la_solicitud(doc) + (_texto_del_cliente(doc.customer_name),)
 
 
 def _mismo_nombre(a, b) -> bool:
@@ -1760,7 +1759,7 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
         for entidad, doc, cambios, identidad_antes in docs_cambiados:
             titulo_doc = _titulo_contacto(cambios)
             # B3 T5 (r2, privacidad 1): la misma regla que update_cotizacion y update_pedido. Si cambio la identidad del
-            # cliente del documento (_identidad_del_cliente: ficha, contacto, nombre o direcciones), su enlace pendiente
+            # cliente del documento (_identidad_del_cliente: ficha, correo, telefono o nombre), su enlace pendiente
             # se revoca; en la COT, salvo CONFIRMADA (R18: el cliente ya confirmo precios). Solo se informa un enlace que
             # el cliente todavia podia usar: los que este mismo UPDATE revoco sin vencer (RETURNING, ronda 2).
             if _identidad_del_cliente(doc) != identidad_antes and not (entidad == "COT" and doc.estado == "CONFIRMADA"):

@@ -578,6 +578,9 @@ def _cambio_el_cliente_despues(db: Session, sc_id: int, desde) -> bool:
     - el marcador OBLIGATORIO (r2): un renglón cambios_documento.ACCION_CLIENTE_CAMBIADO (update_solicitud, cuando el
       renglón de cambios no registró al cliente) o extra_data[MARCA_CLIENTE_CAMBIADO] en el renglón obligatorio de
       PATCH /solicitudes/{id}/cliente. Los dos van en el commit del cambio: si no se pueden escribir, el cambio falla.
+    r3: el marcador sigue la regla de la revocación (ficha, correo, teléfono o nombre; la dirección no, por R18 del
+    Bloque 2), pero esta guarda sigue siendo conservadora: también cuenta un cambio de dirección del renglón de cambios
+    (CAMPOS_CLIENTE). Solo esconde el resumen; no anula ningún enlace.
     """
     from app.core.cambios_documento import ACCION_CLIENTE_CAMBIADO, CAMPOS_CLIENTE, MARCA_CLIENTE_CAMBIADO
     from app.models.erp_documents import ActivityLog

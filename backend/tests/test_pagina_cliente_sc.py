@@ -484,21 +484,31 @@ def test_la_guarda_no_depende_del_renglon_auxiliar_de_cambios(app_client, db, ad
 
 def test_corregir_el_contacto_deja_el_marcador_en_su_renglon(app_client, db, admin_token, user_admin, monkeypatch):
     """r2 (privacidad 2): PATCH /solicitudes/{id}/cliente marca el cambio de cliente en su renglón obligatorio (el de la
-    corrección, que no se traga los errores): extra_data.cliente_cambiado. El enlace confirmado antes ya no muestra el
-    resumen (efecto conservador de la r1)."""
+    corrección, que no se traga los errores): extra_data.cliente_cambiado. r3: con la regla de la revocación (R18 del
+    Bloque 2): el correo o el teléfono sí; solo la dirección de la misma persona no. Aun así, la guarda del resumen es
+    conservadora: después de corregir la dirección, el enlace confirmado antes ya no muestra el resumen."""
     from app.models.erp_documents import ActivityLog
     _sin_correo(monkeypatch)
     sc = _sc(db, user_admin)
     raw = _enviar(app_client, admin_token, sc)
     assert _confirmar(app_client, raw).status_code == 200
+
+    def renglones():
+        db.expire_all()
+        return (db.query(ActivityLog).filter(ActivityLog.entity_type == "SC", ActivityLog.entity_id == sc.id,
+                                             ActivityLog.action == "UPDATED").order_by(ActivityLog.id.asc()).all())
+
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}/cliente", json={"customer_address": "Calle Nueva 5"},
                             headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
-    db.expire_all()
-    [renglon] = (db.query(ActivityLog).filter(ActivityLog.entity_type == "SC", ActivityLog.entity_id == sc.id,
-                                              ActivityLog.action == "UPDATED").all())
-    assert renglon.extra_data["cliente_cambiado"] is True
+    [direccion] = renglones()
+    assert "cliente_cambiado" not in direccion.extra_data
     assert _detalle(_ver(app_client, raw), "confirmada")["documento"] == {"numero": sc.numero}
+
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}/cliente",
+                            json={"customer_email": f"otro-{_sufijo().lower()}@cliente.com"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert renglones()[-1].extra_data["cliente_cambiado"] is True
 
 
 def test_confirmacion_anulada_sin_cambio_de_cliente_no_muestra_el_resumen(app_client, db, admin_token, user_admin,
