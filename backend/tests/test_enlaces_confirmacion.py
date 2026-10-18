@@ -24,6 +24,8 @@ from sqlalchemy import text
 PRODUCTOS = [{"product_name": "Cuna Colecho", "qty": 1}]
 # r1: commits de la rama COT de /confirmar/confirmar: reclamar el token, el que pone CONFIRMADA (con la revocación),
 # _sincronizar_estado_solicitud_desde_cotizacion y el renglón de Actividad. Si T5 reescribe la rama, se vuelve a medir.
+# T5 la reescribió y la volvió a medir: siguen siendo 4. marcar_resultado('CONFIRMADO') va en el mismo commit que pone
+# CONFIRMADA (no agrega uno) y la respuesta nueva (documento, siguiente_paso, empresa) solo lee después del último.
 COMMITS_RAMA_COT = 4
 
 

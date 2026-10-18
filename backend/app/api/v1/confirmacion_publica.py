@@ -4,19 +4,40 @@ Router publico (sin autenticacion) para que un cliente confirme una
 Solicitud (o, desde Task 5, una Cotizacion) haciendo clic en el link de un
 solo uso que le llega por correo. Ver app/core/confirmation_tokens.py para
 el mecanismo de token (mismo patron que el reset de contraseña).
+
+Bloque 3, T5 (U17+H28, U22+H38, U23; C2, C10, C11, C26, R24, RP26, RP27):
+- /confirmar/ver y /confirmar/confirmar (SC y COT) dicen el estado del enlace en palabras (documento_cliente.estado_enlace,
+  reglas a-i). Solo 'pendiente' responde 200 en /ver; todo lo demas sigue en 400, ahora con detail dict
+  (_detalle_enlace: {mensaje, estado_enlace, empresa, documento, confirmada_el, siguiente_paso, comentario}).
+- Cada respuesta lleva 'empresa' (perfil_publico, C26), en el 200 y en el detail del 400.
+- data conserva numero, estado, total_cop (COT) y productos de siempre y agrega documento (la forma unica de C2).
+- POST /pedido-cliente/ver: el enlace de CONSULTA del pedido (TIPOS_CONSULTA, C11), que no se gasta.
+- Nunca se devuelve el dict interno de consultar_token (ids, document_id...): se proyecta campo por campo.
 """
+import logging
+
 from fastapi import APIRouter, HTTPException, Depends, Header
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+
+from app.core.confirmation_tokens import (RESULTADO_CONFIRMADO, TIPOS_CONSULTA, consultar_token, hash_token,
+                                          marcar_resultado, reclamar_token, revoke_pending_tokens)
+from app.core.documento_cliente import (MENSAJE_GRACIAS, documento_cot, documento_pven, documento_sc, estado_enlace,
+                                        forma_de_pago, productos_publicos_sc, siguiente_paso_sc)
+from app.core.empresa import perfil_publico
+from app.core.fechas import ahora_utc, iso_z
 from app.db.database import get_db
-from app.core.confirmation_tokens import hash_token, peek_token, revoke_pending_tokens, verify_and_consume_token
-import logging
+from app.models.erp_documents import CustomerRequest, SaleOrder, SalesQuotation
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# El error del enlace de consulta del pedido (U23): el mismo para un token inexistente, vencido, revocado, de otro tipo
+# o un pedido cancelado; nunca se distingue el motivo (C10).
 GENERIC_ERROR = "El enlace no es válido o ya expiró."
+
+_MODELO_POR_TIPO = {"SC": CustomerRequest, "COT": SalesQuotation}
 
 
 class TokenBody(BaseModel):
@@ -44,24 +65,25 @@ def _productos_publicos(productos: list) -> list:
     ]
 
 
-def _sc_confirmacion_dict(sc) -> dict:
+def _sc_confirmacion_dict(db: Session, sc) -> dict:
     """Proyeccion publica minima de una Solicitud -- SOLO lo que un cliente con el
     link deberia poder ver de su propio pedido. Nunca usar _sc_dict() aqui: expone
     created_by, advisor_user_id, razon_cancelacion y otros campos internos que no
-    son asunto del cliente."""
+    son asunto del cliente. U17: productos sin precio ({n, descripcion, cantidad}) y el documento (documento_sc)."""
     return {
         "numero": sc.numero,
         "customer_name": sc.customer_name,
         "estado": sc.estado,
         "fecha_entrega_estimada": sc.fecha_entrega_estimada.isoformat() if sc.fecha_entrega_estimada else None,
-        "productos": _productos_publicos(sc.productos),
+        "productos": productos_publicos_sc(sc.productos),
+        "documento": documento_sc(db, sc),
     }
 
 
-def _cot_confirmacion_dict(cot) -> dict:
+def _cot_confirmacion_dict(db: Session, cot, token_row=None) -> dict:
     """Proyeccion publica minima de una Cotizacion -- ver _sc_confirmacion_dict.
     Nunca usar _cot_dict() aqui: expone costos/margenes de proveedor y otros campos
-    internos (relevante en cuanto Task 5 empiece a emitir tokens de tipo COT)."""
+    internos. U22+H38: el documento (documento_cot) con la fecha del envio del enlace (token_row)."""
     return {
         "numero": cot.numero,
         "customer_name": cot.customer_name,
@@ -69,48 +91,73 @@ def _cot_confirmacion_dict(cot) -> dict:
         "fecha_entrega_estimada": cot.fecha_entrega_estimada.isoformat() if cot.fecha_entrega_estimada else None,
         "total_cop": float(cot.total_cop) if cot.total_cop else 0,
         "productos": _productos_publicos(cot.productos),
+        "documento": documento_cot(db, cot, token_row),
     }
+
+
+def _documento_del_enlace(db: Session, info):
+    """La SC o la COT del enlace (o None si no hay enlace o el documento ya no existe)."""
+    modelo = _MODELO_POR_TIPO.get(info["document_type"]) if info is not None else None
+    if modelo is None:
+        return None
+    return db.query(modelo).filter(modelo.id == info["document_id"]).first()
+
+
+def _resolver_enlace(db: Session, info) -> tuple:
+    """(estado_enlace, detalle, documento) de un enlace de SC o COT. detalle es lo que ve el cliente cuando el enlace no
+    esta pendiente (el detail del 400), con la empresa para que sepa a quien escribir (C26)."""
+    doc = _documento_del_enlace(db, info)
+    estado, extra = estado_enlace(db, info, doc, info["document_type"] if info is not None else None)
+    detalle = {"mensaje": extra["mensaje"], "estado_enlace": estado, "empresa": perfil_publico(db),
+               "documento": extra["documento"], "confirmada_el": extra["confirmada_el"],
+               "siguiente_paso": extra["siguiente_paso"], "comentario": extra["comentario"]}
+    return estado, detalle, doc
+
+
+def _detalle_enlace(db: Session, info) -> dict:
+    """{mensaje, estado_enlace, empresa, documento|None, confirmada_el|None, siguiente_paso|None, comentario|None} del
+    enlace (info = consultar_token(...), o None): el detail del 400 de las paginas publicas (C10). Lo usa tambien
+    /confirmar/pedir-cambios (T6) con un enlace que ya no esta vigente."""
+    return _resolver_enlace(db, info)[1]
+
+
+def _anotar_confirmado(db: Session, info: dict, numero) -> None:
+    """marcar_resultado 'CONFIRMADO' del enlace recien reclamado, en el commit que confirma el documento. Si no lo anota
+    (no deberia pasar: el enlace se acaba de reclamar), la confirmacion vale igual, pero queda el error en el registro
+    en vez de perder el resultado en silencio."""
+    if not marcar_resultado(db, info["id"], RESULTADO_CONFIRMADO):
+        logger.error("El enlace %s de %s %s no quedo marcado CONFIRMADO (no estaba reclamado o ya tenia resultado)",
+                     info["id"], info["document_type"], numero)
 
 
 @router.post("/confirmar/ver")
 def ver_confirmacion(body: TokenBody, db: Session = Depends(get_db)):
-    resolved = peek_token(db, body.token)
-    if not resolved:
-        raise HTTPException(400, GENERIC_ERROR)
-    document_type, document_id = resolved
-    if document_type == "SC":
-        from app.api.v1.erp_ventas import CustomerRequest
-        doc = db.query(CustomerRequest).filter(CustomerRequest.id == document_id).first()
-        if not doc or doc.estado != "PENDIENTE_CONFIRMACION":
-            # Mismo error generico si el documento no existe, ya no esta pendiente de
-            # confirmacion (p.ej. fue cancelado despues de enviar el link) o cualquier
-            # otro motivo -- nunca se distingue el caso para no filtrar informacion.
-            raise HTTPException(400, GENERIC_ERROR)
-        return {"status": "success", "data": _sc_confirmacion_dict(doc)}
-    elif document_type == "COT":
-        from app.api.v1.erp_ventas import SalesQuotation
-        doc = db.query(SalesQuotation).filter(SalesQuotation.id == document_id).first()
-        if not doc or doc.estado != "PENDIENTE_CONFIRMACION":
-            # Mismo criterio que la rama SC arriba (Task 5): hoy no hay ningun camino
-            # real que deje un token sin revocar para una COT que ya no esta
-            # PENDIENTE_CONFIRMACION (update_cotizacion revoca en toda transicion real
-            # de salida del ciclo de Gate 2 -- ver ese comentario), pero se valida
-            # explicitamente en vez de asumirlo, misma defensa en profundidad que ya
-            # existe para SC. Mismo error generico, nunca se distingue el motivo.
-            raise HTTPException(400, GENERIC_ERROR)
-        return {"status": "success", "data": _cot_confirmacion_dict(doc)}
-    raise HTTPException(400, GENERIC_ERROR)
+    # consultar_token no cambia nada y solo acepta enlaces SC y COT (C11). Un documento que ya no esta pendiente de
+    # confirmacion (cancelado, confirmado, reabierto...) nunca responde 200, aunque su enlace siga sin usar en la tabla:
+    # la regla c de estado_enlace exige las dos cosas.
+    info = consultar_token(db, body.token)
+    estado, detalle, doc = _resolver_enlace(db, info)
+    if estado != "pendiente":
+        raise HTTPException(400, detail=detalle)
+    if info["document_type"] == "SC":
+        data = _sc_confirmacion_dict(db, doc)
+    else:
+        data = _cot_confirmacion_dict(db, doc, info)
+    return {"status": "success", "estado_enlace": "pendiente", "vence_at": iso_z(info["expires_at"]),
+            "empresa": detalle["empresa"], "data": data}
 
 
 @router.post("/confirmar/confirmar")
 def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alias="Idempotency-Key"), db: Session = Depends(get_db)):
-    resolved = verify_and_consume_token(db, body.token)
-    if not resolved:
-        raise HTTPException(400, GENERIC_ERROR)
-    document_type, document_id = resolved
+    # reclamar_token es atomico, hace su propio commit y solo acepta SC y COT (C11: un enlace del pedido nunca se gasta
+    # aqui). Si no se puede reclamar (doble clic, otra pestana, vencido, reemplazado...), la pagina muestra el estado
+    # del enlace en vez de un error.
+    info = reclamar_token(db, body.token)
+    if info is None:
+        raise HTTPException(400, detail=_detalle_enlace(db, consultar_token(db, body.token)))
+    document_type, document_id = info["document_type"], info["document_id"]
     if document_type == "SC":
-        from app.api.v1.erp_ventas import CustomerRequest, SalesQuotation, _log
-        import datetime
+        from app.api.v1.erp_ventas import _log
         # Final whole-branch review (hallazgo #5): .populate_existing().with_for_update()
         # -- mismo endurecimiento que la rama COT de aqui abajo ya tiene desde Round 3,
         # para la misma simetria/consistencia (una lectura sin bloqueo seguida de una
@@ -119,12 +166,13 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
         # equivalente al congelamiento de precio de COT).
         sc = db.query(CustomerRequest).filter(CustomerRequest.id == document_id).populate_existing().with_for_update().first()
         if not sc or sc.estado != "PENDIENTE_CONFIRMACION":
-            # El token ya fue consumido por verify_and_consume_token de cualquier
-            # forma (es de un solo uso) -- si la SC fue cancelada o movida de estado
-            # despues de enviarse el link, este click no debe revivirla a CONFIRMADA.
-            # Mismo error generico, nunca se distingue el motivo.
-            raise HTTPException(400, GENERIC_ERROR)
+            # El token ya fue consumido por reclamar_token de cualquier forma (es de un
+            # solo uso) -- si la SC fue cancelada o movida de estado despues de enviarse
+            # el link, este click no debe revivirla a CONFIRMADA. La pagina muestra el
+            # estado del enlace (p. ej. 'confirmada' si se confirmo por su cotizacion).
+            raise HTTPException(400, detail=_detalle_enlace(db, consultar_token(db, body.token)))
         old_estado = sc.estado
+        ahora = ahora_utc()
         sc.estado = "CONFIRMADA"
         # Round 6: marca de procedencia -- ESTA es la UNICA linea del codebase que escribe
         # gate1_confirmed_at. confirmar_solicitud la exige (ademas de estado=="CONFIRMADA" y
@@ -132,8 +180,8 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
         # la COT; significa "confirmacion vigente del cliente sobre los productos actuales" y
         # se limpia al cambiar los productos, al reiniciar/cancelar/restaurar la SC y cuando
         # una COT deja la SC (update_cotizacion con otro sc_id).
-        sc.gate1_confirmed_at = datetime.datetime.utcnow()
-        sc.updated_at = datetime.datetime.utcnow()
+        sc.gate1_confirmed_at = ahora
+        sc.updated_at = ahora
         # U11: si ya se cotizo sin esperar esta confirmacion (/cotizar-sin-confirmacion), la SC se queda con esa COT
         # (la activa mas reciente; una RECHAZADA no cuenta) y no se crea otra: con ella activa, confirmar_solicitud
         # responde 400. Se lee con la SC todavia bloqueada y todo va en un solo commit (C8).
@@ -152,11 +200,16 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
                  user_name=cliente, commit=False)
         # B3 T1 (C12/R19): los demás enlaces pendientes de esta SC quedan revocados en el MISMO commit que la confirma.
         revoke_pending_tokens(db, "SC", sc.id, commit=False, excepto_hash=hash_token(body.token))
+        # B3 T5: este enlace queda CONFIRMADO en el mismo commit (si no, la pagina no sabria que con el se confirmo).
+        _anotar_confirmado(db, info, sc.numero)
         db.commit()
-        return {"status": "success", "message": "Solicitud confirmada. Gracias."}
+        # Despues del commit solo se lee: la respuesta no agrega commits.
+        return {"status": "success", "message": "Solicitud confirmada. Gracias.", "estado_enlace": "confirmada",
+                "mensaje": MENSAJE_GRACIAS, "confirmada_el": iso_z(ahora),
+                "siguiente_paso": siguiente_paso_sc(sc, forma_de_pago(sc.modalidad_pago)),
+                "empresa": perfil_publico(db), "data": _sc_confirmacion_dict(db, sc)}
     elif document_type == "COT":
-        from app.api.v1.erp_ventas import SalesQuotation, _log, _sincronizar_estado_solicitud_desde_cotizacion
-        import datetime
+        from app.api.v1.erp_ventas import _log, _sincronizar_estado_solicitud_desde_cotizacion
         # Round 3 (adversarial review, hallazgo #2): .populate_existing().with_for_update()
         # -- sin esto, una re-cotizacion concurrente (update_cotizacion rompiendo el
         # congelamiento de precio justo en este instante, por otra conexion) podria
@@ -166,13 +219,13 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
         # vea el estado ya actualizado) en vez de pisarlo a ciegas.
         cot = db.query(SalesQuotation).filter(SalesQuotation.id == document_id).populate_existing().with_for_update().first()
         if not cot or cot.estado != "PENDIENTE_CONFIRMACION":
-            # El token ya fue consumido por verify_and_consume_token de cualquier
-            # forma (es de un solo uso) -- si la COT fue movida de estado despues de
-            # enviarse el link (el PATCH generico es la unica via real, y siempre
-            # revoca -- ver update_cotizacion), este click no debe revivirla a
-            # CONFIRMADA. Mismo error generico, nunca se distingue el motivo.
-            raise HTTPException(400, GENERIC_ERROR)
+            # El token ya fue consumido por reclamar_token de cualquier forma (es de un
+            # solo uso) -- si la COT fue movida de estado despues de enviarse el link (el
+            # PATCH generico es la unica via real, y siempre revoca -- ver
+            # update_cotizacion), este click no debe revivirla a CONFIRMADA.
+            raise HTTPException(400, detail=_detalle_enlace(db, consultar_token(db, body.token)))
         old_estado = cot.estado
+        ahora = ahora_utc()
         cot.estado = "CONFIRMADA"
         # Gate 2 (Task 5, mismo patron que gate1_confirmed_at en la rama SC arriba):
         # marca de procedencia de un solo uso. ESTA es la UNICA linea del codebase que
@@ -183,10 +236,12 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
         # del marcador) y la consume (vuelve a None) en el mismo commit en que crea el
         # Pedido de Venta, para que no quede una prueba reutilizable por un ciclo de venta
         # futuro y no relacionado sobre la misma COT.
-        cot.gate2_confirmed_at = datetime.datetime.utcnow()
-        cot.updated_at = datetime.datetime.utcnow()
+        cot.gate2_confirmed_at = ahora
+        cot.updated_at = ahora
         # B3 T1 (C12/R19): los demás enlaces pendientes de esta COT quedan revocados en el MISMO commit que la confirma.
         revoke_pending_tokens(db, "COT", cot.id, commit=False, excepto_hash=hash_token(body.token))
+        # B3 T5: este enlace queda CONFIRMADO en el mismo commit.
+        _anotar_confirmado(db, info, cot.numero)
         db.commit()
         db.refresh(cot)
         # U15: la SC ya no refleja a su COT; la sincronizacion solo la confirma si estaba
@@ -208,5 +263,32 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
             logger.error(f"Error al sincronizar Solicitud tras confirmar cotizacion {cot.id} via enlace: {exc}", exc_info=True)
         _log(db, "COT", cot.id, cot.numero, "ESTADO_CHANGED", "Confirmada por el cliente vía enlace",
              old_estado=old_estado, new_estado="CONFIRMADA", user_name="Cliente (confirmación por link)")
-        return {"status": "success", "message": "Cotización confirmada. Gracias."}
-    raise HTTPException(400, GENERIC_ERROR)
+        # U22+H38: que sigue = el anticipo que falta pagar y los datos para pagar (R8: solo en una respuesta con token),
+        # leidos del documento despues del commit (sin commits nuevos).
+        data = _cot_confirmacion_dict(db, cot, consultar_token(db, body.token))
+        pago = data["documento"]["pago"]
+        return {"status": "success", "message": "Cotización confirmada. Gracias.", "estado_enlace": "confirmada",
+                "mensaje": MENSAJE_GRACIAS, "confirmada_el": iso_z(ahora),
+                "siguiente_paso": {"anticipo_por_pagar": pago["anticipo_por_pagar"],
+                                   "instrucciones_pago": pago["instrucciones"]},
+                "empresa": perfil_publico(db), "data": data}
+    raise HTTPException(400, detail=_detalle_enlace(db, None))
+
+
+@router.post("/pedido-cliente/ver")
+def ver_pedido_cliente(body: TokenBody, db: Session = Depends(get_db)):
+    """U23: el pedido que ve el cliente por su enlace de CONSULTA (tipo 'PVEN', C11). Verlo NO gasta el enlace: sirve
+    mientras este vigente (30 dias, R6) y el pedido no este cancelado (se revisa en cada vista, aunque el enlace no se
+    hubiera revocado). Responde {status, empresa, data: documento_pven, cot_numero} (R24, RP27). Cualquier otro caso
+    (inexistente, vencido, revocado, de otro tipo o pedido CANCELADO) -> el mismo 400 generico, con la empresa para el
+    contacto (C10, C26)."""
+    info = consultar_token(db, body.token, tipos=TIPOS_CONSULTA)
+    so = None
+    if info is not None and info["vigente"]:
+        so = db.query(SaleOrder).filter(SaleOrder.id == info["document_id"]).first()
+    if so is None or so.estado == "CANCELADO":
+        raise HTTPException(400, detail={"mensaje": GENERIC_ERROR, "estado_enlace": "invalido",
+                                         "empresa": perfil_publico(db), "documento": None, "confirmada_el": None,
+                                         "siguiente_paso": None, "comentario": None})
+    return {"status": "success", "empresa": perfil_publico(db), "data": documento_pven(db, so),
+            "cot_numero": so.cot_numero}

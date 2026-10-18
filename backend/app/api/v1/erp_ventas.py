@@ -713,6 +713,8 @@ def _sc_dict(sc: CustomerRequest) -> dict:
         "fecha_entrega_estimada": sc.fecha_entrega_estimada.isoformat() if sc.fecha_entrega_estimada else None,
         "modalidad_entrega": sc.modalidad_entrega,
         "notas": sc.notas,
+        # R3 (B3 T5): la «Nota para el cliente» (la ve el cliente en la SC, la COT y el PVEN); `notas` es interna.
+        "nota_cliente": sc.nota_cliente,
         "productos": sc.productos or [],
         "created_at": _iso_utc(sc.created_at),
         "updated_at": _iso_utc(sc.updated_at),
@@ -1400,8 +1402,10 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     cliente_antes = _cliente_de_la_solicitud(sc)
     customer_id_antes = sc.customer_id
     # S9 (T11): sin customer_phone, customer_email ni customer_address (van por /cliente; arriba dan 422).
+    # R3 (B3 T5): nota_cliente, la «Nota para el cliente». Editarla NO anula el enlace ni la confirmacion: el cliente
+    # confirma los productos, no la nota (no cuenta como cambio de productos ni de cliente).
     allowed = ["customer_id","customer_name","advisor_name","advisor_user_id","tipo_solicitud","modalidad_pago",
-               "estado","fecha_vencimiento","fecha_entrega_estimada","notas","productos",
+               "estado","fecha_vencimiento","fecha_entrega_estimada","notas","nota_cliente","productos",
                "tipo_problema","descripcion_problema","urgencia","evidencia_descripcion",
                "asignado_a_user_id","estado_soporte"]
     for k in allowed:
@@ -3544,6 +3548,9 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
         # A2 (revision final): con H46 + R6 reconvertir la COT es el flujo normal; lo que este pedido tenia
         # apartado se libera en el mismo commit (reservas, lineas y Lista de Compras).
         _liberar_lo_apartado_del_pedido(db, v, autor)
+        # B3 T5 (hueco 2, R19): el enlace de consulta del pedido (U23) deja de abrir en el mismo commit que lo cancela.
+        from app.core.confirmation_tokens import revoke_pending_tokens
+        revoke_pending_tokens(db, "PVEN", v.id, commit=False)
     v.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(v)

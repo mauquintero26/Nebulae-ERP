@@ -204,3 +204,53 @@ def test_montos_en_pesos_enteros(db):
     # Sin impuestos ni ajuste: lista vacía y None.
     doc = _documento(db, "COT", totales={"subtotal": 1000, "descuento_pct": 0, "descuento": 0, "total": 1000})
     assert doc["totales"]["impuestos"] == [] and doc["totales"]["ajuste_redondeo"] is None
+
+
+def test_claves_exactas_sc_cot_pven(db):
+    """T5 (C2, R24): la prueba ÚNICA de claves exactas de los tres constructores. documento_sc, documento_cot y
+    documento_pven, con datos de ejemplo (la COT con IVA, el pedido con un pago), tienen exactamente CLAVES_DOCUMENTO y
+    cada subdict sus CLAVES_* (pago con 'manual')."""
+    import uuid
+    from app.core import documento_cliente as dc
+    from app.core.iva import calcular_totales_cotizacion
+    from app.models.erp_documents import CustomerRequest, SaleOrder, SalesQuotation
+    from app.models.fase4 import SaleOrderPayment
+    _limpiar_empresa(db)
+    s = uuid.uuid4().hex[:6].upper()
+    sc = CustomerRequest(numero=f"SC-T5K{s}", customer_name="Ana Pérez", estado="CONFIRMADA",
+                         modalidad_pago="Contado", advisor_name="Asesora Uno", nota_cliente="Llamar antes",
+                         customer_address="Calle 1 # 2-3", productos=[{"product_name": "Cuna", "qty": 2}])
+    db.add(sc); db.commit(); db.refresh(sc)
+    r = calcular_totales_cotizacion([{"product_name": "Cuna", "qty": 2, "unit_price_cop": 342462, "iva_tarifa": "19"},
+                                     {"product_name": "Silla", "qty": 1, "unit_price_cop": 1000, "iva_tarifa": "5"}], 0)
+    cot = SalesQuotation(numero=f"COT-T5K{s}", sc_id=sc.id, sc_numero=sc.numero, customer_name="Ana Pérez",
+                         estado="CONFIRMADA", productos=r["lineas"], subtotal_cop=r["subtotal_cop"],
+                         tax_cop=r["iva_cop"], total_cop=r["total_cop"], notas="Válida 5 días")
+    db.add(cot); db.commit(); db.refresh(cot)
+    so = SaleOrder(numero=f"PVEN-T5K{s}", sc_id=sc.id, cot_id=cot.id, cot_numero=cot.numero, customer_name="Ana Pérez",
+                   estado="PENDIENTE_COMPRA", productos=r["lineas"], subtotal_cop=r["subtotal_cop"],
+                   tax_cop=r["iva_cop"], total_cop=r["total_cop"], saldo_cop=r["total_cop"] - 100000,
+                   anticipo_pct_snapshot=100)
+    db.add(so); db.commit(); db.refresh(so)
+    db.add(SaleOrderPayment(sale_order_id=so.id, tipo="ANTICIPO", monto=100000, metodo_pago="Nequi",
+                            fecha=date(2026, 10, 4), estado="CONFIRMADO", referencia_bancaria="REF-SECRETA"))
+    db.commit()
+
+    documentos = {"SC": dc.documento_sc(db, sc), "COT": dc.documento_cot(db, cot), "PVEN": dc.documento_pven(db, so)}
+    for tipo, doc in documentos.items():
+        assert set(doc) == dc.CLAVES_DOCUMENTO, tipo
+        assert doc["tipo"] == tipo
+        assert set(doc["cliente"]) == dc.CLAVES_CLIENTE, tipo
+        assert doc["lineas"] and all(set(l) == dc.CLAVES_LINEA for l in doc["lineas"]), tipo
+        assert set(doc["pago"]) == dc.CLAVES_PAGO, tipo
+        assert doc["notas"] and all(set(n) == dc.CLAVES_NOTA for n in doc["notas"]), tipo
+        if tipo == "SC":
+            assert doc["totales"] is None and doc["pago"]["pagos"] is None
+        else:
+            assert set(doc["totales"]) == dc.CLAVES_TOTALES, tipo
+            assert doc["totales"]["impuestos"], tipo
+            assert all(set(i) == dc.CLAVES_IMPUESTO for i in doc["totales"]["impuestos"]), tipo
+    pagos = documentos["PVEN"]["pago"]["pagos"]
+    assert pagos and all(set(p) == dc.CLAVES_PAGO_REGISTRADO for p in pagos)
+    assert documentos["COT"]["pago"]["pagos"] is None
+    assert "REF-SECRETA" not in str(documentos)

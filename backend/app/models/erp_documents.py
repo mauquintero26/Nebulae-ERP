@@ -1,7 +1,7 @@
 """ERP Documents - Full models for Sales, Purchases, Inventory flows."""
 from sqlalchemy import (
     Column, Integer, String, Numeric, ForeignKey,
-    DateTime, Text, Boolean, JSON
+    Date, DateTime, Text, Boolean, JSON
 )
 from sqlalchemy.orm import relationship
 from app.db.database import Base
@@ -91,6 +91,14 @@ class CustomerRequest(Base):
     # sincronizacion) queda CONFIRMADA SIN esta marca. Reemplaza la inferencia por "cero
     # Cotizaciones vinculadas" (Round 4), que resulto ser falseable desvinculando la COT.
     gate1_confirmed_at     = Column(DateTime, nullable=True)
+    # Bloque 3 (fa6_029, H28-cambios/C9): el cliente pidio cambios desde su enlace (cuando, 'CAMBIOS' | 'NO_LA_NECESITA'
+    # y su comentario). Las escribe POST /confirmar/pedir-cambios (T6) y se limpian al reenviar el enlace; la pagina del
+    # cliente las lee (regla g de documento_cliente.estado_enlace). NULL = nada pendiente del cliente.
+    cambios_cliente_at         = Column(DateTime, nullable=True)
+    cambios_cliente_tipo       = Column(String(20), nullable=True)
+    cambios_cliente_comentario = Column(Text, nullable=True)
+    # R3 (fa6_029): la «Nota para el cliente». La ve el cliente en la SC, la COT y el PVEN; `notas` sigue siendo interna.
+    nota_cliente               = Column(Text, nullable=True)
 
     customer   = relationship("Customer", foreign_keys=[customer_id])
     quotations = relationship("SalesQuotation", back_populates="customer_request")
@@ -147,6 +155,12 @@ class SalesQuotation(Base):
     # confirmara la SC (excepcion auditada a Gate 1). Cuando (UTC sin zona) y el motivo obligatorio; NULL = camino normal.
     sin_confirmacion_sc_at     = Column(DateTime, nullable=True)
     sin_confirmacion_sc_motivo = Column(Text, nullable=True)
+    # Bloque 3 (fa6_029): los mismos cambios del cliente que la SC (C9; los escribe T6) y la validez de la cotizacion
+    # (U22-validez; la escribe el envio, T7): el enlace de la COT vence al final de ese dia en Colombia.
+    cambios_cliente_at         = Column(DateTime, nullable=True)
+    cambios_cliente_tipo       = Column(String(20), nullable=True)
+    cambios_cliente_comentario = Column(Text, nullable=True)
+    valida_hasta               = Column(Date, nullable=True)
 
     customer_request = relationship("CustomerRequest", back_populates="quotations")
     customer         = relationship("Customer", foreign_keys=[customer_id])

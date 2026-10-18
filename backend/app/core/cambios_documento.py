@@ -32,7 +32,10 @@ CAMPOS = {
         **_CLIENTE,
         "advisor_name": "Asesor", "tipo_solicitud": "Tipo de solicitud",
         "modalidad_pago": "Modalidad de pago", "fecha_vencimiento": "Fecha de vencimiento",
-        "notas": "Notas", "productos": "Productos", "tipo_problema": "Tipo de problema",
+        "notas": "Notas",
+        # R3 (B3 T5): la nota que ve el cliente (customer_requests.nota_cliente).
+        "nota_cliente": "Nota para el cliente",
+        "productos": "Productos", "tipo_problema": "Tipo de problema",
         "descripcion_problema": "Descripción del problema", "urgencia": "Urgencia",
         "evidencia_descripcion": "Evidencia", "estado_soporte": "Estado de soporte",
         "asignado_a_user_id": "Responsable de soporte",

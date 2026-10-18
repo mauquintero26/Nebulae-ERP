@@ -1436,6 +1436,10 @@ def cancel_sale_order(
     # A2 (revision final): lo que el pedido tenia por comprar sale de la Lista de Compras, en el mismo commit.
     from app.api.v1.erp_compras import descartar_items_lista_de_pedido
     descartar_items_lista_de_pedido(db, so)
+    # B3 T5 (hueco 2, R19): igual que la cancelacion por PATCH, el enlace de consulta del pedido (U23) deja de abrir en
+    # el mismo commit.
+    from app.core.confirmation_tokens import revoke_pending_tokens
+    revoke_pending_tokens(db, "PVEN", so.id, commit=False)
 
     db.commit()
 
