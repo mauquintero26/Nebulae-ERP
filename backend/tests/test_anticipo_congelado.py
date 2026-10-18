@@ -356,6 +356,37 @@ def test_al_anular_cuenta_el_estado_releido_con_bloqueo(app_client, db, admin_to
     assert _logs(db, "COT", cot.id, "ESTADO_CHANGED") == []
 
 
+def test_al_anular_se_descarta_la_cot_que_ya_tiene_pedido_vigente(app_client, db, admin_token, monkeypatch):
+    """r2: la foto sin bloqueo vio la COT Confirmada sin pedido, pero mientras tanto convertir_cotizacion_a_venta creó su
+    pedido (aquí: el pedido ya está en la base y la lectura vieja la incluye). Al releerla bloqueada se descarta: sigue
+    Confirmada con su anticipo, sin renglón de anulación y con su enlace intacto (no se recalcula ni se anula)."""
+    import app.api.v1.erp_ventas as ventas
+    from app.models.erp_documents import SaleOrder, SalesQuotation
+    sc = _sc(db)
+    cot = _cot(db, sc, estado="CONFIRMADA")
+    raw = _token(db, cot)
+    db.add(SaleOrder(numero=f"PVEN-T7A{_sufijo()}", cot_id=cot.id, customer_name="Ana Pérez",
+                     estado="PENDIENTE_COMPRA", total_cop=1000000))
+    db.commit()
+    leer_real = ventas._anticipos_requeridos
+
+    def lectura_vieja(db_, sc_):
+        previos = leer_real(db_, sc_)  # ya no la trae: tiene pedido vigente
+        vieja = db_.get(SalesQuotation, cot.id)
+        return previos + [(vieja, ventas.anticipo_cotizacion(vieja, db_, sc=sc_).requerido)]
+
+    monkeypatch.setattr(ventas, "_anticipos_requeridos", lectura_vieja)
+    resp = _patch_sc(app_client, admin_token, sc, {"modalidad_pago": "Contado", "anular_confirmacion": True,
+                                                   "motivo_recotizacion": MOTIVO})
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    db.refresh(cot)
+    assert cot.estado == "CONFIRMADA" and cot.gate2_confirmed_at is not None
+    assert cot.anticipo_cop == Decimal("600000")
+    assert _logs(db, "COT", cot.id, "ESTADO_CHANGED") == []
+    assert _fila_token(db, raw).used_at is None
+
+
 def test_una_cot_pendiente_no_cambia_de_solicitud(app_client, db, admin_token):
     """r1 (dinero 1): requerido_nuevo es siempre el vivo (anticipo_cotizacion con la SC y el total que deja el PATCH).
     El caso que lo pide (mover una COT pendiente a una SC con otra modalidad) hoy no llega al congelamiento: N7 solo

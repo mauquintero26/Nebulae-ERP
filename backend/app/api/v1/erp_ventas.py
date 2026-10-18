@@ -776,12 +776,17 @@ def _anticipos_requeridos(db: Session, sc: CustomerRequest) -> list:
             for cot in _cotizaciones_con_anticipo_abierto(db, sc.id)]
 
 
-def _releer_con_bloqueo(db: Session, cots: list) -> None:
+def _releer_con_bloqueo(db: Session, cots: list) -> list:
     """r1 (calidad 2): relee FOR UPDATE las COT dadas (populate_existing: los mismos objetos de la sesion quedan con lo
-    que hay en la base), por id. Se llama con la SC ya bloqueada: el orden SC -> COT de PATCH /cliente y de C20."""
-    if cots:
-        (db.query(SalesQuotation).filter(SalesQuotation.id.in_([cot.id for cot in cots]))
-         .order_by(SalesQuotation.id.asc()).populate_existing().with_for_update().all())
+    que hay en la base), por id. Se llama con la SC ya bloqueada: el orden SC -> COT de PATCH /cliente y de C20.
+    r2: devuelve solo las que siguen sin pedido vigente. Con la fila ya bloqueada, _pven_vigente_de_cotizacion ve el
+    commit de una conversion concurrente (convertir_cotizacion_a_venta): esa COT ya no sigue a la modalidad de su SC y no
+    se anula ni se recalcula."""
+    if not cots:
+        return []
+    (db.query(SalesQuotation).filter(SalesQuotation.id.in_([cot.id for cot in cots]))
+     .order_by(SalesQuotation.id.asc()).populate_existing().with_for_update().all())
+    return [cot for cot in cots if _pven_vigente_de_cotizacion(db, cot.id) is None]
 
 
 def _anticipos_congelados_que_cambian(db: Session, sc: CustomerRequest, previos: list) -> list:
@@ -1781,7 +1786,10 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
             # r1 (calidad 2): la decision se tomo con una foto SIN bloqueo de las COT. Antes de anular se releen
             # bloqueadas (SC -> COT) y las congeladas se recalculan con el estado releido: una COT que mientras tanto
             # paso a Borrador (el cliente pidio cambios) no se anula ni deja un renglon con un estado viejo.
-            _releer_con_bloqueo(db, [cot for cot, _ in anticipos_previos])
+            sin_pedido = {cot.id for cot in _releer_con_bloqueo(db, [cot for cot, _ in anticipos_previos])}
+            # r2: la lista filtrada (sin las COT que ya tienen pedido vigente) sirve para las congeladas y para el
+            # recalculo de abajo.
+            anticipos_previos = [(cot, antes) for cot, antes in anticipos_previos if cot.id in sin_pedido]
             anticipos_congelados = _anticipos_congelados_que_cambian(db, sc, anticipos_previos)
     # B3 T5 (r2, privacidad 2): cambio de cliente (identidad o contacto) comparando los datos, sin describir.
     cambia_la_identidad = _identidad_del_cliente(sc) != identidad_antes
@@ -3420,9 +3428,14 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     B3 T7 (U22-validez + U16-reenvio-cot, C13): este endpoint tambien REENVIA una COT en PENDIENTE_CONFIRMACION, como el
     de la SC. Reemplaza la decision del Round 2 (que obligaba a volverla a Borrador para pedir un enlace nuevo): con la
     validez de la cotizacion el enlace vence y el asesor necesita reenviarlo sin tocar los precios. El reenvio usa el
-    mismo esquema de revocar y emitir: el enlace anterior deja de servir, sale uno nuevo con la validez renovada
-    (valida_hasta = hoy en Colombia + dias_validez_cotizacion) y el estado NO cambia; no se mueve el lead ni se toca la SC
-    (ya se hizo en el primer envio). RECHAZADA, CONFIRMADA y VENCIDA siguen en 400, y con un pedido vigente tambien (H46).
+    mismo esquema de revocar y emitir: el enlace anterior deja de servir, sale uno nuevo con la validez renovada y el
+    estado NO cambia; no se mueve el lead ni se toca la SC (ya se hizo en el primer envio). RECHAZADA, CONFIRMADA y
+    VENCIDA siguen en 400, y con un pedido vigente tambien (H46).
+    - Validez: el primer envio pone valida_hasta = hoy en Colombia + dias_validez_cotizacion; el reenvio la renueva sin
+      acortarla nunca: max(cot.valida_hasta or hoy, hoy + N) (r1). El enlace vence al final de ese dia.
+    - reenvio=true (lo manda el boton «Reenviar», r1): si la COT ya no esta en PENDIENTE_CONFIRMACION (la pagina estaba
+      vieja: el cliente pidio cambios o la editaron), 409 _COT_CAMBIO_AL_REENVIAR sin tocar enlaces, estado ni la marca
+      de cambios. Sin la bandera, una COT en Borrador o Enviada se envia como siempre.
 
     B3 T6 (H28, U22-cambios, RP16): la COT se lee FOR UPDATE y la revocacion, el token nuevo, el estado, el canal, la
     limpieza de cambios_cliente_* y (T7) valida_hasta van en UN solo commit antes del correo. El lead del CRM pasa a
