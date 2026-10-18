@@ -382,12 +382,40 @@ def test_documento_cot_trae_valida_hasta(db):
     assert documento_cot(db, _cot(db))["valida_hasta"] is None
 
 
-def test_cambio_de_cliente_en_cot_pendiente_revoca_el_enlace(app_client, db, admin_token):
+def _espiar_revocaciones_cot(monkeypatch):
+    """r2 (C4): el commit con que se revocan los enlaces COT (update_cotizacion importa revoke_pending_tokens al
+    llamarlo, así que ve este espía)."""
+    import app.core.confirmation_tokens as ct
+    llamadas = []
+    real = ct.revoke_pending_tokens
+
+    def espia(db_, tipo, doc_id, *args, **kwargs):
+        if tipo == "COT":
+            llamadas.append(kwargs.get("commit", True))
+        return real(db_, tipo, doc_id, *args, **kwargs)
+
+    monkeypatch.setattr(ct, "revoke_pending_tokens", espia)
+    return llamadas
+
+
+def _avisos_de_enlace_anulado(db, cot_id):
+    """Los renglones COT con _ENLACE_COT_ANULADO (etiqueta «Enlace de confirmación»)."""
+    from app.models.erp_documents import ActivityLog
+    db.expire_all()
+    filas = (db.query(ActivityLog).filter(ActivityLog.entity_type == "COT", ActivityLog.entity_id == cot_id)
+             .order_by(ActivityLog.id.asc()).all())
+    return [f for f in filas if any(c.get("etiqueta") == "Enlace de confirmación"
+                                    for c in (f.extra_data or {}).get("cambios", []) if isinstance(c, dict))]
+
+
+def test_cambio_de_cliente_en_cot_pendiente_revoca_el_enlace(app_client, db, admin_token, monkeypatch):
     """r1 (P1): si la COT pendiente cambia de cliente (nombre, contacto o dirección), su enlace deja de servir en el mismo
-    commit: quien tenga el anterior no ve los datos del cliente nuevo."""
+    commit: quien tenga el anterior no ve los datos del cliente nuevo. r2 (P3): con un renglón que le dice al asesor que
+    pase la cotización a Borrador y la envíe de nuevo («Enviar al cliente» no acepta una pendiente)."""
     sc = _sc(db)
     cot = _cot(db, sc)
     raw = _token(db, "COT", cot.id)
+    revocaciones = _espiar_revocaciones_cot(monkeypatch)
     resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}",
                             json={"customer_name": "Cliente Gamma Reservado", "direccion_entrega": "Avenida Gamma 7",
                                   "updated_by": "t"}, headers=auth(admin_token))
@@ -395,16 +423,20 @@ def test_cambio_de_cliente_en_cot_pendiente_revoca_el_enlace(app_client, db, adm
     assert resp.json()["data"]["estado"] == "PENDIENTE_CONFIRMACION"
     fila = _fila(db, raw)
     assert fila["used_at"] is not None and fila["resultado"] == "REVOCADO"
+    assert revocaciones == [False]  # en el commit del PATCH
+    [aviso] = _avisos_de_enlace_anulado(db, cot.id)
+    assert "Borrador" in aviso.extra_data["cambios"][0]["despues"]
     resp = _ver(app_client, raw)
     assert _detalle(resp, "no_disponible")["documento"] is None
     assert "Gamma" not in resp.text
 
-    # Un PATCH que no toca al cliente (solo la nota) no revoca el enlace nuevo.
+    # Un PATCH que no toca al cliente (solo la nota) no revoca el enlace nuevo ni deja otro aviso.
     nuevo = _token(db, "COT", cot.id)
     resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={"notas": "Precios en COP", "updated_by": "t"},
                             headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     assert _fila(db, nuevo)["used_at"] is None
+    assert revocaciones == [False] and len(_avisos_de_enlace_anulado(db, cot.id)) == 1
 
 
 def test_get_cotizacion_y_el_documento_dan_el_mismo_anticipo(app_client, db, admin_token):
@@ -426,8 +458,46 @@ def test_get_cotizacion_y_el_documento_dan_el_mismo_anticipo(app_client, db, adm
     assert resp.status_code == 200, resp.text
     d = resp.json()["data"]
     p = documento_cot(db, cot)["pago"]
-    assert p["anticipo_pct"] == d["anticipo_pct"] == 33.34  # HALF_UP a 2 decimales
-    assert p["anticipo"] == d["anticipo_requerido"]
+    # anticipo_pct_manual es NUMERIC(5,2): el 33.335 vuelve de la base como 33.34 (el redondeo HALF_UP del % mostrado lo
+    # fija test_el_porcentaje_mostrado_redondea_half_up).
+    assert p["anticipo_pct"] == d["anticipo_pct"] == 33.34
+    assert p["anticipo"] == d["anticipo_requerido"] == 333400  # round(999999 x 33.34 / 100)
     assert p["saldo_a_favor"] == d["saldo_a_favor"] == 100000
-    assert p["anticipo_por_pagar"] == d["anticipo_por_verificar"] == d["anticipo_requerido"] - 100000
+    assert p["anticipo_por_pagar"] == d["anticipo_por_verificar"] == 233400
     assert p["manual"] is True
+
+
+def test_el_porcentaje_mostrado_redondea_half_up(app_client, db, admin_token):
+    """r2 (C2): una COT sin SC conserva su % (anticipo/total sin cuantizar, H36): 33345 de 100000 es 33,345%, que se
+    muestra 33,35 (HALF_UP; con HALF_EVEN sería 33,34). El requerido es el anticipo guardado y no hay saldo a favor."""
+    from app.core.documento_cliente import documento_cot
+    cot = _cot(db, productos=[{"product_name": "Mesa", "qty": 1, "unit_price_cop": 100000, "total_cop": 100000}],
+               subtotal_cop=100000, total_cop=100000, anticipo_cop=33345)
+    resp = app_client.get(f"/api/v1/ventas/cotizaciones/{cot.id}", headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    d = resp.json()["data"]
+    assert (d["anticipo_pct"], d["anticipo_requerido"], d["anticipo_por_verificar"]) == (33.35, 33345, 33345)
+    p = documento_cot(db, cot)["pago"]
+    assert (p["anticipo_pct"], p["anticipo"], p["anticipo_por_pagar"]) == (33.35, 33345, 33345)
+
+
+def test_la_conversion_usa_la_misma_cuenta_del_anticipo(app_client, db, admin_token, monkeypatch):
+    """r2 (C1): convertir_cotizacion_a_venta toma el anticipo de resumen_anticipo_cotizacion, con los saldos a favor
+    bloqueados (bloquear=True: se marcan TRASLADADO): la misma cuenta que ven el asesor y el cliente."""
+    import datetime as _dt
+    import app.api.v1.erp_ventas_fase4 as f4
+    llamadas = []
+    real = f4.resumen_anticipo_cotizacion
+
+    def espia(cot_, db_, *args, **kwargs):
+        llamadas.append(kwargs.get("bloquear"))
+        return real(cot_, db_, *args, **kwargs)
+
+    monkeypatch.setattr(f4, "resumen_anticipo_cotizacion", espia)
+    sc = _sc(db, modalidad_pago="Credito 30 dias")
+    cot = _cot(db, sc, estado="CONFIRMADA", gate2_confirmed_at=_dt.datetime.utcnow(), productos=[dict(CINTA)],
+               subtotal_cop=132000, total_cop=132000)
+    resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/confirmar", json={"user_name": "t"},
+                           headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert llamadas == [True]

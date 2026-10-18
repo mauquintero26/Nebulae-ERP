@@ -24,6 +24,11 @@ _CLIENTE = {
 # B3 T5 (r1, P4): los campos del cliente de un renglon de cambios ('campo' en extra_data.cambios). La pagina publica de
 # la SC los busca para saber si la solicitud cambio de cliente despues de enviar un enlace.
 CAMPOS_CLIENTE = frozenset(_CLIENTE)
+# B3 T5 (r2): el marcador OBLIGATORIO de cambio de cliente de la SC, para cuando el renglon de cambios (auxiliar) no lo
+# registro: un renglon con esta accion (update_solicitud) o esta llave en extra_data (el renglon obligatorio de PATCH
+# /solicitudes/{id}/cliente). Lo lee documento_cliente._cambio_el_cliente_despues.
+ACCION_CLIENTE_CAMBIADO = "CLIENTE_CAMBIADO"
+MARCA_CLIENTE_CAMBIADO = "cliente_cambiado"
 _PRECIOS = {
     "trm_rate": "TRM", "subtotal_cop": "Subtotal", "descuento_pct": "Descuento",
     # IVA (B3 T4): el IVA total de la COT (fa6_028) y del pedido (sale_orders.tax_cop).

@@ -5,8 +5,8 @@ de COT / PVEN / PXP se guarda y se muestra al peso: exacto, nunca a la centena n
 espejo de redondeo y formato en frontend/src/lib/pesos.js (redondearPeso / formatoPesos).
 
 Sin FastAPI ni DB, salvo anticipo_cotizacion (y pct_anticipo_cotizacion), saldos_a_favor_de_cotizacion,
-resumen_anticipo_cotizacion y anular_pxps_de_pedido (H45), que usan la sesion que reciben (los modelos se importan dentro de esas funciones para
-que el resto siga puro).
+resumen_anticipo_cotizacion y anular_pxps_de_pedido (H45), que usan la sesion que reciben (los modelos se importan
+dentro de esas funciones para que el resto siga puro).
 """
 import unicodedata
 from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
@@ -266,7 +266,8 @@ class AnticipoDelPedido(NamedTuple):
 
 def resumen_anticipo_del_pedido(so) -> AnticipoDelPedido:
     """El anticipo de un Pedido de Venta: la UNICA cuenta que usan recalculate_sale_order_state (PENDIENTE_ANTICIPO),
-    GET /pedidos/{id} (anticipo_pendiente, por anticipo_del_pedido) y el pedido que ve el cliente (B3 T5, documento_pven).
+    GET /pedidos/{id} (anticipo_pendiente, por anticipo_del_pedido) y el pedido que ve el cliente (B3 T5:
+    documento_pven).
 
     pct = anticipo_pct_snapshot (60 si falta); requerido = anticipo_requerido(total, pct); pagado = total - saldo
     redondeado al peso (los pedidos viejos con centavos no quedan debiendo $0,15); pendiente = requerido - pagado,
@@ -333,7 +334,8 @@ class ResumenAnticipoCotizacion(NamedTuple):
     requerido: Decimal
     saldos_a_favor: list       # saldos_a_favor_de_cotizacion
     saldo_a_favor: Decimal
-    por_pagar: Decimal         # anticipo que falta: max(0, requerido - min(saldo a favor, total))
+    traslado: Decimal          # lo que el saldo a favor puede pasar al pedido nuevo: min(saldo a favor, total)
+    por_pagar: Decimal         # anticipo que falta: max(0, requerido - traslado)
 
     @property
     def manual(self) -> bool:
@@ -341,18 +343,20 @@ class ResumenAnticipoCotizacion(NamedTuple):
         return self.origen == ORIGEN_MANUAL
 
 
-def resumen_anticipo_cotizacion(cot, db, sc=None) -> ResumenAnticipoCotizacion:
-    """El anticipo de la cotizacion para mostrar: anticipo_cotizacion (% exacto, modalidad, origen y requerido), el %
-    a 2 decimales, los saldos a favor de sus pedidos cancelados (R6) y lo que falta pagar o verificar,
-    max(0, requerido - min(saldo a favor, total)). Lo usan get_cotizacion (anticipo_por_verificar) y la pagina del
-    cliente (anticipo_por_pagar): el mismo numero en las dos. `sc` evita releer la SC."""
+def resumen_anticipo_cotizacion(cot, db, sc=None, bloquear=False) -> ResumenAnticipoCotizacion:
+    """El anticipo de la cotizacion: anticipo_cotizacion (% exacto, modalidad, origen y requerido), el % a 2 decimales,
+    los saldos a favor de sus pedidos cancelados (R6), lo que de ellos pasa al pedido nuevo (traslado = min(saldo a
+    favor, total)) y lo que falta pagar o verificar, max(0, requerido - traslado). La UNICA cuenta de get_cotizacion
+    (anticipo_por_verificar), de la pagina del cliente (anticipo_por_pagar) y de convertir_cotizacion_a_venta (lo que
+    exige verificar), que pasa bloquear=True: los saldos se leen FOR UPDATE porque los marca TRASLADADO. `sc` evita
+    releer la SC."""
     anticipo = anticipo_cotizacion(cot, db, sc=sc)
-    saldos = saldos_a_favor_de_cotizacion(db, cot.id)
+    saldos = saldos_a_favor_de_cotizacion(db, cot.id, bloquear=bloquear)
     saldo_a_favor = sum((s["monto"] for s in saldos), Decimal("0"))
-    por_pagar = max(Decimal("0"), anticipo.requerido - min(saldo_a_favor, redondear_peso(cot.total_cop)))
+    traslado = min(saldo_a_favor, redondear_peso(cot.total_cop))
     return ResumenAnticipoCotizacion(anticipo.pct, anticipo.pct.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
                                      anticipo.modalidad, anticipo.origen, anticipo.requerido, saldos, saldo_a_favor,
-                                     por_pagar)
+                                     traslado, max(Decimal("0"), anticipo.requerido - traslado))
 
 
 # ─── Orden de pago (PXP) de un pedido cancelado (H45, R12) ────────────────────────────────────────────────────────

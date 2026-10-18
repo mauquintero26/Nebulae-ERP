@@ -446,6 +446,61 @@ def test_cambio_de_cliente_y_confirmacion_por_la_cotizacion_no_muestra_al_client
     assert NOMBRE_B not in resp.text and DIRECCION_B not in resp.text
 
 
+def test_la_guarda_no_depende_del_renglon_auxiliar_de_cambios(app_client, db, admin_token, user_admin, monkeypatch):
+    """r2 (privacidad 2, sonda 4): el camino B con una falla inyectada en cambios_documento.describir. El renglón
+    auxiliar de cambios no se escribe (_registrar_cambios se la traga y el PATCH responde 200), pero el cambio de
+    cliente deja su marcador obligatorio en el mismo commit: el enlace L1 sigue sin mostrar a B."""
+    import app.core.cambios_documento as cd
+    from app.api.v1.erp_ventas import _sincronizar_estado_solicitud_desde_cotizacion
+    from app.models.erp_documents import ActivityLog, SalesQuotation
+    _sin_correo(monkeypatch)
+    ficha_a = _ficha(db, "Ana", "Pérez", "Calle Alfa 1")
+    ficha_b = _ficha(db, "Cliente Beta", "Secreto", DIRECCION_B)
+    sc = _sc(db, user_admin, customer_id=ficha_a.id, customer_address="Calle Alfa 1")
+    l1 = _enviar(app_client, admin_token, sc)
+
+    def falla(*args, **kwargs):
+        raise RuntimeError("falla inyectada en el renglón auxiliar")
+
+    monkeypatch.setattr(cd, "describir", falla)
+    with registro_capturado("app.api.v1.erp_ventas"):  # el warning de _registrar_cambios, sin ruido en la salida
+        data = _cambiar_cliente(app_client, admin_token, sc, ficha_b)
+    monkeypatch.undo()
+    assert data["estado"] == "ASIGNADA"
+    db.expire_all()
+    acciones = [l.action for l in db.query(ActivityLog).filter(ActivityLog.entity_type == "SC",
+                                                                 ActivityLog.entity_id == sc.id)]
+    assert "CLIENTE_CAMBIADO" in acciones  # el marcador, aunque el renglón de cambios no se escribió
+    cot = SalesQuotation(numero=f"COT-T5P{_sufijo()}", sc_id=sc.id, sc_numero=sc.numero, customer_id=ficha_b.id,
+                         customer_name=NOMBRE_B, estado="CONFIRMADA",
+                         productos=[{"product_name": "Rodillo", "qty": 6, "unit_price_cop": 1000}])
+    db.add(cot); db.commit(); db.refresh(cot)
+    _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
+
+    resp = _ver(app_client, l1)
+    assert _detalle(resp, "confirmada")["documento"] == {"numero": sc.numero}
+    assert NOMBRE_B not in resp.text and DIRECCION_B not in resp.text
+
+
+def test_corregir_el_contacto_deja_el_marcador_en_su_renglon(app_client, db, admin_token, user_admin, monkeypatch):
+    """r2 (privacidad 2): PATCH /solicitudes/{id}/cliente marca el cambio de cliente en su renglón obligatorio (el de la
+    corrección, que no se traga los errores): extra_data.cliente_cambiado. El enlace confirmado antes ya no muestra el
+    resumen (efecto conservador de la r1)."""
+    from app.models.erp_documents import ActivityLog
+    _sin_correo(monkeypatch)
+    sc = _sc(db, user_admin)
+    raw = _enviar(app_client, admin_token, sc)
+    assert _confirmar(app_client, raw).status_code == 200
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}/cliente", json={"customer_address": "Calle Nueva 5"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    [renglon] = (db.query(ActivityLog).filter(ActivityLog.entity_type == "SC", ActivityLog.entity_id == sc.id,
+                                              ActivityLog.action == "UPDATED").all())
+    assert renglon.extra_data["cliente_cambiado"] is True
+    assert _detalle(_ver(app_client, raw), "confirmada")["documento"] == {"numero": sc.numero}
+
+
 def test_confirmacion_anulada_sin_cambio_de_cliente_no_muestra_el_resumen(app_client, db, admin_token, user_admin,
                                                                           monkeypatch):
     """r1 (P4): para el enlace que confirmó, el resumen exige que esa confirmación siga vigente (gate1_confirmed_at). Con

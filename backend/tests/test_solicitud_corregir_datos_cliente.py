@@ -406,7 +406,11 @@ def test_cotizacion_confirmada_recibe_los_datos_sin_anular_su_confirmacion(app_c
     assert ENLACE_COT_ANULADO not in _logs(db, "COT", cot.id, "UPDATED")[-1].extra_data["cambios"]
 
 
-def test_corregir_solo_la_direccion_no_anula_nada(app_client, db, admin_token, user_admin):
+def test_corregir_solo_la_direccion_no_anula_la_confirmacion_pero_si_el_enlace_de_la_cotizacion(app_client, db,
+                                                                                              admin_token, user_admin):
+    """La direccion no es Gate 1: la SC sigue pendiente con su enlace. B3 T5 (ronda r2, privacidad 1): la COT abierta
+    que recibe la direccion nueva cambia de identidad (_identidad_del_cliente, la misma regla que update_pedido) y su
+    enlace se anula con el renglon de _ENLACE_COT_ANULADO: la pagina publica de la cotizacion muestra la direccion."""
     from app.core.confirmation_tokens import create_confirmation_token
     cli = _cliente(db, phone="3000000000", email=f"ana-{_u()}@test.com", address="Calle 1", city="Cali")
     sc = _sc(db, "SC-CDC015", user_admin, cliente=cli, estado="PENDIENTE_CONFIRMACION",
@@ -419,14 +423,15 @@ def test_corregir_solo_la_direccion_no_anula_nada(app_client, db, admin_token, u
     resp = _patch(app_client, admin_token, sc.id, customer_address="Calle 2 # 3-4", customer_city="Bogotá")
     assert resp.status_code == 200, resp.text
     cuerpo = resp.json()
-    assert (cuerpo["confirmacion_anulada"], cuerpo["estado_cambiado"], cuerpo["enlaces_anulados"]) == (False, False, [])
+    assert (cuerpo["confirmacion_anulada"], cuerpo["estado_cambiado"], cuerpo["enlaces_anulados"]) == (
+        False, False, [cot.numero])
     assert cuerpo["documentos_actualizados"] == [cot.numero] and cuerpo["ficha_actualizada"] is True
-    assert not _token_usado(db, token_sc) and not _token_usado(db, token_cot)
+    assert not _token_usado(db, token_sc) and _token_usado(db, token_cot)
     db.expire_all()
     assert sc.estado == "PENDIENTE_CONFIRMACION" and cot.estado == "PENDIENTE_CONFIRMACION"
     assert cot.customer_address == "Calle 2 # 3-4" and cli.city == "Bogotá"
     assert [l.action for l in _logs(db, "SC", sc.id)] == ["UPDATED"]
-    assert ENLACE_COT_ANULADO not in _logs(db, "COT", cot.id, "UPDATED")[-1].extra_data["cambios"]
+    assert ENLACE_COT_ANULADO in _logs(db, "COT", cot.id, "UPDATED")[-1].extra_data["cambios"]
 
 
 # --- 9 y la nota de T3: propagacion a la COT y el PVEN abiertos (R6) ---------------------------------------------

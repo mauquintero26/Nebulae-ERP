@@ -39,8 +39,8 @@ from app.models.fase4 import (
 )
 from app.models.users import User
 from app.core.ventas_dinero import (
-    redondear_peso, pesos, formato_pct, anticipo_cotizacion, pct_snapshot_del_pedido, anticipo_del_pedido,
-    saldos_a_favor_de_cotizacion, metodo_pago_anticipo, METODOS_PAGO_ANTICIPO, METODO_PAGO_TRASLADO,
+    redondear_peso, pesos, formato_pct, pct_snapshot_del_pedido, anticipo_del_pedido, resumen_anticipo_cotizacion,
+    metodo_pago_anticipo, METODOS_PAGO_ANTICIPO, METODO_PAGO_TRASLADO,
     METODO_PAGO_SALDO_A_FAVOR, ESTADO_PAGO_TRASLADADO, anular_pxps_de_pedido, unidades,
 )
 from app.core.iva import (
@@ -3108,14 +3108,14 @@ def convertir_cotizacion_a_venta(
     # nada: un 422 deja la COT CONFIRMADA y la marca de Gate 2 intacta para reintentar. H42: el pedido nace en
     # pesos enteros aunque la COT (datos viejos) traiga centavos.
     total_cop = redondear_peso(cot.total_cop)
-    pct, modalidad, _, requerido = anticipo_cotizacion(cot, db)
-    origen_pct = (f"anticipo manual de {formato_pct(pct)}" if cot.anticipo_pct_manual is not None
-                  else (modalidad or formato_pct(pct)))
+    # B3 T5 (r2, C8): la misma cuenta que muestran get_cotizacion y la pagina del cliente (resumen_anticipo_cotizacion).
     # R6: el dinero de pedidos CANCELADO de esta misma COT pasa al pedido nuevo como saldo a favor (hasta el
-    # total) y descuenta lo que falta por verificar. FOR UPDATE: esos pagos se marcan TRASLADADO mas abajo.
-    saldos_a_favor = saldos_a_favor_de_cotizacion(db, cot.id, bloquear=True)
-    traslado = min(sum((s["monto"] for s in saldos_a_favor), Decimal("0")), total_cop)
-    por_verificar = max(Decimal("0"), requerido - traslado)
+    # total, traslado) y descuenta lo que falta por verificar. bloquear=True (FOR UPDATE): esos pagos se marcan
+    # TRASLADADO mas abajo.
+    anticipo = resumen_anticipo_cotizacion(cot, db, bloquear=True)
+    pct, modalidad, requerido = anticipo.pct, anticipo.modalidad, anticipo.requerido
+    origen_pct = f"anticipo manual de {formato_pct(pct)}" if anticipo.manual else (modalidad or formato_pct(pct))
+    saldos_a_favor, traslado, por_verificar = anticipo.saldos_a_favor, anticipo.traslado, anticipo.por_pagar
     ver = request.verificacion_anticipo
     verificado = Decimal("0")
     metodo_verificado = None

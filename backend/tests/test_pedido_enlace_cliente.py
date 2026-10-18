@@ -94,8 +94,9 @@ def _pedido(db, pagado=600000, cot_notas=None, **campos):
                          anticipo_cop=600000, cotizador="cotizador@nebulae.com", notas=cot_notas, **datos)
     db.add(cot); db.commit(); db.refresh(cot)
     campos.setdefault("estado", "PENDIENTE_COMPRA")
+    campos.setdefault("direccion_entrega", "Calle 10 # 5-20")
     so = SaleOrder(numero=f"PVEN-T5V{s}", sc_id=sc.id, sc_numero=sc.numero, cot_id=cot.id, cot_numero=cot.numero,
-                   direccion_entrega="Calle 10 # 5-20", productos=[dict(p) for p in PRODUCTOS], subtotal_cop=1000000,
+                   productos=[dict(p) for p in PRODUCTOS], subtotal_cop=1000000,
                    total_cop=1000000, saldo_cop=1000000 - pagado, anticipo_cop=pagado, anticipo_pct_snapshot=60,
                    total_cost_cop=700000, created_by="creador@nebulae.com", **datos, **campos)
     db.add(so); db.commit(); db.refresh(so)
@@ -107,6 +108,17 @@ def _pedido(db, pagado=600000, cot_notas=None, **campos):
 
 def _ver(app_client, raw):
     return app_client.post("/api/v1/pedido-cliente/ver", json={"token": raw})
+
+
+def _renglones_de_enlace_anulado(db, so_id):
+    """r2: los renglones VEN que avisan que se anuló el enlace del pedido (cambios con la etiqueta «Enlace del
+    pedido»)."""
+    from app.models.erp_documents import ActivityLog
+    db.expire_all()
+    filas = (db.query(ActivityLog).filter(ActivityLog.entity_type == "VEN", ActivityLog.entity_id == so_id)
+             .order_by(ActivityLog.id.asc()).all())
+    return [f for f in filas if any(c.get("etiqueta") == "Enlace del pedido"
+                                    for c in (f.extra_data or {}).get("cambios", []) if isinstance(c, dict))]
 
 
 def _fila(db, raw):
@@ -288,6 +300,9 @@ def test_cambio_de_cliente_del_pedido_revoca_su_enlace(app_client, db, admin_tok
     fila = _fila(db, raw)
     assert fila["used_at"] is not None and fila["resultado"] == "REVOCADO"
     assert revocaciones == [False]
+    # r2 (P3): el asesor se entera: renglón en la Actividad del pedido, en el mismo commit, con qué hacer.
+    [aviso] = _renglones_de_enlace_anulado(db, so.id)
+    assert "envíaselo de nuevo" in aviso.extra_data["cambios"][0]["despues"]
     resp = _ver(app_client, raw)
     _generico(resp)
     assert "Delta" not in resp.text
@@ -405,14 +420,63 @@ def test_lineas_canceladas_sin_iva_siguen_en_el_json_y_no_son_un_ajuste(app_clie
         "Se cancelaron productos; los totales ya lo reflejan. Cancelado: 1 unidad de Lámpara.")}
 
 
-def test_cancelar_todas_las_lineas_revoca_el_enlace(app_client, db, admin_token):
+def test_cancelar_todas_las_lineas_revoca_el_enlace(app_client, db, admin_token, monkeypatch):
     """r1 (C2): cancelar la única línea deja el pedido CANCELADO (recalculate_sale_order_state) y revoca su enlace en el
     mismo commit, igual que las otras dos formas de cancelarlo."""
     productos = [{"product_name": "Silla", "qty": 2, "unit_price_cop": 1000, "total_cop": 2000}]
     so = _convertido(app_client, db, admin_token, productos, subtotal=2000, total=2000)
     raw = _enlace(db, so.id)
+    revocaciones = _espiar_revocaciones_pven(monkeypatch)
     _cancelar_linea(app_client, db, admin_token, so, "Silla")
     assert so.estado == "CANCELADO"
     fila = _fila(db, raw)
     assert fila["used_at"] is not None and fila["resultado"] == "REVOCADO"
+    assert revocaciones == [False]  # r2 (C4): en el commit que cancela la línea
+    _generico(_ver(app_client, raw))
+
+
+# ─── Ronda r2: PATCH /solicitudes/{id}/cliente (privacidad 1) ────────────────────────────────────────────────
+
+NOMBRE_B = "Cliente Beta Secreto"
+DIRECCION_B = "Carrera Beta Secreta 99"
+
+
+def _corregir(app_client, token, sc_id, **datos):
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc_id}/cliente", json=datos, headers=auth(token))
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def test_corregir_la_sc_de_otra_persona_no_lleva_sus_datos_al_pedido(app_client, db, admin_token):
+    """r2, sonda 1: SC sin ficha de Ana con su COT y su PVEN (sin dirección de entrega). La SC pasa al cliente B y
+    después se corrige la dirección por /cliente. El pedido de Ana (sin ficha, otro nombre) es de otra persona: no
+    recibe la dirección de B, queda en documentos_de_otro_cliente y su enlace nunca muestra a B."""
+    from app.models.customers import Customer
+    so, cot, raw = _pedido(db, direccion_entrega=None)
+    ficha_b = Customer(first_name="Cliente Beta", last_name="Secreto", phone="3005550000",
+                       email=f"t5r2-{uuid.uuid4().hex[:8]}@test.nebulae")
+    db.add(ficha_b); db.commit(); db.refresh(ficha_b)
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{so.sc_id}",
+                            json={"customer_id": ficha_b.id, "customer_name": NOMBRE_B, "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    cuerpo = _corregir(app_client, admin_token, so.sc_id, customer_address=DIRECCION_B)
+    assert so.numero in cuerpo["documentos_de_otro_cliente"] and cot.numero in cuerpo["documentos_de_otro_cliente"]
+    assert so.numero not in cuerpo["documentos_actualizados"]
+    db.expire_all()
+    db.refresh(so)
+    assert so.customer_address is None and so.customer_name == "Ana Pérez"
+    resp = _ver(app_client, raw)
+    assert DIRECCION_B not in resp.text and NOMBRE_B not in resp.text
+
+
+def test_corregir_el_correo_revoca_el_enlace_del_pedido(app_client, db, admin_token):
+    """r2, sonda 2: el mismo cliente corrige un correo equivocado por /cliente. El pedido abierto recibe el correo
+    nuevo y su enlace de consulta (que pudo llegar al dato equivocado) se revoca en el mismo commit, con su renglón."""
+    so, cot, raw = _pedido(db)
+    cuerpo = _corregir(app_client, admin_token, so.sc_id, customer_email="ana.bien@cliente.com")
+    assert so.numero in cuerpo["documentos_actualizados"] and so.numero in cuerpo["enlaces_anulados"]
+    fila = _fila(db, raw)
+    assert fila["used_at"] is not None and fila["resultado"] == "REVOCADO"
+    assert len(_renglones_de_enlace_anulado(db, so.id)) == 1
     _generico(_ver(app_client, raw))

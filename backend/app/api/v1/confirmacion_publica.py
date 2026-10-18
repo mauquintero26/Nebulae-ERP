@@ -6,9 +6,10 @@ solo uso que le llega por correo. Ver app/core/confirmation_tokens.py para
 el mecanismo de token (mismo patron que el reset de contraseña).
 
 Bloque 3, T5 (U17+H28, U22+H38, U23; C2, C10, C11, C26, R24, RP26, RP27):
-- /confirmar/ver y /confirmar/confirmar (SC y COT) dicen el estado del enlace en palabras (documento_cliente.estado_enlace,
-  reglas a-i). Solo 'pendiente' responde 200 en /ver; todo lo demas sigue en 400, ahora con detail dict
-  (_detalle_enlace: {mensaje, estado_enlace, empresa, documento, confirmada_el, siguiente_paso, comentario}).
+- /confirmar/ver y /confirmar/confirmar (SC y COT) dicen el estado del enlace en palabras
+  (documento_cliente.estado_enlace, reglas a-i). Solo 'pendiente' responde 200 en /ver; todo lo demas sigue en 400,
+  ahora con detail dict (_detalle_enlace: {mensaje, estado_enlace, empresa, documento, confirmada_el, siguiente_paso,
+  comentario}).
 - Cada respuesta lleva 'empresa' (perfil_publico, C26), en el 200 y en el detail del 400.
 - data conserva numero, estado, total_cop (COT) y productos de siempre y agrega documento (la forma unica de C2).
 - POST /pedido-cliente/ver: el enlace de CONSULTA del pedido (TIPOS_CONSULTA, C11), que no se gasta.
@@ -101,7 +102,9 @@ def _detalle(db: Session, estado: str, mensaje: str, **extra) -> dict:
     """El detail del 400 de las paginas publicas, el UNICO armado (r1, C1): CLAVES_DETALLE con la empresa (C26) y lo que
     no se pase en None."""
     detalle = dict.fromkeys(CLAVES_DETALLE)
-    detalle.update(extra, mensaje=mensaje, estado_enlace=estado, empresa=perfil_publico(db))
+    # r2: campo por campo: una clave que no es del contrato nunca llega a la pagina publica.
+    detalle.update({clave: extra[clave] for clave in CLAVES_DETALLE if clave in extra},
+                   mensaje=mensaje, estado_enlace=estado, empresa=perfil_publico(db))
     return detalle
 
 
@@ -134,9 +137,9 @@ def _detalle_enlace(db: Session, info) -> dict:
 
 def _detalle_al_confirmar(db: Session, raw: str) -> dict:
     """El detail del 400 de /confirmar/confirmar cuando el enlace no se pudo usar. r1 (P2): primero bloquea el
-    documento (FOR UPDATE) y despues relee el enlace. Asi, en un doble clic de verdad concurrente, el segundo POST espera
-    a que termine el commit del primero (CONFIRMADA y el resultado) y muestra 'confirmada', no 'no_disponible' por haber
-    leido el documento todavia pendiente y el enlace reclamado sin resultado."""
+    documento (FOR UPDATE) y despues relee el enlace. Asi, en un doble clic de verdad concurrente, el segundo POST
+    espera a que termine el commit del primero (CONFIRMADA y el resultado) y muestra 'confirmada', no 'no_disponible'
+    por haber leido el documento todavia pendiente y el enlace reclamado sin resultado."""
     info = consultar_token(db, raw)
     if info is not None and _documento_del_enlace(db, info, bloquear=True) is not None:
         info = consultar_token(db, raw)

@@ -19,9 +19,9 @@ para los impuestos, que nunca se recalculan aquí). Sin FastAPI.
 
 T5 (U17+H28, U22+H38 y U23; C2, C3, C4, C10, R3, R24): los constructores documento_sc, documento_cot y documento_pven
 (linea_publica + armar_documento), las piezas que usan (etiqueta_modalidad, forma_de_pago, notas_para_cliente,
-pagos_para_cliente, siguiente_paso_sc) y estado_enlace, el estado del enlace de una SC o una COT en palabras (reglas a-i).
-Los modelos y confirmation_tokens se importan dentro de las funciones: etiqueta_modalidad y forma_de_pago quedan puras e
-importables sin base (T13 compara etiqueta_modalidad con etiquetaModalidad, RP21).
+pagos_para_cliente, siguiente_paso_sc) y estado_enlace, el estado del enlace de una SC o una COT en palabras
+(reglas a-i). Los modelos y confirmation_tokens se importan dentro de las funciones: etiqueta_modalidad y forma_de_pago
+quedan puras e importables sin base (T13 compara etiqueta_modalidad con etiquetaModalidad, RP21).
 """
 import logging
 import re
@@ -571,19 +571,24 @@ def _ultima_confirmacion_en_actividad(db: Session, tipo: str, doc_id: int):
 
 
 def _cambio_el_cliente_despues(db: Session, sc_id: int, desde) -> bool:
-    """r1 (P4): la SC cambió de cliente (su nombre, dirección, correo o teléfono) después de `desde` (cuando se creó el
-    enlace). Lo dice su Actividad: los dos caminos que cambian esos datos (PATCH /solicitudes/{id}, también al cambiar
-    la ficha, B7, y PATCH /solicitudes/{id}/cliente) dejan un renglón con esos campos en extra_data.cambios
-    (cambios_documento.CAMPOS_CLIENTE). Es el dato más directo: el enlace no guarda a qué cliente se envió, y los
-    renglones de aviso (_AVISO_CAMBIO_DE_CLIENTE y los de contacto) solo salen en algunos estados de la SC."""
-    from app.core.cambios_documento import CAMPOS_CLIENTE
+    """r1 (P4): la SC cambió de cliente (su ficha, nombre, dirección, correo o teléfono) después de `desde` (cuando se
+    creó el enlace). Lo dice su Actividad, con cualquiera de estas marcas (el enlace no guarda a qué cliente se envió):
+    - el renglón de cambios con esos campos en extra_data.cambios (cambios_documento.CAMPOS_CLIENTE). Es auxiliar:
+      _registrar_cambios se traga sus errores, así que solo no basta (r2);
+    - el marcador OBLIGATORIO (r2): un renglón cambios_documento.ACCION_CLIENTE_CAMBIADO (update_solicitud, cuando el
+      renglón de cambios no registró al cliente) o extra_data[MARCA_CLIENTE_CAMBIADO] en el renglón obligatorio de
+      PATCH /solicitudes/{id}/cliente. Los dos van en el commit del cambio: si no se pueden escribir, el cambio falla.
+    """
+    from app.core.cambios_documento import ACCION_CLIENTE_CAMBIADO, CAMPOS_CLIENTE, MARCA_CLIENTE_CAMBIADO
     from app.models.erp_documents import ActivityLog
-    filas = (db.query(ActivityLog.extra_data)
+    filas = (db.query(ActivityLog.action, ActivityLog.extra_data)
              .filter(ActivityLog.entity_type == "SC", ActivityLog.entity_id == sc_id, ActivityLog.created_at > desde)
              .all())
-    for (extra,) in filas:
-        cambios = extra.get("cambios") if isinstance(extra, dict) else None
-        if any(isinstance(c, dict) and c.get("campo") in CAMPOS_CLIENTE for c in (cambios or [])):
+    for accion, extra in filas:
+        extra = extra if isinstance(extra, dict) else {}
+        if accion == ACCION_CLIENTE_CAMBIADO or extra.get(MARCA_CLIENTE_CAMBIADO) is True:
+            return True
+        if any(isinstance(c, dict) and c.get("campo") in CAMPOS_CLIENTE for c in (extra.get("cambios") or [])):
             return True
     return False
 

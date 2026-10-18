@@ -36,7 +36,7 @@ from app.core.iva import (
 )
 from app.core.ventas_dinero import (
     redondear_peso, pesos, formato_pct, anticipo_cotizacion, pct_anticipo_cotizacion, anticipo_requerido,
-    anticipo_del_pedido, saldos_a_favor_de_cotizacion, PCT_ANTICIPO_POR_DEFECTO, ORIGEN_CONSERVADO,
+    anticipo_del_pedido, PCT_ANTICIPO_POR_DEFECTO, ORIGEN_CONSERVADO,
     anular_pxps_de_pedido, monto_linea, repartir_anticipo_por_linea, unidades, resumen_anticipo_cotizacion,
 )
 from app.core.textos_actividad import etiqueta_estado, ETIQUETAS_ESTADO, PASOS_SC, nombre_de_usuario
@@ -350,7 +350,9 @@ def _registrar_cambios(db: Session, entidad: str, doc, antes: dict, body: dict, 
     commit=False (update_solicitud, H29): el renglon queda en la sesion y lo confirma el commit unico del llamador;
     si falla el armado en Python no se hace rollback, porque desharia el cambio que ese commit aun no confirmo.
     Un error de la BASE (DBAPIError) con commit=False SI se propaga: deja la transaccion abortada y el commit final
-    seria un ROLLBACK silencioso (PostgreSQL), o sea un 200 sin nada guardado. Con commit=True se conserva lo de siempre."""
+    seria un ROLLBACK silencioso (PostgreSQL), o sea un 200 sin nada guardado. Con commit=True se conserva lo de siempre.
+    Devuelve el renglon que agrego, o None si no hubo cambios o si fallo (B3 T5, r2: update_solicitud lo mira para saber
+    si el cambio de cliente ya quedo registrado)."""
     try:
         despues = cambios_documento.tomar_foto(doc, entidad)
         ids_usuarios = {i for i in (antes.get("asignado_a_user_id"), despues.get("asignado_a_user_id")) if i}
@@ -360,14 +362,14 @@ def _registrar_cambios(db: Session, entidad: str, doc, antes: dict, body: dict, 
         cambios = cambios_documento.comparar(entidad, antes, despues, usuarios)
         registro = cambios_documento.describir(entidad, cambios, antes, despues, recotizacion)
         if registro is None:
-            return
+            return None
         accion, descripcion = registro
         motivo = body.get("motivo")
         if isinstance(motivo, str) and motivo.strip():
             descripcion = motivo.strip()[:300]
-        _log(db, entidad, doc.id, doc.numero, accion, descripcion,
-             user_name=body.get("updated_by") or getattr(user, "email", None),
-             extra_data={"cambios": cambios}, commit=commit, usuario=user)
+        return _log(db, entidad, doc.id, doc.numero, accion, descripcion,
+                    user_name=body.get("updated_by") or getattr(user, "email", None),
+                    extra_data={"cambios": cambios}, commit=commit, usuario=user)
     except Exception as exc:
         if commit:
             db.rollback()
@@ -375,6 +377,14 @@ def _registrar_cambios(db: Session, entidad: str, doc, antes: dict, body: dict, 
             raise
         logger.warning("No se pudo registrar en la Actividad los cambios de %s %s", entidad,
                        getattr(doc, "numero", "?"), exc_info=True)
+        return None
+
+
+def _registra_el_cliente(renglon) -> bool:
+    """El renglon de cambios trae algun dato del cliente (cambios_documento.CAMPOS_CLIENTE): el marcador de cambio de
+    cliente que lee la pagina publica (documento_cliente._cambio_el_cliente_despues)."""
+    cambios = (renglon.extra_data or {}).get("cambios") if renglon is not None else None
+    return any(isinstance(c, dict) and c.get("campo") in cambios_documento.CAMPOS_CLIENTE for c in (cambios or []))
 
 def _lista_compras_items_de(db: Session, pven_id: int) -> list:
     """Items de la Lista de Compras (JSON en web_builder_config) que pertenecen
@@ -511,21 +521,41 @@ def _texto_papelera(db: Session, sc: CustomerRequest, referencias=None) -> str:
     fecha = purga.replace(tzinfo=datetime.timezone.utc).astimezone(ZONA_COLOMBIA).strftime("%d/%m/%Y")
     return f"Se puede eliminar definitivamente desde el {fecha} si no se restaura."
 
+def _texto_del_cliente(v) -> str:
+    """Un dato del cliente para comparar: texto sin espacios en los bordes ('' si falta); el mismo dato con otro tipo
+    (5 o '5') no es un cambio."""
+    return str(v).strip() if v not in (None, "") else ""
+
+
 def _cliente_de_la_solicitud(sc: CustomerRequest) -> tuple:
     """Quien confirma la SC por el enlace de Gate 1: su id, correo y telefono, normalizados (un formulario que reenvia
     lo mismo, con otro tipo, mayusculas o espacios, no es un cambio de cliente)."""
-    def _texto(v):
-        return str(v).strip() if v not in (None, "") else ""
-    return _texto(sc.customer_id), _texto(sc.customer_email).lower(), _texto(sc.customer_phone)
+    return (_texto_del_cliente(sc.customer_id), _texto_del_cliente(sc.customer_email).lower(),
+            _texto_del_cliente(sc.customer_phone))
+
 
 def _identidad_del_cliente(doc) -> tuple:
-    """B3 T5 (r1, P1): a quien le habla el enlace publico de una COT o un PVEN: la ficha, el nombre, el correo, el
-    telefono y las direcciones, normalizados como _cliente_de_la_solicitud (otro tipo, mayusculas o espacios no son un
-    cambio). Si cambia, el enlace pendiente se revoca: quien tenga el anterior no debe ver los datos del cliente nuevo."""
-    def _texto(v):
-        return str(v).strip() if v not in (None, "") else ""
-    return (_texto(doc.customer_id), _texto(doc.customer_name), _texto(doc.customer_email).lower(),
-            _texto(doc.customer_phone), _texto(doc.customer_address), _texto(getattr(doc, "direccion_entrega", None)))
+    """B3 T5 (r1, P1): a quien le habla el enlace publico de una SC, una COT o un PVEN: _cliente_de_la_solicitud (ficha,
+    correo y telefono) mas el nombre y las direcciones, normalizados igual. Si cambia, el enlace pendiente de una COT o
+    un PVEN se revoca (quien tenga el anterior no debe ver los datos del cliente nuevo) y la SC deja el marcador de
+    cambio de cliente (r2)."""
+    return _cliente_de_la_solicitud(doc) + (_texto_del_cliente(doc.customer_name),
+                                            _texto_del_cliente(doc.customer_address),
+                                            _texto_del_cliente(getattr(doc, "direccion_entrega", None)))
+
+
+def _mismo_nombre(a, b) -> bool:
+    """El mismo nombre de cliente sin importar mayusculas ni espacios de mas."""
+    return " ".join(_texto_del_cliente(a).split()).casefold() == " ".join(_texto_del_cliente(b).split()).casefold()
+
+
+def _es_de_otra_persona_sin_ficha(doc, sc: CustomerRequest) -> bool:
+    """B3 T5 (r2, privacidad 1): una COT o un PVEN SIN ficha (customer_id None) con otro nombre que la SC es de otra
+    persona: la SC cambio de cliente despues de crearlo. _es_documento_de_otro_cliente solo mira la ficha, asi que la
+    correccion de contacto le copiaba los datos del cliente nuevo al pedido de la persona anterior. Un documento sin
+    nombre (dato viejo) se trata como de la misma persona, como antes."""
+    return (doc.customer_id is None and bool(_texto_del_cliente(doc.customer_name))
+            and not _mismo_nombre(doc.customer_name, sc.customer_name))
 
 
 def _exigir_estado_valido(body: dict) -> None:
@@ -682,6 +712,9 @@ def _estado_tras_reinicio(sc: CustomerRequest) -> str:
 # (renglon ESTADO_CHANGED) y el aviso es el renglon UPDATED cuando el estado no cambia (hay una cotizacion activa).
 # update_solicitud usa los del Bloque 1 (las pruebas buscan 'cambió el cliente'); PATCH /solicitudes/{id}/cliente (H21,
 # R18), que solo corrige el contacto del mismo cliente, los suyos.
+# B3 T5 (r2): el marcador de cambio de cliente de la SC cuando el renglon de cambios no lo registro.
+_TEXTO_CLIENTE_CAMBIADO = ("Cambiaron los datos del cliente de la solicitud: los enlaces enviados antes de este cambio ya "
+                           "no muestran su resumen.")
 _MOTIVO_PRODUCTOS = ("se modificaron los productos, así que la confirmación del cliente ya no es válida y hay que "
                      "reenviarle la solicitud")
 _MOTIVO_CAMBIO_DE_CLIENTE = ("cambió el cliente de la solicitud, así que la confirmación del cliente anterior ya no es "
@@ -771,6 +804,10 @@ _ESTADOS_VEN_CERRADOS_PARA_CONTACTO = ("CANCELADO", "ENTREGADO", "FACTURADO", "D
 _ENLACE_COT_ANULADO = {"etiqueta": "Enlace de confirmación",
                        "despues": "Se anuló el enlace enviado al dato anterior: pasa la cotización a Borrador y "
                                   "envíala de nuevo"}
+# B3 T5 (r2): el mismo aviso para el enlace de consulta del pedido (U23).
+_ENLACE_PVEN_ANULADO = {"etiqueta": "Enlace del pedido",
+                        "despues": "Se anuló el enlace del pedido enviado al dato anterior: si el cliente lo necesita, "
+                                   "envíaselo de nuevo"}
 
 
 def _normalizar_contacto(body: dict) -> dict:
@@ -1410,6 +1447,7 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     fecha_vieja = sc.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
     antes_log = cambios_documento.tomar_foto(sc, "SC")
     cliente_antes = _cliente_de_la_solicitud(sc)
+    identidad_antes = _identidad_del_cliente(sc)
     customer_id_antes = sc.customer_id
     # S9 (T11): sin customer_phone, customer_email ni customer_address (van por /cliente; arriba dan 422).
     # R3 (B3 T5): nota_cliente, la «Nota para el cliente». Editarla NO anula el enlace ni la confirmacion: el cliente
@@ -1437,6 +1475,8 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         sc.customer_phone = ficha.phone or None
         sc.customer_email = ficha.email or None
         sc.customer_address = ficha.address or None
+    # B3 T5 (r2, privacidad 2): cambio de cliente (identidad o contacto) comparando los datos, sin describir.
+    cambia_la_identidad = _identidad_del_cliente(sc) != identidad_antes
     # Gate 1 -- invariante (Round 6, generaliza la version de la implementacion original
     # de este Task): una SC nunca debe quedar en BORRADOR con un asesor ya asignado. La
     # version original solo evaluaba esto en la primera asignacion (not sc.advisor_user_id
@@ -1515,7 +1555,15 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     db.refresh(sc)
     # Primero lo editado y despues el cambio de estado que provoca (p.ej. asignar asesor ->
     # ASIGNADA), para que la linea de tiempo se lea en el orden causal.
-    _registrar_cambios(db, "SC", sc, antes_log, body, user, commit=False)
+    renglon_cambios = _registrar_cambios(db, "SC", sc, antes_log, body, user, commit=False)
+    if cambia_la_identidad and not _registra_el_cliente(renglon_cambios):
+        # B3 T5 (r2, privacidad 2): el renglon de cambios es auxiliar (si su armado falla, se sigue sin el). El cambio de
+        # cliente deja entonces su marcador OBLIGATORIO en este mismo commit: la pagina publica de la SC lo lee para no
+        # mostrarle al cliente anterior los datos del nuevo. Normalmente no hace falta (el renglon de cambios ya trae los
+        # datos del cliente): no se repite.
+        _log(db, "SC", sc.id, sc.numero, cambios_documento.ACCION_CLIENTE_CAMBIADO, _TEXTO_CLIENTE_CAMBIADO,
+             user_name=body.get("updated_by") or getattr(user, "email", None),
+             extra_data={cambios_documento.MARCA_CLIENTE_CAMBIADO: True}, commit=False, usuario=user)
     if body.get("estado") and body["estado"] != old_estado:
         _log(db, "SC", sc.id, sc.numero, "ESTADO_CHANGED",
              f"Estado cambiado a {etiqueta_estado('SC', sc.estado)}",
@@ -1627,6 +1675,7 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
         old_estado = sc.estado
         foto_sc = cambios_documento.tomar_foto(sc, "SC")
         contacto_sc_antes = _cliente_de_la_solicitud(sc)
+        identidad_sc_antes = _identidad_del_cliente(sc)
         origen = {"tipo": "SC", "id": sc.id, "numero": sc.numero}
         # S8 (T11): la ficha se bloquea dentro del try, como la COT y el PVEN: si PostgreSQL aborta ese bloqueo por un
         # interbloqueo (40P01) o por el statement_timeout (57014), es el 409 de abajo y no un 500. El 422 de la ciudad
@@ -1645,10 +1694,11 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
         # Los documentos se leen bloqueados (SC -> ficha -> COT -> PVEN) y dentro del try: un interbloqueo (40P01) al
         # tomarlos tambien responde 409. La foto 'antes' y la decision de quien es de otro cliente salen de esta lectura.
         for entidad, doc in _docs_abiertos_para_contacto(db, sc):
-            if _es_documento_de_otro_cliente(doc, sc):
+            # B3 T5 (r2, privacidad 1): tampoco recibe los datos un documento sin ficha de otra persona.
+            if _es_documento_de_otro_cliente(doc, sc) or _es_de_otra_persona_sin_ficha(doc, sc):
                 docs_de_otro_cliente.append(doc.numero)
             else:
-                docs.append((entidad, doc, cambios_documento.tomar_foto(doc, entidad), _cliente_de_la_solicitud(doc)))
+                docs.append((entidad, doc, cambios_documento.tomar_foto(doc, entidad), _identidad_del_cliente(doc)))
         # Desde aqui hasta el commit: el UPDATE de la ficha sale en el flush, donde salta el indice unico del correo.
         for clave, valor in nuevos.items():
             col_doc, col_cli = _CONTACTO_CLIENTE[clave]
@@ -1690,9 +1740,13 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
                 descripcion += f". También se corrigieron en {_unir_es(lugares)}."
         else:  # la SC ya tenia esos datos: se corrigieron la ficha o los documentos
             descripcion = f"Datos del cliente corregidos en {_unir_es(lugares)}: {titulo}"
-        _log(db, "SC", sc.id, sc.numero, "UPDATED", descripcion, user_name=autor,
-             extra_data={"cambios": cambios_sc, "ficha_cliente_id": cliente.id if cliente is not None else None,
-                         "documentos": numeros_docs}, commit=False)
+        extra_sc = {"cambios": cambios_sc, "ficha_cliente_id": cliente.id if cliente is not None else None,
+                    "documentos": numeros_docs}
+        if _identidad_del_cliente(sc) != identidad_sc_antes:
+            # B3 T5 (r2, privacidad 2): el marcador de cambio de cliente, en este renglon obligatorio (no es auxiliar: si
+            # falla, falla la correccion). La pagina publica de la SC lo lee (_cambio_el_cliente_despues).
+            extra_sc[cambios_documento.MARCA_CLIENTE_CAMBIADO] = True
+        _log(db, "SC", sc.id, sc.numero, "UPDATED", descripcion, user_name=autor, extra_data=extra_sc, commit=False)
 
         gate1 = {"confirmacion_anulada": False, "estado_cambiado": False, "enlace_anulado": False}
         if _cliente_de_la_solicitud(sc) != contacto_sc_antes:
@@ -1703,16 +1757,17 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
             clientes.log_cliente(db, cliente, f"Datos de contacto corregidos desde la solicitud {sc.numero}: "
                                               f"{_titulo_contacto(cambios_cli)}", cambios_cli, origen, autor)
         from app.core.confirmation_tokens import revoke_pending_tokens
-        for entidad, doc, cambios, contacto_antes in docs_cambiados:
+        for entidad, doc, cambios, identidad_antes in docs_cambiados:
             titulo_doc = _titulo_contacto(cambios)
-            # Se revoca siempre que cambio el correo o el telefono de la COT, salvo CONFIRMADA (R18: el cliente ya
-            # confirmo precios), y solo se informa un enlace que el cliente todavia podia usar: los que este mismo UPDATE
-            # revoco sin vencer (RETURNING, ronda 2).
-            if (entidad == "COT" and doc.estado != "CONFIRMADA"
-                    and _cliente_de_la_solicitud(doc) != contacto_antes):
-                vigentes = revoke_pending_tokens(db, "COT", doc.id, commit=False, contar_vigentes=True)
+            # B3 T5 (r2, privacidad 1): la misma regla que update_cotizacion y update_pedido. Si cambio la identidad del
+            # cliente del documento (_identidad_del_cliente: ficha, contacto, nombre o direcciones), su enlace pendiente
+            # se revoca; en la COT, salvo CONFIRMADA (R18: el cliente ya confirmo precios). Solo se informa un enlace que
+            # el cliente todavia podia usar: los que este mismo UPDATE revoco sin vencer (RETURNING, ronda 2).
+            if _identidad_del_cliente(doc) != identidad_antes and not (entidad == "COT" and doc.estado == "CONFIRMADA"):
+                tipo_enlace, aviso = ("COT", _ENLACE_COT_ANULADO) if entidad == "COT" else ("PVEN", _ENLACE_PVEN_ANULADO)
+                vigentes = revoke_pending_tokens(db, tipo_enlace, doc.id, commit=False, contar_vigentes=True)
                 if vigentes:
-                    cambios = cambios + [dict(_ENLACE_COT_ANULADO)]
+                    cambios = cambios + [dict(aviso)]
                     enlaces_anulados.append(doc.numero)
             _log(db, entidad, doc.id, doc.numero, "UPDATED",
                  f"Datos del cliente corregidos desde la solicitud {sc.numero}: {titulo_doc}", user_name=autor,
@@ -2913,7 +2968,13 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
              commit=False, usuario=user)
     if cambia_el_cliente_cot:
         from app.core.confirmation_tokens import revoke_pending_tokens
-        revoke_pending_tokens(db, "COT", cot.id, commit=False)
+        # r2 (P3): si el cliente todavia podia usar el enlace, el asesor se entera en la Actividad, en este mismo commit,
+        # con lo que tiene que hacer (_ENLACE_COT_ANULADO: pasarla a Borrador y enviarla de nuevo).
+        if revoke_pending_tokens(db, "COT", cot.id, commit=False, contar_vigentes=True):
+            _log(db, "COT", cot.id, cot.numero, "UPDATED",
+                 "Cambiaron los datos del cliente: se anuló el enlace de confirmación de esta cotización",
+                 user_name=body.get("updated_by") or getattr(user, "email", None),
+                 extra_data={"cambios": [dict(_ENLACE_COT_ANULADO)]}, commit=False, usuario=user)
     db.commit()
     db.refresh(cot)
     if not anula_por_recotizacion:
@@ -3564,11 +3625,17 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
         # A2 (revision final): con H46 + R6 reconvertir la COT es el flujo normal; lo que este pedido tenia
         # apartado se libera en el mismo commit (reservas, lineas y Lista de Compras).
         _liberar_lo_apartado_del_pedido(db, v, autor)
-    if cancela or _identidad_del_cliente(v) != cliente_antes:
+    cambia_el_cliente = _identidad_del_cliente(v) != cliente_antes
+    if cancela or cambia_el_cliente:
         # B3 T5 (hueco 2, R19): el enlace de consulta del pedido (U23) deja de abrir en el mismo commit que lo cancela.
         # r1 (P1): tambien si cambio el cliente: el enlace anterior mostraria el pedido con los datos del nuevo.
         from app.core.confirmation_tokens import revoke_pending_tokens
-        revoke_pending_tokens(db, "PVEN", v.id, commit=False)
+        vigentes = revoke_pending_tokens(db, "PVEN", v.id, commit=False, contar_vigentes=True)
+        if vigentes and cambia_el_cliente and not cancela:
+            # r2 (P3): el asesor se entera en la Actividad, en el mismo commit.
+            _log(db, "VEN", v.id, v.numero, "UPDATED",
+                 "Cambiaron los datos del cliente: se anuló el enlace de consulta de este pedido", user_name=autor,
+                 extra_data={"cambios": [dict(_ENLACE_PVEN_ANULADO)]}, commit=False, usuario=user)
     v.updated_at = datetime.datetime.utcnow()
     db.commit()
     db.refresh(v)
