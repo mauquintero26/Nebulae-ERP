@@ -38,6 +38,7 @@ from app.core.ventas_dinero import (
     redondear_peso, pesos, formato_pct, anticipo_cotizacion, pct_anticipo_cotizacion, anticipo_requerido,
     anticipo_del_pedido, PCT_ANTICIPO_POR_DEFECTO, ORIGEN_CONSERVADO,
     anular_pxps_de_pedido, monto_linea, repartir_anticipo_por_linea, unidades, resumen_anticipo_cotizacion,
+    _sin_tildes,
 )
 from app.core.textos_actividad import etiqueta_estado, ETIQUETAS_ESTADO, PASOS_SC, nombre_de_usuario
 from app.core.chatter import validar_nota, reinicia_atraso, puede_registrar, CONTACTO_SOLO_ASESOR
@@ -543,18 +544,24 @@ def _identidad_del_cliente(doc) -> tuple:
     return _cliente_de_la_solicitud(doc) + (_texto_del_cliente(doc.customer_name),)
 
 
+def _nombre_para_comparar(nombre) -> str:
+    """El nombre sin tildes, mayusculas (casefold) ni espacios de mas: el normalizador del repo (_sin_tildes)."""
+    return " ".join(_sin_tildes(_texto_del_cliente(nombre)).casefold().split())
+
+
 def _mismo_nombre(a, b) -> bool:
-    """El mismo nombre de cliente sin importar mayusculas ni espacios de mas."""
-    return " ".join(_texto_del_cliente(a).split()).casefold() == " ".join(_texto_del_cliente(b).split()).casefold()
+    """El mismo nombre de cliente sin importar tildes, mayusculas ni espacios de mas («Ana Perez» = «Ana  Pérez»)."""
+    return _nombre_para_comparar(a) == _nombre_para_comparar(b)
 
 
 def _es_de_otra_persona_sin_ficha(doc, sc: CustomerRequest) -> bool:
-    """B3 T5 (r2, privacidad 1): una COT o un PVEN SIN ficha (customer_id None) con otro nombre que la SC es de otra
-    persona: la SC cambio de cliente despues de crearlo. _es_documento_de_otro_cliente solo mira la ficha, asi que la
-    correccion de contacto le copiaba los datos del cliente nuevo al pedido de la persona anterior. Un documento sin
-    nombre (dato viejo) se trata como de la misma persona, como antes."""
-    return (doc.customer_id is None and bool(_texto_del_cliente(doc.customer_name))
-            and not _mismo_nombre(doc.customer_name, sc.customer_name))
+    """B3 T5 (r2, privacidad 1): una COT o un PVEN SIN ficha (customer_id None) del que no se puede afirmar que es de la
+    misma persona que la SC: otro nombre (la SC cambio de cliente despues de crearlo) o, r4 (privacidad 2), ningun
+    nombre (dato viejo). _es_documento_de_otro_cliente solo mira la ficha, asi que la correccion de contacto le copiaba
+    los datos del cliente nuevo al pedido de la persona anterior; desde la r3 la direccion ya no revoca su enlace, asi
+    que ante la duda no se le copian datos."""
+    return doc.customer_id is None and (not _nombre_para_comparar(doc.customer_name)
+                                        or not _mismo_nombre(doc.customer_name, sc.customer_name))
 
 
 def _exigir_estado_valido(body: dict) -> None:
@@ -1474,6 +1481,10 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         sc.customer_phone = ficha.phone or None
         sc.customer_email = ficha.email or None
         sc.customer_address = ficha.address or None
+        if "customer_name" not in body:
+            # B3 T5 (r4, privacidad 2): y su nombre, si el PATCH no trae otro: la SC nunca se queda con el nombre del
+            # cliente anterior (sus documentos sin ficha con ese nombre recibirian los datos del nuevo).
+            sc.customer_name = f"{ficha.first_name or ''} {ficha.last_name or ''}".strip() or sc.customer_name
     # B3 T5 (r2, privacidad 2): cambio de cliente (identidad o contacto) comparando los datos, sin describir.
     cambia_la_identidad = _identidad_del_cliente(sc) != identidad_antes
     # Gate 1 -- invariante (Round 6, generaliza la version de la implementacion original
@@ -1627,8 +1638,15 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         from app.core.confirmation_tokens import revoke_pending_tokens
         revoke_pending_tokens(db, "SC", sc.id, commit=False)
         sc.gate1_confirmed_at = None
-    if cambia_el_cliente:
+    elif cambia_la_identidad:
+        # B3 T5 (r4, privacidad 1): un cambio de solo el nombre tambien cambia a quien le llega el enlace
+        # (_identidad_del_cliente, la regla unica): el enlace todavia pendiente de la SC se revoca. Ruling: NO reinicia
+        # Gate 1 (no anula una confirmacion ya dada; si debe hacerlo, lo decide el usuario).
+        from app.core.confirmation_tokens import revoke_pending_tokens
+        revoke_pending_tokens(db, "SC", sc.id, commit=False)
+    if cambia_la_identidad:
         # T11 calidad (F2, residual de S9): los enlaces de sus COT tempranas tambien eran del cliente anterior.
+        # B3 T5 (r4): con la misma identidad (cambia_el_cliente esta contenido en ella).
         _anular_enlaces_de_cotizaciones_por_cambio_de_cliente(db, sc, nombre_de_usuario(user))
     # El dict se arma ANTES del commit: tras el commit el objeto queda expirado y leerlo costaria otro viaje a la base.
     resp = _sc_dict(sc)
@@ -1648,12 +1666,15 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
     toma en una carrera: IntegrityError desde el flush). El autor es el usuario de la sesion (R9): se ignoran
     body.updated_by y body.user_name. El nombre no se corrige aqui (se cambia en la ficha).
     R18: si cambia el correo o el telefono de la SC, la misma regla de Gate 1 que update_solicitud para un cambio de
-    cliente (_anular_confirmacion_por_cambio_de_cliente). En cada COT propagada cuyo correo o telefono cambio (menos una
-    CONFIRMADA, que recibe los datos y conserva su confirmacion) se revocan los enlaces sin cambiar su estado; si alguno
-    seguia vivo, queda en enlaces_anulados y en su Actividad. Cambiar solo la direccion o la ciudad no anula nada.
+    cliente (_anular_confirmacion_por_cambio_de_cliente). B3 T5 (r2-r4): en cada COT y cada PVEN propagados cuya
+    identidad cambio (_identidad_del_cliente: ficha, correo, telefono o nombre; la direccion no, R18) se revocan los
+    enlaces sin cambiar su estado (menos una COT CONFIRMADA, que recibe los datos y conserva su confirmacion); si alguno
+    seguia vivo, queda en su Actividad (_ENLACE_COT_ANULADO / _ENLACE_PVEN_ANULADO) y en enlaces_anulados (COT) o
+    enlaces_pedido_anulados (PVEN). Cambiar solo la direccion o la ciudad no anula nada. Un documento sin ficha que no
+    es de la misma persona (otro nombre o ninguno, _es_de_otra_persona_sin_ficha) no recibe los datos y se informa.
     Respuesta: {status, data (_sc_dict + customer_city), ficha_actualizada, documentos_actualizados [numeros],
     documentos_de_otro_cliente [numeros], confirmacion_anulada, estado_cambiado, enlaces_anulados [numeros de SC/COT],
-    sin_cambios}."""
+    enlaces_pedido_anulados [numeros de PVEN], sin_cambios}."""
     correo = None
     cliente, docs, docs_de_otro_cliente = None, [], []
     try:
@@ -1728,7 +1749,8 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
             data["customer_city"] = _ciudad_del_cliente(sc)
             return {"status": "success", "data": data, "ficha_actualizada": False, "documentos_actualizados": [],
                     "documentos_de_otro_cliente": docs_de_otro_cliente, "confirmacion_anulada": False,
-                    "estado_cambiado": False, "enlaces_anulados": [], "sin_cambios": True}
+                    "estado_cambiado": False, "enlaces_anulados": [], "enlaces_pedido_anulados": [],
+                    "sin_cambios": True}
 
         numeros_docs = [doc.numero for _, doc, _, _ in docs_cambiados]
         lugares = (["la ficha del cliente"] if cambios_cli else []) + numeros_docs
@@ -1751,6 +1773,7 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
         if _cliente_de_la_solicitud(sc) != contacto_sc_antes:
             gate1 = _anular_confirmacion_por_cambio_de_cliente(db, sc, old_estado, autor)
         enlaces_anulados = [sc.numero] if gate1["enlace_anulado"] else []
+        enlaces_pedido_anulados = []
 
         if cambios_cli:
             clientes.log_cliente(db, cliente, f"Datos de contacto corregidos desde la solicitud {sc.numero}: "
@@ -1767,7 +1790,8 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
                 vigentes = revoke_pending_tokens(db, tipo_enlace, doc.id, commit=False, contar_vigentes=True)
                 if vigentes:
                     cambios = cambios + [dict(aviso)]
-                    enlaces_anulados.append(doc.numero)
+                    # r4: enlaces_anulados conserva el contrato del Bloque 2 (SC y COT); los pedidos van aparte.
+                    (enlaces_anulados if entidad == "COT" else enlaces_pedido_anulados).append(doc.numero)
             _log(db, entidad, doc.id, doc.numero, "UPDATED",
                  f"Datos del cliente corregidos desde la solicitud {sc.numero}: {titulo_doc}", user_name=autor,
                  extra_data={"cambios": cambios, "origen": origen}, commit=False)
@@ -1804,7 +1828,8 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
     return {"status": "success", "data": data, "ficha_actualizada": bool(cambios_cli),
             "documentos_actualizados": numeros_docs, "documentos_de_otro_cliente": docs_de_otro_cliente,
             "confirmacion_anulada": gate1["confirmacion_anulada"], "estado_cambiado": gate1["estado_cambiado"],
-            "enlaces_anulados": enlaces_anulados, "sin_cambios": False}
+            "enlaces_anulados": enlaces_anulados, "enlaces_pedido_anulados": enlaces_pedido_anulados,
+            "sin_cambios": False}
 
 
 @router.post("/solicitudes/{sc_id}/enviar-confirmacion")

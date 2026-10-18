@@ -511,6 +511,65 @@ def test_corregir_el_contacto_deja_el_marcador_en_su_renglon(app_client, db, adm
     assert renglones()[-1].extra_data["cliente_cambiado"] is True
 
 
+def test_cambio_de_solo_el_nombre_revoca_el_enlace_pendiente_de_la_sc(app_client, db, admin_token, user_admin,
+                                                                      monkeypatch):
+    """r4 (privacidad 1, sonda A): SC sin ficha de Ana, pendiente, con su enlace L1. Cambiarle solo el nombre (por la
+    API) cambia a quién le llega el enlace (_identidad_del_cliente incluye el nombre): L1 se revoca en el mismo commit y
+    nunca muestra el nombre ni, después de corregir la dirección, la dirección de B. La SC sigue pendiente."""
+    _sin_correo(monkeypatch)
+    sc = _sc(db, user_admin, customer_address="Calle Alfa 1")
+    l1 = _enviar(app_client, admin_token, sc)
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"customer_name": NOMBRE_B, "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["estado"] == "PENDIENTE_CONFIRMACION"
+    assert _fila(db, l1)["resultado"] == "REVOCADO"
+    resp = _ver(app_client, l1)
+    assert _detalle(resp, "no_disponible")["documento"] is None
+    assert NOMBRE_B not in resp.text
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}/cliente", json={"customer_address": DIRECCION_B},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    for resp in (_ver(app_client, l1), _confirmar(app_client, l1)):
+        assert resp.status_code == 400, resp.text
+        assert NOMBRE_B not in resp.text and DIRECCION_B not in resp.text
+
+
+def test_cambio_de_solo_el_nombre_no_reinicia_gate1(app_client, db, admin_token, user_admin, monkeypatch):
+    """r4 (ruling): un cambio de solo el nombre revoca los enlaces todavía pendientes, pero no anula una confirmación ya
+    dada (Gate 1 no se reinicia; si debe hacerlo, lo decide el usuario). El enlace que confirmó deja de mostrar el
+    resumen (la guarda de P4)."""
+    _sin_correo(monkeypatch)
+    sc = _sc(db, user_admin)
+    raw = _enviar(app_client, admin_token, sc)
+    assert _confirmar(app_client, raw).status_code == 200
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"customer_name": "Ana María Pérez",
+                                                                       "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    db.refresh(sc)
+    assert sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is not None
+    assert _detalle(_ver(app_client, raw), "confirmada")["documento"] == {"numero": sc.numero}
+
+
+def test_cambiar_la_ficha_sin_nombre_toma_el_nombre_de_la_ficha(app_client, db, admin_token, user_admin):
+    """r4 (privacidad 2, variante): como B7 ya toma el teléfono, el correo y la dirección de la ficha nueva, cambiar
+    customer_id sin customer_name también toma su nombre: la SC nunca queda con el nombre del cliente anterior."""
+    ficha_a = _ficha(db, "Ana", "Pérez", "Calle Alfa 1")
+    ficha_b = _ficha(db, "Cliente Beta", "Secreto", DIRECCION_B)
+    sc = _sc(db, user_admin, customer_id=ficha_a.id, customer_address="Calle Alfa 1")
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"customer_id": ficha_b.id, "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert (data["customer_name"], data["customer_address"]) == (NOMBRE_B, DIRECCION_B)
+    # Si el body trae el nombre, ese gana.
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}",
+                            json={"customer_id": ficha_a.id, "customer_name": "Ana P.", "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["customer_name"] == "Ana P."
+
+
 def test_confirmacion_anulada_sin_cambio_de_cliente_no_muestra_el_resumen(app_client, db, admin_token, user_admin,
                                                                           monkeypatch):
     """r1 (P4): para el enlace que confirmó, el resumen exige que esa confirmación siga vigente (gate1_confirmed_at). Con

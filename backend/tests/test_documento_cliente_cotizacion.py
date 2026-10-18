@@ -429,6 +429,11 @@ def test_cambio_de_cliente_en_cot_pendiente_revoca_el_enlace(app_client, db, adm
     resp = _ver(app_client, raw)
     assert _detalle(resp, "no_disponible")["documento"] is None
     assert "Gamma" not in resp.text
+    # r4 (C2): solo avisa si revocó un enlace vivo. Otro cambio de nombre, ya sin enlace vivo, no deja otro renglón.
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}",
+                            json={"customer_name": "Cliente Delta", "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert len(_avisos_de_enlace_anulado(db, cot.id)) == 1 and revocaciones == [False, False]
 
     # Un PATCH que no cambia a quién le llega el enlace no lo revoca ni deja otro aviso: solo la nota, o (r3, R18 del
     # Bloque 2) solo la dirección de entrega de la misma persona.
@@ -438,7 +443,7 @@ def test_cambio_de_cliente_en_cot_pendiente_revoca_el_enlace(app_client, db, adm
                                 headers=auth(admin_token))
         assert resp.status_code == 200, resp.text
         assert _fila(db, nuevo)["used_at"] is None, cambio
-    assert revocaciones == [False] and len(_avisos_de_enlace_anulado(db, cot.id)) == 1
+    assert revocaciones == [False, False] and len(_avisos_de_enlace_anulado(db, cot.id)) == 1
 
 
 def test_get_cotizacion_y_el_documento_dan_el_mismo_anticipo(app_client, db, admin_token):

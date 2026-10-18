@@ -25,8 +25,11 @@ MOTIVO_CONTACTO = ("cambió el correo o el teléfono del cliente, así que su co
 ENLACE_COT_ANULADO = {"etiqueta": "Enlace de confirmación",
                       "despues": "Se anuló el enlace enviado al dato anterior: pasa la cotización a Borrador y envíala "
                                  "de nuevo"}
+# B3 T5 (r4): enlaces_pedido_anulados, los pedidos cuyo enlace de consulta se anulo (enlaces_anulados sigue con SC y
+# COT).
 CLAVES_RESPUESTA = {"status", "data", "ficha_actualizada", "documentos_actualizados", "documentos_de_otro_cliente",
-                    "confirmacion_anulada", "estado_cambiado", "enlaces_anulados", "sin_cambios"}
+                    "confirmacion_anulada", "estado_cambiado", "enlaces_anulados", "enlaces_pedido_anulados",
+                    "sin_cambios"}
 AVISO_CONTACTO_CON_COT = ("Cambió el correo o el teléfono del cliente: la confirmación de la solicitud ya no vale. La "
                           "cotización activa sigue igual; si necesitas otra cotización, envíale la solicitud de nuevo "
                           "para que la confirme.")

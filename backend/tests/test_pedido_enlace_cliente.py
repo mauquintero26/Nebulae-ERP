@@ -98,7 +98,7 @@ def _pedido(db, pagado=600000, cot_notas=None, **campos):
     so = SaleOrder(numero=f"PVEN-T5V{s}", sc_id=sc.id, sc_numero=sc.numero, cot_id=cot.id, cot_numero=cot.numero,
                    productos=[dict(p) for p in PRODUCTOS], subtotal_cop=1000000,
                    total_cop=1000000, saldo_cop=1000000 - pagado, anticipo_cop=pagado, anticipo_pct_snapshot=60,
-                   total_cost_cop=700000, created_by="creador@nebulae.com", **datos, **campos)
+                   total_cost_cop=700000, created_by="creador@nebulae.com", **{**datos, **campos})
     db.add(so); db.commit(); db.refresh(so)
     if pagado:
         _pago(db, so, monto=pagado, referencia_bancaria="BANCOL-123", usuario="verificador@x",
@@ -308,6 +308,11 @@ def test_cambio_de_cliente_del_pedido_revoca_su_enlace(app_client, db, admin_tok
     resp = _ver(app_client, raw)
     _generico(resp)
     assert "Delta" not in resp.text
+    # r4 (C2): solo avisa si revocó un enlace vivo. Otro cambio de nombre, ya sin enlace vivo, no deja otro renglón.
+    resp = app_client.patch(f"/api/v1/ventas/pedidos/{so.id}", json={"customer_name": "Cliente Epsilon",
+                                                                     "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert len(_renglones_de_enlace_anulado(db, so.id)) == 1
 
     # Solo el correo también es otro cliente para el enlace.
     so, _, raw = _pedido(db)
@@ -485,12 +490,41 @@ def test_corregir_solo_la_direccion_no_revoca_el_enlace_del_pedido(app_client, d
     assert resp.json()["data"]["cliente"]["direccion_entrega"] == "Calle 9 # 1-2"
 
 
+def test_corregir_la_sc_no_lleva_sus_datos_a_un_pedido_sin_ficha_ni_nombre(app_client, db, admin_token):
+    """r4 (privacidad 2, sonda B): un pedido sin ficha y sin nombre (dato viejo) no permite afirmar que es de la misma
+    persona: la SC pasa a B por nombre y se corrige la dirección; el pedido queda en documentos_de_otro_cliente, no
+    recibe la dirección de B y su enlace sigue mostrando solo su propio pedido."""
+    so, cot, raw = _pedido(db, customer_name=None, direccion_entrega=None)
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{so.sc_id}",
+                            json={"customer_name": NOMBRE_B, "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    cuerpo = _corregir(app_client, admin_token, so.sc_id, customer_address=DIRECCION_B)
+    assert so.numero in cuerpo["documentos_de_otro_cliente"] and so.numero not in cuerpo["documentos_actualizados"]
+    db.expire_all()
+    db.refresh(so)
+    assert so.customer_address is None
+    resp = _ver(app_client, raw)
+    assert DIRECCION_B not in resp.text and NOMBRE_B not in resp.text
+
+
+def test_un_nombre_que_solo_difiere_en_tildes_es_la_misma_persona(app_client, db, admin_token):
+    """r4 (C1): «Ana Perez» y «Ana Pérez» son la misma persona: el pedido sin ficha recibe el correo corregido y su
+    enlace, que pudo llegar al correo equivocado, se revoca."""
+    so, cot, raw = _pedido(db, customer_name="Ana  perez")
+    cuerpo = _corregir(app_client, admin_token, so.sc_id, customer_email="ana.bien@cliente.com")
+    assert so.numero in cuerpo["documentos_actualizados"] and so.numero not in cuerpo["documentos_de_otro_cliente"]
+    assert cuerpo["enlaces_pedido_anulados"] == [so.numero]
+    assert _fila(db, raw)["resultado"] == "REVOCADO"
+
+
 def test_corregir_el_correo_revoca_el_enlace_del_pedido(app_client, db, admin_token):
     """r2, sonda 2: el mismo cliente corrige un correo equivocado por /cliente. El pedido abierto recibe el correo
     nuevo y su enlace de consulta (que pudo llegar al dato equivocado) se revoca en el mismo commit, con su renglón."""
     so, cot, raw = _pedido(db)
     cuerpo = _corregir(app_client, admin_token, so.sc_id, customer_email="ana.bien@cliente.com")
-    assert so.numero in cuerpo["documentos_actualizados"] and so.numero in cuerpo["enlaces_anulados"]
+    assert so.numero in cuerpo["documentos_actualizados"]
+    # r4: enlaces_anulados conserva el contrato del Bloque 2 (solo SC y COT); los pedidos van en su propia clave.
+    assert cuerpo["enlaces_pedido_anulados"] == [so.numero] and so.numero not in cuerpo["enlaces_anulados"]
     fila = _fila(db, raw)
     assert fila["used_at"] is not None and fila["resultado"] == "REVOCADO"
     assert len(_renglones_de_enlace_anulado(db, so.id)) == 1
