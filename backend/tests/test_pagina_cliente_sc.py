@@ -23,11 +23,22 @@ import uuid
 
 from sqlalchemy import text
 
+from _registro_capturado import registro_capturado
+
 MOD_60_40 = "60/40 (60% anticipo - 40% pendiente)"
 RODILLOS = [{"product_name": "Rodillo", "qty": 6, "unit_price_cop": 5000, "sku_id": 9}]
 EMPRESA = "Pinturas del Valle"
 ASESORA = "Laura Gómez"
 CLAVES_DETALLE = {"mensaje", "estado_enlace", "empresa", "documento", "confirmada_el", "siguiente_paso", "comentario"}
+CLAVES_200_VER = {"status", "estado_enlace", "vence_at", "empresa", "data"}
+CLAVES_200_CONFIRMAR = {"status", "message", "estado_enlace", "mensaje", "confirmada_el", "siguiente_paso", "empresa",
+                        "data"}
+CLAVES_200_MINIMO = {"status", "message", "estado_enlace", "mensaje", "confirmada_el", "empresa"}
+CLAVES_DATA_SC = {"numero", "customer_name", "estado", "fecha_entrega_estimada", "productos", "documento"}
+CLAVES_DATA_COT = CLAVES_DATA_SC | {"total_cop"}
+# El cliente nuevo de las pruebas del cambio de cliente (r1, P4): nunca debe aparecer en el enlace del anterior.
+NOMBRE_B = "Cliente Beta Secreto"
+DIRECCION_B = "Carrera Beta Secreta 99"
 
 
 def auth(token):
@@ -141,11 +152,15 @@ def test_ver_pendiente_trae_empresa_forma_de_pago_y_productos_sin_precio(app_cli
     resp = _ver(app_client, raw)
     assert resp.status_code == 200, resp.text
     j = resp.json()
+    assert set(j) == CLAVES_200_VER  # r1 (C6): el envelope exacto
     assert j["status"] == "success" and j["estado_enlace"] == "pendiente"
     assert _desde_iso_z(j["vence_at"]) > _ahora()
     assert j["empresa"]["nombre_comercial"] == EMPRESA
     data = j["data"]
+    assert set(data) == CLAVES_DATA_SC
     assert data["numero"] == sc.numero and data["estado"] == "PENDIENTE_CONFIRMACION"
+    assert data["customer_name"] == "Ana Pérez"
+    assert data["fecha_entrega_estimada"] == "2026-10-21T15:00:00"  # campo de compatibilidad, sin 'Z' (ruling r1)
     assert data["productos"] == [{"n": 1, "descripcion": "Rodillo", "cantidad": 6}]  # compatibilidad, sin precio
 
     doc = data["documento"]
@@ -228,6 +243,8 @@ def test_confirmar_responde_que_sigue(app_client, db, admin_token, user_admin, m
     # Reclamar el token y el commit que pone CONFIRMADA (con la revocación y el resultado): armar la respuesta solo lee.
     assert v.commits == 2, v.commits
     j = resp.json()
+    assert set(j) == CLAVES_200_CONFIRMAR and set(j["data"]) == CLAVES_DATA_SC  # r1 (C6)
+    assert j["siguiente_paso"][1] == "Te la enviamos por el mismo medio para que la revises y la apruebes."
     assert j["status"] == "success" and j["message"] == "Solicitud confirmada. Gracias."
     assert j["estado_enlace"] == "confirmada"
     assert j["mensaje"] == "¡Gracias! Tu confirmación fue registrada."
@@ -348,18 +365,158 @@ def test_sc_confirmada_por_la_cotizacion_dice_ya_fue_confirmada(app_client, db, 
     assert [l["descripcion"] for l in d["documento"]["lineas"]] == ["Rodillo"]
 
 
-def test_el_resumen_solo_lo_ve_el_ultimo_enlace_o_el_que_confirmo(app_client, db, admin_token, user_admin,
-                                                                  monkeypatch):
-    """Privacidad: un enlace viejo (reemplazado) de una SC que después se confirmó por otro enlace dice 'confirmada',
-    pero sin el resumen (el cliente o la dirección pudieron cambiar entre los dos envíos)."""
+def test_enlace_viejo_del_mismo_cliente_ve_el_resumen(app_client, db, admin_token, user_admin, monkeypatch):
+    """r1 (ruling sobre la duda 2): la guarda «solo el último enlace o el que confirmó» se reemplaza por la del cambio de
+    cliente. Un enlace viejo (reemplazado) del MISMO cliente, de una SC que se confirmó por el enlace nuevo, ve el
+    resumen: no hay datos de otra persona."""
     _sin_correo(monkeypatch)
     sc = _sc(db, user_admin)
     viejo = _enviar(app_client, admin_token, sc)
     nuevo = _enviar(app_client, admin_token, sc)
     assert _confirmar(app_client, nuevo).status_code == 200
     d = _detalle(_ver(app_client, viejo), "confirmada")
+    assert [l["descripcion"] for l in d["documento"]["lineas"]] == ["Rodillo"]
+    assert d["documento"] == _detalle(_ver(app_client, nuevo), "confirmada")["documento"]
+
+
+def _ficha(db, nombre, apellido, direccion):
+    from app.models.customers import Customer
+    ficha = Customer(first_name=nombre, last_name=apellido, address=direccion, phone="3005550000",
+                     email=f"t5r1-{uuid.uuid4().hex[:8]}@test.nebulae")
+    db.add(ficha); db.commit(); db.refresh(ficha)
+    return ficha
+
+
+def _cambiar_cliente(app_client, admin_token, sc, ficha_b):
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}",
+                            json={"customer_id": ficha_b.id, "customer_name": NOMBRE_B, "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    return resp.json()["data"]
+
+
+def test_cambio_de_cliente_despues_de_confirmar_no_muestra_al_cliente_nuevo(app_client, db, admin_token, user_admin,
+                                                                          monkeypatch):
+    """r1, P4 camino A: A confirma con su enlace L1; la SC tiene una COT activa y el asesor le cambia el cliente a B (la
+    SC sigue CONFIRMADA). L1 dice 'confirmada', pero solo con el número: nunca el nombre ni la dirección de B."""
+    from app.models.erp_documents import SalesQuotation
+    _sin_correo(monkeypatch)
+    ficha_a = _ficha(db, "Ana", "Pérez", "Calle Alfa 1")
+    ficha_b = _ficha(db, "Cliente Beta", "Secreto", DIRECCION_B)
+    sc = _sc(db, user_admin, customer_id=ficha_a.id, customer_address="Calle Alfa 1")
+    l1 = _enviar(app_client, admin_token, sc)
+    assert _confirmar(app_client, l1).status_code == 200
+    cot = SalesQuotation(numero=f"COT-T5P{_sufijo()}", sc_id=sc.id, sc_numero=sc.numero, customer_name="Ana Pérez",
+                         estado="BORRADOR", productos=[{"product_name": "Rodillo", "qty": 6, "unit_price_cop": 1000}])
+    db.add(cot); db.commit()
+    data = _cambiar_cliente(app_client, admin_token, sc, ficha_b)
+    assert data["estado"] == "CONFIRMADA" and data["customer_address"] == DIRECCION_B
+
+    resp = _ver(app_client, l1)
+    d = _detalle(resp, "confirmada")
     assert d["documento"] == {"numero": sc.numero}
-    assert d["documento"] != _detalle(_ver(app_client, nuevo), "confirmada")["documento"]
+    assert NOMBRE_B not in resp.text and DIRECCION_B not in resp.text
+
+
+def test_cambio_de_cliente_y_confirmacion_por_la_cotizacion_no_muestra_al_cliente_nuevo(app_client, db, admin_token,
+                                                                                      user_admin, monkeypatch):
+    """r1, P4 camino B: L1 se envía a A con la SC pendiente; el asesor cambia el cliente a B (L1 queda REVOCADO); B
+    aprueba su COT y la sincronización confirma la SC. L1, que sigue siendo el último enlace de la SC, no muestra a B."""
+    from app.api.v1.erp_ventas import _sincronizar_estado_solicitud_desde_cotizacion
+    from app.models.erp_documents import SalesQuotation
+    _sin_correo(monkeypatch)
+    ficha_a = _ficha(db, "Ana", "Pérez", "Calle Alfa 1")
+    ficha_b = _ficha(db, "Cliente Beta", "Secreto", DIRECCION_B)
+    sc = _sc(db, user_admin, customer_id=ficha_a.id, customer_address="Calle Alfa 1")
+    l1 = _enviar(app_client, admin_token, sc)
+    data = _cambiar_cliente(app_client, admin_token, sc, ficha_b)
+    assert data["estado"] == "ASIGNADA"
+    assert _fila(db, l1)["resultado"] == "REVOCADO"
+    cot = SalesQuotation(numero=f"COT-T5P{_sufijo()}", sc_id=sc.id, sc_numero=sc.numero, customer_id=ficha_b.id,
+                         customer_name=NOMBRE_B, estado="CONFIRMADA",
+                         productos=[{"product_name": "Rodillo", "qty": 6, "unit_price_cop": 1000}])
+    db.add(cot); db.commit(); db.refresh(cot)
+    _sincronizar_estado_solicitud_desde_cotizacion(cot, db)
+    db.refresh(sc)
+    assert sc.estado == "CONFIRMADA"
+
+    resp = _ver(app_client, l1)
+    d = _detalle(resp, "confirmada")
+    assert d["documento"] == {"numero": sc.numero}
+    assert NOMBRE_B not in resp.text and DIRECCION_B not in resp.text
+
+
+def test_confirmacion_anulada_sin_cambio_de_cliente_no_muestra_el_resumen(app_client, db, admin_token, user_admin,
+                                                                          monkeypatch):
+    """r1 (P4): para el enlace que confirmó, el resumen exige que esa confirmación siga vigente (gate1_confirmed_at). Con
+    una COT activa, cambiar los productos deja la SC CONFIRMADA pero N7 limpia la marca: el enlace ya no muestra un
+    resumen que no es lo que el cliente confirmó (aquí no cambió ningún dato del cliente)."""
+    from app.models.erp_documents import SalesQuotation
+    _sin_correo(monkeypatch)
+    sc = _sc(db, user_admin)
+    raw = _enviar(app_client, admin_token, sc)
+    assert _confirmar(app_client, raw).status_code == 200
+    cot = SalesQuotation(numero=f"COT-T5P{_sufijo()}", sc_id=sc.id, sc_numero=sc.numero, customer_name="Ana Pérez",
+                         estado="BORRADOR", productos=[{"product_name": "Rodillo", "qty": 6, "unit_price_cop": 1000}])
+    db.add(cot); db.commit()
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}",
+                            json={"productos": [{"product_name": "Rodillo", "qty": 9}], "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    db.refresh(sc)
+    assert sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is None
+    d = _detalle(_ver(app_client, raw), "confirmada")
+    assert d["documento"] == {"numero": sc.numero}
+
+
+def test_sc_en_estado_heredado_sin_fecha_dice_confirmada_sin_resumen(app_client, db, user_admin):
+    """r1 (C4): una SC en un estado heredado de U15 (COTIZADA) con su enlace usado sin resultado y sin renglón
+    CONFIRMADA en la Actividad: 'confirmada', sin fecha y solo con el número (sin la fecha no se sabe si van 30 días)."""
+    from app.core.confirmation_tokens import create_confirmation_token, reclamar_token
+    sc = _sc(db, user_admin, estado="COTIZADA")
+    raw = create_confirmation_token(db, "SC", sc.id)
+    assert reclamar_token(db, raw) is not None
+    d = _detalle(_ver(app_client, raw), "confirmada")
+    assert d["documento"] == {"numero": sc.numero}
+    assert d["confirmada_el"] is None
+    assert len(d["siguiente_paso"]) == 3
+
+
+def test_respuesta_minima_si_falla_el_documento_despues_de_confirmar(app_client, db, admin_token, user_admin,
+                                                                     monkeypatch):
+    """r1 (P3): la confirmación ya quedó guardada; si armar el documento de la respuesta falla, el cliente recibe el 200
+    mínimo (sin data.documento) y no un 500."""
+    import app.api.v1.confirmacion_publica as cp
+    _sin_correo(monkeypatch)
+    _empresa(app_client, admin_token)
+    sc = _sc(db, user_admin)
+    raw = _enviar(app_client, admin_token, sc)
+
+    def falla(*args, **kwargs):
+        raise RuntimeError("dato viejo malformado")
+
+    monkeypatch.setattr(cp, "documento_sc", falla)
+    with registro_capturado("app.api.v1.confirmacion_publica") as errores:
+        resp = _confirmar(app_client, raw)
+    assert resp.status_code == 200, resp.text
+    assert [e.levelname for e in errores] == ["ERROR"] and sc.numero in errores[0].getMessage()
+    j = resp.json()
+    assert set(j) == CLAVES_200_MINIMO
+    assert j["estado_enlace"] == "confirmada" and j["confirmada_el"].endswith("Z")
+    assert j["empresa"]["nombre_comercial"] == EMPRESA
+    db.refresh(sc)
+    assert sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is not None
+    assert _fila(db, raw)["resultado"] == "CONFIRMADO"
+
+
+def test_ultimo_dia_del_enlace_en_colombia():
+    """r1 (C5): el día de «venció el …»: el último en que sirvió, en hora de Colombia."""
+    from app.core.documento_cliente import _ultimo_dia_del_enlace
+    from app.core.fechas import vence_al_final_del_dia
+    assert _ultimo_dia_del_enlace(vence_al_final_del_dia(datetime.date(2026, 10, 8))) == "8 de octubre de 2026"
+    # 03:00 UTC del 9 = 22:00 del 8 en Colombia (el enlace de 2 días de una SC).
+    assert _ultimo_dia_del_enlace(datetime.datetime(2026, 10, 9, 3, 0)) == "8 de octubre de 2026"
+    assert _ultimo_dia_del_enlace(datetime.datetime(2026, 10, 9, 15, 0)) == "9 de octubre de 2026"
 
 
 def test_cot_pendiente_sigue_respondiendo_igual(app_client, db, admin_token):
@@ -374,6 +531,7 @@ def test_cot_pendiente_sigue_respondiendo_igual(app_client, db, admin_token):
     resp = _ver(app_client, raw)
     assert resp.status_code == 200, resp.text
     j = resp.json()
+    assert set(j) == CLAVES_200_VER and set(j["data"]) == CLAVES_DATA_COT  # r1 (C6)
     assert j["estado_enlace"] == "pendiente" and j["vence_at"].endswith("Z")
     assert j["empresa"]["nombre_comercial"] == EMPRESA  # C26
     data = j["data"]

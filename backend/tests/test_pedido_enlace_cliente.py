@@ -31,7 +31,7 @@ PRODUCTOS = [{"product_name": "Sofá", "qty": 2, "unit_price_cop": 400000, "tota
               "margen_pct": 30, "sku_id": 7},
              {"product_name": "Mesa", "qty": 1, "unit_price_cop": 200000, "total_cop": 200000}]
 CLAVES_DETALLE = {"mensaje", "estado_enlace", "empresa", "documento", "confirmada_el", "siguiente_paso", "comentario"}
-NOTA_CANCELADOS = {"titulo": "Productos cancelados", "texto": "Se cancelaron productos; los totales ya lo reflejan."}
+TITULO_CANCELADOS = "Productos cancelados"
 
 
 def auth(token):
@@ -59,7 +59,28 @@ def _enlace(db, so_id):
         hoy_colombia() + datetime.timedelta(days=30)))
 
 
-def _pedido(db, pagado=600000, **campos):
+def _nota_cancelados(doc):
+    """La nota de los productos cancelados del documento (hueco 3), o None."""
+    return next((n for n in doc["notas"] if n["titulo"] == TITULO_CANCELADOS), None)
+
+
+def _espiar_revocaciones_pven(monkeypatch):
+    """r1 (C3): el commit con que se revocan los enlaces PVEN (update_pedido y fase4 importan revoke_pending_tokens al
+    llamarlo, así que ven este espía)."""
+    import app.core.confirmation_tokens as ct
+    llamadas = []
+    real = ct.revoke_pending_tokens
+
+    def espia(db, tipo, doc_id, *args, **kwargs):
+        if tipo == "PVEN":
+            llamadas.append(kwargs.get("commit", True))
+        return real(db, tipo, doc_id, *args, **kwargs)
+
+    monkeypatch.setattr(ct, "revoke_pending_tokens", espia)
+    return llamadas
+
+
+def _pedido(db, pagado=600000, cot_notas=None, **campos):
     """SC 60/40 -> COT CONFIRMADA -> PVEN PENDIENTE_COMPRA de $1.000.000 con un anticipo verificado de `pagado`
     (Transferencia bancaria, ref 'BANCOL-123', verificado por 'verificador@x'). Devuelve (so, cot, token crudo)."""
     from app.models.erp_documents import CustomerRequest, SaleOrder, SalesQuotation
@@ -70,7 +91,7 @@ def _pedido(db, pagado=600000, **campos):
     db.add(sc); db.commit(); db.refresh(sc)
     cot = SalesQuotation(numero=f"COT-T5V{s}", sc_id=sc.id, sc_numero=sc.numero, estado="CONFIRMADA",
                          productos=[dict(p) for p in PRODUCTOS], subtotal_cop=1000000, total_cop=1000000,
-                         anticipo_cop=600000, cotizador="cotizador@nebulae.com", **datos)
+                         anticipo_cop=600000, cotizador="cotizador@nebulae.com", notas=cot_notas, **datos)
     db.add(cot); db.commit(); db.refresh(cot)
     campos.setdefault("estado", "PENDIENTE_COMPRA")
     so = SaleOrder(numero=f"PVEN-T5V{s}", sc_id=sc.id, sc_numero=sc.numero, cot_id=cot.id, cot_numero=cot.numero,
@@ -122,7 +143,7 @@ def test_ver_pedido_muestra_lo_pagado_y_el_saldo_sin_datos_internos(app_client, 
                                                    "instrucciones_pago": "Davivienda corriente 456"},
                           headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
-    so, cot, raw = _pedido(db, notas="Entregar en la portería")
+    so, cot, raw = _pedido(db, notas="Entregar en la portería", cot_notas="Precios válidos 5 días")
 
     resp = _ver(app_client, raw)
     assert resp.status_code == 200, resp.text
@@ -146,10 +167,12 @@ def test_ver_pedido_muestra_lo_pagado_y_el_saldo_sin_datos_internos(app_client, 
     assert [l["anticipo"] for l in doc["lineas"]] == [None, None]  # C3: el anticipo por línea solo en la COT
     assert doc["cliente"] == {"nombre": "Ana Pérez", "direccion_entrega": "Calle 10 # 5-20"}
     assert doc["atendido_por"] == ASESORA
-    assert doc["notas"] == [{"titulo": "Notas del pedido", "texto": "Entregar en la portería"}]
-    assert NOTA_CANCELADOS not in doc["notas"]
+    # r1 (P5): la nota de la COT sí; las notas del pedido (so.notas) son internas y no salen.
+    assert doc["notas"] == [{"titulo": "Notas", "texto": "Precios válidos 5 días"}]
+    assert _nota_cancelados(doc) is None
     texto = json.dumps(j, ensure_ascii=False)
     for interno in ("BANCOL-123", "verificador@x", "verificado por finanzas", CORREO, TELEFONO, "cost_usd", "margen",
+                    "Entregar en la portería",
                     "total_cost_cop", "700000", "cliente difícil", "creador@nebulae.com", "cotizador@nebulae.com"):
         assert interno not in texto, interno
     claves = set(_todas_las_claves(j))
@@ -167,7 +190,8 @@ def test_ver_no_gasta_el_enlace(app_client, db):
 def test_token_de_pedido_no_confirma_ni_se_gasta(app_client, db):
     """La prueba 6 de U23 en lo que ya existe (/confirmar/ver y /confirmar/confirmar); /confirmar/pedir-cambios es de T6."""
     so, _, raw = _pedido(db)
-    assert app_client.post("/api/v1/confirmar/ver", json={"token": raw}).status_code == 400
+    resp = app_client.post("/api/v1/confirmar/ver", json={"token": raw})
+    assert resp.status_code == 400 and resp.json()["detail"]["estado_enlace"] == "invalido"
     resp = app_client.post("/api/v1/confirmar/confirmar", json={"token": raw},
                            headers={"Idempotency-Key": f"t5v-{uuid.uuid4().hex[:8]}"})
     assert resp.status_code == 400 and resp.json()["detail"]["estado_enlace"] == "invalido"
@@ -221,25 +245,59 @@ def test_pago_trasladado_se_ve_como_saldo_a_favor(app_client, db):
 
 # ─── Hueco 2 y la prueba 5 de U23 (pedido cancelado) ─────────────────────────────────────────────────────────
 
-def test_cancelar_el_pedido_por_la_pantalla_revoca_su_enlace(app_client, db, admin_token):
+def test_cancelar_el_pedido_por_la_pantalla_revoca_su_enlace(app_client, db, admin_token, monkeypatch):
     so, _, raw = _pedido(db)
+    revocaciones = _espiar_revocaciones_pven(monkeypatch)
     resp = app_client.patch(f"/api/v1/ventas/pedidos/{so.id}",
                             json={"estado": "CANCELADO", "cancellation_reason": "El cliente desistió",
                                   "updated_by": "t"}, headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     fila = _fila(db, raw)
     assert fila["used_at"] is not None and fila["resultado"] == "REVOCADO"
+    assert revocaciones == [False]  # en el commit que cancela
     _generico(_ver(app_client, raw))
 
 
-def test_cancelar_el_pedido_por_fase4_revoca_su_enlace(app_client, db, admin_token):
+def test_cancelar_el_pedido_por_fase4_revoca_su_enlace(app_client, db, admin_token, monkeypatch):
     so, _, raw = _pedido(db)
+    revocaciones = _espiar_revocaciones_pven(monkeypatch)
     resp = app_client.post(f"/api/v1/ventas/pedidos/{so.id}/cancelar", json={"motivo": "El cliente desistió"},
                            headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     fila = _fila(db, raw)
     assert fila["used_at"] is not None and fila["resultado"] == "REVOCADO"
+    assert revocaciones == [False]
     _generico(_ver(app_client, raw))
+
+
+def test_cambio_de_cliente_del_pedido_revoca_su_enlace(app_client, db, admin_token, monkeypatch):
+    """r1 (P1): si el pedido cambia de cliente (nombre, dirección o contacto), su enlace de consulta deja de abrir en el
+    mismo commit: quien tenga el anterior nunca ve los datos del cliente nuevo. Un PATCH que no toca al cliente no lo
+    revoca."""
+    so, _, raw = _pedido(db)
+    revocaciones = _espiar_revocaciones_pven(monkeypatch)
+    resp = app_client.patch(f"/api/v1/ventas/pedidos/{so.id}", json={"notas": "Llamar antes", "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert _fila(db, raw)["used_at"] is None and revocaciones == []
+
+    resp = app_client.patch(f"/api/v1/ventas/pedidos/{so.id}",
+                            json={"customer_name": "Cliente Delta Privado", "direccion_entrega": "Calle Delta 4",
+                                  "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    fila = _fila(db, raw)
+    assert fila["used_at"] is not None and fila["resultado"] == "REVOCADO"
+    assert revocaciones == [False]
+    resp = _ver(app_client, raw)
+    _generico(resp)
+    assert "Delta" not in resp.text
+
+    # Solo el correo también es otro cliente para el enlace.
+    so, _, raw = _pedido(db)
+    resp = app_client.patch(f"/api/v1/ventas/pedidos/{so.id}", json={"customer_email": "otra@cliente.com",
+                                                                     "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert _fila(db, raw)["resultado"] == "REVOCADO"
 
 
 def test_pedido_cancelado_con_el_enlace_vivo_da_el_generico(app_client, db):
@@ -312,7 +370,7 @@ def test_lineas_canceladas_con_iva_salen_del_json_y_los_totales_de_la_cabecera(a
                  {"product_name": "Pintura", "qty": 4, "unit_price_cop": 117000, "iva_tarifa": "19"},
                  {"product_name": "Cinta", "qty": 10, "unit_price_cop": 13200, "iva_tarifa": "5"}]
     so = _convertido(app_client, db, admin_token, productos, descuento=10)
-    assert NOTA_CANCELADOS not in documento_pven(db, so)["notas"]
+    assert _nota_cancelados(documento_pven(db, so)) is None
     _cancelar_linea(app_client, db, admin_token, so, "Cinta")
     assert (so.total_cop, so.tax_cop, so.subtotal_cop) == (1829926, 292173, 1708614)
 
@@ -322,7 +380,8 @@ def test_lineas_canceladas_con_iva_salen_del_json_y_los_totales_de_la_cabecera(a
     assert doc["totales"] == {"subtotal": 1708614, "descuento_pct": 10, "descuento": 170861,
                               "impuestos": [{"etiqueta": "IVA 19%", "base": 1537753, "valor": 292173}],
                               "ajuste_redondeo": None, "total": 1829926}
-    assert NOTA_CANCELADOS in doc["notas"]
+    nota = _nota_cancelados(doc)["texto"]
+    assert nota.startswith("Se cancelaron productos; los totales ya lo reflejan.") and "10 unidades de Cinta" in nota
     assert doc["pago"]["saldo"] == 1829926 and doc["pago"]["anticipo"] == 0  # a crédito
 
 
@@ -341,4 +400,19 @@ def test_lineas_canceladas_sin_iva_siguen_en_el_json_y_no_son_un_ajuste(app_clie
         ("Silla", 2, 2000), ("Lámpara", 1, 3000)]
     t = doc["totales"]
     assert (t["subtotal"], t["descuento"], t["impuestos"], t["ajuste_redondeo"], t["total"]) == (2000, 0, [], 0, 2000)
-    assert NOTA_CANCELADOS in doc["notas"]
+    # r1 (C7): la línea sigue a la vista con su cantidad completa, así que la nota dice cuál se canceló.
+    assert _nota_cancelados(doc) == {"titulo": TITULO_CANCELADOS, "texto": (
+        "Se cancelaron productos; los totales ya lo reflejan. Cancelado: 1 unidad de Lámpara.")}
+
+
+def test_cancelar_todas_las_lineas_revoca_el_enlace(app_client, db, admin_token):
+    """r1 (C2): cancelar la única línea deja el pedido CANCELADO (recalculate_sale_order_state) y revoca su enlace en el
+    mismo commit, igual que las otras dos formas de cancelarlo."""
+    productos = [{"product_name": "Silla", "qty": 2, "unit_price_cop": 1000, "total_cop": 2000}]
+    so = _convertido(app_client, db, admin_token, productos, subtotal=2000, total=2000)
+    raw = _enlace(db, so.id)
+    _cancelar_linea(app_client, db, admin_token, so, "Silla")
+    assert so.estado == "CANCELADO"
+    fila = _fila(db, raw)
+    assert fila["used_at"] is not None and fila["resultado"] == "REVOCADO"
+    _generico(_ver(app_client, raw))

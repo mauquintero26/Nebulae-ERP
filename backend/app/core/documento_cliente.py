@@ -26,7 +26,7 @@ importables sin base (T13 compara etiqueta_modalidad con etiquetaModalidad, RP21
 import logging
 import re
 from datetime import date, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy.orm import Session
 
@@ -36,8 +36,9 @@ from app.core.iva import desglose_documento, etiqueta_tarifa_iva, pct_tarifa_iva
 from app.core.textos_actividad import ESTADOS_SC_HEREDADOS, TIPOS_PAGO
 from app.core.ventas_dinero import (METODO_PAGO_SIN_VERIFICAR, METODO_PAGO_TRASLADO, ORIGEN_MANUAL,
                                     PCT_ANTICIPO_POR_DEFECTO, TIPOS_PAGO_INGRESO, _sin_tildes, anticipo_cotizacion,
-                                    anticipo_del_pedido, formato_pct, monto_linea, pct_anticipo_de_modalidad,
-                                    redondear_peso, repartir_anticipo_por_linea, saldos_a_favor_de_cotizacion)
+                                    formato_pct, monto_linea, pct_anticipo_de_modalidad, redondear_peso,
+                                    repartir_anticipo_por_linea, resumen_anticipo_cotizacion,
+                                    resumen_anticipo_del_pedido, unidades)
 
 logger = logging.getLogger(__name__)
 
@@ -264,10 +265,10 @@ _CON_TILDE = {"e": "é", "E": "É", "i": "í", "I": "Í"}
 
 TITULO_NOTA_CLIENTE = "Nota para el cliente"
 TITULO_NOTAS_COT = "Notas"
-TITULO_NOTAS_PEDIDO = "Notas del pedido"
-# Hueco 3: el pedido tiene unidades canceladas (SaleOrderLineErp.quantity_cancelled) y sus totales ya las descuentan.
-NOTA_PRODUCTOS_CANCELADOS = {"titulo": "Productos cancelados",
-                             "texto": "Se cancelaron productos; los totales ya lo reflejan."}
+# Hueco 3: el pedido tiene unidades canceladas (SaleOrderLineErp.quantity_cancelled) y sus totales ya las descuentan. r1
+# (C7): la nota nombra los productos y las unidades canceladas (en un pedido sin tarifas la linea sigue a la vista).
+TITULO_PRODUCTOS_CANCELADOS = "Productos cancelados"
+TEXTO_PRODUCTOS_CANCELADOS = "Se cancelaron productos; los totales ya lo reflejan."
 # Conceptos de pago que dependen del método (RP3: los demás salen de textos_actividad.TIPOS_PAGO).
 CONCEPTO_TRASLADO = "Saldo a favor de tu pedido anterior"
 CONCEPTO_SIN_VERIFICAR = "Anticipo registrado"
@@ -324,10 +325,11 @@ def siguiente_paso_sc(sc, forma_pago) -> list:
             f"Cuando la apruebes, hacemos tu pedido{anticipo}."]
 
 
-def notas_para_cliente(sc, cot=None, so=None) -> list:
+def notas_para_cliente(sc, cot=None) -> list:
     """Las notas que ve el cliente (R3, C19), sin las vacías: la «Nota para el cliente» de la SC (sc.nota_cliente; sus
-    Notas, sc.notas, son internas y NUNCA salen), las «Notas» de la COT y, en el pedido, las «Notas del pedido» solo si
-    difieren de las de la COT (H35)."""
+    Notas, sc.notas, son internas y NUNCA salen) y las «Notas» de la COT, las dos con el aviso «El cliente verá esta
+    nota» en las pantallas internas. r1 (P5): las notas del pedido (so.notas) tampoco salen: su pantalla no tiene ese
+    aviso y el usuario solo aprobó estas dos (mostrarlas queda como decisión del usuario para el informe del B3)."""
     notas = []
 
     def agregar(titulo, texto):
@@ -339,8 +341,6 @@ def notas_para_cliente(sc, cot=None, so=None) -> list:
         agregar(TITULO_NOTA_CLIENTE, sc.nota_cliente)
     if cot is not None:
         agregar(TITULO_NOTAS_COT, cot.notas)
-    if so is not None and _texto(so.notas) != _texto(cot.notas if cot is not None else None):
-        agregar(TITULO_NOTAS_PEDIDO, so.notas)
     return notas
 
 
@@ -428,10 +428,6 @@ def _totales_del_documento(doc, lineas: list, desglose: dict, sumar_lineas: bool
     return dict(totales, subtotal=subtotal, impuestos=impuestos, ajuste_redondeo=ajuste)
 
 
-def _pct_dos_decimales(pct) -> Decimal:
-    return Decimal(str(pct)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-
 def _cargar(db: Session, modelo, doc_id):
     return db.query(modelo).filter(modelo.id == doc_id).first() if doc_id else None
 
@@ -470,17 +466,14 @@ def documento_cot(db: Session, cot, token_row=None) -> dict:
     sc = _cargar(db, CustomerRequest, cot.sc_id)
     productos = _lineas_visibles(cot.productos)
     desglose = desglose_documento(cot)
-    anticipo = anticipo_cotizacion(cot, db, sc=sc)
-    total = _pesos_enteros(cot.total_cop)
-    requerido = int(anticipo.requerido)
-    saldo_a_favor = int(sum((s["monto"] for s in saldos_a_favor_de_cotizacion(db, cot.id)), Decimal("0")))
-    por_linea = repartir_anticipo_por_linea([monto_linea(p) for p in productos], requerido)
+    # r1 (C8): la misma cuenta que la pantalla del asesor (get_cotizacion): una sola fuente.
+    anticipo = resumen_anticipo_cotizacion(cot, db, sc=sc)
+    por_linea = repartir_anticipo_por_linea([monto_linea(p) for p in productos], anticipo.requerido)
     lineas = [linea_publica(p, True, iva=_iva_de_linea(p, desglose), anticipo=parte)
               for p, parte in zip(productos, por_linea)]
-    pago = {"modalidad": anticipo.modalidad, "anticipo_pct": _pct_dos_decimales(anticipo.pct), "anticipo": requerido,
-            "saldo": total - requerido, "saldo_a_favor": saldo_a_favor,
-            "anticipo_por_pagar": max(0, requerido - min(saldo_a_favor, total)),
-            "manual": anticipo.origen == ORIGEN_MANUAL}
+    pago = {"modalidad": anticipo.modalidad, "anticipo_pct": anticipo.pct_mostrar, "anticipo": anticipo.requerido,
+            "saldo": _pesos_enteros(cot.total_cop) - int(anticipo.requerido), "saldo_a_favor": anticipo.saldo_a_favor,
+            "anticipo_por_pagar": anticipo.por_pagar, "manual": anticipo.manual}
     return armar_documento(
         db, "COT", numero=cot.numero, fecha_emision=_creado(token_row) or cot.fecha_cotizacion or cot.created_at,
         cliente_nombre=cot.customer_name, lineas=lineas, con_precios=True,
@@ -490,41 +483,56 @@ def documento_cot(db: Session, cot, token_row=None) -> dict:
         estado=cot.estado, valida_hasta=cot.valida_hasta)
 
 
-def _tiene_unidades_canceladas(db: Session, so_id) -> bool:
+def _unir(partes: list) -> str:
+    """'a', 'a y b', 'a, b y c'."""
+    return partes[0] if len(partes) == 1 else f"{', '.join(partes[:-1])} y {partes[-1]}"
+
+
+def _nota_de_cancelaciones(db: Session, so_id):
+    """La nota de los productos cancelados del pedido (hueco 3, r1 C7), o None si no hay unidades canceladas. Sale de
+    SaleOrderLineErp.quantity_cancelled (nota del controlador después de T4: en un pedido sin tarifas la línea cancelada
+    sigue en el JSON con su cantidad completa) y nombra cada producto con sus unidades: «Se cancelaron productos; los
+    totales ya lo reflejan. Cancelado: 1 unidad de Lámpara y 2 unidades de Silla.»."""
     from app.models.fase1b import SaleOrderLineErp
-    return (db.query(SaleOrderLineErp.id)
-            .filter(SaleOrderLineErp.so_id == so_id, SaleOrderLineErp.quantity_cancelled > 0).first() is not None)
+    canceladas = (db.query(SaleOrderLineErp.description, SaleOrderLineErp.quantity_cancelled)
+                  .filter(SaleOrderLineErp.so_id == so_id, SaleOrderLineErp.quantity_cancelled > 0)
+                  .order_by(SaleOrderLineErp.id.asc()).all())
+    if not canceladas:
+        return None
+    partes = [f"{unidades(cantidad)} de {_texto(descripcion) or 'Producto'}" for descripcion, cantidad in canceladas]
+    return {"titulo": TITULO_PRODUCTOS_CANCELADOS,
+            "texto": f"{TEXTO_PRODUCTOS_CANCELADOS} Cancelado: {_unir(partes)}."}
 
 
 def documento_pven(db: Session, so) -> dict:
     """El pedido que ve el cliente por su enlace de consulta (U23 con C2/R24). Lee la SC y la COT una vez cada una.
     - lineas: las del JSON del pedido (hueco 3), con precio, total sin IVA y su IVA; sin anticipo por línea (C3).
     - totales: los de la cabecera y desglose_documento (C2). Con unidades canceladas (SaleOrderLineErp) el subtotal
-      también es el de la cabecera, la diferencia con el JSON no es un ajuste por redondeo y va la nota
-      NOTA_PRODUCTOS_CANCELADOS.
-    - pago: anticipo (requerido) y anticipo_por_pagar (pendiente) de anticipo_del_pedido (R4), pagado = total − saldo
-      (la cuenta de get_pedido), saldo, la modalidad de la SC con el % del pedido y pagos (pagos_para_cliente).
-    - notas: la «Nota para el cliente», las «Notas» de la COT y las del pedido si difieren (R3, H35)."""
+      también es el de la cabecera, la diferencia con el JSON no es un ajuste por redondeo y va la nota que nombra lo
+      cancelado (_nota_de_cancelaciones).
+    - pago: el %, el anticipo (requerido), lo pagado (total − saldo) y lo que falta del anticipo (pendiente) de
+      resumen_anticipo_del_pedido, la misma cuenta de get_pedido (R4, r1 C8); saldo, la modalidad de la SC y pagos
+      (pagos_para_cliente). manual = el origen del anticipo de su COT es el manual (anticipo_cotizacion, R3).
+    - notas: la «Nota para el cliente» de la SC y las «Notas» de la COT (R3); las del pedido no (r1, P5)."""
     from app.models.erp_documents import CustomerRequest, SalesQuotation
     sc = _cargar(db, CustomerRequest, so.sc_id)
     cot = _cargar(db, SalesQuotation, so.cot_id)
     productos = _lineas_visibles(so.productos)
     desglose = desglose_documento(so)
-    canceladas = _tiene_unidades_canceladas(db, so.id)
+    nota_cancelaciones = _nota_de_cancelaciones(db, so.id)
     lineas = [linea_publica(p, True, iva=_iva_de_linea(p, desglose)) for p in productos]
-    requerido, pendiente = anticipo_del_pedido(so)
-    pct = so.anticipo_pct_snapshot if so.anticipo_pct_snapshot is not None else PCT_ANTICIPO_POR_DEFECTO
-    pago = {"modalidad": sc.modalidad_pago if sc is not None else None, "anticipo_pct": pct, "anticipo": requerido,
-            "saldo": so.saldo_cop, "saldo_a_favor": None, "anticipo_por_pagar": pendiente,
-            "pagado": redondear_peso(Decimal(str(so.total_cop or 0)) - Decimal(str(so.saldo_cop or 0))),
-            "pagos": pagos_para_cliente(db, so),
-            "manual": cot is not None and cot.anticipo_pct_manual is not None}
-    notas = notas_para_cliente(sc, cot, so) + ([dict(NOTA_PRODUCTOS_CANCELADOS)] if canceladas else [])
+    anticipo = resumen_anticipo_del_pedido(so)
+    pago = {"modalidad": sc.modalidad_pago if sc is not None else None, "anticipo_pct": anticipo.pct,
+            "anticipo": anticipo.requerido, "saldo": so.saldo_cop, "saldo_a_favor": None,
+            "anticipo_por_pagar": anticipo.pendiente, "pagado": anticipo.pagado, "pagos": pagos_para_cliente(db, so),
+            "manual": cot is not None and anticipo_cotizacion(cot, db, sc=sc).origen == ORIGEN_MANUAL}
+    notas = notas_para_cliente(sc, cot) + ([nota_cancelaciones] if nota_cancelaciones else [])
     return armar_documento(
         db, "PVEN", numero=so.numero, fecha_emision=so.created_at, cliente_nombre=so.customer_name, lineas=lineas,
         con_precios=True, direccion_entrega=so.direccion_entrega or so.customer_address,
         fecha_entrega_estimada=so.fecha_entrega_estimada,
-        totales=_totales_del_documento(so, lineas, desglose, sumar_lineas=not canceladas), pago=pago, notas=notas,
+        totales=_totales_del_documento(so, lineas, desglose, sumar_lineas=nota_cancelaciones is None), pago=pago,
+        notas=notas,
         atendido_por=sc.advisor_name if sc is not None else None, estado=so.estado)
 
 
@@ -562,12 +570,29 @@ def _ultima_confirmacion_en_actividad(db: Session, tipo: str, doc_id: int):
     return fila[0] if fila else None
 
 
-def _es_el_ultimo_enlace(db: Session, tipo: str, doc_id: int, token_id: int) -> bool:
-    from app.models.confirmation import DocumentConfirmationToken
-    ultimo = (db.query(DocumentConfirmationToken.id)
-              .filter(DocumentConfirmationToken.document_type == tipo, DocumentConfirmationToken.document_id == doc_id)
-              .order_by(DocumentConfirmationToken.created_at.desc(), DocumentConfirmationToken.id.desc()).first())
-    return ultimo is not None and ultimo[0] == token_id
+def _cambio_el_cliente_despues(db: Session, sc_id: int, desde) -> bool:
+    """r1 (P4): la SC cambió de cliente (su nombre, dirección, correo o teléfono) después de `desde` (cuando se creó el
+    enlace). Lo dice su Actividad: los dos caminos que cambian esos datos (PATCH /solicitudes/{id}, también al cambiar
+    la ficha, B7, y PATCH /solicitudes/{id}/cliente) dejan un renglón con esos campos en extra_data.cambios
+    (cambios_documento.CAMPOS_CLIENTE). Es el dato más directo: el enlace no guarda a qué cliente se envió, y los
+    renglones de aviso (_AVISO_CAMBIO_DE_CLIENTE y los de contacto) solo salen en algunos estados de la SC."""
+    from app.core.cambios_documento import CAMPOS_CLIENTE
+    from app.models.erp_documents import ActivityLog
+    filas = (db.query(ActivityLog.extra_data)
+             .filter(ActivityLog.entity_type == "SC", ActivityLog.entity_id == sc_id, ActivityLog.created_at > desde)
+             .all())
+    for (extra,) in filas:
+        cambios = extra.get("cambios") if isinstance(extra, dict) else None
+        if any(isinstance(c, dict) and c.get("campo") in CAMPOS_CLIENTE for c in (cambios or [])):
+            return True
+    return False
+
+
+def _ultimo_dia_del_enlace(expires_at) -> str:
+    """El último día en que sirvió el enlace, en Colombia ('8 de octubre de 2026'), para «venció el …». expires_at es
+    el instante en que dejó de servir (para la COT y el PVEN, las 00:00 del día siguiente en Colombia): el día es el
+    de un instante antes."""
+    return fecha_larga(expires_at - timedelta(microseconds=1))
 
 
 def _asesor_del_documento(db: Session, doc, tipo: str) -> str:
@@ -580,10 +605,11 @@ def _asesor_del_documento(db: Session, doc, tipo: str) -> str:
 
 def _confirmada(db: Session, info: dict, doc, tipo: str, nombre: str) -> dict:
     """Regla d. confirmada_el = cuando se usó ESTE enlace si con él se confirmó; si no, el último renglón CONFIRMADA de
-    la Actividad. La COT solo lleva su número (C10: sin líneas ni precios). La SC lleva el resumen (documento_sc) y
-    '¿Qué sigue?' durante DIAS_RESUMEN_CONFIRMADO días, y el resumen solo para el enlace que la confirmó o el último que
-    se envió: uno viejo, reemplazado por otro, no muestra datos que pudieron cambiar (cliente o dirección) entre los dos
-    envíos."""
+    la Actividad. La COT solo lleva su número (C10: sin líneas ni precios). La SC lleva '¿Qué sigue?' y, durante
+    DIAS_RESUMEN_CONFIRMADO días, el resumen (documento_sc), salvo que ya no sea de quien recibió el enlace (r1, P4):
+    - si la SC cambió de cliente después de crearse ESTE enlace (_cambio_el_cliente_despues), solo {numero};
+    - si con este enlace se confirmó, además exige gate1_confirmed_at: N7 la limpia al cambiar el cliente o los
+      productos (update_solicitud y PATCH /cliente), así que sin ella esa confirmación ya no es la vigente."""
     from app.core.confirmation_tokens import RESULTADO_CONFIRMADO
     confirmo_este = info["resultado"] == RESULTADO_CONFIRMADO
     confirmada_el = info["used_at"] if confirmo_este else _ultima_confirmacion_en_actividad(db, tipo, doc.id)
@@ -591,7 +617,8 @@ def _confirmada(db: Session, info: dict, doc, tipo: str, nombre: str) -> dict:
     if tipo == "SC":
         reciente = (confirmada_el is not None
                     and ahora_utc() - confirmada_el <= timedelta(days=DIAS_RESUMEN_CONFIRMADO))
-        if reciente and (confirmo_este or _es_el_ultimo_enlace(db, tipo, doc.id, info["id"])):
+        confirmacion_vigente = doc.gate1_confirmed_at is not None if confirmo_este else True
+        if reciente and confirmacion_vigente and not _cambio_el_cliente_despues(db, doc.id, info["created_at"]):
             documento = documento_sc(db, doc)
         siguiente = siguiente_paso_sc(doc, forma_de_pago(doc.modalidad_pago))
     return {"mensaje": MENSAJES_ENLACE["confirmada"].format(documento=nombre), "documento": documento,
@@ -624,11 +651,8 @@ def estado_enlace(db: Session, info, doc, tipo) -> tuple:
     if doc.estado == "CONFIRMADA" or (tipo == "SC" and doc.estado in ESTADOS_SC_HEREDADOS):
         return "confirmada", dict(extra, **_confirmada(db, info, doc, tipo, nombre))
     if info["vencido"]:
-        # expires_at es el instante en que dejó de servir (para la COT y el PVEN, las 00:00 del día siguiente en
-        # Colombia): el último día en que sirvió es el de un instante antes.
-        fecha = fecha_larga(info["expires_at"] - timedelta(microseconds=1))
-        return "vencido", dict(extra, mensaje=MENSAJES_ENLACE["vencido"].format(fecha=fecha),
-                               documento={"numero": doc.numero})
+        mensaje = MENSAJES_ENLACE["vencido"].format(fecha=_ultimo_dia_del_enlace(info["expires_at"]))
+        return "vencido", dict(extra, mensaje=mensaje, documento={"numero": doc.numero})
     if hay_enlace_mas_reciente_vigente(db, tipo, doc.id, info["created_at"]):
         return "reemplazado", dict(extra, mensaje=MENSAJES_ENLACE["reemplazado"].format(documento=nombre))
     if info["resultado"] == RESULTADO_CAMBIOS:

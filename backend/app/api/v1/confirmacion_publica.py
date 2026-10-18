@@ -38,6 +38,8 @@ router = APIRouter()
 GENERIC_ERROR = "El enlace no es válido o ya expiró."
 
 _MODELO_POR_TIPO = {"SC": CustomerRequest, "COT": SalesQuotation}
+# Las claves del detail del 400 de las paginas publicas (C10, C26): siempre todas, en None si no aplican.
+CLAVES_DETALLE = ("mensaje", "estado_enlace", "empresa", "documento", "confirmada_el", "siguiente_paso", "comentario")
 
 
 class TokenBody(BaseModel):
@@ -95,12 +97,24 @@ def _cot_confirmacion_dict(db: Session, cot, token_row=None) -> dict:
     }
 
 
-def _documento_del_enlace(db: Session, info):
-    """La SC o la COT del enlace (o None si no hay enlace o el documento ya no existe)."""
+def _detalle(db: Session, estado: str, mensaje: str, **extra) -> dict:
+    """El detail del 400 de las paginas publicas, el UNICO armado (r1, C1): CLAVES_DETALLE con la empresa (C26) y lo que
+    no se pase en None."""
+    detalle = dict.fromkeys(CLAVES_DETALLE)
+    detalle.update(extra, mensaje=mensaje, estado_enlace=estado, empresa=perfil_publico(db))
+    return detalle
+
+
+def _documento_del_enlace(db: Session, info, bloquear: bool = False):
+    """La SC o la COT del enlace (o None si no hay enlace o el documento ya no existe). bloquear=True la lee FOR UPDATE
+    (y la relee de la base)."""
     modelo = _MODELO_POR_TIPO.get(info["document_type"]) if info is not None else None
     if modelo is None:
         return None
-    return db.query(modelo).filter(modelo.id == info["document_id"]).first()
+    consulta = db.query(modelo).filter(modelo.id == info["document_id"])
+    if bloquear:
+        consulta = consulta.populate_existing().with_for_update()
+    return consulta.first()
 
 
 def _resolver_enlace(db: Session, info) -> tuple:
@@ -108,10 +122,7 @@ def _resolver_enlace(db: Session, info) -> tuple:
     esta pendiente (el detail del 400), con la empresa para que sepa a quien escribir (C26)."""
     doc = _documento_del_enlace(db, info)
     estado, extra = estado_enlace(db, info, doc, info["document_type"] if info is not None else None)
-    detalle = {"mensaje": extra["mensaje"], "estado_enlace": estado, "empresa": perfil_publico(db),
-               "documento": extra["documento"], "confirmada_el": extra["confirmada_el"],
-               "siguiente_paso": extra["siguiente_paso"], "comentario": extra["comentario"]}
-    return estado, detalle, doc
+    return estado, _detalle(db, estado, **extra), doc
 
 
 def _detalle_enlace(db: Session, info) -> dict:
@@ -119,6 +130,38 @@ def _detalle_enlace(db: Session, info) -> dict:
     enlace (info = consultar_token(...), o None): el detail del 400 de las paginas publicas (C10). Lo usa tambien
     /confirmar/pedir-cambios (T6) con un enlace que ya no esta vigente."""
     return _resolver_enlace(db, info)[1]
+
+
+def _detalle_al_confirmar(db: Session, raw: str) -> dict:
+    """El detail del 400 de /confirmar/confirmar cuando el enlace no se pudo usar. r1 (P2): primero bloquea el
+    documento (FOR UPDATE) y despues relee el enlace. Asi, en un doble clic de verdad concurrente, el segundo POST espera
+    a que termine el commit del primero (CONFIRMADA y el resultado) y muestra 'confirmada', no 'no_disponible' por haber
+    leido el documento todavia pendiente y el enlace reclamado sin resultado."""
+    info = consultar_token(db, raw)
+    if info is not None and _documento_del_enlace(db, info, bloquear=True) is not None:
+        info = consultar_token(db, raw)
+    return _detalle_enlace(db, info)
+
+
+def _respuesta_confirmada(db: Session, message: str, ahora, numero, armar) -> dict:
+    """El 200 de /confirmar/confirmar, armado DESPUES del commit que confirma. armar() devuelve {siguiente_paso, data}.
+    r1 (P3): la confirmacion ya quedo guardada, asi que si armar el documento falla (un dato viejo malformado), el
+    cliente recibe el 200 minimo (sin data ni siguiente_paso) y el error queda en el registro: nunca un 500."""
+    base = {"status": "success", "message": message, "estado_enlace": "confirmada", "mensaje": MENSAJE_GRACIAS,
+            "confirmada_el": iso_z(ahora)}
+    try:
+        return {**base, **armar(), "empresa": perfil_publico(db)}
+    except Exception:
+        logger.error("La confirmacion de %s quedo guardada, pero no se pudo armar el documento de la respuesta", numero,
+                     exc_info=True)
+        db.rollback()
+    try:
+        empresa = perfil_publico(db)
+    except Exception:
+        logger.error("Tampoco se pudo leer la empresa para la respuesta de %s", numero, exc_info=True)
+        db.rollback()
+        empresa = None
+    return {**base, "empresa": empresa}
 
 
 def _anotar_confirmado(db: Session, info: dict, numero) -> None:
@@ -154,7 +197,7 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
     # del enlace en vez de un error.
     info = reclamar_token(db, body.token)
     if info is None:
-        raise HTTPException(400, detail=_detalle_enlace(db, consultar_token(db, body.token)))
+        raise HTTPException(400, detail=_detalle_al_confirmar(db, body.token))
     document_type, document_id = info["document_type"], info["document_id"]
     if document_type == "SC":
         from app.api.v1.erp_ventas import _log
@@ -170,7 +213,7 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
             # solo uso) -- si la SC fue cancelada o movida de estado despues de enviarse
             # el link, este click no debe revivirla a CONFIRMADA. La pagina muestra el
             # estado del enlace (p. ej. 'confirmada' si se confirmo por su cotizacion).
-            raise HTTPException(400, detail=_detalle_enlace(db, consultar_token(db, body.token)))
+            raise HTTPException(400, detail=_detalle_al_confirmar(db, body.token))
         old_estado = sc.estado
         ahora = ahora_utc()
         sc.estado = "CONFIRMADA"
@@ -201,13 +244,13 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
         # B3 T1 (C12/R19): los demás enlaces pendientes de esta SC quedan revocados en el MISMO commit que la confirma.
         revoke_pending_tokens(db, "SC", sc.id, commit=False, excepto_hash=hash_token(body.token))
         # B3 T5: este enlace queda CONFIRMADO en el mismo commit (si no, la pagina no sabria que con el se confirmo).
-        _anotar_confirmado(db, info, sc.numero)
+        numero = sc.numero
+        _anotar_confirmado(db, info, numero)
         db.commit()
         # Despues del commit solo se lee: la respuesta no agrega commits.
-        return {"status": "success", "message": "Solicitud confirmada. Gracias.", "estado_enlace": "confirmada",
-                "mensaje": MENSAJE_GRACIAS, "confirmada_el": iso_z(ahora),
-                "siguiente_paso": siguiente_paso_sc(sc, forma_de_pago(sc.modalidad_pago)),
-                "empresa": perfil_publico(db), "data": _sc_confirmacion_dict(db, sc)}
+        return _respuesta_confirmada(db, "Solicitud confirmada. Gracias.", ahora, numero, lambda: {
+            "siguiente_paso": siguiente_paso_sc(sc, forma_de_pago(sc.modalidad_pago)),
+            "data": _sc_confirmacion_dict(db, sc)})
     elif document_type == "COT":
         from app.api.v1.erp_ventas import _log, _sincronizar_estado_solicitud_desde_cotizacion
         # Round 3 (adversarial review, hallazgo #2): .populate_existing().with_for_update()
@@ -223,7 +266,7 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
             # solo uso) -- si la COT fue movida de estado despues de enviarse el link (el
             # PATCH generico es la unica via real, y siempre revoca -- ver
             # update_cotizacion), este click no debe revivirla a CONFIRMADA.
-            raise HTTPException(400, detail=_detalle_enlace(db, consultar_token(db, body.token)))
+            raise HTTPException(400, detail=_detalle_al_confirmar(db, body.token))
         old_estado = cot.estado
         ahora = ahora_utc()
         cot.estado = "CONFIRMADA"
@@ -241,7 +284,8 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
         # B3 T1 (C12/R19): los demás enlaces pendientes de esta COT quedan revocados en el MISMO commit que la confirma.
         revoke_pending_tokens(db, "COT", cot.id, commit=False, excepto_hash=hash_token(body.token))
         # B3 T5: este enlace queda CONFIRMADO en el mismo commit.
-        _anotar_confirmado(db, info, cot.numero)
+        numero = cot.numero
+        _anotar_confirmado(db, info, numero)
         db.commit()
         db.refresh(cot)
         # U15: la SC ya no refleja a su COT; la sincronizacion solo la confirma si estaba
@@ -265,13 +309,12 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
              old_estado=old_estado, new_estado="CONFIRMADA", user_name="Cliente (confirmación por link)")
         # U22+H38: que sigue = el anticipo que falta pagar y los datos para pagar (R8: solo en una respuesta con token),
         # leidos del documento despues del commit (sin commits nuevos).
-        data = _cot_confirmacion_dict(db, cot, consultar_token(db, body.token))
-        pago = data["documento"]["pago"]
-        return {"status": "success", "message": "Cotización confirmada. Gracias.", "estado_enlace": "confirmada",
-                "mensaje": MENSAJE_GRACIAS, "confirmada_el": iso_z(ahora),
-                "siguiente_paso": {"anticipo_por_pagar": pago["anticipo_por_pagar"],
-                                   "instrucciones_pago": pago["instrucciones"]},
-                "empresa": perfil_publico(db), "data": data}
+        def armar():
+            data = _cot_confirmacion_dict(db, cot, consultar_token(db, body.token))
+            pago = data["documento"]["pago"]
+            return {"siguiente_paso": {"anticipo_por_pagar": pago["anticipo_por_pagar"],
+                                       "instrucciones_pago": pago["instrucciones"]}, "data": data}
+        return _respuesta_confirmada(db, "Cotización confirmada. Gracias.", ahora, numero, armar)
     raise HTTPException(400, detail=_detalle_enlace(db, None))
 
 
@@ -287,8 +330,6 @@ def ver_pedido_cliente(body: TokenBody, db: Session = Depends(get_db)):
     if info is not None and info["vigente"]:
         so = db.query(SaleOrder).filter(SaleOrder.id == info["document_id"]).first()
     if so is None or so.estado == "CANCELADO":
-        raise HTTPException(400, detail={"mensaje": GENERIC_ERROR, "estado_enlace": "invalido",
-                                         "empresa": perfil_publico(db), "documento": None, "confirmada_el": None,
-                                         "siguiente_paso": None, "comentario": None})
+        raise HTTPException(400, detail=_detalle(db, "invalido", GENERIC_ERROR))
     return {"status": "success", "empresa": perfil_publico(db), "data": documento_pven(db, so),
             "cot_numero": so.cot_numero}

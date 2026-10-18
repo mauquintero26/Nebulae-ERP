@@ -489,7 +489,7 @@ def test_confirmar_sc_revoca_los_demas_enlaces_en_el_mismo_commit(app_client, db
     fila = _fila(db, primero)
     assert fila["used_at"] is not None and fila["resultado"] == "REVOCADO"
     fila = _fila(db, segundo)
-    assert fila["used_at"] is not None and fila["resultado"] != "REVOCADO"
+    assert fila["used_at"] is not None and fila["resultado"] == "CONFIRMADO"  # T5: el enlace usado queda CONFIRMADO
     assert _confirmar(app_client, primero).status_code == 400
 
 
@@ -529,4 +529,4 @@ def test_confirmar_cot_revoca_los_demas_enlaces(app_client, db, monkeypatch, con
     fila = _fila(db, primero)
     assert fila["used_at"] is not None and fila["resultado"] == "REVOCADO"
     fila = _fila(db, segundo)
-    assert fila["used_at"] is not None and fila["resultado"] != "REVOCADO"
+    assert fila["used_at"] is not None and fila["resultado"] == "CONFIRMADO"  # T5: en el commit que confirma

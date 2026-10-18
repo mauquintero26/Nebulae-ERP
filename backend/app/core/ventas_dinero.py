@@ -4,8 +4,8 @@ Lo importan erp_ventas.py y erp_ventas_fase4.py sin import circular (fase4 no im
 de COT / PVEN / PXP se guarda y se muestra al peso: exacto, nunca a la centena ni al mil. El frontend tiene el
 espejo de redondeo y formato en frontend/src/lib/pesos.js (redondearPeso / formatoPesos).
 
-Sin FastAPI ni DB, salvo anticipo_cotizacion (y pct_anticipo_cotizacion), saldos_a_favor_de_cotizacion y
-anular_pxps_de_pedido (H45), que usan la sesion que reciben (los modelos se importan dentro de esas funciones para
+Sin FastAPI ni DB, salvo anticipo_cotizacion (y pct_anticipo_cotizacion), saldos_a_favor_de_cotizacion,
+resumen_anticipo_cotizacion y anular_pxps_de_pedido (H45), que usan la sesion que reciben (los modelos se importan dentro de esas funciones para
 que el resto siga puro).
 """
 import unicodedata
@@ -256,19 +256,33 @@ def repartir_anticipo_por_linea(montos, anticipo) -> list:
     return [Decimal(p) for p in repartir_proporcional(montos, anticipo)]
 
 
-def anticipo_del_pedido(so):
-    """(requerido, pendiente) del anticipo de un Pedido de Venta: la UNICA cuenta que usan
-    recalculate_sale_order_state (PENDIENTE_ANTICIPO) y GET /pedidos/{id} (anticipo_pendiente).
+class AnticipoDelPedido(NamedTuple):
+    """La cuenta del anticipo de un Pedido de Venta (resumen_anticipo_del_pedido)."""
+    pct: Decimal
+    requerido: Decimal
+    pagado: Decimal
+    pendiente: Decimal
 
-    requerido = anticipo_requerido(total, anticipo_pct_snapshot) (60 si el snapshot falta); pagado = total - saldo
+
+def resumen_anticipo_del_pedido(so) -> AnticipoDelPedido:
+    """El anticipo de un Pedido de Venta: la UNICA cuenta que usan recalculate_sale_order_state (PENDIENTE_ANTICIPO),
+    GET /pedidos/{id} (anticipo_pendiente, por anticipo_del_pedido) y el pedido que ve el cliente (B3 T5, documento_pven).
+
+    pct = anticipo_pct_snapshot (60 si falta); requerido = anticipo_requerido(total, pct); pagado = total - saldo
     redondeado al peso (los pedidos viejos con centavos no quedan debiendo $0,15); pendiente = requerido - pagado,
     nunca negativo. Un pedido CANCELADO no debe nada: su pendiente es 0 (su dinero puede haberse trasladado)."""
     pct = so.anticipo_pct_snapshot if so.anticipo_pct_snapshot is not None else PCT_ANTICIPO_POR_DEFECTO
     requerido = anticipo_requerido(so.total_cop, pct)
-    if so.estado == "CANCELADO":
-        return requerido, Decimal("0")
     pagado = redondear_peso(Decimal(str(so.total_cop or 0)) - Decimal(str(so.saldo_cop or 0)))
-    return requerido, max(Decimal("0"), requerido - pagado)
+    if so.estado == "CANCELADO":
+        return AnticipoDelPedido(pct, requerido, pagado, Decimal("0"))
+    return AnticipoDelPedido(pct, requerido, pagado, max(Decimal("0"), requerido - pagado))
+
+
+def anticipo_del_pedido(so):
+    """(requerido, pendiente) de resumen_anticipo_del_pedido: la forma de siempre para sus llamadores."""
+    resumen = resumen_anticipo_del_pedido(so)
+    return resumen.requerido, resumen.pendiente
 
 
 # ─── Saldo a favor de pedidos cancelados (R6) ─────────────────────────────────────────────────────────
@@ -307,6 +321,38 @@ def saldos_a_favor_de_cotizacion(db, cot_id, bloquear=False) -> list:
         if monto > 0:
             saldos.append({"pedido": so, "pagos": propios, "monto": monto})
     return saldos
+
+
+class ResumenAnticipoCotizacion(NamedTuple):
+    """Lo que se le muestra del anticipo de una cotizacion al asesor (GET /cotizaciones/{id}) y al cliente (B3 T5,
+    documento_cot): una sola cuenta (resumen_anticipo_cotizacion)."""
+    pct: Decimal               # el % exacto (el requerido sale de este)
+    pct_mostrar: Decimal       # el % a 2 decimales (HALF_UP), para mostrar
+    modalidad: Optional[str]
+    origen: str
+    requerido: Decimal
+    saldos_a_favor: list       # saldos_a_favor_de_cotizacion
+    saldo_a_favor: Decimal
+    por_pagar: Decimal         # anticipo que falta: max(0, requerido - min(saldo a favor, total))
+
+    @property
+    def manual(self) -> bool:
+        """El % lo puso el asesor a mano (R3)."""
+        return self.origen == ORIGEN_MANUAL
+
+
+def resumen_anticipo_cotizacion(cot, db, sc=None) -> ResumenAnticipoCotizacion:
+    """El anticipo de la cotizacion para mostrar: anticipo_cotizacion (% exacto, modalidad, origen y requerido), el %
+    a 2 decimales, los saldos a favor de sus pedidos cancelados (R6) y lo que falta pagar o verificar,
+    max(0, requerido - min(saldo a favor, total)). Lo usan get_cotizacion (anticipo_por_verificar) y la pagina del
+    cliente (anticipo_por_pagar): el mismo numero en las dos. `sc` evita releer la SC."""
+    anticipo = anticipo_cotizacion(cot, db, sc=sc)
+    saldos = saldos_a_favor_de_cotizacion(db, cot.id)
+    saldo_a_favor = sum((s["monto"] for s in saldos), Decimal("0"))
+    por_pagar = max(Decimal("0"), anticipo.requerido - min(saldo_a_favor, redondear_peso(cot.total_cop)))
+    return ResumenAnticipoCotizacion(anticipo.pct, anticipo.pct.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+                                     anticipo.modalidad, anticipo.origen, anticipo.requerido, saldos, saldo_a_favor,
+                                     por_pagar)
 
 
 # ─── Orden de pago (PXP) de un pedido cancelado (H45, R12) ────────────────────────────────────────────────────────

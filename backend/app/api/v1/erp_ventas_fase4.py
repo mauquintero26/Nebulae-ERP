@@ -1648,6 +1648,11 @@ def cancel_sale_order_line(
     old_so_state = so.estado
     so.estado = recalculate_sale_order_state(so, db)
     so.updated_at = now
+    if so.estado == "CANCELADO" and old_so_state != "CANCELADO":
+        # B3 T5 (r1, C2; R6): cancelar todas las lineas cancela el pedido: su enlace de consulta (U23) deja de abrir en
+        # el mismo commit, como en la cancelacion por PATCH y por POST /cancelar.
+        from app.core.confirmation_tokens import revoke_pending_tokens
+        revoke_pending_tokens(db, "PVEN", so.id, commit=False)
 
     _log_event(
         db=db,

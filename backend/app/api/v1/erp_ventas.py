@@ -37,7 +37,7 @@ from app.core.iva import (
 from app.core.ventas_dinero import (
     redondear_peso, pesos, formato_pct, anticipo_cotizacion, pct_anticipo_cotizacion, anticipo_requerido,
     anticipo_del_pedido, saldos_a_favor_de_cotizacion, PCT_ANTICIPO_POR_DEFECTO, ORIGEN_CONSERVADO,
-    anular_pxps_de_pedido, monto_linea, repartir_anticipo_por_linea, unidades,
+    anular_pxps_de_pedido, monto_linea, repartir_anticipo_por_linea, unidades, resumen_anticipo_cotizacion,
 )
 from app.core.textos_actividad import etiqueta_estado, ETIQUETAS_ESTADO, PASOS_SC, nombre_de_usuario
 from app.core.chatter import validar_nota, reinicia_atraso, puede_registrar, CONTACTO_SOLO_ASESOR
@@ -517,6 +517,16 @@ def _cliente_de_la_solicitud(sc: CustomerRequest) -> tuple:
     def _texto(v):
         return str(v).strip() if v not in (None, "") else ""
     return _texto(sc.customer_id), _texto(sc.customer_email).lower(), _texto(sc.customer_phone)
+
+def _identidad_del_cliente(doc) -> tuple:
+    """B3 T5 (r1, P1): a quien le habla el enlace publico de una COT o un PVEN: la ficha, el nombre, el correo, el
+    telefono y las direcciones, normalizados como _cliente_de_la_solicitud (otro tipo, mayusculas o espacios no son un
+    cambio). Si cambia, el enlace pendiente se revoca: quien tenga el anterior no debe ver los datos del cliente nuevo."""
+    def _texto(v):
+        return str(v).strip() if v not in (None, "") else ""
+    return (_texto(doc.customer_id), _texto(doc.customer_name), _texto(doc.customer_email).lower(),
+            _texto(doc.customer_phone), _texto(doc.customer_address), _texto(getattr(doc, "direccion_entrega", None)))
+
 
 def _exigir_estado_valido(body: dict) -> None:
     """S1 (T11): el 'estado' que llega en el PATCH de una SC, una COT o un PVEN tiene que ser un texto con algo. '' (o
@@ -2278,19 +2288,17 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
     d["sc_estado"] = sc.estado if sc is not None else None
     d["sc_confirmacion_vigente"] = _confirmacion_vigente_sc(sc) if sc is not None else None
     # Anticipo (H36+H43, N1, R3, R6): lo mismo que exigira convertir_cotizacion_a_venta. Solo en el detalle (no en
-    # _cot_dict) para no hacer una consulta por fila en el listado.
-    pct, modalidad, _, requerido = anticipo_cotizacion(cot, db, sc=sc)
-    total = redondear_peso(cot.total_cop)
-    saldos = saldos_a_favor_de_cotizacion(db, cot.id)
-    saldo_a_favor = sum((s["monto"] for s in saldos), Decimal("0"))
-    # Para mostrar, a 2 decimales (el requerido usa el % exacto).
-    d["anticipo_pct"] = float(pct.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
-    d["sc_modalidad_pago"] = modalidad
+    # _cot_dict) para no hacer una consulta por fila en el listado. B3 T5 (r1): la misma cuenta que ve el cliente en
+    # su cotizacion (resumen_anticipo_cotizacion: % a 2 decimales, saldo a favor y lo que falta).
+    anticipo = resumen_anticipo_cotizacion(cot, db, sc=sc)
+    requerido = anticipo.requerido
+    d["anticipo_pct"] = float(anticipo.pct_mostrar)
+    d["sc_modalidad_pago"] = anticipo.modalidad
     d["anticipo_requerido"] = float(requerido)
-    d["saldo_a_favor"] = float(saldo_a_favor)
+    d["saldo_a_favor"] = float(anticipo.saldo_a_favor)
     d["saldo_a_favor_detalle"] = [{"pven_id": s["pedido"].id, "pven_numero": s["pedido"].numero,
-                                   "monto": float(s["monto"])} for s in saldos]
-    d["anticipo_por_verificar"] = float(max(Decimal("0"), requerido - min(saldo_a_favor, total)))
+                                   "monto": float(s["monto"])} for s in anticipo.saldos_a_favor]
+    d["anticipo_por_verificar"] = float(anticipo.por_pagar)
     # U19+U21 (C10): el anticipo de cada producto, lista paralela a d['productos'] (mismo orden). Reparte el mismo numero
     # que muestra TOTALES: con un pedido vigente (el mas nuevo no cancelado, el criterio de _pven_vigente_de_cotizacion
     # sobre `vens`, sin otra consulta) el requerido de ESE pedido; si no, el de la cotizacion. No va dentro de cada
@@ -2686,9 +2694,13 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
                "notas","productos","pec_id","pec_numero"]
     # H42: la cabecera de la COT queda en pesos enteros aunque el cliente mande decimales.
     _redondear_montos_del_body(body, ("subtotal_cop", "total_cop"))
+    cliente_antes = _identidad_del_cliente(cot)
     for k in allowed:
         if k in body:
             setattr(cot, k, body[k])
+    # B3 T5 (r1, P1): si cambio el cliente, su enlace pendiente deja de servir en el commit de abajo (la pagina publica
+    # mostraria el nombre y la direccion del cliente nuevo a quien tiene el enlace del anterior).
+    cambia_el_cliente_cot = _identidad_del_cliente(cot) != cliente_antes
     if motivo_nuevo is not None:
         # B2.1 (D6): la marca y el motivo del ciclo nuevo van en el commit de abajo, con el estado y su renglon. El
         # renglon ya cuenta el cambio del motivo (antes -> despues): que la edicion no lo repita en un UPDATED.
@@ -2899,6 +2911,9 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
              extra_data={"motivo": motivo_nuevo,
                          "cambios": [{"etiqueta": "Motivo", "antes": motivo_anterior, "despues": motivo_nuevo}]},
              commit=False, usuario=user)
+    if cambia_el_cliente_cot:
+        from app.core.confirmation_tokens import revoke_pending_tokens
+        revoke_pending_tokens(db, "COT", cot.id, commit=False)
     db.commit()
     db.refresh(cot)
     if not anula_por_recotizacion:
@@ -3523,6 +3538,7 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
         total_ref = body["total_cop"] if body.get("total_cop") is not None else redondear_peso(v.total_cop)
         if iva_nuevo < 0 or iva_nuevo > total_ref:
             raise HTTPException(422, "El IVA debe estar entre $0 y el total del pedido.")
+    cliente_antes = _identidad_del_cliente(v)
     for k in allowed:
         if k in body:
             setattr(v, k, body[k])
@@ -3548,7 +3564,9 @@ def update_pedido(ven_id: int, body: dict, user: User = Depends(require_roles(*R
         # A2 (revision final): con H46 + R6 reconvertir la COT es el flujo normal; lo que este pedido tenia
         # apartado se libera en el mismo commit (reservas, lineas y Lista de Compras).
         _liberar_lo_apartado_del_pedido(db, v, autor)
+    if cancela or _identidad_del_cliente(v) != cliente_antes:
         # B3 T5 (hueco 2, R19): el enlace de consulta del pedido (U23) deja de abrir en el mismo commit que lo cancela.
+        # r1 (P1): tambien si cambio el cliente: el enlace anterior mostraria el pedido con los datos del nuevo.
         from app.core.confirmation_tokens import revoke_pending_tokens
         revoke_pending_tokens(db, "PVEN", v.id, commit=False)
     v.updated_at = datetime.datetime.utcnow()

@@ -21,6 +21,9 @@ _CLIENTE = {
     "customer_name": "Cliente", "customer_phone": "Teléfono", "customer_email": "Correo",
     "customer_address": "Dirección del cliente",
 }
+# B3 T5 (r1, P4): los campos del cliente de un renglon de cambios ('campo' en extra_data.cambios). La pagina publica de
+# la SC los busca para saber si la solicitud cambio de cliente despues de enviar un enlace.
+CAMPOS_CLIENTE = frozenset(_CLIENTE)
 _PRECIOS = {
     "trm_rate": "TRM", "subtotal_cop": "Subtotal", "descuento_pct": "Descuento",
     # IVA (B3 T4): el IVA total de la COT (fa6_028) y del pedido (sale_orders.tax_cop).

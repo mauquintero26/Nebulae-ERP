@@ -23,6 +23,8 @@ import uuid
 
 from sqlalchemy import text
 
+from _registro_capturado import registro_capturado
+
 MOD_60_40 = "60/40 (60% anticipo - 40% pendiente)"
 ASESORA = "Laura Gómez"
 PINTURA = {"product_name": "Pintura", "qty": 4, "unit_price_cop": 117000, "total_cop": 468000, "cost_usd": 25,
@@ -165,13 +167,16 @@ def test_total_viejo_con_centavos_muestra_ajuste(db):
     assert all(l["total_linea"] == int(l["total_linea"]) for l in doc["lineas"])
 
     # Líneas viejas con centavos que, redondeadas, ya no suman la cabecera: la diferencia es la fila 'Ajuste por
-    # redondeo' (el subtotal es la suma de lo que el cliente ve).
+    # redondeo' (el subtotal es la suma de lo que el cliente ve) y queda en el registro con el número (U22 punto 1).
     medio = {"qty": 1, "unit_price_cop": 100.5, "total_cop": 100.5}
     cot = _cot(db, productos=[dict(medio, product_name="A"), dict(medio, product_name="B")], subtotal_cop=201,
                total_cop=201)
-    t = documento_cot(db, cot)["totales"]
+    with registro_capturado("app.core.documento_cliente") as avisos:
+        t = documento_cot(db, cot)["totales"]
     assert (t["subtotal"], t["descuento"], t["ajuste_redondeo"], t["total"]) == (202, 0, -1, 201)
     assert _cuadra(t)
+    assert len(avisos) == 1 and avisos[0].levelname == "WARNING", avisos
+    assert cot.numero in avisos[0].getMessage() and "-1" in avisos[0].getMessage()
 
 
 def test_anticipo_manual_no_expone_la_nota(app_client, db):
@@ -324,3 +329,105 @@ def test_documento_cot_con_iva_trae_el_desglose(app_client, db):
         for interno in ("cost_usd", "margen_pct", "flete_usd", "total_con_iva_cop", "base_iva_cop", "descuento_cop",
                         "iva_tarifa"):
             assert interno not in texto, interno
+
+
+# ─── Ronda r1 ────────────────────────────────────────────────────────────────────────────────────────────────
+
+def test_confirmar_cot_marca_el_resultado_en_el_commit_que_confirma(app_client, db, monkeypatch, contador_sql):
+    """r1 (C3): marcar_resultado('CONFIRMADO') va en el MISMO commit que pone la COT CONFIRMADA: cuando se llama solo
+    hubo el commit de reclamar el token. Si se moviera después, lo guardaría el commit de la sincronización o el de la
+    Actividad y COMMITS_RAMA_COT no lo notaría."""
+    import app.api.v1.confirmacion_publica as cp
+    sc = _sc(db)
+    cot = _cot(db, sc)
+    raw = _token(db, "COT", cot.id)
+    llamadas = []
+    marcar_real = cp.marcar_resultado
+    with contador_sql.ventana() as v:
+        def espia(db_, token_id, resultado):
+            llamadas.append((resultado, v.commits))
+            return marcar_real(db_, token_id, resultado)
+        monkeypatch.setattr(cp, "marcar_resultado", espia)
+        resp = _confirmar(app_client, raw)
+    assert resp.status_code == 200, resp.text
+    assert llamadas == [("CONFIRMADO", 1)]
+    assert _fila(db, raw)["resultado"] == "CONFIRMADO"
+
+
+def test_respuesta_minima_de_la_cot_si_falla_el_documento(app_client, db, monkeypatch):
+    """r1 (P3): igual que en la SC, la COT ya quedó CONFIRMADA; si armar el documento de la respuesta falla, 200 mínimo
+    sin data ni siguiente_paso."""
+    import app.api.v1.confirmacion_publica as cp
+    sc = _sc(db)
+    cot = _cot(db, sc)
+    raw = _token(db, "COT", cot.id)
+
+    def falla(*args, **kwargs):
+        raise RuntimeError("dato viejo malformado")
+
+    monkeypatch.setattr(cp, "documento_cot", falla)
+    with registro_capturado("app.api.v1.confirmacion_publica") as errores:
+        resp = _confirmar(app_client, raw)
+    assert resp.status_code == 200, resp.text
+    assert [e.levelname for e in errores] == ["ERROR"] and cot.numero in errores[0].getMessage()
+    assert set(resp.json()) == {"status", "message", "estado_enlace", "mensaje", "confirmada_el", "empresa"}
+    db.refresh(cot)
+    assert cot.estado == "CONFIRMADA" and cot.gate2_confirmed_at is not None
+
+
+def test_documento_cot_trae_valida_hasta(db):
+    """r1 (C4): U22-validez en T5: documento.valida_hasta es la fecha de la cotización ('AAAA-MM-DD') o None."""
+    from app.core.documento_cliente import documento_cot
+    assert documento_cot(db, _cot(db, valida_hasta=datetime.date(2026, 10, 8)))["valida_hasta"] == "2026-10-08"
+    assert documento_cot(db, _cot(db))["valida_hasta"] is None
+
+
+def test_cambio_de_cliente_en_cot_pendiente_revoca_el_enlace(app_client, db, admin_token):
+    """r1 (P1): si la COT pendiente cambia de cliente (nombre, contacto o dirección), su enlace deja de servir en el mismo
+    commit: quien tenga el anterior no ve los datos del cliente nuevo."""
+    sc = _sc(db)
+    cot = _cot(db, sc)
+    raw = _token(db, "COT", cot.id)
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}",
+                            json={"customer_name": "Cliente Gamma Reservado", "direccion_entrega": "Avenida Gamma 7",
+                                  "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["estado"] == "PENDIENTE_CONFIRMACION"
+    fila = _fila(db, raw)
+    assert fila["used_at"] is not None and fila["resultado"] == "REVOCADO"
+    resp = _ver(app_client, raw)
+    assert _detalle(resp, "no_disponible")["documento"] is None
+    assert "Gamma" not in resp.text
+
+    # Un PATCH que no toca al cliente (solo la nota) no revoca el enlace nuevo.
+    nuevo = _token(db, "COT", cot.id)
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={"notas": "Precios en COP", "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert _fila(db, nuevo)["used_at"] is None
+
+
+def test_get_cotizacion_y_el_documento_dan_el_mismo_anticipo(app_client, db, admin_token):
+    """r1 (C8): una sola cuenta del anticipo de la COT (ventas_dinero.resumen_anticipo_cotizacion) para la pantalla del
+    asesor y la página del cliente: el % a 2 decimales, el saldo a favor y lo que falta pagar."""
+    from app.core.documento_cliente import documento_cot
+    from app.models.erp_documents import SaleOrder
+    from app.models.fase4 import SaleOrderPayment
+    sc = _sc(db)
+    cot = _cot(db, sc, productos=[{"product_name": "Sofá", "qty": 3, "unit_price_cop": 333333, "total_cop": 999999}],
+               subtotal_cop=999999, total_cop=999999, anticipo_pct_manual=33.335, anticipo_manual_nota="Acuerdo")
+    so = SaleOrder(numero=f"PVEN-T5C{_sufijo()}", cot_id=cot.id, sc_id=sc.id, customer_name="Ana Pérez",
+                   estado="CANCELADO", total_cop=999999, saldo_cop=899999)
+    db.add(so); db.commit(); db.refresh(so)
+    db.add(SaleOrderPayment(sale_order_id=so.id, tipo="ANTICIPO", monto=100000, metodo_pago="Nequi",
+                            fecha=datetime.date(2026, 10, 1), estado="CONFIRMADO"))
+    db.commit()
+    resp = app_client.get(f"/api/v1/ventas/cotizaciones/{cot.id}", headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    d = resp.json()["data"]
+    p = documento_cot(db, cot)["pago"]
+    assert p["anticipo_pct"] == d["anticipo_pct"] == 33.34  # HALF_UP a 2 decimales
+    assert p["anticipo"] == d["anticipo_requerido"]
+    assert p["saldo_a_favor"] == d["saldo_a_favor"] == 100000
+    assert p["anticipo_por_pagar"] == d["anticipo_por_verificar"] == d["anticipo_requerido"] - 100000
+    assert p["manual"] is True
