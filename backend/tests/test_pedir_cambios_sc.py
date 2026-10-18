@@ -235,7 +235,7 @@ def test_comentario_corto_es_422_y_no_gasta_el_enlace(app_client, db, admin_toke
     raw = _enviar(app_client, admin_token, sc)
 
     casos = [("no", None, MENSAJE_COMENTARIO_CORTO), ("   123456789   ", None, MENSAJE_COMENTARIO_CORTO),
-             ("​" * 10, None, MENSAJE_COMENTARIO_CORTO),  # r1: diez espacios de ancho cero no son 10 caracteres
+             ("\u200b" * 10, None, MENSAJE_COMENTARIO_CORTO),  # r1: diez espacios de ancho cero no son 10 caracteres
              ("x" * 1001, None, MENSAJE_COMENTARIO_LARGO), (COMENTARIO, "OTRO", MENSAJE_TIPO_INVALIDO),
              (COMENTARIO, "cambios", MENSAJE_TIPO_INVALIDO), ("x" * 1001, "NO_LA_NECESITA", MENSAJE_COMENTARIO_LARGO)]
     for comentario, tipo, mensaje in casos:
@@ -298,7 +298,7 @@ def test_el_comentario_pierde_los_caracteres_de_control(app_client, db, admin_to
     sc = _sc(db, user_admin)
     raw = _enviar(app_client, admin_token, sc)
     # El cuerpo va armado a mano (json.dumps con ensure_ascii): el surrogate suelto llega como escape JSON (\ud800).
-    cuerpo = json.dumps({"token": raw, "comentario": "Son 8\x00 rodi​llos\r\n‮no 6\ud800"})
+    cuerpo = json.dumps({"token": raw, "comentario": "Son 8\x00 rodi\u200bllos\r\n\u202eno 6\ud800"})
     resp = app_client.post("/api/v1/confirmar/pedir-cambios", content=cuerpo,
                            headers={"Idempotency-Key": "t6-control", "Content-Type": "application/json"})
     assert resp.status_code == 200, resp.text

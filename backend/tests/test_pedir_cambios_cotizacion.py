@@ -467,3 +467,44 @@ def test_el_lead_llega_a_quotation_aunque_el_correo_no_salga(app_client, db, adm
         assert resp.json()["correo"]["motivo"] == motivo
         db.expire_all()
         assert db.get(SalesOrder, lead.id).status == "QUOTATION", motivo
+
+
+def test_un_interbloqueo_o_un_tiempo_agotado_al_bloquear_la_sc_da_409(app_client, db, admin_token, user_admin,
+                                                                     monkeypatch):
+    """r2: el envío bloquea la COT y después su SC (COT→SC). PATCH /solicitudes/{id}/cliente y update_solicitud con
+    cambio de modalidad bloquean SC→COT: si chocan, PostgreSQL aborta uno (40P01), o el bloqueo espera más que el
+    statement_timeout (57014). El envío responde un 409 claro y no guarda nada (el patrón de PATCH /cliente, S8)."""
+    import app.api.v1.erp_ventas as m
+    from _registro_capturado import registro_capturado
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.orm import Query
+    from app.models.erp_documents import CustomerRequest
+    llamadas = _correo_falso(monkeypatch, configurado=True)
+    bloquear_real = Query.with_for_update
+    for pgcode in ("40P01", "57014"):
+        error_de_la_base = type("ErrorDeBloqueo", (Exception,), {"pgcode": pgcode})
+
+        def _falla_al_bloquear_la_sc(self, *args, **kwargs):
+            if self.column_descriptions and self.column_descriptions[0].get("entity") is CustomerRequest:
+                raise OperationalError("SELECT customer_requests.id ... FOR UPDATE", {},
+                                       error_de_la_base("bloqueo abortado"))
+            return bloquear_real(self, *args, **kwargs)
+
+        sc = _sc(db, user_admin)
+        cot = _cot(db, sc, estado="BORRADOR", customer_email="ana@cliente.com")
+        monkeypatch.setattr(Query, "with_for_update", _falla_al_bloquear_la_sc)
+        with registro_capturado(m.logger.name) as registros:
+            resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/enviar-confirmacion", json={},
+                                   headers=auth(admin_token))
+        monkeypatch.setattr(Query, "with_for_update", bloquear_real)
+        assert resp.status_code == 409, (pgcode, resp.text)
+        assert resp.json()["detail"] == ("Otra operación estaba cambiando esta cotización o su solicitud al mismo "
+                                         "tiempo. Intenta de nuevo.")
+        assert [r.levelname for r in registros] == ["WARNING"], pgcode
+        db.expire_all()
+        assert db.get(m.SalesQuotation, cot.id).estado == "BORRADOR", pgcode
+        tokens = db.execute(text("SELECT count(*) FROM document_confirmation_tokens WHERE document_type = 'COT' "
+                                 "AND document_id = :id"), {"id": cot.id}).scalar()
+        assert tokens == 0, pgcode
+        assert _logs(db, "COT", cot.id, "ESTADO_CHANGED") == [], pgcode
+        assert llamadas == [], pgcode

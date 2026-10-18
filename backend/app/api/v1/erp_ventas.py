@@ -3254,23 +3254,37 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     correo, en el commit del renglon del envio: si falla, se deshace solo lo del lead y el envio queda (el aislamiento
     de siempre, sin otro commit antes del correo).
     """
-    cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).with_for_update().first()
-    if not cot:
-        raise HTTPException(404, "Cotización no encontrada")
-    if cot.estado not in ("BORRADOR", "ENVIADA"):
-        raise HTTPException(400, f"La cotización debe estar en Borrador o Enviada antes de enviar para confirmación (estado actual: {etiqueta_estado('COT', cot.estado)}).")
-    # N4: una SC cancelada no tiene cotizaciones vivas.
-    if cot.sc_id:
-        # B3 T6 (r1, seguridad 2): la SC tambien se bloquea, DESPUES de la COT (el orden COT -> SC de
-        # update_cotizacion). Un «Pedir cambios» del cliente en esa SC (que la bloquea y despues, si esta en Pendiente
-        # por confirmacion, a esta COT) termina antes o espera a este envio: C20 nunca queda a medias con la COT
-        # temprana enviada en el mismo instante. No hay ciclo: pedir cambios solo bloquea una COT en
-        # PENDIENTE_CONFIRMACION y este envio solo sigue con una COT en Borrador o Enviada. PATCH
-        # /solicitudes/{id}/cliente bloquea SC -> COT: si llegan a cruzarse, PostgreSQL aborta una de las dos (40P01)
-        # y nada queda a medias.
-        sc = db.query(CustomerRequest).filter(CustomerRequest.id == cot.sc_id).with_for_update().first()
-        if sc is not None and sc.estado == "CANCELADA":
-            raise HTTPException(409, _mensaje_solicitud_cancelada(sc))
+    try:
+        cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).with_for_update().first()
+        if not cot:
+            raise HTTPException(404, "Cotización no encontrada")
+        if cot.estado not in ("BORRADOR", "ENVIADA"):
+            raise HTTPException(400, f"La cotización debe estar en Borrador o Enviada antes de enviar para "
+                                     f"confirmación (estado actual: {etiqueta_estado('COT', cot.estado)}).")
+        # N4: una SC cancelada no tiene cotizaciones vivas.
+        sc = None
+        if cot.sc_id:
+            # B3 T6 (r1, seguridad 2): la SC tambien se bloquea, DESPUES de la COT (el orden COT -> SC de
+            # update_cotizacion). Un «Pedir cambios» del cliente en esa SC (que la bloquea y despues, si esta en
+            # Pendiente por confirmacion, a esta COT) termina antes o espera a este envio: C20 nunca queda a medias
+            # con la COT temprana enviada en el mismo instante. Con pedir cambios no hay ciclo: solo bloquea una COT en
+            # PENDIENTE_CONFIRMACION, y este envio revisa el estado (Borrador o Enviada) antes de bloquear la SC.
+            sc = db.query(CustomerRequest).filter(CustomerRequest.id == cot.sc_id).with_for_update().first()
+    except OperationalError as exc:
+        # r2: dos caminos bloquean SC -> COT y pueden cruzarse con este COT -> SC: PATCH /solicitudes/{id}/cliente
+        # (todas las COT de la SC) y PATCH /solicitudes/{id} cuando cambia la modalidad
+        # (_recalcular_anticipo_por_modalidad escribe las COT). PostgreSQL aborta uno (40P01), o el bloqueo espera mas
+        # que el statement_timeout (57014). Aqui todavia no se escribio nada: se revierte y se pide repetir, como en
+        # PATCH /cliente (S8), en vez de un 500.
+        db.rollback()
+        pgcode = getattr(getattr(exc, "orig", None), "pgcode", None)
+        if pgcode not in (_INTERBLOQUEO, _TIEMPO_AGOTADO):
+            raise
+        logger.warning("Bloqueo abortado (%s) al enviar la cotizacion %s para confirmacion", pgcode, cot_id)
+        raise HTTPException(409, "Otra operación estaba cambiando esta cotización o su solicitud al mismo tiempo. "
+                                 "Intenta de nuevo.")
+    if sc is not None and sc.estado == "CANCELADA":
+        raise HTTPException(409, _mensaje_solicitud_cancelada(sc))
     # Una cotizacion sin productos ni precio calculado no tiene nada que el cliente
     # pueda confirmar -- cierra la variante "tarjeta BORRADOR vacia" del hallazgo #1.
     if not cot.productos or not cot.total_cop:
