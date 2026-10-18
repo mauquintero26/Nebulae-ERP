@@ -504,6 +504,9 @@ def test_corregir_la_sc_no_lleva_sus_datos_a_un_pedido_sin_ficha_ni_nombre(app_c
     db.refresh(so)
     assert so.customer_address is None
     resp = _ver(app_client, raw)
+    # Re-revisión r4: el enlace sigue funcionando (200 con su propio pedido), no solo «no sale B».
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["cliente"]["direccion_entrega"] is None
     assert DIRECCION_B not in resp.text and NOMBRE_B not in resp.text
 
 

@@ -539,8 +539,9 @@ def _identidad_del_cliente(doc) -> tuple:
     """B3 T5 (r1, P1; r3): a quien le llega el enlace publico de una SC, una COT o un PVEN: _cliente_de_la_solicitud
     (ficha, correo y telefono) mas el nombre, normalizados igual. Es la UNICA regla de cambio de cliente para los
     enlaces: si cambia, el enlace pendiente de una COT o un PVEN se revoca (update_cotizacion, update_pedido y PATCH
-    /solicitudes/{id}/cliente) y la SC deja el marcador de cambio de cliente (r2). La direccion no cuenta (R18 del
-    Bloque 2): corregir la direccion de la misma persona no cambia a quien le llega el enlace."""
+    /solicitudes/{id}/cliente), update_solicitud revoca el enlace pendiente de la SC y los de sus COT tempranas (r4) y
+    la SC deja el marcador de cambio de cliente (r2). La direccion no cuenta (R18 del Bloque 2): corregir la direccion
+    de la misma persona no cambia a quien le llega el enlace."""
     return _cliente_de_la_solicitud(doc) + (_texto_del_cliente(doc.customer_name),)
 
 
@@ -921,9 +922,9 @@ def _anular_confirmacion_por_cambio_de_cliente(db: Session, sc: CustomerRequest,
 def _anular_enlaces_de_cotizaciones_por_cambio_de_cliente(db: Session, sc: CustomerRequest,
                                                           autor: Optional[str]) -> list:
     """T11 calidad (F2, residual de S9): la regla R18 de PATCH /cliente para las COT cuando update_solicitud cambia el
-    cliente de la SC (_cliente_de_la_solicitud: aqui, por customer_id o null; el correo y el telefono solo cambian por
-    /cliente, S9). Revocar solo el enlace de la SC dejaba vivo el de una COT temprana (Borrador o Pendiente, sin la
-    confirmacion de la SC): si el cliente ANTERIOR la confirmaba, la sincronizacion
+    cliente de la SC. Desde B3 T5 (r4) se llama cuando cambia _identidad_del_cliente (ficha, correo, telefono y
+    nombre; no la direccion). Revocar solo el enlace de la SC dejaba vivo el de una COT temprana (Borrador o
+    Pendiente, sin la confirmacion de la SC): si el cliente ANTERIOR la confirmaba, la sincronizacion
     confirmaba la SC para el nuevo. En cada COT abierta de la SC que no esta CONFIRMADA (el cliente ya confirmo los
     precios) se revocan los enlaces sin cambiar su estado y, si alguno seguia vivo, su Actividad lo dice con el renglon
     de _ENLACE_COT_ANULADO. Sin commit: va en el commit unico de update_solicitud. Devuelve los numeros anulados."""
