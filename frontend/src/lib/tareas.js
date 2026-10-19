@@ -8,7 +8,7 @@
  * resumen}.
  */
 
-import { instante } from './fechas-colombia.js';
+import { hace, instante } from './fechas-colombia.js';
 
 /** Menos que esto nunca es atraso (el diseño: max(30 min, 3 × intervalo)). */
 export const MINUTOS_MINIMOS_ATRASO = 30;
@@ -35,4 +35,48 @@ export function revisionAtrasada(estado, ahora = new Date()) {
   const intervalo = Number(estado.intervalo_min);
   const minutos = Math.max(MINUTOS_MINIMOS_ATRASO, Number.isFinite(intervalo) && intervalo > 0 ? 3 * intervalo : 0);
   return referencia - ultima.getTime() > minutos * MINUTO;
+}
+
+// ─── B3 T16 (TAREAS punto 6): el pie de «Seguimiento de confirmación» en la Configuración del Hub ───────────────
+
+const AVISA_AL_ADMINISTRADOR = 'los recordatorios no están saliendo. Avísale a quien administra el servidor.';
+
+/**
+ * La línea de estado de la revisión automática, con el `data` de GET /ventas/tareas/estado:
+ * - 'apagada' (recuadro gris): activas_en_servidor es false (tareas_habilitadas() del servidor, RP30);
+ * - 'atrasada' (recuadro ámbar): revisionAtrasada, con «no corre desde hace N …» o «todavía no ha corrido»;
+ * - 'al_dia' (texto gris): «Última revisión automática: hace N minutos.».
+ * `ahora` como en revisionAtrasada (Date, milisegundos o texto ISO). null sin estado (el GET falló).
+ * @param {unknown} estado
+ * @param {Date | number | string} [ahora]
+ * @returns {{caso: 'al_dia' | 'atrasada' | 'apagada', texto: string} | null}
+ */
+export function lineaRevision(estado, ahora = new Date()) {
+  if (typeof estado !== 'object' || estado === null) return null;
+  const e = /** @type {any} */ (estado);
+  if (!e.activas_en_servidor) {
+    return { caso: 'apagada', texto: 'La revisión automática está apagada en este servidor. Los recordatorios solo '
+      + 'salen desde el servidor de producción.' };
+  }
+  const referencia = typeof ahora === 'number' ? ahora : (instante(ahora)?.getTime() ?? Date.now());
+  const desde = hace(e.ultima_revision, referencia);
+  if (revisionAtrasada(e, referencia)) {
+    return { caso: 'atrasada', texto: desde
+      ? `La revisión automática no corre desde ${desde}: ${AVISA_AL_ADMINISTRADOR}`
+      : `La revisión automática todavía no ha corrido en este servidor: ${AVISA_AL_ADMINISTRADOR}` };
+  }
+  return { caso: 'al_dia', texto: `Última revisión automática: ${desde}.` };
+}
+
+/**
+ * Hueco 4: el recuadro ámbar de «sin medios» (la última revisión no pudo enviar recordatorios porque no hay WhatsApp
+ * automático ni correo del sistema: resumen.seguimiento_confirmacion.omitido === 'sin_medios'), o null.
+ * @param {unknown} estado el `data` de GET /ventas/tareas/estado
+ * @returns {string | null}
+ */
+export function avisoSinMedios(estado) {
+  const resumen = typeof estado === 'object' && estado !== null ? /** @type {any} */ (estado).resumen : null;
+  const seguimiento = typeof resumen === 'object' && resumen !== null ? resumen.seguimiento_confirmacion : null;
+  if (typeof seguimiento !== 'object' || seguimiento === null || seguimiento.omitido !== 'sin_medios') return null;
+  return 'Los recordatorios no pueden salir: falta configurar el WhatsApp automático o el correo del sistema.';
 }

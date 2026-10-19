@@ -17,7 +17,7 @@ import {
   generoCotizacion, cotizacionesVigentes, cotizacionesRechazadas, esperaCotizacion, contadoresSolicitudes,
   tasaConversionCotizacion, superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera, pasosParaCancelarSolicitud,
   repartirCancelacionSolicitudes, cifrasVentasDashboard, rutaSinParametro, esSolicitudActiva, pestanaDeSolicitud,
-  pistaActivasSolicitudes,
+  pistaActivasSolicitudes, valorConfig, enteroConfig, DIAS_VALIDEZ_COTIZACION,
 } from '../src/lib/listas-ventas.js';
 import { TEXTO_PAPELERA_SIN_FECHA, ESTADOS_SC } from '../src/lib/estados-solicitud.js';
 
@@ -545,6 +545,39 @@ console.log('--- T11 (V7): la tarjeta ACTIVAS no contradice al banner de vencida
   // Valores raros cuentan como 0.
   assert.equal(pistaActivasSolicitudes(undefined, null), 'Todas atendidas');
   assert.equal(pistaActivasSolicitudes(-1, NaN), 'Todas atendidas');
+}
+
+console.log('--- B3 T16: valorConfig y enteroConfig (las secciones nuevas de la Configuración del Hub) ---');
+{
+  // Las tres formas, como diasAlerta.
+  assert.equal(valorConfig({ status: 'success', data: { iva_tarifa_defecto: { value: '5' } } }, 'iva_tarifa_defecto'), '5');
+  assert.equal(valorConfig({ iva_tarifa_defecto: { value: 'EXENTO' } }, 'iva_tarifa_defecto'), 'EXENTO');
+  assert.equal(valorConfig({ dias_validez_cotizacion: '10' }, 'dias_validez_cotizacion'), '10');
+  assert.equal(valorConfig({ dias_validez_cotizacion: 10 }, 'dias_validez_cotizacion'), '10');
+  assert.equal(valorConfig({ seguimiento_auto_activo: false }, 'seguimiento_auto_activo'), 'false');
+  // Sin la clave (o una clave heredada de Object) -> null; '' se conserva (el panel muestra lo que hay).
+  for (const cfg of [null, undefined, {}, { data: null }, { otra: '1' }, { x: { value: null } }]) {
+    assert.equal(valorConfig(cfg, 'x'), null, JSON.stringify(cfg));
+  }
+  assert.equal(valorConfig({}, 'toString'), null);
+  assert.equal(valorConfig(Object.create({ x: '5' }), 'x'), null, 'solo claves propias');
+  assert.equal(valorConfig({ x: '' }, 'x'), '');
+  assert.equal(valorConfig({ x: { a: 1 } }, 'x'), null);
+  // enteroConfig = admin_config.entero_acotado: fuera de rango usa el límite; lo que no es entero, el defecto.
+  const { defecto, minimo, maximo } = DIAS_VALIDEZ_COTIZACION;
+  assert.deepEqual([defecto, minimo, maximo], [5, 1, 60]);
+  assert.ok(Object.isFrozen(DIAS_VALIDEZ_COTIZACION));
+  const dias = (v) => enteroConfig({ dias_validez_cotizacion: v }, 'dias_validez_cotizacion', defecto, minimo, maximo);
+  assert.equal(dias('10'), 10);
+  assert.equal(dias(' 7 '), 7);
+  assert.equal(dias('+8'), 8);
+  assert.equal(dias('90'), 60);
+  assert.equal(dias('0'), 1);
+  assert.equal(dias('-3'), 1);
+  for (const malo of ['abc', '2.5', '', null, undefined, true, '1e2']) assert.equal(dias(malo), 5, String(malo));
+  assert.equal(enteroConfig(null, 'dias_validez_cotizacion', 5, 1, 60), 5);
+  assert.equal(enteroConfig({ data: { dias_validez_cotizacion: { value: '12' } } }, 'dias_validez_cotizacion', 5, 1, 60),
+    12);
 }
 
 console.log('OK test_listas_ventas.mjs');

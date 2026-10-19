@@ -13,6 +13,8 @@
 import assert from 'node:assert/strict';
 import {
   canalTexto, textoSeguimiento, puedeDetener, validarConfigSeguimiento, LIMITES_SEGUIMIENTO, MENSAJE_HORARIO,
+  lineaSeguimientoEnlace, accionDetenerSeguimiento, configSeguimientoInicial, avisoDiasSeguimiento, opcionesHora,
+  etiquetaHora,
 } from '../src/lib/seguimiento.js';
 
 const LUNES_9AM = '2026-10-05T14:00:00Z'; // lunes 5 de octubre, 9:00 a. m. en Colombia
@@ -230,6 +232,110 @@ console.log('--- TEST 9: validarConfigSeguimiento con los límites y mensajes de
   assert.equal(validarConfigSeguimiento({ seguimiento_max: '9', seguimiento_dias: '0' }), DIAS);
   assert.equal(validarConfigSeguimiento({ alerta_sc_dias: 'x', auto_lead_crm: 'true' }), null);
   assert.equal(validarConfigSeguimiento(null), null);
+}
+
+// ─── B3 T16: la ventana del enlace, TarjetaSeguimiento y la sección «Seguimiento de confirmación» del Hub ────────
+
+console.log('--- TEST 10 (T16): lineaSeguimientoEnlace, la línea del recordatorio en la ventana del enlace ---');
+{
+  // ACTIVO: gris, sin «(1 de max)» y sin doble punto después de 'a. m.'.
+  assert.deepEqual(lineaSeguimientoEnlace(s()),
+    { tono: 'gris', texto: 'Si el cliente no confirma, le recordaremos por WhatsApp el lunes 5 de octubre, 9:00 a. m.' });
+  assert.equal(lineaSeguimientoEnlace(s({ canal: 'Email', proximo_at: MIERCOLES_3PM })).texto,
+    'Si el cliente no confirma, le recordaremos por correo el miércoles 7 de octubre, 3:00 p. m.');
+  assert.equal(lineaSeguimientoEnlace(s({ canal: 'Otro', proximo_at: null })).texto,
+    'Si el cliente no confirma, le recordaremos por correo de respaldo.');
+  // Sin medio: ámbar.
+  assert.deepEqual(lineaSeguimientoEnlace(detenido('SIN_MEDIO_CLIENTE', 'El cliente no tiene teléfono ni correo.')),
+    { tono: 'alerta', texto: 'No habrá recordatorio automático: el cliente no tiene teléfono ni correo.' });
+  // Lo demás no tiene línea en la ventana (la tarjeta de «Siguiente paso» lo dice).
+  for (const nada of [null, undefined, s({ estado: 'APAGADO' }), s({ estado: 'AGOTADO' }), detenido('MANUAL'),
+    detenido('FALLO_ENVIO'), detenido('toString'), { estado: 'OTRO' }, 'ACTIVO']) {
+    assert.equal(lineaSeguimientoEnlace(nada), null, JSON.stringify(nada));
+  }
+}
+
+console.log('--- TEST 11 (T16): accionDetenerSeguimiento («No enviar recordatorios» de TarjetaSeguimiento) ---');
+{
+  assert.deepEqual(accionDetenerSeguimiento('SC', 12), { ruta: '/ventas/solicitudes/12/seguimiento/detener',
+    titulo: 'No enviar recordatorios',
+    mensaje: 'El cliente no recibirá recordatorios automáticos de esta solicitud. Se reactivan si la reenvías.' });
+  assert.deepEqual(accionDetenerSeguimiento('COT', '7'), { ruta: '/ventas/cotizaciones/7/seguimiento/detener',
+    titulo: 'No enviar recordatorios',
+    mensaje: 'El cliente no recibirá recordatorios automáticos de esta cotización. Se reactivan si la reenvías.' });
+  // El pedido no tiene recordatorios; un id que no es un entero positivo no arma ruta.
+  for (const [tipo, id] of [['PVEN', 1], ['VEN', 1], ['SC', null], ['SC', 0], ['COT', 'abc'], ['COT', '1/../x'],
+    ['SC', 1.5], ['toString', 1]]) {
+    assert.equal(accionDetenerSeguimiento(tipo, id), null, `${tipo} ${id}`);
+  }
+}
+
+console.log('--- TEST 12 (T16): configSeguimientoInicial, la lectura de seguimiento_confirmacion.leer_config ---');
+{
+  const DEFECTO = { seguimiento_auto_activo: 'true', seguimiento_dias: '2', seguimiento_max: '1',
+    seguimiento_solo_horario: 'true', seguimiento_hora_inicio: '8', seguimiento_hora_fin: '18' };
+  assert.deepEqual(configSeguimientoInicial({}), DEFECTO);
+  assert.deepEqual(configSeguimientoInicial(null), DEFECTO);
+  // Las tres formas de la configuración (como diasAlerta): respuesta cruda, dict interno y lo que guarda el Hub.
+  assert.equal(configSeguimientoInicial({ status: 'success', data: { seguimiento_dias: { value: '4' } } })
+    .seguimiento_dias, '4');
+  assert.equal(configSeguimientoInicial({ seguimiento_dias: { value: '4' } }).seguimiento_dias, '4');
+  assert.equal(configSeguimientoInicial({ seguimiento_dias: '4' }).seguimiento_dias, '4');
+  // Fuera de rango usa el límite; lo que no es entero, el defecto (admin_config.entero_acotado).
+  assert.equal(configSeguimientoInicial({ seguimiento_dias: '30' }).seguimiento_dias, '15');
+  assert.equal(configSeguimientoInicial({ seguimiento_dias: '0' }).seguimiento_dias, '1');
+  assert.equal(configSeguimientoInicial({ seguimiento_max: ' 3 ' }).seguimiento_max, '3');
+  for (const malo of ['abc', '2.5', '', null, true]) {
+    assert.equal(configSeguimientoInicial({ seguimiento_dias: malo }).seguimiento_dias, '2', String(malo));
+  }
+  // La hora 0 es válida (diasAlerta la descartaría).
+  assert.equal(configSeguimientoInicial({ seguimiento_hora_inicio: '0' }).seguimiento_hora_inicio, '0');
+  // Interruptores: 'true'/'false' sin importar mayúsculas ni espacios; lo demás, el defecto.
+  const apagado = configSeguimientoInicial({ seguimiento_auto_activo: ' FALSE ', seguimiento_solo_horario: 'false' });
+  assert.equal(apagado.seguimiento_auto_activo, 'false');
+  assert.equal(apagado.seguimiento_solo_horario, 'false');
+  assert.equal(configSeguimientoInicial({ seguimiento_auto_activo: 'si' }).seguimiento_auto_activo, 'true');
+  // Si lo guardado deja la hora final antes (o igual) que la inicial, las dos vuelven a 8 y 18.
+  const cruzado = configSeguimientoInicial({ seguimiento_hora_inicio: '20', seguimiento_hora_fin: '10' });
+  assert.deepEqual([cruzado.seguimiento_hora_inicio, cruzado.seguimiento_hora_fin], ['8', '18']);
+  const igual = configSeguimientoInicial({ seguimiento_hora_inicio: '9', seguimiento_hora_fin: '9' });
+  assert.deepEqual([igual.seguimiento_hora_inicio, igual.seguimiento_hora_fin], ['8', '18']);
+  // Lo que da es válido para validarConfigSeguimiento.
+  assert.equal(validarConfigSeguimiento(configSeguimientoInicial({ seguimiento_hora_fin: '99' })), null);
+}
+
+console.log('--- TEST 13 (T16): avisoDiasSeguimiento, el documento se pone rojo antes del recordatorio ---');
+{
+  const cfg = (extra) => ({ seguimiento_auto_activo: 'true', seguimiento_dias: '2', alerta_sc_dias: '2',
+    alerta_cot_dias: '2', ...extra });
+  assert.equal(avisoDiasSeguimiento(cfg()), null, 'iguales: no avisa (el diseño dice «mayor que»)');
+  assert.equal(avisoDiasSeguimiento(cfg({ seguimiento_dias: '3' })),
+    'Con estos días, la solicitud y la cotización se pondrán rojas antes de que salga el recordatorio.');
+  assert.equal(avisoDiasSeguimiento(cfg({ seguimiento_dias: '3', alerta_cot_dias: '5' })),
+    'Con estos días, la solicitud se pondrá roja antes de que salga el recordatorio.');
+  assert.equal(avisoDiasSeguimiento(cfg({ seguimiento_dias: '3', alerta_sc_dias: '5' })),
+    'Con estos días, la cotización se pondrá roja antes de que salga el recordatorio.');
+  // Con el recordatorio apagado no hay nada que avisar; con números a medio escribir tampoco.
+  assert.equal(avisoDiasSeguimiento(cfg({ seguimiento_dias: '9', seguimiento_auto_activo: 'false' })), null);
+  assert.equal(avisoDiasSeguimiento(cfg({ seguimiento_dias: '' })), null);
+  assert.equal(avisoDiasSeguimiento(cfg({ seguimiento_dias: '9', alerta_sc_dias: '', alerta_cot_dias: 'x' })), null);
+  assert.equal(avisoDiasSeguimiento(null), null);
+}
+
+console.log('--- TEST 14 (T16): las horas de los dos selects ---');
+{
+  assert.equal(etiquetaHora(8), '8:00 a. m.');
+  assert.equal(etiquetaHora('18'), '6:00 p. m.');
+  assert.equal(etiquetaHora(12), '12:00 p. m.');
+  assert.equal(etiquetaHora(0), '12:00 a. m. (medianoche)');
+  assert.equal(etiquetaHora(24), '12:00 a. m. (medianoche)');
+  const inicio = opcionesHora('seguimiento_hora_inicio');
+  assert.equal(inicio.length, 24);
+  assert.deepEqual(inicio[0], { valor: '0', etiqueta: '12:00 a. m. (medianoche)' });
+  assert.deepEqual(inicio[8], { valor: '8', etiqueta: '8:00 a. m.' });
+  const fin = opcionesHora('seguimiento_hora_fin');
+  assert.deepEqual([fin[0].valor, fin[fin.length - 1].valor], ['1', '24']);
+  assert.deepEqual(opcionesHora('seguimiento_dias'), []);
 }
 
 console.log('OK test_seguimiento.mjs');

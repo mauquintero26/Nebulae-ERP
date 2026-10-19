@@ -8,10 +8,15 @@
  * ('WhatsApp' | 'Email' | 'Otro' | null), recordatorios_enviados, max, proximo_at, ultimo_recordatorio_at (ISO con 'Z'),
  * motivo_fin, ultimo_resultado: {canal, motivo, mensaje} | null}. Las fechas se muestran con fechaHoraCO de
  * fechas-colombia.js ('lunes 5 de octubre, 9:00 a. m.'), que ya termina en 'a. m.'/'p. m.'.
+ *
+ * B3 T16 agrega la línea de la ventana del enlace (lineaSeguimientoEnlace), el «No enviar recordatorios» de
+ * TarjetaSeguimiento (accionDetenerSeguimiento) y lo de la sección «Seguimiento de confirmación» del Hub
+ * (configSeguimientoInicial, avisoDiasSeguimiento, opcionesHora y etiquetaHora).
  */
 
 import { fechaHoraCO } from './fechas-colombia.js';
 import { stripPy } from './marca-empresa.js';
+import { valorConfig, enteroConfig as enteroAcotadoDeConfig } from './listas-ventas.js';
 
 /** Escríbele o reenvíale: el cierre de los motivos que piden que el asesor actúe. */
 const QUE_HACER = 'Escríbele al cliente o reenvíale el enlace.';
@@ -223,4 +228,140 @@ export function validarConfigSeguimiento(cfg) {
   const { seguimiento_hora_inicio: inicio, seguimiento_hora_fin: fin } = valores;
   if (inicio !== undefined && fin !== undefined && fin <= inicio) return MENSAJE_HORARIO;
   return null;
+}
+
+// ─── B3 T16: la ventana del enlace, TarjetaSeguimiento y la sección «Seguimiento de confirmación» del Hub ────────
+
+/**
+ * La línea del recordatorio en la ventana del enlace (U16-seguimiento punto 11), con el `seguimiento` de la respuesta
+ * del envío: ACTIVO -> gris «Si el cliente no confirma, le recordaremos {canal} el {fecha}.»; DETENIDO por
+ * SIN_MEDIO_CLIENTE -> ámbar «No habrá recordatorio automático: el cliente no tiene teléfono ni correo.». Lo demás (o
+ * sin seguimiento) no tiene línea: lo dice la tarjeta de «Siguiente paso».
+ * @param {unknown} s
+ * @returns {{tono: 'gris' | 'alerta', texto: string} | null}
+ */
+export function lineaSeguimientoEnlace(s) {
+  if (!esObjeto(s)) return null;
+  if (s.estado === 'ACTIVO') {
+    const cuando = fechaHoraCO(s.proximo_at);
+    return { tono: 'gris',
+      texto: conPunto(`Si el cliente no confirma, le recordaremos ${canalTexto(s.canal)}${cuando ? ` el ${cuando}` : ''}`) };
+  }
+  if (s.estado === 'DETENIDO' && s.motivo_fin === 'SIN_MEDIO_CLIENTE') {
+    return { tono: 'alerta', texto: 'No habrá recordatorio automático: el cliente no tiene teléfono ni correo.' };
+  }
+  return null;
+}
+
+// POST /ventas/{ruta}/{id}/seguimiento/detener (T11): solo la SC y la COT tienen recordatorios.
+const DETENER = Object.freeze({
+  SC: Object.freeze({ ruta: 'solicitudes', nombre: 'solicitud' }),
+  COT: Object.freeze({ ruta: 'cotizaciones', nombre: 'cotización' }),
+});
+
+/**
+ * «No enviar recordatorios» de TarjetaSeguimiento: la ruta del POST y lo que pregunta confirmar() (useAvisos), o null
+ * si el documento no tiene recordatorios (el pedido) o el id no es un entero positivo.
+ * @param {unknown} tipoDoc 'SC' | 'COT'
+ * @param {unknown} id
+ * @returns {{ruta: string, titulo: string, mensaje: string} | null}
+ */
+export function accionDetenerSeguimiento(tipoDoc, id) {
+  const d = typeof tipoDoc === 'string' && Object.hasOwn(DETENER, tipoDoc) ? DETENER[tipoDoc] : null;
+  const n = typeof id === 'number' ? id : typeof id === 'string' && /^\d+$/.test(id) ? Number(id) : NaN;
+  if (!d || !Number.isInteger(n) || n <= 0) return null;
+  return { ruta: `/ventas/${d.ruta}/${n}/seguimiento/detener`, titulo: 'No enviar recordatorios',
+    mensaje: `El cliente no recibirá recordatorios automáticos de esta ${d.nombre}. Se reactivan si la reenvías.` };
+}
+
+// seguimiento_confirmacion.CLAVES_CONFIG: los valores por defecto (R8: uno solo, a los 2 días, de 8 a 18).
+const DEFECTOS = Object.freeze({ seguimiento_auto_activo: true, seguimiento_dias: 2, seguimiento_max: 1,
+  seguimiento_solo_horario: true, seguimiento_hora_inicio: 8, seguimiento_hora_fin: 18 });
+
+/**
+ * Los valores con que abre la sección «Seguimiento de confirmación», como los lee seguimiento_confirmacion.leer_config:
+ * un interruptor que no es 'true'/'false' usa su defecto; un número que no es entero, su defecto, y uno fuera de rango,
+ * el límite (admin_config.entero_acotado); si la hora final queda antes (o igual) que la inicial, las dos vuelven a 8 y
+ * 18. Acepta las tres formas de la configuración (valorConfig de listas-ventas.js). Todo como texto, como lo guarda el
+ * panel ('true', '2').
+ * @param {unknown} cfg
+ * @returns {{seguimiento_auto_activo: string, seguimiento_dias: string, seguimiento_max: string,
+ *   seguimiento_solo_horario: string, seguimiento_hora_inicio: string, seguimiento_hora_fin: string}}
+ */
+export function configSeguimientoInicial(cfg) {
+  const interruptor = (clave) => {
+    const crudo = valorConfig(cfg, clave);
+    const b = crudo === null ? null : booleano(crudo);
+    return String(b === null ? DEFECTOS[clave] : b);
+  };
+  const numero = (clave) => enteroAcotadoDeConfig(cfg, clave, DEFECTOS[clave], ...LIMITES_SEGUIMIENTO[clave]);
+  let inicio = numero('seguimiento_hora_inicio');
+  let fin = numero('seguimiento_hora_fin');
+  if (fin <= inicio) [inicio, fin] = [DEFECTOS.seguimiento_hora_inicio, DEFECTOS.seguimiento_hora_fin];
+  return {
+    seguimiento_auto_activo: interruptor('seguimiento_auto_activo'),
+    seguimiento_dias: String(numero('seguimiento_dias')),
+    seguimiento_max: String(numero('seguimiento_max')),
+    seguimiento_solo_horario: interruptor('seguimiento_solo_horario'),
+    seguimiento_hora_inicio: String(inicio),
+    seguimiento_hora_fin: String(fin),
+  };
+}
+
+/**
+ * El aviso ámbar de la sección (U16-seguimiento punto 12a): con el recordatorio encendido, si seguimiento_dias es
+ * MAYOR que los días de alerta de la solicitud o de la cotización, el documento se pone rojo antes de que salga el
+ * recordatorio. Dice cuál: la solicitud, la cotización o las dos. null si no pasa o si algún número está a medio
+ * escribir. `cfg` es el estado del panel (o cualquiera de las formas de valorConfig).
+ * @param {unknown} cfg
+ * @returns {string | null}
+ */
+export function avisoDiasSeguimiento(cfg) {
+  if (!esObjeto(cfg)) return null;
+  if (booleano(valorConfig(cfg, 'seguimiento_auto_activo') ?? 'true') === false) return null;
+  const positivo = (clave) => {
+    const n = enteroConfig(valorConfig(cfg, clave));
+    return n !== null && n > 0 ? n : null;
+  };
+  const dias = positivo('seguimiento_dias');
+  if (dias === null) return null;
+  const sc = positivo('alerta_sc_dias');
+  const cot = positivo('alerta_cot_dias');
+  const rojaSc = sc !== null && dias > sc;
+  const rojaCot = cot !== null && dias > cot;
+  if (rojaSc && rojaCot) {
+    return 'Con estos días, la solicitud y la cotización se pondrán rojas antes de que salga el recordatorio.';
+  }
+  if (rojaSc || rojaCot) {
+    return `Con estos días, la ${rojaSc ? 'solicitud' : 'cotización'} se pondrá roja antes de que salga el recordatorio.`;
+  }
+  return null;
+}
+
+/**
+ * '8:00 a. m.', '6:00 p. m.'; 0 y 24 son '12:00 a. m. (medianoche)' (el inicio y el fin del día). '' si no es una hora
+ * de 0 a 24.
+ * @param {unknown} h
+ * @returns {string}
+ */
+export function etiquetaHora(h) {
+  const n = typeof h === 'number' ? h : typeof h === 'string' && /^\d+$/.test(h) ? Number(h) : NaN;
+  if (!Number.isInteger(n) || n < 0 || n > 24) return '';
+  if (n % 24 === 0) return '12:00 a. m. (medianoche)';
+  const doce = n % 12 === 0 ? 12 : n % 12;
+  return `${doce}:00 ${n < 12 ? 'a. m.' : 'p. m.'}`;
+}
+
+/**
+ * Las opciones de los dos selects de hora (seguimiento_hora_inicio de 0 a 23 y seguimiento_hora_fin de 1 a 24, los
+ * límites del backend): [{valor: '8', etiqueta: '8:00 a. m.'}]. [] con otra clave.
+ * @param {unknown} clave
+ * @returns {{valor: string, etiqueta: string}[]}
+ */
+export function opcionesHora(clave) {
+  if (clave !== 'seguimiento_hora_inicio' && clave !== 'seguimiento_hora_fin') return [];
+  const [minimo, maximo] = LIMITES_SEGUIMIENTO[clave];
+  const opciones = [];
+  for (let h = minimo; h <= maximo; h += 1) opciones.push({ valor: String(h), etiqueta: etiquetaHora(h) });
+  return opciones;
 }

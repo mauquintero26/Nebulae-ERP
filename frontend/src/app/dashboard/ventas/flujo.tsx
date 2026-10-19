@@ -4,8 +4,10 @@ import Link from 'next/link';
 import { Link2, Copy, Check, ExternalLink, ArrowRight, ArrowLeft, MessageCircle } from 'lucide-react';
 import { Modal, Button } from '@/components/ui';
 import type { AccentColor } from '@/components/ui';
-import { avisoCorreo } from '@/lib/aviso-correo';
-import { whatsappParaReabrir } from '@/lib/whatsapp';
+import { avisoCorreo, textosVentanaEnlace } from '@/lib/aviso-correo';
+import { recuadroWhatsApp, enlaceBotonWhatsApp } from '@/lib/envio-whatsapp';
+import { CLASES_TONO_AVISO, RecuadroEnvioWhatsapp, useVerificacionEntrega } from './ventana-enlace';
+import { LineaSeguimientoEnlace } from './seguimiento';
 import { etiquetaValorCambio } from '@/lib/etiquetas-ventas';
 import { copiarTexto } from '@/lib/copiar';
 import { returnToSeguro, etiquetaVolver } from '@/lib/detalle-layout';
@@ -116,13 +118,27 @@ export function NextStepCard({ tone, title, children, actions }: {
 // canal elegido; el recuadro dice en verde si el correo salio o en ambar por que no y que hacer.
 // B13: `whatsappUrl` es el wa.me que se intento abrir al enviar; con canal WhatsApp el modal ofrece
 // "Abrir WhatsApp" por si el navegador bloqueo esa ventana.
-export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', correo, canal, whatsappUrl, onClose }: {
+// B3 T16 (C28: un solo dueño; recuadros en este orden: WhatsApp, correo, vencimiento, recordatorio). Props opcionales:
+// - envioWhatsapp (RP23): el `whatsapp` de la respuesta del envío (el resultado del automático, U16-envio). No es la
+//   envioWhatsApp {automatico, listo} del ChannelModal. Con él, el recuadro verde/azul/ámbar y la verificación de entrega
+//   a los 6 s con «Volver a revisar» (U16-entrega); el botón manual sigue siendo UNO solo (enlaceBotonWhatsApp).
+// - telefono: el del cliente (telefono_whatsapp, el e164 de T8) para armar ese botón con el texto del servidor.
+// - vence: el último día en que sirve el enlace ('AAAA-MM-DD' de la respuesta del envío, C14); sin él (SC), 2 días.
+// - tipo: 'consulta' para el pedido (U23): otro título y texto, sin la nota de «Solo el cliente…».
+// - seguimiento: el recordatorio programado (`seguimiento` de la respuesta, U16-seguimiento).
+export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', correo, canal, whatsappUrl, envioWhatsapp,
+  telefono, vence, tipo = 'confirmacion', seguimiento, onClose }: {
   documento: string;
   link: string;
   color?: AccentColor;
   correo?: { enviado: boolean; destino?: string | null; motivo?: string | null; mensaje?: string } | null;
   canal?: string | null;
   whatsappUrl?: string | null;
+  envioWhatsapp?: unknown;
+  telefono?: string | null;
+  vence?: string | null;
+  tipo?: 'confirmacion' | 'consulta';
+  seguimiento?: unknown;
   onClose: () => void;
 }) {
   // H30: 'manual' = ni el portapapeles ni la copia de la seleccion funcionaron (p. ej. HTTP con IP, sin
@@ -131,8 +147,13 @@ export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', cor
   const inputRef = useRef<HTMLInputElement>(null);
   // Un solo temporizador de 'Copiado': se reprograma en cada copia y se cancela al cerrar el modal.
   const temporizadorCopia = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const aviso = avisoCorreo(correo, canal);
-  const abrirWhatsApp = whatsappParaReabrir(canal, whatsappUrl);
+  const entrega = useVerificacionEntrega(envioWhatsapp);
+  const recuadroWa = recuadroWhatsApp(envioWhatsapp, canal, entrega.verificacion);
+  const whatsappSalio = recuadroWa?.salio === true;
+  const aviso = avisoCorreo(correo, canal, whatsappSalio);
+  const abrirWhatsApp = enlaceBotonWhatsApp({ canal, envio: envioWhatsapp, botonManual: recuadroWa?.botonManual === true,
+    telefono, whatsappUrl });
+  const textos = textosVentanaEnlace({ tipo, documento, vence, whatsappEnviado: whatsappSalio });
 
   useEffect(() => () => {
     if (temporizadorCopia.current) clearTimeout(temporizadorCopia.current);
@@ -165,25 +186,24 @@ export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', cor
 
   return (
     <Modal
-      title="Enlace de confirmación listo"
-      subtitle={`El cliente confirma ${documento} desde este enlace`}
+      title={textos.titulo}
+      subtitle={textos.subtitulo}
       icon={Link2}
       color={color}
       maxWidth="lg"
       onClose={onClose}
       footer={<Button variant="secondary" onClick={onClose}>Cerrar</Button>}
     >
+      {recuadroWa && <RecuadroEnvioWhatsapp recuadro={recuadroWa} entrega={entrega} />}
       {aviso && (
-        <div className={`rounded-xl border px-3 py-2.5 text-xs font-semibold ${aviso.tono === 'ok'
-          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-          : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+        <div className={`rounded-xl border px-3 py-2.5 text-xs font-semibold ${CLASES_TONO_AVISO[aviso.tono]}`}>
           {aviso.texto}
         </div>
       )}
       <p className="text-sm text-slate-600">
-        Envíale este enlace al cliente por el canal que prefieras. Es de un solo uso y vence en 2 días;
-        cuando el cliente lo abra y confirme, esta pantalla te mostrará el siguiente paso.
+        {textos.intro} {textos.vigencia}
       </p>
+      <LineaSeguimientoEnlace seguimiento={seguimiento} />
       <input
         ref={inputRef}
         readOnly
@@ -217,13 +237,13 @@ export function EnlaceConfirmacionModal({ documento, link, color = 'indigo', cor
             rel="noreferrer"
             className="rounded-xl font-bold flex items-center justify-center gap-2 px-5 py-2.5 text-sm border border-green-200 text-green-700 hover:bg-green-50 bg-white"
           >
-            <MessageCircle size={14} /> Abrir WhatsApp
+            <MessageCircle size={14} /> Abrir WhatsApp con el mensaje
           </a>
         )}
       </div>
-      <p className="text-[11px] text-slate-400">
-        Solo el cliente debería confirmar: si abres el enlace y confirmas tú, queda registrado como la confirmación del cliente.
-      </p>
+      {textos.nota && (
+        <p className="text-[11px] text-slate-400">{textos.nota}</p>
+      )}
     </Modal>
   );
 }

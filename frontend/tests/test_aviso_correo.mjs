@@ -5,7 +5,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { avisoCorreo, correoDelCliente } from '../src/lib/aviso-correo.js';
+import { avisoCorreo, correoDelCliente, textosVentanaEnlace } from '../src/lib/aviso-correo.js';
 
 console.log('--- TEST a: sin resultado de correo no hay aviso ---');
 {
@@ -65,6 +65,42 @@ console.log('--- TEST B3: el correo del cliente para el ChannelModal del Hub ---
   assert.equal(correoDelCliente({ numero: 'COT-1' }), undefined);
   assert.equal(correoDelCliente(null), undefined);
   assert.equal(correoDelCliente(undefined), undefined);
+}
+
+console.log('--- TEST B3 T16: textosVentanaEnlace (C28: tipo, vence y el WhatsApp que ya salió) ---');
+{
+  const NOTA = 'Solo el cliente debería confirmar o pedir cambios: si abres el enlace y lo haces tú, queda registrado '
+    + 'como si fuera el cliente.';
+  const MANUAL = 'Envíale este enlace al cliente por el canal que prefieras.';
+  const AUTOMATICO = 'El sistema ya le envió este enlace al cliente por WhatsApp. Puedes copiarlo si también quieres '
+    + 'mandarlo por otro medio.';
+  const SIGUIENTE = 'cuando el cliente lo abra y confirme, esta pantalla te mostrará el siguiente paso.';
+  // SC (sin fecha): el texto de siempre, y el aviso nuevo de U17-H28 (punto 14).
+  assert.deepEqual(textosVentanaEnlace({ documento: 'la solicitud SC-1' }), {
+    titulo: 'Enlace de confirmación listo', subtitulo: 'El cliente confirma la solicitud SC-1 desde este enlace',
+    intro: MANUAL, vigencia: `Es de un solo uso y vence en 2 días; ${SIGUIENTE}`, nota: NOTA });
+  // COT con la fecha real (C14): el último día en que sirve, sin pasarlo a otra zona.
+  const cot = textosVentanaEnlace({ tipo: 'confirmacion', documento: 'la cotización COT-1', vence: '2026-10-08' });
+  assert.equal(cot.vigencia, `Es de un solo uso y sirve hasta el 8 de octubre de 2026; ${SIGUIENTE}`);
+  // Un instante es el vence_at EXCLUSIVO (00:00 en Colombia del día siguiente, nota tras T7): muestra el día anterior.
+  assert.equal(textosVentanaEnlace({ vence: '2026-10-09T05:00:00Z' }).vigencia,
+    `Es de un solo uso y sirve hasta el 8 de octubre de 2026; ${SIGUIENTE}`);
+  // Una fecha que no se puede leer: el texto sin fecha.
+  assert.equal(textosVentanaEnlace({ vence: 'mañana' }).vigencia, `Es de un solo uso y vence en 2 días; ${SIGUIENTE}`);
+  // El WhatsApp automático ya salió (U16-envio punto 12).
+  assert.equal(textosVentanaEnlace({ documento: 'la solicitud SC-1', whatsappEnviado: true }).intro, AUTOMATICO);
+  assert.equal(textosVentanaEnlace({ whatsappEnviado: 'true' }).intro, MANUAL, 'solo con true');
+  // Pedido de consulta (U23 punto 8): su título, subtítulo y texto, sin la nota de «Solo el cliente…».
+  assert.deepEqual(textosVentanaEnlace({ tipo: 'consulta', documento: 'el pedido PVEN-1', vence: '2026-11-02' }), {
+    titulo: 'Enlace del pedido listo', subtitulo: 'El cliente ve su pedido, lo que ha pagado y lo que le falta',
+    intro: MANUAL, vigencia: 'Puede abrirlo las veces que quiera hasta el 2 de noviembre de 2026. Si lo reenvías, el '
+      + 'enlace anterior deja de servir; si cancelas el pedido, deja de abrir.', nota: null });
+  assert.equal(textosVentanaEnlace({ tipo: 'consulta' }).vigencia, 'Puede abrirlo las veces que quiera. Si lo '
+    + 'reenvías, el enlace anterior deja de servir; si cancelas el pedido, deja de abrir.');
+  assert.equal(textosVentanaEnlace({ tipo: 'consulta', whatsappEnviado: true }).intro, AUTOMATICO);
+  // Un tipo desconocido es el de confirmación; sin argumentos no lanza.
+  assert.equal(textosVentanaEnlace({ tipo: 'otro' }).titulo, 'Enlace de confirmación listo');
+  assert.equal(textosVentanaEnlace().subtitulo, 'El cliente confirma el documento desde este enlace');
 }
 
 console.log('OK test_aviso_correo.mjs');

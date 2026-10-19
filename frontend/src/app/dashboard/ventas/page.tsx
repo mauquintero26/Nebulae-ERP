@@ -32,7 +32,16 @@ import { waUrl } from '@/lib/whatsapp';
 import { correoDelCliente } from '@/lib/aviso-correo';
 import { formatoPesos } from '@/lib/pesos';
 import { etiquetaTipoSolicitud } from '@/lib/etiquetas-ventas';
-import { diasAlerta, pedidoVigente, pestanaCotizacion } from '@/lib/listas-ventas';
+import { diasAlerta, pedidoVigente, pestanaCotizacion, valorConfig, enteroConfig, DIAS_VALIDEZ_COTIZACION } from '@/lib/listas-ventas';
+// B3 T16: las secciones nuevas del ConfigPanel, la etiqueta de las acciones del Bloque 3 y el WhatsApp automático del
+// envío desde el tablero (R15: lo nuevo vive en sus archivos; aquí solo se cablea).
+import { SeccionSeguimiento } from './seguimiento';
+import { ConfigEnvioWhatsApp } from './config-envio-whatsapp';
+import { SeccionDocumentosCliente, SeccionIva, EtiquetaAccionBloque3 } from './hub-bloque3';
+import { accionBloque3 } from '@/lib/acciones-bloque3';
+import { abreWhatsAppLocal } from '@/lib/envio-whatsapp';
+import { configSeguimientoInicial, validarConfigSeguimiento } from '@/lib/seguimiento';
+import { normalizarTarifaIva, TARIFA_IVA_POR_DEFECTO } from '@/lib/iva';
 
 // H42: pesos enteros con punto de miles ('$1.062.523'); lo que no es un monto (null, NaN) se ve '$0'.
 const fCOP  = (v: any) => formatoPesos(v);
@@ -177,10 +186,12 @@ function ActivitiesPanel({row,onClose,onNotaGuardada}:{row:any,onClose:()=>void,
                 {[...acts].reverse().map((a:any,i:number)=>(
                   <div key={a.id ?? `act-${i}`} className="flex gap-3 pl-7 relative">
                     <div className="absolute left-0 top-2 w-4 h-4 rounded-full border-2 border-white"
-                      style={{backgroundColor:({CREATED:'#6366f1',ESTADO_CHANGED:'#f59e0b',SENT:'#10b981',CONFIRMED:'#059669',REJECTED:'#ef4444',UPDATED:'#3b82f6',RECOTIZADA:'#f97316',CHATTER:'#0891b2',NOTE_ADDED:'#3b82f6'}as any)[a.action]||'#94a3b8'}}/>
+                      style={{backgroundColor:accionBloque3(a.action)?.hex||({CREATED:'#6366f1',ESTADO_CHANGED:'#f59e0b',SENT:'#10b981',CONFIRMED:'#059669',REJECTED:'#ef4444',UPDATED:'#3b82f6',RECOTIZADA:'#f97316',CHATTER:'#0891b2',NOTE_ADDED:'#3b82f6'}as any)[a.action]||'#94a3b8'}}/>
                     <div className="flex-1 min-w-0 bg-white border border-slate-100 rounded-xl p-3 shadow-xs">
                       {/* U6+H22: una nota del Chatter lleva su tipo encima (Nota interna, Llamada…, «Nota externa · medio»). */}
                       {esEntradaChatter(a)&&<div className="mb-1.5"><EtiquetaChatter actividad={a}/></div>}
+                      {/* B3 T16 (RP22): las acciones nuevas (recordatorio, entrega del WhatsApp…) con su etiqueta e ícono. */}
+                      {accionBloque3(a.action)&&<div className="mb-1.5"><EtiquetaAccionBloque3 action={a.action}/></div>}
                       <p className="text-sm font-medium text-slate-700 whitespace-pre-wrap break-words">{a.description}</p>
                       <div className="mt-1.5"><CambiosDeActividad extra={a.extra_data}/></div>
                       <p className="text-xs text-slate-400 mt-1">{fDate(a.created_at)} {fTime(a.created_at)}{a.user_name&&<span className="ml-2 font-medium">- {a.user_name}</span>}</p>
@@ -200,6 +211,7 @@ function ActivitiesPanel({row,onClose,onNotaGuardada}:{row:any,onClose:()=>void,
 function ConfigPanel({alertDias,onSave,onClose}:{alertDias:any,onSave:(cfg:any)=>void,onClose:()=>void}) {
   // N8: todos leen los valores reales; solo un administrador los cambia (la seguridad real es el 403 del PATCH).
   const soloLectura = getUsuarioActual().role.trim().toLowerCase() !== 'admin';
+  const { avisarError } = useAvisos();
   const [error, setError] = useState('');
   const [cfg, setCfg] = useState({
     alerta_sc_dias:  String(diasAlerta(alertDias, 'alerta_sc_dias')),
@@ -208,13 +220,23 @@ function ConfigPanel({alertDias,onSave,onClose}:{alertDias:any,onSave:(cfg:any)=
     auto_lead_crm:   String(alertDias?.auto_lead_crm?.value   || alertDias?.auto_lead_crm   || 'true'),
     auto_chatter_ia: String(alertDias?.auto_chatter_ia?.value || alertDias?.auto_chatter_ia || 'false'),
     notif_whatsapp:  String(alertDias?.notif_whatsapp?.value  || alertDias?.notif_whatsapp  || 'false'),
+    // B3 T16: validez de la cotización (U22-validez, 1 a 60), tarifa de IVA por defecto (IVA-PRODUCTO, '19') y las 6
+    // claves del recordatorio (U16-seguimiento), leídas como las lee el servidor.
+    dias_validez_cotizacion: String(enteroConfig(alertDias, 'dias_validez_cotizacion', DIAS_VALIDEZ_COTIZACION.defecto,
+      DIAS_VALIDEZ_COTIZACION.minimo, DIAS_VALIDEZ_COTIZACION.maximo)),
+    iva_tarifa_defecto: String(normalizarTarifaIva(valorConfig(alertDias, 'iva_tarifa_defecto')) ?? TARIFA_IVA_POR_DEFECTO),
+    ...configSeguimientoInicial(alertDias),
   });
+  const cambiarCampo = (k: string, v: string) => setCfg(p => ({...p, [k]: v}));
   const [saving,setSaving]=useState(false);
   const [saved,setSaved]=useState(false);
   async function save(){
+    // B3 T16: los recordatorios con las mismas reglas del 422 del servidor, antes de mandar nada.
+    const invalido = validarConfigSeguimiento(cfg);
+    if(invalido){ setError(invalido); return; }
     setSaving(true); setError('');
     try{ await apiFetch('/ventas/config',{method:'PATCH',body:JSON.stringify(cfg)}); onSave(cfg); setSaved(true); setTimeout(()=>setSaved(false),2000); }
-    catch(err:any){ setError(err?.message || 'No se pudo guardar la configuración.'); }
+    catch(err:any){ setError(textoDeError(err, 'No se pudo guardar la configuración')); avisarError(err, 'No se pudo guardar la configuración'); }
     setSaving(false);
   }
   const Toggle=({k,label,desc}:{k:string,label:string,desc:string})=>(
@@ -263,12 +285,20 @@ function ConfigPanel({alertDias,onSave,onClose}:{alertDias:any,onSave:(cfg:any)=
               ))}
             </div>
           </div>
+          {/* B3 T16: Documentos para el cliente (U22-validez), IVA (IVA-PRODUCTO), Seguimiento de confirmación con la
+              revisión automática (U16-seguimiento, TAREAS) y el envío automático por WhatsApp (U16-envio, con su propio
+              «Guardar»). Las tres primeras se guardan con «Guardar Configuración». */}
+          <SeccionDocumentosCliente cfg={cfg} onCambio={cambiarCampo} soloLectura={soloLectura}/>
+          <SeccionIva cfg={cfg} onCambio={cambiarCampo} soloLectura={soloLectura}/>
+          <SeccionSeguimiento cfg={cfg} onCambio={cambiarCampo} soloLectura={soloLectura}/>
+          <ConfigEnvioWhatsApp soloLectura={soloLectura}/>
           <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-5">
             <div className="flex items-center gap-2 mb-4"><Zap size={16} className="text-indigo-600"/><h3 className="font-black text-indigo-800 text-sm uppercase tracking-wide">Automatizaciones Comerciales</h3></div>
             <div className="space-y-3">
               <Toggle k="auto_lead_crm" label="Auto-crear Lead en CRM" desc="Al ingresar una solicitud de cliente, sincroniza automáticamente el prospecto al CRM."/>
               <Toggle k="auto_chatter_ia" label="Chatter asistido por IA" desc="Sugiere respuestas en el Chatter basadas en el catálogo y compras del cliente."/>
-              <Toggle k="notif_whatsapp" label="Notificación WhatsApp automática" desc="Al pasar el pedido a LISTO ENTREGA, avisa al cliente con su número de orden."/>
+              {/* C23 (B3 T16): el interruptor decorativo notif_whatsapp queda oculto: no hacía nada y se confundiría con el
+                  envío automático por WhatsApp. Su valor guardado no cambia (se reenvía tal cual). */}
             </div>
           </div>
     </Drawer>
@@ -324,7 +354,10 @@ export default function VentasHub() {
   const [envioHub, setEnvioHub]       = useState<{tipo:'SC'|'COT', id:string, numero:string, telefono:string, correo?:string|null}|null>(null);
   const [canalHub, setCanalHub]       = useState<'WhatsApp'|'Email'|'Otro'|null>(null);
   const [enviandoHub, setEnviandoHub] = useState(false);
-  const [hubEnlace, setHubEnlace]     = useState<{documento:string, link:string, correo:any, canal:string|null, color:'blue'|'indigo', whatsapp?:string|null}|null>(null);
+  // B3 T16 (RP23): whatsapp sigue siendo el wa.me que se intentó abrir; envioWhatsapp es el resultado del automático, y
+  // telefono (telefono_whatsapp, RP19), vence y seguimiento vienen de la respuesta del envío (el mismo modal del detalle).
+  const [hubEnlace, setHubEnlace]     = useState<{documento:string, link:string, correo:any, canal:string|null, color:'blue'|'indigo', whatsapp?:string|null,
+    envioWhatsapp?:unknown, telefono?:string|null, vence?:string|null, seguimiento?:unknown}|null>(null);
 
   // T9B r1: silencioso (tras una nota del panel de actividad) recarga sin el spinner de página: la tabla o el Kanban no
   // se reemplazan detrás del panel y no se pierde el scroll. «Actualizar» la llama sin opciones: con spinner.
@@ -659,7 +692,8 @@ export default function VentasHub() {
   // H27+H39 (usuario: "Sí, preguntar el canal"): el envío desde el tablero pide el canal y luego muestra el enlace.
   function abrirEnvioHub(tipo:'SC'|'COT', id:string, item:any){
     // B3: el correo del cliente, como en cotizacion/[id] (sin correo, ChannelModal no ofrece Email).
-    setEnvioHub({tipo, id, numero:item?.numero || id, telefono:item?.customer_phone || '', correo:correoDelCliente(item)});
+    // B3 T16 (RP19): el teléfono es telefono_whatsapp de la fila (el e164 que valida el servidor, o null), no el crudo.
+    setEnvioHub({tipo, id, numero:item?.numero || id, telefono:item?.telefono_whatsapp || '', correo:correoDelCliente(item)});
     setCanalHub(null);
   }
 
@@ -673,12 +707,16 @@ export default function VentasHub() {
       const link = d?.link_confirmacion || '';
       const documento = tipo === 'COT' ? `la cotización ${numero}` : `la solicitud ${numero}`;
       let whatsapp: string | null = null;
-      if(canalHub === 'WhatsApp'){
-        whatsapp = waUrl(telefono, link ? `Hola, aquí está ${documento}. Confírmala aquí: ${link}` : `Hola, aquí está ${documento}.`);
+      // B3 T16 (U16-envio punto 14): wa.me solo si el automático no vino o está apagado (nunca dos mensajes), con el
+      // texto que devolvió el servidor (texto_manual, con el enlace) o el de siempre.
+      const wa = d?.whatsapp ?? null;
+      if(abreWhatsAppLocal(canalHub, wa)){
+        whatsapp = waUrl(telefono, wa?.texto_manual || (link ? `Hola, aquí está ${documento}. Confírmala aquí: ${link}` : `Hola, aquí está ${documento}.`));
         if(whatsapp) window.open(whatsapp, '_blank');
       }
       // B13: el modal ofrece "Abrir WhatsApp" con el mismo enlace por si el navegador bloqueó la ventana.
-      if(link) setHubEnlace({documento, link, correo:d?.correo ?? null, canal:canalHub, color: tipo === 'COT' ? 'blue' : 'indigo', whatsapp});
+      if(link) setHubEnlace({documento, link, correo:d?.correo ?? null, canal:canalHub, color: tipo === 'COT' ? 'blue' : 'indigo', whatsapp,
+        envioWhatsapp: wa, telefono, vence: d?.vence ?? null, seguimiento: d?.seguimiento ?? null});
       setToast({msg: 'Enviada para confirmación del cliente', type: 'ok'});
       setEnvioHub(null);
       setCanalHub(null);
@@ -1613,7 +1651,8 @@ export default function VentasHub() {
       )}
       {hubEnlace && (
         <EnlaceConfirmacionModal documento={hubEnlace.documento} link={hubEnlace.link} color={hubEnlace.color}
-          correo={hubEnlace.correo} canal={hubEnlace.canal} whatsappUrl={hubEnlace.whatsapp} onClose={()=>setHubEnlace(null)} />
+          correo={hubEnlace.correo} canal={hubEnlace.canal} whatsappUrl={hubEnlace.whatsapp} envioWhatsapp={hubEnlace.envioWhatsapp}
+          telefono={hubEnlace.telefono} vence={hubEnlace.vence} seguimiento={hubEnlace.seguimiento} onClose={()=>setHubEnlace(null)} />
       )}
     </div>
   );

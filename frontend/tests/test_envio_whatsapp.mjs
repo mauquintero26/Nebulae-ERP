@@ -12,7 +12,9 @@
 import assert from 'node:assert/strict';
 import {
   avisoWhatsApp, debeVerificar, textoEntrega, TEXTOS_MOTIVO_WHATSAPP, TEXTOS_WHATSAPP_ENVIADO, ESTADOS_FINALES_ENTREGA,
-  TEXTOS_CONSULTA_FALLIDA,
+  TEXTOS_CONSULTA_FALLIDA, ESPERA_VERIFICACION_MS, TEXTO_REVISANDO_ENTREGA, abreWhatsAppLocal, recuadroWhatsApp,
+  enlaceBotonWhatsApp, estadoConfigWhatsApp, resultadoPruebaWhatsApp, variablesDeEjemplo, lineaEnvioAutomatico,
+  formularioEnvioWhatsApp, cuerpoEnvioWhatsApp, hayCambiosWhatsApp,
 } from '../src/lib/envio-whatsapp.js';
 import { avisoCorreo } from '../src/lib/aviso-correo.js';
 
@@ -217,6 +219,191 @@ console.log('--- TEST 11: avisoCorreo con el tercer parámetro (U16-envio punto 
   const heredado = avisoCorreo({ enviado: false, motivo: 'toString' }, 'constructor');
   assert.equal(heredado.texto, 'No se envió el correo de respaldo. El cliente todavía no recibió el enlace: cópialo y '
     + 'envíaselo por otro medio.');
+}
+
+// ─── B3 T16: la ventana del enlace (U16-envio puntos 12, 14 y 15, U16-entrega punto 4) y ConfigEnvioWhatsApp (16) ───
+
+console.log('--- TEST 12 (T16): abreWhatsAppLocal, solo sin resultado o con el automático apagado (punto 14) ---');
+{
+  assert.equal(abreWhatsAppLocal('WhatsApp', null), true, 'backend sin el automático: como hoy');
+  assert.equal(abreWhatsAppLocal('WhatsApp', undefined), true);
+  assert.equal(abreWhatsAppLocal('WhatsApp', wa({ motivo: 'ENVIO_AUTOMATICO_APAGADO' })), true);
+  // Salió, o no salió por otro motivo: no se abre (el botón de la ventana lo ofrece). Nunca dos mensajes.
+  assert.equal(abreWhatsAppLocal('WhatsApp', enviadoTexto), false);
+  for (const motivo of ['CHATWOOT_NO_CONFIGURADO', 'BANDEJA_NO_CONFIGURADA', 'TELEFONO_INVALIDO',
+    'FUERA_DE_VENTANA_SIN_PLANTILLA', 'FALLO_CHATWOOT', 'CHATWOOT_SIN_RESPUESTA']) {
+    assert.equal(abreWhatsAppLocal('WhatsApp', wa({ motivo })), false, motivo);
+  }
+  // Con otro canal nunca.
+  assert.equal(abreWhatsAppLocal('Email', null), false);
+  assert.equal(abreWhatsAppLocal('Otro', wa({ motivo: 'ENVIO_AUTOMATICO_APAGADO' })), false);
+  assert.equal(abreWhatsAppLocal(null, null), false);
+}
+
+console.log('--- TEST 13 (T16): recuadroWhatsApp sin verificación = avisoWhatsApp + salio/revisable ---');
+{
+  assert.equal(recuadroWhatsApp(null, 'WhatsApp', null), null);
+  assert.equal(recuadroWhatsApp(enviadoTexto, 'Email', null), null);
+  const r = recuadroWhatsApp(enviadoTexto, 'WhatsApp', null);
+  assert.deepEqual(r, { ...avisoWhatsApp(enviadoTexto, 'WhatsApp'), entrega: null, salio: true, revisable: true });
+  const apagado = recuadroWhatsApp(wa({ motivo: 'ENVIO_AUTOMATICO_APAGADO' }), 'WhatsApp', undefined);
+  assert.equal(apagado.tono, 'info');
+  assert.equal(apagado.salio, false);
+  assert.equal(apagado.revisable, false, 'lo que no salió no se verifica');
+  assert.equal(apagado.botonManual, true);
+  // Un envío que salió sin envio_id (el commit del resultado falló) no se puede verificar.
+  assert.equal(recuadroWhatsApp({ ...enviadoTexto, envio_id: null }, 'WhatsApp', null).revisable, false);
+  assert.equal(ESPERA_VERIFICACION_MS, 6000, 'una sola verificación automática a los 6 s');
+  assert.equal(TEXTO_REVISANDO_ENTREGA, 'Revisando si le llegó al cliente…');
+}
+
+console.log('--- TEST 14 (T16): recuadroWhatsApp con la respuesta de verificar ---');
+{
+  const verif = (estado, texto, extra) => ({ envio_id: 41, estado, texto, boton_manual: estado === 'FALLIDO',
+    verificado: true, ...extra });
+  const entregado = recuadroWhatsApp(enviadoTexto, 'WhatsApp', verif('ENTREGADO', 'El WhatsApp le llegó al cliente.'));
+  assert.equal(entregado.tono, 'ok');
+  assert.equal(entregado.texto, enviadoTexto.texto_resultado, 'el número sigue a la vista');
+  assert.equal(entregado.entrega, 'Le llegó al cliente.');
+  assert.equal(entregado.botonManual, false);
+  assert.equal(entregado.salio, true);
+  assert.equal(entregado.revisable, true, 'ENTREGADO todavía puede pasar a LEIDO');
+  const leido = recuadroWhatsApp(enviadoTexto, 'WhatsApp', verif('LEIDO', 'El cliente leyó el WhatsApp.'));
+  assert.equal(leido.tono, 'ok');
+  assert.equal(leido.entrega, 'El cliente ya lo leyó.');
+  assert.equal(leido.revisable, false, 'LEIDO es final: sin «Volver a revisar»');
+  // FALLIDO: ámbar, con el motivo traducido del servidor, el botón y nunca «sí salió».
+  const fallido = recuadroWhatsApp(enviadoTexto, 'WhatsApp',
+    verif('FALLIDO', 'El WhatsApp no le llegó al cliente: ese número no tiene WhatsApp o no puede recibir mensajes.'));
+  assert.equal(fallido.tono, 'alerta');
+  assert.equal(fallido.botonManual, true);
+  assert.equal(fallido.salio, false);
+  assert.equal(fallido.revisable, false, 'FALLIDO es final');
+  assert.equal(fallido.entrega, 'El WhatsApp no le llegó al cliente: ese número no tiene WhatsApp o no puede recibir '
+    + `mensajes. Envíaselo tú con el botón ${BOTON}.`);
+  // La consulta a Chatwoot falló: el estado no cambió; el tono y el botón siguen como estaban.
+  const sinConsulta = recuadroWhatsApp(enviadoTexto, 'WhatsApp',
+    verif('ENVIADO', 'No se pudo consultar Chatwoot ahora; vuelve a intentar.', { verificado: false }));
+  assert.equal(sinConsulta.tono, 'ok');
+  assert.equal(sinConsulta.entrega, 'No se pudo consultar Chatwoot ahora; vuelve a intentar.');
+  assert.equal(sinConsulta.botonManual, false);
+  assert.equal(sinConsulta.revisable, true);
+  // La respuesta de OTRO envío (otra ventana abierta antes) no se mezcla.
+  assert.deepEqual(recuadroWhatsApp(enviadoTexto, 'WhatsApp', verif('FALLIDO', 'x', { envio_id: 99 })),
+    recuadroWhatsApp(enviadoTexto, 'WhatsApp', null));
+  // Una verificación que no es un objeto se ignora.
+  assert.deepEqual(recuadroWhatsApp(enviadoTexto, 'WhatsApp', 'x'), recuadroWhatsApp(enviadoTexto, 'WhatsApp', null));
+}
+
+console.log('--- TEST 15 (T16, RP23): enlaceBotonWhatsApp, el ÚNICO botón «Abrir WhatsApp con el mensaje» ---');
+{
+  const TEL = '+573001234567';
+  const URL_LOCAL = 'https://wa.me/573001234567?text=hola';
+  // Sin resultado del automático (B13): el mismo wa.me que se intentó abrir.
+  assert.equal(enlaceBotonWhatsApp({ canal: 'WhatsApp', envio: null, botonManual: false, telefono: TEL,
+    whatsappUrl: URL_LOCAL }), URL_LOCAL);
+  assert.equal(enlaceBotonWhatsApp({ canal: 'WhatsApp', envio: null, whatsappUrl: null }), null);
+  // No salió: wa.me con el texto del servidor (texto_manual, con el enlace).
+  const noSalio = wa({ motivo: 'FUERA_DE_VENTANA_SIN_PLANTILLA' });
+  assert.equal(enlaceBotonWhatsApp({ canal: 'WhatsApp', envio: noSalio, botonManual: true, telefono: TEL,
+    whatsappUrl: null }), `https://wa.me/573001234567?text=${encodeURIComponent(noSalio.texto_manual)}`);
+  // Salió (y no falló la entrega): sin botón, aunque llegue un whatsappUrl.
+  assert.equal(enlaceBotonWhatsApp({ canal: 'WhatsApp', envio: enviadoTexto, botonManual: false, telefono: TEL,
+    whatsappUrl: URL_LOCAL }), null);
+  // FALLIDO después de verificar: el botón vuelve con el texto del servidor.
+  assert.equal(enlaceBotonWhatsApp({ canal: 'WhatsApp', envio: enviadoTexto, botonManual: true, telefono: TEL }),
+    `https://wa.me/573001234567?text=${encodeURIComponent(enviadoTexto.texto_manual)}`);
+  // Sin texto_manual o sin teléfono: el wa.me que se intentó abrir, si lo hay; si no, nada.
+  assert.equal(enlaceBotonWhatsApp({ canal: 'WhatsApp', envio: wa({ motivo: 'ENVIO_AUTOMATICO_APAGADO',
+    texto_manual: null }), botonManual: true, telefono: TEL, whatsappUrl: URL_LOCAL }), URL_LOCAL);
+  assert.equal(enlaceBotonWhatsApp({ canal: 'WhatsApp', envio: noSalio, botonManual: true, telefono: '',
+    whatsappUrl: null }), null);
+  // Solo con canal WhatsApp y solo enlaces wa.me (whatsappParaReabrir).
+  assert.equal(enlaceBotonWhatsApp({ canal: 'Email', envio: noSalio, botonManual: true, telefono: TEL }), null);
+  assert.equal(enlaceBotonWhatsApp({ canal: 'WhatsApp', envio: null, whatsappUrl: 'javascript:alert(1)' }), null);
+}
+
+console.log('--- TEST 16 (T16, hueco 4): estadoConfigWhatsApp dice qué falta ---');
+{
+  const completo = { automatico: true, inbox_id: 7, plantilla: 'documento_cliente', plantilla_recordatorio: 'recordatorio',
+    idioma: 'es', servidor_configurado: true, listo: true };
+  const e = estadoConfigWhatsApp(completo);
+  assert.deepEqual(e.servidor, { ok: true, texto: 'Conexión con Chatwoot configurada en el servidor.' });
+  assert.deepEqual(e.faltan, []);
+  const vacio = estadoConfigWhatsApp({ automatico: false, inbox_id: null, plantilla: null, plantilla_recordatorio: null,
+    idioma: 'es', servidor_configurado: false });
+  assert.deepEqual(vacio.servidor,
+    { ok: false, texto: 'Falta configurar la conexión con Chatwoot en el servidor (EasyPanel).' });
+  assert.equal(vacio.faltan.length, 3);
+  assert.ok(vacio.faltan[0].startsWith('El número de la bandeja de WhatsApp de Chatwoot'), vacio.faltan[0]);
+  assert.ok(vacio.faltan[1].startsWith('La plantilla del documento aprobada por Meta'), vacio.faltan[1]);
+  assert.ok(vacio.faltan[1].includes('24 horas'), vacio.faltan[1]);
+  assert.ok(vacio.faltan[2].startsWith('La plantilla del recordatorio aprobada por Meta'), vacio.faltan[2]);
+  assert.ok(vacio.faltan[2].includes('correo'), vacio.faltan[2]);
+  // Cada una por su lado (dice CUÁL falta).
+  assert.deepEqual(estadoConfigWhatsApp({ ...completo, plantilla_recordatorio: null }).faltan, [vacio.faltan[2]]);
+  assert.deepEqual(estadoConfigWhatsApp({ ...completo, plantilla: '' }).faltan, [vacio.faltan[1]]);
+  assert.deepEqual(estadoConfigWhatsApp({ ...completo, inbox_id: 0 }).faltan, [vacio.faltan[0]]);
+  assert.equal(estadoConfigWhatsApp(null), null);
+}
+
+console.log('--- TEST 17 (T16): resultadoPruebaWhatsApp («Probar conexión») ---');
+{
+  const base = { ok: true, version: '3.12.0', bandeja: 'WhatsApp Ventas', es_whatsapp: true, plantilla: 'APROBADA',
+    plantilla_detalle: null, plantilla_recordatorio: 'APROBADA', plantilla_recordatorio_detalle: null,
+    mensaje: 'Conexión correcta con la bandeja «WhatsApp Ventas» de WhatsApp.', probado_por: 'Admin' };
+  assert.deepEqual(resultadoPruebaWhatsApp(base), { tono: 'ok', lineas: [base.mensaje,
+    'Versión de Chatwoot: 3.12.0.', 'Plantilla del documento: aprobada por Meta.',
+    'Plantilla del recordatorio: aprobada por Meta.'] });
+  // Una plantilla sin aprobar: alerta con el detalle del servidor; una sin configurar lo dice.
+  const r = resultadoPruebaWhatsApp({ ...base, plantilla_recordatorio: 'NO_ENCONTRADA',
+    plantilla_recordatorio_detalle: 'No hay una plantilla «recordatorio» en esta bandeja.', plantilla: null });
+  assert.equal(r.tono, 'alerta');
+  assert.ok(r.lineas.includes('Plantilla del documento: sin configurar.'), r.lineas.join(' | '));
+  assert.ok(r.lineas.includes('Plantilla del recordatorio: No hay una plantilla «recordatorio» en esta bandeja.'));
+  // Sin conexión o sin bandeja: solo el mensaje (y la versión si la hay), en ámbar.
+  assert.deepEqual(resultadoPruebaWhatsApp({ ok: false, version: null, bandeja: null, es_whatsapp: false,
+    plantilla: null, plantilla_recordatorio: null,
+    mensaje: 'Falta configurar la conexión con Chatwoot en el servidor (EasyPanel).' }),
+  { tono: 'alerta', lineas: ['Falta configurar la conexión con Chatwoot en el servidor (EasyPanel).'] });
+  assert.equal(resultadoPruebaWhatsApp({ ok: false }).lineas[0], 'No se pudo probar la conexión.');
+  assert.equal(resultadoPruebaWhatsApp(null), null);
+}
+
+console.log('--- TEST 18 (T16): variablesDeEjemplo y la línea de solo lectura ---');
+{
+  assert.deepEqual(variablesDeEjemplo({ 2: 'Pinturas', 1: 'María Pérez', 10: 'x', 3: 'Cotización COT-1' }), [
+    { variable: '{{1}}', valor: 'María Pérez' }, { variable: '{{2}}', valor: 'Pinturas' },
+    { variable: '{{3}}', valor: 'Cotización COT-1' }, { variable: '{{10}}', valor: 'x' }]);
+  assert.deepEqual(variablesDeEjemplo(null), []);
+  assert.deepEqual(variablesDeEjemplo({ a: 'x' }), [], 'solo variables numeradas');
+  assert.equal(lineaEnvioAutomatico({ automatico: true, listo: false }), 'Envío automático por WhatsApp: encendido');
+  assert.equal(lineaEnvioAutomatico({ automatico: false }), 'Envío automático por WhatsApp: apagado');
+  assert.equal(lineaEnvioAutomatico(null), null);
+}
+
+console.log('--- TEST 19 (T16): el formulario de ConfigEnvioWhatsApp y el cuerpo del PUT ---');
+{
+  const guardado = { automatico: true, inbox_id: 7, plantilla: 'documento_cliente', plantilla_recordatorio: null,
+    idioma: 'es_CO', servidor_configurado: true };
+  const form = formularioEnvioWhatsApp(guardado);
+  assert.deepEqual(form, { automatico: true, inbox_id: '7', plantilla: 'documento_cliente', plantilla_recordatorio: '',
+    idioma: 'es_CO' });
+  assert.deepEqual(formularioEnvioWhatsApp(null), { automatico: false, inbox_id: '', plantilla: '',
+    plantilla_recordatorio: '', idioma: 'es' });
+  assert.equal(formularioEnvioWhatsApp({ automatico: 'true', idioma: '' }).automatico, false, 'solo con true');
+  assert.equal(formularioEnvioWhatsApp({ idioma: '' }).idioma, 'es');
+  // El PUT lleva los 5 campos; un campo vacío va como null (el backend borra la clave) y todo sin espacios.
+  assert.deepEqual(cuerpoEnvioWhatsApp({ ...form, inbox_id: ' 12 ', plantilla: '  doc  ', idioma: ' es ' }),
+    { automatico: true, inbox_id: '12', plantilla: 'doc', plantilla_recordatorio: null, idioma: 'es' });
+  assert.deepEqual(cuerpoEnvioWhatsApp({}), { automatico: false, inbox_id: null, plantilla: null,
+    plantilla_recordatorio: null, idioma: null });
+  // Hay cambios solo si el cuerpo cambia (espacios de más no cuentan).
+  assert.equal(hayCambiosWhatsApp(form, guardado), false);
+  assert.equal(hayCambiosWhatsApp({ ...form, plantilla: ' documento_cliente ' }, guardado), false);
+  assert.equal(hayCambiosWhatsApp({ ...form, automatico: false }, guardado), true);
+  assert.equal(hayCambiosWhatsApp({ ...form, plantilla_recordatorio: 'recordatorio' }, guardado), true);
+  assert.equal(hayCambiosWhatsApp(form, null), true, 'sin lo guardado no se puede comparar');
 }
 
 console.log('OK test_envio_whatsapp.mjs');

@@ -34,6 +34,43 @@ export function diasAlerta(cfg, clave, porDefecto = 2) {
   return Number.isFinite(n) && n > 0 ? n : porDefecto;
 }
 
+/**
+ * B3 T16: el valor guardado de `clave` como texto (las tres formas de diasAlerta), o null si no esta. Solo claves
+ * propias (una clave 'toString' no encuentra nada); un numero o un booleano pasan a texto, como los guarda admin_config.
+ * @param {any} cfg
+ * @param {string} clave
+ * @returns {string | null}
+ */
+export function valorConfig(cfg, clave) {
+  const fuente = cfg && typeof cfg.data === 'object' && cfg.data !== null ? cfg.data : cfg;
+  if (!fuente || typeof fuente !== 'object' || !Object.hasOwn(fuente, clave)) return null;
+  const crudo = fuente[clave];
+  const valor = typeof crudo === 'object' && crudo !== null ? crudo.value : crudo;
+  if (typeof valor === 'string') return valor;
+  return typeof valor === 'number' || typeof valor === 'boolean' ? String(valor) : null;
+}
+
+/**
+ * B3 T16: el entero de `clave` acotado a [minimo, maximo], como admin_config.entero_acotado/config_entero del backend:
+ * un texto de digitos (con signo y espacios en los bordes) fuera de rango usa el limite; lo que no es un entero ('abc',
+ * '2.5', '', un booleano) o no esta, `defecto`.
+ * @param {any} cfg
+ * @param {string} clave
+ * @param {number} defecto
+ * @param {number} minimo
+ * @param {number} maximo
+ * @returns {number}
+ */
+export function enteroConfig(cfg, clave, defecto, minimo, maximo) {
+  const valor = valorConfig(cfg, clave);
+  const texto = typeof valor === 'string' ? valor.trim() : '';
+  if (!/^[+-]?\d+$/.test(texto)) return defecto;
+  return Math.max(minimo, Math.min(maximo, Number(texto)));
+}
+
+/** B3 T7/T16 (U22-validez): dias_validez_cotizacion, de 1 a 60 y 5 por defecto (DIAS_VALIDEZ_COT_* del backend). */
+export const DIAS_VALIDEZ_COTIZACION = Object.freeze({ defecto: 5, minimo: 1, maximo: 60 });
+
 const pedidosDe = (cot) => (Array.isArray(cot?.pedidos_venta) ? cot.pedidos_venta.filter((v) => v && typeof v === 'object') : []);
 
 /**

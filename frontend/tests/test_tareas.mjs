@@ -7,7 +7,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { revisionAtrasada, MINUTOS_MINIMOS_ATRASO } from '../src/lib/tareas.js';
+import { revisionAtrasada, MINUTOS_MINIMOS_ATRASO, lineaRevision, avisoSinMedios } from '../src/lib/tareas.js';
 import { hace } from '../src/lib/fechas-colombia.js';
 
 const AHORA = new Date('2026-10-06T15:00:00Z');
@@ -70,6 +70,44 @@ console.log('--- TEST 4 (ronda r1): la misma lectura de instantes que hace() (in
   assert.equal(revisionAtrasada(estado({ ultima_revision: haceMin(45) }), '2026-10-06T15:00:00'), true);
   // Un dato del servidor que es una clave heredada (o basura) no se lee como fecha.
   assert.equal(revisionAtrasada(estado({ ultima_revision: 'toString' }), AHORA), true);
+}
+
+console.log('--- TEST 5 (T16, TAREAS punto 6): lineaRevision, la línea de estado de la Configuración del Hub ---');
+{
+  assert.deepEqual(lineaRevision(estado({ ultima_revision: haceMin(4) }), AHORA),
+    { caso: 'al_dia', texto: 'Última revisión automática: hace 4 minutos.' });
+  assert.deepEqual(lineaRevision(estado({ ultima_revision: haceMin(120) }), AHORA), { caso: 'atrasada',
+    texto: 'La revisión automática no corre desde hace 2 horas: los recordatorios no están saliendo. Avísale a quien '
+      + 'administra el servidor.' });
+  assert.deepEqual(lineaRevision(estado({ ultima_revision: null }), AHORA), { caso: 'atrasada',
+    texto: 'La revisión automática todavía no ha corrido en este servidor: los recordatorios no están saliendo. '
+      + 'Avísale a quien administra el servidor.' });
+  // Apagada en el servidor (RP30: tareas_habilitadas()), aunque haya una revisión vieja guardada.
+  const apagada = { caso: 'apagada', texto: 'La revisión automática está apagada en este servidor. Los recordatorios '
+    + 'solo salen desde el servidor de producción.' };
+  assert.deepEqual(lineaRevision(estado({ activas_en_servidor: false, ultima_revision: haceMin(600) }), AHORA), apagada);
+  assert.deepEqual(lineaRevision(estado({ activas_en_servidor: false, ultima_revision: null }), AHORA), apagada);
+  // La misma lectura de `ahora` que revisionAtrasada (Date, ms o texto ISO) y de la hora sin zona (UTC).
+  assert.equal(lineaRevision(estado({ ultima_revision: haceMin(4).replace('Z', '') }), AHORA.getTime()).texto,
+    'Última revisión automática: hace 4 minutos.');
+  assert.equal(lineaRevision(estado({ ultima_revision: haceMin(4) }), '2026-10-06T15:00:00Z').texto,
+    'Última revisión automática: hace 4 minutos.');
+  assert.equal(lineaRevision(estado({ ultima_revision: haceMin(0) }), AHORA).texto,
+    'Última revisión automática: hace un momento.');
+  // Sin estado (el GET falló): nada.
+  for (const nada of [null, undefined, 'x']) assert.equal(lineaRevision(nada, AHORA), null);
+}
+
+console.log('--- TEST 6 (T16, hueco 4): avisoSinMedios ---');
+{
+  const SIN_MEDIOS = 'Los recordatorios no pueden salir: falta configurar el WhatsApp automático o el correo del sistema.';
+  assert.equal(avisoSinMedios(estado({ resumen: { seguimiento_confirmacion: { omitido: 'sin_medios' } } })), SIN_MEDIOS);
+  for (const resumen of [null, {}, { seguimiento_confirmacion: { omitido: 'apagado' } },
+    { seguimiento_confirmacion: { omitido: 'fuera_de_horario' } }, { seguimiento_confirmacion: { enviados: 2 } },
+    { seguimiento_confirmacion: 'sin_medios' }]) {
+    assert.equal(avisoSinMedios(estado({ resumen })), null, JSON.stringify(resumen));
+  }
+  assert.equal(avisoSinMedios(null), null);
 }
 
 console.log('OK test_tareas.mjs');
