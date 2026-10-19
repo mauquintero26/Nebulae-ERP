@@ -16,6 +16,7 @@ Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_pdf
 """
 import datetime
 import email
+import io
 import logging
 from email.header import decode_header, make_header
 import re
@@ -93,6 +94,42 @@ def _png(ancho: int, alto: int) -> bytes:
     filas = b"".join(b"\x00" + b"\xc2\x41\x0c" * ancho for _ in range(alto))
     return (b"\x89PNG\r\n\x1a\n" + trozo(b"IHDR", struct.pack(">IIBBBBB", ancho, alto, 8, 2, 0, 0, 0))
             + trozo(b"IDAT", zlib.compress(filas)) + trozo(b"IEND", b""))
+
+
+def _png_cabecera(ancho: int, alto: int) -> bytes:
+    """Un PNG cuya cabecera (IHDR) dice ancho x alto pero con datos mínimos: la forma de una bomba de descompresión."""
+    def trozo(tipo, datos):
+        return struct.pack(">I", len(datos)) + tipo + datos + struct.pack(">I", zlib.crc32(tipo + datos) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + trozo(b"IHDR", struct.pack(">IIBBBBB", ancho, alto, 8, 2, 0, 0, 0))
+            + trozo(b"IDAT", zlib.compress(b"\x00" * 16)) + trozo(b"IEND", b""))
+
+
+def _imagen_pil(formato: str, ancho: int, alto: int, ruido: bool = False) -> bytes:
+    """Una imagen de prueba en `formato` (PNG, JPEG, WEBP, GIF, BMP) con Pillow, que trae reportlab. Con ruido, no se
+    comprime: un logo «tipo foto» que pesa."""
+    import os as _os
+    from PIL import Image
+    if ruido:
+        imagen = Image.frombytes("RGB", (ancho, alto), _os.urandom(ancho * alto * 3))
+    else:
+        imagen = Image.new("RGB", (ancho, alto), (194, 65, 12))
+    salida = io.BytesIO()
+    imagen.save(salida, formato, **({"quality": 90} if formato in ("JPEG", "WEBP") else {}))
+    return salida.getvalue()
+
+
+def _imagenes_pdf(pdf: bytes) -> list:
+    """[(ancho, alto)] de cada imagen incrustada (/Subtype /Image) del PDF."""
+    imagenes = []
+    for diccionario in re.findall(rb"<<([^<>]*?/Subtype /Image[^<>]*?)>>", pdf):
+        imagenes.append((int(re.search(rb"/Width (\d+)", diccionario).group(1)),
+                         int(re.search(rb"/Height (\d+)", diccionario).group(1))))
+    return imagenes
+
+
+def _paginas(texto: str) -> list:
+    """El texto de cada hoja, partido por el pie «… · Página N» (se dibuja al empezar cada hoja)."""
+    return [t for t in re.split(r"· Página \d+", texto)[1:]]
 
 
 def _correo_falso(monkeypatch, configurado=True, resultado=True, al_enviar=None):
@@ -264,6 +301,52 @@ def test_el_pdf_copia_los_numeros_del_documento_sin_recalcular(db, monkeypatch):
         assert calculado not in texto, calculado
 
 
+def _inyeccion(campo: str) -> str:
+    """Marcado que SÍ tendría efecto en reportlab si no se escapara (enlace javascript:, imagen local, fuente), con el
+    nombre del campo adentro para saber de dónde viene cada texto."""
+    return f"<a href='javascript:x'>{campo}</a><img src='file:///etc/passwd'/><font color='red'>r</font>&amp;"
+
+
+def test_ningun_campo_de_texto_se_interpreta_como_marcado(monkeypatch):
+    """r1 (S2): cada campo de texto del documento y del perfil sale literal. Ninguno crea un enlace (/URI, /Link), una
+    acción JavaScript ni una imagen. El documento está armado a mano con todas las claves del contrato C2."""
+    from app.core.pdf_documento import pdf_documento
+    _sin_comprimir(monkeypatch)
+    i = _inyeccion
+    documento = {
+        "tipo": "PVEN", "titulo": "Pedido de venta", "numero": i("numero"), "estado": "PENDIENTE_COMPRA",
+        "fecha_emision": "2026-10-03T15:00:00Z", "fecha_entrega_estimada": "2026-10-21",
+        "cliente": {"nombre": i("cliente.nombre"), "direccion_entrega": i("cliente.direccion_entrega")},
+        "atendido_por": i("atendido_por"), "con_precios": True,
+        "lineas": [{"n": 1, "descripcion": i("linea.descripcion"), "cantidad": 2, "precio_unitario": 10.0,
+                    "total_linea": 20.0, "iva_etiqueta": i("linea.iva_etiqueta"), "iva_pct": 19.0, "anticipo": None}],
+        "totales": {"subtotal": 20.0, "descuento_pct": None, "descuento": 0.0,
+                    "impuestos": [{"etiqueta": i("impuesto.etiqueta"), "base": 20.0, "valor": 4.0}],
+                    "ajuste_redondeo": None, "total": 24.0},
+        "pago": {"modalidad": i("pago.modalidad"), "anticipo_pct": 60.0, "anticipo": 14.0, "saldo": 10.0,
+                 "saldo_a_favor": None, "anticipo_por_pagar": 0.0, "pagado": 14.0,
+                 "pagos": [{"concepto": i("pago.concepto"), "monto": 14.0, "metodo": i("pago.metodo"),
+                            "fecha": "2026-10-03"}],
+                 "instrucciones": i("pago.instrucciones"), "manual": False},
+        "notas": [{"titulo": i("nota.titulo"), "texto": i("nota.texto")}],
+        "valida_hasta": None, "terminos": i("terminos"), "mensaje_pie": i("mensaje_pie")}
+    perfil = {campo: i(f"perfil.{campo}") for campo in ("nombre_comercial", "razon_social", "nit", "direccion",
+                                                        "ciudad", "telefono", "whatsapp", "correo", "sitio_web")}
+    perfil["colores"] = {"principal": "#7C3AED", "secundario": "#E11D48", "acento": "#C2410C"}
+
+    pdf = pdf_documento(documento, perfil, None)
+
+    for prohibido in (b"/URI", b"/Link", b"/JavaScript", b"/Subtype /Image", b"/Annots"):
+        assert prohibido not in pdf, prohibido
+    sin_espacios = _textos_pdf(pdf).replace(" ", "")
+    campos = ["numero", "cliente.nombre", "cliente.direccion_entrega", "atendido_por", "linea.descripcion",
+              "linea.iva_etiqueta", "impuesto.etiqueta", "pago.modalidad", "pago.concepto", "pago.metodo",
+              "pago.instrucciones", "nota.titulo", "nota.texto", "terminos", "mensaje_pie"]
+    campos += [f"perfil.{c}" for c in perfil if c != "colores"]
+    for campo in campos:
+        assert i(campo).replace(" ", "") in sin_espacios, campo
+
+
 def test_un_logo_corrupto_no_rompe_el_pdf(db, monkeypatch):
     """Un logo que no se puede leer (bytes basura, PNG truncado, dimensiones absurdas) no rompe nada: el PDF sale sin
     logo. Un logo válido sí se dibuja (una imagen /XObject en el PDF)."""
@@ -278,6 +361,11 @@ def test_un_logo_corrupto_no_rompe_el_pdf(db, monkeypatch):
              "truncado": ("image/png", valido[:60], "v2"),
              "gigante": ("image/png", _png(5000, 1), "v3"),
              "jpeg falso": ("image/jpeg", b"\xff\xd8\xff" + b"\x00" * 40, "v4"),
+             # r1 (S2): una cabecera que dice 50000x50000 con datos mínimos (bomba de descompresión).
+             "bomba": ("image/png", _png_cabecera(50000, 50000), "v6"),
+             # r1 (S1): un formato que el producto no admite (GIF, BMP) no se abre aunque Pillow lo sepa leer.
+             "gif": ("image/png", _imagen_pil("GIF", 40, 20), "v7"),
+             "bmp": ("image/png", _imagen_pil("BMP", 40, 20), "v8"),
              "sin logo": None}
     for caso, logo in casos.items():
         pdf = pdf_documento(documento, perfil, logo)
@@ -286,8 +374,29 @@ def test_un_logo_corrupto_no_rompe_el_pdf(db, monkeypatch):
 
     con_logo = pdf_documento(documento, perfil, ("image/png", valido, "v5"))
     assert con_logo.startswith(b"%PDF-") and b"/Subtype /Image" in con_logo
-    # Un logo de leer_logo sin versión (dos elementos) también sirve.
+    # Un logo de leer_logo sin versión (dos elementos) también sirve; JPEG y WebP también.
     assert b"/Subtype /Image" in pdf_documento(documento, perfil, ("image/png", valido))
+    for formato, mime in (("JPEG", "image/jpeg"), ("WEBP", "image/webp")):
+        assert b"/Subtype /Image" in pdf_documento(documento, perfil, (mime, _imagen_pil(formato, 40, 20), "v9")), \
+            formato
+
+
+def test_un_logo_grande_se_reduce_antes_de_incrustarlo(db, monkeypatch):
+    """r1 (S4): un logo grande y válido (aquí un WebP con ruido de 2000x2000) se reduce a LOGO_LADO_PDF_PX en su lado
+    mayor, con la misma proporción, antes de incrustarlo: el PDF pesa menos que el logo original."""
+    from app.core.documento_cliente import documento_cot
+    from app.core.empresa import perfil_publico
+    from app.core.pdf_documento import LOGO_LADO_PDF_PX, pdf_documento
+    cot = _cot(db)
+    documento, perfil = documento_cot(db, cot), perfil_publico(db)
+    for formato, mime, ancho, alto in (("WEBP", "image/webp", 2000, 2000), ("PNG", "image/png", 1800, 600)):
+        logo = _imagen_pil(formato, ancho, alto, ruido=True)
+        pdf = pdf_documento(documento, perfil, (mime, logo, "v1"))
+        assert b"/Subtype /Image" in pdf, formato
+        assert len(pdf) < len(logo), (formato, len(pdf), len(logo))
+        for ancho_pdf, alto_pdf in _imagenes_pdf(pdf):  # la imagen y, si tiene transparencia, su máscara
+            assert max(ancho_pdf, alto_pdf) == LOGO_LADO_PDF_PX, (formato, ancho_pdf, alto_pdf)
+            assert abs(ancho_pdf / alto_pdf - ancho / alto) < 0.02, (formato, ancho_pdf, alto_pdf)
 
 
 def test_un_documento_largo_ocupa_varias_paginas_sin_romper(db, monkeypatch):
@@ -310,25 +419,89 @@ def test_un_documento_largo_ocupa_varias_paginas_sin_romper(db, monkeypatch):
     assert paginas >= 3, paginas
     texto = _textos_pdf(pdf)
     assert "Producto 40" in texto and "Renglón 399 de la nota" in texto and "PEDIDO DE VENTA" in texto
+    # r1 (Q4): el pie numera cada hoja y la cabecera de la tabla se repite en cada hoja que tiene líneas.
+    hojas = _paginas(texto)
+    assert len(hojas) == paginas and f"· Página {paginas}" in texto
+    con_lineas = [h for h in hojas if re.search(r"Producto \d+ con un nombre", h)]
+    assert len(con_lineas) >= 2 and all("CANT. DESCRIPCIÓN PRECIO UNIT. TOTAL" in h for h in con_lineas), con_lineas
+
+
+def test_una_celda_altisima_se_parte_entre_hojas_sin_romper(db, monkeypatch):
+    """r1 (S3, Q2): una descripción o una dirección de entrega de 400 renglones (más alta que una hoja) no tumba el PDF
+    con LayoutError: la fila se parte entre hojas (splitInRow) y el texto sale completo. Un emoji o un carácter CJK
+    tampoco rompen nada (Helvetica los cambia por su glifo de reemplazo)."""
+    from app.core.documento_cliente import armar_documento, linea_publica
+    from app.core.empresa import perfil_publico
+    from app.core.pdf_documento import pdf_documento
+    _sin_comprimir(monkeypatch)
+    altisimo = "\n".join(f"Renglón {i} del texto" for i in range(400))
+    for caso in ("descripcion", "direccion"):
+        lineas = [linea_publica({"product_name": "Taladro 🔨 中文", "qty": 1, "unit_price_cop": 10, "total_cop": 10},
+                                True),
+                  linea_publica({"product_name": altisimo if caso == "descripcion" else "Mesa", "qty": 1,
+                                 "unit_price_cop": 20, "total_cop": 20}, True)]
+        documento = armar_documento(
+            db, "COT", numero=f"COT-T9-ALTA-{caso}", fecha_emision=datetime.datetime(2026, 10, 3, 15, 0),
+            cliente_nombre="Ana Pérez", lineas=lineas, con_precios=True,
+            direccion_entrega=altisimo if caso == "direccion" else "Calle 1", totales={"subtotal": 30, "total": 30})
+
+        pdf = pdf_documento(documento, perfil_publico(db), None)
+
+        assert pdf.startswith(b"%PDF-"), caso
+        texto = _textos_pdf(pdf)
+        assert len(_paginas(texto)) >= 3, caso
+        assert "Taladro" in texto and "Renglón 0 del texto" in texto and "Renglón 399 del texto" in texto, caso
+        assert "TOTAL $30" in texto, caso
+
+
+def test_el_bloque_de_totales_no_se_parte_entre_hojas(db, monkeypatch):
+    """r1 (Q3): con cualquier cantidad de líneas, el bloque de totales (Subtotal … TOTAL … Saldo) queda entero en una
+    sola hoja: nunca el TOTAL o el saldo solos en la siguiente."""
+    from app.core.documento_cliente import armar_documento, linea_publica
+    from app.core.empresa import perfil_publico
+    from app.core.pdf_documento import pdf_documento
+    _sin_comprimir(monkeypatch)
+    perfil = perfil_publico(db)
+    for n in range(10, 40):
+        lineas = [linea_publica({"product_name": f"Producto {i}", "qty": 1, "unit_price_cop": 1000, "total_cop": 1000},
+                                True) for i in range(n)]
+        documento = armar_documento(
+            db, "COT", numero=f"COT-T9-TOT-{n}", fecha_emision=datetime.datetime(2026, 10, 3, 15, 0),
+            cliente_nombre="Ana Pérez", lineas=lineas, con_precios=True,
+            totales={"subtotal": 1000 * n, "descuento_pct": 10, "descuento": 100 * n,
+                     "impuestos": [{"etiqueta": "IVA 19%", "base": 900 * n, "valor": 171 * n}], "total": 1071 * n},
+            pago={"modalidad": "60/40", "anticipo_pct": 60, "anticipo": 600 * n, "saldo": 471 * n, "manual": False})
+
+        hojas = _paginas(_textos_pdf(pdf_documento(documento, perfil, None)))
+
+        [hoja] = [h for h in hojas if "Subtotal" in h]
+        assert f"TOTAL ${1071 * n:,}".replace(",", ".") in hoja and "Saldo $" in hoja, (n, hoja[-300:])
 
 
 def test_sin_reportlab_pdf_documento_lanza_import_error(db, monkeypatch):
     """reportlab se importa DENTRO de la función (R2): el módulo carga sin él y la falta se ve al generar."""
-    import importlib
+    import importlib.util
+    import app.core
+    import app.core.pdf_documento as original
     from app.core.documento_cliente import documento_cot
     from app.core.empresa import perfil_publico
     cot = _cot(db)
     documento, perfil = documento_cot(db, cot), perfil_publico(db)
     _sin_reportlab(monkeypatch)
-    # Una copia nueva del módulo, cargada sin reportlab (monkeypatch devuelve la original a sys.modules al terminar).
-    monkeypatch.delitem(sys.modules, "app.core.pdf_documento", raising=False)
-    modulo = importlib.import_module("app.core.pdf_documento")
+    # r1 (Q7): una copia del módulo cargada desde su archivo con OTRO nombre, sin reportlab. No toca
+    # sys.modules['app.core.pdf_documento'] ni el atributo app.core.pdf_documento: las pruebas siguientes y el endpoint
+    # siguen viendo el mismo módulo.
+    spec = importlib.util.spec_from_file_location("pdf_documento_sin_reportlab", original.__file__)
+    modulo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(modulo)
     try:
         modulo.pdf_documento(documento, perfil, None)
     except ImportError:
         pass
     else:
         raise AssertionError("sin reportlab, pdf_documento debe lanzar ImportError")
+    assert sys.modules["app.core.pdf_documento"] is original and app.core.pdf_documento is original
+    assert "pdf_documento_sin_reportlab" not in sys.modules
 
 
 # ─── 5: send_email con adjuntos ──────────────────────────────────────────────────────────────────────────────
@@ -381,13 +554,23 @@ def test_send_email_con_adjuntos_lleva_la_parte_pdf(monkeypatch):
     assert adjunto.get_payload(decode=True) == contenido
     assert capturas[-1]["destinos"] == ["cliente@example.com"]
 
-    # Sin adjuntos (None o lista vacía): idéntico a antes de T9.
-    for sin in (None, []):
-        assert correo.send_email("cliente@example.com", "Asunto", "<p>Hola</p>", adjuntos=sin)
-        msg = email.message_from_string(capturas[-1]["mensaje"])
-        assert msg.get_content_type() == "multipart/alternative"
-        assert [p.get_content_type() for p in msg.get_payload()] == ["text/html"]
-        assert msg["From"] == "ventas@example.com" and msg["To"] == "cliente@example.com"
+    # Sin adjuntos (None, lista vacía o sin el argumento): r1 (Q5) el mensaje es IDÉNTICO, byte a byte, al que armaba
+    # send_email antes de T9 (mismo código de entonces, con el mismo boundary): encabezados, orden, Subject y partes.
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.utils import formataddr
+    for kwargs in ({"adjuntos": None}, {"adjuntos": []}, {}, {"remitente_nombre": "DEMO Ferretería"}):
+        assert correo.send_email("cliente@example.com", "Tu cotización", "<p>Hola</p>", **kwargs)
+        enviado = capturas[-1]["mensaje"]
+        msg = email.message_from_string(enviado)
+        antes = MIMEMultipart("alternative", boundary=msg.get_boundary())  # send_email antes de T9 (860ea1e)
+        antes["Subject"] = "Tu cotización"
+        antes["From"] = (formataddr(("DEMO Ferretería", "ventas@example.com")) if kwargs.get("remitente_nombre")
+                         else "ventas@example.com")
+        antes["To"] = "cliente@example.com"
+        antes.attach(MIMEText("<p>Hola</p>", "html"))
+        assert enviado == antes.as_string(), kwargs
+        assert [k for k, _ in msg.items()] == ["Content-Type", "MIME-Version", "Subject", "From", "To"], kwargs
 
     # Un nombre de archivo con salto de línea no inyecta encabezados ni rutas.
     assert correo.send_email("cliente@example.com", "Asunto", "<p>Hola</p>",
@@ -675,3 +858,168 @@ def test_rp16_el_pdf_se_genera_despues_del_unico_commit_y_no_agrega_commits(app_
             assert all(s.lstrip().upper().startswith("SELECT") for s in despues_del_commit), despues_del_commit
     finally:
         event.remove(Session, "after_commit", al_confirmar)
+
+
+# ─── Ronda r1 ────────────────────────────────────────────────────────────────────────────────────────────────
+
+def test_si_el_modulo_del_pdf_no_se_puede_importar_el_envio_sigue(app_client, db, admin_token, monkeypatch):
+    """r1 (C2, Q6): un fallo al importar el módulo del PDF (después del commit único) cae en la rama «sin PDF»: 200, el
+    correo sale sin adjunto con el aviso y el renglón de la Actividad queda guardado. Nunca un 500 con el envío a medias.
+    COT y PVEN."""
+    import app.core
+    import app.core.pdf_documento  # noqa: F401  (el atributo existe y se quita abajo)
+    llamadas = _correo_falso(monkeypatch)
+    _silenciar(monkeypatch, "app.api.v1.erp_ventas")
+    monkeypatch.delattr(app.core, "pdf_documento")
+    monkeypatch.setitem(sys.modules, "app.core.pdf_documento", None)  # import -> ModuleNotFoundError
+    esperado = f"Correo enviado a {CORREO} {SIN_PDF}."
+
+    cot = _cot(db)
+    resp = _enviar_cot(app_client, admin_token, cot)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["correo"]["mensaje"] == esperado and not llamadas[-1].get("adjuntos")
+    assert _fila_correo(_renglon(db, "COT", cot.id, "ESTADO_CHANGED"))["despues"] == esperado
+
+    so = _pedido(db)
+    resp = _enviar_pven(app_client, admin_token, so)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["correo"]["mensaje"] == esperado and not llamadas[-1].get("adjuntos")
+    assert _fila_correo(_renglon(db, "VEN", so.id, "ENVIADO_AL_CLIENTE"))["despues"] == esperado
+
+
+TELEFONO_WA = "3001234567"  # el del contacto del Chatwoot falso (+57 300 123 4567)
+
+
+class _ChatwootFalso:
+    """Reemplaza app.core.chatwoot._peticion, como FakeChatwoot de T8: responde por (método, ruta) y anota las llamadas.
+    Nunca sale a la red."""
+
+    def __init__(self, respuestas):
+        self.respuestas = respuestas
+        self.llamadas = []
+
+    def __call__(self, metodo, ruta, cuerpo=None, params=None, timeout=6):
+        self.llamadas.append((metodo, ruta))
+        if (metodo, ruta) not in self.respuestas:
+            raise AssertionError(f"llamada inesperada a Chatwoot: {metodo} {ruta}")
+        return dict(self.respuestas[(metodo, ruta)])
+
+
+def _whatsapp_falso(monkeypatch, db):
+    """Chatwoot ficticio (R18: valores de relleno con monkeypatch.setenv) con el contacto 7 y su conversación 55
+    abierta en la bandeja 3, y el envío automático encendido (admin_config, dentro de la transacción revertida)."""
+    from app.core.admin_config import guardar_config
+    monkeypatch.setenv("CHATWOOT_BASE_URL", "https://chatwoot.invalid")
+    monkeypatch.setenv("CHATWOOT_API_TOKEN", "token-de-prueba")
+    monkeypatch.setenv("CHATWOOT_ACCOUNT_ID", "1")
+    contacto = {"id": 7, "name": "Ana Pérez", "phone_number": "+573001234567",
+                "contact_inboxes": [{"source_id": "573001234567", "inbox": {"id": 3}}]}
+    falso = _ChatwootFalso({
+        ("GET", "contacts/search"): {"payload": [contacto]},
+        ("GET", "contacts/7/conversations"): {"payload": [{"id": 55, "inbox_id": 3, "can_reply": True,
+                                                           "last_activity_at": 1700000000}]},
+        ("POST", "conversations/55/messages"): {"id": 901}})
+    monkeypatch.setattr("app.core.chatwoot._peticion", falso)
+    guardar_config(db, {"envio_whatsapp_automatico": "true", "envio_whatsapp_inbox_id": "3"})
+    db.commit()
+    return falso
+
+
+def _envios(db, tipo, doc_id):
+    from app.models.envios import EnvioAlCliente
+    db.expire_all()
+    return (db.query(EnvioAlCliente)
+            .filter(EnvioAlCliente.document_type == tipo, EnvioAlCliente.document_id == doc_id)
+            .order_by(EnvioAlCliente.id).all())
+
+
+def _envios_por_whatsapp(app_client, db, admin_token, monkeypatch):
+    """Envía por WhatsApp una COT y un PVEN (con el Chatwoot falso) y devuelve [(doc, tipo, entidad, acción, resp)]."""
+    _whatsapp_falso(monkeypatch, db)
+    cot = _cot(db, customer_phone=TELEFONO_WA)
+    so = _pedido(db, customer_phone=TELEFONO_WA)
+    hechos = []
+    for enviar, doc, tipo, entidad, accion in ((_enviar_cot, cot, "COT", "COT", "ESTADO_CHANGED"),
+                                               (_enviar_pven, so, "PVEN", "VEN", "ENVIADO_AL_CLIENTE")):
+        hechos.append((doc, tipo, entidad, accion, enviar(app_client, admin_token, doc, {"canal": "WhatsApp"})))
+    return hechos
+
+
+def test_con_whatsapp_el_correo_de_respaldo_lleva_el_pdf(app_client, db, admin_token, monkeypatch):
+    """r1 (C1, Q8), R2: con canal WhatsApp el PDF va en el correo de RESPALDO, y el WhatsApp sale igual: su fila
+    EnvioAlCliente y el renglón (con su envio_id) quedan guardados. COT y PVEN."""
+    llamadas = _correo_falso(monkeypatch)
+    for doc, tipo, entidad, accion, resp in _envios_por_whatsapp(app_client, db, admin_token, monkeypatch):
+        assert resp.status_code == 200, resp.text
+        j = resp.json()
+        assert j["whatsapp"]["enviado"] is True and j["correo"]["mensaje"] == f"Correo enviado a {CORREO}.", tipo
+        correo = next(l for l in reversed(llamadas) if doc.numero in l["subject"])
+        assert correo["to"] == CORREO and _unico_adjunto(correo, doc.numero)
+        [envio] = _envios(db, tipo, doc.id)
+        renglon = _renglon(db, entidad, doc.id, accion)
+        assert renglon.extra_data["whatsapp"]["envio_id"] == envio.id, tipo
+        assert _fila_correo(renglon)["etiqueta"] == "Correo de respaldo", tipo
+
+
+def test_con_whatsapp_un_fallo_de_lectura_del_pdf_no_pierde_el_envio(app_client, db, admin_token, monkeypatch):
+    """r1 (C1, Q8): con canal WhatsApp y documento_cot / documento_pven forzados a ejecutar SELECT 1/0 (transacción
+    abortada), el WhatsApp sale, el correo de respaldo dice «(sin PDF adjunto)» y quedan guardados la fila
+    EnvioAlCliente y el renglón. Es el invariante de la duda 1: el PDF va antes del WhatsApp y su rollback no toca la
+    fila del envío."""
+    from sqlalchemy import text
+    import app.core.documento_cliente as documento_cliente
+    llamadas = _correo_falso(monkeypatch)
+    _silenciar(monkeypatch, "app.api.v1.erp_ventas")
+
+    def lectura_que_falla(db_, *a, **k):
+        db_.execute(text("SELECT 1/0"))
+
+    monkeypatch.setattr(documento_cliente, "documento_cot", lectura_que_falla)
+    monkeypatch.setattr(documento_cliente, "documento_pven", lectura_que_falla)
+    for doc, tipo, entidad, accion, resp in _envios_por_whatsapp(app_client, db, admin_token, monkeypatch):
+        assert resp.status_code == 200, resp.text
+        j = resp.json()
+        assert j["whatsapp"]["enviado"] is True and j["whatsapp"]["envio_id"] is not None, tipo
+        assert j["correo"]["mensaje"] == f"Correo enviado a {CORREO} {SIN_PDF}.", tipo
+        correo = next(l for l in reversed(llamadas) if doc.numero in l["subject"])
+        assert not correo.get("adjuntos"), tipo
+        [envio] = _envios(db, tipo, doc.id)
+        assert envio.id == j["whatsapp"]["envio_id"] and envio.estado == "ENVIADO", (tipo, envio.estado)
+        renglon = _renglon(db, entidad, doc.id, accion)
+        assert renglon is not None and renglon.extra_data["whatsapp"]["envio_id"] == envio.id, tipo
+        assert _fila_correo(renglon)["despues"] == f"Correo enviado a {CORREO} {SIN_PDF}.", tipo
+
+
+def test_el_contacto_y_el_color_de_la_empresa_salen_de_una_sola_fuente(db, monkeypatch):
+    """r1 (Q9): el pie del correo y el del PDF salen de empresa.contacto_empresa(perfil), y el color de la marca de
+    empresa.color_de_marca: los mismos renglones en el mismo orden, sin copias en correo_documento ni en
+    pdf_documento."""
+    import html
+    import app.core.correo_documento as correo_mod
+    import app.core.pdf_documento as pdf_mod
+    from app.core.correo_documento import correo_documento
+    from app.core.documento_cliente import armar_documento
+    from app.core.empresa import COLORES_POR_DEFECTO, color_de_marca, contacto_empresa
+    _sin_comprimir(monkeypatch)
+    perfil = {"nombre_comercial": "DEMO Ferretería", "razon_social": "Demo & Hijos S.A.S.", "nit": "900.123.456-7",
+              "direccion": "Calle 10 # 20-30", "ciudad": "Bogotá", "telefono": " 601 555 1234 ",
+              "whatsapp": "300 123 4567", "correo": "ventas@demo.co", "sitio_web": "https://demo.co",
+              "colores": {"principal": "#7c3aed", "secundario": "no-es-hex", "acento": "#C2410C"}}
+    renglones = contacto_empresa(perfil)
+
+    assert renglones == ["Teléfono: 601 555 1234", "WhatsApp: 300 123 4567", "Correo: ventas@demo.co",
+                         "Página web: https://demo.co", "Calle 10 # 20-30, Bogotá",
+                         "Demo & Hijos S.A.S. · NIT 900.123.456-7"]
+    assert contacto_empresa({"nit": "900"}) == ["NIT 900"] and contacto_empresa({}) == []
+    assert contacto_empresa({"ciudad": "Cali", "razon_social": "X"}) == ["Cali", "X"]
+    assert color_de_marca(perfil, "principal") == "#7C3AED"
+    assert color_de_marca(perfil, "secundario") == COLORES_POR_DEFECTO["secundario"]
+    assert color_de_marca({}, "acento") == COLORES_POR_DEFECTO["acento"]
+
+    _, cuerpo = correo_documento(perfil, "COT", "COT-1", "Ana", "https://erp.invalid/confirmar/abc")
+    assert "<br>".join(html.escape(r, quote=True) for r in renglones) in cuerpo
+    documento = armar_documento(db, "COT", numero="COT-T9-PIE", fecha_emision=datetime.datetime(2026, 10, 3, 15, 0),
+                                cliente_nombre="Ana", lineas=[], con_precios=True, totales={"total": 1})
+    assert " ".join(renglones) in _textos_pdf(pdf_mod.pdf_documento(documento, perfil, None))
+    for modulo, copias in ((pdf_mod, ("_color", "_campo", "_renglones_pie")), (correo_mod, ("_color", "_campo"))):
+        assert not [c for c in copias if hasattr(modulo, c)], modulo.__name__

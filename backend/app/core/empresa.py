@@ -235,6 +235,43 @@ def perfil_publico(db: Session) -> dict:
     return publico
 
 
+# ─── Lectura de un perfil ya armado: UNA sola fuente para el correo y el PDF del cliente (B3 T9 r1, Q9) ──────────
+
+# El contacto de la empresa en el pie, en este orden (correo_documento y pdf_documento).
+_ETIQUETAS_CONTACTO = (("Teléfono", "telefono"), ("WhatsApp", "whatsapp"), ("Correo", "correo"),
+                       ("Página web", "sitio_web"))
+
+
+def color_de_marca(perfil, nombre: str) -> str:
+    """El color `nombre` ('principal', 'secundario' o 'acento') de un perfil de perfil_publico en '#RRGGBB' mayusculas;
+    el de la referencia (COLORES_POR_DEFECTO) si falta o no es #RRGGBB (nunca llega otra cosa a un style)."""
+    colores = perfil.get("colores") if isinstance(perfil, dict) else None
+    valor = colores.get(nombre) if isinstance(colores, dict) else None
+    return valor.upper() if es_color_hex(valor) else COLORES_POR_DEFECTO[nombre]
+
+
+def campo_de_perfil(perfil, campo: str) -> str:
+    """El texto de `campo` de un perfil, sin espacios en los bordes; '' si falta o no es texto."""
+    valor = perfil.get(campo) if isinstance(perfil, dict) else None
+    return valor.strip() if isinstance(valor, str) else ""
+
+
+def contacto_empresa(perfil) -> list:
+    """Los renglones de contacto de la empresa para el pie del correo y del PDF, SIN escapar (cada uno escapa con su
+    regla: html.escape el correo, xml escape el PDF), solo los que haya y en este orden: 'Teléfono: …', 'WhatsApp: …',
+    'Correo: …', 'Página web: …', 'direccion, ciudad' y 'razon social · NIT …'."""
+    renglones = [f"{etiqueta}: {campo_de_perfil(perfil, campo)}" for etiqueta, campo in _ETIQUETAS_CONTACTO
+                 if campo_de_perfil(perfil, campo)]
+    direccion = ", ".join(v for v in (campo_de_perfil(perfil, "direccion"), campo_de_perfil(perfil, "ciudad")) if v)
+    if direccion:
+        renglones.append(direccion)
+    razon_social, nit = campo_de_perfil(perfil, "razon_social"), campo_de_perfil(perfil, "nit")
+    legal = " · ".join(x for x in (razon_social, f"NIT {nit}" if nit else "") if x)
+    if legal:
+        renglones.append(legal)
+    return renglones
+
+
 def textos_documento(db: Session, tipo: str) -> dict:
     """{terminos, instrucciones_pago, mensaje_pie} del documento `tipo`; un texto vacio es None.
     SC: sin terminos ni datos para pagar. COT: terminos_cotizacion. PVEN: terminos_pedido. COT y PVEN traen los datos

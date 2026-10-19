@@ -385,10 +385,12 @@ def _pdf_para_el_correo(db: Session, tipo: str, doc, numero: str, destino: Optio
     from app.core import email as correo
     if not (destino or "").strip() or not correo.smtp_configurado():
         return None, False
-    from app.core import documento_cliente, empresa, pdf_documento
-    from app.core.confirmation_tokens import consultar_token
     documento = logo = None
     try:
+        # r1 (C2, Q6): los imports tambien van dentro del try. Si uno falla (p. ej. un import roto en pdf_documento), es
+        # un fallo del PDF como cualquier otro: el correo sale sin adjunto, nunca un 500 despues del commit unico.
+        from app.core import documento_cliente, empresa, pdf_documento
+        from app.core.confirmation_tokens import consultar_token
         if tipo == "COT":
             token_row = consultar_token(db, raw_token, tipos=("COT",)) if raw_token else None
             documento = documento_cliente.documento_cot(db, doc, token_row)

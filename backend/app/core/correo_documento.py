@@ -22,7 +22,7 @@ vuelve al de la referencia. Sin <img> del logo: los correos bloquean imágenes y
 import html
 
 from app.core.documento_cliente import TITULOS
-from app.core.empresa import COLORES_POR_DEFECTO, es_color_hex, limpiar_linea
+from app.core.empresa import color_de_marca, contacto_empresa, es_color_hex, limpiar_linea
 from app.core.fechas import fecha_larga
 from app.core.ventas_dinero import pesos
 
@@ -67,12 +67,6 @@ def color_texto_sobre(*colores) -> str:
 
 def _e(valor) -> str:
     return html.escape("" if valor is None else str(valor), quote=True)
-
-
-def _color(perfil: dict, nombre: str) -> str:
-    colores = perfil.get("colores") if isinstance(perfil.get("colores"), dict) else {}
-    valor = colores.get(nombre)
-    return valor.upper() if es_color_hex(valor) else COLORES_POR_DEFECTO[nombre]
 
 
 def _asunto(nombre_empresa: str, tipo: str, numero: str, proposito: str) -> str:
@@ -137,24 +131,10 @@ def _texto_vence(tipo: str, vence) -> str:
     return f"Este enlace estará disponible hasta el {fecha}."
 
 
-def _campo(perfil: dict, campo: str) -> str:
-    valor = perfil.get(campo)
-    return valor.strip() if isinstance(valor, str) else ""
-
-
 def _pie(perfil: dict) -> str:
-    """Contacto de la empresa: teléfono, WhatsApp, correo, página web, dirección, razón social y NIT (los que haya)."""
-    renglones = [f"{_e(etiqueta)}: {_e(_campo(perfil, campo))}"
-                 for etiqueta, campo in (("Teléfono", "telefono"), ("WhatsApp", "whatsapp"), ("Correo", "correo"),
-                                         ("Página web", "sitio_web"))
-                 if _campo(perfil, campo)]
-    direccion = ", ".join(v for v in (_campo(perfil, "direccion"), _campo(perfil, "ciudad")) if v)
-    if direccion:
-        renglones.append(_e(direccion))
-    razon_social, nit = _campo(perfil, "razon_social"), _campo(perfil, "nit")
-    legal = " · ".join(x for x in (_e(razon_social), f"NIT {_e(nit)}" if nit else "") if x)
-    if legal:
-        renglones.append(legal)
+    """Contacto de la empresa: teléfono, WhatsApp, correo, página web, dirección, razón social y NIT (los que haya). Los
+    renglones salen de empresa.contacto_empresa, la misma lista del pie del PDF (B3 T9 r1), escapados aquí."""
+    renglones = [_e(renglon) for renglon in contacto_empresa(perfil)]
     if not renglones:
         return ""
     return (f'<tr><td style="padding:16px 32px 24px;font-size:12px;line-height:18px;color:{_GRIS_SUAVE};'
@@ -177,7 +157,7 @@ def correo_documento(perfil, tipo, numero, cliente, link, resumen=None, proposit
     numero = limpiar_linea(numero)
     asunto = _asunto(nombre_empresa, tipo, numero, proposito)
 
-    franja = _color(perfil, "principal" if tipo == "SC" else "acento")
+    franja = color_de_marca(perfil, "principal" if tipo == "SC" else "acento")
     texto_franja = color_texto_sobre(franja)
     titulo = f"{TITULOS[tipo]} {numero}"
     cliente = limpiar_linea(cliente)
