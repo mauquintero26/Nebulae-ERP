@@ -308,13 +308,15 @@ def _enviar_whatsapp(db: Session, doc_tipo: str, doc, enlace: str, user_name, pr
         proposito=proposito)
 
 def _enviar_correo_confirmacion(destino: Optional[str], asunto: str, html: str,
-                                remitente_nombre: Optional[str] = None) -> dict:
+                                remitente_nombre: Optional[str] = None, adjuntos: Optional[list] = None) -> dict:
     """Intenta el correo con el enlace de confirmacion y dice que paso: {enviado, destino, motivo, mensaje}.
 
     motivo es None si salio; si no, SIN_CORREO_CLIENTE | CORREO_NO_CONFIGURADO | FALLO_ENVIO. Nunca lanza: el enlace ya
     quedo guardado y el asesor puede entregarlo por otro medio, asi que un fallo del correo solo se informa.
     app.core.email se usa por atributo (correo.smtp_configurado / correo.send_email) para poder parchearlo en pruebas.
-    remitente_nombre (B3 PLANTILLA, C17): el nombre comercial de la empresa en el From; None deja solo la direccion."""
+    remitente_nombre (B3 PLANTILLA, C17): el nombre comercial de la empresa en el From; None deja solo la direccion.
+    adjuntos (B3 T9): [(nombre, bytes, mime)] tal cual a send_email (el PDF de la COT o del PVEN, _pdf_para_el_correo);
+    None en la SC, los avisos al asesor y los recordatorios."""
     from app.core import email as correo
     destino = (destino or "").strip()
     if not destino:
@@ -324,7 +326,7 @@ def _enviar_correo_confirmacion(destino: Optional[str], asunto: str, html: str,
         return {"enviado": False, "destino": destino, "motivo": "CORREO_NO_CONFIGURADO",
                 "mensaje": "No se envió correo: el envío de correos no está configurado en el sistema."}
     try:
-        salio = bool(correo.send_email(destino, asunto, html, remitente_nombre=remitente_nombre))
+        salio = bool(correo.send_email(destino, asunto, html, remitente_nombre=remitente_nombre, adjuntos=adjuntos))
     except Exception:
         logger.exception("No se pudo enviar el correo de confirmación a %s", destino)
         salio = False
@@ -356,6 +358,65 @@ def _armar_correo_o_revertir(db: Session, perfil: dict, tipo: str, numero, clien
         db.rollback()
         logger.error("No se pudo armar el correo de %s %s: %s", tipo, numero, e)
         raise HTTPException(status_code=500, detail=_MENSAJE_CORREO_SIN_ARMAR)
+
+
+# B3 T9 (ítem PDF, R2): lo que agrega el mensaje del correo (respuesta y Actividad) si salió sin el PDF que debía llevar.
+SIN_PDF_ADJUNTO = "(sin PDF adjunto)"
+
+
+def _pdf_para_el_correo(db: Session, tipo: str, doc, numero: str, destino: Optional[str], perfil: dict,
+                        raw_token: Optional[str] = None) -> tuple:
+    """B3 T9 (ítem PDF opción 1, R2, C2, RP16): (adjuntos, sin_pdf) del correo de la COT ('COT') o del PVEN ('PVEN').
+
+    - adjuntos: [(f'{numero}.pdf', bytes, 'application/pdf')] de pdf_documento con el MISMO documento que ve el cliente
+      (documento_cot con el enlace recien creado, para la misma fecha de emision que su pagina, o documento_pven; C2),
+      el perfil de la empresa (perfil_publico, leido antes del commit) y su logo (leer_logo); o None.
+    - sin_pdf: True si el correo va a salir pero el PDF no se pudo armar (falta reportlab, o fallo la lectura del
+      documento o el dibujo): logger.exception, y quien llama le agrega SIN_PDF_ADJUNTO al mensaje (_avisar_sin_pdf).
+    Si el correo no va a salir (el cliente no tiene correo o el SMTP no esta configurado) no se genera nada:
+    (None, False). La SC y los recordatorios no llaman aqui (R2).
+
+    Donde va (RP16, R20): DESPUES del unico commit del envio, asi que no alarga la transaccion que tenia bloqueados el
+    documento y su SC, y ANTES del WhatsApp de T8. Sus lecturas (ninguna con FOR UPDATE) terminan con db.rollback(): en
+    ese punto no hay nada pendiente en la sesion (lo del envio ya se confirmo y la fila EnvioAlCliente del WhatsApp
+    todavia no existe), asi que no deshace nada; cierra la transaccion de lectura para que no quede abierta mientras
+    sale el SMTP (como _avisar_asesor_por_correo) y, si una lectura fallo en la base, deja la sesion sana para el
+    renglon del envio. El dibujo (CPU, sin base) va despues de ese rollback."""
+    from app.core import email as correo
+    if not (destino or "").strip() or not correo.smtp_configurado():
+        return None, False
+    from app.core import documento_cliente, empresa, pdf_documento
+    from app.core.confirmation_tokens import consultar_token
+    documento = logo = None
+    try:
+        if tipo == "COT":
+            token_row = consultar_token(db, raw_token, tipos=("COT",)) if raw_token else None
+            documento = documento_cliente.documento_cot(db, doc, token_row)
+        else:
+            documento = documento_cliente.documento_pven(db, doc)
+        logo = empresa.leer_logo(db)
+    except Exception:
+        logger.exception("No se pudo leer %s %s para su PDF; el correo sale sin adjunto", tipo, numero)
+        documento = None
+    finally:
+        db.rollback()  # fin de la lectura: nada pendiente (ver el docstring)
+    if documento is None:
+        return None, True
+    try:
+        contenido = pdf_documento.pdf_documento(documento, perfil, logo)
+    except Exception:
+        logger.exception("No se pudo generar el PDF de %s %s; el correo sale sin adjunto", tipo, numero)
+        return None, True
+    return [(f"{numero}.pdf", contenido, pdf_documento.MIME_PDF)], False
+
+
+def _avisar_sin_pdf(correo_res: dict) -> dict:
+    """B3 T9: el correo salio sin el PDF que debia llevar, y su mensaje lo dice ('Correo enviado a x (sin PDF
+    adjunto).'): el de la respuesta y el del renglon 'Correo' de la Actividad. La respuesta no cambia de forma. Si el
+    correo no salio, su mensaje ya dice por que y queda igual."""
+    if not correo_res.get("enviado"):
+        return correo_res
+    return {**correo_res, "mensaje": f"{correo_res['mensaje'].rstrip('.')} {SIN_PDF_ADJUNTO}."}
 
 
 def _detalle_envio(canal: Optional[str], correo_res: Optional[dict], wa_res: Optional[dict] = None,
@@ -3502,6 +3563,9 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     limpieza de cambios_cliente_* y (T7) valida_hasta van en UN solo commit antes del correo. El lead del CRM pasa a
     QUOTATION despues del correo, en el commit del renglon del envio: si falla, se deshace solo lo del lead y el envio
     queda (el aislamiento de siempre, sin otro commit antes del correo).
+
+    B3 T9 (ítem PDF, R2): el correo que salga (principal o de respaldo) lleva COT-….pdf (_pdf_para_el_correo, despues
+    del commit unico); si el PDF no se puede armar, sale sin adjunto y su mensaje dice «(sin PDF adjunto)».
     """
     try:
         cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).with_for_update().first()
@@ -3610,12 +3674,18 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     # ni de la SC. Un rollback en ese tramo borraria tambien la fila del envio (por eso el lead va en un savepoint).
     db.commit()
     autor = body.get("user_name") or getattr(user, "email", None)
+    # B3 T9 (ítem PDF, R2, RP16): el PDF de la cotizacion para el correo que salga (el principal con Email, el de
+    # respaldo con WhatsApp u Otro). Despues del commit unico (sin filas bloqueadas) y antes del WhatsApp: sus lecturas
+    # terminan con un rollback sin nada pendiente (_pdf_para_el_correo). Si falla, el correo sale sin adjunto.
+    adjuntos, sin_pdf = _pdf_para_el_correo(db, "COT", cot, numero, destino, perfil, raw_token)
     # B3 T8 (U16-envio, C21, RP16): el WhatsApp automatico va DESPUES del commit unico y antes del correo, con la
     # validez real (C14). Si no sale, la COT queda igual en Pendiente por confirmacion y el asesor lo manda a mano.
     wa_res = _enviar_whatsapp(db, "COT", cot, link, autor, vence=valida_hasta) if canal == "WhatsApp" else None
     # H39: el correo de respaldo se intenta (y su resultado se conoce) antes de anotar el envio en la Actividad.
     correo_res = _enviar_correo_confirmacion(destino, asunto, html,
-                                             remitente_nombre=perfil["nombre_comercial"] or None)
+                                             remitente_nombre=perfil["nombre_comercial"] or None, adjuntos=adjuntos)
+    if sin_pdf:
+        correo_res = _avisar_sin_pdf(correo_res)
     if not es_reenvio:
         # El lead pasa a "Cotización enviada" (el efecto que el PATCH viejo a ENVIADA disparaba; este endpoint es el
         # unico lugar donde "se envia la cotizacion"). B3 T6 (RP16): despues del correo y sin commit propio
@@ -3927,7 +3997,9 @@ def enviar_pedido_al_cliente(ven_id: int, body: dict = Body(default_factory=dict
       + DIAS_ENLACE_PEDIDO en Colombia, R6) y el renglon ENVIADO_AL_CLIENTE van en UN commit antes del correo. Despues
       sale el correo (correo_documento CONSULTA con el resumen de pagos y el ultimo dia del enlace; siempre como
       respaldo, sea cual sea el canal) y su resultado completa el renglon (_extra_data_de_envio, RP31). Si el correo no
-      se puede armar, se revierte todo y responde 500, como los envios de SC y COT.
+      se puede armar, se revierte todo y responde 500, como los envios de SC y COT. B3 T9 (ítem PDF, R2): ese correo
+      lleva PVEN-….pdf (_pdf_para_el_correo, despues del commit unico); si el PDF no se puede armar, sale sin adjunto
+      y su mensaje dice «(sin PDF adjunto)».
     - El autor es el usuario de la sesion (nombre_de_usuario, RP15): el user_name del body no cuenta.
     - Respuesta: {status, link, canal, correo, vence ('AAAA-MM-DD'), whatsapp}. B3 T8: con canal WhatsApp, whatsapp es el
       resultado de enviar_documento (proposito CONSULTA; con el automatico apagado, ENVIO_AUTOMATICO_APAGADO y el
@@ -3977,13 +4049,18 @@ def enviar_pedido_al_cliente(ven_id: int, body: dict = Body(default_factory=dict
     renglon_id = renglon.id
     db.commit()  # RP16: el UNICO commit antes del correo
 
+    # B3 T9 (ítem PDF, R2, RP16): el PDF del pedido para el correo (siempre sale, como principal o como respaldo).
+    # Despues del commit unico (sin el pedido bloqueado) y antes del WhatsApp: ver _pdf_para_el_correo.
+    adjuntos, sin_pdf = _pdf_para_el_correo(db, "PVEN", so, numero, destino, perfil)
     # B3 T8 (U16-envio, U23, C15, C21): el WhatsApp automatico de CONSULTA va despues del commit unico y antes del correo;
     # un fallo no deshace el envio (el enlace ya sirve). Su fila EnvioAlCliente la confirma el commit de abajo.
     # r1 (L2/R5): desde aqui, con WhatsApp, hay una transaccion abierta durante Chatwoot y el SMTP con esa fila en flush.
     wa_res = (_enviar_whatsapp(db, "PVEN", so, link, nombre_de_usuario(user), proposito="CONSULTA", vence=vence)
               if canal == "WhatsApp" else None)
     correo_res = _enviar_correo_confirmacion(destino, asunto, html,
-                                             remitente_nombre=perfil["nombre_comercial"] or None)
+                                             remitente_nombre=perfil["nombre_comercial"] or None, adjuntos=adjuntos)
+    if sin_pdf:
+        correo_res = _avisar_sin_pdf(correo_res)
     # r1 (R2, como el lead de la COT): completar el renglon va en un savepoint. Si falla, el renglon queda como estaba
     # antes del correo, y el commit de abajo guarda igual la fila EnvioAlCliente del WhatsApp que ya salio. Un
     # db.rollback() aqui la borraria.
