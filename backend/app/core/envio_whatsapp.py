@@ -105,8 +105,10 @@ MOTIVOS = {
     "FUERA_DE_VENTANA_SIN_PLANTILLA": ("No se envió: el cliente no ha escrito en las últimas 24 horas y no hay una "
                                        "plantilla aprobada por Meta en Configuración."),
     "FALLO_CHATWOOT": "No se envió: Chatwoot rechazó el mensaje ({detalle}).",
-    "CHATWOOT_SIN_RESPUESTA": ("Chatwoot no respondió a tiempo: puede que el mensaje haya salido. Revisa la "
-                               "conversación en Chatwoot antes de mandarlo otra vez."),
+    # r2 (arreglos 3): neutro, porque cubre el timeout, el 5xx, la respuesta que no es JSON, el corte al leer y el 2xx sin
+    # id despues del POST final (la causa queda en detalle).
+    "CHATWOOT_SIN_RESPUESTA": ("Chatwoot no confirmó el envío: puede que el mensaje haya salido. Revisa la conversación "
+                               "en Chatwoot antes de reenviarlo."),
 }
 TEXTOS_ENVIADO = {
     "TEXTO": "Enviado automáticamente al {destino} desde el WhatsApp de la empresa.",

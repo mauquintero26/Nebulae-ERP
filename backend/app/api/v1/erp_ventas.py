@@ -3604,6 +3604,10 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     # RP16: el UNICO commit antes del correo. Ya no se llama _sincronizar_estado_solicitud_desde_cotizacion: con U15 una
     # COT en PENDIENTE_CONFIRMACION no toca la SC (salia sin hacer nada), y sin refresh ni sincronizacion no queda
     # abierta una transaccion de lectura mientras sale el SMTP sincrono.
+    # B3 T8 r1/r2 (L2/R5): con canal WhatsApp eso ya no se cumple del todo. El WhatsApp (despues del commit) relee la
+    # COT, la configuracion y la marca, y deja la fila EnvioAlCliente en flush hasta el commit del renglon. Asi queda
+    # una transaccion abierta durante Chatwoot (hasta 12 s) y el SMTP (hasta 10 s), aunque sin bloquear filas de la COT
+    # ni de la SC. Un rollback en ese tramo borraria tambien la fila del envio (por eso el lead va en un savepoint).
     db.commit()
     autor = body.get("user_name") or getattr(user, "email", None)
     # B3 T8 (U16-envio, C21, RP16): el WhatsApp automatico va DESPUES del commit unico y antes del correo, con la

@@ -32,6 +32,8 @@ LINEA = {"product_name": "Cuna Colecho", "qty": 1}
 SIN_TELEFONO = ("El cliente no tiene un teléfono de WhatsApp válido: elige Email u Otro, o corrige su teléfono antes "
                 "de enviar.")
 RESERVADA = "El número de WhatsApp de la empresa y el envío automático se cambian en Envío automático por WhatsApp."
+SIN_CONFIRMAR = ("Chatwoot no confirmó el envío: puede que el mensaje haya salido. Revisa la conversación en Chatwoot "
+                 "antes de reenviarlo.")
 ETIQUETAS_SC = ["Canal de envío", "WhatsApp", "Mensaje", "Correo de respaldo"]
 ETIQUETAS_COT_PVEN = ETIQUETAS_SC + ["Enlace vigente hasta"]
 
@@ -221,20 +223,32 @@ def test_telefonos_paridad_con_frontend():
 def test_chatwoot_real_bloqueado_en_las_pruebas(monkeypatch):
     """r1 (L3 = S6 = R9): como el SMTP, ninguna prueba puede llegar a Chatwoot real. El runner (y conftest) quitan
     CHATWOOT_BASE_URL y CHATWOOT_API_TOKEN del entorno y cambian chatwoot._ABRIDOR por uno que lanza RuntimeError: aun con
-    la configuracion puesta, una peticion sin el fake no sale. El abridor real queda en abridor_real (para revisarlo)."""
+    la configuracion puesta, una peticion sin el fake no sale. El abridor real queda en abridor_real (para revisarlo).
+    r2 (guarda 4 y 2): tambien urllib.request.urlopen (el cliente propio de chat.py) lanza el mismo RuntimeError, y cada
+    bloqueo se cuenta: el runner falla al final si el contador no quedo en 0. Esta prueba dispara el bloqueo a proposito,
+    asi que deja el contador como lo encontro."""
     import os
+    import urllib.request
     import app.core.chatwoot as cw
     assert "CHATWOOT_BASE_URL" not in os.environ and "CHATWOOT_API_TOKEN" not in os.environ
     assert cw.configurado() is False
     real = cw._ABRIDOR.abridor_real  # sin la guarda no existe: la prueba cae aqui, antes de tocar la red
     assert any(isinstance(h, cw._SinRedirecciones) for h in real.handlers)
+    contador = type(cw._ABRIDOR)
+    assert getattr(urllib.request.urlopen, "contador", None) is contador  # urlopen bloqueado (sin red si no lo esta)
+    antes = contador.veces
     monkeypatch.setenv("CHATWOOT_BASE_URL", URL_FICTICIA)
     monkeypatch.setenv("CHATWOOT_API_TOKEN", TOKEN_FICTICIO)
     try:
-        cw._peticion("GET", "/api")
-        raise AssertionError("una peticion real a Chatwoot debia estar bloqueada")
-    except RuntimeError as e:
-        assert str(e) == "Chatwoot real bloqueado en pruebas"
+        for intento in (lambda: cw._peticion("GET", "/api"), lambda: urllib.request.urlopen(URL_FICTICIA + "/api")):
+            try:
+                intento()
+                raise AssertionError("una peticion real debia estar bloqueada")
+            except RuntimeError as e:
+                assert str(e) == "Chatwoot real bloqueado en pruebas"
+        assert contador.veces == antes + 2
+    finally:
+        contador.veces = antes  # los dos bloqueos de esta prueba son a proposito: no cuentan para el runner
 
 
 def test_una_redireccion_no_lleva_el_token_a_otro_host(monkeypatch):
@@ -568,6 +582,7 @@ def test_despues_del_post_final_un_error_ambiguo_puede_haber_salido(app_client, 
         assert resp.status_code == 200, resp.text
         wa = resp.json()["whatsapp"]
         assert wa["motivo"] == "CHATWOOT_SIN_RESPUESTA" and wa["enviado"] is False, (respuesta, wa)
+        assert wa["texto_resultado"] == SIN_CONFIRMAR, respuesta  # r2: no dice «no respondió a tiempo» ante un 502
         [envio] = _envios(db, "SC", sc.id)
         assert (envio.estado, envio.motivo) == ("NO_ENVIADO", "CHATWOOT_SIN_RESPUESTA"), respuesta
     # La conversacion nueva (plantilla) sin 'id' en la respuesta: tambien puede haber salido.
@@ -738,8 +753,8 @@ def test_timeout_en_el_post_final_avisa_que_puede_haber_salido(app_client, db, a
     assert resp.status_code == 200, resp.text
     wa = resp.json()["whatsapp"]
     assert wa["motivo"] == "CHATWOOT_SIN_RESPUESTA" and wa["enviado"] is False
-    assert wa["texto_resultado"] == ("Chatwoot no respondió a tiempo: puede que el mensaje haya salido. Revisa la "
-                                     "conversación en Chatwoot antes de mandarlo otra vez.")
+    # r2 (arreglos 3): texto neutro, sirve tambien para el 5xx, la respuesta que no es JSON, el corte y el 2xx sin id.
+    assert wa["texto_resultado"] == SIN_CONFIRMAR
     # Plazo total agotado antes de llamar: tampoco se llama a Chatwoot.
     fake = _preparar(monkeypatch, db, _en_ventana())
     monkeypatch.setattr(ew, "PLAZO_TOTAL", 0)
@@ -881,18 +896,23 @@ def test_cot_con_lead_que_falla_conserva_el_registro_del_whatsapp(app_client, db
 def test_pedido_si_falla_completar_el_renglon_el_registro_del_whatsapp_queda(app_client, db, admin_token, user_admin,
                                                                             monkeypatch):
     """r1 (R2): en el PVEN el renglon ENVIADO_AL_CLIENTE se completa despues del correo. Si eso falla, la fila
-    EnvioAlCliente de un WhatsApp que ya salio no se pierde: el renglon queda como estaba antes del correo."""
+    EnvioAlCliente de un WhatsApp que ya salio no se pierde: el renglon queda como estaba antes del correo.
+    r2 (arreglos 1): el fallo ocurre DENTRO de Postgres y en la sesion del endpoint (SELECT 1/0 justo antes del UPDATE
+    que completa el renglon), no como un error de Python: asi se prueba que el savepoint tambien recupera una
+    transaccion que Postgres dejo abortada (sin el, el commit de despues la deshace con la fila del envio)."""
     import logging
-    import app.api.v1.erp_ventas as ev
+    from sqlalchemy import text
+    from sqlalchemy.orm import Query
     _preparar(monkeypatch, db, _en_ventana())
-    original = ev._extra_data_de_envio
+    update_original = Query.update
 
-    def falla_al_completar(canal, correo_res, **kwargs):
-        if correo_res is not None:
-            raise RuntimeError("no se pudo completar el renglon")
-        return original(canal, correo_res, **kwargs)
+    def update_que_falla_en_la_base(self, values, *args, **kwargs):
+        extra = next((v for k, v in values.items() if getattr(k, "key", k) == "extra_data"), None)
+        if isinstance(extra, dict) and extra.get("correo") is not None:  # el UPDATE que completa el renglon
+            self.session.execute(text("SELECT 1/0"))  # division_by_zero en Postgres: la transaccion queda abortada
+        return update_original(self, values, *args, **kwargs)
 
-    monkeypatch.setattr(ev, "_extra_data_de_envio", falla_al_completar)
+    monkeypatch.setattr(Query, "update", update_que_falla_en_la_base)
     monkeypatch.setattr(logging.getLogger("app.api.v1.erp_ventas"), "disabled", True)
     so = _pven(db)
     resp = _enviar_pven(app_client, admin_token, so, {"canal": "WhatsApp"})

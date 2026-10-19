@@ -40,30 +40,79 @@ def _sin_credenciales_smtp():
 _sin_credenciales_smtp()
 
 
+import urllib.request
+
+# B3 T8 r2: el urlopen de la stdlib, guardado ANTES de bloquearlo. Solo lo recuperan las pruebas de tests/prod_smoke,
+# que prueban produccion por la red a proposito (ver _sin_servicios_externos_reales).
+_URLOPEN_REAL = urllib.request.urlopen
+
+
 class _ChatwootBloqueado:
     """Reemplaza app.core.chatwoot._ABRIDOR: cualquier peticion real a Chatwoot lanza RuntimeError. abridor_real guarda el
-    abridor de produccion (para revisarlo, nunca para usarlo). Igual que en tests/rollback_runner.py."""
+    abridor de produccion (para revisarlo, nunca para usarlo). Igual que en tests/rollback_runner.py.
+    r2: `veces` cuenta los intentos bloqueados (de este abridor y de urlopen); el finalizador de sesion falla si no es 0."""
+
+    veces = 0
 
     def __init__(self, abridor_real):
         self.abridor_real = abridor_real
 
     def open(self, *args, **kwargs):
+        _ChatwootBloqueado.veces += 1
         raise RuntimeError("Chatwoot real bloqueado en pruebas")
 
 
+def _urlopen_bloqueado(*args, **kwargs):
+    """Reemplaza urllib.request.urlopen (r2): el cliente propio de chat.py sale a la red con urlopen y guarda sus
+    credenciales al importarse. Cuenta el intento igual que _ChatwootBloqueado."""
+    _ChatwootBloqueado.veces += 1
+    raise RuntimeError("Chatwoot real bloqueado en pruebas")
+
+
+_urlopen_bloqueado.contador = _ChatwootBloqueado
+
+
 def _sin_chatwoot_real():
-    """B3 T8 r1, como _sin_credenciales_smtp: ninguna prueba llega a Chatwoot real (ni manda un WhatsApp por Meta) aunque
-    el .env compartido tenga CHATWOOT_* o admin_config tenga el envio automatico encendido. Quita CHATWOOT_BASE_URL,
-    CHATWOOT_API_TOKEN y CHATWOOT_ACCOUNT_ID del entorno (sin leerlos ni mostrarlos) y cambia app.core.chatwoot._ABRIDOR
-    (el unico transporte) por uno que lanza RuntimeError. Se llama en los mismos puntos que _sin_credenciales_smtp."""
+    """B3 T8 r1 y r2, como _sin_credenciales_smtp: ninguna prueba llega a Chatwoot real (ni manda un WhatsApp por Meta)
+    aunque el .env compartido tenga CHATWOOT_* o admin_config tenga el envio automatico encendido.
+    - Quita CHATWOOT_BASE_URL, CHATWOOT_API_TOKEN y CHATWOOT_ACCOUNT_ID del entorno, sin leerlos ni mostrarlos.
+    - Cambia app.core.chatwoot._ABRIDOR (el transporte de app.core.chatwoot) por uno que lanza RuntimeError.
+    - Cambia urllib.request.urlopen (el transporte del cliente propio de chat.py) por uno que tambien lanza RuntimeError.
+    Se llama en los mismos puntos que _sin_credenciales_smtp y, ademas, antes de cada prueba (fixture autouse)."""
     import app.core.chatwoot as chatwoot
     for clave in ("CHATWOOT_BASE_URL", "CHATWOOT_API_TOKEN", "CHATWOOT_ACCOUNT_ID"):
         os.environ.pop(clave, None)
     if not isinstance(chatwoot._ABRIDOR, _ChatwootBloqueado):
         chatwoot._ABRIDOR = _ChatwootBloqueado(chatwoot._ABRIDOR)
+    urllib.request.urlopen = _urlopen_bloqueado
 
 
 _sin_chatwoot_real()
+
+
+@pytest.fixture(autouse=True)
+def _sin_servicios_externos_reales(request, monkeypatch):
+    """B3 T8 r2 (guarda 1): las dos guardas otra vez antes de CADA prueba. Un modulo que llama a load_dotenv al
+    importarse o durante una prueba (test_fase6_concurrency, test_receipt_concurrency) repondria las credenciales.
+    tests/prod_smoke prueba produccion por la red a proposito: solo ahi vuelve el urlopen real (el resto sigue
+    bloqueado)."""
+    _sin_credenciales_smtp()
+    _sin_chatwoot_real()
+    if "prod_smoke" in pathlib.Path(str(request.path)).parts:
+        monkeypatch.setattr(urllib.request, "urlopen", _URLOPEN_REAL)
+    yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _chatwoot_real_nunca():
+    """B3 T8 r2 (guarda 2): al terminar la sesion, «Chatwoot real bloqueado N veces». Con N > 0 la sesion falla aunque
+    las pruebas hayan pasado: una prueba llego al transporte real y la guarda la paro (el envio atrapa el error y
+    responde 200, asi que no se veria de otro modo)."""
+    yield
+    veces = _ChatwootBloqueado.veces
+    print(f"\nChatwoot real bloqueado {veces} veces")
+    if veces:
+        pytest.fail(f"Chatwoot real bloqueado {veces} veces: una prueba intento salir a Chatwoot o por urlopen.")
 
 PROD_URL = os.environ.get("DATABASE_URL", "")
 TEST_URL = os.environ.get("TEST_DATABASE_URL", "")

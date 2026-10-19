@@ -25,8 +25,15 @@ en orden inverso, ANTES de cerrar la sesion y revertir la transaccion.
 
 Variable de entorno PARCHE: codigo Python que se ejecuta antes de cargar el modulo (para pruebas "rojas").
 
-Ningun servicio externo real: el SMTP (_bloquear_correo_real) y Chatwoot (_bloquear_chatwoot_real, B3 T8 r1) quedan
-bloqueados para todo el modulo, sea cual sea el .env compartido.
+Ningun servicio externo real, sea cual sea el .env compartido:
+- SMTP: _bloquear_correo_real (smtplib y las credenciales SMTP_*).
+- Chatwoot: _bloquear_chatwoot_real (B3 T8 r1 y r2). Bloquea las credenciales CHATWOOT_*, el transporte de
+  app.core.chatwoot (_ABRIDOR) y urllib.request.urlopen, que es lo que usa el cliente propio de chat.py (y cualquier
+  otro urlopen).
+Las dos guardas se aplican al arrancar, despues de importar la app, despues de importar el modulo de pruebas y al
+empezar cada prueba (r2). Un modulo que vuelva a cargar el .env no las abre.
+Cada intento de salir a Chatwoot o por urlopen se cuenta. Al final se imprime «Chatwoot real bloqueado N veces», y con
+N > 0 la corrida falla aunque todas las pruebas pasen: una prueba llego al transporte real y la guarda la paro.
 """
 import sys, os, re, importlib, inspect, traceback, contextlib, uuid
 from datetime import timedelta
@@ -63,30 +70,50 @@ _bloquear_correo_real()
 
 class _ChatwootBloqueado:
     """Reemplaza app.core.chatwoot._ABRIDOR: cualquier peticion real a Chatwoot lanza RuntimeError. abridor_real guarda el
-    abridor de produccion para que las pruebas revisen como esta armado (sin redirecciones), sin usarlo."""
+    abridor de produccion para que las pruebas revisen como esta armado (sin redirecciones), sin usarlo.
+    r2 (guarda 2): `veces` cuenta los intentos bloqueados (de este abridor y de urlopen). Una prueba que dispare el
+    bloqueo a proposito lo deja como lo encontro."""
+
+    veces = 0
 
     def __init__(self, abridor_real):
         self.abridor_real = abridor_real
 
     def open(self, *args, **kwargs):
+        _ChatwootBloqueado.veces += 1
         raise RuntimeError("Chatwoot real bloqueado en pruebas")
 
 
+def _urlopen_bloqueado(*args, **kwargs):
+    """Reemplaza urllib.request.urlopen (r2, guarda 4): el cliente propio de chat.py (_send_to_chatwoot, sync-chatwoot y
+    la consulta a Gemini) sale a la red con urlopen y lee sus credenciales al importarse, asi que quitar CHATWOOT_* del
+    entorno no lo frena. Cuenta el intento igual que _ChatwootBloqueado."""
+    _ChatwootBloqueado.veces += 1
+    raise RuntimeError("Chatwoot real bloqueado en pruebas")
+
+
+_urlopen_bloqueado.contador = _ChatwootBloqueado  # para que una prueba lea (y deje como estaba) el contador
+
+
 def _bloquear_chatwoot_real():
-    """B3 T8 r1 (como _bloquear_correo_real): ninguna prueba puede llegar a Chatwoot real (ni mandar un WhatsApp por
-    Meta), sea cual sea el .env compartido o lo que diga admin_config de erp_test.
+    """B3 T8 r1 y r2 (como _bloquear_correo_real): ninguna prueba puede llegar a Chatwoot real (ni mandar un WhatsApp
+    por Meta), sea cual sea el .env compartido o lo que diga admin_config de erp_test.
 
     1) Quita CHATWOOT_BASE_URL, CHATWOOT_API_TOKEN y CHATWOOT_ACCOUNT_ID del entorno (sin leerlos ni mostrarlos):
        chatwoot.configurado() da False y el envio automatico se detiene en CHATWOOT_NO_CONFIGURADO.
-    2) Red de seguridad: app.core.chatwoot._ABRIDOR (el unico transporte, lo usa _peticion) pasa a ser un abridor que
-       lanza RuntimeError. Las pruebas que necesitan Chatwoot ponen valores ficticios con monkeypatch.setenv y
-       reemplazan _peticion o _ABRIDOR con monkeypatch.
-    Se llama otra vez despues de importar la app: app/db/database.py vuelve a cargar el .env y reponeria las claves."""
+    2) Red de seguridad: app.core.chatwoot._ABRIDOR (el transporte de app.core.chatwoot, lo usa _peticion) pasa a ser un
+       abridor que lanza RuntimeError. Las pruebas que necesitan Chatwoot ponen valores ficticios con
+       monkeypatch.setenv y reemplazan _peticion o _ABRIDOR con monkeypatch.
+    3) urllib.request.urlopen (el transporte del cliente propio de chat.py, que guarda sus credenciales al importarse)
+       tambien lanza RuntimeError (r2).
+    Idempotente: se vuelve a aplicar despues de importar la app y el modulo de pruebas, y al empezar cada prueba."""
+    import urllib.request
     import app.core.chatwoot as chatwoot
     for clave in ("CHATWOOT_BASE_URL", "CHATWOOT_API_TOKEN", "CHATWOOT_ACCOUNT_ID"):
         os.environ.pop(clave, None)
     if not isinstance(chatwoot._ABRIDOR, _ChatwootBloqueado):
         chatwoot._ABRIDOR = _ChatwootBloqueado(chatwoot._ABRIDOR)
+    urllib.request.urlopen = _urlopen_bloqueado
 
 
 _bloquear_chatwoot_real()
@@ -106,6 +133,13 @@ from app.core.security import create_access_token
 
 _bloquear_correo_real()  # database.py recargo el .env al importarse: se quitan de nuevo las credenciales SMTP
 _bloquear_chatwoot_real()  # y las de Chatwoot (B3 T8 r1)
+
+
+def _bloquear_servicios_externos():
+    """B3 T8 r2 (guarda 1): las dos guardas otra vez. Un modulo de pruebas que llama a load_dotenv al importarse o durante
+    una prueba (test_fase6_concurrency, test_receipt_concurrency) repondria las credenciales."""
+    _bloquear_correo_real()
+    _bloquear_chatwoot_real()
 
 TABLAS = ["customer_requests", "sales_quotations", "sale_orders", "purchase_orders_full", "activity_logs",
           "document_confirmation_tokens", "customers", "sales_orders",
@@ -305,6 +339,7 @@ if os.environ.get("PARCHE"):  # prueba "roja": codigo que anula la regla bajo pr
     exec(os.environ["PARCHE"])
 
 mod = importlib.import_module(sys.argv[1])
+_bloquear_servicios_externos()  # B3 T8 r2: por si el modulo de pruebas recargo el .env al importarse
 client = TestClient(app, raise_server_exceptions=False)
 sessionlocal_original = dbmod.SessionLocal
 print(f"[rollback_runner] codigo: {BACKEND}  base: {_nombre_base}", flush=True)
@@ -324,6 +359,7 @@ def recolectar():
 
 passed = failed = 0
 for nombre, fn in recolectar():
+    _bloquear_servicios_externos()  # B3 T8 r2: al empezar cada prueba (una prueba anterior pudo recargar el .env)
     conn = dbmod.engine.connect()
     trans = conn.begin()
     Sesion = sessionmaker(bind=conn, autocommit=False, autoflush=False, join_transaction_mode="create_savepoint")
@@ -404,5 +440,11 @@ for nombre, fn in recolectar():
 despues = maximos()
 cambios = {t: (antes[t], despues[t]) for t in TABLAS if despues[t] != antes[t]}
 print(f"\n{passed} passed, {failed} failed")
+# B3 T8 r2 (guarda 2): la guarda de Chatwoot no se queda callada. Si actuo, una prueba llego al transporte real (el
+# envio la atrapa y responde 200, asi que la prueba pudo quedar en verde): la corrida falla igual. Va antes de la ultima
+# linea para que la salida siga terminando en «Base intacta».
+bloqueos_chatwoot = _ChatwootBloqueado.veces
+print(f"Chatwoot real bloqueado {bloqueos_chatwoot} veces"
+      + ("" if not bloqueos_chatwoot else ": OJO, una prueba intento salir a Chatwoot o por urlopen (falla la corrida)"))
 print("Base intacta (max(id) sin cambios)." if not cambios else f"OJO, max(id) cambio en: {cambios}")
-sys.exit(1 if failed else 0)
+sys.exit(1 if failed or bloqueos_chatwoot else 0)
