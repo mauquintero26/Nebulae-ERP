@@ -21,6 +21,7 @@
 import {
   normalizarTarifaIva, etiquetaTarifaIva, pctTarifaIva, intentarTotalesCotizacion, TARIFA_IVA_POR_DEFECTO,
 } from './iva.js';
+import { pedidoVigente } from './listas-ventas.js';
 
 export const MARGIN_PCT_CAP = 95;
 
@@ -219,40 +220,67 @@ export function cuerpoDeGuardado(actual, inicial) {
  * B2-T9A ronda 2: el calculo inicial contra el que compara cuerpoDeGuardado. Una cotizacion sin total (> 0) todavia no
  * esta cotizada: null, y se manda el cuerpo completo aunque nada haya cambiado (con los costos ya puestos, «Guardar»
  * mandaba solo las notas y cerraba sin cotizarla).
- * B3 T17 r1 (ruling del controlador): una cotizacion VIEJA (cotizacionSinIva: guardada sin IVA discriminado y con
- * precio) en Borrador o Enviada tampoco se compara: la calculadora la abre con las cifras CON IVA, y comparar contra
- * ellas mandaba solo las notas, asi que el servidor nunca le aplicaba el IVA. En Pendiente o Confirmada se sigue
- * comparando (guardar una nota no anula la confirmacion, H40) y la calculadora lo avisa (avisoCotizacionSinIva).
+ * (B3 T17 r2: la cotizacion vieja, sin IVA discriminado, ya no se decide aqui sino en reglaCotizacionSinIva.)
  * @param {Record<string, any> | null | undefined} cot
  * @param {Record<string, any> | null | undefined} inicial  cuerpoCompletoCalculadora al abrir la calculadora
  * @returns {Record<string, any> | null}
  */
 export function inicialParaComparar(cot, inicial) {
-  if (!(Number(cot?.total_cop) > 0)) return null;
-  if (cotizacionSinIva(cot) && (cot?.estado === 'BORRADOR' || cot?.estado === 'ENVIADA')) return null;
-  return inicial ?? null;
+  return Number(cot?.total_cop) > 0 ? (inicial ?? null) : null;
 }
 
-/** B3 T17 r1: la cotizacion se guardo antes del IVA (el GET dice iva_discriminado false) y ya tiene precio. */
-function cotizacionSinIva(cot) {
-  return cot?.iva_discriminado === false && Number(cot?.total_cop) > 0;
+/**
+ * B3 T17 r2: la validacion de precios del «Guardar» de la calculadora: hay lineas, cada una y el total son mayores
+ * que $0 (los totales de totalesIvaCalculadora; null, con una linea incompleta, no pasa).
+ * @param {{ lineas?: Array<{ total_cop?: number }>, total_cop?: number } | null | undefined} totalesIva
+ * @returns {boolean}
+ */
+export function preciosCompletos(totalesIva) {
+  const lineas = Array.isArray(totalesIva?.lineas) ? totalesIva.lineas : [];
+  return lineas.length > 0 && lineas.every((l) => Number(l?.total_cop) > 0) && Number(totalesIva?.total_cop) > 0;
 }
 
-/** B3 T17 r1: el aviso ambar de la calculadora para una cotizacion vieja que espera o ya tiene la confirmacion. */
+/** B3 T17 r2 (a), todas las filas validas: el aviso neutral. */
+export const AVISO_SIN_IVA_SE_APLICA = 'Esta cotización se guardó sin IVA discriminado: al guardar se aplicará el IVA.';
+/** B3 T17 r2 (a), alguna fila no pasa la validacion de precios. */
+export const AVISO_SIN_IVA_COMPLETA_COSTOS = 'Esta cotización se guardó sin IVA discriminado. Para aplicarle el IVA, '
+  + 'completa el costo de los productos que no lo tienen y vuelve a guardar.';
+/** B3 T17 r1/r2 (b): congelada por H40 (Pendiente, o Confirmada sin pedido vigente). */
 export const AVISO_COT_SIN_IVA = 'Esta cotización se guardó sin IVA discriminado. Las cifras con IVA se guardan si '
   + 'cambias algún precio, y el cliente tendrá que confirmar de nuevo.';
 
 /**
- * B3 T17 r1: AVISO_COT_SIN_IVA si la cotizacion es vieja (sin IVA discriminado y con precio) y la calculadora la abre
- * congelada (`estadoConfirmacion` de H40: 'PENDIENTE_CONFIRMACION' o 'CONFIRMADA' sin pedido vigente), donde guardar
- * sin cambiar un precio manda solo las notas (inicialParaComparar). Si no, null.
- * @param {Record<string, any> | null | undefined} cot
- * @param {string | null | undefined} estadoConfirmacion
- * @returns {string | null}
+ * B3 T17 r2 (ruling del controlador, reemplaza al de r1): que hace la calculadora con una cotizacion VIEJA (el GET dice
+ * iva_discriminado false y tiene total > 0). La calculadora la abre con las cifras CON IVA; comparar contra ellas
+ * (inicialParaComparar) manda solo las notas y el servidor nunca le aplica el IVA. null para una cotizacion con
+ * tarifas (iva_discriminado true o ausente) o sin precio: se compara exactamente como antes. Si no, {comparaContraNull,
+ * aviso, tono}:
+ * - (a) no congelada y sin pedido vigente (Borrador, Enviada, Vencida, Rechazada…): con TODAS las filas validas
+ *   (preciosCompletos de `totalesIva`, los totales que tiene en pantalla) compara contra null, asi que viajan los
+ *   precios con su tarifa y el servidor aplica el IVA (AVISO_SIN_IVA_SE_APLICA, tono neutral); si alguna fila no pasa,
+ *   se guardan solo las notas, para no bloquearlas (B2-T9A r1 p2), y AVISO_SIN_IVA_COMPLETA_COSTOS;
+ * - (b) congelada por H40 (Pendiente, o Confirmada sin pedido vigente): solo las notas y AVISO_COT_SIN_IVA;
+ * - (c) con pedido vigente (pedidoVigente): solo las notas y «… y se actualizará el pedido {numero}.» («el pedido de
+ *   venta» sin numero).
+ * @param {Record<string, any> | null | undefined} cot  el GET de la cotizacion (estado, total_cop, iva_discriminado,
+ *   pedidos_venta)
+ * @param {{ lineas?: Array<{ total_cop?: number }>, total_cop?: number } | null | undefined} totalesIva
+ * @returns {{ comparaContraNull: boolean, aviso: string, tono: 'neutral' | 'ambar' } | null}
  */
-export function avisoCotizacionSinIva(cot, estadoConfirmacion) {
-  const congelada = estadoConfirmacion === 'PENDIENTE_CONFIRMACION' || estadoConfirmacion === 'CONFIRMADA';
-  return congelada && cotizacionSinIva(cot) ? AVISO_COT_SIN_IVA : null;
+export function reglaCotizacionSinIva(cot, totalesIva) {
+  if (cot?.iva_discriminado !== false || !(Number(cot?.total_cop) > 0)) return null;
+  const pedido = pedidoVigente(cot);
+  if (pedido) {
+    const numero = typeof pedido.numero === 'string' && pedido.numero.trim() ? pedido.numero.trim() : 'de venta';
+    return { comparaContraNull: false, tono: 'ambar', aviso: 'Esta cotización se guardó sin IVA discriminado. Las cifras '
+      + `con IVA se guardan si cambias algún precio, y se actualizará el pedido ${numero}.` };
+  }
+  if (cot.estado === 'PENDIENTE_CONFIRMACION' || cot.estado === 'CONFIRMADA') {
+    return { comparaContraNull: false, aviso: AVISO_COT_SIN_IVA, tono: 'ambar' };
+  }
+  return preciosCompletos(totalesIva)
+    ? { comparaContraNull: true, aviso: AVISO_SIN_IVA_SE_APLICA, tono: 'neutral' }
+    : { comparaContraNull: false, aviso: AVISO_SIN_IVA_COMPLETA_COSTOS, tono: 'ambar' };
 }
 
 /**

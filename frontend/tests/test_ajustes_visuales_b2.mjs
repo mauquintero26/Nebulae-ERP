@@ -160,7 +160,7 @@ console.log('--- V3 TEST 2: la SC, la COT y el PVEN usan la misma cabecera ---')
     assert.ok(/<CabeceraActividad\b[^>]*titulo=\{a\.description \|\| (b3\?\.etiqueta \|\| )?humanizarCodigo\(a\.action\)\}/.test(fuente),
       `${ruta}: la tarjeta usa <CabeceraActividad titulo=...>`);
     if (ruta === 'cotizacion/[id]/page.tsx') {
-      assert.ok(/titulo=\{a\.description \|\| b3\?\.etiqueta \|\| humanizarCodigo\(a\.action\)\}/.test(fuente),
+      assert.ok(/<CabeceraActividad\b[^>]*titulo=\{a\.description \|\| b3\?\.etiqueta \|\| humanizarCodigo\(a\.action\)\}/.test(fuente),
         `${ruta}: sin descripción, la etiqueta de ACCIONES_BLOQUE3 (RP22)`);
     }
     assert.ok(!/<span className="font-bold text-slate-800 text-sm">\{a\.description/.test(fuente),

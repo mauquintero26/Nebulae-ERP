@@ -463,8 +463,8 @@ function CotizacionDetalleContent() {
         if (cuerpoPedido) {
           await apiFetch(`/ventas/pedidos/${pvenVigente.id}`, { method: 'PATCH', body: JSON.stringify(cuerpoPedido) });
         } else {
-          avisar(`La cotización se guardó, pero el pedido ${pvenVigente.numero} no se actualizó: el servidor no devolvió las `
-            + 'cifras guardadas. Re-cotiza de nuevo para pasarle los precios.', { tono: 'error' });
+          // r2: el texto exacto del controlador (re-cotizar sin cambiar un precio no propagaría nada).
+          avisar('La cotización se guardó, pero el pedido no se actualizó: recarga la página y revisa el pedido.', { tono: 'error' });
         }
       }
       setShowCalc(false);

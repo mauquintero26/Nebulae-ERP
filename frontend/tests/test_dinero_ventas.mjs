@@ -378,6 +378,11 @@ console.log('--- A3 TEST 12: la re-cotizacion manda precios al pedido, nunca sal
   assert.ok(!('iva_cop' in propagacionRecotizacion({ ...guardada, iva_cop: null }, pedido, 'COT-1', 'x')));
   // B3 T17 r1: sin la respuesta del servidor no hay propagación (nunca lo calculado en el navegador): null.
   for (const sin of [null, undefined, 'x', 3]) assert.equal(propagacionRecotizacion(sin, pedido, 'COT-1', 'x'), null, String(sin));
+  // B3 T17 r2: el aviso de ese caso (cotizacion/[id]) no manda a re-cotizar (sin cambiar un precio no se propaga nada).
+  const detalle = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/[id]/page.tsx', import.meta.url), 'utf8');
+  assert.ok(detalle.includes("'La cotización se guardó, pero el pedido no se actualizó: recarga la página y revisa el pedido.'"),
+    'el texto exacto del aviso sin data');
+  assert.ok(!/re-cotiza de nuevo/i.test(detalle), 'sin «re-cotiza de nuevo»');
 }
 
 console.log('--- B3 T17 r1: anticipoDeCalculadora (el anticipo de la calculadora sobre el total con IVA, como el servidor) ---');

@@ -15,7 +15,7 @@ import { apiFetch, API_URL } from '@/lib/api';
 import {
   MARGIN_PCT_CAP, calcularCotizacion, cuerpoCompletoCalculadora, cuerpoDeGuardado,
   validaPreciosAlGuardar, inicialParaComparar,
-  filaNuevaCalculadora, filasInicialesCalculadora, tarifaDeSeleccion, totalesIvaCalculadora, avisoCotizacionSinIva,
+  filaNuevaCalculadora, filasInicialesCalculadora, tarifaDeSeleccion, totalesIvaCalculadora, reglaCotizacionSinIva,
 } from '@/lib/pricing';
 import { formatoPesos } from '@/lib/pesos';
 import { humanizarCodigo } from '@/lib/estados-pedido';
@@ -209,7 +209,6 @@ export function CalculadorModal({
   const avisoConfirmacion = estadoConfirmacion === 'PENDIENTE_CONFIRMACION' ? AVISO_CALC_PENDIENTE
     : estadoConfirmacion === 'CONFIRMADA' ? (sinConfirmacionVigente ? AVISO_CALC_FIGURA_CONFIRMADA : AVISO_CALC_CONFIRMADA)
     : null;
-  const avisoSinIva = avisoCotizacionSinIva(cot, estadoConfirmacion);
   const notasId = useId();
   const notasAyudaId = useId();
   const [razon, setRazon] = useState('');
@@ -238,6 +237,8 @@ export function CalculadorModal({
   // anticipo) salen de lib/iva.js. Con una línea incompleta no lanza: totales null, el mensaje en línea y «—».
   const iva = useMemo(() => totalesIvaCalculadora(calculo.filas, descuento), [calculo, descuento]);
   const totalIva = iva.totales ? iva.totales.total_cop : null;
+  // B3 T17 r2: una cotización vieja (sin IVA discriminado): si se compara contra null y su aviso (lib/pricing.js).
+  const reglaSinIva = reglaCotizacionSinIva(cot, iva.totales);
   // H36+H43 / R3: el anticipo ya no se edita aqui; lo calcula el servidor con la modalidad de la SC o el % manual.
   // Ya convertida: el % y lo pagado DEL PEDIDO (el GET recalcula con la modalidad de hoy, que ya no es el trato).
   // B3 T17 (R8): sobre el total CON IVA; r1: sin SC ni % manual, con el % guardado sin cuantizar (anticipoDeCalculadora).
@@ -254,6 +255,8 @@ export function CalculadorModal({
   // cambiaron frente a él (cuerpoDeGuardado): guardar solo las notas de una cotización calculada antes de H42 ya no
   // reenvía sus precios recalculados ni anula la confirmación del cliente.
   const [inicial] = useState(armarPayload);
+  // B3 T17 r2: contra qué se compara al guardar: null en una cotización vieja que ya puede tomar el IVA; si no, inicial.
+  const referenciaGuardado = () => (reglaSinIva?.comparaContraNull ? null : inicialParaComparar(cot, inicial));
 
   // H40 (ruling T9A-1): `extra` es solo lo de la anulación. El botón normal la llama con una flecha
   // (onClick={() => handleSave()}): si React le pasara el evento del clic como `extra`, JSON.stringify fallaría por la
@@ -261,7 +264,7 @@ export function CalculadorModal({
   const handleSave = (extra: ExtraGuardado = {}) => {
     // Ronda 2 (punto 2): una cotización sin total todavía no está cotizada: no se compara y va el cuerpo completo
     // (inicialParaComparar da null).
-    const cuerpo = cuerpoDeGuardado(armarPayload(), inicialParaComparar(cot, inicial));
+    const cuerpo = cuerpoDeGuardado(armarPayload(), referenciaGuardado());
     // Los precios se validan solo si viajan (validaPreciosAlGuardar): guardar solo las notas o la fecha de una
     // cotización ya calculada no depende de ellos.
     if (validaPreciosAlGuardar(cuerpo)) {
@@ -287,7 +290,7 @@ export function CalculadorModal({
   // B3 T17: con una línea incompleta (iva.error) no se guardan precios: el botón se deshabilita y el motivo ya está en
   // TOTALES. Guardar solo las notas o la fecha sigue funcionando.
   const bloqueadoPorIva = !iva.totales
-    && validaPreciosAlGuardar(cuerpoDeGuardado(armarPayload(), inicialParaComparar(cot, inicial)));
+    && validaPreciosAlGuardar(cuerpoDeGuardado(armarPayload(), referenciaGuardado()));
 
   return (
     <Modal title="Calculadora de Cotización" subtitle={`${cot.numero} — ${cot.customer_name}`}
@@ -320,11 +323,12 @@ export function CalculadorModal({
               <p>{avisoConfirmacion}</p>
             </div>
           )}
-          {/* B3 T17 r1: una cotización vieja (sin IVA discriminado) que espera o tiene la confirmación del cliente. */}
-          {avisoSinIva && (
-            <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs font-semibold text-amber-800">
+          {/* B3 T17 r2: una cotización vieja (sin IVA discriminado): neutral si al guardar se aplica el IVA, ámbar si no. */}
+          {reglaSinIva && (
+            <div className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold ${reglaSinIva.tono === 'neutral'
+              ? 'border-slate-200 bg-slate-50 text-slate-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
               <AlertTriangle size={14} className="shrink-0 mt-0.5" />
-              <p>{avisoSinIva}</p>
+              <p>{reglaSinIva.aviso}</p>
             </div>
           )}
           {/* TRM */}
