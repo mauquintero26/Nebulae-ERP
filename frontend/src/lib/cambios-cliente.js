@@ -57,3 +57,45 @@ export function etiquetaChipCambios(doc, tipoDoc = 'SC') {
   if (!cambios) return null;
   return cambios.tipo === 'NO_LA_NECESITA' ? 'Ya no la necesita' : 'Cambios pedidos';
 }
+
+/** B3 T18 (H28-cambios punto 11): a donde lleva la pastilla de AlertasBadge: la lista de solicitudes, con su marca. */
+export const RUTA_CAMBIOS_CLIENTE = '/dashboard/ventas/solicitud';
+
+/**
+ * B3 T18 (H28-cambios punto 11, C22): el texto de la pastilla ámbar del menú lateral (AlertasBadge) con el
+ * `cambios_cliente` de GET /ventas/alertas/resumen (SC y COT con cambios del cliente sin responder; el asesor ve solo
+ * las suyas): '1 con cambios del cliente', '3 con cambios del cliente'. Es una cuenta aparte de los atrasados. Sin un
+ * número positivo: '' (la pastilla no se muestra). Misma lectura del número que textoAtrasados (lib/hub-ventas.js).
+ * @param {unknown} n
+ * @returns {string}
+ */
+export function textoCambiosCliente(n) {
+  const cuantos = typeof n === 'number' || (typeof n === 'string' && n.trim() !== '') ? Number(n) : NaN;
+  if (!Number.isFinite(cuantos) || cuantos <= 0) return '';
+  return `${cuantos} con cambios del cliente`;
+}
+
+/** El máximo del motivo de POST /ventas/solicitudes/{id}/cancelar (CancelarSolicitudBody: len() de Python). */
+export const MAX_MOTIVO_CANCELACION = 500;
+
+const PREFIJO_NO_LA_NECESITA = 'El cliente ya no la necesita';
+
+/**
+ * B3 T18 (R8, no_la_necesita): el motivo con que se abre «Cancelar solicitud» desde la tarjeta rosa «El cliente dice
+ * que ya no la necesita»: 'El cliente ya no la necesita: {su comentario}' (sin los espacios de los bordes) o, sin
+ * comentario, 'El cliente ya no la necesita.'. El comentario llega hasta 1000 caracteres y el motivo admite
+ * MAX_MOTIVO_CANCELACION (en puntos de código, como len() de Python): si no cabe, se corta con '…' sin partir un emoji.
+ * null si la SC no tiene vigente un «Ya no la necesita» (la misma regla de avisoCambiosCliente). El asesor lo puede
+ * cambiar antes de cancelar.
+ * @param {any} sc
+ * @returns {string | null}
+ */
+export function motivoCancelacionNoLaNecesita(sc) {
+  const cambios = cambiosVigentes(sc, 'SC');
+  if (!cambios || cambios.tipo !== 'NO_LA_NECESITA') return null;
+  const comentario = typeof cambios.comentario === 'string' ? cambios.comentario.trim() : '';
+  if (!comentario) return `${PREFIJO_NO_LA_NECESITA}.`;
+  const puntos = [...`${PREFIJO_NO_LA_NECESITA}: ${comentario}`];
+  if (puntos.length <= MAX_MOTIVO_CANCELACION) return puntos.join('');
+  return `${puntos.slice(0, MAX_MOTIVO_CANCELACION - 1).join('')}…`;
+}

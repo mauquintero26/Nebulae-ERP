@@ -35,6 +35,7 @@ const RAICES = [
   'src/app/dashboard/cotiza',
   'src/components/documento',
   'src/components/AlertasBadge.tsx',
+  'src/components/PastillaCambiosCliente.tsx', // B3 T18: la segunda pastilla de AlertasBadge
   'src/app/confirmar',
   'src/app/pedido',
 ];

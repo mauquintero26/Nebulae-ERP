@@ -343,8 +343,9 @@ console.log('--- N4 TEST 7: estadoEnPapelera (se conserva si tiene documentos; n
   assert.equal(estadoEnPapelera({ dias_restantes: 5, tiene_documentos: false }).urgente, true);
   assert.equal(estadoEnPapelera({ dias_restantes: 1, tiene_documentos: false }).texto, '1 día');
   // B2.1 D2 (ruling de T4): con 0 días ya no dice «0 días para eliminar»: venció y la borra un administrador al vaciar.
+  // B3 T18 (RP7): o la revisión automática (purga_papelera, desde B3-T10).
   assert.equal(estadoEnPapelera({ dias_restantes: 0, tiene_documentos: false }).texto,
-    'Vencida: se borra cuando un administrador vacíe la Papelera');
+    'Vencida: se borra cuando un administrador vacíe la Papelera o en la revisión automática');
   // T7 (pendiente de T2B): sin dias_restantes ya no se dice que se conserva, pero tampoco se promete una eliminación.
   assert.equal(estadoEnPapelera({}).texto, 'No vence: no tiene fecha de envío a la Papelera');
   assert.equal(estadoEnPapelera({}).nota, '', 'sin dias_restantes no hay cuenta regresiva');

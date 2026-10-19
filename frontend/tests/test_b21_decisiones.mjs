@@ -124,7 +124,8 @@ console.log('--- D1 TEST 1: /register sin formulario y el login sin enlace a /re
 
 console.log('--- D2 TEST 1: la fila vencida de la Papelera (dias_restantes <= 0) ---');
 {
-  assert.equal(TEXTO_PAPELERA_VENCIDA, 'Vencida: se borra cuando un administrador vacíe la Papelera');
+  // B3 T18 (RP7): desde B3-T10 la revisión automática también purga las vencidas (purga_papelera).
+  assert.equal(TEXTO_PAPELERA_VENCIDA, 'Vencida: se borra cuando un administrador vacíe la Papelera o en la revisión automática');
   for (const dias of [0, -1, -12]) {
     assert.deepEqual(estadoEnPapelera({ dias_restantes: dias, tiene_documentos: false }), {
       conservada: false, texto: TEXTO_PAPELERA_VENCIDA, nota: '', urgente: true, puedeEliminar: true,
@@ -212,6 +213,9 @@ console.log('--- D2 TEST 5: los textos ya no dicen que la Papelera se borra sola
   assert.ok(!lista.includes('antes de su eliminación permanente'), 'el análisis sin el borrado automático');
   assert.ok(!lista.includes('almacenan automáticamente'), 'el análisis sin el borrado automático');
   assert.ok((lista.match(/un administrador vacía las vencidas/gi) ?? []).length >= 3, 'cabecera, estado vacío y análisis');
+  // B3 T18 (RP7): y los tres dicen que desde B3-T10 la revisión automática también las vacía.
+  assert.ok((lista.match(/un administrador vacía las vencidas, y la revisión automática también/gi) ?? []).length >= 3,
+    'cabecera, estado vacío y análisis con la revisión automática');
   const hub = leer('app/dashboard/ventas/page.tsx');
   assert.ok(!hub.includes("'La solicitud se cancela y pasa a la papelera (30 días)'"), 'el Hub sin «(30 días)»');
   assert.ok(hub.includes("SC: 'La solicitud se cancela y pasa a la Papelera: se puede eliminar definitivamente después de 30 días si no se restaura',"));

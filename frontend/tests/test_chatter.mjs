@@ -322,6 +322,13 @@ console.log('--- T11 calidad E6: textoSinTelefono, el mismo texto en las tres ve
     assert.ok(/<ChannelModal[\s\S]*?textoSinTelefono=\{textoSinTelefono\(/.test(fuente), `${ruta}: ChannelModal con textoSinTelefono(...)`);
     assert.ok(!fuente.includes("'teléfono incompleto' : 'sin teléfono'"), `${ruta}: sin el texto armado a mano`);
   }
+  // B3 T17/T18 (RP19, C27): en la COT y la SC, sobre telefono_whatsapp (el e164 que valida el servidor), no sobre el
+  // teléfono escrito en el documento.
+  for (const [ruta, doc] of [['cotizacion/[id]/page.tsx', 'cotizacion'], ['solicitud/[id]/page.tsx', 'solicitud']]) {
+    const fuente = leer(ruta);
+    assert.ok(fuente.includes(`customerHasPhone={!motivoTelefono(${doc}?.telefono_whatsapp)}`), `${ruta}: customerHasPhone`);
+    assert.ok(fuente.includes(`textoSinTelefono={textoSinTelefono(${doc}?.telefono_whatsapp) ?? undefined}`), `${ruta}: el porqué`);
+  }
   // Es el mismo texto que armaban a mano antes, en todos los casos en que WhatsApp queda deshabilitado.
   for (const tel of [null, '', 'sin número', '+57', '0', '123', '300 123 45']) {
     assert.ok(motivoTelefono(tel), String(tel));

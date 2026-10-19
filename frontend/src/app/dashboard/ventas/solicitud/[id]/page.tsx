@@ -29,10 +29,10 @@ import { VentanaMotivoSinConfirmacion } from '../../motivo-sin-confirmacion';
 import { formatoPct } from '@/lib/dinero-ventas';
 import { pctAnticipoDeModalidad } from '@/lib/etiquetas-solicitud';
 import { destinoVolver, anchoInicialPanel, inicialesAutor } from '@/lib/detalle-layout';
-import { comoUTC, fechaEditadaParaGuardar } from '@/lib/hub-ventas';
+import { comoUTC, fechaEditadaParaGuardar, notaReiniciaAtraso } from '@/lib/hub-ventas';
 import {
   CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto, formularioDeEdicion, camposEditadosDeSolicitud,
-  hayCambiosEnEdicion, SIN_CAMBIOS_PARA_GUARDAR, textoContactoAnula,
+  hayCambiosEnEdicion, SIN_CAMBIOS_PARA_GUARDAR, textoContactoAnula, anulacionPorModalidad,
 } from '@/lib/datos-cliente';
 import { avisoProductosGuardados } from '@/lib/lineas-solicitud';
 import { EstadoSolicitudPasos } from './estado-solicitud';
@@ -57,6 +57,16 @@ import {
   NextStepCard, EnlaceConfirmacionModal, esAsesorElegible, getUsuarioActual, type UsuarioActual,
   BotonVolver, returnToSeguro,
 } from '../../flujo';
+// B3 T18: el envío con el WhatsApp automático (T13/T17), el recordatorio (T16), las acciones nuevas de la Actividad
+// (RP22), los cambios del cliente, la «Nota para el cliente» y el 409 de la modalidad (detalle-bloque3.tsx).
+import { abreWhatsAppLocal, NOTA_REENVIO_ENLACE } from '@/lib/envio-whatsapp';
+import { accionBloque3, ACCIONES_BLOQUE3 } from '@/lib/acciones-bloque3';
+import { avisoCambiosCliente, motivoCancelacionNoLaNecesita } from '@/lib/cambios-cliente';
+import { esAdminOAsesor } from '@/lib/seguimiento';
+import { useEstadoEnvioWhatsApp } from '../../cotizacion/estado-envio-whatsapp';
+import { TarjetaSeguimiento } from '../../seguimiento';
+import { ChipCambiosCliente } from '../chip-cambios-cliente';
+import { PasoCambiosCliente, NotaParaElCliente, CampoNotaParaElCliente, VentanaAnularPorModalidad } from './detalle-bloque3';
 
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
 // (mismo patron que cotizacion/[id]/page.tsx; valores reales emitidos por el backend para
@@ -97,6 +107,9 @@ const ACTIVITY_TYPE_LABELS: Record<string, string> = {
 const ACTIVITY_TYPE_ORDER = [
   'ESTADO_CHANGED', 'UPDATED', 'FECHA_ENTREGA_MODIFICADA', 'NOTE_ADDED', 'CREATED',
   'COTIZACION_CREADA', 'COTIZADA_SIN_CONFIRMACION', 'COTIZACION_RECHAZADA', 'CHATTER', 'CANCELLED', 'SENT_TO_TRASH', 'RESTORED',
+  // B3 T18 (RP22): las acciones del Bloque 3 (cambios del cliente, aviso al asesor, entrega del WhatsApp, recordatorios…)
+  // con su etiqueta, su ícono y su color de ACCIONES_BLOQUE3 (T13), sin copiarlos aquí.
+  ...Object.keys(ACCIONES_BLOQUE3),
 ];
 
 const textoCotizacionCreada = (numero: unknown) => (numero ? `Cotización ${numero} creada` : 'Cotización creada');
@@ -164,6 +177,13 @@ function SolicitudDetalleContent() {
   const [confirmCanal, setConfirmCanal] = useState<string | null>(null);
   // B13: el wa.me que se intento abrir, para "Abrir WhatsApp" en el modal si el navegador bloqueo la ventana.
   const [confirmWhatsapp, setConfirmWhatsapp] = useState<string | null>(null);
+  // B3 T18 (RP23, U16-envio y U16-seguimiento): lo demás que trae el envío para la ventana del enlace: el resultado del
+  // WhatsApp automático (envioWhatsapp, w minúscula), el último día del enlace (vence; la SC no lo manda: 2 días) y el
+  // recordatorio (seguimiento).
+  const [confirmEnvio, setConfirmEnvio] = useState<{ envioWhatsapp: unknown; vence: string | null; seguimiento: unknown } | null>(null);
+  // B3 T18 (U16-envio punto 14): el estado del WhatsApp automático mientras el ChannelModal está abierto ({automatico,
+  // listo}, A mayúscula: no es la envioWhatsapp de la ventana del enlace).
+  const envioWhatsAppCanal = useEstadoEnvioWhatsApp(showChannelModal);
   // Asignar asesor desde la propia pagina (BORRADOR -> ASIGNADA), sin tener que entrar a Editar.
   const [me, setMe] = useState<UsuarioActual>({ id: null, email: '', name: '', role: '' });
   const [assigning, setAssigning] = useState(false);
@@ -191,6 +211,12 @@ function SolicitudDetalleContent() {
   const [motivoSinConf, setMotivoSinConf] = useState('');
   const [cotizandoSinConf, setCotizandoSinConf] = useState(false);
   const [errorSinConf, setErrorSinConf] = useState('');
+  // B3 T18 (U22-anticipo punto 4): el 409 ANULA_CONFIRMACION de «Guardar» por cambiar la modalidad
+  // (anulacionPorModalidad), con el cuerpo del PATCH que se repite con la razón, y el error de ese reintento (se ve
+  // dentro de la ventana).
+  const [anulacionEdicion, setAnulacionEdicion] = useState<
+    (NonNullable<ReturnType<typeof anulacionPorModalidad>> & { cuerpo: Record<string, unknown> }) | null>(null);
+  const [errorAnulacion, setErrorAnulacion] = useState('');
 
   useEffect(() => {
     const u = localStorage.getItem('user_name') || localStorage.getItem('username') || '';
@@ -362,7 +388,11 @@ function SolicitudDetalleContent() {
         });
       } catch (err) {
         guardado = false;
-        setEditError(contactoGuardado
+        // B3 T18 (U22-anticipo punto 4): la modalidad nueva cambia el anticipo de una cotización que el cliente ya vio o
+        // confirmó. No se guardó nada de la SC: la ventana de H40 pide la razón y repite este mismo PATCH.
+        const anulacion = anulacionPorModalidad(err);
+        if (anulacion) setAnulacionEdicion({ ...anulacion, cuerpo: { ...campos, updated_by: currentUser } });
+        else setEditError(contactoGuardado
           ? `Los datos del cliente se guardaron, pero no el resto: ${textoDeError(err)}`
           : textoDeError(err, 'No se pudieron guardar los cambios'));
       }
@@ -375,6 +405,34 @@ function SolicitudDetalleContent() {
     const aviso = correccion ? avisoCorreccionContacto(correccion) : null;
     if (aviso) avisar(aviso.texto, { tono: aviso.tono });
     setSavingEdit(false);
+  }
+
+  // B3 T18 (U22-anticipo punto 4, H40): con la razón, el MISMO PATCH de «Guardar» con anular_confirmacion y
+  // motivo_recotizacion. Las cotizaciones congeladas vuelven a Borrador en el mismo commit (H29); el aviso dice cuáles.
+  // Si falla, el error se ve dentro de la ventana, que sigue abierta.
+  async function guardarAnulandoConfirmacion(motivo: string) {
+    if (!solicitud || !anulacionEdicion) return;
+    setSavingEdit(true);
+    setErrorAnulacion('');
+    try {
+      await apiFetch(`/ventas/solicitudes/${solicitud.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ ...anulacionEdicion.cuerpo, anular_confirmacion: true, motivo_recotizacion: motivo }),
+      });
+      setAnulacionEdicion(null);
+      setEditMode(false);
+      await loadSolicitud({ silencioso: true });
+      avisar(anulacionEdicion.aviso, { tono: 'info' });
+    } catch (err) {
+      setErrorAnulacion(textoDeError(err, 'No se pudieron guardar los cambios'));
+      if (recargarTrasError(err)) void loadSolicitud({ silencioso: true });
+    }
+    setSavingEdit(false);
+  }
+
+  function cerrarAnulacionEdicion() {
+    setAnulacionEdicion(null);
+    setErrorAnulacion('');
   }
 
   // U15 (R30): 'Reiniciar solicitud' es el único cambio de estado a mano (PATCH {estado:'BORRADOR'}: vuelve a Nueva, o a
@@ -552,13 +610,16 @@ function SolicitudDetalleContent() {
       const d = await apiFetch(`/ventas/solicitudes/${solicitud.id}/enviar-confirmacion`, { method: 'POST', body: JSON.stringify({ user_name: currentUser, canal: selectedChannel }) });
       const link = d?.link_confirmacion || '';
       let whatsapp: string | null = null;
+      // B3 T18 (U16-envio punto 14, RP19): wa.me solo si el automático no vino o está apagado (nunca dos mensajes), con el
+      // texto que devolvió el servidor (texto_manual, con el enlace) o el de siempre, y al telefono_whatsapp (el e164 que
+      // valida el servidor; sin uno que sirva, waUrl da null y no se abre un wa.me muerto).
+      const wa = d?.whatsapp ?? null;
 
-      if (selectedChannel === 'WhatsApp') {
+      if (abreWhatsAppLocal(selectedChannel, wa)) {
         const mensaje = link
           ? `Hola, aquí está tu solicitud ${solicitud.numero}. Confírmala aquí: ${link}`
           : `Hola, aquí está tu solicitud ${solicitud.numero}`;
-        // T8B ronda 1: el mismo criterio que «Llamar» (telUrl): con un teléfono incompleto no se abre un wa.me muerto.
-        whatsapp = telUrl(solicitud?.customer_phone) ? waUrl(solicitud?.customer_phone, mensaje) : null;
+        whatsapp = waUrl(solicitud?.telefono_whatsapp, wa?.texto_manual || mensaje);
         if (whatsapp) window.open(whatsapp, '_blank');
       }
 
@@ -566,6 +627,7 @@ function SolicitudDetalleContent() {
       setConfirmCorreo(d?.correo ?? null);
       setConfirmCanal(selectedChannel);
       setConfirmWhatsapp(whatsapp);
+      setConfirmEnvio({ envioWhatsapp: wa, vence: d?.vence ?? null, seguimiento: d?.seguimiento ?? null });
       setShowChannelModal(false);
       setSelectedChannel(null);
       if (link) setConfirmLink(link);
@@ -584,6 +646,27 @@ function SolicitudDetalleContent() {
     setCancelError('');
     setCancelRazon('');
     setShowCancelModal(true);
+  }
+
+  // B3 T18 (R8, no_la_necesita): «Cancelar solicitud» de la tarjeta rosa abre la misma ventana con el motivo prellenado
+  // ('El cliente ya no la necesita: …'); el asesor lo puede cambiar antes de cancelar.
+  function cancelarPorqueNoLaNecesita() {
+    abrirCancelacion();
+    setCancelRazon(motivoCancelacionNoLaNecesita(solicitud) ?? '');
+  }
+
+  // U6+H22: la nota guardada en el Chatter entra de una vez en la Actividad (sin recargar); si el servidor no devuelve el
+  // renglón, recarga silenciosa. B3 T18 (nota del controlador tras T16): un contacto con el cliente (llamada, WhatsApp,
+  // correo, nota externa) corre el recordatorio en el servidor: se relee para que TarjetaSeguimiento muestre la fecha
+  // nueva (como el Hub y la COT).
+  function notaRegistrada(log: Record<string, unknown> | null) {
+    if (log) setSolicitud((p: Record<string, unknown>) => agregarActividad(p, log, 'SC'));
+    if (!log || notaReiniciaAtraso(log)) void loadSolicitud({ silencioso: true });
+  }
+
+  // B3 T18: la recarga silenciosa tras «No enviar recordatorios» (TarjetaSeguimiento). Con nombre, como notaRegistrada.
+  function recordatorioCambiado() {
+    void loadSolicitud({ silencioso: true });
   }
 
   // N4: POST /cancelar pide el motivo (minimo 5 caracteres) y el servidor responde 409 con lo que falta (cancelar el pedido
@@ -794,6 +877,9 @@ function SolicitudDetalleContent() {
                   Ver {c.numero} <ArrowRight size={14} />
                 </Link>
               ))}
+              {/* B3 T18 (U16-seguimiento): la SC sigue en Pendiente por confirmación con su cotización temprana (U11): su
+                  recordatorio, o que ya siguen en la cotización. Sin seguimiento no pinta nada. */}
+              <TarjetaSeguimiento tipoDoc="SC" doc={solicitud} onCambio={recordatorioCambiado} />
               {puedeEnviarEnlace && (
                 <Button variant="secondary" icon={Send} loading={sendingConfirmacion} onClick={handleEnviarParaConfirmacion}>
                   {estado === 'PENDIENTE_CONFIRMACION' ? 'Reenviar enlace de confirmación' : 'Enviar para Confirmación'}
@@ -875,6 +961,9 @@ function SolicitudDetalleContent() {
           title="Esperando confirmación del cliente"
           actions={(
             <>
+              {/* B3 T18 (U16-seguimiento punto 9): cuándo sale el recordatorio (o que ya salió) y «No enviar
+                  recordatorios»; al detenerlo, recarga silenciosa. */}
+              <TarjetaSeguimiento tipoDoc="SC" doc={solicitud} onCambio={recordatorioCambiado} />
               <span className="block [&>button]:w-full" title={tituloEnviar}>
                 <Button color="blue" icon={Send} loading={sendingConfirmacion} disabled={editandoProductos} onClick={handleEnviarParaConfirmacion}>Reenviar enlace de confirmación</Button>
               </span>
@@ -886,6 +975,17 @@ function SolicitudDetalleContent() {
           Ya se envió el enlace. Cuando el cliente confirme, aquí aparecerá &ldquo;Crear Cotización&rdquo;.
           Si el enlace venció (dura 2 días) o no le llegó, genera uno nuevo.
         </NextStepCard>
+      );
+    }
+    // B3 T18 (H28-cambios punto 8, C9, R8): el cliente pidió cambios (o ya no la necesita) desde su enlace y la solicitud
+    // volvió a Asignada: su comentario, con «Editar productos», «Reenviar al cliente» y, si ya no la necesita, «Cancelar
+    // solicitud» con el motivo prellenado. Reenviarla limpia la marca (el servidor).
+    if (estado === 'ASIGNADA' && avisoCambiosCliente(solicitud, 'SC')) {
+      return (
+        <PasoCambiosCliente solicitud={solicitud} puedeGestionar={esAdminOAsesor(me.role)}
+          puedeEditarProductos={puedeEditarProductos} editandoProductos={editandoProductos} enviando={sendingConfirmacion}
+          tituloEnviar={tituloEnviar} pie={motivoEditorAbierto(true, false)} onEditarProductos={abrirEditorProductos}
+          onReenviar={handleEnviarParaConfirmacion} onCancelar={cancelarPorqueNoLaNecesita} />
       );
     }
     if (estado === 'ASIGNADA') {
@@ -958,7 +1058,7 @@ function SolicitudDetalleContent() {
   // esta SC (orden preferido primero, luego cualquier tipo futuro no listado arriba).
   const activityFilterOptions = [
     { key: 'all', label: 'Todos' },
-    ...ACTIVITY_TYPE_ORDER.filter(t => actividades.some((a: any) => a.action === t)).map(t => ({ key: t, label: ACTIVITY_TYPE_LABELS[t] || t })),
+    ...ACTIVITY_TYPE_ORDER.filter(t => actividades.some((a: any) => a.action === t)).map(t => ({ key: t, label: ACTIVITY_TYPE_LABELS[t] || accionBloque3(t)?.etiqueta || t })),
     ...Array.from(new Set(actividades.map((a: any) => a.action).filter((t: string) => t && !ACTIVITY_TYPE_ORDER.includes(t)))).map((t: any) => ({ key: t, label: humanizarCodigo(t) })),
   ];
   const actividadesFiltradas = [...actividades].reverse().filter((a: any) => activityFilter === 'all' || a.action === activityFilter);
@@ -976,6 +1076,8 @@ function SolicitudDetalleContent() {
           <div className="flex flex-wrap items-center gap-3 min-w-0">
             <h1 className="text-2xl font-black text-slate-800 whitespace-nowrap">{solicitud?.numero || String(params.id || '').toUpperCase()}</h1>
             {solicitud && <EstadoBadge estado={solicitud.estado} />}
+            {/* B3 T18: «Cambios pedidos» o «Ya no la necesita», como en la lista (también con el Chatter o la IA abiertos). */}
+            {solicitud && <ChipCambiosCliente sc={solicitud} />}
             {solicitud && <TipoBadge tipo={solicitud.tipo_solicitud || 'Cotizacion de Producto'} />}
           </div>
         </div>
@@ -1146,6 +1248,9 @@ function SolicitudDetalleContent() {
               </div>
               <div><label className="text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider block">Fecha Vencimiento</label><input type="date" value={editForm.fecha_vencimiento} onChange={e => setEditForm((ef: any) => ({ ...ef, fecha_vencimiento: e.target.value }))} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-indigo-200 outline-none" /></div>
               <div><label className="text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider block">Notas</label><textarea value={editForm.notas} onChange={e => setEditForm((ef: any) => ({ ...ef, notas: e.target.value }))} rows={3} className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-200 outline-none" /></div>
+              {/* B3 T18 (R3, C19): la nota que SÍ ve el cliente; las Notas de arriba siguen internas. */}
+              <CampoNotaParaElCliente valor={editForm.nota_cliente ?? ''}
+                onCambio={valor => setEditForm((ef: Record<string, unknown>) => ({ ...ef, nota_cliente: valor }))} />
             </div>
           ) : (
             <>
@@ -1156,6 +1261,8 @@ function SolicitudDetalleContent() {
                   <p className="text-sm text-slate-700 whitespace-pre-wrap break-words">{solicitud.notas}</p>
                 </div>
               )}
+              {/* B3 T18 (R3, C19): la «Nota para el cliente», con «El cliente verá esta nota» (sin nota no se pinta). */}
+              <NotaParaElCliente nota={solicitud?.nota_cliente} />
               <div className="grid grid-cols-2 gap-3">
                 {[{ l: 'Asesor', v: solicitud?.advisor_name || '-' }, { l: 'Modalidad Pago', v: etiquetaModalidad(solicitud?.modalidad_pago) || '-' }, { l: 'Fecha Solicitud', v: fDate(comoUTC(solicitud?.fecha_solicitud)) }, { l: 'Vencimiento', v: fDate(comoUTC(solicitud?.fecha_vencimiento)) }].map(item => (
                   <div key={item.l} className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3"><p className="text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider">{item.l}</p><p className="font-bold text-sm text-slate-800">{item.v}</p></div>
@@ -1332,7 +1439,9 @@ function SolicitudDetalleContent() {
                 ) : (
                   <div className="space-y-5 relative before:absolute before:inset-0 before:ml-4 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-200 before:to-transparent">
                     {actividadesFiltradas.map((a: any) => {
-                      const style = ACTIVITY_STYLE[a.action] || DEFAULT_ACTIVITY_STYLE;
+                      // B3 T18 (RP22): las acciones del Bloque 3 toman su ícono y su color de ACCIONES_BLOQUE3 (T13).
+                      const b3 = accionBloque3(a.action);
+                      const style = ACTIVITY_STYLE[a.action] || (b3 ? { icon: b3.icono, color: b3.clases } : DEFAULT_ACTIVITY_STYLE);
                       const Icon = style.icon;
                       return (
                         <div key={a.id} className="relative flex items-start gap-3">
@@ -1343,7 +1452,7 @@ function SolicitudDetalleContent() {
                             {/* U6+H22: una nota del Chatter lleva su tipo encima (Nota interna, Llamada…, «Nota externa · medio»). */}
                             {esEntradaChatter(a) && <div className="mb-1.5"><EtiquetaChatter actividad={a} /></div>}
                             {/* T11 (V3): la misma cabecera que la COT y el PVEN (a 1024 px la fecha pasa debajo). */}
-                            <CabeceraActividad titulo={a.description || humanizarCodigo(a.action)} fecha={`${fDate(a.created_at)} ${fTime(a.created_at)}`} />
+                            <CabeceraActividad titulo={a.description || b3?.etiqueta || humanizarCodigo(a.action)} fecha={`${fDate(a.created_at)} ${fTime(a.created_at)}`} />
                             <CambiosDeActividad extra={a.extra_data} />
                             {a.old_estado && a.new_estado && (
                               <p className="flex items-center gap-1.5 mb-2 flex-wrap">
@@ -1370,8 +1479,7 @@ function SolicitudDetalleContent() {
                 nota guardada entra de una vez aquí y en la Actividad, sin recargar la página; si el servidor no devuelve
                 el renglón, recarga silenciosa. */}
             {panelTab === 'chatter' && (
-              <ChatterDocumento tipoDoc="SC" doc={solicitud}
-                onRegistrado={(log) => log ? setSolicitud((p: Record<string, unknown>) => agregarActividad(p, log, 'SC')) : void loadSolicitud({ silencioso: true })} />
+              <ChatterDocumento tipoDoc="SC" doc={solicitud} onRegistrado={notaRegistrada} />
             )}
 
             {/* B2.1 D4: el servidor configurado (API_URL), sin la URL de producción escrita a mano. */}
@@ -1465,18 +1573,33 @@ function SolicitudDetalleContent() {
           onConfirm={enviarParaConfirmacion}
           onCancel={cancelarEnvioConfirmacion}
           saving={sendingConfirmacion}
-          // T8B ronda 1: WhatsApp solo con un teléfono que sirva para llamar (el mismo criterio de «Contactar cliente»).
-          customerHasPhone={!!llamarCliente}
-          // T11 calidad (E6): por qué no se ofrece WhatsApp, con el mismo texto de la COT y del Hub.
-          textoSinTelefono={textoSinTelefono(solicitud?.customer_phone) ?? undefined}
+          // B3 T18 (RP19, C27): sobre telefono_whatsapp, el e164 que valida el servidor (el de la SC o el de la ficha del
+          // cliente), o null. T11 calidad (E6): por qué no se ofrece WhatsApp, con el mismo texto de la COT y del Hub.
+          customerHasPhone={!motivoTelefono(solicitud?.telefono_whatsapp)}
+          textoSinTelefono={textoSinTelefono(solicitud?.telefono_whatsapp) ?? undefined}
           customerEmail={solicitud?.customer_email ?? null}
           documentLabel="solicitud"
+          // B3 T18 (U16-envio punto 14): si sale solo desde el WhatsApp de la empresa y, con un enlace pendiente, que el
+          // anterior deja de servir.
+          envioWhatsApp={envioWhatsAppCanal}
+          nota={solicitud?.estado === 'PENDIENTE_CONFIRMACION' ? NOTA_REENVIO_ENLACE : undefined}
         />
       )}
 
       {confirmLink && (
         <EnlaceConfirmacionModal documento={`la solicitud ${solicitud?.numero || ''}`} link={confirmLink} color="indigo"
-          correo={confirmCorreo} canal={confirmCanal} whatsappUrl={confirmWhatsapp} onClose={() => setConfirmLink(null)} />
+          correo={confirmCorreo} canal={confirmCanal} whatsappUrl={confirmWhatsapp}
+          // B3 T18 (T16, RP23): el resultado del WhatsApp automático, el teléfono e164, el vencimiento y el recordatorio.
+          envioWhatsapp={confirmEnvio?.envioWhatsapp} telefono={solicitud?.telefono_whatsapp ?? null}
+          vence={confirmEnvio?.vence ?? null} seguimiento={confirmEnvio?.seguimiento ?? null}
+          onClose={() => setConfirmLink(null)} />
+      )}
+
+      {/* B3 T18 (U22-anticipo punto 4): la ventana de H40 con el 409 de la modalidad; con la razón repite el PATCH. */}
+      {anulacionEdicion && (
+        <VentanaAnularPorModalidad anulacion={anulacionEdicion.anulacion} titulo={anulacionEdicion.titulo}
+          numero={solicitud?.numero} guardando={savingEdit} error={errorAnulacion} onLimpiarError={() => setErrorAnulacion('')}
+          onSeguirEditando={cerrarAnulacionEdicion} onAnular={guardarAnulandoConfirmacion} />
       )}
     </div>
   );

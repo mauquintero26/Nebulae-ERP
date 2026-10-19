@@ -7,8 +7,9 @@
 import assert from 'node:assert/strict';
 import {
   CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto, formularioDeEdicion, camposEditadosDeSolicitud,
-  itemDeTimelineCliente, TITULOS_DE_RESPALDO, hayCambiosEnEdicion, SIN_CAMBIOS_PARA_GUARDAR,
+  itemDeTimelineCliente, TITULOS_DE_RESPALDO, hayCambiosEnEdicion, SIN_CAMBIOS_PARA_GUARDAR, anulacionPorModalidad,
 } from '../src/lib/datos-cliente.js';
+import { errorDeRespuesta } from '../src/lib/avisos.js';
 
 console.log('--- TEST 1: CAMPOS_CONTACTO (orden del formulario, límites del backend) ---');
 {
@@ -108,7 +109,9 @@ console.log('--- TEST 8 (T8B, R18 y rulings 2 y 5): avisoCorreccionContacto — 
     sin_cambios: false,
   };
   const A = 'Datos corregidos. Como cambió el correo o el teléfono del cliente, su confirmación quedó anulada: envíale la solicitud de nuevo.';
-  const COT = 'Datos corregidos. Se anuló el enlace de la cotización COT-20260486 enviado al dato anterior: pásala a Borrador y envíala de nuevo.';
+  // B3 T18 (nota del controlador tras T7, RP13): como _ENLACE_COT_ANULADO del backend, «reenvía la cotización al cliente»
+  // (ya no «pásala a Borrador»).
+  const COT = 'Datos corregidos. Se anuló el enlace de la cotización COT-20260486 enviado al dato anterior: reenvía la cotización al cliente.';
   const B = 'Datos corregidos. Se anuló el enlace que se había enviado al dato anterior: usa «Reenviar enlace de confirmación».';
   const CONFIRMACION = 'Datos corregidos. La confirmación anterior del cliente ya no vale; la cotización activa sigue igual.';
   const NORMAL = 'Datos del cliente corregidos.';
@@ -119,17 +122,17 @@ console.log('--- TEST 8 (T8B, R18 y rulings 2 y 5): avisoCorreccionContacto — 
   // T8B r1 (punto 7): si además se anuló el enlace de una cotización, el texto A lo completa (una o varias).
   assert.deepEqual(avisoCorreccionContacto({ ...base, confirmacion_anulada: true, estado_cambiado: true,
     enlaces_anulados: [SC, 'COT-20260486'] }), {
-    texto: `${A} Se anuló también el enlace de la cotización COT-20260486: pásala a Borrador y envíala de nuevo.`, tono: 'info',
+    texto: `${A} Se anuló también el enlace de la cotización COT-20260486: reenvía la cotización al cliente.`, tono: 'info',
   });
   assert.deepEqual(avisoCorreccionContacto({ ...base, confirmacion_anulada: true, estado_cambiado: true,
     enlaces_anulados: [SC, 'COT-1', 'COT-2'] }), {
-    texto: `${A} Se anularon también los enlaces de las cotizaciones COT-1 y COT-2: pásalas a Borrador y envíalas de nuevo.`,
+    texto: `${A} Se anularon también los enlaces de las cotizaciones COT-1 y COT-2: reenvía las cotizaciones al cliente.`,
     tono: 'info',
   });
   // … y los documentos de otro cliente siguen al final.
   assert.deepEqual(avisoCorreccionContacto({ ...base, confirmacion_anulada: true, estado_cambiado: true,
     enlaces_anulados: ['COT-9'], documentos_de_otro_cliente: ['PVEN-7'] }), {
-    texto: `${A} Se anuló también el enlace de la cotización COT-9: pásala a Borrador y envíala de nuevo. No se cambió PVEN-7 porque es de otro cliente.`,
+    texto: `${A} Se anuló también el enlace de la cotización COT-9: reenvía la cotización al cliente. No se cambió PVEN-7 porque es de otro cliente.`,
     tono: 'info',
   });
   // 2. Se anuló el enlace de una cotización: gana sobre el de la solicitud.
@@ -138,7 +141,7 @@ console.log('--- TEST 8 (T8B, R18 y rulings 2 y 5): avisoCorreccionContacto — 
     { texto: COT, tono: 'info' });
   // Varias cotizaciones (raro): en plural.
   assert.deepEqual(avisoCorreccionContacto({ ...base, enlaces_anulados: ['COT-1', 'COT-2'] }), {
-    texto: 'Datos corregidos. Se anularon los enlaces de las cotizaciones COT-1 y COT-2 enviados al dato anterior: pásalas a Borrador y envíalas de nuevo.',
+    texto: 'Datos corregidos. Se anularon los enlaces de las cotizaciones COT-1 y COT-2 enviados al dato anterior: reenvía las cotizaciones al cliente.',
     tono: 'info',
   });
   // 3. Se anuló el enlace de la solicitud (sin cambio de estado).
@@ -165,6 +168,34 @@ console.log('--- TEST 8 (T8B, R18 y rulings 2 y 5): avisoCorreccionContacto — 
     documentos_de_otro_cliente: ['COT-5', 'PVEN-7'] }),
   { texto: `${A} No se cambiaron COT-5 y PVEN-7 porque son de otro cliente.`, tono: 'info' });
 
+  // B3 T18 (nota del controlador tras T5): los enlaces de consulta de pedidos anulados (enlaces_pedido_anulados, PVEN-…)
+  // se dicen con el texto de _ENLACE_PVEN_ANULADO del backend. Solos reemplazan el aviso normal; con otro aviso, van
+  // después de él («también») y antes de los documentos de otro cliente.
+  const PVEN = 'Se anuló el enlace del pedido PVEN-7 enviado al dato anterior: si el cliente lo necesita, envíaselo de nuevo.';
+  const PVEN_TAMBIEN = 'Se anuló también el enlace del pedido PVEN-7: si el cliente lo necesita, envíaselo de nuevo.';
+  assert.deepEqual(avisoCorreccionContacto({ ...base, enlaces_pedido_anulados: ['PVEN-7'] }),
+    { texto: `Datos corregidos. ${PVEN}`, tono: 'info' });
+  assert.deepEqual(avisoCorreccionContacto({ ...base, enlaces_pedido_anulados: ['PVEN-7', 'PVEN-8'] }), {
+    texto: 'Datos corregidos. Se anularon los enlaces de los pedidos PVEN-7 y PVEN-8 enviados al dato anterior: si el cliente los necesita, envíaselos de nuevo.',
+    tono: 'info',
+  });
+  assert.deepEqual(avisoCorreccionContacto({ ...base, confirmacion_anulada: true, enlaces_pedido_anulados: ['PVEN-7'] }),
+    { texto: `${CONFIRMACION} ${PVEN_TAMBIEN}`, tono: 'info' });
+  assert.deepEqual(avisoCorreccionContacto({ ...base, enlaces_anulados: ['COT-20260486'], enlaces_pedido_anulados: ['PVEN-7'] }),
+    { texto: `${COT} ${PVEN_TAMBIEN}`, tono: 'info' });
+  assert.deepEqual(avisoCorreccionContacto({ ...base, confirmacion_anulada: true, estado_cambiado: true,
+    enlaces_pedido_anulados: ['PVEN-7', 'PVEN-8'], documentos_de_otro_cliente: ['COT-5'] }), {
+    texto: `${A} Se anularon también los enlaces de los pedidos PVEN-7 y PVEN-8: si el cliente los necesita, envíaselos de nuevo. No se cambió COT-5 porque es de otro cliente.`,
+    tono: 'info',
+  });
+  assert.deepEqual(avisoCorreccionContacto({ ...base, enlaces_pedido_anulados: ['PVEN-7'], documentos_de_otro_cliente: ['COT-5'] }),
+    { texto: `Datos corregidos. ${PVEN} No se cambió COT-5 porque es de otro cliente.`, tono: 'info' });
+  // Lo que no es una lista de números se ignora (el aviso normal), y enlaces_anulados no cambia de contrato (SC y COT).
+  assert.deepEqual(avisoCorreccionContacto({ ...base, enlaces_pedido_anulados: 'PVEN-7' }), { texto: NORMAL, tono: 'ok' });
+  assert.deepEqual(avisoCorreccionContacto({ ...base, enlaces_pedido_anulados: [null, 3, '  '] }), { texto: NORMAL, tono: 'ok' });
+  // Sin cambios no se anuló nada: tampoco se habla de pedidos.
+  assert.equal(avisoCorreccionContacto({ ...base, sin_cambios: true, enlaces_pedido_anulados: ['PVEN-7'] }), null);
+
   // Sin cambios: nada que avisar, salvo los documentos de otro cliente.
   assert.equal(avisoCorreccionContacto({ ...base, sin_cambios: true }), null);
   assert.deepEqual(avisoCorreccionContacto({ ...base, sin_cambios: true, documentos_de_otro_cliente: ['COT-5', 'COT-6', 'PVEN-7'] }),
@@ -185,7 +216,7 @@ console.log('--- TEST 9 (T8B r2, punto 1): formularioDeEdicion y camposEditadosD
   // Lo que muestra el formulario, con los valores por defecto de siempre.
   assert.deepEqual(formularioDeEdicion(base), {
     advisor_name: '', advisor_user_id: '', tipo_solicitud: 'Cotizacion de Producto', modalidad_pago: 'Contado',
-    notas: 'Llamar antes', fecha_vencimiento: '2026-11-03', customer_phone: '3000000000', customer_email: '',
+    notas: 'Llamar antes', nota_cliente: '', fecha_vencimiento: '2026-11-03', customer_phone: '3000000000', customer_email: '',
     customer_address: 'Calle 1', customer_city: 'Cali',
   });
   const form = formularioDeEdicion(base);
@@ -223,6 +254,18 @@ console.log('--- TEST 9 (T8B r2, punto 1): formularioDeEdicion y camposEditadosD
   const { notas: _sinNotas, ...formSinNotas } = form;
   assert.deepEqual(camposEditadosDeSolicitud(base, formSinNotas), {});
   assert.deepEqual(camposEditadosDeSolicitud(null, null), {});
+
+  // B3 T18 (R3, C19): la «Nota para el cliente» (nota_cliente) se edita aparte de las Notas internas y viaja sola cuando
+  // cambia (editarla no anula el enlace: el servidor la tiene en `allowed` de update_solicitud).
+  const conNota = { ...base, nota_cliente: 'Entregamos de 8 a 12.' };
+  assert.equal(formularioDeEdicion(conNota).nota_cliente, 'Entregamos de 8 a 12.');
+  assert.deepEqual(camposEditadosDeSolicitud(conNota, formularioDeEdicion(conNota)), {});
+  assert.deepEqual(camposEditadosDeSolicitud(base, { ...form, nota_cliente: 'Precios en pesos.' }), { nota_cliente: 'Precios en pesos.' });
+  assert.deepEqual(camposEditadosDeSolicitud(conNota, { ...formularioDeEdicion(conNota), nota_cliente: '' }), { nota_cliente: '' },
+    'borrar la nota para el cliente también es un cambio');
+  assert.deepEqual(camposEditadosDeSolicitud({ ...base, nota_cliente: null }, form), {}, "null y '' son lo mismo");
+  assert.deepEqual(camposEditadosDeSolicitud(base, { ...form, notas: 'Interna', nota_cliente: 'Visible' }),
+    { notas: 'Interna', nota_cliente: 'Visible' }, 'las dos notas, cada una con su clave');
 }
 
 console.log('--- T11 calidad E8: hayCambiosEnEdicion — «Guardar» sin cambios no llama al servidor y lo dice ---');
@@ -241,6 +284,7 @@ console.log('--- T11 calidad E8: hayCambiosEnEdicion — «Guardar» sin cambios
   assert.equal(hayCambiosEnEdicion(base, { ...form, notas: 'Llamar antes', advisor_user_id: '7' }, { tieneFicha: true }), false);
   // Cualquier campo de la SC, la fecha (otro día) o el contacto sí.
   assert.equal(hayCambiosEnEdicion(base, { ...form, notas: 'Otra' }, { tieneFicha: true }), true);
+  assert.equal(hayCambiosEnEdicion(base, { ...form, nota_cliente: 'La ve el cliente' }, { tieneFicha: true }), true, 'B3 T18');
   assert.equal(hayCambiosEnEdicion(base, { ...form, advisor_user_id: '' }, { tieneFicha: true }), true);
   assert.equal(hayCambiosEnEdicion(base, { ...form, fecha_vencimiento: '2026-12-01' }, { tieneFicha: true }), true);
   assert.equal(hayCambiosEnEdicion(base, { ...form, customer_phone: '3001112233' }, { tieneFicha: true }), true);
@@ -385,6 +429,47 @@ console.log('--- Revisión final (F8): textoContactoAnula, solo cuando hay algo 
   const detalle = readFileSync(new URL('../src/app/dashboard/ventas/solicitud/[id]/page.tsx', import.meta.url), 'utf8');
   assert.ok(!detalle.includes('TEXTO_CONTACTO_ANULA'), 'sin el texto fijo');
   assert.ok(detalle.includes('textoContactoAnula(solicitud, { cotizacionActiva: cotizacionesActivas.length > 0 })'));
+}
+
+console.log('--- B3 T18 (U22-anticipo punto 4): anulacionPorModalidad — el 409 de cambiar la modalidad en «Editar» ---');
+{
+  // La forma exacta de _exigir_anulacion_por_modalidad (nota del controlador tras T7): {codigo, estado, cambios:
+  // ['Anticipo'], documentos, mensaje}. Sin detail.anticipo, y 'estado' es el de la PRIMERA cotización: no se usa.
+  const MENSAJE = 'Cambiar la modalidad de pago cambia el anticipo de COT-20260450 ($600.000 → $1.000.000), que el '
+    + 'cliente ya vio o confirmó. Si sigues, esa confirmación se anula y tendrás que enviarle la cotización de nuevo.';
+  const conflicto = (documentos, extra = {}) => errorDeRespuesta(409, { detail: {
+    codigo: 'ANULA_CONFIRMACION', estado: 'PENDIENTE_CONFIRMACION', cambios: ['Anticipo'], documentos, mensaje: MENSAJE,
+    ...extra,
+  } });
+  assert.deepEqual(anulacionPorModalidad(conflicto(['COT-20260450'])), {
+    anulacion: { codigo: 'ANULA_CONFIRMACION', cambios: ['Anticipo'], documentos: ['COT-20260450'], mensaje: MENSAJE },
+    titulo: 'La cotización COT-20260450 vuelve a Borrador',
+    aviso: 'Solicitud guardada. La cotización COT-20260450 volvió a Borrador: envíasela de nuevo al cliente.',
+  });
+  // Varias cotizaciones: en plural. El estado (de la primera) no cambia nada.
+  const varias = anulacionPorModalidad(conflicto(['COT-1', 'COT-2', 'COT-3'], { estado: 'CONFIRMADA' }));
+  assert.equal(varias.titulo, 'Las cotizaciones COT-1, COT-2 y COT-3 vuelven a Borrador');
+  assert.equal(varias.aviso, 'Solicitud guardada. Las cotizaciones COT-1, COT-2 y COT-3 volvieron a Borrador: envíaselas de nuevo al cliente.');
+  assert.equal('estado' in varias.anulacion, false, 'el panel no recibe el estado de la primera cotización');
+  // Sin la lista de documentos (o con basura), en singular y sin número.
+  const sinDocs = anulacionPorModalidad(conflicto(undefined));
+  assert.equal(sinDocs.titulo, 'La cotización vuelve a Borrador');
+  assert.equal(sinDocs.aviso, 'Solicitud guardada. La cotización volvió a Borrador: envíasela de nuevo al cliente.');
+  assert.deepEqual(anulacionPorModalidad(conflicto([null, '  ', 'COT-9'])).anulacion.documentos, ['COT-9']);
+  // Sin mensaje del servidor (no debería pasar): un texto fijo con lo mismo, nunca el genérico del 409.
+  const SIN_MENSAJE = 'Cambiar la modalidad de pago cambia el anticipo de una cotización que el cliente ya vio o confirmó.';
+  const sinMensaje = errorDeRespuesta(409, { detail: { codigo: 'ANULA_CONFIRMACION', cambios: ['Anticipo'], documentos: ['COT-1'] } });
+  assert.equal(anulacionPorModalidad(sinMensaje).anulacion.mensaje, SIN_MENSAJE);
+  assert.equal(anulacionPorModalidad({ status: 409, detail: { codigo: 'ANULA_CONFIRMACION', mensaje: '  ' } }).anulacion.mensaje,
+    SIN_MENSAJE);
+  assert.deepEqual(anulacionPorModalidad({ status: 409, detail: { codigo: 'ANULA_CONFIRMACION', cambios: 'Anticipo' } }).anulacion.cambios,
+    [], 'cambios que no es una lista: ninguno');
+  // Cualquier otro error no es este 409: null (el error sale como siempre, bajo la barra de Guardar).
+  assert.equal(anulacionPorModalidad(errorDeRespuesta(409, { detail: 'La solicitud está cancelada.' })), null);
+  assert.equal(anulacionPorModalidad(errorDeRespuesta(409, { detail: { codigo: 'MOTIVO_NUEVO', mensaje: 'x' } })), null);
+  assert.equal(anulacionPorModalidad(errorDeRespuesta(422, { detail: { codigo: 'ANULA_CONFIRMACION', mensaje: 'x' } })), null);
+  assert.equal(anulacionPorModalidad(new Error('red')), null);
+  assert.equal(anulacionPorModalidad(null), null);
 }
 
 console.log('OK test_datos_cliente');

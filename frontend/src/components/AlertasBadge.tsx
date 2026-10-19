@@ -4,7 +4,9 @@ import { useRouter } from 'next/navigation';
 import { AlertTriangle } from 'lucide-react';
 import { apiFetch, hayReautenticacionPendiente } from '@/lib/api';
 import { RUTA_HUB_VENTAS, textoAtrasados } from '@/lib/hub-ventas';
+import { textoCambiosCliente } from '@/lib/cambios-cliente';
 import { KPI_COLOR_MAP } from '@/lib/design-system';
+import { PastillaCambiosCliente } from './PastillaCambiosCliente';
 
 const ROJO = KPI_COLOR_MAP.red;
 
@@ -13,10 +15,13 @@ const ROJO = KPI_COLOR_MAP.red;
  * menú lateral (Sidebar), arriba; antes flotaba fijo arriba a la derecha y tapaba los botones de las cabeceras y de las
  * ventanas. Con el menú contraído (`colapsado`) se ve solo el ícono con el número en una insignia; con 0 atrasados no
  * se muestra. El clic lleva al Hub de Ventas.
+ * B3 T18 (H28-cambios punto 11, C22): debajo, la pastilla ámbar de cambios del cliente (PastillaCambiosCliente), con el
+ * `cambios_cliente` de la misma respuesta. Es una cuenta aparte y se muestra aunque no haya atrasados.
  */
 export function AlertasBadge({ colapsado = false }: { colapsado?: boolean }) {
   const router = useRouter();
   const [count, setCount] = useState(0);
+  const [cambios, setCambios] = useState(0);
 
   useEffect(() => {
     let mounted = true;
@@ -27,6 +32,7 @@ export function AlertasBadge({ colapsado = false }: { colapsado?: boolean }) {
       try {
         const res = await apiFetch('/ventas/alertas/resumen');
         if (mounted) setCount(res?.data?.atrasados ?? 0);
+        if (mounted) setCambios(res?.data?.cambios_cliente ?? 0);
       } catch {}
     }
     load();
@@ -44,10 +50,15 @@ export function AlertasBadge({ colapsado = false }: { colapsado?: boolean }) {
   }, []);
 
   const texto = textoAtrasados(count);
-  if (!texto) return null;
+  const textoCambios = textoCambiosCliente(cambios);
+  if (!texto && !textoCambios) return null;
+  const pastillaCambios = textoCambios
+    ? <PastillaCambiosCliente texto={textoCambios} cantidad={cambios} colapsado={colapsado} /> : null;
+  // Sin atrasados: solo la de cambios del cliente.
+  if (!texto) return <div className="px-3 pt-4 shrink-0">{pastillaCambios}</div>;
 
   return (
-    <div className="px-3 pt-4 shrink-0">
+    <div className="px-3 pt-4 shrink-0 space-y-2">
       <button
         type="button"
         onClick={() => router.push(RUTA_HUB_VENTAS)}
@@ -64,6 +75,7 @@ export function AlertasBadge({ colapsado = false }: { colapsado?: boolean }) {
           <span className="truncate">{texto}</span>
         )}
       </button>
+      {pastillaCambios}
     </div>
   );
 }

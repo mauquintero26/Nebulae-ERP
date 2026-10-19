@@ -13,6 +13,9 @@
  *
  * Revisión final: el texto de «Editar» sobre lo que anula cambiar el contacto, solo si hay algo que anular
  * (textoContactoAnula).
+ *
+ * B3 T18: la «Nota para el cliente» en «Editar», los enlaces de pedidos anulados en el aviso de la corrección y el 409
+ * de cambiar la modalidad (anulacionPorModalidad).
  */
 
 import { tiene, humanizarCodigo } from './estados-pedido.js';
@@ -109,6 +112,29 @@ const numeros = (v) => (Array.isArray(v) ? v.filter((n) => typeof n === 'string'
 /** 'a' | 'a y b' | 'a, b y c' (como _unir_es del backend). */
 const unirConY = (partes) => (partes.length <= 1 ? partes.join('') : `${partes.slice(0, -1).join(', ')} y ${partes[partes.length - 1]}`);
 
+// B3 T18: qué hacer con una cotización cuyo enlace se anuló (_ENLACE_COT_ANULADO del backend, RP13).
+const REENVIA_COTIZACION = 'reenvía la cotización al cliente.';
+const REENVIA_COTIZACIONES = 'reenvía las cotizaciones al cliente.';
+
+/**
+ * B3 T18 (nota del controlador tras T5): los enlaces de consulta de pedidos anulados, con el texto de
+ * _ENLACE_PVEN_ANULADO del backend (si el cliente lo necesita, el asesor le envía el enlace del pedido de nuevo).
+ * `tambien`: va después de otro aviso de la misma corrección.
+ * @param {string[]} pedidos números PVEN-… (al menos uno)
+ * @param {boolean} tambien
+ * @returns {string}
+ */
+function frasePedidosAnulados(pedidos, tambien) {
+  if (pedidos.length === 1) {
+    return tambien
+      ? `Se anuló también el enlace del pedido ${pedidos[0]}: si el cliente lo necesita, envíaselo de nuevo.`
+      : `Se anuló el enlace del pedido ${pedidos[0]} enviado al dato anterior: si el cliente lo necesita, envíaselo de nuevo.`;
+  }
+  return tambien
+    ? `Se anularon también los enlaces de los pedidos ${unirConY(pedidos)}: si el cliente los necesita, envíaselos de nuevo.`
+    : `Se anularon los enlaces de los pedidos ${unirConY(pedidos)} enviados al dato anterior: si el cliente los necesita, envíaselos de nuevo.`;
+}
+
 /**
  * H21 con R18 (rulings 2 y 5 de T8B): el aviso que se muestra después de corregir el contacto del cliente con
  * PATCH /ventas/solicitudes/{id}/cliente, según las claves de su respuesta (T5). Uno solo, en este orden:
@@ -118,6 +144,10 @@ const unirConY = (partes) => (partes.length <= 1 ? partes.join('') : `${partes.s
  * 3. se anuló el enlace de la solicitud (cualquier otro número de enlaces_anulados);
  * 4. la confirmación anterior ya no vale (confirmacion_anulada: Confirmada con una cotización activa);
  * 5. si no, el aviso normal de guardado.
+ * B3 T18 (notas del controlador tras T5 y T7): las cotizaciones dicen lo de _ENLACE_COT_ANULADO del backend
+ * («reenvía la cotización al cliente», RP13; ya no «pásala a Borrador»), y los enlaces de consulta de pedidos anulados
+ * (enlaces_pedido_anulados, PVEN-…) se dicen con el texto de _ENLACE_PVEN_ANULADO: solos, en lugar del aviso normal; con
+ * otro aviso, después de él («también»).
  * Al final, los documentos de otro cliente que no se corrigieron (documentos_de_otro_cliente). null si no hay nada que
  * decir (sin_cambios y sin documentos de otro cliente, o sin respuesta). Tono 'ok' solo en el guardado normal.
  * @param {any} respuesta la respuesta del PATCH
@@ -135,14 +165,14 @@ export function avisoCorreccionContacto(respuesta) {
   else if (respuesta.estado_cambiado === true) {
     principal = 'Datos corregidos. Como cambió el correo o el teléfono del cliente, su confirmación quedó anulada: envíale la solicitud de nuevo.';
     if (cotizaciones.length === 1) {
-      principal += ` Se anuló también el enlace de la cotización ${cotizaciones[0]}: pásala a Borrador y envíala de nuevo.`;
+      principal += ` Se anuló también el enlace de la cotización ${cotizaciones[0]}: ${REENVIA_COTIZACION}`;
     } else if (cotizaciones.length > 1) {
-      principal += ` Se anularon también los enlaces de las cotizaciones ${unirConY(cotizaciones)}: pásalas a Borrador y envíalas de nuevo.`;
+      principal += ` Se anularon también los enlaces de las cotizaciones ${unirConY(cotizaciones)}: ${REENVIA_COTIZACIONES}`;
     }
   } else if (cotizaciones.length === 1) {
-    principal = `Datos corregidos. Se anuló el enlace de la cotización ${cotizaciones[0]} enviado al dato anterior: pásala a Borrador y envíala de nuevo.`;
+    principal = `Datos corregidos. Se anuló el enlace de la cotización ${cotizaciones[0]} enviado al dato anterior: ${REENVIA_COTIZACION}`;
   } else if (cotizaciones.length > 1) {
-    principal = `Datos corregidos. Se anularon los enlaces de las cotizaciones ${unirConY(cotizaciones)} enviados al dato anterior: pásalas a Borrador y envíalas de nuevo.`;
+    principal = `Datos corregidos. Se anularon los enlaces de las cotizaciones ${unirConY(cotizaciones)} enviados al dato anterior: ${REENVIA_COTIZACIONES}`;
   } else if (enlaces.length > 0) {
     principal = 'Datos corregidos. Se anuló el enlace que se había enviado al dato anterior: usa «Reenviar enlace de confirmación».';
   } else if (respuesta.confirmacion_anulada === true) {
@@ -150,6 +180,13 @@ export function avisoCorreccionContacto(respuesta) {
   } else {
     principal = 'Datos del cliente corregidos.';
     tono = 'ok';
+  }
+  const pedidos = respuesta.sin_cambios === true ? [] : numeros(respuesta.enlaces_pedido_anulados);
+  if (pedidos.length > 0 && tono === 'ok') {
+    principal = `Datos corregidos. ${frasePedidosAnulados(pedidos, false)}`;
+    tono = 'info';
+  } else if (pedidos.length > 0) {
+    principal += ` ${frasePedidosAnulados(pedidos, true)}`;
   }
   let otros = '';
   if (deOtroCliente.length === 1) otros = `No se cambió ${deOtroCliente[0]} porque es de otro cliente.`;
@@ -185,9 +222,10 @@ export function textoContactoAnula(sc, { cotizacionActiva = false } = {}) {
  * ficha), con los valores por defecto de siempre. fecha_vencimiento llega en UTC sin zona (utcnow + días): el campo
  * muestra el día en hora de Colombia, el mismo que la grilla y la lista.
  * @param {any} d la solicitud (GET /ventas/solicitudes/{id})
+ * B3 T18 (R3, C19): también la «Nota para el cliente» (nota_cliente), aparte de las Notas, que siguen internas.
  * @returns {{ advisor_name: string, advisor_user_id: any, tipo_solicitud: string, modalidad_pago: string, notas: string,
- *   fecha_vencimiento: string, customer_phone: string, customer_email: string, customer_address: string,
- *   customer_city: string }}
+ *   nota_cliente: string, fecha_vencimiento: string, customer_phone: string, customer_email: string,
+ *   customer_address: string, customer_city: string }}
  */
 export function formularioDeEdicion(d) {
   return {
@@ -196,6 +234,7 @@ export function formularioDeEdicion(d) {
     tipo_solicitud: d?.tipo_solicitud || 'Cotizacion de Producto',
     modalidad_pago: d?.modalidad_pago || 'Contado',
     notas: d?.notas || '',
+    nota_cliente: d?.nota_cliente || '',
     fecha_vencimiento: diaLocalDeFecha(d?.fecha_vencimiento),
     customer_phone: d?.customer_phone || '',
     customer_email: d?.customer_email || '',
@@ -204,8 +243,9 @@ export function formularioDeEdicion(d) {
   };
 }
 
-/** Los campos de la SC que se editan en «Editar» (el contacto va por PATCH /cliente y la fecha, aparte). */
-const CAMPOS_SOLICITUD_EDITABLES = ['tipo_solicitud', 'modalidad_pago', 'notas'];
+/** Los campos de la SC que se editan en «Editar» (el contacto va por PATCH /cliente y la fecha, aparte). B3 T18: con la
+ * «Nota para el cliente» (nota_cliente; editarla no anula el enlace, R3). */
+const CAMPOS_SOLICITUD_EDITABLES = ['tipo_solicitud', 'modalidad_pago', 'notas', 'nota_cliente'];
 
 /**
  * T8B ronda 2 (punto 1): los campos de la SC que el formulario de «Editar» cambió respecto de lo que mostraba al
@@ -234,6 +274,37 @@ export function camposEditadosDeSolicitud(base, form) {
     if (tiene(form, clave) && !igual(inicial[clave], form[clave])) cambios[clave] = form[clave];
   }
   return cambios;
+}
+
+/** B3 T18: el mensaje de la ventana si el 409 no trae el suyo (no debería pasar: el servidor siempre lo manda). */
+const MENSAJE_ANULA_POR_MODALIDAD = 'Cambiar la modalidad de pago cambia el anticipo de una cotización que el cliente ya vio o confirmó.';
+
+/**
+ * B3 T18 (U22-anticipo punto 4, nota del controlador tras T7): el 409 ANULA_CONFIRMACION de PATCH
+ * /ventas/solicitudes/{id} (_exigir_anulacion_por_modalidad) cuando la modalidad nueva cambia el anticipo de una o
+ * varias cotizaciones que el cliente ya vio o confirmó. Su detail es {codigo, estado, cambios: ['Anticipo'], documentos:
+ * ['COT-…'], mensaje}, sin detail.anticipo; 'estado' es el de la PRIMERA cotización, así que nada se arma con él: la
+ * ventana muestra el `mensaje` del servidor, que ya nombra cada cotización con sus montos. null si `err` no es ese 409.
+ * - anulacion: lo que pinta PanelAnularConfirmacion (anular-confirmacion.tsx), sin el estado;
+ * - titulo: lo que pasa con las cotizaciones si se sigue ('La cotización COT-1 vuelve a Borrador');
+ * - aviso: el aviso tras guardar con la razón (el PATCH de éxito no trae confirmacion_anulada).
+ * @param {any} err el Error de apiFetch (errorDeRespuesta: .status y .detail)
+ * @returns {{ anulacion: { codigo: string, cambios: string[], documentos: string[], mensaje: string }, titulo: string,
+ *   aviso: string } | null}
+ */
+export function anulacionPorModalidad(err) {
+  const detalle = err?.detail;
+  if (err?.status !== 409 || !detalle || typeof detalle !== 'object' || detalle.codigo !== 'ANULA_CONFIRMACION') return null;
+  const documentos = numeros(detalle.documentos);
+  const mensaje = typeof detalle.mensaje === 'string' && detalle.mensaje.trim() ? detalle.mensaje.trim() : MENSAJE_ANULA_POR_MODALIDAD;
+  const varias = documentos.length > 1;
+  const nombre = varias ? `Las cotizaciones ${unirConY(documentos)}`
+    : `La cotización${documentos.length === 1 ? ` ${documentos[0]}` : ''}`;
+  return {
+    anulacion: { codigo: 'ANULA_CONFIRMACION', cambios: numeros(detalle.cambios), documentos, mensaje },
+    titulo: `${nombre} ${varias ? 'vuelven' : 'vuelve'} a Borrador`,
+    aviso: `Solicitud guardada. ${nombre} ${varias ? 'volvieron' : 'volvió'} a Borrador: ${varias ? 'envíaselas' : 'envíasela'} de nuevo al cliente.`,
+  };
 }
 
 /** T11 calidad (E8): el aviso informativo de «Guardar» cuando no hay nada que guardar. */

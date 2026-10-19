@@ -543,7 +543,7 @@ export function resumenCancelacionSolicitudes(resultados, omitidas = []) {
  *  - sin documentos y sin `dias_restantes` no se elimina sola, pero un administrador la puede eliminar;
  *  - sin documentos y con `dias_restantes` hay cuenta regresiva ('20 días para poder eliminarla', urgente desde 5; B2.1
  *    T4 r1: no se borra sola al llegar a 0, se puede eliminar desde ese día);
- *  - B2.1 D2: con `dias_restantes` <= 0 ya venció (esVencidaEnPapelera) y no se borra sola: TEXTO_PAPELERA_VENCIDA.
+ *  - B2.1 D2: con `dias_restantes` <= 0 ya venció (esVencidaEnPapelera) y no se borra al abrirla: TEXTO_PAPELERA_VENCIDA.
  * 'Se conserva' y 'Eliminar permanentemente' nunca van juntos (sin la fila, tampoco se ofrece eliminar).
  * @returns {{conservada: boolean, texto: string, nota: string, urgente: boolean, puedeEliminar: boolean}}
  */
@@ -563,10 +563,11 @@ export function estadoEnPapelera(sc) {
 
 /**
  * B2.1 D2 (decisión del usuario): la Papelera ya no se borra sola al abrirla; la vacía un administrador con «Vaciar las
- * vencidas» (POST /ventas/papelera/purgar). Lo que dice una fila vencida.
+ * vencidas» (POST /ventas/papelera/purgar). Lo que dice una fila vencida. B3 T18 (RP7): desde B3-T10 la revisión
+ * automática también las purga (la tarea purga_papelera llama a purgar_papelera_vencida).
  * @type {string}
  */
-export const TEXTO_PAPELERA_VENCIDA = 'Vencida: se borra cuando un administrador vacíe la Papelera';
+export const TEXTO_PAPELERA_VENCIDA = 'Vencida: se borra cuando un administrador vacíe la Papelera o en la revisión automática';
 
 /**
  * B2.1 D2: una fila de la Papelera que ya venció: sin documentos y con `dias_restantes` (número) en 0 o menos. Sin fecha

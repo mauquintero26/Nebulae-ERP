@@ -42,6 +42,7 @@ import { nombreCliente } from '@/lib/cliente-desde-busqueda';
 import { ProductSearch } from './buscador-producto';
 import { SelectorClienteSC } from './selector-cliente';
 import { LineasProducto } from './lineas-producto';
+import { ChipCambiosCliente } from './chip-cambios-cliente';
 
 // T7: las tablas viven en las librerías (H10/C16 y U15/C5: una sola fuente). Se reexportan desde aquí para no romper los
 // imports del detalle (solicitud/[id]), del Hub y del Asistente Omnicanal. ProductSearch (buscador-producto.tsx) y
@@ -767,7 +768,7 @@ export default function SolicitudClient() {
         aiReply = `🚫 **Análisis de Cancelaciones:**\n\n` +
           `• Actualmente hay **${canc} solicitudes canceladas** (${cancRate}% del total).\n` +
           `• **Motivo más recurrente registrado:** *"${topReason}"*.\n` +
-          `• Las solicitudes canceladas pasan a la **Papelera** con trazabilidad: se pueden eliminar definitivamente después de 30 días si no se restauran; un administrador vacía las vencidas.\n\n` +
+          `• Las solicitudes canceladas pasan a la **Papelera** con trazabilidad: se pueden eliminar definitivamente después de 30 días si no se restauran; un administrador vacía las vencidas, y la revisión automática también.\n\n` +
           `💡 **Acción sugerida:** Implementar seguimiento preventivo vía WhatsApp antes de los 3 días de inactividad para recuperar leads dubitativos antes de que desistan.`;
       } else if (qLower.includes('cliente') || qLower.includes('top') || qLower.includes('volumen')) {
         aiReply = `👑 **Comportamiento de Clientes:**\n\n` +
@@ -1336,12 +1337,13 @@ export default function SolicitudClient() {
           {/* PAPELERA TABLE */}
           {activeTab==='Papelera'&&(
             <div className="p-4">
-              {/* B2.1 D2: la Papelera ya no se borra sola; un administrador vacía las vencidas (solo él ve el botón). */}
+              {/* B2.1 D2: la Papelera ya no se borra al abrirla; un administrador vacía las vencidas (solo él ve el botón). B3
+                  T18 (RP7): desde B3-T10 también la revisión automática (purga_papelera). */}
               {/* B2.1 T4 r1: el título solo; la regla va debajo, sin mayúsculas, con el subtítulo del design-system. */}
               <div className="flex items-start justify-between gap-3 mb-3">
                 <div className="min-w-0">
                   <p className="text-xs font-black text-slate-500 uppercase">Solicitudes en Papelera</p>
-                  <p className={PAGE_HEADER.subtitle}>Las solicitudes canceladas se pueden eliminar definitivamente después de 30 días si no se restauran, salvo las que tienen documentos vinculados; un administrador vacía las vencidas.</p>
+                  <p className={PAGE_HEADER.subtitle}>Las solicitudes canceladas se pueden eliminar definitivamente después de 30 días si no se restauran, salvo las que tienen documentos vinculados; un administrador vacía las vencidas, y la revisión automática también.</p>
                 </div>
                 <div className="flex items-center gap-3 shrink-0">
                   {esAdministrador(getUsuarioActual().role)&&<button onClick={vaciarVencidas} disabled={vaciandoPapelera} className="bg-red-50 hover:bg-red-100 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold border border-red-200 flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"><Trash2 size={11} className={vaciandoPapelera?'animate-pulse':''}/>Vaciar las vencidas</button>}
@@ -1354,7 +1356,7 @@ export default function SolicitudClient() {
                   <span>No se pudo cargar la papelera: {papeleraError}{papelera.length>0?' (se muestra la última lista cargada).':'.'}</span>
                 </div>
               )}
-              {loadingPapelera?<div className="flex justify-center py-8"><RefreshCw size={20} className="animate-spin text-slate-400"/></div>:papelera.length===0?(papeleraError?null:<EmptyState icon={Trash2} message="La papelera está vacía." hint="Las solicitudes canceladas aparecen aquí; se pueden eliminar definitivamente después de 30 días si no se restauran, salvo las que tienen cotizaciones, pedidos o leads vinculados. Un administrador vacía las vencidas."/>):(
+              {loadingPapelera?<div className="flex justify-center py-8"><RefreshCw size={20} className="animate-spin text-slate-400"/></div>:papelera.length===0?(papeleraError?null:<EmptyState icon={Trash2} message="La papelera está vacía." hint="Las solicitudes canceladas aparecen aquí; se pueden eliminar definitivamente después de 30 días si no se restauran, salvo las que tienen cotizaciones, pedidos o leads vinculados. Un administrador vacía las vencidas, y la revisión automática también."/>):(
                 <div className="space-y-2">
                   {papelera.map((sc:any)=>{
                     const enPapelera=estadoEnPapelera(sc);
@@ -1442,7 +1444,8 @@ export default function SolicitudClient() {
                       ) : (
                         <td className="px-4 py-4"><span className={`font-medium text-xs ${isOverdue?'text-red-600 font-bold':''}`}>{isOverdue&&<AlertTriangle size={10} className="inline mr-1"/>}{fDate(comoUTC(sc.fecha_vencimiento))}</span></td>
                       )}
-                      <td className="px-4 py-4"><EstadoBadge estado={sc.estado}/></td>
+                      {/* B3 T18 (H28-cambios punto 9): junto al estado, «Cambios pedidos» o «Ya no la necesita». */}
+                      <td className="px-4 py-4"><div className="flex flex-wrap items-center gap-1.5"><EstadoBadge estado={sc.estado}/><ChipCambiosCliente sc={sc}/></div></td>
                       <td className="px-4 py-4" onClick={e=>e.stopPropagation()}>
                         <div className="flex items-center justify-center gap-1.5">
                           <button onClick={()=>router.push(`/dashboard/ventas/solicitud/${sc.id}`)} title="Ver Detalle" className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 p-1.5 rounded-lg text-xs font-bold transition-colors">
