@@ -481,7 +481,9 @@ def test_paridad_texto_seguimiento_con_el_resumen_real():
                                 "mensaje": sc.TEXTO_NO_SALIO_POR_ERROR}),
          {"activo": True, "max": 2}, "alerta"),
     ]
-    assert f'"mensaje": "{_ERROR_DEL_SISTEMA}"' in inspect.getsource(sc), "cambio el texto 'Error del sistema.'"
+    # El backend escribe 'Error del sistema.' en dos lugares; un cambio en cualquiera de los dos hace caer la prueba.
+    for funcion in (sc._anotar_error_del_sistema, sc._enviar_recordatorio):
+        assert f'"mensaje": "{_ERROR_DEL_SISTEMA}"' in inspect.getsource(funcion), funcion.__name__
     resumenes = [sc.resumen(None, "SC", pendiente, cfg=cfg, fila=f) for _, f, cfg, _ in casos]
     resumenes.append(sc.resumen(None, "SC", SimpleNamespace(id=1, estado="CONFIRMADA"), cfg={"activo": True, "max": 1},
                                 fila=fila()))
