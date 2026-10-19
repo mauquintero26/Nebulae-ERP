@@ -13,7 +13,20 @@
  *
  * Contrato (nota del controlador tras T3): normalizarTarifaIva devuelve null con un valor vacío o no válido (el backend
  * lanza con los no válidos); pctTarifaIva y etiquetaTarifaIva nunca lanzan. calcularTotalesCotizacion lanza un Error con
- * el MISMO mensaje que el ValueError del backend.
+ * el MISMO mensaje que el ValueError del backend (salvo el desborde de abajo).
+ *
+ * Divergencias conocidas con el backend (ninguna se alcanza desde la pantalla: piden más de 9 × 10^15 pesos o datos
+ * que la pantalla no manda; la paridad de test_paridad_bloque3.py cubre todo lo realista):
+ * - El BigInt es solo interno: las salidas son Number, exactas solo hasta 2^53 (9.007.199.254.740.992).
+ *   desgloseDocumento con una base '9007199254740993' da iva_discriminado false (el backend, true), y
+ *   repartirProporcional([1e20, 1], 1e20) da [1e20, 1] (el backend, [99999999999999999999, 1]).
+ * - Un monto de 10^28 o más: el mensaje es «Monto no válido en '<línea>'.» (el backend: «Monto no válido:
+ *   Decimal('1.0E+28')»); el texto del error de repartirProporcional tampoco es el de Python (true/abc frente a
+ *   True/'abc').
+ * - El texto de un número no acepta los '_' ni los dígitos no ASCII que Decimal sí acepta, y una cantidad con más de 28
+ *   cifras significativas se multiplica exacta (Python redondea el producto al contexto).
+ * - Un nombre de línea que no es texto sale distinto en los mensajes: 7.0 sale '7' (JSON no distingue 7.0 de 7) y una
+ *   lista, un objeto o 1e16 se escriben a la manera de JS.
  */
 
 import { stripPy } from './marca-empresa.js';
@@ -36,7 +49,7 @@ export const TARIFA_IVA_POR_DEFECTO = '19';
 export const MENSAJE_TARIFA_INVALIDA = 'Tarifa de IVA no válida: usa 19%, 5%, Exento o Excluido.';
 export const MENSAJE_DESCUENTO_INVALIDO = 'El descuento debe estar entre 0 y 100%.';
 
-const tiene = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+const tiene = (o, k) => Object.hasOwn(o, k); // solo claves propias: 'toString' no es una tarifa
 const esObjeto = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /**

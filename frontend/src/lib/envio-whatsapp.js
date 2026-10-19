@@ -38,6 +38,15 @@ export const TEXTOS_WHATSAPP_ENVIADO = Object.freeze({
 /** envio_whatsapp.ESTADOS_FINALES: LEIDO y FALLIDO ya no se vuelven a consultar («Volver a revisar» no aplica). */
 export const ESTADOS_FINALES_ENTREGA = Object.freeze(['LEIDO', 'FALLIDO']);
 
+/**
+ * Lo que responde verificar_envio cuando la consulta a Chatwoot no sirvió (envio_whatsapp.TEXTO_NO_SE_PUDO_CONSULTAR y
+ * TEXTO_NO_ENCONTRADO): el estado no cambió y no se sabe más que antes.
+ */
+export const TEXTOS_CONSULTA_FALLIDA = Object.freeze([
+  'No se pudo consultar Chatwoot ahora; vuelve a intentar.',
+  'No se encontró el mensaje en Chatwoot: no se pudo verificar si le llegó al cliente.',
+]);
+
 const BOTON = '«Abrir WhatsApp con el mensaje»';
 const DETALLE_MAX = 150; // envio_whatsapp._DETALLE_EN_TEXTO_MAX
 const TEXTO_ESTADO_ENVIADO = 'Chatwoot aceptó el mensaje; WhatsApp todavía no confirma que le llegó al cliente.';
@@ -46,6 +55,10 @@ const TEXTOS_ENTREGA = Object.freeze({ ENTREGADO: 'Le llegó al cliente.', LEIDO
 const esObjeto = (v) => typeof v === 'object' && v !== null;
 const textoNoVacio = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 const recortar = (texto, maximo) => (texto.length <= maximo ? texto : `${texto.slice(0, maximo - 1)}…`);
+/** El valor de `mapa` para `clave` solo si es una clave PROPIA (un motivo 'toString' del servidor no es una plantilla). */
+const propio = (mapa, clave) => (typeof clave === 'string' && Object.hasOwn(mapa, clave) ? mapa[clave] : undefined);
+/** Llena `{nombre}` con el valor TAL CUAL: con una función, String.replace no interpreta '$&', "$'", '$`' ni '$$'. */
+const llenar = (plantilla, nombre, valor) => plantilla.replace(`{${nombre}}`, () => valor);
 
 /** telefonos.telefono_legible: '+573001234567' -> '+57 300 123 4567'; otro país queda igual. */
 function telefonoLegible(e164) {
@@ -62,14 +75,14 @@ function textoDelResultado(wa) {
     const destino = textoNoVacio(wa.destino_legible) || telefonoLegible(wa.destino) || 'cliente';
     const plantilla = textoNoVacio(wa.plantilla);
     if (wa.modo === 'PLANTILLA') {
-      const conNombre = TEXTOS_WHATSAPP_ENVIADO.PLANTILLA.replace('{destino}', destino);
-      return plantilla ? conNombre.replace('{plantilla}', plantilla) : conNombre.replace(' «{plantilla}»', '');
+      const conNombre = llenar(TEXTOS_WHATSAPP_ENVIADO.PLANTILLA, 'destino', destino);
+      return plantilla ? llenar(conNombre, 'plantilla', plantilla) : conNombre.replace(' «{plantilla}»', '');
     }
-    return TEXTOS_WHATSAPP_ENVIADO.TEXTO.replace('{destino}', destino);
+    return llenar(TEXTOS_WHATSAPP_ENVIADO.TEXTO, 'destino', destino);
   }
-  const plantilla = TEXTOS_MOTIVO_WHATSAPP[wa.motivo];
+  const plantilla = propio(TEXTOS_MOTIVO_WHATSAPP, wa.motivo);
   if (!plantilla) return 'No se pudo enviar el WhatsApp automático.';
-  return plantilla.replace('{detalle}', recortar(textoNoVacio(wa.detalle) || 'sin detalle', DETALLE_MAX));
+  return llenar(plantilla, 'detalle', recortar(textoNoVacio(wa.detalle) || 'sin detalle', DETALLE_MAX));
 }
 
 /**
@@ -109,18 +122,19 @@ export function debeVerificar(wa) {
 
 /**
  * El texto del recuadro después de verificar (la respuesta de verificar: {envio_id, estado, texto, boton_manual,
- * verificado}): ENTREGADO -> 'Le llegó al cliente.'; LEIDO -> 'El cliente ya lo leyó.'; FALLIDO -> el texto del
- * servidor, que trae el motivo traducido (o 'No le llegó al cliente.'); ENVIADO y los demás -> el texto del servidor
- * (por ejemplo «No se pudo consultar Chatwoot ahora; vuelve a intentar.»), o el del estado ENVIADO.
+ * verificado}): ENTREGADO -> 'Le llegó al cliente.'; LEIDO -> 'El cliente ya lo leyó.' (si la consulta falló, uno de
+ * TEXTOS_CONSULTA_FALLIDA, se agrega: 'Le llegó al cliente. No se pudo consultar Chatwoot ahora; vuelve a intentar.');
+ * FALLIDO -> el texto del servidor, que trae el motivo traducido (o 'No le llegó al cliente.'); ENVIADO y los demás ->
+ * el texto del servidor (por ejemplo «No se pudo consultar Chatwoot ahora; vuelve a intentar.»), o el del estado
+ * ENVIADO.
  * @param {string | null | undefined} estado
  * @param {string | null} [texto]
  * @returns {string}
  */
 export function textoEntrega(estado, texto) {
-  if (typeof estado === 'string' && Object.prototype.hasOwnProperty.call(TEXTOS_ENTREGA, estado)) {
-    return TEXTOS_ENTREGA[estado];
-  }
   const delServidor = textoNoVacio(texto);
+  const fijo = propio(TEXTOS_ENTREGA, estado);
+  if (fijo) return delServidor && TEXTOS_CONSULTA_FALLIDA.includes(delServidor) ? `${fijo} ${delServidor}` : fijo;
   if (estado === 'FALLIDO') return delServidor || 'No le llegó al cliente.';
   return delServidor || (estado === 'ENVIADO' ? TEXTO_ESTADO_ENVIADO : '');
 }

@@ -26,6 +26,7 @@ NO compara la etiqueta del impuesto de filasTotales ('IVA 19% sobre $X') con la 
 Sin base de datos: todas las funciones del backend que compara son puras.
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_paridad_bloque3
 """
+import inspect
 import json
 import shutil
 import subprocess
@@ -146,6 +147,12 @@ _CALCULOS = [
     # basicos (no 101).
     ([_linea("Tela", 1.005, 100, "19")], 0), ([_linea("A", 1, 100000, "19")], "1.005"),
     ([_linea("A", 1, 100000, "19")], 1.005),
+    # Ronda r1. El IVA va en CADA linea (paso 6), no sobre la base sumada de la tarifa: 2 x ($50 al 19%) da $10 + $10
+    # (por tarifa, $19) y 2 x ($10 al 5%) da $1 + $1 (por tarifa, $1).
+    ([_linea("A", 1, 50, "19"), _linea("B", 1, 50, "19")], 0), ([_linea("A", 1, 10, "5"), _linea("B", 1, 10, "5")], 0),
+    # Ronda r1. Lo que la calculadora manda a medio escribir: un precio en blanco vale $0 en el backend (redondear_peso);
+    # una cantidad en blanco es un error (mas abajo), no 1.
+    ([_linea("X", 1, "", "19")], 0), ([_linea("X", 1, "  ", "19")], 0),
     ([_linea("X", 3, "0.5", "19"), _linea("Y", "0.01", 50, " iva 19% "), _linea("Z", "1e1", "1E2", 5)], None),
     ([_linea("X", 1, None, "exento"), _linea("Y", " 2 ", " 7 ", "EXCLUIDO")], ""),
     ([_linea("A", 1, 100, "19"), _linea("B", 1, 100, "19"), _linea("C", 1, 100, "19")], "0.005"),
@@ -155,6 +162,7 @@ _CALCULOS = [
     (_ejemplo(("19", "16", "5")), 0), ([_linea("Rodillo", 0, 206769, "19")], 0),
     ([_linea("Rodillo", -2, 206769, "19")], 0), ([{"product_name": "Rodillo", "unit_price_cop": 5, "iva_tarifa": "19"}], 0),
     ([_linea("Rodillo", True, 5, "19")], 0), ([_linea("Rodillo", "dos", 5, "19")], 0), ([_linea("Rodillo", "-0", 5, "19")], 0),
+    ([_linea("Rodillo", "", 5, "19")], 0), ([_linea("Rodillo", "  ", 5, "19")], 0),
     ([_linea("Rodillo", 1, -5, "19")], 0), ([_linea("Rodillo", 1, "abc", "19")], 0), ([_linea("Rodillo", 1, True, "19")], 0),
     ([_linea("Rodillo", 1, [5], "19")], 0),
     (_ejemplo(), 101), (_ejemplo(), "100.004"), (_ejemplo(), -1), (_ejemplo(), "diez"), (_ejemplo(), True),
@@ -184,7 +192,14 @@ def test_paridad_calcular_totales_cotizacion():
     assert [r["total_cop"] for r in esperado[:2]] == [2171851, 1954666]
     assert esperado[13]["total_cop"] == 21614 and esperado[13]["lineas"][0]["total_cop"] == 12
     assert esperado[14]["total_cop"] == 120 and esperado[15]["descuento_cop"] == esperado[16]["descuento_cop"] == 1010
-    assert sum(1 for r in esperado if "error" in r) == 27
+    # Ronda r1: IVA por linea y lo que llega a medio escribir.
+    assert [l["iva_cop"] for l in esperado[17]["lineas"]] == [10, 10] and esperado[17]["total_cop"] == 120
+    assert esperado[18]["iva_cop"] == 2 and esperado[18]["iva_por_tarifa"][0]["iva_cop"] == 2
+    assert esperado[19]["total_cop"] == esperado[20]["total_cop"] == 0 and "error" not in esperado[19]
+    for qty in ("", "  "):
+        indice = _CALCULOS.index(([_linea("Rodillo", qty, 5, "19")], 0))
+        assert esperado[indice] == {"error": "La cantidad de 'Rodillo' debe ser mayor que 0."}, ascii(esperado[indice])
+    assert sum(1 for r in esperado if "error" in r) == 29
 
 
 def _desgloses():
@@ -405,6 +420,9 @@ def test_paridad_config_seguimiento():
 _TONO_POR_MOTIVO = {"SIN_MEDIO_CLIENTE": "alerta", "FALLO_ENVIO": "alerta", "CHATWOOT_SIN_RESPUESTA": "alerta",
                     "PLAZO_PASADO": "alerta", "COTIZACION_ENVIADA": "gris", "COTIZACION_VENCIDA": "alerta",
                     "ENLACE_ANULADO": "gris", "MANUAL": "gris"}
+# El mensaje de FALLO_ENVIO cuando `enviar` lanzo (seguimiento_confirmacion: _anotar_error_del_sistema y el cierre de
+# _enviar_recordatorio). Es un literal del backend, sin constante: la prueba afirma que sigue escrito asi.
+_ERROR_DEL_SISTEMA = "Error del sistema."
 
 
 def test_paridad_texto_seguimiento_con_el_resumen_real():
@@ -449,7 +467,21 @@ def test_paridad_texto_seguimiento_con_el_resumen_real():
                                if m in mensajes else None),
          {"activo": True, "max": 1}, _TONO_POR_MOTIVO[m])
         for m in sorted(_TONO_POR_MOTIVO)
+    ] + [
+        # Ronda r1: FALLO_ENVIO con el mensaje de _anotar_error_del_sistema (enviar lanzo: pudo haber salido). El texto
+        # es un literal del backend: si cambia, esta afirmacion cae y seguimiento.js debe seguirlo.
+        ("detenido FALLO_ENVIO por error del sistema",
+         fila(estado=sc.DETENIDO, proximo_at=None, motivo_fin=sc.MOTIVO_FALLO_ENVIO,
+              ultimo_resultado={"canal": "WhatsApp", "motivo": sc.MOTIVO_FALLO_ENVIO, "mensaje": _ERROR_DEL_SISTEMA}),
+         {"activo": True, "max": 1}, "alerta"),
+        # Ronda r1: un error antes de enviar el segundo, despues de uno que si salio.
+        ("error antes de enviar el segundo",
+         fila(recordatorios_enviados=1, ultimo_recordatorio_at=enviado,
+              ultimo_resultado={"canal": "WhatsApp", "motivo": sc.MOTIVO_ERROR_ANTES_DE_ENVIAR,
+                                "mensaje": sc.TEXTO_NO_SALIO_POR_ERROR}),
+         {"activo": True, "max": 2}, "alerta"),
     ]
+    assert f'"mensaje": "{_ERROR_DEL_SISTEMA}"' in inspect.getsource(sc), "cambio el texto 'Error del sistema.'"
     resumenes = [sc.resumen(None, "SC", pendiente, cfg=cfg, fila=f) for _, f, cfg, _ in casos]
     resumenes.append(sc.resumen(None, "SC", SimpleNamespace(id=1, estado="CONFIRMADA"), cfg={"activo": True, "max": 1},
                                 fila=fila()))
@@ -468,6 +500,11 @@ def test_paridad_texto_seguimiento_con_el_resumen_real():
             assert mensaje.rstrip(".") in t["texto"], ascii((descripcion, mensaje, t["texto"]))
     assert f"{co.day} de octubre, {hora}" in espejo[0]["t"]["texto"] and "por WhatsApp" in espejo[0]["t"]["texto"]
     assert "(1 de 1)" in espejo[0]["t"]["texto"] and "El próximo sale el" in espejo[3]["t"]["texto"]
+    sistema, segundo = espejo[len(casos) - 2]["t"], espejo[len(casos) - 1]["t"]
+    assert sistema == {"tono": "alerta", "titulo": "Problema con el recordatorio",
+                       "texto": "Error del sistema. Revisa si le llegó al cliente antes de escribirle."}, ascii(sistema)
+    assert segundo["texto"].startswith("Recordatorio 1 de 2 enviado el ") and "Revisa si" not in segundo["texto"]
+    assert f" {sc.TEXTO_NO_SALIO_POR_ERROR} " in segundo["texto"], ascii(segundo)
 
 
 # ─── Documento del cliente (T5 / T9 / T12) ─────────────────────────────────────────────────────────────────────
@@ -537,21 +574,27 @@ def test_paridad_texto_forma_pago():
 
 def test_paridad_textos_whatsapp():
     from app.core import envio_whatsapp
+    fallidas = [envio_whatsapp.TEXTO_NO_SE_PUDO_CONSULTAR, envio_whatsapp.TEXTO_NO_ENCONTRADO]
     espejo = _node("envio-whatsapp.js", """({ motivos: m.TEXTOS_MOTIVO_WHATSAPP, enviado: m.TEXTOS_WHATSAPP_ENVIADO,
-      finales: m.ESTADOS_FINALES_ENTREGA })""")
+      finales: m.ESTADOS_FINALES_ENTREGA, consulta: m.TEXTOS_CONSULTA_FALLIDA,
+      entrega: d.map((texto) => ['ENTREGADO', 'LEIDO'].map((estado) => m.textoEntrega(estado, texto))) })""", fallidas)
     assert espejo["motivos"] == envio_whatsapp.MOTIVOS
     assert espejo["enviado"] == envio_whatsapp.TEXTOS_ENVIADO
     assert espejo["finales"] == list(envio_whatsapp.ESTADOS_FINALES)
+    # Ronda r1: con un ENTREGADO o LEIDO, si la consulta a Chatwoot falló, el modal también lo dice.
+    assert espejo["consulta"] == fallidas
+    assert espejo["entrega"] == [[f"Le llegó al cliente. {t}", f"El cliente ya lo leyó. {t}"] for t in fallidas]
 
 
 def test_paridad_acciones_bloque3_con_el_backend():
-    """RP22: el backend solo escribe la action y ACCIONES_BLOQUE3 trae una entrada por cada una, con el mismo codigo."""
-    import inspect
+    """RP22: el backend solo escribe la action y ACCIONES_BLOQUE3 trae una entrada por cada una, con el mismo codigo.
+    Ronda r1: tambien CLIENTE_CAMBIADO (cambios_documento, T5 r2)."""
     from app.api.v1 import confirmacion_publica, erp_ventas
-    from app.core import envio_whatsapp
+    from app.core import cambios_documento, envio_whatsapp
     from app.core import seguimiento_confirmacion as sc
     codigos = {sc.RECORDATORIO_ENVIADO, sc.RECORDATORIO_FALLIDO, sc.SEGUIMIENTO_AGOTADO, sc.SEGUIMIENTO_DETENIDO,
-               envio_whatsapp.ACCION_MENSAJE_CLIENTE, erp_ventas.ACCION_ENVIADO_AL_CLIENTE}
+               envio_whatsapp.ACCION_MENSAJE_CLIENTE, erp_ventas.ACCION_ENVIADO_AL_CLIENTE,
+               cambios_documento.ACCION_CLIENTE_CAMBIADO}
     # Las tres de T6 se escriben con el codigo literal (sin constante): que sigan escritas asi en el backend.
     fuentes = inspect.getsource(confirmacion_publica) + inspect.getsource(erp_ventas)
     literales = {"CAMBIOS_CLIENTE", "SC_CAMBIOS_CLIENTE", "AVISO_ASESOR"}

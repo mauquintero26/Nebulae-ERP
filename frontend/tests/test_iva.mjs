@@ -81,6 +81,13 @@ console.log('--- TEST 3: pctTarifaIva y etiquetaTarifaIva nunca lanzan ---');
     assert.equal(pctTarifaIva(raro), 0, String(raro));
     assert.equal(etiquetaTarifaIva(raro), 'IVA no discriminado', String(raro));
   }
+  // Ronda r1: un código que es una clave heredada de Object no es una tarifa (solo claves propias).
+  for (const heredada of ['toString', 'constructor', '__proto__', 'hasOwnProperty', 'TOSTRING']) {
+    assert.equal(normalizarTarifaIva(heredada), null, heredada);
+    assert.equal(pctTarifaIva(heredada), 0, heredada);
+    assert.equal(etiquetaTarifaIva(heredada), 'IVA no discriminado', heredada);
+  }
+  assert.deepEqual(resumenIvaPorTarifa([{ iva_tarifa: 'constructor', base_iva_cop: 5, iva_cop: 1 }]), []);
 }
 
 // ─── Parte 2: el cálculo en pesos enteros ──────────────────────────────────────────────────────────────────────
@@ -134,6 +141,19 @@ console.log('--- TEST 6 (casos 3 y 4): medio peso hacia arriba; Exento y Excluid
   assert.equal(r4.total_cop, 392204);
   assert.deepEqual(filas(r4), [['19', 92501, 17575], ['5', 92501, 4625], ['EXENTO', 92501, 0], ['EXCLUIDO', 92501, 0]]);
   assert.deepEqual(r4.iva_por_tarifa.map((f) => f.etiqueta), ['IVA 19%', 'IVA 5%', 'Exento', 'Excluido']);
+
+  // Ronda r1 (paso 6 de la regla): el IVA va en CADA línea, nunca sobre la base sumada de la tarifa. Dos líneas de $50
+  // al 19% llevan $10 + $10 = $20 (por tarifa serían $19); dos de $10 al 5%, $1 + $1 = $2 (por tarifa, $1).
+  const dos50 = calcularTotalesCotizacion([linea('A', 1, 50, '19'), linea('B', 1, 50, '19')], 0);
+  assert.deepEqual(campo(dos50, 'iva_cop'), [10, 10]);
+  assert.equal(dos50.iva_cop, 20);
+  assert.equal(dos50.total_cop, 120);
+  assert.deepEqual(filas(dos50), [['19', 100, 20]]);
+  const dos10 = calcularTotalesCotizacion([linea('A', 1, 10, '5'), linea('B', 1, 10, '5')], 0);
+  assert.deepEqual(campo(dos10, 'iva_cop'), [1, 1]);
+  assert.equal(dos10.iva_cop, 2);
+  assert.equal(dos10.total_cop, 22);
+  assert.deepEqual(filas(dos10), [['5', 20, 2]]);
 }
 
 console.log('--- TEST 7 (caso 5): invariantes en los casos fijos del backend ---');
@@ -202,6 +222,16 @@ console.log('--- TEST 8: aritmética decimal exacta, como Decimal en Python (nun
   assert.equal(r2.total_cop, 4);
   // Un precio vacío vale $0 (como redondear_peso(None) del backend).
   assert.equal(calcularTotalesCotizacion([{ product_name: 'X', qty: 1, iva_tarifa: '19' }], 0).total_cop, 0);
+  // Ronda r1: lo que la calculadora manda a medio escribir. Un precio en blanco ('' o '  ') vale $0, como en el backend
+  // (no lanza); una cantidad en blanco NO es 1 (como Number(qty) || 1 de pricing.js): es el error del backend.
+  for (const precio of ['', '  ']) {
+    const rb = calcularTotalesCotizacion([{ product_name: 'X', qty: 1, unit_price_cop: precio, iva_tarifa: '19' }], 0);
+    assert.deepEqual([rb.lineas[0].unit_price_cop, rb.total_cop], [0, 0], JSON.stringify(precio));
+  }
+  for (const qty of ['', '  ']) {
+    lanza(() => calcularTotalesCotizacion([{ product_name: 'Rodillo', qty, unit_price_cop: 5, iva_tarifa: '19' }], 0),
+      "La cantidad de 'Rodillo' debe ser mayor que 0.");
+  }
 }
 
 console.log('--- TEST 9: los errores legibles del backend, nombrando la línea ---');

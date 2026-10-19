@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict';
 import {
   avisoWhatsApp, debeVerificar, textoEntrega, TEXTOS_MOTIVO_WHATSAPP, TEXTOS_WHATSAPP_ENVIADO, ESTADOS_FINALES_ENTREGA,
+  TEXTOS_CONSULTA_FALLIDA,
 } from '../src/lib/envio-whatsapp.js';
 import { avisoCorreo } from '../src/lib/aviso-correo.js';
 
@@ -125,6 +126,18 @@ console.log('--- TEST 7: los demás motivos -> alerta con su motivo y el botón 
   assert.equal(raro.tono, 'alerta');
   assert.ok(!raro.texto.includes('ALGO_NUEVO'), raro.texto);
   assert.equal(raro.botonManual, true);
+  // Ronda r1: un motivo que es una clave heredada de Object cae en el mismo texto genérico (nunca lanza).
+  for (const heredado of ['toString', 'constructor', '__proto__', 'hasOwnProperty']) {
+    assert.deepEqual(avisoWhatsApp({ enviado: false, motivo: heredado }, 'WhatsApp'), raro, heredado);
+  }
+  // Ronda r1: los valores se ponen tal cual, aunque traigan los patrones de String.replace ('$&', "$'", '$`', '$$').
+  const patrones = "a $' b $& c $` d $$ e";
+  const conPatrones = avisoWhatsApp({ enviado: false, motivo: 'FALLO_CHATWOOT', detalle: patrones }, 'WhatsApp');
+  assert.ok(conPatrones.texto.startsWith(`No se envió: Chatwoot rechazó el mensaje (${patrones}).`), conPatrones.texto);
+  const plantilla = avisoWhatsApp({ enviado: true, modo: 'PLANTILLA', destino_legible: '+57 $& 1', plantilla: "doc_$'" },
+    'WhatsApp');
+  assert.equal(plantilla.texto, "Enviado automáticamente al +57 $& 1 con la plantilla aprobada «doc_$'» (el cliente no "
+    + 'había escrito en las últimas 24 horas).');
 }
 
 console.log('--- TEST 8: textos espejo de core/envio_whatsapp.py (la paridad la corre test_paridad_bloque3.py) ---');
@@ -165,6 +178,19 @@ console.log('--- TEST 10: textoEntrega (U16-entrega) ---');
     'Chatwoot aceptó el mensaje; WhatsApp todavía no confirma que le llegó al cliente.');
   assert.equal(textoEntrega('NO_ENVIADO', 'Texto.'), 'Texto.');
   assert.equal(textoEntrega('OTRO'), '');
+  // Ronda r1: «Volver a revisar» sobre uno ya ENTREGADO o LEIDO y la consulta falla (TEXTO_NO_SE_PUDO_CONSULTAR o
+  // TEXTO_NO_ENCONTRADO de envio_whatsapp): se ve el estado que ya se sabía Y el aviso de que la consulta falló.
+  assert.deepEqual(TEXTOS_CONSULTA_FALLIDA, ['No se pudo consultar Chatwoot ahora; vuelve a intentar.',
+    'No se encontró el mensaje en Chatwoot: no se pudo verificar si le llegó al cliente.']);
+  assert.ok(Object.isFrozen(TEXTOS_CONSULTA_FALLIDA));
+  assert.equal(textoEntrega('ENTREGADO', 'No se pudo consultar Chatwoot ahora; vuelve a intentar.'),
+    'Le llegó al cliente. No se pudo consultar Chatwoot ahora; vuelve a intentar.');
+  assert.equal(textoEntrega('LEIDO', TEXTOS_CONSULTA_FALLIDA[1]),
+    'El cliente ya lo leyó. No se encontró el mensaje en Chatwoot: no se pudo verificar si le llegó al cliente.');
+  assert.equal(textoEntrega('LEIDO', 'El cliente leyó el WhatsApp.'), 'El cliente ya lo leyó.');
+  // Ronda r1: un estado que es una clave heredada no es un estado conocido.
+  assert.equal(textoEntrega('toString'), '');
+  assert.equal(textoEntrega('constructor', 'Texto.'), 'Texto.');
 }
 
 console.log('--- TEST 11: avisoCorreo con el tercer parámetro (U16-envio punto 11) ---');
@@ -186,6 +212,11 @@ console.log('--- TEST 11: avisoCorreo con el tercer parámetro (U16-envio punto 
   assert.equal(ok.tono, 'ok');
   assert.ok(ok.texto.includes('respaldo'), ok.texto);
   assert.equal(avisoCorreo(null, 'WhatsApp', true), null);
+  // Ronda r1: el motivo y el canal se buscan solo entre las claves propias de sus mapas.
+  assert.equal(avisoCorreo({ enviado: true, destino: 'a@b.co' }, 'toString').texto, 'Correo enviado a a@b.co.');
+  const heredado = avisoCorreo({ enviado: false, motivo: 'toString' }, 'constructor');
+  assert.equal(heredado.texto, 'No se envió el correo de respaldo. El cliente todavía no recibió el enlace: cópialo y '
+    + 'envíaselo por otro medio.');
 }
 
 console.log('OK test_envio_whatsapp.mjs');

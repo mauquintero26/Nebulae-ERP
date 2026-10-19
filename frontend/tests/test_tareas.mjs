@@ -54,4 +54,22 @@ console.log('--- TEST 3: la hora del API sin zona es UTC; ahora como Date o en m
   assert.equal(hace(estado({ ultima_revision: haceMin(4) }).ultima_revision, AHORA), 'hace 4 minutos');
 }
 
+console.log('--- TEST 4 (ronda r1): la misma lectura de instantes que hace() (instante de fechas-colombia.js) ---');
+{
+  // Un Date en ultima_revision es un instante (antes contaba como «sin revisión» y salía atrasada).
+  assert.equal(revisionAtrasada(estado({ ultima_revision: new Date(haceMin(2)) }), AHORA), false);
+  assert.equal(revisionAtrasada(estado({ ultima_revision: new Date(haceMin(45)) }), AHORA), true);
+  assert.equal(revisionAtrasada(estado({ ultima_revision: new Date('x') }), AHORA), true);
+  // Una fecha sola (sin hora) no es un instante: cuenta como sin revisión, aunque sea de hoy.
+  const recienEmpezado = new Date('2026-10-06T00:10:00Z');
+  assert.equal(revisionAtrasada(estado({ ultima_revision: '2026-10-06' }), recienEmpezado), true);
+  assert.equal(revisionAtrasada(estado({ ultima_revision: '2026-10-06T00:05:00Z' }), recienEmpezado), false);
+  // Un `ahora` en texto ISO también se lee (con 'Z' o sin zona, que es UTC).
+  assert.equal(revisionAtrasada(estado({ ultima_revision: haceMin(5) }), '2026-10-06T15:00:00Z'), false);
+  assert.equal(revisionAtrasada(estado({ ultima_revision: haceMin(45) }), '2026-10-06T15:00:00Z'), true);
+  assert.equal(revisionAtrasada(estado({ ultima_revision: haceMin(45) }), '2026-10-06T15:00:00'), true);
+  // Un dato del servidor que es una clave heredada (o basura) no se lee como fecha.
+  assert.equal(revisionAtrasada(estado({ ultima_revision: 'toString' }), AHORA), true);
+}
+
 console.log('OK test_tareas.mjs');

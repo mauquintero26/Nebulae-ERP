@@ -41,7 +41,7 @@ function diaDeCalendario(texto) {
 }
 
 /** Date válido de un instante (Date, o texto con fecha y hora), o null. */
-function instante(valor) {
+export function instante(valor) {
   if (valor instanceof Date) return Number.isNaN(valor.getTime()) ? null : valor;
   if (typeof valor !== 'string') return null;
   const texto = valor.trim();

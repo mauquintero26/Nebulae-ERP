@@ -21,6 +21,9 @@ const SIGUIENTE_PASO = {
 };
 const SIGUIENTE_PASO_POR_DEFECTO = 'El cliente todavía no recibió el enlace: cópialo y envíaselo por otro medio.';
 
+/** B3 T13 r1: el valor solo si `clave` es PROPIA del mapa (un motivo o un canal 'toString' no encuentra nada). */
+const propio = (mapa, clave) => (typeof clave === 'string' && Object.hasOwn(mapa, clave) ? mapa[clave] : undefined);
+
 /**
  * B3 T13 (U16-envio punto 11): con `whatsappEnviado` (el WhatsApp automático del canal WhatsApp salió, avisoWhatsApp
  * de envio-whatsapp.js en 'ok'), un correo de respaldo que no salió ya no es una alerta: 'info' con '… El WhatsApp sí
@@ -34,13 +37,13 @@ export function avisoCorreo(correo, canal, whatsappEnviado = false) {
   if (!correo || typeof correo !== 'object') return null;
   if (correo.enviado) {
     const base = (correo.mensaje || `Correo enviado a ${correo.destino || 'el cliente'}.`).trim().replace(/\.$/, '');
-    const respaldo = RESPALDO_DE[canal];
+    const respaldo = propio(RESPALDO_DE, canal);
     return { tono: 'ok', texto: respaldo ? `${base} (respaldo del envío por ${respaldo}).` : `${base}.` };
   }
-  const porMotivo = MENSAJE_POR_MOTIVO[correo.motivo];
+  const porMotivo = propio(MENSAJE_POR_MOTIVO, correo.motivo);
   const mensaje = (correo.mensaje || (porMotivo ? porMotivo(correo.destino) : 'No se envió el correo de respaldo.')).trim();
   if (whatsappEnviado === true && canal === 'WhatsApp') return { tono: 'info', texto: `${mensaje} El WhatsApp sí salió.` };
-  return { tono: 'alerta', texto: `${mensaje} ${SIGUIENTE_PASO[canal] || SIGUIENTE_PASO_POR_DEFECTO}` };
+  return { tono: 'alerta', texto: `${mensaje} ${propio(SIGUIENTE_PASO, canal) || SIGUIENTE_PASO_POR_DEFECTO}` };
 }
 
 /**

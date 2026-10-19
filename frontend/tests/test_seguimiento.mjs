@@ -38,6 +38,7 @@ console.log('--- TEST 1: canalTexto ---');
   assert.equal(canalTexto('Otro'), 'por correo de respaldo');
   assert.equal(canalTexto(null), 'por correo de respaldo');
   assert.equal(canalTexto(undefined), 'por correo de respaldo');
+  assert.equal(canalTexto('toString'), 'por correo de respaldo');
 }
 
 console.log('--- TEST 2: ACTIVO sin envíos -> info con la fecha (1 de max) ---');
@@ -71,19 +72,25 @@ console.log('--- TEST 3: ACTIVO con envíos -> ok, el que salió y el próximo (
 console.log('--- TEST 4: ACTIVO con ERROR_ANTES_DE_ENVIAR -> alerta con el mensaje tal cual, sigue programado ---');
 {
   const mensaje = 'No salió: error del sistema antes de enviarlo.';
-  const t = bien(textoSeguimiento(s({ ultimo_resultado: { canal: 'WhatsApp', motivo: 'ERROR_ANTES_DE_ENVIAR',
-    mensaje } })));
+  const otraVez = 'El sistema lo intentará de nuevo automáticamente.';
+  const error = (extra) => s({ ...extra, ultimo_resultado: { canal: 'WhatsApp', motivo: 'ERROR_ANTES_DE_ENVIAR',
+    mensaje: extra?.mensaje === undefined ? mensaje : extra.mensaje } });
+  const t = bien(textoSeguimiento(error()));
   assert.equal(t.tono, 'alerta');
-  assert.ok(t.texto.startsWith(mensaje), t.texto);
-  assert.ok(t.texto.includes('de nuevo'), t.texto);
+  assert.equal(t.texto, `${mensaje} ${otraVez}`);
   assert.ok(!/revisa si le lleg/i.test(t.texto), 'nunca «Revisa si le llegó»');
   assert.equal(t.titulo, 'Recordatorio programado');
-  // También con un recordatorio ya enviado antes; sin mensaje, el texto del backend.
-  const segundo = bien(textoSeguimiento(s({ recordatorios_enviados: 1, max: 2, ultimo_recordatorio_at: LUNES_9AM,
-    ultimo_resultado: { canal: 'WhatsApp', motivo: 'ERROR_ANTES_DE_ENVIAR', mensaje: null } })));
+  // Ronda r1: con un recordatorio ya enviado antes se sigue viendo, sin la fecha del próximo (quedó vencida); sin
+  // mensaje, el texto del backend.
+  const segundo = bien(textoSeguimiento(error({ recordatorios_enviados: 1, max: 2, ultimo_recordatorio_at: LUNES_9AM,
+    proximo_at: MIERCOLES_3PM, mensaje: null })));
   assert.equal(segundo.tono, 'alerta');
-  assert.ok(segundo.texto.startsWith(mensaje), segundo.texto);
-  assert.equal(puedeDetener(s({ ultimo_resultado: { motivo: 'ERROR_ANTES_DE_ENVIAR', mensaje } })), true);
+  assert.equal(segundo.texto, `Recordatorio 1 de 2 enviado el lunes 5 de octubre, 9:00 a. m. ${mensaje} ${otraVez}`);
+  const sinFecha = bien(textoSeguimiento(error({ recordatorios_enviados: 1, max: 2, ultimo_recordatorio_at: null })));
+  assert.equal(sinFecha.texto, `Recordatorio 1 de 2 enviado. ${mensaje} ${otraVez}`);
+  // Ronda r1: el punto final con la misma regla que DETENIDO.
+  assert.equal(bien(textoSeguimiento(error({ mensaje: 'Fallo raro' }))).texto, `Fallo raro. ${otraVez}`);
+  assert.equal(puedeDetener(error()), true);
 }
 
 console.log('--- TEST 5: AGOTADO -> alerta «Llámalo o escríbele» ---');
@@ -110,6 +117,13 @@ console.log('--- TEST 6: DETENIDO por cada motivo ---');
   assert.equal(fallo.tono, 'alerta');
   assert.ok(fallo.texto.startsWith('No se pudo enviar: el WhatsApp automático no está configurado'), fallo.texto);
   assert.ok(fallo.texto.endsWith('Escríbele al cliente o reenvíale el enlace.'), fallo.texto);
+  // Ronda r1: título neutral; con 'Error del sistema.' (seguimiento_confirmacion._anotar_error_del_sistema: enviar
+  // lanzó y pudo haber salido) no invita a reenviar sin revisar.
+  assert.equal(fallo.titulo, 'Problema con el recordatorio');
+  const sistema = bien(textoSeguimiento(detenido('FALLO_ENVIO', 'Error del sistema.')));
+  assert.equal(sistema.tono, 'alerta');
+  assert.equal(sistema.titulo, 'Problema con el recordatorio');
+  assert.equal(sistema.texto, 'Error del sistema. Revisa si le llegó al cliente antes de escribirle.');
   const plazo = bien(textoSeguimiento(detenido('PLAZO_PASADO', 'Venció hace más de 3 días sin poder enviarse.')));
   assert.equal(plazo.tono, 'alerta');
   assert.ok(plazo.texto.includes('3 días'), plazo.texto);
@@ -146,6 +160,11 @@ console.log('--- TEST 6: DETENIDO por cada motivo ---');
   // Un motivo que el frontend no conoce: gris genérico, sin el código.
   const raro = bien(textoSeguimiento(detenido('VOLVIO_AL_ASESOR')));
   assert.equal(raro.tono, 'gris');
+  // Ronda r1: un motivo_fin que es una clave heredada de Object cae en el mismo genérico (nunca {tono: undefined}).
+  for (const heredado of ['toString', 'constructor', '__proto__', 'hasOwnProperty']) {
+    assert.deepEqual(textoSeguimiento(detenido(heredado)), raro, heredado);
+  }
+  assert.equal(validarConfigSeguimiento({ toString: 'x', constructor: 'y' }), null);
 }
 
 console.log('--- TEST 7: APAGADO y los que no muestran nada ---');
