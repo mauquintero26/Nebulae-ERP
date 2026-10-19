@@ -1225,6 +1225,49 @@ def test_traza_del_bloqueo_antes_de_enviar(db, user_admin, monkeypatch):
     commit = primero(lambda s: s == "COMMIT", insercion)
     assert doc < fila < insercion < commit, tramo
     assert not any("FROM SEGUIMIENTOS_CONFIRMACION" in s for s in tramo[:doc]), tramo  # la fila no se lee antes
+    assert "COMMIT" not in tramo[doc:insercion], tramo  # los bloqueos siguen tomados al crear el enlace
+
+
+def test_error_antes_de_enviar_conserva_el_proximo_del_chatter(app_client, db, admin_token, user_admin, monkeypatch):
+    """r3: un contacto EXTERNA en el Chatter entre el reclamo y el envío, y después un error ANTES de enviar (aquí en
+    _bloquear, como un 57014): el reclamo se devuelve SIN pisar el proximo_at que puso el Chatter, así que la vuelta
+    siguiente, 10 minutos después, no le escribe al cliente que acaba de hablar con el asesor (R23)."""
+    import logging
+    seg_mod = _sc_mod()
+    _dobles(monkeypatch)
+    _config(db)
+    monkeypatch.setattr(logging.getLogger(seg_mod.__name__), "disabled", True)
+    primera = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
+    segunda = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
+    _fila(db, "SC", primera, proximo_at=T - datetime.timedelta(hours=2))
+    _fila(db, "SC", segunda)
+    original = seg_mod._bloquear
+    hubo_contacto = []
+
+    def bloquear(db_, reclamo):
+        if hubo_contacto and reclamo.doc_id == segunda.id:
+            raise RuntimeError("falla a propósito esperando el bloqueo")
+        return original(db_, reclamo)
+
+    monkeypatch.setattr(seg_mod, "_bloquear", bloquear)
+    doble = EnviarFalso()
+
+    def enviar(db_, **kwargs):
+        _nota_externa(app_client, admin_token, segunda)  # mientras sale la primera
+        hubo_contacto.append(True)
+        return doble(db_, **kwargs)
+
+    res = seg_mod.correr_seguimientos(db, ahora=T, enviar=enviar)
+    assert (res["enviados"], res["fallidos"]) == (1, 1), res
+    fila2 = _seg(db, "SC", segunda.id)
+    assert (fila2.estado, fila2.recordatorios_enviados, fila2.ultimo_recordatorio_at) == ("ACTIVO", 0, None)
+    assert fila2.proximo_at == seg_mod.siguiente_momento(fila2.ultimo_contacto_at, seg_mod.leer_config(db))
+    assert fila2.proximo_at > T + datetime.timedelta(minutes=10)
+    assert fila2.ultimo_resultado["mensaje"] == "No salió: error del sistema antes de enviarlo."
+    monkeypatch.setattr(seg_mod, "_bloquear", original)
+    otra = EnviarFalso()
+    assert seg_mod.correr_seguimientos(db, ahora=T + datetime.timedelta(minutes=10), enviar=otra)["enviados"] == 0
+    assert otra.llamadas == [] and _tokens(db, "SC", segunda.id) == []
 
 
 def test_error_antes_de_enviar_no_dice_revisa_si_le_llego(db, user_admin, monkeypatch):

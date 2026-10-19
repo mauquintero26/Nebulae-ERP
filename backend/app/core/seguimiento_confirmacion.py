@@ -30,7 +30,9 @@ NUNCA DOS VECES EL MISMO RECORDATORIO (contrato de TAREAS de T10). El reclamo es
 (recordatorios_enviados = el visto) con las filas tomadas FOR UPDATE SKIP LOCKED, y se confirma ANTES de enviar: si el
 proceso cae a mitad, ese recordatorio se pierde, pero nunca se duplica. Dos corridas seguidas (varios workers, «Revisar
 ahora») no lo repiten: la segunda ya no lo ve vencido. Un fallo no se reintenta: la fila queda DETENIDO y el asesor
-reenvía. CHATWOOT_SIN_RESPUESTA («puede que haya salido», T8) tampoco se reintenta, y su enlace no se anula.
+reenvía. La excepción es un error del sistema ANTES de enviar (r2): no salió nada, así que el reclamo se devuelve y la
+vuelta siguiente lo intenta otra vez, hasta que el plazo de 3 días (PLAZO_PASADO) cierre la fila.
+CHATWOOT_SIN_RESPUESTA («puede que haya salido», T8) tampoco se reintenta, y su enlace no se anula.
 
 ORDEN DEL ENVÍO (_enviar_recordatorio). Bloqueos siempre documento → fila del seguimiento → enlaces, el orden de los
 envíos, el Chatter y el «pedir cambios» (así ningún camino forma un ciclo con otro):
@@ -737,6 +739,13 @@ TEXTO_NO_SALIO_POR_ERROR = "No salió: error del sistema antes de enviarlo."
 MOTIVO_ERROR_ANTES_DE_ENVIAR = "ERROR_ANTES_DE_ENVIAR"  # solo en ultimo_resultado: la fila sigue ACTIVO
 
 
+def _contacto_nuevo(fila, reclamo: _Reclamo) -> bool:
+    """r2 (R23): el asesor anotó un contacto en el Chatter después del reclamo; posponer_por_contacto ya corrió la fila
+    (ultimo_contacto_at más nuevo que el del reclamo, y su proximo_at)."""
+    return (fila.ultimo_contacto_at is not None and reclamo.ultimo_contacto_at is not None
+            and fila.ultimo_contacto_at > reclamo.ultimo_contacto_at)
+
+
 def _devolver_reclamo(fila, reclamo: _Reclamo, restaurar_proximo: bool) -> None:
     """r2: deshace el reclamo en la fila de su ciclo: el contador y el último recordatorio vuelven a los de antes. Con
     restaurar_proximo también proximo_at (vencido: la vuelta siguiente lo intenta otra vez); sin él queda el que puso el
@@ -751,15 +760,16 @@ def _anotar_error_antes_de_enviar(db: Session, reclamo: _Reclamo) -> None:
     """r2: la preparación falló ANTES de enviar (p. ej. un 57014 esperando el bloqueo, o el INSERT o el commit del
     enlace), así que no salió nada ni quedó un enlace: nunca «Revisa si le llegó». La fila NO queda DETENIDO: se le
     devuelve el reclamo con su proximo_at vencido, para que la vuelta siguiente lo intente, y ultimo_resultado dice
-    TEXTO_NO_SALIO_POR_ERROR. El renglón (el mismo texto) sale una sola vez: si la fila ya lo decía, no se repite en
-    cada vuelta. Si el error sigue, el plazo de 3 días (PLAZO_PASADO) la cierra. Si tampoco se puede anotar, queda solo
-    en el log."""
+    TEXTO_NO_SALIO_POR_ERROR. Si entretanto el asesor anotó un contacto en el Chatter (_contacto_nuevo), queda el
+    proximo_at que puso el Chatter (r3, R23). El renglón (el mismo texto) sale una sola vez: si la fila ya lo decía, no
+    se repite en cada vuelta. Si el error sigue, el plazo de 3 días (PLAZO_PASADO) la cierra. Si tampoco se puede
+    anotar, queda solo en el log."""
     try:
         fila = _fila_por_id(db, reclamo.fila_id)
         if _mismo_ciclo(fila, reclamo):
             ya_avisado = (isinstance(fila.ultimo_resultado, dict)
                           and fila.ultimo_resultado.get("mensaje") == TEXTO_NO_SALIO_POR_ERROR)
-            _devolver_reclamo(fila, reclamo, restaurar_proximo=True)
+            _devolver_reclamo(fila, reclamo, restaurar_proximo=not _contacto_nuevo(fila, reclamo))
             fila.ultimo_resultado = {"canal": reclamo.canal, "motivo": MOTIVO_ERROR_ANTES_DE_ENVIAR,
                                      "mensaje": TEXTO_NO_SALIO_POR_ERROR}
             if not ya_avisado:
@@ -805,8 +815,7 @@ def _preparar_envio(db: Session, reclamo: _Reclamo, ahora: datetime):
         _cerrar_por_parada(db, fila, reclamo.tipo, doc, *parada, ahora)
         db.commit()
         return None
-    if (fila.ultimo_contacto_at is not None and reclamo.ultimo_contacto_at is not None
-            and fila.ultimo_contacto_at > reclamo.ultimo_contacto_at):
+    if _contacto_nuevo(fila, reclamo):
         _devolver_reclamo(fila, reclamo, restaurar_proximo=False)
         db.commit()
         return None
