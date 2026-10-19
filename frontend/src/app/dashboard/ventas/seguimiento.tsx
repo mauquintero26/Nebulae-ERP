@@ -184,7 +184,8 @@ function EstadoRevisionAutomatica({ esAdmin }: { esAdmin: boolean }) {
       if (r?.message) avisar(r.message);
       releer();
       if (relectura.current) clearTimeout(relectura.current);
-      relectura.current = setTimeout(releer, RELECTURA_TRAS_REVISION_MS);
+      // Solo si sigue montada: la limpieza del efecto ya corrió si se cerró el panel con el POST en vuelo.
+      if (montado.current) relectura.current = setTimeout(releer, RELECTURA_TRAS_REVISION_MS);
     } catch (err) {
       avisarError(err);
       releer();

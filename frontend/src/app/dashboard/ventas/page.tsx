@@ -302,14 +302,14 @@ function ConfigPanel({alertDias,configCargada,onSave,onClose}:{alertDias:any,con
           <SeccionDocumentosCliente cfg={cfg} onCambio={cambiarCampo} soloLectura={soloLectura}/>
           <SeccionIva cfg={cfg} onCambio={cambiarCampo} soloLectura={soloLectura}/>
           <SeccionSeguimiento cfg={cfg} onCambio={cambiarCampo} soloLectura={soloLectura}/>
-          <ConfigEnvioWhatsApp soloLectura={soloLectura} onCambiosPendientes={setWaPendiente}/>
+          <ConfigEnvioWhatsApp soloLectura={soloLectura} onCambiosPendientes={p=>{setWaPendiente(p); if(!p) setError(e=>e===MENSAJE_WHATSAPP_SIN_GUARDAR?'':e);}}/>
           <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-5">
             <div className="flex items-center gap-2 mb-4"><Zap size={16} className="text-indigo-600"/><h3 className="font-black text-indigo-800 text-sm uppercase tracking-wide">Automatizaciones Comerciales</h3></div>
             <div className="space-y-3">
               <Toggle k="auto_lead_crm" label="Auto-crear Lead en CRM" desc="Al ingresar una solicitud de cliente, sincroniza automáticamente el prospecto al CRM."/>
               <Toggle k="auto_chatter_ia" label="Chatter asistido por IA" desc="Sugiere respuestas en el Chatter basadas en el catálogo y compras del cliente."/>
               {/* C23 (B3 T16): el interruptor decorativo notif_whatsapp queda oculto: no hacía nada y se confundiría con el
-                  envío automático por WhatsApp. Su valor guardado no cambia (se reenvía tal cual). */}
+                  envío automático por WhatsApp. Su valor guardado no cambia (no se manda: el PATCH lleva solo lo que cambió). */}
             </div>
           </div>
     </Drawer>

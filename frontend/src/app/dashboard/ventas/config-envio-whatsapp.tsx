@@ -277,7 +277,7 @@ function TextoPlantilla({ titulo, nombre, texto, ejemplo }: {
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs font-bold text-slate-700">{titulo}</p>
-        <button type="button" onClick={() => void copiar(texto)} aria-label={`Copiar el texto de la plantilla ${nombre}`}
+        <button type="button" onClick={() => void copiar(texto)} aria-label={`${estado === 'copiado' ? 'Copiado' : 'Copiar'} el texto de la plantilla ${nombre}`}
           className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-600 hover:bg-slate-50">
           {estado === 'copiado' ? <Check size={12} /> : <Copy size={12} />} {estado === 'copiado' ? 'Copiado' : 'Copiar'}
         </button>
