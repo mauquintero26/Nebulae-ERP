@@ -26,7 +26,7 @@ from app.api.dependencies import (
 )
 from app.models.users import User
 from app.core.busqueda import productos_ilike
-from app.core import cambios_documento, clientes, envio_whatsapp, tareas_automaticas
+from app.core import cambios_documento, clientes, envio_whatsapp, seguimiento_confirmacion, tareas_automaticas
 from app.core.admin_config import config_entero, guardar_config, leer_config
 from app.core.correo_documento import correo_documento
 from app.core.empresa import PREFIJOS_RESERVADOS, perfil_publico
@@ -49,6 +49,7 @@ from app.core.estados_pedido import ESTADOS_VEN_DESTINOS, ESTADOS_VEN_SIN_DINERO
 from app.api.v1.schemas_compras import CancelarSolicitudBody, CotizarSinConfirmacionBody
 from app.api.v1.crm import mover_lead_de_solicitud, reabrir_lead_de_solicitud
 import datetime
+import functools
 import hashlib
 import json
 import logging
@@ -432,7 +433,9 @@ def _detalle_envio(canal: Optional[str], correo_res: Optional[dict], wa_res: Opt
     - vence (la COT con valida_hasta y el PVEN con su ultimo dia; la SC no lo pasa): 'Enlace vigente hasta' dd/mm/aaaa.
     - wa_res (T8, U16-envio): 'WhatsApp' con su texto_resultado y, si hay mensaje, 'Mensaje' (el texto enviado con
       '[enlace de confirmación]' en lugar del enlace).
-    - seguimiento: la firma completa de C16; 'Recordatorio automático' al final lo agrega T11 en el lugar marcado."""
+    - seguimiento (T11, U16-seguimiento): el resumen que devuelve seguimiento_confirmacion.iniciar en los envíos de SC y
+      COT (el PVEN no tiene seguimiento). 'Recordatorio automático' al final: la fecha en hora de Colombia, 'apagado en
+      Configuración' o 'no habrá: el cliente no tiene teléfono ni correo' (texto_para_el_envio)."""
     cambios = []
     if canal:
         cambios.append({"etiqueta": "Canal de envío", "despues": canal})
@@ -445,7 +448,9 @@ def _detalle_envio(canal: Optional[str], correo_res: Optional[dict], wa_res: Opt
                         "despues": correo_res["mensaje"]})
     if vence is not None:
         cambios.append({"etiqueta": "Enlace vigente hasta", "despues": vence.strftime("%d/%m/%Y")})
-    # T11 (U16-seguimiento): aqui va 'Recordatorio automático' a partir de seguimiento.
+    recordatorio = seguimiento_confirmacion.texto_para_el_envio(seguimiento)
+    if recordatorio:
+        cambios.append({"etiqueta": "Recordatorio automático", "despues": recordatorio})
     return cambios
 
 def _extra_data_de_envio(canal: Optional[str], correo_res: Optional[dict], wa_res: Optional[dict] = None,
@@ -1534,7 +1539,9 @@ def _agregar_nota(db: Session, entidad: str, doc, body: dict, user: User) -> dic
     con el mensaje si no sirve). El autor es el usuario de la sesion (R9/C13), nunca body.user_name. R1: un contacto con
     el cliente (llamada, WhatsApp, correo, nota externa) reinicia el atraso del documento (updated_at); la nota interna
     no. Una sola transaccion; devuelve el renglon creado (_log_dict: con id y created_at en 'Z').
-    S7 (T11): esos contactos con el cliente son solo de ADMIN y ASESOR; COMPRAS solo deja notas internas (403)."""
+    S7 (T11): esos contactos con el cliente son solo de ADMIN y ASESOR; COMPRAS solo deja notas internas (403).
+    B3 T11 (U16-seguimiento, R23): el mismo contacto corre el recordatorio automatico de una SC o una COT
+    (seguimiento_confirmacion.posponer_por_contacto: N dias desde ahora), en este mismo commit."""
     try:
         action, texto, extra = validar_nota(body)
     except ValueError as e:
@@ -1545,7 +1552,10 @@ def _agregar_nota(db: Session, entidad: str, doc, body: dict, user: User) -> dic
     log = _log(db, entidad, doc.id, doc.numero, action, texto, user_name=nombre_de_usuario(user), extra_data=extra,
                commit=False)
     if reinicia_atraso(extra["tipo"]):
-        doc.updated_at = datetime.datetime.utcnow()
+        ahora = datetime.datetime.utcnow()
+        doc.updated_at = ahora
+        if entidad in ("SC", "COT"):
+            seguimiento_confirmacion.posponer_por_contacto(db, entidad, doc.id, ahora)
     db.flush()
     d = _log_dict(log, rol)
     db.commit()
@@ -1781,6 +1791,9 @@ def get_solicitud(sc_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)
         referencias = _referencias_de_solicitud(db, sc.id)
         d["se_conserva_en_papelera"] = bool(referencias)
         d["purga_programada"] = _iso_utc(_fecha_de_purga(sc, referencias))
+    # B3 T11 (U16-seguimiento): el recordatorio automatico, solo en el detalle (una consulta por la clave unica; el
+    # listado no la hace). None si la SC no esta en Pendiente por confirmacion.
+    d["seguimiento"] = seguimiento_confirmacion.resumen(db, "SC", sc)
     return {"status": "success", "data": d}
 
 
@@ -2321,6 +2334,9 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
     # B3 PLANTILLA (C17, C21): el asunto y el html salen de correo_documento con la marca de la empresa, y el remitente
     # lleva su nombre comercial. Se arman ANTES del commit (r1, Q3): si no se pueden armar, se revierte todo.
     asunto, html = _armar_correo_o_revertir(db, perfil, "SC", numero, cliente, link)
+    # B3 T11 (U16-seguimiento, C21, RP16): el envio y el reenvio programan el recordatorio automatico (el conteo empieza
+    # de nuevo) en este mismo commit, con la SC ya en Pendiente por confirmacion. iniciado_por sale de la sesion.
+    seguimiento = seguimiento_confirmacion.iniciar(db, "SC", sc, canal, nombre_de_usuario(user))
     db.commit()
 
     autor = body.get("user_name") or getattr(user, "email", None)
@@ -2337,10 +2353,10 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
         descripcion += f" {CANALES_ENVIO[canal]}"
     _log(db, "SC", sc.id, numero, "ESTADO_CHANGED", descripcion,
          old_estado=old_estado, new_estado="PENDIENTE_CONFIRMACION",
-         user_name=autor, extra_data=_extra_data_de_envio(canal, correo_res, wa_res=wa_res))
+         user_name=autor, extra_data=_extra_data_de_envio(canal, correo_res, wa_res=wa_res, seguimiento=seguimiento))
 
     return {"status": "success", "data": _sc_dict(sc), "link_confirmacion": link, "canal": canal, "correo": correo_res,
-            "whatsapp": wa_res}
+            "whatsapp": wa_res, "seguimiento": seguimiento}
 
 
 def _exigir_sin_documentos_activos(db: Session, sc: CustomerRequest) -> None:
@@ -2836,6 +2852,8 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
     sku_ids = [_sku_id_de_linea(p) for p in (cot.productos or [])]
     tarifas = tarifas_de_producto(db, [s for s in sku_ids if s is not None])
     d["tarifas_producto"] = [tarifas.get(s) if s is not None else None for s in sku_ids]
+    # B3 T11 (U16-seguimiento): el recordatorio automatico, solo en el detalle, como en get_solicitud.
+    d["seguimiento"] = seguimiento_confirmacion.resumen(db, "COT", cot)
     return {"status": "success", "data": d}
 
 
@@ -3668,6 +3686,11 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     # B3 PLANTILLA (C17, C21): el correo sale de correo_documento con la marca de la empresa y su nombre de remitente.
     # Se arma ANTES del commit (r1, Q3): si no se puede armar, se revierte todo. C14: dice hasta cuando es valida.
     asunto, html = _armar_correo_o_revertir(db, perfil, "COT", numero, cliente, link, vence=valida_hasta)
+    # B3 T11 (U16-seguimiento, C21, RP16): el envio y el reenvio programan el recordatorio de la COT y, si su SC sigue
+    # esperando al cliente (U11), detienen el de la SC: el cliente recibe uno solo. Los dos en este mismo commit.
+    seguimiento = seguimiento_confirmacion.iniciar(db, "COT", cot, canal, nombre_de_usuario(user))
+    if sc_id:
+        seguimiento_confirmacion.detener_por_cotizacion(db, sc_id, numero)
     # RP16: el UNICO commit antes del correo. Ya no se llama _sincronizar_estado_solicitud_desde_cotizacion: con U15 una
     # COT en PENDIENTE_CONFIRMACION no toca la SC (salia sin hacer nada), y sin refresh ni sincronizacion no queda
     # abierta una transaccion de lectura mientras sale el SMTP sincrono.
@@ -3703,10 +3726,11 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
         descripcion += f" {CANALES_ENVIO[canal]}"
     _log(db, "COT", cot_id, numero, "ESTADO_CHANGED", descripcion,
          old_estado=old_estado, new_estado="PENDIENTE_CONFIRMACION",
-         user_name=autor, extra_data=_extra_data_de_envio(canal, correo_res, wa_res=wa_res, vence=valida_hasta))
+         user_name=autor, extra_data=_extra_data_de_envio(canal, correo_res, wa_res=wa_res, vence=valida_hasta,
+                                                          seguimiento=seguimiento))
 
     return {"status": "success", "data": _cot_dict(cot), "link_confirmacion": link, "canal": canal, "correo": correo_res,
-            "vence": valida_hasta.isoformat(), "whatsapp": wa_res}
+            "vence": valida_hasta.isoformat(), "whatsapp": wa_res, "seguimiento": seguimiento}
 
 
 @router.post("/cotizaciones/{cot_id}/confirmar")
@@ -3788,6 +3812,39 @@ def add_cot_activity(cot_id: int, body: dict, user: User = Depends(require_roles
     if not cot:
         raise HTTPException(404, "Cotización no encontrada")
     return _agregar_nota(db, "COT", cot, body, user)
+
+
+# ─── B3 T11 (U16-seguimiento): «No enviar recordatorios» ─────────────────────────────────────────────────────────
+
+def _detener_seguimiento(db: Session, tipo: str, doc, user: User) -> dict:
+    """Detiene a mano el recordatorio automatico de `doc` (seguimiento_confirmacion.detener_manual): 409 con su mensaje
+    si no hay uno programado (o el documento ya no espera al cliente). El autor sale de la sesion (RP15): el body, si
+    llega, se ignora. Responde {status, data: resumen}."""
+    try:
+        seguimiento_confirmacion.detener_manual(db, tipo, doc, nombre_de_usuario(user))
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(409, str(e))
+    db.commit()
+    return {"status": "success", "data": seguimiento_confirmacion.resumen(db, tipo, doc)}
+
+
+@router.post("/solicitudes/{sc_id}/seguimiento/detener")
+def detener_seguimiento_solicitud(sc_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+                                  db: Session = Depends(get_db)):
+    sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).first()
+    if not sc:
+        raise HTTPException(404, "Solicitud no encontrada")
+    return _detener_seguimiento(db, "SC", sc, user)
+
+
+@router.post("/cotizaciones/{cot_id}/seguimiento/detener")
+def detener_seguimiento_cotizacion(cot_id: int, user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR)),
+                                   db: Session = Depends(get_db)):
+    cot = db.query(SalesQuotation).filter(SalesQuotation.id == cot_id).first()
+    if not cot:
+        raise HTTPException(404, "Cotización no encontrada")
+    return _detener_seguimiento(db, "COT", cot, user)
 
 
 @router.post("/pedidos/{ven_id}/actividad")
@@ -4744,12 +4801,16 @@ def get_alertas(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *R
         if sc.updated_at <= datetime.datetime.utcnow() - datetime.timedelta(hours=horas):
             soporte_alertas.append(sc)
 
+    # B3 T11 (U16-seguimiento): seguimiento_estado de cada SC y COT atrasada ('AGOTADO', 'DETENIDO' o None), con UNA
+    # consulta IN por tipo (sin N+1). Sirve para el chip «Sin respuesta al recordatorio».
+    seguimiento_sc = seguimiento_confirmacion.estados_para_alertas(db, "SC", sc_alertas)
+    seguimiento_cot = seguimiento_confirmacion.estados_para_alertas(db, "COT", cot_alertas)
     return {
         "status": "success",
         "data": {
             "alerta_dias": dias,
-            "sc_sin_atender": [_sc_dict(sc) for sc in sc_alertas],
-            "cot_sin_atender": [_cot_dict(c) for c in cot_alertas],
+            "sc_sin_atender": [{**_sc_dict(sc), "seguimiento_estado": seguimiento_sc.get(sc.id)} for sc in sc_alertas],
+            "cot_sin_atender": [{**_cot_dict(c), "seguimiento_estado": seguimiento_cot.get(c.id)} for c in cot_alertas],
             "sc_count": len(sc_alertas),
             "cot_count": len(cot_alertas),
             "soporte_sin_atender": [_sc_dict(sc) for sc in soporte_alertas],
@@ -4766,7 +4827,9 @@ _CONFIG_LECTURA_GENERAL = {"alerta_sc_dias", "alerta_cot_dias", "alerta_ven_dias
                            "alerta_soporte_alta_horas", "alerta_soporte_media_horas", "alerta_soporte_baja_horas",
                            "auto_lead_crm", "auto_chatter_ia", "notif_whatsapp",
                            CLAVE_TARIFA_DEFECTO,  # B3 T3: los asesores y Cotiza la leen (solo ADMIN la cambia)
-                           CLAVE_DIAS_VALIDEZ_COT}  # B3 T7 (C23): la pantalla de la COT dice hasta cuando vale
+                           CLAVE_DIAS_VALIDEZ_COT,  # B3 T7 (C23): la pantalla de la COT dice hasta cuando vale
+                           # B3 T11 (R13, C23): las 6 seguimiento_*; los asesores las ven en solo lectura.
+                           *seguimiento_confirmacion.CLAVES_CONFIG}
 
 
 # C23/R13 (B3 T2): claves que /config no muestra ni acepta, prefijo -> mensaje del 422 (RP18). Van por su propio
@@ -4817,6 +4880,10 @@ def _validar_dias_validez_cot(valor) -> str:
 _VALIDADORES_CONFIG = {
     CLAVE_TARIFA_DEFECTO: _validar_tarifa_defecto,
     CLAVE_DIAS_VALIDEZ_COT: _validar_dias_validez_cot,
+    # B3 T11 (U16-seguimiento, R13): cada seguimiento_* con su validar_valor. La regla que cruza dos claves (hora final
+    # mayor que la inicial, con lo guardado) va en update_config (validar_cambios_de_config).
+    **{clave: functools.partial(seguimiento_confirmacion.validar_valor, clave)
+       for clave in seguimiento_confirmacion.CLAVES_CONFIG},
 }
 
 
@@ -4873,8 +4940,14 @@ def get_config(user: User = Depends(require_roles(*ALL_ERP_ROLES)),
 def update_config(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)),
         db: Session = Depends(get_db)):
     """C23/R13: _validar_config ANTES de escribir (todo o nada, 422 en espanol); luego el upsert parametrizado de
-    admin_config.guardar_config (RP17) y un commit."""
-    guardar_config(db, _validar_config(body))
+    admin_config.guardar_config (RP17) y un commit. B3 T11: si el body toca las horas del seguimiento, la final debe
+    quedar mayor que la inicial combinando el body con lo guardado (422 antes de escribir nada)."""
+    limpio = _validar_config(body)
+    try:
+        seguimiento_confirmacion.validar_cambios_de_config(db, limpio)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    guardar_config(db, limpio)
     db.commit()
     return {"status": "success"}
 

@@ -99,9 +99,9 @@ def test_enviar_sc_por_whatsapp_registra_el_canal_y_manda_el_correo_de_respaldo(
     assert ultima.extra_data["canal"] == "WhatsApp"
     assert ultima.extra_data["correo"] == {"enviado": True, "destino": CORREO, "motivo": None}
     # B3 T8 (C16): con WhatsApp van tambien 'WhatsApp' y 'Mensaje'. El envio automatico esta apagado por defecto: el
-    # renglon dice que fue manual. T11 cierra la lista con 'Recordatorio automático'.
+    # renglon dice que fue manual. B3 T11 (C16, cierre): la lista termina en 'Recordatorio automático' (U16-seguimiento).
     assert [c["etiqueta"] for c in ultima.extra_data["cambios"]] == ["Canal de envío", "WhatsApp", "Mensaje",
-                                                                      "Correo de respaldo"]
+                                                                      "Correo de respaldo", "Recordatorio automático"]
     assert ultima.extra_data["cambios"][0]["despues"] == "WhatsApp"
     assert ultima.extra_data["cambios"][1]["despues"] == ("Envío manual: se abrió WhatsApp en el computador del asesor "
                                                           "(el envío automático está apagado).")
@@ -276,8 +276,9 @@ def test_enviar_sc_sin_canal_como_el_hub_sigue_funcionando(app_client, db, admin
     assert "@" in ultima.user_name  # sin user_name en el body: el email del usuario autenticado
     assert ultima.user_name == user_admin.email
     assert ultima.extra_data["canal"] is None
-    # Sin canal solo aparece el renglon del correo, rotulado como respaldo.
-    assert [c["etiqueta"] for c in ultima.extra_data["cambios"]] == ["Correo de respaldo"]
+    # Sin canal solo aparece el renglon del correo, rotulado como respaldo (y, B3 T11, el del recordatorio automático,
+    # que sale en todo envío de SC y COT).
+    assert [c["etiqueta"] for c in ultima.extra_data["cambios"]] == ["Correo de respaldo", "Recordatorio automático"]
 
 
 def test_enviar_sc_por_email_rotula_el_renglon_como_correo(app_client, db, admin_token, user_admin, monkeypatch):
@@ -288,7 +289,8 @@ def test_enviar_sc_por_email_rotula_el_renglon_como_correo(app_client, db, admin
     assert resp.status_code == 200, resp.text
     ultima = _actividades(db, "SC", sc.id)[-1]
     assert ultima.description == "Enviada para confirmación del cliente por correo"
-    assert [c["etiqueta"] for c in ultima.extra_data["cambios"]] == ["Canal de envío", "Correo"]
+    assert [c["etiqueta"] for c in ultima.extra_data["cambios"]] == ["Canal de envío", "Correo",
+                                                                      "Recordatorio automático"]  # B3 T11 (C16)
 
 
 def test_reenviar_una_sc_pendiente_anota_el_canal_en_el_reenvio(app_client, db, admin_token, user_admin, monkeypatch):
@@ -327,8 +329,10 @@ def test_enviar_cot_guarda_canal_envio_y_un_solo_renglon_de_actividad(
     assert filas[0].extra_data["canal"] == "WhatsApp"
     # B3 T7 (C16, decisión del controlador sobre RP11): el envío de la COT agrega «Enlace vigente hasta» (valida_hasta)
     # después del correo. La cadena de dueños de esta lista es T2 -> T7 -> T8 -> T11. B3 T8: 'WhatsApp' y 'Mensaje'.
+    # B3 T11 (C16, cierre): 'Recordatorio automático' al final.
     assert [c["etiqueta"] for c in filas[0].extra_data["cambios"]] == ["Canal de envío", "WhatsApp", "Mensaje",
-                                                                        "Correo de respaldo", "Enlace vigente hasta"]
+                                                                        "Correo de respaldo", "Enlace vigente hasta",
+                                                                        "Recordatorio automático"]
 
 
 def test_enviar_cot_sin_canal_deja_el_canal_envio_que_ya_tenia(app_client, db, admin_token, user_admin, monkeypatch):

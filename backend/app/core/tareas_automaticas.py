@@ -95,14 +95,16 @@ LARGO_MAXIMO_TEXTO_EN_RESUMEN = 40  # r1: un texto más largo puede ser un nombr
 MARCAS_BASE_DE_PRUEBAS = ("test", "staging", "dev", "qa")
 _VERDADEROS_DE_UVICORN = ("1", "true", "t", "yes", "y", "on")
 
-# Registro fijo de tareas, en orden. T11 agrega al final ('seguimiento_confirmacion',
-# 'app.core.seguimiento_confirmacion:correr_seguimientos').
+# Registro fijo de tareas, en orden; una tarea nueva se agrega al final.
 # CONTRATO (ver el docstring del módulo): fn(db, ahora) -> dict; (a) idempotente entre dos corridas seguidas (varios
 # workers, «Revisar ahora»); (b) devuelve solo conteos y números de documento, porque lo ve cualquier rol en
 # /tareas/estado: nunca nombres, teléfonos, correos ni textos de error; (c) consultas por índice y con LIMIT.
 TAREAS = [
     # RP7 (B2.1-D2): la purga de la Papelera, la misma de POST /papelera/purgar, con el autor por defecto «Sistema».
     ("purga_papelera", "app.api.v1.erp_ventas:purgar_papelera_vencida"),
+    # B3 T11 (U16-seguimiento): el recordatorio automático al cliente que no confirma (reclamo idempotente; devuelve
+    # solo conteos u {'omitido': ...}).
+    ("seguimiento_confirmacion", "app.core.seguimiento_confirmacion:correr_seguimientos"),
 ]
 
 

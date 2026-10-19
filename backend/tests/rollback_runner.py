@@ -144,7 +144,8 @@ def _bloquear_servicios_externos():
 TABLAS = ["customer_requests", "sales_quotations", "sale_orders", "purchase_orders_full", "activity_logs",
           "document_confirmation_tokens", "customers", "sales_orders",
           "users", "brands", "categories", "products", "product_skus",
-          "envios_al_cliente"]  # B3 T8 (fa6_030): los mensajes de WhatsApp al cliente tampoco pueden escaparse
+          "envios_al_cliente",  # B3 T8 (fa6_030): los mensajes de WhatsApp al cliente tampoco pueden escaparse
+          "seguimientos_confirmacion"]  # B3 T11 (fa6_031): ni los recordatorios programados
 MODULOS_CON_SESSIONLOCAL = (dbmod, m_compras, m_inv, m_f4)
 
 # Salvaguarda como la de conftest.py: jamas correr contra una base que no se identifique como de pruebas.
