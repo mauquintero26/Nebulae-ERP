@@ -174,7 +174,9 @@ def test_un_solo_commit_antes_del_correo(app_client, db, admin_token, monkeypatc
     resp = _enviar(app_client, admin_token, so, {"canal": "Email"})
     assert resp.status_code == 200, resp.text
     assert commits_al_enviar == [1], commits_al_enviar
-    assert contador_sql.commits == 2, contador_sql.commits
+    # B3 T8 r1 (R2, ruling 1): el renglón se completa en un savepoint (si falla, la fila del WhatsApp que ya salió no se
+    # pierde) y contador_sql cuenta su RELEASE SAVEPOINT como un commit: 3. RP16 no cambia: un solo commit antes del correo.
+    assert contador_sql.commits == 3, contador_sql.commits
     assert [s for s in contador_sql.sentencias if "FROM sale_orders" in s and "FOR UPDATE" in s.upper()], \
         "el pedido debe leerse con FOR UPDATE"
     assert resp.json()["correo"]["motivo"] == "FALLO_ENVIO"

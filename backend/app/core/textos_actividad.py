@@ -13,6 +13,7 @@ corregir_descripcion_historica es el corazon de scripts/corregir_textos_activida
 de la Actividad (sin tildes, con el codigo del estado) con el mismo texto que hoy generan los endpoints.
 """
 import re
+import unicodedata
 
 ETIQUETAS_ESTADO = {
     # Solicitud de Cotizacion (U15: cuenta solo su propia historia; 'Nueva' y 'Pendiente por confirmación' son las
@@ -179,6 +180,24 @@ def nombre_de_usuario(user) -> str:
     body. Es el mismo valor que AuthGuard guarda como 'user_name' (el username o, si no tiene, el correo); 'Sistema'
     si no hay ninguno. app/core/chatter.py lo reexporta."""
     return getattr(user, "username", None) or getattr(user, "email", None) or "Sistema"
+
+
+USER_NAME_MAX = 150  # activity_logs.user_name (y envios_al_cliente.user_name) es String(150)
+
+
+def autor_de_actividad(user_name, usuario=None):
+    """El autor como se guarda (B3 T8 r1, R6: UNA sola regla; antes vivia dentro de erp_ventas._log y envio_whatsapp
+    tenia una copia). None sigue siendo «sin autor». Un valor que no es texto (una lista, un numero llegado en el body)
+    pasa a nombre_de_usuario(usuario) ('Sistema' sin usuario). Se quitan los caracteres de control (Cc) y los
+    surrogates sueltos (Cs), que psycopg2 no acepta; si no queda nada, nombre_de_usuario(usuario). Hasta USER_NAME_MAX."""
+    if user_name is None:
+        return None
+    if not isinstance(user_name, str):
+        user_name = nombre_de_usuario(usuario)
+    sin_control = "".join(ch for ch in user_name if unicodedata.category(ch) not in ("Cc", "Cs"))
+    if sin_control != user_name and not sin_control:
+        sin_control = nombre_de_usuario(usuario)
+    return sin_control[:USER_NAME_MAX]
 
 
 # --- Correccion de las actividades viejas (H7+H41; la usa scripts/corregir_textos_actividad.py) ---------------

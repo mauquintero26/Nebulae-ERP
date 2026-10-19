@@ -48,7 +48,8 @@ def _sufijo():
 
 class FakeChatwoot:
     """Reemplaza app.core.chatwoot._peticion: anota (metodo, ruta, cuerpo, params) y el timeout de cada llamada y
-    responde por (metodo, ruta). Una respuesta puede ser una excepcion (se lanza) o un valor (se entrega una copia)."""
+    responde por (metodo, ruta). Una respuesta puede ser una excepcion (se lanza), una funcion (recibe metodo, ruta,
+    cuerpo y params; lo que devuelve es la respuesta y lo que lanza se lanza) o un valor (se entrega una copia)."""
 
     def __init__(self, respuestas=None):
         self.respuestas = dict(respuestas or {})
@@ -64,6 +65,8 @@ class FakeChatwoot:
         r = self.respuestas[clave]
         if isinstance(r, BaseException):
             raise r
+        if callable(r):
+            return r(metodo, ruta, copy.deepcopy(cuerpo), copy.deepcopy(params))
         return copy.deepcopy(r)
 
     def rutas(self):
@@ -215,6 +218,71 @@ def test_telefonos_paridad_con_frontend():
     assert telefono_legible(E164) == LEGIBLE
 
 
+def test_chatwoot_real_bloqueado_en_las_pruebas(monkeypatch):
+    """r1 (L3 = S6 = R9): como el SMTP, ninguna prueba puede llegar a Chatwoot real. El runner (y conftest) quitan
+    CHATWOOT_BASE_URL y CHATWOOT_API_TOKEN del entorno y cambian chatwoot._ABRIDOR por uno que lanza RuntimeError: aun con
+    la configuracion puesta, una peticion sin el fake no sale. El abridor real queda en abridor_real (para revisarlo)."""
+    import os
+    import app.core.chatwoot as cw
+    assert "CHATWOOT_BASE_URL" not in os.environ and "CHATWOOT_API_TOKEN" not in os.environ
+    assert cw.configurado() is False
+    real = cw._ABRIDOR.abridor_real  # sin la guarda no existe: la prueba cae aqui, antes de tocar la red
+    assert any(isinstance(h, cw._SinRedirecciones) for h in real.handlers)
+    monkeypatch.setenv("CHATWOOT_BASE_URL", URL_FICTICIA)
+    monkeypatch.setenv("CHATWOOT_API_TOKEN", TOKEN_FICTICIO)
+    try:
+        cw._peticion("GET", "/api")
+        raise AssertionError("una peticion real a Chatwoot debia estar bloqueada")
+    except RuntimeError as e:
+        assert str(e) == "Chatwoot real bloqueado en pruebas"
+
+
+def test_una_redireccion_no_lleva_el_token_a_otro_host(monkeypatch):
+    """r1 (S5): un 302 hacia otro host NO se sigue, asi que el header api_access_token nunca llega al destino. Sin red:
+    el abridor es el de produccion (abridor_sin_redirecciones) con un manejador HTTP falso que responde el 302 de la
+    base y anota cualquier peticion al otro host."""
+    import email.message
+    import io
+    import urllib.request
+    import urllib.response
+    import app.core.chatwoot as cw
+    monkeypatch.setattr(__import__("logging").getLogger("app.core.chatwoot"), "disabled", True)
+    monkeypatch.setenv("CHATWOOT_BASE_URL", "http://localhost:3000")
+    monkeypatch.setenv("CHATWOOT_API_TOKEN", TOKEN_FICTICIO)
+    al_otro_host = []
+
+    class HTTPFalso(urllib.request.BaseHandler):
+        handler_order = 100  # antes que el HTTPHandler real: ninguna peticion sale a la red
+
+        def http_open(self, req):
+            cabeceras = email.message.Message()
+            if req.host.startswith("localhost"):
+                cabeceras["Location"] = "http://otro-host.invalid/robar"
+                resp = urllib.response.addinfourl(io.BytesIO(b""), cabeceras, req.full_url, 302)
+                resp.msg = "Found"
+                return resp
+            al_otro_host.append(dict(req.header_items()))
+            resp = urllib.response.addinfourl(io.BytesIO(b"{}"), cabeceras, req.full_url, 200)
+            resp.msg = "OK"
+            return resp
+
+    abridor = cw.abridor_sin_redirecciones()
+    abridor.add_handler(HTTPFalso())
+    monkeypatch.setattr(cw, "_ABRIDOR", abridor)
+    try:
+        cw._peticion("GET", "inboxes/3")
+        raise AssertionError("la redireccion debia dar error")
+    except cw.ChatwootError as e:
+        assert e.status == 302
+    assert al_otro_host == []
+    # Control: un abridor normal SI sigue la redireccion y se lleva el token (lo que la proteccion evita).
+    normal = urllib.request.build_opener()
+    normal.add_handler(HTTPFalso())
+    monkeypatch.setattr(cw, "_ABRIDOR", normal)
+    cw._peticion("GET", "inboxes/3")
+    assert [h.get("Api_access_token") for h in al_otro_host] == [TOKEN_FICTICIO]
+
+
 # ─── 2 a 11) Envio por WhatsApp desde la SC, la COT y el PVEN ─────────────────────────────────────────────────────
 
 def test_sc_por_whatsapp_dentro_de_ventana_manda_texto_libre(app_client, db, admin_token, user_admin, monkeypatch):
@@ -333,11 +401,14 @@ def test_cliente_nuevo_crea_contacto_y_conversacion_con_plantilla(app_client, db
     assert fake.rutas() == [("GET", "contacts/search"), ("POST", "contacts"), ("POST", "conversations")]
     assert fake.cuerpo("POST", "contacts") == {"inbox_id": 3, "name": "Cliente Prueba", "phone_number": E164,
                                                "email": CORREO}
-    conv = fake.cuerpo("POST", "conversations")
-    assert {k: conv[k] for k in ("source_id", "inbox_id", "contact_id", "status")} == {
-        "source_id": "src-70", "inbox_id": 3, "contact_id": 70, "status": "open"}
-    assert conv["message"]["template_params"]["processed_params"]["4"] == link
-    assert link in conv["message"]["content"]
+    from app.core.envio_whatsapp import TEXTO_PLANTILLA_DOCUMENTO, rellenar_plantilla
+    params = {"1": "Cliente Prueba", "2": EMPRESA, "3": f"Solicitud {sc.numero}", "4": link}
+    # r1 (R4): el cuerpo completo de POST conversations.
+    assert fake.cuerpo("POST", "conversations") == {
+        "source_id": "src-70", "inbox_id": 3, "contact_id": 70, "status": "open",
+        "message": {"content": rellenar_plantilla(TEXTO_PLANTILLA_DOCUMENTO, params),
+                    "template_params": {"name": "confirmar_documento", "category": "UTILITY", "language": "es",
+                                        "processed_params": params}}}
     [envio] = _envios(db, "SC", sc.id)
     assert (envio.chatwoot_conversation_id, envio.chatwoot_message_id, envio.estado) == ("77", "903", "ENVIADO")
 
@@ -450,6 +521,127 @@ def test_error_de_chatwoot_no_filtra_el_token(app_client, db, admin_token, user_
     [renglon] = _renglones(db, "SC", sc.id, "ESTADO_CHANGED")
     assert TOKEN_FICTICIO not in json.dumps(renglon.extra_data, ensure_ascii=False)
 
+    # r1 (L1 = S2 = R7): un error que repite el contenido enviado (con el enlace) no deja el enlace ni su token guardados:
+    # ni completo ni cortado por el recorte a 300 caracteres del detalle.
+    def repite_completo(metodo, ruta, cuerpo, params):
+        contenido = cuerpo["content"]
+        raise cw.ChatwootError(422, "Unprocessable: " + contenido[contenido.index("http"):])
+
+    def repite_cortado(metodo, ruta, cuerpo, params):
+        contenido = cuerpo["content"]
+        token = contenido.split("/confirmar/")[1].split(" ")[0]
+        relleno = "x" * (300 - len("Unprocessable ") - contenido.index(token) - 20)  # el corte cae a mitad del token
+        raise cw.ChatwootError(422, "Unprocessable " + relleno + contenido)
+
+    for repite in (repite_completo, repite_cortado):
+        respuestas = _en_ventana()
+        respuestas[("POST", "conversations/55/messages")] = repite
+        _preparar(monkeypatch, db, respuestas)
+        sc = _sc(db, user_admin)
+        resp = _enviar_sc(app_client, admin_token, sc, {"canal": "WhatsApp"})
+        assert resp.status_code == 200, resp.text
+        wa = resp.json()["whatsapp"]
+        raw = _raw(resp.json()["link_confirmacion"])
+        assert wa["motivo"] == "FALLO_CHATWOOT", (repite.__name__, wa)
+        assert raw[:10] not in wa["detalle"] and raw[:10] not in wa["texto_resultado"], repite.__name__
+        assert "[enlace de confirmación]" in wa["detalle"], repite.__name__
+        [envio] = _envios(db, "SC", sc.id)
+        assert raw[:10] not in envio.detalle, repite.__name__
+        [renglon] = _renglones(db, "SC", sc.id, "ESTADO_CHANGED")
+        assert raw[:10] not in json.dumps(renglon.extra_data, ensure_ascii=False), repite.__name__
+
+
+def test_despues_del_post_final_un_error_ambiguo_puede_haber_salido(app_client, db, admin_token, user_admin,
+                                                                    monkeypatch):
+    """r1 (R3): una vez intentado el POST final (enviar_mensaje o crear_conversacion), un error sin status, un 5xx, una
+    respuesta que no es JSON o un 2xx sin 'id' pueden esconder un mensaje que SI salio: CHATWOOT_SIN_RESPUESTA («puede que
+    haya salido»), no FALLO. Antes del POST final, un 5xx sigue siendo FALLO_CHATWOOT (no salio nada)."""
+    import app.core.chatwoot as cw
+    ambiguos = [cw.ChatwootError(502, "Bad Gateway"), cw.ChatwootError(None, "no se pudo conectar con Chatwoot"),
+                cw.ChatwootError(None, "Chatwoot respondió algo que no es JSON"), {}, {"status": "ok"}]
+    for respuesta in ambiguos:
+        respuestas = _en_ventana()
+        respuestas[("POST", "conversations/55/messages")] = respuesta
+        _preparar(monkeypatch, db, respuestas)
+        sc = _sc(db, user_admin)
+        resp = _enviar_sc(app_client, admin_token, sc, {"canal": "WhatsApp"})
+        assert resp.status_code == 200, resp.text
+        wa = resp.json()["whatsapp"]
+        assert wa["motivo"] == "CHATWOOT_SIN_RESPUESTA" and wa["enviado"] is False, (respuesta, wa)
+        [envio] = _envios(db, "SC", sc.id)
+        assert (envio.estado, envio.motivo) == ("NO_ENVIADO", "CHATWOOT_SIN_RESPUESTA"), respuesta
+    # La conversacion nueva (plantilla) sin 'id' en la respuesta: tambien puede haber salido.
+    _preparar(monkeypatch, db, {("GET", "contacts/search"): {"payload": []},
+                                ("POST", "contacts"): {"payload": {"contact": {"id": 70},
+                                                                   "contact_inbox": {"source_id": "src-70"}}},
+                                ("POST", "conversations"): {"messages": []}}, plantilla="confirmar_documento")
+    resp = _enviar_sc(app_client, admin_token, _sc(db, user_admin), {"canal": "WhatsApp"})
+    assert resp.status_code == 200 and resp.json()["whatsapp"]["motivo"] == "CHATWOOT_SIN_RESPUESTA"
+    # Antes del POST final: un 5xx es FALLO (no salio nada) y un 422 en el POST final tambien (Chatwoot lo rechazo).
+    for clave, error in ((("GET", "contacts/search"), cw.ChatwootError(503, "Service Unavailable")),
+                         (("POST", "conversations/55/messages"), cw.ChatwootError(422, "Unprocessable"))):
+        respuestas = _en_ventana()
+        respuestas[clave] = error
+        _preparar(monkeypatch, db, respuestas)
+        resp = _enviar_sc(app_client, admin_token, _sc(db, user_admin), {"canal": "WhatsApp"})
+        assert resp.json()["whatsapp"]["motivo"] == "FALLO_CHATWOOT", clave
+
+
+def test_una_respuesta_inesperada_no_tumba_el_envio(app_client, db, admin_token, user_admin, monkeypatch):
+    """r1 (R4): la red de seguridad. Un contacto sin 'id' (otra version de Chatwoot) antes del POST final da FALLO_CHATWOOT
+    'respuesta inesperada de Chatwoot': 200, la fila y el renglon quedan, nunca un 500 despues del commit."""
+    import logging
+    monkeypatch.setattr(logging.getLogger("app.core.envio_whatsapp"), "disabled", True)  # traceback esperado
+    respuestas = _en_ventana()
+    respuestas[("GET", "contacts/search")] = {"payload": [{"phone_number": E164}]}
+    _preparar(monkeypatch, db, respuestas)
+    sc = _sc(db, user_admin)
+    resp = _enviar_sc(app_client, admin_token, sc, {"canal": "WhatsApp"})
+    assert resp.status_code == 200, resp.text
+    wa = resp.json()["whatsapp"]
+    assert wa["motivo"] == "FALLO_CHATWOOT" and wa["detalle"] == "respuesta inesperada de Chatwoot"
+    [envio] = _envios(db, "SC", sc.id)
+    assert envio.motivo == "FALLO_CHATWOOT" and envio.id == wa["envio_id"]
+    [renglon] = _renglones(db, "SC", sc.id, "ESTADO_CHANGED")
+    assert renglon.extra_data["whatsapp"]["motivo"] == "FALLO_CHATWOOT"
+
+
+def test_token_con_caracteres_de_control_no_se_usa_ni_se_filtra(app_client, db, admin_token, user_admin,
+                                                                monkeypatch):
+    """r1 (S1): un CHATWOOT_API_TOKEN con un salto de linea (o espacios) cuenta como «no configurado», con un mensaje que
+    no lo lleva; y si de todos modos http.client lanzara ValueError con el header, _peticion lo cambia por un
+    ChatwootError sin el valor."""
+    import logging
+    import app.core.chatwoot as cw
+    peticion_real = cw._peticion  # _preparar la cambia por el fake; la ultima parte prueba la de verdad
+    monkeypatch.setattr(logging.getLogger("app.core.chatwoot"), "disabled", True)  # aviso esperado, sin ruido
+    malo = "abc\ndef-secreto"
+    fake = _preparar(monkeypatch, db, _en_ventana())
+    for token in (malo, "abc def-secreto", "abc\x07def-secreto"):
+        monkeypatch.setenv("CHATWOOT_API_TOKEN", token)
+        assert cw.configurado() is False, repr(token)
+        try:
+            cw.config_chatwoot()
+            raise AssertionError("debia rechazar el token")
+        except cw.ChatwootNoConfigurado as e:
+            assert "secreto" not in str(e)
+    monkeypatch.setenv("CHATWOOT_API_TOKEN", malo)
+    resp = _enviar_sc(app_client, admin_token, _sc(db, user_admin), {"canal": "WhatsApp"})
+    assert resp.status_code == 200 and resp.json()["whatsapp"]["motivo"] == "CHATWOOT_NO_CONFIGURADO"
+    assert fake.llamadas == [] and "secreto" not in resp.text
+
+    class AbridorQueLanzaValueError:
+        def open(self, req, timeout=None):
+            raise ValueError(f"Invalid header value b'{malo}'")
+
+    monkeypatch.setenv("CHATWOOT_API_TOKEN", TOKEN_FICTICIO)
+    monkeypatch.setattr(cw, "_ABRIDOR", AbridorQueLanzaValueError())
+    try:
+        peticion_real("GET", "inboxes/3")
+        raise AssertionError("debia fallar")
+    except cw.ChatwootError as e:
+        assert e.status is None and e.detalle == "configuración de Chatwoot inválida" and "secreto" not in str(e)
+
 
 def test_peticion_real_sin_red_ni_token_en_los_errores(monkeypatch):
     """_peticion con un abridor falso (nunca la red): url, cabecera y cuerpo; HTTPError sin el token y recortado; timeout
@@ -495,13 +687,25 @@ def test_peticion_real_sin_red_ni_token_en_los_errores(monkeypatch):
         cuerpo = (f'{{"error": "token {TOKEN_FICTICIO} no vale"}}' + "x" * 600).encode()
         raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, io.BytesIO(cuerpo))
 
-    for hacer, tipo, status in ((error_http, cw.ChatwootError, 401),
-                                (lambda req: (_ for _ in ()).throw(socket.timeout("timed out")),
-                                 cw.ChatwootSinRespuesta, None),
-                                (lambda req: (_ for _ in ()).throw(urllib.error.URLError(socket.timeout("t"))),
-                                 cw.ChatwootSinRespuesta, None),
-                                (lambda req: (_ for _ in ()).throw(urllib.error.URLError("sin ruta")),
-                                 cw.ChatwootError, None)):
+    import http.client
+
+    class LecturaCortada(Respuesta):
+        def read(self, *a):
+            raise http.client.IncompleteRead(b"{")
+
+    # r1 (R4): tambien la respuesta que no es JSON, un corte de conexion (OSError) y una lectura incompleta.
+    casos = [(error_http, cw.ChatwootError, 401, None),
+             (lambda req: (_ for _ in ()).throw(socket.timeout("timed out")), cw.ChatwootSinRespuesta, None, None),
+             (lambda req: (_ for _ in ()).throw(urllib.error.URLError(socket.timeout("t"))),
+              cw.ChatwootSinRespuesta, None, None),
+             (lambda req: (_ for _ in ()).throw(urllib.error.URLError("sin ruta")), cw.ChatwootError, None,
+              "no se pudo conectar con Chatwoot"),
+             (lambda req: (_ for _ in ()).throw(ConnectionResetError(10054, "reset")), cw.ChatwootError, None,
+              "no se pudo conectar con Chatwoot"),
+             (lambda req: LecturaCortada(b""), cw.ChatwootError, None, "no se pudo conectar con Chatwoot"),
+             (lambda req: Respuesta(b"<html>502 Bad Gateway</html>"), cw.ChatwootError, None,
+              "Chatwoot respondió algo que no es JSON")]
+    for hacer, tipo, status, detalle in casos:
         monkeypatch.setattr(cw, "_ABRIDOR", Abridor(hacer))
         try:
             cw._peticion("GET", "inboxes/3")
@@ -510,8 +714,8 @@ def test_peticion_real_sin_red_ni_token_en_los_errores(monkeypatch):
             assert type(e) is tipo and e.status == status, (type(e), e.status)
             assert TOKEN_FICTICIO not in str(e) and TOKEN_FICTICIO not in e.detalle
             assert len(e.detalle) <= 300
-            if tipo is cw.ChatwootError and status is None:
-                assert e.detalle == "no se pudo conectar con Chatwoot"
+            if detalle is not None:
+                assert e.detalle == detalle, e.detalle
     # Sin configuracion no se arma ninguna peticion.
     monkeypatch.delenv("CHATWOOT_API_TOKEN")
     n = len(pedidos)
@@ -640,9 +844,10 @@ def test_pedido_por_whatsapp_es_de_consulta_y_un_fallo_no_deshace_el_envio(app_c
     assert fake.cuerpo("POST", "conversations/55/messages")["template_params"]["processed_params"]["3"] == \
         f"Pedido de venta {so2.numero}"
 
-    # Si Chatwoot falla, el enlace queda igual (el pedido ya se envio): 200, enlace vigente y el motivo.
+    # Si Chatwoot falla, el enlace queda igual (el pedido ya se envio): 200, enlace vigente y el motivo. r1 (R3): un 4xx
+    # en el POST final es un rechazo (FALLO_CHATWOOT); un 5xx seria ambiguo («puede que haya salido»).
     respuestas = _en_ventana()
-    respuestas[("POST", "conversations/55/messages")] = cw.ChatwootError(500, "error interno")
+    respuestas[("POST", "conversations/55/messages")] = cw.ChatwootError(422, "plantilla rechazada")
     _preparar(monkeypatch, db, respuestas)
     so3 = _pven(db)
     resp = _enviar_pven(app_client, admin_token, so3, {"canal": "WhatsApp"})
@@ -673,6 +878,33 @@ def test_cot_con_lead_que_falla_conserva_el_registro_del_whatsapp(app_client, db
     assert renglon.extra_data["whatsapp"]["envio_id"] == envio.id
 
 
+def test_pedido_si_falla_completar_el_renglon_el_registro_del_whatsapp_queda(app_client, db, admin_token, user_admin,
+                                                                            monkeypatch):
+    """r1 (R2): en el PVEN el renglon ENVIADO_AL_CLIENTE se completa despues del correo. Si eso falla, la fila
+    EnvioAlCliente de un WhatsApp que ya salio no se pierde: el renglon queda como estaba antes del correo."""
+    import logging
+    import app.api.v1.erp_ventas as ev
+    _preparar(monkeypatch, db, _en_ventana())
+    original = ev._extra_data_de_envio
+
+    def falla_al_completar(canal, correo_res, **kwargs):
+        if correo_res is not None:
+            raise RuntimeError("no se pudo completar el renglon")
+        return original(canal, correo_res, **kwargs)
+
+    monkeypatch.setattr(ev, "_extra_data_de_envio", falla_al_completar)
+    monkeypatch.setattr(logging.getLogger("app.api.v1.erp_ventas"), "disabled", True)
+    so = _pven(db)
+    resp = _enviar_pven(app_client, admin_token, so, {"canal": "WhatsApp"})
+    assert resp.status_code == 200, resp.text
+    wa = resp.json()["whatsapp"]
+    assert wa["enviado"] is True
+    [envio] = _envios(db, "PVEN", so.id)
+    assert envio.estado == "ENVIADO" and envio.id == wa["envio_id"]
+    [renglon] = _renglones(db, "VEN", so.id, "ENVIADO_AL_CLIENTE")
+    assert renglon.extra_data["correo"] is None  # el renglon quedo como antes del correo
+
+
 def test_seguimiento_usa_la_plantilla_de_recordatorio(db, user_admin, monkeypatch):
     """proposito SEGUIMIENTO (lo usa T11): la plantilla 'recordatorio' con sus 4 variables (nombre, documento, empresa,
     enlace); sin ella no sale nada aunque exista la de 'documento'. whatsapp_configurado dice si el automatico esta
@@ -684,7 +916,9 @@ def test_seguimiento_usa_la_plantilla_de_recordatorio(db, user_admin, monkeypatc
     assert ew.whatsapp_configurado(db) is True
     cot = _cot(db)
     vence = datetime.date(2026, 10, 30)
-    wa = ew.enviar_documento(db, doc_tipo="COT", doc_id=cot.id, doc_numero=cot.numero, cliente_nombre="  Ana\nPérez ",
+    # r1 (S4): una sola regla de «una linea» (empresa.limpiar_linea + espacios colapsados): \x07 tambien se va.
+    wa = ew.enviar_documento(db, doc_tipo="COT", doc_id=cot.id, doc_numero=cot.numero,
+                             cliente_nombre="  Ana\x07\nPérez ",
                              cliente_email=CORREO, telefono=TELEFONO, enlace=enlace, total_cop=1000, vence=vence,
                              user_name="Sistema", proposito="SEGUIMIENTO")
     assert wa["enviado"] is True and wa["modo"] == "PLANTILLA"
@@ -707,6 +941,23 @@ def test_seguimiento_usa_la_plantilla_de_recordatorio(db, user_admin, monkeypatc
                              proposito="SEGUIMIENTO")
     assert wa["motivo"] == "FUERA_DE_VENTANA_SIN_PLANTILLA"
     assert wa["texto_manual"].startswith("Hola cliente, te recordamos que tu solicitud SC-X de")
+
+    # r1 (S3): las variables se rellenan en una sola pasada: un cliente llamado '{{4}}' no se vuelve el enlace.
+    assert ew.rellenar_plantilla("A {{1}} B {{2}} C {{9}}", {"1": "{{2}}", "2": "x"}) == "A {{2}} B x C {{9}}"
+    fake = _preparar(monkeypatch, db, _en_ventana(can_reply=False), plantilla="confirmar_documento")
+    ew.enviar_documento(db, doc_tipo="COT", doc_id=cot.id, doc_numero=cot.numero, cliente_nombre="{{4}}",
+                        cliente_email=None, telefono=TELEFONO, enlace=enlace, user_name=None)
+    contenido = fake.cuerpo("POST", "conversations/55/messages")["content"]
+    assert contenido.startswith("Hola {{4}}, te escribimos de") and contenido.count(enlace) == 1
+
+    # r1 (R6): el autor con el mismo saneo de la Actividad (textos_actividad.autor_de_actividad): sin caracteres de
+    # control, hasta 150, y uno que no es texto pasa a 'Sistema'.
+    for user_name, guardado in (("Ana\x00" + "x" * 200, ("Ana" + "x" * 200)[:150]), (123, "Sistema"), (None, None)):
+        _preparar(monkeypatch, db, automatico="false")
+        wa = ew.enviar_documento(db, doc_tipo="COT", doc_id=cot.id, doc_numero=cot.numero, cliente_nombre="Ana",
+                                 cliente_email=None, telefono=TELEFONO, enlace=enlace, user_name=user_name)
+        envio = [e for e in _envios(db, "COT", cot.id) if e.id == wa["envio_id"]][0]
+        assert envio.user_name == guardado, (user_name, envio.user_name)
     for malo in ({"proposito": "OTRO"}, {"doc_tipo": "XX"}):
         datos = {"doc_tipo": "SC", "doc_id": 1, "doc_numero": "SC-X", "cliente_nombre": "A", "cliente_email": None,
                  "telefono": TELEFONO, "enlace": enlace, "user_name": None, **malo}
@@ -795,6 +1046,9 @@ def test_config_whatsapp(app_client, db, admin_token, user_admin, vendedor_token
          "El nombre de la plantilla solo puede tener minúsculas, números y guion bajo, igual que en Meta."),
         ({"plantilla_recordatorio": "recordar-documento"},
          "El nombre de la plantilla solo puede tener minúsculas, números y guion bajo, igual que en Meta."),
+        # r1 (L4 = R8): hasta 100, lo que cabe en envios_al_cliente.plantilla (VARCHAR(100)).
+        ({"plantilla": "a" * 101}, "El nombre de la plantilla puede tener hasta 100 caracteres."),
+        ({"plantilla_recordatorio": "b" * 101}, "El nombre de la plantilla puede tener hasta 100 caracteres."),
         ({"automatico": True}, "Para encender el envío automático falta el número de la bandeja de WhatsApp."),
         ({"inbox_id": 0}, "El número de la bandeja debe ser un número entero mayor que 0."),
         ({"inbox_id": "3a"}, "El número de la bandeja debe ser un número entero mayor que 0."),
@@ -857,6 +1111,9 @@ def test_config_whatsapp(app_client, db, admin_token, user_admin, vendedor_token
     assert resp.status_code == 200, resp.text
     assert leer_config(db, claves)["envio_whatsapp_automatico"] == "false"
     assert "envio_whatsapp_plantilla" not in leer_config(db, claves)
+    # 100 caracteres si caben.
+    resp = app_client.put(ruta, json={"plantilla": "c" * 100}, headers=auth(admin_token))
+    assert resp.status_code == 200 and resp.json()["data"]["plantilla"] == "c" * 100, resp.text
 
     # /ventas/config no las acepta ni las muestra (C23, RP18).
     resp = app_client.patch("/api/v1/ventas/config", json={"envio_whatsapp_automatico": "true"},

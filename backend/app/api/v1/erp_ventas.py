@@ -41,7 +41,9 @@ from app.core.ventas_dinero import (
     anular_pxps_de_pedido, monto_linea, repartir_anticipo_por_linea, unidades, resumen_anticipo_cotizacion,
     _sin_tildes,
 )
-from app.core.textos_actividad import etiqueta_estado, ETIQUETAS_ESTADO, PASOS_SC, nombre_de_usuario
+from app.core.textos_actividad import (
+    etiqueta_estado, ETIQUETAS_ESTADO, PASOS_SC, nombre_de_usuario, autor_de_actividad,
+)
 from app.core.chatter import validar_nota, reinicia_atraso, puede_registrar, CONTACTO_SOLO_ASESOR
 from app.core.estados_pedido import ESTADOS_VEN_DESTINOS, ESTADOS_VEN_SIN_DINERO, destinos_ven_permitidos
 from app.api.v1.schemas_compras import CancelarSolicitudBody, CotizarSinConfirmacionBody
@@ -221,8 +223,8 @@ def _gen_numero(db: Session, prefix: str, seq: str) -> str:
     n = _next_seq(db, seq)
     return f"{prefix}{year}{n:04d}"
 
-# activity_logs.user_name es String(150).
-_USER_NAME_MAX = 150
+# activity_logs.user_name es String(150): el recorte y el saneo del autor viven en textos_actividad.autor_de_actividad
+# (B3 T8 r1, R6: una sola fuente).
 
 
 def _log(db: Session, entity_type: str, entity_id: int, entity_numero: str,
@@ -238,14 +240,9 @@ def _log(db: Session, entity_type: str, entity_id: int, entity_numero: str,
     T11 calidad (F4): antes de recortar se quitan los caracteres de control (Cc): con U+0000 psycopg2 lanzaba
     ValueError en el flush y, en los cambios de estado explicitos de la COT y del PVEN, el estado ya confirmado se
     quedaba sin su renglon (500). Si no queda nada, nombre_de_usuario(usuario) ('Sistema' sin usuario). Ronda 1:
-    tambien los surrogates sueltos (Cs, p. ej. U+D800 llegado como escape JSON): psycopg2 lanzaba UnicodeEncodeError."""
-    if user_name is not None:
-        if not isinstance(user_name, str):
-            user_name = nombre_de_usuario(usuario)
-        sin_control = "".join(ch for ch in user_name if unicodedata.category(ch) not in ("Cc", "Cs"))
-        if sin_control != user_name and not sin_control:
-            sin_control = nombre_de_usuario(usuario)
-        user_name = sin_control[:_USER_NAME_MAX]
+    tambien los surrogates sueltos (Cs, p. ej. U+D800 llegado como escape JSON): psycopg2 lanzaba UnicodeEncodeError.
+    B3 T8 r1 (R6): esa regla es textos_actividad.autor_de_actividad, la misma que usa envio_whatsapp."""
+    user_name = autor_de_actividad(user_name, usuario)
     log = ActivityLog(
         entity_type=entity_type,
         entity_id=entity_id,
@@ -2251,6 +2248,10 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
     _limpiar_cambios_cliente(sc)
     # Se leen antes del commit: despues el objeto queda expirado y leerlo abriria otra transaccion mientras el correo
     # (SMTP sincrono) sale. La marca de la empresa (B3 PLANTILLA) tambien: un SELECT dentro de esta misma transaccion.
+    # B3 T8 r1 (L2/R5): con canal WhatsApp eso ya no se cumple del todo. El WhatsApp (despues del commit) relee la SC, la
+    # configuracion y la marca, y deja la fila EnvioAlCliente en flush hasta el commit del renglon. Asi queda una
+    # transaccion abierta durante Chatwoot (hasta 12 s) y el SMTP (hasta 10 s), aunque sin bloquear filas del
+    # documento. Un rollback en ese tramo borraria tambien la fila del envio.
     numero, destino, cliente = sc.numero, sc.customer_email, sc.customer_name
     perfil = perfil_publico(db)
     # B3 PLANTILLA (C17, C21): el asunto y el html salen de correo_documento con la marca de la empresa, y el remitente
@@ -3614,20 +3615,12 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     if not es_reenvio:
         # El lead pasa a "Cotización enviada" (el efecto que el PATCH viejo a ENVIADA disparaba; este endpoint es el
         # unico lugar donde "se envia la cotizacion"). B3 T6 (RP16): despues del correo y sin commit propio
-        # (commit=False solo hace flush); lo confirma el commit del renglon de abajo. Si falla, el rollback deshace solo
-        # lo del lead: el envio ya quedo confirmado arriba. B3 T7 (C13): el reenvio no lo mueve (ya se movio).
-        if wa_res is not None:
-            # B3 T8: la fila EnvioAlCliente del WhatsApp (que ya salio) esta en la sesion sin confirmar: un rollback la
-            # borraria. El lead va en su savepoint: si falla, solo se deshace lo del lead.
-            _lead_en_savepoint(db, f"mover el lead tras enviar la cotizacion {cot_id} para confirmacion",
-                               lambda: mover_lead_de_solicitud(sc_id, "QUOTATION", db, commit=False))
-        else:
-            try:
-                mover_lead_de_solicitud(sc_id, "QUOTATION", db, commit=False)
-            except Exception as exc:
-                db.rollback()
-                logger.error(f"Error al mover el lead tras enviar la cotizacion {cot_id} para confirmacion: {exc}",
-                             exc_info=True)
+        # (commit=False solo hace flush); lo confirma el commit del renglon de abajo. B3 T7 (C13): el reenvio no lo mueve
+        # (ya se movio). B3 T8 r1 (ruling 1): SIEMPRE en su savepoint (una sola ruta): si falla, solo se deshace lo del
+        # lead. Un db.rollback() borraria tambien lo que este pendiente en la sesion, como la fila EnvioAlCliente de un
+        # WhatsApp que ya salio. El savepoint va despues del correo: RP16 sigue con un solo commit antes del correo.
+        _lead_en_savepoint(db, f"mover el lead tras enviar la cotizacion {cot_id} para confirmacion",
+                           lambda: mover_lead_de_solicitud(sc_id, "QUOTATION", db, commit=False))
     descripcion = "Enlace de confirmación reenviado al cliente" if es_reenvio else "Enviada para confirmación del cliente"
     if canal:
         descripcion += f" {CANALES_ENVIO[canal]}"
@@ -3982,19 +3975,30 @@ def enviar_pedido_al_cliente(ven_id: int, body: dict = Body(default_factory=dict
 
     # B3 T8 (U16-envio, U23, C15, C21): el WhatsApp automatico de CONSULTA va despues del commit unico y antes del correo;
     # un fallo no deshace el envio (el enlace ya sirve). Su fila EnvioAlCliente la confirma el commit de abajo.
+    # r1 (L2/R5): desde aqui, con WhatsApp, hay una transaccion abierta durante Chatwoot y el SMTP con esa fila en flush.
     wa_res = (_enviar_whatsapp(db, "PVEN", so, link, nombre_de_usuario(user), proposito="CONSULTA", vence=vence)
               if canal == "WhatsApp" else None)
     correo_res = _enviar_correo_confirmacion(destino, asunto, html,
                                              remitente_nombre=perfil["nombre_comercial"] or None)
+    # r1 (R2, como el lead de la COT): completar el renglon va en un savepoint. Si falla, el renglon queda como estaba
+    # antes del correo, y el commit de abajo guarda igual la fila EnvioAlCliente del WhatsApp que ya salio. Un
+    # db.rollback() aqui la borraria.
     try:
-        db.query(ActivityLog).filter(ActivityLog.id == renglon_id).update(
-            {ActivityLog.extra_data: _extra_data_de_envio(canal, correo_res, wa_res=wa_res, vence=vence)},
-            synchronize_session=False)
+        with db.begin_nested():
+            db.query(ActivityLog).filter(ActivityLog.id == renglon_id).update(
+                {ActivityLog.extra_data: _extra_data_de_envio(canal, correo_res, wa_res=wa_res, vence=vence)},
+                synchronize_session=False)
+    except Exception:
+        logger.exception("El pedido %s se envio al cliente, pero no se pudo anotar el resultado del correo", numero)
+    try:
         db.commit()
     except Exception:
-        # El enlace y el renglon ya quedaron; solo falta el resultado del correo (y del WhatsApp) en la Actividad.
+        # El enlace y el renglon ya estaban confirmados; si esto falla, se pierde el resultado (y la fila del envio, que
+        # ya no se podria verificar: la respuesta lo dice con envio_id None).
         db.rollback()
-        logger.exception("El pedido %s se envio al cliente, pero no se pudo anotar el resultado del correo", numero)
+        logger.exception("El pedido %s se envio al cliente, pero no se pudo guardar el resultado del envio", numero)
+        if wa_res is not None:
+            wa_res = {**wa_res, "envio_id": None}
     return {"status": "success", "link": link, "canal": canal, "correo": correo_res, "vence": vence.isoformat(),
             "whatsapp": wa_res}
 

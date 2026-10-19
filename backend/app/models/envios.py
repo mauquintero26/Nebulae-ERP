@@ -18,6 +18,10 @@ from sqlalchemy import Column, DateTime, Index, Integer, String, Text
 
 from app.db.database import Base
 
+# El nombre de una plantilla de Meta cabe en plantilla VARCHAR(100) (fa6_030): el PUT de la configuracion no acepta uno
+# mas largo (envio_whatsapp.validar_cambios), asi el registro de un envio nunca falla despues de mandarlo (r1, L4/R8).
+PLANTILLA_MAX = 100
+
 
 class EnvioAlCliente(Base):
     __tablename__ = "envios_al_cliente"
@@ -31,7 +35,7 @@ class EnvioAlCliente(Base):
     canal                    = Column(String(20), nullable=False)
     destino                  = Column(String(200), nullable=False)
     modo                     = Column(String(20), nullable=True)
-    plantilla                = Column(String(100), nullable=True)
+    plantilla                = Column(String(PLANTILLA_MAX), nullable=True)
     mensaje                  = Column(Text, nullable=False)
     estado                   = Column(String(20), nullable=False)
     motivo                   = Column(String(40), nullable=True)

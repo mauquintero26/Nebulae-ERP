@@ -39,6 +39,32 @@ def _sin_credenciales_smtp():
 
 _sin_credenciales_smtp()
 
+
+class _ChatwootBloqueado:
+    """Reemplaza app.core.chatwoot._ABRIDOR: cualquier peticion real a Chatwoot lanza RuntimeError. abridor_real guarda el
+    abridor de produccion (para revisarlo, nunca para usarlo). Igual que en tests/rollback_runner.py."""
+
+    def __init__(self, abridor_real):
+        self.abridor_real = abridor_real
+
+    def open(self, *args, **kwargs):
+        raise RuntimeError("Chatwoot real bloqueado en pruebas")
+
+
+def _sin_chatwoot_real():
+    """B3 T8 r1, como _sin_credenciales_smtp: ninguna prueba llega a Chatwoot real (ni manda un WhatsApp por Meta) aunque
+    el .env compartido tenga CHATWOOT_* o admin_config tenga el envio automatico encendido. Quita CHATWOOT_BASE_URL,
+    CHATWOOT_API_TOKEN y CHATWOOT_ACCOUNT_ID del entorno (sin leerlos ni mostrarlos) y cambia app.core.chatwoot._ABRIDOR
+    (el unico transporte) por uno que lanza RuntimeError. Se llama en los mismos puntos que _sin_credenciales_smtp."""
+    import app.core.chatwoot as chatwoot
+    for clave in ("CHATWOOT_BASE_URL", "CHATWOOT_API_TOKEN", "CHATWOOT_ACCOUNT_ID"):
+        os.environ.pop(clave, None)
+    if not isinstance(chatwoot._ABRIDOR, _ChatwootBloqueado):
+        chatwoot._ABRIDOR = _ChatwootBloqueado(chatwoot._ABRIDOR)
+
+
+_sin_chatwoot_real()
+
 PROD_URL = os.environ.get("DATABASE_URL", "")
 TEST_URL = os.environ.get("TEST_DATABASE_URL", "")
 # URL de erpdb real (para tests de guardia que verifican que producción no fue alterada).
@@ -250,6 +276,7 @@ def app_client(setup_test_db):
     import app.api.v1.erp_inventario as _inventario_module
     import app.api.v1.erp_ventas_fase4 as _ventas_fase4_module
     _sin_credenciales_smtp()  # database.py recargo el .env al importarse
+    _sin_chatwoot_real()  # B3 T8 r1: tambien las de Chatwoot
 
     # Override FastAPI dependency
     app.dependency_overrides[get_db] = override_get_db
@@ -322,6 +349,7 @@ def db(setup_test_db):
 from app.core.security import create_access_token
 from datetime import timedelta
 _sin_credenciales_smtp()  # por si importar la app recargo el .env
+_sin_chatwoot_real()  # B3 T8 r1: idem con Chatwoot
 
 TEST_PASSWORD = "Test123!"
 # Pre-hashed bcrypt of TEST_PASSWORD to avoid passlib/bcrypt version issues at import time.

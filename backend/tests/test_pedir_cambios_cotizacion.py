@@ -412,7 +412,10 @@ def test_reenvio_de_la_cot_hace_un_solo_commit_antes_del_correo(app_client, db, 
     orden = [("COT" if "FROM sales_quotations" in s else "SC") for s in contador_sql.sentencias
              if "FOR UPDATE" in s.upper() and ("FROM sales_quotations" in s or "FROM customer_requests" in s)]
     assert orden[:2] == ["COT", "SC"], orden
-    assert contador_sql.commits == 2, contador_sql.commits  # el del envío y, después del correo, el del renglón
+    # El del envío y, después del correo, el del renglón. B3 T8 r1 (ruling 1): el lead se mueve en un savepoint
+    # (_lead_en_savepoint) y contador_sql cuenta su RELEASE SAVEPOINT como un commit (escucha after_commit), así que son 3.
+    # El invariante de RP16 no cambia: un solo commit ANTES del correo (commits_al_enviar == [1], arriba).
+    assert contador_sql.commits == 3, contador_sql.commits
     db.refresh(cot)
     assert cot.estado == "PENDIENTE_CONFIRMACION" and cot.canal_envio == "Email" and cot.cambios_cliente_at is None
     db.expire_all()

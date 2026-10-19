@@ -24,6 +24,9 @@ Las fixtures generadoras (yield) entregan el valor del yield y su teardown corre
 en orden inverso, ANTES de cerrar la sesion y revertir la transaccion.
 
 Variable de entorno PARCHE: codigo Python que se ejecuta antes de cargar el modulo (para pruebas "rojas").
+
+Ningun servicio externo real: el SMTP (_bloquear_correo_real) y Chatwoot (_bloquear_chatwoot_real, B3 T8 r1) quedan
+bloqueados para todo el modulo, sea cual sea el .env compartido.
 """
 import sys, os, re, importlib, inspect, traceback, contextlib, uuid
 from datetime import timedelta
@@ -57,6 +60,37 @@ def _bloquear_correo_real():
 
 _bloquear_correo_real()
 
+
+class _ChatwootBloqueado:
+    """Reemplaza app.core.chatwoot._ABRIDOR: cualquier peticion real a Chatwoot lanza RuntimeError. abridor_real guarda el
+    abridor de produccion para que las pruebas revisen como esta armado (sin redirecciones), sin usarlo."""
+
+    def __init__(self, abridor_real):
+        self.abridor_real = abridor_real
+
+    def open(self, *args, **kwargs):
+        raise RuntimeError("Chatwoot real bloqueado en pruebas")
+
+
+def _bloquear_chatwoot_real():
+    """B3 T8 r1 (como _bloquear_correo_real): ninguna prueba puede llegar a Chatwoot real (ni mandar un WhatsApp por
+    Meta), sea cual sea el .env compartido o lo que diga admin_config de erp_test.
+
+    1) Quita CHATWOOT_BASE_URL, CHATWOOT_API_TOKEN y CHATWOOT_ACCOUNT_ID del entorno (sin leerlos ni mostrarlos):
+       chatwoot.configurado() da False y el envio automatico se detiene en CHATWOOT_NO_CONFIGURADO.
+    2) Red de seguridad: app.core.chatwoot._ABRIDOR (el unico transporte, lo usa _peticion) pasa a ser un abridor que
+       lanza RuntimeError. Las pruebas que necesitan Chatwoot ponen valores ficticios con monkeypatch.setenv y
+       reemplazan _peticion o _ABRIDOR con monkeypatch.
+    Se llama otra vez despues de importar la app: app/db/database.py vuelve a cargar el .env y reponeria las claves."""
+    import app.core.chatwoot as chatwoot
+    for clave in ("CHATWOOT_BASE_URL", "CHATWOOT_API_TOKEN", "CHATWOOT_ACCOUNT_ID"):
+        os.environ.pop(clave, None)
+    if not isinstance(chatwoot._ABRIDOR, _ChatwootBloqueado):
+        chatwoot._ABRIDOR = _ChatwootBloqueado(chatwoot._ABRIDOR)
+
+
+_bloquear_chatwoot_real()
+
 import pytest
 from sqlalchemy import event, text
 from sqlalchemy.engine import Engine
@@ -71,6 +105,7 @@ from app.models.users import User
 from app.core.security import create_access_token
 
 _bloquear_correo_real()  # database.py recargo el .env al importarse: se quitan de nuevo las credenciales SMTP
+_bloquear_chatwoot_real()  # y las de Chatwoot (B3 T8 r1)
 
 TABLAS = ["customer_requests", "sales_quotations", "sale_orders", "purchase_orders_full", "activity_logs",
           "document_confirmation_tokens", "customers", "sales_orders",

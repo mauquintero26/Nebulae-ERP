@@ -68,17 +68,28 @@ class _SinRedirecciones(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_ABRIDOR = urllib.request.build_opener(_SinRedirecciones)
+def abridor_sin_redirecciones() -> urllib.request.OpenerDirector:
+    """El abridor de urllib de este modulo: el de siempre, pero sin seguir redirecciones (_SinRedirecciones)."""
+    return urllib.request.build_opener(_SinRedirecciones)
+
+
+# Las pruebas lo reemplazan (el runner de ROLLBACK y conftest lo cambian por uno que lanza RuntimeError).
+_ABRIDOR = abridor_sin_redirecciones()
+# Un token de Chatwoot es texto ASCII visible, sin espacios: con un caracter de control, http.client lanzaria un
+# ValueError que repite el header (el token) y terminaria en el log (r1, S1).
+_TOKEN_VALIDO = re.compile(r"[\x21-\x7e]+")
 
 
 def config_chatwoot() -> dict:
     """{base_url, account_id, token} desde el entorno, leido en cada llamada. ChatwootNoConfigurado si falta la URL o
-    el token, si la URL no es https:// (http:// solo para localhost) o trae usuario y clave, o si la cuenta no es un
-    entero positivo."""
+    el token, si el token tiene espacios o caracteres que no son ASCII visibles, si la URL no es https:// (http:// solo
+    para localhost) o trae usuario y clave, o si la cuenta no es un entero positivo. Los mensajes no llevan valores."""
     base = (os.environ.get("CHATWOOT_BASE_URL") or "").strip().rstrip("/")
     token = (os.environ.get("CHATWOOT_API_TOKEN") or "").strip()
     if not base or not token:
         raise ChatwootNoConfigurado("Falta CHATWOOT_BASE_URL o CHATWOOT_API_TOKEN en las variables del servidor.")
+    if not _TOKEN_VALIDO.fullmatch(token):
+        raise ChatwootNoConfigurado("CHATWOOT_API_TOKEN tiene espacios o caracteres que no son válidos.")
     try:
         partes = urllib.parse.urlsplit(base)
         host = (partes.hostname or "").lower()
@@ -158,6 +169,11 @@ def _peticion(metodo: str, ruta: str, cuerpo=None, params=None, timeout=TIMEOUT_
     except (OSError, http.client.HTTPException):
         logger.warning("No se pudo conectar con Chatwoot (%s %s)", metodo, ruta)
         raise ChatwootError(None, "no se pudo conectar con Chatwoot") from None
+    except ValueError:
+        # http.client rechaza un header o una URL con caracteres invalidos repitiendo el valor (el token) en el mensaje:
+        # nunca se propaga ni se registra el original (r1, S1).
+        logger.warning("Configuracion de Chatwoot invalida (%s %s)", metodo, ruta)
+        raise ChatwootError(None, "configuración de Chatwoot inválida") from None
     if not texto.strip():
         return {}
     try:
@@ -284,7 +300,8 @@ def enviar_mensaje(conv_id, contenido: str, template_params=None, plazo=None) ->
 
 
 def crear_conversacion(inbox_id: int, contact_id, source_id, contenido: str, template_params, plazo=None) -> tuple:
-    """(conv_id, message_id | None) de una conversacion nueva que arranca con el mensaje (la plantilla)."""
+    """(conv_id, message_id | None) de una conversacion nueva que arranca con el mensaje (la plantilla). conv_id es None
+    si la respuesta no lo trae: quien llama lo trata como «puede que haya salido» (r1, R3)."""
     resp = _peticion("POST", "conversations", {
         "source_id": source_id, "inbox_id": inbox_id, "contact_id": contact_id, "status": "open",
         "message": {"content": contenido, "template_params": template_params}}, timeout=_timeout(plazo))
@@ -293,7 +310,7 @@ def crear_conversacion(inbox_id: int, contact_id, source_id, contenido: str, tem
     mensaje_id = None
     if mensajes_creados and isinstance(mensajes_creados[-1], dict):
         mensaje_id = mensajes_creados[-1].get("id")
-    return resp["id"], mensaje_id
+    return resp.get("id"), mensaje_id
 
 
 def mensajes(conv_id, plazo=None) -> list:

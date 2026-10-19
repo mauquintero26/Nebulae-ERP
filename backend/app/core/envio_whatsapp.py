@@ -25,7 +25,6 @@ la Actividad del documento, una vez cada uno (renglon MENSAJE_CLIENTE sin clave 
 import logging
 import re
 import time
-import unicodedata
 from datetime import datetime
 
 from sqlalchemy.orm import Session
@@ -34,11 +33,12 @@ from app.core import admin_config, chatwoot
 from app.core.chatwoot import ChatwootError, ChatwootNoConfigurado, ChatwootSinRespuesta
 from app.core.confirmation_tokens import TOKEN_TTL_DAYS, frontend_url
 from app.core.documento_cliente import TITULOS
-from app.core.empresa import ENTIDAD_EMPRESA, empresa_para_mensajes
+from app.core.empresa import ENTIDAD_EMPRESA, empresa_para_mensajes, limpiar_linea
 from app.core.fechas import fecha_larga
 from app.core.telefonos import e164_whatsapp, telefono_legible
+from app.core.textos_actividad import autor_de_actividad
 from app.core.ventas_dinero import pesos
-from app.models.envios import EnvioAlCliente
+from app.models.envios import PLANTILLA_MAX, EnvioAlCliente
 from app.models.erp_documents import ActivityLog
 
 logger = logging.getLogger(__name__)
@@ -54,10 +54,14 @@ CLAVE_IDIOMA = "envio_whatsapp_idioma"
 CLAVES = {"automatico": CLAVE_AUTOMATICO, "inbox_id": CLAVE_INBOX, "plantilla": CLAVE_PLANTILLA,
           "plantilla_recordatorio": CLAVE_PLANTILLA_RECORDATORIO, "idioma": CLAVE_IDIOMA}
 IDIOMA_POR_DEFECTO = "es"
-_PLANTILLA_VALIDA = re.compile(r"[a-z0-9_]{1,512}")
+# r1 (L4 = R8): el nombre cabe en envios_al_cliente.plantilla (PLANTILLA_MAX = 100, VARCHAR(100) de fa6_030). Con 512,
+# como decia el brief, el registro de un envio en modo PLANTILLA fallaba DESPUES de mandarlo (un 500 tras el commit).
+_PLANTILLA_CARACTERES = re.compile(r"[a-z0-9_]+")
+_PLANTILLA_VALIDA = re.compile(rf"[a-z0-9_]{{1,{PLANTILLA_MAX}}}")
 _IDIOMA_VALIDO = re.compile(r"[a-z]{2}(_[A-Z]{2})?")
 
 MENSAJE_PLANTILLA = "El nombre de la plantilla solo puede tener minúsculas, números y guion bajo, igual que en Meta."
+MENSAJE_PLANTILLA_LARGA = f"El nombre de la plantilla puede tener hasta {PLANTILLA_MAX} caracteres."
 MENSAJE_INBOX = "El número de la bandeja debe ser un número entero mayor que 0."
 MENSAJE_IDIOMA = "El idioma debe tener el formato de Meta, por ejemplo es o es_CO."
 MENSAJE_AUTOMATICO = "El interruptor del envío automático debe ser verdadero o falso."
@@ -147,20 +151,13 @@ _CODIGO_AL_INICIO = re.compile(r"\s*\(?#?(\d{5,6})(?!\d)")
 # ─── Utilidades ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def _una_linea(texto) -> str:
-    """Sin saltos de linea ni tabuladores y con los espacios colapsados (Meta rechaza parametros con saltos)."""
-    return " ".join(str(texto if texto is not None else "").split())
+    """Una sola linea con la regla de empresa.limpiar_linea (saltos y demas caracteres de control a espacio) y los
+    espacios colapsados: Meta rechaza parametros con saltos, tabuladores o mas de 4 espacios seguidos (r1, S4)."""
+    return " ".join(limpiar_linea(texto).split())
 
 
 def _recortar(texto: str, maximo: int) -> str:
     return texto if len(texto) <= maximo else texto[:maximo - 1] + "…"
-
-
-def _autor(user_name):
-    """El autor como lo guarda la Actividad: texto sin caracteres de control y de hasta 150; si no, None."""
-    if not isinstance(user_name, str):
-        return None
-    limpio = "".join(ch for ch in user_name if unicodedata.category(ch) not in ("Cc", "Cs")).strip()
-    return limpio[:150] or None
 
 
 def _entero_positivo(valor):
@@ -262,10 +259,12 @@ def validar_cambios(db: Session, body: dict) -> dict:
             valor = body[campo]
             if valor is None or (isinstance(valor, str) and not valor.strip()):
                 cambios[campo] = None
-            elif isinstance(valor, str) and _PLANTILLA_VALIDA.fullmatch(valor.strip()):
-                cambios[campo] = valor.strip()
-            else:
+            elif not (isinstance(valor, str) and _PLANTILLA_CARACTERES.fullmatch(valor.strip())):
                 raise ValueError(MENSAJE_PLANTILLA)
+            elif len(valor.strip()) > PLANTILLA_MAX:
+                raise ValueError(MENSAJE_PLANTILLA_LARGA)
+            else:
+                cambios[campo] = valor.strip()
     if "idioma" in body:
         valor = body["idioma"]
         if valor is None or (isinstance(valor, str) and not valor.strip()):
@@ -308,7 +307,7 @@ def guardar_configuracion(db: Session, cambios: dict, user_name) -> list:
     db.add(ActivityLog(entity_type=ENTIDAD_EMPRESA, entity_id=0, entity_numero=ENTIDAD_EMPRESA, action="UPDATED",
                        description="Envío automático por WhatsApp actualizado: "
                                    + ", ".join(h["etiqueta"] for h in hechos),
-                       user_name=_autor(user_name) or "Sistema", extra_data={"cambios": hechos}))
+                       user_name=autor_de_actividad(user_name) or "Sistema", extra_data={"cambios": hechos}))
     return hechos
 
 
@@ -366,22 +365,33 @@ def parametros_plantilla(doc_tipo: str, nombre, empresa, numero, enlace: str, pr
     return {"1": nombre, "2": empresa, "3": f"{TITULOS[doc_tipo]} {numero}", "4": _una_linea(enlace)}
 
 
+_VARIABLE_DE_PLANTILLA = re.compile(r"\{\{(\d+)\}\}")
+_COLA_MINIMA = 8  # un pedazo del token mas corto que esto, al final de un texto recortado, no sirve para nada
+
+
 def rellenar_plantilla(texto_plantilla: str, params: dict) -> str:
-    """El texto de la plantilla con sus variables: lo que ve el cliente (y el content del mensaje en Chatwoot)."""
-    for n, valor in params.items():
-        texto_plantilla = texto_plantilla.replace("{{" + n + "}}", valor)
-    return texto_plantilla
+    """El texto de la plantilla con sus variables: lo que ve el cliente (y el content del mensaje en Chatwoot). En UNA
+    sola pasada (r1, S3): un valor que trae '{{2}}' (un cliente que se llama asi) no se vuelve a sustituir. Una
+    variable sin valor queda tal cual."""
+    return _VARIABLE_DE_PLANTILLA.sub(lambda m: params.get(m.group(1), m.group(0)), texto_plantilla)
 
 
 def ocultar_enlace(texto, enlace) -> str:
     """El texto con el enlace (y, por si acaso, su token suelto) cambiado por '[enlace de confirmación]': lo que se
-    guarda en envios_al_cliente y en la Actividad. El enlace con su token NUNCA se guarda."""
+    guarda en envios_al_cliente y en la Actividad. El enlace con su token NUNCA se guarda.
+    r1 (L1 = S2 = R7): tambien sirve para el detalle de un error de Chatwoot, que puede repetir el contenido enviado y
+    llega recortado (300): si el texto TERMINA en un pedazo del token (de _COLA_MINIMA caracteres o mas), ese pedazo
+    tambien se cambia."""
     texto = "" if texto is None else str(texto)
     if enlace:
         texto = texto.replace(enlace, ENLACE_OCULTO)
         token = str(enlace).rstrip("/").rsplit("/", 1)[-1]
         if len(token) >= 20:
             texto = texto.replace(token, ENLACE_OCULTO)
+            for n in range(len(token) - 1, _COLA_MINIMA - 1, -1):
+                if texto.endswith(token[:n]):
+                    texto = texto[:-n] + ENLACE_OCULTO
+                    break
     return texto
 
 
@@ -399,12 +409,23 @@ def _detalle_de(e: ChatwootError) -> str:
 
 # ─── Envio ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+class _SinIdDelMensaje(Exception):
+    """Chatwoot acepto el POST final (2xx) pero no devolvio el id del mensaje: puede que haya salido."""
+
+
 def _por_chatwoot(inbox_id: int, idioma: str, plantilla, e164: str, nombre: str, email, texto: str,
                   contenido_plantilla: str, params: dict) -> dict:
-    """Pasos (e) a (h) de enviar_documento. Devuelve {motivo, modo, detalle, conv, msg, contenido, plantilla}."""
+    """Pasos (e) a (h) de enviar_documento. Devuelve {motivo, modo, detalle, conv, msg, contenido, plantilla}.
+
+    r1 (R3): `post_final` marca que ya se intento el POST que manda el mensaje (enviar_mensaje o crear_conversacion).
+    Desde ahi, lo ambiguo (un error sin status o con status >= 500, una respuesta que no es JSON, un corte al leer, un
+    2xx sin 'id' o con otra forma) puede esconder un mensaje que SI salio: CHATWOOT_SIN_RESPUESTA («puede que haya
+    salido»), nunca un «No se envió» falso que invite a mandarlo otra vez. Antes del POST final no salio nada:
+    FALLO_CHATWOOT. Un 4xx en el POST final es un rechazo de Chatwoot: FALLO_CHATWOOT."""
     res = {"motivo": None, "modo": None, "detalle": None, "conv": None, "msg": None, "contenido": texto,
            "plantilla": None}
     plazo = time.monotonic() + PLAZO_TOTAL
+    post_final = False
     try:
         contacto = chatwoot.buscar_contacto(e164, plazo=plazo)
         conversacion = None
@@ -413,7 +434,11 @@ def _por_chatwoot(inbox_id: int, idioma: str, plantilla, e164: str, nombre: str,
             if conversacion is not None:
                 res["conv"] = conversacion.get("id")
         if conversacion is not None and conversacion.get("can_reply") is True:
-            mensaje = chatwoot.enviar_mensaje(conversacion["id"], texto, plazo=plazo)
+            conv_id = conversacion["id"]
+            post_final = True
+            mensaje = chatwoot.enviar_mensaje(conv_id, texto, plazo=plazo)
+            if mensaje.get("id") is None:
+                raise _SinIdDelMensaje()
             res.update(modo="TEXTO", msg=mensaje.get("id"))
             return res
         if not plantilla:
@@ -423,7 +448,11 @@ def _por_chatwoot(inbox_id: int, idioma: str, plantilla, e164: str, nombre: str,
                            "processed_params": params}
         res.update(contenido=contenido_plantilla, plantilla=plantilla)
         if conversacion is not None:
-            mensaje = chatwoot.enviar_mensaje(conversacion["id"], contenido_plantilla, template_params, plazo=plazo)
+            conv_id = conversacion["id"]
+            post_final = True
+            mensaje = chatwoot.enviar_mensaje(conv_id, contenido_plantilla, template_params, plazo=plazo)
+            if mensaje.get("id") is None:
+                raise _SinIdDelMensaje()
             res.update(modo="PLANTILLA", msg=mensaje.get("id"))
             return res
         if contacto is None:
@@ -431,20 +460,28 @@ def _por_chatwoot(inbox_id: int, idioma: str, plantilla, e164: str, nombre: str,
         else:
             contact_id = contacto["id"]
             source_id = chatwoot.source_id_en_bandeja(contacto, inbox_id, e164, plazo=plazo)
+        post_final = True
         conv_id, msg_id = chatwoot.crear_conversacion(inbox_id, contact_id, source_id, contenido_plantilla,
                                                       template_params, plazo=plazo)
+        if conv_id is None:
+            raise _SinIdDelMensaje()
         res.update(modo="PLANTILLA", conv=conv_id, msg=msg_id)
         return res
     except ChatwootSinRespuesta as e:
         res.update(motivo="CHATWOOT_SIN_RESPUESTA", modo=None, detalle=_detalle_de(e))
     except ChatwootError as e:
-        res.update(motivo="FALLO_CHATWOOT", modo=None, detalle=_detalle_de(e))
+        ambiguo = post_final and (e.status is None or e.status >= 500)
+        res.update(motivo="CHATWOOT_SIN_RESPUESTA" if ambiguo else "FALLO_CHATWOOT", modo=None,
+                   detalle=_detalle_de(e))
     except ChatwootNoConfigurado:
         res.update(motivo="CHATWOOT_NO_CONFIGURADO", modo=None)
+    except _SinIdDelMensaje:
+        res.update(motivo="CHATWOOT_SIN_RESPUESTA", modo=None, detalle="Chatwoot no devolvió el id del mensaje")
     except Exception:
         # Una respuesta con otra forma (otra version de Chatwoot): no tumba el envio, que ya quedo confirmado.
         logger.exception("Respuesta inesperada de Chatwoot al enviar un WhatsApp")
-        res.update(motivo="FALLO_CHATWOOT", modo=None, detalle="respuesta inesperada de Chatwoot")
+        res.update(motivo="CHATWOOT_SIN_RESPUESTA" if post_final else "FALLO_CHATWOOT", modo=None,
+                   detalle="respuesta inesperada de Chatwoot")
     return res
 
 
@@ -489,20 +526,23 @@ def enviar_documento(db: Session, *, doc_tipo: str, doc_id: int, doc_numero, cli
     estado = "ENVIADO" if enviado else "NO_ENVIADO"
     legible = telefono_legible(e164)
     mensaje = ocultar_enlace(res["contenido"], enlace)
-    texto_resultado = _texto_resultado(res["motivo"], res["modo"], legible, res["plantilla"], res["detalle"])
+    # r1 (L1 = S2 = R7): el detalle de un error puede repetir lo enviado; sin el enlace en la fila, la Actividad y la
+    # respuesta.
+    detalle = ocultar_enlace(res["detalle"], enlace) if res["detalle"] is not None else None
+    texto_resultado = _texto_resultado(res["motivo"], res["modo"], legible, res["plantilla"], detalle)
     envio = EnvioAlCliente(
         document_type=doc_tipo, document_id=doc_id, document_numero=_una_linea(doc_numero)[:50], proposito=proposito,
         canal=CANAL, destino=e164 or _una_linea(telefono)[:200], modo=res["modo"], plantilla=res["plantilla"],
-        mensaje=mensaje, estado=estado, motivo=res["motivo"], detalle=res["detalle"],
+        mensaje=mensaje, estado=estado, motivo=res["motivo"], detalle=detalle,
         chatwoot_conversation_id=str(res["conv"])[:50] if res["conv"] is not None else None,
         chatwoot_message_id=str(res["msg"])[:50] if res["msg"] is not None else None,
-        user_name=_autor(user_name))
+        user_name=autor_de_actividad(user_name))
     db.add(envio)
     db.flush()
     logger.info("WhatsApp de %s %s: %s %s", doc_tipo, envio.document_numero, estado, res["motivo"] or res["modo"])
     return {"enviado": enviado, "estado": estado, "modo": res["modo"], "destino": e164, "destino_legible": legible,
             "motivo": res["motivo"], "texto_resultado": texto_resultado, "mensaje": mensaje,
-            "detalle": res["detalle"], "envio_id": envio.id, "texto_manual": texto}
+            "detalle": detalle, "envio_id": envio.id, "texto_manual": texto}
 
 
 # ─── «Probar conexion» (hueco 0) ───────────────────────────────────────────────────────────────────────────────────
@@ -624,7 +664,7 @@ def _renglon_de_entrega(envio: EnvioAlCliente, user_name) -> ActivityLog:
     return ActivityLog(
         entity_type=_ENTIDAD_ACTIVIDAD[envio.document_type], entity_id=envio.document_id,
         entity_numero=(envio.document_numero or "")[:30], action=ACCION_MENSAJE_CLIENTE,
-        description=_DESCRIPCION_ENTREGA[envio.estado], user_name=_autor(user_name) or "Sistema",
+        description=_DESCRIPCION_ENTREGA[envio.estado], user_name=autor_de_actividad(user_name) or "Sistema",
         extra_data={"whatsapp": {"envio_id": envio.id, "estado": envio.estado, "destino": envio.destino},
                     "cambios": cambios})
 
