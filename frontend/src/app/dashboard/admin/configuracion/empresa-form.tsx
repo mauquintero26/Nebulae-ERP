@@ -263,7 +263,8 @@ function Logo({ perfil, puedeEditar, bloqueado, trabajando, setTrabajando, onPer
       textoConfirmar: 'Quitar logo',
       peligro: true,
     });
-    if (!ok || trabajando || bloqueado) return;
+    // Mientras se guarda o el logo trabaja, el botón está deshabilitado (habilitado, abajo), y el confirmar es modal.
+    if (!ok) return;
     setTrabajando(true);
     setError(null);
     try {
