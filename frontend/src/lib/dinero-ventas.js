@@ -246,6 +246,8 @@ export function creditoPorRecotizacion(pedido, totalNuevo) {
  * A3: el PATCH /ventas/pedidos/{id} que lleva la re-cotizacion de la COT a su pedido vigente. Solo productos y
  * precios: el saldo y el anticipo los recalcula el servidor desde los pagos del pedido, asi que nunca se mandan. El
  * aviso de credito compara lo pagado con el total nuevo (creditoPorRecotizacion).
+ * B3 T17 (IVA punto 11): `data` es la RESPUESTA del PATCH de la COT (lo que guardo el servidor, no lo calculado en el
+ * navegador); si trae iva_cop (el IVA total de la COT), va tambien: el pedido lo guarda como su tax_cop.
  */
 export function propagacionRecotizacion(data, pedido, cotNumero, usuario) {
   const { credito } = creditoPorRecotizacion(pedido, data?.total_cop);
@@ -253,6 +255,7 @@ export function propagacionRecotizacion(data, pedido, cotNumero, usuario) {
   return {
     productos: data?.productos,
     subtotal_cop: data?.subtotal_cop,
+    ...(data?.iva_cop !== null && data?.iva_cop !== undefined ? { iva_cop: data.iva_cop } : {}),
     descuento_pct: data?.descuento_pct,
     total_cop: data?.total_cop,
     motivo: `Precios actualizados por re-cotización de ${cotNumero || ''} (anticipo y pagos existentes no se `

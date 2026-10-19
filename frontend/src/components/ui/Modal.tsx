@@ -22,7 +22,8 @@ export function Modal({
   onClose: () => void;
   children: React.ReactNode;
   footer?: React.ReactNode;
-  maxWidth?: 'md' | 'lg' | 'xl' | '3xl';
+  /** B3 T17: '4xl' para la calculadora de la cotización con la columna IVA. */
+  maxWidth?: 'md' | 'lg' | 'xl' | '3xl' | '4xl';
   capa?: 'base' | 'encima';
   role?: 'dialog' | 'alertdialog';
   /** id del texto que describe la ventana (aria-describedby), p. ej. el mensaje de una confirmación. */
@@ -31,7 +32,7 @@ export function Modal({
   bloquearCierre?: boolean;
 }) {
   const accent = ACCENTS[color];
-  const widthCls = { md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl', '3xl': 'max-w-3xl' }[maxWidth];
+  const widthCls = { md: 'max-w-md', lg: 'max-w-lg', xl: 'max-w-xl', '3xl': 'max-w-3xl', '4xl': 'max-w-4xl' }[maxWidth];
   const capaCls = capa === 'encima' ? 'z-[60]' : 'z-50';
   const tituloId = useId();
   return (

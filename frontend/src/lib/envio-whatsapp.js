@@ -371,3 +371,38 @@ export function lineaEnvioAutomatico(estado) {
   const encendido = /** @type {any} */ (estado).automatico === true;
   return { texto: `Envío automático por WhatsApp: ${encendido ? 'encendido' : 'apagado'}`, encendido };
 }
+
+// ─── La ventana del canal (ChannelModal, B3 T17: U16-envio punto 13 y U16-reenvio-cot) ──────────────────────────────
+
+/**
+ * La prop envioWhatsApp {automatico, listo} del ChannelModal (A mayúscula; no es la envioWhatsapp del
+ * EnlaceConfirmacionModal, RP23) con el `data` de GET /ventas/envio-cliente/whatsapp/estado. Solo `true` cuenta. null
+ * si no es un objeto (el GET falló o el rol no lo lee).
+ * @param {unknown} data
+ * @returns {{automatico: boolean, listo: boolean} | null}
+ */
+export function estadoEnvioParaCanal(data) {
+  if (!esObjeto(data)) return null;
+  const d = /** @type {any} */ (data);
+  return { automatico: d.automatico === true, listo: d.listo === true };
+}
+
+/**
+ * La línea bajo la opción WhatsApp del ChannelModal: listo -> 'ok' «Sale automáticamente desde el WhatsApp de la
+ * empresa.»; encendido sin estar listo -> 'alerta' «El envío automático no está listo: se abrirá WhatsApp para que lo
+ * mandes tú.»; apagado o sin estado -> null (sin línea: se abre wa.me como hoy).
+ * @param {unknown} envio  la prop envioWhatsApp
+ * @returns {{tono: 'ok' | 'alerta', texto: string} | null}
+ */
+export function lineaWhatsAppCanal(envio) {
+  if (!esObjeto(envio)) return null;
+  const e = /** @type {any} */ (envio);
+  if (e.listo === true) return { tono: 'ok', texto: 'Sale automáticamente desde el WhatsApp de la empresa.' };
+  if (e.automatico === true) {
+    return { tono: 'alerta', texto: 'El envío automático no está listo: se abrirá WhatsApp para que lo mandes tú.' };
+  }
+  return null;
+}
+
+/** U16-reenvio-cot: la nota del ChannelModal al reenviar el enlace de un documento que espera al cliente. */
+export const NOTA_REENVIO_ENLACE = 'Se crea un enlace nuevo y el anterior deja de servir.';

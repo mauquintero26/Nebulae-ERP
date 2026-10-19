@@ -16,6 +16,7 @@ import {
   MENSAJE_TARIFA_INVALIDA, MENSAJE_DESCUENTO_INVALIDO, normalizarTarifaIva, pctTarifaIva, etiquetaTarifaIva,
   nombreDeLinea, lineasConTarifa, repartirProporcional, calcularTotalesCotizacion, resumenIvaPorTarifa,
   desgloseDocumento, ETIQUETA_CATALOGO_SIN_TARIFA, etiquetaTarifaCatalogo, sinTarifaIva,
+  etiquetaCortaTarifaIva, intentarTotalesCotizacion, textoBaseIva, filasIvaTotales, ivaDeLinea,
 } from '../src/lib/iva.js';
 
 const linea = (nombre, qty, precio, tarifa, extra = {}) => {
@@ -363,6 +364,89 @@ console.log('--- TEST 14: etiquetaTarifaCatalogo y sinTarifaIva (la lista del ca
   for (const p of productos) {
     assert.equal(sinTarifaIva(p), etiquetaTarifaCatalogo(p.tarifa_iva) === 'Sin tarifa', `producto ${p.id}`);
   }
+}
+
+// ─── Parte 4: las pantallas de la cotización (T17) ─────────────────────────────────────────────────────────────
+
+console.log('--- B3 T17 TEST 15: etiquetaCortaTarifaIva (el selector de la línea) ---');
+{
+  assert.deepEqual(TARIFAS_IVA.map((t) => etiquetaCortaTarifaIva(t.codigo)), ['19%', '5%', 'Exento', 'Excluido']);
+  assert.equal(etiquetaCortaTarifaIva(' iva 19 '), '19%', 'normaliza como normalizarTarifaIva');
+  for (const raro of [null, undefined, '', '16', '0', true]) assert.equal(etiquetaCortaTarifaIva(raro), '', String(raro));
+}
+
+console.log('--- B3 T17 TEST 16: intentarTotalesCotizacion (la pantalla nunca se cae con una línea incompleta) ---');
+{
+  const ok = intentarTotalesCotizacion(ejemplo(), 0);
+  assert.equal(ok.error, '');
+  assert.equal(ok.totales.total_cop, 2171851, 'el mismo resultado de calcularTotalesCotizacion');
+  assert.equal(ok.totales.iva_cop, 331237);
+  // Lo que lanza calcularTotalesCotizacion queda como texto (el mismo del 422) y sin totales.
+  const casos = [
+    [[linea('Rodillo', '', 206769, '19')], "La cantidad de 'Rodillo' debe ser mayor que 0."],
+    [[linea('Rodillo', '-', 206769, '19')], "La cantidad de 'Rodillo' debe ser mayor que 0."],
+    [[linea('Rodillo', '.', 206769, '19')], "La cantidad de 'Rodillo' debe ser mayor que 0."],
+    [[linea('Rodillo', 6, 'abc', '19')], "El precio unitario de 'Rodillo' no es válido."],
+    [[linea('Rodillo', 6, 206769, null)], "Indica la tarifa de IVA de 'Rodillo'."],
+  ];
+  for (const [productos, mensaje] of casos) {
+    assert.deepEqual(intentarTotalesCotizacion(productos, 0), { totales: null, error: mensaje }, mensaje);
+  }
+  assert.deepEqual(intentarTotalesCotizacion(ejemplo(), 101), { totales: null, error: MENSAJE_DESCUENTO_INVALIDO });
+  assert.deepEqual(intentarTotalesCotizacion([], 0).totales.lineas, [], 'sin líneas no es un error');
+}
+
+console.log('--- B3 T17 TEST 17: textoBaseIva y filasIvaTotales (los renglones del IVA en los totales) ---');
+{
+  const r = calcularTotalesCotizacion(ejemplo(), 10);
+  assert.deepEqual(r.iva_por_tarifa.map(textoBaseIva), ['IVA 19% sobre $1.537.753', 'IVA 5% sobre $118.800']);
+  assert.equal(textoBaseIva({ tarifa: 'EXENTO', base_cop: 132000, iva_cop: 0 }), 'Exento sobre $132.000');
+  assert.equal(textoBaseIva({ tarifa: 'EXCLUIDO', base_cop: '50.4', iva_cop: 0 }), 'Excluido sobre $50');
+  // La calculadora: el resultado de calcularTotalesCotizacion (sin iva_discriminado: siempre discriminado).
+  assert.deepEqual(filasIvaTotales(r), [
+    { clave: 'iva-19', etiqueta: 'IVA 19% sobre $1.537.753', valor: 292173 },
+    { clave: 'iva-5', etiqueta: 'IVA 5% sobre $118.800', valor: 5940 },
+  ]);
+  const exento = calcularTotalesCotizacion([linea('Cuaderno', 2, 66000, 'EXENTO')], 0);
+  assert.deepEqual(filasIvaTotales(exento), [{ clave: 'iva-EXENTO', etiqueta: 'Exento sobre $132.000', valor: 0 }]);
+  // El detalle: el desglose del GET (iva_discriminado, iva_por_tarifa, total_cop).
+  const detalle = { total_cop: 1954666, iva_discriminado: true, iva_por_tarifa: r.iva_por_tarifa };
+  assert.equal(filasIvaTotales(detalle).length, 2);
+  // Una COT vieja: 'IVA no discriminado', sin monto; sin precios todavía (total 0), nada.
+  assert.deepEqual(filasIvaTotales({ total_cop: 1840614, iva_discriminado: false, iva_por_tarifa: [] }),
+    [{ clave: 'sin-iva', etiqueta: 'IVA no discriminado', valor: null }]);
+  assert.deepEqual(filasIvaTotales({ total_cop: 0, iva_discriminado: false, iva_por_tarifa: [] }), []);
+  for (const raro of [null, undefined, 'x', {}]) assert.deepEqual(filasIvaTotales(raro), [], String(raro));
+}
+
+console.log('--- B3 T17 TEST 18: ivaDeLinea (la tarjeta de cada producto en el detalle de la COT) ---');
+{
+  const [rodillo, , cinta] = calcularTotalesCotizacion(ejemplo(), 10).lineas;
+  assert.deepEqual(ivaDeLinea(rodillo), {
+    discriminado: true, cantidad: 'Cant. 6 × $206.769 sin IVA', iva: 'IVA 19% · $212.145',
+    descuento: 'Descuento −$124.061', total_con_iva_cop: 1328698,
+  });
+  const sinDescuento = calcularTotalesCotizacion(ejemplo(), 0).lineas[0];
+  assert.equal(ivaDeLinea(sinDescuento).iva, 'IVA 19% · $235.717', 'el ejemplo del recorrido');
+  assert.equal(ivaDeLinea(sinDescuento).descuento, null, 'sin descuento no hay renglón de descuento');
+  assert.equal(ivaDeLinea(sinDescuento).total_con_iva_cop, 1476331);
+  assert.equal(ivaDeLinea(cinta).iva, 'IVA 5% · $5.940');
+  const exenta = calcularTotalesCotizacion([linea('Cuaderno', 2.5, 1000, 'EXENTO')], 0).lineas[0];
+  assert.deepEqual(ivaDeLinea(exenta), { discriminado: true, cantidad: 'Cant. 2.5 × $1.000 sin IVA', iva: 'Exento · $0',
+    descuento: null, total_con_iva_cop: 2500 });
+  // Una línea guardada sin total_con_iva_cop (dato raro): base (total − descuento) + IVA.
+  assert.equal(ivaDeLinea({ ...sinDescuento, total_con_iva_cop: undefined }).total_con_iva_cop, 1476331);
+  assert.equal(ivaDeLinea({ ...rodillo, total_con_iva_cop: undefined }).total_con_iva_cop, 1328698, 'con descuento');
+  // Sin tarifa (documento viejo): como hoy, con 'IVA no discriminado'.
+  assert.deepEqual(ivaDeLinea({ product_name: 'Cuna', qty: 6, unit_price_cop: 206769, total_cop: 1240614 }),
+    { discriminado: false, texto: 'IVA no discriminado' });
+  assert.deepEqual(ivaDeLinea({ qty: 2, unit_price_cop: 1000, iva_tarifa: '16' }),
+    { discriminado: false, texto: 'IVA no discriminado' }, 'una tarifa no válida tampoco discrimina');
+  // Con total 0 (sin precio todavía): nada de IVA. Sin total_cop se mira unitario × cantidad.
+  assert.equal(ivaDeLinea({ qty: 3, unit_price_cop: 0, total_cop: 0, iva_tarifa: '19' }), null);
+  assert.equal(ivaDeLinea({ qty: 3, unit_price_cop: 0 }), null);
+  assert.deepEqual(ivaDeLinea({ qty: 3, unit_price_cop: 100 }), { discriminado: false, texto: 'IVA no discriminado' });
+  for (const raro of [null, undefined, 'x', 7]) assert.equal(ivaDeLinea(raro), null, String(raro));
 }
 
 console.log('OK test_iva.mjs');

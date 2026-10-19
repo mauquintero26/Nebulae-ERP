@@ -362,6 +362,20 @@ console.log('--- A3 TEST 12: la re-cotizacion manda precios al pedido, nunca sal
   assert.deepEqual(creditoPorRecotizacion(pedido, 600000), { pagado: 700000, credito: 100000 });
   assert.deepEqual(creditoPorRecotizacion(pedido, 1500000), { pagado: 700000, credito: 0 });
   assert.deepEqual(creditoPorRecotizacion(null, 1000), { pagado: 0, credito: 0 });
+
+  // B3 T17 (IVA punto 11): commitCalcSave propaga la RESPUESTA del PATCH de la COT (r.data, lo que guardó el servidor),
+  // que trae el IVA total (iva_cop): el pedido lo recibe como iva_cop (su tax_cop) y el crédito se mide con ese total.
+  const guardada = { productos: [{ product_name: 'Rodillo', iva_tarifa: '19', iva_cop: 235717 }], subtotal_cop: 1240614,
+    descuento_pct: 0, total_cop: 1476331, iva_cop: 235717, iva_discriminado: true, numero: 'COT-1', estado: 'BORRADOR' };
+  const conIva = propagacionRecotizacion(guardada, pedido, 'COT-1', 'ana@x.com');
+  assert.deepEqual(Object.keys(conIva).sort(),
+    ['descuento_pct', 'iva_cop', 'motivo', 'productos', 'subtotal_cop', 'total_cop', 'updated_by'],
+    'solo lo de precios: ni el estado ni el número de la COT');
+  assert.equal(conIva.iva_cop, 235717);
+  assert.equal(conIva.total_cop, 1476331);
+  assert.equal(conIva.productos, guardada.productos, 'las líneas del servidor, tal cual');
+  assert.equal(propagacionRecotizacion({ ...guardada, iva_cop: 0 }, pedido, 'COT-1', 'x').iva_cop, 0, 'un IVA 0 también va');
+  assert.ok(!('iva_cop' in propagacionRecotizacion({ ...guardada, iva_cop: null }, pedido, 'COT-1', 'x')));
 }
 
 console.log('--- B7 / R6 TEST 13: dinero del pedido que queda como saldo a favor si se cancela ---');

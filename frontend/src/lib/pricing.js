@@ -14,7 +14,14 @@
  * cantidad exacto y la suma de las lineas cuadra con el total; pueden
  * quedar hasta medio peso por linea de diferencia frente al calculo sin
  * redondear (a proposito: exacto al peso, no a la centena ni al mil).
+ *
+ * B3 T17 (IVA punto 10): la calculadora lleva la tarifa de IVA de cada fila; todas sus cifras (el total de cada
+ * linea, subtotal, descuento, IVA por tarifa, total y anticipo) salen de lib/iva.js (totalesIvaCalculadora).
  */
+import {
+  normalizarTarifaIva, etiquetaTarifaIva, pctTarifaIva, intentarTotalesCotizacion, TARIFA_IVA_POR_DEFECTO,
+} from './iva.js';
+
 export const MARGIN_PCT_CAP = 95;
 
 export function computeMarginPrice(costoTotalCop, margenPct, qty = 1) {
@@ -61,31 +68,118 @@ export function calcularCotizacion(filas, trm, descuentoPct) {
   return { filas: calculadas, subtotal, descTotal, total: subtotal - descTotal };
 }
 
+// ─── IVA por línea en la calculadora (B3 T17: IVA punto 10, R8) ─────────────────────────────────────────────────────
+
+/** La tarifa de una fila sin tarifa propia: la de Configuración (iva_tarifa_defecto) o, si no es válida, '19' (R8). */
+const tarifaPorDefecto = (tarifaIvaDefecto) => normalizarTarifaIva(tarifaIvaDefecto) ?? TARIFA_IVA_POR_DEFECTO;
+
+/**
+ * Una fila nueva de la calculadora («Agregar», o la primera de una cotización sin productos), con la tarifa por
+ * defecto. _tarifaProducto es la tarifa del producto del catálogo (para el aviso ámbar): una fila nueva no tiene.
+ * @param {unknown} tarifaIvaDefecto
+ * @returns {Record<string, any>}
+ */
+export function filaNuevaCalculadora(tarifaIvaDefecto) {
+  return { product_name: '', qty: 1, cost_usd: 0, margen_pct: 30, flete_usd: 0, es_libre: false,
+    iva_tarifa: tarifaPorDefecto(tarifaIvaDefecto), _tarifaProducto: null };
+}
+
+/**
+ * Las filas con que abre la calculadora: filaDeCalculadora de cada línea guardada más su tarifa de IVA, que es la de
+ * la línea (p.iva_tarifa), o la ACTUAL de su producto (cot.tarifas_producto[i], lista paralela del GET: una cotización
+ * vieja sin tarifas), o la de Configuración. _tarifaProducto = cot.tarifas_producto[i] normalizada (null sin
+ * producto o sin tarifa definida). Sin productos, una fila nueva. No muta la cotización.
+ * @param {Record<string, any> | null | undefined} cot
+ * @param {unknown} tarifaIvaDefecto
+ * @returns {Array<Record<string, any>>}
+ */
+export function filasInicialesCalculadora(cot, tarifaIvaDefecto) {
+  const productos = Array.isArray(cot?.productos) ? cot.productos : [];
+  if (!productos.length) return [filaNuevaCalculadora(tarifaIvaDefecto)];
+  const actuales = Array.isArray(cot?.tarifas_producto) ? cot.tarifas_producto : [];
+  return productos.map((p, i) => {
+    const delProducto = normalizarTarifaIva(actuales[i]);
+    return { ...filaDeCalculadora(p),
+      iva_tarifa: normalizarTarifaIva(p?.iva_tarifa) ?? delProducto ?? tarifaPorDefecto(tarifaIvaDefecto),
+      _tarifaProducto: delProducto };
+  });
+}
+
+/**
+ * Al elegir un producto en el buscador (onSelect): {iva_tarifa: la del catálogo (sel.tarifa_iva) o la de
+ * Configuración, _tarifaProducto: la del catálogo o null}. Escribir a mano o pasar a texto libre conserva la tarifa.
+ * @param {Record<string, any> | null | undefined} sel  un resultado de GET /crm/products/search
+ * @param {unknown} tarifaIvaDefecto
+ * @returns {{ iva_tarifa: string, _tarifaProducto: string | null }}
+ */
+export function tarifaDeSeleccion(sel, tarifaIvaDefecto) {
+  const delProducto = normalizarTarifaIva(sel?.tarifa_iva);
+  return { iva_tarifa: delProducto ?? tarifaPorDefecto(tarifaIvaDefecto), _tarifaProducto: delProducto };
+}
+
+/**
+ * R8 (iva_cambiar_en_linea): el aviso ámbar de una fila vinculada al catálogo cuya tarifa no es la de su producto:
+ * 'El producto tiene IVA 5%' ('El producto es Exento de IVA' / 'El producto es Excluido de IVA'), o null si es la
+ * misma, si la fila no tiene producto (sku_id) o si el producto no tiene tarifa definida.
+ * @param {Record<string, any> | null | undefined} fila
+ * @returns {string | null}
+ */
+export function avisoTarifaProducto(fila) {
+  const delProducto = normalizarTarifaIva(fila?._tarifaProducto);
+  if (!fila?.sku_id || delProducto === null || normalizarTarifaIva(fila.iva_tarifa) === delProducto) return null;
+  return pctTarifaIva(delProducto) > 0
+    ? `El producto tiene ${etiquetaTarifaIva(delProducto)}`
+    : `El producto es ${etiquetaTarifaIva(delProducto)} de IVA`;
+}
+
+/**
+ * Todas las cifras de la calculadora (nota del controlador tras T13): intentarTotalesCotizacion de lib/iva.js sobre
+ * las filas de calcularCotizacion, con el precio NUEVO de cada fila (price_cop_unit) como unit_price_cop (esa clave
+ * trae el precio viejo, o falta en una fila nueva). {totales, error}: con una fila incompleta, totales null y el
+ * mensaje del 422. No muta las filas.
+ * @param {Array<Record<string, any>>} filas  calcularCotizacion(...).filas
+ * @param {unknown} descuentoPct
+ */
+export function totalesIvaCalculadora(filas, descuentoPct) {
+  const lineas = (Array.isArray(filas) ? filas : []).map((p) => ({ ...p, unit_price_cop: p?.price_cop_unit }));
+  return intentarTotalesCotizacion(lineas, descuentoPct);
+}
+
 /**
  * El cuerpo COMPLETO de PATCH /ventas/cotizaciones/{id} con lo que la calculadora tiene en pantalla (armarPayload,
  * ruling B2-T9A-1): las lineas calculadas, TRM, subtotal, descuento, total, notas y fecha de entrega. Notas y fecha
  * vacias conservan las de la cotizacion (como siempre).
+ * B3 T17 (IVA punto 10): con `totalesIva` (los totales de totalesIvaCalculadora) cada linea lleva su iva_tarifa y su
+ * precio y su total sin IVA de lib/iva.js, y subtotal_cop/total_cop son los de lib/iva.js (el total CON IVA). El
+ * servidor recalcula y gana. Sin `totalesIva`, como antes.
  * @param {{ filas: Array<Record<string, any>>, subtotal: number, total: number }} calculo  calcularCotizacion(...)
  * @param {{ trm: any, descuento: any, notas?: string, fechaEntrega?: string }} formulario
  * @param {Record<string, any>} cot
+ * @param {{ lineas: Array<Record<string, any>>, subtotal_cop: number, total_cop: number } | null} [totalesIva]
  * @returns {Record<string, any>}
  */
-export function cuerpoCompletoCalculadora(calculo, formulario, cot) {
+export function cuerpoCompletoCalculadora(calculo, formulario, cot, totalesIva = null) {
+  const lineasIva = totalesIva ? totalesIva.lineas : null;
   return {
-    productos: calculo.filas.map((p) => ({
-      product_name: p.product_name,
-      sku_id: p.sku_id || null,
-      qty: Number(p.qty),
-      cost_usd: Number(p.cost_usd),
-      flete_usd: Number(p.flete_usd),
-      margen_pct: Number(p.margen_pct),
-      unit_price_cop: p.price_cop_unit,
-      total_cop: p.total_cop,
-      es_libre: !!p.es_libre,
-    })),
+    productos: calculo.filas.map((p, i) => {
+      const linea = {
+        product_name: p.product_name,
+        sku_id: p.sku_id || null,
+        qty: Number(p.qty),
+        cost_usd: Number(p.cost_usd),
+        flete_usd: Number(p.flete_usd),
+        margen_pct: Number(p.margen_pct),
+        unit_price_cop: p.price_cop_unit,
+        total_cop: p.total_cop,
+        es_libre: !!p.es_libre,
+      };
+      if (!lineasIva) return linea;
+      const conIva = lineasIva[i];
+      return { ...linea, unit_price_cop: conIva.unit_price_cop, total_cop: conIva.total_cop, iva_tarifa: conIva.iva_tarifa };
+    }),
     trm_rate: Number(formulario.trm),
-    subtotal_cop: calculo.subtotal, descuento_pct: Number(formulario.descuento),
-    total_cop: calculo.total,
+    subtotal_cop: totalesIva ? totalesIva.subtotal_cop : calculo.subtotal, descuento_pct: Number(formulario.descuento),
+    total_cop: totalesIva ? totalesIva.total_cop : calculo.total,
     notas: formulario.notas || cot?.notas,
     fecha_entrega_estimada: formulario.fechaEntrega || cot?.fecha_entrega_estimada,
   };

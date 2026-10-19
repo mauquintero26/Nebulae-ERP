@@ -30,6 +30,8 @@
  */
 
 import { stripPy } from './marca-empresa.js';
+// B3 T17 (parte 4): formatoPesos solo escribe los textos de las pantallas, sobre montos ya enteros (pesoEntero).
+import { formatoPesos } from './pesos.js';
 
 // ─── Tarifas (parte 1) ─────────────────────────────────────────────────────────────────────────────────────────
 
@@ -393,4 +395,96 @@ export function desgloseDocumento(doc) {
   const descuento = subtotal + iva - total;
   return { iva_discriminado: resumen.length > 0, iva_cop: Number(iva), descuento_cop: Number(descuento > 0n ? descuento : 0n),
     iva_por_tarifa: resumen };
+}
+
+// ─── Las pantallas de la cotización (parte 4, B3 T17) ──────────────────────────────────────────────────────────
+
+/**
+ * La etiqueta corta de una tarifa en el selector de cada línea (la calculadora y el Cotizador Rápido): '19%', '5%',
+ * 'Exento' o 'Excluido'; '' si no es una tarifa válida.
+ * @param {unknown} codigo
+ * @returns {string}
+ */
+export function etiquetaCortaTarifaIva(codigo) {
+  const tarifa = normalizarTarifaIva(codigo);
+  if (tarifa === null) return '';
+  return PCT_TARIFA[tarifa] > 0 ? `${PCT_TARIFA[tarifa]}%` : ETIQUETAS_TARIFA_IVA[tarifa];
+}
+
+/**
+ * calcularTotalesCotizacion sin lanzar (nota del controlador tras T13): {totales, error}. Con una línea incompleta (qty
+ * '', '-' o '.', un precio no válido, una línea sin tarifa) o un descuento fuera de 0..100, totales es null y error el
+ * mensaje que lanzó, que es el mismo del 422 del servidor; si no, error es ''. La pantalla muestra el error en línea y
+ * los totales en «—»: nunca se cae.
+ * @param {unknown} productos
+ * @param {unknown} descuentoPct
+ * @returns {{totales: ReturnType<typeof calcularTotalesCotizacion> | null, error: string}}
+ */
+export function intentarTotalesCotizacion(productos, descuentoPct) {
+  try {
+    return { totales: calcularTotalesCotizacion(productos, descuentoPct), error: '' };
+  } catch (e) {
+    return { totales: null, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * El renglón de una tarifa en un bloque de totales: 'IVA 19% sobre $1.537.753', 'Exento sobre $132.000' (su IVA va
+ * aparte). `fila` es una de iva_por_tarifa ({tarifa, base_cop, iva_cop}).
+ * @param {unknown} fila
+ * @returns {string}
+ */
+export function textoBaseIva(fila) {
+  const f = esObjeto(fila) ? /** @type {any} */ (fila) : {};
+  return `${etiquetaTarifaIva(f.tarifa)} sobre ${formatoPesos(Number(pesoEntero(f.base_cop)))}`;
+}
+
+/**
+ * Los renglones del IVA en un bloque de totales (IVA puntos 10 y 11): la calculadora (el resultado de
+ * calcularTotalesCotizacion) y TOTALES del detalle (el desglose del GET: iva_discriminado, iva_por_tarifa, total_cop).
+ * - Una fila por tarifa: {clave: 'iva-19', etiqueta: 'IVA 19% sobre $1.537.753', valor: 292173}.
+ * - Un documento con iva_discriminado false (una cotización vieja) y total mayor que 0: una sola fila
+ *   {clave: 'sin-iva', etiqueta: 'IVA no discriminado', valor: null}. Sin precios todavía, nada.
+ * @param {unknown} t
+ * @returns {{clave: string, etiqueta: string, valor: number | null}[]}
+ */
+export function filasIvaTotales(t) {
+  if (!esObjeto(t)) return [];
+  const doc = /** @type {any} */ (t);
+  if (doc.iva_discriminado === false) {
+    return pesoEntero(doc.total_cop) > 0n ? [{ clave: 'sin-iva', etiqueta: ETIQUETA_SIN_TARIFA, valor: null }] : [];
+  }
+  return (Array.isArray(doc.iva_por_tarifa) ? doc.iva_por_tarifa : []).filter(esObjeto).map((f) => ({
+    clave: `iva-${normalizarTarifaIva(f.tarifa) ?? f.tarifa}`, etiqueta: textoBaseIva(f), valor: Number(pesoEntero(f.iva_cop)),
+  }));
+}
+
+/**
+ * El IVA de una línea guardada de la cotización, para su tarjeta en el detalle (IVA punto 11):
+ * - null si la línea vale $0 (total_cop o, sin él, unitario × cantidad): no se dice nada del IVA;
+ * - {discriminado: false, texto: 'IVA no discriminado'} si no trae una tarifa válida (una cotización vieja);
+ * - con tarifa: {discriminado: true, cantidad: 'Cant. 6 × $206.769 sin IVA', iva: 'IVA 19% · $235.717', descuento:
+ *   'Descuento −$124.061' (null sin descuento), total_con_iva_cop}. Los montos son los GUARDADOS (no recalcula nada);
+ *   sin total_con_iva_cop, base + IVA.
+ * @param {unknown} linea
+ */
+export function ivaDeLinea(linea) {
+  if (!esObjeto(linea)) return null;
+  const l = /** @type {any} */ (linea);
+  const total = l.total_cop !== null && l.total_cop !== undefined
+    ? Number(pesoEntero(l.total_cop)) : (Number(l.unit_price_cop) || 0) * (Number(l.qty) || 0);
+  if (!(total > 0)) return null;
+  const tarifa = normalizarTarifaIva(l.iva_tarifa);
+  if (tarifa === null) return { discriminado: false, texto: ETIQUETA_SIN_TARIFA };
+  const iva = Number(pesoEntero(l.iva_cop));
+  const descuento = Number(pesoEntero(l.descuento_cop));
+  const conIva = l.total_con_iva_cop !== null && l.total_con_iva_cop !== undefined
+    ? Number(pesoEntero(l.total_con_iva_cop)) : total - descuento + iva;
+  return {
+    discriminado: true,
+    cantidad: `Cant. ${l.qty ?? 0} × ${formatoPesos(Number(pesoEntero(l.unit_price_cop)))} sin IVA`,
+    iva: `${ETIQUETAS_TARIFA_IVA[tarifa]} · ${formatoPesos(iva)}`,
+    descuento: descuento > 0 ? `Descuento −${formatoPesos(descuento)}` : null,
+    total_con_iva_cop: conIva,
+  };
 }

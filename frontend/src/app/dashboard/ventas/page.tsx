@@ -18,6 +18,7 @@ import { textoDeError, esErrorDeValidacion } from '@/lib/avisos';
 import { VEN_NAV } from './ven-nav';
 import { CambiosDeActividad, EnlaceConfirmacionModal, getUsuarioActual } from './flujo';
 import { ChannelModal, ESTADOS as ESTADOS_COT } from './cotizacion/cotizacion-client';
+import { useEstadoEnvioWhatsApp } from './cotizacion/estado-envio-whatsapp';
 import { ESTADOS_SC } from './solicitud/solicitud-client';
 import { ComposerChatter, EtiquetaChatter } from './chatter';
 import { agregarActividad, esEntradaChatter, motivoTelefono, textoSinTelefono } from '@/lib/chatter';
@@ -367,6 +368,7 @@ export default function VentasHub() {
   const [envioHub, setEnvioHub]       = useState<{tipo:'SC'|'COT', id:string, numero:string, telefono:string, correo?:string|null}|null>(null);
   const [canalHub, setCanalHub]       = useState<'WhatsApp'|'Email'|'Otro'|null>(null);
   const [enviandoHub, setEnviandoHub] = useState(false);
+  const envioWhatsAppHub = useEstadoEnvioWhatsApp(!!envioHub); // B3 T17: {automatico, listo} del ChannelModal (U16-envio 14)
   // B3 T16 (RP23): whatsapp sigue siendo el wa.me que se intentó abrir; envioWhatsapp es el resultado del automático, y
   // telefono (telefono_whatsapp, RP19), vence y seguimiento vienen de la respuesta del envío (el mismo modal del detalle).
   const [hubEnlace, setHubEnlace]     = useState<{documento:string, link:string, correo:any, canal:string|null, color:'blue'|'indigo', whatsapp?:string|null,
@@ -1661,6 +1663,7 @@ export default function VentasHub() {
           textoSinTelefono={textoSinTelefono(envioHub.telefono) ?? undefined}
           documentLabel={envioHub.tipo === 'COT' ? 'cotización' : 'solicitud'}
           customerEmail={envioHub.correo}
+          envioWhatsApp={envioWhatsAppHub}
         />
       )}
       {hubEnlace && (

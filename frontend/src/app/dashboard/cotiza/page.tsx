@@ -6,6 +6,11 @@ import { getCustomers, apiFetch, API_URL, getHeaders } from '@/lib/api';
 import { computeMarginPrice, MARGIN_PCT_CAP } from '@/lib/pricing';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
+// B3 T17 (IVA punto 13): el IVA de la línea, con la misma regla del servidor (lib/iva.js) y la tarifa de Configuración.
+import { intentarTotalesCotizacion, etiquetaCortaTarifaIva, TARIFA_IVA_POR_DEFECTO } from '@/lib/iva';
+import { tarifaIvaDeConfig } from '@/lib/listas-ventas';
+import { porcentajeDePesos } from '@/lib/dinero-ventas';
+import { SelectTarifaIva } from '../ventas/cotizacion/calculadora-iva';
 
 function formatCOP(v: number) {
   return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0);
@@ -21,12 +26,22 @@ export default function CotizaPage() {
   const [customers, setCustomers] = useState<any[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('');
   const [isCreatingCot, setIsCreatingCot] = useState(false);
+  // B3 T17 (IVA punto 13): arranca en iva_tarifa_defecto de /ventas/config; lo que elija el asesor no lo pisa esa lectura.
+  const [tarifaConfig, setTarifaConfig] = useState<string>(TARIFA_IVA_POR_DEFECTO);
+  const [tarifaElegida, setTarifaElegida] = useState<string | null>(null);
+  const tarifaIva = tarifaElegida ?? tarifaConfig;
 
   useEffect(() => {
     getCustomers().then(res => {
       const list = res.data || res;
       if (Array.isArray(list)) setCustomers(list);
     }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    let vigente = true;
+    apiFetch('/ventas/config').then(cfg => { if (vigente) setTarifaConfig(tarifaIvaDeConfig(cfg)); }).catch(() => {});
+    return () => { vigente = false; };
   }, []);
 
   // Live calculation
@@ -40,8 +55,15 @@ export default function CotizaPage() {
   const precioVentaCop = Math.round(precioVentaCopRaw);
   const unitPriceCop = Math.round(unitPriceCopRaw);
   const utilidadCop = Math.max(0, precioVentaCop - totalCostCop);
-  const anticipo60 = Math.round(precioVentaCop * 0.60);
-  const saldo40 = precioVentaCop - anticipo60;
+  // B3 T17 (IVA punto 13, R8): el precio calculado es sin IVA y el IVA va encima; el 60/40 es sobre el total con IVA. Las
+  // cifras salen de lib/iva.js (la regla del servidor); con un precio no válido no se cae: el motivo en línea y «—».
+  const ivaRapido = intentarTotalesCotizacion([{ product_name: productName.trim() || 'el producto', qty: 1,
+    unit_price_cop: unitPriceCop, iva_tarifa: tarifaIva }], 0);
+  const lineaIva = ivaRapido.totales?.lineas[0] ?? null;
+  const totalConIva = ivaRapido.totales ? ivaRapido.totales.total_cop : null;
+  const anticipo60 = totalConIva === null ? null : porcentajeDePesos(totalConIva, 60);
+  const saldo40 = totalConIva === null || anticipo60 === null ? null : totalConIva - anticipo60;
+  const pesosOGuion = (v: number | null) => (v === null ? '—' : formatCOP(v));
 
   const handleCrearCotizacionDirecta = async () => {
     if (!selectedCustomerId) {
@@ -52,6 +74,8 @@ export default function CotizaPage() {
       toast.error('Ingresa el nombre del producto');
       return;
     }
+    // B3 T17: con un precio no válido el botón está deshabilitado y el motivo se ve junto al IVA.
+    if (!ivaRapido.totales || !lineaIva) return;
 
     setIsCreatingCot(true);
     const tid = toast.loading('Creando cotización formal...');
@@ -64,8 +88,9 @@ export default function CotizaPage() {
         customer_email: clientObj?.email || '',
         customer_address: clientObj?.address || '',
         trm_rate: trm,
-        subtotal_cop: precioVentaCop,
-        total_cop: precioVentaCop,
+        // B3 T17 (IVA punto 13): subtotal y total (con IVA) de lib/iva.js y la tarifa en la línea; el servidor recalcula.
+        subtotal_cop: ivaRapido.totales.subtotal_cop,
+        total_cop: ivaRapido.totales.total_cop,
         anticipo_cop: anticipo60,
         productos: [{
           product_name: productName.trim(),
@@ -74,7 +99,8 @@ export default function CotizaPage() {
           flete_usd: fleteUsd,
           margen_pct: margenPct,
           unit_price_cop: unitPriceCop,
-          total_cop: precioVentaCop
+          total_cop: lineaIva.total_cop,
+          iva_tarifa: lineaIva.iva_tarifa
         }],
         notas: `Cotizado desde Calculadora Rápida. Margen: ${margenPct}% | TRM: ${trm}`
       };
@@ -89,7 +115,8 @@ export default function CotizaPage() {
 
       const cotId = data.data?.id || data.id;
       toast.success(`¡Cotización ${data.data?.numero || ''} creada!`, { id: tid });
-      window.location.href = `/dashboard/ventas/cotizacion?id=${cotId}`;
+      // B3 T17: assign() en vez de asignar href (lo mismo; el compilador de React marcaba la asignación al global).
+      window.location.assign(`/dashboard/ventas/cotizacion?id=${cotId}`);
     } catch (e: any) {
       toast.error(e.message || 'Error al crear cotización', { id: tid });
     } finally {
@@ -204,6 +231,15 @@ export default function CotizaPage() {
             </div>
           </div>
 
+          {/* B3 T17 (IVA punto 13): la tarifa de IVA del producto; arranca en la de Configuración. */}
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <label htmlFor="cotiza-tarifa-iva" className="block text-xs font-bold text-slate-600 mb-1">IVA</label>
+              <SelectTarifaIva id="cotiza-tarifa-iva" valor={tarifaIva} onCambio={setTarifaElegida}
+                className="w-full min-w-0 bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-800 focus:ring-2 focus:ring-purple-200 focus:border-purple-600 outline-none" />
+            </div>
+          </div>
+
           {/* Customer Selection for direct conversion */}
           <div className="pt-4 border-t border-slate-100 space-y-3">
             <h4 className="text-xs font-black text-slate-600 uppercase tracking-wider">Asignar a Cliente (Opcional)</h4>
@@ -224,7 +260,7 @@ export default function CotizaPage() {
               <button
                 type="button"
                 onClick={handleCrearCotizacionDirecta}
-                disabled={isCreatingCot || !selectedCustomerId}
+                disabled={isCreatingCot || !selectedCustomerId || !ivaRapido.totales}
                 className="bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white font-bold text-xs py-2.5 px-4 rounded-xl shadow-sm transition-colors flex items-center justify-center gap-1.5"
               >
                 <Plus size={14} /> Crear Cotización Formal
@@ -268,17 +304,30 @@ export default function CotizaPage() {
               <h2 className="text-3xl font-black text-purple-900">{formatCOP(precioVentaCop)}</h2>
             </div>
 
+            {/* B3 T17 (IVA punto 13): el IVA de la línea y el total con IVA, que es lo que paga el cliente. */}
+            <div className="mt-3 space-y-2">
+              <div className="flex justify-between items-center p-3 bg-slate-50 rounded-xl text-xs">
+                <span className="font-semibold text-slate-500">IVA ({etiquetaCortaTarifaIva(tarifaIva)})</span>
+                <span className="font-bold text-slate-800">{pesosOGuion(lineaIva ? lineaIva.iva_cop : null)}</span>
+              </div>
+              <div className="flex justify-between items-center p-3.5 bg-purple-100 rounded-xl text-xs">
+                <span className="font-bold text-purple-800">Total con IVA</span>
+                <span className="font-black text-purple-900 text-sm">{pesosOGuion(totalConIva)}</span>
+              </div>
+              {ivaRapido.error && <p role="alert" className="text-xs font-bold text-red-600">{ivaRapido.error}</p>}
+            </div>
+
             {/* 60/40 Split */}
             <div className="mt-4 grid grid-cols-2 gap-3">
               <div className="p-4 bg-blue-50 border border-blue-200 rounded-2xl">
                 <span className="text-[10px] font-black text-blue-700 uppercase tracking-wider block">Anticipo (60%)</span>
-                <h4 className="text-lg font-black text-blue-900 mt-0.5">{formatCOP(anticipo60)}</h4>
+                <h4 className="text-lg font-black text-blue-900 mt-0.5">{pesosOGuion(anticipo60)}</h4>
                 <p className="text-[10px] text-blue-600 mt-1">Para realizar la compra</p>
               </div>
 
               <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl">
                 <span className="text-[10px] font-black text-rose-700 uppercase tracking-wider block">Saldo Contra Entrega (40%)</span>
-                <h4 className="text-lg font-black text-rose-900 mt-0.5">{formatCOP(saldo40)}</h4>
+                <h4 className="text-lg font-black text-rose-900 mt-0.5">{pesosOGuion(saldo40)}</h4>
                 <p className="text-[10px] text-rose-600 mt-1">Al llegar a Barranquilla</p>
               </div>
             </div>

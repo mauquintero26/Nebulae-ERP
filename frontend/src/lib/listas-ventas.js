@@ -17,6 +17,7 @@ import { ESTADOS_PEDIDO_CERRADOS, grupoPedido, esCotizacionActiva, esPedidoVigen
 import { comoUTC, esSoporte } from './hub-ventas.js';
 import { redondearPeso } from './pesos.js';
 import { TEXTO_PAPELERA_SIN_FECHA } from './estados-solicitud.js';
+import { normalizarTarifaIva, TARIFA_IVA_POR_DEFECTO } from './iva.js';
 
 /**
  * Dias de alerta de `clave` (alerta_sc_dias, alerta_cot_dias, alerta_ven_dias) en la configuracion. Acepta la
@@ -66,6 +67,17 @@ export function enteroConfig(cfg, clave, defecto, minimo, maximo) {
   const texto = typeof valor === 'string' ? valor.trim() : '';
   if (!/^[+-]?\d+$/.test(texto)) return defecto;
   return Math.max(minimo, Math.min(maximo, Number(texto)));
+}
+
+/**
+ * B3 T17 (IVA punto 13): la tarifa de IVA por defecto de Configuración (iva_tarifa_defecto, en cualquiera de las formas
+ * de valorConfig), normalizada; '19' (R8, como el servidor) si no está o no es válida. Con ella arranca el Cotizador
+ * Rápido.
+ * @param {any} cfg
+ * @returns {string}
+ */
+export function tarifaIvaDeConfig(cfg) {
+  return normalizarTarifaIva(valorConfig(cfg, 'iva_tarifa_defecto')) ?? TARIFA_IVA_POR_DEFECTO;
 }
 
 /** B3 T7/T16 (U22-validez): dias_validez_cotizacion, de 1 a 60 y 5 por defecto (DIAS_VALIDEZ_COT_* del backend). */

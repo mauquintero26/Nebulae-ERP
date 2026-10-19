@@ -29,7 +29,26 @@ const PARTES_CALENDARIO = new Intl.DateTimeFormat('es-CO', {
   timeZone: 'UTC', day: 'numeric', month: 'long', year: 'numeric',
 });
 
+// B3 T17: los números del día de Colombia (año, mes y día con dos cifras), para diaColombia.
+const NUMEROS_DIA_COLOMBIA = new Intl.DateTimeFormat('en-US', {
+  timeZone: ZONA, year: 'numeric', month: '2-digit', day: '2-digit',
+});
+
 const partes = (formato, fecha) => Object.fromEntries(formato.formatToParts(fecha).map((p) => [p.type, p.value]));
+
+/**
+ * B3 T17: el día de Colombia en `ahora` como 'AAAA-MM-DD' (para comparar con una fecha de calendario como valida_hasta):
+ * a las 11 p. m. del 8 de octubre en Colombia (las 4 a. m. del 9 en UTC) da '2026-10-08'. `ahora` es un Date o
+ * milisegundos (por defecto, ahora). Inválido -> ''.
+ * @param {Date | number} [ahora]
+ * @returns {string}
+ */
+export function diaColombia(ahora = new Date()) {
+  const fecha = ahora instanceof Date ? ahora : typeof ahora === 'number' ? new Date(ahora) : null;
+  if (!fecha || Number.isNaN(fecha.getTime())) return '';
+  const p = partes(NUMEROS_DIA_COLOMBIA, fecha);
+  return `${p.year}-${p.month}-${p.day}`;
+}
 
 /** Date UTC de un 'AAAA-MM-DD' que existe (no '2026-02-30'), o null. */
 function diaDeCalendario(texto) {

@@ -15,6 +15,7 @@ import {
   TEXTOS_CONSULTA_FALLIDA, ESPERA_VERIFICACION_MS, TEXTO_REVISANDO_ENTREGA, abreWhatsAppLocal, recuadroWhatsApp,
   enlaceBotonWhatsApp, estadoConfigWhatsApp, resultadoPruebaWhatsApp, variablesDeEjemplo, lineaEnvioAutomatico,
   formularioEnvioWhatsApp, cuerpoEnvioWhatsApp, hayCambiosWhatsApp, MENSAJE_WHATSAPP_SIN_GUARDAR,
+  estadoEnvioParaCanal, lineaWhatsAppCanal, NOTA_REENVIO_ENLACE,
 } from '../src/lib/envio-whatsapp.js';
 import { avisoCorreo } from '../src/lib/aviso-correo.js';
 
@@ -411,6 +412,27 @@ console.log('--- TEST 19 (T16): el formulario de ConfigEnvioWhatsApp y el cuerpo
   assert.equal(hayCambiosWhatsApp({ ...form, automatico: false }, guardado), true);
   assert.equal(hayCambiosWhatsApp({ ...form, plantilla_recordatorio: 'recordatorio' }, guardado), true);
   assert.equal(hayCambiosWhatsApp(form, null), true, 'sin lo guardado no se puede comparar');
+}
+
+console.log('--- B3 T17: la ventana del canal (ChannelModal) con envioWhatsApp {automatico, listo} y la nota del reenvío ---');
+{
+  // El `data` de GET /ventas/envio-cliente/whatsapp/estado -> {automatico, listo}; solo `true` cuenta.
+  const estado = { automatico: true, listo: true, plantilla_configurada: false, plantilla_recordatorio_configurada: false,
+    motivo_texto: null };
+  assert.deepEqual(estadoEnvioParaCanal(estado), { automatico: true, listo: true });
+  assert.deepEqual(estadoEnvioParaCanal({ automatico: 'true', listo: 1 }), { automatico: false, listo: false });
+  for (const raro of [null, undefined, 'x', 3]) assert.equal(estadoEnvioParaCanal(raro), null, String(raro));
+  // La línea bajo la opción WhatsApp (U16-envio punto 13).
+  assert.deepEqual(lineaWhatsAppCanal({ automatico: true, listo: true }),
+    { tono: 'ok', texto: 'Sale automáticamente desde el WhatsApp de la empresa.' });
+  assert.deepEqual(lineaWhatsAppCanal({ automatico: true, listo: false }),
+    { tono: 'alerta', texto: 'El envío automático no está listo: se abrirá WhatsApp para que lo mandes tú.' });
+  // Apagado o sin estado (el GET falló, o el rol no lo lee): sin línea, se abre wa.me como hoy.
+  for (const sinLinea of [{ automatico: false, listo: false }, null, undefined]) {
+    assert.equal(lineaWhatsAppCanal(sinLinea), null, JSON.stringify(sinLinea));
+  }
+  // El reenvío de una COT pendiente (U16-reenvio-cot): la nota bajo las opciones.
+  assert.equal(NOTA_REENVIO_ENLACE, 'Se crea un enlace nuevo y el anterior deja de servir.');
 }
 
 console.log('OK test_envio_whatsapp.mjs');

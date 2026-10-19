@@ -16,7 +16,7 @@ import {
   TIPOS_DOCUMENTO, normalizarDocumento, filasTotales, textoFormaPago, formaDePagoDocumento, colorTextoSobre,
   colorSobreBlanco, enlaceSeguro, contactosEmpresa, mensajeWhatsAppDocumento, resumenPagosCliente, textoEnlaceVigente,
   textoEntregaEstimada, formatoCantidad, tituloDePestana, DOCUMENTO_EJEMPLO_SC, DOCUMENTO_EJEMPLO_COT,
-  documentoVistaPrevia, totalUnidades, coloresBotonPrincipal,
+  documentoVistaPrevia, totalUnidades, coloresBotonPrincipal, textoValidezCotizacion,
 } from '../src/lib/documento-comercial.js';
 import { resumenPagoPedido } from '../src/lib/resumen-pago.js';
 
@@ -359,6 +359,25 @@ console.log('--- TEST 10: textoEnlaceVigente (enlace_cliente del pedido, T7) ---
   // Un pedido CANCELADO no se puede reenviar (el botón se oculta y /pedido-cliente/ver lo rechaza): no se aconseja.
   assert.equal(textoEnlaceVigente(vencido, 'CANCELADO', ahora), null);
   assert.equal(textoEnlaceVigente(vigente, 'CANCELADO', ahora), null);
+}
+
+console.log('--- B3 T17 TEST 10b: textoValidezCotizacion (U22-validez punto 9: la COT pendiente en el detalle) ---');
+{
+  const dia = (iso) => new Date(iso);
+  // valida_hasta es el último día en que sirve el enlace (hasta las 23:59 de Colombia).
+  assert.deepEqual(textoValidezCotizacion('2026-10-08', dia('2026-10-05T15:00:00Z')),
+    { vencida: false, texto: 'El cliente puede confirmar hasta el 8 de octubre de 2026.' });
+  assert.deepEqual(textoValidezCotizacion('2026-10-08', dia('2026-10-09T04:30:00Z')),
+    { vencida: false, texto: 'El cliente puede confirmar hasta el 8 de octubre de 2026.' },
+    '11:30 p. m. del 8 en Colombia (ya el 9 en UTC): todavía sirve');
+  assert.deepEqual(textoValidezCotizacion('2026-10-08', dia('2026-10-09T05:00:00Z')),
+    { vencida: true, texto: 'El enlace venció el 8 de octubre de 2026.' });
+  assert.deepEqual(textoValidezCotizacion(' 2026-10-08 ', dia('2026-11-01T12:00:00Z')),
+    { vencida: true, texto: 'El enlace venció el 8 de octubre de 2026.' });
+  // Una COT enviada antes del Bloque 3 (sin valida_hasta) o un dato que no es una fecha: null (no se dice nada).
+  for (const sin of [null, undefined, '', 'mañana', '2026-02-30', 20261008]) {
+    assert.equal(textoValidezCotizacion(sin, dia('2026-10-05T15:00:00Z')), null, String(sin));
+  }
 }
 
 console.log('--- TEST 11: entrega estimada, cantidad y título de la pestaña ---');

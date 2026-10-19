@@ -26,10 +26,18 @@ import {
 import { comoUTC } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
 import { destinoVolver, anchoInicialPanel, inicialesAutor } from '@/lib/detalle-layout';
-import { agregarActividad, esEntradaChatter, telUrl, textoSinTelefono } from '@/lib/chatter';
+import { agregarActividad, esEntradaChatter, motivoTelefono, textoSinTelefono } from '@/lib/chatter';
 import { ESTADOS_SC_SIN_CONFIRMAR, pideMotivoNuevo, errorMotivoSinConfirmacion } from '@/lib/estados-solicitud';
 import { humanizarCodigo } from '@/lib/estados-pedido';
 import { VentanaMotivoSinConfirmacion } from '../../motivo-sin-confirmacion';
+// B3 T17: IVA, cambios del cliente, validez y reenvío, WhatsApp automático y recordatorio (las piezas nuevas viven en
+// sus propios archivos; aquí solo se cablean, R15).
+import { abreWhatsAppLocal, NOTA_REENVIO_ENLACE } from '@/lib/envio-whatsapp';
+import { accionBloque3 } from '@/lib/acciones-bloque3';
+import { avisoCambiosCliente } from '@/lib/cambios-cliente';
+import { useEstadoEnvioWhatsApp } from '../estado-envio-whatsapp';
+import { TarjetaCambiosCliente } from '../tarjeta-cambios-cliente';
+import { PrecioLineaIva, TotalesIvaCotizacion, PasoEsperandoConfirmacion } from './detalle-bloque3';
 
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
 const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
@@ -79,6 +87,13 @@ function CotizacionDetalleContent() {
   const [confirmCanal, setConfirmCanal] = useState<string | null>(null);
   // B13: el wa.me que se intento abrir, para "Abrir WhatsApp" en el modal si el navegador bloqueo la ventana.
   const [confirmWhatsapp, setConfirmWhatsapp] = useState<string | null>(null);
+  // B3 T17 (RP23, U22-validez, U16-seguimiento): lo demás que trae el envío para la ventana del enlace: el resultado del
+  // WhatsApp automático (envioWhatsapp, w minúscula), el último día del enlace (vence) y el recordatorio (seguimiento).
+  const [confirmEnvio, setConfirmEnvio] = useState<{ envioWhatsapp: unknown; vence: string | null; seguimiento: unknown } | null>(null);
+  // B3 T17 (U16-reenvio-cot, C13): el ChannelModal se abrió con «Reenviar al cliente» (la nota del reenvío y reenvio: true).
+  const [reenviando, setReenviando] = useState(false);
+  // B3 T17 (U16-envio punto 14): el estado del WhatsApp automático mientras el ChannelModal está abierto.
+  const envioWhatsAppCanal = useEstadoEnvioWhatsApp(showChannelModal);
   // Gate 2: numero del PVEN recien creado, para el mensaje de exito con fade (4s) tras
   // "Crear Pedido de Venta". H46: ya no hay banner permanente; despues queda la tarjeta
   // "Pedido de Venta generado" mientras el pedido siga vigente.
@@ -90,6 +105,9 @@ function CotizacionDetalleContent() {
   const [showAjuste, setShowAjuste] = useState(false);
   const [ajusteSaving, setAjusteSaving] = useState(false);
   const [ajusteError, setAjusteError] = useState('');
+  // B3 T17 (U22-anticipo punto 5): el 409 ANULA_CONFIRMACION de «Ajustar anticipo» y el guardado que lo pidió (se repite
+  // con la razón).
+  const [ajusteAnulacion, setAjusteAnulacion] = useState<{ detalle: AnulacionConfirmacion; pct: number | null; nota?: string } | null>(null);
   // B2.1 D6: el 409 MOTIVO_NUEVO de retomar la cotización (la solicitud se canceló y se restauró después de crearla sin
   // confirmación): el cuerpo del PATCH que se reintenta con el motivo, el mensaje del servidor y la ventana del motivo.
   const [motivoNuevoPendiente, setMotivoNuevoPendiente] = useState<{ cuerpo: { estado: string; [campo: string]: unknown }; mensaje: string } | null>(null);
@@ -239,6 +257,15 @@ function CotizacionDetalleContent() {
 
   function handleEnviarCotizacion() {
     if (!cotizacion?.id) return;
+    setReenviando(false);
+    setShowChannelModal(true);
+  }
+
+  // B3 T17 (U16-reenvio-cot, C13): «Reenviar al cliente» de una cotización que espera al cliente: el mismo ChannelModal,
+  // con la nota del reenvío; confirmarEnvio manda reenvio: true.
+  function handleReenviarCotizacion() {
+    if (!cotizacion?.id) return;
+    setReenviando(true);
     setShowChannelModal(true);
   }
 
@@ -252,20 +279,22 @@ function CotizacionDetalleContent() {
       // previo. El servidor responde 400 con 'Email' si el cliente no tiene correo (ChannelModal lo evita).
       const d = await apiFetch(`/ventas/cotizaciones/${cotizacion.id}/enviar-confirmacion`, {
         method: 'POST',
-        body: JSON.stringify({user_name: currentUser, canal: selectedChannel}),
+        // B3 T7 (r1): el reenvío lleva reenvio: true; si la cotización cambió mientras tanto, el servidor responde 409.
+        body: JSON.stringify({user_name: currentUser, canal: selectedChannel, ...(reenviando ? { reenvio: true } : {})}),
       });
       const link = d?.link_confirmacion || '';
       let whatsapp: string | null = null;
-
-      if (selectedChannel === 'WhatsApp') {
+      // B3 T17 (U16-envio punto 14): wa.me solo si el automático no vino o está apagado (nunca dos mensajes), con el texto
+      // que devolvió el servidor (texto_manual, con el enlace) o el de siempre, y al telefono_whatsapp (el e164, RP19).
+      const wa = d?.whatsapp ?? null;
+      if (abreWhatsAppLocal(selectedChannel, wa)) {
         // Hallazgo #3 (spec): el mensaje de WhatsApp debe incluir el link -- sin esto,
         // un cliente que solo recibe por WhatsApp (o sin email registrado) no tenia
         // ninguna forma real de llegar al link de confirmacion.
         const mensaje = link
           ? `Hola, aquí está tu cotización ${cotizacion.numero}. Confírmala aquí: ${link}`
           : `Hola, aquí está tu cotización ${cotizacion.numero}`;
-        // T9A (lección de T8A): el wa.me solo con un teléfono que sirve (el mismo criterio de dígitos de telUrl).
-        whatsapp = telUrl(cotizacion?.customer_phone) ? waUrl(cotizacion?.customer_phone, mensaje) : null;
+        whatsapp = waUrl(cotizacion?.telefono_whatsapp, wa?.texto_manual || mensaje);
         if (whatsapp) window.open(whatsapp, '_blank');
       }
 
@@ -273,6 +302,7 @@ function CotizacionDetalleContent() {
       setConfirmCorreo(d?.correo ?? null);
       setConfirmCanal(selectedChannel);
       setConfirmWhatsapp(whatsapp);
+      setConfirmEnvio({ envioWhatsapp: wa, vence: d?.vence ?? null, seguimiento: d?.seguimiento ?? null });
       setShowChannelModal(false);
       setSelectedChannel(null);
       // H40: ya se le envió de nuevo; el aviso 'Envíasela de nuevo' sobra.
@@ -280,7 +310,13 @@ function CotizacionDetalleContent() {
       if (link) setConfirmLink(link);
     } catch (err: any) {
       avisarError(err, 'No se pudo enviar la cotización');
-      if (recargarTrasError(err)) void loadCotizacion({ silencioso: true });
+      // B3 T7 (r1): con el 409 «La cotización cambió mientras la reenviabas…» (el cliente pidió cambios o la editaron) la
+      // recarga la trae fuera de Pendiente: el reenvío ya no aplica y la ventana se cierra. Otro 409 la deja abierta.
+      if (recargarTrasError(err)) {
+        void loadCotizacion({ silencioso: true }).then(fresca => {
+          if (reenviando && fresca && fresca.estado !== 'PENDIENTE_CONFIRMACION') cancelarEnvio();
+        });
+      }
     }
     setSending(false);
   }
@@ -340,22 +376,38 @@ function CotizacionDetalleContent() {
   }
 
   // R3: anticipo manual (pct + nota) o null para volver a la modalidad; el 409/422 se ve en el modal.
-  async function guardarAjusteAnticipo(pct: number | null, nota?: string) {
+  // B3 T17 (U22-anticipo punto 5): si el cliente ya vio o confirmó la cotización, el 409 ANULA_CONFIRMACION (no guardó
+  // nada) abre en el modal la ventana de H40; con la razón (`anular`) se repite este mismo guardado.
+  async function guardarAjusteAnticipo(pct: number | null, nota?: string,
+    anular?: { anular_confirmacion: true; motivo_recotizacion: string }) {
     if (!cotizacion?.id) return;
     setAjusteSaving(true);
     setAjusteError('');
     try {
-      await apiFetch(`/ventas/cotizaciones/${cotizacion.id}`, {
+      const r = await apiFetch(`/ventas/cotizaciones/${cotizacion.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ anticipo_pct_manual: pct, anticipo_manual_nota: pct === null ? null : nota, updated_by: currentUser }),
+        body: JSON.stringify({ anticipo_pct_manual: pct, anticipo_manual_nota: pct === null ? null : nota, updated_by: currentUser, ...anular }),
       });
       setShowAjuste(false);
+      setAjusteAnulacion(null);
+      // H40: la cotización volvió a Borrador; el aviso de Acciones pide enviársela de nuevo.
+      if (r?.confirmacion_anulada) setAvisoAnulada(AVISO_CONFIRMACION_ANULADA);
       await loadCotizacion();
     } catch (err: any) {
-      setAjusteError(err.message);
-      if (recargarTrasError(err)) void loadCotizacion({ silencioso: true });
+      if (!anular && err?.status === 409 && err?.detail?.codigo === 'ANULA_CONFIRMACION') {
+        setAjusteAnulacion({ detalle: err.detail, pct, nota });
+      } else {
+        setAjusteError(err.message);
+        if (recargarTrasError(err)) void loadCotizacion({ silencioso: true });
+      }
     }
     setAjusteSaving(false);
+  }
+
+  function cerrarAjuste() {
+    if (ajusteSaving) return;
+    setShowAjuste(false);
+    setAjusteAnulacion(null);
   }
 
   function onCalcSave(data: any) {
@@ -404,9 +456,11 @@ function CotizacionDetalleContent() {
         // A3: solo productos y precios; el servidor recalcula saldo y anticipo desde los pagos del pedido.
         // El PATCH del pedido ya registra su propio renglon de Actividad (con el detalle de lo que
         // cambio); "motivo" le pone el titulo, en vez de un segundo POST /actividad que duplicaria el evento.
+        // B3 T17 (IVA punto 11): con la RESPUESTA del PATCH (lo que guardó el servidor, con su IVA), no con lo calculado
+        // en el navegador: productos, subtotal, IVA, descuento y total, y el crédito se mide con ese total.
         await apiFetch(`/ventas/pedidos/${pvenVigente.id}`, {
           method: 'PATCH',
-          body: JSON.stringify(propagacionRecotizacion(data, pvenVigente, cotizacion?.numero, currentUser)),
+          body: JSON.stringify(propagacionRecotizacion(r?.data ?? data, pvenVigente, cotizacion?.numero, currentUser)),
         });
       }
       setShowCalc(false);
@@ -573,7 +627,8 @@ function CotizacionDetalleContent() {
     try {
       const p = await apiFetch('/crm/products/quick-create', {
         method: 'POST',
-        body: JSON.stringify({ name: item.product_name, sale_price: item.unit_price_cop || 0 }),
+        // B3 T17 (IVA punto 11): el producto nuevo nace con la tarifa de la línea (el servidor la normaliza).
+        body: JSON.stringify({ name: item.product_name, sale_price: item.unit_price_cop || 0, iva_tarifa: item.iva_tarifa }),
       });
       const prod = p?.data ?? p;
       const nuevosProductos = productos.map((it: any, i: number) => i === idx ? { ...it, sku_id: prod.id, es_libre: false } : it);
@@ -596,6 +651,11 @@ function CotizacionDetalleContent() {
   function notaRegistrada(log: Record<string, unknown> | null) {
     if (log) setCotizacion((p: Record<string, unknown>) => agregarActividad(p, log, 'COT'));
     else void loadCotizacion({ silencioso: true });
+  }
+
+  // B3 T17: la recarga silenciosa tras «No enviar recordatorios» (TarjetaSeguimiento). Con nombre, como notaRegistrada.
+  function recordatorioCambiado() {
+    void loadCotizacion({ silencioso: true });
   }
 
   if (loading) {
@@ -622,10 +682,12 @@ function CotizacionDetalleContent() {
   // sueltos (incluido "Enviar al Cliente", que el backend rechaza mientras la cotizacion
   // no tenga productos ni precio calculado).
   const cotizada = productos.length > 0 && Number(cotizacion?.total_cop) > 0;
-  // La tarjeta de siguiente paso ya ofrece "Calcular Precios" en este caso; evita
-  // repetir el mismo boton justo debajo.
-  const cardOfreceCalculo = !pvenVigente && !cotizada
-    && (estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA');
+  // B3 T17 (U22-cambios punto 7, C9): lo que pidió el cliente desde su enlace (cambios_cliente del GET; solo en Borrador).
+  const avisoCambios = avisoCambiosCliente(cotizacion, 'COT');
+  // La tarjeta de siguiente paso ya ofrece "Calcular Precios" en este caso (o "Re-cotizar", con los cambios del cliente);
+  // evita repetir el mismo boton justo debajo.
+  const cardOfreceCalculo = (!pvenVigente && !cotizada
+    && (estadoActual === 'BORRADOR' || estadoActual === 'ENVIADA')) || (!!avisoCambios && rolGestiona);
   const LINK_ACCION = 'flex items-center justify-center gap-2 rounded-xl font-bold px-6 py-3 text-sm text-white shadow-md';
 
   function renderSiguientePaso() {
@@ -679,12 +741,11 @@ function CotizacionDetalleContent() {
       );
     }
     if (estadoActual === 'PENDIENTE_CONFIRMACION') {
+      // B3 T17 (U22-validez punto 9, U16-reenvio-cot con C13, U16-seguimiento punto 10): hasta cuándo puede confirmar, el
+      // recordatorio y «Reenviar al cliente» (ya no hay que pasarla a Borrador para enviarle un enlace nuevo).
       return (
-        <NextStepCard tone="blue" title="Esperando confirmación del cliente">
-          Cuando el cliente confirme desde el enlace, aquí aparecerá &ldquo;Crear Pedido de Venta&rdquo;. Si el enlace venció
-          (dura 2 días) o no le llegó, pasa la cotización a Borrador desde &ldquo;Cambiar Estado&rdquo; y envíala de nuevo
-          para generar uno nuevo.
-        </NextStepCard>
+        <PasoEsperandoConfirmacion cotizacion={cotizacion} puedeReenviar={rolGestiona} enviando={sending}
+          onReenviar={handleReenviarCotizacion} onCambio={recordatorioCambiado} />
       );
     }
     if (estadoActual === 'RECHAZADA' || estadoActual === 'VENCIDA') {
@@ -714,6 +775,18 @@ function CotizacionDetalleContent() {
         >
           Hasta que tenga precios, la cotización no se puede enviar al cliente ni convertir en pedido.
         </NextStepCard>
+      );
+    }
+    if (avisoCambios) {
+      // B3 T17 (U22-cambios punto 7, C9): lo que escribió el cliente, la fecha, «Re-cotizar» y «Enviar al cliente» (solo
+      // para ADMIN o ASESOR, los roles que el servidor acepta).
+      return (
+        <TarjetaCambiosCliente aviso={avisoCambios} acciones={rolGestiona ? (
+          <>
+            <Button color="orange" size="lg" icon={RotateCcw} onClick={() => setShowCalc(true)}>Re-cotizar</Button>
+            <Button color="blue" size="lg" icon={Send} loading={sending} onClick={handleEnviarCotizacion}>Enviar al cliente</Button>
+          </>
+        ) : undefined} />
       );
     }
     return (
@@ -869,6 +942,8 @@ function CotizacionDetalleContent() {
                   <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
                     <p className="text-xs font-black text-blue-600 uppercase mb-1.5">Nota de la cotización</p>
                     <p className="text-sm text-blue-900 whitespace-pre-wrap break-words">{cotizacion.notas}</p>
+                    {/* R3 (C19): la nota de la cotización le llega al cliente; la de la solicitud no (es interna). */}
+                    <p className="text-[11px] text-blue-700 mt-1.5">El cliente verá esta nota</p>
                   </div>
                 )}
               </div>
@@ -919,8 +994,8 @@ function CotizacionDetalleContent() {
                         </div>
                       </div>
                       <div className="ml-auto text-right shrink-0">
-                        <p className="text-xs text-slate-400">Cant. {item.qty ?? 0} &times; {fCOP(item.unit_price_cop)}</p>
-                        <p className="font-black text-slate-900 text-lg">{fCOP(item.total_cop != null ? item.total_cop : (Number(item.unit_price_cop) || 0) * (Number(item.qty) || 0))}</p>
+                        {/* B3 T17 (IVA punto 11): precio sin IVA, el IVA de la línea y su total con IVA (detalle-bloque3.tsx). */}
+                        <PrecioLineaIva item={item} />
                         {/* U19+U21: el % es el de TOTALES (resumenAnticipoCotizacion; con pedido, el del pedido: ruling T9A-2). */}
                         {Array.isArray(cotizacion?.anticipo_por_linea) && (
                           <p className={`text-sm font-bold ${anticipoLinea > 0 ? 'text-emerald-700' : 'text-slate-500'}`}>
@@ -937,16 +1012,9 @@ function CotizacionDetalleContent() {
               {/* TOTALES */}
               <div className="flex justify-end mt-6">
                 <div className="w-full @md:w-80 bg-slate-50 p-5 rounded-2xl border border-slate-200">
-                  <div className="flex justify-between items-center mb-3">
-                    <span className="text-sm font-bold text-slate-500">Subtotal</span>
-                    <span className="font-bold text-slate-800">{fCOP(cotizacion?.subtotal_cop)}</span>
-                  </div>
-                  <div className="flex justify-between items-center mb-4">
-                    <span className="text-sm font-bold text-slate-500">Descuento ({Number(cotizacion?.descuento_pct) || 0}%)</span>
-                    <span className="font-bold text-slate-800">
-                      {fCOP((Number(cotizacion?.subtotal_cop) || 0) - (Number(cotizacion?.total_cop) || 0))}
-                    </span>
-                  </div>
+                  {/* B3 T17 (IVA punto 11): Subtotal (sin IVA), Descuento con descuento_cop (ya no subtotal − total, que con
+                      IVA da mal) y el IVA por tarifa (detalle-bloque3.tsx). */}
+                  <TotalesIvaCotizacion cotizacion={cotizacion} />
                   <div className="h-px w-full bg-slate-200 mb-4" />
                   <div className="flex justify-between items-center">
                     <span className="text-base font-black text-slate-800">TOTAL</span>
@@ -1201,7 +1269,10 @@ function CotizacionDetalleContent() {
 
             <div className="space-y-6 relative before:absolute before:inset-0 before:ml-4 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-200 before:to-transparent">
               {[...(cotizacion?.actividades || [])].reverse().map((a:any) => {
-                const style = ACTIVITY_STYLE[a.action] || DEFAULT_ACTIVITY_STYLE;
+                // RP22: las acciones del Bloque 3 (cambios del cliente, entrega del WhatsApp, recordatorios…) toman su ícono
+                // y su color de ACCIONES_BLOQUE3 (T13), sin copiarlos en ACTIVITY_STYLE.
+                const b3 = accionBloque3(a.action);
+                const style = ACTIVITY_STYLE[a.action] || (b3 ? {icon: b3.icono, color: b3.clases} : DEFAULT_ACTIVITY_STYLE);
                 const Icon = style.icon;
                 return (
                   <div key={a.id} className="relative flex items-start gap-4 group animate-in fade-in slide-in-from-bottom-2">
@@ -1267,11 +1338,13 @@ function CotizacionDetalleContent() {
           onConfirm={confirmarEnvio}
           onCancel={cancelarEnvio}
           saving={sending}
-          customerHasPhone={!!telUrl(cotizacion?.customer_phone)}
-          // Ronda 1 (punto 11): con dígitos pero sin alcanzar (motivoTelefono) es un teléfono incompleto. T11 calidad (E6 y
-          // ronda 1): las tres ventanas de envío (SC, COT y Hub) usan textoSinTelefono.
-          textoSinTelefono={textoSinTelefono(cotizacion?.customer_phone) ?? undefined}
+          // B3 T17 (RP19, C27): sobre telefono_whatsapp, el e164 que valida el servidor (el de la COT o el de la ficha del
+          // cliente), o null. T11 calidad (E6 y ronda 1): las tres ventanas de envío (SC, COT y Hub) usan textoSinTelefono.
+          customerHasPhone={!motivoTelefono(cotizacion?.telefono_whatsapp)}
+          textoSinTelefono={textoSinTelefono(cotizacion?.telefono_whatsapp) ?? undefined}
           customerEmail={cotizacion?.customer_email ?? null}
+          envioWhatsApp={envioWhatsAppCanal}
+          nota={reenviando ? NOTA_REENVIO_ENLACE : undefined}
         />
       )}
       {showVerificar && cotizacion && (
@@ -1291,7 +1364,12 @@ function CotizacionDetalleContent() {
           error={ajusteError}
           onGuardar={(pct, nota) => guardarAjusteAnticipo(pct, nota)}
           onVolverModalidad={() => guardarAjusteAnticipo(null)}
-          onCancel={() => { if (!ajusteSaving) setShowAjuste(false); }}
+          onCancel={cerrarAjuste}
+          // B3 T17 (U22-anticipo punto 5): la ventana de H40 con el 409 ANULA_CONFIRMACION; con la razón repite el guardado.
+          anulacion={ajusteAnulacion?.detalle ?? null} sinConfirmacionVigente={situacion.paso === 'reabrir'}
+          onDescartarAnulacion={() => { setAjusteAnulacion(null); setAjusteError(''); }}
+          onAnular={motivo => ajusteAnulacion && guardarAjusteAnticipo(ajusteAnulacion.pct, ajusteAnulacion.nota,
+            { anular_confirmacion: true, motivo_recotizacion: motivo })}
         />
       )}
       {showCalc && cotizacion && (
@@ -1300,7 +1378,8 @@ function CotizacionDetalleContent() {
         <CalculadorModal cot={cotizacion} onSave={onCalcSave}
           onClose={() => { if (!savingCalc) { setShowCalc(false); setCalcAnulacion(null); } }}
           estadoConfirmacion={estadoConfirmacionCalc} sinConfirmacionVigente={situacion.paso === 'reabrir'}
-          anulacion={calcAnulacion} onDescartarAnulacion={() => setCalcAnulacion(null)} saving={savingCalc} />
+          anulacion={calcAnulacion} onDescartarAnulacion={() => setCalcAnulacion(null)} saving={savingCalc}
+          tarifaIvaDefecto={cotizacion.iva_tarifa_defecto} />
       )}
       {showDelete && cotizacion && <DeleteConfirm cot={cotizacion} onConfirm={deleteCot} onCancel={() => setShowDelete(false)} />}
       {/* B2.1 D6: retomarla después de cancelar y restaurar la solicitud pide un motivo nuevo (409 MOTIVO_NUEVO): la
@@ -1334,7 +1413,11 @@ function CotizacionDetalleContent() {
       )}
       {confirmLink && (
         <EnlaceConfirmacionModal documento={`la cotización ${cotizacion?.numero || ''}`} link={confirmLink} color="blue"
-          correo={confirmCorreo} canal={confirmCanal} whatsappUrl={confirmWhatsapp} onClose={() => setConfirmLink(null)} />
+          correo={confirmCorreo} canal={confirmCanal} whatsappUrl={confirmWhatsapp}
+          // B3 T17 (T16, RP23): el resultado del WhatsApp automático, el teléfono e164, el vencimiento y el recordatorio.
+          envioWhatsapp={confirmEnvio?.envioWhatsapp} telefono={cotizacion?.telefono_whatsapp ?? null}
+          vence={confirmEnvio?.vence ?? null} seguimiento={confirmEnvio?.seguimiento ?? null}
+          onClose={() => setConfirmLink(null)} />
       )}
     </div>
   );

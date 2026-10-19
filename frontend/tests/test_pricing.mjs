@@ -9,7 +9,8 @@
 import assert from 'node:assert/strict';
 import {
   computeMarginPrice, MARGIN_PCT_CAP, filaDeCalculadora, calcularCotizacion, cuerpoCompletoCalculadora, cuerpoDeGuardado,
-  validaPreciosAlGuardar, inicialParaComparar,
+  validaPreciosAlGuardar, inicialParaComparar, filaNuevaCalculadora, filasInicialesCalculadora, tarifaDeSeleccion,
+  avisoTarifaProducto, totalesIvaCalculadora,
 } from '../src/lib/pricing.js';
 
 console.log('--- TEST 1: unitario * qty == total, siempre (caso real reportado) ---');
@@ -193,6 +194,106 @@ console.log('--- B2-T9A r1/r2 TEST 11: validaPreciosAlGuardar e inicialParaCompa
     assert.equal(validaPreciosAlGuardar(cuerpo), true);
   }
   assert.equal(inicialParaComparar(null, inicial), null);
+}
+
+console.log('--- B3 T17 TEST 12: la tarifa de IVA de cada fila de la calculadora ---');
+{
+  // Fila nueva: la tarifa por defecto de Configuración, o '19' (R8) si no viene o no es válida.
+  assert.deepEqual(filaNuevaCalculadora('5'), { product_name: '', qty: 1, cost_usd: 0, margen_pct: 30, flete_usd: 0,
+    es_libre: false, iva_tarifa: '5', _tarifaProducto: null });
+  for (const raro of [undefined, null, '', '16']) assert.equal(filaNuevaCalculadora(raro).iva_tarifa, '19', String(raro));
+  // Una COT sin productos abre con una fila nueva.
+  assert.deepEqual(filasInicialesCalculadora({ productos: [] }, 'EXENTO'), [filaNuevaCalculadora('EXENTO')]);
+  assert.deepEqual(filasInicialesCalculadora(null, '19'), [filaNuevaCalculadora('19')]);
+  // Las guardadas: su tarifa; si no la tienen (COT vieja), la ACTUAL del producto (tarifas_producto, lista paralela);
+  // si tampoco, la de Configuración. _tarifaProducto es la del producto (para el aviso ámbar).
+  const cot = {
+    productos: [
+      { product_name: 'Rodillo', sku_id: 4, qty: 6, cost_usd: 30, margen_pct: 35, iva_tarifa: '5' },
+      { product_name: 'Pintura', sku_id: 7, qty: 4, cost_usd: 20 },
+      { product_name: 'Texto libre', qty: 1, cost_usd: 1, es_libre: true },
+    ],
+    tarifas_producto: ['19', 'EXENTO', null],
+  };
+  const filas = filasInicialesCalculadora(cot, '19');
+  assert.deepEqual(filas.map((f) => [f.iva_tarifa, f._tarifaProducto]), [['5', '19'], ['EXENTO', 'EXENTO'], ['19', null]]);
+  assert.deepEqual(filasInicialesCalculadora(cot, 'EXCLUIDO').map((f) => f.iva_tarifa), ['5', 'EXENTO', 'EXCLUIDO']);
+  // Es filaDeCalculadora más la tarifa (margen guardado o 30) y no muta la COT.
+  assert.equal(filas[0].margen_pct, 35);
+  assert.equal(filas[1].margen_pct, 30);
+  assert.ok(!('iva_tarifa' in cot.productos[1]));
+  // Sin tarifas_producto (una respuesta vieja) cae a la de Configuración.
+  assert.deepEqual(filasInicialesCalculadora({ productos: cot.productos }, '5').map((f) => f.iva_tarifa), ['5', '5', '5']);
+  // Al elegir un producto del buscador: su tarifa del catálogo o, si no la tiene, la de Configuración.
+  assert.deepEqual(tarifaDeSeleccion({ id: 4, tarifa_iva: '5' }, '19'), { iva_tarifa: '5', _tarifaProducto: '5' });
+  assert.deepEqual(tarifaDeSeleccion({ id: 4, tarifa_iva: null }, '19'), { iva_tarifa: '19', _tarifaProducto: null });
+  assert.deepEqual(tarifaDeSeleccion(null, 'EXENTO'), { iva_tarifa: 'EXENTO', _tarifaProducto: null });
+}
+
+console.log('--- B3 T17 TEST 13: avisoTarifaProducto (la tarifa de la línea no es la del producto) ---');
+{
+  const fila = { sku_id: 4, iva_tarifa: '19', _tarifaProducto: '5' };
+  assert.equal(avisoTarifaProducto(fila), 'El producto tiene IVA 5%');
+  assert.equal(avisoTarifaProducto({ ...fila, _tarifaProducto: '19', iva_tarifa: '5' }), 'El producto tiene IVA 19%');
+  assert.equal(avisoTarifaProducto({ ...fila, _tarifaProducto: 'EXENTO' }), 'El producto es Exento de IVA');
+  assert.equal(avisoTarifaProducto({ ...fila, _tarifaProducto: 'EXCLUIDO' }), 'El producto es Excluido de IVA');
+  // Sin aviso: la misma tarifa, una línea sin producto del catálogo o un producto sin tarifa definida.
+  assert.equal(avisoTarifaProducto({ ...fila, iva_tarifa: '5' }), null);
+  assert.equal(avisoTarifaProducto({ ...fila, sku_id: null }), null);
+  assert.equal(avisoTarifaProducto({ ...fila, _tarifaProducto: null }), null);
+  assert.equal(avisoTarifaProducto(null), null);
+}
+
+console.log('--- B3 T17 TEST 14: totalesIvaCalculadora usa el precio NUEVO (price_cop_unit) de cada fila ---');
+{
+  // El recorrido del Bloque 1 como filas de la calculadora: unit_price_cop trae el valor VIEJO (o falta, en una fila nueva).
+  const filasCalc = [
+    { product_name: 'Rodillo', qty: 6, price_cop_unit: 206769, unit_price_cop: 150000, iva_tarifa: '19' },
+    { product_name: 'Pintura', qty: 4, price_cop_unit: 117000, iva_tarifa: '19' },
+    { product_name: 'Cinta', qty: 10, price_cop_unit: 13200, unit_price_cop: undefined, iva_tarifa: '5' },
+  ];
+  const sin = totalesIvaCalculadora(filasCalc, 0);
+  assert.equal(sin.error, '');
+  assert.deepEqual([sin.totales.subtotal_cop, sin.totales.iva_cop, sin.totales.total_cop], [1840614, 331237, 2171851]);
+  assert.deepEqual(sin.totales.lineas.map((l) => l.unit_price_cop), [206769, 117000, 13200]);
+  const con = totalesIvaCalculadora(filasCalc, 10);
+  assert.equal(con.totales.descuento_cop, 184061);
+  assert.equal(con.totales.total_cop, 1954666);
+  // Una línea incompleta: el mensaje del 422 y sin totales (la pantalla muestra «—»).
+  assert.deepEqual(totalesIvaCalculadora([{ ...filasCalc[0], qty: '' }], 0),
+    { totales: null, error: "La cantidad de 'Rodillo' debe ser mayor que 0." });
+  assert.equal(filasCalc[0].unit_price_cop, 150000, 'no muta las filas');
+  // Con calcularCotizacion de verdad: una fila nueva (sin unit_price_cop) no sale en $0.
+  const calculo = calcularCotizacion([{ ...filaNuevaCalculadora('19'), product_name: 'Cuna', cost_usd: 30, flete_usd: 2,
+    qty: 6, margen_pct: 35 }], 4200, 0);
+  const r = totalesIvaCalculadora(calculo.filas, 0);
+  assert.equal(r.totales.subtotal_cop, 1240614);
+  assert.equal(r.totales.iva_cop, 235717);
+}
+
+console.log('--- B3 T17 TEST 15: el cuerpo de guardado con IVA (iva_tarifa por línea y los totales de lib/iva.js) ---');
+{
+  const f = { ...formularioInicial(COT_20260486),
+    filas: filasInicialesCalculadora({ ...COT_20260486, tarifas_producto: ['19'] }, '19') };
+  const calculo = calcularCotizacion(f.filas, f.trm, f.descuento);
+  const iva = totalesIvaCalculadora(calculo.filas, f.descuento);
+  const cuerpo = cuerpoCompletoCalculadora(calculo, f, COT_20260486, iva.totales);
+  assert.deepEqual(Object.keys(cuerpo),
+    ['productos', 'trm_rate', 'subtotal_cop', 'descuento_pct', 'total_cop', 'notas', 'fecha_entrega_estimada']);
+  assert.deepEqual(cuerpo.productos, [{ product_name: 'Cuna DEMO', sku_id: 2, qty: 6, cost_usd: 30, flete_usd: 2,
+    margen_pct: 35, unit_price_cop: 206769, total_cop: 1240614, es_libre: false, iva_tarifa: '19' }]);
+  assert.equal(cuerpo.subtotal_cop, 1240614);
+  assert.equal(cuerpo.total_cop, 1476331, 'el total con IVA de lib/iva.js (el servidor recalcula y gana)');
+  // No viajan las claves internas de la fila (_tarifaProducto) ni el IVA calculado por línea.
+  assert.ok(cuerpo.productos.every((p) => !('_tarifaProducto' in p) && !('iva_cop' in p)));
+  // Sin tocar nada: solo las notas, también con IVA.
+  const otraVez = cuerpoCompletoCalculadora(calculo, f, COT_20260486, totalesIvaCalculadora(calculo.filas, 0).totales);
+  assert.deepEqual(cuerpoDeGuardado(otraVez, cuerpo), { notas: 'Entrega en la mañana' });
+  // Cambiar la tarifa de la línea cambia `productos`: viajan los precios (es un cambio de precio, H40).
+  const calc5 = calcularCotizacion([{ ...f.filas[0], iva_tarifa: '5' }], f.trm, f.descuento);
+  const otra = cuerpoCompletoCalculadora(calc5, f, COT_20260486, totalesIvaCalculadora(calc5.filas, 0).totales);
+  assert.equal(otra.total_cop, 1302645);
+  assert.ok('productos' in cuerpoDeGuardado(otra, cuerpo));
 }
 
 console.log('✓ Todos los tests de pricing pasaron exitosamente.');

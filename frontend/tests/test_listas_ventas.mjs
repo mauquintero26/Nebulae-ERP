@@ -18,6 +18,7 @@ import {
   tasaConversionCotizacion, superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera, pasosParaCancelarSolicitud,
   repartirCancelacionSolicitudes, cifrasVentasDashboard, rutaSinParametro, esSolicitudActiva, pestanaDeSolicitud,
   pistaActivasSolicitudes, valorConfig, enteroConfig, DIAS_VALIDEZ_COTIZACION, configLeida, cuerpoGuardarConfig,
+  tarifaIvaDeConfig,
 } from '../src/lib/listas-ventas.js';
 import { TEXTO_PAPELERA_SIN_FECHA, ESTADOS_SC } from '../src/lib/estados-solicitud.js';
 
@@ -604,6 +605,18 @@ console.log('--- B3 T16 r1: «Guardar Configuración» nunca pisa claves que no 
   assert.deepEqual(cuerpoGuardarConfig(null, { a: '1' }, true), { a: '1' });
   assert.deepEqual(cuerpoGuardarConfig(Object.create({ a: '1' }), { a: '1' }, true), { a: '1' }, 'solo claves propias');
   assert.equal(cuerpoGuardarConfig(inicial, null, true), null);
+}
+
+console.log('--- B3 T17: tarifaIvaDeConfig (el IVA con que arranca el Cotizador Rápido) ---');
+{
+  // Las tres formas de valorConfig: la respuesta cruda de GET /ventas/config, el dict interno y lo que guarda el Hub.
+  assert.equal(tarifaIvaDeConfig({ status: 'success', data: { iva_tarifa_defecto: { value: '5' } } }), '5');
+  assert.equal(tarifaIvaDeConfig({ iva_tarifa_defecto: { value: 'exento' } }), 'EXENTO', 'normalizada');
+  assert.equal(tarifaIvaDeConfig({ iva_tarifa_defecto: 'EXCLUIDO' }), 'EXCLUIDO');
+  // Sin la clave, vacía o no válida: '19' (R8, como el servidor).
+  for (const cfg of [{}, null, undefined, { data: {} }, { iva_tarifa_defecto: '' }, { iva_tarifa_defecto: '16' }]) {
+    assert.equal(tarifaIvaDeConfig(cfg), '19', JSON.stringify(cfg));
+  }
 }
 
 console.log('OK test_listas_ventas.mjs');

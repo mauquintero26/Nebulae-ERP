@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useId } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Link from 'next/link';
 import { useSearchParams, useRouter } from 'next/navigation';
 import {
@@ -13,12 +13,17 @@ import {
 
 import { apiFetch, API_URL } from '@/lib/api';
 import {
-  MARGIN_PCT_CAP, filaDeCalculadora, calcularCotizacion, cuerpoCompletoCalculadora, cuerpoDeGuardado,
+  MARGIN_PCT_CAP, calcularCotizacion, cuerpoCompletoCalculadora, cuerpoDeGuardado,
   validaPreciosAlGuardar, inicialParaComparar,
+  filaNuevaCalculadora, filasInicialesCalculadora, tarifaDeSeleccion, totalesIvaCalculadora,
 } from '@/lib/pricing';
 import { formatoPesos } from '@/lib/pesos';
 import { humanizarCodigo } from '@/lib/estados-pedido';
-import { largoTexto } from '@/lib/chatter';
+import { lineaWhatsAppCanal } from '@/lib/envio-whatsapp';
+import { PanelAnularConfirmacion, tituloAnulacion } from './anular-confirmacion';
+import type { AnulacionConfirmacion } from './anular-confirmacion';
+import { CeldaIvaLinea, TotalesCalculadoraIva, pesosOGuion } from './calculadora-iva';
+import type { EnvioWhatsAppCanal } from './estado-envio-whatsapp';
 import {
   METODOS_PAGO_ANTICIPO, formatoPct, porcentajeDePesos, hoyLocal, origenAnticipo, cuentaVerificacion,
   evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo, resumenAnticipoCotizacion, montoDesdeTexto,
@@ -171,13 +176,12 @@ function ProductoAutocomplete({
   );
 }
 
-// H40: lo que trae el 409 ANULA_CONFIRMACION de PATCH /ventas/cotizaciones/{id} (T4) en err.detail.
-export type AnulacionConfirmacion = { codigo?: string; estado?: string; cambios?: string[]; mensaje?: string };
+// H40: lo que trae el 409 ANULA_CONFIRMACION de PATCH /ventas/cotizaciones/{id} (T4) en err.detail. B3 T17: vive con
+// el panel rosa en anular-confirmacion.tsx (lo comparte «Ajustar anticipo»); se reexporta para quien lo importa de aquí.
+export type { AnulacionConfirmacion };
 // H40 (R7): lo que la calculadora agrega al payload para guardar anulando la confirmación del cliente. La razón va de 5
 // a 500 caracteres (medidos como len() de Python, en puntos de código) y queda en la Actividad de la cotización.
 type ExtraGuardado = { anular_confirmacion?: boolean; motivo_recotizacion?: string };
-const RAZON_RECOTIZAR_MIN = 5;
-const RAZON_RECOTIZAR_MAX = 500;
 
 // H40: el aviso ámbar con que abre la calculadora de una cotización que el cliente ya confirmó o que espera su
 // confirmación. 'figura confirmada' (ruling T9A-6): CONFIRMADA sin la confirmación del cliente vigente ('reabrir').
@@ -187,9 +191,11 @@ const AVISO_CALC_FIGURA_CONFIRMADA = 'Esta cotización figura como confirmada: c
 
 export function CalculadorModal({
   cot, onSave, onClose, estadoConfirmacion = null, sinConfirmacionVigente = false, anulacion = null,
-  onDescartarAnulacion, saving = false,
+  onDescartarAnulacion, saving = false, tarifaIvaDefecto = null,
 }: {
   cot: any; onSave: (data: any) => void; onClose: () => void;
+  /** B3 T17 (IVA punto 10): la tarifa de IVA de Configuración (iva_tarifa_defecto del GET) para las filas sin tarifa. */
+  tarifaIvaDefecto?: string | null;
   /** H40: la cotización CONFIRMADA (sin pedido vigente) o PENDIENTE_CONFIRMACION: aviso ámbar al abrir. */
   estadoConfirmacion?: 'CONFIRMADA' | 'PENDIENTE_CONFIRMACION' | null;
   /** H40 (ruling T9A-6): CONFIRMADA pero sin la confirmación del cliente vigente (situacion.paso 'reabrir'). */
@@ -204,24 +210,18 @@ export function CalculadorModal({
     : estadoConfirmacion === 'CONFIRMADA' ? (sinConfirmacionVigente ? AVISO_CALC_FIGURA_CONFIRMADA : AVISO_CALC_CONFIRMADA)
     : null;
   const [razon, setRazon] = useState('');
-  const razonId = useId();
-  // Como el servidor: sin los espacios de los bordes y en puntos de código (largoTexto, lección de T7/T8A).
-  const largoRazon = largoTexto(razon.trim());
-  const razonValida = largoRazon >= RAZON_RECOTIZAR_MIN && largoRazon <= RAZON_RECOTIZAR_MAX;
-  const cambiosAnulacion = Array.isArray(anulacion?.cambios) ? anulacion.cambios : [];
   const [trm, setTrm] = useState(cot.trm_rate || 4200);
+  // Ronda 1 (punto 3): filaDeCalculadora respeta un margen 0 (antes `|| 30` lo subía al 30%). B3 T17: cada fila lleva su
+  // iva_tarifa (la de la línea, la actual del producto o la de Configuración) y _tarifaProducto (filasInicialesCalculadora).
   const [productos, setProductos] = useState<any[]>(
-    (cot.productos || []).length > 0
-      // Ronda 1 (punto 3): filaDeCalculadora respeta un margen 0 (antes `|| 30` lo subía al 30%).
-      ? cot.productos.map((p: any) => ({ ...filaDeCalculadora(p), _rowId: crypto.randomUUID() }))
-      : [{ product_name: '', qty: 1, cost_usd: 0, margen_pct: 30, flete_usd: 0, es_libre: false, _rowId: crypto.randomUUID() }]
+    () => filasInicialesCalculadora(cot, tarifaIvaDefecto).map(f => ({ ...f, _rowId: crypto.randomUUID() }))
   );
   const [descuento, setDescuento] = useState(cot.descuento_pct || 0);
   const [fechaEntrega, setFechaEntrega] = useState(cot.fecha_entrega_estimada ? cot.fecha_entrega_estimada.split('T')[0] : '');
   const [notas, setNotas] = useState(cot.notas || '');
   const [error, setError] = useState('');
 
-  const addProd = () => setProductos(p => [...p, { product_name: '', qty: 1, cost_usd: 0, margen_pct: 30, flete_usd: 0, es_libre: false, _rowId: crypto.randomUUID() }]);
+  const addProd = () => setProductos(p => [...p, { ...filaNuevaCalculadora(tarifaIvaDefecto), _rowId: crypto.randomUUID() }]);
   const removeProd = (i: number) => setProductos(p => p.filter((_, idx) => idx !== i));
   const setProdFields = (i: number, patch: any) =>
     setProductos(p => p.map((item, idx) => idx === i ? { ...item, ...patch } : item));
@@ -229,22 +229,29 @@ export function CalculadorModal({
 
   // H42: lineas en pesos enteros; el descuento se redondea al peso y el total cuadra exacto (ronda 1: la cuenta vive en
   // @/lib/pricing, probada con node).
-  const calculo = calcularCotizacion(productos, trm, descuento);
-  const { filas: computedProd, subtotal, descTotal, total } = calculo;
+  const calculo = useMemo(() => calcularCotizacion(productos, trm, descuento), [productos, trm, descuento]);
+  const computedProd = calculo.filas;
+  // B3 T17 (nota tras T13): TODAS las cifras (el total de cada línea, subtotal, descuento, IVA por tarifa, total y
+  // anticipo) salen de lib/iva.js. Con una línea incompleta no lanza: totales null, el mensaje en línea y «—».
+  const iva = useMemo(() => totalesIvaCalculadora(calculo.filas, descuento), [calculo, descuento]);
+  const totalIva = iva.totales ? iva.totales.total_cop : null;
   // H36+H43 / R3: el anticipo ya no se edita aqui; lo calcula el servidor con la modalidad de la SC o el % manual.
   // Ya convertida: el % y lo pagado DEL PEDIDO (el GET recalcula con la modalidad de hoy, que ya no es el trato).
+  // B3 T17 (R8): sobre el total CON IVA.
   const resumenAnticipo = resumenAnticipoCotizacion(cot);
   const anticipoPct = resumenAnticipo.pct;
-  const anticipo_cop = porcentajeDePesos(total, anticipoPct);
-  const saldo = total - (resumenAnticipo.convertida ? Number(resumenAnticipo.pagado) || 0 : anticipo_cop);
+  const anticipo_cop = totalIva === null ? null : porcentajeDePesos(totalIva, anticipoPct);
+  const saldo = totalIva === null || anticipo_cop === null ? null
+    : totalIva - (resumenAnticipo.convertida ? Number(resumenAnticipo.pagado) || 0 : anticipo_cop);
 
-  // H40: el cuerpo COMPLETO de PATCH /ventas/cotizaciones/{id} con lo que hay en pantalla (ruling 1).
-  const armarPayload = () => cuerpoCompletoCalculadora(calculo, { trm, descuento, notas, fechaEntrega }, cot);
-  // Ronda 1 (punto 2): el cálculo con que se abrió la calculadora (ref perezosa: se arma una sola vez). Al guardar, los
-  // precios solo viajan si cambiaron frente a él (cuerpoDeGuardado): guardar solo las notas de una cotización calculada
-  // antes de H42 ya no reenvía sus precios recalculados ni anula la confirmación del cliente.
-  const inicial = useRef<ReturnType<typeof cuerpoCompletoCalculadora> | null>(null);
-  if (inicial.current === null) inicial.current = armarPayload();
+  // H40: el cuerpo COMPLETO de PATCH /ventas/cotizaciones/{id} con lo que hay en pantalla (ruling 1). B3 T17: con la
+  // iva_tarifa de cada línea y subtotal/total de lib/iva.js (el servidor recalcula y gana).
+  const armarPayload = () => cuerpoCompletoCalculadora(calculo, { trm, descuento, notas, fechaEntrega }, cot, iva.totales);
+  // Ronda 1 (punto 2): el cálculo con que se abrió la calculadora (estado perezoso: se arma una sola vez; B3 T17: estado
+  // y no ref, porque también lo lee el render para deshabilitar «Guardar»). Al guardar, los precios solo viajan si
+  // cambiaron frente a él (cuerpoDeGuardado): guardar solo las notas de una cotización calculada antes de H42 ya no
+  // reenvía sus precios recalculados ni anula la confirmación del cliente.
+  const [inicial] = useState(armarPayload);
 
   // H40 (ruling T9A-1): `extra` es solo lo de la anulación. El botón normal la llama con una flecha
   // (onClick={() => handleSave()}): si React le pasara el evento del clic como `extra`, JSON.stringify fallaría por la
@@ -252,15 +259,18 @@ export function CalculadorModal({
   const handleSave = (extra: ExtraGuardado = {}) => {
     // Ronda 2 (punto 2): una cotización sin total todavía no está cotizada: no se compara y va el cuerpo completo
     // (inicialParaComparar da null).
-    const cuerpo = cuerpoDeGuardado(armarPayload(), inicialParaComparar(cot, inicial.current));
+    const cuerpo = cuerpoDeGuardado(armarPayload(), inicialParaComparar(cot, inicial));
     // Los precios se validan solo si viajan (validaPreciosAlGuardar): guardar solo las notas o la fecha de una
     // cotización ya calculada no depende de ellos.
     if (validaPreciosAlGuardar(cuerpo)) {
-      if (computedProd.length === 0 || computedProd.some(p => !p.total_cop || p.total_cop <= 0)) {
+      // B3 T17: con una línea incompleta el botón está deshabilitado y el error se ve en TOTALES (un solo medio).
+      if (!iva.totales) return;
+      const lineas = iva.totales.lineas;
+      if (lineas.length === 0 || lineas.some(p => !(p.total_cop > 0))) {
         setError('Cada producto necesita un costo mayor a $0 antes de guardar la cotización.');
         return;
       }
-      if (total <= 0) {
+      if (iva.totales.total_cop <= 0) {
         setError('El total de la cotización debe ser mayor a $0.');
         return;
       }
@@ -272,58 +282,29 @@ export function CalculadorModal({
   const errorCalculadora = error && (
     <p className="text-xs text-red-600 font-bold mb-3 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>
   );
+  // B3 T17: con una línea incompleta (iva.error) no se guardan precios: el botón se deshabilita y el motivo ya está en
+  // TOTALES. Guardar solo las notas o la fecha sigue funcionando.
+  const bloqueadoPorIva = !iva.totales
+    && validaPreciosAlGuardar(cuerpoDeGuardado(armarPayload(), inicialParaComparar(cot, inicial)));
 
   return (
     <Modal title="Calculadora de Cotización" subtitle={`${cot.numero} — ${cot.customer_name}`}
-      icon={Calculator} color="amber" maxWidth="3xl" onClose={onClose} bloquearCierre={saving}
+      icon={Calculator} color="amber" maxWidth="4xl" onClose={onClose} bloquearCierre={saving}
       footer={anulacion ? (
         // H40 (R7): el servidor no guardó (409 ANULA_CONFIRMACION): qué cambió y la razón obligatoria antes de anular.
-        <div className="w-full rounded-2xl border border-rose-200 bg-rose-50 p-4 space-y-3">
-          <div role="alert" className="space-y-1">
-            <p className="text-sm font-black text-rose-800 flex items-center gap-1.5">
-              <AlertTriangle size={16} className="shrink-0" />
-              {/* Según el caso: pendiente (ronda 2, punto 3; el estado del 409, como el mensaje de abajo), figura
-                  confirmada sin la confirmación del cliente vigente ('reabrir', ronda 1) o confirmada. */}
-              {(anulacion.estado || estadoConfirmacion) === 'PENDIENTE_CONFIRMACION'
-                ? 'Vas a dejar sin efecto el enlace que tiene el cliente'
-                : estadoConfirmacion === 'CONFIRMADA' && sinConfirmacionVigente
-                  ? 'Vas a devolver la cotización a Borrador'
-                  : 'Vas a anular la confirmación del cliente'}
-            </p>
-            {anulacion.mensaje && <p className="text-xs text-rose-700">{anulacion.mensaje}</p>}
-            {cambiosAnulacion.length > 0 && (
-              <p className="text-xs font-bold text-rose-800">Cambia: {cambiosAnulacion.join(', ')}</p>
-            )}
-          </div>
-          <div>
-            <label htmlFor={razonId} className="text-xs font-black text-rose-800 mb-1 block">Razón del cambio (queda en la Actividad)</label>
-            <textarea id={razonId} value={razon} onChange={e => setRazon(e.target.value)} rows={2}
-              maxLength={RAZON_RECOTIZAR_MAX} readOnly={saving} placeholder="Ej: el proveedor subió el precio"
-              className="w-full border border-rose-200 bg-white rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400 outline-none" />
-            <div className="flex justify-between gap-2 text-[11px] mt-1">
-              <span className={largoRazon < RAZON_RECOTIZAR_MIN ? 'font-bold text-rose-700' : 'text-slate-500'}>
-                {largoRazon < RAZON_RECOTIZAR_MIN
-                  ? `Mínimo ${RAZON_RECOTIZAR_MIN} caracteres (llevas ${largoRazon}).`
-                  : 'Queda en la Actividad de la cotización con tu nombre.'}
-              </span>
-              <span className="text-slate-500 shrink-0">{largoRazon}/{RAZON_RECOTIZAR_MAX}</span>
-            </div>
-          </div>
-          {errorCalculadora}
-          <div className="flex flex-wrap justify-end gap-3">
-            <Button variant="secondary" disabled={saving} onClick={onDescartarAnulacion}>Seguir editando</Button>
-            <Button color="rose" icon={AlertTriangle} loading={saving} disabled={!razonValida}
-              onClick={() => handleSave({ anular_confirmacion: true, motivo_recotizacion: razon.trim() })}>
-              Guardar y anular la confirmación
-            </Button>
-          </div>
-        </div>
+        // B3 T17: el panel vive en anular-confirmacion.tsx (lo comparte «Ajustar anticipo»). El título según el caso:
+        // pendiente (el estado del 409), figura confirmada sin la confirmación vigente ('reabrir') o confirmada.
+        <PanelAnularConfirmacion anulacion={anulacion} razon={razon} onRazon={setRazon} saving={saving}
+          titulo={tituloAnulacion(anulacion.estado || estadoConfirmacion,
+            estadoConfirmacion === 'CONFIRMADA' && sinConfirmacionVigente)}
+          error={errorCalculadora} onSeguirEditando={onDescartarAnulacion}
+          onAnular={motivo => handleSave({ anular_confirmacion: true, motivo_recotizacion: motivo })} />
       ) : (
         <div className="w-full">
           {errorCalculadora}
           <div className="flex justify-end gap-3">
             <Button variant="secondary" disabled={saving} onClick={onClose}>Cancelar</Button>
-            <Button color="amber" icon={Save} loading={saving} onClick={() => handleSave()}>Guardar Cotización</Button>
+            <Button color="amber" icon={Save} loading={saving} disabled={bloqueadoPorIva} onClick={() => handleSave()}>Guardar Cotización</Button>
           </div>
         </div>
       )}>
@@ -364,7 +345,8 @@ export function CalculadorModal({
                 <Plus size={12}/> Agregar
               </button>
             </div>
-            <div className="border border-slate-200 rounded-xl overflow-hidden">
+            {/* B3 T17: con la columna IVA la tabla no cabe en un celular: se desliza de lado en su recuadro. */}
+            <div className="border border-slate-200 rounded-xl overflow-x-auto">
               <table className="w-full text-xs">
                 <thead className="bg-slate-50 text-slate-400 uppercase font-black">
                   <tr>
@@ -373,7 +355,8 @@ export function CalculadorModal({
                     <th className="px-3 py-2 text-right">Costo USD</th>
                     <th className="px-3 py-2 text-right">Flete USD</th>
                     <th className="px-3 py-2 text-right">Margen %</th>
-                    <th className="px-3 py-2 text-right">Total COP</th>
+                    <th className="px-3 py-2 text-left">IVA</th>
+                    <th className="px-3 py-2 text-right">Total sin IVA</th>
                     <th className="px-3 py-2"></th>
                   </tr>
                 </thead>
@@ -386,7 +369,7 @@ export function CalculadorModal({
                           esLibre={p.es_libre}
                           skuId={p.sku_id}
                           onTyping={v => setProdFields(i, { product_name: v, sku_id: null, es_libre: false })}
-                          onSelect={sel => setProdFields(i, { product_name: sel.product_name || sel.name, sku_id: sel.id, es_libre: false })}
+                          onSelect={sel => setProdFields(i, { product_name: sel.product_name || sel.name, sku_id: sel.id, es_libre: false, ...tarifaDeSeleccion(sel, tarifaIvaDefecto) })}
                           onFreeText={nombre => setProdFields(i, { product_name: nombre, sku_id: null, es_libre: true })}
                         />
                       </td>
@@ -406,7 +389,11 @@ export function CalculadorModal({
                         <input type="number" min="0" max={MARGIN_PCT_CAP} value={p.margen_pct} onChange={e => updateProd(i, 'margen_pct', Math.min(MARGIN_PCT_CAP, Math.max(0, Number(e.target.value) || 0)))}
                           className="w-16 border border-slate-200 rounded px-2 py-1 text-right font-bold outline-none focus:ring-1 focus:ring-amber-200" />
                       </td>
-                      <td className="px-3 py-2 text-right font-black text-amber-700">{fCOP(p.total_cop)}</td>
+                      <td className="px-3 py-2 align-top">
+                        <CeldaIvaLinea fila={p} ivaLinea={iva.totales?.lineas[i]?.iva_cop}
+                          onCambio={t => updateProd(i, 'iva_tarifa', t)} />
+                      </td>
+                      <td className="px-3 py-2 text-right font-black text-amber-700">{pesosOGuion(iva.totales?.lineas[i]?.total_cop)}</td>
                       <td className="px-3 py-2">
                         {computedProd.length > 1 && (
                           <button onClick={() => removeProd(i)} className="text-red-400 hover:text-red-600"><X size={12}/></button>
@@ -421,28 +408,16 @@ export function CalculadorModal({
 
           {/* Totals */}
           <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="text-slate-600 font-medium">Subtotal</span>
-              <span className="font-bold">{fCOP(subtotal)}</span>
-            </div>
-            {descuento > 0 && (
-              <div className="flex justify-between text-sm text-red-600">
-                <span className="font-medium">Descuento ({descuento}%)</span>
-                <span className="font-bold">-{fCOP(descTotal)}</span>
-              </div>
-            )}
-            <div className="flex justify-between text-base border-t border-amber-200 pt-2">
-              <span className="font-black text-slate-800">TOTAL</span>
-              <span className="font-black text-amber-700 text-lg">{fCOP(total)}</span>
-            </div>
+            {/* B3 T17: Subtotal, Descuento, el IVA por tarifa y TOTAL (con IVA), de lib/iva.js (calculadora-iva.tsx). */}
+            <TotalesCalculadoraIva iva={iva} descuentoPct={descuento} />
             <div className="grid grid-cols-2 gap-3 mt-2">
               <div>
                 <p className="text-xs text-slate-500 mb-1">Anticipo {resumenAnticipo.etiqueta}</p>
-                <p className="font-black text-slate-800">{fCOP(anticipo_cop)}</p>
+                <p className="font-black text-slate-800">{pesosOGuion(anticipo_cop)}</p>
               </div>
               <div className="flex flex-col justify-end">
                 <p className="text-xs text-slate-500 mb-1">{resumenAnticipo.convertida ? 'Saldo del pedido' : 'Saldo pendiente'}</p>
-                <p className="font-black text-slate-800">{fCOP(saldo)}</p>
+                <p className="font-black text-slate-800">{pesosOGuion(saldo)}</p>
               </div>
             </div>
             <p className="text-[11px] text-amber-800">
@@ -461,6 +436,8 @@ export function CalculadorModal({
             <label className="text-xs font-black text-slate-500 uppercase mb-1 block">Notas / Observaciones</label>
             <textarea value={notas} onChange={e => setNotas(e.target.value)} rows={3}
               className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400 outline-none" />
+            {/* R3 (C19): la nota de la cotización le llega al cliente en su documento. */}
+            <p className="text-[11px] text-slate-500 mt-1">El cliente verá esta nota</p>
           </div>
         </fieldset>
     </Modal>
@@ -526,10 +503,19 @@ export function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm
 // vacio, Email queda deshabilitado ('Email (sin correo)'); en ambos casos se avisa del correo de respaldo.
 // B2-T9A ronda 1: `textoSinTelefono` (opcional) dice por qué no se ofrece WhatsApp: 'sin teléfono' (por defecto) o
 // 'teléfono incompleto'.
-export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, saving, customerHasPhone, documentLabel = 'cotización', customerEmail, textoSinTelefono = 'sin teléfono' }: { selectedChannel: 'WhatsApp'|'Email'|'Otro'|null; onSelectChannel: (ch: 'WhatsApp'|'Email'|'Otro') => void; onConfirm: () => void; onCancel: () => void; saving: boolean; customerHasPhone: boolean; documentLabel?: string; customerEmail?: string | null; textoSinTelefono?: string }) {
+// B3 T17 (U16-envio punto 13 con RP19, U16-reenvio-cot): dos props opcionales más, que usan la COT, el Hub, la SC (T18)
+// y el PVEN (T19). `envioWhatsApp` {automatico, listo} (useEstadoEnvioWhatsApp; A mayúscula, no es la envioWhatsapp del
+// EnlaceConfirmacionModal) pone bajo la opción WhatsApp si sale sola desde el WhatsApp de la empresa (lineaWhatsAppCanal);
+// `nota` va bajo las opciones (el reenvío: NOTA_REENVIO_ENLACE). Sin ellas, la ventana queda como antes.
+export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, saving, customerHasPhone, documentLabel = 'cotización', customerEmail, textoSinTelefono = 'sin teléfono', envioWhatsApp = null, nota }: {
+  selectedChannel: 'WhatsApp'|'Email'|'Otro'|null; onSelectChannel: (ch: 'WhatsApp'|'Email'|'Otro') => void; onConfirm: () => void;
+  onCancel: () => void; saving: boolean; customerHasPhone: boolean; documentLabel?: string; customerEmail?: string | null;
+  textoSinTelefono?: string; envioWhatsApp?: EnvioWhatsAppCanal | null; nota?: string;
+}) {
   const conoceCorreo = customerEmail !== undefined;
   const correo = (customerEmail || '').trim();
   const sinCorreo = conoceCorreo && !correo;
+  const lineaWhatsApp = customerHasPhone ? lineaWhatsAppCanal(envioWhatsApp) : null;
   return (
     <Modal title="Seleccionar Canal de Envío" subtitle={`¿Por cuál canal deseas enviar la ${documentLabel}?`}
       icon={Send} color="blue" maxWidth="md" onClose={onCancel}
@@ -553,6 +539,11 @@ export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCa
           <Phone size={18}/>
           <span>WhatsApp{!customerHasPhone ? ` (${textoSinTelefono})` : ''}</span>
         </button>
+        {lineaWhatsApp && (
+          <p className={`text-xs font-semibold px-1 ${lineaWhatsApp.tono === 'ok' ? 'text-green-700' : 'text-amber-700'}`}>
+            {lineaWhatsApp.texto}
+          </p>
+        )}
         <button
           onClick={() => onSelectChannel('Email')}
           disabled={sinCorreo}
@@ -577,6 +568,7 @@ export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCa
           <span>Otro</span>
         </button>
       </div>
+      {nota && <p className="text-xs font-semibold text-slate-600">{nota}</p>}
       {conoceCorreo && (
         <p className="text-xs text-slate-500">
           {correo
@@ -699,19 +691,32 @@ export function VerificarAnticipoModal({ cot, verificador, saving, error, onConf
 }
 
 // ── R3: ajustar el anticipo a mano (porcentaje + nota obligatoria) o volver a la modalidad ─────
-export function AjustarAnticipoModal({ cot, saving, error, onGuardar, onVolverModalidad, onCancel }: {
+// B3 T17 (U22-anticipo punto 5): si el cliente ya vio o confirmó la cotización, el 409 ANULA_CONFIRMACION (`anulacion`)
+// cambia el pie por el mismo panel rosa de H40 (anular-confirmacion.tsx, con el anticipo de antes y el nuevo) y deja el
+// formulario inerte; con la razón, onAnular repite el mismo guardado con anular_confirmacion y motivo_recotizacion.
+export function AjustarAnticipoModal({ cot, saving, error, onGuardar, onVolverModalidad, onCancel, anulacion = null,
+  sinConfirmacionVigente = false, onDescartarAnulacion, onAnular }: {
   cot: CotizacionAnticipo; saving: boolean; error?: string;
   onGuardar: (pct: number, nota: string) => void; onVolverModalidad: () => void; onCancel: () => void;
+  anulacion?: AnulacionConfirmacion | null; sinConfirmacionVigente?: boolean; onDescartarAnulacion?: () => void;
+  onAnular?: (motivo: string) => void;
 }) {
   const manual = cot.anticipo_pct_manual !== null && cot.anticipo_pct_manual !== undefined;
   const [pct, setPct] = useState(String(manual ? cot.anticipo_pct_manual : (cot.anticipo_pct ?? 60)));
   const [nota, setNota] = useState(cot.anticipo_manual_nota || '');
+  const [razon, setRazon] = useState('');
   const v = validarAjusteAnticipo(pct, nota);
   const campo = 'w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400';
+  const errorGuardado = error && <p className="text-xs text-red-600 font-bold bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>;
   return (
     <Modal title="Ajustar anticipo" subtitle={`${cot.numero} — total ${fCOP(cot.total_cop)}`}
       icon={DollarSign} color="amber" maxWidth="md" onClose={onCancel}
-      footer={(
+      footer={anulacion ? (
+        <PanelAnularConfirmacion anulacion={anulacion} razon={razon} onRazon={setRazon} saving={saving}
+          titulo={tituloAnulacion(anulacion.estado, anulacion.estado === 'CONFIRMADA' && sinConfirmacionVigente)}
+          error={errorGuardado} placeholder="Ej: el cliente negoció otro anticipo"
+          onSeguirEditando={onDescartarAnulacion} onAnular={motivo => onAnular?.(motivo)} />
+      ) : (
         <>
           <Button variant="secondary" disabled={saving} onClick={onCancel}>Cancelar</Button>
           {manual && <Button variant="secondary" disabled={saving} onClick={onVolverModalidad}>Volver a la modalidad</Button>}
@@ -719,6 +724,7 @@ export function AjustarAnticipoModal({ cot, saving, error, onGuardar, onVolverMo
             onClick={() => v.pct !== null && onGuardar(v.pct, v.nota)}>Guardar</Button>
         </>
       )}>
+      <fieldset disabled={!!anulacion} className="min-w-0 space-y-4">
       <p className="text-sm text-slate-600">
         Hoy: {origenAnticipo(cot)} — {formatoPct(cot.anticipo_pct ?? 60)} = <strong>{fCOP(cot.anticipo_requerido ?? cot.anticipo_cop)}</strong>.
         Úsalo solo en casos especiales (por ejemplo, un anticipo negociado con el cliente).
@@ -736,7 +742,8 @@ export function AjustarAnticipoModal({ cot, saving, error, onGuardar, onVolverMo
           placeholder="Explica por qué el anticipo es distinto al de la modalidad" className={`${campo} resize-none`} />
       </div>
       {(pct !== '' || nota) && v.error && <p className="text-xs text-rose-600 font-bold">{v.error}</p>}
-      {error && <p className="text-xs text-red-600 font-bold bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>}
+      {!anulacion && errorGuardado}
+      </fieldset>
     </Modal>
   );
 }

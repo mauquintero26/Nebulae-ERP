@@ -18,7 +18,7 @@ import { waUrl } from './whatsapp.js';
 import { etiquetaModalidad, pctAnticipoDeModalidad } from './etiquetas-solicitud.js';
 import { resumenPagoPedido } from './resumen-pago.js';
 import { comoUTC } from './hub-ventas.js';
-import { fechaLarga, fechaSolo } from './fechas-colombia.js';
+import { fechaLarga, fechaSolo, diaColombia } from './fechas-colombia.js';
 import { correoValido, normalizarMarca } from './marca-empresa.js';
 
 /**
@@ -441,6 +441,23 @@ export function textoEnlaceVigente(enlace, estadoDelPedido = null, ahora = new D
     return enviado ? `Enviado al cliente el ${enviado} · ${sirve}` : sirve.charAt(0).toUpperCase() + sirve.slice(1);
   }
   return enlace.enviado_at || enlace.vigente === true ? 'El enlace del cliente venció: reenvíaselo' : null;
+}
+
+/**
+ * B3 T17 (U22-validez punto 9): la validez de una cotización que espera al cliente, en «Siguiente paso» de su detalle.
+ * `validaHasta` es valida_hasta ('AAAA-MM-DD'): el último día en que sirve el enlace, hasta las 23:59 de Colombia.
+ * {vencida: false, texto: 'El cliente puede confirmar hasta el 8 de octubre de 2026.'} o, si ese día ya pasó en
+ * Colombia, {vencida: true, texto: 'El enlace venció el 8 de octubre de 2026.'}. null sin una fecha válida (una
+ * cotización enviada antes del Bloque 3).
+ * @param {unknown} validaHasta
+ * @param {Date | number} [ahora]
+ * @returns {{vencida: boolean, texto: string} | null}
+ */
+export function textoValidezCotizacion(validaHasta, ahora = new Date()) {
+  const fecha = fechaSolo(validaHasta);
+  if (!fecha || typeof validaHasta !== 'string') return null;
+  const vencida = diaColombia(ahora) > validaHasta.trim().slice(0, 10);
+  return { vencida, texto: vencida ? `El enlace venció el ${fecha}.` : `El cliente puede confirmar hasta el ${fecha}.` };
 }
 
 // ─── Pequeños textos del documento ─────────────────────────────────────────────────────────────────────────────

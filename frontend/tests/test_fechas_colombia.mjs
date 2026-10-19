@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fechaLarga, fechaSolo, fechaHoraCO, fechaHoraLarga, hace } from '../src/lib/fechas-colombia.js';
+import { fechaLarga, fechaSolo, fechaHoraCO, fechaHoraLarga, hace, diaColombia } from '../src/lib/fechas-colombia.js';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
@@ -100,6 +100,17 @@ console.log('--- TEST 6: fechaHoraLarga (con el año, en hora de Colombia; T14 r
   for (const malo of [null, undefined, '', 'abc', '2026-10-05', 7, new Date('x')]) {
     assert.equal(fechaHoraLarga(malo), '', `inválido o sin hora: ${String(malo)}`);
   }
+}
+
+console.log('--- B3 T17 TEST 7: diaColombia (el día de hoy en Colombia, para la validez de la cotización) ---');
+{
+  assert.equal(diaColombia(new Date('2026-10-08T15:00:00Z')), '2026-10-08');
+  // 11 p. m. del 8 de octubre en Colombia son las 4 a. m. del 9 en UTC: sigue siendo el 8.
+  assert.equal(diaColombia(new Date('2026-10-09T04:00:00Z')), '2026-10-08');
+  assert.equal(diaColombia(new Date('2026-10-09T05:00:00Z')), '2026-10-09', 'medianoche en Colombia');
+  assert.equal(diaColombia(Date.UTC(2026, 0, 1, 4, 59)), '2025-12-31', 'también con milisegundos');
+  assert.match(diaColombia(), /^\d{4}-\d{2}-\d{2}$/, 'sin argumento, hoy');
+  for (const malo of [new Date('x'), NaN, 'abc', null]) assert.equal(diaColombia(malo), '', String(malo));
 }
 
 console.log('✓ Todas las pruebas de fechas de Colombia pasaron.');
