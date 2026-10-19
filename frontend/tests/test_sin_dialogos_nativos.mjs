@@ -1,9 +1,12 @@
 /**
  * frontend/tests/test_sin_dialogos_nativos.mjs
- * H49 (Bloque 2, T1B; choque C4): prueba guardián. En src/app/dashboard/ventas no puede quedar ningún alert(),
- * confirm() ni prompt() nativo del navegador: los avisos y las confirmaciones van por useAvisos()
- * (avisar, avisarError, confirmar) de @/components/ui.
- * - Recorre src/app/dashboard/ventas/**\/*.{ts,tsx,js} sin comentarios y falla con archivo:línea.
+ * H49 (Bloque 2, T1B; choque C4): prueba guardián. En las RAICES (abajo) no puede quedar ningún alert(), confirm() ni
+ * prompt() nativo del navegador: los avisos y las confirmaciones van por useAvisos() (avisar, avisarError, confirmar)
+ * de @/components/ui, y las páginas del cliente muestran sus mensajes en la misma página.
+ * - B3 T12 (RP14): una lista de raíces, cada una un directorio o un archivo. Una raíz que todavía no existe (la crea
+ *   una tarea posterior) no hace fallar la prueba. T14 agrega 'src/app/dashboard/inventario/productos' en una línea,
+ *   en el mismo commit en que quita sus dos alert() (decisión del controlador, punto 2).
+ * - Recorre cada raíz (**\/*.{ts,tsx,js}) sin comentarios y falla con archivo:línea.
  * - Los comentarios /* … *\/ (también los {/* … *\/} de JSX) se cambian por la misma cantidad de saltos de línea, para
  *   que la línea reportada sea la real. Un // se quita solo si no va precedido de ':' y no está dentro de comillas o
  *   backticks (recorrido simple que lleva el estado de la cadena).
@@ -19,12 +22,21 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..');
-const VENTAS = join(RAIZ, 'src', 'app', 'dashboard', 'ventas');
+// Una raíz por línea (relativa a frontend/): un directorio o un archivo.
+const RAICES = [
+  'src/app/dashboard/ventas',
+  'src/app/dashboard/admin/configuracion',
+  'src/app/dashboard/cotiza',
+  'src/components/documento',
+  'src/components/AlertasBadge.tsx',
+  'src/app/confirmar',
+  'src/app/pedido',
+];
 
 // alert( / confirm( / prompt(, sueltos o con window. / window?. / globalThis. / self. delante, que no sean parte de
 // otro nombre (confirmar(, setAlertDias(, chatPrompt() ni un método de otro objeto (x.confirm(); y la forma con
@@ -201,26 +213,33 @@ console.log('--- TEST 1: autoprueba del patrón ---');
   assert.ok(detecta('fetch("x"); const u = http://x; confirm(1)'));
 }
 
-console.log('--- TEST 2: ninguna pantalla de Ventas usa alert/confirm/prompt nativos ---');
+console.log('--- TEST 2: ningún archivo de las raíces usa alert/confirm/prompt nativos ---');
 {
   const hallazgos = [];
-  const recorrer = (dir) => {
-    for (const nombre of readdirSync(dir).sort()) {
-      const ruta = join(dir, nombre);
-      if (statSync(ruta).isDirectory()) recorrer(ruta);
-      else if (/\.(tsx?|js)$/.test(nombre)) {
-        for (const { linea, codigo } of llamadasNativas(readFileSync(ruta, 'utf8'))) {
-          hallazgos.push(`${relative(RAIZ, ruta).replace(/\\/g, '/')}:${linea}  ${codigo}`);
-        }
+  const revisados = [];
+  const revisar = (ruta) => {
+    if (statSync(ruta).isDirectory()) {
+      for (const nombre of readdirSync(ruta).sort()) revisar(join(ruta, nombre));
+    } else if (/\.(tsx?|js)$/.test(ruta)) {
+      revisados.push(ruta);
+      for (const { linea, codigo } of llamadasNativas(readFileSync(ruta, 'utf8'))) {
+        hallazgos.push(`${relative(RAIZ, ruta).replace(/\\/g, '/')}:${linea}  ${codigo}`);
       }
     }
   };
-  recorrer(VENTAS);
+  const existentes = RAICES.filter((r) => existsSync(join(RAIZ, r)));
+  // La guardia no puede quedar vacía en silencio: Ventas siempre existe.
+  assert.ok(existentes.includes('src/app/dashboard/ventas'), 'falta src/app/dashboard/ventas');
+  for (const r of existentes) revisar(join(RAIZ, r));
+  assert.ok(revisados.length > 0, 'no se revisó ningún archivo');
   assert.deepEqual(
     hallazgos,
     [],
-    `${hallazgos.length} diálogo(s) nativo(s) en Ventas; usa useAvisos() (avisar, avisarError, confirmar):\n  ${hallazgos.join('\n  ')}`,
+    `${hallazgos.length} diálogo(s) nativo(s); usa useAvisos() (avisar, avisarError, confirmar):\n  ${hallazgos.join('\n  ')}`,
   );
+  const faltan = RAICES.filter((r) => !existentes.includes(r));
+  console.log(`  ${revisados.length} archivos en ${existentes.length} de ${RAICES.length} raíces`
+    + (faltan.length ? ` (aún no existen: ${faltan.join(', ')})` : ''));
 }
 
-console.log('✓ Ventas no usa alert/confirm/prompt nativos.');
+console.log('✓ Las raíces revisadas no usan alert/confirm/prompt nativos.');
