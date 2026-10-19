@@ -47,6 +47,21 @@ _SECRET_KEYS = frozenset({
 _DEV_SECRET = "super-secret-key-for-development-change-me"
 
 # ============================================================================
+# Variables de la revision automatica (Bloque 3, TAREAS) -- solo documentacion:
+# este lanzador no las lee; las lee app/core/tareas_automaticas.py (R14).
+# ============================================================================
+# NEBULAE_TAREAS_AUTOMATICAS=1   Enciende la revision automatica cada 10 minutos
+#                                (recordatorios a los clientes, purga de la Papelera).
+#                                Va SOLO en el entorno de UN servidor de produccion,
+#                                que ya tiene NEBULAE_ENV=production: el .env.production
+#                                de este lanzador, o las variables de EasyPanel si corre
+#                                en Docker. NUNCA en backend/.env (desarrollo, erp_test).
+#                                Con --workers 2 cada worker arranca su bucle y un
+#                                candado de Postgres decide quien revisa en cada vuelta.
+# NEBULAE_TAREAS_INTERVALO_SEG   Opcional: segundos entre revisiones (600 por defecto,
+#                                de 60 a 3600).
+
+# ============================================================================
 # PID file
 # ============================================================================
 _PID_FILE = pathlib.Path(__file__).parent / "nebulae_backend.pid"

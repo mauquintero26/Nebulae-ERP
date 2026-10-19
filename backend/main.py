@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import math
 from decimal import Decimal
 
@@ -14,6 +16,9 @@ from app.api.v1 import debug_db  # Hardening — endpoint de verificacion de DB 
 from app.api import ws
 from app.db.database import Base, engine
 from app.core.preflight import run_preflight_or_abort  # BLOQUE 5 — Preflight DB check
+from app.core import tareas_automaticas  # Bloque 3 (TAREAS) — revision automatica cada 10 minutos, solo en produccion
+
+logger = logging.getLogger(__name__)
 
 # Create tables in DB (for development/testing only, Alembic is preferred)
 # Base.metadata.create_all(bind=engine)
@@ -72,6 +77,35 @@ async def startup_preflight():
     No imprime DATABASE_URL ni credenciales.
     """
     run_preflight_or_abort()
+
+
+# Bloque 3 (TAREAS): segundos que el apagado espera a que el bucle termine de cancelarse.
+_ESPERA_AL_DETENER_TAREAS_SEG = 5
+
+
+@app.on_event("startup")
+async def iniciar_tareas_automaticas():
+    """Revision automatica (B3 T10). Va DESPUES de startup_preflight: solo con la base verificada. Arranca el bucle
+    solo si tareas_automaticas.debe_iniciar() (R14: NEBULAE_TAREAS_AUTOMATICAS=1 y NEBULAE_ENV=production, base de
+    produccion, sin pytest ni --reload). Con --workers 2 cada proceso arranca el suyo y el candado de Postgres decide
+    quien revisa en cada vuelta."""
+    if tareas_automaticas.debe_iniciar():
+        app.state.tareas_bucle = asyncio.create_task(tareas_automaticas.bucle())
+        logger.info("Tareas automáticas activas cada %s s", tareas_automaticas.intervalo_seg())
+    else:
+        logger.info("Tareas automáticas apagadas en este proceso")
+
+
+@app.on_event("shutdown")
+async def detener_tareas_automaticas():
+    """Cancela el bucle de la revision automatica si este proceso lo arranco. Lo ya confirmado se queda; si habia una
+    revision a mitad, su hilo la termina y suelta el candado (y si el proceso muere antes, Postgres lo suelta)."""
+    tarea = getattr(app.state, "tareas_bucle", None)
+    if tarea is None:
+        return
+    app.state.tareas_bucle = None
+    tarea.cancel()
+    await asyncio.wait({tarea}, timeout=_ESPERA_AL_DETENER_TAREAS_SEG)
 
 
 @app.exception_handler(Exception)

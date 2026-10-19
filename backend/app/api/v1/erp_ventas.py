@@ -3,7 +3,7 @@ ERP Ventas API
 Endpoints for: Solicitudes de Cliente (SC), Cotizaciones (COT),
 Pedidos de Venta (VEN), Ordenes Pendientes por Pagar (PXP)
 """
-from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import text, func, select, case, and_, or_
 from sqlalchemy.exc import DataError, DBAPIError, IntegrityError, OperationalError
@@ -26,8 +26,8 @@ from app.api.dependencies import (
 )
 from app.models.users import User
 from app.core.busqueda import productos_ilike
-from app.core import cambios_documento, clientes, envio_whatsapp
-from app.core.admin_config import config_entero, guardar_config
+from app.core import cambios_documento, clientes, envio_whatsapp, tareas_automaticas
+from app.core.admin_config import config_entero, guardar_config, leer_config
 from app.core.correo_documento import correo_documento
 from app.core.empresa import PREFIJOS_RESERVADOS, perfil_publico
 from app.core.telefonos import e164_whatsapp, telefono_del_documento, telefono_legible
@@ -50,6 +50,7 @@ from app.api.v1.schemas_compras import CancelarSolicitudBody, CotizarSinConfirma
 from app.api.v1.crm import mover_lead_de_solicitud, reabrir_lead_de_solicitud
 import datetime
 import hashlib
+import json
 import logging
 import re
 import unicodedata
@@ -4775,8 +4776,12 @@ _MENSAJE_CLAVES_DE_EMPRESA = "Los datos de la empresa y de los documentos se cam
 # B3 T8 (RP18, decision 4 del controlador): envio_whatsapp_* va por PUT /envio-cliente/whatsapp/config.
 _MENSAJE_CLAVES_DE_WHATSAPP = ("El número de WhatsApp de la empresa y el envío automático se cambian en Envío "
                                "automático por WhatsApp.")
+# B3 T10 (RP18): tareas_* (la hora y el resumen de la revisión automática) las escribe solo el sistema; se leen por
+# GET /tareas/estado.
+_MENSAJE_CLAVES_DEL_SISTEMA = "Ese valor lo escribe el sistema."
 _PREFIJOS_RESERVADOS_CONFIG = {**{prefijo: _MENSAJE_CLAVES_DE_EMPRESA for prefijo in PREFIJOS_RESERVADOS},
-                               envio_whatsapp.PREFIJO_CLAVES: _MENSAJE_CLAVES_DE_WHATSAPP}
+                               envio_whatsapp.PREFIJO_CLAVES: _MENSAJE_CLAVES_DE_WHATSAPP,
+                               tareas_automaticas.PREFIJO_CLAVES: _MENSAJE_CLAVES_DEL_SISTEMA}
 
 
 def _validar_tarifa_defecto(valor) -> str:
@@ -4872,6 +4877,47 @@ def update_config(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)),
     guardar_config(db, _validar_config(body))
     db.commit()
     return {"status": "success"}
+
+
+# ─── REVISIÓN AUTOMÁTICA (B3 T10, TAREAS) ────────────────────────────────────────────────────────────────────────
+
+MENSAJE_REVISION_APAGADA = "La revisión automática está apagada en este servidor."
+
+
+def _resumen_de_revision(texto):
+    """El resumen guardado de la última revisión como dict, o None si falta o no es un objeto JSON (json.loads seguro)."""
+    try:
+        resumen = json.loads(texto) if texto else None
+    except (TypeError, ValueError):
+        return None
+    return resumen if isinstance(resumen, dict) else None
+
+
+@router.get("/tareas/estado")
+def estado_tareas_automaticas(user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Session = Depends(get_db)):
+    """Estado de la revisión automática para Configuración (lo leen todos los roles; nada sensible).
+    activas_en_servidor es tareas_habilitadas() (R14, RP30): no mira si pytest está cargado. La hora y el resumen se
+    leen con leer_config (RP17); la hora va tal como se guardó (UTC con 'Z')."""
+    valores = leer_config(db, [tareas_automaticas.CLAVE_ULTIMA_REVISION, tareas_automaticas.CLAVE_ULTIMO_RESUMEN])
+    return {"status": "success", "data": {
+        "activas_en_servidor": tareas_automaticas.tareas_habilitadas(),
+        "intervalo_min": tareas_automaticas.intervalo_seg() // 60,
+        "ultima_revision": valores.get(tareas_automaticas.CLAVE_ULTIMA_REVISION),
+        "resumen": _resumen_de_revision(valores.get(tareas_automaticas.CLAVE_ULTIMO_RESUMEN)),
+    }}
+
+
+@router.post("/tareas/revisar-ahora", status_code=202)
+def revisar_ahora(background_tasks: BackgroundTasks, user: User = Depends(require_roles(*ROLE_ADMIN))):
+    """«Revisar ahora» del administrador: la misma revisión del bucle, en segundo plano. 409 si la revisión está
+    apagada en este servidor (R14: sin las dos variables, o con una base de pruebas), para que un clic en un equipo de
+    prueba nunca le escriba a un cliente. El candado evita que choque con el bucle. El rastro lleva el autor de la sesión
+    (RP15)."""
+    if not tareas_automaticas.tareas_habilitadas():
+        raise HTTPException(409, MENSAJE_REVISION_APAGADA)
+    background_tasks.add_task(tareas_automaticas.correr_una_vez)
+    logger.info("Revisión automática pedida a mano por %s", nombre_de_usuario(user))
+    return {"status": "success", "message": "Revisión iniciada"}
 
 
 # ─── IA ANÁLISIS DE SOLICITUD ────────────────────────────────────────────────
