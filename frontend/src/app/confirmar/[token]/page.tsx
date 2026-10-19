@@ -1,110 +1,136 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
-import { CheckCircle2, AlertCircle, RefreshCw } from 'lucide-react';
-import { apiFetch } from '@/lib/api';
+import { API_URL } from '@/lib/api';
+import {
+  claveIdempotencia, pedirPublico, respuestaDeAccion, tituloDeLaPagina, vistaConDocumento, vistaDeRespuesta,
+  type VistaPublica,
+} from '@/lib/confirmacion-publica';
+import { AvisoEnlace, CargandoDocumento } from './aviso-enlace';
+import { PanelPedirCambios, type TipoCambios } from './panel-cambios';
+import { VistaCotizacion } from './vista-cotizacion';
+import { VistaSolicitud } from './vista-solicitud';
 
-const fCOP = (v: any) => { const n = Number(v) || 0; return n > 0 ? '$' + n.toLocaleString('es-CO') : '$0'; };
-const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
-
+/**
+ * La página que abre el cliente con su enlace de confirmación (B3 T15: U17+H28 punto 9, U22+H38 punto 7, H28-cambios
+ * punto 6; C3, C9, C10, C26). Solo despacha:
+ * - UNA llamada al cargar (POST /confirmar/ver, C26): la marca de la empresa viene en la respuesta, también en el 400;
+ * - 'pendiente' con su documento: la solicitud (VistaSolicitud, 'degradado') o la cotización (VistaCotizacion,
+ *   'acento'), con 'Confirmar' y 'Pedir cambios' (PanelPedirCambios, que reemplaza a los botones);
+ * - todo lo demás (los estados del enlace, el 200 de confirmar o de pedir cambios, sin conexión, un error): AvisoEnlace.
+ * Las respuestas se leen con vistaDeRespuesta y respuestaDeAccion (lib/confirmacion-publica.js): el 422 y los errores
+ * de una acción se muestran en la misma pantalla sin borrar lo escrito; un 400 muestra el estado que manda el servidor
+ * (doble clic u otra pestaña: 'ya fue confirmada'). La pestaña sale de tituloDeLaPagina.
+ */
 export default function ConfirmarPublicoPage() {
   const params = useParams();
   const token = String(params.token || '');
-  const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<any>(null);
-  const [error, setError] = useState('');
-  const [confirming, setConfirming] = useState(false);
-  const [done, setDone] = useState(false);
+  const [vista, setVista] = useState<VistaPublica | null>(null);
+  // Cada 'Reintentar' vuelve a pedir /confirmar/ver.
+  const [intento, setIntento] = useState(0);
+  const [enviando, setEnviando] = useState<'confirmar' | 'cambios' | null>(null);
+  const [errorAccion, setErrorAccion] = useState<string | null>(null);
+  const [panelAbierto, setPanelAbierto] = useState(false);
+  const [errorCambios, setErrorCambios] = useState<string | null>(null);
 
   useEffect(() => {
-    (async () => {
-      try {
-        // Round 7: el token va en el body JSON, nunca en la URL de la API (la URL de
-        // ESTA pagina si lo lleva -- params.token, inevitable, igual que
-        // /reset-password?token= -- lo que cambia es solo como esta pagina habla con
-        // el backend, para que un access log de uvicorn nunca vea el token crudo).
-        const raw = await apiFetch(`/confirmar/ver`, {
-          method: 'POST',
-          body: JSON.stringify({ token }),
-        });
-        setData(raw?.data ?? raw);
-      } catch (err: any) {
-        setError(err.message || 'El enlace no es válido o ya expiró.');
-      }
-      setLoading(false);
-    })();
-  }, [token]);
+    // Round 7: el token va en el body JSON, nunca en la URL de la API (la URL de
+    // ESTA pagina si lo lleva -- params.token, inevitable, igual que
+    // /reset-password?token= -- lo que cambia es solo como esta pagina habla con
+    // el backend, para que un access log de uvicorn nunca vea el token crudo).
+    // pedirPublico no manda la sesion del personal ni Referer, nunca lleva a /login y nunca lanza.
+    let vigente = true;
+    pedirPublico(API_URL, '/confirmar/ver', { token }).then((r) => {
+      if (vigente) setVista(vistaDeRespuesta(r));
+    });
+    return () => {
+      vigente = false;
+    };
+  }, [token, intento]);
 
-  async function confirmar() {
-    setConfirming(true);
-    try {
-      await apiFetch(`/confirmar/confirmar`, {
-        method: 'POST',
-        headers: { 'Idempotency-Key': `confirm-${token.slice(0, 16)}` },
-        body: JSON.stringify({ token }),
-      });
-      setDone(true);
-    } catch (err: any) {
-      setError(err.message || 'El enlace no es válido o ya expiró.');
-    }
-    setConfirming(false);
+  // La pestaña dice el documento y la empresa en cualquier estado ('Solicitud SC-… · Empresa').
+  useEffect(() => {
+    if (vista) document.title = tituloDeLaPagina(vista, 'Documento');
+  }, [vista]);
+
+  function reintentar() {
+    setVista(null);
+    setErrorAccion(null);
+    setErrorCambios(null);
+    setPanelAbierto(false);
+    setIntento((n) => n + 1);
   }
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center"><RefreshCw className="animate-spin text-indigo-600" size={32} /></div>;
-  if (error) return <div className="min-h-screen flex flex-col items-center justify-center gap-3 px-6 text-center"><AlertCircle className="text-rose-500" size={40} /><p className="text-slate-600 font-medium">{error}</p></div>;
-  if (done) return <div className="min-h-screen flex flex-col items-center justify-center gap-3 px-6 text-center"><CheckCircle2 className="text-emerald-500" size={40} /><p className="text-slate-800 font-bold text-lg">¡Gracias! Tu confirmación fue registrada.</p></div>;
+  // Una Idempotency-Key nueva por intento, sin el token. Si el POST no llega (sin red o un error), la hoja y lo escrito
+  // se quedan con el mensaje; un 400 trae el estado del enlace (otra pestaña ya confirmó: 'ya fue confirmada').
+  async function confirmar() {
+    if (enviando) return;
+    setEnviando('confirmar');
+    setErrorAccion(null);
+    const r = await pedirPublico(API_URL, '/confirmar/confirmar', { token },
+      { 'Idempotency-Key': claveIdempotencia('confirmar') });
+    const resultado = respuestaDeAccion(r, 'confirmar', vista);
+    if (resultado.vista) setVista(resultado.vista);
+    else setErrorAccion(resultado.error);
+    setEnviando(null);
+  }
 
-  // Hallazgo #4 (adversarial review): antes esta pagina solo mostraba el numero y el
-  // nombre del cliente -- nunca el precio que se le pedia confirmar. /confirmar/ver ya
-  // devuelve productos/total_cop/fecha_entrega_estimada (para SC y COT); esta pagina
-  // simplemente no los renderizaba. Todo es condicional a que el campo venga presente
-  // en la respuesta -- SC hoy no trae total_cop (no tiene un campo agregado propio),
-  // asi que esa seccion simplemente no se muestra para SC, sin necesidad de ramificar
-  // por tipo de documento.
-  const productos = Array.isArray(data?.productos) ? data.productos : [];
+  async function pedirCambios(tipo: TipoCambios, comentario: string) {
+    if (enviando) return;
+    setEnviando('cambios');
+    setErrorCambios(null);
+    const r = await pedirPublico(API_URL, '/confirmar/pedir-cambios', { token, tipo, comentario },
+      { 'Idempotency-Key': claveIdempotencia('cambios') });
+    const resultado = respuestaDeAccion(r, 'cambios', vista);
+    if (resultado.vista) {
+      setVista(resultado.vista);
+      setPanelAbierto(false);
+    } else {
+      setErrorCambios(resultado.error);
+    }
+    setEnviando(null);
+  }
+
+  function abrirPanel() {
+    setErrorAccion(null);
+    setErrorCambios(null);
+    setPanelAbierto(true);
+  }
+
+  function cerrarPanel() {
+    setErrorCambios(null);
+    setPanelAbierto(false);
+  }
+
+  let contenido;
+  if (!vista) {
+    contenido = <CargandoDocumento />;
+  } else if (vista.estado_enlace === 'pendiente' && vistaConDocumento(vista) && (vista.tipo === 'SC' || vista.tipo === 'COT')) {
+    // Hallazgo #4 (adversarial review): el cliente ve lo que confirma (productos y, en la COT, precios y totales); los
+    // números vienen del servidor y DocumentoComercial no recalcula nada.
+    const panel = panelAbierto ? (
+      <PanelPedirCambios
+        tipo={vista.tipo}
+        asesor={vista.documento?.atendido_por}
+        marca={vista.empresa}
+        onEnviar={pedirCambios}
+        enviando={enviando === 'cambios'}
+        error={errorCambios}
+        onVolver={cerrarPanel}
+      />
+    ) : null;
+    const props = {
+      vista, apiUrl: API_URL, onConfirmar: confirmar, confirmando: enviando === 'confirmar', onPedirCambios: abrirPanel,
+      errorAccion, panel,
+    };
+    contenido = vista.tipo === 'SC' ? <VistaSolicitud {...props} /> : <VistaCotizacion {...props} />;
+  } else {
+    contenido = <AvisoEnlace vista={vista} apiUrl={API_URL} onReintentar={reintentar} />;
+  }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center gap-6 px-6 text-center max-w-md mx-auto">
-      <h1 className="text-xl font-black text-slate-800">{data?.numero}</h1>
-      <p className="text-slate-600">{data?.customer_name}</p>
-
-      {productos.length > 0 && (
-        <div className="w-full bg-slate-50 border border-slate-200 rounded-xl p-4 text-left">
-          <p className="text-xs font-black text-slate-400 uppercase mb-2">Productos</p>
-          <div className="space-y-1.5">
-            {productos.map((p: any, i: number) => (
-              <div key={i} className="flex justify-between gap-3 text-sm text-slate-700">
-                <span className="truncate">{p.product_name}{p.qty ? ` × ${p.qty}` : ''}</span>
-                {/* Round 3 (adversarial review, hallazgo #4): los productos de una
-                    Solicitud (SC, Gate 1) genuinamente no tienen precio por linea todavia
-                    (unit_price_cop viene en 0 por diseno -- el precio recien existe cuando
-                    se crea la Cotizacion) -- mostrar "$0" junto a cada producto en esa
-                    pagina se veia como un error. Se omite el precio cuando no es > 0, en
-                    vez de ramificar esta pagina por tipo de documento. */}
-                {Number(p.unit_price_cop) > 0 && (
-                  <span className="font-bold shrink-0">{fCOP(p.unit_price_cop)}</span>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {!!data?.total_cop && (
-        <div className="w-full flex justify-between items-center bg-indigo-50 border border-indigo-100 rounded-xl px-4 py-3">
-          <span className="text-sm font-bold text-indigo-700">Total</span>
-          <span className="text-lg font-black text-indigo-800">{fCOP(data.total_cop)}</span>
-        </div>
-      )}
-
-      {data?.fecha_entrega_estimada && (
-        <p className="text-xs text-slate-500">Entrega estimada: {fDate(data.fecha_entrega_estimada)}</p>
-      )}
-
-      <button onClick={confirmar} disabled={confirming}
-        className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold px-8 py-3 rounded-xl">
-        {confirming ? 'Confirmando...' : 'Confirmar'}
-      </button>
-    </div>
+    <main className="min-h-screen bg-gray-100 px-4 py-6 text-gray-900 print:bg-white print:p-0">
+      {contenido}
+    </main>
   );
 }

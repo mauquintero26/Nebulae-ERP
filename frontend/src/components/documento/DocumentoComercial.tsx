@@ -38,6 +38,12 @@ export type DocumentoComercialProps = {
   metaDerecha?: MetaDocumento[];
   /** Lo que va bajo los totales (ResumenPagosCliente del pedido, C3). */
   extraTotales?: ReactNode;
+  /**
+   * B3 T15: el nivel del título del documento ('SOLICITUD', 'COTIZACIÓN'…): 1 (por defecto) cuando la hoja es lo
+   * principal de la página; 2 debajo de otro h1 (el aviso de la página pública, la vista previa de Configuración). Las
+   * secciones de la hoja quedan un nivel más abajo.
+   */
+  nivelTitulo?: 1 | 2;
 };
 
 const COLOR_SELLO = { ok: '#15803D', alerta: '#B45309', info: '#1D4ED8', gris: '#4B5563' } as const;
@@ -188,10 +194,11 @@ function Totales({ filas, variante }: { filas: FilaTotal[]; variante: 'degradado
   );
 }
 
-function Seccion({ titulo, children }: { titulo: string; children: ReactNode }) {
+function Seccion({ titulo, nivel = 2, children }: { titulo: string; nivel?: 2 | 3; children: ReactNode }) {
+  const Encabezado = nivel === 3 ? 'h3' : 'h2';
   return (
     <section className="space-y-1">
-      <h2 className="text-xs font-bold uppercase tracking-wide text-gray-500">{titulo}</h2>
+      <Encabezado className="text-xs font-bold uppercase tracking-wide text-gray-500">{titulo}</Encabezado>
       {children}
     </section>
   );
@@ -211,8 +218,10 @@ function Seccion({ titulo, children }: { titulo: string; children: ReactNode }) 
  */
 export function DocumentoComercial({
   documento, marca, apiUrl, variante, acciones, sello, aviso, mostrarDescargar = true, fijarTitulo = false, metaDerecha,
-  extraTotales,
+  extraTotales, nivelTitulo = 1,
 }: DocumentoComercialProps) {
+  const Titulo = nivelTitulo === 2 ? 'h2' : 'h1';
+  const nivelSeccion = nivelTitulo === 2 ? 3 : 2;
   const doc = normalizarDocumento(documento);
   const m = normalizarMarca(marca);
   const tipo = doc.tipo === 'SC' || doc.tipo === 'COT' || doc.tipo === 'PVEN' ? doc.tipo : null;
@@ -275,7 +284,7 @@ export function DocumentoComercial({
   );
 
   const formaDePago = forma && (forma.etiqueta || forma.texto || forma.instrucciones) && (
-    <Seccion titulo="Forma de pago">
+    <Seccion titulo="Forma de pago" nivel={nivelSeccion}>
       {forma.etiqueta && <p className="font-semibold text-gray-900">{forma.etiqueta}</p>}
       {forma.texto && <p className="text-sm text-gray-800">{forma.texto}</p>}
       {forma.instrucciones && (
@@ -327,7 +336,7 @@ export function DocumentoComercial({
                 <div className="min-w-0 space-y-3">
                   <LogoMarca marca={m} apiUrl={apiUrl} sobre="franja" />
                   <div className="flex flex-wrap items-center gap-3">
-                    <h1 className="text-3xl font-extrabold tracking-wide @min-[40rem]:text-4xl">{titulo}</h1>
+                    <Titulo className="text-3xl font-extrabold tracking-wide @min-[40rem]:text-4xl">{titulo}</Titulo>
                     {sello && <Sello sello={sello} />}
                   </div>
                   {doc.numero && <p className="break-words text-sm font-semibold"># {doc.numero}</p>}
@@ -366,9 +375,9 @@ export function DocumentoComercial({
                 <div className="space-y-1 @min-[40rem]:text-right">
                   <div className="flex flex-wrap items-center gap-3 @min-[40rem]:justify-end">
                     {sello && <Sello sello={sello} />}
-                    <h1 className="text-2xl font-extrabold tracking-wide @min-[40rem]:text-3xl" style={{ color: 'var(--doc-acento-texto)' }}>
+                    <Titulo className="text-2xl font-extrabold tracking-wide @min-[40rem]:text-3xl" style={{ color: 'var(--doc-acento-texto)' }}>
                       {titulo}
-                    </h1>
+                    </Titulo>
                   </div>
                   {doc.numero && <p className="break-words text-sm font-semibold text-gray-700">N.º {doc.numero}</p>}
                 </div>
@@ -390,7 +399,7 @@ export function DocumentoComercial({
               <div className="space-y-5">
                 {formaDePago}
                 {doc.terminos && (
-                  <Seccion titulo="Términos y condiciones">
+                  <Seccion titulo="Términos y condiciones" nivel={nivelSeccion}>
                     <p className="whitespace-pre-line break-words text-sm text-gray-800">{doc.terminos}</p>
                   </Seccion>
                 )}
@@ -405,7 +414,7 @@ export function DocumentoComercial({
               {formaDePago}
               {extraTotales}
               {doc.terminos && (
-                <Seccion titulo="Términos y condiciones">
+                <Seccion titulo="Términos y condiciones" nivel={nivelSeccion}>
                   <p className="whitespace-pre-line break-words text-sm text-gray-800">{doc.terminos}</p>
                 </Seccion>
               )}
@@ -413,7 +422,7 @@ export function DocumentoComercial({
           )}
 
           {doc.notas.map((nota, i) => (
-            <Seccion key={`${nota.titulo ?? 'Notas'}-${i}`} titulo={nota.titulo ?? 'Notas'}>
+            <Seccion key={`${nota.titulo ?? 'Notas'}-${i}`} titulo={nota.titulo ?? 'Notas'} nivel={nivelSeccion}>
               <p className="whitespace-pre-line break-words rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-800">
                 {nota.texto}
               </p>

@@ -10,6 +10,9 @@
  * - puedeEnviarCambios: CAMBIOS de 10 a 1000 caracteres; NO_LA_NECESITA admite vacío. La misma limpieza del backend
  *   (_limpiar_comentario): sin Cc (salvo \n y \t), Cs ni Cf, \r\n -> \n, sin bordes, contando code points; más de
  *   4000 sin limpiar es demasiado largo.
+ * - B3 T15 (TEST 12 a 21): lo que pintan las páginas públicas: vista.tipo, vistaConDocumento, respuestaDeAccion (el
+ *   422 y los errores de una acción en la misma pantalla), textoAntesDeConfirmar, queSigue, lineaConfirmacion,
+ *   metaDeLaVista, selloDeLaVista, parrafoDelAviso, textosPanelCambios y tituloDeLaPagina.
  */
 
 import assert from 'node:assert/strict';
@@ -18,7 +21,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   pedirPublico, vistaDeRespuesta, TEXTOS_ENLACE, claveIdempotencia, puedeEnviarCambios, limpiarComentario,
-  MIN_COMENTARIO_CAMBIOS, MAX_COMENTARIO_CAMBIOS,
+  MIN_COMENTARIO_CAMBIOS, MAX_COMENTARIO_CAMBIOS, vistaConDocumento, respuestaDeAccion, textoAntesDeConfirmar,
+  queSigue, lineaConfirmacion, metaDeLaVista, selloDeLaVista, parrafoDelAviso, textosPanelCambios, tituloDeLaPagina,
 } from '../src/lib/confirmacion-publica.js';
 import { fechaHoraCO } from '../src/lib/fechas-colombia.js';
 import { DOCUMENTO_EJEMPLO_SC, DOCUMENTO_EJEMPLO_COT } from '../src/lib/documento-comercial.js';
@@ -363,6 +367,250 @@ console.log('--- TEST 11: sin apiFetch ni URL de producción escrita a mano ---'
   assert.match(fuente, /import\s*\{[^}]*\bstripPy\b[^}]*\}\s*from\s*'\.\/marca-empresa\.js'/);
   assert.match(fuente, /import\s*\{[^}]*\blargoTexto\b[^}]*\}\s*from\s*'\.\/chatter\.js'/);
   assert.doesNotMatch(fuente, /x1c-\\x1f|\[\.\.\.\w+\]\.length/, 'sin otra lista de espacios ni otro conteo de code points');
+}
+
+// ─── B3 T15: lo que pintan las páginas /confirmar/{token} y /pedido/{token} (solo librerías probadas) ──────────────
+
+const PVEN = { ...DOCUMENTO_EJEMPLO_COT, tipo: 'PVEN', titulo: 'Pedido de venta', numero: 'PVEN-DEMO-0001' };
+const pendiente = (documento, extra = {}) => vistaDeRespuesta(respuesta(200, { status: 'success',
+  estado_enlace: 'pendiente', vence_at: '2026-10-05T14:00:00Z', empresa: EMPRESA,
+  data: { numero: documento.numero, documento }, ...extra }));
+const enlace400 = (extra) => vistaDeRespuesta({ ok: false, status: 400, mensaje: null,
+  cuerpo: { detail: detalle400(extra) } });
+const confirmada200 = (extra) => vistaDeRespuesta(respuesta(200, { status: 'success', estado_enlace: 'confirmada',
+  mensaje: '¡Gracias! Tu confirmación fue registrada.', confirmada_el: '2026-10-03T20:15:00Z', empresa: EMPRESA,
+  ...extra }));
+const consulta = (extra = {}) => vistaDeRespuesta(respuesta(200, { status: 'success', empresa: EMPRESA, data: PVEN,
+  cot_numero: 'COT-DEMO-0001', ...extra }));
+
+console.log('--- TEST 12 (T15): vista.tipo, por el documento, su número o el mensaje del servidor ---');
+{
+  assert.equal(pendiente(DOCUMENTO_EJEMPLO_SC).tipo, 'SC');
+  assert.equal(pendiente(DOCUMENTO_EJEMPLO_COT).tipo, 'COT');
+  assert.equal(consulta().tipo, 'PVEN');
+  assert.equal(enlace400({ estado_enlace: 'vencido', mensaje: 'Este enlace venció el 8 de octubre de 2026.',
+    documento: { numero: 'COT-20261003-1' } }).tipo, 'COT', 'por el prefijo del número');
+  assert.equal(enlace400({ estado_enlace: 'actualizada',
+    mensaje: 'Tu asesor actualizó esta cotización después de tu confirmación.' }).tipo, 'COT', 'por el mensaje');
+  assert.equal(enlace400({ estado_enlace: 'reemplazado',
+    mensaje: 'Te enviamos un enlace más reciente para esta solicitud.' }).tipo, 'SC');
+  assert.equal(enlace400({ estado_enlace: 'invalido', mensaje: 'El enlace no es válido o ya expiró.' }).tipo, null);
+  assert.equal(vistaDeRespuesta({ ok: false, status: 0, cuerpo: null, mensaje: null }).tipo, null);
+}
+
+console.log('--- TEST 13 (T15): vistaConDocumento (la hoja se pinta solo pendiente, confirmada y el pedido) ---');
+{
+  assert.equal(vistaConDocumento(pendiente(DOCUMENTO_EJEMPLO_SC)), true);
+  assert.equal(vistaConDocumento(pendiente(DOCUMENTO_EJEMPLO_COT)), true);
+  assert.equal(vistaConDocumento(consulta()), true);
+  assert.equal(vistaConDocumento(enlace400({ estado_enlace: 'confirmada', mensaje: 'Esta solicitud ya fue confirmada.',
+    documento: DOCUMENTO_EJEMPLO_SC, confirmada_el: '2026-10-03T20:15:00Z' })), true, 'SC confirmada con su resumen');
+  assert.equal(vistaConDocumento(enlace400({ estado_enlace: 'confirmada', mensaje: 'Esta cotización ya fue confirmada.',
+    documento: { numero: 'COT-20261003-1' } })), false, 'C10: la COT confirmada solo trae su número');
+  assert.equal(vistaConDocumento(confirmada200({ data: { numero: 'SC-DEMO-0001', documento: DOCUMENTO_EJEMPLO_SC } })),
+    true);
+  assert.equal(vistaConDocumento(vistaDeRespuesta(respuesta(200, { status: 'success', estado_enlace: 'cambios_enviados',
+    mensaje: '¡Listo! Recibimos tus cambios.', detalle: 'x', empresa: EMPRESA,
+    data: { numero: 'SC-DEMO-0001', documento: DOCUMENTO_EJEMPLO_SC } }))), false,
+  'después de pedir cambios no se pinta la hoja (va a cambiar)');
+  assert.equal(vistaConDocumento(enlace400({ estado_enlace: 'vencido', mensaje: 'x', documento: { numero: 'SC-1' } })),
+    false);
+  assert.equal(vistaConDocumento(null), false);
+}
+
+console.log('--- TEST 14 (T15): respuestaDeAccion (el 422 y los errores en la misma pantalla; lo demás reemplaza la vista) ---');
+{
+  const anterior = pendiente(DOCUMENTO_EJEMPLO_SC);
+  const corto = 'Cuéntanos qué quieres cambiar (al menos 10 caracteres).';
+  assert.deepEqual(respuestaDeAccion({ ok: false, status: 422, mensaje: corto, cuerpo: { detail: corto } }, 'cambios',
+    anterior), { vista: null, error: corto }, 'el 422: solo el mensaje, la vista y lo escrito se conservan');
+  assert.deepEqual(respuestaDeAccion({ ok: false, status: 0, cuerpo: null, mensaje: null }, 'confirmar', anterior),
+    { vista: null, error: 'No pudimos enviar tu confirmación. Revisa tu conexión y vuelve a intentarlo.' });
+  const sinRed = respuestaDeAccion({ ok: false, status: 0, cuerpo: null, mensaje: null }, 'cambios', anterior);
+  assert.equal(sinRed.vista, null);
+  assert.equal(sinRed.error, 'No pudimos enviar tu mensaje. Revisa tu conexión y vuelve a intentarlo: lo que escribiste '
+    + 'sigue aquí.');
+  assert.deepEqual(respuestaDeAccion({ ok: false, status: 500, mensaje: 'Ocurrió un error inesperado. Intenta de nuevo.',
+    cuerpo: { status: 'error', message: 'Internal Server Error' } }, 'confirmar', anterior),
+  { vista: null, error: 'Ocurrió un error inesperado. Intenta de nuevo.' });
+
+  // Un 400 con el estado del enlace (doble clic, otra pestaña, venció) reemplaza la vista.
+  const yaConfirmada = respuestaDeAccion({ ok: false, status: 400, mensaje: null, cuerpo: { detail: detalle400({
+    estado_enlace: 'confirmada', mensaje: 'Esta solicitud ya fue confirmada.', documento: DOCUMENTO_EJEMPLO_SC,
+    confirmada_el: '2026-10-03T20:15:00Z' }) } }, 'confirmar', anterior);
+  assert.equal(yaConfirmada.error, null);
+  assert.equal(yaConfirmada.vista.estado_enlace, 'confirmada');
+  assert.equal(yaConfirmada.vista.recienConfirmada, false);
+
+  // El 200 de confirmar con su documento.
+  const ok = respuestaDeAccion(respuesta(200, { status: 'success', estado_enlace: 'confirmada',
+    mensaje: '¡Gracias! Tu confirmación fue registrada.', confirmada_el: '2026-10-03T20:15:00Z', empresa: EMPRESA,
+    siguiente_paso: ['a', 'b', 'c'], data: { numero: 'SC-DEMO-0001', documento: DOCUMENTO_EJEMPLO_SC } }),
+  'confirmar', anterior);
+  assert.equal(ok.vista.recienConfirmada, true);
+  assert.equal(ok.vista.documento, DOCUMENTO_EJEMPLO_SC);
+  // r1 de T5: si armar el documento falló, el 200 llega sin data: la página sigue con la hoja que el cliente confirmó.
+  const minimo = respuestaDeAccion(respuesta(200, { status: 'success', estado_enlace: 'confirmada',
+    mensaje: '¡Gracias! Tu confirmación fue registrada.', confirmada_el: '2026-10-03T20:15:00Z', empresa: null }),
+  'confirmar', anterior);
+  assert.equal(minimo.vista.documento, anterior.documento);
+  assert.equal(minimo.vista.tipo, 'SC');
+  assert.equal(minimo.vista.empresa.nombre_comercial, 'DEMO Ferretería', 'y la marca que ya tenía');
+  // Un estado sin documento conserva el tipo (para los textos) pero nunca pinta la hoja vieja.
+  const otro = respuestaDeAccion({ ok: false, status: 400, mensaje: null, cuerpo: { detail: detalle400({
+    estado_enlace: 'no_disponible', mensaje: 'Este enlace ya no está disponible. Si tienes dudas, escríbenos.' }) } },
+  'cambios', pendiente(DOCUMENTO_EJEMPLO_COT));
+  assert.equal(otro.vista.estado_enlace, 'no_disponible');
+  assert.equal(otro.vista.tipo, 'COT');
+  assert.equal(otro.vista.documento, null);
+  // Sin vista anterior no se inventa nada.
+  assert.equal(respuestaDeAccion(respuesta(200, { status: 'success', estado_enlace: 'confirmada',
+    confirmada_el: '2026-10-03T20:15:00Z' }), 'confirmar').vista.documento, null);
+}
+
+console.log('--- TEST 15 (T15): textoAntesDeConfirmar («¿Qué pasa si confirmo?», U17 y U22+H38) ---');
+{
+  assert.equal(textoAntesDeConfirmar(DOCUMENTO_EJEMPLO_SC), 'Nos confirmas que estos productos y cantidades son los '
+    + 'que necesitas. Con eso Asesor DEMO prepara tu cotización con los precios y te la enviamos para que la apruebes. '
+    + 'Confirmar no es una compra ni un pago.');
+  assert.ok(textoAntesDeConfirmar({ ...DOCUMENTO_EJEMPLO_SC, atendido_por: null })
+    .includes('Con eso tu asesor prepara tu cotización'), 'sin asesor');
+  assert.equal(textoAntesDeConfirmar(DOCUMENTO_EJEMPLO_COT), 'Al confirmar aceptas los productos, precios y forma de '
+    + 'pago de esta cotización. El siguiente paso es pagar el anticipo de $823.188; cuando lo verifiquemos, crearemos tu '
+    + 'pedido.');
+  const conPago = (pago) => ({ ...DOCUMENTO_EJEMPLO_COT, pago: { ...DOCUMENTO_EJEMPLO_COT.pago, ...pago } });
+  const sinAnticipo = 'Al confirmar aceptas los productos, precios y forma de pago de esta cotización. Cuando la '
+    + 'confirmes, crearemos tu pedido.';
+  assert.equal(textoAntesDeConfirmar(conPago({ anticipo_pct: 0, anticipo: 0, anticipo_por_pagar: 0 })), sinAnticipo);
+  assert.equal(textoAntesDeConfirmar(conPago({ saldo_a_favor: 823188, anticipo_por_pagar: 0 })), sinAnticipo,
+    'el saldo a favor cubre el anticipo');
+  assert.ok(textoAntesDeConfirmar(conPago({ saldo_a_favor: 23188, anticipo_por_pagar: 800000 }))
+    .includes('pagar el anticipo de $800.000;'), 'lo que falta pagar, no el anticipo entero');
+  assert.ok(textoAntesDeConfirmar(conPago({ anticipo_por_pagar: null, anticipo: 300000 }))
+    .includes('pagar el anticipo de $300.000;'));
+  assert.equal(textoAntesDeConfirmar(conPago({ anticipo_por_pagar: null, anticipo: null })), sinAnticipo);
+  assert.equal(textoAntesDeConfirmar(PVEN), '', 'el pedido no se confirma');
+  assert.equal(textoAntesDeConfirmar(null), '');
+}
+
+console.log('--- TEST 16 (T15): queSigue (los pasos del servidor; en la COT, el anticipo y los datos para pagar) ---');
+{
+  const sc = confirmada200({ siguiente_paso: ['Asesor DEMO prepara tu cotización con los precios.', '  ', 5,
+    'Te la enviamos por el mismo medio para que la revises y la apruebes.'],
+  data: { numero: 'SC-DEMO-0001', documento: DOCUMENTO_EJEMPLO_SC } });
+  assert.deepEqual(queSigue(sc), { pasos: ['Asesor DEMO prepara tu cotización con los precios.',
+    'Te la enviamos por el mismo medio para que la revises y la apruebes.'], instrucciones: null });
+  const cot = confirmada200({ siguiente_paso: { anticipo_por_pagar: 823188, instrucciones_pago: 'Banco DEMO\nCuenta 000' },
+    data: { numero: 'COT-DEMO-0001', documento: DOCUMENTO_EJEMPLO_COT } });
+  assert.deepEqual(queSigue(cot), { pasos: ['Paga el anticipo de $823.188.',
+    'Cuando lo verifiquemos, crearemos tu pedido.'], instrucciones: 'Banco DEMO\nCuenta 000' });
+  assert.deepEqual(queSigue(confirmada200({ siguiente_paso: { anticipo_por_pagar: 0, instrucciones_pago: null } })),
+    { pasos: ['Crearemos tu pedido.'], instrucciones: null });
+  assert.deepEqual(queSigue(confirmada200({ siguiente_paso: { anticipo_por_pagar: null, instrucciones_pago: ' ' } })),
+    { pasos: [], instrucciones: null }, 'sin el monto no se dice nada');
+  assert.deepEqual(queSigue(enlace400({ estado_enlace: 'confirmada', mensaje: 'Esta cotización ya fue confirmada.',
+    documento: { numero: 'COT-1' } })), { pasos: [], instrucciones: null }, 'C10: la COT reabierta, sin «¿Qué sigue?»');
+  assert.deepEqual(queSigue(null), { pasos: [], instrucciones: null });
+}
+
+console.log('--- TEST 17 (T15): lineaConfirmacion (la fecha con fechaHoraCO, RP26) ---');
+{
+  const sc = confirmada200({ data: { numero: 'SC-DEMO-0001', documento: DOCUMENTO_EJEMPLO_SC } });
+  assert.equal(lineaConfirmacion(sc), 'Confirmaste la solicitud SC-DEMO-0001 el sábado 3 de octubre, 3:15 p. m.',
+    'fechaHoraCO termina en «p. m.»: sin otro punto');
+  assert.equal(lineaConfirmacion(confirmada200({})), 'Registramos tu confirmación el sábado 3 de octubre, 3:15 p. m.');
+  assert.equal(lineaConfirmacion(enlace400({ estado_enlace: 'confirmada', mensaje: 'Esta cotización ya fue confirmada.',
+    documento: { numero: 'COT-20261003-1' }, confirmada_el: '2026-10-03T20:15:00Z' })),
+  'La cotización COT-20261003-1 se confirmó el sábado 3 de octubre, 3:15 p. m.');
+  assert.equal(lineaConfirmacion(enlace400({ estado_enlace: 'confirmada', mensaje: null,
+    confirmada_el: '2026-10-03T20:15:00Z' })), 'Se confirmó el sábado 3 de octubre, 3:15 p. m.');
+  assert.equal(lineaConfirmacion(enlace400({ estado_enlace: 'confirmada', mensaje: 'x', documento: { numero: 'SC-1' } })),
+    '', 'sin fecha no hay línea');
+  assert.equal(lineaConfirmacion(pendiente(DOCUMENTO_EJEMPLO_SC)), '');
+  assert.equal(lineaConfirmacion(null), '');
+}
+
+console.log('--- TEST 18 (T15): metaDeLaVista y selloDeLaVista (el encabezado del documento) ---');
+{
+  assert.deepEqual(metaDeLaVista(pendiente(DOCUMENTO_EJEMPLO_SC)), [
+    { etiqueta: 'Estado', valor: 'Esperando tu confirmación' },
+    { etiqueta: 'Puedes confirmar hasta', valor: 'lunes 5 de octubre, 9:00 a. m.' }]);
+  assert.deepEqual(metaDeLaVista(pendiente(DOCUMENTO_EJEMPLO_SC, { vence_at: null })),
+    [{ etiqueta: 'Estado', valor: 'Esperando tu confirmación' }]);
+  // U22-validez: en la COT el enlace vence al final de valida_hasta: solo «Válida hasta».
+  assert.deepEqual(metaDeLaVista(pendiente(DOCUMENTO_EJEMPLO_COT)), [
+    { etiqueta: 'Estado', valor: 'Esperando tu confirmación' },
+    { etiqueta: 'Válida hasta', valor: '8 de octubre de 2026' }]);
+  assert.deepEqual(metaDeLaVista(confirmada200({ data: { numero: 'COT-DEMO-0001', documento: DOCUMENTO_EJEMPLO_COT } })),
+    [{ etiqueta: 'Válida hasta', valor: '8 de octubre de 2026' }]);
+  assert.deepEqual(metaDeLaVista(confirmada200({ data: { numero: 'SC-DEMO-0001', documento: DOCUMENTO_EJEMPLO_SC } })),
+    []);
+  assert.deepEqual(metaDeLaVista(consulta()), [{ etiqueta: 'Según cotización', valor: 'COT-DEMO-0001' }]);
+  assert.deepEqual(metaDeLaVista(consulta({ cot_numero: null })), []);
+  assert.deepEqual(metaDeLaVista(null), []);
+
+  assert.deepEqual(selloDeLaVista(confirmada200({})), { texto: 'Confirmada', tono: 'ok' });
+  assert.deepEqual(selloDeLaVista(enlace400({ estado_enlace: 'confirmada', mensaje: 'x', documento: DOCUMENTO_EJEMPLO_SC })),
+    { texto: 'Confirmada', tono: 'ok' });
+  assert.equal(selloDeLaVista(pendiente(DOCUMENTO_EJEMPLO_SC)), null);
+  assert.equal(selloDeLaVista(consulta()), null);
+  assert.equal(selloDeLaVista(null), null);
+}
+
+console.log('--- TEST 19 (T15): parrafoDelAviso (encabezado + párrafo; nunca el mismo texto dos veces) ---');
+{
+  // El backend manda frases completas (nota del controlador después de T12): el párrafo puede repetir parte del título.
+  const vencido = enlace400({ estado_enlace: 'vencido',
+    mensaje: 'Este enlace venció el 8 de octubre de 2026. Escríbenos y te enviamos uno nuevo.' });
+  assert.equal(parrafoDelAviso(vencido), 'Este enlace venció el 8 de octubre de 2026. Escríbenos y te enviamos uno nuevo.');
+  // Pero si es EXACTAMENTE el título (con su punto final), no se pinta dos veces.
+  assert.equal(parrafoDelAviso(enlace400({ estado_enlace: 'confirmada', mensaje: 'Esta solicitud ya fue confirmada.' })),
+    null);
+  assert.equal(parrafoDelAviso(enlace400({ estado_enlace: 'confirmada', mensaje: '  esta solicitud YA fue confirmada ' })),
+    null);
+  const cambios = vistaDeRespuesta(respuesta(200, { status: 'success', estado_enlace: 'cambios_enviados',
+    mensaje: '¡Listo! Recibimos tus cambios.', detalle: 'Asesor DEMO ajustará tu solicitud y te enviará un enlace nuevo.',
+    empresa: EMPRESA }));
+  assert.equal(parrafoDelAviso(cambios), 'Asesor DEMO ajustará tu solicitud y te enviará un enlace nuevo.');
+  assert.equal(parrafoDelAviso(confirmada200({})), null, 'el «¡Gracias!» ya es el título');
+  assert.equal(parrafoDelAviso(null), null);
+}
+
+console.log('--- TEST 20 (T15): textosPanelCambios (H28-cambios y U22-cambios) ---');
+{
+  assert.deepEqual(textosPanelCambios('SC', 'CAMBIOS', 'Asesor DEMO'), {
+    pregunta: '¿Qué quieres cambiar?',
+    ejemplo: 'Por ejemplo: son 8 rodillos, no 6, y agrega 2 brochas de 3 pulgadas.',
+    explicacion: 'Asesor DEMO recibirá tu mensaje y te enviará la solicitud corregida con un enlace nuevo. Este enlace '
+      + 'dejará de funcionar.',
+    boton: 'Enviar cambios',
+  });
+  const cot = textosPanelCambios('COT', 'CAMBIOS', null);
+  assert.equal(cot.ejemplo, 'Por ejemplo: quiero 6 galones en vez de 4.');
+  assert.equal(cot.explicacion, 'Tu asesor recibirá tu mensaje y te enviará la cotización corregida con un enlace nuevo. '
+    + 'Este enlace dejará de funcionar.');
+  // R8: «Ya no la necesito» solo en la SC; el comentario es opcional (puedeEnviarCambios('', 'NO_LA_NECESITA')).
+  assert.deepEqual(textosPanelCambios('SC', 'NO_LA_NECESITA', '  '), {
+    pregunta: '¿Quieres contarnos por qué? (opcional)',
+    ejemplo: 'Por ejemplo: ya no necesito estos productos.',
+    explicacion: 'Tu asesor revisará tu respuesta y se pondrá en contacto contigo. Este enlace dejará de funcionar.',
+    boton: 'Enviar respuesta',
+  });
+  assert.deepEqual(textosPanelCambios('COT', 'NO_LA_NECESITA', null), cot, 'en la COT no existe: textos de cambios');
+}
+
+console.log('--- TEST 21 (T15): tituloDeLaPagina (la pestaña, orden de PLANTILLA: «Solicitud SC-… · Empresa») ---');
+{
+  assert.equal(tituloDeLaPagina(pendiente(DOCUMENTO_EJEMPLO_SC), 'Documento'), 'Solicitud SC-DEMO-0001 · DEMO Ferretería');
+  assert.equal(tituloDeLaPagina(consulta(), 'Tu pedido'), 'Pedido de venta PVEN-DEMO-0001 · DEMO Ferretería');
+  assert.equal(tituloDeLaPagina(enlace400({ estado_enlace: 'vencido', mensaje: 'x', documento: { numero: 'COT-1' } }),
+    'Documento'), 'Cotización COT-1 · DEMO Ferretería', 'con solo el número');
+  assert.equal(tituloDeLaPagina(enlace400({ estado_enlace: 'reemplazado',
+    mensaje: 'Te enviamos un enlace más reciente para esta cotización.' }), 'Documento'), 'Cotización · DEMO Ferretería');
+  assert.equal(tituloDeLaPagina(enlace400({ estado_enlace: 'invalido', mensaje: 'x' }), 'Documento'), 'DEMO Ferretería');
+  assert.equal(tituloDeLaPagina(vistaDeRespuesta({ ok: false, status: 0, cuerpo: null, mensaje: null }), 'Tu pedido'),
+    'Tu pedido', 'sin empresa ni documento: el del layout (nunca Nebulae)');
+  assert.equal(tituloDeLaPagina(null, 'Documento'), 'Documento');
 }
 
 console.log('✓ Todas las pruebas de la confirmación pública pasaron.');

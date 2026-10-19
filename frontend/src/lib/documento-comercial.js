@@ -298,6 +298,23 @@ export function colorTextoSobre(...colores) {
 }
 
 /**
+ * B3 T15: los colores del botón principal de la página del cliente ('Confirmar solicitud', 'Confirmar cotización',
+ * 'Enviar cambios'), con la marca: en la variante 'degradado' (la SC) el degradado principal -> secundario; en
+ * cualquier otra ('acento', la COT y el PVEN) el color de acento. texto es el que se lee encima (colorTextoSobre). Sin
+ * marca, los colores de la referencia (normalizarMarca): nunca un color interno.
+ * @param {unknown} marca
+ * @param {unknown} variante
+ * @returns {{fondo: string, texto: string}} fondo es un valor para la propiedad CSS background
+ */
+export function coloresBotonPrincipal(marca, variante) {
+  const { principal, secundario, acento } = normalizarMarca(marca).colores;
+  if (variante === 'degradado') {
+    return { fondo: `linear-gradient(90deg, ${principal}, ${secundario})`, texto: colorTextoSobre(principal, secundario) };
+  }
+  return { fondo: acento, texto: colorTextoSobre(acento) };
+}
+
+/**
  * Un color de la marca usado como texto sobre la hoja blanca (el título en color de acento): el mismo si se lee
  * (contraste de al menos 3:1, texto grande), si no '#111827'.
  * @param {unknown} hex
@@ -447,6 +464,21 @@ export function textoEntregaEstimada(doc) {
  */
 export function formatoCantidad(v) {
   return esNumero(v) ? String(v).replace('.', ',') : '';
+}
+
+/**
+ * B3 T15 (U17): el 'Total de unidades' de la pastilla de la solicitud, la suma de documento.lineas[].cantidad
+ * (total_unidades no es clave del contrato, R24). Solo cuenta las cantidades que son números de JSON (como
+ * normalizarDocumento) y redondea a milésimas (sin el 0,30000000000000004 de la coma flotante). null si ninguna línea
+ * trae cantidad: la página no pinta la pastilla.
+ * @param {unknown} doc
+ * @returns {number | null}
+ */
+export function totalUnidades(doc) {
+  const cantidades = (esObjeto(doc) && Array.isArray(doc.lineas) ? doc.lineas : [])
+    .filter(esObjeto).map((l) => l.cantidad).filter(esNumero);
+  if (cantidades.length === 0) return null;
+  return Math.round(cantidades.reduce((a, b) => a + b, 0) * 1000) / 1000;
 }
 
 /**

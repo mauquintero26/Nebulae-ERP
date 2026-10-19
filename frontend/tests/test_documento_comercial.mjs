@@ -8,6 +8,7 @@
  *   pago.anticipo None (la SC) los textos de U17 para 100, 60, 0 y modalidad no reconocida.
  * - resumenPagosCliente es un adaptador de resumenPagoPedido (resumen-pago.js) con el mapeo de RP25.
  * - B3 T14: documentoVistaPrevia (la vista previa de «Diseño de documentos» con los textos sin guardar).
+ * - B3 T15: totalUnidades (la pastilla de la solicitud) y coloresBotonPrincipal (el botón principal con la marca).
  */
 
 import assert from 'node:assert/strict';
@@ -15,7 +16,7 @@ import {
   TIPOS_DOCUMENTO, normalizarDocumento, filasTotales, textoFormaPago, formaDePagoDocumento, colorTextoSobre,
   colorSobreBlanco, enlaceSeguro, contactosEmpresa, mensajeWhatsAppDocumento, resumenPagosCliente, textoEnlaceVigente,
   textoEntregaEstimada, formatoCantidad, tituloDePestana, DOCUMENTO_EJEMPLO_SC, DOCUMENTO_EJEMPLO_COT,
-  documentoVistaPrevia,
+  documentoVistaPrevia, totalUnidades, coloresBotonPrincipal,
 } from '../src/lib/documento-comercial.js';
 import { resumenPagoPedido } from '../src/lib/resumen-pago.js';
 
@@ -408,6 +409,28 @@ console.log('--- TEST 12: documentoVistaPrevia (los textos sin guardar, donde lo
   assert.equal(DOCUMENTO_EJEMPLO_COT.terminos, 'Términos y condiciones DEMO de la cotización.');
   assert.ok(DOCUMENTO_EJEMPLO_COT.pago.instrucciones.startsWith('Banco DEMO'));
   assert.equal(DOCUMENTO_EJEMPLO_SC.mensaje_pie, 'Mensaje de pie DEMO.');
+}
+
+console.log('--- TEST 13 (B3 T15): totalUnidades (la pastilla de la SC) y coloresBotonPrincipal ---');
+{
+  // U17: total_unidades no es clave del contrato (R24): la página suma documento.lineas[].cantidad.
+  assert.equal(totalUnidades(DOCUMENTO_EJEMPLO_SC), 6);
+  assert.equal(totalUnidades({ lineas: [{ cantidad: 2.5 }, { cantidad: '3' }, { cantidad: null }, 'x', { cantidad: 1 }] }),
+    3.5, 'solo los números de JSON (como normalizarDocumento)');
+  assert.equal(totalUnidades({ lineas: [{ cantidad: 0.1 }, { cantidad: 0.2 }] }), 0.3, 'sin el error de coma flotante');
+  assert.equal(totalUnidades({ lineas: [] }), null, 'sin líneas no hay pastilla');
+  assert.equal(totalUnidades({ lineas: [{ cantidad: null }] }), null);
+  assert.equal(totalUnidades(null), null);
+
+  // El botón principal de la página del cliente con los colores de la marca: el degradado en la SC y el acento en la
+  // COT y el PVEN, con el texto que se lee encima (colorTextoSobre).
+  const marca = { colores: { principal: '#7C3AED', secundario: '#E11D48', acento: '#FDE68A' } };
+  assert.deepEqual(coloresBotonPrincipal(marca, 'degradado'),
+    { fondo: 'linear-gradient(90deg, #7C3AED, #E11D48)', texto: '#FFFFFF' });
+  assert.deepEqual(coloresBotonPrincipal(marca, 'acento'), { fondo: '#FDE68A', texto: '#111827' });
+  // Sin marca: los colores de la referencia (nunca un color interno).
+  assert.deepEqual(coloresBotonPrincipal(null, 'acento'), { fondo: '#C2410C', texto: '#FFFFFF' });
+  assert.deepEqual(coloresBotonPrincipal(undefined, 'otra'), { fondo: '#C2410C', texto: '#FFFFFF' }, 'por defecto, acento');
 }
 
 console.log('✓ Todas las pruebas del documento comercial pasaron.');
