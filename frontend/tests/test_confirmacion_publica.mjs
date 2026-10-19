@@ -121,6 +121,7 @@ console.log('--- TEST 4b (r1): los textos LITERALES de MENSAJES_ENLACE (SC y COT
       + 'nuevo.',
     actualizada: 'Tu asesor actualizó esta {documento} después de tu confirmación. Te enviaremos un enlace nuevo para '
       + 'que la revises.',
+    no_la_necesita: 'Ya nos enviaste tu respuesta sobre esta solicitud el {fecha}. {asesor} se pondrá en contacto contigo.',
   };
   const llenar = (t, documento) => t.replace('{documento}', documento).replace('{fecha}', '8 de octubre de 2026')
     .replace('{asesor}', 'Asesor DEMO');
@@ -152,6 +153,15 @@ console.log('--- TEST 4b (r1): los textos LITERALES de MENSAJES_ENLACE (SC y COT
     // T15 r1: un título neutro, que sirve para «Quiero cambiar algo» y para «Ya no la necesito».
     assert.equal(cambios.titulo, 'Ya recibimos tu respuesta');
     assert.equal(cambios.mensaje, llenar(MENSAJES_ENLACE.cambios_enviados, nombre));
+  }
+  // T15 r2: «Ya no la necesito» (solo la SC) al reabrir el enlace: título neutro, la frase completa y el tipo SC (el
+  // mensaje nombra la solicitud, así la pestaña y el encabezado dicen «Solicitud»).
+  {
+    const v = vista('cambios_enviados', llenar(MENSAJES_ENLACE.no_la_necesita, 'solicitud'), null);
+    assert.equal(v.titulo, 'Ya recibimos tu respuesta');
+    assert.equal(v.mensaje, llenar(MENSAJES_ENLACE.no_la_necesita, 'solicitud'));
+    assert.notEqual(v.titulo, v.mensaje);
+    assert.equal(v.tipo, 'SC', 'el tipo sale de «solicitud» en el mensaje');
   }
   // Ni el documento ni el mensaje dicen el tipo: un título fijo, sin {documento} ni el mensaje.
   const sinTipo = vista('actualizada', 'Un texto que no nombra el documento.', null);

@@ -550,12 +550,15 @@ MENSAJES_ENLACE = {
     "cambios_enviados": ("Ya nos enviaste tus cambios el {fecha}. {asesor} ajustará la {documento} y te enviará un "
                          "enlace nuevo."),
     # B3 T15 r1 (regla g con «Ya no la necesito», R8): no se promete una solicitud ajustada ni un enlace nuevo.
-    "no_la_necesita": "Ya nos enviaste tu respuesta el {fecha}. {asesor} se pondrá en contacto contigo.",
+    # T15 r2: nombra la solicitud (NO_LA_NECESITA solo existe en la SC), así la página saca de ahí el tipo.
+    "no_la_necesita": ("Ya nos enviaste tu respuesta sobre esta solicitud el {fecha}. {asesor} se pondrá en contacto "
+                       "contigo."),
     "actualizada": ("Tu asesor actualizó esta {documento} después de tu confirmación. Te enviaremos un enlace nuevo "
                     "para que la revises."),
 }
-# El tipo «Ya no la necesito» de cambios_cliente_tipo (el TIPO_NO_LA_NECESITA de confirmacion_publica, R8: solo la SC).
-_TIPO_NO_LA_NECESITA = "NO_LA_NECESITA"
+# El tipo «Ya no la necesito» de cambios_cliente_tipo (R8: solo la SC). Única definición: confirmacion_publica lo
+# reexporta (T15 r2).
+TIPO_NO_LA_NECESITA = "NO_LA_NECESITA"
 # Regla h: el documento volvió a un estado anterior a la confirmación (el asesor lo cambió después).
 _ESTADOS_ANTES_DE_CONFIRMAR = {"SC": ("BORRADOR", "ASIGNADA", "PENDIENTE_CONFIRMACION"),
                                "COT": ("BORRADOR", "ENVIADA", "PENDIENTE_CONFIRMACION")}
@@ -687,7 +690,7 @@ def estado_enlace(db: Session, info, doc, tipo) -> tuple:
         marca_de_este = (doc.cambios_cliente_at is not None
                          and not _hay_enlace_posterior(db, tipo, doc.id, info["created_at"]))
         # B3 T15 r1: con «Ya no la necesito» no se promete una solicitud ajustada ni un enlace nuevo.
-        clave = ("no_la_necesita" if marca_de_este and doc.cambios_cliente_tipo == _TIPO_NO_LA_NECESITA
+        clave = ("no_la_necesita" if marca_de_este and doc.cambios_cliente_tipo == TIPO_NO_LA_NECESITA
                  else "cambios_enviados")
         mensaje = MENSAJES_ENLACE[clave].format(
             fecha=fecha_larga(info["used_at"]), asesor=_asesor_del_documento(db, doc, tipo), documento=nombre)

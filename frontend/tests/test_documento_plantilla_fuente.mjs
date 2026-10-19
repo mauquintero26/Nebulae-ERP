@@ -188,6 +188,15 @@ console.log('--- TEST 7 (T15): un solo h1 por página: nivelTitulo en DocumentoC
   assert.ok(leer(APP, 'confirmar', '[token]', 'aviso-enlace.tsx').includes('<h1'), 'el aviso lleva el h1 de la página');
 }
 
+console.log('--- TEST 7b (T15 r2): las reglas de página solo cuando el documento ES la página ---');
+{
+  const doc = leer(DOCUMENTO, 'DocumentoComercial.tsx');
+  assert.match(doc, /esPagina\?: boolean/, 'la prop esPagina (true por defecto)');
+  assert.match(doc, /esPagina \? ESTILOS_PAGINA/, 'el @page sin margen y el padding de la hoja dependen de esPagina');
+  assert.ok(leer(APP, 'dashboard', 'admin', 'configuracion', 'documentos-form.tsx').includes('esPagina={false}'),
+    'la vista previa de Configuración no cambia cómo se imprime su pantalla');
+}
+
 console.log('--- TEST 8 (T15 r1): nada queda colgado, el foco no se pierde y la tarjeta sin hoja imprime limpio ---');
 {
   const pagina = leer(APP, 'confirmar', '[token]', 'page.tsx');

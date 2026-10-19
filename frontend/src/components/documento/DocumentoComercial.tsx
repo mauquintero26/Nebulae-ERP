@@ -44,6 +44,12 @@ export type DocumentoComercialProps = {
    * secciones de la hoja quedan un nivel más abajo.
    */
   nivelTitulo?: 1 | 2;
+  /**
+   * B3 T15 r2: true (por defecto) cuando la hoja ES la página que se imprime (las páginas públicas): pone el @page sin
+   * margen y el padding de la hoja. false en una hoja dentro de otra pantalla (la vista previa de Configuración), que
+   * así no cambia cómo se imprime esa pantalla.
+   */
+  esPagina?: boolean;
 };
 
 const COLOR_SELLO = { ok: '#15803D', alerta: '#B45309', info: '#1D4ED8', gris: '#4B5563' } as const;
@@ -52,11 +58,16 @@ const ICONOS_CONTACTO = { telefono: Phone, whatsapp: MessageCircle, correo: Mail
 // Impresión: sin tamaño fijo (Carta o A4), los colores de la marca y la tabla sin partir filas, con el encabezado
 // repetido en cada hoja. B3 T15 r1: @page sin margen, para que Chrome y Edge no impriman el encabezado y el pie del
 // navegador (la URL de la página pública lleva el token); los 12 mm pasan a padding de la raíz, repetido en cada página
-// impresa (box-decoration-break: clone).
-const ESTILOS_IMPRESION = `
+// impresa (box-decoration-break: clone). T15 r2: esas dos reglas de página (ESTILOS_PAGINA) solo van cuando la hoja ES
+// la página (esPagina).
+const ESTILOS_PAGINA = `
 @page { margin: 0; }
 @media print {
   .documento-comercial-pagina { padding: 12mm; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+}
+`;
+const ESTILOS_IMPRESION = `
+@media print {
   .documento-comercial, .documento-comercial * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .documento-comercial { box-shadow: none !important; }
   .documento-comercial tr { break-inside: avoid; }
@@ -221,7 +232,7 @@ function Seccion({ titulo, nivel = 2, children }: { titulo: string; nivel?: 2 | 
  */
 export function DocumentoComercial({
   documento, marca, apiUrl, variante, acciones, sello, aviso, mostrarDescargar = true, fijarTitulo = false, metaDerecha,
-  extraTotales, nivelTitulo = 1,
+  extraTotales, nivelTitulo = 1, esPagina = true,
 }: DocumentoComercialProps) {
   const Titulo = nivelTitulo === 2 ? 'h2' : 'h1';
   const nivelSeccion = nivelTitulo === 2 ? 3 : 2;
@@ -304,7 +315,7 @@ export function DocumentoComercial({
     // (~380 px a 1024) sale en tarjetas. 40rem = los 640 px del corte sm de antes; en la página pública el contenedor
     // es casi la ventana, así que se ve igual.
     <div className="documento-comercial-pagina @container w-full">
-      <style>{ESTILOS_IMPRESION}</style>
+      <style>{esPagina ? ESTILOS_PAGINA + ESTILOS_IMPRESION : ESTILOS_IMPRESION}</style>
       {(aviso || mostrarDescargar) && (
         <div className="mx-auto mb-3 flex w-full max-w-[820px] flex-col gap-3 print:hidden">
           {aviso}

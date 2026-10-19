@@ -208,6 +208,7 @@ export function FormDocumentos({ activo = true }: { activo?: boolean }) {
                 apiUrl={API_URL}
                 mostrarDescargar={false}
                 nivelTitulo={2}
+                esPagina={false}
               />
             </div>
           </section>

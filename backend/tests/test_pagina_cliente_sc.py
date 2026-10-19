@@ -738,8 +738,13 @@ def test_ya_no_la_necesita_al_reabrir_no_promete_una_solicitud_ajustada(app_clie
     from app.core.confirmation_tokens import marcar_resultado, reclamar_token
     from app.core.documento_cliente import MENSAJES_ENLACE
     from app.core.fechas import fecha_larga
-    assert MENSAJES_ENLACE["no_la_necesita"] == ("Ya nos enviaste tu respuesta el {fecha}. {asesor} se pondrá en "
-                                                 "contacto contigo.")
+    from app.api.v1.confirmacion_publica import TIPO_NO_LA_NECESITA
+    from app.core import documento_cliente
+    # T15 r2: el texto nombra la solicitud (la página saca de ahí el tipo: pestaña y encabezado «Solicitud»), y el tipo
+    # vive en un solo lugar (core) que confirmacion_publica reexporta.
+    assert MENSAJES_ENLACE["no_la_necesita"] == ("Ya nos enviaste tu respuesta sobre esta solicitud el {fecha}. {asesor} "
+                                                 "se pondrá en contacto contigo.")
+    assert TIPO_NO_LA_NECESITA is documento_cliente.TIPO_NO_LA_NECESITA == "NO_LA_NECESITA"
     assert MENSAJES_ENLACE["cambios_enviados"].startswith("Ya nos enviaste tus cambios el {fecha}.")
     _sin_correo(monkeypatch)
     sc = _sc(db, user_admin)
@@ -755,8 +760,8 @@ def test_ya_no_la_necesita_al_reabrir_no_promete_una_solicitud_ajustada(app_clie
     usado = _fila(db, raw)["used_at"]
     for resp in (_ver(app_client, raw), _confirmar(app_client, raw)):
         d = _detalle(resp, "cambios_enviados")
-        assert d["mensaje"] == (f"Ya nos enviaste tu respuesta el {fecha_larga(usado)}. {ASESORA} se pondrá en "
-                                "contacto contigo.")
+        assert d["mensaje"] == (f"Ya nos enviaste tu respuesta sobre esta solicitud el {fecha_larga(usado)}. {ASESORA} "
+                                "se pondrá en contacto contigo.")
         assert "ajustará" not in d["mensaje"] and "enlace nuevo" not in d["mensaje"]
         assert d["comentario"] is None and d["documento"] is None
     db.refresh(sc)

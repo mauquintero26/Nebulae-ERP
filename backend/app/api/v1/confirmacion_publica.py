@@ -27,9 +27,9 @@ from sqlalchemy.orm import Session
 
 from app.core.confirmation_tokens import (RESULTADO_CAMBIOS, RESULTADO_CONFIRMADO, TIPOS_CONSULTA, consultar_token,
                                           hash_token, marcar_resultado, reclamar_token, revoke_pending_tokens)
-from app.core.documento_cliente import (MENSAJE_GRACIAS, _asesor_del_documento, documento_cot, documento_pven,
-                                        documento_sc, estado_enlace, forma_de_pago, productos_publicos_sc,
-                                        siguiente_paso_sc)
+from app.core.documento_cliente import (MENSAJE_GRACIAS, TIPO_NO_LA_NECESITA, _asesor_del_documento, documento_cot,
+                                        documento_pven, documento_sc, estado_enlace, forma_de_pago,
+                                        productos_publicos_sc, siguiente_paso_sc)
 from app.core.empresa import perfil_publico
 from app.core.fechas import ahora_utc, iso_z
 from app.core.textos_actividad import etiqueta_estado
@@ -350,7 +350,8 @@ def ver_pedido_cliente(body: TokenBody, db: Session = Depends(get_db)):
 MIN_COMENTARIO_CAMBIOS = 10
 MAX_COMENTARIO_CAMBIOS = 1000
 TIPO_CAMBIOS = "CAMBIOS"
-TIPO_NO_LA_NECESITA = "NO_LA_NECESITA"  # R8: solo en la SC (vuelve al asesor marcada «Ya no la necesita»)
+# TIPO_NO_LA_NECESITA (R8: solo en la SC; vuelve al asesor marcada «Ya no la necesita») viene de core.documento_cliente
+# (T15 r2: una sola definición); erp_ventas lo sigue importando de aquí.
 TIPOS_PEDIR_CAMBIOS = (TIPO_CAMBIOS, TIPO_NO_LA_NECESITA)
 USUARIO_DEL_ENLACE = "Cliente (por el enlace)"
 MENSAJE_COMENTARIO_CORTO = f"Cuéntanos qué quieres cambiar (al menos {MIN_COMENTARIO_CAMBIOS} caracteres)."
