@@ -1555,6 +1555,10 @@ def _agregar_nota(db: Session, entidad: str, doc, body: dict, user: User) -> dic
         ahora = datetime.datetime.utcnow()
         doc.updated_at = ahora
         if entidad in ("SC", "COT"):
+            # B3 T11 r1 (I1): la sesion no hace autoflush; este flush manda el UPDATE del documento (que lo bloquea)
+            # ANTES de que posponer_por_contacto bloquee la fila del seguimiento: documento -> fila, el orden de los
+            # envios y de la revision automatica.
+            db.flush()
             seguimiento_confirmacion.posponer_por_contacto(db, entidad, doc.id, ahora)
     db.flush()
     d = _log_dict(log, rol)
@@ -3690,7 +3694,7 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     # esperando al cliente (U11), detienen el de la SC: el cliente recibe uno solo. Los dos en este mismo commit.
     seguimiento = seguimiento_confirmacion.iniciar(db, "COT", cot, canal, nombre_de_usuario(user))
     if sc_id:
-        seguimiento_confirmacion.detener_por_cotizacion(db, sc_id, numero)
+        seguimiento_confirmacion.detener_por_cotizacion(db, sc_id, numero, user_name=nombre_de_usuario(user))
     # RP16: el UNICO commit antes del correo. Ya no se llama _sincronizar_estado_solicitud_desde_cotizacion: con U15 una
     # COT en PENDIENTE_CONFIRMACION no toca la SC (salia sin hacer nada), y sin refresh ni sincronizacion no queda
     # abierta una transaccion de lectura mientras sale el SMTP sincrono.
@@ -4876,15 +4880,29 @@ def _validar_dias_validez_cot(valor) -> str:
 
 
 # C23/R13: validador por clave de /config. Recibe el valor del body y devuelve el texto a guardar, o lanza ValueError con
-# el mensaje en espanol del 422. T3 agrega iva_tarifa_defecto, T7 dias_validez_cotizacion y T11 las seguimiento_*.
+# el mensaje en espanol del 422. T3 agrega iva_tarifa_defecto y T7 dias_validez_cotizacion; las seguimiento_* de T11 van
+# por prefijo (_VALIDADORES_POR_PREFIJO_CONFIG).
 _VALIDADORES_CONFIG = {
     CLAVE_TARIFA_DEFECTO: _validar_tarifa_defecto,
     CLAVE_DIAS_VALIDEZ_COT: _validar_dias_validez_cot,
-    # B3 T11 (U16-seguimiento, R13): cada seguimiento_* con su validar_valor. La regla que cruza dos claves (hora final
-    # mayor que la inicial, con lo guardado) va en update_config (validar_cambios_de_config).
-    **{clave: functools.partial(seguimiento_confirmacion.validar_valor, clave)
-       for clave in seguimiento_confirmacion.CLAVES_CONFIG},
 }
+# B3 T11 (U16-seguimiento, R13; r1, C4): TODA clave que empiece por 'seguimiento_' pasa por
+# seguimiento_confirmacion.validar_valor, tambien una desconocida o mal escrita ('seguimiento_dia' -> 422), en vez de
+# guardarse sin efecto. La regla que cruza dos claves (hora final mayor que la inicial, con lo guardado) va en
+# update_config (validar_cambios_de_config).
+_VALIDADORES_POR_PREFIJO_CONFIG = {"seguimiento_": seguimiento_confirmacion.validar_valor}
+
+
+def _validador_de_config(clave: str):
+    """El validador de una clave de /config: el de la clave, o el de su prefijo con la clave ya puesta; None si no
+    tiene."""
+    validador = _VALIDADORES_CONFIG.get(clave)
+    if validador is not None:
+        return validador
+    for prefijo, validar in _VALIDADORES_POR_PREFIJO_CONFIG.items():
+        if clave.startswith(prefijo):
+            return functools.partial(validar, clave)
+    return None
 
 
 def _patrones_reservados() -> list:
@@ -4905,7 +4923,7 @@ def _validar_config(body: dict) -> dict:
                 raise HTTPException(422, mensaje)
     limpio = {}
     for clave, valor in body.items():
-        validador = _VALIDADORES_CONFIG.get(clave)
+        validador = _validador_de_config(clave)
         if validador is None:
             limpio[clave] = str(valor)
             continue

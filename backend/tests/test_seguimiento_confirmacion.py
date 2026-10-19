@@ -434,6 +434,8 @@ def test_chatwoot_sin_respuesta_no_se_reintenta_ni_anula_el_enlace(db, user_admi
     assert res["fallidos"] == 1
     fila = _seg(db, "SC", sc.id)
     assert (fila.estado, fila.motivo_fin) == ("DETENIDO", "CHATWOOT_SIN_RESPUESTA")
+    # r1 (C1): nunca «No se pudo enviar» de algo que tal vez sí le llegó al cliente (lo ve la tarjeta, por resumen).
+    assert fila.ultimo_resultado["mensaje"] == "No se confirmó: Chatwoot no confirmó el WhatsApp y puede que haya salido."
     (nuevo,) = _tokens(db, "SC", sc.id)
     assert nuevo.used_at is None and nuevo.token_hash == _hash_del_link(enviar.llamadas[0]["link"])
     (renglon,) = _renglones(db, "SC", sc.id, "RECORDATORIO_FALLIDO")
@@ -491,8 +493,9 @@ def test_reenviar_reinicia_el_conteo(app_client, db, admin_token, user_admin, mo
                                                     SeguimientoConfirmacion.document_id == sc.id).count() == 1
 
 
-def test_contacto_externo_pospone(app_client, db, admin_token, user_admin, monkeypatch):
-    """R23: el gancho va en erp_ventas._agregar_nota con reinicia_atraso (EXTERNA, LLAMADA, ...); la nota interna no."""
+def test_contacto_externo_pospone(app_client, db, admin_token, user_admin, monkeypatch, contador_sql):
+    """R23: el gancho va en erp_ventas._agregar_nota con reinicia_atraso (EXTERNA, LLAMADA, ...); la nota interna no.
+    r1 (I1): el documento se bloquea (su UPDATE) ANTES que la fila del seguimiento, el orden de los demás caminos."""
     from app.core.fechas import ahora_utc
     seg_mod = _sc_mod()
     _dobles(monkeypatch)
@@ -507,9 +510,16 @@ def test_contacto_externo_pospone(app_client, db, admin_token, user_admin, monke
         fila = _seg(db, tipo, doc.id)
         assert fila.proximo_at == T and fila.ultimo_contacto_at == T - datetime.timedelta(days=2, hours=1), tipo
         antes = ahora_utc()
-        resp = app_client.post(f"/api/v1/ventas/{ruta}/{doc.id}/actividad", headers=auth(admin_token),
-                               json={"action": "CHATTER", "tipo": "EXTERNA", "description": "Hablé con el cliente"})
+        with contador_sql.ventana() as v:
+            resp = app_client.post(f"/api/v1/ventas/{ruta}/{doc.id}/actividad", headers=auth(admin_token),
+                                   json={"action": "CHATTER", "tipo": "EXTERNA", "description": "Hablé con el cliente"})
         assert resp.status_code == 200, resp.text
+        tabla = "customer_requests" if tipo == "SC" else "sales_quotations"
+        sentencias = [" ".join(s.split()).upper() for s in v.sentencias]
+        update_doc = next(i for i, s in enumerate(sentencias) if s.startswith(f"UPDATE {tabla.upper()}"))
+        bloqueo_fila = next(i for i, s in enumerate(sentencias)
+                            if "FROM SEGUIMIENTOS_CONFIRMACION" in s and "FOR UPDATE" in s)
+        assert update_doc < bloqueo_fila, (tipo, sentencias)
         fila = _seg(db, tipo, doc.id)
         assert antes <= fila.ultimo_contacto_at <= ahora_utc(), tipo
         assert fila.proximo_at == seg_mod.siguiente_momento(fila.ultimo_contacto_at, seg_mod.leer_config(db)), tipo
@@ -530,6 +540,8 @@ def test_enviar_cot_detiene_el_de_la_sc(app_client, db, admin_token, user_admin,
     (renglon,) = _renglones(db, "SC", sc.id, "SEGUIMIENTO_DETENIDO")
     assert renglon.description == (f"Recordatorios de la solicitud detenidos: ahora se le recuerda la cotización "
                                    f"{cot.numero}")
+    from app.core.textos_actividad import nombre_de_usuario
+    assert renglon.user_name == nombre_de_usuario(user_admin)  # r1 (P3): el asesor de la sesión, no el sistema
     assert _seg(db, "COT", cot.id).estado == "ACTIVO"
     assert resp.json()["seguimiento"]["estado"] == "ACTIVO"
 
@@ -671,6 +683,16 @@ def test_enlace_anulado_no_se_recuerda(db, monkeypatch):
     assert (fila.estado, fila.motivo_fin) == ("DETENIDO", "ENLACE_ANULADO")
     assert len(_tokens(db, "COT", cot.id)) == 1
     assert _renglones(db, "COT", cot.id, "SEGUIMIENTO_DETENIDO") == []
+    # r1 (C2 = I2): sin falsos positivos. Un enlace vivo anterior (el del reenvío del asesor) y uno REVOCADO más nuevo
+    # (el de un recordatorio que no salió): el cliente todavía tiene un enlace que sirve, así que el ciclo sigue.
+    from app.core.confirmation_tokens import revocar_token
+    cot2 = _cot(db, estado="PENDIENTE_CONFIRMACION")
+    create_confirmation_token(db, "COT", cot2.id)
+    revocar_token(db, create_confirmation_token(db, "COT", cot2.id))
+    db.commit()
+    _fila(db, "COT", cot2)
+    assert seg_mod.correr_seguimientos(db, ahora=T, enviar=enviar)["enviados"] == 1
+    assert _seg(db, "COT", cot2.id).motivo_fin is None and len(enviar.llamadas) == 1
 
 
 # ─── 14 a 16. Configuración, detalles, alertas y cliente sin medio ─────────────────────────────────────────────────
@@ -684,7 +706,8 @@ def test_config_valida_limites(app_client, db, admin_token, vendedor_token):
              ({"seguimiento_hora_inicio": "19", "seguimiento_hora_fin": "8"},
               "La hora final debe ser mayor que la inicial."),
              ({"seguimiento_hora_fin": "8"}, "La hora final debe ser mayor que la inicial."),  # con lo guardado (8)
-             ({"seguimiento_auto_activo": "quizás"}, None)]
+             ({"seguimiento_auto_activo": "quizás"}, None),
+             ({"seguimiento_dia": "3"}, "Clave de seguimiento desconocida: seguimiento_dia.")]  # r1 (C4): mal escrita
     for body, mensaje in malos:
         resp = app_client.patch("/api/v1/ventas/config", json={**body, "alerta_sc_dias": "97"},
                                 headers=auth(admin_token))
@@ -815,24 +838,10 @@ def test_correr_una_vez_llama_a_correr_seguimientos_y_es_idempotente(db, user_ad
 def test_envio_por_defecto_con_plantilla_de_recordatorio(db, user_admin, monkeypatch):
     """_enviar_por_defecto (import perezoso, R20): WhatsApp con la plantilla 'recordatorio' (proposito SEGUIMIENTO) por el
     FakeChatwoot de T8 y el correo de respaldo con el asunto de SEGUIMIENTO (RP28). Nunca sale a Chatwoot real."""
-    from test_envio_whatsapp_chatwoot import FakeChatwoot, _en_ventana
-    from app.core.admin_config import guardar_config
+    from test_envio_whatsapp_chatwoot import _en_ventana
     from app.models.envios import EnvioAlCliente
     seg_mod = _sc_mod()
-    monkeypatch.setenv("CHATWOOT_BASE_URL", "https://chatwoot.invalid")
-    monkeypatch.setenv("CHATWOOT_API_TOKEN", "token-de-prueba")
-    monkeypatch.setenv("CHATWOOT_ACCOUNT_ID", "1")
-    fake = FakeChatwoot(_en_ventana(can_reply=False))
-    monkeypatch.setattr("app.core.chatwoot._peticion", fake)
-    import app.core.email as correo
-    correos = []
-    monkeypatch.setattr(correo, "send_email",
-                        lambda to, subject, html_body, **kw: correos.append((to, subject, html_body)) or True)
-    monkeypatch.setattr(correo, "smtp_configurado", lambda: True)
-    guardar_config(db, {"envio_whatsapp_automatico": "true", "envio_whatsapp_inbox_id": "3",
-                        "envio_whatsapp_plantilla_recordatorio": "recordatorio_confirmacion",
-                        "empresa_nombre_comercial": "Casa Prueba"})
-    _config(db)
+    fake, correos = _chatwoot_falso(monkeypatch, db, _en_ventana(can_reply=False))
     sc = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
     _fila(db, "SC", sc)
 
@@ -858,3 +867,248 @@ def test_envio_por_defecto_con_plantilla_de_recordatorio(db, user_admin, monkeyp
                                                                        "Correo de respaldo", "Próximo paso"]
     assert link not in str(renglon.extra_data)
     assert renglon.extra_data["whatsapp"]["envio_id"] == envio.id
+    _sin_contactos_para_compras(renglon)  # r1 (P2)
+
+
+# ─── Ronda r1 de la revisión ───────────────────────────────────────────────────────────────────────────────────────
+
+E164 = "+573001234567"
+LEGIBLE = "+57 300 123 4567"
+
+
+def _chatwoot_falso(monkeypatch, db, respuestas, correo_sale=True):
+    """Chatwoot ficticio (FakeChatwoot de T8 sobre _peticion, valores de entorno de relleno), correo falso y el WhatsApp
+    automático listo con la plantilla de recordatorio. Devuelve (fake, correos)."""
+    from test_envio_whatsapp_chatwoot import FakeChatwoot
+    from app.core.admin_config import guardar_config
+    import app.core.email as correo
+    monkeypatch.setenv("CHATWOOT_BASE_URL", "https://chatwoot.invalid")
+    monkeypatch.setenv("CHATWOOT_API_TOKEN", "token-de-prueba")
+    monkeypatch.setenv("CHATWOOT_ACCOUNT_ID", "1")
+    fake = FakeChatwoot(respuestas)
+    monkeypatch.setattr("app.core.chatwoot._peticion", fake)
+    correos = []
+    monkeypatch.setattr(correo, "send_email",
+                        lambda to, subject, html_body, **kw: correos.append((to, subject, html_body)) or correo_sale)
+    monkeypatch.setattr(correo, "smtp_configurado", lambda: True)
+    guardar_config(db, {"envio_whatsapp_automatico": "true", "envio_whatsapp_inbox_id": "3",
+                        "envio_whatsapp_plantilla_recordatorio": "recordatorio_confirmacion",
+                        "empresa_nombre_comercial": "Casa Prueba"})
+    _config(db)
+    return fake, correos
+
+
+def _sin_contactos_para_compras(renglon):
+    """P2: COMPRAS (sin acceso a los contactos) ve el renglón del recordatorio sin el correo ni el teléfono del cliente."""
+    import json
+    from app.api.v1.erp_ventas import _log_dict
+    visto = _log_dict(renglon, "COMPRAS")
+    texto = json.dumps(visto, ensure_ascii=False)
+    for dato in ("@", E164, LEGIBLE, TELEFONO, "573001234567"):
+        assert dato not in texto, (dato, texto)
+    assert "destino" not in visto["extra_data"]["correo"]
+    assert "destino" not in visto["extra_data"]["whatsapp"]
+    # ADMIN sí los ve (el renglón los guarda; solo se ocultan al leerlo).
+    assert "@" in json.dumps(_log_dict(renglon, "ADMIN"), ensure_ascii=False)
+
+
+def test_contactos_ocultos_en_el_recordatorio_fallido(db, user_admin, monkeypatch):
+    """P2: el RECORDATORIO_FALLIDO (Chatwoot rechaza el WhatsApp y el servidor de correo falla) tampoco le muestra a
+    COMPRAS el correo ni el teléfono del cliente."""
+    import app.core.chatwoot as cw
+    from test_envio_whatsapp_chatwoot import _en_ventana
+    seg_mod = _sc_mod()
+    respuestas = _en_ventana(can_reply=False)
+    respuestas[("POST", "conversations/55/messages")] = cw.ChatwootError(422, '{"message":"rechazado"}')
+    _chatwoot_falso(monkeypatch, db, respuestas, correo_sale=False)
+    sc = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
+    _fila(db, "SC", sc)
+    assert seg_mod.correr_seguimientos(db, ahora=T)["fallidos"] == 1
+    (renglon,) = _renglones(db, "SC", sc.id, "RECORDATORIO_FALLIDO")
+    assert renglon.extra_data["whatsapp"]["destino"] == E164 and renglon.extra_data["correo"]["destino"] == CORREO
+    _sin_contactos_para_compras(renglon)
+    assert _seg(db, "SC", sc.id).motivo_fin == "FALLO_ENVIO"
+
+
+def test_la_fila_del_whatsapp_que_salio_no_se_pierde(db, user_admin, monkeypatch):
+    """I3: si un paso posterior al WhatsApp lanza (aquí, el correo), la fila EnvioAlCliente del WhatsApp que ya salió
+    queda guardada; el recordatorio queda DETENIDO (pudo haber salido) y no se reintenta."""
+    import logging
+    from test_envio_whatsapp_chatwoot import _en_ventana
+    from app.models.envios import EnvioAlCliente
+    seg_mod = _sc_mod()
+    _chatwoot_falso(monkeypatch, db, _en_ventana(can_reply=False))
+    monkeypatch.setattr(logging.getLogger(seg_mod.__name__), "disabled", True)
+
+    def correo_que_lanza(*args, **kwargs):
+        raise RuntimeError("falla a propósito después del WhatsApp")
+
+    monkeypatch.setattr("app.api.v1.erp_ventas._enviar_correo_confirmacion", correo_que_lanza)
+    sc = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
+    _fila(db, "SC", sc)
+    assert seg_mod.correr_seguimientos(db, ahora=T)["fallidos"] == 1
+    db.expire_all()
+    (envio,) = db.query(EnvioAlCliente).filter(EnvioAlCliente.document_type == "SC",
+                                               EnvioAlCliente.document_id == sc.id).all()
+    assert (envio.proposito, envio.estado) == ("SEGUIMIENTO", "ENVIADO")
+    fila = _seg(db, "SC", sc.id)
+    assert (fila.estado, fila.motivo_fin) == ("DETENIDO", "FALLO_ENVIO")
+    assert len(_vivos(db, "SC", sc.id)) == 1  # el enlace que pudo llegarle sigue sirviendo
+
+
+def _evento_reenvio(app_client, admin_token, db, doc, raw_viejo):
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{doc.id}/enviar-confirmacion", json={"canal": "Email"},
+                           headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+
+
+def _evento_parada_manual(app_client, admin_token, db, doc, raw_viejo):
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{doc.id}/seguimiento/detener", headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+
+
+def _evento_confirmacion(app_client, admin_token, db, doc, raw_viejo):
+    resp = app_client.post("/api/v1/confirmar/confirmar", json={"token": raw_viejo},
+                           headers={"Idempotency-Key": f"t11c-{uuid.uuid4().hex[:8]}"})
+    assert resp.status_code == 200, resp.text
+
+
+def _evento_pedir_cambios(app_client, admin_token, db, doc, raw_viejo):
+    resp = app_client.post("/api/v1/confirmar/pedir-cambios",
+                           json={"token": raw_viejo, "comentario": "Quiero cambiar la cantidad de la cuna."},
+                           headers={"Idempotency-Key": f"t11p-{uuid.uuid4().hex[:8]}"})
+    assert resp.status_code == 200, resp.text
+
+
+def _evento_cambio_de_cliente(app_client, admin_token, db, doc, raw_viejo):
+    """Lo que hace PATCH /solicitudes/{id}/cliente: el contacto nuevo y el enlace de la SC anulado (la SC vuelve a
+    Asignada)."""
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{doc.id}/cliente", json={"customer_email": "otro@test.com"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+
+
+def _evento_cliente_de_la_cot(app_client, admin_token, db, doc, raw_viejo):
+    """Lo que hace update_cotizacion (T5) al cambiar el contacto de una COT pendiente: el dato nuevo y su enlace anulado,
+    sin cambiar el estado."""
+    from app.core.confirmation_tokens import revoke_pending_tokens
+    from app.models.erp_documents import SalesQuotation
+    cot = db.get(SalesQuotation, doc.id)
+    cot.customer_email = "otro@test.com"
+    revoke_pending_tokens(db, "COT", doc.id, commit=False)
+    db.commit()
+
+
+def _evento_identidad_sin_anular(app_client, admin_token, db, doc, raw_viejo):
+    """Solo cambia el contacto (sin anular el enlace): lo detiene la comparación de la identidad del cliente."""
+    from app.models.erp_documents import SalesQuotation
+    db.get(SalesQuotation, doc.id).customer_phone = "3109876543"
+    db.commit()
+
+
+def test_carreras_entre_el_reclamo_y_el_envio(app_client, db, admin_token, user_admin, monkeypatch):
+    """I4 = P4 e I5: dos recordatorios reclamados en la misma vuelta. Mientras sale el primero pasa algo con el segundo
+    (el asesor lo reenvía o lo detiene, el cliente confirma, pide cambios o le cambian el contacto). Antes de crear su
+    enlace se vuelve a mirar el documento con bloqueo: ese recordatorio no sale, no queda un enlace nuevo vivo y la fila
+    queda con el motivo correcto."""
+    from app.core.confirmation_tokens import create_confirmation_token
+    seg_mod = _sc_mod()
+    _dobles(monkeypatch)
+    _config(db)
+    casos = [
+        ("reenvío", "SC", _evento_reenvio, "ACTIVO", None),
+        ("parada manual", "SC", _evento_parada_manual, "DETENIDO", "MANUAL"),
+        ("confirmación", "SC", _evento_confirmacion, "DETENIDO", "CONFIRMADO"),
+        ("pedir cambios", "SC", _evento_pedir_cambios, "DETENIDO", "VOLVIO_AL_ASESOR"),
+        ("cambio de cliente", "SC", _evento_cambio_de_cliente, "DETENIDO", "VOLVIO_AL_ASESOR"),
+        ("cliente de la COT", "COT", _evento_cliente_de_la_cot, "DETENIDO", "ENLACE_ANULADO"),
+        ("identidad sin anular", "COT", _evento_identidad_sin_anular, "DETENIDO", "ENLACE_ANULADO"),
+    ]
+    for nombre, tipo, evento, estado, motivo in casos:
+        primera = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
+        segunda = (_sc(db, user_admin, estado="PENDIENTE_CONFIRMACION") if tipo == "SC"
+                   else _cot(db, estado="PENDIENTE_CONFIRMACION"))
+        raw_viejo = create_confirmation_token(db, tipo, segunda.id)
+        _fila(db, "SC", primera, proximo_at=T - datetime.timedelta(hours=2))
+        fila2 = _fila(db, tipo, segunda)
+        iniciado_antes = fila2.iniciado_at
+        tokens_antes = {t.id for t in _tokens(db, tipo, segunda.id)}
+        doble = EnviarFalso()
+        llamadas = []
+
+        def enviar(db_, **kwargs):
+            llamadas.append(kwargs["doc"].id)
+            if kwargs["doc"].id == primera.id:
+                evento(app_client, admin_token, db_, segunda, raw_viejo)
+            return doble(db_, **kwargs)
+
+        res = seg_mod.correr_seguimientos(db, ahora=T, enviar=enviar)
+        assert llamadas == [primera.id], nombre  # el segundo no sale
+        assert (res["enviados"], res["detenidos"]) == (1, 1), (nombre, res)
+        assert _renglones(db, tipo, segunda.id, "RECORDATORIO_ENVIADO") == [], nombre
+        fila2 = _seg(db, tipo, segunda.id)
+        assert (fila2.estado, fila2.motivo_fin) == (estado, motivo), nombre
+        nuevos = [t for t in _tokens(db, tipo, segunda.id) if t.id not in tokens_antes]
+        if nombre == "reenvío":
+            # Ciclo nuevo del asesor: su enlace sigue vivo, el contador en 0 y no hay enlace del recordatorio.
+            assert fila2.recordatorios_enviados == 0 and fila2.iniciado_at != iniciado_antes
+            assert len(nuevos) == 1 and [t.id for t in _vivos(db, tipo, segunda.id)] == [nuevos[0].id]
+        else:
+            assert nuevos == [], nombre  # el recordatorio no creó su enlace
+            if nombre not in ("parada manual", "identidad sin anular"):
+                assert _vivos(db, tipo, segunda.id) == [], nombre
+
+
+def test_confirmacion_durante_el_envio_anula_el_enlace_del_recordatorio(app_client, db, user_admin, monkeypatch):
+    """Si el cliente confirma con el enlace viejo MIENTRAS sale el recordatorio de ese mismo documento, el enlace del
+    recordatorio no queda vivo en una SC confirmada, la fila se detiene y no cuenta como contacto."""
+    from app.core.confirmation_tokens import create_confirmation_token
+    from app.models.erp_documents import CustomerRequest
+    seg_mod = _sc_mod()
+    _dobles(monkeypatch)
+    _config(db)
+    sc = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
+    raw_viejo = create_confirmation_token(db, "SC", sc.id)
+    _fila(db, "SC", sc)
+    doble = EnviarFalso()
+
+    def enviar(db_, **kwargs):
+        _evento_confirmacion(app_client, None, db_, sc, raw_viejo)
+        return doble(db_, **kwargs)
+
+    seg_mod.correr_seguimientos(db, ahora=T, enviar=enviar)
+    db.expire_all()
+    confirmada = db.get(CustomerRequest, sc.id)
+    assert confirmada.estado == "CONFIRMADA" and confirmada.updated_at != T
+    assert _vivos(db, "SC", sc.id) == []
+    fila = _seg(db, "SC", sc.id)
+    assert (fila.estado, fila.motivo_fin) == ("DETENIDO", "CONFIRMADO")
+    assert len(_renglones(db, "SC", sc.id, "RECORDATORIO_ENVIADO")) == 1  # salió: queda en la Actividad
+
+
+def test_cambio_real_de_cliente_por_patch_cliente(app_client, db, admin_token, user_admin, monkeypatch):
+    """P1 de punta a punta (T5): la SC y su COT pendientes se envían, el asesor les cambia el correo con PATCH
+    /solicitudes/{id}/cliente y vence el plazo. Ningún recordatorio sale ni crea un enlace para el contacto nuevo: la SC
+    volvió a Asignada y el enlace de la COT quedó anulado."""
+    seg_mod = _sc_mod()
+    _dobles(monkeypatch)
+    _config(db)
+    sc = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
+    cot = _cot(db, estado="BORRADOR", sc_id=sc.id, sc_numero=sc.numero)
+    assert _enviar_cot(app_client, admin_token, cot, {"canal": "Email"}).status_code == 200
+    from app.models.confirmation import SeguimientoConfirmacion
+    _fila(db, "SC", sc)  # la SC también tenía su recordatorio vencido
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}/cliente", json={"customer_email": "otro@test.com"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert cot.numero in resp.json()["enlaces_anulados"]
+    db.query(SeguimientoConfirmacion).filter(SeguimientoConfirmacion.document_type == "COT",
+                                             SeguimientoConfirmacion.document_id == cot.id).update(
+        {"proximo_at": T - datetime.timedelta(hours=1)})
+    db.commit()
+    enviar = EnviarFalso()
+    res = seg_mod.correr_seguimientos(db, ahora=T, enviar=enviar)
+    assert enviar.llamadas == [] and res["detenidos"] == 2, res
+    assert (_seg(db, "SC", sc.id).estado, _seg(db, "SC", sc.id).motivo_fin) == ("DETENIDO", "VOLVIO_AL_ASESOR")
+    assert (_seg(db, "COT", cot.id).estado, _seg(db, "COT", cot.id).motivo_fin) == ("DETENIDO", "ENLACE_ANULADO")
+    assert _vivos(db, "SC", sc.id) == [] and _vivos(db, "COT", cot.id) == []

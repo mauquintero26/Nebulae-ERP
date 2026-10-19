@@ -16,9 +16,12 @@ PARADAS «AL PASAR». La revisión solo actúa si el documento sigue en PENDIENT
 DETENIDO con motivo_por_estado y sin renglón (el evento que lo sacó ya está en la Actividad): el cliente confirmó,
 pidió cambios (la SC vuelve a Asignada y la COT a Borrador, T6), se canceló, se rechazó, se editó o se re-cotizó. Así no
 se tocan confirmar_via_token, cancelar_solicitud, update_* ni el «pedir cambios» público. Además (paradas que no cambian
-el estado): ENLACE_ANULADO si el último enlace del documento se anuló sin sacarlo de Pendiente (cambió el cliente de la
-COT o de su SC, T5: la Actividad le pide al asesor reenviarla, así que el recordatorio no le crea uno nuevo a nadie) y
-COTIZACION_VENCIDA si la COT pasó su valida_hasta (C14; el recordatorio nunca la renueva). Enviar la COT de una SC
+el estado): ENLACE_ANULADO si el último enlace del documento se anuló y no le queda ninguno vivo, sin sacarlo de
+Pendiente (cambió el cliente de la COT o de su SC, T5: la Actividad le pide al asesor reenviarla, así que el
+recordatorio no le crea uno nuevo a nadie) y COTIZACION_VENCIDA si la COT pasó su valida_hasta (C14; el recordatorio
+nunca la renueva). Las paradas se miran al reclamar y OTRA VEZ, con bloqueo, justo antes de cada envío (r1): si
+entretanto el cliente confirmó o pidió cambios, el asesor lo reenvió o lo detuvo, o cambió el cliente (la misma regla
+_identidad_del_cliente de T5), ese recordatorio no sale ni crea enlace. Enviar la COT de una SC
 pendiente (U11) detiene el de la SC (detener_por_cotizacion): el cliente recibe uno solo. Un contacto con el cliente
 anotado en el Chatter (R23: erp_ventas._agregar_nota, reinicia_atraso) corre el recordatorio (posponer_por_contacto).
 
@@ -28,13 +31,17 @@ proceso cae a mitad, ese recordatorio se pierde, pero nunca se duplica. Dos corr
 ahora») no lo repiten: la segunda ya no lo ve vencido. Un fallo no se reintenta: la fila queda DETENIDO y el asesor
 reenvía. CHATWOOT_SIN_RESPUESTA («puede que haya salido», T8) tampoco se reintenta, y su enlace no se anula.
 
-ORDEN DEL ENVÍO (_enviar_recordatorio): (1) el enlace nuevo se confirma solo (sirve en cuanto le llega al cliente);
-(2) el envío (enviar o _enviar_por_defecto), que deja en flush la fila EnvioAlCliente del WhatsApp; (3) un commit que la
-deja firme (la fila de un envío que ya salió nunca se pierde por una falla posterior, nota del controlador tras T8);
-(4) con el documento y la fila del seguimiento bloqueados (en ese orden, el de los envíos y el Chatter): si salió, se
-anulan los enlaces anteriores (excepto_hash) y cuenta como
-contacto (R7: doc.updated_at); si no, se anula el enlace nuevo (nadie lo recibió) y el anterior sigue sirviendo. Si el
-asesor reenvió o detuvo en medio, la fila ya es de otro ciclo y no se toca (solo queda el renglón).
+ORDEN DEL ENVÍO (_enviar_recordatorio). Bloqueos siempre documento → fila del seguimiento → enlaces, el orden de los
+envíos, el Chatter y el «pedir cambios» (así ningún camino forma un ciclo con otro):
+(1) _preparar_envio: con el documento y la fila bloqueados, repite las paradas; si sigue en pie, crea el enlace nuevo en
+    esa transacción y la confirma (suelta los bloqueos antes de la red; el enlace sirve en cuanto le llega al cliente).
+(2) El envío (enviar o _enviar_por_defecto, que confirma la fila EnvioAlCliente del WhatsApp en cuanto sale, nota del
+    controlador tras T8) y un commit.
+(3) Con el documento y la fila bloqueados otra vez: si salió y el documento sigue en Pendiente, se anulan los enlaces
+    anteriores (excepto_hash) y cuenta como contacto (R7: doc.updated_at); si no salió, se anula el enlace nuevo (nadie
+    lo recibió) y el anterior sigue sirviendo. Si el documento dejó de esperar al cliente durante el envío, el enlace
+    nuevo se anula y no cuenta como contacto. Si el asesor reenvió o detuvo en medio, la fila ya es de otro ciclo y no
+    se toca (solo queda el renglón).
 
 Lo que devuelve correr_seguimientos lo ve cualquier rol en /tareas/estado: solo conteos ({'revisados', 'enviados',
 'fallidos', 'agotados', 'detenidos'}) o {'omitido': 'apagado' | 'fuera_de_horario' | 'sin_medios'}.
@@ -402,10 +409,12 @@ def iniciar(db: Session, tipo: str, doc, canal, user_name, ahora: datetime | Non
     return resumen(db, tipo, doc, cfg=cfg, fila=fila)
 
 
-def detener_por_cotizacion(db: Session, sc_id: int, cot_numero, ahora: datetime | None = None) -> bool:
+def detener_por_cotizacion(db: Session, sc_id: int, cot_numero, ahora: datetime | None = None,
+                           user_name=None) -> bool:
     """U11: al enviar la COT de una SC que sigue en Pendiente por confirmación, el recordatorio de la SC se detiene
     (COTIZACION_ENVIADA) con un renglón en la SC: al confirmar la COT se confirma la SC, y así el cliente no recibe dos
-    recordatorios. True si la detuvo. Sin commit (antes del commit del envío de la COT, C21)."""
+    recordatorios. True si la detuvo. Sin commit (antes del commit del envío de la COT, C21). r1 (P3): el renglón va a
+    nombre de quien envió la COT (`user_name`, de la sesión: RP15); USUARIO_SISTEMA solo si no llega."""
     ahora = ahora or ahora_utc()
     fila = _fila_de(db, "SC", sc_id, bloquear=True)
     if fila is None or fila.estado != ACTIVO:
@@ -415,7 +424,8 @@ def detener_por_cotizacion(db: Session, sc_id: int, cot_numero, ahora: datetime 
         return False
     _terminar(fila, DETENIDO, MOTIVO_COTIZACION_ENVIADA, ahora)
     _registrar(db, "SC", sc.id, sc.numero, SEGUIMIENTO_DETENIDO,
-               f"Recordatorios de la solicitud detenidos: ahora se le recuerda la cotización {cot_numero}")
+               f"Recordatorios de la solicitud detenidos: ahora se le recuerda la cotización {cot_numero}",
+               user_name=autor_de_actividad(user_name) or USUARIO_SISTEMA)
     return True
 
 
@@ -450,7 +460,8 @@ def detener_manual(db: Session, tipo: str, doc, user_name, ahora: datetime | Non
 
 @dataclass
 class _Reclamo:
-    """Un recordatorio reclamado: lo que se necesita para enviarlo y para reconocer su ciclo después del commit."""
+    """Un recordatorio reclamado: lo que se necesita para enviarlo y para reconocer su ciclo después del commit.
+    identidad: a quién le llegaba el enlace al reclamar (_identidad); si cambia antes de enviar, no sale (r1, P4)."""
     fila_id: int
     tipo: str
     doc: object
@@ -459,6 +470,11 @@ class _Reclamo:
     n: int
     canal: str | None
     iniciado_at: datetime
+    identidad: tuple
+
+
+# Resultado de _enviar_recordatorio (la clave del conteo de correr_seguimientos).
+ENVIADO, FALLIDO, NO_SALIO = "enviados", "fallidos", "detenidos"
 
 
 def _cargar_documentos(db: Session, filas) -> dict:
@@ -472,17 +488,58 @@ def _cargar_documentos(db: Session, filas) -> dict:
     return docs
 
 
+_SQL_ENLACES = text("""
+    SELECT (SELECT resultado FROM document_confirmation_tokens
+            WHERE document_type = :tipo AND document_id = :id
+            ORDER BY created_at DESC, id DESC LIMIT 1) AS ultimo,
+           EXISTS (SELECT 1 FROM document_confirmation_tokens
+                   WHERE document_type = :tipo AND document_id = :id AND used_at IS NULL AND expires_at > :ahora)
+               AS hay_vivo
+""")
+
+
 def _enlace_anulado(db: Session, tipo: str, doc_id: int) -> bool:
-    """El enlace más reciente del documento fue ANULADO (resultado REVOCADO) sin que el documento saliera de Pendiente:
-    lo hace el cambio de cliente de una COT o de su SC (T5). Uno vencido sin usar no cuenta (el de la SC vence a los 2
-    días: para eso es el recordatorio). Por el índice (document_type, document_id), LIMIT 1."""
-    fila = db.execute(text("""
-        SELECT resultado FROM document_confirmation_tokens
-        WHERE document_type = :tipo AND document_id = :id
-        ORDER BY created_at DESC, id DESC
-        LIMIT 1
-    """), {"tipo": tipo, "id": doc_id}).first()
-    return fila is not None and fila[0] == RESULTADO_REVOCADO
+    """El enlace más reciente del documento fue ANULADO (resultado REVOCADO) y no le queda NINGÚN enlace vivo, sin que el
+    documento saliera de Pendiente: lo hace el cambio de cliente de una COT o de su SC (T5), que los revoca todos. Uno
+    vencido sin usar no cuenta (el de la SC vence a los 2 días: para eso es el recordatorio). r1 (C2 = I2): si queda un
+    enlace vivo (p. ej. el de un reenvío del asesor, con un recordatorio fallido REVOCADO más nuevo), el cliente todavía
+    puede confirmar y el ciclo sigue. Por el índice (document_type, document_id)."""
+    fila = db.execute(_SQL_ENLACES, {"tipo": tipo, "id": doc_id, "ahora": ahora_utc()}).first()
+    return fila is not None and fila.ultimo == RESULTADO_REVOCADO and not fila.hay_vivo
+
+
+def _identidad(doc) -> tuple:
+    """A quién le llega el enlace del documento: erp_ventas._identidad_del_cliente (ficha, correo, teléfono y nombre),
+    la ÚNICA regla de cambio de cliente (T5). Import dentro de la función: este módulo no importa erp_ventas al
+    cargarse."""
+    from app.api.v1.erp_ventas import _identidad_del_cliente
+    return _identidad_del_cliente(doc)
+
+
+def _parada_del_documento(db: Session, tipo: str, doc, hoy: date):
+    """La parada «al pasar» que ya aplica por el documento, o None: (motivo, texto del renglón o None).
+    - No existe o no está en Pendiente por confirmación: motivo_por_estado, sin renglón (el evento ya está en la
+      Actividad). Con la marca de cambios pedidos (que en Pendiente no debería quedar): VOLVIO_AL_ASESOR.
+    - Su último enlace se anuló y no le queda ninguno vivo (cambio de cliente, T5): ENLACE_ANULADO, sin renglón.
+    - La COT pasó su valida_hasta (C14): COTIZACION_VENCIDA, con el renglón «La cotización venció el …»."""
+    if doc is None or doc.estado != PENDIENTE:
+        return motivo_por_estado(doc), None
+    if getattr(doc, "cambios_cliente_at", None) is not None:
+        return "VOLVIO_AL_ASESOR", None
+    if _enlace_anulado(db, tipo, doc.id):
+        return MOTIVO_ENLACE_ANULADO, None
+    if tipo == "COT" and isinstance(doc.valida_hasta, date) and doc.valida_hasta < hoy:
+        return MOTIVO_COTIZACION_VENCIDA, (f"La cotización venció el {fecha_larga(doc.valida_hasta)} sin respuesta: "
+                                           f"re-cotízala o reenvíala.")
+    return None
+
+
+def _cerrar_por_parada(db: Session, fila, tipo: str, doc, motivo: str, texto, ahora: datetime) -> None:
+    """Deja la fila DETENIDO con el motivo de la parada y, si la parada lo trae, su renglón (SEGUIMIENTO_DETENIDO)."""
+    resultado = {"canal": fila.canal, "motivo": motivo, "mensaje": texto} if texto else None
+    _terminar(fila, DETENIDO, motivo, ahora, resultado)
+    if texto:
+        _registrar(db, tipo, doc.id, doc.numero, SEGUIMIENTO_DETENIDO, texto)
 
 
 def _texto_agotado(n: int) -> str:
@@ -526,18 +583,9 @@ def _revisar_vencidos(db: Session, ahora: datetime, cfg: dict, conteo: dict) -> 
         conteo["revisados"] += 1
         tipo = fila.document_type
         doc = docs.get((tipo, fila.document_id))
-        if doc is None or doc.estado != PENDIENTE:
-            _terminar(fila, DETENIDO, motivo_por_estado(doc), ahora)  # sin renglón: el evento ya está en la Actividad
-            conteo["detenidos"] += 1
-        elif _enlace_anulado(db, tipo, doc.id):
-            _terminar(fila, DETENIDO, MOTIVO_ENLACE_ANULADO, ahora)  # el renglón del cambio de cliente ya lo explica
-            conteo["detenidos"] += 1
-        elif tipo == "COT" and isinstance(doc.valida_hasta, date) and doc.valida_hasta < hoy:
-            texto = (f"La cotización venció el {fecha_larga(doc.valida_hasta)} sin respuesta: re-cotízala o "
-                     f"reenvíala.")
-            _terminar(fila, DETENIDO, MOTIVO_COTIZACION_VENCIDA, ahora,
-                      {"canal": fila.canal, "motivo": MOTIVO_COTIZACION_VENCIDA, "mensaje": texto})
-            _registrar(db, tipo, doc.id, doc.numero, SEGUIMIENTO_DETENIDO, texto)
+        parada = _parada_del_documento(db, tipo, doc, hoy)
+        if parada is not None:
+            _cerrar_por_parada(db, fila, tipo, doc, *parada, ahora)
             conteo["detenidos"] += 1
         elif fila.recordatorios_enviados >= cfg["max"]:
             # Antes que el plazo pasado: aquí no sale nada al cliente, solo se le avisa al asesor. No toca updated_at:
@@ -554,7 +602,7 @@ def _revisar_vencidos(db: Session, ahora: datetime, cfg: dict, conteo: dict) -> 
         elif _reclamar(db, fila.id, fila.recordatorios_enviados, ahora, siguiente):
             reclamados.append(_Reclamo(fila_id=fila.id, tipo=tipo, doc=doc, doc_id=doc.id, numero=doc.numero,
                                        n=fila.recordatorios_enviados + 1, canal=fila.canal,
-                                       iniciado_at=fila.iniciado_at))
+                                       iniciado_at=fila.iniciado_at, identidad=_identidad(doc)))
     return reclamados
 
 
@@ -565,7 +613,8 @@ def correr_seguimientos(db: Session, ahora: datetime | None = None, enviar=None)
     (a) Apagado en Configuración -> {'omitido': 'apagado'}; solo en horario y fuera de él -> 'fuera_de_horario'; sin
         WhatsApp automático ni SMTP -> 'sin_medios' (Configuración lo avisa). En los tres no se toca ninguna fila.
     (b) Reclama en una transacción (_revisar_vencidos) y la CONFIRMA antes de enviar: nunca dos veces el mismo.
-    (c) Envía uno por uno; un error en uno queda en el log y en su Actividad, y no frena a los demás.
+    (c) Envía uno por uno; justo antes de cada uno vuelve a mirar el documento con bloqueo (r1): lo que ya no debe
+        salir cuenta en 'detenidos'. Un error en uno queda en el log y en su Actividad, y no frena a los demás.
     Devuelve solo conteos (lo ve cualquier rol en /tareas/estado)."""
     ahora = ahora or ahora_utc()
     cfg = leer_config(db)
@@ -582,13 +631,13 @@ def correr_seguimientos(db: Session, ahora: datetime | None = None, enviar=None)
     db.commit()  # se guarda primero y se envía después: si el proceso cae a mitad, se pierde uno pero no se duplica
     for reclamo in reclamados:
         try:
-            salio = _enviar_recordatorio(db, reclamo, cfg, enviar, ahora)
+            resultado = _enviar_recordatorio(db, reclamo, cfg, enviar, ahora)
         except Exception:
             db.rollback()
             logger.exception("No se pudo completar el recordatorio automático de %s %s", reclamo.tipo, reclamo.numero)
             _anotar_error_del_sistema(db, reclamo, ahora)
-            salio = False
-        conteo["enviados" if salio else "fallidos"] += 1
+            resultado = FALLIDO
+        conteo[resultado] += 1
     return conteo
 
 
@@ -673,56 +722,103 @@ def _anotar_error_del_sistema(db: Session, reclamo: _Reclamo, ahora: datetime) -
         logger.exception("No se pudo anotar el error del recordatorio de %s %s", reclamo.tipo, reclamo.numero)
 
 
-def _enviar_recordatorio(db: Session, reclamo: _Reclamo, cfg: dict, enviar, ahora: datetime) -> bool:
-    """Envía el recordatorio reclamado con un enlace nuevo y lo anota (orden en el docstring del módulo). True si salió
-    por algún medio. Un error del envío mismo (enviar lanzó) no se reintenta: la fila queda DETENIDO y el enlace nuevo
-    sigue vivo (pudo haber llegado)."""
-    tipo, doc, n = reclamo.tipo, reclamo.doc, reclamo.n
-    valida_hasta = doc.valida_hasta if tipo == "COT" else None
-    # C14: el enlace de una COT vence con su validez (que el recordatorio nunca cambia); el de la SC, a los 2 días.
+TEXTO_QUIZAS_SALIO = "No se confirmó: Chatwoot no confirmó el WhatsApp y puede que haya salido."
+
+
+def _bloquear(db: Session, reclamo: _Reclamo) -> tuple:
+    """(documento, fila del seguimiento) releídos con bloqueo y EN ESE ORDEN, el de los envíos, el Chatter y el «pedir
+    cambios» del cliente: documento → fila → enlaces. Así un reenvío del asesor en el mismo instante no forma un ciclo
+    con la revisión (PostgreSQL abortaría uno de los dos)."""
+    modelo = _MODELOS[reclamo.tipo]
+    doc = (db.query(modelo).filter(modelo.id == reclamo.doc_id)
+           .with_for_update().populate_existing().one_or_none())
+    return doc, _fila_por_id(db, reclamo.fila_id)
+
+
+def _preparar_envio(db: Session, reclamo: _Reclamo, ahora: datetime):
+    """r1 (I4 = P4): justo antes de crear el enlace, vuelve a mirar CON BLOQUEO el documento y la fila (la revisión los
+    leyó al reclamar, quizá varios envíos antes) y repite las paradas: que siga en Pendiente, sin cambios pedidos, con
+    un enlace que el cliente todavía pueda usar, la COT vigente, la misma identidad del cliente (_identidad) y el mismo
+    ciclo de la fila (nadie lo reenvió ni lo detuvo a mano).
+    - Otro ciclo: la fila es del asesor (reenvío o parada manual) y no se toca.
+    - Una parada: la fila se cierra con su motivo (ENLACE_ANULADO si cambió el cliente).
+    En los dos casos no se crea enlace ni sale nada, y devuelve None. Si sigue en pie, crea el enlace en ESTA misma
+    transacción (commit=False) y confirma, para soltar los bloqueos antes de hablar con Chatwoot y con el SMTP (y para
+    que el enlace sirva en cuanto le llega al cliente). Devuelve su token crudo. C14: el enlace de una COT vence con su
+    validez (que el recordatorio nunca cambia); el de la SC, a los 2 días."""
+    doc, fila = _bloquear(db, reclamo)
+    if not _mismo_ciclo(fila, reclamo):
+        db.commit()
+        return None
+    parada = _parada_del_documento(db, reclamo.tipo, doc, hoy_colombia(ahora))
+    if parada is None and _identidad(doc) != reclamo.identidad:
+        parada = (MOTIVO_ENLACE_ANULADO, None)  # cambió el cliente: el enlace sería para otra persona
+    if parada is not None:
+        _cerrar_por_parada(db, fila, reclamo.tipo, doc, *parada, ahora)
+        db.commit()
+        return None
+    valida_hasta = doc.valida_hasta if reclamo.tipo == "COT" else None
     expira = vence_al_final_del_dia(valida_hasta) if isinstance(valida_hasta, date) else None
-    raw = create_confirmation_token(db, tipo, reclamo.doc_id, expires_at=expira)  # commit: sirve apenas llega
+    raw = create_confirmation_token(db, reclamo.tipo, reclamo.doc_id, expires_at=expira, commit=False)
+    db.commit()
+    return raw
+
+
+def _enviar_recordatorio(db: Session, reclamo: _Reclamo, cfg: dict, enviar, ahora: datetime) -> str:
+    """Envía el recordatorio reclamado con un enlace nuevo y lo anota (orden en el docstring del módulo). Devuelve la
+    clave del conteo: ENVIADO si salió por algún medio, FALLIDO si no (o si no se sabe) y NO_SALIO si al volver a
+    mirar el documento ya no debía salir (_preparar_envio). Un error del envío mismo (enviar lanzó) no se reintenta: la
+    fila queda DETENIDO y el enlace nuevo sigue vivo (pudo haber llegado), salvo que el documento ya no esté en
+    Pendiente."""
+    tipo, n = reclamo.tipo, reclamo.n
+    raw = _preparar_envio(db, reclamo, ahora)
+    if raw is None:
+        return NO_SALIO
     link = enlace_publico(raw, tipo)
     try:
-        res = enviar(db, tipo=tipo, doc=doc, canal=reclamo.canal, link=link, numero=n, total=cfg["max"])
+        res = enviar(db, tipo=tipo, doc=reclamo.doc, canal=reclamo.canal, link=link, numero=n, total=cfg["max"])
     except Exception:
         db.rollback()
         logger.exception("Falló el envío del recordatorio automático de %s %s", tipo, reclamo.numero)
         res = None
     db.commit()  # la fila EnvioAlCliente de un WhatsApp que ya salió queda firme antes de lo que sigue
 
-    # Bloqueos en el mismo orden que los envíos, el Chatter y el «pedir cambios» del cliente: primero el documento,
-    # después la fila del seguimiento y por último los enlaces (sin esto, un reenvío del asesor en el mismo instante
-    # podía cruzarse con este paso y PostgreSQL abortaría uno de los dos).
-    doc = (db.query(_MODELOS[tipo]).filter(_MODELOS[tipo].id == reclamo.doc_id)
-           .with_for_update().populate_existing().one_or_none())
-    fila = _fila_por_id(db, reclamo.fila_id)
+    doc, fila = _bloquear(db, reclamo)
     mismo_ciclo = _mismo_ciclo(fila, reclamo)
+    # Si mientras salía el documento dejó de esperar al cliente (confirmó, pidió cambios, se canceló), su enlace nuevo no
+    # queda vivo y no cuenta como contacto.
+    pendiente = doc is not None and doc.estado == PENDIENTE
     if res is None:
+        if not pendiente:
+            revocar_token(db, raw)
         if mismo_ciclo:
             _terminar(fila, DETENIDO, MOTIVO_FALLO_ENVIO, ahora,
                       {"canal": reclamo.canal, "motivo": MOTIVO_FALLO_ENVIO, "mensaje": "Error del sistema."})
         _registrar(db, tipo, reclamo.doc_id, reclamo.numero, RECORDATORIO_FALLIDO, _texto_error_del_sistema(n))
         db.commit()
-        return False
+        return FALLIDO
 
     wa, co = res.get("whatsapp"), res.get("correo")
     salio = _salio(wa) or _salio(co)
     if salio:
         por = _POR["WhatsApp"] if _salio(wa) else _POR["correo"]
         descripcion = f"Recordatorio automático {n} de {cfg['max']} enviado {por} con un enlace nuevo"
+        resultado = {"canal": "WhatsApp" if _salio(wa) else "correo", "motivo": None, "mensaje": f"{descripcion}."}
         proximo_paso = None
-        if mismo_ciclo:
+        if not pendiente:
+            revocar_token(db, raw)
+            if mismo_ciclo:
+                _terminar(fila, DETENIDO, motivo_por_estado(doc), ahora, resultado)
+        elif mismo_ciclo:
             # El enlace anterior deja de servir solo ahora, cuando el nuevo salió bien.
             revoke_pending_tokens(db, tipo, reclamo.doc_id, commit=False, excepto_hash=hash_token(raw))
             fila.ultimo_contacto_at = ahora
-            fila.ultimo_resultado = {"canal": "WhatsApp" if _salio(wa) else "correo", "motivo": None,
-                                     "mensaje": f"{descripcion}."}
+            fila.ultimo_resultado = resultado
             if fila.proximo_at is not None:
                 cuando = fecha_hora_co(fila.proximo_at)
                 proximo_paso = (f"Otro recordatorio el {cuando}" if n < cfg["max"]
                                 else f"Si no responde, se te avisará el {cuando}")
-        if REINICIA_ATRASO and doc is not None and doc.estado == PENDIENTE:
+        if REINICIA_ATRASO and pendiente:
             doc.updated_at = ahora  # R7 / C22: cuenta como contacto, igual que la nota externa del Bloque 2
         _registrar(db, tipo, reclamo.doc_id, reclamo.numero, RECORDATORIO_ENVIADO, descripcion,
                    _extra(reclamo, cfg, wa, co, _cambios(reclamo.canal, wa, co, proximo_paso)))
@@ -730,26 +826,28 @@ def _enviar_recordatorio(db: Session, reclamo: _Reclamo, cfg: dict, enviar, ahor
         quizas_salio = isinstance(wa, dict) and wa.get("motivo") == MOTIVO_SIN_RESPUESTA
         causas = _causas(wa, co)
         if quizas_salio:
-            # T8: «puede que haya salido». No se anula el enlace (pudo llegarle) ni se reintenta.
+            # T8: «puede que haya salido». No se anula el enlace (pudo llegarle) ni se reintenta; r1 (C1): ni la fila ni
+            # el renglón dicen «No se pudo enviar».
             motivo = MOTIVO_SIN_RESPUESTA
+            mensaje_fila = TEXTO_QUIZAS_SALIO
             otras = [c for c in causas if c != _CAUSAS_WHATSAPP[MOTIVO_SIN_RESPUESTA]]
             descripcion = (f"No se confirmó el recordatorio automático {n}: Chatwoot no confirmó el WhatsApp y puede "
                            f"que haya salido{'; además, ' + ' y '.join(otras) if otras else ''}. Revisa la "
                            f"conversación en Chatwoot antes de escribirle al cliente.")
         else:
-            revocar_token(db, raw)  # nadie recibió el enlace nuevo; el anterior sigue sirviendo
             motivo = _motivo_del_fallo(wa, co)
+            mensaje_fila = f"No se pudo enviar: {' y '.join(causas) or 'no salió por ningún medio'}."
             descripcion = (f"No se pudo enviar el recordatorio automático {n}: "
                            f"{' y '.join(causas) or 'no salió por ningún medio'}. Escríbele al cliente o reenvíale "
                            f"el enlace.")
+        if not quizas_salio or not pendiente:
+            revocar_token(db, raw)  # nadie lo recibió (o el documento ya no espera al cliente); el anterior sigue
         if mismo_ciclo:
-            _terminar(fila, DETENIDO, motivo, ahora,
-                      {"canal": reclamo.canal, "motivo": motivo,
-                       "mensaje": f"No se pudo enviar: {' y '.join(causas) or 'no salió por ningún medio'}."})
+            _terminar(fila, DETENIDO, motivo, ahora, {"canal": reclamo.canal, "motivo": motivo, "mensaje": mensaje_fila})
         _registrar(db, tipo, reclamo.doc_id, reclamo.numero, RECORDATORIO_FALLIDO, descripcion,
                    _extra(reclamo, cfg, wa, co, _cambios(reclamo.canal, wa, co)))
     db.commit()
-    return salio
+    return ENVIADO if salio else FALLIDO
 
 
 def _enviar_por_defecto(db: Session, *, tipo: str, doc, canal, link: str, numero: int, total: int) -> dict:
@@ -762,12 +860,17 @@ def _enviar_por_defecto(db: Session, *, tipo: str, doc, canal, link: str, numero
       ventana de 24 h, más el correo de respaldo. Si el WhatsApp automático no está listo, no se llama:
       WHATSAPP_NO_CONFIGURADO. Email: solo el correo. Otro o sin canal: solo el correo de respaldo (CANAL_OTRO).
     - El correo sale por erp_ventas._enviar_correo_confirmacion (H27+H39, con sus mensajes exactos), sin adjuntos.
+    - r1 (I3, nota del controlador tras T8): justo DESPUÉS de enviar_documento y ANTES del correo se confirma (commit) la
+      fila EnvioAlCliente que dejó en flush: un paso posterior que lance (el correo, o lo que se agregue después) no
+      puede borrar el registro de un WhatsApp que ya salió. Los datos del correo se leen antes, para no releer el
+      documento después de ese commit.
     Imports dentro de la función (R20): monkeypatch en las pruebas y sin ciclo con erp_ventas."""
     from app.api.v1.erp_ventas import _MENSAJE_CORREO_SIN_ARMAR, _enviar_correo_confirmacion
     from app.core import envio_whatsapp
     from app.core.correo_documento import correo_documento
     from app.core.empresa import perfil_publico
     vence = doc.valida_hasta if tipo == "COT" else None
+    destino = doc.customer_email
     perfil = perfil_publico(db)
     try:
         asunto, html = correo_documento(perfil, tipo, doc.numero, doc.customer_name, link, proposito="SEGUIMIENTO",
@@ -783,6 +886,7 @@ def _enviar_por_defecto(db: Session, *, tipo: str, doc, canal, link: str, numero
                 db, doc_tipo=tipo, doc_id=doc.id, doc_numero=doc.numero, cliente_nombre=doc.customer_name,
                 cliente_email=doc.customer_email, telefono=telefono_del_documento(doc), enlace=link, vence=vence,
                 user_name=USUARIO_SISTEMA, proposito="SEGUIMIENTO")
+            db.commit()  # r1 (I3): la fila EnvioAlCliente queda firme antes de lo que sigue
             wa = {"enviado": r["enviado"], "motivo": r["motivo"], "mensaje": r["texto_resultado"],
                   "estado": r["estado"], "modo": r["modo"], "destino": r["destino"], "envio_id": r["envio_id"],
                   "texto": r["mensaje"]}
@@ -790,6 +894,5 @@ def _enviar_por_defecto(db: Session, *, tipo: str, doc, canal, link: str, numero
             wa = dict(WHATSAPP_NO_CONFIGURADO)
     elif canal != "Email":
         wa = {"enviado": False, "motivo": CANAL_OTRO, "mensaje": None}
-    correo = _enviar_correo_confirmacion(doc.customer_email, asunto, html,
-                                         remitente_nombre=perfil.get("nombre_comercial") or None)
+    correo = _enviar_correo_confirmacion(destino, asunto, html, remitente_nombre=perfil.get("nombre_comercial") or None)
     return {"whatsapp": wa, "correo": correo}
