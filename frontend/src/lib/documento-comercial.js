@@ -285,14 +285,14 @@ const contraste = (a, b) => {
 
 /**
  * El color del texto que va encima de los colores dados (la franja degradada, el bloque del TOTAL): '#FFFFFF' u
- * '#111827', el de mayor contraste mínimo frente a todos. Los valores que no son '#RRGGBB' no cuentan; sin ninguno,
- * '#111827' (texto sobre la hoja blanca).
+ * '#111827', el de mayor contraste mínimo frente a todos; en empate, blanco. Los valores que no son '#RRGGBB' no
+ * cuentan; sin ninguno válido, blanco. Es la misma regla de correo_documento.color_texto_sobre (backend).
  * @param {...unknown} colores
  * @returns {string}
  */
 export function colorTextoSobre(...colores) {
   const validos = colores.flat().filter((c) => typeof c === 'string' && HEX.test(c));
-  if (validos.length === 0) return OSCURO;
+  if (validos.length === 0) return BLANCO;
   const minimo = (texto) => Math.min(...validos.map((c) => contraste(texto, c)));
   return minimo(BLANCO) >= minimo(OSCURO) ? BLANCO : OSCURO;
 }
@@ -310,8 +310,8 @@ export function colorSobreBlanco(hex) {
 // ─── Enlaces y contacto ─────────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * La URL si es http(s) completa con dominio y sin espacios (nunca javascript:, data: ni otro esquema en un href), o
- * null.
+ * La URL si es http(s) completa con dominio, sin espacios y sin credenciales (nunca javascript:, data: ni otro esquema
+ * en un href, ni 'https://mitienda.com@evil.com', que lleva a evil.com), o null.
  * @param {unknown} url
  * @returns {string | null}
  */
@@ -321,6 +321,7 @@ export function enlaceSeguro(url) {
   if (!/^https?:\/\//i.test(t) || /\s/.test(t)) return null;
   try {
     const u = new URL(t);
+    if (u.username || u.password) return null;
     return (u.protocol === 'http:' || u.protocol === 'https:') && u.hostname ? t : null;
   } catch {
     return null;
@@ -404,12 +405,15 @@ export function resumenPagosCliente(pago, totales) {
  * ({vigente, enviado_at ('…Z'), vence_at ('…Z', el instante en que deja de servir), vence ('AAAA-MM-DD', el último
  * día)}): 'Enviado al cliente el 3 de octubre de 2026 · el enlace sirve hasta el 2 de noviembre de 2026'; si ya no
  * sirve (o venció con la página abierta), 'El enlace del cliente venció: reenvíaselo'; si nunca se envió, null.
+ * r1: con el pedido CANCELADO, null: el backend da vigente False también cuando revocó el enlace al cancelar, y un
+ * pedido cancelado no se puede reenviar (el botón se oculta y /pedido-cliente/ver lo rechaza).
  * @param {unknown} enlace
+ * @param {string | null} [estadoDelPedido] el estado del PVEN ('CANCELADO'…); sin él, no se mira
  * @param {Date | number} [ahora]
  * @returns {string | null}
  */
-export function textoEnlaceVigente(enlace, ahora = new Date()) {
-  if (!esObjeto(enlace)) return null;
+export function textoEnlaceVigente(enlace, estadoDelPedido = null, ahora = new Date()) {
+  if (!esObjeto(enlace) || estadoDelPedido === 'CANCELADO') return null;
   const venceAt = typeof enlace.vence_at === 'string' ? new Date(comoUTC(enlace.vence_at)).getTime() : NaN;
   const referencia = ahora instanceof Date ? ahora.getTime() : Number(ahora);
   const vigente = enlace.vigente === true && !(Number.isFinite(venceAt) && venceAt <= referencia);

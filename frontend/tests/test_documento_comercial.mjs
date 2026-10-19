@@ -242,7 +242,10 @@ console.log('--- TEST 6: colorTextoSobre y colorSobreBlanco ---');
   assert.equal(colorTextoSobre('#7C3AED', '#E11D48'), '#FFFFFF');
   assert.equal(colorTextoSobre('#ffffff', '#000000'), '#111827', 'el de mayor contraste mínimo frente a todos');
   assert.equal(colorTextoSobre('#7C3AED', 'red', null), '#FFFFFF', 'los inválidos no cuentan');
-  assert.equal(colorTextoSobre(), '#111827', 'sin colores: texto oscuro sobre la hoja blanca');
+  // r1 (menor 9): como correo_documento.color_texto_sobre: sin ningún color válido, blanco; en empate, blanco.
+  assert.equal(colorTextoSobre(), '#FFFFFF', 'sin colores: blanco, como el backend');
+  assert.equal(colorTextoSobre('x'), '#FFFFFF');
+  assert.equal(colorTextoSobre(null, 'red'), '#FFFFFF');
   assert.equal(colorSobreBlanco('#C2410C'), '#C2410C', 'el acento se lee sobre blanco');
   assert.equal(colorSobreBlanco('#FDE68A'), '#111827', 'un acento claro pasa a oscuro');
   assert.equal(colorSobreBlanco('x'), '#111827');
@@ -259,6 +262,12 @@ console.log('--- TEST 7: enlaceSeguro ---');
   assert.equal(enlaceSeguro(null), null);
   assert.equal(enlaceSeguro(' https://example.com/tienda '), 'https://example.com/tienda');
   assert.equal(enlaceSeguro('HTTP://example.com'), 'HTTP://example.com');
+  // r1 (menor 14): sin credenciales en la URL (phishing 'mitienda.com@evil.com') ni otros esquemas.
+  for (const malo of ['https://a.com@evil.com', 'https://u:p@evil.com', 'https://u:@evil.com', '//evil.com',
+    'vbscript:x', 'JaVaScRiPt:alert(1)', '\tjavascript:alert(1)', 'https://evil.com\n.x']) {
+    assert.equal(enlaceSeguro(malo), null, JSON.stringify(malo));
+  }
+  assert.deepEqual(contactosEmpresa({ sitio_web: 'https://mitienda.com@evil.com' }), [], 'el pie no pinta ese enlace');
 }
 
 console.log('--- TEST 8: contactosEmpresa y el mensaje de WhatsApp ---');
@@ -332,15 +341,21 @@ console.log('--- TEST 10: textoEnlaceVigente (enlace_cliente del pedido, T7) ---
   const ahora = new Date('2026-10-10T12:00:00Z');
   const vigente = { vigente: true, enviado_at: '2026-10-03T15:00:00Z', vence_at: '2026-11-03T05:00:00Z', vence: '2026-11-02' };
   const esperado = 'Enviado al cliente el 3 de octubre de 2026 · el enlace sirve hasta el 2 de noviembre de 2026';
-  assert.equal(textoEnlaceVigente(vigente, ahora), esperado);
-  assert.equal(textoEnlaceVigente({ ...vigente, vence: null }, ahora), esperado, 'sin vence: el último día de vence_at');
-  assert.equal(textoEnlaceVigente({ ...vigente, enviado_at: null }, ahora), 'El enlace sirve hasta el 2 de noviembre de 2026');
+  // r1 (menor 11): textoEnlaceVigente(enlace, estadoDelPedido?, ahora?).
+  assert.equal(textoEnlaceVigente(vigente, 'CONFIRMADO', ahora), esperado);
+  assert.equal(textoEnlaceVigente(vigente, null, ahora), esperado, 'sin estado: como siempre');
+  assert.equal(textoEnlaceVigente({ ...vigente, vence: null }, null, ahora), esperado, 'sin vence: el último día de vence_at');
+  assert.equal(textoEnlaceVigente({ ...vigente, enviado_at: null }, null, ahora),
+    'El enlace sirve hasta el 2 de noviembre de 2026');
   const vencido = { vigente: false, enviado_at: '2026-09-01T15:00:00Z', vence_at: null, vence: null };
-  assert.equal(textoEnlaceVigente(vencido, ahora), 'El enlace del cliente venció: reenvíaselo');
-  assert.equal(textoEnlaceVigente(vigente, new Date('2026-11-03T05:00:00Z')), 'El enlace del cliente venció: reenvíaselo',
-    'una página abierta desde antes ya ve el vencimiento');
-  assert.equal(textoEnlaceVigente({ vigente: false, enviado_at: null, vence_at: null, vence: null }, ahora), null);
-  assert.equal(textoEnlaceVigente(null, ahora), null);
+  assert.equal(textoEnlaceVigente(vencido, 'EN_PRODUCCION', ahora), 'El enlace del cliente venció: reenvíaselo');
+  assert.equal(textoEnlaceVigente(vigente, null, new Date('2026-11-03T05:00:00Z')),
+    'El enlace del cliente venció: reenvíaselo', 'una página abierta desde antes ya ve el vencimiento');
+  assert.equal(textoEnlaceVigente({ vigente: false, enviado_at: null, vence_at: null, vence: null }, null, ahora), null);
+  assert.equal(textoEnlaceVigente(null, null, ahora), null);
+  // Un pedido CANCELADO no se puede reenviar (el botón se oculta y /pedido-cliente/ver lo rechaza): no se aconseja.
+  assert.equal(textoEnlaceVigente(vencido, 'CANCELADO', ahora), null);
+  assert.equal(textoEnlaceVigente(vigente, 'CANCELADO', ahora), null);
 }
 
 console.log('--- TEST 11: entrega estimada, cantidad y título de la pestaña ---');

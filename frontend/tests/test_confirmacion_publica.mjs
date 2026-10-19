@@ -102,6 +102,65 @@ console.log("--- TEST 4: (d) 'vencido' dice que venció; los demás estados del 
   assert.equal(cambios.comentario, 'Son 8 rodillos, no 6');
 }
 
+console.log('--- TEST 4b (r1): los textos LITERALES de MENSAJES_ENLACE (SC y COT): el título es corto, nunca el mensaje ---');
+{
+  // backend/app/core/documento_cliente.py, MENSAJES_ENLACE, tal cual. estado_enlace los llena con documento =
+  // TITULOS[tipo].lower() ('solicitud' o 'cotización'); solo 'vencido' y 'confirmada' mandan detail.documento.
+  const MENSAJES_ENLACE = {
+    invalido: 'Este enlace no es válido. Ábrelo completo desde el mensaje que te enviamos o pide uno nuevo.',
+    no_disponible: 'Este enlace ya no está disponible. Si tienes dudas, escríbenos.',
+    confirmada: 'Esta {documento} ya fue confirmada.',
+    vencido: 'Este enlace venció el {fecha}. Escríbenos y te enviamos uno nuevo.',
+    reemplazado: 'Te enviamos un enlace más reciente para esta {documento}. Ábrelo desde el último mensaje que recibiste.',
+    cambios_enviados: 'Ya nos enviaste tus cambios el {fecha}. {asesor} ajustará la {documento} y te enviará un enlace '
+      + 'nuevo.',
+    actualizada: 'Tu asesor actualizó esta {documento} después de tu confirmación. Te enviaremos un enlace nuevo para '
+      + 'que la revises.',
+  };
+  const llenar = (t, documento) => t.replace('{documento}', documento).replace('{fecha}', '8 de octubre de 2026')
+    .replace('{asesor}', 'Asesor DEMO');
+  const vista = (estado, mensaje, documento) => vistaDeRespuesta({ ok: false, status: 400, mensaje,
+    cuerpo: { detail: detalle400({ estado_enlace: estado, mensaje, documento }) } });
+  // [estado, ¿manda detail.documento?, título de la SC, título de la COT]
+  const casos = [
+    ['invalido', false, 'Este enlace no es válido', 'Este enlace no es válido'],
+    ['vencido', true, 'Este enlace venció', 'Este enlace venció'],
+    ['reemplazado', false, 'Te enviamos un enlace más reciente', 'Te enviamos un enlace más reciente'],
+    ['no_disponible', false, 'Este enlace ya no está disponible', 'Este enlace ya no está disponible'],
+    ['actualizada', false, 'Tu asesor actualizó esta solicitud', 'Tu asesor actualizó esta cotización'],
+  ];
+  for (const [tipo, nombre, numero] of [['SC', 'solicitud', 'SC-20261003-1'], ['COT', 'cotización', 'COT-20261003-1']]) {
+    for (const [estado, conDocumento, tituloSc, tituloCot] of casos) {
+      const mensaje = llenar(MENSAJES_ENLACE[estado], nombre);
+      const v = vista(estado, mensaje, conDocumento ? { numero } : null);
+      assert.equal(v.titulo, tipo === 'SC' ? tituloSc : tituloCot, `${tipo} ${estado}`);
+      assert.equal(v.mensaje, mensaje, `${tipo} ${estado}: el cuerpo es la frase completa del servidor`);
+      assert.notEqual(v.titulo, v.mensaje, `${tipo} ${estado}`);
+      assert.notEqual(`${v.titulo}.`, v.mensaje, `${tipo} ${estado}: el título nunca es el mensaje entero`);
+    }
+    // 'confirmada' (con su número) y 'cambios_enviados' (sin documento), también con los textos reales.
+    assert.equal(vista('confirmada', llenar(MENSAJES_ENLACE.confirmada, nombre), { numero }).titulo,
+      `Esta ${nombre} ya fue confirmada`);
+    assert.equal(vista('confirmada', llenar(MENSAJES_ENLACE.confirmada, nombre), null).titulo,
+      `Esta ${nombre} ya fue confirmada`, 'sin documento: el tipo sale del mensaje');
+    const cambios = vista('cambios_enviados', llenar(MENSAJES_ENLACE.cambios_enviados, nombre), null);
+    assert.equal(cambios.titulo, 'Ya recibimos tus cambios');
+    assert.equal(cambios.mensaje, llenar(MENSAJES_ENLACE.cambios_enviados, nombre));
+  }
+  // Ni el documento ni el mensaje dicen el tipo: un título fijo, sin {documento} ni el mensaje.
+  const sinTipo = vista('actualizada', 'Un texto que no nombra el documento.', null);
+  assert.equal(sinTipo.titulo, 'Tu asesor actualizó el documento');
+  assert.equal(vista('confirmada', null, null).titulo, 'Ya fue confirmada');
+  // Sin mensaje del servidor: la frase completa de MENSAJES_ENLACE (una sola convención).
+  assert.equal(vista('no_disponible', null, null).mensaje, MENSAJES_ENLACE.no_disponible);
+  assert.equal(vista('invalido', null, null).mensaje, MENSAJES_ENLACE.invalido);
+  assert.equal(vista('reemplazado', null, { numero: 'COT-1' }).mensaje, llenar(MENSAJES_ENLACE.reemplazado, 'cotización'));
+  assert.equal(vista('actualizada', null, { numero: 'SC-1' }).mensaje, llenar(MENSAJES_ENLACE.actualizada, 'solicitud'));
+  for (const [estado, t] of Object.entries(TEXTOS_ENLACE)) {
+    assert.ok(!(t.mensaje ?? '').includes('{fecha}') && !(t.mensaje ?? '').includes('{asesor}'), estado);
+  }
+}
+
 console.log('--- TEST 5: (e) fechaHoraCO (R10) ---');
 {
   const t = fechaHoraCO('2026-10-03T20:15:00Z');
@@ -180,6 +239,22 @@ console.log('--- TEST 8: el 200 de /pedido-cliente/ver (RP27) y los errores que 
   assert.equal(servidor.reintentar, true);
   assert.equal(servidor.mensaje, 'Ocurrió un error inesperado. Intenta de nuevo.');
 
+  // r1: solo un 400 es un estado del enlace. Un 404/405 de Starlette (ruta inexistente o API_URL mal puesta) es un
+  // error del servidor o de configuración: 'error' con el texto ya traducido de pedirPublico y reintentar.
+  for (const [status, detail] of [[404, 'Not Found'], [405, 'Method Not Allowed'], [404, detalle400({
+    estado_enlace: 'vencido', mensaje: 'Este enlace venció el 8 de octubre de 2026.' })]]) {
+    const r = await pedirPublico('http://x/api/v1', '/confirmar/ver', { token: TOKEN }, {},
+      async () => ({ ok: false, status, json: async () => ({ detail }) }));
+    const w = vistaDeRespuesta(r);
+    assert.equal(w.estado_enlace, 'error', `${status}`);
+    assert.equal(w.mensaje, r.mensaje, `${status}: el texto de pedirPublico (errorDeRespuesta de avisos.js)`);
+    assert.ok(w.mensaje, `${status}: con mensaje`);
+    assert.notEqual(w.titulo, 'Este enlace no es válido', `${status}: no le dice al cliente que su enlace no sirve`);
+    if (detail === 'Not Found') assert.equal(w.mensaje, 'No se encontró el registro (404).', 'el texto ya traducido');
+    assert.equal(w.reintentar, true);
+    assert.equal(w.puedeActuar, false);
+  }
+
   for (const [estado, t] of Object.entries(TEXTOS_ENLACE)) {
     assert.ok(t.titulo && t.icono && t.tono, `TEXTOS_ENLACE.${estado}`);
   }
@@ -207,7 +282,13 @@ console.log("--- TEST 9: pedirPublico: sin Authorization, lee 'detail' y 'messag
   assert.equal(init.headers['Content-Type'], 'application/json');
   assert.equal(init.credentials, 'omit');
   assert.equal(init.referrerPolicy, 'no-referrer');
+  assert.equal(init.redirect, 'error', 'r1: no sigue redirecciones (un 307 repetiría el POST con el token)');
   assert.ok(!url.includes(TOKEN));
+  // Una redirección rechazada es un TypeError de fetch: el camino de 'sin_conexion', sin lanzar.
+  const redirigida = await pedirPublico('http://x/api/v1', '/confirmar/ver', { token: TOKEN }, {},
+    async (_u, i) => { if (i.redirect === 'error') throw new TypeError('Failed to fetch'); return { ok: true, status: 200, json: async () => ({}) }; });
+  assert.equal(redirigida.status, 0);
+  assert.equal(vistaDeRespuesta(redirigida).estado_enlace, 'sin_conexion');
 
   const mensajeValidacion = 'Los datos enviados no son válidos. Revisa el formulario e intenta de nuevo.';
   const sinDetail = await pedirPublico('http://x/api/v1', '/confirmar/confirmar', { token: TOKEN }, {},
@@ -266,6 +347,10 @@ console.log('--- TEST 11: sin apiFetch ni URL de producción escrita a mano ---'
   assert.doesNotMatch(fuente, /from '\.\/api|apiFetch\s*\(|nebulaekids|['"]Authorization['"]/,
     'sin apiFetch, sin la URL fija y sin el encabezado de sesión');
   assert.doesNotMatch(fuente, /\.slice\(\s*0\s*,\s*16\s*\)/, 'la clave ya no repite el inicio del token');
+  // r1: una sola copia de las reglas de texto de Python (stripPy de marca-empresa.js, largoTexto de chatter.js).
+  assert.match(fuente, /import\s*\{[^}]*\bstripPy\b[^}]*\}\s*from\s*'\.\/marca-empresa\.js'/);
+  assert.match(fuente, /import\s*\{[^}]*\blargoTexto\b[^}]*\}\s*from\s*'\.\/chatter\.js'/);
+  assert.doesNotMatch(fuente, /x1c-\\x1f|\[\.\.\.\w+\]\.length/, 'sin otra lista de espacios ni otro conteo de code points');
 }
 
 console.log('✓ Todas las pruebas de la confirmación pública pasaron.');

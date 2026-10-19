@@ -14,7 +14,8 @@
 
 import { errorDeRespuesta } from './avisos.js';
 import { fechaHoraCO } from './fechas-colombia.js';
-import { normalizarMarca } from './marca-empresa.js';
+import { normalizarMarca, stripPy } from './marca-empresa.js';
+import { largoTexto } from './chatter.js';
 import { TIPOS_DOCUMENTO } from './documento-comercial.js';
 
 // ─── Pedir cambios (C9; los límites de confirmacion_publica.py) ───────────────────────────────────────────────
@@ -26,8 +27,6 @@ export const TIPO_CAMBIOS = 'CAMBIOS';
 export const TIPO_NO_LA_NECESITA = 'NO_LA_NECESITA';
 // Un comentario más largo que esto ni se limpia (_TOPE_SIN_LIMPIAR del backend).
 const TOPE_SIN_LIMPIAR = 4 * MAX_COMENTARIO_CAMBIOS;
-// Los espacios de str.strip() de Python (lo que queda después de quitar los controles).
-const BORDES_PY = /^[\t\n\x0b\x0c\r\x1c-\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+|[\t\n\x0b\x0c\r\x1c-\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$/g;
 
 /**
  * El comentario como lo guarda el backend (_limpiar_comentario): \r\n y \r -> \n; sin caracteres de control (salvo
@@ -38,13 +37,11 @@ const BORDES_PY = /^[\t\n\x0b\x0c\r\x1c-\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u
  */
 export function limpiarComentario(texto) {
   if (typeof texto !== 'string') return '';
-  return texto.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-    .replace(/(?![\n\t])[\p{Cc}\p{Cs}\p{Cf}]/gu, '')
-    .replace(BORDES_PY, '');
+  // Los bordes con stripPy (str.strip() de Python, la copia única de marca-empresa.js).
+  return stripPy(texto.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+    .replace(/(?![\n\t])[\p{Cc}\p{Cs}\p{Cf}]/gu, ''));
 }
 
-/** len() de Python: code points. */
-const largo = (texto) => [...texto].length;
 
 /**
  * Si el comentario se puede enviar (el botón 'Enviar cambios' se habilita), con la misma regla del backend
@@ -58,8 +55,8 @@ const largo = (texto) => [...texto].length;
 export function puedeEnviarCambios(texto, tipo = TIPO_CAMBIOS) {
   if (tipo !== TIPO_CAMBIOS && tipo !== TIPO_NO_LA_NECESITA) return false;
   const crudo = typeof texto === 'string' ? texto : '';
-  if (largo(crudo) > TOPE_SIN_LIMPIAR) return false;
-  const n = largo(limpiarComentario(crudo));
+  if (largoTexto(crudo) > TOPE_SIN_LIMPIAR) return false;
+  const n = largoTexto(limpiarComentario(crudo));
   if (n > MAX_COMENTARIO_CAMBIOS) return false;
   return tipo === TIPO_NO_LA_NECESITA || n >= MIN_COMENTARIO_CAMBIOS;
 }
@@ -99,7 +96,8 @@ const PROHIBIDOS = new Set(['authorization', 'cookie']);
 
 /**
  * POST {apiUrl}{ruta} con el cuerpo en JSON, sin token de sesión (se descarta si viene en `encabezados`), sin cookies,
- * sin Referer y sin caché; nunca redirige a /login. Devuelve {ok, status, cuerpo (el JSON, o null), mensaje}: si no es
+ * sin Referer y sin caché; nunca redirige a /login ni sigue una redirección HTTP (redirect 'error': un 307/308 repetiría
+ * el POST con el token en el cuerpo; el fallo sale por el camino de sin conexión). Devuelve {ok, status, cuerpo (el JSON, o null), mensaje}: si no es
  * 2xx, mensaje es el texto del error leído de 'detail' (texto o dict con mensaje) o de 'message' (el 400 de validación
  * de backend/main.py no trae 'detail'), con errorDeRespuesta de lib/avisos.js. Si la red falla, status 0 y el mensaje
  * de sin conexión. Nunca lanza.
@@ -121,7 +119,7 @@ export async function pedirPublico(apiUrl, ruta, cuerpo, encabezados = {}, fetch
   try {
     const respuesta = await fetchImpl(`${base}${camino}`, {
       method: 'POST', headers, body: JSON.stringify(cuerpo ?? {}), credentials: 'omit', referrerPolicy: 'no-referrer',
-      cache: 'no-store',
+      cache: 'no-store', redirect: 'error',
     });
     let datos = null;
     try {
@@ -139,23 +137,36 @@ export async function pedirPublico(apiUrl, ruta, cuerpo, encabezados = {}, fetch
 // ─── Lo que pinta la página ─────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * Título, ícono (nombre de lucide-react) y tono de cada estado de la página; mensaje = el texto por defecto si el
- * servidor no manda uno. {documento} se cambia por 'solicitud' o 'cotización'. Inmutable.
+ * Título, ícono (nombre de lucide-react) y tono de cada estado de la página.
+ * - titulo: un encabezado corto. Nunca es el mensaje del servidor.
+ * - mensaje: el párrafo por defecto, si el servidor no manda uno. Es la frase COMPLETA, la misma convención de
+ *   MENSAJES_ENLACE (backend/app/core/documento_cliente.py), así que el párrafo puede repetir el título; las partes que
+ *   el frontend no conoce ({fecha}, {asesor}) se omiten.
+ * - {documento} se cambia por 'solicitud', 'cotización' o 'pedido'. Si no se sabe el tipo, se usan tituloSinTipo y
+ *   mensajeSinTipo.
+ * Inmutable.
  */
 export const TEXTOS_ENLACE = Object.freeze({
   pendiente: Object.freeze({ titulo: 'Esperando tu confirmación', icono: 'Clock', tono: 'info', mensaje: null }),
-  confirmada: Object.freeze({ titulo: 'Esta {documento} ya fue confirmada', icono: 'CheckCircle2', tono: 'ok',
-    mensaje: null }),
+  confirmada: Object.freeze({ titulo: 'Esta {documento} ya fue confirmada', tituloSinTipo: 'Ya fue confirmada',
+    icono: 'CheckCircle2', tono: 'ok', mensaje: 'Esta {documento} ya fue confirmada.',
+    mensajeSinTipo: 'Ya fue confirmada.' }),
   vencido: Object.freeze({ titulo: 'Este enlace venció', icono: 'CalendarX', tono: 'alerta',
     mensaje: 'Este enlace venció. Escríbenos y te enviamos uno nuevo.' }),
   reemplazado: Object.freeze({ titulo: 'Te enviamos un enlace más reciente', icono: 'RefreshCw', tono: 'info',
-    mensaje: 'Ábrelo desde el último mensaje que recibiste.' }),
+    mensaje: 'Te enviamos un enlace más reciente para esta {documento}. Ábrelo desde el último mensaje que recibiste.',
+    mensajeSinTipo: 'Te enviamos un enlace más reciente. Ábrelo desde el último mensaje que recibiste.' }),
   cambios_enviados: Object.freeze({ titulo: 'Ya recibimos tus cambios', icono: 'MessageSquare', tono: 'info',
-    mensaje: null }),
-  actualizada: Object.freeze({ titulo: 'Tu asesor actualizó esta {documento}', icono: 'RefreshCw', tono: 'info',
-    mensaje: 'Te enviaremos un enlace nuevo para que la revises.' }),
+    mensaje: 'Ya nos enviaste tus cambios. Tu asesor ajustará la {documento} y te enviará un enlace nuevo.',
+    mensajeSinTipo: 'Ya nos enviaste tus cambios. Tu asesor te enviará un enlace nuevo.' }),
+  actualizada: Object.freeze({ titulo: 'Tu asesor actualizó esta {documento}',
+    tituloSinTipo: 'Tu asesor actualizó el documento', icono: 'RefreshCw', tono: 'info',
+    mensaje: 'Tu asesor actualizó esta {documento} después de tu confirmación. Te enviaremos un enlace nuevo para que '
+      + 'la revises.',
+    mensajeSinTipo: 'Tu asesor actualizó el documento después de tu confirmación. Te enviaremos un enlace nuevo para '
+      + 'que lo revises.' }),
   no_disponible: Object.freeze({ titulo: 'Este enlace ya no está disponible', icono: 'Ban', tono: 'gris',
-    mensaje: 'Si tienes dudas, escríbenos.' }),
+    mensaje: 'Este enlace ya no está disponible. Si tienes dudas, escríbenos.' }),
   invalido: Object.freeze({ titulo: 'Este enlace no es válido', icono: 'Link2Off', tono: 'alerta',
     mensaje: 'Este enlace no es válido. Ábrelo completo desde el mensaje que te enviamos o pide uno nuevo.' }),
   consulta: Object.freeze({ titulo: 'Tu pedido', icono: 'FileText', tono: 'info', mensaje: null }),
@@ -190,13 +201,26 @@ function tipoDe(documento) {
   return prefijo ? prefijo[1].toUpperCase() : null;
 }
 
-/** El título del estado con {documento}; sin saber el tipo, el mensaje del servidor sin el punto final. */
-function tituloDe(estado, documento, mensaje) {
-  const plantilla = TEXTOS_ENLACE[estado].titulo;
-  if (!plantilla.includes('{documento}')) return plantilla;
+// El nombre del documento dentro de un mensaje del servidor ('Tu asesor actualizó esta cotización…'), como palabra.
+const NOMBRE_EN_MENSAJE = /(?:^|[^\p{L}])(solicitud|cotización|pedido)(?![\p{L}])/iu;
+
+/**
+ * Cómo se nombra el documento en los textos: por su tipo o el prefijo de su número; si no viene (el backend solo manda
+ * detail.documento en 'vencido' y 'confirmada'), por la palabra que trae el mensaje del servidor; si no, null.
+ */
+function nombreDe(documento, mensaje) {
   const tipo = tipoDe(documento);
-  if (!tipo && mensaje) return mensaje.replace(/\.$/, '');
-  return plantilla.replace('{documento}', tipo ? TIPOS_DOCUMENTO[tipo].nombre : 'solicitud');
+  if (tipo) return TIPOS_DOCUMENTO[/** @type {'SC'|'COT'|'PVEN'} */ (tipo)].nombre;
+  const m = NOMBRE_EN_MENSAJE.exec(mensaje ?? '');
+  return m ? m[1].toLowerCase() : null;
+}
+
+/** El texto `campo` ('titulo' o 'mensaje') del estado con {documento} lleno; sin nombre, su variante SinTipo. */
+function textoDelEstado(estado, campo, nombre) {
+  const t = /** @type {Record<string, string | null>} */ (TEXTOS_ENLACE[estado]);
+  const valor = t[campo];
+  if (typeof valor !== 'string' || !valor.includes('{documento}')) return valor;
+  return nombre ? valor.replace('{documento}', nombre) : t[`${campo}SinTipo`];
 }
 
 /**
@@ -207,10 +231,16 @@ function tituloDe(estado, documento, mensaje) {
  *   'confirmada' con recienConfirmada. 200 de pedir cambios ({estado_enlace 'cambios_enviados', mensaje, detalle,
  *   comentario, data?}) -> 'cambios_enviados' (título = mensaje, mensaje = detalle).
  * - 200 de /pedido-cliente/ver ({status, empresa, data: documento, cot_numero}) -> 'consulta' (solo lectura).
- * - 400 con el detail de _detalle ({mensaje, estado_enlace, empresa, documento, confirmada_el, siguiente_paso,
- *   comentario}) -> ese estado; un detail de texto (backend viejo o genérico) -> 'invalido' con ese texto.
+ * - Solo un 400 es un estado del enlace: con el detail de _detalle ({mensaje, estado_enlace, empresa, documento,
+ *   confirmada_el, siguiente_paso, comentario}) -> ese estado; con un detail de texto (backend viejo o genérico) ->
+ *   'invalido' con ese texto.
  * - 422 (el comentario de pedir cambios) -> 'validacion': el mensaje en la misma pantalla y el enlace sigue sirviendo.
- * - Sin red -> 'sin_conexion'; otro error (500, el 400 de validación sin detail) -> 'error'. Los dos con reintentar.
+ * - Sin red (o una redirección rechazada) -> 'sin_conexion'. Cualquier otro status (404, 405, 500, el 400 de
+ *   validación sin detail) -> 'error' con r.mensaje (el texto ya traducido). Los dos con reintentar.
+ * Título y mensaje: titulo es un encabezado corto de TEXTOS_ENLACE ({documento} con el nombre del documento, o del
+ * mensaje del servidor si el detail no trae documento) y nunca es el mensaje del servidor; mensaje es la frase completa
+ * del servidor (o la de TEXTOS_ENLACE), así que el cuerpo puede repetir el título; T15 lo pinta como encabezado +
+ * párrafo.
  * confirmadaElTexto = fechaHoraCO(confirmada_el) (RP26: 'sábado 3 de octubre, 3:15 p. m.'). empresa = normalizarMarca
  * (la marca vacía si no viene: nunca 'Nebulae').
  * @param {RespuestaPublica} r
@@ -246,24 +276,27 @@ export function vistaDeRespuesta(r) {
   } else if (status === 422) {
     estado = 'validacion';
     mensaje = texto(r?.mensaje) ?? (typeof detail === 'string' ? texto(detail) : null);
-  } else if (esObjeto(detail) && Object.prototype.hasOwnProperty.call(TEXTOS_ENLACE, detail.estado_enlace)) {
+  } else if (status === 400 && esObjeto(detail)
+    && Object.prototype.hasOwnProperty.call(TEXTOS_ENLACE, detail.estado_enlace)) {
     estado = detail.estado_enlace;
     documento = esObjeto(detail.documento) ? detail.documento : null;
     mensaje = texto(detail.mensaje);
-  } else if (typeof detail === 'string' && texto(detail)) {
+  } else if (status === 400 && typeof detail === 'string' && texto(detail)) {
     estado = 'invalido';
     mensaje = texto(detail);
   } else {
     estado = 'error';
     mensaje = texto(r?.mensaje);
   }
+  const nombre = nombreDe(documento, mensaje);
   const confirmadaEl = texto(fuente.confirmada_el);
   return {
     estado_enlace: estado,
-    titulo: titulo ?? tituloDe(estado, documento, mensaje),
+    titulo: titulo ?? textoDelEstado(estado, 'titulo', nombre) ?? '',
     icono: TEXTOS_ENLACE[estado].icono,
     tono: TEXTOS_ENLACE[estado].tono,
-    mensaje: mensaje ?? TEXTOS_ENLACE[estado].mensaje,
+    // Un 200 no se completa con el texto por defecto (el '¡Gracias!' de confirmar ya es el título).
+    mensaje: mensaje ?? (r?.ok ? null : textoDelEstado(estado, 'mensaje', nombre)),
     empresa: normalizarMarca(fuente.empresa ?? cuerpo.empresa),
     documento,
     cot_numero: texto(cuerpo.cot_numero),

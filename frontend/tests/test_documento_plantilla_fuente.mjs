@@ -3,7 +3,8 @@
  * B3 T12 (PLANTILLA puntos 6 y 8, C3, C7, R15): lee las fuentes con fs.
  * - DocumentoComercial.tsx imprime bien: 'print:hidden' (botones), '@page' sin tamaño fijo y 'print-color-adjust'.
  * - Todo components/documento: sin clases dark: (H1), sin 'truncate' (los nombres largos hacen break-words), sin
- *   next/image (un <img> simple) y todo target="_blank" lleva rel 'noopener noreferrer'.
+ *   next/image (un <img> simple), sin dangerouslySetInnerHTML (r1) y todo target="_blank" lleva rel
+ *   'noopener noreferrer'.
  * - app/layout.tsx tiene lang="es" (C7). T15 agrega aquí las aserciones de app/confirmar/layout.tsx y app/pedido/layout.tsx.
  */
 
@@ -59,6 +60,8 @@ console.log('--- TEST 3: components/documento sin dark:, truncate ni next/image;
     assert.deepEqual(enlacesSinRel(fuente), [], `${nombre}: todo target="_blank" con rel="noopener noreferrer"`);
     assert.doesNotMatch(fuente, /nebulaekids|Nebulae/, `${nombre}: ni la URL de producción ni la marca Nebulae`);
     assert.doesNotMatch(fuente, /design-system/, `${nombre}: colores de la marca, no los tokens internos`);
+    // r1 (menor 16): lo que escriben la empresa y el cliente se pinta siempre como texto (React lo escapa).
+    assert.doesNotMatch(fuente, /dangerouslySetInnerHTML/, `${nombre}: sin dangerouslySetInnerHTML`);
   }
   assert.ok(leer(DOCUMENTO, 'DocumentoComercial.tsx').includes('target="_blank"'), 'el pie tiene enlaces externos');
 }

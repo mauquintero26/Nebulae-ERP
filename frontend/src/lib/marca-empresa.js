@@ -14,6 +14,7 @@
  */
 
 import { numeroWhatsApp } from './whatsapp.js';
+import { largoTexto } from './chatter.js';
 
 /** Colores de las referencias aprobadas: degradado morado -> rojo de la SC y acento naranja de la COT y el PVEN. */
 export const COLORES_POR_DEFECTO = Object.freeze({ principal: '#7C3AED', secundario: '#E11D48', acento: '#C2410C' });
@@ -49,10 +50,14 @@ const ESPACIOS_PY = '\\t\\n\\x0b\\x0c\\r\\x1c-\\x1f \\x85\\xa0\\u1680\\u2000-\\u
 const BORDES_PY = new RegExp(`^[${ESPACIOS_PY}]+|[${ESPACIOS_PY}]+$`, 'g');
 const HAY_ESPACIO_PY = new RegExp(`[${ESPACIOS_PY}]`);
 
-/** str.strip() de Python. */
-const stripPy = (texto) => texto.replace(BORDES_PY, '');
-/** len() de Python: code points, no unidades UTF-16. */
-const largoPy = (texto) => [...texto].length;
+/**
+ * str.strip() de Python: quita de los bordes sus espacios (ESPACIOS_PY), no los de trim(). Es la ÚNICA copia de esta
+ * regla en el frontend del bloque: confirmacion-publica.js la importa. El largo en code points (len() de Python) es
+ * largoTexto de chatter.js.
+ * @param {string} texto
+ * @returns {string}
+ */
+export const stripPy = (texto) => texto.replace(BORDES_PY, '');
 
 /** clientes.CORREO_VALIDO con el \s de Python. */
 const CORREO_VALIDO = new RegExp(`^[^@${ESPACIOS_PY}]+@[^@${ESPACIOS_PY}]+\\.[^@${ESPACIOS_PY}]+$`);
@@ -262,7 +267,7 @@ export function validarCampoEmpresa(nombre, valor) {
     if (typeof texto !== 'string') fallo(MENSAJE_NO_ES_TEXTO(etiqueta));
     texto = largo ? normalizarTexto(texto) : limpiarLinea(texto);
     if (texto && regla) texto = regla(texto);
-    if (largoPy(texto) > maximo) fallo(MENSAJE_MAXIMO(etiqueta, maximo));
+    if (largoTexto(texto) > maximo) fallo(MENSAJE_MAXIMO(etiqueta, maximo));
     return { valor: texto, error: null };
   } catch (e) {
     return { valor: null, error: /** @type {Error} */ (e).message };
@@ -309,14 +314,19 @@ export function validarArchivoLogo(archivo) {
 
 const esObjeto = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const textoLimpio = (v) => (typeof v === 'string' ? v.trim() : '');
-const LOGO_PERMITIDO = /^(?:\/(?!\/)|https?:\/\/|data:image\/(?:png|jpeg|webp);base64,)/i;
+// r1: el logo solo puede ser la ruta pública del API (empresa._url_logo: '/publico/empresa/logo?v=' + sha256[:12]) o
+// el data:image de la vista previa de Configuración (T14). Nunca una imagen de otro sitio (le revelaría la IP del
+// cliente) ni otra ruta ('/../x', '/\evil.com', '//evil.com').
+const LOGO_RUTA_PUBLICA = /^\/publico\/empresa\/logo(?:\?v=[A-Za-z0-9_-]+)?$/;
+const LOGO_VISTA_PREVIA = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/;
+const logoPermitido = (logo) => LOGO_RUTA_PUBLICA.test(logo) || LOGO_VISTA_PREVIA.test(logo);
 
 /**
  * La marca lista para mostrar, con la forma de MARCA_VACIA. Acepta la respuesta {status, data} de /publico/empresa,
  * el perfil directo (perfil_publico) o la forma plana de GET /empresa y del formulario (color_principal...). Lo que no
  * es texto queda ''; un color que no es #RRGGBB vuelve al de la referencia (nunca llega otra cosa a un style); el logo
- * solo si es una ruta del API, http(s) o un data:image PNG/JPG/WebP (la vista previa). configurada = hay nombre
- * comercial, como empresa.leer_perfil. Solo la lista blanca: nunca términos ni otra clave.
+ * solo si es la ruta pública /publico/empresa/logo?v=… o un data:image PNG/JPG/WebP (la vista previa). configurada =
+ * hay nombre comercial, como empresa.leer_perfil. Solo la lista blanca: nunca términos ni otra clave.
  * @param {unknown} raw
  * @returns {MarcaEmpresa}
  */
@@ -339,14 +349,15 @@ export function normalizarMarca(raw) {
   return /** @type {MarcaEmpresa} */ ({
     ...marca,
     colores: /** @type {MarcaEmpresa['colores']} */ (finales),
-    logo_url: logo && LOGO_PERMITIDO.test(logo) ? logo : null,
+    logo_url: logo && logoPermitido(logo) ? logo : null,
     configurada: Boolean(marca.nombre_comercial),
   });
 }
 
 /**
- * La marca de la empresa: GET {apiUrl}/publico/empresa sin el token de sesión, sin cookies y sin Referer. Ante cualquier
- * error (red, respuesta no 2xx, JSON inválido o sin fetch) devuelve MARCA_VACIA: nunca lanza.
+ * La marca de la empresa: GET {apiUrl}/publico/empresa sin el token de sesión, sin cookies, sin Referer y sin seguir
+ * redirecciones (redirect 'error'). Ante cualquier error (red, redirección, respuesta no 2xx, JSON inválido o sin
+ * fetch) devuelve MARCA_VACIA: nunca lanza.
  * @param {string} apiUrl la URL del API (API_URL de lib/api.ts)
  * @param {typeof fetch} [fetchImpl]
  * @returns {Promise<MarcaEmpresa>}
@@ -357,7 +368,7 @@ export async function cargarMarcaEmpresa(apiUrl, fetchImpl = globalThis.fetch) {
     const base = String(apiUrl ?? '').replace(/\/+$/, '');
     const respuesta = await fetchImpl(`${base}/publico/empresa`, {
       method: 'GET', headers: { Accept: 'application/json' }, credentials: 'omit', referrerPolicy: 'no-referrer',
-      cache: 'no-store',
+      cache: 'no-store', redirect: 'error',
     });
     if (!respuesta || !respuesta.ok) return MARCA_VACIA;
     return normalizarMarca(await respuesta.json());
@@ -367,16 +378,17 @@ export async function cargarMarcaEmpresa(apiUrl, fetchImpl = globalThis.fetch) {
 }
 
 /**
- * La URL del logo: una ruta del API (/publico/empresa/logo?v=…) se cuelga de apiUrl; una URL http(s) o un data:image
- * (vista previa) quedan igual. Sin logo, o con algo que no es eso, null (se muestra el monograma).
+ * La URL del logo: la ruta pública del API (/publico/empresa/logo?v=…) colgada de apiUrl, o el data:image de la vista
+ * previa tal cual. Cualquier otra cosa (otra URL http(s), '/../x', '/\evil.com/x.png', '//evil.com'…) o sin logo, null
+ * (se muestra el monograma).
  * @param {any} marca
  * @param {string} apiUrl
  * @returns {string | null}
  */
 export function urlLogo(marca, apiUrl) {
   const logo = esObjeto(marca) ? textoLimpio(marca.logo_url) : '';
-  if (!logo || !LOGO_PERMITIDO.test(logo)) return null;
-  return logo.startsWith('/') ? `${String(apiUrl ?? '').replace(/\/+$/, '')}${logo}` : logo;
+  if (LOGO_RUTA_PUBLICA.test(logo)) return `${String(apiUrl ?? '').replace(/\/+$/, '')}${logo}`;
+  return LOGO_VISTA_PREVIA.test(logo) ? logo : null;
 }
 
 /**

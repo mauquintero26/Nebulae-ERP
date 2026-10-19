@@ -72,6 +72,12 @@ console.log('--- TEST 1: COLORES_POR_DEFECTO, MARCA_VACIA y normalizarMarca ---'
   assert.equal(normalizarMarca({ logo_url: 'data:image/png;base64,iVBORw0KGgo=' }).logo_url,
     'data:image/png;base64,iVBORw0KGgo=', 'la vista previa de un logo sin guardar');
   assert.equal(normalizarMarca({ logo_url: 'data:image/svg+xml;base64,PHN2Zz4=' }).logo_url, null, 'SVG no');
+  // r1: solo la ruta pública del logo (empresa._url_logo) o un data:image de la vista previa.
+  for (const malo of ['https://cdn.example.com/l.png', '/../x', '/\\evil.com/x.png', '/\t/x', '//evil.com',
+    '/publico/empresa/logo?v=abc&x=1', '/publico/empresa/logo/../../admin', 'data:image/png;base64,<script>']) {
+    assert.equal(normalizarMarca({ logo_url: malo }).logo_url, null, `logo_url ${JSON.stringify(malo)}`);
+  }
+  assert.equal(normalizarMarca({ logo_url: '/publico/empresa/logo' }).logo_url, '/publico/empresa/logo');
 
   assert.equal(inicialesMarca('DEMO Ferretería del Centro'), 'DF');
   assert.equal(inicialesMarca('  ñandú  '), 'Ñ');
@@ -93,7 +99,13 @@ console.log('--- TEST 2: cargarMarcaEmpresa sin Authorization y sin lanzar ---')
   assert.ok(!encabezados.includes('authorization'), 'sin Authorization');
   assert.equal(init.credentials, 'omit', 'sin credenciales (cookies)');
   assert.equal(init.referrerPolicy, 'no-referrer', 'la URL con el token no viaja en el Referer');
+  assert.equal(init.redirect, 'error', 'r1: no sigue redirecciones');
   assert.deepEqual(marca, normalizarMarca(PERFIL));
+  // Una redirección rechazada (TypeError de fetch) da MARCA_VACIA, sin lanzar.
+  assert.deepEqual(await cargarMarcaEmpresa('http://x/api/v1', async (_u, i) => {
+    if (i.redirect === 'error') throw new TypeError('Failed to fetch');
+    return { ok: true, status: 200, json: async () => PERFIL };
+  }), MARCA_VACIA);
 
   const casos = [
     async () => { throw new TypeError('Failed to fetch'); },
@@ -248,16 +260,27 @@ console.log('--- TEST 6: urlLogo ---');
   assert.equal(urlLogo(PERFIL, 'http://localhost:8030/api/v1/'),
     'http://localhost:8030/api/v1/publico/empresa/logo?v=abc123def456', 'sin doble barra');
   assert.equal(urlLogo(MARCA_VACIA, 'http://x/api/v1'), null, 'sin logo');
-  assert.equal(urlLogo({ logo_url: 'https://cdn.example.com/l.png' }, 'http://x'), 'https://cdn.example.com/l.png');
   assert.equal(urlLogo({ logo_url: '//evil.example/l.png' }, 'http://x'), null);
   assert.equal(urlLogo(null, 'http://x'), null);
+  // r1: solo la ruta pública del logo colgada de apiUrl, o el data:image de la vista previa de T14.
+  assert.equal(urlLogo({ logo_url: '/publico/empresa/logo' }, 'http://x/api/v1'), 'http://x/api/v1/publico/empresa/logo');
+  assert.equal(urlLogo({ logo_url: 'data:image/webp;base64,UklGRg==' }, 'http://x'), 'data:image/webp;base64,UklGRg==');
+  for (const malo of ['https://cdn.example.com/l.png', 'http://x/api/v1/publico/empresa/logo', '/../x',
+    '/\\evil.com/x.png', '/\t/x', '//evil.com', '/publico/empresa/logo?v=abc def', '/publico/empresa/logo?v=1&w=2',
+    'data:image/svg+xml;base64,PHN2Zz4=', 'javascript:alert(1)']) {
+    assert.equal(urlLogo({ logo_url: malo }, 'http://x/api/v1'), null, `urlLogo ${JSON.stringify(malo)}`);
+  }
 }
 
-console.log('--- TEST 7: sin apiFetch ni URL de producción escrita a mano ---');
+console.log('--- TEST 7: sin apiFetch ni URL de producción escrita a mano; una sola copia de las reglas de Python ---');
 {
   const fuente = readFileSync(join(SRC, 'lib', 'marca-empresa.js'), 'utf8');
   assert.doesNotMatch(fuente, /from '\.\/api|apiFetch\s*\(|nebulaekids|['"]Authorization['"]/,
     'sin apiFetch, sin la URL fija y sin el encabezado de sesión');
+  // r1 (menor 15): el largo en code points es largoTexto de chatter.js; stripPy se exporta para confirmacion-publica.js.
+  assert.match(fuente, /import\s*\{[^}]*\blargoTexto\b[^}]*\}\s*from\s*'\.\/chatter\.js'/);
+  assert.match(fuente, /export\s+(?:const|function)\s+stripPy\b/);
+  assert.doesNotMatch(fuente, /\[\.\.\.\w+\]\.length/, 'sin otro conteo de code points');
 }
 
 console.log('✓ Todas las pruebas de la marca de la empresa pasaron.');
