@@ -107,13 +107,15 @@ def _tarea_con_resumen_largo(db, ahora):
 
 def _tarea_que_devuelve_de_mas(db, ahora):
     """Devuelve lo que una tarea NO debe devolver (r1, contrato de TAREAS): un nombre largo, un dict anidado con un
-    teléfono, un decimal, una lista con un dict, una clave que es un nombre; junto a lo publicable."""
+    teléfono, un decimal, una lista con un dict, claves que son nombres (con espacios o con tildes); junto a lo
+    publicable."""
     return {
         "cliente": "María Fernanda Rodríguez de las Casas Ochoa",
         "detalle": {"telefono": "3000000000", "correo": "cliente@ejemplo.invalid"},
         "monto": 1.5,
         "mezcla": ["COT-1", {"telefono": "3000000000"}],
         "María Pérez": 1,
+        "María": 1,
         "enviados": 2,
         "agotado": True,
         "omitido": "sin_medios",

@@ -57,7 +57,10 @@ _DEV_SECRET = "super-secret-key-for-development-change-me"
 #                                de este lanzador, o las variables de EasyPanel si corre
 #                                en Docker. NUNCA en backend/.env (desarrollo, erp_test).
 #                                Con --workers 2 cada worker arranca su bucle y un
-#                                candado de Postgres decide quien revisa en cada vuelta.
+#                                candado de Postgres evita que dos revisen a la vez; con
+#                                2 workers suelen correr dos revisiones seguidas por
+#                                intervalo, por eso las tareas deben ser idempotentes
+#                                (ver app/core/tareas_automaticas.py).
 # NEBULAE_TAREAS_INTERVALO_SEG   Opcional: segundos entre revisiones (600 por defecto,
 #                                de 60 a 3600).
 

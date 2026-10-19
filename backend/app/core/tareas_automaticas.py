@@ -260,14 +260,16 @@ def _valor_publicable(valor) -> bool:
 
 def _resultado_publicable(resultado) -> dict:
     """r1 (contrato (b) de TAREAS): lo que se guarda del resultado de una tarea, que /tareas/estado muestra a todos los
-    roles. Pasan las claves que son nombres de campo (identificadores de hasta 40 caracteres) con un valor publicable o
-    una lista de valores publicables; 'error' solo con el nombre de un tipo ({'error': 'RuntimeError'}). Lo demás (un
-    dict anidado, un decimal, un texto largo, una clave con espacios) se descarta; un resultado que no es dict da {}."""
+    roles. Pasan las claves que son nombres de campo (identificadores ASCII de hasta 40 caracteres) con un valor
+    publicable o una lista de valores publicables; 'error' solo con el nombre de un tipo ({'error': 'RuntimeError'}).
+    Lo demás (un dict anidado, un decimal, un texto largo, una clave con espacios o con letras fuera de ASCII, como un
+    nombre con tildes) se descarta; un resultado que no es dict da {}."""
     if not isinstance(resultado, dict):
         return {}
     publicable = {}
     for clave, valor in resultado.items():
-        if not (isinstance(clave, str) and clave.isidentifier() and len(clave) <= LARGO_MAXIMO_TEXTO_EN_RESUMEN):
+        if not (isinstance(clave, str) and clave.isascii() and clave.isidentifier()
+                and len(clave) <= LARGO_MAXIMO_TEXTO_EN_RESUMEN):
             continue
         if clave == "error":
             if isinstance(valor, str) and valor.isidentifier():
