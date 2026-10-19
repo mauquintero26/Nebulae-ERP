@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import {
   canalTexto, textoSeguimiento, puedeDetener, validarConfigSeguimiento, LIMITES_SEGUIMIENTO, MENSAJE_HORARIO,
   lineaSeguimientoEnlace, accionDetenerSeguimiento, configSeguimientoInicial, avisoDiasSeguimiento, opcionesHora,
-  etiquetaHora,
+  etiquetaHora, esAdminOAsesor,
 } from '../src/lib/seguimiento.js';
 
 const LUNES_9AM = '2026-10-05T14:00:00Z'; // lunes 5 de octubre, 9:00 a. m. en Colombia
@@ -327,15 +327,26 @@ console.log('--- TEST 14 (T16): las horas de los dos selects ---');
   assert.equal(etiquetaHora(8), '8:00 a. m.');
   assert.equal(etiquetaHora('18'), '6:00 p. m.');
   assert.equal(etiquetaHora(12), '12:00 p. m.');
-  assert.equal(etiquetaHora(0), '12:00 a. m. (medianoche)');
-  assert.equal(etiquetaHora(24), '12:00 a. m. (medianoche)');
+  // r1 (Important 3): la medianoche, más corta, para que el select quepa en el panel (448 px).
+  assert.equal(etiquetaHora(0), '12 a. m. (medianoche)');
+  assert.equal(etiquetaHora(24), '12 a. m. (medianoche)');
   const inicio = opcionesHora('seguimiento_hora_inicio');
   assert.equal(inicio.length, 24);
-  assert.deepEqual(inicio[0], { valor: '0', etiqueta: '12:00 a. m. (medianoche)' });
+  assert.deepEqual(inicio[0], { valor: '0', etiqueta: '12 a. m. (medianoche)' });
   assert.deepEqual(inicio[8], { valor: '8', etiqueta: '8:00 a. m.' });
   const fin = opcionesHora('seguimiento_hora_fin');
   assert.deepEqual([fin[0].valor, fin[fin.length - 1].valor], ['1', '24']);
   assert.deepEqual(opcionesHora('seguimiento_dias'), []);
+  assert.ok(Math.max(...[...inicio, ...fin].map((o) => o.etiqueta.length)) <= 21, 'ninguna etiqueta más larga');
+}
+
+console.log('--- TEST 15 (T16 r1, menor 5): esAdminOAsesor, quien puede detener recordatorios y leer el WhatsApp ---');
+{
+  // Espejo de require_roles(ROLE_ADMIN, ROLE_ASESOR) con normalize_role: legacy o canónico, sin importar mayúsculas.
+  for (const rol of ['Admin', 'ADMIN', ' admin ', 'Vendedor', 'ASESOR', 'asesor']) assert.equal(esAdminOAsesor(rol), true, rol);
+  for (const rol of ['Finanzas', 'FINANZAS', 'COMPRAS', 'ERP', 'Bodega', 'consulta', 'Mercadeo', '', null, undefined, 7]) {
+    assert.equal(esAdminOAsesor(rol), false, String(rol));
+  }
 }
 
 console.log('OK test_seguimiento.mjs');

@@ -17,7 +17,7 @@ import {
   generoCotizacion, cotizacionesVigentes, cotizacionesRechazadas, esperaCotizacion, contadoresSolicitudes,
   tasaConversionCotizacion, superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera, pasosParaCancelarSolicitud,
   repartirCancelacionSolicitudes, cifrasVentasDashboard, rutaSinParametro, esSolicitudActiva, pestanaDeSolicitud,
-  pistaActivasSolicitudes, valorConfig, enteroConfig, DIAS_VALIDEZ_COTIZACION,
+  pistaActivasSolicitudes, valorConfig, enteroConfig, DIAS_VALIDEZ_COTIZACION, configLeida, cuerpoGuardarConfig,
 } from '../src/lib/listas-ventas.js';
 import { TEXTO_PAPELERA_SIN_FECHA, ESTADOS_SC } from '../src/lib/estados-solicitud.js';
 
@@ -578,6 +578,32 @@ console.log('--- B3 T16: valorConfig y enteroConfig (las secciones nuevas de la 
   assert.equal(enteroConfig(null, 'dias_validez_cotizacion', 5, 1, 60), 5);
   assert.equal(enteroConfig({ data: { dias_validez_cotizacion: { value: '12' } } }, 'dias_validez_cotizacion', 5, 1, 60),
     12);
+}
+
+console.log('--- B3 T16 r1: «Guardar Configuración» nunca pisa claves que no se tocaron ---');
+{
+  // configLeida: GET /ventas/config llegó de verdad (el sobre con su data); un GET que falló (null) no.
+  assert.equal(configLeida({ status: 'success', data: { alerta_sc_dias: { value: '3', description: null } } }), true);
+  assert.equal(configLeida({ status: 'success', data: {} }), true, 'una admin_config vacía (instalación nueva) sí cuenta');
+  for (const no of [null, undefined, 'x', {}, { status: 'success' }, { data: null }, { data: [] }, { data: 'x' }]) {
+    assert.equal(configLeida(no), false, JSON.stringify(no));
+  }
+  const inicial = { alerta_sc_dias: '2', alerta_cot_dias: '2', iva_tarifa_defecto: '5', seguimiento_auto_activo: 'false',
+    dias_validez_cotizacion: '10', notif_whatsapp: 'false' };
+  // Solo cambió un día de alerta -> el PATCH lleva SOLO esa clave (ni el IVA ni los recordatorios).
+  assert.deepEqual(cuerpoGuardarConfig(inicial, { ...inicial, alerta_sc_dias: '4' }, true), { alerta_sc_dias: '4' });
+  // Sin /config cargado -> no se puede guardar (null), aunque haya cambios.
+  assert.equal(cuerpoGuardarConfig(inicial, { ...inicial, alerta_sc_dias: '4' }, false), null);
+  assert.equal(cuerpoGuardarConfig(inicial, { ...inicial, alerta_sc_dias: '4' }, undefined), null, 'solo con true');
+  // Sin cambios: un cuerpo vacío (no se escribe nada).
+  assert.deepEqual(cuerpoGuardarConfig(inicial, { ...inicial }, true), {});
+  // Varias: solo las que cambiaron, como texto; una clave nueva cuenta como cambio; nunca se borra una que falte.
+  assert.deepEqual(cuerpoGuardarConfig(inicial, { ...inicial, seguimiento_auto_activo: 'true', iva_tarifa_defecto: '5',
+    seguimiento_dias: '3' }, true), { seguimiento_auto_activo: 'true', seguimiento_dias: '3' });
+  assert.deepEqual(cuerpoGuardarConfig(inicial, { alerta_sc_dias: 2 }, true), {}, '2 y \'2\' son el mismo valor');
+  assert.deepEqual(cuerpoGuardarConfig(null, { a: '1' }, true), { a: '1' });
+  assert.deepEqual(cuerpoGuardarConfig(Object.create({ a: '1' }), { a: '1' }, true), { a: '1' }, 'solo claves propias');
+  assert.equal(cuerpoGuardarConfig(inicial, null, true), null);
 }
 
 console.log('OK test_listas_ventas.mjs');

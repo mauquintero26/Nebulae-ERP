@@ -7,7 +7,9 @@
  */
 
 import assert from 'node:assert/strict';
-import { revisionAtrasada, MINUTOS_MINIMOS_ATRASO, lineaRevision, avisoSinMedios } from '../src/lib/tareas.js';
+import {
+  revisionAtrasada, MINUTOS_MINIMOS_ATRASO, lineaRevision, avisoSinMedios, RELECTURA_TRAS_REVISION_MS,
+} from '../src/lib/tareas.js';
 import { hace } from '../src/lib/fechas-colombia.js';
 
 const AHORA = new Date('2026-10-06T15:00:00Z');
@@ -108,6 +110,12 @@ console.log('--- TEST 6 (T16, hueco 4): avisoSinMedios ---');
     assert.equal(avisoSinMedios(estado({ resumen })), null, JSON.stringify(resumen));
   }
   assert.equal(avisoSinMedios(null), null);
+}
+
+console.log('--- TEST 7 (T16 r1, menor 7): la segunda lectura del estado después de «Revisar ahora» ---');
+{
+  // La revisión corre en segundo plano DESPUÉS del 202: unos segundos después se vuelve a leer /tareas/estado.
+  assert.equal(RELECTURA_TRAS_REVISION_MS, 5000);
 }
 
 console.log('OK test_tareas.mjs');

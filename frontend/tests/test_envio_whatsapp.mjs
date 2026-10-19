@@ -14,7 +14,7 @@ import {
   avisoWhatsApp, debeVerificar, textoEntrega, TEXTOS_MOTIVO_WHATSAPP, TEXTOS_WHATSAPP_ENVIADO, ESTADOS_FINALES_ENTREGA,
   TEXTOS_CONSULTA_FALLIDA, ESPERA_VERIFICACION_MS, TEXTO_REVISANDO_ENTREGA, abreWhatsAppLocal, recuadroWhatsApp,
   enlaceBotonWhatsApp, estadoConfigWhatsApp, resultadoPruebaWhatsApp, variablesDeEjemplo, lineaEnvioAutomatico,
-  formularioEnvioWhatsApp, cuerpoEnvioWhatsApp, hayCambiosWhatsApp,
+  formularioEnvioWhatsApp, cuerpoEnvioWhatsApp, hayCambiosWhatsApp, MENSAJE_WHATSAPP_SIN_GUARDAR,
 } from '../src/lib/envio-whatsapp.js';
 import { avisoCorreo } from '../src/lib/aviso-correo.js';
 
@@ -377,9 +377,16 @@ console.log('--- TEST 18 (T16): variablesDeEjemplo y la línea de solo lectura -
     { variable: '{{3}}', valor: 'Cotización COT-1' }, { variable: '{{10}}', valor: 'x' }]);
   assert.deepEqual(variablesDeEjemplo(null), []);
   assert.deepEqual(variablesDeEjemplo({ a: 'x' }), [], 'solo variables numeradas');
-  assert.equal(lineaEnvioAutomatico({ automatico: true, listo: false }), 'Envío automático por WhatsApp: encendido');
-  assert.equal(lineaEnvioAutomatico({ automatico: false }), 'Envío automático por WhatsApp: apagado');
+  // r1 (menor 13): {texto, encendido}, para pintarla verde solo si está encendido.
+  assert.deepEqual(lineaEnvioAutomatico({ automatico: true, listo: false }),
+    { texto: 'Envío automático por WhatsApp: encendido', encendido: true });
+  assert.deepEqual(lineaEnvioAutomatico({ automatico: false }),
+    { texto: 'Envío automático por WhatsApp: apagado', encendido: false });
+  assert.equal(lineaEnvioAutomatico({ automatico: 'true' }).encendido, false, 'solo con true');
   assert.equal(lineaEnvioAutomatico(null), null);
+  // r1 (menor 8): lo que dice «Guardar Configuración» si la sección de WhatsApp tiene cambios sin guardar.
+  assert.equal(MENSAJE_WHATSAPP_SIN_GUARDAR, 'Tienes cambios sin guardar en «Envío automático por WhatsApp»: guárdalos '
+    + 'con el botón «Guardar» de esa sección antes de guardar la configuración.');
 }
 
 console.log('--- TEST 19 (T16): el formulario de ConfigEnvioWhatsApp y el cuerpo del PUT ---');

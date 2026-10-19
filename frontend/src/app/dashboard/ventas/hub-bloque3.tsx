@@ -21,8 +21,12 @@ const SECCION: Record<TonoSeccion, { caja: string; icono: string; titulo: string
 };
 
 const FILA = 'bg-white rounded-xl border';
-const CONTROL = 'border border-slate-200 rounded-lg text-sm font-bold py-1 outline-none focus:ring-2 focus:ring-indigo-200 '
-  + 'disabled:bg-slate-50 disabled:text-slate-500 disabled:cursor-not-allowed';
+/**
+ * El estilo de los campos del ConfigPanel (el de los días de alerta: text-sm, negrita, py-1), para que todos los campos
+ * de las secciones se vean iguales (r1: también los de «Envío automático por WhatsApp»).
+ */
+export const CONTROL = 'border border-slate-200 rounded-lg text-sm font-bold py-1 outline-none focus:ring-2 '
+  + 'focus:ring-indigo-200 disabled:bg-slate-50 disabled:text-slate-500 disabled:cursor-not-allowed';
 
 /** Una sección del ConfigPanel: caja de color con su ícono, título en mayúsculas, descripción y sus filas. */
 export function SeccionConfig({ titulo, icono: Icono, tono, descripcion, children }: {
@@ -72,7 +76,10 @@ export function CampoNumero({ etiqueta, ayuda, valor, min, max, sufijo, onCambio
   );
 }
 
-/** Fila con un select. */
+/**
+ * Fila con un select: la etiqueta arriba y el select debajo, a todo el ancho (r1: el Drawer mide 448 px a cualquier
+ * ancho de ventana, y al lado de la etiqueta un select largo se salía del panel).
+ */
 export function CampoSelect({ etiqueta, ayuda, valor, opciones, onCambio, deshabilitado, tono = 'blue' }: {
   etiqueta: string;
   ayuda?: string;
@@ -83,13 +90,13 @@ export function CampoSelect({ etiqueta, ayuda, valor, opciones, onCambio, deshab
   tono?: TonoSeccion;
 }) {
   return (
-    <label className={`flex flex-wrap items-center justify-between gap-3 p-3 ${FILA} ${SECCION[tono].fila}`}>
-      <span className="min-w-0">
+    <label className={`block space-y-2 p-3 ${FILA} ${SECCION[tono].fila}`}>
+      <span className="block min-w-0">
         <span className="block text-sm font-bold text-slate-700">{etiqueta}</span>
         {ayuda && <span className="block text-xs text-slate-500 mt-0.5">{ayuda}</span>}
       </span>
       <select value={valor} disabled={deshabilitado} onChange={e => onCambio(e.target.value)}
-        className={`px-2 bg-white ${CONTROL}`}>
+        className={`w-full min-w-0 px-2 bg-white ${CONTROL}`}>
         {opciones.map(o => <option key={o.valor} value={o.valor}>{o.etiqueta}</option>)}
       </select>
     </label>

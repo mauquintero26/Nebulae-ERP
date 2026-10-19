@@ -2,31 +2,32 @@
 import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, BellRing, RefreshCw } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import { recargarTrasError } from '@/lib/avisos';
 import { TONES, useAvisos } from '@/components/ui';
 import {
-  textoSeguimiento, puedeDetener, accionDetenerSeguimiento, lineaSeguimientoEnlace, avisoDiasSeguimiento, opcionesHora,
+  textoSeguimiento, puedeDetener, accionDetenerSeguimiento, avisoDiasSeguimiento, opcionesHora, esAdminOAsesor,
   LIMITES_SEGUIMIENTO,
 } from '@/lib/seguimiento';
-import { lineaRevision, avisoSinMedios } from '@/lib/tareas';
+import { lineaRevision, avisoSinMedios, RELECTURA_TRAS_REVISION_MS } from '@/lib/tareas';
+import { getUsuarioActual } from './flujo';
+import { CLASES_TONO_AVISO } from './ventana-enlace';
 import { CampoNumero, CampoSelect, Interruptor, SeccionConfig } from './hub-bloque3';
 
 // B3 T16 (U16-seguimiento puntos 8, 11 y 12; TAREAS punto 6): el recordatorio automático al cliente en pantalla.
 // - TarjetaSeguimiento: el recuadro de «Siguiente paso» de la SC y la COT (lo montan T17 y T18).
-// - LineaSeguimientoEnlace: la línea del recordatorio en la ventana del enlace (EnlaceConfirmacionModal, C28).
+// - (La línea del recordatorio de la ventana del enlace, LineaSeguimientoEnlace, vive en ventana-enlace.tsx: r1.)
 // - SeccionSeguimiento: «Seguimiento de confirmación» del ConfigPanel del Hub, con el estado de la revisión automática.
 // Toda la lógica y los textos vienen de lib/seguimiento.js y lib/tareas.js (probadas con node).
 
-const CLASES_TONO: Record<'ok' | 'info' | 'alerta' | 'gris', string> = {
-  ok: TONES.success,
-  info: TONES.info,
-  alerta: TONES.warning,
-  gris: TONES.neutral,
-};
+const CLASES_TONO: Record<'ok' | 'info' | 'alerta' | 'gris', string> = { ...CLASES_TONO_AVISO, gris: TONES.neutral };
 
 /**
  * El recuadro del recordatorio en «Siguiente paso» (textoSeguimiento de doc.seguimiento) con «No enviar
  * recordatorios» mientras está programado. Va como bloque (div): dentro de NextStepCard, en `actions` (sus `children`
  * se pintan dentro de un <p>). onCambio recarga el documento (el «detener» deja su renglón en la Actividad).
+ * r1: el botón solo para ADMIN o ASESOR (esAdminOAsesor: el POST exige esos roles, nunca un 403); la respuesta del
+ * «detener» se pinta enseguida (reemplaza a doc.seguimiento hasta que llegue uno nuevo del padre) y un 400 o 409 (otro
+ * usuario ya lo detuvo, el documento salió de Pendiente) también recarga.
  */
 export function TarjetaSeguimiento({ tipoDoc, doc, onCambio }: {
   tipoDoc: 'SC' | 'COT';
@@ -36,9 +37,13 @@ export function TarjetaSeguimiento({ tipoDoc, doc, onCambio }: {
 }) {
   const { avisarError, confirmar } = useAvisos();
   const [deteniendo, setDeteniendo] = useState(false);
-  const texto = textoSeguimiento(doc?.seguimiento);
+  // La respuesta del «detener», atada al doc.seguimiento que reemplaza: cuando el padre trae uno nuevo, se descarta.
+  const [respuesta, setRespuesta] = useState<{ de: unknown; resumen: unknown } | null>(null);
+  const seguimiento = respuesta && respuesta.de === doc?.seguimiento ? respuesta.resumen : doc?.seguimiento;
+  const texto = textoSeguimiento(seguimiento);
   if (!texto) return null;
-  const accion = puedeDetener(doc?.seguimiento) ? accionDetenerSeguimiento(tipoDoc, doc?.id) : null;
+  const accion = puedeDetener(seguimiento) && esAdminOAsesor(getUsuarioActual().role)
+    ? accionDetenerSeguimiento(tipoDoc, doc?.id) : null;
 
   async function detener() {
     if (!accion || deteniendo) return;
@@ -47,10 +52,12 @@ export function TarjetaSeguimiento({ tipoDoc, doc, onCambio }: {
     }
     setDeteniendo(true);
     try {
-      await apiFetch(accion.ruta, { method: 'POST', body: '{}' });
+      const r = await apiFetch(accion.ruta, { method: 'POST', body: '{}' });
+      setRespuesta({ de: doc?.seguimiento, resumen: r?.data ?? null });
       onCambio();
     } catch (err) {
       avisarError(err, 'No se pudieron detener los recordatorios');
+      if (recargarTrasError(err)) onCambio();
     } finally {
       setDeteniendo(false);
     }
@@ -72,17 +79,6 @@ export function TarjetaSeguimiento({ tipoDoc, doc, onCambio }: {
         </div>
       </div>
     </div>
-  );
-}
-
-/** La línea del recordatorio en la ventana del enlace: gris si quedó programado, ámbar si el cliente no tiene medio. */
-export function LineaSeguimientoEnlace({ seguimiento }: { seguimiento?: unknown }) {
-  const linea = lineaSeguimientoEnlace(seguimiento);
-  if (!linea) return null;
-  return (
-    <p className={`flex items-start gap-1.5 text-xs ${linea.tono === 'alerta' ? 'font-semibold text-amber-800' : 'text-slate-500'}`}>
-      <BellRing size={12} className="mt-0.5 shrink-0" /> <span>{linea.texto}</span>
-    </p>
   );
 }
 
@@ -118,7 +114,8 @@ export function SeccionSeguimiento({ cfg, onCambio, soloLectura }: {
         valor={cfg.seguimiento_solo_horario === 'true'} deshabilitado={soloLectura}
         onCambio={v => onCambio('seguimiento_solo_horario', v ? 'true' : 'false')} />
       {cfg.seguimiento_solo_horario === 'true' && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        // r1: una columna. El Drawer mide 448 px a cualquier ancho de ventana: dos columnas por `sm:` se salían.
+        <div className="space-y-3">
           <CampoSelect tono="sky" etiqueta="Desde" valor={cfg.seguimiento_hora_inicio}
             opciones={opcionesHora('seguimiento_hora_inicio')} deshabilitado={soloLectura}
             onCambio={v => onCambio('seguimiento_hora_inicio', v)} />
@@ -141,7 +138,8 @@ export function SeccionSeguimiento({ cfg, onCambio, soloLectura }: {
  * TAREAS punto 6: el pie de la sección. Lee GET /ventas/tareas/estado al montarse (sobre {status, data}: apiFetch no lo
  * desenvuelve) y muestra la línea de lineaRevision (al día, atrasada o apagada) y el recuadro «sin medios». «Revisar
  * ahora» solo para el administrador y solo con la revisión activa en este servidor; su aviso es el `message` del 202 y
- * después se vuelve a leer el estado. Los errores (el 409 de «apagada») van con avisarError.
+ * después se vuelve a leer el estado, y otra vez a los RELECTURA_TRAS_REVISION_MS (la revisión corre en segundo plano
+ * después del 202; r1). Los errores (el 409 de «apagada») van con avisarError y también releen el estado (r1).
  */
 type EstadoTareas = {
   activas_en_servidor?: boolean;
@@ -158,7 +156,17 @@ function EstadoRevisionAutomatica({ esAdmin }: { esAdmin: boolean }) {
   // Cada lectura de /tareas/estado: la de abrir el panel y la de después de «Revisar ahora».
   const [lectura, setLectura] = useState(0);
   const montado = useRef(true);
-  useEffect(() => () => { montado.current = false; }, []);
+  const relectura = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // r1 (StrictMode de next dev): el efecto vuelve a poner montado en true al (re)montar; si no, las guardas quedaban en
+  // false para siempre y el botón no salía de «revisando». La segunda lectura se cancela al desmontar.
+  useEffect(() => {
+    montado.current = true;
+    return () => {
+      montado.current = false;
+      if (relectura.current) clearTimeout(relectura.current);
+    };
+  }, []);
+  const releer = () => { if (montado.current) setLectura(n => n + 1); };
 
   useEffect(() => {
     let vigente = true; // una respuesta vieja (o con el panel cerrado) no se pinta
@@ -174,9 +182,12 @@ function EstadoRevisionAutomatica({ esAdmin }: { esAdmin: boolean }) {
     try {
       const r = await apiFetch('/ventas/tareas/revisar-ahora', { method: 'POST', body: '{}' });
       if (r?.message) avisar(r.message);
-      if (montado.current) setLectura(n => n + 1);
+      releer();
+      if (relectura.current) clearTimeout(relectura.current);
+      relectura.current = setTimeout(releer, RELECTURA_TRAS_REVISION_MS);
     } catch (err) {
       avisarError(err);
+      releer();
     } finally {
       if (montado.current) setRevisando(false);
     }

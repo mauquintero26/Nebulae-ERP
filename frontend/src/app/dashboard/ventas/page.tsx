@@ -14,7 +14,7 @@ import { useRouter } from 'next/navigation';
 import { apiFetch, API_URL } from '@/lib/api';
 import { coincideProducto } from '@/lib/busqueda';
 import { SubNav, PageHeader, Badge, Drawer, Modal, Button, useAvisos, ContenidoEnlace } from '@/components/ui';
-import { textoDeError } from '@/lib/avisos';
+import { textoDeError, esErrorDeValidacion } from '@/lib/avisos';
 import { VEN_NAV } from './ven-nav';
 import { CambiosDeActividad, EnlaceConfirmacionModal, getUsuarioActual } from './flujo';
 import { ChannelModal, ESTADOS as ESTADOS_COT } from './cotizacion/cotizacion-client';
@@ -32,14 +32,15 @@ import { waUrl } from '@/lib/whatsapp';
 import { correoDelCliente } from '@/lib/aviso-correo';
 import { formatoPesos } from '@/lib/pesos';
 import { etiquetaTipoSolicitud } from '@/lib/etiquetas-ventas';
-import { diasAlerta, pedidoVigente, pestanaCotizacion, valorConfig, enteroConfig, DIAS_VALIDEZ_COTIZACION } from '@/lib/listas-ventas';
+import { diasAlerta, pedidoVigente, pestanaCotizacion, valorConfig, enteroConfig, DIAS_VALIDEZ_COTIZACION, configLeida,
+  cuerpoGuardarConfig } from '@/lib/listas-ventas';
 // B3 T16: las secciones nuevas del ConfigPanel, la etiqueta de las acciones del Bloque 3 y el WhatsApp automático del
 // envío desde el tablero (R15: lo nuevo vive en sus archivos; aquí solo se cablea).
 import { SeccionSeguimiento } from './seguimiento';
 import { ConfigEnvioWhatsApp } from './config-envio-whatsapp';
 import { SeccionDocumentosCliente, SeccionIva, EtiquetaAccionBloque3 } from './hub-bloque3';
 import { accionBloque3 } from '@/lib/acciones-bloque3';
-import { abreWhatsAppLocal } from '@/lib/envio-whatsapp';
+import { abreWhatsAppLocal, MENSAJE_WHATSAPP_SIN_GUARDAR } from '@/lib/envio-whatsapp';
 import { configSeguimientoInicial, validarConfigSeguimiento } from '@/lib/seguimiento';
 import { normalizarTarifaIva, TARIFA_IVA_POR_DEFECTO } from '@/lib/iva';
 
@@ -208,7 +209,7 @@ function ActivitiesPanel({row,onClose,onNotaGuardada}:{row:any,onClose:()=>void,
 }
 
 /* ── Config Panel ── */
-function ConfigPanel({alertDias,onSave,onClose}:{alertDias:any,onSave:(cfg:any)=>void,onClose:()=>void}) {
+function ConfigPanel({alertDias,configCargada,onSave,onClose}:{alertDias:any,configCargada:boolean,onSave:(cfg:any)=>void,onClose:()=>void}) {
   // N8: todos leen los valores reales; solo un administrador los cambia (la seguridad real es el 403 del PATCH).
   const soloLectura = getUsuarioActual().role.trim().toLowerCase() !== 'admin';
   const { avisarError } = useAvisos();
@@ -227,23 +228,33 @@ function ConfigPanel({alertDias,onSave,onClose}:{alertDias:any,onSave:(cfg:any)=
     iva_tarifa_defecto: String(normalizarTarifaIva(valorConfig(alertDias, 'iva_tarifa_defecto')) ?? TARIFA_IVA_POR_DEFECTO),
     ...configSeguimientoInicial(alertDias),
   });
-  const cambiarCampo = (k: string, v: string) => setCfg(p => ({...p, [k]: v}));
+  // B3 T16 r1: la foto con que abrió el panel (el PATCH lleva solo lo que cambió) y si la sección de WhatsApp tiene
+  // cambios sin guardar (tiene su propio botón). Editar un campo borra el error del pie.
+  const cfgInicial = React.useRef(cfg);
+  const [waPendiente, setWaPendiente] = useState(false);
+  const cambiarCampo = (k: string, v: string) => { setCfg(p => ({...p, [k]: v})); setError(''); };
   const [saving,setSaving]=useState(false);
   const [saved,setSaved]=useState(false);
   async function save(){
-    // B3 T16: los recordatorios con las mismas reglas del 422 del servidor, antes de mandar nada.
+    // B3 T16: los recordatorios con las mismas reglas del 422 del servidor, antes de mandar nada (r1: y sin perder lo
+    // escrito en la sección de WhatsApp).
+    if(waPendiente){ setError(MENSAJE_WHATSAPP_SIN_GUARDAR); return; }
     const invalido = validarConfigSeguimiento(cfg);
     if(invalido){ setError(invalido); return; }
+    // r1: solo las claves que cambiaron (nunca pisa con un valor por defecto lo que nadie tocó), y solo con /config leído.
+    const cuerpo = cuerpoGuardarConfig(cfgInicial.current, cfg, configCargada);
+    if(!cuerpo) return;
     setSaving(true); setError('');
-    try{ await apiFetch('/ventas/config',{method:'PATCH',body:JSON.stringify(cfg)}); onSave(cfg); setSaved(true); setTimeout(()=>setSaved(false),2000); }
-    catch(err:any){ setError(textoDeError(err, 'No se pudo guardar la configuración')); avisarError(err, 'No se pudo guardar la configuración'); }
+    try{ await apiFetch('/ventas/config',{method:'PATCH',body:JSON.stringify(cuerpo)}); onSave(cfg); setSaved(true); setTimeout(()=>setSaved(false),2000); }
+    // r1: un error de validación (el 422) va solo en línea; los demás, solo con el aviso.
+    catch(err:any){ if(esErrorDeValidacion(err)) setError(textoDeError(err)); else avisarError(err, 'No se pudo guardar la configuración'); }
     setSaving(false);
   }
   const Toggle=({k,label,desc}:{k:string,label:string,desc:string})=>(
     <div className="bg-white rounded-xl p-4 border border-indigo-100">
       <div className="flex items-start justify-between gap-3">
         <div><p className="font-bold text-sm text-slate-800">{label}</p><p className="text-xs text-slate-500 mt-0.5">{desc}</p></div>
-        <button disabled={soloLectura} onClick={()=>setCfg(p=>({...p,[k]:p[k as keyof typeof p]==='true'?'false':'true'}))}
+        <button disabled={soloLectura} onClick={()=>cambiarCampo(k,cfg[k as keyof typeof cfg]==='true'?'false':'true')}
           className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl border transition-colors shrink-0 disabled:cursor-not-allowed disabled:opacity-60 ${(cfg as any)[k]==='true'?'bg-emerald-50 border-emerald-300 text-emerald-700':'bg-slate-50 border-slate-200 text-slate-500'}`}>
           {(cfg as any)[k]==='true'?<ToggleRight size={16} className="text-emerald-600"/>:<ToggleLeft size={16}/>}
           {(cfg as any)[k]==='true'?'ON':'OFF'}
@@ -262,7 +273,7 @@ function ConfigPanel({alertDias,onSave,onClose}:{alertDias:any,onSave:(cfg:any)=
     ) : (
       <div className="space-y-2">
         {error && <p className="text-xs font-semibold text-rose-600 text-center">{error}</p>}
-        <button onClick={save} disabled={saving}
+        <button onClick={save} disabled={saving || !configCargada}
           className={`w-full py-3 rounded-xl font-black flex items-center justify-center gap-2 transition-colors ${saved?'bg-emerald-500 text-white':'bg-indigo-600 hover:bg-indigo-700 text-white'} disabled:opacity-50`}>
           {saving?<RefreshCw size={16} className="animate-spin"/>:saved?<CheckCircle2 size={16}/>:<Save size={16}/>}
           {saved?'¡Configuración Guardada!':'Guardar Configuración'}
@@ -277,7 +288,7 @@ function ConfigPanel({alertDias,onSave,onClose}:{alertDias:any,onSave:(cfg:any)=
                 <div key={k} className="flex items-center justify-between bg-white rounded-xl p-3 border border-amber-100">
                   <span className="text-sm font-bold text-slate-700">{label}</span>
                   <div className="flex items-center gap-2">
-                    <input type="number" min="1" max="30" value={(cfg as any)[k]} onChange={e=>setCfg(p=>({...p,[k]:e.target.value}))} disabled={soloLectura}
+                    <input type="number" min="1" max="30" value={(cfg as any)[k]} onChange={e=>cambiarCampo(k,e.target.value)} disabled={soloLectura}
                       className="w-16 border border-slate-200 rounded-lg text-center text-sm font-bold py-1 focus:ring-2 focus:ring-amber-200 outline-none disabled:bg-slate-50 disabled:text-slate-500"/>
                     <span className="text-xs text-slate-500 font-medium">días</span>
                   </div>
@@ -291,7 +302,7 @@ function ConfigPanel({alertDias,onSave,onClose}:{alertDias:any,onSave:(cfg:any)=
           <SeccionDocumentosCliente cfg={cfg} onCambio={cambiarCampo} soloLectura={soloLectura}/>
           <SeccionIva cfg={cfg} onCambio={cambiarCampo} soloLectura={soloLectura}/>
           <SeccionSeguimiento cfg={cfg} onCambio={cambiarCampo} soloLectura={soloLectura}/>
-          <ConfigEnvioWhatsApp soloLectura={soloLectura}/>
+          <ConfigEnvioWhatsApp soloLectura={soloLectura} onCambiosPendientes={setWaPendiente}/>
           <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-5">
             <div className="flex items-center gap-2 mb-4"><Zap size={16} className="text-indigo-600"/><h3 className="font-black text-indigo-800 text-sm uppercase tracking-wide">Automatizaciones Comerciales</h3></div>
             <div className="space-y-3">
@@ -344,6 +355,8 @@ export default function VentasHub() {
   const [actRow, setActRow]         = useState<any>(null);
   const [quickDetailDoc, setQuickDetailDoc] = useState<any>(null);
   const [showConfig, setShowConfig] = useState(false);
+  // B3 T16 r1: GET /ventas/config llegó de verdad (configLeida). Hasta entonces el panel no se abre ni guarda.
+  const [configCargada, setConfigCargada] = useState(false);
 
   // N3: cancelación con motivo (modal) y resultado de un lote con fallos (banner; lo comparte N5).
   const [cancelacion, setCancelacion]             = useState<{ids:string[]}|null>(null);
@@ -384,6 +397,7 @@ export default function VentasHub() {
       setSolicitudes(carga.listas.sc); setCotizaciones(carga.listas.cot); setPedidos(carga.listas.ven);
       setAllData(carga.todas);
       if(carga.cfg) setAlertDias(carga.cfg);
+      if(configLeida(cfg)) setConfigCargada(true);
       if(carga.aviso) avisar(carga.aviso, {tono: 'error'});
     } catch(err:any){if (miCarga === cargaRef.current) setToast({msg:err.message,type:'error'});}
     finally{if (miCarga === cargaRef.current) setLoading(false);}
@@ -786,7 +800,7 @@ export default function VentasHub() {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
       {actRow && <ActivitiesPanel key={`${actRow.tipo}|${actRow.id}`} row={actRow} onClose={()=>setActRow(null)} onNotaGuardada={()=>loadData({silencioso: true})}/>}
-      {showConfig && <ConfigPanel alertDias={alertDias} onSave={cfg=>{setAlertDias(cfg);setShowConfig(false);loadData();}} onClose={()=>setShowConfig(false)}/>}
+      {showConfig && <ConfigPanel alertDias={alertDias} configCargada={configCargada} onSave={cfg=>{setAlertDias(cfg);setShowConfig(false);loadData();}} onClose={()=>setShowConfig(false)}/>}
 
       <SubNav label="Hub Ventas" items={VEN_NAV} currentPath="/dashboard/ventas" color="indigo" />
 
@@ -829,7 +843,7 @@ export default function VentasHub() {
             className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors ${quickFilter === 'todos' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
             Ver Todo
           </button>
-          <button onClick={()=>setShowConfig(true)} className="text-xs text-indigo-600 hover:text-indigo-800 font-bold border border-indigo-200 px-3 py-1.5 rounded-xl hover:bg-indigo-50 transition-colors">
+          <button onClick={()=>setShowConfig(true)} disabled={!configCargada} className="text-xs text-indigo-600 hover:text-indigo-800 font-bold border border-indigo-200 px-3 py-1.5 rounded-xl hover:bg-indigo-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
             Ajustar Tiempos
           </button>
         </div>
@@ -854,8 +868,8 @@ export default function VentasHub() {
                 className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-semibold text-xs shadow-xs transition-colors">
                 <RefreshCw size={13} className={loading?'animate-spin':''}/> Actualizar
               </button>
-              <button onClick={()=>setShowConfig(true)}
-                className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 font-semibold text-xs shadow-xs transition-colors">
+              <button onClick={()=>setShowConfig(true)} disabled={!configCargada}
+                className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 font-semibold text-xs shadow-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                 <Settings size={13}/> Configuración
               </button>
             </div>

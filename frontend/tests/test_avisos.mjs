@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import {
   MENSAJE_SIN_CONEXION, MENSAJE_GENERICO, ETIQUETAS_CAMPO,
   textoDeDetalle, textoDeError, duracionAviso, agregarAviso, errorDeRespuesta, normalizarTono, recargarTrasError,
+  esErrorDeValidacion,
 } from '../src/lib/avisos.js';
 
 const DATOS_INVALIDOS = 'Los datos enviados no son válidos. Revisa el formulario e intenta de nuevo.';
@@ -290,6 +291,17 @@ console.log('--- TEST 11 (revisión final, B10): el 500 de /crm/products/search 
   assert.ok(buscador.includes("catch (err) { error = textoDeError(err, 'No se pudo buscar'); }"), 'el catch arma el error');
   assert.ok(buscador.includes('setErrorBusqueda(error)') && buscador.includes('setOpen(!error); setSearched(!error);'));
   assert.ok(buscador.includes('{open && searched && !errorBusqueda && results.length === 0 && escrito.length > 2 && ('));
+}
+
+console.log('--- TEST 12 (B3 T16 r1): esErrorDeValidacion, el 422 se muestra en línea y no como aviso ---');
+{
+  assert.equal(esErrorDeValidacion(errorDeRespuesta(422, { detail: 'Los recordatorios deben ser entre 1 y 5.' })), true);
+  for (const status of [400, 403, 404, 409, 500]) {
+    assert.equal(esErrorDeValidacion(errorDeRespuesta(status, { detail: 'x' })), false, String(status));
+  }
+  for (const nada of [new Error('Failed to fetch'), null, undefined, 'x', { status: '422' }]) {
+    assert.equal(esErrorDeValidacion(nada), false, String(nada));
+  }
 }
 
 console.log('✓ Todas las pruebas de avisos pasaron.');

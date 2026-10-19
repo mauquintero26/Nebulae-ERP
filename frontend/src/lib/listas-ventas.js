@@ -71,6 +71,39 @@ export function enteroConfig(cfg, clave, defecto, minimo, maximo) {
 /** B3 T7/T16 (U22-validez): dias_validez_cotizacion, de 1 a 60 y 5 por defecto (DIAS_VALIDEZ_COT_* del backend). */
 export const DIAS_VALIDEZ_COTIZACION = Object.freeze({ defecto: 5, minimo: 1, maximo: 60 });
 
+/**
+ * B3 T16 r1: si GET /ventas/config llego de verdad (el sobre {status, data} con data como objeto). Un GET que fallo
+ * (null en loadData) u otra cosa: false. Una admin_config vacia ({data: {}}, instalacion nueva) si cuenta: el backend
+ * no la distingue del except de get_config, y cuerpoGuardarConfig igual manda solo lo que se cambio.
+ * @param {unknown} respuesta
+ * @returns {boolean}
+ */
+export function configLeida(respuesta) {
+  if (!respuesta || typeof respuesta !== 'object') return false;
+  const data = /** @type {any} */ (respuesta).data;
+  return typeof data === 'object' && data !== null && !Array.isArray(data);
+}
+
+/**
+ * B3 T16 r1: el cuerpo de PATCH /ventas/config del «Guardar Configuracion» del Hub. Solo las claves cuyo valor cambio
+ * frente a la foto `inicial` con que se abrio el panel (comparadas como texto; una clave nueva cuenta como cambio y
+ * nunca se borra una que falte), para no pisar con un valor por defecto lo que nadie toco. null si la configuracion no
+ * se ha leido de verdad (`cargada` distinto de true): no se puede guardar.
+ * @param {Record<string, unknown> | null | undefined} inicial
+ * @param {Record<string, unknown> | null | undefined} actual
+ * @param {boolean | undefined} cargada
+ * @returns {Record<string, unknown> | null}
+ */
+export function cuerpoGuardarConfig(inicial, actual, cargada) {
+  if (cargada !== true || !actual || typeof actual !== 'object') return null;
+  const base = inicial && typeof inicial === 'object' ? inicial : {};
+  const cuerpo = {};
+  for (const [clave, valor] of Object.entries(actual)) {
+    if (!Object.hasOwn(base, clave) || String(base[clave]) !== String(valor)) cuerpo[clave] = valor;
+  }
+  return cuerpo;
+}
+
 const pedidosDe = (cot) => (Array.isArray(cot?.pedidos_venta) ? cot.pedidos_venta.filter((v) => v && typeof v === 'object') : []);
 
 /**

@@ -354,11 +354,20 @@ export function hayCambiosWhatsApp(form, cfg) {
 }
 
 /**
- * La única línea que ve quien no es administrador (N8), con el `data` de GET /ventas/envio-cliente/whatsapp/estado.
+ * B3 T16 r1 (menor 8): lo que dice el «Guardar Configuración» del Hub, sin guardar ni cerrar el panel, si la sección
+ * de WhatsApp (que se guarda con su propio botón) tiene cambios sin guardar: así no se pierden.
+ */
+export const MENSAJE_WHATSAPP_SIN_GUARDAR = 'Tienes cambios sin guardar en «Envío automático por WhatsApp»: guárdalos '
+  + 'con el botón «Guardar» de esa sección antes de guardar la configuración.';
+
+/**
+ * La única línea que ve quien no es administrador (N8), con el `data` de GET /ventas/envio-cliente/whatsapp/estado:
+ * {texto, encendido} (r1: la pantalla la pinta verde solo si está encendido), o null sin estado.
  * @param {unknown} estado
- * @returns {string | null}
+ * @returns {{texto: string, encendido: boolean} | null}
  */
 export function lineaEnvioAutomatico(estado) {
   if (!esObjeto(estado)) return null;
-  return `Envío automático por WhatsApp: ${/** @type {any} */ (estado).automatico === true ? 'encendido' : 'apagado'}`;
+  const encendido = /** @type {any} */ (estado).automatico === true;
+  return { texto: `Envío automático por WhatsApp: ${encendido ? 'encendido' : 'apagado'}`, encendido };
 }

@@ -191,6 +191,16 @@ export function recargarTrasError(err) {
 }
 
 /**
+ * B3 T16 r1: un 422 (el dato no es valido: el servidor dice cual). Esos errores van en linea, junto al campo o al
+ * boton; los demas (sin permiso, sin conexion, 500…) van con avisarError.
+ * @param {unknown} err
+ * @returns {boolean}
+ */
+export function esErrorDeValidacion(err) {
+  return /** @type {{ status?: unknown } | null | undefined} */ (err)?.status === 422;
+}
+
+/**
  * Texto de un aviso para un error atrapado (Error, string u otra cosa).
  * Sin conexion -> MENSAJE_SIN_CONEXION; vacio o '[object Object]' -> MENSAJE_GENERICO. Con prefijo:
  * 'No se pudo X: <texto>' (sin repetir el prefijo si el texto ya empieza por el).

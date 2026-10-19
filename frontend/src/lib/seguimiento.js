@@ -339,15 +339,15 @@ export function avisoDiasSeguimiento(cfg) {
 }
 
 /**
- * '8:00 a. m.', '6:00 p. m.'; 0 y 24 son '12:00 a. m. (medianoche)' (el inicio y el fin del día). '' si no es una hora
- * de 0 a 24.
+ * '8:00 a. m.', '6:00 p. m.'; 0 y 24 son '12 a. m. (medianoche)' (el inicio y el fin del día; r1: más corta, para que
+ * el select quepa en el panel). '' si no es una hora de 0 a 24.
  * @param {unknown} h
  * @returns {string}
  */
 export function etiquetaHora(h) {
   const n = typeof h === 'number' ? h : typeof h === 'string' && /^\d+$/.test(h) ? Number(h) : NaN;
   if (!Number.isInteger(n) || n < 0 || n > 24) return '';
-  if (n % 24 === 0) return '12:00 a. m. (medianoche)';
+  if (n % 24 === 0) return '12 a. m. (medianoche)';
   const doce = n % 12 === 0 ? 12 : n % 12;
   return `${doce}:00 ${n < 12 ? 'a. m.' : 'p. m.'}`;
 }
@@ -364,4 +364,17 @@ export function opcionesHora(clave) {
   const opciones = [];
   for (let h = minimo; h <= maximo; h += 1) opciones.push({ valor: String(h), etiqueta: etiquetaHora(h) });
   return opciones;
+}
+
+/**
+ * B3 T16 r1: quien puede usar «No enviar recordatorios» (POST …/seguimiento/detener) y leer el estado del WhatsApp
+ * automático (GET /ventas/envio-cliente/whatsapp/estado): los dos exigen ADMIN o ASESOR en el servidor. Espejo de
+ * normalize_role (legacy 'Admin'/'Vendedor' o canónico, sin importar mayúsculas ni espacios), como esAsesorElegible de
+ * flujo.tsx: así ningún botón termina en un 403.
+ * @param {unknown} role
+ * @returns {boolean}
+ */
+export function esAdminOAsesor(role) {
+  const r = typeof role === 'string' ? role.toLowerCase().trim() : '';
+  return r === 'admin' || r === 'vendedor' || r === 'asesor';
 }

@@ -12,6 +12,11 @@ import { hace, instante } from './fechas-colombia.js';
 
 /** Menos que esto nunca es atraso (el diseño: max(30 min, 3 × intervalo)). */
 export const MINUTOS_MINIMOS_ATRASO = 30;
+/**
+ * B3 T16 r1: «Revisar ahora» responde 202 ANTES de revisar (la revisión corre en segundo plano), así que el estado se
+ * vuelve a leer otra vez unos segundos después.
+ */
+export const RELECTURA_TRAS_REVISION_MS = 5000;
 const MINUTO = 60 * 1000;
 
 /**
