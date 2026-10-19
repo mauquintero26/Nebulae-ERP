@@ -6,13 +6,14 @@
  * - fechaSolo('AAAA-MM-DD'): la fecha de calendario sin zona (entrega estimada, validez).
  * - fechaHoraCO(iso): 'lunes 5 de octubre, 9:00 a. m.' (U16-seguimiento), en America/Bogota.
  * - hace(iso, ahora): 'hace un momento', 'hace N minutos', 'hace N horas', 'hace N días'.
+ * - B3 T14 r1: fechaHoraLarga(iso): '5 de octubre de 2026, 9:00 a. m.' (con el año: el historial de la empresa).
  */
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fechaLarga, fechaSolo, fechaHoraCO, hace } from '../src/lib/fechas-colombia.js';
+import { fechaLarga, fechaSolo, fechaHoraCO, fechaHoraLarga, hace } from '../src/lib/fechas-colombia.js';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
@@ -83,6 +84,22 @@ console.log('--- TEST 5: una sola regla (RP24): comoUTC de hub-ventas.js e Intl 
   assert.match(fuente, /import\s*\{[^}]*\bcomoUTC\b[^}]*\}\s*from\s*'\.\/hub-ventas\.js'/);
   assert.ok(fuente.includes("'America/Bogota'"));
   assert.doesNotMatch(fuente, /-\s*5\s*\*\s*3600|-\s*18000000|UTC\s*-\s*5/, 'sin desfase fijo de -5 h');
+}
+
+console.log('--- TEST 6: fechaHoraLarga (con el año, en hora de Colombia; T14 r1) ---');
+{
+  assert.equal(fechaHoraLarga('2026-10-05T14:00:00Z'), '5 de octubre de 2026, 9:00 a. m.');
+  assert.equal(fechaHoraLarga('2026-10-05T14:00:00'), '5 de octubre de 2026, 9:00 a. m.', 'sin zona = UTC');
+  assert.equal(fechaHoraLarga('2026-01-01T04:30:00Z'), '31 de diciembre de 2025, 11:30 p. m.',
+    'el día y el año de Colombia, no los de UTC');
+  assert.equal(fechaHoraLarga('2026-10-05T17:00:00Z'), '5 de octubre de 2026, 12:00 p. m.', 'mediodía');
+  assert.equal(fechaHoraLarga('2026-10-06T05:00:00Z'), '6 de octubre de 2026, 12:00 a. m.', 'medianoche');
+  assert.equal(fechaHoraLarga(new Date('2026-10-05T14:05:00Z')), '5 de octubre de 2026, 9:05 a. m.');
+  // La hora es la misma de fechaHoraCO (una sola regla).
+  assert.ok(fechaHoraCO('2026-10-03T20:15:00Z').endsWith(fechaHoraLarga('2026-10-03T20:15:00Z').split(', ')[1]));
+  for (const malo of [null, undefined, '', 'abc', '2026-10-05', 7, new Date('x')]) {
+    assert.equal(fechaHoraLarga(malo), '', `inválido o sin hora: ${String(malo)}`);
+  }
 }
 
 console.log('✓ Todas las pruebas de fechas de Colombia pasaron.');

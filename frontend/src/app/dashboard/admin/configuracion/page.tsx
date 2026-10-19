@@ -45,12 +45,17 @@ export default function ConfiguracionHub() {
 
         {/* Sidebar Menu inside Config */}
         <div className="w-full md:w-64 bg-slate-50/50 border-b md:border-b-0 md:border-r border-slate-200 p-2 md:p-4 shrink-0 overflow-x-auto md:overflow-y-auto">
-          <ul className="flex gap-1 md:block md:space-y-1">
+          {/* Patrón ARIA de pestañas (r1): aria-controls solo apunta a un panel que está en la página (las dos de la
+              empresa siempre; las demás cuando están abiertas). */}
+          <ul role="tablist" aria-label="Secciones de Configuración General" className="flex gap-1 md:block md:space-y-1">
             {TABS.map(tab => (
-              <li key={tab.id} className="shrink-0">
+              <li key={tab.id} role="presentation" className="shrink-0">
                 <button
                   type="button"
-                  aria-pressed={activeTab === tab.id}
+                  role="tab"
+                  id={`tab-${tab.id}`}
+                  aria-selected={activeTab === tab.id}
+                  aria-controls={tab.id === 'empresa' || tab.id === 'diseno' || activeTab === tab.id ? `panel-${tab.id}` : undefined}
                   onClick={() => setActiveTab(tab.id)}
                   className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm whitespace-nowrap md:whitespace-normal text-left transition-colors ${
                     activeTab === tab.id 
@@ -67,20 +72,24 @@ export default function ConfiguracionHub() {
         </div>
 
         {/* Content Area */}
-        <div className="flex-1 bg-white p-4 sm:p-6 lg:p-10 overflow-y-auto custom-scrollbar">
+        {/* @container (r1): los formularios miden este espacio, no la ventana (a 1024 px quedan ~430 px entre las dos
+            barras). */}
+        <div className="@container flex-1 bg-white p-4 sm:p-6 lg:p-10 overflow-y-auto custom-scrollbar">
           <div className="max-w-4xl mx-auto">
 
             {/* Las dos pestañas de la empresa quedan montadas (ocultas cuando no están a la vista): cambiar de
                 pestaña no borra lo que se escribió y no se guardó. */}
-            <div className={activeTab === 'empresa' ? 'animate-in slide-in-from-right-4' : 'hidden'}>
+            <div id="panel-empresa" role="tabpanel" aria-labelledby="tab-empresa"
+              className={activeTab === 'empresa' ? 'animate-in slide-in-from-right-4' : 'hidden'}>
               <FormEmpresa activo={activeTab === 'empresa'} />
             </div>
-            <div className={activeTab === 'diseno' ? 'animate-in slide-in-from-right-4' : 'hidden'}>
+            <div id="panel-diseno" role="tabpanel" aria-labelledby="tab-diseno"
+              className={activeTab === 'diseno' ? 'animate-in slide-in-from-right-4' : 'hidden'}>
               <FormDocumentos activo={activeTab === 'diseno'} />
             </div>
 
             {activeTab === 'api' && (
-              <div className="space-y-8 animate-in slide-in-from-right-4">
+              <div id="panel-api" role="tabpanel" aria-labelledby="tab-api" className="space-y-8 animate-in slide-in-from-right-4">
                 <h2 className="text-2xl font-black text-slate-800 border-b border-slate-100 pb-4">API de Nebulae & Autenticación</h2>
                 <p className="text-slate-500 font-medium">Permite que aplicaciones externas (Terceros) se conecten directamente a tu ERP a través de nuestra API pública y OAuth.</p>
                 
@@ -119,7 +128,8 @@ export default function ConfiguracionHub() {
             )}
 
             {activeTab !== 'empresa' && activeTab !== 'diseno' && activeTab !== 'api' && (
-               <div className="flex flex-col items-center justify-center py-32 text-slate-400">
+               <div id={`panel-${activeTab}`} role="tabpanel" aria-labelledby={`tab-${activeTab}`}
+                 className="flex flex-col items-center justify-center py-32 text-slate-400">
                   <Settings size={48} className="mb-4 opacity-20" />
                   <p className="font-bold">Contenido de "{TABS.find(t=>t.id === activeTab)?.label}" en construcción.</p>
                </div>

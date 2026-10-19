@@ -97,9 +97,28 @@ export function fechaHoraCO(iso) {
   const fecha = instante(iso);
   if (!fecha) return '';
   const p = partes(PARTES_COLOMBIA, fecha);
+  return `${p.weekday} ${p.day} de ${p.month}, ${horaDePartes(p)}`;
+}
+
+/** '9:00 a. m.' de las partes de PARTES_COLOMBIA: la hora de fechaHoraCO y de fechaHoraLarga (una sola regla). */
+function horaDePartes(p) {
   const hora = Number(p.hour) % 24;
   const doce = hora % 12 === 0 ? 12 : hora % 12;
-  return `${p.weekday} ${p.day} de ${p.month}, ${doce}:${p.minute} ${hora < 12 ? 'a. m.' : 'p. m.'}`;
+  return `${doce}:${p.minute} ${hora < 12 ? 'a. m.' : 'p. m.'}`;
+}
+
+/**
+ * '5 de octubre de 2026, 9:00 a. m.' (B3 T14 r1: el historial de la empresa): día, mes, AÑO y hora de Colombia, para
+ * que un cambio del año pasado no se confunda con uno de este. Solo instantes (Date o texto con hora; sin zona = UTC);
+ * una fecha sin hora o inválida -> ''. Termina en 'a. m.' / 'p. m.'.
+ * @param {unknown} iso
+ * @returns {string}
+ */
+export function fechaHoraLarga(iso) {
+  const fecha = instante(iso);
+  if (!fecha) return '';
+  const p = partes(PARTES_COLOMBIA, fecha);
+  return `${p.day} de ${p.month} de ${p.year}, ${horaDePartes(p)}`;
 }
 
 const MINUTO = 60 * 1000;

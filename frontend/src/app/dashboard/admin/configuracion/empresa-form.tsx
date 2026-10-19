@@ -1,14 +1,16 @@
 'use client';
 
-import { useCallback, useEffect, useId, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
+import {
+  useCallback, useEffect, useId, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode,
+} from 'react';
 import { AlertCircle, AlertTriangle, Building2, History, ImageUp, Lock, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { apiFetch, API_URL } from '@/lib/api';
 import { textoDeError } from '@/lib/avisos';
 import { BTN, LOADING } from '@/lib/design-system';
-import { fechaHoraCO } from '@/lib/fechas-colombia';
+import { fechaHoraLarga } from '@/lib/fechas-colombia';
 import {
   CAMPOS_EMPRESA, GRUPOS_CAMPOS_EMPRESA, avisoLogoParaPdf, cambiosDelFormulario, cambiosDelHistorial,
-  erroresDeCambios, urlLogo, validarArchivoLogo, validarCampoEmpresa, valoresDeCampos,
+  erroresDeCambios, perfilDeRespuesta, urlLogo, validarArchivoLogo, validarCampoEmpresa, valoresDeCampos,
 } from '@/lib/marca-empresa';
 import { useAvisos } from '@/components/ui';
 
@@ -29,11 +31,14 @@ export type PerfilEmpresa = Record<string, unknown> & { puede_editar?: boolean; 
 type FilaHistorial = { id: number; descripcion: string; user_name: string | null; created_at: string; cambios: unknown };
 type Carga = { estado: 'cargando' | 'listo' | 'error'; mensaje?: string };
 
+// r1: el foco se ve (anillo indigo-500 al 40% además del borde): outline-none lleva su reemplazo.
 export const ESTILO_CAMPO =
-  'w-full bg-white border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-900 outline-none placeholder-gray-400 '
-  + 'focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:bg-gray-50 disabled:text-gray-500 '
-  + 'aria-[invalid=true]:border-red-400';
+  'w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 outline-none placeholder-slate-400 '
+  + 'focus:border-indigo-500 focus-visible:ring-2 focus-visible:ring-indigo-500/40 disabled:bg-slate-50 '
+  + 'disabled:text-slate-500 aria-[invalid=true]:border-red-400';
 const DESHABILITADO = ' disabled:opacity-50 disabled:cursor-not-allowed';
+// r1: «Quitar logo» parte de BTN.ghost (design-system.ts) con texto rojo.
+const BTN_QUITAR = BTN.ghost.replace('text-gray-600', 'text-red-600').replace('hover:bg-gray-100', 'hover:bg-red-50');
 
 const sinClave = (objeto: Record<string, string>, clave: string) => {
   const copia = { ...objeto };
@@ -63,10 +68,11 @@ export function useFormularioEmpresa(campos: readonly string[], textoGuardado: s
     setValores(v);
   }, [campos]);
 
-  // El estado solo cambia cuando llega la respuesta (nunca dentro del efecto mismo).
-  const pedirPerfil = useCallback(() => apiFetch('/empresa').then(
-    (r) => {
-      aplicarPerfil(r?.data ?? {});
+  // El estado solo cambia cuando llega la respuesta (nunca dentro del efecto mismo). r1: una respuesta sin perfil
+  // (perfilDeRespuesta lanza) va por la rama de error.
+  const pedirPerfil = useCallback(() => apiFetch('/empresa').then(perfilDeRespuesta).then(
+    (p) => {
+      aplicarPerfil(p);
       setCarga({ estado: 'listo' });
     },
     (err) => setCarga({ estado: 'error', mensaje: textoDeError(err, 'No se pudieron cargar los datos de la empresa') }),
@@ -104,7 +110,7 @@ export function useFormularioEmpresa(campos: readonly string[], textoGuardado: s
     setGuardando(true);
     try {
       const r = await apiFetch('/empresa', { method: 'PUT', body: JSON.stringify(cambios) });
-      aplicarPerfil(r?.data ?? {});
+      aplicarPerfil(perfilDeRespuesta(r));
       avisar(textoGuardado, { tono: 'ok' });
       return true;
     } catch (err) {
@@ -132,9 +138,9 @@ export function Campo({ etiqueta, ayuda, error, children }: {
   const describe = [ayuda ? `${id}-ayuda` : '', error ? `${id}-error` : ''].filter(Boolean).join(' ') || undefined;
   return (
     <div className="min-w-0">
-      <label htmlFor={id} className="block text-sm font-semibold text-gray-700 mb-1.5">{etiqueta}</label>
+      <label htmlFor={id} className="block text-sm font-semibold text-slate-700 mb-1.5">{etiqueta}</label>
       {children({ id, 'aria-describedby': describe, 'aria-invalid': Boolean(error) })}
-      {ayuda && <p id={`${id}-ayuda`} className="mt-1 text-xs text-gray-500">{ayuda}</p>}
+      {ayuda && <p id={`${id}-ayuda`} className="mt-1 text-xs text-slate-500">{ayuda}</p>}
       {error && (
         <p id={`${id}-error`} className="mt-1 flex items-start gap-1 text-xs font-semibold text-red-600">
           <AlertCircle size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
@@ -148,8 +154,8 @@ export function Campo({ etiqueta, ayuda, error, children }: {
 /** Quien no es administrador ve los datos sin poder editarlos. */
 export function AvisoSoloLectura() {
   return (
-    <p className="flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-semibold text-gray-600">
-      <Lock size={16} className="shrink-0 text-gray-400" aria-hidden="true" />
+    <p className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-600">
+      <Lock size={16} className="shrink-0 text-slate-400" aria-hidden="true" />
       Solo un administrador puede cambiar estos datos.
     </p>
   );
@@ -213,14 +219,18 @@ const leerComoDataUrl = (archivo: File) => new Promise<string>((resolver, rechaz
  * El logo: un <label> con el <input type=file> oculto (sr-only). validarArchivoLogo antes de leerlo; el servidor lo
  * vuelve a revisar. «Quitar logo» solo si hay un logo con versión (logo_url; nota del controlador después de T2) y con
  * confirmar(). Si pasa de 4000 px por lado, avisa que no saldrá en el PDF (nota después de T9).
+ * r1: `trabajando` vive en FormEmpresa («Guardar» espera al logo) y `bloqueado` (se están guardando los datos) apaga el
+ * logo: las dos respuestas reemplazan el perfil y no pueden cruzarse.
  */
-function Logo({ perfil, puedeEditar, onPerfil }: {
+function Logo({ perfil, puedeEditar, bloqueado, trabajando, setTrabajando, onPerfil }: {
   perfil: PerfilEmpresa | null;
   puedeEditar: boolean;
+  bloqueado: boolean;
+  trabajando: boolean;
+  setTrabajando: (valor: boolean) => void;
   onPerfil: (p: PerfilEmpresa) => void;
 }) {
   const { avisar, confirmar } = useAvisos();
-  const [trabajando, setTrabajando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [avisoPdf, setAvisoPdf] = useState<string | null>(null);
   const logo = urlLogo(perfil, API_URL);
@@ -230,14 +240,14 @@ function Logo({ perfil, puedeEditar, onPerfil }: {
     const input = e.currentTarget;
     const archivo = input.files?.[0];
     input.value = ''; // el mismo archivo se puede volver a elegir
-    if (!archivo || trabajando) return;
+    if (!archivo || trabajando || bloqueado) return;
     const problema = validarArchivoLogo(archivo);
     setError(problema);
     if (problema) return;
     setTrabajando(true);
     try {
       const r = await apiFetch('/empresa/logo', { method: 'PUT', body: JSON.stringify({ logo: await leerComoDataUrl(archivo) }) });
-      onPerfil(r?.data ?? {});
+      onPerfil(perfilDeRespuesta(r));
       avisar('Logo guardado', { tono: 'ok' });
     } catch (err) {
       setError(textoDeError(err, 'No se pudo guardar el logo'));
@@ -253,12 +263,12 @@ function Logo({ perfil, puedeEditar, onPerfil }: {
       textoConfirmar: 'Quitar logo',
       peligro: true,
     });
-    if (!ok) return;
+    if (!ok || trabajando || bloqueado) return;
     setTrabajando(true);
     setError(null);
     try {
       const r = await apiFetch('/empresa/logo', { method: 'DELETE' });
-      onPerfil(r?.data ?? {});
+      onPerfil(perfilDeRespuesta(r));
       setAvisoPdf(null);
       avisar('Logo quitado', { tono: 'ok' });
     } catch (err) {
@@ -268,14 +278,14 @@ function Logo({ perfil, puedeEditar, onPerfil }: {
     }
   }
 
-  const habilitado = puedeEditar && !trabajando;
+  const habilitado = puedeEditar && !trabajando && !bloqueado;
   return (
-    <div className="w-full sm:w-44 shrink-0 space-y-2">
+    <div className="w-full @xl:w-44 shrink-0 space-y-2">
       <label
-        className={`relative flex h-40 w-full sm:w-44 flex-col items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed p-3 text-center transition-colors ${
+        className={`relative flex h-40 w-full @xl:w-44 flex-col items-center justify-center overflow-hidden rounded-2xl border-2 border-dashed p-3 text-center transition-colors ${
           habilitado
-            ? 'cursor-pointer border-gray-300 text-gray-500 hover:bg-gray-50 focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100'
-            : 'cursor-not-allowed border-gray-200 text-gray-400'
+            ? 'cursor-pointer border-slate-300 text-slate-500 hover:bg-slate-50 focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/40'
+            : 'cursor-not-allowed border-slate-200 text-slate-400'
         }`}
       >
         <input
@@ -308,12 +318,12 @@ function Logo({ perfil, puedeEditar, onPerfil }: {
           </span>
         )}
         {logo && habilitado && (
-          <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-lg bg-white/90 px-2 py-1 text-[11px] font-bold text-gray-700 shadow-sm">
+          <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-lg bg-white/90 px-2 py-1 text-[11px] font-bold text-slate-700 shadow-sm">
             <ImageUp size={12} aria-hidden="true" /> Cambiar
           </span>
         )}
       </label>
-      <p id={ayudaId} className="text-xs text-gray-500">PNG, JPG o WebP de hasta 300 KB, mejor con fondo transparente.</p>
+      <p id={ayudaId} className="text-xs text-slate-500">PNG, JPG o WebP de hasta 300 KB, mejor con fondo transparente.</p>
       {logo && avisoPdf && (
         <p role="status" className="flex items-start gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs font-semibold text-amber-800">
           <AlertTriangle size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
@@ -331,7 +341,7 @@ function Logo({ perfil, puedeEditar, onPerfil }: {
           type="button"
           onClick={quitar}
           disabled={!habilitado}
-          className={`flex items-center gap-2 rounded-xl px-2 py-1 text-sm font-semibold text-red-600 transition-colors hover:bg-red-50${DESHABILITADO}`}
+          className={`${BTN_QUITAR}${DESHABILITADO}`}
         >
           <Trash2 size={14} aria-hidden="true" /> Quitar logo
         </button>
@@ -340,30 +350,30 @@ function Logo({ perfil, puedeEditar, onPerfil }: {
   );
 }
 
-/** «Historial de cambios»: los últimos renglones EMPRESA de la Actividad, con la fecha en hora de Colombia. */
+/** «Historial de cambios»: los últimos renglones EMPRESA de la Actividad, con la fecha y el año en hora de Colombia. */
 function Historial({ filas, error }: { filas: FilaHistorial[] | null; error: string | null }) {
   return (
-    <section className="space-y-3 border-t border-gray-100 pt-6" aria-labelledby="historial-empresa">
-      <h3 id="historial-empresa" className="flex items-center gap-2 text-base font-black text-gray-800">
-        <History size={16} className="text-gray-400" aria-hidden="true" /> Historial de cambios
+    <section className="space-y-3 border-t border-slate-100 pt-6" aria-labelledby="historial-empresa">
+      <h3 id="historial-empresa" className="flex items-center gap-2 text-base font-black text-slate-800">
+        <History size={16} className="text-slate-400" aria-hidden="true" /> Historial de cambios
       </h3>
       {error ? (
         <ErrorDelServidor mensaje={error} />
       ) : filas === null ? (
-        <p className="text-sm text-gray-400">Cargando…</p>
+        <p className="text-sm text-slate-400">Cargando…</p>
       ) : filas.length === 0 ? (
-        <p className="text-sm text-gray-500">Todavía no hay cambios.</p>
+        <p className="text-sm text-slate-500">Todavía no hay cambios.</p>
       ) : (
         <ol className="space-y-3">
           {filas.map((f) => (
-            <li key={f.id} className="rounded-xl border border-gray-100 bg-gray-50/60 px-4 py-3 text-sm">
-              <p className="text-xs text-gray-500">
-                {fechaHoraCO(f.created_at)} · <span className="font-semibold text-gray-700">{f.user_name || 'Sistema'}</span>
+            <li key={f.id} className="rounded-xl border border-slate-100 bg-slate-50/60 px-4 py-3 text-sm">
+              <p className="text-xs text-slate-500">
+                {fechaHoraLarga(f.created_at)} · <span className="font-semibold text-slate-700">{f.user_name || 'Sistema'}</span>
               </p>
-              <p className="mt-0.5 font-semibold text-gray-800 break-words">{f.descripcion}</p>
+              <p className="mt-0.5 font-semibold text-slate-800 break-words">{f.descripcion}</p>
               {cambiosDelHistorial(f).map((c, i) => (
-                <p key={`${c.etiqueta}-${i}`} className="mt-1 whitespace-pre-line break-words text-gray-600">
-                  <span className="font-semibold text-gray-700">{c.etiqueta}:</span> {c.antes} → {c.despues}
+                <p key={`${c.etiqueta}-${i}`} className="mt-1 whitespace-pre-line break-words text-slate-600">
+                  <span className="font-semibold text-slate-700">{c.etiqueta}:</span> {c.antes} → {c.despues}
                 </p>
               ))}
             </li>
@@ -381,14 +391,24 @@ export function FormEmpresa({ activo = true }: { activo?: boolean }) {
   const f = useFormularioEmpresa(CAMPOS_FORM, 'Datos de la empresa guardados');
   const [historial, setHistorial] = useState<FilaHistorial[] | null>(null);
   const [errorHistorial, setErrorHistorial] = useState<string | null>(null);
+  const [logoTrabajando, setLogoTrabajando] = useState(false);
+  // r1: cada pedido del historial lleva su número; solo la respuesta del último se pinta (una vieja que llega tarde
+  // no pisa la nueva).
+  const ultimoHistorial = useRef(0);
 
-  const cargarHistorial = useCallback(() => apiFetch('/empresa/historial').then(
-    (r) => {
-      setHistorial(Array.isArray(r?.data) ? r.data : []);
-      setErrorHistorial(null);
-    },
-    (err) => setErrorHistorial(textoDeError(err, 'No se pudo cargar el historial')),
-  ), []);
+  const cargarHistorial = useCallback(() => {
+    const numero = ++ultimoHistorial.current;
+    return apiFetch('/empresa/historial').then(
+      (r) => {
+        if (numero !== ultimoHistorial.current) return;
+        setHistorial(Array.isArray(r?.data) ? r.data : []);
+        setErrorHistorial(null);
+      },
+      (err) => {
+        if (numero === ultimoHistorial.current) setErrorHistorial(textoDeError(err, 'No se pudo cargar el historial'));
+      },
+    );
+  }, []);
 
   // Solo un ADMIN ve el historial (GET /empresa/historial es de ADMIN). Al volver a la pestaña se recarga: «Diseño de
   // documentos» también deja renglones.
@@ -398,6 +418,7 @@ export function FormEmpresa({ activo = true }: { activo?: boolean }) {
 
   async function alGuardar(e: FormEvent) {
     e.preventDefault();
+    if (logoTrabajando) return; // r1: no se cruza con la respuesta del logo
     if (await f.guardar()) cargarHistorial();
   }
 
@@ -408,8 +429,8 @@ export function FormEmpresa({ activo = true }: { activo?: boolean }) {
 
   return (
     <div className="space-y-8">
-      <h2 className="text-2xl font-black text-gray-800 border-b border-gray-100 pb-4">Información de la empresa</h2>
-      <p className="-mt-4 text-sm text-gray-500">
+      <h2 className="text-2xl font-black text-slate-800 border-b border-slate-100 pb-4">Información de la empresa</h2>
+      <p className="-mt-4 text-sm text-slate-500">
         Tus clientes ven estos datos en la solicitud, la cotización, el pedido y los correos.
       </p>
 
@@ -418,14 +439,22 @@ export function FormEmpresa({ activo = true }: { activo?: boolean }) {
       ) : (
         <form onSubmit={alGuardar} noValidate className="space-y-6">
           {!f.puedeEditar && <AvisoSoloLectura />}
-          <div className="flex flex-col gap-6 sm:flex-row sm:gap-8">
-            <Logo perfil={f.perfil} puedeEditar={f.puedeEditar} onPerfil={alCambiarPerfil} />
-            <fieldset disabled={!f.puedeEditar || f.guardando} className="min-w-0 flex-1 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          {/* r1: los cortes son del contenedor (@container del área de contenido), no de la ventana. */}
+          <div className="flex flex-col gap-6 @xl:flex-row @xl:gap-8">
+            <Logo
+              perfil={f.perfil}
+              puedeEditar={f.puedeEditar}
+              bloqueado={f.guardando}
+              trabajando={logoTrabajando}
+              setTrabajando={setLogoTrabajando}
+              onPerfil={alCambiarPerfil}
+            />
+            <fieldset disabled={!f.puedeEditar || f.guardando} className="min-w-0 flex-1 grid grid-cols-1 gap-4 @xl:grid-cols-2">
               <legend className="sr-only">Datos de la empresa</legend>
               {CAMPOS_FORM.map((campo) => {
                 const d = DETALLES[campo];
                 return (
-                  <div key={campo} className={d?.ancho ? 'sm:col-span-2' : ''}>
+                  <div key={campo} className={d?.ancho ? '@xl:col-span-2' : ''}>
                     <Campo etiqueta={CAMPOS_EMPRESA[campo].etiqueta} ayuda={d?.ayuda} error={f.errores[campo]}>
                       {(props) => (
                         <input
@@ -452,11 +481,11 @@ export function FormEmpresa({ activo = true }: { activo?: boolean }) {
 
           {f.puedeEditar && (
             <div className="flex flex-wrap items-center gap-3">
-              <button type="submit" disabled={!f.hayCambios || f.guardando} className={`${BTN.primary}${DESHABILITADO}`}>
+              <button type="submit" disabled={!f.hayCambios || f.guardando || logoTrabajando} className={`${BTN.primary}${DESHABILITADO}`}>
                 {f.guardando ? <RefreshCw size={14} className="animate-spin" aria-hidden="true" /> : <Save size={14} aria-hidden="true" />}
                 {f.guardando ? 'Guardando…' : 'Guardar'}
               </button>
-              {!f.hayCambios && <span className="text-xs text-gray-400">Sin cambios por guardar.</span>}
+              {!f.hayCambios && <span className="text-xs text-slate-400">Sin cambios por guardar.</span>}
             </div>
           )}
         </form>

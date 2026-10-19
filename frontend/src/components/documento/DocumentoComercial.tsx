@@ -87,7 +87,7 @@ function Lineas({ doc, variante }: { doc: DocumentoCliente; variante: 'degradado
   const fila = variante === 'degradado' ? 'odd:bg-white even:bg-gray-50' : 'border-b border-gray-200';
   return (
     <>
-      <table className="hidden w-full border-collapse text-sm sm:table print:table">
+      <table className="hidden w-full border-collapse text-sm @min-[40rem]:table print:table">
         <thead>
           <tr className="border-b-2 border-gray-300 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">
             {precios ? (
@@ -131,7 +131,7 @@ function Lineas({ doc, variante }: { doc: DocumentoCliente; variante: 'degradado
           ))}
         </tbody>
       </table>
-      <ul className="divide-y divide-gray-200 sm:hidden print:hidden">
+      <ul className="divide-y divide-gray-200 @min-[40rem]:hidden print:hidden">
         {doc.lineas.map((l, i) => (
           <li key={`${l.n}-${i}`} className="flex items-start justify-between gap-3 px-4 py-3 text-sm text-gray-900">
             <div className="min-w-0 flex-1">
@@ -203,7 +203,8 @@ function Seccion({ titulo, children }: { titulo: string; children: ReactNode }) 
  * PVEN, hoja blanca con acento). No recalcula nada: los números vienen del servidor (normalizarDocumento solo
  * completa total_linea si falta) y los textos salen de lib/documento-comercial.js.
  * - Colores de la marca como variables CSS; el texto encima pasa solo a blanco u oscuro (colorTextoSobre).
- * - Celular (< 640 px): tarjetas por línea, nombres completos (break-words) y las acciones fijas abajo.
+ * - Celular (contenedor < 640 px, T14 r1): tarjetas por línea, nombres completos (break-words) y las acciones fijas
+ *   abajo.
  * - Impresión: 'Descargar o imprimir' (window.print); botones, acciones y aviso no se imprimen (print:hidden); el
  *   sello y la tabla sí, con los colores (print-color-adjust) y @page sin tamaño fijo.
  * Sin marca configurada no aparece ningún nombre de ejemplo: solo el tipo y el número del documento.
@@ -287,7 +288,10 @@ export function DocumentoComercial({
   );
 
   return (
-    <div className="w-full">
+    // T14 r1: los cortes se miden con este contenedor (@container), no con la ventana: la vista previa de Configuración
+    // (~380 px a 1024) sale en tarjetas. 40rem = los 640 px del corte sm de antes; en la página pública el contenedor
+    // es casi la ventana, así que se ve igual.
+    <div className="@container w-full">
       <style>{ESTILOS_IMPRESION}</style>
       {(aviso || mostrarDescargar) && (
         <div className="mx-auto mb-3 flex w-full max-w-[820px] flex-col gap-3 print:hidden">
@@ -316,25 +320,25 @@ export function DocumentoComercial({
         {v === 'degradado' ? (
           <>
             <header
-              className="px-5 pb-14 pt-6 sm:px-8"
+              className="px-5 pb-14 pt-6 @min-[40rem]:px-8"
               style={{ backgroundImage: 'linear-gradient(135deg, var(--doc-principal), var(--doc-secundario))', color: 'var(--doc-sobre-franja)' }}
             >
-              <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex flex-col gap-5 @min-[40rem]:flex-row @min-[40rem]:items-start @min-[40rem]:justify-between">
                 <div className="min-w-0 space-y-3">
                   <LogoMarca marca={m} apiUrl={apiUrl} sobre="franja" />
                   <div className="flex flex-wrap items-center gap-3">
-                    <h1 className="text-3xl font-extrabold tracking-wide sm:text-4xl">{titulo}</h1>
+                    <h1 className="text-3xl font-extrabold tracking-wide @min-[40rem]:text-4xl">{titulo}</h1>
                     {sello && <Sello sello={sello} />}
                   </div>
                   {doc.numero && <p className="break-words text-sm font-semibold"># {doc.numero}</p>}
                 </div>
-                <div className="space-y-3 sm:max-w-[45%] sm:text-right">
+                <div className="space-y-3 @min-[40rem]:max-w-[45%] @min-[40rem]:text-right">
                   {meta}
                   {para}
                 </div>
               </div>
             </header>
-            <div className="relative -mt-8 px-3 sm:px-6">
+            <div className="relative -mt-8 px-3 @min-[40rem]:px-6">
               <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-md">
                 <Lineas doc={doc} variante="degradado" />
               </div>
@@ -353,36 +357,36 @@ export function DocumentoComercial({
               className="absolute bottom-0 right-0 h-10 w-10"
               style={{ backgroundColor: 'var(--doc-acento)', clipPath: 'polygon(100% 0, 100% 100%, 0 100%)' }}
             />
-            <header className="space-y-6 py-6 pl-7 pr-5 sm:pl-10 sm:pr-16">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <header className="space-y-6 py-6 pl-7 pr-5 @min-[40rem]:pl-10 @min-[40rem]:pr-16">
+              <div className="flex flex-col gap-4 @min-[40rem]:flex-row @min-[40rem]:items-start @min-[40rem]:justify-between">
                 <div className="min-w-0 space-y-1">
                   <LogoMarca marca={m} apiUrl={apiUrl} />
                   {legal && <p className="break-words text-xs text-gray-600">{legal}</p>}
                 </div>
-                <div className="space-y-1 sm:text-right">
-                  <div className="flex flex-wrap items-center gap-3 sm:justify-end">
+                <div className="space-y-1 @min-[40rem]:text-right">
+                  <div className="flex flex-wrap items-center gap-3 @min-[40rem]:justify-end">
                     {sello && <Sello sello={sello} />}
-                    <h1 className="text-2xl font-extrabold tracking-wide sm:text-3xl" style={{ color: 'var(--doc-acento-texto)' }}>
+                    <h1 className="text-2xl font-extrabold tracking-wide @min-[40rem]:text-3xl" style={{ color: 'var(--doc-acento-texto)' }}>
                       {titulo}
                     </h1>
                   </div>
                   {doc.numero && <p className="break-words text-sm font-semibold text-gray-700">N.º {doc.numero}</p>}
                 </div>
               </div>
-              <div className="flex flex-col gap-4 border-t border-gray-200 pt-4 text-gray-800 sm:flex-row sm:justify-between">
+              <div className="flex flex-col gap-4 border-t border-gray-200 pt-4 text-gray-800 @min-[40rem]:flex-row @min-[40rem]:justify-between">
                 {para || <span />}
-                <div className="sm:text-right">{meta}</div>
+                <div className="@min-[40rem]:text-right">{meta}</div>
               </div>
             </header>
-            <div className="pl-5 pr-3 sm:pl-10 sm:pr-8">
+            <div className="pl-5 pr-3 @min-[40rem]:pl-10 @min-[40rem]:pr-8">
               <Lineas doc={doc} variante="acento" />
             </div>
           </>
         )}
 
-        <div className="space-y-6 px-5 py-6 sm:pl-10 sm:pr-8">
+        <div className="space-y-6 px-5 py-6 @min-[40rem]:pl-10 @min-[40rem]:pr-8">
           {doc.con_precios ? (
-            <div className="grid gap-6 sm:grid-cols-2">
+            <div className="grid gap-6 @min-[40rem]:grid-cols-2">
               <div className="space-y-5">
                 {formaDePago}
                 {doc.terminos && (
@@ -448,7 +452,7 @@ export function DocumentoComercial({
       </article>
 
       {acciones && (
-        <div className="sticky bottom-0 z-10 mx-auto mt-4 w-full max-w-[820px] border-t border-gray-200 bg-white/95 px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] sm:static sm:border-0 sm:bg-transparent sm:px-0 sm:shadow-none print:hidden">
+        <div className="sticky bottom-0 z-10 mx-auto mt-4 w-full max-w-[820px] border-t border-gray-200 bg-white/95 px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] @min-[40rem]:static @min-[40rem]:border-0 @min-[40rem]:bg-transparent @min-[40rem]:px-0 @min-[40rem]:shadow-none print:hidden">
           {acciones}
         </div>
       )}

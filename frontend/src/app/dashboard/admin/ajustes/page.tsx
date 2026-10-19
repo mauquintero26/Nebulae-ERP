@@ -82,8 +82,8 @@ export default function AjustesHub() {
                   <h3 className="font-bold text-slate-800 mb-4">Ciclo de Venta</h3>
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-sm font-semibold text-slate-700 mb-1.5">Días validez de cotización</label>
-                      <input type="number" defaultValue={15} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 outline-none focus:border-pink-500" />
+                      <p className="block text-sm font-semibold text-slate-700 mb-1.5">Días de validez de la cotización</p>
+                      <p className="text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2">Los días de validez de la cotización se configuran en <Link href="/dashboard/ventas" className="font-semibold text-pink-700 underline underline-offset-2 hover:text-pink-800">HUB Ventas</Link> → Configuración.</p>
                     </div>
                     <label className="flex items-center gap-3">
                       <input type="checkbox" defaultChecked className="w-4 h-4 text-pink-600 rounded" />

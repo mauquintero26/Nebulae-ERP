@@ -423,6 +423,22 @@ export const CAMPOS_COLOR = Object.freeze(Object.entries(NOMBRES_COLOR).map(([no
   referencia: COLORES_POR_DEFECTO[/** @type {'principal' | 'secundario' | 'acento'} */ (nombre)],
 })));
 
+const MENSAJE_RESPUESTA_INESPERADA = 'Respuesta inesperada del servidor.';
+
+/**
+ * El perfil (el .data) de una respuesta de GET o PUT /empresa y de PUT o DELETE /empresa/logo (T14 r1). Si no es un
+ * objeto (un 200 sin cuerpo: apiFetch devuelve {} cuando no es JSON; data null, una lista…) LANZA
+ * Error('Respuesta inesperada del servidor.'), para que la pantalla vaya por su rama de error y no tome un perfil vacío
+ * (todo en blanco y en solo lectura).
+ * @param {unknown} respuesta
+ * @returns {Record<string, any>}
+ */
+export function perfilDeRespuesta(respuesta) {
+  const datos = esObjeto(respuesta) ? respuesta.data : undefined;
+  if (!esObjeto(datos)) throw new Error(MENSAJE_RESPUESTA_INESPERADA);
+  return datos;
+}
+
 /**
  * Los valores iniciales de un formulario: {campo: texto} de `campos`, tomados del perfil de GET /empresa (su .data). Lo
  * que falta o no es texto queda ''. Solo esos campos: nada de puede_editar, logo_url u otros.

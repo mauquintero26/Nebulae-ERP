@@ -19,7 +19,7 @@ import {
   COLORES_POR_DEFECTO, MARCA_VACIA, CAMPOS_EMPRESA, normalizarMarca, cargarMarcaEmpresa, urlLogo, validarCampoEmpresa,
   cambiosDelFormulario, validarArchivoLogo, correoValido, inicialesMarca,
   LOGO_MAX_LADO_PDF, avisoLogoParaPdf, marcaVistaPrevia, GRUPOS_CAMPOS_EMPRESA, CAMPOS_COLOR, valoresDeCampos,
-  erroresDeCambios, cambiosDelHistorial,
+  erroresDeCambios, cambiosDelHistorial, perfilDeRespuesta,
 } from '../src/lib/marca-empresa.js';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
@@ -389,6 +389,19 @@ console.log('--- TEST 12: cambiosDelHistorial (GET /empresa/historial: antes -> 
   assert.deepEqual(cambiosDelHistorial({ cambios: [null, 'x', { antes: 'a' }, { etiqueta: 'NIT', antes: 5 }] }),
     [{ etiqueta: 'NIT', antes: '(vacío)', despues: '(vacío)' }], 'lo que no es un cambio se descarta');
   for (const raro of [null, undefined, {}, { cambios: 'x' }]) assert.deepEqual(cambiosDelHistorial(raro), []);
+}
+
+console.log('--- TEST 13: perfilDeRespuesta (un 200 sin perfil es un error; T14 r1) ---');
+{
+  const perfil = { nombre_comercial: 'DEMO', puede_editar: true, logo_url: null };
+  assert.equal(perfilDeRespuesta({ status: 'success', data: perfil }), perfil, 'el .data tal cual');
+  assert.deepEqual(perfilDeRespuesta({ data: {} }), {}, 'un objeto vacío sigue siendo un perfil');
+  // apiFetch devuelve {} cuando el cuerpo no es JSON: eso no es un perfil vacío, es un error (no pisa el estado).
+  for (const raro of [{}, { status: 'success' }, { data: null }, { data: [] }, { data: 'x' }, { data: 5 }, null,
+    undefined, 'x', []]) {
+    assert.throws(() => perfilDeRespuesta(raro), { message: 'Respuesta inesperada del servidor.' },
+      `respuesta sin perfil: ${JSON.stringify(raro)}`);
+  }
 }
 
 console.log('✓ Todas las pruebas de la marca de la empresa pasaron.');
