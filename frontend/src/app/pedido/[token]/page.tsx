@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { MessageCircle } from 'lucide-react';
 import { API_URL } from '@/lib/api';
@@ -63,6 +63,10 @@ export default function PedidoClientePage() {
   const [vista, setVista] = useState<VistaPublica | null>(null);
   // Cada 'Reintentar' vuelve a pedir el pedido.
   const [intento, setIntento] = useState(0);
+  // T15 r1 (accesibilidad): tras 'Reintentar', la vista nueva toma el foco (el h1 del aviso o la página).
+  const [enfocar, setEnfocar] = useState(false);
+  const principal = useRef<HTMLElement>(null);
+  const conHoja = vista !== null && vista.estado_enlace === 'consulta' && vistaConDocumento(vista);
 
   useEffect(() => {
     // Round 7: el token va en el cuerpo JSON, nunca en la URL de la API.
@@ -79,10 +83,14 @@ export default function PedidoClientePage() {
     if (vista) document.title = tituloDeLaPagina(vista, 'Tu pedido');
   }, [vista]);
 
+  useEffect(() => {
+    if (enfocar && conHoja) principal.current?.focus();
+  }, [enfocar, conHoja, vista]);
+
   let contenido;
   if (!vista) {
     contenido = <CargandoDocumento />;
-  } else if (vista.estado_enlace === 'consulta' && vistaConDocumento(vista)) {
+  } else if (conHoja) {
     const doc = vista.documento;
     const whatsapp = contactosEmpresa(vista.empresa, mensajeWhatsAppDocumento('PVEN', doc.numero))
       .find((c) => c.tipo === 'whatsapp');
@@ -118,14 +126,20 @@ export default function PedidoClientePage() {
         apiUrl={API_URL}
         onReintentar={() => {
           setVista(null);
+          setEnfocar(true);
           setIntento((n) => n + 1);
         }}
+        enfocar={enfocar}
       />
     );
   }
 
   return (
-    <main className="min-h-screen bg-gray-100 px-4 py-6 text-gray-900 print:bg-white print:p-0">
+    <main
+      ref={principal}
+      tabIndex={-1}
+      className="min-h-screen bg-gray-100 px-4 py-6 text-gray-900 outline-none print:bg-white print:p-0"
+    >
       {contenido}
     </main>
   );

@@ -549,9 +549,13 @@ MENSAJES_ENLACE = {
                     "recibiste."),
     "cambios_enviados": ("Ya nos enviaste tus cambios el {fecha}. {asesor} ajustará la {documento} y te enviará un "
                          "enlace nuevo."),
+    # B3 T15 r1 (regla g con «Ya no la necesito», R8): no se promete una solicitud ajustada ni un enlace nuevo.
+    "no_la_necesita": "Ya nos enviaste tu respuesta el {fecha}. {asesor} se pondrá en contacto contigo.",
     "actualizada": ("Tu asesor actualizó esta {documento} después de tu confirmación. Te enviaremos un enlace nuevo "
                     "para que la revises."),
 }
+# El tipo «Ya no la necesito» de cambios_cliente_tipo (el TIPO_NO_LA_NECESITA de confirmacion_publica, R8: solo la SC).
+_TIPO_NO_LA_NECESITA = "NO_LA_NECESITA"
 # Regla h: el documento volvió a un estado anterior a la confirmación (el asesor lo cambió después).
 _ESTADOS_ANTES_DE_CONFIRMAR = {"SC": ("BORRADOR", "ASIGNADA", "PENDIENTE_CONFIRMACION"),
                                "COT": ("BORRADOR", "ENVIADA", "PENDIENTE_CONFIRMACION")}
@@ -624,9 +628,11 @@ def _confirmada(db: Session, info: dict, doc, tipo: str, nombre: str) -> dict:
     """Regla d. confirmada_el = cuando se usó ESTE enlace si con él se confirmó; si no, el último renglón CONFIRMADA de
     la Actividad. La COT solo lleva su número (C10: sin líneas ni precios). La SC lleva '¿Qué sigue?' y, durante
     DIAS_RESUMEN_CONFIRMADO días, el resumen (documento_sc), salvo que ya no sea de quien recibió el enlace (r1, P4):
-    - si la SC cambió de cliente después de crearse ESTE enlace (_cambio_el_cliente_despues), solo {numero};
+    - si la SC cambió de cliente después de crearse ESTE enlace (_cambio_el_cliente_despues), solo {numero} y tampoco
+      '¿Qué sigue?' (B3 T15 r1: el asesor y el anticipo ya no son asunto de quien recibió el enlace);
     - si con este enlace se confirmó, además exige gate1_confirmed_at: N7 la limpia al cambiar el cliente o los
-      productos (update_solicitud y PATCH /cliente), así que sin ella esa confirmación ya no es la vigente."""
+      productos (update_solicitud y PATCH /cliente), así que sin ella esa confirmación ya no es la vigente.
+    Pasados los DIAS_RESUMEN_CONFIRMADO días (mismo cliente) se oculta el resumen, pero '¿Qué sigue?' se mantiene."""
     from app.core.confirmation_tokens import RESULTADO_CONFIRMADO
     confirmo_este = info["resultado"] == RESULTADO_CONFIRMADO
     confirmada_el = info["used_at"] if confirmo_este else _ultima_confirmacion_en_actividad(db, tipo, doc.id)
@@ -635,9 +641,11 @@ def _confirmada(db: Session, info: dict, doc, tipo: str, nombre: str) -> dict:
         reciente = (confirmada_el is not None
                     and ahora_utc() - confirmada_el <= timedelta(days=DIAS_RESUMEN_CONFIRMADO))
         confirmacion_vigente = doc.gate1_confirmed_at is not None if confirmo_este else True
-        if reciente and confirmacion_vigente and not _cambio_el_cliente_despues(db, doc.id, info["created_at"]):
+        otro_cliente = _cambio_el_cliente_despues(db, doc.id, info["created_at"])
+        if reciente and confirmacion_vigente and not otro_cliente:
             documento = documento_sc(db, doc)
-        siguiente = siguiente_paso_sc(doc, forma_de_pago(doc.modalidad_pago))
+        if not otro_cliente:
+            siguiente = siguiente_paso_sc(doc, forma_de_pago(doc.modalidad_pago))
     return {"mensaje": MENSAJES_ENLACE["confirmada"].format(documento=nombre), "documento": documento,
             "confirmada_el": iso_z(confirmada_el), "siguiente_paso": siguiente}
 
@@ -652,7 +660,7 @@ def estado_enlace(db: Session, info, doc, tipo) -> tuple:
       f) hay un enlace más reciente vigente -> 'reemplazado';
       g) resultado CAMBIOS (lo escribe T6) -> 'cambios_enviados', con el comentario mientras cambios_cliente_at siga y
          solo si ESTE enlace dejó la marca (T6 r1: _hay_enlace_posterior; un enlace viejo nunca ve el comentario que
-         dejó otro enlace después);
+         dejó otro enlace después); si con ESTE enlace dijo «Ya no la necesito», el mensaje 'no_la_necesita' (T15 r1);
       h) resultado CONFIRMADO y el documento volvió a un estado anterior -> 'actualizada';
       i) lo demás (revocado o usado sin resultado) -> 'no_disponible'.
     info es el dict INTERNO de consultar_token (nunca se devuelve tal cual) y doc el documento (o None). extra =
@@ -675,11 +683,15 @@ def estado_enlace(db: Session, info, doc, tipo) -> tuple:
     if hay_enlace_mas_reciente_vigente(db, tipo, doc.id, info["created_at"]):
         return "reemplazado", dict(extra, mensaje=MENSAJES_ENLACE["reemplazado"].format(documento=nombre))
     if info["resultado"] == RESULTADO_CAMBIOS:
-        mensaje = MENSAJES_ENLACE["cambios_enviados"].format(
+        # La marca cambios_cliente_* es de ESTE enlace si sigue puesta y no hay uno posterior (T6 r1).
+        marca_de_este = (doc.cambios_cliente_at is not None
+                         and not _hay_enlace_posterior(db, tipo, doc.id, info["created_at"]))
+        # B3 T15 r1: con «Ya no la necesito» no se promete una solicitud ajustada ni un enlace nuevo.
+        clave = ("no_la_necesita" if marca_de_este and doc.cambios_cliente_tipo == _TIPO_NO_LA_NECESITA
+                 else "cambios_enviados")
+        mensaje = MENSAJES_ENLACE[clave].format(
             fecha=fecha_larga(info["used_at"]), asesor=_asesor_del_documento(db, doc, tipo), documento=nombre)
-        comentario = None
-        if doc.cambios_cliente_at is not None and not _hay_enlace_posterior(db, tipo, doc.id, info["created_at"]):
-            comentario = doc.cambios_cliente_comentario
+        comentario = doc.cambios_cliente_comentario if marca_de_este else None
         return "cambios_enviados", dict(extra, mensaje=mensaje, comentario=comentario or None)
     if info["resultado"] == RESULTADO_CONFIRMADO and doc.estado in _ESTADOS_ANTES_DE_CONFIRMAR[tipo]:
         return "actualizada", dict(extra, mensaje=MENSAJES_ENLACE["actualizada"].format(documento=nombre))

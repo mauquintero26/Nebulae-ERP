@@ -45,6 +45,12 @@ console.log('--- TEST 2: DocumentoComercial.tsx imprime bien ---');
   assert.ok(doc.includes('print:hidden'), "los botones llevan 'print:hidden'");
   assert.ok(doc.includes('@page'), '@page');
   assert.doesNotMatch(doc, /@page\s*\{[^}]*\bsize\s*:/, '@page sin tamaño fijo (Carta o A4)');
+  // T15 r1 (menor 12, opción A): sin margen de página, Chrome y Edge no imprimen el encabezado ni el pie con la URL
+  // (que lleva el token). El margen pasa a padding de la hoja, repetido en cada página (box-decoration-break: clone).
+  assert.match(doc, /@page\s*\{\s*margin:\s*0;?\s*\}/, '@page { margin: 0 }');
+  assert.match(doc, /\.documento-comercial-pagina\s*\{[^}]*padding:\s*12mm/, 'los 12 mm pasan a padding de la hoja');
+  assert.match(doc, /\.documento-comercial-pagina\s*\{[^}]*box-decoration-break:\s*clone/, 'en cada página impresa');
+  assert.ok(doc.includes('className="documento-comercial-pagina @container w-full"'), 'la clase en la raíz');
   assert.ok(doc.includes('print-color-adjust'), 'print-color-adjust: exact');
   assert.ok(doc.includes('window.print()'), "'Descargar o imprimir'");
   assert.ok(doc.includes("'use client'"));
@@ -104,6 +110,9 @@ console.log('--- TEST 5 (T15): app/confirmar/layout.tsx y app/pedido/layout.tsx:
     assert.ok(layout.includes('index: false'), `${carpeta}: robots index: false`);
     assert.ok(layout.includes('follow: false'), `${carpeta}: robots follow: false`);
     assert.ok(layout.includes(`title: '${titulo}'`), `${carpeta}: title '${titulo}' (la pestaña la fija la página)`);
+    // T15 r1 (menor 10): Next junta la metadata por capas; sin esto heredaría la description de la raíz (la marca del
+    // ERP) en la página del cliente.
+    assert.ok(layout.includes('description: null'), `${carpeta}: description: null`);
     assert.ok(layout.includes(`LayoutProps<'/${carpeta}'>`), `${carpeta}: LayoutProps<'/${carpeta}'> de Next 16`);
     assert.doesNotMatch(layout, /'use client'/, `${carpeta}: componente de servidor (exporta metadata)`);
   }
@@ -177,6 +186,24 @@ console.log('--- TEST 7 (T15): un solo h1 por página: nivelTitulo en DocumentoC
   // La vista previa de Configuración (T14) y la hoja bajo un aviso de la página pública usan un h2.
   assert.ok(leer(APP, 'dashboard', 'admin', 'configuracion', 'documentos-form.tsx').includes('nivelTitulo={2}'));
   assert.ok(leer(APP, 'confirmar', '[token]', 'aviso-enlace.tsx').includes('<h1'), 'el aviso lleva el h1 de la página');
+}
+
+console.log('--- TEST 8 (T15 r1): nada queda colgado, el foco no se pierde y la tarjeta sin hoja imprime limpio ---');
+{
+  const pagina = leer(APP, 'confirmar', '[token]', 'page.tsx');
+  // Menor 7: setEnviando(null) siempre, aunque algo lance.
+  assert.equal((pagina.match(/finally\s*\{\s*setEnviando\(null\);?\s*\}/g) || []).length, 2,
+    'confirmar() y pedirCambios() con try/finally');
+  // Menor 11: después de una acción el foco va al h1 del aviso (o a la página); al cerrar el panel, a 'Pedir cambios'.
+  const aviso = leer(APP, 'confirmar', '[token]', 'aviso-enlace.tsx');
+  assert.match(aviso, /<h1[^>]*tabIndex=\{-1\}/, 'el h1 del aviso puede recibir el foco');
+  assert.ok(aviso.includes('.focus()'), 'y lo recibe');
+  assert.match(pagina, /<main[^>]*tabIndex=\{-1\}/, 'la página puede recibir el foco (la hoja tras «Reintentar»)');
+  assert.ok(pagina.includes('enfocarPedirCambios'), 'Volver devuelve el foco a «Pedir cambios»');
+  assert.ok(leer(APP, 'confirmar', '[token]', 'vista-solicitud.tsx').includes('.focus()'));
+  // Menor 13: 'Reintentar' y el contacto de la tarjeta no se imprimen.
+  assert.match(aviso, /<button[^>]*print:hidden[^>]*>[\s\S]*?Reintentar/, "'Reintentar' con print:hidden");
+  assert.match(aviso, /<div className="print:hidden">\s*<ContactoEmpresa/, 'el contacto con print:hidden');
 }
 
 console.log('✓ Todas las pruebas de las fuentes de la plantilla pasaron.');

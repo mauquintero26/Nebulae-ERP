@@ -7,6 +7,8 @@ import type { Metadata } from 'next';
 // - La pestaña la pone la página con la empresa y el documento (tituloDeLaPagina: 'Solicitud SC-… · Empresa').
 export const metadata: Metadata = {
   title: 'Documento',
+  // T15 r1: sin la description de la raíz (la marca del ERP); Next junta la metadata por capas.
+  description: null,
   robots: { index: false, follow: false },
   referrer: 'no-referrer',
 };

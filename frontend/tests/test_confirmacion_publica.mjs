@@ -23,6 +23,7 @@ import {
   pedirPublico, vistaDeRespuesta, TEXTOS_ENLACE, claveIdempotencia, puedeEnviarCambios, limpiarComentario,
   MIN_COMENTARIO_CAMBIOS, MAX_COMENTARIO_CAMBIOS, vistaConDocumento, respuestaDeAccion, textoAntesDeConfirmar,
   queSigue, lineaConfirmacion, metaDeLaVista, selloDeLaVista, parrafoDelAviso, textosPanelCambios, tituloDeLaPagina,
+  LIMITE_PEDIR_PUBLICO_MS,
 } from '../src/lib/confirmacion-publica.js';
 import { fechaHoraCO } from '../src/lib/fechas-colombia.js';
 import { DOCUMENTO_EJEMPLO_SC, DOCUMENTO_EJEMPLO_COT } from '../src/lib/documento-comercial.js';
@@ -148,7 +149,8 @@ console.log('--- TEST 4b (r1): los textos LITERALES de MENSAJES_ENLACE (SC y COT
     assert.equal(vista('confirmada', llenar(MENSAJES_ENLACE.confirmada, nombre), null).titulo,
       `Esta ${nombre} ya fue confirmada`, 'sin documento: el tipo sale del mensaje');
     const cambios = vista('cambios_enviados', llenar(MENSAJES_ENLACE.cambios_enviados, nombre), null);
-    assert.equal(cambios.titulo, 'Ya recibimos tus cambios');
+    // T15 r1: un título neutro, que sirve para «Quiero cambiar algo» y para «Ya no la necesito».
+    assert.equal(cambios.titulo, 'Ya recibimos tu respuesta');
     assert.equal(cambios.mensaje, llenar(MENSAJES_ENLACE.cambios_enviados, nombre));
   }
   // Ni el documento ni el mensaje dicen el tipo: un título fijo, sin {documento} ni el mensaje.
@@ -500,10 +502,17 @@ console.log('--- TEST 16 (T15): queSigue (los pasos del servidor; en la COT, el 
   data: { numero: 'SC-DEMO-0001', documento: DOCUMENTO_EJEMPLO_SC } });
   assert.deepEqual(queSigue(sc), { pasos: ['Asesor DEMO prepara tu cotización con los precios.',
     'Te la enviamos por el mismo medio para que la revises y la apruebes.'], instrucciones: null });
+  const pasosCot = ['Paga el anticipo de $823.188.', 'Cuando lo verifiquemos, crearemos tu pedido.'];
+  // T15 r1 (menor 8): con la hoja debajo, que ya trae los datos para pagar en «Forma de pago», no se repiten.
   const cot = confirmada200({ siguiente_paso: { anticipo_por_pagar: 823188, instrucciones_pago: 'Banco DEMO\nCuenta 000' },
     data: { numero: 'COT-DEMO-0001', documento: DOCUMENTO_EJEMPLO_COT } });
-  assert.deepEqual(queSigue(cot), { pasos: ['Paga el anticipo de $823.188.',
-    'Cuando lo verifiquemos, crearemos tu pedido.'], instrucciones: 'Banco DEMO\nCuenta 000' });
+  assert.deepEqual(queSigue(cot), { pasos: pasosCot, instrucciones: null });
+  // Sin la hoja (el 200 mínimo de confirmar) o con una hoja sin datos para pagar, el aviso sí los trae.
+  assert.deepEqual(queSigue(confirmada200({ siguiente_paso: { anticipo_por_pagar: 823188,
+    instrucciones_pago: 'Banco DEMO\nCuenta 000' } })), { pasos: pasosCot, instrucciones: 'Banco DEMO\nCuenta 000' });
+  const sinDatos = { ...DOCUMENTO_EJEMPLO_COT, pago: { ...DOCUMENTO_EJEMPLO_COT.pago, instrucciones: null } };
+  assert.deepEqual(queSigue(confirmada200({ siguiente_paso: { anticipo_por_pagar: 823188, instrucciones_pago: 'Banco DEMO' },
+    data: { numero: 'COT-DEMO-0001', documento: sinDatos } })), { pasos: pasosCot, instrucciones: 'Banco DEMO' });
   assert.deepEqual(queSigue(confirmada200({ siguiente_paso: { anticipo_por_pagar: 0, instrucciones_pago: null } })),
     { pasos: ['Crearemos tu pedido.'], instrucciones: null });
   assert.deepEqual(queSigue(confirmada200({ siguiente_paso: { anticipo_por_pagar: null, instrucciones_pago: ' ' } })),
@@ -541,6 +550,13 @@ console.log('--- TEST 18 (T15): metaDeLaVista y selloDeLaVista (el encabezado de
   assert.deepEqual(metaDeLaVista(pendiente(DOCUMENTO_EJEMPLO_COT)), [
     { etiqueta: 'Estado', valor: 'Esperando tu confirmación' },
     { etiqueta: 'Válida hasta', valor: '8 de octubre de 2026' }]);
+  // T15 r1 (menor 6): una COT enviada antes de valida_hasta (T7) no trae la fecha: dice hasta cuándo sirve su enlace.
+  const cotVieja = { ...DOCUMENTO_EJEMPLO_COT, valida_hasta: null };
+  assert.deepEqual(metaDeLaVista(pendiente(cotVieja)), [
+    { etiqueta: 'Estado', valor: 'Esperando tu confirmación' },
+    { etiqueta: 'Puedes confirmar hasta', valor: 'lunes 5 de octubre, 9:00 a. m.' }]);
+  assert.deepEqual(metaDeLaVista(confirmada200({ data: { numero: 'COT-DEMO-0001', documento: cotVieja } })), [],
+    'fuera de pendiente no se dice hasta cuándo confirmar');
   assert.deepEqual(metaDeLaVista(confirmada200({ data: { numero: 'COT-DEMO-0001', documento: DOCUMENTO_EJEMPLO_COT } })),
     [{ etiqueta: 'Válida hasta', valor: '8 de octubre de 2026' }]);
   assert.deepEqual(metaDeLaVista(confirmada200({ data: { numero: 'SC-DEMO-0001', documento: DOCUMENTO_EJEMPLO_SC } })),
@@ -611,6 +627,37 @@ console.log('--- TEST 21 (T15): tituloDeLaPagina (la pestaña, orden de PLANTILL
   assert.equal(tituloDeLaPagina(vistaDeRespuesta({ ok: false, status: 0, cuerpo: null, mensaje: null }), 'Tu pedido'),
     'Tu pedido', 'sin empresa ni documento: el del layout (nunca Nebulae)');
   assert.equal(tituloDeLaPagina(null, 'Documento'), 'Documento');
+}
+
+console.log('--- TEST 22 (T15 r1): pedirPublico con tiempo límite: nada queda colgado en «Cargando…» ni «Confirmando…» ---');
+{
+  assert.equal(LIMITE_PEDIR_PUBLICO_MS, 30000, '30 s por defecto');
+  const sinConexion = { ok: false, status: 0, cuerpo: null, mensaje: TEXTOS_ENLACE.sin_conexion.mensaje };
+  // Un fetch que nunca responde y ni siquiera mira la señal (la red móvil colgada).
+  let senal = null;
+  const colgado = async (_u, init) => {
+    senal = init.signal;
+    return new Promise(() => {});
+  };
+  const inicio = Date.now();
+  const r = await pedirPublico('http://x/api/v1', '/confirmar/ver', { token: TOKEN }, {}, colgado, 30);
+  assert.deepEqual(r, sinConexion, 'termina en el camino de sin conexión (status 0)');
+  assert.ok(Date.now() - inicio < 5000, 'con el tiempo inyectado');
+  assert.ok(senal instanceof AbortSignal && senal.aborted, 'y aborta el fetch');
+  assert.equal(vistaDeRespuesta(r).estado_enlace, 'sin_conexion');
+  assert.equal(vistaDeRespuesta(r).reintentar, true);
+  // Un cuerpo que nunca termina de llegar también se corta.
+  const cuerpoColgado = async () => ({ ok: true, status: 200, json: () => new Promise(() => {}) });
+  assert.deepEqual(await pedirPublico('http://x', '/confirmar/ver', {}, {}, cuerpoColgado, 30), sinConexion);
+  // Un fetch que respeta la señal (como el del navegador) rechaza con AbortError: el mismo camino, sin lanzar.
+  const respetuoso = (_u, init) => new Promise((_, rechazar) => {
+    init.signal.addEventListener('abort', () => rechazar(new DOMException('abortado', 'AbortError')));
+  });
+  assert.deepEqual(await pedirPublico('http://x', '/confirmar/confirmar', {}, {}, respetuoso, 30), sinConexion);
+  // Una respuesta a tiempo no se toca.
+  const rapido = async () => ({ ok: true, status: 200, json: async () => ({ status: 'success' }) });
+  assert.deepEqual(await pedirPublico('http://x', '/confirmar/ver', {}, {}, rapido, 1000),
+    { ok: true, status: 200, cuerpo: { status: 'success' }, mensaje: null });
 }
 
 console.log('✓ Todas las pruebas de la confirmación pública pasaron.');

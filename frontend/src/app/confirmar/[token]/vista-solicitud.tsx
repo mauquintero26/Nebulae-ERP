@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { ContactoEmpresa, DocumentoComercial } from '@/components/documento';
 import {
   metaDeLaVista, selloDeLaVista, textoAntesDeConfirmar, type VistaPublica,
@@ -24,6 +24,8 @@ export type PropsVista = {
   errorAccion?: string | null;
   /** El panel «Pedir cambios» abierto: reemplaza a los botones, en su lugar debajo de la hoja. */
   panel?: ReactNode;
+  /** T15 r1: el panel se cerró con 'Volver': el foco vuelve a 'Pedir cambios'. */
+  enfocarPedirCambios?: boolean;
 };
 
 /** «¿Qué pasa si confirmo?» (textoAntesDeConfirmar), dentro de la hoja y sin imprimir. */
@@ -40,16 +42,24 @@ export function QuePasaSiConfirmo({ texto }: { texto: string }) {
 /**
  * Los botones de la página (fijos abajo en el celular, ocultos al imprimir: los pone DocumentoComercial): el principal
  * con los colores de la marca y al menos 44 px de alto, 'Pedir cambios' con borde y la ayuda debajo. El error de la
- * última acción va encima, sin perder la hoja.
+ * última acción va encima, sin perder la hoja. T15 r1: con enfocarPedirCambios (el panel se cerró con 'Volver'), el
+ * foco vuelve a 'Pedir cambios' al aparecer de nuevo los botones.
  */
-export function AccionesConfirmar({ etiqueta, colores, onConfirmar, confirmando, onPedirCambios, error }: {
+export function AccionesConfirmar({
+  etiqueta, colores, onConfirmar, confirmando, onPedirCambios, error, enfocarPedirCambios = false,
+}: {
   etiqueta: string;
   colores: { fondo: string; texto: string };
   onConfirmar?: () => void;
   confirmando: boolean;
   onPedirCambios?: () => void;
   error?: string | null;
+  enfocarPedirCambios?: boolean;
 }) {
+  const pedirCambios = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (enfocarPedirCambios) pedirCambios.current?.focus();
+  }, [enfocarPedirCambios]);
   return (
     <div className="space-y-2">
       {error && (
@@ -66,6 +76,7 @@ export function AccionesConfirmar({ etiqueta, colores, onConfirmar, confirmando,
           {confirmando ? 'Confirmando…' : etiqueta}
         </button>
         <button
+          ref={pedirCambios}
           type="button"
           onClick={onPedirCambios}
           disabled={confirmando}
@@ -92,6 +103,7 @@ export function AccionesConfirmar({ etiqueta, colores, onConfirmar, confirmando,
  */
 export function VistaSolicitud({
   vista, apiUrl, soloLectura = false, aviso, onConfirmar, confirmando = false, onPedirCambios, errorAccion, panel,
+  enfocarPedirCambios,
 }: PropsVista) {
   const doc = vista.documento;
   const unidades = totalUnidades(doc);
@@ -127,6 +139,7 @@ export function VistaSolicitud({
       confirmando={confirmando}
       onPedirCambios={onPedirCambios}
       error={errorAccion}
+      enfocarPedirCambios={enfocarPedirCambios}
     />
   );
   return (

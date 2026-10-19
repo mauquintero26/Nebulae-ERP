@@ -18,6 +18,7 @@ import { AccionesConfirmar, QuePasaSiConfirmo, type PropsVista } from './vista-s
  */
 export function VistaCotizacion({
   vista, apiUrl, soloLectura = false, aviso, onConfirmar, confirmando = false, onPedirCambios, errorAccion, panel,
+  enfocarPedirCambios,
 }: PropsVista) {
   const doc = vista.documento;
   const colores = coloresBotonPrincipal(vista.empresa, 'acento');
@@ -37,6 +38,7 @@ export function VistaCotizacion({
       confirmando={confirmando}
       onPedirCambios={onPedirCambios}
       error={errorAccion}
+      enfocarPedirCambios={enfocarPedirCambios}
     />
   );
   return (

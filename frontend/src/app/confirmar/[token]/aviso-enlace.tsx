@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useRef } from 'react';
 import {
   AlertTriangle, Ban, CalendarX, CheckCircle2, Clock, FileText, Link2Off, MessageSquare, RefreshCw, WifiOff,
   type LucideIcon,
@@ -33,8 +34,18 @@ export function CargandoDocumento() {
  * Lo que dice el aviso (encabezado + párrafo, nota del controlador después de T12): el ícono y el h1 de la página, el
  * párrafo (parrafoDelAviso), la fecha de la confirmación (lineaConfirmacion, RP26), el comentario del cliente citado
  * (como texto), «¿Qué sigue?» (queSigue, con los datos para pagar de la COT), 'Reintentar' y el contacto.
+ * T15 r1: con `enfocar` (la pantalla cambió por una acción del cliente) el h1 recibe el foco y el lector de pantalla lo
+ * anuncia; 'Reintentar' y el contacto no se imprimen.
  */
-function ContenidoAviso({ vista, onReintentar }: { vista: VistaPublica; onReintentar?: () => void }) {
+function ContenidoAviso({ vista, onReintentar, enfocar = false }: {
+  vista: VistaPublica;
+  onReintentar?: () => void;
+  enfocar?: boolean;
+}) {
+  const titulo = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (enfocar) titulo.current?.focus();
+  }, [enfocar, vista]);
   const Icono = ICONOS[vista.icono] ?? AlertTriangle;
   const parrafo = parrafoDelAviso(vista);
   const linea = lineaConfirmacion(vista);
@@ -46,7 +57,7 @@ function ContenidoAviso({ vista, onReintentar }: { vista: VistaPublica; onReinte
       <div className="flex items-start gap-3">
         <Icono size={28} className="mt-0.5 shrink-0" style={{ color: COLOR_TONO[vista.tono] ?? COLOR_TONO.gris }} aria-hidden="true" />
         <div className="min-w-0 space-y-1">
-          <h1 className="break-words text-xl font-bold text-gray-900">{vista.titulo}</h1>
+          <h1 ref={titulo} tabIndex={-1} className="break-words text-xl font-bold text-gray-900 outline-none">{vista.titulo}</h1>
           {parrafo && <p className="break-words text-sm text-gray-700">{parrafo}</p>}
           {linea && <p className="text-sm text-gray-700">{linea}</p>}
         </div>
@@ -80,14 +91,16 @@ function ContenidoAviso({ vista, onReintentar }: { vista: VistaPublica; onReinte
         <button
           type="button"
           onClick={onReintentar}
-          className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50"
+          className="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50 print:hidden"
         >
           <RefreshCw size={16} aria-hidden="true" />
           Reintentar
         </button>
       )}
 
-      <ContactoEmpresa empresa={vista.empresa} asesor={doc?.atendido_por} numero={doc?.numero} tipo={tipo} />
+      <div className="print:hidden">
+        <ContactoEmpresa empresa={vista.empresa} asesor={doc?.atendido_por} numero={doc?.numero} tipo={tipo} />
+      </div>
     </div>
   );
 }
@@ -104,17 +117,19 @@ function ContenidoAviso({ vista, onReintentar }: { vista: VistaPublica; onReinte
  *   un error, 'Reintentar'.
  * La usa también /pedido/{token} (U23: la pantalla genérica de enlace no válido).
  */
-export function AvisoEnlace({ vista, apiUrl, onReintentar }: {
+export function AvisoEnlace({ vista, apiUrl, onReintentar, enfocar = false }: {
   vista: VistaPublica;
   /** La URL del API (API_URL de lib/api.ts), para el logo. */
   apiUrl: string;
   /** Vuelve a cargar la página (sin conexión o un error). */
   onReintentar?: () => void;
+  /** T15 r1: la pantalla cambió por una acción del cliente: el h1 del aviso recibe el foco. */
+  enfocar?: boolean;
 }) {
   if (vista.estado_enlace === 'confirmada' && vistaConDocumento(vista) && (vista.tipo === 'SC' || vista.tipo === 'COT')) {
     const aviso = (
       <div className="rounded-2xl border border-green-200 bg-green-50 p-5">
-        <ContenidoAviso vista={vista} />
+        <ContenidoAviso vista={vista} enfocar={enfocar} />
       </div>
     );
     return vista.tipo === 'SC'
@@ -126,7 +141,7 @@ export function AvisoEnlace({ vista, apiUrl, onReintentar }: {
   return (
     <div className="mx-auto w-full max-w-xl space-y-5 rounded-2xl bg-white p-5 text-gray-900 shadow-lg sm:p-8">
       <EncabezadoMarca marca={vista.empresa} apiUrl={apiUrl} titulo={tipo ? TIPOS_DOCUMENTO[tipo].titulo : undefined} numero={numero} />
-      <ContenidoAviso vista={vista} onReintentar={onReintentar} />
+      <ContenidoAviso vista={vista} onReintentar={onReintentar} enfocar={enfocar} />
     </div>
   );
 }

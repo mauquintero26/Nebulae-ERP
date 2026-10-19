@@ -49,11 +49,14 @@ export type DocumentoComercialProps = {
 const COLOR_SELLO = { ok: '#15803D', alerta: '#B45309', info: '#1D4ED8', gris: '#4B5563' } as const;
 const ICONOS_CONTACTO = { telefono: Phone, whatsapp: MessageCircle, correo: Mail, web: Globe } as const;
 
-// Impresión: márgenes sin tamaño fijo (Carta o A4), los colores de la marca y la tabla sin partir filas, con el
-// encabezado repetido en cada hoja.
+// Impresión: sin tamaño fijo (Carta o A4), los colores de la marca y la tabla sin partir filas, con el encabezado
+// repetido en cada hoja. B3 T15 r1: @page sin margen, para que Chrome y Edge no impriman el encabezado y el pie del
+// navegador (la URL de la página pública lleva el token); los 12 mm pasan a padding de la raíz, repetido en cada página
+// impresa (box-decoration-break: clone).
 const ESTILOS_IMPRESION = `
-@page { margin: 12mm; }
+@page { margin: 0; }
 @media print {
+  .documento-comercial-pagina { padding: 12mm; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
   .documento-comercial, .documento-comercial * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .documento-comercial { box-shadow: none !important; }
   .documento-comercial tr { break-inside: avoid; }
@@ -300,7 +303,7 @@ export function DocumentoComercial({
     // T14 r1: los cortes se miden con este contenedor (@container), no con la ventana: la vista previa de Configuración
     // (~380 px a 1024) sale en tarjetas. 40rem = los 640 px del corte sm de antes; en la página pública el contenedor
     // es casi la ventana, así que se ve igual.
-    <div className="@container w-full">
+    <div className="documento-comercial-pagina @container w-full">
       <style>{ESTILOS_IMPRESION}</style>
       {(aviso || mostrarDescargar) && (
         <div className="mx-auto mb-3 flex w-full max-w-[820px] flex-col gap-3 print:hidden">

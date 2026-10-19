@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import { API_URL } from '@/lib/api';
 import {
@@ -21,6 +21,8 @@ import { VistaSolicitud } from './vista-solicitud';
  * Las respuestas se leen con vistaDeRespuesta y respuestaDeAccion (lib/confirmacion-publica.js): el 422 y los errores
  * de una acción se muestran en la misma pantalla sin borrar lo escrito; un 400 muestra el estado que manda el servidor
  * (doble clic u otra pestaña: 'ya fue confirmada'). La pestaña sale de tituloDeLaPagina.
+ * T15 r1: cuando una acción del cliente cambia la pantalla (confirmar, pedir cambios, 'Reintentar'), el foco va al h1
+ * del aviso o, si vuelve la hoja, a la página; al cerrar el panel con 'Volver', a 'Pedir cambios'.
  */
 export default function ConfirmarPublicoPage() {
   const params = useParams();
@@ -32,6 +34,12 @@ export default function ConfirmarPublicoPage() {
   const [errorAccion, setErrorAccion] = useState<string | null>(null);
   const [panelAbierto, setPanelAbierto] = useState(false);
   const [errorCambios, setErrorCambios] = useState<string | null>(null);
+  // T15 r1 (accesibilidad): la pantalla cambió por una acción del cliente, así que la vista nueva toma el foco.
+  const [enfocar, setEnfocar] = useState(false);
+  const [enfocarPedirCambios, setEnfocarPedirCambios] = useState(false);
+  const principal = useRef<HTMLElement>(null);
+  const hojaPendiente = vista !== null && vista.estado_enlace === 'pendiente' && vistaConDocumento(vista)
+    && (vista.tipo === 'SC' || vista.tipo === 'COT');
 
   useEffect(() => {
     // Round 7: el token va en el body JSON, nunca en la URL de la API (la URL de
@@ -53,64 +61,84 @@ export default function ConfirmarPublicoPage() {
     if (vista) document.title = tituloDeLaPagina(vista, 'Documento');
   }, [vista]);
 
+  // Tras 'Reintentar' la hoja vuelve sin h1 propio que enfocar: el foco va a la página (el aviso enfoca su h1).
+  useEffect(() => {
+    if (enfocar && hojaPendiente) principal.current?.focus();
+  }, [enfocar, hojaPendiente, vista]);
+
   function reintentar() {
     setVista(null);
     setErrorAccion(null);
     setErrorCambios(null);
     setPanelAbierto(false);
+    setEnfocar(true);
     setIntento((n) => n + 1);
   }
 
   // Una Idempotency-Key nueva por intento, sin el token. Si el POST no llega (sin red o un error), la hoja y lo escrito
   // se quedan con el mensaje; un 400 trae el estado del enlace (otra pestaña ya confirmó: 'ya fue confirmada').
+  // T15 r1: try/finally, así los botones nunca quedan en «Confirmando…» (pedirPublico ya corta a los 30 s).
   async function confirmar() {
     if (enviando) return;
     setEnviando('confirmar');
     setErrorAccion(null);
-    const r = await pedirPublico(API_URL, '/confirmar/confirmar', { token },
-      { 'Idempotency-Key': claveIdempotencia('confirmar') });
-    const resultado = respuestaDeAccion(r, 'confirmar', vista);
-    if (resultado.vista) setVista(resultado.vista);
-    else setErrorAccion(resultado.error);
-    setEnviando(null);
+    try {
+      const r = await pedirPublico(API_URL, '/confirmar/confirmar', { token },
+        { 'Idempotency-Key': claveIdempotencia('confirmar') });
+      const resultado = respuestaDeAccion(r, 'confirmar', vista);
+      if (resultado.vista) {
+        setVista(resultado.vista);
+        setEnfocar(true);
+      } else {
+        setErrorAccion(resultado.error);
+      }
+    } finally {
+      setEnviando(null);
+    }
   }
 
   async function pedirCambios(tipo: TipoCambios, comentario: string) {
     if (enviando) return;
     setEnviando('cambios');
     setErrorCambios(null);
-    const r = await pedirPublico(API_URL, '/confirmar/pedir-cambios', { token, tipo, comentario },
-      { 'Idempotency-Key': claveIdempotencia('cambios') });
-    const resultado = respuestaDeAccion(r, 'cambios', vista);
-    if (resultado.vista) {
-      setVista(resultado.vista);
-      setPanelAbierto(false);
-    } else {
-      setErrorCambios(resultado.error);
+    try {
+      const r = await pedirPublico(API_URL, '/confirmar/pedir-cambios', { token, tipo, comentario },
+        { 'Idempotency-Key': claveIdempotencia('cambios') });
+      const resultado = respuestaDeAccion(r, 'cambios', vista);
+      if (resultado.vista) {
+        setVista(resultado.vista);
+        setPanelAbierto(false);
+        setEnfocar(true);
+      } else {
+        setErrorCambios(resultado.error);
+      }
+    } finally {
+      setEnviando(null);
     }
-    setEnviando(null);
   }
 
   function abrirPanel() {
     setErrorAccion(null);
     setErrorCambios(null);
+    setEnfocarPedirCambios(false);
     setPanelAbierto(true);
   }
 
   function cerrarPanel() {
     setErrorCambios(null);
     setPanelAbierto(false);
+    setEnfocarPedirCambios(true);
   }
 
   let contenido;
   if (!vista) {
     contenido = <CargandoDocumento />;
-  } else if (vista.estado_enlace === 'pendiente' && vistaConDocumento(vista) && (vista.tipo === 'SC' || vista.tipo === 'COT')) {
+  } else if (hojaPendiente) {
     // Hallazgo #4 (adversarial review): el cliente ve lo que confirma (productos y, en la COT, precios y totales); los
     // números vienen del servidor y DocumentoComercial no recalcula nada.
     const panel = panelAbierto ? (
       <PanelPedirCambios
-        tipo={vista.tipo}
+        tipo={vista.tipo === 'COT' ? 'COT' : 'SC'}
         asesor={vista.documento?.atendido_por}
         marca={vista.empresa}
         onEnviar={pedirCambios}
@@ -121,15 +149,19 @@ export default function ConfirmarPublicoPage() {
     ) : null;
     const props = {
       vista, apiUrl: API_URL, onConfirmar: confirmar, confirmando: enviando === 'confirmar', onPedirCambios: abrirPanel,
-      errorAccion, panel,
+      errorAccion, panel, enfocarPedirCambios,
     };
     contenido = vista.tipo === 'SC' ? <VistaSolicitud {...props} /> : <VistaCotizacion {...props} />;
   } else {
-    contenido = <AvisoEnlace vista={vista} apiUrl={API_URL} onReintentar={reintentar} />;
+    contenido = <AvisoEnlace vista={vista} apiUrl={API_URL} onReintentar={reintentar} enfocar={enfocar} />;
   }
 
   return (
-    <main className="min-h-screen bg-gray-100 px-4 py-6 text-gray-900 print:bg-white print:p-0">
+    <main
+      ref={principal}
+      tabIndex={-1}
+      className="min-h-screen bg-gray-100 px-4 py-6 text-gray-900 outline-none print:bg-white print:p-0"
+    >
       {contenido}
     </main>
   );

@@ -278,6 +278,7 @@ def test_resumen_se_oculta_a_los_30_dias(app_client, db, admin_token, user_admin
     d = _detalle(_ver(app_client, raw), "confirmada")
     assert d["documento"] == {"numero": sc.numero}  # sin productos
     assert d["confirmada_el"].endswith("Z")
+    assert len(d["siguiente_paso"]) == 3  # T15 r1: «¿Qué sigue?» se mantiene (es el mismo cliente)
 
     _poner(db, raw, used_at=_ahora() - datetime.timedelta(days=29))
     d = _detalle(_ver(app_client, raw), "confirmada")
@@ -416,6 +417,9 @@ def test_cambio_de_cliente_despues_de_confirmar_no_muestra_al_cliente_nuevo(app_
     d = _detalle(resp, "confirmada")
     assert d["documento"] == {"numero": sc.numero}
     assert NOMBRE_B not in resp.text and DIRECCION_B not in resp.text
+    # B3 T15 r1 (menor 9): «¿Qué sigue?» (asesor y anticipo) tampoco le llega a quien ya no es el cliente.
+    assert d["siguiente_paso"] is None
+    assert ASESORA not in resp.text
 
 
 def test_cambio_de_cliente_y_confirmacion_por_la_cotizacion_no_muestra_al_cliente_nuevo(app_client, db, admin_token,
@@ -444,6 +448,9 @@ def test_cambio_de_cliente_y_confirmacion_por_la_cotizacion_no_muestra_al_client
     d = _detalle(resp, "confirmada")
     assert d["documento"] == {"numero": sc.numero}
     assert NOMBRE_B not in resp.text and DIRECCION_B not in resp.text
+    # B3 T15 r1 (menor 9): «¿Qué sigue?» (asesor y anticipo) tampoco le llega a quien ya no es el cliente.
+    assert d["siguiente_paso"] is None
+    assert ASESORA not in resp.text
 
 
 def test_la_guarda_no_depende_del_renglon_auxiliar_de_cambios(app_client, db, admin_token, user_admin, monkeypatch):
@@ -714,12 +721,51 @@ def test_enlace_con_cambios_enviados(app_client, db, admin_token, user_admin, mo
         d = _detalle(resp, "cambios_enviados")
         assert d["comentario"] == "Son 8 rodillos, no 6"
         assert d["documento"] is None
+        assert d["mensaje"].endswith(f"{ASESORA} ajustará la solicitud y te enviará un enlace nuevo."), d["mensaje"]
     db.refresh(sc)
     assert sc.estado == "ASIGNADA"  # confirmar con ese enlace no hizo nada
 
     sc.cambios_cliente_at = None  # el asesor ya respondió (T6 la limpia al reenviar)
     db.commit()
     assert _detalle(_ver(app_client, raw), "cambios_enviados")["comentario"] is None
+
+
+def test_ya_no_la_necesita_al_reabrir_no_promete_una_solicitud_ajustada(app_client, db, admin_token, user_admin,
+                                                                         monkeypatch):
+    """B3 T15 r1 (menor 5, regla g): si con ESTE enlace el cliente dijo «Ya no la necesito», al volver a abrirlo no se le
+    promete una solicitud ajustada ni un enlace nuevo: MENSAJES_ENLACE['no_la_necesita'], con la fecha y el asesor. El
+    mensaje de «Quiero cambiar algo» no cambia (test_enlace_con_cambios_enviados)."""
+    from app.core.confirmation_tokens import marcar_resultado, reclamar_token
+    from app.core.documento_cliente import MENSAJES_ENLACE
+    from app.core.fechas import fecha_larga
+    assert MENSAJES_ENLACE["no_la_necesita"] == ("Ya nos enviaste tu respuesta el {fecha}. {asesor} se pondrá en "
+                                                 "contacto contigo.")
+    assert MENSAJES_ENLACE["cambios_enviados"].startswith("Ya nos enviaste tus cambios el {fecha}.")
+    _sin_correo(monkeypatch)
+    sc = _sc(db, user_admin)
+    raw = _enviar(app_client, admin_token, sc)
+    info = reclamar_token(db, raw)
+    assert marcar_resultado(db, info["id"], "CAMBIOS") is True
+    sc.estado = "ASIGNADA"
+    sc.cambios_cliente_at = _ahora()
+    sc.cambios_cliente_tipo = "NO_LA_NECESITA"
+    sc.cambios_cliente_comentario = None
+    db.commit()
+
+    usado = _fila(db, raw)["used_at"]
+    for resp in (_ver(app_client, raw), _confirmar(app_client, raw)):
+        d = _detalle(resp, "cambios_enviados")
+        assert d["mensaje"] == (f"Ya nos enviaste tu respuesta el {fecha_larga(usado)}. {ASESORA} se pondrá en "
+                                "contacto contigo.")
+        assert "ajustará" not in d["mensaje"] and "enlace nuevo" not in d["mensaje"]
+        assert d["comentario"] is None and d["documento"] is None
+    db.refresh(sc)
+    assert sc.estado == "ASIGNADA"
+
+    # Si la marca ya no es de este enlace (el asesor respondió), vuelve el texto de siempre.
+    sc.cambios_cliente_at = None
+    db.commit()
+    assert "ajustará la solicitud" in _detalle(_ver(app_client, raw), "cambios_enviados")["mensaje"]
 
 
 # ─── Funciones puras ────────────────────────────────────────────────────────────────────────────────────────

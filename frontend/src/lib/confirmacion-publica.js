@@ -99,20 +99,29 @@ const PROHIBIDOS = new Set(['authorization', 'cookie']);
  */
 
 /**
+ * T15 r1: cuánto espera pedirPublico la respuesta completa (encabezados y cuerpo) antes de darla por perdida: 30 s.
+ * Una red móvil colgada no deja la página en «Cargando…» ni en «Confirmando…».
+ */
+export const LIMITE_PEDIR_PUBLICO_MS = 30000;
+
+/**
  * POST {apiUrl}{ruta} con el cuerpo en JSON, sin token de sesión (se descarta si viene en `encabezados`), sin cookies,
  * sin Referer y sin caché; nunca redirige a /login ni sigue una redirección HTTP (redirect 'error': un 307/308 repetiría
  * el POST con el token en el cuerpo; el fallo sale por el camino de sin conexión). Devuelve {ok, status, cuerpo (el JSON, o null), mensaje}: si no es
  * 2xx, mensaje es el texto del error leído de 'detail' (texto o dict con mensaje) o de 'message' (el 400 de validación
  * de backend/main.py no trae 'detail'), con errorDeRespuesta de lib/avisos.js. Si la red falla, status 0 y el mensaje
- * de sin conexión. Nunca lanza.
+ * de sin conexión. T15 r1: si la respuesta completa no llega en `limiteMs` (LIMITE_PEDIR_PUBLICO_MS, 30 s), aborta el
+ * fetch (AbortController) y devuelve lo mismo que sin red; no depende de que el fetch respete la señal. Nunca lanza.
  * @param {string} apiUrl la URL del API (API_URL de lib/api.ts)
  * @param {string} ruta p. ej. '/confirmar/ver'
  * @param {unknown} cuerpo p. ej. {token}
  * @param {Record<string, string>} [encabezados] p. ej. {'Idempotency-Key': claveIdempotencia('confirmar')}
  * @param {typeof fetch} [fetchImpl]
+ * @param {number} [limiteMs] el tiempo límite (inyectable en las pruebas)
  * @returns {Promise<RespuestaPublica>}
  */
-export async function pedirPublico(apiUrl, ruta, cuerpo, encabezados = {}, fetchImpl = globalThis.fetch) {
+export async function pedirPublico(apiUrl, ruta, cuerpo, encabezados = {}, fetchImpl = globalThis.fetch,
+  limiteMs = LIMITE_PEDIR_PUBLICO_MS) {
   /** @type {Record<string, string>} */
   const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
   for (const [nombre, valor] of Object.entries(encabezados || {})) {
@@ -120,21 +129,41 @@ export async function pedirPublico(apiUrl, ruta, cuerpo, encabezados = {}, fetch
   }
   const base = String(apiUrl ?? '').replace(/\/+$/, '');
   const camino = String(ruta ?? '').replace(/^\/*/, '/');
-  try {
-    const respuesta = await fetchImpl(`${base}${camino}`, {
-      method: 'POST', headers, body: JSON.stringify(cuerpo ?? {}), credentials: 'omit', referrerPolicy: 'no-referrer',
-      cache: 'no-store', redirect: 'error',
-    });
-    let datos = null;
+  /** @returns {RespuestaPublica} */
+  const sinConexion = () => ({ ok: false, status: 0, cuerpo: null, mensaje: TEXTOS_ENLACE.sin_conexion.mensaje });
+  const control = typeof AbortController === 'function' ? new AbortController() : null;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let reloj;
+  /** @type {Promise<RespuestaPublica>} */
+  const vencido = new Promise((resolver) => {
+    reloj = setTimeout(() => {
+      control?.abort();
+      resolver(sinConexion());
+    }, limiteMs);
+  });
+  /** @returns {Promise<RespuestaPublica>} */
+  const pedir = async () => {
     try {
-      datos = await respuesta.json();
+      const respuesta = await fetchImpl(`${base}${camino}`, {
+        method: 'POST', headers, body: JSON.stringify(cuerpo ?? {}), credentials: 'omit', referrerPolicy: 'no-referrer',
+        cache: 'no-store', redirect: 'error', signal: control?.signal,
+      });
+      let datos = null;
+      try {
+        datos = await respuesta.json();
+      } catch {
+        datos = null;
+      }
+      return { ok: respuesta.ok, status: respuesta.status, cuerpo: datos,
+        mensaje: respuesta.ok ? null : errorDeRespuesta(respuesta.status, datos ?? {}).message };
     } catch {
-      datos = null;
+      return sinConexion();
     }
-    return { ok: respuesta.ok, status: respuesta.status, cuerpo: datos,
-      mensaje: respuesta.ok ? null : errorDeRespuesta(respuesta.status, datos ?? {}).message };
-  } catch {
-    return { ok: false, status: 0, cuerpo: null, mensaje: TEXTOS_ENLACE.sin_conexion.mensaje };
+  };
+  try {
+    return await Promise.race([pedir(), vencido]);
+  } finally {
+    clearTimeout(reloj);
   }
 }
 
@@ -161,7 +190,8 @@ export const TEXTOS_ENLACE = Object.freeze({
   reemplazado: Object.freeze({ titulo: 'Te enviamos un enlace más reciente', icono: 'RefreshCw', tono: 'info',
     mensaje: 'Te enviamos un enlace más reciente para esta {documento}. Ábrelo desde el último mensaje que recibiste.',
     mensajeSinTipo: 'Te enviamos un enlace más reciente. Ábrelo desde el último mensaje que recibiste.' }),
-  cambios_enviados: Object.freeze({ titulo: 'Ya recibimos tus cambios', icono: 'MessageSquare', tono: 'info',
+  // T15 r1: un título neutro, para «Quiero cambiar algo» y para «Ya no la necesito» (el párrafo lo pone el servidor).
+  cambios_enviados: Object.freeze({ titulo: 'Ya recibimos tu respuesta', icono: 'MessageSquare', tono: 'info',
     mensaje: 'Ya nos enviaste tus cambios. Tu asesor ajustará la {documento} y te enviará un enlace nuevo.',
     mensajeSinTipo: 'Ya nos enviaste tus cambios. Tu asesor te enviará un enlace nuevo.' }),
   actualizada: Object.freeze({ titulo: 'Tu asesor actualizó esta {documento}',
@@ -426,7 +456,9 @@ export function textoAntesDeConfirmar(documento) {
  * «¿Qué sigue?» después de confirmar, con el siguiente_paso del servidor:
  * - SC: la lista de 3 pasos (siguiente_paso_sc), tal cual (sin los que no son texto);
  * - COT: {anticipo_por_pagar, instrucciones_pago} -> 'Paga el anticipo de $X.' y 'Cuando lo verifiquemos, crearemos tu
- *   pedido.' (o 'Crearemos tu pedido.' sin anticipo por pagar), con los datos para pagar aparte (saltos de línea);
+ *   pedido.' (o 'Crearemos tu pedido.' sin anticipo por pagar), con los datos para pagar aparte (saltos de línea).
+ *   T15 r1: si la hoja va debajo (vistaConDocumento) y ya trae los datos para pagar en 'Forma de pago', no se repiten
+ *   (instrucciones null);
  * - sin siguiente_paso (la COT reabierta, C10) o sin el monto -> sin pasos.
  * @param {unknown} vista
  * @returns {{pasos: string[], instrucciones: string | null}}
@@ -436,11 +468,13 @@ export function queSigue(vista) {
   if (Array.isArray(paso)) return { pasos: paso.map(texto).filter((p) => p !== null), instrucciones: null };
   if (!esObjeto(paso) || !esNumero(paso.anticipo_por_pagar)) return { pasos: [], instrucciones: null };
   const anticipo = paso.anticipo_por_pagar;
+  const doc = /** @type {any} */ (vista).documento;
+  const enLaHoja = vistaConDocumento(vista) && esObjeto(doc.pago) && texto(doc.pago.instrucciones) !== null;
   return {
     pasos: anticipo > 0
       ? [`Paga el anticipo de ${formatoPesos(anticipo)}.`, 'Cuando lo verifiquemos, crearemos tu pedido.']
       : ['Crearemos tu pedido.'],
-    instrucciones: texto(paso.instrucciones_pago),
+    instrucciones: enLaHoja ? null : texto(paso.instrucciones_pago),
   };
 }
 
@@ -470,7 +504,8 @@ export function lineaConfirmacion(vista) {
  * Los datos de más del encabezado del documento (metaDerecha de DocumentoComercial), en este orden:
  * - pendiente: 'Estado: Esperando tu confirmación'; en la SC, 'Puedes confirmar hasta' (vence_at con fechaHoraCO);
  * - la COT, en cualquier estado con hoja: 'Válida hasta' (valida_hasta, U22-validez; su enlace vence ese día, así que
- *   no se repite el vencimiento);
+ *   no se repite el vencimiento). T15 r1: una COT pendiente sin valida_hasta (enviada antes de T7, con el enlace de 2
+ *   días) lleva la fila de la SC, 'Puedes confirmar hasta';
  * - el pedido: 'Según cotización' (cot_numero de la respuesta, U23).
  * @param {unknown} vista
  * @returns {{etiqueta: string, valor: string}[]}
@@ -482,10 +517,10 @@ export function metaDeLaVista(vista) {
   const meta = [];
   const pendiente = v.estado_enlace === 'pendiente';
   if (pendiente) meta.push({ etiqueta: 'Estado', valor: TEXTOS_ENLACE.pendiente.titulo });
-  if (v.tipo === 'COT') {
-    const valida = fechaSolo(esObjeto(v.documento) ? v.documento.valida_hasta : null);
-    if (valida) meta.push({ etiqueta: 'Válida hasta', valor: valida });
-  } else if (v.tipo === 'SC' && pendiente) {
+  const valida = v.tipo === 'COT' ? fechaSolo(esObjeto(v.documento) ? v.documento.valida_hasta : null) : '';
+  if (valida) {
+    meta.push({ etiqueta: 'Válida hasta', valor: valida });
+  } else if (esTipoConfirmable(v.tipo) && pendiente) {
     const vence = fechaHoraCO(v.vence_at);
     if (vence) meta.push({ etiqueta: 'Puedes confirmar hasta', valor: vence });
   }
