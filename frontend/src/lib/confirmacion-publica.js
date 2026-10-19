@@ -138,12 +138,13 @@ export async function pedirPublico(apiUrl, ruta, cuerpo, encabezados = {}, fetch
 
 /**
  * Título, ícono (nombre de lucide-react) y tono de cada estado de la página.
- * - titulo: un encabezado corto. Nunca es el mensaje del servidor.
+ * - titulo: un encabezado corto. En un 400 nunca es el mensaje del servidor (en el 200 de confirmar y de pedir cambios
+ *   sí lo es: ver vistaDeRespuesta).
  * - mensaje: el párrafo por defecto, si el servidor no manda uno. Es la frase COMPLETA, la misma convención de
  *   MENSAJES_ENLACE (backend/app/core/documento_cliente.py), así que el párrafo puede repetir el título; las partes que
  *   el frontend no conoce ({fecha}, {asesor}) se omiten.
- * - {documento} se cambia por 'solicitud', 'cotización' o 'pedido'. Si no se sabe el tipo, se usan tituloSinTipo y
- *   mensajeSinTipo.
+ * - {documento} se cambia por 'solicitud' o 'cotización': las plantillas están en femenino y los estados que lo usan
+ *   solo existen para la SC y la COT. Si no se sabe el tipo, o es un pedido, se usan tituloSinTipo y mensajeSinTipo.
  * Inmutable.
  */
 export const TEXTOS_ENLACE = Object.freeze({
@@ -201,16 +202,18 @@ function tipoDe(documento) {
   return prefijo ? prefijo[1].toUpperCase() : null;
 }
 
-// El nombre del documento dentro de un mensaje del servidor ('Tu asesor actualizó esta cotización…'), como palabra.
-const NOMBRE_EN_MENSAJE = /(?:^|[^\p{L}])(solicitud|cotización|pedido)(?![\p{L}])/iu;
+// El nombre del documento dentro de un mensaje del servidor ('Tu asesor actualizó esta cotización…'), como palabra
+// suelta. Solo la SC y la COT: las plantillas con {documento} están en femenino (nunca «esta pedido»).
+const NOMBRE_EN_MENSAJE = /(?:^|[^\p{L}\p{N}_])(solicitud|cotización)(?![\p{L}\p{N}_])/iu;
 
 /**
  * Cómo se nombra el documento en los textos: por su tipo o el prefijo de su número; si no viene (el backend solo manda
- * detail.documento en 'vencido' y 'confirmada'), por la palabra que trae el mensaje del servidor; si no, null.
+ * detail.documento en 'vencido' y 'confirmada'), por la palabra que trae el mensaje del servidor; si no, null. Un
+ * pedido también da null (sus textos usan las variantes SinTipo).
  */
 function nombreDe(documento, mensaje) {
   const tipo = tipoDe(documento);
-  if (tipo) return TIPOS_DOCUMENTO[/** @type {'SC'|'COT'|'PVEN'} */ (tipo)].nombre;
+  if (tipo) return tipo === 'PVEN' ? null : TIPOS_DOCUMENTO[/** @type {'SC'|'COT'} */ (tipo)].nombre;
   const m = NOMBRE_EN_MENSAJE.exec(mensaje ?? '');
   return m ? m[1].toLowerCase() : null;
 }
@@ -237,10 +240,10 @@ function textoDelEstado(estado, campo, nombre) {
  * - 422 (el comentario de pedir cambios) -> 'validacion': el mensaje en la misma pantalla y el enlace sigue sirviendo.
  * - Sin red (o una redirección rechazada) -> 'sin_conexion'. Cualquier otro status (404, 405, 500, el 400 de
  *   validación sin detail) -> 'error' con r.mensaje (el texto ya traducido). Los dos con reintentar.
- * Título y mensaje: titulo es un encabezado corto de TEXTOS_ENLACE ({documento} con el nombre del documento, o del
- * mensaje del servidor si el detail no trae documento) y nunca es el mensaje del servidor; mensaje es la frase completa
- * del servidor (o la de TEXTOS_ENLACE), así que el cuerpo puede repetir el título; T15 lo pinta como encabezado +
- * párrafo.
+ * Título y mensaje en un 400: titulo es un encabezado corto de TEXTOS_ENLACE ({documento} con el nombre del documento,
+ * o del mensaje del servidor si el detail no trae documento) y nunca es el mensaje del servidor (en los 200 de
+ * confirmar y de pedir cambios sí lo es, como dice arriba); mensaje es la frase completa del servidor (o la de
+ * TEXTOS_ENLACE), así que el cuerpo puede repetir el título; T15 lo pinta como encabezado + párrafo.
  * confirmadaElTexto = fechaHoraCO(confirmada_el) (RP26: 'sábado 3 de octubre, 3:15 p. m.'). empresa = normalizarMarca
  * (la marca vacía si no viene: nunca 'Nebulae').
  * @param {RespuestaPublica} r

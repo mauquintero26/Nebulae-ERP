@@ -151,6 +151,18 @@ console.log('--- TEST 4b (r1): los textos LITERALES de MENSAJES_ENLACE (SC y COT
   const sinTipo = vista('actualizada', 'Un texto que no nombra el documento.', null);
   assert.equal(sinTipo.titulo, 'Tu asesor actualizó el documento');
   assert.equal(vista('confirmada', null, null).titulo, 'Ya fue confirmada');
+  // Re-revisión r1: las plantillas con {documento} están en femenino y solo sirven para la SC y la COT. Un pedido (por
+  // el número PVEN- o por la palabra en el mensaje) usa las variantes SinTipo: nunca «esta pedido».
+  assert.equal(vista('actualizada', 'Tu asesor actualizó el pedido de esta cotización.', null).titulo,
+    'Tu asesor actualizó esta cotización', 'la palabra pedido no cuenta como tipo');
+  assert.equal(vista('actualizada', 'Tu asesor actualizó el pedido PVEN-20261003-1.', null).titulo,
+    'Tu asesor actualizó el documento');
+  for (const estado of ['actualizada', 'confirmada', 'reemplazado', 'cambios_enviados']) {
+    const v = vista(estado, null, { numero: 'PVEN-20261003-1' });
+    assert.ok(!/est[ae] pedido|la pedido/i.test(`${v.titulo} ${v.mensaje}`), `${estado}: ${v.titulo} / ${v.mensaje}`);
+  }
+  assert.equal(vista('actualizada', 'Se actualizó la solicitud_x.', null).titulo, 'Tu asesor actualizó el documento',
+    'solicitud pegada a _ no es la palabra');
   // Sin mensaje del servidor: la frase completa de MENSAJES_ENLACE (una sola convención).
   assert.equal(vista('no_disponible', null, null).mensaje, MENSAJES_ENLACE.no_disponible);
   assert.equal(vista('invalido', null, null).mensaje, MENSAJES_ENLACE.invalido);
