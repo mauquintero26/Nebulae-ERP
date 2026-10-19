@@ -15,6 +15,9 @@ def auth(token):
 
 LINEA = {"product_name": "Cuna Colecho", "qty": 1}
 CORREO = "cliente@test.com"
+# B3 T8 (U16-envio, RP11, RP19): enviar por WhatsApp exige un telefono de WhatsApp valido (sin el, 400 antes de tocar
+# los enlaces). Las pruebas que mandan canal WhatsApp lo traen.
+TELEFONO = "3001234567"
 
 
 def _sc(db, numero, user_admin, **campos):
@@ -79,7 +82,7 @@ def _actividades(db, tipo, doc_id, accion="ESTADO_CHANGED"):
 def test_enviar_sc_por_whatsapp_registra_el_canal_y_manda_el_correo_de_respaldo(
         app_client, db, admin_token, user_admin, monkeypatch):
     llamadas = _correo_falso(monkeypatch, configurado=True, resultado=True)
-    sc = _sc(db, "SC-ENV001", user_admin, customer_email=CORREO)
+    sc = _sc(db, "SC-ENV001", user_admin, customer_email=CORREO, customer_phone=TELEFONO)
 
     resp = _enviar_sc(app_client, admin_token, sc, {"user_name": "asesor@test", "canal": "WhatsApp"})
     assert resp.status_code == 200, resp.text
@@ -95,9 +98,14 @@ def test_enviar_sc_por_whatsapp_registra_el_canal_y_manda_el_correo_de_respaldo(
     assert ultima.user_name == "asesor@test"
     assert ultima.extra_data["canal"] == "WhatsApp"
     assert ultima.extra_data["correo"] == {"enviado": True, "destino": CORREO, "motivo": None}
-    assert [c["etiqueta"] for c in ultima.extra_data["cambios"]] == ["Canal de envío", "Correo de respaldo"]
+    # B3 T8 (C16): con WhatsApp van tambien 'WhatsApp' y 'Mensaje'. El envio automatico esta apagado por defecto: el
+    # renglon dice que fue manual. T11 cierra la lista con 'Recordatorio automático'.
+    assert [c["etiqueta"] for c in ultima.extra_data["cambios"]] == ["Canal de envío", "WhatsApp", "Mensaje",
+                                                                      "Correo de respaldo"]
     assert ultima.extra_data["cambios"][0]["despues"] == "WhatsApp"
-    assert ultima.extra_data["cambios"][1]["despues"] == f"Correo enviado a {CORREO}."
+    assert ultima.extra_data["cambios"][1]["despues"] == ("Envío manual: se abrió WhatsApp en el computador del asesor "
+                                                          "(el envío automático está apagado).")
+    assert ultima.extra_data["cambios"][3]["despues"] == f"Correo enviado a {CORREO}."
     assert all("campo" not in c for c in ultima.extra_data["cambios"])  # sin 'campo': no se pinta '—' tachado
 
 
@@ -143,7 +151,7 @@ def test_smtp_configurado_lee_las_variables_de_entorno(monkeypatch):
 
 def test_enviar_sc_cliente_sin_correo_no_intenta_enviar(app_client, db, admin_token, user_admin, monkeypatch):
     llamadas = _correo_falso(monkeypatch, configurado=True, resultado=True)
-    sc = _sc(db, "SC-ENV003", user_admin, customer_email=None)
+    sc = _sc(db, "SC-ENV003", user_admin, customer_email=None, customer_phone=TELEFONO)
 
     resp = _enviar_sc(app_client, admin_token, sc, {"user_name": "asesor@test", "canal": "WhatsApp"})
     assert resp.status_code == 200, resp.text
@@ -285,7 +293,8 @@ def test_enviar_sc_por_email_rotula_el_renglon_como_correo(app_client, db, admin
 
 def test_reenviar_una_sc_pendiente_anota_el_canal_en_el_reenvio(app_client, db, admin_token, user_admin, monkeypatch):
     _correo_falso(monkeypatch, configurado=True, resultado=True)
-    sc = _sc(db, "SC-ENV006C", user_admin, customer_email=CORREO, estado="PENDIENTE_CONFIRMACION")
+    sc = _sc(db, "SC-ENV006C", user_admin, customer_email=CORREO, estado="PENDIENTE_CONFIRMACION",
+             customer_phone=TELEFONO)
 
     resp = _enviar_sc(app_client, admin_token, sc, {"user_name": "asesor@test", "canal": "WhatsApp"})
     assert resp.status_code == 200, resp.text
@@ -297,7 +306,7 @@ def test_reenviar_una_sc_pendiente_anota_el_canal_en_el_reenvio(app_client, db, 
 def test_enviar_cot_guarda_canal_envio_y_un_solo_renglon_de_actividad(
         app_client, db, admin_token, user_admin, monkeypatch):
     llamadas = _correo_falso(monkeypatch, configurado=True, resultado=True)
-    cot = _cot(db, "COT-ENV007", customer_email=CORREO)
+    cot = _cot(db, "COT-ENV007", customer_email=CORREO, customer_phone=TELEFONO)
 
     resp = _enviar_cot(app_client, admin_token, cot, {"user_name": "asesor@test", "canal": "WhatsApp"})
     assert resp.status_code == 200, resp.text
@@ -317,9 +326,9 @@ def test_enviar_cot_guarda_canal_envio_y_un_solo_renglon_de_actividad(
         ("ESTADO_CHANGED", "Enviada para confirmación del cliente por WhatsApp")]  # sin UPDATED
     assert filas[0].extra_data["canal"] == "WhatsApp"
     # B3 T7 (C16, decisión del controlador sobre RP11): el envío de la COT agrega «Enlace vigente hasta» (valida_hasta)
-    # después del correo. La cadena de dueños de esta lista es T2 -> T7 -> T8 -> T11.
-    assert [c["etiqueta"] for c in filas[0].extra_data["cambios"]] == ["Canal de envío", "Correo de respaldo",
-                                                                        "Enlace vigente hasta"]
+    # después del correo. La cadena de dueños de esta lista es T2 -> T7 -> T8 -> T11. B3 T8: 'WhatsApp' y 'Mensaje'.
+    assert [c["etiqueta"] for c in filas[0].extra_data["cambios"]] == ["Canal de envío", "WhatsApp", "Mensaje",
+                                                                        "Correo de respaldo", "Enlace vigente hasta"]
 
 
 def test_enviar_cot_sin_canal_deja_el_canal_envio_que_ya_tenia(app_client, db, admin_token, user_admin, monkeypatch):
@@ -402,7 +411,7 @@ def test_una_excepcion_del_envio_se_reporta_como_fallo_y_no_tumba_el_request(
     monkeypatch.setattr("app.core.email.smtp_configurado", lambda: True)
     # El fallo se loguea con traceback (logger.exception): se silencia el logger para no ensuciar la salida.
     monkeypatch.setattr(logging.getLogger("app.api.v1.erp_ventas"), "disabled", True)
-    sc = _sc(db, "SC-ENV009", user_admin, customer_email=CORREO)
+    sc = _sc(db, "SC-ENV009", user_admin, customer_email=CORREO, customer_phone=TELEFONO)
 
     resp = _enviar_sc(app_client, admin_token, sc, {"canal": "WhatsApp"})
     assert resp.status_code == 200, resp.text

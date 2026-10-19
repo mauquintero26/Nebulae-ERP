@@ -130,7 +130,7 @@ def test_reenviar_cotizacion_pendiente_revoca_el_enlace_anterior(app_client, db,
     mover = _contar_mover_lead(monkeypatch)
     _poner_dias(db, None)
     sc = _sc(db)
-    cot = _cot(db, sc)
+    cot = _cot(db, sc, customer_phone="3001234567")  # B3 T8 (RP11, RP19): el reenvio va por WhatsApp
 
     primero = _enviar(app_client, admin_token, cot)
     assert primero.status_code == 200, primero.text
@@ -167,7 +167,7 @@ def test_reenviar_cotizacion_pendiente_revoca_el_enlace_anterior(app_client, db,
                                                "Enlace de confirmación reenviado al cliente por WhatsApp"]
     assert (envios[1].old_estado, envios[1].new_estado) == ("PENDIENTE_CONFIRMACION", "PENDIENTE_CONFIRMACION")
     assert [c["etiqueta"] for c in envios[1].extra_data["cambios"]] == [
-        "Canal de envío", "Correo de respaldo", "Enlace vigente hasta"]
+        "Canal de envío", "WhatsApp", "Mensaje", "Correo de respaldo", "Enlace vigente hasta"]  # B3 T8 (C16)
     # r1 (calidad 5): la validez renovada, en el renglón y en la respuesta (el mismo día: el primer envío fue hoy).
     from app.core.fechas import hoy_colombia
     vence = hoy_colombia() + datetime.timedelta(days=5)

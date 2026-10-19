@@ -10,7 +10,7 @@
   Enlace vigente hasta (C16).
 - La Actividad dice 'Confirmación del pedido enviada (o reenviada) al cliente' + el canal, a nombre de la sesión
   (nombre_de_usuario, RP15: el user_name del body no cuenta). El estado del pedido no cambia.
-- Respuesta {status, link, canal, correo, vence, whatsapp: None} (el WhatsApp es de T8).
+- Respuesta {status, link, canal, correo, vence, whatsapp} (whatsapp: el resultado del envio de T8 con canal WhatsApp).
 - GET /pedidos/{id}.enlace_cliente = {enviado_at, vence_at, vigente} (UTC con 'Z'); nunca el token.
 - Las notas del pedido no van al correo (decisión del usuario pendiente, ruling de T5).
 
@@ -125,7 +125,10 @@ def test_asesor_envia_el_pedido_y_recibe_el_enlace(app_client, db, vendedor_toke
     j = resp.json()
     vence = _vence()
     assert set(j) == CLAVES_RESPUESTA
-    assert j["status"] == "success" and j["canal"] == "WhatsApp" and j["whatsapp"] is None
+    assert j["status"] == "success" and j["canal"] == "WhatsApp"
+    # B3 T8 (U16-envio): el WhatsApp de CONSULTA; con el envio automatico apagado (por defecto) lo manda el asesor con
+    # texto_manual, que lleva el enlace.
+    assert j["whatsapp"]["motivo"] == "ENVIO_AUTOMATICO_APAGADO" and j["link"] in j["whatsapp"]["texto_manual"]
     assert "/pedido/" in j["link"] and j["vence"] == vence.isoformat()
     assert j["correo"]["enviado"] is True and j["correo"]["destino"] == CORREO
     # El correo: el de consulta del pedido (CONSULTA), con la fecha del enlace y lo pagado; sin las notas del pedido.
@@ -149,10 +152,14 @@ def test_asesor_envia_el_pedido_y_recibe_el_enlace(app_client, db, vendedor_toke
     extra = envio.extra_data
     assert extra["canal"] == "WhatsApp" and extra["vence"] == vence.isoformat()
     assert extra["correo"] == {"enviado": True, "destino": CORREO, "motivo": None}
+    # B3 T8 (C16): 'WhatsApp' y 'Mensaje' (sin el enlace) van despues del canal.
     assert extra["cambios"] == [
         {"etiqueta": "Canal de envío", "despues": "WhatsApp"},
+        {"etiqueta": "WhatsApp", "despues": j["whatsapp"]["texto_resultado"]},
+        {"etiqueta": "Mensaje", "despues": j["whatsapp"]["mensaje"]},
         {"etiqueta": "Correo de respaldo", "despues": f"Correo enviado a {CORREO}."},
         {"etiqueta": "Enlace vigente hasta", "despues": vence.strftime("%d/%m/%Y")}]
+    assert _raw(resp) not in str(extra)
     db.refresh(so)
     assert so.estado == "PENDIENTE_COMPRA"
 

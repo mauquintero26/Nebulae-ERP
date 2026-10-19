@@ -74,7 +74,8 @@ _bloquear_correo_real()  # database.py recargo el .env al importarse: se quitan 
 
 TABLAS = ["customer_requests", "sales_quotations", "sale_orders", "purchase_orders_full", "activity_logs",
           "document_confirmation_tokens", "customers", "sales_orders",
-          "users", "brands", "categories", "products", "product_skus"]
+          "users", "brands", "categories", "products", "product_skus",
+          "envios_al_cliente"]  # B3 T8 (fa6_030): los mensajes de WhatsApp al cliente tampoco pueden escaparse
 MODULOS_CON_SESSIONLOCAL = (dbmod, m_compras, m_inv, m_f4)
 
 # Salvaguarda como la de conftest.py: jamas correr contra una base que no se identifique como de pruebas.

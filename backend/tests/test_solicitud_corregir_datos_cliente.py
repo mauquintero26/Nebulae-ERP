@@ -677,7 +677,7 @@ def test_t11_f5_los_envios_al_cliente_no_muestran_su_correo_a_otros_roles(app_cl
     # Ronda 1 (5): sin correo registrado o con el correo sin configurar, el texto no lleva la direccion: se conserva.
     monkeypatch.setattr(correo, "smtp_configurado", lambda: False)
     sin_configurar = _sc(db, "SC-CDC205", user_admin, cli)
-    sin_correo = _sc(db, "SC-CDC206", user_admin)
+    sin_correo = _sc(db, "SC-CDC206", user_admin, customer_phone="3001234567")  # B3 T8 (RP11): WhatsApp con telefono
     for sc_envio, texto in ((sin_configurar, "No se envió correo: el envío de correos no está configurado en el sistema."),
                             (sin_correo, "No se envió correo: el cliente no tiene correo registrado.")):
         resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc_envio.id}/enviar-confirmacion",

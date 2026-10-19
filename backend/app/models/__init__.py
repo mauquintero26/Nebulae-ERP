@@ -9,6 +9,7 @@ from app.models.expenses import OperationalExpense
 from app.models.crm import Alert
 
 from app.models.erp_documents import Supplier, CustomerRequest, SalesQuotation, SaleOrder, PaymentPending, PurchaseOrderFull, GoodsReceipt, ActivityLog
+from app.models.envios import EnvioAlCliente  # Bloque 3 (U16-envio) — mensajes al cliente por WhatsApp
 
 # Fase 1B — modelos normalizados
 from app.models.fase1b import (

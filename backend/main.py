@@ -8,6 +8,7 @@ from app.api.v1 import auth, catalog, quotations, inventory, finance, store, crm
 from app.api.v1 import erp_ventas, erp_ventas_fase4, erp_compras, erp_compras_asignaciones, ecommerce, erp_logistica, erp_inventario
 from app.api.v1 import confirmacion_publica  # Gate 1/2 — confirmacion publica de SC/COT por link, sin autenticacion
 from app.api.v1 import empresa  # Bloque 3 (MARCA) — datos de la empresa; su router_publico va sin autenticacion
+from app.api.v1 import envio_cliente  # Bloque 3 (U16-envio) — WhatsApp automatico por Chatwoot y estado de entrega
 from app.api.v1 import whatsapp_webhook  # BLOQUE 5 — Modo Sombra WhatsApp
 from app.api.v1 import debug_db  # Hardening — endpoint de verificacion de DB (solo ADMIN)
 from app.api import ws
@@ -161,6 +162,7 @@ app.include_router(chat.router, prefix="/api/v1/chat", tags=["Chat Omnicanal"])
 app.include_router(ws.router, prefix="/ws", tags=["WebSockets"])
 app.include_router(erp_ventas.router, prefix="/api/v1/ventas", tags=["ERP Ventas"])
 app.include_router(erp_ventas_fase4.router, prefix="/api/v1/ventas", tags=["ERP Ventas Fase 4"])
+app.include_router(envio_cliente.router, prefix="/api/v1/ventas", tags=["ERP Ventas - Envío al cliente"])
 app.include_router(erp_compras.router, prefix="/api/v1/compras", tags=["ERP Compras"])
 app.include_router(erp_compras_asignaciones.router, prefix="/api/v1/compras", tags=["ERP Compras - Asignaciones"])
 app.include_router(erp_logistica.router, prefix="/api/v1/logistica", tags=["ERP Logística y Tránsito"])

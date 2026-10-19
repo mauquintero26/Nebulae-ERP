@@ -4,7 +4,7 @@ Endpoints for: Solicitudes de Cliente (SC), Cotizaciones (COT),
 Pedidos de Venta (VEN), Ordenes Pendientes por Pagar (PXP)
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import text, func, select, case, and_, or_
 from sqlalchemy.exc import DataError, DBAPIError, IntegrityError, OperationalError
 from typing import Optional, List
@@ -26,10 +26,11 @@ from app.api.dependencies import (
 )
 from app.models.users import User
 from app.core.busqueda import productos_ilike
-from app.core import cambios_documento, clientes
+from app.core import cambios_documento, clientes, envio_whatsapp
 from app.core.admin_config import config_entero, guardar_config
 from app.core.correo_documento import correo_documento
 from app.core.empresa import PREFIJOS_RESERVADOS, perfil_publico
+from app.core.telefonos import e164_whatsapp, telefono_del_documento, telefono_legible
 from app.core.iva import (
     CLAVE_TARIFA_DEFECTO, MENSAJE_TARIFA_INVALIDA, normalizar_tarifa_iva, sku_id_entero, tarifa_iva_defecto,
     tarifas_de_producto, calcular_totales_cotizacion, desglose_documento, lineas_con_tarifa, nombre_de_linea,
@@ -272,10 +273,16 @@ DIAS_VALIDEZ_COT_DEFECTO = 5
 DIAS_VALIDEZ_COT_MIN, DIAS_VALIDEZ_COT_MAX = 1, 60
 DIAS_ENLACE_PEDIDO = 30
 
-def _canal_de_envio(body: dict, customer_email: Optional[str]) -> Optional[str]:
-    """Canal elegido para enviar la SC/COT al cliente, o None si el body no trae (el Hub no pregunta el canal en
+_SIN_TELEFONO_WHATSAPP = ("El cliente no tiene un teléfono de WhatsApp válido: elige Email u Otro, o corrige su teléfono "
+                          "antes de enviar.")
+
+
+def _canal_de_envio(body: dict, customer_email: Optional[str], telefono: Optional[str] = None) -> Optional[str]:
+    """Canal elegido para enviar la SC/COT/PVEN al cliente, o None si el body no trae (el Hub no pregunta el canal en
     todas las rutas). Se valida ANTES de revocar o crear tokens: un canal malo no cambia nada. Elegir 'Email' exige
-    que el cliente tenga correo; con WhatsApp u Otro el correo sale ademas como respaldo (_enviar_correo_confirmacion)."""
+    que el cliente tenga correo; con WhatsApp u Otro el correo sale ademas como respaldo (_enviar_correo_confirmacion).
+    B3 T8 (U16-envio, RP19, C27): elegir 'WhatsApp' exige un WhatsApp valido segun e164_whatsapp (la unica regla) del
+    `telefono` que recibe: telefono_del_documento(doc), el del documento o el de la ficha del cliente."""
     canal = body.get("canal")
     if isinstance(canal, str):
         canal = canal if canal.strip() else None
@@ -286,7 +293,22 @@ def _canal_de_envio(body: dict, customer_email: Optional[str]) -> Optional[str]:
     if canal == "Email" and not (customer_email or "").strip():
         raise HTTPException(400, "El cliente no tiene correo registrado: elige WhatsApp u Otro, o agrega su correo "
                                  "antes de enviar.")
+    if canal == "WhatsApp" and e164_whatsapp(telefono) is None:
+        raise HTTPException(400, _SIN_TELEFONO_WHATSAPP)
     return canal
+
+
+def _enviar_whatsapp(db: Session, doc_tipo: str, doc, enlace: str, user_name, proposito: str = "CONFIRMACION",
+                     vence: Optional[datetime.date] = None) -> dict:
+    """B3 T8 (U16-envio, C21): el WhatsApp automatico del envio, DESPUES del commit unico (RP16). Una sola funcion de
+    envio (envio_whatsapp.enviar_documento, C15): el telefono sale de telefono_del_documento (C27), el total solo en la
+    COT y el PVEN, y vence es la fecha real (C14). Agrega la fila EnvioAlCliente sin commit: la confirma el commit del
+    renglon del envio. Nunca lanza por un fallo de Chatwoot (el documento ya quedo enviado: estado_si_whatsapp_falla)."""
+    return envio_whatsapp.enviar_documento(
+        db, doc_tipo=doc_tipo, doc_id=doc.id, doc_numero=doc.numero, cliente_nombre=doc.customer_name,
+        cliente_email=doc.customer_email, telefono=telefono_del_documento(doc), enlace=enlace,
+        total_cop=doc.total_cop if doc_tipo in ("COT", "PVEN") else None, vence=vence, user_name=user_name,
+        proposito=proposito)
 
 def _enviar_correo_confirmacion(destino: Optional[str], asunto: str, html: str,
                                 remitente_nombre: Optional[str] = None) -> dict:
@@ -347,12 +369,16 @@ def _detalle_envio(canal: Optional[str], correo_res: Optional[dict], wa_res: Opt
     el 'antes', y aqui no hay valor anterior.
     - correo_res None: el correo todavia no salio (el PVEN anota su envio ANTES del correo, RP16): sin su renglon.
     - vence (la COT con valida_hasta y el PVEN con su ultimo dia; la SC no lo pasa): 'Enlace vigente hasta' dd/mm/aaaa.
-    - wa_res y seguimiento: la firma completa de C16. Sus renglones ('WhatsApp' y 'Mensaje' despues del canal; y
-      'Recordatorio automático' al final) los agregan T8 y T11 en los lugares marcados; en T7 no producen renglones."""
+    - wa_res (T8, U16-envio): 'WhatsApp' con su texto_resultado y, si hay mensaje, 'Mensaje' (el texto enviado con
+      '[enlace de confirmación]' en lugar del enlace).
+    - seguimiento: la firma completa de C16; 'Recordatorio automático' al final lo agrega T11 en el lugar marcado."""
     cambios = []
     if canal:
         cambios.append({"etiqueta": "Canal de envío", "despues": canal})
-    # T8 (U16-envio): aqui van 'WhatsApp' y 'Mensaje' a partir de wa_res.
+    if wa_res is not None:
+        cambios.append({"etiqueta": "WhatsApp", "despues": wa_res["texto_resultado"]})
+        if wa_res.get("mensaje"):
+            cambios.append({"etiqueta": "Mensaje", "despues": wa_res["mensaje"]})
     if correo_res is not None:
         cambios.append({"etiqueta": "Correo" if canal == "Email" else "Correo de respaldo",
                         "despues": correo_res["mensaje"]})
@@ -366,11 +392,14 @@ def _extra_data_de_envio(canal: Optional[str], correo_res: Optional[dict], wa_re
     """extra_data del renglon de un envio al cliente: ESTADO_CHANGED de la SC y la COT y ENVIADO_AL_CLIENTE del PVEN.
     RP31: el UNICO constructor de ese extra_data y el unico que llama a _detalle_envio (T8 y T11 solo le pasan wa_res y
     seguimiento). correo es None mientras el correo no ha salido (el PVEN, RP16); vence (date) va tambien como
-    'AAAA-MM-DD' en la clave 'vence' cuando se pasa."""
+    'AAAA-MM-DD' en la clave 'vence' cuando se pasa. B3 T8: con wa_res, la clave 'whatsapp' = {enviado, estado, modo,
+    destino, motivo, envio_id} (sin el mensaje ni el enlace)."""
     extra = {"canal": canal,
              "correo": ({k: correo_res[k] for k in ("enviado", "destino", "motivo")}
                         if correo_res is not None else None),
              "cambios": _detalle_envio(canal, correo_res, wa_res=wa_res, vence=vence, seguimiento=seguimiento)}
+    if wa_res is not None:
+        extra["whatsapp"] = {k: wa_res.get(k) for k in ("enviado", "estado", "modo", "destino", "motivo", "envio_id")}
     if vence is not None:
         extra["vence"] = vence.isoformat()
     return extra
@@ -1031,6 +1060,9 @@ def _sc_dict(sc: CustomerRequest) -> dict:
         "customer_id": sc.customer_id,
         "customer_name": sc.customer_name,
         "customer_phone": sc.customer_phone,
+        # B3 T8 (C27, RP19, RP20): el WhatsApp al que saldria un envio (el del documento o el de la ficha), en e164, o
+        # None si no es valido. Los listados cargan `customer` con selectinload (sin una consulta por fila).
+        "telefono_whatsapp": e164_whatsapp(telefono_del_documento(sc)),
         "customer_email": sc.customer_email,
         "customer_address": sc.customer_address,
         "advisor_name": sc.advisor_name,
@@ -1245,6 +1277,7 @@ def _cot_dict(cot: SalesQuotation) -> dict:
         "customer_id": cot.customer_id,
         "customer_name": cot.customer_name,
         "customer_phone": cot.customer_phone,
+        "telefono_whatsapp": e164_whatsapp(telefono_del_documento(cot)),  # B3 T8 (C27, RP19, RP20)
         "customer_email": cot.customer_email,
         "customer_address": cot.customer_address,
         "cotizador": cot.cotizador,
@@ -1292,6 +1325,7 @@ def _ven_dict(v: SaleOrder) -> dict:
         "customer_id": v.customer_id,
         "customer_name": v.customer_name,
         "customer_phone": v.customer_phone,
+        "telefono_whatsapp": e164_whatsapp(telefono_del_documento(v)),  # B3 T8 (C27, RP19, RP20)
         "customer_email": v.customer_email,
         "customer_address": v.customer_address,
         "direccion_entrega": v.direccion_entrega,
@@ -1373,17 +1407,26 @@ def _sin_valores_de_contacto(extra):
     correo.destino y su cambio 'Correo' / 'Correo de respaldo', SOLO si lleva la direccion ('Correo enviado a …', 'No se
     pudo enviar el correo a …'), pasa a «Correo enviado» o «No se pudo enviar» segun correo.enviado. Sin correo
     registrado o con el correo sin configurar el texto no lleva la direccion y se conserva. La descripcion de esos
-    renglones no lleva la direccion."""
+    renglones no lleva la direccion.
+    B3 T8 (el mismo criterio para el WhatsApp): un renglon con 'whatsapp' (el envio y MENSAJE_CLIENTE) pierde
+    whatsapp.destino, el renglon 'Número' y el numero dentro del cambio 'WhatsApp' («Enviado automáticamente desde el
+    WhatsApp de la empresa.»)."""
     if not isinstance(extra, dict):
         return extra
     correo = extra.get("correo")
     de_envio = isinstance(correo, dict)
+    whatsapp = extra.get("whatsapp")
+    de_whatsapp = isinstance(whatsapp, dict)
     nuevo = dict(extra)
     if de_envio:
         nuevo["correo"] = {k: v for k, v in correo.items() if k != "destino"}
+    if de_whatsapp:
+        nuevo["whatsapp"] = {k: v for k, v in whatsapp.items() if k != "destino"}
     if isinstance(extra.get("cambios"), list):
         resultado = "Correo enviado" if de_envio and correo.get("enviado") is True else "No se pudo enviar"
         destino = correo.get("destino") if de_envio else None
+        numero = whatsapp.get("destino") if de_whatsapp and isinstance(whatsapp.get("destino"), str) else None
+        legible = telefono_legible(numero) if numero else None
         cambios = []
         for c in extra["cambios"]:
             if isinstance(c, dict) and c.get("campo") in _CAMPOS_DE_CONTACTO:
@@ -1392,6 +1435,13 @@ def _sin_valores_de_contacto(extra):
                   and c.get("etiqueta") in _ETIQUETAS_CORREO_DE_ENVIO and isinstance(c.get("despues"), str)
                   and ("@" in c["despues"] or (isinstance(destino, str) and destino and destino in c["despues"]))):
                 c = {**c, "despues": resultado}
+            elif de_whatsapp and isinstance(c, dict) and "campo" not in c and c.get("etiqueta") == "Número":
+                continue
+            elif (de_whatsapp and numero and isinstance(c, dict) and "campo" not in c
+                  and c.get("etiqueta") == "WhatsApp" and isinstance(c.get("despues"), str)):
+                texto = c["despues"].replace(f" al {legible}", "").replace(f" al {numero}", "")
+                c = {**c, "despues": texto.replace(legible, "el número del cliente")
+                                          .replace(numero, "el número del cliente")}
             cambios.append(c)
         nuevo["cambios"] = cambios
     return nuevo
@@ -1467,7 +1517,9 @@ def list_solicitudes(
             productos_ilike(CustomerRequest.productos, like)
         )
     total = q.count()
-    items = q.order_by(CustomerRequest.created_at.desc()).offset(offset).limit(limit).all()
+    # B3 T8 (RP20): la ficha del cliente en UNA consulta para toda la pagina (telefono_whatsapp de _sc_dict).
+    items = (q.order_by(CustomerRequest.created_at.desc()).offset(offset).limit(limit)
+             .options(selectinload(CustomerRequest.customer)).all())
     # H32: las cotizaciones de cada solicitud (version ligera: id, numero y estado), con una sola consulta para toda la
     # pagina. Con eso la lista dice cuantas solicitudes generaron cotizacion de verdad (el detalle trae la completa).
     ids = [s.id for s in items]
@@ -2172,8 +2224,9 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
         raise HTTPException(400, "Agrega al menos un producto a la solicitud antes de enviarla al cliente: "
                                  "sin productos no hay nada que confirmar ni que cotizar.")
 
-    # H27: el canal se valida antes de revocar o crear tokens: un canal malo no cambia nada.
-    canal = _canal_de_envio(body, sc.customer_email)
+    # H27: el canal se valida antes de revocar o crear tokens: un canal malo no cambia nada. B3 T8 (RP19, C27): con
+    # WhatsApp, tambien el telefono (el de la SC o el de la ficha del cliente).
+    canal = _canal_de_envio(body, sc.customer_email, telefono_del_documento(sc))
 
     from app.core.confirmation_tokens import create_confirmation_token, enlace_publico, revoke_pending_tokens
 
@@ -2205,6 +2258,11 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
     asunto, html = _armar_correo_o_revertir(db, perfil, "SC", numero, cliente, link)
     db.commit()
 
+    autor = body.get("user_name") or getattr(user, "email", None)
+    # B3 T8 (U16-envio, C21, RP16): el WhatsApp automatico va DESPUES del commit unico y antes del correo. Si no sale, la
+    # SC queda igual en Pendiente por confirmacion (el enlace ya sirve) y el asesor lo manda a mano. Su fila
+    # EnvioAlCliente la confirma el commit del renglon de abajo.
+    wa_res = _enviar_whatsapp(db, "SC", sc, link, autor) if canal == "WhatsApp" else None
     # H39: el estado ya esta guardado; ahora se intenta el correo de respaldo (siempre, sea cual sea el canal) y,
     # con su resultado a la mano, se anota el envio en la Actividad.
     correo_res = _enviar_correo_confirmacion(destino, asunto, html,
@@ -2214,10 +2272,10 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
         descripcion += f" {CANALES_ENVIO[canal]}"
     _log(db, "SC", sc.id, numero, "ESTADO_CHANGED", descripcion,
          old_estado=old_estado, new_estado="PENDIENTE_CONFIRMACION",
-         user_name=body.get("user_name") or getattr(user, "email", None),
-         extra_data=_extra_data_de_envio(canal, correo_res))
+         user_name=autor, extra_data=_extra_data_de_envio(canal, correo_res, wa_res=wa_res))
 
-    return {"status": "success", "data": _sc_dict(sc), "link_confirmacion": link, "canal": canal, "correo": correo_res}
+    return {"status": "success", "data": _sc_dict(sc), "link_confirmacion": link, "canal": canal, "correo": correo_res,
+            "whatsapp": wa_res}
 
 
 def _exigir_sin_documentos_activos(db: Session, sc: CustomerRequest) -> None:
@@ -2541,7 +2599,9 @@ def list_cotizaciones(
             productos_ilike(SalesQuotation.productos, like)
         )
     total = q.count()
-    items = q.order_by(SalesQuotation.created_at.desc()).offset(offset).limit(limit).all()
+    # B3 T8 (RP20): la ficha del cliente en UNA consulta para toda la pagina (telefono_whatsapp de _cot_dict).
+    items = (q.order_by(SalesQuotation.created_at.desc()).offset(offset).limit(limit)
+             .options(selectinload(SalesQuotation.customer)).all())
     # COT-LISTA: los pedidos de cada cotizacion (version ligera: id, numero y estado, del mas viejo al mas nuevo), con
     # una sola consulta para toda la pagina. Con eso la lista distingue una COT confirmada con pedido vigente de una
     # cuyo pedido se cancelo (el detalle trae el pedido completo).
@@ -3494,8 +3554,9 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
         raise HTTPException(400, f"Esta cotización ya tiene el pedido de venta {pven.numero} activo; no tiene sentido "
                                  f"volver a pedir confirmación.")
 
-    # H27: el canal se valida despues de las guardas de estado (N4, H46) y antes de revocar o crear tokens.
-    canal = _canal_de_envio(body, cot.customer_email)
+    # H27: el canal se valida despues de las guardas de estado (N4, H46) y antes de revocar o crear tokens. B3 T8
+    # (RP19, C27): con WhatsApp, tambien el telefono (el de la COT o el de la ficha del cliente).
+    canal = _canal_de_envio(body, cot.customer_email, telefono_del_documento(cot))
 
     from app.core.confirmation_tokens import create_confirmation_token, enlace_publico, revoke_pending_tokens
 
@@ -3543,6 +3604,10 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
     # COT en PENDIENTE_CONFIRMACION no toca la SC (salia sin hacer nada), y sin refresh ni sincronizacion no queda
     # abierta una transaccion de lectura mientras sale el SMTP sincrono.
     db.commit()
+    autor = body.get("user_name") or getattr(user, "email", None)
+    # B3 T8 (U16-envio, C21, RP16): el WhatsApp automatico va DESPUES del commit unico y antes del correo, con la
+    # validez real (C14). Si no sale, la COT queda igual en Pendiente por confirmacion y el asesor lo manda a mano.
+    wa_res = _enviar_whatsapp(db, "COT", cot, link, autor, vence=valida_hasta) if canal == "WhatsApp" else None
     # H39: el correo de respaldo se intenta (y su resultado se conoce) antes de anotar el envio en la Actividad.
     correo_res = _enviar_correo_confirmacion(destino, asunto, html,
                                              remitente_nombre=perfil["nombre_comercial"] or None)
@@ -3551,22 +3616,27 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
         # unico lugar donde "se envia la cotizacion"). B3 T6 (RP16): despues del correo y sin commit propio
         # (commit=False solo hace flush); lo confirma el commit del renglon de abajo. Si falla, el rollback deshace solo
         # lo del lead: el envio ya quedo confirmado arriba. B3 T7 (C13): el reenvio no lo mueve (ya se movio).
-        try:
-            mover_lead_de_solicitud(sc_id, "QUOTATION", db, commit=False)
-        except Exception as exc:
-            db.rollback()
-            logger.error(f"Error al mover el lead tras enviar la cotizacion {cot_id} para confirmacion: {exc}",
-                         exc_info=True)
+        if wa_res is not None:
+            # B3 T8: la fila EnvioAlCliente del WhatsApp (que ya salio) esta en la sesion sin confirmar: un rollback la
+            # borraria. El lead va en su savepoint: si falla, solo se deshace lo del lead.
+            _lead_en_savepoint(db, f"mover el lead tras enviar la cotizacion {cot_id} para confirmacion",
+                               lambda: mover_lead_de_solicitud(sc_id, "QUOTATION", db, commit=False))
+        else:
+            try:
+                mover_lead_de_solicitud(sc_id, "QUOTATION", db, commit=False)
+            except Exception as exc:
+                db.rollback()
+                logger.error(f"Error al mover el lead tras enviar la cotizacion {cot_id} para confirmacion: {exc}",
+                             exc_info=True)
     descripcion = "Enlace de confirmación reenviado al cliente" if es_reenvio else "Enviada para confirmación del cliente"
     if canal:
         descripcion += f" {CANALES_ENVIO[canal]}"
     _log(db, "COT", cot_id, numero, "ESTADO_CHANGED", descripcion,
          old_estado=old_estado, new_estado="PENDIENTE_CONFIRMACION",
-         user_name=body.get("user_name") or getattr(user, "email", None),
-         extra_data=_extra_data_de_envio(canal, correo_res, vence=valida_hasta))
+         user_name=autor, extra_data=_extra_data_de_envio(canal, correo_res, wa_res=wa_res, vence=valida_hasta))
 
     return {"status": "success", "data": _cot_dict(cot), "link_confirmacion": link, "canal": canal, "correo": correo_res,
-            "vence": valida_hasta.isoformat()}
+            "vence": valida_hasta.isoformat(), "whatsapp": wa_res}
 
 
 @router.post("/cotizaciones/{cot_id}/confirmar")
@@ -3698,7 +3768,9 @@ def list_pedidos(
     monto, saldo, anticipo = q.with_entities(suma(SaleOrder.total_cop), suma(SaleOrder.saldo_cop),
                                              suma(SaleOrder.anticipo_cop)).one()
     por_estado = dict(q.with_entities(SaleOrder.estado, func.count(SaleOrder.id)).group_by(SaleOrder.estado).all())
-    items = q.order_by(SaleOrder.created_at.desc()).offset(offset).limit(limit).all()
+    # B3 T8 (RP20): la ficha del cliente en UNA consulta para toda la pagina (telefono_whatsapp de _ven_dict).
+    items = (q.order_by(SaleOrder.created_at.desc()).offset(offset).limit(limit)
+             .options(selectinload(SaleOrder.customer)).all())
     # H4: el asesor real de cada pedido (el de su COT o, si no, el de su SC), con 2 consultas en bloque.
     asesores = _asesores_de_pedidos(db, items)
     return {"status": "success", "total": total,
@@ -3860,8 +3932,9 @@ def enviar_pedido_al_cliente(ven_id: int, body: dict = Body(default_factory=dict
       respaldo, sea cual sea el canal) y su resultado completa el renglon (_extra_data_de_envio, RP31). Si el correo no
       se puede armar, se revierte todo y responde 500, como los envios de SC y COT.
     - El autor es el usuario de la sesion (nombre_de_usuario, RP15): el user_name del body no cuenta.
-    - Respuesta: {status, link, canal, correo, vence ('AAAA-MM-DD'), whatsapp}. whatsapp es None hasta T8 (sin envio
-      automatico, el frontend abre WhatsApp con el mensaje, como en la cotizacion)."""
+    - Respuesta: {status, link, canal, correo, vence ('AAAA-MM-DD'), whatsapp}. B3 T8: con canal WhatsApp, whatsapp es el
+      resultado de enviar_documento (proposito CONSULTA; con el automatico apagado, ENVIO_AUTOMATICO_APAGADO y el
+      frontend abre WhatsApp con texto_manual); con otro canal, None."""
     try:
         so = db.query(SaleOrder).filter(SaleOrder.id == ven_id).with_for_update().first()
     except OperationalError as exc:
@@ -3880,7 +3953,7 @@ def enviar_pedido_al_cliente(ven_id: int, body: dict = Body(default_factory=dict
         raise HTTPException(409, "El pedido está cancelado: no se puede enviar al cliente.")
     if not so.productos or Decimal(str(so.total_cop or 0)) <= 0:
         raise HTTPException(400, "El pedido no tiene productos ni total; no hay nada que enviar.")
-    canal = _canal_de_envio(body, so.customer_email)
+    canal = _canal_de_envio(body, so.customer_email, telefono_del_documento(so))  # B3 T8: RP19 y C27
 
     from app.core.confirmation_tokens import create_confirmation_token, enlace_publico, revoke_pending_tokens
 
@@ -3907,18 +3980,23 @@ def enviar_pedido_al_cliente(ven_id: int, body: dict = Body(default_factory=dict
     renglon_id = renglon.id
     db.commit()  # RP16: el UNICO commit antes del correo
 
+    # B3 T8 (U16-envio, U23, C15, C21): el WhatsApp automatico de CONSULTA va despues del commit unico y antes del correo;
+    # un fallo no deshace el envio (el enlace ya sirve). Su fila EnvioAlCliente la confirma el commit de abajo.
+    wa_res = (_enviar_whatsapp(db, "PVEN", so, link, nombre_de_usuario(user), proposito="CONSULTA", vence=vence)
+              if canal == "WhatsApp" else None)
     correo_res = _enviar_correo_confirmacion(destino, asunto, html,
                                              remitente_nombre=perfil["nombre_comercial"] or None)
     try:
         db.query(ActivityLog).filter(ActivityLog.id == renglon_id).update(
-            {ActivityLog.extra_data: _extra_data_de_envio(canal, correo_res, vence=vence)}, synchronize_session=False)
+            {ActivityLog.extra_data: _extra_data_de_envio(canal, correo_res, wa_res=wa_res, vence=vence)},
+            synchronize_session=False)
         db.commit()
     except Exception:
-        # El enlace y el renglon ya quedaron; solo falta el resultado del correo en la Actividad.
+        # El enlace y el renglon ya quedaron; solo falta el resultado del correo (y del WhatsApp) en la Actividad.
         db.rollback()
         logger.exception("El pedido %s se envio al cliente, pero no se pudo anotar el resultado del correo", numero)
     return {"status": "success", "link": link, "canal": canal, "correo": correo_res, "vence": vence.isoformat(),
-            "whatsapp": None}
+            "whatsapp": wa_res}
 
 
 def _descontar_inventario_despacho(db: Session, v: SaleOrder, warehouse_id, user_label: Optional[str] = None) -> None:
@@ -4553,24 +4631,25 @@ def get_alertas(user: User = Depends(require_roles(*ROLE_ADMIN, *ROLE_ASESOR, *R
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=dias)
 
     # SC activos sin cambio de estado en N dias (excluye Soporte Tecnico, que tiene su propio umbral)
+    # B3 T8 (RP20): las tres listas cargan la ficha del cliente con selectinload (telefono_whatsapp de los dicts).
     sc_alertas = db.query(CustomerRequest).filter(
         CustomerRequest.updated_at <= cutoff,
         CustomerRequest.estado.notin_(["CONFIRMADA", "CANCELADA"]),
         CustomerRequest.tipo_solicitud != "Soporte Tecnico",
         _sc_sin_documentos_activos(),  # R20: la alerta la lleva su COT o su pedido
-    ).all()
+    ).options(selectinload(CustomerRequest.customer)).all()
 
     # COT activas sin cambio de estado en N dias
     cot_alertas = db.query(SalesQuotation).filter(
         SalesQuotation.updated_at <= cutoff,
         SalesQuotation.estado.notin_(["CONFIRMADA", "RECHAZADA"])
-    ).all()
+    ).options(selectinload(SalesQuotation.customer)).all()
 
     # Soporte Tecnico: umbral propio por urgencia, solo tickets abiertos/en proceso
     soporte_abiertos = db.query(CustomerRequest).filter(
         CustomerRequest.tipo_solicitud == "Soporte Tecnico",
         CustomerRequest.estado_soporte.in_(["ABIERTO", "EN_PROCESO"]),
-    ).all()
+    ).options(selectinload(CustomerRequest.customer)).all()
     soporte_alertas = []
     for sc in soporte_abiertos:
         horas = _get_alert_hours_soporte(db, sc.urgencia)
@@ -4606,7 +4685,11 @@ _CONFIG_LECTURA_GENERAL = {"alerta_sc_dias", "alerta_cot_dias", "alerta_ven_dias
 # endpoint, que las valida: empresa_ y documentos_ por PUT /empresa (Configuracion General). T8 agrega envio_whatsapp_ y
 # T10 tareas_, cada una con su mensaje.
 _MENSAJE_CLAVES_DE_EMPRESA = "Los datos de la empresa y de los documentos se cambian en Configuración General."
-_PREFIJOS_RESERVADOS_CONFIG = {prefijo: _MENSAJE_CLAVES_DE_EMPRESA for prefijo in PREFIJOS_RESERVADOS}
+# B3 T8 (RP18, decision 4 del controlador): envio_whatsapp_* va por PUT /envio-cliente/whatsapp/config.
+_MENSAJE_CLAVES_DE_WHATSAPP = ("El número de WhatsApp de la empresa y el envío automático se cambian en Envío "
+                               "automático por WhatsApp.")
+_PREFIJOS_RESERVADOS_CONFIG = {**{prefijo: _MENSAJE_CLAVES_DE_EMPRESA for prefijo in PREFIJOS_RESERVADOS},
+                               envio_whatsapp.PREFIJO_CLAVES: _MENSAJE_CLAVES_DE_WHATSAPP}
 
 
 def _validar_tarifa_defecto(valor) -> str:
