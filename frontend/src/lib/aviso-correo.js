@@ -22,11 +22,15 @@ const SIGUIENTE_PASO = {
 const SIGUIENTE_PASO_POR_DEFECTO = 'El cliente todavía no recibió el enlace: cópialo y envíaselo por otro medio.';
 
 /**
+ * B3 T13 (U16-envio punto 11): con `whatsappEnviado` (el WhatsApp automático del canal WhatsApp salió, avisoWhatsApp
+ * de envio-whatsapp.js en 'ok'), un correo de respaldo que no salió ya no es una alerta: 'info' con '… El WhatsApp sí
+ * salió.'. Sin el tercer parámetro no cambia nada.
  * @param {{enviado: boolean, destino?: string | null, motivo?: string | null, mensaje?: string} | null | undefined} correo
  * @param {string | null} [canal] 'WhatsApp' | 'Email' | 'Otro' | null (el Hub antes no preguntaba el canal)
- * @returns {{tono: 'ok' | 'alerta', texto: string} | null}
+ * @param {boolean} [whatsappEnviado]
+ * @returns {{tono: 'ok' | 'info' | 'alerta', texto: string} | null}
  */
-export function avisoCorreo(correo, canal) {
+export function avisoCorreo(correo, canal, whatsappEnviado = false) {
   if (!correo || typeof correo !== 'object') return null;
   if (correo.enviado) {
     const base = (correo.mensaje || `Correo enviado a ${correo.destino || 'el cliente'}.`).trim().replace(/\.$/, '');
@@ -35,6 +39,7 @@ export function avisoCorreo(correo, canal) {
   }
   const porMotivo = MENSAJE_POR_MOTIVO[correo.motivo];
   const mensaje = (correo.mensaje || (porMotivo ? porMotivo(correo.destino) : 'No se envió el correo de respaldo.')).trim();
+  if (whatsappEnviado === true && canal === 'WhatsApp') return { tono: 'info', texto: `${mensaje} El WhatsApp sí salió.` };
   return { tono: 'alerta', texto: `${mensaje} ${SIGUIENTE_PASO[canal] || SIGUIENTE_PASO_POR_DEFECTO}` };
 }
 
