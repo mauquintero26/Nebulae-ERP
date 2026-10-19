@@ -277,6 +277,10 @@ def test_recordatorio_sale_y_cambia_el_enlace(db, user_admin, monkeypatch):
     _dobles(monkeypatch)
     _config(db)
     sc = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
+    # La SC se tocó por última vez antes de T (r2: el cierre nunca retrocede updated_at).
+    db.execute(text("UPDATE customer_requests SET updated_at = :v WHERE id = :id"),
+               {"v": T - datetime.timedelta(days=3), "id": sc.id})
+    db.commit()
     create_confirmation_token(db, "SC", sc.id)  # el enlace viejo, todavía vigente
     _fila(db, "SC", sc)
     enviar = EnviarFalso(whatsapp=True)
@@ -405,6 +409,7 @@ def test_fallo_no_deja_enlace_vivo_ni_mata_el_viejo(db, user_admin, monkeypatch)
         assert res["fallidos"] == 1 and res["enviados"] == 0, motivo
         fila = _seg(db, "SC", sc.id)
         assert (fila.estado, fila.motivo_fin, fila.proximo_at) == ("DETENIDO", motivo, None), motivo
+        assert fila.ultimo_resultado["mensaje"].startswith("No se pudo enviar: "), motivo  # r2: solo fallos reales
         (renglon,) = _renglones(db, "SC", sc.id, "RECORDATORIO_FALLIDO")
         assert renglon.description.startswith("No se pudo enviar el recordatorio automático 1: "), renglon.description
         assert renglon.description.endswith("Escríbele al cliente o reenvíale el enlace.")
@@ -1112,3 +1117,146 @@ def test_cambio_real_de_cliente_por_patch_cliente(app_client, db, admin_token, u
     assert (_seg(db, "SC", sc.id).estado, _seg(db, "SC", sc.id).motivo_fin) == ("DETENIDO", "VOLVIO_AL_ASESOR")
     assert (_seg(db, "COT", cot.id).estado, _seg(db, "COT", cot.id).motivo_fin) == ("DETENIDO", "ENLACE_ANULADO")
     assert _vivos(db, "SC", sc.id) == [] and _vivos(db, "COT", cot.id) == []
+
+
+# ─── Ronda r2 de la revisión ───────────────────────────────────────────────────────────────────────────────────────
+
+def _nota_externa(app_client, admin_token, sc):
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/actividad", headers=auth(admin_token),
+                           json={"action": "CHATTER", "tipo": "EXTERNA", "description": "Hablé con el cliente"})
+    assert resp.status_code == 200, resp.text
+
+
+def test_contacto_en_el_chatter_durante_la_vuelta_pospone(app_client, db, admin_token, user_admin, monkeypatch):
+    """R23 (r2, punto 1): un contacto anotado en el Chatter entre el reclamo y el envío corre el recordatorio: no sale,
+    el reclamo se devuelve (contador y último recordatorio de antes) y queda el proximo_at que puso el Chatter. Si el
+    contacto llega mientras sale el recordatorio de ese mismo documento, el cierre no retrocede las fechas."""
+    from app.models.erp_documents import CustomerRequest
+    seg_mod = _sc_mod()
+    _dobles(monkeypatch)
+    _config(db)
+    primera = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
+    segunda = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
+    _fila(db, "SC", primera, proximo_at=T - datetime.timedelta(hours=2))
+    _fila(db, "SC", segunda)
+    doble = EnviarFalso()
+    llamadas = []
+
+    def enviar(db_, **kwargs):
+        llamadas.append(kwargs["doc"].id)
+        _nota_externa(app_client, admin_token, segunda)  # entre el reclamo y el envío de la segunda
+        _nota_externa(app_client, admin_token, primera)  # mientras sale el de la primera
+        return doble(db_, **kwargs)
+
+    res = seg_mod.correr_seguimientos(db, ahora=T, enviar=enviar)
+    assert llamadas == [primera.id] and (res["enviados"], res["detenidos"]) == (1, 1), res
+    fila2 = _seg(db, "SC", segunda.id)
+    assert (fila2.estado, fila2.recordatorios_enviados, fila2.ultimo_recordatorio_at) == ("ACTIVO", 0, None)
+    assert fila2.ultimo_contacto_at > T  # el del Chatter, no retrocede al `ahora` de la vuelta
+    assert fila2.proximo_at == seg_mod.siguiente_momento(fila2.ultimo_contacto_at, seg_mod.leer_config(db))
+    assert _renglones(db, "SC", segunda.id, "RECORDATORIO_ENVIADO") == [] and _tokens(db, "SC", segunda.id) == []
+    # El contacto llegó mientras salía el recordatorio de la primera: el cierre no baja las fechas del Chatter.
+    fila1 = _seg(db, "SC", primera.id)
+    assert fila1.recordatorios_enviados == 1 and fila1.ultimo_contacto_at > T
+    db.expire_all()
+    assert db.get(CustomerRequest, primera.id).updated_at > T
+    assert len(_renglones(db, "SC", primera.id, "RECORDATORIO_ENVIADO")) == 1
+
+
+class _Traza:
+    """Las sentencias SQL y los commits de Session, en orden (sin los SAVEPOINT del runner)."""
+
+    def __init__(self):
+        self.pasos = []
+
+    def __enter__(self):
+        from sqlalchemy import event
+        from sqlalchemy.engine import Engine
+        from sqlalchemy.orm import Session
+        event.listen(Engine, "before_cursor_execute", self._sql)
+        event.listen(Session, "after_commit", self._commit)
+        return self
+
+    def __exit__(self, *exc):
+        from sqlalchemy import event
+        from sqlalchemy.engine import Engine
+        from sqlalchemy.orm import Session
+        event.remove(Engine, "before_cursor_execute", self._sql)
+        event.remove(Session, "after_commit", self._commit)
+
+    def _sql(self, conn, cursor, statement, parameters, context, executemany):
+        s = " ".join(statement.split()).upper()
+        if not s.startswith(("SAVEPOINT", "RELEASE SAVEPOINT", "ROLLBACK TO SAVEPOINT")):
+            self.pasos.append(s)
+
+    def _commit(self, session):
+        self.pasos.append("COMMIT")
+
+
+def test_traza_del_bloqueo_antes_de_enviar(db, user_admin, monkeypatch):
+    """r2 (punto 2): después del reclamo y antes de llamar a enviar, la relectura bloquea el documento y DESPUÉS la
+    fila (FOR UPDATE, no SKIP LOCKED), crea el enlace y confirma. Una relectura que tome la fila primero o sin bloqueo
+    hace caer esta prueba."""
+    seg_mod = _sc_mod()
+    _dobles(monkeypatch)
+    _config(db)
+    sc = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
+    _fila(db, "SC", sc)
+    doble = EnviarFalso()
+
+    def enviar(db_, **kwargs):
+        db_.execute(text("SELECT 'MARCA_ENVIAR'"))
+        return doble(db_, **kwargs)
+
+    with _Traza() as traza:
+        assert seg_mod.correr_seguimientos(db, ahora=T, enviar=enviar)["enviados"] == 1
+    pasos = traza.pasos
+    reclamo = next(i for i, s in enumerate(pasos) if s.startswith("UPDATE SEGUIMIENTOS_CONFIRMACION SET RECORDATORIOS_ENVIADOS"))
+    tras_reclamo = pasos.index("COMMIT", reclamo)
+    marca = next(i for i, s in enumerate(pasos) if "MARCA_ENVIAR" in s)
+    tramo = pasos[tras_reclamo + 1:marca]
+
+    def primero(condicion, desde=0):
+        return next(i for i in range(desde, len(tramo)) if condicion(tramo[i]))
+
+    doc = primero(lambda s: "FROM CUSTOMER_REQUESTS" in s and s.endswith("FOR UPDATE"))
+    fila = primero(lambda s: "FROM SEGUIMIENTOS_CONFIRMACION" in s and s.endswith("FOR UPDATE"))
+    insercion = primero(lambda s: s.startswith("INSERT INTO DOCUMENT_CONFIRMATION_TOKENS"))
+    commit = primero(lambda s: s == "COMMIT", insercion)
+    assert doc < fila < insercion < commit, tramo
+    assert not any("FROM SEGUIMIENTOS_CONFIRMACION" in s for s in tramo[:doc]), tramo  # la fila no se lee antes
+
+
+def test_error_antes_de_enviar_no_dice_revisa_si_le_llego(db, user_admin, monkeypatch):
+    """r2 (punto 3): si la preparación falla ANTES de enviar (aquí, al crear el enlace), no salió nada: el renglón y la
+    fila dicen «No salió: error del sistema antes de enviarlo.» (nunca «Revisa si le llegó»), la fila no queda
+    DETENIDO sino lista para la vuelta siguiente (el reclamo se devuelve) y no se repite el renglón si vuelve a fallar."""
+    import logging
+    seg_mod = _sc_mod()
+    _dobles(monkeypatch)
+    _config(db)
+    monkeypatch.setattr(logging.getLogger(seg_mod.__name__), "disabled", True)
+    sc = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
+    vencido = T - datetime.timedelta(hours=1)
+    _fila(db, "SC", sc, proximo_at=vencido)
+    original = seg_mod.create_confirmation_token
+
+    def falla(*args, **kwargs):
+        raise RuntimeError("falla a propósito al crear el enlace")
+
+    monkeypatch.setattr(seg_mod, "create_confirmation_token", falla)
+    enviar = EnviarFalso()
+    for vuelta in range(2):
+        res = seg_mod.correr_seguimientos(db, ahora=T + datetime.timedelta(minutes=10 * vuelta), enviar=enviar)
+        assert res["fallidos"] == 1 and enviar.llamadas == [], (vuelta, res)
+        fila = _seg(db, "SC", sc.id)
+        assert (fila.estado, fila.recordatorios_enviados, fila.motivo_fin) == ("ACTIVO", 0, None), vuelta
+        assert fila.proximo_at == vencido and fila.ultimo_recordatorio_at is None, vuelta
+        assert fila.ultimo_resultado["mensaje"] == "No salió: error del sistema antes de enviarlo."
+    (renglon,) = _renglones(db, "SC", sc.id, "RECORDATORIO_FALLIDO")  # una sola vez, aunque falló dos
+    assert renglon.description == "No salió: error del sistema antes de enviarlo."
+    assert "Revisa si le llegó" not in renglon.description
+    assert _tokens(db, "SC", sc.id) == []
+    # Arreglado el error, la vuelta siguiente lo envía.
+    monkeypatch.setattr(seg_mod, "create_confirmation_token", original)
+    assert seg_mod.correr_seguimientos(db, ahora=T + datetime.timedelta(minutes=20), enviar=enviar)["enviados"] == 1

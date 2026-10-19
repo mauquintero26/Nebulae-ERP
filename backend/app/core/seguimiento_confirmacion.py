@@ -21,7 +21,8 @@ Pendiente (cambió el cliente de la COT o de su SC, T5: la Actividad le pide al 
 recordatorio no le crea uno nuevo a nadie) y COTIZACION_VENCIDA si la COT pasó su valida_hasta (C14; el recordatorio
 nunca la renueva). Las paradas se miran al reclamar y OTRA VEZ, con bloqueo, justo antes de cada envío (r1): si
 entretanto el cliente confirmó o pidió cambios, el asesor lo reenvió o lo detuvo, o cambió el cliente (la misma regla
-_identidad_del_cliente de T5), ese recordatorio no sale ni crea enlace. Enviar la COT de una SC
+_identidad_del_cliente de T5), ese recordatorio no sale ni crea enlace; si el asesor anotó un contacto en el Chatter,
+tampoco sale y el reclamo se devuelve con el proximo_at del Chatter (r2, R23). Enviar la COT de una SC
 pendiente (U11) detiene el de la SC (detener_por_cotizacion): el cliente recibe uno solo. Un contacto con el cliente
 anotado en el Chatter (R23: erp_ventas._agregar_nota, reinicia_atraso) corre el recordatorio (posponer_por_contacto).
 
@@ -425,7 +426,7 @@ def detener_por_cotizacion(db: Session, sc_id: int, cot_numero, ahora: datetime 
     _terminar(fila, DETENIDO, MOTIVO_COTIZACION_ENVIADA, ahora)
     _registrar(db, "SC", sc.id, sc.numero, SEGUIMIENTO_DETENIDO,
                f"Recordatorios de la solicitud detenidos: ahora se le recuerda la cotización {cot_numero}",
-               user_name=autor_de_actividad(user_name) or USUARIO_SISTEMA)
+               user_name=user_name)  # _registrar normaliza el autor y pone el respaldo (r2)
     return True
 
 
@@ -451,9 +452,9 @@ def detener_manual(db: Session, tipo: str, doc, user_name, ahora: datetime | Non
     if fila is None or fila.estado != ACTIVO or doc.estado != PENDIENTE:
         raise ValueError(SIN_PROGRAMAR)
     _terminar(fila, DETENIDO, MOTIVO_MANUAL, ahora)
-    autor = autor_de_actividad(user_name) or USUARIO_SISTEMA
+    autor = autor_de_actividad(user_name) or USUARIO_SISTEMA  # solo para el texto
     _registrar(db, tipo, doc.id, doc.numero, SEGUIMIENTO_DETENIDO, f"{autor} detuvo los recordatorios automáticos.",
-               user_name=autor)
+               user_name=user_name)  # _registrar normaliza el autor y pone el respaldo (r2)
 
 
 # ─── La revisión automática ────────────────────────────────────────────────────────────────────────────────────────
@@ -461,7 +462,9 @@ def detener_manual(db: Session, tipo: str, doc, user_name, ahora: datetime | Non
 @dataclass
 class _Reclamo:
     """Un recordatorio reclamado: lo que se necesita para enviarlo y para reconocer su ciclo después del commit.
-    identidad: a quién le llegaba el enlace al reclamar (_identidad); si cambia antes de enviar, no sale (r1, P4)."""
+    identidad: a quién le llegaba el enlace al reclamar (_identidad); si cambia antes de enviar, no sale (r1, P4).
+    ultimo_contacto_at, ultimo_recordatorio_previo y proximo_previo: la fila ANTES del reclamo (r2), para notar un
+    contacto del Chatter que llegó después y para devolver el reclamo (_devolver_reclamo)."""
     fila_id: int
     tipo: str
     doc: object
@@ -471,6 +474,9 @@ class _Reclamo:
     canal: str | None
     iniciado_at: datetime
     identidad: tuple
+    ultimo_contacto_at: datetime | None = None
+    ultimo_recordatorio_previo: datetime | None = None
+    proximo_previo: datetime | None = None
 
 
 # Resultado de _enviar_recordatorio (la clave del conteo de correr_seguimientos).
@@ -600,9 +606,13 @@ def _revisar_vencidos(db: Session, ahora: datetime, cfg: dict, conteo: dict) -> 
             _registrar(db, tipo, doc.id, doc.numero, RECORDATORIO_FALLIDO, TEXTO_PLAZO_PASADO)
             conteo["detenidos"] += 1
         elif _reclamar(db, fila.id, fila.recordatorios_enviados, ahora, siguiente):
+            # El objeto `fila` conserva los valores de antes del UPDATE de _reclamar (que va por SQL).
             reclamados.append(_Reclamo(fila_id=fila.id, tipo=tipo, doc=doc, doc_id=doc.id, numero=doc.numero,
                                        n=fila.recordatorios_enviados + 1, canal=fila.canal,
-                                       iniciado_at=fila.iniciado_at, identidad=_identidad(doc)))
+                                       iniciado_at=fila.iniciado_at, identidad=_identidad(doc),
+                                       ultimo_contacto_at=fila.ultimo_contacto_at,
+                                       ultimo_recordatorio_previo=fila.ultimo_recordatorio_at,
+                                       proximo_previo=fila.proximo_at))
     return reclamados
 
 
@@ -723,6 +733,42 @@ def _anotar_error_del_sistema(db: Session, reclamo: _Reclamo, ahora: datetime) -
 
 
 TEXTO_QUIZAS_SALIO = "No se confirmó: Chatwoot no confirmó el WhatsApp y puede que haya salido."
+TEXTO_NO_SALIO_POR_ERROR = "No salió: error del sistema antes de enviarlo."
+MOTIVO_ERROR_ANTES_DE_ENVIAR = "ERROR_ANTES_DE_ENVIAR"  # solo en ultimo_resultado: la fila sigue ACTIVO
+
+
+def _devolver_reclamo(fila, reclamo: _Reclamo, restaurar_proximo: bool) -> None:
+    """r2: deshace el reclamo en la fila de su ciclo: el contador y el último recordatorio vuelven a los de antes. Con
+    restaurar_proximo también proximo_at (vencido: la vuelta siguiente lo intenta otra vez); sin él queda el que puso el
+    Chatter."""
+    fila.recordatorios_enviados = reclamo.n - 1
+    fila.ultimo_recordatorio_at = reclamo.ultimo_recordatorio_previo
+    if restaurar_proximo:
+        fila.proximo_at = reclamo.proximo_previo
+
+
+def _anotar_error_antes_de_enviar(db: Session, reclamo: _Reclamo) -> None:
+    """r2: la preparación falló ANTES de enviar (p. ej. un 57014 esperando el bloqueo, o el INSERT o el commit del
+    enlace), así que no salió nada ni quedó un enlace: nunca «Revisa si le llegó». La fila NO queda DETENIDO: se le
+    devuelve el reclamo con su proximo_at vencido, para que la vuelta siguiente lo intente, y ultimo_resultado dice
+    TEXTO_NO_SALIO_POR_ERROR. El renglón (el mismo texto) sale una sola vez: si la fila ya lo decía, no se repite en
+    cada vuelta. Si el error sigue, el plazo de 3 días (PLAZO_PASADO) la cierra. Si tampoco se puede anotar, queda solo
+    en el log."""
+    try:
+        fila = _fila_por_id(db, reclamo.fila_id)
+        if _mismo_ciclo(fila, reclamo):
+            ya_avisado = (isinstance(fila.ultimo_resultado, dict)
+                          and fila.ultimo_resultado.get("mensaje") == TEXTO_NO_SALIO_POR_ERROR)
+            _devolver_reclamo(fila, reclamo, restaurar_proximo=True)
+            fila.ultimo_resultado = {"canal": reclamo.canal, "motivo": MOTIVO_ERROR_ANTES_DE_ENVIAR,
+                                     "mensaje": TEXTO_NO_SALIO_POR_ERROR}
+            if not ya_avisado:
+                _registrar(db, reclamo.tipo, reclamo.doc_id, reclamo.numero, RECORDATORIO_FALLIDO,
+                           TEXTO_NO_SALIO_POR_ERROR)
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("No se pudo anotar el error del recordatorio de %s %s", reclamo.tipo, reclamo.numero)
 
 
 def _bloquear(db: Session, reclamo: _Reclamo) -> tuple:
@@ -742,7 +788,9 @@ def _preparar_envio(db: Session, reclamo: _Reclamo, ahora: datetime):
     ciclo de la fila (nadie lo reenvió ni lo detuvo a mano).
     - Otro ciclo: la fila es del asesor (reenvío o parada manual) y no se toca.
     - Una parada: la fila se cierra con su motivo (ENLACE_ANULADO si cambió el cliente).
-    En los dos casos no se crea enlace ni sale nada, y devuelve None. Si sigue en pie, crea el enlace en ESTA misma
+    - r2 (R23): el asesor anotó un contacto en el Chatter después del reclamo (la fila tiene un ultimo_contacto_at más
+      nuevo: posponer_por_contacto ya la corrió). Se devuelve el reclamo y queda el proximo_at del Chatter.
+    En esos casos no se crea enlace ni sale nada, y devuelve None. Si sigue en pie, crea el enlace en ESTA misma
     transacción (commit=False) y confirma, para soltar los bloqueos antes de hablar con Chatwoot y con el SMTP (y para
     que el enlace sirva en cuanto le llega al cliente). Devuelve su token crudo. C14: el enlace de una COT vence con su
     validez (que el recordatorio nunca cambia); el de la SC, a los 2 días."""
@@ -757,6 +805,11 @@ def _preparar_envio(db: Session, reclamo: _Reclamo, ahora: datetime):
         _cerrar_por_parada(db, fila, reclamo.tipo, doc, *parada, ahora)
         db.commit()
         return None
+    if (fila.ultimo_contacto_at is not None and reclamo.ultimo_contacto_at is not None
+            and fila.ultimo_contacto_at > reclamo.ultimo_contacto_at):
+        _devolver_reclamo(fila, reclamo, restaurar_proximo=False)
+        db.commit()
+        return None
     valida_hasta = doc.valida_hasta if reclamo.tipo == "COT" else None
     expira = vence_al_final_del_dia(valida_hasta) if isinstance(valida_hasta, date) else None
     raw = create_confirmation_token(db, reclamo.tipo, reclamo.doc_id, expires_at=expira, commit=False)
@@ -769,9 +822,17 @@ def _enviar_recordatorio(db: Session, reclamo: _Reclamo, cfg: dict, enviar, ahor
     clave del conteo: ENVIADO si salió por algún medio, FALLIDO si no (o si no se sabe) y NO_SALIO si al volver a
     mirar el documento ya no debía salir (_preparar_envio). Un error del envío mismo (enviar lanzó) no se reintenta: la
     fila queda DETENIDO y el enlace nuevo sigue vivo (pudo haber llegado), salvo que el documento ya no esté en
-    Pendiente."""
+    Pendiente. Un error ANTES de enviar (en _preparar_envio) es otra cosa: no salió nada, y el reclamo se devuelve para
+    la vuelta siguiente (_anotar_error_antes_de_enviar, r2)."""
     tipo, n = reclamo.tipo, reclamo.n
-    raw = _preparar_envio(db, reclamo, ahora)
+    try:
+        raw = _preparar_envio(db, reclamo, ahora)
+    except Exception:
+        db.rollback()
+        logger.exception("No se pudo preparar el recordatorio automático de %s %s (no salió; se intentará en la "
+                         "próxima revisión)", tipo, reclamo.numero)
+        _anotar_error_antes_de_enviar(db, reclamo)
+        return FALLIDO
     if raw is None:
         return NO_SALIO
     link = enlace_publico(raw, tipo)
@@ -812,14 +873,16 @@ def _enviar_recordatorio(db: Session, reclamo: _Reclamo, cfg: dict, enviar, ahor
         elif mismo_ciclo:
             # El enlace anterior deja de servir solo ahora, cuando el nuevo salió bien.
             revoke_pending_tokens(db, tipo, reclamo.doc_id, commit=False, excepto_hash=hash_token(raw))
-            fila.ultimo_contacto_at = ahora
+            # r2: nunca más viejo que un contacto del Chatter anotado mientras salía.
+            fila.ultimo_contacto_at = max(fila.ultimo_contacto_at or ahora, ahora)
             fila.ultimo_resultado = resultado
             if fila.proximo_at is not None:
                 cuando = fecha_hora_co(fila.proximo_at)
                 proximo_paso = (f"Otro recordatorio el {cuando}" if n < cfg["max"]
                                 else f"Si no responde, se te avisará el {cuando}")
-        if REINICIA_ATRASO and pendiente:
-            doc.updated_at = ahora  # R7 / C22: cuenta como contacto, igual que la nota externa del Bloque 2
+        if REINICIA_ATRASO and pendiente and (doc.updated_at is None or doc.updated_at < ahora):
+            # R7 / C22: cuenta como contacto, igual que la nota externa del Bloque 2; r2: nunca retrocede updated_at.
+            doc.updated_at = ahora
         _registrar(db, tipo, reclamo.doc_id, reclamo.numero, RECORDATORIO_ENVIADO, descripcion,
                    _extra(reclamo, cfg, wa, co, _cambios(reclamo.canal, wa, co, proximo_paso)))
     else:
