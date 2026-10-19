@@ -4882,6 +4882,7 @@ def update_config(body: dict, user: User = Depends(require_roles(*ROLE_ADMIN)),
 # ─── REVISIÓN AUTOMÁTICA (B3 T10, TAREAS) ────────────────────────────────────────────────────────────────────────
 
 MENSAJE_REVISION_APAGADA = "La revisión automática está apagada en este servidor."
+MENSAJE_REVISION_EN_CURSO = "Ya hay una revisión en curso; los resultados se verán en el estado al terminar."
 
 
 def _resumen_de_revision(texto):
@@ -4911,12 +4912,17 @@ def estado_tareas_automaticas(user: User = Depends(require_roles(*ALL_ERP_ROLES)
 def revisar_ahora(background_tasks: BackgroundTasks, user: User = Depends(require_roles(*ROLE_ADMIN))):
     """«Revisar ahora» del administrador: la misma revisión del bucle, en segundo plano. 409 si la revisión está
     apagada en este servidor (R14: sin las dos variables, o con una base de pruebas), para que un clic en un equipo de
-    prueba nunca le escriba a un cliente. El candado evita que choque con el bucle. El rastro lleva el autor de la sesión
-    (RP15)."""
+    prueba nunca le escriba a un cliente. El candado evita que choque con el bucle; si ya hay una revisión corriendo
+    (revision_en_curso, r1) responde 202 con MENSAJE_REVISION_EN_CURSO y no agrega otra. El rastro lleva el autor de la
+    sesión (RP15) y va al log de la revisión, que se ve en producción (r1)."""
     if not tareas_automaticas.tareas_habilitadas():
         raise HTTPException(409, MENSAJE_REVISION_APAGADA)
+    autor = nombre_de_usuario(user)
+    if tareas_automaticas.revision_en_curso():
+        tareas_automaticas.logger.info("Revisión automática pedida a mano por %s: ya había una en curso", autor)
+        return {"status": "success", "message": MENSAJE_REVISION_EN_CURSO}
     background_tasks.add_task(tareas_automaticas.correr_una_vez)
-    logger.info("Revisión automática pedida a mano por %s", nombre_de_usuario(user))
+    tareas_automaticas.logger.info("Revisión automática pedida a mano por %s", autor)
     return {"status": "success", "message": "Revisión iniciada"}
 
 

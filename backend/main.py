@@ -1,5 +1,4 @@
 import asyncio
-import logging
 import math
 from decimal import Decimal
 
@@ -17,8 +16,6 @@ from app.api import ws
 from app.db.database import Base, engine
 from app.core.preflight import run_preflight_or_abort  # BLOQUE 5 — Preflight DB check
 from app.core import tareas_automaticas  # Bloque 3 (TAREAS) — revision automatica cada 10 minutos, solo en produccion
-
-logger = logging.getLogger(__name__)
 
 # Create tables in DB (for development/testing only, Alembic is preferred)
 # Base.metadata.create_all(bind=engine)
@@ -87,13 +84,14 @@ _ESPERA_AL_DETENER_TAREAS_SEG = 5
 async def iniciar_tareas_automaticas():
     """Revision automatica (B3 T10). Va DESPUES de startup_preflight: solo con la base verificada. Arranca el bucle
     solo si tareas_automaticas.debe_iniciar() (R14: NEBULAE_TAREAS_AUTOMATICAS=1 y NEBULAE_ENV=production, base de
-    produccion, sin pytest ni --reload). Con --workers 2 cada proceso arranca el suyo y el candado de Postgres decide
-    quien revisa en cada vuelta."""
+    produccion, sin pytest ni --reload). Con --workers 2 cada proceso arranca el suyo y el candado de Postgres evita que
+    dos revisen a la vez. Los dos casos quedan en el log de la revision (hijo de uvicorn.error, visible en produccion):
+    si NEBULAE_TAREAS_AUTOMATICAS=1 y no arranca, un WARNING con el motivo."""
     if tareas_automaticas.debe_iniciar():
         app.state.tareas_bucle = asyncio.create_task(tareas_automaticas.bucle())
-        logger.info("Tareas automáticas activas cada %s s", tareas_automaticas.intervalo_seg())
+        tareas_automaticas.logger.info("Tareas automáticas activas cada %s s", tareas_automaticas.intervalo_seg())
     else:
-        logger.info("Tareas automáticas apagadas en este proceso")
+        tareas_automaticas.anotar_por_que_no_arranca()
 
 
 @app.on_event("shutdown")

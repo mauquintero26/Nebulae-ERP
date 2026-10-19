@@ -8,21 +8,27 @@
 - RP17: el estado se escribe con guardar_config y se lee con leer_config. RP18: tareas_ es una clave reservada de
   /ventas/config («Ese valor lo escribe el sistema.»). RP30: /tareas/estado informa tareas_habilitadas().
 - main.py arranca el bucle después de startup_preflight y lo cancela al apagar.
+- r1: lo que la revisión deja en el log se ve en producción (logger hijo de uvicorn.error); el motivo del apagado sale
+  como WARNING; «Revisar ahora» avisa si ya hay una revisión en curso; el resumen guardado solo lleva lo publicable.
 
 Correr SOLO con el runner de ROLLBACK (la purga real corre dentro de la transacción revertida):
     python tests/rollback_runner.py test_tareas_automaticas
 Ninguna prueba deja hilos ni tareas vivos: el bucle se prueba con un sueño y un hilo falsos, y correr_una_vez directo.
+Las pruebas que toman el candado usan una clave al azar por corrida (_clave_al_azar): dos corridas a la vez sobre
+erp_test no chocan.
 """
 import asyncio
 import datetime
 import json
 import logging
 import sys
+import uuid
 
 import pytest
 from sqlalchemy import text
 
 MENSAJE_APAGADA = "La revisión automática está apagada en este servidor."
+MENSAJE_EN_CURSO = "Ya hay una revisión en curso; los resultados se verán en el estado al terminar."
 MENSAJE_CLAVES_DEL_SISTEMA = "Ese valor lo escribe el sistema."
 CLAVE_PRUEBA_A = "b3t10_prueba_a"
 CLAVE_PRUEBA_B = "b3t10_prueba_b"
@@ -45,17 +51,26 @@ def _valor(db, clave):
     return None if fila is None else fila[0]
 
 
-def _candado_libre(clave):
-    """True si NINGUNA sesión de esta base tiene el candado. Se mira pg_locks y no pg_try_advisory_lock: una conexión
-    que volvió al pool con el candado tomado podría tocarle a esta consulta, y el candado de sesión es reentrante (lo
-    «tomaría» otra vez y la fuga no se vería). Un bigint chico va en classid 0, objid = clave, objsubid 1."""
+def _clave_al_azar(monkeypatch, ta):
+    """r1: una clave de candado distinta por corrida en vez de CLAVE_LOCK, para que dos corridas de este módulo sobre la
+    base compartida no se tomen el candado una a la otra. _tomar_turno, _soltar_turno y revision_en_curso leen la
+    global al llamarse."""
+    clave = 1_000_000_000 + uuid.uuid4().int % 1_000_000_000
+    monkeypatch.setattr(ta, "CLAVE_LOCK", clave)
+    return clave
+
+
+def _tomar_aparte(clave):
+    """Una conexión aparte (otra «copia») con el candado `clave` tomado. Quien llama hace _soltar_aparte."""
     import app.db.database as dbmod
-    with dbmod.engine.connect() as conn:
-        tomados = conn.execute(text(
-            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND classid = 0 AND objid = :k "
-            "AND objsubid = 1 AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"),
-            {"k": clave}).scalar()
-    return tomados == 0
+    otra = dbmod.engine.connect()
+    assert otra.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": clave}).scalar() is True
+    return otra
+
+
+def _soltar_aparte(otra, clave):
+    otra.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": clave})
+    otra.close()
 
 
 # ─── tareas falsas (se registran con monkeypatch de TAREAS, como 'test_tareas_automaticas:<funcion>') ──────────────
@@ -90,12 +105,47 @@ def _tarea_con_resumen_largo(db, ahora):
     return {"purgadas": 400, "numeros": [f"SC-2026{i:04d}" for i in range(400)]}
 
 
+def _tarea_que_devuelve_de_mas(db, ahora):
+    """Devuelve lo que una tarea NO debe devolver (r1, contrato de TAREAS): un nombre largo, un dict anidado con un
+    teléfono, un decimal, una lista con un dict, una clave que es un nombre; junto a lo publicable."""
+    return {
+        "cliente": "María Fernanda Rodríguez de las Casas Ochoa",
+        "detalle": {"telefono": "3000000000", "correo": "cliente@ejemplo.invalid"},
+        "monto": 1.5,
+        "mezcla": ["COT-1", {"telefono": "3000000000"}],
+        "María Pérez": 1,
+        "enviados": 2,
+        "agotado": True,
+        "omitido": "sin_medios",
+        "numeros": ["COT-20261001", "PVEN-20261002"],
+    }
+
+
+def _tarea_que_devuelve_una_lista(db, ahora):
+    return ["no", "es", "un", "dict"]
+
+
 @pytest.fixture
 def registros_de_log():
-    """Los registros del módulo de tareas durante la prueba, sin salir a la consola (tests/_registro_capturado.py)."""
+    """Lo que la revisión deja en el log, visto como en producción (r1). Bajo uvicorn, 'uvicorn' tiene su handler,
+    'uvicorn.error' queda en INFO y la raíz en WARNING, sin basicConfig: un INFO de 'app.*' o de 'main' se pierde. Aquí
+    se reproduce eso y se captura en 'uvicorn' (tests/_registro_capturado.py): una prueba solo ve un mensaje que
+    también saldría en el log de producción. La salida de la prueba queda limpia."""
     from _registro_capturado import registro_capturado
-    with registro_capturado("app.core.tareas_automaticas") as registros:
-        yield registros
+    uvicorn, uvicorn_error = logging.getLogger("uvicorn"), logging.getLogger("uvicorn.error")
+    niveles = (uvicorn.level, uvicorn_error.level)
+    uvicorn.setLevel(logging.INFO)
+    uvicorn_error.setLevel(logging.INFO)
+    try:
+        with registro_capturado("uvicorn") as registros:
+            yield registros
+    finally:
+        uvicorn.setLevel(niveles[0])
+        uvicorn_error.setLevel(niveles[1])
+
+
+def _mensajes(registros, nivel=logging.INFO):
+    return [r.getMessage() for r in registros if r.levelno == nivel]
 
 
 # ─── R14: cuándo arranca ──────────────────────────────────────────────────────────────────────────────────────────
@@ -131,6 +181,45 @@ def test_no_arranca_sin_la_variable():
     assert ta.tareas_habilitadas({"NEBULAE_TAREAS_AUTOMATICAS": "1"}, base="erpdb") is False
 
 
+def test_el_motivo_del_apagado_se_ve_en_el_log(monkeypatch, registros_de_log):
+    """r1 (cumplimiento 2, concurrencia 2): si NEBULAE_TAREAS_AUTOMATICAS vale '1' y el proceso no arranca el bucle,
+    queda un WARNING con el motivo (ambiente, base de pruebas, pytest o --reload), visible en producción. Del motivo de
+    la base sale solo su nombre, nunca la URL. Con la variable apagada basta un INFO."""
+    ta = _ta()
+    prod = dict(ENV_PRODUCCION)
+    casos = [
+        (dict(env={**prod, "NEBULAE_ENV": "development"}, modulos={}, argv=[], base="erpdb"),
+         "el ambiente es 'development', no production"),
+        (dict(env=prod, modulos={}, argv=[], base="erp_test"), "la base 'erp_test' parece de pruebas"),
+        (dict(env=prod, modulos={"pytest": sys.modules["pytest"]}, argv=[], base="erpdb"), "pytest está cargado"),
+        (dict(env=prod, modulos={}, argv=["uvicorn", "main:app", "--reload"], base="erpdb"),
+         "uvicorn corre con recarga (--reload)"),
+    ]
+    for argumentos, motivo in casos:
+        registros_de_log.clear()
+        assert ta.motivo_para_no_iniciar(**argumentos) == motivo
+        ta.anotar_por_que_no_arranca(**argumentos)
+        avisos = _mensajes(registros_de_log, logging.WARNING)
+        assert len(avisos) == 1 and motivo in avisos[0], (motivo, avisos)
+        assert "NEBULAE_TAREAS_AUTOMATICAS=1" in avisos[0]
+    assert ta.motivo_para_no_iniciar(env=prod, modulos={}, argv=[], base="erpdb") is None
+
+    registros_de_log.clear()
+    ta.anotar_por_que_no_arranca(env={**prod, "NEBULAE_TAREAS_AUTOMATICAS": "0"}, modulos={}, argv=[], base="erpdb")
+    assert _mensajes(registros_de_log, logging.WARNING) == []
+    assert _mensajes(registros_de_log) == ["Tareas automáticas apagadas en este proceso"]
+
+    # Con la base real del runner (erp_test, leída del motor): el aviso nombra la base y no trae la URL.
+    import app.db.database as dbmod
+    registros_de_log.clear()
+    for clave, valor in prod.items():
+        monkeypatch.setenv(clave, valor)
+    ta.anotar_por_que_no_arranca(modulos={}, argv=[])
+    (aviso,) = _mensajes(registros_de_log, logging.WARNING)
+    assert f"la base '{dbmod.engine.url.database}' parece de pruebas" in aviso
+    assert "://" not in aviso and "@" not in aviso
+
+
 def test_intervalo_con_limites():
     """Prueba 2: NEBULAE_TAREAS_INTERVALO_SEG por defecto 600, mínimo 60 y máximo 3600; uno inválido da 600."""
     ta = _ta()
@@ -147,6 +236,7 @@ def test_correr_una_vez_registra_la_revision(db, monkeypatch, registros_de_log):
     """Prueba 3: una tarea que falla no frena a las demás, queda en el log, y la revisión deja su hora (UTC con 'Z') y
     su resumen en admin_config."""
     ta = _ta()
+    _clave_al_azar(monkeypatch, ta)
     _LLAMADAS.clear()
     monkeypatch.setattr(ta, "TAREAS", [("buena", f"{__name__}:_tarea_ok"), ("mala", f"{__name__}:_tarea_que_falla"),
                                        ("despues", f"{__name__}:_tarea_ok")])
@@ -165,6 +255,7 @@ def test_correr_una_vez_confirma_cada_tarea_por_separado(db, monkeypatch, regist
     """Requisito del controlador: lo que escribe una tarea que termina bien queda firme antes de la siguiente; el
     rollback de la que falla deshace solo lo suyo. En los dos órdenes."""
     ta = _ta()
+    _clave_al_azar(monkeypatch, ta)
     ordenes = (
         [("escribe", f"{__name__}:_tarea_que_escribe"), ("falla", f"{__name__}:_tarea_que_escribe_y_falla")],
         [("falla", f"{__name__}:_tarea_que_escribe_y_falla"), ("escribe", f"{__name__}:_tarea_que_escribe")],
@@ -188,12 +279,13 @@ def test_correr_una_vez_confirma_cada_tarea_por_separado(db, monkeypatch, regist
             minutes=5)
 
 
-def test_registro_real_purga_la_papelera_como_sistema(db, user_admin):
+def test_registro_real_purga_la_papelera_como_sistema(db, user_admin, monkeypatch):
     """RP7 y decisión del controlador (punto 1): con el registro REAL (sin monkeypatch de TAREAS), correr_una_vez llama
     a purgar_papelera_vencida(db, ahora): la SC vencida se borra y el renglón PURGED queda con autor «Sistema».
     `ahora` está en 2001 para que la purga solo alcance a la SC de la prueba (todo se revierte al final)."""
     from app.models.erp_documents import ActivityLog, CustomerRequest
     ta = _ta()
+    _clave_al_azar(monkeypatch, ta)
     assert ta.TAREAS[0] == ("purga_papelera", "app.api.v1.erp_ventas:purgar_papelera_vencida")
     ahora = datetime.datetime(2001, 3, 1, 12, 0)
     sc = CustomerRequest(numero="SC-T10P01", customer_name="Cliente Prueba", estado="CANCELADA",
@@ -218,6 +310,7 @@ def test_registro_real_purga_la_papelera_como_sistema(db, user_admin):
 def test_resumen_largo_se_guarda_como_json_valido(db, monkeypatch):
     """El resumen guardado cabe en 2000 caracteres y sigue siendo JSON: las listas largas se recortan."""
     ta = _ta()
+    _clave_al_azar(monkeypatch, ta)
     monkeypatch.setattr(ta, "TAREAS", [("purga_larga", f"{__name__}:_tarea_con_resumen_largo")])
     resumen = ta.correr_una_vez(ahora=datetime.datetime(2026, 10, 5, 14, 0))
     assert len(resumen["purga_larga"]["numeros"]) == 400  # lo que devuelve correr_una_vez no se recorta
@@ -228,36 +321,60 @@ def test_resumen_largo_se_guarda_como_json_valido(db, monkeypatch):
     assert datos["purga_larga"]["numeros"] == [f"SC-2026{i:04d}" for i in range(10)]
 
 
+def test_resumen_solo_guarda_lo_publicable(db, monkeypatch, registros_de_log):
+    """r1 (seguridad 2): /tareas/estado lo leen todos los roles, así que el resumen guardado deja pasar solo enteros,
+    booleanos, textos de hasta 40 caracteres, listas de esos valores y el {'error': tipo}. Un nombre largo, un dict
+    anidado, un decimal, una lista con un dict o una clave que no es un nombre de campo se descartan."""
+    ta = _ta()
+    _clave_al_azar(monkeypatch, ta)
+    monkeypatch.setattr(ta, "TAREAS", [("de_mas", f"{__name__}:_tarea_que_devuelve_de_mas"),
+                                       ("lista", f"{__name__}:_tarea_que_devuelve_una_lista"),
+                                       ("mala", f"{__name__}:_tarea_que_falla")])
+    resumen = ta.correr_una_vez(ahora=datetime.datetime(2026, 10, 5, 14, 0))
+    assert resumen["de_mas"]["cliente"].startswith("María")  # lo que devuelve correr_una_vez no se filtra
+    guardado = json.loads(_valor(db, "tareas_ultimo_resumen"))
+    assert guardado == {
+        "de_mas": {"enviados": 2, "agotado": True, "omitido": "sin_medios",
+                   "numeros": ["COT-20261001", "PVEN-20261002"]},
+        "lista": {},
+        "mala": {"error": "RuntimeError"},
+    }
+
+
 # ─── el candado ───────────────────────────────────────────────────────────────────────────────────────────────────
 
 def test_segunda_copia_no_toma_el_turno(db, monkeypatch):
-    """Prueba 4: si otra copia tiene el candado, correr_una_vez no corre ninguna tarea ni marca la revisión."""
-    import app.db.database as dbmod
+    """Prueba 4: si otra copia tiene el candado, correr_una_vez no corre ninguna tarea ni marca la revisión, y
+    revision_en_curso() lo ve (pg_locks)."""
     ta = _ta()
     assert ta.CLAVE_LOCK == 7420016
+    clave = _clave_al_azar(monkeypatch, ta)
     _LLAMADAS.clear()
     monkeypatch.setattr(ta, "TAREAS", [("buena", f"{__name__}:_tarea_ok")])
     antes = _valor(db, "tareas_ultima_revision")
-    otra = dbmod.engine.connect()
+    assert ta.revision_en_curso() is False
+    otra = _tomar_aparte(clave)
     try:
-        assert otra.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": ta.CLAVE_LOCK}).scalar() is True
+        assert ta.revision_en_curso() is True
         assert ta.correr_una_vez() == {"omitido": "otra_copia_revisando"}
         assert _LLAMADAS == []
         assert _valor(db, "tareas_ultima_revision") == antes
     finally:
-        otra.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": ta.CLAVE_LOCK})
-        otra.close()
-    assert _candado_libre(ta.CLAVE_LOCK) is True
+        _soltar_aparte(otra, clave)
+    assert ta.revision_en_curso() is False
 
 
 def test_el_candado_se_suelta_siempre(db, monkeypatch, registros_de_log):
-    """El candado se suelta aunque una tarea falle o correr_una_vez se caiga. Si el unlock falla, la conexión se
-    invalida (cerrar la conexión física lo suelta) en vez de volver al pool con el candado tomado."""
+    """El candado se suelta aunque una tarea falle o correr_una_vez se caiga. Si el unlock falla, o si _tomar_turno
+    falla después de pedir el candado, la conexión se invalida (cerrar la conexión física lo suelta) en vez de volver
+    al pool con el candado tomado. «Libre» se mide con revision_en_curso() (pg_locks), no con try_lock: una conexión
+    del pool con el candado tomado lo volvería a «tomar» (es reentrante) y la fuga no se vería."""
     import app.db.database as dbmod
     ta = _ta()
+    _clave_al_azar(monkeypatch, ta)
     monkeypatch.setattr(ta, "TAREAS", [("mala", f"{__name__}:_tarea_que_falla")])
     assert ta.correr_una_vez() == {"mala": {"error": "RuntimeError"}}
-    assert _candado_libre(ta.CLAVE_LOCK) is True
+    assert ta.revision_en_curso() is False
 
     def sesion_que_no_abre():
         raise RuntimeError("no hay sesión")
@@ -268,25 +385,29 @@ def test_el_candado_se_suelta_siempre(db, monkeypatch, registros_de_log):
     monkeypatch.setattr(ta, "_marcar_revision", marcar_que_falla)
     assert ta.correr_una_vez() == {"mala": {"error": "RuntimeError"}}  # el resumen se devuelve igual
     assert any("hora de la revisión" in r.getMessage() for r in registros_de_log if r.levelno >= logging.ERROR)
-    assert _candado_libre(ta.CLAVE_LOCK) is True
+    assert ta.revision_en_curso() is False
 
     monkeypatch.setattr(dbmod, "SessionLocal", sesion_que_no_abre)
     with pytest.raises(RuntimeError):
         ta.correr_una_vez()
-    assert _candado_libre(ta.CLAVE_LOCK) is True
+    assert ta.revision_en_curso() is False
 
     class ConexionRota:
-        def __init__(self, falla_al_ejecutar=True):
+        def __init__(self, falla_al_ejecutar=True, falla_al_confirmar=False):
             self.falla_al_ejecutar = falla_al_ejecutar
+            self.falla_al_confirmar = falla_al_confirmar
             self.eventos = []
 
         def execute(self, *args, **kwargs):
             self.eventos.append("execute")
             if self.falla_al_ejecutar:
                 raise RuntimeError("se cayó la conexión")
+            return type("Resultado", (), {"scalar": lambda self: True})()
 
         def commit(self):
             self.eventos.append("commit")
+            if self.falla_al_confirmar:
+                raise RuntimeError("falló el commit")
 
         def invalidate(self):
             self.eventos.append("invalidate")
@@ -309,10 +430,15 @@ def test_el_candado_se_suelta_siempre(db, monkeypatch, registros_de_log):
             return self.conexion
 
     assert ta._tomar_turno(MotorFalso("sqlite")) == ta.SIN_LOCK  # SQLite local: un solo proceso, sin candado
-    rota = ConexionRota()
-    with pytest.raises(RuntimeError):
-        ta._tomar_turno(MotorFalso("postgresql", rota))
-    assert rota.eventos == ["execute", "close"]  # si el SELECT falla, la conexión no se queda abierta
+    assert ta.revision_en_curso(MotorFalso("sqlite")) is False
+    # r1 (concurrencia 3): si _tomar_turno falla (en el SELECT, o en el commit con el candado ya concedido), la
+    # conexión se invalida antes de cerrarse: nunca vuelve al pool con el candado tomado.
+    for rota, eventos in ((ConexionRota(), ["execute", "invalidate", "close"]),
+                          (ConexionRota(falla_al_ejecutar=False, falla_al_confirmar=True),
+                           ["execute", "commit", "invalidate", "close"])):
+        with pytest.raises(RuntimeError):
+            ta._tomar_turno(MotorFalso("postgresql", rota))
+        assert rota.eventos == eventos
 
 
 # ─── el bucle y main.py (sin hilos ni tareas vivas) ───────────────────────────────────────────────────────────────
@@ -351,11 +477,13 @@ def test_bucle_espera_sigue_tras_un_error_y_se_cancela(monkeypatch, registros_de
     assert len(errores) == 1 and errores[0].exc_info
 
 
-def test_main_arranca_el_bucle_despues_del_preflight_y_lo_detiene(monkeypatch):
+def test_main_arranca_el_bucle_despues_del_preflight_y_lo_detiene(monkeypatch, registros_de_log):
     """main.py: iniciar_tareas_automaticas va DESPUÉS de startup_preflight; con debe_iniciar() en False (aquí pytest
-    está cargado) no crea nada; con True crea la tarea y detener_tareas_automaticas la cancela."""
+    está cargado) no crea nada y avisa el motivo con un WARNING (r1); con True crea la tarea, lo anuncia en un INFO que
+    se ve en producción (r1) y detener_tareas_automaticas la cancela."""
     import main
     ta = _ta()
+    monkeypatch.delenv("NEBULAE_TAREAS_INTERVALO_SEG", raising=False)
     inicio = [h.__name__ for h in main.app.router.on_startup]
     assert inicio.index("startup_preflight") < inicio.index("iniciar_tareas_automaticas")
     assert "detener_tareas_automaticas" in [h.__name__ for h in main.app.router.on_shutdown]
@@ -370,6 +498,9 @@ def test_main_arranca_el_bucle_despues_del_preflight_y_lo_detiene(monkeypatch):
             monkeypatch.setenv(clave, valor)
         monkeypatch.setattr(ta, "_nombre_de_la_base", lambda: "erpdb")
         assert asyncio.run(arrancar()) is None  # pytest cargado: no arranca
+        (aviso,) = _mensajes(registros_de_log, logging.WARNING)
+        assert "pytest está cargado" in aviso
+        registros_de_log.clear()
 
         cancelado = []
 
@@ -392,6 +523,7 @@ def test_main_arranca_el_bucle_despues_del_preflight_y_lo_detiene(monkeypatch):
 
         tarea = asyncio.run(arrancar_y_detener())
         assert tarea.cancelled() and cancelado == [True]
+        assert _mensajes(registros_de_log) == ["Tareas automáticas activas cada 600 s"]
         assert getattr(main.app.state, "tareas_bucle", None) is None
         asyncio.run(main.detener_tareas_automaticas())  # sin bucle: no hace nada
     finally:
@@ -400,14 +532,14 @@ def test_main_arranca_el_bucle_despues_del_preflight_y_lo_detiene(monkeypatch):
 
 # ─── endpoints ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-def test_revisar_ahora(app_client, db, admin_token, vendedor_token, user_admin, monkeypatch):
+def test_revisar_ahora(app_client, db, admin_token, vendedor_token, user_admin, monkeypatch, registros_de_log):
     """Prueba 5: 409 con el mensaje exacto si la revisión está apagada (variable, ambiente o base de pruebas); 403 para
     quien no es administrador; 202 con las dos variables y una base de producción (la revisión va en segundo plano,
-    que TestClient corre). El rastro en el log lleva el autor de la sesión (RP15), no un user_name del body."""
-    from _registro_capturado import registro_capturado
-    from app.api.v1 import erp_ventas
+    que TestClient corre). El rastro en el log lleva el autor de la sesión (RP15), no un user_name del body, y se ve en
+    producción (r1). r1 (concurrencia 1): si ya hay una revisión en curso, 202 con otro mensaje y no se agrega otra."""
     from app.core.textos_actividad import nombre_de_usuario
     ta = _ta()
+    clave = _clave_al_azar(monkeypatch, ta)
     llamadas = []
 
     def correr_falso(*args, **kwargs):
@@ -439,17 +571,24 @@ def test_revisar_ahora(app_client, db, admin_token, vendedor_token, user_admin, 
     monkeypatch.setattr(ta, "_nombre_de_la_base", lambda: "erpdb")
     assert llamadas == []
 
-    nivel = erp_ventas.logger.level
-    erp_ventas.logger.setLevel(logging.INFO)  # el rastro es INFO
+    registros_de_log.clear()
+    otra = _tomar_aparte(clave)  # otra copia está revisando
     try:
-        with registro_capturado(erp_ventas.logger.name) as registros:
-            resp = app_client.post(url, headers=auth(admin_token), json={"user_name": "otro@impostor"})
+        resp = app_client.post(url, headers=auth(admin_token))
     finally:
-        erp_ventas.logger.setLevel(nivel)
+        _soltar_aparte(otra, clave)
+    assert resp.status_code == 202, resp.text
+    assert resp.json() == {"status": "success", "message": MENSAJE_EN_CURSO}
+    assert llamadas == []  # no se agregó otra revisión
+    (rastro,) = _mensajes(registros_de_log)
+    assert nombre_de_usuario(user_admin) in rastro and "en curso" in rastro
+
+    registros_de_log.clear()
+    resp = app_client.post(url, headers=auth(admin_token), json={"user_name": "otro@impostor"})
     assert resp.status_code == 202, resp.text
     assert resp.json() == {"status": "success", "message": "Revisión iniciada"}
     assert len(llamadas) == 1
-    mensajes = [r.getMessage() for r in registros]
+    mensajes = _mensajes(registros_de_log)
     assert any(nombre_de_usuario(user_admin) in m for m in mensajes), mensajes
     assert not any("otro@impostor" in m for m in mensajes)
 
