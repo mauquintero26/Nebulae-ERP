@@ -123,8 +123,10 @@ def test_enviar_pone_valida_hasta_y_el_enlace_dura_hasta_ese_dia(app_client, db,
     # C16: «Enlace vigente hasta» después del correo, con la fecha dd/mm/aaaa; sin la clave 'campo'.
     [envio] = _logs(db, cot.id, "ESTADO_CHANGED")
     cambios = envio.extra_data["cambios"]
-    assert [c["etiqueta"] for c in cambios] == ["Canal de envío", "Correo", "Enlace vigente hasta"]
-    assert cambios[-1] == {"etiqueta": "Enlace vigente hasta", "despues": esperado.strftime("%d/%m/%Y")}
+    # B3 T11 (C16, cierre): después va 'Recordatorio automático' (U16-seguimiento).
+    assert [c["etiqueta"] for c in cambios] == ["Canal de envío", "Correo", "Enlace vigente hasta",
+                                                "Recordatorio automático"]
+    assert cambios[-2] == {"etiqueta": "Enlace vigente hasta", "despues": esperado.strftime("%d/%m/%Y")}
     assert envio.extra_data["vence"] == esperado.isoformat()
 
 
@@ -244,7 +246,8 @@ def test_la_sc_conserva_su_enlace_de_2_dias(app_client, db, admin_token, user_ad
     assert duracion < datetime.timedelta(days=TOKEN_TTL_DAYS) + datetime.timedelta(minutes=1)
     envio = (db.query(ActivityLog).filter(ActivityLog.entity_type == "SC", ActivityLog.entity_id == sc.id,
                                           ActivityLog.action == "ESTADO_CHANGED").one())
-    assert [c["etiqueta"] for c in envio.extra_data["cambios"]] == ["Canal de envío", "Correo"]
+    assert [c["etiqueta"] for c in envio.extra_data["cambios"]] == ["Canal de envío", "Correo",
+                                                                     "Recordatorio automático"]  # B3 T11 (C16)
     assert "vence" not in envio.extra_data
 
 

@@ -36,7 +36,8 @@ NOTA_INTERNA_SC = "NOTA-INTERNA-SC-T9"
 NOTA_DEL_PEDIDO = "NOTA-DEL-PEDIDO-T9"
 TALADRO = {"product_name": "Taladro percutor", "qty": 1, "unit_price_cop": 2341952, "iva_tarifa": "19",
            "cost_usd": 4321.98, "margen_pct": 37, "proveedor": PROVEEDOR}
-CLAVES_RESPUESTA_COT = {"status", "data", "link_confirmacion", "canal", "correo", "vence", "whatsapp"}
+# B3 T11 (U16-seguimiento): la respuesta del envío de la COT suma 'seguimiento' (el PVEN no tiene seguimiento).
+CLAVES_RESPUESTA_COT = {"status", "data", "link_confirmacion", "canal", "correo", "vence", "whatsapp", "seguimiento"}
 CLAVES_RESPUESTA_PVEN = {"status", "link", "canal", "correo", "vence", "whatsapp"}
 
 

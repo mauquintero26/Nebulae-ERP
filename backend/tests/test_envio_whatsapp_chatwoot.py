@@ -36,6 +36,9 @@ SIN_CONFIRMAR = ("Chatwoot no confirmó el envío: puede que el mensaje haya sal
                  "antes de reenviarlo.")
 ETIQUETAS_SC = ["Canal de envío", "WhatsApp", "Mensaje", "Correo de respaldo"]
 ETIQUETAS_COT_PVEN = ETIQUETAS_SC + ["Enlace vigente hasta"]
+# B3 T11 (C16, cierre): el envío de una SC o una COT termina en 'Recordatorio automático' (U16-seguimiento); el PVEN no
+# tiene seguimiento.
+RECORDATORIO = ["Recordatorio automático"]
 
 
 def auth(token):
@@ -334,7 +337,7 @@ def test_sc_por_whatsapp_dentro_de_ventana_manda_texto_libre(app_client, db, adm
 
     [renglon] = _renglones(db, "SC", sc.id, "ESTADO_CHANGED")
     assert raw not in json.dumps(renglon.extra_data, ensure_ascii=False) and raw not in renglon.description
-    assert [c["etiqueta"] for c in renglon.extra_data["cambios"]] == ETIQUETAS_SC
+    assert [c["etiqueta"] for c in renglon.extra_data["cambios"]] == ETIQUETAS_SC + RECORDATORIO
     assert all("campo" not in c for c in renglon.extra_data["cambios"])
     assert renglon.extra_data["cambios"][1]["despues"] == wa["texto_resultado"]
     assert renglon.extra_data["cambios"][2]["despues"] == envio.mensaje
@@ -818,7 +821,7 @@ def test_cot_por_whatsapp_incluye_el_total_en_pesos(app_client, db, admin_token,
     db.refresh(cot)
     assert cot.canal_envio == "WhatsApp" and cot.estado == "PENDIENTE_CONFIRMACION"
     [renglon] = _renglones(db, "COT", cot.id, "ESTADO_CHANGED")
-    assert [c["etiqueta"] for c in renglon.extra_data["cambios"]] == ETIQUETAS_COT_PVEN
+    assert [c["etiqueta"] for c in renglon.extra_data["cambios"]] == ETIQUETAS_COT_PVEN + RECORDATORIO
     [envio] = _envios(db, "COT", cot.id)
     assert envio.proposito == "CONFIRMACION" and envio.estado == "ENVIADO"
     # Plantilla de la COT: {{3}} = 'Cotización COT-…'.
