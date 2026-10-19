@@ -156,8 +156,13 @@ console.log('--- V3 TEST 2: la SC, la COT y el PVEN usan la misma cabecera ---')
 {
   for (const ruta of ['solicitud/[id]/page.tsx', 'cotizacion/[id]/page.tsx', 'venta/[id]/page.tsx']) {
     const fuente = sinComentarios(leer(`app/dashboard/ventas/${ruta}`));
-    assert.ok(/<CabeceraActividad\b[^>]*titulo=\{a\.description \|\| humanizarCodigo\(a\.action\)\}/.test(fuente),
+    // B3 T17 r1 (RP22): entre la descripción y el código humanizado puede ir la etiqueta de ACCIONES_BLOQUE3.
+    assert.ok(/<CabeceraActividad\b[^>]*titulo=\{a\.description \|\| (b3\?\.etiqueta \|\| )?humanizarCodigo\(a\.action\)\}/.test(fuente),
       `${ruta}: la tarjeta usa <CabeceraActividad titulo=...>`);
+    if (ruta === 'cotizacion/[id]/page.tsx') {
+      assert.ok(/titulo=\{a\.description \|\| b3\?\.etiqueta \|\| humanizarCodigo\(a\.action\)\}/.test(fuente),
+        `${ruta}: sin descripción, la etiqueta de ACCIONES_BLOQUE3 (RP22)`);
+    }
     assert.ok(!/<span className="font-bold text-slate-800 text-sm">\{a\.description/.test(fuente),
       `${ruta}: sin la cabecera vieja armada a mano`);
     assert.ok(/import \{[^}]*\bCabeceraActividad\b[^}]*\} from '\.\.\/\.\.\/flujo';/.test(fuente), `${ruta}: importa CabeceraActividad`);

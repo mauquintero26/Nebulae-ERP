@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, useId } from 'react';
 import Link from 'next/link';
 import { useSearchParams, useRouter } from 'next/navigation';
 import {
@@ -15,7 +15,7 @@ import { apiFetch, API_URL } from '@/lib/api';
 import {
   MARGIN_PCT_CAP, calcularCotizacion, cuerpoCompletoCalculadora, cuerpoDeGuardado,
   validaPreciosAlGuardar, inicialParaComparar,
-  filaNuevaCalculadora, filasInicialesCalculadora, tarifaDeSeleccion, totalesIvaCalculadora,
+  filaNuevaCalculadora, filasInicialesCalculadora, tarifaDeSeleccion, totalesIvaCalculadora, avisoCotizacionSinIva,
 } from '@/lib/pricing';
 import { formatoPesos } from '@/lib/pesos';
 import { humanizarCodigo } from '@/lib/estados-pedido';
@@ -27,7 +27,7 @@ import type { EnvioWhatsAppCanal } from './estado-envio-whatsapp';
 import {
   METODOS_PAGO_ANTICIPO, formatoPct, porcentajeDePesos, hoyLocal, origenAnticipo, cuentaVerificacion,
   evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo, resumenAnticipoCotizacion, montoDesdeTexto,
-  creditoPorRecotizacion,
+  creditoPorRecotizacion, anticipoDeCalculadora,
 } from '@/lib/dinero-ventas';
 import {
   diasAlerta, pedidoVigente, soloPedidosCancelados, ultimoPedidoCancelado, pestanaCotizacion, situacionPedidoCotizacion,
@@ -209,6 +209,9 @@ export function CalculadorModal({
   const avisoConfirmacion = estadoConfirmacion === 'PENDIENTE_CONFIRMACION' ? AVISO_CALC_PENDIENTE
     : estadoConfirmacion === 'CONFIRMADA' ? (sinConfirmacionVigente ? AVISO_CALC_FIGURA_CONFIRMADA : AVISO_CALC_CONFIRMADA)
     : null;
+  const avisoSinIva = avisoCotizacionSinIva(cot, estadoConfirmacion);
+  const notasId = useId();
+  const notasAyudaId = useId();
   const [razon, setRazon] = useState('');
   const [trm, setTrm] = useState(cot.trm_rate || 4200);
   // Ronda 1 (punto 3): filaDeCalculadora respeta un margen 0 (antes `|| 30` lo subía al 30%). B3 T17: cada fila lleva su
@@ -237,10 +240,9 @@ export function CalculadorModal({
   const totalIva = iva.totales ? iva.totales.total_cop : null;
   // H36+H43 / R3: el anticipo ya no se edita aqui; lo calcula el servidor con la modalidad de la SC o el % manual.
   // Ya convertida: el % y lo pagado DEL PEDIDO (el GET recalcula con la modalidad de hoy, que ya no es el trato).
-  // B3 T17 (R8): sobre el total CON IVA.
+  // B3 T17 (R8): sobre el total CON IVA; r1: sin SC ni % manual, con el % guardado sin cuantizar (anticipoDeCalculadora).
   const resumenAnticipo = resumenAnticipoCotizacion(cot);
-  const anticipoPct = resumenAnticipo.pct;
-  const anticipo_cop = totalIva === null ? null : porcentajeDePesos(totalIva, anticipoPct);
+  const anticipo_cop = anticipoDeCalculadora(cot, resumenAnticipo, totalIva);
   const saldo = totalIva === null || anticipo_cop === null ? null
     : totalIva - (resumenAnticipo.convertida ? Number(resumenAnticipo.pagado) || 0 : anticipo_cop);
 
@@ -318,6 +320,13 @@ export function CalculadorModal({
               <p>{avisoConfirmacion}</p>
             </div>
           )}
+          {/* B3 T17 r1: una cotización vieja (sin IVA discriminado) que espera o tiene la confirmación del cliente. */}
+          {avisoSinIva && (
+            <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs font-semibold text-amber-800">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              <p>{avisoSinIva}</p>
+            </div>
+          )}
           {/* TRM */}
           <div className="grid grid-cols-3 gap-4">
             <div>
@@ -350,7 +359,7 @@ export function CalculadorModal({
               <table className="w-full text-xs">
                 <thead className="bg-slate-50 text-slate-400 uppercase font-black">
                   <tr>
-                    <th className="px-3 py-2 text-left">Producto</th>
+                    <th className="px-3 py-2 text-left min-w-[180px]">Producto</th>
                     <th className="px-3 py-2 text-right">Qty</th>
                     <th className="px-3 py-2 text-right">Costo USD</th>
                     <th className="px-3 py-2 text-right">Flete USD</th>
@@ -363,7 +372,7 @@ export function CalculadorModal({
                 <tbody className="divide-y divide-slate-50">
                   {computedProd.map((p, i) => (
                     <tr key={p._rowId}>
-                      <td className="px-3 py-2">
+                      <td className="px-3 py-2 min-w-[180px]">
                         <ProductoAutocomplete
                           value={p.product_name}
                           esLibre={p.es_libre}
@@ -433,11 +442,11 @@ export function CalculadorModal({
 
           {/* Notas */}
           <div>
-            <label className="text-xs font-black text-slate-500 uppercase mb-1 block">Notas / Observaciones</label>
-            <textarea value={notas} onChange={e => setNotas(e.target.value)} rows={3}
+            <label htmlFor={notasId} className="text-xs font-black text-slate-500 uppercase mb-1 block">Notas / Observaciones</label>
+            <textarea id={notasId} aria-describedby={notasAyudaId} value={notas} onChange={e => setNotas(e.target.value)} rows={3}
               className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400 outline-none" />
-            {/* R3 (C19): la nota de la cotización le llega al cliente en su documento. */}
-            <p className="text-[11px] text-slate-500 mt-1">El cliente verá esta nota</p>
+            {/* R3 (C19): la nota de la cotización le llega al cliente en su documento (r1: ligada al textarea). */}
+            <p id={notasAyudaId} className="text-[11px] text-slate-500 mt-1">El cliente verá esta nota</p>
           </div>
         </fieldset>
     </Modal>
@@ -539,11 +548,12 @@ export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCa
           <Phone size={18}/>
           <span>WhatsApp{!customerHasPhone ? ` (${textoSinTelefono})` : ''}</span>
         </button>
-        {lineaWhatsApp && (
-          <p className={`text-xs font-semibold px-1 ${lineaWhatsApp.tono === 'ok' ? 'text-green-700' : 'text-amber-700'}`}>
-            {lineaWhatsApp.texto}
-          </p>
-        )}
+        {/* r1 (accesibilidad): siempre montada (vacía e invisible sin línea), para que el aviso que llega con el GET se
+            anuncie. */}
+        <p role="status" aria-live="polite" className={!lineaWhatsApp ? 'sr-only'
+          : `text-xs font-semibold px-1 ${lineaWhatsApp.tono === 'ok' ? 'text-green-700' : 'text-amber-700'}`}>
+          {lineaWhatsApp?.texto ?? ''}
+        </p>
         <button
           onClick={() => onSelectChannel('Email')}
           disabled={sinCorreo}

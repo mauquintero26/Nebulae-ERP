@@ -7,7 +7,8 @@
  */
 
 import assert from 'node:assert/strict';
-import { redondearPeso, formatoPesos } from '../src/lib/pesos.js';
+import { redondearPeso, formatoPesos, formatoCantidad } from '../src/lib/pesos.js';
+import { formatoCantidad as formatoCantidadDocumento } from '../src/lib/documento-comercial.js';
 
 console.log('--- TEST 1: formatoPesos redondea al peso y agrupa miles con punto ---');
 {
@@ -49,6 +50,14 @@ console.log('--- TEST 4: redondearPeso es Math.round y devuelve numero entero --
   assert.equal(redondearPeso('abc'), 0);
   assert.ok(Number.isInteger(redondearPeso(60000.00000000001)));
   assert.equal(redondearPeso(60000.00000000001), 60000, 'ruido de punto flotante de la Calculadora');
+}
+
+console.log('--- B3 T17 r1: formatoCantidad vive aquí (lib/iva.js la usa sin import circular) y documento-comercial la reexporta ---');
+{
+  assert.equal(formatoCantidad(2), '2');
+  assert.equal(formatoCantidad(2.5), '2,5');
+  for (const raro of [null, undefined, '2.5', NaN, Infinity]) assert.equal(formatoCantidad(raro), '', String(raro));
+  assert.equal(formatoCantidadDocumento, formatoCantidad, 'la misma función, no una copia');
 }
 
 console.log('✓ Todos los tests de pesos pasaron exitosamente.');

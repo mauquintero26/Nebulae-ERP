@@ -1,5 +1,6 @@
 'use client';
 
+import { useId } from 'react';
 import { TARIFAS_IVA, etiquetaCortaTarifaIva, filasIvaTotales } from '@/lib/iva';
 import { avisoTarifaProducto } from '@/lib/pricing';
 import { formatoPesos } from '@/lib/pesos';
@@ -18,22 +19,26 @@ type FilaConTarifa = { iva_tarifa?: string; product_name?: string; sku_id?: numb
 /** El resultado de totalesIvaCalculadora / intentarTotalesCotizacion: con error, totales es null (y se ve «—»). */
 export type IvaCalculado = { totales: TotalesIva | null; error: string };
 
-/** '$1.062.523', o '—' sin monto (mientras haya una línea incompleta). */
-export const pesosOGuion = (v: number | null | undefined) => (v === null || v === undefined ? '—' : formatoPesos(v));
+/** '$1.062.523', o '—' sin monto (mientras haya una línea incompleta). r1: el Cotizador Rápido pasa su propio formato. */
+export const pesosOGuion = (v: number | null | undefined, formato: (n: number) => string = formatoPesos) =>
+  (v === null || v === undefined ? '—' : formato(v));
 
 const CLASES_SELECT = 'w-full min-w-0 border border-slate-200 rounded px-1.5 py-1 font-bold bg-white outline-none focus:ring-1 focus:ring-amber-200';
 
 /** El selector de la tarifa: 19% / 5% / Exento / Excluido (etiquetaCortaTarifaIva). */
-export function SelectTarifaIva({ valor, onCambio, etiqueta, id, className = CLASES_SELECT }: {
+export function SelectTarifaIva({ valor, onCambio, etiqueta, id, describedBy, className = CLASES_SELECT }: {
   valor: string;
   onCambio: (tarifa: string) => void;
   /** El nombre accesible (aria-label) cuando no hay un <label> con htmlFor. */
   etiqueta?: string;
   id?: string;
+  /** r1: los ids de lo que explica el select (aria-describedby): el IVA de la línea y el aviso ámbar. */
+  describedBy?: string;
   className?: string;
 }) {
   return (
-    <select id={id} aria-label={etiqueta} value={valor} onChange={e => onCambio(e.target.value)} className={className}>
+    <select id={id} aria-label={etiqueta} aria-describedby={describedBy} value={valor} onChange={e => onCambio(e.target.value)}
+      className={className}>
       {TARIFAS_IVA.map(t => <option key={t.codigo} value={t.codigo}>{etiquetaCortaTarifaIva(t.codigo)}</option>)}
     </select>
   );
@@ -49,14 +54,17 @@ export function CeldaIvaLinea({ fila, ivaLinea, onCambio }: {
   onCambio: (tarifa: string) => void;
 }) {
   const aviso = avisoTarifaProducto(fila);
+  // r1 (accesibilidad): el IVA de la línea y el aviso de R8 van ligados al select.
+  const idIva = useId();
+  const idAviso = useId();
   return (
     <div className="min-w-[84px] space-y-0.5">
       <SelectTarifaIva valor={fila.iva_tarifa ?? ''} onCambio={onCambio}
-        etiqueta={`IVA de ${fila.product_name || 'la línea'}`} />
-      <p className="text-[10px] font-bold text-slate-500 text-right">
+        etiqueta={`IVA de ${fila.product_name || 'la línea'}`} describedBy={aviso ? `${idIva} ${idAviso}` : idIva} />
+      <p id={idIva} className="text-[10px] font-bold text-slate-500 text-right">
         {ivaLinea === null || ivaLinea === undefined ? '—' : `+${formatoPesos(ivaLinea)}`}
       </p>
-      {aviso && <p className="text-[10px] font-bold text-amber-700 leading-tight">{aviso}</p>}
+      {aviso && <p id={idAviso} className="text-[10px] font-bold text-amber-700 leading-tight">{aviso}</p>}
     </div>
   );
 }

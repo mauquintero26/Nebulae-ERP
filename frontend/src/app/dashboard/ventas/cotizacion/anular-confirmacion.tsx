@@ -1,6 +1,6 @@
 'use client';
 
-import { useId } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui';
 import { largoTexto } from '@/lib/chatter';
@@ -51,6 +51,9 @@ export function PanelAnularConfirmacion({
   onAnular: (motivo: string) => void;
 }) {
   const razonId = useId();
+  // r1 (accesibilidad): el panel aparece en lugar del botón que tenía el foco (que se desmonta); el foco pasa a la razón.
+  const razonRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { razonRef.current?.focus(); }, []);
   // Como el servidor: sin los espacios de los bordes y en puntos de código (largoTexto, lección de T7/T8A).
   const largoRazon = largoTexto(razon.trim());
   const razonValida = largoRazon >= RAZON_ANULAR_MIN && largoRazon <= RAZON_ANULAR_MAX;
@@ -73,7 +76,7 @@ export function PanelAnularConfirmacion({
       </div>
       <div>
         <label htmlFor={razonId} className="text-xs font-black text-rose-800 mb-1 block">Razón del cambio (queda en la Actividad)</label>
-        <textarea id={razonId} value={razon} onChange={e => onRazon(e.target.value)} rows={2}
+        <textarea ref={razonRef} id={razonId} value={razon} onChange={e => onRazon(e.target.value)} rows={2}
           maxLength={RAZON_ANULAR_MAX} readOnly={saving} placeholder={placeholder}
           className="w-full border border-rose-200 bg-white rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-rose-200 focus:border-rose-400 outline-none" />
         <div className="flex justify-between gap-2 text-[11px] mt-1">

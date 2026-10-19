@@ -107,6 +107,31 @@ export function resumenAnticipoCotizacion(cot) {
   };
 }
 
+/**
+ * B3 T17 r1 (menor 5): el anticipo que muestra la calculadora sobre el total CON IVA que se está cotizando
+ * (`totalNuevo`; null mientras haya una línea incompleta -> null). `resumen` es resumenAnticipoCotizacion(cot).
+ * - Sin pedido vigente, sin SC, sin % manual y con total guardado (ORIGEN_CONSERVADO del servidor): conserva el % que
+ *   ya tenía SIN cuantizar, en enteros: round(totalNuevo × anticipo / total_cop), medio peso hacia arriba, con el
+ *   anticipo guardado entre 0 y el total. Es anticipo_requerido(total, pct_previo) de update_cotizacion (el % del GET
+ *   viene cuantizado a 2 decimales y quedaba $1 corrido). Con el mismo total da el anticipo guardado.
+ * - Si no: porcentajeDePesos(totalNuevo, resumen.pct) (la modalidad, el manual, el 60 por defecto o el % del pedido).
+ * @param {any} cot
+ * @param {{convertida?: boolean, pct?: number} | null | undefined} resumen
+ * @param {number | null | undefined} totalNuevo
+ * @returns {number | null}
+ */
+export function anticipoDeCalculadora(cot, resumen, totalNuevo) {
+  if (totalNuevo === null || totalNuevo === undefined) return null;
+  const totalGuardado = redondearPeso(cot?.total_cop);
+  if (!resumen?.convertida && !cot?.sc_id && !esManual(cot) && totalGuardado > 0) {
+    const anticipo = BigInt(Math.min(Math.max(0, redondearPeso(cot?.anticipo_cop)), totalGuardado));
+    const n = BigInt(Math.max(0, redondearPeso(totalNuevo))) * anticipo;
+    const d = BigInt(totalGuardado);
+    return Number(n / d + ((n % d) * 2n >= d ? 1n : 0n));
+  }
+  return porcentajeDePesos(totalNuevo, resumen?.pct ?? 60);
+}
+
 const NOTA_LINEAS_SUMAN = 'El anticipo de cada producto suma el anticipo total.';
 const NOTA_LINEAS_SIN_PRECIO = 'Los productos no tienen precio por línea: el anticipo se calcula sobre el total.';
 const NOTA_LINEAS_NO_CUADRAN = 'El anticipo de los productos no suma el anticipo total: vale el anticipo total.';
@@ -248,8 +273,10 @@ export function creditoPorRecotizacion(pedido, totalNuevo) {
  * aviso de credito compara lo pagado con el total nuevo (creditoPorRecotizacion).
  * B3 T17 (IVA punto 11): `data` es la RESPUESTA del PATCH de la COT (lo que guardo el servidor, no lo calculado en el
  * navegador); si trae iva_cop (el IVA total de la COT), va tambien: el pedido lo guarda como su tax_cop.
+ * B3 T17 r1: sin esa respuesta (`data` no es un objeto) devuelve null: no se propaga nada calculado en el navegador.
  */
 export function propagacionRecotizacion(data, pedido, cotNumero, usuario) {
+  if (typeof data !== 'object' || data === null) return null;
   const { credito } = creditoPorRecotizacion(pedido, data?.total_cop);
   const nota = credito > 0 ? ` Crédito a favor del cliente: ${formatoPesos(credito)}.` : '';
   return {

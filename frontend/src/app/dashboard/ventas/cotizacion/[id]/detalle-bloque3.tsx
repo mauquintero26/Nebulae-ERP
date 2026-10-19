@@ -9,6 +9,9 @@ import { formatoPesos } from '@/lib/pesos';
 import { NextStepCard } from '../../flujo';
 import { TarjetaSeguimiento } from '../../seguimiento';
 
+/** r1: la ayuda de la tarjeta Pendiente para quien puede reenviar (nota del controlador tras T7). */
+export const AYUDA_REENVIAR_COT = 'Si el enlace venció, se anuló o no le llegó, reenvía la cotización al cliente.';
+
 // B3 T17: las piezas nuevas del detalle de la cotización (cotizacion/[id]/page.tsx solo las cablea, R15). Toda la
 // lógica y los textos vienen de lib/iva.js, lib/documento-comercial.js y lib/seguimiento.js (probadas con node).
 
@@ -106,6 +109,9 @@ export function PasoEsperandoConfirmacion({ cotizacion, puedeReenviar, enviando,
     >
       Cuando el cliente confirme desde el enlace, aquí aparecerá &ldquo;Crear Pedido de Venta&rdquo;.
       {validez ? ` ${validez.texto}` : ''}
+      {/* r1 (nota tras T7): la ayuda de reenviar, para quien puede hacerlo (el enlace pudo anularse sin que la COT cambie
+          de estado, p. ej. al cambiar los datos del cliente en la solicitud). */}
+      {puedeReenviar ? ` ${AYUDA_REENVIAR_COT}` : ''}
     </NextStepCard>
   );
 }

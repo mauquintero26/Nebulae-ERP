@@ -219,12 +219,40 @@ export function cuerpoDeGuardado(actual, inicial) {
  * B2-T9A ronda 2: el calculo inicial contra el que compara cuerpoDeGuardado. Una cotizacion sin total (> 0) todavia no
  * esta cotizada: null, y se manda el cuerpo completo aunque nada haya cambiado (con los costos ya puestos, «Guardar»
  * mandaba solo las notas y cerraba sin cotizarla).
+ * B3 T17 r1 (ruling del controlador): una cotizacion VIEJA (cotizacionSinIva: guardada sin IVA discriminado y con
+ * precio) en Borrador o Enviada tampoco se compara: la calculadora la abre con las cifras CON IVA, y comparar contra
+ * ellas mandaba solo las notas, asi que el servidor nunca le aplicaba el IVA. En Pendiente o Confirmada se sigue
+ * comparando (guardar una nota no anula la confirmacion, H40) y la calculadora lo avisa (avisoCotizacionSinIva).
  * @param {Record<string, any> | null | undefined} cot
  * @param {Record<string, any> | null | undefined} inicial  cuerpoCompletoCalculadora al abrir la calculadora
  * @returns {Record<string, any> | null}
  */
 export function inicialParaComparar(cot, inicial) {
-  return Number(cot?.total_cop) > 0 ? (inicial ?? null) : null;
+  if (!(Number(cot?.total_cop) > 0)) return null;
+  if (cotizacionSinIva(cot) && (cot?.estado === 'BORRADOR' || cot?.estado === 'ENVIADA')) return null;
+  return inicial ?? null;
+}
+
+/** B3 T17 r1: la cotizacion se guardo antes del IVA (el GET dice iva_discriminado false) y ya tiene precio. */
+function cotizacionSinIva(cot) {
+  return cot?.iva_discriminado === false && Number(cot?.total_cop) > 0;
+}
+
+/** B3 T17 r1: el aviso ambar de la calculadora para una cotizacion vieja que espera o ya tiene la confirmacion. */
+export const AVISO_COT_SIN_IVA = 'Esta cotización se guardó sin IVA discriminado. Las cifras con IVA se guardan si '
+  + 'cambias algún precio, y el cliente tendrá que confirmar de nuevo.';
+
+/**
+ * B3 T17 r1: AVISO_COT_SIN_IVA si la cotizacion es vieja (sin IVA discriminado y con precio) y la calculadora la abre
+ * congelada (`estadoConfirmacion` de H40: 'PENDIENTE_CONFIRMACION' o 'CONFIRMADA' sin pedido vigente), donde guardar
+ * sin cambiar un precio manda solo las notas (inicialParaComparar). Si no, null.
+ * @param {Record<string, any> | null | undefined} cot
+ * @param {string | null | undefined} estadoConfirmacion
+ * @returns {string | null}
+ */
+export function avisoCotizacionSinIva(cot, estadoConfirmacion) {
+  const congelada = estadoConfirmacion === 'PENDIENTE_CONFIRMACION' || estadoConfirmacion === 'CONFIRMADA';
+  return congelada && cotizacionSinIva(cot) ? AVISO_COT_SIN_IVA : null;
 }
 
 /**

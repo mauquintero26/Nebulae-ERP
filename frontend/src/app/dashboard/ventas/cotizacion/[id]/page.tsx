@@ -23,7 +23,7 @@ import { situacionPedidoCotizacion } from '@/lib/listas-ventas';
 import {
   resumenAnticipoCotizacion, formatoPct, propagacionRecotizacion, puedeGestionarCotizacion, notaAnticipoPorLinea,
 } from '@/lib/dinero-ventas';
-import { comoUTC } from '@/lib/hub-ventas';
+import { comoUTC, notaReiniciaAtraso } from '@/lib/hub-ventas';
 import { waUrl } from '@/lib/whatsapp';
 import { destinoVolver, anchoInicialPanel, inicialesAutor } from '@/lib/detalle-layout';
 import { agregarActividad, esEntradaChatter, motivoTelefono, textoSinTelefono } from '@/lib/chatter';
@@ -457,11 +457,15 @@ function CotizacionDetalleContent() {
         // El PATCH del pedido ya registra su propio renglon de Actividad (con el detalle de lo que
         // cambio); "motivo" le pone el titulo, en vez de un segundo POST /actividad que duplicaria el evento.
         // B3 T17 (IVA punto 11): con la RESPUESTA del PATCH (lo que guardó el servidor, con su IVA), no con lo calculado
-        // en el navegador: productos, subtotal, IVA, descuento y total, y el crédito se mide con ese total.
-        await apiFetch(`/ventas/pedidos/${pvenVigente.id}`, {
-          method: 'PATCH',
-          body: JSON.stringify(propagacionRecotizacion(r?.data ?? data, pvenVigente, cotizacion?.numero, currentUser)),
-        });
+        // en el navegador: productos, subtotal, IVA, descuento y total, y el crédito se mide con ese total. r1: sin esa
+        // respuesta no se propaga nada (null): se avisa, y la recarga de abajo muestra cómo quedó.
+        const cuerpoPedido = propagacionRecotizacion(r?.data, pvenVigente, cotizacion?.numero, currentUser);
+        if (cuerpoPedido) {
+          await apiFetch(`/ventas/pedidos/${pvenVigente.id}`, { method: 'PATCH', body: JSON.stringify(cuerpoPedido) });
+        } else {
+          avisar(`La cotización se guardó, pero el pedido ${pvenVigente.numero} no se actualizó: el servidor no devolvió las `
+            + 'cifras guardadas. Re-cotiza de nuevo para pasarle los precios.', { tono: 'error' });
+        }
       }
       setShowCalc(false);
       setPendingCalcData(null);
@@ -650,7 +654,9 @@ function CotizacionDetalleContent() {
   // loadCotizacion (eslint react-hooks/preserve-manual-memoization).
   function notaRegistrada(log: Record<string, unknown> | null) {
     if (log) setCotizacion((p: Record<string, unknown>) => agregarActividad(p, log, 'COT'));
-    else void loadCotizacion({ silencioso: true });
+    // B3 T17 r1: un contacto con el cliente (llamada, WhatsApp, correo, nota externa) corre el recordatorio en el
+    // servidor: se relee para que TarjetaSeguimiento muestre la fecha nueva (como el Hub).
+    if (!log || notaReiniciaAtraso(log)) void loadCotizacion({ silencioso: true });
   }
 
   // B3 T17: la recarga silenciosa tras «No enviar recordatorios» (TarjetaSeguimiento). Con nombre, como notaRegistrada.
@@ -1285,7 +1291,7 @@ function CotizacionDetalleContent() {
                       {esEntradaChatter(a) && <div className="mb-1.5"><EtiquetaChatter actividad={a} /></div>}
                       {/* T11 (V3): la misma cabecera que la SC y el PVEN (F12: el título arriba y la fecha debajo).
                           Revisión final (F3): la fecha y la hora del renglón pasan por comoUTC (solo aquí, no en fDate). */}
-                      <CabeceraActividad className="mb-2" titulo={a.description || humanizarCodigo(a.action)} fecha={`${fDate(comoUTC(a.created_at))} ${fTime(comoUTC(a.created_at))}`} />
+                      <CabeceraActividad className="mb-2" titulo={a.description || b3?.etiqueta || humanizarCodigo(a.action)} fecha={`${fDate(comoUTC(a.created_at))} ${fTime(comoUTC(a.created_at))}`} />
                       <CambiosDeActividad extra={a.extra_data} />
                       {a.old_estado && a.new_estado && (
                         <p className="flex items-center gap-1.5 mb-3 flex-wrap">

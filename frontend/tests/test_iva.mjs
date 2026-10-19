@@ -432,8 +432,10 @@ console.log('--- B3 T17 TEST 18: ivaDeLinea (la tarjeta de cada producto en el d
   assert.equal(ivaDeLinea(sinDescuento).total_con_iva_cop, 1476331);
   assert.equal(ivaDeLinea(cinta).iva, 'IVA 5% · $5.940');
   const exenta = calcularTotalesCotizacion([linea('Cuaderno', 2.5, 1000, 'EXENTO')], 0).lineas[0];
-  assert.deepEqual(ivaDeLinea(exenta), { discriminado: true, cantidad: 'Cant. 2.5 × $1.000 sin IVA', iva: 'Exento · $0',
+  // r1: la cantidad con el mismo formato del documento del cliente (formatoCantidad: '2,5').
+  assert.deepEqual(ivaDeLinea(exenta), { discriminado: true, cantidad: 'Cant. 2,5 × $1.000 sin IVA', iva: 'Exento · $0',
     descuento: null, total_con_iva_cop: 2500 });
+  assert.equal(ivaDeLinea({ ...exenta, qty: '3' }).cantidad, 'Cant. 3 × $1.000 sin IVA', 'una cantidad guardada como texto');
   // Una línea guardada sin total_con_iva_cop (dato raro): base (total − descuento) + IVA.
   assert.equal(ivaDeLinea({ ...sinDescuento, total_con_iva_cop: undefined }).total_con_iva_cop, 1476331);
   assert.equal(ivaDeLinea({ ...rodillo, total_con_iva_cop: undefined }).total_con_iva_cop, 1328698, 'con descuento');

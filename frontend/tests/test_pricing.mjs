@@ -7,10 +7,11 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   computeMarginPrice, MARGIN_PCT_CAP, filaDeCalculadora, calcularCotizacion, cuerpoCompletoCalculadora, cuerpoDeGuardado,
   validaPreciosAlGuardar, inicialParaComparar, filaNuevaCalculadora, filasInicialesCalculadora, tarifaDeSeleccion,
-  avisoTarifaProducto, totalesIvaCalculadora,
+  avisoTarifaProducto, totalesIvaCalculadora, avisoCotizacionSinIva, AVISO_COT_SIN_IVA,
 } from '../src/lib/pricing.js';
 
 console.log('--- TEST 1: unitario * qty == total, siempre (caso real reportado) ---');
@@ -286,14 +287,65 @@ console.log('--- B3 T17 TEST 15: el cuerpo de guardado con IVA (iva_tarifa por l
   assert.equal(cuerpo.total_cop, 1476331, 'el total con IVA de lib/iva.js (el servidor recalcula y gana)');
   // No viajan las claves internas de la fila (_tarifaProducto) ni el IVA calculado por línea.
   assert.ok(cuerpo.productos.every((p) => !('_tarifaProducto' in p) && !('iva_cop' in p)));
-  // Sin tocar nada: solo las notas, también con IVA.
+  // Sin tocar nada: solo las notas, en una COT que YA tiene el IVA discriminado (r1: una COT vieja, sin IVA
+  // discriminado, en Borrador o Enviada manda los precios: TEST 16).
   const otraVez = cuerpoCompletoCalculadora(calculo, f, COT_20260486, totalesIvaCalculadora(calculo.filas, 0).totales);
-  assert.deepEqual(cuerpoDeGuardado(otraVez, cuerpo), { notas: 'Entrega en la mañana' });
+  const conTarifas = { ...COT_20260486, total_cop: 1476331, iva_discriminado: true, estado: 'BORRADOR' };
+  assert.deepEqual(cuerpoDeGuardado(otraVez, inicialParaComparar(conTarifas, cuerpo)), { notas: 'Entrega en la mañana' });
   // Cambiar la tarifa de la línea cambia `productos`: viajan los precios (es un cambio de precio, H40).
   const calc5 = calcularCotizacion([{ ...f.filas[0], iva_tarifa: '5' }], f.trm, f.descuento);
   const otra = cuerpoCompletoCalculadora(calc5, f, COT_20260486, totalesIvaCalculadora(calc5.filas, 0).totales);
   assert.equal(otra.total_cop, 1302645);
   assert.ok('productos' in cuerpoDeGuardado(otra, cuerpo));
+}
+
+console.log('--- B3 T17 r1 TEST 16: una COT vieja (sin IVA discriminado) toma el IVA al guardarla en Borrador o Enviada ---');
+{
+  // COT-20260486 guardada antes del IVA: líneas sin iva_tarifa, total sin IVA y el GET con iva_discriminado false.
+  const vieja = { ...COT_20260486, total_cop: 1240614, iva_discriminado: false };
+  const f = { ...formularioInicial(vieja), filas: filasInicialesCalculadora({ ...vieja, tarifas_producto: ['19'] }, '19') };
+  const calculo = calcularCotizacion(f.filas, f.trm, f.descuento);
+  const iva = totalesIvaCalculadora(calculo.filas, f.descuento).totales;
+  const inicial = cuerpoCompletoCalculadora(calculo, f, vieja, iva); // lo que la calculadora muestra al abrir (con IVA)
+  for (const estado of ['BORRADOR', 'ENVIADA']) {
+    const cot = { ...vieja, estado };
+    // Se compara contra null: «Guardar» sin cambiar un número manda los precios con su tarifa y el servidor aplica el IVA.
+    assert.equal(inicialParaComparar(cot, inicial), null, estado);
+    const cuerpo = cuerpoDeGuardado(cuerpoCompletoCalculadora(calculo, f, cot, iva), inicialParaComparar(cot, inicial));
+    assert.equal(validaPreciosAlGuardar(cuerpo), true, estado);
+    assert.equal(cuerpo.productos[0].iva_tarifa, '19');
+    assert.equal(cuerpo.total_cop, 1476331);
+    assert.equal(avisoCotizacionSinIva(cot, null), null, `${estado}: sin aviso (se guarda con IVA)`);
+  }
+  for (const estado of ['PENDIENTE_CONFIRMACION', 'CONFIRMADA']) {
+    const cot = { ...vieja, estado };
+    // H40: guardar una nota no anula la confirmación: se siguen comparando las cifras con IVA (solo notas) y se avisa.
+    assert.equal(inicialParaComparar(cot, inicial), inicial, estado);
+    assert.deepEqual(cuerpoDeGuardado(cuerpoCompletoCalculadora(calculo, f, cot, iva), inicialParaComparar(cot, inicial)),
+      { notas: 'Entrega en la mañana' });
+    assert.equal(avisoCotizacionSinIva(cot, estado), AVISO_COT_SIN_IVA, estado);
+  }
+  assert.equal(AVISO_COT_SIN_IVA, 'Esta cotización se guardó sin IVA discriminado. Las cifras con IVA se guardan si cambias '
+    + 'algún precio, y el cliente tendrá que confirmar de nuevo.');
+  // Confirmada con pedido vigente (la calculadora no la congela: estadoConfirmacion null): sin aviso.
+  assert.equal(avisoCotizacionSinIva({ ...vieja, estado: 'CONFIRMADA' }, null), null);
+  // Una COT con IVA discriminado, una respuesta sin el campo o una COT sin precio: como antes.
+  assert.equal(inicialParaComparar({ ...vieja, iva_discriminado: true, estado: 'BORRADOR' }, inicial), inicial);
+  assert.equal(inicialParaComparar({ ...COT_20260486, total_cop: 1240614, estado: 'BORRADOR' }, inicial), inicial);
+  assert.equal(inicialParaComparar({ ...vieja, total_cop: 0, estado: 'BORRADOR' }, inicial), null);
+  for (const estado of ['PENDIENTE_CONFIRMACION', 'CONFIRMADA']) {
+    assert.equal(avisoCotizacionSinIva({ ...vieja, iva_discriminado: true, estado }, estado), null);
+    assert.equal(avisoCotizacionSinIva({ ...vieja, total_cop: 0, estado }, estado), null);
+  }
+}
+
+console.log('--- B3 T17 r1 TEST 17: el Cotizador Rápido no le manda al cliente el margen ni la TRM (R3/C19) ---');
+{
+  // Las «Notas» de la COT salen en el documento del cliente, el PDF y el correo: la COT del Cotizador se crea sin notas.
+  const fuente = readFileSync(new URL('../src/app/dashboard/cotiza/page.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(fuente, /\bnotas\s*:/, 'el cuerpo de la COT no lleva notas');
+  // Ningún texto armado con el margen o la TRM (`${margenPct}`, `${trm}`): los ve solo el asesor, en la pantalla.
+  assert.doesNotMatch(fuente, /\$\{\s*(margenPct|trm)\b/, 'ningún texto armado con el margen o la TRM');
 }
 
 console.log('✓ Todos los tests de pricing pasaron exitosamente.');

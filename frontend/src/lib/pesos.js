@@ -23,3 +23,13 @@ export function formatoPesos(v) {
   const n = redondearPeso(v);
   return (n < 0 ? '-' : '') + '$' + String(Math.abs(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 }
+
+/**
+ * La cantidad como la escribe el documento (y el PDF): '2', '2,5'. '' si no es un número (B3 T12). B3 T17 r1: vive
+ * aquí para que lib/iva.js la use sin un import circular; documento-comercial.js la reexporta (la misma función).
+ * @param {unknown} v
+ * @returns {string}
+ */
+export function formatoCantidad(v) {
+  return typeof v === 'number' && Number.isFinite(v) ? String(v).replace('.', ',') : '';
+}

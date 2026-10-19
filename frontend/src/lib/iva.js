@@ -30,8 +30,9 @@
  */
 
 import { stripPy } from './marca-empresa.js';
-// B3 T17 (parte 4): formatoPesos solo escribe los textos de las pantallas, sobre montos ya enteros (pesoEntero).
-import { formatoPesos } from './pesos.js';
+// B3 T17 (parte 4): formatoPesos y formatoCantidad solo escriben los textos de las pantallas, sobre montos ya enteros
+// (pesoEntero).
+import { formatoPesos, formatoCantidad } from './pesos.js';
 
 // ─── Tarifas (parte 1) ─────────────────────────────────────────────────────────────────────────────────────────
 
@@ -463,7 +464,8 @@ export function filasIvaTotales(t) {
  * El IVA de una línea guardada de la cotización, para su tarjeta en el detalle (IVA punto 11):
  * - null si la línea vale $0 (total_cop o, sin él, unitario × cantidad): no se dice nada del IVA;
  * - {discriminado: false, texto: 'IVA no discriminado'} si no trae una tarifa válida (una cotización vieja);
- * - con tarifa: {discriminado: true, cantidad: 'Cant. 6 × $206.769 sin IVA', iva: 'IVA 19% · $235.717', descuento:
+ * - con tarifa: {discriminado: true, cantidad: 'Cant. 6 × $206.769 sin IVA' ('Cant. 2,5 × …' con formatoCantidad), iva:
+ *   'IVA 19% · $235.717', descuento:
  *   'Descuento −$124.061' (null sin descuento), total_con_iva_cop}. Los montos son los GUARDADOS (no recalcula nada);
  *   sin total_con_iva_cop, base + IVA.
  * @param {unknown} linea
@@ -482,7 +484,8 @@ export function ivaDeLinea(linea) {
     ? Number(pesoEntero(l.total_con_iva_cop)) : total - descuento + iva;
   return {
     discriminado: true,
-    cantidad: `Cant. ${l.qty ?? 0} × ${formatoPesos(Number(pesoEntero(l.unit_price_cop)))} sin IVA`,
+    // r1: la cantidad como en el documento del cliente ('2,5'); una guardada como texto ('3') también se lee.
+    cantidad: `Cant. ${formatoCantidad(Number(l.qty ?? 0)) || '0'} × ${formatoPesos(Number(pesoEntero(l.unit_price_cop)))} sin IVA`,
     iva: `${ETIQUETAS_TARIFA_IVA[tarifa]} · ${formatoPesos(iva)}`,
     descuento: descuento > 0 ? `Descuento −${formatoPesos(descuento)}` : null,
     total_con_iva_cop: conIva,

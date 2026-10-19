@@ -10,7 +10,7 @@ import Link from 'next/link';
 import { intentarTotalesCotizacion, etiquetaCortaTarifaIva, TARIFA_IVA_POR_DEFECTO } from '@/lib/iva';
 import { tarifaIvaDeConfig } from '@/lib/listas-ventas';
 import { porcentajeDePesos } from '@/lib/dinero-ventas';
-import { SelectTarifaIva } from '../ventas/cotizacion/calculadora-iva';
+import { SelectTarifaIva, pesosOGuion } from '../ventas/cotizacion/calculadora-iva';
 
 function formatCOP(v: number) {
   return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0);
@@ -63,7 +63,8 @@ export default function CotizaPage() {
   const totalConIva = ivaRapido.totales ? ivaRapido.totales.total_cop : null;
   const anticipo60 = totalConIva === null ? null : porcentajeDePesos(totalConIva, 60);
   const saldo40 = totalConIva === null || anticipo60 === null ? null : totalConIva - anticipo60;
-  const pesosOGuion = (v: number | null) => (v === null ? '—' : formatCOP(v));
+  // r1: el mismo pesosOGuion de la calculadora, con el formato de moneda que ya usa esta página.
+  const montoOGuion = (v: number | null) => pesosOGuion(v, formatCOP);
 
   const handleCrearCotizacionDirecta = async () => {
     if (!selectedCustomerId) {
@@ -102,7 +103,8 @@ export default function CotizaPage() {
           total_cop: lineaIva.total_cop,
           iva_tarifa: lineaIva.iva_tarifa
         }],
-        notas: `Cotizado desde Calculadora Rápida. Margen: ${margenPct}% | TRM: ${trm}`
+        // B3 T17 r1 (R3/C19): sin notas. Las «Notas» de la COT le llegan al cliente (documento, PDF y correo); el margen
+        // y la TRM ya quedan en la línea y en trm_rate, que el cliente no ve.
       };
 
       const res = await fetch(`${API_URL}/ventas/cotizaciones`, {
@@ -308,11 +310,11 @@ export default function CotizaPage() {
             <div className="mt-3 space-y-2">
               <div className="flex justify-between items-center p-3 bg-slate-50 rounded-xl text-xs">
                 <span className="font-semibold text-slate-500">IVA ({etiquetaCortaTarifaIva(tarifaIva)})</span>
-                <span className="font-bold text-slate-800">{pesosOGuion(lineaIva ? lineaIva.iva_cop : null)}</span>
+                <span className="font-bold text-slate-800">{montoOGuion(lineaIva ? lineaIva.iva_cop : null)}</span>
               </div>
               <div className="flex justify-between items-center p-3.5 bg-purple-100 rounded-xl text-xs">
                 <span className="font-bold text-purple-800">Total con IVA</span>
-                <span className="font-black text-purple-900 text-sm">{pesosOGuion(totalConIva)}</span>
+                <span className="font-black text-purple-900 text-sm">{montoOGuion(totalConIva)}</span>
               </div>
               {ivaRapido.error && <p role="alert" className="text-xs font-bold text-red-600">{ivaRapido.error}</p>}
             </div>
@@ -321,13 +323,13 @@ export default function CotizaPage() {
             <div className="mt-4 grid grid-cols-2 gap-3">
               <div className="p-4 bg-blue-50 border border-blue-200 rounded-2xl">
                 <span className="text-[10px] font-black text-blue-700 uppercase tracking-wider block">Anticipo (60%)</span>
-                <h4 className="text-lg font-black text-blue-900 mt-0.5">{pesosOGuion(anticipo60)}</h4>
+                <h4 className="text-lg font-black text-blue-900 mt-0.5">{montoOGuion(anticipo60)}</h4>
                 <p className="text-[10px] text-blue-600 mt-1">Para realizar la compra</p>
               </div>
 
               <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl">
                 <span className="text-[10px] font-black text-rose-700 uppercase tracking-wider block">Saldo Contra Entrega (40%)</span>
-                <h4 className="text-lg font-black text-rose-900 mt-0.5">{pesosOGuion(saldo40)}</h4>
+                <h4 className="text-lg font-black text-rose-900 mt-0.5">{montoOGuion(saldo40)}</h4>
                 <p className="text-[10px] text-rose-600 mt-1">Al llegar a Barranquilla</p>
               </div>
             </div>

@@ -425,8 +425,12 @@ console.log('--- B3 T17: la ventana del canal (ChannelModal) con envioWhatsApp {
   // La línea bajo la opción WhatsApp (U16-envio punto 13).
   assert.deepEqual(lineaWhatsAppCanal({ automatico: true, listo: true }),
     { tono: 'ok', texto: 'Sale automáticamente desde el WhatsApp de la empresa.' });
+  // r1 (ruling del texto): encendido sin estar listo no abre wa.me solo (abreWhatsAppLocal): la ventana del enlace trae
+  // el botón «Abrir WhatsApp con el mensaje».
   assert.deepEqual(lineaWhatsAppCanal({ automatico: true, listo: false }),
-    { tono: 'alerta', texto: 'El envío automático no está listo: se abrirá WhatsApp para que lo mandes tú.' });
+    { tono: 'alerta', texto: 'El envío automático no está listo: te daremos el botón para mandarlo tú.' });
+  assert.equal(abreWhatsAppLocal('WhatsApp', { enviado: false, motivo: 'CHATWOOT_NO_CONFIGURADO' }), false,
+    'no se abre solo: por eso la línea habla del botón');
   // Apagado o sin estado (el GET falló, o el rol no lo lee): sin línea, se abre wa.me como hoy.
   for (const sinLinea of [{ automatico: false, listo: false }, null, undefined]) {
     assert.equal(lineaWhatsAppCanal(sinLinea), null, JSON.stringify(sinLinea));

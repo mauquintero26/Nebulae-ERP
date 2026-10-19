@@ -16,7 +16,7 @@ import {
   cuentaVerificacion, evaluarVerificacion, verificacionParaEnviar, validarAjusteAnticipo, montoDesdeTexto,
   etiquetaTipoPago, etiquetaMetodoPago, etiquetaEstadoPago, describirPago,
   etiquetaEstadoPxp, pxpsDelPedido, pedidoAdmitePxp, textoChipPxp, propagacionRecotizacion, creditoPorRecotizacion,
-  saldoAFavorAlCancelar, puedeGestionarCotizacion, notaAnticipoPorLinea,
+  saldoAFavorAlCancelar, puedeGestionarCotizacion, notaAnticipoPorLinea, anticipoDeCalculadora,
 } from '../src/lib/dinero-ventas.js';
 import { pctAnticipoDeModalidad } from '../src/lib/etiquetas-solicitud.js';
 
@@ -376,6 +376,38 @@ console.log('--- A3 TEST 12: la re-cotizacion manda precios al pedido, nunca sal
   assert.equal(conIva.productos, guardada.productos, 'las líneas del servidor, tal cual');
   assert.equal(propagacionRecotizacion({ ...guardada, iva_cop: 0 }, pedido, 'COT-1', 'x').iva_cop, 0, 'un IVA 0 también va');
   assert.ok(!('iva_cop' in propagacionRecotizacion({ ...guardada, iva_cop: null }, pedido, 'COT-1', 'x')));
+  // B3 T17 r1: sin la respuesta del servidor no hay propagación (nunca lo calculado en el navegador): null.
+  for (const sin of [null, undefined, 'x', 3]) assert.equal(propagacionRecotizacion(sin, pedido, 'COT-1', 'x'), null, String(sin));
+}
+
+console.log('--- B3 T17 r1: anticipoDeCalculadora (el anticipo de la calculadora sobre el total con IVA, como el servidor) ---');
+{
+  // Sin SC, sin % manual y con total (ORIGEN_CONSERVADO): el % que ya tenía SIN cuantizar (anticipo_cop × 100 / total_cop).
+  // Paridad con anticipo_requerido(total, pct_previo) del servidor (Decimal): 789.249. Con el % del GET (60, cuantizado
+  // a 2 decimales) salía $1 menos.
+  const conservada = { sc_id: null, anticipo_pct_manual: null, total_cop: 2766506, anticipo_cop: 1659904, anticipo_pct: 60 };
+  const r = resumenAnticipoCotizacion(conservada);
+  assert.equal(anticipoDeCalculadora(conservada, r, 1315414), 789249);
+  assert.equal(porcentajeDePesos(1315414, r.pct), 789248, 'el % cuantizado del GET da $1 menos');
+  assert.equal(anticipoDeCalculadora(conservada, r, 2766506), 1659904, 'el mismo total: el anticipo guardado');
+  assert.equal(anticipoDeCalculadora({ ...conservada, anticipo_cop: 0 }, r, 1315414), 0, 'un anticipo 0 se conserva');
+  assert.equal(anticipoDeCalculadora({ ...conservada, anticipo_cop: 3000000 }, r, 1315414), 1315414,
+    'un anticipo mayor que el total: el % llega a 100');
+  // Medio peso hacia arriba: 3 × 1 / 2 = 1,5 -> 2.
+  assert.equal(anticipoDeCalculadora({ ...conservada, total_cop: 2, anticipo_cop: 1 }, r, 3), 2);
+  assert.equal(anticipoDeCalculadora(conservada, r, null), null, 'con una línea incompleta, sin anticipo');
+  // Con SC (modalidad), con % manual o sin total guardado: el % del GET.
+  const conSc = { ...conservada, sc_id: 7, anticipo_pct: 60 };
+  assert.equal(anticipoDeCalculadora(conSc, resumenAnticipoCotizacion(conSc), 1315414), porcentajeDePesos(1315414, 60));
+  const manual = { ...conservada, anticipo_pct_manual: 50, anticipo_pct: 50 };
+  assert.equal(anticipoDeCalculadora(manual, resumenAnticipoCotizacion(manual), 1315414), 657707);
+  const nueva = { ...conservada, total_cop: 0, anticipo_cop: 0, anticipo_pct: 60 };
+  assert.equal(anticipoDeCalculadora(nueva, resumenAnticipoCotizacion(nueva), 1315414), porcentajeDePesos(1315414, 60));
+  // Ya convertida: el % del pedido vigente.
+  const convertida = { ...conservada, pedidos_venta: [{ estado: 'EN_PROCESO', numero: 'PVEN-1', anticipo_pct: 40,
+    total_cop: 2766506, saldo_cop: 1659904 }] };
+  assert.equal(anticipoDeCalculadora(convertida, resumenAnticipoCotizacion(convertida), 1315414),
+    porcentajeDePesos(1315414, 40));
 }
 
 console.log('--- B7 / R6 TEST 13: dinero del pedido que queda como saldo a favor si se cancela ---');

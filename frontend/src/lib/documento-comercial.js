@@ -474,14 +474,9 @@ export function textoEntregaEstimada(doc) {
   return doc.tipo === 'SC' ? `${fecha} (aproximada; la fecha final llega en la cotización)` : fecha;
 }
 
-/**
- * La cantidad como la escribe el documento (y el PDF): '2', '2,5'. '' si no es un número.
- * @param {unknown} v
- * @returns {string}
- */
-export function formatoCantidad(v) {
-  return esNumero(v) ? String(v).replace('.', ',') : '';
-}
+// La cantidad como la escribe el documento (y el PDF): '2', '2,5'. B3 T17 r1: vive en pesos.js (la usa también
+// lib/iva.js, sin un import circular); se reexporta aquí con el mismo nombre para quien la importa de este módulo.
+export { formatoCantidad } from './pesos.js';
 
 /**
  * B3 T15 (U17): el 'Total de unidades' de la pastilla de la solicitud, la suma de documento.lineas[].cantidad

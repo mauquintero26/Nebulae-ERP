@@ -389,8 +389,9 @@ export function estadoEnvioParaCanal(data) {
 
 /**
  * La línea bajo la opción WhatsApp del ChannelModal: listo -> 'ok' «Sale automáticamente desde el WhatsApp de la
- * empresa.»; encendido sin estar listo -> 'alerta' «El envío automático no está listo: se abrirá WhatsApp para que lo
- * mandes tú.»; apagado o sin estado -> null (sin línea: se abre wa.me como hoy).
+ * empresa.»; encendido sin estar listo -> 'alerta' «El envío automático no está listo: te daremos el botón para mandarlo
+ * tú.» (r1: en ese caso abreWhatsAppLocal no abre wa.me solo; la ventana del enlace trae «Abrir WhatsApp con el
+ * mensaje»); apagado o sin estado -> null (sin línea: se abre wa.me como hoy).
  * @param {unknown} envio  la prop envioWhatsApp
  * @returns {{tono: 'ok' | 'alerta', texto: string} | null}
  */
@@ -399,7 +400,7 @@ export function lineaWhatsAppCanal(envio) {
   const e = /** @type {any} */ (envio);
   if (e.listo === true) return { tono: 'ok', texto: 'Sale automáticamente desde el WhatsApp de la empresa.' };
   if (e.automatico === true) {
-    return { tono: 'alerta', texto: 'El envío automático no está listo: se abrirá WhatsApp para que lo mandes tú.' };
+    return { tono: 'alerta', texto: 'El envío automático no está listo: te daremos el botón para mandarlo tú.' };
   }
   return null;
 }
