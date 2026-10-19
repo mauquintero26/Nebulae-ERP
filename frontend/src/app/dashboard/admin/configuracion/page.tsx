@@ -7,10 +7,12 @@ import {
 } from 'lucide-react';
 import { SubNav, PageHeader } from '@/components/ui';
 import { ADM_NAV } from '../adm-nav';
+import { FormEmpresa } from './empresa-form';
+import { FormDocumentos } from './documentos-form';
 
 const TABS = [
-  { id: 'empresa', label: 'Info de la Empresa', icon: Building2 },
-  { id: 'diseno', label: 'Diseño & Documentos', icon: Paintbrush },
+  { id: 'empresa', label: 'Información de la empresa', icon: Building2 },
+  { id: 'diseno', label: 'Diseño de documentos', icon: Paintbrush },
   { id: 'localizacion', label: 'Localización & Unidades', icon: Globe2 },
   { id: 'api', label: 'Nuestra API & OAuth', icon: TerminalSquare },
   { id: 'seguridad', label: 'Seguridad & SSO', icon: KeyRound },
@@ -26,28 +28,31 @@ export default function ConfiguracionHub() {
       <SubNav label="Admin" items={ADM_NAV} currentPath="/dashboard/admin/configuracion" color="red" />
 
       {/* Warning Banner */}
-      <div className="bg-red-50 border-b border-red-200 px-8 py-3 flex items-center gap-3 shrink-0">
-        <ShieldAlert className="text-red-600" size={20} />
+      <div className="bg-red-50 border-b border-red-200 px-4 sm:px-8 py-3 flex items-center gap-3 shrink-0">
+        <ShieldAlert className="text-red-600 shrink-0" size={20} />
         <span className="text-red-800 font-bold text-sm">ZONA RESTRINGIDA: CONFIGURACIÓN GENERAL DEL SISTEMA.</span>
       </div>
 
       {/* Top Header */}
-      <div className="bg-white px-8 py-8 border-b border-slate-200 shrink-0">
+      <div className="bg-white px-4 sm:px-8 py-6 sm:py-8 border-b border-slate-200 shrink-0">
         <PageHeader icon={Settings} color="red"
           title="Configuración General"
           subtitle="Personaliza el comportamiento global, marca blanca y llaves maestras de Nebulae." />
       </div>
 
-      <div className="flex-1 flex overflow-hidden">
-        
+      {/* En el celular las pestañas van arriba, en una fila que se desliza; desde md, a la izquierda. */}
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+
         {/* Sidebar Menu inside Config */}
-        <div className="w-64 bg-slate-50/50 border-r border-slate-200 p-4 shrink-0 overflow-y-auto">
-          <ul className="space-y-1">
+        <div className="w-full md:w-64 bg-slate-50/50 border-b md:border-b-0 md:border-r border-slate-200 p-2 md:p-4 shrink-0 overflow-x-auto md:overflow-y-auto">
+          <ul className="flex gap-1 md:block md:space-y-1">
             {TABS.map(tab => (
-              <li key={tab.id}>
+              <li key={tab.id} className="shrink-0">
                 <button
+                  type="button"
+                  aria-pressed={activeTab === tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-colors ${
+                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm whitespace-nowrap md:whitespace-normal text-left transition-colors ${
                     activeTab === tab.id 
                       ? 'bg-slate-800 text-white shadow-md' 
                       : 'text-slate-600 hover:bg-slate-200/50'
@@ -62,42 +67,17 @@ export default function ConfiguracionHub() {
         </div>
 
         {/* Content Area */}
-        <div className="flex-1 bg-white p-10 overflow-y-auto custom-scrollbar">
+        <div className="flex-1 bg-white p-4 sm:p-6 lg:p-10 overflow-y-auto custom-scrollbar">
           <div className="max-w-4xl mx-auto">
-            
-            {activeTab === 'empresa' && (
-              <div className="space-y-8 animate-in slide-in-from-right-4">
-                <h2 className="text-2xl font-black text-slate-800 border-b border-slate-100 pb-4">Información de la Compañía</h2>
-                
-                <div className="flex gap-8">
-                  <div className="w-40 h-40 border-2 border-dashed border-slate-300 rounded-3xl flex flex-col items-center justify-center text-slate-400 hover:bg-slate-50 transition-colors cursor-pointer shrink-0">
-                    <Building2 size={32} className="mb-2 opacity-50" />
-                    <span className="text-xs font-bold">Subir Logo</span>
-                  </div>
-                  
-                  <div className="flex-1 space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-semibold text-slate-700 mb-1.5">Razón Social</label>
-                        <input type="text" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 outline-none focus:border-slate-800" defaultValue="Nebulae Corp S.A.S" />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-semibold text-slate-700 mb-1.5">NIT / ID Fiscal</label>
-                        <input type="text" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 outline-none focus:border-slate-800" defaultValue="900.123.456-7" />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-semibold text-slate-700 mb-1.5">Dirección Principal</label>
-                      <input type="text" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 outline-none focus:border-slate-800" defaultValue="Av Siempre Viva 123, Bogotá" />
-                    </div>
-                  </div>
-                </div>
 
-                <div className="pt-6">
-                  <button className="bg-slate-800 hover:bg-slate-900 text-white px-6 py-3 rounded-xl font-bold shadow-sm transition-colors">Guardar Información</button>
-                </div>
-              </div>
-            )}
+            {/* Las dos pestañas de la empresa quedan montadas (ocultas cuando no están a la vista): cambiar de
+                pestaña no borra lo que se escribió y no se guardó. */}
+            <div className={activeTab === 'empresa' ? 'animate-in slide-in-from-right-4' : 'hidden'}>
+              <FormEmpresa activo={activeTab === 'empresa'} />
+            </div>
+            <div className={activeTab === 'diseno' ? 'animate-in slide-in-from-right-4' : 'hidden'}>
+              <FormDocumentos activo={activeTab === 'diseno'} />
+            </div>
 
             {activeTab === 'api' && (
               <div className="space-y-8 animate-in slide-in-from-right-4">
@@ -138,7 +118,7 @@ export default function ConfiguracionHub() {
               </div>
             )}
 
-            {activeTab !== 'empresa' && activeTab !== 'api' && (
+            {activeTab !== 'empresa' && activeTab !== 'diseno' && activeTab !== 'api' && (
                <div className="flex flex-col items-center justify-center py-32 text-slate-400">
                   <Settings size={48} className="mb-4 opacity-20" />
                   <p className="font-bold">Contenido de "{TABS.find(t=>t.id === activeTab)?.label}" en construcción.</p>

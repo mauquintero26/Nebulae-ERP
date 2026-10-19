@@ -7,6 +7,8 @@
  * - validarCampoEmpresa: espejo de empresa.validar_cambios con sus mismos textos (los casos de
  *   backend/tests/test_empresa_marca.py::test_validar_cambios_reglas_y_mensajes). T13 compara los dos lados (RP21).
  * - cambiosDelFormulario, validarArchivoLogo, urlLogo.
+ * - B3 T14 (los formularios de Configuración): avisoLogoParaPdf (nota del controlador después de T9), marcaVistaPrevia,
+ *   GRUPOS_CAMPOS_EMPRESA, CAMPOS_COLOR, valoresDeCampos, erroresDeCambios y cambiosDelHistorial.
  */
 
 import assert from 'node:assert/strict';
@@ -16,6 +18,8 @@ import { fileURLToPath } from 'node:url';
 import {
   COLORES_POR_DEFECTO, MARCA_VACIA, CAMPOS_EMPRESA, normalizarMarca, cargarMarcaEmpresa, urlLogo, validarCampoEmpresa,
   cambiosDelFormulario, validarArchivoLogo, correoValido, inicialesMarca,
+  LOGO_MAX_LADO_PDF, avisoLogoParaPdf, marcaVistaPrevia, GRUPOS_CAMPOS_EMPRESA, CAMPOS_COLOR, valoresDeCampos,
+  erroresDeCambios, cambiosDelHistorial,
 } from '../src/lib/marca-empresa.js';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
@@ -281,6 +285,110 @@ console.log('--- TEST 7: sin apiFetch ni URL de producción escrita a mano; una 
   assert.match(fuente, /import\s*\{[^}]*\blargoTexto\b[^}]*\}\s*from\s*'\.\/chatter\.js'/);
   assert.match(fuente, /export\s+(?:const|function)\s+stripPy\b/);
   assert.doesNotMatch(fuente, /\[\.\.\.\w+\]\.length/, 'sin otro conteo de code points');
+}
+
+console.log('--- TEST 8: avisoLogoParaPdf (pdf_documento descarta un logo de más de 4000 px por lado) ---');
+{
+  const AVISO = 'El logo es muy grande para el PDF (máximo 4000 px por lado): no saldrá en el documento adjunto.';
+  assert.equal(LOGO_MAX_LADO_PDF, 4000, 'pdf_documento.LOGO_MAX_LADO_PX');
+  assert.equal(avisoLogoParaPdf({ ancho: 4000, alto: 4000 }), null, '4000 justos sí salen (0 < lado <= 4000)');
+  assert.equal(avisoLogoParaPdf({ ancho: 600, alto: 200 }), null);
+  assert.equal(avisoLogoParaPdf({ ancho: 4001, alto: 300 }), AVISO, 'el ancho');
+  assert.equal(avisoLogoParaPdf({ ancho: 300, alto: 4001 }), AVISO, 'el alto');
+  assert.equal(avisoLogoParaPdf({ ancho: 8000, alto: 8000 }), AVISO);
+  for (const raro of [null, undefined, {}, 'x', { ancho: '5000', alto: '5000' }, { ancho: NaN, alto: Infinity }]) {
+    assert.equal(avisoLogoParaPdf(raro), null, `sin medidas conocidas no se avisa: ${String(raro)}`);
+  }
+}
+
+console.log('--- TEST 9: marcaVistaPrevia (la marca pública con los colores del formulario sin guardar) ---');
+{
+  assert.deepEqual(marcaVistaPrevia(PERFIL, {}), normalizarMarca(PERFIL), 'sin colores en el formulario: la pública');
+  assert.deepEqual(marcaVistaPrevia({ status: 'success', data: PERFIL }, {}), normalizarMarca(PERFIL), '{status, data}');
+  const propios = { ...PERFIL, colores: { principal: '#111111', secundario: '#222222', acento: '#333333' } };
+  assert.deepEqual(marcaVistaPrevia(propios, { color_secundario: '#ABCDEF' }).colores,
+    { principal: '#111111', secundario: '#ABCDEF', acento: '#333333' }, 'el color que no está en el formulario: el guardado');
+  const m = marcaVistaPrevia(PERFIL, { color_principal: '#112233', color_secundario: ' #aabbcc ', color_acento: '' });
+  assert.deepEqual(m.colores, { principal: '#112233', secundario: '#AABBCC', acento: COLORES_POR_DEFECTO.acento },
+    'ganan los del formulario, normalizados como el servidor; vacío vuelve al de la referencia');
+  assert.equal(m.nombre_comercial, 'DEMO Ferretería', 'la identidad es la pública');
+  assert.equal(m.logo_url, '/publico/empresa/logo?v=abc123def456', 'el logo es el público');
+  // Un color que el servidor rechazaría (422) no se guarda: la vista previa sigue con el guardado.
+  assert.equal(marcaVistaPrevia(PERFIL, { color_principal: '#12' }).colores.principal, '#7C3AED');
+  assert.equal(marcaVistaPrevia({ ...PERFIL, colores: { ...PERFIL.colores, acento: '#00FF00' } },
+    { color_acento: 'naranja' }).colores.acento, '#00FF00');
+  // Solo los colores: los demás campos del formulario no cambian la identidad ni entran a la marca.
+  const otra = marcaVistaPrevia(PERFIL, { nombre_comercial: 'Otro', terminos_cotizacion: 'T', logo_url: 'data:x' });
+  assert.equal(otra.nombre_comercial, 'DEMO Ferretería');
+  assert.equal(otra.logo_url, PERFIL.logo_url);
+  assert.equal('terminos_cotizacion' in otra, false);
+  assert.deepEqual(marcaVistaPrevia(null, { color_principal: '#112233' }),
+    { ...MARCA_VACIA, colores: { ...COLORES_POR_DEFECTO, principal: '#112233' } }, 'sin marca pública');
+  assert.deepEqual(marcaVistaPrevia(PERFIL, null), normalizarMarca(PERFIL));
+}
+
+console.log('--- TEST 10: GRUPOS_CAMPOS_EMPRESA, CAMPOS_COLOR y valoresDeCampos ---');
+{
+  assert.deepEqual(GRUPOS_CAMPOS_EMPRESA.identidad, ['nombre_comercial', 'razon_social', 'nit', 'direccion', 'ciudad',
+    'telefono', 'whatsapp', 'correo', 'sitio_web']);
+  assert.deepEqual(GRUPOS_CAMPOS_EMPRESA.colores, ['color_principal', 'color_secundario', 'color_acento']);
+  assert.deepEqual(GRUPOS_CAMPOS_EMPRESA.textos, ['terminos_cotizacion', 'terminos_pedido', 'instrucciones_pago',
+    'mensaje_pie']);
+  assert.deepEqual([...GRUPOS_CAMPOS_EMPRESA.identidad, ...GRUPOS_CAMPOS_EMPRESA.colores, ...GRUPOS_CAMPOS_EMPRESA.textos],
+    Object.keys(CAMPOS_EMPRESA), 'cada campo de empresa.CAMPOS una sola vez, en su orden');
+  assert.ok(GRUPOS_CAMPOS_EMPRESA.textos.every((c) => CAMPOS_EMPRESA[c].largo), 'los textos son los de varias líneas');
+  assert.deepEqual(CAMPOS_COLOR, [
+    { campo: 'color_principal', nombre: 'principal', referencia: '#7C3AED' },
+    { campo: 'color_secundario', nombre: 'secundario', referencia: '#E11D48' },
+    { campo: 'color_acento', nombre: 'acento', referencia: '#C2410C' },
+  ]);
+  for (const c of [GRUPOS_CAMPOS_EMPRESA, GRUPOS_CAMPOS_EMPRESA.identidad, CAMPOS_COLOR, CAMPOS_COLOR[0]]) {
+    assert.ok(Object.isFrozen(c));
+  }
+
+  const perfil = { nombre_comercial: 'DEMO', nit: null, ciudad: 7, puede_editar: true, logo_url: '/x',
+    color_principal: '#7C3AED' };
+  assert.deepEqual(valoresDeCampos(perfil, ['nombre_comercial', 'nit', 'ciudad', 'correo']),
+    { nombre_comercial: 'DEMO', nit: '', ciudad: '', correo: '' }, 'solo esos campos; lo que no es texto queda vacío');
+  assert.deepEqual(valoresDeCampos(perfil, GRUPOS_CAMPOS_EMPRESA.colores),
+    { color_principal: '#7C3AED', color_secundario: '', color_acento: '' });
+  assert.deepEqual(valoresDeCampos(null, ['nit']), { nit: '' });
+  assert.deepEqual(valoresDeCampos({ status: 'success', data: { nit: '900' } }, ['nit']), { nit: '' },
+    'recibe el perfil (el .data), no la respuesta entera');
+  assert.deepEqual(valoresDeCampos({}, ['toString']), { toString: '' }, 'solo claves propias');
+}
+
+console.log('--- TEST 11: erroresDeCambios (lo que se revisa antes de mandar PUT /empresa) ---');
+{
+  assert.deepEqual(erroresDeCambios({ nit: 'abc', correo: 'v@example.com', telefono: '12', sitio_web: 'example.com' }),
+    { nit: MENSAJE_NIT, telefono: MENSAJE_TELEFONO }, 'solo los que el servidor rechazaría, con su mensaje');
+  assert.deepEqual(erroresDeCambios({ color_acento: '#12', nombre_comercial: '' }), { color_acento: MENSAJE_COLOR },
+    'vaciar un campo no es un error');
+  assert.deepEqual(erroresDeCambios({ whatsapp: 'x', sitio_web: 'javascript:alert(1)' }),
+    { whatsapp: MENSAJE_WHATSAPP, sitio_web: MENSAJE_URL });
+  assert.deepEqual(erroresDeCambios({ logo: 'data:x' }), { logo: 'Campo desconocido: logo.' });
+  assert.deepEqual(erroresDeCambios({ mensaje_pie: 'x'.repeat(201) }),
+    { mensaje_pie: 'Mensaje de pie: máximo 200 caracteres.' });
+  assert.deepEqual(erroresDeCambios({}), {});
+  assert.deepEqual(erroresDeCambios(null), {});
+}
+
+console.log('--- TEST 12: cambiosDelHistorial (GET /empresa/historial: antes -> después) ---');
+{
+  const fila = {
+    id: 9, descripcion: 'Datos de la empresa actualizados: NIT, Correo', user_name: 'Admin DEMO',
+    created_at: '2026-10-05T14:00:00Z',
+    cambios: [{ etiqueta: 'NIT', antes: '', despues: '900.123.456-7' },
+      { etiqueta: 'Correo', antes: 'a@example.com', despues: '' }],
+  };
+  assert.deepEqual(cambiosDelHistorial(fila), [
+    { etiqueta: 'NIT', antes: '(vacío)', despues: '900.123.456-7' },
+    { etiqueta: 'Correo', antes: 'a@example.com', despues: '(vacío)' },
+  ]);
+  assert.deepEqual(cambiosDelHistorial({ descripcion: 'Logo actualizado', cambios: [] }), [], 'el logo: solo la versión');
+  assert.deepEqual(cambiosDelHistorial({ cambios: [null, 'x', { antes: 'a' }, { etiqueta: 'NIT', antes: 5 }] }),
+    [{ etiqueta: 'NIT', antes: '(vacío)', despues: '(vacío)' }], 'lo que no es un cambio se descarta');
+  for (const raro of [null, undefined, {}, { cambios: 'x' }]) assert.deepEqual(cambiosDelHistorial(raro), []);
 }
 
 console.log('✓ Todas las pruebas de la marca de la empresa pasaron.');

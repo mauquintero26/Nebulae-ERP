@@ -7,6 +7,7 @@
  *   etiquetaTarifaIva ('IVA no discriminado' sin tarifa).
  * - Parte 2: repartirProporcional (mayor residuo con BigInt), calcularTotalesCotizacion (pesos enteros, puntos básicos)
  *   y desgloseDocumento (un documento viejo -> iva_discriminado false).
+ * - B3 T14 (catálogo de productos): etiquetaTarifaCatalogo ('Sin tarifa') y sinTarifaIva (el filtro «Sin tarifa de IVA»).
  */
 
 import assert from 'node:assert/strict';
@@ -14,7 +15,7 @@ import {
   TARIFAS_IVA, ORDEN_TARIFAS, ETIQUETAS_TARIFA_IVA, ETIQUETA_SIN_TARIFA, TARIFA_IVA_POR_DEFECTO,
   MENSAJE_TARIFA_INVALIDA, MENSAJE_DESCUENTO_INVALIDO, normalizarTarifaIva, pctTarifaIva, etiquetaTarifaIva,
   nombreDeLinea, lineasConTarifa, repartirProporcional, calcularTotalesCotizacion, resumenIvaPorTarifa,
-  desgloseDocumento,
+  desgloseDocumento, ETIQUETA_CATALOGO_SIN_TARIFA, etiquetaTarifaCatalogo, sinTarifaIva,
 } from '../src/lib/iva.js';
 
 const linea = (nombre, qty, precio, tarifa, extra = {}) => {
@@ -336,6 +337,32 @@ console.log('--- TEST 13: desgloseDocumento (sin recalcular; un documento viejo 
   assert.deepEqual(desgloseDocumento(unPeso).iva_por_tarifa, []);
   // Los montos que no son montos valen 0 (un booleano no es $1, como en el backend).
   assert.equal(desgloseDocumento({ productos: [], tax_cop: true, total_cop: 'abc' }).iva_cop, 0);
+}
+
+// ─── Parte 3: el catálogo de productos (T14) ───────────────────────────────────────────────────────────────────
+
+console.log('--- TEST 14: etiquetaTarifaCatalogo y sinTarifaIva (la lista del catálogo y su filtro) ---');
+{
+  assert.equal(ETIQUETA_CATALOGO_SIN_TARIFA, 'Sin tarifa');
+  assert.equal(etiquetaTarifaCatalogo('19'), 'IVA 19%');
+  assert.equal(etiquetaTarifaCatalogo('5'), 'IVA 5%');
+  assert.equal(etiquetaTarifaCatalogo('EXENTO'), 'Exento');
+  assert.equal(etiquetaTarifaCatalogo('EXCLUIDO'), 'Excluido');
+  for (const sin of [null, undefined, '', '16', 'toString']) {
+    assert.equal(etiquetaTarifaCatalogo(sin), 'Sin tarifa', `${String(sin)}: «Sin tarifa», no 'IVA no discriminado'`);
+  }
+
+  const productos = [
+    { id: 1, tarifa_iva: '19' }, { id: 2, tarifa_iva: null }, { id: 3 }, { id: 4, tarifa_iva: 'EXCLUIDO' },
+    { id: 5, tarifa_iva: '' }, { id: 6, tarifa_iva: 'EXENTO' }, { id: 7, tarifa_iva: '16' }, { id: 8, tarifa_iva: 5 },
+  ];
+  assert.deepEqual(productos.filter(sinTarifaIva).map((p) => p.id), [2, 3, 5, 7],
+    'Exento y Excluido sí tienen tarifa; un código no válido no');
+  for (const raro of [null, undefined, 'x', 42]) assert.equal(sinTarifaIva(raro), true, String(raro));
+  // Una etiqueta y el filtro dicen lo mismo de cada producto.
+  for (const p of productos) {
+    assert.equal(sinTarifaIva(p), etiquetaTarifaCatalogo(p.tarifa_iva) === 'Sin tarifa', `producto ${p.id}`);
+  }
 }
 
 console.log('OK test_iva.mjs');

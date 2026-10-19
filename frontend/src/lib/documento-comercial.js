@@ -522,3 +522,27 @@ export const DOCUMENTO_EJEMPLO_COT = congelar({
   valida_hasta: '2026-10-08', terminos: 'Términos y condiciones DEMO de la cotización.',
   mensaje_pie: 'Mensaje de pie DEMO.',
 });
+
+/**
+ * El documento de la vista previa de «Diseño de documentos» (T14): DOCUMENTO_EJEMPLO_COT o DOCUMENTO_EJEMPLO_SC con los
+ * textos del formulario todavía sin guardar, donde los pone el servidor (empresa.textos_documento y documento_cliente):
+ * la solicitud solo lleva el mensaje de pie; la cotización, además, sus términos (terminos_cotizacion) y los datos para
+ * pagar (pago.instrucciones). Un texto vacío no aparece (null), como en el documento real, aunque el ejemplo DEMO traiga
+ * uno. Devuelve una copia: los ejemplos no cambian.
+ * @param {'SC' | 'COT'} tipo cualquier otro valor da la solicitud
+ * @param {unknown} textos los valores del formulario ({terminos_cotizacion, instrucciones_pago, mensaje_pie, ...})
+ * @returns {DocumentoCliente}
+ */
+export function documentoVistaPrevia(tipo, textos) {
+  const t = esObjeto(textos) ? textos : {};
+  const mensajePie = textoONull(t.mensaje_pie);
+  if (tipo === 'COT') {
+    return {
+      ...DOCUMENTO_EJEMPLO_COT,
+      terminos: textoONull(t.terminos_cotizacion),
+      pago: { ...DOCUMENTO_EJEMPLO_COT.pago, instrucciones: textoONull(t.instrucciones_pago) },
+      mensaje_pie: mensajePie,
+    };
+  }
+  return { ...DOCUMENTO_EJEMPLO_SC, mensaje_pie: mensajePie };
+}

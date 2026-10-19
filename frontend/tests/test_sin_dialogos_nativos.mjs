@@ -31,6 +31,7 @@ const RAIZ = join(dirname(fileURLToPath(import.meta.url)), '..');
 const RAICES = [
   'src/app/dashboard/ventas',
   'src/app/dashboard/admin/configuracion',
+  'src/app/dashboard/inventario/productos',
   'src/app/dashboard/cotiza',
   'src/components/documento',
   'src/components/AlertasBadge.tsx',

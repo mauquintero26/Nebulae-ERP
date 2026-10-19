@@ -7,7 +7,8 @@ import {
   Globe, Tag, Layers, DollarSign, RefreshCw
 } from 'lucide-react';
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
-import { SubNav, PageHeader, Badge, EmptyState, Button } from '@/components/ui';
+import { SubNav, PageHeader, Badge, EmptyState, Button, useAvisos } from '@/components/ui';
+import { TARIFAS_IVA, etiquetaTarifaCatalogo, normalizarTarifaIva, sinTarifaIva } from '@/lib/iva';
 import { INV_NAV } from '../inv-nav';
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
@@ -28,6 +29,8 @@ export default function ProductosPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [soloRevision, setSoloRevision] = useState(false);
+  const [soloSinTarifa, setSoloSinTarifa] = useState(false);
+  const { avisar, avisarError } = useAvisos();
   const [selectedProduct, setSelectedProduct] = useState<any | null>(null);
   const [activeTab, setActiveTab] = useState(TABS[0]);
   const [categories, setCategories] = useState<any[]>([]);
@@ -50,7 +53,7 @@ export default function ProductosPage() {
   const [form, setForm] = useState({
     name: '', description: '', type: 'Fisico', base_currency: 'COP',
     uom: 'Unidad', brand_id: '', category_id: '',
-    sale_price: '', cost_price: '', tax_rate: 0, reference: '',
+    sale_price: '', cost_price: '', tarifa_iva: '', reference: '',
     track_inventory: true, auto_replenish: false, is_active: true,
     is_published: false, ecommerce_category: '', low_stock_alert: 0,
   });
@@ -135,6 +138,8 @@ export default function ProductosPage() {
         brand_id: form.brand_id ? Number(form.brand_id) : null,
         category_id: form.category_id ? Number(form.category_id) : null,
         is_published: isPublished,
+        // IVA-PRODUCTO: '' = «Sin definir» (null: usa la tarifa por defecto de Configuración). Ya no se manda tax_rate.
+        tarifa_iva: form.tarifa_iva || null,
       };
       let productId: number;
       if (isNew) {
@@ -169,7 +174,7 @@ export default function ProductosPage() {
           // step failed. Keep the user on the form (don't reset/close) so "Guardar"
           // retries just the SKU step against the now-existing product, instead of
           // creating a second, duplicate product.
-          alert(`El producto se guardó, pero ocurrió un error creando las variantes: ${skuErr.message}. Vuelve a presionar "Guardar" para reintentar solo las variantes.`);
+          avisar(`El producto se guardó, pero ocurrió un error creando las variantes: ${skuErr.message}. Vuelve a presionar "Guardar" para reintentar solo las variantes.`, { tono: 'error' });
           setSaving(false);
           return;
         }
@@ -180,7 +185,7 @@ export default function ProductosPage() {
       setAtributosElegidos([{ nombre: '', valores: '' }]);
       setPasoVariantes('atributos');
       load();
-    } catch (err: any) { alert(err.message); }
+    } catch (err) { avisarError(err, 'No se pudo guardar el producto'); } // p. ej. el 422 de la tarifa de IVA
     setSaving(false);
   }
 
@@ -194,7 +199,7 @@ export default function ProductosPage() {
     setPasoVariantes('atributos');
     setWarehouseId('');
     setForm({ name: '', description: '', type: 'Fisico', base_currency: 'COP', uom: 'Unidad',
-      brand_id: '', category_id: '', sale_price: '', cost_price: '', tax_rate: 0, reference: '',
+      brand_id: '', category_id: '', sale_price: '', cost_price: '', tarifa_iva: '', reference: '',
       track_inventory: true, auto_replenish: false, is_active: true, is_published: false, ecommerce_category: '', low_stock_alert: 0 });
     setIsPublished(false);
     setActiveTab(TABS[0]);
@@ -212,7 +217,7 @@ export default function ProductosPage() {
       name: p.name || '', description: p.description || '', type: p.type || 'Fisico',
       base_currency: p.base_currency || 'COP', uom: p.uom || 'Unidad',
       brand_id: p.brand_id || '', category_id: p.category_id || '',
-      sale_price: p.sale_price || '', cost_price: p.cost_price || '', tax_rate: p.tax_rate || 0,
+      sale_price: p.sale_price || '', cost_price: p.cost_price || '', tarifa_iva: normalizarTarifaIva(p.tarifa_iva) ?? '',
       reference: p.reference || '', track_inventory: p.track_inventory ?? true,
       auto_replenish: p.auto_replenish ?? false, is_active: p.is_active ?? true,
       is_published: p.is_published ?? false, ecommerce_category: p.ecommerce_category || '',
@@ -239,6 +244,9 @@ export default function ProductosPage() {
     if (found) openEdit(found);
   }, [searchParams, products, loading]);
 
+  // «Sin tarifa de IVA» filtra en el cliente lo que ya trajo load().
+  const visibles = soloSinTarifa ? products.filter(sinTarifaIva) : products;
+
   // ─── PRODUCT LIST ───
   if (!selectedProduct) {
     return (
@@ -252,8 +260,8 @@ export default function ProductosPage() {
             actionLabel="Nuevo Producto" actionIcon={Plus} onAction={openNew} />
 
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col overflow-hidden">
-            <div className="border-b border-slate-200 bg-slate-50/50 p-4 flex justify-between items-center gap-4">
-              <div className="flex items-center gap-3">
+            <div className="border-b border-slate-200 bg-slate-50/50 p-4 flex flex-wrap justify-between items-center gap-4">
+              <div className="flex flex-wrap items-center gap-3">
                 <div className="relative flex items-center bg-white border border-slate-300 rounded-xl px-3 py-2 shadow-sm">
                   <Search className="text-slate-400 mr-2" size={16} />
                   <input type="text" value={search} onChange={e => setSearch(e.target.value)}
@@ -265,8 +273,12 @@ export default function ProductosPage() {
                   className={`px-3 py-2 rounded-xl text-xs font-bold border transition-colors ${soloRevision ? 'bg-amber-100 border-amber-300 text-amber-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
                   Requiere revisión
                 </button>
+                <button onClick={() => setSoloSinTarifa(v => !v)} aria-pressed={soloSinTarifa}
+                  className={`px-3 py-2 rounded-xl text-xs font-bold border transition-colors ${soloSinTarifa ? 'bg-amber-100 border-amber-300 text-amber-700' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+                  Sin tarifa de IVA
+                </button>
               </div>
-              <span className="text-sm text-slate-500">Total: <span className="font-bold text-slate-800">{total} productos</span></span>
+              <span className="text-sm text-slate-500">Total: <span className="font-bold text-slate-800">{soloSinTarifa ? visibles.length : total} productos</span></span>
             </div>
 
             <div className="overflow-x-auto">
@@ -287,19 +299,20 @@ export default function ProductosPage() {
                       <RefreshCw size={24} className="animate-spin text-purple-400 mx-auto mb-2" />
                       <span className="text-slate-400">Cargando productos...</span>
                     </td></tr>
-                  ) : products.length === 0 ? (
+                  ) : visibles.length === 0 ? (
                     <tr><td colSpan={6}>
-                      <EmptyState icon={Package} message="Sin productos. Crea el primero." />
+                      <EmptyState icon={Package} message={soloSinTarifa && products.length > 0 ? 'Todos estos productos tienen tarifa de IVA.' : 'Sin productos. Crea el primero.'} />
                     </td></tr>
-                  ) : products.map((p: any) => (
+                  ) : visibles.map((p: any) => (
                     <tr key={p.id} onClick={() => openEdit(p)}
                       className="hover:bg-slate-50/80 transition-colors cursor-pointer">
                       <td className="px-6 py-4">
                         <div className="font-bold text-slate-800">{p.name}</div>
                         {p.reference && <div className="text-xs text-slate-400">Ref: {p.reference}</div>}
-                        {p.necesita_revision && (
-                          <div className="mt-1"><Badge tone="warning">Requiere revisión</Badge></div>
-                        )}
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          <Badge tone={sinTarifaIva(p) ? 'warning' : 'neutral'}>{etiquetaTarifaCatalogo(p.tarifa_iva)}</Badge>
+                          {p.necesita_revision && <Badge tone="warning">Requiere revisión</Badge>}
+                        </div>
                       </td>
                       <td className="px-6 py-4">
                         <Badge tone="neutral">{p.type}</Badge>
@@ -454,10 +467,12 @@ export default function ProductosPage() {
                     </div>
                   </div>
                   <div>
-                    <label className="block text-xs text-slate-500 mb-1">Impuesto %</label>
-                    <input type="number" value={form.tax_rate} min={0} max={100}
-                      onChange={e=>setForm(f=>({...f,tax_rate:parseFloat(e.target.value)||0}))}
-                      className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400" />
+                    <label htmlFor="producto-tarifa-iva" className="block text-xs text-slate-500 mb-1">Tarifa de IVA</label>
+                    <select id="producto-tarifa-iva" value={form.tarifa_iva} onChange={e=>setForm(f=>({...f,tarifa_iva:e.target.value}))}
+                      className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-purple-400">
+                      <option value="">Sin definir (usa la de Configuración)</option>
+                      {TARIFAS_IVA.map(t => <option key={t.codigo} value={t.codigo}>{t.etiqueta}</option>)}
+                    </select>
                   </div>
                 </div>
               </div>

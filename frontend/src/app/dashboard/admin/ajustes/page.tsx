@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from 'react';
+import Link from 'next/link';
 import {
   SlidersHorizontal, Search, Settings2, ShieldAlert
 } from 'lucide-react';
@@ -64,8 +65,8 @@ export default function AjustesHub() {
                   <h3 className="font-bold text-slate-800 mb-4">Impuestos y Financieros</h3>
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-sm font-semibold text-slate-700 mb-1.5">Impuesto por Defecto (IVA)</label>
-                      <input type="text" defaultValue="19%" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 outline-none focus:border-pink-500" />
+                      <p className="block text-sm font-semibold text-slate-700 mb-1.5">Impuesto por defecto (IVA)</p>
+                      <p className="text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-4 py-2">La tarifa de IVA por defecto se configura en <Link href="/dashboard/ventas" className="font-semibold text-pink-700 underline underline-offset-2 hover:text-pink-800">HUB Ventas</Link> → Configuración.</p>
                     </div>
                     <div>
                       <label className="block text-sm font-semibold text-slate-700 mb-1.5">Moneda Base</label>

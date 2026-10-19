@@ -97,6 +97,29 @@ export function etiquetaTarifaIva(codigo) {
   return tarifa === null ? ETIQUETA_SIN_TARIFA : ETIQUETAS_TARIFA_IVA[tarifa];
 }
 
+/** La etiqueta de un producto sin tarifa en la lista del catálogo (T14). */
+export const ETIQUETA_CATALOGO_SIN_TARIFA = 'Sin tarifa';
+
+/**
+ * La etiqueta pequeña de cada fila del catálogo (T14): la de etiquetaTarifaIva o, si el producto no tiene tarifa (o
+ * no es válida), 'Sin tarifa' (no 'IVA no discriminado', que es el texto de los documentos).
+ * @param {unknown} codigo products.tarifa_iva
+ * @returns {string}
+ */
+export function etiquetaTarifaCatalogo(codigo) {
+  return normalizarTarifaIva(codigo) === null ? ETIQUETA_CATALOGO_SIN_TARIFA : etiquetaTarifaIva(codigo);
+}
+
+/**
+ * true si el producto del catálogo no tiene tarifa de IVA (el botón «Sin tarifa de IVA», que filtra en el cliente).
+ * Exento y Excluido sí son tarifas. Dice lo mismo que etiquetaTarifaCatalogo.
+ * @param {unknown} producto un producto de GET /products ({tarifa_iva, ...})
+ * @returns {boolean}
+ */
+export function sinTarifaIva(producto) {
+  return normalizarTarifaIva(esObjeto(producto) ? producto.tarifa_iva : null) === null;
+}
+
 // ─── Decimales exactos (Decimal de Python) ─────────────────────────────────────────────────────────────────────
 
 const DECIMAL = /^([+-])?(?:(\d+)(?:\.(\d*))?|\.(\d+))(?:[eE]([+-]?\d+))?$/;

@@ -7,6 +7,7 @@
  *   manual -> >= 100% -> > 0% -> 0%; la modalidad va en su propio renglón (formaDePagoDocumento().etiqueta). Con
  *   pago.anticipo None (la SC) los textos de U17 para 100, 60, 0 y modalidad no reconocida.
  * - resumenPagosCliente es un adaptador de resumenPagoPedido (resumen-pago.js) con el mapeo de RP25.
+ * - B3 T14: documentoVistaPrevia (la vista previa de «Diseño de documentos» con los textos sin guardar).
  */
 
 import assert from 'node:assert/strict';
@@ -14,6 +15,7 @@ import {
   TIPOS_DOCUMENTO, normalizarDocumento, filasTotales, textoFormaPago, formaDePagoDocumento, colorTextoSobre,
   colorSobreBlanco, enlaceSeguro, contactosEmpresa, mensajeWhatsAppDocumento, resumenPagosCliente, textoEnlaceVigente,
   textoEntregaEstimada, formatoCantidad, tituloDePestana, DOCUMENTO_EJEMPLO_SC, DOCUMENTO_EJEMPLO_COT,
+  documentoVistaPrevia,
 } from '../src/lib/documento-comercial.js';
 import { resumenPagoPedido } from '../src/lib/resumen-pago.js';
 
@@ -369,6 +371,43 @@ console.log('--- TEST 11: entrega estimada, cantidad y título de la pestaña --
   assert.equal(formatoCantidad(null), '');
   assert.equal(tituloDePestana(cot(), { nombre_comercial: 'DEMO Ferretería' }), 'Cotización COT-20261003-1 · DEMO Ferretería');
   assert.equal(tituloDePestana(cot(), {}), 'Cotización COT-20261003-1', 'sin marca: sin nombre, nunca Nebulae');
+}
+
+console.log('--- TEST 12: documentoVistaPrevia (los textos sin guardar, donde los pone empresa.textos_documento) ---');
+{
+  const textos = { terminos_cotizacion: '  Válida por 5 días.\nPrecios en pesos.  ', terminos_pedido: 'Términos PVEN',
+    instrucciones_pago: 'Banco DEMO\nCuenta 000', mensaje_pie: ' Gracias por tu compra. ', color_principal: '#112233' };
+
+  const c = documentoVistaPrevia('COT', textos);
+  assert.equal(c.terminos, 'Válida por 5 días.\nPrecios en pesos.', 'COT: los términos de la cotización, con saltos');
+  assert.equal(c.pago.instrucciones, 'Banco DEMO\nCuenta 000', 'COT: los datos para pagar en pago.instrucciones');
+  assert.equal(c.mensaje_pie, 'Gracias por tu compra.');
+  assert.deepEqual(claves(c), CLAVES_DOCUMENTO, 'la forma exacta del backend');
+  assert.deepEqual(claves(c.pago), CLAVES_PAGO);
+  assert.deepEqual({ ...c, terminos: null, mensaje_pie: null, pago: { ...c.pago, instrucciones: null } },
+    { ...DOCUMENTO_EJEMPLO_COT, terminos: null, mensaje_pie: null,
+      pago: { ...DOCUMENTO_EJEMPLO_COT.pago, instrucciones: null } }, 'lo demás es el ejemplo DEMO tal cual');
+
+  const s = documentoVistaPrevia('SC', textos);
+  assert.equal(s.terminos, null, 'la SC no lleva términos (textos_documento SC)');
+  assert.equal(s.pago.instrucciones, null, 'ni datos para pagar (R8)');
+  assert.equal(s.mensaje_pie, 'Gracias por tu compra.', 'sí el mensaje de pie');
+  assert.deepEqual({ ...s, mensaje_pie: null }, { ...DOCUMENTO_EJEMPLO_SC, mensaje_pie: null });
+
+  // Un texto vacío no aparece en el documento (textos_documento: '' -> None), aunque el ejemplo DEMO traiga uno.
+  const vacia = documentoVistaPrevia('COT', { terminos_cotizacion: '   ', instrucciones_pago: '', mensaje_pie: null });
+  assert.equal(vacia.terminos, null);
+  assert.equal(vacia.pago.instrucciones, null);
+  assert.equal(vacia.mensaje_pie, null);
+  assert.equal(documentoVistaPrevia('COT', null).terminos, null);
+  assert.equal(documentoVistaPrevia('COT', { terminos_cotizacion: 5 }).terminos, null, 'lo que no es texto no entra');
+  assert.equal(documentoVistaPrevia('PVEN', textos).tipo, 'SC', 'otro tipo: la solicitud');
+  assert.equal(normalizarDocumento(c).terminos, c.terminos, 'DocumentoComercial lo pinta tal cual');
+
+  // No toca los ejemplos congelados.
+  assert.equal(DOCUMENTO_EJEMPLO_COT.terminos, 'Términos y condiciones DEMO de la cotización.');
+  assert.ok(DOCUMENTO_EJEMPLO_COT.pago.instrucciones.startsWith('Banco DEMO'));
+  assert.equal(DOCUMENTO_EJEMPLO_SC.mensaje_pie, 'Mensaje de pie DEMO.');
 }
 
 console.log('✓ Todas las pruebas del documento comercial pasaron.');

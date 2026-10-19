@@ -400,3 +400,115 @@ export function inicialesMarca(nombre) {
   const palabras = textoLimpio(nombre).split(/\s+/).filter(Boolean);
   return palabras.slice(0, 2).map((p) => [...p][0].toUpperCase()).join('');
 }
+
+// ─── Los formularios de Configuración (T14: FormEmpresa y FormDocumentos) ───────────────────────────────────────
+
+/**
+ * Los campos de cada parte de Configuración, en el orden de empresa.CAMPOS: identidad y contacto («Información de la
+ * empresa»), colores y textos de varias líneas («Diseño de documentos»). Inmutable.
+ */
+export const GRUPOS_CAMPOS_EMPRESA = Object.freeze({
+  identidad: CAMPOS_IDENTIDAD,
+  colores: Object.freeze(Object.values(NOMBRES_COLOR)),
+  textos: Object.freeze(Object.keys(DEFINICIONES).filter((nombre) => DEFINICIONES[nombre].largo)),
+});
+
+/**
+ * Cada color del documento: el campo de PUT /empresa, su nombre en la marca (marca.colores) y el color de la referencia
+ * aprobada («Volver al color de la referencia»). Inmutable.
+ * @type {ReadonlyArray<Readonly<{campo: string, nombre: 'principal' | 'secundario' | 'acento', referencia: string}>>}
+ */
+export const CAMPOS_COLOR = Object.freeze(Object.entries(NOMBRES_COLOR).map(([nombre, campo]) => Object.freeze({
+  campo, nombre: /** @type {'principal' | 'secundario' | 'acento'} */ (nombre),
+  referencia: COLORES_POR_DEFECTO[/** @type {'principal' | 'secundario' | 'acento'} */ (nombre)],
+})));
+
+/**
+ * Los valores iniciales de un formulario: {campo: texto} de `campos`, tomados del perfil de GET /empresa (su .data). Lo
+ * que falta o no es texto queda ''. Solo esos campos: nada de puede_editar, logo_url u otros.
+ * @param {unknown} perfil
+ * @param {readonly string[]} campos
+ * @returns {Record<string, string>}
+ */
+export function valoresDeCampos(perfil, campos) {
+  const datos = esObjeto(perfil) ? perfil : {};
+  return Object.fromEntries(campos.map((nombre) => {
+    const valor = tiene(datos, nombre) ? datos[nombre] : '';
+    return [nombre, typeof valor === 'string' ? valor : ''];
+  }));
+}
+
+/**
+ * Los errores de los campos que cambiaron, {campo: mensaje exacto del 422}, con validarCampoEmpresa: lo que se revisa
+ * antes de mandar PUT /empresa (el servidor revisa igual y gana). Vaciar un campo no es un error. {} si todo sirve.
+ * @param {unknown} cambios la salida de cambiosDelFormulario
+ * @returns {Record<string, string>}
+ */
+export function erroresDeCambios(cambios) {
+  /** @type {Record<string, string>} */
+  const errores = {};
+  if (!esObjeto(cambios)) return errores;
+  for (const [nombre, valor] of Object.entries(cambios)) {
+    const { error } = validarCampoEmpresa(nombre, valor);
+    if (error) errores[nombre] = error;
+  }
+  return errores;
+}
+
+/**
+ * La marca de la vista previa de «Diseño de documentos»: la identidad y el logo de la marca pública (lo que ve el
+ * cliente, GET /publico/empresa, C26) con los colores del formulario todavía sin guardar. Cada color se lee como lo
+ * guardaría el servidor (validarCampoEmpresa): vacío vuelve al de la referencia; uno que el servidor rechazaría (422)
+ * deja el guardado. Solo los colores: los demás campos del formulario no entran.
+ * @param {unknown} publica
+ * @param {unknown} valores
+ * @returns {MarcaEmpresa}
+ */
+export function marcaVistaPrevia(publica, valores) {
+  const base = normalizarMarca(publica);
+  const formulario = esObjeto(valores) ? valores : {};
+  /** @type {Record<string, string>} */
+  const colores = {};
+  for (const { campo: nombreCampo, nombre, referencia } of CAMPOS_COLOR) {
+    if (!tiene(formulario, nombreCampo)) {
+      colores[nombre] = base.colores[nombre];
+      continue;
+    }
+    const { valor, error } = validarCampoEmpresa(nombreCampo, formulario[nombreCampo]);
+    colores[nombre] = error ? base.colores[nombre] : valor || referencia;
+  }
+  return normalizarMarca({ ...base, colores });
+}
+
+/** El aviso de la nota del controlador después de T9: pdf_documento descarta un logo de más de 4000 px por lado. */
+export const LOGO_MAX_LADO_PDF = 4000;
+const MENSAJE_LOGO_PDF = `El logo es muy grande para el PDF (máximo ${LOGO_MAX_LADO_PDF} px por lado): no saldrá en el `
+  + 'documento adjunto.';
+
+/**
+ * El aviso del logo para el PDF de la cotización y del pedido: pdf_documento lo descarta si pasa de LOGO_MAX_LADO_PX
+ * (4000) px de ancho o de alto. null si cabe o si no se conocen sus medidas (naturalWidth/naturalHeight de la imagen).
+ * @param {unknown} medidas {ancho, alto} en px
+ * @returns {string | null}
+ */
+export function avisoLogoParaPdf(medidas) {
+  if (!esObjeto(medidas)) return null;
+  const pasa = (v) => typeof v === 'number' && Number.isFinite(v) && v > LOGO_MAX_LADO_PDF;
+  return pasa(medidas.ancho) || pasa(medidas.alto) ? MENSAJE_LOGO_PDF : null;
+}
+
+const TEXTO_VACIO_HISTORIAL = '(vacío)';
+
+/**
+ * Los renglones «antes → después» de una fila de GET /empresa/historial ({cambios: [{etiqueta, antes, despues}]}, como
+ * los deja empresa.guardar_cambios): un texto vacío se muestra '(vacío)' y lo que no es un cambio se descarta. El logo
+ * no trae cambios (solo su versión): [].
+ * @param {unknown} fila
+ * @returns {{etiqueta: string, antes: string, despues: string}[]}
+ */
+export function cambiosDelHistorial(fila) {
+  const cambios = esObjeto(fila) && Array.isArray(fila.cambios) ? fila.cambios : [];
+  const texto = (v) => (typeof v === 'string' && v.trim() ? v : TEXTO_VACIO_HISTORIAL);
+  return cambios.filter((c) => esObjeto(c) && typeof c.etiqueta === 'string' && c.etiqueta.trim())
+    .map((c) => ({ etiqueta: c.etiqueta, antes: texto(c.antes), despues: texto(c.despues) }));
+}
