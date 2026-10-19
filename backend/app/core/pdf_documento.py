@@ -19,8 +19,9 @@ pdf_documento(documento, perfil, logo=None) -> bytes dibuja con reportlab el MIS
   color y el contacto del pie salen de empresa.color_de_marca y empresa.contacto_empresa: la misma fuente del correo.
 - logo: (mime, bytes[, versión]) de empresa.leer_logo, o None. Se abre SOLO como PNG, JPEG o WebP (los formatos de
   MARCA), se descarta si pasa de LOGO_MAX_LADO_PX por lado (antes de decodificarlo: bomba de descompresión) y se reduce a
-  LOGO_LADO_PDF_PX en su lado mayor antes de incrustarlo (_logo_utilizable). Uno que no se puede leer no rompe nada:
-  el PDF sale sin logo (logger.warning).
+  LOGO_LADO_PDF_PX en su lado mayor antes de incrustarlo (_logo_utilizable; un PNG sigue PNG sin pérdida). Uno que
+  no se puede leer, o con el que el dibujo falla (se repite sin logo), no rompe nada: el PDF sale sin logo
+  (logger.warning).
 
 reportlab se importa DENTRO de las funciones (R2): este módulo carga sin él y, si falta, pdf_documento lanza ImportError;
 quien la llama manda el correo sin adjunto. Sin base de datos ni FastAPI.
@@ -189,18 +190,21 @@ def _texto_anticipo_cotizacion(pago: dict, totales: dict) -> str:
 
 def _logo_utilizable(logo):
     """(bytes, ancho_px, alto_px) del logo listo para incrustar, o None (logger.warning) si no se puede usar. r1 (S1, S4):
-    - Se abre con Pillow (lo trae reportlab) SOLO como PNG, JPEG o WebP: ningún otro lector de Pillow toca los bytes
-      guardados, aunque alguien los haya escrito a mano en admin_config.
+    - Se abre con Pillow (fijada en requirements.txt) SOLO como PNG, JPEG o WebP: ningún otro lector de Pillow toca
+      los bytes guardados, aunque alguien los haya escrito a mano en admin_config.
     - Se descarta si su cabecera dice más de LOGO_MAX_LADO_PX por lado, antes de decodificarlo (Pillow ya rechaza al
       abrir una bomba de descompresión de cientos de millones de píxeles).
     - Se decodifica, se reduce a LOGO_LADO_PDF_PX en su lado mayor (thumbnail: misma proporción, nunca agranda) y se
-      vuelve a codificar: PNG si tiene transparencia, JPEG si no. Un archivo truncado o corrupto falla aquí, no al
-      dibujar el PDF, y lo que llega a reportlab es siempre una imagen chica que Pillow acaba de escribir."""
+      vuelve a codificar según su origen (r2): un PNG sigue PNG sin pérdida (RGB, o RGBA si tiene transparencia), para
+      que un logo plano no se llene de artefactos; un JPEG o un WebP pasan a JPEG, o a PNG si tienen alfa. Un archivo
+      truncado o corrupto falla aquí, y lo que llega a reportlab es una imagen chica que Pillow acaba de escribir (si aun
+      así falla al dibujarse, pdf_documento repite sin logo)."""
     if not logo:
         return None
     from PIL import Image
     try:
         with Image.open(io.BytesIO(logo[1]), formats=_FORMATOS_LOGO) as imagen:
+            origen = imagen.format  # 'PNG', 'JPEG' o 'WEBP' (formats= no deja abrir otro)
             ancho, alto = imagen.size
             if not (0 < ancho <= LOGO_MAX_LADO_PX and 0 < alto <= LOGO_MAX_LADO_PX):
                 logger.warning("PDF del documento: el logo mide %sx%s px (máximo %s por lado); sale sin logo", ancho,
@@ -210,7 +214,7 @@ def _logo_utilizable(logo):
             transparente = imagen.mode in ("RGBA", "LA", "PA") or "transparency" in imagen.info
             reducida = imagen.convert("RGBA" if transparente else "RGB")
         salida = io.BytesIO()
-        if transparente:
+        if origen == "PNG" or transparente:
             reducida.save(salida, "PNG", optimize=True)
         else:
             reducida.save(salida, "JPEG", quality=90)
@@ -223,10 +227,18 @@ def _logo_utilizable(logo):
 # ─── Dibujo ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 def pdf_documento(documento: dict, perfil: dict, logo=None) -> bytes:
-    """Los bytes del PDF del documento del cliente (ver el docstring del módulo). ImportError si falta reportlab; un
-    documento que reportlab no puede dibujar lanza su error (quien la llama manda el correo sin adjunto)."""
+    """Los bytes del PDF del documento del cliente (ver el docstring del módulo). ImportError si falta reportlab.
+    r2 (ruling sobre la duda 2): si el dibujo CON el logo falla, se repite sin logo (logger.warning); solo si falla
+    también así, el error sube y quien la llama manda el correo sin adjunto."""
     from reportlab.platypus import BaseDocTemplate  # noqa: F401  (sin reportlab, ImportError antes de nada)
-    return _construir(documento, perfil, _logo_utilizable(logo))
+    imagen = _logo_utilizable(logo)
+    try:
+        return _construir(documento, perfil, imagen)
+    except Exception:
+        if imagen is None:
+            raise
+        logger.warning("PDF del documento: el dibujo con el logo de la empresa falló; sale sin logo", exc_info=True)
+        return _construir(documento, perfil, None)
 
 
 def _construir(documento: dict, perfil: dict, imagen) -> bytes:

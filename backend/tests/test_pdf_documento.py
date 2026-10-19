@@ -119,11 +119,14 @@ def _imagen_pil(formato: str, ancho: int, alto: int, ruido: bool = False) -> byt
 
 
 def _imagenes_pdf(pdf: bytes) -> list:
-    """[(ancho, alto)] de cada imagen incrustada (/Subtype /Image) del PDF."""
+    """[(ancho, alto, filtro)] de cada imagen incrustada (/Subtype /Image) del PDF; filtro es el /Filter en bytes
+    (con b'/FlateDecode' es sin pérdida, con b'/DCTDecode' es JPEG) o b'' si no tiene."""
     imagenes = []
     for diccionario in re.findall(rb"<<([^<>]*?/Subtype /Image[^<>]*?)>>", pdf):
+        filtro = re.search(rb"/Filter\s*(\[[^\]]*\]|/\w+)", diccionario)
         imagenes.append((int(re.search(rb"/Width (\d+)", diccionario).group(1)),
-                         int(re.search(rb"/Height (\d+)", diccionario).group(1))))
+                         int(re.search(rb"/Height (\d+)", diccionario).group(1)),
+                         filtro.group(1) if filtro else b""))
     return imagenes
 
 
@@ -394,9 +397,81 @@ def test_un_logo_grande_se_reduce_antes_de_incrustarlo(db, monkeypatch):
         pdf = pdf_documento(documento, perfil, (mime, logo, "v1"))
         assert b"/Subtype /Image" in pdf, formato
         assert len(pdf) < len(logo), (formato, len(pdf), len(logo))
-        for ancho_pdf, alto_pdf in _imagenes_pdf(pdf):  # la imagen y, si tiene transparencia, su máscara
+        imagenes = _imagenes_pdf(pdf)  # la imagen y, si tiene transparencia, su máscara
+        assert imagenes, formato  # r2: un PDF sin imágenes no pasa la prueba en vacío
+        for ancho_pdf, alto_pdf, _ in imagenes:
             assert max(ancho_pdf, alto_pdf) == LOGO_LADO_PDF_PX, (formato, ancho_pdf, alto_pdf)
             assert abs(ancho_pdf / alto_pdf - ancho / alto) < 0.02, (formato, ancho_pdf, alto_pdf)
+
+
+def test_un_logo_png_sigue_sin_perdida_y_uno_jpeg_o_webp_pasa_a_jpeg(db, monkeypatch):
+    """r2 (re-revisión 1): la salida del logo reducido depende del origen. Un PNG sigue PNG sin pérdida (en el PDF,
+    FlateDecode y no DCTDecode): un logo plano no se llena de artefactos de JPEG. Un JPEG o un WebP sin alfa pasan a JPEG
+    (DCTDecode). Un PNG con transparencia lleva su máscara, también sin pérdida."""
+    from PIL import Image as PilImage
+    from app.core.documento_cliente import documento_cot
+    from app.core.empresa import perfil_publico
+    from app.core.pdf_documento import pdf_documento
+    cot = _cot(db)
+    documento, perfil = documento_cot(db, cot), perfil_publico(db)
+
+    [(ancho, alto, filtro)] = _imagenes_pdf(pdf_documento(documento, perfil,
+                                                          ("image/png", _imagen_pil("PNG", 1200, 400), "v1")))
+    assert (ancho, alto) == (600, 200) and b"/FlateDecode" in filtro and b"/DCTDecode" not in filtro, filtro
+
+    for formato, mime in (("JPEG", "image/jpeg"), ("WEBP", "image/webp")):
+        [(ancho, alto, filtro)] = _imagenes_pdf(pdf_documento(documento, perfil,
+                                                              (mime, _imagen_pil(formato, 1200, 400), "v2")))
+        assert (ancho, alto) == (600, 200) and b"/DCTDecode" in filtro, (formato, filtro)
+
+    salida = io.BytesIO()
+    PilImage.new("RGBA", (1200, 400), (194, 65, 12, 128)).save(salida, "PNG")
+    imagenes = _imagenes_pdf(pdf_documento(documento, perfil, ("image/png", salida.getvalue(), "v3")))
+    assert len(imagenes) == 2 and all((a, h) == (600, 200) for a, h, _ in imagenes), imagenes  # imagen y máscara
+    assert all(b"/DCTDecode" not in f for _, _, f in imagenes), imagenes
+
+
+def test_si_el_dibujo_con_el_logo_falla_el_pdf_sale_sin_logo(app_client, db, admin_token, monkeypatch):
+    """r2 (ruling sobre la duda 2): si reportlab falla dibujando el documento CON el logo, lo vuelve a dibujar sin logo:
+    el correo lleva un PDF sin imagen, no sale «(sin PDF adjunto)». Directo y por el envío de la COT con el logo guardado
+    en la empresa."""
+    import base64
+    import reportlab.platypus
+    from app.core.documento_cliente import documento_cot
+    from app.core.empresa import guardar_logo, perfil_publico
+    from app.core.pdf_documento import pdf_documento
+    _silenciar(monkeypatch, "app.core.pdf_documento")
+    real = reportlab.platypus.Image
+
+    class ImagenQueFalla(real):
+        def draw(self):
+            raise RuntimeError("reportlab no pudo dibujar la imagen")
+
+    monkeypatch.setattr(reportlab.platypus, "Image", ImagenQueFalla)
+    logo = _png(40, 20)
+    cot = _cot(db)
+    pdf = pdf_documento(documento_cot(db, cot), perfil_publico(db), ("image/png", logo, "v1"))
+    assert pdf.startswith(b"%PDF-") and b"/Subtype /Image" not in pdf
+
+    llamadas = _correo_falso(monkeypatch)
+    guardar_logo(db, "data:image/png;base64," + base64.b64encode(logo).decode("ascii"), "admin@test")
+    otra = _cot(db)
+    resp = _enviar_cot(app_client, admin_token, otra)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["correo"]["mensaje"] == f"Correo enviado a {CORREO}."  # sin «(sin PDF adjunto)»
+    assert b"/Subtype /Image" not in _unico_adjunto(llamadas[-1], otra.numero)
+
+
+def test_requirements_fija_reportlab_y_pillow_con_lo_instalado():
+    """r2 (ruling sobre la duda 1): pdf_documento importa reportlab y Pillow directamente, así que las dos van fijadas en
+    backend/requirements.txt, con la versión que tiene el venv."""
+    from importlib.metadata import version
+    from pathlib import Path
+    lineas = [l.strip() for l in (Path(__file__).resolve().parent.parent / "requirements.txt")
+              .read_text(encoding="utf-8").splitlines()]
+    for paquete in ("reportlab", "pillow"):
+        assert f"{paquete}=={version(paquete)}" in lineas, (paquete, version(paquete), lineas)
+    assert "reportlab==4.4.10" in lineas and "pillow==13.0.0" in lineas
 
 
 def test_un_documento_largo_ocupa_varias_paginas_sin_romper(db, monkeypatch):
