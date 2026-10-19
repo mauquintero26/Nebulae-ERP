@@ -10,12 +10,14 @@ import {
   Calculator, Send, Trash2, Save, ArrowRight,
   MessageCircle, RotateCcw
 } from 'lucide-react';
+import { Info } from 'lucide-react'; // B3 T17 r3: el aviso neutral de la COT vieja
 
 import { apiFetch, API_URL } from '@/lib/api';
 import {
   MARGIN_PCT_CAP, calcularCotizacion, cuerpoCompletoCalculadora, cuerpoDeGuardado,
-  validaPreciosAlGuardar, inicialParaComparar,
+  validaPreciosAlGuardar,
   filaNuevaCalculadora, filasInicialesCalculadora, tarifaDeSeleccion, totalesIvaCalculadora, reglaCotizacionSinIva,
+  referenciaDeGuardado, errorPreciosCalculadora,
 } from '@/lib/pricing';
 import { formatoPesos } from '@/lib/pesos';
 import { humanizarCodigo } from '@/lib/estados-pedido';
@@ -255,8 +257,9 @@ export function CalculadorModal({
   // cambiaron frente a él (cuerpoDeGuardado): guardar solo las notas de una cotización calculada antes de H42 ya no
   // reenvía sus precios recalculados ni anula la confirmación del cliente.
   const [inicial] = useState(armarPayload);
-  // B3 T17 r2: contra qué se compara al guardar: null en una cotización vieja que ya puede tomar el IVA; si no, inicial.
-  const referenciaGuardado = () => (reglaSinIva?.comparaContraNull ? null : inicialParaComparar(cot, inicial));
+  // B3 T17 r2/r3: contra qué se compara al guardar (referenciaDeGuardado de lib/pricing.js): null en una cotización
+  // vieja que ya puede tomar el IVA; si no, inicial.
+  const referenciaGuardado = () => referenciaDeGuardado(cot, inicial, iva.totales);
 
   // H40 (ruling T9A-1): `extra` es solo lo de la anulación. El botón normal la llama con una flecha
   // (onClick={() => handleSave()}): si React le pasara el evento del clic como `extra`, JSON.stringify fallaría por la
@@ -270,13 +273,10 @@ export function CalculadorModal({
     if (validaPreciosAlGuardar(cuerpo)) {
       // B3 T17: con una línea incompleta el botón está deshabilitado y el error se ve en TOTALES (un solo medio).
       if (!iva.totales) return;
-      const lineas = iva.totales.lineas;
-      if (lineas.length === 0 || lineas.some(p => !(p.total_cop > 0))) {
-        setError('Cada producto necesita un costo mayor a $0 antes de guardar la cotización.');
-        return;
-      }
-      if (iva.totales.total_cop <= 0) {
-        setError('El total de la cotización debe ser mayor a $0.');
+      // r3: la misma validación que decide la rama (a) de la COT vieja (errorPreciosCalculadora, lib/pricing.js).
+      const errorPrecios = errorPreciosCalculadora(iva.totales);
+      if (errorPrecios) {
+        setError(errorPrecios);
         return;
       }
     }
@@ -327,7 +327,10 @@ export function CalculadorModal({
           {reglaSinIva && (
             <div className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold ${reglaSinIva.tono === 'neutral'
               ? 'border-slate-200 bg-slate-50 text-slate-700' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
-              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              {/* r3: Info para el aviso neutral (se aplicará el IVA); AlertTriangle solo para los ámbar. */}
+              {reglaSinIva.tono === 'neutral'
+                ? <Info size={14} className="shrink-0 mt-0.5" />
+                : <AlertTriangle size={14} className="shrink-0 mt-0.5" />}
               <p>{reglaSinIva.aviso}</p>
             </div>
           )}

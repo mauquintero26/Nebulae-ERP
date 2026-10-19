@@ -230,14 +230,28 @@ export function inicialParaComparar(cot, inicial) {
 }
 
 /**
- * B3 T17 r2: la validacion de precios del «Guardar» de la calculadora: hay lineas, cada una y el total son mayores
- * que $0 (los totales de totalesIvaCalculadora; null, con una linea incompleta, no pasa).
+ * B3 T17 r3: LA validacion de precios del «Guardar» de la calculadora, con los totales de totalesIvaCalculadora: el
+ * texto del error o null. Sin lineas o con una linea en $0, «Cada producto necesita un costo mayor a $0…»; con el total
+ * en $0, «El total de la cotización debe ser mayor a $0.». Sin totales (una linea incompleta) tampoco pasa: la
+ * calculadora muestra ahi el error del IVA en TOTALES, no este. La usan handleSave y preciosCompletos (rama (a)).
+ * @param {{ lineas?: Array<{ total_cop?: number }>, total_cop?: number } | null | undefined} totalesIva
+ * @returns {string | null}
+ */
+export function errorPreciosCalculadora(totalesIva) {
+  const lineas = Array.isArray(totalesIva?.lineas) ? totalesIva.lineas : [];
+  if (!totalesIva || lineas.length === 0 || lineas.some((l) => !(Number(l?.total_cop) > 0))) {
+    return 'Cada producto necesita un costo mayor a $0 antes de guardar la cotización.';
+  }
+  return Number(totalesIva.total_cop) > 0 ? null : 'El total de la cotización debe ser mayor a $0.';
+}
+
+/**
+ * B3 T17 r2/r3: las filas pasan la validacion de precios del «Guardar» (sin errorPreciosCalculadora).
  * @param {{ lineas?: Array<{ total_cop?: number }>, total_cop?: number } | null | undefined} totalesIva
  * @returns {boolean}
  */
 export function preciosCompletos(totalesIva) {
-  const lineas = Array.isArray(totalesIva?.lineas) ? totalesIva.lineas : [];
-  return lineas.length > 0 && lineas.every((l) => Number(l?.total_cop) > 0) && Number(totalesIva?.total_cop) > 0;
+  return !errorPreciosCalculadora(totalesIva);
 }
 
 /** B3 T17 r2 (a), todas las filas validas: el aviso neutral. */
@@ -281,6 +295,19 @@ export function reglaCotizacionSinIva(cot, totalesIva) {
   return preciosCompletos(totalesIva)
     ? { comparaContraNull: true, aviso: AVISO_SIN_IVA_SE_APLICA, tono: 'neutral' }
     : { comparaContraNull: false, aviso: AVISO_SIN_IVA_COMPLETA_COSTOS, tono: 'ambar' };
+}
+
+/**
+ * B3 T17 r3: contra que compara el «Guardar» de la calculadora (cuerpoDeGuardado): null si la cotizacion vieja ya puede
+ * tomar el IVA (reglaCotizacionSinIva con comparaContraNull: van los precios); si no, inicialParaComparar(cot,
+ * inicial), la regla de B2. Una sola fuente para la pantalla (el guardado y el «deshabilitado por IVA») y las pruebas.
+ * @param {Record<string, any> | null | undefined} cot
+ * @param {Record<string, any> | null | undefined} inicial  cuerpoCompletoCalculadora al abrir la calculadora
+ * @param {{ lineas?: Array<{ total_cop?: number }>, total_cop?: number } | null | undefined} totalesIva
+ * @returns {Record<string, any> | null}
+ */
+export function referenciaDeGuardado(cot, inicial, totalesIva) {
+  return reglaCotizacionSinIva(cot, totalesIva)?.comparaContraNull ? null : inicialParaComparar(cot, inicial);
 }
 
 /**

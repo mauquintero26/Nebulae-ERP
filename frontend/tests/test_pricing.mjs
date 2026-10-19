@@ -12,6 +12,7 @@ import {
   computeMarginPrice, MARGIN_PCT_CAP, filaDeCalculadora, calcularCotizacion, cuerpoCompletoCalculadora, cuerpoDeGuardado,
   validaPreciosAlGuardar, inicialParaComparar, filaNuevaCalculadora, filasInicialesCalculadora, tarifaDeSeleccion,
   avisoTarifaProducto, totalesIvaCalculadora, reglaCotizacionSinIva, preciosCompletos, AVISO_COT_SIN_IVA,
+  errorPreciosCalculadora, referenciaDeGuardado,
   AVISO_SIN_IVA_SE_APLICA, AVISO_SIN_IVA_COMPLETA_COSTOS,
 } from '../src/lib/pricing.js';
 
@@ -308,12 +309,10 @@ console.log('--- B3 T17 r2 TEST 16: la COT vieja (sin IVA discriminado), sus tre
   const calculo = calcularCotizacion(f.filas, f.trm, f.descuento);
   const iva = totalesIvaCalculadora(calculo.filas, f.descuento).totales;
   const inicial = cuerpoCompletoCalculadora(calculo, f, vieja, iva); // lo que la calculadora muestra al abrir (con IVA)
-  // Lo que hace la calculadora: con comparaContraNull no compara (van los precios); si no, compara como siempre.
-  const guardar = (cot, totales = iva, filas = calculo) => {
-    const regla = reglaCotizacionSinIva(cot, totales);
-    return cuerpoDeGuardado(cuerpoCompletoCalculadora(filas, f, cot, totales),
-      regla?.comparaContraNull ? null : inicialParaComparar(cot, inicial));
-  };
+  // Lo que hace la calculadora (r3: la misma función que usa la pantalla, referenciaDeGuardado): con comparaContraNull
+  // no compara (van los precios); si no, compara como siempre.
+  const guardar = (cot, totales = iva, filas = calculo) =>
+    cuerpoDeGuardado(cuerpoCompletoCalculadora(filas, f, cot, totales), referenciaDeGuardado(cot, inicial, totales));
   assert.equal(AVISO_SIN_IVA_SE_APLICA, 'Esta cotización se guardó sin IVA discriminado: al guardar se aplicará el IVA.');
   assert.equal(AVISO_SIN_IVA_COMPLETA_COSTOS, 'Esta cotización se guardó sin IVA discriminado. Para aplicarle el IVA, '
     + 'completa el costo de los productos que no lo tienen y vuelve a guardar.');
@@ -338,8 +337,9 @@ console.log('--- B3 T17 r2 TEST 16: la COT vieja (sin IVA discriminado), sus tre
   const borrador = { ...vieja, estado: 'BORRADOR' };
   assert.deepEqual(reglaCotizacionSinIva(borrador, ivaCero), { comparaContraNull: false,
     aviso: AVISO_SIN_IVA_COMPLETA_COSTOS, tono: 'ambar' });
+  assert.equal(referenciaDeGuardado(borrador, inicialCero, ivaCero), inicialCero, 'se compara: solo las notas');
   assert.deepEqual(cuerpoDeGuardado(cuerpoCompletoCalculadora(calculoCero, conCero, borrador, ivaCero),
-    inicialParaComparar(borrador, inicialCero)), { notas: 'Entrega en la mañana' }, 'las notas se guardan sin bloquear');
+    referenciaDeGuardado(borrador, inicialCero, ivaCero)), { notas: 'Entrega en la mañana' }, 'las notas se guardan sin bloquear');
   assert.equal(reglaCotizacionSinIva(borrador, null).aviso, AVISO_SIN_IVA_COMPLETA_COSTOS, 'una línea incompleta');
 
   // (b) Congelada por H40: Pendiente, o Confirmada sin pedido vigente (también con solo pedidos cancelados).
@@ -368,12 +368,35 @@ console.log('--- B3 T17 r2 TEST 16: la COT vieja (sin IVA discriminado), sus tre
   }
   assert.equal(inicialParaComparar({ ...vieja, estado: 'BORRADOR' }, inicial), inicial, 'inicialParaComparar, como en B2');
   assert.equal(inicialParaComparar({ ...vieja, total_cop: 0, estado: 'BORRADOR' }, inicial), null);
+  // r3: referenciaDeGuardado compone las dos: null en (a) con filas válidas; si no, la de inicialParaComparar.
+  assert.equal(referenciaDeGuardado({ ...vieja, estado: 'BORRADOR' }, inicial, iva), null, '(a) válida: contra null');
+  assert.equal(referenciaDeGuardado({ ...vieja, estado: 'PENDIENTE_CONFIRMACION' }, inicial, iva), inicial, '(b)');
+  assert.equal(referenciaDeGuardado(conPedido, inicial, iva), inicial, '(c)');
+  assert.equal(referenciaDeGuardado({ ...vieja, iva_discriminado: true, estado: 'BORRADOR' }, inicial, iva), inicial, 'con tarifas');
+  assert.equal(referenciaDeGuardado({ ...vieja, total_cop: 0, estado: 'BORRADOR' }, inicial, iva), null, 'sin precio, como en B2');
 
   // preciosCompletos: la misma validación del «Guardar» de la calculadora (líneas y total mayores que $0).
   assert.equal(preciosCompletos(iva), true);
   assert.equal(preciosCompletos(ivaCero), false);
   assert.equal(preciosCompletos(null), false);
   assert.equal(preciosCompletos({ lineas: [], total_cop: 0 }), false);
+}
+
+console.log('--- B3 T17 r3 TEST 18: errorPreciosCalculadora, la única validación de precios del «Guardar» ---');
+{
+  const COSTO = 'Cada producto necesita un costo mayor a $0 antes de guardar la cotización.';
+  const TOTAL = 'El total de la cotización debe ser mayor a $0.';
+  const linea = (total_cop) => ({ iva_tarifa: '19', total_cop, iva_cop: 0 });
+  assert.equal(errorPreciosCalculadora({ lineas: [linea(100)], total_cop: 119 }), null);
+  assert.equal(errorPreciosCalculadora({ lineas: [linea(100), linea(0)], total_cop: 119 }), COSTO, 'una línea en $0');
+  assert.equal(errorPreciosCalculadora({ lineas: [], total_cop: 0 }), COSTO, 'sin líneas');
+  assert.equal(errorPreciosCalculadora({ lineas: [linea(100)], total_cop: 0 }), TOTAL, 'el total (un descuento del 100%)');
+  assert.equal(errorPreciosCalculadora(null), COSTO, 'sin totales (una línea incompleta) tampoco pasa');
+  // preciosCompletos es exactamente «sin error»: la rama (a) no se puede desalinear del «Guardar».
+  for (const t of [{ lineas: [linea(100)], total_cop: 119 }, { lineas: [linea(0)], total_cop: 0 }, { lineas: [linea(5)],
+    total_cop: 0 }, null, { lineas: [], total_cop: 0 }]) {
+    assert.equal(preciosCompletos(t), errorPreciosCalculadora(t) === null, JSON.stringify(t));
+  }
 }
 
 console.log('--- B3 T17 r1 TEST 17: el Cotizador Rápido no le manda al cliente el margen ni la TRM (R3/C19) ---');
