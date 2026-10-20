@@ -17,6 +17,7 @@ import {
   colorSobreBlanco, enlaceSeguro, contactosEmpresa, mensajeWhatsAppDocumento, resumenPagosCliente, textoEnlaceVigente,
   textoEntregaEstimada, formatoCantidad, tituloDePestana, DOCUMENTO_EJEMPLO_SC, DOCUMENTO_EJEMPLO_COT,
   documentoVistaPrevia, totalUnidades, coloresBotonPrincipal, textoValidezCotizacion,
+  TEXTO_ENLACE_PEDIDO_VENCIDO, enlacePedidoVigente, botonEnvioPedido,
 } from '../src/lib/documento-comercial.js';
 import { resumenPagoPedido } from '../src/lib/resumen-pago.js';
 
@@ -359,6 +360,49 @@ console.log('--- TEST 10: textoEnlaceVigente (enlace_cliente del pedido, T7) ---
   // Un pedido CANCELADO no se puede reenviar (el botón se oculta y /pedido-cliente/ver lo rechaza): no se aconseja.
   assert.equal(textoEnlaceVigente(vencido, 'CANCELADO', ahora), null);
   assert.equal(textoEnlaceVigente(vigente, 'CANCELADO', ahora), null);
+}
+
+console.log('--- B3 T19 TEST 10c: enlacePedidoVigente, el texto del vencido y botonEnvioPedido (U23 punto 7) ---');
+{
+  const ahora = new Date('2026-10-10T12:00:00Z');
+  const vigente = { vigente: true, enviado_at: '2026-10-03T15:00:00Z', vence_at: '2026-11-03T05:00:00Z', vence: '2026-11-02' };
+  const vencido = { vigente: false, enviado_at: '2026-09-01T15:00:00Z', vence_at: null, vence: null };
+  const nunca = { vigente: false, enviado_at: null, vence_at: null, vence: null };
+  // El texto del enlace vencido es una constante (la pantalla lo pinta en ámbar).
+  assert.equal(TEXTO_ENLACE_PEDIDO_VENCIDO, 'El enlace del cliente venció: reenvíaselo');
+  assert.equal(textoEnlaceVigente(vencido, null, ahora), TEXTO_ENLACE_PEDIDO_VENCIDO);
+  // enlacePedidoVigente: la misma regla que textoEnlaceVigente (vigente del servidor y vence_at todavía no llegó).
+  assert.equal(enlacePedidoVigente(vigente, ahora), true);
+  assert.equal(enlacePedidoVigente(vigente, new Date('2026-11-03T04:59:59Z')), true, 'el último segundo del 2 de noviembre');
+  assert.equal(enlacePedidoVigente(vigente, new Date('2026-11-03T05:00:00Z')), false, 'vence_at es exclusivo');
+  assert.equal(enlacePedidoVigente({ ...vigente, vence_at: null }, ahora), true, 'sin vence_at, el del servidor');
+  for (const e of [vencido, nunca, { ...vigente, vigente: 'true' }, null, undefined, 'x']) {
+    assert.equal(enlacePedidoVigente(e, ahora), false, JSON.stringify(e));
+  }
+
+  // botonEnvioPedido(pedido, rol, ahora): «Enviar al cliente» o, con un enlace vigente, «Reenviar al cliente» (con la
+  // nota del reenvío: el anterior deja de servir). null si el servidor lo rechazaría: CANCELADO (409), un rol que no es
+  // ADMIN ni ASESOR (403) o un pedido sin productos o sin total (400).
+  const pedido = { estado: 'PENDIENTE_COMPRA', productos: [{ product_name: 'Rodillo', qty: 6 }], total_cop: 1954666,
+    enlace_cliente: nunca };
+  const enviar = { texto: 'Enviar al cliente', reenvio: false };
+  for (const rol of ['Asesor', 'Admin', 'admin ', 'Vendedor', 'ASESOR']) assert.deepEqual(botonEnvioPedido(pedido, rol, ahora), enviar, rol);
+  assert.deepEqual(botonEnvioPedido({ ...pedido, enlace_cliente: vigente }, 'Asesor', ahora),
+    { texto: 'Reenviar al cliente', reenvio: true });
+  assert.deepEqual(botonEnvioPedido({ ...pedido, enlace_cliente: vigente }, 'Asesor', new Date('2026-11-03T05:00:00Z')), enviar,
+    'venció con la página abierta');
+  assert.deepEqual(botonEnvioPedido({ ...pedido, enlace_cliente: vencido }, 'Asesor', ahora), enviar, 'vencido: «Enviar» (U23)');
+  assert.deepEqual(botonEnvioPedido({ ...pedido, enlace_cliente: undefined }, 'Asesor', ahora), enviar, 'sin el dato del enlace');
+  for (const estado of ['EN_PROCESO', 'ENTREGADO', 'FACTURADO', 'DEVUELTO_TOTAL']) {
+    assert.deepEqual(botonEnvioPedido({ ...pedido, estado }, 'Asesor', ahora), enviar, estado);
+  }
+  assert.equal(botonEnvioPedido({ ...pedido, estado: 'CANCELADO', enlace_cliente: vigente }, 'Admin', ahora), null);
+  for (const rol of ['Contador', 'Compras', '', null, undefined]) assert.equal(botonEnvioPedido(pedido, rol, ahora), null, String(rol));
+  assert.equal(botonEnvioPedido({ ...pedido, productos: [] }, 'Asesor', ahora), null, 'sin productos');
+  assert.equal(botonEnvioPedido({ ...pedido, productos: null }, 'Asesor', ahora), null, 'sin la lista');
+  assert.equal(botonEnvioPedido({ ...pedido, total_cop: 0 }, 'Asesor', ahora), null, 'sin total');
+  assert.deepEqual(botonEnvioPedido({ ...pedido, total_cop: '0.4' }, 'Asesor', ahora), enviar, 'el servidor acepta total > 0');
+  for (const raro of [null, undefined, 'x', 7]) assert.equal(botonEnvioPedido(raro, 'Admin', ahora), null, String(raro));
 }
 
 console.log('--- B3 T17 TEST 10b: textoValidezCotizacion (U22-validez punto 9: la COT pendiente en el detalle) ---');

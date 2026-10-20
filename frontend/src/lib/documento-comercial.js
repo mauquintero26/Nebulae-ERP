@@ -20,6 +20,7 @@ import { resumenPagoPedido } from './resumen-pago.js';
 import { comoUTC } from './hub-ventas.js';
 import { fechaLarga, fechaSolo, diaColombia } from './fechas-colombia.js';
 import { correoValido, normalizarMarca } from './marca-empresa.js';
+import { esAdminOAsesor } from './seguimiento.js';
 
 /**
  * Cómo se pinta cada tipo de documento: el título de la hoja, cómo se nombra en una frase y la variante (C3): la
@@ -431,16 +432,52 @@ export function resumenPagosCliente(pago, totales) {
  */
 export function textoEnlaceVigente(enlace, estadoDelPedido = null, ahora = new Date()) {
   if (!esObjeto(enlace) || estadoDelPedido === 'CANCELADO') return null;
-  const venceAt = typeof enlace.vence_at === 'string' ? new Date(comoUTC(enlace.vence_at)).getTime() : NaN;
-  const referencia = ahora instanceof Date ? ahora.getTime() : Number(ahora);
-  const vigente = enlace.vigente === true && !(Number.isFinite(venceAt) && venceAt <= referencia);
-  if (vigente) {
+  if (enlacePedidoVigente(enlace, ahora)) {
+    const venceAt = instanteVenceAt(enlace);
     const ultimoDia = fechaSolo(enlace.vence) || (Number.isFinite(venceAt) ? fechaLarga(new Date(venceAt - 1)) : '');
     const enviado = fechaLarga(enlace.enviado_at);
     const sirve = ultimoDia ? `el enlace sirve hasta el ${ultimoDia}` : 'el enlace está vigente';
     return enviado ? `Enviado al cliente el ${enviado} · ${sirve}` : sirve.charAt(0).toUpperCase() + sirve.slice(1);
   }
-  return enlace.enviado_at || enlace.vigente === true ? 'El enlace del cliente venció: reenvíaselo' : null;
+  return enlace.enviado_at || enlace.vigente === true ? TEXTO_ENLACE_PEDIDO_VENCIDO : null;
+}
+
+/** B3 T19: la línea del enlace que ya no sirve (la pantalla del pedido la pinta en ámbar). */
+export const TEXTO_ENLACE_PEDIDO_VENCIDO = 'El enlace del cliente venció: reenvíaselo';
+
+/** vence_at del enlace_cliente en milisegundos (sin zona = UTC), o NaN. */
+const instanteVenceAt = (enlace) => (typeof enlace.vence_at === 'string' ? new Date(comoUTC(enlace.vence_at)).getTime() : NaN);
+
+/**
+ * B3 T19: el enlace de consulta del pedido sirve todavía: vigente del servidor (get_pedido.enlace_cliente) y su vence_at
+ * (exclusivo) no ha llegado, para una página abierta desde antes. La misma regla que textoEnlaceVigente.
+ * @param {unknown} enlace
+ * @param {Date | number} [ahora]
+ * @returns {boolean}
+ */
+export function enlacePedidoVigente(enlace, ahora = new Date()) {
+  if (!esObjeto(enlace) || enlace.vigente !== true) return false;
+  const venceAt = instanteVenceAt(enlace);
+  const referencia = ahora instanceof Date ? ahora.getTime() : Number(ahora);
+  return !(Number.isFinite(venceAt) && venceAt <= referencia);
+}
+
+/**
+ * B3 T19 (U23 punto 7): el botón de la cabecera del pedido, o null si no se muestra. Lo oculta lo que el servidor
+ * (POST /ventas/pedidos/{id}/enviar-al-cliente) rechazaría: el pedido CANCELADO (409), un rol que no es ADMIN ni ASESOR
+ * (403, esAdminOAsesor) o un pedido sin productos o con total <= 0 (400). Dice 'Reenviar al cliente' si el enlace del
+ * cliente está vigente (enlacePedidoVigente; reenvio true: el ChannelModal lleva NOTA_REENVIO_ENLACE, porque el
+ * anterior deja de servir) y 'Enviar al cliente' si nunca se envió o ya venció.
+ * @param {unknown} pedido el GET /ventas/pedidos/{id} ({estado, productos, total_cop, enlace_cliente})
+ * @param {unknown} rol
+ * @param {Date | number} [ahora]
+ * @returns {{texto: string, reenvio: boolean} | null}
+ */
+export function botonEnvioPedido(pedido, rol, ahora = new Date()) {
+  if (!esObjeto(pedido) || pedido.estado === 'CANCELADO' || !esAdminOAsesor(rol)) return null;
+  if (!Array.isArray(pedido.productos) || pedido.productos.length === 0 || !(Number(pedido.total_cop) > 0)) return null;
+  const reenvio = enlacePedidoVigente(pedido.enlace_cliente, ahora);
+  return { texto: reenvio ? 'Reenviar al cliente' : 'Enviar al cliente', reenvio };
 }
 
 /**

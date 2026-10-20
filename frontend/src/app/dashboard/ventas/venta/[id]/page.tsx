@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import {
   DollarSign, CheckCircle2, Circle,
   ShoppingCart, RefreshCw, AlertCircle, ListChecks, ExternalLink,
-  Activity, FileText, X, Edit2, Save, Sparkles, MessageSquare,
+  Activity, FileText, X, Edit2, Save, Sparkles, MessageSquare, Send,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
@@ -13,8 +13,10 @@ import { apiFetch } from '@/lib/api';
 import { Button, Modal, useAvisos } from '@/components/ui';
 import { textoDeError, recargarTrasError } from '@/lib/avisos';
 import { NewSupplierModal } from '../venta-client';
-import { CambiosDeActividad, CabeceraActividad, getUsuarioActual, puedeCrearOrdenDePago, returnToSeguro, BotonVolver } from '../../flujo';
+import { CambiosDeActividad, CabeceraActividad, getUsuarioActual, puedeCrearOrdenDePago, returnToSeguro, BotonVolver, EnlaceConfirmacionModal } from '../../flujo';
 import { ChatterDocumento, EtiquetaChatter } from '../../chatter';
+import { ChannelModal } from '../../cotizacion/cotizacion-client';
+import { useEnvioAlCliente, LineaEnlaceCliente, TablaProductosPedido } from './detalle-bloque3';
 import { formatoPesos } from '@/lib/pesos';
 import { etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import {
@@ -26,9 +28,12 @@ import {
 } from '@/lib/dinero-ventas';
 import { rutaSinParametro } from '@/lib/listas-ventas';
 import { destinoVolver, anchoInicialPanel } from '@/lib/detalle-layout';
-import { agregarActividad, esEntradaChatter } from '@/lib/chatter';
+import { agregarActividad, esEntradaChatter, motivoTelefono, textoSinTelefono } from '@/lib/chatter';
 import { resumenPagoPedido } from '@/lib/resumen-pago';
 import { comoUTC } from '@/lib/hub-ventas';
+import { NOTA_REENVIO_ENLACE } from '@/lib/envio-whatsapp';
+import { accionBloque3 } from '@/lib/acciones-bloque3';
+import { textoIvaIncluido } from '@/lib/iva';
 
 const fCOP = formatoPesos;
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
@@ -106,6 +111,8 @@ function PedidoVentaDetalleContent() {
     const silencioso = opts?.silencioso === true;
     if (!params.id) { if (!silencioso) setLoading(false); return; }
     const miCarga = ++cargaRef.current;
+    // B3 T19: devuelve el pedido que pintó (o null), para que el envío al cliente sepa si lo cancelaron mientras tanto.
+    let fresco: any = null;
     if (!silencioso) {
       setLoading(true);
       setLoadError('');
@@ -113,16 +120,20 @@ function PedidoVentaDetalleContent() {
     try {
       const raw = await apiFetch(`/ventas/pedidos/${params.id}`);
       const d = raw?.data ?? raw;
-      if (miCarga === cargaRef.current) setPedido(d);
+      if (miCarga === cargaRef.current) { setPedido(d); fresco = d; }
       if (abrirCancelacion.current && transicionesPedido(d?.estado).includes('CANCELADO')) setShowCancelModal(true);
       abrirCancelacion.current = false;
     } catch (err: any) {
       if (!silencioso && miCarga === cargaRef.current) setLoadError(err.message || 'No se pudo cargar el pedido de venta');
     }
     if (!silencioso) setLoading(false);
+    return fresco;
   }, [params.id]);
 
   useEffect(() => { loadPedido(); }, [loadPedido]);
+
+  // B3 T19 (U23 punto 7): «Enviar al cliente» / «Reenviar al cliente» con el ChannelModal (detalle-bloque3.tsx).
+  const envio = useEnvioAlCliente(pedido, loadPedido);
 
   // B1 (R8): ?accion=cancelar se usa una sola vez. Tras la primera carga se quita de la URL (sin recargar el pedido)
   // para que el modal no se vuelva a abrir al refrescar ni al volver con el navegador.
@@ -375,6 +386,7 @@ function PedidoVentaDetalleContent() {
   const cancelado = estadoActual === 'CANCELADO';
   const tercerRecuadro = cancelado ? RECUADRO_CANCELADO : (TERCER_RECUADRO[resumenPago.caso] || TERCER_RECUADRO.desconocido);
   const pagos = Array.isArray(pedido?.pagos) ? pedido.pagos : [];
+  const ivaIncluido = textoIvaIncluido(pedido);
 
   return (
     <div className="w-full h-full bg-white flex flex-col overflow-hidden">
@@ -398,6 +410,10 @@ function PedidoVentaDetalleContent() {
         </div>
 
         <div className="flex flex-wrap items-center gap-3 ml-auto">
+          {/* B3 T19 (U23 punto 7): antes de «Crear PXP»; botonEnvioPedido lo oculta donde el servidor lo rechazaría. */}
+          {envio.boton && (
+            <Button color="indigo" icon={Send} onClick={envio.abrir}>{envio.boton.texto}</Button>
+          )}
           {puedePxp && (
             <Button color="emerald" icon={DollarSign} loading={creatingPxp} onClick={handleCrearPxp}>Crear PXP</Button>
           )}
@@ -600,6 +616,8 @@ function PedidoVentaDetalleContent() {
               <h3 className="text-lg font-black text-slate-800 mb-4 flex items-center gap-2">
                 <DollarSign className="text-emerald-600" size={20} /> Resumen Financiero
               </h3>
+              {/* B3 T19 (U23 punto 7): cuándo se le envió al cliente y hasta cuándo sirve su enlace (o que venció). */}
+              <LineaEnlaceCliente enlace={pedido?.enlace_cliente} estado={estadoActual} />
               {/* U24: el total y tres recuadros grandes (anticipo requerido, pagado verificado y saldo), la barra de lo
                   pagado y el aviso del anticipo pendiente (R4). N1: lo pagado sale del libro de pagos (total - saldo); el
                   requerido, del % guardado en el pedido (60 sin snapshot). @container: los recuadros se apilan cuando la
@@ -608,6 +626,8 @@ function PedidoVentaDetalleContent() {
                 <div>
                   <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Total del pedido</p>
                   <p className="text-3xl font-black text-slate-900">{fCOP(resumenPago.total)}</p>
+                  {/* B3 T19 (IVA punto 12): 'IVA incluido: $X' o, en un pedido viejo, 'IVA no discriminado'. */}
+                  {ivaIncluido && <p className="text-sm font-semibold text-slate-500">{ivaIncluido}</p>}
                 </div>
                 <div className="grid grid-cols-1 @md:grid-cols-3 gap-3">
                   <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4">
@@ -673,32 +693,9 @@ function PedidoVentaDetalleContent() {
               <h3 className="text-lg font-black text-slate-800 mb-4 flex items-center gap-2">
                 <FileText className="text-indigo-600" size={20} /> Productos
               </h3>
-              {/* H37: si la columna queda angosta, la tabla se desplaza dentro de su tarjeta (sin scroll de la página). */}
-              <div className="bg-white border border-slate-200 rounded-2xl overflow-x-auto shadow-sm">
-                <table className="w-full text-left">
-                  <thead className="bg-slate-50 border-b border-slate-200">
-                    <tr>
-                      <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">Producto</th>
-                      <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-24 text-center">Cant.</th>
-                      <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-36">P. Unit.</th>
-                      <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-36 text-right">Subtotal</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {productos.length === 0 && (
-                      <tr><td colSpan={4} className="px-4 py-6 text-center text-sm text-slate-400 italic">Sin productos registrados.</td></tr>
-                    )}
-                    {productos.map((p: any, idx: number) => (
-                      <tr key={idx} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 font-bold text-slate-800 text-sm break-words min-w-40">{p.product_name || p.descripcion || p.producto_nombre || 'Producto sin nombre'}</td>
-                        <td className="px-4 py-3 text-center text-sm font-bold text-slate-700">{p.qty ?? p.cantidad ?? 0}</td>
-                        <td className="px-4 py-3 text-sm font-bold text-slate-700">{fCOP(p.unit_price_cop ?? p.precio_unitario)}</td>
-                        <td className="px-4 py-3 font-black text-slate-800 text-right">{fCOP(p.total_cop ?? p.subtotal)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              {/* B3 T19 (IVA punto 12): PRODUCTO / CANT. / P. UNIT. SIN IVA / IVA / TOTAL y debajo los totales de la COT
+                  (detalle-bloque3.tsx). H37: con la columna angosta, la tabla se desplaza dentro de su tarjeta. */}
+              <TablaProductosPedido pedido={pedido} />
             </div>
 
             {(notaSolicitud || notaCotizacion || mostrarNotaPedido || pedido?.direccion_entrega) && !isEditMode && (
@@ -854,10 +851,14 @@ function PedidoVentaDetalleContent() {
                   </button>
                 </div>
                 <div className="space-y-6 relative before:absolute before:inset-0 before:ml-4 before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-200 before:to-transparent">
-                  {[...actividades].reverse().map((a: any, i: number) => (
+                  {[...actividades].reverse().map((a: any, i: number) => {
+                    // B3 T19 (RP22): ENVIADO_AL_CLIENTE, MENSAJE_CLIENTE y las demás acciones nuevas toman su hex y su
+                    // etiqueta de ACCIONES_BLOQUE3 (T13), sin copiarlos en ACTIVITY_STYLE.
+                    const b3 = accionBloque3(a.action);
+                    return (
                     <div key={i} className="relative flex items-start gap-4 group animate-in fade-in slide-in-from-bottom-2">
                       <div className="flex items-center justify-center w-8 h-8 rounded-full border-2 border-white bg-white shadow-sm shrink-0 z-10"
-                        style={{ color: ACTIVITY_STYLE[a.action] || '#94a3b8' }}>
+                        style={{ color: ACTIVITY_STYLE[a.action] || b3?.hex || '#94a3b8' }}>
                         <Activity size={14} />
                       </div>
                       <div className="flex-1 min-w-0 bg-slate-50 p-4 rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
@@ -866,13 +867,14 @@ function PedidoVentaDetalleContent() {
                         {/* T11 (V3): la misma cabecera que la SC y la COT (F12: el título arriba y la fecha debajo).
                             Revisión final (F3): la fecha y la hora del renglón pasan por comoUTC (solo aquí, no en fDate:
                             una fecha de negocio a las 00:00 se correría un día). */}
-                        <CabeceraActividad className="mb-2" titulo={a.description || humanizarCodigo(a.action)}
+                        <CabeceraActividad className="mb-2" titulo={a.description || b3?.etiqueta || humanizarCodigo(a.action)}
                           fecha={`${fDate(comoUTC(a.created_at))}${a.created_at ? ` ${new Date(comoUTC(a.created_at)).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}` : ''}`} />
                         <CambiosDeActividad extra={a.extra_data} />
                         <p className="text-xs font-medium text-slate-500">{a.user_name || 'Sistema'}</p>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 {actividades.length === 0 && <p className="text-xs text-slate-400 italic text-center py-8">Sin actividad registrada todavía.</p>}
               </div>
@@ -1000,6 +1002,34 @@ function PedidoVentaDetalleContent() {
           {cancelRazon.trim().length < 5 && <p className="text-xs text-red-500 -mt-2">El motivo es obligatorio. Mínimo 5 caracteres (llevas {cancelRazon.trim().length}).</p>}
           {cancelError && <p role="alert" className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">{cancelError}</p>}
         </Modal>
+      )}
+      {/* B3 T19 (U23 punto 7, U16-envio, RP19): el canal del envío. customerHasPhone sobre telefono_whatsapp (el e164 que
+          valida el servidor); el porqué mira el teléfono escrito si no hay e164 (como la SC). envioWhatsApp (A mayúscula)
+          es el estado del automático; el error del envío va dentro (H49). */}
+      {envio.abierto && (
+        <ChannelModal
+          selectedChannel={envio.canal}
+          onSelectChannel={envio.elegirCanal}
+          onConfirm={envio.enviarAlCliente}
+          onCancel={envio.cerrar}
+          saving={envio.enviando}
+          documentLabel="confirmación del pedido"
+          customerHasPhone={!motivoTelefono(pedido?.telefono_whatsapp)}
+          textoSinTelefono={textoSinTelefono(pedido?.telefono_whatsapp ?? pedido?.customer_phone) ?? undefined}
+          customerEmail={pedido?.customer_email ?? null}
+          envioWhatsApp={envio.estadoWhatsApp}
+          nota={envio.boton?.reenvio ? NOTA_REENVIO_ENLACE : undefined}
+          error={envio.error}
+        />
+      )}
+      {/* B3 T19 (T16, RP23): la ventana del enlace en modo consulta, con el resultado del WhatsApp (envioWhatsapp, w
+          minúscula), el teléfono e164, el correo de respaldo y hasta cuándo sirve (30 días, R6). */}
+      {envio.resultado && (
+        <EnlaceConfirmacionModal tipo="consulta" documento={`el pedido ${pedido?.numero || ''}`} link={envio.resultado.link}
+          color="indigo" correo={envio.resultado.correo} canal={envio.resultado.canal}
+          whatsappUrl={envio.resultado.whatsappUrl} envioWhatsapp={envio.resultado.envioWhatsapp}
+          telefono={pedido?.telefono_whatsapp ?? null} vence={envio.resultado.vence}
+          onClose={envio.cerrarResultado} />
       )}
     </div>
   );

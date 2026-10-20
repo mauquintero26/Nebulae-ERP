@@ -524,10 +524,11 @@ export function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm
 // y el PVEN (T19). `envioWhatsApp` {automatico, listo} (useEstadoEnvioWhatsApp; A mayúscula, no es la envioWhatsapp del
 // EnlaceConfirmacionModal) pone bajo la opción WhatsApp si sale sola desde el WhatsApp de la empresa (lineaWhatsAppCanal);
 // `nota` va bajo las opciones (el reenvío: NOTA_REENVIO_ENLACE). Sin ellas, la ventana queda como antes.
-export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, saving, customerHasPhone, documentLabel = 'cotización', customerEmail, textoSinTelefono = 'sin teléfono', envioWhatsApp = null, nota }: {
+// B3 T19 (H49): `error` (opcional) es el error del envío dentro de la ventana, que sigue abierta (el PVEN).
+export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, saving, customerHasPhone, documentLabel = 'cotización', customerEmail, textoSinTelefono = 'sin teléfono', envioWhatsApp = null, nota, error }: {
   selectedChannel: 'WhatsApp'|'Email'|'Otro'|null; onSelectChannel: (ch: 'WhatsApp'|'Email'|'Otro') => void; onConfirm: () => void;
   onCancel: () => void; saving: boolean; customerHasPhone: boolean; documentLabel?: string; customerEmail?: string | null;
-  textoSinTelefono?: string; envioWhatsApp?: EnvioWhatsAppCanal | null; nota?: string;
+  textoSinTelefono?: string; envioWhatsApp?: EnvioWhatsAppCanal | null; nota?: string; error?: string;
 }) {
   const conoceCorreo = customerEmail !== undefined;
   const correo = (customerEmail || '').trim();
@@ -594,6 +595,7 @@ export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCa
             : 'El cliente no tiene correo registrado: no se enviará correo de respaldo.'}
         </p>
       )}
+      {error && <p role="alert" className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">{error}</p>}
     </Modal>
   );
 }

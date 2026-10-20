@@ -17,6 +17,7 @@ import {
   nombreDeLinea, lineasConTarifa, repartirProporcional, calcularTotalesCotizacion, resumenIvaPorTarifa,
   desgloseDocumento, ETIQUETA_CATALOGO_SIN_TARIFA, etiquetaTarifaCatalogo, sinTarifaIva,
   etiquetaCortaTarifaIva, intentarTotalesCotizacion, textoBaseIva, filasIvaTotales, ivaDeLinea,
+  filaProductoPedido, textoIvaIncluido,
 } from '../src/lib/iva.js';
 
 const linea = (nombre, qty, precio, tarifa, extra = {}) => {
@@ -449,6 +450,82 @@ console.log('--- B3 T17 TEST 18: ivaDeLinea (la tarjeta de cada producto en el d
   assert.equal(ivaDeLinea({ qty: 3, unit_price_cop: 0 }), null);
   assert.deepEqual(ivaDeLinea({ qty: 3, unit_price_cop: 100 }), { discriminado: false, texto: 'IVA no discriminado' });
   for (const raro of [null, undefined, 'x', 7]) assert.equal(ivaDeLinea(raro), null, String(raro));
+}
+
+// ─── El pedido de venta (B3 T19) ───────────────────────────────────────────────────────────────────────────────
+
+console.log('--- B3 T19 TEST 19: filaProductoPedido (la tabla Productos del pedido, como su documento del cliente) ---');
+{
+  const [rodillo, pintura, cinta] = calcularTotalesCotizacion(ejemplo(), 10).lineas;
+  // Pedido con el IVA discriminado (iva_discriminado del GET): la etiqueta de la tarifa, el IVA guardado de la línea y,
+  // en TOTAL, el total con IVA. Las tres filas suman el total del pedido ($1.954.666).
+  assert.deepEqual(filaProductoPedido(rodillo, true), {
+    producto: 'Rodillo', cantidad: '6', unitario: 206769, sinDiscriminar: false, total: 1328698,
+    iva: { etiqueta: 'IVA 19%', valor: 212145, descuento: 'Descuento −$124.061' },
+  });
+  assert.deepEqual(filaProductoPedido(pintura, true).iva, { etiqueta: 'IVA 19%', valor: 80028, descuento: 'Descuento −$46.800' });
+  assert.deepEqual(filaProductoPedido(cinta, true).iva, { etiqueta: 'IVA 5%', valor: 5940, descuento: 'Descuento −$13.200' });
+  assert.equal([rodillo, pintura, cinta].reduce((s, l) => s + filaProductoPedido(l, true).total, 0), 1954666);
+  const sinDescuento = calcularTotalesCotizacion(ejemplo(), 0).lineas[0];
+  assert.deepEqual(filaProductoPedido(sinDescuento, true).iva, { etiqueta: 'IVA 19%', valor: 235717, descuento: null });
+  assert.equal(filaProductoPedido(sinDescuento, true).total, 1476331);
+  // Exento: su etiqueta e IVA $0; la cantidad con el formato del documento del cliente ('2,5'); una línea en $0 de un
+  // pedido discriminado también lleva su etiqueta (documento_pven: _iva_de_linea no mira el monto).
+  const exenta = calcularTotalesCotizacion([linea('Cuaderno', 2.5, 1000, 'EXENTO')], 0).lineas[0];
+  assert.deepEqual(filaProductoPedido(exenta, true), { producto: 'Cuaderno', cantidad: '2,5', unitario: 1000,
+    iva: { etiqueta: 'Exento', valor: 0, descuento: null }, sinDiscriminar: false, total: 2500 });
+  const regalo = calcularTotalesCotizacion([linea('Regalo', 1, 0, 'EXCLUIDO')], 0).lineas[0];
+  assert.deepEqual(filaProductoPedido(regalo, true).iva, { etiqueta: 'Excluido', valor: 0, descuento: null });
+  // Sin total_con_iva_cop (dato raro), la base (total − descuento) más el IVA, como ivaDeLinea.
+  assert.equal(filaProductoPedido({ ...rodillo, total_con_iva_cop: undefined }, true).total, 1328698);
+
+  // Pedido viejo (sin IVA discriminado): 'IVA no discriminado' en la celda y el total sin IVA (total_cop), como hoy.
+  const vieja = { product_name: 'Cuna', qty: 6, unit_price_cop: 206769, total_cop: 1240614 };
+  assert.deepEqual(filaProductoPedido(vieja, false), { producto: 'Cuna', cantidad: '6', unitario: 206769, iva: null,
+    sinDiscriminar: true, total: 1240614 });
+  // Un pedido que no cuadra (iva_discriminado false aunque sus líneas traigan tarifa): lo mismo que su documento del
+  // cliente, sin etiqueta y con el total sin IVA (C4: nunca total_con_iva_cop).
+  assert.deepEqual(filaProductoPedido(rodillo, false), { producto: 'Rodillo', cantidad: '6', unitario: 206769, iva: null,
+    sinDiscriminar: true, total: 1240614 });
+  assert.equal(filaProductoPedido(rodillo, undefined).iva, null, 'sin el dato del pedido, no discrimina');
+  // Una línea en $0 de un pedido viejo: ni etiqueta ni 'IVA no discriminado' (la celda queda en «—»).
+  assert.equal(filaProductoPedido({ product_name: 'Muestra', qty: 1, unit_price_cop: 0, total_cop: 0 }, false).sinDiscriminar, false);
+
+  // El nombre, la cantidad, el precio y el total con los respaldos de la pantalla de siempre y del documento del cliente.
+  assert.equal(filaProductoPedido({ nombre: 'Silla', qty: 1 }, false).producto, 'Silla');
+  assert.equal(filaProductoPedido({ descripcion: 'Mesa', qty: 1 }, false).producto, 'Mesa');
+  assert.equal(filaProductoPedido({ producto_nombre: 'Lámpara', qty: 1 }, false).producto, 'Lámpara');
+  assert.equal(filaProductoPedido({ product_name: '   ', nombre: ' Banco ', qty: 1 }, false).producto, 'Banco');
+  assert.equal(filaProductoPedido({ qty: 1 }, false).producto, 'Producto sin nombre');
+  assert.equal(filaProductoPedido({ product_name: 'A', qty: '2.5', unit_price_cop: 100 }, false).cantidad, '2,5');
+  assert.equal(filaProductoPedido({ product_name: 'A', cantidad: 4, precio_unitario: 500 }, false).cantidad, '4');
+  assert.equal(filaProductoPedido({ product_name: 'A' }, false).cantidad, '0');
+  // Sin total_cop: precio × cantidad al peso, exacto (documento_cliente._total_linea): 1000,5 × 3 = 3001,5 -> $3.002.
+  assert.deepEqual(filaProductoPedido({ product_name: 'A', qty: 3, unit_price_cop: 1000.5 }, false),
+    { producto: 'A', cantidad: '3', unitario: 1001, iva: null, sinDiscriminar: true, total: 3002 });
+  // 1,005 × 100 = 100,5 -> $101 (en flotante, 100.49999999999999 -> $100).
+  assert.equal(filaProductoPedido({ product_name: 'A', qty: 100, unit_price_cop: 1.005 }, false).total, 101, 'sin flotante');
+  assert.equal(filaProductoPedido({ product_name: 'A', qty: '2.5', unit_price_cop: 1000 }, false).total, 2500, 'cantidad con decimales');
+  // Las líneas viejas de la pantalla: precio_unitario y subtotal (el guardado gana sobre precio × cantidad).
+  const vieja2 = filaProductoPedido({ product_name: 'A', qty: 2, precio_unitario: 500, subtotal: 999 }, false);
+  assert.equal(vieja2.unitario, 500);
+  assert.equal(vieja2.total, 999);
+  for (const raro of [null, undefined, 'x', 7, []]) {
+    assert.deepEqual(filaProductoPedido(raro, true), { producto: 'Producto sin nombre', cantidad: '0', unitario: 0, iva: null,
+      sinDiscriminar: false, total: 0 }, String(raro));
+  }
+}
+
+console.log('--- B3 T19 TEST 20: textoIvaIncluido (el Resumen Financiero del pedido, bajo «Total del pedido») ---');
+{
+  const lineas = calcularTotalesCotizacion(ejemplo(), 10).lineas;
+  const pedido = { productos: lineas, subtotal_cop: 1840614, tax_cop: 298113, total_cop: 1954666, descuento_pct: 10 };
+  assert.equal(textoIvaIncluido({ ...pedido, ...desgloseDocumento(pedido) }), 'IVA incluido: $298.113');
+  assert.equal(textoIvaIncluido({ iva_discriminado: true, iva_cop: 0, total_cop: 2500 }), 'IVA incluido: $0', 'todo exento');
+  assert.equal(textoIvaIncluido({ iva_discriminado: false, iva_cop: 0, total_cop: 1240614 }), 'IVA no discriminado');
+  assert.equal(textoIvaIncluido({ iva_discriminado: false, iva_cop: 0, total_cop: 0 }), null, 'sin total, nada');
+  assert.equal(textoIvaIncluido({ iva_cop: 5000, total_cop: 100000 }), 'IVA no discriminado', 'sin el dato, no discrimina');
+  for (const raro of [null, undefined, 'x', 7]) assert.equal(textoIvaIncluido(raro), null, String(raro));
 }
 
 console.log('OK test_iva.mjs');

@@ -8,6 +8,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import * as lucide from 'lucide-react';
 import { ACCIONES_BLOQUE3, accionBloque3 } from '../src/lib/acciones-bloque3.js';
 
@@ -87,6 +88,18 @@ console.log('--- TEST 5: accionBloque3(action) solo con claves propias (la actio
   for (const raro of ['toString', 'constructor', '__proto__', 'hasOwnProperty', 'CREATED', '', null, undefined, 7]) {
     assert.equal(accionBloque3(raro), null, String(raro));
   }
+}
+
+console.log('--- TEST 6 (B3 T19): el mapa hex de la Actividad del pedido toma las acciones nuevas de esta tabla ---');
+{
+  const venta = readFileSync(new URL('../src/app/dashboard/ventas/venta/[id]/page.tsx', import.meta.url), 'utf8');
+  assert.ok(/import \{[^}]*\baccionBloque3\b[^}]*\} from '@\/lib\/acciones-bloque3';/.test(venta), 'importa accionBloque3');
+  assert.ok(venta.includes('const b3 = accionBloque3(a.action);'), 'una sola búsqueda por renglón');
+  assert.ok(venta.includes("style={{ color: ACTIVITY_STYLE[a.action] || b3?.hex || '#94a3b8' }}"),
+    'el color: el mapa de la página, luego el hex de ACCIONES_BLOQUE3 y el gris por defecto');
+  // Sin copiar los colores en el mapa de la página (RP22): ENVIADO_AL_CLIENTE '#4f46e5' y MENSAJE_CLIENTE '#16a34a'.
+  const mapa = venta.slice(venta.indexOf('const ACTIVITY_STYLE'), venta.indexOf('};', venta.indexOf('const ACTIVITY_STYLE')));
+  for (const accion of Object.keys(ACCIONES_BLOQUE3)) assert.ok(!mapa.includes(accion), `ACTIVITY_STYLE sin ${accion}`);
 }
 
 console.log('OK test_acciones_bloque3.mjs');

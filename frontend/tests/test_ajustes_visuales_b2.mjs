@@ -188,11 +188,9 @@ console.log('--- V3 TEST 2: la SC, la COT y el PVEN usan la misma cabecera ---')
     // B3 T17 r1 (RP22): entre la descripción y el código humanizado puede ir la etiqueta de ACCIONES_BLOQUE3.
     assert.ok(/<CabeceraActividad\b[^>]*titulo=\{a\.description \|\| (b3\?\.etiqueta \|\| )?humanizarCodigo\(a\.action\)\}/.test(fuente),
       `${ruta}: la tarjeta usa <CabeceraActividad titulo=...>`);
-    // B3 T18: la SC también (las acciones nuevas de su Actividad, RP22).
-    if (ruta === 'cotizacion/[id]/page.tsx' || ruta === 'solicitud/[id]/page.tsx') {
-      assert.ok(/<CabeceraActividad\b[^>]*titulo=\{a\.description \|\| b3\?\.etiqueta \|\| humanizarCodigo\(a\.action\)\}/.test(fuente),
-        `${ruta}: sin descripción, la etiqueta de ACCIONES_BLOQUE3 (RP22)`);
-    }
+    // B3 T18: la SC también (las acciones nuevas de su Actividad, RP22). B3 T19: y el PVEN; ya van las tres.
+    assert.ok(/<CabeceraActividad\b[^>]*titulo=\{a\.description \|\| b3\?\.etiqueta \|\| humanizarCodigo\(a\.action\)\}/.test(fuente),
+      `${ruta}: sin descripción, la etiqueta de ACCIONES_BLOQUE3 (RP22)`);
     assert.ok(!/<span className="font-bold text-slate-800 text-sm">\{a\.description/.test(fuente),
       `${ruta}: sin la cabecera vieja armada a mano`);
     assert.ok(/import \{[^}]*\bCabeceraActividad\b[^}]*\} from '\.\.\/\.\.\/flujo';/.test(fuente), `${ruta}: importa CabeceraActividad`);

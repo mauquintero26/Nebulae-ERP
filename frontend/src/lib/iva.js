@@ -487,7 +487,84 @@ export function ivaDeLinea(linea) {
     // r1: la cantidad como en el documento del cliente ('2,5'); una guardada como texto ('3') también se lee.
     cantidad: `Cant. ${formatoCantidad(Number(l.qty ?? 0)) || '0'} × ${formatoPesos(Number(pesoEntero(l.unit_price_cop)))} sin IVA`,
     iva: `${ETIQUETAS_TARIFA_IVA[tarifa]} · ${formatoPesos(iva)}`,
-    descuento: descuento > 0 ? `Descuento −${formatoPesos(descuento)}` : null,
+    descuento: textoDescuentoLinea(descuento),
     total_con_iva_cop: conIva,
   };
+}
+
+/** 'Descuento −$124.061' (la parte del descuento global de una línea), o null sin descuento. */
+const textoDescuentoLinea = (descuento) => (descuento > 0 ? `Descuento −${formatoPesos(descuento)}` : null);
+
+// ─── El pedido de venta (B3 T19) ───────────────────────────────────────────────────────────────────────────────
+
+const NOMBRES_FILA_PEDIDO = ['product_name', 'nombre', 'name', 'descripcion', 'producto_nombre'];
+
+/**
+ * El total SIN IVA de una línea guardada, como documento_cliente._total_linea: total_cop al peso (o subtotal, el campo
+ * de las líneas viejas de la pantalla); sin ninguno, precio × cantidad, exacto y al peso (nunca el flotante). 0 si no
+ * hay con qué calcularlo.
+ */
+function totalSinIvaDeLinea(l) {
+  const guardado = l.total_cop ?? l.subtotal;
+  if (guardado !== null && guardado !== undefined) return Number(pesoEntero(guardado));
+  const precio = decimalExacto(l.unit_price_cop ?? l.precio_unitario);
+  const cant = decimalExacto(l.qty ?? l.cantidad);
+  if (precio === null || cant === null) return 0;
+  const total = enteroMedioArriba({ neg: precio.neg !== cant.neg, digitos: precio.digitos * cant.digitos,
+    exp: precio.exp + cant.exp });
+  return total === null ? 0 : Number(total);
+}
+
+/**
+ * Una fila de la tabla Productos del pedido de venta (venta/[id], IVA punto 12), con lo mismo que la línea de su
+ * documento del cliente (documento_pven: linea_publica con _iva_de_linea): PRODUCTO / CANT. / P. UNIT. SIN IVA / IVA /
+ * TOTAL. No recalcula nada: los montos son los GUARDADOS en la línea.
+ * - producto: el primer texto no vacío de product_name, nombre, name, descripcion o producto_nombre; si no,
+ *   'Producto sin nombre'. cantidad: qty (o cantidad) con formatoCantidad ('2,5'); unitario: unit_price_cop (o
+ *   precio_unitario) al peso.
+ * - Con el IVA discriminado en el PEDIDO (`ivaDiscriminado`, el iva_discriminado del GET; como _iva_de_linea, no basta
+ *   con que la línea traiga tarifa): iva = {etiqueta ('IVA 19%', 'Exento'…), valor (el iva_cop de la línea), descuento
+ *   ('Descuento −$X' o null)} y total = total_con_iva_cop (sin él, base + IVA). Las filas suman el total del pedido.
+ * - Sin IVA discriminado (un pedido viejo, o uno cuyo resumen no cuadra): iva null, total = el total sin IVA de la línea
+ *   (C4: nunca total_con_iva_cop) y sinDiscriminar true si la línea vale más de $0 (la celda dice 'IVA no
+ *   discriminado'; una línea en $0 no dice nada del IVA).
+ * Lo que no es una línea da una fila vacía ('Producto sin nombre', '0', $0).
+ * @param {unknown} linea
+ * @param {unknown} ivaDiscriminado
+ * @returns {{producto: string, cantidad: string, unitario: number, sinDiscriminar: boolean, total: number,
+ *   iva: {etiqueta: string, valor: number, descuento: string | null} | null}}
+ */
+export function filaProductoPedido(linea, ivaDiscriminado) {
+  if (!esObjeto(linea)) {
+    return { producto: 'Producto sin nombre', cantidad: '0', unitario: 0, iva: null, sinDiscriminar: false, total: 0 };
+  }
+  const l = /** @type {any} */ (linea);
+  const nombre = NOMBRES_FILA_PEDIDO.map((k) => (typeof l[k] === 'string' ? stripPy(l[k]) : '')).find(Boolean);
+  const base = {
+    producto: nombre || 'Producto sin nombre',
+    cantidad: formatoCantidad(Number(l.qty ?? l.cantidad ?? 0)) || '0',
+    unitario: Number(pesoEntero(l.unit_price_cop ?? l.precio_unitario)),
+  };
+  const sinIva = totalSinIvaDeLinea(l);
+  if (ivaDiscriminado !== true) return { ...base, iva: null, sinDiscriminar: sinIva > 0, total: sinIva };
+  const iva = Number(pesoEntero(l.iva_cop));
+  const descuento = Number(pesoEntero(l.descuento_cop));
+  const total = l.total_con_iva_cop !== null && l.total_con_iva_cop !== undefined
+    ? Number(pesoEntero(l.total_con_iva_cop)) : sinIva - descuento + iva;
+  return { ...base, iva: { etiqueta: etiquetaTarifaIva(l.iva_tarifa), valor: iva, descuento: textoDescuentoLinea(descuento) },
+    sinDiscriminar: false, total };
+}
+
+/**
+ * La línea bajo «Total del pedido» en el Resumen Financiero (IVA punto 12): 'IVA incluido: $298.113' si el pedido tiene
+ * el IVA discriminado (iva_cop del GET, el tax_cop de la cabecera; 'IVA incluido: $0' si todo es exento o excluido);
+ * 'IVA no discriminado' en un pedido viejo con total; null sin total o si no es un pedido.
+ * @param {unknown} doc
+ * @returns {string | null}
+ */
+export function textoIvaIncluido(doc) {
+  if (!esObjeto(doc)) return null;
+  const d = /** @type {any} */ (doc);
+  if (d.iva_discriminado === true) return `IVA incluido: ${formatoPesos(Number(pesoEntero(d.iva_cop)))}`;
+  return pesoEntero(d.total_cop) > 0n ? ETIQUETA_SIN_TARIFA : null;
 }

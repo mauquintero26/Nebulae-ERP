@@ -317,14 +317,16 @@ console.log('--- T11 calidad E6: textoSinTelefono, el mismo texto en las tres ve
   // Los tres montajes (detalle de la SC, que no pasaba ninguno; detalle de la COT; y el Hub, ronda 1 punto 8) lo usan,
   // sin el texto armado a mano.
   const leer = (ruta) => readFileSync(new URL(`../src/app/dashboard/ventas/${ruta}`, import.meta.url), 'utf8');
-  for (const ruta of ['cotizacion/[id]/page.tsx', 'solicitud/[id]/page.tsx', 'page.tsx']) {
+  // B3 T19: y el pedido de venta («Enviar al cliente», U23 punto 7).
+  for (const ruta of ['cotizacion/[id]/page.tsx', 'solicitud/[id]/page.tsx', 'page.tsx', 'venta/[id]/page.tsx']) {
     const fuente = leer(ruta);
     assert.ok(/<ChannelModal[\s\S]*?textoSinTelefono=\{textoSinTelefono\(/.test(fuente), `${ruta}: ChannelModal con textoSinTelefono(...)`);
     assert.ok(!fuente.includes("'teléfono incompleto' : 'sin teléfono'"), `${ruta}: sin el texto armado a mano`);
   }
-  // B3 T17/T18 (RP19, C27): en la COT y la SC, sobre telefono_whatsapp (el e164 que valida el servidor), no sobre el
-  // teléfono escrito en el documento.
-  for (const [ruta, doc] of [['cotizacion/[id]/page.tsx', 'cotizacion'], ['solicitud/[id]/page.tsx', 'solicitud']]) {
+  // B3 T17/T18/T19 (RP19, C27): en la COT, la SC y el PVEN, sobre telefono_whatsapp (el e164 que valida el servidor), no
+  // sobre el teléfono escrito en el documento.
+  for (const [ruta, doc] of [['cotizacion/[id]/page.tsx', 'cotizacion'], ['solicitud/[id]/page.tsx', 'solicitud'],
+    ['venta/[id]/page.tsx', 'pedido']]) {
     const fuente = leer(ruta);
     assert.ok(fuente.includes(`customerHasPhone={!motivoTelefono(${doc}?.telefono_whatsapp)}`), `${ruta}: customerHasPhone`);
   }
@@ -334,6 +336,9 @@ console.log('--- T11 calidad E6: textoSinTelefono, el mismo texto en las tres ve
   assert.ok(leer('cotizacion/[id]/page.tsx').includes('textoSinTelefono={textoSinTelefono(cotizacion?.telefono_whatsapp) ?? undefined}'));
   assert.ok(leer('solicitud/[id]/page.tsx').includes(
     'textoSinTelefono={textoSinTelefono(solicitud?.telefono_whatsapp ?? solicitud?.customer_phone) ?? undefined}'), 'SC: el porqué');
+  // B3 T19 (nota del controlador tras T13-T18): el PVEN, como la SC.
+  assert.ok(leer('venta/[id]/page.tsx').includes(
+    'textoSinTelefono={textoSinTelefono(pedido?.telefono_whatsapp ?? pedido?.customer_phone) ?? undefined}'), 'PVEN: el porqué');
   assert.equal(textoSinTelefono(null ?? '300123456'), 'teléfono incompleto');
   // Es el mismo texto que armaban a mano antes, en todos los casos en que WhatsApp queda deshabilitado.
   for (const tel of [null, '', 'sin número', '+57', '0', '123', '300 123 45']) {
