@@ -29,7 +29,7 @@ import {
   diasDesde, textoAntiguedad, ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, esNoResuelto, esAccionTomada, accionSiguienteSC,
   esSCConCotizacionTemprana, notaReiniciaAtraso, desdeElHub, fusionarCargaHub,
 } from '@/lib/hub-ventas';
-import { waUrl } from '@/lib/whatsapp';
+import { waUrl, abrirWhatsApp } from '@/lib/whatsapp';
 import { correoDelCliente } from '@/lib/aviso-correo';
 import { formatoPesos } from '@/lib/pesos';
 import { etiquetaTipoSolicitud } from '@/lib/etiquetas-ventas';
@@ -728,7 +728,7 @@ export default function VentasHub() {
       const wa = d?.whatsapp ?? null;
       if(abreWhatsAppLocal(canalHub, wa)){
         whatsapp = waUrl(telefono, wa?.texto_manual || (link ? `Hola, aquí está ${documento}. Confírmala aquí: ${link}` : `Hola, aquí está ${documento}.`));
-        if(whatsapp) window.open(whatsapp, '_blank');
+        abrirWhatsApp(whatsapp);
       }
       // B13: el modal ofrece "Abrir WhatsApp" con el mismo enlace por si el navegador bloqueó la ventana.
       if(link) setHubEnlace({documento, link, correo:d?.correo ?? null, canal:canalHub, color: tipo === 'COT' ? 'blue' : 'indigo', whatsapp,

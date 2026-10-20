@@ -595,8 +595,9 @@ export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCa
             : 'El cliente no tiene correo registrado: no se enviará correo de respaldo.'}
         </p>
       )}
-      {/* r1 (lección de T16/T17): la región viva siempre montada; solo cambia su contenido. */}
-      <div role="alert">{error ? <p className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">{error}</p> : null}</div>
+      {/* r1 (lección de T16/T17): la región viva siempre montada; solo cambia su contenido. r2: vacía, empty:-mt-4 anula el
+          espacio del space-y-4. */}
+      <div role="alert" className="empty:-mt-4">{error ? <p className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">{error}</p> : null}</div>
     </Modal>
   );
 }

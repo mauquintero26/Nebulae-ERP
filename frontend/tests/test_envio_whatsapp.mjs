@@ -16,7 +16,7 @@ import {
   enlaceBotonWhatsApp, estadoConfigWhatsApp, resultadoPruebaWhatsApp, variablesDeEjemplo, lineaEnvioAutomatico,
   formularioEnvioWhatsApp, cuerpoEnvioWhatsApp, hayCambiosWhatsApp, MENSAJE_WHATSAPP_SIN_GUARDAR,
   estadoEnvioParaCanal, lineaWhatsAppCanal, NOTA_REENVIO_ENLACE,
-  botonEnvioPedido, envioIncierto, pedidoSeEnvio, AVISO_PEDIDO_SI_SE_ENVIO,
+  botonEnvioPedido, envioIncierto, pedidoSeEnvio, AVISO_PEDIDO_SI_SE_ENVIO, AVISO_WHATSAPP_NO_SE_ABRIO, avisoEnvioIncierto,
 } from '../src/lib/envio-whatsapp.js';
 import { avisoCorreo } from '../src/lib/aviso-correo.js';
 import { readFileSync } from 'node:fs';
@@ -493,6 +493,29 @@ console.log('--- B3 T19 r1 (menor 3): un envío del pedido con resultado inciert
   assert.equal(pedidoSeEnvio(undefined, { estado: 'PENDIENTE_COMPRA' }), false, 'sin el dato');
   for (const raro of [null, undefined, 'x']) assert.equal(pedidoSeEnvio('2026-10-03T15:00:00Z', raro), false, 'la recarga falló');
   assert.equal(AVISO_PEDIDO_SI_SE_ENVIO, 'El pedido sí se envió; revisa la Actividad antes de reenviar');
+
+  // r2 (menor 2): avisoEnvioIncierto(canal, envioWhatsApp) elige el aviso cuando la recarga muestra que sí se envió. Con
+  // WhatsApp y el automático NO listo, el wa.me manual nunca se abrió (el POST no respondió): el cliente no lo recibió.
+  assert.equal(AVISO_WHATSAPP_NO_SE_ABRIO, 'El pedido quedó registrado, pero el WhatsApp no se abrió: usa «Reenviar al cliente».');
+  for (const estado of [null, undefined, { automatico: false, listo: false }, { automatico: true, listo: false }]) {
+    assert.equal(avisoEnvioIncierto('WhatsApp', estado), AVISO_WHATSAPP_NO_SE_ABRIO, JSON.stringify(estado));
+  }
+  assert.equal(avisoEnvioIncierto('WhatsApp', { automatico: true, listo: true }), AVISO_PEDIDO_SI_SE_ENVIO, 'el automático salió solo');
+  for (const canal of ['Email', 'Otro', null]) {
+    assert.equal(avisoEnvioIncierto(canal, null), AVISO_PEDIDO_SI_SE_ENVIO, String(canal));
+  }
+
+  // r2 (menor 1): en la rama incierta la pantalla espera la recarga ANTES de soltar `enviando`, y el error solo se pone
+  // si la comparación dice que no se envió (nunca antes: no invita a reenviar).
+  const hook = readFileSync(new URL('../src/app/dashboard/ventas/venta/[id]/detalle-bloque3.tsx', import.meta.url), 'utf8')
+    .replace(/\r\n/g, '\n');
+  const captura = hook.slice(hook.indexOf('} catch (err) {', hook.indexOf('async function enviarAlCliente(')),
+    hook.indexOf('setEnviando(false);', hook.indexOf('async function enviarAlCliente(')));
+  const incierta = captura.slice(captura.indexOf('if (envioIncierto(err))'), captura.indexOf('recargarTrasError(err)'));
+  assert.ok(incierta.includes('const fresco = await recargar({ silencioso: true });'), 'espera la recarga');
+  assert.ok(incierta.indexOf('pedidoSeEnvio(enviadoAntes, fresco)') < incierta.indexOf('setError('), 'compara antes del error');
+  assert.ok(incierta.includes('avisoEnvioIncierto(canal, estadoWhatsApp)'), 'el aviso según el canal y el automático');
+  assert.ok(!captura.slice(0, captura.indexOf('if (envioIncierto(err))')).includes('setError('), 'sin error antes de comparar');
 }
 
 console.log('--- B3 T19 r1 (menor 10): el error del ChannelModal en una región viva siempre montada y la X bloqueada ---');
@@ -503,7 +526,8 @@ console.log('--- B3 T19 r1 (menor 10): el error del ChannelModal en una región 
   assert.ok(inicio > 0, 'ChannelModal encontrado');
   const modal = fuente.slice(inicio, fuente.indexOf('\n}\n', inicio));
   assert.ok(/<Modal [^>]*bloquearCierre=\{saving\}/.test(modal), 'la X no se ve activa mientras envía');
-  assert.ok(/<div role="alert">\{error \? <p className="[^"]*">\{error\}<\/p> : null\}<\/div>/.test(modal),
+  // r2 (menor 3): vacía no suma el espacio del space-y-4 del Modal (empty:-mt-4).
+  assert.ok(/<div role="alert" className="empty:-mt-4">\{error \? <p className="[^"]*">\{error\}<\/p> : null\}<\/div>/.test(modal),
     'la región role="alert" siempre montada; solo cambia su contenido');
   assert.ok(!modal.includes('{error && <p role="alert"'), 'sin montar la región solo cuando hay error');
 }

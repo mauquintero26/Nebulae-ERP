@@ -7,7 +7,7 @@ import { useAvisos } from '@/components/ui';
 import { textoDeError, recargarTrasError } from '@/lib/avisos';
 import { textoEnlaceVigente, TEXTO_ENLACE_PEDIDO_VENCIDO } from '@/lib/documento-comercial';
 import {
-  abreWhatsAppLocal, botonEnvioPedido, envioIncierto, pedidoSeEnvio, AVISO_PEDIDO_SI_SE_ENVIO,
+  abreWhatsAppLocal, botonEnvioPedido, envioIncierto, pedidoSeEnvio, avisoEnvioIncierto,
 } from '@/lib/envio-whatsapp';
 import { filaProductoPedido, textosTarjetaPedido, notaProductosCancelados, ETIQUETA_SIN_TARIFA } from '@/lib/iva';
 import { formatoPesos } from '@/lib/pesos';
@@ -58,8 +58,9 @@ const PREFIJO_ERROR = 'No se pudo enviar el pedido al cliente';
  *     en un aviso.
  *   - r1: un resultado incierto (envioIncierto: un 5xx o un error sin status, que pueden llegar después del commit del
  *     servidor) recarga y compara enlace_cliente.enviado_at con el de antes del POST (pedidoSeEnvio). Si cambió, el
- *     pedido sí se envió: la ventana se cierra y se avisa «El pedido sí se envió; revisa la Actividad antes de
- *     reenviar». Si no, queda el error.
+ *     pedido sí se envió: la ventana se cierra y se avisa con avisoEnvioIncierto («El pedido sí se envió; revisa la
+ *     Actividad antes de reenviar», o, r2, que el WhatsApp manual no se abrió). Si no, queda el error. r2: la ventana
+ *     sigue en «enviando» hasta que llega la recarga, y el error no se ve antes de la comparación.
  */
 export function useEnvioAlCliente(pedido: PedidoBloque3 | null,
   recargar: (opts?: { silencioso?: boolean }) => Promise<unknown>) {
@@ -121,19 +122,25 @@ export function useEnvioAlCliente(pedido: PedidoBloque3 | null,
       if (link) setResultado({ link, correo: d?.correo ?? null, canal, whatsappUrl, envioWhatsapp: wa, vence: d?.vence ?? null });
       void recargar({ silencioso: true });
     } catch (err) {
-      setError(textoDeError(err, PREFIJO_ERROR));
       if (envioIncierto(err)) {
-        void recargar({ silencioso: true }).then((fresco) => {
-          if (!pedidoSeEnvio(enviadoAntes, fresco)) return;
+        // r2: espera la recarga ANTES de soltar `enviando` y de mostrar el error: si el pedido sí se envió, la ventana no
+        // invita a reenviar.
+        const fresco = await recargar({ silencioso: true });
+        if (pedidoSeEnvio(enviadoAntes, fresco)) {
           cerrarVentana();
-          avisar(AVISO_PEDIDO_SI_SE_ENVIO, { tono: 'info' });
-        });
-      } else if (recargarTrasError(err)) {
-        void recargar({ silencioso: true }).then((fresco) => {
-          if ((fresco as PedidoBloque3 | null | undefined)?.estado !== 'CANCELADO') return;
-          cerrarVentana();
-          avisarError(err, PREFIJO_ERROR);
-        });
+          avisar(avisoEnvioIncierto(canal, estadoWhatsApp), { tono: 'info' });
+        } else {
+          setError(textoDeError(err, PREFIJO_ERROR));
+        }
+      } else {
+        setError(textoDeError(err, PREFIJO_ERROR));
+        if (recargarTrasError(err)) {
+          void recargar({ silencioso: true }).then((fresco) => {
+            if ((fresco as PedidoBloque3 | null | undefined)?.estado !== 'CANCELADO') return;
+            cerrarVentana();
+            avisarError(err, PREFIJO_ERROR);
+          });
+        }
       }
     }
     setEnviando(false);

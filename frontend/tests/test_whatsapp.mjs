@@ -64,8 +64,9 @@ console.log('--- TEST 6 (B3 T19 r1): abrirWhatsApp abre wa.me sin window.opener 
     delete globalThis.window;
   }
   abrirWhatsApp(waUrl('3001234567')); // sin window (el servidor): no lanza
-  // Las tres pantallas que envían por WhatsApp (COT, SC y el envío del PVEN) abren wa.me solo con el helper.
-  for (const ruta of ['cotizacion/[id]/page.tsx', 'solicitud/[id]/page.tsx', 'venta/[id]/detalle-bloque3.tsx']) {
+  // Las pantallas que envían por WhatsApp (COT, SC, el envío del PVEN y, r2, el Hub) abren wa.me solo con el helper.
+  // chatter.tsx no entra: usa el valor de retorno de window.open (abrir la app y, si no, el respaldo).
+  for (const ruta of ['cotizacion/[id]/page.tsx', 'solicitud/[id]/page.tsx', 'venta/[id]/detalle-bloque3.tsx', 'page.tsx']) {
     const fuente = readFileSync(new URL(`../src/app/dashboard/ventas/${ruta}`, import.meta.url), 'utf8');
     assert.ok(!fuente.includes('window.open('), `${ruta}: sin window.open( suelto`);
     assert.ok(/abrirWhatsApp\(/.test(fuente), `${ruta}: usa abrirWhatsApp`);

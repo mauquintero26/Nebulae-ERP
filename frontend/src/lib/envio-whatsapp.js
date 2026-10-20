@@ -462,3 +462,20 @@ export function pedidoSeEnvio(enviadoAntes, pedidoFresco) {
 
 /** B3 T19 r1: el aviso cuando el envío dio error pero la recarga muestra que el pedido sí se envió. */
 export const AVISO_PEDIDO_SI_SE_ENVIO = 'El pedido sí se envió; revisa la Actividad antes de reenviar';
+
+/** B3 T19 r2: el aviso cuando sí se registró pero el WhatsApp manual nunca se abrió (el POST no respondió). */
+export const AVISO_WHATSAPP_NO_SE_ABRIO = 'El pedido quedó registrado, pero el WhatsApp no se abrió: usa «Reenviar al cliente».';
+
+/**
+ * B3 T19 r2: el aviso de un envío incierto que la recarga muestra como hecho (pedidoSeEnvio). Con el canal WhatsApp y el
+ * automático NO listo (`envioWhatsApp`, el {automatico, listo} del ChannelModal; null si no se pudo leer), el mensaje
+ * dependía del wa.me que abre el asesor, y ese nunca se abrió porque el POST no respondió: AVISO_WHATSAPP_NO_SE_ABRIO.
+ * En los demás casos (Email, Otro o el automático listo), AVISO_PEDIDO_SI_SE_ENVIO.
+ * @param {string | null | undefined} canal
+ * @param {unknown} envioWhatsApp
+ * @returns {string}
+ */
+export function avisoEnvioIncierto(canal, envioWhatsApp) {
+  const listo = esObjeto(envioWhatsApp) && /** @type {any} */ (envioWhatsApp).listo === true;
+  return canal === 'WhatsApp' && !listo ? AVISO_WHATSAPP_NO_SE_ABRIO : AVISO_PEDIDO_SI_SE_ENVIO;
+}

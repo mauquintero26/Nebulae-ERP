@@ -626,7 +626,8 @@ function PedidoVentaDetalleContent() {
                 <div>
                   <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Total del pedido</p>
                   <p className="text-3xl font-black text-slate-900">{fCOP(resumenPago.total)}</p>
-                  {/* B3 T19 (IVA punto 12): 'IVA incluido: $X' o, en un pedido viejo, 'IVA no discriminado'. */}
+                  {/* B3 T19 (IVA punto 12): 'IVA incluido: $X' (con el IVA discriminado o, r1, con iva_cop > 0) o, en un
+                      pedido viejo sin IVA, 'IVA no discriminado'. */}
                   {ivaIncluido && <p className="text-sm font-semibold text-slate-500">{ivaIncluido}</p>}
                 </div>
                 <div className="grid grid-cols-1 @md:grid-cols-3 gap-3">
@@ -693,8 +694,8 @@ function PedidoVentaDetalleContent() {
               <h3 className="text-lg font-black text-slate-800 mb-4 flex items-center gap-2">
                 <FileText className="text-indigo-600" size={20} /> Productos
               </h3>
-              {/* B3 T19 (IVA punto 12): PRODUCTO / CANT. / P. UNIT. SIN IVA / IVA / TOTAL y debajo los totales de la COT
-                  (detalle-bloque3.tsx). H37: con la columna angosta, la tabla se desplaza dentro de su tarjeta. */}
+              {/* B3 T19 (IVA punto 12): desde @xl, la tabla PRODUCTO / CANT. / P. UNIT. SIN IVA / IVA / TOTAL CON IVA; bajo
+                  @xl (r1: a 1024 px), una tarjeta por línea; debajo, los totales de la COT (detalle-bloque3.tsx). */}
               <TablaProductosPedido pedido={pedido} />
             </div>
 

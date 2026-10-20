@@ -55,7 +55,8 @@ export function PrecioLineaIva({ item }: { item: LineaGuardada }) {
 /**
  * IVA punto 11: los renglones de TOTALES antes de TOTAL: Subtotal (sin IVA), Descuento (x%) con descuento_cop del GET
  * (ya no subtotal − total, que con IVA da mal) y un renglón por tarifa ('IVA 19% sobre $1.537.753' · '$292.173'). Una
- * cotización vieja dice 'IVA no discriminado' (filasIvaTotales).
+ * cotización vieja dice 'IVA no discriminado' (filasIvaTotales); B3 T19 r1: si tiene IVA guardado (tax_cop > 0), 'IVA
+ * sobre $X' con su valor, como su documento del cliente. También lo usa el pedido de venta (venta/[id]).
  */
 export function TotalesIvaCotizacion({ cotizacion }: { cotizacion: CotizacionDetalle | null }) {
   return (
