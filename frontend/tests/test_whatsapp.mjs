@@ -4,7 +4,8 @@
  */
 
 import assert from 'node:assert/strict';
-import { numeroWhatsApp, waUrl, whatsappParaReabrir } from '../src/lib/whatsapp.js';
+import { readFileSync } from 'node:fs';
+import { numeroWhatsApp, waUrl, whatsappParaReabrir, abrirWhatsApp } from '../src/lib/whatsapp.js';
 
 console.log('--- TEST 1: numero colombiano de 10 digitos recibe el 57 ---');
 {
@@ -46,6 +47,29 @@ console.log('--- TEST 5 (B13): boton "Abrir WhatsApp" del modal del enlace, por 
   assert.equal(whatsappParaReabrir('WhatsApp', null), null, 'sin telefono no hay boton');
   assert.equal(whatsappParaReabrir('WhatsApp', 'javascript:alert(1)'), null, 'solo enlaces wa.me');
   assert.equal(whatsappParaReabrir('WhatsApp', 'https://evil.co/wa.me/57'), null);
+}
+
+console.log('--- TEST 6 (B3 T19 r1): abrirWhatsApp abre wa.me sin window.opener (noopener, noreferrer) ---');
+{
+  const abiertas = [];
+  globalThis.window = { open: (...args) => { abiertas.push(args); return null; } };
+  try {
+    const url = waUrl('3001234567', 'Hola');
+    abrirWhatsApp(url);
+    assert.deepEqual(abiertas, [[url, '_blank', 'noopener,noreferrer']]);
+    // Solo enlaces wa.me (el de waUrl); nada sin enlace.
+    for (const raro of [null, undefined, '', 'javascript:alert(1)', 'https://evil.co/wa.me/57']) abrirWhatsApp(raro);
+    assert.equal(abiertas.length, 1);
+  } finally {
+    delete globalThis.window;
+  }
+  abrirWhatsApp(waUrl('3001234567')); // sin window (el servidor): no lanza
+  // Las tres pantallas que envían por WhatsApp (COT, SC y el envío del PVEN) abren wa.me solo con el helper.
+  for (const ruta of ['cotizacion/[id]/page.tsx', 'solicitud/[id]/page.tsx', 'venta/[id]/detalle-bloque3.tsx']) {
+    const fuente = readFileSync(new URL(`../src/app/dashboard/ventas/${ruta}`, import.meta.url), 'utf8');
+    assert.ok(!fuente.includes('window.open('), `${ruta}: sin window.open( suelto`);
+    assert.ok(/abrirWhatsApp\(/.test(fuente), `${ruta}: usa abrirWhatsApp`);
+  }
 }
 
 console.log('OK test_whatsapp.mjs');

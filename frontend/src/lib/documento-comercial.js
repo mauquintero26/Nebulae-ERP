@@ -20,7 +20,6 @@ import { resumenPagoPedido } from './resumen-pago.js';
 import { comoUTC } from './hub-ventas.js';
 import { fechaLarga, fechaSolo, diaColombia } from './fechas-colombia.js';
 import { correoValido, normalizarMarca } from './marca-empresa.js';
-import { esAdminOAsesor } from './seguimiento.js';
 
 /**
  * Cómo se pinta cada tipo de documento: el título de la hoja, cómo se nombra en una frase y la variante (C3): la
@@ -460,24 +459,6 @@ export function enlacePedidoVigente(enlace, ahora = new Date()) {
   const venceAt = instanteVenceAt(enlace);
   const referencia = ahora instanceof Date ? ahora.getTime() : Number(ahora);
   return !(Number.isFinite(venceAt) && venceAt <= referencia);
-}
-
-/**
- * B3 T19 (U23 punto 7): el botón de la cabecera del pedido, o null si no se muestra. Lo oculta lo que el servidor
- * (POST /ventas/pedidos/{id}/enviar-al-cliente) rechazaría: el pedido CANCELADO (409), un rol que no es ADMIN ni ASESOR
- * (403, esAdminOAsesor) o un pedido sin productos o con total <= 0 (400). Dice 'Reenviar al cliente' si el enlace del
- * cliente está vigente (enlacePedidoVigente; reenvio true: el ChannelModal lleva NOTA_REENVIO_ENLACE, porque el
- * anterior deja de servir) y 'Enviar al cliente' si nunca se envió o ya venció.
- * @param {unknown} pedido el GET /ventas/pedidos/{id} ({estado, productos, total_cop, enlace_cliente})
- * @param {unknown} rol
- * @param {Date | number} [ahora]
- * @returns {{texto: string, reenvio: boolean} | null}
- */
-export function botonEnvioPedido(pedido, rol, ahora = new Date()) {
-  if (!esObjeto(pedido) || pedido.estado === 'CANCELADO' || !esAdminOAsesor(rol)) return null;
-  if (!Array.isArray(pedido.productos) || pedido.productos.length === 0 || !(Number(pedido.total_cop) > 0)) return null;
-  const reenvio = enlacePedidoVigente(pedido.enlace_cliente, ahora);
-  return { texto: reenvio ? 'Reenviar al cliente' : 'Enviar al cliente', reenvio };
 }
 
 /**

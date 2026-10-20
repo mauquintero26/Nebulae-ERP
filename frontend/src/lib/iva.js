@@ -446,6 +446,9 @@ export function textoBaseIva(fila) {
  * - Una fila por tarifa: {clave: 'iva-19', etiqueta: 'IVA 19% sobre $1.537.753', valor: 292173}.
  * - Un documento con iva_discriminado false (una cotización vieja) y total mayor que 0: una sola fila
  *   {clave: 'sin-iva', etiqueta: 'IVA no discriminado', valor: null}. Sin precios todavía, nada.
+ * - B3 T19 r1: sin discriminar pero con IVA conocido (iva_cop, el tax_cop de la cabecera, > 0), el criterio de
+ *   documento_cliente._totales_del_documento (lo que ve el cliente): {clave: 'iva', etiqueta: 'IVA sobre $(total − IVA)',
+ *   valor: iva_cop}, en lugar de la fila gris.
  * @param {unknown} t
  * @returns {{clave: string, etiqueta: string, valor: number | null}[]}
  */
@@ -453,7 +456,10 @@ export function filasIvaTotales(t) {
   if (!esObjeto(t)) return [];
   const doc = /** @type {any} */ (t);
   if (doc.iva_discriminado === false) {
-    return pesoEntero(doc.total_cop) > 0n ? [{ clave: 'sin-iva', etiqueta: ETIQUETA_SIN_TARIFA, valor: null }] : [];
+    const total = pesoEntero(doc.total_cop);
+    const iva = pesoEntero(doc.iva_cop);
+    if (iva > 0n) return [{ clave: 'iva', etiqueta: `IVA sobre ${formatoPesos(Number(total - iva))}`, valor: Number(iva) }];
+    return total > 0n ? [{ clave: 'sin-iva', etiqueta: ETIQUETA_SIN_TARIFA, valor: null }] : [];
   }
   return (Array.isArray(doc.iva_por_tarifa) ? doc.iva_por_tarifa : []).filter(esObjeto).map((f) => ({
     clave: `iva-${normalizarTarifaIva(f.tarifa) ?? f.tarifa}`, etiqueta: textoBaseIva(f), valor: Number(pesoEntero(f.iva_cop)),
@@ -462,26 +468,22 @@ export function filasIvaTotales(t) {
 
 /**
  * El IVA de una línea guardada de la cotización, para su tarjeta en el detalle (IVA punto 11):
- * - null si la línea vale $0 (total_cop o, sin él, unitario × cantidad): no se dice nada del IVA;
+ * - null si la línea vale $0 (totalSinIvaDeLinea: total_cop o, sin él, unitario × cantidad exacto): no se dice nada
+ *   del IVA;
  * - {discriminado: false, texto: 'IVA no discriminado'} si no trae una tarifa válida (una cotización vieja);
  * - con tarifa: {discriminado: true, cantidad: 'Cant. 6 × $206.769 sin IVA' ('Cant. 2,5 × …' con formatoCantidad), iva:
  *   'IVA 19% · $235.717', descuento:
  *   'Descuento −$124.061' (null sin descuento), total_con_iva_cop}. Los montos son los GUARDADOS (no recalcula nada);
- *   sin total_con_iva_cop, base + IVA.
+ *   sin total_con_iva_cop, base + IVA (montosIvaDeLinea, la misma regla de la fila del pedido).
  * @param {unknown} linea
  */
 export function ivaDeLinea(linea) {
   if (!esObjeto(linea)) return null;
   const l = /** @type {any} */ (linea);
-  const total = l.total_cop !== null && l.total_cop !== undefined
-    ? Number(pesoEntero(l.total_cop)) : (Number(l.unit_price_cop) || 0) * (Number(l.qty) || 0);
-  if (!(total > 0)) return null;
+  if (!(totalSinIvaDeLinea(l) > 0)) return null;
   const tarifa = normalizarTarifaIva(l.iva_tarifa);
   if (tarifa === null) return { discriminado: false, texto: ETIQUETA_SIN_TARIFA };
-  const iva = Number(pesoEntero(l.iva_cop));
-  const descuento = Number(pesoEntero(l.descuento_cop));
-  const conIva = l.total_con_iva_cop !== null && l.total_con_iva_cop !== undefined
-    ? Number(pesoEntero(l.total_con_iva_cop)) : total - descuento + iva;
+  const { iva, descuento, conIva } = montosIvaDeLinea(l);
   return {
     discriminado: true,
     // r1: la cantidad como en el documento del cliente ('2,5'); una guardada como texto ('3') también se lee.
@@ -495,14 +497,33 @@ export function ivaDeLinea(linea) {
 /** 'Descuento −$124.061' (la parte del descuento global de una línea), o null sin descuento. */
 const textoDescuentoLinea = (descuento) => (descuento > 0 ? `Descuento −${formatoPesos(descuento)}` : null);
 
+/**
+ * B3 T19 r1: los montos de IVA GUARDADOS en una línea con tarifa, en pesos enteros (Number): iva (iva_cop), descuento
+ * (descuento_cop, su parte del descuento global) y conIva (total_con_iva_cop; sin él, base + IVA = total sin IVA −
+ * descuento + IVA). Una sola regla para ivaDeLinea (la tarjeta de la COT) y filaProductoPedido (la tabla del pedido).
+ * @param {any} l una línea (objeto)
+ * @returns {{iva: number, descuento: number, conIva: number}}
+ */
+function montosIvaDeLinea(l) {
+  const iva = Number(pesoEntero(l.iva_cop));
+  const descuento = Number(pesoEntero(l.descuento_cop));
+  const conIva = l.total_con_iva_cop !== null && l.total_con_iva_cop !== undefined
+    ? Number(pesoEntero(l.total_con_iva_cop)) : totalSinIvaDeLinea(l) - descuento + iva;
+  return { iva, descuento, conIva };
+}
+
 // ─── El pedido de venta (B3 T19) ───────────────────────────────────────────────────────────────────────────────
 
+// El nombre que ve el cliente en su documento (documento_cliente._descripcion de linea_publica: product_name, nombre,
+// name) y, detrás, los respaldos que ya usaba la tabla del pedido (descripcion, producto_nombre). No es la lista de
+// nombreDeLinea (NOMBRES_LINEA, con 'producto' y el 'Línea N' de los mensajes de error del cálculo).
 const NOMBRES_FILA_PEDIDO = ['product_name', 'nombre', 'name', 'descripcion', 'producto_nombre'];
 
 /**
  * El total SIN IVA de una línea guardada, como documento_cliente._total_linea: total_cop al peso (o subtotal, el campo
  * de las líneas viejas de la pantalla); sin ninguno, precio × cantidad, exacto y al peso (nunca el flotante). 0 si no
- * hay con qué calcularlo.
+ * hay con qué calcularlo. La única regla del archivo para ese total (r1): la usan ivaDeLinea, montosIvaDeLinea y
+ * filaProductoPedido.
  */
 function totalSinIvaDeLinea(l) {
   const guardado = l.total_cop ?? l.subtotal;
@@ -516,9 +537,11 @@ function totalSinIvaDeLinea(l) {
 }
 
 /**
- * Una fila de la tabla Productos del pedido de venta (venta/[id], IVA punto 12), con lo mismo que la línea de su
- * documento del cliente (documento_pven: linea_publica con _iva_de_linea): PRODUCTO / CANT. / P. UNIT. SIN IVA / IVA /
- * TOTAL. No recalcula nada: los montos son los GUARDADOS en la línea.
+ * Una fila de la tabla Productos del pedido de venta (venta/[id], IVA punto 12): PRODUCTO / CANT. / P. UNIT. SIN IVA /
+ * IVA / TOTAL CON IVA. El nombre, la cantidad, el precio y la etiqueta de IVA son los de la línea de su documento del
+ * cliente (documento_pven: linea_publica con _iva_de_linea). El total NO: el documento del cliente pone el total SIN
+ * IVA de cada línea (C4) y aquí va el total CON IVA (el brief; la columna dice «Total con IVA», ruling r1). No recalcula
+ * nada: los montos son los GUARDADOS en la línea.
  * - producto: el primer texto no vacío de product_name, nombre, name, descripcion o producto_nombre; si no,
  *   'Producto sin nombre'. cantidad: qty (o cantidad) con formatoCantidad ('2,5'); unitario: unit_price_cop (o
  *   precio_unitario) al peso.
@@ -547,24 +570,57 @@ export function filaProductoPedido(linea, ivaDiscriminado) {
   };
   const sinIva = totalSinIvaDeLinea(l);
   if (ivaDiscriminado !== true) return { ...base, iva: null, sinDiscriminar: sinIva > 0, total: sinIva };
-  const iva = Number(pesoEntero(l.iva_cop));
-  const descuento = Number(pesoEntero(l.descuento_cop));
-  const total = l.total_con_iva_cop !== null && l.total_con_iva_cop !== undefined
-    ? Number(pesoEntero(l.total_con_iva_cop)) : sinIva - descuento + iva;
+  const { iva, descuento, conIva } = montosIvaDeLinea(l);
   return { ...base, iva: { etiqueta: etiquetaTarifaIva(l.iva_tarifa), valor: iva, descuento: textoDescuentoLinea(descuento) },
-    sinDiscriminar: false, total };
+    sinDiscriminar: false, total: conIva };
+}
+
+/**
+ * B3 T19 r1 (Important): la misma fila de filaProductoPedido como tarjeta, cuando la columna del pedido no cabe la tabla
+ * (bajo @xl: a 1024 px mide unos 390 px). En el lenguaje de PrecioLineaIva de la COT:
+ * - precio: '6 × $206.769 sin IVA' ('sin IVA' solo con el IVA discriminado; en un pedido viejo no se sabe);
+ * - iva: 'IVA 19% · $212.145 · Descuento −$124.061', 'IVA no discriminado' o null (una línea en $0 de un pedido viejo).
+ * @param {unknown} fila el resultado de filaProductoPedido
+ * @returns {{precio: string, iva: string | null}}
+ */
+export function textosTarjetaPedido(fila) {
+  const f = esObjeto(fila) ? /** @type {any} */ (fila) : {};
+  const precio = `${f.cantidad || '0'} × ${formatoPesos(Number(f.unitario) || 0)}${esObjeto(f.iva) ? ' sin IVA' : ''}`;
+  if (esObjeto(f.iva)) {
+    return { precio, iva: [f.iva.etiqueta, formatoPesos(f.iva.valor), f.iva.descuento].filter(Boolean).join(' · ') };
+  }
+  return { precio, iva: f.sinDiscriminar === true ? ETIQUETA_SIN_TARIFA : null };
+}
+
+/** La nota de los productos cancelados del documento del cliente (documento_cliente.TEXTO_PRODUCTOS_CANCELADOS). */
+export const TEXTO_PRODUCTOS_CANCELADOS = 'Se cancelaron productos; los totales ya lo reflejan.';
+
+/**
+ * B3 T19 r1: bajo la tabla del pedido, la misma nota que ve el cliente si se cancelaron productos: la Actividad trae un
+ * renglón LINEA_CANCELADA (erp_ventas_fase4). En un pedido sin IVA discriminado la línea cancelada sigue en el JSON con
+ * su cantidad completa (nota del controlador tras T4), así que las filas pueden sumar más que la cabecera; los totales
+ * son los de la cabecera. null sin cancelaciones.
+ * @param {unknown} actividades
+ * @returns {string | null}
+ */
+export function notaProductosCancelados(actividades) {
+  if (!Array.isArray(actividades)) return null;
+  return actividades.some((a) => esObjeto(a) && /** @type {any} */ (a).action === 'LINEA_CANCELADA')
+    ? TEXTO_PRODUCTOS_CANCELADOS : null;
 }
 
 /**
  * La línea bajo «Total del pedido» en el Resumen Financiero (IVA punto 12): 'IVA incluido: $298.113' si el pedido tiene
- * el IVA discriminado (iva_cop del GET, el tax_cop de la cabecera; 'IVA incluido: $0' si todo es exento o excluido);
- * 'IVA no discriminado' en un pedido viejo con total; null sin total o si no es un pedido.
+ * el IVA discriminado (iva_cop del GET, el tax_cop de la cabecera; 'IVA incluido: $0' si todo es exento o excluido) o,
+ * sin discriminar, si su IVA guardado es mayor que 0 (r1: como documento_cliente._totales_del_documento); 'IVA no
+ * discriminado' en un pedido viejo con total y sin IVA; null sin total o si no es un pedido.
  * @param {unknown} doc
  * @returns {string | null}
  */
 export function textoIvaIncluido(doc) {
   if (!esObjeto(doc)) return null;
   const d = /** @type {any} */ (doc);
-  if (d.iva_discriminado === true) return `IVA incluido: ${formatoPesos(Number(pesoEntero(d.iva_cop)))}`;
+  const iva = pesoEntero(d.iva_cop);
+  if (d.iva_discriminado === true || iva > 0n) return `IVA incluido: ${formatoPesos(Number(iva))}`;
   return pesoEntero(d.total_cop) > 0n ? ETIQUETA_SIN_TARIFA : null;
 }

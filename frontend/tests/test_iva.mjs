@@ -17,7 +17,7 @@ import {
   nombreDeLinea, lineasConTarifa, repartirProporcional, calcularTotalesCotizacion, resumenIvaPorTarifa,
   desgloseDocumento, ETIQUETA_CATALOGO_SIN_TARIFA, etiquetaTarifaCatalogo, sinTarifaIva,
   etiquetaCortaTarifaIva, intentarTotalesCotizacion, textoBaseIva, filasIvaTotales, ivaDeLinea,
-  filaProductoPedido, textoIvaIncluido,
+  filaProductoPedido, textoIvaIncluido, textosTarjetaPedido, notaProductosCancelados, TEXTO_PRODUCTOS_CANCELADOS,
 } from '../src/lib/iva.js';
 
 const linea = (nombre, qty, precio, tarifa, extra = {}) => {
@@ -417,6 +417,10 @@ console.log('--- B3 T17 TEST 17: textoBaseIva y filasIvaTotales (los renglones d
   assert.deepEqual(filasIvaTotales({ total_cop: 1840614, iva_discriminado: false, iva_por_tarifa: [] }),
     [{ clave: 'sin-iva', etiqueta: 'IVA no discriminado', valor: null }]);
   assert.deepEqual(filasIvaTotales({ total_cop: 0, iva_discriminado: false, iva_por_tarifa: [] }), []);
+  // B3 T19 r1 (menor 7): sin discriminar pero con IVA conocido (iva_cop = tax_cop > 0), el mismo criterio que
+  // documento_cliente._totales_del_documento: una fila 'IVA sobre $(total − IVA)' con su valor, no la gris.
+  assert.deepEqual(filasIvaTotales({ total_cop: 1190000, iva_discriminado: false, iva_cop: 190000, iva_por_tarifa: [] }),
+    [{ clave: 'iva', etiqueta: 'IVA sobre $1.000.000', valor: 190000 }]);
   for (const raro of [null, undefined, 'x', {}]) assert.deepEqual(filasIvaTotales(raro), [], String(raro));
 }
 
@@ -450,6 +454,9 @@ console.log('--- B3 T17 TEST 18: ivaDeLinea (la tarjeta de cada producto en el d
   assert.equal(ivaDeLinea({ qty: 3, unit_price_cop: 0 }), null);
   assert.deepEqual(ivaDeLinea({ qty: 3, unit_price_cop: 100 }), { discriminado: false, texto: 'IVA no discriminado' });
   for (const raro of [null, undefined, 'x', 7]) assert.equal(ivaDeLinea(raro), null, String(raro));
+  // B3 T19 r1 (menor 12): una sola regla del total sin IVA, en enteros (la de filaProductoPedido): sin total_cop ni
+  // total_con_iva_cop, 1,005 × 100 = $101 (no 100,49…) y el total con IVA queda en pesos enteros.
+  assert.equal(ivaDeLinea({ qty: 100, unit_price_cop: 1.005, iva_tarifa: '19', iva_cop: 19 }).total_con_iva_cop, 120);
 }
 
 // ─── El pedido de venta (B3 T19) ───────────────────────────────────────────────────────────────────────────────
@@ -514,6 +521,31 @@ console.log('--- B3 T19 TEST 19: filaProductoPedido (la tabla Productos del pedi
     assert.deepEqual(filaProductoPedido(raro, true), { producto: 'Producto sin nombre', cantidad: '0', unitario: 0, iva: null,
       sinDiscriminar: false, total: 0 }, String(raro));
   }
+
+  // B3 T19 r1 (Important): la misma fila como tarjeta, bajo @xl (a 1024 px la columna no cabe la tabla): el precio y el
+  // IVA en el lenguaje de PrecioLineaIva de la COT.
+  assert.deepEqual(textosTarjetaPedido(filaProductoPedido(rodillo, true)),
+    { precio: '6 × $206.769 sin IVA', iva: 'IVA 19% · $212.145 · Descuento −$124.061' });
+  assert.deepEqual(textosTarjetaPedido(filaProductoPedido(sinDescuento, true)),
+    { precio: '6 × $206.769 sin IVA', iva: 'IVA 19% · $235.717' });
+  assert.deepEqual(textosTarjetaPedido(filaProductoPedido(exenta, true)), { precio: '2,5 × $1.000 sin IVA', iva: 'Exento · $0' });
+  // Un pedido viejo: sin «sin IVA» (no se sabe) y 'IVA no discriminado'; una línea en $0, sin renglón de IVA.
+  assert.deepEqual(textosTarjetaPedido(filaProductoPedido(vieja, false)), { precio: '6 × $206.769', iva: 'IVA no discriminado' });
+  assert.deepEqual(textosTarjetaPedido(filaProductoPedido({ product_name: 'Muestra', qty: 1, unit_price_cop: 0, total_cop: 0 }, false)),
+    { precio: '1 × $0', iva: null });
+  for (const raro of [null, undefined, 'x', 7]) assert.deepEqual(textosTarjetaPedido(raro), { precio: '0 × $0', iva: null }, String(raro));
+}
+
+console.log('--- B3 T19 r1 TEST 19b: notaProductosCancelados (la nota del documento del cliente bajo la tabla) ---');
+{
+  // Si la Actividad trae un LINEA_CANCELADA (erp_ventas_fase4), la misma nota que ve el cliente (documento_cliente.py,
+  // TEXTO_PRODUCTOS_CANCELADOS): en un pedido viejo la línea cancelada sigue en el JSON con su cantidad completa.
+  assert.equal(TEXTO_PRODUCTOS_CANCELADOS, 'Se cancelaron productos; los totales ya lo reflejan.');
+  assert.equal(notaProductosCancelados([{ action: 'CREATED' }, { action: 'LINEA_CANCELADA', description: 'x' }]),
+    TEXTO_PRODUCTOS_CANCELADOS);
+  for (const sinNota of [[], [{ action: 'CREATED' }, { action: 'ESTADO_CHANGED' }], [null, 'x', 7], null, undefined, 'x', {}]) {
+    assert.equal(notaProductosCancelados(sinNota), null, JSON.stringify(sinNota));
+  }
 }
 
 console.log('--- B3 T19 TEST 20: textoIvaIncluido (el Resumen Financiero del pedido, bajo «Total del pedido») ---');
@@ -524,7 +556,11 @@ console.log('--- B3 T19 TEST 20: textoIvaIncluido (el Resumen Financiero del ped
   assert.equal(textoIvaIncluido({ iva_discriminado: true, iva_cop: 0, total_cop: 2500 }), 'IVA incluido: $0', 'todo exento');
   assert.equal(textoIvaIncluido({ iva_discriminado: false, iva_cop: 0, total_cop: 1240614 }), 'IVA no discriminado');
   assert.equal(textoIvaIncluido({ iva_discriminado: false, iva_cop: 0, total_cop: 0 }), null, 'sin total, nada');
-  assert.equal(textoIvaIncluido({ iva_cop: 5000, total_cop: 100000 }), 'IVA no discriminado', 'sin el dato, no discrimina');
+  // B3 T19 r1 (menor 7): con IVA conocido aunque no esté discriminado (iva_cop > 0), 'IVA incluido: $X', como el
+  // documento del cliente; 'IVA no discriminado' solo con iva_cop 0.
+  assert.equal(textoIvaIncluido({ iva_discriminado: false, iva_cop: 190000, total_cop: 1190000 }), 'IVA incluido: $190.000');
+  assert.equal(textoIvaIncluido({ iva_cop: 5000, total_cop: 100000 }), 'IVA incluido: $5.000', 'sin el dato, el IVA guardado');
+  assert.equal(textoIvaIncluido({ total_cop: 100000 }), 'IVA no discriminado', 'sin el dato ni IVA');
   for (const raro of [null, undefined, 'x', 7]) assert.equal(textoIvaIncluido(raro), null, String(raro));
 }
 

@@ -536,7 +536,7 @@ export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCa
   const lineaWhatsApp = customerHasPhone ? lineaWhatsAppCanal(envioWhatsApp) : null;
   return (
     <Modal title="Seleccionar Canal de Envío" subtitle={`¿Por cuál canal deseas enviar la ${documentLabel}?`}
-      icon={Send} color="blue" maxWidth="md" onClose={onCancel}
+      icon={Send} color="blue" maxWidth="md" onClose={onCancel} bloquearCierre={saving}
       footer={(
         <>
           <Button variant="secondary" disabled={saving} onClick={onCancel}>Cancelar</Button>
@@ -595,7 +595,8 @@ export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCa
             : 'El cliente no tiene correo registrado: no se enviará correo de respaldo.'}
         </p>
       )}
-      {error && <p role="alert" className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">{error}</p>}
+      {/* r1 (lección de T16/T17): la región viva siempre montada; solo cambia su contenido. */}
+      <div role="alert">{error ? <p className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2">{error}</p> : null}</div>
     </Modal>
   );
 }

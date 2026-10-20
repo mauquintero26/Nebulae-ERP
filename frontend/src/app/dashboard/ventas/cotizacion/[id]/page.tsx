@@ -24,7 +24,7 @@ import {
   resumenAnticipoCotizacion, formatoPct, propagacionRecotizacion, puedeGestionarCotizacion, notaAnticipoPorLinea,
 } from '@/lib/dinero-ventas';
 import { comoUTC, notaReiniciaAtraso } from '@/lib/hub-ventas';
-import { waUrl } from '@/lib/whatsapp';
+import { waUrl, abrirWhatsApp } from '@/lib/whatsapp';
 import { destinoVolver, anchoInicialPanel, inicialesAutor } from '@/lib/detalle-layout';
 import { agregarActividad, esEntradaChatter, motivoTelefono, textoSinTelefono } from '@/lib/chatter';
 import { ESTADOS_SC_SIN_CONFIRMAR, pideMotivoNuevo, errorMotivoSinConfirmacion } from '@/lib/estados-solicitud';
@@ -295,7 +295,7 @@ function CotizacionDetalleContent() {
           ? `Hola, aquí está tu cotización ${cotizacion.numero}. Confírmala aquí: ${link}`
           : `Hola, aquí está tu cotización ${cotizacion.numero}`;
         whatsapp = waUrl(cotizacion?.telefono_whatsapp, wa?.texto_manual || mensaje);
-        if (whatsapp) window.open(whatsapp, '_blank');
+        abrirWhatsApp(whatsapp);
       }
 
       await loadCotizacion();

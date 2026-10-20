@@ -47,7 +47,7 @@ import { EstadoSolicitudPasos } from './estado-solicitud';
 // llega a ningun lado, es un problema ya conocido y diferido por separado, simetrico
 // entre ambos gates -- no se corrige aqui).
 import { ChannelModal, ESTADOS as ESTADOS_COT } from '../../cotizacion/cotizacion-client';
-import { waUrl } from '@/lib/whatsapp';
+import { waUrl, abrirWhatsApp } from '@/lib/whatsapp';
 import { etiquetaTipoSolicitud, etiquetaModalidad } from '@/lib/etiquetas-ventas';
 import { cotizacionesVigentes, cotizacionesRechazadas, pasosParaCancelarSolicitud } from '@/lib/listas-ventas';
 import { infoEstadoPedido, humanizarCodigo } from '@/lib/estados-pedido';
@@ -620,7 +620,7 @@ function SolicitudDetalleContent() {
           ? `Hola, aquí está tu solicitud ${solicitud.numero}. Confírmala aquí: ${link}`
           : `Hola, aquí está tu solicitud ${solicitud.numero}`;
         whatsapp = waUrl(solicitud?.telefono_whatsapp, wa?.texto_manual || mensaje);
-        if (whatsapp) window.open(whatsapp, '_blank');
+        abrirWhatsApp(whatsapp);
       }
 
       await loadSolicitud({ silencioso: true });

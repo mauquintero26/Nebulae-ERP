@@ -5,11 +5,13 @@ import { Send } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { useAvisos } from '@/components/ui';
 import { textoDeError, recargarTrasError } from '@/lib/avisos';
-import { botonEnvioPedido, textoEnlaceVigente, TEXTO_ENLACE_PEDIDO_VENCIDO } from '@/lib/documento-comercial';
-import { abreWhatsAppLocal } from '@/lib/envio-whatsapp';
-import { filaProductoPedido, ETIQUETA_SIN_TARIFA } from '@/lib/iva';
+import { textoEnlaceVigente, TEXTO_ENLACE_PEDIDO_VENCIDO } from '@/lib/documento-comercial';
+import {
+  abreWhatsAppLocal, botonEnvioPedido, envioIncierto, pedidoSeEnvio, AVISO_PEDIDO_SI_SE_ENVIO,
+} from '@/lib/envio-whatsapp';
+import { filaProductoPedido, textosTarjetaPedido, notaProductosCancelados, ETIQUETA_SIN_TARIFA } from '@/lib/iva';
 import { formatoPesos } from '@/lib/pesos';
-import { waUrl } from '@/lib/whatsapp';
+import { waUrl, abrirWhatsApp } from '@/lib/whatsapp';
 import { getUsuarioActual } from '../../flujo';
 import { useEstadoEnvioWhatsApp } from '../../cotizacion/estado-envio-whatsapp';
 import { TotalesIvaCotizacion } from '../../cotizacion/[id]/detalle-bloque3';
@@ -48,14 +50,20 @@ const PREFIJO_ERROR = 'No se pudo enviar el pedido al cliente';
  *   (useEstadoEnvioWhatsApp: estadoWhatsApp, la envioWhatsApp con A mayúscula).
  * - enviarAlCliente: POST /ventas/pedidos/{id}/enviar-al-cliente con solo el canal (el autor lo pone el servidor,
  *   RP15). wa.me se abre solo si el canal es WhatsApp y el automático no vino o está apagado (abreWhatsAppLocal), al
- *   telefono_whatsapp (el e164, RP19) con el texto_manual del servidor o el de siempre. Después recarga el pedido (la
- *   línea «Enviado… · sirve hasta…» y la Actividad) y deja `resultado` para la ventana del enlace.
- * - Los errores van dentro de la ventana del canal, que sigue abierta (H49); se borran al elegir otro canal. Si la
- *   recarga trae el pedido CANCELADO (el 409 de cancelado), la ventana se cierra y el error queda en un aviso.
+ *   telefono_whatsapp (el e164, RP19) con el texto_manual del servidor o el de siempre (abrirWhatsApp: sin
+ *   window.opener). Con la respuesta cierra la ventana del canal, deja `resultado` para la ventana del enlace y recarga
+ *   el pedido sin esperar (r1: la ventana no queda en «enviando» durante la recarga).
+ * - Los errores van dentro de la ventana del canal, que sigue abierta (H49); se borran al elegir otro canal.
+ *   - Un 400 o 409 recarga; si el pedido vuelve CANCELADO (el 409 de cancelado), la ventana se cierra y el error queda
+ *     en un aviso.
+ *   - r1: un resultado incierto (envioIncierto: un 5xx o un error sin status, que pueden llegar después del commit del
+ *     servidor) recarga y compara enlace_cliente.enviado_at con el de antes del POST (pedidoSeEnvio). Si cambió, el
+ *     pedido sí se envió: la ventana se cierra y se avisa «El pedido sí se envió; revisa la Actividad antes de
+ *     reenviar». Si no, queda el error.
  */
 export function useEnvioAlCliente(pedido: PedidoBloque3 | null,
   recargar: (opts?: { silencioso?: boolean }) => Promise<unknown>) {
-  const { avisarError } = useAvisos();
+  const { avisar, avisarError } = useAvisos();
   const [abierto, setAbierto] = useState(false);
   const [canal, setCanal] = useState<CanalEnvio | null>(null);
   const [enviando, setEnviando] = useState(false);
@@ -73,9 +81,7 @@ export function useEnvioAlCliente(pedido: PedidoBloque3 | null,
   function cerrar() {
     // Mientras envía no se cierra: el resultado siempre llega a una ventana abierta.
     if (enviando) return;
-    setAbierto(false);
-    setCanal(null);
-    setError('');
+    cerrarVentana();
   }
 
   function elegirCanal(c: CanalEnvio) {
@@ -83,8 +89,17 @@ export function useEnvioAlCliente(pedido: PedidoBloque3 | null,
     setError('');
   }
 
+  function cerrarVentana() {
+    setAbierto(false);
+    setCanal(null);
+    setError('');
+  }
+
   async function enviarAlCliente() {
     if (!pedido?.id || !canal || enviando) return;
+    // r1: para saber, si el resultado queda incierto, si el pedido sí se envió.
+    const enlaceAntes = pedido.enlace_cliente as { enviado_at?: unknown } | null | undefined;
+    const enviadoAntes = enlaceAntes?.enviado_at ?? null;
     setEnviando(true);
     setError('');
     try {
@@ -100,20 +115,23 @@ export function useEnvioAlCliente(pedido: PedidoBloque3 | null,
           ? `Hola, aquí está la confirmación de tu pedido ${pedido.numero || ''}: ${link}`
           : `Hola, aquí está la confirmación de tu pedido ${pedido.numero || ''}`;
         whatsappUrl = waUrl(pedido.telefono_whatsapp, wa?.texto_manual || mensaje);
-        if (whatsappUrl) window.open(whatsappUrl, '_blank');
+        abrirWhatsApp(whatsappUrl);
       }
-      await recargar({ silencioso: true });
-      setAbierto(false);
-      setCanal(null);
+      cerrarVentana();
       if (link) setResultado({ link, correo: d?.correo ?? null, canal, whatsappUrl, envioWhatsapp: wa, vence: d?.vence ?? null });
+      void recargar({ silencioso: true });
     } catch (err) {
       setError(textoDeError(err, PREFIJO_ERROR));
-      if (recargarTrasError(err)) {
+      if (envioIncierto(err)) {
+        void recargar({ silencioso: true }).then((fresco) => {
+          if (!pedidoSeEnvio(enviadoAntes, fresco)) return;
+          cerrarVentana();
+          avisar(AVISO_PEDIDO_SI_SE_ENVIO, { tono: 'info' });
+        });
+      } else if (recargarTrasError(err)) {
         void recargar({ silencioso: true }).then((fresco) => {
           if ((fresco as PedidoBloque3 | null | undefined)?.estado !== 'CANCELADO') return;
-          setAbierto(false);
-          setCanal(null);
-          setError('');
+          cerrarVentana();
           avisarError(err, PREFIJO_ERROR);
         });
       }
@@ -145,61 +163,89 @@ export function LineaEnlaceCliente({ enlace, estado }: { enlace: unknown; estado
 }
 
 /**
- * IVA punto 12: la tabla Productos del pedido, PRODUCTO / CANT. / P. UNIT. SIN IVA / IVA / TOTAL, con lo mismo que su
- * documento del cliente (filaProductoPedido: la etiqueta de la tarifa solo si el pedido tiene el IVA discriminado), y
- * debajo los totales de la COT (TotalesIvaCotizacion: Subtotal, Descuento, IVA por tarifa) y TOTAL, de la cabecera
- * (nunca recalculados, C2). Un pedido viejo dice 'IVA no discriminado'. Con la columna angosta, la tabla se desplaza
- * dentro de su tarjeta (H37).
+ * IVA punto 12: los productos del pedido y, debajo, los totales de la COT (TotalesIvaCotizacion: Subtotal, Descuento,
+ * IVA por tarifa) y TOTAL, de la cabecera (nunca recalculados, C2).
+ * - Cada línea sale de filaProductoPedido: el nombre, la cantidad, el precio y la etiqueta de IVA de su documento del
+ *   cliente (la etiqueta solo si el pedido tiene el IVA discriminado). El total de la línea va CON IVA (el documento del
+ *   cliente lo pone sin IVA, C4): por eso la columna dice «Total con IVA» (ruling r1). Un pedido viejo dice 'IVA no
+ *   discriminado' y su columna, «Total».
+ * - r1 (Important): con el @container de la página (H37), desde @xl va la tabla PRODUCTO / CANT. / P. UNIT. SIN IVA /
+ *   IVA / TOTAL CON IVA; por debajo (a 1024 px la columna mide unos 390 px y la tabla no cabe), cada línea es una tarjeta
+ *   (textosTarjetaPedido, el lenguaje de PrecioLineaIva de la COT) con el total con IVA a la derecha.
+ * - r1: si se cancelaron productos (LINEA_CANCELADA en la Actividad), la misma nota que ve el cliente.
  */
 export function TablaProductosPedido({ pedido }: { pedido: PedidoBloque3 | null }) {
   const productos = Array.isArray(pedido?.productos) ? pedido.productos : [];
   const discriminado = pedido?.iva_discriminado === true;
+  const filas = productos.map((p) => filaProductoPedido(p, discriminado));
+  const notaCancelados = notaProductosCancelados(pedido?.actividades);
   return (
     <>
-      <div className="bg-white border border-slate-200 rounded-2xl overflow-x-auto shadow-sm">
+      <ul className="@xl:hidden space-y-3">
+        {filas.length === 0 && (
+          <li className="bg-white border border-slate-200 rounded-2xl px-4 py-6 text-center text-sm text-slate-500 italic">Sin productos registrados.</li>
+        )}
+        {filas.map((f, idx) => {
+          const t = textosTarjetaPedido(f);
+          return (
+            <li key={idx} className="bg-white border border-slate-200 rounded-2xl px-4 py-3 shadow-sm flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="font-bold text-slate-800 text-sm break-words">{f.producto}</p>
+                <p className="text-xs text-slate-500">{t.precio}</p>
+                {t.iva && <p className={`text-xs ${f.iva ? 'font-semibold text-slate-600' : 'text-slate-500'}`}>{t.iva}</p>}
+              </div>
+              <p className="shrink-0 text-right">
+                <span className="block font-black text-slate-900">{formatoPesos(f.total)}</span>
+                {discriminado && <span className="block text-[11px] text-slate-500">con IVA</span>}
+              </p>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="hidden @xl:block bg-white border border-slate-200 rounded-2xl overflow-x-auto shadow-sm">
         <table className="w-full text-left">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
-              <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">Producto</th>
-              <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-20 text-center">Cant.</th>
-              <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-36 text-right">P. unit. sin IVA</th>
-              <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-32">IVA</th>
-              <th className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-36 text-right">Total</th>
+              <th scope="col" className="px-4 py-3 text-xs font-bold text-slate-500 uppercase">Producto</th>
+              <th scope="col" className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-20 text-center">Cant.</th>
+              <th scope="col" className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-36 text-right">P. unit. sin IVA</th>
+              <th scope="col" className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-32">IVA</th>
+              <th scope="col" className="px-4 py-3 text-xs font-bold text-slate-500 uppercase w-36 text-right">{discriminado ? 'Total con IVA' : 'Total'}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {productos.length === 0 && (
-              <tr><td colSpan={5} className="px-4 py-6 text-center text-sm text-slate-400 italic">Sin productos registrados.</td></tr>
+            {filas.length === 0 && (
+              <tr><td colSpan={5} className="px-4 py-6 text-center text-sm text-slate-500 italic">Sin productos registrados.</td></tr>
             )}
-            {productos.map((p, idx) => {
-              const f = filaProductoPedido(p, discriminado);
-              return (
-                <tr key={idx} className="hover:bg-slate-50 align-top">
-                  <td className="px-4 py-3 font-bold text-slate-800 text-sm break-words min-w-40">{f.producto}</td>
-                  <td className="px-4 py-3 text-center text-sm font-bold text-slate-700">{f.cantidad}</td>
-                  <td className="px-4 py-3 text-right text-sm font-bold text-slate-700 whitespace-nowrap">{formatoPesos(f.unitario)}</td>
-                  <td className="px-4 py-3 text-sm whitespace-nowrap">
-                    {f.iva ? (
-                      <>
-                        <span className="block font-bold text-slate-700">{f.iva.etiqueta}</span>
-                        <span className="block text-xs text-slate-500">{formatoPesos(f.iva.valor)}</span>
-                      </>
-                    ) : f.sinDiscriminar ? (
-                      <span className="text-xs text-slate-400">{ETIQUETA_SIN_TARIFA}</span>
-                    ) : (
-                      <span className="text-slate-300">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-right whitespace-nowrap">
-                    <span className="block font-black text-slate-800">{formatoPesos(f.total)}</span>
-                    {f.iva?.descuento && <span className="block text-xs text-slate-500">{f.iva.descuento}</span>}
-                  </td>
-                </tr>
-              );
-            })}
+            {filas.map((f, idx) => (
+              <tr key={idx} className="hover:bg-slate-50 align-top">
+                <td className="px-4 py-3 font-bold text-slate-800 text-sm break-words min-w-40">{f.producto}</td>
+                <td className="px-4 py-3 text-center text-sm font-bold text-slate-700">{f.cantidad}</td>
+                <td className="px-4 py-3 text-right text-sm font-bold text-slate-700 whitespace-nowrap">{formatoPesos(f.unitario)}</td>
+                <td className="px-4 py-3 text-sm whitespace-nowrap">
+                  {f.iva ? (
+                    <>
+                      <span className="block font-bold text-slate-700">{f.iva.etiqueta}</span>
+                      <span className="block text-xs text-slate-500">{formatoPesos(f.iva.valor)}</span>
+                    </>
+                  ) : f.sinDiscriminar ? (
+                    <span className="text-xs text-slate-500">{ETIQUETA_SIN_TARIFA}</span>
+                  ) : (
+                    <><span aria-hidden="true" className="text-slate-300">—</span><span className="sr-only">Sin IVA</span></>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-right whitespace-nowrap">
+                  <span className="block font-black text-slate-800">{formatoPesos(f.total)}</span>
+                  {f.iva?.descuento && <span className="block text-xs text-slate-500">{f.iva.descuento}</span>}
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
+      {notaCancelados && (
+        <p className="mt-3 text-xs font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">{notaCancelados}</p>
+      )}
       {(productos.length > 0 || Number(pedido?.total_cop) > 0) && (
         <div className="flex justify-end mt-6">
           <div className="w-full @md:w-80 bg-slate-50 p-5 rounded-2xl border border-slate-200">

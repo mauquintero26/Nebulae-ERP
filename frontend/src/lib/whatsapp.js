@@ -29,3 +29,14 @@ export function waUrl(telefono, texto) {
 export function whatsappParaReabrir(canal, url) {
   return canal === 'WhatsApp' && typeof url === 'string' && url.startsWith('https://wa.me/') ? url : null;
 }
+
+/**
+ * B3 T19 r1: abre un enlace wa.me (el de waUrl) en otra pestaña SIN window.opener ('noopener,noreferrer'): a diferencia
+ * de <a target="_blank">, window.open no lo implica y la pestaña de wa.me podría tocar la del ERP (reverse tabnabbing).
+ * Solo enlaces wa.me; sin enlace o fuera del navegador no hace nada. Lo usan los envíos de la SC, la COT y el PVEN.
+ * @param {unknown} url
+ */
+export function abrirWhatsApp(url) {
+  if (typeof url !== 'string' || !url.startsWith('https://wa.me/') || typeof window === 'undefined') return;
+  window.open(url, '_blank', 'noopener,noreferrer');
+}

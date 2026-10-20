@@ -38,7 +38,8 @@ function numeroONull(v) {
  * - Con saldo: pagado = max(0, redondearPeso(total − saldo)) (la diferencia redondeada, como resumenAnticipoCotizacion
  *   y get_pedido); saldo pendiente = max(0, saldo); saldoAFavor = lo que el saldo quede por debajo de 0 (credito por
  *   re-cotizar a la baja con el anticipo ya pagado).
- * - anticipoPendiente = anticipo_pendiente del GET, o requerido − pagado si no viene; nunca negativo (R4).
+ * - anticipoPendiente = anticipo_pendiente del GET, o requerido − pagado si no viene; nunca negativo (R4). B3 T19 r1:
+ *   en un pedido CANCELADO, 0 (ya no se cobra; el GET puede seguir mandando anticipo_pendiente).
  * - pctPagado: entero 0..100 (Math.round), con dos topes que se apartan de U24 a proposito: con saldo pendiente como
  *   maximo 99 (no se ve 100% si todavia se debe algo) y con algo pagado como minimo 1 (no se ve 0% con un pago real).
  *   Total 0: 100 si hay algo pagado, si no 0.
@@ -55,11 +56,12 @@ export function resumenPagoPedido(p) {
     ? redondearPeso(p.anticipo_requerido)
     : porcentajeDePesos(total, anticipoPct);
   const pendienteServidor = numeroONull(p?.anticipo_pendiente);
+  const cancelado = p?.estado === 'CANCELADO';
   const saldoCrudo = numeroONull(p?.saldo_cop);
   if (saldoCrudo === null) {
     return {
       total, pagado: null, saldo: null, saldoAFavor: null, requerido, anticipoPct,
-      anticipoPendiente: pendienteServidor === null ? null : Math.max(0, redondearPeso(pendienteServidor)),
+      anticipoPendiente: cancelado ? 0 : pendienteServidor === null ? null : Math.max(0, redondearPeso(pendienteServidor)),
       pctPagado: null, caso: 'desconocido',
     };
   }
@@ -67,7 +69,7 @@ export function resumenPagoPedido(p) {
   const pagado = Math.max(0, redondearPeso((numeroONull(p?.total_cop) ?? 0) - saldoCrudo));
   const saldo = Math.max(0, saldoBruto);
   const saldoAFavor = saldoBruto < 0 ? -saldoBruto : 0;
-  const anticipoPendiente = Math.max(0, redondearPeso(pendienteServidor ?? (requerido - pagado)));
+  const anticipoPendiente = cancelado ? 0 : Math.max(0, redondearPeso(pendienteServidor ?? (requerido - pagado)));
   let pctPagado = total > 0 ? Math.min(100, Math.max(0, Math.round((pagado * 100) / total))) : pagado > 0 ? 100 : 0;
   if (saldo > 0) pctPagado = Math.min(pctPagado, 99);
   if (pagado > 0) pctPagado = Math.max(pctPagado, 1);

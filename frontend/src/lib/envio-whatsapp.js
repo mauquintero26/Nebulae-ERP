@@ -19,6 +19,8 @@
  */
 
 import { waUrl, whatsappParaReabrir } from './whatsapp.js';
+import { esAdminOAsesor } from './seguimiento.js';
+import { enlacePedidoVigente } from './documento-comercial.js';
 
 /** Espejo de envio_whatsapp.MOTIVOS: por qué no salió el WhatsApp automático ({detalle} solo en FALLO_CHATWOOT). */
 export const TEXTOS_MOTIVO_WHATSAPP = Object.freeze({
@@ -407,3 +409,56 @@ export function lineaWhatsAppCanal(envio) {
 
 /** U16-reenvio-cot: la nota del ChannelModal al reenviar el enlace de un documento que espera al cliente. */
 export const NOTA_REENVIO_ENLACE = 'Se crea un enlace nuevo y el anterior deja de servir.';
+
+// ─── El envío del pedido al cliente (B3 T19: U23 punto 7) ─────────────────────────────────────────────────────────
+
+/**
+ * El botón de la cabecera del pedido, o null si no se muestra (r1: vive aquí y no en documento-comercial.js, que
+ * importan las páginas públicas). Lo oculta lo que el servidor (POST /ventas/pedidos/{id}/enviar-al-cliente)
+ * rechazaría: el pedido CANCELADO (409), un rol que no es ADMIN ni ASESOR (403, esAdminOAsesor) o un pedido sin
+ * productos o con total <= 0 (400).
+ * - 'Enviar al cliente' si nunca se envió; 'Reenviar al cliente' si ya se envió una vez (enlace_cliente.enviado_at) o el
+ *   enlace está vigente (r1: también con el enlace vencido, como la COT y la Actividad del servidor, que anota
+ *   «reenviada»).
+ * - reenvio true (el ChannelModal lleva NOTA_REENVIO_ENLACE, «el anterior deja de servir») solo con el enlace vigente
+ *   (enlacePedidoVigente): el vencido ya no sirve.
+ * @param {unknown} pedido el GET /ventas/pedidos/{id} ({estado, productos, total_cop, enlace_cliente})
+ * @param {unknown} rol
+ * @param {Date | number} [ahora]
+ * @returns {{texto: string, reenvio: boolean} | null}
+ */
+export function botonEnvioPedido(pedido, rol, ahora = new Date()) {
+  if (!esObjeto(pedido) || pedido.estado === 'CANCELADO' || !esAdminOAsesor(rol)) return null;
+  if (!Array.isArray(pedido.productos) || pedido.productos.length === 0 || !(Number(pedido.total_cop) > 0)) return null;
+  const reenvio = enlacePedidoVigente(pedido.enlace_cliente, ahora);
+  const yaEnviado = reenvio || (esObjeto(pedido.enlace_cliente) && Boolean(pedido.enlace_cliente.enviado_at));
+  return { texto: yaEnviado ? 'Reenviar al cliente' : 'Enviar al cliente', reenvio };
+}
+
+/**
+ * B3 T19 r1: el error del POST del envío no dice si el pedido salió. Un 5xx (p. ej. el proxy, después del commit único
+ * del servidor, mientras salen Chatwoot, el PDF y el correo) o un error sin status (red caída, respuesta perdida) es
+ * INCIERTO: hay que recargar y mirar (pedidoSeEnvio). Un 4xx (400, 403, 404, 409, 422) dice que no se envió.
+ * @param {unknown} err
+ * @returns {boolean}
+ */
+export function envioIncierto(err) {
+  const status = esObjeto(err) ? /** @type {any} */ (err).status : undefined;
+  return typeof status !== 'number' || status >= 500;
+}
+
+/**
+ * B3 T19 r1: tras un envío incierto, la recarga dice si el pedido sí se envió: su enlace_cliente.enviado_at existe y
+ * cambió frente al de antes del POST. false si no cambió o si la recarga no trajo el pedido (no se puede saber).
+ * @param {unknown} enviadoAntes el enlace_cliente.enviado_at antes del POST (o null)
+ * @param {unknown} pedidoFresco el pedido de la recarga (o null)
+ * @returns {boolean}
+ */
+export function pedidoSeEnvio(enviadoAntes, pedidoFresco) {
+  const enlace = esObjeto(pedidoFresco) ? /** @type {any} */ (pedidoFresco).enlace_cliente : null;
+  const ahora = esObjeto(enlace) ? enlace.enviado_at : null;
+  return typeof ahora === 'string' && ahora !== '' && ahora !== (enviadoAntes ?? null);
+}
+
+/** B3 T19 r1: el aviso cuando el envío dio error pero la recarga muestra que el pedido sí se envió. */
+export const AVISO_PEDIDO_SI_SE_ENVIO = 'El pedido sí se envió; revisa la Actividad antes de reenviar';

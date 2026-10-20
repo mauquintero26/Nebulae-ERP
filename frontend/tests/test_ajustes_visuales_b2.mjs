@@ -414,4 +414,24 @@ console.log('--- Revisión final (F6): la carga de /solicitud es neutra; el esqu
   assert.ok(!detalle.includes('Sin este archivo, solicitud/loading.tsx mostraba el esqueleto de la LISTA'), 'sin la afirmación equivocada');
 }
 
+console.log('--- B3 T19 r1: la tabla de productos del pedido a 1024 px (tarjetas bajo @xl) y su accesibilidad ---');
+{
+  const tabla = cuerpo(sinComentarios(leer('app/dashboard/ventas/venta/[id]/detalle-bloque3.tsx')), 'export function TablaProductosPedido(');
+  // La columna izquierda mide unos 390 px a 1024: bajo @xl (container query del @container de page.tsx) cada línea es
+  // una tarjeta; desde @xl, la tabla de 5 columnas.
+  const tarjetas = tabla.match(/<ul className="([^"]*)"/);
+  assert.ok(tarjetas, 'la lista de tarjetas');
+  conClases(tarjetas[1], ['@xl:hidden'], [/^(sm|md|lg|xl):/], 'tarjetas solo bajo @xl');
+  const envoltura = tabla.match(/<div className="([^"]*overflow-x-auto[^"]*)"/);
+  assert.ok(envoltura, 'la tarjeta de la tabla');
+  conClases(envoltura[1], ['hidden', '@xl:block'], [/^(sm|md|lg|xl):/], 'la tabla desde @xl');
+  assert.ok(!/(^|[\s"'`])(sm|md|lg|xl):/m.test(tabla), 'sin breakpoints de la ventana en el panel (solo @container)');
+  // Accesibilidad (menor 9): los cinco encabezados con scope="col"; el texto gris legible; la raya con su texto.
+  assert.equal((tabla.match(/<th scope="col" /g) || []).length, 5, 'scope="col" en los cinco th');
+  assert.ok(!tabla.includes('text-slate-400">{ETIQUETA_SIN_TARIFA}'), 'IVA no discriminado sin slate-400');
+  assert.ok(/<span aria-hidden="true"[^>]*>—<\/span><span className="sr-only">Sin IVA<\/span>/.test(tabla), 'la raya con su texto');
+  // Ruling r1 (menor 6): la columna dice «Total con IVA» cuando el pedido tiene el IVA discriminado.
+  assert.ok(tabla.includes("'Total con IVA'"), 'encabezado «Total con IVA»');
+}
+
 console.log('OK test_ajustes_visuales_b2.mjs');

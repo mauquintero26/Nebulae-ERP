@@ -153,4 +153,19 @@ console.log('--- CASO 11 (ronda 1, punto 17): con saldo nunca 100%; con un pago 
   assert.equal(sinTotal.caso, 'a_favor');
 }
 
+console.log('--- CASO 12 (B3 T19 r1): un pedido CANCELADO ya no se cobra: sin anticipo pendiente ---');
+{
+  // El GET puede seguir mandando anticipo_pendiente > 0; la pantalla no dice «el cliente todavía debe».
+  const base = { total_cop: 1954666, saldo_cop: 954666, anticipo_requerido: 1172800, anticipo_pendiente: 172800, anticipo_pct: 60 };
+  assert.equal(resumenPagoPedido(base).anticipoPendiente, 172800, 'vigente: como siempre');
+  const cancelado = resumenPagoPedido({ ...base, estado: 'CANCELADO' });
+  assert.equal(cancelado.anticipoPendiente, 0);
+  assert.equal(cancelado.pagado, 1000000, 'lo demás no cambia');
+  assert.equal(cancelado.caso, 'pendiente');
+  assert.equal(resumenPagoPedido({ ...base, saldo_cop: null, estado: 'CANCELADO' }).anticipoPendiente, 0, 'sin saldo');
+  assert.equal(resumenPagoPedido({ ...base, anticipo_pendiente: undefined, estado: 'CANCELADO' }).anticipoPendiente, 0,
+    'sin el dato del servidor tampoco se calcula');
+  assert.equal(resumenPagoPedido({ ...base, estado: 'EN_PROCESO' }).anticipoPendiente, 172800);
+}
+
 console.log('OK test_resumen_pago.mjs');

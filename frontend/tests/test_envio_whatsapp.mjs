@@ -16,8 +16,10 @@ import {
   enlaceBotonWhatsApp, estadoConfigWhatsApp, resultadoPruebaWhatsApp, variablesDeEjemplo, lineaEnvioAutomatico,
   formularioEnvioWhatsApp, cuerpoEnvioWhatsApp, hayCambiosWhatsApp, MENSAJE_WHATSAPP_SIN_GUARDAR,
   estadoEnvioParaCanal, lineaWhatsAppCanal, NOTA_REENVIO_ENLACE,
+  botonEnvioPedido, envioIncierto, pedidoSeEnvio, AVISO_PEDIDO_SI_SE_ENVIO,
 } from '../src/lib/envio-whatsapp.js';
 import { avisoCorreo } from '../src/lib/aviso-correo.js';
+import { readFileSync } from 'node:fs';
 
 const BOTON = '«Abrir WhatsApp con el mensaje»';
 // Una respuesta como la de enviar_documento (T8), con lo que haga falta encima.
@@ -437,6 +439,73 @@ console.log('--- B3 T17: la ventana del canal (ChannelModal) con envioWhatsApp {
   }
   // El reenvío de una COT pendiente (U16-reenvio-cot): la nota bajo las opciones.
   assert.equal(NOTA_REENVIO_ENLACE, 'Se crea un enlace nuevo y el anterior deja de servir.');
+}
+
+console.log('--- B3 T19: botonEnvioPedido (el botón de la cabecera del pedido; r1: aquí y no en documento-comercial.js) ---');
+{
+  const ahora = new Date('2026-10-10T12:00:00Z');
+  const vigente = { vigente: true, enviado_at: '2026-10-03T15:00:00Z', vence_at: '2026-11-03T05:00:00Z', vence: '2026-11-02' };
+  const vencido = { vigente: false, enviado_at: '2026-09-01T15:00:00Z', vence_at: null, vence: null };
+  const nunca = { vigente: false, enviado_at: null, vence_at: null, vence: null };
+  // «Enviar al cliente» si nunca se envió; «Reenviar al cliente» si ya se envió una vez (r1: también con el enlace
+  // vencido, como la COT y la Actividad del servidor). reenvio (la nota «el anterior deja de servir») solo con el enlace
+  // vigente: el vencido ya no sirve. null si el servidor lo rechazaría: CANCELADO (409), un rol que no es ADMIN ni ASESOR
+  // (403) o un pedido sin productos o sin total (400).
+  const pedido = { estado: 'PENDIENTE_COMPRA', productos: [{ product_name: 'Rodillo', qty: 6 }], total_cop: 1954666,
+    enlace_cliente: nunca };
+  const enviar = { texto: 'Enviar al cliente', reenvio: false };
+  const reenviarVencido = { texto: 'Reenviar al cliente', reenvio: false };
+  for (const rol of ['Asesor', 'Admin', 'admin ', 'Vendedor', 'ASESOR']) assert.deepEqual(botonEnvioPedido(pedido, rol, ahora), enviar, rol);
+  assert.deepEqual(botonEnvioPedido({ ...pedido, enlace_cliente: vigente }, 'Asesor', ahora),
+    { texto: 'Reenviar al cliente', reenvio: true });
+  assert.deepEqual(botonEnvioPedido({ ...pedido, enlace_cliente: vigente }, 'Asesor', new Date('2026-11-03T05:00:00Z')),
+    reenviarVencido, 'venció con la página abierta');
+  assert.deepEqual(botonEnvioPedido({ ...pedido, enlace_cliente: vencido }, 'Asesor', ahora), reenviarVencido, 'vencido');
+  assert.deepEqual(botonEnvioPedido({ ...pedido, enlace_cliente: undefined }, 'Asesor', ahora), enviar, 'sin el dato del enlace');
+  for (const estado of ['EN_PROCESO', 'ENTREGADO', 'FACTURADO', 'DEVUELTO_TOTAL']) {
+    assert.deepEqual(botonEnvioPedido({ ...pedido, estado }, 'Asesor', ahora), enviar, estado);
+  }
+  assert.equal(botonEnvioPedido({ ...pedido, estado: 'CANCELADO', enlace_cliente: vigente }, 'Admin', ahora), null);
+  for (const rol of ['Contador', 'Compras', '', null, undefined]) assert.equal(botonEnvioPedido(pedido, rol, ahora), null, String(rol));
+  assert.equal(botonEnvioPedido({ ...pedido, productos: [] }, 'Asesor', ahora), null, 'sin productos');
+  assert.equal(botonEnvioPedido({ ...pedido, productos: null }, 'Asesor', ahora), null, 'sin la lista');
+  assert.equal(botonEnvioPedido({ ...pedido, total_cop: 0 }, 'Asesor', ahora), null, 'sin total');
+  assert.deepEqual(botonEnvioPedido({ ...pedido, total_cop: '0.4' }, 'Asesor', ahora), enviar, 'el servidor acepta total > 0');
+  for (const raro of [null, undefined, 'x', 7]) assert.equal(botonEnvioPedido(raro, 'Admin', ahora), null, String(raro));
+}
+
+console.log('--- B3 T19 r1 (menor 3): un envío del pedido con resultado incierto no invita a reenviar ---');
+{
+  const conStatus = (status) => Object.assign(new Error('x'), { status });
+  // Incierto: un 5xx (p. ej. el proxy después del commit único) o un error sin status (red caída, respuesta perdida).
+  for (const err of [conStatus(500), conStatus(502), conStatus(504), new TypeError('Failed to fetch'), new Error('x'), null,
+    undefined, 'texto']) {
+    assert.equal(envioIncierto(err), true, String(err?.status ?? err));
+  }
+  // Un 4xx de validación (400, 403, 404, 409, 422) dice que no se envió.
+  for (const status of [400, 403, 404, 409, 422]) assert.equal(envioIncierto(conStatus(status)), false, String(status));
+  // La recarga dice si sí se envió: enlace_cliente.enviado_at cambió frente al de antes del POST.
+  const fresco = (enviado_at) => ({ estado: 'PENDIENTE_COMPRA', enlace_cliente: { vigente: true, enviado_at } });
+  assert.equal(pedidoSeEnvio(null, fresco('2026-10-19T15:00:00Z')), true, 'primer envío');
+  assert.equal(pedidoSeEnvio('2026-10-03T15:00:00Z', fresco('2026-10-19T15:00:00Z')), true, 'reenvío');
+  assert.equal(pedidoSeEnvio('2026-10-03T15:00:00Z', fresco('2026-10-03T15:00:00Z')), false, 'no cambió');
+  assert.equal(pedidoSeEnvio(null, fresco(null)), false, 'nunca se envió');
+  assert.equal(pedidoSeEnvio(undefined, { estado: 'PENDIENTE_COMPRA' }), false, 'sin el dato');
+  for (const raro of [null, undefined, 'x']) assert.equal(pedidoSeEnvio('2026-10-03T15:00:00Z', raro), false, 'la recarga falló');
+  assert.equal(AVISO_PEDIDO_SI_SE_ENVIO, 'El pedido sí se envió; revisa la Actividad antes de reenviar');
+}
+
+console.log('--- B3 T19 r1 (menor 10): el error del ChannelModal en una región viva siempre montada y la X bloqueada ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/cotizacion-client.tsx', import.meta.url), 'utf8')
+    .replace(/\r\n/g, '\n');
+  const inicio = fuente.indexOf('export function ChannelModal(');
+  assert.ok(inicio > 0, 'ChannelModal encontrado');
+  const modal = fuente.slice(inicio, fuente.indexOf('\n}\n', inicio));
+  assert.ok(/<Modal [^>]*bloquearCierre=\{saving\}/.test(modal), 'la X no se ve activa mientras envía');
+  assert.ok(/<div role="alert">\{error \? <p className="[^"]*">\{error\}<\/p> : null\}<\/div>/.test(modal),
+    'la región role="alert" siempre montada; solo cambia su contenido');
+  assert.ok(!modal.includes('{error && <p role="alert"'), 'sin montar la región solo cuando hay error');
 }
 
 console.log('OK test_envio_whatsapp.mjs');
