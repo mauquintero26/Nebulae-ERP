@@ -3,7 +3,7 @@
 import { useId, useState, type ReactNode } from 'react';
 import { AlertTriangle, Edit2, Send, Trash2 } from 'lucide-react';
 import { Button, Modal } from '@/components/ui';
-import { avisoCambiosCliente } from '@/lib/cambios-cliente';
+import { avisoCambiosCliente, AYUDA_NOTA_CLIENTE } from '@/lib/cambios-cliente';
 import { TarjetaCambiosCliente } from '../../cotizacion/tarjeta-cambios-cliente';
 import { PanelAnularConfirmacion, type AnulacionConfirmacion } from '../../cotizacion/anular-confirmacion';
 
@@ -11,20 +11,20 @@ import { PanelAnularConfirmacion, type AnulacionConfirmacion } from '../../cotiz
 // textos vienen de lib/cambios-cliente.js y lib/datos-cliente.js (probadas con node); la tarjeta de los cambios y el
 // panel de H40 son los de T17.
 
-/** R3 (C19): el aviso bajo la «Nota para el cliente», el mismo de la nota de la cotización (T17). */
-export const AYUDA_NOTA_CLIENTE = 'El cliente verá esta nota';
-
 /**
  * H28-cambios punto 8 (C9, R8): «El cliente pidió cambios» (ámbar) o «El cliente dice que ya no la necesita» (rosa) en
  * «Siguiente paso»: el comentario del cliente entre comillas y la fecha (TarjetaCambiosCliente de T17, con
- * avisoCambiosCliente). Para ADMIN o ASESOR (los roles que el servidor acepta en esos tres pedidos):
- * - «Editar productos» (el editor de H25/U13), si los productos se pueden editar;
- * - «Reenviar al cliente» (la ventana del canal de siempre), deshabilitado con el editor de productos abierto;
+ * avisoCambiosCliente). Para ADMIN o ASESOR (los roles que el servidor acepta en esos pedidos), en este orden:
+ * - «Editar productos» (el editor de H25/U13), si los productos se pueden editar y hay `onEditarProductos`;
+ * - «Reenviar al cliente» (la ventana del canal de siempre), si hay `onReenviar`; deshabilitado con el editor abierto;
+ * - r1: «Cotizar sin esperar confirmación» (`cotizarSinConfirmacion`, el mismo botón del paso de Asignada);
+ * - el `pie` (el porqué escrito de los botones deshabilitados), junto a ellos (r1);
  * - con «Ya no la necesita», «Cancelar solicitud» (la ventana de cancelar con el motivo prellenado, R8).
- * Sin cambios vigentes no pinta nada.
+ * La rama de la cotización temprana (U11) la monta solo con «Cancelar solicitud» (r1). Sin cambios vigentes no pinta
+ * nada; sin ningún botón, la tarjeta va sin acciones.
  */
 export function PasoCambiosCliente({ solicitud, puedeGestionar, puedeEditarProductos, editandoProductos, enviando,
-  tituloEnviar, pie, onEditarProductos, onReenviar, onCancelar }: {
+  tituloEnviar, cotizarSinConfirmacion, pie, onEditarProductos, onReenviar, onCancelar }: {
   solicitud: unknown;
   /** ADMIN o ASESOR (esAdminOAsesor): sin eso, la tarjeta va sin botones. */
   puedeGestionar: boolean;
@@ -33,29 +33,37 @@ export function PasoCambiosCliente({ solicitud, puedeGestionar, puedeEditarProdu
   enviando: boolean;
   /** El porqué de «Reenviar al cliente» deshabilitado (el editor de productos abierto). */
   tituloEnviar?: string;
-  /** Lo que va debajo de los botones (el porqué escrito, como en los demás pasos). */
+  /** El botón «Cotizar sin esperar confirmación» de la página (null si no aplica). */
+  cotizarSinConfirmacion?: ReactNode;
+  /** Lo que va debajo de los botones de enviar y cotizar (el porqué escrito, como en los demás pasos). */
   pie?: ReactNode;
-  onEditarProductos: () => void;
-  onReenviar: () => void;
+  onEditarProductos?: () => void;
+  onReenviar?: () => void;
   onCancelar: () => void;
 }) {
   const aviso = avisoCambiosCliente(solicitud, 'SC');
   if (!aviso) return null;
+  const editar = puedeEditarProductos && !!onEditarProductos;
+  const cancelar = aviso.tono === 'rosa';
+  const conBotones = puedeGestionar && (editar || !!onReenviar || !!cotizarSinConfirmacion || cancelar);
   return (
-    <TarjetaCambiosCliente aviso={aviso} acciones={puedeGestionar ? (
+    <TarjetaCambiosCliente aviso={aviso} acciones={conBotones ? (
       <>
-        {puedeEditarProductos && (
+        {editar && (
           <Button color="amber" size="lg" icon={Edit2} onClick={onEditarProductos}>Editar productos</Button>
         )}
-        <span className="block [&>button]:w-full" title={tituloEnviar}>
-          <Button color="indigo" size="lg" icon={Send} loading={enviando} disabled={editandoProductos} onClick={onReenviar}>
-            Reenviar al cliente
-          </Button>
-        </span>
-        {aviso.tono === 'rosa' && (
+        {onReenviar && (
+          <span className="block [&>button]:w-full" title={tituloEnviar}>
+            <Button color="indigo" size="lg" icon={Send} loading={enviando} disabled={editandoProductos} onClick={onReenviar}>
+              Reenviar al cliente
+            </Button>
+          </span>
+        )}
+        {cotizarSinConfirmacion}
+        {pie}
+        {cancelar && (
           <Button variant="danger" icon={Trash2} onClick={onCancelar}>Cancelar solicitud</Button>
         )}
-        {pie}
       </>
     ) : undefined} />
   );

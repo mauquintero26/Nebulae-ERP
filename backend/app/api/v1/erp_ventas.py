@@ -1378,6 +1378,9 @@ def _cot_dict(cot: SalesQuotation) -> dict:
         # U11: creada sin la confirmacion del cliente sobre la SC (None = camino normal) y el motivo.
         "sin_confirmacion_sc_at": _iso_utc(cot.sin_confirmacion_sc_at),
         "sin_confirmacion_sc_motivo": cot.sin_confirmacion_sc_motivo,
+        # B3 T6 (U22-cambios con C9): lo que pidio el cliente desde el enlace de la COT, de sus columnas (no de los logs).
+        # B3 T18 r1: aqui y no solo en get_cotizacion, para que la lista de cotizaciones (y las de la SC) lo marquen.
+        "cambios_cliente": _cambios_cliente_dict(cot, "COT"),
     }
 
 def _ven_dict(v: SaleOrder) -> dict:
@@ -2827,8 +2830,6 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
     # creada sin confirmacion se muestra mientras la SC no este confirmada. None si la COT no tiene SC.
     d["sc_estado"] = sc.estado if sc is not None else None
     d["sc_confirmacion_vigente"] = _confirmacion_vigente_sc(sc) if sc is not None else None
-    # B3 T6 (U22-cambios con C9): lo que pidio el cliente desde el enlace de la COT, de sus columnas (no de los logs).
-    d["cambios_cliente"] = _cambios_cliente_dict(cot, "COT")
     # Anticipo (H36+H43, N1, R3, R6): lo mismo que exigira convertir_cotizacion_a_venta. Solo en el detalle (no en
     # _cot_dict) para no hacer una consulta por fila en el listado. B3 T5 (r1): la misma cuenta que ve el cliente en
     # su cotizacion (resumen_anticipo_cotizacion: % a 2 decimales, saldo a favor y lo que falta).
@@ -4749,28 +4750,33 @@ def alertas_resumen(user: User = Depends(require_roles(*ALL_ERP_ROLES)), db: Ses
         ~db.query(SaleOrder).filter(SaleOrder.cot_id == SalesQuotation.id, SaleOrder.estado != "CANCELADO").exists(),
     ).count()
 
+    cambios_sc, cambios_cot = _contar_cambios_cliente(db, user)
     return {
         "status": "success",
         "data": {
             "atrasados": sc_atrasadas + cot_atrasadas + ven_atrasados
                          + sc_confirmadas_sin_accion + cot_confirmadas_sin_accion,
-            "cambios_cliente": _contar_cambios_cliente(db, user),
+            # B3 T18 r1: por separado, para que la pastilla del menu lleve a la lista de cada uno; cambios_cliente sigue
+            # siendo la suma, por compatibilidad.
+            "cambios_cliente": cambios_sc + cambios_cot,
+            "cambios_cliente_sc": cambios_sc,
+            "cambios_cliente_cot": cambios_cot,
         }
     }
 
 
-def _contar_cambios_cliente(db: Session, user: User) -> int:
+def _contar_cambios_cliente(db: Session, user: User) -> tuple:
     """B3 T6 (H28-cambios, C9, C22): cuantos documentos tienen cambios pedidos por el cliente sin responder: SC con la
     marca en Asignada o Nueva y COT con la marca en Borrador (reenviar la limpia). Es una cuenta APARTE que no suma a
     'atrasados'. Un asesor ve solo las suyas (la SC con su advisor_user_id; la COT por el asesor de su SC); los demas
-    roles, todas."""
+    roles, todas. B3 T18 r1: devuelve (solicitudes, cotizaciones), con el mismo filtro para las dos."""
     solicitudes = db.query(CustomerRequest.id).filter(_filtro_cambios_cliente_vigentes(CustomerRequest, "SC"))
     cotizaciones = db.query(SalesQuotation.id).filter(_filtro_cambios_cliente_vigentes(SalesQuotation, "COT"))
     if normalize_role(user.role) == "ASESOR":
         solicitudes = solicitudes.filter(CustomerRequest.advisor_user_id == user.id)
         cotizaciones = (cotizaciones.join(CustomerRequest, SalesQuotation.sc_id == CustomerRequest.id)
                         .filter(CustomerRequest.advisor_user_id == user.id))
-    return solicitudes.count() + cotizaciones.count()
+    return solicitudes.count(), cotizaciones.count()
 
 
 @router.get("/alertas")

@@ -348,14 +348,26 @@ const masReciente = (lista) => [...lista].sort((a, b) => Number(b?.id || 0) - Nu
 export const RUTA_HUB_VENTAS = '/dashboard/ventas';
 
 /**
+ * B3 T18 r1: una cuenta de GET /ventas/alertas/resumen (atrasados, cambios_cliente_sc, cambios_cliente_cot) como
+ * número positivo, o null si no lo es (0, negativo, vacío, texto que no es un número, Infinity). Puede llegar como
+ * texto ('3'). La usan textoAtrasados y pastillasCambiosCliente (lib/cambios-cliente.js): una sola lectura.
+ * @param {unknown} n
+ * @returns {number | null}
+ */
+export function cantidadPositiva(n) {
+  const cuantos = typeof n === 'number' || (typeof n === 'string' && n.trim() !== '') ? Number(n) : NaN;
+  return Number.isFinite(cuantos) && cuantos > 0 ? cuantos : null;
+}
+
+/**
  * T11 (V1): el texto del aviso de atrasados del menu lateral (AlertasBadge), con el `atrasados` de
  * GET /ventas/alertas/resumen: '1 atrasado', '5 atrasados'. Sin un numero positivo: '' (el aviso no se muestra).
  * @param {any} n
  * @returns {string}
  */
 export function textoAtrasados(n) {
-  const cuantos = typeof n === 'number' || (typeof n === 'string' && n.trim() !== '') ? Number(n) : NaN;
-  if (!Number.isFinite(cuantos) || cuantos <= 0) return '';
+  const cuantos = cantidadPositiva(n);
+  if (cuantos === null) return '';
   return `${cuantos} ${cuantos === 1 ? 'atrasado' : 'atrasados'}`;
 }
 

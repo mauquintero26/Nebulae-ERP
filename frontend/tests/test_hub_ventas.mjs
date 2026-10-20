@@ -18,6 +18,7 @@ import {
   comoUTC, diasDesde, textoAntiguedad, diaLocalDeFecha, fechaEditadaParaGuardar,
   ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, tieneProductos, esNoResuelto, esAccionTomada, accionSiguienteSC,
   esSCConCotizacionTemprana, TIPOS_NOTA_REINICIAN_ATRASO, notaReiniciaAtraso, desdeElHub, fusionarCargaHub,
+  cantidadPositiva, textoAtrasados,
 } from '../src/lib/hub-ventas.js';
 import { destinoVolver, etiquetaVolver } from '../src/lib/detalle-layout.js';
 import { ESTADOS_PEDIDO } from '../src/lib/estados-pedido.js';
@@ -610,6 +611,22 @@ console.log('--- T9B r1 TEST 21: TIPOS_NOTA_REINICIAN_ATRASO es el _REINICIAN_AT
   const delServidor = [...conjunto[1].matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
   assert.equal(delServidor.length, 4, 'se leyeron los 4 tipos del conjunto');
   assert.deepEqual([...TIPOS_NOTA_REINICIAN_ATRASO].sort(), [...delServidor].sort());
+}
+
+console.log('--- B3 T18 r1: cantidadPositiva, la lectura de una cuenta de GET /ventas/alertas/resumen ---');
+{
+  // Una sola regla para las pastillas del menú (textoAtrasados y pastillasCambiosCliente de lib/cambios-cliente.js).
+  assert.equal(cantidadPositiva(3), 3);
+  assert.equal(cantidadPositiva('4'), 4, 'el número puede llegar como texto');
+  for (const n of [0, -2, null, undefined, '', '  ', 'x', NaN, Infinity, true, [], {}]) {
+    assert.equal(cantidadPositiva(n), null, String(n));
+  }
+  // textoAtrasados la usa: los mismos casos de siempre.
+  assert.equal(textoAtrasados('3'), '3 atrasados');
+  assert.equal(textoAtrasados(Infinity), '');
+  const fuente = readFileSync(new URL('../src/lib/hub-ventas.js', import.meta.url), 'utf8');
+  const cuerpo = fuente.slice(fuente.indexOf('export function textoAtrasados('), fuente.indexOf('export function desdeElHub('));
+  assert.ok(cuerpo.includes('cantidadPositiva(n)') && !cuerpo.includes('Number.isFinite'), 'textoAtrasados usa cantidadPositiva');
 }
 
 console.log('OK test_hub_ventas.mjs');

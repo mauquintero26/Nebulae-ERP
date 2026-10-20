@@ -42,7 +42,7 @@ import { nombreCliente } from '@/lib/cliente-desde-busqueda';
 import { ProductSearch } from './buscador-producto';
 import { SelectorClienteSC } from './selector-cliente';
 import { LineasProducto } from './lineas-producto';
-import { ChipCambiosCliente } from './chip-cambios-cliente';
+import { ChipCambiosCliente } from '../chip-cambios-cliente';
 
 // T7: las tablas viven en las librerías (H10/C16 y U15/C5: una sola fuente). Se reexportan desde aquí para no romper los
 // imports del detalle (solicitud/[id]), del Hub y del Asistente Omnicanal. ProductSearch (buscador-producto.tsx) y
@@ -1445,7 +1445,7 @@ export default function SolicitudClient() {
                         <td className="px-4 py-4"><span className={`font-medium text-xs ${isOverdue?'text-red-600 font-bold':''}`}>{isOverdue&&<AlertTriangle size={10} className="inline mr-1"/>}{fDate(comoUTC(sc.fecha_vencimiento))}</span></td>
                       )}
                       {/* B3 T18 (H28-cambios punto 9): junto al estado, «Cambios pedidos» o «Ya no la necesita». */}
-                      <td className="px-4 py-4"><div className="flex flex-wrap items-center gap-1.5"><EstadoBadge estado={sc.estado}/><ChipCambiosCliente sc={sc}/></div></td>
+                      <td className="px-4 py-4"><div className="flex flex-wrap items-center gap-1.5"><EstadoBadge estado={sc.estado}/><ChipCambiosCliente doc={sc}/></div></td>
                       <td className="px-4 py-4" onClick={e=>e.stopPropagation()}>
                         <div className="flex items-center justify-center gap-1.5">
                           <button onClick={()=>router.push(`/dashboard/ventas/solicitud/${sc.id}`)} title="Ver Detalle" className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 p-1.5 rounded-lg text-xs font-bold transition-colors">

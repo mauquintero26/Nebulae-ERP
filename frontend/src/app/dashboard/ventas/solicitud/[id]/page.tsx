@@ -65,7 +65,7 @@ import { avisoCambiosCliente, motivoCancelacionNoLaNecesita } from '@/lib/cambio
 import { esAdminOAsesor } from '@/lib/seguimiento';
 import { useEstadoEnvioWhatsApp } from '../../cotizacion/estado-envio-whatsapp';
 import { TarjetaSeguimiento } from '../../seguimiento';
-import { ChipCambiosCliente } from '../chip-cambios-cliente';
+import { ChipCambiosCliente } from '../../chip-cambios-cliente';
 import { PasoCambiosCliente, NotaParaElCliente, CampoNotaParaElCliente, VentanaAnularPorModalidad } from './detalle-bloque3';
 
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
@@ -866,7 +866,12 @@ function SolicitudDetalleContent() {
         : `El cliente todavía no confirma esta solicitud; se cotizó sin su confirmación.${
           cotSinConf.sin_confirmacion_sc_motivo ? ` Motivo: ${cotSinConf.sin_confirmacion_sc_motivo}` : ''}`;
       const puedeEnviarEnlace = scSinConfirmar && (estado === 'ASIGNADA' || estado === 'PENDIENTE_CONFIRMACION');
-      return (
+      return (<>
+        {/* B3 T18 r1 (H28-cambios punto 8, R8): con la cotización temprana el cliente también puede pedir cambios en la
+            solicitud: su comentario va encima, sin «Editar productos» (la COT activa los tiene) ni «Reenviar» (abajo está
+            «Enviar para Confirmación»); con «Ya no la necesita», «Cancelar solicitud». Sin cambios no pinta nada. */}
+        <PasoCambiosCliente solicitud={solicitud} puedeGestionar={esAdminOAsesor(me.role)} puedeEditarProductos={false}
+          editandoProductos={editandoProductos} enviando={sendingConfirmacion} onCancelar={cancelarPorqueNoLaNecesita} />
         <NextStepCard
           tone="indigo"
           title="Continúa en la cotización"
@@ -892,7 +897,7 @@ function SolicitudDetalleContent() {
           crea el Pedido de Venta desde ahí.
           {avisoSinConfirmar && <span className="block mt-1.5 font-semibold">{avisoSinConfirmar}</span>}
         </NextStepCard>
-      );
+      </>);
     }
     if (!tieneProductos && ['ASIGNADA', 'PENDIENTE_CONFIRMACION', 'CONFIRMADA'].includes(estado)) {
       return (
@@ -984,8 +989,10 @@ function SolicitudDetalleContent() {
       return (
         <PasoCambiosCliente solicitud={solicitud} puedeGestionar={esAdminOAsesor(me.role)}
           puedeEditarProductos={puedeEditarProductos} editandoProductos={editandoProductos} enviando={sendingConfirmacion}
-          tituloEnviar={tituloEnviar} pie={motivoEditorAbierto(true, false)} onEditarProductos={abrirEditorProductos}
-          onReenviar={handleEnviarParaConfirmacion} onCancelar={cancelarPorqueNoLaNecesita} />
+          tituloEnviar={tituloEnviar} onEditarProductos={abrirEditorProductos} onReenviar={handleEnviarParaConfirmacion}
+          // r1: «Cotizar sin esperar confirmación» sigue (como en el paso de Asignada) y el porqué del editor abierto.
+          cotizarSinConfirmacion={botonCotizarSinConf} pie={motivoEditorAbierto(true, !!botonCotizarSinConf)}
+          onCancelar={cancelarPorqueNoLaNecesita} />
       );
     }
     if (estado === 'ASIGNADA') {
@@ -1077,7 +1084,7 @@ function SolicitudDetalleContent() {
             <h1 className="text-2xl font-black text-slate-800 whitespace-nowrap">{solicitud?.numero || String(params.id || '').toUpperCase()}</h1>
             {solicitud && <EstadoBadge estado={solicitud.estado} />}
             {/* B3 T18: «Cambios pedidos» o «Ya no la necesita», como en la lista (también con el Chatter o la IA abiertos). */}
-            {solicitud && <ChipCambiosCliente sc={solicitud} />}
+            {solicitud && <ChipCambiosCliente doc={solicitud} />}
             {solicitud && <TipoBadge tipo={solicitud.tipo_solicitud || 'Cotizacion de Producto'} />}
           </div>
         </div>
@@ -1576,7 +1583,8 @@ function SolicitudDetalleContent() {
           // B3 T18 (RP19, C27): sobre telefono_whatsapp, el e164 que valida el servidor (el de la SC o el de la ficha del
           // cliente), o null. T11 calidad (E6): por qué no se ofrece WhatsApp, con el mismo texto de la COT y del Hub.
           customerHasPhone={!motivoTelefono(solicitud?.telefono_whatsapp)}
-          textoSinTelefono={textoSinTelefono(solicitud?.telefono_whatsapp) ?? undefined}
+          // r1: telefono_whatsapp es null también con un teléfono incompleto: el porqué mira el escrito («teléfono incompleto»).
+          textoSinTelefono={textoSinTelefono(solicitud?.telefono_whatsapp ?? solicitud?.customer_phone) ?? undefined}
           customerEmail={solicitud?.customer_email ?? null}
           documentLabel="solicitud"
           // B3 T18 (U16-envio punto 14): si sale solo desde el WhatsApp de la empresa y, con un enlace pendiente, que el

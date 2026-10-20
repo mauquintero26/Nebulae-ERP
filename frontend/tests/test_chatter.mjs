@@ -327,8 +327,14 @@ console.log('--- T11 calidad E6: textoSinTelefono, el mismo texto en las tres ve
   for (const [ruta, doc] of [['cotizacion/[id]/page.tsx', 'cotizacion'], ['solicitud/[id]/page.tsx', 'solicitud']]) {
     const fuente = leer(ruta);
     assert.ok(fuente.includes(`customerHasPhone={!motivoTelefono(${doc}?.telefono_whatsapp)}`), `${ruta}: customerHasPhone`);
-    assert.ok(fuente.includes(`textoSinTelefono={textoSinTelefono(${doc}?.telefono_whatsapp) ?? undefined}`), `${ruta}: el porqué`);
   }
+  // El porqué: en la COT, sobre telefono_whatsapp (T17; el mismo cambio que la SC queda para la revisión final). En la SC
+  // (T18 r1), telefono_whatsapp viene en null también con un teléfono incompleto: el texto mira el escrito si no hay e164,
+  // así un '300123456' dice «teléfono incompleto» y no «sin teléfono».
+  assert.ok(leer('cotizacion/[id]/page.tsx').includes('textoSinTelefono={textoSinTelefono(cotizacion?.telefono_whatsapp) ?? undefined}'));
+  assert.ok(leer('solicitud/[id]/page.tsx').includes(
+    'textoSinTelefono={textoSinTelefono(solicitud?.telefono_whatsapp ?? solicitud?.customer_phone) ?? undefined}'), 'SC: el porqué');
+  assert.equal(textoSinTelefono(null ?? '300123456'), 'teléfono incompleto');
   // Es el mismo texto que armaban a mano antes, en todos los casos en que WhatsApp queda deshabilitado.
   for (const tel of [null, '', 'sin número', '+57', '0', '123', '300 123 45']) {
     assert.ok(motivoTelefono(tel), String(tel));

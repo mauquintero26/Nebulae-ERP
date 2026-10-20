@@ -1,7 +1,7 @@
 /**
  * «Pedir cambios» visto por el asesor (Bloque 3, T12: H28-cambios punto 7, C9). JS plano para probarlo con node
- * (frontend/tests/test_cambios_cliente.mjs); lo usan la tarjeta de la SC (T18), la de la COT (T17) y la pastilla de la
- * lista de solicitudes.
+ * (frontend/tests/test_cambios_cliente.mjs); lo usan la tarjeta de la SC (T18), la de la COT (T17), la pastilla de las
+ * listas de solicitudes y de cotizaciones y las pastillas del menú lateral (AlertasBadge, T18 r1).
  *
  * cambios_cliente llega en el detalle de la SC (_sc_dict) y de la COT (get_cotizacion) como {at ('…Z'), tipo
  * ('CAMBIOS' | 'NO_LA_NECESITA'), comentario} o null (erp_ventas._cambios_cliente_dict). Se muestra mientras el
@@ -10,6 +10,7 @@
  */
 
 import { fechaHoraCO } from './fechas-colombia.js';
+import { cantidadPositiva } from './hub-ventas.js';
 
 const ESTADOS_CON_CAMBIOS_VIGENTES = Object.freeze({ SC: Object.freeze(['ASIGNADA', 'BORRADOR']),
   COT: Object.freeze(['BORRADOR']) });
@@ -58,22 +59,47 @@ export function etiquetaChipCambios(doc, tipoDoc = 'SC') {
   return cambios.tipo === 'NO_LA_NECESITA' ? 'Ya no la necesita' : 'Cambios pedidos';
 }
 
-/** B3 T18 (H28-cambios punto 11): a donde lleva la pastilla de AlertasBadge: la lista de solicitudes, con su marca. */
-export const RUTA_CAMBIOS_CLIENTE = '/dashboard/ventas/solicitud';
+/** B3 T18 r1: las dos listas con la marca de cambios del cliente, a donde lleva cada pastilla de AlertasBadge. */
+export const RUTA_LISTA_SOLICITUDES = '/dashboard/ventas/solicitud';
+export const RUTA_LISTA_COTIZACIONES = '/dashboard/ventas/cotizacion';
+
+const PASTILLAS_CAMBIOS = Object.freeze([
+  Object.freeze({ clave: 'SC', cuenta: 'cambios_cliente_sc', singular: 'solicitud', plural: 'solicitudes',
+    lista: 'Solicitudes', ruta: RUTA_LISTA_SOLICITUDES }),
+  Object.freeze({ clave: 'COT', cuenta: 'cambios_cliente_cot', singular: 'cotización', plural: 'cotizaciones',
+    lista: 'Cotizaciones', ruta: RUTA_LISTA_COTIZACIONES }),
+]);
 
 /**
- * B3 T18 (H28-cambios punto 11, C22): el texto de la pastilla ámbar del menú lateral (AlertasBadge) con el
- * `cambios_cliente` de GET /ventas/alertas/resumen (SC y COT con cambios del cliente sin responder; el asesor ve solo
- * las suyas): '1 con cambios del cliente', '3 con cambios del cliente'. Es una cuenta aparte de los atrasados. Sin un
- * número positivo: '' (la pastilla no se muestra). Misma lectura del número que textoAtrasados (lib/hub-ventas.js).
- * @param {unknown} n
- * @returns {string}
+ * B3 T18 r1 (H28-cambios punto 11, C9, C22): las pastillas ámbar del menú lateral (AlertasBadge), con
+ * `cambios_cliente_sc` y `cambios_cliente_cot` de GET /ventas/alertas/resumen (documentos con cambios del cliente sin
+ * responder; el asesor ve solo los suyos). Una por cada cuenta positiva (cantidadPositiva, la misma lectura de
+ * textoAtrasados), primero la de solicitudes: cada una con su número y la lista donde está la marca ('2 solicitudes
+ * con cambios' a la lista de solicitudes; '1 cotización con cambios' a la de cotizaciones), y un title y un
+ * aria-label que dicen adónde lleva. Es una cuenta aparte de los atrasados. Sin cuentas positivas: [] (no se pinta
+ * ninguna); la suma sola (cambios_cliente) no dice adónde llevar.
+ * @param {unknown} resumen el `data` de GET /ventas/alertas/resumen
+ * @returns {Array<{clave: 'SC' | 'COT', cantidad: number, texto: string, ruta: string, titulo: string, ariaLabel: string}>}
  */
-export function textoCambiosCliente(n) {
-  const cuantos = typeof n === 'number' || (typeof n === 'string' && n.trim() !== '') ? Number(n) : NaN;
-  if (!Number.isFinite(cuantos) || cuantos <= 0) return '';
-  return `${cuantos} con cambios del cliente`;
+export function pastillasCambiosCliente(resumen) {
+  const r = resumen && typeof resumen === 'object' ? /** @type {Record<string, unknown>} */ (resumen) : {};
+  const pastillas = [];
+  for (const p of PASTILLAS_CAMBIOS) {
+    const cantidad = cantidadPositiva(r[p.cuenta]);
+    if (cantidad === null) continue;
+    const texto = `${cantidad} ${cantidad === 1 ? p.singular : p.plural} con cambios`;
+    const destino = `la lista de ${p.plural}`;
+    pastillas.push({
+      clave: /** @type {'SC' | 'COT'} */ (p.clave), cantidad, texto, ruta: p.ruta,
+      titulo: `${p.lista} con cambios pedidos por el cliente: abre ${destino}`,
+      ariaLabel: `${texto} pedidos por el cliente: ver ${destino}`,
+    });
+  }
+  return pastillas;
 }
+
+/** R3 (C19): el aviso bajo la «Nota para el cliente» de la SC y bajo la nota de la cotización. Una sola redacción. */
+export const AYUDA_NOTA_CLIENTE = 'El cliente verá esta nota';
 
 /** El máximo del motivo de POST /ventas/solicitudes/{id}/cancelar (CancelarSolicitudBody: len() de Python). */
 export const MAX_MOTIVO_CANCELACION = 500;

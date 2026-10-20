@@ -35,7 +35,8 @@ const RAICES = [
   'src/app/dashboard/cotiza',
   'src/components/documento',
   'src/components/AlertasBadge.tsx',
-  'src/components/PastillaCambiosCliente.tsx', // B3 T18: la segunda pastilla de AlertasBadge
+  'src/components/PastillaCambiosCliente.tsx', // B3 T18: las pastillas de cambios de AlertasBadge
+  'src/components/PastillaMenuLateral.tsx', // B3 T18 r1: la forma de las pastillas del menú lateral
   'src/app/confirmar',
   'src/app/pedido',
 ];

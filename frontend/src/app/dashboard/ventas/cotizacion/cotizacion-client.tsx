@@ -36,6 +36,7 @@ import {
 } from '@/lib/listas-ventas';
 import { SubNav, PageHeader, StatCard, Modal, Button, EmptyState } from '@/components/ui';
 import { VEN_NAV } from '../ven-nav';
+import { ChipCambiosCliente } from '../chip-cambios-cliente';
 
 export const ESTADOS: Record<string, { label: string; color: string; bg: string; border: string }> = {
   BORRADOR:              { label: 'Borrador',              color: '#64748b', bg: '#f1f5f9', border: '#e2e8f0' },
@@ -1005,7 +1006,8 @@ export default function CotizacionClient() {
                           {fDate(cot.fecha_entrega_estimada)}
                         </span>
                       </td>
-                      <td className="px-6 py-4"><EstadoBadge estado={cot.estado}/></td>
+                      {/* B3 T18 r1 (H28-cambios, C9): junto al estado, «Cambios pedidos» si el cliente pidió cambios en su enlace. */}
+                      <td className="px-6 py-4"><div className="flex flex-wrap items-center gap-1.5"><EstadoBadge estado={cot.estado}/><ChipCambiosCliente doc={cot} tipoDoc="COT"/></div></td>
                       <td className="px-6 py-4">
                         <div className="flex items-center justify-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                           <button onClick={e => { e.stopPropagation(); router.push(`/dashboard/ventas/cotizacion/${cot.id}`); }}

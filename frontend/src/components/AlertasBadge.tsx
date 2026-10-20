@@ -4,9 +4,10 @@ import { useRouter } from 'next/navigation';
 import { AlertTriangle } from 'lucide-react';
 import { apiFetch, hayReautenticacionPendiente } from '@/lib/api';
 import { RUTA_HUB_VENTAS, textoAtrasados } from '@/lib/hub-ventas';
-import { textoCambiosCliente } from '@/lib/cambios-cliente';
+import { pastillasCambiosCliente } from '@/lib/cambios-cliente';
 import { KPI_COLOR_MAP } from '@/lib/design-system';
-import { PastillaCambiosCliente } from './PastillaCambiosCliente';
+import { PastillaMenuLateral } from './PastillaMenuLateral';
+import { PastillasCambiosCliente } from './PastillaCambiosCliente';
 
 const ROJO = KPI_COLOR_MAP.red;
 
@@ -15,13 +16,14 @@ const ROJO = KPI_COLOR_MAP.red;
  * menú lateral (Sidebar), arriba; antes flotaba fijo arriba a la derecha y tapaba los botones de las cabeceras y de las
  * ventanas. Con el menú contraído (`colapsado`) se ve solo el ícono con el número en una insignia; con 0 atrasados no
  * se muestra. El clic lleva al Hub de Ventas.
- * B3 T18 (H28-cambios punto 11, C22): debajo, la pastilla ámbar de cambios del cliente (PastillaCambiosCliente), con el
- * `cambios_cliente` de la misma respuesta. Es una cuenta aparte y se muestra aunque no haya atrasados.
+ * B3 T18 (H28-cambios punto 11, C22): debajo, las pastillas ámbar de cambios del cliente (PastillasCambiosCliente), con
+ * la misma respuesta. Son una cuenta aparte y se muestran aunque no haya atrasados. r1: una por lista (solicitudes y
+ * cotizaciones, cambios_cliente_sc y cambios_cliente_cot), y las dos formas salen de PastillaMenuLateral.
  */
 export function AlertasBadge({ colapsado = false }: { colapsado?: boolean }) {
   const router = useRouter();
   const [count, setCount] = useState(0);
-  const [cambios, setCambios] = useState(0);
+  const [cambios, setCambios] = useState<unknown>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -32,7 +34,7 @@ export function AlertasBadge({ colapsado = false }: { colapsado?: boolean }) {
       try {
         const res = await apiFetch('/ventas/alertas/resumen');
         if (mounted) setCount(res?.data?.atrasados ?? 0);
-        if (mounted) setCambios(res?.data?.cambios_cliente ?? 0);
+        if (mounted) setCambios(res?.data ?? null);
       } catch {}
     }
     load();
@@ -50,32 +52,21 @@ export function AlertasBadge({ colapsado = false }: { colapsado?: boolean }) {
   }, []);
 
   const texto = textoAtrasados(count);
-  const textoCambios = textoCambiosCliente(cambios);
-  if (!texto && !textoCambios) return null;
-  const pastillaCambios = textoCambios
-    ? <PastillaCambiosCliente texto={textoCambios} cantidad={cambios} colapsado={colapsado} /> : null;
-  // Sin atrasados: solo la de cambios del cliente.
-  if (!texto) return <div className="px-3 pt-4 shrink-0">{pastillaCambios}</div>;
+  const pastillas = pastillasCambiosCliente(cambios);
+  if (!texto && pastillas.length === 0) return null;
 
+  // Sin atrasados no se pinta la roja; las de cambios del cliente salen igual.
   return (
     <div className="px-3 pt-4 shrink-0 space-y-2">
-      <button
-        type="button"
+      {texto && <PastillaMenuLateral
         onClick={() => router.push(RUTA_HUB_VENTAS)}
-        className={`relative flex w-full items-center rounded-lg border px-3 py-2.5 text-sm font-bold transition-colors hover:bg-red-100 ${ROJO.bg} ${ROJO.text} ${ROJO.border} ${colapsado ? 'justify-center' : ''}`}
+        texto={texto} cantidad={count} colapsado={colapsado} icono={AlertTriangle}
+        claseBoton={`hover:bg-red-100 ${ROJO.bg} ${ROJO.text} ${ROJO.border}`} claseIcono={ROJO.iconText}
+        claseInsignia="bg-red-600 text-white"
         title="Documentos atrasados sin atender"
         aria-label={`${texto} sin atender: ver el Hub de Ventas`}
-      >
-        <AlertTriangle className={`w-5 h-5 shrink-0 ${ROJO.iconText} ${colapsado ? '' : 'mr-3'}`} />
-        {colapsado ? (
-          <span className="absolute -top-1.5 -right-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-black text-white">
-            {count}
-          </span>
-        ) : (
-          <span className="truncate">{texto}</span>
-        )}
-      </button>
-      {pastillaCambios}
+      />}
+      <PastillasCambiosCliente pastillas={pastillas} colapsado={colapsado} />
     </div>
   );
 }

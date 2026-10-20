@@ -27,7 +27,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { textoAtrasados, RUTA_HUB_VENTAS } from '../src/lib/hub-ventas.js';
-import { RUTA_CAMBIOS_CLIENTE } from '../src/lib/cambios-cliente.js';
 import { posicionMenuFila, botonALaVista, recortesDeAncestros } from '../src/lib/listas-ventas.js';
 import { inicialesAutor } from '../src/lib/detalle-layout.js';
 
@@ -80,23 +79,32 @@ console.log('--- V1 TEST 2: el aviso vive en el menú lateral, ya no flota sobre
   assert.ok(badge.includes("document.visibilityState === 'hidden'"), 'no consulta con la pestaña oculta');
   assert.ok(badge.includes('5 * 60 * 1000'), 'cada 5 minutos');
   assert.ok(/textoAtrasados\(/.test(badge), 'el texto sale de textoAtrasados');
-  // B3 T18 (H28-cambios punto 11, C22): la pastilla ámbar de cambios del cliente se muestra aunque no haya atrasados;
-  // sin ninguna de las dos no se muestra nada (antes: «if (!texto) return null;»).
-  assert.ok(/if \(!texto && !textoCambios\) return null;/.test(badge), 'sin atrasados ni cambios no se muestra nada');
+  // B3 T18 (H28-cambios punto 11, C22): las pastillas de cambios del cliente se muestran aunque no haya atrasados;
+  // sin ninguna no se muestra nada (antes: «if (!texto) return null;») y, sin atrasados, la roja no se pinta (r1).
+  assert.ok(/if \(!texto && pastillas\.length === 0\) return null;/.test(badge), 'sin atrasados ni cambios no se muestra nada');
+  assert.ok(/\{texto && <PastillaMenuLateral\b/.test(badge), 'sin atrasados no se pinta la roja');
   assert.ok(badge.includes('router.push(RUTA_HUB_VENTAS)') && RUTA_HUB_VENTAS === '/dashboard/ventas', 'el clic lleva al Hub');
-  assert.ok(/<AlertTriangle\b/.test(badge), 'con el ícono AlertTriangle');
+  assert.ok(/icono=\{AlertTriangle\}/.test(badge), 'con el ícono AlertTriangle');
   assert.ok(/colapsado/.test(badge), 'conoce el menú contraído (solo ícono + número)');
-  // B3 T18: la segunda pastilla lee cambios_cliente de la MISMA respuesta (sin otra consulta) y su texto sale de
-  // textoCambiosCliente; su clic lleva a la lista de solicitudes (RUTA_CAMBIOS_CLIENTE).
-  assert.equal((badge.match(/apiFetch\(/g) ?? []).length, 1, 'una sola consulta para las dos pastillas');
-  assert.ok(/setCambios\(res\?\.data\?\.cambios_cliente \?\? 0\)/.test(badge), 'guarda res.data.cambios_cliente');
-  assert.ok(/textoCambiosCliente\(cambios\)/.test(badge), 'el texto sale de textoCambiosCliente');
-  assert.ok(/<PastillaCambiosCliente\b/.test(badge), 'monta la pastilla de cambios');
+  // B3 T18 r1: las de cambios leen cambios_cliente_sc y cambios_cliente_cot de la MISMA respuesta (sin otra consulta);
+  // cuáles se pintan y adónde lleva cada una lo decide pastillasCambiosCliente (lib/cambios-cliente.js).
+  assert.equal((badge.match(/apiFetch\(/g) ?? []).length, 1, 'una sola consulta para todas las pastillas');
+  assert.ok(/setCambios\(res\?\.data \?\? null\)/.test(badge), 'guarda el resumen con las dos cuentas');
+  assert.ok(/pastillasCambiosCliente\(cambios\)/.test(badge), 'las pastillas salen de pastillasCambiosCliente');
+  assert.ok(/<PastillasCambiosCliente\b/.test(badge), 'monta las pastillas de cambios');
   const pastilla = sinComentarios(leer('components/PastillaCambiosCliente.tsx'));
-  assert.ok(pastilla.includes('router.push(RUTA_CAMBIOS_CLIENTE)') && RUTA_CAMBIOS_CLIENTE === '/dashboard/ventas/solicitud',
-    'el clic lleva a la lista de solicitudes');
-  assert.ok(/colapsado/.test(pastilla), 'la pastilla de cambios también conoce el menú contraído');
+  assert.ok(pastilla.includes('router.push(p.ruta)'), 'cada pastilla lleva a su lista');
+  assert.ok(pastilla.includes('title={p.titulo}') && pastilla.includes('aria-label={p.ariaLabel}'), 'y dice adónde');
+  // r1 (contraste): la insignia del menú contraído y el ícono en ámbar oscuro.
+  assert.ok(pastilla.includes('claseInsignia="bg-amber-700 text-white"') && pastilla.includes('claseIcono="text-amber-700"'));
+  assert.ok(!/\bbg-amber-500\b|\btext-amber-600\b/.test(pastilla), 'sin los tonos de poco contraste');
   assert.ok(!/\bfixed\b/.test(pastilla) && !/\bdark:/.test(pastilla), 'sin fixed ni dark:');
+  // r1 (sin duplicados): la forma de las pastillas vive en UN componente; ni AlertasBadge ni las de cambios la copian.
+  const forma = sinComentarios(leer('components/PastillaMenuLateral.tsx'));
+  assert.ok(/<button\b/.test(forma) && forma.includes('absolute -top-1.5 -right-1.5') && forma.includes('truncate'));
+  for (const [nombre, fuente] of [['AlertasBadge', badge], ['PastillaCambiosCliente', pastilla]]) {
+    assert.ok(/<PastillaMenuLateral\b/.test(fuente) && !/<button\b/.test(fuente), `${nombre} usa PastillaMenuLateral`);
+  }
 
   const sidebar = sinComentarios(leer('components/Sidebar.tsx'));
   assert.ok(/import \{ AlertasBadge \} from '@\/components\/AlertasBadge';/.test(sidebar), 'Sidebar importa AlertasBadge');

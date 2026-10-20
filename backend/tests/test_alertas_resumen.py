@@ -113,3 +113,48 @@ def test_alertas_resumen_cuenta_confirmados_sin_accion_del_asesor(app_client, db
     atrasados_despues = resp_despues.json()["data"]["atrasados"]
 
     assert atrasados_antes - atrasados_despues == 2
+
+
+def test_alertas_resumen_separa_los_cambios_de_solicitudes_y_cotizaciones(app_client, db, admin_token, user_admin,
+                                                                          user_vendedor, vendedor_token):
+    """B3 T18 r1: alertas_resumen trae cambios_cliente_sc y cambios_cliente_cot por separado (la pastilla del menu
+    lleva a la lista de cada uno); cambios_cliente sigue siendo la suma, por compatibilidad. Mismo filtro que la
+    cuenta unica (C9): la SC en Asignada o Nueva y la COT en Borrador con la marca, y un asesor ve solo las suyas (la
+    SC por su advisor_user_id; la COT por el asesor de su SC). Es una cuenta aparte de 'atrasados' (C22)."""
+    import uuid
+    sufijo = uuid.uuid4().hex[:8].upper()
+    headers = lambda token: {"Authorization": f"Bearer {token}"}
+
+    def resumen(token):
+        resp = app_client.get("/api/v1/ventas/alertas/resumen", headers=headers(token))
+        assert resp.status_code == 200, resp.text
+        return resp.json()["data"]
+
+    antes, antes_asesor = resumen(admin_token), resumen(vendedor_token)
+    ahora = datetime.utcnow()
+    marca = dict(cambios_cliente_at=ahora, cambios_cliente_tipo="CAMBIOS", cambios_cliente_comentario="Son 8, no 6")
+    sc_propia = CustomerRequest(numero=f"SC-R1A{sufijo}", customer_name="X", estado="ASIGNADA",
+                                advisor_user_id=user_vendedor.id, **marca)
+    sc_ajena = CustomerRequest(numero=f"SC-R1B{sufijo}", customer_name="Y", estado="ASIGNADA",
+                               advisor_user_id=user_admin.id, **marca)
+    sc_de_la_cot = CustomerRequest(numero=f"SC-R1C{sufijo}", customer_name="Z", estado="CONFIRMADA",
+                                   advisor_user_id=user_vendedor.id)
+    db.add_all([sc_propia, sc_ajena, sc_de_la_cot])
+    db.commit()
+    cot = SalesQuotation(numero=f"COT-R1A{sufijo}", customer_name="Z", estado="BORRADOR", sc_id=sc_de_la_cot.id,
+                         sc_numero=sc_de_la_cot.numero, **marca)
+    # Con la marca pero ya reenviada (fuera de Borrador): no cuenta.
+    cot_reenviada = SalesQuotation(numero=f"COT-R1B{sufijo}", customer_name="Z", estado="PENDIENTE_CONFIRMACION",
+                                   sc_id=sc_de_la_cot.id, sc_numero=sc_de_la_cot.numero, **marca)
+    db.add_all([cot, cot_reenviada])
+    db.commit()
+
+    d = resumen(admin_token)
+    assert d["cambios_cliente_sc"] == antes["cambios_cliente_sc"] + 2
+    assert d["cambios_cliente_cot"] == antes["cambios_cliente_cot"] + 1
+    assert d["cambios_cliente"] == d["cambios_cliente_sc"] + d["cambios_cliente_cot"]
+    assert d["atrasados"] == antes["atrasados"]
+    a = resumen(vendedor_token)
+    assert a["cambios_cliente_sc"] == antes_asesor["cambios_cliente_sc"] + 1
+    assert a["cambios_cliente_cot"] == antes_asesor["cambios_cliente_cot"] + 1
+    assert a["cambios_cliente"] == a["cambios_cliente_sc"] + a["cambios_cliente_cot"]

@@ -385,6 +385,29 @@ def test_alertas_cuentan_la_cotizacion_con_cambios(app_client, db, admin_token, 
     assert _get_cot(app_client, admin_token, propia)["cambios_cliente"] is None
 
 
+
+def test_la_lista_de_cotizaciones_trae_cambios_cliente(app_client, db, admin_token, user_admin, monkeypatch):
+    """B3 T18 r1: _cot_dict expone cambios_cliente con la misma forma que get_cotizacion, así la lista de cotizaciones
+    (y las cotizaciones del detalle de su SC) marca la COT con cambios del cliente."""
+    _correo_falso(monkeypatch)
+    sc = _sc(db, user_admin)
+    cot = _cot(db, sc)
+
+    def fila():
+        resp = app_client.get(f"/api/v1/ventas/cotizaciones?search={cot.numero}", headers=auth(admin_token))
+        assert resp.status_code == 200, resp.text
+        filas = [f for f in resp.json()["data"] if f["id"] == cot.id]
+        assert len(filas) == 1, filas
+        return filas[0]
+
+    assert fila()["cambios_cliente"] is None
+    assert _pedir(app_client, _token(db, cot)).status_code == 200
+    marca = fila()["cambios_cliente"]
+    assert (marca["tipo"], marca["comentario"]) == ("CAMBIOS", COMENTARIO) and marca["at"].endswith("Z")
+    assert marca == _get_cot(app_client, admin_token, cot)["cambios_cliente"]
+    resp = app_client.get(f"/api/v1/ventas/solicitudes/{sc.id}", headers=auth(admin_token))
+    assert [c["cambios_cliente"] for c in resp.json()["data"]["cotizaciones"] if c["id"] == cot.id] == [marca]
+
 # ─── RP16: el envío de la COT ────────────────────────────────────────────────────────────────────────────────
 
 def test_reenvio_de_la_cot_hace_un_solo_commit_antes_del_correo(app_client, db, admin_token, user_admin, monkeypatch,
