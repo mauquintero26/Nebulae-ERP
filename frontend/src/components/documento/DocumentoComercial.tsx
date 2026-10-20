@@ -66,12 +66,31 @@ const ESTILOS_PAGINA = `
   .documento-comercial-pagina { padding: 12mm; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 }
 `;
+// B3 T20 r2 (punto 13): en una hoja impresa nada se sale del recuadro ni queda solo en la hoja siguiente.
+// - El pie no se parte entre hojas (también con la clase print:break-inside-avoid: el next dev del worktree puede generar
+//   el CSS desde otra carpeta y no ver las clases nuevas, así que la regla va aquí también).
+// - La barra izquierda y el triángulo de abajo eran absolutos (inset-y-0 / bottom-0) sobre el recuadro sin partir: en la
+//   hoja 2 terminaban antes que el contenido y el triángulo tapaba el contacto. En la impresión la barra es un fondo del
+//   recuadro (una franja de 8 px a todo su alto: se dibuja en cada hoja; un borde le quitaba ancho al contenido y una
+//   sombra interior dejaba un filo gris arriba y abajo de cada hoja en el PDF) y el
+//   triángulo va en el flujo, en la misma fila del pie (doc-pie, flex): nunca encima de un texto y sin sumar altura. Sus
+//   márgenes negativos lo llevan a la esquina del recuadro (los 2 rem del pr-8 y el 1 rem del cuerpo impreso). Sin
+//   alturas fijas.
+// - El espacio vertical se compacta solo en la impresión (la COT DEMO de 2 productos con notas cabe en una hoja carta).
 const ESTILOS_IMPRESION = `
 @media print {
   .documento-comercial, .documento-comercial * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .documento-comercial { box-shadow: none !important; }
   .documento-comercial tr { break-inside: avoid; }
   .documento-comercial thead { display: table-header-group; }
+  .documento-comercial footer, .documento-comercial .doc-pie { break-inside: avoid; }
+  .documento-comercial .doc-barra, .documento-comercial .doc-triangulo-abajo { display: none; }
+  .documento-comercial.doc-acento { background-image: linear-gradient(#111827, #111827); background-size: 8px 100%; background-repeat: no-repeat; }
+  .documento-comercial .doc-pie { display: flex; align-items: flex-end; gap: 1rem; }
+  .documento-comercial .doc-pie > footer { flex: 1 1 auto; min-width: 0; }
+  .documento-comercial .doc-triangulo-final { display: block; flex: none; margin-left: auto; margin-right: -2rem; margin-bottom: -1rem; }
+  .documento-comercial .doc-encabezado, .documento-comercial .doc-cuerpo { padding-top: 1rem; padding-bottom: 1rem; }
+  .documento-comercial .doc-encabezado > :not(:last-child), .documento-comercial .doc-cuerpo > :not(:last-child) { margin-block-end: 1rem; }
 }
 `;
 
@@ -336,7 +355,7 @@ export function DocumentoComercial({
       )}
 
       <article
-        className="documento-comercial relative mx-auto w-full max-w-[820px] overflow-hidden rounded-2xl bg-white text-gray-900 shadow-lg print:rounded-none"
+        className={`documento-comercial relative mx-auto w-full max-w-[820px] overflow-hidden rounded-2xl bg-white text-gray-900 shadow-lg print:rounded-none${v === 'acento' ? ' doc-acento' : ''}`}
         style={variables}
         aria-label={[titulo, doc.numero].filter(Boolean).join(' ')}
       >
@@ -369,7 +388,7 @@ export function DocumentoComercial({
           </>
         ) : (
           <>
-            <span aria-hidden="true" className="absolute inset-y-0 left-0 w-2 bg-gray-900" />
+            <span aria-hidden="true" className="doc-barra absolute inset-y-0 left-0 w-2 bg-gray-900" />
             <span
               aria-hidden="true"
               className="absolute right-0 top-0 h-14 w-14"
@@ -377,10 +396,10 @@ export function DocumentoComercial({
             />
             <span
               aria-hidden="true"
-              className="absolute bottom-0 right-0 h-10 w-10"
+              className="doc-triangulo-abajo absolute bottom-0 right-0 h-10 w-10"
               style={{ backgroundColor: 'var(--doc-acento)', clipPath: 'polygon(100% 0, 100% 100%, 0 100%)' }}
             />
-            <header className="space-y-6 py-6 pl-7 pr-5 @min-[40rem]:pl-10 @min-[40rem]:pr-16">
+            <header className="doc-encabezado space-y-6 py-6 pl-7 pr-5 @min-[40rem]:pl-10 @min-[40rem]:pr-16">
               <div className="flex flex-col gap-4 @min-[40rem]:flex-row @min-[40rem]:items-start @min-[40rem]:justify-between">
                 <div className="min-w-0 space-y-1">
                   <LogoMarca marca={m} apiUrl={apiUrl} />
@@ -407,7 +426,7 @@ export function DocumentoComercial({
           </>
         )}
 
-        <div className="space-y-6 px-5 py-6 @min-[40rem]:pl-10 @min-[40rem]:pr-8">
+        <div className="doc-cuerpo space-y-6 px-5 py-6 @min-[40rem]:pl-10 @min-[40rem]:pr-8">
           {doc.con_precios ? (
             <div className="grid gap-6 @min-[40rem]:grid-cols-2">
               <div className="space-y-5">
@@ -443,34 +462,44 @@ export function DocumentoComercial({
             </Seccion>
           ))}
 
-          <footer className="space-y-2 border-t border-gray-200 pt-4 text-xs text-gray-600">
-            {doc.mensaje_pie && <p className="whitespace-pre-line break-words text-sm font-semibold text-gray-800">{doc.mensaje_pie}</p>}
-            {contactos.length > 0 && (
-              <ul className="flex flex-wrap gap-x-4 gap-y-1">
-                {contactos.map((c) => {
-                  const Icono = ICONOS_CONTACTO[c.tipo];
-                  return (
-                    <li key={c.tipo} className="min-w-0">
-                      {c.externo ? (
-                        <a href={c.href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 break-all hover:underline">
-                          <Icono size={13} aria-hidden="true" />
-                          {c.texto}
-                        </a>
-                      ) : (
-                        <a href={c.href} className="inline-flex items-center gap-1 break-all hover:underline">
-                          <Icono size={13} aria-hidden="true" />
-                          {c.texto}
-                        </a>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
+          <div className="doc-pie">
+            <footer className="space-y-2 border-t border-gray-200 pt-4 text-xs text-gray-600 print:break-inside-avoid">
+              {doc.mensaje_pie && <p className="whitespace-pre-line break-words text-sm font-semibold text-gray-800">{doc.mensaje_pie}</p>}
+              {contactos.length > 0 && (
+                <ul className="flex flex-wrap gap-x-4 gap-y-1">
+                  {contactos.map((c) => {
+                    const Icono = ICONOS_CONTACTO[c.tipo];
+                    return (
+                      <li key={c.tipo} className="min-w-0">
+                        {c.externo ? (
+                          <a href={c.href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 break-all hover:underline">
+                            <Icono size={13} aria-hidden="true" />
+                            {c.texto}
+                          </a>
+                        ) : (
+                          <a href={c.href} className="inline-flex items-center gap-1 break-all hover:underline">
+                            <Icono size={13} aria-hidden="true" />
+                            {c.texto}
+                          </a>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {ubicacion && <p className="break-words">{ubicacion}</p>}
+              {legal && <p className="break-words">{legal}</p>}
+              {doc.atendido_por && <p className="break-words">Atendido por: {doc.atendido_por}</p>}
+            </footer>
+            {v === 'acento' && (
+              // T20 r2 (punto 13): el triángulo de abajo en la impresión, en la fila del pie (nunca encima del contacto).
+              <span
+                aria-hidden="true"
+                className="doc-triangulo-final hidden h-10 w-10"
+                style={{ backgroundColor: 'var(--doc-acento)', clipPath: 'polygon(100% 0, 100% 100%, 0 100%)' }}
+              />
             )}
-            {ubicacion && <p className="break-words">{ubicacion}</p>}
-            {legal && <p className="break-words">{legal}</p>}
-            {doc.atendido_por && <p className="break-words">Atendido por: {doc.atendido_por}</p>}
-          </footer>
+          </div>
         </div>
       </article>
 

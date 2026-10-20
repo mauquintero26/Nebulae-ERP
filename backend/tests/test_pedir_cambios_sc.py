@@ -639,6 +639,9 @@ def test_cotizacion_activa_que_no_esta_en_borrador_recibe_un_texto_neutro(app_cl
         assert renglon.description == (f"El cliente pidió cambios en la solicitud {sc.numero}. Revisa esta "
                                        f"cotización ({etiqueta_estado('COT', estado)}).")  # T20 (M1): sin la cita
         assert (renglon.old_estado, renglon.new_estado) == (None, None)
+        # T20 r2 (M13): el comentario sigue llegando, como dato, en esas ramas.
+        assert renglon.extra_data["comentario"] == COMENTARIO
+        assert renglon.extra_data["cambios"][0] == {"etiqueta": "Comentario del cliente", "despues": COMENTARIO}
 
 
 def test_cotizacion_temprana_pendiente_vuelve_a_borrador_en_el_mismo_commit(app_client, db, admin_token, user_admin,
@@ -804,3 +807,34 @@ def test_un_pedido_de_cambios_normal_sigue_pasando_el_tope(app_client, db, admin
     assert resp.status_code == 200, resp.text
     db.refresh(sc)
     assert sc.cambios_cliente_comentario == "😀" * 1000
+
+
+def test_el_tope_de_cuerpo_mira_la_ruta_sin_root_path():
+    """T20 r2 (M1): con un root_path (un prefijo en el proxy), scope['path'] lo trae y el router lo quita. El tope
+    compara contra la misma ruta que el router: /erp/api/v1/confirmar/ver con root_path '/erp' también da 413, y una
+    ruta que solo empieza parecido no."""
+    import asyncio
+    from app.core.limite_cuerpo import LimiteDeCuerpo
+
+    def correr(path, root_path, largo):
+        llamado, enviados = [], []
+
+        async def app(scope, receive, send):
+            llamado.append(scope["path"])
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(mensaje):
+            enviados.append(mensaje)
+
+        scope = {"type": "http", "method": "POST", "path": path, "root_path": root_path,
+                 "headers": [(b"content-length", str(largo).encode())]}
+        asyncio.run(LimiteDeCuerpo(app)(scope, receive, send))
+        return llamado, [m.get("status") for m in enviados if m["type"] == "http.response.start"]
+
+    assert correr("/erp/api/v1/confirmar/ver", "/erp", 70_000) == ([], [413])
+    assert correr("/api/v1/confirmar/ver", "", 70_000) == ([], [413])
+    assert correr("/erp/api/v1/confirmar/ver", "/erp", 100) == (["/erp/api/v1/confirmar/ver"], [])
+    assert correr("/erpx/api/v1/confirmar/ver", "/erp", 70_000) == (["/erpx/api/v1/confirmar/ver"], [])
+    assert correr("/erp/api/v1/ventas/solicitudes", "/erp", 70_000) == (["/erp/api/v1/ventas/solicitudes"], [])

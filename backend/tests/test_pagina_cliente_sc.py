@@ -134,6 +134,14 @@ def _todas_las_claves(valor):
             yield from _todas_las_claves(v)
 
 
+def _cambio_de_cliente_despues_del_enlace(db, tipo, doc_id, raw):
+    """T20 r2 (M9): la guarda real de la página pública (_cambio_el_cliente_despues) desde que se creó el enlace raw."""
+    from app.core.documento_cliente import _cambio_el_cliente_despues
+    creado = db.execute(text("SELECT created_at FROM document_confirmation_tokens WHERE token_hash = :h"),
+                        {"h": _hash(raw)}).scalar()
+    return _cambio_el_cliente_despues(db, tipo, doc_id, creado)
+
+
 def _desde_iso_z(valor):
     assert valor.endswith("Z"), valor
     return datetime.datetime.fromisoformat(valor[:-1])
@@ -226,7 +234,9 @@ def test_reabrir_un_enlace_ya_confirmado_dice_ya_fue_confirmada(app_client, db, 
     assert d["documento"]["tipo"] == "SC"
     db.refresh(sc)
     # confirmada_el = used_at del enlace (resultado CONFIRMADO), en ISO con 'Z' (RP26).
-    assert abs((_desde_iso_z(d["confirmada_el"]) - sc.gate1_confirmed_at).total_seconds()) < 1
+    # T20 r2 (M16): contra el used_at real del enlace, no contra gate1_confirmed_at (otra hora de la misma petición:
+    # con una corrida lenta se separaban más de 1 s).
+    assert abs((_desde_iso_z(d["confirmada_el"]) - _fila(db, raw)["used_at"]).total_seconds()) < 0.001
     assert len(d["siguiente_paso"]) == 3
     assert d["empresa"]["nombre_comercial"] == EMPRESA
     assert _fila(db, raw)["resultado"] == "CONFIRMADO"
@@ -493,8 +503,9 @@ def test_la_guarda_no_depende_del_renglon_auxiliar_de_cambios(app_client, db, ad
 def test_corregir_el_contacto_deja_el_marcador_en_su_renglon(app_client, db, admin_token, user_admin, monkeypatch):
     """r2 (privacidad 2): PATCH /solicitudes/{id}/cliente marca el cambio de cliente en su renglón obligatorio (el de la
     corrección, que no se traga los errores): extra_data.cliente_cambiado. r3: con la regla de la revocación (R18 del
-    Bloque 2): el correo o el teléfono sí; solo la dirección de la misma persona no. Aun así, la guarda del resumen es
-    conservadora: después de corregir la dirección, el enlace confirmado antes ya no muestra el resumen."""
+    Bloque 2): el correo o el teléfono sí; solo la dirección de la misma persona no. T20 r2 (M5): la guarda de la página
+    pública usa la misma regla, así que después de corregir solo la dirección el enlace confirmado sigue mostrando el
+    resumen y «¿Qué sigue?»; después de cambiar el correo, ya no dice nada de la SC ('no_disponible', M2)."""
     from app.models.erp_documents import ActivityLog
     _sin_correo(monkeypatch)
     sc = _sc(db, user_admin)
@@ -511,12 +522,14 @@ def test_corregir_el_contacto_deja_el_marcador_en_su_renglon(app_client, db, adm
     assert resp.status_code == 200, resp.text
     [direccion] = renglones()
     assert "cliente_cambiado" not in direccion.extra_data
-    assert _detalle(_ver(app_client, raw), "confirmada")["documento"] == {"numero": sc.numero}
+    d = _detalle(_ver(app_client, raw), "confirmada")
+    assert [l["descripcion"] for l in d["documento"]["lineas"]] == ["Rodillo"] and len(d["siguiente_paso"]) == 3
 
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}/cliente",
                             json={"customer_email": f"otro-{_sufijo().lower()}@cliente.com"}, headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     assert renglones()[-1].extra_data["cliente_cambiado"] is True
+    assert _detalle(_ver(app_client, raw), "no_disponible")["documento"] is None
 
 
 def _renglones_de_estado(db, sc_id):
@@ -595,10 +608,11 @@ def test_corregir_tildes_del_nombre_no_reinicia_gate1(app_client, db, admin_toke
     db.refresh(sc)
     assert sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at == gate1 and gate1 is not None
     assert dict(_fila(db, raw)) == fila and fila["resultado"] == "CONFIRMADO"
-    _detalle(_ver(app_client, raw), "confirmada")
-    acciones = [r.action for r in db.query(ActivityLog).filter(ActivityLog.entity_type == "SC",
-                                                                 ActivityLog.entity_id == sc.id)]
-    assert "CLIENTE_CAMBIADO" not in acciones, acciones
+    # T20 r2 (M5, M9): la página pública usa la misma regla: el enlace confirmado sigue mostrando el resumen y
+    # «¿Qué sigue?», y la guarda real (_cambio_el_cliente_despues) no ve un cambio de cliente.
+    d = _detalle(_ver(app_client, raw), "confirmada")
+    assert [l["descripcion"] for l in d["documento"]["lineas"]] == ["Rodillo"] and len(d["siguiente_paso"]) == 3
+    assert not _cambio_de_cliente_despues_del_enlace(db, "SC", sc.id, raw)
     assert [r for r in _renglones_de_estado(db, sc.id) if r.new_estado == "ASIGNADA"] == []
 
 
@@ -1003,7 +1017,7 @@ def test_cambio_de_solo_el_nombre_revoca_el_enlace_de_la_cot_temprana(app_client
                                                                       monkeypatch, contador_sql):
     """T20 (M12, punto 2 de lo parqueado): cambiar solo el nombre de la SC también revoca el enlace de una COT temprana
     (cambia_la_identidad -> _anular_enlaces_de_cotizaciones_por_cambio_de_cliente), en el mismo y único commit, con su
-    renglón _ENLACE_COT_ANULADO. Si un refactor vuelve a usar cambia_el_cliente (sin el nombre), esta prueba cae."""
+    renglón _ENLACE_COT_ANULADO. Si un refactor vuelve a comparar solo ficha, correo y teléfono, esta prueba cae."""
     from app.api.v1.erp_ventas import _ENLACE_COT_ANULADO
     from app.core.confirmation_tokens import create_confirmation_token
     from app.models.erp_documents import ActivityLog, SalesQuotation
@@ -1096,12 +1110,26 @@ def test_corregir_tildes_mayusculas_o_espacios_del_nombre_no_revoca_enlaces(app_
     assert resp.json()["data"]["estado"] == "PENDIENTE_CONFIRMACION"
     assert _fila(db, l1)["used_at"] is None and _fila(db, enlace_temprana)["used_at"] is None
     assert _ver(app_client, l1).status_code == 200
-    db.expire_all()
-    acciones = [r.action for r in db.query(ActivityLog).filter(ActivityLog.entity_type == "SC",
-                                                                 ActivityLog.entity_id == sc.id)]
-    assert "CLIENTE_CAMBIADO" not in acciones, acciones
+    # T20 r2 (M9): la sonda mira la guarda real (antes miraba una acción que tampoco aparece con un cambio real).
+    assert not _cambio_de_cliente_despues_del_enlace(db, "SC", sc.id, l1)
     # Un nombre de verdad distinto sí revoca (la regla de r4 sigue).
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"customer_name": NOMBRE_B, "updated_by": "t"},
                             headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     assert _fila(db, l1)["resultado"] == "REVOCADO" and _fila(db, enlace_temprana)["resultado"] == "REVOCADO"
+
+
+def test_corregir_solo_la_direccion_no_esconde_el_resumen(app_client, db, admin_token, user_admin, monkeypatch):
+    """T20 r2 (M5): la dirección no cambia a quién le llega el enlace (R18), ni para Gate 1 ni para la página pública.
+    Corregirla con PATCH /cliente (la pantalla «Corregir datos del cliente») después de que el cliente pidió cambios
+    deja su enlace en 'cambios_enviados' con su comentario, no en 'no_disponible'."""
+    _sin_correo(monkeypatch)
+    sc = _sc(db, user_admin, customer_address="Calle Alfa 1")
+    raw = _enviar(app_client, admin_token, sc)
+    assert _pedir_cambios(app_client, raw, comentario="Cámbienme la dirección de entrega").status_code == 200
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}/cliente", json={"customer_address": "Calle Nueva 5"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    d = _detalle(_ver(app_client, raw), "cambios_enviados")
+    assert d["comentario"] == "Cámbienme la dirección de entrega"
+    assert not _cambio_de_cliente_despues_del_enlace(db, "SC", sc.id, raw)

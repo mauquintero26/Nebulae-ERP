@@ -464,13 +464,15 @@ def detener_manual(db: Session, tipo: str, doc, user_name, ahora: datetime | Non
 
 @dataclass
 class _Reclamo:
-    """Un recordatorio reclamado: lo que se necesita para enviarlo y para reconocer su ciclo después del commit.
-    identidad: a quién le llegaba el enlace al reclamar (_identidad); si cambia antes de enviar, no sale (r1, P4).
+    """Un recordatorio reclamado: lo que se necesita para reconocer su ciclo después del commit y anotarlo. El destino
+    del envío NO va aquí: lo toma _preparar_envio con el documento bloqueado (_Destino, T20 M6; r2, M10: ya no se guarda
+    el documento del ORM, que expira en el primer commit y nadie debe releer sin bloqueo).
+    identidad: a quién le llegaba el enlace al reclamar (_identidad); si cambia antes de enviar, no sale (r1, P4), y si
+    cambia mientras sale, no cuenta como contacto (T20 r2, M6).
     ultimo_contacto_at, ultimo_recordatorio_previo y proximo_previo: la fila ANTES del reclamo (r2), para notar un
     contacto del Chatter que llegó después y para devolver el reclamo (_devolver_reclamo)."""
     fila_id: int
     tipo: str
-    doc: object
     doc_id: int
     numero: str
     n: int
@@ -623,7 +625,7 @@ def _revisar_vencidos(db: Session, ahora: datetime, cfg: dict, conteo: dict) -> 
             conteo["detenidos"] += 1
         elif _reclamar(db, fila.id, fila.recordatorios_enviados, ahora, siguiente):
             # El objeto `fila` conserva los valores de antes del UPDATE de _reclamar (que va por SQL).
-            reclamados.append(_Reclamo(fila_id=fila.id, tipo=tipo, doc=doc, doc_id=doc.id, numero=doc.numero,
+            reclamados.append(_Reclamo(fila_id=fila.id, tipo=tipo, doc_id=doc.id, numero=doc.numero,
                                        n=fila.recordatorios_enviados + 1, canal=fila.canal,
                                        iniciado_at=fila.iniciado_at, identidad=_identidad(doc),
                                        ultimo_contacto_at=fila.ultimo_contacto_at,
@@ -881,6 +883,10 @@ def _enviar_recordatorio(db: Session, reclamo: _Reclamo, cfg: dict, enviar, ahor
     # Si mientras salía el documento dejó de esperar al cliente (confirmó, pidió cambios, se canceló), su enlace nuevo no
     # queda vivo y no cuenta como contacto.
     pendiente = doc is not None and doc.estado == PENDIENTE
+    # T20 r2 (M6): con el documento bloqueado otra vez, ¿sigue siendo el mismo cliente? Si cambió mientras salía
+    # (update_cotizacion o PATCH /cliente, que revocan el enlace nuevo sin sacar el documento de Pendiente), el
+    # recordatorio salió al cliente anterior con un enlace ya anulado: no cuenta como contacto ni programa otro.
+    otro_cliente = pendiente and _identidad(doc) != reclamo.identidad
     if res is None:
         if not pendiente:
             revocar_token(db, raw)
@@ -895,13 +901,19 @@ def _enviar_recordatorio(db: Session, reclamo: _Reclamo, cfg: dict, enviar, ahor
     salio = _salio(wa) or _salio(co)
     if salio:
         por = _POR["WhatsApp"] if _salio(wa) else _POR["correo"]
-        descripcion = f"Recordatorio automático {n} de {cfg['max']} enviado {por} con un enlace nuevo"
+        if otro_cliente:
+            descripcion = (f"Recordatorio automático {n} de {cfg['max']} enviado {por} al cliente anterior, con "
+                           f"un enlace que ya quedó anulado: cambiaron los datos del cliente mientras salía. Envíale "
+                           f"el documento al cliente nuevo")
+        else:
+            descripcion = f"Recordatorio automático {n} de {cfg['max']} enviado {por} con un enlace nuevo"
         resultado = {"canal": "WhatsApp" if _salio(wa) else "correo", "motivo": None, "mensaje": f"{descripcion}."}
         proximo_paso = None
-        if not pendiente:
+        if not pendiente or otro_cliente:
             revocar_token(db, raw)
             if mismo_ciclo:
-                _terminar(fila, DETENIDO, motivo_por_estado(doc), ahora, resultado)
+                _terminar(fila, DETENIDO, MOTIVO_ENLACE_ANULADO if otro_cliente else motivo_por_estado(doc), ahora,
+                          resultado)
         elif mismo_ciclo:
             # El enlace anterior deja de servir solo ahora, cuando el nuevo salió bien.
             revoke_pending_tokens(db, tipo, reclamo.doc_id, commit=False, excepto_hash=hash_token(raw))
@@ -912,7 +924,7 @@ def _enviar_recordatorio(db: Session, reclamo: _Reclamo, cfg: dict, enviar, ahor
                 cuando = fecha_hora_co(fila.proximo_at)
                 proximo_paso = (f"Otro recordatorio el {cuando}" if n < cfg["max"]
                                 else f"Si no responde, se te avisará el {cuando}")
-        if REINICIA_ATRASO and pendiente and (doc.updated_at is None or doc.updated_at < ahora):
+        if REINICIA_ATRASO and pendiente and not otro_cliente and (doc.updated_at is None or doc.updated_at < ahora):
             # R7 / C22: cuenta como contacto, igual que la nota externa del Bloque 2; r2: nunca retrocede updated_at.
             doc.updated_at = ahora
         _registrar(db, tipo, reclamo.doc_id, reclamo.numero, RECORDATORIO_ENVIADO, descripcion,

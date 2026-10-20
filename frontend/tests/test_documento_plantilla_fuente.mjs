@@ -215,4 +215,35 @@ console.log('--- TEST 8 (T15 r1): nada queda colgado, el foco no se pierde y la 
   assert.match(aviso, /<div className="print:hidden">\s*<ContactoEmpresa/, 'el contacto con print:hidden');
 }
 
+console.log('--- TEST 9 (T20 r2, punto 13): la hoja impresa no se sale del recuadro ni deja el pie solo ---');
+{
+  const doc = leer(DOCUMENTO, 'DocumentoComercial.tsx');
+  // El pie no se parte entre hojas: la clase literal y, para un CSS generado desde otra carpeta (el next dev del worktree
+  // no siempre ve las clases nuevas), la misma regla en los estilos de impresión.
+  assert.match(doc, /<footer className="[^"]*\bprint:break-inside-avoid\b[^"]*"/, 'el <footer> con print:break-inside-avoid');
+  const impresion = doc.match(/const ESTILOS_IMPRESION = `([\s\S]*?)`;/)[1];
+  // La barra izquierda era absoluta (inset-y-0): en la hoja 2 terminaba antes que el contenido. En la impresión se oculta
+  // y la hace un fondo del recuadro (una franja de 8 px a todo su alto), que se dibuja en cada hoja sin quitarle ancho.
+  assert.match(doc, /className="doc-barra absolute inset-y-0 left-0 w-2 bg-gray-900"/, 'la barra con su gancho');
+  assert.match(impresion, /\.documento-comercial \.doc-barra[^{]*\{[^}]*display:\s*none/, 'la barra no se imprime');
+  assert.match(impresion, /\.documento-comercial\.doc-acento\s*\{[^}]*background-image:\s*linear-gradient\([^}]*background-size:\s*8px 100%/,
+    'la barra en cada hoja');
+  assert.match(doc, /documento-comercial(?: [^"`]*)?\$\{v === 'acento' \? ' doc-acento' : ''\}/, 'el gancho en la variante acento');
+  // El triángulo de abajo era absoluto: en la impresión tapaba el contacto. Se imprime uno en el flujo, en la fila del
+  // pie (flex), así que nunca queda encima de un texto ni agrega altura.
+  assert.match(doc, /className="doc-triangulo-abajo absolute bottom-0 right-0 h-10 w-10"/);
+  assert.match(impresion, /\.doc-triangulo-abajo[^{]*\{[^}]*display:\s*none/, 'el absoluto no se imprime');
+  assert.match(doc, /<div className="doc-pie">\s*<footer [\s\S]*?<\/footer>\s*\{v === 'acento' && \([\s\S]*?className="doc-triangulo-final hidden h-10 w-10"[\s\S]*?\)\}\s*<\/div>/,
+    'el pie y el triángulo del flujo en la misma fila; el triángulo oculto en pantalla');
+  assert.match(impresion, /\.documento-comercial \.doc-pie\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*flex-end/);
+  assert.match(impresion, /\.documento-comercial \.doc-triangulo-final\s*\{[^}]*display:\s*block;[^}]*margin-left:\s*auto/);
+  assert.match(impresion, /\.documento-comercial footer, \.documento-comercial \.doc-pie\s*\{\s*break-inside:\s*avoid;/);
+  // Sin alturas fijas en la impresión, y el espacio vertical se compacta (la COT DEMO de 2 productos cabe en una hoja).
+  assert.doesNotMatch(impresion, /(^|[\s;{])(min-|max-)?height\s*:/, 'nada de alturas en print');
+  assert.match(impresion, /\.documento-comercial \.doc-cuerpo\s*\{[^}]*padding-top:\s*1rem;[^}]*padding-bottom:\s*1rem/);
+  assert.match(impresion, /\.documento-comercial \.doc-cuerpo > :not\(:last-child\)[^{]*\{[^}]*margin-block-end:\s*1rem/);
+  assert.match(doc, /<header className="doc-encabezado /, 'el encabezado de la variante acento con su gancho');
+  assert.match(doc, /<div className="doc-cuerpo /, 'el cuerpo con su gancho');
+}
+
 console.log('✓ Todas las pruebas de las fuentes de la plantilla pasaron.');

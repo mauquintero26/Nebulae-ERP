@@ -608,11 +608,28 @@ def _registrar_cambios(db: Session, entidad: str, doc, antes: dict, body: dict, 
         return None
 
 
+# B3 T20 r2 (M5): los datos de identidad de un renglon de cambios (la ficha, el correo y el telefono; el nombre aparte).
+_CAMPOS_DE_IDENTIDAD = frozenset({"customer_id", "customer_email", "customer_phone"})
+
+
+def _es_cambio_de_identidad(cambio) -> bool:
+    """B3 T20 r2 (M5): un renglon de extra_data.cambios ({campo, antes, despues}) que cambia a quien le llega el enlace,
+    con la misma regla de _identidad_del_cliente: la ficha, el correo o el telefono, y el nombre solo si no es
+    _mismo_nombre (tildes, mayusculas y espacios no cuentan). La direccion no cuenta (R18). La usan
+    _registra_el_cliente y documento_cliente._cambio_el_cliente_despues (la pagina publica)."""
+    if not isinstance(cambio, dict):
+        return False
+    campo = cambio.get("campo")
+    if campo in _CAMPOS_DE_IDENTIDAD:
+        return True
+    return campo == "customer_name" and not _mismo_nombre(cambio.get("antes"), cambio.get("despues"))
+
+
 def _registra_el_cliente(renglon) -> bool:
-    """El renglon de cambios trae algun dato del cliente (cambios_documento.CAMPOS_CLIENTE): el marcador de cambio de
-    cliente que lee la pagina publica (documento_cliente._cambio_el_cliente_despues)."""
+    """El renglon de cambios registra un cambio de IDENTIDAD del cliente (_es_cambio_de_identidad, T20 r2): si no, el
+    cambio de identidad deja su marcador obligatorio (lo lee documento_cliente._cambio_el_cliente_despues)."""
     cambios = (renglon.extra_data or {}).get("cambios") if renglon is not None else None
-    return any(isinstance(c, dict) and c.get("campo") in cambios_documento.CAMPOS_CLIENTE for c in (cambios or []))
+    return isinstance(cambios, list) and any(_es_cambio_de_identidad(c) for c in cambios)
 
 def _lista_compras_items_de(db: Session, pven_id: int) -> list:
     """Items de la Lista de Compras (JSON en web_builder_config) que pertenecen

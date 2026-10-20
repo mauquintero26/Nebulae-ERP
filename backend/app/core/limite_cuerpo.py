@@ -43,6 +43,17 @@ def _content_length(scope) -> int | None:
     return None
 
 
+def _ruta_del_router(scope) -> str:
+    """T20 r2 (M1): la ruta que compara el router: scope['path'] sin el root_path (con uvicorn y un root_path, path ya
+    lo trae), como starlette._utils.get_route_path. Sin esto, publicar el backend detrás de un prefijo saltaba el
+    tope."""
+    ruta = str(scope.get("path") or "")
+    raiz = str(scope.get("root_path") or "")
+    if raiz and ruta.startswith(raiz) and (len(ruta) == len(raiz) or ruta[len(raiz)] == "/"):
+        return ruta[len(raiz):]
+    return ruta
+
+
 async def _responder_413(scope, receive, send) -> None:
     await JSONResponse({"detail": MENSAJE_413}, status_code=413)(scope, receive, send)
 
@@ -56,7 +67,7 @@ class LimiteDeCuerpo:
         self.prefijos = tuple(prefijos)
 
     async def __call__(self, scope, receive, send):
-        if scope.get("type") != "http" or not str(scope.get("path") or "").startswith(self.prefijos):
+        if scope.get("type") != "http" or not _ruta_del_router(scope).startswith(self.prefijos):
             await self.app(scope, receive, send)
             return
         declarado = _content_length(scope)

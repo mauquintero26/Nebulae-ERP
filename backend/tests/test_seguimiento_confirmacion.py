@@ -1307,7 +1307,8 @@ def test_error_antes_de_enviar_no_dice_revisa_si_le_llego(db, user_admin, monkey
 
 # ─── T20, Paso 1 (revisión de seguridad) ────────────────────────────────────────────────────────────────────
 
-def test_el_destino_del_recordatorio_es_la_foto_tomada_con_el_bloqueo(db, user_admin, monkeypatch):
+def test_el_destino_del_recordatorio_es_la_foto_tomada_con_el_bloqueo(app_client, db, admin_token, user_admin,
+                                                                       monkeypatch):
     """T20 (M6): _preparar_envio revisa la identidad del cliente con el documento bloqueado y, antes del commit que
     suelta el bloqueo, guarda una foto del destino (número, nombre, correo, teléfono y validez). El envío usa esa foto:
     si justo después del commit otra sesión cambia el cliente, el mensaje sale al mismo destino que se revisó, nunca a
@@ -1343,3 +1344,53 @@ def test_el_destino_del_recordatorio_es_la_foto_tomada_con_el_bloqueo(db, user_a
     assert correo["to"] == CORREO
     db.expire_all()
     assert db.get(CustomerRequest, sc.id).customer_email == "nuevo@test.com"  # el cambio sí quedó
+    # T20 r2 (M12): la otra mitad, lo que hace segura la opción «sale»: un cambio de cliente por la API revoca el enlace
+    # que llevaba el recordatorio, y su página ya no muestra los datos de nadie.
+    from app.core.confirmation_tokens import hash_token
+    from app.models.confirmation import DocumentConfirmationToken
+    raw = wa["enlace"].rstrip("/").rsplit("/", 1)[-1]
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}/cliente", json={"customer_email": "otro@test.com"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    enlace = db.query(DocumentConfirmationToken).filter(DocumentConfirmationToken.token_hash == hash_token(raw)).one()
+    assert enlace.resultado == "REVOCADO"
+    resp = app_client.post("/api/v1/confirmar/ver", json={"token": raw})
+    assert resp.status_code == 400 and resp.json()["detail"]["estado_enlace"] == "no_disponible", resp.text
+    assert "Cliente Nuevo" not in resp.text and "nuevo@test.com" not in resp.text
+
+
+def test_si_cambia_el_cliente_mientras_sale_no_cuenta_como_contacto(app_client, db, admin_token, monkeypatch):
+    """T20 r2 (M6): el paso 3 vuelve a comparar la identidad con el documento bloqueado. Si el cliente de la COT cambió
+    mientras salía el recordatorio (update_cotizacion revocó el enlace nuevo y la COT sigue en Pendiente), el
+    recordatorio no cuenta como contacto ni programa otro: la fila se cierra con ENLACE_ANULADO y el renglón dice que
+    salió al cliente anterior con un enlace que ya quedó anulado."""
+    from app.core.fechas import hoy_colombia
+    seg_mod = _sc_mod()
+    _dobles(monkeypatch)
+    _config(db)
+    cot = _cot(db, estado="PENDIENTE_CONFIRMACION", valida_hasta=hoy_colombia(T) + datetime.timedelta(days=3))
+    fila = _fila(db, "COT", cot, canal="Email")
+    contacto_antes = fila.ultimo_contacto_at
+    enviar = EnviarFalso()
+    real = seg_mod._preparar_envio
+
+    def preparar_y_cambiar_el_cliente(db_, reclamo, ahora):
+        preparado = real(db_, reclamo, ahora)
+        resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}",
+                                json={"customer_name": "Cliente Nuevo", "customer_email": "nuevo@test.com",
+                                      "updated_by": "t"}, headers=auth(admin_token))
+        assert resp.status_code == 200, resp.text
+        return preparado
+
+    monkeypatch.setattr(seg_mod, "_preparar_envio", preparar_y_cambiar_el_cliente)
+    res = seg_mod.correr_seguimientos(db, ahora=T, enviar=enviar)
+    assert res["enviados"] == 1, res  # salió (al cliente anterior)
+    assert enviar.llamadas[0]["doc_id"] == cot.id
+    fila = _seg(db, "COT", cot.id)
+    assert (fila.estado, fila.motivo_fin, fila.proximo_at) == ("DETENIDO", "ENLACE_ANULADO", None)
+    assert fila.ultimo_contacto_at == contacto_antes  # no cuenta como contacto
+    (renglon,) = _renglones(db, "COT", cot.id, "RECORDATORIO_ENVIADO")
+    assert "cliente anterior" in renglon.description and "anulado" in renglon.description, renglon.description
+    assert "Próximo paso" not in [c["etiqueta"] for c in renglon.extra_data["cambios"]]
+    assert _vivos(db, "COT", cot.id) == []  # el enlace nuevo quedó revocado por el cambio de cliente

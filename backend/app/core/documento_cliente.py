@@ -321,7 +321,8 @@ def nombre_asesor_publico(db: Session, valor):
     entrar al ERP (auth.py acepta el correo o el username), así que nunca salen en una página pública, un correo ni un
     PDF. None si no es texto, si queda vacío, si lleva '@' o si coincide (sin mayúsculas ni espacios en los bordes) con
     el email o el username de algún User; si no, el texto sin los espacios de los bordes. La ÚNICA regla: la usan
-    documento_sc, documento_cot, documento_pven, siguiente_paso_sc y _asesor_del_documento."""
+    documento_sc, documento_cot, documento_pven, siguiente_paso_sc y _asesor_del_documento. T20 r2 (M14): la comparación
+    con User.email es defensiva (todo correo lleva '@', que ya se descartó): cubre un email viejo guardado sin '@'."""
     texto = _texto(valor)
     if texto is None or "@" in texto:
         return None
@@ -598,56 +599,37 @@ def _ultima_confirmacion_en_actividad(db: Session, tipo: str, doc_id: int):
     return fila[0] if fila else None
 
 
-def _cambio_el_cliente_despues(db: Session, sc_id: int, desde) -> bool:
-    """r1 (P4): la SC cambió de cliente (su ficha, nombre, dirección, correo o teléfono) después de `desde` (cuando se
-    creó el enlace). Lo dice su Actividad, con cualquiera de estas marcas (el enlace no guarda a qué cliente se envió):
-    - el renglón de cambios con esos campos en extra_data.cambios (cambios_documento.CAMPOS_CLIENTE). Es auxiliar:
-      _registrar_cambios se traga sus errores, así que solo no basta (r2);
-    - el marcador OBLIGATORIO (r2): un renglón cambios_documento.ACCION_CLIENTE_CAMBIADO (update_solicitud, cuando el
-      renglón de cambios no registró al cliente) o extra_data[MARCA_CLIENTE_CAMBIADO] en el renglón obligatorio de
-      PATCH /solicitudes/{id}/cliente. Los dos van en el commit del cambio: si no se pueden escribir, el cambio falla.
-    r3: el marcador sigue la regla de la revocación (ficha, correo, teléfono o nombre; la dirección no, por R18 del
-    Bloque 2), pero esta guarda sigue siendo conservadora: también cuenta un cambio de dirección del renglón de cambios
-    (CAMPOS_CLIENTE). Solo esconde el resumen; no anula ningún enlace.
-    """
-    from app.core.cambios_documento import ACCION_CLIENTE_CAMBIADO, CAMPOS_CLIENTE, MARCA_CLIENTE_CAMBIADO
+def _cambio_el_cliente_despues(db: Session, entity_type: str, doc_id: int, desde) -> bool:
+    """El documento (SC o COT, `entity_type`) cambió de cliente después de `desde` (cuando se creó el enlace). El enlace
+    no guarda a qué cliente se envió: lo dice la Actividad del documento, con cualquiera de estas marcas posteriores:
+    - un renglón de cambios con un dato de IDENTIDAD en extra_data.cambios (erp_ventas._es_cambio_de_identidad, T20 r2,
+      M5): la ficha, el correo o el teléfono, y el nombre solo si es otro de verdad (_mismo_nombre: tildes, mayúsculas y
+      espacios no cuentan). La dirección no cuenta (R18): es la misma regla de _identidad_del_cliente, la de Gate 1 y la
+      revocación de enlaces. Este renglón es auxiliar en la SC (_registrar_cambios se traga sus errores) y, en la COT,
+      update_cotizacion lo escribe en otro commit, salvo al re-cotizar; PATCH /cliente lo escribe en su renglón
+      obligatorio;
+    - el marcador OBLIGATORIO de la SC: un renglón cambios_documento.ACCION_CLIENTE_CAMBIADO (update_solicitud, cuando
+      el renglón de cambios no registró la identidad) o extra_data[MARCA_CLIENTE_CAMBIADO] en el renglón obligatorio de
+      PATCH /solicitudes/{id}/cliente. Los dos van en el commit del cambio. La COT no tiene marcador obligatorio.
+    T20 r2 (M4, M8): la misma señal para la SC y la COT; ya no depende del texto de un aviso (_ENLACE_COT_ANULADO) ni de
+    que hubiera un enlace vivo que revocar.
+    La usan _confirmada (regla d: esconde el resumen y ¿Qué sigue?) y, desde T20 (M2), estado_enlace, que con ella
+    responde 'no_disponible' antes de las reglas f, g y h."""
+    from app.api.v1.erp_ventas import _es_cambio_de_identidad
+    from app.core.cambios_documento import ACCION_CLIENTE_CAMBIADO, MARCA_CLIENTE_CAMBIADO
     from app.models.erp_documents import ActivityLog
     filas = (db.query(ActivityLog.action, ActivityLog.extra_data)
-             .filter(ActivityLog.entity_type == "SC", ActivityLog.entity_id == sc_id, ActivityLog.created_at > desde)
+             .filter(ActivityLog.entity_type == entity_type, ActivityLog.entity_id == doc_id,
+                     ActivityLog.created_at > desde)
              .all())
     for accion, extra in filas:
         extra = extra if isinstance(extra, dict) else {}
         if accion == ACCION_CLIENTE_CAMBIADO or extra.get(MARCA_CLIENTE_CAMBIADO) is True:
             return True
-        if any(isinstance(c, dict) and c.get("campo") in CAMPOS_CLIENTE for c in (extra.get("cambios") or [])):
+        cambios = extra.get("cambios")
+        if isinstance(cambios, list) and any(_es_cambio_de_identidad(c) for c in cambios):
             return True
     return False
-
-
-def _cot_cambio_de_cliente_despues(db: Session, cot_id: int, desde) -> bool:
-    """B3 T20 (M2): la COT cambió de cliente después de `desde` (cuando se creó el enlace). La señal es su marcador, el
-    renglón con erp_ventas._ENLACE_COT_ANULADO en extra_data.cambios: lo escriben, en el commit del cambio, los tres
-    caminos que le cambian el cliente (update_cotizacion, update_solicitud en sus COT tempranas y PATCH
-    /solicitudes/{id}/cliente) cuando revocan un enlace vivo. No se agregan columnas. Import dentro: erp_ventas importa
-    este módulo."""
-    from app.api.v1.erp_ventas import _ENLACE_COT_ANULADO
-    from app.models.erp_documents import ActivityLog
-    filas = (db.query(ActivityLog.extra_data)
-             .filter(ActivityLog.entity_type == "COT", ActivityLog.entity_id == cot_id, ActivityLog.created_at > desde)
-             .all())
-    for (extra,) in filas:
-        cambios = extra.get("cambios") if isinstance(extra, dict) else None
-        if isinstance(cambios, list) and _ENLACE_COT_ANULADO in cambios:
-            return True
-    return False
-
-
-def _cambio_el_cliente_despues_del_enlace(db: Session, tipo: str, doc_id: int, desde) -> bool:
-    """B3 T20 (M2): el documento del enlace cambió de cliente después de crearse ese enlace. SC:
-    _cambio_el_cliente_despues; COT: _cot_cambio_de_cliente_despues."""
-    if tipo == "SC":
-        return _cambio_el_cliente_despues(db, doc_id, desde)
-    return _cot_cambio_de_cliente_despues(db, doc_id, desde)
 
 
 def _ultimo_dia_del_enlace(expires_at) -> str:
@@ -691,7 +673,7 @@ def _confirmada(db: Session, info: dict, doc, tipo: str, nombre: str) -> dict:
         reciente = (confirmada_el is not None
                     and ahora_utc() - confirmada_el <= timedelta(days=DIAS_RESUMEN_CONFIRMADO))
         confirmacion_vigente = doc.gate1_confirmed_at is not None if confirmo_este else True
-        otro_cliente = _cambio_el_cliente_despues(db, doc.id, info["created_at"])
+        otro_cliente = _cambio_el_cliente_despues(db, "SC", doc.id, info["created_at"])
         if reciente and confirmacion_vigente and not otro_cliente:
             documento = documento_sc(db, doc)
         if not otro_cliente:
@@ -707,9 +689,11 @@ def estado_enlace(db: Session, info, doc, tipo) -> tuple:
       c) enlace vigente y documento en PENDIENTE_CONFIRMACION -> 'pendiente' (la única que responde 200);
       d) documento CONFIRMADA (la SC también en un estado heredado de U15) -> 'confirmada' (ver _confirmada);
       e) vencido sin usar -> 'vencido', con documento = {numero};
-      T20 (M2): si el documento cambió de cliente después de crearse ESTE enlace (_cambio_el_cliente_despues_del_enlace)
+      T20 (M2): si la Actividad del documento registra un cambio de cliente posterior a ESTE enlace
+         (_cambio_el_cliente_despues: un renglón de cambios con un dato de identidad o el marcador obligatorio de la SC)
          -> 'no_disponible', antes de f, g y h: al cliente anterior no se le dice que hay un enlace más reciente, que
-         ya envió cambios ni que el documento se actualizó (todo eso es del cliente nuevo);
+         ya envió cambios ni que el documento se actualizó (todo eso es del cliente nuevo). Si ese renglón auxiliar no
+         se escribió (en la COT no hay marcador obligatorio), no lo detecta y sigue la regla f;
       f) hay un enlace más reciente vigente -> 'reemplazado';
       g) resultado CAMBIOS (lo escribe T6) -> 'cambios_enviados', con el comentario mientras cambios_cliente_at siga y
          solo si ESTE enlace dejó la marca (T6 r1: _hay_enlace_posterior; un enlace viejo nunca ve el comentario que
@@ -733,7 +717,7 @@ def estado_enlace(db: Session, info, doc, tipo) -> tuple:
     if info["vencido"]:
         mensaje = MENSAJES_ENLACE["vencido"].format(fecha=_ultimo_dia_del_enlace(info["expires_at"]))
         return "vencido", dict(extra, mensaje=mensaje, documento={"numero": doc.numero})
-    if _cambio_el_cliente_despues_del_enlace(db, tipo, doc.id, info["created_at"]):
+    if _cambio_el_cliente_despues(db, tipo, doc.id, info["created_at"]):
         return "no_disponible", dict(extra, mensaje=MENSAJES_ENLACE["no_disponible"])
     if hay_enlace_mas_reciente_vigente(db, tipo, doc.id, info["created_at"]):
         return "reemplazado", dict(extra, mensaje=MENSAJES_ENLACE["reemplazado"].format(documento=nombre))

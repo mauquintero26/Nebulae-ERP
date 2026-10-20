@@ -1338,8 +1338,12 @@ def test_verificar_fallido_no_guarda_el_enlace_del_error_de_whatsapp(app_client,
     en_ruta = "Zx9-" * 10 + "abc"  # 43 caracteres de token_urlsafe(32)
     suelto = "-" + "Qw_8" * 10 + "zz"  # 43, empieza por '-' (un límite de palabra \b no lo vería)
     assert len(en_ruta) == len(suelto) == 43
+    # T20 r2 (M0): también el enlace codificado en porcentaje (quote(url, safe='') y quote_plus).
+    import urllib.parse
+    codificado = "Kq_7" * 10 + "xyz"
     externo = (f"(#131008) Parameter value is not valid: https://erp.invalid/confirmar/{en_ruta}, "
-               f"https://erp.invalid/pedido/{en_ruta[:25]} y {suelto}.")
+               f"https://erp.invalid/pedido/{en_ruta[:25]} y {suelto}; "
+               f"{urllib.parse.quote(f'https://erp.invalid/confirmar/{codificado}', safe='')}.")
     _preparar(monkeypatch, db, _mensajes(
         {"id": 901, "status": "failed", "content_attributes": {"external_error": externo}}))
     sc = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
@@ -1352,9 +1356,13 @@ def test_verificar_fallido_no_guarda_el_enlace_del_error_de_whatsapp(app_client,
     [renglon] = _renglones(db, "SC", sc.id, "MENSAJE_CLIENTE")
     for texto in (resp.text, fila.detalle or "", json.dumps(renglon.extra_data, ensure_ascii=False),
                   renglon.description):
-        for token in (en_ruta, suelto, en_ruta[:25]):
+        for token in (en_ruta, suelto, en_ruta[:25], codificado):
             assert token not in texto, (token, texto)
     assert ENLACE_OCULTO in fila.detalle and "131008" in fila.detalle, fila.detalle
+    # T20 r2 (M0): el esquema y el host se van con el enlace (no queda «https://host[enlace…]»).
+    assert "erp.invalid" not in fila.detalle, fila.detalle
+    codificado_plus = urllib.parse.quote_plus(f"https://erp.invalid/pedido/{codificado}")
+    assert chatwoot.limpiar_detalle(codificado_plus) == ENLACE_OCULTO
     # Lo demás no se toca: un texto con 42 o 44 caracteres seguidos no es un token suelto.
     assert chatwoot.limpiar_detalle("a" * 42) == "a" * 42 and chatwoot.limpiar_detalle("b" * 44) == "b" * 44
     assert chatwoot.ENLACE_OCULTO is ENLACE_OCULTO == "[enlace de confirmación]"  # una sola definición

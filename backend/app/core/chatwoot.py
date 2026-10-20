@@ -118,8 +118,12 @@ def configurado() -> bool:
 # B3 T20 (M7): lo que reemplaza al enlace del cliente (y a su token) en todo lo que se guarda o se muestra. Unica
 # definicion: envio_whatsapp la reexporta.
 ENLACE_OCULTO = "[enlace de confirmación]"
-# La ruta de un enlace publico (confirmation_tokens.RUTA_PUBLICA) con su token (o un pedazo de 20 o mas, recortado).
-_ENLACE_EN_TEXTO = re.compile(r"/(?:confirmar|pedido)/[A-Za-z0-9_-]{20,}")
+# La ruta de un enlace publico (confirmation_tokens.RUTA_PUBLICA) con su token (o un pedazo de 20 o mas, recortado). T20
+# r2 (M0): tambien codificada en porcentaje ('%2F' por '/', como quote(url, safe='') o quote_plus), y con el esquema y
+# el host delante si estan, para que no quede «https://host[enlace…]». El host no cruza '/', '%' ni espacios: el patron
+# no vuelve atras sobre el texto.
+_ENLACE_EN_TEXTO = re.compile(
+    r"(?:https?(?::|%3a)(?://|%2f%2f)[^\s/%]*)?(?:/|%2f)(?:confirmar|pedido)(?:/|%2f)[A-Za-z0-9_-]{20,}", re.IGNORECASE)
 # Un token suelto como los de secrets.token_urlsafe(32): 43 caracteres de [A-Za-z0-9_-] sin otro de esos pegado a los
 # lados. Los limites van con lookarounds sobre ese alfabeto y no con \b: un token que empieza o termina en '-' no
 # tendria limite de palabra junto a un espacio.
@@ -128,8 +132,9 @@ _TOKEN_SUELTO = re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-]
 
 def ocultar_tokens(texto: str) -> str:
     """B3 T20 (M7): el texto sin enlaces publicos ni tokens sueltos, SIN necesidad de conocer el enlace (el
-    external_error de Meta puede repetir el parametro {{4}}, el enlace): la ruta /confirmar/<token> o /pedido/<token>
-    y cualquier token suelto de 43 caracteres pasan a ENLACE_OCULTO."""
+    external_error de Meta puede repetir el parametro {{4}}, el enlace): el enlace /confirmar/<token> o /pedido/<token>
+    (r2: tambien codificado en porcentaje, y con su esquema y su host) y cualquier token suelto de 43 caracteres pasan a
+    ENLACE_OCULTO."""
     return _TOKEN_SUELTO.sub(ENLACE_OCULTO, _ENLACE_EN_TEXTO.sub(ENLACE_OCULTO, texto))
 
 

@@ -370,3 +370,76 @@ def test_corregir_la_tilde_del_nombre_no_revoca_el_enlace_de_la_cot(app_client, 
                             headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     assert _tokens(db, cot.id)[-1].resultado == "REVOCADO" and len(_renglones_de_enlace_anulado(db, cot.id)) == 1
+
+
+def _detalle_l1(app_client, raw):
+    resp = _ver(app_client, raw)
+    assert resp.status_code == 400, resp.text
+    return resp
+
+
+def test_cambio_de_cliente_sin_enlace_vivo_tampoco_dice_reemplazado(app_client, db, admin_token, monkeypatch):
+    """T20 r2 (M4, M8): la señal de M2 en la COT ya no depende de que hubiera un enlace VIVO que revocar (el renglón
+    _ENLACE_COT_ANULADO solo se escribía entonces). Es la misma de la SC: un renglón de cambios con un dato de identidad
+    posterior al enlace. Ana pide cambios con L1 (L1 queda usado y la COT vuelve a Borrador); el asesor cambia el
+    cliente, por update_cotizacion y, en otra COT, por PATCH /cliente; la reenvía. L1 da 'no_disponible', sin «más
+    reciente» ni datos de Beto."""
+    _correo_falso(monkeypatch)
+    _poner_dias(db, None)
+
+    def pedir_cambios_y_reenviar(cambiar_el_cliente):
+        sc = _sc(db)
+        cot = _cot(db, sc)
+        primero = _enviar(app_client, admin_token, cot)
+        assert primero.status_code == 200, primero.text
+        l1 = _raw(primero)
+        assert _pedir_cambios(app_client, l1).status_code == 200
+        cambiar_el_cliente(sc, cot)
+        assert _renglones_de_enlace_anulado(db, cot.id) == []  # sin enlace vivo no hay aviso: no es la señal
+        segundo = _enviar(app_client, admin_token, cot)
+        assert segundo.status_code == 200, segundo.text
+        resp = _detalle_l1(app_client, l1)
+        d = resp.json()["detail"]
+        assert d["estado_enlace"] == "no_disponible", d
+        assert "más reciente" not in d["mensaje"] and d["comentario"] is None
+        assert BETO not in resp.text and "beto@cliente.com" not in resp.text
+
+    def por_update_cotizacion(sc, cot):
+        resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}",
+                                json={"customer_name": BETO, "customer_email": "beto@cliente.com", "updated_by": "t"},
+                                headers=auth(admin_token))
+        assert resp.status_code == 200, resp.text
+
+    def por_patch_cliente(sc, cot):
+        resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}/cliente",
+                                json={"customer_email": "beto@cliente.com"}, headers=auth(admin_token))
+        assert resp.status_code == 200, resp.text
+        assert cot.numero in resp.json()["documentos_actualizados"], resp.json()
+
+    pedir_cambios_y_reenviar(por_update_cotizacion)
+    pedir_cambios_y_reenviar(por_patch_cliente)
+
+
+def test_recotizar_y_cambiar_el_cliente_en_el_mismo_patch_tampoco_dice_reemplazado(app_client, db, admin_token,
+                                                                                   monkeypatch):
+    """T20 r2 (M4 caso b): un mismo PATCH re-cotiza con anular_confirmacion y cambia el cliente. _salir_de_gate2 revoca
+    L1 antes del bloque del cambio de cliente (que ya no cuenta vigentes ni deja aviso). Después de reenviar, L1 da
+    'no_disponible'."""
+    _correo_falso(monkeypatch)
+    _poner_dias(db, None)
+    cot = _cot(db, _sc(db))
+    primero = _enviar(app_client, admin_token, cot)
+    assert primero.status_code == 200, primero.text
+    l1 = _raw(primero)
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={
+        "productos": [{**LINEA, "unit_price_cop": 2000, "total_cop": 2000}], "subtotal_cop": 2000, "total_cop": 2000,
+        "recotizacion": True, "anular_confirmacion": True, "motivo_recotizacion": "Cambió el precio del proveedor",
+        "customer_name": BETO, "customer_email": "beto@cliente.com", "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert _tokens(db, cot.id)[0].resultado == "REVOCADO" and _renglones_de_enlace_anulado(db, cot.id) == []
+    segundo = _enviar(app_client, admin_token, cot)
+    assert segundo.status_code == 200, segundo.text
+    resp = _detalle_l1(app_client, l1)
+    d = resp.json()["detail"]
+    assert d["estado_enlace"] == "no_disponible", d
+    assert "más reciente" not in d["mensaje"] and BETO not in resp.text

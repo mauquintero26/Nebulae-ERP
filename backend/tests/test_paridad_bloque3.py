@@ -242,8 +242,17 @@ def test_paridad_impuestos_del_documento():
     from app.core.documento_cliente import _totales_del_documento
     from app.core.iva import desglose_documento
     from app.core.pdf_documento import _filas_totales, _pesos
+    from app.core.iva import calcular_totales_cotizacion
+    # T20 r2 (M15): tambien las tarifas no gravadas, 'Exento sobre $X' y 'Excluido sobre $X' (un caso de _CALCULOS y el
+    # exento de _desgloses).
+    no_gravadas = calcular_totales_cotizacion(
+        [_linea("A", 1, 100001, "19"), _linea("B", 1, 100001, "5"), _linea("C", 1, 100001, "EXENTO"),
+         _linea("D", 1, 100001, "EXCLUIDO")], 7.5)
     docs = _desgloses()[:5] + [{"productos": _ejemplo((None, None, None)), "subtotal_cop": 1840614, "tax_cop": 349717,
-                                "total_cop": 2190331}]  # el ultimo: IVA guardado sin tarifas (una sola fila 'IVA')
+                                "total_cop": 2190331},  # IVA guardado sin tarifas (una sola fila 'IVA')
+                               {"productos": _json(no_gravadas["lineas"]), "subtotal_cop": no_gravadas["subtotal_cop"],
+                                "tax_cop": no_gravadas["iva_cop"], "total_cop": no_gravadas["total_cop"]},
+                               _desgloses()[-1]]
     totales = []
     for d in docs:
         cabecera = SimpleNamespace(numero="COT-1", descuento_pct=10, subtotal_cop=d["subtotal_cop"],
@@ -270,7 +279,10 @@ def test_paridad_impuestos_del_documento():
         de_la_pagina = [(f["etiqueta"], _pesos(f["valor"])) for f in fs if f["clave"].startswith("impuesto-")]
         assert del_pdf == de_la_pagina, ascii((del_pdf, de_la_pagina))
         assert all(" sobre $" in etiqueta for etiqueta, _ in del_pdf), ascii(del_pdf)
-    assert [len(t["impuestos"]) for t in totales] == [2, 2, 2, 0, 1, 1]
+    assert [len(t["impuestos"]) for t in totales] == [2, 2, 2, 0, 1, 1, 4, 1]
+    etiquetas = [e for t in totales for e, _, _ in _filas_totales({"totales": t})]
+    for no_gravada in ("Exento sobre $92.501", "Excluido sobre $92.501", "Exento sobre $100"):
+        assert no_gravada in etiquetas, ascii(etiquetas)
 
 
 # ─── Telefonos (decision 9) ────────────────────────────────────────────────────────────────────────────────────
