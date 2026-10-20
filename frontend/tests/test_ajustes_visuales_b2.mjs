@@ -101,7 +101,14 @@ console.log('--- V1 TEST 2: el aviso vive en el menú lateral, ya no flota sobre
   assert.ok(!/\bfixed\b/.test(pastilla) && !/\bdark:/.test(pastilla), 'sin fixed ni dark:');
   // r1 (sin duplicados): la forma de las pastillas vive en UN componente; ni AlertasBadge ni las de cambios la copian.
   const forma = sinComentarios(leer('components/PastillaMenuLateral.tsx'));
-  assert.ok(/<button\b/.test(forma) && forma.includes('absolute -top-1.5 -right-1.5') && forma.includes('truncate'));
+  assert.ok(/<button\b/.test(forma) && forma.includes('absolute -top-1.5 -right-1.5'));
+  // T18 r2: la forma tampoco flota (las guardias de V1 sobre el botón, que ahora vive aquí) y el texto no se corta con
+  // «…»: hace salto de línea dentro del menú («2 solicitudes con cambios» no cabía en 256 px).
+  assert.ok(!/\bfixed\b/.test(forma) && !/\btop-4\b|\bright-20\b/.test(forma), 'la forma no flota');
+  assert.ok(!/\btruncate\b/.test(forma) && forma.includes('min-w-0 text-left leading-snug'), 'el texto hace salto de línea');
+  assert.ok(pastilla.includes('colapsado={colapsado}'), 'las ámbar reciben el menú contraído');
+  // T18 r2: con el menú contraído, cada pastilla de cambios se distingue por su ícono (solicitudes y cotizaciones).
+  assert.ok(/MessageSquareWarning/.test(pastilla) && /FileWarning/.test(pastilla), 'un ícono por tipo de documento');
   for (const [nombre, fuente] of [['AlertasBadge', badge], ['PastillaCambiosCliente', pastilla]]) {
     assert.ok(/<PastillaMenuLateral\b/.test(fuente) && !/<button\b/.test(fuente), `${nombre} usa PastillaMenuLateral`);
   }

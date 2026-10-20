@@ -1,6 +1,6 @@
 'use client';
 import { useRouter } from 'next/navigation';
-import { MessageSquareWarning } from 'lucide-react';
+import { FileWarning, MessageSquareWarning } from 'lucide-react';
 import type { pastillasCambiosCliente } from '@/lib/cambios-cliente';
 import { PastillaMenuLateral } from './PastillaMenuLateral';
 
@@ -10,7 +10,8 @@ import { PastillaMenuLateral } from './PastillaMenuLateral';
  * pastillasCambiosCliente (lib/cambios-cliente.js): una a la lista de solicitudes y otra a la de cotizaciones, cada una
  * con su número, porque en cada lista está su marca. Son una cuenta aparte de los atrasados y se muestran aunque no
  * haya atrasados. La forma es la de PastillaMenuLateral (la misma de la roja), con el ámbar oscuro en el ícono y en la
- * insignia del menú contraído (contraste, r1).
+ * insignia del menú contraído (contraste, r1). r2: un ícono por tipo (solicitudes y cotizaciones), para distinguirlas
+ * con el menú contraído, donde solo se ven el ícono y el número.
  */
 export function PastillasCambiosCliente({ pastillas, colapsado = false }: {
   pastillas: ReturnType<typeof pastillasCambiosCliente>;
@@ -21,7 +22,7 @@ export function PastillasCambiosCliente({ pastillas, colapsado = false }: {
     <>
       {pastillas.map((p) => (
         <PastillaMenuLateral key={p.clave} onClick={() => router.push(p.ruta)} texto={p.texto} cantidad={p.cantidad}
-          colapsado={colapsado} icono={MessageSquareWarning}
+          colapsado={colapsado} icono={p.clave === 'COT' ? FileWarning : MessageSquareWarning}
           claseBoton="bg-amber-100 text-amber-800 border-amber-200 hover:bg-amber-200" claseIcono="text-amber-700"
           claseInsignia="bg-amber-700 text-white" title={p.titulo} aria-label={p.ariaLabel} />
       ))}

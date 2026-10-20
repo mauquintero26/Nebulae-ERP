@@ -35,7 +35,8 @@ export function PastillaMenuLateral({ texto, cantidad, colapsado, onClick, icono
           {cantidad}
         </span>
       ) : (
-        <span className="truncate">{texto}</span>
+        // T18 r2: salto de línea en vez de «…» («2 solicitudes con cambios» no cabe en una línea del menú).
+        <span className="min-w-0 text-left leading-snug">{texto}</span>
       )}
     </button>
   );
