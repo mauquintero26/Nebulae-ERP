@@ -1303,3 +1303,43 @@ def test_error_antes_de_enviar_no_dice_revisa_si_le_llego(db, user_admin, monkey
     # Arreglado el error, la vuelta siguiente lo envía.
     monkeypatch.setattr(seg_mod, "create_confirmation_token", original)
     assert seg_mod.correr_seguimientos(db, ahora=T + datetime.timedelta(minutes=20), enviar=enviar)["enviados"] == 1
+
+
+# ─── T20, Paso 1 (revisión de seguridad) ────────────────────────────────────────────────────────────────────
+
+def test_el_destino_del_recordatorio_es_la_foto_tomada_con_el_bloqueo(db, user_admin, monkeypatch):
+    """T20 (M6): _preparar_envio revisa la identidad del cliente con el documento bloqueado y, antes del commit que
+    suelta el bloqueo, guarda una foto del destino (número, nombre, correo, teléfono y validez). El envío usa esa foto:
+    si justo después del commit otra sesión cambia el cliente, el mensaje sale al mismo destino que se revisó, nunca a
+    los datos releídos sin bloqueo de un objeto expirado (el enlace que lleva es el de esa persona; si el cambio pasó
+    por update_*, ese enlace ya quedó revocado)."""
+    from app.models.erp_documents import CustomerRequest
+    seg_mod = _sc_mod()
+    llamadas = _dobles(monkeypatch, whatsapp=True)
+    _config(db)
+    sc = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
+    _fila(db, "SC", sc)
+    real = seg_mod._preparar_envio
+
+    def preparar_y_cambiar_el_cliente(db_, reclamo, ahora):
+        preparado = real(db_, reclamo, ahora)
+        # Otra transacción cambia el cliente y confirma justo después del commit que soltó el bloqueo. Va con SQL directo
+        # y en esta misma sesión: el documento queda expirado, como en producción (otra conexión no toca este mapa de
+        # identidad). En el runner, una segunda Session sobre la misma conexión recargaba el objeto expirado antes del
+        # UPDATE (se vio en el diagnóstico de T20) y ocultaba el error.
+        db_.execute(text("UPDATE customer_requests SET customer_name = :n, customer_email = :e, customer_phone = :t "
+                         "WHERE id = :id"), {"n": "Cliente Nuevo", "e": "nuevo@test.com", "t": "3109876543",
+                                             "id": sc.id})
+        db_.commit()
+        return preparado
+
+    monkeypatch.setattr(seg_mod, "_preparar_envio", preparar_y_cambiar_el_cliente)
+    res = seg_mod.correr_seguimientos(db, ahora=T)
+    assert res["enviados"] == 1, res
+    [wa] = llamadas["whatsapp"]
+    assert (wa["cliente_nombre"], wa["cliente_email"], wa["telefono"]) == ("Cliente Prueba", CORREO, TELEFONO), wa
+    assert wa["doc_id"] == sc.id and wa["doc_numero"] == sc.numero
+    [correo] = llamadas["correos"]
+    assert correo["to"] == CORREO
+    db.expire_all()
+    assert db.get(CustomerRequest, sc.id).customer_email == "nuevo@test.com"  # el cambio sí quedó

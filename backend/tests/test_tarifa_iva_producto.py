@@ -448,3 +448,30 @@ def test_get_cotizacion_expone_tarifas(app_client, db, admin_token, brand, categ
         assert contador_sql.consultas == 0
     finally:
         _restaurar_config(db, CLAVE, previo)
+
+
+# ─── T20, Paso 1 (revisión de seguridad) ────────────────────────────────────────────────────────────────────
+
+def test_crear_producto_con_marca_inexistente_no_expone_sql(app_client, admin_token, db, brand, category):
+    """T20 (M8, M18, punto 7 de lo parqueado): como update_product, create_product valida que la marca y la categoría
+    existan (400 en español) y, ante cualquier otro error al guardar, responde un 400 genérico sin str(e): nunca el SQL,
+    la tabla ni los parámetros."""
+    from app.models.catalog import Product
+    for campo, mensaje in (("brand_id", "La marca indicada no existe"),
+                           ("category_id", "La categoria indicada no existe")):
+        nombre = f"Producto T20 {_suf()}"
+        body = {"name": nombre, "type": "Fisico", "base_currency": "COP", "brand_id": brand.id,
+                "category_id": category.id, campo: 2_000_000_000}
+        r = app_client.post("/api/v1/products", json=body, headers=auth(admin_token))
+        assert r.status_code == 400, r.text
+        assert r.json()["detail"] == mensaje
+        for pedazo in ("SQL", "INSERT", "psycopg2", "products", "violates"):
+            assert pedazo not in r.text, (pedazo, r.text)
+        assert db.query(Product).filter(Product.name == nombre).count() == 0
+    # Otro error al guardar (un NUL: psycopg2 lo rechaza en el INSERT): el 400 genérico, sin el texto del error.
+    r = app_client.post("/api/v1/products", json={"name": f"Producto\x00T20 {_suf()}", "type": "Fisico",
+                                                  "base_currency": "COP", "brand_id": brand.id,
+                                                  "category_id": category.id}, headers=auth(admin_token))
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"] == "No se pudo crear el producto. Revisa los datos e intenta de nuevo."
+    assert "NUL" not in r.text and "0x00" not in r.text

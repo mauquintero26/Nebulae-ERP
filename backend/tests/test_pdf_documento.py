@@ -267,7 +267,9 @@ def test_pdf_de_la_cotizacion_trae_el_numero_y_el_total(db, monkeypatch):
     assert pdf.startswith(b"%PDF-")
     assert cot.numero.encode() in pdf and b"$2.786.923" in pdf
     texto = _textos_pdf(pdf)
-    for esperado in ("COTIZACIÓN", "Ana Pérez", "Taladro percutor", "$2.341.952", "IVA 19%", "$444.971",
+    # T20 (M17): la fila del impuesto dice su base, como la página.
+    for esperado in ("COTIZACIÓN", "Ana Pérez", "Taladro percutor", "$2.341.952", "IVA 19% sobre $2.341.952",
+                     "$444.971",
                      "TOTAL $2.786.923", "Anticipo (60%)", "23 de octubre de 2026", ASESORA):
         assert esperado in texto, (esperado, texto)
     assert "Ajuste por redondeo" not in texto and "Descuento" not in texto
@@ -282,18 +284,21 @@ def test_el_pdf_copia_los_numeros_del_documento_sin_recalcular(db, monkeypatch):
     _sin_comprimir(monkeypatch)
     linea = linea_publica({"product_name": "Tornillo <b>x</b> & tuerca", "qty": 3, "unit_price_cop": 10,
                            "total_cop": 555}, True, iva={"etiqueta": "IVA 5%", "pct": 5})
+    # T20 (M17): la base del impuesto ahora se dibuja ('IVA 5% sobre $94'); va en 94 y no en 93 (= 100 - 7) para que la
+    # sonda de abajo siga viendo si el PDF calculara el subtotal menos el descuento.
     documento = armar_documento(
         db, "COT", numero="COT-T9-SIN-CUENTAS", fecha_emision=datetime.datetime(2026, 10, 3, 15, 0),
         cliente_nombre="<b>Ana & Co</b>", lineas=[linea], con_precios=True, direccion_entrega="Calle 1 # 2-3",
         totales={"subtotal": 100, "descuento_pct": 5, "descuento": 7,
-                 "impuestos": [{"etiqueta": "IVA 5%", "base": 93, "valor": 19}], "ajuste_redondeo": 3,
+                 "impuestos": [{"etiqueta": "IVA 5%", "base": 94, "valor": 19}], "ajuste_redondeo": 3,
                  "total": 999999},
         pago={"modalidad": "Contado", "anticipo_pct": 100, "anticipo": 999999, "saldo": 0, "manual": False},
         notas=[{"titulo": "Notas", "texto": "Línea uno\n<script>alert(1)</script>"}])
 
     texto = _textos_pdf(pdf_documento(documento, perfil_publico(db), None))
 
-    for esperado in ("$10", "$555", "Subtotal $100", "Descuento (5%) -$7", "IVA 5% $19", "Ajuste por redondeo $3",
+    for esperado in ("$10", "$555", "Subtotal $100", "Descuento (5%) -$7", "IVA 5% sobre $94 $19",
+                     "Ajuste por redondeo $3",
                      "TOTAL $999.999", "Línea uno", "3 de octubre de 2026"):
         assert esperado in texto, (esperado, texto)
     # reportlab dibuja cada '<' y '>' escapado como un trozo aparte (el extractor los separa con un espacio): el texto
@@ -1099,3 +1104,54 @@ def test_el_contacto_y_el_color_de_la_empresa_salen_de_una_sola_fuente(db, monke
     assert " ".join(renglones) in _textos_pdf(pdf_mod.pdf_documento(documento, perfil, None))
     for modulo, copias in ((pdf_mod, ("_color", "_campo", "_renglones_pie")), (correo_mod, ("_color", "_campo"))):
         assert not [c for c in copias if hasattr(modulo, c)], modulo.__name__
+
+
+# ─── T20, Paso 1 (revisión de seguridad) ────────────────────────────────────────────────────────────────────
+
+def test_el_pdf_nunca_trae_el_correo_ni_el_usuario_del_asesor(db, user_vendedor, monkeypatch):
+    """T20 (C0, R24): el PDF de la COT y del pedido no pinta «Atendido por» con el correo del asesor ni con su usuario de
+    entrada (advisor_name los guarda tal cual); con un nombre que no es de nadie, sí."""
+    from app.core.documento_cliente import documento_cot, documento_pven
+    from app.core.empresa import perfil_publico
+    from app.core.pdf_documento import pdf_documento
+    from app.models.erp_documents import CustomerRequest
+    _sin_comprimir(monkeypatch)
+    user_vendedor.username = f"laura_{_sufijo().lower()}"
+    db.commit()
+    perfil = perfil_publico(db)
+    for asesor in ("laura@empresa.com", user_vendedor.username, f" {user_vendedor.username.upper()} "):
+        cot, so = _cot(db), _pedido(db)
+        for doc in (cot, so):
+            sc = db.get(CustomerRequest, doc.sc_id)
+            sc.advisor_name = asesor
+        db.commit()
+        for documento in (documento_cot(db, cot), documento_pven(db, so)):
+            assert documento["atendido_por"] is None, asesor
+            texto = _textos_pdf(pdf_documento(documento, perfil, None))
+            assert asesor.strip().casefold() not in texto.casefold(), (asesor, texto)
+            assert "Atendido por" not in texto, texto
+    texto = _textos_pdf(pdf_documento(documento_cot(db, _cot(db)), perfil, None))
+    assert "Atendido por:" in texto and ASESORA in texto, texto
+
+
+def test_el_pdf_dice_la_base_de_cada_impuesto(db, monkeypatch):
+    """T20 (M17, spec:3104): la fila de cada impuesto dice '{etiqueta} sobre {base}', como la página (filasTotales):
+    'IVA 19% sobre $2.341.952 $444.971' y, con una línea exenta, 'Exento sobre $500.000 $0'."""
+    from app.core.documento_cliente import documento_cot
+    from app.core.empresa import perfil_publico
+    from app.core.iva import calcular_totales_cotizacion
+    from app.core.pdf_documento import pdf_documento
+    from app.models.erp_documents import SalesQuotation
+    _sin_comprimir(monkeypatch)
+    texto = _textos_pdf(pdf_documento(documento_cot(db, _cot(db)), perfil_publico(db), None))
+    assert "IVA 19% sobre $2.341.952 $444.971" in texto, texto
+
+    libro = {"product_name": "Libro exento", "qty": 1, "unit_price_cop": 500000, "iva_tarifa": "EXENTO"}
+    t = calcular_totales_cotizacion([dict(TALADRO), libro], 0)
+    cot = _cot(db)
+    cot = db.get(SalesQuotation, cot.id)
+    cot.productos, cot.subtotal_cop, cot.tax_cop, cot.total_cop = (t["lineas"], t["subtotal_cop"], t["iva_cop"],
+                                                                   t["total_cop"])
+    db.commit()
+    texto = _textos_pdf(pdf_documento(documento_cot(db, cot), perfil_publico(db), None))
+    assert "IVA 19% sobre $2.341.952 $444.971" in texto and "Exento sobre $500.000 $0" in texto, texto

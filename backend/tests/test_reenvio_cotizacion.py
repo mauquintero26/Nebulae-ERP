@@ -301,3 +301,72 @@ def test_renovar_la_validez_nunca_la_acorta(app_client, db, admin_token, monkeyp
     # B3 T11 (C16): después de «Enlace vigente hasta» va 'Recordatorio automático'.
     assert envio.extra_data["cambios"][-2] == {"etiqueta": "Enlace vigente hasta", "despues": diez.strftime("%d/%m/%Y")}
     assert envio.extra_data["cambios"][-1]["etiqueta"] == "Recordatorio automático"
+
+
+# ─── T20, Paso 1 (revisión de seguridad) ────────────────────────────────────────────────────────────────────
+
+BETO = "Beto Secreto"
+DIRECCION_BETO = "Carrera Beto Secreta 7"
+
+
+def _confirmar(app_client, raw):
+    return app_client.post("/api/v1/confirmar/confirmar", json={"token": raw},
+                           headers={"Idempotency-Key": f"t20c-{uuid.uuid4().hex[:8]}"})
+
+
+def _pedir_cambios(app_client, raw):
+    return app_client.post("/api/v1/confirmar/pedir-cambios", json={"token": raw, "comentario": "Son 2 cunas, no 1"},
+                           headers={"Idempotency-Key": f"t20p-{uuid.uuid4().hex[:8]}"})
+
+
+def _renglones_de_enlace_anulado(db, cot_id):
+    from app.api.v1.erp_ventas import _ENLACE_COT_ANULADO
+    return [r for r in _logs(db, cot_id) if _ENLACE_COT_ANULADO in ((r.extra_data or {}).get("cambios") or [])]
+
+
+def test_el_enlace_de_la_cot_del_cliente_anterior_no_dice_reemplazado(app_client, db, admin_token, monkeypatch):
+    """T20 (M2): L1 de la COT se envía a Ana; el asesor le cambia el cliente a Beto (update_cotizacion revoca L1 y deja
+    el renglón _ENLACE_COT_ANULADO) y se la reenvía a él (L2). Ana abre L1: 'no_disponible', sin «más reciente» ni
+    datos de Beto. L2 sigue sirviendo."""
+    _correo_falso(monkeypatch)
+    _poner_dias(db, None)
+    cot = _cot(db, _sc(db))
+    primero = _enviar(app_client, admin_token, cot)
+    assert primero.status_code == 200, primero.text
+    l1 = _raw(primero)
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}",
+                            json={"customer_name": BETO, "customer_email": "beto@cliente.com",
+                                  "customer_address": DIRECCION_BETO, "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert _tokens(db, cot.id)[0].resultado == "REVOCADO" and len(_renglones_de_enlace_anulado(db, cot.id)) == 1
+    segundo = _enviar(app_client, admin_token, cot)
+    assert segundo.status_code == 200, segundo.text
+    for resp in (_ver(app_client, l1), _confirmar(app_client, l1), _pedir_cambios(app_client, l1)):
+        assert resp.status_code == 400, resp.text
+        d = resp.json()["detail"]
+        assert d["estado_enlace"] == "no_disponible", d
+        assert "más reciente" not in d["mensaje"] and d["documento"] is None
+        assert BETO not in resp.text and DIRECCION_BETO not in resp.text
+    assert _ver(app_client, _raw(segundo)).status_code == 200
+
+
+def test_corregir_la_tilde_del_nombre_no_revoca_el_enlace_de_la_cot(app_client, db, admin_token, monkeypatch):
+    """T20 (M14): update_cotizacion usa la misma regla única de nombre (_identidad_del_cliente con
+    _nombre_para_comparar): corregir la tilde, las mayúsculas o los espacios no revoca el enlace pendiente ni deja el
+    renglón de enlace anulado. Otro nombre sí lo revoca."""
+    _correo_falso(monkeypatch)
+    _poner_dias(db, None)
+    cot = _cot(db, _sc(db))
+    cot.customer_name = "Ana Perez"
+    db.commit()
+    primero = _enviar(app_client, admin_token, cot)
+    assert primero.status_code == 200, primero.text
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}",
+                            json={"customer_name": " ana  PÉREZ ", "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert _tokens(db, cot.id)[-1].used_at is None and _renglones_de_enlace_anulado(db, cot.id) == []
+    assert _ver(app_client, _raw(primero)).status_code == 200
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={"customer_name": BETO, "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert _tokens(db, cot.id)[-1].resultado == "REVOCADO" and len(_renglones_de_enlace_anulado(db, cot.id)) == 1

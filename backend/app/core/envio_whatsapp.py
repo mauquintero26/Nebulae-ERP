@@ -84,7 +84,7 @@ NOMBRE_DOCUMENTO = {"SC": "solicitud", "COT": "cotización", "PVEN": "pedido"}
 CATEGORIA_PLANTILLA = "UTILITY"
 EMPRESA_POR_DEFECTO = "Nebulae"
 CLIENTE_POR_DEFECTO = "cliente"
-ENLACE_OCULTO = "[enlace de confirmación]"
+ENLACE_OCULTO = chatwoot.ENLACE_OCULTO  # B3 T20 (M7): una sola definicion, la de chatwoot.ocultar_tokens
 PLAZO_TOTAL = 12  # segundos para todas las llamadas de un envio (se suman a los 10 s del SMTP de H27)
 
 # C15: dos plantillas de Meta (categoria Utilidad, espanol). Empiezan y terminan en texto y no tienen variables pegadas.

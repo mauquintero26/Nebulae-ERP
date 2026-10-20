@@ -160,8 +160,8 @@ console.log('--- TEST 3: validarCampoEmpresa da los mismos valores y textos que 
     ['sitio_web', 'https://[v1.x]/', 'https://[v1.x]/'],
     ['sitio_web', 'https://[fe80::1%25eth0]/', 'https://[fe80::1%25eth0]/'],
     ['sitio_web', 'https://[::ffff:1.2.3.4]/', 'https://[::ffff:1.2.3.4]/'],
-    ['sitio_web', 'https://u@[::1]:80/', 'https://u@[::1]:80/'],
     ['sitio_web', 'localhost:3000', 'https://localhost:3000'],
+    ['sitio_web', 'https://example.com/@tienda', 'https://example.com/@tienda'],  // T20: el '@' en la ruta no es credencial
     ['nit', '900 123 456', '900 123 456'],
   ];
   for (const [campo, valor, esperado] of validos) {
@@ -203,6 +203,12 @@ console.log('--- TEST 3: validarCampoEmpresa da los mismos valores y textos que 
     ['sitio_web', 'https://[]/', MENSAJE_URL],
     ['sitio_web', 'https://[V1.x]/', MENSAJE_URL],
     ['sitio_web', 'example.com:abc', MENSAJE_URL],
+    // T20 (C1, C2, M16): con credenciales ('mitienda.com@evil.com' abre evil.com), como empresa._validar_url.
+    ['sitio_web', 'https://mitienda.com@evil.com', MENSAJE_URL],
+    ['sitio_web', 'https://user:pw@nebulae.co', MENSAJE_URL],
+    ['sitio_web', 'https://@evil.com', MENSAJE_URL],
+    ['sitio_web', 'mitienda.com@evil.com', MENSAJE_URL],
+    ['sitio_web', 'https://u@[::1]:80/', MENSAJE_URL],
     ['nombre_comercial', '😀'.repeat(121), 'Nombre comercial: máximo 120 caracteres.'],
     ['color_acento', 'red;', MENSAJE_COLOR],
     ['color_acento', '#12345', MENSAJE_COLOR],

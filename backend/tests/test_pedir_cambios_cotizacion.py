@@ -179,7 +179,10 @@ def test_pedir_cambios_devuelve_la_cot_a_borrador(app_client, db, admin_token, u
     [renglon] = _logs(db, "COT", cot.id, "CAMBIOS_CLIENTE")
     assert (renglon.old_estado, renglon.new_estado) == ("PENDIENTE_CONFIRMACION", "BORRADOR")
     assert renglon.user_name == CLIENTE_ENLACE
-    assert COMENTARIO in renglon.description
+    # T20 (M1): el comentario es dato: va en extra_data y en cambios_cliente_comentario, nunca en description.
+    assert renglon.description == ("El cliente pidió cambios desde el enlace. La cotización vuelve a Borrador para "
+                                   "que la ajustes y se la reenvíes.")
+    assert COMENTARIO not in renglon.description
     assert renglon.extra_data["comentario"] == COMENTARIO and renglon.extra_data["tipo"] == "CAMBIOS"
     assert [c["etiqueta"] for c in renglon.extra_data["cambios"]] == ["Comentario del cliente",
                                                                       "Estado de la cotización"]

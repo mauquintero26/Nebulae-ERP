@@ -115,7 +115,11 @@ def _validar_correo(valor: str) -> str:
 
 def _validar_url(valor: str) -> str:
     """Solo http(s) con dominio y sin espacios (evita javascript: en un href). C1: sin esquema ('example.com') se
-    completa con https://; cualquier otro esquema (javascript:, data:, ftp:...) es un error."""
+    completa con https://; cualquier otro esquema (javascript:, data:, ftp:...) es un error.
+    B3 T20 (C1, C2, M16): sin '@' en el netloc. 'https://mitienda.com@evil.com' (o 'https://@evil.com', donde username
+    es '' y no None) lleva a evil.com: el pie del correo y del PDF la imprimen como texto y Gmail o el visor de PDF la
+    vuelven enlace. _valor_guardado revalida al leer, así que un valor viejo así se lee como ''. Espejo: validarUrl de
+    marca-empresa.js (RP21)."""
     if not valor.lower().startswith(("http://", "https://")):
         if _ESQUEMA.match(valor):
             raise ValueError(MENSAJE_URL)
@@ -127,6 +131,8 @@ def _validar_url(valor: str) -> str:
     except ValueError:  # r2: 'https://[abc' o 'example.com]' (IPv6 mal escrita): el mismo mensaje, en espanol
         raise ValueError(MENSAJE_URL) from None
     if partes.scheme.lower() not in ("http", "https") or not partes.netloc:
+        raise ValueError(MENSAJE_URL)
+    if "@" in partes.netloc:
         raise ValueError(MENSAJE_URL)
     return valor
 

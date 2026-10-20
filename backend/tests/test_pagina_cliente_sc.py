@@ -72,8 +72,9 @@ def _sc(db, user_admin, **campos):
     campos.setdefault("estado", "ASIGNADA")
     campos.setdefault("productos", RODILLOS)
     campos.setdefault("modalidad_pago", MOD_60_40)
+    campos.setdefault("advisor_name", ASESORA)
     sc = CustomerRequest(numero=f"SC-T5P{_sufijo()}", customer_name="Ana Pérez", advisor_user_id=user_admin.id,
-                         advisor_name=ASESORA, **campos)
+                         **campos)
     db.add(sc); db.commit(); db.refresh(sc)
     return sc
 
@@ -518,19 +519,32 @@ def test_corregir_el_contacto_deja_el_marcador_en_su_renglon(app_client, db, adm
     assert renglones()[-1].extra_data["cliente_cambiado"] is True
 
 
+def _renglones_de_estado(db, sc_id):
+    from app.models.erp_documents import ActivityLog
+    db.expire_all()
+    return (db.query(ActivityLog).filter(ActivityLog.entity_type == "SC", ActivityLog.entity_id == sc_id,
+                                         ActivityLog.action == "ESTADO_CHANGED")
+            .order_by(ActivityLog.id.asc()).all())
+
+
 def test_cambio_de_solo_el_nombre_revoca_el_enlace_pendiente_de_la_sc(app_client, db, admin_token, user_admin,
                                                                       monkeypatch):
     """r4 (privacidad 1, sonda A): SC sin ficha de Ana, pendiente, con su enlace L1. Cambiarle solo el nombre (por la
     API) cambia a quién le llega el enlace (_identidad_del_cliente incluye el nombre): L1 se revoca en el mismo commit y
-    nunca muestra el nombre ni, después de corregir la dirección, la dirección de B. La SC sigue pendiente."""
+    nunca muestra el nombre ni, después de corregir la dirección, la dirección de B. T20 r1b (M4, M11, M15, opción A
+    del usuario): un cambio REAL de nombre es un cambio de cliente, así que la SC vuelve a Asignada con el renglón
+    «cambió el cliente…» (antes quedaba en Pendiente con el enlace muerto y sin aviso)."""
     _sin_correo(monkeypatch)
     sc = _sc(db, user_admin, customer_address="Calle Alfa 1")
     l1 = _enviar(app_client, admin_token, sc)
     resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"customer_name": NOMBRE_B, "updated_by": "t"},
                             headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
-    assert resp.json()["data"]["estado"] == "PENDIENTE_CONFIRMACION"
+    assert resp.json()["data"]["estado"] == "ASIGNADA"
     assert _fila(db, l1)["resultado"] == "REVOCADO"
+    renglon = _renglones_de_estado(db, sc.id)[-1]
+    assert (renglon.old_estado, renglon.new_estado) == ("PENDIENTE_CONFIRMACION", "ASIGNADA")
+    assert "cambió el cliente" in renglon.description, renglon.description
     resp = _ver(app_client, l1)
     assert _detalle(resp, "no_disponible")["documento"] is None
     assert NOMBRE_B not in resp.text
@@ -542,10 +556,10 @@ def test_cambio_de_solo_el_nombre_revoca_el_enlace_pendiente_de_la_sc(app_client
         assert NOMBRE_B not in resp.text and DIRECCION_B not in resp.text
 
 
-def test_cambio_de_solo_el_nombre_no_reinicia_gate1(app_client, db, admin_token, user_admin, monkeypatch):
-    """r4 (ruling): un cambio de solo el nombre revoca los enlaces todavía pendientes, pero no anula una confirmación ya
-    dada (Gate 1 no se reinicia; si debe hacerlo, lo decide el usuario). El enlace que confirmó deja de mostrar el
-    resumen (la guarda de P4)."""
+def test_cambio_real_del_nombre_reinicia_gate1(app_client, db, admin_token, user_admin, monkeypatch):
+    """T20 r1b (M15, opción A del usuario: «Pedir confirmación otra vez»): un cambio REAL del nombre en una SC
+    confirmada (sin COT activa) es un cambio de cliente, como cambiar la ficha: vuelve a Asignada sin gate1, con el
+    renglón «cambió el cliente…». El enlace que confirmó ya no dice nada de la SC (M2: 'no_disponible')."""
     _sin_correo(monkeypatch)
     sc = _sc(db, user_admin)
     raw = _enviar(app_client, admin_token, sc)
@@ -554,8 +568,64 @@ def test_cambio_de_solo_el_nombre_no_reinicia_gate1(app_client, db, admin_token,
                                                                        "updated_by": "t"}, headers=auth(admin_token))
     assert resp.status_code == 200, resp.text
     db.refresh(sc)
-    assert sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is not None
-    assert _detalle(_ver(app_client, raw), "confirmada")["documento"] == {"numero": sc.numero}
+    assert sc.estado == "ASIGNADA" and sc.gate1_confirmed_at is None
+    renglon = _renglones_de_estado(db, sc.id)[-1]
+    assert (renglon.old_estado, renglon.new_estado) == ("CONFIRMADA", "ASIGNADA")
+    assert "cambió el cliente" in renglon.description, renglon.description
+    d = _detalle(_ver(app_client, raw), "no_disponible")
+    assert d["documento"] is None and d["siguiente_paso"] is None
+
+
+def test_corregir_tildes_del_nombre_no_reinicia_gate1(app_client, db, admin_token, user_admin, monkeypatch):
+    """T20 r1b: lo cosmético NO es un cambio de cliente (_mismo_nombre / _nombre_para_comparar, la regla única de M14):
+    una SC confirmada con 'Ana Perez' que pasa a ' ana  PÉREZ ' sigue Confirmada, con su gate1, su enlace como estaba y
+    sin el marcador CLIENTE_CAMBIADO."""
+    from app.models.erp_documents import ActivityLog
+    _sin_correo(monkeypatch)
+    sc = _sc(db, user_admin)
+    sc.customer_name = "Ana Perez"
+    db.commit()
+    raw = _enviar(app_client, admin_token, sc)
+    assert _confirmar(app_client, raw).status_code == 200
+    db.refresh(sc)
+    gate1, fila = sc.gate1_confirmed_at, dict(_fila(db, raw))
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"customer_name": " ana  PÉREZ ",
+                                                                       "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    db.refresh(sc)
+    assert sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at == gate1 and gate1 is not None
+    assert dict(_fila(db, raw)) == fila and fila["resultado"] == "CONFIRMADO"
+    _detalle(_ver(app_client, raw), "confirmada")
+    acciones = [r.action for r in db.query(ActivityLog).filter(ActivityLog.entity_type == "SC",
+                                                                 ActivityLog.entity_id == sc.id)]
+    assert "CLIENTE_CAMBIADO" not in acciones, acciones
+    assert [r for r in _renglones_de_estado(db, sc.id) if r.new_estado == "ASIGNADA"] == []
+
+
+def test_cambio_real_del_nombre_con_cotizacion_activa_anula_la_confirmacion(app_client, db, admin_token, user_admin,
+                                                                           monkeypatch):
+    """T20 r1b (opción A): con una COT activa la SC sigue Confirmada (U15), pero la confirmación era del cliente
+    anterior: gate1 queda None y la Actividad lo avisa (_AVISO_CAMBIO_DE_CLIENTE), así que para otra cotización hay que
+    enviarle la SC al cliente nuevo."""
+    from app.api.v1.erp_ventas import _AVISO_CAMBIO_DE_CLIENTE
+    from app.models.erp_documents import ActivityLog, SalesQuotation
+    _sin_correo(monkeypatch)
+    sc = _sc(db, user_admin)
+    raw = _enviar(app_client, admin_token, sc)
+    assert _confirmar(app_client, raw).status_code == 200
+    cot = SalesQuotation(numero=f"COT-T20{_sufijo()}", sc_id=sc.id, sc_numero=sc.numero, customer_name="Ana Pérez",
+                         estado="BORRADOR", productos=[{"product_name": "Rodillo", "qty": 6, "unit_price_cop": 1000}])
+    db.add(cot); db.commit()
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"customer_name": NOMBRE_B, "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    db.refresh(sc)
+    assert sc.estado == "CONFIRMADA" and sc.gate1_confirmed_at is None
+    db.expire_all()
+    avisos = [r for r in db.query(ActivityLog).filter(ActivityLog.entity_type == "SC", ActivityLog.entity_id == sc.id,
+                                                       ActivityLog.action == "UPDATED")
+              if r.description == _AVISO_CAMBIO_DE_CLIENTE]
+    assert len(avisos) == 1
 
 
 def test_cambiar_la_ficha_sin_nombre_toma_el_nombre_de_la_ficha(app_client, db, admin_token, user_admin):
@@ -803,7 +873,7 @@ def test_etiqueta_modalidad_es_el_espejo_de_etiquetaModalidad():
         assert etiqueta_modalidad(valor) == esperado, (valor, etiqueta_modalidad(valor))
 
 
-def test_forma_de_pago_y_siguiente_paso():
+def test_forma_de_pago_y_siguiente_paso(db):
     from types import SimpleNamespace
     from app.core.documento_cliente import forma_de_pago, siguiente_paso_sc
     casos = [("Contado", 100), (MOD_60_40, 60), ("Credito 30 dias", 0), ("Otro", 60), (None, 60), ("", 60)]
@@ -813,9 +883,225 @@ def test_forma_de_pago_y_siguiente_paso():
         assert forma["modalidad"] == modalidad
     assert forma_de_pago("Credito 30 dias")["etiqueta"] == "Crédito 30 días"
 
-    con_asesor = siguiente_paso_sc(SimpleNamespace(advisor_name=" Laura "), forma_de_pago(MOD_60_40))
-    assert con_asesor[0].startswith("Laura ") and "cotización" in con_asesor[0]
+    # T20 (C0): siguiente_paso_sc recibe db para limpiar el nombre con nombre_asesor_publico (la regla única).
+    con_asesor = siguiente_paso_sc(db, SimpleNamespace(advisor_name=" Laura G. "), forma_de_pago(MOD_60_40))
+    assert con_asesor[0].startswith("Laura G. ") and "cotización" in con_asesor[0]
     assert con_asesor[2].endswith("con el anticipo del 60%.")
-    sin_asesor = siguiente_paso_sc(SimpleNamespace(advisor_name=None), forma_de_pago("Credito 30 dias"))
+    sin_asesor = siguiente_paso_sc(db, SimpleNamespace(advisor_name=None), forma_de_pago("Credito 30 dias"))
     assert sin_asesor[0].startswith("Tu asesor ")
     assert sin_asesor[2] == "Cuando la apruebes, hacemos tu pedido."
+    correo = siguiente_paso_sc(db, SimpleNamespace(advisor_name="laura@empresa.com"), forma_de_pago(MOD_60_40))
+    assert correo[0] == "Tu asesor prepara tu cotización con los precios."
+
+
+# ─── T20, Paso 1 (revisión de seguridad) ────────────────────────────────────────────────────────────────────
+
+def _usuario_de_entrada(db, user_vendedor):
+    """T20 (C0): un usuario del ERP con su nombre de usuario (auth.py acepta el correo o el username para entrar)."""
+    user_vendedor.username = f"laura_{_sufijo().lower()}"
+    db.commit()
+    return user_vendedor
+
+
+def _pedir_cambios(app_client, raw, comentario="Son 8 rodillos, no 6"):
+    return app_client.post("/api/v1/confirmar/pedir-cambios", json={"token": raw, "comentario": comentario},
+                           headers={"Idempotency-Key": f"t20-{uuid.uuid4().hex[:8]}"})
+
+
+def test_el_cliente_nunca_ve_el_correo_ni_el_usuario_del_asesor(app_client, db, admin_token, user_admin,
+                                                                 user_vendedor, monkeypatch):
+    """T20 (C0, R24): advisor_name guarda el correo del asesor (los formularios mandan yo.email) o su usuario de entrada.
+    Ninguno de los dos sale en lo que ve el cliente: atendido_por None y «Tu asesor» en ¿Qué sigue?, en pedir cambios y
+    en 'cambios_enviados'. Un nombre que no es de ningún usuario ('Laura Gómez') sí sale."""
+    from app.core.confirmation_tokens import create_confirmation_token
+    from app.models.erp_documents import SalesQuotation
+    _sin_correo(monkeypatch)
+    usuario = _usuario_de_entrada(db, user_vendedor)
+    for asesor in ("laura@empresa.com", usuario.username, f"  {usuario.username.upper()} ", f" {usuario.email} "):
+        secreto = asesor.strip().casefold()
+
+        def sin_secreto(resp):
+            assert secreto not in resp.text.casefold(), (asesor, resp.text)
+            return resp
+
+        sc = _sc(db, user_admin, advisor_name=asesor)
+        raw = _enviar(app_client, admin_token, sc)
+        resp = sin_secreto(_ver(app_client, raw))
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["documento"]["atendido_por"] is None
+        resp = sin_secreto(_confirmar(app_client, raw))
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["siguiente_paso"][0] == "Tu asesor prepara tu cotización con los precios."
+        assert resp.json()["data"]["documento"]["atendido_por"] is None
+        for resp in (_ver(app_client, raw), _confirmar(app_client, raw)):
+            d = _detalle(sin_secreto(resp), "confirmada")
+            assert d["siguiente_paso"][0] == "Tu asesor prepara tu cotización con los precios."
+            assert d["documento"]["atendido_por"] is None
+
+        # La COT de esa SC (atendido_por sale de la SC).
+        cot = SalesQuotation(numero=f"COT-T20{_sufijo()}", sc_id=sc.id, sc_numero=sc.numero, customer_name="Ana Pérez",
+                             estado="PENDIENTE_CONFIRMACION", total_cop=1000, subtotal_cop=1000,
+                             productos=[{"product_name": "X", "qty": 1, "unit_price_cop": 1000}])
+        db.add(cot); db.commit(); db.refresh(cot)
+        resp = sin_secreto(_ver(app_client, create_confirmation_token(db, "COT", cot.id)))
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["documento"]["atendido_por"] is None
+
+        # Pedir cambios: el detalle del 200 y, al reabrir el enlace, 'cambios_enviados'.
+        otra = _sc(db, user_admin, advisor_name=asesor)
+        raw = _enviar(app_client, admin_token, otra)
+        resp = sin_secreto(_pedir_cambios(app_client, raw))
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["detalle"] == "Tu asesor ajustará tu solicitud y te enviará un enlace nuevo."
+        d = _detalle(sin_secreto(_ver(app_client, raw)), "cambios_enviados")
+        assert d["mensaje"].endswith("Tu asesor ajustará la solicitud y te enviará un enlace nuevo."), d["mensaje"]
+
+    # Un nombre que no es el correo ni el usuario de nadie sigue saliendo.
+    sc = _sc(db, user_admin)
+    raw = _enviar(app_client, admin_token, sc)
+    assert _ver(app_client, raw).json()["data"]["documento"]["atendido_por"] == ASESORA
+    assert _confirmar(app_client, raw).json()["siguiente_paso"][0] == f"{ASESORA} prepara tu cotización con los precios."
+    otra = _sc(db, user_admin)
+    raw = _enviar(app_client, admin_token, otra)
+    detalle = _pedir_cambios(app_client, raw).json()["detalle"]
+    assert detalle == f"{ASESORA} ajustará tu solicitud y te enviará un enlace nuevo."
+
+
+def test_nombre_asesor_publico(db, user_vendedor):
+    """T20 (C0): la regla única. None si no es texto, si queda vacío, si lleva '@' o si es (sin mayúsculas ni espacios en
+    los bordes) el correo o el usuario de algún User; si no, el texto sin los espacios de los bordes."""
+    from app.core.documento_cliente import nombre_asesor_publico
+    usuario = _usuario_de_entrada(db, user_vendedor)
+    for valor in (None, 5, "", "   ", "laura@empresa.com", "laura@", usuario.username, f" {usuario.username.upper()} ",
+                  usuario.email.upper()):
+        assert nombre_asesor_publico(db, valor) is None, valor
+    assert nombre_asesor_publico(db, "  Laura Gómez ") == "Laura Gómez"
+    assert nombre_asesor_publico(db, "Laura G.") == "Laura G."  # con espacio y punto: nunca es un username
+
+
+def test_el_enlace_del_cliente_anterior_no_dice_reemplazado(app_client, db, admin_token, user_admin, monkeypatch):
+    """T20 (M2): L1 se envía a Ana; el asesor cambia la ficha a Beto (L1 queda REVOCADO) y le envía la SC a él (L2). Ana
+    abre L1: 'no_disponible', sin «más reciente» (no se le dice que le enviamos otro enlace ni que la SC sigue activa) y
+    sin datos de Beto. L2 sigue sirviendo."""
+    _sin_correo(monkeypatch)
+    ficha_a = _ficha(db, "Ana", "Pérez", "Calle Alfa 1")
+    ficha_b = _ficha(db, "Cliente Beta", "Secreto", DIRECCION_B)
+    sc = _sc(db, user_admin, customer_id=ficha_a.id, customer_address="Calle Alfa 1")
+    l1 = _enviar(app_client, admin_token, sc)
+    _cambiar_cliente(app_client, admin_token, sc, ficha_b)
+    assert _fila(db, l1)["resultado"] == "REVOCADO"
+    l2 = _enviar(app_client, admin_token, sc)
+    for resp in (_ver(app_client, l1), _confirmar(app_client, l1), _pedir_cambios(app_client, l1)):
+        d = _detalle(resp, "no_disponible")
+        assert "más reciente" not in d["mensaje"] and d["documento"] is None and d["siguiente_paso"] is None
+        assert NOMBRE_B not in resp.text and DIRECCION_B not in resp.text
+    assert _ver(app_client, l2).status_code == 200
+    assert _fila(db, l1)["resultado"] == "REVOCADO"  # ni confirmar ni pedir cambios lo tocaron
+
+
+def test_cambio_de_solo_el_nombre_revoca_el_enlace_de_la_cot_temprana(app_client, db, admin_token, user_admin,
+                                                                      monkeypatch, contador_sql):
+    """T20 (M12, punto 2 de lo parqueado): cambiar solo el nombre de la SC también revoca el enlace de una COT temprana
+    (cambia_la_identidad -> _anular_enlaces_de_cotizaciones_por_cambio_de_cliente), en el mismo y único commit, con su
+    renglón _ENLACE_COT_ANULADO. Si un refactor vuelve a usar cambia_el_cliente (sin el nombre), esta prueba cae."""
+    from app.api.v1.erp_ventas import _ENLACE_COT_ANULADO
+    from app.core.confirmation_tokens import create_confirmation_token
+    from app.models.erp_documents import ActivityLog, SalesQuotation
+    _sin_correo(monkeypatch)
+    ficha_a = _ficha(db, "Ana", "Pérez", "Calle Alfa 1")
+    sc = _sc(db, user_admin, customer_id=ficha_a.id, customer_address="Calle Alfa 1")
+    temprana = SalesQuotation(numero=f"COT-T20{_sufijo()}", sc_id=sc.id, sc_numero=sc.numero, customer_id=ficha_a.id,
+                              customer_name="Ana Pérez", estado="PENDIENTE_CONFIRMACION", total_cop=1000,
+                              subtotal_cop=1000, productos=[{"product_name": "Rodillo", "qty": 6, "unit_price_cop": 1000}])
+    db.add(temprana); db.commit(); db.refresh(temprana)
+    enlace_temprana = create_confirmation_token(db, "COT", temprana.id)
+    otra_sc = _sc(db, user_admin, estado="CONFIRMADA", customer_id=ficha_a.id)
+    confirmada = SalesQuotation(numero=f"COT-T20{_sufijo()}", sc_id=otra_sc.id, sc_numero=otra_sc.numero,
+                                customer_id=ficha_a.id, customer_name="Ana Pérez", estado="CONFIRMADA", total_cop=1000,
+                                productos=[{"product_name": "Rodillo", "qty": 6, "unit_price_cop": 1000}])
+    db.add(confirmada); db.commit(); db.refresh(confirmada)
+    enlace_confirmada = create_confirmation_token(db, "COT", confirmada.id)
+
+    with contador_sql.ventana() as v:
+        resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"customer_name": NOMBRE_B,
+                                                                           "updated_by": "t"},
+                                headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert v.commits == 1, v.commits
+    assert _fila(db, enlace_temprana)["resultado"] == "REVOCADO"
+    db.expire_all()
+    renglones = [r for r in db.query(ActivityLog).filter(ActivityLog.entity_type == "COT",
+                                                          ActivityLog.entity_id == temprana.id)
+                 if _ENLACE_COT_ANULADO in ((r.extra_data or {}).get("cambios") or [])]
+    assert len(renglones) == 1 and sc.numero in renglones[0].description, [r.description for r in renglones]
+    assert db.get(SalesQuotation, temprana.id).estado == "PENDIENTE_CONFIRMACION"
+    resp = _ver(app_client, enlace_temprana)
+    assert resp.status_code == 400, resp.text
+    assert NOMBRE_B not in resp.text
+    assert _fila(db, enlace_confirmada)["used_at"] is None
+
+
+def test_cambiar_a_una_ficha_sin_nombre_no_conserva_el_nombre_anterior(app_client, db, admin_token, user_admin):
+    """T20 (M13, punto 3 de lo parqueado): una ficha nueva sin nombre no deja en la SC el nombre del cliente ANTERIOR
+    (clientes.nombre_cliente, la regla única: 'CLI-0012'). Así una COT sin ficha de Ana ya no pasa por «la misma
+    persona» y la corrección de contacto no le copia el correo del cliente nuevo."""
+    from app.models.customers import Customer
+    from app.models.erp_documents import SalesQuotation
+    ficha_a = _ficha(db, "Ana", "Pérez", "Calle Alfa 1")
+    ficha_b = Customer(first_name="", last_name="", address=DIRECCION_B, phone="3005550001",
+                       email=f"t20m13-{uuid.uuid4().hex[:8]}@test.nebulae")
+    db.add(ficha_b); db.commit(); db.refresh(ficha_b)
+    sc = _sc(db, user_admin, customer_id=ficha_a.id, customer_address="Calle Alfa 1")
+    cot = SalesQuotation(numero=f"COT-T20{_sufijo()}", sc_id=sc.id, sc_numero=sc.numero, customer_name="Ana Pérez",
+                         customer_email="ana@cliente.com", estado="BORRADOR",
+                         productos=[{"product_name": "Rodillo", "qty": 6, "unit_price_cop": 1000}])
+    db.add(cot); db.commit(); db.refresh(cot)
+
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"customer_id": ficha_b.id, "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["customer_name"] == f"CLI-{ficha_b.id:04d}"
+    nuevo = f"nuevo-{_sufijo().lower()}@cliente.com"
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}/cliente", json={"customer_email": nuevo},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert cot.numero in resp.json()["documentos_de_otro_cliente"], resp.json()
+    db.expire_all()
+    assert db.get(SalesQuotation, cot.id).customer_email == "ana@cliente.com"
+
+
+def test_corregir_tildes_mayusculas_o_espacios_del_nombre_no_revoca_enlaces(app_client, db, admin_token, user_admin,
+                                                                           monkeypatch):
+    """T20 (M14, punto 4 de lo parqueado): una sola regla de nombre. _identidad_del_cliente compara el nombre con
+    _nombre_para_comparar (sin tildes, mayúsculas ni espacios de más), la misma de _mismo_nombre: corregir 'Ana Perez'
+    a ' ana  PÉREZ ' no es un cambio de cliente. L1 de la SC y el enlace de su COT temprana siguen vivos y no queda el
+    marcador CLIENTE_CAMBIADO."""
+    from app.core.confirmation_tokens import create_confirmation_token
+    from app.models.erp_documents import ActivityLog, SalesQuotation
+    _sin_correo(monkeypatch)
+    sc = _sc(db, user_admin)
+    sc.customer_name = "Ana Perez"
+    db.commit()
+    l1 = _enviar(app_client, admin_token, sc)
+    temprana = SalesQuotation(numero=f"COT-T20{_sufijo()}", sc_id=sc.id, sc_numero=sc.numero, customer_name="Ana Perez",
+                              estado="PENDIENTE_CONFIRMACION", total_cop=1000, subtotal_cop=1000,
+                              productos=[{"product_name": "Rodillo", "qty": 6, "unit_price_cop": 1000}])
+    db.add(temprana); db.commit(); db.refresh(temprana)
+    enlace_temprana = create_confirmation_token(db, "COT", temprana.id)
+
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"customer_name": " ana  PÉREZ ",
+                                                                       "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["estado"] == "PENDIENTE_CONFIRMACION"
+    assert _fila(db, l1)["used_at"] is None and _fila(db, enlace_temprana)["used_at"] is None
+    assert _ver(app_client, l1).status_code == 200
+    db.expire_all()
+    acciones = [r.action for r in db.query(ActivityLog).filter(ActivityLog.entity_type == "SC",
+                                                                 ActivityLog.entity_id == sc.id)]
+    assert "CLIENTE_CAMBIADO" not in acciones, acciones
+    # Un nombre de verdad distinto sí revoca (la regla de r4 sigue).
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"customer_name": NOMBRE_B, "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert _fila(db, l1)["resultado"] == "REVOCADO" and _fila(db, enlace_temprana)["resultado"] == "REVOCADO"

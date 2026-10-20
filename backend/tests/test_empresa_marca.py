@@ -137,6 +137,11 @@ def test_validaciones_no_guardan_nada(app_client, db, admin_token):
         ({"smtp_password": "x"}, "Campo desconocido: smtp_password."),
         ({"whatsapp": "Cel: 300 123 4567"}, MENSAJE_WHATSAPP),  # r1 (L2): letras no, aunque los dígitos sirvan
         ({"whatsapp": "300123456"}, MENSAJE_WHATSAPP),  # 9 dígitos (RP19)
+        # T20 (C1, C2, M16): con credenciales ('mitienda.com@evil.com' abre evil.com), aunque el '@' no traiga usuario.
+        ({"sitio_web": "https://mitienda.com@evil.com"}, "La página web debe empezar por http:// o https://."),
+        ({"sitio_web": "https://user:pw@nebulae.co"}, "La página web debe empezar por http:// o https://."),
+        ({"sitio_web": "https://@evil.com"}, "La página web debe empezar por http:// o https://."),
+        ({"sitio_web": "mitienda.com@evil.com"}, "La página web debe empezar por http:// o https://."),
     ]
     for malo, mensaje in casos:
         resp = _put(app_client, admin_token, {"nombre_comercial": "Nuevo", **malo})
@@ -514,7 +519,10 @@ def test_sitio_web_guardado_se_valida_al_leer(app_client, db):
     """r1 (S2): como los colores, un sitio_web guardado que no es http(s) (escrito a mano en la base) no llega a un href:
     se lee como ''."""
     _limpiar_empresa(db)
-    for malo in ("javascript:alert(1)", "data:text/html,x", "https://exa mple.com"):
+    from app.core.empresa import contacto_empresa, perfil_publico
+    for malo in ("javascript:alert(1)", "data:text/html,x", "https://exa mple.com",
+                 # T20 (C1, M16): un valor viejo con credenciales tampoco sale (ni en el pie del correo ni del PDF).
+                 "https://mitienda.com@evil.com", "https://user:pw@nebulae.co", "https://@evil.com"):
         db.execute(text("INSERT INTO admin_config (key, value, updated_at) VALUES ('empresa_sitio_web', :v, NOW()) "
                         "ON CONFLICT (key) DO UPDATE SET value = :v, updated_at = NOW()"), {"v": malo})
         db.commit()
@@ -522,6 +530,9 @@ def test_sitio_web_guardado_se_valida_al_leer(app_client, db):
         assert resp.status_code == 200
         assert resp.json()["data"]["sitio_web"] == "", malo
         assert malo not in resp.text
+        perfil = perfil_publico(db)
+        assert perfil["sitio_web"] == "", malo
+        assert not any(r.startswith("Página web") for r in contacto_empresa(perfil)), malo
 
 
 def test_una_sola_fuente_para_color_y_telefono(monkeypatch):

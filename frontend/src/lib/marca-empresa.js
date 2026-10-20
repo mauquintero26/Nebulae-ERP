@@ -189,7 +189,10 @@ function netlocNfkcInvalido(netloc) {
   return n !== normalizado && /[/?#@:]/.test(normalizado);
 }
 
-/** empresa._validar_url: solo http(s) con dominio; sin esquema recibe https:// (C1). */
+/**
+ * empresa._validar_url: solo http(s) con dominio; sin esquema recibe https:// (C1). B3 T20 (C1, C2, M16): sin '@' en el
+ * netloc: 'https://mitienda.com@evil.com' (o 'https://@evil.com') lleva a evil.com desde el pie del correo y del PDF.
+ */
 function validarUrl(valor) {
   let url = valor;
   if (!/^https?:\/\//i.test(url)) {
@@ -203,6 +206,7 @@ function validarUrl(valor) {
   if (netloc.includes('[') !== netloc.includes(']')) fallo(MENSAJE_URL);
   if (netloc.includes('[') && corchetesInvalidos(netloc)) fallo(MENSAJE_URL);
   if (netlocNfkcInvalido(netloc) || !netloc) fallo(MENSAJE_URL);
+  if (netloc.includes('@')) fallo(MENSAJE_URL);
   return url;
 }
 

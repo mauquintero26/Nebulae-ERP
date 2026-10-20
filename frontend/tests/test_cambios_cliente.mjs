@@ -126,6 +126,15 @@ console.log('--- TEST 6 (T18 r1): AYUDA_NOTA_CLIENTE y las pantallas que usan la
   const detalle = leer('app/dashboard/ventas/solicitud/[id]/detalle-bloque3.tsx');
   assert.ok(/import \{[^}]*\bAYUDA_NOTA_CLIENTE\b[^}]*\} from '@\/lib\/cambios-cliente';/.test(detalle), 'la SC la importa de la lib');
   assert.ok(!detalle.includes("'El cliente verá esta nota'"), 'sin copia en la pantalla');
+  // T20 (M5): en el pedido, «Nota de la cotización» es la que ve el cliente (R3) y lo dice con la misma constante; la
+  // «Nota de la solicitud» (interna) y las «Notas del pedido» no llevan el aviso.
+  const venta = leer('app/dashboard/ventas/venta/[id]/page.tsx');
+  assert.ok(/import \{[^}]*\bAYUDA_NOTA_CLIENTE\b[^}]*\} from '@\/lib\/cambios-cliente';/.test(venta), 'el pedido la importa de la lib');
+  assert.ok(!venta.includes('El cliente verá esta nota'), 'sin copia en la pantalla del pedido');
+  assert.ok(venta.includes("['Nota de la cotización', notaCotizacion, AYUDA_NOTA_CLIENTE]"), 'el aviso va con la nota de la COT');
+  assert.ok(venta.includes("['Nota de la solicitud', notaSolicitud, null]"), 'la nota interna de la SC no lo lleva');
+  assert.ok(venta.includes("['Notas del pedido', mostrarNotaPedido ? notaPedido : '', null]"), 'las notas del pedido tampoco');
+  assert.ok(/\{ayuda && <p className="[^"]*">\{ayuda\}<\/p>\}/.test(venta), 'se pinta debajo de la nota');
   // La pastilla de la lista es UNA (ventas/chip-cambios-cliente.tsx) con etiquetaChipCambios, en las dos listas.
   const chip = leer('app/dashboard/ventas/chip-cambios-cliente.tsx');
   assert.ok(chip.includes('etiquetaChipCambios(doc, tipoDoc)') && chip.includes('avisoCambiosCliente(doc, tipoDoc)'));

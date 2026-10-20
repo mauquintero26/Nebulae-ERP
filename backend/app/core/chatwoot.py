@@ -115,14 +115,33 @@ def configurado() -> bool:
         return False
 
 
+# B3 T20 (M7): lo que reemplaza al enlace del cliente (y a su token) en todo lo que se guarda o se muestra. Unica
+# definicion: envio_whatsapp la reexporta.
+ENLACE_OCULTO = "[enlace de confirmación]"
+# La ruta de un enlace publico (confirmation_tokens.RUTA_PUBLICA) con su token (o un pedazo de 20 o mas, recortado).
+_ENLACE_EN_TEXTO = re.compile(r"/(?:confirmar|pedido)/[A-Za-z0-9_-]{20,}")
+# Un token suelto como los de secrets.token_urlsafe(32): 43 caracteres de [A-Za-z0-9_-] sin otro de esos pegado a los
+# lados. Los limites van con lookarounds sobre ese alfabeto y no con \b: un token que empieza o termina en '-' no
+# tendria limite de palabra junto a un espacio.
+_TOKEN_SUELTO = re.compile(r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])")
+
+
+def ocultar_tokens(texto: str) -> str:
+    """B3 T20 (M7): el texto sin enlaces publicos ni tokens sueltos, SIN necesidad de conocer el enlace (el
+    external_error de Meta puede repetir el parametro {{4}}, el enlace): la ruta /confirmar/<token> o /pedido/<token>
+    y cualquier token suelto de 43 caracteres pasan a ENLACE_OCULTO."""
+    return _TOKEN_SUELTO.sub(ENLACE_OCULTO, _ENLACE_EN_TEXTO.sub(ENLACE_OCULTO, texto))
+
+
 def limpiar_detalle(texto) -> str:
-    """El texto de un error listo para guardar o mostrar: sin el token de Chatwoot (si esta en el entorno), en una sola
-    linea y recortado a DETALLE_MAX caracteres."""
+    """El texto de un error listo para guardar o mostrar: sin el token de Chatwoot (si esta en el entorno), sin enlaces
+    ni tokens del cliente (ocultar_tokens, T20 M7), en una sola linea y recortado a DETALLE_MAX caracteres (despues de
+    ocultar: el recorte nunca deja a la vista un pedazo de token que ya no se reconoce)."""
     texto = " ".join(str(texto if texto is not None else "").split())
     token = (os.environ.get("CHATWOOT_API_TOKEN") or "").strip()
     if len(token) >= 4:
         texto = texto.replace(token, "[token]")
-    return texto[:DETALLE_MAX]
+    return ocultar_tokens(texto)[:DETALLE_MAX]
 
 
 def _timeout(plazo) -> float:

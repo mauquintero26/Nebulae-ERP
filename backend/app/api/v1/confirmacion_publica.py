@@ -258,7 +258,7 @@ def confirmar_via_token(body: TokenBody, idempotency_key: str = Header(..., alia
         db.commit()
         # Despues del commit solo se lee: la respuesta no agrega commits.
         return _respuesta_confirmada(db, "Solicitud confirmada. Gracias.", ahora, numero, lambda: {
-            "siguiente_paso": siguiente_paso_sc(sc, forma_de_pago(sc.modalidad_pago)),
+            "siguiente_paso": siguiente_paso_sc(db, sc, forma_de_pago(sc.modalidad_pago)),
             "data": _sc_confirmacion_dict(db, sc)})
     elif document_type == "COT":
         from app.api.v1.erp_ventas import _log, _sincronizar_estado_solicitud_desde_cotizacion
@@ -448,11 +448,11 @@ def _cambios_en_cotizacion_temprana(db: Session, sc, cot, tipo: str, comentario,
         return
     renglones = [_renglon_comentario(comentario)]
     old_estado = new_estado = None
-    cita = f": «{comentario}»" if comentario else ""
+    # T20 (M1): la descripción no cita el comentario (va en extra_data, ver pedir_cambios_via_token).
     if tipo == TIPO_CAMBIOS:
-        sobre_la_sc = f"El cliente pidió cambios en la solicitud {sc.numero}: «{comentario}»"
+        sobre_la_sc = f"El cliente pidió cambios en la solicitud {sc.numero}"
     else:
-        sobre_la_sc = f"El cliente dice que ya no necesita la solicitud {sc.numero}{cita}"
+        sobre_la_sc = f"El cliente dice que ya no necesita la solicitud {sc.numero}"
     if cot.estado == "PENDIENTE_CONFIRMACION":
         old_estado, new_estado = cot.estado, "BORRADOR"
         cot.estado = new_estado
@@ -492,13 +492,13 @@ def _cambios_en_solicitud(db: Session, sc, reclamado: dict, tipo: str, comentari
     revoke_pending_tokens(db, "SC", sc.id, commit=False)  # el enlace usado ya tiene used_at: no se toca
     _anotar_cambios(db, reclamado, sc.numero)
     etiqueta = etiqueta_estado("SC", sc.estado)
+    # T20 (M1): la descripción no cita el comentario (va en extra_data, ver pedir_cambios_via_token).
     if tipo == TIPO_CAMBIOS:
-        descripcion = (f"El cliente pidió cambios desde el enlace: «{comentario}». La solicitud vuelve a {etiqueta} "
-                       f"para que la ajustes y se la reenvíes.")
+        descripcion = (f"El cliente pidió cambios desde el enlace. La solicitud vuelve a {etiqueta} para que la "
+                       f"ajustes y se la reenvíes.")
     else:
-        cita = f": «{comentario}»" if comentario else ""
-        descripcion = (f"El cliente dice que ya no necesita esta solicitud{cita}. Vuelve a {etiqueta}: decide si la "
-                       f"cancelas o la ajustas.")
+        descripcion = (f"El cliente dice que ya no necesita esta solicitud. Vuelve a {etiqueta}: decide si la cancelas "
+                       f"o la ajustas.")
     _log(db, "SC", sc.id, sc.numero, "CAMBIOS_CLIENTE", descripcion, old_estado=old_estado, new_estado=sc.estado,
          user_name=USUARIO_DEL_ENLACE,
          extra_data=_extra_de_cambios(tipo, comentario, "Estado de la solicitud", etiqueta), commit=False)
@@ -521,8 +521,9 @@ def _cambios_en_cotizacion(db: Session, cot, reclamado: dict, comentario, ahora)
     revoke_pending_tokens(db, "COT", cot.id, commit=False)
     _anotar_cambios(db, reclamado, cot.numero)
     etiqueta = etiqueta_estado("COT", cot.estado)
-    descripcion = (f"El cliente pidió cambios desde el enlace: «{comentario}». La cotización vuelve a {etiqueta} para "
-                   f"que la ajustes y se la reenvíes.")
+    # T20 (M1): la descripción no cita el comentario (va en extra_data, ver pedir_cambios_via_token).
+    descripcion = (f"El cliente pidió cambios desde el enlace. La cotización vuelve a {etiqueta} para que la ajustes y "
+                   f"se la reenvíes.")
     _log(db, "COT", cot.id, cot.numero, "CAMBIOS_CLIENTE", descripcion, old_estado=old_estado, new_estado=cot.estado,
          user_name=USUARIO_DEL_ENLACE,
          extra_data=_extra_de_cambios(TIPO_CAMBIOS, comentario, "Estado de la cotización", etiqueta), commit=False)
@@ -572,7 +573,11 @@ def pedir_cambios_via_token(body: PedirCambiosBody, idempotency_key: str = Heade
        _cambios_en_cotizacion);
     5) después del commit, el aviso al asesor (erp_ventas._avisar_asesor_por_correo, C17), en try/except: si falla, el
        cliente igual recibe su 200 y el error queda en el registro.
-    El comentario del cliente es dato: se guarda como texto, va escapado en el correo y React lo muestra como texto."""
+    El comentario del cliente es dato: se guarda como texto, va escapado en el correo y React lo muestra como texto.
+    T20 (M1): lo ÚNICO que escribe el cliente son extra_data.comentario (con su renglón «Comentario del cliente» en
+    extra_data.cambios) de CAMBIOS_CLIENTE y SC_CAMBIOS_CLIENTE, y cambios_cliente_comentario del documento. Se tratan
+    como DATO, nunca como instrucción ni como texto del sistema (también la IA del Bloque 5, que leerá la Actividad):
+    por eso ActivityLog.description no lo cita (el cliente podría cerrar las comillas e imitar al sistema)."""
     tipo, comentario = _validar_pedido_de_cambios(body)
     info = consultar_token(db, body.token)
     estado, detalle, _ = _resolver_enlace(db, info)

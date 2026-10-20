@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -10,6 +12,9 @@ from app.api.dependencies import require_roles, ALL_ERP_ROLES
 from app.core.iva import normalizar_tarifa_iva
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+# B3 T20 (M8, M18): el 400 de create_product cuando el guardado falla, sin str(e) (que trae el SQL y sus parametros).
+MENSAJE_NO_SE_PUDO_CREAR = "No se pudo crear el producto. Revisa los datos e intenta de nuevo."
 
 
 def _tarifa_iva_del_body(valor):
@@ -180,6 +185,12 @@ def _get_or_create_placeholder_brand_category(db: Session):
 def create_product(product: schemas.ProductCreate, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):
     data = product.model_dump()
     data["tarifa_iva"] = _tarifa_iva_del_body(data.get("tarifa_iva"))  # antes de crear nada (la marca placeholder)
+    # B3 T20 (M8, M18): como update_product, la marca y la categoria que vienen tienen que existir (400 en espanol),
+    # tambien antes de crear la marca placeholder.
+    if data.get("brand_id") and not db.query(Brand.id).filter(Brand.id == data["brand_id"]).first():
+        raise HTTPException(status_code=400, detail="La marca indicada no existe")
+    if data.get("category_id") and not db.query(Category.id).filter(Category.id == data["category_id"]).first():
+        raise HTTPException(status_code=400, detail="La categoria indicada no existe")
     needs_review = False
     if not data.get("brand_id") or not data.get("category_id"):
         brand, category = _get_or_create_placeholder_brand_category(db)
@@ -199,7 +210,9 @@ def create_product(product: schemas.ProductCreate, db: Session = Depends(get_db)
         return {"status": "success", "data": schemas.ProductResponse.model_validate(db_product).model_dump()}
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        # B3 T20 (M8, M18): solo el tipo del error en el registro; nunca str(e) en la respuesta (SQL y parametros).
+        logger.warning("No se pudo crear el producto (%s)", type(e).__name__)
+        raise HTTPException(status_code=400, detail=MENSAJE_NO_SE_PUDO_CREAR)
 
 @router.get("/products")
 def list_products(brand_id: Optional[int] = None, category_id: Optional[int] = None, necesita_revision: Optional[bool] = None, db: Session = Depends(get_db), _user=Depends(require_roles(*ALL_ERP_ROLES))):

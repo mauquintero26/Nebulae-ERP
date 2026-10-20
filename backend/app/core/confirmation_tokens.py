@@ -49,8 +49,11 @@ _TOKEN_CRUDO = re.compile(r"[A-Za-z0-9_-]{20,}")
 
 
 def hash_token(raw: str) -> str:
-    """El sha256 que se guarda en token_hash (el token crudo nunca se guarda)."""
-    return hashlib.sha256(raw.encode()).hexdigest()
+    """El sha256 que se guarda en token_hash (el token crudo nunca se guarda). B3 T20 (M0): con 'surrogatepass', un
+    token con un surrogate suelto (json.loads y pydantic lo dejan pasar) da un hash que no es de ningún enlace, y el
+    endpoint responde su 400 de siempre en vez de un 500 por UnicodeEncodeError. Un token real (ASCII) da el mismo
+    hash."""
+    return hashlib.sha256(raw.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def _como_tupla(tipos) -> tuple:

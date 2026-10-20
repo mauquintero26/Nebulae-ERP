@@ -57,6 +57,13 @@ def _build_cors_origins() -> list[str]:
 
 _CORS_ORIGINS = _build_cors_origins()
 
+# Bloque 3, T20 (M19): tope de 64 KB para el cuerpo de las rutas publicas sin login (/api/v1/confirmar/,
+# /api/v1/pedido-cliente/ y /api/v1/publico/), ver app/core/limite_cuerpo.py. Se agrega ANTES que CORSMiddleware:
+# Starlette pone por FUERA el ultimo que se agrega, asi que este queda por DENTRO de CORS y su 413 sale con
+# Access-Control-Allow-Origin (si no, el navegador mostraria "Failed to fetch", como en el handler de abajo).
+from app.core.limite_cuerpo import LimiteDeCuerpo
+app.add_middleware(LimiteDeCuerpo)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ORIGINS,

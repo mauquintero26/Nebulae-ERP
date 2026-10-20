@@ -130,7 +130,8 @@ def _fecha(valor) -> str:
 
 def _filas_totales(documento: dict) -> list:
     """[(etiqueta, valor, estilo)] del bloque de totales, con estilo None | 'total' | 'ambar' | 'fuerte':
-    Subtotal; 'Descuento (x%)' si es > 0; una fila por impuesto; 'Ajuste por redondeo' si es != 0; TOTAL. Con pago:
+    Subtotal; 'Descuento (x%)' si es > 0; una fila por impuesto ('IVA 19% sobre $X' con su base, T20); 'Ajuste por
+    redondeo' si es != 0; TOTAL. Con pago:
     'Anticipo (x%)', 'Saldo a favor' y 'Anticipo por pagar' (si hay saldo a favor), 'Pagado' (si es > 0), 'Anticipo
     pendiente' (el pedido, si es > 0, en ámbar: R4) y 'Saldo' ('Saldo por pagar', destacado, en el pedido)."""
     filas = []
@@ -142,7 +143,11 @@ def _filas_totales(documento: dict) -> list:
             filas.append((f"Descuento ({pct})" if pct else "Descuento", f"-{_pesos(totales['descuento'])}", None))
         for impuesto in totales.get("impuestos") or []:
             if isinstance(impuesto, dict):
-                filas.append((_linea(impuesto.get("etiqueta")) or "IVA", _pesos(impuesto.get("valor")), None))
+                # B3 T20 (M17, spec:3104): '{etiqueta} sobre {base}', como filasTotales de la página.
+                etiqueta = _linea(impuesto.get("etiqueta")) or "IVA"
+                if _es_numero(impuesto.get("base")):
+                    etiqueta = f"{etiqueta} sobre {_pesos(impuesto['base'])}"
+                filas.append((etiqueta, _pesos(impuesto.get("valor")), None))
         ajuste = totales.get("ajuste_redondeo")
         if _es_numero(ajuste) and ajuste != 0:
             filas.append(("Ajuste por redondeo", _pesos(ajuste), None))

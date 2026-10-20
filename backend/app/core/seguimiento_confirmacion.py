@@ -38,6 +38,7 @@ ORDEN DEL ENVÍO (_enviar_recordatorio). Bloqueos siempre documento → fila del
 envíos, el Chatter y el «pedir cambios» (así ningún camino forma un ciclo con otro):
 (1) _preparar_envio: con el documento y la fila bloqueados, repite las paradas; si sigue en pie, crea el enlace nuevo en
     esa transacción y la confirma (suelta los bloqueos antes de la red; el enlace sirve en cuanto le llega al cliente).
+    T20 (M6): antes de ese commit guarda la foto del destino (_Destino), que es lo que recibe el envío.
 (2) El envío (enviar o _enviar_por_defecto, que confirma la fila EnvioAlCliente del WhatsApp en cuanto sale, nota del
     controlador tras T8) y un commit.
 (3) Con el documento y la fila bloqueados otra vez: si salió y el documento sigue en Pendiente, se anulan los enlaces
@@ -481,6 +482,19 @@ class _Reclamo:
     proximo_previo: datetime | None = None
 
 
+@dataclass(frozen=True)
+class _Destino:
+    """B3 T20 (M6): la foto del destino del recordatorio, tomada en _preparar_envio con el documento bloqueado (la misma
+    lectura con que se revisaron las paradas y la identidad) y ANTES del commit que suelta el bloqueo. Es lo que recibe
+    `enviar` como doc: _enviar_por_defecto ya no relee un documento expirado (y sin bloqueo) después de ese commit."""
+    id: int
+    numero: str
+    customer_name: str | None
+    customer_email: str | None
+    telefono: str | None
+    valida_hasta: date | None
+
+
 # Resultado de _enviar_recordatorio (la clave del conteo de correr_seguimientos).
 ENVIADO, FALLIDO, NO_SALIO = "enviados", "fallidos", "detenidos"
 
@@ -802,8 +816,12 @@ def _preparar_envio(db: Session, reclamo: _Reclamo, ahora: datetime):
       nuevo: posponer_por_contacto ya la corrió). Se devuelve el reclamo y queda el proximo_at del Chatter.
     En esos casos no se crea enlace ni sale nada, y devuelve None. Si sigue en pie, crea el enlace en ESTA misma
     transacción (commit=False) y confirma, para soltar los bloqueos antes de hablar con Chatwoot y con el SMTP (y para
-    que el enlace sirva en cuanto le llega al cliente). Devuelve su token crudo. C14: el enlace de una COT vence con su
-    validez (que el recordatorio nunca cambia); el de la SC, a los 2 días."""
+    que el enlace sirva en cuanto le llega al cliente). Devuelve (token crudo, _Destino). C14: el enlace de una COT
+    vence con su validez (que el recordatorio nunca cambia); el de la SC, a los 2 días.
+    T20 (M6): el _Destino (número, nombre, correo, teléfono y validez) se toma aquí, con el bloqueo y antes del commit:
+    el recordatorio sale a la persona cuya identidad se acaba de revisar, la misma del enlace. Si el cliente cambia
+    después de este commit (update_* o PATCH /cliente), ese cambio revoca el enlace nuevo, así que lo que llega es un
+    enlace anulado del cliente anterior; nunca un mensaje con los datos del cliente nuevo releídos sin bloqueo."""
     doc, fila = _bloquear(db, reclamo)
     if not _mismo_ciclo(fila, reclamo):
         db.commit()
@@ -821,9 +839,12 @@ def _preparar_envio(db: Session, reclamo: _Reclamo, ahora: datetime):
         return None
     valida_hasta = doc.valida_hasta if reclamo.tipo == "COT" else None
     expira = vence_al_final_del_dia(valida_hasta) if isinstance(valida_hasta, date) else None
+    destino = _Destino(id=doc.id, numero=doc.numero, customer_name=doc.customer_name,
+                       customer_email=doc.customer_email, telefono=telefono_del_documento(doc),
+                       valida_hasta=valida_hasta if isinstance(valida_hasta, date) else None)
     raw = create_confirmation_token(db, reclamo.tipo, reclamo.doc_id, expires_at=expira, commit=False)
     db.commit()
-    return raw
+    return raw, destino
 
 
 def _enviar_recordatorio(db: Session, reclamo: _Reclamo, cfg: dict, enviar, ahora: datetime) -> str:
@@ -835,18 +856,20 @@ def _enviar_recordatorio(db: Session, reclamo: _Reclamo, cfg: dict, enviar, ahor
     la vuelta siguiente (_anotar_error_antes_de_enviar, r2)."""
     tipo, n = reclamo.tipo, reclamo.n
     try:
-        raw = _preparar_envio(db, reclamo, ahora)
+        preparado = _preparar_envio(db, reclamo, ahora)
     except Exception:
         db.rollback()
         logger.exception("No se pudo preparar el recordatorio automático de %s %s (no salió; se intentará en la "
                          "próxima revisión)", tipo, reclamo.numero)
         _anotar_error_antes_de_enviar(db, reclamo)
         return FALLIDO
-    if raw is None:
+    if preparado is None:
         return NO_SALIO
+    raw, destino = preparado
     link = enlace_publico(raw, tipo)
     try:
-        res = enviar(db, tipo=tipo, doc=reclamo.doc, canal=reclamo.canal, link=link, numero=n, total=cfg["max"])
+        # T20 (M6): la foto del destino, no reclamo.doc (expirado tras el commit de _preparar_envio).
+        res = enviar(db, tipo=tipo, doc=destino, canal=reclamo.canal, link=link, numero=n, total=cfg["max"])
     except Exception:
         db.rollback()
         logger.exception("Falló el envío del recordatorio automático de %s %s", tipo, reclamo.numero)
@@ -926,6 +949,9 @@ def _enviar_por_defecto(db: Session, *, tipo: str, doc, canal, link: str, numero
     """El envío real del recordatorio (C15, C17, RP28): {'whatsapp': {enviado, motivo, mensaje, estado, modo, destino,
     envio_id, texto} | None, 'correo': {enviado, destino, motivo, mensaje}}.
 
+    T20 (M6): doc es el _Destino de _preparar_envio (la foto tomada con el bloqueo): aquí no se lee ningún atributo de
+    un objeto del ORM (expirado después de ese commit).
+
     - El correo se arma PRIMERO (correo_documento con proposito SEGUIMIENTO y, en la COT, su validez), antes de mandar
       nada: si no se puede armar (un FRONTEND_URL sin http(s)), no sale nada (MENSAJE_SIN_ARMAR).
     - WhatsApp: envio_whatsapp.enviar_documento(proposito='SEGUIMIENTO'), con la plantilla 'recordatorio' fuera de la
@@ -956,7 +982,7 @@ def _enviar_por_defecto(db: Session, *, tipo: str, doc, canal, link: str, numero
         if envio_whatsapp.whatsapp_configurado(db):
             r = envio_whatsapp.enviar_documento(
                 db, doc_tipo=tipo, doc_id=doc.id, doc_numero=doc.numero, cliente_nombre=doc.customer_name,
-                cliente_email=doc.customer_email, telefono=telefono_del_documento(doc), enlace=link, vence=vence,
+                cliente_email=doc.customer_email, telefono=doc.telefono, enlace=link, vence=vence,
                 user_name=USUARIO_SISTEMA, proposito="SEGUIMIENTO")
             db.commit()  # r1 (I3): la fila EnvioAlCliente queda firme antes de lo que sigue
             wa = {"enviado": r["enviado"], "motivo": r["motivo"], "mensaje": r["texto_resultado"],

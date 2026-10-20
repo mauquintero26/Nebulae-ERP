@@ -21,7 +21,8 @@ Compara, con casos fijos (incluidos los bordes; ningun caso al azar):
   (documento-comercial.js).
 - envio_whatsapp.MOTIVOS, TEXTOS_ENVIADO y ESTADOS_FINALES con sus espejos (envio-whatsapp.js), y los codigos de las
   acciones nuevas con ACCIONES_BLOQUE3 (acciones-bloque3.js, RP22).
-NO compara la etiqueta del impuesto de filasTotales ('IVA 19% sobre $X') con la del PDF ('IVA 19%'): difieren hasta T20.
+- La fila de cada impuesto ('IVA 19% sobre $X', T20 M17): la etiqueta y el valor de filasTotales con los de
+  pdf_documento._filas_totales.
 
 Sin base de datos: todas las funciones del backend que compara son puras.
 Correr SOLO con el runner de ROLLBACK:  python tests/rollback_runner.py test_paridad_bloque3
@@ -236,10 +237,11 @@ def test_paridad_desglose_documento():
 def test_paridad_impuestos_del_documento():
     """Los impuestos del documento del cliente (documento_cliente._totales_del_documento, que los toma de
     desglose_documento sin recalcular) son los mismos montos que da desgloseDocumento del frontend y los que pinta
-    filasTotales (documento-comercial.js). NO compara la etiqueta: la pagina dice 'IVA 19% sobre $X' y el PDF 'IVA 19%'
-    (difieren hasta T20)."""
+    filasTotales (documento-comercial.js). T20 (M17): tambien la fila del PDF (pdf_documento._filas_totales), con la
+    misma etiqueta que la pagina ('IVA 19% sobre $X') y el mismo valor."""
     from app.core.documento_cliente import _totales_del_documento
     from app.core.iva import desglose_documento
+    from app.core.pdf_documento import _filas_totales, _pesos
     docs = _desgloses()[:5] + [{"productos": _ejemplo((None, None, None)), "subtotal_cop": 1840614, "tax_cop": 349717,
                                 "total_cop": 2190331}]  # el ultimo: IVA guardado sin tarifas (una sola fila 'IVA')
     totales = []
@@ -262,6 +264,12 @@ def test_paridad_impuestos_del_documento():
         assert not any(k.startswith(f"impuesto-{len(t['impuestos'])}") for k in valor), ascii(fs)
         assert (valor["subtotal"], valor["total"]) == (t["subtotal"], t["total"])
         assert valor.get("descuento", 0) == -des["descuento_cop"] == -t["descuento"]
+        # T20 (M17): las filas de impuesto del PDF (entre Subtotal/Descuento y Ajuste/TOTAL) = las de la pagina.
+        del_pdf = [(etiqueta, monto) for etiqueta, monto, _ in _filas_totales({"totales": t})
+                   if etiqueta not in ("Subtotal", "TOTAL", "Ajuste por redondeo") and not etiqueta.startswith("Descuento")]
+        de_la_pagina = [(f["etiqueta"], _pesos(f["valor"])) for f in fs if f["clave"].startswith("impuesto-")]
+        assert del_pdf == de_la_pagina, ascii((del_pdf, de_la_pagina))
+        assert all(" sobre $" in etiqueta for etiqueta, _ in del_pdf), ascii(del_pdf)
     assert [len(t["impuestos"]) for t in totales] == [2, 2, 2, 0, 1, 1]
 
 
@@ -301,6 +309,9 @@ _EMPRESA = [
     ("sitio_web", "nebulae.co"), ("sitio_web", "https://nebulae.co/tienda"), ("sitio_web", "javascript:alert(1)"),
     ("sitio_web", "ftp://nebulae.co"), ("sitio_web", "https://[abc"), ("sitio_web", "http://"), ("sitio_web", "localhost:3000"),
     ("sitio_web", "https://nebulae .co"), ("sitio_web", "a" * 195 + ".co"),
+    # T20 (C1, C2, M16): una URL con credenciales lleva a otro sitio ('mitienda.com@evil.com' abre evil.com).
+    ("sitio_web", "https://mitienda.com@evil.com"), ("sitio_web", "https://user:pw@nebulae.co"),
+    ("sitio_web", "https://@evil.com"), ("sitio_web", "mitienda.com@evil.com"), ("sitio_web", "https://nebulae.co/@tienda"),
     ("color_principal", "#7c3aed"), ("color_principal", "#7C3AED"), ("color_principal", "7C3AED"),
     ("color_secundario", "#12345"), ("color_acento", "#GGGGGG"), ("color_acento", ""),
     ("terminos_cotizacion", "Línea 1\r\nLínea 2\n\tSangría\x00\x07 "), ("terminos_pedido", "a" * 2001),
@@ -321,6 +332,12 @@ def test_paridad_validar_campo_empresa():
 
     esperado = [backend(c, v) for c, v in _EMPRESA]
     assert esperado == espejo, _diferencias(_EMPRESA, esperado, espejo)
+    # T20 (C1, C2, M16): los dos lados rechazan una URL con '@' antes de la ruta; en la ruta no es una credencial.
+    resultado = {v: r for (c, v), r in zip(_EMPRESA, esperado) if c == "sitio_web"}
+    for credenciales in ("https://mitienda.com@evil.com", "https://user:pw@nebulae.co", "https://@evil.com",
+                         "mitienda.com@evil.com"):
+        assert resultado[credenciales] == {"valor": None, "error": empresa.MENSAJE_URL}, credenciales
+    assert resultado["https://nebulae.co/@tienda"] == {"valor": "https://nebulae.co/@tienda", "error": None}
     assert sum(1 for r in esperado if r["error"]) >= 20 and sum(1 for r in esperado if not r["error"]) >= 20
 
 

@@ -1322,3 +1322,39 @@ def test_verificar_requiere_sesion(app_client, db, admin_token, user_admin, comp
     assert _verificar(app_client, compras_token, envio.id).status_code == 403
     resp = _verificar(app_client, admin_token, 999999999)
     assert resp.status_code == 404 and resp.json()["detail"] == "Envío no encontrado"
+
+
+# ─── T20, Paso 1 (revisión de seguridad) ────────────────────────────────────────────────────────────────────
+
+def test_verificar_fallido_no_guarda_el_enlace_del_error_de_whatsapp(app_client, db, admin_token, user_admin,
+                                                                       monkeypatch):
+    """T20 (M7): el external_error de Meta puede repetir el parámetro {{4}} (el enlace). La limpieza ya no depende de
+    conocer el enlace (chatwoot.limpiar_detalle -> ocultar_tokens): la ruta /confirmar/<token> o /pedido/<token> y un
+    token suelto de 43 caracteres se cambian por ENLACE_OCULTO. El token no queda en envios_al_cliente.detalle, en la
+    Actividad ni en la respuesta de /verificar."""
+    from app.core import chatwoot
+    from app.core.envio_whatsapp import ENLACE_OCULTO
+    from app.models.envios import EnvioAlCliente
+    en_ruta = "Zx9-" * 10 + "abc"  # 43 caracteres de token_urlsafe(32)
+    suelto = "-" + "Qw_8" * 10 + "zz"  # 43, empieza por '-' (un límite de palabra \b no lo vería)
+    assert len(en_ruta) == len(suelto) == 43
+    externo = (f"(#131008) Parameter value is not valid: https://erp.invalid/confirmar/{en_ruta}, "
+               f"https://erp.invalid/pedido/{en_ruta[:25]} y {suelto}.")
+    _preparar(monkeypatch, db, _mensajes(
+        {"id": 901, "status": "failed", "content_attributes": {"external_error": externo}}))
+    sc = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
+    envio = _envio_guardado(db, sc)
+    resp = _verificar(app_client, admin_token, envio.id)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["estado"] == "FALLIDO"
+    db.expire_all()
+    fila = db.get(EnvioAlCliente, envio.id)
+    [renglon] = _renglones(db, "SC", sc.id, "MENSAJE_CLIENTE")
+    for texto in (resp.text, fila.detalle or "", json.dumps(renglon.extra_data, ensure_ascii=False),
+                  renglon.description):
+        for token in (en_ruta, suelto, en_ruta[:25]):
+            assert token not in texto, (token, texto)
+    assert ENLACE_OCULTO in fila.detalle and "131008" in fila.detalle, fila.detalle
+    # Lo demás no se toca: un texto con 42 o 44 caracteres seguidos no es un token suelto.
+    assert chatwoot.limpiar_detalle("a" * 42) == "a" * 42 and chatwoot.limpiar_detalle("b" * 44) == "b" * 44
+    assert chatwoot.ENLACE_OCULTO is ENLACE_OCULTO == "[enlace de confirmación]"  # una sola definición

@@ -34,6 +34,7 @@ import { comoUTC } from '@/lib/hub-ventas';
 import { NOTA_REENVIO_ENLACE } from '@/lib/envio-whatsapp';
 import { accionBloque3 } from '@/lib/acciones-bloque3';
 import { textoIvaIncluido } from '@/lib/iva';
+import { AYUDA_NOTA_CLIENTE } from '@/lib/cambios-cliente';
 
 const fCOP = formatoPesos;
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
@@ -711,13 +712,15 @@ function PedidoVentaDetalleContent() {
                 )}
                 {(notaSolicitud || notaCotizacion || mostrarNotaPedido) && (
                   <div className={`space-y-3 ${pedido?.direccion_entrega ? '' : '@lg:col-span-2'}`}>
-                    {([['Nota de la solicitud', notaSolicitud], ['Nota de la cotización', notaCotizacion],
-                      ['Notas del pedido', mostrarNotaPedido ? notaPedido : '']] as const).filter(([, t]) => t).map(([titulo, t]) => (
+                    {/* B3 T20 (M5, R3): la nota de la COT es la que ve el cliente; la de la SC y las del pedido, no. */}
+                    {([['Nota de la solicitud', notaSolicitud, null], ['Nota de la cotización', notaCotizacion, AYUDA_NOTA_CLIENTE],
+                      ['Notas del pedido', mostrarNotaPedido ? notaPedido : '', null]] as const).filter(([, t]) => t).map(([titulo, t, ayuda]) => (
                       <div key={titulo}>
                         <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">{titulo}</label>
                         <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 whitespace-pre-wrap break-words">
                           {t}
                         </div>
+                        {ayuda && <p className="text-xs text-slate-500 mt-1.5">{ayuda}</p>}
                       </div>
                     ))}
                   </div>

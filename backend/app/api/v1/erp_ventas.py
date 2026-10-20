@@ -768,8 +768,11 @@ def _identidad_del_cliente(doc) -> tuple:
     enlaces: si cambia, el enlace pendiente de una COT o un PVEN se revoca (update_cotizacion, update_pedido y PATCH
     /solicitudes/{id}/cliente), update_solicitud revoca el enlace pendiente de la SC y los de sus COT tempranas (r4) y
     la SC deja el marcador de cambio de cliente (r2). La direccion no cuenta (R18 del Bloque 2): corregir la direccion
-    de la misma persona no cambia a quien le llega el enlace."""
-    return _cliente_de_la_solicitud(doc) + (_texto_del_cliente(doc.customer_name),)
+    de la misma persona no cambia a quien le llega el enlace. B3 T20 (M14): el nombre se compara con
+    _nombre_para_comparar (sin tildes, mayusculas ni espacios de mas), la misma regla de _mismo_nombre: corregir 'Ana
+    Perez' a 'Ana Pérez' no es un cambio de cliente. seguimiento_confirmacion._identidad la reusa en el mismo proceso
+    (el reclamo no se guarda), asi que el cambio de regla no deja fotos viejas al desplegar."""
+    return _cliente_de_la_solicitud(doc) + (_nombre_para_comparar(doc.customer_name),)
 
 
 def _nombre_para_comparar(nombre) -> str:
@@ -1873,7 +1876,6 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     old_estado = sc.estado
     fecha_vieja = sc.fecha_entrega_estimada if "fecha_entrega_estimada" in body else None
     antes_log = cambios_documento.tomar_foto(sc, "SC")
-    cliente_antes = _cliente_de_la_solicitud(sc)
     identidad_antes = _identidad_del_cliente(sc)
     customer_id_antes = sc.customer_id
     # U22-anticipo (B3 T7, C18): el anticipo que exige HOY cada COT abierta, con la modalidad de ANTES de este PATCH.
@@ -1906,8 +1908,9 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         sc.customer_address = ficha.address or None
         if "customer_name" not in body:
             # B3 T5 (r4, privacidad 2): y su nombre, si el PATCH no trae otro: la SC nunca se queda con el nombre del
-            # cliente anterior (sus documentos sin ficha con ese nombre recibirian los datos del nuevo).
-            sc.customer_name = f"{ficha.first_name or ''} {ficha.last_name or ''}".strip() or sc.customer_name
+            # cliente anterior (sus documentos sin ficha con ese nombre recibirian los datos del nuevo). B3 T20 (M13):
+            # con la regla unica clientes.nombre_cliente: una ficha sin nombre da 'CLI-0012', nunca el nombre anterior.
+            sc.customer_name = clientes.nombre_cliente(ficha)
     # U22-anticipo (B3 T7, C18, RP29): si la modalidad nueva cambia el anticipo de una COT que el cliente ya vio o
     # confirmo, 409 ANULA_CONFIRMACION aqui, en la fase de validacion: todavia no se escribio nada (sin flush; la SC y
     # sus COT quedan intactas). Con anular_confirmacion y la razon, esas COT vuelven a Borrador en el commit unico (H29).
@@ -1962,7 +1965,11 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
     # SC vuelve a ASIGNADA y su enlace se revoca, como sin cotizacion.
     cambian_los_productos = "productos" in body and cambios_documento.cambian_productos(
         antes_log.get("productos"), sc.productos)
-    cambia_el_cliente = _cliente_de_la_solicitud(sc) != cliente_antes
+    # B3 T20 r1b (M4, M11 y M15; opcion A del usuario, «Pedir confirmacion otra vez»): un cambio REAL del nombre tambien
+    # es un cambio de cliente y reinicia Gate 1 como cambiar la ficha; lo cosmetico (tildes, mayusculas y espacios, segun
+    # _mismo_nombre) no. Es exactamente cambia_la_identidad (_identidad_del_cliente = _cliente_de_la_solicitud mas
+    # _nombre_para_comparar, la regla unica de M14): se reusa en vez de repetir la comparacion.
+    cambia_el_cliente = cambia_la_identidad
     invalida_confirmacion = (
         (cambian_los_productos or cambia_el_cliente)
         and sc.estado == old_estado
@@ -2078,18 +2085,14 @@ def update_solicitud(sc_id: int, body: dict, user: User = Depends(require_roles(
         # (anula_por_cliente): el enlace y la marca eran del cliente anterior.
         # B7 (revision final): con CUALQUIER cambio de cliente, tambien en Asignada o Nueva sin la marca (ahi ni el
         # reinicio ni anula_por_cliente revocaban un enlace que hubiera quedado vivo): era del cliente anterior.
+        # B3 T20 r1b: un cambio real de solo el nombre tambien pasa por aqui (cambia_el_cliente = cambia_la_identidad);
+        # la rama aparte que revocaba sin aviso y sin reiniciar Gate 1 (r4 de T5) se borro.
         from app.core.confirmation_tokens import revoke_pending_tokens
         revoke_pending_tokens(db, "SC", sc.id, commit=False)
         sc.gate1_confirmed_at = None
-    elif cambia_la_identidad:
-        # B3 T5 (r4, privacidad 1): un cambio de solo el nombre tambien cambia a quien le llega el enlace
-        # (_identidad_del_cliente, la regla unica): el enlace todavia pendiente de la SC se revoca. Ruling: NO reinicia
-        # Gate 1 (no anula una confirmacion ya dada; si debe hacerlo, lo decide el usuario).
-        from app.core.confirmation_tokens import revoke_pending_tokens
-        revoke_pending_tokens(db, "SC", sc.id, commit=False)
     if cambia_la_identidad:
         # T11 calidad (F2, residual de S9): los enlaces de sus COT tempranas tambien eran del cliente anterior.
-        # B3 T5 (r4): con la misma identidad (cambia_el_cliente esta contenido en ella).
+        # B3 T5 (r4); T20 r1b: cambia_el_cliente es esta misma identidad.
         _anular_enlaces_de_cotizaciones_por_cambio_de_cliente(db, sc, nombre_de_usuario(user))
     # El dict se arma ANTES del commit: tras el commit el objeto queda expirado y leerlo costaria otro viaje a la base.
     resp = _sc_dict(sc)

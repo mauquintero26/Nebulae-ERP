@@ -532,3 +532,38 @@ def test_corregir_el_correo_revoca_el_enlace_del_pedido(app_client, db, admin_to
     assert fila["used_at"] is not None and fila["resultado"] == "REVOCADO"
     assert len(_renglones_de_enlace_anulado(db, so.id)) == 1
     _generico(_ver(app_client, raw))
+
+
+# ─── T20, Paso 1 (revisión de seguridad) ────────────────────────────────────────────────────────────────────
+
+def test_el_pedido_nunca_muestra_el_correo_ni_el_usuario_del_asesor(app_client, db, user_vendedor):
+    """T20 (C0, R24): /pedido-cliente/ver no muestra el advisor_name de la SC si es un correo o el usuario de entrada
+    de un User (auth.py acepta los dos): atendido_por None. Un nombre que no es de nadie sigue saliendo."""
+    from app.models.erp_documents import CustomerRequest
+    user_vendedor.username = f"laura_{_sufijo().lower()}"
+    db.commit()
+    for asesor in ("laura@empresa.com", user_vendedor.username, f" {user_vendedor.username.upper()} "):
+        so, _, raw = _pedido(db)
+        sc = db.get(CustomerRequest, so.sc_id)
+        sc.advisor_name = asesor
+        db.commit()
+        resp = _ver(app_client, raw)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["atendido_por"] is None
+        assert asesor.strip().casefold() not in resp.text.casefold(), asesor
+    so, _, raw = _pedido(db)
+    assert _ver(app_client, raw).json()["data"]["atendido_por"] == ASESORA
+
+
+def test_corregir_la_tilde_del_nombre_no_revoca_el_enlace_del_pedido(app_client, db, admin_token, monkeypatch):
+    """T20 (M14): una sola regla de nombre (_nombre_para_comparar). Corregir la tilde, las mayúsculas o los espacios
+    del nombre del pedido no es un cambio de cliente: su enlace de consulta sigue abriendo y no queda el renglón de
+    enlace anulado. Otro nombre sí lo revoca (test_cambio_de_cliente_del_pedido_revoca_su_enlace)."""
+    so, _, raw = _pedido(db, customer_name="Ana Perez")
+    revocaciones = _espiar_revocaciones_pven(monkeypatch)
+    resp = app_client.patch(f"/api/v1/ventas/pedidos/{so.id}", json={"customer_name": "  ana  PÉREZ ",
+                                                                     "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert _fila(db, raw)["used_at"] is None and revocaciones == []
+    assert _renglones_de_enlace_anulado(db, so.id) == []
+    assert _ver(app_client, raw).status_code == 200

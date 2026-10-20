@@ -4,7 +4,8 @@ C4 y R24).
 armar_documento(db, tipo, *, ...) devuelve SIEMPRE exactamente estas claves (CLAVES_DOCUMENTO), con los nombres de R24:
   tipo, titulo, numero, estado,
   fecha_emision ('...Z': instante UTC que el navegador pasa a Colombia), fecha_entrega_estimada ('AAAA-MM-DD'),
-  cliente {nombre, direccion_entrega}, atendido_por (solo el nombre del asesor), con_precios,
+  cliente {nombre, direccion_entrega}, atendido_por (solo el nombre del asesor; T20: nombre_asesor_publico),
+  con_precios,
   lineas [{n, descripcion, cantidad, precio_unitario, total_linea, iva_etiqueta, iva_pct, anticipo}] (CLAVES_LINEA),
   totales {subtotal, descuento_pct, descuento, impuestos [{etiqueta, base, valor}], ajuste_redondeo, total} | None,
   pago {modalidad, anticipo_pct, anticipo, saldo, saldo_a_favor, anticipo_por_pagar, pagado, pagos, instrucciones,
@@ -314,10 +315,29 @@ def forma_de_pago(modalidad) -> dict:
             "anticipo_pct": int(PCT_ANTICIPO_POR_DEFECTO if pct is None else pct)}
 
 
-def siguiente_paso_sc(sc, forma_pago) -> list:
+def nombre_asesor_publico(db: Session, valor):
+    """B3 T20 (C0, R24): el nombre del asesor que puede ver el cliente, o None. advisor_name lo escriben los formularios
+    internos y suele traer el CORREO del usuario (advisor_name: yo.email) o su usuario de entrada; los dos sirven para
+    entrar al ERP (auth.py acepta el correo o el username), así que nunca salen en una página pública, un correo ni un
+    PDF. None si no es texto, si queda vacío, si lleva '@' o si coincide (sin mayúsculas ni espacios en los bordes) con
+    el email o el username de algún User; si no, el texto sin los espacios de los bordes. La ÚNICA regla: la usan
+    documento_sc, documento_cot, documento_pven, siguiente_paso_sc y _asesor_del_documento."""
+    texto = _texto(valor)
+    if texto is None or "@" in texto:
+        return None
+    from sqlalchemy import func, or_
+    from app.models.users import User
+    clave = texto.casefold()
+    es_de_un_usuario = db.query(User.id).filter(or_(func.lower(func.trim(User.email)) == clave,
+                                                    func.lower(func.trim(User.username)) == clave)).first()
+    return None if es_de_un_usuario is not None else texto
+
+
+def siguiente_paso_sc(db: Session, sc, forma_pago) -> list:
     """Los 3 pasos de '¿Qué sigue?' de una SC confirmada (U17): quién prepara la cotización (el asesor o 'Tu asesor'),
-    que se la enviamos por el mismo medio y que al aprobarla se hace el pedido, con el anticipo si es mayor que 0."""
-    asesor = _texto(getattr(sc, "advisor_name", None)) or "Tu asesor"
+    que se la enviamos por el mismo medio y que al aprobarla se hace el pedido, con el anticipo si es mayor que 0.
+    T20 (C0): el nombre pasa por nombre_asesor_publico (nunca el correo ni el usuario de entrada)."""
+    asesor = nombre_asesor_publico(db, getattr(sc, "advisor_name", None)) or "Tu asesor"
     pct = (forma_pago or {}).get("anticipo_pct") or 0
     anticipo = f" con el anticipo del {formato_pct(pct)}" if pct > 0 else ""
     return [f"{asesor} prepara tu cotización con los precios.",
@@ -449,7 +469,7 @@ def documento_sc(db: Session, sc) -> dict:
         lineas=[linea_publica(p, False) for p in _lineas_visibles(sc.productos)], con_precios=False,
         direccion_entrega=sc.customer_address, fecha_entrega_estimada=sc.fecha_entrega_estimada,
         pago={"modalidad": forma["modalidad"], "anticipo_pct": forma["anticipo_pct"], "manual": False},
-        notas=notas_para_cliente(sc), atendido_por=sc.advisor_name, estado=sc.estado)
+        notas=notas_para_cliente(sc), atendido_por=nombre_asesor_publico(db, sc.advisor_name), estado=sc.estado)
 
 
 def documento_cot(db: Session, cot, token_row=None) -> dict:
@@ -479,7 +499,8 @@ def documento_cot(db: Session, cot, token_row=None) -> dict:
         cliente_nombre=cot.customer_name, lineas=lineas, con_precios=True,
         direccion_entrega=cot.direccion_entrega or cot.customer_address,
         fecha_entrega_estimada=cot.fecha_entrega_estimada, totales=_totales_del_documento(cot, lineas, desglose),
-        pago=pago, notas=notas_para_cliente(sc, cot), atendido_por=sc.advisor_name if sc is not None else None,
+        pago=pago, notas=notas_para_cliente(sc, cot),
+        atendido_por=nombre_asesor_publico(db, sc.advisor_name) if sc is not None else None,
         estado=cot.estado, valida_hasta=cot.valida_hasta)
 
 
@@ -533,7 +554,7 @@ def documento_pven(db: Session, so) -> dict:
         fecha_entrega_estimada=so.fecha_entrega_estimada,
         totales=_totales_del_documento(so, lineas, desglose, sumar_lineas=nota_cancelaciones is None), pago=pago,
         notas=notas,
-        atendido_por=sc.advisor_name if sc is not None else None, estado=so.estado)
+        atendido_por=nombre_asesor_publico(db, sc.advisor_name) if sc is not None else None, estado=so.estado)
 
 
 # ─── T5: estado del enlace en palabras (U17 reglas a-i, C10; regla g con H28-cambios) ───────────────────────────
@@ -603,6 +624,32 @@ def _cambio_el_cliente_despues(db: Session, sc_id: int, desde) -> bool:
     return False
 
 
+def _cot_cambio_de_cliente_despues(db: Session, cot_id: int, desde) -> bool:
+    """B3 T20 (M2): la COT cambió de cliente después de `desde` (cuando se creó el enlace). La señal es su marcador, el
+    renglón con erp_ventas._ENLACE_COT_ANULADO en extra_data.cambios: lo escriben, en el commit del cambio, los tres
+    caminos que le cambian el cliente (update_cotizacion, update_solicitud en sus COT tempranas y PATCH
+    /solicitudes/{id}/cliente) cuando revocan un enlace vivo. No se agregan columnas. Import dentro: erp_ventas importa
+    este módulo."""
+    from app.api.v1.erp_ventas import _ENLACE_COT_ANULADO
+    from app.models.erp_documents import ActivityLog
+    filas = (db.query(ActivityLog.extra_data)
+             .filter(ActivityLog.entity_type == "COT", ActivityLog.entity_id == cot_id, ActivityLog.created_at > desde)
+             .all())
+    for (extra,) in filas:
+        cambios = extra.get("cambios") if isinstance(extra, dict) else None
+        if isinstance(cambios, list) and _ENLACE_COT_ANULADO in cambios:
+            return True
+    return False
+
+
+def _cambio_el_cliente_despues_del_enlace(db: Session, tipo: str, doc_id: int, desde) -> bool:
+    """B3 T20 (M2): el documento del enlace cambió de cliente después de crearse ese enlace. SC:
+    _cambio_el_cliente_despues; COT: _cot_cambio_de_cliente_despues."""
+    if tipo == "SC":
+        return _cambio_el_cliente_despues(db, doc_id, desde)
+    return _cot_cambio_de_cliente_despues(db, doc_id, desde)
+
+
 def _ultimo_dia_del_enlace(expires_at) -> str:
     """El último día en que sirvió el enlace, en Colombia ('8 de octubre de 2026'), para «venció el …». expires_at es
     el instante en que dejó de servir (para la COT y el PVEN, las 00:00 del día siguiente en Colombia): el día es el
@@ -611,11 +658,11 @@ def _ultimo_dia_del_enlace(expires_at) -> str:
 
 
 def _asesor_del_documento(db: Session, doc, tipo: str) -> str:
-    """El nombre del asesor (el de la SC; en la COT, el de su SC) o 'Tu asesor'."""
+    """El nombre del asesor (el de la SC; en la COT, el de su SC) o 'Tu asesor'. T20 (C0): nombre_asesor_publico."""
     if tipo == "COT":
         from app.models.erp_documents import CustomerRequest
         doc = _cargar(db, CustomerRequest, doc.sc_id)
-    return _texto(getattr(doc, "advisor_name", None)) or "Tu asesor"
+    return nombre_asesor_publico(db, getattr(doc, "advisor_name", None)) or "Tu asesor"
 
 
 def _hay_enlace_posterior(db: Session, tipo: str, doc_id: int, despues_de) -> bool:
@@ -648,7 +695,7 @@ def _confirmada(db: Session, info: dict, doc, tipo: str, nombre: str) -> dict:
         if reciente and confirmacion_vigente and not otro_cliente:
             documento = documento_sc(db, doc)
         if not otro_cliente:
-            siguiente = siguiente_paso_sc(doc, forma_de_pago(doc.modalidad_pago))
+            siguiente = siguiente_paso_sc(db, doc, forma_de_pago(doc.modalidad_pago))
     return {"mensaje": MENSAJES_ENLACE["confirmada"].format(documento=nombre), "documento": documento,
             "confirmada_el": iso_z(confirmada_el), "siguiente_paso": siguiente}
 
@@ -660,6 +707,9 @@ def estado_enlace(db: Session, info, doc, tipo) -> tuple:
       c) enlace vigente y documento en PENDIENTE_CONFIRMACION -> 'pendiente' (la única que responde 200);
       d) documento CONFIRMADA (la SC también en un estado heredado de U15) -> 'confirmada' (ver _confirmada);
       e) vencido sin usar -> 'vencido', con documento = {numero};
+      T20 (M2): si el documento cambió de cliente después de crearse ESTE enlace (_cambio_el_cliente_despues_del_enlace)
+         -> 'no_disponible', antes de f, g y h: al cliente anterior no se le dice que hay un enlace más reciente, que
+         ya envió cambios ni que el documento se actualizó (todo eso es del cliente nuevo);
       f) hay un enlace más reciente vigente -> 'reemplazado';
       g) resultado CAMBIOS (lo escribe T6) -> 'cambios_enviados', con el comentario mientras cambios_cliente_at siga y
          solo si ESTE enlace dejó la marca (T6 r1: _hay_enlace_posterior; un enlace viejo nunca ve el comentario que
@@ -683,6 +733,8 @@ def estado_enlace(db: Session, info, doc, tipo) -> tuple:
     if info["vencido"]:
         mensaje = MENSAJES_ENLACE["vencido"].format(fecha=_ultimo_dia_del_enlace(info["expires_at"]))
         return "vencido", dict(extra, mensaje=mensaje, documento={"numero": doc.numero})
+    if _cambio_el_cliente_despues_del_enlace(db, tipo, doc.id, info["created_at"]):
+        return "no_disponible", dict(extra, mensaje=MENSAJES_ENLACE["no_disponible"])
     if hay_enlace_mas_reciente_vigente(db, tipo, doc.id, info["created_at"]):
         return "reemplazado", dict(extra, mensaje=MENSAJES_ENLACE["reemplazado"].format(documento=nombre))
     if info["resultado"] == RESULTADO_CAMBIOS:
