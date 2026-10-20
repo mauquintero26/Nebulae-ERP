@@ -66,31 +66,36 @@ const ESTILOS_PAGINA = `
   .documento-comercial-pagina { padding: 12mm; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 }
 `;
-// B3 T20 r2 (punto 13): en una hoja impresa nada se sale del recuadro ni queda solo en la hoja siguiente.
-// - El pie no se parte entre hojas (también con la clase print:break-inside-avoid: el next dev del worktree puede generar
-//   el CSS desde otra carpeta y no ver las clases nuevas, así que la regla va aquí también).
+// B3 T20 r3 (M7): el color de la barra izquierda, una sola vez: la de la pantalla (doc-barra) y la franja impresa.
+const COLOR_BARRA = '#111827';
+// B3 T20 r2 y r3 (punto 13): en una hoja impresa nada se sale del recuadro ni queda solo en la hoja siguiente.
+// - El pie no se parte entre hojas: la clase print:break-inside-avoid del <footer> y, aquí, la regla en su envoltorio
+//   .doc-pie (el pie y el triángulo), que ya impide partir lo que lleva dentro (r3, M6: una sola vez).
 // - La barra izquierda y el triángulo de abajo eran absolutos (inset-y-0 / bottom-0) sobre el recuadro sin partir: en la
 //   hoja 2 terminaban antes que el contenido y el triángulo tapaba el contacto. En la impresión la barra es un fondo del
-//   recuadro (una franja de 8 px a todo su alto: se dibuja en cada hoja; un borde le quitaba ancho al contenido y una
-//   sombra interior dejaba un filo gris arriba y abajo de cada hoja en el PDF) y el
-//   triángulo va en el flujo, en la misma fila del pie (doc-pie, flex): nunca encima de un texto y sin sumar altura. Sus
-//   márgenes negativos lo llevan a la esquina del recuadro (los 2 rem del pr-8 y el 1 rem del cuerpo impreso). Sin
-//   alturas fijas.
-// - El espacio vertical se compacta solo en la impresión (la COT DEMO de 2 productos con notas cabe en una hoja carta).
+//   recuadro (una franja de 8 px a todo su alto, que se dibuja en cada hoja; un borde le quitaba ancho al contenido y una
+//   sombra interior dejaba un filo gris arriba y abajo de cada hoja en el PDF), y el triángulo va en el flujo, en la
+//   misma fila del pie (doc-pie, flex): nunca encima de un texto y sin sumar altura.
+// - r3 (M7): sus márgenes negativos lo llevan a la esquina del recuadro con las mismas variables que fijan aquí el
+//   padding derecho e inferior del cuerpo impreso (no dependen del pr-8 de la container query).
+// - r3 (M8): la línea de arriba del pie es de .doc-pie, así cruza todo el ancho (el <footer> comparte la fila con el
+//   triángulo).
+// - Sin alturas fijas. El espacio vertical se compacta solo en la impresión (la COT DEMO de 2 productos con notas cabe en
+//   una hoja carta).
 const ESTILOS_IMPRESION = `
 @media print {
   .documento-comercial, .documento-comercial * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .documento-comercial { box-shadow: none !important; }
   .documento-comercial tr { break-inside: avoid; }
   .documento-comercial thead { display: table-header-group; }
-  .documento-comercial footer, .documento-comercial .doc-pie { break-inside: avoid; }
   .documento-comercial .doc-barra, .documento-comercial .doc-triangulo-abajo { display: none; }
-  .documento-comercial.doc-acento { background-image: linear-gradient(#111827, #111827); background-size: 8px 100%; background-repeat: no-repeat; }
-  .documento-comercial .doc-pie { display: flex; align-items: flex-end; gap: 1rem; }
-  .documento-comercial .doc-pie > footer { flex: 1 1 auto; min-width: 0; }
-  .documento-comercial .doc-triangulo-final { display: block; flex: none; margin-left: auto; margin-right: -2rem; margin-bottom: -1rem; }
-  .documento-comercial .doc-encabezado, .documento-comercial .doc-cuerpo { padding-top: 1rem; padding-bottom: 1rem; }
+  .documento-comercial.doc-acento { background-image: linear-gradient(${COLOR_BARRA}, ${COLOR_BARRA}); background-size: 8px 100%; background-repeat: no-repeat; }
+  .documento-comercial .doc-encabezado { padding-top: 1rem; padding-bottom: 1rem; }
+  .documento-comercial .doc-cuerpo { --doc-margen-derecho: 2rem; --doc-margen-inferior: 1rem; padding-top: 1rem; padding-bottom: var(--doc-margen-inferior); padding-right: var(--doc-margen-derecho); }
   .documento-comercial .doc-encabezado > :not(:last-child), .documento-comercial .doc-cuerpo > :not(:last-child) { margin-block-end: 1rem; }
+  .documento-comercial .doc-pie { break-inside: avoid; display: flex; align-items: flex-end; gap: 1rem; border-top: 1px solid var(--color-gray-200, #e5e7eb); padding-top: 1rem; }
+  .documento-comercial .doc-pie > footer { flex: 1 1 auto; min-width: 0; border-top-width: 0; padding-top: 0; }
+  .documento-comercial .doc-triangulo-final { display: block; flex: none; margin-left: auto; margin-right: calc(-1 * var(--doc-margen-derecho)); margin-bottom: calc(-1 * var(--doc-margen-inferior)); }
 }
 `;
 
@@ -388,7 +393,7 @@ export function DocumentoComercial({
           </>
         ) : (
           <>
-            <span aria-hidden="true" className="doc-barra absolute inset-y-0 left-0 w-2 bg-gray-900" />
+            <span aria-hidden="true" className="doc-barra absolute inset-y-0 left-0 w-2" style={{ backgroundColor: COLOR_BARRA }} />
             <span
               aria-hidden="true"
               className="absolute right-0 top-0 h-14 w-14"

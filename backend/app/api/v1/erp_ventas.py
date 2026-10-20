@@ -608,21 +608,21 @@ def _registrar_cambios(db: Session, entidad: str, doc, antes: dict, body: dict, 
         return None
 
 
-# B3 T20 r2 (M5): los datos de identidad de un renglon de cambios (la ficha, el correo y el telefono; el nombre aparte).
-_CAMPOS_DE_IDENTIDAD = frozenset({"customer_id", "customer_email", "customer_phone"})
-
-
 def _es_cambio_de_identidad(cambio) -> bool:
-    """B3 T20 r2 (M5): un renglon de extra_data.cambios ({campo, antes, despues}) que cambia a quien le llega el enlace,
-    con la misma regla de _identidad_del_cliente: la ficha, el correo o el telefono, y el nombre solo si no es
-    _mismo_nombre (tildes, mayusculas y espacios no cuentan). La direccion no cuenta (R18). La usan
-    _registra_el_cliente y documento_cliente._cambio_el_cliente_despues (la pagina publica)."""
+    """B3 T20 r2 (M5) y r3 (M1): un renglon de extra_data.cambios ({campo, antes, despues}) que cambia a quien le
+    llega el enlace, con la misma regla de _identidad_del_cliente: el correo sin espacios en los bordes ni mayusculas,
+    el telefono sin espacios en los bordes y el nombre solo si no es _mismo_nombre (tildes, mayusculas y espacios no
+    cuentan). La direccion no cuenta (R18). La ficha (customer_id) nunca llega aqui: cambios_documento.comparar no
+    compara ids, asi que un cambio de solo la ficha se ve por el marcador obligatorio (MARCA_CLIENTE_CAMBIADO, r3 M0).
+    La usan _registra_el_cliente y documento_cliente._cambio_el_cliente_despues (la pagina publica)."""
     if not isinstance(cambio, dict):
         return False
-    campo = cambio.get("campo")
-    if campo in _CAMPOS_DE_IDENTIDAD:
-        return True
-    return campo == "customer_name" and not _mismo_nombre(cambio.get("antes"), cambio.get("despues"))
+    campo, antes, despues = cambio.get("campo"), cambio.get("antes"), cambio.get("despues")
+    if campo == "customer_email":
+        return _texto_del_cliente(antes).lower() != _texto_del_cliente(despues).lower()
+    if campo == "customer_phone":
+        return _texto_del_cliente(antes) != _texto_del_cliente(despues)
+    return campo == "customer_name" and not _mismo_nombre(antes, despues)
 
 
 def _registra_el_cliente(renglon) -> bool:
@@ -1086,6 +1086,9 @@ def _estado_tras_reinicio(sc: CustomerRequest) -> str:
 # B3 T5 (r2): el marcador de cambio de cliente de la SC cuando el renglon de cambios no lo registro.
 _TEXTO_CLIENTE_CAMBIADO = ("Cambiaron los datos del cliente de la solicitud: los enlaces enviados antes de este cambio ya "
                            "no muestran su resumen.")
+# B3 T20 r3 (M0): el renglon del marcador de la COT cuando el cambio de cliente no anulo ningun enlace vivo.
+_TEXTO_CLIENTE_CAMBIADO_COT = ("Cambiaron los datos del cliente de la cotización: los enlaces enviados antes de este "
+                               "cambio ya no le muestran nada al cliente anterior.")
 _MOTIVO_PRODUCTOS = ("se modificaron los productos, así que la confirmación del cliente ya no es válida y hay que "
                      "reenviarle la solicitud")
 _MOTIVO_CAMBIO_DE_CLIENTE = ("cambió el cliente de la solicitud, así que la confirmación del cliente anterior ya no es "
@@ -1342,7 +1345,9 @@ def _anular_enlaces_de_cotizaciones_por_cambio_de_cliente(db: Session, sc: Custo
                  f"Cambió el cliente de la solicitud {sc.numero}: se anuló el enlace de confirmación de esta "
                  f"cotización", user_name=autor,
                  extra_data={"cambios": [dict(_ENLACE_COT_ANULADO)],
-                             "origen": {"tipo": "SC", "id": sc.id, "numero": sc.numero}},
+                             "origen": {"tipo": "SC", "id": sc.id, "numero": sc.numero},
+                             # B3 T20 r3 (M0): el marcador obligatorio que lee la pagina publica de la COT.
+                             cambios_documento.MARCA_CLIENTE_CAMBIADO: True},
                  commit=False)
             anulados.append(cot.numero)
     return anulados
@@ -2248,16 +2253,22 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
             # cliente del documento (_identidad_del_cliente: ficha, correo, telefono o nombre), su enlace pendiente
             # se revoca; en la COT, salvo CONFIRMADA (R18: el cliente ya confirmo precios). Solo se informa un enlace que
             # el cliente todavia podia usar: los que este mismo UPDATE revoco sin vencer (RETURNING, ronda 2).
-            if _identidad_del_cliente(doc) != identidad_antes and not (entidad == "COT" and doc.estado == "CONFIRMADA"):
+            extra_doc = {"cambios": cambios, "origen": origen}
+            cambio_su_identidad = _identidad_del_cliente(doc) != identidad_antes
+            if cambio_su_identidad and not (entidad == "COT" and doc.estado == "CONFIRMADA"):
                 tipo_enlace, aviso = ("COT", _ENLACE_COT_ANULADO) if entidad == "COT" else ("PVEN", _ENLACE_PVEN_ANULADO)
                 vigentes = revoke_pending_tokens(db, tipo_enlace, doc.id, commit=False, contar_vigentes=True)
                 if vigentes:
-                    cambios = cambios + [dict(aviso)]
+                    extra_doc["cambios"] = cambios + [dict(aviso)]
                     # r4: enlaces_anulados conserva el contrato del Bloque 2 (SC y COT); los pedidos van aparte.
                     (enlaces_anulados if entidad == "COT" else enlaces_pedido_anulados).append(doc.numero)
+            if cambio_su_identidad:
+                # B3 T20 r3 (M0): el marcador obligatorio, en este renglon del commit principal (lo lee la pagina
+                # publica).
+                extra_doc[cambios_documento.MARCA_CLIENTE_CAMBIADO] = True
             _log(db, entidad, doc.id, doc.numero, "UPDATED",
                  f"Datos del cliente corregidos desde la solicitud {sc.numero}: {titulo_doc}", user_name=autor,
-                 extra_data={"cambios": cambios, "origen": origen}, commit=False)
+                 extra_data=extra_doc, commit=False)
 
         # Se arma ANTES del commit: despues el objeto queda expirado y leerlo costaria otro viaje a la base.
         data = _sc_dict(sc)
@@ -3487,11 +3498,18 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         from app.core.confirmation_tokens import revoke_pending_tokens
         # r2 (P3): si el cliente todavia podia usar el enlace, el asesor se entera en la Actividad, en este mismo commit,
         # con lo que tiene que hacer (_ENLACE_COT_ANULADO: reenviarla al cliente, B3 T7).
+        # B3 T20 r3 (M0): y SIEMPRE deja el marcador obligatorio en este commit (el renglon de cambios va despues, en
+        # otro commit, y un cambio de solo la ficha no deja ningun dato de identidad en el): lo lee la pagina publica.
+        marca = {cambios_documento.MARCA_CLIENTE_CAMBIADO: True}
         if revoke_pending_tokens(db, "COT", cot.id, commit=False, contar_vigentes=True):
             _log(db, "COT", cot.id, cot.numero, "UPDATED",
                  "Cambiaron los datos del cliente: se anuló el enlace de confirmación de esta cotización",
                  user_name=body.get("updated_by") or getattr(user, "email", None),
-                 extra_data={"cambios": [dict(_ENLACE_COT_ANULADO)]}, commit=False, usuario=user)
+                 extra_data={"cambios": [dict(_ENLACE_COT_ANULADO)], **marca}, commit=False, usuario=user)
+        else:
+            _log(db, "COT", cot.id, cot.numero, "UPDATED", _TEXTO_CLIENTE_CAMBIADO_COT,
+                 user_name=body.get("updated_by") or getattr(user, "email", None), extra_data=marca, commit=False,
+                 usuario=user)
     db.commit()
     db.refresh(cot)
     if not anula_por_recotizacion:

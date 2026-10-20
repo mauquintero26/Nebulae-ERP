@@ -591,9 +591,8 @@ def test_cambio_real_del_nombre_reinicia_gate1(app_client, db, admin_token, user
 
 def test_corregir_tildes_del_nombre_no_reinicia_gate1(app_client, db, admin_token, user_admin, monkeypatch):
     """T20 r1b: lo cosmético NO es un cambio de cliente (_mismo_nombre / _nombre_para_comparar, la regla única de M14):
-    una SC confirmada con 'Ana Perez' que pasa a ' ana  PÉREZ ' sigue Confirmada, con su gate1, su enlace como estaba y
-    sin el marcador CLIENTE_CAMBIADO."""
-    from app.models.erp_documents import ActivityLog
+    una SC confirmada con 'Ana Perez' que pasa a ' ana  PÉREZ ' sigue Confirmada, con su gate1 y su enlace como
+    estaba, y la guarda de la página pública (_cambio_el_cliente_despues) no ve un cambio de cliente."""
     _sin_correo(monkeypatch)
     sc = _sc(db, user_admin)
     sc.customer_name = "Ana Perez"
@@ -1088,10 +1087,10 @@ def test_corregir_tildes_mayusculas_o_espacios_del_nombre_no_revoca_enlaces(app_
                                                                            monkeypatch):
     """T20 (M14, punto 4 de lo parqueado): una sola regla de nombre. _identidad_del_cliente compara el nombre con
     _nombre_para_comparar (sin tildes, mayúsculas ni espacios de más), la misma de _mismo_nombre: corregir 'Ana Perez'
-    a ' ana  PÉREZ ' no es un cambio de cliente. L1 de la SC y el enlace de su COT temprana siguen vivos y no queda el
-    marcador CLIENTE_CAMBIADO."""
+    a ' ana  PÉREZ ' no es un cambio de cliente. L1 de la SC y el enlace de su COT temprana siguen vivos y la guarda de
+    la página pública (_cambio_el_cliente_despues) no ve un cambio de cliente."""
     from app.core.confirmation_tokens import create_confirmation_token
-    from app.models.erp_documents import ActivityLog, SalesQuotation
+    from app.models.erp_documents import SalesQuotation
     _sin_correo(monkeypatch)
     sc = _sc(db, user_admin)
     sc.customer_name = "Ana Perez"
@@ -1133,3 +1132,37 @@ def test_corregir_solo_la_direccion_no_esconde_el_resumen(app_client, db, admin_
     d = _detalle(_ver(app_client, raw), "cambios_enviados")
     assert d["comentario"] == "Cámbienme la dirección de entrega"
     assert not _cambio_de_cliente_despues_del_enlace(db, "SC", sc.id, raw)
+
+
+def test_otra_ficha_con_el_mismo_nombre_deja_el_marcador(app_client, db, admin_token, user_admin, monkeypatch):
+    """T20 r3 (M4, duda 5): una ficha nueva con el mismo nombre y sin correo ni teléfono deja un renglón de cambios con
+    solo la dirección, que no es un dato de identidad (R18). _registra_el_cliente usa la misma regla, así que el cambio
+    de identidad (la ficha) deja su marcador obligatorio CLIENTE_CAMBIADO: la guarda lo ve y el enlace que confirmó A
+    (la SC sigue Confirmada por su COT activa, U15) ya no muestra «¿Qué sigue?» ni el resumen."""
+    from app.models.customers import Customer
+    from app.models.erp_documents import ActivityLog, SalesQuotation
+    _sin_correo(monkeypatch)
+    ficha_a = Customer(first_name="Juan", last_name="Pérez", address="Calle Alfa 1")
+    ficha_b = Customer(first_name="Juan", last_name="Pérez", address=DIRECCION_B)
+    db.add_all([ficha_a, ficha_b]); db.commit(); db.refresh(ficha_a); db.refresh(ficha_b)
+    sc = _sc(db, user_admin, customer_id=ficha_a.id, customer_address="Calle Alfa 1")
+    sc.customer_name = "Juan Pérez"
+    db.commit()
+    l1 = _enviar(app_client, admin_token, sc)
+    assert _confirmar(app_client, l1).status_code == 200
+    cot = SalesQuotation(numero=f"COT-T20{_sufijo()}", sc_id=sc.id, sc_numero=sc.numero, customer_name="Juan Pérez",
+                         estado="BORRADOR", productos=[{"product_name": "Rodillo", "qty": 6, "unit_price_cop": 1000}])
+    db.add(cot); db.commit()
+    resp = app_client.patch(f"/api/v1/ventas/solicitudes/{sc.id}", json={"customer_id": ficha_b.id, "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["estado"] == "CONFIRMADA"
+    db.expire_all()
+    acciones = [r.action for r in db.query(ActivityLog).filter(ActivityLog.entity_type == "SC",
+                                                                 ActivityLog.entity_id == sc.id)]
+    assert "CLIENTE_CAMBIADO" in acciones, acciones
+    assert _cambio_de_cliente_despues_del_enlace(db, "SC", sc.id, l1)
+    resp = _ver(app_client, l1)
+    d = _detalle(resp, "confirmada")
+    assert d["siguiente_paso"] is None and d["documento"] == {"numero": sc.numero}
+    assert DIRECCION_B not in resp.text

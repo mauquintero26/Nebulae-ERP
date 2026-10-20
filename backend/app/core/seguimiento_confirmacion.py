@@ -44,8 +44,10 @@ envíos, el Chatter y el «pedir cambios» (así ningún camino forma un ciclo c
 (3) Con el documento y la fila bloqueados otra vez: si salió y el documento sigue en Pendiente, se anulan los enlaces
     anteriores (excepto_hash) y cuenta como contacto (R7: doc.updated_at); si no salió, se anula el enlace nuevo (nadie
     lo recibió) y el anterior sigue sirviendo. Si el documento dejó de esperar al cliente durante el envío, el enlace
-    nuevo se anula y no cuenta como contacto. Si el asesor reenvió o detuvo en medio, la fila ya es de otro ciclo y no
-    se toca (solo queda el renglón).
+    nuevo se anula y no cuenta como contacto. T20 r2/r3 (M6, M2): si cambió la identidad del cliente mientras salía
+    (esté o no en Pendiente), el enlace nuevo se anula, no cuenta como contacto, la fila se cierra con ENLACE_ANULADO
+    y el renglón dice que salió al cliente anterior. Si el asesor reenvió o detuvo en medio, la fila ya es de otro ciclo
+    y no se toca (solo queda el renglón).
 
 Lo que devuelve correr_seguimientos lo ve cualquier rol en /tareas/estado: solo conteos ({'revisados', 'enviados',
 'fallidos', 'agotados', 'detenidos'}) o {'omitido': 'apagado' | 'fuera_de_horario' | 'sin_medios'}.
@@ -870,7 +872,7 @@ def _enviar_recordatorio(db: Session, reclamo: _Reclamo, cfg: dict, enviar, ahor
     raw, destino = preparado
     link = enlace_publico(raw, tipo)
     try:
-        # T20 (M6): la foto del destino, no reclamo.doc (expirado tras el commit de _preparar_envio).
+        # T20 (M6): la foto del destino que tomó _preparar_envio con el bloqueo (no un documento del ORM, expirado).
         res = enviar(db, tipo=tipo, doc=destino, canal=reclamo.canal, link=link, numero=n, total=cfg["max"])
     except Exception:
         db.rollback()
@@ -884,9 +886,11 @@ def _enviar_recordatorio(db: Session, reclamo: _Reclamo, cfg: dict, enviar, ahor
     # queda vivo y no cuenta como contacto.
     pendiente = doc is not None and doc.estado == PENDIENTE
     # T20 r2 (M6): con el documento bloqueado otra vez, ¿sigue siendo el mismo cliente? Si cambió mientras salía
-    # (update_cotizacion o PATCH /cliente, que revocan el enlace nuevo sin sacar el documento de Pendiente), el
+    # (update_cotizacion o PATCH /cliente revocan el enlace nuevo, a veces sin sacar el documento de Pendiente), el
     # recordatorio salió al cliente anterior con un enlace ya anulado: no cuenta como contacto ni programa otro.
-    otro_cliente = pendiente and _identidad(doc) != reclamo.identidad
+    # r3 (M2): también fuera de Pendiente (re-cotizar y cambiar el cliente en el mismo PATCH): el renglón lo dice igual
+    # y el motivo es ENLACE_ANULADO (ruling del controlador).
+    otro_cliente = doc is not None and _identidad(doc) != reclamo.identidad
     if res is None:
         if not pendiente:
             revocar_token(db, raw)

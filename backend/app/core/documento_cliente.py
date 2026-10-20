@@ -610,7 +610,9 @@ def _cambio_el_cliente_despues(db: Session, entity_type: str, doc_id: int, desde
       obligatorio;
     - el marcador OBLIGATORIO de la SC: un renglón cambios_documento.ACCION_CLIENTE_CAMBIADO (update_solicitud, cuando
       el renglón de cambios no registró la identidad) o extra_data[MARCA_CLIENTE_CAMBIADO] en el renglón obligatorio de
-      PATCH /solicitudes/{id}/cliente. Los dos van en el commit del cambio. La COT no tiene marcador obligatorio.
+      PATCH /solicitudes/{id}/cliente. Los dos van en el commit del cambio. T20 r3 (M0): la COT también lo lleva
+      (extra_data[MARCA_CLIENTE_CAMBIADO] en el commit principal de update_cotizacion, de PATCH /cliente y del
+      cambio de cliente de su SC). Un cambio de solo la ficha se ve solo por este marcador.
     T20 r2 (M4, M8): la misma señal para la SC y la COT; ya no depende del texto de un aviso (_ENLACE_COT_ANULADO) ni de
     que hubiera un enlace vivo que revocar.
     La usan _confirmada (regla d: esconde el resumen y ¿Qué sigue?) y, desde T20 (M2), estado_enlace, que con ella
@@ -693,7 +695,7 @@ def estado_enlace(db: Session, info, doc, tipo) -> tuple:
          (_cambio_el_cliente_despues: un renglón de cambios con un dato de identidad o el marcador obligatorio de la SC)
          -> 'no_disponible', antes de f, g y h: al cliente anterior no se le dice que hay un enlace más reciente, que
          ya envió cambios ni que el documento se actualizó (todo eso es del cliente nuevo). Si ese renglón auxiliar no
-         se escribió (en la COT no hay marcador obligatorio), no lo detecta y sigue la regla f;
+         se escribió y no hay marcador, no lo detecta y sigue la regla f;
       f) hay un enlace más reciente vigente -> 'reemplazado';
       g) resultado CAMBIOS (lo escribe T6) -> 'cambios_enviados', con el comentario mientras cambios_cliente_at siga y
          solo si ESTE enlace dejó la marca (T6 r1: _hay_enlace_posterior; un enlace viejo nunca ve el comentario que

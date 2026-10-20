@@ -641,7 +641,7 @@ def test_cotizacion_activa_que_no_esta_en_borrador_recibe_un_texto_neutro(app_cl
         assert (renglon.old_estado, renglon.new_estado) == (None, None)
         # T20 r2 (M13): el comentario sigue llegando, como dato, en esas ramas.
         assert renglon.extra_data["comentario"] == COMENTARIO
-        assert renglon.extra_data["cambios"][0] == {"etiqueta": "Comentario del cliente", "despues": COMENTARIO}
+        assert renglon.extra_data["cambios"] == [{"etiqueta": "Comentario del cliente", "despues": COMENTARIO}]
 
 
 def test_cotizacion_temprana_pendiente_vuelve_a_borrador_en_el_mismo_commit(app_client, db, admin_token, user_admin,

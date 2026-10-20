@@ -443,3 +443,55 @@ def test_recotizar_y_cambiar_el_cliente_en_el_mismo_patch_tampoco_dice_reemplaza
     d = resp.json()["detail"]
     assert d["estado_enlace"] == "no_disponible", d
     assert "más reciente" not in d["mensaje"] and BETO not in resp.text
+
+
+def test_cambiar_solo_la_ficha_de_la_cot_tampoco_dice_reemplazado(app_client, db, admin_token, monkeypatch):
+    """T20 r3 (M0): cambiar solo la ficha (customer_id) a otra con el mismo nombre, correo y teléfono es un cambio de
+    cliente para la revocación, pero no deja ningún dato de identidad en el renglón de cambios (comparar no emite
+    customer_id). update_cotizacion deja entonces el marcador obligatorio en su commit principal: en el renglón del
+    enlace anulado o, sin enlace vivo, en uno propio. Al reenviar, L1 da 'no_disponible'."""
+    from app.core.cambios_documento import MARCA_CLIENTE_CAMBIADO
+    from app.models.customers import Customer
+    _correo_falso(monkeypatch)
+    _poner_dias(db, None)
+
+    def caso(con_enlace_vivo):
+        cot = _cot(db, _sc(db))
+        primero = _enviar(app_client, admin_token, cot)
+        assert primero.status_code == 200, primero.text
+        l1 = _raw(primero)
+        if not con_enlace_vivo:
+            assert _pedir_cambios(app_client, l1).status_code == 200
+        ficha = Customer(first_name="Ana", last_name="Pérez", address="Otra dirección 1")
+        db.add(ficha); db.commit(); db.refresh(ficha)
+        resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}",
+                                json={"customer_id": ficha.id, "updated_by": "t"}, headers=auth(admin_token))
+        assert resp.status_code == 200, resp.text
+        marcas = [r for r in _logs(db, cot.id) if (r.extra_data or {}).get(MARCA_CLIENTE_CAMBIADO) is True]
+        assert len(marcas) == 1, [r.extra_data for r in _logs(db, cot.id)]
+        segundo = _enviar(app_client, admin_token, cot)
+        assert segundo.status_code == 200, segundo.text
+        d = _detalle_l1(app_client, l1).json()["detail"]
+        assert d["estado_enlace"] == "no_disponible" and "más reciente" not in d["mensaje"], d
+
+    caso(con_enlace_vivo=True)
+    caso(con_enlace_vivo=False)
+
+
+def test_corregir_las_mayusculas_del_correo_no_esconde_nada(app_client, db, admin_token, monkeypatch):
+    """T20 r3 (M1): en el renglón de cambios el correo cuenta como cambio de identidad solo si cambia sin mayúsculas ni
+    espacios (la regla de _identidad_del_cliente). 'ana@cliente.com' -> 'Ana@Cliente.com' no esconde nada: después de
+    pedir cambios, el enlace sigue diciendo 'cambios_enviados' con su comentario."""
+    _correo_falso(monkeypatch)
+    _poner_dias(db, None)
+    cot = _cot(db, _sc(db))
+    primero = _enviar(app_client, admin_token, cot)
+    assert primero.status_code == 200, primero.text
+    l1 = _raw(primero)
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}",
+                            json={"customer_email": " Ana@Cliente.com ", "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert _tokens(db, cot.id)[0].used_at is None  # la misma persona: el enlace sigue vivo
+    assert _pedir_cambios(app_client, l1).status_code == 200
+    d = _detalle_l1(app_client, l1).json()["detail"]
+    assert d["estado_enlace"] == "cambios_enviados" and d["comentario"] == "Son 2 cunas, no 1", d
