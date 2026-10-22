@@ -4,7 +4,7 @@ C4 y R24).
 armar_documento(db, tipo, *, ...) devuelve SIEMPRE exactamente estas claves (CLAVES_DOCUMENTO), con los nombres de R24:
   tipo, titulo, numero, estado,
   fecha_emision ('...Z': instante UTC que el navegador pasa a Colombia), fecha_entrega_estimada ('AAAA-MM-DD'),
-  cliente {nombre, direccion_entrega}, atendido_por (solo el nombre del asesor; T20: nombre_asesor_publico),
+  cliente {nombre, direccion_entrega}, atendido_por (solo el nombre del asesor; T20b: asesor_publico),
   con_precios,
   lineas [{n, descripcion, cantidad, precio_unitario, total_linea, iva_etiqueta, iva_pct, anticipo}] (CLAVES_LINEA),
   totales {subtotal, descuento_pct, descuento, impuestos [{etiqueta, base, valor}], ajuste_redondeo, total} | None,
@@ -320,25 +320,45 @@ def nombre_asesor_publico(db: Session, valor):
     internos y suele traer el CORREO del usuario (advisor_name: yo.email) o su usuario de entrada; los dos sirven para
     entrar al ERP (auth.py acepta el correo o el username), así que nunca salen en una página pública, un correo ni un
     PDF. None si no es texto, si queda vacío, si lleva '@' o si coincide (sin mayúsculas ni espacios en los bordes) con
-    el email o el username de algún User; si no, el texto sin los espacios de los bordes. La ÚNICA regla: la usan
-    documento_sc, documento_cot, documento_pven, siguiente_paso_sc y _asesor_del_documento. T20 r2 (M14): la comparación
-    con User.email es defensiva (todo correo lleva '@', que ya se descartó): cubre un email viejo guardado sin '@'."""
+    el email o el username de algún User (nombre_para_mostrar.es_de_un_usuario); si no, el texto sin los espacios de los
+    bordes. T20b: es la regla de advisor_name dentro de asesor_publico, el único resolvedor que usan los documentos.
+    T20 r2 (M14): la comparación con User.email es defensiva (todo correo lleva '@', que ya se descartó): cubre un email
+    viejo guardado sin '@'."""
     texto = _texto(valor)
     if texto is None or "@" in texto:
         return None
-    from sqlalchemy import func, or_
-    from app.models.users import User
-    clave = texto.casefold()
-    es_de_un_usuario = db.query(User.id).filter(or_(func.lower(func.trim(User.email)) == clave,
-                                                    func.lower(func.trim(User.username)) == clave)).first()
-    return None if es_de_un_usuario is not None else texto
+    from app.core.nombre_para_mostrar import es_de_un_usuario
+    return None if es_de_un_usuario(db, texto.casefold()) else texto
+
+
+def asesor_publico(db: Session, sc):
+    """B3 T20b (decisión del usuario): el nombre del asesor que ve el cliente en la SC, la COT y el pedido (para la COT
+    y el pedido, el de su SC), o None (quien lo pinta dice 'Tu asesor' o no pinta «Atendido por»). EL ÚNICO resolvedor:
+    lo usan documento_sc, documento_cot y documento_pven (atendido_por, que también pinta el PDF), siguiente_paso_sc y
+    _asesor_del_documento (pedir cambios y los mensajes 'cambios_enviados' y 'no_la_necesita').
+    1) Si sc.advisor_user_id es un User con nombre_para_mostrar que HOY cumple la regla (nombre_para_mostrar_vigente:
+       la Administración lo llena en Empleados), ese nombre;
+    2) si no, la regla de siempre sobre sc.advisor_name (nombre_asesor_publico: nunca un correo ni un usuario de
+       entrada);
+    3) si no queda nada, None."""
+    if sc is None:
+        return None
+    advisor_user_id = getattr(sc, "advisor_user_id", None)
+    if advisor_user_id is not None:
+        from app.core.nombre_para_mostrar import nombre_para_mostrar_vigente
+        from app.models.users import User
+        guardado = db.query(User.nombre_para_mostrar).filter(User.id == advisor_user_id).scalar()
+        nombre = nombre_para_mostrar_vigente(db, guardado)
+        if nombre:
+            return nombre
+    return nombre_asesor_publico(db, getattr(sc, "advisor_name", None))
 
 
 def siguiente_paso_sc(db: Session, sc, forma_pago) -> list:
     """Los 3 pasos de '¿Qué sigue?' de una SC confirmada (U17): quién prepara la cotización (el asesor o 'Tu asesor'),
     que se la enviamos por el mismo medio y que al aprobarla se hace el pedido, con el anticipo si es mayor que 0.
-    T20 (C0): el nombre pasa por nombre_asesor_publico (nunca el correo ni el usuario de entrada)."""
-    asesor = nombre_asesor_publico(db, getattr(sc, "advisor_name", None)) or "Tu asesor"
+    T20 (C0) y T20b: el nombre sale de asesor_publico (nunca el correo ni el usuario de entrada)."""
+    asesor = asesor_publico(db, sc) or "Tu asesor"
     pct = (forma_pago or {}).get("anticipo_pct") or 0
     anticipo = f" con el anticipo del {formato_pct(pct)}" if pct > 0 else ""
     return [f"{asesor} prepara tu cotización con los precios.",
@@ -470,7 +490,7 @@ def documento_sc(db: Session, sc) -> dict:
         lineas=[linea_publica(p, False) for p in _lineas_visibles(sc.productos)], con_precios=False,
         direccion_entrega=sc.customer_address, fecha_entrega_estimada=sc.fecha_entrega_estimada,
         pago={"modalidad": forma["modalidad"], "anticipo_pct": forma["anticipo_pct"], "manual": False},
-        notas=notas_para_cliente(sc), atendido_por=nombre_asesor_publico(db, sc.advisor_name), estado=sc.estado)
+        notas=notas_para_cliente(sc), atendido_por=asesor_publico(db, sc), estado=sc.estado)
 
 
 def documento_cot(db: Session, cot, token_row=None) -> dict:
@@ -500,8 +520,7 @@ def documento_cot(db: Session, cot, token_row=None) -> dict:
         cliente_nombre=cot.customer_name, lineas=lineas, con_precios=True,
         direccion_entrega=cot.direccion_entrega or cot.customer_address,
         fecha_entrega_estimada=cot.fecha_entrega_estimada, totales=_totales_del_documento(cot, lineas, desglose),
-        pago=pago, notas=notas_para_cliente(sc, cot),
-        atendido_por=nombre_asesor_publico(db, sc.advisor_name) if sc is not None else None,
+        pago=pago, notas=notas_para_cliente(sc, cot), atendido_por=asesor_publico(db, sc),
         estado=cot.estado, valida_hasta=cot.valida_hasta)
 
 
@@ -554,8 +573,7 @@ def documento_pven(db: Session, so) -> dict:
         con_precios=True, direccion_entrega=so.direccion_entrega or so.customer_address,
         fecha_entrega_estimada=so.fecha_entrega_estimada,
         totales=_totales_del_documento(so, lineas, desglose, sumar_lineas=nota_cancelaciones is None), pago=pago,
-        notas=notas,
-        atendido_por=nombre_asesor_publico(db, sc.advisor_name) if sc is not None else None, estado=so.estado)
+        notas=notas, atendido_por=asesor_publico(db, sc), estado=so.estado)
 
 
 # ─── T5: estado del enlace en palabras (U17 reglas a-i, C10; regla g con H28-cambios) ───────────────────────────
@@ -642,11 +660,11 @@ def _ultimo_dia_del_enlace(expires_at) -> str:
 
 
 def _asesor_del_documento(db: Session, doc, tipo: str) -> str:
-    """El nombre del asesor (el de la SC; en la COT, el de su SC) o 'Tu asesor'. T20 (C0): nombre_asesor_publico."""
+    """El nombre del asesor (el de la SC; en la COT, el de su SC) o 'Tu asesor'. T20 (C0) y T20b: asesor_publico."""
     if tipo == "COT":
         from app.models.erp_documents import CustomerRequest
         doc = _cargar(db, CustomerRequest, doc.sc_id)
-    return nombre_asesor_publico(db, getattr(doc, "advisor_name", None)) or "Tu asesor"
+    return asesor_publico(db, doc) or "Tu asesor"
 
 
 def _hay_enlace_posterior(db: Session, tipo: str, doc_id: int, despues_de) -> bool:

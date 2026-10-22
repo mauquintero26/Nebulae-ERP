@@ -11,10 +11,11 @@ from app.db.database import get_db
 from app.models.users import User, PasswordResetToken
 from app.schemas.users import (
     UserCreate, UserResponse, PasswordChange,
-    ForgotPasswordRequest, ResetPasswordRequest, UsernameUpdate,
+    ForgotPasswordRequest, ResetPasswordRequest, UsernameUpdate, NombreParaMostrarUpdate,
 )
 from app.core.security import get_password_hash, verify_password, create_access_token, SESSION_IDLE_TIMEOUT_MINUTES
 from app.core.email import send_email
+from app.core.nombre_para_mostrar import NombreParaMostrarInvalido, es_de_un_usuario, validar_nombre_para_mostrar
 from app.api.dependencies import get_current_user, require_roles, ROLE_ADMIN, ALL_ERP_ROLES, normalize_role
 
 router = APIRouter()
@@ -257,6 +258,28 @@ def update_user_role(
     if user.id == 1 and normalize_role(new_role) != "ADMIN":
         raise HTTPException(status_code=400, detail="No se puede retirar el rol de Administrador de la cuenta principal del sistema")
     user.role = new_role
+    db.commit()
+    db.refresh(user)
+    return {"status": "success", "data": UserResponse.model_validate(user).model_dump()}
+
+@router.patch("/users/{user_id}/nombre-para-mostrar")
+def update_nombre_para_mostrar(
+    user_id: int,
+    payload: NombreParaMostrarUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*ROLE_ADMIN)),
+):
+    """B3 T20b: como vera el cliente a este asesor en los documentos (documento_cliente.asesor_publico). Solo ADMIN: lo
+    llena la Administracion. La regla es validar_nombre_para_mostrar (null o vacio lo borra); si falla, 400 con su
+    texto y no se escribe nada."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    try:
+        nombre = validar_nombre_para_mostrar(payload.nombre_para_mostrar, lambda clave: es_de_un_usuario(db, clave))
+    except NombreParaMostrarInvalido as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=exc.mensaje)
+    user.nombre_para_mostrar = nombre
     db.commit()
     db.refresh(user)
     return {"status": "success", "data": UserResponse.model_validate(user).model_dump()}

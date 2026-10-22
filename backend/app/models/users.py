@@ -16,6 +16,10 @@ class User(Base):
     password_hash = Column(String, nullable=False)
     role = Column(String, nullable=False) # "Admin, Vendedor, ERP, Finanzas, Mercadeo"
     is_active = Column(Boolean, default=True)
+    # B3 T20b (fa6_032): como vera el cliente a su asesor en los documentos. Lo llena la Administracion (PATCH
+    # /auth/users/{id}/nombre-para-mostrar, regla en app/core/nombre_para_mostrar.py); lo lee
+    # documento_cliente.asesor_publico. None = sin nombre (el cliente ve 'Tu asesor' o la regla de advisor_name).
+    nombre_para_mostrar = Column(String(80), nullable=True)
 
     quotations = relationship("Quotation", back_populates="user")
     sales_orders = relationship("SalesOrder", back_populates="user")

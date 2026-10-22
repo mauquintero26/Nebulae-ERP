@@ -67,6 +67,7 @@ import { useEstadoEnvioWhatsApp } from '../../cotizacion/estado-envio-whatsapp';
 import { TarjetaSeguimiento } from '../../seguimiento';
 import { ChipCambiosCliente } from '../../chip-cambios-cliente';
 import { PasoCambiosCliente, NotaParaElCliente, CampoNotaParaElCliente, VentanaAnularPorModalidad } from './detalle-bloque3';
+import { AvisoNombreSinContacto } from '../../aviso-nombre-sin-contacto';
 
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
 // (mismo patron que cotizacion/[id]/page.tsx; valores reales emitidos por el backend para
@@ -1591,6 +1592,7 @@ function SolicitudDetalleContent() {
           // anterior deja de servir.
           envioWhatsApp={envioWhatsAppCanal}
           nota={solicitud?.estado === 'PENDIENTE_CONFIRMACION' ? NOTA_REENVIO_ENLACE : undefined}
+          aviso={<AvisoNombreSinContacto documento={solicitud} />}
         />
       )}
 

@@ -802,6 +802,49 @@ def _mismo_nombre(a, b) -> bool:
     return _nombre_para_comparar(a) == _nombre_para_comparar(b)
 
 
+# B3 T20b (parte B, decision del usuario): los campos de un renglon de cambios que dicen que tambien se reviso el
+# contacto o la ficha. comparar() no emite telefono_whatsapp ni customer_id hoy (el e164 sale del telefono y no compara
+# ids): se cuentan por si algun dia los registra. El cambio de solo la ficha en update_solicitud deja el renglon
+# ACCION_CLIENTE_CAMBIADO, que tambien cuenta.
+_CAMPOS_CONTACTO_O_FICHA = frozenset({"customer_phone", "customer_email", "telefono_whatsapp", "customer_id"})
+
+
+def _nombre_cambio_sin_contacto(renglones, desde) -> bool:
+    """B3 T20b (parte B): True si, despues de `desde` (el created_at del ultimo enlace de confirmacion del documento;
+    None = nunca se envio: cuenta desde su creacion), la Actividad tiene un cambio REAL de customer_name (no
+    _mismo_nombre: tildes, mayusculas y espacios no cuentan) y, desde ese cambio, ningun renglon trae el telefono, el
+    correo o el WhatsApp ni cambia la ficha (_CAMPOS_CONTACTO_O_FICHA o el renglon ACCION_CLIENTE_CAMBIADO). El nombre y
+    el telefono en el mismo renglon tampoco avisan. Pura: `renglones` son (created_at, action, extra_data) en el orden
+    de la Actividad (created_at, id) y solo se leen la accion y extra_data.cambios, nunca el texto de un renglon. Datos
+    viejos malformados no cuentan. La pantalla lo muestra en la ventana de envio, sin bloquear nada."""
+    pendiente = False
+    for creado, accion, extra in renglones:
+        if desde is not None and (creado is None or creado <= desde):
+            continue
+        if accion == cambios_documento.ACCION_CLIENTE_CAMBIADO:
+            pendiente = False
+            continue
+        cambios = extra.get("cambios") if isinstance(extra, dict) else None
+        if not isinstance(cambios, list):
+            continue
+        cambios = [c for c in cambios if isinstance(c, dict)]
+        if any(c.get("campo") in _CAMPOS_CONTACTO_O_FICHA for c in cambios):
+            pendiente = False
+        elif any(c.get("campo") == "customer_name" and not _mismo_nombre(c.get("antes"), c.get("despues"))
+                 for c in cambios):
+            pendiente = True
+    return pendiente
+
+
+def _aviso_nombre_sin_contacto(db: Session, tipo: str, doc_id: int, logs) -> bool:
+    """nombre_cambio_sin_contacto del detalle (get_solicitud y get_cotizacion): la regla pura sobre los renglones que el
+    detalle ya leyo (`logs`, en orden) y UNA consulta, el created_at del ultimo enlace de confirmacion del documento."""
+    from app.models.confirmation import DocumentConfirmationToken as Enlace
+    desde = (db.query(func.max(Enlace.created_at))
+             .filter(Enlace.document_type == tipo, Enlace.document_id == doc_id).scalar())
+    return _nombre_cambio_sin_contacto([(l.created_at, l.action, l.extra_data) for l in logs], desde)
+
+
 def _es_de_otra_persona_sin_ficha(doc, sc: CustomerRequest) -> bool:
     """B3 T5 (r2, privacidad 1): una COT o un PVEN SIN ficha (customer_id None) del que no se puede afirmar que es de la
     misma persona que la SC: otro nombre (la SC cambio de cliente despues de crearlo) o, r4 (privacidad 2), ningun
@@ -1806,6 +1849,8 @@ def get_solicitud(sc_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)
     d["customer_city"] = _ciudad_del_cliente(sc)  # H21: de la ficha; solo en el detalle (no suma consultas al listado)
     rol = normalize_role(user.role)
     d["actividades"] = [_log_dict(l, rol) for l in logs]
+    # B3 T20b (parte B): la ventana de envio avisa si el nombre cambio pero el contacto no (sin bloquear).
+    d["nombre_cambio_sin_contacto"] = _aviso_nombre_sin_contacto(db, "SC", sc.id, logs)
     # linked quotations
     cots = db.query(SalesQuotation).filter(SalesQuotation.sc_id == sc_id).all()
     d["cotizaciones"] = [_cot_dict(c) for c in cots]
@@ -2849,6 +2894,8 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
     d = _cot_dict(cot)
     rol = normalize_role(user.role)
     d["actividades"] = [_log_dict(l, rol) for l in logs]
+    # B3 T20b (parte B): el mismo aviso que la SC (su nombre tambien cambia por update_cotizacion).
+    d["nombre_cambio_sin_contacto"] = _aviso_nombre_sin_contacto(db, "COT", cot.id, logs)
     # linked VEN (H46: en orden de creacion, para que el frontend tome el ultimo vigente o cancelado)
     vens = db.query(SaleOrder).filter(SaleOrder.cot_id == cot_id).order_by(SaleOrder.id.asc()).all()
     d["pedidos_venta"] = [_ven_dict(v) for v in vens]

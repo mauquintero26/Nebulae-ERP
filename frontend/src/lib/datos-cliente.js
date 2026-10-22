@@ -16,6 +16,8 @@
  *
  * B3 T18: la «Nota para el cliente» en «Editar», los enlaces de pedidos anulados en el aviso de la corrección y el 409
  * de cambiar la modalidad (anulacionPorModalidad).
+ *
+ * B3 T20b: la nota «el nombre cambió pero el contacto no» de la ventana de envío (avisoNombreSinContacto).
  */
 
 import { tiene, humanizarCodigo } from './estados-pedido.js';
@@ -384,4 +386,23 @@ export function itemDeTimelineCliente(t) {
     autor: primerTexto(t?.user_name),
     cambios: Array.isArray(t?.cambios) ? t.cambios : [],
   };
+}
+
+// ─── B3 T20b (parte B, decisión del usuario): el nombre cambió pero el contacto no ─────────────────────────────────
+
+/** La nota ámbar de la ventana de envío de la SC y de la COT. No bloquea nada. */
+export const AVISO_NOMBRE_SIN_CONTACTO = 'El nombre cambió pero el contacto no: revisa el teléfono y el correo.';
+
+/**
+ * La nota de la ventana de envío, o null. La decide el servidor (nombre_cambio_sin_contacto de GET
+ * /ventas/solicitudes/{id} y /ventas/cotizaciones/{id}, erp_ventas._nombre_cambio_sin_contacto): después del último
+ * envío cambió de verdad el nombre del cliente y ni el teléfono ni el correo cambiaron desde entonces. Solo un true
+ * exacto la muestra (un listado sin el campo, o un dato raro, no).
+ * @param {unknown} documento el detalle de la SC o de la COT
+ * @returns {string | null}
+ */
+export function avisoNombreSinContacto(documento) {
+  const campo = documento && typeof documento === 'object'
+    ? /** @type {{ nombre_cambio_sin_contacto?: unknown }} */ (documento).nombre_cambio_sin_contacto : undefined;
+  return campo === true ? AVISO_NOMBRE_SIN_CONTACTO : null;
 }

@@ -9,6 +9,7 @@ import {
 import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 import { SubNav, PageHeader, Toast, Modal, Button } from '@/components/ui';
 import { ADM_NAV } from '../adm-nav';
+import { CampoNombreParaMostrar } from './nombre-para-mostrar';
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
   const res = await _apiFetch(path, opts);
@@ -240,6 +241,9 @@ export default function EmpleadosHub() {
                   </span>
                 </div>
               </div>
+
+              {/* B3 T20b: como verá el cliente a este asesor en los documentos (solo un ADMIN lo edita). */}
+              <CampoNombreParaMostrar usuario={selectedUser} onGuardado={() => { showToast('Nombre para mostrar guardado'); void loadUsers(); }} />
 
               {/* Selector de Rol Funcional */}
               <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">

@@ -38,6 +38,7 @@ import { avisoCambiosCliente } from '@/lib/cambios-cliente';
 import { useEstadoEnvioWhatsApp } from '../estado-envio-whatsapp';
 import { TarjetaCambiosCliente } from '../tarjeta-cambios-cliente';
 import { PrecioLineaIva, TotalesIvaCotizacion, PasoEsperandoConfirmacion } from './detalle-bloque3';
+import { AvisoNombreSinContacto } from '../../aviso-nombre-sin-contacto';
 
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
 const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
@@ -1351,6 +1352,7 @@ function CotizacionDetalleContent() {
           customerEmail={cotizacion?.customer_email ?? null}
           envioWhatsApp={envioWhatsAppCanal}
           nota={reenviando ? NOTA_REENVIO_ENLACE : undefined}
+          aviso={<AvisoNombreSinContacto documento={cotizacion} />}
         />
       )}
       {showVerificar && cotizacion && (

@@ -5,9 +5,11 @@
  */
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   CAMPOS_CONTACTO, cambiosDeContacto, validarContacto, avisoCorreccionContacto, formularioDeEdicion, camposEditadosDeSolicitud,
   itemDeTimelineCliente, TITULOS_DE_RESPALDO, hayCambiosEnEdicion, SIN_CAMBIOS_PARA_GUARDAR, anulacionPorModalidad,
+  AVISO_NOMBRE_SIN_CONTACTO, avisoNombreSinContacto,
 } from '../src/lib/datos-cliente.js';
 import { errorDeRespuesta } from '../src/lib/avisos.js';
 
@@ -470,6 +472,39 @@ console.log('--- B3 T18 (U22-anticipo punto 4): anulacionPorModalidad — el 409
   assert.equal(anulacionPorModalidad(errorDeRespuesta(422, { detail: { codigo: 'ANULA_CONFIRMACION', mensaje: 'x' } })), null);
   assert.equal(anulacionPorModalidad(new Error('red')), null);
   assert.equal(anulacionPorModalidad(null), null);
+}
+
+console.log('--- B3 T20b (parte B): «el nombre cambió pero el contacto no» en la ventana de envío ---');
+{
+  assert.equal(AVISO_NOMBRE_SIN_CONTACTO, 'El nombre cambió pero el contacto no: revisa el teléfono y el correo.');
+  // La decisión es del servidor (nombre_cambio_sin_contacto del detalle): solo un true exacto la muestra.
+  assert.equal(avisoNombreSinContacto({ nombre_cambio_sin_contacto: true }), AVISO_NOMBRE_SIN_CONTACTO);
+  for (const valor of [false, undefined, null, 'true', 1, {}]) {
+    assert.equal(avisoNombreSinContacto({ nombre_cambio_sin_contacto: valor }), null, String(valor));
+  }
+  for (const documento of [null, undefined, {}, 'x']) assert.equal(avisoNombreSinContacto(documento), null);
+
+  // La nota va en un componente nuevo; ChannelModal solo la recibe (`aviso`) y la pinta arriba de los botones, sin
+  // tocar el «Enviar» (no bloquea nada). Las páginas de la SC y la COT solo la pasan (R15).
+  const nota = readFileSync(new URL('../src/app/dashboard/ventas/aviso-nombre-sin-contacto.tsx', import.meta.url), 'utf8')
+    .replace(/\r\n/g, '\n');
+  assert.ok(nota.includes("from '@/lib/datos-cliente'") && nota.includes('avisoNombreSinContacto('), 'la lib decide');
+  assert.ok(/amber/.test(nota), 'nota ámbar');
+  const fuente = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/cotizacion-client.tsx', import.meta.url), 'utf8')
+    .replace(/\r\n/g, '\n');
+  const inicio = fuente.indexOf('export function ChannelModal(');
+  const modal = fuente.slice(inicio, fuente.indexOf('\n}\n', inicio));
+  assert.ok(/\baviso\?: ReactNode\b/.test(modal) && /\{ [^}]*\baviso\b[^}]*\}: \{/.test(modal), 'ChannelModal recibe `aviso`');
+  assert.ok(modal.indexOf('{aviso}') > 0 && modal.indexOf('{aviso}') < modal.indexOf("onSelectChannel('WhatsApp')"),
+    'arriba de los botones');
+  assert.ok(modal.includes('<Button color="blue" disabled={!selectedChannel || saving} onClick={onConfirm}>Enviar</Button>'),
+    '«Enviar» no depende del aviso');
+  for (const [ruta, doc] of [['../src/app/dashboard/ventas/solicitud/[id]/page.tsx', 'solicitud'],
+    ['../src/app/dashboard/ventas/cotizacion/[id]/page.tsx', 'cotizacion']]) {
+    const pagina = readFileSync(new URL(ruta, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+    assert.ok(pagina.includes(`aviso={<AvisoNombreSinContacto documento={${doc}} />}`), ruta);
+    assert.ok(pagina.includes("import { AvisoNombreSinContacto } from '"), ruta);
+  }
 }
 
 console.log('OK test_datos_cliente');

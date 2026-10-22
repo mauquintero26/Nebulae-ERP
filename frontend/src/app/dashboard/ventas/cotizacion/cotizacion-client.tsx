@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useMemo, useId } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, useId, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useSearchParams, useRouter } from 'next/navigation';
 import {
@@ -525,10 +525,11 @@ export function PropagarPvenConfirm({ pven, totalAnterior, totalNuevo, onConfirm
 // EnlaceConfirmacionModal) pone bajo la opción WhatsApp si sale sola desde el WhatsApp de la empresa (lineaWhatsAppCanal);
 // `nota` va bajo las opciones (el reenvío: NOTA_REENVIO_ENLACE). Sin ellas, la ventana queda como antes.
 // B3 T19 (H49): `error` (opcional) es el error del envío dentro de la ventana, que sigue abierta (el PVEN).
-export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, saving, customerHasPhone, documentLabel = 'cotización', customerEmail, textoSinTelefono = 'sin teléfono', envioWhatsApp = null, nota, error }: {
+// B3 T20b: `aviso` (opcional) va arriba de los botones y no bloquea nada (AvisoNombreSinContacto de la SC y la COT).
+export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCancel, saving, customerHasPhone, documentLabel = 'cotización', customerEmail, textoSinTelefono = 'sin teléfono', envioWhatsApp = null, nota, error, aviso }: {
   selectedChannel: 'WhatsApp'|'Email'|'Otro'|null; onSelectChannel: (ch: 'WhatsApp'|'Email'|'Otro') => void; onConfirm: () => void;
   onCancel: () => void; saving: boolean; customerHasPhone: boolean; documentLabel?: string; customerEmail?: string | null;
-  textoSinTelefono?: string; envioWhatsApp?: EnvioWhatsAppCanal | null; nota?: string; error?: string;
+  textoSinTelefono?: string; envioWhatsApp?: EnvioWhatsAppCanal | null; nota?: string; error?: string; aviso?: ReactNode;
 }) {
   const conoceCorreo = customerEmail !== undefined;
   const correo = (customerEmail || '').trim();
@@ -543,6 +544,7 @@ export function ChannelModal({ selectedChannel, onSelectChannel, onConfirm, onCa
           <Button color="blue" disabled={!selectedChannel || saving} onClick={onConfirm}>Enviar</Button>
         </>
       )}>
+      {aviso}
       <div className="space-y-2">
         <button
           onClick={() => onSelectChannel('WhatsApp')}
