@@ -34,6 +34,9 @@ NOMBRE, CORREO = "Cliente T21", "cliente-t21@test.com"
 TELEFONO_VALIDO = "3001234567"
 MENSAJE_SIN_TAX_RATE = "La columna products.tax_rate no existe en esta base: no hay nada que copiar."
 CALCULADORA = "Cotizado desde Calculadora Rápida. Margen: 30% | TRM: 4100"
+MENSAJE_FALTA_IDS = "Falta --ids: aplica solo los ids que el usuario aprobó en el --listar."
+AVISO_PRODUCCION = ("AVISO: estás conectado a la base de PRODUCCIÓN (erpdb). La salida trae datos reales: guárdala solo "
+                    "en la carpeta datos y no la pegues en el chat.")
 
 
 # ─── ayudas ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -218,6 +221,11 @@ def test_solo_tax_rate_acepta_aplicar_y_lo_exige_con_base():
         assert parser.parse_args([sub, "--listar"]).listar
     with contextlib.redirect_stderr(io.StringIO()), pytest.raises(SystemExit):
         parser.parse_args(["tax_rate", "--aplicar"])                      # sin --base
+    # F1 (M25): sin --ids, --aplicar no copia «lo copiable de ese momento»: sale con el mensaje.
+    error = io.StringIO()
+    with contextlib.redirect_stderr(error), pytest.raises(SystemExit):
+        parser.parse_args(["tax_rate", "--aplicar", "--base", "erp_test"])
+    assert MENSAJE_FALTA_IDS in error.getvalue()
     with contextlib.redirect_stderr(io.StringIO()), pytest.raises(SystemExit):
         parser.parse_args(["tax_rate", "--listar", "--aplicar", "--base", "erp_test"])
     ns = parser.parse_args(["tax_rate", "--aplicar", "--base", "erp_test", "--ids", "3,4"])
@@ -225,7 +233,11 @@ def test_solo_tax_rate_acepta_aplicar_y_lo_exige_con_base():
 
 
 def test_listar_todo_corre_en_solo_lectura_sin_commits(db, contador_sql, monkeypatch):
+    import inspect
     cb = _db3()
+    # F1 (M27): la solo lectura es incondicional: listar y listar_todo ya no tienen la salida solo_lectura=False.
+    assert "solo_lectura" not in inspect.signature(cb.listar).parameters
+    assert "solo_lectura" not in inspect.signature(cb.listar_todo).parameters
     modo = []
     original = cb.LISTADORES["empresa"]
 
@@ -265,6 +277,34 @@ def test_main_listar_todo_imprime_la_base_y_no_escribe(db, contador_sql):
     assert "RESUMEN" in texto and "LISTAR: no se escribió nada" in texto
     assert contador_sql.commits == 0
     assert not any(s.strip().upper().startswith(("INSERT", "UPDATE", "DELETE")) for s in contador_sql.sentencias)
+    # F1 (M26): con la base de pruebas no sale el aviso de producción.
+    assert "PRODUCCIÓN" not in texto
+    # F1 (M31 a): ni la URL cruda ni la contraseña (primero el booleano: el mensaje de la falla nunca lleva la URL).
+    from urllib.parse import urlparse
+    from app.db.database import SQLALCHEMY_DATABASE_URL
+    cruda = SQLALCHEMY_DATABASE_URL in texto
+    assert not cruda, "salió la URL sin enmascarar"
+    clave = urlparse(SQLALCHEMY_DATABASE_URL).password
+    if clave:
+        con_la_clave = f":{clave}@" in texto or (len(clave) >= 8 and clave in texto)
+        assert not con_la_clave, "salió la contraseña de la base"
+
+
+def test_main_avisa_si_esta_conectado_a_produccion(db, monkeypatch):
+    """F1 (M26): si current_database() es la base de producción (erpdb, el nombre de alembic/env.py), el aviso sale
+    arriba de todo, en stdout y en stderr. El Uso dice de dónde sale la base (DATABASE_URL) y que ALEMBIC_ENV no
+    aplica."""
+    cb = _db3()
+    assert cb.BASE_PRODUCCION == "erpdb"
+    assert "DATABASE_URL" in cb.__doc__ and "ALEMBIC_ENV" in cb.__doc__
+    monkeypatch.setattr(cb, "base_actual", lambda db_: "erpdb")
+    salida, error = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(salida), contextlib.redirect_stderr(error):
+        codigo = cb.main(["empresa", "--listar"])
+    assert codigo == 0
+    texto = salida.getvalue()
+    assert AVISO_PRODUCCION in texto and AVISO_PRODUCCION in error.getvalue()
+    assert texto.index(AVISO_PRODUCCION) < texto.index("empresa: ")  # antes de cualquier listado
 
 
 def test_los_documentos_reales_de_erp_test_no_salen_en_ningun_listado(db):
@@ -321,10 +361,11 @@ def test_tax_rate_aplicar_copia_19_y_5_y_deja_el_resto_sin_definir(db, brand, ca
     if not _hay_tax_rate(db):
         # erp_test sin la columna vieja: --aplicar termina sin escribir y lo dice
         with _carpeta() as carpeta:
-            res = cb.aplicar_tax_rate(db, base=_base(db), carpeta_respaldo=carpeta)
+            res = cb.aplicar_tax_rate(db, base=_base(db), carpeta_respaldo=carpeta, ids=[1])
             assert res.cambiados == 0 and MENSAJE_SIN_TAX_RATE in res.detalle and os.listdir(carpeta) == []
         return
     p19 = _producto(db, brand, category, tax_rate=19)
+    p16_exento = _producto(db, brand, category, tax_rate=16, tarifa_iva="EXENTO")   # F1 (M29)
     p5 = _producto(db, brand, category, tax_rate=5)
     p16 = _producto(db, brand, category, tax_rate=16)
     p0 = _producto(db, brand, category, tax_rate=0)
@@ -344,10 +385,17 @@ def test_tax_rate_aplicar_copia_19_y_5_y_deja_el_resto_sin_definir(db, brand, ca
     assert fila["tarifa_nueva"] == "19" and fila["tax_rate"] == "19"
     assert next(f for f in l.seccion("copiables").filas if f["id"] == p5.id)["tarifa_nueva"] == "5"
     assert next(f for f in l.seccion("otros").filas if f["id"] == p16.id)["tax_rate"] == "16"
+    # F1 (M29): el que ya tiene tarifa no «se deja sin definir»: conserva la suya.
+    assert next(f for f in l.seccion("otros").filas if f["id"] == p16.id)["queda"] == "sin definir (no es 19 ni 5)"
+    assert next(f for f in l.seccion("otros").filas if f["id"] == p16_exento.id)["queda"] == "conserva 'EXENTO'"
+    # F1 (M25): el --listar trae el comando exacto con los ids copiables.
+    copiables = ",".join(str(f["id"]) for f in l.seccion("copiables").filas)
+    assert any(f"tax_rate --aplicar --base {_base(db)} --ids {copiables}" in n for n in l.notas), l.notas
     with _carpeta() as carpeta:
         salida = io.StringIO()
         with contextlib.redirect_stdout(salida):
-            codigo = cb.main(["tax_rate", "--aplicar", "--base", _base(db), "--respaldo", carpeta])
+            codigo = cb.main(["tax_rate", "--aplicar", "--base", _base(db), "--respaldo", carpeta,
+                              "--ids", f"{p19.id},{p5.id}"])
         assert codigo == 0, salida.getvalue()
         archivos = os.listdir(carpeta)
         assert len(archivos) == 1 and archivos[0].startswith(f"tax_rate-{_base(db)}-") and archivos[0].endswith(".json")
@@ -364,6 +412,8 @@ def test_tax_rate_aplicar_copia_19_y_5_y_deja_el_resto_sin_definir(db, brand, ca
     assert p19.tarifa_iva == "19" and p5.tarifa_iva == "5"
     assert p16.tarifa_iva is None and p0.tarifa_iva is None and p_nulo.tarifa_iva is None
     assert p_con.tarifa_iva == "EXENTO"                                    # ya tenia tarifa: no se toca
+    _refrescar(db, p16_exento)
+    assert p16_exento.tarifa_iva == "EXENTO"
     otra_vez = cb.listar(db, "tax_rate")
     assert p19.id not in [f["id"] for f in otra_vez.seccion("copiables").filas]
     assert p19.id in [f["id"] for f in otra_vez.seccion("ya_tienen").filas]
@@ -376,7 +426,7 @@ def test_tax_rate_sin_la_columna_vieja_no_escribe_y_lo_dice(db, monkeypatch, con
                         lambda db_, tabla: original(db_, tabla) - ({"tax_rate"} if tabla == "products" else set()))
     with _carpeta() as carpeta:
         contador_sql.reset()
-        res = cb.aplicar_tax_rate(db, base=_base(db), carpeta_respaldo=carpeta)
+        res = cb.aplicar_tax_rate(db, base=_base(db), carpeta_respaldo=carpeta, ids=[1])
         assert res.cambiados == 0 and not res.escribio and res.respaldo is None
         assert res.detalle == [MENSAJE_SIN_TAX_RATE]
         assert os.listdir(carpeta) == []
@@ -384,7 +434,7 @@ def test_tax_rate_sin_la_columna_vieja_no_escribe_y_lo_dice(db, monkeypatch, con
         assert contador_sql.commits == 0
         salida = io.StringIO()
         with contextlib.redirect_stdout(salida):
-            codigo = cb.main(["tax_rate", "--aplicar", "--base", _base(db), "--respaldo", carpeta])
+            codigo = cb.main(["tax_rate", "--aplicar", "--base", _base(db), "--respaldo", carpeta, "--ids", "1"])
         assert codigo == 0 and MENSAJE_SIN_TAX_RATE in salida.getvalue()
         assert os.listdir(carpeta) == []
     l = cb.listar(db, "tax_rate")
@@ -396,11 +446,12 @@ def test_tax_rate_con_otra_base_o_un_id_fuera_de_la_lista_aborta_sin_escribir(db
     cb = _db3()
     with _carpeta() as carpeta:
         with pytest.raises(cb.ErrorDatos) as exc:
-            cb.aplicar_tax_rate(db, base="otra_base_que_no_es", carpeta_respaldo=carpeta)
+            cb.aplicar_tax_rate(db, base="otra_base_que_no_es", carpeta_respaldo=carpeta, ids=[1])
         assert "otra_base_que_no_es" in str(exc.value) and "no se escribió nada" in str(exc.value)
         salida, error = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(salida), contextlib.redirect_stderr(error):
-            codigo = cb.main(["tax_rate", "--aplicar", "--base", "otra_base_que_no_es", "--respaldo", carpeta])
+            codigo = cb.main(["tax_rate", "--aplicar", "--base", "otra_base_que_no_es", "--respaldo", carpeta,
+                              "--ids", "1"])
         assert codigo == 2 and "ABORTADO" in error.getvalue() and "Traceback" not in error.getvalue()
         assert os.listdir(carpeta) == []
         if not _hay_tax_rate(db):
@@ -411,7 +462,9 @@ def test_tax_rate_con_otra_base_o_un_id_fuera_de_la_lista_aborta_sin_escribir(db
         p5 = _producto(db, brand, category, tax_rate=5)
         p16 = _producto(db, brand, category, tax_rate=16)
         p_con = _producto(db, brand, category, tax_rate=5, tarifa_iva="19")
-        for pid, motivo in ((p16.id, "no es 19 ni 5"), (p_con.id, "ya tiene tarifa"),
+        p16_exento = _producto(db, brand, category, tax_rate=16, tarifa_iva="EXENTO")   # F1 (M29)
+        for pid, motivo in ((p16.id, "no es 19 ni 5 (se deja sin definir)"), (p_con.id, "ya tiene tarifa"),
+                            (p16_exento.id, "no es 19 ni 5 (conserva 'EXENTO')"),
                             (2_000_000_000, "no está en el listado")):
             with pytest.raises(cb.ErrorDatos) as exc:
                 cb.aplicar_tax_rate(db, base=_base(db), carpeta_respaldo=carpeta, ids=[p19.id, pid])
@@ -431,7 +484,7 @@ def test_tax_rate_si_falla_a_medio_camino_no_queda_nada_y_el_respaldo_dice_no_ap
     cb = _db3()
     if not _hay_tax_rate(db):
         with _carpeta() as carpeta:
-            res = cb.aplicar_tax_rate(db, base=_base(db), carpeta_respaldo=carpeta)
+            res = cb.aplicar_tax_rate(db, base=_base(db), carpeta_respaldo=carpeta, ids=[1])
             assert res.cambiados == 0 and MENSAJE_SIN_TAX_RATE in res.detalle
         return
     p19 = _producto(db, brand, category, tax_rate=19)
@@ -533,8 +586,20 @@ def test_anticipos_cot_separa_las_que_cambian_solo_porque_d7_saco_su_modalidad_d
     _ven(db, f"PVEN-T21Y{s}", cot=cot_pven_cancelado, estado="CANCELADO")
     sc_real = _sc(db, f"SC-T21R{s}", modalidad_pago="Cruce de cuentas")
     cot_real = _cot(db, f"COT-T21R{s}", sc_real, estado="PENDIENTE_CONFIRMACION", anticipo_cop=0)
+    # F1 (M31 d): la rama «empieza por cr» de la regla vieja, en una COT que no está excluida; y una con anticipo
+    # manual y una modalidad de D7, que no es «solo por D7» (su % sale del manual).
+    sc_cr = _sc(db, f"SC-T21CR{s}", modalidad_pago="cr. 90 dias")
+    cot_cr = _cot(db, f"COT-T21CR{s}", sc_cr, estado="PENDIENTE_CONFIRMACION", anticipo_cop=0)
+    cot_manual = _cot(db, f"COT-T21MN{s}", sc_cr, estado="CONFIRMADA", anticipo_cop=0, anticipo_pct_manual=30,
+                      anticipo_manual_nota="Acordado con el cliente")
+    # F1 (M32): una COT sin SC con centavos en el anticipo sale con el origen «conservado».
+    cot_sin_sc = _cot(db, f"COT-T21NS{s}", estado="PENDIENTE_CONFIRMACION", anticipo_cop=Decimal("300000.50"))
     l = cb.listar(db, "anticipos_cot", excluidos=(sc_real.numero,))
     d7, otras = _numeros(l, "dejo_de_ser_credito"), _numeros(l, "desactualizadas")
+    assert cot_cr.numero in d7 and cot_manual.numero not in d7
+    fila = next(f for f in l.seccion("desactualizadas").filas if f["numero"] == cot_sin_sc.numero)
+    assert fila["origen"] == "conservado"
+    assert "sin SC" in l.que_haria and "h36 solo recalcula las COT con SC" in l.que_haria
     assert cot_d7.numero in d7 and cot_d7.numero not in otras
     assert cot_d7_otro.numero in otras and cot_d7_otro.numero not in d7
     assert cot_mal.numero in otras and cot_pven_cancelado.numero in otras
@@ -591,7 +656,16 @@ def test_telefonos_lista_clientes_y_documentos_vigentes_sin_whatsapp_valido(db):
     sc_papelera = _sc(db, f"SC-T21P{s}", customer_phone="123", eliminada_at=_ahora())
     cot_rechazada = _cot(db, f"COT-T21X{s}", customer_phone="123", estado="RECHAZADA")
     sc_real = _sc(db, f"SC-T21R{s}", customer_phone="123", customer_id=c_real.id)
+    # F1 (M31 e): un pedido vigente y una COT activa con un teléfono inválido; un documento sin teléfono propio cuyo
+    # cliente tiene 9 dígitos sale con el origen «del cliente».
+    ven_malo = _ven(db, f"PVEN-T21M{s}", customer_phone="123")
+    cot_mala = _cot(db, f"COT-T21M{s}", customer_phone="123", estado="BORRADOR")
+    cot_del_cliente_malo = _cot(db, f"COT-T21D{s}", customer_phone="", customer_id=c_malo.id, estado="ENVIADA")
     l = cb.listar(db, "telefonos", excluidos=(sc_real.numero,))
+    por_numero = {f["numero"]: f for f in l.seccion("documentos_invalidos").filas}
+    assert por_numero[ven_malo.numero]["tipo"] == "PVEN" and por_numero[cot_mala.numero]["tipo"] == "COT"
+    assert por_numero[cot_del_cliente_malo.numero]["origen"] == "del cliente"
+    assert por_numero[cot_del_cliente_malo.numero]["digitos"] == 9
     clientes = {f["id"]: f for f in l.seccion("clientes").filas}
     assert c_malo.id in clientes and clientes[c_malo.id]["digitos"] == 9
     for c in (c_sin, c_vacio, c_bueno, c_real):
@@ -655,7 +729,16 @@ def test_notas_cot_lista_las_notas_de_cot_activas_y_pedidos_y_aparta_las_del_cot
     cot_calc_rechazada = _cot(db, f"COT-T21Y{s}", estado="RECHAZADA", notas=CALCULADORA)
     cot_real = _cot(db, f"COT-T21R{s}", estado="CONFIRMADA", notas="Nota de un documento real")
     ven_real = _ven(db, f"PVEN-T21R{s}", cot=cot_real)
+    # F1 (M28): los correos y las series de 7 o más dígitos (con espacios, puntos o guiones) salen ocultos.
+    cot_datos = _cot(db, f"COT-T21N{s}", estado="BORRADOR",
+                     notas="Llamar a ana.perez@correo.com o al 300 123 4567; cédula 1.023.456.789. Código 4100.")
     l = cb.listar(db, "notas_cot", excluidos=(cot_real.numero,))
+    fila = next(f for f in l.seccion("cot_notas").filas if f["numero"] == cot_datos.numero)
+    for dato in ("ana.perez@correo.com", "300 123 4567", "1.023.456.789"):
+        assert dato not in fila["notas"], fila["notas"]
+    assert fila["notas"] == ("Llamar a [correo oculto] o al [número oculto]; cédula [número oculto]. Código 4100.")
+    assert "pueden traer datos personales" in cb.INFO["notas_cot"]["que_es"]
+    assert "pueden traer datos personales" in cb.__doc__
     cot_otras, cot_calc = _numeros(l, "cot_notas"), _numeros(l, "cot_calculadora")
     pven_otras, pven_calc = _numeros(l, "pven_notas"), _numeros(l, "pven_calculadora")
     assert cot_activa.numero in cot_otras and cot_activa.numero not in cot_calc               # activa con notas: sale
@@ -679,6 +762,13 @@ def test_notas_cot_lista_las_notas_de_cot_activas_y_pedidos_y_aparta_las_del_cot
     assert informativa.informativa and cot_calc_rechazada.numero in _numeros(l, "calculadora_otros_estados")
     assert cot_rechazada.numero not in _numeros(l, "calculadora_otros_estados")
     assert l.conteo == sum(len(x.filas) for x in l.secciones if not x.informativa)
+    # F1 (M30): el resumen no suma la sección informativa: sus partes dan el conteo.
+    resumen = cb.texto_resumen([l])
+    assert "calculadora_otros_estados" not in resumen
+    import re
+    dentro = resumen.split("fila(s) (", 1)[1].split(");", 1)[0]
+    partes = {clave: int(n) for clave, n in re.findall(r"(\w+): (\d+)", dentro)}
+    assert "calculadora_otros_estados" not in partes and sum(partes.values()) == l.conteo, resumen
     texto = cb.texto_listado(l)
     assert "A" * 200 not in texto                                          # el texto tambien sale recortado
     _sin_datos_del_cliente(texto)
@@ -713,5 +803,68 @@ def test_los_listados_sirven_en_una_base_sin_el_bloque_3(db, monkeypatch, contad
     assert cot.numero in _numeros(listados["iva_documentos"], "cotizaciones")
     assert "fa6_027" in listados["tax_rate"].seccion("sin_tarifa").nota
     with _carpeta() as carpeta:
-        res = cb.aplicar_tax_rate(db, base=_base(db), carpeta_respaldo=carpeta)
+        res = cb.aplicar_tax_rate(db, base=_base(db), carpeta_respaldo=carpeta, ids=[1])
         assert res.cambiados == 0 and any("tarifa_iva" in d for d in res.detalle) and os.listdir(carpeta) == []
+
+
+# ─── Revisión final del Bloque 3, ronda F1 (M25 y M31) ──────────────────────────────────────────────────────
+
+def test_tax_rate_aplicar_sin_ids_no_escribe_nada(db, brand, category, contador_sql):
+    """F1 (M25): ids es obligatorio también en la función (sin ids, o vacío): ErrorDatos con el mensaje, sin UPDATE,
+    sin commit y sin respaldo."""
+    cb = _db3()
+    p19 = _producto(db, brand, category, tax_rate=19) if _hay_tax_rate(db) else None
+    with _carpeta() as carpeta:
+        for ids in (None, []):
+            contador_sql.reset()
+            with pytest.raises(cb.ErrorDatos) as exc:
+                cb.aplicar_tax_rate(db, base=_base(db), carpeta_respaldo=carpeta, ids=ids)
+            assert str(exc.value) == MENSAJE_FALTA_IDS, ids
+            assert not any(s.strip().upper().startswith("UPDATE") for s in contador_sql.sentencias), ids
+            assert contador_sql.commits == 0, ids
+        assert os.listdir(carpeta) == []
+    if p19 is not None:
+        _refrescar(db, p19)
+        assert p19.tarifa_iva is None
+
+
+def test_tax_rate_el_respaldo_va_antes_del_primer_update(db, brand, category, monkeypatch, contador_sql):
+    """F1 (M31 b): el respaldo existe antes del primer UPDATE; si no se puede escribir, se aborta sin ningún UPDATE ni
+    commit y la tarifa no cambia. (c) el guard «AND tarifa_iva IS NULL» por sí solo: un producto que ya tiene tarifa
+    no cambia aunque se le pida."""
+    cb = _db3()
+    if not _hay_tax_rate(db):
+        return
+    p19 = _producto(db, brand, category, tax_rate=19)
+    p5 = _producto(db, brand, category, tax_rate=5)
+    p_exento = _producto(db, brand, category, tax_rate=19, tarifa_iva="EXENTO")
+    assert cb._copiar_tarifa(db, p_exento.id, "19") == 0
+    _refrescar(db, p_exento)
+    assert p_exento.tarifa_iva == "EXENTO"
+
+    original = cb._copiar_tarifa
+    with _carpeta() as carpeta:
+        archivos_al_copiar = []
+
+        def espia(db_, producto_id, tarifa):
+            archivos_al_copiar.append(len(os.listdir(carpeta)))
+            return original(db_, producto_id, tarifa)
+
+        monkeypatch.setattr(cb, "_copiar_tarifa", espia)
+        res = cb.aplicar_tax_rate(db, base=_base(db), carpeta_respaldo=carpeta, ids=[p19.id])
+        assert res.cambiados == 1 and archivos_al_copiar == [1]
+
+    def no_se_puede(*args, **kwargs):
+        raise OSError("disco lleno (prueba)")
+
+    monkeypatch.setattr(cb, "_copiar_tarifa", original)
+    monkeypatch.setattr(cb, "_escribir_respaldo_tax_rate", no_se_puede)
+    with _carpeta() as carpeta:
+        contador_sql.reset()
+        with pytest.raises(cb.ErrorDatos) as exc:
+            cb.aplicar_tax_rate(db, base=_base(db), carpeta_respaldo=carpeta, ids=[p5.id])
+        assert "respaldo" in str(exc.value) and "no se escribió nada" in str(exc.value)
+        assert not any(s.strip().upper().startswith("UPDATE") for s in contador_sql.sentencias)
+        assert contador_sql.commits == 0
+    _refrescar(db, p5)
+    assert p5.tarifa_iva is None

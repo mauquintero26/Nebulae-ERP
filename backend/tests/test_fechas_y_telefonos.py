@@ -225,3 +225,13 @@ def test_telefono_del_documento_usa_el_del_cliente_si_el_documento_no_tiene(db):
     sin.customer_phone = "-"
     db.commit(); db.refresh(sin)
     assert telefono_del_documento(sin) is None
+
+
+def test_iso_utc_de_erp_ventas_es_iso_z():
+    """F1 (M43, D:57(c)): una sola regla de «UTC sin zona más 'Z'»: erp_ventas._iso_utc ES fechas.iso_z (el nombre se
+    queda por sus llamadores). La salida no cambia."""
+    from app.api.v1 import erp_ventas
+    from app.core.fechas import iso_z
+    assert erp_ventas._iso_utc is iso_z
+    assert erp_ventas._iso_utc(datetime(2026, 10, 22, 15, 0)) == "2026-10-22T15:00:00Z"
+    assert erp_ventas._iso_utc(None) is None and erp_ventas._iso_utc("2026-10-22T15:00:00Z") == "2026-10-22T15:00:00Z"

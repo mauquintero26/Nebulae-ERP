@@ -385,3 +385,19 @@ def test_cancelar_un_pedido_registra_el_estado_y_el_motivo(app_client, db, admin
     assert actividades[0]["extra_data"]["cambios"] == [{
         "campo": "cancellation_reason", "etiqueta": "Motivo de cancelación",
         "antes": None, "despues": "El cliente desistió"}]
+
+
+def test_las_cantidades_de_la_actividad_llevan_coma_decimal():
+    """F1 (M44, D:102): «Rodillo ×2,5» y la cantidad que pasa de «2,5» a «3,5», con coma decimal es-CO, como dicen
+    LINEA_CANCELADA y COMPRA_REVISAR («2,5 unidades»). Una sola regla (ventas_dinero.cantidad_es); los enteros no
+    cambian."""
+    from app.core.ventas_dinero import cantidad_es, unidades
+    antes = {"productos": [_linea("Rodillo", Decimal("2.5"), 1000), _linea("Silla", Decimal("1.25"), 100)]}
+    despues = {"productos": [_linea("Rodillo", Decimal("3.5"), 1000), _linea("Brocha", Decimal("2.50"), 500)]}
+    por_etiqueta = {c["etiqueta"]: c for c in cd.comparar("COT", antes, despues)}
+    assert (por_etiqueta["Rodillo — cantidad"]["antes"], por_etiqueta["Rodillo — cantidad"]["despues"]) == ("2,5",
+                                                                                                         "3,5")
+    assert por_etiqueta["Producto agregado"]["despues"] == "Brocha ×2,5 a $500"
+    assert por_etiqueta["Producto eliminado"]["antes"] == "Silla ×1,25 a $100"
+    assert [cantidad_es(v) for v in (Decimal("10.00"), Decimal("2.50"), 3, "0.330")] == ["10", "2,5", "3", "0,33"]
+    assert unidades(Decimal("2.50")) == "2,5 unidades" and unidades(1) == "1 unidad"

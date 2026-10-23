@@ -195,6 +195,14 @@ def limpiar_linea(texto) -> str:
     return _SALTOS_Y_CONTROL.sub(" ", str(texto)).strip()
 
 
+def una_linea(texto) -> str:
+    """Una sola linea con la regla de limpiar_linea (saltos y demas caracteres de control a espacio) y los espacios
+    juntos en uno. Revision final (F1, M6): la UNICA regla de «una linea»; la usan el asunto del aviso al asesor
+    (erp_ventas) y los parametros del WhatsApp (envio_whatsapp: Meta rechaza saltos, tabuladores o mas de 4 espacios
+    seguidos). None -> ''."""
+    return " ".join(limpiar_linea(texto).split())
+
+
 def _url_logo(version):
     """Ruta del logo relativa al API (/api/v1): la version en ?v= hace que un logo nuevo se vea al instante."""
     return f"/publico/empresa/logo?v={version}" if version else None

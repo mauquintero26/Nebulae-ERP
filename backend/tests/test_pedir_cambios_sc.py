@@ -769,7 +769,7 @@ def test_cuerpo_demasiado_grande_responde_413_sin_gastar_el_enlace(app_client, d
     assert len(justo.encode()) == 65536
     _detalle(app_client.post("/api/v1/confirmar/ver", content=justo, headers=cabeceras), "invalido")
 
-    # Sin tope fuera de esas rutas: PUT /empresa con 70 KB llega a su validación (422), no a un 413.
+    # Fuera de esas rutas el tope es otro (F1, M55: 25 MB): PUT /empresa con 70 KB llega a su validación (422).
     resp = app_client.put("/api/v1/empresa", json={"nombre_comercial": "x" * 70_000}, headers=auth(admin_token))
     assert resp.status_code == 422, resp.text
 
@@ -838,3 +838,237 @@ def test_el_tope_de_cuerpo_mira_la_ruta_sin_root_path():
     assert correr("/erp/api/v1/confirmar/ver", "/erp", 100) == (["/erp/api/v1/confirmar/ver"], [])
     assert correr("/erpx/api/v1/confirmar/ver", "/erp", 70_000) == (["/erpx/api/v1/confirmar/ver"], [])
     assert correr("/erp/api/v1/ventas/solicitudes", "/erp", 70_000) == (["/erp/api/v1/ventas/solicitudes"], [])
+
+
+# ─── Revisión final del Bloque 3, ronda F1 ──────────────────────────────────────────────────────────────────
+
+RECARGA_SC = ("La solicitud cambió mientras la reenviabas (el cliente pidió cambios o la editaron). Recarga la "
+              "página.")
+YA_ENVIADA = "Ya se le envió al cliente; usa «Reenviar»."
+
+
+def _enviar_sc(app_client, admin_token, sc, **body):
+    return app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/enviar-confirmacion",
+                           json={"user_name": "t", **body}, headers=auth(admin_token))
+
+
+def _tokens_sc(db, sc_id):
+    return db.execute(text("SELECT id, used_at FROM document_confirmation_tokens WHERE document_type = 'SC' "
+                           "AND document_id = :i ORDER BY id"), {"i": sc_id}).mappings().all()
+
+
+def test_reenvio_de_la_sc_con_una_pagina_vieja_da_409(app_client, db, admin_token, user_admin, monkeypatch):
+    """F1 (C0): el botón «Reenviar enlace de confirmación» manda reenvio=true. Si la SC ya no está en Pendiente por
+    confirmación (el cliente pidió cambios con la página abierta), 409 sin tocar enlaces, estado, marca ni seguimiento.
+    Con la SC pendiente, reenvio=true es el reenvío de siempre."""
+    llamadas = _correo_falso(monkeypatch)
+    sc = _sc(db, user_admin)
+    raw = _enviar(app_client, admin_token, sc)
+    assert _pedir(app_client, raw).status_code == 200
+    db.refresh(sc)
+    marca = (sc.cambios_cliente_at, sc.cambios_cliente_tipo, sc.cambios_cliente_comentario)
+    assert sc.estado == "ASIGNADA" and marca[0] is not None
+    tokens_antes = [dict(t) for t in _tokens_sc(db, sc.id)]
+    envios_antes = len(_logs(db, "SC", sc.id, "ESTADO_CHANGED"))
+    n_correos = len(llamadas)
+    seguimiento_antes = db.execute(text("SELECT estado, iniciado_at FROM seguimientos_confirmacion WHERE "
+                                        "document_type = 'SC' AND document_id = :i"), {"i": sc.id}).mappings().first()
+
+    resp = _enviar_sc(app_client, admin_token, sc, reenvio=True)
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == RECARGA_SC
+    assert [dict(t) for t in _tokens_sc(db, sc.id)] == tokens_antes  # sin token nuevo ni revocación
+    db.expire_all()
+    db.refresh(sc)
+    assert sc.estado == "ASIGNADA"
+    assert (sc.cambios_cliente_at, sc.cambios_cliente_tipo, sc.cambios_cliente_comentario) == marca
+    assert len(_logs(db, "SC", sc.id, "ESTADO_CHANGED")) == envios_antes and len(llamadas) == n_correos
+    seguimiento = db.execute(text("SELECT estado, iniciado_at FROM seguimientos_confirmacion WHERE "
+                                  "document_type = 'SC' AND document_id = :i"), {"i": sc.id}).mappings().first()
+    assert seguimiento == seguimiento_antes  # el recordatorio no se reprograma
+
+    # Sin la bandera, el primer envío de siempre; después, reenvio=true reenvía.
+    assert _enviar_sc(app_client, admin_token, sc).status_code == 200
+    resp = _enviar_sc(app_client, admin_token, sc, reenvio=True)
+    assert resp.status_code == 200, resp.text
+    assert _logs(db, "SC", sc.id, "ESTADO_CHANGED")[-1].description == "Enlace de confirmación reenviado al cliente"
+
+
+def test_primer_envio_de_una_sc_que_ya_se_envio_da_409(app_client, db, admin_token, user_admin, monkeypatch):
+    """F1 (M0): la bandera simétrica. reenvio=false sobre una SC que ya está en Pendiente por confirmación (otra pestaña
+    u otro asesor ya la envió) da 409 sin tocar el enlace que el cliente acaba de recibir. Sin la clave, lo de hoy."""
+    _correo_falso(monkeypatch)
+    sc = _sc(db, user_admin)
+    assert _enviar_sc(app_client, admin_token, sc, reenvio=False).status_code == 200  # Asignada: el primer envío
+    tokens_antes = [dict(t) for t in _tokens_sc(db, sc.id)]
+    resp = _enviar_sc(app_client, admin_token, sc, reenvio=False)
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == YA_ENVIADA
+    assert [dict(t) for t in _tokens_sc(db, sc.id)] == tokens_antes
+    assert len(_logs(db, "SC", sc.id, "ESTADO_CHANGED")) == 1
+    assert _enviar_sc(app_client, admin_token, sc).status_code == 200  # sin la clave: el reenvío de siempre
+
+
+def test_la_cot_temprana_no_sale_con_los_cambios_de_la_sc_sin_revisar(app_client, db, admin_token, user_admin,
+                                                                       monkeypatch):
+    """F1 (M1, C20): con la SC ya bloqueada, el primer envío de su COT temprana mira la marca de cambios de la SC. Si
+    sigue vigente, 409 y la COT no sale (el cliente no aprueba la COT vieja después de pedir cambios en la SC)."""
+    _correo_falso(monkeypatch)
+    sc = _sc(db, user_admin)
+    raw = _enviar(app_client, admin_token, sc)
+    cot = _cot_temprana(db, sc, "BORRADOR")
+    assert _pedir(app_client, raw).status_code == 200
+    resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/enviar-confirmacion", json={},
+                           headers=auth(admin_token))
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == (f"El cliente pidió cambios en la solicitud {sc.numero}: revísalos antes de "
+                                     f"enviar la cotización.")
+    db.refresh(cot)
+    assert cot.estado == "BORRADOR" and cot.valida_hasta is None
+    assert db.execute(text("SELECT count(*) FROM document_confirmation_tokens WHERE document_type = 'COT' AND "
+                           "document_id = :i"), {"i": cot.id}).scalar() == 0
+    assert _logs(db, "COT", cot.id, "ESTADO_CHANGED") == []
+    # Al reenviar la SC el asesor ya respondió: la marca se borra y la COT sale.
+    _enviar(app_client, admin_token, sc)
+    resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/enviar-confirmacion", json={},
+                           headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+
+
+def test_cancelar_y_restaurar_no_revive_la_marca_de_cambios(app_client, db, admin_token, user_admin, monkeypatch):
+    """F1 (M5): cancelar la SC borra la marca cambios_cliente_* en su commit único (la Actividad conserva el
+    comentario). Al restaurarla, no reaparece la tarjeta ni cuenta en las alertas; restaurar también la borra por si
+    quedó de antes (una SC cancelada antes de este arreglo)."""
+    _correo_falso(monkeypatch)
+    sc = _sc(db, user_admin)
+    raw = _enviar(app_client, admin_token, sc)
+    assert _pedir(app_client, raw, comentario="", tipo="NO_LA_NECESITA").status_code == 200
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/cancelar",
+                           json={"razon": "El cliente ya no la necesita", "user_name": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    db.refresh(sc)
+    assert (sc.cambios_cliente_at, sc.cambios_cliente_tipo, sc.cambios_cliente_comentario) == (None, None, None)
+    assert len(_logs(db, "SC", sc.id, "CAMBIOS_CLIENTE")) == 1
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{sc.id}/restaurar", headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    data = app_client.get(f"/api/v1/ventas/solicitudes/{sc.id}", headers=auth(admin_token)).json()["data"]
+    assert data["estado"] == "ASIGNADA" and data["cambios_cliente"] is None
+
+    # Una SC cancelada que conserva la marca (de antes del arreglo): restaurar la borra.
+    vieja = _sc(db, user_admin, estado="CANCELADA", eliminada_at=_ahora(), cambios_cliente_at=_ahora(),
+                cambios_cliente_tipo="NO_LA_NECESITA")
+    resp = app_client.post(f"/api/v1/ventas/solicitudes/{vieja.id}/restaurar", headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    db.refresh(vieja)
+    assert vieja.estado == "ASIGNADA" and vieja.cambios_cliente_at is None and vieja.cambios_cliente_tipo is None
+
+
+def test_el_asunto_del_aviso_usa_la_regla_de_una_linea_de_los_correos():
+    """F1 (M6): una sola regla de «una línea» (empresa.una_linea: limpiar_linea y los espacios juntos). El asunto del
+    aviso al asesor ya no deja pasar un carácter de control."""
+    from app.api.v1 import erp_ventas
+    from app.core import empresa, envio_whatsapp
+    assert envio_whatsapp._una_linea is empresa.una_linea
+    assert not hasattr(erp_ventas, "_una_linea")
+    asunto, _ = erp_ventas._correo_del_aviso("SC", "SC-1", "Ana\x07Pérez  Ruiz", "CAMBIOS", "x", "ASIGNADA",
+                                             "https://erp.invalid/x")
+    assert asunto == "Ana Pérez Ruiz pidió cambios en la solicitud SC-1"
+
+
+def test_el_409_de_un_bloqueo_abortado_tiene_un_solo_ayudante():
+    """F1 (M6): el manejo de 40P01 y 57014 -> 409 era una copia en tres endpoints: ahora es un solo ayudante."""
+    import inspect
+    from fastapi import HTTPException
+    from sqlalchemy.exc import OperationalError
+    from app.api.v1 import erp_ventas
+    assert inspect.getsource(erp_ventas).count("pgcode not in (_INTERBLOQUEO, _TIEMPO_AGOTADO)") == 1
+
+    class Sesion:
+        def __init__(self):
+            self.rollbacks = 0
+
+        def rollback(self):
+            self.rollbacks += 1
+
+    class Orig:
+        def __init__(self, pgcode):
+            self.pgcode = pgcode
+
+    for pgcode in ("40P01", "57014"):
+        sesion = Sesion()
+        try:
+            erp_ventas._409_si_bloqueo_abortado(sesion, OperationalError("x", {}, Orig(pgcode)), "probar", "Repite.")
+        except HTTPException as exc:
+            assert (exc.status_code, exc.detail, sesion.rollbacks) == (409, "Repite.", 1)
+        else:
+            raise AssertionError(pgcode)
+    sesion = Sesion()
+    assert erp_ventas._409_si_bloqueo_abortado(sesion, OperationalError("x", {}, Orig("XX000")), "probar",
+                                               "R.") is None
+    assert sesion.rollbacks == 1  # otro error: el llamador lo vuelve a lanzar
+
+
+def test_el_tope_de_cuerpo_va_por_niveles():
+    """F1 (M55, ruling del controlador): 64 KB para las páginas públicas y /api/v1/auth/, 1 MB para los webhooks y
+    25 MB para todo lo demás, con el mismo corte por Content-Length, sin root_path y un solo middleware por dentro de
+    CORS."""
+    import asyncio
+    import main
+    from starlette.middleware.cors import CORSMiddleware
+    from app.core import limite_cuerpo as lc
+
+    def correr(path, largo, root_path=""):
+        llamado, enviados = [], []
+
+        async def app(scope, receive, send):
+            llamado.append(scope["path"])
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(mensaje):
+            enviados.append(mensaje)
+
+        scope = {"type": "http", "method": "POST", "path": path, "root_path": root_path,
+                 "headers": [(b"content-length", str(largo).encode())]}
+        asyncio.run(lc.LimiteDeCuerpo(app)(scope, receive, send))
+        return bool(llamado), [m.get("status") for m in enviados if m["type"] == "http.response.start"]
+
+    mb = 1024 * 1024
+    assert (lc.LIMITE_BYTES, lc.LIMITE_WEBHOOKS, lc.LIMITE_GENERAL) == (65536, mb, 25 * mb)
+    for ruta in ("/api/v1/auth/login", "/api/v1/auth/forgot-password", "/api/v1/confirmar/ver"):
+        assert correr(ruta, 70_000) == (False, [413]), ruta
+        assert correr(ruta, 65536) == (True, []), ruta
+    for ruta in ("/api/v1/webhooks/whatsapp", "/api/v1/webhooks/chatwoot", "/api/v1/whatsapp/webhook",
+                 "/api/v1/chat/webhook/chatwoot"):
+        assert correr(ruta, 2_000_000) == (False, [413]), ruta
+        assert correr(ruta, 100_000) == (True, []), ruta
+    assert correr("/erp/api/v1/webhooks/whatsapp", 2_000_000, root_path="/erp") == (False, [413])
+    assert correr("/api/v1/ventas/solicitudes", mb) == (True, [])
+    assert correr("/api/v1/empresa", 25 * mb) == (True, [])
+    assert correr("/api/v1/empresa", 25 * mb + 1) == (False, [413])
+    clases = [m.cls for m in main.app.user_middleware]
+    assert clases.count(lc.LimiteDeCuerpo) == 1
+    assert clases.index(CORSMiddleware) < clases.index(lc.LimiteDeCuerpo)  # el primero de la lista va por fuera
+
+
+def test_login_y_webhooks_grandes_dan_413_y_una_ruta_normal_de_1_mb_pasa(app_client, admin_token):
+    """F1 (M55): por la app real. Un login de 70 KB da 413 con CORS (el navegador no lo convierte en «Failed to
+    fetch»); también forgot-password. Un webhook de 2 MB da 413. Un PUT /empresa de 1 MB llega a su validación."""
+    relleno = "x" * 70_000
+    resp = app_client.post("/api/v1/auth/login", data={"username": "nadie-f1", "password": "x", "relleno": relleno},
+                           headers={"Origin": ORIGEN})
+    assert resp.status_code == 413, resp.text
+    assert resp.json() == {"detail": MENSAJE_413}
+    assert resp.headers.get("access-control-allow-origin") == ORIGEN
+    resp = app_client.post("/api/v1/auth/forgot-password", headers={"Content-Type": "application/json",
+                                                                     "Origin": ORIGEN},
+                           content=json.dumps({"email": "nadie-f1@test.invalid", "relleno": relleno}))
+    assert resp.status_code == 413 and resp.headers.get("access-control-allow-origin") == ORIGEN, resp.text
+    resp = app_client.post("/api/v1/webhooks/whatsapp", content=b"x" * 2_000_000,
+                           headers={"Content-Type": "application/json"})
+    assert resp.status_code == 413 and resp.json() == {"detail": MENSAJE_413}, resp.text
+    resp = app_client.put("/api/v1/empresa", json={"nombre_comercial": "x" * 1_000_000}, headers=auth(admin_token))
+    assert resp.status_code == 422, resp.text

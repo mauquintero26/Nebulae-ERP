@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 
 from app.core.fechas import ZONA_COLOMBIA
 from app.core.iva import etiqueta_tarifa_iva, nombre_de_linea
+from app.core.ventas_dinero import cantidad_es
 
 # Columnas que se comparan por documento: nombre -> etiqueta que ve el usuario. Quedan
 # fuera a proposito el estado y la fecha de entrega (ya tienen su propio registro:
@@ -201,9 +202,11 @@ def _miles(n, decimales=0):
 
 
 def _qty(n):
+    """La cantidad de una línea en los renglones de cambios ('×2,5', '2,5' -> '3,5'): F1 (M44), con coma decimal es-CO
+    como LINEA_CANCELADA y COMPRA_REVISAR (ventas_dinero.cantidad_es, la misma regla); los enteros no cambian."""
     if n is None:
         return None
-    return str(int(n)) if n == n.to_integral_value() else format(n.normalize(), "f")
+    return cantidad_es(n)
 
 
 def _mostrar(campo, v, usuarios):

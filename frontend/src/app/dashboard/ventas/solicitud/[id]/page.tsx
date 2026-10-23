@@ -169,6 +169,9 @@ function SolicitudDetalleContent() {
   const [sendingConfirmacion, setSendingConfirmacion] = useState(false);
   // Hallazgo #1: mismo estado que cotizacion/[id]/page.tsx usa para su propio ChannelModal.
   const [showChannelModal, setShowChannelModal] = useState(false);
+  // Revisión final B3 (F1, C0): la ventana se abrió con la SC en Pendiente (un «Reenviar enlace de confirmación»): el POST
+  // lleva reenvio: true y, si la SC cambió mientras tanto, el servidor responde 409 (sale con avisarError).
+  const [reenviandoSc, setReenviandoSc] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<'WhatsApp'|'Email'|'Otro'|null>(null);
   // Enlace de confirmacion recien generado: el token crudo solo viaja en la respuesta del
   // envio, asi que se muestra (copiar/abrir) apenas llega.
@@ -597,6 +600,7 @@ function SolicitudDetalleContent() {
   // WhatsApp (y la SC tiene telefono), abre wa.me con el link incluido en el mensaje.
   function handleEnviarParaConfirmacion() {
     if (!solicitud) return;
+    setReenviandoSc(solicitud.estado === 'PENDIENTE_CONFIRMACION');
     setShowChannelModal(true);
   }
 
@@ -608,7 +612,7 @@ function SolicitudDetalleContent() {
       // H27+H39: el canal viaja en el POST (la Actividad lo anota y el servidor siempre intenta el correo de respaldo;
       // responde {canal, correo: {enviado, destino, motivo, mensaje}, link_confirmacion}). 'Email' sin correo del cliente
       // da 400 (ChannelModal lo deshabilita).
-      const d = await apiFetch(`/ventas/solicitudes/${solicitud.id}/enviar-confirmacion`, { method: 'POST', body: JSON.stringify({ user_name: currentUser, canal: selectedChannel }) });
+      const d = await apiFetch(`/ventas/solicitudes/${solicitud.id}/enviar-confirmacion`, { method: 'POST', body: JSON.stringify({ user_name: currentUser, canal: selectedChannel, ...(reenviandoSc ? { reenvio: true } : {}) }) });
       const link = d?.link_confirmacion || '';
       let whatsapp: string | null = null;
       // B3 T18 (U16-envio punto 14, RP19): wa.me solo si el automático no vino o está apagado (nunca dos mensajes), con el

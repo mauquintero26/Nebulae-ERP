@@ -530,11 +530,14 @@ def test_h46_reabre_las_cotizaciones_con_todos_sus_pedidos_cancelados(db):
         assert [(f["id"], f["estado"]) for f in t["customer_requests"]] == [(sc.id, "CONFIRMADA")]
         assert [(f["id"], f["status"], f["pipeline_stage_id"]) for f in t["sales_orders"]] == [
             (lead.id, "DRAFT", None)]                                        # el lead, tal como estaba
-        assert [(f["id"], f["used_at"]) for f in t["document_confirmation_tokens"]] == [(token.id, None)]
+        # F1 (M42): revoke_pending_tokens también escribe resultado = 'REVOCADO' (B3 T1): el respaldo lo guarda.
+        assert [(f["id"], f["used_at"], f["resultado"]) for f in t["document_confirmation_tokens"]] == [
+            (token.id, None, None)]
     _refrescar(db, cot, sc, cot_viva, cot_real, sc_r, lead, token)
     # U15 (Bloque 2): reabrir la COT ya no cambia la solicitud (sigue CONFIRMADA).
     assert cot.estado == "BORRADOR" and cot.gate2_confirmed_at is None and sc.estado == "CONFIRMADA"
     assert lead.status == "QUOTATION" and token.used_at is not None                  # lo que el respaldo permite deshacer
+    assert token.resultado == "REVOCADO"
     assert cot_viva.estado == "CONFIRMADA" and cot_real.estado == "CONFIRMADA" and sc_r.estado == "CONFIRMADA"
     log = _logs(db, "COT", cot.id, "ESTADO_CHANGED")
     assert len(log) == 1 and ven.numero in log[0].description and "vuelve a Borrador" in log[0].description

@@ -228,6 +228,16 @@ def update_username(
     ).first()
     if existing:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ese nombre de usuario ya está en uso")
+    # Revision final del B3 (F1, M35): un username que coincide (NFKC y casefold, clave_publica) con el nombre para
+    # mostrar de OTRO usuario lo apagaria: nombre_para_mostrar_vigente lo revalida al leer y, desde ese momento, sus
+    # paginas publicas, su PDF y sus mensajes dirian «Tu asesor» sin ningun aviso.
+    from app.core.nombre_para_mostrar import clave_publica
+    clave = clave_publica(username)
+    nombres = db.query(User.nombre_para_mostrar).filter(User.nombre_para_mostrar.isnot(None),
+                                                         User.id != current_user.id).all()
+    if any(clave_publica(nombre) == clave for (nombre,) in nombres):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Ese nombre ya lo usa otra persona como nombre para mostrar.")
 
     current_user.username = username
     db.commit()

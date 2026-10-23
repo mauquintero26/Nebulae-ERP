@@ -232,6 +232,32 @@ def test_validar_nombre_para_mostrar_es_pura():
         else:
             raise AssertionError(f"debía fallar: {valor!r}")
     assert validar_nombre_para_mostrar("Ana María", es_de_un_usuario) == "Ana María"
+    # F1 (M37): al menos 2 caracteres visibles (letra o número; los rellenos de Hangul U+3164, U+115F, U+1160 y U+FFA0
+    # no cuentan): «ㅤㅤ» dejaría «Atendido por: » en blanco.
+    for invisible in ("\u3164\u3164", "\u115f\u1160\u3164", "\uffa0\uffa0", "..", "L\u3164"):
+        try:
+            validar_nombre_para_mostrar(invisible, es_de_un_usuario)
+        except NombreParaMostrarInvalido as exc:
+            assert exc.mensaje == MENSAJE, (invisible, exc.mensaje)
+        else:
+            raise AssertionError(f"debía fallar: {invisible!r}")
+    assert validar_nombre_para_mostrar("L1", es_de_un_usuario) == "L1"
+    # F1 (M37): NFC antes de medir y de guardar: un nombre pegado en NFD (macOS) se guarda igual que en NFC, y 41 «á»
+    # en NFD (82 code points) caben en los 80.
+    nfd = "Go\u0301mez Laura"
+    assert validar_nombre_para_mostrar(nfd, es_de_un_usuario) == "G\u00f3mez Laura"
+    assert validar_nombre_para_mostrar("a\u0301" * 41, es_de_un_usuario) == "\u00e1" * 41
+    # F1 (M37): los caracteres de formato (Cf), \t y \n de los BORDES se quitan antes de revisar los controles; en el
+    # medio siguen dando 400 (test_correos_y_usuarios_de_entrada_dan_400).
+    for con_bordes in ("\u200bLaura Gómez\u200b", "\tLaura Gómez\n", " \ufeff Laura Gómez \u200e "):
+        assert validar_nombre_para_mostrar(con_bordes, es_de_un_usuario) == NOMBRE, repr(con_bordes)
+    for malo in ("Laura\u200bGómez", "Laura\tGómez", "\rLaura"):
+        try:
+            validar_nombre_para_mostrar(malo, es_de_un_usuario)
+        except NombreParaMostrarInvalido as exc:
+            assert exc.mensaje == MENSAJE, (malo, exc.mensaje)
+        else:
+            raise AssertionError(f"debía fallar: {malo!r}")
 
 
 # ─── Lo que ve el cliente ─────────────────────────────────────────────────────────────────────────────────────
@@ -343,3 +369,37 @@ def test_asesor_publico(db, user_vendedor):
         assert asesor_publico(db, SimpleNamespace(advisor_user_id=user_vendedor.id, advisor_name="Laura G.")) == (
             esperado or "Laura G."), guardado
     assert asesor_publico(db, SimpleNamespace(advisor_user_id=2_000_000_000, advisor_name="Laura G.")) == "Laura G."
+    # F1 (M36): advisor_name usa la misma clave que el nombre para mostrar (NFKC y casefold, clave_publica): la arroba de
+    # ancho completo o el usuario de entrada escrito en ancho completo tampoco le llegan al cliente.
+    ancho_completo = "".join(chr(ord(c) + 0xFEE0) if "!" <= c <= "~" else c for c in otro.username)
+    for advisor_name in ("laura\uff20empresa.com", ancho_completo, ancho_completo.upper()):
+        assert asesor_publico(db, SimpleNamespace(advisor_name=advisor_name)) is None, advisor_name
+
+
+
+# ─── Revisión final del Bloque 3, ronda F1 ──────────────────────────────────────────────────────────────────
+
+def test_un_username_no_puede_apagar_un_nombre_para_mostrar(app_client, db, admin_token, user_admin, user_vendedor):
+    """F1 (M35): PATCH /auth/username rechaza un username que coincide (NFKC y casefold) con el nombre para mostrar de
+    OTRO usuario: con él, la página pública, el PDF y los mensajes de ese asesor dirían «Tu asesor» sin aviso."""
+    from types import SimpleNamespace
+    from app.core.documento_cliente import asesor_publico
+    from app.models.users import User
+    _con_nombre(app_client, admin_token, db, user_vendedor, "Laurita")
+    antes = db.get(User, user_admin.id).username
+    resp = app_client.patch("/api/v1/auth/username", json={"username": "LAURITA"}, headers=auth(admin_token))
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["detail"] == "Ese nombre ya lo usa otra persona como nombre para mostrar."
+    db.expire_all()
+    assert db.get(User, user_admin.id).username == antes
+    sc = SimpleNamespace(advisor_user_id=user_vendedor.id, advisor_name=user_vendedor.email)
+    assert asesor_publico(db, sc) == "Laurita"
+
+
+def test_la_clave_publica_es_una_sola_regla():
+    """F1 (M35, M36): clave_publica(texto) es NFKC y casefold de los espacios juntos; la usan la validación del nombre
+    para mostrar, el respaldo sobre advisor_name y el cambio de username."""
+    from app.core.nombre_para_mostrar import clave_publica
+    assert clave_publica("  Laura   GÓMEZ ") == "laura gómez"
+    assert clave_publica("ＬＡＵＲＡ") == "laura"
+    assert clave_publica("laura\uff20x.co") == "laura@x.co"

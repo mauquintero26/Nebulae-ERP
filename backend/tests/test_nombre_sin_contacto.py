@@ -45,10 +45,12 @@ def _sc(db, user_admin, **campos):
     return sc
 
 
-def _ficha(db, nombre, telefono="3005550000"):
+def _ficha(db, nombre, telefono="3005550000", correo="nuevo"):
+    """Una ficha de cliente; correo="nuevo" le pone uno propio, None la deja sin correo."""
     from app.models.customers import Customer
-    ficha = Customer(first_name=nombre, last_name="Prueba", phone=telefono,
-                     email=f"t20b-{uuid.uuid4().hex[:8]}@test.nebulae")
+    if correo == "nuevo":
+        correo = f"t20b-{uuid.uuid4().hex[:8]}@test.nebulae"
+    ficha = Customer(first_name=nombre, last_name="Prueba", phone=telefono, email=correo)
     db.add(ficha); db.commit(); db.refresh(ficha)
     return ficha
 
@@ -162,12 +164,57 @@ def test_sin_enviar_cuenta_desde_la_creacion(app_client, db, admin_token, user_a
 
 
 def test_cambiar_la_ficha_no_avisa(app_client, db, admin_token, user_admin, monkeypatch):
-    """Elegir otra ficha trae su teléfono y su correo (B7): el contacto también cambió."""
+    """Elegir otra ficha trae su teléfono y su correo (B7): el contacto también cambió. F1 (M38): la ficha nueva tiene
+    otro teléfono, y el renglón de cambios lo trae."""
     _sin_correo(monkeypatch)
-    ficha_a, ficha_b = _ficha(db, "Ana"), _ficha(db, "Beto")
+    ficha_a, ficha_b = _ficha(db, "Ana"), _ficha(db, "Beto", telefono="3107770000")
     sc = _sc(db, user_admin, customer_id=ficha_a.id, customer_email=ficha_a.email, customer_phone=ficha_a.phone)
     _enviar_sc(app_client, admin_token, sc)
     _editar_sc(app_client, admin_token, sc, customer_id=ficha_b.id, customer_name="Beto Prueba")
+    assert _aviso_sc(app_client, admin_token, sc) is False
+    campos = [c.get("campo") for c in _ultimo_renglon_de_cambios(db, "SC", sc.id)]
+    assert "customer_phone" in campos and "customer_email" in campos, campos
+
+
+def _ultimo_renglon_de_cambios(db, entidad, doc_id):
+    from app.models.erp_documents import ActivityLog
+    db.expire_all()
+    renglones = (db.query(ActivityLog).filter(ActivityLog.entity_type == entidad, ActivityLog.entity_id == doc_id)
+                 .order_by(ActivityLog.id.desc()).all())
+    return next(r.extra_data["cambios"] for r in renglones
+                if isinstance(r.extra_data, dict) and isinstance(r.extra_data.get("cambios"), list)
+                and any(isinstance(c, dict) and c.get("campo") for c in r.extra_data["cambios"]))
+
+
+def test_ficha_nueva_con_el_mismo_telefono_sin_correo_y_otro_nombre_avisa(app_client, db, admin_token, user_admin,
+                                                                          monkeypatch):
+    """F1 (M38): el comportamiento documentado (B.M1 de T20b). La SC no tiene correo; la ficha nueva trae el mismo
+    teléfono, tampoco tiene correo y tiene otro nombre: el contacto no cambió y el nombre sí, así que avisa."""
+    _sin_correo(monkeypatch)
+    sc = _sc(db, user_admin, customer_email=None)
+    _enviar_sc(app_client, admin_token, sc)
+    ficha = _ficha(db, "Beto", telefono=TELEFONO, correo=None)
+    _editar_sc(app_client, admin_token, sc, customer_id=ficha.id)
+    assert _aviso_sc(app_client, admin_token, sc) is True
+
+
+def test_ficha_nueva_con_el_mismo_nombre_y_contacto_no_avisa(app_client, db, admin_token, user_admin, monkeypatch):
+    """F1 (M38): la API cambia el nombre a «Beto Prueba» (avisa); después se vincula una ficha con ese mismo nombre y
+    el contacto que ya tenía la SC. El renglón de cambios no trae nada de identidad, así que update_solicitud deja el
+    renglón ACCION_CLIENTE_CAMBIADO, que cuenta como «cambió la ficha»: ya no avisa."""
+    from app.core.cambios_documento import ACCION_CLIENTE_CAMBIADO
+    from app.models.erp_documents import ActivityLog
+    _sin_correo(monkeypatch)
+    correo = f"ana-{_sufijo().lower()}@test.nebulae"
+    sc = _sc(db, user_admin, customer_email=correo)
+    _enviar_sc(app_client, admin_token, sc)
+    _editar_sc(app_client, admin_token, sc, customer_name="Beto Prueba")
+    assert _aviso_sc(app_client, admin_token, sc) is True
+    ficha = _ficha(db, "Beto", telefono=TELEFONO, correo=correo)
+    _editar_sc(app_client, admin_token, sc, customer_id=ficha.id)
+    db.expire_all()
+    assert db.query(ActivityLog).filter(ActivityLog.entity_type == "SC", ActivityLog.entity_id == sc.id,
+                                        ActivityLog.action == ACCION_CLIENTE_CAMBIADO).count() == 1
     assert _aviso_sc(app_client, admin_token, sc) is False
 
 
@@ -234,6 +281,13 @@ def test_la_regla_pura_no_lee_el_texto_de_los_renglones():
         assert _nombre_cambio_sin_contacto([r(1, nombre), r(2, contacto)], None) is False, campo
         assert _nombre_cambio_sin_contacto([r(1, nombre, contacto)], None) is False, campo
         assert _nombre_cambio_sin_contacto([r(1, contacto), r(2, nombre)], None) is True, campo
+    # F1 (M34): el teléfono y el correo apagan el aviso solo si cambian de verdad (_es_cambio_de_identidad): las
+    # mayúsculas del correo o el formato del teléfono no son otro contacto.
+    mayusculas = {"campo": "customer_email", "antes": "ana@x.com", "despues": " Ana@X.com "}
+    formato = {"campo": "customer_phone", "antes": "3001234567", "despues": "300 123 4567"}
+    for cosmetico in (mayusculas, formato):
+        assert _nombre_cambio_sin_contacto([r(1, nombre), r(2, cosmetico)], None) is True, cosmetico
+        assert _nombre_cambio_sin_contacto([r(1, nombre, cosmetico)], None) is True, cosmetico
     assert _nombre_cambio_sin_contacto([], None) is False
     assert _nombre_cambio_sin_contacto([r(1, nombre)], None) is True
     assert _nombre_cambio_sin_contacto([r(1, tilde)], None) is False
@@ -245,9 +299,49 @@ def test_la_regla_pura_no_lee_el_texto_de_los_renglones():
     direccion = {"campo": "customer_address", "antes": "a", "despues": "b"}
     assert _nombre_cambio_sin_contacto([r(1, nombre), r(2, direccion)], None) is True
     assert _nombre_cambio_sin_contacto([r(1, nombre), r(2, accion=ACCION_CLIENTE_CAMBIADO, extra={})], None) is False
+    # F1 (M39): el renglón ACCION_CLIENTE_CAMBIADO de la COT dice si cambió la ficha; sin cambio de ficha no apaga el
+    # aviso (al re-cotizar va DESPUÉS del renglón con el nombre, en el mismo commit).
+    cot_sin_ficha = {"cliente_cambiado": True, "ficha_cambiada": False}
+    cot_con_ficha = {"cliente_cambiado": True, "ficha_cambiada": True}
+    assert _nombre_cambio_sin_contacto([r(1, nombre), r(2, accion=ACCION_CLIENTE_CAMBIADO, extra=cot_sin_ficha)],
+                                       None) is True
+    assert _nombre_cambio_sin_contacto([r(1, nombre), r(2, accion=ACCION_CLIENTE_CAMBIADO, extra=cot_con_ficha)],
+                                       None) is False
     # Renglones sin cambios, con datos viejos malformados o con otra acción no cambian nada (ni dependen del texto).
     raros = [r(2, extra=None), r(2, accion="NOTA", extra={"nota": "Beto Ruiz cambió el teléfono"}),
              (t0 + datetime.timedelta(minutes=2), "NOTA", None), r(3, extra={"cambios": "x"}),
              r(4, extra={"cambios": [None, 5, {"campo": None}]}), r(5, extra=["customer_phone"])]
     assert _nombre_cambio_sin_contacto([r(1, nombre)] + raros, None) is True
     assert _nombre_cambio_sin_contacto(raros, None) is False
+
+
+def test_en_la_cotizacion_un_cambio_cosmetico_del_contacto_no_apaga_el_aviso(app_client, db, admin_token, user_admin,
+                                                                            monkeypatch):
+    """F1 (M34): tras el cambio de nombre, un PATCH del correo que solo cambia las mayúsculas (o del teléfono con otro
+    formato) no es otro contacto: el aviso sigue. Otro número sí lo apaga."""
+    _sin_correo(monkeypatch)
+    sc = _sc(db, user_admin, estado="CONFIRMADA", gate1_confirmed_at=datetime.datetime.utcnow())
+    cot = _cot(db, sc)
+    _editar_cot(app_client, admin_token, cot, customer_name="Beto Ruiz")
+    assert _aviso_cot(app_client, admin_token, cot) is True
+    _editar_cot(app_client, admin_token, cot, customer_email="ANA@Cliente.com")
+    assert _aviso_cot(app_client, admin_token, cot) is True
+    _editar_cot(app_client, admin_token, cot, customer_phone="300 111 2233")
+    assert _aviso_cot(app_client, admin_token, cot) is True
+    _editar_cot(app_client, admin_token, cot, customer_phone="3109998877")
+    assert _aviso_cot(app_client, admin_token, cot) is False
+
+
+def test_recotizar_y_cambiar_solo_el_nombre_sigue_avisando(app_client, db, admin_token, user_admin, monkeypatch):
+    """F1 (M39): al re-cotizar con anular_confirmacion, el renglón de cambios (con el nombre) va ANTES del renglón
+    ACCION_CLIENTE_CAMBIADO del marcador, en el mismo commit. Como la ficha no cambió, ese renglón no apaga el aviso."""
+    _sin_correo(monkeypatch)
+    sc = _sc(db, user_admin, estado="CONFIRMADA", gate1_confirmed_at=datetime.datetime.utcnow())
+    cot = _cot(db, sc)
+    resp = app_client.post(f"/api/v1/ventas/cotizaciones/{cot.id}/enviar-confirmacion", json={"canal": "Email"},
+                           headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    _editar_cot(app_client, admin_token, cot, productos=[{**LINEA, "unit_price_cop": 2000, "total_cop": 2000}],
+                subtotal_cop=2000, total_cop=2000, recotizacion=True, anular_confirmacion=True,
+                motivo_recotizacion="Cambió el precio del proveedor", customer_name="Beto Ruiz")
+    assert _aviso_cot(app_client, admin_token, cot) is True

@@ -477,6 +477,66 @@ def test_cambiar_solo_la_ficha_de_la_cot_tampoco_dice_reemplazado(app_client, db
     caso(con_enlace_vivo=True)
     caso(con_enlace_vivo=False)
 
+    # F1 (M39, C.1): una COT que nunca se envió no tiene enlaces que esconder: cambiarle la ficha no deja el renglón
+    # del marcador (el texto diría que los enlaces enviados antes ya no muestran nada, y no hubo ninguno).
+    from app.api.v1.erp_ventas import _TEXTO_CLIENTE_CAMBIADO_COT
+    cot = _cot(db, _sc(db))
+    ficha = Customer(first_name="Ana", last_name="Pérez", address="Otra dirección 2")
+    db.add(ficha); db.commit(); db.refresh(ficha)
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={"customer_id": ficha.id, "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert not [r for r in _logs(db, cot.id) if (r.extra_data or {}).get(MARCA_CLIENTE_CAMBIADO) is True
+                or r.description == _TEXTO_CLIENTE_CAMBIADO_COT], [(r.action, r.extra_data) for r in _logs(db, cot.id)]
+
+
+def test_el_renglon_del_cambio_de_cliente_de_la_cot_dice_lo_que_paso(app_client, db, admin_token, monkeypatch):
+    """F1 (M39, C.1): sin un enlace vivo que anular, una COT que SÍ tuvo un enlace deja en el commit principal su
+    renglón con la acción ACCION_CLIENTE_CAMBIADO, el texto exacto y el marcador (lo lee la página pública)."""
+    from app.api.v1.erp_ventas import _TEXTO_CLIENTE_CAMBIADO_COT
+    from app.core.cambios_documento import ACCION_CLIENTE_CAMBIADO, MARCA_CLIENTE_CAMBIADO
+    assert _TEXTO_CLIENTE_CAMBIADO_COT == ("Cambiaron los datos del cliente de la cotización: los enlaces enviados antes "
+                                           "ya no le muestran el resumen ni los datos al cliente anterior.")
+    _correo_falso(monkeypatch)
+    _poner_dias(db, None)
+    cot = _cot(db, _sc(db))
+    primero = _enviar(app_client, admin_token, cot)
+    assert primero.status_code == 200, primero.text
+    assert _pedir_cambios(app_client, _raw(primero)).status_code == 200  # L1 usado: no queda enlace vivo
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={"customer_name": BETO, "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    [renglon] = [r for r in _logs(db, cot.id) if r.description == _TEXTO_CLIENTE_CAMBIADO_COT]
+    assert renglon.action == ACCION_CLIENTE_CAMBIADO
+    # ficha_cambiada: solo cambió el nombre (no la ficha), así que no apaga el aviso de nombre sin contacto.
+    assert renglon.extra_data == {MARCA_CLIENTE_CAMBIADO: True, "ficha_cambiada": False}
+    [de_cambios] = [r for r in _logs(db, cot.id, "UPDATED") if (r.extra_data or {}).get("cambios")]
+    assert renglon.id < de_cambios.id  # el marcador va en el commit principal; el renglón de cambios, después
+
+
+YA_ENVIADA = "Ya se le envió al cliente; usa «Reenviar»."
+
+
+def test_primer_envio_de_una_cot_que_ya_se_envio_da_409(app_client, db, admin_token, monkeypatch):
+    """F1 (M0): la bandera simétrica. reenvio=false (el «Enviar» del primer envío) sobre una COT que ya está en Pendiente
+    por confirmación da 409 sin revocar el enlace que el cliente acaba de recibir, sin correo y sin renovar la validez.
+    Sin la clave, el comportamiento de hoy (el reenvío)."""
+    llamadas = _correo_falso(monkeypatch)
+    _poner_dias(db, None)
+    cot = _cot(db)
+    assert _enviar(app_client, admin_token, cot, {"canal": "Email", "reenvio": False}).status_code == 200
+    db.refresh(cot)
+    valida, n_correos = cot.valida_hasta, len(llamadas)
+    resp = _enviar(app_client, admin_token, cot, {"canal": "Email", "reenvio": False})
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"] == YA_ENVIADA
+    [token] = _tokens(db, cot.id)
+    assert token.used_at is None
+    db.refresh(cot)
+    assert cot.estado == "PENDIENTE_CONFIRMACION" and cot.valida_hasta == valida and len(llamadas) == n_correos
+    assert len(_logs(db, cot.id, "ESTADO_CHANGED")) == 1
+    assert _enviar(app_client, admin_token, cot, {"canal": "Email"}).status_code == 200  # sin la clave: reenvía
+
 
 def test_corregir_las_mayusculas_del_correo_no_esconde_nada(app_client, db, admin_token, monkeypatch):
     """T20 r3 (M1): en el renglón de cambios el correo cuenta como cambio de identidad solo si cambia sin mayúsculas ni
@@ -495,3 +555,41 @@ def test_corregir_las_mayusculas_del_correo_no_esconde_nada(app_client, db, admi
     assert _pedir_cambios(app_client, l1).status_code == 200
     d = _detalle_l1(app_client, l1).json()["detail"]
     assert d["estado_enlace"] == "cambios_enviados" and d["comentario"] == "Son 2 cunas, no 1", d
+
+
+def test_reformatear_el_telefono_no_esconde_nada(app_client, db, admin_token, monkeypatch):
+    """F1 (M33, C.4): el teléfono se compara por sus dígitos en la regla única (_cliente_de_la_solicitud y
+    _es_cambio_de_identidad). '3001234567' -> '300 123 4567' es la misma persona: el enlace sigue vivo y, después de
+    pedir cambios, dice 'cambios_enviados' con su comentario. Gemela de la del correo con mayúsculas."""
+    _correo_falso(monkeypatch)
+    _poner_dias(db, None)
+    cot = _cot(db, _sc(db), customer_phone="3001234567")
+    primero = _enviar(app_client, admin_token, cot)
+    assert primero.status_code == 200, primero.text
+    l1 = _raw(primero)
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}",
+                            json={"customer_phone": "300 123 4567", "updated_by": "t"}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert _tokens(db, cot.id)[0].used_at is None  # la misma persona: el enlace sigue vivo
+    assert _pedir_cambios(app_client, l1).status_code == 200
+    d = _detalle_l1(app_client, l1).json()["detail"]
+    assert d["estado_enlace"] == "cambios_enviados" and d["comentario"] == "Son 2 cunas, no 1", d
+
+
+def test_la_regla_de_identidad_compara_el_telefono_por_digitos():
+    """F1 (M33): pura. Los espacios, guiones y paréntesis no cuentan; otro número sí; '+57 300…' frente a '300…' sigue
+    contando como cambio (el lado seguro)."""
+    from types import SimpleNamespace
+    from app.api.v1.erp_ventas import _es_cambio_de_identidad, _identidad_del_cliente
+    cambio = lambda antes, despues: {"campo": "customer_phone", "antes": antes, "despues": despues}
+    assert _es_cambio_de_identidad(cambio("3001234567", " 300-123-4567 ")) is False
+    assert _es_cambio_de_identidad(cambio("3001234567", "(300) 123 4567")) is False
+    assert _es_cambio_de_identidad(cambio("3001234567", "3001234568")) is True
+    assert _es_cambio_de_identidad(cambio("3001234567", "+57 300 123 4567")) is True
+    assert _es_cambio_de_identidad(cambio(None, "")) is False
+
+    def doc(telefono):
+        return SimpleNamespace(customer_id=None, customer_email="ana@cliente.com", customer_phone=telefono,
+                               customer_name="Ana Pérez")
+    assert _identidad_del_cliente(doc("3001234567")) == _identidad_del_cliente(doc("300 123-4567"))
+    assert _identidad_del_cliente(doc("3001234567")) != _identidad_del_cliente(doc("3001234568"))

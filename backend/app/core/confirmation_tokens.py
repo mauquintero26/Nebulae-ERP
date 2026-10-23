@@ -12,9 +12,10 @@ link enviado por correo -- nunca se persiste ni se loguea.
 Bloque 3, T1 (C11, C12, R19, RP2, RP16): este modulo es la UNICA fuente de las firmas de enlaces; las demas tareas
 solo consumen su API.
 - Tipos: TIPOS_CONFIRMACION = ('SC','COT') (enlaces que confirman o piden cambios) y TIPOS_CONSULTA = ('PVEN',)
-  (enlace de solo lectura del pedido, en la misma tabla). consultar_token, reclamar_token, peek_token y
-  verify_and_consume_token filtran con `document_type = ANY(:tipos)` (parametro, nunca interpolado) y por defecto solo
-  aceptan TIPOS_CONFIRMACION: un enlace del pedido nunca se gasta en /confirmar/confirmar.
+  (enlace de solo lectura del pedido, en la misma tabla). consultar_token y reclamar_token filtran con
+  `document_type = ANY(:tipos)` (parametro, nunca interpolado) y por defecto solo aceptan TIPOS_CONFIRMACION: un enlace
+  del pedido nunca se gasta en /confirmar/confirmar. Revision final (F1, M6): peek_token y verify_and_consume_token se
+  quitaron (desde T5 nadie en app/ los usaba): menos superficie en la pieza que cierra C11.
 - Columna resultado (fa6_026): RESULTADO_CONFIRMADO | RESULTADO_CAMBIOS | RESULTADO_REVOCADO. Revocar (en bloque o un
   solo enlace) pone used_at y 'REVOCADO'; marcar_resultado lo pone quien uso el enlace, sin commit.
 - Vida del enlace (R19/C14): SC TOKEN_TTL_DAYS (2 dias, el valor por defecto); COT hasta el final de valida_hasta y PVEN
@@ -134,22 +135,6 @@ def reclamar_token(db: Session, token: str, tipos=TIPOS_CONFIRMACION) -> dict | 
     if not row:
         return None
     return {"id": row[0], "document_type": row[1], "document_id": row[2]}
-
-
-def verify_and_consume_token(db: Session, token: str, tipos=TIPOS_CONFIRMACION) -> tuple[str, int] | None:
-    """Envoltura de reclamar_token que devuelve la tupla de siempre: (document_type, document_id) o None."""
-    info = reclamar_token(db, token, tipos=tipos)
-    if info is None:
-        return None
-    return (info["document_type"], info["document_id"])
-
-
-def peek_token(db: Session, token: str, tipos=TIPOS_CONFIRMACION) -> tuple[str, int] | None:
-    """Como verify_and_consume_token pero NO marca usado -- para el GET de solo lectura."""
-    info = consultar_token(db, token, tipos=tipos)
-    if info is None or not info["vigente"]:
-        return None
-    return (info["document_type"], info["document_id"])
 
 
 def marcar_resultado(db: Session, token_id: int, resultado: str) -> bool:

@@ -33,7 +33,7 @@ from app.core import admin_config, chatwoot
 from app.core.chatwoot import ChatwootError, ChatwootNoConfigurado, ChatwootSinRespuesta
 from app.core.confirmation_tokens import TOKEN_TTL_DAYS, frontend_url
 from app.core.documento_cliente import TITULOS
-from app.core.empresa import ENTIDAD_EMPRESA, empresa_para_mensajes, limpiar_linea
+from app.core.empresa import ENTIDAD_EMPRESA, empresa_para_mensajes, una_linea
 from app.core.fechas import fecha_larga
 from app.core.telefonos import e164_whatsapp, telefono_legible
 from app.core.textos_actividad import autor_de_actividad
@@ -152,10 +152,9 @@ _CODIGO_AL_INICIO = re.compile(r"\s*\(?#?(\d{5,6})(?!\d)")
 
 # ─── Utilidades ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-def _una_linea(texto) -> str:
-    """Una sola linea con la regla de empresa.limpiar_linea (saltos y demas caracteres de control a espacio) y los
-    espacios colapsados: Meta rechaza parametros con saltos, tabuladores o mas de 4 espacios seguidos (r1, S4)."""
-    return " ".join(limpiar_linea(texto).split())
+# Una sola linea (saltos y demas caracteres de control a espacio, espacios juntos): Meta rechaza parametros con saltos,
+# tabuladores o mas de 4 espacios seguidos (r1, S4). F1 (M6): es empresa.una_linea, la unica regla.
+_una_linea = una_linea
 
 
 def _recortar(texto: str, maximo: int) -> str:

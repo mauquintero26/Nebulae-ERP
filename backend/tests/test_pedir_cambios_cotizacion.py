@@ -537,3 +537,38 @@ def test_un_interbloqueo_o_un_tiempo_agotado_al_bloquear_la_sc_da_409(app_client
         assert tokens == 0, pgcode
         assert _logs(db, "COT", cot.id, "ESTADO_CHANGED") == [], pgcode
         assert llamadas == [], pgcode
+
+
+# ─── Revisión final del Bloque 3, ronda F1 ──────────────────────────────────────────────────────────────────
+
+def test_rechazar_y_retomar_la_cot_no_revive_la_marca_de_cambios(app_client, db, admin_token, user_admin, monkeypatch):
+    """F1 (M5): rechazar la COT borra la marca cambios_cliente_* en su commit (la Actividad conserva el comentario). Al
+    retomarla (Rechazada -> Borrador) no reaparece «Cambios del cliente»; retomar también la borra por si quedó de
+    antes (una COT rechazada antes de este arreglo)."""
+    _correo_falso(monkeypatch)
+    sc = _sc(db, user_admin)
+    cot = _cot(db, sc)
+    assert _pedir(app_client, _token(db, cot)).status_code == 200
+    assert _get_cot(app_client, admin_token, cot)["cambios_cliente"]["comentario"] == COMENTARIO
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={"estado": "RECHAZADA", "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    db.refresh(cot)
+    assert (cot.cambios_cliente_at, cot.cambios_cliente_tipo, cot.cambios_cliente_comentario) == (None, None, None)
+    assert len(_logs(db, "COT", cot.id, "CAMBIOS_CLIENTE")) == 1
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{cot.id}", json={"estado": "BORRADOR", "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert _get_cot(app_client, admin_token, cot)["cambios_cliente"] is None
+
+    # Una COT rechazada que conserva la marca (de antes del arreglo): retomarla la borra.
+    otra_sc = _sc(db, user_admin)
+    vieja = _cot(db, otra_sc, estado="RECHAZADA", cambios_cliente_at=_ahora(), cambios_cliente_tipo="CAMBIOS",
+                 cambios_cliente_comentario=COMENTARIO)
+    resp = app_client.patch(f"/api/v1/ventas/cotizaciones/{vieja.id}", json={"estado": "BORRADOR", "updated_by": "t"},
+                            headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    db.refresh(vieja)
+    assert vieja.estado == "BORRADOR" and vieja.cambios_cliente_at is None and vieja.cambios_cliente_comentario is None

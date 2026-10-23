@@ -1452,3 +1452,30 @@ def test_recotizar_y_cambiar_el_cliente_mientras_sale_lo_dice(app_client, db, ad
     (renglon,) = _renglones(db, "COT", cot.id, "RECORDATORIO_ENVIADO")
     assert "cliente anterior" in renglon.description and "con un enlace nuevo" not in renglon.description, \
         renglon.description
+
+
+# ─── Revisión final del Bloque 3, ronda F1 ──────────────────────────────────────────────────────────────────
+
+def test_reenviar_la_sc_con_su_cot_pendiente_no_reactiva_su_recordatorio(app_client, db, admin_token, user_admin,
+                                                                          monkeypatch):
+    """F1 (M2, U11): «el cliente recibe uno solo» en los dos sentidos. Al reenviar la SC mientras su COT temprana
+    espera al cliente, el recordatorio de la SC queda DETENIDO (COTIZACION_ENVIADA), como al enviar la COT; sin una
+    COT pendiente, el reenvío lo programa como siempre."""
+    _dobles(monkeypatch)
+    _config(db)
+    sc = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
+    _fila(db, "SC", sc, estado="DETENIDO", motivo_fin="COTIZACION_ENVIADA", proximo_at=None, terminado_at=T)
+    cot = _cot(db, sc_id=sc.id, sc_numero=sc.numero, estado="PENDIENTE_CONFIRMACION")
+    resp = _enviar_sc(app_client, admin_token, sc, {"canal": "Email"})
+    assert resp.status_code == 200, resp.text
+    fila = _seg(db, "SC", sc.id)
+    assert (fila.estado, fila.motivo_fin, fila.proximo_at) == ("DETENIDO", "COTIZACION_ENVIADA", None)
+    assert resp.json()["seguimiento"]["estado"] == "DETENIDO"
+    assert resp.json()["seguimiento"]["motivo_fin"] == "COTIZACION_ENVIADA"
+    assert _seg(db, "COT", cot.id) is None  # el de la COT no se toca
+
+    cot.estado = "BORRADOR"  # el cliente pidió cambios en la COT: ya no espera respuesta
+    db.commit()
+    resp = _enviar_sc(app_client, admin_token, sc, {"canal": "Email"})
+    assert resp.status_code == 200, resp.text
+    assert _seg(db, "SC", sc.id).estado == "ACTIVO"

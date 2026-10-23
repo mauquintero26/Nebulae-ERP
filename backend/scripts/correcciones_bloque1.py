@@ -149,10 +149,10 @@ REQUISITOS = {
 #   n1 b   _cabecera_desde_el_libro_de_pagos: so.anticipo_cop, so.saldo_cop (+ updated_at, que pone el paso)
 #   h45    anular_pxps_de_pedido: p.estado, p.updated_at, p.notas; so.pxp_id, so.pxp_numero (y, por el onupdate de
 #          SaleOrder, so.updated_at)
-#   h46    _reabrir_cotizacion_por_pven_cancelado: cot.estado, gate2_confirmed_at, updated_at; tokens.used_at
-#          (revoke_pending_tokens); lead pipeline_stage_id, status, updated_at (_mover_lead_a_status). La SC ya no
-#          cambia (U15: _sincronizar_estado_solicitud_desde_cotizacion no la toca por una COT en Borrador); su estado
-#          se respalda igual. Puede INSERTAR etapas estandar faltantes del pipeline (_asegurar_etapas_estandar) y un
+#   h46    _reabrir_cotizacion_por_pven_cancelado: cot.estado, gate2_confirmed_at, updated_at; tokens.used_at y
+#          resultado (revoke_pending_tokens, B3 T1); lead pipeline_stage_id, status, updated_at
+#          (_mover_lead_a_status). La SC ya no cambia (U15: _sincronizar_estado_solicitud_desde_cotizacion no la
+#          toca por una COT en Borrador); su estado se respalda igual. Puede INSERTAR etapas estandar faltantes del pipeline (_asegurar_etapas_estandar) y un
 #          renglon de Actividad: filas nuevas, no se restauran.
 #   h7     corregir(): activity_logs.description
 # Ninguna lleva columnas customer_* (nombre, correo, telefono, direccion del cliente).
@@ -165,7 +165,7 @@ RESPALDO_COLUMNAS = {
     "h46": {"sales_quotations": ["estado", "gate2_confirmed_at", "updated_at"],
             "customer_requests": ["estado", "updated_at"],
             "sales_orders": ["status", "pipeline_stage_id", "updated_at"],
-            "document_confirmation_tokens": ["used_at"]},
+            "document_confirmation_tokens": ["used_at", "resultado"]},
     "h36": {"sales_quotations": ["anticipo_cop", "updated_at"]},
     "n4": {"customer_requests": ["eliminada_at", "razon_cancelacion"]},
     "n5": {"customer_requests": ["estado", "updated_at"],

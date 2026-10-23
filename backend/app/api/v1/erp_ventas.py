@@ -29,7 +29,7 @@ from app.core.busqueda import productos_ilike
 from app.core import cambios_documento, clientes, envio_whatsapp, seguimiento_confirmacion, tareas_automaticas
 from app.core.admin_config import config_entero, guardar_config, leer_config
 from app.core.correo_documento import correo_documento
-from app.core.empresa import PREFIJOS_RESERVADOS, perfil_publico
+from app.core.empresa import PREFIJOS_RESERVADOS, perfil_publico, una_linea
 from app.core.telefonos import e164_whatsapp, telefono_del_documento, telefono_legible
 from app.core.iva import (
     CLAVE_TARIFA_DEFECTO, MENSAJE_TARIFA_INVALIDA, normalizar_tarifa_iva, sku_id_entero, tarifa_iva_defecto,
@@ -344,6 +344,28 @@ _MENSAJE_CORREO_SIN_ARMAR = ("No se pudo armar el correo al cliente: revisa la d
 _COT_CAMBIO_AL_REENVIAR = ("La cotización cambió mientras la reenviabas (el cliente pidió cambios o la editaron). "
                            "Recarga la página.")
 _PEDIDO_BLOQUEADO = "Otra operación estaba cambiando este pedido al mismo tiempo. Intenta de nuevo."
+# Revision final del B3 (F1, C0): el gemelo de la SC (su boton «Reenviar enlace de confirmacion» manda reenvio=true).
+_SC_CAMBIO_AL_REENVIAR = ("La solicitud cambió mientras la reenviabas (el cliente pidió cambios o la editaron). "
+                          "Recarga la página.")
+# F1 (M0): la bandera simetrica, reenvio=false (el boton del primer envio; el cable del frontend es de F2).
+_YA_ENVIADO_USA_REENVIAR = "Ya se le envió al cliente; usa «Reenviar»."
+
+
+def _exigir_bandera_de_reenvio(body: dict, pendiente: bool, cambio_al_reenviar: str) -> None:
+    """F1 (C0 y M0): la bandera `reenvio` del body contra el estado que el servidor acaba de leer bloqueado (`pendiente`:
+    el documento espera al cliente, PENDIENTE_CONFIRMACION). Va antes de tocar enlaces, estado, marca o seguimiento.
+    - reenvio=true (el boton «Reenviar») y el documento ya no espera al cliente (la pagina estaba vieja: el cliente pidio
+      cambios o la editaron): 409 `cambio_al_reenviar`. Sin esto, el clic hacia un primer envio completo que borraba la
+      marca cambios_cliente_* sin que el asesor respondiera.
+    - reenvio=false (el «Enviar» del primer envio) y el documento ya espera al cliente (otra pestaña, otro asesor, el Hub
+      y el detalle): 409 _YA_ENVIADO_USA_REENVIAR. Sin esto, salian otro WhatsApp y otro correo y el enlace que el
+      cliente acababa de recibir quedaba «reemplazado».
+    Sin la clave (o con otro valor), nada: el comportamiento de siempre, para los llamadores viejos."""
+    reenvio = body.get("reenvio")
+    if reenvio is True and not pendiente:
+        raise HTTPException(409, cambio_al_reenviar)
+    if reenvio is False and pendiente:
+        raise HTTPException(409, _YA_ENVIADO_USA_REENVIAR)
 
 
 def _armar_correo_o_revertir(db: Session, perfil: dict, tipo: str, numero, cliente, link, resumen=None,
@@ -488,11 +510,6 @@ _AVISO_NO_SALIO = {
 }
 
 
-def _una_linea(texto) -> str:
-    """El texto en una sola linea (sin saltos ni espacios de mas): va en el asunto del correo."""
-    return " ".join(str(texto or "").split())
-
-
 def _correo_del_aviso(tipo: str, numero: str, cliente: str, tipo_cambio: Optional[str], comentario: Optional[str],
                       estado: str, link: str) -> tuple:
     """(asunto, html) del aviso al asesor. Todo lo que viene del cliente (su nombre, su comentario) va escapado con
@@ -516,7 +533,7 @@ def _correo_del_aviso(tipo: str, numero: str, cliente: str, tipo_cambio: Optiona
             f"{cuerpo_comentario}"
             f"<p>La {documento} quedó en {escape(etiqueta_estado(tipo, estado))}: {siguiente}</p>"
             f'<p><a href="{escape(link, quote=True)}">Abrir la {documento} {escape(numero)}</a></p>')
-    return _una_linea(asunto), html
+    return una_linea(asunto), html  # F1 (M6): la regla de los asuntos y encabezados de correo (empresa.una_linea)
 
 
 def _avisar_asesor_por_correo(db: Session, doc, tipo: str) -> dict:
@@ -533,7 +550,7 @@ def _avisar_asesor_por_correo(db: Session, doc, tipo: str) -> dict:
     cliente: no se manda el correo y el renglon dice que esta inactivo."""
     from app.core.confirmation_tokens import frontend_url
     doc_id, numero, estado = doc.id, doc.numero, doc.estado
-    cliente = _una_linea(doc.customer_name) or "El cliente"
+    cliente = una_linea(doc.customer_name) or "El cliente"
     tipo_cambio, comentario = doc.cambios_cliente_tipo, doc.cambios_cliente_comentario
     sc = doc if tipo == "SC" else (db.query(CustomerRequest).filter(CustomerRequest.id == doc.sc_id).first()
                                    if doc.sc_id else None)
@@ -611,17 +628,17 @@ def _registrar_cambios(db: Session, entidad: str, doc, antes: dict, body: dict, 
 def _es_cambio_de_identidad(cambio) -> bool:
     """B3 T20 r2 (M5) y r3 (M1): un renglon de extra_data.cambios ({campo, antes, despues}) que cambia a quien le
     llega el enlace, con la misma regla de _identidad_del_cliente: el correo sin espacios en los bordes ni mayusculas,
-    el telefono sin espacios en los bordes y el nombre solo si no es _mismo_nombre (tildes, mayusculas y espacios no
-    cuentan). La direccion no cuenta (R18). La ficha (customer_id) nunca llega aqui: cambios_documento.comparar no
-    compara ids, asi que un cambio de solo la ficha se ve por el marcador obligatorio (MARCA_CLIENTE_CAMBIADO, r3 M0).
-    La usan _registra_el_cliente y documento_cliente._cambio_el_cliente_despues (la pagina publica)."""
+    el telefono por sus digitos (_telefono_para_comparar, F1 M33: '300 123 4567' es '3001234567') y el nombre solo si
+    no es _mismo_nombre (tildes, mayusculas y espacios no cuentan). La direccion no cuenta (R18). La ficha (customer_id)
+    nunca llega aqui: cambios_documento.comparar no compara ids, asi que un cambio de solo la ficha se ve por el
+    marcador obligatorio (MARCA_CLIENTE_CAMBIADO, r3 M0). La usan _registra_el_cliente y documento_cliente._cambio_el_cliente_despues (la pagina publica)."""
     if not isinstance(cambio, dict):
         return False
     campo, antes, despues = cambio.get("campo"), cambio.get("antes"), cambio.get("despues")
     if campo == "customer_email":
         return _texto_del_cliente(antes).lower() != _texto_del_cliente(despues).lower()
     if campo == "customer_phone":
-        return _texto_del_cliente(antes) != _texto_del_cliente(despues)
+        return _telefono_para_comparar(antes) != _telefono_para_comparar(despues)
     return campo == "customer_name" and not _mismo_nombre(antes, despues)
 
 
@@ -772,18 +789,29 @@ def _texto_del_cliente(v) -> str:
     return str(v).strip() if v not in (None, "") else ""
 
 
+_NO_DIGITO = re.compile(r"[^0-9]")
+
+
+def _telefono_para_comparar(v) -> str:
+    """F1 (M33, C.4): el telefono de un cliente para compararlo, solo con sus digitos ASCII: reformatear el de la misma
+    persona ('3001234567' -> '300 123 4567' o '300-123-4567') no es un cambio de cliente. '+57 300…' frente a '300…'
+    sigue contando como cambio: es el lado seguro (puede ser otro numero)."""
+    return _NO_DIGITO.sub("", _texto_del_cliente(v))
+
+
 def _cliente_de_la_solicitud(sc: CustomerRequest) -> tuple:
     """Quien confirma la SC por el enlace de Gate 1: su id, correo y telefono, normalizados (un formulario que reenvia
-    lo mismo, con otro tipo, mayusculas o espacios, no es un cambio de cliente)."""
+    lo mismo, con otro tipo, mayusculas o espacios, no es un cambio de cliente; el telefono, por sus digitos:
+    _telefono_para_comparar, F1 M33)."""
     return (_texto_del_cliente(sc.customer_id), _texto_del_cliente(sc.customer_email).lower(),
-            _texto_del_cliente(sc.customer_phone))
+            _telefono_para_comparar(sc.customer_phone))
 
 
 def _identidad_del_cliente(doc) -> tuple:
     """B3 T5 (r1, P1; r3): a quien le llega el enlace publico de una SC, una COT o un PVEN: _cliente_de_la_solicitud
-    (ficha, correo y telefono) mas el nombre, normalizados igual. Es la UNICA regla de cambio de cliente para los
-    enlaces: si cambia, el enlace pendiente de una COT o un PVEN se revoca (update_cotizacion, update_pedido y PATCH
-    /solicitudes/{id}/cliente), update_solicitud revoca el enlace pendiente de la SC y los de sus COT tempranas (r4) y
+    (ficha, correo y telefono por sus digitos) mas el nombre, normalizados igual. Es la UNICA regla de cambio de cliente
+    para los enlaces: si cambia, el enlace pendiente de una COT o un PVEN se revoca (update_cotizacion, update_pedido y
+    PATCH /solicitudes/{id}/cliente), update_solicitud revoca el enlace pendiente de la SC y los de sus COT tempranas (r4) y
     la SC deja el marcador de cambio de cliente (r2). La direccion no cuenta (R18 del Bloque 2): corregir la direccion
     de la misma persona no cambia a quien le llega el enlace. B3 T20 (M14): el nombre se compara con
     _nombre_para_comparar (sin tildes, mayusculas ni espacios de mas), la misma regla de _mismo_nombre: corregir 'Ana
@@ -805,30 +833,48 @@ def _mismo_nombre(a, b) -> bool:
 # B3 T20b (parte B, decision del usuario): los campos de un renglon de cambios que dicen que tambien se reviso el
 # contacto o la ficha. comparar() no emite telefono_whatsapp ni customer_id hoy (el e164 sale del telefono y no compara
 # ids): se cuentan por si algun dia los registra. El cambio de solo la ficha en update_solicitud deja el renglon
-# ACCION_CLIENTE_CAMBIADO, que tambien cuenta.
-_CAMPOS_CONTACTO_O_FICHA = frozenset({"customer_phone", "customer_email", "telefono_whatsapp", "customer_id"})
+# ACCION_CLIENTE_CAMBIADO, que tambien cuenta. F1 (M34): customer_phone y customer_email ya no estan aqui: cuentan solo si
+# cambian de verdad (_es_cambio_de_identidad, la regla unica de T20: las mayusculas del correo o el formato del
+# telefono no son otro contacto).
+_CAMPOS_CONTACTO_O_FICHA = frozenset({"telefono_whatsapp", "customer_id"})
+# F1 (M39): la llave del renglon ACCION_CLIENTE_CAMBIADO de la COT que dice si cambio la ficha (customer_id).
+_FICHA_CAMBIADA = "ficha_cambiada"
+
+
+def _cambia_el_contacto(cambio: dict) -> bool:
+    """F1 (M34): el renglon de cambios dice que se reviso el contacto o la ficha: telefono_whatsapp o customer_id, o el
+    telefono o el correo con un cambio real (_es_cambio_de_identidad)."""
+    campo = cambio.get("campo")
+    if campo in _CAMPOS_CONTACTO_O_FICHA:
+        return True
+    return campo in ("customer_phone", "customer_email") and _es_cambio_de_identidad(cambio)
 
 
 def _nombre_cambio_sin_contacto(renglones, desde) -> bool:
     """B3 T20b (parte B): True si, despues de `desde` (el created_at del ultimo enlace de confirmacion del documento;
     None = nunca se envio: cuenta desde su creacion), la Actividad tiene un cambio REAL de customer_name (no
-    _mismo_nombre: tildes, mayusculas y espacios no cuentan) y, desde ese cambio, ningun renglon trae el telefono, el
-    correo o el WhatsApp ni cambia la ficha (_CAMPOS_CONTACTO_O_FICHA o el renglon ACCION_CLIENTE_CAMBIADO). El nombre y
-    el telefono en el mismo renglon tampoco avisan. Pura: `renglones` son (created_at, action, extra_data) en el orden
-    de la Actividad (created_at, id) y solo se leen la accion y extra_data.cambios, nunca el texto de un renglon. Datos
-    viejos malformados no cuentan. La pantalla lo muestra en la ventana de envio, sin bloquear nada."""
+    _mismo_nombre: tildes, mayusculas y espacios no cuentan) y, desde ese cambio, ningun renglon cambia el telefono, el
+    correo o el WhatsApp ni la ficha (_cambia_el_contacto, F1 M34: el telefono y el correo solo si cambian de verdad,
+    _es_cambio_de_identidad; o el renglon ACCION_CLIENTE_CAMBIADO, salvo el de la COT que dice ficha_cambiada False,
+    F1 M39). El nombre y el telefono en el mismo renglon tampoco avisan. Pura: `renglones` son (created_at, action,
+    extra_data) en el orden de la Actividad (created_at, id) y solo se leen la accion y extra_data.cambios, nunca el
+    texto de un renglon. Datos viejos malformados no cuentan. La pantalla lo muestra en la ventana de envio, sin bloquear nada."""
     pendiente = False
     for creado, accion, extra in renglones:
         if desde is not None and (creado is None or creado <= desde):
             continue
         if accion == cambios_documento.ACCION_CLIENTE_CAMBIADO:
-            pendiente = False
+            # F1 (M39): el de la COT lleva _FICHA_CAMBIADA (al re-cotizar va DESPUES del renglon con el nombre, en el
+            # mismo commit): sin cambio de ficha no apaga el aviso. El de update_solicitud (sin la llave) siempre es un
+            # cambio de ficha.
+            if not (isinstance(extra, dict) and extra.get(_FICHA_CAMBIADA) is False):
+                pendiente = False
             continue
         cambios = extra.get("cambios") if isinstance(extra, dict) else None
         if not isinstance(cambios, list):
             continue
         cambios = [c for c in cambios if isinstance(c, dict)]
-        if any(c.get("campo") in _CAMPOS_CONTACTO_O_FICHA for c in cambios):
+        if any(_cambia_el_contacto(c) for c in cambios):
             pendiente = False
         elif any(c.get("campo") == "customer_name" and not _mismo_nombre(c.get("antes"), c.get("despues"))
                  for c in cambios):
@@ -1068,17 +1114,11 @@ def _leer_ajuste_anticipo_manual(db: Session, cot: SalesQuotation, body: dict):
                                  f"{vigente.numero} vigente.")
     return ajuste
 
-def _iso_utc(dt):
-    """created_at/updated_at/... se guardan en UTC sin zona (utcnow); con 'Z' el navegador las lee como UTC y las
-    muestra en hora local (sin ella las lee como hora local y todo sale corrido 5 h en Colombia). NO es para las fechas
-    de calendario o de negocio (fecha_solicitud, fecha_vencimiento, fecha_entrega_estimada, fecha_pago...)."""
-    if dt is None:
-        return None
-    if isinstance(dt, str):
-        return dt
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
-    return dt.isoformat() + "Z"
+# created_at/updated_at/... se guardan en UTC sin zona (utcnow); con 'Z' el navegador las lee como UTC y las muestra en
+# hora local (sin ella las lee como hora local y todo sale corrido 5 h en Colombia). NO es para las fechas de calendario
+# o de negocio (fecha_solicitud, fecha_vencimiento, fecha_entrega_estimada, fecha_pago...). F1 (M43): una sola regla,
+# fechas.iso_z (el nombre se queda por sus llamadores); una fecha sin hora da un TypeError claro.
+_iso_utc = iso_z
 
 def _pago_dict(p: SaleOrderPayment) -> dict:
     return {
@@ -1129,9 +1169,10 @@ def _estado_tras_reinicio(sc: CustomerRequest) -> str:
 # B3 T5 (r2): el marcador de cambio de cliente de la SC cuando el renglon de cambios no lo registro.
 _TEXTO_CLIENTE_CAMBIADO = ("Cambiaron los datos del cliente de la solicitud: los enlaces enviados antes de este cambio ya "
                            "no muestran su resumen.")
-# B3 T20 r3 (M0): el renglon del marcador de la COT cuando el cambio de cliente no anulo ningun enlace vivo.
-_TEXTO_CLIENTE_CAMBIADO_COT = ("Cambiaron los datos del cliente de la cotización: los enlaces enviados antes de este "
-                               "cambio ya no le muestran nada al cliente anterior.")
+# B3 T20 r3 (M0): el renglon del marcador de la COT cuando el cambio de cliente no anulo ningun enlace vivo. F1 (M39):
+# solo si la COT tuvo algun enlace, con la accion ACCION_CLIENTE_CAMBIADO.
+_TEXTO_CLIENTE_CAMBIADO_COT = ("Cambiaron los datos del cliente de la cotización: los enlaces enviados antes ya no le "
+                               "muestran el resumen ni los datos al cliente anterior.")
 _MOTIVO_PRODUCTOS = ("se modificaron los productos, así que la confirmación del cliente ya no es válida y hay que "
                      "reenviarle la solicitud")
 _MOTIVO_CAMBIO_DE_CLIENTE = ("cambió el cliente de la solicitud, así que la confirmación del cliente anterior ya no es "
@@ -1264,6 +1305,20 @@ _ENLACE_COT_ANULADO = {"etiqueta": "Enlace de confirmación",
 _ENLACE_PVEN_ANULADO = {"etiqueta": "Enlace del pedido",
                         "despues": "Se anuló el enlace del pedido enviado al dato anterior: si el cliente lo necesita, "
                                    "envíaselo de nuevo"}
+
+
+def _409_si_bloqueo_abortado(db: Session, exc: OperationalError, que: str, mensaje: str) -> None:
+    """F1 (M6): el manejo de un bloqueo abortado, que estaba copiado en PATCH /solicitudes/{id}/cliente y en el envio de
+    la COT y del pedido. Revierte la transaccion y, si PostgreSQL aborto el bloqueo por un interbloqueo (40P01) o porque
+    espero mas que el statement_timeout (57014), deja la advertencia en el log («Bloqueo abortado (codigo) al `que`») y
+    lanza el 409 con `mensaje` (repetir, en vez de un 500). Con otro error no lanza nada: quien llama lo vuelve a
+    lanzar con `raise`, dentro de su except."""
+    db.rollback()
+    pgcode = getattr(getattr(exc, "orig", None), "pgcode", None)
+    if pgcode not in (_INTERBLOQUEO, _TIEMPO_AGOTADO):
+        return None
+    logger.warning("Bloqueo abortado (%s) al %s", pgcode, que)
+    raise HTTPException(409, mensaje)
 
 
 def _normalizar_contacto(body: dict) -> dict:
@@ -1751,13 +1806,28 @@ _SQL_SC_CON_DOCUMENTOS = """(EXISTS(SELECT 1 FROM sales_quotations q WHERE q.sc_
                 OR EXISTS(SELECT 1 FROM sales_orders l WHERE l.canonical_customer_request_id = cr.id))"""
 
 
+def _borrar_rastro_de_envios(db: Session, tipo: str, ids) -> None:
+    """F1 (M7): las tablas del Bloque 3 que guardan por documento lo que se le envio al cliente (envios_al_cliente: su
+    WhatsApp en e164 y el mensaje con su nombre) y su recordatorio (seguimientos_confirmacion) no tienen FK. Al eliminar
+    definitivamente los documentos `ids` de `tipo` se borran sus filas en el MISMO commit del borrado (aqui no hay
+    commit): «eliminada definitivamente» ya no deja sus datos personales."""
+    ids = sorted({int(i) for i in ids})
+    if not ids:
+        return
+    for tabla in ("envios_al_cliente", "seguimientos_confirmacion"):
+        db.execute(text(f"DELETE FROM {tabla} WHERE document_type = :tipo AND document_id = ANY(:ids)"),
+                   {"tipo": tipo, "ids": ids})
+
+
 def purgar_papelera_vencida(db: Session, ahora: datetime.datetime, autor: str = "Sistema") -> dict:
     """Borra las SC CANCELADA con eliminada_at anterior a `ahora` - DIAS_EN_PAPELERA dias que nadie referencia y deja
     un renglon PURGED por cada una, con `autor` («Sistema» si no se indica). `ahora` es UTC sin zona, como eliminada_at.
     No hace commit: quien la llame confirma. Si se usa en un ciclo automático, confirma después de cada tarea, o aísla
     la tarea, para que un fallo posterior no deshaga la purga. El borrado y sus renglones van juntos en ese commit (H33:
     la SC ya no existe, ninguna pantalla muestra el renglon). La usan POST /papelera/purgar y, en el Bloque 3, la
-    revision automatica, que la llama fn(db, ahora). Devuelve {'purgadas': n, 'numeros': [...]}."""
+    revision automatica, que la llama fn(db, ahora). Devuelve {'purgadas': n, 'numeros': [...]}.
+    F1 (M7): en ese mismo commit se borran sus filas de envios_al_cliente y seguimientos_confirmacion
+    (_borrar_rastro_de_envios). Una SC con cotizaciones no se purga, asi que ninguna COT se va con ella."""
     corte = ahora - datetime.timedelta(days=DIAS_EN_PAPELERA)
     purgadas = db.execute(text(f"""
         DELETE FROM customer_requests cr
@@ -1766,6 +1836,7 @@ def purgar_papelera_vencida(db: Session, ahora: datetime.datetime, autor: str = 
         AND NOT {_SQL_SC_CON_DOCUMENTOS}
         RETURNING cr.id, cr.numero, cr.customer_name, cr.razon_cancelacion
     """), {"corte": corte}).mappings().all()
+    _borrar_rastro_de_envios(db, "SC", [f["id"] for f in purgadas])
     for f in purgadas:
         _log(db, "SC", f["id"], f["numero"], "PURGED",
              f"Solicitud eliminada definitivamente: llevaba más de {DIAS_EN_PAPELERA} días en la Papelera",
@@ -2337,13 +2408,10 @@ def corregir_datos_cliente_solicitud(sc_id: int, body: dict,
         # La SC se bloquea antes que sus documentos y update_cotizacion bloquea la COT antes que la SC: si chocan,
         # PostgreSQL aborta una de las dos (40P01). S8 (T11): lo mismo si un bloqueo espera mas que el statement_timeout
         # (57014). Aqui se revierte todo y se pide repetir en vez de un 500.
-        db.rollback()
-        pgcode = getattr(getattr(exc, "orig", None), "pgcode", None)
-        if pgcode not in (_INTERBLOQUEO, _TIEMPO_AGOTADO):
-            raise
-        logger.warning("Bloqueo abortado (%s) al corregir los datos del cliente de la solicitud %s", pgcode, sc_id)
-        raise HTTPException(409, "Otra operación estaba cambiando esta solicitud o su cotización al mismo tiempo. "
+        _409_si_bloqueo_abortado(db, exc, f"corregir los datos del cliente de la solicitud {sc_id}",
+                                 "Otra operación estaba cambiando esta solicitud o su cotización al mismo tiempo. "
                                  "Intenta de nuevo.")
+        raise
     return {"status": "success", "data": data, "ficha_actualizada": bool(cambios_cli),
             "documentos_actualizados": numeros_docs, "documentos_de_otro_cliente": docs_de_otro_cliente,
             "confirmacion_anulada": gate1["confirmacion_anulada"], "estado_cambiado": gate1["estado_cambiado"],
@@ -2365,10 +2433,18 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
 
     B3 T6 (H28, RP16): la SC se lee FOR UPDATE y todo lo del envio (revocacion, token nuevo, estado y la limpieza de
     cambios_cliente_*) va en UN solo commit antes del correo: un «Pedir cambios» del cliente que llega al mismo tiempo
-    espera a este commit (o este espera al suyo) y nunca queda borrado a medias."""
+    espera a este commit (o este espera al suyo) y nunca queda borrado a medias.
+
+    Revision final del B3 (F1, C0 y M0), el mismo contrato que la COT: reenvio=true (el boton «Reenviar enlace de
+    confirmacion») con la SC fuera de Pendiente por confirmacion (la pagina estaba vieja: el cliente pidio cambios o «Ya
+    no la necesito») da 409 _SC_CAMBIO_AL_REENVIAR sin tocar enlaces, estado, marca ni seguimiento; reenvio=false con la
+    SC ya pendiente da 409 _YA_ENVIADO_USA_REENVIAR. Sin la bandera, lo de siempre (_exigir_bandera_de_reenvio).
+    F1 (M2): si la SC tiene una COT temprana esperando al cliente, su recordatorio queda detenido
+    (seguimiento_confirmacion.iniciar): el cliente recibe uno solo, el de la cotizacion."""
     sc = db.query(CustomerRequest).filter(CustomerRequest.id == sc_id).with_for_update().first()
     if not sc:
         raise HTTPException(404, "Solicitud no encontrada")
+    _exigir_bandera_de_reenvio(body, sc.estado == "PENDIENTE_CONFIRMACION", _SC_CAMBIO_AL_REENVIAR)
     if sc.estado not in ("ASIGNADA", "PENDIENTE_CONFIRMACION"):
         raise HTTPException(400, f"La solicitud debe estar Asignada antes de enviar para confirmación (estado actual: {etiqueta_estado('SC', sc.estado)})")
     # Round 6: red de seguridad barata -- hoy ASIGNADA y PENDIENTE_CONFIRMACION ya
@@ -3509,6 +3585,11 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
     # de ESTE request con el de un click de confirmacion del cliente llegando al mismo
     # tiempo por otra conexion.
     sale_de_gate2 = old_estado in ("PENDIENTE_CONFIRMACION", "CONFIRMADA") and cot.estado != old_estado
+    if cot.estado != old_estado and "RECHAZADA" in (old_estado, cot.estado):
+        # F1 (M5): rechazar la COT responde al pedido del cliente y la marca cambios_cliente_* se borra en este commit
+        # (la Actividad conserva el comentario); retomarla (Rechazada -> Borrador) tampoco la revive, aunque sea de antes
+        # de este arreglo.
+        _limpiar_cambios_cliente(cot)
     cot.updated_at = datetime.datetime.utcnow()
     # H40 + S6 (T11): anular la confirmacion del cliente por re-cotizar va en UN commit (patron C8): la COT en Borrador,
     # el renglon de los cambios, el de la razon (con el autor de la sesion, nunca body.updated_by), la revocacion del
@@ -3547,16 +3628,26 @@ def update_cotizacion(cot_id: int, body: dict, user: User = Depends(require_role
         # con lo que tiene que hacer (_ENLACE_COT_ANULADO: reenviarla al cliente, B3 T7).
         # B3 T20 r3 (M0): y SIEMPRE deja el marcador obligatorio en este commit (el renglon de cambios va despues, en
         # otro commit, y un cambio de solo la ficha no deja ningun dato de identidad en el): lo lee la pagina publica.
+        from app.models.confirmation import DocumentConfirmationToken
         marca = {cambios_documento.MARCA_CLIENTE_CAMBIADO: True}
         if revoke_pending_tokens(db, "COT", cot.id, commit=False, contar_vigentes=True):
             _log(db, "COT", cot.id, cot.numero, "UPDATED",
                  "Cambiaron los datos del cliente: se anuló el enlace de confirmación de esta cotización",
                  user_name=body.get("updated_by") or getattr(user, "email", None),
                  extra_data={"cambios": [dict(_ENLACE_COT_ANULADO)], **marca}, commit=False, usuario=user)
-        else:
-            _log(db, "COT", cot.id, cot.numero, "UPDATED", _TEXTO_CLIENTE_CAMBIADO_COT,
-                 user_name=body.get("updated_by") or getattr(user, "email", None), extra_data=marca, commit=False,
-                 usuario=user)
+        elif db.query(DocumentConfirmationToken.id).filter(
+                DocumentConfirmationToken.document_type == "COT",
+                DocumentConfirmationToken.document_id == cot.id).first() is not None:
+            # F1 (M39, C.1): sin un enlace vivo que anular, el renglon del marcador solo si la COT tuvo algun enlace (la
+            # pagina publica solo mira los renglones posteriores a cada enlace): en una COT que nunca se envio, cada
+            # correccion del cliente dejaba un renglon que hablaba de enlaces que no existen. Con la accion
+            # ACCION_CLIENTE_CAMBIADO (la Actividad lo pinta «Cliente cambiado») y _FICHA_CAMBIADA: al re-cotizar este
+            # renglon va DESPUES del de cambios con el nombre, y _nombre_cambio_sin_contacto solo lo toma como «cambio
+            # la ficha» si de verdad cambio.
+            _log(db, "COT", cot.id, cot.numero, cambios_documento.ACCION_CLIENTE_CAMBIADO, _TEXTO_CLIENTE_CAMBIADO_COT,
+                 user_name=body.get("updated_by") or getattr(user, "email", None),
+                 extra_data={**marca, _FICHA_CAMBIADA: cliente_antes[0] != _identidad_del_cliente(cot)[0]},
+                 commit=False, usuario=user)
     db.commit()
     db.refresh(cot)
     if not anula_por_recotizacion:
@@ -3668,7 +3759,11 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
       acortarla nunca: max(cot.valida_hasta or hoy, hoy + N) (r1). El enlace vence al final de ese dia.
     - reenvio=true (lo manda el boton «Reenviar», r1): si la COT ya no esta en PENDIENTE_CONFIRMACION (la pagina estaba
       vieja: el cliente pidio cambios o la editaron), 409 _COT_CAMBIO_AL_REENVIAR sin tocar enlaces, estado ni la marca
-      de cambios. Sin la bandera, una COT en Borrador o Enviada se envia como siempre.
+      de cambios. Sin la bandera, una COT en Borrador o Enviada se envia como siempre. F1 (M0): reenvio=false (el
+      primer envio) sobre una COT ya pendiente da 409 _YA_ENVIADO_USA_REENVIAR (_exigir_bandera_de_reenvio).
+    - F1 (M1, C20): en el PRIMER envio, con la SC ya bloqueada, si el cliente pidio cambios en la SC y la marca sigue
+      vigente (_cambios_cliente_vigentes), 409: la COT temprana no sale hasta que el asesor responda (reenviar la SC
+      borra la marca).
 
     B3 T6 (H28, U22-cambios, RP16): la COT se lee FOR UPDATE y la revocacion, el token nuevo, el estado, el canal, la
     limpieza de cambios_cliente_* y (T7) valida_hasta van en UN solo commit antes del correo. El lead del CRM pasa a
@@ -3685,8 +3780,8 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
         # B3 T7 (r1, calidad 1): el boton «Reenviar» manda reenvio=true (T17). Si la COT ya no espera al cliente (pidio
         # cambios y volvio a Borrador, o la editaron) la pagina estaba vieja: 409 sin tocar enlaces, estado ni la marca
         # de cambios (sin esto, un primer envio completo borraria cambios_cliente_* sin que el asesor respondiera).
-        if body.get("reenvio") is True and cot.estado != "PENDIENTE_CONFIRMACION":
-            raise HTTPException(409, _COT_CAMBIO_AL_REENVIAR)
+        # F1 (M0): y reenvio=false con la COT ya pendiente, 409 (la bandera simetrica).
+        _exigir_bandera_de_reenvio(body, cot.estado == "PENDIENTE_CONFIRMACION", _COT_CAMBIO_AL_REENVIAR)
         if cot.estado not in ("BORRADOR", "ENVIADA", "PENDIENTE_CONFIRMACION"):
             raise HTTPException(400, f"La cotización debe estar en Borrador, Enviada o Pendiente por confirmación para "
                                      f"enviarla al cliente (estado actual: {etiqueta_estado('COT', cot.estado)}).")
@@ -3711,15 +3806,18 @@ def enviar_cotizacion_para_confirmacion(cot_id: int, body: dict = Body(default_f
         # (_recalcular_anticipo_por_modalidad escribe las COT). PostgreSQL aborta uno (40P01), o el bloqueo espera mas
         # que el statement_timeout (57014). Aqui todavia no se escribio nada: se revierte y se pide repetir, como en
         # PATCH /cliente (S8), en vez de un 500.
-        db.rollback()
-        pgcode = getattr(getattr(exc, "orig", None), "pgcode", None)
-        if pgcode not in (_INTERBLOQUEO, _TIEMPO_AGOTADO):
-            raise
-        logger.warning("Bloqueo abortado (%s) al enviar la cotizacion %s para confirmacion", pgcode, cot_id)
-        raise HTTPException(409, "Otra operación estaba cambiando esta cotización o su solicitud al mismo tiempo. "
+        _409_si_bloqueo_abortado(db, exc, f"enviar la cotizacion {cot_id} para confirmacion",
+                                 "Otra operación estaba cambiando esta cotización o su solicitud al mismo tiempo. "
                                  "Intenta de nuevo.")
+        raise
     if sc is not None and sc.estado == "CANCELADA":
         raise HTTPException(409, _mensaje_solicitud_cancelada(sc))
+    # F1 (M1, C20): en el primer envio la SC ya esta bloqueada (arriba). Si el cliente pidio cambios en ella y el asesor
+    # todavia no le respondio (la marca sigue vigente), la COT temprana no sale: el cliente no puede aprobar la COT vieja
+    # despues de pedir cambios en la SC (ni aunque el envio haya esperado el bloqueo del «Pedir cambios»).
+    if sc is not None and not es_reenvio and _cambios_cliente_vigentes(sc, "SC"):
+        raise HTTPException(409, f"El cliente pidió cambios en la solicitud {sc.numero}: revísalos antes de enviar la "
+                                 f"cotización.")
     # Una cotizacion sin productos ni precio calculado no tiene nada que el cliente
     # pueda confirmar -- cierra la variante "tarjeta BORRADOR vacia" del hallazgo #1.
     if not cot.productos or not cot.total_cop:
@@ -4160,12 +4258,8 @@ def enviar_pedido_al_cliente(ven_id: int, body: dict = Body(default_factory=dict
         # r1 (calidad 4), como el envio de la COT (T6 r2): si el bloqueo se aborta (40P01) o espera mas que el
         # statement_timeout (57014) detras de otro que tiene el pedido, todavia no se escribio nada: se revierte y se
         # pide repetir, en vez de un 500.
-        db.rollback()
-        pgcode = getattr(getattr(exc, "orig", None), "pgcode", None)
-        if pgcode not in (_INTERBLOQUEO, _TIEMPO_AGOTADO):
-            raise
-        logger.warning("Bloqueo abortado (%s) al enviar el pedido %s al cliente", pgcode, ven_id)
-        raise HTTPException(409, _PEDIDO_BLOQUEADO)
+        _409_si_bloqueo_abortado(db, exc, f"enviar el pedido {ven_id} al cliente", _PEDIDO_BLOQUEADO)
+        raise
     if not so:
         raise HTTPException(404, "Pedido de venta no encontrado")
     if so.estado == "CANCELADO":
@@ -5234,6 +5328,10 @@ def cancelar_solicitud(sc_id: int, body: CancelarSolicitudBody,
     user_name = getattr(body, "user_name", None) or getattr(user, "username", None) or getattr(user, "email", "")
     ahora = datetime.datetime.utcnow()
     tenia_lead = db.query(LeadCRM.id).filter(LeadCRM.canonical_customer_request_id == sc.id).first() is not None
+    # F1 (M5): el pedido del cliente («Ya no la necesito», «Pedir cambios») ya tuvo su respuesta; la marca se borra en el
+    # commit unico de la cancelacion (la Actividad conserva el comentario). Sin esto, al restaurar la SC reaparecian la
+    # tarjeta y la cuenta de las alertas como si el pedido estuviera pendiente.
+    _limpiar_cambios_cliente(sc)
     # U18 (H31+H33, C1/C8): todo en UNA transaccion con un solo commit al final. El motivo vive en razon_cancelacion y en
     # la Actividad, ya NO en las notas (R3: las notas viajan a la COT y al PVEN).
     if sc.estado == "CANCELADA":
@@ -5343,6 +5441,9 @@ def eliminar_permanente(sc_id: int, user: User = Depends(require_roles(*ROLE_ADM
          old_estado="CANCELADA", user_name=getattr(user, "email", None),
          extra_data={"cliente": sc.customer_name, "motivo_cancelacion": sc.razon_cancelacion}, commit=False)
     try:
+        # F1 (M7): y sus filas de envios_al_cliente y seguimientos_confirmacion, en el mismo commit. Con cotizaciones la
+        # SC no se elimina (arriba), asi que ninguna COT se va con ella.
+        _borrar_rastro_de_envios(db, "SC", [sc.id])
         db.delete(sc)
         db.commit()
     except IntegrityError:
@@ -5385,6 +5486,9 @@ def restaurar_solicitud(sc_id: int, user: User = Depends(require_roles(*ROLE_ADM
     sc.eliminada_at = None
     sc.gate1_confirmed_at = None
     sc.updated_at = datetime.datetime.utcnow()
+    # F1 (M5): la marca de un pedido viejo del cliente no vuelve con la SC (cancelar ya la borra; esto cubre las SC
+    # canceladas antes de ese arreglo).
+    _limpiar_cambios_cliente(sc)
     # Gate 1 (Round 7): mismo revoke+clear que cancelar_solicitud y update_solicitud ya tienen -- defensa en
     # profundidad para que una SC restaurada desde la papelera nunca pueda cargar un token o una marca de confirmacion
     # de un ciclo anterior. B5 (revision final): los enlaces vivos que anula los cuenta la propia revocacion (RETURNING),

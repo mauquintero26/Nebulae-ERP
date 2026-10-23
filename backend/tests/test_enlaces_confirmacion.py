@@ -1,8 +1,8 @@
 """Bloque 3, Tarea 1: enlaces de confirmación por tipo y con resultado (core/confirmation_tokens.py; C11, C12, R19,
 RP2 y RP16).
 
-- Tipos: TIPOS_CONFIRMACION = ('SC','COT') y TIPOS_CONSULTA = ('PVEN',). consultar_token, reclamar_token, peek_token y
-  verify_and_consume_token filtran con document_type = ANY(:tipos); por defecto, solo SC y COT. Un enlace de consulta
+- Tipos: TIPOS_CONFIRMACION = ('SC','COT') y TIPOS_CONSULTA = ('PVEN',). consultar_token y reclamar_token
+  filtran con document_type = ANY(:tipos); por defecto, solo SC y COT. Un enlace de consulta
   del pedido nunca se gasta en /confirmar/confirmar (prueba 8 de U22+H38).
 - Columna resultado (fa6_026): 'CONFIRMADO' | 'CAMBIOS' | 'REVOCADO'. revoke_pending_tokens y revocar_token ponen
   'REVOCADO'; marcar_resultado no hace commit (va en el del documento).
@@ -107,15 +107,12 @@ def test_token_de_pedido_no_se_gasta_en_confirmar(app_client, db):
     assert (info["document_type"], info["document_id"], info["vigente"]) == ("PVEN", ven.id, True)
 
     # Ninguna de las funciones de confirmación lo reclama con sus tipos por defecto.
-    assert ct.peek_token(db, raw) is None
-    assert ct.verify_and_consume_token(db, raw) is None
     assert ct.reclamar_token(db, raw) is None
     assert _fila(db, raw)["used_at"] is None
     # Con su tipo sí.
-    assert ct.peek_token(db, raw, tipos=ct.TIPOS_CONSULTA) == ("PVEN", ven.id)
+    assert ct.consultar_token(db, raw, tipos=ct.TIPOS_CONSULTA)["document_id"] == ven.id
     # r1: un solo tipo escrito como texto ('PVEN') se toma como ('PVEN',), no como ['P','V','E','N'].
     assert ct.consultar_token(db, raw, tipos="PVEN")["document_type"] == "PVEN"
-    assert ct.peek_token(db, raw, tipos="PVEN") == ("PVEN", ven.id)
     assert ct.reclamar_token(db, raw, tipos="PVEN")["document_type"] == "PVEN"
 
 
@@ -128,14 +125,14 @@ def test_enlace_de_confirmacion_no_abre_la_consulta_del_pedido(db):
     raw_cot = ct.create_confirmation_token(db, "COT", cot.id)
     assert ct.consultar_token(db, raw_sc, tipos=ct.TIPOS_CONSULTA) is None
     assert ct.consultar_token(db, raw_cot, tipos=ct.TIPOS_CONSULTA) is None
-    assert ct.peek_token(db, raw_sc, tipos=ct.TIPOS_CONSULTA) is None
-    assert ct.peek_token(db, raw_cot, tipos=ct.TIPOS_CONSULTA) is None
     assert ct.reclamar_token(db, raw_cot, tipos=ct.TIPOS_CONSULTA) is None
-    assert ct.verify_and_consume_token(db, raw_sc, tipos=ct.TIPOS_CONSULTA) is None
+    assert ct.reclamar_token(db, raw_sc, tipos=ct.TIPOS_CONSULTA) is None
     assert _fila(db, raw_sc)["used_at"] is None and _fila(db, raw_cot)["used_at"] is None
     # Con sus tipos por defecto sí.
-    assert ct.peek_token(db, raw_sc) == ("SC", sc.id)
-    assert ct.peek_token(db, raw_cot) == ("COT", cot.id)
+    assert (ct.consultar_token(db, raw_sc)["document_type"], ct.consultar_token(db, raw_sc)["document_id"]) == (
+        "SC", sc.id)
+    assert (ct.consultar_token(db, raw_cot)["document_type"], ct.consultar_token(db, raw_cot)["document_id"]) == (
+        "COT", cot.id)
 
 
 # ─── consultar / reclamar / marcar ──────────────────────────────────────────────────────────────────────────
@@ -187,10 +184,9 @@ def test_reclamar_token_es_de_un_solo_uso(db):
     assert ct.reclamar_token(db, vencido) is None
     assert _fila(db, vencido)["used_at"] is None
 
-    # verify_and_consume_token es la envoltura de siempre: devuelve la tupla.
-    otro = ct.create_confirmation_token(db, "SC", sc.id)
-    assert ct.verify_and_consume_token(db, otro) == ("SC", sc.id)
-    assert ct.verify_and_consume_token(db, otro) is None
+    # F1 (M6): peek_token y verify_and_consume_token ya no existen (nadie en app/ los usaba desde T5): la API de los
+    # enlaces es consultar_token y reclamar_token.
+    assert not hasattr(ct, "peek_token") and not hasattr(ct, "verify_and_consume_token")
 
 
 def test_marcar_resultado_no_hace_commit(db, contador_sql):

@@ -389,7 +389,10 @@ def iniciar(db: Session, tipo: str, doc, canal, user_name, ahora: datetime | Non
     upsert de la fila (bloqueada) en ACTIVO, con el contador en 0, el canal del envío y proximo_at =
     siguiente_momento(ahora). Si no hay forma de llegarle al cliente (medio_posible), DETENIDO 'SIN_MEDIO_CLIENTE'. Se
     programa aunque el seguimiento esté apagado en Configuración (la tarjeta lo dice). Sin commit: va en el commit único
-    del envío (C21, RP16). Devuelve resumen()."""
+    del envío (C21, RP16). Devuelve resumen().
+    F1 (M2, U11): «el cliente recibe uno solo» en los dos sentidos. Si se (re)envía la SC mientras una COT suya espera
+    al cliente (_cotizacion_pendiente), la fila de la SC queda DETENIDO 'COTIZACION_ENVIADA', como al enviar la COT
+    (detener_por_cotizacion): al confirmar la COT se confirma la SC y el recordatorio sigue en la cotización."""
     ahora = ahora or ahora_utc()
     cfg = leer_config(db)
     fila = _fila_de(db, tipo, doc.id, bloquear=True)
@@ -411,16 +414,27 @@ def iniciar(db: Session, tipo: str, doc, canal, user_name, ahora: datetime | Non
     if not medio_posible(canal, doc):
         _terminar(fila, DETENIDO, MOTIVO_SIN_MEDIO, ahora,
                   {"canal": canal, "motivo": MOTIVO_SIN_MEDIO, "mensaje": TEXTO_SIN_MEDIO})
+    elif tipo == "SC" and _cotizacion_pendiente(db, doc.id) is not None:
+        _terminar(fila, DETENIDO, MOTIVO_COTIZACION_ENVIADA, ahora)
     db.flush()
     return resumen(db, tipo, doc, cfg=cfg, fila=fila)
+
+
+def _cotizacion_pendiente(db: Session, sc_id: int):
+    """F1 (M2): el número de una COT de la SC que espera al cliente (Pendiente por confirmación), o None."""
+    fila = (db.query(SalesQuotation.numero)
+            .filter(SalesQuotation.sc_id == sc_id, SalesQuotation.estado == PENDIENTE)
+            .order_by(SalesQuotation.id.desc()).first())
+    return fila[0] if fila else None
 
 
 def detener_por_cotizacion(db: Session, sc_id: int, cot_numero, ahora: datetime | None = None,
                            user_name=None) -> bool:
     """U11: al enviar la COT de una SC que sigue en Pendiente por confirmación, el recordatorio de la SC se detiene
     (COTIZACION_ENVIADA) con un renglón en la SC: al confirmar la COT se confirma la SC, y así el cliente no recibe dos
-    recordatorios. True si la detuvo. Sin commit (antes del commit del envío de la COT, C21). r1 (P3): el renglón va a
-    nombre de quien envió la COT (`user_name`, de la sesión: RP15); USUARIO_SISTEMA solo si no llega."""
+    recordatorios (el otro sentido, reenviar la SC con la COT pendiente, lo cubre iniciar: F1, M2). True si la detuvo.
+    Sin commit (antes del commit del envío de la COT, C21). r1 (P3): el renglón va a nombre de quien envió la COT
+    (`user_name`, de la sesión: RP15); USUARIO_SISTEMA solo si no llega."""
     ahora = ahora or ahora_utc()
     fila = _fila_de(db, "SC", sc_id, bloquear=True)
     if fila is None or fila.estado != ACTIVO:

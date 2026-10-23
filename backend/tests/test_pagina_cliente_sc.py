@@ -1052,6 +1052,18 @@ def test_cambio_de_solo_el_nombre_revoca_el_enlace_de_la_cot_temprana(app_client
     assert resp.status_code == 400, resp.text
     assert NOMBRE_B not in resp.text
     assert _fila(db, enlace_confirmada)["used_at"] is None
+    # F1 (M40, C.2): el renglón anulado lleva el marcador obligatorio (lo lee la página pública de la COT). Al
+    # reenviar la COT, el enlace del cliente anterior da 'no_disponible', nunca «hay uno más reciente».
+    from app.core.cambios_documento import MARCA_CLIENTE_CAMBIADO
+    assert renglones[0].extra_data[MARCA_CLIENTE_CAMBIADO] is True
+    resp = app_client.post(f"/api/v1/ventas/cotizaciones/{temprana.id}/enviar-confirmacion", json={},
+                           headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    resp = _ver(app_client, enlace_temprana)
+    assert resp.status_code == 400, resp.text
+    detalle = resp.json()["detail"]
+    assert detalle["estado_enlace"] == "no_disponible" and "más reciente" not in detalle["mensaje"], detalle
+    assert NOMBRE_B not in resp.text
 
 
 def test_cambiar_a_una_ficha_sin_nombre_no_conserva_el_nombre_anterior(app_client, db, admin_token, user_admin):

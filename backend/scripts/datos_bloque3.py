@@ -6,7 +6,13 @@ usuario, por ambiente (erp_test y produccion por separado).
 Uso (desde backend/, con el python del venv):
     python scripts/datos_bloque3.py todo --listar                 corre todos los listados
     python scripts/datos_bloque3.py telefonos --listar            un solo listado
-    python scripts/datos_bloque3.py tax_rate --aplicar --base erp_test [--ids 3,4] [--respaldo <carpeta>]
+    python scripts/datos_bloque3.py tax_rate --aplicar --base erp_test --ids 3,4 [--respaldo <carpeta>]
+
+La base sale de DATABASE_URL (app/db/database.py): la variable del entorno de la consola gana sobre backend/.env.
+ALEMBIC_ENV no aplica a este script. Antes de seguir, mira la linea «SELECT current_database() -> ...» que imprime al
+empezar; si es la base de produccion (BASE_PRODUCCION, erpdb) imprime un AVISO arriba de todo, en stdout y en stderr.
+tax_rate --aplicar exige --ids: solo los ids que el usuario aprobo en el --listar (el --listar imprime el comando
+exacto con los ids copiables).
 
 Subcomandos (cada uno con --listar; solo tax_rate tiene --aplicar):
     empresa                     claves empresa_* y documentos_* que ya existen en admin_config (choques)
@@ -38,7 +44,10 @@ Seguridad:
   - Sirve en una base donde el Bloque 3 todavia no se desplego (produccion antes de desplegar): sin products.tarifa_iva,
     sin sales_quotations.tax_cop ni la tabla seguimientos_confirmacion, los listados no las nombran y lo dicen.
   - La salida puede traer nombres de productos y de clientes (telefonos): se guarda en la carpeta `datos` del ledger y
-    no se pega completa en el chat. Nunca imprime telefonos, correos ni valores de admin_config.
+    no se pega completa en el chat. Fuera de notas_cot no imprime telefonos, correos ni valores de admin_config.
+    notas_cot imprime las notas TAL CUAL las escribieron (hasta 160 caracteres, con los correos y las series de 7 o
+    mas digitos ocultos) y pueden traer datos personales (nombres, direcciones): esa seccion se trata como los nombres
+    de telefonos, solo en la carpeta `datos` y nunca entera en el chat.
 """
 import argparse
 import datetime
@@ -85,6 +94,13 @@ MENSAJE_SIN_TAX_RATE = "La columna products.tax_rate no existe en esta base: no 
 MENSAJE_SIN_TARIFA_IVA = ("Falta la columna products.tarifa_iva (la crea fa6_027 al desplegar el Bloque 3): no hay "
                           "dónde copiar.")
 TARIFAS_QUE_SE_COPIAN = ("19", "5")   # 19 -> '19' y 5 -> '5'; cualquier otro valor se deja sin definir
+# F1 (M25): --aplicar copia SOLO los ids que el usuario aprobo en el --listar, nunca «lo copiable de ese momento».
+MENSAJE_FALTA_IDS = "Falta --ids: aplica solo los ids que el usuario aprobó en el --listar."
+# F1 (M26): la base de produccion, la misma de alembic/env.py (_PRODUCTION_DATABASE_NAME). Ese archivo no se puede
+# importar: corre alembic al cargarse.
+BASE_PRODUCCION = "erpdb"
+AVISO_PRODUCCION = (f"AVISO: estás conectado a la base de PRODUCCIÓN ({BASE_PRODUCCION}). La salida trae datos reales: "
+                    f"guárdala solo en la carpeta datos y no la pegues en el chat.")
 
 ESTADOS_COT_ACTIVOS = ("BORRADOR", "ENVIADA", "PENDIENTE_CONFIRMACION", "CONFIRMADA")
 ESTADOS_COT_ANTICIPO = ("PENDIENTE_CONFIRMACION", "CONFIRMADA")
@@ -96,6 +112,12 @@ MAX_FILAS_EN_TEXTO = 300   # por seccion al imprimir (los datos completos siguen
 
 _NO_DIGITO = re.compile(r"[^0-9]")
 _ESPACIOS = re.compile(r"\s+")
+# F1 (M28): lo que se oculta en las notas que imprime notas_cot: un correo (cualquier palabra con '@') y una serie de 7
+# o mas digitos, aunque lleve espacios, puntos, guiones o parentesis (un telefono, una cedula, una cuenta).
+_CORREO_EN_NOTAS = re.compile(r"\S+@\S+")
+_SERIE_DE_DIGITOS = re.compile(r"\+?\d(?:[ .()\-]*\d){6,}")
+CORREO_OCULTO = "[correo oculto]"
+NUMERO_OCULTO = "[número oculto]"
 
 # Lo que cada listado necesita del esquema de antes del Bloque 3. Si falta algo, el listado dice "No aplica" y sigue.
 # Las columnas y tablas que crea el Bloque 3 (products.tarifa_iva, sales_quotations.tax_cop, seguimientos_confirmacion)
@@ -138,10 +160,10 @@ INFO = {
                "guardó desde la ficha. El Bloque 3 usa products.tarifa_iva ('19', '5', 'EXENTO', 'EXCLUIDO' o sin "
                "definir). Además lista los productos activos sin tarifa de IVA, que el usuario debe clasificar (lo "
                "mismo que el filtro «Sin tarifa de IVA» del catálogo).",
-        que_haria="Solo con el OK del usuario y en cada base por separado (--aplicar --base <base>): copia 19 → '19' y "
-                  "5 → '5' en la tarifa_iva de los productos que todavía no tienen tarifa, con respaldo JSON antes de "
-                  "escribir. Cualquier otro valor se deja sin definir y se lista; un producto que ya tiene tarifa no "
-                  "se toca."),
+        que_haria="Solo con el OK del usuario y en cada base por separado (--aplicar --base <base> --ids <ids "
+                  "aprobados>): copia 19 → '19' y 5 → '5' en la tarifa_iva de los productos que todavía no tienen "
+                  "tarifa, con respaldo JSON antes de escribir. Cualquier otro valor se deja sin definir y se lista; un "
+                  "producto que ya tiene tarifa no se toca (conserva la suya)."),
     "iva_documentos": dict(
         titulo="Cotizaciones y pedidos vigentes sin IVA discriminado",
         que_es="COT en Borrador, Enviada, Pendiente de confirmación o Confirmada y pedidos no cancelados cuyo IVA no "
@@ -160,8 +182,10 @@ INFO = {
                "que exige hoy anticipo_cotizacion (el cliente verá el de hoy). Aparte, las que cambian SOLO porque "
                "B2.1 (D7) sacó su modalidad de la lista de crédito («modalidad que dejó de ser crédito»): con la "
                "regla vieja (empieza por «cr» o dice «credito») tenían 0% de anticipo.",
-        que_haria="Nada: solo informe. Los recalcula el Bloque 1 (correcciones_bloque1.py h36), solo con el OK del "
-                  "usuario. D7 pide repetir este listado antes de producción."),
+        que_haria="Nada: solo informe. Las COT con SC las recalcula el Bloque 1 (correcciones_bloque1.py h36), solo "
+                  "con el OK del usuario. h36 solo recalcula las COT con SC; las COT sin SC (Origen del % «conservado») "
+                  "no las toca: se corrigen aparte, con el OK del usuario. D7 pide repetir este listado antes de "
+                  "producción."),
     "pagos_sin_verificar": dict(
         titulo="Pagos de anticipo automáticos sin verificar (CONVERSION_COTIZACION)",
         que_es="Pagos CONVERSION_COTIZACION confirmados que creó la conversión antes de N1, sin que nadie los "
@@ -188,7 +212,9 @@ INFO = {
                "el PDF y en el correo. Lista las COT en Borrador, Enviada, Pendiente de confirmación o Confirmada "
                f"con notas y los pedidos no cancelados cuya COT tiene notas (recortadas a {LARGO_NOTAS} caracteres). "
                "Aparte, las del Cotizador Rápido («Cotizado desde Calculadora Rápida. Margen: X% | TRM: Y»): con el "
-               "precio y el margen el cliente puede deducir el costo.",
+               "precio y el margen el cliente puede deducir el costo. Las notas salen tal cual las escribieron (con "
+               "los correos y las series de 7 o más dígitos ocultos) y pueden traer datos personales: esta sección se "
+               "guarda solo en la carpeta datos y nunca se pega entera en el chat.",
         que_haria="Nada: este subcomando no tiene --aplicar. Limpiar las notas se hace después y aparte, solo con la "
                   "lista aprobada por el usuario y por ambiente."),
 }
@@ -314,7 +340,8 @@ def texto_resumen(listados) -> str:
         elif l.error:
             estado = f"ERROR: {l.error}"
         else:
-            partes = ", ".join(f"{s.clave}: {len(s.filas)}" for s in l.secciones)
+            # F1 (M30): sin la seccion informativa, como Listado.conteo y texto_listado: las partes suman el total.
+            partes = ", ".join(f"{s.clave}: {len(s.filas)}" for s in l.secciones if not s.informativa)
             estado = f"{l.conteo} fila(s) ({partes}); excluidos reales que coincidían: {len(l.excluidos)}"
         out.append(f"  {l.subcomando}\n      {estado}")
     return "\n".join(out) + "\n"
@@ -330,10 +357,20 @@ def _numero_legible(valor) -> str:
     return format(d, "f").replace(".", ",")
 
 
+def _ocultar_correo(m) -> str:
+    """El correo de la nota pasa a CORREO_OCULTO; la puntuacion pegada a sus bordes se queda."""
+    texto = m.group(0)
+    sin_inicio = texto.lstrip("(«\"'[¿¡")
+    nucleo = sin_inicio.rstrip(".,;:!?)»\"']")
+    return texto[:len(texto) - len(sin_inicio)] + CORREO_OCULTO + sin_inicio[len(nucleo):]
+
+
 def _notas_recortadas(notas) -> str:
-    """Las notas en una sola linea (los saltos y tabuladores pasan a un espacio) y de LARGO_NOTAS caracteres como
-    maximo: si son mas largas, las primeras LARGO_NOTAS - 1 y '…'."""
+    """Las notas en una sola linea (los saltos y tabuladores pasan a un espacio), con los correos y las series de 7 o
+    mas digitos ocultos (F1, M28: CORREO_OCULTO y NUMERO_OCULTO, ANTES de recortar: nunca queda medio numero) y de
+    LARGO_NOTAS caracteres como maximo: si son mas largas, las primeras LARGO_NOTAS - 1 y '…'."""
     limpias = _ESPACIOS.sub(" ", notas or "").strip()
+    limpias = _SERIE_DE_DIGITOS.sub(NUMERO_OCULTO, _CORREO_EN_NOTAS.sub(_ocultar_correo, limpias))
     return limpias if len(limpias) <= LARGO_NOTAS else limpias[:LARGO_NOTAS - 1] + "…"
 
 
@@ -418,7 +455,9 @@ def _sel_tax_rate(db, con_tarifa_iva, bloquear=False):
         f["tax_rate_original"] = f["tax_rate"]
         f["tax_rate"] = _numero_legible(f["tax_rate"])
         if tarifa not in TARIFAS_QUE_SE_COPIAN:
-            f["queda"] = "sin definir (no es 19 ni 5)"
+            # F1 (M29): el que ya tiene tarifa no «se deja sin definir»: conserva la suya (el UPDATE nunca la toca).
+            f["queda"] = (f"conserva '{f['tarifa_iva']}'" if f["tarifa_iva"] is not None
+                          else "sin definir (no es 19 ni 5)")
             otros.append(f)
         elif f["tarifa_iva"] is not None:
             ya_tienen.append(f)
@@ -460,6 +499,13 @@ def listar_tax_rate(db, excl) -> Listado:
     l.secciones.append(sin_tarifa)
     l.notas.append("Los productos no son parte de la cadena de un documento: este subcomando no lee ni cambia ninguna "
                    "SC, COT ni pedido (las líneas ya guardadas conservan su tarifa).")
+    # F1 (M25): el comando exacto, con los ids copiables de ESTE listado: --aplicar no copia nada que no se haya aprobado.
+    if copiables:
+        ids = ",".join(str(f["id"]) for f in copiables)
+        l.notas.append(f"Para copiar SOLO estos (con el OK del usuario): python scripts/datos_bloque3.py tax_rate "
+                       f"--aplicar --base {base_actual(db)} --ids {ids}")
+    else:
+        l.notas.append("No hay productos copiables: tax_rate --aplicar no tendría nada que copiar.")
     return l
 
 
@@ -501,16 +547,21 @@ def _marcar_no_aplicado(ruta) -> Optional[str]:
 
 
 def aplicar_tax_rate(db, base, carpeta_respaldo=CARPETA_DATOS, ids=None) -> ResultadoAplicar:
-    """Copia products.tax_rate a tarifa_iva (19 -> '19', 5 -> '5') en los productos sin tarifa, SOLO con el OK del
-    usuario. Aborta (ErrorDatos) SIN escribir si `base` no es current_database() o si un id de `ids` no esta entre los
-    que se copiarian. Termina sin escribir, y lo dice, si falta products.tarifa_iva o products.tax_rate. Respaldo JSON
-    antes de escribir, un solo commit y, ante cualquier error, rollback y el respaldo pasa a '...-NO-APLICADO.json'."""
+    """Copia products.tax_rate a tarifa_iva (19 -> '19', 5 -> '5') en los productos sin tarifa de `ids`, SOLO con el OK
+    del usuario. Aborta (ErrorDatos) SIN escribir si `base` no es current_database(), si no vienen `ids` (F1, M25:
+    MENSAJE_FALTA_IDS; sin ids no se copia «lo copiable de ese momento»), si un id de `ids` no esta entre los que se
+    copiarian o si no se puede escribir el respaldo. Termina sin escribir, y lo dice, si falta products.tarifa_iva o
+    products.tax_rate. Respaldo JSON antes de escribir, un solo commit y, ante cualquier error, rollback y el respaldo
+    pasa a '...-NO-APLICADO.json'."""
     res = ResultadoAplicar()
     actual = base_actual(db)
     if base != actual:
         db.rollback()
         raise ErrorDatos(f"--base {base!r} no coincide con la base a la que está conectado el script ({actual!r}): no "
                          f"se escribió nada.")
+    if not ids:
+        db.rollback()
+        raise ErrorDatos(MENSAJE_FALTA_IDS)
     columnas = _columnas(db, "products")
     if "tarifa_iva" not in columnas:
         db.rollback()
@@ -526,8 +577,11 @@ def aplicar_tax_rate(db, base, carpeta_respaldo=CARPETA_DATOS, ids=None) -> Resu
         for i in ids:
             if any(f["id"] == i for f in copiables):
                 continue
-            if any(f["id"] == i for f in otros):
-                faltan.append(f"id {i}: su tax_rate no es 19 ni 5 (se deja sin definir)")
+            otro = next((f for f in otros if f["id"] == i), None)
+            if otro is not None:
+                queda = (f"conserva '{otro['tarifa_iva']}'" if otro["tarifa_iva"] is not None
+                         else "se deja sin definir")
+                faltan.append(f"id {i}: su tax_rate no es 19 ni 5 ({queda})")
             elif any(f["id"] == i for f in ya_tienen):
                 faltan.append(f"id {i}: ya tiene tarifa de IVA (no se toca)")
             else:
@@ -535,12 +589,18 @@ def aplicar_tax_rate(db, base, carpeta_respaldo=CARPETA_DATOS, ids=None) -> Resu
         if faltan:
             db.rollback()
             raise ErrorDatos("tax_rate: no se escribió nada. " + "; ".join(faltan))
-    elegidos = [f for f in copiables if ids is None or f["id"] in set(ids)]
+    elegidos = [f for f in copiables if f["id"] in set(ids)]
     if not elegidos:
         db.rollback()
         res.detalle.append("No hay productos con tax_rate 19 o 5 sin tarifa de IVA: no se escribió nada.")
         return res
-    ruta = _escribir_respaldo_tax_rate(carpeta_respaldo, base, elegidos, _ahora_utc())
+    try:
+        ruta = _escribir_respaldo_tax_rate(carpeta_respaldo, base, elegidos, _ahora_utc())
+    except OSError as exc:
+        # F1 (M31 b): sin respaldo no se escribe nada (y se sueltan los bloqueos del SELECT ... FOR UPDATE).
+        db.rollback()
+        raise ErrorDatos(f"No se pudo escribir el respaldo en {carpeta_respaldo} ({type(exc).__name__}): no se escribió "
+                         f"nada.") from exc
     try:
         for f in elegidos:
             if _copiar_tarifa(db, f["id"], f["tarifa_nueva"]):
@@ -894,13 +954,13 @@ LISTADORES = {"empresa": listar_empresa, "tax_rate": listar_tax_rate, "iva_docum
               "pendientes_sin_seguimiento": listar_pendientes_sin_seguimiento, "notas_cot": listar_notas_cot}
 
 
-def listar(db, subcomando, excluidos=NUMEROS_REALES, solo_lectura=True, excl=None) -> Listado:
-    """El listado de un subcomando. Con solo_lectura (lo normal) corre dentro de SET TRANSACTION READ ONLY y termina con
-    rollback. `excl` son los excluidos ya calculados (listar_todo los calcula una vez)."""
+def listar(db, subcomando, excluidos=NUMEROS_REALES, excl=None) -> Listado:
+    """El listado de un subcomando. Corre SIEMPRE dentro de SET TRANSACTION READ ONLY y termina con rollback (F1, M27:
+    sin la salida solo_lectura=False: --listar no puede escribir ni por error). `excl` son los excluidos ya calculados
+    (listar_todo los calcula una vez)."""
     if subcomando not in LISTADORES:
         raise ErrorDatos(f"Subcomando desconocido: {subcomando!r}")
-    if solo_lectura:
-        iniciar_solo_lectura(db)
+    iniciar_solo_lectura(db)
     try:
         motivo = _faltantes(db, subcomando)
         if motivo:
@@ -908,24 +968,22 @@ def listar(db, subcomando, excluidos=NUMEROS_REALES, solo_lectura=True, excl=Non
         excl = excl if excl is not None else calcular_excluidos(db, excluidos)
         return LISTADORES[subcomando](db, excl)
     finally:
-        if solo_lectura:
-            db.rollback()
+        db.rollback()
 
 
-def listar_todo(db, excluidos=NUMEROS_REALES, solo_lectura=True, subcomandos=SUBCOMANDOS, excl=None) -> list:
-    """Los listados, en el orden de SUBCOMANDOS. Uno que falla no tumba a los demas: queda con su error."""
+def listar_todo(db, excluidos=NUMEROS_REALES, subcomandos=SUBCOMANDOS, excl=None) -> list:
+    """Los listados, en el orden de SUBCOMANDOS, cada uno en su transaccion de solo lectura. Uno que falla no tumba a
+    los demas: queda con su error."""
     if excl is None:
-        if solo_lectura:
-            iniciar_solo_lectura(db)
+        iniciar_solo_lectura(db)
         try:
             excl = calcular_excluidos(db, excluidos)
         finally:
-            if solo_lectura:
-                db.rollback()
+            db.rollback()
     listados = []
     for sub in subcomandos:
         try:
-            listados.append(listar(db, sub, excluidos, solo_lectura, excl=excl))
+            listados.append(listar(db, sub, excluidos, excl=excl))
         except Exception as exc:  # noqa: BLE001 -- se reporta por subcomando y se sigue
             db.rollback()
             listados.append(_nuevo(sub, error=f"{type(exc).__name__}: {exc}"))
@@ -946,6 +1004,8 @@ class _Parser(argparse.ArgumentParser):
         ns = super().parse_args(args, namespace)
         if getattr(ns, "aplicar", False) and not ns.base:
             self.error("--aplicar exige --base <nombre de la base>, igual a current_database()")
+        if getattr(ns, "aplicar", False) and not ns.ids:
+            self.error(MENSAJE_FALTA_IDS)   # F1 (M25)
         return ns
 
 
@@ -960,7 +1020,8 @@ def armar_parser() -> argparse.ArgumentParser:
             modo.add_argument("--aplicar", action="store_true",
                               help="escribe, SOLO con el OK del usuario (con respaldo JSON previo)")
             p.add_argument("--base", help="con --aplicar: nombre de la base; debe ser igual a current_database()")
-            p.add_argument("--ids", type=_lista_de_enteros, help="con --aplicar: solo estos productos (ids por coma)")
+            p.add_argument("--ids", type=_lista_de_enteros,
+                           help="con --aplicar, obligatorio: los ids que el usuario aprobó en el --listar (por coma)")
             p.add_argument("--respaldo", default=str(CARPETA_DATOS), help="carpeta del respaldo JSON")
         else:
             p.add_argument("--listar", action="store_true", required=True, help="solo lectura")
@@ -989,6 +1050,12 @@ def main(argv=None) -> int:
             iniciar_solo_lectura(db)
         base = base_actual(db)
         print(f"SELECT current_database() -> {base}")
+        if base == BASE_PRODUCCION:
+            # F1 (M26): arriba de todo y visible, en stdout y en stderr: la salida trae datos reales.
+            print("!" * 78)
+            print(AVISO_PRODUCCION)
+            print("!" * 78)
+            print(AVISO_PRODUCCION, file=sys.stderr)
         print(f"Fecha (UTC): {datetime.datetime.now(datetime.timezone.utc):%Y-%m-%d %H:%M:%S}")
         if args.listar:
             db.rollback()

@@ -609,3 +609,64 @@ def test_eliminar_permanente_bloquea_la_solicitud_antes_de_revisar_sus_documento
     # El bloqueo va antes que la revision de documentos.
     revision = [i for i, s in enumerate(v.sentencias) if "FROM sales_quotations" in s]
     assert revision and v.sentencias.index(lecturas[0]) < revision[0]
+
+
+# ─── Revisión final del Bloque 3, ronda F1 (M7) ─────────────────────────────────────────────────────────────
+
+def _rastro_de_envios(db, sc):
+    """Una fila de envios_al_cliente (con el WhatsApp y el mensaje del cliente) y una de seguimientos_confirmacion de
+    la SC: las tablas del Bloque 3, sin FK a customer_requests."""
+    from app.models.confirmation import SeguimientoConfirmacion
+    from app.models.envios import EnvioAlCliente
+    ahora = datetime.datetime.utcnow()
+    db.add(EnvioAlCliente(document_type="SC", document_id=sc.id, document_numero=sc.numero, canal="WhatsApp",
+                          destino="+573001234567", mensaje="Hola Cliente Prueba", estado="ENVIADO"))
+    db.add(SeguimientoConfirmacion(document_type="SC", document_id=sc.id, document_numero=sc.numero,
+                                   estado="DETENIDO", iniciado_at=ahora, ultimo_contacto_at=ahora))
+    db.commit()
+
+
+def _cuantos_rastros(db, sc_id):
+    from sqlalchemy import text
+    return tuple(db.execute(text(f"SELECT count(*) FROM {tabla} WHERE document_type = 'SC' AND document_id = :i"),
+                            {"i": sc_id}).scalar() for tabla in ("envios_al_cliente", "seguimientos_confirmacion"))
+
+
+def test_eliminar_para_siempre_borra_tambien_su_rastro_de_envios(app_client, db, admin_token, user_admin):
+    """F1 (M7): eliminar definitivamente una SC (a mano) borra en el mismo commit sus filas de envios_al_cliente y
+    seguimientos_confirmacion: «eliminada definitivamente» ya no deja el WhatsApp ni el mensaje del cliente. Las filas
+    de otra SC no se tocan."""
+    sufijo = uuid.uuid4().hex[:6].upper()
+    sc = _sc(db, f"SC-M7A{sufijo}", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(1))
+    otra = _sc(db, f"SC-M7B{sufijo}", user_admin, estado="CANCELADA", eliminada_at=_hace_dias(1))
+    sc_id = sc.id
+    _rastro_de_envios(db, sc)
+    _rastro_de_envios(db, otra)
+    resp = app_client.delete(f"/api/v1/ventas/solicitudes/{sc_id}/permanente", headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    assert _cuantos_rastros(db, sc_id) == (0, 0)
+    assert _cuantos_rastros(db, otra.id) == (1, 1)
+
+
+def test_la_purga_borra_tambien_el_rastro_de_envios_de_las_que_borra(db, user_admin, contador_sql):
+    """F1 (M7): la purga de la Papelera (la del administrador y la automática) borra las filas de envíos y de
+    seguimiento de las SC que purga, sin hacer commit (lo hace quien la llama); las que conserva quedan con las suyas."""
+    from app.api.v1.erp_ventas import purgar_papelera_vencida
+    sufijo = uuid.uuid4().hex[:6].upper()
+    ahora = datetime.datetime(2030, 1, 31, 12, 0, 0)
+    vencida = _sc(db, f"SC-M7P{sufijo}", user_admin, estado="CANCELADA",
+                  eliminada_at=ahora - datetime.timedelta(days=31))
+    reciente = _sc(db, f"SC-M7R{sufijo}", user_admin, estado="CANCELADA",
+                   eliminada_at=ahora - datetime.timedelta(days=2))
+    vencida_id, vencida_numero = vencida.id, vencida.numero
+    _rastro_de_envios(db, vencida)
+    _rastro_de_envios(db, reciente)
+    with contador_sql.ventana() as v:
+        resultado = purgar_papelera_vencida(db, ahora, "Revisión automática")
+    assert v.commits == 0
+    assert vencida_numero in resultado["numeros"] and reciente.numero not in resultado["numeros"]
+    db.flush()
+    db.expire_all()
+    assert _cuantos_rastros(db, vencida_id) == (0, 0)
+    assert _cuantos_rastros(db, reciente.id) == (1, 1)

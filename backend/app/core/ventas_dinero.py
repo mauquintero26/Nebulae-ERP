@@ -72,12 +72,18 @@ def pesos(valor) -> str:
     return f"{signo}${abs(n):,.0f}".replace(",", ".")
 
 
+def cantidad_es(cantidad) -> str:
+    """Una cantidad para los textos de la Actividad, sin los ceros de Numeric(10, 2) y con coma decimal es-CO: '1',
+    '10', '2,5', '0,33'. Revision final (F1, M44): la UNICA regla; la usan unidades y cambios_documento._qty (los
+    renglones de cambios: 'Rodillo ×2,5')."""
+    return format(Decimal(str(cantidad)).normalize(), "f").replace(".", ",")
+
+
 def unidades(cantidad) -> str:
-    """Una cantidad en los textos de la Actividad, sin los ceros de Numeric(10, 2) y con coma decimal es-CO:
-    '1 unidad', '10 unidades', '2,5 unidades', '0,33 unidades' (B3 T4, ronda r2). La usan COMPRA_REVISAR (erp_ventas) y
-    LINEA_CANCELADA (erp_ventas_fase4). cambios_documento._qty todavia escribe las cantidades con punto ('×2.5')."""
+    """Una cantidad con su palabra: '1 unidad', '10 unidades', '2,5 unidades', '0,33 unidades' (B3 T4, ronda r2;
+    cantidad_es). La usan COMPRA_REVISAR (erp_ventas) y LINEA_CANCELADA (erp_ventas_fase4)."""
     q = Decimal(str(cantidad)).normalize()
-    texto = format(q, "f").replace(".", ",")
+    texto = cantidad_es(q)
     return f"{texto} unidad" if q == 1 else f"{texto} unidades"
 
 

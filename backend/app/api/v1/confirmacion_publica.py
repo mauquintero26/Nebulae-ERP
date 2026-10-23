@@ -436,8 +436,11 @@ def _cambios_en_cotizacion_temprana(db: Session, sc, cot, tipo: str, comentario,
     cambiar de estado: una en Borrador solo recibe un renglón, y bloquearla podría cruzarse con update_cotizacion, que
     bloquea la COT antes que su SC al cambiarle la solicitud.
     Con el envío de la COT: el PRIMER envío (Borrador o Enviada) bloquea la COT y después su SC (T6 r1), así que no
-    corre en medio de este cambio. El REENVÍO de una COT ya pendiente (B3 T7, C13) NO bloquea la SC (evita el ciclo
-    COT -> SC frente a este SC -> COT): a los dos los ordena el bloqueo de la COT. Si el reenvío llega primero, este
+    corre en medio de este cambio; y, ya con la SC bloqueada, si la marca de cambios de la SC sigue vigente responde 409
+    sin enviar nada (F1, M1): si llega justo después de este cambio (esperaba el bloqueo) o desde una página vieja, la
+    COT temprana no sale hasta que el asesor responda (reenviar la SC borra la marca). El REENVÍO de una COT ya
+    pendiente (B3 T7, C13) NO bloquea la SC (evita el ciclo COT -> SC frente a este SC -> COT): a los dos los ordena el
+    bloqueo de la COT. Si el reenvío llega primero, este
     refresh espera su commit y la revocación de abajo, que corre después del refresh con una foto nueva, también anula
     el enlace que el reenvío acaba de crear; si este llega primero, el reenvío espera y relee la COT en Borrador: con
     reenvio=true (el botón «Reenviar») responde 409 sin tocar nada (T7 r1)."""

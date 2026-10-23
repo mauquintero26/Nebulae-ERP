@@ -323,12 +323,14 @@ def nombre_asesor_publico(db: Session, valor):
     el email o el username de algún User (nombre_para_mostrar.es_de_un_usuario); si no, el texto sin los espacios de los
     bordes. T20b: es la regla de advisor_name dentro de asesor_publico, el único resolvedor que usan los documentos.
     T20 r2 (M14): la comparación con User.email es defensiva (todo correo lleva '@', que ya se descartó): cubre un email
-    viejo guardado sin '@'."""
+    viejo guardado sin '@'. F1 (M36): la misma clave que el nombre para mostrar (nombre_para_mostrar.clave_publica: NFKC
+    y casefold), así la arroba de ancho completo o un usuario escrito en ancho completo tampoco salen."""
     texto = _texto(valor)
-    if texto is None or "@" in texto:
+    if texto is None:
         return None
-    from app.core.nombre_para_mostrar import es_de_un_usuario
-    return None if es_de_un_usuario(db, texto.casefold()) else texto
+    from app.core.nombre_para_mostrar import clave_publica, es_de_un_usuario
+    clave = clave_publica(texto)
+    return None if "@" in clave or es_de_un_usuario(db, clave) else texto
 
 
 def asesor_publico(db: Session, sc):
@@ -630,7 +632,9 @@ def _cambio_el_cliente_despues(db: Session, entity_type: str, doc_id: int, desde
       el renglón de cambios no registró la identidad) o extra_data[MARCA_CLIENTE_CAMBIADO] en el renglón obligatorio de
       PATCH /solicitudes/{id}/cliente. Los dos van en el commit del cambio. T20 r3 (M0): la COT también lo lleva
       (extra_data[MARCA_CLIENTE_CAMBIADO] en el commit principal de update_cotizacion, de PATCH /cliente y del
-      cambio de cliente de su SC). Un cambio de solo la ficha se ve solo por este marcador.
+      cambio de cliente de su SC). Un cambio de solo la ficha se ve solo por este marcador. F1 (M39, C.1): en
+      update_cotizacion, sin un enlace vivo que anular, el renglón del marcador (acción ACCION_CLIENTE_CAMBIADO) solo se
+      escribe si la COT tuvo algún enlace: sin enlaces anteriores no hay nada que esconder.
     T20 r2 (M4, M8): la misma señal para la SC y la COT; ya no depende del texto de un aviso (_ENLACE_COT_ANULADO) ni de
     que hubiera un enlace vivo que revocar.
     La usan _confirmada (regla d: esconde el resumen y ¿Qué sigue?) y, desde T20 (M2), estado_enlace, que con ella
@@ -710,7 +714,8 @@ def estado_enlace(db: Session, info, doc, tipo) -> tuple:
       d) documento CONFIRMADA (la SC también en un estado heredado de U15) -> 'confirmada' (ver _confirmada);
       e) vencido sin usar -> 'vencido', con documento = {numero};
       T20 (M2): si la Actividad del documento registra un cambio de cliente posterior a ESTE enlace
-         (_cambio_el_cliente_despues: un renglón de cambios con un dato de identidad o el marcador obligatorio de la SC)
+         (_cambio_el_cliente_despues: un renglón de cambios con un dato de identidad o el marcador obligatorio de la SC
+         o la COT)
          -> 'no_disponible', antes de f, g y h: al cliente anterior no se le dice que hay un enlace más reciente, que
          ya envió cambios ni que el documento se actualizó (todo eso es del cliente nuevo). Si ese renglón auxiliar no
          se escribió y no hay marcador, no lo detecta y sigue la regla f;
