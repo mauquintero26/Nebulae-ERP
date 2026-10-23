@@ -1238,6 +1238,26 @@ def test_verificar_marca_fallido_y_explica_el_motivo(app_client, db, admin_token
     assert len(fake.llamadas) == n and len(_renglones(db, "SC", sc.id, "MENSAJE_CLIENTE")) == 1
 
 
+def test_el_que_hacer_de_un_whatsapp_fallido_es_el_mismo_en_los_tres_documentos(app_client, db, admin_token,
+                                                                                  user_admin, monkeypatch):
+    """F3 (M1): el renglón «Qué hacer» de un WhatsApp FALLIDO nombra el botón que de verdad existe en las pantallas
+    («Reenviar al cliente», TEXTO_REENVIAR_AL_CLIENTE) y es el mismo texto para la SC, la COT y el PVEN. Antes la SC y la
+    COT decían «Reenviar enlace de confirmación», un botón que F2 (M9/M22) quitó."""
+    que_hacer = "Usa «Reenviar al cliente» y mándalo por otro medio."
+    _preparar(monkeypatch, db, _mensajes(
+        {"id": 901, "status": "failed", "content_attributes": {"external_error": "131047: Re-engagement message"}}))
+    sc = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")
+    cot = _cot(db, estado="PENDIENTE_CONFIRMACION")
+    so = _pven(db)
+    for tipo, doc, entidad in (("SC", sc, "SC"), ("COT", cot, "COT"), ("PVEN", so, "VEN")):
+        envio = _envio_guardado(db, doc, tipo=tipo)
+        resp = _verificar(app_client, admin_token, envio.id)
+        assert resp.status_code == 200, (tipo, resp.text)
+        assert resp.json()["data"]["estado"] == "FALLIDO", tipo
+        [renglon] = _renglones(db, entidad, doc.id, "MENSAJE_CLIENTE")
+        assert renglon.extra_data["cambios"][2] == {"etiqueta": "Qué hacer", "despues": que_hacer}, tipo
+
+
 def test_verificar_entregado(app_client, db, admin_token, user_admin, vendedor_token, monkeypatch):
     fake = _preparar(monkeypatch, db, _mensajes({"id": 901, "status": "delivered"}))
     sc = _sc(db, user_admin, estado="PENDIENTE_CONFIRMACION")

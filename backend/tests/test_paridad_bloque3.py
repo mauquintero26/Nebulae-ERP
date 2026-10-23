@@ -617,6 +617,21 @@ def test_paridad_textos_whatsapp():
     assert espejo["entrega"] == [[f"Le llegó al cliente. {t}", f"El cliente ya lo leyó. {t}"] for t in fallidas]
 
 
+def test_paridad_los_textos_del_servidor_nombran_el_boton_real():
+    """F3 (M1, M8): el 409 del primer envío («Ya se le envió al cliente; usa «…».») y el «Qué hacer» de un WhatsApp
+    FALLIDO nombran el botón con TEXTO_REENVIAR_AL_CLIENTE, el rótulo que de verdad tienen las pantallas. Si el
+    frontend cambia el rótulo, esta prueba avisa antes de que el servidor siga nombrando un botón que no existe."""
+    from app.api.v1 import erp_ventas
+    from app.core import envio_whatsapp
+    espejo = _node("envio-whatsapp.js", "({ reenviar: m.TEXTO_REENVIAR_AL_CLIENTE })")
+    boton = f"«{espejo['reenviar']}»"
+    assert boton == "«Reenviar al cliente»"
+    assert boton in erp_ventas._YA_ENVIADO_USA_REENVIAR, erp_ventas._YA_ENVIADO_USA_REENVIAR
+    assert erp_ventas._YA_ENVIADO_USA_REENVIAR == f"Ya se le envió al cliente; usa {boton}."
+    assert boton in envio_whatsapp._QUE_HACER, envio_whatsapp._QUE_HACER
+    assert not hasattr(envio_whatsapp, "_QUE_HACER_POR_DEFECTO")  # un solo texto para los tres documentos
+
+
 def test_paridad_acciones_bloque3_con_el_backend():
     """RP22: el backend solo escribe la action y ACCIONES_BLOQUE3 trae una entrada por cada una, con el mismo codigo.
     Ronda r1: tambien CLIENTE_CAMBIADO (cambios_documento, T5 r2)."""

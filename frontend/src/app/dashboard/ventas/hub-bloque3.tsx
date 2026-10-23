@@ -3,6 +3,7 @@ import { FileText, Percent, ToggleLeft, ToggleRight } from 'lucide-react';
 import { accionBloque3 } from '@/lib/acciones-bloque3';
 import { TARIFAS_IVA } from '@/lib/iva';
 import { DIAS_VALIDEZ_COTIZACION } from '@/lib/listas-ventas';
+import { TEXTO_REENVIAR_AL_CLIENTE } from '@/lib/envio-whatsapp';
 
 // B3 T16: piezas nuevas del Hub de Ventas (ventas/page.tsx) para que page.tsx, que está en máxima protección (R15), solo
 // las cablee: las secciones «Documentos para el cliente» e «IVA» del ConfigPanel (C23), los campos que comparten con
@@ -151,7 +152,7 @@ type PropsSeccion = {
 export function SeccionDocumentosCliente({ cfg, onCambio, soloLectura }: PropsSeccion) {
   return (
     <SeccionConfig titulo="Documentos para el cliente" icono={FileText} tono="blue"
-      descripcion="La cotización que recibe el cliente dice hasta cuándo es válida, y su enlace sirve hasta ese día. «Reenviar al cliente» renueva la validez; el recordatorio no.">
+      descripcion={`La cotización que recibe el cliente dice hasta cuándo es válida, y su enlace sirve hasta ese día. «${TEXTO_REENVIAR_AL_CLIENTE}» renueva la validez; el recordatorio no.`}>
       <CampoNumero etiqueta="Días de validez de una cotización" ayuda={`De ${DIAS_VALIDEZ_COTIZACION.minimo} a ${DIAS_VALIDEZ_COTIZACION.maximo} días.`}
         valor={cfg.dias_validez_cotizacion} min={DIAS_VALIDEZ_COTIZACION.minimo} max={DIAS_VALIDEZ_COTIZACION.maximo}
         sufijo="días" onCambio={v => onCambio('dias_validez_cotizacion', v)} deshabilitado={soloLectura} />

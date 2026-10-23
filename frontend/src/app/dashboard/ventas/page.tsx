@@ -170,10 +170,13 @@ function ActivitiesPanel({row,onClose,onNotaGuardada}:{row:any,onClose:()=>void,
       {loading?(
         <div className="flex items-center justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"/></div>
       ):errorCarga!==null?(
-        <div role="alert" className="text-center space-y-3 py-8">
+        <div className="text-center space-y-3 py-8">
           <AlertTriangle size={28} className="mx-auto text-rose-400"/>
-          <p className="text-sm font-bold text-slate-700">No se pudo cargar la actividad.</p>
-          {errorCarga&&<p className="text-xs text-slate-500">{errorCarga}</p>}
+          {/* F3 (M6): la región viva envuelve solo los textos; el botón «Reintentar» queda fuera. */}
+          <div role="alert" className="space-y-3">
+            <p className="text-sm font-bold text-slate-700">No se pudo cargar la actividad.</p>
+            {errorCarga&&<p className="text-xs text-slate-500">{errorCarga}</p>}
+          </div>
           <Button variant="secondary" size="sm" icon={RefreshCw} onClick={reintentar}>Reintentar</Button>
         </div>
       ):(
@@ -753,7 +756,15 @@ export default function VentasHub() {
       setCanalHub(null);
       loadData();
     }catch(err:any){
-      // La ventana del canal sigue abierta: se puede elegir otro canal o cancelar.
+      // F3 (M3): con el 409 de la bandera (otro asesor o pestaña ya la envió: «Ya se le envió al cliente…») la ventana ya
+      // no aplica: se cierra y el tablero se recarga en silencio; si no, la tarjeta seguía en su columna vieja y cada
+      // «Enviar» repetía el 409. Con cualquier otro error la ventana del canal sigue abierta: se puede elegir otro canal
+      // o cancelar. El toast con el mensaje del servidor sale en los dos casos.
+      if(err?.status === 409){
+        setEnvioHub(null);
+        setCanalHub(null);
+        loadData({silencioso: true});
+      }
       setToast({msg: 'No se pudo enviar para confirmación: ' + (err?.message || (tipo === 'COT'
         ? 'la cotización necesita precios calculados primero.' : 'la solicitud necesita un asesor asignado primero.')), type: 'error'});
     }

@@ -653,4 +653,22 @@ console.log('--- Revisión final B3 (F2, M47): la nota ámbar del nombre sin con
   assert.ok(modal.includes('aviso={<AvisoNombreSinContacto documento={envioHub.detalle} />}'), 'el ChannelModal la recibe');
 }
 
+console.log('--- Revisión final B3 (F3, M3): tras el 409 de la bandera, el Hub cierra la ventana del canal y recarga ---');
+{
+  const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const confirmar = hub.slice(hub.indexOf('async function confirmarEnvioHub('), hub.indexOf('// KPIs con contexto'));
+  const captura = confirmar.slice(confirmar.indexOf('}catch(err:any){'), confirmar.indexOf('setEnviandoHub(false);'));
+  assert.ok(captura.length > 0 && captura.includes('setToast('), 'se encontró el catch de confirmarEnvioHub');
+  // Con el 409 («Ya se le envió al cliente…»: otro asesor o pestaña la envió): la ventana se cierra y el tablero se
+  // recarga en silencio (la tarjeta sigue en su columna vieja hasta recargar y cada «Enviar» repetiría el 409).
+  const en409 = captura.match(/if\s*\(\s*err\?\.status === 409\s*\)\s*\{([\s\S]*?)\n\s*\}\n/);
+  assert.ok(en409, 'el catch distingue el 409');
+  assert.ok(en409[1].includes('setEnvioHub(null);'), '409: cierra la ventana del envío');
+  assert.ok(en409[1].includes('setCanalHub(null);'), '409: olvida el canal elegido');
+  assert.ok(en409[1].includes('loadData({silencioso: true});'), '409: recarga el tablero en silencio');
+  // El toast con el mensaje del servidor sigue saliendo, con 409 o con cualquier otro error.
+  assert.ok(captura.indexOf("setToast({msg: 'No se pudo enviar para confirmación: '") > captura.indexOf('setEnvioHub(null);'),
+    'el toast sale para todos los errores');
+}
+
 console.log('OK test_hub_ventas.mjs');

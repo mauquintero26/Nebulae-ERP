@@ -514,7 +514,7 @@ def test_el_renglon_del_cambio_de_cliente_de_la_cot_dice_lo_que_paso(app_client,
     assert renglon.id < de_cambios.id  # el marcador va en el commit principal; el renglón de cambios, después
 
 
-YA_ENVIADA = "Ya se le envió al cliente; usa «Reenviar»."
+YA_ENVIADA = "Ya se le envió al cliente; usa «Reenviar al cliente»."  # F3 (M8): el botón real
 
 
 def test_primer_envio_de_una_cot_que_ya_se_envio_da_409(app_client, db, admin_token, monkeypatch):

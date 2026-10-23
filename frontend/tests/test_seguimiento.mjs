@@ -16,7 +16,8 @@ import {
   lineaSeguimientoEnlace, accionDetenerSeguimiento, configSeguimientoInicial, avisoDiasSeguimiento, opcionesHora,
   etiquetaHora, esAdminOAsesor, errorConfigSeguimiento,
 } from '../src/lib/seguimiento.js';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { sep } from 'node:path';
 
 const LUNES_9AM = '2026-10-05T14:00:00Z'; // lunes 5 de octubre, 9:00 a. m. en Colombia
 const MIERCOLES_3PM = '2026-10-07T20:00:00Z'; // miércoles 7 de octubre, 3:00 p. m.
@@ -418,6 +419,8 @@ function regionesVivas(fuente) {
 console.log('--- TEST 17 (F2, M15): las regiones vivas no envuelven botones ---');
 {
   assert.deepEqual(regionesVivas('<div role="status"><p>a</p><div>b</div></div><button>x</button>'), ['<p>a</p><div>b</div>']);
+  // F3 (M6): el componente Button también cuenta, no solo <button>.
+  assert.deepEqual(regionesVivas('<div role="alert"><p>a</p><Button>r</Button></div>'), ['<p>a</p><Button>r</Button>']);
   for (const ruta of ['app/dashboard/ventas/seguimiento.tsx', 'app/dashboard/ventas/ventana-enlace.tsx']) {
     const regiones = regionesVivas(leer(ruta));
     assert.ok(regiones.length > 0, `${ruta}: tiene regiones vivas`);
@@ -426,6 +429,25 @@ console.log('--- TEST 17 (F2, M15): las regiones vivas no envuelven botones ---'
   // Los botones siguen ahí, fuera de la región.
   assert.ok(leer('app/dashboard/ventas/seguimiento.tsx').includes('No enviar recordatorios'));
   assert.ok(leer('app/dashboard/ventas/ventana-enlace.tsx').includes('Volver a revisar'));
+
+  // F3 (M6): la regla vale para TODOS los .tsx de dashboard/ventas (antes solo esos dos; quedaban el «Reintentar» de la
+  // Actividad del Hub, role="alert" sobre el contenedor, y el «Cerrar aviso» del aviso H40 de la COT, role="status").
+  const raiz = new URL('../src/app/dashboard/ventas/', import.meta.url);
+  const tsx = readdirSync(raiz, { recursive: true }).map((f) => String(f).split(sep).join('/'))
+    .filter((f) => f.endsWith('.tsx')).sort();
+  for (const esperado of ['seguimiento.tsx', 'ventana-enlace.tsx', 'page.tsx', 'cotizacion/[id]/page.tsx', 'solicitud/[id]/page.tsx']) {
+    assert.ok(tsx.includes(esperado), `se recorre ${esperado}`);
+  }
+  let vivas = 0;
+  for (const ruta of tsx) {
+    const regiones = regionesVivas(leer(`app/dashboard/ventas/${ruta}`));
+    vivas += regiones.length;
+    for (const region of regiones) assert.doesNotMatch(region, /<button\b|<Button\b/, `${ruta}: sin botones dentro de una región viva`);
+  }
+  assert.ok(vivas >= 10, `se leyeron las regiones vivas de ventas (${vivas})`);
+  // Los dos arreglos: el aviso H40 lleva el role en su texto y la Actividad del Hub, en el bloque de textos.
+  assert.match(leer('app/dashboard/ventas/cotizacion/[id]/page.tsx'), /<p role="status" className="flex-1 text-sm font-bold text-amber-800">\{avisoAnulada\}<\/p>/);
+  assert.ok(leer('app/dashboard/ventas/page.tsx').includes('No se pudo cargar la actividad.'));
 }
 
 console.log('--- TEST 18 (F2, M53): un solo enteroConfig (el de listas-ventas.js); el local es enteroDeTexto ---');

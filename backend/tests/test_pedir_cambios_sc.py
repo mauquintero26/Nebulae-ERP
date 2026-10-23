@@ -797,6 +797,34 @@ def test_cuerpo_sin_content_length_tambien_se_corta(app_client, db, admin_token,
     assert _fila(db, raw)["used_at"] is None
 
 
+def test_el_webhook_de_chatwoot_con_un_cuerpo_chunked_grande_da_413(app_client):
+    """F3 (M2): /api/v1/chat/webhook/chatwoot lee el cuerpo con request.json() dentro de un try. Sin Content-Length
+    (chunked) y pasando los 5 MB, el _CuerpoDemasiadoGrande de receive_con_tope caía en el `except Exception` y la
+    respuesta era un 200 {"status": "error", "detail": "Invalid JSON"} en vez del 413. Ahora el 413 sale (con su detail y
+    sus encabezados CORS); un JSON roto sigue dando el 200 de siempre y uno chico y válido llega al handler."""
+    ruta = "/api/v1/chat/webhook/chatwoot"
+    cabeceras = {"Content-Type": "application/json", "Origin": ORIGEN}
+
+    def trozos(mb):
+        yield b'{"event": "conversation_updated", "relleno": "'
+        for _ in range(mb * 16):  # trozos de 64 KB: mb * 1 MB
+            yield b"x" * 65536
+        yield b'"}'
+
+    for mb, esperado in ((6, 413), (4, 200)):
+        resp = app_client.post(ruta, content=trozos(mb), headers=cabeceras)
+        assert "content-length" not in {k.lower() for k in resp.request.headers}, resp.request.headers
+        assert resp.status_code == esperado, (mb, resp.status_code, resp.text[:200])
+        if esperado == 413:
+            assert resp.json() == {"detail": MENSAJE_413}
+            assert resp.headers.get("access-control-allow-origin") == ORIGEN
+        else:
+            assert resp.json() == {"status": "ignored", "event": "conversation_updated"}
+    # Un JSON roto (poco a poco, sin pasar el tope) sigue siendo el 200 de siempre, no un 500 ni un 413.
+    resp = app_client.post(ruta, content=iter([b'{"event": ', b"no es json"]), headers=cabeceras)
+    assert resp.status_code == 200 and resp.json() == {"status": "error", "detail": "Invalid JSON"}, resp.text
+
+
 def test_un_pedido_de_cambios_normal_sigue_pasando_el_tope(app_client, db, admin_token, user_admin, monkeypatch):
     """T20 (M19): 1000 emojis (el máximo del comentario, 4 bytes cada uno en UTF-8 y 12 como escape JSON) caben de
     sobra en los 64 KB."""
@@ -844,7 +872,7 @@ def test_el_tope_de_cuerpo_mira_la_ruta_sin_root_path():
 
 RECARGA_SC = ("La solicitud cambió mientras la reenviabas (el cliente pidió cambios o la editaron). Recarga la "
               "página.")
-YA_ENVIADA = "Ya se le envió al cliente; usa «Reenviar»."
+YA_ENVIADA = "Ya se le envió al cliente; usa «Reenviar al cliente»."  # F3 (M8): el botón real
 
 
 def _enviar_sc(app_client, admin_token, sc, **body):
@@ -858,7 +886,7 @@ def _tokens_sc(db, sc_id):
 
 
 def test_reenvio_de_la_sc_con_una_pagina_vieja_da_409(app_client, db, admin_token, user_admin, monkeypatch):
-    """F1 (C0): el botón «Reenviar enlace de confirmación» manda reenvio=true. Si la SC ya no está en Pendiente por
+    """F1 (C0): el botón «Reenviar al cliente» de la SC manda reenvio=true. Si la SC ya no está en Pendiente por
     confirmación (el cliente pidió cambios con la página abierta), 409 sin tocar enlaces, estado, marca ni seguimiento.
     Con la SC pendiente, reenvio=true es el reenvío de siempre."""
     llamadas = _correo_falso(monkeypatch)

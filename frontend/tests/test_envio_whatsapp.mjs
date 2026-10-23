@@ -17,7 +17,7 @@ import {
   formularioEnvioWhatsApp, cuerpoEnvioWhatsApp, hayCambiosWhatsApp, MENSAJE_WHATSAPP_SIN_GUARDAR,
   estadoEnvioParaCanal, lineaWhatsAppCanal, NOTA_REENVIO_ENLACE,
   botonEnvioPedido, envioIncierto, pedidoSeEnvio, AVISO_PEDIDO_SI_SE_ENVIO, AVISO_WHATSAPP_NO_SE_ABRIO, avisoEnvioIncierto,
-  TEXTO_ENVIAR_AL_CLIENTE, TEXTO_REENVIAR_AL_CLIENTE, banderaReenvio, envioYaNoAplica,
+  TEXTO_ENVIAR_AL_CLIENTE, TEXTO_REENVIAR_AL_CLIENTE, banderaReenvio, envioYaNoAplica, esReenvioDelEstado,
 } from '../src/lib/envio-whatsapp.js';
 import { avisoCorreo } from '../src/lib/aviso-correo.js';
 import { readFileSync } from 'node:fs';
@@ -539,7 +539,8 @@ console.log('--- Revisión final B3 (F2, M0 y M9/M22): la bandera del envío y u
   assert.equal(TEXTO_ENVIAR_AL_CLIENTE, 'Enviar al cliente');
   assert.equal(TEXTO_REENVIAR_AL_CLIENTE, 'Reenviar al cliente');
   // M0: la bandera del POST …/enviar-confirmacion siempre va: true solo desde «Reenviar al cliente»; el primer envío
-  // manda false (el servidor responde 409 «Ya se le envió al cliente; usa «Reenviar».» si el documento ya espera).
+  // manda false (el servidor responde 409 «Ya se le envió al cliente; usa «Reenviar al cliente».» si el documento ya
+  // espera).
   assert.deepEqual(banderaReenvio(true), { reenvio: true });
   for (const v of [false, undefined, null, 'true', 1]) assert.deepEqual(banderaReenvio(v), { reenvio: false }, String(v));
   // Tras el 409, la recarga dice si la ventana ya no aplica (se cierra): se abrió para reenviar y el documento ya no
@@ -596,6 +597,47 @@ console.log('--- Revisión final B3 (F2, M0 y M9/M22): la bandera del envío y u
     assert.doesNotMatch(fuente, /Re-enviar|Reenviar enlace de confirmación|Enviar al Cliente/, `${ruta}: sin la grafía vieja`);
     assert.doesNotMatch(fuente, /['>]\s*(Enviar|Reenviar) al cliente\s*['<]/, `${ruta}: el rótulo sale de la lib`);
   }
+}
+
+console.log('--- Revisión final B3 (F3, M4, M5 y M8): la regla del reenvío de la SC en la lib, la nota de la ventana y la ayuda del Hub ---');
+{
+  // M4: «¿abrir la ventana con el documento en este estado es un reenvío?» es una sola regla, en la lib: sí cuando el
+  // documento ya espera al cliente. La SC la usa para la bandera del POST y envioYaNoAplica para saber si la ventana
+  // sigue aplicando (antes la SC la tenía escrita aparte en el .tsx).
+  assert.equal(esReenvioDelEstado('PENDIENTE_CONFIRMACION'), true);
+  const estados = ['ASIGNADA', 'BORRADOR', 'CONFIRMADA', 'ENVIADA', 'CANCELADA', 'pendiente_confirmacion', ' PENDIENTE_CONFIRMACION', ''];
+  for (const e of [...estados, null, undefined, 5, {}, ['PENDIENTE_CONFIRMACION']]) assert.equal(esReenvioDelEstado(e), false, String(e));
+  for (const e of ['PENDIENTE_CONFIRMACION', ...estados]) {
+    for (const reenviando of [true, false]) {
+      assert.equal(envioYaNoAplica(reenviando, e), esReenvioDelEstado(e) !== reenviando, `${e} con reenviando=${reenviando}`);
+    }
+  }
+  const lib = readFileSync(new URL('../src/lib/envio-whatsapp.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const inicioYaNoAplica = lib.indexOf('export function envioYaNoAplica(');
+  const cuerpoYaNoAplica = lib.slice(inicioYaNoAplica, lib.indexOf('\n}\n', inicioYaNoAplica));
+  assert.ok(cuerpoYaNoAplica.includes('esReenvioDelEstado(estadoFresco)'), 'envioYaNoAplica usa la regla de la lib');
+  assert.ok(!cuerpoYaNoAplica.includes("'PENDIENTE_CONFIRMACION'"), 'envioYaNoAplica sin el estado escrito a mano');
+
+  const leer = (ruta) => readFileSync(new URL(`../src/app/dashboard/ventas/${ruta}`, import.meta.url), 'utf8')
+    .replace(/\r\n/g, '\n');
+  const codigo = (fuente) => fuente.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const sc = leer('solicitud/[id]/page.tsx');
+  const cot = leer('cotizacion/[id]/page.tsx');
+  assert.ok(sc.includes('setReenviandoSc(esReenvioDelEstado(solicitud.estado));'), 'SC: la bandera sale de la regla de la lib');
+  assert.ok(/import \{[^}]*\besReenvioDelEstado\b[^}]*\} from '@\/lib\/envio-whatsapp';/.test(sc), 'SC importa esReenvioDelEstado');
+  assert.doesNotMatch(codigo(sc), /setReenviandoSc\(solicitud\.estado ===/, 'SC: sin la regla escrita a mano');
+
+  // M5: la nota de la ventana («Se crea un enlace nuevo…») sale de la misma bandera que el POST (reenviandoSc, fijada
+  // al abrir la ventana), no del estado vivo; la COT ya lo hacía con `reenviando`.
+  assert.ok(sc.includes('nota={reenviandoSc ? NOTA_REENVIO_ENLACE : undefined}'), 'SC: la nota sale de reenviandoSc');
+  assert.doesNotMatch(codigo(sc), /nota=\{solicitud\?\.estado/, 'SC: la nota no sale del estado vivo');
+  assert.ok(cot.includes('nota={reenviando ? NOTA_REENVIO_ENLACE : undefined}'), 'COT: la nota sale de reenviando');
+
+  // M8: la ayuda de «Documentos para el cliente» del Hub nombra el botón con la constante, no a mano.
+  const bloque3 = leer('hub-bloque3.tsx');
+  assert.ok(/import \{[^}]*\bTEXTO_REENVIAR_AL_CLIENTE\b[^}]*\} from '@\/lib\/envio-whatsapp';/.test(bloque3), 'Hub: importa la constante');
+  assert.ok(bloque3.includes('«${TEXTO_REENVIAR_AL_CLIENTE}» renueva la validez'), 'Hub: la ayuda interpola el rótulo');
+  assert.doesNotMatch(codigo(bloque3), /Reenviar al cliente/, 'Hub: sin el rótulo escrito a mano');
 }
 
 console.log('OK test_envio_whatsapp.mjs');

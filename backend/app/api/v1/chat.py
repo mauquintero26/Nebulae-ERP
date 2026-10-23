@@ -9,6 +9,7 @@ from app.api.dependencies import require_roles, ROLE_ADMIN, ROLE_FINANZAS, ROLE_
 from app.core.security import SECRET_KEY, ALGORITHM
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query, status, Request
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from app.db.database import get_db
@@ -1258,6 +1259,10 @@ async def chatwoot_webhook(request: Request, db: Session = Depends(get_db)):
     """
     try:
         body = await request.json()
+    except StarletteHTTPException:
+        # F3 (M2): el 413 del tope de cuerpo (core/limite_cuerpo: _CuerpoDemasiadoGrande, sin Content-Length y pasando los
+        # 5 MB) sale tal cual; antes caia en el `except Exception` y se volvia un 200 «Invalid JSON».
+        raise
     except Exception:
         return {"status": "error", "detail": "Invalid JSON"}
 

@@ -425,7 +425,7 @@ export const TEXTO_REENVIAR_AL_CLIENTE = 'Reenviar al cliente';
  * «Reenviar al cliente» (el documento espera al cliente); el primer envío manda false. El servidor
  * (_exigir_bandera_de_reenvio) responde 409 si no coincide con lo que ve: un reenvío de un documento que ya no espera
  * (el cliente pidió cambios o lo editaron) o un primer envío de uno que ya espera («Ya se le envió al cliente; usa
- * «Reenviar».»: otra pestaña, otro asesor, el Hub y el detalle). Sin la clave el servidor no revisaría nada.
+ * «Reenviar al cliente».»: otra pestaña, otro asesor, el Hub y el detalle). Sin la clave el servidor no revisaría nada.
  * @param {unknown} reenviando
  * @returns {{reenvio: boolean}}
  */
@@ -443,7 +443,19 @@ export function banderaReenvio(reenviando) {
  */
 export function envioYaNoAplica(reenviando, estadoFresco) {
   if (typeof estadoFresco !== 'string') return false;
-  return (estadoFresco === 'PENDIENTE_CONFIRMACION') !== (reenviando === true);
+  return esReenvioDelEstado(estadoFresco) !== (reenviando === true);
+}
+
+/**
+ * F3 (M4): la regla de la SC para la bandera: abrir la ventana de envío con el documento en `estado` es un REENVÍO si
+ * ya espera al cliente (PENDIENTE_CONFIRMACION). La SC la usa al abrir la ventana (handleEnviarParaConfirmacion fija
+ * reenviandoSc con ella) y envioYaNoAplica, para saber si la ventana sigue aplicando tras el 409. La COT no la usa:
+ * allí decide el botón que abrió la ventana.
+ * @param {unknown} estado el estado del documento tal como lo ve la pantalla
+ * @returns {boolean}
+ */
+export function esReenvioDelEstado(estado) {
+  return estado === 'PENDIENTE_CONFIRMACION';
 }
 
 // ─── El envío del pedido al cliente (B3 T19: U23 punto 7) ─────────────────────────────────────────────────────────

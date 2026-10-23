@@ -134,8 +134,9 @@ _TEXTOS_ESTADO = {
 }
 _DESCRIPCION_ENTREGA = {"ENTREGADO": "El WhatsApp le llegó al cliente", "LEIDO": "El cliente leyó el WhatsApp",
                         "FALLIDO": "El WhatsApp no le llegó al cliente"}
-_QUE_HACER = {"PVEN": "Usa «Reenviar al cliente» y mándalo por otro medio."}
-_QUE_HACER_POR_DEFECTO = "Usa «Reenviar enlace de confirmación» y mándalo por otro medio."
+# F3 (M1): un solo texto para la SC, la COT y el PVEN; nombra el botón con el rótulo de las pantallas
+# (TEXTO_REENVIAR_AL_CLIENTE de envio-whatsapp.js; test_paridad_bloque3 lo compara).
+_QUE_HACER = "Usa «Reenviar al cliente» y mándalo por otro medio."
 
 _ERRORES_WHATSAPP = {
     "131047": "pasaron más de 24 horas desde el último mensaje del cliente y no se usó una plantilla aprobada",
@@ -661,7 +662,7 @@ def _renglon_de_entrega(envio: EnvioAlCliente, user_name) -> ActivityLog:
         cambios = [numero]
     elif envio.estado == "FALLIDO":
         cambios = [numero, {"etiqueta": "Motivo", "despues": traducir_error_whatsapp(envio.detalle)},
-                   {"etiqueta": "Qué hacer", "despues": _QUE_HACER.get(envio.document_type, _QUE_HACER_POR_DEFECTO)}]
+                   {"etiqueta": "Qué hacer", "despues": _QUE_HACER}]
     return ActivityLog(
         entity_type=_ENTIDAD_ACTIVIDAD[envio.document_type], entity_id=envio.document_id,
         entity_numero=(envio.document_numero or "")[:30], action=ACCION_MENSAJE_CLIENTE,

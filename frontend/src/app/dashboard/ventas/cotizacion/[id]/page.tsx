@@ -1132,9 +1132,10 @@ function CotizacionDetalleContent() {
 
                   {/* H40: después de anular la confirmación del cliente al re-cotizar. */}
                   {avisoAnulada && (
-                    <div role="status" className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                    <div className="flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 p-4">
                       <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
-                      <p className="flex-1 text-sm font-bold text-amber-800">{avisoAnulada}</p>
+                      {/* F3 (M6): el role va solo en el texto; el botón «Cerrar aviso» queda fuera de la región viva. */}
+                      <p role="status" className="flex-1 text-sm font-bold text-amber-800">{avisoAnulada}</p>
                       <button type="button" onClick={() => setAvisoAnulada(null)} aria-label="Cerrar aviso" title="Cerrar aviso"
                         className="p-1 rounded-lg text-amber-700 hover:bg-amber-100 shrink-0">
                         <X size={14} />

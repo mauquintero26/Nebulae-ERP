@@ -344,11 +344,12 @@ _MENSAJE_CORREO_SIN_ARMAR = ("No se pudo armar el correo al cliente: revisa la d
 _COT_CAMBIO_AL_REENVIAR = ("La cotización cambió mientras la reenviabas (el cliente pidió cambios o la editaron). "
                            "Recarga la página.")
 _PEDIDO_BLOQUEADO = "Otra operación estaba cambiando este pedido al mismo tiempo. Intenta de nuevo."
-# Revision final del B3 (F1, C0): el gemelo de la SC (su boton «Reenviar enlace de confirmacion» manda reenvio=true).
+# Revision final del B3 (F1, C0): el gemelo de la SC (su boton «Reenviar al cliente» manda reenvio=true).
 _SC_CAMBIO_AL_REENVIAR = ("La solicitud cambió mientras la reenviabas (el cliente pidió cambios o la editaron). "
                           "Recarga la página.")
 # F1 (M0): la bandera simetrica, reenvio=false (el boton del primer envio; el cable del frontend es de F2).
-_YA_ENVIADO_USA_REENVIAR = "Ya se le envió al cliente; usa «Reenviar»."
+# F3 (M8): nombra el boton real, TEXTO_REENVIAR_AL_CLIENTE de envio-whatsapp.js (test_paridad_bloque3 lo compara).
+_YA_ENVIADO_USA_REENVIAR = "Ya se le envió al cliente; usa «Reenviar al cliente»."
 
 
 def _exigir_bandera_de_reenvio(body: dict, pendiente: bool, cambio_al_reenviar: str) -> None:
@@ -2435,8 +2436,8 @@ def enviar_solicitud_para_confirmacion(sc_id: int, body: dict,
     cambios_cliente_*) va en UN solo commit antes del correo: un «Pedir cambios» del cliente que llega al mismo tiempo
     espera a este commit (o este espera al suyo) y nunca queda borrado a medias.
 
-    Revision final del B3 (F1, C0 y M0), el mismo contrato que la COT: reenvio=true (el boton «Reenviar enlace de
-    confirmacion») con la SC fuera de Pendiente por confirmacion (la pagina estaba vieja: el cliente pidio cambios o «Ya
+    Revision final del B3 (F1, C0 y M0), el mismo contrato que la COT: reenvio=true (el boton «Reenviar al
+    cliente») con la SC fuera de Pendiente por confirmacion (la pagina estaba vieja: el cliente pidio cambios o «Ya
     no la necesito») da 409 _SC_CAMBIO_AL_REENVIAR sin tocar enlaces, estado, marca ni seguimiento; reenvio=false con la
     SC ya pendiente da 409 _YA_ENVIADO_USA_REENVIAR. Sin la bandera, lo de siempre (_exigir_bandera_de_reenvio).
     F1 (M2): si la SC tiene una COT temprana esperando al cliente, su recordatorio queda detenido

@@ -59,7 +59,7 @@ import {
 } from '../../flujo';
 // B3 T18: el envío con el WhatsApp automático (T13/T17), el recordatorio (T16), las acciones nuevas de la Actividad
 // (RP22), los cambios del cliente, la «Nota para el cliente» y el 409 de la modalidad (detalle-bloque3.tsx).
-import { abreWhatsAppLocal, NOTA_REENVIO_ENLACE, banderaReenvio, envioYaNoAplica, TEXTO_REENVIAR_AL_CLIENTE } from '@/lib/envio-whatsapp';
+import { abreWhatsAppLocal, NOTA_REENVIO_ENLACE, banderaReenvio, envioYaNoAplica, esReenvioDelEstado, TEXTO_REENVIAR_AL_CLIENTE } from '@/lib/envio-whatsapp';
 import { accionBloque3, ACCIONES_BLOQUE3 } from '@/lib/acciones-bloque3';
 import { avisoCambiosCliente, motivoCancelacionNoLaNecesita } from '@/lib/cambios-cliente';
 import { esAdminOAsesor } from '@/lib/seguimiento';
@@ -603,7 +603,7 @@ function SolicitudDetalleContent() {
   // WhatsApp (y la SC tiene telefono), abre wa.me con el link incluido en el mensaje.
   function handleEnviarParaConfirmacion() {
     if (!solicitud) return;
-    setReenviandoSc(solicitud.estado === 'PENDIENTE_CONFIRMACION');
+    setReenviandoSc(esReenvioDelEstado(solicitud.estado));
     setShowChannelModal(true);
   }
 
@@ -1602,7 +1602,7 @@ function SolicitudDetalleContent() {
           // B3 T18 (U16-envio punto 14): si sale solo desde el WhatsApp de la empresa y, con un enlace pendiente, que el
           // anterior deja de servir.
           envioWhatsApp={envioWhatsAppCanal}
-          nota={solicitud?.estado === 'PENDIENTE_CONFIRMACION' ? NOTA_REENVIO_ENLACE : undefined}
+          nota={reenviandoSc ? NOTA_REENVIO_ENLACE : undefined}
           aviso={<AvisoNombreSinContacto documento={solicitud} />}
         />
       )}
