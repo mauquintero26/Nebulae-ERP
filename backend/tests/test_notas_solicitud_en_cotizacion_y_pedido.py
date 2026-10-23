@@ -162,3 +162,44 @@ def test_el_detalle_de_la_cotizacion_lee_la_solicitud_una_sola_vez(app_client, d
         d = _get(app_client, admin_token, "cotizaciones", cot.id)
     assert d["sc_notas"] == "Nota SC" and d["sc_modalidad_pago"] == "Contado"
     assert len([s for s in v.sentencias if "FROM customer_requests" in s]) == 1, v.sentencias
+
+def test_la_cotizacion_y_el_pedido_traen_aparte_la_nota_para_el_cliente_de_la_solicitud(app_client, db, admin_token,
+                                                                                        user_admin):
+    """Revisión final B3 (F2, M8): la «Nota para el cliente» de la SC (sc.nota_cliente) sale en el documento de la COT y
+    del PVEN que recibe el cliente (notas_para_cliente). El detalle interno de cada uno la trae aparte como
+    sc_nota_cliente, en vivo y con la regla de las notas (sin los espacios de los bordes; None en blanco o sin SC), para
+    que el asesor vea todo lo que lee el cliente. Las Notas de la SC (internas) siguen en sc_notas."""
+    from app.core.documento_cliente import TITULO_NOTA_CLIENTE, TITULO_NOTAS_COT, notas_para_cliente
+
+    sc = _sc(db, "SC-NOTA011", user_admin, notas="Interna", nota_cliente="  Incluye instalación  ")
+    cot = _cot(db, "COT-NOTA011", sc, notas="Nota COT")
+    ven = SaleOrder(numero="PVEN-NOTA011", sc_id=sc.id, cot_id=cot.id, customer_name="Cliente Prueba",
+                    estado="PENDIENTE_COMPRA")
+    db.add(ven); db.commit(); db.refresh(ven)
+    d = _get(app_client, admin_token, "cotizaciones", cot.id)
+    assert (d["sc_notas"], d["sc_nota_cliente"], d["notas"]) == ("Interna", "Incluye instalación", "Nota COT")
+    d = _get(app_client, admin_token, "pedidos", ven.id)
+    assert (d["sc_notas"], d["sc_nota_cliente"], d["cot_notas"]) == ("Interna", "Incluye instalación", "Nota COT")
+    # Es la misma nota que lee el cliente en su documento.
+    assert notas_para_cliente(sc, cot)[0] == {"titulo": TITULO_NOTA_CLIENTE, "texto": "Incluye instalación"}
+    # En vivo: si la SC cambia, las dos pantallas muestran la nueva (nunca se copia).
+    sc.nota_cliente = "Incluye instalación y flete"
+    db.commit()
+    assert _get(app_client, admin_token, "cotizaciones", cot.id)["sc_nota_cliente"] == "Incluye instalación y flete"
+    assert _get(app_client, admin_token, "pedidos", ven.id)["sc_nota_cliente"] == "Incluye instalación y flete"
+    # En blanco no cuenta (tampoco sale en el documento del cliente).
+    sc.nota_cliente = "   "
+    db.commit()
+    assert _get(app_client, admin_token, "cotizaciones", cot.id)["sc_nota_cliente"] is None
+    assert _get(app_client, admin_token, "pedidos", ven.id)["sc_nota_cliente"] is None
+    assert notas_para_cliente(sc, cot) == [{"titulo": TITULO_NOTAS_COT, "texto": "Nota COT"}]
+    # Sin SC: None.
+    cot_sola = _cot(db, "COT-NOTA012")
+    assert _get(app_client, admin_token, "cotizaciones", cot_sola.id)["sc_nota_cliente"] is None
+    ven_solo = SaleOrder(numero="PVEN-NOTA012", customer_name="Cliente Web", estado="PENDIENTE_COMPRA")
+    db.add(ven_solo); db.commit(); db.refresh(ven_solo)
+    assert _get(app_client, admin_token, "pedidos", ven_solo.id)["sc_nota_cliente"] is None
+    # Los listados no la traen (sin una consulta por fila).
+    resp = app_client.get("/api/v1/ventas/cotizaciones", params={"search": cot.numero}, headers=auth(admin_token))
+    assert resp.status_code == 200, resp.text
+    assert "sc_nota_cliente" not in resp.json()["data"][0]

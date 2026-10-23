@@ -4,6 +4,7 @@ import { useId, useState, type ReactNode } from 'react';
 import { AlertTriangle, Edit2, Send, Trash2 } from 'lucide-react';
 import { Button, Modal } from '@/components/ui';
 import { avisoCambiosCliente, AYUDA_NOTA_CLIENTE } from '@/lib/cambios-cliente';
+import { TEXTO_REENVIAR_AL_CLIENTE } from '@/lib/envio-whatsapp';
 import { TarjetaCambiosCliente } from '../../cotizacion/tarjeta-cambios-cliente';
 import { PanelAnularConfirmacion, type AnulacionConfirmacion } from '../../cotizacion/anular-confirmacion';
 
@@ -55,7 +56,7 @@ export function PasoCambiosCliente({ solicitud, puedeGestionar, puedeEditarProdu
         {onReenviar && (
           <span className="block [&>button]:w-full" title={tituloEnviar}>
             <Button color="indigo" size="lg" icon={Send} loading={enviando} disabled={editandoProductos} onClick={onReenviar}>
-              Reenviar al cliente
+              {TEXTO_REENVIAR_AL_CLIENTE}
             </Button>
           </span>
         )}
@@ -72,12 +73,14 @@ export function PasoCambiosCliente({ solicitud, puedeGestionar, puedeEditarProdu
 /**
  * R3 (C19, U17-H28 punto 6): la «Nota para el cliente» de la SC fuera de «Editar», con «El cliente verá esta nota». La
  * ven el cliente en su solicitud, su cotización y su pedido; las Notas de la SC siguen internas. Sin nota no pinta nada.
+ * Revisión final B3 (F2, M8): el detalle de la COT la muestra también, con su `titulo`
+ * (TITULO_NOTA_CLIENTE_DE_LA_SOLICITUD).
  */
-export function NotaParaElCliente({ nota }: { nota: unknown }) {
+export function NotaParaElCliente({ nota, titulo = 'Nota para el cliente' }: { nota: unknown; titulo?: string }) {
   if (typeof nota !== 'string' || !nota.trim()) return null;
   return (
     <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
-      <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Nota para el cliente</p>
+      <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">{titulo}</p>
       <p className="text-sm text-slate-700 whitespace-pre-wrap break-words">{nota}</p>
       <p className="text-xs text-slate-500 mt-1.5">{AYUDA_NOTA_CLIENTE}</p>
     </div>

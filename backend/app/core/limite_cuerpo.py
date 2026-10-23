@@ -1,5 +1,5 @@
 """Tope de tamaño del cuerpo de las peticiones (Bloque 3, T20: M19, M3 y M9; punto 6 de lo parqueado; revisión final
-F1, M55: por niveles).
+F1, M55: por niveles; F2: los webhooks a 5 MB).
 
 FastAPI lee el cuerpo entero a memoria y hace json.loads ANTES de resolver las dependencias (el login, el token, el
 Idempotency-Key, el tope del comentario): cualquiera en internet, sin sesión, podía mandar cuerpos de cientos de MB a
@@ -10,8 +10,10 @@ LimiteDeCuerpo es un middleware ASGI puro (no BaseHTTPMiddleware) con un tope po
 controlador en la revisión final; el primer prefijo que coincide gana):
 - LIMITE_BYTES (64 KB): PREFIJOS, las páginas públicas sin login (/api/v1/confirmar/, /api/v1/pedido-cliente/,
   /api/v1/publico/) y /api/v1/auth/ (login, forgot y reset-password, username y nombre para mostrar);
-- LIMITE_WEBHOOKS (1 MB): PREFIJOS_WEBHOOKS, las rutas de webhooks.py (/api/v1/webhooks/) y de whatsapp_webhook.py
-  (/api/v1/whatsapp/), y los webhooks de chat.py (/api/v1/chat/webhook/: WhatsApp, Instagram y Chatwoot);
+- LIMITE_WEBHOOKS (5 MB): PREFIJOS_WEBHOOKS, las rutas de webhooks.py (/api/v1/webhooks/) y de whatsapp_webhook.py
+  (/api/v1/whatsapp/), y los webhooks de chat.py (/api/v1/chat/webhook/: WhatsApp, Instagram y Chatwoot). F2 (agregado
+  del controlador): Meta documenta cuerpos de webhook de hasta 3 MB y reintenta lo que recibe con 413, así que 1 MB
+  podía rechazar un lote legítimo; 5 MB lo cubre con margen;
 - LIMITE_GENERAL (25 MB): todo lo demás. Hoy ningún endpoint recibe archivos (no hay UploadFile ni multipart); lo más
   grande que llega es el logo de la empresa (PUT /api/v1/empresa: 300 KB en base64, unos 400 KB de JSON).
 - Con Content-Length mayor que el tope: 413 {"detail": MENSAJE_413} sin leer el cuerpo.
@@ -29,7 +31,7 @@ from starlette.responses import JSONResponse
 PREFIJOS = ("/api/v1/confirmar/", "/api/v1/pedido-cliente/", "/api/v1/publico/", "/api/v1/auth/")
 LIMITE_BYTES = 65536
 PREFIJOS_WEBHOOKS = ("/api/v1/webhooks/", "/api/v1/whatsapp/", "/api/v1/chat/webhook/")
-LIMITE_WEBHOOKS = 1024 * 1024
+LIMITE_WEBHOOKS = 5 * 1024 * 1024
 LIMITE_GENERAL = 25 * 1024 * 1024
 NIVELES = ((PREFIJOS, LIMITE_BYTES), (PREFIJOS_WEBHOOKS, LIMITE_WEBHOOKS))
 MENSAJE_413 = "La petición es demasiado grande."

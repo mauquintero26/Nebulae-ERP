@@ -33,3 +33,15 @@ export function formatoPesos(v) {
 export function formatoCantidad(v) {
   return typeof v === 'number' && Number.isFinite(v) ? String(v).replace('.', ',') : '';
 }
+
+/**
+ * Revisión final B3 (F2, M11): n / d con el medio peso hacia arriba (ROUND_HALF_UP del backend), en BigInt, para
+ * n >= 0 y d > 0. Una sola regla de redondeo para las dos libs de dinero: el IVA y el descuento de lib/iva.js y el
+ * anticipo que conserva su % en la calculadora (dinero-ventas.js, anticipoDeCalculadora).
+ * @param {bigint} n
+ * @param {bigint} d
+ * @returns {bigint}
+ */
+export function dividirMedioArriba(n, d) {
+  return n / d + ((n % d) * 2n >= d ? 1n : 0n);
+}

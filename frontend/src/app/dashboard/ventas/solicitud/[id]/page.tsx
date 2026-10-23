@@ -59,7 +59,7 @@ import {
 } from '../../flujo';
 // B3 T18: el envío con el WhatsApp automático (T13/T17), el recordatorio (T16), las acciones nuevas de la Actividad
 // (RP22), los cambios del cliente, la «Nota para el cliente» y el 409 de la modalidad (detalle-bloque3.tsx).
-import { abreWhatsAppLocal, NOTA_REENVIO_ENLACE } from '@/lib/envio-whatsapp';
+import { abreWhatsAppLocal, NOTA_REENVIO_ENLACE, banderaReenvio, envioYaNoAplica, TEXTO_REENVIAR_AL_CLIENTE } from '@/lib/envio-whatsapp';
 import { accionBloque3, ACCIONES_BLOQUE3 } from '@/lib/acciones-bloque3';
 import { avisoCambiosCliente, motivoCancelacionNoLaNecesita } from '@/lib/cambios-cliente';
 import { esAdminOAsesor } from '@/lib/seguimiento';
@@ -169,8 +169,8 @@ function SolicitudDetalleContent() {
   const [sendingConfirmacion, setSendingConfirmacion] = useState(false);
   // Hallazgo #1: mismo estado que cotizacion/[id]/page.tsx usa para su propio ChannelModal.
   const [showChannelModal, setShowChannelModal] = useState(false);
-  // Revisión final B3 (F1, C0): la ventana se abrió con la SC en Pendiente (un «Reenviar enlace de confirmación»): el POST
-  // lleva reenvio: true y, si la SC cambió mientras tanto, el servidor responde 409 (sale con avisarError).
+  // Revisión final B3 (F1, C0; F2, M0): la ventana se abrió con la SC en Pendiente (un «Reenviar al cliente»): el POST
+  // lleva reenvio: true (false en el primer envío) y, si la SC cambió mientras tanto, el servidor responde 409.
   const [reenviandoSc, setReenviandoSc] = useState(false);
   const [selectedChannel, setSelectedChannel] = useState<'WhatsApp'|'Email'|'Otro'|null>(null);
   // Enlace de confirmacion recien generado: el token crudo solo viaja en la respuesta del
@@ -244,10 +244,12 @@ function SolicitudDetalleContent() {
       setLoading(true);
       setLoadError('');
     }
+    let fresca: any = null; // F2 (M0): la SC recargada, para quien la espera (el 409 del envío)
     try {
       const raw = await apiFetch(`/ventas/solicitudes/${params.id}`);
       const d = raw?.data ?? raw;
       if (esLaUltima()) {
+        fresca = d;
         setSolicitud(d);
         if (!silencioso) {
           setEditForm(formularioDeEdicion(d));
@@ -259,6 +261,7 @@ function SolicitudDetalleContent() {
     }
     // El spinner de una carga completa siempre se apaga (aunque una mas nueva la haya reemplazado): nunca queda pegado.
     if (!silencioso) setLoading(false);
+    return fresca;
   }, [params.id]);
 
   useEffect(() => { loadSolicitud(); }, [loadSolicitud]);
@@ -612,7 +615,7 @@ function SolicitudDetalleContent() {
       // H27+H39: el canal viaja en el POST (la Actividad lo anota y el servidor siempre intenta el correo de respaldo;
       // responde {canal, correo: {enviado, destino, motivo, mensaje}, link_confirmacion}). 'Email' sin correo del cliente
       // da 400 (ChannelModal lo deshabilita).
-      const d = await apiFetch(`/ventas/solicitudes/${solicitud.id}/enviar-confirmacion`, { method: 'POST', body: JSON.stringify({ user_name: currentUser, canal: selectedChannel, ...(reenviandoSc ? { reenvio: true } : {}) }) });
+      const d = await apiFetch(`/ventas/solicitudes/${solicitud.id}/enviar-confirmacion`, { method: 'POST', body: JSON.stringify({ user_name: currentUser, canal: selectedChannel, ...banderaReenvio(reenviandoSc) }) });
       const link = d?.link_confirmacion || '';
       let whatsapp: string | null = null;
       // B3 T18 (U16-envio punto 14, RP19): wa.me solo si el automático no vino o está apagado (nunca dos mensajes), con el
@@ -638,6 +641,10 @@ function SolicitudDetalleContent() {
       if (link) setConfirmLink(link);
     } catch (err: any) {
       avisarError(err, 'No se pudo enviar la solicitud al cliente');
+      // F2 (M0): tras el 409 de la bandera la recarga trae la SC como está; si la ventana ya no aplica, se cierra.
+      if (recargarTrasError(err)) void loadSolicitud({ silencioso: true }).then(fresca => {
+        if (envioYaNoAplica(reenviandoSc, fresca?.estado)) cancelarEnvioConfirmacion();
+      });
     }
     setSendingConfirmacion(false);
   }
@@ -892,7 +899,7 @@ function SolicitudDetalleContent() {
               <TarjetaSeguimiento tipoDoc="SC" doc={solicitud} onCambio={recordatorioCambiado} />
               {puedeEnviarEnlace && (
                 <Button variant="secondary" icon={Send} loading={sendingConfirmacion} onClick={handleEnviarParaConfirmacion}>
-                  {estado === 'PENDIENTE_CONFIRMACION' ? 'Reenviar enlace de confirmación' : 'Enviar para Confirmación'}
+                  {estado === 'PENDIENTE_CONFIRMACION' ? TEXTO_REENVIAR_AL_CLIENTE : 'Enviar para Confirmación'}
                 </Button>
               )}
             </>
@@ -975,7 +982,7 @@ function SolicitudDetalleContent() {
                   recordatorios»; al detenerlo, recarga silenciosa. */}
               <TarjetaSeguimiento tipoDoc="SC" doc={solicitud} onCambio={recordatorioCambiado} />
               <span className="block [&>button]:w-full" title={tituloEnviar}>
-                <Button color="blue" icon={Send} loading={sendingConfirmacion} disabled={editandoProductos} onClick={handleEnviarParaConfirmacion}>Reenviar enlace de confirmación</Button>
+                <Button color="blue" icon={Send} loading={sendingConfirmacion} disabled={editandoProductos} onClick={handleEnviarParaConfirmacion}>{TEXTO_REENVIAR_AL_CLIENTE}</Button>
               </span>
               {botonCotizarSinConf}
               {motivoEditorAbierto(true, !!botonCotizarSinConf)}

@@ -12,6 +12,7 @@ import {
   AVISO_NOMBRE_SIN_CONTACTO, avisoNombreSinContacto,
 } from '../src/lib/datos-cliente.js';
 import { errorDeRespuesta } from '../src/lib/avisos.js';
+import { TEXTO_REENVIAR_AL_CLIENTE } from '../src/lib/envio-whatsapp.js';
 
 console.log('--- TEST 1: CAMPOS_CONTACTO (orden del formulario, límites del backend) ---');
 {
@@ -114,7 +115,9 @@ console.log('--- TEST 8 (T8B, R18 y rulings 2 y 5): avisoCorreccionContacto — 
   // B3 T18 (nota del controlador tras T7, RP13): como _ENLACE_COT_ANULADO del backend, «reenvía la cotización al cliente»
   // (ya no «pásala a Borrador»).
   const COT = 'Datos corregidos. Se anuló el enlace de la cotización COT-20260486 enviado al dato anterior: reenvía la cotización al cliente.';
-  const B = 'Datos corregidos. Se anuló el enlace que se había enviado al dato anterior: usa «Reenviar enlace de confirmación».';
+  // Revisión final B3 (F2, M9/M22): el botón de la SC en Pendiente se llama «Reenviar al cliente» (la constante de la lib).
+  const B = 'Datos corregidos. Se anuló el enlace que se había enviado al dato anterior: usa «Reenviar al cliente».';
+  assert.ok(B.includes(`«${TEXTO_REENVIAR_AL_CLIENTE}»`), 'el aviso nombra el botón con su rótulo de la lib');
   const CONFIRMACION = 'Datos corregidos. La confirmación anterior del cliente ya no vale; la cotización activa sigue igual.';
   const NORMAL = 'Datos del cliente corregidos.';
 

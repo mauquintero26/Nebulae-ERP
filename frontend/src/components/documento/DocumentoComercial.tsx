@@ -138,7 +138,7 @@ function Lineas({ doc, variante }: { doc: DocumentoCliente; variante: 'degradado
               <>
                 <th scope="col" className="w-20 px-3 py-2 text-center">Cant.</th>
                 <th scope="col" className="px-3 py-2">Descripción</th>
-                <th scope="col" className="w-36 px-3 py-2 text-right">Precio</th>
+                <th scope="col" className="w-36 px-3 py-2 text-right">Precio unit.</th>
                 <th scope="col" className="w-36 px-3 py-2 text-right">Total</th>
               </>
             ) : (

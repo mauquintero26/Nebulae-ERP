@@ -34,7 +34,7 @@ import { comoUTC } from '@/lib/hub-ventas';
 import { NOTA_REENVIO_ENLACE } from '@/lib/envio-whatsapp';
 import { accionBloque3 } from '@/lib/acciones-bloque3';
 import { textoIvaIncluido } from '@/lib/iva';
-import { AYUDA_NOTA_CLIENTE } from '@/lib/cambios-cliente';
+import { AYUDA_NOTA_CLIENTE, TITULO_NOTA_CLIENTE_DE_LA_SOLICITUD } from '@/lib/cambios-cliente';
 
 const fCOP = formatoPesos;
 const fDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('es-CO', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
@@ -378,6 +378,8 @@ function PedidoVentaDetalleContent() {
   // H35+H48: notas ACTUALES de la SC y de la COT, aparte de la del pedido. Al crear el pedido se copia la nota
   // de la COT, asi que 'Notas del pedido' solo aparece si es distinta (se edito, o el pedido no viene de una COT).
   const notaSolicitud = (pedido?.sc_notas || '').trim();
+  // Revisión final B3 (F2, M8): la «Nota para el cliente» de la SC, que también sale en el documento del pedido.
+  const notaClienteSolicitud = (pedido?.sc_nota_cliente || '').trim();
   const notaCotizacion = (pedido?.cot_notas || '').trim();
   const notaPedido = (pedido?.notas || '').trim();
   const mostrarNotaPedido = !!notaPedido && notaPedido !== notaCotizacion;
@@ -700,7 +702,7 @@ function PedidoVentaDetalleContent() {
               <TablaProductosPedido pedido={pedido} />
             </div>
 
-            {(notaSolicitud || notaCotizacion || mostrarNotaPedido || pedido?.direccion_entrega) && !isEditMode && (
+            {(notaSolicitud || notaClienteSolicitud || notaCotizacion || mostrarNotaPedido || pedido?.direccion_entrega) && !isEditMode && (
               <div className="grid grid-cols-1 @lg:grid-cols-2 gap-6">
                 {pedido?.direccion_entrega && (
                   <div>
@@ -710,10 +712,12 @@ function PedidoVentaDetalleContent() {
                     </div>
                   </div>
                 )}
-                {(notaSolicitud || notaCotizacion || mostrarNotaPedido) && (
+                {(notaSolicitud || notaClienteSolicitud || notaCotizacion || mostrarNotaPedido) && (
                   <div className={`space-y-3 ${pedido?.direccion_entrega ? '' : '@lg:col-span-2'}`}>
-                    {/* B3 T20 (M5, R3): la nota de la COT es la que ve el cliente; la de la SC y las del pedido, no. */}
-                    {([['Nota de la solicitud', notaSolicitud, null], ['Nota de la cotización', notaCotizacion, AYUDA_NOTA_CLIENTE],
+                    {/* B3 T20 (M5, R3) y F2 (M8): la «Nota para el cliente» de la SC y la nota de la COT son las que ve el
+                        cliente; las Notas de la SC y las del pedido, no. */}
+                    {([['Nota de la solicitud', notaSolicitud, null], [TITULO_NOTA_CLIENTE_DE_LA_SOLICITUD, notaClienteSolicitud, AYUDA_NOTA_CLIENTE],
+                      ['Nota de la cotización', notaCotizacion, AYUDA_NOTA_CLIENTE],
                       ['Notas del pedido', mostrarNotaPedido ? notaPedido : '', null]] as const).filter(([, t]) => t).map(([titulo, t, ayuda]) => (
                       <div key={titulo}>
                         <label className="block text-xs font-bold text-slate-500 mb-2 uppercase tracking-wider">{titulo}</label>

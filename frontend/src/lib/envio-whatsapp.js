@@ -19,7 +19,7 @@
  */
 
 import { waUrl, whatsappParaReabrir } from './whatsapp.js';
-import { esAdminOAsesor } from './seguimiento.js';
+import { esAdminOAsesor } from './roles.js';
 import { enlacePedidoVigente } from './documento-comercial.js';
 
 /** Espejo de envio_whatsapp.MOTIVOS: por qué no salió el WhatsApp automático ({detalle} solo en FALLO_CHATWOOT). */
@@ -410,6 +410,42 @@ export function lineaWhatsAppCanal(envio) {
 /** U16-reenvio-cot: la nota del ChannelModal al reenviar el enlace de un documento que espera al cliente. */
 export const NOTA_REENVIO_ENLACE = 'Se crea un enlace nuevo y el anterior deja de servir.';
 
+// ─── Revisión final B3 (F2): un solo rótulo para enviar y reenviar (M9/M22) y la bandera del envío (M0) ─────────────
+
+/**
+ * M9/M22: los rótulos de la acción de enviarle el documento al cliente (POST …/enviar-confirmacion de la SC y la COT, y
+ * …/enviar-al-cliente del pedido), iguales en todas las pantallas. El primer envío de la SC conserva el texto del
+ * Bloque 2 («Enviar para Confirmación»).
+ */
+export const TEXTO_ENVIAR_AL_CLIENTE = 'Enviar al cliente';
+export const TEXTO_REENVIAR_AL_CLIENTE = 'Reenviar al cliente';
+
+/**
+ * M0: la bandera `reenvio` del POST …/enviar-confirmacion (SC y COT, también desde el Hub). Siempre va: true solo desde
+ * «Reenviar al cliente» (el documento espera al cliente); el primer envío manda false. El servidor
+ * (_exigir_bandera_de_reenvio) responde 409 si no coincide con lo que ve: un reenvío de un documento que ya no espera
+ * (el cliente pidió cambios o lo editaron) o un primer envío de uno que ya espera («Ya se le envió al cliente; usa
+ * «Reenviar».»: otra pestaña, otro asesor, el Hub y el detalle). Sin la clave el servidor no revisaría nada.
+ * @param {unknown} reenviando
+ * @returns {{reenvio: boolean}}
+ */
+export function banderaReenvio(reenviando) {
+  return { reenvio: reenviando === true };
+}
+
+/**
+ * M0: tras el 409 de la bandera, la recarga dice si la ventana de envío ya no aplica (se cierra): se abrió para reenviar
+ * y el documento ya no espera al cliente, o para el primer envío y ya le espera (PENDIENTE_CONFIRMACION). Sin la
+ * recarga (un estado que no es texto) no se sabe: queda abierta.
+ * @param {unknown} reenviando con qué bandera se abrió la ventana
+ * @param {unknown} estadoFresco el estado del documento recargado
+ * @returns {boolean}
+ */
+export function envioYaNoAplica(reenviando, estadoFresco) {
+  if (typeof estadoFresco !== 'string') return false;
+  return (estadoFresco === 'PENDIENTE_CONFIRMACION') !== (reenviando === true);
+}
+
 // ─── El envío del pedido al cliente (B3 T19: U23 punto 7) ─────────────────────────────────────────────────────────
 
 /**
@@ -432,7 +468,7 @@ export function botonEnvioPedido(pedido, rol, ahora = new Date()) {
   if (!Array.isArray(pedido.productos) || pedido.productos.length === 0 || !(Number(pedido.total_cop) > 0)) return null;
   const reenvio = enlacePedidoVigente(pedido.enlace_cliente, ahora);
   const yaEnviado = reenvio || (esObjeto(pedido.enlace_cliente) && Boolean(pedido.enlace_cliente.enviado_at));
-  return { texto: yaEnviado ? 'Reenviar al cliente' : 'Enviar al cliente', reenvio };
+  return { texto: yaEnviado ? TEXTO_REENVIAR_AL_CLIENTE : TEXTO_ENVIAR_AL_CLIENTE, reenvio };
 }
 
 /**
@@ -464,7 +500,7 @@ export function pedidoSeEnvio(enviadoAntes, pedidoFresco) {
 export const AVISO_PEDIDO_SI_SE_ENVIO = 'El pedido sí se envió; revisa la Actividad antes de reenviar';
 
 /** B3 T19 r2: el aviso cuando sí se registró pero el WhatsApp manual nunca se abrió (el POST no respondió). */
-export const AVISO_WHATSAPP_NO_SE_ABRIO = 'El pedido quedó registrado, pero el WhatsApp no se abrió: usa «Reenviar al cliente».';
+export const AVISO_WHATSAPP_NO_SE_ABRIO = `El pedido quedó registrado, pero el WhatsApp no se abrió: usa «${TEXTO_REENVIAR_AL_CLIENTE}».`;
 
 /**
  * B3 T19 r2: el aviso de un envío incierto que la recarga muestra como hecho (pedidoSeEnvio). Con el canal WhatsApp y el

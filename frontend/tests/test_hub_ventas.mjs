@@ -18,7 +18,7 @@ import {
   comoUTC, diasDesde, textoAntiguedad, diaLocalDeFecha, fechaEditadaParaGuardar,
   ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, tieneProductos, esNoResuelto, esAccionTomada, accionSiguienteSC,
   esSCConCotizacionTemprana, TIPOS_NOTA_REINICIAN_ATRASO, notaReiniciaAtraso, desdeElHub, fusionarCargaHub,
-  cantidadPositiva, textoAtrasados,
+  cantidadPositiva, textoAtrasados, conDetalleDelEnvio,
 } from '../src/lib/hub-ventas.js';
 import { destinoVolver, etiquetaVolver } from '../src/lib/detalle-layout.js';
 import { ESTADOS_PEDIDO } from '../src/lib/estados-pedido.js';
@@ -627,6 +627,30 @@ console.log('--- B3 T18 r1: cantidadPositiva, la lectura de una cuenta de GET /v
   const fuente = readFileSync(new URL('../src/lib/hub-ventas.js', import.meta.url), 'utf8');
   const cuerpo = fuente.slice(fuente.indexOf('export function textoAtrasados('), fuente.indexOf('export function desdeElHub('));
   assert.ok(cuerpo.includes('cantidadPositiva(n)') && !cuerpo.includes('Number.isFinite'), 'textoAtrasados usa cantidadPositiva');
+}
+
+console.log('--- Revisión final B3 (F2, M47): la nota ámbar del nombre sin contacto en la ventana de envío del Hub ---');
+{
+  // El detalle (GET …/{id}) se guarda solo si la ventana sigue abierta para ESE documento.
+  const abierta = { tipo: 'SC', id: '12', numero: 'SC-12', telefono: '', correo: null };
+  const detalle = { id: 12, nombre_cambio_sin_contacto: true };
+  assert.deepEqual(conDetalleDelEnvio(abierta, 'SC', '12', detalle), { ...abierta, detalle });
+  assert.deepEqual(conDetalleDelEnvio(abierta, 'SC', 12, detalle), { ...abierta, detalle }, 'el id como número o texto');
+  assert.equal(conDetalleDelEnvio(abierta, 'COT', '12', detalle), abierta, 'otro tipo con el mismo id: no');
+  assert.equal(conDetalleDelEnvio(abierta, 'SC', '13', detalle), abierta, 'otro documento: no');
+  assert.equal(conDetalleDelEnvio(null, 'SC', '12', detalle), null, 'la ventana ya se cerró');
+  assert.deepEqual(conDetalleDelEnvio(abierta, 'SC', '12', undefined), { ...abierta, detalle: null }, 'sin data');
+  assert.deepEqual(abierta, { tipo: 'SC', id: '12', numero: 'SC-12', telefono: '', correo: null }, 'no muta la ventana');
+
+  const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  assert.ok(hub.includes("import { AvisoNombreSinContacto } from './aviso-nombre-sin-contacto';"), 'el Hub importa la nota');
+  const abrir = hub.slice(hub.indexOf('function abrirEnvioHub('), hub.indexOf('async function confirmarEnvioHub('));
+  assert.ok(abrir.includes("apiFetch(`/ventas/${tipo === 'COT' ? 'cotizaciones' : 'solicitudes'}/${id}`)"),
+    'abrirEnvioHub pide el detalle del documento');
+  assert.ok(abrir.includes('setEnvioHub(e => conDetalleDelEnvio(e, tipo, id, d?.data))'), 'con la guarda del documento');
+  assert.ok(/\.catch\(/.test(abrir), 'si el GET falla, la ventana queda sin la nota (no bloquea el envío)');
+  const modal = hub.slice(hub.indexOf('{envioHub && (\n        <ChannelModal'), hub.indexOf('{hubEnlace && ('));
+  assert.ok(modal.includes('aviso={<AvisoNombreSinContacto documento={envioHub.detalle} />}'), 'el ChannelModal la recibe');
 }
 
 console.log('OK test_hub_ventas.mjs');

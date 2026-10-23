@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, type KeyboardEvent } from 'react';
 import {
   Settings, Building2, Paintbrush, Globe2, TerminalSquare,
   Barcode, ShieldAlert, KeyRound
 } from 'lucide-react';
 import { SubNav, PageHeader } from '@/components/ui';
+import { pestanaConTecla } from '@/lib/pestanas';
 import { ADM_NAV } from '../adm-nav';
 import { FormEmpresa } from './empresa-form';
 import { FormDocumentos } from './documentos-form';
@@ -21,6 +22,14 @@ const TABS = [
 
 export default function ConfiguracionHub() {
   const [activeTab, setActiveTab] = useState('empresa');
+  // Revisión final B3 (F2, M15): las flechas, Inicio y Fin cambian de pestaña y le pasan el foco (lib/pestanas.js).
+  function alTeclear(e: KeyboardEvent<HTMLButtonElement>) {
+    const siguiente = pestanaConTecla(TABS.map(t => t.id), activeTab, e.key);
+    if (!siguiente) return;
+    e.preventDefault();
+    setActiveTab(siguiente);
+    document.getElementById(`tab-${siguiente}`)?.focus();
+  }
 
   return (
     <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden animate-in fade-in">
@@ -46,7 +55,7 @@ export default function ConfiguracionHub() {
         {/* Sidebar Menu inside Config */}
         <div className="w-full md:w-64 bg-slate-50/50 border-b md:border-b-0 md:border-r border-slate-200 p-2 md:p-4 shrink-0 overflow-x-auto md:overflow-y-auto">
           {/* Patrón ARIA de pestañas (r1): aria-controls solo apunta a un panel que está en la página (las dos de la
-              empresa siempre; las demás cuando están abiertas). */}
+              empresa siempre; las demás cuando están abiertas). F2 (M15): solo la activa en el orden del Tab. */}
           <ul role="tablist" aria-label="Secciones de Configuración General" className="flex gap-1 md:block md:space-y-1">
             {TABS.map(tab => (
               <li key={tab.id} role="presentation" className="shrink-0">
@@ -56,6 +65,8 @@ export default function ConfiguracionHub() {
                   id={`tab-${tab.id}`}
                   aria-selected={activeTab === tab.id}
                   aria-controls={tab.id === 'empresa' || tab.id === 'diseno' || activeTab === tab.id ? `panel-${tab.id}` : undefined}
+                  tabIndex={activeTab === tab.id ? 0 : -1}
+                  onKeyDown={alTeclear}
                   onClick={() => setActiveTab(tab.id)}
                   className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm whitespace-nowrap md:whitespace-normal text-left transition-colors ${
                     activeTab === tab.id 

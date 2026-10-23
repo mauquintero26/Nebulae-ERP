@@ -64,12 +64,15 @@ export function TarjetaSeguimiento({ tipoDoc, doc, onCambio }: {
   }
 
   return (
-    <div role="status" className={`rounded-xl border px-3 py-2.5 text-xs ${CLASES_TONO[texto.tono]}`}>
+    <div className={`rounded-xl border px-3 py-2.5 text-xs ${CLASES_TONO[texto.tono]}`}>
       <div className="flex items-start gap-2">
         <BellRing size={14} className="mt-0.5 shrink-0" />
         <div className="min-w-0 space-y-1">
-          <p className="font-bold">{texto.titulo}</p>
-          <p className="leading-relaxed">{texto.texto}</p>
+          {/* Revisión final B3 (F2, M15): la región viva solo con el texto; el botón va fuera de ella. */}
+          <div role="status" className="space-y-1">
+            <p className="font-bold">{texto.titulo}</p>
+            <p className="leading-relaxed">{texto.texto}</p>
+          </div>
           {accion && (
             <button type="button" onClick={detener} disabled={deteniendo}
               className="font-bold underline underline-offset-2 hover:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed">
@@ -86,42 +89,46 @@ export function TarjetaSeguimiento({ tipoDoc, doc, onCambio }: {
  * «Seguimiento de confirmación» del ConfigPanel (U16-seguimiento punto 12a): los 6 valores seguimiento_* (se guardan
  * con el «Guardar Configuración» del panel), el aviso de los días de alerta y, al pie, el estado de la revisión
  * automática (TAREAS). Quien no es administrador la ve en solo lectura (N8).
+ * Revisión final B3 (F2, M15): `error` es el campo que falló al guardar (errorConfigSeguimiento) y el id del error del
+ * pie del panel: ese campo lleva aria-invalid y queda ligado al error.
  */
-export function SeccionSeguimiento({ cfg, onCambio, soloLectura }: {
+export function SeccionSeguimiento({ cfg, onCambio, soloLectura, error = null }: {
   cfg: Record<string, string>;
   onCambio: (clave: string, valor: string) => void;
   soloLectura: boolean;
+  error?: { clave: string; id: string } | null;
 }) {
   const aviso = avisoDiasSeguimiento(cfg);
   const [diasMin, diasMax] = LIMITES_SEGUIMIENTO.seguimiento_dias;
   const [maxMin, maxMax] = LIMITES_SEGUIMIENTO.seguimiento_max;
+  const idErrorDe = (clave: string) => (error?.clave === clave ? error.id : undefined);
   return (
     <SeccionConfig titulo="Seguimiento de confirmación" icono={BellRing} tono="sky"
       descripcion="Recordatorio automático al cliente cuando una solicitud o cotización sigue en Pendiente por confirmación.">
       <Interruptor tono="sky" etiqueta="Recordar al cliente si no confirma"
         descripcion="Si una solicitud o cotización sigue sin confirmar, se le envía al cliente un recordatorio por el mismo medio, con un enlace nuevo y el correo de respaldo."
         valor={cfg.seguimiento_auto_activo === 'true'} deshabilitado={soloLectura}
-        onCambio={v => onCambio('seguimiento_auto_activo', v ? 'true' : 'false')} />
+        onCambio={v => onCambio('seguimiento_auto_activo', v ? 'true' : 'false')} idError={idErrorDe('seguimiento_auto_activo')} />
       <CampoNumero tono="sky" etiqueta="Días sin respuesta antes del recordatorio" ayuda={`De ${diasMin} a ${diasMax}.`}
         valor={cfg.seguimiento_dias} min={diasMin} max={diasMax} sufijo="días" deshabilitado={soloLectura}
-        onCambio={v => onCambio('seguimiento_dias', v)} />
+        onCambio={v => onCambio('seguimiento_dias', v)} idError={idErrorDe('seguimiento_dias')} />
       <CampoNumero tono="sky" etiqueta="Cuántos recordatorios" ayuda={`De ${maxMin} a ${maxMax}.`}
         valor={cfg.seguimiento_max} min={maxMin} max={maxMax} deshabilitado={soloLectura}
-        onCambio={v => onCambio('seguimiento_max', v)} />
+        onCambio={v => onCambio('seguimiento_max', v)} idError={idErrorDe('seguimiento_max')} />
       <Interruptor tono="sky" etiqueta="Solo en horario laboral"
         descripcion={cfg.seguimiento_solo_horario === 'true'
           ? 'Lunes a sábado. Si el plazo se cumple fuera de horario, sale a la siguiente hora hábil.' : undefined}
         valor={cfg.seguimiento_solo_horario === 'true'} deshabilitado={soloLectura}
-        onCambio={v => onCambio('seguimiento_solo_horario', v ? 'true' : 'false')} />
+        onCambio={v => onCambio('seguimiento_solo_horario', v ? 'true' : 'false')} idError={idErrorDe('seguimiento_solo_horario')} />
       {cfg.seguimiento_solo_horario === 'true' && (
         // r1: una columna. El Drawer mide 448 px a cualquier ancho de ventana: dos columnas por `sm:` se salían.
         <div className="space-y-3">
           <CampoSelect tono="sky" etiqueta="Desde" valor={cfg.seguimiento_hora_inicio}
             opciones={opcionesHora('seguimiento_hora_inicio')} deshabilitado={soloLectura}
-            onCambio={v => onCambio('seguimiento_hora_inicio', v)} />
+            onCambio={v => onCambio('seguimiento_hora_inicio', v)} idError={idErrorDe('seguimiento_hora_inicio')} />
           <CampoSelect tono="sky" etiqueta="Hasta" valor={cfg.seguimiento_hora_fin}
             opciones={opcionesHora('seguimiento_hora_fin')} deshabilitado={soloLectura}
-            onCambio={v => onCambio('seguimiento_hora_fin', v)} />
+            onCambio={v => onCambio('seguimiento_hora_fin', v)} idError={idErrorDe('seguimiento_hora_fin')} />
         </div>
       )}
       {aviso && (

@@ -279,6 +279,10 @@ console.log('--- TEST 8: el 200 de /pedido-cliente/ver (RP27) y los errores que 
     assert.ok(w.mensaje, `${status}: con mensaje`);
     assert.notEqual(w.titulo, 'Este enlace no es válido', `${status}: no le dice al cliente que su enlace no sirve`);
     if (detail === 'Not Found') assert.equal(w.mensaje, 'No se encontró el registro (404).', 'el texto ya traducido');
+    // Revisión final B3 (F2, M45): el 405 de Starlette tampoco sale en inglés.
+    if (detail === 'Method Not Allowed') {
+      assert.equal(w.mensaje, 'El servidor respondió con un error (405). Intenta de nuevo.', 'el 405 en español');
+    }
     assert.equal(w.reintentar, true);
     assert.equal(w.puedeActuar, false);
   }

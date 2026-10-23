@@ -97,6 +97,12 @@ export function configLeida(respuesta) {
 }
 
 /**
+ * Revision final B3 (F2, M16): el porque de «Ajustar Tiempos» y «Configuracion» del Hub deshabilitados mientras
+ * GET /ventas/config no llega (configLeida): ante un error de red pasajero, el boton gris dice que hacer.
+ */
+export const AVISO_CONFIG_SIN_LEER = 'No se pudo leer la configuración: pulsa Actualizar.';
+
+/**
  * B3 T16 r1: el cuerpo de PATCH /ventas/config del «Guardar Configuracion» del Hub. Solo las claves cuyo valor cambio
  * frente a la foto `inicial` con que se abrio el panel (comparadas como texto; una clave nueva cuenta como cambio y
  * nunca se borra una que falte), para no pisar con un valor por defecto lo que nadie toco. null si la configuracion no

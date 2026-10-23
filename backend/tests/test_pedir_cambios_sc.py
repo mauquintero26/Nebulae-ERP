@@ -1011,9 +1011,9 @@ def test_el_409_de_un_bloqueo_abortado_tiene_un_solo_ayudante():
 
 
 def test_el_tope_de_cuerpo_va_por_niveles():
-    """F1 (M55, ruling del controlador): 64 KB para las páginas públicas y /api/v1/auth/, 1 MB para los webhooks y
-    25 MB para todo lo demás, con el mismo corte por Content-Length, sin root_path y un solo middleware por dentro de
-    CORS."""
+    """F1 (M55, ruling del controlador): 64 KB para las páginas públicas y /api/v1/auth/, 5 MB para los webhooks (F2,
+    agregado del controlador: Meta documenta webhooks de hasta 3 MB) y 25 MB para todo lo demás, con el mismo corte por
+    Content-Length, sin root_path y un solo middleware por dentro de CORS."""
     import asyncio
     import main
     from starlette.middleware.cors import CORSMiddleware
@@ -1037,15 +1037,17 @@ def test_el_tope_de_cuerpo_va_por_niveles():
         return bool(llamado), [m.get("status") for m in enviados if m["type"] == "http.response.start"]
 
     mb = 1024 * 1024
-    assert (lc.LIMITE_BYTES, lc.LIMITE_WEBHOOKS, lc.LIMITE_GENERAL) == (65536, mb, 25 * mb)
+    assert (lc.LIMITE_BYTES, lc.LIMITE_WEBHOOKS, lc.LIMITE_GENERAL) == (65536, 5 * mb, 25 * mb)
     for ruta in ("/api/v1/auth/login", "/api/v1/auth/forgot-password", "/api/v1/confirmar/ver"):
         assert correr(ruta, 70_000) == (False, [413]), ruta
         assert correr(ruta, 65536) == (True, []), ruta
     for ruta in ("/api/v1/webhooks/whatsapp", "/api/v1/webhooks/chatwoot", "/api/v1/whatsapp/webhook",
                  "/api/v1/chat/webhook/chatwoot"):
-        assert correr(ruta, 2_000_000) == (False, [413]), ruta
-        assert correr(ruta, 100_000) == (True, []), ruta
-    assert correr("/erp/api/v1/webhooks/whatsapp", 2_000_000, root_path="/erp") == (False, [413])
+        assert correr(ruta, 6 * mb) == (False, [413]), ruta
+        assert correr(ruta, 5 * mb + 1) == (False, [413]), ruta
+        assert correr(ruta, 5 * mb) == (True, []), ruta
+        assert correr(ruta, 4 * mb) == (True, []), ruta
+    assert correr("/erp/api/v1/webhooks/whatsapp", 6 * mb, root_path="/erp") == (False, [413])
     assert correr("/api/v1/ventas/solicitudes", mb) == (True, [])
     assert correr("/api/v1/empresa", 25 * mb) == (True, [])
     assert correr("/api/v1/empresa", 25 * mb + 1) == (False, [413])
@@ -1056,7 +1058,8 @@ def test_el_tope_de_cuerpo_va_por_niveles():
 
 def test_login_y_webhooks_grandes_dan_413_y_una_ruta_normal_de_1_mb_pasa(app_client, admin_token):
     """F1 (M55): por la app real. Un login de 70 KB da 413 con CORS (el navegador no lo convierte en «Failed to
-    fetch»); también forgot-password. Un webhook de 2 MB da 413. Un PUT /empresa de 1 MB llega a su validación."""
+    fetch»); también forgot-password. F2: un webhook de 6 MB da 413 y uno de 4 MB pasa el tope (llega a la firma: 401).
+    Un PUT /empresa de 1 MB llega a su validación."""
     relleno = "x" * 70_000
     resp = app_client.post("/api/v1/auth/login", data={"username": "nadie-f1", "password": "x", "relleno": relleno},
                            headers={"Origin": ORIGEN})
@@ -1067,8 +1070,12 @@ def test_login_y_webhooks_grandes_dan_413_y_una_ruta_normal_de_1_mb_pasa(app_cli
                                                                      "Origin": ORIGEN},
                            content=json.dumps({"email": "nadie-f1@test.invalid", "relleno": relleno}))
     assert resp.status_code == 413 and resp.headers.get("access-control-allow-origin") == ORIGEN, resp.text
-    resp = app_client.post("/api/v1/webhooks/whatsapp", content=b"x" * 2_000_000,
+    mb = 1024 * 1024
+    resp = app_client.post("/api/v1/webhooks/whatsapp", content=b"x" * (6 * mb),
                            headers={"Content-Type": "application/json"})
     assert resp.status_code == 413 and resp.json() == {"detail": MENSAJE_413}, resp.text
+    resp = app_client.post("/api/v1/webhooks/whatsapp", content=b"x" * (4 * mb),
+                           headers={"Content-Type": "application/json"})
+    assert resp.status_code == 401, resp.text  # sin firma: el cuerpo pasó el tope y llegó a la verificación
     resp = app_client.put("/api/v1/empresa", json={"nombre_comercial": "x" * 1_000_000}, headers=auth(admin_token))
     assert resp.status_code == 422, resp.text

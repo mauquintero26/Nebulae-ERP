@@ -7,7 +7,7 @@
  * muestran sus cuentas y se valida lo mismo antes de enviar, para que el boton no se habilite con datos que van a
  * dar 422. Todo en pesos enteros (pesos.js).
  */
-import { redondearPeso, formatoPesos } from './pesos.js';
+import { redondearPeso, formatoPesos, dividirMedioArriba } from './pesos.js';
 import { pedidoVigente } from './listas-ventas.js';
 import { humanizarCodigo } from './estados-pedido.js';
 import { etiquetaModalidad, etiquetaModalidadCorta } from './etiquetas-ventas.js';
@@ -126,8 +126,7 @@ export function anticipoDeCalculadora(cot, resumen, totalNuevo) {
   if (!resumen?.convertida && !cot?.sc_id && !esManual(cot) && totalGuardado > 0) {
     const anticipo = BigInt(Math.min(Math.max(0, redondearPeso(cot?.anticipo_cop)), totalGuardado));
     const n = BigInt(Math.max(0, redondearPeso(totalNuevo))) * anticipo;
-    const d = BigInt(totalGuardado);
-    return Number(n / d + ((n % d) * 2n >= d ? 1n : 0n));
+    return Number(dividirMedioArriba(n, BigInt(totalGuardado)));
   }
   return porcentajeDePesos(totalNuevo, resumen?.pct ?? 60);
 }
@@ -294,11 +293,10 @@ export function propagacionRecotizacion(data, pedido, cotNumero, usuario) {
 /**
  * B4: 'Ajustar anticipo' (PATCH /ventas/cotizaciones/{id}) y 'Crear Pedido de Venta' (POST
  * /ventas/cotizaciones/{id}/confirmar) solo para los roles que el servidor acepta: ADMIN y ASESOR, tambien con los
- * nombres legacy Admin y Vendedor (normalize_role de backend/app/api/dependencies.py).
+ * nombres legacy Admin y Vendedor (normalize_role de backend/app/api/dependencies.py). Revision final B3 (F2, M12): es
+ * esAdminOAsesor de lib/roles.js (una sola regla).
  */
-export function puedeGestionarCotizacion(role) {
-  return ['admin', 'asesor', 'vendedor'].includes(texto(role).toLowerCase());
-}
+export { esAdminOAsesor as puedeGestionarCotizacion } from './roles.js';
 
 /** El `verificacion_anticipo` que espera POST /cotizaciones/{id}/confirmar (sin fecha, el servidor pone hoy). */
 export function verificacionParaEnviar(form) {
@@ -410,7 +408,7 @@ export function pxpsDelPedido(pedido) {
 /**
  * Se puede crear una orden de pago (lo mismo que exige POST /pedidos/{id}/crear-pxp): pedido no CANCELADO, con saldo
  * (al peso) y sin otra PXP vigente. El detalle trae `pxps`; una fila de la lista solo `pxp_id` (que se limpia al
- * anularla, H45). El rol lo decide puedeCrearOrdenDePago (flujo.tsx).
+ * anularla, H45). El rol lo decide puedeCrearOrdenDePago (lib/roles.js).
  */
 export function pedidoAdmitePxp(p) {
   if (!esObjeto(p) || p.estado === 'CANCELADO' || !(redondearPeso(p.saldo_cop) > 0)) return false;

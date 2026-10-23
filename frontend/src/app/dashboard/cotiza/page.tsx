@@ -11,10 +11,10 @@ import { intentarTotalesCotizacion, etiquetaCortaTarifaIva, TARIFA_IVA_POR_DEFEC
 import { tarifaIvaDeConfig } from '@/lib/listas-ventas';
 import { porcentajeDePesos } from '@/lib/dinero-ventas';
 import { SelectTarifaIva, pesosOGuion } from '../ventas/cotizacion/calculadora-iva';
+import { formatoPesos } from '@/lib/pesos';
 
-function formatCOP(v: number) {
-  return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(v || 0);
-}
+// Revisión final B3 (F2, M10): el dinero como en la COT y los documentos ('$1.710'; Intl daba '$ 1.710').
+const formatCOP = formatoPesos;
 
 export default function CotizaPage() {
   const [productName, setProductName] = useState('');
@@ -63,8 +63,8 @@ export default function CotizaPage() {
   const totalConIva = ivaRapido.totales ? ivaRapido.totales.total_cop : null;
   const anticipo60 = totalConIva === null ? null : porcentajeDePesos(totalConIva, 60);
   const saldo40 = totalConIva === null || anticipo60 === null ? null : totalConIva - anticipo60;
-  // r1: el mismo pesosOGuion de la calculadora, con el formato de moneda que ya usa esta página.
-  const montoOGuion = (v: number | null) => pesosOGuion(v, formatCOP);
+  // r1: el mismo pesosOGuion de la calculadora (F2, M10: con formatoPesos, como el resto de la página).
+  const montoOGuion = (v: number | null) => pesosOGuion(v);
 
   const handleCrearCotizacionDirecta = async () => {
     if (!selectedCustomerId) {

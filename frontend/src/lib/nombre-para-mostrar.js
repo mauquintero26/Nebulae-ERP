@@ -10,7 +10,14 @@
  */
 
 export const ETIQUETA_NOMBRE_PARA_MOSTRAR = 'Nombre para mostrar';
-export const AYUDA_NOMBRE_PARA_MOSTRAR = 'Así verá el cliente a su asesor en los documentos. Si lo dejas vacío, verá «Tu asesor».';
+/**
+ * Revisión final B3 (F2, M14): sin nombre para mostrar, el servidor (documento_cliente.asesor_publico) usa el nombre
+ * escrito en la solicitud si no es un correo ni un usuario de entrada; solo sin él el cliente lee «Tu asesor».
+ */
+export const AYUDA_NOMBRE_PARA_MOSTRAR = 'Así verá el cliente a su asesor en los documentos. Si lo dejas vacío, verá el '
+  + 'nombre escrito en la solicitud (si no es un correo) o «Tu asesor».';
+/** F2 (M48): en solo lectura (quien no es ADMIN también llega a Empleados), por qué no se puede editar. */
+export const SOLO_ADMIN_NOMBRE_PARA_MOSTRAR = 'Solo la Administración lo cambia.';
 
 /**
  * Los espacios de los bordes fuera y los de adentro juntos en uno (también el tab y el espacio duro), como el servidor.
@@ -43,11 +50,19 @@ export function cuerpoNombreParaMostrar(escrito) {
 }
 
 /**
- * Solo un ADMIN lo edita (el servidor exige ROLE_ADMIN): 'Admin' legacy o 'ADMIN' canónico, sin importar mayúsculas
- * ni espacios, como normalize_role de dependencies.py (y esAdministrador de ventas/flujo.tsx).
- * @param {unknown} rol
- * @returns {boolean}
+ * F2 (M49): la línea de la fila de Empleados con el nombre que ve el cliente, o null si el usuario no lo tiene (la
+ * fila queda como antes).
+ * @param {unknown} valor el nombre_para_mostrar del usuario
+ * @returns {string | null}
  */
-export function puedeEditarNombreParaMostrar(rol) {
-  return typeof rol === 'string' && rol.trim().toLowerCase() === 'admin';
+export function lineaNombreParaMostrar(valor) {
+  const nombre = normalizarNombreParaMostrar(valor);
+  return nombre ? `${ETIQUETA_NOMBRE_PARA_MOSTRAR}: ${nombre}` : null;
 }
+
+/**
+ * Solo un ADMIN lo edita (el servidor exige ROLE_ADMIN): 'Admin' legacy o 'ADMIN' canónico, sin importar mayúsculas
+ * ni espacios, como normalize_role de dependencies.py. Revisión final B3 (F2, M12): es esAdmin de lib/roles.js (la
+ * misma de esAdministrador en ventas/flujo.tsx).
+ */
+export { esAdmin as puedeEditarNombreParaMostrar } from './roles.js';

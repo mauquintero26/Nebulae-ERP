@@ -4,3 +4,5 @@ export { DocumentoComercial } from './DocumentoComercial';
 export type { DocumentoComercialProps, MetaDocumento, SelloDocumento } from './DocumentoComercial';
 export { EncabezadoMarca, LogoMarca } from './EncabezadoMarca';
 export { ContactoEmpresa } from './ContactoEmpresa';
+// Revisión final B3 (F2, M17): el aviso del enlace y la carga, de las dos páginas públicas.
+export { AvisoEnlace, CargandoDocumento } from './AvisoEnlace';

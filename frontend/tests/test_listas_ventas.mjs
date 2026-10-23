@@ -18,8 +18,9 @@ import {
   tasaConversionCotizacion, superaDiasAlerta, resumenCancelacionSolicitudes, estadoEnPapelera, pasosParaCancelarSolicitud,
   repartirCancelacionSolicitudes, cifrasVentasDashboard, rutaSinParametro, esSolicitudActiva, pestanaDeSolicitud,
   pistaActivasSolicitudes, valorConfig, enteroConfig, DIAS_VALIDEZ_COTIZACION, configLeida, cuerpoGuardarConfig,
-  tarifaIvaDeConfig,
+  tarifaIvaDeConfig, AVISO_CONFIG_SIN_LEER,
 } from '../src/lib/listas-ventas.js';
+import { readFileSync } from 'node:fs';
 import { TEXTO_PAPELERA_SIN_FECHA, ESTADOS_SC } from '../src/lib/estados-solicitud.js';
 
 console.log('--- N8 TEST 1: diasAlerta lee las tres formas de la configuracion ---');
@@ -606,6 +607,18 @@ console.log('--- B3 T16 r1: «Guardar Configuración» nunca pisa claves que no 
   assert.deepEqual(cuerpoGuardarConfig(null, { a: '1' }, true), { a: '1' });
   assert.deepEqual(cuerpoGuardarConfig(Object.create({ a: '1' }), { a: '1' }, true), { a: '1' }, 'solo claves propias');
   assert.equal(cuerpoGuardarConfig(inicial, null, true), null);
+}
+
+console.log('--- Revisión final B3 (F2, M16): los botones de Configuración del Hub dicen por qué están apagados ---');
+{
+  assert.equal(AVISO_CONFIG_SIN_LEER, 'No se pudo leer la configuración: pulsa Actualizar.');
+  const hub = readFileSync(new URL('../src/app/dashboard/ventas/page.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  // «Ajustar Tiempos» y «Configuración»: deshabilitados sin /config, con el porqué en el title.
+  const botones = hub.match(/<button onClick=\{\(\)=>setShowConfig\(true\)\} disabled=\{!configCargada\}[^>]*>/g) || [];
+  assert.equal(botones.length, 2, 'los dos botones que abren el panel');
+  for (const boton of botones) {
+    assert.ok(boton.includes('title={configCargada ? undefined : AVISO_CONFIG_SIN_LEER}'), boton);
+  }
 }
 
 console.log('--- B3 T17: tarifaIvaDeConfig (el IVA con que arranca el Cotizador Rápido) ---');

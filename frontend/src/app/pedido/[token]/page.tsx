@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { MessageCircle } from 'lucide-react';
 import { API_URL } from '@/lib/api';
-import { DocumentoComercial } from '@/components/documento';
+import { AvisoEnlace, CargandoDocumento, DocumentoComercial } from '@/components/documento';
 import {
   metaDeLaVista, pedirPublico, tituloDeLaPagina, vistaConDocumento, vistaDeRespuesta, type VistaPublica,
 } from '@/lib/confirmacion-publica';
@@ -12,7 +12,6 @@ import {
   coloresBotonPrincipal, contactosEmpresa, mensajeWhatsAppDocumento, resumenPagosCliente,
 } from '@/lib/documento-comercial';
 import { formatoPesos } from '@/lib/pesos';
-import { AvisoEnlace, CargandoDocumento } from '@/app/confirmar/[token]/aviso-enlace';
 
 /** Un pago de resumenPagosCliente: el concepto del servidor, 'Transferencia · 3 de octubre de 2026' y el monto. */
 type PagoCliente = { concepto: string; metodo: string | null; fecha: string; monto: number; detalle: string };

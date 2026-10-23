@@ -14,8 +14,9 @@ import assert from 'node:assert/strict';
 import {
   canalTexto, textoSeguimiento, puedeDetener, validarConfigSeguimiento, LIMITES_SEGUIMIENTO, MENSAJE_HORARIO,
   lineaSeguimientoEnlace, accionDetenerSeguimiento, configSeguimientoInicial, avisoDiasSeguimiento, opcionesHora,
-  etiquetaHora, esAdminOAsesor,
+  etiquetaHora, esAdminOAsesor, errorConfigSeguimiento,
 } from '../src/lib/seguimiento.js';
+import { readFileSync } from 'node:fs';
 
 const LUNES_9AM = '2026-10-05T14:00:00Z'; // lunes 5 de octubre, 9:00 a. m. en Colombia
 const MIERCOLES_3PM = '2026-10-07T20:00:00Z'; // miércoles 7 de octubre, 3:00 p. m.
@@ -347,6 +348,92 @@ console.log('--- TEST 15 (T16 r1, menor 5): esAdminOAsesor, quien puede detener 
   for (const rol of ['Finanzas', 'FINANZAS', 'COMPRAS', 'ERP', 'Bodega', 'consulta', 'Mercadeo', '', null, undefined, 7]) {
     assert.equal(esAdminOAsesor(rol), false, String(rol));
   }
+}
+
+const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+
+console.log('--- TEST 16 (revisión final F2, M15): el error de Configuración dice qué campo falló (aria-invalid) ---');
+{
+  const defecto = { seguimiento_auto_activo: 'true', seguimiento_dias: '2', seguimiento_max: '1',
+    seguimiento_solo_horario: 'true', seguimiento_hora_inicio: '8', seguimiento_hora_fin: '18' };
+  assert.equal(errorConfigSeguimiento(defecto), null);
+  assert.equal(errorConfigSeguimiento(null), null);
+  assert.deepEqual(errorConfigSeguimiento({ ...defecto, seguimiento_dias: '0' }),
+    { clave: 'seguimiento_dias', mensaje: 'Los días antes del recordatorio deben estar entre 1 y 15.' });
+  assert.deepEqual(errorConfigSeguimiento({ ...defecto, seguimiento_max: '6' }),
+    { clave: 'seguimiento_max', mensaje: 'Los recordatorios deben ser entre 1 y 5.' });
+  assert.deepEqual(errorConfigSeguimiento({ seguimiento_auto_activo: 'si' }), { clave: 'seguimiento_auto_activo',
+    mensaje: 'El recordatorio automático debe estar encendido o apagado (true o false).' });
+  // Las horas al revés: el campo es la hora final (la que hay que mover).
+  assert.deepEqual(errorConfigSeguimiento({ ...defecto, seguimiento_hora_inicio: '18', seguimiento_hora_fin: '18' }),
+    { clave: 'seguimiento_hora_fin', mensaje: MENSAJE_HORARIO });
+  // validarConfigSeguimiento es su mensaje (una sola regla).
+  for (const cfg of [defecto, { ...defecto, seguimiento_dias: 16 }, { ...defecto, seguimiento_hora_inicio: 20,
+    seguimiento_hora_fin: 8 }, null]) {
+    assert.equal(validarConfigSeguimiento(cfg), errorConfigSeguimiento(cfg)?.mensaje ?? null, JSON.stringify(cfg));
+  }
+  // El ConfigPanel del Hub: el error del pie en una región role="alert" siempre montada (como ChannelModal) y el campo
+  // que falló con aria-invalid y ligado al error.
+  const hub = leer('app/dashboard/ventas/page.tsx');
+  assert.ok(/<div role="alert">\{error \? <p id=\{idError\} className="[^"]*">\{error\}<\/p> : null\}<\/div>/.test(hub),
+    'la región del pie siempre montada; solo cambia su contenido');
+  assert.ok(!hub.includes('{error && <p className="text-xs font-semibold text-rose-600 text-center">{error}</p>}'),
+    'sin montar el párrafo solo cuando hay error');
+  assert.ok(hub.includes('const invalido = errorConfigSeguimiento(cfg);')
+    && hub.includes('if(invalido){ setError(invalido.mensaje); setCampoError(invalido.clave); return; }'), 'qué campo falló');
+  assert.ok(hub.includes('error={campoError ? {clave: campoError, id: idError} : null}'), 'la sección lo recibe');
+  const seccion = leer('app/dashboard/ventas/seguimiento.tsx');
+  for (const clave of ['seguimiento_auto_activo', 'seguimiento_dias', 'seguimiento_max', 'seguimiento_solo_horario',
+    'seguimiento_hora_inicio', 'seguimiento_hora_fin']) {
+    assert.ok(seccion.includes(`idError={idErrorDe('${clave}')}`), `${clave}: aria-invalid si es el que falló`);
+  }
+  const campos = leer('app/dashboard/ventas/hub-bloque3.tsx');
+  assert.equal((campos.match(/aria-invalid=\{idError \? true : undefined\} aria-describedby=\{idError\}/g) || []).length, 3,
+    'CampoNumero, CampoSelect e Interruptor');
+}
+
+/** El contenido de cada región viva (role="status" o role="alert") de un .tsx, hasta el cierre de su etiqueta. */
+function regionesVivas(fuente) {
+  const salida = [];
+  const roles = /role="(?:status|alert)"/g;
+  let m;
+  while ((m = roles.exec(fuente))) {
+    const inicio = fuente.lastIndexOf('<', m.index);
+    const nombre = /^<([A-Za-z]+)/.exec(fuente.slice(inicio))[1];
+    const finApertura = fuente.indexOf('>', m.index);
+    if (fuente[finApertura - 1] === '/') continue;
+    const etiquetas = new RegExp(`<(/?)${nombre}\\b[^>]*?(/?)>`, 'g');
+    etiquetas.lastIndex = finApertura + 1;
+    let profundidad = 1;
+    let t;
+    while (profundidad > 0 && (t = etiquetas.exec(fuente))) {
+      if (t[1]) profundidad -= 1;
+      else if (!t[2]) profundidad += 1;
+      if (profundidad === 0) salida.push(fuente.slice(finApertura + 1, t.index));
+    }
+  }
+  return salida;
+}
+
+console.log('--- TEST 17 (F2, M15): las regiones vivas no envuelven botones ---');
+{
+  assert.deepEqual(regionesVivas('<div role="status"><p>a</p><div>b</div></div><button>x</button>'), ['<p>a</p><div>b</div>']);
+  for (const ruta of ['app/dashboard/ventas/seguimiento.tsx', 'app/dashboard/ventas/ventana-enlace.tsx']) {
+    const regiones = regionesVivas(leer(ruta));
+    assert.ok(regiones.length > 0, `${ruta}: tiene regiones vivas`);
+    for (const region of regiones) assert.doesNotMatch(region, /<button\b|<Button\b/, `${ruta}: sin botones dentro`);
+  }
+  // Los botones siguen ahí, fuera de la región.
+  assert.ok(leer('app/dashboard/ventas/seguimiento.tsx').includes('No enviar recordatorios'));
+  assert.ok(leer('app/dashboard/ventas/ventana-enlace.tsx').includes('Volver a revisar'));
+}
+
+console.log('--- TEST 18 (F2, M53): un solo enteroConfig (el de listas-ventas.js); el local es enteroDeTexto ---');
+{
+  const lib = leer('lib/seguimiento.js');
+  assert.ok(lib.includes("import { valorConfig, enteroConfig } from './listas-ventas.js';"), 'sin alias');
+  assert.ok(/^function enteroDeTexto\(v\) \{/m.test(lib), 'la función local de un argumento');
+  assert.doesNotMatch(lib, /enteroAcotadoDeConfig|^function enteroConfig\(/m, 'sin el alias ni el nombre repetido');
 }
 
 console.log('OK test_seguimiento.mjs');

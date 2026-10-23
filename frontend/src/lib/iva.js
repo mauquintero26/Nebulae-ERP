@@ -31,8 +31,8 @@
 
 import { stripPy } from './marca-empresa.js';
 // B3 T17 (parte 4): formatoPesos y formatoCantidad solo escriben los textos de las pantallas, sobre montos ya enteros
-// (pesoEntero).
-import { formatoPesos, formatoCantidad } from './pesos.js';
+// (pesoEntero). Revisión final B3 (F2, M11): dividirMedioArriba es la regla de redondeo de las dos libs de dinero.
+import { formatoPesos, formatoCantidad, dividirMedioArriba } from './pesos.js';
 
 // ─── Tarifas (parte 1) ─────────────────────────────────────────────────────────────────────────────────────────
 
@@ -166,7 +166,7 @@ function enteroMedioArriba({ neg, digitos, exp }) {
     entero = 0n; // menos de 0,1
   } else {
     const divisor = 10n ** BigInt(-exp);
-    entero = digitos / divisor + ((digitos % divisor) * 2n >= divisor ? 1n : 0n);
+    entero = dividirMedioArriba(digitos, divisor);
     if (entero.toString().length > PRECISION) return null;
   }
   return neg ? -entero : entero;
@@ -188,9 +188,6 @@ function redondearPesoExacto(valor) {
 
 /** _peso_entero del backend: redondear_peso como entero, y 0 si no es un monto (presentación de datos guardados). */
 const pesoEntero = (valor) => redondearPesoExacto(valor) ?? 0n;
-
-/** n / d con medio hacia arriba, para n >= 0 y d > 0 (BigInt). */
-const divMedioArriba = (n, d) => n / d + ((n % d) * 2n >= d ? 1n : 0n);
 
 // ─── Reparto proporcional ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -358,11 +355,11 @@ export function calcularTotalesCotizacion(productos, descuentoPct) {
       total_cop: Number(bruto) });
   });
   const subtotal = brutos.reduce((a, b) => a + b, 0n);
-  const descuento = divMedioArriba(subtotal * pb, UNO_PB);
+  const descuento = dividirMedioArriba(subtotal * pb, UNO_PB);
   const partes = repartirBig(brutos, descuento);
   lineas.forEach((linea, i) => {
     const base = brutos[i] - partes[i];
-    const iva = divMedioArriba(base * BigInt(linea.iva_pct), 100n);
+    const iva = dividirMedioArriba(base * BigInt(linea.iva_pct), 100n);
     Object.assign(linea, { descuento_cop: Number(partes[i]), base_iva_cop: Number(base), iva_cop: Number(iva),
       total_con_iva_cop: Number(base + iva) });
   });
@@ -467,6 +464,17 @@ export function filasIvaTotales(t) {
 }
 
 /**
+ * Revisión final B3 (F2, M13): la cantidad de una línea como la escribe el documento del cliente ('2', '2,5'); una
+ * guardada como texto ('2.5') también se lee y lo que no es un número da '0'. La usan las tarjetas de la COT (con y sin
+ * IVA, PrecioLineaIva) y la tabla del pedido (filaProductoPedido).
+ * @param {unknown} qty
+ * @returns {string}
+ */
+export function cantidadDeLinea(qty) {
+  return formatoCantidad(Number(qty ?? 0)) || '0';
+}
+
+/**
  * El IVA de una línea guardada de la cotización, para su tarjeta en el detalle (IVA punto 11):
  * - null si la línea vale $0 (totalSinIvaDeLinea: total_cop o, sin él, unitario × cantidad exacto): no se dice nada
  *   del IVA;
@@ -487,7 +495,7 @@ export function ivaDeLinea(linea) {
   return {
     discriminado: true,
     // r1: la cantidad como en el documento del cliente ('2,5'); una guardada como texto ('3') también se lee.
-    cantidad: `Cant. ${formatoCantidad(Number(l.qty ?? 0)) || '0'} × ${formatoPesos(Number(pesoEntero(l.unit_price_cop)))} sin IVA`,
+    cantidad: `Cant. ${cantidadDeLinea(l.qty)} × ${formatoPesos(Number(pesoEntero(l.unit_price_cop)))} sin IVA`,
     iva: `${ETIQUETAS_TARIFA_IVA[tarifa]} · ${formatoPesos(iva)}`,
     descuento: textoDescuentoLinea(descuento),
     total_con_iva_cop: conIva,
@@ -565,7 +573,7 @@ export function filaProductoPedido(linea, ivaDiscriminado) {
   const nombre = NOMBRES_FILA_PEDIDO.map((k) => (typeof l[k] === 'string' ? stripPy(l[k]) : '')).find(Boolean);
   const base = {
     producto: nombre || 'Producto sin nombre',
-    cantidad: formatoCantidad(Number(l.qty ?? l.cantidad ?? 0)) || '0',
+    cantidad: cantidadDeLinea(l.qty ?? l.cantidad),
     unitario: Number(pesoEntero(l.unit_price_cop ?? l.precio_unitario)),
   };
   const sinIva = totalSinIvaDeLinea(l);

@@ -101,6 +101,13 @@ export function pastillasCambiosCliente(resumen) {
 /** R3 (C19): el aviso bajo la «Nota para el cliente» de la SC y bajo la nota de la cotización. Una sola redacción. */
 export const AYUDA_NOTA_CLIENTE = 'El cliente verá esta nota';
 
+/**
+ * Revisión final B3 (F2, M8): el título de la «Nota para el cliente» de la SC (sc_nota_cliente del GET) en los detalles
+ * de la COT y del PVEN: también sale en su documento del cliente (notas_para_cliente del servidor), así que el asesor la
+ * ve ahí, con AYUDA_NOTA_CLIENTE debajo.
+ */
+export const TITULO_NOTA_CLIENTE_DE_LA_SOLICITUD = 'Nota para el cliente (de la solicitud)';
+
 /** El máximo del motivo de POST /ventas/solicitudes/{id}/cancelar (CancelarSolicitudBody: len() de Python). */
 export const MAX_MOTIVO_CANCELACION = 500;
 

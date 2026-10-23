@@ -16,7 +16,7 @@
 
 import { fechaHoraCO } from './fechas-colombia.js';
 import { stripPy } from './marca-empresa.js';
-import { valorConfig, enteroConfig as enteroAcotadoDeConfig } from './listas-ventas.js';
+import { valorConfig, enteroConfig } from './listas-ventas.js';
 
 /** Escríbele o reenvíale: el cierre de los motivos que piden que el asesor actúe. */
 const QUE_HACER = 'Escríbele al cliente o reenvíale el enlace.';
@@ -194,40 +194,57 @@ function booleano(v) {
   return null;
 }
 
-/** _entero del backend: un entero (no booleano) o un texto de dígitos ASCII (sin los espacios de los bordes). */
-function enteroConfig(v) {
+/**
+ * _entero del backend: un entero (no booleano) o un texto de dígitos ASCII (sin los espacios de los bordes). Revisión
+ * final B3 (F2, M53): se llama enteroDeTexto para no confundirse con enteroConfig de listas-ventas.js (cfg, clave,
+ * defecto, mínimo, máximo), que este archivo también usa.
+ */
+function enteroDeTexto(v) {
   if (typeof v === 'number') return Number.isInteger(v) ? v : null;
   if (typeof v === 'string' && /^[0-9]+$/.test(stripPy(v))) return Number(stripPy(v));
   return null;
 }
 
 /**
- * El mensaje del 422 que daría PATCH /ventas/config con estos valores, o null si están bien. `cfg` usa las claves de
- * admin_config (seguimiento_auto_activo, seguimiento_dias, seguimiento_max, seguimiento_solo_horario,
- * seguimiento_hora_inicio, seguimiento_hora_fin); las que falten no se revisan y las demás claves del panel se ignoran.
- * Interruptores: un booleano o 'true'/'false'. Números: un entero o un texto de dígitos dentro de LIMITES_SEGUIMIENTO.
- * Con las dos horas, la final debe ser mayor que la inicial (MENSAJE_HORARIO); con una sola, el backend la combina
- * con lo guardado y aquí no se puede saber.
+ * El error del 422 que daría PATCH /ventas/config con estos valores, con la clave del campo que falló ({clave,
+ * mensaje}), o null si están bien. `cfg` usa las claves de admin_config (seguimiento_auto_activo, seguimiento_dias,
+ * seguimiento_max, seguimiento_solo_horario, seguimiento_hora_inicio, seguimiento_hora_fin); las que falten no se
+ * revisan y las demás claves del panel se ignoran. Interruptores: un booleano o 'true'/'false'. Números: un entero o un
+ * texto de dígitos dentro de LIMITES_SEGUIMIENTO. Con las dos horas, la final debe ser mayor que la inicial
+ * (MENSAJE_HORARIO, en la hora final); con una sola, el backend la combina con lo guardado y aquí no se puede saber.
+ * Revisión final B3 (F2, M15): la clave es para el aria-invalid del campo en el ConfigPanel del Hub.
  * @param {unknown} cfg
- * @returns {string | null}
+ * @returns {{clave: string, mensaje: string} | null}
  */
-export function validarConfigSeguimiento(cfg) {
+export function errorConfigSeguimiento(cfg) {
   if (!esObjeto(cfg)) return null;
   const valores = {};
   for (const clave of CLAVES) {
     if (!Object.prototype.hasOwnProperty.call(cfg, clave)) continue;
     if (INTERRUPTORES.has(clave)) {
-      if (booleano(cfg[clave]) === null) return MENSAJES[clave];
+      if (booleano(cfg[clave]) === null) return { clave, mensaje: MENSAJES[clave] };
       continue;
     }
-    const n = enteroConfig(cfg[clave]);
+    const n = enteroDeTexto(cfg[clave]);
     const [minimo, maximo] = LIMITES_SEGUIMIENTO[clave];
-    if (n === null || n < minimo || n > maximo) return MENSAJES[clave];
+    if (n === null || n < minimo || n > maximo) return { clave, mensaje: MENSAJES[clave] };
     valores[clave] = n;
   }
   const { seguimiento_hora_inicio: inicio, seguimiento_hora_fin: fin } = valores;
-  if (inicio !== undefined && fin !== undefined && fin <= inicio) return MENSAJE_HORARIO;
+  if (inicio !== undefined && fin !== undefined && fin <= inicio) {
+    return { clave: 'seguimiento_hora_fin', mensaje: MENSAJE_HORARIO };
+  }
   return null;
+}
+
+/**
+ * El mensaje del 422 que daría PATCH /ventas/config con estos valores, o null si están bien (el de
+ * errorConfigSeguimiento: una sola regla).
+ * @param {unknown} cfg
+ * @returns {string | null}
+ */
+export function validarConfigSeguimiento(cfg) {
+  return errorConfigSeguimiento(cfg)?.mensaje ?? null;
 }
 
 // ─── B3 T16: la ventana del enlace, TarjetaSeguimiento y la sección «Seguimiento de confirmación» del Hub ────────
@@ -294,7 +311,7 @@ export function configSeguimientoInicial(cfg) {
     const b = crudo === null ? null : booleano(crudo);
     return String(b === null ? DEFECTOS[clave] : b);
   };
-  const numero = (clave) => enteroAcotadoDeConfig(cfg, clave, DEFECTOS[clave], ...LIMITES_SEGUIMIENTO[clave]);
+  const numero = (clave) => enteroConfig(cfg, clave, DEFECTOS[clave], ...LIMITES_SEGUIMIENTO[clave]);
   let inicio = numero('seguimiento_hora_inicio');
   let fin = numero('seguimiento_hora_fin');
   if (fin <= inicio) [inicio, fin] = [DEFECTOS.seguimiento_hora_inicio, DEFECTOS.seguimiento_hora_fin];
@@ -320,7 +337,7 @@ export function avisoDiasSeguimiento(cfg) {
   if (!esObjeto(cfg)) return null;
   if (booleano(valorConfig(cfg, 'seguimiento_auto_activo') ?? 'true') === false) return null;
   const positivo = (clave) => {
-    const n = enteroConfig(valorConfig(cfg, clave));
+    const n = enteroDeTexto(valorConfig(cfg, clave));
     return n !== null && n > 0 ? n : null;
   };
   const dias = positivo('seguimiento_dias');
@@ -368,13 +385,8 @@ export function opcionesHora(clave) {
 
 /**
  * B3 T16 r1: quien puede usar «No enviar recordatorios» (POST …/seguimiento/detener) y leer el estado del WhatsApp
- * automático (GET /ventas/envio-cliente/whatsapp/estado): los dos exigen ADMIN o ASESOR en el servidor. Espejo de
- * normalize_role (legacy 'Admin'/'Vendedor' o canónico, sin importar mayúsculas ni espacios), como esAsesorElegible de
- * flujo.tsx: así ningún botón termina en un 403.
- * @param {unknown} role
- * @returns {boolean}
+ * automático (GET /ventas/envio-cliente/whatsapp/estado): los dos exigen ADMIN o ASESOR en el servidor, así que ningún
+ * botón termina en un 403. Revisión final B3 (F2, M52): la regla vive en lib/roles.js (sobre normalizarRol, el espejo
+ * de normalize_role); flujo.tsx la reexporta como esAsesorElegible.
  */
-export function esAdminOAsesor(role) {
-  const r = typeof role === 'string' ? role.toLowerCase().trim() : '';
-  return r === 'admin' || r === 'vendedor' || r === 'asesor';
-}
+export { esAdminOAsesor } from './roles.js';

@@ -2,10 +2,11 @@
 
 import { Send } from 'lucide-react';
 import { Button } from '@/components/ui';
-import { ivaDeLinea, filasIvaTotales } from '@/lib/iva';
+import { ivaDeLinea, filasIvaTotales, cantidadDeLinea } from '@/lib/iva';
 import { textoValidezCotizacion } from '@/lib/documento-comercial';
 import { textoSeguimiento } from '@/lib/seguimiento';
 import { formatoPesos } from '@/lib/pesos';
+import { TEXTO_REENVIAR_AL_CLIENTE } from '@/lib/envio-whatsapp';
 import { NextStepCard } from '../../flujo';
 import { TarjetaSeguimiento } from '../../seguimiento';
 
@@ -45,7 +46,8 @@ export function PrecioLineaIva({ item }: { item: LineaGuardada }) {
   }
   return (
     <>
-      <p className="text-xs text-slate-400">Cant. {item.qty ?? 0} &times; {formatoPesos(item.unit_price_cop)}</p>
+      {/* Revisión final B3 (F2, M13): la cantidad con coma decimal, como la rama con IVA y el documento del cliente. */}
+      <p className="text-xs text-slate-400">Cant. {cantidadDeLinea(item.qty)} &times; {formatoPesos(item.unit_price_cop)}</p>
       <p className="font-black text-slate-900 text-lg">{formatoPesos(item.total_cop != null ? item.total_cop : (Number(item.unit_price_cop) || 0) * (Number(item.qty) || 0))}</p>
       {iva && <p className="text-[11px] text-slate-400">{iva.texto}</p>}
     </>
@@ -103,7 +105,7 @@ export function PasoEsperandoConfirmacion({ cotizacion, puedeReenviar, enviando,
         <>
           <TarjetaSeguimiento tipoDoc="COT" doc={cotizacion} onCambio={onCambio} />
           {puedeReenviar && (
-            <Button color="blue" size="lg" icon={Send} loading={enviando} onClick={onReenviar}>Reenviar al cliente</Button>
+            <Button color="blue" size="lg" icon={Send} loading={enviando} onClick={onReenviar}>{TEXTO_REENVIAR_AL_CLIENTE}</Button>
           )}
         </>
       ) : undefined}

@@ -10,10 +10,11 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import {
   avisoCambiosCliente, etiquetaChipCambios, motivoCancelacionNoLaNecesita, MAX_MOTIVO_CANCELACION,
   pastillasCambiosCliente, RUTA_LISTA_SOLICITUDES, RUTA_LISTA_COTIZACIONES, AYUDA_NOTA_CLIENTE,
+  TITULO_NOTA_CLIENTE_DE_LA_SOLICITUD,
 } from '../src/lib/cambios-cliente.js';
 
 const leer = (ruta) => readFileSync(new URL(`../src/${ruta}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
@@ -141,6 +142,48 @@ console.log('--- TEST 6 (T18 r1): AYUDA_NOTA_CLIENTE y las pantallas que usan la
   assert.ok(leer('app/dashboard/ventas/solicitud/solicitud-client.tsx').includes('<ChipCambiosCliente doc={sc}/>'), 'lista de SC');
   assert.ok(leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx').includes('<ChipCambiosCliente doc={cot} tipoDoc="COT"/>'),
     'lista de COT');
+}
+
+console.log('--- Revisión final B3 (F2, M8 y M51): la «Nota para el cliente» de la SC en la COT y el PVEN; un solo aviso ---');
+{
+  // Sin los comentarios ({/* */}, /* */ y //): un comentario puede citar el aviso.
+  const codigo = (fuente) => fuente.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const importa = (fuente, simbolo) =>
+    new RegExp(`import \\{[^}]*\\b${simbolo}\\b[^}]*\\} from '@/lib/cambios-cliente';`).test(fuente);
+  // M51: ningún .tsx de dashboard/ventas escribe el aviso a mano; los dos sitios de la COT (T17) importan la constante.
+  const carpeta = new URL('../src/app/dashboard/ventas/', import.meta.url);
+  const tsx = readdirSync(carpeta, { recursive: true }).map(String).filter((n) => n.endsWith('.tsx'));
+  assert.ok(tsx.length > 20, 'se leen los .tsx de ventas');
+  for (const nombre of tsx) {
+    const fuente = readFileSync(new URL(nombre.replace(/\\/g, '/'), carpeta), 'utf8');
+    assert.ok(!codigo(fuente).includes('El cliente verá esta nota'), `${nombre}: el aviso sale de AYUDA_NOTA_CLIENTE`);
+  }
+  const editor = leer('app/dashboard/ventas/cotizacion/cotizacion-client.tsx');
+  const cot = leer('app/dashboard/ventas/cotizacion/[id]/page.tsx');
+  assert.ok(importa(editor, 'AYUDA_NOTA_CLIENTE') && importa(cot, 'AYUDA_NOTA_CLIENTE'), 'la COT importa la constante');
+  assert.ok(/<p id=\{notasAyudaId\} [^>]*>\{AYUDA_NOTA_CLIENTE\}<\/p>/.test(editor), 'la calculadora, ligada al textarea');
+  assert.ok(/<p className="[^"]*">\{AYUDA_NOTA_CLIENTE\}<\/p>/.test(cot), 'el detalle, bajo la nota de la cotización');
+
+  // M8: la SC le manda su «Nota para el cliente» al cliente también en la COT y el PVEN (notas_para_cliente del
+  // servidor): sus detalles internos la muestran aparte, con su título y el aviso, desde sc_nota_cliente.
+  assert.equal(TITULO_NOTA_CLIENTE_DE_LA_SOLICITUD, 'Nota para el cliente (de la solicitud)');
+  assert.ok(importa(cot, 'TITULO_NOTA_CLIENTE_DE_LA_SOLICITUD'), 'la COT importa el título');
+  assert.ok(cot.includes('<NotaParaElCliente nota={cotizacion?.sc_nota_cliente} titulo={TITULO_NOTA_CLIENTE_DE_LA_SOLICITUD} />'),
+    'la COT la pinta con la pieza de la SC');
+  assert.ok(cot.includes('(cotizacion?.sc_notas || cotizacion?.sc_nota_cliente || cotizacion?.notas) && ('),
+    'también cuando es la única nota');
+  assert.ok(!cot.includes('la de la solicitud no (es interna)'), 'el comentario ya no dice que el cliente no ve la SC');
+  const detalleSc = leer('app/dashboard/ventas/solicitud/[id]/detalle-bloque3.tsx');
+  assert.ok(detalleSc.includes("export function NotaParaElCliente({ nota, titulo = 'Nota para el cliente' }"),
+    'NotaParaElCliente acepta el título (el de la SC por defecto)');
+  assert.ok(/>\{titulo\}<\/p>/.test(detalleSc) && /\{AYUDA_NOTA_CLIENTE\}/.test(detalleSc));
+  const venta = leer('app/dashboard/ventas/venta/[id]/page.tsx');
+  assert.ok(importa(venta, 'TITULO_NOTA_CLIENTE_DE_LA_SOLICITUD'), 'el pedido importa el título');
+  assert.ok(venta.includes("const notaClienteSolicitud = (pedido?.sc_nota_cliente || '').trim();"), 'el pedido la lee');
+  assert.ok(venta.includes('[TITULO_NOTA_CLIENTE_DE_LA_SOLICITUD, notaClienteSolicitud, AYUDA_NOTA_CLIENTE]'),
+    'con el aviso, después de la nota interna de la SC');
+  assert.ok(venta.includes('(notaSolicitud || notaClienteSolicitud || notaCotizacion || mostrarNotaPedido)'),
+    'también cuando es la única nota');
 }
 
 console.log('✓ Todas las pruebas de los cambios del cliente pasaron.');

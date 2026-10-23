@@ -2980,6 +2980,9 @@ def get_cotizacion(cot_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLE
     # H35+H48: la nota ACTUAL de la solicitud, aparte de cot.notas (nunca se copia: asi cambia si la SC cambia y
     # funciona sin backfill). Solo en el detalle (no en _cot_dict) para no hacer una consulta por fila en el listado.
     d["sc_notas"] = _texto_o_none(sc.notas) if sc is not None else None
+    # Revision final B3 (F2, M8): la «Nota para el cliente» de la SC, que SI sale en el documento de la COT que recibe el
+    # cliente (documento_cliente.notas_para_cliente). Aparte de sc_notas (interna), con la misma lectura de la SC.
+    d["sc_nota_cliente"] = _texto_o_none(sc.nota_cliente) if sc is not None else None
     # U11 (C9): estado de la SC y si el cliente la confirmo (Gate 1 vigente), con esa misma lectura. El aviso de una COT
     # creada sin confirmacion se muestra mientras la SC no este confirmada. None si la COT no tiene SC.
     d["sc_estado"] = sc.estado if sc is not None else None
@@ -4187,12 +4190,14 @@ def get_pedido(ven_id: int, user: User = Depends(require_roles(*ALL_ERP_ROLES)),
     # H4 + H35+H48: la SC y la COT del pedido se leen UNA vez cada una (solo las columnas que hacen falta). El asesor
     # sale del cotizador de la COT o, si no, del asesor de la SC; las notas son las ACTUALES de cada documento (nunca
     # copiadas al pedido). Solo en el detalle (no en _ven_dict) para no hacer una consulta por fila en el listado.
-    sc = (db.query(CustomerRequest.notas, CustomerRequest.advisor_name).filter(CustomerRequest.id == v.sc_id).first()
-          if v.sc_id else None)
+    sc = (db.query(CustomerRequest.notas, CustomerRequest.nota_cliente, CustomerRequest.advisor_name)
+          .filter(CustomerRequest.id == v.sc_id).first() if v.sc_id else None)
     cot = (db.query(SalesQuotation.notas, SalesQuotation.cotizador).filter(SalesQuotation.id == v.cot_id).first()
            if v.cot_id else None)
     d["advisor_name"] = _asesor_de_pedido(cot.cotizador if cot else None, sc.advisor_name if sc else None)
     d["sc_notas"] = _texto_o_none(sc.notas) if sc else None
+    # Revision final B3 (F2, M8): la «Nota para el cliente» de la SC, que SI sale en el documento del pedido.
+    d["sc_nota_cliente"] = _texto_o_none(sc.nota_cliente) if sc else None
     d["cot_notas"] = _texto_o_none(cot.notas) if cot else None
     # U23 (B3 T7): el estado del enlace de consulta que se le envio al cliente (sin el token).
     d["enlace_cliente"] = _enlace_cliente_del_pedido(db, ven_id)

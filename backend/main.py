@@ -59,9 +59,9 @@ _CORS_ORIGINS = _build_cors_origins()
 
 # Bloque 3, T20 (M19) y revision final (F1, M55): tope del cuerpo por niveles, ver app/core/limite_cuerpo.py: 64 KB
 # para las rutas publicas sin login (/api/v1/confirmar/, /api/v1/pedido-cliente/, /api/v1/publico/) y /api/v1/auth/,
-# 1 MB para los webhooks y 25 MB para todo lo demas. Se agrega ANTES que CORSMiddleware: Starlette pone por FUERA el
-# ultimo que se agrega, asi que este queda por DENTRO de CORS y su 413 sale con Access-Control-Allow-Origin (si no, el
-# navegador mostraria "Failed to fetch", como en el handler de abajo).
+# 5 MB para los webhooks (F2: Meta documenta hasta 3 MB) y 25 MB para todo lo demas. Se agrega ANTES que
+# CORSMiddleware: Starlette pone por FUERA el ultimo que se agrega, asi que este queda por DENTRO de CORS y su 413 sale
+# con Access-Control-Allow-Origin (si no, el navegador mostraria "Failed to fetch", como en el handler de abajo).
 from app.core.limite_cuerpo import LimiteDeCuerpo
 app.add_middleware(LimiteDeCuerpo)
 

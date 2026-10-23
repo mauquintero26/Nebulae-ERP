@@ -176,7 +176,9 @@ export function avisoCorreccionContacto(respuesta) {
   } else if (cotizaciones.length > 1) {
     principal = `Datos corregidos. Se anularon los enlaces de las cotizaciones ${unirConY(cotizaciones)} enviados al dato anterior: ${REENVIA_COTIZACIONES}`;
   } else if (enlaces.length > 0) {
-    principal = 'Datos corregidos. Se anuló el enlace que se había enviado al dato anterior: usa «Reenviar enlace de confirmación».';
+    // Revisión final B3 (F2, M9/M22): el botón de la SC en Pendiente es TEXTO_REENVIAR_AL_CLIENTE de envio-whatsapp.js
+    // (no se importa: envio-whatsapp.js llega a este archivo por roles.js y chatter.js; test_datos_cliente.mjs los compara).
+    principal = 'Datos corregidos. Se anuló el enlace que se había enviado al dato anterior: usa «Reenviar al cliente».';
   } else if (respuesta.confirmacion_anulada === true) {
     principal = `Datos corregidos. La ${CONFIRMACION_ANTERIOR_NO_VALE}`;
   } else {

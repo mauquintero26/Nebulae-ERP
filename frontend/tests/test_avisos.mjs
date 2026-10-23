@@ -304,4 +304,27 @@ console.log('--- TEST 12 (B3 T16 r1): esErrorDeValidacion, el 422 se muestra en 
   }
 }
 
+console.log('--- TEST 13 (revisión final B3, F2: M45): las frases por defecto de Starlette salen en español ---');
+{
+  // Un 405 (una ruta o un API_URL mal configurados) salía en inglés, también en la página pública del cliente.
+  assert.equal(textoDeDetalle('Method Not Allowed', 405), 'El servidor respondió con un error (405). Intenta de nuevo.');
+  const FRASES = [['Bad Request', 400], ['Unauthorized', 401], ['Method Not Allowed', 405], ['Not Acceptable', 406],
+    ['Conflict', 409], ['Unsupported Media Type', 415], ['Unprocessable Entity', 422], ['Too Many Requests', 429],
+    ['Bad Gateway', 502], ['Service Unavailable', 503], ['Gateway Timeout', 504]];
+  for (const [frase, status] of FRASES) {
+    assert.equal(textoDeDetalle(frase, status), `El servidor respondió con un error (${status}). Intenta de nuevo.`, frase);
+    assert.equal(textoDeDetalle(` ${frase} `, status), `El servidor respondió con un error (${status}). Intenta de nuevo.`);
+    assert.equal(errorDeRespuesta(status, { detail: frase }).message,
+      `El servidor respondió con un error (${status}). Intenta de nuevo.`, `${frase} por errorDeRespuesta`);
+  }
+  // Sin status, el genérico.
+  assert.equal(textoDeDetalle('Bad Gateway'), MENSAJE_GENERICO);
+  // Las reglas de antes siguen primero: 'Not Found' con su frase y el 403 técnico como «sin permiso».
+  assert.equal(textoDeDetalle('Not Found', 404), 'No se encontró el registro (404).');
+  assert.equal(textoDeDetalle('Forbidden', 403), 'No tienes permiso para esta acción.');
+  // Un texto del servidor en español, o una frase parecida pero no la de Starlette, queda como está.
+  assert.equal(textoDeDetalle('La cotización cambió mientras la reenviabas.', 409), 'La cotización cambió mientras la reenviabas.');
+  assert.equal(textoDeDetalle('conflict', 409), 'conflict', 'solo la frase exacta');
+}
+
 console.log('✓ Todas las pruebas de avisos pasaron.');

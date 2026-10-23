@@ -18,26 +18,19 @@ import { returnToSeguro, etiquetaVolver } from '@/lib/detalle-layout';
 // El rol real en users.role puede ser legacy ("Admin", "Vendedor") o canonico ("ADMIN",
 // "ASESOR") -- ver normalize_role en backend/app/api/dependencies.py. Comparar
 // case-insensitive evita que un usuario con rol canonico (p.ej. el admin de QA) quede
-// fuera de los selectores de asesor.
-export function esAsesorElegible(role?: string | null): boolean {
-  const r = (role || '').toLowerCase().trim();
-  return r === 'admin' || r === 'vendedor' || r === 'asesor';
-}
+// fuera de los selectores de asesor. Revision final B3 (F2, M12 y M52): las tres reglas de aqui viven en lib/roles.js
+// (sobre normalizarRol, una sola copia) y se reexportan con sus nombres de siempre.
+export { esAdminOAsesor as esAsesorElegible } from '@/lib/roles';
 
 // H44+N6: quien puede crear la orden de pago (PXP) de un pedido: Administracion, Finanzas y el
 // asesor, incluidos los roles legacy (replica normalize_role de dependencies.py y los roles de
 // POST /ventas/pedidos/{id}/crear-pxp). Las condiciones del pedido van en pedidoAdmitePxp.
-export function puedeCrearOrdenDePago(role?: string | null): boolean {
-  const r = (role || '').toLowerCase().trim();
-  return ['admin', 'finanzas', 'asesor', 'vendedor'].includes(r);
-}
+export { puedeCrearOrdenDePago } from '@/lib/roles';
 
 // H34 (Bloque 2, T1B): solo un administrador puede 'Eliminar permanentemente' una SC de la Papelera
 // (DELETE /ventas/solicitudes/{id}/permanente exige ROLE_ADMIN). 'Admin' legacy o 'ADMIN' canonico,
 // igual que normalize_role.
-export function esAdministrador(role?: string | null): boolean {
-  return (role || '').toLowerCase().trim() === 'admin';
-}
+export { esAdmin as esAdministrador } from '@/lib/roles';
 
 export type UsuarioActual = { id: number | null; email: string; name: string; role: string };
 

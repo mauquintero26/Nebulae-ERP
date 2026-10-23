@@ -489,3 +489,19 @@ export function notaReiniciaAtraso(log) {
   const tipo = log?.extra_data?.tipo;
   return typeof tipo === 'string' && TIPOS_NOTA_REINICIAN_ATRASO.includes(tipo.trim().toUpperCase());
 }
+
+/**
+ * Revision final B3 (F2, M47): la ventana de envio del Hub (envioHub, {tipo, id, ...}) con el detalle del documento
+ * (GET /ventas/solicitudes|cotizaciones/{id}) para la nota ambar del nombre sin contacto (nombre_cambio_sin_contacto,
+ * T20b), solo si sigue abierta para ESE documento: si el asesor la cerro (null) o abrio otra mientras llegaba la
+ * respuesta, queda como esta. No muta la que recibe.
+ * @param {any} envio
+ * @param {'SC' | 'COT'} tipo
+ * @param {unknown} id
+ * @param {unknown} detalle
+ * @returns {any}
+ */
+export function conDetalleDelEnvio(envio, tipo, id, detalle) {
+  if (!envio || typeof envio !== 'object' || envio.tipo !== tipo || String(envio.id) !== String(id)) return envio;
+  return { ...envio, detalle: detalle ?? null };
+}

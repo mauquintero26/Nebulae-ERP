@@ -1,17 +1,19 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import {
   AlertTriangle, Ban, CalendarX, CheckCircle2, Clock, FileText, Link2Off, MessageSquare, RefreshCw, WifiOff,
   type LucideIcon,
 } from 'lucide-react';
-import { ContactoEmpresa, EncabezadoMarca } from '@/components/documento';
 import {
   lineaConfirmacion, parrafoDelAviso, queSigue, vistaConDocumento, type VistaPublica,
 } from '@/lib/confirmacion-publica';
 import { TIPOS_DOCUMENTO } from '@/lib/documento-comercial';
-import { VistaCotizacion } from './vista-cotizacion';
-import { VistaSolicitud } from './vista-solicitud';
+import { ContactoEmpresa } from './ContactoEmpresa';
+import { EncabezadoMarca } from './EncabezadoMarca';
+
+// Revisión final B3 (F2, M17): las piezas que comparten las dos páginas públicas (/confirmar/{token} y /pedido/{token})
+// viven aquí, con el resto del documento, y no dentro de la ruta /confirmar (moverla rompía /pedido).
 
 // Los íconos de TEXTOS_ENLACE (lib/confirmacion-publica.js) por su nombre de lucide.
 const ICONOS: Record<string, LucideIcon> = {
@@ -108,16 +110,17 @@ function ContenidoAviso({ vista, onReintentar, enfocar = false }: {
 /**
  * Todo lo que no es la hoja por confirmar (B3 T15: U17+H28 punto 11, H28-cambios, U22+H38; C10, C26): el estado del
  * enlace en palabras, siempre con la marca de la empresa (viene en la respuesta) y su contacto.
- * - 'confirmada' con el documento (la SC durante 30 días, o el 200 de confirmar): el aviso verde con '¡Gracias! Tu
- *   confirmación fue registrada.' o 'Esta solicitud ya fue confirmada', la fecha y «¿Qué sigue?», y debajo la hoja en
- *   solo lectura con el sello 'Confirmada' (VistaSolicitud o VistaCotizacion).
+ * - 'confirmada' con el documento (la SC durante 30 días, o el 200 de confirmar) y `hojaConfirmada`: el aviso verde con
+ *   '¡Gracias! Tu confirmación fue registrada.' o 'Esta solicitud ya fue confirmada', la fecha y «¿Qué sigue?», y debajo
+ *   la hoja en solo lectura con el sello 'Confirmada' (la arma /confirmar con VistaSolicitud o VistaCotizacion: un
+ *   componente no importa de una ruta).
  * - Los demás (la COT confirmada con solo su número, vencido, reemplazado, cambios enviados, actualizada, no
  *   disponible, inválido, sin conexión, error, y el enlace del pedido que no sirve): una tarjeta con el encabezado de la
  *   empresa (EncabezadoMarca; sin documento, solo el logo y el nombre), el mensaje y el contacto. Sin conexión o con
  *   un error, 'Reintentar'.
- * La usa también /pedido/{token} (U23: la pantalla genérica de enlace no válido).
+ * La usa también /pedido/{token} (U23: la pantalla genérica de enlace no válido), sin `hojaConfirmada`.
  */
-export function AvisoEnlace({ vista, apiUrl, onReintentar, enfocar = false }: {
+export function AvisoEnlace({ vista, apiUrl, onReintentar, enfocar = false, hojaConfirmada }: {
   vista: VistaPublica;
   /** La URL del API (API_URL de lib/api.ts), para el logo. */
   apiUrl: string;
@@ -125,16 +128,17 @@ export function AvisoEnlace({ vista, apiUrl, onReintentar, enfocar = false }: {
   onReintentar?: () => void;
   /** T15 r1: la pantalla cambió por una acción del cliente: el h1 del aviso recibe el foco. */
   enfocar?: boolean;
+  /** La hoja en solo lectura de una SC o una COT ya confirmada, con este aviso encima (el h1 de la página). */
+  hojaConfirmada?: (aviso: ReactNode) => ReactNode;
 }) {
-  if (vista.estado_enlace === 'confirmada' && vistaConDocumento(vista) && (vista.tipo === 'SC' || vista.tipo === 'COT')) {
+  if (hojaConfirmada && vista.estado_enlace === 'confirmada' && vistaConDocumento(vista)
+    && (vista.tipo === 'SC' || vista.tipo === 'COT')) {
     const aviso = (
       <div className="rounded-2xl border border-green-200 bg-green-50 p-5">
         <ContenidoAviso vista={vista} enfocar={enfocar} />
       </div>
     );
-    return vista.tipo === 'SC'
-      ? <VistaSolicitud vista={vista} apiUrl={apiUrl} soloLectura aviso={aviso} />
-      : <VistaCotizacion vista={vista} apiUrl={apiUrl} soloLectura aviso={aviso} />;
+    return <>{hojaConfirmada(aviso)}</>;
   }
   const tipo = vista.tipo;
   const numero = typeof vista.documento?.numero === 'string' ? vista.documento.numero : undefined;

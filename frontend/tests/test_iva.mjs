@@ -18,7 +18,9 @@ import {
   desgloseDocumento, ETIQUETA_CATALOGO_SIN_TARIFA, etiquetaTarifaCatalogo, sinTarifaIva,
   etiquetaCortaTarifaIva, intentarTotalesCotizacion, textoBaseIva, filasIvaTotales, ivaDeLinea,
   filaProductoPedido, textoIvaIncluido, textosTarjetaPedido, notaProductosCancelados, TEXTO_PRODUCTOS_CANCELADOS,
+  cantidadDeLinea,
 } from '../src/lib/iva.js';
+import { readFileSync } from 'node:fs';
 
 const linea = (nombre, qty, precio, tarifa, extra = {}) => {
   const l = { product_name: nombre, qty, unit_price_cop: precio, total_cop: qty * precio, ...extra };
@@ -562,6 +564,23 @@ console.log('--- B3 T19 TEST 20: textoIvaIncluido (el Resumen Financiero del ped
   assert.equal(textoIvaIncluido({ iva_cop: 5000, total_cop: 100000 }), 'IVA incluido: $5.000', 'sin el dato, el IVA guardado');
   assert.equal(textoIvaIncluido({ total_cop: 100000 }), 'IVA no discriminado', 'sin el dato ni IVA');
   for (const raro of [null, undefined, 'x', 7]) assert.equal(textoIvaIncluido(raro), null, String(raro));
+}
+
+console.log('--- Revisión final B3 (F2, M13): la cantidad de una línea con coma decimal, con y sin IVA ---');
+{
+  // La cantidad como en el documento del cliente ('2,5'); una guardada como texto también se lee; sin número, '0'.
+  assert.equal(cantidadDeLinea(6), '6');
+  assert.equal(cantidadDeLinea(2.5), '2,5');
+  assert.equal(cantidadDeLinea('2.5'), '2,5');
+  assert.equal(cantidadDeLinea('3'), '3');
+  for (const raro of [null, undefined, 'x', NaN]) assert.equal(cantidadDeLinea(raro), '0', String(raro));
+  // La rama con IVA (ivaDeLinea) y la de sin IVA de PrecioLineaIva escriben la cantidad igual.
+  assert.equal(ivaDeLinea({ qty: 2.5, unit_price_cop: 1000, total_cop: 2500, iva_tarifa: '19', iva_cop: 475,
+    total_con_iva_cop: 2975 }).cantidad, 'Cant. 2,5 × $1.000 sin IVA');
+  const precio = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/[id]/detalle-bloque3.tsx', import.meta.url), 'utf8');
+  assert.ok(precio.includes('Cant. {cantidadDeLinea(item.qty)} &times; {formatoPesos(item.unit_price_cop)}'),
+    'la rama sin IVA usa cantidadDeLinea');
+  assert.doesNotMatch(precio, /Cant\. \{item\.qty/, 'sin la cantidad cruda (2.5)');
 }
 
 console.log('OK test_iva.mjs');

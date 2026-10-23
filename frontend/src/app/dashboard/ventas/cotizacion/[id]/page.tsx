@@ -32,13 +32,14 @@ import { humanizarCodigo } from '@/lib/estados-pedido';
 import { VentanaMotivoSinConfirmacion } from '../../motivo-sin-confirmacion';
 // B3 T17: IVA, cambios del cliente, validez y reenvío, WhatsApp automático y recordatorio (las piezas nuevas viven en
 // sus propios archivos; aquí solo se cablean, R15).
-import { abreWhatsAppLocal, NOTA_REENVIO_ENLACE } from '@/lib/envio-whatsapp';
+import { abreWhatsAppLocal, NOTA_REENVIO_ENLACE, banderaReenvio, envioYaNoAplica, TEXTO_ENVIAR_AL_CLIENTE, TEXTO_REENVIAR_AL_CLIENTE } from '@/lib/envio-whatsapp';
 import { accionBloque3 } from '@/lib/acciones-bloque3';
-import { avisoCambiosCliente } from '@/lib/cambios-cliente';
+import { avisoCambiosCliente, AYUDA_NOTA_CLIENTE, TITULO_NOTA_CLIENTE_DE_LA_SOLICITUD } from '@/lib/cambios-cliente';
 import { useEstadoEnvioWhatsApp } from '../estado-envio-whatsapp';
 import { TarjetaCambiosCliente } from '../tarjeta-cambios-cliente';
 import { PrecioLineaIva, TotalesIvaCotizacion, PasoEsperandoConfirmacion } from './detalle-bloque3';
 import { AvisoNombreSinContacto } from '../../aviso-nombre-sin-contacto';
+import { NotaParaElCliente } from '../../solicitud/[id]/detalle-bloque3';
 
 // Estilo (icono + color) por tipo de accion registrada en el ActivityLog real del backend
 const ACTIVITY_STYLE: Record<string, {icon: any; color: string}> = {
@@ -280,8 +281,9 @@ function CotizacionDetalleContent() {
       // previo. El servidor responde 400 con 'Email' si el cliente no tiene correo (ChannelModal lo evita).
       const d = await apiFetch(`/ventas/cotizaciones/${cotizacion.id}/enviar-confirmacion`, {
         method: 'POST',
-        // B3 T7 (r1): el reenvío lleva reenvio: true; si la cotización cambió mientras tanto, el servidor responde 409.
-        body: JSON.stringify({user_name: currentUser, canal: selectedChannel, ...(reenviando ? { reenvio: true } : {})}),
+        // B3 T7 (r1) y revisión final (F2, M0): la bandera siempre va (true al reenviar, false en el primer envío); si la
+        // cotización cambió mientras tanto, el servidor responde 409.
+        body: JSON.stringify({user_name: currentUser, canal: selectedChannel, ...banderaReenvio(reenviando)}),
       });
       const link = d?.link_confirmacion || '';
       let whatsapp: string | null = null;
@@ -312,10 +314,11 @@ function CotizacionDetalleContent() {
     } catch (err: any) {
       avisarError(err, 'No se pudo enviar la cotización');
       // B3 T7 (r1): con el 409 «La cotización cambió mientras la reenviabas…» (el cliente pidió cambios o la editaron) la
-      // recarga la trae fuera de Pendiente: el reenvío ya no aplica y la ventana se cierra. Otro 409 la deja abierta.
+      // recarga la trae fuera de Pendiente: el reenvío ya no aplica y la ventana se cierra. F2 (M0): con «Ya se le envió
+      // al cliente» la trae en Pendiente y el primer envío tampoco aplica. Otro 409 la deja abierta.
       if (recargarTrasError(err)) {
         void loadCotizacion({ silencioso: true }).then(fresca => {
-          if (reenviando && fresca && fresca.estado !== 'PENDIENTE_CONFIRMACION') cancelarEnvio();
+          if (envioYaNoAplica(reenviando, fresca?.estado)) cancelarEnvio();
         });
       }
     }
@@ -791,7 +794,7 @@ function CotizacionDetalleContent() {
         <TarjetaCambiosCliente aviso={avisoCambios} acciones={rolGestiona ? (
           <>
             <Button color="orange" size="lg" icon={RotateCcw} onClick={() => setShowCalc(true)}>Re-cotizar</Button>
-            <Button color="blue" size="lg" icon={Send} loading={sending} onClick={handleEnviarCotizacion}>Enviar al cliente</Button>
+            <Button color="blue" size="lg" icon={Send} loading={sending} onClick={handleEnviarCotizacion}>{TEXTO_ENVIAR_AL_CLIENTE}</Button>
           </>
         ) : undefined} />
       );
@@ -802,7 +805,7 @@ function CotizacionDetalleContent() {
         title={estadoActual === 'ENVIADA' ? 'Enviada al cliente: reenvíala si hace falta' : 'Envía la cotización al cliente para que la confirme'}
         actions={(
           <Button color="blue" size="lg" icon={Send} loading={sending} onClick={handleEnviarCotizacion}>
-            {estadoActual === 'ENVIADA' ? 'Re-enviar al Cliente' : 'Enviar al Cliente'}
+            {estadoActual === 'ENVIADA' ? TEXTO_REENVIAR_AL_CLIENTE : TEXTO_ENVIAR_AL_CLIENTE}
           </Button>
         )}
       >
@@ -937,7 +940,7 @@ function CotizacionDetalleContent() {
             {/* H35+H48: la nota ACTUAL de la solicitud (se lee en vivo, nunca se copia) aparte de la de la cotizacion.
                 U14 (C17): la de la solicitud con el estilo neutro de la SC (no parece una advertencia); la de la
                 cotización sigue azul. */}
-            {(cotizacion?.sc_notas || cotizacion?.notas) && (
+            {(cotizacion?.sc_notas || cotizacion?.sc_nota_cliente || cotizacion?.notas) && (
               <div className="space-y-3 mb-10">
                 {cotizacion?.sc_notas && (
                   <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
@@ -945,12 +948,15 @@ function CotizacionDetalleContent() {
                     <p className="text-sm text-slate-700 whitespace-pre-wrap break-words">{cotizacion.sc_notas}</p>
                   </div>
                 )}
+                {/* Revisión final B3 (F2, M8): la «Nota para el cliente» de la SC también sale en el documento de la COT. */}
+                <NotaParaElCliente nota={cotizacion?.sc_nota_cliente} titulo={TITULO_NOTA_CLIENTE_DE_LA_SOLICITUD} />
                 {cotizacion?.notas && (
                   <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
                     <p className="text-xs font-black text-blue-600 uppercase mb-1.5">Nota de la cotización</p>
                     <p className="text-sm text-blue-900 whitespace-pre-wrap break-words">{cotizacion.notas}</p>
-                    {/* R3 (C19): la nota de la cotización le llega al cliente; la de la solicitud no (es interna). */}
-                    <p className="text-[11px] text-blue-700 mt-1.5">El cliente verá esta nota</p>
+                    {/* R3 (C19): esta nota y la «Nota para el cliente» de la solicitud le llegan al cliente; las Notas
+                        de la solicitud no (son internas). */}
+                    <p className="text-[11px] text-blue-700 mt-1.5">{AYUDA_NOTA_CLIENTE}</p>
                   </div>
                 )}
               </div>
@@ -1348,7 +1354,7 @@ function CotizacionDetalleContent() {
           // B3 T17 (RP19, C27): sobre telefono_whatsapp, el e164 que valida el servidor (el de la COT o el de la ficha del
           // cliente), o null. T11 calidad (E6 y ronda 1): las tres ventanas de envío (SC, COT y Hub) usan textoSinTelefono.
           customerHasPhone={!motivoTelefono(cotizacion?.telefono_whatsapp)}
-          textoSinTelefono={textoSinTelefono(cotizacion?.telefono_whatsapp) ?? undefined}
+          textoSinTelefono={textoSinTelefono(cotizacion?.telefono_whatsapp ?? cotizacion?.customer_phone) ?? undefined}
           customerEmail={cotizacion?.customer_email ?? null}
           envioWhatsApp={envioWhatsAppCanal}
           nota={reenviando ? NOTA_REENVIO_ENLACE : undefined}

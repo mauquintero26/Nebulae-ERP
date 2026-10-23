@@ -91,15 +91,18 @@ export function RecuadroEnvioWhatsapp({ recuadro, entrega }: {
   }, [mostrarBoton]);
 
   return (
-    <div ref={cajaRef} tabIndex={-1} role="status"
+    <div ref={cajaRef} tabIndex={-1}
       className={`rounded-xl border px-3 py-2.5 text-xs font-semibold space-y-1 outline-none focus:ring-2 focus:ring-slate-300 ${CLASES_TONO_AVISO[recuadro.tono]}`}>
-      <p className="flex items-start gap-1.5">
-        <MessageCircle size={13} className="mt-px shrink-0" /> <span>{recuadro.texto}</span>
-      </p>
-      {recuadro.entrega
-        ? <p>{recuadro.entrega}</p>
-        : entrega.revisando && <p className="font-medium opacity-80">{TEXTO_REVISANDO_ENTREGA}</p>}
-      {entrega.error && <p className="font-medium">{entrega.error}</p>}
+      {/* Revisión final B3 (F2, M15): la región viva solo con los textos; «Volver a revisar» va fuera de ella. */}
+      <div role="status" className="space-y-1">
+        <p className="flex items-start gap-1.5">
+          <MessageCircle size={13} className="mt-px shrink-0" /> <span>{recuadro.texto}</span>
+        </p>
+        {recuadro.entrega
+          ? <p>{recuadro.entrega}</p>
+          : entrega.revisando && <p className="font-medium opacity-80">{TEXTO_REVISANDO_ENTREGA}</p>}
+        {entrega.error && <p className="font-medium">{entrega.error}</p>}
+      </div>
       {mostrarBoton && (
         <button type="button" aria-disabled={entrega.revisando} onClick={() => { if (!entrega.revisando) entrega.revisar(); }}
           className="font-bold underline underline-offset-2 hover:opacity-80 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed">

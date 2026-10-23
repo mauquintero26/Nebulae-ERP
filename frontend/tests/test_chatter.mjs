@@ -330,10 +330,17 @@ console.log('--- T11 calidad E6: textoSinTelefono, el mismo texto en las tres ve
     const fuente = leer(ruta);
     assert.ok(fuente.includes(`customerHasPhone={!motivoTelefono(${doc}?.telefono_whatsapp)}`), `${ruta}: customerHasPhone`);
   }
-  // El porqué: en la COT, sobre telefono_whatsapp (T17; el mismo cambio que la SC queda para la revisión final). En la SC
-  // (T18 r1), telefono_whatsapp viene en null también con un teléfono incompleto: el texto mira el escrito si no hay e164,
-  // así un '300123456' dice «teléfono incompleto» y no «sin teléfono».
-  assert.ok(leer('cotizacion/[id]/page.tsx').includes('textoSinTelefono={textoSinTelefono(cotizacion?.telefono_whatsapp) ?? undefined}'));
+  // El porqué: en la SC (T18 r1), telefono_whatsapp viene en null también con un teléfono incompleto: el texto mira el
+  // escrito si no hay e164, así un '300123456' dice «teléfono incompleto» y no «sin teléfono». Revisión final B3 (F2,
+  // M50): la COT y el Hub, igual (el Hub guarda el crudo de la fila; waUrl sigue con el e164).
+  assert.ok(leer('cotizacion/[id]/page.tsx').includes(
+    'textoSinTelefono={textoSinTelefono(cotizacion?.telefono_whatsapp ?? cotizacion?.customer_phone) ?? undefined}'), 'COT: el porqué');
+  const hubEnvio = leer('page.tsx');
+  assert.ok(hubEnvio.includes('telefonoCrudo:item?.customer_phone ?? null'), 'Hub: el crudo de la fila');
+  assert.ok(hubEnvio.includes('textoSinTelefono={textoSinTelefono(envioHub.telefono || envioHub.telefonoCrudo) ?? undefined}'),
+    'Hub: el porqué');
+  assert.ok(hubEnvio.includes('customerHasPhone={!motivoTelefono(envioHub.telefono)}'), 'Hub: la opción sigue con el e164');
+  assert.equal(textoSinTelefono('' || '300123456'), 'teléfono incompleto');
   assert.ok(leer('solicitud/[id]/page.tsx').includes(
     'textoSinTelefono={textoSinTelefono(solicitud?.telefono_whatsapp ?? solicitud?.customer_phone) ?? undefined}'), 'SC: el porqué');
   // B3 T19 (nota del controlador tras T13-T18): el PVEN, como la SC.

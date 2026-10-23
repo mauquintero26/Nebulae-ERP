@@ -408,4 +408,16 @@ console.log('--- B3 T17 r1 TEST 17: el Cotizador Rápido no le manda al cliente 
   assert.doesNotMatch(fuente, /\$\{\s*(margenPct|trm)\b/, 'ningún texto armado con el margen o la TRM');
 }
 
+console.log('--- Revisión final B3 (F2, M10): el Cotizador Rápido escribe el dinero con formatoPesos ($1.710, sin espacio) ---');
+{
+  const fuente = readFileSync(new URL('../src/app/dashboard/cotiza/page.tsx', import.meta.url), 'utf8');
+  // Intl da '$ 1.710' (con espacio); la COT, la calculadora, el PVEN y los documentos, '$1.710'.
+  assert.doesNotMatch(fuente, /Intl\.NumberFormat/, 'sin el formato de Intl');
+  assert.match(fuente, /import \{ formatoPesos \} from '@\/lib\/pesos';/, 'formatoPesos de lib/pesos.js');
+  assert.ok(fuente.includes('const formatCOP = formatoPesos;'), 'las cifras de siempre, con formatoPesos');
+  assert.ok(fuente.includes('const montoOGuion = (v: number | null) => pesosOGuion(v);'), 'las del IVA, igual que la calculadora');
+  const calculadora = readFileSync(new URL('../src/app/dashboard/ventas/cotizacion/calculadora-iva.tsx', import.meta.url), 'utf8');
+  assert.match(calculadora, /export const pesosOGuion = \(v: number \| null \| undefined\) =>/, 'pesosOGuion ya no pide otro formato');
+}
+
 console.log('✓ Todos los tests de pricing pasaron exitosamente.');

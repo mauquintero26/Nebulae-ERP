@@ -10,6 +10,7 @@ import { apiFetch as _apiFetch, API_URL } from '@/lib/api';
 import { SubNav, PageHeader, Toast, Modal, Button } from '@/components/ui';
 import { ADM_NAV } from '../adm-nav';
 import { CampoNombreParaMostrar } from './nombre-para-mostrar';
+import { lineaNombreParaMostrar } from '@/lib/nombre-para-mostrar';
 
 async function apiFetch(path: string, opts: RequestInit = {}) {
   const res = await _apiFetch(path, opts);
@@ -190,6 +191,8 @@ export default function EmpleadosHub() {
                 const isSelected = selectedUser?.id === user.id;
                 const roleObj = ROLES_DISPONIBLES.find(r => r.id === user.role) || { label: user.role, color: 'bg-slate-100 text-slate-700 border-slate-200' };
                 const namePart = (user.email || '').split('@')[0];
+                // Revisión final B3 (F2, M49): el nombre que ve el cliente, cuando el usuario lo tiene.
+                const nombreVisible = lineaNombreParaMostrar(user.nombre_para_mostrar);
 
                 return (
                   <div
@@ -207,6 +210,7 @@ export default function EmpleadosHub() {
                         {user.role}
                       </span>
                     </div>
+                    {nombreVisible && <p className="text-[11px] text-slate-600 break-words">{nombreVisible}</p>}
                     <p className="text-[11px] text-slate-400 font-mono truncate">{user.email}</p>
                   </div>
                 );
@@ -243,7 +247,7 @@ export default function EmpleadosHub() {
               </div>
 
               {/* B3 T20b: como verá el cliente a este asesor en los documentos (solo un ADMIN lo edita). */}
-              <CampoNombreParaMostrar usuario={selectedUser} onGuardado={() => { showToast('Nombre para mostrar guardado'); void loadUsers(); }} />
+              <CampoNombreParaMostrar key={selectedUser.id} usuario={selectedUser} onGuardado={() => { showToast('Nombre para mostrar guardado'); void loadUsers(); }} />
 
               {/* Selector de Rol Funcional */}
               <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-4">

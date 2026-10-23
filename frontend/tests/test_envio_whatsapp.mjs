@@ -17,6 +17,7 @@ import {
   formularioEnvioWhatsApp, cuerpoEnvioWhatsApp, hayCambiosWhatsApp, MENSAJE_WHATSAPP_SIN_GUARDAR,
   estadoEnvioParaCanal, lineaWhatsAppCanal, NOTA_REENVIO_ENLACE,
   botonEnvioPedido, envioIncierto, pedidoSeEnvio, AVISO_PEDIDO_SI_SE_ENVIO, AVISO_WHATSAPP_NO_SE_ABRIO, avisoEnvioIncierto,
+  TEXTO_ENVIAR_AL_CLIENTE, TEXTO_REENVIAR_AL_CLIENTE, banderaReenvio, envioYaNoAplica,
 } from '../src/lib/envio-whatsapp.js';
 import { avisoCorreo } from '../src/lib/aviso-correo.js';
 import { readFileSync } from 'node:fs';
@@ -530,6 +531,71 @@ console.log('--- B3 T19 r1 (menor 10): el error del ChannelModal en una región 
   assert.ok(/<div role="alert" className="empty:-mt-4">\{error \? <p className="[^"]*">\{error\}<\/p> : null\}<\/div>/.test(modal),
     'la región role="alert" siempre montada; solo cambia su contenido');
   assert.ok(!modal.includes('{error && <p role="alert"'), 'sin montar la región solo cuando hay error');
+}
+
+console.log('--- Revisión final B3 (F2, M0 y M9/M22): la bandera del envío y un solo rótulo para enviar y reenviar ---');
+{
+  // M9/M22: la misma acción con el mismo rótulo en todas las pantallas (la COT, la SC en Pendiente y el pedido).
+  assert.equal(TEXTO_ENVIAR_AL_CLIENTE, 'Enviar al cliente');
+  assert.equal(TEXTO_REENVIAR_AL_CLIENTE, 'Reenviar al cliente');
+  // M0: la bandera del POST …/enviar-confirmacion siempre va: true solo desde «Reenviar al cliente»; el primer envío
+  // manda false (el servidor responde 409 «Ya se le envió al cliente; usa «Reenviar».» si el documento ya espera).
+  assert.deepEqual(banderaReenvio(true), { reenvio: true });
+  for (const v of [false, undefined, null, 'true', 1]) assert.deepEqual(banderaReenvio(v), { reenvio: false }, String(v));
+  // Tras el 409, la recarga dice si la ventana ya no aplica (se cierra): se abrió para reenviar y el documento ya no
+  // espera al cliente, o para el primer envío y ya le espera. Sin la recarga (null) no se sabe: queda abierta.
+  assert.equal(envioYaNoAplica(true, 'BORRADOR'), true);
+  assert.equal(envioYaNoAplica(true, 'ASIGNADA'), true);
+  assert.equal(envioYaNoAplica(false, 'PENDIENTE_CONFIRMACION'), true);
+  assert.equal(envioYaNoAplica(true, 'PENDIENTE_CONFIRMACION'), false);
+  assert.equal(envioYaNoAplica(false, 'BORRADOR'), false);
+  assert.equal(envioYaNoAplica(false, 'ASIGNADA'), false);
+  for (const raro of [null, undefined, 5]) {
+    assert.equal(envioYaNoAplica(true, raro), false, String(raro));
+    assert.equal(envioYaNoAplica(false, raro), false, String(raro));
+  }
+  // El pedido usa las mismas constantes.
+  const pedido = { estado: 'PENDIENTE_COMPRA', productos: [{ product_name: 'Rodillo', qty: 1 }], total_cop: 10,
+    enlace_cliente: { vigente: false, enviado_at: '2026-09-01T15:00:00Z' } };
+  assert.equal(botonEnvioPedido(pedido, 'Asesor').texto, TEXTO_REENVIAR_AL_CLIENTE);
+  assert.equal(botonEnvioPedido({ ...pedido, enlace_cliente: null }, 'Asesor').texto, TEXTO_ENVIAR_AL_CLIENTE);
+
+  const leer = (ruta) => readFileSync(new URL(`../src/app/dashboard/ventas/${ruta}`, import.meta.url), 'utf8')
+    .replace(/\r\n/g, '\n');
+  // Sin los comentarios ({/* */}, /* */ y //), para mirar solo el código y el JSX.
+  const codigo = (fuente) => fuente.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const cot = leer('cotizacion/[id]/page.tsx');
+  const sc = leer('solicitud/[id]/page.tsx');
+  const hub = leer('page.tsx');
+  // M0: los tres envíos (el detalle de la COT, el de la SC y el Hub) mandan la bandera de la lib, nunca armada a mano.
+  assert.ok(cot.includes('...banderaReenvio(reenviando)'), 'COT: la bandera del botón que abrió la ventana');
+  assert.ok(sc.includes('...banderaReenvio(reenviandoSc)'), 'SC: la bandera del estado con que se abrió la ventana');
+  assert.ok(hub.includes('...banderaReenvio(false)'), 'Hub: siempre un primer envío (no deja arrastrar una pendiente)');
+  for (const [ruta, fuente] of [['COT', cot], ['SC', sc], ['Hub', hub]]) {
+    assert.doesNotMatch(codigo(fuente), /reenvio:\s*(true|false)/, `${ruta}: sin la bandera escrita a mano`);
+  }
+  // Tras el 409 la COT y la SC recargan en silencio y cierran la ventana si ya no aplica.
+  assert.ok(cot.includes('if (envioYaNoAplica(reenviando, fresca?.estado)) cancelarEnvio();'), 'COT: cierra la ventana');
+  assert.ok(sc.includes('if (envioYaNoAplica(reenviandoSc, fresca?.estado)) cancelarEnvioConfirmacion();'),
+    'SC: cierra la ventana');
+  // M9/M22: la tarjeta B2 de la COT, la de los cambios del cliente, el detalle B3 (Pendiente) y los dos reenvíos de la
+  // SC en Pendiente usan las constantes. El primer envío de la SC conserva el texto que aprobó el Bloque 2.
+  assert.ok(cot.includes("{estadoActual === 'ENVIADA' ? TEXTO_REENVIAR_AL_CLIENTE : TEXTO_ENVIAR_AL_CLIENTE}"), 'COT B2');
+  assert.ok(cot.includes('onClick={handleEnviarCotizacion}>{TEXTO_ENVIAR_AL_CLIENTE}</Button>'), 'COT con cambios');
+  assert.ok(leer('cotizacion/[id]/detalle-bloque3.tsx').includes('onClick={onReenviar}>{TEXTO_REENVIAR_AL_CLIENTE}</Button>'),
+    'COT en Pendiente');
+  assert.ok(sc.includes("{estado === 'PENDIENTE_CONFIRMACION' ? TEXTO_REENVIAR_AL_CLIENTE : 'Enviar para Confirmación'}"),
+    'SC con su cotización temprana');
+  assert.ok(sc.includes('onClick={handleEnviarParaConfirmacion}>{TEXTO_REENVIAR_AL_CLIENTE}</Button>'), 'SC en Pendiente');
+  assert.ok(sc.includes('onClick={handleEnviarParaConfirmacion}>Enviar para Confirmación</Button>'), 'SC: primer envío (B2)');
+  assert.ok(leer('solicitud/[id]/detalle-bloque3.tsx').includes('{TEXTO_REENVIAR_AL_CLIENTE}'), 'SC con cambios');
+  // Ninguna pantalla de ventas escribe el rótulo a mano ni conserva las grafías viejas.
+  for (const ruta of ['cotizacion/[id]/page.tsx', 'cotizacion/[id]/detalle-bloque3.tsx', 'solicitud/[id]/page.tsx',
+    'solicitud/[id]/detalle-bloque3.tsx', 'venta/[id]/detalle-bloque3.tsx', 'page.tsx']) {
+    const fuente = codigo(leer(ruta));
+    assert.doesNotMatch(fuente, /Re-enviar|Reenviar enlace de confirmación|Enviar al Cliente/, `${ruta}: sin la grafía vieja`);
+    assert.doesNotMatch(fuente, /['>]\s*(Enviar|Reenviar) al cliente\s*['<]/, `${ruta}: el rótulo sale de la lib`);
+  }
 }
 
 console.log('OK test_envio_whatsapp.mjs');

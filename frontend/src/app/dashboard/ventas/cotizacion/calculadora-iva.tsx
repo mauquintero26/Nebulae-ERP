@@ -19,9 +19,11 @@ type FilaConTarifa = { iva_tarifa?: string; product_name?: string; sku_id?: numb
 /** El resultado de totalesIvaCalculadora / intentarTotalesCotizacion: con error, totales es null (y se ve «—»). */
 export type IvaCalculado = { totales: TotalesIva | null; error: string };
 
-/** '$1.062.523', o '—' sin monto (mientras haya una línea incompleta). r1: el Cotizador Rápido pasa su propio formato. */
-export const pesosOGuion = (v: number | null | undefined, formato: (n: number) => string = formatoPesos) =>
-  (v === null || v === undefined ? '—' : formato(v));
+/**
+ * '$1.062.523', o '—' sin monto (mientras haya una línea incompleta). Revisión final B3 (F2, M10): el Cotizador Rápido
+ * ya no pasa su propio formato (Intl, '$ 1.710'): todos con formatoPesos.
+ */
+export const pesosOGuion = (v: number | null | undefined) => (v === null || v === undefined ? '—' : formatoPesos(v));
 
 const CLASES_SELECT = 'w-full min-w-0 border border-slate-200 rounded px-1.5 py-1 font-bold bg-white outline-none focus:ring-1 focus:ring-amber-200';
 

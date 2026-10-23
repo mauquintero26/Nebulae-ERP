@@ -59,7 +59,7 @@ console.log('--- TEST 2: DocumentoComercial.tsx imprime bien ---');
 console.log('--- TEST 3: components/documento sin dark:, truncate ni next/image; _blank con noopener noreferrer ---');
 {
   const archivos = readdirSync(DOCUMENTO).filter((n) => /\.tsx?$/.test(n)).sort();
-  for (const nombre of ['ContactoEmpresa.tsx', 'DocumentoComercial.tsx', 'EncabezadoMarca.tsx', 'index.ts']) {
+  for (const nombre of ['AvisoEnlace.tsx', 'ContactoEmpresa.tsx', 'DocumentoComercial.tsx', 'EncabezadoMarca.tsx', 'index.ts']) {
     assert.ok(archivos.includes(nombre), `falta components/documento/${nombre}`);
   }
   for (const nombre of archivos) {
@@ -125,11 +125,12 @@ console.log('--- TEST 6 (T15): las páginas públicas usan pedirPublico (nunca a
   const publicas = [...fuentesDe('confirmar'), ...fuentesDe('pedido')];
   const nombres = publicas.map(([ruta]) => ruta);
   for (const archivo of ['confirmar/layout.tsx', 'confirmar/[token]/page.tsx', 'confirmar/[token]/vista-solicitud.tsx',
-    'confirmar/[token]/vista-cotizacion.tsx', 'confirmar/[token]/aviso-enlace.tsx', 'confirmar/[token]/panel-cambios.tsx',
+    'confirmar/[token]/vista-cotizacion.tsx', 'confirmar/[token]/panel-cambios.tsx',
     'pedido/layout.tsx', 'pedido/[token]/page.tsx']) {
     assert.ok(nombres.includes(archivo), `falta app/${archivo}`);
   }
-  for (const [ruta, fuente] of publicas) {
+  // Revisión final B3 (F2, M17): el aviso del enlace vive en components/documento; le aplican las mismas reglas.
+  for (const [ruta, fuente] of [...publicas, ['components/documento/AvisoEnlace.tsx', leer(DOCUMENTO, 'AvisoEnlace.tsx')]]) {
     assert.doesNotMatch(fuente, /\bapiFetch\b/, `${ruta}: sin apiFetch (mandaría el token del personal y llevaría a /login)`);
     assert.doesNotMatch(fuente, /(^|[^\w.])fetch\s*\(/, `${ruta}: sin fetch a mano (pedirPublico)`);
     assert.doesNotMatch(fuente, /['"]Authorization['"]/, `${ruta}: sin el encabezado de sesión`);
@@ -185,7 +186,7 @@ console.log('--- TEST 7 (T15): un solo h1 por página: nivelTitulo en DocumentoC
   assert.doesNotMatch(doc, /<h1\b/, 'el título del documento sale de nivelTitulo, no de un <h1> fijo');
   // La vista previa de Configuración (T14) y la hoja bajo un aviso de la página pública usan un h2.
   assert.ok(leer(APP, 'dashboard', 'admin', 'configuracion', 'documentos-form.tsx').includes('nivelTitulo={2}'));
-  assert.ok(leer(APP, 'confirmar', '[token]', 'aviso-enlace.tsx').includes('<h1'), 'el aviso lleva el h1 de la página');
+  assert.ok(leer(DOCUMENTO, 'AvisoEnlace.tsx').includes('<h1'), 'el aviso lleva el h1 de la página');
 }
 
 console.log('--- TEST 7b (T15 r2): las reglas de página solo cuando el documento ES la página ---');
@@ -204,7 +205,7 @@ console.log('--- TEST 8 (T15 r1): nada queda colgado, el foco no se pierde y la 
   assert.equal((pagina.match(/finally\s*\{\s*setEnviando\(null\);?\s*\}/g) || []).length, 2,
     'confirmar() y pedirCambios() con try/finally');
   // Menor 11: después de una acción el foco va al h1 del aviso (o a la página); al cerrar el panel, a 'Pedir cambios'.
-  const aviso = leer(APP, 'confirmar', '[token]', 'aviso-enlace.tsx');
+  const aviso = leer(DOCUMENTO, 'AvisoEnlace.tsx');
   assert.match(aviso, /<h1[^>]*tabIndex=\{-1\}/, 'el h1 del aviso puede recibir el foco');
   assert.ok(aviso.includes('.focus()'), 'y lo recibe');
   assert.match(pagina, /<main[^>]*tabIndex=\{-1\}/, 'la página puede recibir el foco (la hoja tras «Reintentar»)');
@@ -257,6 +258,62 @@ console.log('--- TEST 9 (T20 r2, punto 13): la hoja impresa no se sale del recua
   assert.match(impresion, /\.documento-comercial \.doc-cuerpo > :not\(:last-child\)[^{]*\{[^}]*margin-block-end:\s*1rem/);
   assert.match(doc, /<header className="doc-encabezado /, 'el encabezado de la variante acento con su gancho');
   assert.match(doc, /<div className="doc-cuerpo /, 'el cuerpo con su gancho');
+}
+
+console.log('--- Revisión final B3 (F2, M17): AvisoEnlace y CargandoDocumento viven en components/documento ---');
+{
+  // Son piezas de las dos páginas públicas: ya no viven dentro de la ruta /confirmar (moverla rompía /pedido).
+  assert.ok(!existsSync(join(APP, 'confirmar', '[token]', 'aviso-enlace.tsx')), 'sin app/confirmar/[token]/aviso-enlace.tsx');
+  assert.match(leer(DOCUMENTO, 'index.ts'), /export \{ AvisoEnlace, CargandoDocumento \} from '\.\/AvisoEnlace';/,
+    'el índice las exporta');
+  const importadas = (fuente) => (fuente.match(/import\s*\{([^}]*)\}\s*from\s*'@\/components\/documento'/) || ['', ''])[1]
+    .split(',').map((s) => s.trim()).filter(Boolean);
+  for (const ruta of [['confirmar', '[token]', 'page.tsx'], ['pedido', '[token]', 'page.tsx']]) {
+    const fuente = leer(APP, ...ruta);
+    for (const nombre of ['AvisoEnlace', 'CargandoDocumento']) {
+      assert.ok(importadas(fuente).includes(nombre), `${ruta.join('/')}: ${nombre} de @/components/documento`);
+    }
+    assert.doesNotMatch(fuente, /aviso-enlace|from '@\/app\//, `${ruta.join('/')}: no importa de otra ruta`);
+  }
+  // Un componente no depende de una ruta: la hoja confirmada (VistaSolicitud o VistaCotizacion, de /confirmar) se la
+  // pasa la página con hojaConfirmada; /pedido no la pasa (su aviso es siempre la tarjeta).
+  const aviso = leer(DOCUMENTO, 'AvisoEnlace.tsx');
+  assert.doesNotMatch(aviso, /from '@\/app\/|from '\.\.?\/vista-/, 'AvisoEnlace no importa de app/');
+  assert.match(aviso, /hojaConfirmada\?: \(aviso: ReactNode\) => ReactNode;/, 'la prop de la hoja confirmada');
+  const confirmar = leer(APP, 'confirmar', '[token]', 'page.tsx').replace(/\r\n/g, '\n');
+  assert.ok(confirmar.includes('hojaConfirmada={(aviso) => (vista.tipo === \'SC\'\n'
+    + '          ? <VistaSolicitud vista={vista} apiUrl={API_URL} soloLectura aviso={aviso} />\n'
+    + '          : <VistaCotizacion vista={vista} apiUrl={API_URL} soloLectura aviso={aviso} />)}'),
+  '/confirmar pasa su hoja en solo lectura');
+  assert.doesNotMatch(leer(APP, 'pedido', '[token]', 'page.tsx'), /hojaConfirmada/, '/pedido no la pasa');
+}
+
+console.log('--- Revisión final B3 (F2, M19): la columna del precio dice «Precio unit.», como el PDF ---');
+{
+  const doc = leer(DOCUMENTO, 'DocumentoComercial.tsx');
+  assert.ok(doc.includes('<th scope="col" className="w-36 px-3 py-2 text-right">Precio unit.</th>'), 'el encabezado de la tabla');
+  assert.doesNotMatch(doc, />Precio<\/th>/, 'sin el «Precio» suelto');
+  const pdf = readFileSync(join(SRC, '..', '..', 'backend', 'app', 'core', 'pdf_documento.py'), 'utf8');
+  assert.ok(pdf.includes('"PRECIO UNIT."'), 'el PDF dice lo mismo (en mayúsculas)');
+}
+
+console.log('--- Revisión final B3 (F2, M54): los botones derivados de BTN.ghost encuentran lo que reemplazan ---');
+{
+  // «Quitar logo» (rojo) y «Volver al color de la referencia» se arman con .replace() sobre BTN.ghost: si el token
+  // cambia, el .replace() no encuentra el fragmento y el botón pierde su color sin que nada falle. Aquí sí falla.
+  const ghost = leer(SRC, 'lib', 'design-system.ts').match(/^\s*ghost:\s*'([^']*)'/m);
+  assert.ok(ghost, 'design-system.ts define BTN.ghost');
+  for (const fragmento of ['px-4 py-2', 'text-gray-600', 'hover:bg-gray-100']) {
+    assert.ok(ghost[1].includes(fragmento), `BTN.ghost trae '${fragmento}'`);
+  }
+  for (const [archivo, constante] of [['empresa-form.tsx', 'BTN_QUITAR'], ['documentos-form.tsx', 'BTN_VOLVER']]) {
+    const fuente = leer(APP, 'dashboard', 'admin', 'configuracion', archivo);
+    const declaracion = fuente.match(new RegExp(`const ${constante} = BTN\\.ghost([\\s\\S]*?);`));
+    assert.ok(declaracion, `${archivo}: ${constante} sale de BTN.ghost`);
+    const fragmentos = [...declaracion[1].matchAll(/\.replace\('([^']+)'/g)].map((m) => m[1]);
+    assert.ok(fragmentos.length > 0, `${archivo}: ${constante} reemplaza algo`);
+    for (const fragmento of fragmentos) assert.ok(ghost[1].includes(fragmento), `${constante}: BTN.ghost trae '${fragmento}'`);
+  }
 }
 
 console.log('✓ Todas las pruebas de las fuentes de la plantilla pasaron.');

@@ -22,6 +22,7 @@ import {
 import { formatoPesos } from '@/lib/pesos';
 import { humanizarCodigo } from '@/lib/estados-pedido';
 import { lineaWhatsAppCanal } from '@/lib/envio-whatsapp';
+import { AYUDA_NOTA_CLIENTE } from '@/lib/cambios-cliente';
 import { PanelAnularConfirmacion, tituloAnulacion } from './anular-confirmacion';
 import type { AnulacionConfirmacion } from './anular-confirmacion';
 import { CeldaIvaLinea, TotalesCalculadoraIva, pesosOGuion } from './calculadora-iva';
@@ -454,7 +455,7 @@ export function CalculadorModal({
             <textarea id={notasId} aria-describedby={notasAyudaId} value={notas} onChange={e => setNotas(e.target.value)} rows={3}
               className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400 outline-none" />
             {/* R3 (C19): la nota de la cotización le llega al cliente en su documento (r1: ligada al textarea). */}
-            <p id={notasAyudaId} className="text-[11px] text-slate-500 mt-1">El cliente verá esta nota</p>
+            <p id={notasAyudaId} className="text-[11px] text-slate-500 mt-1">{AYUDA_NOTA_CLIENTE}</p>
           </div>
         </fieldset>
     </Modal>

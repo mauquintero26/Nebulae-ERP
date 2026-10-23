@@ -6,7 +6,7 @@ import {
   claveIdempotencia, pedirPublico, respuestaDeAccion, tituloDeLaPagina, vistaConDocumento, vistaDeRespuesta,
   type VistaPublica,
 } from '@/lib/confirmacion-publica';
-import { AvisoEnlace, CargandoDocumento } from './aviso-enlace';
+import { AvisoEnlace, CargandoDocumento } from '@/components/documento';
 import { PanelPedirCambios, type TipoCambios } from './panel-cambios';
 import { VistaCotizacion } from './vista-cotizacion';
 import { VistaSolicitud } from './vista-solicitud';
@@ -153,7 +153,12 @@ export default function ConfirmarPublicoPage() {
     };
     contenido = vista.tipo === 'SC' ? <VistaSolicitud {...props} /> : <VistaCotizacion {...props} />;
   } else {
-    contenido = <AvisoEnlace vista={vista} apiUrl={API_URL} onReintentar={reintentar} enfocar={enfocar} />;
+    // Revisión final B3 (F2, M17): AvisoEnlace vive en components/documento; la hoja confirmada (en solo lectura, bajo
+    // el aviso verde) se la pasa esta página.
+    contenido = <AvisoEnlace vista={vista} apiUrl={API_URL} onReintentar={reintentar} enfocar={enfocar}
+      hojaConfirmada={(aviso) => (vista.tipo === 'SC'
+          ? <VistaSolicitud vista={vista} apiUrl={API_URL} soloLectura aviso={aviso} />
+          : <VistaCotizacion vista={vista} apiUrl={API_URL} soloLectura aviso={aviso} />)} />;
   }
 
   return (

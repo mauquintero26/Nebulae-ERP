@@ -27,22 +27,25 @@ import {
   ordenParaCancelar, motivoNoCancelable, resumenLote, ETIQUETA_ESTADO_VEN, ESTADOS_VEN_MANUALES, opcionesEstadoPVEN,
   repartirCambioEstadoPVEN, comoUTC,
   diasDesde, textoAntiguedad, ESTADOS_NO_RESOLUCION, ESTADOS_ACCION_TOMADA, esNoResuelto, esAccionTomada, accionSiguienteSC,
-  esSCConCotizacionTemprana, notaReiniciaAtraso, desdeElHub, fusionarCargaHub,
+  esSCConCotizacionTemprana, notaReiniciaAtraso, desdeElHub, fusionarCargaHub, conDetalleDelEnvio,
 } from '@/lib/hub-ventas';
 import { waUrl, abrirWhatsApp } from '@/lib/whatsapp';
 import { correoDelCliente } from '@/lib/aviso-correo';
 import { formatoPesos } from '@/lib/pesos';
 import { etiquetaTipoSolicitud } from '@/lib/etiquetas-ventas';
 import { diasAlerta, pedidoVigente, pestanaCotizacion, valorConfig, enteroConfig, DIAS_VALIDEZ_COTIZACION, configLeida,
-  cuerpoGuardarConfig } from '@/lib/listas-ventas';
+  cuerpoGuardarConfig, AVISO_CONFIG_SIN_LEER } from '@/lib/listas-ventas';
 // B3 T16: las secciones nuevas del ConfigPanel, la etiqueta de las acciones del Bloque 3 y el WhatsApp automático del
 // envío desde el tablero (R15: lo nuevo vive en sus archivos; aquí solo se cablea).
 import { SeccionSeguimiento } from './seguimiento';
 import { ConfigEnvioWhatsApp } from './config-envio-whatsapp';
 import { SeccionDocumentosCliente, SeccionIva, EtiquetaAccionBloque3 } from './hub-bloque3';
 import { accionBloque3 } from '@/lib/acciones-bloque3';
-import { abreWhatsAppLocal, MENSAJE_WHATSAPP_SIN_GUARDAR } from '@/lib/envio-whatsapp';
-import { configSeguimientoInicial, validarConfigSeguimiento } from '@/lib/seguimiento';
+import { abreWhatsAppLocal, MENSAJE_WHATSAPP_SIN_GUARDAR, banderaReenvio } from '@/lib/envio-whatsapp';
+import { configSeguimientoInicial, errorConfigSeguimiento } from '@/lib/seguimiento';
+// Revisión final B3 (F2): la regla de rol (M12) y la nota ámbar en la ventana de envío del tablero (M47).
+import { esAdmin } from '@/lib/roles';
+import { AvisoNombreSinContacto } from './aviso-nombre-sin-contacto';
 import { normalizarTarifaIva, TARIFA_IVA_POR_DEFECTO } from '@/lib/iva';
 
 // H42: pesos enteros con punto de miles ('$1.062.523'); lo que no es un monto (null, NaN) se ve '$0'.
@@ -212,9 +215,12 @@ function ActivitiesPanel({row,onClose,onNotaGuardada}:{row:any,onClose:()=>void,
 /* ── Config Panel ── */
 function ConfigPanel({alertDias,configCargada,onSave,onClose}:{alertDias:any,configCargada:boolean,onSave:(cfg:any)=>void,onClose:()=>void}) {
   // N8: todos leen los valores reales; solo un administrador los cambia (la seguridad real es el 403 del PATCH).
-  const soloLectura = getUsuarioActual().role.trim().toLowerCase() !== 'admin';
+  const soloLectura = !esAdmin(getUsuarioActual().role);
   const { avisarError } = useAvisos();
   const [error, setError] = useState('');
+  // F2 (M15): el campo que falló (aria-invalid y ligado al error del pie, que tiene este id).
+  const [campoError, setCampoError] = useState<string|null>(null);
+  const idError = React.useId();
   const [cfg, setCfg] = useState({
     alerta_sc_dias:  String(diasAlerta(alertDias, 'alerta_sc_dias')),
     alerta_cot_dias: String(diasAlerta(alertDias, 'alerta_cot_dias')),
@@ -233,15 +239,16 @@ function ConfigPanel({alertDias,configCargada,onSave,onClose}:{alertDias:any,con
   // cambios sin guardar (tiene su propio botón). Editar un campo borra el error del pie.
   const cfgInicial = React.useRef(cfg);
   const [waPendiente, setWaPendiente] = useState(false);
-  const cambiarCampo = (k: string, v: string) => { setCfg(p => ({...p, [k]: v})); setError(''); };
+  const cambiarCampo = (k: string, v: string) => { setCfg(p => ({...p, [k]: v})); setError(''); setCampoError(null); };
   const [saving,setSaving]=useState(false);
   const [saved,setSaved]=useState(false);
   async function save(){
     // B3 T16: los recordatorios con las mismas reglas del 422 del servidor, antes de mandar nada (r1: y sin perder lo
     // escrito en la sección de WhatsApp).
+    setCampoError(null);
     if(waPendiente){ setError(MENSAJE_WHATSAPP_SIN_GUARDAR); return; }
-    const invalido = validarConfigSeguimiento(cfg);
-    if(invalido){ setError(invalido); return; }
+    const invalido = errorConfigSeguimiento(cfg);
+    if(invalido){ setError(invalido.mensaje); setCampoError(invalido.clave); return; }
     // r1: solo las claves que cambiaron (nunca pisa con un valor por defecto lo que nadie tocó), y solo con /config leído.
     const cuerpo = cuerpoGuardarConfig(cfgInicial.current, cfg, configCargada);
     if(!cuerpo) return;
@@ -272,8 +279,9 @@ function ConfigPanel({alertDias,configCargada,onSave,onClose}:{alertDias:any,con
     )} footer={soloLectura ? (
       <p className="text-xs text-slate-500 text-center">Solo un administrador puede cambiar estos valores.</p>
     ) : (
-      <div className="space-y-2">
-        {error && <p className="text-xs font-semibold text-rose-600 text-center">{error}</p>}
+      <div>
+        {/* F2 (M15): la región del error siempre montada (como en ChannelModal); solo cambia su contenido. */}
+        <div role="alert">{error ? <p id={idError} className="mb-2 text-xs font-semibold text-rose-600 text-center">{error}</p> : null}</div>
         <button onClick={save} disabled={saving || !configCargada}
           className={`w-full py-3 rounded-xl font-black flex items-center justify-center gap-2 transition-colors ${saved?'bg-emerald-500 text-white':'bg-indigo-600 hover:bg-indigo-700 text-white'} disabled:opacity-50`}>
           {saving?<RefreshCw size={16} className="animate-spin"/>:saved?<CheckCircle2 size={16}/>:<Save size={16}/>}
@@ -302,7 +310,7 @@ function ConfigPanel({alertDias,configCargada,onSave,onClose}:{alertDias:any,con
               «Guardar»). Las tres primeras se guardan con «Guardar Configuración». */}
           <SeccionDocumentosCliente cfg={cfg} onCambio={cambiarCampo} soloLectura={soloLectura}/>
           <SeccionIva cfg={cfg} onCambio={cambiarCampo} soloLectura={soloLectura}/>
-          <SeccionSeguimiento cfg={cfg} onCambio={cambiarCampo} soloLectura={soloLectura}/>
+          <SeccionSeguimiento cfg={cfg} onCambio={cambiarCampo} soloLectura={soloLectura} error={campoError ? {clave: campoError, id: idError} : null}/>
           <ConfigEnvioWhatsApp soloLectura={soloLectura} onCambiosPendientes={p=>{setWaPendiente(p); if(!p) setError(e=>e===MENSAJE_WHATSAPP_SIN_GUARDAR?'':e);}}/>
           <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-5">
             <div className="flex items-center gap-2 mb-4"><Zap size={16} className="text-indigo-600"/><h3 className="font-black text-indigo-800 text-sm uppercase tracking-wide">Automatizaciones Comerciales</h3></div>
@@ -365,7 +373,8 @@ export default function VentasHub() {
   const [cancelando, setCancelando]               = useState(false);
   const [resultadoLote, setResultadoLote]         = useState<{titulo:string, lineas:{numero:string,error:string}[]}|null>(null);
   // H27+H39: al arrastrar una SC o COT para enviarla se pregunta el canal y luego se muestra el enlace con el aviso del correo.
-  const [envioHub, setEnvioHub]       = useState<{tipo:'SC'|'COT', id:string, numero:string, telefono:string, correo?:string|null}|null>(null);
+  // F2: telefonoCrudo (el porqué de «sin teléfono», M50) y detalle (la nota ámbar del nombre sin contacto, M47).
+  const [envioHub, setEnvioHub]       = useState<{tipo:'SC'|'COT', id:string, numero:string, telefono:string, telefonoCrudo?:string|null, correo?:string|null, detalle?:unknown}|null>(null);
   const [canalHub, setCanalHub]       = useState<'WhatsApp'|'Email'|'Otro'|null>(null);
   const [enviandoHub, setEnviandoHub] = useState(false);
   const envioWhatsAppHub = useEstadoEnvioWhatsApp(!!envioHub); // B3 T17: {automatico, listo} del ChannelModal (U16-envio 14)
@@ -709,8 +718,13 @@ export default function VentasHub() {
   function abrirEnvioHub(tipo:'SC'|'COT', id:string, item:any){
     // B3: el correo del cliente, como en cotizacion/[id] (sin correo, ChannelModal no ofrece Email).
     // B3 T16 (RP19): el teléfono es telefono_whatsapp de la fila (el e164 que valida el servidor, o null), no el crudo.
-    setEnvioHub({tipo, id, numero:item?.numero || id, telefono:item?.telefono_whatsapp || '', correo:correoDelCliente(item)});
+    setEnvioHub({tipo, id, numero:item?.numero || id, telefono:item?.telefono_whatsapp || '', telefonoCrudo:item?.customer_phone ?? null, correo:correoDelCliente(item)});
     setCanalHub(null);
+    // Revisión final B3 (F2, M47): la nota ámbar sale del detalle (nombre_cambio_sin_contacto), guardado solo si la ventana
+    // sigue abierta para este documento. Si el GET falla, la ventana queda sin la nota: no bloquea el envío.
+    apiFetch(`/ventas/${tipo === 'COT' ? 'cotizaciones' : 'solicitudes'}/${id}`)
+      .then((d: any) => setEnvioHub(e => conDetalleDelEnvio(e, tipo, id, d?.data)))
+      .catch((err: unknown) => console.error(err));
   }
 
   async function confirmarEnvioHub(){
@@ -719,7 +733,8 @@ export default function VentasHub() {
     const ruta = tipo === 'COT' ? 'cotizaciones' : 'solicitudes';
     setEnviandoHub(true);
     try{
-      const d = await apiFetch(`/ventas/${ruta}/${id}/enviar-confirmacion`, {method:'POST', body: JSON.stringify({canal:canalHub, user_name:autorActual()})});
+      // F2 (M0): siempre un primer envío (una tarjeta ya pendiente no llega aquí); si ya se le envió, el servidor da 409.
+      const d = await apiFetch(`/ventas/${ruta}/${id}/enviar-confirmacion`, {method:'POST', body: JSON.stringify({canal:canalHub, user_name:autorActual(), ...banderaReenvio(false)})});
       const link = d?.link_confirmacion || '';
       const documento = tipo === 'COT' ? `la cotización ${numero}` : `la solicitud ${numero}`;
       let whatsapp: string | null = null;
@@ -845,7 +860,7 @@ export default function VentasHub() {
             className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors ${quickFilter === 'todos' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
             Ver Todo
           </button>
-          <button onClick={()=>setShowConfig(true)} disabled={!configCargada} className="text-xs text-indigo-600 hover:text-indigo-800 font-bold border border-indigo-200 px-3 py-1.5 rounded-xl hover:bg-indigo-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+          <button onClick={()=>setShowConfig(true)} disabled={!configCargada} title={configCargada ? undefined : AVISO_CONFIG_SIN_LEER} className="text-xs text-indigo-600 hover:text-indigo-800 font-bold border border-indigo-200 px-3 py-1.5 rounded-xl hover:bg-indigo-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
             Ajustar Tiempos
           </button>
         </div>
@@ -870,7 +885,7 @@ export default function VentasHub() {
                 className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-slate-50 font-semibold text-xs shadow-xs transition-colors">
                 <RefreshCw size={13} className={loading?'animate-spin':''}/> Actualizar
               </button>
-              <button onClick={()=>setShowConfig(true)} disabled={!configCargada}
+              <button onClick={()=>setShowConfig(true)} disabled={!configCargada} title={configCargada ? undefined : AVISO_CONFIG_SIN_LEER}
                 className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-xl hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 font-semibold text-xs shadow-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                 <Settings size={13}/> Configuración
               </button>
@@ -1660,10 +1675,11 @@ export default function VentasHub() {
           saving={enviandoHub}
           // T9A: WhatsApp solo con un teléfono que sirve (motivoTelefono, como la COT); si no, dice por qué.
           customerHasPhone={!motivoTelefono(envioHub.telefono)}
-          textoSinTelefono={textoSinTelefono(envioHub.telefono) ?? undefined}
+          textoSinTelefono={textoSinTelefono(envioHub.telefono || envioHub.telefonoCrudo) ?? undefined}
           documentLabel={envioHub.tipo === 'COT' ? 'cotización' : 'solicitud'}
           customerEmail={envioHub.correo}
           envioWhatsApp={envioWhatsAppHub}
+          aviso={<AvisoNombreSinContacto documento={envioHub.detalle} />}
         />
       )}
       {hubEnlace && (

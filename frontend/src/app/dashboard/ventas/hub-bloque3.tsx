@@ -49,8 +49,11 @@ export function SeccionConfig({ titulo, icono: Icono, tono, descripcion, childre
   );
 }
 
+// Revisión final B3 (F2, M15): `idError` en los tres campos es el id del error que dice que ESTE campo falló al guardar
+// (el pie del ConfigPanel): el control lleva aria-invalid y queda ligado a ese texto. Sin él, como siempre.
+
 /** Fila con un número (días, cantidad) a la derecha. */
-export function CampoNumero({ etiqueta, ayuda, valor, min, max, sufijo, onCambio, deshabilitado, tono = 'blue' }: {
+export function CampoNumero({ etiqueta, ayuda, valor, min, max, sufijo, onCambio, deshabilitado, tono = 'blue', idError }: {
   etiqueta: string;
   ayuda?: string;
   valor: string;
@@ -60,6 +63,7 @@ export function CampoNumero({ etiqueta, ayuda, valor, min, max, sufijo, onCambio
   onCambio: (valor: string) => void;
   deshabilitado: boolean;
   tono?: TonoSeccion;
+  idError?: string;
 }) {
   return (
     <label className={`flex items-center justify-between gap-3 p-3 ${FILA} ${SECCION[tono].fila}`}>
@@ -69,6 +73,7 @@ export function CampoNumero({ etiqueta, ayuda, valor, min, max, sufijo, onCambio
       </span>
       <span className="flex items-center gap-2 shrink-0">
         <input type="number" inputMode="numeric" min={min} max={max} step={1} value={valor} disabled={deshabilitado}
+          aria-invalid={idError ? true : undefined} aria-describedby={idError}
           onChange={e => onCambio(e.target.value)} className={`w-16 text-center ${CONTROL}`} />
         {sufijo && <span className="text-xs text-slate-500 font-medium">{sufijo}</span>}
       </span>
@@ -80,7 +85,7 @@ export function CampoNumero({ etiqueta, ayuda, valor, min, max, sufijo, onCambio
  * Fila con un select: la etiqueta arriba y el select debajo, a todo el ancho (r1: el Drawer mide 448 px a cualquier
  * ancho de ventana, y al lado de la etiqueta un select largo se salía del panel).
  */
-export function CampoSelect({ etiqueta, ayuda, valor, opciones, onCambio, deshabilitado, tono = 'blue' }: {
+export function CampoSelect({ etiqueta, ayuda, valor, opciones, onCambio, deshabilitado, tono = 'blue', idError }: {
   etiqueta: string;
   ayuda?: string;
   valor: string;
@@ -88,6 +93,7 @@ export function CampoSelect({ etiqueta, ayuda, valor, opciones, onCambio, deshab
   onCambio: (valor: string) => void;
   deshabilitado: boolean;
   tono?: TonoSeccion;
+  idError?: string;
 }) {
   return (
     <label className={`block space-y-2 p-3 ${FILA} ${SECCION[tono].fila}`}>
@@ -96,6 +102,7 @@ export function CampoSelect({ etiqueta, ayuda, valor, opciones, onCambio, deshab
         {ayuda && <span className="block text-xs text-slate-500 mt-0.5">{ayuda}</span>}
       </span>
       <select value={valor} disabled={deshabilitado} onChange={e => onCambio(e.target.value)}
+        aria-invalid={idError ? true : undefined} aria-describedby={idError}
         className={`w-full min-w-0 px-2 bg-white ${CONTROL}`}>
         {opciones.map(o => <option key={o.valor} value={o.valor}>{o.etiqueta}</option>)}
       </select>
@@ -104,13 +111,14 @@ export function CampoSelect({ etiqueta, ayuda, valor, opciones, onCambio, deshab
 }
 
 /** Interruptor ON/OFF, con el mismo aspecto que los Toggle de «Automatizaciones Comerciales». */
-export function Interruptor({ etiqueta, descripcion, valor, onCambio, deshabilitado, tono = 'blue' }: {
+export function Interruptor({ etiqueta, descripcion, valor, onCambio, deshabilitado, tono = 'blue', idError }: {
   etiqueta: string;
   descripcion?: string;
   valor: boolean;
   onCambio: (valor: boolean) => void;
   deshabilitado: boolean;
   tono?: TonoSeccion;
+  idError?: string;
 }) {
   return (
     <div className={`${FILA} p-4 ${SECCION[tono].fila}`}>
@@ -120,6 +128,7 @@ export function Interruptor({ etiqueta, descripcion, valor, onCambio, deshabilit
           {descripcion && <p className="text-xs text-slate-500 mt-0.5">{descripcion}</p>}
         </div>
         <button type="button" role="switch" aria-checked={valor} aria-label={etiqueta} disabled={deshabilitado}
+          aria-invalid={idError ? true : undefined} aria-describedby={idError}
           onClick={() => onCambio(!valor)}
           className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-xl border transition-colors shrink-0 disabled:cursor-not-allowed disabled:opacity-60 ${valor
             ? 'bg-emerald-50 border-emerald-300 text-emerald-700'

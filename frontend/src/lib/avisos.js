@@ -56,6 +56,13 @@ const textoServidor = (status) =>
     ? `El servidor respondió con un error (${status}). Intenta de nuevo.`
     : MENSAJE_GENERICO;
 
+// Revisión final del Bloque 3 (F2, M45): las frases en inglés que Starlette pone por defecto en el detail de un error
+// (un 405 por una ruta o un API_URL mal configurados, un 502 del proxy…). Se dicen como «el servidor respondió con un
+// error (N)», también en la página pública del cliente (confirmacion-publica.js usa errorDeRespuesta).
+const FRASES_STARLETTE = new Set(['Bad Request', 'Unauthorized', 'Method Not Allowed', 'Not Acceptable', 'Conflict',
+  'Unsupported Media Type', 'Unprocessable Entity', 'Too Many Requests', 'Bad Gateway', 'Service Unavailable',
+  'Gateway Timeout']);
+
 /** Textos en ingles o tecnicos que el servidor manda tal cual y tienen una frase propia. */
 function traducirTexto(texto, status) {
   const limpio = texto.trim();
@@ -64,6 +71,7 @@ function traducirTexto(texto, status) {
   if (status === 403 && esDetalle403Tecnico(limpio)) return MENSAJE_SIN_PERMISO;
   if (limpio === 'Internal Server Error') return textoServidor(typeof status === 'number' ? status : 500);
   if (limpio === 'Not Found') return `No se encontró el registro (${typeof status === 'number' ? status : 404}).`;
+  if (FRASES_STARLETTE.has(limpio)) return textoServidor(status);
   return texto;
 }
 
